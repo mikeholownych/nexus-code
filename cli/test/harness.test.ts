@@ -28,6 +28,7 @@ import { wrapSandboxedCommand, isBwrapAvailable } from "../src/sandbox.js";
 import { PluginManager } from "../src/plugins.js";
 import { WorktreeManager } from "../src/worktree.js";
 import { FlightRecorder, FlightPlayer } from "../src/flight.js";
+import { parseDiffHunks, buildSingleHunkPatch, HunkStager } from "../src/stager.js";
 
 describe("Nexus Code Test Suite", () => {
   test("HARNESS_TOOLS definitions include all parity tools", () => {
@@ -2203,6 +2204,122 @@ error[E0308]: mismatched types
       assert.strictEqual(discardRes.error, "No active worktree");
     } finally {
       agent.shutdown();
+    }
+  });
+
+  test("HunkStager parses unified diffs and stages individual hunks with surgical precision", () => {
+    // 1. Test diff parser directly
+    const rawDiff = `diff --git a/src/example.ts b/src/example.ts
+index 1234567..89abcdef 100644
+--- a/src/example.ts
++++ b/src/example.ts
+@@ -1,4 +1,5 @@
+ import * as fs from "node:fs";
++import * as path from "node:path";
+ const x = 1;
+ const y = 2;
+@@ -10,3 +11,4 @@
+ export function test() {
+   return true;
++  console.log("added");
+ }
+`;
+    const parsedFiles = parseDiffHunks(rawDiff);
+    assert.strictEqual(parsedFiles.length, 1);
+    assert.strictEqual(parsedFiles[0].newPath, "src/example.ts");
+    assert.strictEqual(parsedFiles[0].hunks.length, 2);
+    assert.strictEqual(parsedFiles[0].hunks[0].oldStart, 1);
+    assert.strictEqual(parsedFiles[0].hunks[1].oldStart, 10);
+
+    const singlePatch = buildSingleHunkPatch(parsedFiles[0], parsedFiles[0].hunks[0]);
+    assert.ok(singlePatch.includes("diff --git a/src/example.ts b/src/example.ts"));
+    assert.ok(singlePatch.includes("+import * as path from \"node:path\";"));
+    assert.ok(!singlePatch.includes("console.log(\"added\");"));
+
+    // 2. Test live git hunk staging and discard
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-stager-test-"));
+    try {
+      execSync("git init -b main", { cwd: tempDir, stdio: "ignore" });
+      execSync('git config user.name "StagerTester"', { cwd: tempDir, stdio: "ignore" });
+      execSync('git config user.email "stager@nexus.local"', { cwd: tempDir, stdio: "ignore" });
+
+      const fileContent = [
+        "// Section A",
+        "const a = 1;",
+        "const b = 2;",
+        "",
+        "// Padding lines",
+        "// line 5",
+        "// line 6",
+        "// line 7",
+        "// line 8",
+        "// line 9",
+        "// line 10",
+        "",
+        "// Section B",
+        "const c = 3;",
+        "const d = 4;",
+      ].join("\n") + "\n";
+
+      fs.writeFileSync(path.join(tempDir, "code.ts"), fileContent, "utf-8");
+      execSync("git add code.ts && git commit -m 'Initial code'", { cwd: tempDir, stdio: "ignore" });
+
+      // Modify both sections
+      const modifiedContent = [
+        "// Section A",
+        "const a = 999; // modified A",
+        "const b = 2;",
+        "",
+        "// Padding lines",
+        "// line 5",
+        "// line 6",
+        "// line 7",
+        "// line 8",
+        "// line 9",
+        "// line 10",
+        "",
+        "// Section B",
+        "const c = 3;",
+        "const d = 888; // modified B",
+      ].join("\n") + "\n";
+
+      fs.writeFileSync(path.join(tempDir, "code.ts"), modifiedContent, "utf-8");
+
+      const stager = new HunkStager(tempDir);
+      const summary = stager.getStatusSummary();
+      assert.strictEqual(summary.files.length, 1);
+      assert.strictEqual(summary.files[0].hunks.length, 2);
+
+      // Stage ONLY Hunk 1 (Section A)
+      const stageRes = stager.stageHunk(summary.files[0], summary.files[0].hunks[0]);
+      assert.strictEqual(stageRes.success, true);
+
+      // Verify staged diff contains 999 but NOT 888
+      const stagedDiff = stager.getStagedDiff();
+      assert.ok(stagedDiff.includes("999"));
+      assert.ok(!stagedDiff.includes("888"));
+
+      // Verify unstaged diff still contains 888
+      const unstagedDiff = stager.getUnstagedDiff();
+      assert.ok(unstagedDiff.includes("888"));
+      assert.ok(!unstagedDiff.includes("999"));
+
+      // Now discard Hunk 2
+      const updatedFiles = stager.getParsedUnstagedDiff();
+      assert.strictEqual(updatedFiles[0].hunks.length, 1);
+      const discardRes = stager.discardHunk(updatedFiles[0], updatedFiles[0].hunks[0]);
+      assert.strictEqual(discardRes.success, true);
+
+      // Verify no remaining unstaged changes
+      const remainingUnstaged = stager.getUnstagedDiff();
+      assert.strictEqual(remainingUnstaged.trim(), "");
+
+      // Working file should have 999 and the original d = 4
+      const finalCode = fs.readFileSync(path.join(tempDir, "code.ts"), "utf-8");
+      assert.ok(finalCode.includes("const a = 999;"));
+      assert.ok(finalCode.includes("const d = 4;"));
+    } finally {
+      fs.rmSync(tempDir, { recursive: true, force: true });
     }
   });
 });

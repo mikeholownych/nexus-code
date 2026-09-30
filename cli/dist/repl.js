@@ -18,6 +18,7 @@ import { encodeImageFile, formatVisionContent } from "./image.js";
 import { ThemeManager } from "./theme.js";
 import { TeamOrchestrator } from "./team.js";
 import { TerminalDashboard } from "./tui.js";
+import { HunkStager } from "./stager.js";
 function parsePatchHunks(patch) {
     const lines = patch.split("\n");
     const fileHeaderLines = [];
@@ -161,6 +162,8 @@ export class InteractiveRepl {
         console.log(`  ${pc.bold(pc.yellow("/compact"))}            Condense earlier messages to free token budget`);
         console.log(`  ${pc.bold(pc.yellow("/mode [auto|review]"))} Toggle autonomous execution vs human review approval`);
         console.log(`  ${pc.bold(pc.yellow("/diff"))}               Show colored git diff of uncommitted changes`);
+        console.log(`  ${pc.bold(pc.yellow("/stage [reset]"))}       Inspect and stage individual diff hunks`);
+        console.log(`  ${pc.bold(pc.yellow("/worktree [status|merge|discard]"))} Manage isolated ephemeral git worktrees`);
         console.log(`  ${pc.bold(pc.yellow("/git"))}                Show current git status and modified files`);
         console.log(`  ${pc.bold(pc.yellow("/sessions"))}           List past saved sessions`);
         console.log(`  ${pc.bold(pc.yellow("/save [name]"))}        Save current session snapshot to ~/.nexus/sessions/`);
@@ -518,6 +521,88 @@ export class InteractiveRepl {
                         }
                         catch (err) {
                             console.log(pc.red(`Git diff error: ${err.message}\n`));
+                        }
+                        continue;
+                    }
+                    else if (cmd === "stage") {
+                        const stager = new HunkStager(this.config.workspace);
+                        if (arg === "reset") {
+                            stager.unstage();
+                            console.log(pc.green("✔ Unstaged all changes.\n"));
+                        }
+                        else {
+                            const summary = stager.getStatusSummary();
+                            if (summary.files.length === 0) {
+                                console.log(pc.green("✔ No unstaged diff hunks in working directory.\n"));
+                            }
+                            else {
+                                console.log(pc.bold(pc.cyan(`\n=== Granular Hunk Stager (${summary.files.length} modified files, ${summary.unstagedHunkCount} hunks) ===\n`)));
+                                for (const f of summary.files) {
+                                    console.log(pc.bold(pc.white(`📄 ${f.newPath} (${f.hunks.length} hunks)`)));
+                                    f.hunks.forEach((h, idx) => {
+                                        console.log(`  [Hunk ${idx + 1}] ${pc.dim(h.header)}`);
+                                        for (const l of h.lines.slice(0, 5)) {
+                                            if (l.startsWith("+"))
+                                                console.log(`    ${pc.green(l)}`);
+                                            else if (l.startsWith("-"))
+                                                console.log(`    ${pc.red(l)}`);
+                                            else
+                                                console.log(`    ${pc.dim(l)}`);
+                                        }
+                                        if (h.lines.length > 5)
+                                            console.log(pc.dim(`    ... [${h.lines.length - 5} more lines]`));
+                                    });
+                                    console.log();
+                                }
+                                console.log(pc.dim("Use '/stage reset' to unstage, or '/commit' to create a commit.\n"));
+                            }
+                        }
+                        continue;
+                    }
+                    else if (cmd === "worktree") {
+                        const mgr = this.agent.getWorktreeManager();
+                        const active = this.agent.getActiveWorktree();
+                        if (arg === "merge") {
+                            if (!active) {
+                                console.log(pc.yellow("No active speculative worktree to merge.\n"));
+                            }
+                            else {
+                                const res = this.agent.mergeActiveWorktree();
+                                if (res.success) {
+                                    console.log(pc.green(`✔ Merged ${res.commitsMerged} speculative commit(s) from branch ${res.branch}.\n`));
+                                }
+                                else {
+                                    console.log(pc.red(`Failed to merge worktree: ${res.error}\n`));
+                                }
+                            }
+                        }
+                        else if (arg === "discard") {
+                            if (!active) {
+                                console.log(pc.yellow("No active speculative worktree to discard.\n"));
+                            }
+                            else {
+                                const res = this.agent.discardActiveWorktree();
+                                if (res.success) {
+                                    console.log(pc.green("✔ Discarded active speculative worktree.\n"));
+                                }
+                                else {
+                                    console.log(pc.red(`Failed to discard worktree: ${res.error}\n`));
+                                }
+                            }
+                        }
+                        else {
+                            const list = mgr.listWorktrees();
+                            console.log(pc.bold(pc.cyan(`\n=== Speculative Git Worktrees (${list.length}) ===\n`)));
+                            if (active) {
+                                console.log(pc.green(`* Active Worktree: ${active.branch} at ${active.worktreePath}\n`));
+                            }
+                            for (const wt of list) {
+                                console.log(`• Task: ${pc.bold(wt.taskId)} (branch: ${pc.cyan(wt.branch)}) at ${pc.dim(wt.path)}`);
+                            }
+                            if (list.length === 0 && !active) {
+                                console.log(pc.dim("No active speculative worktrees. Launch with --worktree to isolate.\n"));
+                            }
+                            console.log();
                         }
                         continue;
                     }

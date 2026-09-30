@@ -14,6 +14,7 @@ import { McpClientManager } from "./mcp.js";
 import { PluginManager } from "./plugins.js";
 import { FlightPlayer } from "./flight.js";
 import { WorktreeManager } from "./worktree.js";
+import { HunkStager } from "./stager.js";
 import pc from "picocolors";
 import * as os from "node:os";
 const __filename = fileURLToPath(import.meta.url);
@@ -476,6 +477,43 @@ program
     for (const wt of wts) {
         console.log(`• Task: ${pc.bold(wt.taskId)} (branch: ${pc.cyan(wt.branch)})`);
         console.log(`  Path: ${pc.dim(wt.path)} | Head: ${pc.gray(wt.headSha.slice(0, 8))}\n`);
+    }
+});
+program
+    .command("stage")
+    .description("Inspect and manage granular git diff hunks")
+    .option("-w, --workspace <path>", "Workspace directory", process.cwd())
+    .option("--reset", "Unstage all staged changes")
+    .action((options) => {
+    const ws = options.workspace ? path.resolve(options.workspace) : process.cwd();
+    const stager = new HunkStager(ws);
+    if (options.reset) {
+        stager.unstage();
+        console.log(pc.green("✔ Unstaged all changes.\n"));
+        return;
+    }
+    const summary = stager.getStatusSummary();
+    if (summary.files.length === 0) {
+        console.log(pc.green("✔ Working tree clean (no unstaged diff hunks).\n"));
+        return;
+    }
+    console.log(pc.bold(pc.cyan(`\n=== Granular Hunk Stager (${summary.files.length} modified files, ${summary.unstagedHunkCount} hunks) ===\n`)));
+    for (const f of summary.files) {
+        console.log(pc.bold(pc.white(`📄 ${f.newPath} (${f.hunks.length} hunks)`)));
+        f.hunks.forEach((h, idx) => {
+            console.log(`  [Hunk ${idx + 1}] ${pc.dim(h.header)}`);
+            for (const l of h.lines.slice(0, 5)) {
+                if (l.startsWith("+"))
+                    console.log(`    ${pc.green(l)}`);
+                else if (l.startsWith("-"))
+                    console.log(`    ${pc.red(l)}`);
+                else
+                    console.log(`    ${pc.dim(l)}`);
+            }
+            if (h.lines.length > 5)
+                console.log(pc.dim(`    ... [${h.lines.length - 5} more lines]`));
+        });
+        console.log();
     }
 });
 if (process.argv.length <= 2) {
