@@ -123,4 +123,46 @@ export class SkillManager {
         }
         return out;
     }
+    watchers = [];
+    reloadDebounceTimer = null;
+    startWatcher(onReload) {
+        this.stopWatcher();
+        const watchDirs = [
+            path.join(this.workspace, ".nexus", "skills"),
+            path.join(this.workspace, "skills"),
+            path.join(os.homedir(), ".nexus", "skills"),
+        ];
+        for (const dir of watchDirs) {
+            if (fs.existsSync(dir)) {
+                try {
+                    const watcher = fs.watch(dir, { recursive: true }, () => {
+                        if (this.reloadDebounceTimer)
+                            clearTimeout(this.reloadDebounceTimer);
+                        this.reloadDebounceTimer = setTimeout(() => {
+                            this.refresh();
+                            if (onReload)
+                                onReload(this.listSkills());
+                        }, 250);
+                    });
+                    this.watchers.push(watcher);
+                }
+                catch {
+                    // Ignore watcher errors
+                }
+            }
+        }
+    }
+    stopWatcher() {
+        if (this.reloadDebounceTimer) {
+            clearTimeout(this.reloadDebounceTimer);
+            this.reloadDebounceTimer = null;
+        }
+        for (const w of this.watchers) {
+            try {
+                w.close();
+            }
+            catch { }
+        }
+        this.watchers = [];
+    }
 }

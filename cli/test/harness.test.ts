@@ -17,6 +17,8 @@ import { SecurityManager } from "../src/security.js";
 import { countTokens, calculateContextBudget, renderTokenGauge } from "../src/tokens.js";
 import { selectRelevantFewShots } from "../src/fewshots.js";
 import { LocalLlmClient } from "../src/client.js";
+import { scanAndOnboardWorkspace } from "../src/onboard.js";
+import { detectTestCommand, runTestSuite } from "../src/tester.js";
 
 describe("Nexus Code Test Suite", () => {
   test("HARNESS_TOOLS definitions include all parity tools", () => {
@@ -574,6 +576,133 @@ error[E0308]: mismatched types
     const planShot = selectRelevantFewShots("Formulate a multi-step architecture plan for migration phases");
     assert.ok(planShot.includes("update_plan"));
     assert.ok(planShot.includes("phases"));
+  });
+
+  test("scanAndOnboardWorkspace discovers stack and writes AGENTS.md with diagram", () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "nexus_onboard_test_"));
+    try {
+      fs.writeFileSync(path.join(tmpDir, "Cargo.toml"), '[package]\nname = "test_engine"\nversion = "0.1.0"\n');
+      fs.writeFileSync(
+        path.join(tmpDir, "package.json"),
+        JSON.stringify({
+          name: "test_frontend",
+          scripts: { build: "tsc", test: "node --test", lint: "eslint ." },
+        })
+      );
+      fs.mkdirSync(path.join(tmpDir, "src"));
+      fs.mkdirSync(path.join(tmpDir, "docs"));
+
+      const report = scanAndOnboardWorkspace(tmpDir, true);
+      assert.ok(report.languages.includes("Rust"));
+      assert.ok(report.languages.includes("TypeScript / JavaScript"));
+      assert.ok(report.buildCommands.includes("cargo build"));
+      assert.ok(report.testCommands.includes("cargo test"));
+      assert.ok(report.testCommands.includes("npm test"));
+      assert.ok(report.keyDirectories.includes("src"));
+      assert.ok(report.architectureDiagram.includes("graph TD"));
+
+      assert.strictEqual(fs.existsSync(path.join(tmpDir, "AGENTS.md")), true);
+      const content = fs.readFileSync(path.join(tmpDir, "AGENTS.md"), "utf-8");
+      assert.ok(content.includes("Project Guidelines & Agent Instructions"));
+      assert.ok(content.includes("test_engine"));
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  test("detectTestCommand recognizes framework and supports test filters", () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "nexus_tester_test_"));
+    try {
+      fs.writeFileSync(path.join(tmpDir, "Cargo.toml"), '[package]\nname = "demo"\n');
+      const cmd = detectTestCommand(tmpDir);
+      assert.strictEqual(cmd, "cargo test");
+
+      const filtered = detectTestCommand(tmpDir, "unit_test_auth");
+      assert.strictEqual(filtered, "cargo test -- unit_test_auth");
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  test("RustCoreBridge executes run_tests tool with structured diagnostic output", async () => {
+    const { RustCoreBridge } = await import("../src/tools.js");
+    const bridge = new RustCoreBridge(process.cwd());
+    try {
+      const res = await bridge.executeTool("run_tests", {});
+      assert.strictEqual(res.success, true);
+      const parsed = JSON.parse(res.output);
+      assert.strictEqual(typeof parsed.passed, "boolean");
+      assert.ok(Array.isArray(parsed.failures));
+      assert.ok(Array.isArray(parsed.diagnostics));
+    } finally {
+      bridge.shutdown();
+    }
+  });
+
+  test("SkillManager hot-reloading watcher detects newly added skills", async () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "nexus_watcher_test_"));
+    const skillsDir = path.join(tmpDir, "skills", "dynamic-skill");
+    fs.mkdirSync(skillsDir, { recursive: true });
+
+    const sm = new SkillManager(tmpDir);
+    assert.strictEqual(sm.getSkill("dynamic-skill"), null);
+
+    try {
+      let reloaded = false;
+      sm.startWatcher(() => {
+        reloaded = true;
+      });
+
+      // Write skill file while watcher is active
+      fs.writeFileSync(
+        path.join(skillsDir, "SKILL.md"),
+        `---\nname: dynamic-skill\ndescription: Dynamically hot-reloaded skill\n---\nSkill content.`
+      );
+
+      // Wait for debounce and fs event
+      await new Promise<void>((resolve) => setTimeout(resolve, 600));
+
+      assert.strictEqual(reloaded, true);
+      assert.ok(sm.getSkill("dynamic-skill") !== null);
+    } finally {
+      sm.stopWatcher();
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  test("AutonomousAgent plan wizard updates and advances milestone phases", () => {
+    const agent = new AutonomousAgent({
+      endpoint: "http://localhost:1234/v1",
+      model: "test-model",
+      workspace: process.cwd(),
+      maxSteps: 5,
+      shell: "bash",
+    });
+
+    try {
+      agent.setActivePlan([
+        { name: "Phase 1: Architecture review", status: "completed" },
+        { name: "Phase 2: Core implementation", status: "in_progress" },
+        { name: "Phase 3: Test verification", status: "pending" },
+      ]);
+
+      const plan = agent.getActivePlan();
+      assert.strictEqual(plan.length, 3);
+      assert.strictEqual(plan[0].status, "completed");
+      assert.strictEqual(plan[1].status, "in_progress");
+      assert.strictEqual(plan[2].status, "pending");
+
+      // Advance phase 2
+      plan[1].status = "completed";
+      plan[2].status = "in_progress";
+      agent.setActivePlan([...plan]);
+
+      const updated = agent.getActivePlan();
+      assert.strictEqual(updated[1].status, "completed");
+      assert.strictEqual(updated[2].status, "in_progress");
+    } finally {
+      agent.shutdown();
+    }
   });
 });
 

@@ -419,6 +419,22 @@ export const HARNESS_TOOLS: ToolDefinition[] = [
       },
     },
   },
+  {
+    type: "function",
+    function: {
+      name: "run_tests",
+      description: "Auto-detect and run the project test suite (cargo test, npm test, pytest, make test) with parsed failures and compiler diagnostics.",
+      parameters: {
+        type: "object",
+        properties: {
+          filter: {
+            type: "string",
+            description: "Optional test name filter or pattern to isolate specific unit tests.",
+          },
+        },
+      },
+    },
+  },
 ];
 
 export function isSafeOutboundUrl(urlStr: string): { safe: boolean; reason?: string } {
@@ -890,6 +906,24 @@ export class RustCoreBridge {
           status: "plan_updated",
           phases: args.phases || [],
         }),
+      };
+    }
+
+    if (toolName === "run_tests") {
+      const { runTestSuite } = await import("./tester.js");
+      const res = runTestSuite(this.workspace, args.filter);
+      return {
+        success: res.success,
+        output: JSON.stringify({
+          command: res.command,
+          passed: res.success,
+          failures: res.failures,
+          diagnostics: res.diagnostics,
+          summary: res.success
+            ? "Test suite passed successfully."
+            : `Test suite failed with ${res.failures.length} failing tests and ${res.diagnostics.length} diagnostics.`,
+        }),
+        error: res.success ? undefined : `Test suite failed: ${res.failures.join("; ") || "Errors encountered"}`,
       };
     }
 

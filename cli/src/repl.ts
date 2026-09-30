@@ -12,6 +12,8 @@ import { getGitInfo, scaffoldProjectRules, generateConventionalCommit, commitCha
 import { SessionManager, SessionData } from "./session.js";
 import { CheckpointManager } from "./checkpoint.js";
 import { renderTokenGauge } from "./tokens.js";
+import { scanAndOnboardWorkspace } from "./onboard.js";
+import { runTestSuite } from "./tester.js";
 
 interface PatchHunk {
   header: string;
@@ -298,6 +300,7 @@ export class InteractiveRepl {
           "/diff", "/git", "/commit", "/sessions", "/save", "/resume", "/skills",
           "/skill", "/mcp", "/plugins", "/plan", "/checkpoint",
           "/checkpoints", "/undo", "/audit", "/export", "/tokens", "/init",
+          "/onboard", "/test",
           "/model", "/shell", "/cd", "/history", "/exit", "/quit"
         ];
         const trimmed = line.trim();
@@ -353,6 +356,10 @@ export class InteractiveRepl {
 
         return [[], lastToken] as [string[], string];
       },
+    });
+
+    this.agent.getSkillManager().startWatcher((skills) => {
+      console.log(pc.dim(`\n🔄 [Hot-Reload] Skills library updated (${skills.length} available).`));
     });
 
     const promptLoop = async () => {
@@ -685,11 +692,81 @@ export class InteractiveRepl {
             }
             continue;
           } else if (cmd === "plan") {
-            const plan = this.agent.getActivePlan();
-            if (!plan || plan.length === 0) {
-              console.log(pc.yellow("No active plan currently defined. The agent will formulate a plan when given a multi-step objective.\n"));
+            const subArgs = arg.trim().split(/\s+/).filter(Boolean);
+            const subCmd = subArgs[0]?.toLowerCase();
+
+            if (subCmd === "add") {
+              const phaseName = subArgs.slice(1).join(" ");
+              if (!phaseName) {
+                console.log(pc.yellow("Usage: /plan add <phase description>\n"));
+              } else {
+                const plan = [...this.agent.getActivePlan(), { name: phaseName, status: "pending" }];
+                this.agent.setActivePlan(plan);
+                console.log(pc.green(`✔ Added phase to plan: ${pc.bold(phaseName)}\n`));
+                this.agent.getUi().renderPlan(plan);
+              }
+            } else if (subCmd === "done" || subCmd === "complete") {
+              const idx = parseInt(subArgs[1], 10) - 1;
+              const plan = [...this.agent.getActivePlan()];
+              if (isNaN(idx) || idx < 0 || idx >= plan.length) {
+                console.log(pc.red(`Invalid phase number. Usage: /plan done <1..${plan.length}>\n`));
+              } else {
+                plan[idx] = { ...plan[idx], status: "completed" };
+                this.agent.setActivePlan(plan);
+                console.log(pc.green(`✔ Phase ${idx + 1} marked as completed.\n`));
+                this.agent.getUi().renderPlan(plan);
+              }
+            } else if (subCmd === "start") {
+              const idx = parseInt(subArgs[1], 10) - 1;
+              const plan = [...this.agent.getActivePlan()];
+              if (isNaN(idx) || idx < 0 || idx >= plan.length) {
+                console.log(pc.red(`Invalid phase number. Usage: /plan start <1..${plan.length}>\n`));
+              } else {
+                plan[idx] = { ...plan[idx], status: "in_progress" };
+                this.agent.setActivePlan(plan);
+                console.log(pc.green(`✔ Phase ${idx + 1} marked as in progress.\n`));
+                this.agent.getUi().renderPlan(plan);
+              }
+            } else if (subCmd === "clear") {
+              this.agent.setActivePlan([]);
+              console.log(pc.green("✔ Active plan cleared.\n"));
             } else {
-              this.agent.getUi().renderPlan(plan);
+              const plan = this.agent.getActivePlan();
+              if (!plan || plan.length === 0) {
+                console.log(pc.yellow("No active plan currently defined. Use '/plan add <milestone>' to create phases.\n"));
+              } else {
+                this.agent.getUi().renderPlan(plan);
+              }
+            }
+            continue;
+          } else if (cmd === "onboard") {
+            console.log(pc.dim(`🔍 Scanning workspace at ${this.config.workspace}...`));
+            const report = scanAndOnboardWorkspace(this.config.workspace, true);
+            console.log(pc.green(`✔ Onboarding complete for ${pc.bold(report.projectName)}!`));
+            console.log(`  • Detected stack: ${pc.cyan(report.languages.join(", ") || "General")}`);
+            console.log(`  • Detected commands: build: ${report.buildCommands[0] || "none"}, test: ${report.testCommands[0] || "none"}, lint: ${report.lintCommands[0] || "none"}`);
+            console.log(`  • Generated customized ${pc.bold("AGENTS.md")} with architecture diagram.\n`);
+            continue;
+          } else if (cmd === "test") {
+            const filterPattern = arg.trim() || undefined;
+            console.log(pc.dim(`🧪 Running automated test suite${filterPattern ? ` matching "${filterPattern}"` : ""}...`));
+            const res = runTestSuite(this.config.workspace, filterPattern);
+            console.log(pc.dim(`  Command: ${res.command}`));
+            if (res.success) {
+              console.log(pc.green(`✔ Test suite PASSED!\n`));
+            } else {
+              console.log(pc.red(`✖ Test suite FAILED.`));
+              if (res.failures.length > 0) {
+                console.log(pc.bold(pc.red("\nFailing Tests:")));
+                res.failures.slice(0, 10).forEach((f) => console.log(`  • ${pc.red(f)}`));
+              }
+              if (res.diagnostics.length > 0) {
+                console.log(pc.bold(pc.yellow("\nParsed Diagnostics:")));
+                res.diagnostics.slice(0, 5).forEach((d) => {
+                  console.log(`  • [${d.severity.toUpperCase()}] ${d.file || "unknown"}:${d.line || "?"} - ${d.message}`);
+                });
+              }
+              console.log();
             }
             continue;
           } else if (cmd === "checkpoint") {

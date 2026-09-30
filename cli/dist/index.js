@@ -38,6 +38,10 @@ function buildConfig(options) {
     const maxSteps = options.maxSteps ? parseInt(options.maxSteps, 10) : 30;
     const temperature = options.temperature ? parseFloat(options.temperature) : 0.2;
     const shell = options.shell || process.env.LOCAL_HARNESS_SHELL || "bash";
+    const dryRun = Boolean(options.dryRun);
+    const readOnly = Boolean(options.readOnly);
+    const fallbackEndpoints = options.fallback ? options.fallback.split(",").map((s) => s.trim()) : undefined;
+    const contextLimit = options.contextLimit ? parseInt(options.contextLimit, 10) : undefined;
     return {
         endpoint,
         model,
@@ -46,6 +50,10 @@ function buildConfig(options) {
         maxSteps,
         temperature,
         shell,
+        dryRun,
+        readOnly,
+        fallbackEndpoints,
+        contextLimit,
     };
 }
 program
@@ -57,6 +65,10 @@ program
     .option("-s, --max-steps <number>", "Maximum steps per turn (default: 30)")
     .option("-t, --temperature <number>", "Model temperature (default: 0.2)")
     .option("--shell <type>", "Linux shell to use: bash, zsh, or sh (default: bash)", "bash")
+    .option("--fallback <urls>", "Comma-separated fallback LLM endpoints if primary is unavailable")
+    .option("--context-limit <tokens>", "Model context window limit in tokens (default: 32768)")
+    .option("--dry-run", "Simulate file modifications without writing changes to disk")
+    .option("--read-only", "Reject all mutating tool executions and commands")
     .option("--approve", "Require human approval before destructive actions (edits, shell commands)")
     .option("-r, --resume [id]", "Resume previous session (defaults to latest if id omitted)")
     .action(async (options) => {
@@ -87,6 +99,10 @@ program
     .option("-s, --max-steps <number>", "Maximum autonomous agent steps", "30")
     .option("-t, --temperature <number>", "Model temperature", "0.2")
     .option("--shell <type>", "Linux shell to use: bash, zsh, or sh (default: bash or $LOCAL_HARNESS_SHELL)", "bash")
+    .option("--fallback <urls>", "Comma-separated fallback LLM endpoints if primary is unavailable")
+    .option("--context-limit <tokens>", "Model context window limit in tokens (default: 32768)")
+    .option("--dry-run", "Simulate file modifications without writing changes to disk")
+    .option("--read-only", "Reject all mutating tool executions and commands")
     .action(async (promptParts, options) => {
     const prompt = promptParts.join(" ");
     const config = buildConfig(options);

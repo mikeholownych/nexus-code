@@ -149,4 +149,47 @@ export class SkillManager {
 
     return out;
   }
+
+  private watchers: fs.FSWatcher[] = [];
+  private reloadDebounceTimer: NodeJS.Timeout | null = null;
+
+  public startWatcher(onReload?: (skills: Skill[]) => void): void {
+    this.stopWatcher();
+
+    const watchDirs = [
+      path.join(this.workspace, ".nexus", "skills"),
+      path.join(this.workspace, "skills"),
+      path.join(os.homedir(), ".nexus", "skills"),
+    ];
+
+    for (const dir of watchDirs) {
+      if (fs.existsSync(dir)) {
+        try {
+          const watcher = fs.watch(dir, { recursive: true }, () => {
+            if (this.reloadDebounceTimer) clearTimeout(this.reloadDebounceTimer);
+            this.reloadDebounceTimer = setTimeout(() => {
+              this.refresh();
+              if (onReload) onReload(this.listSkills());
+            }, 250);
+          });
+          this.watchers.push(watcher);
+        } catch {
+          // Ignore watcher errors
+        }
+      }
+    }
+  }
+
+  public stopWatcher(): void {
+    if (this.reloadDebounceTimer) {
+      clearTimeout(this.reloadDebounceTimer);
+      this.reloadDebounceTimer = null;
+    }
+    for (const w of this.watchers) {
+      try {
+        w.close();
+      } catch {}
+    }
+    this.watchers = [];
+  }
 }

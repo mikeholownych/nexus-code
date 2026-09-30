@@ -11,6 +11,9 @@ import { SkillManager } from "./skills.js";
 import { McpClientManager } from "./mcp.js";
 import { PluginManager } from "./plugins.js";
 import { extractCompilerDiagnostics, formatDiagnosticHints } from "./diagnostics.js";
+import { SecurityManager } from "./security.js";
+import { calculateContextBudget, countTokens } from "./tokens.js";
+import { selectRelevantFewShots } from "./fewshots.js";
 import pc from "picocolors";
 const READ_ONLY_TOOLS = new Set([
     "read_file",
@@ -22,6 +25,7 @@ const READ_ONLY_TOOLS = new Set([
     "find_files",
     "search_symbols",
     "fetch_web",
+    "run_tests",
 ]);
 function triggerNotification(title, message) {
     try {
@@ -65,13 +69,15 @@ export class AutonomousAgent {
     skillManager;
     mcpManager;
     pluginManager;
+    securityManager;
     extensibilityInitialized = false;
     activePlan = [];
     constructor(config, depth = 0) {
         this.config = config;
         this.depth = depth;
         this.client = new LocalLlmClient(config);
-        this.bridge = new RustCoreBridge(config.workspace, config.shell, config.coreBinaryPath);
+        this.bridge = new RustCoreBridge(config.workspace, config.shell, config.coreBinaryPath, config.dryRun, config.readOnly);
+        this.securityManager = new SecurityManager(config.workspace);
         this.ui = new TerminalUI();
         this.skillManager = new SkillManager(config.workspace);
         this.mcpManager = new McpClientManager(config.workspace);
@@ -99,8 +105,12 @@ export class AutonomousAgent {
     getPluginManager() {
         return this.pluginManager;
     }
+    getSecurityManager() {
+        return this.securityManager;
+    }
     shutdown() {
         this.bridge.shutdown();
+        this.skillManager.stopWatcher();
         this.mcpManager.shutdownAll();
     }
     getEffectiveTools() {
@@ -160,30 +170,110 @@ export class AutonomousAgent {
     getTokenStats() {
         return this.totalTokens;
     }
+    getContextBudget() {
+        const limit = this.config.contextLimit || 32768;
+        return calculateContextBudget(this.messages, this.getEffectiveTools(), limit);
+    }
     getActivePlan() {
         return this.activePlan;
     }
     setActivePlan(phases) {
         this.activePlan = phases;
     }
-    compactConversation() {
+    async compactConversation(useLlm = false) {
         if (this.messages.length <= 4) {
             return "Conversation is already compact.";
         }
         const system = this.messages[0];
         const recent = this.messages.slice(-4);
-        const prunedCount = this.messages.length - 5;
+        const discarded = this.messages.slice(1, -4);
+        const prunedCount = discarded.length;
+        // Structured extraction from discarded history
+        const filesRead = new Set();
+        const filesModified = new Set();
+        const commandsExecuted = [];
+        const keyDecisions = [];
+        for (const m of discarded) {
+            if (m.role === "assistant" && m.tool_calls) {
+                for (const tc of m.tool_calls) {
+                    const fn = tc.function.name;
+                    let args = {};
+                    try {
+                        args = typeof tc.function.arguments === "string" ? JSON.parse(tc.function.arguments) : tc.function.arguments;
+                    }
+                    catch { }
+                    if (["read_file", "file_info"].includes(fn) && args.path) {
+                        filesRead.add(args.path);
+                    }
+                    else if (fn === "batch_read" && Array.isArray(args.paths)) {
+                        args.paths.forEach((p) => filesRead.add(p));
+                    }
+                    else if (["write_file", "edit_file", "patch_file"].includes(fn) && args.path) {
+                        filesModified.add(args.path);
+                    }
+                    else if (fn === "run_command" && args.command) {
+                        commandsExecuted.push(args.command);
+                    }
+                }
+            }
+            if (m.role === "assistant" && m.content) {
+                const thoughtMatch = m.content.match(/<thought>([\s\S]*?)<\/thought>/);
+                if (thoughtMatch && thoughtMatch[1].trim()) {
+                    const snippet = thoughtMatch[1].trim().split("\n")[0].substring(0, 120);
+                    if (snippet && !keyDecisions.includes(snippet)) {
+                        keyDecisions.push(snippet);
+                    }
+                }
+            }
+        }
+        let summaryText = `[Structured Context Memory - ${prunedCount} previous messages compacted]\n`;
+        if (filesModified.size > 0) {
+            summaryText += `• Modified files: ${Array.from(filesModified).join(", ")}\n`;
+        }
+        if (filesRead.size > 0) {
+            summaryText += `• Inspected files: ${Array.from(filesRead).slice(0, 8).join(", ")}${filesRead.size > 8 ? " (and more)" : ""}\n`;
+        }
+        if (commandsExecuted.length > 0) {
+            summaryText += `• Commands run: ${commandsExecuted.slice(-4).join(" | ")}\n`;
+        }
+        if (keyDecisions.length > 0) {
+            summaryText += `• Key discoveries/decisions:\n` + keyDecisions.slice(-3).map((d) => `  - ${d}`).join("\n") + "\n";
+        }
+        if (useLlm) {
+            try {
+                const llmPrompt = [
+                    {
+                        role: "system",
+                        content: "You are an AI context summarizer. Distill the conversation into concise engineering bullet points (max 120 words): files modified, test results, and next actions.",
+                    },
+                    ...discarded.slice(-8),
+                ];
+                const res = await this.client.chatCompletion(llmPrompt, []);
+                if (res.content) {
+                    summaryText += `\nExecutive Summary:\n${res.content.trim()}\n`;
+                }
+            }
+            catch {
+                // Fallback to deterministic extraction
+            }
+        }
         const summaryMessage = {
             role: "system",
-            content: `[Context Note: ${prunedCount} earlier conversation messages were compacted to preserve context budget.]`,
+            content: summaryText.trim(),
         };
         this.messages = [system, summaryMessage, ...recent];
-        return `Compacted context: pruned ${prunedCount} messages, ${this.messages.length} active messages in memory.`;
+        return `Compacted context: distilled ${prunedCount} messages, ${this.messages.length} active messages in memory.`;
     }
     buildSystemPrompt() {
         const projectRules = getProjectRules(this.config.workspace);
         const rulesSection = projectRules ? `\n${projectRules}\n` : "";
         const skillsSection = this.skillManager ? `\n${this.skillManager.getPromptSection()}` : "";
+        // Candidate #18: Inject dynamic few-shot tool demonstration based on task context
+        const taskContext = this.messages
+            .filter((m) => m.role === "user")
+            .map((m) => m.content)
+            .join(" ");
+        const fewShotSection = `\n${selectRelevantFewShots(taskContext || this.config.workspace)}\n`;
         // Dynamic runtime state placed at the tail to preserve invariant KV-cache prefix
         const gitInfo = getGitInfo(this.config.workspace);
         const gitSection = gitInfo.isRepo
@@ -209,7 +299,7 @@ ${rulesSection}${skillsSection}
 5. VERIFICATION: After making code changes, use \`run_command\` with bash/zsh commands to run tests, builds, or linting (e.g. \`cargo check\`, \`cargo test\`, \`npm test\`, \`pytest\`).
 6. SELF-CORRECTION: If a command or tool returns an error, analyze the error message, identify the root cause, and fix it.
 7. AUTONOMOUS COMPLETION: Keep executing tools until the entire task is thoroughly resolved. When everything is verified and done, invoke \`task_completed\` with a detailed summary.
-
+${fewShotSection}
 Always explain your reasoning before or alongside your tool calls.${gitSection}${planSection}`;
     }
     async runTurn(taskPrompt, onConfirm) {
@@ -249,6 +339,13 @@ Always explain your reasoning before or alongside your tool calls.${gitSection}$
             }
             // Parse the response using hybrid parser
             const parsed = parseModelResponse(assistantMessage);
+            // Update cumulative token usage
+            const promptEst = calculateContextBudget(this.messages, this.getEffectiveTools(), this.config.contextLimit || 32768).totalActiveTokens;
+            const compEst = countTokens(assistantMessage.content || "") +
+                countTokens(JSON.stringify(assistantMessage.tool_calls || []));
+            this.totalTokens.prompt += promptEst;
+            this.totalTokens.completion += compEst;
+            this.totalTokens.total = this.totalTokens.prompt + this.totalTokens.completion;
             // Print any thought or explanation text only if not already streamed
             if (parsed.thoughtText && !streamedTokens) {
                 this.ui.printThought(parsed.thoughtText);

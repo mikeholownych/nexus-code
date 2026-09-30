@@ -29,6 +29,7 @@ const READ_ONLY_TOOLS = new Set([
   "find_files",
   "search_symbols",
   "fetch_web",
+  "run_tests",
 ]);
 
 function triggerNotification(title: string, message: string) {
@@ -132,6 +133,7 @@ export class AutonomousAgent {
 
   public shutdown(): void {
     this.bridge.shutdown();
+    this.skillManager.stopWatcher();
     this.mcpManager.shutdownAll();
   }
 
