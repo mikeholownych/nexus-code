@@ -729,6 +729,125 @@ error[E0308]: mismatched types
     }
   });
 
+  test("reconstructible result omission requires a unique valid matching call identity", () => {
+    const agent = new AutonomousAgent({
+      endpoint: "http://localhost:1234/v1",
+      model: "test-model",
+      workspace: process.cwd(),
+      maxSteps: 1,
+      shell: "bash",
+    });
+    const assistantCall = (id: string, name: string, argumentsValue?: unknown) => ({
+      role: "assistant",
+      content: null,
+      tool_calls: [{ id, type: "function", function: { name, arguments: argumentsValue } }],
+    });
+    const toolResult = (id: string | undefined, name: string, content: string) => ({
+      role: "tool",
+      ...(id === undefined ? {} : { tool_call_id: id }),
+      name,
+      content,
+    });
+    const summaryFor = (entries: any[]) => {
+      const compacted = (agent as any).compactedMessages([
+        agent.getMessages()[0],
+        { role: "user", content: "Continue while preserving all non-reconstructible observations." },
+        ...entries,
+        { role: "user", content: "Continue." },
+      ], 0, 6_000);
+      return String(compacted.filter((message: any) => message.role === "system")[1]?.content || "");
+    };
+    try {
+      const matched = summaryFor([
+        assistantCall("matching-id", "list_dir", JSON.stringify({ path: "src" })),
+        toolResult("matching-id", "list_dir", "MATCHED_BULK_RESULT"),
+      ]);
+      assert.ok(!matched.includes("MATCHED_BULK_RESULT"), "a uniquely matched reconstructible result may be omitted");
+      assert.ok(matched.includes('Reconstructible query retained for rerun: list_dir {"path":"src"}'));
+
+      const exactMismatch = "Do not change the published RPC contract; downstream clients depend on this method.";
+      let repeatedHistory: any[] = [
+        agent.getMessages()[0],
+        { role: "user", content: "Continue while preserving this API constraint." },
+        assistantCall("same-id", "list_dir", JSON.stringify({ path: "src" })),
+        toolResult("same-id", "file_tree", exactMismatch),
+        { role: "user", content: "Continue." },
+      ];
+      for (let cycle = 0; cycle < 5; cycle++) {
+        repeatedHistory = (agent as any).compactedMessages(repeatedHistory, 0, 6_000);
+        const summary = String(repeatedHistory.filter((message: any) => message.role === "system")[1]?.content || "");
+        assert.ok(summary.includes(exactMismatch), `mismatched result constraint disappeared after cycle ${cycle + 1}`);
+        assert.strictEqual(summary.split(exactMismatch).length - 1, 1, "repeated mismatched observations deduplicate");
+        if (cycle < 4) {
+          repeatedHistory = [
+            ...repeatedHistory,
+            assistantCall(`same-id-${cycle}`, "list_dir", JSON.stringify({ path: "src" })),
+            toolResult(`same-id-${cycle}`, "file_tree", exactMismatch),
+            { role: "user", content: "Continue." },
+          ];
+        }
+      }
+
+      const mismatchedNames = summaryFor([
+        assistantCall("name-mismatch", "list_dir", JSON.stringify({ path: "src" })),
+        toolResult("name-mismatch", "file_tree", "FILE_TREE_RESULT_MUST_REMAIN"),
+      ]);
+      assert.ok(mismatchedNames.includes("FILE_TREE_RESULT_MUST_REMAIN"), "different allowlisted names are not equivalent");
+
+      const missingCall = summaryFor([toolResult("missing-call", "list_dir", "MISSING_CALL_RESULT_MUST_REMAIN")]);
+      assert.ok(missingCall.includes("MISSING_CALL_RESULT_MUST_REMAIN"));
+
+      const malformedArguments = summaryFor([
+        assistantCall("malformed-args", "list_dir", "{invalid-json"),
+        toolResult("malformed-args", "list_dir", "MALFORMED_ARGUMENT_RESULT_MUST_REMAIN"),
+      ]);
+      assert.ok(malformedArguments.includes("MALFORMED_ARGUMENT_RESULT_MUST_REMAIN"));
+
+      const missingArguments = summaryFor([
+        assistantCall("missing-args", "list_dir"),
+        toolResult("missing-args", "list_dir", "MISSING_ARGUMENT_RESULT_MUST_REMAIN"),
+      ]);
+      assert.ok(missingArguments.includes("MISSING_ARGUMENT_RESULT_MUST_REMAIN"));
+
+      const missingRequiredArguments = summaryFor([
+        assistantCall("missing-required", "find_files", JSON.stringify({})),
+        toolResult("missing-required", "find_files", "MISSING_REQUIRED_ARGUMENT_RESULT_MUST_REMAIN"),
+      ]);
+      assert.ok(missingRequiredArguments.includes("MISSING_REQUIRED_ARGUMENT_RESULT_MUST_REMAIN"));
+
+      const missingFunctionMetadata = summaryFor([
+        { role: "assistant", content: null, tool_calls: [{ id: "missing-function", type: "function" }] },
+        toolResult("missing-function", "file_tree", "MISSING_FUNCTION_RESULT_MUST_REMAIN"),
+      ]);
+      assert.ok(missingFunctionMetadata.includes("MISSING_FUNCTION_RESULT_MUST_REMAIN"));
+
+      const unrelatedResult = summaryFor([
+        assistantCall("unrelated", "list_dir", JSON.stringify({ path: "src" })),
+        toolResult("unrelated", "read_file", "NON_ALLOWLISTED_RESULT_MUST_REMAIN"),
+        toolResult(undefined, "file_tree", "RESULT_WITHOUT_CALL_ID_MUST_REMAIN"),
+      ]);
+      assert.ok(unrelatedResult.includes("NON_ALLOWLISTED_RESULT_MUST_REMAIN"));
+      assert.ok(unrelatedResult.includes("RESULT_WITHOUT_CALL_ID_MUST_REMAIN"));
+
+      const ambiguousCallId = summaryFor([
+        assistantCall("ambiguous", "list_dir", JSON.stringify({ path: "src" })),
+        assistantCall("ambiguous", "file_tree", JSON.stringify({ path: "src" })),
+        toolResult("ambiguous", "file_tree", "AMBIGUOUS_CALL_ID_RESULT_MUST_REMAIN"),
+      ]);
+      assert.ok(ambiguousCallId.includes("AMBIGUOUS_CALL_ID_RESULT_MUST_REMAIN"));
+
+      const ambiguousResultId = summaryFor([
+        assistantCall("duplicate-results", "list_dir", JSON.stringify({ path: "src" })),
+        toolResult("duplicate-results", "list_dir", "FIRST_AMBIGUOUS_RESULT_MUST_REMAIN"),
+        toolResult("duplicate-results", "list_dir", "SECOND_AMBIGUOUS_RESULT_MUST_REMAIN"),
+      ]);
+      assert.ok(ambiguousResultId.includes("FIRST_AMBIGUOUS_RESULT_MUST_REMAIN"));
+      assert.ok(ambiguousResultId.includes("SECOND_AMBIGUOUS_RESULT_MUST_REMAIN"));
+    } finally {
+      agent.shutdown();
+    }
+  });
+
   test("long-running tool use keeps every dispatched request within budget", async () => {
     const limit = 65_536;
     const completionReserve = 8_192;

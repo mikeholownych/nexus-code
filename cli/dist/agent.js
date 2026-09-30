@@ -238,10 +238,69 @@ export class AutonomousAgent {
         const filesModified = new Set();
         const commandsExecuted = [];
         const reconstructibleCalls = new Map();
+        const toolCallCounts = new Map();
+        const toolResultCounts = new Map();
         const priorTasks = [];
         const durableNotes = [];
         const durableNoteKeys = new Set();
         const reconstructibleQueryTools = new Set(["file_tree", "list_dir", "find_files", "file_info"]);
+        const validReconstructibleArgs = (name, rawArgs) => {
+            let args;
+            try {
+                args = typeof rawArgs === "string" ? JSON.parse(rawArgs) : rawArgs;
+            }
+            catch {
+                return undefined;
+            }
+            if (!args || typeof args !== "object" || Array.isArray(args))
+                return undefined;
+            const prototype = Object.getPrototypeOf(args);
+            if (prototype !== Object.prototype && prototype !== null)
+                return undefined;
+            const values = args;
+            const optionalString = (key) => values[key] === undefined || (typeof values[key] === "string" && values[key] !== "");
+            const optionalNumber = (key) => values[key] === undefined || (typeof values[key] === "number" && Number.isFinite(values[key]));
+            if (name === "file_tree" || name === "list_dir") {
+                if (Object.keys(values).some((key) => !["path", "max_depth"].includes(key)))
+                    return undefined;
+                if (!optionalString("path") || !optionalNumber("max_depth"))
+                    return undefined;
+            }
+            else if (name === "find_files") {
+                if (Object.keys(values).some((key) => !["pattern", "max_results"].includes(key)))
+                    return undefined;
+                if (typeof values.pattern !== "string" || values.pattern.length === 0 || !optionalNumber("max_results"))
+                    return undefined;
+            }
+            else if (name === "file_info") {
+                if (Object.keys(values).some((key) => key !== "path"))
+                    return undefined;
+                if (typeof values.path !== "string" || values.path.length === 0)
+                    return undefined;
+            }
+            else {
+                return undefined;
+            }
+            try {
+                return JSON.stringify(values);
+            }
+            catch {
+                return undefined;
+            }
+        };
+        for (const message of messages) {
+            if (message.role === "assistant" && message.tool_calls) {
+                for (const call of message.tool_calls) {
+                    const id = typeof call?.id === "string" && call.id.trim() ? call.id : undefined;
+                    if (id)
+                        toolCallCounts.set(id, (toolCallCounts.get(id) || 0) + 1);
+                }
+            }
+            if (message.role === "tool" && typeof message.tool_call_id === "string" && message.tool_call_id.trim()) {
+                const id = message.tool_call_id;
+                toolResultCounts.set(id, (toolResultCounts.get(id) || 0) + 1);
+            }
+        }
         const addDurableNote = (note) => {
             const key = note.replace(/\s+/g, " ").trim();
             if (key && !durableNoteKeys.has(key)) {
@@ -291,14 +350,20 @@ export class AutonomousAgent {
             if (message.role === "assistant" && message.tool_calls) {
                 for (const call of message.tool_calls) {
                     let args = {};
+                    const rawArgs = call?.function?.arguments;
                     try {
-                        args = typeof call.function.arguments === "string" ? JSON.parse(call.function.arguments) : call.function.arguments;
+                        const parsed = typeof rawArgs === "string" ? JSON.parse(rawArgs) : rawArgs;
+                        if (parsed && typeof parsed === "object" && !Array.isArray(parsed))
+                            args = parsed;
                     }
                     catch { }
-                    const name = call.function.name;
-                    if (call.id && reconstructibleQueryTools.has(name)) {
-                        const serializedArgs = JSON.stringify(args);
-                        reconstructibleCalls.set(call.id, `${name} ${serializedArgs}`);
+                    const name = typeof call?.function?.name === "string" ? call.function.name : "";
+                    const id = typeof call?.id === "string" && call.id.trim() ? call.id : undefined;
+                    const serializedArgs = reconstructibleQueryTools.has(name)
+                        ? validReconstructibleArgs(name, rawArgs)
+                        : undefined;
+                    if (id && toolCallCounts.get(id) === 1 && serializedArgs) {
+                        reconstructibleCalls.set(id, { name, serializedArgs });
                     }
                     if (["read_file", "file_info"].includes(name) && args.path)
                         filesRead.add(String(args.path));
@@ -319,9 +384,10 @@ export class AutonomousAgent {
                 }
             }
             if (message.role === "tool" && typeof message.content === "string") {
-                const reconstructibleCall = message.tool_call_id ? reconstructibleCalls.get(message.tool_call_id) : undefined;
-                if (reconstructibleCall && message.name && reconstructibleQueryTools.has(message.name)) {
-                    addDurableNote(`Reconstructible query retained for rerun: ${reconstructibleCall}`);
+                const id = typeof message.tool_call_id === "string" && message.tool_call_id.trim() ? message.tool_call_id : undefined;
+                const reconstructibleCall = id ? reconstructibleCalls.get(id) : undefined;
+                if (id && toolResultCounts.get(id) === 1 && reconstructibleCall && message.name === reconstructibleCall.name) {
+                    addDurableNote(`Reconstructible query retained for rerun: ${reconstructibleCall.name} ${reconstructibleCall.serializedArgs}`);
                     continue;
                 }
                 const lines = message.content.split(/\r?\n/).map((line) => line.replace(/\s+/g, " ").trim()).filter(Boolean);

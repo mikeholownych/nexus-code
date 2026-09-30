@@ -283,11 +283,56 @@ export class AutonomousAgent {
     const filesRead = new Set<string>();
     const filesModified = new Set<string>();
     const commandsExecuted: string[] = [];
-    const reconstructibleCalls = new Map<string, string>();
+    const reconstructibleCalls = new Map<string, { name: string; serializedArgs: string }>();
+    const toolCallCounts = new Map<string, number>();
+    const toolResultCounts = new Map<string, number>();
     const priorTasks: string[] = [];
     const durableNotes: string[] = [];
     const durableNoteKeys = new Set<string>();
     const reconstructibleQueryTools = new Set(["file_tree", "list_dir", "find_files", "file_info"]);
+    const validReconstructibleArgs = (name: string, rawArgs: unknown): string | undefined => {
+      let args: unknown;
+      try {
+        args = typeof rawArgs === "string" ? JSON.parse(rawArgs) : rawArgs;
+      } catch {
+        return undefined;
+      }
+      if (!args || typeof args !== "object" || Array.isArray(args)) return undefined;
+      const prototype = Object.getPrototypeOf(args);
+      if (prototype !== Object.prototype && prototype !== null) return undefined;
+      const values = args as Record<string, unknown>;
+      const optionalString = (key: string) => values[key] === undefined || (typeof values[key] === "string" && values[key] !== "");
+      const optionalNumber = (key: string) => values[key] === undefined || (typeof values[key] === "number" && Number.isFinite(values[key]));
+      if (name === "file_tree" || name === "list_dir") {
+        if (Object.keys(values).some((key) => !["path", "max_depth"].includes(key))) return undefined;
+        if (!optionalString("path") || !optionalNumber("max_depth")) return undefined;
+      } else if (name === "find_files") {
+        if (Object.keys(values).some((key) => !["pattern", "max_results"].includes(key))) return undefined;
+        if (typeof values.pattern !== "string" || values.pattern.length === 0 || !optionalNumber("max_results")) return undefined;
+      } else if (name === "file_info") {
+        if (Object.keys(values).some((key) => key !== "path")) return undefined;
+        if (typeof values.path !== "string" || values.path.length === 0) return undefined;
+      } else {
+        return undefined;
+      }
+      try {
+        return JSON.stringify(values);
+      } catch {
+        return undefined;
+      }
+    };
+    for (const message of messages) {
+      if (message.role === "assistant" && message.tool_calls) {
+        for (const call of message.tool_calls) {
+          const id = typeof call?.id === "string" && call.id.trim() ? call.id : undefined;
+          if (id) toolCallCounts.set(id, (toolCallCounts.get(id) || 0) + 1);
+        }
+      }
+      if (message.role === "tool" && typeof message.tool_call_id === "string" && message.tool_call_id.trim()) {
+        const id = message.tool_call_id;
+        toolResultCounts.set(id, (toolResultCounts.get(id) || 0) + 1);
+      }
+    }
     const addDurableNote = (note: string) => {
       const key = note.replace(/\s+/g, " ").trim();
       if (key && !durableNoteKeys.has(key)) {
@@ -334,13 +379,18 @@ export class AutonomousAgent {
       if (message.role === "assistant" && message.tool_calls) {
         for (const call of message.tool_calls) {
           let args: Record<string, any> = {};
+          const rawArgs = call?.function?.arguments;
           try {
-            args = typeof call.function.arguments === "string" ? JSON.parse(call.function.arguments) : call.function.arguments;
+            const parsed = typeof rawArgs === "string" ? JSON.parse(rawArgs) : rawArgs;
+            if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) args = parsed;
           } catch {}
-          const name = call.function.name;
-          if (call.id && reconstructibleQueryTools.has(name)) {
-            const serializedArgs = JSON.stringify(args);
-            reconstructibleCalls.set(call.id, `${name} ${serializedArgs}`);
+          const name = typeof call?.function?.name === "string" ? call.function.name : "";
+          const id = typeof call?.id === "string" && call.id.trim() ? call.id : undefined;
+          const serializedArgs = reconstructibleQueryTools.has(name)
+            ? validReconstructibleArgs(name, rawArgs)
+            : undefined;
+          if (id && toolCallCounts.get(id) === 1 && serializedArgs) {
+            reconstructibleCalls.set(id, { name, serializedArgs });
           }
           if (["read_file", "file_info"].includes(name) && args.path) filesRead.add(String(args.path));
           if (name === "batch_read" && Array.isArray(args.paths)) args.paths.forEach((value: string) => filesRead.add(String(value)));
@@ -356,9 +406,10 @@ export class AutonomousAgent {
         }
       }
       if (message.role === "tool" && typeof message.content === "string") {
-        const reconstructibleCall = message.tool_call_id ? reconstructibleCalls.get(message.tool_call_id) : undefined;
-        if (reconstructibleCall && message.name && reconstructibleQueryTools.has(message.name)) {
-          addDurableNote(`Reconstructible query retained for rerun: ${reconstructibleCall}`);
+        const id = typeof message.tool_call_id === "string" && message.tool_call_id.trim() ? message.tool_call_id : undefined;
+        const reconstructibleCall = id ? reconstructibleCalls.get(id) : undefined;
+        if (id && toolResultCounts.get(id) === 1 && reconstructibleCall && message.name === reconstructibleCall.name) {
+          addDurableNote(`Reconstructible query retained for rerun: ${reconstructibleCall.name} ${reconstructibleCall.serializedArgs}`);
           continue;
         }
         const lines = message.content.split(/\r?\n/).map((line) => line.replace(/\s+/g, " ").trim()).filter(Boolean);
