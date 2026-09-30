@@ -19,6 +19,7 @@ import { selectRelevantFewShots } from "./fewshots.js";
 import { FlightRecorder } from "./flight.js";
 import { WorktreeManager } from "./worktree.js";
 import { isSandboxAvailable } from "./sandbox.js";
+import { runTestSuiteWithExecutor } from "./tester.js";
 import { HybridSearchEngine } from "./embeddings.js";
 import { SynthesizerEngine } from "./synthesizer.js";
 import { BrowserDriver } from "./browser.js";
@@ -217,6 +218,7 @@ export class AutonomousAgent {
   private worktreeManager: WorktreeManager;
   private activeWorktree?: { taskId: string; worktreePath: string; branch: string };
   private originalWorkspace?: string;
+  private inheritedWorktreeScope?: { workspace: string; requireSandbox: true };
   private plannerClient: LocalLlmClient;
   private coderClient: LocalLlmClient;
   private cognitiveRoutingEnabled: boolean = false;
@@ -227,10 +229,18 @@ export class AutonomousAgent {
   private browser: BrowserDriver;
   private knowledge: KnowledgeGraph;
 
-  constructor(config: HarnessConfig, depth: number = 0) {
+  constructor(
+    config: HarnessConfig,
+    depth: number = 0,
+    inheritedWorktreeScope?: { workspace: string; requireSandbox: true },
+  ) {
     canonicalDurableProvenance.set(this, new WeakMap());
     this.config = config;
     this.depth = depth;
+    this.inheritedWorktreeScope = inheritedWorktreeScope;
+    if (inheritedWorktreeScope && path.resolve(config.workspace) !== path.resolve(inheritedWorktreeScope.workspace)) {
+      throw new Error("Subagent workspace does not match its inherited worktree authority.");
+    }
     const ws = config.workspace || process.cwd();
     this.client = new LocalLlmClient(config);
     if (config.plannerModel || config.coderModel) {
@@ -263,7 +273,8 @@ export class AutonomousAgent {
       config.coreBinaryPath,
       config.dryRun,
       config.readOnly,
-      config.sandbox
+      inheritedWorktreeScope ? (config.sandbox || "auto") : config.sandbox,
+      Boolean(inheritedWorktreeScope?.requireSandbox),
     );
     this.securityManager = new SecurityManager(ws);
     this.ui = new TerminalUI();
@@ -448,6 +459,9 @@ export class AutonomousAgent {
   }
 
   public setWorkspace(newWorkspace: string): void {
+    if (this.inheritedWorktreeScope && path.resolve(newWorkspace) !== path.resolve(this.inheritedWorktreeScope.workspace)) {
+      throw new Error("Cannot change workspace outside the inherited worktree authority.");
+    }
     if (this.activeWorktree && !this.managedWorktreeWorkspaceSwitch) {
       throw new Error("Cannot switch workspaces while a speculative worktree is unresolved; merge or discard it first.");
     }
@@ -460,7 +474,7 @@ export class AutonomousAgent {
       this.config.dryRun,
       this.config.readOnly,
       this.bridgeSandboxSetting(),
-      Boolean(this.activeWorktree),
+      Boolean(this.activeWorktree) || Boolean(this.inheritedWorktreeScope?.requireSandbox),
     );
     this.skillManager.setWorkspace(newWorkspace);
     // During an internally managed isolation switch, retain the manager bound
@@ -487,7 +501,7 @@ export class AutonomousAgent {
       this.config.dryRun,
       this.config.readOnly,
       this.bridgeSandboxSetting(),
-      Boolean(this.activeWorktree),
+      Boolean(this.activeWorktree) || Boolean(this.inheritedWorktreeScope?.requireSandbox),
     );
     this.resetConversation();
   }
@@ -1168,14 +1182,19 @@ Always explain your reasoning before or alongside your tool calls.`;
           const worktreeHasChanges = this.activeWorktree
             ? this.worktreeManager.hasChanges(this.activeWorktree.taskId)
             : false;
+          let verifierSucceeded = false;
           // Verification Oracle: If code was modified and unverified, verify before marking complete
           if ((this.hasPendingModifications || worktreeHasChanges) && !this.config.dryRun && !this.config.readOnly) {
             try {
-              const { runTestSuite } = await import("./tester.js");
-              const testRes = runTestSuite(this.config.workspace);
+              const authoritativeVerifier = this.config.authoritativeVerifierCommand?.trim();
+              const testRes = await runTestSuiteWithExecutor(
+                this.config.workspace,
+                (command) => this.bridge.executeTool("run_command", { command }),
+                authoritativeVerifier || undefined,
+              );
               if (!testRes.success || testRes.command === "none") {
                 const hints = formatDiagnosticHints(testRes.diagnostics);
-                const oracleFailContent = `Verification Oracle: Recent code modifications caused automated tests to fail.\nCommand: ${testRes.command}\n${foldVoluminousOutput(testRes.rawOutput || "")}${hints}\nPlease resolve these test failures before calling task_completed.`;
+                const oracleFailContent = `Verification Oracle: The selected verifier did not pass.\nCommand: ${testRes.command}\n${foldVoluminousOutput(testRes.rawOutput || "")}${hints}\nResolve the verification failure before calling task_completed.`;
                 if (this.flightRecorder) {
                   this.flightRecorder.recordToolResult(currentStep, call.id, toolName, false, oracleFailContent, 0, "Test verification failed");
                 }
@@ -1187,6 +1206,10 @@ Always explain your reasoning before or alongside your tool calls.`;
                 });
                 continue;
               }
+              verifierSucceeded = true;
+              if (this.activeWorktree && !authoritativeVerifier) {
+                console.log(pc.yellow(`Verification command '${testRes.command}' passed, but no authoritative verifier is configured; changes will remain in the worktree.`));
+              }
             } catch (err: any) {
               const verificationError = `Verification Oracle could not verify this worktree: ${err?.message || "test discovery failed"}.`;
               if (this.flightRecorder) this.flightRecorder.recordToolResult(currentStep, call.id, toolName, false, verificationError, 0, "Verification unavailable");
@@ -1196,7 +1219,10 @@ Always explain your reasoning before or alongside your tool calls.`;
           }
 
           this.hasPendingModifications = false;
-          if (this.activeWorktree) this.verifiedWorktreeCompletion = true;
+          if (this.activeWorktree) {
+            this.verifiedWorktreeCompletion = !worktreeHasChanges
+              || Boolean(verifierSucceeded && this.config.authoritativeVerifierCommand?.trim() && !this.config.dryRun && !this.config.readOnly);
+          }
           this.ui.taskCompleted(args.summary || "Task completed.", args.notes);
           isFinished = true;
           if (this.flightRecorder) {
@@ -1230,14 +1256,20 @@ Always explain your reasoning before or alongside your tool calls.`;
 
           const subPrompt = args.prompt || "Investigate the task";
           const subMaxSteps = args.max_steps ? Math.min(args.max_steps, 15) : 8;
+          const inheritedWorktreeScope = this.activeWorktree
+            ? { workspace: this.activeWorktree.worktreePath, requireSandbox: true as const }
+            : undefined;
+          const subagentConfig: HarnessConfig = {
+            ...this.config,
+            maxSteps: subMaxSteps,
+            ...(inheritedWorktreeScope
+              ? { workspace: inheritedWorktreeScope.workspace, sandbox: this.bridgeSandboxSetting() || "auto" }
+              : {}),
+          };
 
           this.ui.startSpinner(`Spawning isolated subagent: "${subPrompt.slice(0, 45)}..."`);
-          const subagent = new AutonomousAgent(
-            { ...this.config, maxSteps: subMaxSteps },
-            this.depth + 1
-          );
-
           try {
+            const subagent = new AutonomousAgent(subagentConfig, this.depth + 1, inheritedWorktreeScope);
             const subResult = await subagent.runSubagent(subPrompt);
             this.ui.stopSpinner(true);
             console.log(pc.cyan(`\n🤖 [Subagent Report Received]\n`));
@@ -1799,6 +1831,12 @@ Always explain your reasoning before or alongside your tool calls.`;
   }
 
   public async runSubagent(prompt: string): Promise<string> {
+    if (this.config.worktree && !this.activeWorktree && !this.inheritedWorktreeScope) {
+      throw new Error("Cannot run a worktree-enabled subagent without an established worktree authority.");
+    }
+    if (this.inheritedWorktreeScope && path.resolve(this.config.workspace) !== path.resolve(this.inheritedWorktreeScope.workspace)) {
+      throw new Error("Subagent workspace no longer matches its inherited worktree authority.");
+    }
     this.resetConversation();
     this.messages.push({
       role: "user",

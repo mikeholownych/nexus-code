@@ -508,7 +508,7 @@ error[E0308]: mismatched types
       port = await listen();
       const createAgent = () => new AutonomousAgent({
         endpoint: `http://127.0.0.1:${port}/v1`, model: "test", maxSteps: 3, temperature: 0,
-        workspace: repo, shell: "bash", worktree: true,
+        workspace: repo, shell: "bash", worktree: true, authoritativeVerifierCommand: "make test",
       });
       const blocked = createAgent();
       const originalCreate = blocked.getWorktreeManager().createWorktree.bind(blocked.getWorktreeManager());
@@ -691,7 +691,7 @@ error[E0308]: mismatched types
     let agent: AutonomousAgent | undefined;
     try {
       const port = await new Promise<number>((resolve) => server.listen(0, "127.0.0.1", () => resolve((server.address() as any).port)));
-      agent = new AutonomousAgent({ endpoint: `http://127.0.0.1:${port}/v1`, model: "test", maxSteps: 2, temperature: 0, workspace: repos[0], shell: "bash", worktree: true });
+      agent = new AutonomousAgent({ endpoint: `http://127.0.0.1:${port}/v1`, model: "test", maxSteps: 2, temperature: 0, workspace: repos[0], shell: "bash", worktree: true, authoritativeVerifierCommand: "make test" });
       agent.setWorkspace(repos[1]);
       await agent.run("write in the selected workspace");
       assert.strictEqual(requests, 1);
@@ -748,6 +748,234 @@ error[E0308]: mismatched types
       server.closeAllConnections();
       await new Promise<void>((resolve) => server.close(() => resolve()));
       fs.rmSync(repo, { recursive: true, force: true });
+    }
+  });
+
+  test("issue 11 worktree subagents cannot mutate the original workspace", async () => {
+    const repo = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-subagent-authority-"));
+    fs.writeFileSync(path.join(repo, "base.txt"), "base\n");
+    fs.writeFileSync(path.join(repo, "Makefile"), "test:\n\t@true\n");
+    execSync("git init -q && git config user.name 'Nexus Test' && git config user.email 'nexus@example.invalid' && git add . && git commit -qm baseline", { cwd: repo, stdio: "ignore" });
+    const originalWorkspaceWrite = path.join(repo, "subagent-root-escape.txt");
+    let streamRequests = 0;
+    let childRequests = 0;
+    const server = http.createServer((req, res) => {
+      let body = "";
+      req.on("data", (chunk) => { body += chunk; });
+      req.on("end", () => {
+        const request = JSON.parse(body || "{}");
+        if (request.stream) {
+          streamRequests++;
+          const calls = streamRequests === 1 ? [
+            { index: 0, id: "write", type: "function", function: { name: "write_file", arguments: JSON.stringify({ path: "parent-worktree.txt", content: "parent\n" }) } },
+            { index: 1, id: "spawn", type: "function", function: { name: "spawn_subagent", arguments: JSON.stringify({ prompt: "write to the original checkout", max_steps: 3 }) } },
+            { index: 2, id: "complete", type: "function", function: { name: "task_completed", arguments: JSON.stringify({ summary: "Parent task finished." }) } },
+          ] : [];
+          res.writeHead(200, { "Content-Type": "text/event-stream" });
+          res.end(`data: ${JSON.stringify({ choices: [{ delta: { content: "Exercise inherited worktree authority.", tool_calls: calls } }] })}\n\ndata: [DONE]\n\n`);
+          return;
+        }
+        childRequests++;
+        const call = childRequests === 1
+          ? { name: "run_command", args: { command: "printf child > child-worktree.txt" } }
+          : childRequests === 2
+            ? { name: "run_command", args: { command: `printf escaped > ${JSON.stringify(originalWorkspaceWrite)}` } }
+            : { name: "task_completed", args: { summary: "Child finished." } };
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ choices: [{ message: { role: "assistant", tool_calls: [{ id: `child-${childRequests}`, type: "function", function: { name: call.name, arguments: JSON.stringify(call.args) } }] } }] }));
+      });
+    });
+    let agent: AutonomousAgent | undefined;
+    try {
+      const port = await new Promise<number>((resolve) => server.listen(0, "127.0.0.1", () => resolve((server.address() as any).port)));
+      agent = new AutonomousAgent({ endpoint: `http://127.0.0.1:${port}/v1`, model: "test", maxSteps: 3, temperature: 0, workspace: repo, shell: "bash", worktree: true });
+      await agent.run("exercise child mutation boundary");
+      const active = agent.getActiveWorktree();
+      assert.ok(active, "unverified parent worktree remains recoverable");
+      assert.strictEqual(fs.existsSync(originalWorkspaceWrite), false, "child shell must not mutate the original checkout");
+      assert.strictEqual(fs.existsSync(path.join(active!.worktreePath, "parent-worktree.txt")), true, "parent mutation remains in its intended worktree");
+      assert.strictEqual(fs.existsSync(path.join(active!.worktreePath, "child-worktree.txt")), true, "child retains the parent's authorized mutation destination");
+      assert.strictEqual(streamRequests, 1);
+      assert.strictEqual(childRequests, 3);
+      assert.strictEqual(agent.discardActiveWorktree().success, true);
+    } finally {
+      agent?.shutdown();
+      server.closeAllConnections();
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+      fs.rmSync(repo, { recursive: true, force: true });
+    }
+  });
+
+  test("worktree-enabled runSubagent refuses to start without inherited worktree authority", async () => {
+    const repo = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-subagent-no-authority-"));
+    execSync("git init -q", { cwd: repo, stdio: "ignore" });
+    let requests = 0;
+    const server = http.createServer((req, res) => { requests++; res.writeHead(500).end(); });
+    let agent: AutonomousAgent | undefined;
+    try {
+      const port = await new Promise<number>((resolve) => server.listen(0, "127.0.0.1", () => resolve((server.address() as any).port)));
+      agent = new AutonomousAgent({ endpoint: `http://127.0.0.1:${port}/v1`, model: "test", maxSteps: 2, temperature: 0, workspace: repo, shell: "bash", worktree: true });
+      await assert.rejects(agent.runSubagent("must not dispatch without a worktree"), /without an established worktree authority/);
+      assert.strictEqual(requests, 0, "refusal happens before inference");
+      assert.strictEqual(execSync("git status --porcelain", { cwd: repo, encoding: "utf8" }), "");
+    } finally {
+      agent?.shutdown();
+      server.closeAllConnections();
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+      fs.rmSync(repo, { recursive: true, force: true });
+    }
+  });
+
+  test("spawned worktree subagent preserves parent read-only authority", async () => {
+    const repo = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-subagent-readonly-"));
+    fs.writeFileSync(path.join(repo, "base.txt"), "base\n");
+    execSync("git init -q && git config user.name 'Nexus Test' && git config user.email 'nexus@example.invalid' && git add . && git commit -qm baseline", { cwd: repo, stdio: "ignore" });
+    let streamRequests = 0;
+    let childRequests = 0;
+    let childDeniedWrite = false;
+    const server = http.createServer((req, res) => {
+      let body = "";
+      req.on("data", (chunk) => { body += chunk; });
+      req.on("end", () => {
+        const request = JSON.parse(body || "{}");
+        if (request.stream) {
+          streamRequests++;
+          const calls = streamRequests === 1 ? [
+            { index: 0, id: "spawn", type: "function", function: { name: "spawn_subagent", arguments: JSON.stringify({ prompt: "attempt a prohibited write", max_steps: 2 }) } },
+            { index: 1, id: "complete", type: "function", function: { name: "task_completed", arguments: JSON.stringify({ summary: "Read-only task complete." }) } },
+          ] : [];
+          res.writeHead(200, { "Content-Type": "text/event-stream" });
+          res.end(`data: ${JSON.stringify({ choices: [{ delta: { content: "Respect read-only authority.", tool_calls: calls } }] })}\n\ndata: [DONE]\n\n`);
+          return;
+        }
+        childRequests++;
+        if (childRequests > 1) {
+          const toolMessage = (request.messages || []).find((message: any) => message.role === "tool");
+          childDeniedWrite = String(toolMessage?.content || "").includes("Read-only mode violation");
+        }
+        const call = childRequests === 1
+          ? { name: "write_file", args: { path: "read-only-child.txt", content: "must not write" } }
+          : { name: "task_completed", args: { summary: "Child finished." } };
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ choices: [{ message: { role: "assistant", tool_calls: [{ id: `child-${childRequests}`, type: "function", function: { name: call.name, arguments: JSON.stringify(call.args) } }] } }] }));
+      });
+    });
+    let agent: AutonomousAgent | undefined;
+    try {
+      const port = await new Promise<number>((resolve) => server.listen(0, "127.0.0.1", () => resolve((server.address() as any).port)));
+      agent = new AutonomousAgent({ endpoint: `http://127.0.0.1:${port}/v1`, model: "test", maxSteps: 2, temperature: 0, workspace: repo, shell: "bash", worktree: true, readOnly: true });
+      await agent.run("keep subagent read-only");
+      assert.strictEqual(childRequests, 2);
+      assert.strictEqual(childDeniedWrite, true, "the child must receive the parent read-only tool policy");
+      assert.strictEqual(fs.existsSync(path.join(repo, "read-only-child.txt")), false);
+      assert.strictEqual(agent.getActiveWorktree(), undefined, "no-change read-only task resolves without a mutation merge");
+    } finally {
+      if (agent?.getActiveWorktree()) agent.discardActiveWorktree();
+      agent?.shutdown();
+      server.closeAllConnections();
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+      fs.rmSync(repo, { recursive: true, force: true });
+    }
+  });
+
+  test("discovered verification success does not authorize worktree merge", async () => {
+    const repo = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-discovered-verifier-"));
+    fs.writeFileSync(path.join(repo, "base.txt"), "base\n");
+    fs.writeFileSync(path.join(repo, "Makefile"), "test: ; @true\n");
+    execSync("git init -q && git config user.name 'Nexus Test' && git config user.email 'nexus@example.invalid' && git add . && git commit -qm baseline", { cwd: repo, stdio: "ignore" });
+    let requests = 0;
+    const server = http.createServer((req, res) => {
+      req.resume();
+      req.on("end", () => {
+        requests++;
+        const calls = requests === 1 ? [
+          { index: 0, id: "write", type: "function", function: { name: "write_file", arguments: JSON.stringify({ path: "discovered-only.txt", content: "retain\n" }) } },
+          { index: 1, id: "complete", type: "function", function: { name: "task_completed", arguments: JSON.stringify({ summary: "Completed after discovered test command." }) } },
+        ] : [];
+        res.writeHead(200, { "Content-Type": "text/event-stream" });
+        res.end(`data: ${JSON.stringify({ choices: [{ delta: { content: "Finish task.", tool_calls: calls } }] })}\n\ndata: [DONE]\n\n`);
+      });
+    });
+    let agent: AutonomousAgent | undefined;
+    try {
+      const port = await new Promise<number>((resolve) => server.listen(0, "127.0.0.1", () => resolve((server.address() as any).port)));
+      agent = new AutonomousAgent({ endpoint: `http://127.0.0.1:${port}/v1`, model: "test", maxSteps: 2, temperature: 0, workspace: repo, shell: "bash", worktree: true });
+      await agent.run("complete after discovered-only verifier");
+      const active = agent.getActiveWorktree();
+      assert.ok(active, "discovery success alone cannot discard the worktree via merge");
+      assert.strictEqual((agent as any).verifiedWorktreeCompletion, false);
+      assert.strictEqual(fs.existsSync(path.join(repo, "discovered-only.txt")), false);
+      assert.strictEqual(fs.existsSync(path.join(active!.worktreePath, "discovered-only.txt")), true);
+      assert.strictEqual(requests, 1);
+      assert.strictEqual(agent.discardActiveWorktree().success, true);
+    } finally {
+      agent?.shutdown();
+      server.closeAllConnections();
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+      fs.rmSync(repo, { recursive: true, force: true });
+    }
+  });
+
+  test("configured authoritative verifier success permits merge and failure or exception retains worktree", async () => {
+    const scenarios = [
+      { name: "success", command: "make verify", verifier: "verify: ; @true\n", expectedVerified: true },
+      { name: "failure", command: "make verify", verifier: "verify: ; @false\n", expectedVerified: false },
+      { name: "unavailable", command: "nexus-verifier-command-does-not-exist-issue11", verifier: "verify: ; @true\n", expectedVerified: false },
+      { name: "exception", command: "make verify", verifier: "verify: ; @true\n", expectedVerified: false, throws: true },
+    ];
+    for (const scenario of scenarios) {
+      const repo = fs.mkdtempSync(path.join(os.tmpdir(), `nexus-authoritative-verifier-${scenario.name}-`));
+      fs.writeFileSync(path.join(repo, "base.txt"), "base\n");
+      fs.writeFileSync(path.join(repo, "Makefile"), `test: ; @true\n${scenario.verifier}`);
+      execSync("git init -q && git config user.name 'Nexus Test' && git config user.email 'nexus@example.invalid' && git add . && git commit -qm baseline", { cwd: repo, stdio: "ignore" });
+      let requests = 0;
+      const server = http.createServer((req, res) => {
+        req.resume();
+        req.on("end", () => {
+          requests++;
+          const calls = requests === 1 ? [
+            { index: 0, id: "write", type: "function", function: { name: "write_file", arguments: JSON.stringify({ path: `${scenario.name}.txt`, content: `${scenario.name}\n` }) } },
+            { index: 1, id: "complete", type: "function", function: { name: "task_completed", arguments: JSON.stringify({ summary: `${scenario.name} verifier scenario.` }) } },
+          ] : [];
+          res.writeHead(200, { "Content-Type": "text/event-stream" });
+          res.end(`data: ${JSON.stringify({ choices: [{ delta: { content: "Finish task.", tool_calls: calls } }] })}\n\ndata: [DONE]\n\n`);
+        });
+      });
+      let agent: AutonomousAgent | undefined;
+      try {
+        const port = await new Promise<number>((resolve) => server.listen(0, "127.0.0.1", () => resolve((server.address() as any).port)));
+        agent = new AutonomousAgent({ endpoint: `http://127.0.0.1:${port}/v1`, model: "test", maxSteps: 2, temperature: 0, workspace: repo, shell: "bash", worktree: true, authoritativeVerifierCommand: scenario.command } as any);
+        if (scenario.throws) {
+          const originalSetWorkspace = agent.setWorkspace.bind(agent);
+          (agent as any).setWorkspace = (workspace: string) => {
+            originalSetWorkspace(workspace);
+            const bridge = (agent as any).bridge;
+            const executeTool = bridge.executeTool.bind(bridge);
+            bridge.executeTool = async (name: string, args: any) => {
+              if (name === "run_command" && args.command === scenario.command) throw new Error("injected verifier exception");
+              return executeTool(name, args);
+            };
+          };
+        }
+        await agent.run(`exercise ${scenario.name} authoritative verifier`);
+        const active = agent.getActiveWorktree();
+        assert.strictEqual((agent as any).verifiedWorktreeCompletion, scenario.expectedVerified);
+        if (scenario.expectedVerified) {
+          assert.strictEqual(active, undefined);
+          assert.strictEqual(fs.existsSync(path.join(repo, `${scenario.name}.txt`)), true);
+        } else {
+          assert.ok(active, `${scenario.name} verifier must retain worktree`);
+          assert.strictEqual(fs.existsSync(path.join(repo, `${scenario.name}.txt`)), false);
+          assert.strictEqual(fs.existsSync(path.join(active!.worktreePath, `${scenario.name}.txt`)), true);
+          assert.strictEqual(agent.discardActiveWorktree().success, true);
+        }
+        assert.strictEqual(requests, scenario.expectedVerified ? 1 : 2);
+      } finally {
+        agent?.shutdown();
+        server.closeAllConnections();
+        await new Promise<void>((resolve) => server.close(() => resolve()));
+        fs.rmSync(repo, { recursive: true, force: true });
+      }
     }
   });
 

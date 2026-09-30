@@ -58,6 +58,7 @@ function buildConfig(options: any): HarnessConfig {
   const fallbackEndpoints = options.fallback ? options.fallback.split(",").map((s: string) => s.trim()) : undefined;
   const contextLimit = options.contextLimit ? parseInt(options.contextLimit, 10) : undefined;
   const worktree = Boolean(options.worktree);
+  const authoritativeVerifierCommand = options.authoritativeVerifier;
   const recordFlight = Boolean(options.recordFlight || options.flight);
   const plannerModel = options.plannerModel || process.env.PLANNER_LLM_MODEL;
   const plannerEndpoint = options.plannerEndpoint || process.env.PLANNER_LLM_ENDPOINT;
@@ -78,6 +79,7 @@ function buildConfig(options: any): HarnessConfig {
     fallbackEndpoints,
     contextLimit,
     worktree,
+    authoritativeVerifierCommand,
     recordFlight,
     plannerModel,
     plannerEndpoint,
@@ -102,6 +104,7 @@ program
   .option("--read-only", "Reject all mutating tool executions and commands")
   .option("--sandbox [mode]", "Isolate command execution using bubblewrap (bwrap) or Docker (default: auto)")
   .option("--worktree", "Isolate execution inside an ephemeral git worktree under .nexus/worktrees/<task-id>")
+  .option("--authoritative-verifier <command>", "Trusted command whose successful exit may authorize automatic worktree merge")
   .option("--record-flight", "Record execution into an append-only deterministic .flightlog")
   .option("--planner-model <name>", "Deep reasoning model for architecture planning (o3, R1, Sonnet)")
   .option("--planner-endpoint <url>", "Dedicated inference endpoint for planner model")
@@ -143,6 +146,7 @@ program
   .option("--read-only", "Reject all mutating tool executions and commands")
   .option("--sandbox [mode]", "Isolate command execution using bubblewrap (bwrap) or Docker (default: auto)")
   .option("--worktree", "Isolate execution inside an ephemeral git worktree under .nexus/worktrees/<task-id>")
+  .option("--authoritative-verifier <command>", "Trusted command whose successful exit may authorize automatic worktree merge")
   .option("--record-flight", "Record execution into an append-only deterministic .flightlog")
   .option("--planner-model <name>", "Deep reasoning model for architecture planning (o3, R1, Sonnet)")
   .option("--planner-endpoint <url>", "Dedicated inference endpoint for planner model")

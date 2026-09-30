@@ -90,6 +90,8 @@ To run a specific task and exit:
 harness run "Inspect the project, write comprehensive unit tests, and verify with cargo test"
 ```
 
+For worktree-isolated runs, automatic merge requires an explicitly trusted verifier command. Configure it with `--authoritative-verifier "make test"` (or the corresponding `authoritativeVerifierCommand` in `HarnessConfig`). Automatically discovered test commands can still provide diagnostic evidence, but success alone does not authorize merging a worktree.
+
 ---
 
 ## 🎮 Slash Commands Cheatsheet
