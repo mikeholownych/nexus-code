@@ -178,6 +178,42 @@ export class WorktreeManager {
     }
   }
 
+  /** Returns whether a speculative worktree contains changes or commits to verify. */
+  public hasChanges(taskId: string): boolean {
+    const worktreePath = path.join(this.getWorktreesBaseDir(), taskId);
+    if (!fs.existsSync(worktreePath)) return false;
+    try {
+      const status = execFileSync("git", ["status", "--porcelain"], {
+        cwd: worktreePath,
+        encoding: "utf-8",
+        stdio: ["ignore", "pipe", "ignore"],
+      }).trim();
+      if (status.length > 0) return true;
+      const ahead = execFileSync("git", ["rev-list", "--count", `HEAD..nexus/${taskId}`], {
+        cwd: this.gitRoot,
+        encoding: "utf-8",
+        stdio: ["ignore", "pipe", "ignore"],
+      }).trim();
+      return Number(ahead) > 0;
+    } catch {
+      // An unreadable worktree is not safe to merge as verified.
+      return true;
+    }
+  }
+
+  /** Dirty developer state prevents an automatic merge from disturbing the root checkout. */
+  public rootHasChanges(): boolean {
+    try {
+      return execFileSync("git", ["status", "--porcelain"], {
+        cwd: this.gitRoot,
+        encoding: "utf-8",
+        stdio: ["ignore", "pipe", "ignore"],
+      }).trim().length > 0;
+    } catch {
+      return true;
+    }
+  }
+
   /**
    * Commits any pending changes in the worktree and merges them back into the active branch.
    */

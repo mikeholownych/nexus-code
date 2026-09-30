@@ -385,6 +385,173 @@ error[E0308]: mismatched types
     }
   });
 
+  test("workspace and shell bridge reconstruction preserve mutation safety controls", async () => {
+    const base = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-safety-switch-"));
+    const repositories = [path.join(base, "first"), path.join(base, "second")];
+    const initRepo = (repo: string) => {
+      fs.mkdirSync(repo, { recursive: true });
+      execSync("git init -q", { cwd: repo, stdio: "ignore" });
+      execSync('git config user.name "Nexus Test" && git config user.email "nexus@example.invalid"', { cwd: repo, stdio: "ignore" });
+      fs.writeFileSync(path.join(repo, "tracked.txt"), "baseline\n");
+      execSync("git add tracked.txt && git commit -qm baseline", { cwd: repo, stdio: "ignore" });
+    };
+    try {
+      repositories.forEach(initRepo);
+      const agent: any = new AutonomousAgent({
+        endpoint: "http://127.0.0.1:1/v1", model: "test", maxSteps: 2, temperature: 0,
+        workspace: repositories[0], shell: "bash", readOnly: true, sandbox: "bwrap",
+      });
+      try {
+        agent.setWorkspace(repositories[1]);
+        for (const transition of ["workspace", "shell"]) {
+          if (transition === "shell") agent.setShell("sh");
+          assert.deepStrictEqual(
+            { dryRun: agent.bridge.dryRun, readOnly: agent.bridge.readOnly, sandbox: agent.bridge.sandbox },
+            { dryRun: false, readOnly: true, sandbox: "bwrap" },
+          );
+          const file = await agent.bridge.executeTool("write_file", { path: `${transition}.txt`, content: "blocked" });
+          const shell = await agent.bridge.executeTool("run_command", { command: `printf blocked > ${transition}-shell.txt` });
+          assert.match(file.error || "", /Read-only mode violation/);
+          assert.match(shell.error || "", /Read-only mode violation/);
+          assert.strictEqual(fs.existsSync(path.join(repositories[1], `${transition}.txt`)), false);
+          assert.strictEqual(fs.existsSync(path.join(repositories[1], `${transition}-shell.txt`)), false);
+        }
+      } finally { agent.shutdown(); }
+
+      const dryRun: any = new AutonomousAgent({
+        endpoint: "http://127.0.0.1:1/v1", model: "test", maxSteps: 2, temperature: 0,
+        workspace: repositories[0], shell: "bash", dryRun: true, sandbox: "bwrap",
+      });
+      try {
+        dryRun.setWorkspace(repositories[1]);
+        dryRun.setShell("sh");
+        assert.deepStrictEqual(
+          { dryRun: dryRun.bridge.dryRun, readOnly: dryRun.bridge.readOnly, sandbox: dryRun.bridge.sandbox },
+          { dryRun: true, readOnly: false, sandbox: "bwrap" },
+        );
+        const file = await dryRun.bridge.executeTool("write_file", { path: "simulated.txt", content: "no disk write" });
+        const shell = await dryRun.bridge.executeTool("run_command", { command: "printf simulated > simulated-shell.txt" });
+        assert.match(file.output, /dry_run/);
+        assert.match(shell.output, /DRY-RUN SIMULATION/);
+        assert.strictEqual(fs.existsSync(path.join(repositories[1], "simulated.txt")), false);
+        assert.strictEqual(fs.existsSync(path.join(repositories[1], "simulated-shell.txt")), false);
+      } finally { dryRun.shutdown(); }
+    } finally { fs.rmSync(base, { recursive: true, force: true }); }
+  });
+
+  test("worktree tasks fail closed, verify before merge, retain failed or incomplete work, and preserve root state", async () => {
+    const base = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-worktree-boundary-"));
+    const repo = path.join(base, "repo");
+    fs.mkdirSync(repo);
+    execSync("git init -b main -q", { cwd: repo, stdio: "ignore" });
+    execSync('git config user.name "Nexus Test" && git config user.email "nexus@example.invalid"', { cwd: repo, stdio: "ignore" });
+    fs.writeFileSync(path.join(repo, "base.txt"), "base\n");
+    fs.writeFileSync(path.join(repo, "Makefile"), "test:\n\t@test ! -f fail.flag\n");
+    execSync("git add . && git commit -qm baseline", { cwd: repo, stdio: "ignore" });
+    execSync("printf 'operator.ignored\\n' > .gitignore && git add .gitignore && git commit -qm ignore-rule", { cwd: repo, stdio: "ignore" });
+    const ignored = path.join(repo, "operator.ignored");
+    const rootState = () => ({
+      head: execSync("git rev-parse HEAD", { cwd: repo, encoding: "utf8" }).trim(),
+      indexTree: execSync("git write-tree", { cwd: repo, encoding: "utf8" }).trim(),
+      unstagedDiff: execSync("git diff --binary", { cwd: repo, encoding: "utf8" }),
+      base: fs.readFileSync(path.join(repo, "base.txt"), "utf8"),
+      staged: fs.readFileSync(path.join(repo, "staged.txt"), "utf8"),
+      untracked: fs.readFileSync(path.join(repo, "untracked.txt"), "utf8"),
+      ignored: fs.readFileSync(ignored, "utf8"),
+      status: execSync("git status --porcelain", { cwd: repo, encoding: "utf8" }),
+    });
+    let requests = 0;
+    let responseMode: "success" | "failure" | "incomplete" | "dirty-success" = "success";
+    const server = http.createServer((req, res) => {
+      if (req.url !== "/v1/chat/completions") { res.writeHead(404).end(); return; }
+      requests++;
+      let body = "";
+      req.on("data", (chunk) => { body += chunk; });
+      req.on("end", () => {
+        const task = requests === 1 ? {
+          content: "Apply and verify a small isolated change.",
+          tool_calls: [
+            { index: 0, id: "write-bridge", type: "function", function: { name: "write_file", arguments: JSON.stringify({ path: `bridge-change-${responseMode}.txt`, content: "bridge change\n" }) } },
+            { index: 1, id: "write-shell", type: "function", function: { name: "run_command", arguments: JSON.stringify({ command: `printf 'shell change\\n' > shell-change-${responseMode}.txt` }) } },
+            ...(responseMode === "failure" ? [{ index: 2, id: "fail-tests", type: "function", function: { name: "run_command", arguments: JSON.stringify({ command: "printf failed > fail.flag" }) } }] : []),
+            ...(responseMode === "incomplete" ? [] : [{ index: responseMode === "failure" ? 3 : 2, id: "done", type: "function", function: { name: "task_completed", arguments: JSON.stringify({ summary: "Mutation task complete." }) } }]),
+          ],
+        } : { content: "Verification failed; changes remain isolated.", tool_calls: [] };
+        const chunk = { choices: [{ delta: task }] };
+        res.writeHead(200, { "Content-Type": "text/event-stream" });
+        res.end(`data: ${JSON.stringify(chunk)}\n\ndata: [DONE]\n\n`);
+      });
+    });
+    const listen = () => new Promise<number>((resolve) => server.listen(0, "127.0.0.1", () => resolve((server.address() as any).port)));
+    let port = 0;
+    try {
+      port = await listen();
+      const createAgent = () => new AutonomousAgent({
+        endpoint: `http://127.0.0.1:${port}/v1`, model: "test", maxSteps: 3, temperature: 0,
+        workspace: repo, shell: "bash", worktree: true,
+      });
+      const blocked = createAgent();
+      const originalCreate = blocked.getWorktreeManager().createWorktree.bind(blocked.getWorktreeManager());
+      execSync("git branch nexus/issue11-collision", { cwd: repo, stdio: "ignore" });
+      (blocked.getWorktreeManager() as any).createWorktree = () => originalCreate("issue11-collision");
+      const callsBeforeFailure = requests;
+      await assert.rejects(blocked.run("must not escape worktree isolation"), /Failed to create git worktree/);
+      assert.strictEqual(requests, callsBeforeFailure, "no inference starts after worktree creation fails");
+      assert.strictEqual(execSync("git status --porcelain", { cwd: repo, encoding: "utf8" }), "");
+      (blocked.getWorktreeManager() as any).createWorktree = originalCreate;
+      execSync("git branch -D nexus/issue11-collision", { cwd: repo, stdio: "ignore" });
+      blocked.shutdown();
+
+      const successful = createAgent();
+      responseMode = "success";
+      await successful.run("write through both mutation interfaces and verify");
+      assert.strictEqual(fs.existsSync(path.join(repo, "bridge-change-success.txt")), true);
+      assert.strictEqual(fs.existsSync(path.join(repo, "shell-change-success.txt")), true);
+      assert.strictEqual(successful.getActiveWorktree(), undefined, "verified explicit task completion merges and returns to root");
+      assert.strictEqual(execSync("git status --porcelain", { cwd: repo, encoding: "utf8" }), "", "successful task merge leaves a clean root");
+      successful.shutdown();
+
+      fs.writeFileSync(path.join(repo, "staged.txt"), "staged operator state\n");
+      execSync("git add staged.txt", { cwd: repo, stdio: "ignore" });
+      fs.writeFileSync(path.join(repo, "base.txt"), "unstaged operator state\n");
+      fs.writeFileSync(path.join(repo, "untracked.txt"), "untracked operator state\n");
+      fs.writeFileSync(ignored, "ignored operator state\n");
+      const before = rootState();
+
+      for (const outcome of ["failure", "incomplete"] as const) {
+        responseMode = outcome;
+        requests = 0;
+        const agent = createAgent();
+        await agent.run(`exercise ${outcome} outcome`);
+        const active = agent.getActiveWorktree();
+        assert.ok(active, `${outcome} outcome retains its speculative worktree`);
+        assert.strictEqual(fs.existsSync(path.join(repo, `bridge-change-${outcome}.txt`)), false, "failed work remains isolated");
+        assert.strictEqual(fs.existsSync(path.join(active!.worktreePath, `bridge-change-${outcome}.txt`)), true);
+        assert.deepStrictEqual(rootState(), before);
+        const discarded = agent.discardActiveWorktree();
+        assert.strictEqual(discarded.success, true, "discard explicitly removes failed/incomplete work");
+        assert.strictEqual(fs.existsSync(active!.worktreePath), false);
+        assert.deepStrictEqual(rootState(), before);
+        agent.shutdown();
+      }
+
+      responseMode = "dirty-success";
+      requests = 0;
+      const dirtyRootAgent = createAgent();
+      await dirtyRootAgent.run("verify change without disturbing developer state");
+      const retained = dirtyRootAgent.getActiveWorktree();
+      assert.ok(retained, "verified task remains isolated while developer changes are present in the root");
+      assert.deepStrictEqual(rootState(), before, "verified task cannot alter dirty root state");
+      assert.strictEqual(dirtyRootAgent.discardActiveWorktree().success, true);
+      assert.deepStrictEqual(rootState(), before, "explicit discard preserves the complete root snapshot");
+      dirtyRootAgent.shutdown();
+    } finally {
+      server.closeAllConnections();
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+      fs.rmSync(base, { recursive: true, force: true });
+    }
+  });
+
   test("SecurityManager enforces default blocked commands and protected paths", () => {
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "nexus_sec_test_"));
     try {

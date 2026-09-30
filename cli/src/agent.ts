@@ -209,6 +209,7 @@ export class AutonomousAgent {
   private extensibilityInitialized: boolean = false;
   private activePlan: Array<{ name: string; status: string; detail?: string }> = [];
   private hasPendingModifications: boolean = false;
+  private verifiedWorktreeCompletion: boolean = false;
   private flightRecorder?: FlightRecorder;
   private worktreeManager: WorktreeManager;
   private activeWorktree?: { taskId: string; worktreePath: string; branch: string };
@@ -442,7 +443,14 @@ export class AutonomousAgent {
   public setWorkspace(newWorkspace: string): void {
     this.bridge.shutdown();
     this.config.workspace = newWorkspace;
-    this.bridge = new RustCoreBridge(this.config.workspace, this.config.shell, this.config.coreBinaryPath);
+    this.bridge = new RustCoreBridge(
+      this.config.workspace,
+      this.config.shell,
+      this.config.coreBinaryPath,
+      this.config.dryRun,
+      this.config.readOnly,
+      this.config.sandbox,
+    );
     this.skillManager.setWorkspace(newWorkspace);
     this.mcpManager = new McpClientManager(newWorkspace);
     this.pluginManager = new PluginManager(newWorkspace);
@@ -457,7 +465,14 @@ export class AutonomousAgent {
   public setShell(newShell: string): void {
     this.bridge.shutdown();
     this.config.shell = newShell;
-    this.bridge = new RustCoreBridge(this.config.workspace, this.config.shell, this.config.coreBinaryPath);
+    this.bridge = new RustCoreBridge(
+      this.config.workspace,
+      this.config.shell,
+      this.config.coreBinaryPath,
+      this.config.dryRun,
+      this.config.readOnly,
+      this.config.sandbox,
+    );
     this.resetConversation();
   }
 
@@ -1101,8 +1116,11 @@ Always explain your reasoning before or alongside your tool calls.`;
         this.ui.printToolCall(toolName, args);
 
         if (toolName === "task_completed") {
+          const worktreeHasChanges = this.activeWorktree
+            ? this.worktreeManager.hasChanges(this.activeWorktree.taskId)
+            : false;
           // Verification Oracle: If code was modified and unverified, verify before marking complete
-          if (this.hasPendingModifications && !this.config.dryRun && !this.config.readOnly) {
+          if ((this.hasPendingModifications || worktreeHasChanges) && !this.config.dryRun && !this.config.readOnly) {
             try {
               const { runTestSuite } = await import("./tester.js");
               const testRes = runTestSuite(this.config.workspace);
@@ -1126,6 +1144,7 @@ Always explain your reasoning before or alongside your tool calls.`;
           }
 
           this.hasPendingModifications = false;
+          if (this.activeWorktree) this.verifiedWorktreeCompletion = true;
           this.ui.taskCompleted(args.summary || "Task completed.", args.notes);
           isFinished = true;
           if (this.flightRecorder) {
@@ -1669,16 +1688,16 @@ Always explain your reasoning before or alongside your tool calls.`;
     console.log(`🐚 Shell: ${this.config.shell}`);
     console.log(`🤖 Model: ${this.config.model} (${this.config.endpoint})\n`);
 
-    if (this.config.worktree && this.worktreeManager.isGitRepo()) {
-      try {
-        const wt = this.worktreeManager.createWorktree();
-        this.activeWorktree = { taskId: wt.taskId, worktreePath: wt.worktreePath, branch: wt.branch };
-        this.originalWorkspace = this.config.workspace;
-        this.setWorkspace(wt.worktreePath);
-        console.log(pc.cyan(`🌲 Spun up speculative git worktree: ${wt.branch} at ${wt.worktreePath}`));
-      } catch (err: any) {
-        console.warn(pc.yellow(`⚠️ Failed to create ephemeral worktree, falling back to workspace: ${err.message}`));
+    this.verifiedWorktreeCompletion = false;
+    if (this.config.worktree) {
+      if (!this.worktreeManager.isGitRepo()) {
+        throw new Error(`Cannot start worktree-isolated task: ${this.config.workspace} is not a valid git repository.`);
       }
+      const wt = this.worktreeManager.createWorktree();
+      this.activeWorktree = { taskId: wt.taskId, worktreePath: wt.worktreePath, branch: wt.branch };
+      this.originalWorkspace = this.config.workspace;
+      this.setWorkspace(wt.worktreePath);
+      console.log(pc.cyan(`🌲 Spun up speculative git worktree: ${wt.branch} at ${wt.worktreePath}`));
     }
 
     if (this.flightRecorder && !this.flightRecorder.isSessionActive()) {
@@ -1703,11 +1722,11 @@ Always explain your reasoning before or alongside your tool calls.`;
       }
     } finally {
       if (this.activeWorktree && this.config.worktree) {
-        if (!this.hasPendingModifications) {
+        if (this.verifiedWorktreeCompletion && !this.worktreeManager.rootHasChanges()) {
           console.log(pc.cyan(`🌲 Merging verified changes from worktree ${this.activeWorktree.branch}...`));
           this.mergeActiveWorktree(`nexus: apply verified changes from ${this.activeWorktree.taskId}`);
         } else {
-          console.log(pc.yellow(`⚠️ Speculative changes unverified or failed; retaining worktree at ${this.activeWorktree.worktreePath}`));
+          console.log(pc.yellow(`⚠️ Speculative changes are unverified or the root workspace is dirty; retaining worktree at ${this.activeWorktree.worktreePath}`));
         }
       }
     }
