@@ -349,7 +349,7 @@ export class AutonomousAgent {
     const durableNotes: string[] = [];
     const durableNoteKeys = new Set<string>();
     const trustedRecords = new Map<string, CanonicalDurableProvenance>();
-    const reconstructibleQueryTools = new Set(["file_tree", "list_dir", "find_files", "file_info"]);
+    const reconstructibleQueryTools = new Set(["file_tree", "list_dir", "find_files", "file_info", "outline_file", "cst_symbols"]);
     const validReconstructibleArgs = (name: string, rawArgs: unknown): string | undefined => {
       let args: unknown;
       try {
@@ -369,9 +369,12 @@ export class AutonomousAgent {
       } else if (name === "find_files") {
         if (Object.keys(values).some((key) => !["pattern", "max_results"].includes(key))) return undefined;
         if (typeof values.pattern !== "string" || values.pattern.length === 0 || !optionalNumber("max_results")) return undefined;
-      } else if (name === "file_info") {
+      } else if (name === "file_info" || name === "outline_file") {
         if (Object.keys(values).some((key) => key !== "path")) return undefined;
         if (typeof values.path !== "string" || values.path.length === 0) return undefined;
+      } else if (name === "cst_symbols") {
+        if (Object.keys(values).some((key) => !["path", "query"].includes(key))) return undefined;
+        if (typeof values.path !== "string" || values.path.length === 0 || !optionalString("query")) return undefined;
       } else {
         return undefined;
       }
