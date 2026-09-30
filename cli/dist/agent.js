@@ -17,6 +17,7 @@ import { calculateContextBudget, countTokens, isContextAdmissible } from "./toke
 import { selectRelevantFewShots } from "./fewshots.js";
 import { FlightRecorder } from "./flight.js";
 import { WorktreeManager } from "./worktree.js";
+import { HybridSearchEngine } from "./embeddings.js";
 import pc from "picocolors";
 export class ContextBudgetError extends Error {
     estimatedTokens;
@@ -89,6 +90,7 @@ const READ_ONLY_TOOLS = new Set([
     "cst_symbols",
     "outline_file",
     "trigram_search",
+    "hybrid_search",
 ]);
 /**
  * Folds voluminous terminal outputs to conserve local LLM context window while preserving critical error signals.
@@ -164,12 +166,40 @@ export class AutonomousAgent {
     worktreeManager;
     activeWorktree;
     originalWorkspace;
+    plannerClient;
+    coderClient;
+    cognitiveRoutingEnabled = false;
+    activeTier = "planner";
+    tierStats = { plannerTurns: 0, coderTurns: 0 };
+    hybridSearch;
     constructor(config, depth = 0) {
         canonicalDurableProvenance.set(this, new WeakMap());
         this.config = config;
         this.depth = depth;
         const ws = config.workspace || process.cwd();
         this.client = new LocalLlmClient(config);
+        if (config.plannerModel || config.coderModel) {
+            this.cognitiveRoutingEnabled = true;
+            const plannerConfig = {
+                ...config,
+                model: config.plannerModel || config.model,
+                endpoint: config.plannerEndpoint || config.endpoint,
+                apiKey: config.plannerApiKey || config.apiKey,
+            };
+            const coderConfig = {
+                ...config,
+                model: config.coderModel || config.model,
+                endpoint: config.coderEndpoint || config.endpoint,
+                apiKey: config.coderApiKey || config.apiKey,
+            };
+            this.plannerClient = new LocalLlmClient(plannerConfig);
+            this.coderClient = new LocalLlmClient(coderConfig);
+        }
+        else {
+            this.plannerClient = this.client;
+            this.coderClient = this.client;
+        }
+        this.hybridSearch = new HybridSearchEngine(ws, this.client);
         this.bridge = new RustCoreBridge(ws, config.shell, config.coreBinaryPath, config.dryRun, config.readOnly, config.sandbox);
         this.securityManager = new SecurityManager(ws);
         this.ui = new TerminalUI();
@@ -241,6 +271,37 @@ export class AutonomousAgent {
         }
         return res;
     }
+    getHybridSearchEngine() {
+        return this.hybridSearch;
+    }
+    getCognitiveTier() {
+        return this.activeTier;
+    }
+    getTierStats() {
+        return this.tierStats;
+    }
+    isCognitiveRoutingEnabled() {
+        return this.cognitiveRoutingEnabled;
+    }
+    selectCognitiveClient(step, recentMessages) {
+        if (!this.cognitiveRoutingEnabled) {
+            return { client: this.client, tier: "planner" };
+        }
+        if (step === 1) {
+            this.activeTier = "planner";
+            this.tierStats.plannerTurns++;
+            return { client: this.plannerClient, tier: "planner" };
+        }
+        const lastMsg = recentMessages[recentMessages.length - 1];
+        if (lastMsg && lastMsg.role === "tool" && lastMsg.name === "update_plan") {
+            this.activeTier = "planner";
+            this.tierStats.plannerTurns++;
+            return { client: this.plannerClient, tier: "planner" };
+        }
+        this.activeTier = "coder";
+        this.tierStats.coderTurns++;
+        return { client: this.coderClient, tier: "coder" };
+    }
     shutdown() {
         this.bridge.shutdown();
         this.skillManager.stopWatcher();
@@ -286,6 +347,7 @@ export class AutonomousAgent {
         this.skillManager.setWorkspace(newWorkspace);
         this.mcpManager = new McpClientManager(newWorkspace);
         this.pluginManager = new PluginManager(newWorkspace);
+        this.hybridSearch = new HybridSearchEngine(newWorkspace, this.client);
         this.extensibilityInitialized = false;
         this.resetConversation();
     }
@@ -324,7 +386,7 @@ export class AutonomousAgent {
         const durableNotes = [];
         const durableNoteKeys = new Set();
         const trustedRecords = new Map();
-        const reconstructibleQueryTools = new Set(["file_tree", "list_dir", "find_files", "file_info", "outline_file", "cst_symbols"]);
+        const reconstructibleQueryTools = new Set(["file_tree", "list_dir", "find_files", "file_info", "outline_file", "cst_symbols", "hybrid_search", "trigram_search"]);
         const validReconstructibleArgs = (name, rawArgs) => {
             let args;
             try {
@@ -363,6 +425,12 @@ export class AutonomousAgent {
                 if (Object.keys(values).some((key) => !["path", "query"].includes(key)))
                     return undefined;
                 if (typeof values.path !== "string" || values.path.length === 0 || !optionalString("query"))
+                    return undefined;
+            }
+            else if (name === "hybrid_search" || name === "trigram_search") {
+                if (typeof values.query !== "string" || values.query.length === 0)
+                    return undefined;
+                if (!optionalString("path") || !optionalString("mode") || !optionalNumber("limit") || !optionalNumber("max_results"))
                     return undefined;
             }
             else {
@@ -726,10 +794,14 @@ Always explain your reasoning before or alongside your tool calls.`;
             const requestId = randomUUID();
             this.admitContext(currentStep, requestId);
             this.ui.startSpinner("Thinking and analyzing next step...");
+            const { client: activeClient } = this.selectCognitiveClient(currentStep, this.messages);
+            if (this.cognitiveRoutingEnabled && currentStep === 1) {
+                process.stdout.write(pc.dim(`\n🧭 Dual-Model Routing: [Planner: ${this.plannerClient.getModel()} | Coder: ${this.coderClient.getModel()}]\n`));
+            }
             let assistantMessage;
             let streamedTokens = false;
             try {
-                assistantMessage = await this.client.chatCompletionStream(this.messages, this.getEffectiveTools(), (token) => {
+                assistantMessage = await activeClient.chatCompletionStream(this.messages, this.getEffectiveTools(), (token) => {
                     if (!streamedTokens) {
                         this.ui.stopSpinner(true);
                         process.stdout.write(pc.bold(pc.magenta("\n💭 Assistant: ")));
@@ -819,7 +891,26 @@ Always explain your reasoning before or alongside your tool calls.`;
                         args = { raw: call.function.arguments };
                     }
                     const t0 = Date.now();
-                    const result = await this.bridge.executeTool(toolName, args);
+                    let result;
+                    if (toolName === "hybrid_search") {
+                        try {
+                            const matches = await this.hybridSearch.search(args.query || "", {
+                                mode: args.mode,
+                                path: args.path,
+                                limit: args.limit ? parseInt(args.limit, 10) : 10,
+                            });
+                            result = {
+                                success: true,
+                                output: JSON.stringify({ query: args.query, totalMatches: matches.length, matches }, null, 2),
+                            };
+                        }
+                        catch (err) {
+                            result = { success: false, output: "", error: err.message };
+                        }
+                    }
+                    else {
+                        result = await this.bridge.executeTool(toolName, args);
+                    }
                     const durationMs = Date.now() - t0;
                     logAudit({
                         workspace: this.config.workspace,
@@ -949,6 +1040,48 @@ Always explain your reasoning before or alongside your tool calls.`;
                             tool_call_id: call.id,
                             name: toolName,
                             content: `Subagent failed with error: ${subErr.message}`,
+                        });
+                    }
+                    continue;
+                }
+                if (toolName === "hybrid_search") {
+                    const t0 = Date.now();
+                    this.ui.startSpinner(`Performing hybrid code search for "${args.query}"...`);
+                    try {
+                        const matches = await this.hybridSearch.search(args.query || "", {
+                            mode: args.mode,
+                            path: args.path,
+                            limit: args.limit ? parseInt(args.limit, 10) : 10,
+                        });
+                        const durationMs = Date.now() - t0;
+                        this.ui.stopSpinner(true);
+                        const output = JSON.stringify({
+                            query: args.query,
+                            totalMatches: matches.length,
+                            matches,
+                        }, null, 2);
+                        if (this.flightRecorder) {
+                            this.flightRecorder.recordToolResult(currentStep, call.id, toolName, true, output, durationMs);
+                        }
+                        this.ui.printToolResult(toolName, true, `${matches.length} matches found.`);
+                        this.messages.push({
+                            role: "tool",
+                            tool_call_id: call.id,
+                            name: toolName,
+                            content: output,
+                        });
+                    }
+                    catch (err) {
+                        const durationMs = Date.now() - t0;
+                        this.ui.stopSpinner(false);
+                        if (this.flightRecorder) {
+                            this.flightRecorder.recordToolResult(currentStep, call.id, toolName, false, "", durationMs, err.message);
+                        }
+                        this.messages.push({
+                            role: "tool",
+                            tool_call_id: call.id,
+                            name: toolName,
+                            content: `Error executing hybrid_search: ${err.message}`,
                         });
                     }
                     continue;
@@ -1192,9 +1325,10 @@ Always explain your reasoning before or alongside your tool calls.`;
         while (currentStep <= this.config.maxSteps) {
             let assistantMessage;
             const requestId = randomUUID();
+            const { client: activeClient } = this.selectCognitiveClient(currentStep, this.messages);
             try {
                 this.admitContext(currentStep, requestId);
-                assistantMessage = await this.client.chatCompletion(this.messages, HARNESS_TOOLS, requestId);
+                assistantMessage = await activeClient.chatCompletion(this.messages, HARNESS_TOOLS, requestId);
             }
             catch (err) {
                 return `Subagent failed during LLM inference: ${err.message}`;
@@ -1233,7 +1367,26 @@ Always explain your reasoning before or alongside your tool calls.`;
                     });
                     continue;
                 }
-                const result = await this.bridge.executeTool(toolName, args);
+                let result;
+                if (toolName === "hybrid_search") {
+                    try {
+                        const matches = await this.hybridSearch.search(args.query || "", {
+                            mode: args.mode,
+                            path: args.path,
+                            limit: args.limit ? parseInt(args.limit, 10) : 10,
+                        });
+                        result = {
+                            success: true,
+                            output: JSON.stringify({ query: args.query, totalMatches: matches.length, matches }, null, 2),
+                        };
+                    }
+                    catch (err) {
+                        result = { success: false, output: "", error: err.message };
+                    }
+                }
+                else {
+                    result = await this.bridge.executeTool(toolName, args);
+                }
                 this.messages.push({
                     role: "tool",
                     tool_call_id: call.id,

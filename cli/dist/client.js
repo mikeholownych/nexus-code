@@ -321,4 +321,31 @@ export class LocalLlmClient {
             };
         });
     }
+    getModel() {
+        return this.model;
+    }
+    async generateEmbedding(text, model) {
+        return this.executeWithFailover("generateEmbedding", async (currentEp) => {
+            const url = `${currentEp}/embeddings`;
+            const res = await fetch(url, {
+                method: "POST",
+                headers: {
+                    "Content-Type": "application/json",
+                    Authorization: `Bearer ${this.apiKey}`,
+                },
+                body: JSON.stringify({
+                    model: model || this.model,
+                    input: text,
+                }),
+            });
+            if (!res.ok) {
+                throw new Error(`Embedding request failed (${res.status}): ${await res.text()}`);
+            }
+            const data = await res.json();
+            if (data.data && Array.isArray(data.data) && data.data[0]?.embedding) {
+                return data.data[0].embedding;
+            }
+            throw new Error("Invalid embedding response format");
+        });
+    }
 }

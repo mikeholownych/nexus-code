@@ -48,6 +48,10 @@ function buildConfig(options) {
     const contextLimit = options.contextLimit ? parseInt(options.contextLimit, 10) : undefined;
     const worktree = Boolean(options.worktree);
     const recordFlight = Boolean(options.recordFlight || options.flight);
+    const plannerModel = options.plannerModel || process.env.PLANNER_LLM_MODEL;
+    const plannerEndpoint = options.plannerEndpoint || process.env.PLANNER_LLM_ENDPOINT;
+    const coderModel = options.coderModel || process.env.CODER_LLM_MODEL;
+    const coderEndpoint = options.coderEndpoint || process.env.CODER_LLM_ENDPOINT;
     return {
         endpoint,
         model,
@@ -63,6 +67,10 @@ function buildConfig(options) {
         contextLimit,
         worktree,
         recordFlight,
+        plannerModel,
+        plannerEndpoint,
+        coderModel,
+        coderEndpoint,
     };
 }
 program
@@ -81,6 +89,10 @@ program
     .option("--sandbox [mode]", "Isolate command execution using bubblewrap (bwrap) or Docker (default: auto)")
     .option("--worktree", "Isolate execution inside an ephemeral git worktree under .nexus/worktrees/<task-id>")
     .option("--record-flight", "Record execution into an append-only deterministic .flightlog")
+    .option("--planner-model <name>", "Deep reasoning model for architecture planning (o3, R1, Sonnet)")
+    .option("--planner-endpoint <url>", "Dedicated inference endpoint for planner model")
+    .option("--coder-model <name>", "High-throughput model for surgical code implementation (Qwen 2.5 Coder)")
+    .option("--coder-endpoint <url>", "Dedicated inference endpoint for coder model")
     .option("--approve", "Require human approval before destructive actions (edits, shell commands)")
     .option("-r, --resume [id]", "Resume previous session (defaults to latest if id omitted)")
     .action(async (options) => {
@@ -118,6 +130,10 @@ program
     .option("--sandbox [mode]", "Isolate command execution using bubblewrap (bwrap) or Docker (default: auto)")
     .option("--worktree", "Isolate execution inside an ephemeral git worktree under .nexus/worktrees/<task-id>")
     .option("--record-flight", "Record execution into an append-only deterministic .flightlog")
+    .option("--planner-model <name>", "Deep reasoning model for architecture planning (o3, R1, Sonnet)")
+    .option("--planner-endpoint <url>", "Dedicated inference endpoint for planner model")
+    .option("--coder-model <name>", "High-throughput model for surgical code implementation (Qwen 2.5 Coder)")
+    .option("--coder-endpoint <url>", "Dedicated inference endpoint for coder model")
     .action(async (promptParts, options) => {
     const prompt = promptParts.join(" ");
     const config = buildConfig(options);

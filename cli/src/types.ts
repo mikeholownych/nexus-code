@@ -55,6 +55,12 @@ export interface HarnessConfig {
   sandbox?: boolean | string; // Linux namespace / bwrap / container isolation (default: false)
   worktree?: boolean;        // Isolated ephemeral git worktree execution (default: false)
   recordFlight?: boolean;    // Deterministic .flightlog session recording (default: false)
+  plannerModel?: string;     // Deep reasoning / architecture planner (e.g. Claude 3.7 Thinking / o3 / DeepSeek R1)
+  plannerEndpoint?: string;  // Dedicated endpoint for planner model
+  plannerApiKey?: string;    // API key for planner model
+  coderModel?: string;       // Ultra-fast surgical implementation model (e.g. Qwen 2.5 Coder 32B @ 150 tok/s)
+  coderEndpoint?: string;    // Dedicated endpoint for coder model
+  coderApiKey?: string;      // API key for coder model
 }
 
 export interface ExecutionResult {

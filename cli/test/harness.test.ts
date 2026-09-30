@@ -29,6 +29,7 @@ import { PluginManager } from "../src/plugins.js";
 import { WorktreeManager } from "../src/worktree.js";
 import { FlightRecorder, FlightPlayer } from "../src/flight.js";
 import { parseDiffHunks, buildSingleHunkPatch, HunkStager } from "../src/stager.js";
+import { BM25Index, VectorIndex, cosineSimilarity, reciprocalRankFusion, HybridSearchEngine } from "../src/embeddings.js";
 
 describe("Nexus Code Test Suite", () => {
   test("HARNESS_TOOLS definitions include all parity tools", () => {
@@ -2320,6 +2321,132 @@ index 1234567..89abcdef 100644
       assert.ok(finalCode.includes("const d = 4;"));
     } finally {
       fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  test("BM25Index, VectorIndex, and Reciprocal Rank Fusion rank code matches effectively", () => {
+    // 1. Test BM25
+    const bm25 = new BM25Index();
+    bm25.addDocument("doc1", "export function verifyAuthToken(token: string): boolean { return true; }", {
+      file: "src/auth.ts",
+      startLine: 1,
+      endLine: 5,
+      content: "export function verifyAuthToken(token: string): boolean",
+    });
+    bm25.addDocument("doc2", "export function connectDatabase(url: string) { return new DB(); }", {
+      file: "src/db.ts",
+      startLine: 1,
+      endLine: 5,
+      content: "export function connectDatabase(url: string)",
+    });
+    bm25.addDocument("doc3", "export function processPayment(amount: number) { return charge(); }", {
+      file: "src/payment.ts",
+      startLine: 1,
+      endLine: 5,
+      content: "export function processPayment(amount: number)",
+    });
+
+    const authRes = bm25.search("verifyAuthToken");
+    assert.strictEqual(authRes.length >= 1, true);
+    assert.strictEqual(authRes[0].id, "doc1");
+    assert.strictEqual(authRes[0].metadata.file, "src/auth.ts");
+
+    const dbRes = bm25.search("connectDatabase");
+    assert.strictEqual(dbRes[0].id, "doc2");
+
+    // 2. Test Cosine Similarity & VectorIndex
+    const simHigh = cosineSimilarity([1, 0, 0], [0.99, 0.01, 0]);
+    const simLow = cosineSimilarity([1, 0, 0], [0, 1, 0]);
+    assert.ok(simHigh > 0.98);
+    assert.strictEqual(simLow, 0);
+
+    const vecIndex = new VectorIndex();
+    vecIndex.addVector("doc1", [1, 0, 0], { file: "src/auth.ts", startLine: 1, endLine: 5, content: "auth" });
+    vecIndex.addVector("doc2", [0, 1, 0], { file: "src/db.ts", startLine: 1, endLine: 5, content: "db" });
+    const vecRes = vecIndex.search([0.9, 0.1, 0]);
+    assert.strictEqual(vecRes[0].id, "doc1");
+
+    // 3. Test Reciprocal Rank Fusion
+    const dense = [{ id: "docA", score: 0.9, metadata: { file: "a", startLine: 1, endLine: 1, content: "" } }, { id: "docB", score: 0.8, metadata: { file: "b", startLine: 1, endLine: 1, content: "" } }];
+    const sparse = [{ id: "docB", score: 5.2, metadata: { file: "b", startLine: 1, endLine: 1, content: "" } }, { id: "docC", score: 3.1, metadata: { file: "c", startLine: 1, endLine: 1, content: "" } }];
+    const fused = reciprocalRankFusion(dense, sparse, 60, 5);
+    assert.strictEqual(fused.length, 3);
+    // docB was ranked #2 in dense and #1 in sparse, so should have highest combined RRF
+    assert.strictEqual(fused[0].id, "docB");
+  });
+
+  test("HybridSearchEngine indexes workspace and discovers code matches", async () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-search-test-"));
+    try {
+      fs.mkdirSync(path.join(tempDir, "src"), { recursive: true });
+      fs.writeFileSync(path.join(tempDir, "src", "session.ts"), `
+export class SessionManager {
+  private activeTokens: Map<string, number> = new Map();
+  public validateSessionToken(token: string): boolean {
+    return this.activeTokens.has(token);
+  }
+}
+`, "utf-8");
+
+      fs.writeFileSync(path.join(tempDir, "src", "cache.ts"), `
+export class CacheService {
+  private memoryCache = new Map();
+  public get(key: string) { return this.memoryCache.get(key); }
+}
+`, "utf-8");
+
+      const engine = new HybridSearchEngine(tempDir);
+      const indexStats = await engine.indexWorkspace();
+      assert.strictEqual(indexStats.totalIndexed, 2);
+      assert.ok(indexStats.totalChunks >= 2);
+
+      const matches = await engine.search("validateSessionToken", { mode: "lexical" });
+      assert.ok(matches.length > 0);
+      assert.strictEqual(matches[0].file, "src/session.ts");
+      assert.ok(matches[0].snippet.includes("validateSessionToken"));
+    } finally {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  test("AutonomousAgent dynamically routes cognitive tiers between planner and coder models", () => {
+    const agent = new AutonomousAgent({
+      endpoint: "http://localhost:1234/v1",
+      model: "default-model",
+      plannerModel: "deepseek-r1-planner",
+      coderModel: "qwen2.5-coder-32b",
+      workspace: process.cwd(),
+      maxSteps: 5,
+    });
+
+    try {
+      assert.strictEqual(agent.isCognitiveRoutingEnabled(), true);
+
+      // Step 1: Initial planning step routes to planner model
+      const tier1 = agent.selectCognitiveClient(1, []);
+      assert.strictEqual(tier1.tier, "planner");
+      assert.strictEqual(tier1.client.getModel(), "deepseek-r1-planner");
+      assert.strictEqual(agent.getCognitiveTier(), "planner");
+
+      // Step 2: Implementation step routes to fast coder model
+      const tier2 = agent.selectCognitiveClient(2, [{ role: "user", content: "Edit the file" }]);
+      assert.strictEqual(tier2.tier, "coder");
+      assert.strictEqual(tier2.client.getModel(), "qwen2.5-coder-32b");
+      assert.strictEqual(agent.getCognitiveTier(), "coder");
+
+      // Step 3: Re-planning step with update_plan routes back to planner model
+      const tier3 = agent.selectCognitiveClient(3, [
+        { role: "tool", name: "update_plan", tool_call_id: "plan-1", content: '{"status":"ok"}' },
+      ]);
+      assert.strictEqual(tier3.tier, "planner");
+      assert.strictEqual(tier3.client.getModel(), "deepseek-r1-planner");
+
+      // Verify stats
+      const stats = agent.getTierStats();
+      assert.strictEqual(stats.plannerTurns, 2);
+      assert.strictEqual(stats.coderTurns, 1);
+    } finally {
+      agent.shutdown();
     }
   });
 });

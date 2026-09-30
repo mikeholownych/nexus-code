@@ -628,6 +628,36 @@ export const HARNESS_TOOLS = [
             },
         },
     },
+    {
+        type: "function",
+        function: {
+            name: "hybrid_search",
+            description: "Perform hybrid code search blending dense semantic embeddings, sparse Okapi BM25, and Reciprocal Rank Fusion (RRF). Ideal for discovering code by intent or meaning when exact keyword tokens are unknown.",
+            parameters: {
+                type: "object",
+                properties: {
+                    query: {
+                        type: "string",
+                        description: "Natural language query or code concept to search for.",
+                    },
+                    path: {
+                        type: "string",
+                        description: "Optional relative directory path to scope search.",
+                    },
+                    mode: {
+                        type: "string",
+                        enum: ["hybrid", "semantic", "lexical"],
+                        description: "Search mode: 'hybrid' (blended RRF, default), 'semantic' (vector embeddings), or 'lexical' (BM25 keyword).",
+                    },
+                    limit: {
+                        type: "number",
+                        description: "Maximum matches to return (default: 10).",
+                    },
+                },
+                required: ["query"],
+            },
+        },
+    },
 ];
 export function isSafeOutboundUrl(urlStr) {
     let parsed;
