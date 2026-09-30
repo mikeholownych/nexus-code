@@ -216,3 +216,433 @@ pub fn delete_file(args: DeleteFileArgs, base_dir: &Path) -> Result<DeleteFileRe
         status: "deleted".into(),
     })
 }
+
+pub fn resolve_safe_path(base_dir: &Path, rel_path: &str) -> Result<std::path::PathBuf, String> {
+    let clean_rel = rel_path.trim();
+    if clean_rel.starts_with('/') {
+        let path = std::path::PathBuf::from(clean_rel);
+        if let Ok(base_canon) = base_dir.canonicalize() {
+            if let Ok(path_canon) = path.canonicalize() {
+                if path_canon.starts_with(&base_canon) {
+                    return Ok(path_canon);
+                }
+            }
+        }
+        return Err(format!("Security Violation: Path escapes workspace jail: {clean_rel}"));
+    }
+
+    let joined = base_dir.join(clean_rel);
+    let mut normalized = std::path::PathBuf::new();
+    for comp in joined.components() {
+        match comp {
+            std::path::Component::ParentDir => {
+                if !normalized.pop() {
+                    return Err(format!("Security Violation: Path escapes workspace root: {rel_path}"));
+                }
+            }
+            std::path::Component::Normal(c) => normalized.push(c),
+            std::path::Component::RootDir => normalized.push("/"),
+            std::path::Component::Prefix(_) => {},
+            std::path::Component::CurDir => {},
+        }
+    }
+
+    if let Ok(base_canon) = base_dir.canonicalize() {
+        if normalized.exists() {
+            if let Ok(norm_canon) = normalized.canonicalize() {
+                if !norm_canon.starts_with(&base_canon) {
+                    return Err(format!("Security Violation: Path escapes workspace jail: {rel_path}"));
+                }
+            }
+        }
+    }
+
+    Ok(normalized)
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct FileInfoArgs {
+    pub path: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct FileInfoResult {
+    pub path: String,
+    pub exists: bool,
+    pub is_file: bool,
+    pub is_dir: bool,
+    pub is_symlink: bool,
+    pub size_bytes: u64,
+    pub line_count: Option<usize>,
+    pub is_binary: bool,
+    pub permissions: Option<String>,
+    pub modified_iso: Option<String>,
+}
+
+pub fn file_info(args: FileInfoArgs, base_dir: &Path) -> Result<FileInfoResult, String> {
+    let target = resolve_safe_path(base_dir, &args.path)?;
+    if !target.exists() {
+        return Ok(FileInfoResult {
+            path: args.path,
+            exists: false,
+            is_file: false,
+            is_dir: false,
+            is_symlink: false,
+            size_bytes: 0,
+            line_count: None,
+            is_binary: false,
+            permissions: None,
+            modified_iso: None,
+        });
+    }
+
+    let sym_meta = fs::symlink_metadata(&target).map_err(|e| format!("Metadata error: {e}"))?;
+    let is_symlink = sym_meta.file_type().is_symlink();
+    let meta = fs::metadata(&target).map_err(|e| format!("Metadata error: {e}"))?;
+    let is_file = meta.is_file();
+    let is_dir = meta.is_dir();
+    let size = meta.len();
+
+    let mut line_count = None;
+    let mut is_bin = false;
+
+    if is_file {
+        is_bin = is_binary_file(&target).unwrap_or(false);
+        if !is_bin {
+            if let Ok(file) = File::open(&target) {
+                let reader = BufReader::new(file);
+                line_count = Some(reader.lines().count());
+            }
+        }
+    }
+
+    #[cfg(unix)]
+    let perms = {
+        use std::os::unix::fs::PermissionsExt;
+        Some(format!("{:o}", meta.permissions().mode() & 0o777))
+    };
+    #[cfg(not(unix))]
+    let perms = None;
+
+    let modified = meta.modified().ok().and_then(|t| {
+        let dur = t.duration_since(std::time::UNIX_EPOCH).ok()?;
+        Some(format!("epoch_secs:{}", dur.as_secs()))
+    });
+
+    Ok(FileInfoResult {
+        path: args.path,
+        exists: true,
+        is_file,
+        is_dir,
+        is_symlink,
+        size_bytes: size,
+        line_count,
+        is_binary: is_bin,
+        permissions: perms,
+        modified_iso: modified,
+    })
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct BatchReadArgs {
+    pub paths: Vec<String>,
+    pub max_lines_per_file: Option<usize>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct BatchReadFileEntry {
+    pub path: String,
+    pub success: bool,
+    pub total_lines: usize,
+    pub content: String,
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct BatchReadResult {
+    pub total_files: usize,
+    pub files: Vec<BatchReadFileEntry>,
+}
+
+pub fn batch_read(args: BatchReadArgs, base_dir: &Path) -> Result<BatchReadResult, String> {
+    let mut results = Vec::new();
+    let max_lines = args.max_lines_per_file.unwrap_or(500);
+
+    for path_str in &args.paths {
+        match resolve_safe_path(base_dir, path_str) {
+            Ok(target) => {
+                if !target.exists() {
+                    results.push(BatchReadFileEntry {
+                        path: path_str.clone(),
+                        success: false,
+                        total_lines: 0,
+                        content: String::new(),
+                        error: Some("File does not exist".into()),
+                    });
+                    continue;
+                }
+                if target.is_dir() {
+                    results.push(BatchReadFileEntry {
+                        path: path_str.clone(),
+                        success: false,
+                        total_lines: 0,
+                        content: String::new(),
+                        error: Some("Target is a directory".into()),
+                    });
+                    continue;
+                }
+                if is_binary_file(&target).unwrap_or(false) {
+                    results.push(BatchReadFileEntry {
+                        path: path_str.clone(),
+                        success: false,
+                        total_lines: 0,
+                        content: String::new(),
+                        error: Some("File is binary".into()),
+                    });
+                    continue;
+                }
+
+                match File::open(&target) {
+                    Ok(file) => {
+                        let reader = BufReader::new(file);
+                        let all_lines: Vec<String> = reader.lines().filter_map(Result::ok).collect();
+                        let total = all_lines.len();
+                        let slice = &all_lines[..total.min(max_lines)];
+                        let mut numbered = String::new();
+                        for (idx, line) in slice.iter().enumerate() {
+                            numbered.push_str(&format!("{:>5} | {}\n", idx + 1, line));
+                        }
+                        results.push(BatchReadFileEntry {
+                            path: path_str.clone(),
+                            success: true,
+                            total_lines: total,
+                            content: numbered,
+                            error: None,
+                        });
+                    }
+                    Err(e) => {
+                        results.push(BatchReadFileEntry {
+                            path: path_str.clone(),
+                            success: false,
+                            total_lines: 0,
+                            content: String::new(),
+                            error: Some(format!("Open error: {e}")),
+                        });
+                    }
+                }
+            }
+            Err(e) => {
+                results.push(BatchReadFileEntry {
+                    path: path_str.clone(),
+                    success: false,
+                    total_lines: 0,
+                    content: String::new(),
+                    error: Some(e),
+                });
+            }
+        }
+    }
+
+    Ok(BatchReadResult {
+        total_files: results.len(),
+        files: results,
+    })
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct PatchFileArgs {
+    pub path: String,
+    pub patch: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct PatchFileResult {
+    pub path: String,
+    pub applied_hunks: usize,
+    pub total_hunks: usize,
+    pub diff: String,
+}
+
+pub fn patch_file(args: PatchFileArgs, base_dir: &Path) -> Result<PatchFileResult, String> {
+    let target = resolve_safe_path(base_dir, &args.path)?;
+    if !target.exists() {
+        return Err(format!("File does not exist: {}", args.path));
+    }
+    if is_binary_file(&target).unwrap_or(false) {
+        return Err(format!("Cannot patch binary file: {}", args.path));
+    }
+
+    let original_content = fs::read_to_string(&target)
+        .map_err(|e| format!("Failed to read file: {e}"))?;
+
+    struct Hunk {
+        old_lines: Vec<String>,
+        new_lines: Vec<String>,
+    }
+
+    let mut hunks: Vec<Hunk> = Vec::new();
+    let mut current_old = Vec::new();
+    let mut current_new = Vec::new();
+    let mut in_hunk = false;
+
+    for line in args.patch.lines() {
+        if line.starts_with("@@") {
+            if in_hunk && (!current_old.is_empty() || !current_new.is_empty()) {
+                hunks.push(Hunk {
+                    old_lines: current_old,
+                    new_lines: current_new,
+                });
+                current_old = Vec::new();
+                current_new = Vec::new();
+            }
+            in_hunk = true;
+            continue;
+        }
+
+        if !in_hunk {
+            if line.starts_with("---") || line.starts_with("+++") {
+                continue;
+            }
+            in_hunk = true;
+        }
+
+        if line.starts_with('-') {
+            current_old.push(line[1..].to_string());
+        } else if line.starts_with('+') {
+            current_new.push(line[1..].to_string());
+        } else if line.starts_with(' ') {
+            current_old.push(line[1..].to_string());
+            current_new.push(line[1..].to_string());
+        } else {
+            current_old.push(line.to_string());
+            current_new.push(line.to_string());
+        }
+    }
+
+    if in_hunk && (!current_old.is_empty() || !current_new.is_empty()) {
+        hunks.push(Hunk {
+            old_lines: current_old,
+            new_lines: current_new,
+        });
+    }
+
+    if hunks.is_empty() {
+        return Err("No valid patch hunks found in provided patch".to_string());
+    }
+
+    let mut file_lines: Vec<String> = original_content.lines().map(|s| s.to_string()).collect();
+    let total_hunks = hunks.len();
+    let mut applied_hunks = 0;
+
+    for hunk in hunks {
+        let old_block = hunk.old_lines;
+        let new_block = hunk.new_lines;
+
+        if old_block.is_empty() {
+            continue;
+        }
+
+        let mut match_idx = None;
+        for i in 0..=file_lines.len().saturating_sub(old_block.len()) {
+            let slice = &file_lines[i..i + old_block.len()];
+            if slice == old_block.as_slice() {
+                match_idx = Some(i);
+                break;
+            }
+        }
+
+        if let Some(idx) = match_idx {
+            file_lines.splice(idx..idx + old_block.len(), new_block);
+            applied_hunks += 1;
+        } else {
+            return Err(format!(
+                "Hunk failed to match context in {}. Target snippet not found.",
+                args.path
+            ));
+        }
+    }
+
+    let mut new_content = file_lines.join("\n");
+    if original_content.ends_with('\n') {
+        new_content.push('\n');
+    }
+
+    let temp_path = target.with_extension("tmp_patch");
+    fs::write(&temp_path, &new_content)
+        .map_err(|e| format!("Failed to write patched file: {e}"))?;
+    fs::rename(&temp_path, &target)
+        .map_err(|e| format!("Failed to commit patched file: {e}"))?;
+
+    let diff = TextDiff::from_lines(&original_content, &new_content);
+    let mut diff_str = String::new();
+    for change in diff.iter_all_changes() {
+        let sign = match change.tag() {
+            ChangeTag::Delete => "-",
+            ChangeTag::Insert => "+",
+            ChangeTag::Equal => " ",
+        };
+        diff_str.push_str(&format!("{}{}", sign, change));
+    }
+
+    Ok(PatchFileResult {
+        path: args.path,
+        applied_hunks,
+        total_hunks,
+        diff: diff_str,
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+
+    #[test]
+    fn test_resolve_safe_path() {
+        let temp_dir = std::env::temp_dir();
+        let safe = resolve_safe_path(&temp_dir, "foo/bar.txt");
+        assert!(safe.is_ok());
+
+        let escaping = resolve_safe_path(&temp_dir, "../../etc/passwd");
+        assert!(escaping.is_err());
+    }
+
+    #[test]
+    fn test_file_info_and_batch_read() {
+        let dir = std::env::temp_dir().join(format!("test_harness_{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+
+        let f1 = dir.join("file1.txt");
+        let mut file1 = File::create(&f1).unwrap();
+        writeln!(file1, "Line 1\nLine 2\nLine 3").unwrap();
+
+        let info = file_info(FileInfoArgs { path: "file1.txt".into() }, &dir).unwrap();
+        assert!(info.exists);
+        assert!(info.is_file);
+        assert_eq!(info.line_count, Some(3));
+
+        let batch = batch_read(BatchReadArgs {
+            paths: vec!["file1.txt".into(), "nonexistent.txt".into()],
+            max_lines_per_file: Some(10),
+        }, &dir).unwrap();
+
+        assert_eq!(batch.total_files, 2);
+        assert!(batch.files[0].success);
+        assert!(!batch.files[1].success);
+
+        // Test patch_file
+        let patch_content = "@@ -1,3 +1,3 @@\n Line 1\n-Line 2\n+Line 2 Patched\n Line 3\n";
+        let patch_res = patch_file(PatchFileArgs {
+            path: "file1.txt".into(),
+            patch: patch_content.into(),
+        }, &dir).unwrap();
+
+        assert_eq!(patch_res.applied_hunks, 1);
+        let updated = fs::read_to_string(&f1).unwrap();
+        assert!(updated.contains("Line 2 Patched"));
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+}
+
+

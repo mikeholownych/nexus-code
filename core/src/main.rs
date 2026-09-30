@@ -104,6 +104,30 @@ fn execute_tool(tool_name: &str, params: Value, base_dir: &Path) -> Result<Value
             let res = runner::run_command(args, base_dir)?;
             serde_json::to_value(res).map_err(|e| e.to_string())
         }
+        "file_info" => {
+            let args: file_ops::FileInfoArgs = serde_json::from_value(params)
+                .map_err(|e| format!("Invalid file_info arguments: {e}"))?;
+            let res = file_ops::file_info(args, base_dir)?;
+            serde_json::to_value(res).map_err(|e| e.to_string())
+        }
+        "batch_read" => {
+            let args: file_ops::BatchReadArgs = serde_json::from_value(params)
+                .map_err(|e| format!("Invalid batch_read arguments: {e}"))?;
+            let res = file_ops::batch_read(args, base_dir)?;
+            serde_json::to_value(res).map_err(|e| e.to_string())
+        }
+        "file_tree" => {
+            let args: search::FileTreeArgs = serde_json::from_value(params)
+                .map_err(|e| format!("Invalid file_tree arguments: {e}"))?;
+            let res = search::file_tree(args, base_dir)?;
+            serde_json::to_value(res).map_err(|e| e.to_string())
+        }
+        "patch_file" => {
+            let args: file_ops::PatchFileArgs = serde_json::from_value(params)
+                .map_err(|e| format!("Invalid patch_file arguments: {e}"))?;
+            let res = file_ops::patch_file(args, base_dir)?;
+            serde_json::to_value(res).map_err(|e| e.to_string())
+        }
         _ => Err(format!("Unknown tool: {tool_name}")),
     }
 }

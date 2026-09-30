@@ -58,7 +58,7 @@ function buildConfig(options: any): HarnessConfig {
 }
 
 program
-  .command("repl", { isDefault: true })
+  .command("repl")
   .description("Start interactive coding session (REPL / TUI)")
   .option("-e, --endpoint <url>", "Local LLM endpoint (default: $LOCAL_LLM_ENDPOINT)")
   .option("-m, --model <name>", "Model name identifier (default: active model in vLLM)")
@@ -303,6 +303,30 @@ program
       console.log(`• ${pc.bold(pc.green(p.name))}: ${p.description} (custom tools: ${p.customToolCount})\n`);
     }
   });
+
+program
+  .command("checkpoints")
+  .description("List saved workspace snapshots and rollback checkpoints")
+  .option("-w, --workspace <path>", "Workspace directory")
+  .action(async (options: any) => {
+    const ws = options.workspace ? path.resolve(options.workspace) : process.cwd();
+    const { CheckpointManager } = await import("./checkpoint.js");
+    const cm = new CheckpointManager(ws);
+    const cps = cm.listCheckpoints();
+    if (cps.length === 0) {
+      console.log(pc.yellow("\nNo saved checkpoints for this workspace.\n"));
+      return;
+    }
+    console.log(pc.bold(pc.cyan("\n=== Saved Workspace Checkpoints ===\n")));
+    cps.forEach((cp, idx) => {
+      console.log(`${idx + 1}. ${pc.bold(pc.green(cp.name))} ${pc.gray(`(${cp.id})`)} - ${pc.dim(cp.timestamp)}`);
+    });
+    console.log();
+  });
+
+if (process.argv.length <= 2) {
+  process.argv.push("repl");
+}
 
 program.parse(process.argv);
 

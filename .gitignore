@@ -1,0 +1,6 @@
+node_modules/
+core/target/
+.env
+*.log
+.nexus/
+.DS_Store

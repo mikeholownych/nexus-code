@@ -1,8 +1,12 @@
+import * as fs from "node:fs";
+import * as path from "node:path";
+import * as os from "node:os";
+import { exec } from "node:child_process";
 import { ChatMessage, HarnessConfig, ToolCall, ToolDefinition } from "./types.js";
 import { LocalLlmClient } from "./client.js";
 import { HARNESS_TOOLS, RustCoreBridge } from "./tools.js";
 import { parseModelResponse } from "./parser.js";
-import { TerminalUI } from "./ui.js";
+import { TerminalUI, redactSecrets } from "./ui.js";
 import { getGitInfo, getProjectRules } from "./git.js";
 import { SkillManager } from "./skills.js";
 import { McpClientManager } from "./mcp.js";
@@ -10,6 +14,45 @@ import { PluginManager } from "./plugins.js";
 import pc from "picocolors";
 
 export type ConfirmHandler = (toolName: string, args: Record<string, any>) => Promise<boolean>;
+
+function triggerNotification(title: string, message: string) {
+  try {
+    process.stdout.write("\x07");
+    exec(`notify-send "${title.replace(/"/g, '\\"')}" "${message.replace(/"/g, '\\"')}"`, () => {});
+  } catch {
+    // Ignore notification errors
+  }
+}
+
+function logAudit(entry: {
+  workspace: string;
+  tool: string;
+  args: any;
+  success: boolean;
+  durationMs: number;
+  error?: string;
+}) {
+  try {
+    const auditDir = path.join(os.homedir(), ".nexus");
+    if (!fs.existsSync(auditDir)) {
+      fs.mkdirSync(auditDir, { recursive: true });
+    }
+    const auditPath = path.join(auditDir, "audit.log");
+    const sanitizedArgs = JSON.parse(redactSecrets(JSON.stringify(entry.args)));
+    const record = {
+      timestamp: new Date().toISOString(),
+      workspace: entry.workspace,
+      tool: entry.tool,
+      args: sanitizedArgs,
+      success: entry.success,
+      duration_ms: entry.durationMs,
+      error: entry.error ? redactSecrets(entry.error) : undefined,
+    };
+    fs.appendFileSync(auditPath, JSON.stringify(record) + "\n");
+  } catch {
+    // Ignore audit log write errors
+  }
+}
 
 export class AutonomousAgent {
   private client: LocalLlmClient;
@@ -22,6 +65,7 @@ export class AutonomousAgent {
   private mcpManager: McpClientManager;
   private pluginManager: PluginManager;
   private extensibilityInitialized: boolean = false;
+  private activePlan: Array<{ name: string; status: string; detail?: string }> = [];
 
   constructor(config: HarnessConfig, depth: number = 0) {
     this.config = config;
@@ -91,6 +135,10 @@ export class AutonomousAgent {
     return this.messages.length;
   }
 
+  public getUi(): TerminalUI {
+    return this.ui;
+  }
+
   public getConfig(): HarnessConfig {
     return this.config;
   }
@@ -122,6 +170,14 @@ export class AutonomousAgent {
     return this.totalTokens;
   }
 
+  public getActivePlan(): Array<{ name: string; status: string; detail?: string }> {
+    return this.activePlan;
+  }
+
+  public setActivePlan(phases: Array<{ name: string; status: string; detail?: string }>): void {
+    this.activePlan = phases;
+  }
+
   public compactConversation(): string {
     if (this.messages.length <= 4) {
       return "Conversation is already compact.";
@@ -146,6 +202,11 @@ export class AutonomousAgent {
     const projectRules = getProjectRules(this.config.workspace);
     const rulesSection = projectRules ? `\n${projectRules}\n` : "";
     const skillsSection = this.skillManager ? `\n${this.skillManager.getPromptSection()}` : "";
+    let planSection = "";
+    if (this.activePlan && this.activePlan.length > 0) {
+      planSection = `\n### Active Execution Plan:\n` +
+        this.activePlan.map((p, i) => `${i + 1}. [${p.status}] ${p.name}${p.detail ? ` (${p.detail})` : ""}`).join("\n") + "\n";
+    }
 
     return `You are Nexus Code, an autonomous AI software engineering agent running in a Linux shell environment.
 You solve coding problems, build features, fix bugs, and refactor codebases by iteratively exploring, reading, editing, and verifying files.
@@ -153,13 +214,15 @@ You solve coding problems, build features, fix bugs, and refactor codebases by i
 ### Shell Environment:
 - Active Shell: ${this.config.shell} (standard GNU/Linux shell environment)
 - Workspace directory: ${this.config.workspace}
-${gitSection}${rulesSection}${skillsSection}
+${gitSection}${rulesSection}${skillsSection}${planSection}
 ### Operating Rules:
-1. EXPLORE FIRST: Before editing files, always explore the workspace using \`list_dir\`, \`find_files\`, \`search_code\`, or \`read_file\`. Never guess file names or function signatures.
-2. PRECISE EDITS: When modifying existing files, use \`edit_file\` with unique, exact snippets. Do not rewrite entire multi-hundred line files if you only need to change a few lines.
-3. VERIFICATION: After making code changes, use \`run_command\` with bash/zsh commands to run relevant tests, builds, or linting (e.g. \`cargo check\`, \`cargo test\`, \`npm test\`, \`pytest\`).
-4. SELF-CORRECTION: If a command or tool returns an error, analyze the error message, identify the root cause, and fix it.
-5. AUTONOMOUS COMPLETION: Keep executing tools until the entire task is thoroughly resolved. When everything is verified and done, invoke \`task_completed\` with a detailed summary.
+1. EXPLORE FIRST: Before editing files, always explore the workspace using \`file_tree\`, \`list_dir\`, \`find_files\`, \`search_code\`, or \`read_file\`. Never guess file names or function signatures.
+2. HIGH-EFFICIENCY BATCHING: Prefer \`batch_read\` to read multiple files concurrently in a single turn, and \`file_info\` to inspect metadata without loading whole files.
+3. PRECISE EDITS & PATCHES: When modifying existing files, use \`edit_file\` with unique snippets or \`patch_file\` with unified diffs.
+4. STRUCTURED PLANNING: For multi-step tasks, use \`update_plan\` to establish and advance through explicit milestone phases.
+5. VERIFICATION: After making code changes, use \`run_command\` with bash/zsh commands to run tests, builds, or linting (e.g. \`cargo check\`, \`cargo test\`, \`npm test\`, \`pytest\`).
+6. SELF-CORRECTION: If a command or tool returns an error, analyze the error message, identify the root cause, and fix it.
+7. AUTONOMOUS COMPLETION: Keep executing tools until the entire task is thoroughly resolved. When everything is verified and done, invoke \`task_completed\` with a detailed summary.
 
 Always explain your reasoning before or alongside your tool calls.`;
   }
@@ -316,10 +379,44 @@ Always explain your reasoning before or alongside your tool calls.`;
           continue;
         }
 
+        if (toolName === "update_plan") {
+          const phases = Array.isArray(args.phases) ? args.phases : [];
+          this.activePlan = phases;
+          this.ui.renderPlan(this.activePlan);
+          logAudit({
+            workspace: this.config.workspace,
+            tool: toolName,
+            args,
+            success: true,
+            durationMs: 0,
+          });
+          this.messages.push({
+            role: "tool",
+            tool_call_id: call.id,
+            name: toolName,
+            content: JSON.stringify({
+              status: "plan_updated",
+              total_phases: this.activePlan.length,
+              completed: this.activePlan.filter((p) => p.status === "completed").length,
+              in_progress: this.activePlan.filter((p) => p.status === "in_progress").length,
+            }),
+          });
+          continue;
+        }
+
         if (this.mcpManager.isMcpTool(toolName)) {
+          const t0 = Date.now();
           this.ui.startSpinner(`Executing MCP tool ${toolName}...`);
           const result = await this.mcpManager.executeMcpTool(toolName, args);
           this.ui.stopSpinner(result.success);
+          logAudit({
+            workspace: this.config.workspace,
+            tool: toolName,
+            args,
+            success: result.success,
+            durationMs: Date.now() - t0,
+            error: result.error,
+          });
           this.ui.printToolResult(toolName, result.success, result.output, result.error);
           this.messages.push({
             role: "tool",
@@ -331,9 +428,18 @@ Always explain your reasoning before or alongside your tool calls.`;
         }
 
         if (this.pluginManager.isCustomTool(toolName)) {
+          const t0 = Date.now();
           this.ui.startSpinner(`Executing plugin tool ${toolName}...`);
           const result = await this.pluginManager.executeCustomTool(toolName, args);
           this.ui.stopSpinner(result.success);
+          logAudit({
+            workspace: this.config.workspace,
+            tool: toolName,
+            args,
+            success: result.success,
+            durationMs: Date.now() - t0,
+            error: result.error,
+          });
           this.ui.printToolResult(toolName, result.success, result.output, result.error);
           this.messages.push({
             role: "tool",
@@ -345,7 +451,7 @@ Always explain your reasoning before or alongside your tool calls.`;
         }
 
         // Optional Human-in-the-loop confirmation
-        if (onConfirm && (toolName === "edit_file" || toolName === "write_file" || toolName === "run_command")) {
+        if (onConfirm && (toolName === "edit_file" || toolName === "write_file" || toolName === "patch_file" || toolName === "run_command")) {
           const approved = await onConfirm(toolName, args);
           if (!approved) {
             console.log(`⚠️ Tool execution cancelled by user.`);
@@ -359,9 +465,19 @@ Always explain your reasoning before or alongside your tool calls.`;
           }
         }
 
+        const t0 = Date.now();
         this.ui.startSpinner(`Executing ${toolName}...`);
         const result = await this.bridge.executeTool(toolName, args);
         this.ui.stopSpinner(result.success);
+
+        logAudit({
+          workspace: this.config.workspace,
+          tool: toolName,
+          args,
+          success: result.success,
+          durationMs: Date.now() - t0,
+          error: result.error,
+        });
 
         this.ui.printToolResult(toolName, result.success, result.output, result.error);
 
@@ -378,6 +494,8 @@ Always explain your reasoning before or alongside your tool calls.`;
 
       currentStep++;
     }
+
+    triggerNotification("Nexus Code", "Turn completed.");
 
     if (!isFinished && currentStep > this.config.maxSteps) {
       console.log(

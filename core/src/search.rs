@@ -362,3 +362,135 @@ pub fn search_symbols(args: SearchSymbolsArgs, base_dir: &Path) -> Result<Search
         symbols: matches,
     })
 }
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct FileTreeArgs {
+    #[serde(default = "default_dot")]
+    pub path: String,
+    #[serde(default = "default_tree_depth")]
+    pub max_depth: usize,
+}
+
+fn default_tree_depth() -> usize {
+    3
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct FileTreeResult {
+    pub root: String,
+    pub total_directories: usize,
+    pub total_files: usize,
+    pub tree: String,
+}
+
+pub fn file_tree(args: FileTreeArgs, base_dir: &Path) -> Result<FileTreeResult, String> {
+    let target = base_dir.join(&args.path);
+    if !target.exists() {
+        return Err(format!("Path does not exist: {}", args.path));
+    }
+
+    let mut total_dirs = 0;
+    let mut total_files = 0;
+    let mut output = format!("{}\n", args.path);
+
+    fn build_tree(
+        dir: &Path,
+        prefix: &str,
+        depth: usize,
+        max_depth: usize,
+        out: &mut String,
+        total_dirs: &mut usize,
+        total_files: &mut usize,
+    ) {
+        if depth >= max_depth {
+            return;
+        }
+
+        let walker = match WalkBuilder::new(dir)
+            .max_depth(Some(1))
+            .hidden(true)
+            .git_ignore(true)
+            .build()
+            .collect::<Result<Vec<_>, _>>() {
+                Ok(w) => w,
+                Err(_) => return,
+            };
+
+        let mut entries: Vec<_> = walker
+            .into_iter()
+            .filter(|e| e.path() != dir)
+            .collect();
+
+        entries.sort_by_key(|e| e.path().to_path_buf());
+        let count = entries.len();
+
+        for (i, entry) in entries.iter().enumerate() {
+            let is_last = i == count - 1;
+            let branch = if is_last { "└── " } else { "├── " };
+            let child_prefix = if is_last { "    " } else { "│   " };
+
+            let file_name = entry.file_name().to_string_lossy();
+            let is_dir = entry.file_type().map(|ft| ft.is_dir()).unwrap_or(false);
+
+            if is_dir {
+                *total_dirs += 1;
+                out.push_str(&format!("{}{}{}/\n", prefix, branch, file_name));
+                let next_prefix = format!("{}{}", prefix, child_prefix);
+                build_tree(entry.path(), &next_prefix, depth + 1, max_depth, out, total_dirs, total_files);
+            } else {
+                *total_files += 1;
+                out.push_str(&format!("{}{}{}\n", prefix, branch, file_name));
+            }
+        }
+    }
+
+    build_tree(&target, "", 0, args.max_depth, &mut output, &mut total_dirs, &mut total_files);
+
+    Ok(FileTreeResult {
+        root: args.path,
+        total_directories: total_dirs,
+        total_files,
+        tree: output,
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs::{self, File};
+    use std::io::Write;
+
+    #[test]
+    fn test_file_tree_and_find_files() {
+        let dir = std::env::temp_dir().join(format!("test_search_{}", std::process::id()));
+        let sub = dir.join("src");
+        fs::create_dir_all(&sub).unwrap();
+
+        let mut f1 = File::create(sub.join("main.rs")).unwrap();
+        writeln!(f1, "fn main() {{\n    println!(\"Hello\");\n}}").unwrap();
+
+        let mut f2 = File::create(dir.join("README.md")).unwrap();
+        writeln!(f2, "# Test Readme").unwrap();
+
+        let tree_res = file_tree(FileTreeArgs {
+            path: ".".into(),
+            max_depth: 3,
+        }, &dir).unwrap();
+
+        assert!(tree_res.total_files >= 2);
+        assert!(tree_res.tree.contains("main.rs"));
+        assert!(tree_res.tree.contains("README.md"));
+
+        let found = find_files(FindFilesArgs {
+            pattern: "*.rs".into(),
+            max_results: 10,
+        }, &dir).unwrap();
+
+        assert_eq!(found.files.len(), 1);
+        assert!(found.files[0].ends_with("main.rs"));
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+}
+
+

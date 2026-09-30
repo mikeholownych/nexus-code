@@ -285,6 +285,122 @@ export const HARNESS_TOOLS: ToolDefinition[] = [
   {
     type: "function",
     function: {
+      name: "file_info",
+      description: "Inspect detailed metadata of a file or directory (size in bytes, permissions, line count, binary check, modified timestamp).",
+      parameters: {
+        type: "object",
+        properties: {
+          path: {
+            type: "string",
+            description: "Relative path to the file or directory.",
+          },
+        },
+        required: ["path"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "batch_read",
+      description: "Read multiple files in parallel in a single turn to eliminate multi-turn round trips.",
+      parameters: {
+        type: "object",
+        properties: {
+          paths: {
+            type: "array",
+            items: { type: "string" },
+            description: "List of relative paths to files to read.",
+          },
+          max_lines_per_file: {
+            type: "number",
+            description: "Maximum number of lines to read per file (default: 500).",
+          },
+        },
+        required: ["paths"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "file_tree",
+      description: "Render a hierarchical Unicode directory tree of the workspace, respecting .gitignore and ignoring hidden files.",
+      parameters: {
+        type: "object",
+        properties: {
+          path: {
+            type: "string",
+            description: "Subdirectory to render tree from (default: '.').",
+          },
+          max_depth: {
+            type: "number",
+            description: "Maximum tree depth to traverse (default: 3).",
+          },
+        },
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "patch_file",
+      description: "Apply a standard unified diff patch or hunk to a file.",
+      parameters: {
+        type: "object",
+        properties: {
+          path: {
+            type: "string",
+            description: "Relative path to the file to patch.",
+          },
+          patch: {
+            type: "string",
+            description: "Unified diff or hunk content (including @@ headers or -/+ lines).",
+          },
+        },
+        required: ["path", "patch"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "update_plan",
+      description: "Create or update the structured multi-phase execution plan for the active task. Keeps user and agent aligned on milestones.",
+      parameters: {
+        type: "object",
+        properties: {
+          phases: {
+            type: "array",
+            items: {
+              type: "object",
+              properties: {
+                name: {
+                  type: "string",
+                  description: "Name or title of this execution phase.",
+                },
+                status: {
+                  type: "string",
+                  enum: ["pending", "in_progress", "completed"],
+                  description: "Current status of the phase.",
+                },
+                detail: {
+                  type: "string",
+                  description: "Optional details or sub-steps for this phase.",
+                },
+              },
+              required: ["name", "status"],
+            },
+            description: "List of plan phases in chronological order.",
+          },
+        },
+        required: ["phases"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
       name: "activate_skill",
       description: "Load the complete instructions, workflow, and guidelines of a specialized agent skill into active context.",
       parameters: {
@@ -346,6 +462,16 @@ export class RustCoreBridge {
           status: "completed",
           summary: args.summary || "Task marked as completed.",
           notes: args.notes || "",
+        }),
+      };
+    }
+
+    if (toolName === "update_plan") {
+      return {
+        success: true,
+        output: JSON.stringify({
+          status: "plan_updated",
+          phases: args.phases || [],
         }),
       };
     }

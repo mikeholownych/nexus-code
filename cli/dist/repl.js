@@ -9,6 +9,7 @@ import { AutonomousAgent } from "./agent.js";
 import { LocalLlmClient } from "./client.js";
 import { getGitInfo, scaffoldProjectRules } from "./git.js";
 import { SessionManager } from "./session.js";
+import { CheckpointManager } from "./checkpoint.js";
 export class InteractiveRepl {
     agent;
     config;
@@ -17,12 +18,14 @@ export class InteractiveRepl {
     historyFile;
     history = [];
     sessionManager;
+    checkpointManager;
     currentSessionId;
     constructor(config, autoApprove = true, resumeSessionId) {
         this.config = config;
         this.autoApprove = autoApprove;
         this.agent = new AutonomousAgent(config);
         this.sessionManager = new SessionManager();
+        this.checkpointManager = new CheckpointManager(config.workspace);
         this.historyFile = path.join(os.homedir(), ".nexus_history");
         this.loadHistory();
         if (resumeSessionId) {
@@ -34,6 +37,7 @@ export class InteractiveRepl {
                 if (sess.workspace && fs.existsSync(sess.workspace)) {
                     this.config.workspace = sess.workspace;
                     this.agent.setWorkspace(sess.workspace);
+                    this.checkpointManager = new CheckpointManager(sess.workspace);
                 }
                 this.agent.setMessages(sess.messages);
                 console.log(pc.green(`✔ Restored previous session ${pc.bold(sess.id)} (${sess.messages.length} messages)`));
@@ -122,6 +126,11 @@ export class InteractiveRepl {
         console.log(`  ${pc.bold(pc.yellow("/skill <name>"))}        View specialized skill instructions`);
         console.log(`  ${pc.bold(pc.yellow("/mcp"))}                List connected MCP servers and external tools`);
         console.log(`  ${pc.bold(pc.yellow("/plugins"))}            List loaded custom plugins and lifecycle hooks`);
+        console.log(`  ${pc.bold(pc.yellow("/plan"))}               Show active execution plan and milestones`);
+        console.log(`  ${pc.bold(pc.yellow("/checkpoint [name]"))}   Save rollback snapshot of current workspace`);
+        console.log(`  ${pc.bold(pc.yellow("/checkpoints"))}         List all saved workspace snapshots`);
+        console.log(`  ${pc.bold(pc.yellow("/undo"))}                Rollback workspace changes to last checkpoint`);
+        console.log(`  ${pc.bold(pc.yellow("/export [md|json]"))}    Export session transcript to file in workspace`);
         console.log(`  ${pc.bold(pc.yellow("/tokens"))}             Show context message count and token usage`);
         console.log(`  ${pc.bold(pc.yellow("/init"))}               Scaffold AGENTS.md rules file in workspace`);
         console.log(`  ${pc.bold(pc.yellow("/model [name]"))}       View or switch loaded model`);
@@ -169,6 +178,18 @@ export class InteractiveRepl {
             output,
             historySize: 200,
             prompt: "",
+            completer: (line) => {
+                const completions = [
+                    "/help", "/status", "/clear", "/reset", "/compact", "/mode",
+                    "/diff", "/git", "/sessions", "/save", "/resume", "/skills",
+                    "/skill", "/mcp", "/plugins", "/plan", "/checkpoint",
+                    "/checkpoints", "/undo", "/export", "/tokens", "/init",
+                    "/model", "/shell", "/cd", "/history", "/exit", "/quit"
+                ];
+                const trimmed = line.trim();
+                const hits = completions.filter((c) => c.startsWith(trimmed));
+                return [hits.length ? hits : completions, line];
+            },
         });
         const promptLoop = async () => {
             while (true) {
@@ -482,11 +503,78 @@ export class InteractiveRepl {
                         }
                         continue;
                     }
+                    else if (cmd === "plan") {
+                        const plan = this.agent.getActivePlan();
+                        if (!plan || plan.length === 0) {
+                            console.log(pc.yellow("No active plan currently defined. The agent will formulate a plan when given a multi-step objective.\n"));
+                        }
+                        else {
+                            this.agent.getUi().renderPlan(plan);
+                        }
+                        continue;
+                    }
+                    else if (cmd === "checkpoint") {
+                        const cp = this.checkpointManager.createCheckpoint(arg || undefined);
+                        console.log(pc.green(`✔ Checkpoint saved: ${pc.bold(cp.name)} (${cp.id})\n`));
+                        continue;
+                    }
+                    else if (cmd === "checkpoints") {
+                        const cps = this.checkpointManager.listCheckpoints();
+                        if (cps.length === 0) {
+                            console.log(pc.yellow("No saved checkpoints.\n"));
+                        }
+                        else {
+                            console.log(pc.bold(pc.white("\nSaved Workspace Checkpoints:")));
+                            cps.forEach((cp, idx) => {
+                                console.log(`  ${idx + 1}. ${pc.cyan(cp.id)} - ${pc.bold(cp.name)} ${pc.gray(`(${cp.timestamp})`)}`);
+                            });
+                            console.log();
+                        }
+                        continue;
+                    }
+                    else if (cmd === "undo") {
+                        const res = this.checkpointManager.rollbackLast();
+                        if (res.success) {
+                            console.log(pc.green(`✔ ${res.message}\n`));
+                        }
+                        else {
+                            console.log(pc.red(`✖ ${res.message}\n`));
+                        }
+                        continue;
+                    }
+                    else if (cmd === "export") {
+                        const format = (arg || "markdown").toLowerCase();
+                        const sess = this.sessionManager.loadSession(this.currentSessionId);
+                        if (!sess || sess.messages.length === 0) {
+                            console.log(pc.yellow("No session conversation to export.\n"));
+                            continue;
+                        }
+                        const outFilename = format === "json"
+                            ? `nexus-session-${this.currentSessionId}.json`
+                            : `nexus-session-${this.currentSessionId}.md`;
+                        const outPath = path.join(this.config.workspace, outFilename);
+                        if (format === "json") {
+                            fs.writeFileSync(outPath, JSON.stringify(sess, null, 2), "utf-8");
+                        }
+                        else {
+                            let md = `# Nexus Code Session Export\n\n- **Session ID:** \`${sess.id}\`\n- **Workspace:** \`${sess.workspace}\`\n- **Date:** ${sess.createdAt}\n- **Model:** \`${sess.model}\`\n\n---\n\n`;
+                            for (const m of sess.messages) {
+                                if (m.role === "system")
+                                    continue;
+                                md += `### ${m.role === "user" ? "👤 User" : m.role === "assistant" ? "🤖 Nexus" : "⚡ Tool (" + m.name + ")"}\n\n`;
+                                md += `${m.content}\n\n---\n\n`;
+                            }
+                            fs.writeFileSync(outPath, md, "utf-8");
+                        }
+                        console.log(pc.green(`✔ Session transcript exported to: ${pc.bold(outPath)}\n`));
+                        continue;
+                    }
                     else if (cmd === "cd") {
                         if (arg) {
                             const newPath = path.resolve(this.config.workspace, arg);
                             this.config.workspace = newPath;
                             this.agent.setWorkspace(newPath);
+                            this.checkpointManager = new CheckpointManager(newPath);
                             console.log(pc.green(`✔ Workspace changed to ${newPath}\n`));
                         }
                         else {
@@ -525,6 +613,7 @@ export class InteractiveRepl {
                 }
                 // Regular user prompt: run agent turn
                 try {
+                    this.checkpointManager.createCheckpoint(`Turn: ${trimmed.slice(0, 30)}`);
                     await this.agent.runTurn(trimmed, (tool, args) => this.confirmAction(tool, args));
                     this.saveCurrentSession(trimmed);
                 }

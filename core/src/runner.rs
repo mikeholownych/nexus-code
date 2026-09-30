@@ -48,7 +48,56 @@ fn truncate_output(s: &str) -> String {
     }
 }
 
+pub fn is_dangerous_command(cmd: &str) -> Option<&'static str> {
+    let normalized = cmd.trim().to_lowercase();
+
+    // Check destructive rm patterns
+    if normalized.contains("rm ") && (
+        normalized.contains("-rf /") || 
+        normalized.contains("-fr /") || 
+        normalized.contains("-rf /*") || 
+        normalized.contains("-fr /*") ||
+        normalized.contains("-rf ~") ||
+        normalized.contains("-rf $home") ||
+        normalized.contains("-rf .") ||
+        normalized.contains("-fr .")
+    ) {
+        return Some("Destructive recursive deletion of root, home, or current directory (rm -rf)");
+    }
+
+    // Format / filesystem destroyers
+    if normalized.starts_with("mkfs") || normalized.contains(" mkfs") {
+        return Some("Filesystem destruction command (mkfs)");
+    }
+
+    // Raw disk writes
+    if normalized.contains("dd if=") && (
+        normalized.contains("of=/dev/sd") || 
+        normalized.contains("of=/dev/nvme") || 
+        normalized.contains("of=/dev/vd") || 
+        (!normalized.contains("of=/dev/null") && !normalized.contains("of=/dev/zero") && normalized.contains("of=/dev/"))
+    ) {
+        return Some("Raw disk block overwrite (dd of=/dev/...)");
+    }
+
+    // Fork bombs
+    if normalized.contains(":(){ :|:& };:") || normalized.contains(":(){:|:&};:") {
+        return Some("Fork bomb denial-of-service");
+    }
+
+    // Destructive root permissions
+    if (normalized.contains("chmod -r 777 /") || (normalized.contains("chown -r") && normalized.contains(" /"))) && !normalized.contains(" ./") {
+        return Some("Recursive root permission alteration");
+    }
+
+    None
+}
+
 pub fn run_command(args: RunCommandArgs, base_dir: &Path) -> Result<RunCommandResult, String> {
+    if let Some(reason) = is_dangerous_command(&args.command) {
+        return Err(format!("Security Violation: Dangerous command blocked by safety guard ({reason}): '{}'", args.command));
+    }
+
     let working_dir = match args.cwd {
         Some(ref d) => base_dir.join(d),
         None => base_dir.to_path_buf(),
@@ -115,3 +164,27 @@ pub fn run_command(args: RunCommandArgs, base_dir: &Path) -> Result<RunCommandRe
         timed_out,
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_dangerous_command_detection() {
+        assert!(is_dangerous_command("rm -rf /").is_some());
+        assert!(is_dangerous_command("sudo rm -rf /*").is_some());
+        assert!(is_dangerous_command("rm -rf ~").is_some());
+        assert!(is_dangerous_command("mkfs.ext4 /dev/sda1").is_some());
+        assert!(is_dangerous_command("dd if=/dev/zero of=/dev/sda bs=1M").is_some());
+        assert!(is_dangerous_command(":(){ :|:& };:").is_some());
+        assert!(is_dangerous_command("chmod -R 777 /").is_some());
+
+        // Safe commands
+        assert!(is_dangerous_command("cargo test").is_none());
+        assert!(is_dangerous_command("ls -la /").is_none());
+        assert!(is_dangerous_command("git status").is_none());
+        assert!(is_dangerous_command("cat /etc/hosts").is_none());
+        assert!(is_dangerous_command("npm run build").is_none());
+    }
+}
+

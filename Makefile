@@ -26,3 +26,4 @@ clean:
 
 test:
 	cargo test --manifest-path core/Cargo.toml
+	npm --prefix cli test

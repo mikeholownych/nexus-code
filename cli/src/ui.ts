@@ -1,6 +1,15 @@
 import pc from "picocolors";
 import ora, { Ora } from "ora";
 
+export function redactSecrets(text: string): string {
+  if (!text) return text;
+  return text
+    .replace(/Bearer\s+[A-Za-z0-9_\-\.]{15,}/gi, "Bearer [REDACTED_TOKEN]")
+    .replace(/(?:sk-|ghp_|gho_|glpat-|xoxb-|xoxp-)[A-Za-z0-9_\-]{16,}/g, "[REDACTED_KEY]")
+    .replace(/-----BEGIN[ A-Z0-9_-]*PRIVATE KEY-----[\s\S]*?-----END[ A-Z0-9_-]*PRIVATE KEY-----/g, "[REDACTED_PRIVATE_KEY]")
+    .replace(/((?:password|secret|token|api[_-]?key)["']?\s*[:=]\s*["']?)([^"' \s\n\r]{6,})(["']?)/gi, "$1[REDACTED]$3");
+}
+
 export class TerminalUI {
   private spinner: Ora | null = null;
 
@@ -42,10 +51,30 @@ export class TerminalUI {
     }
   }
 
+  renderPlan(phases: Array<{ name: string; status: string; detail?: string }>): void {
+    if (!phases || phases.length === 0) return;
+    console.log(pc.bold(pc.cyan("\n📋 Active Execution Plan:")));
+    phases.forEach((p, idx) => {
+      let icon = pc.gray("[ ]");
+      let nameStr = pc.white(p.name);
+      if (p.status === "completed") {
+        icon = pc.green("[✔]");
+        nameStr = pc.strikethrough(pc.gray(p.name));
+      } else if (p.status === "in_progress") {
+        icon = pc.yellow("[►]");
+        nameStr = pc.bold(pc.yellow(p.name));
+      }
+      const detailStr = p.detail ? pc.dim(` - ${p.detail}`) : "";
+      console.log(`  ${icon} ${idx + 1}. ${nameStr}${detailStr}`);
+    });
+    console.log();
+  }
+
   printThought(thought: string): void {
     if (!thought || !thought.trim()) return;
     console.log(pc.bold(pc.magenta("\n💭 Thought:")));
-    const lines = thought.trim().split("\n");
+    const sanitized = redactSecrets(thought.trim());
+    const lines = sanitized.split("\n");
     for (const line of lines) {
       console.log(pc.gray("  │ ") + line);
     }
@@ -53,22 +82,24 @@ export class TerminalUI {
   }
 
   printToolCall(name: string, args: Record<string, any>): void {
+    const rawArgs = JSON.stringify(args);
+    const sanitized = redactSecrets(rawArgs);
     console.log(
       pc.bold(pc.blue("⚡ Tool Call: ")) +
         pc.bold(pc.white(name)) +
         pc.gray(" ") +
-        pc.dim(JSON.stringify(args))
+        pc.dim(sanitized)
     );
   }
 
   printToolResult(toolName: string, success: boolean, output: string, error?: string): void {
     if (success) {
       console.log(pc.bold(pc.green("✔ Result:")));
-      // If diff, render nicely
-      if (toolName === "edit_file" && output) {
+      if ((toolName === "edit_file" || toolName === "patch_file") && output) {
         this.renderDiff(output);
       } else {
-        const preview = output.length > 500 ? output.substring(0, 500) + "\n... [TRUNCATED]" : output;
+        const sanitized = redactSecrets(output);
+        const preview = sanitized.length > 500 ? sanitized.substring(0, 500) + "\n... [TRUNCATED]" : sanitized;
         const lines = preview.split("\n");
         for (const line of lines) {
           console.log(pc.gray("  ") + line);
@@ -76,13 +107,14 @@ export class TerminalUI {
       }
     } else {
       console.log(pc.bold(pc.red("✖ Tool Error:")));
-      console.log(pc.red(`  ${error || output}`));
+      console.log(pc.red(`  ${redactSecrets(error || output)}`));
     }
     console.log();
   }
 
   renderDiff(diffText: string): void {
-    const lines = diffText.split("\n");
+    const sanitized = redactSecrets(diffText);
+    const lines = sanitized.split("\n");
     for (const line of lines) {
       if (line.startsWith("+")) {
         console.log(pc.green(`  ${line}`));
@@ -97,10 +129,10 @@ export class TerminalUI {
   taskCompleted(summary: string, notes?: string): void {
     console.log(pc.bold(pc.green("\n════════════════════════ TASK COMPLETED ════════════════════════")));
     console.log(pc.bold(pc.white("\nSummary:")));
-    console.log(summary);
+    console.log(redactSecrets(summary));
     if (notes && notes.trim()) {
       console.log(pc.bold(pc.yellow("\nNotes:")));
-      console.log(notes);
+      console.log(redactSecrets(notes));
     }
     console.log(pc.bold(pc.green("════════════════════════════════════════════════════════════════\n")));
   }
