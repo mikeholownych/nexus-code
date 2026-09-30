@@ -36,6 +36,40 @@ export class ContextBudgetError extends Error {
   }
 }
 
+interface NormalizedMessageContent {
+  text: string[];
+  preserveOriginal: boolean;
+}
+
+function normalizeMessageContent(content: ChatMessage["content"]): NormalizedMessageContent {
+  if (typeof content === "string") return { text: [content], preserveOriginal: false };
+  if (content === undefined || content === null) return { text: [], preserveOriginal: false };
+  if (!Array.isArray(content)) return { text: [], preserveOriginal: true };
+
+  const text: string[] = [];
+  let preserveOriginal = false;
+  for (const part of content) {
+    if (!part || typeof part !== "object" || Array.isArray(part)) {
+      preserveOriginal = true;
+      continue;
+    }
+    if (part.type === "text" && typeof part.text === "string") {
+      text.push(part.text);
+      if (Object.keys(part).some((key) => key !== "type" && key !== "text")) preserveOriginal = true;
+      continue;
+    }
+    if (part.type === "image_url") {
+      // Keep image payloads in their original message; admission counts the full payload.
+      preserveOriginal = true;
+      continue;
+    }
+    // Keep unknown or malformed parts in their original message rather than
+    // serializing opaque payloads into the durable text summary.
+    preserveOriginal = true;
+  }
+  return { text, preserveOriginal };
+}
+
 const READ_ONLY_TOOLS = new Set([
   "read_file",
   "batch_read",
@@ -342,11 +376,13 @@ export class AutonomousAgent {
     };
 
     for (const message of messages) {
-      if (message.role === "system" && typeof message.content === "string") {
+      const normalizedContent = normalizeMessageContent(message.content);
+      const contentText = normalizedContent.text.join("\n");
+      if (message.role === "system" && contentText) {
         // Synthetic summaries are the canonical durable state. Reconcile their
         // entries into the next summary instead of retaining an unbounded chain.
         let section = "Earlier durable state";
-        for (const rawLine of message.content.split(/\r?\n/)) {
+        for (const rawLine of contentText.split(/\r?\n/)) {
           const line = rawLine.replace(/^\s*[-•]\s*/, "").trim();
           if (!line || line.startsWith("[Structured Context Memory")) continue;
           if (/^Current plan:?$/i.test(line)) {
@@ -372,8 +408,8 @@ export class AutonomousAgent {
           addDurableNote(`${section}: ${line}`);
         }
       }
-      if (message.role === "user" && typeof message.content === "string") {
-        const task = message.content.replace(/\s+/g, " ").trim();
+      if (message.role === "user" && contentText) {
+        const task = contentText.replace(/\s+/g, " ").trim();
         if (task && !priorTasks.includes(task)) priorTasks.push(task);
       }
       if (message.role === "assistant" && message.tool_calls) {
@@ -398,21 +434,21 @@ export class AutonomousAgent {
           if (name === "run_command" && args.command) commandsExecuted.push(String(args.command));
         }
       }
-      if (message.role === "assistant" && typeof message.content === "string") {
-        const content = message.content.replace(/<\/?thought>/g, "");
+      if (message.role === "assistant" && contentText) {
+        const content = contentText.replace(/<\/?thought>/g, "");
         for (const line of content.split(/\r?\n/)) {
           const clean = line.replace(/\s+/g, " ").trim();
           if (clean) addDurableNote(`Earlier assistant message: ${clean}`);
         }
       }
-      if (message.role === "tool" && typeof message.content === "string") {
+      if (message.role === "tool") {
         const id = typeof message.tool_call_id === "string" && message.tool_call_id.trim() ? message.tool_call_id : undefined;
         const reconstructibleCall = id ? reconstructibleCalls.get(id) : undefined;
-        if (id && toolResultCounts.get(id) === 1 && reconstructibleCall && message.name === reconstructibleCall.name) {
+        if (!normalizedContent.preserveOriginal && id && toolResultCounts.get(id) === 1 && reconstructibleCall && message.name === reconstructibleCall.name) {
           addDurableNote(`Reconstructible query retained for rerun: ${reconstructibleCall.name} ${reconstructibleCall.serializedArgs}`);
           continue;
         }
-        const lines = message.content.split(/\r?\n/).map((line) => line.replace(/\s+/g, " ").trim()).filter(Boolean);
+        const lines = contentText.split(/\r?\n/).map((line) => line.replace(/\s+/g, " ").trim()).filter(Boolean);
         for (const line of lines) addDurableNote(`Earlier ${message.name || "tool"} output: ${line}`);
       }
     }
@@ -444,15 +480,19 @@ export class AutonomousAgent {
     const recentStart = recentToolTurns > 0 && toolTurnStarts.length
       ? toolTurnStarts[Math.max(0, toolTurnStarts.length - recentToolTurns)]
       : source.length;
+    const retainedOriginalContent = new Set<number>();
+    source.forEach((message, index) => {
+      if (normalizeMessageContent(message.content).preserveOriginal) retainedOriginalContent.add(index);
+    });
     const retained = source
       .map((message, index) => ({ message, index }))
-      .filter(({ message, index }) => index > 0 && index !== currentUserIndex && message.role !== "system" && index >= recentStart);
-    const discarded = source
+      .filter(({ message, index }) => index > 0 && index !== currentUserIndex && ((message.role !== "system" && index >= recentStart) || retainedOriginalContent.has(index)));
+    const messagesToSummarize = source
       .map((message, index) => ({ message, index }))
-      .filter(({ message, index }) => index > 0 && index !== currentUserIndex && !(index >= recentStart && message.role !== "system"));
-    const summary = this.summarizeDiscardedHistory(discarded.map(({ message }) => message), detailBudgetChars);
+      .filter(({ message, index }) => index > 0 && index !== currentUserIndex && (retainedOriginalContent.has(index) || !(index >= recentStart && message.role !== "system")));
+    const summary = this.summarizeDiscardedHistory(messagesToSummarize.map(({ message }) => message), detailBudgetChars);
     const compacted: ChatMessage[] = [system];
-    if (discarded.length) compacted.push({ role: "system", content: summary });
+    if (messagesToSummarize.length) compacted.push({ role: "system", content: summary });
     const selected = new Map<number, ChatMessage>();
     for (const item of retained) selected.set(item.index, item.message);
     if (currentUserIndex !== undefined) selected.set(currentUserIndex, source[currentUserIndex]);

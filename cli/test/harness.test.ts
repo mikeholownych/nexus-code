@@ -848,6 +848,126 @@ error[E0308]: mismatched types
     }
   });
 
+  test("array-valued user, assistant, and tool text survives repeated compaction", () => {
+    const agent = new AutonomousAgent({
+      endpoint: "http://localhost:1234/v1",
+      model: "test-model",
+      workspace: process.cwd(),
+      maxSteps: 1,
+      shell: "bash",
+    });
+    const userConstraint = "Do not change the published RPC contract; downstream clients depend on this method.";
+    const assistantDecision = "Keep the public API stable because callers depend on it.";
+    const toolFinding = "The old wire format remains required by older clients.";
+    const arrayText = (text: string, pad = "") => [{ type: "text", text: `${pad}${text}${pad}` }];
+    try {
+      let history: any[] = [
+        agent.getMessages()[0],
+        { role: "user", content: arrayText(userConstraint) },
+        { role: "assistant", content: arrayText(assistantDecision) },
+        { role: "tool", name: "read_file", tool_call_id: "array-finding", content: arrayText(toolFinding) },
+        { role: "user", content: "Continue the work." },
+      ];
+
+      for (let cycle = 0; cycle < 5; cycle++) {
+        history = (agent as any).compactedMessages(history, 0, 6_000);
+        const summary = String(history.filter((message) => message.role === "system")[1]?.content || "");
+        for (const text of [userConstraint, assistantDecision, toolFinding]) {
+          assert.ok(summary.includes(text), `array text disappeared after cycle ${cycle + 1}: ${text}`);
+          assert.strictEqual(summary.split(text).length - 1, 1, "normalized array text should be deduplicated");
+        }
+        if (cycle < 4) {
+          history = [
+            ...history,
+            { role: "user", content: arrayText(userConstraint, "  ") },
+            { role: "assistant", content: arrayText(assistantDecision, "  ") },
+            { role: "tool", name: "read_file", tool_call_id: `array-finding-${cycle}`, content: arrayText(toolFinding, "  ") },
+            { role: "user", content: "Continue the work." },
+          ];
+        }
+      }
+    } finally {
+      agent.shutdown();
+    }
+  });
+
+  test("mixed and unsupported content parts stay available without entering durable summaries", async () => {
+    const agent = new AutonomousAgent({
+      endpoint: "http://localhost:1234/v1",
+      model: "test-model",
+      workspace: process.cwd(),
+      maxSteps: 1,
+      shell: "bash",
+    });
+    const imagePayload = `data:image/png;base64,${"A".repeat(2_000)}`;
+    const mixedUser = { role: "user", content: [
+      { type: "text", text: "Preserve the uploaded diagram's fixed-width interface." },
+      { type: "image_url", image_url: { url: imagePayload } },
+    ] };
+    const malformedAssistant = { role: "assistant", content: [
+      { type: "text", text: "Keep the established field order." },
+      { type: "text", text: 42, marker: "MALFORMED_PART_PAYLOAD" },
+    ] };
+    const unknownTool = { role: "tool", name: "read_file", tool_call_id: "unknown-content", content: [
+      { type: "text", text: "Existing clients still send protocol version one." },
+      { type: "vendor_binary", payload: "UNKNOWN_PART_PAYLOAD" },
+    ] };
+    try {
+      let history: any[] = [
+        agent.getMessages()[0],
+        mixedUser,
+        malformedAssistant,
+        unknownTool,
+        { role: "user", content: "Continue the work." },
+      ];
+      for (let cycle = 0; cycle < 4; cycle++) {
+        history = (agent as any).compactedMessages(history, 0, 6_000);
+        const summary = String(history.filter((message) => message.role === "system")[1]?.content || "");
+        assert.ok(summary.includes("Preserve the uploaded diagram's fixed-width interface."));
+        assert.ok(summary.includes("Keep the established field order."));
+        assert.ok(summary.includes("Existing clients still send protocol version one."));
+        assert.ok(!summary.includes("MALFORMED_PART_PAYLOAD"));
+        assert.ok(!summary.includes("UNKNOWN_PART_PAYLOAD"));
+        assert.ok(!summary.includes(imagePayload), "binary image data must not be copied into the text summary");
+        assert.ok(history.includes(mixedUser), "mixed text/image content must retain its original message");
+        assert.ok(history.includes(malformedAssistant), "malformed parts must retain their original message");
+        assert.ok(history.includes(unknownTool), "unknown parts must retain their original message");
+        if (cycle < 3) history = [...history, { role: "user", content: "Continue the work." }];
+      }
+    } finally {
+      agent.shutdown();
+    }
+
+    const overflowAgent = new AutonomousAgent({
+      endpoint: "http://localhost:1234/v1",
+      model: "test-model",
+      workspace: process.cwd(),
+      maxSteps: 1,
+      shell: "bash",
+      contextLimit: 20_000,
+      completionReserveTokens: 1_000,
+      toolResponseReserveTokens: 1_000,
+    });
+    let dispatchCount = 0;
+    overflowAgent.setMessages([
+      overflowAgent.getMessages()[0],
+      { role: "user", content: [
+        { type: "text", text: "Inspect this image without losing it." },
+        { type: "image_url", image_url: { url: `data:image/png;base64,${"B".repeat(60_000)}` } },
+      ] },
+    ]);
+    (overflowAgent as any).client = { chatCompletionStream: async () => { dispatchCount++; return { role: "assistant", content: "unexpected" }; } };
+    try {
+      await assert.rejects(
+        overflowAgent.runTurn("Continue image inspection."),
+        (error: Error) => error instanceof ContextBudgetError && /Context budget exceeded/.test(error.message),
+      );
+      assert.strictEqual(dispatchCount, 0, "unrepresentable oversized image content must fail before provider dispatch");
+    } finally {
+      overflowAgent.shutdown();
+    }
+  });
+
   test("long-running tool use keeps every dispatched request within budget", async () => {
     const limit = 65_536;
     const completionReserve = 8_192;
