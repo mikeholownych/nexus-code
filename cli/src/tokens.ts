@@ -36,13 +36,25 @@ export interface TokenBudget {
   utilizationPercent: number;
 }
 
+export function isContextAdmissible(
+  estimatedPromptTokens: number,
+  contextLimit: number,
+  completionReserveTokens: number,
+  toolResponseReserveTokens: number,
+): boolean {
+  return estimatedPromptTokens >= 0 &&
+    completionReserveTokens >= 0 &&
+    toolResponseReserveTokens >= 0 &&
+    estimatedPromptTokens + completionReserveTokens + toolResponseReserveTokens <= contextLimit;
+}
+
 /**
  * Calculate token breakdown across all parts of the LLM context
  */
 export function calculateContextBudget(
   messages: ChatMessage[],
   tools: ToolDefinition[],
-  contextLimit: number = 32768
+  contextLimit: number = 65536
 ): TokenBudget {
   let systemPromptTokens = 0;
   let userTokens = 0;
@@ -50,7 +62,11 @@ export function calculateContextBudget(
   let toolOutputTokens = 0;
 
   for (const msg of messages) {
-    const content = typeof msg.content === "string" ? msg.content : "";
+    const content = typeof msg.content === "string"
+      ? msg.content
+      : msg.content === undefined || msg.content === null
+        ? ""
+        : JSON.stringify(msg.content);
     const toolCallsLen = msg.tool_calls ? JSON.stringify(msg.tool_calls) : "";
     const tokens = countTokens(content) + countTokens(toolCallsLen) + 4; // 4 overhead tokens per message
 

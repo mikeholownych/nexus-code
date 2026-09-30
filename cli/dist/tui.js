@@ -83,7 +83,7 @@ export class TerminalDashboard {
         rightLines.push("");
         rightLines.push(pc.bold(pc.white("Context & Tokens:")));
         const tokenStats = this.agent.getTokenStats();
-        const limit = this.config.contextLimit || 32768;
+        const limit = this.config.contextLimit || 65536;
         const total = tokenStats.total;
         const pct = Math.min(100, Math.round((total / limit) * 100));
         const filled = Math.min(14, Math.round((total / limit) * 14));

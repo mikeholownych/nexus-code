@@ -1,6 +1,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
+import { randomUUID } from "node:crypto";
 import { ChatMessage, ToolDefinition, HarnessConfig, ToolCall } from "./types.js";
 import pc from "picocolors";
 
@@ -202,7 +203,8 @@ export class LocalLlmClient {
 
   async chatCompletion(
     messages: ChatMessage[],
-    tools: ToolDefinition[]
+    tools: ToolDefinition[],
+    requestId: string = randomUUID(),
   ): Promise<ChatMessage> {
     return this.executeWithFailover("chatCompletion", async (currentEp) => {
       const url = `${currentEp}/chat/completions`;
@@ -229,12 +231,13 @@ export class LocalLlmClient {
         headers: {
           "Content-Type": "application/json",
           Authorization: `Bearer ${this.apiKey}`,
+          "X-Request-ID": requestId,
         },
         body: JSON.stringify(payload),
       });
 
       if (res.status === 401 && this.reloadAuthToken()) {
-        return this.chatCompletion(messages, tools);
+        return this.chatCompletion(messages, tools, requestId);
       }
 
       if (!res.ok) {
@@ -257,7 +260,8 @@ export class LocalLlmClient {
   async chatCompletionStream(
     messages: ChatMessage[],
     tools: ToolDefinition[],
-    onToken?: StreamTokenCallback
+    onToken?: StreamTokenCallback,
+    requestId: string = randomUUID(),
   ): Promise<ChatMessage> {
     return this.executeWithFailover("chatCompletionStream", async (currentEp) => {
       const url = `${currentEp}/chat/completions`;
@@ -287,16 +291,17 @@ export class LocalLlmClient {
           headers: {
             "Content-Type": "application/json",
             Authorization: `Bearer ${this.apiKey}`,
+            "X-Request-ID": requestId,
           },
           body: JSON.stringify(payload),
         });
       } catch {
         // Fallback to non-streaming if network error
-        return this.chatCompletion(messages, tools);
+        return this.chatCompletion(messages, tools, requestId);
       }
 
       if (res.status === 401 && this.reloadAuthToken()) {
-        return this.chatCompletionStream(messages, tools, onToken);
+        return this.chatCompletionStream(messages, tools, onToken, requestId);
       }
 
       if (!res.ok || !res.body) {

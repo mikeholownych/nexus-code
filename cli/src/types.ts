@@ -49,7 +49,9 @@ export interface HarnessConfig {
   dryRun?: boolean;          // Dry-run simulation mode without persisting file modifications
   readOnly?: boolean;        // Reject all mutating tool executions and commands
   fallbackEndpoints?: string[]; // Failover endpoint URLs if primary endpoint is unavailable
-  contextLimit?: number;     // Maximum model context window token limit (default: 32768)
+  contextLimit?: number;     // Maximum model context window token limit (default: 65536)
+  completionReserveTokens?: number; // Context reserved for each model completion (default: 8192)
+  toolResponseReserveTokens?: number; // Context reserved for the following tool results (default: 4096)
   sandbox?: boolean | string; // Linux namespace / bwrap / container isolation (default: false)
 }
 

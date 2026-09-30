@@ -23,16 +23,26 @@ export function countTokens(text) {
     }
     return count;
 }
+export function isContextAdmissible(estimatedPromptTokens, contextLimit, completionReserveTokens, toolResponseReserveTokens) {
+    return estimatedPromptTokens >= 0 &&
+        completionReserveTokens >= 0 &&
+        toolResponseReserveTokens >= 0 &&
+        estimatedPromptTokens + completionReserveTokens + toolResponseReserveTokens <= contextLimit;
+}
 /**
  * Calculate token breakdown across all parts of the LLM context
  */
-export function calculateContextBudget(messages, tools, contextLimit = 32768) {
+export function calculateContextBudget(messages, tools, contextLimit = 65536) {
     let systemPromptTokens = 0;
     let userTokens = 0;
     let assistantTokens = 0;
     let toolOutputTokens = 0;
     for (const msg of messages) {
-        const content = typeof msg.content === "string" ? msg.content : "";
+        const content = typeof msg.content === "string"
+            ? msg.content
+            : msg.content === undefined || msg.content === null
+                ? ""
+                : JSON.stringify(msg.content);
         const toolCallsLen = msg.tool_calls ? JSON.stringify(msg.tool_calls) : "";
         const tokens = countTokens(content) + countTokens(toolCallsLen) + 4; // 4 overhead tokens per message
         if (msg.role === "system") {

@@ -1,6 +1,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
+import { randomUUID } from "node:crypto";
 import { exec } from "node:child_process";
 import { ChatMessage, HarnessConfig, ToolCall, ToolDefinition } from "./types.js";
 import { LocalLlmClient } from "./client.js";
@@ -13,11 +14,27 @@ import { McpClientManager } from "./mcp.js";
 import { PluginManager } from "./plugins.js";
 import { extractCompilerDiagnostics, formatDiagnosticHints } from "./diagnostics.js";
 import { SecurityManager } from "./security.js";
-import { calculateContextBudget, countTokens, TokenBudget } from "./tokens.js";
+import { calculateContextBudget, countTokens, isContextAdmissible, TokenBudget } from "./tokens.js";
 import { selectRelevantFewShots } from "./fewshots.js";
 import pc from "picocolors";
 
 export type ConfirmHandler = (toolName: string, args: Record<string, any>) => Promise<boolean>;
+
+export class ContextBudgetError extends Error {
+  constructor(
+    public readonly estimatedTokens: number,
+    public readonly completionReserveTokens: number,
+    public readonly toolResponseReserveTokens: number,
+    public readonly contextLimit: number,
+  ) {
+    super(
+      `Context budget exceeded: ${estimatedTokens} estimated prompt tokens plus ` +
+      `${completionReserveTokens} completion and ${toolResponseReserveTokens} tool-response ` +
+      `reserve tokens exceeds the ${contextLimit} token limit after safe compaction.`,
+    );
+    this.name = "ContextBudgetError";
+  }
+}
 
 const READ_ONLY_TOOLS = new Set([
   "read_file",
@@ -219,8 +236,136 @@ export class AutonomousAgent {
   }
 
   public getContextBudget(): TokenBudget {
-    const limit = this.config.contextLimit || 32768;
+    const limit = this.config.contextLimit || 65536;
     return calculateContextBudget(this.messages, this.getEffectiveTools(), limit);
+  }
+
+  private getContextReserves(): { completion: number; toolResponse: number; total: number } {
+    const limit = this.config.contextLimit || 65536;
+    const completion = this.config.completionReserveTokens ?? Math.min(8192, Math.floor(limit / 4));
+    const toolResponse = this.config.toolResponseReserveTokens ?? Math.min(4096, Math.floor(limit / 8));
+    return { completion, toolResponse, total: completion + toolResponse };
+  }
+
+  private summarizeDiscardedHistory(messages: ChatMessage[], detailBudgetChars: number): string {
+    const filesRead = new Set<string>();
+    const filesModified = new Set<string>();
+    const commandsExecuted: string[] = [];
+    const decisions: string[] = [];
+    const priorTasks: string[] = [];
+    const findings: string[] = [];
+    const usefulLine = /error|fail|pass|test|warning|created|modified|found|decision|result|status|function|class|interface|export|todo|fix|implement/i;
+
+    for (const message of messages) {
+      if (message.role === "user" && typeof message.content === "string") {
+        const task = message.content.replace(/\s+/g, " ").trim();
+        if (task && !priorTasks.includes(task)) priorTasks.push(task.slice(0, 400));
+      }
+      if (message.role === "assistant" && message.tool_calls) {
+        for (const call of message.tool_calls) {
+          let args: Record<string, any> = {};
+          try {
+            args = typeof call.function.arguments === "string" ? JSON.parse(call.function.arguments) : call.function.arguments;
+          } catch {}
+          const name = call.function.name;
+          if (["read_file", "file_info"].includes(name) && args.path) filesRead.add(String(args.path));
+          if (name === "batch_read" && Array.isArray(args.paths)) args.paths.forEach((value: string) => filesRead.add(String(value)));
+          if (["write_file", "edit_file", "patch_file"].includes(name) && args.path) filesModified.add(String(args.path));
+          if (name === "run_command" && args.command) commandsExecuted.push(String(args.command).slice(0, 240));
+          if (findings.length < 18) findings.push(`Earlier tool call: ${name}${args.path ? ` ${args.path}` : ""}`);
+        }
+      }
+      if (message.role === "assistant" && typeof message.content === "string") {
+        const thought = message.content.match(/<thought>([\s\S]*?)<\/thought>/)?.[1]?.trim();
+        if (thought) {
+          const sentence = thought.split(/\r?\n/)[0].slice(0, 220);
+          if (!decisions.includes(sentence) && decisions.length < 12) decisions.push(sentence);
+        }
+        const content = message.content.replace(/<thought>([\s\S]*?)<\/thought>/g, "$1");
+        for (const line of content.split(/\r?\n/)) {
+          const clean = line.replace(/\s+/g, " ").trim();
+          if (clean && usefulLine.test(clean) && decisions.length < 12 && !decisions.includes(clean)) decisions.push(clean.slice(0, 220));
+        }
+      }
+      if (message.role === "tool" && typeof message.content === "string") {
+        const lines = message.content.split(/\r?\n/).map((line) => line.replace(/\s+/g, " ").trim()).filter(Boolean);
+        const selected = lines.filter((line) => usefulLine.test(line)).slice(0, 2);
+        if (selected.length === 0 && lines.length > 0) selected.push(lines[0]);
+        for (const line of selected) {
+          if (findings.length >= 24) break;
+          findings.push(`Earlier ${message.name || "tool"} result: ${line.slice(0, 220)}`);
+        }
+      }
+    }
+
+    const sections = [`[Structured Context Memory - ${messages.length} older messages compacted]`];
+    if (priorTasks.length) sections.push(`Earlier task requests:\n${priorTasks.slice(-3).map((task) => `- ${task}`).join("\n")}`);
+    if (this.activePlan.length) sections.push(`Current plan:\n${this.activePlan.map((item) => `- [${item.status}] ${item.name}${item.detail ? `: ${item.detail}` : ""}`).join("\n")}`);
+    if (filesModified.size) sections.push(`Modified files: ${Array.from(filesModified).slice(-16).join(", ")}`);
+    if (filesRead.size) sections.push(`Inspected files: ${Array.from(filesRead).slice(-16).join(", ")}`);
+    if (commandsExecuted.length) sections.push(`Recent commands: ${commandsExecuted.slice(-4).join(" | ")}`);
+    if (decisions.length) sections.push(`Findings and decisions:\n${decisions.slice(-8).map((item) => `- ${item}`).join("\n")}`);
+    if (findings.length) sections.push(`Earlier interaction notes:\n${findings.slice(-12).map((item) => `- ${item}`).join("\n")}`);
+    const summary = sections.join("\n");
+    return summary.length <= detailBudgetChars ? summary : `${summary.slice(0, Math.max(0, detailBudgetChars - 24)).trimEnd()}\n[older context summarized]`;
+  }
+
+  private compactedMessages(source: ChatMessage[], recentToolTurns: number, detailBudgetChars: number): ChatMessage[] {
+    const system = source[0];
+    const currentUserIndex = source.map((message, index) => message.role === "user" ? index : -1).filter((index) => index >= 0).at(-1);
+    const toolTurnStarts = source
+      .map((message, index) => message.role === "assistant" && message.tool_calls?.length ? index : -1)
+      .filter((index) => index >= 0);
+    const recentStart = recentToolTurns > 0 && toolTurnStarts.length
+      ? toolTurnStarts[Math.max(0, toolTurnStarts.length - recentToolTurns)]
+      : source.length;
+    const retained = source
+      .map((message, index) => ({ message, index }))
+      .filter(({ message, index }) => index > 0 && index !== currentUserIndex && message.role !== "system" && index >= recentStart);
+    const discarded = source
+      .map((message, index) => ({ message, index }))
+      .filter(({ message, index }) => index > 0 && index !== currentUserIndex && !(index >= recentStart && message.role !== "system"));
+    const summary = this.summarizeDiscardedHistory(discarded.map(({ message }) => message), detailBudgetChars);
+    const compacted: ChatMessage[] = [system];
+    if (discarded.length) compacted.push({ role: "system", content: summary });
+    const selected = new Map<number, ChatMessage>();
+    for (const item of retained) selected.set(item.index, item.message);
+    if (currentUserIndex !== undefined) selected.set(currentUserIndex, source[currentUserIndex]);
+    for (const [index, message] of Array.from(selected.entries()).sort((left, right) => left[0] - right[0])) compacted.push(message);
+    return compacted;
+  }
+
+  private admitContext(step: number, requestId: string): void {
+    const contextLimit = this.config.contextLimit || 65536;
+    const reserves = this.getContextReserves();
+    const original = this.messages;
+    let budget = calculateContextBudget(original, this.getEffectiveTools(), contextLimit);
+    let compacted = false;
+
+    if (!isContextAdmissible(budget.totalActiveTokens, contextLimit, reserves.completion, reserves.toolResponse)) {
+      compacted = true;
+      let accepted = false;
+      for (const recentTurns of [2, 1, 0]) {
+        for (const detailBudgetChars of [6000, 3000, 1200, 400, 0]) {
+          const candidate = this.compactedMessages(original, recentTurns, detailBudgetChars);
+          const candidateBudget = calculateContextBudget(candidate, this.getEffectiveTools(), contextLimit);
+          if (isContextAdmissible(candidateBudget.totalActiveTokens, contextLimit, reserves.completion, reserves.toolResponse)) {
+            this.messages = candidate;
+            budget = candidateBudget;
+            accepted = true;
+            break;
+          }
+        }
+        if (accepted) break;
+      }
+      if (!accepted) {
+        budget = calculateContextBudget(original, this.getEffectiveTools(), contextLimit);
+        console.log(`[context_admission] step=${step} request_id=${requestId} state=blocked estimated_tokens=${budget.totalActiveTokens} completion_reserve=${reserves.completion} tool_response_reserve=${reserves.toolResponse} limit=${contextLimit}`);
+        throw new ContextBudgetError(budget.totalActiveTokens, reserves.completion, reserves.toolResponse, contextLimit);
+      }
+    }
+
+    console.log(`[context_admission] step=${step} request_id=${requestId} state=admitted estimated_tokens=${budget.totalActiveTokens} completion_reserve=${reserves.completion} tool_response_reserve=${reserves.toolResponse} limit=${contextLimit} compacted=${compacted} messages=${this.messages.length}`);
   }
 
   public getActivePlan(): Array<{ name: string; status: string; detail?: string }> {
@@ -232,64 +377,15 @@ export class AutonomousAgent {
   }
 
   public async compactConversation(useLlm: boolean = false): Promise<string> {
-    if (this.messages.length <= 4) {
+    if (this.messages.length <= 2) {
       return "Conversation is already compact.";
     }
-    const system = this.messages[0];
-    const recent = this.messages.slice(-4);
-    const discarded = this.messages.slice(1, -4);
+    const original = this.messages;
+    const compacted = this.compactedMessages(original, 1, 6000);
+    const retainedMessages = new Set(compacted);
+    const discarded = original.filter((message, index) => index > 0 && !retainedMessages.has(message));
     const prunedCount = discarded.length;
-
-    // Structured extraction from discarded history
-    const filesRead = new Set<string>();
-    const filesModified = new Set<string>();
-    const commandsExecuted: string[] = [];
-    const keyDecisions: string[] = [];
-
-    for (const m of discarded) {
-      if (m.role === "assistant" && m.tool_calls) {
-        for (const tc of m.tool_calls) {
-          const fn = tc.function.name;
-          let args: any = {};
-          try {
-            args = typeof tc.function.arguments === "string" ? JSON.parse(tc.function.arguments) : tc.function.arguments;
-          } catch {}
-
-          if (["read_file", "file_info"].includes(fn) && args.path) {
-            filesRead.add(args.path);
-          } else if (fn === "batch_read" && Array.isArray(args.paths)) {
-            args.paths.forEach((p: string) => filesRead.add(p));
-          } else if (["write_file", "edit_file", "patch_file"].includes(fn) && args.path) {
-            filesModified.add(args.path);
-          } else if (fn === "run_command" && args.command) {
-            commandsExecuted.push(args.command);
-          }
-        }
-      }
-      if (m.role === "assistant" && typeof m.content === "string") {
-        const thoughtMatch = m.content.match(/<thought>([\s\S]*?)<\/thought>/);
-        if (thoughtMatch && thoughtMatch[1].trim()) {
-          const snippet = thoughtMatch[1].trim().split("\n")[0].substring(0, 120);
-          if (snippet && !keyDecisions.includes(snippet)) {
-            keyDecisions.push(snippet);
-          }
-        }
-      }
-    }
-
-    let summaryText = `[Structured Context Memory - ${prunedCount} previous messages compacted]\n`;
-    if (filesModified.size > 0) {
-      summaryText += `• Modified files: ${Array.from(filesModified).join(", ")}\n`;
-    }
-    if (filesRead.size > 0) {
-      summaryText += `• Inspected files: ${Array.from(filesRead).slice(0, 8).join(", ")}${filesRead.size > 8 ? " (and more)" : ""}\n`;
-    }
-    if (commandsExecuted.length > 0) {
-      summaryText += `• Commands run: ${commandsExecuted.slice(-4).join(" | ")}\n`;
-    }
-    if (keyDecisions.length > 0) {
-      summaryText += `• Key discoveries/decisions:\n` + keyDecisions.slice(-3).map((d) => `  - ${d}`).join("\n") + "\n";
-    }
+    let summaryText = String(compacted.find((message) => message.role === "system" && message !== original[0])?.content || "");
 
     if (useLlm) {
       try {
@@ -300,7 +396,17 @@ export class AutonomousAgent {
           },
           ...discarded.slice(-8),
         ];
-        const res = await this.client.chatCompletion(llmPrompt, []);
+        const requestId = randomUUID();
+        const originalMessages = this.messages;
+        let admittedPrompt = llmPrompt;
+        try {
+          this.messages = llmPrompt;
+          this.admitContext(0, requestId);
+          admittedPrompt = this.messages;
+        } finally {
+          this.messages = originalMessages;
+        }
+        const res = await this.client.chatCompletion(admittedPrompt, [], requestId);
         if (typeof res.content === "string" && res.content.trim()) {
           summaryText += `\nExecutive Summary:\n${res.content.trim()}\n`;
         }
@@ -309,12 +415,9 @@ export class AutonomousAgent {
       }
     }
 
-    const summaryMessage: ChatMessage = {
-      role: "system",
-      content: summaryText.trim(),
-    };
-
-    this.messages = [system, summaryMessage, ...recent];
+    const summaryIndex = compacted.findIndex((message) => message.role === "system" && message !== original[0]);
+    if (summaryIndex >= 0) compacted[summaryIndex] = { role: "system", content: summaryText.trim() };
+    this.messages = compacted;
     return `Compacted context: distilled ${prunedCount} messages, ${this.messages.length} active messages in memory.`;
   }
 
@@ -376,6 +479,8 @@ Always explain your reasoning before or alongside your tool calls.${gitSection}$
 
     while (currentStep <= this.config.maxSteps && !isFinished) {
       this.ui.stepHeader(currentStep, this.config.maxSteps);
+      const requestId = randomUUID();
+      this.admitContext(currentStep, requestId);
       this.ui.startSpinner("Thinking and analyzing next step...");
 
       let assistantMessage: ChatMessage;
@@ -391,7 +496,8 @@ Always explain your reasoning before or alongside your tool calls.${gitSection}$
               streamedTokens = true;
             }
             process.stdout.write(token);
-          }
+          },
+          requestId,
         );
         if (streamedTokens) {
           process.stdout.write("\n\n");
@@ -401,6 +507,7 @@ Always explain your reasoning before or alongside your tool calls.${gitSection}$
       } catch (err: any) {
         this.ui.stopSpinner(false, `Inference error: ${err.message}`);
         console.error(`\nFatal error communicating with LLM server: ${err.message}`);
+        if (err instanceof ContextBudgetError) throw err;
         return;
       }
 
@@ -411,7 +518,7 @@ Always explain your reasoning before or alongside your tool calls.${gitSection}$
       const promptEst = calculateContextBudget(
         this.messages,
         this.getEffectiveTools(),
-        this.config.contextLimit || 32768
+        this.config.contextLimit || 65536
       ).totalActiveTokens;
       const compContent = typeof assistantMessage.content === "string"
         ? assistantMessage.content
@@ -748,8 +855,10 @@ Always explain your reasoning before or alongside your tool calls.${gitSection}$
 
     while (currentStep <= this.config.maxSteps) {
       let assistantMessage: ChatMessage;
+      const requestId = randomUUID();
       try {
-        assistantMessage = await this.client.chatCompletion(this.messages, HARNESS_TOOLS);
+        this.admitContext(currentStep, requestId);
+        assistantMessage = await this.client.chatCompletion(this.messages, HARNESS_TOOLS, requestId);
       } catch (err: any) {
         return `Subagent failed during LLM inference: ${err.message}`;
       }
@@ -809,4 +918,3 @@ Always explain your reasoning before or alongside your tool calls.${gitSection}$
     return finalSummary || "Subagent completed assigned steps.";
   }
 }
-

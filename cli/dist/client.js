@@ -1,6 +1,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
+import { randomUUID } from "node:crypto";
 import pc from "picocolors";
 export function readLatestAuthToken() {
     // 1. Check opencode client token file
@@ -152,7 +153,7 @@ export class LocalLlmClient {
             return data.data?.map((m) => m.id) || [];
         });
     }
-    async chatCompletion(messages, tools) {
+    async chatCompletion(messages, tools, requestId = randomUUID()) {
         return this.executeWithFailover("chatCompletion", async (currentEp) => {
             const url = `${currentEp}/chat/completions`;
             const payload = {
@@ -175,11 +176,12 @@ export class LocalLlmClient {
                 headers: {
                     "Content-Type": "application/json",
                     Authorization: `Bearer ${this.apiKey}`,
+                    "X-Request-ID": requestId,
                 },
                 body: JSON.stringify(payload),
             });
             if (res.status === 401 && this.reloadAuthToken()) {
-                return this.chatCompletion(messages, tools);
+                return this.chatCompletion(messages, tools, requestId);
             }
             if (!res.ok) {
                 const errText = await res.text();
@@ -195,7 +197,7 @@ export class LocalLlmClient {
     /**
      * Real-time SSE token streaming for typewriter terminal output (matching Codex / Claude Code)
      */
-    async chatCompletionStream(messages, tools, onToken) {
+    async chatCompletionStream(messages, tools, onToken, requestId = randomUUID()) {
         return this.executeWithFailover("chatCompletionStream", async (currentEp) => {
             const url = `${currentEp}/chat/completions`;
             const payload = {
@@ -221,16 +223,17 @@ export class LocalLlmClient {
                     headers: {
                         "Content-Type": "application/json",
                         Authorization: `Bearer ${this.apiKey}`,
+                        "X-Request-ID": requestId,
                     },
                     body: JSON.stringify(payload),
                 });
             }
             catch {
                 // Fallback to non-streaming if network error
-                return this.chatCompletion(messages, tools);
+                return this.chatCompletion(messages, tools, requestId);
             }
             if (res.status === 401 && this.reloadAuthToken()) {
-                return this.chatCompletionStream(messages, tools, onToken);
+                return this.chatCompletionStream(messages, tools, onToken, requestId);
             }
             if (!res.ok || !res.body) {
                 const errText = await res.text().catch(() => res.statusText);

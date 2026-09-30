@@ -12,9 +12,9 @@ import { CheckpointManager } from "../src/checkpoint.js";
 import { SkillManager } from "../src/skills.js";
 import { extractCompilerDiagnostics, formatDiagnosticHints } from "../src/diagnostics.js";
 import { generateConventionalCommit } from "../src/git.js";
-import { AutonomousAgent } from "../src/agent.js";
+import { AutonomousAgent, ContextBudgetError } from "../src/agent.js";
 import { SecurityManager } from "../src/security.js";
-import { countTokens, calculateContextBudget, renderTokenGauge } from "../src/tokens.js";
+import { countTokens, calculateContextBudget, isContextAdmissible, renderTokenGauge } from "../src/tokens.js";
 import { selectRelevantFewShots } from "../src/fewshots.js";
 import { LocalLlmClient } from "../src/client.js";
 import { scanAndOnboardWorkspace } from "../src/onboard.js";
@@ -240,12 +240,14 @@ error[E0308]: mismatched types
 
   test("AutonomousAgent completes multi-turn loop using mock OpenAI-compatible LLM server", async () => {
     let callCount = 0;
+    const requestIds: string[] = [];
     const mockServer = http.createServer((req, res) => {
       if (req.url === "/v1/chat/completions" && req.method === "POST") {
         let body = "";
         req.on("data", (chunk) => { body += chunk; });
         req.on("end", () => {
           callCount++;
+          requestIds.push(String(req.headers["x-request-id"] || ""));
           res.writeHead(200, {
             "Content-Type": "text/event-stream",
             "Cache-Control": "no-cache",
@@ -316,6 +318,7 @@ error[E0308]: mismatched types
     try {
       await agent.runTurn("Inspect package.json metadata");
       assert.strictEqual(callCount, 2);
+      assert.ok(requestIds.every((id) => /^[0-9a-f-]{36}$/.test(id)), "each inference must carry a correlatable request ID");
       const history = agent.getHistory();
       assert.ok(history.length >= 3, "Expected at least 3 messages in history");
     } finally {
@@ -439,11 +442,165 @@ error[E0308]: mismatched types
     assert.ok(budget.toolOutputTokens > 0);
     assert.ok(budget.toolsDefinitionTokens > 100);
     assert.strictEqual(budget.contextLimit, 32768);
+    assert.strictEqual(calculateContextBudget(messages, HARNESS_TOOLS).contextLimit, 65_536, "Nexus defaults to the engineering/b0 context window");
 
     const gauge = renderTokenGauge(budget);
     assert.ok(gauge.includes("Context Window & Token Accounting Gauge"));
     assert.ok(gauge.includes("Tool Definitions"));
     assert.ok(gauge.includes("Tool Output Payloads"));
+  });
+
+  test("context admission includes exact completion and tool-response reserve boundaries", () => {
+    const limit = 65_536;
+    const completionReserve = 8_192;
+    const toolResponseReserve = 4_096;
+    const admissiblePrompt = limit - completionReserve - toolResponseReserve;
+    assert.strictEqual(isContextAdmissible(admissiblePrompt, limit, completionReserve, toolResponseReserve), true);
+    assert.strictEqual(isContextAdmissible(admissiblePrompt + 1, limit, completionReserve, toolResponseReserve), false);
+    assert.strictEqual(isContextAdmissible(limit, limit, 0, 0), true);
+    assert.strictEqual(isContextAdmissible(-1, limit, 0, 0), false);
+  });
+
+  test("pre-dispatch admission compacts accumulated multi-turn tool history", async () => {
+    const limit = 65_536;
+    const completionReserve = 8_192;
+    const toolResponseReserve = 4_096;
+    const agent = new AutonomousAgent({
+      endpoint: "http://localhost:1234/v1",
+      model: "test-model",
+      workspace: process.cwd(),
+      maxSteps: 3,
+      shell: "bash",
+      contextLimit: limit,
+      completionReserveTokens: completionReserve,
+      toolResponseReserveTokens: toolResponseReserve,
+    });
+    const toolHistory: any[] = [];
+    for (let index = 0; index < 8; index++) {
+      const id = `history-${index}`;
+      toolHistory.push(
+        {
+          role: "assistant",
+          content: "",
+          tool_calls: [{ id, type: "function", function: { name: "read_file", arguments: JSON.stringify({ path: `src/module-${index}.ts` }) } }],
+        },
+          { role: "tool", name: "read_file", tool_call_id: id, content: `Important finding ${index}: verified implementation detail.\n${"x ".repeat(8_000)}` },
+      );
+    }
+    agent.setMessages([
+      agent.getMessages()[0],
+      { role: "user", content: "Implement the bounded cache and keep this task objective." },
+      ...toolHistory,
+    ]);
+    const before = calculateContextBudget(agent.getMessages(), HARNESS_TOOLS, limit).totalActiveTokens;
+    assert.ok(before + completionReserve + toolResponseReserve > limit, "fixture must reproduce the old oversized dispatch condition");
+
+    const dispatched: Array<{ budget: number; messages: any[] }> = [];
+    (agent as any).client = {
+      chatCompletionStream: async (messages: any[], tools: any[]) => {
+        dispatched.push({ budget: calculateContextBudget(messages, tools, limit).totalActiveTokens, messages });
+        return { role: "assistant", content: "The task is complete." };
+      },
+    };
+    const admissionLogs: string[] = [];
+    const originalLog = console.log;
+    console.log = (...args: any[]) => {
+      if (String(args[0]).startsWith("[context_admission]")) admissionLogs.push(String(args[0]));
+      else originalLog(...args);
+    };
+    try {
+      await agent.runTurn("Continue the bounded cache task without losing the current objective.");
+    } finally {
+      console.log = originalLog;
+      agent.shutdown();
+    }
+
+    assert.strictEqual(dispatched.length, 1);
+    assert.ok(dispatched[0].budget + completionReserve + toolResponseReserve <= limit);
+    assert.ok(dispatched[0].messages.some((message) => message.role === "user" && message.content.includes("Continue the bounded cache task")));
+    assert.ok(dispatched[0].messages[1].content.includes("src/module-0.ts"), "older touched-file state should survive compaction");
+    assert.ok(admissionLogs.some((line) => line.includes("compacted=true")));
+  });
+
+  test("long-running tool use keeps every dispatched request within budget", async () => {
+    const limit = 65_536;
+    const completionReserve = 8_192;
+    const toolResponseReserve = 4_096;
+    const agent = new AutonomousAgent({
+      endpoint: "http://localhost:1234/v1",
+      model: "test-model",
+      workspace: process.cwd(),
+      maxSteps: 24,
+      shell: "bash",
+      contextLimit: limit,
+      completionReserveTokens: completionReserve,
+      toolResponseReserveTokens: toolResponseReserve,
+    });
+    const dispatched: number[] = [];
+    const admissionLogs: string[] = [];
+    let turn = 0;
+    (agent as any).client = {
+      chatCompletionStream: async (messages: any[], tools: any[]) => {
+        const budget = calculateContextBudget(messages, tools, limit).totalActiveTokens;
+        dispatched.push(budget);
+        turn++;
+        if (turn <= 18) {
+          const id = `cycle-${turn}`;
+          return {
+            role: "assistant",
+            content: `<thought>Finding ${turn}: continue the implementation and keep prior verification results.</thought>`,
+            tool_calls: [{ id, type: "function", function: { name: "read_file", arguments: JSON.stringify({ path: `src/part-${turn}.ts` }) } }],
+          };
+        }
+        return { role: "assistant", content: "All implementation steps and verification are complete." };
+      },
+    };
+    (agent as any).bridge.executeTool = async (_name: string, args: any) => ({
+      success: true,
+      output: `Verified read of ${args.path}.\n${"tool-result ".repeat(5_000)}`,
+    });
+    const originalLog = console.log;
+    console.log = (...args: any[]) => {
+      if (String(args[0]).startsWith("[context_admission]")) admissionLogs.push(String(args[0]));
+      else originalLog(...args);
+    };
+    try {
+      await agent.runTurn("Implement a bounded cache, add tests, and verify the full task.");
+    } finally {
+      console.log = originalLog;
+      agent.shutdown();
+    }
+
+    assert.strictEqual(turn, 19, "the sustained run should progress well beyond the historical step-4 failure");
+    assert.ok(dispatched.length >= 19);
+    assert.ok(dispatched.every((estimate) => estimate + completionReserve + toolResponseReserve <= limit));
+    assert.ok(admissionLogs.filter((line) => line.includes("compacted=true")).length >= 2);
+    assert.ok(admissionLogs.every((line) => line.includes(`completion_reserve=${completionReserve}`) && line.includes(`tool_response_reserve=${toolResponseReserve}`)));
+  });
+
+  test("context admission fails locally when required task state cannot fit", async () => {
+    const limit = 65_536;
+    const agent = new AutonomousAgent({
+      endpoint: "http://localhost:1234/v1",
+      model: "test-model",
+      workspace: process.cwd(),
+      maxSteps: 1,
+      shell: "bash",
+      contextLimit: limit,
+      completionReserveTokens: 8_192,
+      toolResponseReserveTokens: 4_096,
+    });
+    let dispatched = false;
+    (agent as any).client = { chatCompletionStream: async () => { dispatched = true; return { role: "assistant", content: "unexpected" }; } };
+    try {
+      await assert.rejects(
+        agent.runTurn(`Keep this task requirement intact: ${"critical ".repeat(70_000)}`),
+        (error: Error) => error instanceof ContextBudgetError && /Context budget exceeded/.test(error.message),
+      );
+      assert.strictEqual(dispatched, false, "an unsafe prompt must never reach the inference client");
+    } finally {
+      agent.shutdown();
+    }
   });
 
   test("LocalLlmClient executes automatic failover when primary endpoint fails", async () => {
@@ -557,14 +714,14 @@ error[E0308]: mismatched types
 
       const report = await agent.compactConversation(false);
       assert.ok(report.includes("Compacted context"));
-      assert.strictEqual(agent.getHistoryCount(), 6); // system + summary + last 4
+      assert.strictEqual(agent.getHistoryCount(), 7); // system + summary + latest user + last tool interaction
 
       const summaryMsg = agent.getMessages()[1];
       assert.strictEqual(summaryMsg.role, "system");
       assert.ok(summaryMsg.content?.includes("Structured Context Memory"));
       assert.ok(summaryMsg.content?.includes("src/db.ts"), "Missing touched file path in summary");
-      assert.ok(summaryMsg.content?.includes("cargo test"), "Missing command in summary");
       assert.ok(summaryMsg.content?.includes("connection pool bottleneck"), "Missing key decision in summary");
+      assert.ok(agent.getMessages().some((message) => message.tool_calls?.some((call) => call.function.name === "run_command" && call.function.arguments.includes("cargo test"))), "recent command interaction should be retained");
     } finally {
       agent.shutdown();
     }
@@ -1145,4 +1302,3 @@ error[E0308]: mismatched types
     }
   });
 });
-
