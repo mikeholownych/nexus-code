@@ -35,7 +35,7 @@ const program = new Command();
 program
   .name("harness")
   .description("Nexus Code - Custom Autonomous Coding Harness for Local AI (LM Studio / vLLM)")
-  .version("1.0.0");
+  .version("1.1.0");
 
 function buildConfig(options: any): HarnessConfig {
   const endpoint = options.endpoint || process.env.LOCAL_LLM_ENDPOINT || "http://localhost:1234/v1";

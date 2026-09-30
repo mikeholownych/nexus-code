@@ -1,6 +1,6 @@
 {
   "name": "nexus-code-harness",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "High-Performance Autonomous Local AI Coding Harness (Codex / Claude-Code style) powered by Rust + TypeScript",
   "scripts": {
     "build:core": "cargo build --release --manifest-path core/Cargo.toml",
@@ -12,7 +12,16 @@
     "check": "node cli/dist/index.js check",
     "models": "node cli/dist/index.js models"
   },
-  "keywords": ["ai-agent", "coding-harness", "codex", "claude-code", "rust", "typescript", "vllm", "lm-studio"],
+  "keywords": [
+    "ai-agent",
+    "coding-harness",
+    "codex",
+    "claude-code",
+    "rust",
+    "typescript",
+    "vllm",
+    "lm-studio"
+  ],
   "author": "",
   "license": "MIT"
 }
