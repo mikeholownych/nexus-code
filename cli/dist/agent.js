@@ -237,12 +237,11 @@ export class AutonomousAgent {
         const filesRead = new Set();
         const filesModified = new Set();
         const commandsExecuted = [];
-        const decisions = [];
+        const reconstructibleCalls = new Map();
         const priorTasks = [];
-        const findings = [];
         const durableNotes = [];
         const durableNoteKeys = new Set();
-        const usefulLine = /error|fail|pass|test|warning|created|modified|found|finding|decision|result|status|function|class|interface|export|todo|fix|implement|unresolved|pending|blocked|open item|constraint|risk|identified|bottleneck/i;
+        const reconstructibleQueryTools = new Set(["file_tree", "list_dir", "find_files", "file_info"]);
         const addDurableNote = (note) => {
             const key = note.replace(/\s+/g, " ").trim();
             if (key && !durableNoteKeys.has(key)) {
@@ -269,6 +268,10 @@ export class AutonomousAgent {
                         section = "Durable state carried forward";
                         continue;
                     }
+                    if (section === "Durable state carried forward") {
+                        addDurableNote(line);
+                        continue;
+                    }
                     if (/^(Earlier task requests|Modified files|Inspected files|Recent commands|Findings and decisions|Earlier interaction notes):/i.test(line)) {
                         const separator = line.indexOf(":");
                         section = line.slice(0, separator);
@@ -277,10 +280,7 @@ export class AutonomousAgent {
                             addDurableNote(`${section}: ${value}`);
                         continue;
                     }
-                    if (section === "Durable state carried forward")
-                        addDurableNote(line);
-                    else
-                        addDurableNote(`${section}: ${line}`);
+                    addDurableNote(`${section}: ${line}`);
                 }
             }
             if (message.role === "user" && typeof message.content === "string") {
@@ -296,6 +296,10 @@ export class AutonomousAgent {
                     }
                     catch { }
                     const name = call.function.name;
+                    if (call.id && reconstructibleQueryTools.has(name)) {
+                        const serializedArgs = JSON.stringify(args);
+                        reconstructibleCalls.set(call.id, `${name} ${serializedArgs}`);
+                    }
                     if (["read_file", "file_info"].includes(name) && args.path)
                         filesRead.add(String(args.path));
                     if (name === "batch_read" && Array.isArray(args.paths))
@@ -307,25 +311,22 @@ export class AutonomousAgent {
                 }
             }
             if (message.role === "assistant" && typeof message.content === "string") {
-                const thought = message.content.match(/<thought>([\s\S]*?)<\/thought>/)?.[1]?.trim();
-                if (thought && usefulLine.test(thought)) {
-                    const sentence = thought.split(/\r?\n/)[0];
-                    if (!decisions.includes(sentence))
-                        decisions.push(sentence);
-                }
-                const content = message.content.replace(/<thought>([\s\S]*?)<\/thought>/g, "$1");
+                const content = message.content.replace(/<\/?thought>/g, "");
                 for (const line of content.split(/\r?\n/)) {
                     const clean = line.replace(/\s+/g, " ").trim();
-                    if (clean && usefulLine.test(clean) && !decisions.includes(clean))
-                        decisions.push(clean);
+                    if (clean)
+                        addDurableNote(`Earlier assistant message: ${clean}`);
                 }
             }
             if (message.role === "tool" && typeof message.content === "string") {
-                const lines = message.content.split(/\r?\n/).map((line) => line.replace(/\s+/g, " ").trim()).filter(Boolean);
-                const selected = lines.filter((line) => usefulLine.test(line));
-                for (const line of selected) {
-                    findings.push(`Earlier ${message.name || "tool"} result: ${line}`);
+                const reconstructibleCall = message.tool_call_id ? reconstructibleCalls.get(message.tool_call_id) : undefined;
+                if (reconstructibleCall && message.name && reconstructibleQueryTools.has(message.name)) {
+                    addDurableNote(`Reconstructible query retained for rerun: ${reconstructibleCall}`);
+                    continue;
                 }
+                const lines = message.content.split(/\r?\n/).map((line) => line.replace(/\s+/g, " ").trim()).filter(Boolean);
+                for (const line of lines)
+                    addDurableNote(`Earlier ${message.name || "tool"} output: ${line}`);
             }
         }
         const freshSections = [
@@ -333,8 +334,6 @@ export class AutonomousAgent {
             ["Modified files", Array.from(filesModified)],
             ["Inspected files", Array.from(filesRead)],
             ["Recent commands", commandsExecuted],
-            ["Findings and decisions", decisions],
-            ["Earlier interaction notes", findings],
         ];
         for (const [section, entries] of freshSections) {
             for (const entry of entries) {
