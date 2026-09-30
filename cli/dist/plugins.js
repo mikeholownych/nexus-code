@@ -2,6 +2,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
 import { pathToFileURL } from "node:url";
+import { Worker } from "node:worker_threads";
 export class PluginManager {
     workspace;
     plugins = new Map();
@@ -172,5 +173,94 @@ export class PluginManager {
             });
         }
         return list;
+    }
+    /**
+     * Check if worker thread isolation is supported
+     */
+    isWorkerSandboxingSupported() {
+        return typeof Worker !== "undefined";
+    }
+    /**
+     * Execute untrusted or custom plugin code inside an isolated Worker thread (Candidate #38)
+     */
+    async executeSandboxed(handlerCode, args, options = {}) {
+        const timeoutMs = options.timeoutMs || 5000;
+        const memoryLimitMb = options.memoryLimitMb || 128;
+        const workerScript = `
+      const { parentPort, workerData } = require('node:worker_threads');
+      (async () => {
+        try {
+          const fn = eval('(' + workerData.code + ')');
+          const result = await fn(workerData.args);
+          parentPort.postMessage({ success: true, result });
+        } catch (err) {
+          parentPort.postMessage({ success: false, error: err.message || String(err) });
+        }
+      })();
+    `;
+        return new Promise((resolve) => {
+            let isSettled = false;
+            let worker = null;
+            let timer = null;
+            const cleanup = () => {
+                if (timer)
+                    clearTimeout(timer);
+                if (worker) {
+                    worker.terminate().catch(() => { });
+                    worker = null;
+                }
+            };
+            try {
+                worker = new Worker(workerScript, {
+                    eval: true,
+                    workerData: { code: handlerCode, args },
+                    resourceLimits: {
+                        maxOldGenerationSizeMb: memoryLimitMb,
+                    },
+                });
+                timer = setTimeout(() => {
+                    if (!isSettled) {
+                        isSettled = true;
+                        cleanup();
+                        resolve({
+                            success: false,
+                            output: "",
+                            error: `Plugin execution timed out after ${timeoutMs}ms in sandboxed worker thread.`,
+                        });
+                    }
+                }, timeoutMs);
+                worker.on("message", (msg) => {
+                    if (!isSettled) {
+                        isSettled = true;
+                        cleanup();
+                        if (msg.success) {
+                            const out = typeof msg.result === "string" ? msg.result : JSON.stringify(msg.result, null, 2);
+                            resolve({ success: true, output: out });
+                        }
+                        else {
+                            resolve({ success: false, output: "", error: msg.error });
+                        }
+                    }
+                });
+                worker.on("error", (err) => {
+                    if (!isSettled) {
+                        isSettled = true;
+                        cleanup();
+                        resolve({ success: false, output: "", error: `Worker error: ${err.message}` });
+                    }
+                });
+                worker.on("exit", (code) => {
+                    if (!isSettled && code !== 0) {
+                        isSettled = true;
+                        cleanup();
+                        resolve({ success: false, output: "", error: `Worker thread exited with code ${code}` });
+                    }
+                });
+            }
+            catch (err) {
+                cleanup();
+                resolve({ success: false, output: "", error: `Failed to spawn worker thread: ${err.message}` });
+            }
+        });
     }
 }

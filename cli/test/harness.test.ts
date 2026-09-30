@@ -1084,4 +1084,65 @@ error[E0308]: mismatched types
       bridge.shutdown();
     }
   });
+
+  test("PluginManager isolates custom plugins in worker threads with timeout boundary (Candidate #38)", async () => {
+    const { PluginManager } = await import("../src/plugins.js");
+    const pm = new PluginManager(process.cwd());
+
+    assert.strictEqual(pm.isWorkerSandboxingSupported(), true);
+
+    // 1. Successful sandboxed execution
+    const validFn = "async (args) => { return { computed: args.x * 2, status: 'sandboxed_ok' }; }";
+    const res1 = await pm.executeSandboxed(validFn, { x: 21 }, { timeoutMs: 2000 });
+    assert.strictEqual(res1.success, true);
+    assert.ok(res1.output.includes("42"));
+    assert.ok(res1.output.includes("sandboxed_ok"));
+
+    // 2. Timeout protection for infinite loop
+    const infiniteFn = "async () => { while(true) {} }";
+    const res2 = await pm.executeSandboxed(infiniteFn, {}, { timeoutMs: 200 });
+    assert.strictEqual(res2.success, false);
+    assert.ok(res2.error?.includes("timed out"));
+  });
+
+  test("TerminalDashboard renders split-screen layout and metrics snapshot (Candidate #19)", async () => {
+    const { TerminalDashboard } = await import("../src/tui.js");
+    const { AutonomousAgent } = await import("../src/agent.js");
+    const { ThemeManager } = await import("../src/theme.js");
+
+    const agent = new AutonomousAgent({
+      endpoint: "http://localhost:11434/v1",
+      model: "qwen2.5-coder-32b",
+      workspace: process.cwd(),
+      maxSteps: 5,
+      temperature: 0.1,
+    });
+
+    try {
+      agent.setActivePlan([
+        { name: "Setup environment", status: "completed" },
+        { name: "Execute migration", status: "in_progress" },
+        { name: "Verify tests", status: "pending" },
+      ]);
+
+      const tm = new ThemeManager("nord");
+      const dashboard = new TerminalDashboard(agent, {
+        endpoint: "http://localhost:11434/v1",
+        model: "qwen2.5-coder-32b",
+        workspace: process.cwd(),
+        maxSteps: 5,
+        temperature: 0.1,
+      }, tm);
+
+      const snapshot = dashboard.renderSnapshot(100, 30);
+      assert.ok(snapshot.includes("TUI DASHBOARD"));
+      assert.ok(snapshot.includes("qwen2.5-coder-32b"));
+      assert.ok(snapshot.includes("Setup environment"));
+      assert.ok(snapshot.includes("Execute migration"));
+      assert.ok(snapshot.includes("Return to REPL"));
+    } finally {
+      agent.shutdown();
+    }
+  });
 });
+

@@ -17,6 +17,7 @@ import { copyToClipboard, readFromClipboard } from "./clipboard.js";
 import { encodeImageFile, formatVisionContent } from "./image.js";
 import { ThemeManager } from "./theme.js";
 import { TeamOrchestrator } from "./team.js";
+import { TerminalDashboard } from "./tui.js";
 function parsePatchHunks(patch) {
     const lines = patch.split("\n");
     const fileHeaderLines = [];
@@ -171,6 +172,7 @@ export class InteractiveRepl {
         console.log(`  ${pc.bold(pc.yellow("/team <role|full> <task>"))} Multi-agent collaborative team orchestration`);
         console.log(`  ${pc.bold(pc.yellow("/image <path> [prompt]"))} Ingest multi-modal image into vision model`);
         console.log(`  ${pc.bold(pc.yellow("/theme [name]"))}       View or switch terminal color theme`);
+        console.log(`  ${pc.bold(pc.yellow("/tui"))}                Launch full-screen interactive TUI dashboard`);
         console.log(`  ${pc.bold(pc.yellow("/checkpoint [name]"))}   Save rollback snapshot of current workspace`);
         console.log(`  ${pc.bold(pc.yellow("/checkpoint diff <id>"))} Inspect diff of a checkpoint vs current or another`);
         console.log(`  ${pc.bold(pc.yellow("/checkpoint prune [n]"))} Prune old checkpoints beyond retention limit`);
@@ -1011,6 +1013,11 @@ export class InteractiveRepl {
                                 console.log(pc.red(`Unknown theme '${arg}'. Options: ${this.themeManager.listThemes().join(", ")}\n`));
                             }
                         }
+                        continue;
+                    }
+                    else if (cmd === "tui") {
+                        const dashboard = new TerminalDashboard(this.agent, this.config, this.themeManager);
+                        await dashboard.launchInteractive();
                         continue;
                     }
                     else if (cmd === "team") {

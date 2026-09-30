@@ -97,20 +97,21 @@ export class AutonomousAgent {
   constructor(config: HarnessConfig, depth: number = 0) {
     this.config = config;
     this.depth = depth;
+    const ws = config.workspace || process.cwd();
     this.client = new LocalLlmClient(config);
     this.bridge = new RustCoreBridge(
-      config.workspace,
+      ws,
       config.shell,
       config.coreBinaryPath,
       config.dryRun,
       config.readOnly,
       config.sandbox
     );
-    this.securityManager = new SecurityManager(config.workspace);
+    this.securityManager = new SecurityManager(ws);
     this.ui = new TerminalUI();
-    this.skillManager = new SkillManager(config.workspace);
-    this.mcpManager = new McpClientManager(config.workspace);
-    this.pluginManager = new PluginManager(config.workspace);
+    this.skillManager = new SkillManager(ws);
+    this.mcpManager = new McpClientManager(ws);
+    this.pluginManager = new PluginManager(ws);
     this.resetConversation();
   }
 
