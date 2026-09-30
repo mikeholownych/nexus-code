@@ -16,6 +16,8 @@ import { extractCompilerDiagnostics, formatDiagnosticHints } from "./diagnostics
 import { SecurityManager } from "./security.js";
 import { calculateContextBudget, countTokens, isContextAdmissible, TokenBudget } from "./tokens.js";
 import { selectRelevantFewShots } from "./fewshots.js";
+import { FlightRecorder } from "./flight.js";
+import { WorktreeManager } from "./worktree.js";
 import pc from "picocolors";
 
 export type ConfirmHandler = (toolName: string, args: Record<string, any>) => Promise<boolean>;
@@ -200,6 +202,10 @@ export class AutonomousAgent {
   private extensibilityInitialized: boolean = false;
   private activePlan: Array<{ name: string; status: string; detail?: string }> = [];
   private hasPendingModifications: boolean = false;
+  private flightRecorder?: FlightRecorder;
+  private worktreeManager: WorktreeManager;
+  private activeWorktree?: { taskId: string; worktreePath: string; branch: string };
+  private originalWorkspace?: string;
 
   constructor(config: HarnessConfig, depth: number = 0) {
     canonicalDurableProvenance.set(this, new WeakMap());
@@ -220,6 +226,10 @@ export class AutonomousAgent {
     this.skillManager = new SkillManager(ws);
     this.mcpManager = new McpClientManager(ws);
     this.pluginManager = new PluginManager(ws);
+    this.worktreeManager = new WorktreeManager(ws);
+    if (config.recordFlight) {
+      this.flightRecorder = new FlightRecorder(ws);
+    }
     this.resetConversation();
   }
 
@@ -248,6 +258,47 @@ export class AutonomousAgent {
 
   public getSecurityManager(): SecurityManager {
     return this.securityManager;
+  }
+
+  public getFlightRecorder(): FlightRecorder | undefined {
+    return this.flightRecorder;
+  }
+
+  public enableFlightRecorder(flightId?: string): FlightRecorder {
+    this.flightRecorder = new FlightRecorder(this.config.workspace, flightId);
+    return this.flightRecorder;
+  }
+
+  public getWorktreeManager(): WorktreeManager {
+    return this.worktreeManager;
+  }
+
+  public getActiveWorktree(): { taskId: string; worktreePath: string; branch: string } | undefined {
+    return this.activeWorktree;
+  }
+
+  public mergeActiveWorktree(commitMessage?: string): { success: boolean; taskId?: string; branch?: string; commitsMerged: number; error?: string } {
+    if (!this.activeWorktree) {
+      return { success: false, commitsMerged: 0, error: "No active worktree" };
+    }
+    const res = this.worktreeManager.mergeWorktree(this.activeWorktree.taskId, commitMessage);
+    if (res.success && this.originalWorkspace) {
+      this.setWorkspace(this.originalWorkspace);
+      this.activeWorktree = undefined;
+    }
+    return res;
+  }
+
+  public discardActiveWorktree(): { success: boolean; error?: string } {
+    if (!this.activeWorktree) {
+      return { success: false, error: "No active worktree" };
+    }
+    const res = this.worktreeManager.discardWorktree(this.activeWorktree.taskId);
+    if (this.originalWorkspace) {
+      this.setWorkspace(this.originalWorkspace);
+      this.activeWorktree = undefined;
+    }
+    return res;
   }
 
   public shutdown(): void {
@@ -694,6 +745,17 @@ Always explain your reasoning before or alongside your tool calls.`;
     const promptText = typeof taskPrompt === "string" ? taskPrompt : "[Multi-modal Vision Input]";
     await this.pluginManager.notifyTurnStart(promptText, this.config.workspace);
 
+    if (this.flightRecorder) {
+      if (!this.flightRecorder.isSessionActive()) {
+        this.flightRecorder.startSession({
+          model: this.config.model,
+          endpoint: this.config.endpoint,
+          taskPrompt: promptText,
+        });
+      }
+      this.flightRecorder.recordTurnStart(1, promptText);
+    }
+
     // Dynamic runtime state injected into turn-level context without invalidating system prompt prefix cache
     const gitInfo = getGitInfo(this.config.workspace);
     let runtimeContext = "";
@@ -718,6 +780,9 @@ Always explain your reasoning before or alongside your tool calls.`;
 
     while (currentStep <= this.config.maxSteps && !isFinished) {
       this.ui.stepHeader(currentStep, this.config.maxSteps);
+      if (currentStep > 1 && this.flightRecorder) {
+        this.flightRecorder.recordTurnStart(currentStep, promptText);
+      }
       const requestId = randomUUID();
       this.admitContext(currentStep, requestId);
       this.ui.startSpinner("Thinking and analyzing next step...");
@@ -772,8 +837,13 @@ Always explain your reasoning before or alongside your tool calls.`;
       this.totalTokens.total = this.totalTokens.prompt + this.totalTokens.completion;
 
       // Print any thought or explanation text only if not already streamed
-      if (parsed.thoughtText && !streamedTokens) {
-        this.ui.printThought(parsed.thoughtText);
+      if (parsed.thoughtText) {
+        if (!streamedTokens) {
+          this.ui.printThought(parsed.thoughtText);
+        }
+        if (this.flightRecorder) {
+          this.flightRecorder.recordThought(currentStep, parsed.thoughtText);
+        }
       }
 
       // Record assistant's response in history
@@ -788,12 +858,32 @@ Always explain your reasoning before or alongside your tool calls.`;
         console.log("ℹ Model finished without further tool calls.");
         this.ui.taskCompleted(parsed.thoughtText || "Completed without additional tool invocations.");
         isFinished = true;
+        if (this.flightRecorder) {
+          this.flightRecorder.recordSessionEnd(
+            parsed.thoughtText || "Completed without additional tool invocations.",
+            true,
+            this.totalTokens
+          );
+        }
         break;
       }
 
       // Parallel execution optimization: if multiple tool calls in this turn are all read-only, execute concurrently
       if (parsed.toolCalls.length > 1 && parsed.toolCalls.every((call) => READ_ONLY_TOOLS.has(call.function.name))) {
         this.ui.startSpinner(`Executing ${parsed.toolCalls.length} read operations in parallel...`);
+        if (this.flightRecorder) {
+          for (const call of parsed.toolCalls) {
+            let callArgs: Record<string, any> = {};
+            try {
+              callArgs = typeof call.function.arguments === "string"
+                ? JSON.parse(call.function.arguments)
+                : call.function.arguments;
+            } catch {
+              callArgs = { raw: call.function.arguments };
+            }
+            this.flightRecorder.recordToolCall(currentStep, call.id, call.function.name, callArgs);
+          }
+        }
         const parallelResults = await Promise.all(
           parsed.toolCalls.map(async (call) => {
             const toolName = call.function.name;
@@ -807,14 +897,26 @@ Always explain your reasoning before or alongside your tool calls.`;
             }
             const t0 = Date.now();
             const result = await this.bridge.executeTool(toolName, args);
+            const durationMs = Date.now() - t0;
             logAudit({
               workspace: this.config.workspace,
               tool: toolName,
               args,
               success: result.success,
-              durationMs: Date.now() - t0,
+              durationMs,
               error: result.error,
             });
+            if (this.flightRecorder) {
+              this.flightRecorder.recordToolResult(
+                currentStep,
+                call.id,
+                toolName,
+                result.success,
+                result.output || "",
+                durationMs,
+                result.error
+              );
+            }
             return { call, toolName, args, result };
           })
         );
@@ -856,6 +958,10 @@ Always explain your reasoning before or alongside your tool calls.`;
           args = { raw: call.function.arguments };
         }
 
+        if (this.flightRecorder) {
+          this.flightRecorder.recordToolCall(currentStep, call.id, toolName, args);
+        }
+
         this.ui.printToolCall(toolName, args);
 
         if (toolName === "task_completed") {
@@ -866,11 +972,15 @@ Always explain your reasoning before or alongside your tool calls.`;
               const testRes = runTestSuite(this.config.workspace);
               if (!testRes.success && testRes.command !== "none") {
                 const hints = formatDiagnosticHints(testRes.diagnostics);
+                const oracleFailContent = `Verification Oracle: Recent code modifications caused automated tests to fail.\nCommand: ${testRes.command}\n${foldVoluminousOutput(testRes.rawOutput || "")}${hints}\nPlease resolve these test failures before calling task_completed.`;
+                if (this.flightRecorder) {
+                  this.flightRecorder.recordToolResult(currentStep, call.id, toolName, false, oracleFailContent, 0, "Test verification failed");
+                }
                 this.messages.push({
                   role: "tool",
                   tool_call_id: call.id,
                   name: toolName,
-                  content: `Verification Oracle: Recent code modifications caused automated tests to fail.\nCommand: ${testRes.command}\n${foldVoluminousOutput(testRes.rawOutput || "")}${hints}\nPlease resolve these test failures before calling task_completed.`,
+                  content: oracleFailContent,
                 });
                 continue;
               }
@@ -882,16 +992,31 @@ Always explain your reasoning before or alongside your tool calls.`;
           this.hasPendingModifications = false;
           this.ui.taskCompleted(args.summary || "Task completed.", args.notes);
           isFinished = true;
+          if (this.flightRecorder) {
+            this.flightRecorder.recordToolResult(
+              currentStep,
+              call.id,
+              toolName,
+              true,
+              args.summary || "Task completed.",
+              0
+            );
+            this.flightRecorder.recordSessionEnd(args.summary || "Task completed.", true, this.totalTokens);
+          }
           break;
         }
 
         if (toolName === "spawn_subagent") {
           if (this.depth >= 2) {
+            const depthErr = "Error: Subagent depth limit reached. Solve the task directly without spawning additional subagents.";
+            if (this.flightRecorder) {
+              this.flightRecorder.recordToolResult(currentStep, call.id, toolName, false, depthErr, 0, depthErr);
+            }
             this.messages.push({
               role: "tool",
               tool_call_id: call.id,
               name: toolName,
-              content: "Error: Subagent depth limit reached. Solve the task directly without spawning additional subagents.",
+              content: depthErr,
             });
             continue;
           }
@@ -910,6 +1035,9 @@ Always explain your reasoning before or alongside your tool calls.`;
             this.ui.stopSpinner(true);
             console.log(pc.cyan(`\n🤖 [Subagent Report Received]\n`));
 
+            if (this.flightRecorder) {
+              this.flightRecorder.recordToolResult(currentStep, call.id, toolName, true, subResult, 0);
+            }
             this.messages.push({
               role: "tool",
               tool_call_id: call.id,
@@ -918,6 +1046,9 @@ Always explain your reasoning before or alongside your tool calls.`;
             });
           } catch (subErr: any) {
             this.ui.stopSpinner(false);
+            if (this.flightRecorder) {
+              this.flightRecorder.recordToolResult(currentStep, call.id, toolName, false, "", 0, subErr.message);
+            }
             this.messages.push({
               role: "tool",
               tool_call_id: call.id,
@@ -933,19 +1064,27 @@ Always explain your reasoning before or alongside your tool calls.`;
           const skill = this.skillManager.getSkill(skillName);
           if (!skill) {
             const avail = this.skillManager.listSkills().map((s) => s.name).join(", ");
+            const errMsg = `Error: Skill '${skillName}' not found. Available skills: ${avail || "none"}`;
+            if (this.flightRecorder) {
+              this.flightRecorder.recordToolResult(currentStep, call.id, toolName, false, errMsg, 0, errMsg);
+            }
             this.messages.push({
               role: "tool",
               tool_call_id: call.id,
               name: toolName,
-              content: `Error: Skill '${skillName}' not found. Available skills: ${avail || "none"}`,
+              content: errMsg,
             });
           } else {
             console.log(pc.green(`✔ Activated skill: ${pc.bold(skill.name)}`));
+            const skillContent = `[Activated Skill: ${skill.name}]\n\n${skill.content}`;
+            if (this.flightRecorder) {
+              this.flightRecorder.recordToolResult(currentStep, call.id, toolName, true, skillContent, 0);
+            }
             this.messages.push({
               role: "tool",
               tool_call_id: call.id,
               name: toolName,
-              content: `[Activated Skill: ${skill.name}]\n\n${skill.content}`,
+              content: skillContent,
             });
           }
           continue;
@@ -962,16 +1101,21 @@ Always explain your reasoning before or alongside your tool calls.`;
             success: true,
             durationMs: 0,
           });
+          const planOutput = JSON.stringify({
+            status: "plan_updated",
+            total_phases: this.activePlan.length,
+            completed: this.activePlan.filter((p) => p.status === "completed").length,
+            in_progress: this.activePlan.filter((p) => p.status === "in_progress").length,
+          });
+          if (this.flightRecorder) {
+            this.flightRecorder.recordToolResult(currentStep, call.id, toolName, true, planOutput, 0);
+            this.flightRecorder.recordDurableState(currentStep, { plan: this.activePlan });
+          }
           this.messages.push({
             role: "tool",
             tool_call_id: call.id,
             name: toolName,
-            content: JSON.stringify({
-              status: "plan_updated",
-              total_phases: this.activePlan.length,
-              completed: this.activePlan.filter((p) => p.status === "completed").length,
-              in_progress: this.activePlan.filter((p) => p.status === "in_progress").length,
-            }),
+            content: planOutput,
           });
           continue;
         }
@@ -980,15 +1124,27 @@ Always explain your reasoning before or alongside your tool calls.`;
           const t0 = Date.now();
           this.ui.startSpinner(`Executing MCP tool ${toolName}...`);
           const result = await this.mcpManager.executeMcpTool(toolName, args);
+          const durationMs = Date.now() - t0;
           this.ui.stopSpinner(result.success);
           logAudit({
             workspace: this.config.workspace,
             tool: toolName,
             args,
             success: result.success,
-            durationMs: Date.now() - t0,
+            durationMs,
             error: result.error,
           });
+          if (this.flightRecorder) {
+            this.flightRecorder.recordToolResult(
+              currentStep,
+              call.id,
+              toolName,
+              result.success,
+              result.output || "",
+              durationMs,
+              result.error
+            );
+          }
           this.ui.printToolResult(toolName, result.success, result.output, result.error);
           this.messages.push({
             role: "tool",
@@ -1003,15 +1159,27 @@ Always explain your reasoning before or alongside your tool calls.`;
           const t0 = Date.now();
           this.ui.startSpinner(`Executing plugin tool ${toolName}...`);
           const result = await this.pluginManager.executeCustomTool(toolName, args);
+          const durationMs = Date.now() - t0;
           this.ui.stopSpinner(result.success);
           logAudit({
             workspace: this.config.workspace,
             tool: toolName,
             args,
             success: result.success,
-            durationMs: Date.now() - t0,
+            durationMs,
             error: result.error,
           });
+          if (this.flightRecorder) {
+            this.flightRecorder.recordToolResult(
+              currentStep,
+              call.id,
+              toolName,
+              result.success,
+              result.output || "",
+              durationMs,
+              result.error
+            );
+          }
           this.ui.printToolResult(toolName, result.success, result.output, result.error);
           this.messages.push({
             role: "tool",
@@ -1027,11 +1195,15 @@ Always explain your reasoning before or alongside your tool calls.`;
           const approved = await onConfirm(toolName, args);
           if (!approved) {
             console.log(`⚠️ Tool execution cancelled by user.`);
+            const cancelMsg = "Error: Execution was rejected by the user. Ask the user for clarification or proceed with an alternative approach.";
+            if (this.flightRecorder) {
+              this.flightRecorder.recordToolResult(currentStep, call.id, toolName, false, cancelMsg, 0, "Rejected by user");
+            }
             this.messages.push({
               role: "tool",
               tool_call_id: call.id,
               name: toolName,
-              content: `Error: Execution was rejected by the user. Ask the user for clarification or proceed with an alternative approach.`,
+              content: cancelMsg,
             });
             continue;
           }
@@ -1045,6 +1217,7 @@ Always explain your reasoning before or alongside your tool calls.`;
           args,
           async (effectiveArgs) => this.bridge.executeTool(toolName, effectiveArgs)
         );
+        const durationMs = Date.now() - t0;
         await this.pluginManager.notifyToolResult(toolName, result);
         this.ui.stopSpinner(result.success);
 
@@ -1053,9 +1226,21 @@ Always explain your reasoning before or alongside your tool calls.`;
           tool: toolName,
           args,
           success: result.success,
-          durationMs: Date.now() - t0,
+          durationMs,
           error: result.error,
         });
+
+        if (this.flightRecorder) {
+          this.flightRecorder.recordToolResult(
+            currentStep,
+            call.id,
+            toolName,
+            result.success,
+            result.output || "",
+            durationMs,
+            result.error
+          );
+        }
 
         this.ui.printToolResult(toolName, result.success, result.output, result.error);
 
@@ -1065,6 +1250,14 @@ Always explain your reasoning before or alongside your tool calls.`;
 
         if (result.success && ["write_file", "edit_file", "patch_file"].includes(toolName)) {
           this.hasPendingModifications = true;
+          if (this.flightRecorder) {
+            this.flightRecorder.recordFileDiff(
+              currentStep,
+              args.path || args.target_file || args.file_path || "unknown",
+              result.output || "",
+              args.replacements
+            );
+          }
         }
 
         if (toolName === "run_command" || toolName === "run_tests") {
@@ -1094,6 +1287,14 @@ Always explain your reasoning before or alongside your tool calls.`;
 
     triggerNotification("Nexus Code", "Turn completed.");
 
+    if (!isFinished && this.flightRecorder) {
+      this.flightRecorder.recordSessionEnd(
+        `Turn completed after ${currentStep - 1} steps`,
+        false,
+        this.totalTokens
+      );
+    }
+
     if (!isFinished && currentStep > this.config.maxSteps) {
       console.log(
         `\n⚠️ Reached maximum step limit (${this.config.maxSteps}). Halting loop to prevent runaway execution.`
@@ -1108,8 +1309,39 @@ Always explain your reasoning before or alongside your tool calls.`;
     console.log(`🐚 Shell: ${this.config.shell}`);
     console.log(`🤖 Model: ${this.config.model} (${this.config.endpoint})\n`);
 
+    if (this.config.worktree && this.worktreeManager.isGitRepo()) {
+      try {
+        const wt = this.worktreeManager.createWorktree();
+        this.activeWorktree = { taskId: wt.taskId, worktreePath: wt.worktreePath, branch: wt.branch };
+        this.originalWorkspace = this.config.workspace;
+        this.setWorkspace(wt.worktreePath);
+        console.log(pc.cyan(`🌲 Spun up speculative git worktree: ${wt.branch} at ${wt.worktreePath}`));
+      } catch (err: any) {
+        console.warn(pc.yellow(`⚠️ Failed to create ephemeral worktree, falling back to workspace: ${err.message}`));
+      }
+    }
+
+    if (this.flightRecorder && !this.flightRecorder.isSessionActive()) {
+      this.flightRecorder.startSession({
+        model: this.config.model,
+        endpoint: this.config.endpoint,
+        taskPrompt,
+      });
+    }
+
     this.resetConversation();
-    await this.runTurn(taskPrompt);
+    try {
+      await this.runTurn(taskPrompt);
+    } finally {
+      if (this.activeWorktree && this.config.worktree) {
+        if (!this.hasPendingModifications) {
+          console.log(pc.cyan(`🌲 Merging verified changes from worktree ${this.activeWorktree.branch}...`));
+          this.mergeActiveWorktree(`nexus: apply verified changes from ${this.activeWorktree.taskId}`);
+        } else {
+          console.log(pc.yellow(`⚠️ Speculative changes unverified or failed; retaining worktree at ${this.activeWorktree.worktreePath}`));
+        }
+      }
+    }
   }
 
   public async runSubagent(prompt: string): Promise<string> {

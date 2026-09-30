@@ -53,6 +53,8 @@ export interface HarnessConfig {
   completionReserveTokens?: number; // Context reserved for each model completion (default: 8192)
   toolResponseReserveTokens?: number; // Context reserved for the following tool results (default: 4096)
   sandbox?: boolean | string; // Linux namespace / bwrap / container isolation (default: false)
+  worktree?: boolean;        // Isolated ephemeral git worktree execution (default: false)
+  recordFlight?: boolean;    // Deterministic .flightlog session recording (default: false)
 }
 
 export interface ExecutionResult {

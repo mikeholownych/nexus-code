@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import * as path from "node:path";
 import * as fs from "node:fs";
 import * as os from "node:os";
+import { execSync } from "node:child_process";
 
 import * as http from "node:http";
 import { HARNESS_TOOLS, isSafeOutboundUrl } from "../src/tools.js";
@@ -25,6 +26,8 @@ import { executeWebSearch } from "../src/search_web.js";
 import { RustCoreBridge } from "../src/tools.js";
 import { wrapSandboxedCommand, isBwrapAvailable } from "../src/sandbox.js";
 import { PluginManager } from "../src/plugins.js";
+import { WorktreeManager } from "../src/worktree.js";
+import { FlightRecorder, FlightPlayer } from "../src/flight.js";
 
 describe("Nexus Code Test Suite", () => {
   test("HARNESS_TOOLS definitions include all parity tools", () => {
@@ -2041,6 +2044,163 @@ error[E0308]: mismatched types
 
       // Verify system prompt is byte-exact identical
       assert.strictEqual(agent.getMessages()[0].content, initialSystemPrompt);
+    } finally {
+      agent.shutdown();
+    }
+  });
+
+  test("WorktreeManager manages ephemeral git worktrees with zero pollution of working tree", () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-wt-test-"));
+    try {
+      execSync("git init -b main", { cwd: tempDir, stdio: "ignore" });
+      execSync('git config user.name "NexusTester"', { cwd: tempDir, stdio: "ignore" });
+      execSync('git config user.email "tester@nexus.local"', { cwd: tempDir, stdio: "ignore" });
+      fs.writeFileSync(path.join(tempDir, "README.md"), "# Initial Repo\n", "utf-8");
+      execSync("git add README.md && git commit -m 'Initial commit'", { cwd: tempDir, stdio: "ignore" });
+
+      const manager = new WorktreeManager(tempDir);
+      assert.strictEqual(manager.isGitRepo(), true);
+
+      // 1. Create speculative worktree
+      const taskId = "spec-task-01";
+      const wt = manager.createWorktree(taskId);
+      assert.strictEqual(wt.taskId, taskId);
+      assert.strictEqual(wt.branch, `nexus/${taskId}`);
+      assert.ok(fs.existsSync(wt.worktreePath));
+
+      // 2. List worktrees
+      const list = manager.listWorktrees();
+      assert.strictEqual(list.length, 1);
+      assert.strictEqual(list[0].taskId, taskId);
+      assert.strictEqual(list[0].branch, `nexus/${taskId}`);
+
+      // 3. Make speculative file modification in worktree
+      const specFile = path.join(wt.worktreePath, "feature.txt");
+      fs.writeFileSync(specFile, "Speculative change verified!\n", "utf-8");
+
+      // Verify main directory is still untouched
+      assert.strictEqual(fs.existsSync(path.join(tempDir, "feature.txt")), false);
+
+      // 4. Merge worktree into active branch
+      const mergeRes = manager.mergeWorktree(taskId, "apply spec-task-01");
+      assert.strictEqual(mergeRes.success, true);
+      assert.strictEqual(mergeRes.taskId, taskId);
+
+      // Verify file now exists in main repo
+      assert.strictEqual(fs.existsSync(path.join(tempDir, "feature.txt")), true);
+      assert.strictEqual(fs.readFileSync(path.join(tempDir, "feature.txt"), "utf-8"), "Speculative change verified!\n");
+
+      // Worktree should be cleanly removed
+      assert.strictEqual(fs.existsSync(wt.worktreePath), false);
+      assert.strictEqual(manager.listWorktrees().length, 0);
+
+      // 5. Test discardWorktree
+      const taskId2 = "spec-task-02";
+      const wt2 = manager.createWorktree(taskId2);
+      assert.ok(fs.existsSync(wt2.worktreePath));
+      assert.strictEqual(manager.listWorktrees().length, 1);
+
+      const discardRes = manager.discardWorktree(taskId2);
+      assert.strictEqual(discardRes.success, true);
+      assert.strictEqual(fs.existsSync(wt2.worktreePath), false);
+      assert.strictEqual(manager.listWorktrees().length, 0);
+    } finally {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  test("FlightRecorder and FlightPlayer record and replay deterministic session execution", async () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-flight-test-"));
+    try {
+      const flightId = "flight-test-suite-01";
+      const recorder = new FlightRecorder(tempDir, flightId);
+      assert.strictEqual(recorder.getFlightId(), flightId);
+      assert.strictEqual(recorder.isSessionActive(), false);
+
+      // 1. Start session
+      const manifest = recorder.startSession({
+        model: "qwen2.5-coder-32b",
+        endpoint: "http://localhost:11434/v1",
+        taskPrompt: "Fix bug in authentication token parser",
+      });
+      assert.strictEqual(recorder.isSessionActive(), true);
+      assert.strictEqual(manifest.flightId, flightId);
+      assert.strictEqual(manifest.model, "qwen2.5-coder-32b");
+
+      // 2. Record turn and events
+      recorder.recordTurnStart(1, "Fix bug in authentication token parser");
+      recorder.recordThought(1, "Analyzing token expiry edge case...", "Deep reasoning trace");
+      recorder.recordToolCall(1, "call-001", "read_file", { path: "src/auth.ts" });
+      recorder.recordToolResult(1, "call-001", "read_file", true, "export function verifyToken() {}", 15);
+      recorder.recordFileDiff(1, "src/auth.ts", "@@ -1,3 +1,3 @@\n-expired\n+valid", 1);
+      recorder.recordDurableState(1, { plan: [{ name: "Fix auth", status: "completed" }] });
+      recorder.recordSessionEnd("Authentication verification passed", true, { prompt: 150, completion: 45, total: 195 });
+
+      assert.strictEqual(recorder.isSessionActive(), false);
+
+      // Verify .flightlog file exists
+      const logPath = recorder.getLogPath();
+      assert.ok(fs.existsSync(logPath));
+      const logLines = fs.readFileSync(logPath, "utf-8").trim().split("\n");
+      assert.strictEqual(logLines.length, 8); // session_start, turn_start, thought, tool_call, tool_result, file_diff, durable_state, session_end
+
+      // 3. FlightPlayer: listFlights
+      const flights = FlightPlayer.listFlights(tempDir);
+      assert.strictEqual(flights.length, 1);
+      assert.strictEqual(flights[0].flightId, flightId);
+      assert.strictEqual(flights[0].taskPrompt, "Fix bug in authentication token parser");
+
+      // 4. FlightPlayer: loadFlight
+      const loaded = FlightPlayer.loadFlight(tempDir, flightId);
+      assert.strictEqual(loaded.manifest.flightId, flightId);
+      assert.strictEqual(loaded.events.length, 8);
+      assert.strictEqual(loaded.events[0].type, "session_start");
+      assert.strictEqual(loaded.events[2].type, "thought");
+      assert.strictEqual(loaded.events[3].type, "tool_call");
+      assert.strictEqual(loaded.events[4].type, "tool_result");
+
+      // 5. FlightPlayer: replay
+      const replayedTypes: string[] = [];
+      await FlightPlayer.replay(loaded.events, (ev) => {
+        replayedTypes.push(ev.type);
+      });
+      assert.deepStrictEqual(replayedTypes, [
+        "session_start",
+        "turn_start",
+        "thought",
+        "tool_call",
+        "tool_result",
+        "file_diff",
+        "durable_state",
+        "session_end",
+      ]);
+    } finally {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  test("AutonomousAgent exposes WorktreeManager and FlightRecorder with state getters", () => {
+    const agent = new AutonomousAgent({
+      endpoint: "http://localhost:1234/v1",
+      model: "test-model",
+      workspace: process.cwd(),
+      recordFlight: true,
+      worktree: false,
+    });
+
+    try {
+      assert.ok(agent.getWorktreeManager() instanceof WorktreeManager);
+      assert.ok(agent.getFlightRecorder() instanceof FlightRecorder);
+      assert.strictEqual(agent.getActiveWorktree(), undefined);
+
+      // Verify merge/discard gracefully handle undefined active worktree
+      const mergeRes = agent.mergeActiveWorktree();
+      assert.strictEqual(mergeRes.success, false);
+      assert.strictEqual(mergeRes.error, "No active worktree");
+
+      const discardRes = agent.discardActiveWorktree();
+      assert.strictEqual(discardRes.success, false);
+      assert.strictEqual(discardRes.error, "No active worktree");
     } finally {
       agent.shutdown();
     }

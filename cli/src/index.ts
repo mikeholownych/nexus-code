@@ -13,6 +13,8 @@ import { SkillManager } from "./skills.js";
 import { McpClientManager } from "./mcp.js";
 import { PluginManager } from "./plugins.js";
 import { HarnessConfig } from "./types.js";
+import { FlightPlayer } from "./flight.js";
+import { WorktreeManager } from "./worktree.js";
 import pc from "picocolors";
 
 import * as os from "node:os";
@@ -50,6 +52,8 @@ function buildConfig(options: any): HarnessConfig {
   const sandbox = options.sandbox ? (typeof options.sandbox === "string" ? options.sandbox : true) : undefined;
   const fallbackEndpoints = options.fallback ? options.fallback.split(",").map((s: string) => s.trim()) : undefined;
   const contextLimit = options.contextLimit ? parseInt(options.contextLimit, 10) : undefined;
+  const worktree = Boolean(options.worktree);
+  const recordFlight = Boolean(options.recordFlight || options.flight);
   return {
     endpoint,
     model,
@@ -63,6 +67,8 @@ function buildConfig(options: any): HarnessConfig {
     sandbox,
     fallbackEndpoints,
     contextLimit,
+    worktree,
+    recordFlight,
   };
 }
 
@@ -80,6 +86,8 @@ program
   .option("--dry-run", "Simulate file modifications without writing changes to disk")
   .option("--read-only", "Reject all mutating tool executions and commands")
   .option("--sandbox [mode]", "Isolate command execution using bubblewrap (bwrap) or Docker (default: auto)")
+  .option("--worktree", "Isolate execution inside an ephemeral git worktree under .nexus/worktrees/<task-id>")
+  .option("--record-flight", "Record execution into an append-only deterministic .flightlog")
   .option("--approve", "Require human approval before destructive actions (edits, shell commands)")
   .option("-r, --resume [id]", "Resume previous session (defaults to latest if id omitted)")
   .action(async (options: any) => {
@@ -115,6 +123,8 @@ program
   .option("--dry-run", "Simulate file modifications without writing changes to disk")
   .option("--read-only", "Reject all mutating tool executions and commands")
   .option("--sandbox [mode]", "Isolate command execution using bubblewrap (bwrap) or Docker (default: auto)")
+  .option("--worktree", "Isolate execution inside an ephemeral git worktree under .nexus/worktrees/<task-id>")
+  .option("--record-flight", "Record execution into an append-only deterministic .flightlog")
   .action(async (promptParts: string[], options: any) => {
     const prompt = promptParts.join(" ");
     const config = buildConfig(options);
@@ -399,6 +409,94 @@ program
     const { McpServer } = await import("./mcp.js");
     const server = new McpServer(ws, options.shell);
     await server.startStdio();
+  });
+
+program
+  .command("flights")
+  .description("List recorded deterministic flight logs")
+  .option("-w, --workspace <path>", "Workspace directory", process.cwd())
+  .action((options: any) => {
+    const ws = options.workspace ? path.resolve(options.workspace) : process.cwd();
+    const manifests = FlightPlayer.listFlights(ws);
+    if (manifests.length === 0) {
+      console.log(pc.yellow("\nNo flight logs found in .nexus/flights/\n"));
+      return;
+    }
+    console.log(pc.bold(pc.cyan(`\n=== Nexus Code Deterministic Flight Logs (${manifests.length}) ===\n`)));
+    for (const m of manifests) {
+      const status = m.status === "completed" ? pc.green("COMPLETED") : pc.yellow(m.status.toUpperCase());
+      console.log(`• ${pc.bold(m.flightId)} [${status}] - ${pc.dim(m.recordedAt)}`);
+      console.log(`  Model: ${pc.cyan(m.model)} | Branch: ${pc.dim(m.initialBranch || "unknown")}`);
+      if (m.taskPrompt) {
+        console.log(`  Prompt: ${pc.white(m.taskPrompt.slice(0, 80))}`);
+      }
+      console.log();
+    }
+    console.log(pc.dim("Replay any flight log with: harness replay <flight-id>\n"));
+  });
+
+program
+  .command("replay <flight>")
+  .description("Replay a deterministic flight log step by step")
+  .option("-w, --workspace <path>", "Workspace directory", process.cwd())
+  .option("--delay <ms>", "Delay between events in milliseconds", "100")
+  .action(async (flightId: string, options: any) => {
+    const ws = options.workspace ? path.resolve(options.workspace) : process.cwd();
+    const delay = parseInt(options.delay, 10) || 0;
+    try {
+      const { manifest, events } = FlightPlayer.loadFlight(ws, flightId);
+      console.log(pc.bold(pc.cyan(`\n🛫 Replaying Flight: ${manifest.flightId}`)));
+      console.log(`Model: ${pc.bold(manifest.model)} | Workspace: ${pc.dim(manifest.workspace)}`);
+      console.log(`Recorded: ${pc.dim(manifest.recordedAt)} | Events: ${events.length}\n`);
+
+      await FlightPlayer.replay(events, (ev) => {
+        const stepPrefix = ev.step !== undefined ? `[Step ${ev.step}] ` : "";
+        switch (ev.type) {
+          case "turn_start":
+            console.log(pc.bold(pc.magenta(`\n▶ ${stepPrefix}Turn Started: ${ev.payload.prompt?.slice(0, 100)}`)));
+            break;
+          case "thought":
+            console.log(pc.italic(pc.gray(`💭 Thought: ${ev.payload.thought?.slice(0, 160)}...`)));
+            break;
+          case "tool_call":
+            console.log(pc.cyan(`⚡ ${stepPrefix}Tool Call: ${pc.bold(ev.payload.toolName)}(${JSON.stringify(ev.payload.arguments || {}).slice(0, 80)})`));
+            break;
+          case "tool_result": {
+            const status = ev.payload.success ? pc.green("✔") : pc.red("✘");
+            console.log(`  ${status} Result (${ev.payload.durationMs || 0}ms): ${ev.payload.outputSnippet?.slice(0, 100) || "ok"}`);
+            break;
+          }
+          case "file_diff":
+            console.log(pc.yellow(`📝 File Diff: ${ev.payload.path} (${ev.payload.diffSnippet?.slice(0, 80)}...)`));
+            break;
+          case "session_end":
+            console.log(pc.bold(pc.green(`\n🏁 Flight Completed: ${ev.payload.summary} (${ev.payload.durationMs}ms)`)));
+            break;
+        }
+      }, delay);
+      console.log();
+    } catch (err: any) {
+      console.error(pc.red(`Replay error: ${err.message}`));
+    }
+  });
+
+program
+  .command("worktrees")
+  .description("List active speculative git worktrees")
+  .option("-w, --workspace <path>", "Workspace directory", process.cwd())
+  .action((options: any) => {
+    const ws = options.workspace ? path.resolve(options.workspace) : process.cwd();
+    const mgr = new WorktreeManager(ws);
+    const wts = mgr.listWorktrees();
+    if (wts.length === 0) {
+      console.log(pc.yellow("\nNo active speculative worktrees in .nexus/worktrees/\n"));
+      return;
+    }
+    console.log(pc.bold(pc.cyan(`\n=== Speculative Git Worktrees (${wts.length}) ===\n`)));
+    for (const wt of wts) {
+      console.log(`• Task: ${pc.bold(wt.taskId)} (branch: ${pc.cyan(wt.branch)})`);
+      console.log(`  Path: ${pc.dim(wt.path)} | Head: ${pc.gray(wt.headSha.slice(0, 8))}\n`);
+    }
   });
 
 if (process.argv.length <= 2) {
