@@ -80,6 +80,7 @@ nexus (engineering/b0) my-app ❯ !npm test
 | `/undo` | Roll back workspace changes to the last checkpoint |
 | `/diff` | Display colored syntax-highlighted git diff |
 | `/git` | Show uncommitted files and git status |
+| `/commit [msg]` | Generate or execute Conventional Commit from staged changes |
 | `/audit [count]` | Inspect visual tool execution audit trail (recent N entries) |
 | `/compact` | Condense earlier conversation messages to preserve token budget |
 | `/mode [auto\|review]` | Toggle autonomous execution vs human approval before edits |
@@ -124,6 +125,8 @@ Nexus Code provides high-performance tools executed via compiled native 64-bit R
 ## 4. Safety & Compliance
 - **Workspace Path Jail**: Restricts file operations to workspace directory; prevents path traversal (`../`) or accessing `/etc/shadow`, `/root`, `~/.ssh`.
 - **Dangerous Command Guard**: Blocks destructive commands (`rm -rf /`, `mkfs`, raw device writes, fork bombs) from executing.
+- **SSRF Network Protection**: Blocks outbound access to loopback (`127.0.0.1`), cloud metadata (`169.254.169.254`), and private RFC-1918 subnets in `fetch_web`.
+- **Non-Blocking Pipe Execution**: Drains stdout and stderr concurrently to prevent 64KB Linux buffer saturation deadlocks during intensive builds.
 - **Secret Redaction**: Redacts Bearer tokens, private keys, and passwords before printing or logging.
 - **Audit Logging**: Every tool execution is recorded with timestamps, parameters, duration, and status in `~/.nexus/audit.log`. Visual inspection available via `/audit` and `nexus audit`.
 - **Workspace Snapshots & Rollback**: Automatic Git-backed and filesystem snapshot rollback. Inspect diffs anytime with `/checkpoint diff <id>`, and manage disk footprint with `/checkpoint prune [keep]`.

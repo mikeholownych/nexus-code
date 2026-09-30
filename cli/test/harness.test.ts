@@ -4,11 +4,15 @@ import * as path from "node:path";
 import * as fs from "node:fs";
 import * as os from "node:os";
 
-import { HARNESS_TOOLS } from "../src/tools.js";
+import * as http from "node:http";
+import { HARNESS_TOOLS, isSafeOutboundUrl } from "../src/tools.js";
 import { parseModelResponse } from "../src/parser.js";
 import { redactSecrets } from "../src/ui.js";
 import { CheckpointManager } from "../src/checkpoint.js";
 import { SkillManager } from "../src/skills.js";
+import { extractCompilerDiagnostics, formatDiagnosticHints } from "../src/diagnostics.js";
+import { generateConventionalCommit } from "../src/git.js";
+import { AutonomousAgent } from "../src/agent.js";
 
 describe("Nexus Code Test Suite", () => {
   test("HARNESS_TOOLS definitions include all parity tools", () => {
@@ -174,6 +178,137 @@ describe("Nexus Code Test Suite", () => {
       assert.ok(callRes.result.content[0].text.includes("package.json"));
     } finally {
       server.shutdown();
+    }
+  });
+
+  test("extractCompilerDiagnostics parses rust and typescript errors into actionable hints", () => {
+    const rawRustError = `
+error[E0308]: mismatched types
+  --> src/main.rs:42:15
+   |
+42 |     let x: u32 = "hello";
+   |            ---   ^^^^^^^ expected \`u32\`, found \`&str\`
+`;
+    const rustDiags = extractCompilerDiagnostics(rawRustError);
+    assert.strictEqual(rustDiags.length, 1);
+    assert.strictEqual(rustDiags[0].file, "src/main.rs");
+    assert.strictEqual(rustDiags[0].line, 42);
+    assert.strictEqual(rustDiags[0].code, "E0308");
+
+    const rawTsError = `src/index.ts:18:5 - error TS2322: Type 'number' is not assignable to type 'string'.`;
+    const tsDiags = extractCompilerDiagnostics(rawTsError);
+    assert.strictEqual(tsDiags.length, 1);
+    assert.strictEqual(tsDiags[0].file, "src/index.ts");
+    assert.strictEqual(tsDiags[0].line, 18);
+    assert.strictEqual(tsDiags[0].code, "TS2322");
+
+    const hints = formatDiagnosticHints([...rustDiags, ...tsDiags]);
+    assert.ok(hints.includes("[Automated Diagnostic Hints & Error Locations]:"));
+    assert.ok(hints.includes("src/main.rs:42:15"));
+    assert.ok(hints.includes("src/index.ts:18:5"));
+  });
+
+  test("generateConventionalCommit creates valid conventional commit messages", () => {
+    const commit = generateConventionalCommit(process.cwd());
+    assert.ok(commit.message.length > 0);
+    assert.ok(/^(feat|fix|docs|test|chore)\([^)]+\):/.test(commit.message));
+  });
+
+  test("isSafeOutboundUrl blocks SSRF threats and permits valid public URLs", () => {
+    assert.strictEqual(isSafeOutboundUrl("http://localhost:8080").safe, false);
+    assert.strictEqual(isSafeOutboundUrl("http://127.0.0.1:3000").safe, false);
+    assert.strictEqual(isSafeOutboundUrl("http://169.254.169.254/latest/meta-data").safe, false);
+    assert.strictEqual(isSafeOutboundUrl("http://10.0.1.5:8080/secret").safe, false);
+    assert.strictEqual(isSafeOutboundUrl("http://192.168.1.1/admin").safe, false);
+    assert.strictEqual(isSafeOutboundUrl("ftp://example.com/file.txt").safe, false);
+
+    assert.strictEqual(isSafeOutboundUrl("https://raw.githubusercontent.com/org/repo/main/README.md").safe, true);
+    assert.strictEqual(isSafeOutboundUrl("https://api.example.com/v1/data").safe, true);
+  });
+
+  test("AutonomousAgent completes multi-turn loop using mock OpenAI-compatible LLM server", async () => {
+    let callCount = 0;
+    const mockServer = http.createServer((req, res) => {
+      if (req.url === "/v1/chat/completions" && req.method === "POST") {
+        let body = "";
+        req.on("data", (chunk) => { body += chunk; });
+        req.on("end", () => {
+          callCount++;
+          res.writeHead(200, {
+            "Content-Type": "text/event-stream",
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+          });
+
+          if (callCount === 1) {
+            // First turn: model decides to inspect package.json
+            const chunk1 = {
+              choices: [{
+                delta: {
+                  content: "I will check the metadata of package.json first.",
+                  tool_calls: [{
+                    index: 0,
+                    id: "call_mock_1",
+                    type: "function",
+                    function: {
+                      name: "file_info",
+                      arguments: JSON.stringify({ path: "package.json" }),
+                    },
+                  }],
+                },
+              }],
+            };
+            res.write(`data: ${JSON.stringify(chunk1)}\n\n`);
+            res.write("data: [DONE]\n\n");
+            res.end();
+          } else {
+            // Second turn: model concludes the task
+            const chunk2 = {
+              choices: [{
+                delta: {
+                  content: "The package file is verified.",
+                  tool_calls: [{
+                    index: 0,
+                    id: "call_mock_2",
+                    type: "function",
+                    function: {
+                      name: "task_completed",
+                      arguments: JSON.stringify({ summary: "Metadata inspected successfully." }),
+                    },
+                  }],
+                },
+              }],
+            };
+            res.write(`data: ${JSON.stringify(chunk2)}\n\n`);
+            res.write("data: [DONE]\n\n");
+            res.end();
+          }
+        });
+      } else {
+        res.writeHead(404);
+        res.end();
+      }
+    });
+
+    await new Promise<void>((resolve) => mockServer.listen(0, "127.0.0.1", () => resolve()));
+    const port = (mockServer.address() as any).port;
+
+    const agent = new AutonomousAgent({
+      endpoint: `http://127.0.0.1:${port}/v1`,
+      model: "mock-model",
+      workspace: process.cwd(),
+      maxSteps: 4,
+      shell: "bash",
+    });
+
+    try {
+      await agent.runTurn("Inspect package.json metadata");
+      assert.strictEqual(callCount, 2);
+      const history = agent.getHistory();
+      assert.ok(history.length >= 3, "Expected at least 3 messages in history");
+    } finally {
+      agent.shutdown();
+      mockServer.close();
     }
   });
 });

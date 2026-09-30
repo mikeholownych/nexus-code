@@ -417,6 +417,67 @@ export const HARNESS_TOOLS: ToolDefinition[] = [
   },
 ];
 
+export function isSafeOutboundUrl(urlStr: string): { safe: boolean; reason?: string } {
+  let parsed: URL;
+  try {
+    parsed = new URL(urlStr);
+  } catch {
+    return { safe: false, reason: "Invalid URL format" };
+  }
+
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+    return { safe: false, reason: `Blocked protocol '${parsed.protocol}'. Only http and https are permitted.` };
+  }
+
+  const hostname = parsed.hostname.toLowerCase();
+
+  // Cloud metadata & special internal domains
+  if (
+    hostname === "localhost" ||
+    hostname.endsWith(".localhost") ||
+    hostname.endsWith(".local") ||
+    hostname.endsWith(".internal") ||
+    hostname === "metadata.google.internal"
+  ) {
+    return { safe: false, reason: "SSRF Guard: Access to local/internal domains is blocked." };
+  }
+
+  // IPv4 check
+  const ipv4Match = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(hostname);
+  if (ipv4Match) {
+    const octets = ipv4Match.slice(1).map(Number);
+    if (octets.some((o) => o > 255)) {
+      return { safe: false, reason: "Invalid IP address" };
+    }
+    const [a, b] = octets;
+    if (a === 127) {
+      return { safe: false, reason: "SSRF Guard: Loopback access (127.0.0.0/8) is blocked." };
+    }
+    if (a === 169 && b === 254) {
+      return { safe: false, reason: "SSRF Guard: Cloud metadata / Link-local address (169.254.0.0/16) is blocked." };
+    }
+    if (a === 10) {
+      return { safe: false, reason: "SSRF Guard: Private network address (10.0.0.0/8) is blocked." };
+    }
+    if (a === 172 && b >= 16 && b <= 31) {
+      return { safe: false, reason: "SSRF Guard: Private network address (172.16.0.0/12) is blocked." };
+    }
+    if (a === 192 && b === 168) {
+      return { safe: false, reason: "SSRF Guard: Private network address (192.168.0.0/16) is blocked." };
+    }
+    if (a === 0) {
+      return { safe: false, reason: "SSRF Guard: Zero network address (0.0.0.0/8) is blocked." };
+    }
+  }
+
+  // IPv6 loopback
+  if (hostname === "::1" || hostname === "[::1]") {
+    return { safe: false, reason: "SSRF Guard: IPv6 loopback (::1) is blocked." };
+  }
+
+  return { safe: true };
+}
+
 export class RustCoreBridge {
   private workspace: string;
   private defaultShell: string;
@@ -706,6 +767,12 @@ export class RustCoreBridge {
         if (!url || typeof url !== "string") {
           return { success: false, output: "", error: "Missing required parameter 'url'" };
         }
+
+        const safetyCheck = isSafeOutboundUrl(url);
+        if (!safetyCheck.safe) {
+          return { success: false, output: "", error: safetyCheck.reason || "Blocked by security policy" };
+        }
+
         const res = await fetch(url, {
           headers: {
             "User-Agent": "Mozilla/5.0 (compatible; NexusCode/1.0)",

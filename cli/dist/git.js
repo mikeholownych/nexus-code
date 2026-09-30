@@ -75,3 +75,86 @@ export function scaffoldProjectRules(workspace) {
     fs.writeFileSync(target, template, "utf-8");
     return target;
 }
+export function generateConventionalCommit(workspace) {
+    try {
+        const statusOut = execSync("git status --porcelain", {
+            cwd: workspace,
+            encoding: "utf-8",
+            stdio: ["pipe", "pipe", "ignore"],
+        }).trim();
+        if (!statusOut) {
+            return { message: "chore: update repository", files: [] };
+        }
+        const lines = statusOut.split("\n");
+        const files = lines.map((l) => l.slice(3).trim());
+        // Determine primary scope
+        let scope = "core";
+        if (files.every((f) => f.startsWith("docs/") || f.endsWith(".md"))) {
+            scope = "docs";
+        }
+        else if (files.every((f) => f.startsWith("cli/test/") || f.includes("test"))) {
+            scope = "test";
+        }
+        else if (files.every((f) => f.startsWith("cli/"))) {
+            scope = "cli";
+        }
+        else if (files.every((f) => f.startsWith("core/"))) {
+            scope = "core";
+        }
+        // Determine type
+        let type = "feat";
+        if (scope === "docs") {
+            type = "docs";
+        }
+        else if (scope === "test") {
+            type = "test";
+        }
+        else if (files.some((f) => f.includes("fix") || f.includes("bug"))) {
+            type = "fix";
+        }
+        // Identify primary topic
+        let topic = "update workspace files";
+        if (files.some((f) => f.includes("repl") || f.includes("prompt"))) {
+            topic = "enhance interactive REPL and command UX";
+        }
+        else if (files.some((f) => f.includes("agent") || f.includes("diagnostics"))) {
+            topic = "improve agent self-healing and recovery loop";
+        }
+        else if (files.some((f) => f.includes("mcp"))) {
+            topic = "update MCP server and tool integrations";
+        }
+        else if (files.some((f) => f.includes("checkpoint"))) {
+            topic = "enhance workspace snapshotting and rollback";
+        }
+        else if (files.some((f) => f.includes("file_ops"))) {
+            topic = "robust file editing and matching";
+        }
+        else if (files.length === 1) {
+            topic = `update ${path.basename(files[0])}`;
+        }
+        const message = `${type}(${scope}): ${topic}`;
+        return { message, files };
+    }
+    catch {
+        return { message: "chore: update workspace", files: [] };
+    }
+}
+export function commitChanges(workspace, message) {
+    try {
+        execSync("git add -A", { cwd: workspace, stdio: ["pipe", "pipe", "pipe"] });
+        execSync(`git commit -m "${message.replace(/"/g, '\\"')}"`, {
+            cwd: workspace,
+            encoding: "utf-8",
+            stdio: ["pipe", "pipe", "pipe"],
+        });
+        const hash = execSync("git rev-parse --short HEAD", {
+            cwd: workspace,
+            encoding: "utf-8",
+            stdio: ["pipe", "pipe", "ignore"],
+        }).trim();
+        return { success: true, hash };
+    }
+    catch (err) {
+        return { success: false, error: err.message };
+    }
+}

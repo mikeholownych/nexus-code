@@ -125,20 +125,36 @@ pub fn run_command(args: RunCommandArgs, base_dir: &Path) -> Result<RunCommandRe
         format!("Failed to execute '{}' via {shell_name}: {e}", args.command)
     })?;
 
+    let stdout = child.stdout.take().ok_or("Failed to capture stdout")?;
+    let stderr = child.stderr.take().ok_or("Failed to capture stderr")?;
+
+    let stdout_handle = std::thread::spawn(move || {
+        let mut reader = std::io::BufReader::new(stdout);
+        let mut buf = Vec::new();
+        let _ = std::io::Read::read_to_end(&mut reader, &mut buf);
+        buf
+    });
+
+    let stderr_handle = std::thread::spawn(move || {
+        let mut reader = std::io::BufReader::new(stderr);
+        let mut buf = Vec::new();
+        let _ = std::io::Read::read_to_end(&mut reader, &mut buf);
+        buf
+    });
+
     let timeout = Duration::from_secs(args.timeout_secs);
     let poll_interval = Duration::from_millis(50);
     let mut timed_out = false;
 
-    loop {
+    let exit_status = loop {
         match child.try_wait() {
-            Ok(Some(_status)) => {
-                break;
-            }
+            Ok(Some(status)) => break Some(status),
             Ok(None) => {
                 if start.elapsed() > timeout {
                     let _ = child.kill();
                     timed_out = true;
-                    break;
+                    let _ = child.wait();
+                    break None;
                 }
                 std::thread::sleep(poll_interval);
             }
@@ -146,18 +162,19 @@ pub fn run_command(args: RunCommandArgs, base_dir: &Path) -> Result<RunCommandRe
                 return Err(format!("Error waiting for process: {e}"));
             }
         }
-    }
+    };
 
-    let output = child.wait_with_output().map_err(|e| format!("Failed to read process output: {e}"))?;
+    let stdout_bytes = stdout_handle.join().unwrap_or_default();
+    let stderr_bytes = stderr_handle.join().unwrap_or_default();
     let duration_ms = start.elapsed().as_millis();
 
-    let raw_stdout = String::from_utf8_lossy(&output.stdout).to_string();
-    let raw_stderr = String::from_utf8_lossy(&output.stderr).to_string();
+    let raw_stdout = String::from_utf8_lossy(&stdout_bytes).to_string();
+    let raw_stderr = String::from_utf8_lossy(&stderr_bytes).to_string();
 
     Ok(RunCommandResult {
         command: args.command,
         shell: shell_name,
-        exit_code: output.status.code(),
+        exit_code: exit_status.and_then(|s| s.code()),
         stdout: truncate_output(&raw_stdout),
         stderr: truncate_output(&raw_stderr),
         duration_ms,

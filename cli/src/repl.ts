@@ -8,9 +8,39 @@ import pc from "picocolors";
 import { AutonomousAgent } from "./agent.js";
 import { LocalLlmClient } from "./client.js";
 import { HarnessConfig } from "./types.js";
-import { getGitInfo, scaffoldProjectRules } from "./git.js";
+import { getGitInfo, scaffoldProjectRules, generateConventionalCommit, commitChanges } from "./git.js";
 import { SessionManager, SessionData } from "./session.js";
 import { CheckpointManager } from "./checkpoint.js";
+
+interface PatchHunk {
+  header: string;
+  lines: string[];
+}
+
+function parsePatchHunks(patch: string): { fileHeader: string; hunks: PatchHunk[] } {
+  const lines = patch.split("\n");
+  const fileHeaderLines: string[] = [];
+  const hunks: PatchHunk[] = [];
+  let currentHunk: PatchHunk | null = null;
+
+  for (const line of lines) {
+    if (line.startsWith("@@")) {
+      if (currentHunk) {
+        hunks.push(currentHunk);
+      }
+      currentHunk = { header: line, lines: [] };
+    } else if (currentHunk) {
+      currentHunk.lines.push(line);
+    } else {
+      fileHeaderLines.push(line);
+    }
+  }
+  if (currentHunk) {
+    hunks.push(currentHunk);
+  }
+
+  return { fileHeader: fileHeaderLines.join("\n"), hunks };
+}
 
 export class InteractiveRepl {
   private agent: AutonomousAgent;
@@ -144,8 +174,7 @@ export class InteractiveRepl {
     console.log(`  ${pc.bold(pc.yellow("/shell [bash|zsh]"))}   Switch Linux execution shell`);
     console.log(`  ${pc.bold(pc.yellow("/cd <path>"))}          Change active workspace directory`);
     console.log(`  ${pc.bold(pc.yellow("/history"))}            Show recent prompt history`);
-    console.log(`  ${pc.bold(pc.yellow("!<command>"))}           Run raw shell command directly (e.g. !git status)`);
-    console.log(`  ${pc.bold(pc.yellow("/exit"))} or ${pc.bold(pc.yellow("/quit"))}       Exit session\n`);
+    console.log(`  ${pc.bold(pc.yellow("/commit [msg]"))}       Generate or execute conventional git commit\n`);
   }
 
   private async confirmAction(toolName: string, args: Record<string, any>): Promise<boolean> {
@@ -153,6 +182,56 @@ export class InteractiveRepl {
     if (!this.rl) return true;
 
     console.log(pc.bold(pc.yellow(`\n⚠️  Action Approval Required:`)));
+
+    // Hunk-by-hunk review for patch_file
+    if (toolName === "patch_file" && typeof args.patch === "string") {
+      const { fileHeader, hunks } = parsePatchHunks(args.patch);
+      console.log(`  Target: ${pc.cyan(args.path)} (${hunks.length} hunks)`);
+
+      if (hunks.length > 1) {
+        const reviewMode = await this.rl.question(
+          pc.bold(pc.white(`  Review ${hunks.length} hunks individually? [y/N]: `))
+        );
+        if (reviewMode.trim().toLowerCase() === "y") {
+          const acceptedHunks: PatchHunk[] = [];
+          for (let i = 0; i < hunks.length; i++) {
+            const h = hunks[i];
+            console.log(pc.cyan(`\n  --- Hunk ${i + 1}/${hunks.length}: ${h.header} ---`));
+            for (const hl of h.lines) {
+              if (hl.startsWith("+")) console.log(pc.green(`    ${hl}`));
+              else if (hl.startsWith("-")) console.log(pc.red(`    ${hl}`));
+              else console.log(pc.gray(`    ${hl}`));
+            }
+            const hunkAns = await this.rl.question(
+              pc.bold(pc.white(`  Accept hunk [y]es, [n]o, [a]ccept all remaining, [q]uit? [Y/n/a/q]: `))
+            );
+            const trimmedHunk = hunkAns.trim().toLowerCase();
+            if (trimmedHunk === "q") {
+              console.log(pc.dim("  Patch review aborted by user."));
+              return false;
+            }
+            if (trimmedHunk === "a") {
+              acceptedHunks.push(...hunks.slice(i));
+              break;
+            }
+            if (trimmedHunk === "" || trimmedHunk === "y") {
+              acceptedHunks.push(h);
+            }
+          }
+
+          if (acceptedHunks.length === 0) {
+            console.log(pc.yellow("  No hunks accepted. Skipping patch."));
+            return false;
+          }
+
+          args.patch = (fileHeader ? fileHeader + "\n" : "") +
+            acceptedHunks.map((h) => h.header + "\n" + h.lines.join("\n")).join("\n");
+          console.log(pc.green(`  Approved ${acceptedHunks.length}/${hunks.length} hunks.`));
+          return true;
+        }
+      }
+    }
+
     if (toolName === "edit_file") {
       console.log(`  Target: ${pc.cyan(args.path)}`);
       console.log(pc.bold(pc.dim("  Snippet to replace:")));
@@ -167,18 +246,41 @@ export class InteractiveRepl {
       console.log(`  Command: ${pc.bold(pc.magenta(args.command))}`);
     }
 
-    const answer = await this.rl.question(
-      pc.bold(pc.white(`  Approve [y]es, [n]o, [a]lways allow session? [Y/n/a]: `))
-    );
+    while (true) {
+      const answer = await this.rl.question(
+        pc.bold(pc.white(`  Approve [y]es, [n]o, [d]iff preview, [a]lways allow session? [Y/n/d/a]: `))
+      );
 
-    const trimmed = answer.trim().toLowerCase();
-    if (trimmed === "a" || trimmed === "always") {
-      this.autoApprove = true;
-      console.log(pc.green("  Switched to auto-approve for remainder of session."));
-      return true;
+      const trimmed = answer.trim().toLowerCase();
+      if (trimmed === "a" || trimmed === "always") {
+        this.autoApprove = true;
+        console.log(pc.green("  Switched to auto-approve for remainder of session."));
+        return true;
+      }
+      if (trimmed === "d" || trimmed === "diff") {
+        if (toolName === "edit_file") {
+          console.log(pc.bold(pc.red("\n--- Snippet to Replace ---")));
+          console.log(args.old_content);
+          console.log(pc.bold(pc.green("+++ Replacement Content +++")));
+          console.log(args.new_content);
+          console.log();
+        } else if (toolName === "write_file") {
+          console.log(pc.bold(pc.cyan(`\n--- Preview: ${args.path} ---`)));
+          const previewLines = (args.content || "").split("\n").slice(0, 30).join("\n");
+          console.log(previewLines);
+          console.log();
+        } else if (toolName === "patch_file") {
+          console.log(pc.bold(pc.cyan(`\n--- Patch Preview: ${args.path} ---`)));
+          console.log(args.patch);
+          console.log();
+        } else {
+          console.log(pc.dim("  No detailed diff available for this action.\n"));
+        }
+        continue;
+      }
+
+      return trimmed === "" || trimmed === "y" || trimmed === "yes";
     }
-
-    return trimmed === "" || trimmed === "y" || trimmed === "yes";
   }
 
   async start(): Promise<void> {
@@ -192,14 +294,63 @@ export class InteractiveRepl {
       completer: (line: string) => {
         const completions = [
           "/help", "/status", "/clear", "/reset", "/compact", "/mode",
-          "/diff", "/git", "/sessions", "/save", "/resume", "/skills",
+          "/diff", "/git", "/commit", "/sessions", "/save", "/resume", "/skills",
           "/skill", "/mcp", "/plugins", "/plan", "/checkpoint",
           "/checkpoints", "/undo", "/audit", "/export", "/tokens", "/init",
           "/model", "/shell", "/cd", "/history", "/exit", "/quit"
         ];
         const trimmed = line.trim();
-        const hits = completions.filter((c) => c.startsWith(trimmed));
-        return [hits.length ? hits : completions, line] as [string[], string];
+        const parts = line.split(/\s+/);
+        const lastToken = parts[parts.length - 1] || "";
+
+        // If line is starting a slash command:
+        if (parts.length <= 1 && line.startsWith("/")) {
+          const hits = completions.filter((c) => c.startsWith(trimmed));
+          return [hits.length ? hits : completions, line] as [string[], string];
+        }
+
+        // If completing /model
+        if (parts[0] === "/model") {
+          const models = ["qwen2.5-coder", "deepseek-coder", "llama-3.1", "claude-3-7-sonnet", "gpt-4o", "mistral-large"];
+          const hits = models.filter((m) => m.startsWith(lastToken));
+          return [hits, lastToken] as [string[], string];
+        }
+
+        // If completing /skill
+        if (parts[0] === "/skill") {
+          const skills = this.agent.getSkillManager()?.listSkills().map((s) => s.name) || [];
+          const hits = skills.filter((s) => s.startsWith(lastToken));
+          return [hits, lastToken] as [string[], string];
+        }
+
+        // Context-aware file & directory path completion for /cd, /checkpoint diff, shell commands
+        if (parts[0] === "/cd" || parts[0] === "!cat" || parts[0] === "!ls" || lastToken.includes("/")) {
+          try {
+            const searchDir = lastToken.includes("/")
+              ? path.resolve(this.config.workspace, path.dirname(lastToken))
+              : this.config.workspace;
+            const filePrefix = lastToken.includes("/") ? path.basename(lastToken) : lastToken;
+            const basePrefix = lastToken.includes("/") ? lastToken.slice(0, lastToken.lastIndexOf("/") + 1) : "";
+
+            if (fs.existsSync(searchDir) && fs.statSync(searchDir).isDirectory()) {
+              const entries = fs.readdirSync(searchDir, { withFileTypes: true });
+              const matches: string[] = [];
+              for (const entry of entries) {
+                if (entry.name.startsWith(".") && !filePrefix.startsWith(".")) continue;
+                if (entry.name.startsWith(filePrefix)) {
+                  matches.push(basePrefix + entry.name + (entry.isDirectory() ? "/" : ""));
+                }
+              }
+              if (matches.length > 0) {
+                return [matches, lastToken] as [string[], string];
+              }
+            }
+          } catch {
+            // Ignore filesystem errors during completion
+          }
+        }
+
+        return [[], lastToken] as [string[], string];
       },
     });
 
@@ -395,6 +546,50 @@ export class InteractiveRepl {
               console.log(pc.red(`Git status error: ${err.message}`));
             }
             console.log();
+            continue;
+          } else if (cmd === "commit") {
+            const git = getGitInfo(this.config.workspace);
+            if (!git.isRepo) {
+              console.log(pc.yellow("Current workspace is not inside a git repository.\n"));
+              continue;
+            }
+            if (git.dirtyCount === 0) {
+              console.log(pc.green("Working tree clean — nothing to commit.\n"));
+              continue;
+            }
+
+            let commitMsg = arg ? arg.trim() : "";
+            if (!commitMsg) {
+              const suggestion = generateConventionalCommit(this.config.workspace);
+              console.log(pc.bold(pc.white("\nConventional Commit Generator:")));
+              console.log(`  Modified files: ${pc.cyan(suggestion.files.length)} files`);
+              console.log(`  Suggested message: ${pc.bold(pc.green(suggestion.message))}`);
+
+              const answer = await this.rl!.question(
+                pc.bold(pc.white(`  Accept [y], edit custom message [e], cancel [n]? [Y/e/n]: `))
+              );
+              const trimmedAns = answer.trim().toLowerCase();
+              if (trimmedAns === "n" || trimmedAns === "no") {
+                console.log(pc.dim("Commit cancelled.\n"));
+                continue;
+              } else if (trimmedAns === "e" || trimmedAns === "edit") {
+                const custom = await this.rl!.question(pc.bold(pc.white("  Enter commit message: ")));
+                commitMsg = custom.trim();
+                if (!commitMsg) {
+                  console.log(pc.dim("Empty message, commit cancelled.\n"));
+                  continue;
+                }
+              } else {
+                commitMsg = suggestion.message;
+              }
+            }
+
+            const commitRes = commitChanges(this.config.workspace, commitMsg);
+            if (commitRes.success) {
+              console.log(pc.green(`✔ Committed changes: ${pc.bold(commitRes.hash || "")} - ${commitMsg}\n`));
+            } else {
+              console.log(pc.red(`Commit failed: ${commitRes.error}\n`));
+            }
             continue;
           } else if (cmd === "init") {
             const file = scaffoldProjectRules(this.config.workspace);

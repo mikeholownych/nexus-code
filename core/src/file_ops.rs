@@ -130,6 +130,92 @@ fn normalize_newlines(s: &str) -> String {
     s.replace("\r\n", "\n")
 }
 
+/// Attempts fuzzy matching for `edit_file` when exact and normalized substring matches fail.
+/// 1. Tries line-by-line trimmed matching (ignoring indentation / whitespace variations per line).
+/// 2. Tries sliding window similarity using `similar::TextDiff` ratio (threshold >= 0.85).
+fn fuzzy_find_and_replace(
+    original: &str,
+    old_content: &str,
+    new_content: &str,
+) -> Option<(String, usize)> {
+    let norm_orig = normalize_newlines(original);
+    let norm_old = normalize_newlines(old_content);
+    let norm_new = normalize_newlines(new_content);
+
+    let orig_lines: Vec<&str> = norm_orig.lines().collect();
+    let old_lines: Vec<&str> = norm_old.lines().collect();
+
+    // Strip leading and trailing empty lines from old_lines if needed
+    let mut start = 0;
+    while start < old_lines.len() && old_lines[start].trim().is_empty() {
+        start += 1;
+    }
+    let mut end = old_lines.len();
+    while end > start && old_lines[end - 1].trim().is_empty() {
+        end -= 1;
+    }
+    if start >= end {
+        return None;
+    }
+    let trimmed_old_lines = &old_lines[start..end];
+    let window_size = trimmed_old_lines.len();
+
+    if window_size == 0 || orig_lines.len() < window_size {
+        return None;
+    }
+
+    // Step 1: Check for exact line-by-line trimmed match (handles indentation differences)
+    for i in 0..=(orig_lines.len() - window_size) {
+        let mut matches = true;
+        for k in 0..window_size {
+            if orig_lines[i + k].trim() != trimmed_old_lines[k].trim() {
+                matches = false;
+                break;
+            }
+        }
+        if matches {
+            let mut result_lines = Vec::new();
+            result_lines.extend_from_slice(&orig_lines[0..i]);
+            result_lines.push(&norm_new);
+            result_lines.extend_from_slice(&orig_lines[(i + window_size)..]);
+            let mut reconstructed = result_lines.join("\n");
+            if norm_orig.ends_with('\n') && !reconstructed.ends_with('\n') {
+                reconstructed.push('\n');
+            }
+            return Some((reconstructed, 1));
+        }
+    }
+
+    // Step 2: Sliding window TextDiff ratio match (>= 0.85 similarity)
+    let old_joined = trimmed_old_lines.join("\n");
+    let mut best_idx = None;
+    let mut best_ratio = 0.85f32;
+
+    for i in 0..=(orig_lines.len() - window_size) {
+        let window_joined = orig_lines[i..(i + window_size)].join("\n");
+        let diff = TextDiff::from_lines(&window_joined, &old_joined);
+        let ratio = diff.ratio();
+        if ratio > best_ratio {
+            best_ratio = ratio;
+            best_idx = Some(i);
+        }
+    }
+
+    if let Some(i) = best_idx {
+        let mut result_lines = Vec::new();
+        result_lines.extend_from_slice(&orig_lines[0..i]);
+        result_lines.push(&norm_new);
+        result_lines.extend_from_slice(&orig_lines[(i + window_size)..]);
+        let mut reconstructed = result_lines.join("\n");
+        if norm_orig.ends_with('\n') && !reconstructed.ends_with('\n') {
+            reconstructed.push('\n');
+        }
+        return Some((reconstructed, 1));
+    }
+
+    None
+}
+
 pub fn edit_file(args: EditFileArgs, base_dir: &Path) -> Result<EditFileResult, String> {
     let target = base_dir.join(&args.path);
     if !target.exists() {
@@ -158,9 +244,11 @@ pub fn edit_file(args: EditFileArgs, base_dir: &Path) -> Result<EditFileResult, 
             if !trimmed_old.is_empty() && norm_orig.contains(trimmed_old) {
                 let count = norm_orig.matches(trimmed_old).count();
                 (norm_orig.replacen(trimmed_old, norm_new.trim(), 1), count)
+            } else if let Some((fuzzy_content, count)) = fuzzy_find_and_replace(&raw_original, &args.old_content, &args.new_content) {
+                (fuzzy_content, count)
             } else {
                 return Err(format!(
-                    "Could not find exact text match in {}. Ensure the snippet matches the existing file contents.",
+                    "Could not find exact or fuzzy text match in {}. Ensure the snippet matches the existing file contents.",
                     args.path
                 ));
             }
@@ -640,6 +728,22 @@ mod tests {
         assert_eq!(patch_res.applied_hunks, 1);
         let updated = fs::read_to_string(&f1).unwrap();
         assert!(updated.contains("Line 2 Patched"));
+
+        // Test edit_file with fuzzy indentation mismatch
+        let code_file = dir.join("code.rs");
+        fs::write(&code_file, "fn main() {\n    let val = 42;\n    println!(\"{}\", val);\n}\n").unwrap();
+
+        // Model provides old_content with no indentation
+        let edit_res = edit_file(EditFileArgs {
+            path: "code.rs".into(),
+            old_content: "let val = 42;\nprintln!(\"{}\", val);".into(),
+            new_content: "    let val = 100;\n    println!(\"Updated: {}\", val);".into(),
+        }, &dir).unwrap();
+
+        assert_eq!(edit_res.replacements, 1);
+        let updated_code = fs::read_to_string(&code_file).unwrap();
+        assert!(updated_code.contains("let val = 100;"));
+        assert!(updated_code.contains("Updated: {}"));
 
         let _ = fs::remove_dir_all(&dir);
     }

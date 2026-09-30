@@ -11,6 +11,7 @@ import { getGitInfo, getProjectRules } from "./git.js";
 import { SkillManager } from "./skills.js";
 import { McpClientManager } from "./mcp.js";
 import { PluginManager } from "./plugins.js";
+import { extractCompilerDiagnostics, formatDiagnosticHints } from "./diagnostics.js";
 import pc from "picocolors";
 
 export type ConfirmHandler = (toolName: string, args: Record<string, any>) => Promise<boolean>;
@@ -131,6 +132,10 @@ export class AutonomousAgent {
     return [...this.messages];
   }
 
+  public getHistory(): ChatMessage[] {
+    return [...this.messages];
+  }
+
   public setMessages(msgs: ChatMessage[]): void {
     this.messages = [...msgs];
   }
@@ -209,14 +214,16 @@ export class AutonomousAgent {
   }
 
   private buildSystemPrompt(): string {
-    const gitInfo = getGitInfo(this.config.workspace);
-    const gitSection = gitInfo.isRepo
-      ? `### Git Repository:\n- Branch: ${gitInfo.branch}\n- Uncommitted changes: ${gitInfo.dirtyCount} files\n`
-      : "";
-
     const projectRules = getProjectRules(this.config.workspace);
     const rulesSection = projectRules ? `\n${projectRules}\n` : "";
     const skillsSection = this.skillManager ? `\n${this.skillManager.getPromptSection()}` : "";
+
+    // Dynamic runtime state placed at the tail to preserve invariant KV-cache prefix
+    const gitInfo = getGitInfo(this.config.workspace);
+    const gitSection = gitInfo.isRepo
+      ? `\n### Git Repository State:\n- Branch: ${gitInfo.branch}\n- Uncommitted changes: ${gitInfo.dirtyCount} files\n`
+      : "";
+
     let planSection = "";
     if (this.activePlan && this.activePlan.length > 0) {
       planSection = `\n### Active Execution Plan:\n` +
@@ -229,7 +236,7 @@ You solve coding problems, build features, fix bugs, and refactor codebases by i
 ### Shell Environment:
 - Active Shell: ${this.config.shell} (standard GNU/Linux shell environment)
 - Workspace directory: ${this.config.workspace}
-${gitSection}${rulesSection}${skillsSection}${planSection}
+${rulesSection}${skillsSection}
 ### Operating Rules:
 1. EXPLORE FIRST: Before editing files, always explore the workspace using \`file_tree\`, \`list_dir\`, \`find_files\`, \`search_code\`, or \`read_file\`. Never guess file names or function signatures.
 2. HIGH-EFFICIENCY BATCHING: Prefer \`batch_read\` to read multiple files concurrently in a single turn, and \`file_info\` to inspect metadata without loading whole files.
@@ -239,7 +246,7 @@ ${gitSection}${rulesSection}${skillsSection}${planSection}
 6. SELF-CORRECTION: If a command or tool returns an error, analyze the error message, identify the root cause, and fix it.
 7. AUTONOMOUS COMPLETION: Keep executing tools until the entire task is thoroughly resolved. When everything is verified and done, invoke \`task_completed\` with a detailed summary.
 
-Always explain your reasoning before or alongside your tool calls.`;
+Always explain your reasoning before or alongside your tool calls.${gitSection}${planSection}`;
   }
 
   async runTurn(taskPrompt: string, onConfirm?: ConfirmHandler): Promise<void> {
@@ -339,13 +346,20 @@ Always explain your reasoning before or alongside your tool calls.`;
         for (const item of parallelResults) {
           this.ui.printToolCall(item.toolName, item.args);
           this.ui.printToolResult(item.toolName, item.result.success, item.result.output, item.result.error);
+          let content = item.result.success
+            ? item.result.output
+            : `Error executing ${item.toolName}: ${item.result.error || "Unknown error"}`;
+          if (item.toolName === "run_command") {
+            const diags = extractCompilerDiagnostics((item.result.output || "") + "\n" + (item.result.error || ""));
+            if (diags.length > 0) {
+              content += formatDiagnosticHints(diags);
+            }
+          }
           this.messages.push({
             role: "tool",
             tool_call_id: item.call.id,
             name: item.toolName,
-            content: item.result.success
-              ? item.result.output
-              : `Error executing ${item.toolName}: ${item.result.error || "Unknown error"}`,
+            content,
           });
         }
         currentStep++;
@@ -541,14 +555,24 @@ Always explain your reasoning before or alongside your tool calls.`;
 
         this.ui.printToolResult(toolName, result.success, result.output, result.error);
 
+        let finalContent = result.success
+          ? result.output
+          : `Error executing ${toolName}: ${result.error || "Unknown error"}`;
+
+        if (toolName === "run_command") {
+          const combined = (result.output || "") + "\n" + (result.error || "");
+          const diags = extractCompilerDiagnostics(combined);
+          if (diags.length > 0) {
+            finalContent += formatDiagnosticHints(diags);
+          }
+        }
+
         // Append tool result to context
         this.messages.push({
           role: "tool",
           tool_call_id: call.id,
           name: toolName,
-          content: result.success
-            ? result.output
-            : `Error executing ${toolName}: ${result.error || "Unknown error"}`,
+          content: finalContent,
         });
       }
 
