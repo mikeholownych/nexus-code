@@ -183,7 +183,7 @@ export class WorktreeManager {
     const worktreePath = path.join(this.getWorktreesBaseDir(), taskId);
     if (!fs.existsSync(worktreePath)) return false;
     try {
-      const status = execFileSync("git", ["status", "--porcelain"], {
+      const status = execFileSync("git", ["status", "--porcelain", "--ignored=matching", "--untracked-files=all"], {
         cwd: worktreePath,
         encoding: "utf-8",
         stdio: ["ignore", "pipe", "ignore"],
@@ -197,6 +197,21 @@ export class WorktreeManager {
       return Number(ahead) > 0;
     } catch {
       // An unreadable worktree is not safe to merge as verified.
+      return true;
+    }
+  }
+
+  /** Ignored task output is still a task effect and must not be silently discarded by merge. */
+  public hasIgnoredChanges(taskId: string): boolean {
+    const worktreePath = path.join(this.getWorktreesBaseDir(), taskId);
+    if (!fs.existsSync(worktreePath)) return false;
+    try {
+      return execFileSync("git", ["status", "--porcelain", "--ignored=matching", "--untracked-files=all"], {
+        cwd: worktreePath,
+        encoding: "utf-8",
+        stdio: ["ignore", "pipe", "ignore"],
+      }).split("\n").some((line) => line.startsWith("!! "));
+    } catch {
       return true;
     }
   }
@@ -228,6 +243,16 @@ export class WorktreeManager {
         branch,
         commitsMerged: 0,
         error: `Worktree path ${worktreePath} does not exist.`,
+      };
+    }
+
+    if (this.hasIgnoredChanges(taskId)) {
+      return {
+        success: false,
+        taskId,
+        branch,
+        commitsMerged: 0,
+        error: "Ignored worktree output exists; resolve or explicitly discard it before merging.",
       };
     }
 

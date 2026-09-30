@@ -18,6 +18,7 @@ import { calculateContextBudget, countTokens, isContextAdmissible, TokenBudget }
 import { selectRelevantFewShots } from "./fewshots.js";
 import { FlightRecorder } from "./flight.js";
 import { WorktreeManager } from "./worktree.js";
+import { isSandboxAvailable } from "./sandbox.js";
 import { HybridSearchEngine } from "./embeddings.js";
 import { SynthesizerEngine } from "./synthesizer.js";
 import { BrowserDriver } from "./browser.js";
@@ -210,6 +211,8 @@ export class AutonomousAgent {
   private activePlan: Array<{ name: string; status: string; detail?: string }> = [];
   private hasPendingModifications: boolean = false;
   private verifiedWorktreeCompletion: boolean = false;
+  private worktreeRunTurnAuthorized: boolean = false;
+  private managedWorktreeWorkspaceSwitch: boolean = false;
   private flightRecorder?: FlightRecorder;
   private worktreeManager: WorktreeManager;
   private activeWorktree?: { taskId: string; worktreePath: string; branch: string };
@@ -324,8 +327,10 @@ export class AutonomousAgent {
     }
     const res = this.worktreeManager.mergeWorktree(this.activeWorktree.taskId, commitMessage);
     if (res.success && this.originalWorkspace) {
-      this.setWorkspace(this.originalWorkspace);
+      const originalWorkspace = this.originalWorkspace;
       this.activeWorktree = undefined;
+      this.originalWorkspace = undefined;
+      this.switchWorktreeWorkspace(originalWorkspace);
     }
     return res;
   }
@@ -335,9 +340,11 @@ export class AutonomousAgent {
       return { success: false, error: "No active worktree" };
     }
     const res = this.worktreeManager.discardWorktree(this.activeWorktree.taskId);
-    if (this.originalWorkspace) {
-      this.setWorkspace(this.originalWorkspace);
+    if (res.success && this.originalWorkspace) {
+      const originalWorkspace = this.originalWorkspace;
       this.activeWorktree = undefined;
+      this.originalWorkspace = undefined;
+      this.switchWorktreeWorkspace(originalWorkspace);
     }
     return res;
   }
@@ -441,6 +448,9 @@ export class AutonomousAgent {
   }
 
   public setWorkspace(newWorkspace: string): void {
+    if (this.activeWorktree && !this.managedWorktreeWorkspaceSwitch) {
+      throw new Error("Cannot switch workspaces while a speculative worktree is unresolved; merge or discard it first.");
+    }
     this.bridge.shutdown();
     this.config.workspace = newWorkspace;
     this.bridge = new RustCoreBridge(
@@ -449,9 +459,14 @@ export class AutonomousAgent {
       this.config.coreBinaryPath,
       this.config.dryRun,
       this.config.readOnly,
-      this.config.sandbox,
+      this.bridgeSandboxSetting(),
+      Boolean(this.activeWorktree),
     );
     this.skillManager.setWorkspace(newWorkspace);
+    // During an internally managed isolation switch, retain the manager bound
+    // to the selected original workspace; the active checkout is only a
+    // specimen worktree, not the repository manager's authority root.
+    if (!this.managedWorktreeWorkspaceSwitch) this.worktreeManager = new WorktreeManager(newWorkspace);
     this.mcpManager = new McpClientManager(newWorkspace);
     this.pluginManager = new PluginManager(newWorkspace);
     this.hybridSearch = new HybridSearchEngine(newWorkspace, this.client);
@@ -471,9 +486,25 @@ export class AutonomousAgent {
       this.config.coreBinaryPath,
       this.config.dryRun,
       this.config.readOnly,
-      this.config.sandbox,
+      this.bridgeSandboxSetting(),
+      Boolean(this.activeWorktree),
     );
     this.resetConversation();
+  }
+
+  private bridgeSandboxSetting(): boolean | string | undefined {
+    if (!this.activeWorktree) return this.config.sandbox;
+    if (!this.config.sandbox || this.config.sandbox === "none") return "auto";
+    return this.config.sandbox;
+  }
+
+  private switchWorktreeWorkspace(workspace: string): void {
+    this.managedWorktreeWorkspaceSwitch = true;
+    try {
+      this.setWorkspace(workspace);
+    } finally {
+      this.managedWorktreeWorkspaceSwitch = false;
+    }
   }
 
   public setModel(newModel: string): void {
@@ -861,6 +892,15 @@ Always explain your reasoning before or alongside your tool calls.`;
   }
 
   async runTurn(taskPrompt: string | any[], onConfirm?: ConfirmHandler): Promise<void> {
+    // The REPL calls runTurn directly. Route worktree-enabled turns through the
+    // same establishment and resolution boundary as one-shot `run` tasks.
+    if (this.config.worktree && this.activeWorktree && !this.worktreeRunTurnAuthorized) {
+      throw new Error(`Cannot start a new task: unresolved worktree ${this.activeWorktree.taskId}; merge or discard it first.`);
+    }
+    if (this.config.worktree && !this.worktreeRunTurnAuthorized) {
+      await this.run(taskPrompt, onConfirm);
+      return;
+    }
     await this.initExtensibility();
     const promptText = typeof taskPrompt === "string" ? taskPrompt : "[Multi-modal Vision Input]";
     await this.pluginManager.notifyTurnStart(promptText, this.config.workspace);
@@ -1097,7 +1137,7 @@ Always explain your reasoning before or alongside your tool calls.`;
             ? JSON.parse(call.function.arguments)
             : call.function.arguments;
         } catch {
-          args = { raw: call.function.arguments };
+          args = toolName === "task_completed" ? {} : { raw: call.function.arguments };
         }
 
         // Reversibly restore any quarantined secret references for local execution
@@ -1116,6 +1156,15 @@ Always explain your reasoning before or alongside your tool calls.`;
         this.ui.printToolCall(toolName, args);
 
         if (toolName === "task_completed") {
+          const validCompletion = !!args && typeof args === "object" && !Array.isArray(args)
+            && typeof args.summary === "string" && args.summary.trim().length > 0
+            && (args.notes === undefined || typeof args.notes === "string");
+          if (!validCompletion) {
+            const invalid = "Invalid task_completed payload: summary must be a non-empty string and notes, when present, must be a string.";
+            if (this.flightRecorder) this.flightRecorder.recordToolResult(currentStep, call.id, toolName, false, invalid, 0, "Invalid completion payload");
+            this.messages.push({ role: "tool", tool_call_id: call.id, name: toolName, content: invalid });
+            continue;
+          }
           const worktreeHasChanges = this.activeWorktree
             ? this.worktreeManager.hasChanges(this.activeWorktree.taskId)
             : false;
@@ -1124,7 +1173,7 @@ Always explain your reasoning before or alongside your tool calls.`;
             try {
               const { runTestSuite } = await import("./tester.js");
               const testRes = runTestSuite(this.config.workspace);
-              if (!testRes.success && testRes.command !== "none") {
+              if (!testRes.success || testRes.command === "none") {
                 const hints = formatDiagnosticHints(testRes.diagnostics);
                 const oracleFailContent = `Verification Oracle: Recent code modifications caused automated tests to fail.\nCommand: ${testRes.command}\n${foldVoluminousOutput(testRes.rawOutput || "")}${hints}\nPlease resolve these test failures before calling task_completed.`;
                 if (this.flightRecorder) {
@@ -1138,8 +1187,11 @@ Always explain your reasoning before or alongside your tool calls.`;
                 });
                 continue;
               }
-            } catch {
-              // Ignore in environments without test commands
+            } catch (err: any) {
+              const verificationError = `Verification Oracle could not verify this worktree: ${err?.message || "test discovery failed"}.`;
+              if (this.flightRecorder) this.flightRecorder.recordToolResult(currentStep, call.id, toolName, false, verificationError, 0, "Verification unavailable");
+              this.messages.push({ role: "tool", tool_call_id: call.id, name: toolName, content: verificationError });
+              continue;
             }
           }
 
@@ -1681,22 +1733,31 @@ Always explain your reasoning before or alongside your tool calls.`;
     }
   }
 
-  async run(taskPrompt: string): Promise<void> {
+  async run(taskPrompt: string | any[], onConfirm?: ConfirmHandler): Promise<void> {
     this.ui.banner();
-    console.log(`🎯 Task: ${taskPrompt}\n`);
+    console.log(`🎯 Task: ${typeof taskPrompt === "string" ? taskPrompt : "[Multi-modal task input]"}\n`);
     console.log(`📁 Workspace: ${this.config.workspace}`);
     console.log(`🐚 Shell: ${this.config.shell}`);
     console.log(`🤖 Model: ${this.config.model} (${this.config.endpoint})\n`);
 
     this.verifiedWorktreeCompletion = false;
     if (this.config.worktree) {
+      if (this.activeWorktree) {
+        throw new Error(`Cannot start a new task: unresolved worktree ${this.activeWorktree.taskId}; merge or discard it first.`);
+      }
       if (!this.worktreeManager.isGitRepo()) {
         throw new Error(`Cannot start worktree-isolated task: ${this.config.workspace} is not a valid git repository.`);
+      }
+      const configuredSandbox = this.config.sandbox === "bwrap" || this.config.sandbox === "docker"
+        ? this.config.sandbox
+        : "auto";
+      if (!isSandboxAvailable(configuredSandbox)) {
+        throw new Error(`Cannot start worktree-isolated task: no usable shell sandbox is available (${configuredSandbox}).`);
       }
       const wt = this.worktreeManager.createWorktree();
       this.activeWorktree = { taskId: wt.taskId, worktreePath: wt.worktreePath, branch: wt.branch };
       this.originalWorkspace = this.config.workspace;
-      this.setWorkspace(wt.worktreePath);
+      this.switchWorktreeWorkspace(wt.worktreePath);
       console.log(pc.cyan(`🌲 Spun up speculative git worktree: ${wt.branch} at ${wt.worktreePath}`));
     }
 
@@ -1704,27 +1765,32 @@ Always explain your reasoning before or alongside your tool calls.`;
       this.flightRecorder.startSession({
         model: this.config.model,
         endpoint: this.config.endpoint,
-        taskPrompt,
+        taskPrompt: typeof taskPrompt === "string" ? taskPrompt : "[Multi-modal task input]",
       });
     }
 
     this.resetConversation();
+    this.worktreeRunTurnAuthorized = true;
     try {
       if (this.config.tdd) {
         this.config.tdd = false;
         try {
+          if (typeof taskPrompt !== "string") throw new Error("TDD mode does not accept multimodal task input.");
           await this.synthesizer.runAutonomousTdd(this, taskPrompt);
         } finally {
           this.config.tdd = true;
         }
       } else {
-        await this.runTurn(taskPrompt);
+        await this.runTurn(taskPrompt, onConfirm);
       }
     } finally {
+      this.worktreeRunTurnAuthorized = false;
       if (this.activeWorktree && this.config.worktree) {
-        if (this.verifiedWorktreeCompletion && !this.worktreeManager.rootHasChanges()) {
+        if (this.verifiedWorktreeCompletion && !this.worktreeManager.rootHasChanges()
+          && !this.worktreeManager.hasIgnoredChanges(this.activeWorktree.taskId)) {
           console.log(pc.cyan(`🌲 Merging verified changes from worktree ${this.activeWorktree.branch}...`));
-          this.mergeActiveWorktree(`nexus: apply verified changes from ${this.activeWorktree.taskId}`);
+          const result = this.mergeActiveWorktree(`nexus: apply verified changes from ${this.activeWorktree.taskId}`);
+          if (!result.success) console.log(pc.yellow(`⚠️ Worktree retained because merge was refused: ${result.error || "unknown error"}`));
         } else {
           console.log(pc.yellow(`⚠️ Speculative changes are unverified or the root workspace is dirty; retaining worktree at ${this.activeWorktree.worktreePath}`));
         }

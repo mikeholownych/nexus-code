@@ -448,8 +448,11 @@ error[E0308]: mismatched types
     fs.writeFileSync(path.join(repo, "base.txt"), "base\n");
     fs.writeFileSync(path.join(repo, "Makefile"), "test:\n\t@test ! -f fail.flag\n");
     execSync("git add . && git commit -qm baseline", { cwd: repo, stdio: "ignore" });
-    execSync("printf 'operator.ignored\\n' > .gitignore && git add .gitignore && git commit -qm ignore-rule", { cwd: repo, stdio: "ignore" });
+    execSync("printf 'operator.ignored\\ngenerated/\\n' > .gitignore && git add .gitignore && git commit -qm ignore-rule", { cwd: repo, stdio: "ignore" });
     const ignored = path.join(repo, "operator.ignored");
+    const externalRoot = fs.mkdtempSync(path.join(os.homedir(), ".nexus-issue11-boundary-"));
+    const externalSentinel = path.join(externalRoot, "outside.txt");
+    fs.writeFileSync(externalSentinel, "protected\n");
     const rootState = () => ({
       head: execSync("git rev-parse HEAD", { cwd: repo, encoding: "utf8" }).trim(),
       indexTree: execSync("git write-tree", { cwd: repo, encoding: "utf8" }).trim(),
@@ -461,20 +464,37 @@ error[E0308]: mismatched types
       status: execSync("git status --porcelain", { cwd: repo, encoding: "utf8" }),
     });
     let requests = 0;
-    let responseMode: "success" | "failure" | "incomplete" | "dirty-success" = "success";
+    let responseMode: "success" | "failure" | "incomplete" | "dirty-success" | "malformed" | "ignored" = "success";
     const server = http.createServer((req, res) => {
       if (req.url !== "/v1/chat/completions") { res.writeHead(404).end(); return; }
       requests++;
       let body = "";
       req.on("data", (chunk) => { body += chunk; });
       req.on("end", () => {
+        const completionCall = {
+          index: responseMode === "failure" ? 3 : 2,
+          id: "done",
+          type: "function",
+          function: {
+            name: "task_completed",
+            arguments: responseMode === "malformed" ? "{" : JSON.stringify({ summary: "Mutation task complete." }),
+          },
+        };
         const task = requests === 1 ? {
           content: "Apply and verify a small isolated change.",
-          tool_calls: [
+          tool_calls: responseMode === "ignored" ? [
+            { index: 0, id: "ignored-shell", type: "function", function: { name: "run_command", arguments: JSON.stringify({ command: "mkdir -p generated && printf artifact > generated/result.bin" }) } },
+            { index: 1, id: "done", type: "function", function: { name: "task_completed", arguments: JSON.stringify({ summary: "Mutation task complete." }) } },
+          ] : responseMode === "malformed" ? [
+            { index: 0, id: "write-bridge", type: "function", function: { name: "write_file", arguments: JSON.stringify({ path: "bridge-change-malformed.txt", content: "bridge change\n" }) } },
+            { index: 1, id: "write-shell", type: "function", function: { name: "run_command", arguments: JSON.stringify({ command: "make test" }) } },
+            { ...completionCall, index: 2 },
+          ] : [
             { index: 0, id: "write-bridge", type: "function", function: { name: "write_file", arguments: JSON.stringify({ path: `bridge-change-${responseMode}.txt`, content: "bridge change\n" }) } },
             { index: 1, id: "write-shell", type: "function", function: { name: "run_command", arguments: JSON.stringify({ command: `printf 'shell change\\n' > shell-change-${responseMode}.txt` }) } },
+            ...(responseMode === "success" ? [{ index: 2, id: "escape-shell", type: "function", function: { name: "run_command", arguments: JSON.stringify({ command: `printf escaped > ${JSON.stringify(externalSentinel)}` }) } }] : []),
             ...(responseMode === "failure" ? [{ index: 2, id: "fail-tests", type: "function", function: { name: "run_command", arguments: JSON.stringify({ command: "printf failed > fail.flag" }) } }] : []),
-            ...(responseMode === "incomplete" ? [] : [{ index: responseMode === "failure" ? 3 : 2, id: "done", type: "function", function: { name: "task_completed", arguments: JSON.stringify({ summary: "Mutation task complete." }) } }]),
+            ...(responseMode === "incomplete" ? [] : [{ ...completionCall, index: responseMode === "success" ? 3 : completionCall.index }]),
           ],
         } : { content: "Verification failed; changes remain isolated.", tool_calls: [] };
         const chunk = { choices: [{ delta: task }] };
@@ -505,11 +525,44 @@ error[E0308]: mismatched types
       const successful = createAgent();
       responseMode = "success";
       await successful.run("write through both mutation interfaces and verify");
+      const successState = {
+        active: successful.getActiveWorktree(),
+        verified: (successful as any).verifiedWorktreeCompletion,
+        rootDirty: successful.getWorktreeManager().rootHasChanges(),
+        rootStatus: execSync("git status --porcelain", { cwd: repo, encoding: "utf8" }),
+        ignored: successful.getActiveWorktree() ? successful.getWorktreeManager().hasIgnoredChanges(successful.getActiveWorktree()!.taskId) : false,
+      };
+      successful.shutdown();
+      assert.ok(!successState.active && successState.verified && !successState.rootDirty && !successState.ignored, JSON.stringify(successState));
+      assert.strictEqual(fs.readFileSync(externalSentinel, "utf8"), "protected\n", "shell absolute paths must not mutate outside the worktree");
+      assert.strictEqual(fs.readFileSync(path.join(repo, "base.txt"), "utf8"), "base\n", "shell path traversal must not mutate the original repository");
       assert.strictEqual(fs.existsSync(path.join(repo, "bridge-change-success.txt")), true);
       assert.strictEqual(fs.existsSync(path.join(repo, "shell-change-success.txt")), true);
       assert.strictEqual(successful.getActiveWorktree(), undefined, "verified explicit task completion merges and returns to root");
       assert.strictEqual(execSync("git status --porcelain", { cwd: repo, encoding: "utf8" }), "", "successful task merge leaves a clean root");
-      successful.shutdown();
+
+      const unsafeCompletionOutcomes: string[] = [];
+      for (const outcome of ["malformed", "ignored"] as const) {
+        responseMode = outcome;
+        requests = 0;
+        const agent = createAgent();
+        await agent.run(`exercise ${outcome} completion boundary`);
+        const active = agent.getActiveWorktree();
+        if (!active) unsafeCompletionOutcomes.push(`${outcome} completion discarded/merged the unresolved worktree`);
+        if (outcome === "ignored") {
+          if (!active || !fs.existsSync(path.join(active.worktreePath, "generated", "result.bin"))) unsafeCompletionOutcomes.push("ignored tool output was not retained");
+          if (fs.existsSync(path.join(repo, "generated", "result.bin"))) unsafeCompletionOutcomes.push("ignored tool output escaped into the root");
+          const refusedMerge = agent.mergeActiveWorktree();
+          if (refusedMerge.success || !agent.getActiveWorktree()) unsafeCompletionOutcomes.push("ignored output was accepted by explicit merge or its retained worktree was lost");
+        } else {
+          if (!active || !fs.existsSync(path.join(active.worktreePath, "bridge-change-malformed.txt"))) unsafeCompletionOutcomes.push("malformed completion lost the review worktree");
+          if (fs.existsSync(path.join(repo, "bridge-change-malformed.txt"))) unsafeCompletionOutcomes.push("malformed completion merged its changes");
+        }
+        if (active) assert.strictEqual(agent.discardActiveWorktree().success, true);
+        else for (const entry of agent.getWorktreeManager().listWorktrees()) agent.getWorktreeManager().discardWorktree(entry.taskId);
+        agent.shutdown();
+      }
+      assert.deepStrictEqual(unsafeCompletionOutcomes, [], "malformed completion and ignored outputs must remain recoverable and unmerged");
 
       fs.writeFileSync(path.join(repo, "staged.txt"), "staged operator state\n");
       execSync("git add staged.txt", { cwd: repo, stdio: "ignore" });
@@ -518,6 +571,7 @@ error[E0308]: mismatched types
       fs.writeFileSync(ignored, "ignored operator state\n");
       const before = rootState();
 
+      const repeatRunFailures: string[] = [];
       for (const outcome of ["failure", "incomplete"] as const) {
         responseMode = outcome;
         requests = 0;
@@ -528,12 +582,19 @@ error[E0308]: mismatched types
         assert.strictEqual(fs.existsSync(path.join(repo, `bridge-change-${outcome}.txt`)), false, "failed work remains isolated");
         assert.strictEqual(fs.existsSync(path.join(active!.worktreePath, `bridge-change-${outcome}.txt`)), true);
         assert.deepStrictEqual(rootState(), before);
+        const requestCountBeforeRepeat = requests;
+        let rejectedRetainedRun = false;
+        try { await agent.run("a retained worktree requires explicit resolution"); }
+        catch (error: any) { rejectedRetainedRun = /unresolved worktree/i.test(error?.message || ""); }
+        if (!rejectedRetainedRun) repeatRunFailures.push(`${outcome}: second run did not reject an unresolved worktree`);
+        if (requests !== requestCountBeforeRepeat) repeatRunFailures.push(`${outcome}: second run dispatched inference before resolution`);
         const discarded = agent.discardActiveWorktree();
         assert.strictEqual(discarded.success, true, "discard explicitly removes failed/incomplete work");
         assert.strictEqual(fs.existsSync(active!.worktreePath), false);
         assert.deepStrictEqual(rootState(), before);
         agent.shutdown();
       }
+      assert.deepStrictEqual(repeatRunFailures, [], "a retained worktree cannot be superseded by a later run");
 
       responseMode = "dirty-success";
       requests = 0;
@@ -549,6 +610,144 @@ error[E0308]: mismatched types
       server.closeAllConnections();
       await new Promise<void>((resolve) => server.close(() => resolve()));
       fs.rmSync(base, { recursive: true, force: true });
+      fs.rmSync(externalRoot, { recursive: true, force: true });
+    }
+  });
+
+  test("runTurn honors --worktree and refuses another run until retained work is resolved", async () => {
+    const repo = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-repl-worktree-"));
+    execSync("git init -q", { cwd: repo, stdio: "ignore" });
+    execSync('git config user.name "Nexus Test" && git config user.email "nexus@example.invalid"', { cwd: repo, stdio: "ignore" });
+    fs.writeFileSync(path.join(repo, "base.txt"), "base\n");
+    fs.writeFileSync(path.join(repo, "Makefile"), "test:\n\t@true\n");
+    execSync("git add . && git commit -qm baseline", { cwd: repo, stdio: "ignore" });
+    let requests = 0;
+    const server = http.createServer((req, res) => {
+      requests++;
+      let body = "";
+      req.on("data", (chunk) => { body += chunk; });
+      req.on("end", () => {
+        const response = { choices: [{ delta: { content: "write in isolation", tool_calls: [
+          { index: 0, id: "write", type: "function", function: { name: "write_file", arguments: JSON.stringify({ path: "repl-turn.txt", content: "isolated\n" }) } },
+        ] } }] };
+        res.writeHead(200, { "Content-Type": "text/event-stream" });
+        res.end(`data: ${JSON.stringify(response)}\n\ndata: [DONE]\n\n`);
+      });
+    });
+    let agent: AutonomousAgent | undefined;
+    try {
+      const port = await new Promise<number>((resolve) => server.listen(0, "127.0.0.1", () => resolve((server.address() as any).port)));
+      agent = new AutonomousAgent({ endpoint: `http://127.0.0.1:${port}/v1`, model: "test", maxSteps: 1, temperature: 0, workspace: repo, shell: "bash", worktree: true });
+      await agent.runTurn("write from an interactive turn");
+      const active = agent.getActiveWorktree();
+      const failures: string[] = [];
+      if (!active) failures.push("interactive runTurn did not establish a worktree");
+      if (fs.existsSync(path.join(repo, "repl-turn.txt"))) failures.push("interactive mutation reached the original workspace");
+      if (active && !fs.existsSync(path.join(active.worktreePath, "repl-turn.txt"))) failures.push("isolated worktree lacks the interactive write");
+      const count = requests;
+      let rejected = false;
+      try { await agent.runTurn("do not supersede retained work"); }
+      catch (error: any) { rejected = /unresolved worktree/i.test(error?.message || ""); }
+      if (!rejected) failures.push("second interactive turn did not reject retained work");
+      if (requests !== count) failures.push("second interactive turn dispatched inference before resolution");
+      if (agent.getActiveWorktree()) assert.strictEqual(agent.discardActiveWorktree().success, true);
+      else for (const entry of agent.getWorktreeManager().listWorktrees()) agent.getWorktreeManager().discardWorktree(entry.taskId);
+      if (fs.existsSync(path.join(repo, "repl-turn.txt"))) failures.push("discard left the original root mutated");
+      assert.deepStrictEqual(failures, []);
+    } finally {
+      if (agent?.getActiveWorktree()) agent.discardActiveWorktree();
+      agent?.shutdown();
+      server.closeAllConnections();
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+      fs.rmSync(repo, { recursive: true, force: true });
+    }
+  });
+
+  test("setWorkspace rebinds worktree operations to the effective repository", async () => {
+    const base = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-worktree-workspace-switch-"));
+    const repos = [path.join(base, "original"), path.join(base, "selected")];
+    for (const repo of repos) {
+      fs.mkdirSync(repo);
+      execSync("git init -q", { cwd: repo, stdio: "ignore" });
+      execSync('git config user.name "Nexus Test" && git config user.email "nexus@example.invalid"', { cwd: repo, stdio: "ignore" });
+      fs.writeFileSync(path.join(repo, "base.txt"), "base\n");
+      fs.writeFileSync(path.join(repo, "Makefile"), "test:\n\t@true\n");
+      execSync("git add . && git commit -qm baseline", { cwd: repo, stdio: "ignore" });
+    }
+    let requests = 0;
+    const server = http.createServer((req, res) => {
+      requests++;
+      let body = "";
+      req.on("data", (chunk) => { body += chunk; });
+      req.on("end", () => {
+        const response = { choices: [{ delta: { content: "write to selected workspace", tool_calls: [
+          { index: 0, id: "write", type: "function", function: { name: "write_file", arguments: JSON.stringify({ path: "selected-change.txt", content: "selected\n" }) } },
+          { index: 1, id: "complete", type: "function", function: { name: "task_completed", arguments: JSON.stringify({ summary: "Verified selected-workspace change." }) } },
+        ] } }] };
+        res.writeHead(200, { "Content-Type": "text/event-stream" });
+        res.end(`data: ${JSON.stringify(response)}\n\ndata: [DONE]\n\n`);
+      });
+    });
+    let agent: AutonomousAgent | undefined;
+    try {
+      const port = await new Promise<number>((resolve) => server.listen(0, "127.0.0.1", () => resolve((server.address() as any).port)));
+      agent = new AutonomousAgent({ endpoint: `http://127.0.0.1:${port}/v1`, model: "test", maxSteps: 2, temperature: 0, workspace: repos[0], shell: "bash", worktree: true });
+      agent.setWorkspace(repos[1]);
+      await agent.run("write in the selected workspace");
+      assert.strictEqual(requests, 1);
+      assert.strictEqual(fs.existsSync(path.join(repos[0], "selected-change.txt")), false, "the constructor-time repository must not receive the change");
+      assert.strictEqual(fs.existsSync(path.join(repos[1], "selected-change.txt")), true, "the selected workspace receives the verified change");
+      assert.strictEqual(agent.getActiveWorktree(), undefined);
+    } finally {
+      if (agent?.getActiveWorktree()) agent.discardActiveWorktree();
+      agent?.shutdown();
+      server.closeAllConnections();
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+      fs.rmSync(base, { recursive: true, force: true });
+    }
+  });
+
+  test("task_completed retains mutations when no verification command is available", async () => {
+    const repo = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-worktree-no-tests-"));
+    execSync("git init -q", { cwd: repo, stdio: "ignore" });
+    execSync('git config user.name "Nexus Test" && git config user.email "nexus@example.invalid"', { cwd: repo, stdio: "ignore" });
+    fs.writeFileSync(path.join(repo, "base.txt"), "base\n");
+    execSync("git add . && git commit -qm baseline", { cwd: repo, stdio: "ignore" });
+    const { detectTestCommand } = await import("../src/tester.js");
+    assert.notStrictEqual(detectTestCommand(repo), "none", "the current detector uses a failing npm test fallback rather than reporting none");
+
+    let requests = 0;
+    const server = http.createServer((req, res) => {
+      requests++;
+      let body = "";
+      req.on("data", (chunk) => { body += chunk; });
+      req.on("end", () => {
+        const toolCalls = requests === 1 ? [
+          { index: 0, id: "write", type: "function", function: { name: "write_file", arguments: JSON.stringify({ path: "unverified.txt", content: "retain me\n" }) } },
+          { index: 1, id: "complete", type: "function", function: { name: "task_completed", arguments: JSON.stringify({ summary: "Claimed complete without a test suite." }) } },
+        ] : [];
+        res.writeHead(200, { "Content-Type": "text/event-stream" });
+        res.end(`data: ${JSON.stringify({ choices: [{ delta: { content: "Attempt completion.", tool_calls: toolCalls } }] })}\n\ndata: [DONE]\n\n`);
+      });
+    });
+    let agent: AutonomousAgent | undefined;
+    try {
+      const port = await new Promise<number>((resolve) => server.listen(0, "127.0.0.1", () => resolve((server.address() as any).port)));
+      agent = new AutonomousAgent({ endpoint: `http://127.0.0.1:${port}/v1`, model: "test", maxSteps: 2, temperature: 0, workspace: repo, shell: "bash", worktree: true });
+      await agent.run("do not merge an unverified change");
+      const active = agent.getActiveWorktree();
+      assert.ok(active, "missing verification retains the speculative worktree");
+      assert.strictEqual((agent as any).verifiedWorktreeCompletion, false);
+      assert.strictEqual(fs.existsSync(path.join(active!.worktreePath, "unverified.txt")), true);
+      assert.strictEqual(fs.existsSync(path.join(repo, "unverified.txt")), false);
+      assert.strictEqual(agent.discardActiveWorktree().success, true);
+      assert.strictEqual(requests, 2);
+    } finally {
+      if (agent?.getActiveWorktree()) agent.discardActiveWorktree();
+      agent?.shutdown();
+      server.closeAllConnections();
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+      fs.rmSync(repo, { recursive: true, force: true });
     }
   });
 
@@ -643,6 +842,34 @@ error[E0308]: mismatched types
       });
       assert.strictEqual(resCmd.success, false);
       assert.ok(resCmd.error?.includes("Read-only mode violation"));
+
+      const mutatedPaths: string[] = [];
+      for (const [command, target] of [
+        ["echo payload > echo-redirection.txt", "echo-redirection.txt"],
+        ["ls .; echo payload > compound-redirection.txt", "compound-redirection.txt"],
+        ["cat /etc/hosts > cat-redirection.txt", "cat-redirection.txt"],
+        ["echo payload | tee tee-redirection.txt", "tee-redirection.txt"],
+        ["git status && echo payload > chained-redirection.txt", "chained-redirection.txt"],
+      ]) {
+        await bridge.executeTool("run_command", { command });
+        if (fs.existsSync(path.join(tmpDir, target))) mutatedPaths.push(target);
+      }
+      assert.deepStrictEqual(mutatedPaths, [], "read-only shell cannot mutate through redirection or compound syntax");
+    } finally {
+      bridge.shutdown();
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  test("RustCoreBridge fails closed when an isolated worktree shell loses its sandbox", async () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "nexus_required_sandbox_"));
+    const { RustCoreBridge } = await import("../src/tools.js");
+    const bridge = new RustCoreBridge(tmpDir, "bash", undefined, false, false, "none", true);
+    try {
+      const result = await bridge.executeTool("run_command", { command: "echo escaped > fallback-mutation.txt" });
+      assert.strictEqual(result.success, false);
+      assert.ok(result.error?.includes("Worktree isolation violation"));
+      assert.strictEqual(fs.existsSync(path.join(tmpDir, "fallback-mutation.txt")), false);
     } finally {
       bridge.shutdown();
       fs.rmSync(tmpDir, { recursive: true, force: true });

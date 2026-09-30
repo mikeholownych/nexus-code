@@ -859,6 +859,7 @@ export class RustCoreBridge {
   private dryRun: boolean = false;
   private readOnly: boolean = false;
   private sandbox: boolean | string = false;
+  private requireSandbox: boolean = false;
   private securityManager: SecurityManager;
 
   constructor(
@@ -867,7 +868,8 @@ export class RustCoreBridge {
     customBinaryPath?: string,
     dryRun: boolean = false,
     readOnly: boolean = false,
-    sandbox: boolean | string = false
+    sandbox: boolean | string = false,
+    requireSandbox: boolean = false
   ) {
     this.workspace = path.resolve(workspace);
     this.defaultShell = defaultShell;
@@ -875,6 +877,7 @@ export class RustCoreBridge {
     this.dryRun = dryRun;
     this.readOnly = readOnly;
     this.sandbox = sandbox;
+    this.requireSandbox = requireSandbox;
     this.securityManager = new SecurityManager(this.workspace);
 
     if (customBinaryPath && fs.existsSync(customBinaryPath)) {
@@ -1414,13 +1417,23 @@ export class RustCoreBridge {
       if (!args.shell) {
         args.shell = this.defaultShell;
       }
-      if (this.sandbox) {
+      if (this.sandbox || this.readOnly || this.requireSandbox) {
         const { wrapSandboxedCommand } = await import("./sandbox.js");
-        const mode = typeof this.sandbox === "string" ? (this.sandbox as any) : "auto";
+        const configuredMode = typeof this.sandbox === "string" ? (this.sandbox as any) : "auto";
+        const mode = this.readOnly && configuredMode === "none" ? "auto" : configuredMode;
         const sandboxed = wrapSandboxedCommand(args.command || "", this.workspace, {
           mode,
           shell: args.shell,
+          readOnlyHost: this.readOnly,
+          network: this.readOnly ? false : undefined,
         });
+        if ((this.readOnly || this.requireSandbox) && !sandboxed.sandboxed) {
+          return {
+            success: false,
+            output: "",
+            error: `${this.readOnly ? "Read-only mode" : "Worktree isolation"} violation: filesystem-isolated shell execution is unavailable. ${sandboxed.warning || "No supported sandbox engine is available."}`,
+          };
+        }
         args.command = sandboxed.command;
       }
     }
@@ -1439,4 +1452,3 @@ export class RustCoreBridge {
     return this.executeViaSpawnSync(toolName, args);
   }
 }
-
