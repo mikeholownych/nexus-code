@@ -233,7 +233,7 @@ export class AutonomousAgent {
         const toolResponse = this.config.toolResponseReserveTokens ?? Math.min(4096, Math.floor(limit / 8));
         return { completion, toolResponse, total: completion + toolResponse };
     }
-    summarizeDiscardedHistory(messages, detailBudgetChars) {
+    summarizeDiscardedHistory(messages, _detailBudgetChars) {
         const filesRead = new Set();
         const filesModified = new Set();
         const commandsExecuted = [];
@@ -241,11 +241,14 @@ export class AutonomousAgent {
         const priorTasks = [];
         const findings = [];
         const durableNotes = [];
-        const usefulLine = /error|fail|pass|test|warning|created|modified|found|decision|result|status|function|class|interface|export|todo|fix|implement|unresolved|pending|blocked|open item/i;
+        const durableNoteKeys = new Set();
+        const usefulLine = /error|fail|pass|test|warning|created|modified|found|finding|decision|result|status|function|class|interface|export|todo|fix|implement|unresolved|pending|blocked|open item|constraint|risk|identified|bottleneck/i;
         const addDurableNote = (note) => {
-            const clean = note.replace(/\s+/g, " ").trim().slice(0, 240);
-            if (clean && !durableNotes.includes(clean))
-                durableNotes.push(clean);
+            const key = note.replace(/\s+/g, " ").trim();
+            if (key && !durableNoteKeys.has(key)) {
+                durableNoteKeys.add(key);
+                durableNotes.push(note.trim());
+            }
         };
         for (const message of messages) {
             if (message.role === "system" && typeof message.content === "string") {
@@ -283,7 +286,7 @@ export class AutonomousAgent {
             if (message.role === "user" && typeof message.content === "string") {
                 const task = message.content.replace(/\s+/g, " ").trim();
                 if (task && !priorTasks.includes(task))
-                    priorTasks.push(task.slice(0, 400));
+                    priorTasks.push(task);
             }
             if (message.role === "assistant" && message.tool_calls) {
                 for (const call of message.tool_calls) {
@@ -300,53 +303,42 @@ export class AutonomousAgent {
                     if (["write_file", "edit_file", "patch_file"].includes(name) && args.path)
                         filesModified.add(String(args.path));
                     if (name === "run_command" && args.command)
-                        commandsExecuted.push(String(args.command).slice(0, 240));
-                    if (findings.length < 18)
-                        findings.push(`Earlier tool call: ${name}${args.path ? ` ${args.path}` : ""}`);
+                        commandsExecuted.push(String(args.command));
                 }
             }
             if (message.role === "assistant" && typeof message.content === "string") {
                 const thought = message.content.match(/<thought>([\s\S]*?)<\/thought>/)?.[1]?.trim();
-                if (thought) {
-                    const sentence = thought.split(/\r?\n/)[0].slice(0, 220);
-                    if (!decisions.includes(sentence) && decisions.length < 12)
+                if (thought && usefulLine.test(thought)) {
+                    const sentence = thought.split(/\r?\n/)[0];
+                    if (!decisions.includes(sentence))
                         decisions.push(sentence);
                 }
                 const content = message.content.replace(/<thought>([\s\S]*?)<\/thought>/g, "$1");
                 for (const line of content.split(/\r?\n/)) {
                     const clean = line.replace(/\s+/g, " ").trim();
-                    if (clean && usefulLine.test(clean) && decisions.length < 12 && !decisions.includes(clean))
-                        decisions.push(clean.slice(0, 220));
+                    if (clean && usefulLine.test(clean) && !decisions.includes(clean))
+                        decisions.push(clean);
                 }
             }
             if (message.role === "tool" && typeof message.content === "string") {
                 const lines = message.content.split(/\r?\n/).map((line) => line.replace(/\s+/g, " ").trim()).filter(Boolean);
-                const selected = lines.filter((line) => usefulLine.test(line)).slice(0, 2);
-                if (selected.length === 0 && lines.length > 0)
-                    selected.push(lines[0]);
+                const selected = lines.filter((line) => usefulLine.test(line));
                 for (const line of selected) {
-                    if (findings.length >= 24)
-                        break;
-                    findings.push(`Earlier ${message.name || "tool"} result: ${line.slice(0, 220)}`);
+                    findings.push(`Earlier ${message.name || "tool"} result: ${line}`);
                 }
             }
         }
         const freshSections = [
-            ["Earlier task requests", priorTasks.slice(-3)],
-            ["Modified files", Array.from(filesModified).slice(-16)],
-            ["Inspected files", Array.from(filesRead).slice(-16)],
-            ["Recent commands", commandsExecuted.slice(-4)],
-            ["Findings and decisions", decisions.slice(-8)],
-            ["Earlier interaction notes", findings.slice(-12)],
+            ["Earlier task requests", priorTasks],
+            ["Modified files", Array.from(filesModified)],
+            ["Inspected files", Array.from(filesRead)],
+            ["Recent commands", commandsExecuted],
+            ["Findings and decisions", decisions],
+            ["Earlier interaction notes", findings],
         ];
-        let freshCharacters = 0;
         for (const [section, entries] of freshSections) {
             for (const entry of entries) {
-                const note = `${section}: ${entry}`;
-                if (freshCharacters + note.length > detailBudgetChars)
-                    continue;
-                addDurableNote(note);
-                freshCharacters += note.length;
+                addDurableNote(`${section}: ${entry}`);
             }
         }
         const sections = ["[Structured Context Memory - durable task state]"];

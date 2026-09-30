@@ -616,6 +616,62 @@ error[E0308]: mismatched types
     }
   });
 
+  test("compaction preserves every distinct durable finding and deduplicates repeats", () => {
+    const agent = new AutonomousAgent({
+      endpoint: "http://localhost:1234/v1",
+      model: "test-model",
+      workspace: process.cwd(),
+      maxSteps: 1,
+      shell: "bash",
+    });
+    const findingMarkers = Array.from({ length: 40 }, (_, index) => `DURABLE_FINDING_${String(index).padStart(2, "0")}`);
+    agent.setActivePlan([{ name: "Superseded phase", status: "in_progress", detail: "replace this plan" }]);
+    try {
+      let history: any[] = [
+        agent.getMessages()[0],
+        { role: "user", content: "Preserve every material finding while completing the task." },
+        ...findingMarkers.map((marker) => ({ role: "tool", name: "read_file", tool_call_id: marker, content: `${marker}: unique verified result.` })),
+        { role: "tool", name: "read_file", tool_call_id: "ordinary", content: "Routine payload without a durable signal." },
+        { role: "user", content: "Continue the same task." },
+      ];
+      history = (agent as any).compactedMessages(history, 0, 6_000);
+      let summary = String(history.find((message) => message.role === "system" && message !== agent.getMessages()[0])?.content || "");
+      for (const marker of findingMarkers) assert.ok(summary.includes(marker), `distinct finding was lost: ${marker}`);
+      assert.ok(!summary.includes("Routine payload without a durable signal"), "ordinary tool output remains discardable");
+      assert.ok(summary.includes("Superseded phase"));
+
+      agent.setActivePlan([{ name: "Current phase", status: "in_progress", detail: "current plan state" }]);
+      const nextMarker = "DURABLE_FINDING_40";
+      history = [
+        ...history,
+        { role: "tool", name: "read_file", tool_call_id: "new", content: `${nextMarker}: newly discovered compatibility constraint.` },
+        { role: "user", content: "Continue the same task." },
+      ];
+      history = (agent as any).compactedMessages(history, 0, 6_000);
+      summary = String(history.filter((message) => message.role === "system")[1]?.content || "");
+      assert.strictEqual(history.filter((message) => message.role === "system").length, 2, "retain the original system prompt plus one canonical durable summary");
+      assert.ok(summary.includes(nextMarker), "a newly discovered durable finding must be carried forward");
+      assert.ok(summary.includes("Current phase"));
+      assert.ok(!summary.includes("Superseded phase"), "the current plan must replace the superseded plan");
+
+      const stableSummary = summary;
+      for (let cycle = 0; cycle < 6; cycle++) {
+        history = [
+          ...history,
+          { role: "tool", name: "read_file", tool_call_id: `duplicate-${cycle}`, content: `${nextMarker}: newly discovered compatibility constraint.` },
+          { role: "user", content: "Continue the same task." },
+        ];
+        history = (agent as any).compactedMessages(history, 0, 6_000);
+        summary = String(history.filter((message) => message.role === "system")[1]?.content || "");
+        for (const marker of [...findingMarkers, nextMarker]) assert.ok(summary.includes(marker), `finding disappeared after repeated compaction: ${marker}`);
+        assert.strictEqual(summary.split(nextMarker).length - 1, 1, "duplicate findings must remain represented once");
+      }
+      assert.strictEqual(summary, stableSummary, "repeated equivalent findings and task state must not grow the canonical summary");
+    } finally {
+      agent.shutdown();
+    }
+  });
+
   test("long-running tool use keeps every dispatched request within budget", async () => {
     const limit = 65_536;
     const completionReserve = 8_192;
@@ -695,6 +751,40 @@ error[E0308]: mismatched types
         (error: Error) => error instanceof ContextBudgetError && /Context budget exceeded/.test(error.message),
       );
       assert.strictEqual(dispatched, false, "an unsafe prompt must never reach the inference client");
+    } finally {
+      agent.shutdown();
+    }
+  });
+
+  test("durable-state overflow refuses locally without provider dispatch", async () => {
+    const agent = new AutonomousAgent({
+      endpoint: "http://localhost:1234/v1",
+      model: "test-model",
+      workspace: process.cwd(),
+      maxSteps: 1,
+      shell: "bash",
+      contextLimit: 65_536,
+      completionReserveTokens: 8_192,
+      toolResponseReserveTokens: 4_096,
+    });
+    let dispatchCount = 0;
+    (agent as any).client = { chatCompletionStream: async () => { dispatchCount++; return { role: "assistant", content: "unexpected" }; } };
+    agent.setMessages([
+      agent.getMessages()[0],
+      { role: "user", content: "Preserve every required finding before continuing." },
+      ...Array.from({ length: 400 }, (_, index) => ({
+        role: "tool",
+        name: "read_file",
+        tool_call_id: `overflow-${index}`,
+        content: `UNRESOLVED FINDING ${index}: ${"this distinct required durable fact must remain available ".repeat(80)}`,
+      })),
+    ]);
+    try {
+      await assert.rejects(
+        agent.runTurn("Continue without losing any required findings."),
+        (error: Error) => error instanceof ContextBudgetError && /Context budget exceeded/.test(error.message),
+      );
+      assert.strictEqual(dispatchCount, 0, "required durable state that cannot fit must not reach the provider");
     } finally {
       agent.shutdown();
     }
