@@ -32,6 +32,21 @@ To run a one-off objective and exit automatically when verified:
 nexus run "Refactor the authentication handler to support JWT rotation and add unit tests"
 ```
 
+### Viewing Tool Audit Logs
+To inspect recent tool executions, filter errors, or track latency:
+```bash
+nexus audit --limit 20
+nexus audit --errors
+nexus audit --tool run_command
+```
+
+### Exposing Nexus Tools via Model Context Protocol (MCP)
+To expose Nexus Code's native Rust tools to external LLM clients (Claude Desktop, Cursor, Zed):
+```bash
+nexus serve-mcp --workspace /path/to/project
+```
+See [MCP_GUIDE.md](file:///home/mike/nexus-code/docs/MCP_GUIDE.md) for full configuration details.
+
 ---
 
 ## 2. Interactive REPL / TUI Features
@@ -59,10 +74,13 @@ nexus (engineering/b0) my-app ❯ !npm test
 | `/status` | View active model, endpoint, shell, and git badge |
 | `/plan` | Render the current multi-phase execution plan |
 | `/checkpoint [name]` | Create a safe rollback snapshot of the workspace |
+| `/checkpoint diff <id>` | View file diff between current workspace and a checkpoint |
+| `/checkpoint prune [keep]` | Prune older checkpoints, retaining the latest N (default: 5) |
 | `/checkpoints` | List all saved workspace rollback snapshots |
 | `/undo` | Roll back workspace changes to the last checkpoint |
 | `/diff` | Display colored syntax-highlighted git diff |
 | `/git` | Show uncommitted files and git status |
+| `/audit [count]` | Inspect visual tool execution audit trail (recent N entries) |
 | `/compact` | Condense earlier conversation messages to preserve token budget |
 | `/mode [auto\|review]` | Toggle autonomous execution vs human approval before edits |
 | `/sessions` | List saved past sessions |
@@ -107,4 +125,5 @@ Nexus Code provides high-performance tools executed via compiled native 64-bit R
 - **Workspace Path Jail**: Restricts file operations to workspace directory; prevents path traversal (`../`) or accessing `/etc/shadow`, `/root`, `~/.ssh`.
 - **Dangerous Command Guard**: Blocks destructive commands (`rm -rf /`, `mkfs`, raw device writes, fork bombs) from executing.
 - **Secret Redaction**: Redacts Bearer tokens, private keys, and passwords before printing or logging.
-- **Audit Logging**: Every tool execution is recorded with timestamps, parameters, duration, and status in `~/.nexus/audit.log`.
+- **Audit Logging**: Every tool execution is recorded with timestamps, parameters, duration, and status in `~/.nexus/audit.log`. Visual inspection available via `/audit` and `nexus audit`.
+- **Workspace Snapshots & Rollback**: Automatic Git-backed and filesystem snapshot rollback. Inspect diffs anytime with `/checkpoint diff <id>`, and manage disk footprint with `/checkpoint prune [keep]`.

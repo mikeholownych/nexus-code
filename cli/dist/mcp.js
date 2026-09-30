@@ -2,6 +2,7 @@ import { spawn } from "node:child_process";
 import * as path from "node:path";
 import * as fs from "node:fs";
 import * as os from "node:os";
+import { HARNESS_TOOLS, RustCoreBridge } from "./tools.js";
 class McpConnection {
     serverName;
     config;
@@ -297,5 +298,153 @@ export class McpClientManager {
         }
         this.connections.clear();
         this.toolToServerMap.clear();
+    }
+}
+export class McpServer {
+    bridge;
+    workspace;
+    running = false;
+    constructor(workspace, defaultShell = "bash") {
+        this.workspace = path.resolve(workspace);
+        this.bridge = new RustCoreBridge(this.workspace, defaultShell);
+    }
+    async startStdio() {
+        this.running = true;
+        const stdin = process.stdin;
+        const stdout = process.stdout;
+        let buffer = "";
+        stdin.setEncoding("utf-8");
+        stdin.on("data", async (chunk) => {
+            buffer += chunk;
+            const lines = buffer.split("\n");
+            buffer = lines.pop() || "";
+            for (const line of lines) {
+                const trimmed = line.trim();
+                if (!trimmed)
+                    continue;
+                try {
+                    const req = JSON.parse(trimmed);
+                    const res = await this.handleMessage(req);
+                    if (res) {
+                        stdout.write(JSON.stringify(res) + "\n");
+                    }
+                }
+                catch (err) {
+                    stdout.write(JSON.stringify({
+                        jsonrpc: "2.0",
+                        id: null,
+                        error: { code: -32700, message: `Parse error: ${err.message}` },
+                    }) + "\n");
+                }
+            }
+        });
+        stdin.on("end", () => {
+            this.running = false;
+            setTimeout(() => {
+                this.shutdown();
+            }, 200);
+        });
+    }
+    async handleMessage(req) {
+        if (!req || typeof req !== "object")
+            return null;
+        const id = req.id;
+        const method = req.method;
+        // Handle notifications (no response needed if no id)
+        if (method === "notifications/initialized") {
+            return null;
+        }
+        if (method === "initialize") {
+            return {
+                jsonrpc: "2.0",
+                id,
+                result: {
+                    protocolVersion: "2024-11-05",
+                    capabilities: {
+                        tools: {},
+                    },
+                    serverInfo: {
+                        name: "nexus-code",
+                        version: "1.0.0",
+                    },
+                },
+            };
+        }
+        if (method === "ping") {
+            return {
+                jsonrpc: "2.0",
+                id,
+                result: {},
+            };
+        }
+        if (method === "tools/list") {
+            // Expose all available tools from HARNESS_TOOLS
+            const tools = HARNESS_TOOLS
+                .filter((t) => t.function.name !== "spawn_subagent" && t.function.name !== "activate_skill")
+                .map((t) => ({
+                name: t.function.name,
+                description: t.function.description,
+                inputSchema: t.function.parameters,
+            }));
+            return {
+                jsonrpc: "2.0",
+                id,
+                result: {
+                    tools,
+                },
+            };
+        }
+        if (method === "tools/call") {
+            const toolName = req.params?.name;
+            const args = req.params?.arguments || {};
+            if (!toolName) {
+                return {
+                    jsonrpc: "2.0",
+                    id,
+                    error: { code: -32602, message: "Missing tool name in tools/call" },
+                };
+            }
+            const execResult = await this.bridge.executeTool(toolName, args);
+            if (execResult.success) {
+                return {
+                    jsonrpc: "2.0",
+                    id,
+                    result: {
+                        content: [
+                            {
+                                type: "text",
+                                text: execResult.output,
+                            },
+                        ],
+                        isError: false,
+                    },
+                };
+            }
+            else {
+                return {
+                    jsonrpc: "2.0",
+                    id,
+                    result: {
+                        content: [
+                            {
+                                type: "text",
+                                text: execResult.error || "Tool execution failed",
+                            },
+                        ],
+                        isError: true,
+                    },
+                };
+            }
+        }
+        // Default: method not found
+        return {
+            jsonrpc: "2.0",
+            id,
+            error: { code: -32601, message: `Method not found: ${method}` },
+        };
+    }
+    shutdown() {
+        this.running = false;
+        this.bridge.shutdown();
     }
 }

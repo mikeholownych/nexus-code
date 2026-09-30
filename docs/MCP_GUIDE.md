@@ -75,3 +75,31 @@ Type `/mcp` at the REPL prompt:
 nexus (engineering/b0) my-app ❯ /mcp
 ```
 All discovered tools are immediately accessible to both the user and the autonomous model.
+
+---
+
+## 4. Serving Nexus Code as an MCP Server (`serve-mcp`)
+
+Nexus Code can also operate as a high-performance **MCP Server**, exposing its Rust-accelerated software engineering tools to external AI environments such as Claude Desktop, Cursor, Zed, or Antigravity:
+
+```bash
+harness serve-mcp --workspace /path/to/project
+```
+
+### Client Configuration (Claude Desktop, Cursor, Zed)
+
+Add Nexus Code to your external assistant's MCP configuration file:
+
+```json
+{
+  "mcpServers": {
+    "nexus-code": {
+      "command": "harness",
+      "args": ["serve-mcp", "--workspace", "/path/to/project"]
+    }
+  }
+}
+```
+
+External clients immediately gain access to Nexus Code's complete native tool suite (`file_tree`, `batch_read`, `file_info`, `search_code`, `patch_file`, `edit_file`, `run_command`) with workspace jail security and sub-millisecond Rust acceleration.
+

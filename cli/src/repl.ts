@@ -131,10 +131,12 @@ export class InteractiveRepl {
     console.log(`  ${pc.bold(pc.yellow("/skill <name>"))}        View specialized skill instructions`);
     console.log(`  ${pc.bold(pc.yellow("/mcp"))}                List connected MCP servers and external tools`);
     console.log(`  ${pc.bold(pc.yellow("/plugins"))}            List loaded custom plugins and lifecycle hooks`);
-    console.log(`  ${pc.bold(pc.yellow("/plan"))}               Show active execution plan and milestones`);
     console.log(`  ${pc.bold(pc.yellow("/checkpoint [name]"))}   Save rollback snapshot of current workspace`);
+    console.log(`  ${pc.bold(pc.yellow("/checkpoint diff <id>"))} Inspect diff of a checkpoint vs current or another`);
+    console.log(`  ${pc.bold(pc.yellow("/checkpoint prune [n]"))} Prune old checkpoints beyond retention limit`);
     console.log(`  ${pc.bold(pc.yellow("/checkpoints"))}         List all saved workspace snapshots`);
     console.log(`  ${pc.bold(pc.yellow("/undo"))}                Rollback workspace changes to last checkpoint`);
+    console.log(`  ${pc.bold(pc.yellow("/audit [count]"))}       View recent tool execution history and metrics`);
     console.log(`  ${pc.bold(pc.yellow("/export [md|json]"))}    Export session transcript to file in workspace`);
     console.log(`  ${pc.bold(pc.yellow("/tokens"))}             Show context message count and token usage`);
     console.log(`  ${pc.bold(pc.yellow("/init"))}               Scaffold AGENTS.md rules file in workspace`);
@@ -192,7 +194,7 @@ export class InteractiveRepl {
           "/help", "/status", "/clear", "/reset", "/compact", "/mode",
           "/diff", "/git", "/sessions", "/save", "/resume", "/skills",
           "/skill", "/mcp", "/plugins", "/plan", "/checkpoint",
-          "/checkpoints", "/undo", "/export", "/tokens", "/init",
+          "/checkpoints", "/undo", "/audit", "/export", "/tokens", "/init",
           "/model", "/shell", "/cd", "/history", "/exit", "/quit"
         ];
         const trimmed = line.trim();
@@ -488,8 +490,31 @@ export class InteractiveRepl {
             }
             continue;
           } else if (cmd === "checkpoint") {
-            const cp = this.checkpointManager.createCheckpoint(arg || undefined);
-            console.log(pc.green(`✔ Checkpoint saved: ${pc.bold(cp.name)} (${cp.id})\n`));
+            const subArgs = arg.trim().split(/\s+/).filter(Boolean);
+            const subCmd = subArgs[0]?.toLowerCase();
+            if (subCmd === "diff") {
+              const cpId = subArgs[1];
+              if (!cpId) {
+                console.log("Usage: /checkpoint diff <checkpoint_id> [base_checkpoint_id]\n");
+              } else {
+                const baseId = subArgs[2];
+                const res = this.checkpointManager.getDiff(cpId, baseId);
+                if (res.success) {
+                  console.log(pc.bold(pc.white(`\nCheckpoint Diff (${cpId}${baseId ? ` vs ${baseId}` : " vs current"}):`)));
+                  this.agent.getUi().renderDiff(res.diff);
+                } else {
+                  console.log(pc.red(`Diff error: ${res.error}\n`));
+                }
+              }
+            } else if (subCmd === "prune") {
+              const keepCount = subArgs[1] ? parseInt(subArgs[1], 10) : 20;
+              const res = this.checkpointManager.pruneCheckpoints(keepCount);
+              console.log(pc.green(`✔ ${res.message}\n`));
+            } else {
+              const cpName = arg ? arg : undefined;
+              const cp = this.checkpointManager.createCheckpoint(cpName);
+              console.log(pc.green(`✔ Checkpoint saved: ${pc.bold(cp.name)} (${cp.id})\n`));
+            }
             continue;
           } else if (cmd === "checkpoints") {
             const cps = this.checkpointManager.listCheckpoints();
@@ -500,7 +525,7 @@ export class InteractiveRepl {
               cps.forEach((cp, idx) => {
                 console.log(`  ${idx + 1}. ${pc.cyan(cp.id)} - ${pc.bold(cp.name)} ${pc.gray(`(${cp.timestamp})`)}`);
               });
-              console.log();
+              console.log(pc.dim("\nUse '/checkpoint diff <id>' to inspect changes, or '/undo' to roll back.\n"));
             }
             continue;
           } else if (cmd === "undo") {
@@ -509,6 +534,36 @@ export class InteractiveRepl {
               console.log(pc.green(`✔ ${res.message}\n`));
             } else {
               console.log(pc.red(`✖ ${res.message}\n`));
+            }
+            continue;
+          } else if (cmd === "audit") {
+            const auditFile = path.join(os.homedir(), ".nexus", "audit.log");
+            if (!fs.existsSync(auditFile)) {
+              console.log(pc.dim("No audit records found in ~/.nexus/audit.log\n"));
+            } else {
+              const limit = arg ? parseInt(arg, 10) : 15;
+              try {
+                const raw = fs.readFileSync(auditFile, "utf-8");
+                const lines = raw.trim().split("\n").filter(Boolean);
+                const records = lines.slice(-limit).map((l) => {
+                  try { return JSON.parse(l); } catch { return null; }
+                }).filter(Boolean);
+
+                console.log(pc.bold(pc.cyan(`\n=== Recent Tool Execution Audit Log (last ${records.length}) ===\n`)));
+                for (const r of records) {
+                  const status = r.success ? pc.green("PASS") : pc.red("FAIL");
+                  const time = pc.gray(r.timestamp?.slice(11, 19) || "");
+                  const dur = pc.yellow(`${r.duration_ms || 0}ms`.padStart(6));
+                  const tool = pc.bold(pc.cyan(r.tool.padEnd(16)));
+                  console.log(`[${time}] [${status}] ${tool} (${dur})`);
+                  if (r.error) {
+                    console.log(`  ${pc.red("Error:")} ${r.error}`);
+                  }
+                }
+                console.log();
+              } catch (e: any) {
+                console.log(pc.red(`Failed to read audit log: ${e.message}\n`));
+              }
             }
             continue;
           } else if (cmd === "export") {

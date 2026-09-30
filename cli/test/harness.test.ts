@@ -83,4 +83,100 @@ describe("Nexus Code Test Suite", () => {
       fs.rmSync(tmpDir, { recursive: true, force: true });
     }
   });
+
+  test("RustCoreBridge executes tool via persistent RPC daemon", async () => {
+    const { RustCoreBridge } = await import("../src/tools.js");
+    const bridge = new RustCoreBridge(process.cwd());
+    try {
+      const res = await bridge.executeTool("file_info", { path: "package.json" });
+      assert.strictEqual(res.success, true);
+      const parsed = JSON.parse(res.output);
+      assert.strictEqual(parsed.exists, true);
+      assert.strictEqual(parsed.path, "package.json");
+    } finally {
+      bridge.shutdown();
+    }
+  });
+
+  test("RustCoreBridge handles concurrent parallel tool calls", async () => {
+    const { RustCoreBridge } = await import("../src/tools.js");
+    const bridge = new RustCoreBridge(process.cwd());
+    try {
+      const results = await Promise.all([
+        bridge.executeTool("file_info", { path: "package.json" }),
+        bridge.executeTool("file_info", { path: "tsconfig.json" }),
+        bridge.executeTool("file_tree", { max_depth: 1 }),
+      ]);
+      assert.strictEqual(results.length, 3);
+      assert.ok(results.every((r) => r.success));
+    } finally {
+      bridge.shutdown();
+    }
+  });
+
+  test("CheckpointManager handles pruning and diff inspection", () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "nexus_cp_diff_test_"));
+    try {
+      const cm = new CheckpointManager(tmpDir);
+      const cp1 = cm.createCheckpoint("Snapshot 1");
+      const cp2 = cm.createCheckpoint("Snapshot 2");
+
+      const list = cm.listCheckpoints();
+      assert.ok(list.length >= 2);
+
+      const diffRes = cm.getDiff(cp1.id);
+      assert.strictEqual(diffRes.success, true);
+
+      const pruneRes = cm.pruneCheckpoints(1);
+      assert.strictEqual(pruneRes.prunedCount >= 1, true);
+      assert.strictEqual(cm.listCheckpoints().length, 1);
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  test("McpServer responds to initialize, tools/list, and tools/call", async () => {
+    const { McpServer } = await import("../src/mcp.js");
+    const server = new McpServer(process.cwd());
+    try {
+      // 1. Handshake
+      const initRes = await server.handleMessage({
+        jsonrpc: "2.0",
+        id: 1,
+        method: "initialize",
+        params: { protocolVersion: "2024-11-05" },
+      });
+      assert.strictEqual(initRes.id, 1);
+      assert.strictEqual(initRes.result.serverInfo.name, "nexus-code");
+
+      // 2. Query tools
+      const listRes = await server.handleMessage({
+        jsonrpc: "2.0",
+        id: 2,
+        method: "tools/list",
+      });
+      assert.strictEqual(listRes.id, 2);
+      assert.ok(Array.isArray(listRes.result.tools));
+      assert.ok(listRes.result.tools.some((t: any) => t.name === "file_info"));
+
+      // 3. Execute tool call via server
+      const callRes = await server.handleMessage({
+        jsonrpc: "2.0",
+        id: 3,
+        method: "tools/call",
+        params: {
+          name: "file_info",
+          arguments: { path: "package.json" },
+        },
+      });
+      assert.strictEqual(callRes.id, 3);
+      assert.strictEqual(callRes.result.isError, false);
+      assert.ok(callRes.result.content[0].text.includes("package.json"));
+    } finally {
+      server.shutdown();
+    }
+  });
 });
+
+
+

@@ -306,6 +306,63 @@ program
     });
     console.log();
 });
+program
+    .command("audit")
+    .description("Inspect tool execution audit log and execution metrics")
+    .option("-n, --limit <number>", "Number of recent records to display", "25")
+    .option("-t, --tool <name>", "Filter by tool name")
+    .option("--errors", "Show only failed executions")
+    .action((options) => {
+    const auditFile = path.join(os.homedir(), ".nexus", "audit.log");
+    if (!fs.existsSync(auditFile)) {
+        console.log(pc.yellow("\nNo audit records found in ~/.nexus/audit.log\n"));
+        return;
+    }
+    const raw = fs.readFileSync(auditFile, "utf-8");
+    let records = raw.trim().split("\n").filter(Boolean).map((l) => {
+        try {
+            return JSON.parse(l);
+        }
+        catch {
+            return null;
+        }
+    }).filter(Boolean);
+    if (options.tool) {
+        records = records.filter((r) => r.tool === options.tool);
+    }
+    if (options.errors) {
+        records = records.filter((r) => !r.success);
+    }
+    const limit = parseInt(options.limit, 10) || 25;
+    const slice = records.slice(-limit);
+    if (slice.length === 0) {
+        console.log(pc.yellow("\nNo matching audit records found.\n"));
+        return;
+    }
+    console.log(pc.bold(pc.cyan(`\n=== Nexus Code Tool Execution Audit Log (${slice.length} entries) ===\n`)));
+    for (const r of slice) {
+        const status = r.success ? pc.green("PASS") : pc.red("FAIL");
+        const time = pc.gray(r.timestamp?.slice(0, 19).replace("T", " ") || "");
+        const dur = pc.yellow(`${r.duration_ms || 0}ms`.padStart(6));
+        const tool = pc.bold(pc.cyan((r.tool || "").padEnd(16)));
+        console.log(`${time} | ${status} | ${tool} | ${dur}`);
+        if (r.error) {
+            console.log(`  ${pc.red("└─ Error:")} ${r.error}`);
+        }
+    }
+    console.log();
+});
+program
+    .command("serve-mcp")
+    .description("Run Nexus Code as a Model Context Protocol (MCP) server over stdio")
+    .option("-w, --workspace <path>", "Workspace directory", process.cwd())
+    .option("--shell <type>", "Linux shell to use", "bash")
+    .action(async (options) => {
+    const ws = options.workspace ? path.resolve(options.workspace) : process.cwd();
+    const { McpServer } = await import("./mcp.js");
+    const server = new McpServer(ws, options.shell);
+    await server.startStdio();
+});
 if (process.argv.length <= 2) {
     process.argv.push("repl");
 }

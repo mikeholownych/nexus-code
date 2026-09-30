@@ -15,6 +15,18 @@ import pc from "picocolors";
 
 export type ConfirmHandler = (toolName: string, args: Record<string, any>) => Promise<boolean>;
 
+const READ_ONLY_TOOLS = new Set([
+  "read_file",
+  "batch_read",
+  "list_dir",
+  "file_tree",
+  "file_info",
+  "search_code",
+  "find_files",
+  "search_symbols",
+  "fetch_web",
+]);
+
 function triggerNotification(title: string, message: string) {
   try {
     process.stdout.write("\x07");
@@ -103,6 +115,7 @@ export class AutonomousAgent {
   }
 
   public shutdown(): void {
+    this.bridge.shutdown();
     this.mcpManager.shutdownAll();
   }
 
@@ -144,6 +157,7 @@ export class AutonomousAgent {
   }
 
   public setWorkspace(newWorkspace: string): void {
+    this.bridge.shutdown();
     this.config.workspace = newWorkspace;
     this.bridge = new RustCoreBridge(this.config.workspace, this.config.shell, this.config.coreBinaryPath);
     this.skillManager.setWorkspace(newWorkspace);
@@ -154,6 +168,7 @@ export class AutonomousAgent {
   }
 
   public setShell(newShell: string): void {
+    this.bridge.shutdown();
     this.config.shell = newShell;
     this.bridge = new RustCoreBridge(this.config.workspace, this.config.shell, this.config.coreBinaryPath);
     this.resetConversation();
@@ -290,6 +305,51 @@ Always explain your reasoning before or alongside your tool calls.`;
         this.ui.taskCompleted(parsed.thoughtText || "Completed without additional tool invocations.");
         isFinished = true;
         break;
+      }
+
+      // Parallel execution optimization: if multiple tool calls in this turn are all read-only, execute concurrently
+      if (parsed.toolCalls.length > 1 && parsed.toolCalls.every((call) => READ_ONLY_TOOLS.has(call.function.name))) {
+        this.ui.startSpinner(`Executing ${parsed.toolCalls.length} read operations in parallel...`);
+        const parallelResults = await Promise.all(
+          parsed.toolCalls.map(async (call) => {
+            const toolName = call.function.name;
+            let args: Record<string, any> = {};
+            try {
+              args = typeof call.function.arguments === "string"
+                ? JSON.parse(call.function.arguments)
+                : call.function.arguments;
+            } catch {
+              args = { raw: call.function.arguments };
+            }
+            const t0 = Date.now();
+            const result = await this.bridge.executeTool(toolName, args);
+            logAudit({
+              workspace: this.config.workspace,
+              tool: toolName,
+              args,
+              success: result.success,
+              durationMs: Date.now() - t0,
+              error: result.error,
+            });
+            return { call, toolName, args, result };
+          })
+        );
+        this.ui.stopSpinner(true);
+
+        for (const item of parallelResults) {
+          this.ui.printToolCall(item.toolName, item.args);
+          this.ui.printToolResult(item.toolName, item.result.success, item.result.output, item.result.error);
+          this.messages.push({
+            role: "tool",
+            tool_call_id: item.call.id,
+            name: item.toolName,
+            content: item.result.success
+              ? item.result.output
+              : `Error executing ${item.toolName}: ${item.result.error || "Unknown error"}`,
+          });
+        }
+        currentStep++;
+        continue;
       }
 
       // Execute each tool call

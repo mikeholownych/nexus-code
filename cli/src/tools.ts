@@ -1,4 +1,4 @@
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync, ChildProcess } from "node:child_process";
 import * as path from "node:path";
 import * as fs from "node:fs";
 import { fileURLToPath } from "node:url";
@@ -422,6 +422,13 @@ export class RustCoreBridge {
   private defaultShell: string;
   private coreBinaryPath: string | null = null;
   private cargoManifestPath: string;
+  private rpcProcess: ChildProcess | null = null;
+  private nextRequestId: number = 1;
+  private pendingRequests: Map<number, {
+    resolve: (res: ExecutionResult) => void;
+    timeoutTimer: NodeJS.Timeout;
+  }> = new Map();
+  private rpcBuffer: string = "";
 
   constructor(workspace: string, defaultShell: string = "bash", customBinaryPath?: string) {
     this.workspace = path.resolve(workspace);
@@ -451,8 +458,225 @@ export class RustCoreBridge {
     }
   }
 
+  private ensureRpcDaemon(): ChildProcess | null {
+    if (this.rpcProcess && !this.rpcProcess.killed && this.rpcProcess.stdin && !this.rpcProcess.stdin.destroyed) {
+      return this.rpcProcess;
+    }
+
+    let command: string;
+    let spawnArgs: string[];
+
+    if (this.coreBinaryPath && fs.existsSync(this.coreBinaryPath)) {
+      command = this.coreBinaryPath;
+      spawnArgs = ["--workspace", this.workspace, "rpc"];
+    } else {
+      command = "cargo";
+      spawnArgs = [
+        "run",
+        "--manifest-path",
+        this.cargoManifestPath,
+        "--quiet",
+        "--",
+        "--workspace",
+        this.workspace,
+        "rpc",
+      ];
+    }
+
+    try {
+      this.rpcProcess = spawn(command, spawnArgs, {
+        cwd: this.workspace,
+        stdio: ["pipe", "pipe", "pipe"],
+      });
+
+      this.rpcProcess.stdout?.on("data", (chunk: Buffer) => {
+        this.handleRpcStdout(chunk.toString("utf-8"));
+      });
+
+      this.rpcProcess.on("error", () => {
+        this.cleanupRpc();
+      });
+
+      this.rpcProcess.on("exit", () => {
+        this.cleanupRpc();
+      });
+
+      return this.rpcProcess;
+    } catch {
+      this.cleanupRpc();
+      return null;
+    }
+  }
+
+  private cleanupRpc(): void {
+    if (this.rpcProcess) {
+      try {
+        this.rpcProcess.kill();
+      } catch {}
+      this.rpcProcess = null;
+    }
+    for (const [_, pending] of this.pendingRequests.entries()) {
+      clearTimeout(pending.timeoutTimer);
+      pending.resolve({
+        success: false,
+        output: "",
+        error: "Rust core RPC daemon disconnected",
+      });
+    }
+    this.pendingRequests.clear();
+    this.rpcBuffer = "";
+  }
+
+  private handleRpcStdout(data: string): void {
+    this.rpcBuffer += data;
+    const lines = this.rpcBuffer.split("\n");
+    this.rpcBuffer = lines.pop() || "";
+
+    for (const line of lines) {
+      const trimmed = line.trim();
+      if (!trimmed) continue;
+
+      try {
+        const msg = JSON.parse(trimmed);
+        const reqId = msg.id;
+        if (reqId !== undefined && this.pendingRequests.has(reqId)) {
+          const { resolve, timeoutTimer } = this.pendingRequests.get(reqId)!;
+          clearTimeout(timeoutTimer);
+          this.pendingRequests.delete(reqId);
+
+          if (msg.error) {
+            resolve({
+              success: false,
+              output: "",
+              error: typeof msg.error === "string" ? msg.error : JSON.stringify(msg.error),
+            });
+          } else {
+            const outStr = typeof msg.result === "string"
+              ? msg.result
+              : JSON.stringify(msg.result, null, 2);
+            resolve({
+              success: true,
+              output: outStr,
+            });
+          }
+        }
+      } catch {
+        // Non-JSON output (e.g. cargo build notes)
+      }
+    }
+  }
+
+  public shutdown(): void {
+    this.cleanupRpc();
+  }
+
+  private async executeViaRpc(toolName: string, args: Record<string, any>): Promise<ExecutionResult | null> {
+    const daemon = this.ensureRpcDaemon();
+    if (!daemon || !daemon.stdin || daemon.stdin.destroyed) {
+      return null;
+    }
+
+    const id = this.nextRequestId++;
+    const payload = JSON.stringify({
+      id,
+      method: toolName,
+      params: args,
+    });
+
+    return new Promise<ExecutionResult>((resolve) => {
+      const timeoutMs = (args.timeout_secs ? (args.timeout_secs + 5) * 1000 : 35000);
+      const timeoutTimer = setTimeout(() => {
+        if (this.pendingRequests.has(id)) {
+          this.pendingRequests.delete(id);
+          resolve({
+            success: false,
+            output: "",
+            error: `RPC request for '${toolName}' timed out after ${timeoutMs / 1000}s`,
+          });
+        }
+      }, timeoutMs);
+
+      this.pendingRequests.set(id, { resolve, timeoutTimer });
+
+      try {
+        daemon.stdin!.write(payload + "\n");
+      } catch (err: any) {
+        clearTimeout(timeoutTimer);
+        this.pendingRequests.delete(id);
+        resolve({
+          success: false,
+          output: "",
+          error: `Failed to write to RPC daemon: ${err.message}`,
+        });
+      }
+    });
+  }
+
+  private executeViaSpawnSync(toolName: string, args: Record<string, any>): ExecutionResult {
+    const argsJson = JSON.stringify(args);
+
+    let command: string;
+    let spawnArgs: string[];
+
+    if (this.coreBinaryPath && fs.existsSync(this.coreBinaryPath)) {
+      command = this.coreBinaryPath;
+      spawnArgs = ["--workspace", this.workspace, "call", "--tool", toolName, "--args", argsJson];
+    } else {
+      command = "cargo";
+      spawnArgs = [
+        "run",
+        "--manifest-path",
+        this.cargoManifestPath,
+        "--quiet",
+        "--",
+        "--workspace",
+        this.workspace,
+        "call",
+        "--tool",
+        toolName,
+        "--args",
+        argsJson,
+      ];
+    }
+
+    try {
+      const res = spawnSync(command, spawnArgs, {
+        cwd: this.workspace,
+        encoding: "utf-8",
+        maxBuffer: 10 * 1024 * 1024,
+      });
+
+      if (res.error) {
+        return {
+          success: false,
+          output: "",
+          error: `Failed to execute core engine: ${res.error.message}`,
+        };
+      }
+
+      if (res.status !== 0) {
+        return {
+          success: false,
+          output: res.stdout || "",
+          error: res.stderr || `Tool exited with code ${res.status}`,
+        };
+      }
+
+      return {
+        success: true,
+        output: res.stdout.trim(),
+      };
+    } catch (err: any) {
+      return {
+        success: false,
+        output: "",
+        error: `Unexpected error executing tool: ${err.message}`,
+      };
+    }
+  }
+
   /**
-   * Execute tool using either the compiled harness-core binary or cargo run
+   * Execute tool using high-performance persistent JSON-RPC daemon, with automatic spawnSync fallback
    */
   async executeTool(toolName: string, args: Record<string, any>): Promise<ExecutionResult> {
     if (toolName === "task_completed") {
@@ -511,66 +735,18 @@ export class RustCoreBridge {
       args.shell = this.defaultShell;
     }
 
-    const argsJson = JSON.stringify(args);
-
-    let command: string;
-    let spawnArgs: string[];
-
-    if (this.coreBinaryPath && fs.existsSync(this.coreBinaryPath)) {
-      command = this.coreBinaryPath;
-      spawnArgs = ["--workspace", this.workspace, "call", "--tool", toolName, "--args", argsJson];
-    } else {
-      // Fallback: cargo run
-      command = "cargo";
-      spawnArgs = [
-        "run",
-        "--manifest-path",
-        this.cargoManifestPath,
-        "--quiet",
-        "--",
-        "--workspace",
-        this.workspace,
-        "call",
-        "--tool",
-        toolName,
-        "--args",
-        argsJson,
-      ];
-    }
-
+    // Attempt persistent JSON-RPC execution
     try {
-      const res = spawnSync(command, spawnArgs, {
-        cwd: this.workspace,
-        encoding: "utf-8",
-        maxBuffer: 10 * 1024 * 1024,
-      });
-
-      if (res.error) {
-        return {
-          success: false,
-          output: "",
-          error: `Failed to execute core engine: ${res.error.message}`,
-        };
+      const rpcResult = await this.executeViaRpc(toolName, args);
+      if (rpcResult !== null) {
+        return rpcResult;
       }
-
-      if (res.status !== 0) {
-        return {
-          success: false,
-          output: res.stdout || "",
-          error: res.stderr || `Tool exited with code ${res.status}`,
-        };
-      }
-
-      return {
-        success: true,
-        output: res.stdout.trim(),
-      };
-    } catch (err: any) {
-      return {
-        success: false,
-        output: "",
-        error: `Unexpected error executing tool: ${err.message}`,
-      };
+    } catch {
+      // Fall through to fallback
     }
+
+    // Fallback: spawnSync invocation
+    return this.executeViaSpawnSync(toolName, args);
   }
 }
+
