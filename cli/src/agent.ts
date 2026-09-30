@@ -264,7 +264,7 @@ export class AutonomousAgent {
       this.coderClient = this.client;
     }
     this.hybridSearch = new HybridSearchEngine(ws, this.client);
-    this.synthesizer = new SynthesizerEngine(ws);
+    this.synthesizer = new SynthesizerEngine(ws, (command) => this.bridge.executeTool("run_command", { command, timeout_secs: 120 }));
     this.browser = new BrowserDriver(ws);
     this.knowledge = new KnowledgeGraph(ws);
     this.bridge = new RustCoreBridge(
@@ -484,7 +484,7 @@ export class AutonomousAgent {
     this.mcpManager = new McpClientManager(newWorkspace);
     this.pluginManager = new PluginManager(newWorkspace);
     this.hybridSearch = new HybridSearchEngine(newWorkspace, this.client);
-    this.synthesizer = new SynthesizerEngine(newWorkspace);
+    this.synthesizer = new SynthesizerEngine(newWorkspace, (command) => this.bridge.executeTool("run_command", { command, timeout_secs: 120 }));
     this.browser = new BrowserDriver(newWorkspace);
     this.knowledge = new KnowledgeGraph(newWorkspace);
     this.extensibilityInitialized = false;

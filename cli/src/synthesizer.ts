@@ -1,6 +1,6 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { runTestSuite, detectTestCommand, TestRunResult } from "./tester.js";
+import { detectTestCommand, runTestSuiteWithExecutor, TestCommandExecutor, TestRunResult } from "./tester.js";
 import { AutonomousAgent } from "./agent.js";
 import { HarnessConfig } from "./types.js";
 import pc from "picocolors";
@@ -46,16 +46,23 @@ export interface TddRunResult {
  */
 export class SynthesizerEngine {
   private workspace: string;
+  private executeTestCommand: TestCommandExecutor;
   private state: SynthesizerState;
 
-  constructor(workspace: string = process.cwd()) {
+  constructor(workspace: string = process.cwd(), executeTestCommand: TestCommandExecutor) {
     this.workspace = path.resolve(workspace);
+    this.executeTestCommand = executeTestCommand;
     this.state = {
       currentPhase: "IDLE",
       issueDescription: "",
       history: [],
       regressionFailures: [],
     };
+  }
+
+  private runTests(filterPattern?: string): Promise<TestRunResult> {
+    const command = detectTestCommand(this.workspace, filterPattern);
+    return runTestSuiteWithExecutor(this.workspace, this.executeTestCommand, command);
   }
 
   public getState(): SynthesizerState {
@@ -102,7 +109,7 @@ export class SynthesizerEngine {
     }
     this.state.reproductionTestTarget = target;
 
-    const testRes = runTestSuite(this.workspace, target);
+    const testRes = await this.runTests(target);
     // In RED phase, success = test FAILED (confirmed defect reproduction)
     const defectReproduced = !testRes.success;
 
@@ -152,7 +159,7 @@ export class SynthesizerEngine {
       };
     }
 
-    const testRes = runTestSuite(this.workspace, target);
+    const testRes = await this.runTests(target);
     if (testRes.success) {
       this.state.currentPhase = "REFACTOR";
       this.state.history.push({
@@ -189,7 +196,7 @@ export class SynthesizerEngine {
    * Phase 3 (REFACTOR): Run the complete test suite to guarantee zero regressions.
    */
   public async verifyRefactorPhase(): Promise<TddVerificationResult> {
-    const fullRes = runTestSuite(this.workspace);
+    const fullRes = await this.runTests();
 
     if (fullRes.success) {
       this.state.currentPhase = "COMPLETED";

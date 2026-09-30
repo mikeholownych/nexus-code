@@ -1104,6 +1104,157 @@ error[E0308]: mismatched types
     }
   });
 
+  test("run_tests keeps repository test side effects inside worktree authority and honors read-only, dry-run, and required sandbox", async () => {
+    const base = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-run-tests-authority-"));
+    const repo = path.join(base, "repo");
+    fs.mkdirSync(repo);
+    const rootTarget = path.join(repo, "test-wrote-root.txt");
+    const outsideTarget = path.join(base, "test-wrote-outside.txt");
+    fs.writeFileSync(path.join(repo, "Makefile"), [
+      "test:",
+      `\t@mkdir -p generated; printf worktree > generated/test-output.txt 2>/dev/null; printf root > ${JSON.stringify(rootTarget)} 2>/dev/null; printf outside > ${JSON.stringify(outsideTarget)} 2>/dev/null; true`,
+      "",
+    ].join("\n"));
+    execSync("git init -q && git config user.name 'Nexus Test' && git config user.email 'nexus@example.invalid' && git add . && git commit -qm baseline", { cwd: repo, stdio: "ignore" });
+    const manager = new WorktreeManager(repo);
+    const worktree = manager.createWorktree();
+    const generated = path.join(worktree.worktreePath, "generated", "test-output.txt");
+    const bridge = new RustCoreBridge(worktree.worktreePath, "bash", undefined, false, false, "bwrap", true);
+    try {
+      const result = await bridge.executeTool("run_tests", {});
+      assert.strictEqual(result.success, true, "the test command can report success inside the required sandbox");
+      assert.strictEqual(fs.existsSync(generated), true, "repository test side effects are allowed in the authorized worktree");
+      assert.strictEqual(fs.existsSync(rootTarget), false, "repository test code cannot mutate the original checkout");
+      assert.strictEqual(fs.existsSync(outsideTarget), false, "repository test code cannot mutate outside the authorized worktree");
+    } finally {
+      bridge.shutdown();
+      manager.discardWorktree(worktree.taskId);
+      fs.rmSync(base, { recursive: true, force: true });
+    }
+
+    for (const mode of ["read-only", "dry-run", "sandbox-unavailable"] as const) {
+      const fixture = fs.mkdtempSync(path.join(os.tmpdir(), `nexus-run-tests-${mode}-`));
+      const fixtureRepo = path.join(fixture, "repo");
+      fs.mkdirSync(fixtureRepo);
+      const fixtureRootTarget = path.join(fixtureRepo, "test-wrote-root.txt");
+      const fixtureOutsideTarget = path.join(fixture, "test-wrote-outside.txt");
+      fs.writeFileSync(path.join(fixtureRepo, "Makefile"), [
+        "test:",
+        `\t@mkdir -p generated; printf worktree > generated/test-output.txt 2>/dev/null; printf root > ${JSON.stringify(fixtureRootTarget)} 2>/dev/null; printf outside > ${JSON.stringify(fixtureOutsideTarget)} 2>/dev/null; true`,
+        "",
+      ].join("\n"));
+      execSync("git init -q && git config user.name 'Nexus Test' && git config user.email 'nexus@example.invalid' && git add . && git commit -qm baseline", { cwd: fixtureRepo, stdio: "ignore" });
+      const fixtureManager = new WorktreeManager(fixtureRepo);
+      const fixtureWorktree = fixtureManager.createWorktree();
+      const fixtureBridge = new RustCoreBridge(
+        fixtureWorktree.worktreePath,
+        "bash",
+        undefined,
+        mode === "dry-run",
+        mode === "read-only",
+        "bwrap",
+        true,
+      );
+      if (mode === "sandbox-unavailable") fixtureBridge.setSandbox("none");
+      try {
+        const result = await fixtureBridge.executeTool("run_tests", {});
+        assert.strictEqual(result.success, false, `${mode} does not report test execution success`);
+        assert.strictEqual(fs.existsSync(path.join(fixtureWorktree.worktreePath, "generated", "test-output.txt")), false, `${mode} does not execute repository test mutations`);
+        assert.strictEqual(fs.existsSync(fixtureRootTarget), false, `${mode} preserves the original repository`);
+        assert.strictEqual(fs.existsSync(fixtureOutsideTarget), false, `${mode} preserves the outside target`);
+      } finally {
+        fixtureBridge.shutdown();
+        fixtureManager.discardWorktree(fixtureWorktree.taskId);
+        fs.rmSync(fixture, { recursive: true, force: true });
+      }
+    }
+  });
+
+  test("read-only subagent run_tests cannot mutate the parent worktree, original repository, or outside path", async () => {
+    const base = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-subagent-run-tests-authority-"));
+    const repo = path.join(base, "repo");
+    fs.mkdirSync(repo);
+    const rootTarget = path.join(repo, "test-wrote-root.txt");
+    const outsideTarget = path.join(base, "test-wrote-outside.txt");
+    fs.writeFileSync(path.join(repo, "Makefile"), [
+      "test:",
+      `\t@mkdir -p generated; printf worktree > generated/test-output.txt 2>/dev/null; printf root > ${JSON.stringify(rootTarget)} 2>/dev/null; printf outside > ${JSON.stringify(outsideTarget)} 2>/dev/null; true`,
+      "",
+    ].join("\n"));
+    execSync("git init -q && git config user.name 'Nexus Test' && git config user.email 'nexus@example.invalid' && git add . && git commit -qm baseline", { cwd: repo, stdio: "ignore" });
+    let parentRequests = 0;
+    let childRequests = 0;
+    const server = http.createServer((req, res) => {
+      let body = "";
+      req.on("data", (chunk) => { body += chunk; });
+      req.on("end", () => {
+        const request = JSON.parse(body || "{}");
+        if (request.stream) {
+          parentRequests++;
+          const calls = parentRequests === 1 ? [
+            { index: 0, id: "spawn", type: "function", function: { name: "spawn_subagent", arguments: JSON.stringify({ prompt: "run the repository tests", max_steps: 2 }) } },
+            { index: 1, id: "complete", type: "function", function: { name: "task_completed", arguments: JSON.stringify({ summary: "Parent finished." }) } },
+          ] : [];
+          res.writeHead(200, { "Content-Type": "text/event-stream" });
+          res.end(`data: ${JSON.stringify({ choices: [{ delta: { content: "Delegate the test request.", tool_calls: calls } }] })}\n\ndata: [DONE]\n\n`);
+          return;
+        }
+        childRequests++;
+        const call = childRequests === 1
+          ? { name: "run_tests", args: {} }
+          : { name: "task_completed", args: { summary: "Child finished." } };
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ choices: [{ message: { role: "assistant", tool_calls: [{ id: `child-${childRequests}`, type: "function", function: { name: call.name, arguments: JSON.stringify(call.args) } }] } }] }));
+      });
+    });
+    let agent: AutonomousAgent | undefined;
+    try {
+      const port = await new Promise<number>((resolve) => server.listen(0, "127.0.0.1", () => resolve((server.address() as any).port)));
+      agent = new AutonomousAgent({ endpoint: `http://127.0.0.1:${port}/v1`, model: "test", maxSteps: 2, temperature: 0, workspace: repo, shell: "bash", worktree: true, readOnly: true });
+      await agent.run("delegate a read-only test request");
+      const active = agent.getActiveWorktree();
+      assert.strictEqual(childRequests, 2, "the subagent receives a run_tests tool result and then completes");
+      assert.strictEqual(fs.existsSync(path.join(active?.worktreePath || "", "generated", "test-output.txt")), false);
+      assert.strictEqual(fs.existsSync(rootTarget), false, "the subagent cannot mutate the original checkout");
+      assert.strictEqual(fs.existsSync(outsideTarget), false, "the subagent cannot mutate outside the parent boundary");
+      assert.strictEqual(parentRequests, 1);
+    } finally {
+      if (agent?.getActiveWorktree()) agent.discardActiveWorktree();
+      agent?.shutdown();
+      server.closeAllConnections();
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+      fs.rmSync(base, { recursive: true, force: true });
+    }
+  });
+
+  test("TDD synthesizer verification uses the agent shell authority boundary", async () => {
+    const base = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-tdd-verifier-authority-"));
+    const repo = path.join(base, "repo");
+    fs.mkdirSync(repo);
+    const outsideTarget = path.join(base, "test-wrote-outside.txt");
+    fs.writeFileSync(path.join(repo, "Makefile"), [
+      "test:",
+      `\t@mkdir -p generated; printf worktree > generated/test-output.txt 2>/dev/null; printf outside > ${JSON.stringify(outsideTarget)} 2>/dev/null; true`,
+      "",
+    ].join("\n"));
+    execSync("git init -q && git config user.name 'Nexus Test' && git config user.email 'nexus@example.invalid' && git add . && git commit -qm baseline", { cwd: repo, stdio: "ignore" });
+    const manager = new WorktreeManager(repo);
+    const worktree = manager.createWorktree();
+    let agent: AutonomousAgent | undefined;
+    try {
+      agent = new AutonomousAgent({ endpoint: "http://127.0.0.1:1/v1", model: "test", maxSteps: 1, temperature: 0, workspace: worktree.worktreePath, shell: "bash", sandbox: "bwrap" });
+      const result = await agent.getSynthesizer().verifyRefactorPhase();
+      assert.strictEqual(result.success, true, "the confined command may complete successfully");
+      assert.strictEqual(fs.existsSync(path.join(worktree.worktreePath, "generated", "test-output.txt")), true, "the test command can write within its selected workspace");
+      assert.strictEqual(fs.existsSync(path.join(repo, "generated", "test-output.txt")), false, "TDD verification cannot write into the original repository");
+      assert.strictEqual(fs.existsSync(outsideTarget), false, "TDD verification cannot write outside its selected workspace");
+    } finally {
+      agent?.shutdown();
+      manager.discardWorktree(worktree.taskId);
+      fs.rmSync(base, { recursive: true, force: true });
+    }
+  });
+
   test("BPE Token Accounting accurately counts subwords and computes budget", () => {
     const text = "function calculateTotal(items: Item[]): number {\n  return items.reduce((a, b) => a + b.price, 0);\n}";
     const tokens = countTokens(text);
@@ -3157,7 +3308,10 @@ export class CacheService {
   test("SynthesizerEngine tracks RED-GREEN-REFACTOR protocol state and transitions", async () => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-synth-test-"));
     try {
-      const engine = new SynthesizerEngine(tempDir);
+      const engine = new SynthesizerEngine(tempDir, async () => ({
+        success: true,
+        output: JSON.stringify({ exit_code: 1, stdout: "", stderr: "simulated failing test" }),
+      }));
       assert.strictEqual(engine.getCurrentPhase(), "IDLE");
 
       // 1. Start TDD session

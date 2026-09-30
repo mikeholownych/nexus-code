@@ -1188,6 +1188,17 @@ export class RustCoreBridge {
 
     // 3. Dry-run mode simulation
     if (this.dryRun) {
+      if (toolName === "run_tests") {
+        return {
+          success: false,
+          output: JSON.stringify({
+            dry_run: true,
+            passed: false,
+            summary: "Test command was not executed because dry-run mode is active.",
+          }),
+          error: "Dry-run mode does not execute repository-controlled test commands.",
+        };
+      }
       if (toolName === "write_file") {
         return {
           success: true,
@@ -1266,8 +1277,13 @@ export class RustCoreBridge {
     }
 
     if (toolName === "run_tests") {
-      const { runTestSuite } = await import("./tester.js");
-      const res = runTestSuite(this.workspace, args.filter);
+      const { detectTestCommand, runTestSuiteWithExecutor } = await import("./tester.js");
+      const command = detectTestCommand(this.workspace, args.filter);
+      const res = await runTestSuiteWithExecutor(
+        this.workspace,
+        (testCommand) => this.executeTool("run_command", { command: testCommand, timeout_secs: 120 }),
+        command,
+      );
       return {
         success: res.success,
         output: JSON.stringify({
