@@ -1170,6 +1170,70 @@ error[E0308]: mismatched types
     }
   });
 
+  test("explicitly selected unavailable sandbox fails closed for run_command and run_tests", async () => {
+    const base = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-explicit-sandbox-required-"));
+    const workspace = path.join(base, "workspace");
+    const bin = path.join(base, "bin");
+    fs.mkdirSync(workspace);
+    fs.mkdirSync(bin);
+    const shell = process.platform === "win32" ? "bash.exe" : "bash";
+    fs.symlinkSync("/bin/bash", path.join(bin, shell));
+    fs.symlinkSync("/usr/bin/make", path.join(bin, "make"));
+
+    const oldPath = process.env.PATH;
+    process.env.PATH = bin;
+    const coreBinary = path.resolve(process.cwd(), "../core/target/release/harness-core");
+    const runCommandOutside = path.join(base, "run-command-outside.txt");
+    const runTestsOutside = path.join(base, "run-tests-outside.txt");
+    fs.writeFileSync(path.join(workspace, "Makefile"), [
+      "test:",
+      `\t@printf escaped > ${JSON.stringify(runTestsOutside)}`,
+      "",
+    ].join("\n"));
+
+    const unavailableSandbox = new RustCoreBridge(workspace, "bash", coreBinary, false, false, "bwrap");
+    const noSandbox = new RustCoreBridge(workspace, "bash", coreBinary);
+    try {
+      const commandResult = await unavailableSandbox.executeTool("run_command", {
+        command: `printf escaped > ${JSON.stringify(runCommandOutside)}`,
+      });
+      const testsResult = await unavailableSandbox.executeTool("run_tests", {});
+      assert.deepStrictEqual({
+        commandRefusedForSandbox: !commandResult.success && /sandbox/i.test(commandResult.error || ""),
+        commandWroteOutside: fs.existsSync(runCommandOutside),
+        testsSuccess: testsResult.success,
+        testsWroteOutside: fs.existsSync(runTestsOutside),
+      }, {
+        commandRefusedForSandbox: true,
+        commandWroteOutside: false,
+        testsSuccess: false,
+        testsWroteOutside: false,
+      }, "both model-visible execution paths must refuse without creating either outside marker");
+
+      const unsandboxedCommandTarget = path.join(base, "no-sandbox-command.txt");
+      const unsandboxedCommand = await noSandbox.executeTool("run_command", {
+        command: `printf allowed > ${JSON.stringify(unsandboxedCommandTarget)}`,
+      });
+      assert.strictEqual(unsandboxedCommand.success, true, "no sandbox request preserves ordinary host execution");
+      assert.strictEqual(fs.readFileSync(unsandboxedCommandTarget, "utf8"), "allowed");
+
+      const unsandboxedTestTarget = path.join(base, "no-sandbox-tests.txt");
+      fs.writeFileSync(path.join(workspace, "Makefile"), [
+        "test:",
+        `\t@printf allowed > ${JSON.stringify(unsandboxedTestTarget)}`,
+        "",
+      ].join("\n"));
+      const unsandboxedTests = await noSandbox.executeTool("run_tests", {});
+      assert.strictEqual(unsandboxedTests.success, true, "no sandbox request preserves ordinary test execution");
+      assert.strictEqual(fs.readFileSync(unsandboxedTestTarget, "utf8"), "allowed");
+    } finally {
+      unavailableSandbox.shutdown();
+      noSandbox.shutdown();
+      process.env.PATH = oldPath;
+      fs.rmSync(base, { recursive: true, force: true });
+    }
+  });
+
   test("read-only subagent run_tests cannot mutate the parent worktree, original repository, or outside path", async () => {
     const base = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-subagent-run-tests-authority-"));
     const repo = path.join(base, "repo");

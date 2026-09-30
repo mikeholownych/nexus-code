@@ -1443,11 +1443,17 @@ export class RustCoreBridge {
           readOnlyHost: this.readOnly,
           network: this.readOnly ? false : undefined,
         });
-        if ((this.readOnly || this.requireSandbox) && !sandboxed.sandboxed) {
+        const explicitlyRequestedSandbox = Boolean(this.sandbox) && configuredMode !== "none";
+        if ((this.readOnly || this.requireSandbox || explicitlyRequestedSandbox) && !sandboxed.sandboxed) {
+          const authority = this.readOnly
+            ? "Read-only mode"
+            : this.requireSandbox
+              ? "Worktree isolation"
+              : "Configured sandbox";
           return {
             success: false,
             output: "",
-            error: `${this.readOnly ? "Read-only mode" : "Worktree isolation"} violation: filesystem-isolated shell execution is unavailable. ${sandboxed.warning || "No supported sandbox engine is available."}`,
+            error: `${authority} violation: filesystem-isolated shell execution is unavailable. ${sandboxed.warning || "No supported sandbox engine is available."}`,
           };
         }
         args.command = sandboxed.command;
