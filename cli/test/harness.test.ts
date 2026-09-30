@@ -19,6 +19,10 @@ import { selectRelevantFewShots } from "../src/fewshots.js";
 import { LocalLlmClient } from "../src/client.js";
 import { scanAndOnboardWorkspace } from "../src/onboard.js";
 import { detectTestCommand, runTestSuite } from "../src/tester.js";
+import { highlightLine, highlightDiff, highlightCode, highlightMarkdownCodeBlocks } from "../src/syntax.js";
+import { copyToClipboard, readFromClipboard } from "../src/clipboard.js";
+import { executeWebSearch } from "../src/search_web.js";
+import { RustCoreBridge } from "../src/tools.js";
 
 describe("Nexus Code Test Suite", () => {
   test("HARNESS_TOOLS definitions include all parity tools", () => {
@@ -702,6 +706,54 @@ error[E0308]: mismatched types
       assert.strictEqual(updated[2].status, "in_progress");
     } finally {
       agent.shutdown();
+    }
+  });
+
+  test("Syntax highlighter renders ANSI colors for code and diffs (Candidate #22)", () => {
+    // 1. highlightLine
+    const highlightedCode = highlightLine("const answer: number = 42; // commentary");
+    assert.ok(highlightedCode.includes("answer"));
+    // 2. highlightDiff
+    const diff = `--- a/file.ts\n+++ b/file.ts\n@@ -1,3 +1,4 @@\n context\n+added line\n-removed line`;
+    const highlightedDiff = highlightDiff(diff);
+    assert.ok(highlightedDiff.includes("+added line"));
+    assert.ok(highlightedDiff.includes("-removed line"));
+    assert.ok(highlightedDiff.includes("@@ -1,3 +1,4 @@"));
+
+    // 3. highlightMarkdownCodeBlocks
+    const md = "Here is some code:\n```typescript\nconst x = 10;\n```\nDone.";
+    const formatted = highlightMarkdownCodeBlocks(md);
+    assert.ok(formatted.includes("const x = 10;"));
+  });
+
+  test("Clipboard module provides copy and paste interface (Candidate #24)", () => {
+    const copyRes = copyToClipboard("test clipboard content");
+    assert.strictEqual(typeof copyRes.success, "boolean");
+    const pasteRes = readFromClipboard();
+    assert.strictEqual(typeof pasteRes.success, "boolean");
+  });
+
+  test("Web search module rejects empty queries and structures results (Candidate #45)", async () => {
+    const emptyRes = await executeWebSearch("");
+    assert.strictEqual(emptyRes.success, false);
+    assert.strictEqual(emptyRes.results.length, 0);
+
+    const validQueryRes = await executeWebSearch("rust axum json", 3);
+    assert.strictEqual(validQueryRes.success, true);
+    assert.ok(validQueryRes.results.length >= 1);
+    assert.ok(validQueryRes.results[0].title);
+  });
+
+  test("RustCoreBridge dispatches search_web tool execution (Candidate #45)", async () => {
+    const bridge = new RustCoreBridge(process.cwd());
+    try {
+      const toolRes = await bridge.executeTool("search_web", { query: "typescript interface example" });
+      assert.strictEqual(toolRes.success, true);
+      const parsed = JSON.parse(toolRes.output);
+      assert.strictEqual(parsed.query, "typescript interface example");
+      assert.ok(Array.isArray(parsed.results));
+    } finally {
+      bridge.shutdown();
     }
   });
 });

@@ -29,6 +29,7 @@ const READ_ONLY_TOOLS = new Set([
   "find_files",
   "search_symbols",
   "fetch_web",
+  "search_web",
   "run_tests",
 ]);
 

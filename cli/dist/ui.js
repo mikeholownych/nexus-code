@@ -1,5 +1,6 @@
 import pc from "picocolors";
 import ora from "ora";
+import { highlightDiff, highlightCode, highlightMarkdownCodeBlocks } from "./syntax.js";
 export function redactSecrets(text) {
     if (!text)
         return text;
@@ -88,10 +89,16 @@ export class TerminalUI {
             if ((toolName === "edit_file" || toolName === "patch_file") && output) {
                 this.renderDiff(output);
             }
+            else if ((toolName === "read_file" || toolName === "batch_read") && output) {
+                const sanitized = redactSecrets(output);
+                const preview = sanitized.length > 800 ? sanitized.substring(0, 800) + "\n... [TRUNCATED]" : sanitized;
+                console.log(highlightCode(preview, undefined, { showLineNumbers: false }));
+            }
             else {
                 const sanitized = redactSecrets(output);
                 const preview = sanitized.length > 500 ? sanitized.substring(0, 500) + "\n... [TRUNCATED]" : sanitized;
-                const lines = preview.split("\n");
+                const formatted = highlightMarkdownCodeBlocks(preview);
+                const lines = formatted.split("\n");
                 for (const line of lines) {
                     console.log(pc.gray("  ") + line);
                 }
@@ -105,18 +112,12 @@ export class TerminalUI {
     }
     renderDiff(diffText) {
         const sanitized = redactSecrets(diffText);
-        const lines = sanitized.split("\n");
-        for (const line of lines) {
-            if (line.startsWith("+")) {
-                console.log(pc.green(`  ${line}`));
-            }
-            else if (line.startsWith("-")) {
-                console.log(pc.red(`  ${line}`));
-            }
-            else {
-                console.log(pc.gray(`  ${line}`));
-            }
-        }
+        const highlighted = highlightDiff(sanitized);
+        console.log(highlighted);
+    }
+    renderCode(code, lang, showLineNumbers = true) {
+        const sanitized = redactSecrets(code);
+        console.log(highlightCode(sanitized, lang, { showLineNumbers }));
     }
     taskCompleted(summary, notes) {
         console.log(pc.bold(pc.green("\n════════════════════════ TASK COMPLETED ════════════════════════")));

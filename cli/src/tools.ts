@@ -435,6 +435,27 @@ export const HARNESS_TOOLS: ToolDefinition[] = [
       },
     },
   },
+  {
+    type: "function",
+    function: {
+      name: "search_web",
+      description: "Search the web for programming documentation, error messages, library APIs, and technical solutions.",
+      parameters: {
+        type: "object",
+        properties: {
+          query: {
+            type: "string",
+            description: "The technical search query (e.g. 'rust axum json extraction example').",
+          },
+          max_results: {
+            type: "number",
+            description: "Maximum number of search results to return (default: 5).",
+          },
+        },
+        required: ["query"],
+      },
+    },
+  },
 ];
 
 export function isSafeOutboundUrl(urlStr: string): { safe: boolean; reason?: string } {
@@ -980,6 +1001,35 @@ export class RustCoreBridge {
         return { success: true, output: truncated };
       } catch (err: any) {
         return { success: false, output: "", error: `Fetch failed: ${err.message}` };
+      }
+    }
+
+    if (toolName === "search_web") {
+      try {
+        const query = args.query;
+        if (!query || typeof query !== "string") {
+          return { success: false, output: "", error: "Missing required parameter 'query'" };
+        }
+        const maxResults = typeof args.max_results === "number" ? args.max_results : 5;
+        const { executeWebSearch } = await import("./search_web.js");
+        const searchRes = await executeWebSearch(query, maxResults);
+        if (!searchRes.success) {
+          return { success: false, output: "", error: searchRes.error || "Web search failed" };
+        }
+        return {
+          success: true,
+          output: JSON.stringify(
+            {
+              query,
+              total_results: searchRes.results.length,
+              results: searchRes.results,
+            },
+            null,
+            2
+          ),
+        };
+      } catch (err: any) {
+        return { success: false, output: "", error: `Search failed: ${err.message}` };
       }
     }
 

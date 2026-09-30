@@ -13,6 +13,7 @@ import { CheckpointManager } from "./checkpoint.js";
 import { renderTokenGauge } from "./tokens.js";
 import { scanAndOnboardWorkspace } from "./onboard.js";
 import { runTestSuite } from "./tester.js";
+import { copyToClipboard, readFromClipboard } from "./clipboard.js";
 function parsePatchHunks(patch) {
     const lines = patch.split("\n");
     const fileHeaderLines = [];
@@ -115,6 +116,15 @@ export class InteractiveRepl {
             // ignore
         }
     }
+    getLastAssistantMessage() {
+        const messages = this.agent.getMessages();
+        for (let i = messages.length - 1; i >= 0; i--) {
+            if (messages[i].role === "assistant" && messages[i].content) {
+                return messages[i].content || "";
+            }
+        }
+        return "";
+    }
     printWelcome() {
         console.log(pc.bold(pc.cyan("\n╔════════════════════════════════════════════════════════════════╗")));
         console.log(pc.bold(pc.cyan("║           NEXUS CODE HARNESS - CODEX / CLAUDE-CODE REPL        ║")));
@@ -165,7 +175,9 @@ export class InteractiveRepl {
         console.log(`  ${pc.bold(pc.yellow("/model [name]"))}       View or switch loaded model`);
         console.log(`  ${pc.bold(pc.yellow("/shell [bash|zsh]"))}   Switch Linux execution shell`);
         console.log(`  ${pc.bold(pc.yellow("/cd <path>"))}          Change active workspace directory`);
-        console.log(`  ${pc.bold(pc.yellow("/history"))}            Show recent prompt history`);
+        console.log(`  ${pc.bold(pc.yellow("/history [query|!n]"))} Search history or re-execute item by index`);
+        console.log(`  ${pc.bold(pc.yellow("/copy [diff|code|last]"))} Copy diff, code blocks, or response to clipboard`);
+        console.log(`  ${pc.bold(pc.yellow("/paste"))}               Paste clipboard content into prompt`);
         console.log(`  ${pc.bold(pc.yellow("/commit [msg]"))}       Generate or execute conventional git commit\n`);
     }
     async confirmAction(toolName, args) {
@@ -283,7 +295,7 @@ export class InteractiveRepl {
                     "/skill", "/mcp", "/plugins", "/plan", "/checkpoint",
                     "/checkpoints", "/undo", "/audit", "/export", "/tokens", "/init",
                     "/onboard", "/test",
-                    "/model", "/shell", "/cd", "/history", "/exit", "/quit"
+                    "/model", "/shell", "/cd", "/history", "/copy", "/paste", "/exit", "/quit"
                 ];
                 const trimmed = line.trim();
                 const parts = line.split(/\s+/);
@@ -375,11 +387,25 @@ export class InteractiveRepl {
                     }
                 }
                 fullInput = fullInput.replace(/\x1b\[200~/g, "").replace(/\x1b\[201~/g, "");
-                const trimmed = fullInput.trim();
+                let trimmed = fullInput.trim();
                 if (!trimmed)
                     continue;
-                // Direct raw shell escape (e.g. !git status, !cargo check, !ls -la)
-                if (trimmed.startsWith("!")) {
+                // History recall shortcut: !<number>
+                if (/^\!\d+$/.test(trimmed)) {
+                    const idx = parseInt(trimmed.slice(1), 10) - 1;
+                    if (idx >= 0 && idx < this.history.length) {
+                        const recalled = this.history[idx];
+                        console.log(pc.cyan(`⚡ Recalled from history [#${idx + 1}]: ${pc.bold(recalled)}`));
+                        line = recalled;
+                        trimmed = recalled;
+                    }
+                    else {
+                        console.log(pc.red(`History index out of range: ${trimmed}. Type /history to view items.\n`));
+                        continue;
+                    }
+                }
+                else if (trimmed.startsWith("!")) {
+                    // Direct raw shell escape (e.g. !git status, !cargo check, !ls -la)
                     const shellCmd = trimmed.slice(1).trim();
                     if (shellCmd) {
                         console.log(pc.dim(`🐚 [Direct Shell] ${shellCmd}`));
@@ -678,12 +704,136 @@ export class InteractiveRepl {
                         continue;
                     }
                     else if (cmd === "history") {
-                        console.log(pc.bold(pc.white("\nRecent Command History:")));
-                        const recent = this.history.slice(-15);
-                        for (let i = 0; i < recent.length; i++) {
-                            console.log(`  ${pc.gray(i + 1)} ${recent[i]}`);
+                        const query = arg.trim();
+                        if (query.startsWith("run ") || /^\d+$/.test(query)) {
+                            const rawNum = query.startsWith("run ") ? query.slice(4).trim() : query;
+                            const idx = parseInt(rawNum, 10) - 1;
+                            if (idx >= 0 && idx < this.history.length) {
+                                const recalled = this.history[idx];
+                                console.log(pc.cyan(`⚡ Running from history [#${idx + 1}]: ${pc.bold(recalled)}`));
+                                this.checkpointManager.createCheckpoint(`Turn: ${recalled.slice(0, 30)}`);
+                                await this.agent.runTurn(recalled, (tool, args) => this.confirmAction(tool, args));
+                                this.saveCurrentSession(recalled);
+                            }
+                            else {
+                                console.log(pc.red(`History index out of range: ${rawNum}\n`));
+                            }
+                            continue;
                         }
-                        console.log();
+                        if (query) {
+                            const lowerQuery = query.toLowerCase();
+                            const matches = this.history
+                                .map((item, index) => ({ item, index }))
+                                .filter(({ item }) => item.toLowerCase().includes(lowerQuery));
+                            if (matches.length === 0) {
+                                console.log(pc.yellow(`No history items matching "${query}".\n`));
+                            }
+                            else {
+                                console.log(pc.bold(pc.white(`\nHistory search matches for "${query}":`)));
+                                for (const { item, index } of matches) {
+                                    const highlighted = item.replace(new RegExp(query.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "gi"), (m) => pc.bold(pc.yellow(m)));
+                                    console.log(`  ${pc.gray(`[${index + 1}]`)} ${highlighted}`);
+                                }
+                                console.log(pc.dim("\nUse '!<num>' or '/history run <num>' to re-run any item.\n"));
+                            }
+                        }
+                        else {
+                            console.log(pc.bold(pc.white("\nRecent Command History:")));
+                            const startIdx = Math.max(0, this.history.length - 20);
+                            for (let i = startIdx; i < this.history.length; i++) {
+                                console.log(`  ${pc.gray(`[${i + 1}]`)} ${this.history[i]}`);
+                            }
+                            console.log(pc.dim("\nUse '/history <query>' to search or '!<num>' to re-run.\n"));
+                        }
+                        continue;
+                    }
+                    else if (cmd === "copy") {
+                        const subArg = arg.trim().toLowerCase();
+                        if (subArg === "diff") {
+                            const git = getGitInfo(this.config.workspace);
+                            if (!git.isRepo) {
+                                console.log(pc.yellow("Current workspace is not inside a git repository.\n"));
+                                continue;
+                            }
+                            try {
+                                const diffOut = execSync("git diff", {
+                                    cwd: this.config.workspace,
+                                    encoding: "utf-8",
+                                    stdio: ["pipe", "pipe", "pipe"],
+                                });
+                                if (!diffOut.trim()) {
+                                    console.log(pc.yellow("No uncommitted git diffs to copy.\n"));
+                                }
+                                else {
+                                    const res = copyToClipboard(diffOut);
+                                    if (res.success) {
+                                        console.log(pc.green(`✔ Copied git diff (${diffOut.split("\n").length} lines) to clipboard.\n`));
+                                    }
+                                    else {
+                                        console.log(pc.red(`Clipboard error: ${res.error}\n`));
+                                    }
+                                }
+                            }
+                            catch (err) {
+                                console.log(pc.red(`Git diff error: ${err.message}\n`));
+                            }
+                        }
+                        else if (subArg === "code") {
+                            const lastAssistant = this.getLastAssistantMessage();
+                            if (!lastAssistant) {
+                                console.log(pc.yellow("No assistant response available in conversation history.\n"));
+                                continue;
+                            }
+                            const codeBlocks = [];
+                            const regex = /```(?:[a-zA-Z0-9_-]*)\n([\s\S]*?)```/g;
+                            let match;
+                            while ((match = regex.exec(lastAssistant)) !== null) {
+                                codeBlocks.push(match[1].trimEnd());
+                            }
+                            const contentToCopy = codeBlocks.length > 0 ? codeBlocks.join("\n\n// ────────────────────────────\n\n") : lastAssistant;
+                            const res = copyToClipboard(contentToCopy);
+                            if (res.success) {
+                                console.log(pc.green(`✔ Copied ${codeBlocks.length > 0 ? `${codeBlocks.length} code block(s)` : "latest response"} to clipboard.\n`));
+                            }
+                            else {
+                                console.log(pc.red(`Clipboard error: ${res.error}\n`));
+                            }
+                        }
+                        else {
+                            const lastAssistant = this.getLastAssistantMessage();
+                            if (!lastAssistant) {
+                                console.log(pc.yellow("No assistant response available in conversation history.\n"));
+                                continue;
+                            }
+                            const res = copyToClipboard(lastAssistant);
+                            if (res.success) {
+                                console.log(pc.green(`✔ Copied last assistant response (${lastAssistant.length} chars) to clipboard.\n`));
+                            }
+                            else {
+                                console.log(pc.red(`Clipboard error: ${res.error}\n`));
+                            }
+                        }
+                        continue;
+                    }
+                    else if (cmd === "paste") {
+                        const res = readFromClipboard();
+                        if (!res.success || !res.text) {
+                            console.log(pc.red(`Clipboard error: ${res.error || "Clipboard is empty"}\n`));
+                        }
+                        else {
+                            const preview = res.text.length > 200 ? res.text.slice(0, 200) + "..." : res.text;
+                            console.log(pc.bold(pc.white(`\nClipboard contents (${res.text.length} chars):`)));
+                            console.log(pc.gray(preview));
+                            const confirm = await this.rl.question(pc.bold(pc.white(`\nSend clipboard content as user prompt? [y/N]: `)));
+                            if (confirm.trim().toLowerCase() === "y" || confirm.trim().toLowerCase() === "yes") {
+                                this.checkpointManager.createCheckpoint(`Turn: ${res.text.slice(0, 30)}`);
+                                await this.agent.runTurn(res.text, (tool, args) => this.confirmAction(tool, args));
+                                this.saveCurrentSession(res.text);
+                            }
+                            else {
+                                console.log(pc.dim("Paste cancelled.\n"));
+                            }
+                        }
                         continue;
                     }
                     else if (cmd === "shell") {
