@@ -16,6 +16,8 @@ import { FlightPlayer } from "./flight.js";
 import { WorktreeManager } from "./worktree.js";
 import { HunkStager } from "./stager.js";
 import { BenchmarkEvaluator } from "./evaluator.js";
+import { BrowserDriver } from "./browser.js";
+import { KnowledgeGraph } from "./knowledge.js";
 import pc from "picocolors";
 import * as os from "node:os";
 const __filename = fileURLToPath(import.meta.url);
@@ -562,6 +564,64 @@ program
     const outputPath = path.resolve(options.output || "eval-scorecard.md");
     fs.writeFileSync(outputPath, scorecard, "utf-8");
     console.log(pc.green(`✔ Scorecard saved to: ${outputPath}\n`));
+});
+program
+    .command("knowledge [action] [key] [val...]")
+    .description("Inspect or manage persistent project knowledge graph")
+    .option("-w, --workspace <path>", "Workspace directory", process.cwd())
+    .option("-c, --category <type>", "Category: idiom, architecture, dependency, troubleshooting, rule", "rule")
+    .action((action, key, valParts, options) => {
+    const ws = options.workspace ? path.resolve(options.workspace) : process.cwd();
+    const kg = new KnowledgeGraph(ws);
+    const act = (action || "list").toLowerCase();
+    if (act === "set" && key) {
+        const val = (valParts || []).join(" ");
+        const entry = kg.set(key, val, options.category);
+        console.log(pc.green(`✔ Saved knowledge entry: [${entry.category}] ${entry.key}`));
+    }
+    else if (act === "get" && key) {
+        const entry = kg.get(key);
+        if (entry) {
+            console.log(`\n• [${pc.cyan(entry.category)}] ${pc.bold(entry.key)}: ${pc.white(entry.value)} (confidence: ${entry.confidence})\n`);
+        }
+        else {
+            console.log(pc.yellow(`Key '${key}' not found in knowledge graph.\n`));
+        }
+    }
+    else if (act === "delete" && key) {
+        const deleted = kg.delete(key);
+        console.log(deleted ? pc.green(`✔ Deleted entry: ${key}\n`) : pc.yellow(`Entry not found: ${key}\n`));
+    }
+    else {
+        const list = kg.list();
+        if (list.length === 0) {
+            console.log(pc.yellow("\nNo persistent knowledge entries found in .nexus/knowledge.json\n"));
+            return;
+        }
+        console.log(pc.bold(pc.cyan(`\n=== Persistent Project Knowledge Graph (${list.length} entries) ===\n`)));
+        for (const e of list) {
+            console.log(`• [${pc.cyan(e.category)}] ${pc.bold(e.key)}: ${pc.white(e.value)}`);
+        }
+        console.log();
+    }
+});
+program
+    .command("browse <url>")
+    .description("Verify local or remote web frontend using headless browser driver")
+    .option("-w, --workspace <path>", "Workspace directory", process.cwd())
+    .option("--screenshot", "Capture page screenshot")
+    .action(async (url, options) => {
+    const ws = options.workspace ? path.resolve(options.workspace) : process.cwd();
+    const driver = new BrowserDriver(ws);
+    console.log(pc.bold(pc.cyan(`\n🌐 Navigating headless browser to: ${url}`)));
+    const res = await driver.navigate(url);
+    console.log(`Title: ${pc.bold(res.title)} | Status: ${res.status === 200 ? pc.green(res.status) : pc.yellow(res.status)}`);
+    console.log(`Snippet:\n${pc.dim(res.contentSnippet.slice(0, 300))}...\n`);
+    if (options.screenshot) {
+        const shot = await driver.screenshot();
+        console.log(pc.green(`✔ Screenshot saved: ${shot.path}\n`));
+    }
+    await driver.close();
 });
 if (process.argv.length <= 2) {
     process.argv.push("repl");

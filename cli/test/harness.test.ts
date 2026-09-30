@@ -32,6 +32,9 @@ import { parseDiffHunks, buildSingleHunkPatch, HunkStager } from "../src/stager.
 import { BM25Index, VectorIndex, cosineSimilarity, reciprocalRankFusion, HybridSearchEngine } from "../src/embeddings.js";
 import { BenchmarkEvaluator } from "../src/evaluator.js";
 import { SynthesizerEngine } from "../src/synthesizer.js";
+import { BrowserDriver } from "../src/browser.js";
+import { KnowledgeGraph } from "../src/knowledge.js";
+import { SecretsVault } from "../src/security.js";
 
 describe("Nexus Code Test Suite", () => {
   test("HARNESS_TOOLS definitions include all parity tools", () => {
@@ -2569,5 +2572,127 @@ export class CacheService {
     } finally {
       fs.rmSync(tempDir, { recursive: true, force: true });
     }
+  });
+
+  test("BrowserDriver navigates web resources, captures screenshots, and handles DOM interactions", async () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-browser-test-"));
+    try {
+      const htmlFile = path.join(tempDir, "index.html");
+      fs.writeFileSync(
+        htmlFile,
+        `<!DOCTYPE html><html><head><title>Nexus Test App</title></head><body><h1 id="header">Welcome to Nexus</h1><input id="email-input" type="text" /><button id="login-btn">Log In</button></body></html>`,
+        "utf-8"
+      );
+
+      const driver = new BrowserDriver(tempDir, 9999);
+      const initRes = await driver.init();
+      assert.strictEqual(typeof initRes.cdpActive, "boolean");
+
+      // 1. Navigate to local HTML file
+      const navRes = await driver.navigate(htmlFile);
+      assert.strictEqual(navRes.status, 200);
+      assert.strictEqual(navRes.title, "Nexus Test App");
+      assert.ok(navRes.contentSnippet.includes("Welcome to Nexus"));
+
+      // 2. Click DOM element
+      const clickRes = await driver.click("#login-btn");
+      assert.strictEqual(clickRes.success, true);
+      assert.ok(clickRes.message.includes("#login-btn"));
+
+      // 3. Type into input element
+      const typeRes = await driver.type("#email-input", "engineer@nexus.local");
+      assert.strictEqual(typeRes.success, true);
+
+      // 4. Capture screenshot
+      const shotPath = path.join(tempDir, "test-screenshot.png");
+      const shot = await driver.screenshot(shotPath);
+      assert.strictEqual(shot.path, shotPath);
+      assert.ok(fs.existsSync(shotPath));
+      assert.ok(shot.width > 0);
+      assert.ok(shot.height > 0);
+
+      // 5. Inspect console logs & DOM snapshot
+      const logs = driver.getConsoleLogs();
+      assert.ok(logs.length >= 2);
+      const dom = driver.getDomSnapshot();
+      assert.ok(dom.includes("Nexus Test App"));
+
+      await driver.close();
+    } finally {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  test("KnowledgeGraph persists project idioms across sessions, filters queries, and exports prompt section", () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-kg-test-"));
+    try {
+      const kg = new KnowledgeGraph(tempDir);
+      assert.strictEqual(kg.list().length, 0);
+
+      // 1. Add knowledge entries
+      const e1 = kg.set("package-manager", "Always use pnpm, never npm or yarn", "rule");
+      const e2 = kg.set("test-framework", "Project runs node:test via npm test", "idiom");
+      const e3 = kg.set("migration-flow", "Run cargo sqlx migrate run before cargo test", "architecture");
+
+      assert.strictEqual(kg.list().length, 3);
+      assert.strictEqual(kg.get("package-manager")?.value, "Always use pnpm, never npm or yarn");
+
+      // 2. Query knowledge by category and search term
+      const ruleQuery = kg.query(undefined, "rule");
+      assert.strictEqual(ruleQuery.length, 1);
+      assert.strictEqual(ruleQuery[0].key, "package-manager");
+
+      const textQuery = kg.query("sqlx");
+      assert.strictEqual(textQuery.length, 1);
+      assert.strictEqual(textQuery[0].key, "migration-flow");
+
+      // 3. Export prompt section
+      const promptSec = kg.exportPromptSection();
+      assert.ok(promptSec.includes("Persistent Project Knowledge & Conventions"));
+      assert.ok(promptSec.includes("package-manager"));
+      assert.ok(promptSec.includes("Always use pnpm"));
+
+      // 4. Verify persistence across new instance
+      const kg2 = new KnowledgeGraph(tempDir);
+      assert.strictEqual(kg2.list().length, 3);
+      assert.strictEqual(kg2.get("test-framework")?.key, "test-framework");
+
+      // 5. Delete entry
+      const delSuccess = kg2.delete("migration-flow");
+      assert.strictEqual(delSuccess, true);
+      assert.strictEqual(kg2.list().length, 2);
+    } finally {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  test("SecretsVault reversibly quarantines sensitive API keys and tokens before egress and restores them", () => {
+    const vault = new SecretsVault();
+    const rawOutbound = `
+Connecting to provider with Bearer bAGOhOwLeY7Mabcdef123456789.
+API Key: sk-proj-1234567890abcdef1234567890123456789012.
+GitHub token: ghp_123456789012345678901234567890123456.
+Workspace path: /home/user/project.
+`;
+
+    // 1. Quarantine outbound text
+    const { sanitized, quarantinedCount } = vault.quarantine(rawOutbound);
+    assert.strictEqual(quarantinedCount, 3);
+
+    // Verify raw secrets are completely eliminated from sanitized text
+    assert.ok(!sanitized.includes("sk-proj-1234567890abcdef"));
+    assert.ok(!sanitized.includes("ghp_1234567890123456"));
+    assert.ok(!sanitized.includes("bAGOhOwLeY7Mabcdef"));
+    assert.ok(sanitized.includes("[SECRET_REF_1]"));
+    assert.ok(sanitized.includes("[SECRET_REF_2]"));
+    assert.ok(sanitized.includes("[SECRET_REF_3]"));
+    assert.ok(sanitized.includes("/home/user/project"));
+
+    // 2. Restore sanitized text for local execution
+    const restored = vault.restore(sanitized);
+    assert.ok(restored.includes("sk-proj-1234567890abcdef1234567890123456789012"));
+    assert.ok(restored.includes("ghp_123456789012345678901234567890123456"));
+    assert.ok(restored.includes("Bearer bAGOhOwLeY7Mabcdef123456789"));
+    assert.strictEqual(vault.getMappingCount(), 3);
   });
 });

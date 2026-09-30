@@ -177,6 +177,8 @@ export class InteractiveRepl {
     console.log(`  ${pc.bold(pc.yellow("/stage [reset]"))}       Inspect and stage individual diff hunks`);
     console.log(`  ${pc.bold(pc.yellow("/worktree [status|merge|discard]"))} Manage isolated ephemeral git worktrees`);
     console.log(`  ${pc.bold(pc.yellow("/tdd <issue>"))}         Execute strict RED-GREEN-REFACTOR TDD cycle`);
+    console.log(`  ${pc.bold(pc.yellow("/knowledge [set|del]"))} Manage persistent project knowledge graph`);
+    console.log(`  ${pc.bold(pc.yellow("/browse <url>"))}        Verify URL in headless browser driver`);
     console.log(`  ${pc.bold(pc.yellow("/git"))}                Show current git status and modified files`);
     console.log(`  ${pc.bold(pc.yellow("/sessions"))}           List past saved sessions`);
     console.log(`  ${pc.bold(pc.yellow("/save [name]"))}        Save current session snapshot to ~/.nexus/sessions/`);
@@ -616,6 +618,42 @@ export class InteractiveRepl {
               console.log(pc.bold(pc.yellow(`\n⚠️ TDD Cycle Ended at Phase: ${res.finalPhase} - ${res.summary}`)));
             }
             console.log();
+            continue;
+          } else if (cmd === "knowledge") {
+            const kg = this.agent.getKnowledgeGraph();
+            const subparts = arg.split(/\s+/).filter(Boolean);
+            const subact = subparts[0]?.toLowerCase() || "list";
+            if (subact === "set" && subparts[1]) {
+              const k = subparts[1];
+              const v = subparts.slice(2).join(" ");
+              const entry = kg.set(k, v, "rule");
+              console.log(pc.green(`✔ Saved knowledge: [${entry.category}] ${entry.key}\n`));
+            } else if (subact === "delete" && subparts[1]) {
+              const deleted = kg.delete(subparts[1]);
+              console.log(deleted ? pc.green(`✔ Deleted: ${subparts[1]}\n`) : pc.yellow(`Not found: ${subparts[1]}\n`));
+            } else {
+              const list = kg.list();
+              if (list.length === 0) {
+                console.log(pc.dim("No persistent knowledge entries found. Use: /knowledge set <key> <rule>\n"));
+              } else {
+                console.log(pc.bold(pc.cyan(`\n=== Persistent Knowledge Graph (${list.length} entries) ===\n`)));
+                for (const e of list) {
+                  console.log(`• [${pc.cyan(e.category)}] ${pc.bold(e.key)}: ${pc.white(e.value)}`);
+                }
+                console.log();
+              }
+            }
+            continue;
+          } else if (cmd === "browse") {
+            if (!arg.trim()) {
+              console.log(pc.yellow("Please provide a target URL: /browse <url>\n"));
+              continue;
+            }
+            const driver = this.agent.getBrowserDriver();
+            console.log(pc.bold(pc.cyan(`\n🌐 Navigating headless browser to: ${arg}`)));
+            const res = await driver.navigate(arg.trim());
+            console.log(`Title: ${pc.bold(res.title)} | Status: ${res.status === 200 ? pc.green(res.status) : pc.yellow(res.status)}`);
+            console.log(`Snippet:\n${pc.dim(res.contentSnippet.slice(0, 300))}...\n`);
             continue;
           } else if (cmd === "sessions") {
             const list = this.sessionManager.listSessions();

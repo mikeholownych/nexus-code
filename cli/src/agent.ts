@@ -20,6 +20,8 @@ import { FlightRecorder } from "./flight.js";
 import { WorktreeManager } from "./worktree.js";
 import { HybridSearchEngine } from "./embeddings.js";
 import { SynthesizerEngine } from "./synthesizer.js";
+import { BrowserDriver } from "./browser.js";
+import { KnowledgeGraph } from "./knowledge.js";
 import pc from "picocolors";
 
 export type ConfirmHandler = (toolName: string, args: Record<string, any>) => Promise<boolean>;
@@ -120,6 +122,8 @@ const READ_ONLY_TOOLS = new Set([
   "outline_file",
   "trigram_search",
   "hybrid_search",
+  "browser_console_logs",
+  "browser_screenshot",
 ]);
 
 /**
@@ -216,6 +220,8 @@ export class AutonomousAgent {
   private tierStats = { plannerTurns: 0, coderTurns: 0 };
   private hybridSearch: HybridSearchEngine;
   private synthesizer: SynthesizerEngine;
+  private browser: BrowserDriver;
+  private knowledge: KnowledgeGraph;
 
   constructor(config: HarnessConfig, depth: number = 0) {
     canonicalDurableProvenance.set(this, new WeakMap());
@@ -245,6 +251,8 @@ export class AutonomousAgent {
     }
     this.hybridSearch = new HybridSearchEngine(ws, this.client);
     this.synthesizer = new SynthesizerEngine(ws);
+    this.browser = new BrowserDriver(ws);
+    this.knowledge = new KnowledgeGraph(ws);
     this.bridge = new RustCoreBridge(
       ws,
       config.shell,
@@ -341,6 +349,14 @@ export class AutonomousAgent {
     return this.synthesizer;
   }
 
+  public getBrowserDriver(): BrowserDriver {
+    return this.browser;
+  }
+
+  public getKnowledgeGraph(): KnowledgeGraph {
+    return this.knowledge;
+  }
+
   public getCognitiveTier(): "planner" | "coder" {
     return this.activeTier;
   }
@@ -432,6 +448,8 @@ export class AutonomousAgent {
     this.pluginManager = new PluginManager(newWorkspace);
     this.hybridSearch = new HybridSearchEngine(newWorkspace, this.client);
     this.synthesizer = new SynthesizerEngine(newWorkspace);
+    this.browser = new BrowserDriver(newWorkspace);
+    this.knowledge = new KnowledgeGraph(newWorkspace);
     this.extensibilityInitialized = false;
     this.resetConversation();
   }
@@ -796,6 +814,7 @@ export class AutonomousAgent {
     const projectRules = getProjectRules(this.config.workspace);
     const rulesSection = projectRules ? `\n${projectRules}\n` : "";
     const skillsSection = this.skillManager ? `\n${this.skillManager.getPromptSection()}` : "";
+    const knowledgeSection = this.knowledge ? `\n${this.knowledge.exportPromptSection()}` : "";
 
     // Invariant prompt prefix optimization for local AI:
     // Fixed canonical few-shots ensure byte-exact prefix caching across turns (vLLM / llama.cpp / Ollama)
@@ -813,7 +832,7 @@ You solve coding problems, build features, fix bugs, and refactor codebases by i
 ### Shell Environment:
 - Active Shell: ${this.config.shell} (standard GNU/Linux shell environment)
 - Workspace directory: ${this.config.workspace}
-${rulesSection}${skillsSection}
+${rulesSection}${skillsSection}${knowledgeSection}
 ### Operating Rules:
 1. EXPLORE FIRST: Before editing files, always explore the workspace using \`file_tree\`, \`list_dir\`, \`find_files\`, \`search_code\`, or \`read_file\`. For large files, use \`outline_file\` first to inspect class/function signatures without loading the entire file into context.
 2. HIGH-EFFICIENCY BATCHING: Prefer \`batch_read\` to read multiple files concurrently in a single turn, and \`file_info\` to inspect metadata without loading whole files.
@@ -1066,6 +1085,15 @@ Always explain your reasoning before or alongside your tool calls.`;
           args = { raw: call.function.arguments };
         }
 
+        // Reversibly restore any quarantined secret references for local execution
+        try {
+          const serialized = JSON.stringify(args);
+          const restored = this.securityManager.getVault().restore(serialized);
+          if (restored !== serialized) {
+            args = JSON.parse(restored);
+          }
+        } catch {}
+
         if (this.flightRecorder) {
           this.flightRecorder.recordToolCall(currentStep, call.id, toolName, args);
         }
@@ -1206,6 +1234,184 @@ Always explain your reasoning before or alongside your tool calls.`;
               content: `Error executing hybrid_search: ${err.message}`,
             });
           }
+          continue;
+        }
+
+        if (toolName === "browser_navigate") {
+          const t0 = Date.now();
+          this.ui.startSpinner(`Navigating browser to ${args.url}...`);
+          try {
+            const nav = await this.browser.navigate(args.url || "");
+            const durationMs = Date.now() - t0;
+            this.ui.stopSpinner(true);
+            const output = JSON.stringify(nav, null, 2);
+            if (this.flightRecorder) {
+              this.flightRecorder.recordToolResult(currentStep, call.id, toolName, true, output, durationMs);
+            }
+            this.ui.printToolResult(toolName, true, `Loaded: ${nav.title} (${nav.status})`);
+            this.messages.push({
+              role: "tool",
+              tool_call_id: call.id,
+              name: toolName,
+              content: output,
+            });
+          } catch (err: any) {
+            const durationMs = Date.now() - t0;
+            this.ui.stopSpinner(false);
+            if (this.flightRecorder) {
+              this.flightRecorder.recordToolResult(currentStep, call.id, toolName, false, "", durationMs, err.message);
+            }
+            this.messages.push({
+              role: "tool",
+              tool_call_id: call.id,
+              name: toolName,
+              content: `Error executing browser_navigate: ${err.message}`,
+            });
+          }
+          continue;
+        }
+
+        if (toolName === "browser_screenshot") {
+          const t0 = Date.now();
+          this.ui.startSpinner("Capturing browser viewport screenshot...");
+          try {
+            const shot = await this.browser.screenshot(args.output_path);
+            const durationMs = Date.now() - t0;
+            this.ui.stopSpinner(true);
+            const output = JSON.stringify({ path: shot.path, width: shot.width, height: shot.height }, null, 2);
+            if (this.flightRecorder) {
+              this.flightRecorder.recordToolResult(currentStep, call.id, toolName, true, output, durationMs);
+            }
+            this.ui.printToolResult(toolName, true, `Screenshot captured: ${shot.path}`);
+            this.messages.push({
+              role: "tool",
+              tool_call_id: call.id,
+              name: toolName,
+              content: output,
+            });
+          } catch (err: any) {
+            const durationMs = Date.now() - t0;
+            this.ui.stopSpinner(false);
+            if (this.flightRecorder) {
+              this.flightRecorder.recordToolResult(currentStep, call.id, toolName, false, "", durationMs, err.message);
+            }
+            this.messages.push({
+              role: "tool",
+              tool_call_id: call.id,
+              name: toolName,
+              content: `Error executing browser_screenshot: ${err.message}`,
+            });
+          }
+          continue;
+        }
+
+        if (toolName === "browser_click") {
+          const t0 = Date.now();
+          this.ui.startSpinner(`Clicking element '${args.selector}'...`);
+          try {
+            const clickRes = await this.browser.click(args.selector || "");
+            const durationMs = Date.now() - t0;
+            this.ui.stopSpinner(clickRes.success);
+            const output = JSON.stringify(clickRes, null, 2);
+            if (this.flightRecorder) {
+              this.flightRecorder.recordToolResult(currentStep, call.id, toolName, clickRes.success, output, durationMs);
+            }
+            this.ui.printToolResult(toolName, clickRes.success, clickRes.message);
+            this.messages.push({
+              role: "tool",
+              tool_call_id: call.id,
+              name: toolName,
+              content: output,
+            });
+          } catch (err: any) {
+            const durationMs = Date.now() - t0;
+            this.ui.stopSpinner(false);
+            this.messages.push({
+              role: "tool",
+              tool_call_id: call.id,
+              name: toolName,
+              content: `Error executing browser_click: ${err.message}`,
+            });
+          }
+          continue;
+        }
+
+        if (toolName === "browser_type") {
+          const t0 = Date.now();
+          this.ui.startSpinner(`Typing into '${args.selector}'...`);
+          try {
+            const typeRes = await this.browser.type(args.selector || "", args.text || "");
+            const durationMs = Date.now() - t0;
+            this.ui.stopSpinner(typeRes.success);
+            const output = JSON.stringify(typeRes, null, 2);
+            if (this.flightRecorder) {
+              this.flightRecorder.recordToolResult(currentStep, call.id, toolName, typeRes.success, output, durationMs);
+            }
+            this.ui.printToolResult(toolName, typeRes.success, typeRes.message);
+            this.messages.push({
+              role: "tool",
+              tool_call_id: call.id,
+              name: toolName,
+              content: output,
+            });
+          } catch (err: any) {
+            const durationMs = Date.now() - t0;
+            this.ui.stopSpinner(false);
+            this.messages.push({
+              role: "tool",
+              tool_call_id: call.id,
+              name: toolName,
+              content: `Error executing browser_type: ${err.message}`,
+            });
+          }
+          continue;
+        }
+
+        if (toolName === "browser_console_logs") {
+          const logs = this.browser.getConsoleLogs(args.limit ? parseInt(args.limit, 10) : 50);
+          const output = JSON.stringify({ totalLogs: logs.length, logs }, null, 2);
+          this.ui.printToolResult(toolName, true, `${logs.length} console log entries.`);
+          if (this.flightRecorder) {
+            this.flightRecorder.recordToolResult(currentStep, call.id, toolName, true, output, 0);
+          }
+          this.messages.push({
+            role: "tool",
+            tool_call_id: call.id,
+            name: toolName,
+            content: output,
+          });
+          continue;
+        }
+
+        if (toolName === "manage_knowledge") {
+          let output = "";
+          const action = args.action || "list";
+          if (action === "set") {
+            const entry = this.knowledge.set(args.key || "custom-rule", args.value || "", args.category || "rule");
+            output = JSON.stringify({ status: "saved", entry }, null, 2);
+          } else if (action === "get") {
+            const entry = this.knowledge.get(args.key || "");
+            output = JSON.stringify({ found: Boolean(entry), entry }, null, 2);
+          } else if (action === "delete") {
+            const deleted = this.knowledge.delete(args.key || "");
+            output = JSON.stringify({ status: deleted ? "deleted" : "not_found", key: args.key }, null, 2);
+          } else if (action === "query") {
+            const entries = this.knowledge.query(args.key || args.value, args.category);
+            output = JSON.stringify({ total: entries.length, entries }, null, 2);
+          } else {
+            const entries = this.knowledge.list();
+            output = JSON.stringify({ total: entries.length, entries }, null, 2);
+          }
+          this.ui.printToolResult(toolName, true, `Knowledge operation: ${action}`);
+          if (this.flightRecorder) {
+            this.flightRecorder.recordToolResult(currentStep, call.id, toolName, true, output, 0);
+          }
+          this.messages.push({
+            role: "tool",
+            tool_call_id: call.id,
+            name: toolName,
+            content: output,
+          });
           continue;
         }
 
@@ -1436,6 +1642,10 @@ Always explain your reasoning before or alongside your tool calls.`;
     }
 
     triggerNotification("Nexus Code", "Turn completed.");
+
+    try {
+      this.knowledge.autoExtract(promptText, "");
+    } catch {}
 
     if (!isFinished && this.flightRecorder) {
       this.flightRecorder.recordSessionEnd(

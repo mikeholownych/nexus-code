@@ -108,4 +108,86 @@ export class SecurityManager {
   public getPolicy(): SecurityPolicy {
     return this.policy;
   }
+
+  private vault = new SecretsVault();
+  public getVault(): SecretsVault {
+    return this.vault;
+  }
+}
+
+/**
+ * SecretsVault: Reversible token placeholder secrets quarantine.
+ * Replaces live API keys and credentials with `[SECRET_REF_N]` placeholders
+ * before outbound transmission, and restores original values for local tool execution.
+ */
+export class SecretsVault {
+  private refMap: Map<string, string> = new Map(); // placeholder -> secret
+  private secretMap: Map<string, string> = new Map(); // secret -> placeholder
+  private nextId: number = 1;
+
+  private static SECRET_PATTERNS = [
+    // OpenAI / Anthropic / GitHub / Slack / AWS Tokens
+    /(?:sk-[a-zA-Z0-9_\-]{20,64})/g,
+    /(?:ghp_[a-zA-Z0-9]{36})/g,
+    /(?:github_pat_[a-zA-Z0-9_]{50,90})/g,
+    /(?:AKIA[0-9A-Z]{16})/g,
+    /(?:xox[baprs]-[0-9a-zA-Z]{10,48})/g,
+    // Bearer / Authorization headers
+    /(?:Bearer\s+[a-zA-Z0-9_\-\.]{16,128})/g,
+    // Generic passwords or secrets in key=value / json format
+    /(?:(?:password|secret|api_key|apiKey|token)["']?\s*[:=]\s*["'])([^"' \t\r\n]{8,64})(?:["'])/gi,
+  ];
+
+  /**
+   * Quarantines detected credentials by replacing them with deterministic `[SECRET_REF_N]` references.
+   */
+  public quarantine(text: string): { sanitized: string; quarantinedCount: number } {
+    let sanitized = text;
+    let quarantinedCount = 0;
+
+    for (const pattern of SecretsVault.SECRET_PATTERNS) {
+      sanitized = sanitized.replace(pattern, (...args: any[]) => {
+        const match = String(args[0]);
+        const captured = (args.length > 3 && typeof args[1] === "string") ? args[1] : match;
+        const rawSecret = String(captured || match);
+        // Avoid quarantining short words or common code terms
+        if (rawSecret.length < 8 || rawSecret.includes("[SECRET_REF_")) {
+          return match;
+        }
+
+        let placeholder = this.secretMap.get(rawSecret);
+        if (!placeholder) {
+          placeholder = `[SECRET_REF_${this.nextId++}]`;
+          this.secretMap.set(rawSecret, placeholder);
+          this.refMap.set(placeholder, rawSecret);
+          quarantinedCount++;
+        }
+
+        return match.replace(rawSecret, placeholder);
+      });
+    }
+
+    return { sanitized, quarantinedCount };
+  }
+
+  /**
+   * Restores sanitized placeholder tokens back to real secrets for local command execution.
+   */
+  public restore(sanitizedText: string): string {
+    let restored = sanitizedText;
+    for (const [placeholder, secret] of this.refMap.entries()) {
+      restored = restored.replaceAll(placeholder, secret);
+    }
+    return restored;
+  }
+
+  public getMappingCount(): number {
+    return this.refMap.size;
+  }
+
+  public clear(): void {
+    this.refMap.clear();
+    this.secretMap.clear();
+    this.nextId = 1;
+  }
 }

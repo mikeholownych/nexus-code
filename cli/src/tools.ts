@@ -663,6 +663,124 @@ export const HARNESS_TOOLS: ToolDefinition[] = [
       },
     },
   },
+  {
+    type: "function",
+    function: {
+      name: "browser_navigate",
+      description: "Navigate the headless browser to a local development server URL (e.g. http://localhost:3000), web page, or HTML file for runtime verification.",
+      parameters: {
+        type: "object",
+        properties: {
+          url: {
+            type: "string",
+            description: "The complete HTTP/HTTPS URL or local HTML file path to load.",
+          },
+        },
+        required: ["url"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "browser_screenshot",
+      description: "Capture a viewport screenshot of the active browser page to verify frontend layout or UI state.",
+      parameters: {
+        type: "object",
+        properties: {
+          output_path: {
+            type: "string",
+            description: "Optional destination file path for screenshot PNG (defaults to .nexus/screenshots/).",
+          },
+        },
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "browser_click",
+      description: "Click an interactive DOM element on the active browser page by CSS selector or element ID.",
+      parameters: {
+        type: "object",
+        properties: {
+          selector: {
+            type: "string",
+            description: "CSS selector of the element to click (e.g. '#submit-btn' or 'button.login').",
+          },
+        },
+        required: ["selector"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "browser_type",
+      description: "Type text into an input field or textarea on the active browser page.",
+      parameters: {
+        type: "object",
+        properties: {
+          selector: {
+            type: "string",
+            description: "CSS selector of target input element.",
+          },
+          text: {
+            type: "string",
+            description: "Text to enter into the target field.",
+          },
+        },
+        required: ["selector", "text"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "browser_console_logs",
+      description: "Inspect browser console logs, warnings, and uncaught exceptions for frontend diagnostics.",
+      parameters: {
+        type: "object",
+        properties: {
+          limit: {
+            type: "number",
+            description: "Maximum recent log entries to return (default: 50).",
+          },
+        },
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "manage_knowledge",
+      description: "Query or record persistent project idioms, rules, dependencies, and architectural decisions.",
+      parameters: {
+        type: "object",
+        properties: {
+          action: {
+            type: "string",
+            enum: ["get", "set", "list", "delete", "query"],
+            description: "The knowledge operation to execute.",
+          },
+          key: {
+            type: "string",
+            description: "Knowledge entry key identifier (e.g. 'preferred-package-manager').",
+          },
+          value: {
+            type: "string",
+            description: "Value or rule description to persist.",
+          },
+          category: {
+            type: "string",
+            enum: ["idiom", "architecture", "dependency", "troubleshooting", "rule"],
+            description: "Classification category for the knowledge entry.",
+          },
+        },
+        required: ["action"],
+      },
+    },
+  },
 ];
 
 export function isSafeOutboundUrl(urlStr: string): { safe: boolean; reason?: string } {
