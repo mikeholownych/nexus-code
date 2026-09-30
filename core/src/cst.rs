@@ -171,6 +171,55 @@ pub fn scan_workspace_cst(base_dir: &Path, args: CstParseArgs) -> Result<CstPars
     })
 }
 
+#[derive(Debug, Serialize, Deserialize)]
+pub struct OutlineFileArgs {
+    pub path: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct OutlineFileResult {
+    pub path: String,
+    pub total_lines: usize,
+    pub symbol_count: usize,
+    pub outline: String,
+}
+
+/// Generates a compact AST symbol outline for a source file to conserve local LLM context
+pub fn generate_file_outline(base_dir: &Path, args: OutlineFileArgs) -> Result<OutlineFileResult, String> {
+    let target = crate::file_ops::resolve_safe_path(base_dir, &args.path)?;
+    if !target.is_file() {
+        return Err(format!("File does not exist or is not a file: {}", args.path));
+    }
+
+    let rel_path = target.strip_prefix(base_dir).unwrap_or(&target).to_string_lossy().to_string();
+    let symbols = parse_cst_symbols(&target, &rel_path, None)?;
+    let content = std::fs::read_to_string(&target).map_err(|e| format!("Failed to read file: {e}"))?;
+    let total_lines = content.lines().count();
+
+    let mut outline_str = format!("File: {} ({} lines, {} symbols)\n", rel_path, total_lines, symbols.len());
+    if symbols.is_empty() {
+        outline_str.push_str("No top-level declarations or exported symbols detected.\n");
+    } else {
+        for s in &symbols {
+            let doc_hint = s.doc_comment.as_ref()
+                .and_then(|d| d.lines().next())
+                .map(|line| format!(" - \"{}\"", line.trim()))
+                .unwrap_or_default();
+            outline_str.push_str(&format!(
+                "- [{}] {} (lines {}-{}) [{}]{}\n",
+                s.kind, s.name, s.start_line, s.end_line, s.visibility, doc_hint
+            ));
+        }
+    }
+
+    Ok(OutlineFileResult {
+        path: args.path,
+        total_lines,
+        symbol_count: symbols.len(),
+        outline: outline_str,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -196,6 +245,14 @@ pub async fn execute_task(
         assert_eq!(s.visibility, "pub");
         assert!(s.signature.contains("-> Result<bool, String>"));
         assert!(s.doc_comment.as_ref().unwrap().contains("High-level engine runner"));
+
+        let outline_res = generate_file_outline(&std::env::temp_dir(), OutlineFileArgs {
+            path: "nexus_cst_test.rs".into(),
+        }).unwrap();
+        assert_eq!(outline_res.symbol_count, 1);
+        assert!(outline_res.outline.contains("- [fn] execute_task"));
+        assert!(outline_res.outline.contains("lines"));
+
         let _ = std::fs::remove_file(tmp);
     }
 }

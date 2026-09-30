@@ -152,6 +152,12 @@ fn execute_tool(tool_name: &str, params: Value, base_dir: &Path) -> Result<Value
             let res = cst::scan_workspace_cst(base_dir, args)?;
             serde_json::to_value(res).map_err(|e| e.to_string())
         }
+        "outline_file" => {
+            let args: cst::OutlineFileArgs = serde_json::from_value(params)
+                .map_err(|e| format!("Invalid outline_file arguments: {e}"))?;
+            let res = cst::generate_file_outline(base_dir, args)?;
+            serde_json::to_value(res).map_err(|e| e.to_string())
+        }
         "trigram_search" => {
             let args: trigram::TrigramSearchArgs = serde_json::from_value(params)
                 .map_err(|e| format!("Invalid trigram_search arguments: {e}"))?;

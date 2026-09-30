@@ -51,8 +51,33 @@ const READ_ONLY_TOOLS = new Set([
     "git_diff",
     "git_log",
     "cst_symbols",
+    "outline_file",
     "trigram_search",
 ]);
+/**
+ * Folds voluminous terminal outputs to conserve local LLM context window while preserving critical error signals.
+ */
+export function foldVoluminousOutput(output, maxLines = 60, maxChars = 4000) {
+    if (!output || (output.length <= maxChars && output.split("\n").length <= maxLines)) {
+        return output;
+    }
+    const lines = output.split(/\r?\n/);
+    if (lines.length <= maxLines) {
+        return output.slice(0, maxChars) + "\n... [TRUNCATED]";
+    }
+    const head = lines.slice(0, 15);
+    const tail = lines.slice(-25);
+    const middle = lines.slice(15, -25);
+    const errorLinePattern = /error|fail|panic|exception|assert|traceback|warning|cannot|undefined|syntax/i;
+    const criticalMiddle = middle.filter((line) => errorLinePattern.test(line)).slice(0, 15);
+    const omittedCount = lines.length - head.length - tail.length - criticalMiddle.length;
+    return [
+        ...head,
+        `\n... [${omittedCount} lines folded for local context optimization] ...\n`,
+        ...(criticalMiddle.length > 0 ? ["[Critical diagnostic excerpts from folded section]:", ...criticalMiddle, ""] : []),
+        ...tail,
+    ].join("\n");
+}
 function triggerNotification(title, message) {
     try {
         process.stdout.write("\x07");
@@ -98,6 +123,7 @@ export class AutonomousAgent {
     securityManager;
     extensibilityInitialized = false;
     activePlan = [];
+    hasPendingModifications = false;
     constructor(config, depth = 0) {
         this.config = config;
         this.depth = depth;
@@ -214,8 +240,46 @@ export class AutonomousAgent {
         const decisions = [];
         const priorTasks = [];
         const findings = [];
-        const usefulLine = /error|fail|pass|test|warning|created|modified|found|decision|result|status|function|class|interface|export|todo|fix|implement/i;
+        const durableNotes = [];
+        const usefulLine = /error|fail|pass|test|warning|created|modified|found|decision|result|status|function|class|interface|export|todo|fix|implement|unresolved|pending|blocked|open item/i;
+        const addDurableNote = (note) => {
+            const clean = note.replace(/\s+/g, " ").trim().slice(0, 240);
+            if (clean && !durableNotes.includes(clean))
+                durableNotes.push(clean);
+        };
         for (const message of messages) {
+            if (message.role === "system" && typeof message.content === "string") {
+                // Synthetic summaries are the canonical durable state. Reconcile their
+                // entries into the next summary instead of retaining an unbounded chain.
+                let section = "Earlier durable state";
+                for (const rawLine of message.content.split(/\r?\n/)) {
+                    const line = rawLine.replace(/^\s*[-•]\s*/, "").trim();
+                    if (!line || line.startsWith("[Structured Context Memory"))
+                        continue;
+                    if (/^Current plan:?$/i.test(line)) {
+                        section = "Current plan";
+                        continue; // Rebuilt from the live plan below.
+                    }
+                    if (section === "Current plan")
+                        continue;
+                    if (/^Durable state carried forward:?$/i.test(line)) {
+                        section = "Durable state carried forward";
+                        continue;
+                    }
+                    if (/^(Earlier task requests|Modified files|Inspected files|Recent commands|Findings and decisions|Earlier interaction notes):/i.test(line)) {
+                        const separator = line.indexOf(":");
+                        section = line.slice(0, separator);
+                        const value = line.slice(separator + 1).trim();
+                        if (value)
+                            addDurableNote(`${section}: ${value}`);
+                        continue;
+                    }
+                    if (section === "Durable state carried forward")
+                        addDurableNote(line);
+                    else
+                        addDurableNote(`${section}: ${line}`);
+                }
+            }
             if (message.role === "user" && typeof message.content === "string") {
                 const task = message.content.replace(/\s+/g, " ").trim();
                 if (task && !priorTasks.includes(task))
@@ -267,23 +331,30 @@ export class AutonomousAgent {
                 }
             }
         }
-        const sections = [`[Structured Context Memory - ${messages.length} older messages compacted]`];
-        if (priorTasks.length)
-            sections.push(`Earlier task requests:\n${priorTasks.slice(-3).map((task) => `- ${task}`).join("\n")}`);
+        const freshSections = [
+            ["Earlier task requests", priorTasks.slice(-3)],
+            ["Modified files", Array.from(filesModified).slice(-16)],
+            ["Inspected files", Array.from(filesRead).slice(-16)],
+            ["Recent commands", commandsExecuted.slice(-4)],
+            ["Findings and decisions", decisions.slice(-8)],
+            ["Earlier interaction notes", findings.slice(-12)],
+        ];
+        let freshCharacters = 0;
+        for (const [section, entries] of freshSections) {
+            for (const entry of entries) {
+                const note = `${section}: ${entry}`;
+                if (freshCharacters + note.length > detailBudgetChars)
+                    continue;
+                addDurableNote(note);
+                freshCharacters += note.length;
+            }
+        }
+        const sections = ["[Structured Context Memory - durable task state]"];
+        if (durableNotes.length)
+            sections.push(`Durable state carried forward:\n${durableNotes.map((note) => `- ${note}`).join("\n")}`);
         if (this.activePlan.length)
             sections.push(`Current plan:\n${this.activePlan.map((item) => `- [${item.status}] ${item.name}${item.detail ? `: ${item.detail}` : ""}`).join("\n")}`);
-        if (filesModified.size)
-            sections.push(`Modified files: ${Array.from(filesModified).slice(-16).join(", ")}`);
-        if (filesRead.size)
-            sections.push(`Inspected files: ${Array.from(filesRead).slice(-16).join(", ")}`);
-        if (commandsExecuted.length)
-            sections.push(`Recent commands: ${commandsExecuted.slice(-4).join(" | ")}`);
-        if (decisions.length)
-            sections.push(`Findings and decisions:\n${decisions.slice(-8).map((item) => `- ${item}`).join("\n")}`);
-        if (findings.length)
-            sections.push(`Earlier interaction notes:\n${findings.slice(-12).map((item) => `- ${item}`).join("\n")}`);
-        const summary = sections.join("\n");
-        return summary.length <= detailBudgetChars ? summary : `${summary.slice(0, Math.max(0, detailBudgetChars - 24)).trimEnd()}\n[older context summarized]`;
+        return sections.join("\n");
     }
     compactedMessages(source, recentToolTurns, detailBudgetChars) {
         const system = source[0];
@@ -399,22 +470,9 @@ export class AutonomousAgent {
         const projectRules = getProjectRules(this.config.workspace);
         const rulesSection = projectRules ? `\n${projectRules}\n` : "";
         const skillsSection = this.skillManager ? `\n${this.skillManager.getPromptSection()}` : "";
-        // Candidate #18: Inject dynamic few-shot tool demonstration based on task context
-        const taskContext = this.messages
-            .filter((m) => m.role === "user")
-            .map((m) => m.content)
-            .join(" ");
-        const fewShotSection = `\n${selectRelevantFewShots(taskContext || this.config.workspace)}\n`;
-        // Dynamic runtime state placed at the tail to preserve invariant KV-cache prefix
-        const gitInfo = getGitInfo(this.config.workspace);
-        const gitSection = gitInfo.isRepo
-            ? `\n### Git Repository State:\n- Branch: ${gitInfo.branch}\n- Uncommitted changes: ${gitInfo.dirtyCount} files\n`
-            : "";
-        let planSection = "";
-        if (this.activePlan && this.activePlan.length > 0) {
-            planSection = `\n### Active Execution Plan:\n` +
-                this.activePlan.map((p, i) => `${i + 1}. [${p.status}] ${p.name}${p.detail ? ` (${p.detail})` : ""}`).join("\n") + "\n";
-        }
+        // Invariant prompt prefix optimization for local AI:
+        // Fixed canonical few-shots ensure byte-exact prefix caching across turns (vLLM / llama.cpp / Ollama)
+        const fewShotSection = `\n${selectRelevantFewShots(this.config.workspace)}\n`;
         return `You are Nexus Code, an autonomous AI software engineering agent running in a Linux shell environment.
 You solve coding problems, build features, fix bugs, and refactor codebases by iteratively exploring, reading, editing, and verifying files.
 
@@ -423,7 +481,7 @@ You solve coding problems, build features, fix bugs, and refactor codebases by i
 - Workspace directory: ${this.config.workspace}
 ${rulesSection}${skillsSection}
 ### Operating Rules:
-1. EXPLORE FIRST: Before editing files, always explore the workspace using \`file_tree\`, \`list_dir\`, \`find_files\`, \`search_code\`, or \`read_file\`. Never guess file names or function signatures.
+1. EXPLORE FIRST: Before editing files, always explore the workspace using \`file_tree\`, \`list_dir\`, \`find_files\`, \`search_code\`, or \`read_file\`. For large files, use \`outline_file\` first to inspect class/function signatures without loading the entire file into context.
 2. HIGH-EFFICIENCY BATCHING: Prefer \`batch_read\` to read multiple files concurrently in a single turn, and \`file_info\` to inspect metadata without loading whole files.
 3. PRECISE EDITS & PATCHES: When modifying existing files, use \`edit_file\` with unique snippets or \`patch_file\` with unified diffs.
 4. STRUCTURED PLANNING: For multi-step tasks, use \`update_plan\` to establish and advance through explicit milestone phases.
@@ -431,15 +489,27 @@ ${rulesSection}${skillsSection}
 6. SELF-CORRECTION: If a command or tool returns an error, analyze the error message, identify the root cause, and fix it.
 7. AUTONOMOUS COMPLETION: Keep executing tools until the entire task is thoroughly resolved. When everything is verified and done, invoke \`task_completed\` with a detailed summary.
 ${fewShotSection}
-Always explain your reasoning before or alongside your tool calls.${gitSection}${planSection}`;
+Always explain your reasoning before or alongside your tool calls.`;
     }
     async runTurn(taskPrompt, onConfirm) {
         await this.initExtensibility();
         const promptText = typeof taskPrompt === "string" ? taskPrompt : "[Multi-modal Vision Input]";
         await this.pluginManager.notifyTurnStart(promptText, this.config.workspace);
+        // Dynamic runtime state injected into turn-level context without invalidating system prompt prefix cache
+        const gitInfo = getGitInfo(this.config.workspace);
+        let runtimeContext = "";
+        if (gitInfo.isRepo) {
+            runtimeContext += `\n[Git Status: ${gitInfo.branch} (${gitInfo.dirtyCount} uncommitted dirty files)]`;
+        }
+        if (this.activePlan && this.activePlan.length > 0) {
+            runtimeContext += `\n[Active Plan: ${this.activePlan.map((p, i) => `${i + 1}. [${p.status}] ${p.name}`).join(" -> ")}]`;
+        }
+        const effectiveUserContent = typeof taskPrompt === "string"
+            ? (runtimeContext ? `${taskPrompt}\n${runtimeContext}` : taskPrompt)
+            : taskPrompt;
         this.messages.push({
             role: "user",
-            content: taskPrompt,
+            content: effectiveUserContent,
         });
         let currentStep = 1;
         let isFinished = false;
@@ -567,6 +637,27 @@ Always explain your reasoning before or alongside your tool calls.${gitSection}$
                 }
                 this.ui.printToolCall(toolName, args);
                 if (toolName === "task_completed") {
+                    // Verification Oracle: If code was modified and unverified, verify before marking complete
+                    if (this.hasPendingModifications && !this.config.dryRun && !this.config.readOnly) {
+                        try {
+                            const { runTestSuite } = await import("./tester.js");
+                            const testRes = runTestSuite(this.config.workspace);
+                            if (!testRes.success && testRes.command !== "none") {
+                                const hints = formatDiagnosticHints(testRes.diagnostics);
+                                this.messages.push({
+                                    role: "tool",
+                                    tool_call_id: call.id,
+                                    name: toolName,
+                                    content: `Verification Oracle: Recent code modifications caused automated tests to fail.\nCommand: ${testRes.command}\n${foldVoluminousOutput(testRes.rawOutput || "")}${hints}\nPlease resolve these test failures before calling task_completed.`,
+                                });
+                                continue;
+                            }
+                        }
+                        catch {
+                            // Ignore in environments without test commands
+                        }
+                    }
+                    this.hasPendingModifications = false;
                     this.ui.taskCompleted(args.summary || "Task completed.", args.notes);
                     isFinished = true;
                     break;
@@ -730,11 +821,18 @@ Always explain your reasoning before or alongside your tool calls.${gitSection}$
                 let finalContent = result.success
                     ? result.output
                     : `Error executing ${toolName}: ${result.error || "Unknown error"}`;
-                if (toolName === "run_command") {
+                if (result.success && ["write_file", "edit_file", "patch_file"].includes(toolName)) {
+                    this.hasPendingModifications = true;
+                }
+                if (toolName === "run_command" || toolName === "run_tests") {
                     const combined = (result.output || "") + "\n" + (result.error || "");
                     const diags = extractCompilerDiagnostics(combined);
                     if (diags.length > 0) {
                         finalContent += formatDiagnosticHints(diags);
+                    }
+                    finalContent = foldVoluminousOutput(finalContent);
+                    if (result.success && (toolName === "run_tests" || (args.command && /test|check|lint|cargo\s+test|npm\s+test|pytest/i.test(args.command)))) {
+                        this.hasPendingModifications = false;
                     }
                 }
                 // Append tool result to context

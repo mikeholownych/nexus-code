@@ -140,6 +140,24 @@ pub fn write_file(args: WriteFileArgs, base_dir: &Path) -> Result<WriteFileResul
         ));
     }
 
+    // Pre-flight syntax validation to protect local workspace code integrity
+    let ext = target.extension().and_then(|s| s.to_str()).unwrap_or("");
+    if ext == "json" {
+        if let Err(e) = serde_json::from_str::<serde_json::Value>(&args.content) {
+            return Err(format!(
+                "Pre-flight syntax validation rejected write to {}: invalid JSON ({e}). The file was not modified.",
+                args.path
+            ));
+        }
+    } else if matches!(ext, "rs" | "ts" | "tsx" | "js" | "jsx" | "go" | "c" | "cpp") {
+        if let Err(msg) = validate_syntax_delimiters(&args.content, ext) {
+            return Err(format!(
+                "Pre-flight syntax validation rejected write to {}: {msg}. The file was not modified.",
+                args.path
+            ));
+        }
+    }
+
     if let Some(parent) = target.parent() {
         fs::create_dir_all(parent).map_err(|e| format!("Failed to create directories: {e}"))?;
     }
@@ -245,6 +263,204 @@ fn fuzzy_find_and_replace(
     None
 }
 
+/// Pre-flight syntax delimiter validation for source files.
+/// Verifies that braces {}, brackets [], and parentheses () are balanced and properly closed,
+/// taking into account comments, quotes, template literals, and language nuances.
+pub fn validate_syntax_delimiters(content: &str, ext: &str) -> Result<(), String> {
+    if !matches!(ext, "rs" | "ts" | "tsx" | "js" | "jsx" | "c" | "cpp" | "go" | "java") {
+        return Ok(());
+    }
+
+    let mut stack: Vec<(char, usize, usize)> = Vec::new();
+    let mut in_single_quote = false;
+    let mut in_double_quote = false;
+    let mut in_template_literal = false;
+    let mut in_line_comment = false;
+    let mut in_block_comment = false;
+    let mut is_escaped = false;
+
+    let mut line = 1;
+    let mut col = 0;
+    let chars: Vec<char> = content.chars().collect();
+    let len = chars.len();
+    let mut i = 0;
+
+    while i < len {
+        let ch = chars[i];
+        col += 1;
+
+        if ch == '\n' {
+            line += 1;
+            col = 0;
+            in_line_comment = false;
+            if in_single_quote || in_double_quote {
+                in_single_quote = false;
+                in_double_quote = false;
+            }
+            i += 1;
+            continue;
+        }
+
+        if in_line_comment {
+            i += 1;
+            continue;
+        }
+
+        if in_block_comment {
+            if ch == '*' && i + 1 < len && chars[i + 1] == '/' {
+                in_block_comment = false;
+                i += 2;
+                col += 1;
+                continue;
+            }
+            i += 1;
+            continue;
+        }
+
+        if in_single_quote {
+            if is_escaped {
+                is_escaped = false;
+            } else if ch == '\\' {
+                is_escaped = true;
+            } else if ch == '\'' {
+                in_single_quote = false;
+            }
+            i += 1;
+            continue;
+        }
+
+        if in_double_quote {
+            if is_escaped {
+                is_escaped = false;
+            } else if ch == '\\' {
+                is_escaped = true;
+            } else if ch == '"' {
+                in_double_quote = false;
+            }
+            i += 1;
+            continue;
+        }
+
+        if in_template_literal {
+            if is_escaped {
+                is_escaped = false;
+            } else if ch == '\\' {
+                is_escaped = true;
+            } else if ch == '`' {
+                in_template_literal = false;
+            }
+            i += 1;
+            continue;
+        }
+
+        // Comment check
+        if ch == '/' && i + 1 < len {
+            if chars[i + 1] == '/' {
+                in_line_comment = true;
+                i += 2;
+                col += 1;
+                continue;
+            } else if chars[i + 1] == '*' {
+                in_block_comment = true;
+                i += 2;
+                col += 1;
+                continue;
+            }
+        }
+
+        // Quote start check
+        if ch == '\'' {
+            // In Rust, distinguish character literals ('c', '\n') from lifetime annotations (&'a str, 'loop:)
+            if ext == "rs" {
+                let is_char_lit = (i + 2 < len && chars[i + 2] == '\'')
+                    || (i + 3 < len && chars[i + 1] == '\\' && chars[i + 3] == '\'');
+                if is_char_lit {
+                    in_single_quote = true;
+                    is_escaped = false;
+                    i += 1;
+                    continue;
+                }
+            } else {
+                in_single_quote = true;
+                is_escaped = false;
+                i += 1;
+                continue;
+            }
+        }
+
+        if ch == '"' {
+            in_double_quote = true;
+            is_escaped = false;
+            i += 1;
+            continue;
+        }
+
+        if ch == '`' && matches!(ext, "ts" | "tsx" | "js" | "jsx" | "go") {
+            in_template_literal = true;
+            is_escaped = false;
+            i += 1;
+            continue;
+        }
+
+        // Delimiter matching
+        match ch {
+            '{' | '(' | '[' => {
+                stack.push((ch, line, col));
+            }
+            '}' => {
+                match stack.pop() {
+                    Some(('{', _, _)) => {}
+                    Some((open_ch, open_line, open_col)) => {
+                        return Err(format!(
+                            "Mismatched delimiter: closing '}}' at line {line}:{col} does not match '{open_ch}' opened at line {open_line}:{open_col}"
+                        ));
+                    }
+                    None => {
+                        return Err(format!("Unmatched closing delimiter '}}' at line {line}:{col}"));
+                    }
+                }
+            }
+            ')' => {
+                match stack.pop() {
+                    Some(('(', _, _)) => {}
+                    Some((open_ch, open_line, open_col)) => {
+                        return Err(format!(
+                            "Mismatched delimiter: closing ')' at line {line}:{col} does not match '{open_ch}' opened at line {open_line}:{open_col}"
+                        ));
+                    }
+                    None => {
+                        return Err(format!("Unmatched closing delimiter ')' at line {line}:{col}"));
+                    }
+                }
+            }
+            ']' => {
+                match stack.pop() {
+                    Some(('[', _, _)) => {}
+                    Some((open_ch, open_line, open_col)) => {
+                        return Err(format!(
+                            "Mismatched delimiter: closing ']' at line {line}:{col} does not match '{open_ch}' opened at line {open_line}:{open_col}"
+                        ));
+                    }
+                    None => {
+                        return Err(format!("Unmatched closing delimiter ']' at line {line}:{col}"));
+                    }
+                }
+            }
+            _ => {}
+        }
+
+        i += 1;
+    }
+
+    if let Some((open_ch, open_line, open_col)) = stack.pop() {
+        return Err(format!(
+            "Unclosed delimiter: '{open_ch}' opened at line {open_line}:{open_col} was not closed"
+        ));
+    }
+
+    Ok(())
+}
+
 pub fn edit_file(args: EditFileArgs, base_dir: &Path) -> Result<EditFileResult, String> {
     let target = resolve_safe_path(base_dir, &args.path)?;
     if !target.exists() {
@@ -283,6 +499,24 @@ pub fn edit_file(args: EditFileArgs, base_dir: &Path) -> Result<EditFileResult, 
             }
         }
     };
+
+    // Pre-flight syntax validation to protect local workspace code integrity
+    let ext = target.extension().and_then(|s| s.to_str()).unwrap_or("");
+    if ext == "json" {
+        if let Err(e) = serde_json::from_str::<serde_json::Value>(&new_file_content) {
+            return Err(format!(
+                "Pre-flight syntax validation rejected edit on {}: invalid JSON ({e}). The file was not modified. Please adjust your edit.",
+                args.path
+            ));
+        }
+    } else if matches!(ext, "rs" | "ts" | "tsx" | "js" | "jsx" | "go" | "c" | "cpp") {
+        if let Err(msg) = validate_syntax_delimiters(&new_file_content, ext) {
+            return Err(format!(
+                "Pre-flight syntax validation rejected edit on {}: {msg}. The file was not modified. Please adjust your edit to maintain valid syntax.",
+                args.path
+            ));
+        }
+    }
 
     // Generate unified diff
     let diff = TextDiff::from_lines(&raw_original, &new_file_content);
@@ -827,6 +1061,56 @@ mod tests {
         let updated_code = fs::read_to_string(&code_file).unwrap();
         assert!(updated_code.contains("let val = 100;"));
         assert!(updated_code.contains("Updated: {}"));
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_preflight_syntax_validation() {
+        let dir = std::env::temp_dir().join(format!("test_syntax_{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+
+        // 1. Valid syntax should pass write_file
+        let valid_ts = "export function add(a: number, b: number): number {\n  return a + b;\n}\n";
+        let res1 = write_file(WriteFileArgs {
+            path: "math.ts".into(),
+            content: valid_ts.into(),
+            overwrite: false,
+        }, &dir);
+        assert!(res1.is_ok());
+
+        // 2. Unclosed brace should be rejected by write_file
+        let invalid_ts = "export function broken() {\n  console.log('unclosed');\n";
+        let res2 = write_file(WriteFileArgs {
+            path: "broken.ts".into(),
+            content: invalid_ts.into(),
+            overwrite: false,
+        }, &dir);
+        assert!(res2.is_err());
+        assert!(res2.unwrap_err().contains("Unclosed delimiter"));
+
+        // 3. Invalid JSON should be rejected
+        let invalid_json = "{ \"name\": \"nexus\", \"count\": }";
+        let res3 = write_file(WriteFileArgs {
+            path: "config.json".into(),
+            content: invalid_json.into(),
+            overwrite: false,
+        }, &dir);
+        assert!(res3.is_err());
+        assert!(res3.unwrap_err().contains("invalid JSON"));
+
+        // 4. Broken edit should be rejected by edit_file without touching the file
+        let edit_err = edit_file(EditFileArgs {
+            path: "math.ts".into(),
+            old_content: "return a + b;".into(),
+            new_content: "return { a + b;".into(), // introduces unclosed brace
+        }, &dir);
+        assert!(edit_err.is_err());
+        assert!(edit_err.unwrap_err().contains("Pre-flight syntax validation rejected edit"));
+
+        // Verify math.ts was NOT corrupted
+        let content_after = fs::read_to_string(dir.join("math.ts")).unwrap();
+        assert!(content_after.contains("return a + b;"));
 
         let _ = fs::remove_dir_all(&dir);
     }

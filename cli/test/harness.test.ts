@@ -6,13 +6,13 @@ import * as os from "node:os";
 
 import * as http from "node:http";
 import { HARNESS_TOOLS, isSafeOutboundUrl } from "../src/tools.js";
-import { parseModelResponse } from "../src/parser.js";
+import { parseModelResponse, repairJson } from "../src/parser.js";
 import { redactSecrets } from "../src/ui.js";
 import { CheckpointManager } from "../src/checkpoint.js";
 import { SkillManager } from "../src/skills.js";
 import { extractCompilerDiagnostics, formatDiagnosticHints } from "../src/diagnostics.js";
 import { generateConventionalCommit } from "../src/git.js";
-import { AutonomousAgent, ContextBudgetError } from "../src/agent.js";
+import { AutonomousAgent, ContextBudgetError, foldVoluminousOutput } from "../src/agent.js";
 import { SecurityManager } from "../src/security.js";
 import { countTokens, calculateContextBudget, isContextAdmissible, renderTokenGauge } from "../src/tokens.js";
 import { selectRelevantFewShots } from "../src/fewshots.js";
@@ -60,6 +60,54 @@ describe("Nexus Code Test Suite", () => {
     assert.ok(parsed.thoughtText.includes("Let's inspect the directory structure"), "Failed to extract thought");
     assert.strictEqual(parsed.toolCalls.length, 1, "Failed to parse json tool call");
     assert.strictEqual(parsed.toolCalls[0].function.name, "file_tree");
+  });
+
+  test("repairJson heals local LLM artifacts: trailing commas, single quotes, unquoted keys, python literals", () => {
+    // 1. Trailing commas & unquoted keys
+    const raw1 = `{ path: 'src/app.ts', enabled: True, items: [1, 2, 3,], }`;
+    const res1 = repairJson(raw1);
+    assert.strictEqual(res1.path, "src/app.ts");
+    assert.strictEqual(res1.enabled, true);
+    assert.deepStrictEqual(res1.items, [1, 2, 3]);
+
+    // 2. Python False and None
+    const raw2 = `{"debug": False, "extra": None}`;
+    const res2 = repairJson(raw2);
+    assert.strictEqual(res2.debug, false);
+    assert.strictEqual(res2.extra, null);
+
+    // 3. Wrapping markdown code block
+    const raw3 = "```json\n{\"action\": \"read_file\", \"path\": \"README.md\",}\n```";
+    const res3 = repairJson(raw3);
+    assert.strictEqual(res3.action, "read_file");
+    assert.strictEqual(res3.path, "README.md");
+  });
+
+  test("parseModelResponse handles DeepSeek R1 <think> tags, embedded JSON, and unwraps arguments", () => {
+    // 1. DeepSeek R1 <think> tag isolation
+    const deepseekMsg = {
+      role: "assistant" as const,
+      content: "<think>\nAnalyzing the user request.\nWe should read the package.json to check dependencies.\n</think>\nI will now read the file.\n```json\n{\n  \"name\": \"read_file\",\n  \"arguments\": {\n    \"input\": {\n      \"path\": \"package.json\",\n    }\n  }\n}\n```",
+    };
+    const parsed1 = parseModelResponse(deepseekMsg);
+    assert.ok(parsed1.reasoningText?.includes("Analyzing the user request"));
+    assert.ok(parsed1.thoughtText.includes("I will now read the file"));
+    assert.strictEqual(parsed1.toolCalls.length, 1);
+    assert.strictEqual(parsed1.toolCalls[0].function.name, "read_file");
+    const args1 = JSON.parse(parsed1.toolCalls[0].function.arguments);
+    // Verified unwrapped from "input"
+    assert.strictEqual(args1.path, "package.json");
+
+    // 2. Embedded raw JSON without markdown or XML tags
+    const embeddedMsg = {
+      role: "assistant" as const,
+      content: "Sure, let me check that directory:\n{\"name\": \"list_dir\", \"arguments\": {\"path\": \"cli/src\",}}\nHope this helps!",
+    };
+    const parsed2 = parseModelResponse(embeddedMsg);
+    assert.strictEqual(parsed2.toolCalls.length, 1);
+    assert.strictEqual(parsed2.toolCalls[0].function.name, "list_dir");
+    const args2 = JSON.parse(parsed2.toolCalls[0].function.arguments);
+    assert.strictEqual(args2.path, "cli/src");
   });
 
   test("CheckpointManager creates and records snapshots", () => {
@@ -522,6 +570,52 @@ error[E0308]: mismatched types
     assert.ok(admissionLogs.some((line) => line.includes("compacted=true")));
   });
 
+  test("repeated compaction carries one bounded canonical durable state forward", () => {
+    const agent = new AutonomousAgent({
+      endpoint: "http://localhost:1234/v1",
+      model: "test-model",
+      workspace: process.cwd(),
+      maxSteps: 1,
+      shell: "bash",
+    });
+    const decisionMarker = "DURABLE_DECISION_MARKER_ISSUE8";
+    const findingMarker = "DURABLE_FINDING_MARKER_ISSUE8";
+    try {
+      let history: any[] = [
+        agent.getMessages()[0],
+        { role: "user", content: "Complete the cache migration and retain its decisions." },
+        { role: "assistant", content: `<thought>${decisionMarker}: retain the bounded cache API.</thought>` },
+        { role: "tool", name: "run_tests", tool_call_id: "initial", content: `${findingMarker}: baseline regression confirmed.\n${"bulky output ".repeat(5_000)}` },
+      ];
+      const summaryLengths: number[] = [];
+
+      for (let cycle = 0; cycle < 8; cycle++) {
+        if (cycle > 0) {
+          history = [
+            ...history,
+            { role: "assistant", content: "Repeated verified interaction.", tool_calls: [{ id: "repeat", type: "function", function: { name: "run_tests", arguments: "{}" } }] },
+            { role: "tool", name: "run_tests", tool_call_id: "repeat", content: `Redundant output: ${"bulky output ".repeat(5_000)}` },
+            { role: "user", content: "Continue the same cache migration." },
+          ];
+        }
+        history = (agent as any).compactedMessages(history, 0, 6_000);
+        const syntheticSummaries = history.filter((message) => message.role === "system").slice(1);
+        assert.strictEqual(syntheticSummaries.length, 1, "each cycle should replace the prior summary with one canonical state message");
+        const summary = String(syntheticSummaries[0].content);
+        summaryLengths.push(summary.length);
+        assert.ok(summary.includes(decisionMarker), `decision state was lost in compaction cycle ${cycle + 1}`);
+        assert.ok(summary.includes(findingMarker), `finding state was lost in compaction cycle ${cycle + 1}`);
+        assert.strictEqual(summary.split(decisionMarker).length - 1, 1, "the decision marker must not duplicate across cycles");
+        assert.strictEqual(summary.split(findingMarker).length - 1, 1, "the finding marker must not duplicate across cycles");
+        assert.ok(summary.length <= 6_000, "canonical durable state must remain bounded");
+      }
+
+      assert.ok(summaryLengths.slice(2).every((length) => length === summaryLengths[2]), "redundant history must not make summaries grow monotonically");
+    } finally {
+      agent.shutdown();
+    }
+  });
+
   test("long-running tool use keeps every dispatched request within budget", async () => {
     const limit = 65_536;
     const completionReserve = 8_192;
@@ -548,7 +642,7 @@ error[E0308]: mismatched types
           const id = `cycle-${turn}`;
           return {
             role: "assistant",
-            content: `<thought>Finding ${turn}: continue the implementation and keep prior verification results.</thought>`,
+            content: `<thought>${turn === 1 ? "DURABLE_MULTI_TURN_DECISION_ISSUE8" : `Finding ${turn}`}: continue the implementation and keep prior verification results.</thought>`,
             tool_calls: [{ id, type: "function", function: { name: "read_file", arguments: JSON.stringify({ path: `src/part-${turn}.ts` }) } }],
           };
         }
@@ -557,7 +651,7 @@ error[E0308]: mismatched types
     };
     (agent as any).bridge.executeTool = async (_name: string, args: any) => ({
       success: true,
-      output: `Verified read of ${args.path}.\n${"tool-result ".repeat(5_000)}`,
+      output: `${args.path === "src/part-1.ts" ? "DURABLE_MULTI_TURN_FINDING_ISSUE8: initial compatibility result retained.\n" : ""}Verified read of ${args.path}.\n${"tool-result ".repeat(5_000)}`,
     });
     const originalLog = console.log;
     console.log = (...args: any[]) => {
@@ -576,6 +670,9 @@ error[E0308]: mismatched types
     assert.ok(dispatched.every((estimate) => estimate + completionReserve + toolResponseReserve <= limit));
     assert.ok(admissionLogs.filter((line) => line.includes("compacted=true")).length >= 2);
     assert.ok(admissionLogs.every((line) => line.includes(`completion_reserve=${completionReserve}`) && line.includes(`tool_response_reserve=${toolResponseReserve}`)));
+    const finalHistory = agent.getMessages().map((message) => typeof message.content === "string" ? message.content : "").join("\n");
+    assert.ok(finalHistory.includes("DURABLE_MULTI_TURN_DECISION_ISSUE8"), "the first-turn decision must survive repeated live-loop compactions");
+    assert.ok(finalHistory.includes("DURABLE_MULTI_TURN_FINDING_ISSUE8"), "the first-turn finding must survive repeated live-loop compactions");
   });
 
   test("context admission fails locally when required task state cannot fit", async () => {
@@ -1297,6 +1394,73 @@ error[E0308]: mismatched types
       assert.ok(snapshot.includes("Setup environment"));
       assert.ok(snapshot.includes("Execute migration"));
       assert.ok(snapshot.includes("Return to REPL"));
+    } finally {
+      agent.shutdown();
+    }
+  });
+
+  test("foldVoluminousOutput compresses long terminal logs while preserving critical error excerpts", () => {
+    // 1. Short output should be untouched
+    const short = "Line 1\nLine 2\nLine 3";
+    assert.strictEqual(foldVoluminousOutput(short), short);
+
+    // 2. Long output with an error line in the middle
+    const lines: string[] = [];
+    for (let i = 1; i <= 100; i++) {
+      if (i === 50) {
+        lines.push("src/main.rs:50:5: error[E0308]: mismatched types");
+      } else {
+        lines.push(`Compiling module_${i} v0.1.0 ...`);
+      }
+    }
+    const longOutput = lines.join("\n");
+    const folded = foldVoluminousOutput(longOutput, 40, 2000);
+
+    assert.ok(folded.length < longOutput.length);
+    assert.ok(folded.includes("lines folded for local context optimization"));
+    assert.ok(folded.includes("mismatched types"), "Failed to preserve critical error excerpt");
+    assert.ok(folded.includes("module_1 v0.1.0"), "Missing head line");
+    assert.ok(folded.includes("module_100 v0.1.0"), "Missing tail line");
+  });
+
+  test("RustCoreBridge executes outline_file tool for compact AST context conservation", async () => {
+    const repoRoot = fs.existsSync(path.join(process.cwd(), "core")) ? process.cwd() : path.resolve(process.cwd(), "..");
+    const bridge = new RustCoreBridge(repoRoot);
+    try {
+      const res = await bridge.executeTool("outline_file", { path: "cli/src/types.ts" });
+      assert.strictEqual(res.success, true);
+      const parsed = JSON.parse(res.output);
+      assert.ok(parsed.total_lines > 0);
+      assert.ok(parsed.symbol_count > 0);
+      assert.ok(parsed.outline.includes("HarnessConfig"));
+      assert.ok(parsed.outline.includes("lines"));
+    } finally {
+      bridge.shutdown();
+    }
+  });
+
+  test("AutonomousAgent preserves invariant system prompt prefix across multiple turns for KV cache reuse", () => {
+    const agent = new AutonomousAgent({
+      endpoint: "http://localhost:11434/v1",
+      model: "qwen2.5-coder-32b",
+      workspace: process.cwd(),
+      maxSteps: 5,
+      temperature: 0.1,
+    });
+
+    try {
+      agent.resetConversation();
+      const initialSystemPrompt = agent.getMessages()[0].content;
+      assert.ok(typeof initialSystemPrompt === "string");
+      assert.ok(initialSystemPrompt.includes("You are Nexus Code"));
+      assert.ok(initialSystemPrompt.includes("outline_file"));
+
+      // Simulate turn 1
+      agent.getMessages().push({ role: "user", content: "Task 1" });
+      agent.getMessages().push({ role: "assistant", content: "Done" });
+
+      // Verify system prompt is byte-exact identical
+      assert.strictEqual(agent.getMessages()[0].content, initialSystemPrompt);
     } finally {
       agent.shutdown();
     }

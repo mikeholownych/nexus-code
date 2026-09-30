@@ -594,6 +594,23 @@ export const HARNESS_TOOLS: ToolDefinition[] = [
   {
     type: "function",
     function: {
+      name: "outline_file",
+      description: "Generate a compact AST skeleton outline of a source file (functions, classes, interfaces, signatures, and line numbers) to conserve context before reading specific line ranges.",
+      parameters: {
+        type: "object",
+        properties: {
+          path: {
+            type: "string",
+            description: "Relative path to the source file to outline.",
+          },
+        },
+        required: ["path"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
       name: "trigram_search",
       description: "Ultra-fast code search accelerated by Rust inverted trigram index.",
       parameters: {
