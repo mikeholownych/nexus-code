@@ -47,6 +47,7 @@ function buildConfig(options: any): HarnessConfig {
   const shell = options.shell || process.env.LOCAL_HARNESS_SHELL || "bash";
   const dryRun = Boolean(options.dryRun);
   const readOnly = Boolean(options.readOnly);
+  const sandbox = options.sandbox ? (typeof options.sandbox === "string" ? options.sandbox : true) : undefined;
   const fallbackEndpoints = options.fallback ? options.fallback.split(",").map((s: string) => s.trim()) : undefined;
   const contextLimit = options.contextLimit ? parseInt(options.contextLimit, 10) : undefined;
 
@@ -60,6 +61,7 @@ function buildConfig(options: any): HarnessConfig {
     shell,
     dryRun,
     readOnly,
+    sandbox,
     fallbackEndpoints,
     contextLimit,
   };
@@ -78,6 +80,7 @@ program
   .option("--context-limit <tokens>", "Model context window limit in tokens (default: 32768)")
   .option("--dry-run", "Simulate file modifications without writing changes to disk")
   .option("--read-only", "Reject all mutating tool executions and commands")
+  .option("--sandbox [mode]", "Isolate command execution using bubblewrap (bwrap) or Docker (default: auto)")
   .option("--approve", "Require human approval before destructive actions (edits, shell commands)")
   .option("-r, --resume [id]", "Resume previous session (defaults to latest if id omitted)")
   .action(async (options: any) => {
@@ -112,6 +115,7 @@ program
   .option("--context-limit <tokens>", "Model context window limit in tokens (default: 32768)")
   .option("--dry-run", "Simulate file modifications without writing changes to disk")
   .option("--read-only", "Reject all mutating tool executions and commands")
+  .option("--sandbox [mode]", "Isolate command execution using bubblewrap (bwrap) or Docker (default: auto)")
   .action(async (promptParts: string[], options: any) => {
     const prompt = promptParts.join(" ");
     const config = buildConfig(options);

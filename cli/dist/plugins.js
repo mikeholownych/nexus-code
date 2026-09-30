@@ -59,6 +59,19 @@ export class PluginManager {
             // Ignore plugins that fail to load
         }
     }
+    registerPlugin(plugin) {
+        if (plugin && plugin.name) {
+            this.plugins.set(plugin.name, plugin);
+            if (Array.isArray(plugin.customTools)) {
+                for (const ct of plugin.customTools) {
+                    if (ct.definition?.function?.name && typeof ct.handler === "function") {
+                        this.customToolDefs.push(ct.definition);
+                        this.customToolsMap.set(ct.definition.function.name, ct.handler);
+                    }
+                }
+            }
+        }
+    }
     getCustomToolDefinitions() {
         return this.customToolDefs;
     }
@@ -71,6 +84,43 @@ export class PluginManager {
             return { success: false, output: "", error: `Custom tool not found: ${toolName}` };
         }
         return handler(args);
+    }
+    /**
+     * Execute tool through the pre-tool and post-tool middleware pipeline (Candidate #41)
+     */
+    async executeToolPipeline(toolName, initialArgs, coreExecutor) {
+        const preMiddlewares = [];
+        const postMiddlewares = [];
+        for (const plugin of this.plugins.values()) {
+            if (plugin.preToolExecution) {
+                preMiddlewares.push(plugin.preToolExecution);
+            }
+            if (plugin.postToolExecution) {
+                postMiddlewares.push(plugin.postToolExecution);
+            }
+        }
+        const dispatch = async (idx, currentArgs) => {
+            if (idx < preMiddlewares.length) {
+                const mw = preMiddlewares[idx];
+                return mw({ toolName, args: currentArgs, workspace: this.workspace }, async (nextArgs) => dispatch(idx + 1, nextArgs || currentArgs));
+            }
+            return coreExecutor(currentArgs);
+        };
+        let result = await dispatch(0, initialArgs);
+        for (const postMw of postMiddlewares) {
+            try {
+                result = await postMw({
+                    toolName,
+                    args: initialArgs,
+                    result,
+                    workspace: this.workspace,
+                });
+            }
+            catch {
+                // If post-middleware fails, keep existing result
+            }
+        }
+        return result;
     }
     async notifyTurnStart(prompt, workspace) {
         for (const p of this.plugins.values()) {

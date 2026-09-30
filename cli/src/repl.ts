@@ -173,7 +173,7 @@ export class InteractiveRepl {
     console.log(`  ${pc.bold(pc.yellow("/resume [id]"))}        Load a past session into memory`);
     console.log(`  ${pc.bold(pc.yellow("/skills"))}             List discovered agent skills (SKILL.md)`);
     console.log(`  ${pc.bold(pc.yellow("/skill <name>"))}        View specialized skill instructions`);
-    console.log(`  ${pc.bold(pc.yellow("/mcp"))}                List connected MCP servers and external tools`);
+    console.log(`  ${pc.bold(pc.yellow("/mcp [add|resources|prompts]"))} Manage MCP servers, tools, resources, and prompts`);
     console.log(`  ${pc.bold(pc.yellow("/plugins"))}            List loaded custom plugins and lifecycle hooks`);
     console.log(`  ${pc.bold(pc.yellow("/checkpoint [name]"))}   Save rollback snapshot of current workspace`);
     console.log(`  ${pc.bold(pc.yellow("/checkpoint diff <id>"))} Inspect diff of a checkpoint vs current or another`);
@@ -666,24 +666,126 @@ export class InteractiveRepl {
           } else if (cmd === "mcp") {
             await this.agent.initExtensibility();
             const mcp = this.agent.getMcpManager();
-            const servers = mcp.listServers();
-            const tools = mcp.getToolDefinitions();
-            if (servers.length === 0) {
-              console.log(pc.yellow("No MCP servers configured. Add servers in ~/.config/nexus/mcp.json or .mcp.json\n"));
-            } else {
-              console.log(pc.bold(pc.white("\nConfigured MCP Servers:")));
-              for (const s of servers) {
-                const status = s.connected ? pc.green("CONNECTED") : pc.red("DISCONNECTED");
-                console.log(`  • ${pc.bold(pc.cyan(s.name))} [${status}] (${pc.dim(s.command)})`);
-                console.log(`    Tools exposed: ${s.toolCount}`);
+            const subArgs = arg.trim().split(/\s+/).filter(Boolean);
+            const subCmd = subArgs[0]?.toLowerCase();
+
+            if (subCmd === "add") {
+              console.log(pc.bold(pc.white("\n=== MCP Server Configuration Wizard ===")));
+              const name = (await this.rl!.question(pc.bold(pc.white("  Server Identifier (e.g. sqlite-db, github): ")))).trim();
+              if (!name) {
+                console.log(pc.dim("Empty server name. Wizard cancelled.\n"));
+                continue;
               }
-              if (tools.length > 0) {
-                console.log(pc.bold(pc.white("\nAvailable MCP Tools:")));
-                for (const t of tools) {
-                  console.log(`  ⚡ ${pc.yellow(t.function.name)}: ${pc.gray(t.function.description)}`);
+
+              const transportInput = (await this.rl!.question(pc.bold(pc.white("  Transport [stdio/sse/websocket] (default: stdio): ")))).trim().toLowerCase();
+              const transport = transportInput === "sse" || transportInput === "websocket" ? transportInput : "stdio";
+
+              let config: any = { transport };
+              if (transport === "stdio") {
+                const command = (await this.rl!.question(pc.bold(pc.white("  Executable command (e.g. npx -y @modelcontextprotocol/server-sqlite): ")))).trim();
+                if (!command) {
+                  console.log(pc.dim("Empty command. Wizard cancelled.\n"));
+                  continue;
+                }
+                const parts = command.split(/\s+/);
+                config.command = parts[0];
+                config.args = parts.slice(1);
+              } else {
+                const url = (await this.rl!.question(pc.bold(pc.white("  Endpoint URL (e.g. http://localhost:8000/sse): ")))).trim();
+                if (!url) {
+                  console.log(pc.dim("Empty URL. Wizard cancelled.\n"));
+                  continue;
+                }
+                config.url = url;
+              }
+
+              console.log(pc.dim(`  Connecting to MCP server '${name}'...`));
+              const res = await mcp.addServer(name, config, true);
+              if (res.success) {
+                console.log(pc.green(`✔ Connected to MCP server '${name}'!`));
+                console.log(`  • Exposed Tools: ${pc.cyan(res.toolCount)}`);
+                console.log(`  • Exposed Resources: ${pc.cyan(res.resourceCount)}`);
+                console.log(`  • Exposed Prompts: ${pc.cyan(res.promptCount)}`);
+                console.log(`  • Configuration saved to ~/.config/nexus/mcp.json\n`);
+              } else {
+                console.log(pc.red(`✖ MCP connection failed: ${res.error}\n`));
+              }
+            } else if (subCmd === "resources") {
+              const resources = mcp.listResources();
+              if (resources.length === 0) {
+                console.log(pc.yellow("No MCP resources exposed by connected servers.\n"));
+              } else {
+                console.log(pc.bold(pc.white("\nExposed MCP Resources:")));
+                for (const r of resources) {
+                  console.log(`  • ${pc.bold(pc.cyan(r.name))} (${pc.dim(r.uri)}) [${pc.gray(r.server)}]`);
+                  if (r.description) console.log(`    ${pc.gray(r.description)}`);
+                }
+                console.log(pc.dim("\nUse '/mcp resource <uri>' to inspect content.\n"));
+              }
+            } else if (subCmd === "resource") {
+              const uri = subArgs.slice(1).join(" ").trim();
+              if (!uri) {
+                console.log(pc.yellow("Usage: /mcp resource <uri>\n"));
+              } else {
+                const res = await mcp.readResource(uri);
+                if (res.success) {
+                  console.log(pc.bold(pc.cyan(`\n=== MCP Resource: ${uri} ===`)));
+                  console.log(res.content || "");
+                  console.log(pc.bold(pc.cyan("================================\n")));
+                } else {
+                  console.log(pc.red(`Error reading resource: ${res.error}\n`));
                 }
               }
-              console.log();
+            } else if (subCmd === "prompts") {
+              const prompts = mcp.listPrompts();
+              if (prompts.length === 0) {
+                console.log(pc.yellow("No MCP prompt templates exposed by connected servers.\n"));
+              } else {
+                console.log(pc.bold(pc.white("\nExposed MCP Prompt Templates:")));
+                for (const p of prompts) {
+                  const argsDesc = p.arguments && p.arguments.length > 0
+                    ? ` (args: ${p.arguments.map((a: any) => a.name).join(", ")})`
+                    : "";
+                  console.log(`  • ${pc.bold(pc.yellow(p.name))}${pc.dim(argsDesc)} [${pc.gray(p.server)}]`);
+                  if (p.description) console.log(`    ${pc.gray(p.description)}`);
+                }
+                console.log(pc.dim("\nUse '/mcp prompt <name>' to inspect prompt template.\n"));
+              }
+            } else if (subCmd === "prompt") {
+              const name = subArgs[1];
+              if (!name) {
+                console.log(pc.yellow("Usage: /mcp prompt <name>\n"));
+              } else {
+                const res = await mcp.getPrompt(name);
+                if (res.success) {
+                  console.log(pc.bold(pc.yellow(`\n=== MCP Prompt: ${name} ===`)));
+                  if (res.description) console.log(pc.dim(res.description) + "\n");
+                  console.log(JSON.stringify(res.messages, null, 2));
+                  console.log(pc.bold(pc.yellow("==========================\n")));
+                } else {
+                  console.log(pc.red(`Error fetching prompt: ${res.error}\n`));
+                }
+              }
+            } else {
+              const servers = mcp.listServers();
+              const tools = mcp.getToolDefinitions();
+              if (servers.length === 0) {
+                console.log(pc.yellow("No MCP servers configured. Use '/mcp add' to configure a server.\n"));
+              } else {
+                console.log(pc.bold(pc.white("\nConfigured MCP Servers:")));
+                for (const s of servers) {
+                  const status = s.connected ? pc.green("CONNECTED") : pc.red("DISCONNECTED");
+                  console.log(`  • ${pc.bold(pc.cyan(s.name))} [${status} - ${pc.dim(s.transport)}] (${pc.dim(s.command)})`);
+                  console.log(`    Tools: ${pc.yellow(s.toolCount)} | Resources: ${pc.cyan(s.resourceCount)} | Prompts: ${pc.magenta(s.promptCount)}`);
+                }
+                if (tools.length > 0) {
+                  console.log(pc.bold(pc.white("\nAvailable MCP Tools:")));
+                  for (const t of tools) {
+                    console.log(`  ⚡ ${pc.yellow(t.function.name)}: ${pc.gray(t.function.description)}`);
+                  }
+                }
+                console.log(pc.dim("\nCommands: /mcp add, /mcp resources, /mcp resource <uri>, /mcp prompts, /mcp prompt <name>\n"));
+              }
             }
             continue;
           } else if (cmd === "plugins") {

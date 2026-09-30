@@ -516,13 +516,15 @@ export class RustCoreBridge {
     rpcBuffer = "";
     dryRun = false;
     readOnly = false;
+    sandbox = false;
     securityManager;
-    constructor(workspace, defaultShell = "bash", customBinaryPath, dryRun = false, readOnly = false) {
+    constructor(workspace, defaultShell = "bash", customBinaryPath, dryRun = false, readOnly = false, sandbox = false) {
         this.workspace = path.resolve(workspace);
         this.defaultShell = defaultShell;
         this.cargoManifestPath = path.resolve(__dirname, "../../core/Cargo.toml");
         this.dryRun = dryRun;
         this.readOnly = readOnly;
+        this.sandbox = sandbox;
         this.securityManager = new SecurityManager(this.workspace);
         if (customBinaryPath && fs.existsSync(customBinaryPath)) {
             this.coreBinaryPath = customBinaryPath;
@@ -539,6 +541,9 @@ export class RustCoreBridge {
     }
     setReadOnly(enabled) {
         this.readOnly = enabled;
+    }
+    setSandbox(sandbox) {
+        this.sandbox = sandbox;
     }
     resolveBinary() {
         const candidates = [
@@ -971,9 +976,20 @@ export class RustCoreBridge {
                 return { success: false, output: "", error: `Search failed: ${err.message}` };
             }
         }
-        // Default the shell if not explicitly provided
-        if (toolName === "run_command" && !args.shell) {
-            args.shell = this.defaultShell;
+        // Default the shell and wrap with sandbox if enabled
+        if (toolName === "run_command") {
+            if (!args.shell) {
+                args.shell = this.defaultShell;
+            }
+            if (this.sandbox) {
+                const { wrapSandboxedCommand } = await import("./sandbox.js");
+                const mode = typeof this.sandbox === "string" ? this.sandbox : "auto";
+                const sandboxed = wrapSandboxedCommand(args.command || "", this.workspace, {
+                    mode,
+                    shell: args.shell,
+                });
+                args.command = sandboxed.command;
+            }
         }
         // Attempt persistent JSON-RPC execution
         try {

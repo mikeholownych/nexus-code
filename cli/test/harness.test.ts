@@ -23,6 +23,8 @@ import { highlightLine, highlightDiff, highlightCode, highlightMarkdownCodeBlock
 import { copyToClipboard, readFromClipboard } from "../src/clipboard.js";
 import { executeWebSearch } from "../src/search_web.js";
 import { RustCoreBridge } from "../src/tools.js";
+import { wrapSandboxedCommand, isBwrapAvailable } from "../src/sandbox.js";
+import { PluginManager } from "../src/plugins.js";
 
 describe("Nexus Code Test Suite", () => {
   test("HARNESS_TOOLS definitions include all parity tools", () => {
@@ -755,6 +757,122 @@ error[E0308]: mismatched types
     } finally {
       bridge.shutdown();
     }
+  });
+
+  test("Sandboxed command wrapper wraps commands with namespace boundary (Candidate #33)", () => {
+    const wrappedAuto = wrapSandboxedCommand("echo hello", process.cwd(), { mode: "auto" });
+    assert.ok(wrappedAuto.command.includes("echo hello"));
+    assert.strictEqual(typeof wrappedAuto.sandboxed, "boolean");
+
+    const wrappedNone = wrapSandboxedCommand("echo hello", process.cwd(), { mode: "none" });
+    assert.strictEqual(wrappedNone.sandboxed, false);
+    assert.strictEqual(wrappedNone.command, "echo hello");
+
+    // RustCoreBridge executes with sandbox configured
+    const bridge = new RustCoreBridge(process.cwd(), "bash", undefined, false, false, "none");
+    assert.ok(bridge);
+    bridge.shutdown();
+  });
+
+  test("PluginManager tool middleware pipeline intercepts and transforms tool execution (Candidate #41)", async () => {
+    const pm = new PluginManager(process.cwd());
+
+    // Register a test middleware plugin
+    pm.registerPlugin({
+      name: "test-middleware",
+      preToolExecution: async (ctx, next) => {
+        // Intercept read_file and mutate target path
+        if (ctx.toolName === "read_file" && ctx.args.path === "original.txt") {
+          return next({ ...ctx.args, path: "transformed.txt" });
+        }
+        // Short-circuit / mock a tool
+        if (ctx.toolName === "mock_tool") {
+          return { success: true, output: "mocked_by_middleware" };
+        }
+        return next();
+      },
+      postToolExecution: async (ctx) => {
+        if (ctx.toolName === "read_file") {
+          return {
+            ...ctx.result,
+            output: `[INTERCEPTED] ${ctx.result.output}`,
+          };
+        }
+        return ctx.result;
+      },
+    });
+
+    // 1. Test argument mutation
+    let observedPath = "";
+    const res1 = await pm.executeToolPipeline("read_file", { path: "original.txt" }, async (args) => {
+      observedPath = args.path;
+      return { success: true, output: "file content" };
+    });
+    assert.strictEqual(observedPath, "transformed.txt");
+    assert.strictEqual(res1.output, "[INTERCEPTED] file content");
+
+    // 2. Test short-circuiting
+    const res2 = await pm.executeToolPipeline("mock_tool", {}, async () => {
+      throw new Error("Core executor should not be reached for mock_tool");
+    });
+    assert.strictEqual(res2.success, true);
+    assert.strictEqual(res2.output, "mocked_by_middleware");
+  });
+
+  test("McpServer exposes and serves MCP resources and prompt templates (Candidates #36, #37)", async () => {
+    const { McpServer } = await import("../src/mcp.js");
+    const server = new McpServer(process.cwd());
+
+    try {
+      // 1. initialize announces resources & prompts capabilities
+      const initRes = await server.handleMessage({ jsonrpc: "2.0", id: 1, method: "initialize" });
+      assert.ok(initRes.result.capabilities.resources);
+      assert.ok(initRes.result.capabilities.prompts);
+
+      // 2. resources/list and resources/read
+      const listRes = await server.handleMessage({ jsonrpc: "2.0", id: 2, method: "resources/list" });
+      assert.ok(Array.isArray(listRes.result.resources));
+      assert.ok(listRes.result.resources.some((r: any) => r.uri === "nexus://workspace-info"));
+
+      const readRes = await server.handleMessage({
+        jsonrpc: "2.0",
+        id: 3,
+        method: "resources/read",
+        params: { uri: "nexus://workspace-info" },
+      });
+      assert.ok(readRes.result.contents[0].text.includes("nexus-code"));
+
+      // 3. prompts/list and prompts/get
+      const promptListRes = await server.handleMessage({ jsonrpc: "2.0", id: 4, method: "prompts/list" });
+      assert.ok(Array.isArray(promptListRes.result.prompts));
+      assert.ok(promptListRes.result.prompts.some((p: any) => p.name === "code-review"));
+
+      const promptGetRes = await server.handleMessage({
+        jsonrpc: "2.0",
+        id: 5,
+        method: "prompts/get",
+        params: { name: "code-review" },
+      });
+      assert.ok(promptGetRes.result.messages.length > 0);
+    } finally {
+      server.shutdown();
+    }
+  });
+
+  test("McpClientManager manages remote transports, server discovery, and resources (Candidates #36, #37, #42)", async () => {
+    const { McpClientManager, McpConnection } = await import("../src/mcp.js");
+    const mcp = new McpClientManager(process.cwd());
+
+    // Add a mock connection
+    const mockConn = new McpConnection("test-server", {
+      transport: "sse",
+      url: "http://localhost:8000/sse",
+    });
+    assert.strictEqual(mockConn.transport, "sse");
+    mcp.addConnection("test-server", mockConn);
+
+    const servers = mcp.listServers();
+    assert.ok(servers.some((s) => s.name === "test-server" && s.transport === "sse"));
   });
 });
 

@@ -5,12 +5,30 @@ import { pathToFileURL } from "node:url";
 import { ToolDefinition, ExecutionResult } from "./types.js";
 import pc from "picocolors";
 
+export interface ToolMiddlewareContext {
+  toolName: string;
+  args: Record<string, any>;
+  workspace: string;
+}
+
+export interface ToolPostMiddlewareContext extends ToolMiddlewareContext {
+  result: ExecutionResult;
+}
+
 export interface PluginHooks {
   name: string;
   description?: string;
   onTurnStart?: (context: { prompt: string; workspace: string }) => Promise<void> | void;
   onToolCall?: (context: { toolName: string; args: Record<string, any> }) => Promise<void> | void;
   onToolResult?: (context: { toolName: string; result: ExecutionResult }) => Promise<void> | void;
+  // Candidate #41: Chain-of-responsibility middleware pipeline
+  preToolExecution?: (
+    context: ToolMiddlewareContext,
+    next: (modifiedArgs?: Record<string, any>) => Promise<ExecutionResult>
+  ) => Promise<ExecutionResult>;
+  postToolExecution?: (
+    context: ToolPostMiddlewareContext
+  ) => Promise<ExecutionResult> | ExecutionResult;
   onTurnEnd?: (context: { summary: string; isFinished: boolean }) => Promise<void> | void;
   customTools?: Array<{
     definition: ToolDefinition;
@@ -81,6 +99,20 @@ export class PluginManager {
     }
   }
 
+  public registerPlugin(plugin: PluginHooks): void {
+    if (plugin && plugin.name) {
+      this.plugins.set(plugin.name, plugin);
+      if (Array.isArray(plugin.customTools)) {
+        for (const ct of plugin.customTools) {
+          if (ct.definition?.function?.name && typeof ct.handler === "function") {
+            this.customToolDefs.push(ct.definition);
+            this.customToolsMap.set(ct.definition.function.name, ct.handler);
+          }
+        }
+      }
+    }
+  }
+
   public getCustomToolDefinitions(): ToolDefinition[] {
     return this.customToolDefs;
   }
@@ -95,6 +127,55 @@ export class PluginManager {
       return { success: false, output: "", error: `Custom tool not found: ${toolName}` };
     }
     return handler(args);
+  }
+
+  /**
+   * Execute tool through the pre-tool and post-tool middleware pipeline (Candidate #41)
+   */
+  public async executeToolPipeline(
+    toolName: string,
+    initialArgs: Record<string, any>,
+    coreExecutor: (args: Record<string, any>) => Promise<ExecutionResult>
+  ): Promise<ExecutionResult> {
+    const preMiddlewares: Array<NonNullable<PluginHooks["preToolExecution"]>> = [];
+    const postMiddlewares: Array<NonNullable<PluginHooks["postToolExecution"]>> = [];
+
+    for (const plugin of this.plugins.values()) {
+      if (plugin.preToolExecution) {
+        preMiddlewares.push(plugin.preToolExecution);
+      }
+      if (plugin.postToolExecution) {
+        postMiddlewares.push(plugin.postToolExecution);
+      }
+    }
+
+    const dispatch = async (idx: number, currentArgs: Record<string, any>): Promise<ExecutionResult> => {
+      if (idx < preMiddlewares.length) {
+        const mw = preMiddlewares[idx];
+        return mw(
+          { toolName, args: currentArgs, workspace: this.workspace },
+          async (nextArgs) => dispatch(idx + 1, nextArgs || currentArgs)
+        );
+      }
+      return coreExecutor(currentArgs);
+    };
+
+    let result = await dispatch(0, initialArgs);
+
+    for (const postMw of postMiddlewares) {
+      try {
+        result = await postMw({
+          toolName,
+          args: initialArgs,
+          result,
+          workspace: this.workspace,
+        });
+      } catch {
+        // If post-middleware fails, keep existing result
+      }
+    }
+
+    return result;
   }
 
   public async notifyTurnStart(prompt: string, workspace: string): Promise<void> {

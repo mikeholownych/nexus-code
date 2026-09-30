@@ -533,6 +533,7 @@ export class RustCoreBridge {
   private rpcBuffer: string = "";
   private dryRun: boolean = false;
   private readOnly: boolean = false;
+  private sandbox: boolean | string = false;
   private securityManager: SecurityManager;
 
   constructor(
@@ -540,13 +541,15 @@ export class RustCoreBridge {
     defaultShell: string = "bash",
     customBinaryPath?: string,
     dryRun: boolean = false,
-    readOnly: boolean = false
+    readOnly: boolean = false,
+    sandbox: boolean | string = false
   ) {
     this.workspace = path.resolve(workspace);
     this.defaultShell = defaultShell;
     this.cargoManifestPath = path.resolve(__dirname, "../../core/Cargo.toml");
     this.dryRun = dryRun;
     this.readOnly = readOnly;
+    this.sandbox = sandbox;
     this.securityManager = new SecurityManager(this.workspace);
 
     if (customBinaryPath && fs.existsSync(customBinaryPath)) {
@@ -566,6 +569,10 @@ export class RustCoreBridge {
 
   public setReadOnly(enabled: boolean): void {
     this.readOnly = enabled;
+  }
+
+  public setSandbox(sandbox: boolean | string): void {
+    this.sandbox = sandbox;
   }
 
   private resolveBinary(): void {
@@ -1033,9 +1040,20 @@ export class RustCoreBridge {
       }
     }
 
-    // Default the shell if not explicitly provided
-    if (toolName === "run_command" && !args.shell) {
-      args.shell = this.defaultShell;
+    // Default the shell and wrap with sandbox if enabled
+    if (toolName === "run_command") {
+      if (!args.shell) {
+        args.shell = this.defaultShell;
+      }
+      if (this.sandbox) {
+        const { wrapSandboxedCommand } = await import("./sandbox.js");
+        const mode = typeof this.sandbox === "string" ? (this.sandbox as any) : "auto";
+        const sandboxed = wrapSandboxedCommand(args.command || "", this.workspace, {
+          mode,
+          shell: args.shell,
+        });
+        args.command = sandboxed.command;
+      }
     }
 
     // Attempt persistent JSON-RPC execution

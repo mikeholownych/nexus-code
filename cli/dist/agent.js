@@ -77,7 +77,7 @@ export class AutonomousAgent {
         this.config = config;
         this.depth = depth;
         this.client = new LocalLlmClient(config);
-        this.bridge = new RustCoreBridge(config.workspace, config.shell, config.coreBinaryPath, config.dryRun, config.readOnly);
+        this.bridge = new RustCoreBridge(config.workspace, config.shell, config.coreBinaryPath, config.dryRun, config.readOnly, config.sandbox);
         this.securityManager = new SecurityManager(config.workspace);
         this.ui = new TerminalUI();
         this.skillManager = new SkillManager(config.workspace);
@@ -574,7 +574,9 @@ Always explain your reasoning before or alongside your tool calls.${gitSection}$
                 }
                 const t0 = Date.now();
                 this.ui.startSpinner(`Executing ${toolName}...`);
-                const result = await this.bridge.executeTool(toolName, args);
+                await this.pluginManager.notifyToolCall(toolName, args);
+                const result = await this.pluginManager.executeToolPipeline(toolName, args, async (effectiveArgs) => this.bridge.executeTool(toolName, effectiveArgs));
+                await this.pluginManager.notifyToolResult(toolName, result);
                 this.ui.stopSpinner(result.success);
                 logAudit({
                     workspace: this.config.workspace,

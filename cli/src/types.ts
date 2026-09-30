@@ -50,6 +50,7 @@ export interface HarnessConfig {
   readOnly?: boolean;        // Reject all mutating tool executions and commands
   fallbackEndpoints?: string[]; // Failover endpoint URLs if primary endpoint is unavailable
   contextLimit?: number;     // Maximum model context window token limit (default: 32768)
+  sandbox?: boolean | string; // Linux namespace / bwrap / container isolation (default: false)
 }
 
 export interface ExecutionResult {
