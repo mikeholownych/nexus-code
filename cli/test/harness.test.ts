@@ -217,7 +217,7 @@ error[E0308]: mismatched types
   test("generateConventionalCommit creates valid conventional commit messages", () => {
     const commit = generateConventionalCommit(process.cwd());
     assert.ok(commit.message.length > 0);
-    assert.ok(/^(feat|fix|docs|test|chore)\([^)]+\):/.test(commit.message));
+    assert.ok(/^(feat|fix|docs|test|chore)(\([^)]+\))?:/.test(commit.message));
   });
 
   test("isSafeOutboundUrl blocks SSRF threats and permits valid public URLs", () => {

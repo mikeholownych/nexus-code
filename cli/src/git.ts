@@ -101,7 +101,7 @@ export function generateConventionalCommit(workspace: string): { message: string
     }).trim();
 
     if (!statusOut) {
-      return { message: "chore: update repository", files: [] };
+      return { message: "chore(repo): update repository", files: [] };
     }
 
     const lines = statusOut.split("\n");
@@ -148,7 +148,7 @@ export function generateConventionalCommit(workspace: string): { message: string
     const message = `${type}(${scope}): ${topic}`;
     return { message, files };
   } catch {
-    return { message: "chore: update workspace", files: [] };
+    return { message: "chore(repo): update workspace", files: [] };
   }
 }
 
