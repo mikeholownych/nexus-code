@@ -1,11 +1,13 @@
+mod cst;
 mod file_ops;
+mod git_ops;
 mod runner;
 mod search;
+mod trigram;
 
 use clap::{Parser, Subcommand};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::io::{self, BufRead, Write};
 use std::path::{Path, PathBuf};
 
 #[derive(Parser, Debug)]
@@ -128,50 +130,103 @@ fn execute_tool(tool_name: &str, params: Value, base_dir: &Path) -> Result<Value
             let res = file_ops::patch_file(args, base_dir)?;
             serde_json::to_value(res).map_err(|e| e.to_string())
         }
+        "git_status" => {
+            let res = git_ops::git_status(base_dir)?;
+            serde_json::to_value(res).map_err(|e| e.to_string())
+        }
+        "git_diff" => {
+            let args: git_ops::GitDiffArgs = serde_json::from_value(params)
+                .unwrap_or(git_ops::GitDiffArgs { staged: false, path_filter: None });
+            let res = git_ops::git_diff(args, base_dir)?;
+            serde_json::to_value(res).map_err(|e| e.to_string())
+        }
+        "git_log" => {
+            let args: git_ops::GitLogArgs = serde_json::from_value(params)
+                .unwrap_or(git_ops::GitLogArgs { max_commits: 10 });
+            let res = git_ops::git_log(args, base_dir)?;
+            serde_json::to_value(res).map_err(|e| e.to_string())
+        }
+        "cst_symbols" => {
+            let args: cst::CstParseArgs = serde_json::from_value(params)
+                .map_err(|e| format!("Invalid cst_symbols arguments: {e}"))?;
+            let res = cst::scan_workspace_cst(base_dir, args)?;
+            serde_json::to_value(res).map_err(|e| e.to_string())
+        }
+        "trigram_search" => {
+            let args: trigram::TrigramSearchArgs = serde_json::from_value(params)
+                .map_err(|e| format!("Invalid trigram_search arguments: {e}"))?;
+            let res = trigram::execute_trigram_search(args, base_dir)?;
+            serde_json::to_value(res).map_err(|e| e.to_string())
+        }
         _ => Err(format!("Unknown tool: {tool_name}")),
     }
 }
 
-fn run_rpc(workspace: &Path) {
-    let stdin = io::stdin();
-    let stdout = io::stdout();
-    let mut handle = stdout.lock();
+/**
+ * Asynchronous Non-Blocking JSON-RPC Stdio Server using Tokio (Candidate #05)
+ */
+async fn run_rpc_async(workspace: &Path) {
+    use std::sync::Arc;
+    use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 
-    for line in stdin.lock().lines() {
-        let line = match line {
-            Ok(l) => l,
-            Err(_) => break,
-        };
+    let stdin = tokio::io::stdin();
+    let reader = BufReader::new(stdin);
+    let mut lines = reader.lines();
 
-        let trimmed = line.trim();
+    let stdout = Arc::new(tokio::sync::Mutex::new(tokio::io::stdout()));
+    let ws = Arc::new(workspace.to_path_buf());
+
+    while let Ok(Some(line)) = lines.next_line().await {
+        let trimmed = line.trim().to_string();
         if trimmed.is_empty() {
             continue;
         }
 
-        let response = match serde_json::from_str::<RpcRequest>(trimmed) {
-            Ok(req) => match execute_tool(&req.method, req.params, workspace) {
-                Ok(result) => RpcResponse {
-                    id: req.id,
-                    result: Some(result),
-                    error: None,
-                },
-                Err(err) => RpcResponse {
-                    id: req.id,
-                    result: None,
-                    error: Some(err),
-                },
-            },
-            Err(e) => RpcResponse {
-                id: None,
-                result: None,
-                error: Some(format!("Invalid JSON-RPC request: {e}")),
-            },
-        };
+        let stdout_clone = Arc::clone(&stdout);
+        let ws_clone = Arc::clone(&ws);
 
-        if let Ok(json) = serde_json::to_string(&response) {
-            let _ = writeln!(handle, "{json}");
-            let _ = handle.flush();
-        }
+        tokio::spawn(async move {
+            let response = match serde_json::from_str::<RpcRequest>(&trimmed) {
+                Ok(req) => {
+                    let method = req.method;
+                    let params = req.params;
+                    let id = req.id;
+                    let exec_res = tokio::task::spawn_blocking(move || {
+                        execute_tool(&method, params, &ws_clone)
+                    })
+                    .await;
+
+                    match exec_res {
+                        Ok(Ok(result)) => RpcResponse {
+                            id,
+                            result: Some(result),
+                            error: None,
+                        },
+                        Ok(Err(err)) => RpcResponse {
+                            id,
+                            result: None,
+                            error: Some(err),
+                        },
+                        Err(join_err) => RpcResponse {
+                            id,
+                            result: None,
+                            error: Some(format!("Task execution failed: {join_err}")),
+                        },
+                    }
+                }
+                Err(e) => RpcResponse {
+                    id: None,
+                    result: None,
+                    error: Some(format!("Invalid JSON-RPC request: {e}")),
+                },
+            };
+
+            if let Ok(json) = serde_json::to_string(&response) {
+                let mut out = stdout_clone.lock().await;
+                let _ = out.write_all(format!("{json}\n").as_bytes()).await;
+                let _ = out.flush().await;
+            }
+        });
     }
 }
 
@@ -195,7 +250,8 @@ fn parse_flexible_json(input: &str) -> Result<Value, String> {
     Err(format!("Could not parse JSON arguments: {input}"))
 }
 
-fn main() {
+#[tokio::main]
+async fn main() {
     let cli = Cli::parse();
     let workspace = std::fs::canonicalize(&cli.workspace).unwrap_or(cli.workspace);
 
@@ -219,7 +275,7 @@ fn main() {
             }
         }
         Commands::Rpc => {
-            run_rpc(&workspace);
+            run_rpc_async(&workspace).await;
         }
     }
 }

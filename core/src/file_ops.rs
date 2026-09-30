@@ -72,25 +72,54 @@ pub fn read_file(args: ReadFileArgs, base_dir: &Path) -> Result<ReadFileResult, 
     }
 
     let file = File::open(&target).map_err(|e| format!("Failed to open file: {e}"))?;
-    let reader = BufReader::new(file);
-    let all_lines: Vec<String> = reader.lines().collect::<Result<_, _>>()
-        .map_err(|e| format!("Failed to read lines: {e}"))?;
+    let file_meta = file.metadata().map_err(|e| format!("Failed to get metadata: {e}"))?;
+    let file_size = file_meta.len() as usize;
 
-    let total = all_lines.len();
-    let start = args.start_line.unwrap_or(1).max(1);
-    let end = args.end_line.unwrap_or(total).min(total);
+    let (total, start, end, numbered_content) = if file_size > 0 {
+        // High-performance Memory-Mapped I/O (Candidate #07)
+        if let Ok(mmap) = unsafe { memmap2::Mmap::map(&file) } {
+            let text = String::from_utf8_lossy(&mmap);
+            let lines: Vec<&str> = text.lines().collect();
+            let total = lines.len();
+            let start = args.start_line.unwrap_or(1).max(1);
+            let end = args.end_line.unwrap_or(total).min(total);
 
-    if start > total && total > 0 {
-        return Err(format!("start_line ({start}) exceeds total lines ({total})"));
-    }
+            if start > total && total > 0 {
+                return Err(format!("start_line ({start}) exceeds total lines ({total})"));
+            }
 
-    let mut numbered_content = String::new();
-    if total > 0 && start <= end {
-        for (idx, line) in all_lines[start - 1..end].iter().enumerate() {
-            let line_num = start + idx;
-            numbered_content.push_str(&format!("{line_num:>5} | {line}\n"));
+            let mut numbered_content = String::new();
+            if total > 0 && start <= end {
+                for (idx, line) in lines[start - 1..end].iter().enumerate() {
+                    let line_num = start + idx;
+                    numbered_content.push_str(&format!("{line_num:>5} | {line}\n"));
+                }
+            }
+            (total, start, end, numbered_content)
+        } else {
+            let reader = BufReader::new(file);
+            let all_lines: Vec<String> = reader.lines().collect::<Result<_, _>>()
+                .map_err(|e| format!("Failed to read lines: {e}"))?;
+            let total = all_lines.len();
+            let start = args.start_line.unwrap_or(1).max(1);
+            let end = args.end_line.unwrap_or(total).min(total);
+
+            if start > total && total > 0 {
+                return Err(format!("start_line ({start}) exceeds total lines ({total})"));
+            }
+
+            let mut numbered_content = String::new();
+            if total > 0 && start <= end {
+                for (idx, line) in all_lines[start - 1..end].iter().enumerate() {
+                    let line_num = start + idx;
+                    numbered_content.push_str(&format!("{line_num:>5} | {line}\n"));
+                }
+            }
+            (total, start, end, numbered_content)
         }
-    }
+    } else {
+        (0, 1, 0, String::new())
+    };
 
     Ok(ReadFileResult {
         path: args.path,
@@ -306,11 +335,13 @@ pub fn delete_file(args: DeleteFileArgs, base_dir: &Path) -> Result<DeleteFileRe
 }
 
 pub fn resolve_safe_path(base_dir: &Path, rel_path: &str) -> Result<std::path::PathBuf, String> {
-    let clean_rel = rel_path.trim();
+    // Cross-platform path normalization (Candidate #50)
+    let clean_rel = rel_path.trim().replace('\\', "/");
     let base_canon = base_dir.canonicalize().map_err(|e| format!("Invalid workspace directory: {e}"))?;
 
-    if clean_rel.starts_with('/') {
-        let path = std::path::PathBuf::from(clean_rel);
+    let clean_path = std::path::Path::new(&clean_rel);
+    if clean_path.is_absolute() {
+        let path = std::path::PathBuf::from(&clean_rel);
         if let Ok(path_canon) = path.canonicalize() {
             if path_canon.starts_with(&base_canon) {
                 return Ok(path_canon);
@@ -415,8 +446,14 @@ pub fn file_info(args: FileInfoArgs, base_dir: &Path) -> Result<FileInfoResult, 
         is_bin = is_binary_file(&target).unwrap_or(false);
         if !is_bin {
             if let Ok(file) = File::open(&target) {
-                let reader = BufReader::new(file);
-                line_count = Some(reader.lines().count());
+                if let Ok(mmap) = unsafe { memmap2::Mmap::map(&file) } {
+                    let newlines = mmap.iter().filter(|&&b| b == b'\n').count();
+                    let has_trailing = mmap.last().map(|&b| b != b'\n').unwrap_or(false);
+                    line_count = Some(if has_trailing { newlines + 1 } else { newlines });
+                } else {
+                    let reader = BufReader::new(file);
+                    line_count = Some(reader.lines().count());
+                }
             }
         }
     }

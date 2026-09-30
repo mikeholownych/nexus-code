@@ -992,8 +992,96 @@ error[E0308]: mismatched types
       fs.rmSync(tmpDir, { recursive: true, force: true });
     }
   });
+
+  test("RustCoreBridge executes native git operations via git2 (Candidate #06)", async () => {
+    const repoRoot = fs.existsSync(path.join(process.cwd(), "core")) ? process.cwd() : path.resolve(process.cwd(), "..");
+    const bridge = new RustCoreBridge(repoRoot);
+    try {
+      const statusRes = await bridge.executeTool("git_status", {});
+      assert.strictEqual(statusRes.success, true);
+      const status = JSON.parse(statusRes.output);
+      assert.ok(status.branch, "Branch name should be present");
+      assert.strictEqual(typeof status.is_clean, "boolean");
+      assert.ok(Array.isArray(status.modified));
+
+      const logRes = await bridge.executeTool("git_log", { max_commits: 2 });
+      assert.strictEqual(logRes.success, true);
+      const log = JSON.parse(logRes.output);
+      assert.ok(Array.isArray(log.commits));
+      assert.ok(log.commits.length > 0);
+      assert.ok(log.commits[0].id);
+      assert.ok(log.commits[0].author);
+    } finally {
+      bridge.shutdown();
+    }
+  });
+
+  test("RustCoreBridge executes CST symbol parser and syntax navigation (Candidate #04)", async () => {
+    const repoRoot = fs.existsSync(path.join(process.cwd(), "core")) ? process.cwd() : path.resolve(process.cwd(), "..");
+    const bridge = new RustCoreBridge(repoRoot);
+    try {
+      const cstRes = await bridge.executeTool("cst_symbols", { path: "core/src/cst.rs" });
+      assert.strictEqual(cstRes.success, true);
+      const parsed = JSON.parse(cstRes.output);
+      assert.ok(parsed.total_symbols > 0);
+      assert.ok(parsed.symbols.some((s: any) => s.name === "parse_cst_symbols"));
+      assert.ok(parsed.symbols.some((s: any) => s.kind === "fn" || s.kind === "struct"));
+    } finally {
+      bridge.shutdown();
+    }
+  });
+
+  test("RustCoreBridge executes inverted trigram search acceleration (Candidate #10)", async () => {
+    const repoRoot = fs.existsSync(path.join(process.cwd(), "core")) ? process.cwd() : path.resolve(process.cwd(), "..");
+    const bridge = new RustCoreBridge(repoRoot);
+    try {
+      const searchRes = await bridge.executeTool("trigram_search", { query: "execute_tool", path: "core/src" });
+      assert.strictEqual(searchRes.success, true);
+      const results = JSON.parse(searchRes.output);
+      assert.ok(results.candidate_files_examined > 0);
+      assert.ok(results.total_matches > 0);
+      assert.ok(results.matches.some((m: any) => m.line.includes("execute_tool")));
+    } finally {
+      bridge.shutdown();
+    }
+  });
+
+  test("RustCoreBridge executes commands via allocated Pseudo-Terminal (PTY) (Candidate #03)", async () => {
+    const repoRoot = fs.existsSync(path.join(process.cwd(), "core")) ? process.cwd() : path.resolve(process.cwd(), "..");
+    const bridge = new RustCoreBridge(repoRoot);
+    try {
+      const ptyRes = await bridge.executeTool("run_command", {
+        command: "echo 'NEXUS_PTY_OK'",
+        pty: true,
+      });
+      assert.strictEqual(ptyRes.success, true);
+      const res = JSON.parse(ptyRes.output);
+      assert.strictEqual(res.exit_code, 0);
+      assert.ok(res.stdout.includes("NEXUS_PTY_OK"));
+    } finally {
+      bridge.shutdown();
+    }
+  });
+
+  test("RustCoreBridge reads files via zero-copy memmap2 and counts lines (Candidate #07)", async () => {
+    const repoRoot = fs.existsSync(path.join(process.cwd(), "core")) ? process.cwd() : path.resolve(process.cwd(), "..");
+    const bridge = new RustCoreBridge(repoRoot);
+    try {
+      const readRes = await bridge.executeTool("read_file", { path: "core/Cargo.toml", start_line: 1, end_line: 5 });
+      assert.strictEqual(readRes.success, true);
+      const res = JSON.parse(readRes.output);
+      assert.ok(res.total_lines > 0);
+      assert.strictEqual(res.start_line, 1);
+      assert.strictEqual(res.end_line, 5);
+      assert.ok(res.content.includes("harness-core"));
+
+      const infoRes = await bridge.executeTool("file_info", { path: "core/Cargo.toml" });
+      assert.strictEqual(infoRes.success, true);
+      const info = JSON.parse(infoRes.output);
+      assert.ok(info.line_count > 0);
+      assert.strictEqual(info.is_file, true);
+    } finally {
+      bridge.shutdown();
+    }
+  });
 });
-
-
-
-

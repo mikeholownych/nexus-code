@@ -518,6 +518,99 @@ export const HARNESS_TOOLS = [
             },
         },
     },
+    {
+        type: "function",
+        function: {
+            name: "git_status",
+            description: "Inspect native repository branch and staged/modified/untracked files via Rust libgit2 engine.",
+            parameters: {
+                type: "object",
+                properties: {},
+            },
+        },
+    },
+    {
+        type: "function",
+        function: {
+            name: "git_diff",
+            description: "Generate unified diff of repository changes natively via Rust libgit2 engine.",
+            parameters: {
+                type: "object",
+                properties: {
+                    staged: {
+                        type: "boolean",
+                        description: "If true, diff staged changes against HEAD. Otherwise diff working directory.",
+                    },
+                    path_filter: {
+                        type: "string",
+                        description: "Optional file path pattern to restrict diff to.",
+                    },
+                },
+            },
+        },
+    },
+    {
+        type: "function",
+        function: {
+            name: "git_log",
+            description: "Inspect recent commit history (author, hash, summary, timestamp) natively via Rust libgit2 engine.",
+            parameters: {
+                type: "object",
+                properties: {
+                    max_commits: {
+                        type: "number",
+                        description: "Maximum number of commits to retrieve (default: 10).",
+                    },
+                },
+            },
+        },
+    },
+    {
+        type: "function",
+        function: {
+            name: "cst_symbols",
+            description: "Parse symbols, multiline signatures, doc comments, visibility, and scopes using the Rust CST parser.",
+            parameters: {
+                type: "object",
+                properties: {
+                    path: {
+                        type: "string",
+                        description: "File or directory path to parse.",
+                    },
+                    query: {
+                        type: "string",
+                        description: "Optional symbol name filter.",
+                    },
+                },
+                required: ["path"],
+            },
+        },
+    },
+    {
+        type: "function",
+        function: {
+            name: "trigram_search",
+            description: "Ultra-fast code search accelerated by Rust inverted trigram index.",
+            parameters: {
+                type: "object",
+                properties: {
+                    query: {
+                        type: "string",
+                        description: "Substring or token to search for across the codebase.",
+                    },
+                    path: {
+                        type: "string",
+                        description: "Optional subdirectory to restrict search to.",
+                    },
+                    max_results: {
+                        type: "number",
+                        description: "Maximum matches to return (default: 50).",
+                    },
+                },
+                required: ["query"],
+            },
+        },
+    },
 ];
 export function isSafeOutboundUrl(urlStr) {
     let parsed;

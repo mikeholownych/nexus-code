@@ -11,6 +11,8 @@ pub struct RunCommandArgs {
     pub timeout_secs: u64,
     #[serde(default = "default_shell")]
     pub shell: String,
+    #[serde(default)]
+    pub pty: bool,
 }
 
 fn default_timeout() -> u64 {
@@ -18,7 +20,10 @@ fn default_timeout() -> u64 {
 }
 
 fn default_shell() -> String {
-    "bash".to_string()
+    #[cfg(windows)]
+    return "powershell.exe".to_string();
+    #[cfg(not(windows))]
+    return "bash".to_string();
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -107,17 +112,30 @@ pub fn run_command(args: RunCommandArgs, base_dir: &Path) -> Result<RunCommandRe
         return Err(format!("Working directory does not exist: {}", working_dir.display()));
     }
 
-    let start = Instant::now();
     let shell_name = if args.shell.trim().is_empty() {
-        "bash".to_string()
+        default_shell()
     } else {
         args.shell.trim().to_string()
     };
 
-    // Native Linux shell process execution
+    if args.pty {
+        return run_command_pty(&args.command, &working_dir, args.timeout_secs, &shell_name);
+    }
+
+    let start = Instant::now();
+
+    // Cross-platform shell process execution (Candidate #50)
     let mut cmd = Command::new(&shell_name);
-    cmd.args(["-c", &args.command])
-        .current_dir(&working_dir)
+    #[cfg(windows)]
+    if shell_name.contains("powershell") {
+        cmd.args(["-NoProfile", "-Command", &args.command]);
+    } else {
+        cmd.args(["/C", &args.command]);
+    }
+    #[cfg(not(windows))]
+    cmd.args(["-c", &args.command]);
+
+    cmd.current_dir(&working_dir)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
 
@@ -182,6 +200,86 @@ pub fn run_command(args: RunCommandArgs, base_dir: &Path) -> Result<RunCommandRe
     })
 }
 
+/**
+ * Execute command inside a Pseudo-Terminal (PTY) master/slave pair (Candidate #03)
+ */
+pub fn run_command_pty(
+    command_str: &str,
+    working_dir: &Path,
+    timeout_secs: u64,
+    shell_name: &str,
+) -> Result<RunCommandResult, String> {
+    use portable_pty::{native_pty_system, PtySize, CommandBuilder};
+    let start = Instant::now();
+
+    let pty_system = native_pty_system();
+    let pair = pty_system.openpty(PtySize {
+        rows: 24,
+        cols: 80,
+        pixel_width: 0,
+        pixel_height: 0,
+    }).map_err(|e| format!("Failed to allocate PTY: {e}"))?;
+
+    let mut cmd = CommandBuilder::new(shell_name);
+    #[cfg(windows)]
+    if shell_name.contains("powershell") {
+        cmd.args(["-NoProfile", "-Command", command_str]);
+    } else {
+        cmd.args(["/C", command_str]);
+    }
+    #[cfg(not(windows))]
+    cmd.args(["-c", command_str]);
+
+    cmd.cwd(working_dir);
+
+    let mut child = pair.slave.spawn_command(cmd)
+        .map_err(|e| format!("Failed to spawn PTY child: {e}"))?;
+    drop(pair.slave); // Required to ensure EOF when command terminates
+
+    let mut reader = pair.master.try_clone_reader()
+        .map_err(|e| format!("Failed to clone PTY master reader: {e}"))?;
+
+    let output_handle = std::thread::spawn(move || {
+        let mut buf = Vec::new();
+        let _ = std::io::Read::read_to_end(&mut reader, &mut buf);
+        buf
+    });
+
+    let timeout = Duration::from_secs(timeout_secs);
+    let poll_interval = Duration::from_millis(50);
+    let mut timed_out = false;
+
+    let exit_status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break Some(status),
+            Ok(None) => {
+                if start.elapsed() > timeout {
+                    let _ = child.kill();
+                    timed_out = true;
+                    let _ = child.wait();
+                    break None;
+                }
+                std::thread::sleep(poll_interval);
+            }
+            Err(_) => break None,
+        }
+    };
+
+    drop(pair.master);
+    let raw_out = output_handle.join().unwrap_or_default();
+    let text = String::from_utf8_lossy(&raw_out).to_string();
+
+    Ok(RunCommandResult {
+        command: command_str.to_string(),
+        shell: shell_name.to_string(),
+        exit_code: exit_status.and_then(|s| if s.success() { Some(0) } else { Some(1) }),
+        stdout: truncate_output(&text),
+        stderr: String::new(),
+        duration_ms: start.elapsed().as_millis(),
+        timed_out,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -202,6 +300,21 @@ mod tests {
         assert!(is_dangerous_command("git status").is_none());
         assert!(is_dangerous_command("cat /etc/hosts").is_none());
         assert!(is_dangerous_command("npm run build").is_none());
+    }
+
+    #[test]
+    fn test_run_command_pty() {
+        let cwd = std::env::current_dir().unwrap();
+        let res = run_command(RunCommandArgs {
+            command: "echo 'PTY terminal test'".to_string(),
+            cwd: None,
+            timeout_secs: 5,
+            shell: default_shell(),
+            pty: true,
+        }, &cwd).unwrap();
+
+        assert_eq!(res.exit_code, Some(0));
+        assert!(res.stdout.contains("PTY terminal test"));
     }
 }
 

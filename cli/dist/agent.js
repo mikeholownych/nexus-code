@@ -30,6 +30,11 @@ const READ_ONLY_TOOLS = new Set([
     "lsp_hover",
     "lsp_definition",
     "lsp_diagnostics",
+    "git_status",
+    "git_diff",
+    "git_log",
+    "cst_symbols",
+    "trigram_search",
 ]);
 function triggerNotification(title, message) {
     try {
