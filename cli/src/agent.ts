@@ -18,6 +18,8 @@ import { calculateContextBudget, countTokens, isContextAdmissible, TokenBudget }
 import { selectRelevantFewShots } from "./fewshots.js";
 import { FlightRecorder } from "./flight.js";
 import { WorktreeManager } from "./worktree.js";
+import { isSandboxAvailable } from "./sandbox.js";
+import { runTestSuiteWithExecutor } from "./tester.js";
 import { HybridSearchEngine } from "./embeddings.js";
 import { SynthesizerEngine } from "./synthesizer.js";
 import { BrowserDriver } from "./browser.js";
@@ -209,10 +211,14 @@ export class AutonomousAgent {
   private extensibilityInitialized: boolean = false;
   private activePlan: Array<{ name: string; status: string; detail?: string }> = [];
   private hasPendingModifications: boolean = false;
+  private verifiedWorktreeCompletion: boolean = false;
+  private worktreeRunTurnAuthorized: boolean = false;
+  private managedWorktreeWorkspaceSwitch: boolean = false;
   private flightRecorder?: FlightRecorder;
   private worktreeManager: WorktreeManager;
   private activeWorktree?: { taskId: string; worktreePath: string; branch: string };
   private originalWorkspace?: string;
+  private inheritedWorktreeScope?: { workspace: string; requireSandbox: true };
   private plannerClient: LocalLlmClient;
   private coderClient: LocalLlmClient;
   private cognitiveRoutingEnabled: boolean = false;
@@ -223,10 +229,18 @@ export class AutonomousAgent {
   private browser: BrowserDriver;
   private knowledge: KnowledgeGraph;
 
-  constructor(config: HarnessConfig, depth: number = 0) {
+  constructor(
+    config: HarnessConfig,
+    depth: number = 0,
+    inheritedWorktreeScope?: { workspace: string; requireSandbox: true },
+  ) {
     canonicalDurableProvenance.set(this, new WeakMap());
     this.config = config;
     this.depth = depth;
+    this.inheritedWorktreeScope = inheritedWorktreeScope;
+    if (inheritedWorktreeScope && path.resolve(config.workspace) !== path.resolve(inheritedWorktreeScope.workspace)) {
+      throw new Error("Subagent workspace does not match its inherited worktree authority.");
+    }
     const ws = config.workspace || process.cwd();
     this.client = new LocalLlmClient(config);
     if (config.plannerModel || config.coderModel) {
@@ -250,7 +264,7 @@ export class AutonomousAgent {
       this.coderClient = this.client;
     }
     this.hybridSearch = new HybridSearchEngine(ws, this.client);
-    this.synthesizer = new SynthesizerEngine(ws);
+    this.synthesizer = new SynthesizerEngine(ws, (command) => this.bridge.executeTool("run_command", { command, timeout_secs: 120 }));
     this.browser = new BrowserDriver(ws);
     this.knowledge = new KnowledgeGraph(ws);
     this.bridge = new RustCoreBridge(
@@ -259,7 +273,8 @@ export class AutonomousAgent {
       config.coreBinaryPath,
       config.dryRun,
       config.readOnly,
-      config.sandbox
+      inheritedWorktreeScope ? (config.sandbox || "auto") : config.sandbox,
+      Boolean(inheritedWorktreeScope?.requireSandbox),
     );
     this.securityManager = new SecurityManager(ws);
     this.ui = new TerminalUI();
@@ -323,8 +338,10 @@ export class AutonomousAgent {
     }
     const res = this.worktreeManager.mergeWorktree(this.activeWorktree.taskId, commitMessage);
     if (res.success && this.originalWorkspace) {
-      this.setWorkspace(this.originalWorkspace);
+      const originalWorkspace = this.originalWorkspace;
       this.activeWorktree = undefined;
+      this.originalWorkspace = undefined;
+      this.switchWorktreeWorkspace(originalWorkspace);
     }
     return res;
   }
@@ -334,9 +351,11 @@ export class AutonomousAgent {
       return { success: false, error: "No active worktree" };
     }
     const res = this.worktreeManager.discardWorktree(this.activeWorktree.taskId);
-    if (this.originalWorkspace) {
-      this.setWorkspace(this.originalWorkspace);
+    if (res.success && this.originalWorkspace) {
+      const originalWorkspace = this.originalWorkspace;
       this.activeWorktree = undefined;
+      this.originalWorkspace = undefined;
+      this.switchWorktreeWorkspace(originalWorkspace);
     }
     return res;
   }
@@ -440,14 +459,32 @@ export class AutonomousAgent {
   }
 
   public setWorkspace(newWorkspace: string): void {
+    if (this.inheritedWorktreeScope && path.resolve(newWorkspace) !== path.resolve(this.inheritedWorktreeScope.workspace)) {
+      throw new Error("Cannot change workspace outside the inherited worktree authority.");
+    }
+    if (this.activeWorktree && !this.managedWorktreeWorkspaceSwitch) {
+      throw new Error("Cannot switch workspaces while a speculative worktree is unresolved; merge or discard it first.");
+    }
     this.bridge.shutdown();
     this.config.workspace = newWorkspace;
-    this.bridge = new RustCoreBridge(this.config.workspace, this.config.shell, this.config.coreBinaryPath);
+    this.bridge = new RustCoreBridge(
+      this.config.workspace,
+      this.config.shell,
+      this.config.coreBinaryPath,
+      this.config.dryRun,
+      this.config.readOnly,
+      this.bridgeSandboxSetting(),
+      Boolean(this.activeWorktree) || Boolean(this.inheritedWorktreeScope?.requireSandbox),
+    );
     this.skillManager.setWorkspace(newWorkspace);
+    // During an internally managed isolation switch, retain the manager bound
+    // to the selected original workspace; the active checkout is only a
+    // specimen worktree, not the repository manager's authority root.
+    if (!this.managedWorktreeWorkspaceSwitch) this.worktreeManager = new WorktreeManager(newWorkspace);
     this.mcpManager = new McpClientManager(newWorkspace);
     this.pluginManager = new PluginManager(newWorkspace);
     this.hybridSearch = new HybridSearchEngine(newWorkspace, this.client);
-    this.synthesizer = new SynthesizerEngine(newWorkspace);
+    this.synthesizer = new SynthesizerEngine(newWorkspace, (command) => this.bridge.executeTool("run_command", { command, timeout_secs: 120 }));
     this.browser = new BrowserDriver(newWorkspace);
     this.knowledge = new KnowledgeGraph(newWorkspace);
     this.extensibilityInitialized = false;
@@ -457,8 +494,31 @@ export class AutonomousAgent {
   public setShell(newShell: string): void {
     this.bridge.shutdown();
     this.config.shell = newShell;
-    this.bridge = new RustCoreBridge(this.config.workspace, this.config.shell, this.config.coreBinaryPath);
+    this.bridge = new RustCoreBridge(
+      this.config.workspace,
+      this.config.shell,
+      this.config.coreBinaryPath,
+      this.config.dryRun,
+      this.config.readOnly,
+      this.bridgeSandboxSetting(),
+      Boolean(this.activeWorktree) || Boolean(this.inheritedWorktreeScope?.requireSandbox),
+    );
     this.resetConversation();
+  }
+
+  private bridgeSandboxSetting(): boolean | string | undefined {
+    if (!this.activeWorktree) return this.config.sandbox;
+    if (!this.config.sandbox || this.config.sandbox === "none") return "auto";
+    return this.config.sandbox;
+  }
+
+  private switchWorktreeWorkspace(workspace: string): void {
+    this.managedWorktreeWorkspaceSwitch = true;
+    try {
+      this.setWorkspace(workspace);
+    } finally {
+      this.managedWorktreeWorkspaceSwitch = false;
+    }
   }
 
   public setModel(newModel: string): void {
@@ -846,6 +906,15 @@ Always explain your reasoning before or alongside your tool calls.`;
   }
 
   async runTurn(taskPrompt: string | any[], onConfirm?: ConfirmHandler): Promise<void> {
+    // The REPL calls runTurn directly. Route worktree-enabled turns through the
+    // same establishment and resolution boundary as one-shot `run` tasks.
+    if (this.config.worktree && this.activeWorktree && !this.worktreeRunTurnAuthorized) {
+      throw new Error(`Cannot start a new task: unresolved worktree ${this.activeWorktree.taskId}; merge or discard it first.`);
+    }
+    if (this.config.worktree && !this.worktreeRunTurnAuthorized) {
+      await this.run(taskPrompt, onConfirm);
+      return;
+    }
     await this.initExtensibility();
     const promptText = typeof taskPrompt === "string" ? taskPrompt : "[Multi-modal Vision Input]";
     await this.pluginManager.notifyTurnStart(promptText, this.config.workspace);
@@ -1082,7 +1151,7 @@ Always explain your reasoning before or alongside your tool calls.`;
             ? JSON.parse(call.function.arguments)
             : call.function.arguments;
         } catch {
-          args = { raw: call.function.arguments };
+          args = toolName === "task_completed" ? {} : { raw: call.function.arguments };
         }
 
         // Reversibly restore any quarantined secret references for local execution
@@ -1101,14 +1170,31 @@ Always explain your reasoning before or alongside your tool calls.`;
         this.ui.printToolCall(toolName, args);
 
         if (toolName === "task_completed") {
+          const validCompletion = !!args && typeof args === "object" && !Array.isArray(args)
+            && typeof args.summary === "string" && args.summary.trim().length > 0
+            && (args.notes === undefined || typeof args.notes === "string");
+          if (!validCompletion) {
+            const invalid = "Invalid task_completed payload: summary must be a non-empty string and notes, when present, must be a string.";
+            if (this.flightRecorder) this.flightRecorder.recordToolResult(currentStep, call.id, toolName, false, invalid, 0, "Invalid completion payload");
+            this.messages.push({ role: "tool", tool_call_id: call.id, name: toolName, content: invalid });
+            continue;
+          }
+          const worktreeHasChanges = this.activeWorktree
+            ? this.worktreeManager.hasChanges(this.activeWorktree.taskId)
+            : false;
+          let verifierSucceeded = false;
           // Verification Oracle: If code was modified and unverified, verify before marking complete
-          if (this.hasPendingModifications && !this.config.dryRun && !this.config.readOnly) {
+          if ((this.hasPendingModifications || worktreeHasChanges) && !this.config.dryRun && !this.config.readOnly) {
             try {
-              const { runTestSuite } = await import("./tester.js");
-              const testRes = runTestSuite(this.config.workspace);
-              if (!testRes.success && testRes.command !== "none") {
+              const authoritativeVerifier = this.config.authoritativeVerifierCommand?.trim();
+              const testRes = await runTestSuiteWithExecutor(
+                this.config.workspace,
+                (command) => this.bridge.executeTool("run_command", { command }),
+                authoritativeVerifier || undefined,
+              );
+              if (!testRes.success || testRes.command === "none") {
                 const hints = formatDiagnosticHints(testRes.diagnostics);
-                const oracleFailContent = `Verification Oracle: Recent code modifications caused automated tests to fail.\nCommand: ${testRes.command}\n${foldVoluminousOutput(testRes.rawOutput || "")}${hints}\nPlease resolve these test failures before calling task_completed.`;
+                const oracleFailContent = `Verification Oracle: The selected verifier did not pass.\nCommand: ${testRes.command}\n${foldVoluminousOutput(testRes.rawOutput || "")}${hints}\nResolve the verification failure before calling task_completed.`;
                 if (this.flightRecorder) {
                   this.flightRecorder.recordToolResult(currentStep, call.id, toolName, false, oracleFailContent, 0, "Test verification failed");
                 }
@@ -1120,12 +1206,23 @@ Always explain your reasoning before or alongside your tool calls.`;
                 });
                 continue;
               }
-            } catch {
-              // Ignore in environments without test commands
+              verifierSucceeded = true;
+              if (this.activeWorktree && !authoritativeVerifier) {
+                console.log(pc.yellow(`Verification command '${testRes.command}' passed, but no authoritative verifier is configured; changes will remain in the worktree.`));
+              }
+            } catch (err: any) {
+              const verificationError = `Verification Oracle could not verify this worktree: ${err?.message || "test discovery failed"}.`;
+              if (this.flightRecorder) this.flightRecorder.recordToolResult(currentStep, call.id, toolName, false, verificationError, 0, "Verification unavailable");
+              this.messages.push({ role: "tool", tool_call_id: call.id, name: toolName, content: verificationError });
+              continue;
             }
           }
 
           this.hasPendingModifications = false;
+          if (this.activeWorktree) {
+            this.verifiedWorktreeCompletion = !worktreeHasChanges
+              || Boolean(verifierSucceeded && this.config.authoritativeVerifierCommand?.trim() && !this.config.dryRun && !this.config.readOnly);
+          }
           this.ui.taskCompleted(args.summary || "Task completed.", args.notes);
           isFinished = true;
           if (this.flightRecorder) {
@@ -1159,14 +1256,20 @@ Always explain your reasoning before or alongside your tool calls.`;
 
           const subPrompt = args.prompt || "Investigate the task";
           const subMaxSteps = args.max_steps ? Math.min(args.max_steps, 15) : 8;
+          const inheritedWorktreeScope = this.activeWorktree
+            ? { workspace: this.activeWorktree.worktreePath, requireSandbox: true as const }
+            : undefined;
+          const subagentConfig: HarnessConfig = {
+            ...this.config,
+            maxSteps: subMaxSteps,
+            ...(inheritedWorktreeScope
+              ? { workspace: inheritedWorktreeScope.workspace, sandbox: this.bridgeSandboxSetting() || "auto" }
+              : {}),
+          };
 
           this.ui.startSpinner(`Spawning isolated subagent: "${subPrompt.slice(0, 45)}..."`);
-          const subagent = new AutonomousAgent(
-            { ...this.config, maxSteps: subMaxSteps },
-            this.depth + 1
-          );
-
           try {
+            const subagent = new AutonomousAgent(subagentConfig, this.depth + 1, inheritedWorktreeScope);
             const subResult = await subagent.runSubagent(subPrompt);
             this.ui.stopSpinner(true);
             console.log(pc.cyan(`\n🤖 [Subagent Report Received]\n`));
@@ -1662,58 +1765,78 @@ Always explain your reasoning before or alongside your tool calls.`;
     }
   }
 
-  async run(taskPrompt: string): Promise<void> {
+  async run(taskPrompt: string | any[], onConfirm?: ConfirmHandler): Promise<void> {
     this.ui.banner();
-    console.log(`🎯 Task: ${taskPrompt}\n`);
+    console.log(`🎯 Task: ${typeof taskPrompt === "string" ? taskPrompt : "[Multi-modal task input]"}\n`);
     console.log(`📁 Workspace: ${this.config.workspace}`);
     console.log(`🐚 Shell: ${this.config.shell}`);
     console.log(`🤖 Model: ${this.config.model} (${this.config.endpoint})\n`);
 
-    if (this.config.worktree && this.worktreeManager.isGitRepo()) {
-      try {
-        const wt = this.worktreeManager.createWorktree();
-        this.activeWorktree = { taskId: wt.taskId, worktreePath: wt.worktreePath, branch: wt.branch };
-        this.originalWorkspace = this.config.workspace;
-        this.setWorkspace(wt.worktreePath);
-        console.log(pc.cyan(`🌲 Spun up speculative git worktree: ${wt.branch} at ${wt.worktreePath}`));
-      } catch (err: any) {
-        console.warn(pc.yellow(`⚠️ Failed to create ephemeral worktree, falling back to workspace: ${err.message}`));
+    this.verifiedWorktreeCompletion = false;
+    if (this.config.worktree) {
+      if (this.activeWorktree) {
+        throw new Error(`Cannot start a new task: unresolved worktree ${this.activeWorktree.taskId}; merge or discard it first.`);
       }
+      if (!this.worktreeManager.isGitRepo()) {
+        throw new Error(`Cannot start worktree-isolated task: ${this.config.workspace} is not a valid git repository.`);
+      }
+      const configuredSandbox = this.config.sandbox === "bwrap" || this.config.sandbox === "docker"
+        ? this.config.sandbox
+        : "auto";
+      if (!isSandboxAvailable(configuredSandbox)) {
+        throw new Error(`Cannot start worktree-isolated task: no usable shell sandbox is available (${configuredSandbox}).`);
+      }
+      const wt = this.worktreeManager.createWorktree();
+      this.activeWorktree = { taskId: wt.taskId, worktreePath: wt.worktreePath, branch: wt.branch };
+      this.originalWorkspace = this.config.workspace;
+      this.switchWorktreeWorkspace(wt.worktreePath);
+      console.log(pc.cyan(`🌲 Spun up speculative git worktree: ${wt.branch} at ${wt.worktreePath}`));
     }
 
     if (this.flightRecorder && !this.flightRecorder.isSessionActive()) {
       this.flightRecorder.startSession({
         model: this.config.model,
         endpoint: this.config.endpoint,
-        taskPrompt,
+        taskPrompt: typeof taskPrompt === "string" ? taskPrompt : "[Multi-modal task input]",
       });
     }
 
     this.resetConversation();
+    this.worktreeRunTurnAuthorized = true;
     try {
       if (this.config.tdd) {
         this.config.tdd = false;
         try {
+          if (typeof taskPrompt !== "string") throw new Error("TDD mode does not accept multimodal task input.");
           await this.synthesizer.runAutonomousTdd(this, taskPrompt);
         } finally {
           this.config.tdd = true;
         }
       } else {
-        await this.runTurn(taskPrompt);
+        await this.runTurn(taskPrompt, onConfirm);
       }
     } finally {
+      this.worktreeRunTurnAuthorized = false;
       if (this.activeWorktree && this.config.worktree) {
-        if (!this.hasPendingModifications) {
+        if (this.verifiedWorktreeCompletion && !this.worktreeManager.rootHasChanges()
+          && !this.worktreeManager.hasIgnoredChanges(this.activeWorktree.taskId)) {
           console.log(pc.cyan(`🌲 Merging verified changes from worktree ${this.activeWorktree.branch}...`));
-          this.mergeActiveWorktree(`nexus: apply verified changes from ${this.activeWorktree.taskId}`);
+          const result = this.mergeActiveWorktree(`nexus: apply verified changes from ${this.activeWorktree.taskId}`);
+          if (!result.success) console.log(pc.yellow(`⚠️ Worktree retained because merge was refused: ${result.error || "unknown error"}`));
         } else {
-          console.log(pc.yellow(`⚠️ Speculative changes unverified or failed; retaining worktree at ${this.activeWorktree.worktreePath}`));
+          console.log(pc.yellow(`⚠️ Speculative changes are unverified or the root workspace is dirty; retaining worktree at ${this.activeWorktree.worktreePath}`));
         }
       }
     }
   }
 
   public async runSubagent(prompt: string): Promise<string> {
+    if (this.config.worktree && !this.activeWorktree && !this.inheritedWorktreeScope) {
+      throw new Error("Cannot run a worktree-enabled subagent without an established worktree authority.");
+    }
+    if (this.inheritedWorktreeScope && path.resolve(this.config.workspace) !== path.resolve(this.inheritedWorktreeScope.workspace)) {
+      throw new Error("Subagent workspace no longer matches its inherited worktree authority.");
+    }
     this.resetConversation();
     this.messages.push({
       role: "user",

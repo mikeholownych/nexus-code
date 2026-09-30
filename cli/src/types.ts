@@ -54,6 +54,7 @@ export interface HarnessConfig {
   toolResponseReserveTokens?: number; // Context reserved for the following tool results (default: 4096)
   sandbox?: boolean | string; // Linux namespace / bwrap / container isolation (default: false)
   worktree?: boolean;        // Isolated ephemeral git worktree execution (default: false)
+  authoritativeVerifierCommand?: string; // Explicit trusted verifier required to authorize automatic worktree merge
   recordFlight?: boolean;    // Deterministic .flightlog session recording (default: false)
   plannerModel?: string;     // Deep reasoning / architecture planner (e.g. Claude 3.7 Thinking / o3 / DeepSeek R1)
   plannerEndpoint?: string;  // Dedicated endpoint for planner model

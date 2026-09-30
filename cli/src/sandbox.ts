@@ -1,6 +1,7 @@
 import { execSync } from "node:child_process";
 import * as path from "node:path";
 import * as fs from "node:fs";
+import * as os from "node:os";
 
 export type SandboxMode = "auto" | "bwrap" | "docker" | "none";
 
@@ -40,6 +41,52 @@ export function isDockerAvailable(): boolean {
     return true;
   } catch {
     return false;
+  }
+}
+
+export function isSandboxAvailable(mode: SandboxMode = "auto"): boolean {
+  if (mode === "bwrap") return probeBwrapSandbox();
+  if (mode === "docker") return probeDockerSandbox();
+  if (mode === "none") return false;
+  return probeBwrapSandbox() || probeDockerSandbox();
+}
+
+/** Exercise the actual mount boundary, not just the presence of a binary. */
+function probeBwrapSandbox(): boolean {
+  if (!isBwrapAvailable()) return false;
+  const root = fs.mkdtempSync(path.join(os.homedir(), ".nexus-bwrap-probe-"));
+  const workspace = path.join(root, "workspace");
+  const outside = path.join(root, "outside.txt");
+  try {
+    fs.mkdirSync(workspace);
+    fs.writeFileSync(outside, "protected");
+    const probe = wrapSandboxedCommand(`printf escaped > ${JSON.stringify(outside)}; printf writable > probe.txt`, workspace, { mode: "bwrap" });
+    if (!probe.sandboxed) return false;
+    execSync(probe.command, { stdio: "ignore", timeout: 5000 });
+    return fs.readFileSync(outside, "utf8") === "protected"
+      && fs.readFileSync(path.join(workspace, "probe.txt"), "utf8") === "writable";
+  } catch {
+    return false;
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+}
+
+/** Verify Docker can actually launch the configured image and mount boundary. */
+function probeDockerSandbox(): boolean {
+  if (!isDockerAvailable()) return false;
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-docker-probe-"));
+  const workspace = path.join(root, "workspace");
+  try {
+    fs.mkdirSync(workspace);
+    const probe = wrapSandboxedCommand("printf writable > probe.txt", workspace, { mode: "docker" });
+    if (!probe.sandboxed) return false;
+    execSync(probe.command, { stdio: "ignore", timeout: 15000 });
+    return fs.readFileSync(path.join(workspace, "probe.txt"), "utf8") === "writable";
+  } catch {
+    return false;
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
   }
 }
 
@@ -84,10 +131,16 @@ export function wrapSandboxedCommand(
     const bwrapArgs: string[] = [
       "bwrap",
       "--ro-bind", "/", "/",
+      // A self-bind of / is not reliably remounted read-only on all kernels.
+      // Explicitly remount the sandbox root before selectively adding its one
+      // writable worktree mount below.
+      "--remount-ro", "/",
       "--dev", "/dev",
       "--proc", "/proc",
       "--tmpfs", "/tmp",
-      "--bind", absWorkspace, absWorkspace,
+      options.readOnlyHost
+        ? "--ro-bind"
+        : "--bind", absWorkspace, absWorkspace,
       "--chdir", absWorkspace,
       "--unshare-pid",
     ];
@@ -123,7 +176,9 @@ export function wrapSandboxedCommand(
     }
 
     const safeEscaped = cmd.replace(/'/g, "'\\''");
-    const dockerCmd = `docker run --rm -v "${absWorkspace}:${absWorkspace}" -w "${absWorkspace}" alpine:latest sh -c '${safeEscaped}'`;
+    const mountMode = options.readOnlyHost ? ":ro" : "";
+    const networkMode = options.network === false ? "--network none " : "";
+    const dockerCmd = `docker run --rm ${networkMode}-v "${absWorkspace}:${absWorkspace}${mountMode}" -w "${absWorkspace}" alpine:latest sh -c '${safeEscaped}'`;
 
     return {
       command: dockerCmd,

@@ -385,6 +385,600 @@ error[E0308]: mismatched types
     }
   });
 
+  test("workspace and shell bridge reconstruction preserve mutation safety controls", async () => {
+    const base = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-safety-switch-"));
+    const repositories = [path.join(base, "first"), path.join(base, "second")];
+    const initRepo = (repo: string) => {
+      fs.mkdirSync(repo, { recursive: true });
+      execSync("git init -q", { cwd: repo, stdio: "ignore" });
+      execSync('git config user.name "Nexus Test" && git config user.email "nexus@example.invalid"', { cwd: repo, stdio: "ignore" });
+      fs.writeFileSync(path.join(repo, "tracked.txt"), "baseline\n");
+      execSync("git add tracked.txt && git commit -qm baseline", { cwd: repo, stdio: "ignore" });
+    };
+    try {
+      repositories.forEach(initRepo);
+      const agent: any = new AutonomousAgent({
+        endpoint: "http://127.0.0.1:1/v1", model: "test", maxSteps: 2, temperature: 0,
+        workspace: repositories[0], shell: "bash", readOnly: true, sandbox: "bwrap",
+      });
+      try {
+        agent.setWorkspace(repositories[1]);
+        for (const transition of ["workspace", "shell"]) {
+          if (transition === "shell") agent.setShell("sh");
+          assert.deepStrictEqual(
+            { dryRun: agent.bridge.dryRun, readOnly: agent.bridge.readOnly, sandbox: agent.bridge.sandbox },
+            { dryRun: false, readOnly: true, sandbox: "bwrap" },
+          );
+          const file = await agent.bridge.executeTool("write_file", { path: `${transition}.txt`, content: "blocked" });
+          const shell = await agent.bridge.executeTool("run_command", { command: `printf blocked > ${transition}-shell.txt` });
+          assert.match(file.error || "", /Read-only mode violation/);
+          assert.match(shell.error || "", /Read-only mode violation/);
+          assert.strictEqual(fs.existsSync(path.join(repositories[1], `${transition}.txt`)), false);
+          assert.strictEqual(fs.existsSync(path.join(repositories[1], `${transition}-shell.txt`)), false);
+        }
+      } finally { agent.shutdown(); }
+
+      const dryRun: any = new AutonomousAgent({
+        endpoint: "http://127.0.0.1:1/v1", model: "test", maxSteps: 2, temperature: 0,
+        workspace: repositories[0], shell: "bash", dryRun: true, sandbox: "bwrap",
+      });
+      try {
+        dryRun.setWorkspace(repositories[1]);
+        dryRun.setShell("sh");
+        assert.deepStrictEqual(
+          { dryRun: dryRun.bridge.dryRun, readOnly: dryRun.bridge.readOnly, sandbox: dryRun.bridge.sandbox },
+          { dryRun: true, readOnly: false, sandbox: "bwrap" },
+        );
+        const file = await dryRun.bridge.executeTool("write_file", { path: "simulated.txt", content: "no disk write" });
+        const shell = await dryRun.bridge.executeTool("run_command", { command: "printf simulated > simulated-shell.txt" });
+        assert.match(file.output, /dry_run/);
+        assert.match(shell.output, /DRY-RUN SIMULATION/);
+        assert.strictEqual(fs.existsSync(path.join(repositories[1], "simulated.txt")), false);
+        assert.strictEqual(fs.existsSync(path.join(repositories[1], "simulated-shell.txt")), false);
+      } finally { dryRun.shutdown(); }
+    } finally { fs.rmSync(base, { recursive: true, force: true }); }
+  });
+
+  test("worktree tasks fail closed, verify before merge, retain failed or incomplete work, and preserve root state", async () => {
+    const base = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-worktree-boundary-"));
+    const repo = path.join(base, "repo");
+    fs.mkdirSync(repo);
+    execSync("git init -b main -q", { cwd: repo, stdio: "ignore" });
+    execSync('git config user.name "Nexus Test" && git config user.email "nexus@example.invalid"', { cwd: repo, stdio: "ignore" });
+    fs.writeFileSync(path.join(repo, "base.txt"), "base\n");
+    fs.writeFileSync(path.join(repo, "Makefile"), "test:\n\t@test ! -f fail.flag\n");
+    execSync("git add . && git commit -qm baseline", { cwd: repo, stdio: "ignore" });
+    execSync("printf 'operator.ignored\\ngenerated/\\n' > .gitignore && git add .gitignore && git commit -qm ignore-rule", { cwd: repo, stdio: "ignore" });
+    const ignored = path.join(repo, "operator.ignored");
+    const externalRoot = fs.mkdtempSync(path.join(os.homedir(), ".nexus-issue11-boundary-"));
+    const externalSentinel = path.join(externalRoot, "outside.txt");
+    fs.writeFileSync(externalSentinel, "protected\n");
+    const rootState = () => ({
+      head: execSync("git rev-parse HEAD", { cwd: repo, encoding: "utf8" }).trim(),
+      indexTree: execSync("git write-tree", { cwd: repo, encoding: "utf8" }).trim(),
+      unstagedDiff: execSync("git diff --binary", { cwd: repo, encoding: "utf8" }),
+      base: fs.readFileSync(path.join(repo, "base.txt"), "utf8"),
+      staged: fs.readFileSync(path.join(repo, "staged.txt"), "utf8"),
+      untracked: fs.readFileSync(path.join(repo, "untracked.txt"), "utf8"),
+      ignored: fs.readFileSync(ignored, "utf8"),
+      status: execSync("git status --porcelain", { cwd: repo, encoding: "utf8" }),
+    });
+    let requests = 0;
+    let responseMode: "success" | "failure" | "incomplete" | "dirty-success" | "malformed" | "ignored" = "success";
+    const server = http.createServer((req, res) => {
+      if (req.url !== "/v1/chat/completions") { res.writeHead(404).end(); return; }
+      requests++;
+      let body = "";
+      req.on("data", (chunk) => { body += chunk; });
+      req.on("end", () => {
+        const completionCall = {
+          index: responseMode === "failure" ? 3 : 2,
+          id: "done",
+          type: "function",
+          function: {
+            name: "task_completed",
+            arguments: responseMode === "malformed" ? "{" : JSON.stringify({ summary: "Mutation task complete." }),
+          },
+        };
+        const task = requests === 1 ? {
+          content: "Apply and verify a small isolated change.",
+          tool_calls: responseMode === "ignored" ? [
+            { index: 0, id: "ignored-shell", type: "function", function: { name: "run_command", arguments: JSON.stringify({ command: "mkdir -p generated && printf artifact > generated/result.bin" }) } },
+            { index: 1, id: "done", type: "function", function: { name: "task_completed", arguments: JSON.stringify({ summary: "Mutation task complete." }) } },
+          ] : responseMode === "malformed" ? [
+            { index: 0, id: "write-bridge", type: "function", function: { name: "write_file", arguments: JSON.stringify({ path: "bridge-change-malformed.txt", content: "bridge change\n" }) } },
+            { index: 1, id: "write-shell", type: "function", function: { name: "run_command", arguments: JSON.stringify({ command: "make test" }) } },
+            { ...completionCall, index: 2 },
+          ] : [
+            { index: 0, id: "write-bridge", type: "function", function: { name: "write_file", arguments: JSON.stringify({ path: `bridge-change-${responseMode}.txt`, content: "bridge change\n" }) } },
+            { index: 1, id: "write-shell", type: "function", function: { name: "run_command", arguments: JSON.stringify({ command: `printf 'shell change\\n' > shell-change-${responseMode}.txt` }) } },
+            ...(responseMode === "success" ? [{ index: 2, id: "escape-shell", type: "function", function: { name: "run_command", arguments: JSON.stringify({ command: `printf escaped > ${JSON.stringify(externalSentinel)}` }) } }] : []),
+            ...(responseMode === "failure" ? [{ index: 2, id: "fail-tests", type: "function", function: { name: "run_command", arguments: JSON.stringify({ command: "printf failed > fail.flag" }) } }] : []),
+            ...(responseMode === "incomplete" ? [] : [{ ...completionCall, index: responseMode === "success" ? 3 : completionCall.index }]),
+          ],
+        } : { content: "Verification failed; changes remain isolated.", tool_calls: [] };
+        const chunk = { choices: [{ delta: task }] };
+        res.writeHead(200, { "Content-Type": "text/event-stream" });
+        res.end(`data: ${JSON.stringify(chunk)}\n\ndata: [DONE]\n\n`);
+      });
+    });
+    const listen = () => new Promise<number>((resolve) => server.listen(0, "127.0.0.1", () => resolve((server.address() as any).port)));
+    let port = 0;
+    try {
+      port = await listen();
+      const createAgent = () => new AutonomousAgent({
+        endpoint: `http://127.0.0.1:${port}/v1`, model: "test", maxSteps: 3, temperature: 0,
+        workspace: repo, shell: "bash", worktree: true, authoritativeVerifierCommand: "make test",
+      });
+      const blocked = createAgent();
+      const originalCreate = blocked.getWorktreeManager().createWorktree.bind(blocked.getWorktreeManager());
+      execSync("git branch nexus/issue11-collision", { cwd: repo, stdio: "ignore" });
+      (blocked.getWorktreeManager() as any).createWorktree = () => originalCreate("issue11-collision");
+      const callsBeforeFailure = requests;
+      await assert.rejects(blocked.run("must not escape worktree isolation"), /Failed to create git worktree/);
+      assert.strictEqual(requests, callsBeforeFailure, "no inference starts after worktree creation fails");
+      assert.strictEqual(execSync("git status --porcelain", { cwd: repo, encoding: "utf8" }), "");
+      (blocked.getWorktreeManager() as any).createWorktree = originalCreate;
+      execSync("git branch -D nexus/issue11-collision", { cwd: repo, stdio: "ignore" });
+      blocked.shutdown();
+
+      const successful = createAgent();
+      responseMode = "success";
+      await successful.run("write through both mutation interfaces and verify");
+      const successState = {
+        active: successful.getActiveWorktree(),
+        verified: (successful as any).verifiedWorktreeCompletion,
+        rootDirty: successful.getWorktreeManager().rootHasChanges(),
+        rootStatus: execSync("git status --porcelain", { cwd: repo, encoding: "utf8" }),
+        ignored: successful.getActiveWorktree() ? successful.getWorktreeManager().hasIgnoredChanges(successful.getActiveWorktree()!.taskId) : false,
+      };
+      successful.shutdown();
+      assert.ok(!successState.active && successState.verified && !successState.rootDirty && !successState.ignored, JSON.stringify(successState));
+      assert.strictEqual(fs.readFileSync(externalSentinel, "utf8"), "protected\n", "shell absolute paths must not mutate outside the worktree");
+      assert.strictEqual(fs.readFileSync(path.join(repo, "base.txt"), "utf8"), "base\n", "shell path traversal must not mutate the original repository");
+      assert.strictEqual(fs.existsSync(path.join(repo, "bridge-change-success.txt")), true);
+      assert.strictEqual(fs.existsSync(path.join(repo, "shell-change-success.txt")), true);
+      assert.strictEqual(successful.getActiveWorktree(), undefined, "verified explicit task completion merges and returns to root");
+      assert.strictEqual(execSync("git status --porcelain", { cwd: repo, encoding: "utf8" }), "", "successful task merge leaves a clean root");
+
+      const unsafeCompletionOutcomes: string[] = [];
+      for (const outcome of ["malformed", "ignored"] as const) {
+        responseMode = outcome;
+        requests = 0;
+        const agent = createAgent();
+        await agent.run(`exercise ${outcome} completion boundary`);
+        const active = agent.getActiveWorktree();
+        if (!active) unsafeCompletionOutcomes.push(`${outcome} completion discarded/merged the unresolved worktree`);
+        if (outcome === "ignored") {
+          if (!active || !fs.existsSync(path.join(active.worktreePath, "generated", "result.bin"))) unsafeCompletionOutcomes.push("ignored tool output was not retained");
+          if (fs.existsSync(path.join(repo, "generated", "result.bin"))) unsafeCompletionOutcomes.push("ignored tool output escaped into the root");
+          const refusedMerge = agent.mergeActiveWorktree();
+          if (refusedMerge.success || !agent.getActiveWorktree()) unsafeCompletionOutcomes.push("ignored output was accepted by explicit merge or its retained worktree was lost");
+        } else {
+          if (!active || !fs.existsSync(path.join(active.worktreePath, "bridge-change-malformed.txt"))) unsafeCompletionOutcomes.push("malformed completion lost the review worktree");
+          if (fs.existsSync(path.join(repo, "bridge-change-malformed.txt"))) unsafeCompletionOutcomes.push("malformed completion merged its changes");
+        }
+        if (active) assert.strictEqual(agent.discardActiveWorktree().success, true);
+        else for (const entry of agent.getWorktreeManager().listWorktrees()) agent.getWorktreeManager().discardWorktree(entry.taskId);
+        agent.shutdown();
+      }
+      assert.deepStrictEqual(unsafeCompletionOutcomes, [], "malformed completion and ignored outputs must remain recoverable and unmerged");
+
+      fs.writeFileSync(path.join(repo, "staged.txt"), "staged operator state\n");
+      execSync("git add staged.txt", { cwd: repo, stdio: "ignore" });
+      fs.writeFileSync(path.join(repo, "base.txt"), "unstaged operator state\n");
+      fs.writeFileSync(path.join(repo, "untracked.txt"), "untracked operator state\n");
+      fs.writeFileSync(ignored, "ignored operator state\n");
+      const before = rootState();
+
+      const repeatRunFailures: string[] = [];
+      for (const outcome of ["failure", "incomplete"] as const) {
+        responseMode = outcome;
+        requests = 0;
+        const agent = createAgent();
+        await agent.run(`exercise ${outcome} outcome`);
+        const active = agent.getActiveWorktree();
+        assert.ok(active, `${outcome} outcome retains its speculative worktree`);
+        assert.strictEqual(fs.existsSync(path.join(repo, `bridge-change-${outcome}.txt`)), false, "failed work remains isolated");
+        assert.strictEqual(fs.existsSync(path.join(active!.worktreePath, `bridge-change-${outcome}.txt`)), true);
+        assert.deepStrictEqual(rootState(), before);
+        const requestCountBeforeRepeat = requests;
+        let rejectedRetainedRun = false;
+        try { await agent.run("a retained worktree requires explicit resolution"); }
+        catch (error: any) { rejectedRetainedRun = /unresolved worktree/i.test(error?.message || ""); }
+        if (!rejectedRetainedRun) repeatRunFailures.push(`${outcome}: second run did not reject an unresolved worktree`);
+        if (requests !== requestCountBeforeRepeat) repeatRunFailures.push(`${outcome}: second run dispatched inference before resolution`);
+        const discarded = agent.discardActiveWorktree();
+        assert.strictEqual(discarded.success, true, "discard explicitly removes failed/incomplete work");
+        assert.strictEqual(fs.existsSync(active!.worktreePath), false);
+        assert.deepStrictEqual(rootState(), before);
+        agent.shutdown();
+      }
+      assert.deepStrictEqual(repeatRunFailures, [], "a retained worktree cannot be superseded by a later run");
+
+      responseMode = "dirty-success";
+      requests = 0;
+      const dirtyRootAgent = createAgent();
+      await dirtyRootAgent.run("verify change without disturbing developer state");
+      const retained = dirtyRootAgent.getActiveWorktree();
+      assert.ok(retained, "verified task remains isolated while developer changes are present in the root");
+      assert.deepStrictEqual(rootState(), before, "verified task cannot alter dirty root state");
+      assert.strictEqual(dirtyRootAgent.discardActiveWorktree().success, true);
+      assert.deepStrictEqual(rootState(), before, "explicit discard preserves the complete root snapshot");
+      dirtyRootAgent.shutdown();
+    } finally {
+      server.closeAllConnections();
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+      fs.rmSync(base, { recursive: true, force: true });
+      fs.rmSync(externalRoot, { recursive: true, force: true });
+    }
+  });
+
+  test("runTurn honors --worktree and refuses another run until retained work is resolved", async () => {
+    const repo = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-repl-worktree-"));
+    execSync("git init -q", { cwd: repo, stdio: "ignore" });
+    execSync('git config user.name "Nexus Test" && git config user.email "nexus@example.invalid"', { cwd: repo, stdio: "ignore" });
+    fs.writeFileSync(path.join(repo, "base.txt"), "base\n");
+    fs.writeFileSync(path.join(repo, "Makefile"), "test:\n\t@true\n");
+    execSync("git add . && git commit -qm baseline", { cwd: repo, stdio: "ignore" });
+    let requests = 0;
+    const server = http.createServer((req, res) => {
+      requests++;
+      let body = "";
+      req.on("data", (chunk) => { body += chunk; });
+      req.on("end", () => {
+        const response = { choices: [{ delta: { content: "write in isolation", tool_calls: [
+          { index: 0, id: "write", type: "function", function: { name: "write_file", arguments: JSON.stringify({ path: "repl-turn.txt", content: "isolated\n" }) } },
+        ] } }] };
+        res.writeHead(200, { "Content-Type": "text/event-stream" });
+        res.end(`data: ${JSON.stringify(response)}\n\ndata: [DONE]\n\n`);
+      });
+    });
+    let agent: AutonomousAgent | undefined;
+    try {
+      const port = await new Promise<number>((resolve) => server.listen(0, "127.0.0.1", () => resolve((server.address() as any).port)));
+      agent = new AutonomousAgent({ endpoint: `http://127.0.0.1:${port}/v1`, model: "test", maxSteps: 1, temperature: 0, workspace: repo, shell: "bash", worktree: true });
+      await agent.runTurn("write from an interactive turn");
+      const active = agent.getActiveWorktree();
+      const failures: string[] = [];
+      if (!active) failures.push("interactive runTurn did not establish a worktree");
+      if (fs.existsSync(path.join(repo, "repl-turn.txt"))) failures.push("interactive mutation reached the original workspace");
+      if (active && !fs.existsSync(path.join(active.worktreePath, "repl-turn.txt"))) failures.push("isolated worktree lacks the interactive write");
+      const count = requests;
+      let rejected = false;
+      try { await agent.runTurn("do not supersede retained work"); }
+      catch (error: any) { rejected = /unresolved worktree/i.test(error?.message || ""); }
+      if (!rejected) failures.push("second interactive turn did not reject retained work");
+      if (requests !== count) failures.push("second interactive turn dispatched inference before resolution");
+      if (agent.getActiveWorktree()) assert.strictEqual(agent.discardActiveWorktree().success, true);
+      else for (const entry of agent.getWorktreeManager().listWorktrees()) agent.getWorktreeManager().discardWorktree(entry.taskId);
+      if (fs.existsSync(path.join(repo, "repl-turn.txt"))) failures.push("discard left the original root mutated");
+      assert.deepStrictEqual(failures, []);
+    } finally {
+      if (agent?.getActiveWorktree()) agent.discardActiveWorktree();
+      agent?.shutdown();
+      server.closeAllConnections();
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+      fs.rmSync(repo, { recursive: true, force: true });
+    }
+  });
+
+  test("setWorkspace rebinds worktree operations to the effective repository", async () => {
+    const base = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-worktree-workspace-switch-"));
+    const repos = [path.join(base, "original"), path.join(base, "selected")];
+    for (const repo of repos) {
+      fs.mkdirSync(repo);
+      execSync("git init -q", { cwd: repo, stdio: "ignore" });
+      execSync('git config user.name "Nexus Test" && git config user.email "nexus@example.invalid"', { cwd: repo, stdio: "ignore" });
+      fs.writeFileSync(path.join(repo, "base.txt"), "base\n");
+      fs.writeFileSync(path.join(repo, "Makefile"), "test:\n\t@true\n");
+      execSync("git add . && git commit -qm baseline", { cwd: repo, stdio: "ignore" });
+    }
+    let requests = 0;
+    const server = http.createServer((req, res) => {
+      requests++;
+      let body = "";
+      req.on("data", (chunk) => { body += chunk; });
+      req.on("end", () => {
+        const response = { choices: [{ delta: { content: "write to selected workspace", tool_calls: [
+          { index: 0, id: "write", type: "function", function: { name: "write_file", arguments: JSON.stringify({ path: "selected-change.txt", content: "selected\n" }) } },
+          { index: 1, id: "complete", type: "function", function: { name: "task_completed", arguments: JSON.stringify({ summary: "Verified selected-workspace change." }) } },
+        ] } }] };
+        res.writeHead(200, { "Content-Type": "text/event-stream" });
+        res.end(`data: ${JSON.stringify(response)}\n\ndata: [DONE]\n\n`);
+      });
+    });
+    let agent: AutonomousAgent | undefined;
+    try {
+      const port = await new Promise<number>((resolve) => server.listen(0, "127.0.0.1", () => resolve((server.address() as any).port)));
+      agent = new AutonomousAgent({ endpoint: `http://127.0.0.1:${port}/v1`, model: "test", maxSteps: 2, temperature: 0, workspace: repos[0], shell: "bash", worktree: true, authoritativeVerifierCommand: "make test" });
+      agent.setWorkspace(repos[1]);
+      await agent.run("write in the selected workspace");
+      assert.strictEqual(requests, 1);
+      assert.strictEqual(fs.existsSync(path.join(repos[0], "selected-change.txt")), false, "the constructor-time repository must not receive the change");
+      assert.strictEqual(fs.existsSync(path.join(repos[1], "selected-change.txt")), true, "the selected workspace receives the verified change");
+      assert.strictEqual(agent.getActiveWorktree(), undefined);
+    } finally {
+      if (agent?.getActiveWorktree()) agent.discardActiveWorktree();
+      agent?.shutdown();
+      server.closeAllConnections();
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+      fs.rmSync(base, { recursive: true, force: true });
+    }
+  });
+
+  test("task_completed retains mutations when no verification command is available", async () => {
+    const repo = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-worktree-no-tests-"));
+    execSync("git init -q", { cwd: repo, stdio: "ignore" });
+    execSync('git config user.name "Nexus Test" && git config user.email "nexus@example.invalid"', { cwd: repo, stdio: "ignore" });
+    fs.writeFileSync(path.join(repo, "base.txt"), "base\n");
+    execSync("git add . && git commit -qm baseline", { cwd: repo, stdio: "ignore" });
+    const { detectTestCommand } = await import("../src/tester.js");
+    assert.notStrictEqual(detectTestCommand(repo), "none", "the current detector uses a failing npm test fallback rather than reporting none");
+
+    let requests = 0;
+    const server = http.createServer((req, res) => {
+      requests++;
+      let body = "";
+      req.on("data", (chunk) => { body += chunk; });
+      req.on("end", () => {
+        const toolCalls = requests === 1 ? [
+          { index: 0, id: "write", type: "function", function: { name: "write_file", arguments: JSON.stringify({ path: "unverified.txt", content: "retain me\n" }) } },
+          { index: 1, id: "complete", type: "function", function: { name: "task_completed", arguments: JSON.stringify({ summary: "Claimed complete without a test suite." }) } },
+        ] : [];
+        res.writeHead(200, { "Content-Type": "text/event-stream" });
+        res.end(`data: ${JSON.stringify({ choices: [{ delta: { content: "Attempt completion.", tool_calls: toolCalls } }] })}\n\ndata: [DONE]\n\n`);
+      });
+    });
+    let agent: AutonomousAgent | undefined;
+    try {
+      const port = await new Promise<number>((resolve) => server.listen(0, "127.0.0.1", () => resolve((server.address() as any).port)));
+      agent = new AutonomousAgent({ endpoint: `http://127.0.0.1:${port}/v1`, model: "test", maxSteps: 2, temperature: 0, workspace: repo, shell: "bash", worktree: true });
+      await agent.run("do not merge an unverified change");
+      const active = agent.getActiveWorktree();
+      assert.ok(active, "missing verification retains the speculative worktree");
+      assert.strictEqual((agent as any).verifiedWorktreeCompletion, false);
+      assert.strictEqual(fs.existsSync(path.join(active!.worktreePath, "unverified.txt")), true);
+      assert.strictEqual(fs.existsSync(path.join(repo, "unverified.txt")), false);
+      assert.strictEqual(agent.discardActiveWorktree().success, true);
+      assert.strictEqual(requests, 2);
+    } finally {
+      if (agent?.getActiveWorktree()) agent.discardActiveWorktree();
+      agent?.shutdown();
+      server.closeAllConnections();
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+      fs.rmSync(repo, { recursive: true, force: true });
+    }
+  });
+
+  test("issue 11 worktree subagents cannot mutate the original workspace", async () => {
+    const repo = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-subagent-authority-"));
+    fs.writeFileSync(path.join(repo, "base.txt"), "base\n");
+    fs.writeFileSync(path.join(repo, "Makefile"), "test:\n\t@true\n");
+    execSync("git init -q && git config user.name 'Nexus Test' && git config user.email 'nexus@example.invalid' && git add . && git commit -qm baseline", { cwd: repo, stdio: "ignore" });
+    const originalWorkspaceWrite = path.join(repo, "subagent-root-escape.txt");
+    let streamRequests = 0;
+    let childRequests = 0;
+    const server = http.createServer((req, res) => {
+      let body = "";
+      req.on("data", (chunk) => { body += chunk; });
+      req.on("end", () => {
+        const request = JSON.parse(body || "{}");
+        if (request.stream) {
+          streamRequests++;
+          const calls = streamRequests === 1 ? [
+            { index: 0, id: "write", type: "function", function: { name: "write_file", arguments: JSON.stringify({ path: "parent-worktree.txt", content: "parent\n" }) } },
+            { index: 1, id: "spawn", type: "function", function: { name: "spawn_subagent", arguments: JSON.stringify({ prompt: "write to the original checkout", max_steps: 3 }) } },
+            { index: 2, id: "complete", type: "function", function: { name: "task_completed", arguments: JSON.stringify({ summary: "Parent task finished." }) } },
+          ] : [];
+          res.writeHead(200, { "Content-Type": "text/event-stream" });
+          res.end(`data: ${JSON.stringify({ choices: [{ delta: { content: "Exercise inherited worktree authority.", tool_calls: calls } }] })}\n\ndata: [DONE]\n\n`);
+          return;
+        }
+        childRequests++;
+        const call = childRequests === 1
+          ? { name: "run_command", args: { command: "printf child > child-worktree.txt" } }
+          : childRequests === 2
+            ? { name: "run_command", args: { command: `printf escaped > ${JSON.stringify(originalWorkspaceWrite)}` } }
+            : { name: "task_completed", args: { summary: "Child finished." } };
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ choices: [{ message: { role: "assistant", tool_calls: [{ id: `child-${childRequests}`, type: "function", function: { name: call.name, arguments: JSON.stringify(call.args) } }] } }] }));
+      });
+    });
+    let agent: AutonomousAgent | undefined;
+    try {
+      const port = await new Promise<number>((resolve) => server.listen(0, "127.0.0.1", () => resolve((server.address() as any).port)));
+      agent = new AutonomousAgent({ endpoint: `http://127.0.0.1:${port}/v1`, model: "test", maxSteps: 3, temperature: 0, workspace: repo, shell: "bash", worktree: true });
+      await agent.run("exercise child mutation boundary");
+      const active = agent.getActiveWorktree();
+      assert.ok(active, "unverified parent worktree remains recoverable");
+      assert.strictEqual(fs.existsSync(originalWorkspaceWrite), false, "child shell must not mutate the original checkout");
+      assert.strictEqual(fs.existsSync(path.join(active!.worktreePath, "parent-worktree.txt")), true, "parent mutation remains in its intended worktree");
+      assert.strictEqual(fs.existsSync(path.join(active!.worktreePath, "child-worktree.txt")), true, "child retains the parent's authorized mutation destination");
+      assert.strictEqual(streamRequests, 1);
+      assert.strictEqual(childRequests, 3);
+      assert.strictEqual(agent.discardActiveWorktree().success, true);
+    } finally {
+      agent?.shutdown();
+      server.closeAllConnections();
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+      fs.rmSync(repo, { recursive: true, force: true });
+    }
+  });
+
+  test("worktree-enabled runSubagent refuses to start without inherited worktree authority", async () => {
+    const repo = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-subagent-no-authority-"));
+    execSync("git init -q", { cwd: repo, stdio: "ignore" });
+    let requests = 0;
+    const server = http.createServer((req, res) => { requests++; res.writeHead(500).end(); });
+    let agent: AutonomousAgent | undefined;
+    try {
+      const port = await new Promise<number>((resolve) => server.listen(0, "127.0.0.1", () => resolve((server.address() as any).port)));
+      agent = new AutonomousAgent({ endpoint: `http://127.0.0.1:${port}/v1`, model: "test", maxSteps: 2, temperature: 0, workspace: repo, shell: "bash", worktree: true });
+      await assert.rejects(agent.runSubagent("must not dispatch without a worktree"), /without an established worktree authority/);
+      assert.strictEqual(requests, 0, "refusal happens before inference");
+      assert.strictEqual(execSync("git status --porcelain", { cwd: repo, encoding: "utf8" }), "");
+    } finally {
+      agent?.shutdown();
+      server.closeAllConnections();
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+      fs.rmSync(repo, { recursive: true, force: true });
+    }
+  });
+
+  test("spawned worktree subagent preserves parent read-only authority", async () => {
+    const repo = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-subagent-readonly-"));
+    fs.writeFileSync(path.join(repo, "base.txt"), "base\n");
+    execSync("git init -q && git config user.name 'Nexus Test' && git config user.email 'nexus@example.invalid' && git add . && git commit -qm baseline", { cwd: repo, stdio: "ignore" });
+    let streamRequests = 0;
+    let childRequests = 0;
+    let childDeniedWrite = false;
+    const server = http.createServer((req, res) => {
+      let body = "";
+      req.on("data", (chunk) => { body += chunk; });
+      req.on("end", () => {
+        const request = JSON.parse(body || "{}");
+        if (request.stream) {
+          streamRequests++;
+          const calls = streamRequests === 1 ? [
+            { index: 0, id: "spawn", type: "function", function: { name: "spawn_subagent", arguments: JSON.stringify({ prompt: "attempt a prohibited write", max_steps: 2 }) } },
+            { index: 1, id: "complete", type: "function", function: { name: "task_completed", arguments: JSON.stringify({ summary: "Read-only task complete." }) } },
+          ] : [];
+          res.writeHead(200, { "Content-Type": "text/event-stream" });
+          res.end(`data: ${JSON.stringify({ choices: [{ delta: { content: "Respect read-only authority.", tool_calls: calls } }] })}\n\ndata: [DONE]\n\n`);
+          return;
+        }
+        childRequests++;
+        if (childRequests > 1) {
+          const toolMessage = (request.messages || []).find((message: any) => message.role === "tool");
+          childDeniedWrite = String(toolMessage?.content || "").includes("Read-only mode violation");
+        }
+        const call = childRequests === 1
+          ? { name: "write_file", args: { path: "read-only-child.txt", content: "must not write" } }
+          : { name: "task_completed", args: { summary: "Child finished." } };
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ choices: [{ message: { role: "assistant", tool_calls: [{ id: `child-${childRequests}`, type: "function", function: { name: call.name, arguments: JSON.stringify(call.args) } }] } }] }));
+      });
+    });
+    let agent: AutonomousAgent | undefined;
+    try {
+      const port = await new Promise<number>((resolve) => server.listen(0, "127.0.0.1", () => resolve((server.address() as any).port)));
+      agent = new AutonomousAgent({ endpoint: `http://127.0.0.1:${port}/v1`, model: "test", maxSteps: 2, temperature: 0, workspace: repo, shell: "bash", worktree: true, readOnly: true });
+      await agent.run("keep subagent read-only");
+      assert.strictEqual(childRequests, 2);
+      assert.strictEqual(childDeniedWrite, true, "the child must receive the parent read-only tool policy");
+      assert.strictEqual(fs.existsSync(path.join(repo, "read-only-child.txt")), false);
+      assert.strictEqual(agent.getActiveWorktree(), undefined, "no-change read-only task resolves without a mutation merge");
+    } finally {
+      if (agent?.getActiveWorktree()) agent.discardActiveWorktree();
+      agent?.shutdown();
+      server.closeAllConnections();
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+      fs.rmSync(repo, { recursive: true, force: true });
+    }
+  });
+
+  test("discovered verification success does not authorize worktree merge", async () => {
+    const repo = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-discovered-verifier-"));
+    fs.writeFileSync(path.join(repo, "base.txt"), "base\n");
+    fs.writeFileSync(path.join(repo, "Makefile"), "test: ; @true\n");
+    execSync("git init -q && git config user.name 'Nexus Test' && git config user.email 'nexus@example.invalid' && git add . && git commit -qm baseline", { cwd: repo, stdio: "ignore" });
+    let requests = 0;
+    const server = http.createServer((req, res) => {
+      req.resume();
+      req.on("end", () => {
+        requests++;
+        const calls = requests === 1 ? [
+          { index: 0, id: "write", type: "function", function: { name: "write_file", arguments: JSON.stringify({ path: "discovered-only.txt", content: "retain\n" }) } },
+          { index: 1, id: "complete", type: "function", function: { name: "task_completed", arguments: JSON.stringify({ summary: "Completed after discovered test command." }) } },
+        ] : [];
+        res.writeHead(200, { "Content-Type": "text/event-stream" });
+        res.end(`data: ${JSON.stringify({ choices: [{ delta: { content: "Finish task.", tool_calls: calls } }] })}\n\ndata: [DONE]\n\n`);
+      });
+    });
+    let agent: AutonomousAgent | undefined;
+    try {
+      const port = await new Promise<number>((resolve) => server.listen(0, "127.0.0.1", () => resolve((server.address() as any).port)));
+      agent = new AutonomousAgent({ endpoint: `http://127.0.0.1:${port}/v1`, model: "test", maxSteps: 2, temperature: 0, workspace: repo, shell: "bash", worktree: true });
+      await agent.run("complete after discovered-only verifier");
+      const active = agent.getActiveWorktree();
+      assert.ok(active, "discovery success alone cannot discard the worktree via merge");
+      assert.strictEqual((agent as any).verifiedWorktreeCompletion, false);
+      assert.strictEqual(fs.existsSync(path.join(repo, "discovered-only.txt")), false);
+      assert.strictEqual(fs.existsSync(path.join(active!.worktreePath, "discovered-only.txt")), true);
+      assert.strictEqual(requests, 1);
+      assert.strictEqual(agent.discardActiveWorktree().success, true);
+    } finally {
+      agent?.shutdown();
+      server.closeAllConnections();
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+      fs.rmSync(repo, { recursive: true, force: true });
+    }
+  });
+
+  test("configured authoritative verifier success permits merge and failure or exception retains worktree", async () => {
+    const scenarios = [
+      { name: "success", command: "make verify", verifier: "verify: ; @true\n", expectedVerified: true },
+      { name: "failure", command: "make verify", verifier: "verify: ; @false\n", expectedVerified: false },
+      { name: "unavailable", command: "nexus-verifier-command-does-not-exist-issue11", verifier: "verify: ; @true\n", expectedVerified: false },
+      { name: "exception", command: "make verify", verifier: "verify: ; @true\n", expectedVerified: false, throws: true },
+    ];
+    for (const scenario of scenarios) {
+      const repo = fs.mkdtempSync(path.join(os.tmpdir(), `nexus-authoritative-verifier-${scenario.name}-`));
+      fs.writeFileSync(path.join(repo, "base.txt"), "base\n");
+      fs.writeFileSync(path.join(repo, "Makefile"), `test: ; @true\n${scenario.verifier}`);
+      execSync("git init -q && git config user.name 'Nexus Test' && git config user.email 'nexus@example.invalid' && git add . && git commit -qm baseline", { cwd: repo, stdio: "ignore" });
+      let requests = 0;
+      const server = http.createServer((req, res) => {
+        req.resume();
+        req.on("end", () => {
+          requests++;
+          const calls = requests === 1 ? [
+            { index: 0, id: "write", type: "function", function: { name: "write_file", arguments: JSON.stringify({ path: `${scenario.name}.txt`, content: `${scenario.name}\n` }) } },
+            { index: 1, id: "complete", type: "function", function: { name: "task_completed", arguments: JSON.stringify({ summary: `${scenario.name} verifier scenario.` }) } },
+          ] : [];
+          res.writeHead(200, { "Content-Type": "text/event-stream" });
+          res.end(`data: ${JSON.stringify({ choices: [{ delta: { content: "Finish task.", tool_calls: calls } }] })}\n\ndata: [DONE]\n\n`);
+        });
+      });
+      let agent: AutonomousAgent | undefined;
+      try {
+        const port = await new Promise<number>((resolve) => server.listen(0, "127.0.0.1", () => resolve((server.address() as any).port)));
+        agent = new AutonomousAgent({ endpoint: `http://127.0.0.1:${port}/v1`, model: "test", maxSteps: 2, temperature: 0, workspace: repo, shell: "bash", worktree: true, authoritativeVerifierCommand: scenario.command } as any);
+        if (scenario.throws) {
+          const originalSetWorkspace = agent.setWorkspace.bind(agent);
+          (agent as any).setWorkspace = (workspace: string) => {
+            originalSetWorkspace(workspace);
+            const bridge = (agent as any).bridge;
+            const executeTool = bridge.executeTool.bind(bridge);
+            bridge.executeTool = async (name: string, args: any) => {
+              if (name === "run_command" && args.command === scenario.command) throw new Error("injected verifier exception");
+              return executeTool(name, args);
+            };
+          };
+        }
+        await agent.run(`exercise ${scenario.name} authoritative verifier`);
+        const active = agent.getActiveWorktree();
+        assert.strictEqual((agent as any).verifiedWorktreeCompletion, scenario.expectedVerified);
+        if (scenario.expectedVerified) {
+          assert.strictEqual(active, undefined);
+          assert.strictEqual(fs.existsSync(path.join(repo, `${scenario.name}.txt`)), true);
+        } else {
+          assert.ok(active, `${scenario.name} verifier must retain worktree`);
+          assert.strictEqual(fs.existsSync(path.join(repo, `${scenario.name}.txt`)), false);
+          assert.strictEqual(fs.existsSync(path.join(active!.worktreePath, `${scenario.name}.txt`)), true);
+          assert.strictEqual(agent.discardActiveWorktree().success, true);
+        }
+        assert.strictEqual(requests, scenario.expectedVerified ? 1 : 2);
+      } finally {
+        agent?.shutdown();
+        server.closeAllConnections();
+        await new Promise<void>((resolve) => server.close(() => resolve()));
+        fs.rmSync(repo, { recursive: true, force: true });
+      }
+    }
+  });
+
   test("SecurityManager enforces default blocked commands and protected paths", () => {
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "nexus_sec_test_"));
     try {
@@ -476,9 +1070,252 @@ error[E0308]: mismatched types
       });
       assert.strictEqual(resCmd.success, false);
       assert.ok(resCmd.error?.includes("Read-only mode violation"));
+
+      const mutatedPaths: string[] = [];
+      for (const [command, target] of [
+        ["echo payload > echo-redirection.txt", "echo-redirection.txt"],
+        ["ls .; echo payload > compound-redirection.txt", "compound-redirection.txt"],
+        ["cat /etc/hosts > cat-redirection.txt", "cat-redirection.txt"],
+        ["echo payload | tee tee-redirection.txt", "tee-redirection.txt"],
+        ["git status && echo payload > chained-redirection.txt", "chained-redirection.txt"],
+      ]) {
+        await bridge.executeTool("run_command", { command });
+        if (fs.existsSync(path.join(tmpDir, target))) mutatedPaths.push(target);
+      }
+      assert.deepStrictEqual(mutatedPaths, [], "read-only shell cannot mutate through redirection or compound syntax");
     } finally {
       bridge.shutdown();
       fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  test("RustCoreBridge fails closed when an isolated worktree shell loses its sandbox", async () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "nexus_required_sandbox_"));
+    const { RustCoreBridge } = await import("../src/tools.js");
+    const bridge = new RustCoreBridge(tmpDir, "bash", undefined, false, false, "none", true);
+    try {
+      const result = await bridge.executeTool("run_command", { command: "echo escaped > fallback-mutation.txt" });
+      assert.strictEqual(result.success, false);
+      assert.ok(result.error?.includes("Worktree isolation violation"));
+      assert.strictEqual(fs.existsSync(path.join(tmpDir, "fallback-mutation.txt")), false);
+    } finally {
+      bridge.shutdown();
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  test("run_tests keeps repository test side effects inside worktree authority and honors read-only, dry-run, and required sandbox", async () => {
+    const base = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-run-tests-authority-"));
+    const repo = path.join(base, "repo");
+    fs.mkdirSync(repo);
+    const rootTarget = path.join(repo, "test-wrote-root.txt");
+    const outsideTarget = path.join(base, "test-wrote-outside.txt");
+    fs.writeFileSync(path.join(repo, "Makefile"), [
+      "test:",
+      `\t@mkdir -p generated; printf worktree > generated/test-output.txt 2>/dev/null; printf root > ${JSON.stringify(rootTarget)} 2>/dev/null; printf outside > ${JSON.stringify(outsideTarget)} 2>/dev/null; true`,
+      "",
+    ].join("\n"));
+    execSync("git init -q && git config user.name 'Nexus Test' && git config user.email 'nexus@example.invalid' && git add . && git commit -qm baseline", { cwd: repo, stdio: "ignore" });
+    const manager = new WorktreeManager(repo);
+    const worktree = manager.createWorktree();
+    const generated = path.join(worktree.worktreePath, "generated", "test-output.txt");
+    const bridge = new RustCoreBridge(worktree.worktreePath, "bash", undefined, false, false, "bwrap", true);
+    try {
+      const result = await bridge.executeTool("run_tests", {});
+      assert.strictEqual(result.success, true, "the test command can report success inside the required sandbox");
+      assert.strictEqual(fs.existsSync(generated), true, "repository test side effects are allowed in the authorized worktree");
+      assert.strictEqual(fs.existsSync(rootTarget), false, "repository test code cannot mutate the original checkout");
+      assert.strictEqual(fs.existsSync(outsideTarget), false, "repository test code cannot mutate outside the authorized worktree");
+    } finally {
+      bridge.shutdown();
+      manager.discardWorktree(worktree.taskId);
+      fs.rmSync(base, { recursive: true, force: true });
+    }
+
+    for (const mode of ["read-only", "dry-run", "sandbox-unavailable"] as const) {
+      const fixture = fs.mkdtempSync(path.join(os.tmpdir(), `nexus-run-tests-${mode}-`));
+      const fixtureRepo = path.join(fixture, "repo");
+      fs.mkdirSync(fixtureRepo);
+      const fixtureRootTarget = path.join(fixtureRepo, "test-wrote-root.txt");
+      const fixtureOutsideTarget = path.join(fixture, "test-wrote-outside.txt");
+      fs.writeFileSync(path.join(fixtureRepo, "Makefile"), [
+        "test:",
+        `\t@mkdir -p generated; printf worktree > generated/test-output.txt 2>/dev/null; printf root > ${JSON.stringify(fixtureRootTarget)} 2>/dev/null; printf outside > ${JSON.stringify(fixtureOutsideTarget)} 2>/dev/null; true`,
+        "",
+      ].join("\n"));
+      execSync("git init -q && git config user.name 'Nexus Test' && git config user.email 'nexus@example.invalid' && git add . && git commit -qm baseline", { cwd: fixtureRepo, stdio: "ignore" });
+      const fixtureManager = new WorktreeManager(fixtureRepo);
+      const fixtureWorktree = fixtureManager.createWorktree();
+      const fixtureBridge = new RustCoreBridge(
+        fixtureWorktree.worktreePath,
+        "bash",
+        undefined,
+        mode === "dry-run",
+        mode === "read-only",
+        "bwrap",
+        true,
+      );
+      if (mode === "sandbox-unavailable") fixtureBridge.setSandbox("none");
+      try {
+        const result = await fixtureBridge.executeTool("run_tests", {});
+        assert.strictEqual(result.success, false, `${mode} does not report test execution success`);
+        assert.strictEqual(fs.existsSync(path.join(fixtureWorktree.worktreePath, "generated", "test-output.txt")), false, `${mode} does not execute repository test mutations`);
+        assert.strictEqual(fs.existsSync(fixtureRootTarget), false, `${mode} preserves the original repository`);
+        assert.strictEqual(fs.existsSync(fixtureOutsideTarget), false, `${mode} preserves the outside target`);
+      } finally {
+        fixtureBridge.shutdown();
+        fixtureManager.discardWorktree(fixtureWorktree.taskId);
+        fs.rmSync(fixture, { recursive: true, force: true });
+      }
+    }
+  });
+
+  test("explicitly selected unavailable sandbox fails closed for run_command and run_tests", async () => {
+    const base = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-explicit-sandbox-required-"));
+    const workspace = path.join(base, "workspace");
+    const bin = path.join(base, "bin");
+    fs.mkdirSync(workspace);
+    fs.mkdirSync(bin);
+    const shell = process.platform === "win32" ? "bash.exe" : "bash";
+    fs.symlinkSync("/bin/bash", path.join(bin, shell));
+    fs.symlinkSync("/usr/bin/make", path.join(bin, "make"));
+
+    const oldPath = process.env.PATH;
+    process.env.PATH = bin;
+    const coreBinary = path.resolve(process.cwd(), "../core/target/release/harness-core");
+    const runCommandOutside = path.join(base, "run-command-outside.txt");
+    const runTestsOutside = path.join(base, "run-tests-outside.txt");
+    fs.writeFileSync(path.join(workspace, "Makefile"), [
+      "test:",
+      `\t@printf escaped > ${JSON.stringify(runTestsOutside)}`,
+      "",
+    ].join("\n"));
+
+    const unavailableSandbox = new RustCoreBridge(workspace, "bash", coreBinary, false, false, "bwrap");
+    const noSandbox = new RustCoreBridge(workspace, "bash", coreBinary);
+    try {
+      const commandResult = await unavailableSandbox.executeTool("run_command", {
+        command: `printf escaped > ${JSON.stringify(runCommandOutside)}`,
+      });
+      const testsResult = await unavailableSandbox.executeTool("run_tests", {});
+      assert.deepStrictEqual({
+        commandRefusedForSandbox: !commandResult.success && /sandbox/i.test(commandResult.error || ""),
+        commandWroteOutside: fs.existsSync(runCommandOutside),
+        testsSuccess: testsResult.success,
+        testsWroteOutside: fs.existsSync(runTestsOutside),
+      }, {
+        commandRefusedForSandbox: true,
+        commandWroteOutside: false,
+        testsSuccess: false,
+        testsWroteOutside: false,
+      }, "both model-visible execution paths must refuse without creating either outside marker");
+
+      const unsandboxedCommandTarget = path.join(base, "no-sandbox-command.txt");
+      const unsandboxedCommand = await noSandbox.executeTool("run_command", {
+        command: `printf allowed > ${JSON.stringify(unsandboxedCommandTarget)}`,
+      });
+      assert.strictEqual(unsandboxedCommand.success, true, "no sandbox request preserves ordinary host execution");
+      assert.strictEqual(fs.readFileSync(unsandboxedCommandTarget, "utf8"), "allowed");
+
+      const unsandboxedTestTarget = path.join(base, "no-sandbox-tests.txt");
+      fs.writeFileSync(path.join(workspace, "Makefile"), [
+        "test:",
+        `\t@printf allowed > ${JSON.stringify(unsandboxedTestTarget)}`,
+        "",
+      ].join("\n"));
+      const unsandboxedTests = await noSandbox.executeTool("run_tests", {});
+      assert.strictEqual(unsandboxedTests.success, true, "no sandbox request preserves ordinary test execution");
+      assert.strictEqual(fs.readFileSync(unsandboxedTestTarget, "utf8"), "allowed");
+    } finally {
+      unavailableSandbox.shutdown();
+      noSandbox.shutdown();
+      process.env.PATH = oldPath;
+      fs.rmSync(base, { recursive: true, force: true });
+    }
+  });
+
+  test("read-only subagent run_tests cannot mutate the parent worktree, original repository, or outside path", async () => {
+    const base = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-subagent-run-tests-authority-"));
+    const repo = path.join(base, "repo");
+    fs.mkdirSync(repo);
+    const rootTarget = path.join(repo, "test-wrote-root.txt");
+    const outsideTarget = path.join(base, "test-wrote-outside.txt");
+    fs.writeFileSync(path.join(repo, "Makefile"), [
+      "test:",
+      `\t@mkdir -p generated; printf worktree > generated/test-output.txt 2>/dev/null; printf root > ${JSON.stringify(rootTarget)} 2>/dev/null; printf outside > ${JSON.stringify(outsideTarget)} 2>/dev/null; true`,
+      "",
+    ].join("\n"));
+    execSync("git init -q && git config user.name 'Nexus Test' && git config user.email 'nexus@example.invalid' && git add . && git commit -qm baseline", { cwd: repo, stdio: "ignore" });
+    let parentRequests = 0;
+    let childRequests = 0;
+    const server = http.createServer((req, res) => {
+      let body = "";
+      req.on("data", (chunk) => { body += chunk; });
+      req.on("end", () => {
+        const request = JSON.parse(body || "{}");
+        if (request.stream) {
+          parentRequests++;
+          const calls = parentRequests === 1 ? [
+            { index: 0, id: "spawn", type: "function", function: { name: "spawn_subagent", arguments: JSON.stringify({ prompt: "run the repository tests", max_steps: 2 }) } },
+            { index: 1, id: "complete", type: "function", function: { name: "task_completed", arguments: JSON.stringify({ summary: "Parent finished." }) } },
+          ] : [];
+          res.writeHead(200, { "Content-Type": "text/event-stream" });
+          res.end(`data: ${JSON.stringify({ choices: [{ delta: { content: "Delegate the test request.", tool_calls: calls } }] })}\n\ndata: [DONE]\n\n`);
+          return;
+        }
+        childRequests++;
+        const call = childRequests === 1
+          ? { name: "run_tests", args: {} }
+          : { name: "task_completed", args: { summary: "Child finished." } };
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ choices: [{ message: { role: "assistant", tool_calls: [{ id: `child-${childRequests}`, type: "function", function: { name: call.name, arguments: JSON.stringify(call.args) } }] } }] }));
+      });
+    });
+    let agent: AutonomousAgent | undefined;
+    try {
+      const port = await new Promise<number>((resolve) => server.listen(0, "127.0.0.1", () => resolve((server.address() as any).port)));
+      agent = new AutonomousAgent({ endpoint: `http://127.0.0.1:${port}/v1`, model: "test", maxSteps: 2, temperature: 0, workspace: repo, shell: "bash", worktree: true, readOnly: true });
+      await agent.run("delegate a read-only test request");
+      const active = agent.getActiveWorktree();
+      assert.strictEqual(childRequests, 2, "the subagent receives a run_tests tool result and then completes");
+      assert.strictEqual(fs.existsSync(path.join(active?.worktreePath || "", "generated", "test-output.txt")), false);
+      assert.strictEqual(fs.existsSync(rootTarget), false, "the subagent cannot mutate the original checkout");
+      assert.strictEqual(fs.existsSync(outsideTarget), false, "the subagent cannot mutate outside the parent boundary");
+      assert.strictEqual(parentRequests, 1);
+    } finally {
+      if (agent?.getActiveWorktree()) agent.discardActiveWorktree();
+      agent?.shutdown();
+      server.closeAllConnections();
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+      fs.rmSync(base, { recursive: true, force: true });
+    }
+  });
+
+  test("TDD synthesizer verification uses the agent shell authority boundary", async () => {
+    const base = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-tdd-verifier-authority-"));
+    const repo = path.join(base, "repo");
+    fs.mkdirSync(repo);
+    const outsideTarget = path.join(base, "test-wrote-outside.txt");
+    fs.writeFileSync(path.join(repo, "Makefile"), [
+      "test:",
+      `\t@mkdir -p generated; printf worktree > generated/test-output.txt 2>/dev/null; printf outside > ${JSON.stringify(outsideTarget)} 2>/dev/null; true`,
+      "",
+    ].join("\n"));
+    execSync("git init -q && git config user.name 'Nexus Test' && git config user.email 'nexus@example.invalid' && git add . && git commit -qm baseline", { cwd: repo, stdio: "ignore" });
+    const manager = new WorktreeManager(repo);
+    const worktree = manager.createWorktree();
+    let agent: AutonomousAgent | undefined;
+    try {
+      agent = new AutonomousAgent({ endpoint: "http://127.0.0.1:1/v1", model: "test", maxSteps: 1, temperature: 0, workspace: worktree.worktreePath, shell: "bash", sandbox: "bwrap" });
+      const result = await agent.getSynthesizer().verifyRefactorPhase();
+      assert.strictEqual(result.success, true, "the confined command may complete successfully");
+      assert.strictEqual(fs.existsSync(path.join(worktree.worktreePath, "generated", "test-output.txt")), true, "the test command can write within its selected workspace");
+      assert.strictEqual(fs.existsSync(path.join(repo, "generated", "test-output.txt")), false, "TDD verification cannot write into the original repository");
+      assert.strictEqual(fs.existsSync(outsideTarget), false, "TDD verification cannot write outside its selected workspace");
+    } finally {
+      agent?.shutdown();
+      manager.discardWorktree(worktree.taskId);
+      fs.rmSync(base, { recursive: true, force: true });
     }
   });
 
@@ -2535,7 +3372,10 @@ export class CacheService {
   test("SynthesizerEngine tracks RED-GREEN-REFACTOR protocol state and transitions", async () => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-synth-test-"));
     try {
-      const engine = new SynthesizerEngine(tempDir);
+      const engine = new SynthesizerEngine(tempDir, async () => ({
+        success: true,
+        output: JSON.stringify({ exit_code: 1, stdout: "", stderr: "simulated failing test" }),
+      }));
       assert.strictEqual(engine.getCurrentPhase(), "IDLE");
 
       // 1. Start TDD session
