@@ -1,6 +1,10 @@
 export function parseModelResponse(message) {
     const toolCalls = [];
-    let thoughtText = message.content || "";
+    let thoughtText = typeof message.content === "string"
+        ? message.content
+        : Array.isArray(message.content)
+            ? JSON.stringify(message.content)
+            : "";
     // 1. If standard OpenAI function calling tool_calls are present:
     if (message.tool_calls && Array.isArray(message.tool_calls) && message.tool_calls.length > 0) {
         for (const tc of message.tool_calls) {

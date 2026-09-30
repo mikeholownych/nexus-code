@@ -31,6 +31,9 @@ const READ_ONLY_TOOLS = new Set([
   "fetch_web",
   "search_web",
   "run_tests",
+  "lsp_hover",
+  "lsp_definition",
+  "lsp_diagnostics",
 ]);
 
 function triggerNotification(title: string, message: string) {
@@ -257,7 +260,7 @@ export class AutonomousAgent {
           }
         }
       }
-      if (m.role === "assistant" && m.content) {
+      if (m.role === "assistant" && typeof m.content === "string") {
         const thoughtMatch = m.content.match(/<thought>([\s\S]*?)<\/thought>/);
         if (thoughtMatch && thoughtMatch[1].trim()) {
           const snippet = thoughtMatch[1].trim().split("\n")[0].substring(0, 120);
@@ -292,7 +295,7 @@ export class AutonomousAgent {
           ...discarded.slice(-8),
         ];
         const res = await this.client.chatCompletion(llmPrompt, []);
-        if (res.content) {
+        if (typeof res.content === "string" && res.content.trim()) {
           summaryText += `\nExecutive Summary:\n${res.content.trim()}\n`;
         }
       } catch {
@@ -352,9 +355,10 @@ ${fewShotSection}
 Always explain your reasoning before or alongside your tool calls.${gitSection}${planSection}`;
   }
 
-  async runTurn(taskPrompt: string, onConfirm?: ConfirmHandler): Promise<void> {
+  async runTurn(taskPrompt: string | any[], onConfirm?: ConfirmHandler): Promise<void> {
     await this.initExtensibility();
-    await this.pluginManager.notifyTurnStart(taskPrompt, this.config.workspace);
+    const promptText = typeof taskPrompt === "string" ? taskPrompt : "[Multi-modal Vision Input]";
+    await this.pluginManager.notifyTurnStart(promptText, this.config.workspace);
 
     this.messages.push({
       role: "user",
@@ -403,8 +407,13 @@ Always explain your reasoning before or alongside your tool calls.${gitSection}$
         this.getEffectiveTools(),
         this.config.contextLimit || 32768
       ).totalActiveTokens;
+      const compContent = typeof assistantMessage.content === "string"
+        ? assistantMessage.content
+        : Array.isArray(assistantMessage.content)
+        ? JSON.stringify(assistantMessage.content)
+        : "";
       const compEst =
-        countTokens(assistantMessage.content || "") +
+        countTokens(compContent) +
         countTokens(JSON.stringify(assistantMessage.tool_calls || []));
       this.totalTokens.prompt += promptEst;
       this.totalTokens.completion += compEst;
@@ -747,7 +756,7 @@ Always explain your reasoning before or alongside your tool calls.${gitSection}$
       });
 
       if (parsed.toolCalls.length === 0) {
-        finalSummary = parsed.thoughtText || assistantMessage.content || "Subagent finished without remarks.";
+        finalSummary = parsed.thoughtText || (typeof assistantMessage.content === "string" ? assistantMessage.content : "Subagent finished without remarks.");
         break;
       }
 

@@ -870,11 +870,130 @@ error[E0308]: mismatched types
     });
     assert.strictEqual(mockConn.transport, "sse");
     mcp.addConnection("test-server", mockConn);
-
     const servers = mcp.listServers();
     assert.ok(servers.some((s) => s.name === "test-server" && s.transport === "sse"));
   });
+
+  test("TeamOrchestrator coordinates specialized sub-agent role profiles (Candidate #13)", async () => {
+    const { ROLE_PROFILES, TeamOrchestrator } = await import("../src/team.js");
+    assert.ok(ROLE_PROFILES.researcher);
+    assert.ok(ROLE_PROFILES.architect);
+    assert.ok(ROLE_PROFILES.implementer);
+    assert.ok(ROLE_PROFILES.tester);
+
+    assert.ok(ROLE_PROFILES.researcher.recommendedTools.includes("batch_read"));
+    assert.ok(ROLE_PROFILES.implementer.recommendedTools.includes("edit_file"));
+    assert.ok(ROLE_PROFILES.tester.recommendedTools.includes("run_tests"));
+
+    const orchestrator = new TeamOrchestrator({
+      endpoint: "http://localhost:11434/v1",
+      model: "qwen2.5-coder",
+      maxSteps: 5,
+      temperature: 0.1,
+    });
+    assert.ok(orchestrator);
+  });
+
+  test("LspBridgeManager detects language servers and handles LSP message formatting (Candidate #44)", async () => {
+    const { LspBridgeManager, LspClient } = await import("../src/lsp.js");
+    const manager = new LspBridgeManager(process.cwd());
+
+    // Server detection
+    const rustServer = manager.getServerForFile("core/src/lib.rs");
+    assert.ok(rustServer);
+    assert.strictEqual(rustServer.cmd, "rust-analyzer");
+
+    const tsServer = manager.getServerForFile("cli/src/agent.ts");
+    assert.ok(tsServer);
+    assert.strictEqual(tsServer.cmd, "typescript-language-server");
+
+    const pyServer = manager.getServerForFile("scripts/eval.py");
+    assert.ok(pyServer);
+    assert.ok(pyServer.cmd.includes("pyright"));
+
+    const unknownServer = manager.getServerForFile("readme.txt");
+    assert.strictEqual(unknownServer, null);
+
+    // Protocol framing
+    const client = new LspClient("mock-lsp", process.cwd());
+    assert.strictEqual(client.initialized, false);
+    manager.shutdownAll();
+  });
+
+  test("encodeImageFile reads and formats images for multi-modal vision inputs (Candidate #25)", async () => {
+    const { encodeImageFile, formatVisionContent } = await import("../src/image.js");
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "nexus_img_test_"));
+
+    try {
+      const imgPath = path.join(tmpDir, "test_ui.png");
+      const dummyPngHeader = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13]);
+      fs.writeFileSync(imgPath, dummyPngHeader);
+
+      const encoded = encodeImageFile(imgPath);
+      assert.strictEqual(encoded.success, true);
+      assert.strictEqual(encoded.mimeType, "image/png");
+      assert.ok(encoded.dataUri.startsWith("data:image/png;base64,"));
+
+      // Multi-modal message structure
+      const formatted = formatVisionContent("Inspect this screenshot layout", [encoded.dataUri]);
+      assert.ok(Array.isArray(formatted));
+      assert.strictEqual(formatted.length, 2);
+      assert.strictEqual(formatted[0].type, "text");
+      assert.strictEqual(formatted[0].text, "Inspect this screenshot layout");
+      assert.strictEqual(formatted[1].type, "image_url");
+      assert.strictEqual(formatted[1].image_url?.url, encoded.dataUri);
+
+      // Non-existent image handling
+      const missing = encodeImageFile(path.join(tmpDir, "missing.png"));
+      assert.strictEqual(missing.success, false);
+      assert.ok(missing.error?.includes("does not exist"));
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  test("ThemeManager provides customizable terminal color schemes (Candidate #26)", async () => {
+    const { ThemeManager } = await import("../src/theme.js");
+    const tm = new ThemeManager("default");
+
+    assert.strictEqual(tm.getThemeName(), "default");
+    const themes = tm.listThemes();
+    assert.ok(themes.includes("default"));
+    assert.ok(themes.includes("nord"));
+    assert.ok(themes.includes("dracula"));
+    assert.ok(themes.includes("catppuccin"));
+    assert.ok(themes.includes("monochrome"));
+
+    assert.strictEqual(tm.setTheme("nord"), true);
+    assert.strictEqual(tm.getThemeName(), "nord");
+
+    const scheme = tm.getScheme();
+    assert.strictEqual(typeof scheme.primary("test"), "string");
+    assert.strictEqual(typeof scheme.error("err"), "string");
+
+    assert.strictEqual(tm.setTheme("nonexistent_theme"), false);
+    assert.strictEqual(tm.getThemeName(), "nord");
+  });
+
+  test("scaffoldSkill generates clean SKILL.md templates for skill creation (Candidate #40)", async () => {
+    const { scaffoldSkill } = await import("../src/skills.js");
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "nexus_skill_scaffold_"));
+
+    try {
+      const res = scaffoldSkill("unit-test-generator", "Automates generation of robust unit tests", tmpDir);
+      assert.ok(fs.existsSync(res.dirPath));
+      assert.ok(fs.existsSync(res.skillPath));
+
+      const content = fs.readFileSync(res.skillPath, "utf-8");
+      assert.ok(content.includes("name: unit-test-generator"));
+      assert.ok(content.includes("Automates generation of robust unit tests"));
+      assert.ok(content.includes("## Workflows & Instructions"));
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
 });
+
 
 
 

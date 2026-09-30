@@ -192,4 +192,54 @@ export class SkillManager {
     }
     this.watchers = [];
   }
+
+  public scaffoldSkill(name: string, description?: string, inWorkspace: boolean = true): { skillPath: string; dirPath: string } {
+    const targetDir = inWorkspace
+      ? path.join(this.workspace, ".nexus", "skills")
+      : path.join(os.homedir(), ".nexus", "skills");
+    const res = scaffoldSkill(name, description, targetDir);
+    this.refresh();
+    return res;
+  }
+}
+
+/**
+ * Scaffold a new agent skill directory and SKILL.md template (Candidate #40)
+ */
+export function scaffoldSkill(
+  name: string,
+  description: string = "Specialized engineering instructions and workflows",
+  targetDir?: string
+): { skillPath: string; dirPath: string } {
+  const cleanName = name.toLowerCase().replace(/[^a-z0-9_-]/g, "-").replace(/^-+|-+$/g, "");
+  const baseDir = targetDir || path.join(process.cwd(), ".nexus", "skills");
+  const skillDir = path.join(baseDir, cleanName);
+
+  if (!fs.existsSync(skillDir)) {
+    fs.mkdirSync(skillDir, { recursive: true });
+  }
+
+  const skillFile = path.join(skillDir, "SKILL.md");
+  const template = `---
+name: ${cleanName}
+description: ${description}
+---
+
+# ${cleanName} Skill
+
+## Overview
+${description}
+
+## Workflows & Instructions
+1. Step 1: Analyze context and verify preconditions.
+2. Step 2: Apply changes adhering to project conventions.
+3. Step 3: Run automated test suite to confirm correctness.
+
+## Guidelines
+- Always verify outputs with diagnostic tools.
+- Maintain existing codebase comments and formatting.
+`;
+
+  fs.writeFileSync(skillFile, template, "utf-8");
+  return { skillPath: skillFile, dirPath: skillDir };
 }

@@ -451,6 +451,73 @@ export const HARNESS_TOOLS = [
             },
         },
     },
+    {
+        type: "function",
+        function: {
+            name: "lsp_hover",
+            description: "Query Language Server Protocol (LSP) hover documentation and type signatures for a symbol at a given line and character.",
+            parameters: {
+                type: "object",
+                properties: {
+                    path: {
+                        type: "string",
+                        description: "The source file path to inspect.",
+                    },
+                    line: {
+                        type: "number",
+                        description: "The 1-indexed line number.",
+                    },
+                    character: {
+                        type: "number",
+                        description: "The 1-indexed character offset on the line.",
+                    },
+                },
+                required: ["path", "line", "character"],
+            },
+        },
+    },
+    {
+        type: "function",
+        function: {
+            name: "lsp_definition",
+            description: "Query Language Server Protocol (LSP) definition location for a symbol at a given line and character.",
+            parameters: {
+                type: "object",
+                properties: {
+                    path: {
+                        type: "string",
+                        description: "The source file path containing the symbol reference.",
+                    },
+                    line: {
+                        type: "number",
+                        description: "The 1-indexed line number.",
+                    },
+                    character: {
+                        type: "number",
+                        description: "The 1-indexed character offset on the line.",
+                    },
+                },
+                required: ["path", "line", "character"],
+            },
+        },
+    },
+    {
+        type: "function",
+        function: {
+            name: "lsp_diagnostics",
+            description: "Retrieve active Language Server Protocol (LSP) semantic compiler diagnostics for a source file.",
+            parameters: {
+                type: "object",
+                properties: {
+                    path: {
+                        type: "string",
+                        description: "The source file path to query diagnostics for.",
+                    },
+                },
+                required: ["path"],
+            },
+        },
+    },
 ];
 export function isSafeOutboundUrl(urlStr) {
     let parsed;
@@ -974,6 +1041,50 @@ export class RustCoreBridge {
             }
             catch (err) {
                 return { success: false, output: "", error: `Search failed: ${err.message}` };
+            }
+        }
+        if (toolName === "lsp_hover") {
+            try {
+                const { LspBridgeManager } = await import("./lsp.js");
+                const lsp = new LspBridgeManager(this.workspace);
+                const res = await lsp.hover(args.path, Number(args.line), Number(args.character));
+                return {
+                    success: res.found,
+                    output: res.hoverText || "No hover info",
+                    error: res.error,
+                };
+            }
+            catch (err) {
+                return { success: false, output: "", error: `LSP error: ${err.message}` };
+            }
+        }
+        if (toolName === "lsp_definition") {
+            try {
+                const { LspBridgeManager } = await import("./lsp.js");
+                const lsp = new LspBridgeManager(this.workspace);
+                const res = await lsp.definition(args.path, Number(args.line), Number(args.character));
+                return {
+                    success: res.found,
+                    output: JSON.stringify(res.locations || [], null, 2),
+                    error: res.error,
+                };
+            }
+            catch (err) {
+                return { success: false, output: "", error: `LSP error: ${err.message}` };
+            }
+        }
+        if (toolName === "lsp_diagnostics") {
+            try {
+                const { LspBridgeManager } = await import("./lsp.js");
+                const lsp = new LspBridgeManager(this.workspace);
+                const diags = lsp.getDiagnostics(args.path);
+                return {
+                    success: true,
+                    output: JSON.stringify(diags, null, 2),
+                };
+            }
+            catch (err) {
+                return { success: false, output: "", error: `LSP error: ${err.message}` };
             }
         }
         // Default the shell and wrap with sandbox if enabled

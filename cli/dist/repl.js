@@ -14,6 +14,9 @@ import { renderTokenGauge } from "./tokens.js";
 import { scanAndOnboardWorkspace } from "./onboard.js";
 import { runTestSuite } from "./tester.js";
 import { copyToClipboard, readFromClipboard } from "./clipboard.js";
+import { encodeImageFile, formatVisionContent } from "./image.js";
+import { ThemeManager } from "./theme.js";
+import { TeamOrchestrator } from "./team.js";
 function parsePatchHunks(patch) {
     const lines = patch.split("\n");
     const fileHeaderLines = [];
@@ -48,6 +51,7 @@ export class InteractiveRepl {
     sessionManager;
     checkpointManager;
     currentSessionId;
+    themeManager = new ThemeManager();
     constructor(config, autoApprove = true, resumeSessionId) {
         this.config = config;
         this.autoApprove = autoApprove;
@@ -119,8 +123,9 @@ export class InteractiveRepl {
     getLastAssistantMessage() {
         const messages = this.agent.getMessages();
         for (let i = messages.length - 1; i >= 0; i--) {
-            if (messages[i].role === "assistant" && messages[i].content) {
-                return messages[i].content || "";
+            const c = messages[i].content;
+            if (messages[i].role === "assistant" && c) {
+                return typeof c === "string" ? c : JSON.stringify(c);
             }
         }
         return "";
@@ -160,9 +165,12 @@ export class InteractiveRepl {
         console.log(`  ${pc.bold(pc.yellow("/save [name]"))}        Save current session snapshot to ~/.nexus/sessions/`);
         console.log(`  ${pc.bold(pc.yellow("/resume [id]"))}        Load a past session into memory`);
         console.log(`  ${pc.bold(pc.yellow("/skills"))}             List discovered agent skills (SKILL.md)`);
-        console.log(`  ${pc.bold(pc.yellow("/skill <name>"))}        View specialized skill instructions`);
+        console.log(`  ${pc.bold(pc.yellow("/skill [init <name>|<name>]"))} View or scaffold specialized skill`);
         console.log(`  ${pc.bold(pc.yellow("/mcp [add|resources|prompts]"))} Manage MCP servers, tools, resources, and prompts`);
         console.log(`  ${pc.bold(pc.yellow("/plugins"))}            List loaded custom plugins and lifecycle hooks`);
+        console.log(`  ${pc.bold(pc.yellow("/team <role|full> <task>"))} Multi-agent collaborative team orchestration`);
+        console.log(`  ${pc.bold(pc.yellow("/image <path> [prompt]"))} Ingest multi-modal image into vision model`);
+        console.log(`  ${pc.bold(pc.yellow("/theme [name]"))}       View or switch terminal color theme`);
         console.log(`  ${pc.bold(pc.yellow("/checkpoint [name]"))}   Save rollback snapshot of current workspace`);
         console.log(`  ${pc.bold(pc.yellow("/checkpoint diff <id>"))} Inspect diff of a checkpoint vs current or another`);
         console.log(`  ${pc.bold(pc.yellow("/checkpoint prune [n]"))} Prune old checkpoints beyond retention limit`);
@@ -295,7 +303,9 @@ export class InteractiveRepl {
                     "/skill", "/mcp", "/plugins", "/plan", "/checkpoint",
                     "/checkpoints", "/undo", "/audit", "/export", "/tokens", "/init",
                     "/onboard", "/test",
-                    "/model", "/shell", "/cd", "/history", "/copy", "/paste", "/exit", "/quit"
+                    "/model", "/shell", "/cd", "/history", "/copy", "/paste",
+                    "/image", "/theme", "/team",
+                    "/exit", "/quit"
                 ];
                 const trimmed = line.trim();
                 const parts = line.split(/\s+/);
@@ -648,7 +658,18 @@ export class InteractiveRepl {
                     }
                     else if (cmd === "skill") {
                         if (!arg) {
-                            console.log("Usage: /skill <skill_name>\n");
+                            console.log("Usage: /skill <skill_name> or /skill init <skill_name>\n");
+                            continue;
+                        }
+                        if (arg.startsWith("init ")) {
+                            const skillName = arg.slice(5).trim();
+                            if (!skillName) {
+                                console.log(pc.yellow("Usage: /skill init <skill_name>\n"));
+                            }
+                            else {
+                                const res = this.agent.getSkillManager().scaffoldSkill(skillName);
+                                console.log(pc.green(`✔ Scaffolded new skill template at: ${pc.bold(res.skillPath)}\n`));
+                            }
                             continue;
                         }
                         const skill = this.agent.getSkillManager().getSkill(arg);
@@ -947,6 +968,80 @@ export class InteractiveRepl {
                             else {
                                 console.log(pc.dim("Paste cancelled.\n"));
                             }
+                        }
+                        continue;
+                    }
+                    else if (cmd === "image") {
+                        const parts = arg.trim().split(/\s+/);
+                        const imgPath = parts[0];
+                        const userPrompt = parts.slice(1).join(" ") || "Please analyze this image, describe its contents, and provide relevant technical solutions.";
+                        if (!imgPath) {
+                            console.log(pc.yellow("Usage: /image <path_to_image> [prompt]\n"));
+                            continue;
+                        }
+                        const encoded = encodeImageFile(imgPath, this.config.workspace);
+                        if (!encoded.success) {
+                            console.log(pc.red(`Error loading image: ${encoded.error}\n`));
+                            continue;
+                        }
+                        console.log(pc.cyan(`🖼️  Loaded image: ${pc.bold(path.basename(encoded.filePath))} (${(encoded.sizeBytes / 1024).toFixed(1)} KB)`));
+                        const visionPayload = formatVisionContent(userPrompt, encoded.dataUri);
+                        this.checkpointManager.createCheckpoint(`Vision: ${userPrompt.slice(0, 30)}`);
+                        await this.agent.runTurn(visionPayload, (tool, args) => this.confirmAction(tool, args));
+                        this.saveCurrentSession(userPrompt);
+                        continue;
+                    }
+                    else if (cmd === "theme") {
+                        if (!arg) {
+                            const themes = this.themeManager.listThemes();
+                            console.log(pc.bold(pc.white("\nAvailable Color Themes:")));
+                            for (const t of themes) {
+                                const isCurrent = t === this.themeManager.getThemeName();
+                                const marker = isCurrent ? pc.bold(pc.green("* ")) : "  ";
+                                console.log(`${marker}${pc.cyan(t)}`);
+                            }
+                            console.log(pc.dim("\nUse '/theme <name>' to apply and persist a theme.\n"));
+                        }
+                        else {
+                            const ok = this.themeManager.saveConfiguredTheme(arg.trim());
+                            if (ok) {
+                                console.log(pc.green(`✔ Color theme switched to: ${pc.bold(arg.trim())}\n`));
+                            }
+                            else {
+                                console.log(pc.red(`Unknown theme '${arg}'. Options: ${this.themeManager.listThemes().join(", ")}\n`));
+                            }
+                        }
+                        continue;
+                    }
+                    else if (cmd === "team") {
+                        const subParts = arg.trim().split(/\s+/);
+                        const subCmd = subParts[0]?.toLowerCase();
+                        const task = subParts.slice(1).join(" ").trim();
+                        if (!subCmd || !task) {
+                            console.log(pc.yellow("Usage: /team <researcher|architect|implementer|tester|full> <objective>\n"));
+                            continue;
+                        }
+                        const orchestrator = new TeamOrchestrator(this.config);
+                        if (subCmd === "full") {
+                            console.log(pc.bold(pc.cyan(`\n👥 Launching Multi-Agent Collaborative Team Workflow...`)));
+                            console.log(pc.dim(`Objective: ${task}\n`));
+                            this.agent.getUi().startSpinner("Orchestrating team phases (Researcher -> Architect -> Implementer -> Tester)...");
+                            const result = await orchestrator.runFullWorkflow(task);
+                            this.agent.getUi().stopSpinner(result.success);
+                            console.log(result.finalReport);
+                            console.log();
+                        }
+                        else if (["researcher", "architect", "implementer", "tester"].includes(subCmd)) {
+                            console.log(pc.bold(pc.cyan(`\n👤 Delegating to Specialized Role: ${subCmd.toUpperCase()}...`)));
+                            this.agent.getUi().startSpinner(`Executing ${subCmd} task...`);
+                            const result = await orchestrator.executeRoleTask(subCmd, task);
+                            this.agent.getUi().stopSpinner(result.success);
+                            console.log(pc.bold(pc.white(`\nRole [${subCmd.toUpperCase()}] Summary:`)));
+                            console.log(result.summary);
+                            console.log(pc.dim(`Duration: ${(result.durationMs / 1000).toFixed(1)}s | Steps: ${result.steps}\n`));
+                        }
+                        else {
+                            console.log(pc.red(`Unknown role '${subCmd}'. Available: researcher, architect, implementer, tester, full\n`));
                         }
                         continue;
                     }
