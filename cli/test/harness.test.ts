@@ -530,9 +530,10 @@ error[E0308]: mismatched types
         {
           role: "assistant",
           content: "",
-          tool_calls: [{ id, type: "function", function: { name: "read_file", arguments: JSON.stringify({ path: `src/module-${index}.ts` }) } }],
+          tool_calls: [{ id, type: "function", function: { name: "list_dir", arguments: JSON.stringify({ path: `src/module-${index}` }) } }],
         },
-          { role: "tool", name: "read_file", tool_call_id: id, content: `Important finding ${index}: verified implementation detail.\n${"x ".repeat(8_000)}` },
+        { role: "tool", name: "list_dir", tool_call_id: id, content: `directory entry ${index}\n${"x ".repeat(8_000)}` },
+        { role: "tool", name: "read_file", content: `Important finding ${index}: verified implementation detail.` },
       );
     }
     agent.setMessages([
@@ -566,7 +567,9 @@ error[E0308]: mismatched types
     assert.strictEqual(dispatched.length, 1);
     assert.ok(dispatched[0].budget + completionReserve + toolResponseReserve <= limit);
     assert.ok(dispatched[0].messages.some((message) => message.role === "user" && message.content.includes("Continue the bounded cache task")));
-    assert.ok(dispatched[0].messages[1].content.includes("src/module-0.ts"), "older touched-file state should survive compaction");
+    const admittedSummary = String(dispatched[0].messages[1].content);
+    const admittedState = JSON.parse(admittedSummary.slice(admittedSummary.indexOf("\n") + 1));
+    assert.ok(admittedState.notes.some((note: string) => note.includes("src/module-0")), "older reconstructible query arguments should survive compaction");
     assert.ok(admissionLogs.some((line) => line.includes("compacted=true")));
   });
 
@@ -585,7 +588,9 @@ error[E0308]: mismatched types
         agent.getMessages()[0],
         { role: "user", content: "Complete the cache migration and retain its decisions." },
         { role: "assistant", content: `<thought>${decisionMarker}: retain the bounded cache API.</thought>` },
-        { role: "tool", name: "run_tests", tool_call_id: "initial", content: `${findingMarker}: baseline regression confirmed.\n${"bulky output\n".repeat(5_000)}` },
+        { role: "tool", name: "read_file", tool_call_id: "initial", content: `${findingMarker}: baseline regression confirmed.` },
+        { role: "assistant", content: "Listing the workspace.", tool_calls: [{ id: "initial-listing", type: "function", function: { name: "list_dir", arguments: JSON.stringify({ path: "src" }) } }] },
+        { role: "tool", name: "list_dir", tool_call_id: "initial-listing", content: `bulky output\n${"bulky output\n".repeat(5_000)}` },
       ];
       const summaryLengths: number[] = [];
 
@@ -593,8 +598,8 @@ error[E0308]: mismatched types
         if (cycle > 0) {
           history = [
             ...history,
-            { role: "assistant", content: "Repeated verified interaction.", tool_calls: [{ id: "repeat", type: "function", function: { name: "run_tests", arguments: "{}" } }] },
-            { role: "tool", name: "run_tests", tool_call_id: "repeat", content: `Redundant output\n${"bulky output\n".repeat(5_000)}` },
+            { role: "assistant", content: "Repeated verified interaction.", tool_calls: [{ id: `repeat-${cycle}`, type: "function", function: { name: "list_dir", arguments: JSON.stringify({ path: "src" }) } }] },
+            { role: "tool", name: "list_dir", tool_call_id: `repeat-${cycle}`, content: `Redundant output\n${"bulky output\n".repeat(5_000)}` },
             { role: "user", content: "Continue the same cache migration." },
           ];
         }
@@ -639,7 +644,8 @@ error[E0308]: mismatched types
       let summary = String(history.find((message) => message.role === "system" && message !== agent.getMessages()[0])?.content || "");
       for (const marker of findingMarkers) assert.ok(summary.includes(marker), `distinct finding was lost: ${marker}`);
       assert.ok(!summary.includes("bulk-entry"), "reconstructible listing contents remain discardable");
-      assert.ok(summary.includes('Reconstructible query retained for rerun: list_dir {"path":"src"}'));
+      const state = JSON.parse(summary.slice(summary.indexOf("\n") + 1));
+      assert.ok(state.notes.includes('Reconstructible query retained for rerun: list_dir {"path":"src"}'));
       assert.ok(summary.includes("Superseded phase"));
 
       agent.setActivePlan([{ name: "Current phase", status: "in_progress", detail: "current plan state" }]);
@@ -708,8 +714,8 @@ error[E0308]: mismatched types
           history = [
             ...history,
             ...durableStatements.map((content, index) => index < 2
-              ? { role: "tool", name: "read_file", tool_call_id: `duplicate-${cycle}-${index}`, content: `  ${content}  ` }
-              : { role: "assistant", content: `<thought>  ${content}  </thought>` }),
+              ? { role: "tool", name: "read_file", tool_call_id: `duplicate-${cycle}-${index}`, content }
+              : { role: "assistant", content: `<thought>${content}</thought>` }),
             { role: "assistant", content: null, tool_calls: [{ id: `listing-${cycle}`, type: "function", function: { name: "file_tree", arguments: JSON.stringify({ path: "src" }) } }] },
             { role: "tool", name: "file_tree", tool_call_id: `listing-${cycle}`, content: `RECONSTRUCTIBLE_BULK_OUTPUT\n${"src/generated-entry\n".repeat(4_000)}` },
             { role: "user", content: "Continue the integration while keeping its operational requirements." },
@@ -719,7 +725,9 @@ error[E0308]: mismatched types
         const summary = String(history.filter((message) => message.role === "system")[1]?.content || "");
         for (const statement of durableStatements) assert.ok(summary.includes(statement), `material state disappeared after cycle ${cycle + 1}: ${statement}`);
         for (const statement of durableStatements) assert.strictEqual(summary.split(statement).length - 1, 1, "normalized duplicate state must be represented once");
-        assert.ok(summary.includes('Reconstructible query retained for rerun: file_tree {"path":"src"}'));
+        const marker = "[Structured Context Memory - durable task state]\n";
+        const state = JSON.parse(summary.slice(marker.length));
+        assert.ok(state.notes.includes('Reconstructible query retained for rerun: file_tree {"path":"src"}'));
         assert.ok(!summary.includes("RECONSTRUCTIBLE_BULK_OUTPUT"));
         assert.ok(!summary.includes("src/generated-entry"));
         assert.ok(summary.length < 6_000, "reconstructible bulk output must not make canonical state grow without bound");
@@ -763,7 +771,7 @@ error[E0308]: mismatched types
         toolResult("matching-id", "list_dir", "MATCHED_BULK_RESULT"),
       ]);
       assert.ok(!matched.includes("MATCHED_BULK_RESULT"), "a uniquely matched reconstructible result may be omitted");
-      assert.ok(matched.includes('Reconstructible query retained for rerun: list_dir {"path":"src"}'));
+      assert.ok(JSON.parse(matched.slice(matched.indexOf("\n") + 1)).notes.includes('Reconstructible query retained for rerun: list_dir {"path":"src"}'));
 
       const exactMismatch = "Do not change the published RPC contract; downstream clients depend on this method.";
       let repeatedHistory: any[] = [
@@ -879,9 +887,9 @@ error[E0308]: mismatched types
         if (cycle < 4) {
           history = [
             ...history,
-            { role: "user", content: arrayText(userConstraint, "  ") },
-            { role: "assistant", content: arrayText(assistantDecision, "  ") },
-            { role: "tool", name: "read_file", tool_call_id: `array-finding-${cycle}`, content: arrayText(toolFinding, "  ") },
+            { role: "user", content: arrayText(userConstraint) },
+            { role: "assistant", content: arrayText(assistantDecision) },
+            { role: "tool", name: "read_file", tool_call_id: `array-finding-${cycle}`, content: arrayText(toolFinding) },
             { role: "user", content: "Continue the work." },
           ];
         }
@@ -968,6 +976,65 @@ error[E0308]: mismatched types
     }
   });
 
+  test("durable serialization preserves exact text whitespace through repeated compaction", () => {
+    const agent = new AutonomousAgent({
+      endpoint: "http://localhost:1234/v1",
+      model: "test-model",
+      workspace: process.cwd(),
+      maxSteps: 1,
+      shell: "bash",
+    });
+    const python = "Implement exactly:\nif ready:\n    return \"yes\"\nelse:\n    return \"no\"";
+    const fenced = "```ts\nfunction render() {\n  return \"ok\";\n}\n```";
+    const yaml = "service:\n  name: api\n  ports:\n    - 8080\n";
+    const blankLines = "first line\n\n  indented third line\n";
+    const outerWhitespace = "\n  leading and trailing whitespace stays  \n";
+    const encodingEdges = "\tpath: C:\\work\\file.ts; quote: \"ok\"; separator: \u2028";
+    const notes = [
+      `Earlier task requests: ${python}`,
+      `Earlier assistant message: ${fenced}`,
+      `Earlier read_file output: ${yaml}`,
+      `Earlier run_tests output: ${blankLines}`,
+      `Earlier task requests: ${outerWhitespace}`,
+      `Earlier task requests: ${encodingEdges}`,
+      "Earlier task requests: first part second part",
+    ];
+    const plan = [{ name: "Preserved phase", status: "in_progress", detail: "keep these lines:\n  first\n  second" }];
+    agent.setActivePlan(plan);
+    try {
+      let history: any[] = [
+        agent.getMessages()[0],
+        { role: "user", content: [{ type: "text", text: python }] },
+        { role: "assistant", content: [{ type: "text", text: fenced }] },
+        { role: "tool", name: "read_file", tool_call_id: "yaml", content: [{ type: "text", text: yaml }] },
+        { role: "tool", name: "run_tests", tool_call_id: "blank-lines", content: [{ type: "text", text: blankLines }] },
+        { role: "user", content: [{ type: "text", text: outerWhitespace }] },
+        { role: "user", content: [{ type: "text", text: encodingEdges }] },
+        { role: "user", content: [{ type: "text", text: "first part" }, { type: "text", text: " second part" }] },
+        { role: "user", content: "Continue the same task." },
+      ];
+
+      let stableSummary: string | undefined;
+      for (let cycle = 0; cycle < 5; cycle++) {
+        history = (agent as any).compactedMessages(history, 0, 6_000);
+        const summary = String(history.filter((message: any) => message.role === "system")[1]?.content || "");
+        const marker = "[Structured Context Memory - durable task state]\n";
+        assert.ok(summary.startsWith(marker), "durable state uses the canonical versioned serialization");
+        const state = JSON.parse(summary.slice(marker.length));
+        for (const note of notes) {
+          assert.strictEqual(state.notes.filter((entry: string) => entry === note).length, 1, `exact retained payload changed or duplicated after cycle ${cycle + 1}`);
+        }
+        assert.deepStrictEqual(state.currentPlan, plan, "structured live plan content must also survive exact serialization");
+        if (cycle === 1) stableSummary = summary;
+        if (cycle > 1) assert.strictEqual(summary, stableSummary, "repeated equivalent state must serialize idempotently");
+        agent.setActivePlan([]);
+        if (cycle < 4) history.push({ role: "user", content: "Continue the same task." });
+      }
+    } finally {
+      agent.shutdown();
+    }
+  });
+
   test("long-running tool use keeps every dispatched request within budget", async () => {
     const limit = 65_536;
     const completionReserve = 8_192;
@@ -994,8 +1061,8 @@ error[E0308]: mismatched types
           const id = `cycle-${turn}`;
           return {
             role: "assistant",
-            content: `<thought>${turn === 1 ? "DURABLE_MULTI_TURN_DECISION_ISSUE8" : `Finding ${turn}`}: continue the implementation and keep prior verification results.</thought>`,
-            tool_calls: [{ id, type: "function", function: { name: "read_file", arguments: JSON.stringify({ path: `src/part-${turn}.ts` }) } }],
+            content: `<thought>${turn === 1 ? "DURABLE_MULTI_TURN_DECISION_ISSUE8 DURABLE_MULTI_TURN_FINDING_ISSUE8" : `Finding ${turn}`}: continue the implementation and keep prior verification results.</thought>`,
+            tool_calls: [{ id, type: "function", function: { name: "list_dir", arguments: JSON.stringify({ path: "src" }) } }],
           };
         }
         return { role: "assistant", content: "All implementation steps and verification are complete." };
@@ -1003,7 +1070,7 @@ error[E0308]: mismatched types
     };
     (agent as any).bridge.executeTool = async (_name: string, args: any) => ({
       success: true,
-      output: `${args.path === "src/part-1.ts" ? "DURABLE_MULTI_TURN_FINDING_ISSUE8: initial compatibility result retained.\n" : ""}Verified read of ${args.path}.\n${"tool-result\n".repeat(5_000)}`,
+      output: `Verified listing of ${args.path}.\n${"tool-result\n".repeat(5_000)}`,
     });
     const originalLog = console.log;
     console.log = (...args: any[]) => {

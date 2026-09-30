@@ -274,6 +274,7 @@ export class AutonomousAgent {
         const priorTasks = [];
         const durableNotes = [];
         const durableNoteKeys = new Set();
+        let carriedPlan = [];
         const reconstructibleQueryTools = new Set(["file_tree", "list_dir", "find_files", "file_info"]);
         const validReconstructibleArgs = (name, rawArgs) => {
             let args;
@@ -333,52 +334,53 @@ export class AutonomousAgent {
             }
         }
         const addDurableNote = (note) => {
-            const key = note.replace(/\s+/g, " ").trim();
+            const key = note;
             if (key && !durableNoteKeys.has(key)) {
                 durableNoteKeys.add(key);
-                durableNotes.push(note.trim());
+                durableNotes.push(note);
             }
         };
         for (const message of messages) {
             const normalizedContent = normalizeMessageContent(message.content);
-            const contentText = normalizedContent.text.join("\n");
+            const contentText = normalizedContent.text.join("");
             if (message.role === "system" && contentText) {
-                // Synthetic summaries are the canonical durable state. Reconcile their
-                // entries into the next summary instead of retaining an unbounded chain.
-                let section = "Earlier durable state";
-                for (const rawLine of contentText.split(/\r?\n/)) {
-                    const line = rawLine.replace(/^\s*[-•]\s*/, "").trim();
-                    if (!line || line.startsWith("[Structured Context Memory"))
-                        continue;
-                    if (/^Current plan:?$/i.test(line)) {
-                        section = "Current plan";
-                        continue; // Rebuilt from the live plan below.
+                const canonicalPrefix = "[Structured Context Memory - durable task state]\n";
+                if (contentText.startsWith(canonicalPrefix)) {
+                    let parsed;
+                    try {
+                        parsed = JSON.parse(contentText.slice(canonicalPrefix.length));
                     }
-                    if (section === "Current plan")
-                        continue;
-                    if (/^Durable state carried forward:?$/i.test(line)) {
-                        section = "Durable state carried forward";
-                        continue;
+                    catch {
+                        parsed = undefined;
                     }
-                    if (section === "Durable state carried forward") {
-                        addDurableNote(line);
-                        continue;
+                    const validPlan = (value) => Array.isArray(value) && value.every((item) => item && typeof item === "object" &&
+                        typeof item.name === "string" && typeof item.status === "string" &&
+                        (item.detail === undefined || typeof item.detail === "string"));
+                    if (parsed?.version === 1 && Array.isArray(parsed.notes) && parsed.notes.every((note) => typeof note === "string") && validPlan(parsed.currentPlan)) {
+                        for (const note of parsed.notes)
+                            addDurableNote(note);
+                        if (!this.activePlan.length)
+                            carriedPlan = parsed.currentPlan;
                     }
-                    if (/^(Earlier task requests|Modified files|Inspected files|Recent commands|Findings and decisions|Earlier interaction notes):/i.test(line)) {
-                        const separator = line.indexOf(":");
-                        section = line.slice(0, separator);
-                        const value = line.slice(separator + 1).trim();
-                        if (value)
-                            addDurableNote(`${section}: ${value}`);
-                        continue;
+                    else {
+                        // Malformed canonical state is opaque required content: keep its
+                        // exact text instead of attempting a lossy line-oriented recovery.
+                        addDurableNote(`Earlier system message: ${contentText}`);
                     }
-                    addDurableNote(`${section}: ${line}`);
+                }
+                else if (contentText.startsWith("[Structured Context Memory")) {
+                    // Compatibility with summaries written before the lossless format.
+                    // Preserve the complete legacy payload; it may contain meaningful
+                    // whitespace that the old line parser cannot safely interpret.
+                    addDurableNote(`Earlier durable state: ${contentText}`);
+                }
+                else {
+                    addDurableNote(`Earlier system message: ${contentText}`);
                 }
             }
             if (message.role === "user" && contentText) {
-                const task = contentText.replace(/\s+/g, " ").trim();
-                if (task && !priorTasks.includes(task))
-                    priorTasks.push(task);
+                if (!priorTasks.includes(contentText))
+                    priorTasks.push(contentText);
             }
             if (message.role === "assistant" && message.tool_calls) {
                 for (const call of message.tool_calls) {
@@ -409,12 +411,7 @@ export class AutonomousAgent {
                 }
             }
             if (message.role === "assistant" && contentText) {
-                const content = contentText.replace(/<\/?thought>/g, "");
-                for (const line of content.split(/\r?\n/)) {
-                    const clean = line.replace(/\s+/g, " ").trim();
-                    if (clean)
-                        addDurableNote(`Earlier assistant message: ${clean}`);
-                }
+                addDurableNote(`Earlier assistant message: ${contentText}`);
             }
             if (message.role === "tool") {
                 const id = typeof message.tool_call_id === "string" && message.tool_call_id.trim() ? message.tool_call_id : undefined;
@@ -423,9 +420,8 @@ export class AutonomousAgent {
                     addDurableNote(`Reconstructible query retained for rerun: ${reconstructibleCall.name} ${reconstructibleCall.serializedArgs}`);
                     continue;
                 }
-                const lines = contentText.split(/\r?\n/).map((line) => line.replace(/\s+/g, " ").trim()).filter(Boolean);
-                for (const line of lines)
-                    addDurableNote(`Earlier ${message.name || "tool"} output: ${line}`);
+                if (contentText.length)
+                    addDurableNote(`Earlier ${message.name || "tool"} output: ${contentText}`);
             }
         }
         const freshSections = [
@@ -439,12 +435,11 @@ export class AutonomousAgent {
                 addDurableNote(`${section}: ${entry}`);
             }
         }
-        const sections = ["[Structured Context Memory - durable task state]"];
-        if (durableNotes.length)
-            sections.push(`Durable state carried forward:\n${durableNotes.map((note) => `- ${note}`).join("\n")}`);
-        if (this.activePlan.length)
-            sections.push(`Current plan:\n${this.activePlan.map((item) => `- [${item.status}] ${item.name}${item.detail ? `: ${item.detail}` : ""}`).join("\n")}`);
-        return sections.join("\n");
+        const currentPlan = this.activePlan.length ? this.activePlan : carriedPlan;
+        return [
+            "[Structured Context Memory - durable task state]",
+            JSON.stringify({ version: 1, notes: durableNotes, currentPlan }),
+        ].join("\n");
     }
     compactedMessages(source, recentToolTurns, detailBudgetChars) {
         const system = source[0];
