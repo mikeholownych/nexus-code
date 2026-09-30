@@ -2,6 +2,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
 import { ChatMessage, ToolDefinition, HarnessConfig, ToolCall } from "./types.js";
+import pc from "picocolors";
 
 export function readLatestAuthToken(): string | null {
   // 1. Check opencode client token file
@@ -52,22 +53,67 @@ export interface ChatCompletionResponse {
 export type StreamTokenCallback = (token: string) => void;
 
 export class LocalLlmClient {
-  private endpoint: string;
+  private endpoints: string[] = [];
+  private activeEndpointIndex: number = 0;
   private apiKey: string;
   private model: string;
   private temperature: number;
 
   constructor(config: HarnessConfig) {
-    let ep = config.endpoint.replace(/\/+$/, "");
+    const normalizeEp = (urlStr: string) => {
+      let ep = urlStr.trim().replace(/\/+$/, "");
+      if (!ep.endsWith("/v1")) {
+        ep = `${ep}/v1`;
+      }
+      return ep;
+    };
+
+    const endpointList: string[] = [normalizeEp(config.endpoint)];
+    if (config.fallbackEndpoints && Array.isArray(config.fallbackEndpoints)) {
+      for (const fb of config.fallbackEndpoints) {
+        if (fb && typeof fb === "string") {
+          endpointList.push(normalizeEp(fb));
+        }
+      }
+    }
+    if (process.env.LOCAL_LLM_FALLBACK_ENDPOINTS) {
+      for (const fb of process.env.LOCAL_LLM_FALLBACK_ENDPOINTS.split(",")) {
+        if (fb.trim()) {
+          endpointList.push(normalizeEp(fb));
+        }
+      }
+    }
+    this.endpoints = Array.from(new Set(endpointList));
+    this.activeEndpointIndex = 0;
+
+    this.apiKey =
+      config.apiKey && config.apiKey !== "local" && config.apiKey !== "not-needed"
+        ? config.apiKey
+        : readLatestAuthToken() || "not-needed";
+    this.model = config.model;
+    this.temperature = config.temperature ?? 0.2;
+  }
+
+  public get endpoint(): string {
+    return this.endpoints[this.activeEndpointIndex] || this.endpoints[0];
+  }
+
+  public getActiveEndpoint(): string {
+    return this.endpoint;
+  }
+
+  public getEndpoints(): string[] {
+    return [...this.endpoints];
+  }
+
+  public addFallbackEndpoint(endpoint: string): void {
+    let ep = endpoint.trim().replace(/\/+$/, "");
     if (!ep.endsWith("/v1")) {
       ep = `${ep}/v1`;
     }
-    this.endpoint = ep;
-    this.apiKey = config.apiKey && config.apiKey !== "local" && config.apiKey !== "not-needed"
-      ? config.apiKey
-      : (readLatestAuthToken() || "not-needed");
-    this.model = config.model;
-    this.temperature = config.temperature ?? 0.2;
+    if (!this.endpoints.includes(ep)) {
+      this.endpoints.push(ep);
+    }
   }
 
   public setApiKey(key: string): void {
@@ -83,9 +129,50 @@ export class LocalLlmClient {
     return false;
   }
 
+  private async executeWithFailover<T>(
+    operationName: string,
+    operation: (endpoint: string) => Promise<T>
+  ): Promise<T> {
+    const total = this.endpoints.length;
+    let lastError: Error | null = null;
+
+    for (let attempt = 0; attempt < total; attempt++) {
+      const idx = (this.activeEndpointIndex + attempt) % total;
+      const currentEp = this.endpoints[idx];
+
+      try {
+        const result = await operation(currentEp);
+        if (idx !== this.activeEndpointIndex) {
+          console.warn(
+            pc.yellow(`\n⚡ Failover: Active inference endpoint switched to ${currentEp}`)
+          );
+          this.activeEndpointIndex = idx;
+        }
+        return result;
+      } catch (err: any) {
+        lastError = err;
+        if (total > 1 && attempt < total - 1) {
+          const nextIdx = (idx + 1) % total;
+          console.warn(
+            pc.dim(
+              `⚠️ [Failover] ${operationName} failed on ${currentEp} (${err.message}). Trying backup endpoint ${this.endpoints[nextIdx]}...`
+            )
+          );
+        }
+      }
+    }
+
+    throw (
+      lastError ||
+      new Error(
+        `All inference endpoints failed for ${operationName} (attempted: ${this.endpoints.join(", ")})`
+      )
+    );
+  }
+
   async listModels(): Promise<string[]> {
-    const url = `${this.endpoint}/models`;
-    try {
+    return this.executeWithFailover("listModels", async (currentEp) => {
+      const url = `${currentEp}/models`;
       const res = await fetch(url, {
         headers: {
           Authorization: `Bearer ${this.apiKey}`,
@@ -110,58 +197,58 @@ export class LocalLlmClient {
 
       const data = (await res.json()) as { data?: Array<{ id: string }> };
       return data.data?.map((m) => m.id) || [];
-    } catch (err: any) {
-      throw new Error(`Failed to connect to local AI server at ${url}: ${err.message}`);
-    }
+    });
   }
 
   async chatCompletion(
     messages: ChatMessage[],
     tools: ToolDefinition[]
   ): Promise<ChatMessage> {
-    const url = `${this.endpoint}/chat/completions`;
+    return this.executeWithFailover("chatCompletion", async (currentEp) => {
+      const url = `${currentEp}/chat/completions`;
 
-    const payload: any = {
-      model: this.model,
-      messages: messages.map((m) => ({
-        role: m.role,
-        content: m.content ?? null,
-        ...(m.tool_calls ? { tool_calls: m.tool_calls } : {}),
-        ...(m.tool_call_id ? { tool_call_id: m.tool_call_id } : {}),
-        ...(m.name ? { name: m.name } : {}),
-      })),
-      temperature: this.temperature,
-    };
+      const payload: any = {
+        model: this.model,
+        messages: messages.map((m) => ({
+          role: m.role,
+          content: m.content ?? null,
+          ...(m.tool_calls ? { tool_calls: m.tool_calls } : {}),
+          ...(m.tool_call_id ? { tool_call_id: m.tool_call_id } : {}),
+          ...(m.name ? { name: m.name } : {}),
+        })),
+        temperature: this.temperature,
+      };
 
-    if (tools.length > 0) {
-      payload.tools = tools;
-      payload.tool_choice = "auto";
-    }
+      if (tools.length > 0) {
+        payload.tools = tools;
+        payload.tool_choice = "auto";
+      }
 
-    const res = await fetch(url, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${this.apiKey}`,
-      },
-      body: JSON.stringify(payload),
+      const res = await fetch(url, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${this.apiKey}`,
+        },
+        body: JSON.stringify(payload),
+      });
+
+      if (res.status === 401 && this.reloadAuthToken()) {
+        return this.chatCompletion(messages, tools);
+      }
+
+      if (!res.ok) {
+        const errText = await res.text();
+        throw new Error(`Inference error (HTTP ${res.status}): ${errText}`);
+      }
+
+      const data = (await res.json()) as ChatCompletionResponse;
+      if (!data.choices || data.choices.length === 0) {
+        throw new Error("Model returned empty choices array");
+      }
+
+      return data.choices[0].message;
     });
-
-    if (res.status === 401 && this.reloadAuthToken()) {
-      return this.chatCompletion(messages, tools);
-    }
-
-    if (!res.ok) {
-      const errText = await res.text();
-      throw new Error(`Inference error (HTTP ${res.status}): ${errText}`);
-    }
-
-    const data = (await res.json()) as ChatCompletionResponse;
-    if (!data.choices || data.choices.length === 0) {
-      throw new Error("Model returned empty choices array");
-    }
-
-    return data.choices[0].message;
   }
 
   /**
@@ -172,132 +259,136 @@ export class LocalLlmClient {
     tools: ToolDefinition[],
     onToken?: StreamTokenCallback
   ): Promise<ChatMessage> {
-    const url = `${this.endpoint}/chat/completions`;
+    return this.executeWithFailover("chatCompletionStream", async (currentEp) => {
+      const url = `${currentEp}/chat/completions`;
 
-    const payload: any = {
-      model: this.model,
-      messages: messages.map((m) => ({
-        role: m.role,
-        content: m.content ?? null,
-        ...(m.tool_calls ? { tool_calls: m.tool_calls } : {}),
-        ...(m.tool_call_id ? { tool_call_id: m.tool_call_id } : {}),
-        ...(m.name ? { name: m.name } : {}),
-      })),
-      temperature: this.temperature,
-      stream: true,
-    };
+      const payload: any = {
+        model: this.model,
+        messages: messages.map((m) => ({
+          role: m.role,
+          content: m.content ?? null,
+          ...(m.tool_calls ? { tool_calls: m.tool_calls } : {}),
+          ...(m.tool_call_id ? { tool_call_id: m.tool_call_id } : {}),
+          ...(m.name ? { name: m.name } : {}),
+        })),
+        temperature: this.temperature,
+        stream: true,
+      };
 
-    if (tools.length > 0) {
-      payload.tools = tools;
-      payload.tool_choice = "auto";
-    }
+      if (tools.length > 0) {
+        payload.tools = tools;
+        payload.tool_choice = "auto";
+      }
 
-    let res: Response;
-    try {
-      res = await fetch(url, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${this.apiKey}`,
-        },
-        body: JSON.stringify(payload),
-      });
-    } catch {
-      // Fallback to non-streaming if network error
-      return this.chatCompletion(messages, tools);
-    }
+      let res: Response;
+      try {
+        res = await fetch(url, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${this.apiKey}`,
+          },
+          body: JSON.stringify(payload),
+        });
+      } catch {
+        // Fallback to non-streaming if network error
+        return this.chatCompletion(messages, tools);
+      }
 
-    if (res.status === 401 && this.reloadAuthToken()) {
-      return this.chatCompletionStream(messages, tools, onToken);
-    }
+      if (res.status === 401 && this.reloadAuthToken()) {
+        return this.chatCompletionStream(messages, tools, onToken);
+      }
 
-    if (!res.ok || !res.body) {
-      // Fallback to non-streaming on status error
-      return this.chatCompletion(messages, tools);
-    }
+      if (!res.ok || !res.body) {
+        const errText = await res.text().catch(() => res.statusText);
+        throw new Error(`Inference error (HTTP ${res.status}): ${errText}`);
+      }
 
-    let fullContent = "";
-    const toolCallsMap: Map<number, { id: string; name: string; args: string }> = new Map();
+      let fullContent = "";
+      const toolCallsMap: Map<number, { id: string; name: string; args: string }> = new Map();
 
-    const reader = res.body.getReader();
-    const decoder = new TextDecoder("utf-8");
-    let buffer = "";
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder("utf-8");
+      let buffer = "";
 
-    try {
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
+      try {
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
 
-        buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split("\n");
-        buffer = lines.pop() || "";
+          buffer += decoder.decode(value, { stream: true });
+          const lines = buffer.split("\n");
+          buffer = lines.pop() || "";
 
-        for (const line of lines) {
-          const trimmed = line.trim();
-          if (!trimmed || trimmed.startsWith(":") || trimmed === "data: [DONE]") {
-            continue;
-          }
+          for (const line of lines) {
+            const trimmed = line.trim();
+            if (!trimmed || trimmed.startsWith(":") || trimmed === "data: [DONE]") {
+              continue;
+            }
 
-          if (trimmed.startsWith("data: ")) {
-            const jsonStr = trimmed.slice(6);
-            try {
-              const chunk = JSON.parse(jsonStr);
-              const delta = chunk.choices?.[0]?.delta;
-              if (!delta) continue;
+            if (trimmed.startsWith("data: ")) {
+              const jsonStr = trimmed.slice(6);
+              try {
+                const chunk = JSON.parse(jsonStr);
+                const delta = chunk.choices?.[0]?.delta;
+                if (!delta) continue;
 
-              // 1. Text token chunk
-              if (delta.content) {
-                fullContent += delta.content;
-                if (onToken) {
-                  onToken(delta.content);
+                // 1. Text token chunk
+                if (delta.content) {
+                  fullContent += delta.content;
+                  if (onToken) {
+                    onToken(delta.content);
+                  }
                 }
-              }
 
-              // 2. Tool call chunks
-              if (delta.tool_calls && Array.isArray(delta.tool_calls)) {
-                for (const tc of delta.tool_calls) {
-                  const idx = tc.index ?? 0;
-                  const current = toolCallsMap.get(idx) || { id: "", name: "", args: "" };
+                // 2. Tool call chunks
+                if (delta.tool_calls && Array.isArray(delta.tool_calls)) {
+                  for (const tc of delta.tool_calls) {
+                    const idx = tc.index ?? 0;
+                    const current = toolCallsMap.get(idx) || { id: "", name: "", args: "" };
 
-                  if (tc.id) current.id = tc.id;
-                  if (tc.function?.name) current.name += tc.function.name;
-                  if (tc.function?.arguments) current.args += tc.function.arguments;
+                    if (tc.id) current.id = tc.id;
+                    if (tc.function?.name) current.name += tc.function.name;
+                    if (tc.function?.arguments) current.args += tc.function.arguments;
 
-                  toolCallsMap.set(idx, current);
+                    toolCallsMap.set(idx, current);
+                  }
                 }
+              } catch {
+                // Ignore malformed partial chunks
               }
-            } catch {
-              // Ignore malformed partial chunks
             }
           }
         }
+      } catch (streamErr) {
+        if (!fullContent && toolCallsMap.size === 0) {
+          throw streamErr;
+        }
       }
-    } catch {
-      // If stream broken mid-flight, proceed with what was accumulated
-    }
 
-    const assembledToolCalls: ToolCall[] = [];
-    for (const [_, tc] of toolCallsMap.entries()) {
-      if (tc.name) {
-        assembledToolCalls.push({
-          id: tc.id || `call_${Math.random().toString(36).substring(2, 9)}`,
-          type: "function",
-          function: {
-            name: tc.name,
-            arguments: tc.args,
-          },
-        });
+      const assembledToolCalls: ToolCall[] = [];
+      for (const [_, tc] of toolCallsMap.entries()) {
+        if (tc.name) {
+          assembledToolCalls.push({
+            id: tc.id || `call_${Math.random().toString(36).substring(2, 9)}`,
+            type: "function",
+            function: {
+              name: tc.name,
+              arguments: tc.args,
+            },
+          });
+        }
       }
-    }
 
-    if (!fullContent && assembledToolCalls.length === 0) {
-      return this.chatCompletion(messages, tools);
-    }
+      if (!fullContent && assembledToolCalls.length === 0) {
+        return this.chatCompletion(messages, tools);
+      }
 
-    return {
-      role: "assistant",
-      content: fullContent || null,
-      ...(assembledToolCalls.length > 0 ? { tool_calls: assembledToolCalls } : {}),
-    };
+      return {
+        role: "assistant",
+        content: fullContent || null,
+        ...(assembledToolCalls.length > 0 ? { tool_calls: assembledToolCalls } : {}),
+      };
+    });
   }
 }

@@ -11,6 +11,7 @@ import { HarnessConfig } from "./types.js";
 import { getGitInfo, scaffoldProjectRules, generateConventionalCommit, commitChanges } from "./git.js";
 import { SessionManager, SessionData } from "./session.js";
 import { CheckpointManager } from "./checkpoint.js";
+import { renderTokenGauge } from "./tokens.js";
 
 interface PatchHunk {
   header: string;
@@ -435,7 +436,7 @@ export class InteractiveRepl {
             console.log(pc.green("✔ Conversation context reset.\n"));
             continue;
           } else if (cmd === "compact") {
-            const report = this.agent.compactConversation();
+            const report = await this.agent.compactConversation(arg.includes("--llm"));
             console.log(pc.green(`✔ ${report}\n`));
             continue;
           } else if (cmd === "status") {
@@ -522,11 +523,18 @@ export class InteractiveRepl {
             }
             continue;
           } else if (cmd === "tokens" || cmd === "cost") {
-            console.log(pc.bold(pc.white("\nContext & Token Statistics:")));
-            console.log(`  • Messages in active context: ${this.agent.getHistoryCount()}`);
-            console.log(`  • Estimated turns completed: ${Math.floor(this.agent.getHistoryCount() / 2)}`);
-            console.log(`  • Model: ${pc.green(this.config.model)}`);
-            console.log(`  • Session ID: ${pc.dim(this.currentSessionId)}\n`);
+            const budget = this.agent.getContextBudget();
+            console.log(renderTokenGauge(budget));
+            const cumulative = this.agent.getTokenStats();
+            if (cumulative.total > 0) {
+              console.log(
+                pc.dim(
+                  `  • Cumulative Session Usage: ${cumulative.prompt.toLocaleString()} prompt, ${cumulative.completion.toLocaleString()} completion (${cumulative.total.toLocaleString()} total tokens)\n`
+                )
+              );
+            } else {
+              console.log();
+            }
             continue;
           } else if (cmd === "git") {
             const git = getGitInfo(this.config.workspace);

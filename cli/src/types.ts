@@ -48,6 +48,8 @@ export interface HarnessConfig {
   coreBinaryPath?: string;   // Path to compiled harness-core executable
   dryRun?: boolean;          // Dry-run simulation mode without persisting file modifications
   readOnly?: boolean;        // Reject all mutating tool executions and commands
+  fallbackEndpoints?: string[]; // Failover endpoint URLs if primary endpoint is unavailable
+  contextLimit?: number;     // Maximum model context window token limit (default: 32768)
 }
 
 export interface ExecutionResult {

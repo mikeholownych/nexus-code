@@ -14,6 +14,9 @@ import { extractCompilerDiagnostics, formatDiagnosticHints } from "../src/diagno
 import { generateConventionalCommit } from "../src/git.js";
 import { AutonomousAgent } from "../src/agent.js";
 import { SecurityManager } from "../src/security.js";
+import { countTokens, calculateContextBudget, renderTokenGauge } from "../src/tokens.js";
+import { selectRelevantFewShots } from "../src/fewshots.js";
+import { LocalLlmClient } from "../src/client.js";
 
 describe("Nexus Code Test Suite", () => {
   test("HARNESS_TOOLS definitions include all parity tools", () => {
@@ -408,6 +411,169 @@ error[E0308]: mismatched types
       bridge.shutdown();
       fs.rmSync(tmpDir, { recursive: true, force: true });
     }
+  });
+
+  test("BPE Token Accounting accurately counts subwords and computes budget", () => {
+    const text = "function calculateTotal(items: Item[]): number {\n  return items.reduce((a, b) => a + b.price, 0);\n}";
+    const tokens = countTokens(text);
+    assert.ok(tokens > 15 && tokens < 40, `Unexpected token count: ${tokens}`);
+
+    const messages = [
+      { role: "system" as const, content: "You are an assistant." },
+      { role: "user" as const, content: "Fix the bug in utils.ts" },
+      { role: "assistant" as const, content: "<thought>Let's check the code.</thought>" },
+      { role: "tool" as const, name: "read_file", content: text },
+    ];
+    const budget = calculateContextBudget(messages, HARNESS_TOOLS, 32768);
+    assert.ok(budget.systemPromptTokens > 0);
+    assert.ok(budget.userTokens > 0);
+    assert.ok(budget.assistantTokens > 0);
+    assert.ok(budget.toolOutputTokens > 0);
+    assert.ok(budget.toolsDefinitionTokens > 100);
+    assert.strictEqual(budget.contextLimit, 32768);
+
+    const gauge = renderTokenGauge(budget);
+    assert.ok(gauge.includes("Context Window & Token Accounting Gauge"));
+    assert.ok(gauge.includes("Tool Definitions"));
+    assert.ok(gauge.includes("Tool Output Payloads"));
+  });
+
+  test("LocalLlmClient executes automatic failover when primary endpoint fails", async () => {
+    // 1. Primary server that always returns 503 Service Unavailable
+    const primaryServer = http.createServer((req, res) => {
+      res.writeHead(503, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: "GPU VRAM Out of Memory" }));
+    });
+    await new Promise<void>((resolve) => primaryServer.listen(0, "127.0.0.1", () => resolve()));
+    const primaryPort = (primaryServer.address() as any).port;
+
+    // 2. Backup server that succeeds
+    const backupServer = http.createServer((req, res) => {
+      if (req.url?.includes("/chat/completions")) {
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(
+          JSON.stringify({
+            id: "chat_backup_123",
+            choices: [
+              {
+                index: 0,
+                message: { role: "assistant", content: "Response from backup server!" },
+                finish_reason: "stop",
+              },
+            ],
+          })
+        );
+      } else if (req.url?.includes("/models")) {
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ data: [{ id: "backup-model" }] }));
+      }
+    });
+    await new Promise<void>((resolve) => backupServer.listen(0, "127.0.0.1", () => resolve()));
+    const backupPort = (backupServer.address() as any).port;
+
+    try {
+      const client = new LocalLlmClient({
+        endpoint: `http://127.0.0.1:${primaryPort}/v1`,
+        fallbackEndpoints: [`http://127.0.0.1:${backupPort}/v1`],
+        model: "test-model",
+        workspace: process.cwd(),
+        maxSteps: 5,
+        shell: "bash",
+        temperature: 0.1,
+      });
+
+      // Failover in chatCompletion
+      const reply = await client.chatCompletion([{ role: "user", content: "Ping" }], []);
+      assert.strictEqual(reply.content, "Response from backup server!");
+      assert.ok(client.getActiveEndpoint().includes(String(backupPort)));
+
+      // Failover in listModels
+      const models = await client.listModels();
+      assert.deepStrictEqual(models, ["backup-model"]);
+    } finally {
+      primaryServer.close();
+      backupServer.close();
+    }
+  });
+
+  test("AutonomousAgent context compaction distills discarded history into structured memory", async () => {
+    const agent = new AutonomousAgent({
+      endpoint: "http://localhost:1234/v1",
+      model: "test-model",
+      workspace: process.cwd(),
+      maxSteps: 10,
+      shell: "bash",
+    });
+
+    try {
+      // Simulate an extended 8-message conversation with edits, reads, and commands
+      const history = [
+        { role: "system" as const, content: "System Prompt" },
+        { role: "user" as const, content: "Refactor database access" },
+        {
+          role: "assistant" as const,
+          content: "<thought>Identified connection pool bottleneck in db.ts</thought>",
+          tool_calls: [
+            {
+              id: "c1",
+              type: "function" as const,
+              function: { name: "read_file", arguments: JSON.stringify({ path: "src/db.ts" }) },
+            },
+          ],
+        },
+        { role: "tool" as const, name: "read_file", tool_call_id: "c1", content: "file content" },
+        {
+          role: "assistant" as const,
+          content: "Now patching db.ts connection logic",
+          tool_calls: [
+            {
+              id: "c2",
+              type: "function" as const,
+              function: { name: "edit_file", arguments: JSON.stringify({ path: "src/db.ts", target_content: "a", replacement_content: "b" }) },
+            },
+            {
+              id: "c3",
+              type: "function" as const,
+              function: { name: "run_command", arguments: JSON.stringify({ command: "cargo test" }) },
+            },
+          ],
+        },
+        { role: "tool" as const, name: "edit_file", tool_call_id: "c2", content: "success" },
+        { role: "tool" as const, name: "run_command", tool_call_id: "c3", content: "test passed" },
+        { role: "user" as const, content: "Next step please" },
+        { role: "assistant" as const, content: "Ready to proceed" },
+      ];
+
+      agent.setMessages(history);
+      assert.strictEqual(agent.getHistoryCount(), 9);
+
+      const report = await agent.compactConversation(false);
+      assert.ok(report.includes("Compacted context"));
+      assert.strictEqual(agent.getHistoryCount(), 6); // system + summary + last 4
+
+      const summaryMsg = agent.getMessages()[1];
+      assert.strictEqual(summaryMsg.role, "system");
+      assert.ok(summaryMsg.content?.includes("Structured Context Memory"));
+      assert.ok(summaryMsg.content?.includes("src/db.ts"), "Missing touched file path in summary");
+      assert.ok(summaryMsg.content?.includes("cargo test"), "Missing command in summary");
+      assert.ok(summaryMsg.content?.includes("connection pool bottleneck"), "Missing key decision in summary");
+    } finally {
+      agent.shutdown();
+    }
+  });
+
+  test("selectRelevantFewShots injects task-specific exemplars", () => {
+    const editShot = selectRelevantFewShots("Please edit and refactor the calc function to fix bug");
+    assert.ok(editShot.includes("edit_file"));
+    assert.ok(editShot.includes("target_content"));
+
+    const testShot = selectRelevantFewShots("We have failing compiler errors and diagnostic cargo test");
+    assert.ok(testShot.includes("run_command"));
+    assert.ok(testShot.includes("npm test") || testShot.includes("cargo test") || testShot.includes("FAIL"));
+
+    const planShot = selectRelevantFewShots("Formulate a multi-step architecture plan for migration phases");
+    assert.ok(planShot.includes("update_plan"));
+    assert.ok(planShot.includes("phases"));
   });
 });
 
