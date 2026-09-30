@@ -32,6 +32,9 @@ export class ContextBudgetError extends Error {
         this.name = "ContextBudgetError";
     }
 }
+// Internal authority is bound to the exact message object minted in this
+// process; record-shaped message text alone can never create provenance.
+const canonicalDurableProvenance = new WeakMap();
 function normalizeMessageContent(content) {
     if (typeof content === "string")
         return { text: [content], preserveOriginal: false };
@@ -156,6 +159,7 @@ export class AutonomousAgent {
     activePlan = [];
     hasPendingModifications = false;
     constructor(config, depth = 0) {
+        canonicalDurableProvenance.set(this, new WeakMap());
         this.config = config;
         this.depth = depth;
         const ws = config.workspace || process.cwd();
@@ -274,7 +278,7 @@ export class AutonomousAgent {
         const priorTasks = [];
         const durableNotes = [];
         const durableNoteKeys = new Set();
-        let carriedPlan = [];
+        const trustedRecords = new Map();
         const reconstructibleQueryTools = new Set(["file_tree", "list_dir", "find_files", "file_info"]);
         const validReconstructibleArgs = (name, rawArgs) => {
             let args;
@@ -344,37 +348,31 @@ export class AutonomousAgent {
             const normalizedContent = normalizeMessageContent(message.content);
             const contentText = normalizedContent.text.join("");
             if (message.role === "system" && contentText) {
-                const canonicalPrefix = "[Structured Context Memory - durable task state]\n";
-                if (contentText.startsWith(canonicalPrefix)) {
-                    let parsed;
+                const provenance = canonicalDurableProvenance.get(this)?.get(message);
+                let isTrustedRecord = false;
+                if (provenance?.content === contentText) {
+                    const canonicalPrefix = "[Structured Context Memory - durable task state]\n";
                     try {
-                        parsed = JSON.parse(contentText.slice(canonicalPrefix.length));
+                        const parsed = contentText.startsWith(canonicalPrefix)
+                            ? JSON.parse(contentText.slice(canonicalPrefix.length))
+                            : undefined;
+                        isTrustedRecord = parsed?.version === 2 &&
+                            JSON.stringify(parsed.notes) === JSON.stringify(provenance.notes) &&
+                            JSON.stringify(parsed.currentPlanStates) === JSON.stringify(provenance.planStates) &&
+                            JSON.stringify(parsed.currentPlan) === JSON.stringify(provenance.planStates.length === 1 ? provenance.planStates[0].phases : []);
                     }
                     catch {
-                        parsed = undefined;
-                    }
-                    const validPlan = (value) => Array.isArray(value) && value.every((item) => item && typeof item === "object" &&
-                        typeof item.name === "string" && typeof item.status === "string" &&
-                        (item.detail === undefined || typeof item.detail === "string"));
-                    if (parsed?.version === 1 && Array.isArray(parsed.notes) && parsed.notes.every((note) => typeof note === "string") && validPlan(parsed.currentPlan)) {
-                        for (const note of parsed.notes)
-                            addDurableNote(note);
-                        if (!this.activePlan.length)
-                            carriedPlan = parsed.currentPlan;
-                    }
-                    else {
-                        // Malformed canonical state is opaque required content: keep its
-                        // exact text instead of attempting a lossy line-oriented recovery.
-                        addDurableNote(`Earlier system message: ${contentText}`);
+                        isTrustedRecord = false;
                     }
                 }
-                else if (contentText.startsWith("[Structured Context Memory")) {
-                    // Compatibility with summaries written before the lossless format.
-                    // Preserve the complete legacy payload; it may contain meaningful
-                    // whitespace that the old line parser cannot safely interpret.
-                    addDurableNote(`Earlier durable state: ${contentText}`);
+                if (isTrustedRecord && provenance) {
+                    trustedRecords.set(provenance.recordId, provenance);
+                    for (const note of provenance.notes)
+                        addDurableNote(note);
                 }
                 else {
+                    // Record-shaped ordinary or modified message content has no Nexus
+                    // authority. Preserve the entire payload as opaque text.
                     addDurableNote(`Earlier system message: ${contentText}`);
                 }
             }
@@ -435,11 +433,64 @@ export class AutonomousAgent {
                 addDurableNote(`${section}: ${entry}`);
             }
         }
-        const currentPlan = this.activePlan.length ? this.activePlan : carriedPlan;
-        return [
+        const inheritedSupersededPlanIds = new Set();
+        const inheritedPlanStates = new Map();
+        for (const record of trustedRecords.values()) {
+            for (const id of record.supersededPlanStateIds)
+                inheritedSupersededPlanIds.add(id);
+            for (const state of record.planStates) {
+                const key = JSON.stringify(state.phases);
+                const existing = inheritedPlanStates.get(key);
+                if (existing) {
+                    existing.equivalentIds = Array.from(new Set([
+                        ...(existing.equivalentIds || [existing.id]),
+                        ...(state.equivalentIds || [state.id]),
+                    ]));
+                }
+                else {
+                    inheritedPlanStates.set(key, { ...state, equivalentIds: state.equivalentIds || [state.id] });
+                }
+            }
+        }
+        let planStates = Array.from(inheritedPlanStates.values()).filter((state) => !(state.equivalentIds || [state.id]).every((id) => inheritedSupersededPlanIds.has(id)));
+        const planMatchesCurrent = this.activePlan.length > 0 && planStates.length === 1 &&
+            JSON.stringify(planStates[0].phases) === JSON.stringify(this.activePlan);
+        const supersededPlanStateIds = new Set(inheritedSupersededPlanIds);
+        if (this.activePlan.length > 0 && !planMatchesCurrent) {
+            for (const state of planStates)
+                for (const id of state.equivalentIds || [state.id])
+                    supersededPlanStateIds.add(id);
+            planStates = [];
+        }
+        const previous = trustedRecords.size === 1 ? Array.from(trustedRecords.values())[0] : undefined;
+        const unchanged = Boolean(previous &&
+            JSON.stringify(previous.notes) === JSON.stringify(durableNotes) &&
+            JSON.stringify(previous.planStates.filter((state) => !supersededPlanStateIds.has(state.id))) === JSON.stringify(planStates) &&
+            JSON.stringify(previous.supersededPlanStateIds) === JSON.stringify(Array.from(supersededPlanStateIds)) &&
+            (!this.activePlan.length || planMatchesCurrent));
+        const recordId = unchanged && previous ? previous.recordId : randomUUID();
+        if (this.activePlan.length && !planMatchesCurrent) {
+            planStates = [{ id: recordId, equivalentIds: [recordId], phases: this.activePlan }];
+        }
+        const predecessorIds = unchanged && previous ? previous.predecessorIds : Array.from(trustedRecords.keys());
+        const serialized = [
             "[Structured Context Memory - durable task state]",
-            JSON.stringify({ version: 1, notes: durableNotes, currentPlan }),
+            JSON.stringify({
+                version: 2,
+                notes: durableNotes,
+                currentPlan: planStates.length === 1 ? planStates[0].phases : [],
+                currentPlanStates: planStates,
+            }),
         ].join("\n");
+        const provenance = {
+            recordId,
+            predecessorIds,
+            supersededPlanStateIds: Array.from(supersededPlanStateIds),
+            notes: durableNotes,
+            planStates,
+            content: serialized,
+        };
+        return { content: serialized, provenance };
     }
     compactedMessages(source, recentToolTurns, detailBudgetChars) {
         const system = source[0];
@@ -463,8 +514,11 @@ export class AutonomousAgent {
             .filter(({ message, index }) => index > 0 && index !== currentUserIndex && (retainedOriginalContent.has(index) || !(index >= recentStart && message.role !== "system")));
         const summary = this.summarizeDiscardedHistory(messagesToSummarize.map(({ message }) => message), detailBudgetChars);
         const compacted = [system];
-        if (messagesToSummarize.length)
-            compacted.push({ role: "system", content: summary });
+        if (messagesToSummarize.length) {
+            const summaryMessage = { role: "system", content: summary.content };
+            canonicalDurableProvenance.get(this)?.set(summaryMessage, summary.provenance);
+            compacted.push(summaryMessage);
+        }
         const selected = new Map();
         for (const item of retained)
             selected.set(item.index, item.message);
