@@ -164,6 +164,7 @@ export class InteractiveRepl {
         console.log(`  ${pc.bold(pc.yellow("/diff"))}               Show colored git diff of uncommitted changes`);
         console.log(`  ${pc.bold(pc.yellow("/stage [reset]"))}       Inspect and stage individual diff hunks`);
         console.log(`  ${pc.bold(pc.yellow("/worktree [status|merge|discard]"))} Manage isolated ephemeral git worktrees`);
+        console.log(`  ${pc.bold(pc.yellow("/tdd <issue>"))}         Execute strict RED-GREEN-REFACTOR TDD cycle`);
         console.log(`  ${pc.bold(pc.yellow("/git"))}                Show current git status and modified files`);
         console.log(`  ${pc.bold(pc.yellow("/sessions"))}           List past saved sessions`);
         console.log(`  ${pc.bold(pc.yellow("/save [name]"))}        Save current session snapshot to ~/.nexus/sessions/`);
@@ -604,6 +605,23 @@ export class InteractiveRepl {
                             }
                             console.log();
                         }
+                        continue;
+                    }
+                    else if (cmd === "tdd") {
+                        if (!arg.trim()) {
+                            console.log(pc.yellow("Please provide an issue description: /tdd <issue description or reproduction target>\n"));
+                            continue;
+                        }
+                        console.log(pc.bold(pc.cyan(`\n🧪 Launching Autonomous TDD Session: ${arg}`)));
+                        const synth = this.agent.getSynthesizer();
+                        const res = await synth.runAutonomousTdd(this.agent, arg);
+                        if (res.success) {
+                            console.log(pc.bold(pc.green(`\n✔ TDD Cycle Completed Successfully! (RED -> GREEN -> REFACTOR)`)));
+                        }
+                        else {
+                            console.log(pc.bold(pc.yellow(`\n⚠️ TDD Cycle Ended at Phase: ${res.finalPhase} - ${res.summary}`)));
+                        }
+                        console.log();
                         continue;
                     }
                     else if (cmd === "sessions") {

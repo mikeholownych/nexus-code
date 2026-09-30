@@ -16,6 +16,8 @@ import { HarnessConfig } from "./types.js";
 import { FlightPlayer } from "./flight.js";
 import { WorktreeManager } from "./worktree.js";
 import { HunkStager } from "./stager.js";
+import { BenchmarkEvaluator } from "./evaluator.js";
+import { SynthesizerEngine } from "./synthesizer.js";
 import pc from "picocolors";
 
 import * as os from "node:os";
@@ -59,6 +61,7 @@ function buildConfig(options: any): HarnessConfig {
   const plannerEndpoint = options.plannerEndpoint || process.env.PLANNER_LLM_ENDPOINT;
   const coderModel = options.coderModel || process.env.CODER_LLM_MODEL;
   const coderEndpoint = options.coderEndpoint || process.env.CODER_LLM_ENDPOINT;
+  const tdd = Boolean(options.tdd);
   return {
     endpoint,
     model,
@@ -78,6 +81,7 @@ function buildConfig(options: any): HarnessConfig {
     plannerEndpoint,
     coderModel,
     coderEndpoint,
+    tdd,
   };
 }
 
@@ -142,6 +146,7 @@ program
   .option("--planner-endpoint <url>", "Dedicated inference endpoint for planner model")
   .option("--coder-model <name>", "High-throughput model for surgical code implementation (Qwen 2.5 Coder)")
   .option("--coder-endpoint <url>", "Dedicated inference endpoint for coder model")
+  .option("--tdd", "Enforce strict RED-GREEN-REFACTOR Test-Driven Development protocol")
   .action(async (promptParts: string[], options: any) => {
     const prompt = promptParts.join(" ");
     const config = buildConfig(options);
@@ -548,6 +553,34 @@ program
       });
       console.log();
     }
+  });
+
+program
+  .command("eval <dataset>")
+  .description("Evaluate SWE-bench / benchmark dataset against Nexus Code harness")
+  .option("-e, --endpoint <url>", "Local LLM endpoint (default: $LOCAL_LLM_ENDPOINT)")
+  .option("-m, --model <name>", "Model name identifier (default: active model in LM Studio/vLLM)")
+  .option("-w, --workspace <path>", "Workspace directory (default: current directory)")
+  .option("-s, --max-steps <number>", "Maximum steps per task instance", "30")
+  .option("-t, --temperature <number>", "Model temperature", "0.2")
+  .option("--output <path>", "Output file path for Markdown scorecard", "eval-scorecard.md")
+  .option("--limit <number>", "Limit number of benchmark instances to evaluate")
+  .action(async (datasetPath: string, options: any) => {
+    const config = buildConfig(options);
+    console.log(pc.bold(pc.cyan(`\n📊 Loading evaluation dataset: ${datasetPath}`)));
+    let instances = BenchmarkEvaluator.loadDataset(datasetPath);
+    if (options.limit) {
+      const limit = parseInt(options.limit, 10);
+      instances = instances.slice(0, limit);
+    }
+    console.log(pc.dim(`Loaded ${instances.length} benchmark task instance(s).`));
+    const evaluator = new BenchmarkEvaluator(config.workspace);
+    const summary = await evaluator.runBenchmark(instances, config);
+    const scorecard = BenchmarkEvaluator.renderScorecard(summary);
+    console.log("\n" + scorecard);
+    const outputPath = path.resolve(options.output || "eval-scorecard.md");
+    fs.writeFileSync(outputPath, scorecard, "utf-8");
+    console.log(pc.green(`✔ Scorecard saved to: ${outputPath}\n`));
   });
 
 if (process.argv.length <= 2) {

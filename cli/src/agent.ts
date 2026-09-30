@@ -19,6 +19,7 @@ import { selectRelevantFewShots } from "./fewshots.js";
 import { FlightRecorder } from "./flight.js";
 import { WorktreeManager } from "./worktree.js";
 import { HybridSearchEngine } from "./embeddings.js";
+import { SynthesizerEngine } from "./synthesizer.js";
 import pc from "picocolors";
 
 export type ConfirmHandler = (toolName: string, args: Record<string, any>) => Promise<boolean>;
@@ -214,6 +215,7 @@ export class AutonomousAgent {
   private activeTier: "planner" | "coder" = "planner";
   private tierStats = { plannerTurns: 0, coderTurns: 0 };
   private hybridSearch: HybridSearchEngine;
+  private synthesizer: SynthesizerEngine;
 
   constructor(config: HarnessConfig, depth: number = 0) {
     canonicalDurableProvenance.set(this, new WeakMap());
@@ -242,6 +244,7 @@ export class AutonomousAgent {
       this.coderClient = this.client;
     }
     this.hybridSearch = new HybridSearchEngine(ws, this.client);
+    this.synthesizer = new SynthesizerEngine(ws);
     this.bridge = new RustCoreBridge(
       ws,
       config.shell,
@@ -334,6 +337,10 @@ export class AutonomousAgent {
     return this.hybridSearch;
   }
 
+  public getSynthesizer(): SynthesizerEngine {
+    return this.synthesizer;
+  }
+
   public getCognitiveTier(): "planner" | "coder" {
     return this.activeTier;
   }
@@ -424,6 +431,7 @@ export class AutonomousAgent {
     this.mcpManager = new McpClientManager(newWorkspace);
     this.pluginManager = new PluginManager(newWorkspace);
     this.hybridSearch = new HybridSearchEngine(newWorkspace, this.client);
+    this.synthesizer = new SynthesizerEngine(newWorkspace);
     this.extensibilityInitialized = false;
     this.resetConversation();
   }
@@ -792,6 +800,12 @@ export class AutonomousAgent {
     // Invariant prompt prefix optimization for local AI:
     // Fixed canonical few-shots ensure byte-exact prefix caching across turns (vLLM / llama.cpp / Ollama)
     const fewShotSection = `\n${selectRelevantFewShots(this.config.workspace)}\n`;
+    const tddSection = this.config.tdd
+      ? `\n### Test-Driven Development (RED-GREEN-REFACTOR) Protocol Enforced:
+1. PHASE 1 (RED): Before modifying any production code, author a reproduction test that asserts the desired behavior and verify that it FAILS.
+2. PHASE 2 (GREEN): Make surgical edits to production files until the reproduction test PASSES.
+3. PHASE 3 (REFACTOR): Run the complete test suite to ensure zero regressions before completing the task.\n`
+      : "";
 
     return `You are Nexus Code, an autonomous AI software engineering agent running in a Linux shell environment.
 You solve coding problems, build features, fix bugs, and refactor codebases by iteratively exploring, reading, editing, and verifying files.
@@ -808,7 +822,7 @@ ${rulesSection}${skillsSection}
 5. VERIFICATION: After making code changes, use \`run_command\` with bash/zsh commands to run tests, builds, or linting (e.g. \`cargo check\`, \`cargo test\`, \`npm test\`, \`pytest\`).
 6. SELF-CORRECTION: If a command or tool returns an error, analyze the error message, identify the root cause, and fix it.
 7. AUTONOMOUS COMPLETION: Keep executing tools until the entire task is thoroughly resolved. When everything is verified and done, invoke \`task_completed\` with a detailed summary.
-${fewShotSection}
+${fewShotSection}${tddSection}
 Always explain your reasoning before or alongside your tool calls.`;
   }
 
@@ -1467,7 +1481,16 @@ Always explain your reasoning before or alongside your tool calls.`;
 
     this.resetConversation();
     try {
-      await this.runTurn(taskPrompt);
+      if (this.config.tdd) {
+        this.config.tdd = false;
+        try {
+          await this.synthesizer.runAutonomousTdd(this, taskPrompt);
+        } finally {
+          this.config.tdd = true;
+        }
+      } else {
+        await this.runTurn(taskPrompt);
+      }
     } finally {
       if (this.activeWorktree && this.config.worktree) {
         if (!this.hasPendingModifications) {

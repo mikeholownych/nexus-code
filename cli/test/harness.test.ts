@@ -30,6 +30,8 @@ import { WorktreeManager } from "../src/worktree.js";
 import { FlightRecorder, FlightPlayer } from "../src/flight.js";
 import { parseDiffHunks, buildSingleHunkPatch, HunkStager } from "../src/stager.js";
 import { BM25Index, VectorIndex, cosineSimilarity, reciprocalRankFusion, HybridSearchEngine } from "../src/embeddings.js";
+import { BenchmarkEvaluator } from "../src/evaluator.js";
+import { SynthesizerEngine } from "../src/synthesizer.js";
 
 describe("Nexus Code Test Suite", () => {
   test("HARNESS_TOOLS definitions include all parity tools", () => {
@@ -2447,6 +2449,125 @@ export class CacheService {
       assert.strictEqual(stats.coderTurns, 1);
     } finally {
       agent.shutdown();
+    }
+  });
+
+  test("BenchmarkEvaluator loads SWE-bench datasets and renders markdown scorecards", () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-eval-test-"));
+    try {
+      // 1. Test JSON Array dataset
+      const jsonPath = path.join(tempDir, "dataset.json");
+      const sampleInstances = [
+        {
+          instance_id: "django__django-11099",
+          repo: "django/django",
+          problem_statement: "ASCIIUsernameValidator allows trailing newline in username validator.",
+          test_patch: "diff --git a/tests/test_validators.py b/tests/test_validators.py...",
+        },
+      ];
+      fs.writeFileSync(jsonPath, JSON.stringify(sampleInstances), "utf-8");
+
+      const loadedJson = BenchmarkEvaluator.loadDataset(jsonPath);
+      assert.strictEqual(loadedJson.length, 1);
+      assert.strictEqual(loadedJson[0].instance_id, "django__django-11099");
+      assert.strictEqual(loadedJson[0].repo, "django/django");
+
+      // 2. Test JSONL dataset
+      const jsonlPath = path.join(tempDir, "dataset.jsonl");
+      const jsonlContent = [
+        JSON.stringify({ instance_id: "sympy__sympy-13480", repo: "sympy/sympy", problem_statement: "coth(log(tan(x))) evaluation bug" }),
+        JSON.stringify({ instance_id: "pytest-dev__pytest-5221", repo: "pytest-dev/pytest", problem_statement: "Fixture scope display bug" }),
+      ].join("\n");
+      fs.writeFileSync(jsonlPath, jsonlContent, "utf-8");
+
+      const loadedJsonl = BenchmarkEvaluator.loadDataset(jsonlPath);
+      assert.strictEqual(loadedJsonl.length, 2);
+      assert.strictEqual(loadedJsonl[1].instance_id, "pytest-dev__pytest-5221");
+
+      // 3. Test renderScorecard
+      const summary = {
+        benchmarkName: "SWE-bench Lite",
+        timestamp: "2026-09-30T12:00:00Z",
+        totalInstances: 2,
+        resolvedCount: 1,
+        unresolvedCount: 1,
+        errorCount: 0,
+        passRatePercentage: 50.0,
+        totalTokensConsumed: 125000,
+        avgDurationSeconds: 42.5,
+        results: [
+          {
+            instanceId: "django__django-11099",
+            repo: "django/django",
+            resolved: true,
+            status: "RESOLVED" as const,
+            durationMs: 35000,
+            tokensConsumed: { prompt: 50000, completion: 10000, total: 60000 },
+            stepsTaken: 8,
+          },
+          {
+            instanceId: "sympy__sympy-13480",
+            repo: "sympy/sympy",
+            resolved: false,
+            status: "UNRESOLVED" as const,
+            durationMs: 50000,
+            tokensConsumed: { prompt: 55000, completion: 10000, total: 65000 },
+            stepsTaken: 12,
+          },
+        ],
+      };
+
+      const scorecard = BenchmarkEvaluator.renderScorecard(summary);
+      assert.ok(scorecard.includes("# 🏆 SWE-bench Lite Evaluation Scorecard"));
+      assert.ok(scorecard.includes("Pass Rate @ 1**: **50%** (1/2)"));
+      assert.ok(scorecard.includes("django__django-11099"));
+      assert.ok(scorecard.includes("✅ RESOLVED"));
+      assert.ok(scorecard.includes("sympy__sympy-13480"));
+      assert.ok(scorecard.includes("❌ UNRESOLVED"));
+    } finally {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  test("SynthesizerEngine tracks RED-GREEN-REFACTOR protocol state and transitions", async () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-synth-test-"));
+    try {
+      const engine = new SynthesizerEngine(tempDir);
+      assert.strictEqual(engine.getCurrentPhase(), "IDLE");
+
+      // 1. Start TDD session
+      engine.startSession("Fix zero division error", "test_div");
+      assert.strictEqual(engine.getCurrentPhase(), "RED");
+      const state = engine.getState();
+      assert.strictEqual(state.currentPhase, "RED");
+      assert.strictEqual(state.issueDescription, "Fix zero division error");
+      assert.strictEqual(state.history.length, 1);
+      assert.strictEqual(state.history[0].phase, "RED");
+
+      // 2. Test RED phase verification:
+      // When a test does not exist or fails, verifyRedPhase recognizes failing test as reproduction confirmed
+      const redRes = await engine.verifyRedPhase("non_existent_or_failing_test");
+      assert.strictEqual(redRes.phase, "RED");
+      // Because non_existent_or_failing_test fails to execute, defect is reproduced
+      assert.strictEqual(redRes.success, true);
+      assert.strictEqual(engine.getCurrentPhase(), "GREEN");
+
+      // Verify history updated
+      const stateGreen = engine.getState();
+      assert.strictEqual(stateGreen.history.length, 2);
+      assert.strictEqual(stateGreen.history[1].status, "PASSED");
+
+      // 3. Test GREEN phase verification failure when test still fails
+      const greenFail = await engine.verifyGreenPhase("still_failing_test");
+      assert.strictEqual(greenFail.success, false);
+      assert.strictEqual(engine.getCurrentPhase(), "GREEN");
+
+      // 4. Test REFACTOR phase zero-regression verification
+      const refactorRes = await engine.verifyRefactorPhase();
+      assert.strictEqual(typeof refactorRes.success, "boolean");
+      assert.strictEqual(refactorRes.phase, "REFACTOR");
+    } finally {
+      fs.rmSync(tempDir, { recursive: true, force: true });
     }
   });
 });

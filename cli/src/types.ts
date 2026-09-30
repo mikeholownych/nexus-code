@@ -61,6 +61,7 @@ export interface HarnessConfig {
   coderModel?: string;       // Ultra-fast surgical implementation model (e.g. Qwen 2.5 Coder 32B @ 150 tok/s)
   coderEndpoint?: string;    // Dedicated endpoint for coder model
   coderApiKey?: string;      // API key for coder model
+  tdd?: boolean;             // Enforce strict RED-GREEN-REFACTOR protocol
 }
 
 export interface ExecutionResult {
