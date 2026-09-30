@@ -46,6 +46,8 @@ export interface HarnessConfig {
   workspace: string;         // Working directory for tools
   shell: string;             // Linux shell: "bash", "zsh", "sh" (default: "bash")
   coreBinaryPath?: string;   // Path to compiled harness-core executable
+  dryRun?: boolean;          // Dry-run simulation mode without persisting file modifications
+  readOnly?: boolean;        // Reject all mutating tool executions and commands
 }
 
 export interface ExecutionResult {

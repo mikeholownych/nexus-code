@@ -59,7 +59,7 @@ fn is_binary_file(path: &Path) -> io::Result<bool> {
 }
 
 pub fn read_file(args: ReadFileArgs, base_dir: &Path) -> Result<ReadFileResult, String> {
-    let target = base_dir.join(&args.path);
+    let target = resolve_safe_path(base_dir, &args.path)?;
     if !target.exists() {
         return Err(format!("File does not exist: {}", args.path));
     }
@@ -102,7 +102,7 @@ pub fn read_file(args: ReadFileArgs, base_dir: &Path) -> Result<ReadFileResult, 
 }
 
 pub fn write_file(args: WriteFileArgs, base_dir: &Path) -> Result<WriteFileResult, String> {
-    let target = base_dir.join(&args.path);
+    let target = resolve_safe_path(base_dir, &args.path)?;
 
     if target.exists() && !args.overwrite {
         return Err(format!(
@@ -217,7 +217,7 @@ fn fuzzy_find_and_replace(
 }
 
 pub fn edit_file(args: EditFileArgs, base_dir: &Path) -> Result<EditFileResult, String> {
-    let target = base_dir.join(&args.path);
+    let target = resolve_safe_path(base_dir, &args.path)?;
     if !target.exists() {
         return Err(format!("File does not exist: {}", args.path));
     }
@@ -290,7 +290,7 @@ pub struct DeleteFileResult {
 }
 
 pub fn delete_file(args: DeleteFileArgs, base_dir: &Path) -> Result<DeleteFileResult, String> {
-    let target = base_dir.join(&args.path);
+    let target = resolve_safe_path(base_dir, &args.path)?;
     if !target.exists() {
         return Err(format!("Path does not exist: {}", args.path));
     }
@@ -307,13 +307,13 @@ pub fn delete_file(args: DeleteFileArgs, base_dir: &Path) -> Result<DeleteFileRe
 
 pub fn resolve_safe_path(base_dir: &Path, rel_path: &str) -> Result<std::path::PathBuf, String> {
     let clean_rel = rel_path.trim();
+    let base_canon = base_dir.canonicalize().map_err(|e| format!("Invalid workspace directory: {e}"))?;
+
     if clean_rel.starts_with('/') {
         let path = std::path::PathBuf::from(clean_rel);
-        if let Ok(base_canon) = base_dir.canonicalize() {
-            if let Ok(path_canon) = path.canonicalize() {
-                if path_canon.starts_with(&base_canon) {
-                    return Ok(path_canon);
-                }
+        if let Ok(path_canon) = path.canonicalize() {
+            if path_canon.starts_with(&base_canon) {
+                return Ok(path_canon);
             }
         }
         return Err(format!("Security Violation: Path escapes workspace jail: {clean_rel}"));
@@ -335,13 +335,30 @@ pub fn resolve_safe_path(base_dir: &Path, rel_path: &str) -> Result<std::path::P
         }
     }
 
-    if let Ok(base_canon) = base_dir.canonicalize() {
-        if normalized.exists() {
-            if let Ok(norm_canon) = normalized.canonicalize() {
-                if !norm_canon.starts_with(&base_canon) {
-                    return Err(format!("Security Violation: Path escapes workspace jail: {rel_path}"));
-                }
+    // 1. If target exists or is a symlink, verify canonicalization stays under base_canon
+    if normalized.exists() || normalized.is_symlink() {
+        if let Ok(norm_canon) = normalized.canonicalize() {
+            if !norm_canon.starts_with(&base_canon) {
+                return Err(format!("Security Violation: Symlink/path escapes workspace jail: {rel_path}"));
             }
+        } else if normalized.is_symlink() {
+            return Err(format!("Security Violation: Broken or escaping symlink detected: {rel_path}"));
+        }
+    } else {
+        // 2. If target does not exist yet (e.g. creating new file), check all existing ancestors
+        let mut curr = normalized.as_path();
+        while let Some(parent) = curr.parent() {
+            if parent.exists() || parent.is_symlink() {
+                if let Ok(parent_canon) = parent.canonicalize() {
+                    if !parent_canon.starts_with(&base_canon) {
+                        return Err(format!("Security Violation: Parent directory symlink escapes workspace jail: {rel_path}"));
+                    }
+                } else if parent.is_symlink() {
+                    return Err(format!("Security Violation: Broken parent symlink detected: {rel_path}"));
+                }
+                break;
+            }
+            curr = parent;
         }
     }
 
@@ -693,6 +710,35 @@ mod tests {
 
         let escaping = resolve_safe_path(&temp_dir, "../../etc/passwd");
         assert!(escaping.is_err());
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn test_symlink_boundary_confinement() {
+        let root = std::env::temp_dir().join(format!("test_symlink_{}", std::process::id()));
+        let workspace = root.join("workspace");
+        let external = root.join("external");
+        fs::create_dir_all(&workspace).unwrap();
+        fs::create_dir_all(&external).unwrap();
+
+        let secret = external.join("secret.txt");
+        fs::write(&secret, "super_secret_key").unwrap();
+
+        // Symlink pointing to external file
+        let sym_file = workspace.join("sym_secret.txt");
+        let _ = std::os::unix::fs::symlink(&secret, &sym_file);
+
+        let res = resolve_safe_path(&workspace, "sym_secret.txt");
+        assert!(res.is_err(), "Expected escaping symlink to be rejected");
+
+        // Symlink pointing to external directory
+        let sym_dir = workspace.join("sym_ext_dir");
+        let _ = std::os::unix::fs::symlink(&external, &sym_dir);
+
+        let res_parent = resolve_safe_path(&workspace, "sym_ext_dir/new_file.txt");
+        assert!(res_parent.is_err(), "Expected escaping symlink parent to be rejected");
+
+        let _ = fs::remove_dir_all(&root);
     }
 
     #[test]

@@ -12,6 +12,7 @@ import { SkillManager } from "./skills.js";
 import { McpClientManager } from "./mcp.js";
 import { PluginManager } from "./plugins.js";
 import { extractCompilerDiagnostics, formatDiagnosticHints } from "./diagnostics.js";
+import { SecurityManager } from "./security.js";
 import pc from "picocolors";
 
 export type ConfirmHandler = (toolName: string, args: Record<string, any>) => Promise<boolean>;
@@ -77,6 +78,7 @@ export class AutonomousAgent {
   private skillManager: SkillManager;
   private mcpManager: McpClientManager;
   private pluginManager: PluginManager;
+  private securityManager: SecurityManager;
   private extensibilityInitialized: boolean = false;
   private activePlan: Array<{ name: string; status: string; detail?: string }> = [];
 
@@ -84,7 +86,14 @@ export class AutonomousAgent {
     this.config = config;
     this.depth = depth;
     this.client = new LocalLlmClient(config);
-    this.bridge = new RustCoreBridge(config.workspace, config.shell, config.coreBinaryPath);
+    this.bridge = new RustCoreBridge(
+      config.workspace,
+      config.shell,
+      config.coreBinaryPath,
+      config.dryRun,
+      config.readOnly
+    );
+    this.securityManager = new SecurityManager(config.workspace);
     this.ui = new TerminalUI();
     this.skillManager = new SkillManager(config.workspace);
     this.mcpManager = new McpClientManager(config.workspace);
@@ -113,6 +122,10 @@ export class AutonomousAgent {
 
   public getPluginManager(): PluginManager {
     return this.pluginManager;
+  }
+
+  public getSecurityManager(): SecurityManager {
+    return this.securityManager;
   }
 
   public shutdown(): void {

@@ -13,6 +13,7 @@ import { SkillManager } from "../src/skills.js";
 import { extractCompilerDiagnostics, formatDiagnosticHints } from "../src/diagnostics.js";
 import { generateConventionalCommit } from "../src/git.js";
 import { AutonomousAgent } from "../src/agent.js";
+import { SecurityManager } from "../src/security.js";
 
 describe("Nexus Code Test Suite", () => {
   test("HARNESS_TOOLS definitions include all parity tools", () => {
@@ -309,6 +310,103 @@ error[E0308]: mismatched types
     } finally {
       agent.shutdown();
       mockServer.close();
+    }
+  });
+
+  test("SecurityManager enforces default blocked commands and protected paths", () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "nexus_sec_test_"));
+    try {
+      const sm = new SecurityManager(tmpDir);
+      assert.strictEqual(sm.isCommandBlocked("rm -rf /").blocked, true);
+      assert.strictEqual(sm.isCommandBlocked("rm -rf /*").blocked, true);
+      assert.strictEqual(sm.isCommandBlocked("shutdown -h now").blocked, true);
+      assert.strictEqual(sm.isCommandBlocked("git status").blocked, false);
+
+      assert.strictEqual(sm.isPathProtected(".git").protected, true);
+      assert.strictEqual(sm.isPathProtected(".git/config").protected, true);
+      assert.strictEqual(sm.isPathProtected(".env").protected, true);
+      assert.strictEqual(sm.isPathProtected("src/index.ts").protected, false);
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  test("SecurityManager loads custom .nexus-security.json policy", () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "nexus_sec_custom_"));
+    try {
+      const customPolicy = {
+        blockedCommands: ["curl evil.com", "npm publish"],
+        protectedPaths: ["config/secrets.json", "private"],
+        allowedDomains: ["api.github.com", "crates.io"],
+      };
+      fs.writeFileSync(path.join(tmpDir, ".nexus-security.json"), JSON.stringify(customPolicy));
+
+      const sm = new SecurityManager(tmpDir);
+      assert.strictEqual(sm.isCommandBlocked("curl evil.com").blocked, true);
+      assert.strictEqual(sm.isCommandBlocked("npm publish").blocked, true);
+      assert.strictEqual(sm.isPathProtected("config/secrets.json").protected, true);
+      assert.strictEqual(sm.isPathProtected("private/key.pem").protected, true);
+      assert.deepStrictEqual(sm.getPolicy().allowedDomains, ["api.github.com", "crates.io"]);
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  test("RustCoreBridge dry-run mode intercepts mutations without modifying disk", async () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "nexus_dryrun_test_"));
+    const { RustCoreBridge } = await import("../src/tools.js");
+    const bridge = new RustCoreBridge(tmpDir, "bash", undefined, true, false);
+    try {
+      // 1. write_file simulation
+      const resWrite = await bridge.executeTool("write_file", {
+        path: "simulated.txt",
+        content: "Hello Dry Run!",
+      });
+      assert.strictEqual(resWrite.success, true);
+      const parsedWrite = JSON.parse(resWrite.output);
+      assert.strictEqual(parsedWrite.dry_run, true);
+      assert.strictEqual(fs.existsSync(path.join(tmpDir, "simulated.txt")), false);
+
+      // 2. mutating command simulation
+      const resCmd = await bridge.executeTool("run_command", {
+        command: "touch dummy_file.txt",
+      });
+      assert.strictEqual(resCmd.success, true);
+      assert.ok(resCmd.output.includes("DRY-RUN SIMULATION"));
+      assert.strictEqual(fs.existsSync(path.join(tmpDir, "dummy_file.txt")), false);
+
+      // 3. safe command allowed in dry-run
+      const resSafe = await bridge.executeTool("run_command", {
+        command: "echo 'safe probe'",
+      });
+      assert.strictEqual(resSafe.success, true);
+      assert.ok(resSafe.output.includes("safe probe"));
+    } finally {
+      bridge.shutdown();
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  test("RustCoreBridge read-only mode blocks file edits and non-safe commands", async () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "nexus_readonly_test_"));
+    const { RustCoreBridge } = await import("../src/tools.js");
+    const bridge = new RustCoreBridge(tmpDir, "bash", undefined, false, true);
+    try {
+      const resWrite = await bridge.executeTool("write_file", {
+        path: "blocked.txt",
+        content: "Should fail",
+      });
+      assert.strictEqual(resWrite.success, false);
+      assert.ok(resWrite.error?.includes("Read-only mode violation"));
+
+      const resCmd = await bridge.executeTool("run_command", {
+        command: "rm -f something.txt",
+      });
+      assert.strictEqual(resCmd.success, false);
+      assert.ok(resCmd.error?.includes("Read-only mode violation"));
+    } finally {
+      bridge.shutdown();
+      fs.rmSync(tmpDir, { recursive: true, force: true });
     }
   });
 });

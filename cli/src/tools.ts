@@ -3,6 +3,10 @@ import * as path from "node:path";
 import * as fs from "node:fs";
 import { fileURLToPath } from "node:url";
 import { ToolDefinition, ExecutionResult } from "./types.js";
+import { SecurityManager } from "./security.js";
+
+export const SAFE_READONLY_COMMAND_REGEX =
+  /^(git\s+(status|diff|log|branch|show|rev-parse)|ls|dir|cat|head|tail|grep|find|which|echo|pwd|cargo\s+(check|clippy)|npm\s+(test|run\s+lint)|pytest)/i;
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -490,17 +494,41 @@ export class RustCoreBridge {
     timeoutTimer: NodeJS.Timeout;
   }> = new Map();
   private rpcBuffer: string = "";
+  private dryRun: boolean = false;
+  private readOnly: boolean = false;
+  private securityManager: SecurityManager;
 
-  constructor(workspace: string, defaultShell: string = "bash", customBinaryPath?: string) {
+  constructor(
+    workspace: string,
+    defaultShell: string = "bash",
+    customBinaryPath?: string,
+    dryRun: boolean = false,
+    readOnly: boolean = false
+  ) {
     this.workspace = path.resolve(workspace);
     this.defaultShell = defaultShell;
     this.cargoManifestPath = path.resolve(__dirname, "../../core/Cargo.toml");
+    this.dryRun = dryRun;
+    this.readOnly = readOnly;
+    this.securityManager = new SecurityManager(this.workspace);
 
     if (customBinaryPath && fs.existsSync(customBinaryPath)) {
       this.coreBinaryPath = customBinaryPath;
     } else {
       this.resolveBinary();
     }
+  }
+
+  public getSecurityManager(): SecurityManager {
+    return this.securityManager;
+  }
+
+  public setDryRun(enabled: boolean): void {
+    this.dryRun = enabled;
+  }
+
+  public setReadOnly(enabled: boolean): void {
+    this.readOnly = enabled;
   }
 
   private resolveBinary(): void {
@@ -740,6 +768,110 @@ export class RustCoreBridge {
    * Execute tool using high-performance persistent JSON-RPC daemon, with automatic spawnSync fallback
    */
   async executeTool(toolName: string, args: Record<string, any>): Promise<ExecutionResult> {
+    // 1. Security policy verification
+    if (toolName === "run_command") {
+      const cmd = (args.command || "").trim();
+      const check = this.securityManager.isCommandBlocked(cmd);
+      if (check.blocked) {
+        return {
+          success: false,
+          output: "",
+          error: check.reason,
+        };
+      }
+    }
+
+    if (["write_file", "edit_file", "patch_file", "delete_file", "read_file"].includes(toolName)) {
+      const targetPath = args.path || "";
+      const check = this.securityManager.isPathProtected(targetPath);
+      if (check.protected) {
+        return {
+          success: false,
+          output: "",
+          error: check.reason,
+        };
+      }
+    }
+
+    // 2. Read-only mode enforcement
+    if (this.readOnly) {
+      if (["write_file", "edit_file", "patch_file", "delete_file"].includes(toolName)) {
+        return {
+          success: false,
+          output: "",
+          error: `Read-only mode violation: Mutating tool '${toolName}' is blocked.`,
+        };
+      }
+      if (toolName === "run_command") {
+        const cmd = (args.command || "").trim();
+        if (!SAFE_READONLY_COMMAND_REGEX.test(cmd)) {
+          return {
+            success: false,
+            output: "",
+            error: `Read-only mode violation: Non-read command '${cmd}' is blocked.`,
+          };
+        }
+      }
+    }
+
+    // 3. Dry-run mode simulation
+    if (this.dryRun) {
+      if (toolName === "write_file") {
+        return {
+          success: true,
+          output: JSON.stringify({
+            dry_run: true,
+            path: args.path,
+            action: "write_file",
+            bytes_simulated: (args.content || "").length,
+            message: `[DRY-RUN SIMULATION] Would write ${(args.content || "").length} characters to ${args.path}. No changes written to disk.`,
+          }),
+        };
+      }
+      if (toolName === "edit_file") {
+        return {
+          success: true,
+          output: JSON.stringify({
+            dry_run: true,
+            path: args.path,
+            action: "edit_file",
+            message: `[DRY-RUN SIMULATION] Would replace target content in ${args.path}. No changes written to disk.`,
+          }),
+        };
+      }
+      if (toolName === "patch_file") {
+        return {
+          success: true,
+          output: JSON.stringify({
+            dry_run: true,
+            path: args.path,
+            action: "patch_file",
+            message: `[DRY-RUN SIMULATION] Would patch ${args.path}. No changes written to disk.`,
+          }),
+        };
+      }
+      if (toolName === "delete_file") {
+        return {
+          success: true,
+          output: JSON.stringify({
+            dry_run: true,
+            path: args.path,
+            action: "delete_file",
+            message: `[DRY-RUN SIMULATION] Would delete ${args.path}. No changes deleted.`,
+          }),
+        };
+      }
+      if (toolName === "run_command") {
+        const cmd = (args.command || "").trim();
+        if (!SAFE_READONLY_COMMAND_REGEX.test(cmd)) {
+          return {
+            success: true,
+            output: `[DRY-RUN SIMULATION] Command '${cmd}' simulated without execution to protect disk state.`,
+          };
+        }
+      }
+    }
+
     if (toolName === "task_completed") {
       return {
         success: true,
@@ -771,6 +903,26 @@ export class RustCoreBridge {
         const safetyCheck = isSafeOutboundUrl(url);
         if (!safetyCheck.safe) {
           return { success: false, output: "", error: safetyCheck.reason || "Blocked by security policy" };
+        }
+
+        const policy = this.securityManager.getPolicy();
+        if (policy.allowedDomains && policy.allowedDomains.length > 0) {
+          try {
+            const parsedUrl = new URL(url);
+            const domain = parsedUrl.hostname.toLowerCase();
+            const isAllowed = policy.allowedDomains.some(
+              (d) => domain === d.toLowerCase() || domain.endsWith("." + d.toLowerCase())
+            );
+            if (!isAllowed) {
+              return {
+                success: false,
+                output: "",
+                error: `Security Policy Violation: Domain '${domain}' is not in allowedDomains list.`,
+              };
+            }
+          } catch (e: any) {
+            return { success: false, output: "", error: `Invalid URL: ${e.message}` };
+          }
         }
 
         const res = await fetch(url, {
