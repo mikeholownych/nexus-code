@@ -72,7 +72,11 @@ nexus (engineering/b0) my-app ❯ !npm test
 | :--- | :--- |
 | `/help` | Display cheatsheet of all available commands |
 | `/status` | View active model, endpoint, shell, and git badge |
-| `/plan` | Render the current multi-phase execution plan |
+| `/plan [add\|done\|start\|clear]` | Formulate and manage multi-phase milestone execution plan |
+| `/tui` | Launch full-screen interactive TUI dashboard with split-pane view |
+| `/theme [name]` | View or switch terminal color theme (Catppuccin, Nord, Dracula, etc.) |
+| `/team <role\|full> <task>` | Orchestrate multi-agent team (Researcher, Architect, Implementer, Tester) |
+| `/image <path> [prompt]` | Ingest multi-modal image / screenshot into vision model context |
 | `/checkpoint [name]` | Create a safe rollback snapshot of the workspace |
 | `/checkpoint diff <id>` | View file diff between current workspace and a checkpoint |
 | `/checkpoint prune [keep]` | Prune older checkpoints, retaining the latest N (default: 5) |
@@ -82,49 +86,58 @@ nexus (engineering/b0) my-app ❯ !npm test
 | `/git` | Show uncommitted files and git status |
 | `/commit [msg]` | Generate or execute Conventional Commit from staged changes |
 | `/audit [count]` | Inspect visual tool execution audit trail (recent N entries) |
-| `/compact` | Condense earlier conversation messages to preserve token budget |
+| `/compact [--llm]` | Distill earlier conversation into structured memory to preserve context |
 | `/mode [auto\|review]` | Toggle autonomous execution vs human approval before edits |
 | `/sessions` | List saved past sessions |
 | `/save [name]` | Save current conversation session to `~/.nexus/sessions/` |
 | `/resume [id]` | Resume an existing session |
 | `/export [md\|json]` | Export session conversation transcript to a file in workspace |
 | `/skills` | List discovered agent skills (`SKILL.md`) |
-| `/skill <name>` | Inspect full instructions of a specialized skill |
-| `/mcp` | List connected MCP servers and external tools |
+| `/skill [init <name>\|<name>]` | Scaffold new skill template or inspect full instructions |
+| `/mcp [add\|resources\|prompts]` | Manage MCP servers, tools, resources, and prompt templates |
 | `/plugins` | List loaded custom plugins and lifecycle hooks |
 | `/tokens` | Display visual BPE token accounting gauge and context breakdown |
-| `/compact [--llm]` | Distill earlier conversation into structured memory to preserve context |
-| `/plan [add\|done\|start\|clear]` | Formulate and manage multi-phase milestone execution plan |
 | `/onboard` | Scan workspace tech stack and generate customized `AGENTS.md` & diagram |
 | `/test [filter]` | Auto-detect and run test suite with compiler diagnostic parsing |
 | `/init` | Scaffold `AGENTS.md` project rules file |
 | `/model [name]` | Inspect or switch active model |
 | `/shell [bash\|zsh]` | Switch execution shell |
 | `/cd <path>` | Switch active workspace directory |
-| `/history` | Show recent prompt history |
+| `/history [query\|!n]` | Fuzzy history search or re-execute item by index |
+| `/copy [diff\|code\|last]` | Copy diff, code blocks, or response to system clipboard |
+| `/paste` | Paste clipboard content into prompt |
 | `/exit` or `/quit` | Exit session cleanly |
 
 ---
 
 ## 3. High-Efficiency Tooling Parity
 
-Nexus Code provides high-performance tools executed via compiled native 64-bit Rust ELF and persistent JSON-RPC:
+Nexus Code provides high-performance tools executed via compiled native 64-bit Rust ELF, persistent JSON-RPC stdio daemon, and async Tokio runtime:
 
-1. **`read_file`**: Read file lines with line numbering and range slices.
+1. **`read_file`**: Read file lines with line numbering and range slices using zero-copy `memmap2`.
 2. **`batch_read`**: Read multiple files in parallel in a single turn.
 3. **`file_tree`**: Render directory tree hierarchy respecting `.gitignore`.
 4. **`file_info`**: Inspect file size, permissions, line count, binary status, and modified timestamps.
 5. **`edit_file`**: Precise search-and-replace using unique snippet matching with fuzzy recovery.
 6. **`patch_file`**: Apply standard unified diffs and patch hunks.
 7. **`search_code`**: Multi-threaded ripgrep code search across workspace.
-8. **`search_symbols`**: AST-level symbol search for function, struct, interface declarations.
-9. **`run_command`**: Execute bash/zsh commands with non-blocking pipe streaming and safety guards.
-10. **`run_tests`**: Auto-detect and run project test suites with structured failure parsing and compiler diagnostics.
-11. **`update_plan`**: Maintain multi-phase milestone tracking.
-12. **`spawn_subagent`**: Delegate subtasks to isolated sub-agents.
-13. **`activate_skill`**: Load specialized agent knowledge into context dynamically.
-14. **`fetch_web`**: Outbound HTTP scraper with SSRF protection and allowed domain filtering.
-15. **`task_completed`**: Finalize turn with comprehensive report.
+8. **`trigram_search`**: Ultra-fast code search accelerated by Rust inverted trigram index.
+9. **`search_symbols`**: AST-level symbol search for function, struct, interface declarations.
+10. **`cst_symbols`**: Concrete Syntax Tree parser extracting multiline signatures, doc comments, visibility, and scopes.
+11. **`git_status`**: Native repository status (branch, clean/dirty, staged, modified, untracked) via `git2`.
+12. **`git_diff`**: Native unified diff generation via `git2`.
+13. **`git_log`**: Native commit history retrieval via `git2`.
+14. **`run_command`**: Execute commands with non-blocking pipes, safety guards, and PTY pseudo-terminal support.
+15. **`run_tests`**: Auto-detect and run project test suites with structured failure parsing and compiler diagnostics.
+16. **`lsp_hover`**: Query Language Server Protocol hover documentation and type signatures.
+17. **`lsp_definition`**: Query LSP symbol definition locations.
+18. **`lsp_diagnostics`**: Query LSP compiler diagnostics and inline errors.
+19. **`search_web`**: Technical web search engine for API documentation and solutions.
+20. **`update_plan`**: Maintain multi-phase milestone tracking.
+21. **`spawn_subagent`**: Delegate subtasks to isolated sub-agents.
+22. **`activate_skill`**: Load specialized agent knowledge into context dynamically.
+23. **`fetch_web`**: Outbound HTTP scraper with SSRF protection and allowed domain filtering.
+24. **`task_completed`**: Finalize turn with comprehensive report.
 
 ---
 
@@ -135,6 +148,9 @@ Nexus Code provides high-performance tools executed via compiled native 64-bit R
 - **Dry-Run & Read-Only Modes**:
   - `--dry-run`: Intercepts file writes and mutating commands to simulate changes without touching disk.
   - `--read-only`: Rejects all file modifications and non-read shell commands with an immediate error.
+- **Lightweight Container Sandboxing (`--sandbox`)**: Restricts filesystem mutation strictly to the target workspace using Linux Bubblewrap (`bwrap`) or Docker isolation.
+- **Worker Thread Plugin Sandboxing**: Untrusted or custom plugin handlers execute in isolated Node.js `worker_threads` with strict timeout boundaries and memory caps.
+- **Pseudo-Terminal (PTY) Allocation**: Commands requiring TTY capabilities run inside allocated virtual pseudo-terminals via `portable-pty`.
 - **Multi-Provider Failover**: Specify secondary fallback endpoints via `--fallback <url1,url2>` or `$LOCAL_LLM_FALLBACK_ENDPOINTS`. Automatic failover occurs if the primary LLM server drops connection or runs out of GPU VRAM (HTTP 503).
 - **BPE Token Accounting & Context Gauge**: Real-time token breakdown across system instructions, tools schema, user messages, assistant thinking, and tool output payloads with visual ANSI progress gauge.
 - **Structured Context Compaction**: `/compact` distills discarded messages into structured memory (files touched, commands run, architectural decisions) instead of discarding context blindly.
