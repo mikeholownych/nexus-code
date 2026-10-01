@@ -2,6 +2,11 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
+import {
+  CandidateTracker,
+  ValidationReceipt,
+  CandidateIdentity,
+} from "./core/candidate.js";
 
 export interface WorktreeInfo {
   taskId: string;
@@ -230,9 +235,16 @@ export class WorktreeManager {
   }
 
   /**
-   * Commits any pending changes in the worktree and merges them back into the active branch.
+   * Commits verified changes in the worktree and merges them back into the active branch.
+   * Gated by CAND-001..CAND-004 validation receipts and clean root checks.
    */
-  public mergeWorktree(taskId: string, commitMessage: string = `nexus: apply verified speculative changes from ${taskId}`): WorktreeMergeResult {
+  public mergeWorktree(
+    taskId: string,
+    commitMessage: string = `nexus: apply verified speculative changes from ${taskId}`,
+    validationReceipt?: ValidationReceipt,
+    candidateTracker?: CandidateTracker,
+    options?: { requireValidation?: boolean }
+  ): WorktreeMergeResult {
     const worktreePath = path.join(this.getWorktreesBaseDir(), taskId);
     const branch = `nexus/${taskId}`;
 
@@ -246,14 +258,65 @@ export class WorktreeManager {
       };
     }
 
+    // CAND-004: Refuse merge if ignored output exists in worktree
     if (this.hasIgnoredChanges(taskId)) {
       return {
         success: false,
         taskId,
         branch,
         commitsMerged: 0,
-        error: "Ignored worktree output exists; resolve or explicitly discard it before merging.",
+        error: "CAND-004: Ignored worktree output exists; resolve or explicitly discard it before merging.",
       };
+    }
+
+    // CAND-004: Refuse merge if target root workspace has uncommitted/dirty state
+    if (this.rootHasChanges()) {
+      return {
+        success: false,
+        taskId,
+        branch,
+        commitsMerged: 0,
+        error: "CAND-004: Target root workspace contains uncommitted modifications or is dirty.",
+      };
+    }
+
+    // CAND-001..CAND-003: If validation is required or receipt/tracker is provided, enforce validation receipt
+    const requireValidation =
+      options?.requireValidation ??
+      (validationReceipt !== undefined || candidateTracker !== undefined);
+
+    if (requireValidation) {
+      if (!validationReceipt) {
+        return {
+          success: false,
+          taskId,
+          branch,
+          commitsMerged: 0,
+          error: "CAND-003: No authoritative validation receipt provided for candidate worktree merge.",
+        };
+      }
+
+      if (validationReceipt.status !== "PASSED") {
+        return {
+          success: false,
+          taskId,
+          branch,
+          commitsMerged: 0,
+          error: `CAND-003: Validation receipt status is ${validationReceipt.status}: ${validationReceipt.invalidationReason || "receipt is not in PASSED state"}`,
+        };
+      }
+
+      const tracker = candidateTracker || new CandidateTracker();
+      const decision = tracker.isCandidateValidForMergeSync(worktreePath, validationReceipt);
+      if (!decision.valid) {
+        return {
+          success: false,
+          taskId,
+          branch,
+          commitsMerged: 0,
+          error: decision.reason || "CAND-003: Candidate identity at merge does not match validated candidate.",
+        };
+      }
     }
 
     try {
@@ -354,5 +417,14 @@ export class WorktreeManager {
     } catch (err: any) {
       return { success: false, error: err.message };
     }
+  }
+
+  /**
+   * Computes candidate identity for a given worktree task.
+   */
+  public getCandidateIdentity(taskId: string, tracker?: CandidateTracker): CandidateIdentity {
+    const worktreePath = path.join(this.getWorktreesBaseDir(), taskId);
+    const t = tracker || new CandidateTracker();
+    return t.computeCandidateIdentitySync(worktreePath);
   }
 }

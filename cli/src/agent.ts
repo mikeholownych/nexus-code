@@ -20,6 +20,11 @@ import {
   extractTargetResources,
 } from "./core/spine.js";
 import { AuthorityAdmissionEngine } from "./core/authority.js";
+import {
+  CandidateTracker,
+  ValidationReceipt,
+  hashContent,
+} from "./core/candidate.js";
 import { parseModelResponse } from "./parser.js";
 import { TerminalUI, redactSecrets } from "./ui.js";
 import { getGitInfo, getProjectRules } from "./git.js";
@@ -245,6 +250,8 @@ export class AutonomousAgent {
   public readonly capabilityRegistry: CapabilityRegistry;
   public readonly authorityEngine: AuthorityAdmissionEngine;
   public readonly spine: ExecutionSpine;
+  public readonly candidateTracker: CandidateTracker;
+  private activeValidationReceipt?: ValidationReceipt;
   private currentTaskId: string = "task-" + randomUUID().slice(0, 8);
 
   constructor(
@@ -303,6 +310,7 @@ export class AutonomousAgent {
     if (config.recordFlight) {
       this.flightRecorder = new FlightRecorder(ws);
     }
+    this.candidateTracker = new CandidateTracker();
     this.capabilityRegistry = createDefaultRegistry();
     this.authorityEngine = new AuthorityAdmissionEngine({
       readOnly: config.readOnly,
@@ -313,8 +321,9 @@ export class AutonomousAgent {
       hooks: {
         authorityAdmission: this.authorityEngine.createAdmissionHook(),
         resourceConfinement: this.authorityEngine.createConfinementHook(),
-        candidateMutation: async (_event) => {
+        candidateMutation: async (event, context) => {
           this.hasPendingModifications = true;
+          await this.candidateTracker.createMutationHook()(event, context);
         },
       },
     });
@@ -328,6 +337,14 @@ export class AutonomousAgent {
 
   public getAuthorityEngine(): AuthorityAdmissionEngine {
     return this.authorityEngine;
+  }
+
+  public getCandidateTracker(): CandidateTracker {
+    return this.candidateTracker;
+  }
+
+  public getActiveValidationReceipt(): ValidationReceipt | undefined {
+    return this.activeValidationReceipt;
   }
 
   public getBridge(): RustCoreBridge {
@@ -382,11 +399,20 @@ export class AutonomousAgent {
     return this.activeWorktree;
   }
 
-  public mergeActiveWorktree(commitMessage?: string): { success: boolean; taskId?: string; branch?: string; commitsMerged: number; error?: string } {
+  public mergeActiveWorktree(
+    commitMessage?: string,
+    receipt?: ValidationReceipt
+  ): { success: boolean; taskId?: string; branch?: string; commitsMerged: number; error?: string } {
     if (!this.activeWorktree) {
       return { success: false, commitsMerged: 0, error: "No active worktree" };
     }
-    const res = this.worktreeManager.mergeWorktree(this.activeWorktree.taskId, commitMessage);
+    const receiptToUse = receipt || this.activeValidationReceipt;
+    const res = this.worktreeManager.mergeWorktree(
+      this.activeWorktree.taskId,
+      commitMessage,
+      receiptToUse,
+      this.candidateTracker
+    );
     if (res.success && this.originalWorkspace) {
       const originalWorkspace = this.originalWorkspace;
       this.activeWorktree = undefined;
@@ -1032,14 +1058,36 @@ Always explain your reasoning before or alongside your tool calls.`;
 
       this.hasPendingModifications = false;
       if (this.activeWorktree) {
-        this.verifiedWorktreeCompletion =
-          !worktreeHasChanges ||
-          Boolean(
-            verifierSucceeded &&
-              this.config.authoritativeVerifierCommand?.trim() &&
-              !this.config.dryRun &&
-              !this.config.readOnly
-          );
+        const canValidate =
+          verifierSucceeded &&
+          this.config.authoritativeVerifierCommand?.trim() &&
+          !this.config.dryRun &&
+          !this.config.readOnly;
+
+        if (canValidate) {
+          try {
+            const candidateWorkspace = this.activeWorktree.worktreePath;
+            const candidateIdentity = this.candidateTracker.computeCandidateIdentitySync(candidateWorkspace);
+            this.activeValidationReceipt = this.candidateTracker.recordValidationReceipt({
+              candidateId: candidateIdentity.candidateId,
+              verifierCommand: this.config.authoritativeVerifierCommand?.trim() || "authoritative_verifier",
+              exitCode: 0,
+              stdoutHash: hashContent("VERIFIED_BY_TASK_COMPLETED"),
+              status: "PASSED",
+              evaluatorBinding: {
+                evaluatorId: "authoritative_verifier",
+                evaluatorType: "runTestSuiteWithExecutor",
+                testSuite: this.config.authoritativeVerifierCommand?.trim(),
+              },
+              materialDependencies: [],
+            });
+            this.verifiedWorktreeCompletion = true;
+          } catch {
+            this.verifiedWorktreeCompletion = false;
+          }
+        } else {
+          this.verifiedWorktreeCompletion = !worktreeHasChanges;
+        }
       }
       this.ui.taskCompleted(args.summary || "Task completed.", args.notes);
       return {
@@ -1714,6 +1762,7 @@ Always explain your reasoning before or alongside your tool calls.`;
     console.log(`🤖 Model: ${this.config.model} (${this.config.endpoint})\n`);
 
     this.verifiedWorktreeCompletion = false;
+    this.activeValidationReceipt = undefined;
     if (this.config.worktree) {
       if (this.activeWorktree) {
         throw new Error(`Cannot start a new task: unresolved worktree ${this.activeWorktree.taskId}; merge or discard it first.`);
@@ -1759,13 +1808,26 @@ Always explain your reasoning before or alongside your tool calls.`;
     } finally {
       this.worktreeRunTurnAuthorized = false;
       if (this.activeWorktree && this.config.worktree) {
-        if (this.verifiedWorktreeCompletion && !this.worktreeManager.rootHasChanges()
-          && !this.worktreeManager.hasIgnoredChanges(this.activeWorktree.taskId)) {
-          console.log(pc.cyan(`🌲 Merging verified changes from worktree ${this.activeWorktree.branch}...`));
-          const result = this.mergeActiveWorktree(`nexus: apply verified changes from ${this.activeWorktree.taskId}`);
-          if (!result.success) console.log(pc.yellow(`⚠️ Worktree retained because merge was refused: ${result.error || "unknown error"}`));
+        const hasChanges = this.worktreeManager.hasChanges(this.activeWorktree.taskId);
+        if (hasChanges) {
+          if (
+            this.activeValidationReceipt &&
+            !this.worktreeManager.rootHasChanges() &&
+            !this.worktreeManager.hasIgnoredChanges(this.activeWorktree.taskId)
+          ) {
+            console.log(pc.cyan(`🌲 Merging verified changes from worktree ${this.activeWorktree.branch}...`));
+            const result = this.mergeActiveWorktree(
+              `nexus: apply verified changes from ${this.activeWorktree.taskId}`,
+              this.activeValidationReceipt
+            );
+            if (!result.success) {
+              console.log(pc.yellow(`⚠️ Worktree retained because merge was refused: ${result.error || "unknown error"}`));
+            }
+          } else {
+            console.log(pc.yellow(`⚠️ Speculative changes are unverified or the root workspace is dirty; retaining worktree at ${this.activeWorktree.worktreePath}`));
+          }
         } else {
-          console.log(pc.yellow(`⚠️ Speculative changes are unverified or the root workspace is dirty; retaining worktree at ${this.activeWorktree.worktreePath}`));
+          this.discardActiveWorktree();
         }
       }
     }

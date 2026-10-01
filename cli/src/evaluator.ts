@@ -5,6 +5,11 @@ import { AutonomousAgent } from "./agent.js";
 import { HarnessConfig } from "./types.js";
 import { runTestSuite } from "./tester.js";
 import pc from "picocolors";
+import {
+  CandidateTracker,
+  ValidationReceipt,
+  hashContent,
+} from "./core/candidate.js";
 
 export interface SweBenchInstance {
   instance_id: string;
@@ -29,6 +34,8 @@ export interface EvaluationResult {
   stepsTaken: number;
   patchDiff?: string;
   testOutput?: string;
+  candidateId?: string;
+  validationReceipt?: ValidationReceipt;
   error?: string;
 }
 
@@ -128,17 +135,31 @@ export class BenchmarkEvaluator {
       // 2. Run agent on problem statement
       await agent.run(instance.problem_statement);
 
-      // 3. Inspect git diff of generated solution
+      // 3. Inspect candidate identity and patch diff directly from evaluated candidate workspace
       let patchDiff = "";
+      let candidateId = "";
+      let validationReceipt: ValidationReceipt | undefined;
+
+      const activeWt = agent.getActiveWorktree();
+      const evalWorkspace = activeWt ? activeWt.worktreePath : this.workspace;
+
+      const candidateTracker = agent.candidateTracker || new CandidateTracker();
+      try {
+        const candidateIdentity = candidateTracker.computeCandidateIdentitySync(evalWorkspace);
+        candidateId = candidateIdentity.candidateId;
+      } catch {
+        candidateId = "UNRESOLVED_CANDIDATE";
+      }
+
       try {
         patchDiff = execFileSync("git", ["diff", "HEAD~1..HEAD"], {
-          cwd: this.workspace,
+          cwd: evalWorkspace,
           encoding: "utf-8",
           stdio: ["ignore", "pipe", "ignore"],
         });
         if (!patchDiff.trim()) {
           patchDiff = execFileSync("git", ["diff"], {
-            cwd: this.workspace,
+            cwd: evalWorkspace,
             encoding: "utf-8",
             stdio: ["ignore", "pipe", "ignore"],
           });
@@ -152,22 +173,39 @@ export class BenchmarkEvaluator {
       if (instance.test_patch) {
         try {
           execFileSync("git", ["apply", "--check", "-"], {
-            cwd: this.workspace,
+            cwd: evalWorkspace,
             input: instance.test_patch,
             stdio: ["pipe", "ignore", "ignore"],
           });
           execFileSync("git", ["apply", "-"], {
-            cwd: this.workspace,
+            cwd: evalWorkspace,
             input: instance.test_patch,
             stdio: ["pipe", "ignore", "ignore"],
           });
         } catch {}
       }
 
-      // 5. Run test suite to verify resolution
-      const testRes = runTestSuite(this.workspace);
+      // 5. Run test suite to verify resolution in candidate workspace
+      const testRes = runTestSuite(evalWorkspace);
       testsPassed = testRes.success || testRes.command === "none";
       testOutput = testRes.rawOutput || "";
+
+      if (testsPassed && candidateId) {
+        validationReceipt = candidateTracker.recordValidationReceipt({
+          candidateId,
+          verifierCommand: testRes.command || "runTestSuite",
+          exitCode: 0,
+          stdoutHash: hashContent(testOutput),
+          status: "PASSED",
+          evaluatorBinding: {
+            evaluatorId: "swe-bench",
+            evaluatorType: "BenchmarkEvaluator",
+            instanceId: instance.instance_id,
+            testSuite: testRes.command,
+          },
+          materialDependencies: [],
+        });
+      }
 
       const durationMs = Date.now() - t0;
       const tokensConsumed = agent.getTokenStats();
@@ -184,6 +222,8 @@ export class BenchmarkEvaluator {
         stepsTaken: agent.getHistoryCount(),
         patchDiff,
         testOutput,
+        candidateId,
+        validationReceipt,
       };
 
       const statusBadge = resolved ? pc.bold(pc.green("✔ RESOLVED")) : pc.bold(pc.red("✘ UNRESOLVED"));
