@@ -4,6 +4,7 @@ import * as fs from "node:fs";
 import { fileURLToPath } from "node:url";
 import { ToolDefinition, ExecutionResult } from "./types.js";
 import { SecurityManager } from "./security.js";
+import { InformationFlowBoundary } from "./core/egress.js";
 import { CapabilityRegistry, HARNESS_TOOLS, defaultRegistry } from "./core/capabilities.js";
 export { HARNESS_TOOLS, defaultRegistry };
 
@@ -553,6 +554,14 @@ export class RustCoreBridge {
         const safetyCheck = isSafeOutboundUrl(url);
         if (!safetyCheck.safe) {
           return { success: false, output: "", error: safetyCheck.reason || "Blocked by security policy" };
+        }
+
+        const boundary = InformationFlowBoundary.getGlobalInstance();
+        const egressCheck = boundary.evaluateEgress(url, url, {
+          sourceBoundary: "HOST_LOCAL",
+        });
+        if (!egressCheck.allowed) {
+          return { success: false, output: "", error: egressCheck.reason || "Egress blocked by InformationFlowBoundary [FAIL-003]" };
         }
 
         const policy = this.securityManager.getPolicy();

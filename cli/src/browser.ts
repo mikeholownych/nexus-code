@@ -1,6 +1,7 @@
 import * as http from "node:http";
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { InformationFlowBoundary } from "./core/egress.js";
 import pc from "picocolors";
 
 export interface ConsoleLogMessage {
@@ -152,6 +153,23 @@ export class BrowserDriver {
 
     // Remote HTTP / HTTPS navigation
     if (targetUrl.startsWith("http://") || targetUrl.startsWith("https://")) {
+      const boundary = InformationFlowBoundary.getGlobalInstance();
+      const egressCheck = boundary.evaluateEgress(targetUrl, targetUrl, {
+        sourceBoundary: "HOST_LOCAL",
+      });
+      if (!egressCheck.allowed) {
+        this.consoleLogs.push({
+          type: "error",
+          text: `Egress Denied: Navigation blocked by InformationFlowBoundary [FAIL-003]: ${egressCheck.reason}`,
+          timestamp: new Date().toISOString(),
+        });
+        return {
+          url: targetUrl,
+          title: "Egress Denied",
+          status: 403,
+          contentSnippet: `Egress Denied: ${egressCheck.reason || "Navigation blocked by InformationFlowBoundary [FAIL-003]"}`,
+        };
+      }
       try {
         const res = await fetch(targetUrl, { signal: AbortSignal.timeout(8000) });
         const text = await res.text();

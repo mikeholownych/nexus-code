@@ -517,6 +517,7 @@ export class McpClientManager {
                 this.toolToServerMap.set(qualifiedName, {
                     server: conn,
                     originalName: t.name,
+                    serverName,
                 });
             }
         }
@@ -553,6 +554,16 @@ export class McpClientManager {
     }
     isMcpTool(toolName) {
         return this.toolToServerMap.has(toolName);
+    }
+    getToolServer(toolName) {
+        const entry = this.toolToServerMap.get(toolName);
+        if (!entry)
+            return undefined;
+        return {
+            serverName: entry.serverName,
+            url: entry.server.config.url,
+            command: entry.server.config.command,
+        };
     }
     async executeMcpTool(toolName, args) {
         const entry = this.toolToServerMap.get(toolName);

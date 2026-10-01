@@ -28,6 +28,7 @@ import { SynthesizerEngine } from "./synthesizer.js";
 import { BrowserDriver } from "./browser.js";
 import { KnowledgeGraph } from "./knowledge.js";
 import { DurableStateManager, } from "./core/state.js";
+import { InformationFlowBoundary } from "./core/egress.js";
 import pc from "picocolors";
 export class ContextBudgetError extends Error {
     estimatedTokens;
@@ -254,6 +255,83 @@ export class AutonomousAgent {
             hooks: {
                 authorityAdmission: this.authorityEngine.createAdmissionHook(),
                 resourceConfinement: this.authorityEngine.createConfinementHook(),
+                egressQuarantine: async (request, context) => {
+                    const boundary = InformationFlowBoundary.getGlobalInstance();
+                    const toolName = request.toolName;
+                    const args = request.args || {};
+                    const effectiveTaskId = request.taskId || this.currentTaskId;
+                    // 1. If tool is fetch_web, evaluate egress against external URL
+                    if (toolName === "fetch_web" && typeof args.url === "string") {
+                        const destUrl = args.url;
+                        const egressResult = boundary.evaluateEgress(args, destUrl, {
+                            taskId: effectiveTaskId,
+                            sourceBoundary: "HOST_LOCAL",
+                        });
+                        if (!egressResult.allowed) {
+                            return {
+                                allowed: false,
+                                reason: egressResult.reason || `Egress to '${destUrl}' blocked by InformationFlowBoundary [FAIL-003]`,
+                            };
+                        }
+                        return {
+                            allowed: true,
+                            quarantined: egressResult.quarantinedCount > 0,
+                            sanitizedArgs: egressResult.sanitizedPayload || args,
+                        };
+                    }
+                    // 2. If tool is browser navigation, evaluate egress against URL
+                    if (toolName === "browser_navigate" && typeof args.url === "string") {
+                        const destUrl = args.url;
+                        const egressResult = boundary.evaluateEgress(args, destUrl, {
+                            taskId: effectiveTaskId,
+                            sourceBoundary: "HOST_LOCAL",
+                        });
+                        if (!egressResult.allowed) {
+                            return {
+                                allowed: false,
+                                reason: egressResult.reason || `Browser navigation to '${destUrl}' blocked by InformationFlowBoundary [FAIL-003]`,
+                            };
+                        }
+                        return {
+                            allowed: true,
+                            quarantined: egressResult.quarantinedCount > 0,
+                            sanitizedArgs: egressResult.sanitizedPayload || args,
+                        };
+                    }
+                    // 3. If tool is remote MCP server
+                    if (this.mcpManager.isMcpTool(toolName)) {
+                        const serverInfo = this.mcpManager.getToolServer(toolName);
+                        if (serverInfo?.url) {
+                            const egressResult = boundary.evaluateEgress(args, serverInfo.url, {
+                                taskId: effectiveTaskId,
+                                sourceBoundary: "HOST_LOCAL",
+                            });
+                            if (!egressResult.allowed) {
+                                return {
+                                    allowed: false,
+                                    reason: egressResult.reason || `Egress to remote MCP '${serverInfo.url}' blocked by InformationFlowBoundary [FAIL-003]`,
+                                };
+                            }
+                            return {
+                                allowed: true,
+                                quarantined: egressResult.quarantinedCount > 0,
+                                sanitizedArgs: egressResult.sanitizedPayload || args,
+                            };
+                        }
+                    }
+                    // 4. For authorized local execution sinks (HOST_LOCAL):
+                    // Rehydrate tokens for local execution (REHYD-001..005, DISC-004)
+                    // Invariant: Possession != Authority (REHYD-003). Local sinks are authorized within owning taskId.
+                    const rehydratedResult = boundary.rehydrate(args, {
+                        taskId: effectiveTaskId,
+                        isAuthorizedSink: true,
+                    });
+                    return {
+                        allowed: true,
+                        quarantined: false,
+                        sanitizedArgs: rehydratedResult.rehydrated,
+                    };
+                },
                 candidateMutation: async (event, context) => {
                     this.hasPendingModifications = true;
                     await this.candidateTracker.createMutationHook()(event, context);
@@ -262,6 +340,12 @@ export class AutonomousAgent {
         });
         this.setupSpineHandlers();
         this.stateManager = new DurableStateManager();
+        if (typeof this.client?.setTaskId === "function")
+            this.client.setTaskId(this.currentTaskId);
+        if (typeof this.plannerClient?.setTaskId === "function")
+            this.plannerClient.setTaskId(this.currentTaskId);
+        if (typeof this.coderClient?.setTaskId === "function")
+            this.coderClient.setTaskId(this.currentTaskId);
         this.initTaskState();
         this.resetConversation();
     }
@@ -1410,6 +1494,12 @@ Always explain your reasoning before or alongside your tool calls.`;
             },
         };
         const effectiveTaskId = this.activeWorktree?.taskId || this.currentTaskId;
+        if (typeof this.client?.setTaskId === "function")
+            this.client.setTaskId(effectiveTaskId);
+        if (typeof this.plannerClient?.setTaskId === "function")
+            this.plannerClient.setTaskId(effectiveTaskId);
+        if (typeof this.coderClient?.setTaskId === "function")
+            this.coderClient.setTaskId(effectiveTaskId);
         if (this.stateManager && effectiveTaskId) {
             try {
                 this.stateManager.recordOperationStart(effectiveTaskId, {

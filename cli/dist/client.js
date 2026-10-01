@@ -2,6 +2,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
 import { randomUUID } from "node:crypto";
+import { InformationFlowBoundary } from "./core/egress.js";
 import pc from "picocolors";
 export function readLatestAuthToken() {
     // 1. Check opencode client token file
@@ -41,7 +42,10 @@ export class LocalLlmClient {
     apiKey;
     model;
     temperature;
-    constructor(config) {
+    boundary;
+    taskId;
+    sessionId;
+    constructor(config, options) {
         const normalizeEp = (urlStr) => {
             let ep = urlStr.trim().replace(/\/+$/, "");
             if (!ep.endsWith("/v1")) {
@@ -72,6 +76,27 @@ export class LocalLlmClient {
                 : readLatestAuthToken() || "not-needed";
         this.model = config.model;
         this.temperature = config.temperature ?? 0.2;
+        this.boundary = options?.boundary || InformationFlowBoundary.getGlobalInstance();
+        this.taskId = options?.taskId;
+        this.sessionId = options?.sessionId;
+    }
+    setTaskId(taskId) {
+        this.taskId = taskId;
+    }
+    getTaskId() {
+        return this.taskId;
+    }
+    setSessionId(sessionId) {
+        this.sessionId = sessionId;
+    }
+    getSessionId() {
+        return this.sessionId;
+    }
+    getBoundary() {
+        return this.boundary;
+    }
+    setBoundary(boundary) {
+        this.boundary = boundary;
     }
     get endpoint() {
         return this.endpoints[this.activeEndpointIndex] || this.endpoints[0];
@@ -156,9 +181,31 @@ export class LocalLlmClient {
     async chatCompletion(messages, tools, requestId = randomUUID()) {
         return this.executeWithFailover("chatCompletion", async (currentEp) => {
             const url = `${currentEp}/chat/completions`;
+            // 1. Egress Interception & Quarantine (DISC-001..003, CTX-006, FAIL-003)
+            const egressEvaluation = this.boundary.evaluateEgress(messages, currentEp, {
+                taskId: this.taskId,
+                sessionId: this.sessionId,
+                sourceBoundary: "HOST_LOCAL",
+            });
+            if (!egressEvaluation.allowed) {
+                throw new Error(egressEvaluation.reason || `Egress to endpoint '${currentEp}' denied by InformationFlowBoundary [FAIL-003].`);
+            }
+            const outboundMessages = egressEvaluation.sanitizedPayload || messages;
+            let outboundTools = tools;
+            if (tools.length > 0) {
+                const toolsEgress = this.boundary.evaluateEgress(tools, currentEp, {
+                    taskId: this.taskId,
+                    sessionId: this.sessionId,
+                    sourceBoundary: "HOST_LOCAL",
+                });
+                if (!toolsEgress.allowed) {
+                    throw new Error(toolsEgress.reason || `Egress of tools to endpoint '${currentEp}' denied by InformationFlowBoundary [FAIL-003].`);
+                }
+                outboundTools = toolsEgress.sanitizedPayload || tools;
+            }
             const payload = {
                 model: this.model,
-                messages: messages.map((m) => ({
+                messages: outboundMessages.map((m) => ({
                     role: m.role,
                     content: m.content ?? null,
                     ...(m.tool_calls ? { tool_calls: m.tool_calls } : {}),
@@ -167,8 +214,8 @@ export class LocalLlmClient {
                 })),
                 temperature: this.temperature,
             };
-            if (tools.length > 0) {
-                payload.tools = tools;
+            if (outboundTools.length > 0) {
+                payload.tools = outboundTools;
                 payload.tool_choice = "auto";
             }
             const res = await fetch(url, {
@@ -200,9 +247,31 @@ export class LocalLlmClient {
     async chatCompletionStream(messages, tools, onToken, requestId = randomUUID()) {
         return this.executeWithFailover("chatCompletionStream", async (currentEp) => {
             const url = `${currentEp}/chat/completions`;
+            // 1. Egress Interception & Quarantine (DISC-001..003, CTX-006, FAIL-003)
+            const egressEvaluation = this.boundary.evaluateEgress(messages, currentEp, {
+                taskId: this.taskId,
+                sessionId: this.sessionId,
+                sourceBoundary: "HOST_LOCAL",
+            });
+            if (!egressEvaluation.allowed) {
+                throw new Error(egressEvaluation.reason || `Egress to endpoint '${currentEp}' denied by InformationFlowBoundary [FAIL-003].`);
+            }
+            const outboundMessages = egressEvaluation.sanitizedPayload || messages;
+            let outboundTools = tools;
+            if (tools.length > 0) {
+                const toolsEgress = this.boundary.evaluateEgress(tools, currentEp, {
+                    taskId: this.taskId,
+                    sessionId: this.sessionId,
+                    sourceBoundary: "HOST_LOCAL",
+                });
+                if (!toolsEgress.allowed) {
+                    throw new Error(toolsEgress.reason || `Egress of tools to endpoint '${currentEp}' denied by InformationFlowBoundary [FAIL-003].`);
+                }
+                outboundTools = toolsEgress.sanitizedPayload || tools;
+            }
             const payload = {
                 model: this.model,
-                messages: messages.map((m) => ({
+                messages: outboundMessages.map((m) => ({
                     role: m.role,
                     content: m.content ?? null,
                     ...(m.tool_calls ? { tool_calls: m.tool_calls } : {}),
@@ -212,8 +281,8 @@ export class LocalLlmClient {
                 temperature: this.temperature,
                 stream: true,
             };
-            if (tools.length > 0) {
-                payload.tools = tools;
+            if (outboundTools.length > 0) {
+                payload.tools = outboundTools;
                 payload.tool_choice = "auto";
             }
             let res;
@@ -327,6 +396,16 @@ export class LocalLlmClient {
     async generateEmbedding(text, model) {
         return this.executeWithFailover("generateEmbedding", async (currentEp) => {
             const url = `${currentEp}/embeddings`;
+            // 1. Egress Interception & Quarantine (DISC-001..003, CTX-006, FAIL-003)
+            const egressEvaluation = this.boundary.evaluateEgress(text, currentEp, {
+                taskId: this.taskId,
+                sessionId: this.sessionId,
+                sourceBoundary: "HOST_LOCAL",
+            });
+            if (!egressEvaluation.allowed) {
+                throw new Error(egressEvaluation.reason || `Egress to endpoint '${currentEp}' denied by InformationFlowBoundary [FAIL-003].`);
+            }
+            const outboundText = egressEvaluation.sanitizedText || text;
             const res = await fetch(url, {
                 method: "POST",
                 headers: {
@@ -335,7 +414,7 @@ export class LocalLlmClient {
                 },
                 body: JSON.stringify({
                     model: model || this.model,
-                    input: text,
+                    input: outboundText,
                 }),
             });
             if (!res.ok) {

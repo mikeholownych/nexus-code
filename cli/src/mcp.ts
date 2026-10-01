@@ -479,7 +479,7 @@ export class McpClientManager {
   private static activeManagers: Set<McpClientManager> = new Set();
   private workspace: string;
   private connections: Map<string, McpConnection> = new Map();
-  private toolToServerMap: Map<string, { server: McpConnection; originalName: string }> = new Map();
+  private toolToServerMap: Map<string, { server: McpConnection; originalName: string; serverName: string }> = new Map();
 
   constructor(workspace: string) {
     this.workspace = path.resolve(workspace);
@@ -605,6 +605,7 @@ export class McpClientManager {
         this.toolToServerMap.set(qualifiedName, {
           server: conn,
           originalName: t.name,
+          serverName,
         });
       }
     }
@@ -646,6 +647,16 @@ export class McpClientManager {
 
   public isMcpTool(toolName: string): boolean {
     return this.toolToServerMap.has(toolName);
+  }
+
+  public getToolServer(toolName: string): { serverName: string; url?: string; command?: string } | undefined {
+    const entry = this.toolToServerMap.get(toolName);
+    if (!entry) return undefined;
+    return {
+      serverName: entry.serverName,
+      url: entry.server.config.url,
+      command: entry.server.config.command,
+    };
   }
 
   public async executeMcpTool(toolName: string, args: Record<string, any>): Promise<ExecutionResult> {

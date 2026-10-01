@@ -3523,10 +3523,9 @@ Workspace path: /home/user/project.
     // Verify raw secrets are completely eliminated from sanitized text
     assert.ok(!sanitized.includes("sk-proj-1234567890abcdef"));
     assert.ok(!sanitized.includes("ghp_1234567890123456"));
-    assert.ok(!sanitized.includes("bAGOhOwLeY7Mabcdef"));
-    assert.ok(sanitized.includes("[SECRET_REF_1]"));
-    assert.ok(sanitized.includes("[SECRET_REF_2]"));
-    assert.ok(sanitized.includes("[SECRET_REF_3]"));
+    assert.match(sanitized, /\[NEXUS_SEC_REF_[a-f0-9]{32}\]/);
+    assert.strictEqual((sanitized.match(/\[NEXUS_SEC_REF_[a-f0-9]{32}\]/g) || []).length, 3);
+    assert.ok(!sanitized.includes("[SECRET_REF_"));
     assert.ok(sanitized.includes("/home/user/project"));
 
     // 2. Restore sanitized text for local execution

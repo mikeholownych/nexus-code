@@ -3,6 +3,7 @@ import * as path from "node:path";
 import * as fs from "node:fs";
 import { fileURLToPath } from "node:url";
 import { SecurityManager } from "./security.js";
+import { InformationFlowBoundary } from "./core/egress.js";
 import { HARNESS_TOOLS, defaultRegistry } from "./core/capabilities.js";
 export { HARNESS_TOOLS, defaultRegistry };
 export const SAFE_READONLY_COMMAND_REGEX = /^(git\s+(status|diff|log|branch|show|rev-parse)|ls|dir|cat|head|tail|grep|find|which|echo|pwd|cargo\s+(check|clippy)|npm\s+(test|run\s+lint)|pytest)/i;
@@ -490,6 +491,13 @@ export class RustCoreBridge {
                 const safetyCheck = isSafeOutboundUrl(url);
                 if (!safetyCheck.safe) {
                     return { success: false, output: "", error: safetyCheck.reason || "Blocked by security policy" };
+                }
+                const boundary = InformationFlowBoundary.getGlobalInstance();
+                const egressCheck = boundary.evaluateEgress(url, url, {
+                    sourceBoundary: "HOST_LOCAL",
+                });
+                if (!egressCheck.allowed) {
+                    return { success: false, output: "", error: egressCheck.reason || "Egress blocked by InformationFlowBoundary [FAIL-003]" };
                 }
                 const policy = this.securityManager.getPolicy();
                 if (policy.allowedDomains && policy.allowedDomains.length > 0) {
