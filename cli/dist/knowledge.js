@@ -1,7 +1,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { randomUUID } from "node:crypto";
-import pc from "picocolors";
+import { redactForPersistence, writeProtectedTextFile } from "./core/persistence_protection.js";
 /**
  * Persistent Project Knowledge Graph
  * Retains project idioms, architectural decisions, and conventions across sessions.
@@ -29,11 +29,24 @@ export class KnowledgeGraph {
         this.entries.clear();
         if (!fs.existsSync(this.dbPath))
             return;
+        let raw;
+        let data;
         try {
-            const raw = fs.readFileSync(this.dbPath, "utf-8");
-            const data = JSON.parse(raw);
-            if (Array.isArray(data.entries)) {
-                for (const entry of data.entries) {
+            raw = fs.readFileSync(this.dbPath, "utf-8");
+            data = JSON.parse(raw);
+        }
+        catch {
+            // Ignore parse errors on corrupt file
+            return;
+        }
+        try {
+            const protectedData = redactForPersistence(data);
+            const safeSerialized = JSON.stringify(protectedData, null, 2);
+            if (safeSerialized !== JSON.stringify(data, null, 2)) {
+                writeProtectedTextFile(this.dbPath, safeSerialized);
+            }
+            if (Array.isArray(protectedData.entries)) {
+                for (const entry of protectedData.entries) {
                     if (entry.key && entry.value) {
                         this.entries.set(entry.key, entry);
                     }
@@ -41,7 +54,7 @@ export class KnowledgeGraph {
             }
         }
         catch {
-            // Ignore parse errors on corrupt file
+            throw new Error("Failed to protect knowledge graph during recovery");
         }
     }
     /**
@@ -58,10 +71,11 @@ export class KnowledgeGraph {
             if (!fs.existsSync(nexusDir)) {
                 fs.mkdirSync(nexusDir, { recursive: true });
             }
-            fs.writeFileSync(this.dbPath, JSON.stringify(data, null, 2), "utf-8");
+            const protectedData = redactForPersistence(data);
+            writeProtectedTextFile(this.dbPath, JSON.stringify(protectedData, null, 2));
         }
-        catch (err) {
-            console.warn(pc.yellow(`Warning: Failed to save knowledge graph: ${err.message}`));
+        catch {
+            throw new Error("Failed to protect or save knowledge graph");
         }
     }
     /**

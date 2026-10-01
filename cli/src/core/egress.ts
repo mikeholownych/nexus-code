@@ -368,6 +368,19 @@ export class InformationFlowBoundary {
    * does not create reversible vault references (DISC-005).
    */
   public redactForTelemetry<T>(value: T): T {
+    return this.redactClassifiedValue(value);
+  }
+
+  /**
+   * Irreversibly redact classified values from durable application state.
+   * This preserves the accepted classifier and redaction semantics but does not
+   * make the value recoverable as a credential store would.
+   */
+  public redactForDurablePersistence<T>(value: T): T {
+    return this.redactClassifiedValue(value);
+  }
+
+  private redactClassifiedValue<T>(value: T): T {
     const visit = (item: any): any => {
       if (typeof item === "string") {
         let sanitized = item;

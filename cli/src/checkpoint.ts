@@ -1,8 +1,13 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
-import { execSync } from "node:child_process";
+import { execFileSync, execSync } from "node:child_process";
 import crypto from "node:crypto";
+import {
+  assertNoSensitivePersistenceContent,
+  redactForPersistence,
+  SensitivePersistenceError,
+} from "./core/persistence_protection.js";
 
 export interface CheckpointInfo {
   id: string;
@@ -45,22 +50,66 @@ export class CheckpointManager {
     const entries = fs.readdirSync(src, { withFileTypes: true });
     for (const entry of entries) {
       if (ignored.has(entry.name)) continue;
+      assertNoSensitivePersistenceContent(entry.name, "checkpoint");
       const srcPath = path.join(src, entry.name);
       const destPath = path.join(dest, entry.name);
       if (entry.isDirectory()) {
         this.copyDirFiltered(srcPath, destPath);
       } else if (entry.isFile()) {
-        try {
-          fs.copyFileSync(srcPath, destPath);
-        } catch {}
+        const content = fs.readFileSync(srcPath);
+        assertNoSensitivePersistenceContent(content.toString("utf8"), "checkpoint");
+        fs.writeFileSync(destPath, content);
       }
     }
+  }
+
+  private assertGitChangesSafe(): void {
+    const changedPaths = execSync("git diff --name-only -z HEAD", {
+      cwd: this.workspace,
+      encoding: "buffer",
+    }).toString("utf8").split("\0").filter(Boolean);
+
+    for (const relativePath of changedPaths) {
+      assertNoSensitivePersistenceContent(relativePath, "checkpoint");
+      try {
+        const indexed = execFileSync("git", ["show", `:${relativePath}`], {
+          cwd: this.workspace,
+          encoding: "buffer",
+          maxBuffer: 64 * 1024 * 1024,
+        });
+        assertNoSensitivePersistenceContent(indexed.toString("utf8"), "checkpoint");
+      } catch (error) {
+        if (error instanceof SensitivePersistenceError) throw error;
+      }
+
+      const worktreePath = path.join(this.workspace, relativePath);
+      if (fs.existsSync(worktreePath) && fs.statSync(worktreePath).isFile()) {
+        assertNoSensitivePersistenceContent(fs.readFileSync(worktreePath, "utf8"), "checkpoint");
+      }
+    }
+  }
+
+  private assertFallbackSnapshotSafe(workspacePath: string): void {
+    const ignored = new Set(["node_modules", ".git", "target", "dist", ".nexus", ".next", ".cache"]);
+    const visit = (directory: string): void => {
+      for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
+        if (ignored.has(entry.name)) continue;
+        assertNoSensitivePersistenceContent(entry.name, "checkpoint");
+        const sourcePath = path.join(directory, entry.name);
+        if (entry.isDirectory()) {
+          visit(sourcePath);
+        } else if (entry.isFile()) {
+          assertNoSensitivePersistenceContent(fs.readFileSync(sourcePath, "utf8"), "checkpoint");
+        }
+      }
+    };
+    visit(workspacePath);
   }
 
   public createCheckpoint(name?: string): CheckpointInfo {
     const rand = Math.random().toString(36).slice(2, 6);
     const id = `cp_${Date.now()}_${rand}`;
-    const desc = name || `Checkpoint at ${new Date().toLocaleTimeString()}`;
+    const desc = redactForPersistence(name || `Checkpoint at ${new Date().toLocaleTimeString()}`);
     const timestamp = new Date().toISOString();
 
     let gitRef: string | undefined;
@@ -68,6 +117,7 @@ export class CheckpointManager {
 
     if (this.isGit) {
       try {
+        this.assertGitChangesSafe();
         // Create an untracked + tracked git stash commit without modifying working tree
         const stashCommit = execSync("git stash create", { cwd: this.workspace, encoding: "utf-8" }).trim();
         if (stashCommit) {
@@ -81,17 +131,24 @@ export class CheckpointManager {
           const headCommit = execSync("git rev-parse HEAD", { cwd: this.workspace, encoding: "utf-8" }).trim();
           gitRef = headCommit;
         }
-      } catch {
-        // Fallback to file snapshot if git stash fails
+      } catch (error) {
+        if (error instanceof SensitivePersistenceError) throw error;
+        throw new Error("Checkpoint could not verify protected Git state; no checkpoint was written");
       }
     }
 
     if (!gitRef) {
       const snapTarget = path.join(this.checkpointDir, "snapshots", id);
       try {
+        this.assertFallbackSnapshotSafe(this.workspace);
         this.copyDirFiltered(this.workspace, snapTarget);
         snapshotDir = snapTarget;
-      } catch {}
+      } catch (error) {
+        try {
+          fs.rmSync(snapTarget, { recursive: true, force: true });
+        } catch {}
+        throw error;
+      }
     }
 
     const checkpoint: CheckpointInfo = {

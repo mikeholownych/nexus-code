@@ -10,6 +10,7 @@ import * as path from "node:path";
 import * as os from "node:os";
 import { randomUUID } from "node:crypto";
 import { CandidateTracker, } from "./candidate.js";
+import { redactForPersistence } from "./persistence_protection.js";
 export const CURRENT_STATE_SCHEMA_VERSION = 1;
 // -------------------------------------------------------------
 // Typed Exceptions (Fail-Closed)
@@ -94,10 +95,8 @@ export class DurableStateManager {
      */
     saveTaskState(state) {
         if (!state.taskId) {
-            throw new TaskStateWriteError(state.taskId || "unknown", "Missing required taskId");
+            throw new TaskStateWriteError("unknown", "Missing required taskId");
         }
-        const targetPath = this.getStateFilePath(state.taskId);
-        const tempPath = `${targetPath}.${randomUUID()}.tmp`;
         state.updatedAt = new Date().toISOString();
         if (!state.schemaVersion) {
             state.schemaVersion = CURRENT_STATE_SCHEMA_VERSION;
@@ -105,7 +104,32 @@ export class DurableStateManager {
         // Maintain compatibility aliases
         state.id = state.sessionId || state.taskId;
         state.workspace = state.workspacePath;
-        const serialized = JSON.stringify(state, null, 2);
+        let serialized;
+        let safeTaskId;
+        let protectionPhase = "classification";
+        try {
+            const protectedState = redactForPersistence(state);
+            protectionPhase = "identity validation";
+            if (protectedState.taskId !== state.taskId ||
+                protectedState.sessionId !== state.sessionId ||
+                protectedState.id !== state.id ||
+                protectedState.workspacePath !== state.workspacePath) {
+                throw new Error("Sensitive data intersects a durable state identity field");
+            }
+            if (!/^[A-Za-z0-9._-]{1,160}$/.test(state.taskId) || state.taskId === "." || state.taskId === "..") {
+                throw new Error("Task identity is not a safe persistence name");
+            }
+            safeTaskId = state.taskId;
+            protectionPhase = "serialization";
+            serialized = JSON.stringify(protectedState, null, 2);
+            if (serialized === undefined)
+                throw new Error("Task state is not JSON serializable");
+        }
+        catch {
+            throw new TaskStateWriteError("unknown", `Sensitive-data protection or ${protectionPhase} failed`);
+        }
+        const targetPath = this.getStateFilePath(safeTaskId);
+        const tempPath = `${targetPath}.${randomUUID()}.tmp`;
         try {
             if (!fs.existsSync(this.baseDir)) {
                 fs.mkdirSync(this.baseDir, { recursive: true });
@@ -122,7 +146,7 @@ export class DurableStateManager {
                 }
             }
             catch { }
-            throw new TaskStateWriteError(state.taskId, err.message);
+            throw new TaskStateWriteError(safeTaskId, "filesystem persistence failed");
         }
     }
     /**
@@ -169,6 +193,17 @@ export class DurableStateManager {
             if (normExpected !== normActual) {
                 throw new WorkspaceIdentityMismatchError(normExpected, normActual);
             }
+        }
+        try {
+            const protectedState = redactForPersistence(state);
+            if (JSON.stringify(protectedState) !== JSON.stringify(state)) {
+                // Migrate older plaintext state on disk before reporting a successful load.
+                this.saveTaskState(protectedState);
+                return protectedState;
+            }
+        }
+        catch {
+            throw new TaskStateReadError(taskId, "Sensitive-data protection failed during state recovery");
         }
         return state;
     }

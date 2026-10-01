@@ -11,6 +11,11 @@ import { LocalLlmClient } from "./client.js";
 import { HarnessConfig } from "./types.js";
 import { getGitInfo, scaffoldProjectRules, generateConventionalCommit, commitChanges } from "./git.js";
 import { SessionManager, SessionData } from "./session.js";
+import {
+  appendProtectedHistoryLine,
+  redactForPersistence,
+  writeProtectedTextFile,
+} from "./core/persistence_protection.js";
 import { CheckpointManager } from "./checkpoint.js";
 import { renderTokenGauge } from "./tokens.js";
 import { scanAndOnboardWorkspace } from "./onboard.js";
@@ -125,11 +130,19 @@ export class InteractiveRepl {
 
   private loadHistory(): void {
     if (fs.existsSync(this.historyFile)) {
+      let data: string;
       try {
-        const data = fs.readFileSync(this.historyFile, "utf-8");
-        this.history = data.split("\n").filter((l) => l.trim().length > 0);
+        data = fs.readFileSync(this.historyFile, "utf-8");
       } catch {
         this.history = [];
+        return;
+      }
+      try {
+        const safeData = redactForPersistence(data);
+        if (safeData !== data) writeProtectedTextFile(this.historyFile, safeData);
+        this.history = safeData.split("\n").filter((l) => l.trim().length > 0);
+      } catch {
+        throw new Error("Failed to protect REPL history during recovery");
       }
     }
   }
@@ -139,9 +152,9 @@ export class InteractiveRepl {
     if (!trimmed || trimmed.startsWith("/")) return;
     this.history.push(trimmed);
     try {
-      fs.appendFileSync(this.historyFile, `${trimmed}\n`, "utf-8");
+      appendProtectedHistoryLine(this.historyFile, trimmed);
     } catch {
-      // ignore
+      throw new Error("Failed to protect or persist REPL history");
     }
   }
 
@@ -1332,7 +1345,7 @@ export class InteractiveRepl {
               : `nexus-session-${this.currentSessionId}.md`;
             const outPath = path.join(this.config.workspace, outFilename);
             if (format === "json") {
-              fs.writeFileSync(outPath, JSON.stringify(sess, null, 2), "utf-8");
+              writeProtectedTextFile(outPath, JSON.stringify(sess, null, 2));
             } else {
               let md = `# Nexus Code Session Export\n\n- **Session ID:** \`${sess.id}\`\n- **Workspace:** \`${sess.workspace}\`\n- **Date:** ${sess.createdAt}\n- **Model:** \`${sess.model}\`\n\n---\n\n`;
               for (const m of sess.messages) {
@@ -1340,7 +1353,7 @@ export class InteractiveRepl {
                 md += `### ${m.role === "user" ? "👤 User" : m.role === "assistant" ? "🤖 Nexus" : "⚡ Tool (" + m.name + ")"}\n\n`;
                 md += `${m.content}\n\n---\n\n`;
               }
-              fs.writeFileSync(outPath, md, "utf-8");
+              writeProtectedTextFile(outPath, md);
             }
             console.log(pc.green(`✔ Session transcript exported to: ${pc.bold(outPath)}\n`));
             continue;
