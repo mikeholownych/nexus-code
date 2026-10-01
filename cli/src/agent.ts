@@ -207,19 +207,15 @@ function logAudit(entry: {
       fs.mkdirSync(auditDir, { recursive: true });
     }
     const auditPath = path.join(auditDir, "audit.log");
-    const sanitized = InformationFlowBoundary.getGlobalInstance().redactForTelemetry({
-      args: entry.args,
-      error: entry.error,
-    });
-    const record = {
+    const record = InformationFlowBoundary.getGlobalInstance().redactForTelemetry({
       timestamp: new Date().toISOString(),
       workspace: entry.workspace,
       tool: entry.tool,
-      args: sanitized.args,
+      args: entry.args,
       success: entry.success,
       duration_ms: entry.durationMs,
-      error: sanitized.error,
-    };
+      error: entry.error,
+    });
     fs.appendFileSync(auditPath, JSON.stringify(record) + "\n");
   } catch {
     // Ignore audit log write errors

@@ -5,7 +5,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { FlightRecorder } from "../src/flight.js";
 import { InformationFlowBoundary } from "../src/core/egress.js";
-import { AuthorityAdmissionEngine } from "../src/core/authority.js";
+import { AutonomousAgent } from "../src/agent.js";
 
 const tempDirs: string[] = [];
 const originalBoundary = InformationFlowBoundary.getGlobalInstance();
@@ -59,42 +59,104 @@ test("FlightRecorder irreversibly sanitizes nested secrets before appended disk 
   assert.equal(lines[6].payload.arguments.path, "src/other.ts");
 });
 
-test("rehydrated local tool arguments remain usable while flight evidence stays redacted, including fullAccess runs", () => {
+test("rehydrated local tool arguments execute under fullAccess while flight and audit evidence stay redacted", async () => {
   const boundary = new InformationFlowBoundary();
   const credential = `ghp_${"r".repeat(36)}`;
-  const quarantined = boundary.evaluateEgress({ token: credential }, "https://example.invalid", {
-    taskId: "task-synthetic",
-    sessionId: "session-synthetic",
+  const quarantined = boundary.evaluateEgress({ token: credential, phases: [] }, "https://example.invalid", {
+    taskId: "default_task",
+    sessionId: "default_session",
     sourceBoundary: "HOST_LOCAL",
   });
   assert.equal(quarantined.allowed, true);
-  const localArgs = boundary.rehydrate(quarantined.sanitizedPayload, {
-    taskId: "task-synthetic",
-    sessionId: "session-synthetic",
-    isAuthorizedSink: true,
-  }).rehydrated;
-  assert.equal(localArgs.token, credential, "authorized local execution lost its credential");
-
   InformationFlowBoundary.setGlobalInstance(boundary);
-  const authority = new AuthorityAdmissionEngine({ fullAccess: true });
-  assert.equal(authority.isFullAccess(), true);
-  const flight = recorder("flight-rehydrated-synthetic");
-  flight.recordToolCall(1, "restored", "use_credential", localArgs);
-  const disk = fs.readFileSync(flight.getLogPath(), "utf8");
-  assert.equal(disk.includes(credential), false);
-  assert.match(disk, /\[REDACTED:GITHUB_TOKEN\]/);
+  const baseWorkspace = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-cred003-agent-"));
+  tempDirs.push(baseWorkspace);
+  const workspace = path.join(baseWorkspace, `workspace-${credential}`);
+  fs.mkdirSync(workspace, { recursive: true });
+  const auditHome = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-cred003-audit-home-"));
+  tempDirs.push(auditHome);
+  const previousHome = process.env.HOME;
+  process.env.HOME = auditHome;
+  const agent: any = new AutonomousAgent({
+    endpoint: "http://127.0.0.1:1/v1",
+    model: "synthetic-test",
+    maxSteps: 1,
+    temperature: 0,
+    workspace,
+    shell: "bash",
+    fullAccess: true,
+    recordFlight: true,
+  });
+  let executedArgs: Record<string, unknown> | undefined;
+  try {
+    assert.equal(agent.authorityEngine.isFullAccess(), true);
+    agent.spine.registerHandler("update_plan", async (args: Record<string, unknown>) => {
+      executedArgs = args;
+      return { success: true, output: "synthetic local execution completed" };
+    });
+    const result = await agent.dispatchToolCall({
+      id: "synthetic-restored-call",
+      function: { name: "update_plan", arguments: JSON.stringify(quarantined.sanitizedPayload) },
+    }, 1);
+    assert.equal(result.receipt.success, true);
+    assert.deepEqual(executedArgs, { token: credential, phases: [] }, "authorized local capability did not receive restored plaintext");
+
+    const flight = agent.getFlightRecorder() as FlightRecorder;
+    const flightDisk = fs.readFileSync(flight.getLogPath(), "utf8");
+    assert.equal(flightDisk.includes(credential), false);
+    assert.match(flightDisk, /\[REDACTED:GITHUB_TOKEN\]/);
+
+    const auditPath = path.join(auditHome, ".nexus", "audit.log");
+    const auditDisk = fs.readFileSync(auditPath, "utf8");
+    assert.equal(auditDisk.includes(credential), false, "workspace metadata plaintext survived in audit log");
+    assert.match(auditDisk, /\[REDACTED:GITHUB_TOKEN\]/);
+    assert.match(auditDisk, /"tool":"update_plan"/);
+  } finally {
+    agent.shutdown();
+    if (previousHome === undefined) delete process.env.HOME;
+    else process.env.HOME = previousHome;
+  }
 });
 
-test("FlightRecorder fails closed without appending when classifier sanitization fails", () => {
+test("classifier failure skips flight and audit persistence without blocking authorized execution", async () => {
   const boundary = new InformationFlowBoundary();
   const secret = `ghp_${"f".repeat(36)}`;
   boundary.classifyText = () => { throw new Error(`synthetic classifier failure: ${secret}`); };
   InformationFlowBoundary.setGlobalInstance(boundary);
-  const flight = recorder("flight-sanitizer-failure");
-
-  assert.throws(() => flight.recordToolCall(1, "failure", "run_command", { token: secret }), (error: Error) => {
-    assert.equal(error.message.includes(secret), false, "sanitizer diagnostics exposed inspected plaintext");
-    return error.message === "Flightlog sanitization failed; event was not persisted";
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-cred003-failure-"));
+  tempDirs.push(workspace);
+  const auditHome = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-cred003-failure-home-"));
+  tempDirs.push(auditHome);
+  const previousHome = process.env.HOME;
+  process.env.HOME = auditHome;
+  const agent: any = new AutonomousAgent({
+    endpoint: "http://127.0.0.1:1/v1",
+    model: "synthetic-test",
+    maxSteps: 1,
+    temperature: 0,
+    workspace,
+    shell: "bash",
+    fullAccess: true,
+    recordFlight: true,
   });
-  assert.equal(fs.existsSync(flight.getLogPath()), false, "sanitizer failure created a durable flightlog");
+  let executedArgs: Record<string, unknown> | undefined;
+  try {
+    agent.spine.registerHandler("update_plan", async (args: Record<string, unknown>) => {
+      executedArgs = args;
+      return { success: true, output: "execution survived sanitizer failure" };
+    });
+    const result = await agent.dispatchToolCall({
+      id: "synthetic-failure-call",
+      function: { name: "update_plan", arguments: JSON.stringify({ token: secret, phases: [] }) },
+    }, 1);
+    assert.equal(result.receipt.success, true);
+    assert.deepEqual(executedArgs, { token: secret, phases: [] });
+    const flight = agent.getFlightRecorder() as FlightRecorder;
+    assert.equal(fs.existsSync(flight.getLogPath()), false, "sanitizer failure created a durable flightlog");
+    assert.equal(fs.existsSync(path.join(auditHome, ".nexus", "audit.log")), false, "audit sanitizer failure wrote a record");
+  } finally {
+    agent.shutdown();
+    if (previousHome === undefined) delete process.env.HOME;
+    else process.env.HOME = previousHome;
+  }
 });

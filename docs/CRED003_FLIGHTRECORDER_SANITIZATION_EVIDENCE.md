@@ -24,9 +24,9 @@ Before correction, a controlled temporary workspace was used with synthetic bear
 
 `InformationFlowBoundary.redactForTelemetry()` recursively sanitizes string values and object keys in arrays and nested objects, then applies the same canonical classifier over the serialized structure. The second pass preserves contextual classification that depends on a field name and value together. Replacements use the classifier's `[REDACTED:<pattern>]` labels and irreversibly discard plaintext. It does not create reversible token references.
 
-`FlightRecorder.appendEvent()` is the single event persistence boundary. It sanitizes the entire event payload before constructing and appending the JSON line. A classification/sanitization exception escapes before the append call, so the record is not written. Session metadata, prompts, thoughts, tool arguments, result snippets, errors, durable state, diffs, and arbitrary nested payload fields all pass through this boundary.
+`FlightRecorder.appendEvent()` is the single event persistence boundary. It sanitizes the entire event payload before constructing and appending the JSON line. If classification/sanitization fails, it returns a safe `recordingSkipped` event result without writing that record or propagating classifier diagnostics; authorized local execution continues. Session metadata, prompts, thoughts, tool arguments, result snippets, errors, durable state, diffs, and arbitrary nested payload fields all pass through this boundary.
 
-The separate local audit append in `agent.ts` also uses this shared classifier for arguments and errors, because CRED-003 explicitly names audit trails and the previous display redactor did not cover all classifier-supported patterns. Sanitization failure is caught by the existing audit-write guard and skips the write.
+The separate local audit append in `agent.ts` uses the shared classifier on the complete record, including workspace and tool metadata, arguments, and errors. CRED-003 explicitly names audit trails, and the previous display redactor did not cover all classifier-supported patterns. Sanitization failure is caught by the existing audit-write guard and skips the write.
 
 ## Adversarial and utility evidence
 
@@ -35,9 +35,8 @@ Focused test file: `cli/test/flight_sanitization.test.ts`.
 - Before/after disk inspection exercises safe event → sensitive event → safe event appends and parses every JSON line.
 - Nested arrays and objects contain multiple synthetic credentials, including bearer, GitHub-style, OpenAI-style, and contextual `api_key` values. None survive in the serialized file; matching irreversible redaction markers remain.
 - Session metadata, model request prompt, thought/reasoning, tool arguments, tool result output snippet, and error fields are checked at the durable artifact.
-- An authorized WP-05 tokenization/rehydration sequence restores a synthetic value for local tool use; the tool argument remains plaintext in local memory while the `.flightlog` contains only the redaction marker.
-- A configured `AuthorityAdmissionEngine` with `fullAccess: true` does not alter the recorder boundary; recording the restored arguments still yields redacted disk evidence.
-- Injected classifier failure causes the tool-call record to throw before append; no `.flightlog` is created.
+- An authorized WP-05 tokenization/rehydration sequence is dispatched through `AutonomousAgent` under `fullAccess: true`. The registered local capability receives the restored synthetic plaintext and succeeds, while the `.flightlog` contains only the redaction marker. The resulting audit record is read from disk and confirms the credential embedded in the workspace metadata is redacted.
+- Injected classifier failure during agent dispatch skips flight and audit persistence without blocking the authorized local capability. The capability receives the original synthetic argument, and neither durable file is created.
 - Non-sensitive paths, notes, call IDs, success state, and neighboring safe records remain materially intact and structurally parseable.
 
 The original implementation had a single `appendFileSync()` in `FlightRecorder`; all record methods route through `appendEvent()`. No alternate FlightRecorder write path was found. Model inputs are represented by turn prompts and session task prompts; reasoning text is recorded as thoughts. Model responses are not stored as raw response bodies. Tool results persist a bounded output snippet and error text, both covered by the common boundary.
@@ -55,6 +54,6 @@ All test credentials are synthetic values constructed in test code. This artifac
 
 ## Limitations and disposition
 
-This evidence establishes FlightRecorder and the directly named local audit append behavior. It does not claim that every application persistence subsystem is a logging or telemetry sink, nor does it change WP-05 trust ranks, token scoping, rehydration authority, or egress policy. The Phase 2 acceptance criterion for bearer tokens/private keys in crash reports and stack traces remains subject to the existing exception-display paths; no new crash-report persistence mechanism was introduced here.
+This evidence establishes FlightRecorder and the directly named local audit append behavior. It does not claim that every application persistence subsystem is a logging or telemetry sink, nor does it change WP-05 trust ranks, token scoping, rehydration authority, or egress policy. No separate crash-report persistence writer was found in the examined paths; the Phase 2 acceptance criterion for bearer tokens/private keys in crash reports and stack traces remains a bounded limitation pending qualification of all exception-display paths.
 
 CRED-003 is ready for independent qualification and operator review. Issue #12 remains open pending the separate narrow closure reconciliation and operator acceptance.

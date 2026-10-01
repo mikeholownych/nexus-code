@@ -73,17 +73,26 @@ export class FlightRecorder {
 
   private appendEvent(type: FlightEventType, step: number | undefined, payload: Record<string, any>): FlightEvent {
     // Flightlogs are durable telemetry. Sanitize the complete event before its
-    // only write path; a classifier failure must not fall through to plaintext.
+    // only write path; a classifier failure must not fall through to plaintext
+    // or prevent the authorized local capability from executing.
+    const eventId = `evt-${randomUUID().slice(0, 8)}`;
+    const timestamp = new Date().toISOString();
     let sanitizedPayload: Record<string, any>;
     try {
       sanitizedPayload = InformationFlowBoundary.getGlobalInstance().redactForTelemetry(payload);
     } catch {
       // Do not propagate classifier diagnostics that could echo inspected input.
-      throw new Error("Flightlog sanitization failed; event was not persisted");
+      return {
+        eventId,
+        timestamp,
+        type,
+        step,
+        payload: { recordingSkipped: true, reason: "sanitization_failed" },
+      };
     }
     const event: FlightEvent = {
-      eventId: `evt-${randomUUID().slice(0, 8)}`,
-      timestamp: new Date().toISOString(),
+      eventId,
+      timestamp,
       type,
       step,
       payload: sanitizedPayload,
