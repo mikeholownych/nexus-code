@@ -10,7 +10,10 @@
     "setup": "npm run install:cli && npm run build",
     "harness": "node cli/dist/index.js",
     "check": "node cli/dist/index.js check",
-    "models": "node cli/dist/index.js models"
+    "models": "node cli/dist/index.js models",
+    "security-scan": "bash scripts/security_gates.sh",
+    "audit": "npm --prefix cli audit",
+    "sbom": "bash scripts/generate_sbom.sh"
   },
   "keywords": [
     "ai-agent",
