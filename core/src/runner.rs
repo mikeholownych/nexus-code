@@ -103,14 +103,27 @@ pub fn run_command(args: RunCommandArgs, base_dir: &Path) -> Result<RunCommandRe
         return Err(format!("Security Violation: Dangerous command blocked by safety guard ({reason}): '{}'", args.command));
     }
 
-    let working_dir = match args.cwd {
-        Some(ref d) => base_dir.join(d),
-        None => base_dir.to_path_buf(),
-    };
+    let base_canon = base_dir.canonicalize().map_err(|e| format!("Invalid workspace directory: {e}"))?;
 
-    if !working_dir.exists() {
-        return Err(format!("Working directory does not exist: {}", working_dir.display()));
-    }
+    let working_dir = match args.cwd {
+        Some(ref d) => {
+            let p = Path::new(d);
+            let target_path = if p.is_absolute() {
+                p.to_path_buf()
+            } else {
+                base_dir.join(p)
+            };
+            if !target_path.exists() {
+                return Err(format!("Working directory does not exist: {}", target_path.display()));
+            }
+            let canon = target_path.canonicalize().map_err(|e| format!("Invalid cwd: {e}"))?;
+            if !canon.starts_with(&base_canon) {
+                return Err(format!("Security Violation: cwd escapes workspace jail: {d}"));
+            }
+            canon
+        }
+        None => base_canon.clone(),
+    };
 
     let shell_name = if args.shell.trim().is_empty() {
         default_shell()
@@ -315,6 +328,78 @@ mod tests {
 
         assert_eq!(res.exit_code, Some(0));
         assert!(res.stdout.contains("PTY terminal test"));
+    }
+
+    #[test]
+    fn test_cwd_workspace_confinement() {
+        let temp_base = std::env::temp_dir().join(format!("nexus_test_cwd_{}", std::process::id()));
+        let workspace = temp_base.join("workspace");
+        let sub = workspace.join("subdir");
+        let external = temp_base.join("external");
+
+        let _ = std::fs::remove_dir_all(&temp_base);
+        std::fs::create_dir_all(&sub).unwrap();
+        std::fs::create_dir_all(&external).unwrap();
+
+        // 1. None cwd defaults to base_dir
+        let res_none = run_command(RunCommandArgs {
+            command: "pwd".into(),
+            cwd: None,
+            timeout_secs: 5,
+            shell: default_shell(),
+            pty: false,
+        }, &workspace);
+        assert!(res_none.is_ok());
+
+        // 2. In-workspace relative subdir cwd is permitted
+        let res_sub = run_command(RunCommandArgs {
+            command: "pwd".into(),
+            cwd: Some("subdir".into()),
+            timeout_secs: 5,
+            shell: default_shell(),
+            pty: false,
+        }, &workspace);
+        assert!(res_sub.is_ok());
+
+        // 3. Absolute path outside workspace is rejected
+        let res_ext = run_command(RunCommandArgs {
+            command: "pwd".into(),
+            cwd: Some(external.to_string_lossy().to_string()),
+            timeout_secs: 5,
+            shell: default_shell(),
+            pty: false,
+        }, &workspace);
+        assert!(res_ext.is_err());
+        assert!(res_ext.unwrap_err().contains("cwd escapes workspace jail"));
+
+        // 4. Traversal ../../ outside workspace is rejected
+        let res_traversal = run_command(RunCommandArgs {
+            command: "pwd".into(),
+            cwd: Some("../../".into()),
+            timeout_secs: 5,
+            shell: default_shell(),
+            pty: false,
+        }, &workspace);
+        assert!(res_traversal.is_err());
+        assert!(res_traversal.unwrap_err().contains("cwd escapes workspace jail"));
+
+        // 5. Escaping symlink cwd is rejected
+        #[cfg(unix)]
+        {
+            let sym_cwd = workspace.join("sym_ext_cwd");
+            let _ = std::os::unix::fs::symlink(&external, &sym_cwd);
+            let res_sym = run_command(RunCommandArgs {
+                command: "pwd".into(),
+                cwd: Some("sym_ext_cwd".into()),
+                timeout_secs: 5,
+                shell: default_shell(),
+                pty: false,
+            }, &workspace);
+            assert!(res_sym.is_err());
+            assert!(res_sym.unwrap_err().contains("cwd escapes workspace jail"));
+        }
+
+        let _ = std::fs::remove_dir_all(&temp_base);
     }
 }
 

@@ -448,21 +448,32 @@ export class InteractiveRepl {
             continue;
           }
         } else if (trimmed.startsWith("!")) {
-          // Direct raw shell escape (e.g. !git status, !cargo check, !ls -la)
+          // Explicit Operator Direct Shell Domain (ACT-004, AUTH-001, F-05)
           const shellCmd = trimmed.slice(1).trim();
           if (shellCmd) {
             console.log(pc.dim(`🐚 [Direct Shell] ${shellCmd}`));
-            try {
-              const out = execSync(shellCmd, {
-                cwd: this.config.workspace,
-                shell: this.config.shell,
-                encoding: "utf-8",
-              });
-              if (out) process.stdout.write(out);
-            } catch (err: any) {
-              if (err.stdout) process.stdout.write(err.stdout);
-              if (err.stderr) process.stderr.write(err.stderr);
-              console.log(pc.red(`Command exited with status ${err.status}`));
+            const receipt = await this.agent.getSpine().execute(
+              {
+                toolName: "run_command",
+                args: { command: shellCmd },
+                actor: "operator",
+                executionDomain: "operator_direct_shell",
+              },
+              {
+                workspaceRoot: this.config.workspace,
+                readOnly: this.config.readOnly,
+                bridge: this.agent.getBridge(),
+              }
+            );
+
+            if (receipt.output) {
+              process.stdout.write(receipt.output);
+            }
+            if (receipt.error) {
+              console.log(pc.red(receipt.error));
+            }
+            if (!receipt.success && receipt.status === "DENIED") {
+              console.log(pc.yellow(`Execution denied by authority admission gate.`));
             }
             console.log();
           }

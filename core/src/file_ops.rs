@@ -1,8 +1,11 @@
 use serde::{Deserialize, Serialize};
 use similar::{ChangeTag, TextDiff};
 use std::fs::{self, File};
-use std::io::{self, BufRead, BufReader};
+use std::io::{self, BufRead, BufReader, Read, Seek, SeekFrom, Write};
 use std::path::Path;
+
+#[cfg(unix)]
+use std::os::unix::io::AsRawFd;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ReadFileArgs {
@@ -49,16 +52,55 @@ pub struct EditFileResult {
     pub diff: String,
 }
 
-/// Helper to verify a file is not binary
-fn is_binary_file(path: &Path) -> io::Result<bool> {
-    let mut file = File::open(path)?;
+/// Verifies that an open file descriptor's target actually resides within the authorized workspace jail.
+/// Implements Option C of DEC-01 (Descriptor-Level Verification).
+pub fn verify_descriptor_confinement<F: AsRawFd>(file: &F, base_canon: &Path) -> Result<(), String> {
+    #[cfg(target_os = "linux")]
+    {
+        let fd = file.as_raw_fd();
+        let proc_fd_path = format!("/proc/self/fd/{}", fd);
+        match fs::read_link(&proc_fd_path) {
+            Ok(resolved_path) => {
+                if !resolved_path.starts_with(base_canon) {
+                    return Err(format!(
+                        "Security Violation: File descriptor points outside workspace jail: {}",
+                        resolved_path.display()
+                    ));
+                }
+            }
+            Err(e) => {
+                return Err(format!(
+                    "Security Violation: Failed to verify descriptor confinement (/proc/self/fd/{}): {e}",
+                    fd
+                ));
+            }
+        }
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = file;
+        let _ = base_canon;
+    }
+    Ok(())
+}
+
+/// Helper to verify an open file descriptor is not binary
+fn is_binary_file_descriptor(mut file: &File) -> io::Result<bool> {
     let mut buffer = [0u8; 1024];
-    use std::io::Read;
     let bytes_read = file.read(&mut buffer)?;
+    file.seek(SeekFrom::Start(0))?;
     Ok(buffer[..bytes_read].contains(&0))
 }
 
+/// Helper to verify a file is not binary
+#[allow(dead_code)]
+fn is_binary_file(path: &Path) -> io::Result<bool> {
+    let mut file = File::open(path)?;
+    is_binary_file_descriptor(&mut file)
+}
+
 pub fn read_file(args: ReadFileArgs, base_dir: &Path) -> Result<ReadFileResult, String> {
+    let base_canon = base_dir.canonicalize().map_err(|e| format!("Invalid workspace directory: {e}"))?;
     let target = resolve_safe_path(base_dir, &args.path)?;
     if !target.exists() {
         return Err(format!("File does not exist: {}", args.path));
@@ -67,11 +109,13 @@ pub fn read_file(args: ReadFileArgs, base_dir: &Path) -> Result<ReadFileResult, 
         return Err(format!("Target is a directory, not a file: {}", args.path));
     }
 
-    if is_binary_file(&target).unwrap_or(false) {
+    let file = File::open(&target).map_err(|e| format!("Failed to open file: {e}"))?;
+    verify_descriptor_confinement(&file, &base_canon)?;
+
+    if is_binary_file_descriptor(&file).unwrap_or(false) {
         return Err(format!("File is binary, cannot display as text: {}", args.path));
     }
 
-    let file = File::open(&target).map_err(|e| format!("Failed to open file: {e}"))?;
     let file_meta = file.metadata().map_err(|e| format!("Failed to get metadata: {e}"))?;
     let file_size = file_meta.len() as usize;
 
@@ -131,6 +175,7 @@ pub fn read_file(args: ReadFileArgs, base_dir: &Path) -> Result<ReadFileResult, 
 }
 
 pub fn write_file(args: WriteFileArgs, base_dir: &Path) -> Result<WriteFileResult, String> {
+    let base_canon = base_dir.canonicalize().map_err(|e| format!("Invalid workspace directory: {e}"))?;
     let target = resolve_safe_path(base_dir, &args.path)?;
 
     if target.exists() && !args.overwrite {
@@ -160,10 +205,25 @@ pub fn write_file(args: WriteFileArgs, base_dir: &Path) -> Result<WriteFileResul
 
     if let Some(parent) = target.parent() {
         fs::create_dir_all(parent).map_err(|e| format!("Failed to create directories: {e}"))?;
+        let parent_canon = parent.canonicalize().map_err(|e| format!("Invalid parent directory: {e}"))?;
+        if !parent_canon.starts_with(&base_canon) {
+            return Err(format!("Security Violation: Parent directory escapes workspace jail: {}", parent.display()));
+        }
     }
 
-    fs::write(&target, args.content.as_bytes())
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(&target)
+        .map_err(|e| format!("Failed to open file for writing: {e}"))?;
+
+    verify_descriptor_confinement(&file, &base_canon)?;
+
+    file.set_len(0).map_err(|e| format!("Failed to truncate file: {e}"))?;
+    file.write_all(args.content.as_bytes())
         .map_err(|e| format!("Failed to write to file: {e}"))?;
+    file.flush().map_err(|e| format!("Failed to flush file: {e}"))?;
 
     Ok(WriteFileResult {
         path: args.path,
@@ -462,13 +522,20 @@ pub fn validate_syntax_delimiters(content: &str, ext: &str) -> Result<(), String
 }
 
 pub fn edit_file(args: EditFileArgs, base_dir: &Path) -> Result<EditFileResult, String> {
+    let base_canon = base_dir.canonicalize().map_err(|e| format!("Invalid workspace directory: {e}"))?;
     let target = resolve_safe_path(base_dir, &args.path)?;
     if !target.exists() {
         return Err(format!("File does not exist: {}", args.path));
     }
 
-    let raw_original = fs::read_to_string(&target)
-        .map_err(|e| format!("Failed to read file: {e}"))?;
+    let raw_original = {
+        let file = File::open(&target).map_err(|e| format!("Failed to open file: {e}"))?;
+        verify_descriptor_confinement(&file, &base_canon)?;
+        let mut reader = BufReader::new(file);
+        let mut content = String::new();
+        reader.read_to_string(&mut content).map_err(|e| format!("Failed to read file: {e}"))?;
+        content
+    };
 
     // Try exact replacement first
     let (new_file_content, count) = if raw_original.contains(&args.old_content) {
@@ -530,9 +597,17 @@ pub fn edit_file(args: EditFileArgs, base_dir: &Path) -> Result<EditFileResult, 
         diff_str.push_str(&format!("{sign}{change}"));
     }
 
-    // Write modified content
-    fs::write(&target, new_file_content.as_bytes())
+    // Write modified content with descriptor verification
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .truncate(false)
+        .open(&target)
+        .map_err(|e| format!("Failed to open file for writing: {e}"))?;
+    verify_descriptor_confinement(&file, &base_canon)?;
+    file.set_len(0).map_err(|e| format!("Failed to truncate file: {e}"))?;
+    file.write_all(new_file_content.as_bytes())
         .map_err(|e| format!("Failed to write edited content: {e}"))?;
+    file.flush().map_err(|e| format!("Failed to flush edited content: {e}"))?;
 
     Ok(EditFileResult {
         path: args.path,
@@ -553,9 +628,14 @@ pub struct DeleteFileResult {
 }
 
 pub fn delete_file(args: DeleteFileArgs, base_dir: &Path) -> Result<DeleteFileResult, String> {
+    let base_canon = base_dir.canonicalize().map_err(|e| format!("Invalid workspace directory: {e}"))?;
     let target = resolve_safe_path(base_dir, &args.path)?;
     if !target.exists() {
         return Err(format!("Path does not exist: {}", args.path));
+    }
+    let canon = target.canonicalize().map_err(|e| format!("Invalid target: {e}"))?;
+    if !canon.starts_with(&base_canon) {
+        return Err(format!("Security Violation: Path escapes workspace jail: {}", args.path));
     }
     if target.is_dir() {
         fs::remove_dir_all(&target).map_err(|e| format!("Failed to remove directory: {e}"))?;
@@ -650,6 +730,7 @@ pub struct FileInfoResult {
 }
 
 pub fn file_info(args: FileInfoArgs, base_dir: &Path) -> Result<FileInfoResult, String> {
+    let base_canon = base_dir.canonicalize().map_err(|e| format!("Invalid workspace directory: {e}"))?;
     let target = resolve_safe_path(base_dir, &args.path)?;
     if !target.exists() {
         return Ok(FileInfoResult {
@@ -666,6 +747,12 @@ pub fn file_info(args: FileInfoArgs, base_dir: &Path) -> Result<FileInfoResult, 
         });
     }
 
+    if let Ok(canon) = target.canonicalize() {
+        if !canon.starts_with(&base_canon) {
+            return Err(format!("Security Violation: Path escapes workspace jail: {}", args.path));
+        }
+    }
+
     let sym_meta = fs::symlink_metadata(&target).map_err(|e| format!("Metadata error: {e}"))?;
     let is_symlink = sym_meta.file_type().is_symlink();
     let meta = fs::metadata(&target).map_err(|e| format!("Metadata error: {e}"))?;
@@ -677,16 +764,18 @@ pub fn file_info(args: FileInfoArgs, base_dir: &Path) -> Result<FileInfoResult, 
     let mut is_bin = false;
 
     if is_file {
-        is_bin = is_binary_file(&target).unwrap_or(false);
-        if !is_bin {
-            if let Ok(file) = File::open(&target) {
-                if let Ok(mmap) = unsafe { memmap2::Mmap::map(&file) } {
-                    let newlines = mmap.iter().filter(|&&b| b == b'\n').count();
-                    let has_trailing = mmap.last().map(|&b| b != b'\n').unwrap_or(false);
-                    line_count = Some(if has_trailing { newlines + 1 } else { newlines });
-                } else {
-                    let reader = BufReader::new(file);
-                    line_count = Some(reader.lines().count());
+        if let Ok(file) = File::open(&target) {
+            if verify_descriptor_confinement(&file, &base_canon).is_ok() {
+                is_bin = is_binary_file_descriptor(&file).unwrap_or(false);
+                if !is_bin {
+                    if let Ok(mmap) = unsafe { memmap2::Mmap::map(&file) } {
+                        let newlines = mmap.iter().filter(|&&b| b == b'\n').count();
+                        let has_trailing = mmap.last().map(|&b| b != b'\n').unwrap_or(false);
+                        line_count = Some(if has_trailing { newlines + 1 } else { newlines });
+                    } else {
+                        let reader = BufReader::new(file);
+                        line_count = Some(reader.lines().count());
+                    }
                 }
             }
         }
@@ -741,6 +830,7 @@ pub struct BatchReadResult {
 }
 
 pub fn batch_read(args: BatchReadArgs, base_dir: &Path) -> Result<BatchReadResult, String> {
+    let base_canon = base_dir.canonicalize().map_err(|e| format!("Invalid workspace directory: {e}"))?;
     let mut results = Vec::new();
     let max_lines = args.max_lines_per_file.unwrap_or(500);
 
@@ -767,19 +857,30 @@ pub fn batch_read(args: BatchReadArgs, base_dir: &Path) -> Result<BatchReadResul
                     });
                     continue;
                 }
-                if is_binary_file(&target).unwrap_or(false) {
-                    results.push(BatchReadFileEntry {
-                        path: path_str.clone(),
-                        success: false,
-                        total_lines: 0,
-                        content: String::new(),
-                        error: Some("File is binary".into()),
-                    });
-                    continue;
-                }
 
                 match File::open(&target) {
                     Ok(file) => {
+                        if let Err(e) = verify_descriptor_confinement(&file, &base_canon) {
+                            results.push(BatchReadFileEntry {
+                                path: path_str.clone(),
+                                success: false,
+                                total_lines: 0,
+                                content: String::new(),
+                                error: Some(e),
+                            });
+                            continue;
+                        }
+                        if is_binary_file_descriptor(&file).unwrap_or(false) {
+                            results.push(BatchReadFileEntry {
+                                path: path_str.clone(),
+                                success: false,
+                                total_lines: 0,
+                                content: String::new(),
+                                error: Some("File is binary".into()),
+                            });
+                            continue;
+                        }
+
                         let reader = BufReader::new(file);
                         let all_lines: Vec<String> = reader.lines().filter_map(Result::ok).collect();
                         let total = all_lines.len();
@@ -840,16 +941,23 @@ pub struct PatchFileResult {
 }
 
 pub fn patch_file(args: PatchFileArgs, base_dir: &Path) -> Result<PatchFileResult, String> {
+    let base_canon = base_dir.canonicalize().map_err(|e| format!("Invalid workspace directory: {e}"))?;
     let target = resolve_safe_path(base_dir, &args.path)?;
     if !target.exists() {
         return Err(format!("File does not exist: {}", args.path));
     }
-    if is_binary_file(&target).unwrap_or(false) {
-        return Err(format!("Cannot patch binary file: {}", args.path));
-    }
 
-    let original_content = fs::read_to_string(&target)
-        .map_err(|e| format!("Failed to read file: {e}"))?;
+    let original_content = {
+        let file = File::open(&target).map_err(|e| format!("Failed to open file: {e}"))?;
+        verify_descriptor_confinement(&file, &base_canon)?;
+        if is_binary_file_descriptor(&file).unwrap_or(false) {
+            return Err(format!("Cannot patch binary file: {}", args.path));
+        }
+        let mut reader = BufReader::new(file);
+        let mut content = String::new();
+        reader.read_to_string(&mut content).map_err(|e| format!("Failed to read file: {e}"))?;
+        content
+    };
 
     struct Hunk {
         old_lines: Vec<String>,
@@ -944,8 +1052,19 @@ pub fn patch_file(args: PatchFileArgs, base_dir: &Path) -> Result<PatchFileResul
     }
 
     let temp_path = target.with_extension("tmp_patch");
-    fs::write(&temp_path, &new_content)
-        .map_err(|e| format!("Failed to write patched file: {e}"))?;
+    {
+        let mut temp_file = std::fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(&temp_path)
+            .map_err(|e| format!("Failed to open temp patch file: {e}"))?;
+        verify_descriptor_confinement(&temp_file, &base_canon)?;
+        temp_file.set_len(0).map_err(|e| format!("Failed to truncate temp patch file: {e}"))?;
+        temp_file.write_all(new_content.as_bytes())
+            .map_err(|e| format!("Failed to write patched file: {e}"))?;
+        temp_file.flush().map_err(|e| format!("Failed to flush temp patch file: {e}"))?;
+    }
     fs::rename(&temp_path, &target)
         .map_err(|e| format!("Failed to commit patched file: {e}"))?;
 
@@ -1113,6 +1232,171 @@ mod tests {
         assert!(content_after.contains("return a + b;"));
 
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn test_dec01_descriptor_confinement() {
+        let root = std::env::temp_dir().join(format!("test_dec01_{}", std::process::id()));
+        let workspace = root.join("workspace");
+        let external = root.join("external");
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&workspace).unwrap();
+        fs::create_dir_all(&external).unwrap();
+
+        let ext_file = external.join("outside.txt");
+        fs::write(&ext_file, "external secret").unwrap();
+
+        let inside_file = workspace.join("inside.txt");
+        fs::write(&inside_file, "inside content").unwrap();
+
+        let sym_file = workspace.join("sym_link.txt");
+        let _ = std::os::unix::fs::symlink(&ext_file, &sym_file);
+
+        let ws_canon = workspace.canonicalize().unwrap();
+
+        // 1. Direct descriptor verification on valid in-workspace file
+        let valid_f = File::open(&inside_file).unwrap();
+        assert!(verify_descriptor_confinement(&valid_f, &ws_canon).is_ok());
+
+        // 2. Direct descriptor verification on escaping symlink descriptor
+        let sym_f = File::open(&sym_file).unwrap();
+        let res = verify_descriptor_confinement(&sym_f, &ws_canon);
+        assert!(res.is_err());
+        assert!(res.unwrap_err().contains("File descriptor points outside workspace jail"));
+
+        // 3. Attempt read_file through escaping symlink
+        let read_res = read_file(ReadFileArgs {
+            path: "sym_link.txt".into(),
+            start_line: None,
+            end_line: None,
+        }, &workspace);
+        assert!(read_res.is_err());
+
+        // 4. Attempt write_file through escaping symlink
+        let write_res = write_file(WriteFileArgs {
+            path: "sym_link.txt".into(),
+            content: "malicious overwrite".into(),
+            overwrite: true,
+        }, &workspace);
+        assert!(write_res.is_err());
+        // Verify external file was NOT overwritten
+        assert_eq!(fs::read_to_string(&ext_file).unwrap(), "external secret");
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn test_dec01_symlink_race_adversarial() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        use std::sync::Arc;
+        use std::thread;
+        use std::time::Instant;
+
+        let root = std::env::temp_dir().join(format!("test_dec01_race_{}", std::process::id()));
+        let workspace = root.join("workspace");
+        let external = root.join("external");
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&workspace).unwrap();
+        fs::create_dir_all(&external).unwrap();
+
+        let secret_file = external.join("secret.txt");
+        fs::write(&secret_file, "EXTERNAL_SECRET_DATA").unwrap();
+
+        let valid_file = workspace.join("valid.txt");
+        fs::write(&valid_file, "VALID_WORKSPACE_DATA").unwrap();
+
+        let target_symlink = workspace.join("racy_link.txt");
+        let _ = std::os::unix::fs::symlink(&valid_file, &target_symlink);
+
+        let running = Arc::new(AtomicBool::new(true));
+        let running_clone = running.clone();
+        let symlink_path = target_symlink.clone();
+        let valid_target = valid_file.clone();
+        let secret_target = secret_file.clone();
+
+        // Attacker thread rapidly swaps symlink between internal valid file and external secret file
+        let attacker = thread::spawn(move || {
+            let mut flip = false;
+            while running_clone.load(Ordering::Relaxed) {
+                let _ = fs::remove_file(&symlink_path);
+                if flip {
+                    let _ = std::os::unix::fs::symlink(&valid_target, &symlink_path);
+                } else {
+                    let _ = std::os::unix::fs::symlink(&secret_target, &symlink_path);
+                }
+                flip = !flip;
+                thread::yield_now();
+            }
+        });
+
+        let mut read_attempts = 0;
+        let mut read_rejections = 0;
+        let mut read_successes = 0;
+        let mut external_leak_count = 0;
+
+        let start_time = Instant::now();
+        for _ in 0..200 {
+            read_attempts += 1;
+            match read_file(ReadFileArgs {
+                path: "racy_link.txt".into(),
+                start_line: None,
+                end_line: None,
+            }, &workspace) {
+                Ok(res) => {
+                    read_successes += 1;
+                    if res.content.contains("EXTERNAL_SECRET_DATA") {
+                        external_leak_count += 1;
+                    }
+                }
+                Err(err) => {
+                    read_rejections += 1;
+                    assert!(err.contains("Security Violation") || err.contains("File does not exist") || err.contains("Failed to open"));
+                }
+            }
+        }
+
+        let mut write_attempts = 0;
+        let mut write_rejections = 0;
+        let mut write_successes = 0;
+
+        for _ in 0..100 {
+            write_attempts += 1;
+            match write_file(WriteFileArgs {
+                path: "racy_link.txt".into(),
+                content: "VALID_WORKSPACE_DATA".into(),
+                overwrite: true,
+            }, &workspace) {
+                Ok(_) => {
+                    write_successes += 1;
+                }
+                Err(err) => {
+                    write_rejections += 1;
+                    assert!(err.contains("Security Violation") || err.contains("File does not exist") || err.contains("Failed to open"));
+                }
+            }
+        }
+
+        let elapsed = start_time.elapsed();
+
+        // Stop attacker thread
+        running.store(false, Ordering::Relaxed);
+        let _ = attacker.join();
+
+        // 1. External file MUST NEVER have leaked into read results
+        assert_eq!(external_leak_count, 0, "TOCTOU Symlink Race Escape: External secret data was read!");
+
+        // 2. External file MUST NEVER have been mutated by write operations
+        let secret_after = fs::read_to_string(&secret_file).unwrap();
+        assert_eq!(secret_after, "EXTERNAL_SECRET_DATA", "TOCTOU Symlink Race Escape: External file was mutated!");
+
+        println!(
+            "DEC-01 Symlink Race Test: {} reads ({} ok, {} rejected), {} writes ({} ok, {} rejected), leaks: {}, elapsed: {:?}",
+            read_attempts, read_successes, read_rejections, write_attempts, write_successes, write_rejections, external_leak_count, elapsed
+        );
+
+        let _ = fs::remove_dir_all(&root);
     }
 }
 

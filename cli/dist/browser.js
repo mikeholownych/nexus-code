@@ -66,10 +66,42 @@ export class BrowserDriver {
         });
         if (targetUrl.startsWith("file://") || targetUrl.startsWith("/") || fs.existsSync(targetUrl)) {
             const filePath = targetUrl.startsWith("file://") ? targetUrl.replace("file://", "") : targetUrl;
-            const absPath = path.isAbsolute(filePath) ? filePath : path.resolve(this.workspace, filePath);
+            const absPath = path.isAbsolute(filePath) ? path.normalize(filePath) : path.resolve(this.workspace, filePath);
+            // Verify workspace confinement (RES-001, RES-002)
+            const relToWs = path.relative(this.workspace, absPath);
+            if (relToWs.startsWith("..") || path.isAbsolute(relToWs)) {
+                this.consoleLogs.push({
+                    type: "error",
+                    text: `Security Violation: Local file navigation escaped workspace confinement: ${targetUrl}`,
+                    timestamp: new Date().toISOString(),
+                });
+                return {
+                    url: targetUrl,
+                    title: "Security Violation",
+                    status: 403,
+                    contentSnippet: `Security Violation: Local file URL '${targetUrl}' escapes workspace jail.`,
+                };
+            }
             if (fs.existsSync(absPath)) {
                 try {
-                    const raw = fs.readFileSync(absPath, "utf-8");
+                    // Check canonical realpath to prevent symlink traversal
+                    const realTarget = fs.realpathSync(absPath);
+                    const realWs = fs.realpathSync(this.workspace);
+                    const realRel = path.relative(realWs, realTarget);
+                    if (realRel.startsWith("..") || path.isAbsolute(realRel)) {
+                        this.consoleLogs.push({
+                            type: "error",
+                            text: `Security Violation: Symlink escaped workspace confinement: ${targetUrl}`,
+                            timestamp: new Date().toISOString(),
+                        });
+                        return {
+                            url: targetUrl,
+                            title: "Security Violation",
+                            status: 403,
+                            contentSnippet: `Security Violation: Symlink at '${targetUrl}' escapes workspace jail.`,
+                        };
+                    }
+                    const raw = fs.readFileSync(realTarget, "utf-8");
                     this.domContent = raw;
                     const titleMatch = raw.match(/<title>([^<]+)<\/title>/i);
                     this.currentTitle = titleMatch ? titleMatch[1] : path.basename(absPath);
@@ -173,7 +205,12 @@ export class BrowserDriver {
             fs.mkdirSync(outDir, { recursive: true });
         }
         const filename = outputPath || path.join(outDir, `screenshot-${Date.now()}.png`);
-        const resolvedPath = path.isAbsolute(filename) ? filename : path.resolve(this.workspace, filename);
+        const resolvedPath = path.isAbsolute(filename) ? path.normalize(filename) : path.resolve(this.workspace, filename);
+        // Verify workspace confinement (RES-001, RES-002)
+        const rel = path.relative(this.workspace, resolvedPath);
+        if (rel.startsWith("..") || path.isAbsolute(rel)) {
+            throw new Error(`Security Violation: Screenshot output path escapes workspace jail: ${outputPath}`);
+        }
         // Minimal valid 1x1 transparent PNG binary fallback if headless renderer is absent
         const dummyPngBuffer = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==", "base64");
         try {

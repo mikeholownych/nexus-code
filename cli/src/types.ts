@@ -48,6 +48,7 @@ export interface HarnessConfig {
   coreBinaryPath?: string;   // Path to compiled harness-core executable
   dryRun?: boolean;          // Dry-run simulation mode without persisting file modifications
   readOnly?: boolean;        // Reject all mutating tool executions and commands
+  fullAccess?: boolean;      // Broad full-access mode executing without confirmation prompts (AUTH-007, AUTH-008)
   fallbackEndpoints?: string[]; // Failover endpoint URLs if primary endpoint is unavailable
   contextLimit?: number;     // Maximum model context window token limit (default: 65536)
   completionReserveTokens?: number; // Context reserved for each model completion (default: 8192)

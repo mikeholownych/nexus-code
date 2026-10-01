@@ -19,6 +19,7 @@ import {
   InvocationContext,
   extractTargetResources,
 } from "./core/spine.js";
+import { AuthorityAdmissionEngine } from "./core/authority.js";
 import { parseModelResponse } from "./parser.js";
 import { TerminalUI, redactSecrets } from "./ui.js";
 import { getGitInfo, getProjectRules } from "./git.js";
@@ -242,6 +243,7 @@ export class AutonomousAgent {
   private browser: BrowserDriver;
   private knowledge: KnowledgeGraph;
   public readonly capabilityRegistry: CapabilityRegistry;
+  public readonly authorityEngine: AuthorityAdmissionEngine;
   public readonly spine: ExecutionSpine;
   private currentTaskId: string = "task-" + randomUUID().slice(0, 8);
 
@@ -302,9 +304,15 @@ export class AutonomousAgent {
       this.flightRecorder = new FlightRecorder(ws);
     }
     this.capabilityRegistry = createDefaultRegistry();
+    this.authorityEngine = new AuthorityAdmissionEngine({
+      readOnly: config.readOnly,
+      fullAccess: config.fullAccess ?? false,
+    });
     this.spine = new ExecutionSpine({
       registry: this.capabilityRegistry,
       hooks: {
+        authorityAdmission: this.authorityEngine.createAdmissionHook(),
+        resourceConfinement: this.authorityEngine.createConfinementHook(),
         candidateMutation: async (_event) => {
           this.hasPendingModifications = true;
         },
@@ -316,6 +324,14 @@ export class AutonomousAgent {
 
   public getSpine(): ExecutionSpine {
     return this.spine;
+  }
+
+  public getAuthorityEngine(): AuthorityAdmissionEngine {
+    return this.authorityEngine;
+  }
+
+  public getBridge(): RustCoreBridge {
+    return this.bridge;
   }
 
   public getCapabilityRegistry(): CapabilityRegistry {

@@ -7,6 +7,7 @@ import { LocalLlmClient } from "./client.js";
 import { HARNESS_TOOLS, RustCoreBridge, registerBridgeCapabilities } from "./tools.js";
 import { createDefaultRegistry, } from "./core/capabilities.js";
 import { ExecutionSpine, extractTargetResources, } from "./core/spine.js";
+import { AuthorityAdmissionEngine } from "./core/authority.js";
 import { parseModelResponse } from "./parser.js";
 import { TerminalUI, redactSecrets } from "./ui.js";
 import { getGitInfo, getProjectRules } from "./git.js";
@@ -189,6 +190,7 @@ export class AutonomousAgent {
     browser;
     knowledge;
     capabilityRegistry;
+    authorityEngine;
     spine;
     currentTaskId = "task-" + randomUUID().slice(0, 8);
     constructor(config, depth = 0, inheritedWorktreeScope) {
@@ -237,9 +239,15 @@ export class AutonomousAgent {
             this.flightRecorder = new FlightRecorder(ws);
         }
         this.capabilityRegistry = createDefaultRegistry();
+        this.authorityEngine = new AuthorityAdmissionEngine({
+            readOnly: config.readOnly,
+            fullAccess: config.fullAccess ?? false,
+        });
         this.spine = new ExecutionSpine({
             registry: this.capabilityRegistry,
             hooks: {
+                authorityAdmission: this.authorityEngine.createAdmissionHook(),
+                resourceConfinement: this.authorityEngine.createConfinementHook(),
                 candidateMutation: async (_event) => {
                     this.hasPendingModifications = true;
                 },
@@ -250,6 +258,12 @@ export class AutonomousAgent {
     }
     getSpine() {
         return this.spine;
+    }
+    getAuthorityEngine() {
+        return this.authorityEngine;
+    }
+    getBridge() {
+        return this.bridge;
     }
     getCapabilityRegistry() {
         return this.capabilityRegistry;
