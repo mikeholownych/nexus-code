@@ -82,6 +82,8 @@ MIIEowIBAAKCAQEA0Z3vV4k8t...fake...pem...body...content...
         AWS Key: AKIAIOSFODNN7EXAMPLE
         Slack Token: NEXUS_SYNTHETIC_SLACK_TOKEN
         Bearer auth: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.e30.t-IDc
+        Google key: AIzaSyD-1234567890abcdef12345678901234
+        HuggingFace token: hf_1234567890abcdef1234567890abcdef12
         PEM Key:
         ${samplePemKey}
       `;
@@ -94,6 +96,8 @@ MIIEowIBAAKCAQEA0Z3vV4k8t...fake...pem...body...content...
       assert.ok(matchedSecrets.some((s) => s.startsWith("AKIA")));
       assert.ok(matchedSecrets.some((s) => s.startsWith("xoxb-")));
       assert.ok(matchedSecrets.some((s) => s.startsWith("eyJhbGci") || s.startsWith("Bearer ")));
+      assert.ok(matchedSecrets.some((s) => s.startsWith("AIza")));
+      assert.ok(matchedSecrets.some((s) => s.startsWith("hf_")));
       assert.ok(matchedSecrets.some((s) => s.includes("BEGIN RSA PRIVATE KEY")));
     });
 
@@ -124,6 +128,14 @@ MIIEowIBAAKCAQEA0Z3vV4k8t...fake...pem...body...content...
       const payload = `Entropy test: ${highEntropyBase64}`;
       const secrets = boundary.classifyText(payload);
       assert.ok(secrets.some((s) => s.secret === highEntropyBase64 && s.classificationType === "UNCERTAIN"));
+    });
+
+    test("DATA-004: Detects 20-31 character high-entropy tokens (FINDING-WP05-002)", () => {
+      // 24-character random base64 string with high entropy
+      const random24 = "4fA8zK1x9qLmP3wV7tY0bE5r";
+      const payload = `Token: ${random24}`;
+      const secrets = boundary.classifyText(payload);
+      assert.ok(secrets.some((s) => s.secret === random24 && s.classificationType === "UNCERTAIN"));
     });
   });
 
@@ -264,6 +276,16 @@ MIIEowIBAAKCAQEA0Z3vV4k8t...fake...pem...body...content...
       assert.strictEqual(invalidRehydration.inertCount, 1);
       assert.ok(!invalidRehydration.rehydrated.includes(secret));
       assert.ok(invalidRehydration.rehydrated.includes("[NEXUS_SEC_REF_"));
+
+      // Attempt 3: Rehydrate with missing/empty taskId -> FAILS CLOSED (FINDING-WP05-001)
+      const emptyTaskRehydration = boundary.rehydrate(tokenized, {
+        taskId: "", // Empty taskId
+        isAuthorizedSink: true,
+      });
+      assert.strictEqual(emptyTaskRehydration.rehydratedCount, 0);
+      assert.strictEqual(emptyTaskRehydration.inertCount, 1);
+      assert.ok(!emptyTaskRehydration.rehydrated.includes(secret));
+      assert.ok(emptyTaskRehydration.rehydrated.includes("[NEXUS_SEC_REF_"));
     });
 
     test("REHYD-003: Possession alone != authority (isAuthorizedSink=false leaves tokens inert)", () => {
@@ -529,6 +551,46 @@ MIIEowIBAAKCAQEA0Z3vV4k8t...fake...pem...body...content...
 
         assert.ok(capturedBody, "Capture server received no stream body");
         assert.strictEqual(capturedBody!.includes(syntheticSecret), false, "Secret leaked in stream body!");
+        assert.match(capturedBody!, /\[NEXUS_SEC_REF_[a-f0-9]{32}\]/);
+      } finally {
+        captureServer.close();
+      }
+    });
+
+    test("TEST-003: Outbound generateEmbedding transmits 0 synthetic secrets in serialized HTTP body (FINDING-WP05-004)", async () => {
+      const syntheticSecret = "sk-proj-embeddingsecret1234567890abcdef123456";
+      let capturedBody: string | null = null;
+
+      const captureServer = http.createServer((req, res) => {
+        let body = "";
+        req.on("data", (chunk) => (body += chunk));
+        req.on("end", () => {
+          capturedBody = body;
+          res.writeHead(200, { "Content-Type": "application/json" });
+          res.end(
+            JSON.stringify({
+              object: "list",
+              data: [{ object: "embedding", embedding: [0.1, 0.2, 0.3], index: 0 }],
+            })
+          );
+        });
+      });
+
+      await new Promise<void>((r) => captureServer.listen(0, "127.0.0.1", () => r()));
+      const port = (captureServer.address() as AddressInfo).port;
+      const endpoint = `http://127.0.0.1:${port}`;
+
+      try {
+        const client = new LocalLlmClient({
+          model: "test-model",
+          endpoint,
+        });
+        client.setTaskId("task-test-003-embedding");
+
+        await client.generateEmbedding(`Input text containing ${syntheticSecret}`);
+
+        assert.ok(capturedBody, "Capture server received no embedding body");
+        assert.strictEqual(capturedBody!.includes(syntheticSecret), false, "Secret leaked in embedding body!");
         assert.match(capturedBody!, /\[NEXUS_SEC_REF_[a-f0-9]{32}\]/);
       } finally {
         captureServer.close();

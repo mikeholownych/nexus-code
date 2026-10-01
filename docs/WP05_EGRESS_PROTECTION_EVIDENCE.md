@@ -79,13 +79,13 @@ Data is classified into 4 normative categories:
 3. **`CONTEXTUAL_HEURISTIC` (Confidence 0.75):**
    - Contextual RHS assignments (`password = "..."`, `api_key = "..."`), matching values only and strictly preserving LHS code identifiers (e.g. `passwordInput`).
 4. **`UNCERTAIN` (Confidence 0.50):**
-   - High Shannon entropy character sequences (entropy >= 4.5 bits/char for strings >= 20 chars).
+   - High Shannon entropy character sequences (scaled threshold: entropy >= 4.0 for length 20-31 chars, >= 4.5 for length >= 32 chars; FINDING-WP05-002).
 
 ### 3.3 Cryptographically Unguessable Scoped References (`REHYD-001..005`)
 - Sequential integers (`[SECRET_REF_1]`) are **strictly prohibited**.
 - Scoped references are minted as `[NEXUS_SEC_REF_${randomBytes(16).toString("hex")}]` (128 bits of cryptographic entropy).
 - Tokens are bound in the boundary vault to the owning `taskId` and `sessionId`.
-- Rehydration Invariant: Token possession alone does NOT grant rehydration authority (`REHYD-003`). Rehydration requires `isAuthorizedSink === true` and matching `taskId`. Any forged, stale, cross-task, or unauthorized tokens remain inert.
+- Rehydration Invariant: Token possession alone does NOT grant rehydration authority (`REHYD-003`). Rehydration requires `isAuthorizedSink === true` AND strict matching `taskId` (fail-closed on missing, empty, or mismatched `taskId`; `FINDING-WP05-001`). Any forged, stale, cross-task, or unauthorized tokens remain inert.
 
 ---
 
@@ -110,10 +110,10 @@ Data is classified into 4 normative categories:
 
 ## 5. Adversarial Testing & Dynamic Transport Verification
 
-The dedicated test suite `cli/test/egress.test.ts` executes 19 comprehensive tests across 9 suites:
+The dedicated test suite `cli/test/egress.test.ts` executes 21 comprehensive tests across 9 suites:
 
 1. **Dynamic Transport Capture (`TEST-003`):**
-   - An in-process HTTP mock capture server recorded all raw serialized HTTP POST request bodies for `chatCompletion` and `chatCompletionStream`.
+   - In-process HTTP mock capture servers recorded raw serialized HTTP POST request bodies for `chatCompletion`, `chatCompletionStream`, and `generateEmbedding`.
    - Inspection of raw serialized request bodies proved that **0 synthetic secrets leaked over the wire**. All synthetic secrets were replaced with unguessable `[NEXUS_SEC_REF_<hex32>]` tokens.
 2. **Route Fallback Re-Admission (`CTX-006`):**
    - Simulated failover from a failing local inference endpoint to a backup public endpoint. The backup endpoint received fully re-admitted and sanitized payloads with 0 plaintext secrets.
@@ -121,18 +121,24 @@ The dedicated test suite `cli/test/egress.test.ts` executes 19 comprehensive tes
    - 1,000 random token brute-force attempts produced **0 successful rehydrations**.
 4. **Cross-Task Rehydration Attack (`REHYD-002`):**
    - Tokens created in `task-alpha` presented to `task-bravo` remained completely inert (`inertCount: 1`, `rehydratedCount: 0`).
-5. **Unauthorized Sink Attack (`REHYD-003`):**
+5. **Missing/Empty TaskId Rehydration Attack (`FINDING-WP05-001`):**
+   - Rehydration attempted with `taskId: ""` or omitted `taskId` on a task-scoped token failed closed, leaving the token inert (`inertCount: 1`, `rehydratedCount: 0`).
+6. **Unauthorized Sink Attack (`REHYD-003`):**
    - Token presented with `isAuthorizedSink: false` remained inert.
-6. **Classifier Failure Attack (`FAIL-003`):**
+7. **Classifier Failure Attack (`FAIL-003`):**
    - Simulated classifier error failed closed, blocking egress with `FAIL-003` reason and preventing transmission.
-7. **Authority Attack (`DISC-001`):**
+8. **Authority Attack (`DISC-001`):**
    - An actor with full execution access was blocked from exfiltrating credentials across the trust boundary.
+9. **Short High-Entropy Token Detection (`FINDING-WP05-002`):**
+   - Tokens between 20 and 31 characters with high Shannon entropy are detected as Category 4 `UNCERTAIN`.
+10. **Expanded Deterministic Vendor Coverage (`FINDING-WP05-003`):**
+    - Google API keys (`AIza...`), HuggingFace tokens (`hf_...`), and expanded GitHub user/server prefixes (`ghu_`, `ghs_`) are classified deterministically.
 
 ---
 
 ## 6. Verification Results
 
-- `npm --prefix cli test`: **192 passed across 19 suites, 0 failures, 0 open handles, clean natural exit** (44.7s).
+- `npm --prefix cli test`: **194 passed across 19 suites, 0 failures, 0 open handles, clean natural exit** (44s).
 - `cargo test --manifest-path core/Cargo.toml`: **15 passed, 0 failed**.
 - `bash scripts/security_gates.sh`: **All 3 security gates passed cleanly (npm audit clean, RustSec audit clean, 0 unredacted secrets, git diff hygiene clean)**.
 - `make verify-reproducibility`: **Byte-identical artifacts verified**.

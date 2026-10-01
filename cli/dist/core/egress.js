@@ -94,8 +94,12 @@ export class InformationFlowBoundary {
         { name: "OPENAI_API_KEY", regex: /\b(?:sk-[a-zA-Z0-9_\-]{20,64})\b/g },
         // Anthropic API keys
         { name: "ANTHROPIC_API_KEY", regex: /\b(?:sk-ant-[a-zA-Z0-9_\-]{20,64})\b/g },
-        // GitHub Tokens (classic, fine-grained, oauth)
-        { name: "GITHUB_TOKEN", regex: /\b(?:ghp_[a-zA-Z0-9]{36}|github_pat_[a-zA-Z0-9_]{50,90}|gho_[a-zA-Z0-9]{36})\b/g },
+        // GitHub Tokens (classic, fine-grained, oauth, user, server)
+        { name: "GITHUB_TOKEN", regex: /\b(?:ghp_[a-zA-Z0-9]{36}|github_pat_[a-zA-Z0-9_]{50,90}|gho_[a-zA-Z0-9]{36}|ghu_[a-zA-Z0-9]{36}|ghs_[a-zA-Z0-9]{36})\b/g },
+        // Google API Key
+        { name: "GOOGLE_API_KEY", regex: /\b(?:AIza[0-9A-Za-z-_]{30,36})\b/g },
+        // HuggingFace Token
+        { name: "HUGGINGFACE_TOKEN", regex: /\b(?:hf_[a-zA-Z0-9]{34})\b/g },
         // AWS Access Key ID
         { name: "AWS_ACCESS_KEY_ID", regex: /\b(?:AKIA[0-9A-Z]{16})\b/g },
         // Slack Tokens
@@ -209,13 +213,15 @@ export class InformationFlowBoundary {
             }
         }
         // 4. High-Entropy Token Detection (DATA-002: Category 4 / DATA-004)
-        // Check individual non-whitespace tokens length >= 32 with high Shannon entropy
+        // Check individual non-whitespace tokens length >= 20 with high Shannon entropy
         const tokens = text.split(/[\s,;'"()\[\]{}]+/);
         for (const tok of tokens) {
-            if (tok.length >= 32 && tok.length <= 128 && !tok.startsWith("[NEXUS_SEC_REF_") && !seenSecrets.has(tok)) {
+            if (tok.length >= 20 && tok.length <= 128 && !tok.startsWith("[NEXUS_SEC_REF_") && !seenSecrets.has(tok)) {
                 if (/^[a-zA-Z0-9+/=_-]+$/.test(tok)) {
                     const entropy = calculateShannonEntropy(tok);
-                    if (entropy >= 4.5) {
+                    // Scaled entropy threshold: >= 4.0 for length 20-31, >= 4.5 for length >= 32
+                    const threshold = tok.length < 32 ? 4.0 : 4.5;
+                    if (entropy >= threshold) {
                         seenSecrets.add(tok);
                         classified.push({
                             secret: tok,
@@ -399,10 +405,16 @@ export class InformationFlowBoundary {
                 inertCount++;
                 return token; // Inert
             }
-            // Rule 3: Task Scoping (REHYD-002)
-            if (record.taskId && context.taskId && record.taskId !== context.taskId) {
+            // Rule 3: Task & Session Scoping (REHYD-002, FINDING-WP05-001)
+            // If the token is scoped to a taskId, rehydration context MUST supply the matching taskId
+            if (record.taskId && (!context.taskId || record.taskId !== context.taskId)) {
                 inertCount++;
-                return token; // Cross-task token remains inert
+                return token; // Cross-task or un-scoped token remains inert
+            }
+            // If the token is scoped to a sessionId, rehydration context cannot mismatch
+            if (record.sessionId && context.sessionId && record.sessionId !== context.sessionId) {
+                inertCount++;
+                return token; // Cross-session token remains inert
             }
             // Authorized Rehydration
             record.rehydratedCount++;
