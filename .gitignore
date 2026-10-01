@@ -3,4 +3,5 @@ core/target/
 .env
 *.log
 .nexus/
+dist/
 .DS_Store

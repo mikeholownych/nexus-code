@@ -72,13 +72,13 @@ for line in cargo_lines:
         continue
 
     if in_deps and "=" in line and not line.startswith("#"):
-        crate_name = line.split("=")[0].strip()
-        ver_part = line.split("=")[1].strip()
+        parts = line.split("=", 1)
+        crate_name = parts[0].strip()
+        ver_part = parts[1].strip()
         # Parse simple version string or table
         if ver_part.startswith('"'):
             crate_ver = ver_part.strip('"')
         elif "version" in ver_part:
-            # extract version = "..."
             import re
             m = re.search(r'version\s*=\s*"([^"]+)"', ver_part)
             crate_ver = m.group(1) if m else "unknown"
