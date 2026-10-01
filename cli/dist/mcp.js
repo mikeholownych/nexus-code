@@ -390,6 +390,8 @@ export class McpConnection {
         if (this.child) {
             try {
                 this.child.stdin?.end();
+                this.child.stdout?.destroy();
+                this.child.stderr?.destroy();
                 this.child.kill("SIGTERM");
             }
             catch { }
@@ -406,11 +408,19 @@ export class McpConnection {
     }
 }
 export class McpClientManager {
+    static activeManagers = new Set();
     workspace;
     connections = new Map();
     toolToServerMap = new Map();
     constructor(workspace) {
         this.workspace = path.resolve(workspace);
+        McpClientManager.activeManagers.add(this);
+    }
+    static shutdownAllGlobal() {
+        for (const m of McpClientManager.activeManagers) {
+            m.shutdownAll();
+        }
+        McpClientManager.activeManagers.clear();
     }
     async loadAndConnect() {
         this.shutdownAll();
@@ -652,6 +662,7 @@ export class McpClientManager {
         }
         this.connections.clear();
         this.toolToServerMap.clear();
+        McpClientManager.activeManagers.delete(this);
     }
 }
 export class McpServer {

@@ -112,17 +112,18 @@ This document records the empirical verification and technical evidence from the
 | Property | Normative Requirement | Verification Mechanism | Machine Result |
 |---|---|---|---|
 | Single Application Model | `UI-001` | `app.test.ts`, `system_journey.test.ts` | Identical core instance shared across CLI, REPL, and TUI |
-| Non-Bypassable Security Gates | `SCAN-002`, `SCAN-004` | `scripts/security_gates.sh` | Fails closed on bypass attempt or high CVEs |
+| Non-Bypassable Security Gates | `SCAN-002`, `SCAN-004` | `scripts/security_gates.sh`, `scripts/audit_rust_deps.py` | Fails closed on bypass attempt, scanner unavailability, or high CVEs across Node and Rust |
 | Zero Plaintext Credentials | `SCAN-003`, `TEST-003` | Secret scanner in `security_gates.sh` | Clean scan; synthetic secrets flagged |
 | Deterministic SBOM Generation | `REL-001`, `REL-003` | `scripts/generate_sbom.sh` | Valid CycloneDX 1.5 JSON with SHA-256 digest |
 | Reproducible Build | `REL-004` | `make verify-reproducibility` | Clean diff between successive build runs |
 | Independent Fault Boundary | `SEGR-001`..`SEGR-003` | `core/tests/segregation_boundary.rs` | Rust core handles bad arguments without panic |
 | Safe Unauthorized Denial | `FAIL-001`, `AUTH-009` | `system_journey.test.ts` (Phase 2) | Mutating command denied with `status: "DENIED"` |
 | Candidate Validation Merge Gate | `CAND-001`..`CAND-004` | `system_journey.test.ts` (Phase 7) | Merge refused without valid receipt, permitted with it |
+| Canonical Test Lifecycle | `TEST-001`, `TEST-004` | `make test`, `npm test` | All 173 tests terminate naturally with exit code 0 |
 
 ---
 
 ## 5. Known Bounded Limitations
 - **Ratatui Presentation (`DEC-03`):** Explicitly deferred post-Issue #12. The existing TypeScript `TerminalDashboard` is retained.
 - **Issue #10:** Explicitly deferred pending broader UI redesign.
-- **Legacy Phase 1 Test Handles (`F-WP07-OBS-03`):** Legacy `test/harness.test.ts` leaves open timers during full `npm test`; Phase 4 suites and WP-11 suites terminate cleanly in seconds.
+- **Canonical Test Lifecycle (`F-WP07-OBS-03`):** Verified resolved. All child processes, pipes, and MCP server connections are cleanly disposed, enabling natural termination for `make test` and `npm test`.

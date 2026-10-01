@@ -35,16 +35,31 @@ echo "[+] [Gate 1] Node.js dependencies clean (zero High/Critical vulnerabilitie
 
 echo "[*] [Gate 1] Verifying Rust core dependencies..."
 cd "${ROOT_DIR}/core"
+if [[ ! -f "Cargo.lock" ]]; then
+  echo "[-] FAIL [SCAN-001]: Missing Cargo.lock in core crate." >&2
+  exit 1
+fi
+
+if [[ -n "${SIMULATE_RUST_SCANNER_UNAVAILABLE:-}" && "${SIMULATE_RUST_SCANNER_UNAVAILABLE}" == "1" ]]; then
+  echo "[-] FAIL [SCAN-001]: Rust vulnerability scanner unavailable. Security gates cannot establish dependency safety." >&2
+  exit 1
+fi
+
 if command -v cargo-audit &>/dev/null; then
-  cargo audit
-else
-  # Built-in check for Cargo.lock and dependency graph integrity
-  if [[ ! -f "Cargo.lock" ]]; then
-    echo "[-] FAIL [SCAN-001]: Missing Cargo.lock in core crate." >&2
+  if ! cargo audit; then
+    echo "[-] FAIL [SCAN-002]: cargo audit reported vulnerability in Rust core dependencies." >&2
     exit 1
   fi
+elif [[ -f "${SCRIPT_DIR}/audit_rust_deps.py" ]]; then
+  if ! python3 "${SCRIPT_DIR}/audit_rust_deps.py" "${ROOT_DIR}/core/Cargo.lock"; then
+    echo "[-] FAIL [SCAN-002]: Vulnerability audit detected issue in Rust core dependencies." >&2
+    exit 1
+  fi
+else
+  echo "[-] FAIL [SCAN-001]: Rust vulnerability scanner unavailable. Security gates cannot establish dependency safety." >&2
+  exit 1
 fi
-echo "[+] [Gate 1] Rust core dependencies verified."
+echo "[+] [Gate 1] Rust core dependencies verified (zero High/Critical vulnerabilities)."
 
 # -----------------------------------------------------------------------------
 # Gate 2: Secret Scanning across Workspace & Candidate Trees (SCAN-003, TEST-003)

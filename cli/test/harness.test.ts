@@ -1,4 +1,4 @@
-import { test, describe } from "node:test";
+import { test, describe, after } from "node:test";
 import assert from "node:assert/strict";
 import * as path from "node:path";
 import * as fs from "node:fs";
@@ -26,6 +26,7 @@ import { executeWebSearch } from "../src/search_web.js";
 import { RustCoreBridge } from "../src/tools.js";
 import { wrapSandboxedCommand, isBwrapAvailable } from "../src/sandbox.js";
 import { PluginManager } from "../src/plugins.js";
+import { McpClientManager } from "../src/mcp.js";
 import { WorktreeManager } from "../src/worktree.js";
 import { FlightRecorder, FlightPlayer } from "../src/flight.js";
 import { parseDiffHunks, buildSingleHunkPatch, HunkStager } from "../src/stager.js";
@@ -3534,5 +3535,10 @@ Workspace path: /home/user/project.
     assert.ok(restored.includes("ghp_123456789012345678901234567890123456"));
     assert.ok(restored.includes("Bearer bAGOhOwLeY7Mabcdef123456789"));
     assert.strictEqual(vault.getMappingCount(), 3);
+  });
+
+  after(() => {
+    McpClientManager.shutdownAllGlobal();
+    RustCoreBridge.shutdownAllGlobal();
   });
 });

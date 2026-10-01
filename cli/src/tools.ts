@@ -76,6 +76,7 @@ export function isSafeOutboundUrl(urlStr: string): { safe: boolean; reason?: str
 }
 
 export class RustCoreBridge {
+  private static activeBridges: Set<RustCoreBridge> = new Set();
   private workspace: string;
   private defaultShell: string;
   private coreBinaryPath: string | null = null;
@@ -110,6 +111,7 @@ export class RustCoreBridge {
     this.sandbox = sandbox;
     this.requireSandbox = requireSandbox;
     this.securityManager = new SecurityManager(this.workspace);
+    RustCoreBridge.activeBridges.add(this);
 
     if (customBinaryPath && fs.existsSync(customBinaryPath)) {
       this.coreBinaryPath = customBinaryPath;
@@ -203,7 +205,10 @@ export class RustCoreBridge {
   private cleanupRpc(): void {
     if (this.rpcProcess) {
       try {
-        this.rpcProcess.kill();
+        this.rpcProcess.stdin?.end();
+        this.rpcProcess.stdout?.destroy();
+        this.rpcProcess.stderr?.destroy();
+        this.rpcProcess.kill("SIGTERM");
       } catch {}
       this.rpcProcess = null;
     }
@@ -260,6 +265,14 @@ export class RustCoreBridge {
 
   public shutdown(): void {
     this.cleanupRpc();
+    RustCoreBridge.activeBridges.delete(this);
+  }
+
+  public static shutdownAllGlobal(): void {
+    for (const b of RustCoreBridge.activeBridges) {
+      b.shutdown();
+    }
+    RustCoreBridge.activeBridges.clear();
   }
 
   private async executeViaRpc(toolName: string, args: Record<string, any>): Promise<ExecutionResult | null> {

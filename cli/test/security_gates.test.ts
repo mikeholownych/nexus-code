@@ -59,6 +59,54 @@ describe("WP-11: Security Lifecycle Gates & Segregation (INC-12, SCAN-001..005, 
     );
   });
 
+  test("SCAN-001 & SCAN-004: Rust vulnerability scanner unavailable fails closed", () => {
+    const scriptPath = path.join(scriptsDir, "security_gates.sh");
+    assert.throws(
+      () => {
+        execFileSync("bash", [scriptPath], {
+          cwd: rootDir,
+          env: { ...process.env, SIMULATE_RUST_SCANNER_UNAVAILABLE: "1" },
+          stdio: "pipe",
+        });
+      },
+      (err: any) => {
+        const stderr = err.stderr ? err.stderr.toString() : "";
+        return stderr.includes("Rust vulnerability scanner unavailable");
+      }
+    );
+  });
+
+  test("SCAN-002: Rust dependency vulnerability detection on fixture fails closed", () => {
+    const auditScript = path.join(scriptsDir, "audit_rust_deps.py");
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-vuln-cargo-"));
+    try {
+      const lockContent = `version = 3
+
+[[package]]
+name = "smallvec"
+version = "0.6.13"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+`;
+      const lockPath = path.join(tmpDir, "Cargo.lock");
+      fs.writeFileSync(lockPath, lockContent);
+
+      assert.throws(
+        () => {
+          execFileSync("python3", [auditScript, lockPath], {
+            cwd: rootDir,
+            stdio: "pipe",
+          });
+        },
+        (err: any) => {
+          const stderr = err.stderr ? err.stderr.toString() : "";
+          return stderr.includes("vulnerability/vulnerabilities detected") && stderr.includes("smallvec@0.6.13");
+        }
+      );
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
   test("SCAN-003 & TEST-003: Secret scanning detects synthetic credentials in workspace", () => {
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-secret-scan-"));
     try {

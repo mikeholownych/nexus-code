@@ -62,6 +62,7 @@ export function isSafeOutboundUrl(urlStr) {
     return { safe: true };
 }
 export class RustCoreBridge {
+    static activeBridges = new Set();
     workspace;
     defaultShell;
     coreBinaryPath = null;
@@ -84,6 +85,7 @@ export class RustCoreBridge {
         this.sandbox = sandbox;
         this.requireSandbox = requireSandbox;
         this.securityManager = new SecurityManager(this.workspace);
+        RustCoreBridge.activeBridges.add(this);
         if (customBinaryPath && fs.existsSync(customBinaryPath)) {
             this.coreBinaryPath = customBinaryPath;
         }
@@ -164,7 +166,10 @@ export class RustCoreBridge {
     cleanupRpc() {
         if (this.rpcProcess) {
             try {
-                this.rpcProcess.kill();
+                this.rpcProcess.stdin?.end();
+                this.rpcProcess.stdout?.destroy();
+                this.rpcProcess.stderr?.destroy();
+                this.rpcProcess.kill("SIGTERM");
             }
             catch { }
             this.rpcProcess = null;
@@ -220,6 +225,13 @@ export class RustCoreBridge {
     }
     shutdown() {
         this.cleanupRpc();
+        RustCoreBridge.activeBridges.delete(this);
+    }
+    static shutdownAllGlobal() {
+        for (const b of RustCoreBridge.activeBridges) {
+            b.shutdown();
+        }
+        RustCoreBridge.activeBridges.clear();
     }
     async executeViaRpc(toolName, args) {
         const daemon = this.ensureRpcDaemon();

@@ -546,6 +546,7 @@ export class AutonomousAgent {
             throw new Error("Cannot switch workspaces while a speculative worktree is unresolved; merge or discard it first.");
         }
         this.bridge.shutdown();
+        this.mcpManager.shutdownAll();
         this.config.workspace = newWorkspace;
         this.bridge = new RustCoreBridge(this.config.workspace, this.config.shell, this.config.coreBinaryPath, this.config.dryRun, this.config.readOnly, this.bridgeSandboxSetting(), Boolean(this.activeWorktree) || Boolean(this.inheritedWorktreeScope?.requireSandbox));
         this.skillManager.setWorkspace(newWorkspace);
