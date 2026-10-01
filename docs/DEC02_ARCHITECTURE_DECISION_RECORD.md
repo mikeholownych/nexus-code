@@ -5,7 +5,7 @@
 - **Title:** Candidate Identity & Validation Binding Design
 - **Work Package:** `WP-04 — Candidate Identity & Validation Binding`
 - **Increment:** `INC-05`
-- **Status:** `RESOLVED`
+- **Status:** `RESOLVED (CORRECTED)`
 - **Date:** 2026-10-01
 - **Owning Component:** `cli/src/core/candidate.ts`, `cli/src/worktree.ts`, `cli/src/evaluator.ts`, `cli/src/agent.ts`
 
@@ -57,19 +57,20 @@ In earlier harness designs, validation was decoupled from candidate identity or 
   - Computation times exceed several seconds, violating latency requirements.
 - **Disposition:** **REJECTED**.
 
-### Option C: Canonical Content-Addressed Manifest with Dependency and Evaluator Binding (SELECTED)
+### Option C: Canonical Structural Content-Addressed Manifest with Dependency and Evaluator Binding (SELECTED & CORRECTED)
 - **Mechanism:**
-  1. **Git Workspaces:** Query `git status --porcelain=v1` to discover the exact set of tracked modifications (staged and unstaged) and untracked files. Sort paths canonically (`localeCompare`). Compute SHA-256 hashes of modified and untracked file contents. Combine `rootBaseSha` and canonical manifest hash to form `candidateId` (`SHA-256("candidate-v1:git:" + rootBaseSha + ":" + manifestHash)`). Exclude `.gitignore` matched build artifacts automatically.
-  2. **Non-Git Workspaces:** Perform deterministic recursive filesystem manifest generation excluding standard ephemeral folders (`.git`, `node_modules`, `.nexus`, `dist`, `target`), hashing file sizes and contents.
-  3. **Validation Receipts (`CAND-001`):** Model validation receipts containing `receiptId`, `candidateId`, `verifierCommand`, `exitCode`, `stdoutHash`, `status`, and `materialDependencies` (`name`, `path`, `versionOrHash`).
-  4. **Active Mutation Invalidation (`CAND-002`):** Register `CandidateMutationHook` on the `ExecutionSpine` to detect tool mutations and immediately transition active receipts to `INVALIDATED`.
-  5. **At-Merge Disk Re-verification (`CAND-003`):** In `mergeWorktree`, recompute candidate identity from disk. If the on-disk candidate identity or material dependency hashes differ from the receipt, refuse merge.
-  6. **Root Cleanliness Gating (`CAND-004`):** Inspect target root with `git status --porcelain`. If dirty, refuse merge and retain the candidate worktree.
-  7. **SWE-bench Evaluator Binding (`F-02`, `VER-001`, `VER-005`):** Compute candidate identity and issue `ValidationReceipt` directly within `BenchmarkEvaluator` against candidate workspaces.
+  1. **Git Workspaces:** Query `git status --porcelain=v1 --untracked-files=all` using pattern `/^([ MADRCUT?!]{2})\s+(.*)$/` capturing modifications (`M`), additions (`A`), deletions (`D`), renames (`R`), copies (`C`), unmerged (`U`), type changes (`T`), and untracked files (`??`).
+  2. **Structural Attributes & Symlink Identity:** Inspect entries via `fs.lstatSync`. Record explicit structural mode (`"100644"` for non-executable file, `"100755"` for executable file, `"120000"` for symlink, `"000000"` for deleted). For symlinks, hash the target link text (`fs.readlinkSync`) rather than dereferenced file bytes. Sort paths canonically (`localeCompare`).
+  3. **Non-Git Workspaces:** Perform deterministic recursive traversal excluding standard ephemeral folders (`.git`, `node_modules`, `.nexus`, `dist`, `target`). Explicitly discover and record symbolic links (`mode: "120000"`). Unsupported filesystem object types (e.g., FIFOs, sockets) fail closed.
+  4. **Validation Receipts (`CAND-001`):** Model validation receipts containing `receiptId`, `candidateId`, `verifierCommand`, `exitCode`, `stdoutHash`, `status`, and declared `materialDependencies` (`name`, `path`, `versionOrHash`).
+  5. **Immediate Mutation Invalidation (`CAND-002`):** Register `CandidateMutationHook` on `ExecutionSpine`. When a mutating capability completes, evaluate candidate workspace containment. Any successful mutation inside the workspace (including new file creation, replacement, or deletion) or touching declared material dependencies immediately transitions active receipts to `INVALIDATED`.
+  6. **At-Merge Disk Re-verification (`CAND-003`):** In `mergeWorktree`, recompute candidate identity from disk. If the on-disk candidate identity or material dependency hashes differ from the receipt, refuse merge.
+  7. **Root Cleanliness Gating (`CAND-004`):** Inspect target root with `git status --porcelain`. If dirty, refuse merge and retain the candidate worktree.
+  8. **SWE-bench Evaluator Binding (`F-02`, `VER-001`, `VER-005`):** Compute candidate identity and issue `ValidationReceipt` directly within `BenchmarkEvaluator` against candidate workspaces.
 - **Evaluation:**
   - Fast: only examines modified/untracked files (< 50ms typical).
   - Deterministic and collision-resistant (SHA-256).
-  - Defeats out-of-band tampering and post-validation mutation.
+  - Defeats out-of-band tampering, post-validation mutation, and structural type changes.
   - Guarantees target repository integrity.
 - **Disposition:** **ACCEPTED AND IMPLEMENTED**.
 
@@ -126,10 +127,20 @@ flowchart TD
 
 ### 4.2 Core Data Structures
 
+- `FileCandidateEntry`:
+  ```typescript
+  export interface FileCandidateEntry {
+    path: string;           // Relative POSIX path
+    mode: string;           // "100644" | "100755" | "120000" | "000000"
+    contentHash: string;    // SHA-256 hex
+    size: number;
+    status: CandidateFileStatus; // "modified" | "added" | "deleted" | "untracked" | "typechange"
+  }
+  ```
 - `CandidateIdentity`:
   ```typescript
   export interface CandidateIdentity {
-    candidateId: string;           // SHA-256 hex string
+    candidateId: string;    // SHA-256 hex string
     workspacePath: string;
     rootBaseSha: string;
     trackedChanges: FileCandidateEntry[];
@@ -149,6 +160,7 @@ flowchart TD
     stdoutHash: string;
     status: "PASSED" | "FAILED" | "INVALIDATED";
     materialDependencies: MaterialValidationDependency[];
+    evaluatorBinding?: EvaluatorBinding;
     invalidationReason?: string;
     timestamp: string;
   }
@@ -158,7 +170,7 @@ flowchart TD
 
 ## 5. Empirical Verification & Test Evidence
 
-Comprehensive tests in `cli/test/candidate.test.ts` and `cli/test/evaluator.test.ts` demonstrate compliance:
+Comprehensive tests in `cli/test/candidate.test.ts` and `cli/test/evaluator.test.ts` demonstrate compliance across 25 automated test cases:
 
 1. **Determinism (`CAND-001`, Property A):** Unchanged candidates produce identical 64-character SHA-256 identities across invocations.
 2. **Tracked & Unstaged Modifications (`CAND-001`, Properties B & C):** Editing files, staging changes, or creating unstaged edits immediately changes `candidateId`.
@@ -172,13 +184,20 @@ Comprehensive tests in `cli/test/candidate.test.ts` and `cli/test/evaluator.test
 10. **Target Repository Cleanliness (`CAND-004`):** Dirty root repository with uncommitted changes blocks candidate merge; worktree remains intact on disk.
 11. **Full-Access Invariance (Property P):** Running with `--full-access` does not bypass validation receipt enforcement or candidate identity checks.
 12. **SWE-bench Evaluator Candidate Binding (`F-02`, `VER-001`, `VER-005`):** Evaluator directly binds validation receipts to candidate worktree identities.
+13. **Git Typechange Detection (`F-WP04-MAT-01`):** Replacing a regular file with a symlink or vice-versa is detected via Git porcelain status `T`, changing `candidateId`.
+14. **Immediate Mutation Invalidation on New Files (`F-WP04-MAT-02`):** Creating an unseen new file post-validation transitions active receipts to `INVALIDATED`.
+15. **Symlink Target Identity (`F-WP04-MIN-01`):** Changing symlink target text changes `candidateId`; symlinks and regular files remain structurally distinct.
+16. **Executable Mode (`F-WP04-MIN-02`):** Executing `chmod +x` or `chmod -x` on content-modified files alters `candidateId` via mode bits.
+17. **Non-Git Symlinks (`F-WP04-MIN-03`):** Non-git workspace manifests discover symlinks and detect link target alterations.
+18. **Combined Adversarial Case:** Tracked content edit + typechange + validation + subsequent new file mutation fails closed.
 
-All 19 test cases in `cli/test/candidate.test.ts` and `cli/test/evaluator.test.ts` passed with zero failures.
+All 25 test cases passed with zero failures.
 
 ---
 
-## 6. Residual Considerations and Mitigations
+## 6. Residual Considerations and Operating Envelope
 
-- **Symlinks:** Symlinks within candidate workspaces are hashed by target path or content, avoiding loops.
-- **Large Candidate Files:** File content hashing is performed synchronously via standard crypto SHA-256 streams, keeping overhead under 10ms for multi-megabyte files.
-- **Concurrency & TOCTOU:** Disk state is re-evaluated immediately before the merge operation inside `mergeWorktree`, ensuring that out-of-band file updates cannot race past validation checks.
+- **Material Dependency Discovery Boundary:** `CandidateTracker` verifies declared `materialDependencies` against on-disk hashes at merge time. Automatic discovery of implicit project dependencies (e.g. compiler version, ambient test runner binaries) is not implemented in this increment; the validator/evaluator producer is responsible for declaring relevant material dependencies.
+- **Evaluator Binding Gating (`F-WP04-OBS-01`):** `EvaluatorBinding` is recorded on receipts as audit metadata. In the current single-tenant runtime, merge gating checks candidate equality and receipt status, but does not enforce task-to-evaluator authorization mapping.
+- **Verifier Output Hashing in Agent Loop (`F-WP04-OBS-02`):** `task_completed` records a static digest for `stdoutHash`. Benchmark evaluator records the real stdout hash.
+- **Concurrency & TOCTOU Boundary (`F-WP04-OBS-03`):** Disk state is re-evaluated immediately before `git commit` in `mergeWorktree`. Under the present single-agent sequential execution model, concurrent writers are not active.

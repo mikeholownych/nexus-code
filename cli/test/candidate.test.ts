@@ -504,4 +504,215 @@ describe("WP-04: Candidate Identity & Validation Binding (INC-05, DEC-02)", () =
     assert.match(receipt.invalidationReason!, /Candidate mutated post-validation by tool 'write_file'/);
     assert.strictEqual(tracker.getActiveReceipt("cand-test-12345"), null, "Active receipt is no longer returned");
   });
+
+  test("F-WP04-MAT-01: Git typechange detection (regular file <-> symlink)", () => {
+    const tracker = new CandidateTracker();
+    const baselineId = tracker.computeCandidateIdentitySync(rootGit).candidateId;
+
+    const targetFile = path.join(rootGit, "src", "index.ts");
+    const origContent = fs.readFileSync(targetFile, "utf-8");
+
+    try {
+      // 1. Replace regular file with symlink
+      fs.unlinkSync(targetFile);
+      fs.symlinkSync("README.md", targetFile);
+
+      const symlinkId = tracker.computeCandidateIdentitySync(rootGit);
+      assert.notStrictEqual(symlinkId.candidateId, baselineId, "Replacing file with symlink must alter candidateId");
+      assert.strictEqual(symlinkId.trackedChanges.length, 1);
+      assert.strictEqual(symlinkId.trackedChanges[0].status, "typechange");
+      assert.strictEqual(symlinkId.trackedChanges[0].mode, "120000");
+
+      // 2. Replace symlink back with regular file having different content
+      fs.unlinkSync(targetFile);
+      fs.writeFileSync(targetFile, "export const newContent = 100;\n");
+
+      const regularFileId = tracker.computeCandidateIdentitySync(rootGit);
+      assert.notStrictEqual(regularFileId.candidateId, symlinkId.candidateId, "Replacing symlink with file must alter candidateId");
+      assert.strictEqual(regularFileId.trackedChanges[0].mode, "100644");
+    } finally {
+      try {
+        if (fs.existsSync(targetFile) || fs.lstatSync(targetFile).isSymbolicLink()) {
+          fs.unlinkSync(targetFile);
+        }
+      } catch {}
+      fs.writeFileSync(targetFile, origContent);
+    }
+  });
+
+  test("F-WP04-MAT-02: Immediate mutation invalidation on new file creation post-validation", async () => {
+    const tracker = new CandidateTracker();
+    const id = tracker.computeCandidateIdentitySync(rootGit);
+
+    const receipt = tracker.recordValidationReceipt({
+      candidateId: id.candidateId,
+      verifierCommand: "npm test",
+      exitCode: 0,
+      stdoutHash: hashContent("ok"),
+      status: "PASSED",
+      materialDependencies: [],
+    });
+
+    assert.strictEqual(receipt.status, "PASSED");
+    assert.strictEqual(tracker.getActiveReceipt(id.candidateId) !== null, true);
+
+    const hook = tracker.createMutationHook();
+    await hook(
+      {
+        toolName: "write_file",
+        mutatedPaths: ["src/brand_new_unseen_file.ts"],
+        invocationId: "inv-new-file",
+        durationMs: 5,
+      },
+      { workspaceRoot: rootGit }
+    );
+
+    assert.strictEqual(receipt.status, "INVALIDATED", "Creating a new file inside candidate workspace must invalidate receipt");
+    assert.match(receipt.invalidationReason!, /Candidate mutated post-validation by tool 'write_file'/);
+    assert.strictEqual(tracker.getActiveReceipt(id.candidateId), null, "Active receipt must be cleared");
+  });
+
+  test("F-WP04-MIN-01: Symlink target text change changes candidateId; symlink and regular file are structurally distinct", () => {
+    const tracker = new CandidateTracker();
+    const testSymlinkPath = path.join(rootGit, "src", "link_test.ts");
+
+    try {
+      // 1. Point to README.md
+      fs.symlinkSync("../README.md", testSymlinkPath);
+      const idA = tracker.computeCandidateIdentitySync(rootGit);
+
+      // 2. Point to index.ts
+      fs.unlinkSync(testSymlinkPath);
+      fs.symlinkSync("index.ts", testSymlinkPath);
+      const idB = tracker.computeCandidateIdentitySync(rootGit);
+
+      assert.notStrictEqual(idA.candidateId, idB.candidateId, "Changing symlink target text must change candidateId");
+      assert.strictEqual(idA.untrackedFiles[0].mode, "120000");
+      assert.strictEqual(idB.untrackedFiles[0].mode, "120000");
+
+      // 3. Regular file with exact same string as target text
+      fs.unlinkSync(testSymlinkPath);
+      fs.writeFileSync(testSymlinkPath, "index.ts");
+      const idRegular = tracker.computeCandidateIdentitySync(rootGit);
+
+      assert.notStrictEqual(idRegular.candidateId, idB.candidateId, "Regular file and symlink must have distinct structural identities");
+      assert.strictEqual(idRegular.untrackedFiles[0].mode, "100644");
+    } finally {
+      try {
+        if (fs.existsSync(testSymlinkPath) || fs.lstatSync(testSymlinkPath).isSymbolicLink()) {
+          fs.unlinkSync(testSymlinkPath);
+        }
+      } catch {}
+    }
+  });
+
+  test("F-WP04-MIN-02: Executable mode chmod +x and chmod -x change candidateId", () => {
+    const tracker = new CandidateTracker();
+    const scriptPath = path.join(rootGit, "src", "run_script.sh");
+    fs.writeFileSync(scriptPath, "#!/bin/sh\necho test\n", { mode: 0o644 });
+    execFileSync("git", ["add", "src/run_script.sh"], { cwd: rootGit });
+    execFileSync("git", ["commit", "-m", "add script"], { cwd: rootGit });
+
+    try {
+      // Modify content (mode 100644)
+      fs.writeFileSync(scriptPath, "#!/bin/sh\necho modified\n", { mode: 0o644 });
+      const idNonExec = tracker.computeCandidateIdentitySync(rootGit);
+      assert.strictEqual(idNonExec.trackedChanges[0].mode, "100644");
+
+      // chmod +x (mode 100755)
+      fs.chmodSync(scriptPath, 0o755);
+      const idExec = tracker.computeCandidateIdentitySync(rootGit);
+      assert.strictEqual(idExec.trackedChanges[0].mode, "100755");
+      assert.notStrictEqual(idNonExec.candidateId, idExec.candidateId, "chmod +x on modified file must change candidateId");
+
+      // chmod -x (revert to 100644)
+      fs.chmodSync(scriptPath, 0o644);
+      const idReverted = tracker.computeCandidateIdentitySync(rootGit);
+      assert.strictEqual(idReverted.candidateId, idNonExec.candidateId, "chmod -x must restore original candidateId");
+    } finally {
+      try {
+        execFileSync("git", ["rm", "-f", "src/run_script.sh"], { cwd: rootGit, stdio: "ignore" });
+        execFileSync("git", ["commit", "-m", "cleanup script"], { cwd: rootGit, stdio: "ignore" });
+      } catch {}
+    }
+  });
+
+  test("F-WP04-MIN-03: Non-Git workspace symlink detection and target mutation", () => {
+    const tracker = new CandidateTracker();
+    const symPath = path.join(nonGitWorkspace, "sym_link.txt");
+
+    try {
+      // 1. Create symlink in non-git workspace
+      fs.symlinkSync("file1.txt", symPath);
+      const id1 = tracker.computeCandidateIdentitySync(nonGitWorkspace);
+      const symEntry = id1.trackedChanges.find((e) => e.path === "sym_link.txt");
+      assert.ok(symEntry, "Non-git symlink must be included in manifest");
+      assert.strictEqual(symEntry.mode, "120000");
+      assert.strictEqual(symEntry.status, "typechange");
+
+      // 2. Change symlink target text
+      fs.unlinkSync(symPath);
+      fs.symlinkSync("file2.txt", symPath);
+      const id2 = tracker.computeCandidateIdentitySync(nonGitWorkspace);
+      assert.notStrictEqual(id1.candidateId, id2.candidateId, "Changing non-git symlink target must alter candidateId");
+
+      // 3. Replace symlink with regular file
+      fs.unlinkSync(symPath);
+      fs.writeFileSync(symPath, "file2.txt");
+      const id3 = tracker.computeCandidateIdentitySync(nonGitWorkspace);
+      assert.notStrictEqual(id2.candidateId, id3.candidateId, "Replacing symlink with regular file in non-git must alter candidateId");
+    } finally {
+      try { fs.unlinkSync(symPath); } catch {}
+    }
+  });
+
+  test("Combined Adversarial Case: Modified file + typechange + validate + subsequent new file mutation", async () => {
+    const worktreeManager = new WorktreeManager(rootGit);
+    const wt = worktreeManager.createWorktree("task-combined-adv");
+    const tracker = new CandidateTracker();
+
+    try {
+      // 1. Modified tracked file + structural typechange
+      const wtFile = path.join(wt.worktreePath, "src", "index.ts");
+      fs.writeFileSync(wtFile, "export const value = 999;\n");
+      const symFile = path.join(wt.worktreePath, "README.md");
+      fs.unlinkSync(symFile);
+      fs.symlinkSync("src/index.ts", symFile);
+
+      // 2. Validate and obtain receipt
+      const candId = tracker.computeCandidateIdentitySync(wt.worktreePath).candidateId;
+      const receipt = tracker.recordValidationReceipt({
+        candidateId: candId,
+        verifierCommand: "npm test",
+        exitCode: 0,
+        stdoutHash: hashContent("passed combined"),
+        status: "PASSED",
+        materialDependencies: [],
+      });
+      assert.strictEqual(receipt.status, "PASSED");
+
+      // 3. Post-validation new file creation through mutation hook
+      const hook = tracker.createMutationHook();
+      await hook(
+        {
+          toolName: "write_file",
+          mutatedPaths: ["src/injected_backdoor.ts"],
+          invocationId: "inv-backdoor",
+          durationMs: 12,
+        },
+        { workspaceRoot: wt.worktreePath }
+      );
+
+      // Receipt must be immediately invalidated
+      assert.strictEqual(receipt.status, "INVALIDATED");
+      assert.strictEqual(tracker.getActiveReceipt(candId), null);
+
+      // 4. Merge attempt must be refused (fails closed)
+      const mergeRes = worktreeManager.mergeWorktree(wt.taskId, "merge combined", receipt, tracker);
+      assert.strictEqual(mergeRes.success, false, "Merge must be refused after post-validation mutation");
+      assert.match(mergeRes.error!, /CAND-003: Validation receipt status is INVALIDATED/);
+    } finally {
+      worktreeManager.discardWorktree(wt.taskId);
+    }
+  });
 });

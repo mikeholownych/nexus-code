@@ -22,6 +22,49 @@ export function toPosixRelativePath(basePath, targetPath) {
     return rel.split(path.sep).join("/");
 }
 /**
+ * Resolves structural attributes for a candidate file or symlink entry on disk.
+ * Uses lstatSync to preserve symbolic link identity and readlinkSync to hash link target text.
+ */
+export function resolveFileCandidateDetails(fullPath) {
+    try {
+        const lstat = fs.lstatSync(fullPath);
+        if (lstat.isSymbolicLink()) {
+            const targetText = fs.readlinkSync(fullPath);
+            return {
+                mode: "120000",
+                contentHash: hashContent(targetText),
+                size: Buffer.byteLength(targetText),
+                isDeleted: false,
+                isSymlink: true,
+            };
+        }
+        if (lstat.isFile()) {
+            const isExec = (lstat.mode & 0o111) !== 0;
+            const buf = fs.readFileSync(fullPath);
+            return {
+                mode: isExec ? "100755" : "100644",
+                contentHash: hashContent(buf),
+                size: buf.length,
+                isDeleted: false,
+                isSymlink: false,
+            };
+        }
+        throw new Error(`Unsupported filesystem object type for candidate entry at: ${fullPath}`);
+    }
+    catch (err) {
+        if (err.code === "ENOENT") {
+            return {
+                mode: "000000",
+                contentHash: "0000000000000000000000000000000000000000000000000000000000000000",
+                size: 0,
+                isDeleted: true,
+                isSymlink: false,
+            };
+        }
+        throw err;
+    }
+}
+/**
  * Computes deterministic digest over an array of material dependencies.
  */
 export function computeMaterialDependenciesHash(deps) {
@@ -107,19 +150,39 @@ function computeGitCandidateIdentity(workspacePath, options, includeUntracked) {
                         if (statusChar === "D") {
                             trackedEntriesMap.set(posixPath, {
                                 path: posixPath,
+                                mode: "000000",
                                 contentHash: "0000000000000000000000000000000000000000000000000000000000000000",
                                 size: 0,
                                 status: "deleted",
                             });
                         }
-                        else if (fs.existsSync(fullPath) && fs.statSync(fullPath).isFile()) {
-                            const buf = fs.readFileSync(fullPath);
-                            trackedEntriesMap.set(posixPath, {
-                                path: posixPath,
-                                contentHash: hashContent(buf),
-                                size: buf.length,
-                                status: statusChar === "A" ? "added" : "modified",
-                            });
+                        else {
+                            const details = resolveFileCandidateDetails(fullPath);
+                            if (details.isDeleted) {
+                                trackedEntriesMap.set(posixPath, {
+                                    path: posixPath,
+                                    mode: "000000",
+                                    contentHash: details.contentHash,
+                                    size: 0,
+                                    status: "deleted",
+                                });
+                            }
+                            else {
+                                let status = "modified";
+                                if (statusChar === "T" || details.isSymlink) {
+                                    status = "typechange";
+                                }
+                                else if (statusChar === "A") {
+                                    status = "added";
+                                }
+                                trackedEntriesMap.set(posixPath, {
+                                    path: posixPath,
+                                    mode: details.mode,
+                                    contentHash: details.contentHash,
+                                    size: details.size,
+                                    status,
+                                });
+                            }
                         }
                     }
                 }
@@ -129,7 +192,7 @@ function computeGitCandidateIdentity(workspacePath, options, includeUntracked) {
             // Diff command fallback
         }
     }
-    // 2. Query git status for working tree modifications and untracked files
+    // 2. Query git status for working tree modifications, type changes, and untracked files
     try {
         const statusOut = execFileSync("git", ["status", "--porcelain=v1", "--untracked-files=all"], {
             cwd: workspacePath,
@@ -141,7 +204,7 @@ function computeGitCandidateIdentity(workspacePath, options, includeUntracked) {
             for (const line of lines) {
                 if (!line || line.length < 3)
                     continue;
-                const match = line.match(/^([ MADRCU?!]{2})\s+(.*)$/);
+                const match = line.match(/^([ MADRCUT?!]{2})\s+(.*)$/);
                 if (!match)
                     continue;
                 const code = match[1];
@@ -159,35 +222,56 @@ function computeGitCandidateIdentity(workspacePath, options, includeUntracked) {
                 const fullPath = path.join(workspacePath, rawFile);
                 if (code === "??") {
                     if (includeUntracked) {
-                        if (fs.existsSync(fullPath) && fs.statSync(fullPath).isFile()) {
-                            const buf = fs.readFileSync(fullPath);
+                        const details = resolveFileCandidateDetails(fullPath);
+                        if (!details.isDeleted) {
                             untrackedEntriesMap.set(posixPath, {
                                 path: posixPath,
-                                contentHash: hashContent(buf),
-                                size: buf.length,
+                                mode: details.mode,
+                                contentHash: details.contentHash,
+                                size: details.size,
                                 status: "untracked",
                             });
                         }
                     }
                 }
                 else {
-                    // Tracked modification (staged or unstaged)
-                    if (!fs.existsSync(fullPath) || code.includes("D")) {
+                    // Tracked modification (staged or unstaged or typechange or deletion)
+                    if (code.includes("D")) {
                         trackedEntriesMap.set(posixPath, {
                             path: posixPath,
+                            mode: "000000",
                             contentHash: "0000000000000000000000000000000000000000000000000000000000000000",
                             size: 0,
                             status: "deleted",
                         });
                     }
-                    else if (fs.statSync(fullPath).isFile()) {
-                        const buf = fs.readFileSync(fullPath);
-                        trackedEntriesMap.set(posixPath, {
-                            path: posixPath,
-                            contentHash: hashContent(buf),
-                            size: buf.length,
-                            status: code.includes("A") ? "added" : "modified",
-                        });
+                    else {
+                        const details = resolveFileCandidateDetails(fullPath);
+                        if (details.isDeleted) {
+                            trackedEntriesMap.set(posixPath, {
+                                path: posixPath,
+                                mode: "000000",
+                                contentHash: details.contentHash,
+                                size: 0,
+                                status: "deleted",
+                            });
+                        }
+                        else {
+                            let status = "modified";
+                            if (code.includes("T")) {
+                                status = "typechange";
+                            }
+                            else if (code.includes("A")) {
+                                status = "added";
+                            }
+                            trackedEntriesMap.set(posixPath, {
+                                path: posixPath,
+                                mode: details.mode,
+                                contentHash: details.contentHash,
+                                size: details.size,
+                                status,
+                            });
+                        }
                     }
                 }
             }
@@ -201,10 +285,10 @@ function computeGitCandidateIdentity(workspacePath, options, includeUntracked) {
     const untrackedFiles = Array.from(untrackedEntriesMap.values()).sort((a, b) => a.path.localeCompare(b.path));
     const manifestLines = [];
     for (const entry of trackedChanges) {
-        manifestLines.push(`T\t${entry.path}\t${entry.status}\t${entry.contentHash}\t${entry.size}`);
+        manifestLines.push(`T\t${entry.path}\t${entry.status}\t${entry.mode}\t${entry.contentHash}\t${entry.size}`);
     }
     for (const entry of untrackedFiles) {
-        manifestLines.push(`U\t${entry.path}\t${entry.status}\t${entry.contentHash}\t${entry.size}`);
+        manifestLines.push(`U\t${entry.path}\t${entry.status}\t${entry.mode}\t${entry.contentHash}\t${entry.size}`);
     }
     const manifestContent = manifestLines.length > 0 ? manifestLines.join("\n") : "CLEAN_TREE_NO_CANDIDATE_CHANGES";
     const manifestHash = hashContent(manifestContent);
@@ -235,6 +319,11 @@ function computeNonGitCandidateIdentity(workspacePath, options) {
         "build",
         ".cache",
     ]);
+    if (options.ignoredPatterns && options.ignoredPatterns.length > 0) {
+        for (const pat of options.ignoredPatterns) {
+            defaultExcludes.add(pat);
+        }
+    }
     function walk(currentDir) {
         const items = fs.readdirSync(currentDir, { withFileTypes: true });
         for (const item of items) {
@@ -244,21 +333,28 @@ function computeNonGitCandidateIdentity(workspacePath, options) {
             if (item.isDirectory()) {
                 walk(fullPath);
             }
-            else if (item.isFile()) {
+            else if (item.isFile() || item.isSymbolicLink()) {
                 const relPath = toPosixRelativePath(workspacePath, fullPath);
-                const buf = fs.readFileSync(fullPath);
-                allEntries.push({
-                    path: relPath,
-                    contentHash: hashContent(buf),
-                    size: buf.length,
-                    status: "modified",
-                });
+                const details = resolveFileCandidateDetails(fullPath);
+                if (!details.isDeleted) {
+                    allEntries.push({
+                        path: relPath,
+                        mode: details.mode,
+                        contentHash: details.contentHash,
+                        size: details.size,
+                        status: details.isSymlink ? "typechange" : "modified",
+                    });
+                }
+            }
+            else {
+                const relPath = toPosixRelativePath(workspacePath, fullPath);
+                throw new Error(`Unsupported filesystem object type in non-git workspace at: ${relPath}`);
             }
         }
     }
     walk(workspacePath);
     allEntries.sort((a, b) => a.path.localeCompare(b.path));
-    const manifestLines = allEntries.map((e) => `F\t${e.path}\t${e.status}\t${e.contentHash}\t${e.size}`);
+    const manifestLines = allEntries.map((e) => `F\t${e.path}\t${e.status}\t${e.mode}\t${e.contentHash}\t${e.size}`);
     const manifestContent = manifestLines.length > 0 ? manifestLines.join("\n") : "EMPTY_NON_GIT_WORKSPACE";
     const manifestHash = hashContent(manifestContent);
     const candidateId = hashContent(`candidate-v1:nongit:${manifestHash}`);
@@ -338,32 +434,56 @@ export class CandidateTracker {
     }
     /**
      * Invalidates active validation receipts.
-     * If mutatedPaths is specified, checks whether the mutated paths overlap with candidate files
-     * or material validation dependencies per CAND-002.
+     * If mutatedPaths is specified, checks whether the mutated paths fall within candidate workspace
+     * or touch material validation dependencies per CAND-002.
      */
-    invalidateReceipts(reason, mutatedPaths) {
+    invalidateReceipts(reason, mutatedPaths, workspaceRoot) {
         let invalidatedCount = 0;
         const now = new Date().toISOString();
         for (const receipt of this.activeReceipts.values()) {
             if (receipt.status === "PASSED") {
                 if (mutatedPaths && mutatedPaths.length > 0) {
                     const candidateIdentity = this.knownCandidateIdentities.get(receipt.candidateId);
-                    if (candidateIdentity) {
-                        // Check if any mutated path touches candidate changes or material dependencies
-                        const candidatePaths = new Set([
-                            ...candidateIdentity.trackedChanges.map((t) => t.path),
-                            ...candidateIdentity.untrackedFiles.map((u) => u.path),
-                            ...receipt.materialDependencies.map((d) => d.path || d.name),
-                        ]);
-                        const hasOverlap = mutatedPaths.some((p) => {
-                            const norm = p.split(path.sep).join("/");
-                            return (candidatePaths.has(norm) ||
-                                Array.from(candidatePaths).some((cp) => norm.endsWith(cp) || cp.endsWith(norm)));
-                        });
-                        if (!hasOverlap) {
-                            // Mutation is strictly confined outside candidate identity and dependencies (CAND-002)
-                            continue;
+                    const effectiveWsRoot = candidateIdentity?.workspacePath || workspaceRoot;
+                    const candidateDeps = new Set(receipt.materialDependencies.map((d) => d.path || d.name));
+                    let touchesCandidate = false;
+                    for (const rawPath of mutatedPaths) {
+                        const norm = rawPath.split(path.sep).join("/");
+                        // 1. Check material validation dependencies
+                        if (candidateDeps.has(norm) ||
+                            Array.from(candidateDeps).some((dp) => norm.endsWith(dp) || dp.endsWith(norm))) {
+                            touchesCandidate = true;
+                            break;
                         }
+                        // 2. Check candidate workspace containment
+                        if (effectiveWsRoot) {
+                            const resolvedWs = path.resolve(effectiveWsRoot);
+                            const resolvedTarget = path.isAbsolute(rawPath)
+                                ? path.resolve(rawPath)
+                                : path.resolve(resolvedWs, rawPath);
+                            const rel = path.relative(resolvedWs, resolvedTarget);
+                            const isInside = !rel.startsWith("..") && !path.isAbsolute(rel);
+                            if (isInside) {
+                                touchesCandidate = true;
+                                break;
+                            }
+                        }
+                        else if (candidateIdentity) {
+                            // Fallback to known candidate file paths if workspace root is unknown
+                            const candidatePaths = new Set([
+                                ...candidateIdentity.trackedChanges.map((t) => t.path),
+                                ...candidateIdentity.untrackedFiles.map((u) => u.path),
+                            ]);
+                            if (candidatePaths.has(norm) ||
+                                Array.from(candidatePaths).some((cp) => norm.endsWith(cp) || cp.endsWith(norm))) {
+                                touchesCandidate = true;
+                                break;
+                            }
+                        }
+                    }
+                    if (!touchesCandidate) {
+                        // Mutation is demonstrably confined outside candidate workspace and dependencies (CAND-002)
+                        continue;
                     }
                 }
                 receipt.status = "INVALIDATED";
@@ -378,11 +498,11 @@ export class CandidateTracker {
      * Creates an ExecutionSpine CandidateMutationHook that invalidates receipts upon file mutation.
      */
     createMutationHook() {
-        return async (event) => {
+        return async (event, context) => {
             const paths = event.mutatedPaths && event.mutatedPaths.length > 0
                 ? event.mutatedPaths.join(", ")
                 : "unspecified resources";
-            this.invalidateReceipts(`Candidate mutated post-validation by tool '${event.toolName}' (mutated: ${paths})`, event.mutatedPaths);
+            this.invalidateReceipts(`Candidate mutated post-validation by tool '${event.toolName}' (mutated: ${paths})`, event.mutatedPaths, context?.workspaceRoot);
         };
     }
     /**
