@@ -72,6 +72,22 @@ export class ApplicationCore extends EventEmitter {
         }
         return this.agent.checkpointDurableState();
     }
+    getActiveValidationReceipt() {
+        const fromAgent = this.agent.getActiveValidationReceipt();
+        if (fromAgent)
+            return fromAgent;
+        const taskId = this.agent.getTaskId();
+        if (this.stateManager.hasTaskState(taskId)) {
+            try {
+                const state = this.stateManager.loadTaskState(taskId);
+                if (state.validationReceipts && state.validationReceipts.length > 0) {
+                    return state.validationReceipts[state.validationReceipts.length - 1];
+                }
+            }
+            catch { }
+        }
+        return null;
+    }
     /**
      * Executes a task through the unified execution spine and durable state lifecycle (UI-001, UI-002, UI-003).
      */

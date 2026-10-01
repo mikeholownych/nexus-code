@@ -102,14 +102,19 @@ export class TerminalDashboard {
         rightLines.push("");
         rightLines.push(pc.bold(pc.white("Active Subsystems & Identity:")));
         rightLines.push(pc.dim(`  • Task ID: `) + pc.cyan(this.app ? this.app.getTaskId() : this.agent.getTaskId()));
-        const candidateId = this.agent.getActiveValidationReceipt()?.candidateId || (this.app ? this.app.getTaskState()?.candidateId : null);
+        const taskState = this.app ? this.app.getTaskState() : null;
+        const candidateId = taskState?.candidateId || this.agent.getActiveValidationReceipt()?.candidateId;
         if (candidateId) {
             rightLines.push(pc.dim(`  • Candidate: `) + pc.cyan(candidateId.slice(0, 12)));
         }
-        const receipt = this.agent.getActiveValidationReceipt();
+        const receipt = this.app ? this.app.getActiveValidationReceipt() : this.agent.getActiveValidationReceipt();
         if (receipt) {
             const recStatus = receipt.status === "PASSED" ? pc.green("PASSED") : pc.red(receipt.status);
             rightLines.push(pc.dim(`  • Receipt: `) + recStatus);
+        }
+        const worktreePath = taskState?.worktreeBinding?.worktreePath;
+        if (worktreePath) {
+            rightLines.push(pc.dim(`  • Worktree: `) + pc.cyan(path.basename(worktreePath)));
         }
         rightLines.push(pc.dim(`  • Theme: `) + pc.cyan(this.themeManager.getThemeName()));
         rightLines.push(pc.dim(`  • History: `) + pc.cyan(`${this.agent.getHistoryCount()} messages`));

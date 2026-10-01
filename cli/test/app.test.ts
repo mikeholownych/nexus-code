@@ -158,6 +158,8 @@ describe("WP-10: Application Core & CLI/TUI Projection Convergence (INC-11, UI-0
     assert.ok(snapshot.includes("Validation"), "Must project Phase 2 from ApplicationCore");
     assert.ok(snapshot.includes(app.getTaskId()), "Must project Task ID from ApplicationCore");
     assert.ok(snapshot.includes(candidate.candidateId.slice(0, 12)), "Must project Candidate ID");
+    assert.ok(snapshot.includes("PASSED"), "Must project validation receipt status from ApplicationCore");
+    assert.strictEqual(app.getActiveValidationReceipt()?.receiptId, receipt.receiptId, "ApplicationCore must expose active validation receipt");
   });
 
   test("UI-006: Unified slash commands via ApplicationCore", async () => {
