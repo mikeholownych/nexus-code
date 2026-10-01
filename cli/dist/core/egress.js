@@ -237,6 +237,44 @@ export class InformationFlowBoundary {
         return classified;
     }
     /**
+     * Irreversibly redact classified values from durable telemetry before it is written.
+     * This uses the same DATA-001 classifier as egress protection and deliberately
+     * does not create reversible vault references (DISC-005).
+     */
+    redactForTelemetry(value) {
+        const visit = (item) => {
+            if (typeof item === "string") {
+                let sanitized = item;
+                for (const secret of this.classifyText(item)) {
+                    sanitized = sanitized.replaceAll(secret.secret, `[REDACTED:${secret.patternName || "SECRET"}]`);
+                }
+                return sanitized;
+            }
+            if (Array.isArray(item))
+                return item.map(visit);
+            if (item && typeof item === "object") {
+                const sanitized = {};
+                for (const [key, nested] of Object.entries(item)) {
+                    sanitized[visit(key)] = visit(nested);
+                }
+                return sanitized;
+            }
+            return item;
+        };
+        const recursivelySanitized = visit(value);
+        // Run the canonical classifier once over the serialized structure too. This
+        // preserves contextual policies (for example, api_key=value) whose signal
+        // spans an object key and its nested string value.
+        const serialized = JSON.stringify(recursivelySanitized);
+        if (serialized === undefined)
+            throw new Error("Telemetry payload is not JSON serializable");
+        let sanitizedSerialized = serialized;
+        for (const secret of this.classifyText(serialized)) {
+            sanitizedSerialized = sanitizedSerialized.replaceAll(secret.secret, `[REDACTED:${secret.patternName || "SECRET"}]`);
+        }
+        return JSON.parse(sanitizedSerialized);
+    }
+    /**
      * Generates a cryptographically unguessable, task-scoped reference (REHYD-001, REHYD-002).
      */
     generateToken(secret, taskId, sessionId, sourceBoundary, targetBoundary) {

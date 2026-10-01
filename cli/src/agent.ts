@@ -26,7 +26,7 @@ import {
   hashContent,
 } from "./core/candidate.js";
 import { parseModelResponse } from "./parser.js";
-import { TerminalUI, redactSecrets } from "./ui.js";
+import { TerminalUI } from "./ui.js";
 import { getGitInfo, getProjectRules } from "./git.js";
 import { SkillManager } from "./skills.js";
 import { McpClientManager } from "./mcp.js";
@@ -207,15 +207,18 @@ function logAudit(entry: {
       fs.mkdirSync(auditDir, { recursive: true });
     }
     const auditPath = path.join(auditDir, "audit.log");
-    const sanitizedArgs = JSON.parse(redactSecrets(JSON.stringify(entry.args)));
+    const sanitized = InformationFlowBoundary.getGlobalInstance().redactForTelemetry({
+      args: entry.args,
+      error: entry.error,
+    });
     const record = {
       timestamp: new Date().toISOString(),
       workspace: entry.workspace,
       tool: entry.tool,
-      args: sanitizedArgs,
+      args: sanitized.args,
       success: entry.success,
       duration_ms: entry.durationMs,
-      error: entry.error ? redactSecrets(entry.error) : undefined,
+      error: sanitized.error,
     };
     fs.appendFileSync(auditPath, JSON.stringify(record) + "\n");
   } catch {
