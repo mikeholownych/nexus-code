@@ -5,7 +5,20 @@ import { randomUUID } from "node:crypto";
 import { exec } from "node:child_process";
 import { ChatMessage, HarnessConfig, ToolCall, ToolDefinition } from "./types.js";
 import { LocalLlmClient } from "./client.js";
-import { HARNESS_TOOLS, RustCoreBridge } from "./tools.js";
+import { HARNESS_TOOLS, RustCoreBridge, registerBridgeCapabilities } from "./tools.js";
+import {
+  CanonicalCapability,
+  CapabilityRegistry,
+  createDefaultRegistry,
+  defaultRegistry,
+} from "./core/capabilities.js";
+import {
+  ExecutionSpine,
+  ExecutionReceipt,
+  InvocationRequest,
+  InvocationContext,
+  extractTargetResources,
+} from "./core/spine.js";
 import { parseModelResponse } from "./parser.js";
 import { TerminalUI, redactSecrets } from "./ui.js";
 import { getGitInfo, getProjectRules } from "./git.js";
@@ -228,6 +241,9 @@ export class AutonomousAgent {
   private synthesizer: SynthesizerEngine;
   private browser: BrowserDriver;
   private knowledge: KnowledgeGraph;
+  public readonly capabilityRegistry: CapabilityRegistry;
+  public readonly spine: ExecutionSpine;
+  private currentTaskId: string = "task-" + randomUUID().slice(0, 8);
 
   constructor(
     config: HarnessConfig,
@@ -285,7 +301,25 @@ export class AutonomousAgent {
     if (config.recordFlight) {
       this.flightRecorder = new FlightRecorder(ws);
     }
+    this.capabilityRegistry = createDefaultRegistry();
+    this.spine = new ExecutionSpine({
+      registry: this.capabilityRegistry,
+      hooks: {
+        candidateMutation: async (_event) => {
+          this.hasPendingModifications = true;
+        },
+      },
+    });
+    this.setupSpineHandlers();
     this.resetConversation();
+  }
+
+  public getSpine(): ExecutionSpine {
+    return this.spine;
+  }
+
+  public getCapabilityRegistry(): CapabilityRegistry {
+    return this.capabilityRegistry;
   }
 
   public async initExtensibility(): Promise<void> {
@@ -488,6 +522,7 @@ export class AutonomousAgent {
     this.browser = new BrowserDriver(newWorkspace);
     this.knowledge = new KnowledgeGraph(newWorkspace);
     this.extensibilityInitialized = false;
+    this.setupSpineHandlers();
     this.resetConversation();
   }
 
@@ -503,6 +538,7 @@ export class AutonomousAgent {
       this.bridgeSandboxSetting(),
       Boolean(this.activeWorktree) || Boolean(this.inheritedWorktreeScope?.requireSandbox),
     );
+    this.setupSpineHandlers();
     this.resetConversation();
   }
 
@@ -905,6 +941,502 @@ ${fewShotSection}${tddSection}
 Always explain your reasoning before or alongside your tool calls.`;
   }
 
+  private setupSpineHandlers(): void {
+    registerBridgeCapabilities(this.capabilityRegistry, this.bridge);
+
+    this.spine.registerHandler("task_completed", async (args, context) => {
+      if (context.metadata?.actor === "subagent") {
+        return {
+          success: true,
+          output: JSON.stringify({
+            status: "completed",
+            summary: args.summary || "Subagent finished objective.",
+          }),
+        };
+      }
+
+      const validCompletion =
+        Boolean(args) &&
+        typeof args === "object" &&
+        !Array.isArray(args) &&
+        typeof args.summary === "string" &&
+        args.summary.trim().length > 0 &&
+        (args.notes === undefined || typeof args.notes === "string");
+      if (!validCompletion) {
+        return {
+          success: false,
+          output: "",
+          error:
+            "Invalid task_completed payload: summary must be a non-empty string and notes, when present, must be a string.",
+        };
+      }
+
+      const worktreeHasChanges = this.activeWorktree
+        ? this.worktreeManager.hasChanges(this.activeWorktree.taskId)
+        : false;
+      let verifierSucceeded = false;
+
+      if (
+        (this.hasPendingModifications || worktreeHasChanges) &&
+        !this.config.dryRun &&
+        !this.config.readOnly
+      ) {
+        try {
+          const authoritativeVerifier = this.config.authoritativeVerifierCommand?.trim();
+          const testRes = await runTestSuiteWithExecutor(
+            this.config.workspace,
+            (command) => this.bridge.executeTool("run_command", { command }),
+            authoritativeVerifier || undefined
+          );
+          if (!testRes.success || testRes.command === "none") {
+            const hints = formatDiagnosticHints(testRes.diagnostics);
+            const oracleFailContent = `Verification Oracle: The selected verifier did not pass.\nCommand: ${testRes.command}\n${foldVoluminousOutput(testRes.rawOutput || "")}${hints}\nResolve the verification failure before calling task_completed.`;
+            return {
+              success: false,
+              output: "",
+              error: oracleFailContent,
+            };
+          }
+          verifierSucceeded = true;
+          if (this.activeWorktree && !authoritativeVerifier) {
+            console.log(
+              pc.yellow(
+                `Verification command '${testRes.command}' passed, but no authoritative verifier is configured; changes will remain in the worktree.`
+              )
+            );
+          }
+        } catch (err: any) {
+          return {
+            success: false,
+            output: "",
+            error: `Verification Oracle could not verify this worktree: ${err?.message || "test discovery failed"}.`,
+          };
+        }
+      }
+
+      this.hasPendingModifications = false;
+      if (this.activeWorktree) {
+        this.verifiedWorktreeCompletion =
+          !worktreeHasChanges ||
+          Boolean(
+            verifierSucceeded &&
+              this.config.authoritativeVerifierCommand?.trim() &&
+              !this.config.dryRun &&
+              !this.config.readOnly
+          );
+      }
+      this.ui.taskCompleted(args.summary || "Task completed.", args.notes);
+      return {
+        success: true,
+        output: JSON.stringify({
+          status: "completed",
+          summary: args.summary || "Task completed.",
+          notes: args.notes || "",
+        }),
+      };
+    });
+
+    this.spine.registerHandler("spawn_subagent", async (args, context) => {
+      if (this.depth >= 2 || context.metadata?.actor === "subagent") {
+        return {
+          success: false,
+          output: "",
+          error:
+            "Error: Subagent depth limit reached. Solve the task directly without spawning additional subagents.",
+        };
+      }
+
+      const subPrompt = args.prompt || "Investigate the task";
+      const subMaxSteps = args.max_steps ? Math.min(args.max_steps, 15) : 8;
+      const inheritedWorktreeScope = this.activeWorktree
+        ? { workspace: this.activeWorktree.worktreePath, requireSandbox: true as const }
+        : undefined;
+      const subagentConfig: HarnessConfig = {
+        ...this.config,
+        maxSteps: subMaxSteps,
+        ...(inheritedWorktreeScope
+          ? {
+              workspace: inheritedWorktreeScope.workspace,
+              sandbox: this.bridgeSandboxSetting() || "auto",
+            }
+          : {}),
+      };
+
+      this.ui.startSpinner(`Spawning isolated subagent: "${subPrompt.slice(0, 45)}..."`);
+      try {
+        const subagent = new AutonomousAgent(
+          subagentConfig,
+          this.depth + 1,
+          inheritedWorktreeScope
+        );
+        const subResult = await subagent.runSubagent(subPrompt);
+        this.ui.stopSpinner(true);
+        console.log(pc.cyan(`\n🤖 [Subagent Report Received]\n`));
+        return {
+          success: true,
+          output: subResult,
+        };
+      } catch (subErr: any) {
+        this.ui.stopSpinner(false);
+        return {
+          success: false,
+          output: "",
+          error: `Subagent failed with error: ${subErr.message}`,
+        };
+      }
+    });
+
+    this.spine.registerHandler("hybrid_search", async (args) => {
+      try {
+        const matches = await this.hybridSearch.search(args.query || "", {
+          mode: args.mode,
+          path: args.path,
+          limit: args.limit ? parseInt(args.limit, 10) : 10,
+        });
+        return {
+          success: true,
+          output: JSON.stringify(
+            { query: args.query, totalMatches: matches.length, matches },
+            null,
+            2
+          ),
+        };
+      } catch (err: any) {
+        return { success: false, output: "", error: err.message };
+      }
+    });
+
+    this.spine.registerHandler("browser_navigate", async (args) => {
+      try {
+        const nav = await this.browser.navigate(args.url || "");
+        return { success: true, output: JSON.stringify(nav, null, 2) };
+      } catch (err: any) {
+        return {
+          success: false,
+          output: "",
+          error: `Error executing browser_navigate: ${err.message}`,
+        };
+      }
+    });
+
+    this.spine.registerHandler("browser_screenshot", async (args) => {
+      try {
+        const shot = await this.browser.screenshot(args.output_path);
+        return {
+          success: true,
+          output: JSON.stringify(
+            { path: shot.path, width: shot.width, height: shot.height },
+            null,
+            2
+          ),
+        };
+      } catch (err: any) {
+        return {
+          success: false,
+          output: "",
+          error: `Error executing browser_screenshot: ${err.message}`,
+        };
+      }
+    });
+
+    this.spine.registerHandler("browser_click", async (args) => {
+      try {
+        const clickRes = await this.browser.click(args.selector || "");
+        return {
+          success: clickRes.success,
+          output: JSON.stringify(clickRes, null, 2),
+          error: clickRes.success ? undefined : clickRes.message,
+        };
+      } catch (err: any) {
+        return {
+          success: false,
+          output: "",
+          error: `Error executing browser_click: ${err.message}`,
+        };
+      }
+    });
+
+    this.spine.registerHandler("browser_type", async (args) => {
+      try {
+        const typeRes = await this.browser.type(args.selector || "", args.text || "");
+        return {
+          success: typeRes.success,
+          output: JSON.stringify(typeRes, null, 2),
+          error: typeRes.success ? undefined : typeRes.message,
+        };
+      } catch (err: any) {
+        return {
+          success: false,
+          output: "",
+          error: `Error executing browser_type: ${err.message}`,
+        };
+      }
+    });
+
+    this.spine.registerHandler("browser_console_logs", async (args) => {
+      try {
+        const logs = this.browser.getConsoleLogs(args.limit ? parseInt(args.limit, 10) : 50);
+        return {
+          success: true,
+          output: JSON.stringify({ totalLogs: logs.length, logs }, null, 2),
+        };
+      } catch (err: any) {
+        return {
+          success: false,
+          output: "",
+          error: `Error executing browser_console_logs: ${err.message}`,
+        };
+      }
+    });
+
+    this.spine.registerHandler("manage_knowledge", async (args) => {
+      try {
+        let output = "";
+        const action = args.action || "list";
+        if (action === "set") {
+          const entry = this.knowledge.set(
+            args.key || "custom-rule",
+            args.value || "",
+            args.category || "rule"
+          );
+          output = JSON.stringify({ status: "saved", entry }, null, 2);
+        } else if (action === "get") {
+          const entry = this.knowledge.get(args.key || "");
+          output = JSON.stringify({ found: Boolean(entry), entry }, null, 2);
+        } else if (action === "delete") {
+          const deleted = this.knowledge.delete(args.key || "");
+          output = JSON.stringify(
+            { status: deleted ? "deleted" : "not_found", key: args.key },
+            null,
+            2
+          );
+        } else if (action === "query") {
+          const entries = this.knowledge.query(args.key || args.value, args.category);
+          output = JSON.stringify({ total: entries.length, entries }, null, 2);
+        } else {
+          const entries = this.knowledge.list();
+          output = JSON.stringify({ total: entries.length, entries }, null, 2);
+        }
+        return { success: true, output };
+      } catch (err: any) {
+        return {
+          success: false,
+          output: "",
+          error: `Error executing manage_knowledge: ${err.message}`,
+        };
+      }
+    });
+
+    this.spine.registerHandler("activate_skill", async (args) => {
+      const skillName = args.name;
+      const skill = this.skillManager.getSkill(skillName);
+      if (!skill) {
+        const avail = this.skillManager.listSkills().map((s) => s.name).join(", ");
+        return {
+          success: false,
+          output: "",
+          error: `Error: Skill '${skillName}' not found. Available skills: ${avail || "none"}`,
+        };
+      }
+      console.log(pc.green(`✔ Activated skill: ${pc.bold(skill.name)}`));
+      return {
+        success: true,
+        output: `[Activated Skill: ${skill.name}]\n\n${skill.content}`,
+      };
+    });
+
+    this.spine.registerHandler("update_plan", async (args) => {
+      const phases = Array.isArray(args.phases) ? args.phases : [];
+      this.activePlan = phases;
+      this.ui.renderPlan(this.activePlan);
+      return {
+        success: true,
+        output: JSON.stringify({
+          status: "plan_updated",
+          total_phases: this.activePlan.length,
+          completed: this.activePlan.filter((p) => p.status === "completed").length,
+          in_progress: this.activePlan.filter((p) => p.status === "in_progress").length,
+        }),
+      };
+    });
+  }
+
+  private async dispatchToolCall(
+    call: ToolCall,
+    currentStep: number,
+    actor: "agent" | "subagent" = "agent",
+    onConfirm?: ConfirmHandler
+  ): Promise<{ receipt: ExecutionReceipt; shouldExit: boolean }> {
+    const toolName = call.function.name;
+    let args: Record<string, any> = {};
+
+    try {
+      args =
+        typeof call.function.arguments === "string"
+          ? JSON.parse(call.function.arguments)
+          : call.function.arguments;
+    } catch {
+      args = toolName === "task_completed" ? {} : { raw: call.function.arguments };
+    }
+
+    try {
+      const serialized = JSON.stringify(args);
+      const restored = this.securityManager.getVault().restore(serialized);
+      if (restored !== serialized) {
+        args = JSON.parse(restored);
+      }
+    } catch {}
+
+    if (this.flightRecorder) {
+      this.flightRecorder.recordToolCall(currentStep, call.id, toolName, args);
+    }
+
+    this.ui.printToolCall(toolName, args);
+
+    if (
+      onConfirm &&
+      (toolName === "edit_file" ||
+        toolName === "write_file" ||
+        toolName === "patch_file" ||
+        toolName === "run_command")
+    ) {
+      const approved = await onConfirm(toolName, args);
+      if (!approved) {
+        console.log(`⚠️ Tool execution cancelled by user.`);
+        const cancelMsg =
+          "Error: Execution was rejected by the user. Ask the user for clarification or proceed with an alternative approach.";
+        const receipt: ExecutionReceipt = {
+          invocationId: call.id,
+          taskId: this.activeWorktree?.taskId || this.currentTaskId,
+          actor,
+          executionDomain: actor === "subagent" ? "subagent" : "agent_orchestration",
+          capabilityId:
+            this.capabilityRegistry.getByToolName(toolName)?.id || "unknown",
+          toolName,
+          targetResources: extractTargetResources(toolName, args),
+          success: false,
+          output: "",
+          error: cancelMsg,
+          durationMs: 0,
+          candidateMutated: false,
+          status: "DENIED",
+          timestamp: new Date().toISOString(),
+          simulated: Boolean(this.config.dryRun),
+        };
+        if (this.flightRecorder) {
+          this.flightRecorder.recordToolResult(
+            currentStep,
+            call.id,
+            toolName,
+            false,
+            cancelMsg,
+            0,
+            "Rejected by user"
+          );
+        }
+        return { receipt, shouldExit: false };
+      }
+    }
+
+    this.ui.startSpinner(`Executing ${toolName}...`);
+    await this.pluginManager.notifyToolCall(toolName, args);
+
+    const context: InvocationContext = {
+      workspaceRoot: this.config.workspace,
+      dryRun: this.config.dryRun,
+      readOnly: this.config.readOnly,
+      bridge: this.bridge,
+      metadata: { actor, stepIndex: currentStep },
+      defaultHandler: async (tName, tArgs) => {
+        if (this.mcpManager.isMcpTool(tName)) {
+          return await this.mcpManager.executeMcpTool(tName, tArgs);
+        }
+        if (this.pluginManager.isCustomTool(tName)) {
+          return await this.pluginManager.executeCustomTool(tName, tArgs);
+        }
+        return await this.pluginManager.executeToolPipeline(
+          tName,
+          tArgs,
+          async (pipeArgs) => this.bridge.executeTool(tName, pipeArgs)
+        );
+      },
+    };
+
+    const receipt = await this.spine.execute(
+      {
+        invocationId: call.id,
+        taskId: this.activeWorktree?.taskId || this.currentTaskId,
+        actor,
+        executionDomain: actor === "subagent" ? "subagent" : "agent_orchestration",
+        toolName,
+        args,
+        stepIndex: currentStep,
+      },
+      context
+    );
+
+    await this.pluginManager.notifyToolResult(toolName, {
+      success: receipt.success,
+      output: receipt.output,
+      error: receipt.error,
+    });
+    this.ui.stopSpinner(receipt.success);
+
+    logAudit({
+      workspace: this.config.workspace,
+      tool: toolName,
+      args,
+      success: receipt.success,
+      durationMs: receipt.durationMs,
+      error: receipt.error,
+    });
+
+    if (this.flightRecorder) {
+      this.flightRecorder.recordToolResult(
+        currentStep,
+        call.id,
+        toolName,
+        receipt.success,
+        receipt.output,
+        receipt.durationMs,
+        receipt.error
+      );
+      if (toolName === "update_plan" && receipt.success) {
+        this.flightRecorder.recordDurableState(currentStep, {
+          plan: this.activePlan,
+        });
+      }
+      if (
+        receipt.success &&
+        ["write_file", "edit_file", "patch_file"].includes(toolName)
+      ) {
+        this.flightRecorder.recordFileDiff(
+          currentStep,
+          args.path || args.target_file || args.file_path || "unknown",
+          receipt.output,
+          args.replacements
+        );
+      }
+      if (toolName === "task_completed" && receipt.success) {
+        this.flightRecorder.recordSessionEnd(
+          args.summary || "Task completed.",
+          true,
+          this.totalTokens
+        );
+      }
+    }
+
+    this.ui.printToolResult(
+      toolName,
+      receipt.success,
+      receipt.output,
+      receipt.error
+    );
+
+    const shouldExit = toolName === "task_completed" && receipt.success;
+    return { receipt, shouldExit };
+  }
+
   async runTurn(taskPrompt: string | any[], onConfirm?: ConfirmHandler): Promise<void> {
     // The REPL calls runTurn directly. Route worktree-enabled turns through the
     // same establishment and resolution boundary as one-shot `run` tasks.
@@ -1047,85 +1579,23 @@ Always explain your reasoning before or alongside your tool calls.`;
         break;
       }
 
-      // Parallel execution optimization: if multiple tool calls in this turn are all read-only, execute concurrently
+      // Parallel execution optimization: if multiple tool calls in this turn are all read-only, execute concurrently through ExecutionSpine
       if (parsed.toolCalls.length > 1 && parsed.toolCalls.every((call) => READ_ONLY_TOOLS.has(call.function.name))) {
         this.ui.startSpinner(`Executing ${parsed.toolCalls.length} read operations in parallel...`);
-        if (this.flightRecorder) {
-          for (const call of parsed.toolCalls) {
-            let callArgs: Record<string, any> = {};
-            try {
-              callArgs = typeof call.function.arguments === "string"
-                ? JSON.parse(call.function.arguments)
-                : call.function.arguments;
-            } catch {
-              callArgs = { raw: call.function.arguments };
-            }
-            this.flightRecorder.recordToolCall(currentStep, call.id, call.function.name, callArgs);
-          }
-        }
         const parallelResults = await Promise.all(
           parsed.toolCalls.map(async (call) => {
-            const toolName = call.function.name;
-            let args: Record<string, any> = {};
-            try {
-              args = typeof call.function.arguments === "string"
-                ? JSON.parse(call.function.arguments)
-                : call.function.arguments;
-            } catch {
-              args = { raw: call.function.arguments };
-            }
-            const t0 = Date.now();
-            let result: { success: boolean; output: string; error?: string };
-            if (toolName === "hybrid_search") {
-              try {
-                const matches = await this.hybridSearch.search(args.query || "", {
-                  mode: args.mode,
-                  path: args.path,
-                  limit: args.limit ? parseInt(args.limit, 10) : 10,
-                });
-                result = {
-                  success: true,
-                  output: JSON.stringify({ query: args.query, totalMatches: matches.length, matches }, null, 2),
-                };
-              } catch (err: any) {
-                result = { success: false, output: "", error: err.message };
-              }
-            } else {
-              result = await this.bridge.executeTool(toolName, args);
-            }
-            const durationMs = Date.now() - t0;
-            logAudit({
-              workspace: this.config.workspace,
-              tool: toolName,
-              args,
-              success: result.success,
-              durationMs,
-              error: result.error,
-            });
-            if (this.flightRecorder) {
-              this.flightRecorder.recordToolResult(
-                currentStep,
-                call.id,
-                toolName,
-                result.success,
-                result.output || "",
-                durationMs,
-                result.error
-              );
-            }
-            return { call, toolName, args, result };
+            const { receipt } = await this.dispatchToolCall(call, currentStep, "agent");
+            return { call, toolName: call.function.name, receipt };
           })
         );
         this.ui.stopSpinner(true);
 
         for (const item of parallelResults) {
-          this.ui.printToolCall(item.toolName, item.args);
-          this.ui.printToolResult(item.toolName, item.result.success, item.result.output, item.result.error);
-          let content = item.result.success
-            ? item.result.output
-            : `Error executing ${item.toolName}: ${item.result.error || "Unknown error"}`;
+          let content = item.receipt.success
+            ? item.receipt.output
+            : `Error executing ${item.toolName}: ${item.receipt.error || "Unknown error"}`;
           if (item.toolName === "run_command") {
-            const diags = extractCompilerDiagnostics((item.result.output || "") + "\n" + (item.result.error || ""));
+            const diags = extractCompilerDiagnostics((item.receipt.output || "") + "\n" + (item.receipt.error || ""));
             if (diags.length > 0) {
               content += formatDiagnosticHints(diags);
             }
@@ -1141,604 +1611,59 @@ Always explain your reasoning before or alongside your tool calls.`;
         continue;
       }
 
-      // Execute each tool call
+      // Execute each tool call through ExecutionSpine
       for (const call of parsed.toolCalls) {
         const toolName = call.function.name;
-        let args: Record<string, any> = {};
-
+        let rawArgs: any = {};
         try {
-          args = typeof call.function.arguments === "string"
-            ? JSON.parse(call.function.arguments)
-            : call.function.arguments;
+          rawArgs =
+            typeof call.function.arguments === "string"
+              ? JSON.parse(call.function.arguments)
+              : call.function.arguments;
         } catch {
-          args = toolName === "task_completed" ? {} : { raw: call.function.arguments };
+          rawArgs = {};
         }
 
-        // Reversibly restore any quarantined secret references for local execution
-        try {
-          const serialized = JSON.stringify(args);
-          const restored = this.securityManager.getVault().restore(serialized);
-          if (restored !== serialized) {
-            args = JSON.parse(restored);
-          }
-        } catch {}
-
-        if (this.flightRecorder) {
-          this.flightRecorder.recordToolCall(currentStep, call.id, toolName, args);
-        }
-
-        this.ui.printToolCall(toolName, args);
-
-        if (toolName === "task_completed") {
-          const validCompletion = !!args && typeof args === "object" && !Array.isArray(args)
-            && typeof args.summary === "string" && args.summary.trim().length > 0
-            && (args.notes === undefined || typeof args.notes === "string");
-          if (!validCompletion) {
-            const invalid = "Invalid task_completed payload: summary must be a non-empty string and notes, when present, must be a string.";
-            if (this.flightRecorder) this.flightRecorder.recordToolResult(currentStep, call.id, toolName, false, invalid, 0, "Invalid completion payload");
-            this.messages.push({ role: "tool", tool_call_id: call.id, name: toolName, content: invalid });
-            continue;
-          }
-          const worktreeHasChanges = this.activeWorktree
-            ? this.worktreeManager.hasChanges(this.activeWorktree.taskId)
-            : false;
-          let verifierSucceeded = false;
-          // Verification Oracle: If code was modified and unverified, verify before marking complete
-          if ((this.hasPendingModifications || worktreeHasChanges) && !this.config.dryRun && !this.config.readOnly) {
-            try {
-              const authoritativeVerifier = this.config.authoritativeVerifierCommand?.trim();
-              const testRes = await runTestSuiteWithExecutor(
-                this.config.workspace,
-                (command) => this.bridge.executeTool("run_command", { command }),
-                authoritativeVerifier || undefined,
-              );
-              if (!testRes.success || testRes.command === "none") {
-                const hints = formatDiagnosticHints(testRes.diagnostics);
-                const oracleFailContent = `Verification Oracle: The selected verifier did not pass.\nCommand: ${testRes.command}\n${foldVoluminousOutput(testRes.rawOutput || "")}${hints}\nResolve the verification failure before calling task_completed.`;
-                if (this.flightRecorder) {
-                  this.flightRecorder.recordToolResult(currentStep, call.id, toolName, false, oracleFailContent, 0, "Test verification failed");
-                }
-                this.messages.push({
-                  role: "tool",
-                  tool_call_id: call.id,
-                  name: toolName,
-                  content: oracleFailContent,
-                });
-                continue;
-              }
-              verifierSucceeded = true;
-              if (this.activeWorktree && !authoritativeVerifier) {
-                console.log(pc.yellow(`Verification command '${testRes.command}' passed, but no authoritative verifier is configured; changes will remain in the worktree.`));
-              }
-            } catch (err: any) {
-              const verificationError = `Verification Oracle could not verify this worktree: ${err?.message || "test discovery failed"}.`;
-              if (this.flightRecorder) this.flightRecorder.recordToolResult(currentStep, call.id, toolName, false, verificationError, 0, "Verification unavailable");
-              this.messages.push({ role: "tool", tool_call_id: call.id, name: toolName, content: verificationError });
-              continue;
-            }
-          }
-
-          this.hasPendingModifications = false;
-          if (this.activeWorktree) {
-            this.verifiedWorktreeCompletion = !worktreeHasChanges
-              || Boolean(verifierSucceeded && this.config.authoritativeVerifierCommand?.trim() && !this.config.dryRun && !this.config.readOnly);
-          }
-          this.ui.taskCompleted(args.summary || "Task completed.", args.notes);
-          isFinished = true;
-          if (this.flightRecorder) {
-            this.flightRecorder.recordToolResult(
-              currentStep,
-              call.id,
-              toolName,
-              true,
-              args.summary || "Task completed.",
-              0
-            );
-            this.flightRecorder.recordSessionEnd(args.summary || "Task completed.", true, this.totalTokens);
-          }
-          break;
-        }
-
-        if (toolName === "spawn_subagent") {
-          if (this.depth >= 2) {
-            const depthErr = "Error: Subagent depth limit reached. Solve the task directly without spawning additional subagents.";
-            if (this.flightRecorder) {
-              this.flightRecorder.recordToolResult(currentStep, call.id, toolName, false, depthErr, 0, depthErr);
-            }
-            this.messages.push({
-              role: "tool",
-              tool_call_id: call.id,
-              name: toolName,
-              content: depthErr,
-            });
-            continue;
-          }
-
-          const subPrompt = args.prompt || "Investigate the task";
-          const subMaxSteps = args.max_steps ? Math.min(args.max_steps, 15) : 8;
-          const inheritedWorktreeScope = this.activeWorktree
-            ? { workspace: this.activeWorktree.worktreePath, requireSandbox: true as const }
-            : undefined;
-          const subagentConfig: HarnessConfig = {
-            ...this.config,
-            maxSteps: subMaxSteps,
-            ...(inheritedWorktreeScope
-              ? { workspace: inheritedWorktreeScope.workspace, sandbox: this.bridgeSandboxSetting() || "auto" }
-              : {}),
-          };
-
-          this.ui.startSpinner(`Spawning isolated subagent: "${subPrompt.slice(0, 45)}..."`);
-          try {
-            const subagent = new AutonomousAgent(subagentConfig, this.depth + 1, inheritedWorktreeScope);
-            const subResult = await subagent.runSubagent(subPrompt);
-            this.ui.stopSpinner(true);
-            console.log(pc.cyan(`\n🤖 [Subagent Report Received]\n`));
-
-            if (this.flightRecorder) {
-              this.flightRecorder.recordToolResult(currentStep, call.id, toolName, true, subResult, 0);
-            }
-            this.messages.push({
-              role: "tool",
-              tool_call_id: call.id,
-              name: toolName,
-              content: subResult,
-            });
-          } catch (subErr: any) {
-            this.ui.stopSpinner(false);
-            if (this.flightRecorder) {
-              this.flightRecorder.recordToolResult(currentStep, call.id, toolName, false, "", 0, subErr.message);
-            }
-            this.messages.push({
-              role: "tool",
-              tool_call_id: call.id,
-              name: toolName,
-              content: `Subagent failed with error: ${subErr.message}`,
-            });
-          }
-          continue;
-        }
-
-        if (toolName === "hybrid_search") {
-          const t0 = Date.now();
-          this.ui.startSpinner(`Performing hybrid code search for "${args.query}"...`);
-          try {
-            const matches = await this.hybridSearch.search(args.query || "", {
-              mode: args.mode,
-              path: args.path,
-              limit: args.limit ? parseInt(args.limit, 10) : 10,
-            });
-            const durationMs = Date.now() - t0;
-            this.ui.stopSpinner(true);
-            const output = JSON.stringify({
-              query: args.query,
-              totalMatches: matches.length,
-              matches,
-            }, null, 2);
-            if (this.flightRecorder) {
-              this.flightRecorder.recordToolResult(currentStep, call.id, toolName, true, output, durationMs);
-            }
-            this.ui.printToolResult(toolName, true, `${matches.length} matches found.`);
-            this.messages.push({
-              role: "tool",
-              tool_call_id: call.id,
-              name: toolName,
-              content: output,
-            });
-          } catch (err: any) {
-            const durationMs = Date.now() - t0;
-            this.ui.stopSpinner(false);
-            if (this.flightRecorder) {
-              this.flightRecorder.recordToolResult(currentStep, call.id, toolName, false, "", durationMs, err.message);
-            }
-            this.messages.push({
-              role: "tool",
-              tool_call_id: call.id,
-              name: toolName,
-              content: `Error executing hybrid_search: ${err.message}`,
-            });
-          }
-          continue;
-        }
-
-        if (toolName === "browser_navigate") {
-          const t0 = Date.now();
-          this.ui.startSpinner(`Navigating browser to ${args.url}...`);
-          try {
-            const nav = await this.browser.navigate(args.url || "");
-            const durationMs = Date.now() - t0;
-            this.ui.stopSpinner(true);
-            const output = JSON.stringify(nav, null, 2);
-            if (this.flightRecorder) {
-              this.flightRecorder.recordToolResult(currentStep, call.id, toolName, true, output, durationMs);
-            }
-            this.ui.printToolResult(toolName, true, `Loaded: ${nav.title} (${nav.status})`);
-            this.messages.push({
-              role: "tool",
-              tool_call_id: call.id,
-              name: toolName,
-              content: output,
-            });
-          } catch (err: any) {
-            const durationMs = Date.now() - t0;
-            this.ui.stopSpinner(false);
-            if (this.flightRecorder) {
-              this.flightRecorder.recordToolResult(currentStep, call.id, toolName, false, "", durationMs, err.message);
-            }
-            this.messages.push({
-              role: "tool",
-              tool_call_id: call.id,
-              name: toolName,
-              content: `Error executing browser_navigate: ${err.message}`,
-            });
-          }
-          continue;
-        }
-
-        if (toolName === "browser_screenshot") {
-          const t0 = Date.now();
-          this.ui.startSpinner("Capturing browser viewport screenshot...");
-          try {
-            const shot = await this.browser.screenshot(args.output_path);
-            const durationMs = Date.now() - t0;
-            this.ui.stopSpinner(true);
-            const output = JSON.stringify({ path: shot.path, width: shot.width, height: shot.height }, null, 2);
-            if (this.flightRecorder) {
-              this.flightRecorder.recordToolResult(currentStep, call.id, toolName, true, output, durationMs);
-            }
-            this.ui.printToolResult(toolName, true, `Screenshot captured: ${shot.path}`);
-            this.messages.push({
-              role: "tool",
-              tool_call_id: call.id,
-              name: toolName,
-              content: output,
-            });
-          } catch (err: any) {
-            const durationMs = Date.now() - t0;
-            this.ui.stopSpinner(false);
-            if (this.flightRecorder) {
-              this.flightRecorder.recordToolResult(currentStep, call.id, toolName, false, "", durationMs, err.message);
-            }
-            this.messages.push({
-              role: "tool",
-              tool_call_id: call.id,
-              name: toolName,
-              content: `Error executing browser_screenshot: ${err.message}`,
-            });
-          }
-          continue;
-        }
-
-        if (toolName === "browser_click") {
-          const t0 = Date.now();
-          this.ui.startSpinner(`Clicking element '${args.selector}'...`);
-          try {
-            const clickRes = await this.browser.click(args.selector || "");
-            const durationMs = Date.now() - t0;
-            this.ui.stopSpinner(clickRes.success);
-            const output = JSON.stringify(clickRes, null, 2);
-            if (this.flightRecorder) {
-              this.flightRecorder.recordToolResult(currentStep, call.id, toolName, clickRes.success, output, durationMs);
-            }
-            this.ui.printToolResult(toolName, clickRes.success, clickRes.message);
-            this.messages.push({
-              role: "tool",
-              tool_call_id: call.id,
-              name: toolName,
-              content: output,
-            });
-          } catch (err: any) {
-            const durationMs = Date.now() - t0;
-            this.ui.stopSpinner(false);
-            this.messages.push({
-              role: "tool",
-              tool_call_id: call.id,
-              name: toolName,
-              content: `Error executing browser_click: ${err.message}`,
-            });
-          }
-          continue;
-        }
-
-        if (toolName === "browser_type") {
-          const t0 = Date.now();
-          this.ui.startSpinner(`Typing into '${args.selector}'...`);
-          try {
-            const typeRes = await this.browser.type(args.selector || "", args.text || "");
-            const durationMs = Date.now() - t0;
-            this.ui.stopSpinner(typeRes.success);
-            const output = JSON.stringify(typeRes, null, 2);
-            if (this.flightRecorder) {
-              this.flightRecorder.recordToolResult(currentStep, call.id, toolName, typeRes.success, output, durationMs);
-            }
-            this.ui.printToolResult(toolName, typeRes.success, typeRes.message);
-            this.messages.push({
-              role: "tool",
-              tool_call_id: call.id,
-              name: toolName,
-              content: output,
-            });
-          } catch (err: any) {
-            const durationMs = Date.now() - t0;
-            this.ui.stopSpinner(false);
-            this.messages.push({
-              role: "tool",
-              tool_call_id: call.id,
-              name: toolName,
-              content: `Error executing browser_type: ${err.message}`,
-            });
-          }
-          continue;
-        }
-
-        if (toolName === "browser_console_logs") {
-          const logs = this.browser.getConsoleLogs(args.limit ? parseInt(args.limit, 10) : 50);
-          const output = JSON.stringify({ totalLogs: logs.length, logs }, null, 2);
-          this.ui.printToolResult(toolName, true, `${logs.length} console log entries.`);
-          if (this.flightRecorder) {
-            this.flightRecorder.recordToolResult(currentStep, call.id, toolName, true, output, 0);
-          }
-          this.messages.push({
-            role: "tool",
-            tool_call_id: call.id,
-            name: toolName,
-            content: output,
-          });
-          continue;
-        }
-
-        if (toolName === "manage_knowledge") {
-          let output = "";
-          const action = args.action || "list";
-          if (action === "set") {
-            const entry = this.knowledge.set(args.key || "custom-rule", args.value || "", args.category || "rule");
-            output = JSON.stringify({ status: "saved", entry }, null, 2);
-          } else if (action === "get") {
-            const entry = this.knowledge.get(args.key || "");
-            output = JSON.stringify({ found: Boolean(entry), entry }, null, 2);
-          } else if (action === "delete") {
-            const deleted = this.knowledge.delete(args.key || "");
-            output = JSON.stringify({ status: deleted ? "deleted" : "not_found", key: args.key }, null, 2);
-          } else if (action === "query") {
-            const entries = this.knowledge.query(args.key || args.value, args.category);
-            output = JSON.stringify({ total: entries.length, entries }, null, 2);
-          } else {
-            const entries = this.knowledge.list();
-            output = JSON.stringify({ total: entries.length, entries }, null, 2);
-          }
-          this.ui.printToolResult(toolName, true, `Knowledge operation: ${action}`);
-          if (this.flightRecorder) {
-            this.flightRecorder.recordToolResult(currentStep, call.id, toolName, true, output, 0);
-          }
-          this.messages.push({
-            role: "tool",
-            tool_call_id: call.id,
-            name: toolName,
-            content: output,
-          });
-          continue;
-        }
-
-        if (toolName === "activate_skill") {
-          const skillName = args.name;
-          const skill = this.skillManager.getSkill(skillName);
-          if (!skill) {
-            const avail = this.skillManager.listSkills().map((s) => s.name).join(", ");
-            const errMsg = `Error: Skill '${skillName}' not found. Available skills: ${avail || "none"}`;
-            if (this.flightRecorder) {
-              this.flightRecorder.recordToolResult(currentStep, call.id, toolName, false, errMsg, 0, errMsg);
-            }
-            this.messages.push({
-              role: "tool",
-              tool_call_id: call.id,
-              name: toolName,
-              content: errMsg,
-            });
-          } else {
-            console.log(pc.green(`✔ Activated skill: ${pc.bold(skill.name)}`));
-            const skillContent = `[Activated Skill: ${skill.name}]\n\n${skill.content}`;
-            if (this.flightRecorder) {
-              this.flightRecorder.recordToolResult(currentStep, call.id, toolName, true, skillContent, 0);
-            }
-            this.messages.push({
-              role: "tool",
-              tool_call_id: call.id,
-              name: toolName,
-              content: skillContent,
-            });
-          }
-          continue;
-        }
-
-        if (toolName === "update_plan") {
-          const phases = Array.isArray(args.phases) ? args.phases : [];
-          this.activePlan = phases;
-          this.ui.renderPlan(this.activePlan);
-          logAudit({
-            workspace: this.config.workspace,
-            tool: toolName,
-            args,
-            success: true,
-            durationMs: 0,
-          });
-          const planOutput = JSON.stringify({
-            status: "plan_updated",
-            total_phases: this.activePlan.length,
-            completed: this.activePlan.filter((p) => p.status === "completed").length,
-            in_progress: this.activePlan.filter((p) => p.status === "in_progress").length,
-          });
-          if (this.flightRecorder) {
-            this.flightRecorder.recordToolResult(currentStep, call.id, toolName, true, planOutput, 0);
-            this.flightRecorder.recordDurableState(currentStep, { plan: this.activePlan });
-          }
-          this.messages.push({
-            role: "tool",
-            tool_call_id: call.id,
-            name: toolName,
-            content: planOutput,
-          });
-          continue;
-        }
-
-        if (this.mcpManager.isMcpTool(toolName)) {
-          const t0 = Date.now();
-          this.ui.startSpinner(`Executing MCP tool ${toolName}...`);
-          const result = await this.mcpManager.executeMcpTool(toolName, args);
-          const durationMs = Date.now() - t0;
-          this.ui.stopSpinner(result.success);
-          logAudit({
-            workspace: this.config.workspace,
-            tool: toolName,
-            args,
-            success: result.success,
-            durationMs,
-            error: result.error,
-          });
-          if (this.flightRecorder) {
-            this.flightRecorder.recordToolResult(
-              currentStep,
-              call.id,
-              toolName,
-              result.success,
-              result.output || "",
-              durationMs,
-              result.error
-            );
-          }
-          this.ui.printToolResult(toolName, result.success, result.output, result.error);
-          this.messages.push({
-            role: "tool",
-            tool_call_id: call.id,
-            name: toolName,
-            content: result.success ? result.output : `MCP Tool Error: ${result.error}`,
-          });
-          continue;
-        }
-
-        if (this.pluginManager.isCustomTool(toolName)) {
-          const t0 = Date.now();
-          this.ui.startSpinner(`Executing plugin tool ${toolName}...`);
-          const result = await this.pluginManager.executeCustomTool(toolName, args);
-          const durationMs = Date.now() - t0;
-          this.ui.stopSpinner(result.success);
-          logAudit({
-            workspace: this.config.workspace,
-            tool: toolName,
-            args,
-            success: result.success,
-            durationMs,
-            error: result.error,
-          });
-          if (this.flightRecorder) {
-            this.flightRecorder.recordToolResult(
-              currentStep,
-              call.id,
-              toolName,
-              result.success,
-              result.output || "",
-              durationMs,
-              result.error
-            );
-          }
-          this.ui.printToolResult(toolName, result.success, result.output, result.error);
-          this.messages.push({
-            role: "tool",
-            tool_call_id: call.id,
-            name: toolName,
-            content: result.success ? result.output : `Plugin Tool Error: ${result.error}`,
-          });
-          continue;
-        }
-
-        // Optional Human-in-the-loop confirmation
-        if (onConfirm && (toolName === "edit_file" || toolName === "write_file" || toolName === "patch_file" || toolName === "run_command")) {
-          const approved = await onConfirm(toolName, args);
-          if (!approved) {
-            console.log(`⚠️ Tool execution cancelled by user.`);
-            const cancelMsg = "Error: Execution was rejected by the user. Ask the user for clarification or proceed with an alternative approach.";
-            if (this.flightRecorder) {
-              this.flightRecorder.recordToolResult(currentStep, call.id, toolName, false, cancelMsg, 0, "Rejected by user");
-            }
-            this.messages.push({
-              role: "tool",
-              tool_call_id: call.id,
-              name: toolName,
-              content: cancelMsg,
-            });
-            continue;
-          }
-        }
-
-        const t0 = Date.now();
-        this.ui.startSpinner(`Executing ${toolName}...`);
-        await this.pluginManager.notifyToolCall(toolName, args);
-        const result = await this.pluginManager.executeToolPipeline(
-          toolName,
-          args,
-          async (effectiveArgs) => this.bridge.executeTool(toolName, effectiveArgs)
+        const { receipt, shouldExit } = await this.dispatchToolCall(
+          call,
+          currentStep,
+          "agent",
+          onConfirm
         );
-        const durationMs = Date.now() - t0;
-        await this.pluginManager.notifyToolResult(toolName, result);
-        this.ui.stopSpinner(result.success);
 
-        logAudit({
-          workspace: this.config.workspace,
-          tool: toolName,
-          args,
-          success: result.success,
-          durationMs,
-          error: result.error,
-        });
-
-        if (this.flightRecorder) {
-          this.flightRecorder.recordToolResult(
-            currentStep,
-            call.id,
-            toolName,
-            result.success,
-            result.output || "",
-            durationMs,
-            result.error
-          );
-        }
-
-        this.ui.printToolResult(toolName, result.success, result.output, result.error);
-
-        let finalContent = result.success
-          ? result.output
-          : `Error executing ${toolName}: ${result.error || "Unknown error"}`;
-
-        if (result.success && ["write_file", "edit_file", "patch_file"].includes(toolName)) {
-          this.hasPendingModifications = true;
-          if (this.flightRecorder) {
-            this.flightRecorder.recordFileDiff(
-              currentStep,
-              args.path || args.target_file || args.file_path || "unknown",
-              result.output || "",
-              args.replacements
-            );
-          }
-        }
+        let finalContent = receipt.success
+          ? receipt.output
+          : `Error executing ${toolName}: ${receipt.error || "Unknown error"}`;
 
         if (toolName === "run_command" || toolName === "run_tests") {
-          const combined = (result.output || "") + "\n" + (result.error || "");
+          const combined = (receipt.output || "") + "\n" + (receipt.error || "");
           const diags = extractCompilerDiagnostics(combined);
           if (diags.length > 0) {
             finalContent += formatDiagnosticHints(diags);
           }
           finalContent = foldVoluminousOutput(finalContent);
 
-          if (result.success && (toolName === "run_tests" || (args.command && /test|check|lint|cargo\s+test|npm\s+test|pytest/i.test(args.command)))) {
+          if (
+            receipt.success &&
+            (toolName === "run_tests" ||
+              (rawArgs.command &&
+                /test|check|lint|cargo\s+test|npm\s+test|pytest/i.test(rawArgs.command)))
+          ) {
             this.hasPendingModifications = false;
           }
         }
 
-        // Append tool result to context
         this.messages.push({
           role: "tool",
           tool_call_id: call.id,
           name: toolName,
           content: finalContent,
         });
+
+        if (shouldExit) {
+          isFinished = true;
+          break;
+        }
       }
 
       currentStep++;
@@ -1871,55 +1796,27 @@ Always explain your reasoning before or alongside your tool calls.`;
 
       for (const call of parsed.toolCalls) {
         const toolName = call.function.name;
-        let args: Record<string, any> = {};
-        try {
-          args = typeof call.function.arguments === "string"
-            ? JSON.parse(call.function.arguments)
-            : call.function.arguments;
-        } catch {
-          args = { raw: call.function.arguments };
-        }
+        const { receipt } = await this.dispatchToolCall(call, currentStep, "subagent");
 
         if (toolName === "task_completed") {
+          let args: any = {};
+          try {
+            args =
+              typeof call.function.arguments === "string"
+                ? JSON.parse(call.function.arguments)
+                : call.function.arguments;
+          } catch {}
           finalSummary = args.summary || "Subagent finished objective.";
           return finalSummary;
         }
 
-        if (toolName === "spawn_subagent") {
-          this.messages.push({
-            role: "tool",
-            tool_call_id: call.id,
-            name: toolName,
-            content: "Error: Subagents cannot recursively spawn further subagents.",
-          });
-          continue;
-        }
-
-        let result: { success: boolean; output: string; error?: string };
-        if (toolName === "hybrid_search") {
-          try {
-            const matches = await this.hybridSearch.search(args.query || "", {
-              mode: args.mode,
-              path: args.path,
-              limit: args.limit ? parseInt(args.limit, 10) : 10,
-            });
-            result = {
-              success: true,
-              output: JSON.stringify({ query: args.query, totalMatches: matches.length, matches }, null, 2),
-            };
-          } catch (err: any) {
-            result = { success: false, output: "", error: err.message };
-          }
-        } else {
-          result = await this.bridge.executeTool(toolName, args);
-        }
         this.messages.push({
           role: "tool",
           tool_call_id: call.id,
           name: toolName,
-          content: result.success
-            ? result.output
-            : `Error executing ${toolName}: ${result.error || "Unknown error"}`,
+          content: receipt.success
+            ? receipt.output
+            : `Error executing ${toolName}: ${receipt.error || "Unknown error"}`,
         });
       }
 
