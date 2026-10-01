@@ -11,20 +11,81 @@ import { defaultRegistry } from "./capabilities.js";
 export const DEFAULT_SAFE_READONLY_COMMAND_REGEX = /^\s*(ls|dir|pwd|echo|cat|head|tail|grep|rg|find|diff|wc|which|where|git\s+(status|log|diff|branch|show)|cargo\s+(check|clippy)|npm\s+(test|run\s+test|list)|node\s+-v|rustc\s+-v)(\s+.*)?$/i;
 /**
  * Validates whether a shell command is safe to execute under read-only mode.
+ * Enforces AUTH-009 and AUTH-010:
+ * 1. Rejects shell composition, pipelines, command substitutions, redirections, and separators.
+ * 2. Validates base executable against safe command allowlist.
+ * 3. Inspects executable arguments to prevent subcommands or options that perform mutation.
  */
 export function isSafeReadOnlyCommand(command, customRegex) {
     if (!command || typeof command !== "string")
         return false;
     const trimmed = command.trim();
-    // Reject chained commands or redirection operators that modify state
-    if (/[><&;|\n]/.test(trimmed)) {
-        // If it has pipe or redirect, inspect if it contains redirection or background operators
-        if (/>|>>|&/.test(trimmed)) {
+    if (trimmed.length === 0)
+        return false;
+    // 1. Strict rejection of shell control, chaining, substitution, and redirection metacharacters:
+    // ;      - command separator
+    // &      - background operator or logical AND (&&)
+    // |      - pipeline or logical OR (||)
+    // >      - output redirection (truncate or append)
+    // <      - input redirection or process substitution
+    // $      - variable / command / arithmetic substitution ($(cmd), $VAR, $((expr)))
+    // `      - backtick command substitution (`cmd`)
+    // \n, \r - newline command separators
+    // (, )   - subshell execution / grouping
+    // {, }   - command block grouping
+    // \      - escape character
+    if (/[><&;|`$\n\r(){}\\]/.test(trimmed)) {
+        return false;
+    }
+    // 2. Validate against the safe read-only command allowlist
+    const regex = customRegex || DEFAULT_SAFE_READONLY_COMMAND_REGEX;
+    if (!regex.test(trimmed)) {
+        return false;
+    }
+    // 3. Inspect command-specific argument escapes for allowed executables:
+    // 3a. 'find' command: reject mutating or execution arguments (-delete, -exec, -ok, -fprint, etc.)
+    if (/^\s*find\b/i.test(trimmed)) {
+        if (/\s-(delete|exec|execdir|ok|okdir|fprint|fprint0|fprintf|fls)\b/i.test(trimmed)) {
             return false;
         }
     }
-    const regex = customRegex || DEFAULT_SAFE_READONLY_COMMAND_REGEX;
-    return regex.test(trimmed);
+    // 3b. 'git' command: reject output redirection flags (--output, -o)
+    if (/^\s*git\b/i.test(trimmed)) {
+        if (/\s(--output\b|-o\s)/i.test(trimmed) || /\s--output=/i.test(trimmed)) {
+            return false;
+        }
+        // 3c. 'git branch': only allow inspection/listing; reject creation, deletion, renaming
+        if (/^\s*git\s+branch\b/i.test(trimmed)) {
+            // Reject deletion (-d, -D, --delete), renaming (-m, -M, --move), copying (-c, -C, --copy), upstream setting (-u)
+            if (/\s(-[dDmMceCu]|--delete|--move|--copy|--set-upstream|--edit-description)\b/i.test(trimmed)) {
+                return false;
+            }
+            // Inspect remaining tokens after 'git branch': any non-flag token not preceded by -l or --list is branch creation/mutation
+            const afterBranch = trimmed.replace(/^\s*git\s+branch\s*/i, "").trim();
+            if (afterBranch.length > 0) {
+                const tokens = afterBranch.split(/\s+/);
+                let expectsPattern = false;
+                for (const token of tokens) {
+                    if (token === "-l" || token === "--list") {
+                        expectsPattern = true;
+                    }
+                    else if (token.startsWith("-")) {
+                        // Safe flag, e.g. -a, -r, -v, -vv, --remotes, --all, --show-current
+                        expectsPattern = false;
+                    }
+                    else if (expectsPattern) {
+                        // Allowed pattern argument for --list (e.g. "feat/*")
+                        expectsPattern = false;
+                    }
+                    else {
+                        // Positional argument without --list means branch creation/mutation: reject
+                        return false;
+                    }
+                }
+            }
+        }
+    }
+    return true;
 }
 /**
  * Authority Admission & Resource Confinement Engine

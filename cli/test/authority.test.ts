@@ -33,27 +33,77 @@ describe("WP-02: Authority Admission & Resource Confinement (INC-03)", () => {
   fs.writeFileSync(path.join(extRoot, "secret.txt"), "SUPER_SECRET_EXTERNAL_DATA");
 
   test("AUTH-009 & AUTH-010: Safe read-only command classification", () => {
-    // Allowed safe commands
+    // 1. Allowed safe commands
     assert.strictEqual(isSafeReadOnlyCommand("ls"), true);
     assert.strictEqual(isSafeReadOnlyCommand("ls -la"), true);
     assert.strictEqual(isSafeReadOnlyCommand("pwd"), true);
     assert.strictEqual(isSafeReadOnlyCommand("git status"), true);
     assert.strictEqual(isSafeReadOnlyCommand("git log -n 5"), true);
     assert.strictEqual(isSafeReadOnlyCommand("git diff"), true);
+    assert.strictEqual(isSafeReadOnlyCommand("git branch"), true);
+    assert.strictEqual(isSafeReadOnlyCommand("git branch -a"), true);
+    assert.strictEqual(isSafeReadOnlyCommand("git branch -r"), true);
+    assert.strictEqual(isSafeReadOnlyCommand("git branch --list"), true);
+    assert.strictEqual(isSafeReadOnlyCommand('git branch --list "main"'), true);
+    assert.strictEqual(isSafeReadOnlyCommand("git branch --show-current"), true);
     assert.strictEqual(isSafeReadOnlyCommand("cat package.json"), true);
+    assert.strictEqual(isSafeReadOnlyCommand("head -n 20 README.md"), true);
+    assert.strictEqual(isSafeReadOnlyCommand("tail -n 5 log.txt"), true);
+    assert.strictEqual(isSafeReadOnlyCommand('grep "foo" file.txt'), true);
+    assert.strictEqual(isSafeReadOnlyCommand('rg "pattern" src/'), true);
+    assert.strictEqual(isSafeReadOnlyCommand("diff file1 file2"), true);
+    assert.strictEqual(isSafeReadOnlyCommand("wc -l package.json"), true);
+    assert.strictEqual(isSafeReadOnlyCommand('find . -name "*.ts"'), true);
+    assert.strictEqual(isSafeReadOnlyCommand("find src -type f"), true);
     assert.strictEqual(isSafeReadOnlyCommand("cargo check"), true);
     assert.strictEqual(isSafeReadOnlyCommand("cargo clippy"), true);
     assert.strictEqual(isSafeReadOnlyCommand("npm test"), true);
+    assert.strictEqual(isSafeReadOnlyCommand("npm run test"), true);
+    assert.strictEqual(isSafeReadOnlyCommand("npm list"), true);
+    assert.strictEqual(isSafeReadOnlyCommand("node -v"), true);
+    assert.strictEqual(isSafeReadOnlyCommand("rustc -v"), true);
 
-    // Denied mutating commands
+    // 2. Denied shell composition, chaining, redirection, and substitution
+    assert.strictEqual(isSafeReadOnlyCommand("cat file.txt | rm -rf /"), false);
+    assert.strictEqual(isSafeReadOnlyCommand("cat file.txt | cat"), false);
+    assert.strictEqual(isSafeReadOnlyCommand("cat $(rm -rf /)"), false);
+    assert.strictEqual(isSafeReadOnlyCommand("cat `rm -rf /`"), false);
+    assert.strictEqual(isSafeReadOnlyCommand("git status || rm -rf /"), false);
+    assert.strictEqual(isSafeReadOnlyCommand("git status && rm -rf /"), false);
+    assert.strictEqual(isSafeReadOnlyCommand("ls; rm -rf /"), false);
+    assert.strictEqual(isSafeReadOnlyCommand("ls & rm -rf /"), false);
+    assert.strictEqual(isSafeReadOnlyCommand("ls > out.txt"), false);
+    assert.strictEqual(isSafeReadOnlyCommand("cat file >> other.txt"), false);
+    assert.strictEqual(isSafeReadOnlyCommand("cat < /etc/passwd"), false);
+    assert.strictEqual(isSafeReadOnlyCommand("cat << EOF"), false);
+    assert.strictEqual(isSafeReadOnlyCommand("cat file\nrm -rf /"), false);
+    assert.strictEqual(isSafeReadOnlyCommand("cat file\rrm -rf /"), false);
+    assert.strictEqual(isSafeReadOnlyCommand("(rm -rf /)"), false);
+    assert.strictEqual(isSafeReadOnlyCommand("{ rm -rf /; }"), false);
+    assert.strictEqual(isSafeReadOnlyCommand("cat file\\; rm"), false);
+
+    // 3. Denied non-allowlisted mutating commands
     assert.strictEqual(isSafeReadOnlyCommand("rm -rf /"), false);
     assert.strictEqual(isSafeReadOnlyCommand("touch newfile.txt"), false);
     assert.strictEqual(isSafeReadOnlyCommand("git commit -m 'feat'"), false);
     assert.strictEqual(isSafeReadOnlyCommand("git push"), false);
-    assert.strictEqual(isSafeReadOnlyCommand("ls > out.txt"), false);
-    assert.strictEqual(isSafeReadOnlyCommand("cat file >> other.txt"), false);
     assert.strictEqual(isSafeReadOnlyCommand("npm install"), false);
     assert.strictEqual(isSafeReadOnlyCommand("cargo build"), false);
+    assert.strictEqual(isSafeReadOnlyCommand('python3 -c "import os"'), false);
+    assert.strictEqual(isSafeReadOnlyCommand('node -e "process.exit()"'), false);
+
+    // 4. Denied executable argument escapes (find -exec/delete, git --output, git branch creation/deletion)
+    assert.strictEqual(isSafeReadOnlyCommand("find . -exec rm -rf {} +"), false);
+    assert.strictEqual(isSafeReadOnlyCommand("find . -delete"), false);
+    assert.strictEqual(isSafeReadOnlyCommand("find . -ok rm {} +"), false);
+    assert.strictEqual(isSafeReadOnlyCommand("find . -fprint out.txt"), false);
+    assert.strictEqual(isSafeReadOnlyCommand("git diff --output=out.txt"), false);
+    assert.strictEqual(isSafeReadOnlyCommand("git log --output out.txt"), false);
+    assert.strictEqual(isSafeReadOnlyCommand("git branch -D main"), false);
+    assert.strictEqual(isSafeReadOnlyCommand("git branch -d feat"), false);
+    assert.strictEqual(isSafeReadOnlyCommand("git branch -m old new"), false);
+    assert.strictEqual(isSafeReadOnlyCommand("git branch new_branch"), false);
+    assert.strictEqual(isSafeReadOnlyCommand("git branch --delete foo"), false);
   });
 
   test("AUTH-009: Read-only mode denies mutating capabilities and non-safe commands", async () => {
@@ -379,5 +429,91 @@ describe("WP-02: Authority Admission & Resource Confinement (INC-03)", () => {
     assert.strictEqual(receipt.status, "BLOCKED");
     assert.strictEqual(executed, false, "Handler must NOT have executed!");
     assert.match(receipt.error!, /RES-004: Security Violation: Path/);
+  });
+
+  test("F-WP02-MAT-01: Read-only mode denies shell composition and prevents disk side effects through ExecutionSpine", async () => {
+    const registry = createDefaultRegistry();
+    const authorityEngine = new AuthorityAdmissionEngine({ readOnly: true });
+
+    let handlerExecuted = false;
+    registry.setHandler("run_command", async (args) => {
+      handlerExecuted = true;
+      return { success: true, output: "simulated execution" };
+    });
+
+    const spine = new ExecutionSpine({
+      registry,
+      hooks: {
+        authorityAdmission: authorityEngine.createAdmissionHook(),
+        resourceConfinement: authorityEngine.createConfinementHook(),
+      },
+    });
+
+    const sideEffectFile1 = path.join(wsRoot, "side_effect_pipe.txt");
+    const sideEffectFile2 = path.join(wsRoot, "side_effect_subshell.txt");
+    const sideEffectFile3 = path.join(wsRoot, "side_effect_chain.txt");
+
+    const commandsToTest = [
+      `cat package.json | touch ${sideEffectFile1}`,
+      `git status && touch ${sideEffectFile2}`,
+      `cat $(touch ${sideEffectFile3})`,
+      `echo malicious > ${path.join(wsRoot, "side_effect_redirect.txt")}`,
+      "find . -delete",
+      "git branch -D main",
+    ];
+
+    for (const cmd of commandsToTest) {
+      handlerExecuted = false;
+      const receipt = await spine.execute(
+        {
+          toolName: "run_command",
+          args: { command: cmd },
+          actor: "agent",
+          executionDomain: "agent_orchestration",
+        },
+        { workspaceRoot: wsRoot, readOnly: true }
+      );
+
+      assert.strictEqual(receipt.success, false, `Command '${cmd}' must fail admission`);
+      assert.strictEqual(receipt.status, "DENIED", `Command '${cmd}' receipt status must be DENIED`);
+      assert.strictEqual(handlerExecuted, false, `Handler must NOT execute for '${cmd}'`);
+      assert.match(receipt.error!, /AUTH-010:.*is not permitted in read-only mode/);
+    }
+
+    // Verify disk state has ZERO side-effect files
+    assert.strictEqual(fs.existsSync(sideEffectFile1), false, "Pipe side effect must not exist on disk");
+    assert.strictEqual(fs.existsSync(sideEffectFile2), false, "Subshell side effect must not exist on disk");
+    assert.strictEqual(fs.existsSync(sideEffectFile3), false, "Chaining side effect must not exist on disk");
+    assert.strictEqual(fs.existsSync(path.join(wsRoot, "side_effect_redirect.txt")), false, "Redirect side effect must not exist on disk");
+  });
+
+  test("F-WP02-MAT-01: Read-only command denial applies consistently across agent, operator_direct_shell, and subagent domains", async () => {
+    const authorityEngine = new AuthorityAdmissionEngine({ readOnly: true });
+    const dummyContext: InvocationContext = { workspaceRoot: wsRoot, readOnly: true };
+
+    const domains = [
+      { actor: "agent", domain: "agent_orchestration" },
+      { actor: "operator", domain: "operator_direct_shell" },
+      { actor: "subagent-1", domain: "subagent" },
+    ];
+
+    for (const d of domains) {
+      const decision = await authorityEngine.admit(
+        {
+          toolName: "run_command",
+          args: { command: "cat file.txt | rm -rf /" },
+          actor: d.actor,
+          executionDomain: d.domain,
+        },
+        dummyContext
+      );
+
+      assert.strictEqual(
+        decision.admitted,
+        false,
+        `Domain '${d.domain}' with actor '${d.actor}' must deny unsafe read-only command`
+      );
+      assert.match(decision.reason!, /AUTH-010:.*Command 'cat file.txt \| rm -rf \/' is not permitted in read-only mode/);
+    }
   });
 });
