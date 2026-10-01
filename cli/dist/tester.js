@@ -65,6 +65,36 @@ export function runTestSuite(workspace, filterPattern) {
         rawOutput = (err.stdout || "") + "\n" + (err.stderr || err.message || "");
         success = false;
     }
+    return summarizeTestRun(command, success, rawOutput);
+}
+/** Execute test discovery or an explicit verifier through the caller's mutation boundary. */
+export async function runTestSuiteWithExecutor(workspace, execute, commandOverride) {
+    const command = commandOverride?.trim() || detectTestCommand(workspace);
+    if (command === "none")
+        return summarizeTestRun(command, false, "No verification command is configured.");
+    try {
+        const result = await execute(command);
+        let commandSucceeded = false;
+        let rawOutput = [result.output, result.error].filter(Boolean).join("\n");
+        if (result.success) {
+            try {
+                const execution = JSON.parse(result.output);
+                if (execution && typeof execution === "object" && typeof execution.exit_code === "number") {
+                    commandSucceeded = execution.exit_code === 0 && execution.timed_out !== true;
+                    rawOutput = [execution.stdout, execution.stderr, result.error].filter(Boolean).join("\n");
+                }
+            }
+            catch {
+                // Unknown executor output is not proof that the command exited successfully.
+            }
+        }
+        return summarizeTestRun(command, commandSucceeded, rawOutput);
+    }
+    catch (error) {
+        return summarizeTestRun(command, false, error?.message || "Verification command execution failed.");
+    }
+}
+function summarizeTestRun(command, success, rawOutput) {
     // Extract failing test line summaries
     const failures = [];
     const lines = rawOutput.split("\n");

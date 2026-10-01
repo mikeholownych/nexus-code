@@ -1,5 +1,5 @@
 import * as path from "node:path";
-import { runTestSuite } from "./tester.js";
+import { detectTestCommand, runTestSuiteWithExecutor } from "./tester.js";
 import pc from "picocolors";
 /**
  * SynthesizerEngine: Enforces strict RED-GREEN-REFACTOR Test-Driven Development protocol.
@@ -10,15 +10,21 @@ import pc from "picocolors";
  */
 export class SynthesizerEngine {
     workspace;
+    executeTestCommand;
     state;
-    constructor(workspace = process.cwd()) {
+    constructor(workspace = process.cwd(), executeTestCommand) {
         this.workspace = path.resolve(workspace);
+        this.executeTestCommand = executeTestCommand;
         this.state = {
             currentPhase: "IDLE",
             issueDescription: "",
             history: [],
             regressionFailures: [],
         };
+    }
+    runTests(filterPattern) {
+        const command = detectTestCommand(this.workspace, filterPattern);
+        return runTestSuiteWithExecutor(this.workspace, this.executeTestCommand, command);
     }
     getState() {
         return { ...this.state, history: [...this.state.history] };
@@ -60,7 +66,7 @@ export class SynthesizerEngine {
             };
         }
         this.state.reproductionTestTarget = target;
-        const testRes = runTestSuite(this.workspace, target);
+        const testRes = await this.runTests(target);
         // In RED phase, success = test FAILED (confirmed defect reproduction)
         const defectReproduced = !testRes.success;
         if (defectReproduced) {
@@ -106,7 +112,7 @@ export class SynthesizerEngine {
                 error: "No reproduction test target specified for GREEN phase verification.",
             };
         }
-        const testRes = runTestSuite(this.workspace, target);
+        const testRes = await this.runTests(target);
         if (testRes.success) {
             this.state.currentPhase = "REFACTOR";
             this.state.history.push({
@@ -141,7 +147,7 @@ export class SynthesizerEngine {
      * Phase 3 (REFACTOR): Run the complete test suite to guarantee zero regressions.
      */
     async verifyRefactorPhase() {
-        const fullRes = runTestSuite(this.workspace);
+        const fullRes = await this.runTests();
         if (fullRes.success) {
             this.state.currentPhase = "COMPLETED";
             this.state.regressionFailures = [];

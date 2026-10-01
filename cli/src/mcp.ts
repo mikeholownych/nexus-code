@@ -196,7 +196,7 @@ export class McpConnection {
         },
         clientInfo: {
           name: "nexus-code",
-          version: "1.2.0",
+          version: "1.2.1",
         },
       });
 
@@ -839,7 +839,7 @@ export class McpServer {
           },
           serverInfo: {
             name: "nexus-code",
-          version: "1.2.0",
+          version: "1.2.1",
           },
         },
       };

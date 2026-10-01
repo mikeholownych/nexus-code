@@ -842,14 +842,16 @@ export class RustCoreBridge {
     dryRun = false;
     readOnly = false;
     sandbox = false;
+    requireSandbox = false;
     securityManager;
-    constructor(workspace, defaultShell = "bash", customBinaryPath, dryRun = false, readOnly = false, sandbox = false) {
+    constructor(workspace, defaultShell = "bash", customBinaryPath, dryRun = false, readOnly = false, sandbox = false, requireSandbox = false) {
         this.workspace = path.resolve(workspace);
         this.defaultShell = defaultShell;
         this.cargoManifestPath = path.resolve(__dirname, "../../core/Cargo.toml");
         this.dryRun = dryRun;
         this.readOnly = readOnly;
         this.sandbox = sandbox;
+        this.requireSandbox = requireSandbox;
         this.securityManager = new SecurityManager(this.workspace);
         if (customBinaryPath && fs.existsSync(customBinaryPath)) {
             this.coreBinaryPath = customBinaryPath;
@@ -1133,6 +1135,17 @@ export class RustCoreBridge {
         }
         // 3. Dry-run mode simulation
         if (this.dryRun) {
+            if (toolName === "run_tests") {
+                return {
+                    success: false,
+                    output: JSON.stringify({
+                        dry_run: true,
+                        passed: false,
+                        summary: "Test command was not executed because dry-run mode is active.",
+                    }),
+                    error: "Dry-run mode does not execute repository-controlled test commands.",
+                };
+            }
             if (toolName === "write_file") {
                 return {
                     success: true,
@@ -1208,8 +1221,9 @@ export class RustCoreBridge {
             };
         }
         if (toolName === "run_tests") {
-            const { runTestSuite } = await import("./tester.js");
-            const res = runTestSuite(this.workspace, args.filter);
+            const { detectTestCommand, runTestSuiteWithExecutor } = await import("./tester.js");
+            const command = detectTestCommand(this.workspace, args.filter);
+            const res = await runTestSuiteWithExecutor(this.workspace, (testCommand) => this.executeTool("run_command", { command: testCommand, timeout_secs: 120 }), command);
             return {
                 success: res.success,
                 output: JSON.stringify({
@@ -1350,13 +1364,29 @@ export class RustCoreBridge {
             if (!args.shell) {
                 args.shell = this.defaultShell;
             }
-            if (this.sandbox) {
+            if (this.sandbox || this.readOnly || this.requireSandbox) {
                 const { wrapSandboxedCommand } = await import("./sandbox.js");
-                const mode = typeof this.sandbox === "string" ? this.sandbox : "auto";
+                const configuredMode = typeof this.sandbox === "string" ? this.sandbox : "auto";
+                const mode = this.readOnly && configuredMode === "none" ? "auto" : configuredMode;
                 const sandboxed = wrapSandboxedCommand(args.command || "", this.workspace, {
                     mode,
                     shell: args.shell,
+                    readOnlyHost: this.readOnly,
+                    network: this.readOnly ? false : undefined,
                 });
+                const explicitlyRequestedSandbox = Boolean(this.sandbox) && configuredMode !== "none";
+                if ((this.readOnly || this.requireSandbox || explicitlyRequestedSandbox) && !sandboxed.sandboxed) {
+                    const authority = this.readOnly
+                        ? "Read-only mode"
+                        : this.requireSandbox
+                            ? "Worktree isolation"
+                            : "Configured sandbox";
+                    return {
+                        success: false,
+                        output: "",
+                        error: `${authority} violation: filesystem-isolated shell execution is unavailable. ${sandboxed.warning || "No supported sandbox engine is available."}`,
+                    };
+                }
                 args.command = sandboxed.command;
             }
         }
