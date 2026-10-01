@@ -55,10 +55,6 @@ describe("WP-02: Authority Admission & Resource Confinement (INC-03)", () => {
     assert.strictEqual(isSafeReadOnlyCommand("wc -l package.json"), true);
     assert.strictEqual(isSafeReadOnlyCommand('find . -name "*.ts"'), true);
     assert.strictEqual(isSafeReadOnlyCommand("find src -type f"), true);
-    assert.strictEqual(isSafeReadOnlyCommand("cargo check"), true);
-    assert.strictEqual(isSafeReadOnlyCommand("cargo clippy"), true);
-    assert.strictEqual(isSafeReadOnlyCommand("npm test"), true);
-    assert.strictEqual(isSafeReadOnlyCommand("npm run test"), true);
     assert.strictEqual(isSafeReadOnlyCommand("npm list"), true);
     assert.strictEqual(isSafeReadOnlyCommand("node -v"), true);
     assert.strictEqual(isSafeReadOnlyCommand("rustc -v"), true);
@@ -82,7 +78,7 @@ describe("WP-02: Authority Admission & Resource Confinement (INC-03)", () => {
     assert.strictEqual(isSafeReadOnlyCommand("{ rm -rf /; }"), false);
     assert.strictEqual(isSafeReadOnlyCommand("cat file\\; rm"), false);
 
-    // 3. Denied non-allowlisted mutating commands
+    // 3. Denied non-allowlisted and project-controlled delegated execution commands
     assert.strictEqual(isSafeReadOnlyCommand("rm -rf /"), false);
     assert.strictEqual(isSafeReadOnlyCommand("touch newfile.txt"), false);
     assert.strictEqual(isSafeReadOnlyCommand("git commit -m 'feat'"), false);
@@ -91,6 +87,10 @@ describe("WP-02: Authority Admission & Resource Confinement (INC-03)", () => {
     assert.strictEqual(isSafeReadOnlyCommand("cargo build"), false);
     assert.strictEqual(isSafeReadOnlyCommand('python3 -c "import os"'), false);
     assert.strictEqual(isSafeReadOnlyCommand('node -e "process.exit()"'), false);
+    assert.strictEqual(isSafeReadOnlyCommand("npm test"), false);
+    assert.strictEqual(isSafeReadOnlyCommand("npm run test"), false);
+    assert.strictEqual(isSafeReadOnlyCommand("cargo check"), false);
+    assert.strictEqual(isSafeReadOnlyCommand("cargo clippy"), false);
 
     // 4. Denied executable argument escapes (find -exec/delete, git --output, git branch creation/deletion)
     assert.strictEqual(isSafeReadOnlyCommand("find . -exec rm -rf {} +"), false);
@@ -515,5 +515,134 @@ describe("WP-02: Authority Admission & Resource Confinement (INC-03)", () => {
       );
       assert.match(decision.reason!, /AUTH-010:.*Command 'cat file.txt \| rm -rf \/' is not permitted in read-only mode/);
     }
+  });
+
+  test("F-WP02-MAT-02: Isolated fixtures confirm project-controlled execution (npm test, cargo check) is denied under read-only mode", async () => {
+    const registry = createDefaultRegistry();
+    const authorityEngine = new AuthorityAdmissionEngine({ readOnly: true });
+
+    let handlerExecuted = false;
+    registry.setHandler("run_command", async (args) => {
+      handlerExecuted = true;
+      return { success: true, output: "simulated execution" };
+    });
+
+    const spine = new ExecutionSpine({
+      registry,
+      hooks: {
+        authorityAdmission: authorityEngine.createAdmissionHook(),
+        resourceConfinement: authorityEngine.createConfinementHook(),
+      },
+    });
+
+    // 1. Isolated npm fixture
+    const npmFixtureDir = path.join(tmpRoot, "npm-fixture");
+    fs.mkdirSync(npmFixtureDir, { recursive: true });
+    const npmSentinel = path.join(npmFixtureDir, "sentinel_npm.txt");
+    fs.writeFileSync(
+      path.join(npmFixtureDir, "package.json"),
+      JSON.stringify({
+        name: "test-escape",
+        scripts: { test: `touch "${npmSentinel}"` },
+      })
+    );
+
+    // Attempt npm test under read-only mode
+    handlerExecuted = false;
+    const npmReceipt = await spine.execute(
+      {
+        toolName: "run_command",
+        args: { command: "npm test", cwd: npmFixtureDir },
+        actor: "agent",
+        executionDomain: "agent_orchestration",
+      },
+      { workspaceRoot: wsRoot, readOnly: true }
+    );
+
+    assert.strictEqual(npmReceipt.success, false, "npm test must be denied under read-only mode");
+    assert.strictEqual(npmReceipt.status, "DENIED", "npm test receipt status must be DENIED");
+    assert.strictEqual(handlerExecuted, false, "Handler must NOT have executed for npm test");
+    assert.strictEqual(fs.existsSync(npmSentinel), false, "npm test sentinel must NOT be created on disk");
+    assert.match(npmReceipt.error!, /AUTH-010:.*Command 'npm test' is not permitted in read-only mode/);
+
+    // Attempt npm run test under read-only mode
+    handlerExecuted = false;
+    const npmRunReceipt = await spine.execute(
+      {
+        toolName: "run_command",
+        args: { command: "npm run test", cwd: npmFixtureDir },
+        actor: "agent",
+        executionDomain: "agent_orchestration",
+      },
+      { workspaceRoot: wsRoot, readOnly: true }
+    );
+    assert.strictEqual(npmRunReceipt.success, false, "npm run test must be denied under read-only mode");
+    assert.strictEqual(npmRunReceipt.status, "DENIED");
+    assert.strictEqual(handlerExecuted, false);
+
+    // 2. Isolated Cargo fixture with build.rs
+    const cargoFixtureDir = path.join(tmpRoot, "cargo-fixture");
+    fs.mkdirSync(cargoFixtureDir, { recursive: true });
+    const cargoSentinel = path.join(cargoFixtureDir, "sentinel_cargo.txt");
+    fs.writeFileSync(
+      path.join(cargoFixtureDir, "Cargo.toml"),
+      `[package]\nname = "cargo-escape"\nversion = "0.1.0"\nedition = "2021"\n`
+    );
+    fs.writeFileSync(
+      path.join(cargoFixtureDir, "build.rs"),
+      `fn main() { std::fs::write("${cargoSentinel}", "escaped").unwrap(); }`
+    );
+
+    // Attempt cargo check under read-only mode
+    handlerExecuted = false;
+    const cargoReceipt = await spine.execute(
+      {
+        toolName: "run_command",
+        args: { command: "cargo check", cwd: cargoFixtureDir },
+        actor: "agent",
+        executionDomain: "agent_orchestration",
+      },
+      { workspaceRoot: wsRoot, readOnly: true }
+    );
+
+    assert.strictEqual(cargoReceipt.success, false, "cargo check must be denied under read-only mode");
+    assert.strictEqual(cargoReceipt.status, "DENIED", "cargo check receipt status must be DENIED");
+    assert.strictEqual(handlerExecuted, false, "Handler must NOT have executed for cargo check");
+    assert.strictEqual(fs.existsSync(cargoSentinel), false, "cargo check sentinel must NOT be created on disk");
+    assert.match(cargoReceipt.error!, /AUTH-010:.*Command 'cargo check' is not permitted in read-only mode/);
+
+    // Attempt cargo clippy under read-only mode
+    handlerExecuted = false;
+    const clippyReceipt = await spine.execute(
+      {
+        toolName: "run_command",
+        args: { command: "cargo clippy", cwd: cargoFixtureDir },
+        actor: "agent",
+        executionDomain: "agent_orchestration",
+      },
+      { workspaceRoot: wsRoot, readOnly: true }
+    );
+    assert.strictEqual(clippyReceipt.success, false, "cargo clippy must be denied under read-only mode");
+    assert.strictEqual(clippyReceipt.status, "DENIED");
+    assert.strictEqual(handlerExecuted, false);
+
+    // 3. Positive verification: npm list remains admitted
+    handlerExecuted = false;
+    const listReceipt = await spine.execute(
+      {
+        toolName: "run_command",
+        args: { command: "npm list", cwd: wsRoot },
+        actor: "agent",
+        executionDomain: "agent_orchestration",
+      },
+      { workspaceRoot: wsRoot, readOnly: true }
+    );
+    assert.strictEqual(listReceipt.success, true, "npm list must be admitted under read-only mode");
+    assert.strictEqual(listReceipt.status, "COMPLETED");
+    assert.strictEqual(handlerExecuted, true);
+
+    // Cleanup fixtures
+    fs.rmSync(npmFixtureDir, { recursive: true, force: true });
+    fs.rmSync(cargoFixtureDir, { recursive: true, force: true });
   });
 });

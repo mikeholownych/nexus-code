@@ -40,7 +40,7 @@ export interface AuthorityConfig {
  * Standard safe commands allowed under --read-only mode.
  */
 export const DEFAULT_SAFE_READONLY_COMMAND_REGEX =
-  /^\s*(ls|dir|pwd|echo|cat|head|tail|grep|rg|find|diff|wc|which|where|git\s+(status|log|diff|branch|show)|cargo\s+(check|clippy)|npm\s+(test|run\s+test|list)|node\s+-v|rustc\s+-v)(\s+.*)?$/i;
+  /^\s*(ls|dir|pwd|echo|cat|head|tail|grep|rg|find|diff|wc|which|where|git\s+(status|log|diff|branch|show)|npm\s+list|node\s+-v|rustc\s+-v)(\s+.*)?$/i;
 
 /**
  * Validates whether a shell command is safe to execute under read-only mode.
