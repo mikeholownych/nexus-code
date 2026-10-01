@@ -5,7 +5,7 @@ import * as fs from "node:fs";
 import { execSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { config as loadDotenv } from "dotenv";
-import { AutonomousAgent } from "./agent.js";
+import { ApplicationCore } from "./core/app.js";
 import { InteractiveRepl } from "./repl.js";
 import { LocalLlmClient, readLatestAuthToken } from "./client.js";
 import { SessionManager } from "./session.js";
@@ -118,7 +118,8 @@ program
         }
     }
     const resumeId = typeof options.resume === "string" ? options.resume : options.resume ? "latest" : undefined;
-    const repl = new InteractiveRepl(config, !options.approve, resumeId);
+    const app = new ApplicationCore(config);
+    const repl = new InteractiveRepl(app, !options.approve, resumeId);
     await repl.start();
 });
 program
@@ -144,9 +145,12 @@ program
     .option("--coder-model <name>", "High-throughput model for surgical code implementation (Qwen 2.5 Coder)")
     .option("--coder-endpoint <url>", "Dedicated inference endpoint for coder model")
     .option("--tdd", "Enforce strict RED-GREEN-REFACTOR Test-Driven Development protocol")
+    .option("-j, --json", "Output machine-readable JSON structured result (UI-002, UI-003)")
+    .option("-r, --resume [id]", "Resume previous session or task state")
     .action(async (promptParts, options) => {
     const prompt = promptParts.join(" ");
     const config = buildConfig(options);
+    const isJson = Boolean(options.json);
     // Auto-detect loaded model if model is 'local-model'
     if (config.model === "local-model") {
         try {
@@ -154,36 +158,49 @@ program
             const models = await client.listModels();
             if (models.length > 0) {
                 config.model = models[0];
-                console.log(pc.dim(`🔍 Auto-detected active model: ${pc.bold(config.model)}`));
+                if (!isJson) {
+                    console.log(pc.dim(`🔍 Auto-detected active model: ${pc.bold(config.model)}`));
+                }
             }
         }
         catch {
             // Fallback to default
         }
     }
-    const agent = new AutonomousAgent(config);
+    const app = new ApplicationCore(config);
+    const resumeTaskId = typeof options.resume === "string" ? options.resume : options.resume ? "latest" : undefined;
     try {
-        await agent.run(prompt);
-        const sm = new SessionManager();
-        sm.saveSession({
-            id: sm.generateSessionId(),
-            title: prompt.slice(0, 60),
-            createdAt: new Date().toISOString(),
-            updatedAt: new Date().toISOString(),
-            workspace: config.workspace,
-            model: config.model,
-            messages: agent.getMessages(),
-            tokenStats: agent.getTokenStats(),
+        const result = await app.runTask(prompt, {
+            json: isJson,
+            resumeTaskId,
         });
+        if (isJson) {
+            console.log(JSON.stringify(result, null, 2));
+        }
+        app.shutdown();
+        process.exit(result.success ? 0 : 1);
     }
     catch (err) {
-        console.error(pc.red(`\nAgent failed: ${err.message}`));
-        agent.shutdown();
+        if (isJson) {
+            console.log(JSON.stringify({
+                taskId: app.getTaskId(),
+                success: false,
+                status: "failed",
+                prompt,
+                output: "",
+                plan: [],
+                milestones: [],
+                validationReceipts: [],
+                tokenStats: { prompt: 0, completion: 0, total: 0 },
+                durationMs: 0,
+                error: err.message,
+            }, null, 2));
+        }
+        else {
+            console.error(pc.red(`\nTask failed: ${err.message}`));
+        }
+        app.shutdown();
         process.exit(1);
-    }
-    finally {
-        agent.shutdown();
-        process.exit(0);
     }
 });
 program
@@ -631,3 +648,4 @@ if (process.argv.length <= 2) {
     process.argv.push("repl");
 }
 program.parse(process.argv);
+export { ApplicationCore, } from "./core/app.js";

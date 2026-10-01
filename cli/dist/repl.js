@@ -5,10 +5,9 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import { execSync } from "node:child_process";
 import pc from "picocolors";
-import { AutonomousAgent } from "./agent.js";
+import { ApplicationCore } from "./core/app.js";
 import { LocalLlmClient } from "./client.js";
 import { getGitInfo, scaffoldProjectRules, generateConventionalCommit, commitChanges } from "./git.js";
-import { SessionManager } from "./session.js";
 import { CheckpointManager } from "./checkpoint.js";
 import { renderTokenGauge } from "./tokens.js";
 import { scanAndOnboardWorkspace } from "./onboard.js";
@@ -44,6 +43,7 @@ function parsePatchHunks(patch) {
     return { fileHeader: fileHeaderLines.join("\n"), hunks };
 }
 export class InteractiveRepl {
+    app;
     agent;
     config;
     rl = null;
@@ -54,12 +54,22 @@ export class InteractiveRepl {
     checkpointManager;
     currentSessionId;
     themeManager = new ThemeManager();
-    constructor(config, autoApprove = true, resumeSessionId) {
-        this.config = config;
+    constructor(appOrConfig, autoApprove = true, resumeSessionId) {
+        if ("getAgent" in appOrConfig && typeof appOrConfig.getAgent === "function") {
+            this.app = appOrConfig;
+            this.config = this.app.getConfig();
+            this.agent = this.app.getAgent();
+            this.sessionManager = this.app.getSessionManager();
+            this.checkpointManager = this.app.getCheckpointManager();
+        }
+        else {
+            this.config = appOrConfig;
+            this.app = new ApplicationCore(this.config);
+            this.agent = this.app.getAgent();
+            this.sessionManager = this.app.getSessionManager();
+            this.checkpointManager = this.app.getCheckpointManager();
+        }
         this.autoApprove = autoApprove;
-        this.agent = new AutonomousAgent(config);
-        this.sessionManager = new SessionManager();
-        this.checkpointManager = new CheckpointManager(config.workspace);
         this.historyFile = path.join(os.homedir(), ".nexus_history");
         this.loadHistory();
         if (resumeSessionId) {
@@ -83,6 +93,9 @@ export class InteractiveRepl {
         else {
             this.currentSessionId = this.sessionManager.generateSessionId();
         }
+    }
+    getApp() {
+        return this.app;
     }
     saveCurrentSession(titlePrompt) {
         const messages = this.agent.getMessages();
@@ -427,16 +440,7 @@ export class InteractiveRepl {
                     const shellCmd = trimmed.slice(1).trim();
                     if (shellCmd) {
                         console.log(pc.dim(`🐚 [Direct Shell] ${shellCmd}`));
-                        const receipt = await this.agent.getSpine().execute({
-                            toolName: "run_command",
-                            args: { command: shellCmd },
-                            actor: "operator",
-                            executionDomain: "operator_direct_shell",
-                        }, {
-                            workspaceRoot: this.config.workspace,
-                            readOnly: this.config.readOnly,
-                            bridge: this.agent.getBridge(),
-                        });
+                        const receipt = await this.app.executeOperatorCommand(shellCmd);
                         if (receipt.output) {
                             process.stdout.write(receipt.output);
                         }

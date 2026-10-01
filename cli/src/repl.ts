@@ -6,6 +6,7 @@ import * as os from "node:os";
 import { execSync } from "node:child_process";
 import pc from "picocolors";
 import { AutonomousAgent } from "./agent.js";
+import { ApplicationCore } from "./core/app.js";
 import { LocalLlmClient } from "./client.js";
 import { HarnessConfig } from "./types.js";
 import { getGitInfo, scaffoldProjectRules, generateConventionalCommit, commitChanges } from "./git.js";
@@ -52,6 +53,7 @@ function parsePatchHunks(patch: string): { fileHeader: string; hunks: PatchHunk[
 }
 
 export class InteractiveRepl {
+  private app: ApplicationCore;
   private agent: AutonomousAgent;
   private config: HarnessConfig;
   private rl: readline.Interface | null = null;
@@ -63,12 +65,21 @@ export class InteractiveRepl {
   private currentSessionId: string;
   private themeManager: ThemeManager = new ThemeManager();
 
-  constructor(config: HarnessConfig, autoApprove: boolean = true, resumeSessionId?: string) {
-    this.config = config;
+  constructor(appOrConfig: ApplicationCore | HarnessConfig, autoApprove: boolean = true, resumeSessionId?: string) {
+    if ("getAgent" in appOrConfig && typeof (appOrConfig as any).getAgent === "function") {
+      this.app = appOrConfig as ApplicationCore;
+      this.config = this.app.getConfig();
+      this.agent = this.app.getAgent();
+      this.sessionManager = this.app.getSessionManager();
+      this.checkpointManager = this.app.getCheckpointManager();
+    } else {
+      this.config = appOrConfig as HarnessConfig;
+      this.app = new ApplicationCore(this.config);
+      this.agent = this.app.getAgent();
+      this.sessionManager = this.app.getSessionManager();
+      this.checkpointManager = this.app.getCheckpointManager();
+    }
     this.autoApprove = autoApprove;
-    this.agent = new AutonomousAgent(config);
-    this.sessionManager = new SessionManager();
-    this.checkpointManager = new CheckpointManager(config.workspace);
     this.historyFile = path.join(os.homedir(), ".nexus_history");
     this.loadHistory();
 
@@ -91,6 +102,10 @@ export class InteractiveRepl {
     } else {
       this.currentSessionId = this.sessionManager.generateSessionId();
     }
+  }
+
+  public getApp(): ApplicationCore {
+    return this.app;
   }
 
   private saveCurrentSession(titlePrompt?: string): void {
@@ -452,19 +467,7 @@ export class InteractiveRepl {
           const shellCmd = trimmed.slice(1).trim();
           if (shellCmd) {
             console.log(pc.dim(`🐚 [Direct Shell] ${shellCmd}`));
-            const receipt = await this.agent.getSpine().execute(
-              {
-                toolName: "run_command",
-                args: { command: shellCmd },
-                actor: "operator",
-                executionDomain: "operator_direct_shell",
-              },
-              {
-                workspaceRoot: this.config.workspace,
-                readOnly: this.config.readOnly,
-                bridge: this.agent.getBridge(),
-              }
-            );
+            const receipt = await this.app.executeOperatorCommand(shellCmd);
 
             if (receipt.output) {
               process.stdout.write(receipt.output);

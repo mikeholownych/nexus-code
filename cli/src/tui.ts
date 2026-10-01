@@ -2,21 +2,34 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import pc from "picocolors";
 import { AutonomousAgent } from "./agent.js";
+import { ApplicationCore } from "./core/app.js";
 import { HarnessConfig } from "./types.js";
 import { ThemeManager } from "./theme.js";
 
 /**
- * Full-Screen Terminal User Interface (TUI) Dashboard (Candidate #19)
- * Features alternate screen buffer mode, split-pane dashboard, and real-time state visualization.
+ * Full-Screen Terminal User Interface (TUI) Dashboard (Candidate #19, UI-001, UI-004, UI-005)
+ * Features alternate screen buffer mode, split-pane dashboard, and real-time state visualization
+ * projected directly from the shared ApplicationCore model.
  */
 export class TerminalDashboard {
+  private app?: ApplicationCore;
   private agent: AutonomousAgent;
   private config: HarnessConfig;
   private themeManager: ThemeManager;
 
-  constructor(agent: AutonomousAgent, config: HarnessConfig, themeManager?: ThemeManager) {
-    this.agent = agent;
-    this.config = config;
+  constructor(
+    target: ApplicationCore | AutonomousAgent,
+    config?: HarnessConfig,
+    themeManager?: ThemeManager
+  ) {
+    if ("getAgent" in target && typeof (target as any).getAgent === "function") {
+      this.app = target as ApplicationCore;
+      this.agent = this.app.getAgent();
+      this.config = config || this.app.getConfig();
+    } else {
+      this.agent = target as AutonomousAgent;
+      this.config = config || this.agent.getConfig();
+    }
     this.themeManager = themeManager || new ThemeManager();
   }
 
@@ -103,7 +116,17 @@ export class TerminalDashboard {
     rightLines.push(`  [${bar}] ${pct}% (${total.toLocaleString()} / ${limit.toLocaleString()})`);
 
     rightLines.push("");
-    rightLines.push(pc.bold(pc.white("Active Subsystems:")));
+    rightLines.push(pc.bold(pc.white("Active Subsystems & Identity:")));
+    rightLines.push(pc.dim(`  • Task ID: `) + pc.cyan(this.app ? this.app.getTaskId() : this.agent.getTaskId()));
+    const candidateId = this.agent.getActiveValidationReceipt()?.candidateId || (this.app ? this.app.getTaskState()?.candidateId : null);
+    if (candidateId) {
+      rightLines.push(pc.dim(`  • Candidate: `) + pc.cyan(candidateId.slice(0, 12)));
+    }
+    const receipt = this.agent.getActiveValidationReceipt();
+    if (receipt) {
+      const recStatus = receipt.status === "PASSED" ? pc.green("PASSED") : pc.red(receipt.status);
+      rightLines.push(pc.dim(`  • Receipt: `) + recStatus);
+    }
     rightLines.push(pc.dim(`  • Theme: `) + pc.cyan(this.themeManager.getThemeName()));
     rightLines.push(pc.dim(`  • History: `) + pc.cyan(`${this.agent.getHistoryCount()} messages`));
     rightLines.push(pc.dim(`  • Sandbox: `) + pc.cyan(this.config.sandbox ? "Enabled" : "Off"));
