@@ -43,6 +43,12 @@ import { HybridSearchEngine } from "./embeddings.js";
 import { SynthesizerEngine } from "./synthesizer.js";
 import { BrowserDriver } from "./browser.js";
 import { KnowledgeGraph } from "./knowledge.js";
+import {
+  DurableStateManager,
+  DurableTaskState,
+  TaskRecoveryOptions,
+  TaskRecoveryResult,
+} from "./core/state.js";
 import pc from "picocolors";
 
 export type ConfirmHandler = (toolName: string, args: Record<string, any>) => Promise<boolean>;
@@ -251,6 +257,7 @@ export class AutonomousAgent {
   public readonly authorityEngine: AuthorityAdmissionEngine;
   public readonly spine: ExecutionSpine;
   public readonly candidateTracker: CandidateTracker;
+  public readonly stateManager: DurableStateManager;
   private activeValidationReceipt?: ValidationReceipt;
   private currentTaskId: string = "task-" + randomUUID().slice(0, 8);
 
@@ -328,7 +335,133 @@ export class AutonomousAgent {
       },
     });
     this.setupSpineHandlers();
+    this.stateManager = new DurableStateManager();
+    this.initTaskState();
     this.resetConversation();
+  }
+
+  public getStateManager(): DurableStateManager {
+    return this.stateManager;
+  }
+
+  public getTaskId(): string {
+    return this.currentTaskId;
+  }
+
+  private initTaskState(): void {
+    if (!this.stateManager) return;
+    try {
+      this.stateManager.saveTaskState({
+        schemaVersion: 1,
+        taskId: this.currentTaskId,
+        sessionId: this.currentTaskId,
+        id: this.currentTaskId,
+        title: "Task " + this.currentTaskId,
+        workspacePath: this.config.workspace || process.cwd(),
+        workspace: this.config.workspace || process.cwd(),
+        model: this.config.model,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+        status: "in_progress",
+        activePlan: this.activePlan,
+        milestones: [],
+        validationReceipts: this.activeValidationReceipt ? [this.activeValidationReceipt] : [],
+        messages: this.messages,
+        currentOperation: null,
+      });
+    } catch {}
+  }
+
+  public checkpointDurableState(notes?: string): DurableTaskState {
+    const state: DurableTaskState = {
+      schemaVersion: 1,
+      taskId: this.currentTaskId,
+      sessionId: this.currentTaskId,
+      id: this.currentTaskId,
+      title: "Task " + this.currentTaskId,
+      workspacePath: this.config.workspace || process.cwd(),
+      workspace: this.config.workspace || process.cwd(),
+      model: this.config.model,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      status: this.verifiedWorktreeCompletion ? "completed" : "in_progress",
+      activePlan: this.activePlan,
+      milestones: [],
+      worktreeBinding: this.activeWorktree
+        ? {
+            taskId: this.activeWorktree.taskId,
+            worktreePath: this.activeWorktree.worktreePath,
+            branch: this.activeWorktree.branch,
+            createdAt: new Date().toISOString(),
+          }
+        : null,
+      candidateId: this.activeValidationReceipt?.candidateId || null,
+      validationReceipts: this.activeValidationReceipt ? [this.activeValidationReceipt] : [],
+      messages: this.messages,
+      durableNotes: notes ? [notes] : undefined,
+      cognitiveRouting: {
+        activeTier: this.activeTier,
+        plannerModel: this.config.plannerModel,
+        coderModel: this.config.coderModel,
+        tokenStats: {
+          prompt: 0,
+          completion: 0,
+          total: 0,
+        },
+      },
+    };
+
+    if (this.stateManager.hasTaskState(this.currentTaskId)) {
+      try {
+        const existing = this.stateManager.loadTaskState(this.currentTaskId);
+        state.milestones = existing.milestones || [];
+        state.createdAt = existing.createdAt;
+        if (!state.validationReceipts.length && existing.validationReceipts) {
+          state.validationReceipts = existing.validationReceipts;
+        }
+      } catch {}
+    }
+
+    this.stateManager.saveTaskState(state);
+    return state;
+  }
+
+  public async recoverFromTaskState(
+    taskId: string,
+    options: TaskRecoveryOptions = {}
+  ): Promise<TaskRecoveryResult> {
+    const recoveryResult = this.stateManager.recoverTaskState(taskId, {
+      expectedWorkspace: this.config.workspace,
+      candidateTracker: this.candidateTracker,
+      worktreeManager: this.worktreeManager,
+      authorityEngine: this.authorityEngine,
+      currentConfig: {
+        readOnly: this.config.readOnly,
+        fullAccess: this.config.fullAccess,
+      },
+      ...options,
+    });
+
+    const state = recoveryResult.state;
+    this.currentTaskId = state.taskId;
+    this.activePlan = state.activePlan || [];
+    this.messages = state.messages || [];
+
+    if (state.worktreeBinding && recoveryResult.worktreeStatus === "consistent") {
+      this.activeWorktree = {
+        taskId: state.worktreeBinding.taskId,
+        worktreePath: state.worktreeBinding.worktreePath,
+        branch: state.worktreeBinding.branch,
+      };
+      this.switchWorktreeWorkspace(state.worktreeBinding.worktreePath);
+    }
+
+    if (state.validationReceipts && state.validationReceipts.length > 0) {
+      const activeReceipt = state.validationReceipts.find((r) => r.status === "PASSED");
+      this.activeValidationReceipt = activeReceipt;
+    }
+
+    return recoveryResult;
   }
 
   public getSpine(): ExecutionSpine {
@@ -945,6 +1078,18 @@ export class AutonomousAgent {
     const summaryIndex = compacted.findIndex((message) => message.role === "system" && message !== original[0]);
     if (summaryIndex >= 0) compacted[summaryIndex] = { role: "system", content: summaryText.trim() };
     this.messages = compacted;
+    if (this.stateManager && this.currentTaskId) {
+      try {
+        const state = this.checkpointDurableState("compacted conversation");
+        state.compactionProvenance = {
+          recordId: randomUUID(),
+          predecessorIds: [],
+          supersededPlanStateIds: [],
+          summaryContent: summaryText.trim(),
+        };
+        this.stateManager.saveTaskState(state);
+      } catch {}
+    }
     return `Compacted context: distilled ${prunedCount} messages, ${this.messages.length} active messages in memory.`;
   }
 
@@ -1082,6 +1227,15 @@ Always explain your reasoning before or alongside your tool calls.`;
               materialDependencies: [],
             });
             this.verifiedWorktreeCompletion = true;
+            if (this.stateManager && this.currentTaskId) {
+              try {
+                this.stateManager.recordCandidateAndReceipt(this.currentTaskId, {
+                  candidateId: candidateIdentity.candidateId,
+                  candidateIdentity,
+                  receipt: this.activeValidationReceipt,
+                });
+              } catch {}
+            }
           } catch {
             this.verifiedWorktreeCompletion = false;
           }
@@ -1313,6 +1467,21 @@ Always explain your reasoning before or alongside your tool calls.`;
       const phases = Array.isArray(args.phases) ? args.phases : [];
       this.activePlan = phases;
       this.ui.renderPlan(this.activePlan);
+      if (this.stateManager && this.currentTaskId) {
+        try {
+          this.checkpointDurableState();
+          for (let i = 0; i < phases.length; i++) {
+            if (phases[i].status === "completed") {
+              this.stateManager.recordMilestone(this.currentTaskId, {
+                name: phases[i].name,
+                phaseIndex: i,
+                evidenceSummary: phases[i].detail,
+                candidateId: this.activeValidationReceipt?.candidateId,
+              });
+            }
+          }
+        } catch {}
+      }
       return {
         success: true,
         output: JSON.stringify({
@@ -1426,10 +1595,22 @@ Always explain your reasoning before or alongside your tool calls.`;
       },
     };
 
+    const effectiveTaskId = this.activeWorktree?.taskId || this.currentTaskId;
+    if (this.stateManager && effectiveTaskId) {
+      try {
+        this.stateManager.recordOperationStart(effectiveTaskId, {
+          invocationId: call.id,
+          toolName,
+          targetResources: args.path ? [args.path] : (args.target_file ? [args.target_file] : undefined),
+          argsSummary: JSON.stringify(args).slice(0, 200),
+        });
+      } catch {}
+    }
+
     const receipt = await this.spine.execute(
       {
         invocationId: call.id,
-        taskId: this.activeWorktree?.taskId || this.currentTaskId,
+        taskId: effectiveTaskId,
         actor,
         executionDomain: actor === "subagent" ? "subagent" : "agent_orchestration",
         toolName,
@@ -1438,6 +1619,15 @@ Always explain your reasoning before or alongside your tool calls.`;
       },
       context
     );
+
+    if (this.stateManager && effectiveTaskId) {
+      try {
+        this.stateManager.recordOperationEnd(effectiveTaskId, call.id, {
+          success: receipt.success,
+          error: receipt.error,
+        });
+      } catch {}
+    }
 
     await this.pluginManager.notifyToolResult(toolName, {
       success: receipt.success,
