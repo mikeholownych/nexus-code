@@ -5,3 +5,5 @@ core/target/
 .nexus/
 /dist/
 .DS_Store
+.cloudflare/
+.wrangler/
