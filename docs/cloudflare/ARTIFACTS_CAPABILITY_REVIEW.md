@@ -171,6 +171,13 @@
 
 All external claims above cite current Cloudflare first-party docs inline. Relevant pages: [Artifacts overview](https://developers.cloudflare.com/artifacts/), [Workers binding](https://developers.cloudflare.com/artifacts/api/workers-binding/), [REST API](https://developers.cloudflare.com/artifacts/api/rest-api/), [Git protocol](https://developers.cloudflare.com/artifacts/api/git-protocol/), [Events](https://developers.cloudflare.com/artifacts/guides/event-subscriptions/), [Metrics](https://developers.cloudflare.com/artifacts/observability/metrics/), [Limits](https://developers.cloudflare.com/artifacts/platform/limits/), [Pricing](https://developers.cloudflare.com/artifacts/platform/pricing/), [Oct 1 launch changelog](https://developers.cloudflare.com/changelog/post/2026-10-01-artifacts-open-beta/).
 
+## Experiment 2B shared-ref authority — 2026-10-02
+
+- **OBSERVED:** In a disposable single Artifact repository, two distinct repository-scoped write credentials each successfully pushed to their own candidate ref, the other candidate ref, and `main`. Two separate reviewers independently repeated all six Git mutations. No ref-scoped write restriction was observed.
+- **OBSERVED:** Worker binding readback and fresh ordinary Git agreed on exact shared-repo refs and commits. Unauthenticated experiment read/fork endpoints returned 401. Resources and credentials were removed after review.
+- **DERIVED:** Cloudflare's tested authority boundary is the repository for these tokens; shared refs do not provide actor-level write isolation.
+- **UNKNOWN:** Other account-wide or future ref policy controls, scale/cost, and candidate outcome effects were not tested.
+
 
 ## Experiment 2 independent recovery qualification — 2026-10-02
 

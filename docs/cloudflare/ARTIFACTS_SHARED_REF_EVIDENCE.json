@@ -1,0 +1,449 @@
+{
+  "schema": "nexus.cloudflare.artifacts.shared-ref-evidence.v1",
+  "classification": "OBSERVED",
+  "execution": {
+    "startedAt": "2026-10-02T03:10:05.090Z",
+    "gitVersion": "git version 2.43.0",
+    "cfVersion": "1.0.0-beta.10",
+    "mode": "two separate ordinary Git clones; sequential operations",
+    "scratchRetainedForIndependentReview": true,
+    "errorClass": "final_ls_remote_wrong_working_directory; recovered by fresh ordinary Git clone and independent review",
+    "scratchDirectory": "removed after independent review",
+    "finishedAt": "2026-10-02T03:10:29.373Z",
+    "recovery": {
+      "recordedAt": "2026-10-02T03:16:23.066Z",
+      "sourceCodeHash": "c574058a206fa7cbbcd132a84ce2484f50207b58748df757ff11e9ba7a60d4b6",
+      "harnessDefect": "The executor harness final ls-remote calls used a working directory outside the cloned Git repositories. This occurred after all six authority pushes, all three Worker readbacks and final-state checks. A separate fresh ordinary Git clone then fetched and verified main and both candidate refs. Corrected runner source now executes ls-remote within each clone. No Cloudflare state changed while correcting this inspection step.",
+      "freshCloneComparison": {
+        "gitVersion": "git version 2.43.0",
+        "cloneSucceeded": true,
+        "main": "ec3affd0e916b895e3528de6747b632f428359c0",
+        "candidateA": "60e149fd4e79edbc2376a891346f89ec6147d39b",
+        "candidateATree": "4891d746182705bd838e10d97f930f4751575fb6",
+        "candidateAParent": "ec3affd0e916b895e3528de6747b632f428359c0",
+        "candidateB": "bab7fe248718bfefcda10f6c87b00af4d6e5706b",
+        "candidateBTree": "9a2d7b36b3bb2eeeb62aa2ea9b14f68ac896d696",
+        "candidateBParent": "ec3affd0e916b895e3528de6747b632f428359c0",
+        "mergeBase": "ec3affd0e916b895e3528de6747b632f428359c0",
+        "baselineToA": "A candidate-a.txt",
+        "baselineToB": "A candidate-b.txt",
+        "AtoB": "A candidate-b.txt",
+        "ordinaryGitOnly": true,
+        "localAndGlobalAuthorizationHeadersAbsent": true,
+        "verificationReadCredential": {
+          "credentialId": "zeq27caeyblogt9q",
+          "scope": "read",
+          "revoked": true
+        }
+      },
+      "reviewer": {
+        "execution": "separate independent reviewer execution",
+        "modelProfile": "UNKNOWN",
+        "evidenceHashBeforeExecutorCompletionAddendum": "473122770886433033dfdf4357cb7121760fe9f84fb68c16d7fe704b1c099478",
+        "runnerHashAtReview": "734562100012472e5cdd638e14dfe6bfb3263c8caa9dca6b6aca871929fc036c",
+        "workerSourceHash": "cc2af7e9a76d5990df45e58e1a192f979c54219887978bb57de2f3117f027103",
+        "workerConfigHash": "2c0582a086f3e85ca69bc2ccf690d15a3114313b404b37881f3410cdf9f7d54f",
+        "authorityMatrix": {
+          "tokenA": {
+            "candidateA": "ALLOW",
+            "candidateB": "ALLOW",
+            "main": "ALLOW"
+          },
+          "tokenB": {
+            "candidateA": "ALLOW",
+            "candidateB": "ALLOW",
+            "main": "ALLOW"
+          }
+        },
+        "readbackExact": true,
+        "mainAndCandidateRefsRestoredToExecutorFinalState": true,
+        "unauthenticatedReadAndForkStatus": 401,
+        "reviewerTokensRevoked": true,
+        "reviewerWorkerDeleted": true,
+        "disposition": "independently confirmed repository-scoped authority; no ref-scoped enforcement observed"
+      }
+    },
+    "runnerFailureWasHarnessOnly": true
+  },
+  "worker": {
+    "name": "nexus-exp2b-shared-ref-20261002",
+    "id": "5b61e6d14d784e6d9d114950539eea98",
+    "versionId": "925889cb-a208-4a7e-8d0c-a64c5f00ecef",
+    "url": "https://nexus-exp2b-shared-ref-20261002.holownych.workers.dev",
+    "auth": "temporary secret binding, value not recorded",
+    "unauthenticatedReadStatus": 401,
+    "unauthenticatedForkStatus": 401
+  },
+  "baseline": {
+    "namespace": "nexus-exp1-oct02",
+    "name": "external-git-proof",
+    "id": "4v94nnw1eqf0sanw",
+    "expectedSha": "ec3affd0e916b895e3528de6747b632f428359c0",
+    "expectedTree": "8a10e93afd210e09f6166ad39d144710011f16ed",
+    "readmeSha256": "a56e53990f231b655476e60dfe54e9279dbee6f08be5e4bd5467a5c21d2636a6"
+  },
+  "repository": {
+    "namespace": "nexus-exp1-oct02",
+    "name": "nexus-exp2b-shared-refs",
+    "id": "s9jethbwn3ebkqoh",
+    "defaultBranch": "main",
+    "remote": "https://a1a1fe900d3e61ccd4ef3a512867d7c0.artifacts.cloudflare.net/git/nexus-exp1-oct02/nexus-exp2b-shared-refs.git",
+    "forkElapsedMs": 1727.7,
+    "source": "nexus-exp1-oct02/external-git-proof"
+  },
+  "credentials": {
+    "forkIssued": [
+      {
+        "credentialId": "3gqqn5yg9pykfyz2",
+        "scope": "write",
+        "state": "active",
+        "createdAt": "2026-10-02T03:10:07.054Z",
+        "expiresAt": "2026-10-03T03:10:07.054Z"
+      }
+    ],
+    "forkIssuedRevoke_3gqqn5yg9pykfyz2": {
+      "credentialId": "3gqqn5yg9pykfyz2",
+      "exitStatus": 0,
+      "classification": "revoke_accepted"
+    },
+    "afterInitialRevocation": [
+      {
+        "credentialId": "3gqqn5yg9pykfyz2",
+        "scope": "write",
+        "state": "revoked",
+        "createdAt": "2026-10-02T03:10:07.054Z",
+        "expiresAt": "2026-10-03T03:10:07.054Z"
+      }
+    ],
+    "tokenA": {
+      "credentialId": "jsdaznn9xxz7kobz",
+      "repo": "nexus-exp2b-shared-refs",
+      "scope": "write",
+      "expiresAt": "2026-10-02T03:25:15.000Z",
+      "plaintextRecorded": false
+    },
+    "tokenB": {
+      "credentialId": "fna4ghyon59oxxff",
+      "repo": "nexus-exp2b-shared-refs",
+      "scope": "write",
+      "expiresAt": "2026-10-02T03:25:17.000Z",
+      "plaintextRecorded": false
+    },
+    "readVerification": {
+      "credentialId": "zeq27caeyblogt9q",
+      "scope": "read",
+      "state": "revoked",
+      "plaintextRecorded": false
+    },
+    "afterTests": [
+      {
+        "credentialId": "fna4ghyon59oxxff",
+        "scope": "write",
+        "state": "revoked",
+        "repository": "nexus-exp2b-shared-refs",
+        "expiresAt": "2026-10-02T03:25:17.247Z"
+      },
+      {
+        "credentialId": "jsdaznn9xxz7kobz",
+        "scope": "write",
+        "state": "revoked",
+        "repository": "nexus-exp2b-shared-refs",
+        "expiresAt": "2026-10-02T03:25:15.497Z"
+      },
+      {
+        "credentialId": "3gqqn5yg9pykfyz2",
+        "scope": "write",
+        "state": "revoked",
+        "repository": "nexus-exp2b-shared-refs",
+        "expiresAt": "2026-10-03T03:10:07.054Z"
+      },
+      {
+        "credentialId": "zeq27caeyblogt9q",
+        "scope": "read",
+        "state": "revoked",
+        "repository": "nexus-exp2b-shared-refs",
+        "expiresAt": "2026-10-02T03:21:08.655Z"
+      },
+      {
+        "credentialId": "e4y4683xglfxzsbi",
+        "scope": "read",
+        "state": "revoked",
+        "repository": "nexus-exp2b-shared-refs",
+        "expiresAt": "2026-10-02T03:24:43.873Z"
+      },
+      {
+        "credentialId": "otsa5onhpx4gyrc4",
+        "scope": "write",
+        "state": "revoked",
+        "repository": "nexus-exp2b-shared-refs",
+        "expiresAt": "2026-10-02T03:23:19.385Z"
+      },
+      {
+        "credentialId": "rfudrutqs93jxtq9",
+        "scope": "write",
+        "state": "revoked",
+        "repository": "nexus-exp2b-shared-refs",
+        "expiresAt": "2026-10-02T03:23:17.822Z"
+      }
+    ],
+    "reviewerCredentials": {
+      "reviewerExecutions": 2,
+      "reviewerTokensIssued": 6,
+      "allRevokedAndVerified": true,
+      "plaintextRetained": false
+    },
+    "finalPlaintextRetained": false
+  },
+  "refs": {
+    "initial": {
+      "candidate-a": {
+        "sha": "ec3affd0e916b895e3528de6747b632f428359c0",
+        "pushElapsedMs": 579.3
+      },
+      "candidate-b": {
+        "sha": "ec3affd0e916b895e3528de6747b632f428359c0",
+        "pushElapsedMs": 796.5
+      }
+    },
+    "candidateA": {
+      "sha": "60e149fd4e79edbc2376a891346f89ec6147d39b",
+      "tree": "4891d746182705bd838e10d97f930f4751575fb6",
+      "parent": "ec3affd0e916b895e3528de6747b632f428359c0",
+      "path": "candidate-a.txt",
+      "contentSha256": "f01b3295e93dc61249758a7a36aef08c48f959bf9f870d8df42447a696ca9b81",
+      "commitCreatedLocally": true
+    },
+    "candidateB": {
+      "sha": "bab7fe248718bfefcda10f6c87b00af4d6e5706b",
+      "tree": "9a2d7b36b3bb2eeeb62aa2ea9b14f68ac896d696",
+      "parent": "ec3affd0e916b895e3528de6747b632f428359c0",
+      "path": "candidate-b.txt",
+      "contentSha256": "c6cdfd5d693692952e5daac3cd71737a5d2cafabe01f2718ba7b12c4bdc6cc85",
+      "commitCreatedLocally": true
+    },
+    "mainReadback": {
+      "repositoryId": "s9jethbwn3ebkqoh",
+      "repositoryName": "nexus-exp2b-shared-refs",
+      "defaultBranch": "main",
+      "ref": "refs/heads/main",
+      "head": "ec3affd0e916b895e3528de6747b632f428359c0",
+      "tree": "8a10e93afd210e09f6166ad39d144710011f16ed",
+      "parents": [],
+      "files": [
+        {
+          "path": "README.md",
+          "blob": "f08008d11185e3933eb0bbb3930d05e8c4e6bf12",
+          "contentSha256": "a56e53990f231b655476e60dfe54e9279dbee6f08be5e4bd5467a5c21d2636a6",
+          "byteLength": 70
+        }
+      ],
+      "elapsedMs": 487.1
+    },
+    "candidate-aReadback": {
+      "repositoryId": "s9jethbwn3ebkqoh",
+      "repositoryName": "nexus-exp2b-shared-refs",
+      "defaultBranch": "main",
+      "ref": "refs/heads/candidate-a",
+      "head": "60e149fd4e79edbc2376a891346f89ec6147d39b",
+      "tree": "4891d746182705bd838e10d97f930f4751575fb6",
+      "parents": [
+        "ec3affd0e916b895e3528de6747b632f428359c0"
+      ],
+      "files": [
+        {
+          "path": "README.md",
+          "blob": "f08008d11185e3933eb0bbb3930d05e8c4e6bf12",
+          "contentSha256": "a56e53990f231b655476e60dfe54e9279dbee6f08be5e4bd5467a5c21d2636a6",
+          "byteLength": 70
+        },
+        {
+          "path": "candidate-a.txt",
+          "blob": "5a5be0aa98f36d40c2a81fe0b7ea4d6bf794eb06",
+          "contentSha256": "f01b3295e93dc61249758a7a36aef08c48f959bf9f870d8df42447a696ca9b81",
+          "byteLength": 16
+        }
+      ],
+      "elapsedMs": 529.5
+    },
+    "candidate-bReadback": {
+      "repositoryId": "s9jethbwn3ebkqoh",
+      "repositoryName": "nexus-exp2b-shared-refs",
+      "defaultBranch": "main",
+      "ref": "refs/heads/candidate-b",
+      "head": "bab7fe248718bfefcda10f6c87b00af4d6e5706b",
+      "tree": "9a2d7b36b3bb2eeeb62aa2ea9b14f68ac896d696",
+      "parents": [
+        "ec3affd0e916b895e3528de6747b632f428359c0"
+      ],
+      "files": [
+        {
+          "path": "README.md",
+          "blob": "f08008d11185e3933eb0bbb3930d05e8c4e6bf12",
+          "contentSha256": "a56e53990f231b655476e60dfe54e9279dbee6f08be5e4bd5467a5c21d2636a6",
+          "byteLength": 70
+        },
+        {
+          "path": "candidate-b.txt",
+          "blob": "2b10fd8da4614991456e895cf2a9e0278e0ceea5",
+          "contentSha256": "c6cdfd5d693692952e5daac3cd71737a5d2cafabe01f2718ba7b12c4bdc6cc85",
+          "byteLength": 16
+        }
+      ],
+      "elapsedMs": 535.2
+    },
+    "actorAGitConfigClean": true
+  },
+  "authority": {
+    "tokenA_candidateA": {
+      "exitStatus": 0,
+      "elapsedMs": 767.7,
+      "result": "ALLOW",
+      "responseClass": "accepted",
+      "stdoutSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stderrSha256": "c000a3e0527368d855318e12f8f2e36615d0329145beaa3e4e96746cc0648997"
+    },
+    "tokenB_candidateB": {
+      "exitStatus": 0,
+      "elapsedMs": 560.3,
+      "result": "ALLOW",
+      "responseClass": "accepted",
+      "stdoutSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stderrSha256": "333744aa736da75b474e9be635554d04dd51e8625b2e229151a88cf00961aa8d"
+    },
+    "tokenA_candidateB": {
+      "exitStatus": 0,
+      "elapsedMs": 570.5,
+      "result": "ALLOW",
+      "responseClass": "accepted",
+      "stdoutSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stderrSha256": "d63559bf85819df7299b3749cb9e0334e0a4ce90e23100db99644772f6563cab"
+    },
+    "tokenA_main": {
+      "exitStatus": 0,
+      "elapsedMs": 556.1,
+      "result": "ALLOW",
+      "responseClass": "accepted",
+      "stdoutSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stderrSha256": "216231c10ef0922773d3d389e09ad84bf48099f2d51f3ef7bbd92a8d8554ff38"
+    },
+    "tokenB_candidateA": {
+      "exitStatus": 0,
+      "elapsedMs": 624.1,
+      "result": "ALLOW",
+      "responseClass": "accepted",
+      "stdoutSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stderrSha256": "01654b919826e21098ecbfda07aa40c644af8aa1569f2dc763268c51a9c0a1c4"
+    },
+    "tokenB_main": {
+      "exitStatus": 0,
+      "elapsedMs": 540,
+      "result": "ALLOW",
+      "responseClass": "accepted",
+      "stdoutSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stderrSha256": "ef7559e85bf1faeacb928f3eccf3c8a2210bf9af3b20f51c0c545f55f98ed539"
+    }
+  },
+  "comparison": {
+    "mergeBase": "ec3affd0e916b895e3528de6747b632f428359c0",
+    "expectedMergeBase": "ec3affd0e916b895e3528de6747b632f428359c0",
+    "baselineToA": "A candidate-a.txt",
+    "baselineToB": "A candidate-b.txt",
+    "aToB": "A candidate-b.txt",
+    "ordinaryGitOnly": true
+  },
+  "cleanup": {
+    "state": "completed",
+    "completedAt": "2026-10-02T03:23:31.343Z",
+    "repository": {
+      "name": "nexus-exp2b-shared-refs",
+      "id": "s9jethbwn3ebkqoh",
+      "deleteCommandExitStatus": 0,
+      "verifiedAbsent": true
+    },
+    "worker": {
+      "name": "nexus-exp2b-shared-ref-20261002",
+      "id": "5b61e6d14d784e6d9d114950539eea98",
+      "deleteCommandExitStatus": 0,
+      "verifiedAbsent": true
+    },
+    "executorCredentials": {
+      "allRevoked": true,
+      "verifiedByTokenInventoryBeforeRepositoryDeletion": true
+    },
+    "reviewerCredentials": {
+      "allRevoked": true,
+      "reviewerWorkerDeleted": true
+    },
+    "temporaryAuthFilesAndGitClones": {
+      "removed": true
+    },
+    "sourceBaseline": {
+      "retained": true,
+      "unchanged": true
+    },
+    "finalTokenInventory": [
+      {
+        "credentialId": "fna4ghyon59oxxff",
+        "scope": "write",
+        "state": "revoked",
+        "repository": "nexus-exp2b-shared-refs"
+      },
+      {
+        "credentialId": "jsdaznn9xxz7kobz",
+        "scope": "write",
+        "state": "revoked",
+        "repository": "nexus-exp2b-shared-refs"
+      },
+      {
+        "credentialId": "3gqqn5yg9pykfyz2",
+        "scope": "write",
+        "state": "revoked",
+        "repository": "nexus-exp2b-shared-refs"
+      },
+      {
+        "credentialId": "zeq27caeyblogt9q",
+        "scope": "read",
+        "state": "revoked",
+        "repository": "nexus-exp2b-shared-refs"
+      },
+      {
+        "credentialId": "e4y4683xglfxzsbi",
+        "scope": "read",
+        "state": "revoked",
+        "repository": "nexus-exp2b-shared-refs"
+      },
+      {
+        "credentialId": "otsa5onhpx4gyrc4",
+        "scope": "write",
+        "state": "revoked",
+        "repository": "nexus-exp2b-shared-refs"
+      },
+      {
+        "credentialId": "rfudrutqs93jxtq9",
+        "scope": "write",
+        "state": "revoked",
+        "repository": "nexus-exp2b-shared-refs"
+      }
+    ]
+  },
+  "notes": [
+    "Token plaintext is held in process memory only; Git remotes and persistent Git config do not contain credentials.",
+    "All sensitive Worker routes require a bearer secret. The secret is not included in this file.",
+    "A first disposable setup repo was removed after a local harness error occurred before candidate refs were created; the tested repository is the identity recorded above. A later harness inspection error occurred after all six authority pushes and Worker readbacks; fresh ordinary Git clone/fetch then verified all refs and ancestry. The runner bug is corrected in source and is not interpreted as Cloudflare behavior.",
+    "The source Artifact fork and original Experiment 1 baseline were not mutated by this experiment. The separate reviewer restored main/candidate refs to the executor final values and independently confirmed them through fresh Git and a protected Worker binding readback."
+  ],
+  "authorityMatrix": {
+    "tokenA": {
+      "candidateA": "ALLOW",
+      "candidateB": "ALLOW",
+      "main": "ALLOW"
+    },
+    "tokenB": {
+      "candidateA": "ALLOW",
+      "candidateB": "ALLOW",
+      "main": "ALLOW"
+    },
+    "basis": "six external ordinary Git push attempts; exit status 0 each; independent reviewer repeated all six using fresh scoped tokens; main remained baseline and candidate refs retained their distinct commits"
+  },
+  "reviewDisposition": "two separate independent reviewer executions confirmed all six ALLOW results; repository-scoped write authority only observed"
+}

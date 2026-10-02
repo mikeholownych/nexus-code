@@ -259,6 +259,16 @@ These entries preserve uncertainty; they do not change Issue #12 status or dispo
 
 Review the fork evidence and determine whether a small shared-repository/ref comparison would change the architecture assessment. Do not begin Experiment 3 or implementation until that decision is explicit. Current evidence supports fork-per-candidate as feasible, but does not establish it as the preferred architecture.
 
+**Historical recommendation superseded:** Experiment 2B below performed the shared-ref comparison and changes the next experiment substrate recommendation, while leaving final architecture open.
+
+## Experiment 2B shared-ref differential — 2026-10-02
+
+- **OBSERVED:** One disposable Artifact repository held two exact baseline-derived candidate refs; ordinary Git established their common merge base and diffs, and binding readback matched external Git.
+- **OBSERVED:** Both distinct repository-scoped write credentials changed both candidate refs and `main` through real Git pushes. Two separate independent reviews reproduced all six ALLOW results. Unauthenticated temporary Worker mutation/read endpoints returned 401.
+- **DERIVED:** Shared refs provide Git-native comparison but no tested per-ref authority isolation.
+- **INFERRED (next experiment only):** Use one Artifact fork/repository boundary per independently authorized actor/candidate, with ordinary refs inside that boundary for its own revisions. This is the lowest-risk substrate to test next because repo-scoped credentials cannot be constrained to candidate refs in the observed model. It is not final architecture.
+- **UNKNOWN:** Agent outcome improvement, scale, event routing, repo-per-actor costs, and operational advantage of a hybrid remain untested.
+
 
 ## Experiment 2 independent recovery qualification — 2026-10-02
 
