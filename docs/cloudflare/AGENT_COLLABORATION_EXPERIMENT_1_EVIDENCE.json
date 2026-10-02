@@ -1,0 +1,242 @@
+{
+  "schema": "nexus.cloudflare.agent-collaboration-experiment.v1",
+  "status": "OBSERVED_SINGLE_BOUNDED_TRIAL",
+  "execution": {
+    "date": "2026-10-02",
+    "startedAt": "2026-10-02T03:29:36Z",
+    "endedAt": "2026-10-02T03:42:24Z",
+    "gitVersion": "git version 2.43.0",
+    "actorModelProfiles": "UNKNOWN",
+    "actorAExecutions": "separate control and treatment subagent executions launched to work concurrently",
+    "coreBehaviorMocked": false
+  },
+  "question": "Does a machine-readable signal about evolving producer-interface work help an independent consumer actor produce work that passes integration against the actual interface candidate before corrective feedback?",
+  "hypothesis": "The relevant prospective work signal lets a consumer actor choose an implementation compatible with an evolving interface and avoid an integration correction.",
+  "preregistration": {
+    "path": "docs/cloudflare/AGENT_COLLABORATION_EXPERIMENT_1_PREREGISTRATION.md",
+    "primaryMetric": "Binary first-pass integration validation of the unchanged consumer commit applied atop the exact producer candidate, before integration-error feedback.",
+    "sampleSize": {
+      "control": 1,
+      "treatment": 1
+    },
+    "limitations": [
+      "One actor execution per condition cannot establish statistical superiority or population-level causality.",
+      "Actor model/profile is unknown.",
+      "The signal was hand-authored from declared intent and updated from observed Git/Artifact state; signal generation and relevance selection were not tested.",
+      "The experiment tests one async interface dependency in a small deterministic fixture, not general engineering quality."
+    ],
+    "signalEvidence": "docs/cloudflare/AGENT_COLLABORATION_EXPERIMENT_1_SIGNALS.json",
+    "initialSignalFile": "docs/cloudflare/AGENT_COLLABORATION_EXPERIMENT_1_INITIAL_SIGNAL.json",
+    "updatedSignalFile": "docs/cloudflare/AGENT_COLLABORATION_EXPERIMENT_1_UPDATED_SIGNAL.json",
+    "transcriptFile": "docs/cloudflare/AGENT_COLLABORATION_EXPERIMENT_1_TRANSCRIPT.json"
+  },
+  "substrate": {
+    "namespace": "nexus-exp1-oct02",
+    "sourceRepository": {
+      "name": "external-git-proof",
+      "id": "4v94nnw1eqf0sanw"
+    },
+    "sourceCommit": "ec3affd0e916b895e3528de6747b632f428359c0",
+    "fixtureBaseline": {
+      "name": "nexus-agent-collab-e1-base",
+      "id": "w8tn50mr383e45m8",
+      "ref": "refs/heads/main",
+      "commit": "684db6fa5c960fdd0fe26ba213ea30a45eecd4de",
+      "tree": "ca25659bcb6157096cb4fbd0de17981a14e57676",
+      "parent": "ec3affd0e916b895e3528de6747b632f428359c0",
+      "workerReadback": "exact commit/tree/parent match; README.md SHA-256 a56e53990f231b655476e60dfe54e9279dbee6f08be5e4bd5467a5c21d2636a6"
+    },
+    "worker": {
+      "name": "nexus-agent-collab-exp1-20261002",
+      "id": "577a042af11b49ceaabce9f71a78801f",
+      "versionId": "998cc133-0895-4fc8-9e2e-a175714dc186",
+      "url": "https://nexus-agent-collab-exp1-20261002.holownych.workers.dev",
+      "binding": "ARTIFACTS namespace nexus-exp1-oct02",
+      "publicRoute": "GET /health returns only {ok:true}",
+      "unauthenticatedReadStatus": 401,
+      "unauthenticatedForkStatuses": [
+        401,
+        401
+      ],
+      "authSecret": "bound secret; never recorded"
+    },
+    "repositories": [
+      {
+        "role": "producer B",
+        "name": "nexus-agent-collab-e1-b",
+        "id": "ujxx84uk8fmvyhb1",
+        "ref": "refs/heads/main",
+        "initialSha": "684db6fa5c960fdd0fe26ba213ea30a45eecd4de",
+        "finalSha": "3ee0152b0e95df524796c266806007469d2bbcbe",
+        "finalTree": "779cd962494b72c0688bd73a40ed04802390711d",
+        "finalParent": "684db6fa5c960fdd0fe26ba213ea30a45eecd4de"
+      },
+      {
+        "role": "control consumer A",
+        "name": "nexus-agent-collab-e1-control",
+        "id": "16n2hymgr686ym0z",
+        "ref": "refs/heads/main",
+        "initialSha": "684db6fa5c960fdd0fe26ba213ea30a45eecd4de",
+        "finalSha": "380d98051d7ca0c9da7cb532730957ca67dbf4a6",
+        "finalTree": "13dfacc059b5a32c3bf28a8f6c85e5e401ac7cd0",
+        "finalParent": "ca1dec73aea65bf61d6a992cfa890e29ccbcb761"
+      },
+      {
+        "role": "treatment consumer A",
+        "name": "nexus-agent-collab-e1-treatment",
+        "id": "fxo81neyixb3laee",
+        "ref": "refs/heads/main",
+        "initialSha": "684db6fa5c960fdd0fe26ba213ea30a45eecd4de",
+        "finalSha": "4a33ab5f29a9dec576e6049274891cba3141cfba",
+        "finalTree": "2aa6094b8e4c5d092c0c3d18be536dac7501a94f",
+        "finalParent": "684db6fa5c960fdd0fe26ba213ea30a45eecd4de"
+      }
+    ]
+  },
+  "conditions": {
+    "control": {
+      "signalExposure": "none",
+      "task": "Add getCustomerSummary(customerId), return exactly cust-1: Ada for the fixture customer, preserve missing-customer error behavior, and add a runtime test.",
+      "initialCommit": {
+        "sha": "ca1dec73aea65bf61d6a992cfa890e29ccbcb761",
+        "tree": "90a1dd318ece804ff7606047848c6f78068722d3",
+        "parent": "684db6fa5c960fdd0fe26ba213ea30a45eecd4de",
+        "summaryImplementation": "synchronous readCustomer call"
+      },
+      "firstPass": {
+        "integrationCommit": "dbf3017d0d49528d1387f255be0ab8bbabd08485",
+        "producerCommit": "3ee0152b0e95df524796c266806007469d2bbcbe",
+        "typescript": "5.9.3 strict build",
+        "buildExitStatus": 2,
+        "diagnostic": "src/customer-summary.ts(5,21): Property 'id' does not exist on type 'Promise<Customer>'; src/customer-summary.ts(5,37): Property 'name' does not exist on type 'Promise<Customer>'.",
+        "runtimeTests": "not run because strict build failed",
+        "primaryMetric": "FAIL",
+        "elapsedMs": 1735.7
+      },
+      "correction": {
+        "feedback": "The exact TypeScript diagnostic above, delivered only after first-pass outcome capture.",
+        "commit": {
+          "sha": "380d98051d7ca0c9da7cb532730957ca67dbf4a6",
+          "tree": "13dfacc059b5a32c3bf28a8f6c85e5e401ac7cd0",
+          "parent": "ca1dec73aea65bf61d6a992cfa890e29ccbcb761"
+        },
+        "change": "Await readCustomer and return Promise<string>; await in test and retain missing-customer error assertion.",
+        "validationOnProducerCandidate": {
+          "integrationCommit": "215047370a5b51df6269cc38f879c163efa28af9",
+          "typescript": "5.9.3",
+          "buildExitStatus": 0,
+          "storeTestExitStatus": 0,
+          "summaryTestExitStatus": 0,
+          "elapsedMs": 1859.6
+        }
+      }
+    },
+    "treatment": {
+      "initialSignal": "machine-readable advisory declared intent; exact signal SHA-256 a85396c061d6c96e4760c5e1b2ebd143e69f761771bcf7fb1b3c55c11ab34e1a",
+      "postCommitSignal": "machine-readable advisory actual commit/tree/parent, changed paths and content digests, validation result; SHA-256 156c713308e8800755399bd5a6b04055e7c9d3b6f5e21a225f5ed48cfcbeb83f",
+      "task": "Same consumer task as control.",
+      "initialCommit": {
+        "sha": "4a33ab5f29a9dec576e6049274891cba3141cfba",
+        "tree": "2aa6094b8e4c5d092c0c3d18be536dac7501a94f",
+        "parent": "684db6fa5c960fdd0fe26ba213ea30a45eecd4de",
+        "summaryImplementation": "async function awaiting readCustomer"
+      },
+      "reassessment": "After receiving the observed exact producer commit signal, the actor reported its committed implementation was compatible; no code change or replan was needed.",
+      "firstPass": {
+        "integrationCommit": "25ed8caa3e6f4eb162e2728ce5967f662f4a232e",
+        "producerCommit": "3ee0152b0e95df524796c266806007469d2bbcbe",
+        "typescript": "5.9.3 strict build",
+        "buildExitStatus": 0,
+        "storeTestExitStatus": 0,
+        "summaryTestExitStatus": 0,
+        "primaryMetric": "PASS",
+        "elapsedMs": 1802.7
+      }
+    }
+  },
+  "primaryResult": {
+    "control": "FAIL",
+    "treatment": "PASS",
+    "score": "1/1 treatment pass, 0/1 control pass",
+    "interpretation": "OBSERVED in this paired fixture: the treated candidate was compatible before integration feedback; the control candidate required one correction. This is consistent with the hypothesis, but the small sample and unknown actor profiles prevent a general causal claim."
+  },
+  "artifactVerification": {
+    "method": "Fresh ordinary Git clones using short-lived repository-scoped read credentials, plus authorized Worker ARTIFACTS binding reads with cache disabled.",
+    "freshGitClones": [
+      {
+        "repo": "nexus-agent-collab-e1-base",
+        "head": "684db6fa5c960fdd0fe26ba213ea30a45eecd4de",
+        "tree": "ca25659bcb6157096cb4fbd0de17981a14e57676",
+        "cloneMs": 1230.6,
+        "tokenState": "revoked"
+      },
+      {
+        "repo": "nexus-agent-collab-e1-b",
+        "head": "3ee0152b0e95df524796c266806007469d2bbcbe",
+        "tree": "779cd962494b72c0688bd73a40ed04802390711d",
+        "cloneMs": 1402,
+        "tokenState": "revoked"
+      },
+      {
+        "repo": "nexus-agent-collab-e1-control",
+        "head": "380d98051d7ca0c9da7cb532730957ca67dbf4a6",
+        "tree": "13dfacc059b5a32c3bf28a8f6c85e5e401ac7cd0",
+        "cloneMs": 1814.3,
+        "tokenState": "revoked"
+      },
+      {
+        "repo": "nexus-agent-collab-e1-treatment",
+        "head": "4a33ab5f29a9dec576e6049274891cba3141cfba",
+        "tree": "2aa6094b8e4c5d092c0c3d18be536dac7501a94f",
+        "cloneMs": 1344.8,
+        "tokenState": "revoked"
+      }
+    ],
+    "workerReadbacks": {
+      "baseline": "exact repo ID, commit, tree, parent, and expected fixture content digests; main remains at baseline commit",
+      "producerB": "exact repo ID ujxx84uk8fmvyhb1, commit/tree/parent, and customer-store/store-test content digests",
+      "control": "exact repo ID 16n2hymgr686ym0z, final commit/tree/parent and customer-summary/test content digests; initial control commit remains ancestor of final head",
+      "treatment": "exact repo ID fxo81neyixb3laee, commit/tree/parent and customer-summary/test content digests"
+    }
+  },
+  "credentialHygiene": {
+    "scopes": "repo-scoped write for pushes; repo-scoped read for fresh clones; short TTL",
+    "stateAfterRun": "all listed baseline, B, control, and treatment credentials were independently listed and had state revoked; activeCount 0 for each repository",
+    "workerAuth": "random temporary secret in mode-0600 /tmp file and Worker secret binding; never included in repository or evidence",
+    "gitRemotes": "credential-free HTTPS remotes",
+    "gitConfig": "no local or global HTTP authorization extraHeader configured",
+    "unauthenticatedSensitiveRoutes": "GET /read and POST /baseline and /fork returned HTTP 401",
+    "sourceAndEvidenceSecretScan": "Gitleaks targeted scans of fixture, Worker, and preregistration found 0 matches",
+    "knownHighCritical": "Trivy scan of experiment package-lock.json including development dependencies found 0 HIGH and 0 CRITICAL vulnerabilities",
+    "plaintextCredentialsRetained": false,
+    "tokenIds": "Omitted from retained evidence because opaque IDs matched a generic-api-key secret-scanner heuristic; credential scope/lifetime/revocation states were verified through Cloudflare token inventory.",
+    "workerAvailability": "Independent reviewer executions received HTTP 403 on /health and authenticated read; executor observed HTTP 200 on /health and exact authenticated baseline readback at 2026-10-02 03:46 UTC. The reviewer later repeated HTTP 403. Cause and recurrence pattern are UNKNOWN."
+  },
+  "methodAndToolingNotes": [
+    "The fixture package has no declared local TypeScript compiler dependency. The experiment pinned its validation command to TypeScript 5.9.3 through npm exec; a plain npm run build therefore fails on a clean clone unless TypeScript is supplied. This is a fixture reproducibility limitation, not a collaboration result.",
+    "The first Actor B push harness completed the Git push and token revocation but errored before printing its readback because EXPERIMENT_AUTH_FILE was not passed to that one-off process. The independent Worker readback was immediately repeated successfully; no credential was exposed.",
+    "A direct `cf artifacts ... repos create` attempt returned HTTP 401 even though `cf auth whoami` was authenticated. The repository setup used the already qualified Worker binding fork path; exact cause of the CLI/API discrepancy remains UNKNOWN.",
+    "No Artifact events were configured or claimed."
+  ],
+  "cleanup": {
+    "state": "independent review complete; resources temporarily retained for the next bounded state-signal iteration",
+    "retained": [
+      "temporary fail-closed Worker nexus-agent-collab-exp1-20261002",
+      "fixture baseline repository w8tn50mr383e45m8",
+      "producer repository ujxx84uk8fmvyhb1",
+      "control repository 16n2hymgr686ym0z",
+      "treatment repository fxo81neyixb3laee"
+    ],
+    "activeCredentials": 0,
+    "planned": "If the next iteration does not require these repositories/Worker, delete them and remove local credential files/clones. No credentials are active."
+  },
+  "review": {
+    "status": "INDEPENDENT_REVIEW_REPRODUCED_PRIMARY_RESULT_WITH_LIMITATIONS",
+    "reviewerProfile": "UNKNOWN",
+    "independentReviewer": "separate subagent execution",
+    "limitations": [
+      "Reviewer observed HTTP 403 on /health and authenticated baseline read in two separate review attempts; executor observed HTTP 200 at 03:46 UTC. Cause and recurrence pattern remain UNKNOWN.",
+      "Agent task messages and sequence can be preserved from tool calls, but tool timestamps and full model transcript are unavailable; causality remains unqualified."
+    ]
+  }
+}

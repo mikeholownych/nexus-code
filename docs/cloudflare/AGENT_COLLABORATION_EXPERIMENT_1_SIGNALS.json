@@ -1,0 +1,65 @@
+{
+  "initial": {
+    "schema": "nexus.agent-work-state.v1",
+    "observedAt": "2026-10-02T03:32:40.203Z",
+    "state": "ACTIVE",
+    "source": "Actor B declared intent after reading baseline; no commit exists yet",
+    "work": {
+      "actor": "actor-b",
+      "repository": {
+        "namespace": "nexus-exp1-oct02",
+        "name": "nexus-agent-collab-e1-b",
+        "id": "ujxx84uk8fmvyhb1"
+      },
+      "baselineSha": "684db6fa5c960fdd0fe26ba213ea30a45eecd4de",
+      "objective": "Evolve the customer store lookup as though its data access crossed an asynchronous service boundary.",
+      "affectedPaths": [
+        "src/customer-store.ts",
+        "test/store.test.ts"
+      ],
+      "affectedSymbol": "readCustomer",
+      "plannedSignature": "readCustomer(id: string): Promise<Customer>",
+      "assumptions": [
+        "the customer value and not-found behavior stay the same",
+        "the implementation currently uses in-memory data",
+        "validation has not yet run"
+      ],
+      "plannedValidation": [
+        "npm run test:store"
+      ]
+    },
+    "relationship": {
+      "candidateConsumer": "customer summary actor task",
+      "basis": "prospective interface dependency declared by actor B",
+      "authority": "advisory; not a lock, reservation, or required assignment"
+    }
+  },
+  "updated": {
+    "schema": "nexus.agent-work-state.experiment.v1",
+    "epistemicStatus": "OBSERVED",
+    "source": {
+      "repository": "nexus-exp1-oct02/nexus-agent-collab-e1-b",
+      "repositoryId": "ujxx84uk8fmvyhb1",
+      "ref": "refs/heads/main",
+      "commit": "3ee0152b0e95df524796c266806007469d2bbcbe",
+      "tree": "779cd962494b72c0688bd73a40ed04802390711d",
+      "parent": "684db6fa5c960fdd0fe26ba213ea30a45eecd4de",
+      "validated": true,
+      "validation": "npm exec --yes --package=typescript@5.9.3 -- tsc -p tsconfig.json && node dist/test/store.test.js",
+      "readback": "Worker Artifacts binding; exact repository id, commit, tree, parent, and changed file digests matched"
+    },
+    "observedChange": {
+      "paths": [
+        "src/customer-store.ts",
+        "test/store.test.ts"
+      ],
+      "symbol": "readCustomer",
+      "diffSummary": "return type changed from Customer to Promise<Customer>; store contract test awaits result; existing not-found behavior retained",
+      "sha256": {
+        "src/customer-store.ts": "13686b5ed95655e558087c5b9bfb29ecc34c78cf34a1fe31d0622ef0570ac98e",
+        "test/store.test.ts": "77750a662f67cfe1b604b57d333f8abe31b97b4f036cef37e53872e42a11f9dd"
+      }
+    },
+    "authority": "advisory observation only; no assignment, lock, permission, or merge authority"
+  }
+}

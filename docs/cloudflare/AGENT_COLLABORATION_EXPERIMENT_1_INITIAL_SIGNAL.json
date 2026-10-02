@@ -1,0 +1,35 @@
+{
+  "schema": "nexus.agent-work-state.v1",
+  "observedAt": "2026-10-02T03:32:40.203Z",
+  "state": "ACTIVE",
+  "source": "Actor B declared intent after reading baseline; no commit exists yet",
+  "work": {
+    "actor": "actor-b",
+    "repository": {
+      "namespace": "nexus-exp1-oct02",
+      "name": "nexus-agent-collab-e1-b",
+      "id": "ujxx84uk8fmvyhb1"
+    },
+    "baselineSha": "684db6fa5c960fdd0fe26ba213ea30a45eecd4de",
+    "objective": "Evolve the customer store lookup as though its data access crossed an asynchronous service boundary.",
+    "affectedPaths": [
+      "src/customer-store.ts",
+      "test/store.test.ts"
+    ],
+    "affectedSymbol": "readCustomer",
+    "plannedSignature": "readCustomer(id: string): Promise<Customer>",
+    "assumptions": [
+      "the customer value and not-found behavior stay the same",
+      "the implementation currently uses in-memory data",
+      "validation has not yet run"
+    ],
+    "plannedValidation": [
+      "npm run test:store"
+    ]
+  },
+  "relationship": {
+    "candidateConsumer": "customer summary actor task",
+    "basis": "prospective interface dependency declared by actor B",
+    "authority": "advisory; not a lock, reservation, or required assignment"
+  }
+}

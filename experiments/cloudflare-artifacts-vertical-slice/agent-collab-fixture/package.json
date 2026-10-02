@@ -1,0 +1,8 @@
+{
+  "name": "customer-interface-collab-fixture",
+  "private": true,
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test:store": "npm run build && node dist/test/store.test.js"
+  }
+}

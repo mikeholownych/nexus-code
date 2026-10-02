@@ -1,0 +1,86 @@
+{
+  "schema": "nexus.agent-collaboration-experiment-transcript.v1",
+  "classification": "TRANSCRIBED_FROM_ORCHESTRATOR_TOOL_MESSAGES",
+  "exactTimestamps": "UNKNOWN; message order is preserved, no wall-clock timestamp was recorded for each tool call",
+  "actorModelProfiles": "UNKNOWN",
+  "sequence": [
+    {
+      "n": 1,
+      "actor": "control-A",
+      "kind": "task",
+      "message": "You are engineering Actor A CONTROL in the preregistered Nexus collaboration experiment. Work ONLY in `/tmp/agent-collab-actors-nT31iD/control` on top of baseline `684db6fa5c960fdd0fe26ba213ea30a45eecd4de`. Do not access other actor repos or experiment signals. Task: implement `getCustomerSummary(customerId)` using current `readCustomer` API, return exactly `cust-1: Ada` for the fixture customer, preserve current missing-id behavior. Add `test/summary.test.ts`. Do not edit `src/customer-store.ts` or `test/store.test.ts`. Validate with `npm run build && node dist/test/store.test.js && node dist/test/summary.test.js`. Commit your changes locally with an informative message. Do not push or use credentials. Report commit SHA, files, validation result, and any assumptions. This control condition receives no other actor's work-state signal."
+    },
+    {
+      "n": 2,
+      "actor": "treatment-A",
+      "kind": "task",
+      "message": "You are engineering Actor A TREATMENT in the preregistered Nexus collaboration experiment. Work ONLY in `/tmp/agent-collab-actors-nT31iD/treatment` on top of baseline `684db6fa5c960fdd0fe26ba213ea30a45eecd4de`. Task: implement `getCustomerSummary(customerId)` using the current `readCustomer` API, return exactly `cust-1: Ada` for the fixture customer, preserve current missing-id behavior. Add `test/summary.test.ts`. Do not edit `src/customer-store.ts` or `test/store.test.ts`. Validate with `npm run build && node dist/test/store.test.js && node dist/test/summary.test.js`. Before implementing, read and assess the advisory machine-readable evolving-work signal at `/tmp/agent-collab-state-20261002/active.json`; its current contents are the only other actor state you receive. Treat it as advisory, not authority. Commit changes locally with an informative message. Do not push or use credentials. Report commit SHA, files, validation result, what the signal changed (if anything), and assumptions."
+    },
+    {
+      "n": 3,
+      "actor": "producer-B",
+      "kind": "task-follow-up",
+      "message": "Continue as Actor B on ONLY `/tmp/agent-collab-actors-nT31iD/b`, baseline `684db6fa5c960fdd0fe26ba213ea30a45eecd4de`. Implement the previously planned async interface: change `readCustomer(id: string): Customer` to return `Promise<Customer>` while preserving customer value and not-found behavior; update `test/store.test.ts` to await it. Run `npm run test:store`, commit locally with an informative message, no credentials or push. Report commit SHA, files, validation, assumptions."
+    },
+    {
+      "n": 4,
+      "actor": "producer-B",
+      "kind": "result",
+      "message": "Implemented and committed as `3ee0152b0e95df524796c266806007469d2bbcbe`. Updated `readCustomer` to return `Promise<Customer>` and made the store contract check await it. `git diff --check` passed. `npm run test:store` could not complete because `tsc` was not installed in the clone. Assumption: existing lookup and not-found behavior remain unchanged; only the API is asynchronous."
+    },
+    {
+      "n": 5,
+      "actor": "control-A",
+      "kind": "result-before-feedback",
+      "message": "Committed `ca1dec73aea65bf61d6a992cfa890e29ccbcb761`. Added `src/customer-summary.ts` and `test/summary.test.ts`; implementation uses synchronous `readCustomer`. The initial `npm run build` could not find `tsc`; validation was reported successful after using `npm exec --yes --package typescript -- tsc -p tsconfig.json` and both Node tests."
+    },
+    {
+      "n": 6,
+      "actor": "treatment-A",
+      "kind": "result-before-feedback",
+      "message": "Committed `4a33ab5f29a9dec576e6049274891cba3141cfba`. Added `src/customer-summary.ts` and `test/summary.test.ts`; implementation awaits `readCustomer`. The actor reported that the advisory signal led it to make the consumer async-compatible. The initial `npm run build` could not find `tsc`, so the reported validation did not complete then."
+    },
+    {
+      "n": 7,
+      "actor": "treatment-A",
+      "kind": "observed-state-signal",
+      "message": "Read `/tmp/agent-collab-state-20261002/updated.json`, SHA-256 `156c713308e8800755399bd5a6b04055e7c9d3b6f5e21a225f5ed48cfcbeb83f`, identifying B commit `3ee0152b0e95df524796c266806007469d2bbcbe`, exact parent/tree, changed paths/digests, and passing TypeScript 5.9.3 validation. Asked to reassess and correct only if needed."
+    },
+    {
+      "n": 8,
+      "actor": "treatment-A",
+      "kind": "reassessment-before-integration",
+      "message": "The observed change is compatible with the committed candidate: `getCustomerSummary` awaits `readCustomer`, which supports the new `Promise<Customer>` return type. No code change or replan was needed; commit remains `4a33ab5f29a9dec576e6049274891cba3141cfba`. Requested TypeScript 5.9.3 validation passed against its own baseline checkout."
+    },
+    {
+      "n": 9,
+      "actor": "executor",
+      "kind": "primary-metric-control-before-feedback",
+      "message": "Applied control commit unchanged atop B's exact producer commit. TypeScript 5.9.3 reported `Property 'id' does not exist on type 'Promise<Customer>'` and the same for `name`; runtime tests were skipped after build failure. No actor received this diagnostic before the first-pass outcome was recorded."
+    },
+    {
+      "n": 10,
+      "actor": "executor",
+      "kind": "primary-metric-treatment-before-feedback",
+      "message": "Applied treatment commit unchanged atop B's exact producer commit. TypeScript 5.9.3 strict build, store test, and summary test passed. No integration feedback was sent to either actor before this result."
+    },
+    {
+      "n": 11,
+      "actor": "control-A",
+      "kind": "correction-feedback",
+      "message": "First-pass integration against B commit `3ee0152b0e95df524796c266806007469d2bbcbe` failed before feedback: TypeScript reports `src/customer-summary.ts(5,21): Property 'id' does not exist on type 'Promise<Customer>'` and same for `name`. This exact diagnostic is now your integration feedback. In your own control repo, make the smallest correction to consume the async API, add/adjust tests if warranted, validate using TypeScript 5.9.3 plus store and summary runtime checks, and commit locally. No push/credentials."
+    },
+    {
+      "n": 12,
+      "actor": "control-A",
+      "kind": "correction-result",
+      "message": "Corrected `getCustomerSummary` to await `readCustomer` and return `Promise<string>`. Updated the test to await the summary and verify the missing-customer error propagates. Validation passed with TypeScript 5.9.3, store test, and summary test. Committed `380d98051d7ca0c9da7cb532730957ca67dbf4a6`."
+    },
+    {
+      "n": 13,
+      "actor": "treatment-A",
+      "kind": "post-integration-reassessment",
+      "message": "The unchanged treatment candidate integrated on top of B commit `3ee0152b0e95df524796c266806007469d2bbcbe` and passed TypeScript 5.9.3 build plus store and summary runtime checks. This increased confidence; no code change or further action was needed."
+    }
+  ]
+}
