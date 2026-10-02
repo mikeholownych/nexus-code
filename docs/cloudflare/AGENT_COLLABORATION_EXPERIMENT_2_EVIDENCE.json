@@ -1,0 +1,167 @@
+{
+  "experiment": "agent-collaboration-experiment-2-reassessment-from-evolving-artifact-state",
+  "date": "2026-10-02",
+  "status": "independently-qualified-bounded-single-pair",
+  "classification": "single-paired-observation-not-causal-proof",
+  "baseline": {
+    "namespace": "nexus-exp1-oct02",
+    "repository": "nexus-agent-collab-e1-base",
+    "repositoryId": "w8tn50mr383e45m8",
+    "ref": "refs/heads/main",
+    "commit": "684db6fa5c960fdd0fe26ba213ea30a45eecd4de",
+    "tree": "ca25659bcb6157096cb4fbd0de17981a14e57676",
+    "parent": "ec3affd0e916b895e3528de6747b632f428359c0"
+  },
+  "worker": {
+    "name": "nexus-agent-collab-exp1-20261002",
+    "version": "e071efb5-d1ec-464e-9c7f-86784b6c6a38",
+    "binding": "ARTIFACTS",
+    "namespace": "nexus-exp1-oct02",
+    "publicRoutes": ["GET /health"],
+    "protectedRoute": "GET /work-state",
+    "fixedRepository": "nexus-agent-collab-e1-b",
+    "fixedRef": "refs/heads/work-state",
+    "fixedPath": ".agent/work-state.json",
+    "unauthenticated": {
+      "GET /work-state": 401,
+      "GET /read": 401,
+      "POST /work-state": 401
+    },
+    "authenticated": {
+      "GET /work-state": 200,
+      "POST /work-state": 404,
+      "GET /read": 404
+    }
+  },
+  "producer": {
+    "repository": "nexus-agent-collab-e1-b",
+    "repositoryId": "ujxx84uk8fmvyhb1",
+    "candidateRef": "refs/heads/collab2-producer",
+    "parent": "684db6fa5c960fdd0fe26ba213ea30a45eecd4de",
+    "commit": "812bea492f97bd54e8a1cc9137f8beeee1b1461e",
+    "tree": "3c72f789b7b4a3de751d681d19b379dee93b84cd",
+    "contract": "readCustomer(id): Promise<Customer | null>; missing IDs resolve null",
+    "changedPaths": ["src/customer-store.ts", "test/store.test.ts"],
+    "fileSha256": {
+      "src/customer-store.ts": "27ffff011ae10c01b4d7b777e931122868df633677e9091e7f1528139087d02d",
+      "test/store.test.ts": "24e125b45cb2f78509895af1198dbca6a93e9cc3ebdde07010bdad50c7a9b084"
+    },
+    "validation": {
+      "typescript": "5.9.3",
+      "strictTypecheck": "PASS",
+      "storeRuntime": "PASS"
+    }
+  },
+  "workState": {
+    "repository": "nexus-agent-collab-e1-b",
+    "repositoryId": "ujxx84uk8fmvyhb1",
+    "ref": "refs/heads/work-state",
+    "initial": {
+      "parent": "3ee0152b0e95df524796c266806007469d2bbcbe",
+      "commit": "1deb8c247320a9ab1a0c0a173a22ed641a98ff17",
+      "tree": "2bb07e3640dd2ed20eca5a6756085807528e47ba"
+    },
+    "updated": {
+      "parent": "1deb8c247320a9ab1a0c0a173a22ed641a98ff17",
+      "commit": "27c61cb9266b429ad9b9c1d5e854b589e1090164",
+      "tree": "0fae1d8b7084f71f915c1f79a31bd2429751421c",
+      "contentSha256": "8c453875e5c145e338a02ac1ac34880fc19e2c6d3255fc89c738c78bb13cb45d",
+      "workerCandidateHead": "812bea492f97bd54e8a1cc9137f8beeee1b1461e"
+    },
+    "postRunTimestampCleanup": {
+      "commit": "8dd9368b4ed2f690108d0893eafd3cb1fedcd4b9",
+      "tree": "ce5b7dfd419d5835c63a67f419b252be6f97f711",
+      "contentSha256": "778755f2081faed204341466f4c13e23a2d02297366b81cf928e3ff2118f8422",
+      "purpose": "remove manually set non-authoritative updatedAt field after primary outcome capture",
+      "workerCandidateHead": "812bea492f97bd54e8a1cc9137f8beeee1b1461e"
+    },
+    "treatmentReadBothStates": true,
+    "controlReceivedState": false,
+    "eventSubscription": false
+  },
+  "control": {
+    "repository": "nexus-agent-collab-e1-control",
+    "repositoryId": "16n2hymgr686ym0z",
+    "ref": "refs/heads/collab2-control",
+    "commit": "78a6f8c294381c7440008e6b8b0db05f63c59240",
+    "tree": "c45cea112ed9afa073cdee9a8498849fadd803e3",
+    "parent": "684db6fa5c960fdd0fe26ba213ea30a45eecd4de",
+    "finalValidationAgainstBaseline": "PASS",
+    "integrationProducerCommit": "812bea492f97bd54e8a1cc9137f8beeee1b1461e",
+    "integrationMerge": "PASS",
+    "integrationTypecheck": {
+      "command": "npm exec --yes --package=typescript@5.9.3 -- tsc -p tsconfig.json",
+      "exit": 2,
+      "diagnostics": [
+        "src/customer-summary.ts(5,21): error TS2339: Property 'name' does not exist on type 'Promise<Customer | null>'.",
+        "src/customer-summary.ts(5,39): error TS2339: Property 'id' does not exist on type 'Promise<Customer | null>'."
+      ]
+    },
+    "integrationStoreRuntime": "PASS",
+    "integrationSummaryRuntime": "FAIL: known-customer result was undefined (undefined)",
+    "primaryOutcome": "FAIL"
+  },
+  "treatment": {
+    "repository": "nexus-agent-collab-e1-treatment",
+    "repositoryId": "fxo81neyixb3laee",
+    "ref": "refs/heads/collab2-treatment",
+    "initialCommit": "ba9553df150e7370506d794dc97420976d07048a",
+    "initialTree": "2460371a0f314c95e33c6b74d60b48abc511f490",
+    "initialParent": "684db6fa5c960fdd0fe26ba213ea30a45eecd4de",
+    "finalCommit": "7887e59d295b2405af17879d459347052a57f782",
+    "finalTree": "c686c944371fe092308a60f9352b5ebce71b9c42",
+    "finalParent": "ba9553df150e7370506d794dc97420976d07048a",
+    "finalValidationAgainstBaseline": "PASS",
+    "integrationProducerCommit": "812bea492f97bd54e8a1cc9137f8beeee1b1461e",
+    "integrationMerge": "PASS",
+    "integrationTypecheck": {"command": "npm exec --yes --package=typescript@5.9.3 -- tsc -p tsconfig.json", "exit": 0},
+    "integrationStoreRuntime": "PASS",
+    "integrationSummaryRuntime": "PASS: known customer formatted; missing customer resolves null",
+    "primaryOutcome": "PASS",
+    "correctionCommitsAfterInitialCandidate": 1
+  },
+  "freshGitReadback": {
+    "baseline": "684db6fa5c960fdd0fe26ba213ea30a45eecd4de",
+    "producer": "812bea492f97bd54e8a1cc9137f8beeee1b1461e",
+    "workState": "8dd9368b4ed2f690108d0893eafd3cb1fedcd4b9",
+    "treatmentObservedWorkState": "27c61cb9266b429ad9b9c1d5e854b589e1090164",
+    "control": "78a6f8c294381c7440008e6b8b0db05f63c59240",
+    "treatment": "7887e59d295b2405af17879d459347052a57f782",
+    "allHeadsAndTreesMatched": true,
+    "baselineMainUnchanged": true,
+    "mergeBaseForCandidates": "684db6fa5c960fdd0fe26ba213ea30a45eecd4de"
+  },
+  "credentialHygiene": {
+    "scopes": "repository read/write as required for clone/fetch/push",
+    "authHeaders": "process-local Git environment only",
+    "remotesContainCredentials": false,
+    "localGlobalSystemGitExtraHeadersPresent": false,
+    "activeTokensAfterExecution": 0,
+    "plaintextPersisted": false,
+    "tokenIdsPersisted": false,
+    "parserCorrection": "one unused token created by a response-key mismatch was found through inventory and revoked before use; no credential was printed"
+  },
+  "securityScans": {
+    "gitleaks": {"scope": "new experiment evidence, preregistration, Worker source and helper", "findings": 0},
+    "trivy": {"status": "PASS", "scope": "isolated temporary lockfile generated from exact package.json; development dependencies included", "high": 0, "critical": 0, "temporaryLockSha256": "4047559835924c07d8e4d0cd82bc3d66aa33062e6d8e0619dc011ebf8fa0cdb8", "reportSha256": "711376a469d1c8403dedd0c754a5c961db279661acc2d7790dd12de4530c4b7f", "limitation": "resolved graph was not committed because the experiment package has no lockfile"},
+    "dependencyChanges": false,
+    "highCriticalDependencyStatus": "ZERO_IN_SCANNED_TEMPORARY_RESOLUTION"
+  },
+  "timings": {
+    "forkCreation": "not applicable",
+    "pushCloneReadbackLatency": "not measured",
+    "actorElapsedTime": "UNKNOWN"
+  },
+  "events": "not subscribed or observed",
+  "independentReview": {
+    "disposition": "QUALIFIED",
+    "reviewerExecution": "/root/independent_collab2_review",
+    "modelProfile": "UNKNOWN",
+    "freshArtifactGitClones": true,
+    "candidateIntegrationReproduced": true,
+    "workerAuthAndReadbackChecked": true,
+    "credentialsAndGitConfigChecked": true,
+    "gitleaksTrivyRerun": false,
+    "materialCaveats": ["single pair only", "non-authoritative updatedAt was present in treatment's signal and unused", "dependency graph scan used an uncommitted temporary resolution", "current main refs are distinct from measured collab2 refs"]
+  }
+}
