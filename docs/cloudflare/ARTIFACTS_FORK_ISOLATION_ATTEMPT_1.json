@@ -1,0 +1,463 @@
+{
+  "schema": "nexus.cloudflare.artifacts.fork-isolation-evidence.v1",
+  "classification": "OBSERVED_ATTEMPT_NOT_QUALIFIED",
+  "execution": {
+    "startedAt": "2026-10-02T02:35:28.209Z",
+    "finishedAt": "2026-10-02T02:35:55.908Z",
+    "gitVersion": "git version 2.43.0",
+    "cfVersion": "1.0.0-beta.10",
+    "credentialFingerprintsNotRetained": 3
+  },
+  "baseline": {
+    "namespace": "nexus-exp1-oct02",
+    "name": "external-git-proof",
+    "id": "4v94nnw1eqf0sanw",
+    "expected": {
+      "sha": "ec3affd0e916b895e3528de6747b632f428359c0",
+      "tree": "8a10e93afd210e09f6166ad39d144710011f16ed",
+      "readmeSha256": "a56e53990f231b655476e60dfe54e9279dbee6f08be5e4bd5467a5c21d2636a6"
+    },
+    "before": {
+      "status": 200,
+      "sha": "ec3affd0e916b895e3528de6747b632f428359c0",
+      "tree": "8a10e93afd210e09f6166ad39d144710011f16ed",
+      "parents": [],
+      "repository": {
+        "namespace": "nexus-exp1-oct02",
+        "name": "external-git-proof",
+        "id": "4v94nnw1eqf0sanw",
+        "defaultBranch": "main",
+        "remote": "https://a1a1fe900d3e61ccd4ef3a512867d7c0.artifacts.cloudflare.net/git/nexus-exp1-oct02/external-git-proof.git"
+      },
+      "readmeSha256": "a56e53990f231b655476e60dfe54e9279dbee6f08be5e4bd5467a5c21d2636a6"
+    },
+    "after": null
+  },
+  "worker": {
+    "name": "nexus-exp2-recovery-20261002",
+    "auth": "secret binding; value not recorded",
+    "unauthenticatedReadback": {
+      "status": 401,
+      "classification": "rejected_unauthorized"
+    },
+    "unauthenticatedForkPost": {
+      "status": 401,
+      "classification": "rejected_unauthorized"
+    },
+    "deployment": {
+      "id": "8bb784445ca64deea0f3fe99fa5ed38b",
+      "versionId": "c95c1f95-a9e0-403c-be65-70bf10fed74c",
+      "url": "https://nexus-exp2-recovery-20261002.holownych.workers.dev",
+      "deployedAt": "2026-10-02T02:35:24.510958Z",
+      "publicEndpoints": [
+        "GET /health (generic response only; no repository data)",
+        "GET /readback (401 without bearer secret)",
+        "POST /fork/a (401 without bearer secret)",
+        "POST /fork/b (401 without bearer secret)"
+      ]
+    }
+  },
+  "forks": {
+    "a": {
+      "namespace": "nexus-exp1-oct02",
+      "name": "nexus-exp2r-a",
+      "id": "merrdgekr47wgss7",
+      "defaultBranch": "main",
+      "remote": "https://a1a1fe900d3e61ccd4ef3a512867d7c0.artifacts.cloudflare.net/git/nexus-exp1-oct02/nexus-exp2r-a.git",
+      "createdElapsedMs": 2915.9,
+      "sourceRepository": "nexus-exp1-oct02/external-git-proof"
+    },
+    "b": {
+      "namespace": "nexus-exp1-oct02",
+      "name": "nexus-exp2r-b",
+      "id": "dhktbbzltgizisal",
+      "defaultBranch": "main",
+      "remote": "https://a1a1fe900d3e61ccd4ef3a512867d7c0.artifacts.cloudflare.net/git/nexus-exp1-oct02/nexus-exp2r-b.git",
+      "createdElapsedMs": 3096.6,
+      "sourceRepository": "nexus-exp1-oct02/external-git-proof"
+    }
+  },
+  "actors": {
+    "a": {
+      "execution": "ordinary external Git client",
+      "worktree": "temporary; removed after evidence capture",
+      "cloneExitStatus": 0,
+      "cloneElapsedMs": 1604.7,
+      "initialSha": "ec3affd0e916b895e3528de6747b632f428359c0",
+      "initialTree": "8a10e93afd210e09f6166ad39d144710011f16ed",
+      "parentShas": [
+        "ec3affd0e916b895e3528de6747b632f428359c0"
+      ],
+      "commitSha": "31afe80d200d255572694c86e03ea134ae1cf26e",
+      "treeSha": "8ee6fed4fa0df7cd191c98e7e5a760791cd8eb3b",
+      "fixturePath": "actor-a-recovery.txt",
+      "fixtureContentSha256": "416b8947e7faaba168023d146612c80640b4c9a26d9185910125191870f76bd0",
+      "fixtureByteLength": 97,
+      "localIdentity": "E2 Recovery Actor A",
+      "credentialId": "v1qnmb1t0o920eyn"
+    },
+    "b": {
+      "execution": "ordinary external Git client",
+      "worktree": "temporary; removed after evidence capture",
+      "cloneExitStatus": 0,
+      "cloneElapsedMs": 1352.4,
+      "initialSha": "ec3affd0e916b895e3528de6747b632f428359c0",
+      "initialTree": "8a10e93afd210e09f6166ad39d144710011f16ed",
+      "parentShas": [
+        "ec3affd0e916b895e3528de6747b632f428359c0"
+      ],
+      "commitSha": "ed47620ec4b4486df180703d7f4c32b63aec9554",
+      "treeSha": "f190018f35997dd43e9952d1960856206bc816d0",
+      "fixturePath": "actor-b-recovery.txt",
+      "fixtureContentSha256": "dceb647d2e5ee4cca3a601089cb0c33f189cfd88bcc4a1e4ba4df33c568bf531",
+      "fixtureByteLength": 97,
+      "localIdentity": "E2 Recovery Actor B",
+      "credentialId": "yoatd98k6nt166ps"
+    }
+  },
+  "authority": {
+    "tokenA_to_forkA": {
+      "credential": {
+        "id": "v1qnmb1t0o920eyn",
+        "scope": "write",
+        "repository": "nexus-exp2r-a"
+      },
+      "targetRepository": "nexus-exp2r-a",
+      "targetRef": "refs/heads/main",
+      "attempt": {
+        "exitStatus": 0,
+        "elapsedMs": 1066.1,
+        "classification": "push_accepted",
+        "denialHint": null,
+        "stdoutSha256": "e2b3b4b543bf69f4cd0fd2ec9bfd9f902f28dba104a3e1ba90be0ac3bcc04053",
+        "stderrSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "workerReadback": {
+        "status": 200,
+        "elapsedMs": 753.4,
+        "observedSha": "31afe80d200d255572694c86e03ea134ae1cf26e"
+      },
+      "result": "ALLOW"
+    },
+    "tokenB_to_forkB": {
+      "credential": {
+        "id": "yoatd98k6nt166ps",
+        "scope": "write",
+        "repository": "nexus-exp2r-b"
+      },
+      "targetRepository": "nexus-exp2r-b",
+      "targetRef": "refs/heads/main",
+      "attempt": {
+        "exitStatus": 0,
+        "elapsedMs": 1074.8,
+        "classification": "push_accepted",
+        "denialHint": null,
+        "stdoutSha256": "9458938e48326bee644492e021ad6a80db74af5c72a2e91488de36d9c04c2cb6",
+        "stderrSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "workerReadback": {
+        "status": 200,
+        "elapsedMs": 592.1,
+        "observedSha": "ed47620ec4b4486df180703d7f4c32b63aec9554"
+      },
+      "result": "ALLOW"
+    },
+    "tokenA_to_forkB": {
+      "credential": {
+        "id": "v1qnmb1t0o920eyn",
+        "scope": "write",
+        "repository": "nexus-exp2r-a"
+      },
+      "targetRepository": "nexus-exp2r-b",
+      "targetRef": "refs/heads/e2r-token-b-probe",
+      "attempt": {
+        "exitStatus": 128,
+        "elapsedMs": 437.2,
+        "classification": "authorization_denied",
+        "denialHint": "https://a1a1fe900d3e61ccd4ef3a512867d7c0.artifacts.cloudflare.net/git/nexus-exp1-oct02/nexus-exp2r-b.git/': the requested url returned error: 403",
+        "stdoutSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "stderrSha256": "6f199bb65a86b1ad93264e857c512f1f5d21c3786c5c6f14070a261a2e9d6616"
+      },
+      "workerReadback": {
+        "status": 200,
+        "elapsedMs": 263.9,
+        "observedSha": null
+      },
+      "result": "DENY"
+    },
+    "tokenB_to_forkA": {
+      "credential": {
+        "id": "yoatd98k6nt166ps",
+        "scope": "write",
+        "repository": "nexus-exp2r-b"
+      },
+      "targetRepository": "nexus-exp2r-a",
+      "targetRef": "refs/heads/e2r-token-a-probe",
+      "attempt": {
+        "exitStatus": 128,
+        "elapsedMs": 299.2,
+        "classification": "authorization_denied",
+        "denialHint": "https://a1a1fe900d3e61ccd4ef3a512867d7c0.artifacts.cloudflare.net/git/nexus-exp1-oct02/nexus-exp2r-a.git/': the requested url returned error: 403",
+        "stdoutSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "stderrSha256": "23b4d44e6bed61163340e6ca1fe623545b9368ac91c1ba0feef323e77265d6eb"
+      },
+      "workerReadback": {
+        "status": 200,
+        "elapsedMs": 256.6,
+        "observedSha": null
+      },
+      "result": "DENY"
+    },
+    "tokenA_to_baseline": {
+      "credential": {
+        "id": "v1qnmb1t0o920eyn",
+        "scope": "write",
+        "repository": "nexus-exp2r-a"
+      },
+      "targetRepository": "external-git-proof",
+      "targetRef": "refs/heads/e2r-token-a-baseline",
+      "attempt": {
+        "exitStatus": 128,
+        "elapsedMs": 343.6,
+        "classification": "authorization_denied",
+        "denialHint": "https://a1a1fe900d3e61ccd4ef3a512867d7c0.artifacts.cloudflare.net/git/nexus-exp1-oct02/external-git-proof.git/': the requested url returned error: 403",
+        "stdoutSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "stderrSha256": "e7f7e6ac984435cdff305bf71a1f6e334445fe5522a5ed61c6e5170d0203928b"
+      },
+      "workerReadback": {
+        "status": 200,
+        "elapsedMs": 269.2,
+        "observedSha": null
+      },
+      "result": "DENY"
+    },
+    "tokenB_to_baseline": {
+      "credential": {
+        "id": "yoatd98k6nt166ps",
+        "scope": "write",
+        "repository": "nexus-exp2r-b"
+      },
+      "targetRepository": "external-git-proof",
+      "targetRef": "refs/heads/e2r-token-b-baseline",
+      "attempt": {
+        "exitStatus": 128,
+        "elapsedMs": 317.9,
+        "classification": "authorization_denied",
+        "denialHint": "https://a1a1fe900d3e61ccd4ef3a512867d7c0.artifacts.cloudflare.net/git/nexus-exp1-oct02/external-git-proof.git/': the requested url returned error: 403",
+        "stdoutSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "stderrSha256": "e7f7e6ac984435cdff305bf71a1f6e334445fe5522a5ed61c6e5170d0203928b"
+      },
+      "workerReadback": {
+        "status": 200,
+        "elapsedMs": 275.7,
+        "observedSha": null
+      },
+      "result": "DENY"
+    }
+  },
+  "integrity": {
+    "authoritativeReadbacks": {
+      "baseline": {
+        "status": 200,
+        "elapsedMs": 518.8,
+        "repositoryId": "4v94nnw1eqf0sanw",
+        "ref": "refs/heads/main",
+        "head": "ec3affd0e916b895e3528de6747b632f428359c0",
+        "tree": "8a10e93afd210e09f6166ad39d144710011f16ed",
+        "parents": [],
+        "files": [
+          {
+            "path": "README.md",
+            "contentSha256": "a56e53990f231b655476e60dfe54e9279dbee6f08be5e4bd5467a5c21d2636a6",
+            "byteLength": 70,
+            "blob": "f08008d11185e3933eb0bbb3930d05e8c4e6bf12"
+          }
+        ]
+      },
+      "forkA": {
+        "status": 200,
+        "elapsedMs": 520.2,
+        "repositoryId": "merrdgekr47wgss7",
+        "ref": "refs/heads/main",
+        "head": "31afe80d200d255572694c86e03ea134ae1cf26e",
+        "tree": "8ee6fed4fa0df7cd191c98e7e5a760791cd8eb3b",
+        "parents": [
+          "ec3affd0e916b895e3528de6747b632f428359c0"
+        ],
+        "files": [
+          {
+            "path": "README.md",
+            "contentSha256": "a56e53990f231b655476e60dfe54e9279dbee6f08be5e4bd5467a5c21d2636a6",
+            "byteLength": 70,
+            "blob": "f08008d11185e3933eb0bbb3930d05e8c4e6bf12"
+          },
+          {
+            "path": "actor-a-recovery.txt",
+            "contentSha256": "416b8947e7faaba168023d146612c80640b4c9a26d9185910125191870f76bd0",
+            "byteLength": 97,
+            "blob": "9b75b14acb27164f8743524a25f8e1d2eb7a529c"
+          }
+        ]
+      },
+      "forkB": {
+        "status": 200,
+        "elapsedMs": 576.6,
+        "repositoryId": "dhktbbzltgizisal",
+        "ref": "refs/heads/main",
+        "head": "ed47620ec4b4486df180703d7f4c32b63aec9554",
+        "tree": "f190018f35997dd43e9952d1960856206bc816d0",
+        "parents": [
+          "ec3affd0e916b895e3528de6747b632f428359c0"
+        ],
+        "files": [
+          {
+            "path": "README.md",
+            "contentSha256": "a56e53990f231b655476e60dfe54e9279dbee6f08be5e4bd5467a5c21d2636a6",
+            "byteLength": 70,
+            "blob": "f08008d11185e3933eb0bbb3930d05e8c4e6bf12"
+          },
+          {
+            "path": "actor-b-recovery.txt",
+            "contentSha256": "dceb647d2e5ee4cca3a601089cb0c33f189cfd88bcc4a1e4ba4df33c568bf531",
+            "byteLength": 97,
+            "blob": "e67c65cacf14edfb246f788950268f769660caaf"
+          }
+        ]
+      }
+    },
+    "freshGitClones": {
+      "forkA": {
+        "exitStatus": 0,
+        "elapsedMs": 1041.9,
+        "head": "31afe80d200d255572694c86e03ea134ae1cf26e",
+        "tree": "8ee6fed4fa0df7cd191c98e7e5a760791cd8eb3b",
+        "remoteHasNoCredentials": true,
+        "localAuthConfigAbsent": true,
+        "globalAuthConfigAbsent": true,
+        "systemAuthConfigAbsent": true
+      },
+      "forkB": {
+        "exitStatus": 0,
+        "elapsedMs": 1216.4,
+        "head": "ed47620ec4b4486df180703d7f4c32b63aec9554",
+        "tree": "f190018f35997dd43e9952d1960856206bc816d0",
+        "remoteHasNoCredentials": true,
+        "localAuthConfigAbsent": true,
+        "globalAuthConfigAbsent": true,
+        "systemAuthConfigAbsent": true
+      },
+      "baseline": {
+        "exitStatus": 0,
+        "elapsedMs": 935.5,
+        "head": "ec3affd0e916b895e3528de6747b632f428359c0",
+        "tree": "8a10e93afd210e09f6166ad39d144710011f16ed",
+        "remoteHasNoCredentials": true,
+        "localAuthConfigAbsent": true,
+        "globalAuthConfigAbsent": true,
+        "systemAuthConfigAbsent": true
+      }
+    },
+    "baselineMainUnchanged": true,
+    "tokenAWriteOwn": "ALLOW",
+    "tokenBWriteOwn": "ALLOW",
+    "tokenACrossForkDenied": "DENY",
+    "tokenBCrossForkDenied": "DENY",
+    "tokenABaselineDenied": "DENY",
+    "tokenBBaselineDenied": "DENY"
+  },
+  "credentialMetadata": [
+    {
+      "id": "v1qnmb1t0o920eyn",
+      "repository": "nexus-exp2r-a",
+      "scope": "write",
+      "expiresAt": "2026-10-02T03:35:37.000Z"
+    },
+    {
+      "id": "yoatd98k6nt166ps",
+      "repository": "nexus-exp2r-b",
+      "scope": "write",
+      "expiresAt": "2026-10-02T03:35:38.000Z"
+    },
+    {
+      "id": "7yj1sr3lbibqvle3",
+      "repository": "external-git-proof",
+      "scope": "read",
+      "expiresAt": "2026-10-02T03:35:40.000Z"
+    }
+  ],
+  "notes": [
+    "No token plaintext, authorization header, or authenticated remote URL is written to this file.",
+    "A first harness run found that the Workers binding log() expects a branch name such as main, not the full refs/heads/main name. This was corrected before any fork or repository token was created.",
+    "Credential identifiers are non-secret Cloudflare token record IDs; the evidence labels these credentialId and contains no token plaintext."
+  ],
+  "independentReview": {
+    "disposition": "EXPERIMENT_2_CORRECTION_REQUIRED",
+    "reviewerProfile": "separate subagent; exact model/profile unavailable",
+    "findings": [
+      "Git subprocess inherited a secret-like environment variable; no value was inspected or recorded.",
+      "Two binding-created write credentials were active but absent from runner cleanup inventory.",
+      "Independent reviewer reproduced all six authority cells with separate credentials; all four negative writes returned HTTP 403 and target refs were absent.",
+      "Independent reviewer verified both forks Git history/tree/parent/content, authenticated and unauthenticated Worker behavior, and revoked reviewer tokens."
+    ],
+    "evidenceSha256": "47aeb9035aef91f5be41f4d646b70a605e1db743afc259be5109a4111f88861a",
+    "liveChecks": [
+      "Fork IDs and Git head/tree/parent/fixture content independently matched the evidence.",
+      "All six authority attempts were independently repeated; own writes succeeded and four cross/baseline writes returned HTTP 403 with target refs absent.",
+      "Unauthenticated Worker GET readback and POST fork both returned 401.",
+      "Five reviewer tokens were revoked and reviewer probe refs deleted."
+    ]
+  },
+  "cleanup": {
+    "executorTokens": [
+      {
+        "id": "v1qnmb1t0o920eyn",
+        "state": "revoked",
+        "verifiedByRepositoryTokenListing": true
+      },
+      {
+        "id": "2i0lic5ulv6jureb",
+        "state": "revoked",
+        "verifiedByRepositoryTokenListing": true
+      },
+      {
+        "id": "yoatd98k6nt166ps",
+        "state": "revoked",
+        "verifiedByRepositoryTokenListing": true
+      },
+      {
+        "id": "uca113qxok9saqfv",
+        "state": "revoked",
+        "verifiedByRepositoryTokenListing": true
+      },
+      {
+        "id": "7yj1sr3lbibqvle3",
+        "state": "revoked",
+        "verifiedByRepositoryTokenListing": true
+      }
+    ],
+    "forks": [
+      {
+        "name": "nexus-exp2r-a",
+        "id": "merrdgekr47wgss7",
+        "state": "deleted_after_independent_review",
+        "deletionVerified": true
+      },
+      {
+        "name": "nexus-exp2r-b",
+        "id": "dhktbbzltgizisal",
+        "state": "deleted_after_independent_review",
+        "deletionVerified": true
+      }
+    ],
+    "worker": {
+      "name": "nexus-exp2-recovery-20261002",
+      "state": "deleted_after_independent_review",
+      "deletionVerified": true
+    },
+    "cleanupAt": "2026-10-02T02:46:22.774Z",
+    "allExecutorCredentials": {
+      "active": 0,
+      "verifiedBy": "cf token list state=all for baseline and both forks"
+    }
+  }
+}

@@ -176,7 +176,7 @@ These are candidate primitives, not approved subsystem names:
 | Rank | Experiment and hypothesis | Uncertainty reduced | Minimal setup / observable result | Decision informed | Cost | Contest relevance |
 |---:|---|---|---|---|---|---|
 | 1 | **Real Worker → Artifact → external Git → exact readback.** COMPLETED 2026-10-02; bounded path proven. | Resolved for tested clone/fetch/root commit/push/fresh clone/readback and read-token denial. | See dated evidence in `ARTIFACTS_VERTICAL_SLICE_EVIDENCE.md`. | Artifacts can serve as this experiment's real Git substrate. | Low–medium; completed. | Critical; prerequisite met. |
-| 2 | **Fork as candidate isolation.** Fork retains usable ancestry but has independent refs/token/lifecycle; two real runners can push separately. | Fork mechanics, token boundaries, comparison and cleanup. | Fork baseline twice, verify branch/ref/SHA/parents with Git and binding, issue distinct tokens, push one commit each, cross-token denial, compare and delete fixture repos. | Use one repo per candidate or use another isolation layout. | Low–medium after rank 1. | High; validates credible two-runner demo isolation. |
+| 2 | **Fork as candidate isolation. COMPLETED 2026-10-02; bounded substrate hypothesis proven.** | Exact baseline identity/ancestry and tested per-repository write-token isolation observed; object count, scale and architecture choice remain unknown. | See [fork isolation evidence](ARTIFACTS_FORK_ISOLATION_EVIDENCE.md). | Keep fork-per-candidate as a supported option; no architecture selected. | Low–medium; completed. | High; qualifies isolated candidates for later work. |
 | 3 | **Advisory evolving work context.** Minimal objective + base SHA + relevant paths/assumptions updated after reconnaissance reduces waste without suppressing alternatives. | Information value, staleness and false-positive costs. | Two independent agents on small fixture; compare baseline condition (no shared context) with advisory versioned context and push notifications; blind assess duplicated effort, interruptions, changes, outcome quality/time. | Add a narrow work-awareness record or defer it. | Medium; bounded scripted reruns. | High; tests agent-native collaboration premise beyond Git plumbing. |
 
 ## 17. Recommendation at initial research review (historical)
@@ -200,6 +200,7 @@ No separate existing contest finding registry was identified in the Nexus checko
 | Finding | Disposition | Basis / trigger |
 |---|---|---|
 | `CF-A0-ACCESS-001` — At initial review, account access and paid plan unverified; no real Artifact operations | RE-EVALUATED: ACCESS_PROVEN_FOR_TESTED_OPERATIONS | On 2026-10-02, authenticated current `cf` CLI verified account access, namespace/repository/token operations, Worker deployment and binding use. Initial blocked result remains historically accurate. Plan label/billing state was not changed or separately proven. |
+| `CF-A2-CLI-001` — Current generated `cf artifacts namespaces repos fork` handler overwrites target name with source path name | REGISTER_AND_DEFER | Two valid target-name attempts returned code 10101; CLI dry-run looked valid. Worker binding `fork()` succeeded. Use the supported binding route for this bounded test; do not treat this as a Cloudflare fork-service failure or build a general CLI workaround. |
 | `CF-A0-DOC-001` — Closed/open beta discrepancy | DEFER_REGISTERED | Sep 30 overview says closed beta; newer Oct 1 changelog says open beta/Workers Paid. Verify live account and recheck docs before implementation. |
 | `CF-A0-EVENT-001` — Event ordering/delivery contract not documented in reviewed page | DEFER_REGISTERED | Do not use events as sole state authority until documented or experimentally qualified. |
 | `CF-A0-SCALE-001` — Large repo-count intent is not performance evidence | POST_SUBMISSION_RESEARCH | Contest can bound to two actors. Reassess before high-cardinality scale claims. |
@@ -225,7 +226,7 @@ These entries preserve uncertainty; they do not change Issue #12 status or dispo
 - **Strongest human-workflow assumption challenged:** Work awareness does not automatically require sprint/assignment/issue ceremony; an evolving, SHA-anchored context and selective change notification is a hypothesis to measure.
 - **Most promising agent-native hypothesis:** Store an evolving objective plus baseline, assumptions/relevant surface, and candidate evidence, then notify only actors whose recorded assumptions are affected by a repository change. Treat inferred relevance as advisory and source-attributed.
 - **Highest-value Nexus capability for the next seam:** CandidateTracker's exact candidate identity and validation linkage, adapted to Artifact repo/fork identity; invocation-bound authority remains complementary to repo write tokens.
-- **Largest remaining uncertainty:** Fork mechanics and ancestry, event behavior, additional Git feature compatibility, and practical multi-agent behavior remain untested. The bounded Worker → scoped token → ordinary Git → exact Worker readback path is now observed working.
+- **Largest remaining uncertainty:** Whether fork-per-candidate is operationally preferable to shared refs or a hybrid at realistic fan-out, and whether agentic collaboration improves outcomes. Event behavior, scale, and actual autonomous-agent quality remain untested.
 
 
 ## Experiment 1 update — 2026-10-02
@@ -236,9 +237,32 @@ These entries preserve uncertainty; they do not change Issue #12 status or dispo
 - **UNKNOWN:** Events, forks, cross-repository credential denial, large repositories, other Git protocol features, and multiple live agents remain untested. No next experiment was started. Experiment 2 is eligible under the stopping rule.
 - **OBSERVED:** No core path capability was mocked. The first `cf` deploy was used directly; Wrangler was neither introduced nor needed.
 
+## Experiment 2 update — 2026-10-02
 
-### Current next step after Experiment 1
+- **OBSERVED:** Two real Worker-binding forks from the exact Experiment 1 baseline retained its commit SHA/tree and were independently addressable. Two separate ordinary Git working copies made distinct commits directly descended from baseline. Both `main` pushes succeeded only with each repository's write credential; all four cross-repository/fork-to-baseline push attempts failed with authorization/visibility denial. Baseline HEAD stayed unchanged.
+- **OBSERVED:** Worker readbacks and fresh Git clones agreed on both fork HEADs and file digests. Ordinary Git reported the baseline as their common merge base and exposed separate baseline diffs. This establishes Git facts, not semantic task relationships or autonomous collaboration.
+- **DERIVED:** Repository-per-candidate is now a technically supported isolation option: it preserves exact history in this test and gives a coarser repository-level authority boundary. Shared refs and hybrid layouts remain plausible; this experiment did not compare their costs or permissions.
+- **OBSERVED:** The installed `cf` fork command's request builder overwrote the request body's target `name` with the source path name; valid fork names failed with API code 10101. The documented Worker binding method succeeded. This is registered as `CF-A2-CLI-001`; it is a CLI limitation and not a demonstrated Artifacts service limitation.
+- **OBSERVED:** Experiment 2 tokens were revoked, temporary clones removed, two forks deleted, and the disposable helper Worker deleted. The baseline repo and original Experiment 1 Worker remain. The helper Worker source, fork evidence, and this research update are uncommitted for review.
+- **UNKNOWN:** Fork object count, copy-on-write/storage semantics, non-default ref behavior, cleanup completion latency, large-scale fan-out, event behavior, and whether agents produce better outcomes with this isolation remain untested.
+- **Architecture assessment:** `FORK_PER_CANDIDATE_SUPPORTED` as a substrate capability; `INSUFFICIENT_EVIDENCE` to select it over shared refs or a hybrid as the product architecture.
+- **Stopping decision:** Experiment 3 and all collaboration/application implementation were not started. First review this evidence and decide whether a bounded shared-ref comparison would materially reduce uncertainty.
+
+
+### Recommendation at the close of Experiment 1 (historical)
 
 **OBSERVED:** Rank 1 is complete and met the bounded acceptance path. Per the stopping condition, no rank 2 fork test or collaboration implementation was started. **Recommended immediate next task:** operator may authorize Experiment 2 (fork isolation and ancestry) as a separate bounded experiment; this work does not begin it.
 
 **Evidence that changes this recommendation:** If the retained repository/Worker state is stale, if a fresh independent operator rerun fails exact SHA/content agreement, or if Cloudflare confirms the tested token semantics are deprecated/unsupported, requalify the substrate before proceeding. Otherwise rank 2 remains eligible, not mandatory.
+
+### Current next step after Experiment 2
+
+Review the fork evidence and determine whether a small shared-repository/ref comparison would change the architecture assessment. Do not begin Experiment 3 or implementation until that decision is explicit. Current evidence supports fork-per-candidate as feasible, but does not establish it as the preferred architecture.
+
+
+## Experiment 2 independent recovery qualification — 2026-10-02
+
+- **OBSERVED:** Independent review qualified a fresh, corrected two-fork isolation run with live Cloudflare state. The reviewer independently exercised ordinary Git mutations and checked Worker readback, exact ancestry, baseline immutability, and fail-closed routes before cleanup. The reviewer model/profile was unavailable and remains **UNKNOWN**. See the recovery JSON and independent review artifact.
+- **OBSERVED:** The initial recovery attempt was not qualified because secret-like parent environment was inherited by Git children and fork-issued credentials were not captured. A second bounded run corrected both issues and passed separate review.
+- **DERIVED:** Forks are a viable substrate isolation option, but no preference over shared refs is justified until ref authority is measured. No agent collaboration outcome has yet been demonstrated.
+- **Next experiment:** Run the bounded shared-ref differential before selecting the substrate for an agent outcome experiment.

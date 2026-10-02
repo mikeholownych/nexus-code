@@ -7,7 +7,7 @@
 ## Evidence labels
 
 - **DOCUMENTED** — stated in current Cloudflare primary documentation or changelog.
-- **OBSERVED** — directly exercised and captured in this environment. No Artifacts operations were observed during this review.
+- **OBSERVED** — directly exercised and captured in this environment. Statements explicitly marked “initial review” preserve the earlier Track A0 observation; later Experiment 1/2 evidence is dated separately below.
 - **INFERRED** — a conclusion drawn from documented behavior, not itself a Cloudflare guarantee.
 - **HYPOTHESIS** — a design possibility to test, not an adopted architecture.
 - **UNKNOWN** — documentation or available access does not establish the claim.
@@ -19,6 +19,14 @@
 - **OBSERVED:** Ordinary host Git 2.43.0 clone/fetch/push interoperated with the returned HTTPS smart HTTP remote. A short-lived repo `read` token cloned/fetched but its push failed with authorization denial; repo `write` token pushed successfully. A fresh clone and the Worker binding independently observed the same commit SHA and fixture bytes. Temporary credentials were revoked and the token list verified revoked state.
 - **UNKNOWN:** No event delivery, event payload, ordering, retry, fork, cross-repository denial, expiry enforcement, or revocation propagation latency was qualified by this experiment. The empirical result does not widen claims for untested Git features or scale.
 - **OBSERVED:** The current `cf` CLI provided the required namespace, repository, token, and Worker deployment operations; no Wrangler path was needed. This updates the previous Wrangler-specific access blocker only for this run and does not alter the historical result recorded in the evidence artifact.
+
+## Experiment 2 update — 2026-10-02
+
+- **UNKNOWN before Experiment 2:** Whether a fork preserved exact Git commit identity/history and offered effective independent repository mutation boundaries.
+- **OBSERVED:** The Worker binding forked the Experiment 1 baseline twice. Both forks initially had the exact baseline commit `ec3affd0e916b895e3528de6747b632f428359c0`, tree `8a10e93afd210e09f6166ad39d144710011f16ed`, and README content identity. Subsequent ordinary Git commits were distinct direct children, and Worker readbacks matched the external commit/tree/file state.
+- **OBSERVED:** Fork A and B had distinct repository IDs and source metadata pointing to the baseline. A fork-scoped write token mutated its own fork; cross-fork and fork-to-baseline pushes failed with authorization/visibility denial. All temporary tokens were revoked, both forks deleted, and the baseline repository remained unchanged.
+- **OBSERVED:** The current `cf artifacts namespaces repos fork` command's live handler overwrote the target `name` body field with the source path name. Valid target names received API code 10101. The documented Worker binding `fork()` path succeeded. A separate disposable Worker deployed through `cf deploy` supplied the operation/readback seam and was later deleted.
+- **UNKNOWN:** The Worker binding did not return the fork REST API's documented object count. Additional refs, scale/cost, event behavior, and cleanup latency remain unqualified. See [fork isolation evidence](ARTIFACTS_FORK_ISOLATION_EVIDENCE.md).
 
 ## Access and scope
 
@@ -38,7 +46,7 @@
 
 - **DOCUMENTED:** Worker binding and REST are control plane; Git protocol is data plane. Returned remote URLs identify the same repo created/read through Workers or REST. The namespace/repository address is shared among interfaces. [Repositories](https://developers.cloudflare.com/artifacts/concepts/repositories/)
 - **DOCUMENTED:** Worker binding is configured in Wrangler under `artifacts`; named Wrangler environments require the binding to be repeated because it is non-inheritable. Local Wrangler commands require Wrangler authentication; deployed Worker code uses the binding directly. Remote local development is configurable.
-- **UNKNOWN:** This review could not empirically verify cross-interface consistency, propagation timing, or whether all views see a just-pushed ref immediately. Treating “same repository” as read-after-write consistency is an assumption requiring Track A evidence.
+- **UNKNOWN before Experiment 1:** Cross-interface consistency and propagation timing had not been empirically checked. Experiments 1 and 2 observed exact Worker readback for the tested pushes; broader propagation guarantees remain unknown.
 - **DOCUMENTED:** Dashboard and Wrangler are setup/management surfaces; Git remains the data-plane repository interface. The current documentation also describes dashboard repository inspection and token issuance. No claim is made here that dashboard supports all control-plane operations.
 
 ## 3. Git interoperability
@@ -53,8 +61,10 @@
 
 - **DOCUMENTED:** A fork creates a new repository starting from source history and then diverging with separate repo identity, tokens, routing, and lifecycle. Worker fork options include `defaultBranchOnly`; REST names it `default_branch_only`. Results include an object count. Fork API accepts a target name and read-only setting. [How Artifacts works](https://developers.cloudflare.com/artifacts/concepts/how-artifacts-works/) · [Workers binding](https://developers.cloudflare.com/artifacts/api/workers-binding/) · [REST API](https://developers.cloudflare.com/artifacts/api/rest-api/)
 - **DOCUMENTED:** Cloudflare explicitly recommends repo-per-agent, session, task, user, baseline, or fork target patterns and describes unlimited repository count subject to account storage/rate limits. This documents intended high cardinality, not measured throughput, latency, contention, or economic efficiency.
-- **UNKNOWN:** Fork ancestry representation in Git parent/commit identity, object sharing/copy-on-write details, cross-namespace support constraints, fork latency/cost, complete refs copied when `defaultBranchOnly` is false, and merge comparison ergonomics. Do not infer a GitHub-like visible fork network or pull-request relation.
-- **HYPOTHESIS:** Forks may be the natural isolation boundary for independently mutable candidates because each has separate refs and write tokens while preserving source history. Need test fork/push/readback and exact ancestry before relying on this for the demo.
+- **UNKNOWN before Experiment 2:** Fork ancestry representation in Git parent/commit identity, independent mutation, fork latency, and ordinary Git comparison. Do not infer a GitHub-like visible fork network or pull-request relation.
+- **OBSERVED in Experiment 2:** The tested `fork()` path preserved exact baseline commit/tree identity and Git ancestry; each fork had a different repository ID; scoped write tokens could mutate only their own repository in the tested push cases; ordinary Git exposed a common merge base and separate diffs. See the dated fork evidence for scope.
+- **UNKNOWN after Experiment 2:** Object sharing/copy-on-write details, cross-namespace fork behavior, complete ref copying beyond a single-branch source, fork cost at scale, and merge ergonomics for complex histories.
+- **HYPOTHESIS (still unselected):** Forks may be a useful candidate-isolation boundary. The observed capability does not establish that fork-per-candidate is cheaper or better than shared refs or a hybrid.
 
 ## 5. Authentication, access, and Nexus authority
 
@@ -151,7 +161,7 @@
 
 ### 4. Assumptions for empirical Track A
 
-- **UNKNOWN:** Account entitlement and Worker deployment; same-repository visibility across binding and Git; real clone/fetch/commit/push/readback; whether pushed Git commit SHA is preserved exactly by Artifact reads; scope denial on read-token push and cross-repo access; TTL expiration/revocation; fork refs/ancestry/independence; event delivery, payload, timing, and duplicates; cleanup and latency.
+- **UNKNOWN at the pre-Experiment-1/2 review point:** Account entitlement and Worker deployment; same-repository visibility across binding and Git; real clone/fetch/commit/push/readback; whether pushed Git commit SHA is preserved exactly by Artifact reads; scope denial on read-token push and cross-repo access; TTL expiration/revocation; fork refs/ancestry/independence; event delivery, payload, timing, and duplicates; cleanup and latency. The dated Experiment 1 and Experiment 2 records resolve only their accepted bounded operations.
 
 ### 5. Hypotheses to keep uncommitted
 
@@ -160,3 +170,11 @@
 ## Sources
 
 All external claims above cite current Cloudflare first-party docs inline. Relevant pages: [Artifacts overview](https://developers.cloudflare.com/artifacts/), [Workers binding](https://developers.cloudflare.com/artifacts/api/workers-binding/), [REST API](https://developers.cloudflare.com/artifacts/api/rest-api/), [Git protocol](https://developers.cloudflare.com/artifacts/api/git-protocol/), [Events](https://developers.cloudflare.com/artifacts/guides/event-subscriptions/), [Metrics](https://developers.cloudflare.com/artifacts/observability/metrics/), [Limits](https://developers.cloudflare.com/artifacts/platform/limits/), [Pricing](https://developers.cloudflare.com/artifacts/platform/pricing/), [Oct 1 launch changelog](https://developers.cloudflare.com/changelog/post/2026-10-01-artifacts-open-beta/).
+
+
+## Experiment 2 independent recovery qualification — 2026-10-02
+
+- **OBSERVED:** A corrected, fresh two-fork run was independently qualified while its Cloudflare repositories and fail-closed Worker were live. It confirmed exact baseline commit/tree preservation, independent repository identities, own-repository writes, cross-fork and baseline write denial, exact Git/Worker readback, and unchanged source baseline. See [ARTIFACTS_FORK_ISOLATION_RECOVERY_EVIDENCE.json](ARTIFACTS_FORK_ISOLATION_RECOVERY_EVIDENCE.json) and [ARTIFACTS_FORK_ISOLATION_INDEPENDENT_REVIEW.md](ARTIFACTS_FORK_ISOLATION_INDEPENDENT_REVIEW.md).
+- **OBSERVED:** The first recovery attempt was rejected due to Git subprocess environment hygiene and incomplete fork-issued token accounting. The corrected runner uses an allowlisted environment and revokes/verifies binding-issued initial credentials. The unqualified attempt remains preserved.
+- **DERIVED:** Repository-level forks provide a tested isolation and authority boundary for these two actors. This does not establish cost at scale or architecture superiority over shared refs.
+- **UNKNOWN:** Shared-repository ref authority, large-scale lifecycle cost, event delivery, and agent outcome effects remain untested.

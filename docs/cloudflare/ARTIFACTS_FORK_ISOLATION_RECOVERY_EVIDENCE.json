@@ -1,0 +1,717 @@
+{
+  "schema": "nexus.cloudflare.artifacts.fork-isolation-evidence.v1",
+  "classification": "OBSERVED",
+  "execution": {
+    "startedAt": "2026-10-02T02:47:21.013Z",
+    "finishedAt": "2026-10-02T02:48:03.858Z",
+    "gitVersion": "git version 2.43.0",
+    "cfVersion": "1.0.0-beta.10",
+    "runnerSha256": "1388345b4078587a767ebbf7ffdb760c2152058af2bab9b6975ce02434c8c69d",
+    "workerSourceSha256": "0829e2306b5235f8b0dc87527df881d7ac7ef1fdc877ff8cc86b36eae078bb9f",
+    "gitChildEnvironment": {
+      "policy": "allowlisted variables; repository authorization supplied only via ephemeral GIT_CONFIG_VALUE_0",
+      "secretLikeParentVariablesSuppressed": 2,
+      "terminalPromptDisabled": true
+    },
+    "credentialFingerprintsNotRetained": 3
+  },
+  "baseline": {
+    "namespace": "nexus-exp1-oct02",
+    "name": "external-git-proof",
+    "id": "4v94nnw1eqf0sanw",
+    "expected": {
+      "sha": "ec3affd0e916b895e3528de6747b632f428359c0",
+      "tree": "8a10e93afd210e09f6166ad39d144710011f16ed",
+      "readmeSha256": "a56e53990f231b655476e60dfe54e9279dbee6f08be5e4bd5467a5c21d2636a6"
+    },
+    "before": {
+      "status": 200,
+      "sha": "ec3affd0e916b895e3528de6747b632f428359c0",
+      "tree": "8a10e93afd210e09f6166ad39d144710011f16ed",
+      "parents": [],
+      "repository": {
+        "namespace": "nexus-exp1-oct02",
+        "name": "external-git-proof",
+        "id": "4v94nnw1eqf0sanw",
+        "defaultBranch": "main",
+        "remote": "https://a1a1fe900d3e61ccd4ef3a512867d7c0.artifacts.cloudflare.net/git/nexus-exp1-oct02/external-git-proof.git"
+      },
+      "readmeSha256": "a56e53990f231b655476e60dfe54e9279dbee6f08be5e4bd5467a5c21d2636a6"
+    },
+    "after": {
+      "status": 200,
+      "elapsedMs": 486.4,
+      "repositoryId": "4v94nnw1eqf0sanw",
+      "ref": "refs/heads/main",
+      "head": "ec3affd0e916b895e3528de6747b632f428359c0",
+      "tree": "8a10e93afd210e09f6166ad39d144710011f16ed",
+      "parents": [],
+      "files": [
+        {
+          "path": "README.md",
+          "contentSha256": "a56e53990f231b655476e60dfe54e9279dbee6f08be5e4bd5467a5c21d2636a6",
+          "byteLength": 70,
+          "blob": "f08008d11185e3933eb0bbb3930d05e8c4e6bf12"
+        }
+      ]
+    }
+  },
+  "worker": {
+    "name": "nexus-exp2-recovery-20261002",
+    "url": "https://nexus-exp2-recovery-20261002.holownych.workers.dev",
+    "id": "351313f7202a4507bd9941894f84050c",
+    "versionId": "73b2789f-1a90-44f4-8e97-30cc14beb740",
+    "deployedAt": "2026-10-02T02:47:20Z",
+    "auth": "secret binding; value not recorded",
+    "unauthenticatedReadback": {
+      "status": 401,
+      "classification": "rejected_unauthorized"
+    },
+    "unauthenticatedForkPost": {
+      "status": 401,
+      "classification": "rejected_unauthorized"
+    }
+  },
+  "forks": {
+    "a": {
+      "namespace": "nexus-exp1-oct02",
+      "name": "nexus-exp2r-a",
+      "id": "gcfnl7ezya916kmw",
+      "defaultBranch": "main",
+      "remote": "https://a1a1fe900d3e61ccd4ef3a512867d7c0.artifacts.cloudflare.net/git/nexus-exp1-oct02/nexus-exp2r-a.git",
+      "createdElapsedMs": 2561.7,
+      "sourceRepository": "nexus-exp1-oct02/external-git-proof"
+    },
+    "b": {
+      "namespace": "nexus-exp1-oct02",
+      "name": "nexus-exp2r-b",
+      "id": "4jb7bknb2vuscr83",
+      "defaultBranch": "main",
+      "remote": "https://a1a1fe900d3e61ccd4ef3a512867d7c0.artifacts.cloudflare.net/git/nexus-exp1-oct02/nexus-exp2r-b.git",
+      "createdElapsedMs": 2487,
+      "sourceRepository": "nexus-exp1-oct02/external-git-proof"
+    }
+  },
+  "actors": {
+    "a": {
+      "execution": "ordinary external Git client",
+      "worktree": "temporary; removed after evidence capture",
+      "cloneExitStatus": 0,
+      "cloneElapsedMs": 1095.2,
+      "initialSha": "ec3affd0e916b895e3528de6747b632f428359c0",
+      "initialTree": "8a10e93afd210e09f6166ad39d144710011f16ed",
+      "parentShas": [
+        "ec3affd0e916b895e3528de6747b632f428359c0"
+      ],
+      "commitSha": "f06390750be6de5c11ba6f5d48d80c7ee373ea5e",
+      "treeSha": "331297bddb7dfe739d941652ebb6955358cfdc86",
+      "fixturePath": "actor-a-recovery-rerun.txt",
+      "fixtureContentSha256": "cb9240fec3f4f846e267b6f794cd1cba1c1f152cbb2bf364fb29d284cc543b80",
+      "fixtureByteLength": 103,
+      "localIdentity": "E2 Recovery Actor A",
+      "credentialId": "yvk0tf31o76h36k7"
+    },
+    "b": {
+      "execution": "ordinary external Git client",
+      "worktree": "temporary; removed after evidence capture",
+      "cloneExitStatus": 0,
+      "cloneElapsedMs": 1104.5,
+      "initialSha": "ec3affd0e916b895e3528de6747b632f428359c0",
+      "initialTree": "8a10e93afd210e09f6166ad39d144710011f16ed",
+      "parentShas": [
+        "ec3affd0e916b895e3528de6747b632f428359c0"
+      ],
+      "commitSha": "6718bd3beb4ebbc1667bf7602d279a2856349be1",
+      "treeSha": "d00cb7b341a24ade646ad09c296d059718cc48db",
+      "fixturePath": "actor-b-recovery-rerun.txt",
+      "fixtureContentSha256": "37c2929d473788d4a13fde087c5ecdbec858f679f20bf9839f6bdf87f75ba07b",
+      "fixtureByteLength": 103,
+      "localIdentity": "E2 Recovery Actor B",
+      "credentialId": "wpn08pzwds2jnaor"
+    }
+  },
+  "authority": {
+    "tokenA_to_forkA": {
+      "credential": {
+        "id": "yvk0tf31o76h36k7",
+        "scope": "write",
+        "repository": "nexus-exp2r-a"
+      },
+      "targetRepository": "nexus-exp2r-a",
+      "targetRef": "refs/heads/main",
+      "attempt": {
+        "exitStatus": 0,
+        "elapsedMs": 654.5,
+        "classification": "push_accepted",
+        "denialHint": null,
+        "stdoutSha256": "44aafeb90e304c5042e3ff0e55fd555ee2ea9cc5494de930259e8dd05fc75b6b",
+        "stderrSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "workerReadback": {
+        "status": 200,
+        "elapsedMs": 570.9,
+        "observedSha": "f06390750be6de5c11ba6f5d48d80c7ee373ea5e"
+      },
+      "result": "ALLOW"
+    },
+    "tokenB_to_forkB": {
+      "credential": {
+        "id": "wpn08pzwds2jnaor",
+        "scope": "write",
+        "repository": "nexus-exp2r-b"
+      },
+      "targetRepository": "nexus-exp2r-b",
+      "targetRef": "refs/heads/main",
+      "attempt": {
+        "exitStatus": 0,
+        "elapsedMs": 769.1,
+        "classification": "push_accepted",
+        "denialHint": null,
+        "stdoutSha256": "e8750eb375799b4f136c7af4788da34326ed6d8ffbdae470afc48cdc5e6c23bf",
+        "stderrSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "workerReadback": {
+        "status": 200,
+        "elapsedMs": 576.3,
+        "observedSha": "6718bd3beb4ebbc1667bf7602d279a2856349be1"
+      },
+      "result": "ALLOW"
+    },
+    "tokenA_to_forkB": {
+      "credential": {
+        "id": "yvk0tf31o76h36k7",
+        "scope": "write",
+        "repository": "nexus-exp2r-a"
+      },
+      "targetRepository": "nexus-exp2r-b",
+      "targetRef": "refs/heads/e2r-token-b-probe",
+      "attempt": {
+        "exitStatus": 128,
+        "elapsedMs": 281.3,
+        "classification": "authorization_denied",
+        "denialHint": "HTTP 401/403 response observed",
+        "stdoutSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "stderrSha256": "6f199bb65a86b1ad93264e857c512f1f5d21c3786c5c6f14070a261a2e9d6616"
+      },
+      "workerReadback": {
+        "status": 200,
+        "elapsedMs": 233.1,
+        "observedSha": null
+      },
+      "result": "DENY"
+    },
+    "tokenB_to_forkA": {
+      "credential": {
+        "id": "wpn08pzwds2jnaor",
+        "scope": "write",
+        "repository": "nexus-exp2r-b"
+      },
+      "targetRepository": "nexus-exp2r-a",
+      "targetRef": "refs/heads/e2r-token-a-probe",
+      "attempt": {
+        "exitStatus": 128,
+        "elapsedMs": 266.4,
+        "classification": "authorization_denied",
+        "denialHint": "HTTP 401/403 response observed",
+        "stdoutSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "stderrSha256": "23b4d44e6bed61163340e6ca1fe623545b9368ac91c1ba0feef323e77265d6eb"
+      },
+      "workerReadback": {
+        "status": 200,
+        "elapsedMs": 241,
+        "observedSha": null
+      },
+      "result": "DENY"
+    },
+    "tokenA_to_baseline": {
+      "credential": {
+        "id": "yvk0tf31o76h36k7",
+        "scope": "write",
+        "repository": "nexus-exp2r-a"
+      },
+      "targetRepository": "external-git-proof",
+      "targetRef": "refs/heads/e2r-token-a-baseline",
+      "attempt": {
+        "exitStatus": 128,
+        "elapsedMs": 271.2,
+        "classification": "authorization_denied",
+        "denialHint": "HTTP 401/403 response observed",
+        "stdoutSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "stderrSha256": "e7f7e6ac984435cdff305bf71a1f6e334445fe5522a5ed61c6e5170d0203928b"
+      },
+      "workerReadback": {
+        "status": 200,
+        "elapsedMs": 259.5,
+        "observedSha": null
+      },
+      "result": "DENY"
+    },
+    "tokenB_to_baseline": {
+      "credential": {
+        "id": "wpn08pzwds2jnaor",
+        "scope": "write",
+        "repository": "nexus-exp2r-b"
+      },
+      "targetRepository": "external-git-proof",
+      "targetRef": "refs/heads/e2r-token-b-baseline",
+      "attempt": {
+        "exitStatus": 128,
+        "elapsedMs": 285.8,
+        "classification": "authorization_denied",
+        "denialHint": "HTTP 401/403 response observed",
+        "stdoutSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "stderrSha256": "e7f7e6ac984435cdff305bf71a1f6e334445fe5522a5ed61c6e5170d0203928b"
+      },
+      "workerReadback": {
+        "status": 200,
+        "elapsedMs": 253.3,
+        "observedSha": null
+      },
+      "result": "DENY"
+    }
+  },
+  "integrity": {
+    "authoritativeReadbacks": {
+      "baseline": {
+        "status": 200,
+        "elapsedMs": 486.4,
+        "repositoryId": "4v94nnw1eqf0sanw",
+        "ref": "refs/heads/main",
+        "head": "ec3affd0e916b895e3528de6747b632f428359c0",
+        "tree": "8a10e93afd210e09f6166ad39d144710011f16ed",
+        "parents": [],
+        "files": [
+          {
+            "path": "README.md",
+            "contentSha256": "a56e53990f231b655476e60dfe54e9279dbee6f08be5e4bd5467a5c21d2636a6",
+            "byteLength": 70,
+            "blob": "f08008d11185e3933eb0bbb3930d05e8c4e6bf12"
+          }
+        ]
+      },
+      "forkA": {
+        "status": 200,
+        "elapsedMs": 508,
+        "repositoryId": "gcfnl7ezya916kmw",
+        "ref": "refs/heads/main",
+        "head": "f06390750be6de5c11ba6f5d48d80c7ee373ea5e",
+        "tree": "331297bddb7dfe739d941652ebb6955358cfdc86",
+        "parents": [
+          "ec3affd0e916b895e3528de6747b632f428359c0"
+        ],
+        "files": [
+          {
+            "path": "README.md",
+            "contentSha256": "a56e53990f231b655476e60dfe54e9279dbee6f08be5e4bd5467a5c21d2636a6",
+            "byteLength": 70,
+            "blob": "f08008d11185e3933eb0bbb3930d05e8c4e6bf12"
+          },
+          {
+            "path": "actor-a-recovery-rerun.txt",
+            "contentSha256": "cb9240fec3f4f846e267b6f794cd1cba1c1f152cbb2bf364fb29d284cc543b80",
+            "byteLength": 103,
+            "blob": "4116190d844c66e2c4ad76d91b77ba66f1f0d690"
+          }
+        ]
+      },
+      "forkB": {
+        "status": 200,
+        "elapsedMs": 539.8,
+        "repositoryId": "4jb7bknb2vuscr83",
+        "ref": "refs/heads/main",
+        "head": "6718bd3beb4ebbc1667bf7602d279a2856349be1",
+        "tree": "d00cb7b341a24ade646ad09c296d059718cc48db",
+        "parents": [
+          "ec3affd0e916b895e3528de6747b632f428359c0"
+        ],
+        "files": [
+          {
+            "path": "README.md",
+            "contentSha256": "a56e53990f231b655476e60dfe54e9279dbee6f08be5e4bd5467a5c21d2636a6",
+            "byteLength": 70,
+            "blob": "f08008d11185e3933eb0bbb3930d05e8c4e6bf12"
+          },
+          {
+            "path": "actor-b-recovery-rerun.txt",
+            "contentSha256": "37c2929d473788d4a13fde087c5ecdbec858f679f20bf9839f6bdf87f75ba07b",
+            "byteLength": 103,
+            "blob": "b03dc625e25f31cb494f4b8987ce11613e14354c"
+          }
+        ]
+      }
+    },
+    "freshGitClones": {
+      "forkA": {
+        "exitStatus": 0,
+        "elapsedMs": 1237.8,
+        "head": "f06390750be6de5c11ba6f5d48d80c7ee373ea5e",
+        "tree": "331297bddb7dfe739d941652ebb6955358cfdc86",
+        "remoteHasNoCredentials": true,
+        "localAuthConfigAbsent": true,
+        "globalAuthConfigAbsent": true,
+        "systemAuthConfigAbsent": true
+      },
+      "forkB": {
+        "exitStatus": 0,
+        "elapsedMs": 1010.2,
+        "head": "6718bd3beb4ebbc1667bf7602d279a2856349be1",
+        "tree": "d00cb7b341a24ade646ad09c296d059718cc48db",
+        "remoteHasNoCredentials": true,
+        "localAuthConfigAbsent": true,
+        "globalAuthConfigAbsent": true,
+        "systemAuthConfigAbsent": true
+      },
+      "baseline": {
+        "exitStatus": 0,
+        "elapsedMs": 1246.6,
+        "head": "ec3affd0e916b895e3528de6747b632f428359c0",
+        "tree": "8a10e93afd210e09f6166ad39d144710011f16ed",
+        "remoteHasNoCredentials": true,
+        "localAuthConfigAbsent": true,
+        "globalAuthConfigAbsent": true,
+        "systemAuthConfigAbsent": true
+      }
+    },
+    "baselineMainUnchanged": true,
+    "commitAndContentMatches": {
+      "forkA": true,
+      "forkB": true
+    },
+    "tokenAWriteOwn": "ALLOW",
+    "tokenBWriteOwn": "ALLOW",
+    "tokenACrossForkDenied": "DENY",
+    "tokenBCrossForkDenied": "DENY",
+    "tokenABaselineDenied": "DENY",
+    "tokenBBaselineDenied": "DENY"
+  },
+  "credentialMetadata": [
+    {
+      "id": "yvk0tf31o76h36k7",
+      "repository": "nexus-exp2r-a",
+      "scope": "write",
+      "expiresAt": "2026-10-02T03:02:41.000Z"
+    },
+    {
+      "id": "wpn08pzwds2jnaor",
+      "repository": "nexus-exp2r-b",
+      "scope": "write",
+      "expiresAt": "2026-10-02T03:02:43.000Z"
+    },
+    {
+      "id": "4hw5hgep4hsvklkf",
+      "repository": "external-git-proof",
+      "scope": "read",
+      "expiresAt": "2026-10-02T03:02:45.000Z"
+    }
+  ],
+  "credentialInventory": {
+    "baselineBefore": [
+      {
+        "id": "06860cavapbi3tqk",
+        "scope": "read",
+        "state": "revoked",
+        "createdAt": "2026-10-02T02:40:20.932Z",
+        "expiresAt": "2026-10-02T02:55:20.932Z"
+      },
+      {
+        "id": "hpbm931drjaxe9nz",
+        "scope": "read",
+        "state": "revoked",
+        "createdAt": "2026-10-02T02:39:41.000Z",
+        "expiresAt": "2026-10-02T02:54:41.000Z"
+      },
+      {
+        "id": "7yj1sr3lbibqvle3",
+        "scope": "read",
+        "state": "revoked",
+        "createdAt": "2026-10-02T02:35:40.927Z",
+        "expiresAt": "2026-10-02T03:35:40.927Z"
+      },
+      {
+        "id": "xlg39q8aucnvrk75",
+        "scope": "read",
+        "state": "revoked",
+        "createdAt": "2026-10-02T02:06:14.785Z",
+        "expiresAt": "2026-10-02T02:21:14.785Z"
+      },
+      {
+        "id": "z53pwrnjcqvnpsvj",
+        "scope": "read",
+        "state": "revoked",
+        "createdAt": "2026-10-02T01:57:54.985Z",
+        "expiresAt": "2026-10-02T02:12:54.985Z"
+      },
+      {
+        "id": "2v0812lox3a118x4",
+        "scope": "write",
+        "state": "revoked",
+        "createdAt": "2026-10-02T01:20:53.063Z",
+        "expiresAt": "2026-10-02T02:20:53.063Z"
+      },
+      {
+        "id": "o3z63i1zmchsvvx3",
+        "scope": "read",
+        "state": "revoked",
+        "createdAt": "2026-10-02T01:20:51.538Z",
+        "expiresAt": "2026-10-02T02:20:51.538Z"
+      },
+      {
+        "id": "223j1xbi6k951083",
+        "scope": "write",
+        "state": "revoked",
+        "createdAt": "2026-10-02T01:20:34.601Z",
+        "expiresAt": "2026-10-02T02:20:34.601Z"
+      },
+      {
+        "id": "3qswibndla0bh00r",
+        "scope": "read",
+        "state": "revoked",
+        "createdAt": "2026-10-02T01:20:32.536Z",
+        "expiresAt": "2026-10-02T02:20:32.536Z"
+      },
+      {
+        "id": "l3kkb9m1vjlpqvfk",
+        "scope": "read",
+        "state": "revoked",
+        "createdAt": "2026-10-02T01:18:28.953Z",
+        "expiresAt": "2026-10-02T02:18:28.953Z"
+      },
+      {
+        "id": "jwlvdng8dbpiabgu",
+        "scope": "write",
+        "state": "revoked",
+        "createdAt": "2026-10-02T01:18:15.830Z",
+        "expiresAt": "2026-10-03T01:18:15.830Z"
+      }
+    ],
+    "forkInitial": {
+      "a": [
+        {
+          "id": "vl06ejfngmbsx3td",
+          "scope": "write",
+          "state": "active",
+          "createdAt": "2026-10-02T02:47:25.792Z",
+          "expiresAt": "2026-10-03T02:47:25.792Z"
+        }
+      ],
+      "b": [
+        {
+          "id": "a79ui6sq8kv3xlan",
+          "scope": "write",
+          "state": "active",
+          "createdAt": "2026-10-02T02:47:28.520Z",
+          "expiresAt": "2026-10-03T02:47:28.520Z"
+        }
+      ]
+    },
+    "afterActorCredentials": {
+      "forkA": [
+        {
+          "id": "yvk0tf31o76h36k7",
+          "scope": "write",
+          "state": "active",
+          "createdAt": "2026-10-02T02:47:41.663Z",
+          "expiresAt": "2026-10-02T03:02:41.663Z"
+        },
+        {
+          "id": "vl06ejfngmbsx3td",
+          "scope": "write",
+          "state": "revoked",
+          "createdAt": "2026-10-02T02:47:25.792Z",
+          "expiresAt": "2026-10-03T02:47:25.792Z"
+        }
+      ],
+      "forkB": [
+        {
+          "id": "wpn08pzwds2jnaor",
+          "scope": "write",
+          "state": "active",
+          "createdAt": "2026-10-02T02:47:43.418Z",
+          "expiresAt": "2026-10-02T03:02:43.418Z"
+        },
+        {
+          "id": "a79ui6sq8kv3xlan",
+          "scope": "write",
+          "state": "revoked",
+          "createdAt": "2026-10-02T02:47:28.520Z",
+          "expiresAt": "2026-10-03T02:47:28.520Z"
+        }
+      ],
+      "baseline": [
+        {
+          "id": "4hw5hgep4hsvklkf",
+          "scope": "read",
+          "state": "active",
+          "createdAt": "2026-10-02T02:47:45.202Z",
+          "expiresAt": "2026-10-02T03:02:45.202Z"
+        },
+        {
+          "id": "06860cavapbi3tqk",
+          "scope": "read",
+          "state": "revoked",
+          "createdAt": "2026-10-02T02:40:20.932Z",
+          "expiresAt": "2026-10-02T02:55:20.932Z"
+        },
+        {
+          "id": "hpbm931drjaxe9nz",
+          "scope": "read",
+          "state": "revoked",
+          "createdAt": "2026-10-02T02:39:41.000Z",
+          "expiresAt": "2026-10-02T02:54:41.000Z"
+        },
+        {
+          "id": "7yj1sr3lbibqvle3",
+          "scope": "read",
+          "state": "revoked",
+          "createdAt": "2026-10-02T02:35:40.927Z",
+          "expiresAt": "2026-10-02T03:35:40.927Z"
+        },
+        {
+          "id": "xlg39q8aucnvrk75",
+          "scope": "read",
+          "state": "revoked",
+          "createdAt": "2026-10-02T02:06:14.785Z",
+          "expiresAt": "2026-10-02T02:21:14.785Z"
+        },
+        {
+          "id": "z53pwrnjcqvnpsvj",
+          "scope": "read",
+          "state": "revoked",
+          "createdAt": "2026-10-02T01:57:54.985Z",
+          "expiresAt": "2026-10-02T02:12:54.985Z"
+        },
+        {
+          "id": "2v0812lox3a118x4",
+          "scope": "write",
+          "state": "revoked",
+          "createdAt": "2026-10-02T01:20:53.063Z",
+          "expiresAt": "2026-10-02T02:20:53.063Z"
+        },
+        {
+          "id": "o3z63i1zmchsvvx3",
+          "scope": "read",
+          "state": "revoked",
+          "createdAt": "2026-10-02T01:20:51.538Z",
+          "expiresAt": "2026-10-02T02:20:51.538Z"
+        },
+        {
+          "id": "223j1xbi6k951083",
+          "scope": "write",
+          "state": "revoked",
+          "createdAt": "2026-10-02T01:20:34.601Z",
+          "expiresAt": "2026-10-02T02:20:34.601Z"
+        },
+        {
+          "id": "3qswibndla0bh00r",
+          "scope": "read",
+          "state": "revoked",
+          "createdAt": "2026-10-02T01:20:32.536Z",
+          "expiresAt": "2026-10-02T02:20:32.536Z"
+        },
+        {
+          "id": "l3kkb9m1vjlpqvfk",
+          "scope": "read",
+          "state": "revoked",
+          "createdAt": "2026-10-02T01:18:28.953Z",
+          "expiresAt": "2026-10-02T02:18:28.953Z"
+        },
+        {
+          "id": "jwlvdng8dbpiabgu",
+          "scope": "write",
+          "state": "revoked",
+          "createdAt": "2026-10-02T01:18:15.830Z",
+          "expiresAt": "2026-10-03T01:18:15.830Z"
+        }
+      ]
+    },
+    "forkInitialRevocation": {
+      "a": [
+        {
+          "id": "vl06ejfngmbsx3td",
+          "exitStatus": 0,
+          "classification": "revoke_accepted"
+        }
+      ],
+      "b": [
+        {
+          "id": "a79ui6sq8kv3xlan",
+          "exitStatus": 0,
+          "classification": "revoke_accepted"
+        }
+      ]
+    },
+    "forkAfterInitialRevocation": {
+      "a": [
+        {
+          "id": "vl06ejfngmbsx3td",
+          "scope": "write",
+          "state": "revoked",
+          "createdAt": "2026-10-02T02:47:25.792Z",
+          "expiresAt": "2026-10-03T02:47:25.792Z"
+        }
+      ],
+      "b": [
+        {
+          "id": "a79ui6sq8kv3xlan",
+          "scope": "write",
+          "state": "revoked",
+          "createdAt": "2026-10-02T02:47:28.520Z",
+          "expiresAt": "2026-10-03T02:47:28.520Z"
+        }
+      ]
+    }
+  },
+  "notes": [
+    "No token plaintext, authorization header, or authenticated remote URL is written to this file.",
+    "A first harness run found that the Workers binding log() expects a branch name such as main, not the full refs/heads/main name. This was corrected before any fork or repository token was created.",
+    "Credential identifiers are non-secret Cloudflare token record IDs; the evidence labels these credentialId and contains no token plaintext."
+  ],
+  "cleanup": {
+    "completedAt": "2026-10-02T03:00:13.388Z",
+    "credentials": {
+      "actorA": {
+        "credentialId": "yvk0tf31o76h36k7",
+        "state": "revoked",
+        "verifiedBy": "cf artifacts namespaces repos tokens list"
+      },
+      "actorB": {
+        "credentialId": "wpn08pzwds2jnaor",
+        "state": "revoked",
+        "verifiedBy": "cf artifacts namespaces repos tokens list"
+      },
+      "baselineRead": {
+        "credentialId": "4hw5hgep4hsvklkf",
+        "state": "revoked",
+        "verifiedBy": "cf artifacts namespaces repos tokens list"
+      },
+      "forkCreatedTokens": {
+        "a": {
+          "credentialId": "vl06ejfngmbsx3td",
+          "state": "revoked"
+        },
+        "b": {
+          "credentialId": "a79ui6sq8kv3xlan",
+          "state": "revoked"
+        }
+      },
+      "plaintextRetained": false
+    },
+    "forks": {
+      "a": {
+        "deleteCommandExitStatus": 0,
+        "verifiedAbsent": true
+      },
+      "b": {
+        "deleteCommandExitStatus": 0,
+        "verifiedAbsent": true
+      }
+    },
+    "worker": {
+      "deleteCommandExitStatus": 0,
+      "verifiedAbsent": true
+    },
+    "baseline": {
+      "retained": true
+    }
+  }
+}
