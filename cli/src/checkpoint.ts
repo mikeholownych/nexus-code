@@ -76,10 +76,30 @@ export class CheckpointManager {
           cwd: this.workspace,
           encoding: "buffer",
           maxBuffer: 64 * 1024 * 1024,
+          stdio: ["ignore", "pipe", "ignore"],
         });
         assertNoSensitivePersistenceContent(indexed.toString("utf8"), "checkpoint");
       } catch (error) {
         if (error instanceof SensitivePersistenceError) throw error;
+        try {
+          // A staged deletion has no index blob and no worktree bytes to copy.
+          // Any other inability to inspect an indexed object is fail-closed.
+          execFileSync("git", ["ls-files", "--error-unmatch", "--", relativePath], {
+            cwd: this.workspace,
+            stdio: "ignore",
+          });
+          throw new Error("Checkpoint could not verify protected Git index state");
+        } catch (indexError) {
+          if (
+            indexError instanceof Error &&
+            indexError.message === "Checkpoint could not verify protected Git index state"
+          ) throw indexError;
+          if ((indexError as NodeJS.ErrnoException & { status?: number })?.status !== 1) {
+            throw new Error("Checkpoint could not verify protected Git index state");
+          }
+          // Not present in the index: the path may be a staged deletion. Git's
+          // checkpoint operation will not persist any untracked replacement.
+        }
       }
 
       const worktreePath = path.join(this.workspace, relativePath);

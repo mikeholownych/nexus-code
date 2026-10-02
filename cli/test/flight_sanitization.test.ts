@@ -141,6 +141,8 @@ test("classifier failure skips flight and audit persistence without blocking aut
   });
   let executedArgs: Record<string, unknown> | undefined;
   try {
+    assert.match(agent.getInitialStatePersistenceFailure(), /restart recovery is unavailable/);
+    assert.equal(agent.getInitialStatePersistenceFailure().includes(secret), false);
     agent.spine.registerHandler("update_plan", async (args: Record<string, unknown>) => {
       executedArgs = args;
       return { success: true, output: "execution survived sanitizer failure" };

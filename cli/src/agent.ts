@@ -50,6 +50,7 @@ import {
   TaskRecoveryResult,
 } from "./core/state.js";
 import { InformationFlowBoundary } from "./core/egress.js";
+import { WorkspacePath } from "./core/workspace_path.js";
 import pc from "picocolors";
 
 export type ConfirmHandler = (toolName: string, args: Record<string, any>) => Promise<boolean>;
@@ -258,6 +259,9 @@ export class AutonomousAgent {
   public readonly spine: ExecutionSpine;
   public readonly candidateTracker: CandidateTracker;
   public readonly stateManager: DurableStateManager;
+  private primaryWorkspacePathIdentity: WorkspacePath;
+  private workspacePathIdentity: WorkspacePath;
+  private initialStatePersistenceFailure?: string;
   private activeValidationReceipt?: ValidationReceipt;
   private currentTaskId: string = "task-" + randomUUID().slice(0, 8);
 
@@ -268,6 +272,8 @@ export class AutonomousAgent {
   ) {
     canonicalDurableProvenance.set(this, new WeakMap());
     this.config = config;
+    this.primaryWorkspacePathIdentity = WorkspacePath.fromSelectedWorkspace(path.resolve(config.workspace || process.cwd()));
+    this.workspacePathIdentity = this.primaryWorkspacePathIdentity;
     this.depth = depth;
     this.inheritedWorktreeScope = inheritedWorktreeScope;
     if (inheritedWorktreeScope && path.resolve(config.workspace) !== path.resolve(inheritedWorktreeScope.workspace)) {
@@ -417,7 +423,7 @@ export class AutonomousAgent {
       },
     });
     this.setupSpineHandlers();
-    this.stateManager = new DurableStateManager();
+    this.stateManager = new DurableStateManager({ workspacePaths: [this.primaryWorkspacePathIdentity] });
     if (typeof (this.client as any)?.setTaskId === "function") this.client.setTaskId(this.currentTaskId);
     if (typeof (this.plannerClient as any)?.setTaskId === "function") this.plannerClient.setTaskId(this.currentTaskId);
     if (typeof (this.coderClient as any)?.setTaskId === "function") this.coderClient.setTaskId(this.currentTaskId);
@@ -442,8 +448,8 @@ export class AutonomousAgent {
         sessionId: this.currentTaskId,
         id: this.currentTaskId,
         title: "Task " + this.currentTaskId,
-        workspacePath: this.config.workspace || process.cwd(),
-        workspace: this.config.workspace || process.cwd(),
+        workspacePath: this.workspacePathIdentity.value,
+        workspace: this.workspacePathIdentity.value,
         model: this.config.model,
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString(),
@@ -454,7 +460,14 @@ export class AutonomousAgent {
         messages: this.messages,
         currentOperation: null,
       });
-    } catch {}
+    } catch {
+      this.initialStatePersistenceFailure =
+        "Initial durable task state was not persisted; restart recovery is unavailable until a later successful checkpoint.";
+    }
+  }
+
+  public getInitialStatePersistenceFailure(): string | undefined {
+    return this.initialStatePersistenceFailure;
   }
 
   public checkpointDurableState(notes?: string): DurableTaskState {
@@ -464,8 +477,8 @@ export class AutonomousAgent {
       sessionId: this.currentTaskId,
       id: this.currentTaskId,
       title: "Task " + this.currentTaskId,
-      workspacePath: this.config.workspace || process.cwd(),
-      workspace: this.config.workspace || process.cwd(),
+      workspacePath: this.workspacePathIdentity.value,
+      workspace: this.workspacePathIdentity.value,
       model: this.config.model,
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
@@ -752,6 +765,10 @@ export class AutonomousAgent {
     return this.config;
   }
 
+  public getWorkspacePathIdentity(): WorkspacePath {
+    return this.workspacePathIdentity;
+  }
+
   public setWorkspace(newWorkspace: string): void {
     if (this.inheritedWorktreeScope && path.resolve(newWorkspace) !== path.resolve(this.inheritedWorktreeScope.workspace)) {
       throw new Error("Cannot change workspace outside the inherited worktree authority.");
@@ -761,6 +778,12 @@ export class AutonomousAgent {
     }
     this.bridge.shutdown();
     this.mcpManager.shutdownAll();
+    this.workspacePathIdentity = WorkspacePath.fromSelectedWorkspace(path.resolve(newWorkspace));
+    this.stateManager.setWorkspacePaths(
+      this.workspacePathIdentity.value === this.primaryWorkspacePathIdentity.value
+        ? [this.primaryWorkspacePathIdentity]
+        : [this.primaryWorkspacePathIdentity, this.workspacePathIdentity]
+    );
     this.config.workspace = newWorkspace;
     this.bridge = new RustCoreBridge(
       this.config.workspace,

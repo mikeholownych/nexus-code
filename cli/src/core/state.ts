@@ -18,7 +18,8 @@ import {
 } from "./candidate.js";
 import { AuthorityAdmissionEngine } from "./authority.js";
 import { WorktreeManager } from "../worktree.js";
-import { redactForPersistence } from "./persistence_protection.js";
+import { redactForPersistence, redactTaskStateForPersistence } from "./persistence_protection.js";
+import { WorkspacePath } from "./workspace_path.js";
 
 export const CURRENT_STATE_SCHEMA_VERSION = 1;
 
@@ -195,6 +196,7 @@ export class WorkspaceIdentityMismatchError extends TaskStateError {
 
 export interface TaskRecoveryOptions {
   expectedWorkspace?: string;
+  workspacePaths?: WorkspacePath[];
   candidateTracker?: CandidateTracker;
   worktreeManager?: WorktreeManager;
   authorityEngine?: AuthorityAdmissionEngine;
@@ -229,13 +231,16 @@ export interface TaskRecoveryResult {
 
 export interface DurableStateManagerOptions {
   baseDir?: string;
+  workspacePaths?: WorkspacePath[];
 }
 
 export class DurableStateManager {
   private readonly baseDir: string;
+  private workspacePaths: WorkspacePath[];
 
   constructor(options: DurableStateManagerOptions = {}) {
     this.baseDir = options.baseDir || path.join(os.homedir(), ".nexus", "tasks");
+    this.workspacePaths = options.workspacePaths || [];
     if (!fs.existsSync(this.baseDir)) {
       fs.mkdirSync(this.baseDir, { recursive: true });
     }
@@ -243,6 +248,10 @@ export class DurableStateManager {
 
   public getBaseDir(): string {
     return this.baseDir;
+  }
+
+  public setWorkspacePaths(workspacePaths: WorkspacePath[]): void {
+    this.workspacePaths = [...workspacePaths];
   }
 
   public getStateFilePath(taskId: string): string {
@@ -267,7 +276,7 @@ export class DurableStateManager {
    * Atomically saves task state to disk using write-to-temp and atomic rename.
    * Prevents partially written or corrupted state from being seen on disk (PERS-001, PERS-003).
    */
-  public saveTaskState(state: DurableTaskState): void {
+  public saveTaskState(state: DurableTaskState, workspacePaths: WorkspacePath[] = this.workspacePaths): void {
     if (!state.taskId) {
       throw new TaskStateWriteError("unknown", "Missing required taskId");
     }
@@ -283,15 +292,18 @@ export class DurableStateManager {
     let serialized: string;
     let safeTaskId: string;
     let protectionPhase = "classification";
+    let changedIdentityFields: string[] = [];
     try {
-      const protectedState = redactForPersistence(state);
+      const authorizedPaths = this.authorizeWorkspacePaths(workspacePaths);
+      const protectedState = redactTaskStateForPersistence(state, authorizedPaths);
       protectionPhase = "identity validation";
-      if (
-        protectedState.taskId !== state.taskId ||
-        protectedState.sessionId !== state.sessionId ||
-        protectedState.id !== state.id ||
-        protectedState.workspacePath !== state.workspacePath
-      ) {
+      changedIdentityFields = (["taskId", "sessionId", "id", "workspacePath"] as const).filter(
+        (field) => protectedState[field] !== state[field]
+      );
+      if (protectedState.worktreeBinding?.worktreePath !== state.worktreeBinding?.worktreePath) {
+        changedIdentityFields.push("worktreeBinding.worktreePath");
+      }
+      if (changedIdentityFields.length > 0) {
         throw new Error("Sensitive data intersects a durable state identity field");
       }
       if (!/^[A-Za-z0-9._-]{1,160}$/.test(state.taskId) || state.taskId === "." || state.taskId === "..") {
@@ -302,7 +314,8 @@ export class DurableStateManager {
       serialized = JSON.stringify(protectedState, null, 2);
       if (serialized === undefined) throw new Error("Task state is not JSON serializable");
     } catch {
-      throw new TaskStateWriteError("unknown", `Sensitive-data protection or ${protectionPhase} failed`);
+      const conflict = changedIdentityFields.length > 0 ? ` (${changedIdentityFields.join(", ")})` : "";
+      throw new TaskStateWriteError("unknown", `Sensitive-data protection or ${protectionPhase} failed${conflict}`);
     }
 
     const targetPath = this.getStateFilePath(safeTaskId);
@@ -332,7 +345,11 @@ export class DurableStateManager {
    * Loads task state from disk with strict integrity, versioning, and identity verification.
    * Fails closed on missing file, malformed JSON, unsupported schema, or identity mismatch.
    */
-  public loadTaskState(taskId: string, expectedWorkspace?: string): DurableTaskState {
+  public loadTaskState(
+    taskId: string,
+    expectedWorkspace?: string,
+    workspacePaths: WorkspacePath[] = this.workspacePaths,
+  ): DurableTaskState {
     const filePath = this.getStateFilePath(taskId);
     if (!fs.existsSync(filePath)) {
       throw new TaskStateNotFoundError(taskId, filePath);
@@ -371,19 +388,32 @@ export class DurableStateManager {
     }
 
     // Verify workspace binding if expectedWorkspace provided
+    let selectedPaths = workspacePaths;
     if (expectedWorkspace && state.workspacePath) {
-      const normExpected = path.resolve(expectedWorkspace);
+      const expectedIdentity = WorkspacePath.fromSelectedWorkspace(path.resolve(expectedWorkspace));
+      const normExpected = expectedIdentity.value;
       const normActual = path.resolve(state.workspacePath);
       if (normExpected !== normActual) {
         throw new WorkspaceIdentityMismatchError(normExpected, normActual);
       }
+      selectedPaths = [...workspacePaths, expectedIdentity];
     }
 
     try {
-      const protectedState = redactForPersistence(state);
+      selectedPaths = this.authorizeWorkspacePaths(selectedPaths);
+      const protectedState = redactTaskStateForPersistence(state, selectedPaths);
+      const changedIdentityFields: string[] = (["taskId", "sessionId", "id", "workspacePath"] as const).filter(
+        (field) => protectedState[field] !== state[field]
+      );
+      if (protectedState.worktreeBinding?.worktreePath !== state.worktreeBinding?.worktreePath) {
+        changedIdentityFields.push("worktreeBinding.worktreePath");
+      }
+      if (changedIdentityFields.length > 0) {
+        throw new TaskStateReadError(taskId, "Sensitive data intersects durable state identity");
+      }
       if (JSON.stringify(protectedState) !== JSON.stringify(state)) {
         // Migrate older plaintext state on disk before reporting a successful load.
-        this.saveTaskState(protectedState);
+        this.saveTaskState(protectedState, selectedPaths);
         return protectedState;
       }
     } catch {
@@ -391,6 +421,19 @@ export class DurableStateManager {
     }
 
     return state;
+  }
+
+  private authorizeWorkspacePaths(requested: readonly WorkspacePath[]): WorkspacePath[] {
+    for (const identity of requested) {
+      identity.assertCurrent();
+      if (!this.workspacePaths.some((configured) => {
+        configured.assertCurrent();
+        return configured.matches(identity.value);
+      })) {
+        throw new Error("Workspace identity is not selected by this state manager");
+      }
+    }
+    return [...requested];
   }
 
   /**
@@ -526,7 +569,15 @@ export class DurableStateManager {
     taskId: string,
     options: TaskRecoveryOptions = {}
   ): TaskRecoveryResult {
-    const state = this.loadTaskState(taskId, options.expectedWorkspace);
+    let recoveryWorkspacePaths = options.workspacePaths || this.workspacePaths;
+    if (recoveryWorkspacePaths.length === 0 && options.expectedWorkspace) {
+      recoveryWorkspacePaths = [WorkspacePath.fromSelectedWorkspace(path.resolve(options.expectedWorkspace))];
+    }
+    const state = this.loadTaskState(
+      taskId,
+      options.expectedWorkspace,
+      recoveryWorkspacePaths,
+    );
     const diagnostics: string[] = [];
 
     let interrupted = false;
@@ -615,7 +666,7 @@ export class DurableStateManager {
     // Live execution is governed strictly by current runtime configuration.
 
     // 6. Persist the reconciled state atomically
-    this.saveTaskState(state);
+    this.saveTaskState(state, recoveryWorkspacePaths);
 
     return {
       success: true,

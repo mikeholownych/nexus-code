@@ -9,6 +9,7 @@ import {
   TaskRecoveryResult,
   CURRENT_STATE_SCHEMA_VERSION,
 } from "./core/state.js";
+import { WorkspacePath } from "./core/workspace_path.js";
 
 // Re-export core state primitives
 export * from "./core/state.js";
@@ -25,9 +26,11 @@ export interface SessionData extends DurableTaskState {
 export class SessionManager {
   private sessionsDir: string;
   private stateManager: DurableStateManager;
+  private readonly selectedWorkspace: (() => WorkspacePath) | undefined;
 
-  constructor(customDir?: string) {
+  constructor(customDir?: string, selectedWorkspace?: () => WorkspacePath) {
     this.sessionsDir = customDir || path.join(os.homedir(), ".nexus", "sessions");
+    this.selectedWorkspace = selectedWorkspace;
     if (!fs.existsSync(this.sessionsDir)) {
       fs.mkdirSync(this.sessionsDir, { recursive: true });
     }
@@ -49,7 +52,12 @@ export class SessionManager {
   /**
    * Atomically saves session data conforming to the DurableTaskState envelope.
    */
-  public saveSession(session: Partial<SessionData> & { id: string }): void {
+  public saveSession(session: Partial<SessionData> & { id: string }, workspacePath?: WorkspacePath): void {
+    const selectedWorkspace = this.currentSelectedWorkspace();
+    if (workspacePath && (!selectedWorkspace || !selectedWorkspace.matches(workspacePath.value))) {
+      throw new Error("Session workspace identity is not selected by the application");
+    }
+    if (selectedWorkspace) this.stateManager.setWorkspacePaths([selectedWorkspace]);
     const taskId = session.taskId || session.id;
     const sessionId = session.sessionId || session.id;
     const workspace = session.workspace || session.workspacePath || process.cwd();
@@ -80,7 +88,7 @@ export class SessionManager {
       tokenStats: session.tokenStats,
     };
 
-    this.stateManager.saveTaskState(fullState);
+    this.stateManager.saveTaskState(fullState, selectedWorkspace ? [selectedWorkspace] : []);
   }
 
   /**
@@ -102,7 +110,8 @@ export class SessionManager {
     }
 
     try {
-      const state = this.stateManager.loadTaskState(targetId);
+      const workspacePath = this.workspacePathFromSessionFile(targetId);
+      const state = this.stateManager.loadTaskState(targetId, undefined, [workspacePath]);
       return state as SessionData;
     } catch {
       return null;
@@ -128,7 +137,11 @@ export class SessionManager {
     }
 
     try {
-      return this.stateManager.recoverTaskState(cleanId, options);
+      const workspacePath = this.workspacePathFromSessionFile(cleanId);
+      return this.stateManager.recoverTaskState(cleanId, {
+        ...options,
+        workspacePaths: [workspacePath],
+      });
     } catch {
       return null;
     }
@@ -181,5 +194,25 @@ export class SessionManager {
 
     results.sort((a, b) => b.mtime - a.mtime);
     return results.map(({ mtime, ...rest }) => rest);
+  }
+
+  private workspacePathFromSessionFile(taskId: string): WorkspacePath {
+    const selected = this.currentSelectedWorkspace();
+    if (!selected) throw new Error("Session recovery requires an independently selected workspace");
+    selected.assertCurrent();
+    this.stateManager.setWorkspacePaths([selected]);
+    const filePath = this.stateManager.getStateFilePath(taskId);
+    const raw = JSON.parse(fs.readFileSync(filePath, "utf8"));
+    const value = raw?.workspacePath || raw?.workspace;
+    if (typeof value !== "string") throw new Error("Session record has no workspace identity");
+    if (!selected.matches(value) || (raw?.workspacePath && raw.workspacePath !== selected.value) ||
+        (raw?.workspace && raw.workspace !== selected.value)) {
+      throw new Error("Session workspace does not match the application's selected workspace");
+    }
+    return selected;
+  }
+
+  private currentSelectedWorkspace(): WorkspacePath | undefined {
+    return this.selectedWorkspace?.();
   }
 }

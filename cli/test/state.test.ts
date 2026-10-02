@@ -20,6 +20,7 @@ import { WorktreeManager } from "../src/worktree.js";
 import { SessionManager } from "../src/session.js";
 import { AutonomousAgent } from "../src/agent.js";
 import { HarnessConfig } from "../src/types.js";
+import { WorkspacePath } from "../src/core/workspace_path.js";
 
 describe("WP-07: Durable Task State Persistence & Milestone Recovery (INC-08, PERS-001..PERS-004)", () => {
   let tmpDir: string;
@@ -51,7 +52,7 @@ describe("WP-07: Durable Task State Persistence & Milestone Recovery (INC-08, PE
   });
 
   test("PERS-001: Durable milestone state round-trip with atomic persistence", () => {
-    const manager = new DurableStateManager({ baseDir: tasksDir });
+    const manager = new DurableStateManager({ baseDir: tasksDir, workspacePaths: [WorkspacePath.fromSelectedWorkspace(gitRepoDir)] });
     const taskId = "task-milestone-1";
 
     const initialState: DurableTaskState = {
@@ -105,7 +106,7 @@ describe("WP-07: Durable Task State Persistence & Milestone Recovery (INC-08, PE
   });
 
   test("PERS-001 & Multi-task: Task identity isolation", () => {
-    const manager = new DurableStateManager({ baseDir: tasksDir });
+    const manager = new DurableStateManager({ baseDir: tasksDir, workspacePaths: [WorkspacePath.fromSelectedWorkspace(gitRepoDir)] });
     const taskA = "task-alpha";
     const taskB = "task-beta";
 
@@ -158,7 +159,7 @@ describe("WP-07: Durable Task State Persistence & Milestone Recovery (INC-08, PE
   });
 
   test("PERS-002 & F-07: In-flight operation detected as interrupted on recovery (no false completion)", () => {
-    const manager = new DurableStateManager({ baseDir: tasksDir });
+    const manager = new DurableStateManager({ baseDir: tasksDir, workspacePaths: [WorkspacePath.fromSelectedWorkspace(gitRepoDir)] });
     const taskId = "task-interrupted";
 
     manager.saveTaskState({
@@ -202,7 +203,7 @@ describe("WP-07: Durable Task State Persistence & Milestone Recovery (INC-08, PE
   });
 
   test("PERS-003 & CAND-002: Candidate modified while offline invalidates validation receipt", () => {
-    const manager = new DurableStateManager({ baseDir: tasksDir });
+    const manager = new DurableStateManager({ baseDir: tasksDir, workspacePaths: [WorkspacePath.fromSelectedWorkspace(gitRepoDir)] });
     const tracker = new CandidateTracker();
     const taskId = "task-offline-mutation";
 
@@ -257,7 +258,7 @@ describe("WP-07: Durable Task State Persistence & Milestone Recovery (INC-08, PE
   });
 
   test("PERS-003: Candidate unchanged while offline preserves valid receipt", () => {
-    const manager = new DurableStateManager({ baseDir: tasksDir });
+    const manager = new DurableStateManager({ baseDir: tasksDir, workspacePaths: [WorkspacePath.fromSelectedWorkspace(gitRepoDir)] });
     const tracker = new CandidateTracker();
     const taskId = "task-offline-consistent";
 
@@ -303,7 +304,7 @@ describe("WP-07: Durable Task State Persistence & Milestone Recovery (INC-08, PE
   });
 
   test("PERS-004: Worktree binding recovery and missing worktree detection", () => {
-    const manager = new DurableStateManager({ baseDir: tasksDir });
+    const manager = new DurableStateManager({ baseDir: tasksDir, workspacePaths: [WorkspacePath.fromSelectedWorkspace(gitRepoDir)] });
     const taskId = "task-wt-binding";
     const nonExistentWorktree = path.join(tmpDir, "missing-worktree");
 
@@ -339,7 +340,7 @@ describe("WP-07: Durable Task State Persistence & Milestone Recovery (INC-08, PE
   });
 
   test("PERS-004 & Authority Invariance: Prior authority flags do not resurrect live authority", async () => {
-    const manager = new DurableStateManager({ baseDir: tasksDir });
+    const manager = new DurableStateManager({ baseDir: tasksDir, workspacePaths: [WorkspacePath.fromSelectedWorkspace(gitRepoDir)] });
     const taskId = "task-authority-invariance";
 
     manager.saveTaskState({
@@ -377,7 +378,7 @@ describe("WP-07: Durable Task State Persistence & Milestone Recovery (INC-08, PE
   });
 
   test("Corrupt state and unsupported schema fail closed", () => {
-    const manager = new DurableStateManager({ baseDir: tasksDir });
+    const manager = new DurableStateManager({ baseDir: tasksDir, workspacePaths: [WorkspacePath.fromSelectedWorkspace(gitRepoDir)] });
     const corruptTaskId = "task-corrupt";
     const corruptPath = manager.getStateFilePath(corruptTaskId);
 
@@ -422,7 +423,7 @@ describe("WP-07: Durable Task State Persistence & Milestone Recovery (INC-08, PE
 
     // 4. Workspace identity mismatch
     const wsMismatchId = "task-ws-mismatch";
-    manager.saveTaskState({
+    fs.writeFileSync(manager.getStateFilePath(wsMismatchId), JSON.stringify({
       schemaVersion: CURRENT_STATE_SCHEMA_VERSION,
       taskId: wsMismatchId,
       sessionId: wsMismatchId,
@@ -437,7 +438,7 @@ describe("WP-07: Durable Task State Persistence & Milestone Recovery (INC-08, PE
       milestones: [],
       validationReceipts: [],
       messages: [],
-    });
+    }));
     assert.throws(
       () => manager.loadTaskState(wsMismatchId, gitRepoDir),
       WorkspaceIdentityMismatchError
@@ -451,7 +452,7 @@ describe("WP-07: Durable Task State Persistence & Milestone Recovery (INC-08, PE
   });
 
   test("Restart idempotence: Repeated recovery produces stable deterministic state", () => {
-    const manager = new DurableStateManager({ baseDir: tasksDir });
+    const manager = new DurableStateManager({ baseDir: tasksDir, workspacePaths: [WorkspacePath.fromSelectedWorkspace(gitRepoDir)] });
     const tracker = new CandidateTracker();
     const taskId = "task-idempotent";
 
@@ -517,7 +518,8 @@ describe("WP-07: Durable Task State Persistence & Milestone Recovery (INC-08, PE
     };
     fs.writeFileSync(legacyPath, JSON.stringify(legacyData, null, 2));
 
-    const sessionManager = new SessionManager(sessionDir);
+    const selectedWorkspace = WorkspacePath.fromSelectedWorkspace(gitRepoDir);
+    const sessionManager = new SessionManager(sessionDir, () => selectedWorkspace);
     const loaded = sessionManager.loadSession(legacyId);
 
     assert.ok(loaded);

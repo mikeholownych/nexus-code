@@ -111,7 +111,7 @@ export class InteractiveRepl {
             model: this.config.model,
             messages,
             tokenStats: this.agent.getTokenStats(),
-        });
+        }, this.agent.getWorkspacePathIdentity());
     }
     loadHistory() {
         if (fs.existsSync(this.historyFile)) {

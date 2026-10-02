@@ -125,7 +125,7 @@ export class InteractiveRepl {
       model: this.config.model,
       messages,
       tokenStats: this.agent.getTokenStats(),
-    });
+    }, this.agent.getWorkspacePathIdentity());
   }
 
   private loadHistory(): void {

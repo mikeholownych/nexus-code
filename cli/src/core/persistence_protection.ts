@@ -1,6 +1,7 @@
 import * as fs from "node:fs";
 import { randomUUID } from "node:crypto";
 import { InformationFlowBoundary } from "./egress.js";
+import { WorkspacePath } from "./workspace_path.js";
 
 export class SensitivePersistenceError extends Error {
   constructor(destination: string) {
@@ -15,6 +16,58 @@ export class SensitivePersistenceError extends Error {
  */
 export function redactForPersistence<T>(value: T): T {
   return InformationFlowBoundary.getGlobalInstance().redactForDurablePersistence(value);
+}
+
+/**
+ * Protect a task-state record while preserving only the WorkspacePath supplied
+ * by the selected workspace model. Arbitrary objects receive no path exception.
+ */
+export function redactTaskStateForPersistence<T extends {
+  workspacePath: string;
+  workspace?: string;
+  worktreeBinding?: { worktreePath?: string } | null;
+}>(value: T, workspacePaths: readonly WorkspacePath[] = []): T {
+  if (workspacePaths.length === 0) return redactForPersistence(value);
+
+  for (const identity of workspacePaths) identity.assertCurrent();
+  const selectedWorkspace = workspacePaths.find((identity) => identity.matches(value.workspacePath));
+  if (!selectedWorkspace ||
+      (value.workspace !== undefined && !selectedWorkspace.matches(value.workspace))) {
+    throw new Error("Task state workspace identity does not match the selected workspace");
+  }
+
+  const boundary = InformationFlowBoundary.getGlobalInstance();
+  const typedPaths = [selectedWorkspace];
+  const worktreePath = value.worktreeBinding?.worktreePath;
+  if (worktreePath) {
+    const typedWorktree = workspacePaths.find((identity) => identity.matches(worktreePath));
+    if (typedWorktree) typedPaths.push(typedWorktree);
+  }
+  for (const identity of typedPaths) {
+    const identityFindings = boundary.classifyText(identity.value);
+    if (identityFindings.some((finding) => finding.classificationType !== "UNCERTAIN")) {
+      throw new Error("Workspace identity contains positively classified sensitive material");
+    }
+  }
+
+  // Mask only schema fields whose values match a validated WorkspacePath.
+  const masked = {
+    ...value,
+    workspacePath: "[NEXUS_TYPED_WORKSPACE_PATH]",
+    ...(value.workspace === undefined ? {} : { workspace: "[NEXUS_TYPED_WORKSPACE_PATH]" }),
+    ...(worktreePath && typedPaths.length > 1
+      ? { worktreeBinding: { ...value.worktreeBinding, worktreePath: "[NEXUS_TYPED_WORKSPACE_PATH]" } }
+      : {}),
+  };
+  const protectedValue = redactForPersistence(masked);
+  return {
+    ...protectedValue,
+    workspacePath: selectedWorkspace.value,
+    ...(value.workspace === undefined ? {} : { workspace: selectedWorkspace.value }),
+    ...(worktreePath && typedPaths.length > 1
+      ? { worktreeBinding: { ...protectedValue.worktreeBinding, worktreePath } }
+      : {}),
+  };
 }
 
 /**

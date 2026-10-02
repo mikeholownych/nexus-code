@@ -77,7 +77,7 @@ export class ApplicationCore extends EventEmitter {
     this.config = { ...config };
     this.agent = agent || new AutonomousAgent(this.config);
     this.stateManager = this.agent.getStateManager();
-    this.sessionManager = new SessionManager();
+    this.sessionManager = new SessionManager(undefined, () => this.agent.getWorkspacePathIdentity());
     this.checkpointManager = new CheckpointManager(this.config.workspace || process.cwd());
   }
 
@@ -236,7 +236,7 @@ export class ApplicationCore extends EventEmitter {
       candidateId: durableState.candidateId,
       validationReceipts: durableState.validationReceipts,
       worktreeBinding: durableState.worktreeBinding,
-    });
+    }, this.agent.getWorkspacePathIdentity());
 
     // Extract last assistant output
     let outputText = "";
