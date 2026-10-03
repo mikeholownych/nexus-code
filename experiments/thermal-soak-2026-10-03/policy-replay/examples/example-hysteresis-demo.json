@@ -1,0 +1,23 @@
+{
+  "name": "example-hysteresis-demo",
+  "status": "illustrative_example",
+  "description": "ILLUSTRATIVE EXAMPLE ONLY - not a recommendation. Values are chosen to straddle the observed soak plateaus so the tool's behaviour is visible; they are derived from no limit or safety analysis. Instantaneous activation, but clearing needs 3 C of hysteresis held for 10 s, to show the effect on flapping around a boundary.",
+  "rules": [
+    {
+      "id": "warn-75-h3",
+      "sensor_class": "any_sensor",
+      "state": "warning",
+      "threshold_c": 75,
+      "hysteresis_c": 3,
+      "clear_persistence_s": 10
+    },
+    {
+      "id": "crit-85-h3",
+      "sensor_class": "any_sensor",
+      "state": "critical",
+      "threshold_c": 85,
+      "hysteresis_c": 3,
+      "clear_persistence_s": 10
+    }
+  ]
+}

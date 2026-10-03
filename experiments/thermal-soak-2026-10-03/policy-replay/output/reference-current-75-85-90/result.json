@@ -1,0 +1,5474 @@
+{
+ "class_profile": {
+  "gpu0.any_sensor": {
+   "by_threshold": {
+    "75": {
+     "run_length_buckets": {
+      "1": 1,
+      "2-4": 2,
+      "30-59": 2,
+      "5-29": 5,
+      ">=60": 7
+     },
+     "runs": 17,
+     "samples_at_or_above": 1032,
+     "share_of_loaded_pct": 39.09
+    },
+    "85": {
+     "run_length_buckets": {
+      "1": 0,
+      "2-4": 0,
+      "30-59": 0,
+      "5-29": 0,
+      ">=60": 0
+     },
+     "runs": 0,
+     "samples_at_or_above": 0,
+     "share_of_loaded_pct": 0.0
+    },
+    "90": {
+     "run_length_buckets": {
+      "1": 0,
+      "2-4": 0,
+      "30-59": 0,
+      "5-29": 0,
+      ">=60": 0
+     },
+     "runs": 0,
+     "samples_at_or_above": 0,
+     "share_of_loaded_pct": 0.0
+    }
+   },
+   "loaded_samples": 2640,
+   "max": 76.0,
+   "mean": 72.77,
+   "min": 32.0,
+   "p50": 74.0,
+   "p99": 76.0,
+   "present_samples": 2640
+  },
+  "gpu0.memory_controller": {
+   "by_threshold": {
+    "75": {
+     "run_length_buckets": {
+      "1": 0,
+      "2-4": 0,
+      "30-59": 0,
+      "5-29": 0,
+      ">=60": 0
+     },
+     "runs": 0,
+     "samples_at_or_above": 0,
+     "share_of_loaded_pct": 0.0
+    },
+    "85": {
+     "run_length_buckets": {
+      "1": 0,
+      "2-4": 0,
+      "30-59": 0,
+      "5-29": 0,
+      ">=60": 0
+     },
+     "runs": 0,
+     "samples_at_or_above": 0,
+     "share_of_loaded_pct": 0.0
+    },
+    "90": {
+     "run_length_buckets": {
+      "1": 0,
+      "2-4": 0,
+      "30-59": 0,
+      "5-29": 0,
+      ">=60": 0
+     },
+     "runs": 0,
+     "samples_at_or_above": 0,
+     "share_of_loaded_pct": 0.0
+    }
+   },
+   "loaded_samples": 2640,
+   "max": 49.0,
+   "mean": 48.18,
+   "min": 22.0,
+   "p50": 49.0,
+   "p99": 49.0,
+   "present_samples": 2640
+  },
+  "gpu0.package": {
+   "by_threshold": {
+    "75": {
+     "run_length_buckets": {
+      "1": 0,
+      "2-4": 0,
+      "30-59": 0,
+      "5-29": 0,
+      ">=60": 0
+     },
+     "runs": 0,
+     "samples_at_or_above": 0,
+     "share_of_loaded_pct": 0.0
+    },
+    "85": {
+     "run_length_buckets": {
+      "1": 0,
+      "2-4": 0,
+      "30-59": 0,
+      "5-29": 0,
+      ">=60": 0
+     },
+     "runs": 0,
+     "samples_at_or_above": 0,
+     "share_of_loaded_pct": 0.0
+    },
+    "90": {
+     "run_length_buckets": {
+      "1": 0,
+      "2-4": 0,
+      "30-59": 0,
+      "5-29": 0,
+      ">=60": 0
+     },
+     "runs": 0,
+     "samples_at_or_above": 0,
+     "share_of_loaded_pct": 0.0
+    }
+   },
+   "loaded_samples": 2640,
+   "max": 67.0,
+   "mean": 64.77,
+   "min": 30.0,
+   "p50": 66.0,
+   "p99": 66.0,
+   "present_samples": 2640
+  },
+  "gpu0.pcie": {
+   "by_threshold": {
+    "75": {
+     "run_length_buckets": {
+      "1": 0,
+      "2-4": 0,
+      "30-59": 0,
+      "5-29": 0,
+      ">=60": 0
+     },
+     "runs": 0,
+     "samples_at_or_above": 0,
+     "share_of_loaded_pct": 0.0
+    },
+    "85": {
+     "run_length_buckets": {
+      "1": 0,
+      "2-4": 0,
+      "30-59": 0,
+      "5-29": 0,
+      ">=60": 0
+     },
+     "runs": 0,
+     "samples_at_or_above": 0,
+     "share_of_loaded_pct": 0.0
+    },
+    "90": {
+     "run_length_buckets": {
+      "1": 0,
+      "2-4": 0,
+      "30-59": 0,
+      "5-29": 0,
+      ">=60": 0
+     },
+     "runs": 0,
+     "samples_at_or_above": 0,
+     "share_of_loaded_pct": 0.0
+    }
+   },
+   "loaded_samples": 2640,
+   "max": 67.0,
+   "mean": 65.51,
+   "min": 32.0,
+   "p50": 66.0,
+   "p99": 67.0,
+   "present_samples": 2640
+  },
+  "gpu0.vram": {
+   "by_threshold": {
+    "75": {
+     "run_length_buckets": {
+      "1": 1,
+      "2-4": 2,
+      "30-59": 2,
+      "5-29": 5,
+      ">=60": 7
+     },
+     "runs": 17,
+     "samples_at_or_above": 1032,
+     "share_of_loaded_pct": 39.09
+    },
+    "85": {
+     "run_length_buckets": {
+      "1": 0,
+      "2-4": 0,
+      "30-59": 0,
+      "5-29": 0,
+      ">=60": 0
+     },
+     "runs": 0,
+     "samples_at_or_above": 0,
+     "share_of_loaded_pct": 0.0
+    },
+    "90": {
+     "run_length_buckets": {
+      "1": 0,
+      "2-4": 0,
+      "30-59": 0,
+      "5-29": 0,
+      ">=60": 0
+     },
+     "runs": 0,
+     "samples_at_or_above": 0,
+     "share_of_loaded_pct": 0.0
+    }
+   },
+   "loaded_samples": 2640,
+   "max": 76.0,
+   "mean": 72.76,
+   "min": 32.0,
+   "p50": 74.0,
+   "p99": 76.0,
+   "present_samples": 2640
+  },
+  "gpu0.vram_hottest_channel": {
+   "by_threshold": {
+    "75": {
+     "run_length_buckets": {
+      "1": 1,
+      "2-4": 3,
+      "30-59": 2,
+      "5-29": 5,
+      ">=60": 7
+     },
+     "runs": 18,
+     "samples_at_or_above": 1031,
+     "share_of_loaded_pct": 39.05
+    },
+    "85": {
+     "run_length_buckets": {
+      "1": 0,
+      "2-4": 0,
+      "30-59": 0,
+      "5-29": 0,
+      ">=60": 0
+     },
+     "runs": 0,
+     "samples_at_or_above": 0,
+     "share_of_loaded_pct": 0.0
+    },
+    "90": {
+     "run_length_buckets": {
+      "1": 0,
+      "2-4": 0,
+      "30-59": 0,
+      "5-29": 0,
+      ">=60": 0
+     },
+     "runs": 0,
+     "samples_at_or_above": 0,
+     "share_of_loaded_pct": 0.0
+    }
+   },
+   "loaded_samples": 2640,
+   "max": 76.0,
+   "mean": 72.76,
+   "min": 32.0,
+   "p50": 74.0,
+   "p99": 76.0,
+   "present_samples": 2640
+  },
+  "gpu1.any_sensor": {
+   "by_threshold": {
+    "75": {
+     "run_length_buckets": {
+      "1": 0,
+      "2-4": 0,
+      "30-59": 4,
+      "5-29": 0,
+      ">=60": 6
+     },
+     "runs": 10,
+     "samples_at_or_above": 2523,
+     "share_of_loaded_pct": 95.57
+    },
+    "85": {
+     "run_length_buckets": {
+      "1": 0,
+      "2-4": 0,
+      "30-59": 0,
+      "5-29": 0,
+      ">=60": 0
+     },
+     "runs": 0,
+     "samples_at_or_above": 0,
+     "share_of_loaded_pct": 0.0
+    },
+    "90": {
+     "run_length_buckets": {
+      "1": 0,
+      "2-4": 0,
+      "30-59": 0,
+      "5-29": 0,
+      ">=60": 0
+     },
+     "runs": 0,
+     "samples_at_or_above": 0,
+     "share_of_loaded_pct": 0.0
+    }
+   },
+   "loaded_samples": 2640,
+   "max": 84.0,
+   "mean": 80.23,
+   "min": 34.0,
+   "p50": 80.0,
+   "p99": 84.0,
+   "present_samples": 2640
+  },
+  "gpu1.memory_controller": {
+   "by_threshold": {
+    "75": {
+     "run_length_buckets": {
+      "1": 0,
+      "2-4": 0,
+      "30-59": 0,
+      "5-29": 0,
+      ">=60": 0
+     },
+     "runs": 0,
+     "samples_at_or_above": 0,
+     "share_of_loaded_pct": 0.0
+    },
+    "85": {
+     "run_length_buckets": {
+      "1": 0,
+      "2-4": 0,
+      "30-59": 0,
+      "5-29": 0,
+      ">=60": 0
+     },
+     "runs": 0,
+     "samples_at_or_above": 0,
+     "share_of_loaded_pct": 0.0
+    },
+    "90": {
+     "run_length_buckets": {
+      "1": 0,
+      "2-4": 0,
+      "30-59": 0,
+      "5-29": 0,
+      ">=60": 0
+     },
+     "runs": 0,
+     "samples_at_or_above": 0,
+     "share_of_loaded_pct": 0.0
+    }
+   },
+   "loaded_samples": 2640,
+   "max": 51.0,
+   "mean": 50.42,
+   "min": 23.0,
+   "p50": 51.0,
+   "p99": 51.0,
+   "present_samples": 2640
+  },
+  "gpu1.package": {
+   "by_threshold": {
+    "75": {
+     "run_length_buckets": {
+      "1": 0,
+      "2-4": 0,
+      "30-59": 0,
+      "5-29": 0,
+      ">=60": 0
+     },
+     "runs": 0,
+     "samples_at_or_above": 0,
+     "share_of_loaded_pct": 0.0
+    },
+    "85": {
+     "run_length_buckets": {
+      "1": 0,
+      "2-4": 0,
+      "30-59": 0,
+      "5-29": 0,
+      ">=60": 0
+     },
+     "runs": 0,
+     "samples_at_or_above": 0,
+     "share_of_loaded_pct": 0.0
+    },
+    "90": {
+     "run_length_buckets": {
+      "1": 0,
+      "2-4": 0,
+      "30-59": 0,
+      "5-29": 0,
+      ">=60": 0
+     },
+     "runs": 0,
+     "samples_at_or_above": 0,
+     "share_of_loaded_pct": 0.0
+    }
+   },
+   "loaded_samples": 2640,
+   "max": 70.0,
+   "mean": 68.55,
+   "min": 31.0,
+   "p50": 69.0,
+   "p99": 70.0,
+   "present_samples": 2640
+  },
+  "gpu1.pcie": {
+   "by_threshold": {
+    "75": {
+     "run_length_buckets": {
+      "1": 0,
+      "2-4": 0,
+      "30-59": 0,
+      "5-29": 0,
+      ">=60": 0
+     },
+     "runs": 0,
+     "samples_at_or_above": 0,
+     "share_of_loaded_pct": 0.0
+    },
+    "85": {
+     "run_length_buckets": {
+      "1": 0,
+      "2-4": 0,
+      "30-59": 0,
+      "5-29": 0,
+      ">=60": 0
+     },
+     "runs": 0,
+     "samples_at_or_above": 0,
+     "share_of_loaded_pct": 0.0
+    },
+    "90": {
+     "run_length_buckets": {
+      "1": 0,
+      "2-4": 0,
+      "30-59": 0,
+      "5-29": 0,
+      ">=60": 0
+     },
+     "runs": 0,
+     "samples_at_or_above": 0,
+     "share_of_loaded_pct": 0.0
+    }
+   },
+   "loaded_samples": 2640,
+   "max": 70.0,
+   "mean": 68.81,
+   "min": 32.0,
+   "p50": 69.0,
+   "p99": 70.0,
+   "present_samples": 2640
+  },
+  "gpu1.vram": {
+   "by_threshold": {
+    "75": {
+     "run_length_buckets": {
+      "1": 0,
+      "2-4": 0,
+      "30-59": 4,
+      "5-29": 0,
+      ">=60": 6
+     },
+     "runs": 10,
+     "samples_at_or_above": 2523,
+     "share_of_loaded_pct": 95.57
+    },
+    "85": {
+     "run_length_buckets": {
+      "1": 0,
+      "2-4": 0,
+      "30-59": 0,
+      "5-29": 0,
+      ">=60": 0
+     },
+     "runs": 0,
+     "samples_at_or_above": 0,
+     "share_of_loaded_pct": 0.0
+    },
+    "90": {
+     "run_length_buckets": {
+      "1": 0,
+      "2-4": 0,
+      "30-59": 0,
+      "5-29": 0,
+      ">=60": 0
+     },
+     "runs": 0,
+     "samples_at_or_above": 0,
+     "share_of_loaded_pct": 0.0
+    }
+   },
+   "loaded_samples": 2640,
+   "max": 84.0,
+   "mean": 80.21,
+   "min": 34.0,
+   "p50": 80.0,
+   "p99": 84.0,
+   "present_samples": 2640
+  },
+  "gpu1.vram_hottest_channel": {
+   "by_threshold": {
+    "75": {
+     "run_length_buckets": {
+      "1": 0,
+      "2-4": 0,
+      "30-59": 4,
+      "5-29": 0,
+      ">=60": 6
+     },
+     "runs": 10,
+     "samples_at_or_above": 2523,
+     "share_of_loaded_pct": 95.57
+    },
+    "85": {
+     "run_length_buckets": {
+      "1": 0,
+      "2-4": 0,
+      "30-59": 0,
+      "5-29": 0,
+      ">=60": 0
+     },
+     "runs": 0,
+     "samples_at_or_above": 0,
+     "share_of_loaded_pct": 0.0
+    },
+    "90": {
+     "run_length_buckets": {
+      "1": 0,
+      "2-4": 0,
+      "30-59": 0,
+      "5-29": 0,
+      ">=60": 0
+     },
+     "runs": 0,
+     "samples_at_or_above": 0,
+     "share_of_loaded_pct": 0.0
+    }
+   },
+   "loaded_samples": 2640,
+   "max": 84.0,
+   "mean": 80.22,
+   "min": 34.0,
+   "p50": 80.0,
+   "p99": 84.0,
+   "present_samples": 2640
+  }
+ },
+ "combined": {
+  "gpu0": {
+   "first_transition_t": 400.001,
+   "flaps": 10,
+   "last_transition_t": 1456.001,
+   "time_in_state_by_phase_s": {
+    "abort": {},
+    "critical": {},
+    "ok": {
+     "baseline": 120.0,
+     "cooldown": 480.0,
+     "decode": 303.0,
+     "done": 3.0,
+     "init": 1.0,
+     "prefill": 1305.0
+    },
+    "warning": {
+     "decode": 1017.0,
+     "prefill": 15.0
+    }
+   },
+   "time_in_state_s": {
+    "abort": 0.0,
+    "critical": 0.0,
+    "ok": 2212.0,
+    "warning": 1032.0
+   },
+   "transition_count": 34,
+   "transitions": [
+    {
+     "from": "ok",
+     "phase": "decode",
+     "raw_line": 401,
+     "raw_observations": [
+      {
+       "condition_run": {
+        "count": 1,
+        "first_index": 400,
+        "last_index": 400,
+        "samples": [
+         {
+          "raw_line": 401,
+          "sample_index": 400,
+          "source": "vram",
+          "t": 400.001,
+          "value": 76.0
+         }
+        ]
+       },
+       "coverage": null,
+       "event": "activated",
+       "gpu": "gpu0",
+       "phase": "decode",
+       "raw_line": 401,
+       "rule": "warn-75",
+       "sample_index": 400,
+       "source": "vram",
+       "t": 400.001,
+       "value": 76.0
+      }
+     ],
+     "rule_events": [
+      "warn-75:activated"
+     ],
+     "sample_index": 400,
+     "t": 400.001,
+     "to": "warning"
+    },
+    {
+     "from": "warning",
+     "phase": "decode",
+     "raw_line": 402,
+     "raw_observations": [
+      {
+       "clear_level_c": 75.0,
+       "clear_run": {
+        "count": 1,
+        "first_index": 401,
+        "last_index": 401,
+        "samples": [
+         {
+          "raw_line": 402,
+          "sample_index": 401,
+          "source": "vram",
+          "t": 401.001,
+          "value": 74.0
+         }
+        ]
+       },
+       "event": "cleared",
+       "gpu": "gpu0",
+       "phase": "decode",
+       "raw_line": 402,
+       "rule": "warn-75",
+       "sample_index": 401,
+       "source": "vram",
+       "t": 401.001,
+       "value": 74.0
+      }
+     ],
+     "rule_events": [
+      "warn-75:cleared"
+     ],
+     "sample_index": 401,
+     "t": 401.001,
+     "to": "ok"
+    },
+    {
+     "from": "ok",
+     "phase": "decode",
+     "raw_line": 410,
+     "raw_observations": [
+      {
+       "condition_run": {
+        "count": 1,
+        "first_index": 409,
+        "last_index": 409,
+        "samples": [
+         {
+          "raw_line": 410,
+          "sample_index": 409,
+          "source": "vram",
+          "t": 409.001,
+          "value": 76.0
+         }
+        ]
+       },
+       "coverage": null,
+       "event": "activated",
+       "gpu": "gpu0",
+       "phase": "decode",
+       "raw_line": 410,
+       "rule": "warn-75",
+       "sample_index": 409,
+       "source": "vram",
+       "t": 409.001,
+       "value": 76.0
+      }
+     ],
+     "rule_events": [
+      "warn-75:activated"
+     ],
+     "sample_index": 409,
+     "t": 409.001,
+     "to": "warning"
+    },
+    {
+     "from": "warning",
+     "phase": "decode",
+     "raw_line": 412,
+     "raw_observations": [
+      {
+       "clear_level_c": 75.0,
+       "clear_run": {
+        "count": 1,
+        "first_index": 411,
+        "last_index": 411,
+        "samples": [
+         {
+          "raw_line": 412,
+          "sample_index": 411,
+          "source": "vram",
+          "t": 411.001,
+          "value": 74.0
+         }
+        ]
+       },
+       "event": "cleared",
+       "gpu": "gpu0",
+       "phase": "decode",
+       "raw_line": 412,
+       "rule": "warn-75",
+       "sample_index": 411,
+       "source": "vram",
+       "t": 411.001,
+       "value": 74.0
+      }
+     ],
+     "rule_events": [
+      "warn-75:cleared"
+     ],
+     "sample_index": 411,
+     "t": 411.001,
+     "to": "ok"
+    },
+    {
+     "from": "ok",
+     "phase": "decode",
+     "raw_line": 413,
+     "raw_observations": [
+      {
+       "condition_run": {
+        "count": 1,
+        "first_index": 412,
+        "last_index": 412,
+        "samples": [
+         {
+          "raw_line": 413,
+          "sample_index": 412,
+          "source": "vram",
+          "t": 412.001,
+          "value": 76.0
+         }
+        ]
+       },
+       "coverage": null,
+       "event": "activated",
+       "gpu": "gpu0",
+       "phase": "decode",
+       "raw_line": 413,
+       "rule": "warn-75",
+       "sample_index": 412,
+       "source": "vram",
+       "t": 412.001,
+       "value": 76.0
+      }
+     ],
+     "rule_events": [
+      "warn-75:activated"
+     ],
+     "sample_index": 412,
+     "t": 412.001,
+     "to": "warning"
+    },
+    {
+     "from": "warning",
+     "phase": "decode",
+     "raw_line": 426,
+     "raw_observations": [
+      {
+       "clear_level_c": 75.0,
+       "clear_run": {
+        "count": 1,
+        "first_index": 425,
+        "last_index": 425,
+        "samples": [
+         {
+          "raw_line": 426,
+          "sample_index": 425,
+          "source": "vram",
+          "t": 425.001,
+          "value": 74.0
+         }
+        ]
+       },
+       "event": "cleared",
+       "gpu": "gpu0",
+       "phase": "decode",
+       "raw_line": 426,
+       "rule": "warn-75",
+       "sample_index": 425,
+       "source": "vram",
+       "t": 425.001,
+       "value": 74.0
+      }
+     ],
+     "rule_events": [
+      "warn-75:cleared"
+     ],
+     "sample_index": 425,
+     "t": 425.001,
+     "to": "ok"
+    },
+    {
+     "from": "ok",
+     "phase": "decode",
+     "raw_line": 427,
+     "raw_observations": [
+      {
+       "condition_run": {
+        "count": 1,
+        "first_index": 426,
+        "last_index": 426,
+        "samples": [
+         {
+          "raw_line": 427,
+          "sample_index": 426,
+          "source": "vram",
+          "t": 426.001,
+          "value": 76.0
+         }
+        ]
+       },
+       "coverage": null,
+       "event": "activated",
+       "gpu": "gpu0",
+       "phase": "decode",
+       "raw_line": 427,
+       "rule": "warn-75",
+       "sample_index": 426,
+       "source": "vram",
+       "t": 426.001,
+       "value": 76.0
+      }
+     ],
+     "rule_events": [
+      "warn-75:activated"
+     ],
+     "sample_index": 426,
+     "t": 426.001,
+     "to": "warning"
+    },
+    {
+     "from": "warning",
+     "phase": "decode",
+     "raw_line": 443,
+     "raw_observations": [
+      {
+       "clear_level_c": 75.0,
+       "clear_run": {
+        "count": 1,
+        "first_index": 442,
+        "last_index": 442,
+        "samples": [
+         {
+          "raw_line": 443,
+          "sample_index": 442,
+          "source": "vram",
+          "t": 442.001,
+          "value": 74.0
+         }
+        ]
+       },
+       "event": "cleared",
+       "gpu": "gpu0",
+       "phase": "decode",
+       "raw_line": 443,
+       "rule": "warn-75",
+       "sample_index": 442,
+       "source": "vram",
+       "t": 442.001,
+       "value": 74.0
+      }
+     ],
+     "rule_events": [
+      "warn-75:cleared"
+     ],
+     "sample_index": 442,
+     "t": 442.001,
+     "to": "ok"
+    },
+    {
+     "from": "ok",
+     "phase": "decode",
+     "raw_line": 444,
+     "raw_observations": [
+      {
+       "condition_run": {
+        "count": 1,
+        "first_index": 443,
+        "last_index": 443,
+        "samples": [
+         {
+          "raw_line": 444,
+          "sample_index": 443,
+          "source": "vram",
+          "t": 443.001,
+          "value": 76.0
+         }
+        ]
+       },
+       "coverage": null,
+       "event": "activated",
+       "gpu": "gpu0",
+       "phase": "decode",
+       "raw_line": 444,
+       "rule": "warn-75",
+       "sample_index": 443,
+       "source": "vram",
+       "t": 443.001,
+       "value": 76.0
+      }
+     ],
+     "rule_events": [
+      "warn-75:activated"
+     ],
+     "sample_index": 443,
+     "t": 443.001,
+     "to": "warning"
+    },
+    {
+     "from": "warning",
+     "phase": "decode",
+     "raw_line": 473,
+     "raw_observations": [
+      {
+       "clear_level_c": 75.0,
+       "clear_run": {
+        "count": 1,
+        "first_index": 472,
+        "last_index": 472,
+        "samples": [
+         {
+          "raw_line": 473,
+          "sample_index": 472,
+          "source": "vram",
+          "t": 472.001,
+          "value": 74.0
+         }
+        ]
+       },
+       "event": "cleared",
+       "gpu": "gpu0",
+       "phase": "decode",
+       "raw_line": 473,
+       "rule": "warn-75",
+       "sample_index": 472,
+       "source": "vram",
+       "t": 472.001,
+       "value": 74.0
+      }
+     ],
+     "rule_events": [
+      "warn-75:cleared"
+     ],
+     "sample_index": 472,
+     "t": 472.001,
+     "to": "ok"
+    },
+    {
+     "from": "ok",
+     "phase": "decode",
+     "raw_line": 475,
+     "raw_observations": [
+      {
+       "condition_run": {
+        "count": 1,
+        "first_index": 474,
+        "last_index": 474,
+        "samples": [
+         {
+          "raw_line": 475,
+          "sample_index": 474,
+          "source": "vram",
+          "t": 474.001,
+          "value": 76.0
+         }
+        ]
+       },
+       "coverage": null,
+       "event": "activated",
+       "gpu": "gpu0",
+       "phase": "decode",
+       "raw_line": 475,
+       "rule": "warn-75",
+       "sample_index": 474,
+       "source": "vram",
+       "t": 474.001,
+       "value": 76.0
+      }
+     ],
+     "rule_events": [
+      "warn-75:activated"
+     ],
+     "sample_index": 474,
+     "t": 474.001,
+     "to": "warning"
+    },
+    {
+     "from": "warning",
+     "phase": "decode",
+     "raw_line": 478,
+     "raw_observations": [
+      {
+       "clear_level_c": 75.0,
+       "clear_run": {
+        "count": 1,
+        "first_index": 477,
+        "last_index": 477,
+        "samples": [
+         {
+          "raw_line": 478,
+          "sample_index": 477,
+          "source": "vram",
+          "t": 477.001,
+          "value": 74.0
+         }
+        ]
+       },
+       "event": "cleared",
+       "gpu": "gpu0",
+       "phase": "decode",
+       "raw_line": 478,
+       "rule": "warn-75",
+       "sample_index": 477,
+       "source": "vram",
+       "t": 477.001,
+       "value": 74.0
+      }
+     ],
+     "rule_events": [
+      "warn-75:cleared"
+     ],
+     "sample_index": 477,
+     "t": 477.001,
+     "to": "ok"
+    },
+    {
+     "from": "ok",
+     "phase": "decode",
+     "raw_line": 479,
+     "raw_observations": [
+      {
+       "condition_run": {
+        "count": 1,
+        "first_index": 478,
+        "last_index": 478,
+        "samples": [
+         {
+          "raw_line": 479,
+          "sample_index": 478,
+          "source": "vram",
+          "t": 478.001,
+          "value": 76.0
+         }
+        ]
+       },
+       "coverage": null,
+       "event": "activated",
+       "gpu": "gpu0",
+       "phase": "decode",
+       "raw_line": 479,
+       "rule": "warn-75",
+       "sample_index": 478,
+       "source": "vram",
+       "t": 478.001,
+       "value": 76.0
+      }
+     ],
+     "rule_events": [
+      "warn-75:activated"
+     ],
+     "sample_index": 478,
+     "t": 478.001,
+     "to": "warning"
+    },
+    {
+     "from": "warning",
+     "phase": "decode",
+     "raw_line": 645,
+     "raw_observations": [
+      {
+       "clear_level_c": 75.0,
+       "clear_run": {
+        "count": 1,
+        "first_index": 644,
+        "last_index": 644,
+        "samples": [
+         {
+          "raw_line": 645,
+          "sample_index": 644,
+          "source": "vram",
+          "t": 644.001,
+          "value": 74.0
+         }
+        ]
+       },
+       "event": "cleared",
+       "gpu": "gpu0",
+       "phase": "decode",
+       "raw_line": 645,
+       "rule": "warn-75",
+       "sample_index": 644,
+       "source": "vram",
+       "t": 644.001,
+       "value": 74.0
+      }
+     ],
+     "rule_events": [
+      "warn-75:cleared"
+     ],
+     "sample_index": 644,
+     "t": 644.001,
+     "to": "ok"
+    },
+    {
+     "from": "ok",
+     "phase": "decode",
+     "raw_line": 646,
+     "raw_observations": [
+      {
+       "condition_run": {
+        "count": 1,
+        "first_index": 645,
+        "last_index": 645,
+        "samples": [
+         {
+          "raw_line": 646,
+          "sample_index": 645,
+          "source": "vram",
+          "t": 645.001,
+          "value": 76.0
+         }
+        ]
+       },
+       "coverage": null,
+       "event": "activated",
+       "gpu": "gpu0",
+       "phase": "decode",
+       "raw_line": 646,
+       "rule": "warn-75",
+       "sample_index": 645,
+       "source": "vram",
+       "t": 645.001,
+       "value": 76.0
+      }
+     ],
+     "rule_events": [
+      "warn-75:activated"
+     ],
+     "sample_index": 645,
+     "t": 645.001,
+     "to": "warning"
+    },
+    {
+     "from": "warning",
+     "phase": "decode",
+     "raw_line": 918,
+     "raw_observations": [
+      {
+       "clear_level_c": 75.0,
+       "clear_run": {
+        "count": 1,
+        "first_index": 917,
+        "last_index": 917,
+        "samples": [
+         {
+          "raw_line": 918,
+          "sample_index": 917,
+          "source": "vram",
+          "t": 917.001,
+          "value": 74.0
+         }
+        ]
+       },
+       "event": "cleared",
+       "gpu": "gpu0",
+       "phase": "decode",
+       "raw_line": 918,
+       "rule": "warn-75",
+       "sample_index": 917,
+       "source": "vram",
+       "t": 917.001,
+       "value": 74.0
+      }
+     ],
+     "rule_events": [
+      "warn-75:cleared"
+     ],
+     "sample_index": 917,
+     "t": 917.001,
+     "to": "ok"
+    },
+    {
+     "from": "ok",
+     "phase": "decode",
+     "raw_line": 919,
+     "raw_observations": [
+      {
+       "condition_run": {
+        "count": 1,
+        "first_index": 918,
+        "last_index": 918,
+        "samples": [
+         {
+          "raw_line": 919,
+          "sample_index": 918,
+          "source": "vram",
+          "t": 918.001,
+          "value": 76.0
+         }
+        ]
+       },
+       "coverage": null,
+       "event": "activated",
+       "gpu": "gpu0",
+       "phase": "decode",
+       "raw_line": 919,
+       "rule": "warn-75",
+       "sample_index": 918,
+       "source": "vram",
+       "t": 918.001,
+       "value": 76.0
+      }
+     ],
+     "rule_events": [
+      "warn-75:activated"
+     ],
+     "sample_index": 918,
+     "t": 918.001,
+     "to": "warning"
+    },
+    {
+     "from": "warning",
+     "phase": "decode",
+     "raw_line": 986,
+     "raw_observations": [
+      {
+       "clear_level_c": 75.0,
+       "clear_run": {
+        "count": 1,
+        "first_index": 985,
+        "last_index": 985,
+        "samples": [
+         {
+          "raw_line": 986,
+          "sample_index": 985,
+          "source": "vram",
+          "t": 985.001,
+          "value": 74.0
+         }
+        ]
+       },
+       "event": "cleared",
+       "gpu": "gpu0",
+       "phase": "decode",
+       "raw_line": 986,
+       "rule": "warn-75",
+       "sample_index": 985,
+       "source": "vram",
+       "t": 985.001,
+       "value": 74.0
+      }
+     ],
+     "rule_events": [
+      "warn-75:cleared"
+     ],
+     "sample_index": 985,
+     "t": 985.001,
+     "to": "ok"
+    },
+    {
+     "from": "ok",
+     "phase": "decode",
+     "raw_line": 987,
+     "raw_observations": [
+      {
+       "condition_run": {
+        "count": 1,
+        "first_index": 986,
+        "last_index": 986,
+        "samples": [
+         {
+          "raw_line": 987,
+          "sample_index": 986,
+          "source": "vram",
+          "t": 986.001,
+          "value": 76.0
+         }
+        ]
+       },
+       "coverage": null,
+       "event": "activated",
+       "gpu": "gpu0",
+       "phase": "decode",
+       "raw_line": 987,
+       "rule": "warn-75",
+       "sample_index": 986,
+       "source": "vram",
+       "t": 986.001,
+       "value": 76.0
+      }
+     ],
+     "rule_events": [
+      "warn-75:activated"
+     ],
+     "sample_index": 986,
+     "t": 986.001,
+     "to": "warning"
+    },
+    {
+     "from": "warning",
+     "phase": "decode",
+     "raw_line": 1004,
+     "raw_observations": [
+      {
+       "clear_level_c": 75.0,
+       "clear_run": {
+        "count": 1,
+        "first_index": 1003,
+        "last_index": 1003,
+        "samples": [
+         {
+          "raw_line": 1004,
+          "sample_index": 1003,
+          "source": "vram",
+          "t": 1003.001,
+          "value": 74.0
+         }
+        ]
+       },
+       "event": "cleared",
+       "gpu": "gpu0",
+       "phase": "decode",
+       "raw_line": 1004,
+       "rule": "warn-75",
+       "sample_index": 1003,
+       "source": "vram",
+       "t": 1003.001,
+       "value": 74.0
+      }
+     ],
+     "rule_events": [
+      "warn-75:cleared"
+     ],
+     "sample_index": 1003,
+     "t": 1003.001,
+     "to": "ok"
+    },
+    {
+     "from": "ok",
+     "phase": "decode",
+     "raw_line": 1005,
+     "raw_observations": [
+      {
+       "condition_run": {
+        "count": 1,
+        "first_index": 1004,
+        "last_index": 1004,
+        "samples": [
+         {
+          "raw_line": 1005,
+          "sample_index": 1004,
+          "source": "vram",
+          "t": 1004.001,
+          "value": 76.0
+         }
+        ]
+       },
+       "coverage": null,
+       "event": "activated",
+       "gpu": "gpu0",
+       "phase": "decode",
+       "raw_line": 1005,
+       "rule": "warn-75",
+       "sample_index": 1004,
+       "source": "vram",
+       "t": 1004.001,
+       "value": 76.0
+      }
+     ],
+     "rule_events": [
+      "warn-75:activated"
+     ],
+     "sample_index": 1004,
+     "t": 1004.001,
+     "to": "warning"
+    },
+    {
+     "from": "warning",
+     "phase": "decode",
+     "raw_line": 1099,
+     "raw_observations": [
+      {
+       "clear_level_c": 75.0,
+       "clear_run": {
+        "count": 1,
+        "first_index": 1098,
+        "last_index": 1098,
+        "samples": [
+         {
+          "raw_line": 1099,
+          "sample_index": 1098,
+          "source": "vram",
+          "t": 1098.001,
+          "value": 74.0
+         }
+        ]
+       },
+       "event": "cleared",
+       "gpu": "gpu0",
+       "phase": "decode",
+       "raw_line": 1099,
+       "rule": "warn-75",
+       "sample_index": 1098,
+       "source": "vram",
+       "t": 1098.001,
+       "value": 74.0
+      }
+     ],
+     "rule_events": [
+      "warn-75:cleared"
+     ],
+     "sample_index": 1098,
+     "t": 1098.001,
+     "to": "ok"
+    },
+    {
+     "from": "ok",
+     "phase": "decode",
+     "raw_line": 1100,
+     "raw_observations": [
+      {
+       "condition_run": {
+        "count": 1,
+        "first_index": 1099,
+        "last_index": 1099,
+        "samples": [
+         {
+          "raw_line": 1100,
+          "sample_index": 1099,
+          "source": "vram",
+          "t": 1099.001,
+          "value": 76.0
+         }
+        ]
+       },
+       "coverage": null,
+       "event": "activated",
+       "gpu": "gpu0",
+       "phase": "decode",
+       "raw_line": 1100,
+       "rule": "warn-75",
+       "sample_index": 1099,
+       "source": "vram",
+       "t": 1099.001,
+       "value": 76.0
+      }
+     ],
+     "rule_events": [
+      "warn-75:activated"
+     ],
+     "sample_index": 1099,
+     "t": 1099.001,
+     "to": "warning"
+    },
+    {
+     "from": "warning",
+     "phase": "decode",
+     "raw_line": 1184,
+     "raw_observations": [
+      {
+       "clear_level_c": 75.0,
+       "clear_run": {
+        "count": 1,
+        "first_index": 1183,
+        "last_index": 1183,
+        "samples": [
+         {
+          "raw_line": 1184,
+          "sample_index": 1183,
+          "source": "vram",
+          "t": 1183.001,
+          "value": 74.0
+         }
+        ]
+       },
+       "event": "cleared",
+       "gpu": "gpu0",
+       "phase": "decode",
+       "raw_line": 1184,
+       "rule": "warn-75",
+       "sample_index": 1183,
+       "source": "vram",
+       "t": 1183.001,
+       "value": 74.0
+      }
+     ],
+     "rule_events": [
+      "warn-75:cleared"
+     ],
+     "sample_index": 1183,
+     "t": 1183.001,
+     "to": "ok"
+    },
+    {
+     "from": "ok",
+     "phase": "decode",
+     "raw_line": 1185,
+     "raw_observations": [
+      {
+       "condition_run": {
+        "count": 1,
+        "first_index": 1184,
+        "last_index": 1184,
+        "samples": [
+         {
+          "raw_line": 1185,
+          "sample_index": 1184,
+          "source": "vram",
+          "t": 1184.001,
+          "value": 76.0
+         }
+        ]
+       },
+       "coverage": null,
+       "event": "activated",
+       "gpu": "gpu0",
+       "phase": "decode",
+       "raw_line": 1185,
+       "rule": "warn-75",
+       "sample_index": 1184,
+       "source": "vram",
+       "t": 1184.001,
+       "value": 76.0
+      }
+     ],
+     "rule_events": [
+      "warn-75:activated"
+     ],
+     "sample_index": 1184,
+     "t": 1184.001,
+     "to": "warning"
+    },
+    {
+     "from": "warning",
+     "phase": "decode",
+     "raw_line": 1291,
+     "raw_observations": [
+      {
+       "clear_level_c": 75.0,
+       "clear_run": {
+        "count": 1,
+        "first_index": 1290,
+        "last_index": 1290,
+        "samples": [
+         {
+          "raw_line": 1291,
+          "sample_index": 1290,
+          "source": "vram",
+          "t": 1290.001,
+          "value": 74.0
+         }
+        ]
+       },
+       "event": "cleared",
+       "gpu": "gpu0",
+       "phase": "decode",
+       "raw_line": 1291,
+       "rule": "warn-75",
+       "sample_index": 1290,
+       "source": "vram",
+       "t": 1290.001,
+       "value": 74.0
+      }
+     ],
+     "rule_events": [
+      "warn-75:cleared"
+     ],
+     "sample_index": 1290,
+     "t": 1290.001,
+     "to": "ok"
+    },
+    {
+     "from": "ok",
+     "phase": "decode",
+     "raw_line": 1292,
+     "raw_observations": [
+      {
+       "condition_run": {
+        "count": 1,
+        "first_index": 1291,
+        "last_index": 1291,
+        "samples": [
+         {
+          "raw_line": 1292,
+          "sample_index": 1291,
+          "source": "vram",
+          "t": 1291.001,
+          "value": 76.0
+         }
+        ]
+       },
+       "coverage": null,
+       "event": "activated",
+       "gpu": "gpu0",
+       "phase": "decode",
+       "raw_line": 1292,
+       "rule": "warn-75",
+       "sample_index": 1291,
+       "source": "vram",
+       "t": 1291.001,
+       "value": 76.0
+      }
+     ],
+     "rule_events": [
+      "warn-75:activated"
+     ],
+     "sample_index": 1291,
+     "t": 1291.001,
+     "to": "warning"
+    },
+    {
+     "from": "warning",
+     "phase": "decode",
+     "raw_line": 1327,
+     "raw_observations": [
+      {
+       "clear_level_c": 75.0,
+       "clear_run": {
+        "count": 1,
+        "first_index": 1326,
+        "last_index": 1326,
+        "samples": [
+         {
+          "raw_line": 1327,
+          "sample_index": 1326,
+          "source": "vram",
+          "t": 1326.001,
+          "value": 74.0
+         }
+        ]
+       },
+       "event": "cleared",
+       "gpu": "gpu0",
+       "phase": "decode",
+       "raw_line": 1327,
+       "rule": "warn-75",
+       "sample_index": 1326,
+       "source": "vram",
+       "t": 1326.001,
+       "value": 74.0
+      }
+     ],
+     "rule_events": [
+      "warn-75:cleared"
+     ],
+     "sample_index": 1326,
+     "t": 1326.001,
+     "to": "ok"
+    },
+    {
+     "from": "ok",
+     "phase": "decode",
+     "raw_line": 1328,
+     "raw_observations": [
+      {
+       "condition_run": {
+        "count": 1,
+        "first_index": 1327,
+        "last_index": 1327,
+        "samples": [
+         {
+          "raw_line": 1328,
+          "sample_index": 1327,
+          "source": "vram",
+          "t": 1327.001,
+          "value": 76.0
+         }
+        ]
+       },
+       "coverage": null,
+       "event": "activated",
+       "gpu": "gpu0",
+       "phase": "decode",
+       "raw_line": 1328,
+       "rule": "warn-75",
+       "sample_index": 1327,
+       "source": "vram",
+       "t": 1327.001,
+       "value": 76.0
+      }
+     ],
+     "rule_events": [
+      "warn-75:activated"
+     ],
+     "sample_index": 1327,
+     "t": 1327.001,
+     "to": "warning"
+    },
+    {
+     "from": "warning",
+     "phase": "decode",
+     "raw_line": 1339,
+     "raw_observations": [
+      {
+       "clear_level_c": 75.0,
+       "clear_run": {
+        "count": 1,
+        "first_index": 1338,
+        "last_index": 1338,
+        "samples": [
+         {
+          "raw_line": 1339,
+          "sample_index": 1338,
+          "source": "vram",
+          "t": 1338.001,
+          "value": 74.0
+         }
+        ]
+       },
+       "event": "cleared",
+       "gpu": "gpu0",
+       "phase": "decode",
+       "raw_line": 1339,
+       "rule": "warn-75",
+       "sample_index": 1338,
+       "source": "vram",
+       "t": 1338.001,
+       "value": 74.0
+      }
+     ],
+     "rule_events": [
+      "warn-75:cleared"
+     ],
+     "sample_index": 1338,
+     "t": 1338.001,
+     "to": "ok"
+    },
+    {
+     "from": "ok",
+     "phase": "decode",
+     "raw_line": 1340,
+     "raw_observations": [
+      {
+       "condition_run": {
+        "count": 1,
+        "first_index": 1339,
+        "last_index": 1339,
+        "samples": [
+         {
+          "raw_line": 1340,
+          "sample_index": 1339,
+          "source": "vram",
+          "t": 1339.001,
+          "value": 76.0
+         }
+        ]
+       },
+       "coverage": null,
+       "event": "activated",
+       "gpu": "gpu0",
+       "phase": "decode",
+       "raw_line": 1340,
+       "rule": "warn-75",
+       "sample_index": 1339,
+       "source": "vram",
+       "t": 1339.001,
+       "value": 76.0
+      }
+     ],
+     "rule_events": [
+      "warn-75:activated"
+     ],
+     "sample_index": 1339,
+     "t": 1339.001,
+     "to": "warning"
+    },
+    {
+     "from": "warning",
+     "phase": "decode",
+     "raw_line": 1374,
+     "raw_observations": [
+      {
+       "clear_level_c": 75.0,
+       "clear_run": {
+        "count": 1,
+        "first_index": 1373,
+        "last_index": 1373,
+        "samples": [
+         {
+          "raw_line": 1374,
+          "sample_index": 1373,
+          "source": "vram",
+          "t": 1373.001,
+          "value": 74.0
+         }
+        ]
+       },
+       "event": "cleared",
+       "gpu": "gpu0",
+       "phase": "decode",
+       "raw_line": 1374,
+       "rule": "warn-75",
+       "sample_index": 1373,
+       "source": "vram",
+       "t": 1373.001,
+       "value": 74.0
+      }
+     ],
+     "rule_events": [
+      "warn-75:cleared"
+     ],
+     "sample_index": 1373,
+     "t": 1373.001,
+     "to": "ok"
+    },
+    {
+     "from": "ok",
+     "phase": "decode",
+     "raw_line": 1375,
+     "raw_observations": [
+      {
+       "condition_run": {
+        "count": 1,
+        "first_index": 1374,
+        "last_index": 1374,
+        "samples": [
+         {
+          "raw_line": 1375,
+          "sample_index": 1374,
+          "source": "vram",
+          "t": 1374.001,
+          "value": 76.0
+         }
+        ]
+       },
+       "coverage": null,
+       "event": "activated",
+       "gpu": "gpu0",
+       "phase": "decode",
+       "raw_line": 1375,
+       "rule": "warn-75",
+       "sample_index": 1374,
+       "source": "vram",
+       "t": 1374.001,
+       "value": 76.0
+      }
+     ],
+     "rule_events": [
+      "warn-75:activated"
+     ],
+     "sample_index": 1374,
+     "t": 1374.001,
+     "to": "warning"
+    },
+    {
+     "from": "warning",
+     "phase": "prefill",
+     "raw_line": 1457,
+     "raw_observations": [
+      {
+       "clear_level_c": 75.0,
+       "clear_run": {
+        "count": 1,
+        "first_index": 1456,
+        "last_index": 1456,
+        "samples": [
+         {
+          "raw_line": 1457,
+          "sample_index": 1456,
+          "source": "vram",
+          "t": 1456.001,
+          "value": 74.0
+         }
+        ]
+       },
+       "event": "cleared",
+       "gpu": "gpu0",
+       "phase": "prefill",
+       "raw_line": 1457,
+       "rule": "warn-75",
+       "sample_index": 1456,
+       "source": "vram",
+       "t": 1456.001,
+       "value": 74.0
+      }
+     ],
+     "rule_events": [
+      "warn-75:cleared"
+     ],
+     "sample_index": 1456,
+     "t": 1456.001,
+     "to": "ok"
+    }
+   ]
+  },
+  "gpu1": {
+   "first_transition_t": 229.001,
+   "flaps": 4,
+   "last_transition_t": 2768.001,
+   "time_in_state_by_phase_s": {
+    "abort": {},
+    "critical": {},
+    "ok": {
+     "baseline": 120.0,
+     "cooldown": 473.0,
+     "decode": 108.0,
+     "done": 3.0,
+     "init": 1.0,
+     "prefill": 9.0
+    },
+    "warning": {
+     "cooldown": 7.0,
+     "decode": 1212.0,
+     "prefill": 1311.0
+    }
+   },
+   "time_in_state_s": {
+    "abort": 0.0,
+    "critical": 0.0,
+    "ok": 714.0,
+    "warning": 2530.0
+   },
+   "transition_count": 20,
+   "transitions": [
+    {
+     "from": "ok",
+     "phase": "decode",
+     "raw_line": 230,
+     "raw_observations": [
+      {
+       "condition_run": {
+        "count": 1,
+        "first_index": 229,
+        "last_index": 229,
+        "samples": [
+         {
+          "raw_line": 230,
+          "sample_index": 229,
+          "source": "vram",
+          "t": 229.001,
+          "value": 76.0
+         }
+        ]
+       },
+       "coverage": null,
+       "event": "activated",
+       "gpu": "gpu1",
+       "phase": "decode",
+       "raw_line": 230,
+       "rule": "warn-75",
+       "sample_index": 229,
+       "source": "vram",
+       "t": 229.001,
+       "value": 76.0
+      }
+     ],
+     "rule_events": [
+      "warn-75:activated"
+     ],
+     "sample_index": 229,
+     "t": 229.001,
+     "to": "warning"
+    },
+    {
+     "from": "warning",
+     "phase": "prefill",
+     "raw_line": 1659,
+     "raw_observations": [
+      {
+       "clear_level_c": 75.0,
+       "clear_run": {
+        "count": 1,
+        "first_index": 1658,
+        "last_index": 1658,
+        "samples": [
+         {
+          "raw_line": 1659,
+          "sample_index": 1658,
+          "source": "vram",
+          "t": 1658.001,
+          "value": 74.0
+         }
+        ]
+       },
+       "event": "cleared",
+       "gpu": "gpu1",
+       "phase": "prefill",
+       "raw_line": 1659,
+       "rule": "warn-75",
+       "sample_index": 1658,
+       "source": "vram",
+       "t": 1658.001,
+       "value": 74.0
+      }
+     ],
+     "rule_events": [
+      "warn-75:cleared"
+     ],
+     "sample_index": 1658,
+     "t": 1658.001,
+     "to": "ok"
+    },
+    {
+     "from": "ok",
+     "phase": "prefill",
+     "raw_line": 1660,
+     "raw_observations": [
+      {
+       "condition_run": {
+        "count": 1,
+        "first_index": 1659,
+        "last_index": 1659,
+        "samples": [
+         {
+          "raw_line": 1660,
+          "sample_index": 1659,
+          "source": "vram",
+          "t": 1659.001,
+          "value": 80.0
+         }
+        ]
+       },
+       "coverage": null,
+       "event": "activated",
+       "gpu": "gpu1",
+       "phase": "prefill",
+       "raw_line": 1660,
+       "rule": "warn-75",
+       "sample_index": 1659,
+       "source": "vram",
+       "t": 1659.001,
+       "value": 80.0
+      }
+     ],
+     "rule_events": [
+      "warn-75:activated"
+     ],
+     "sample_index": 1659,
+     "t": 1659.001,
+     "to": "warning"
+    },
+    {
+     "from": "warning",
+     "phase": "prefill",
+     "raw_line": 1790,
+     "raw_observations": [
+      {
+       "clear_level_c": 75.0,
+       "clear_run": {
+        "count": 1,
+        "first_index": 1789,
+        "last_index": 1789,
+        "samples": [
+         {
+          "raw_line": 1790,
+          "sample_index": 1789,
+          "source": "vram",
+          "t": 1789.001,
+          "value": 74.0
+         }
+        ]
+       },
+       "event": "cleared",
+       "gpu": "gpu1",
+       "phase": "prefill",
+       "raw_line": 1790,
+       "rule": "warn-75",
+       "sample_index": 1789,
+       "source": "vram",
+       "t": 1789.001,
+       "value": 74.0
+      }
+     ],
+     "rule_events": [
+      "warn-75:cleared"
+     ],
+     "sample_index": 1789,
+     "t": 1789.001,
+     "to": "ok"
+    },
+    {
+     "from": "ok",
+     "phase": "prefill",
+     "raw_line": 1791,
+     "raw_observations": [
+      {
+       "condition_run": {
+        "count": 1,
+        "first_index": 1790,
+        "last_index": 1790,
+        "samples": [
+         {
+          "raw_line": 1791,
+          "sample_index": 1790,
+          "source": "vram",
+          "t": 1790.001,
+          "value": 80.0
+         }
+        ]
+       },
+       "coverage": null,
+       "event": "activated",
+       "gpu": "gpu1",
+       "phase": "prefill",
+       "raw_line": 1791,
+       "rule": "warn-75",
+       "sample_index": 1790,
+       "source": "vram",
+       "t": 1790.001,
+       "value": 80.0
+      }
+     ],
+     "rule_events": [
+      "warn-75:activated"
+     ],
+     "sample_index": 1790,
+     "t": 1790.001,
+     "to": "warning"
+    },
+    {
+     "from": "warning",
+     "phase": "prefill",
+     "raw_line": 1846,
+     "raw_observations": [
+      {
+       "clear_level_c": 75.0,
+       "clear_run": {
+        "count": 1,
+        "first_index": 1845,
+        "last_index": 1845,
+        "samples": [
+         {
+          "raw_line": 1846,
+          "sample_index": 1845,
+          "source": "vram",
+          "t": 1845.001,
+          "value": 74.0
+         }
+        ]
+       },
+       "event": "cleared",
+       "gpu": "gpu1",
+       "phase": "prefill",
+       "raw_line": 1846,
+       "rule": "warn-75",
+       "sample_index": 1845,
+       "source": "vram",
+       "t": 1845.001,
+       "value": 74.0
+      }
+     ],
+     "rule_events": [
+      "warn-75:cleared"
+     ],
+     "sample_index": 1845,
+     "t": 1845.001,
+     "to": "ok"
+    },
+    {
+     "from": "ok",
+     "phase": "prefill",
+     "raw_line": 1847,
+     "raw_observations": [
+      {
+       "condition_run": {
+        "count": 1,
+        "first_index": 1846,
+        "last_index": 1846,
+        "samples": [
+         {
+          "raw_line": 1847,
+          "sample_index": 1846,
+          "source": "vram",
+          "t": 1846.001,
+          "value": 80.0
+         }
+        ]
+       },
+       "coverage": null,
+       "event": "activated",
+       "gpu": "gpu1",
+       "phase": "prefill",
+       "raw_line": 1847,
+       "rule": "warn-75",
+       "sample_index": 1846,
+       "source": "vram",
+       "t": 1846.001,
+       "value": 80.0
+      }
+     ],
+     "rule_events": [
+      "warn-75:activated"
+     ],
+     "sample_index": 1846,
+     "t": 1846.001,
+     "to": "warning"
+    },
+    {
+     "from": "warning",
+     "phase": "prefill",
+     "raw_line": 2239,
+     "raw_observations": [
+      {
+       "clear_level_c": 75.0,
+       "clear_run": {
+        "count": 1,
+        "first_index": 2238,
+        "last_index": 2238,
+        "samples": [
+         {
+          "raw_line": 2239,
+          "sample_index": 2238,
+          "source": "vram",
+          "t": 2238.001,
+          "value": 74.0
+         }
+        ]
+       },
+       "event": "cleared",
+       "gpu": "gpu1",
+       "phase": "prefill",
+       "raw_line": 2239,
+       "rule": "warn-75",
+       "sample_index": 2238,
+       "source": "vram",
+       "t": 2238.001,
+       "value": 74.0
+      }
+     ],
+     "rule_events": [
+      "warn-75:cleared"
+     ],
+     "sample_index": 2238,
+     "t": 2238.001,
+     "to": "ok"
+    },
+    {
+     "from": "ok",
+     "phase": "prefill",
+     "raw_line": 2240,
+     "raw_observations": [
+      {
+       "condition_run": {
+        "count": 1,
+        "first_index": 2239,
+        "last_index": 2239,
+        "samples": [
+         {
+          "raw_line": 2240,
+          "sample_index": 2239,
+          "source": "vram",
+          "t": 2239.001,
+          "value": 80.0
+         }
+        ]
+       },
+       "coverage": null,
+       "event": "activated",
+       "gpu": "gpu1",
+       "phase": "prefill",
+       "raw_line": 2240,
+       "rule": "warn-75",
+       "sample_index": 2239,
+       "source": "vram",
+       "t": 2239.001,
+       "value": 80.0
+      }
+     ],
+     "rule_events": [
+      "warn-75:activated"
+     ],
+     "sample_index": 2239,
+     "t": 2239.001,
+     "to": "warning"
+    },
+    {
+     "from": "warning",
+     "phase": "prefill",
+     "raw_line": 2295,
+     "raw_observations": [
+      {
+       "clear_level_c": 75.0,
+       "clear_run": {
+        "count": 1,
+        "first_index": 2294,
+        "last_index": 2294,
+        "samples": [
+         {
+          "raw_line": 2295,
+          "sample_index": 2294,
+          "source": "vram",
+          "t": 2294.001,
+          "value": 74.0
+         }
+        ]
+       },
+       "event": "cleared",
+       "gpu": "gpu1",
+       "phase": "prefill",
+       "raw_line": 2295,
+       "rule": "warn-75",
+       "sample_index": 2294,
+       "source": "vram",
+       "t": 2294.001,
+       "value": 74.0
+      }
+     ],
+     "rule_events": [
+      "warn-75:cleared"
+     ],
+     "sample_index": 2294,
+     "t": 2294.001,
+     "to": "ok"
+    },
+    {
+     "from": "ok",
+     "phase": "prefill",
+     "raw_line": 2296,
+     "raw_observations": [
+      {
+       "condition_run": {
+        "count": 1,
+        "first_index": 2295,
+        "last_index": 2295,
+        "samples": [
+         {
+          "raw_line": 2296,
+          "sample_index": 2295,
+          "source": "vram",
+          "t": 2295.001,
+          "value": 80.0
+         }
+        ]
+       },
+       "coverage": null,
+       "event": "activated",
+       "gpu": "gpu1",
+       "phase": "prefill",
+       "raw_line": 2296,
+       "rule": "warn-75",
+       "sample_index": 2295,
+       "source": "vram",
+       "t": 2295.001,
+       "value": 80.0
+      }
+     ],
+     "rule_events": [
+      "warn-75:activated"
+     ],
+     "sample_index": 2295,
+     "t": 2295.001,
+     "to": "warning"
+    },
+    {
+     "from": "warning",
+     "phase": "prefill",
+     "raw_line": 2370,
+     "raw_observations": [
+      {
+       "clear_level_c": 75.0,
+       "clear_run": {
+        "count": 1,
+        "first_index": 2369,
+        "last_index": 2369,
+        "samples": [
+         {
+          "raw_line": 2370,
+          "sample_index": 2369,
+          "source": "vram",
+          "t": 2369.001,
+          "value": 74.0
+         }
+        ]
+       },
+       "event": "cleared",
+       "gpu": "gpu1",
+       "phase": "prefill",
+       "raw_line": 2370,
+       "rule": "warn-75",
+       "sample_index": 2369,
+       "source": "vram",
+       "t": 2369.001,
+       "value": 74.0
+      }
+     ],
+     "rule_events": [
+      "warn-75:cleared"
+     ],
+     "sample_index": 2369,
+     "t": 2369.001,
+     "to": "ok"
+    },
+    {
+     "from": "ok",
+     "phase": "prefill",
+     "raw_line": 2371,
+     "raw_observations": [
+      {
+       "condition_run": {
+        "count": 1,
+        "first_index": 2370,
+        "last_index": 2370,
+        "samples": [
+         {
+          "raw_line": 2371,
+          "sample_index": 2370,
+          "source": "vram",
+          "t": 2370.001,
+          "value": 80.0
+         }
+        ]
+       },
+       "coverage": null,
+       "event": "activated",
+       "gpu": "gpu1",
+       "phase": "prefill",
+       "raw_line": 2371,
+       "rule": "warn-75",
+       "sample_index": 2370,
+       "source": "vram",
+       "t": 2370.001,
+       "value": 80.0
+      }
+     ],
+     "rule_events": [
+      "warn-75:activated"
+     ],
+     "sample_index": 2370,
+     "t": 2370.001,
+     "to": "warning"
+    },
+    {
+     "from": "warning",
+     "phase": "prefill",
+     "raw_line": 2426,
+     "raw_observations": [
+      {
+       "clear_level_c": 75.0,
+       "clear_run": {
+        "count": 1,
+        "first_index": 2425,
+        "last_index": 2425,
+        "samples": [
+         {
+          "raw_line": 2426,
+          "sample_index": 2425,
+          "source": "vram",
+          "t": 2425.001,
+          "value": 74.0
+         }
+        ]
+       },
+       "event": "cleared",
+       "gpu": "gpu1",
+       "phase": "prefill",
+       "raw_line": 2426,
+       "rule": "warn-75",
+       "sample_index": 2425,
+       "source": "vram",
+       "t": 2425.001,
+       "value": 74.0
+      }
+     ],
+     "rule_events": [
+      "warn-75:cleared"
+     ],
+     "sample_index": 2425,
+     "t": 2425.001,
+     "to": "ok"
+    },
+    {
+     "from": "ok",
+     "phase": "prefill",
+     "raw_line": 2427,
+     "raw_observations": [
+      {
+       "condition_run": {
+        "count": 1,
+        "first_index": 2426,
+        "last_index": 2426,
+        "samples": [
+         {
+          "raw_line": 2427,
+          "sample_index": 2426,
+          "source": "vram",
+          "t": 2426.001,
+          "value": 80.0
+         }
+        ]
+       },
+       "coverage": null,
+       "event": "activated",
+       "gpu": "gpu1",
+       "phase": "prefill",
+       "raw_line": 2427,
+       "rule": "warn-75",
+       "sample_index": 2426,
+       "source": "vram",
+       "t": 2426.001,
+       "value": 80.0
+      }
+     ],
+     "rule_events": [
+      "warn-75:activated"
+     ],
+     "sample_index": 2426,
+     "t": 2426.001,
+     "to": "warning"
+    },
+    {
+     "from": "warning",
+     "phase": "prefill",
+     "raw_line": 2632,
+     "raw_observations": [
+      {
+       "clear_level_c": 75.0,
+       "clear_run": {
+        "count": 1,
+        "first_index": 2631,
+        "last_index": 2631,
+        "samples": [
+         {
+          "raw_line": 2632,
+          "sample_index": 2631,
+          "source": "vram",
+          "t": 2631.001,
+          "value": 74.0
+         }
+        ]
+       },
+       "event": "cleared",
+       "gpu": "gpu1",
+       "phase": "prefill",
+       "raw_line": 2632,
+       "rule": "warn-75",
+       "sample_index": 2631,
+       "source": "vram",
+       "t": 2631.001,
+       "value": 74.0
+      }
+     ],
+     "rule_events": [
+      "warn-75:cleared"
+     ],
+     "sample_index": 2631,
+     "t": 2631.001,
+     "to": "ok"
+    },
+    {
+     "from": "ok",
+     "phase": "prefill",
+     "raw_line": 2633,
+     "raw_observations": [
+      {
+       "condition_run": {
+        "count": 1,
+        "first_index": 2632,
+        "last_index": 2632,
+        "samples": [
+         {
+          "raw_line": 2633,
+          "sample_index": 2632,
+          "source": "vram",
+          "t": 2632.001,
+          "value": 80.0
+         }
+        ]
+       },
+       "coverage": null,
+       "event": "activated",
+       "gpu": "gpu1",
+       "phase": "prefill",
+       "raw_line": 2633,
+       "rule": "warn-75",
+       "sample_index": 2632,
+       "source": "vram",
+       "t": 2632.001,
+       "value": 80.0
+      }
+     ],
+     "rule_events": [
+      "warn-75:activated"
+     ],
+     "sample_index": 2632,
+     "t": 2632.001,
+     "to": "warning"
+    },
+    {
+     "from": "warning",
+     "phase": "prefill",
+     "raw_line": 2688,
+     "raw_observations": [
+      {
+       "clear_level_c": 75.0,
+       "clear_run": {
+        "count": 1,
+        "first_index": 2687,
+        "last_index": 2687,
+        "samples": [
+         {
+          "raw_line": 2688,
+          "sample_index": 2687,
+          "source": "vram",
+          "t": 2687.001,
+          "value": 74.0
+         }
+        ]
+       },
+       "event": "cleared",
+       "gpu": "gpu1",
+       "phase": "prefill",
+       "raw_line": 2688,
+       "rule": "warn-75",
+       "sample_index": 2687,
+       "source": "vram",
+       "t": 2687.001,
+       "value": 74.0
+      }
+     ],
+     "rule_events": [
+      "warn-75:cleared"
+     ],
+     "sample_index": 2687,
+     "t": 2687.001,
+     "to": "ok"
+    },
+    {
+     "from": "ok",
+     "phase": "prefill",
+     "raw_line": 2689,
+     "raw_observations": [
+      {
+       "condition_run": {
+        "count": 1,
+        "first_index": 2688,
+        "last_index": 2688,
+        "samples": [
+         {
+          "raw_line": 2689,
+          "sample_index": 2688,
+          "source": "vram",
+          "t": 2688.001,
+          "value": 80.0
+         }
+        ]
+       },
+       "coverage": null,
+       "event": "activated",
+       "gpu": "gpu1",
+       "phase": "prefill",
+       "raw_line": 2689,
+       "rule": "warn-75",
+       "sample_index": 2688,
+       "source": "vram",
+       "t": 2688.001,
+       "value": 80.0
+      }
+     ],
+     "rule_events": [
+      "warn-75:activated"
+     ],
+     "sample_index": 2688,
+     "t": 2688.001,
+     "to": "warning"
+    },
+    {
+     "from": "warning",
+     "phase": "cooldown",
+     "raw_line": 2769,
+     "raw_observations": [
+      {
+       "clear_level_c": 75.0,
+       "clear_run": {
+        "count": 1,
+        "first_index": 2768,
+        "last_index": 2768,
+        "samples": [
+         {
+          "raw_line": 2769,
+          "sample_index": 2768,
+          "source": "vram",
+          "t": 2768.001,
+          "value": 74.0
+         }
+        ]
+       },
+       "event": "cleared",
+       "gpu": "gpu1",
+       "phase": "cooldown",
+       "raw_line": 2769,
+       "rule": "warn-75",
+       "sample_index": 2768,
+       "source": "vram",
+       "t": 2768.001,
+       "value": 74.0
+      }
+     ],
+     "rule_events": [
+      "warn-75:cleared"
+     ],
+     "sample_index": 2768,
+     "t": 2768.001,
+     "to": "ok"
+    }
+   ]
+  },
+  "system": {
+   "first_transition_t": 229.001,
+   "flaps": 4,
+   "last_transition_t": 2768.001,
+   "time_in_state_by_phase_s": {
+    "abort": {},
+    "critical": {},
+    "ok": {
+     "baseline": 120.0,
+     "cooldown": 473.0,
+     "decode": 108.0,
+     "done": 3.0,
+     "init": 1.0,
+     "prefill": 9.0
+    },
+    "warning": {
+     "cooldown": 7.0,
+     "decode": 1212.0,
+     "prefill": 1311.0
+    }
+   },
+   "time_in_state_s": {
+    "abort": 0.0,
+    "critical": 0.0,
+    "ok": 714.0,
+    "warning": 2530.0
+   },
+   "transition_count": 20,
+   "transitions": [
+    {
+     "from": "ok",
+     "phase": "decode",
+     "raw_line": 230,
+     "raw_observations": [
+      {
+       "condition_run": {
+        "count": 1,
+        "first_index": 229,
+        "last_index": 229,
+        "samples": [
+         {
+          "raw_line": 230,
+          "sample_index": 229,
+          "source": "vram",
+          "t": 229.001,
+          "value": 76.0
+         }
+        ]
+       },
+       "coverage": null,
+       "event": "activated",
+       "gpu": "gpu1",
+       "phase": "decode",
+       "raw_line": 230,
+       "rule": "warn-75",
+       "sample_index": 229,
+       "source": "vram",
+       "t": 229.001,
+       "value": 76.0
+      }
+     ],
+     "rule_events": [
+      "gpu1:warn-75:activated"
+     ],
+     "sample_index": 229,
+     "t": 229.001,
+     "to": "warning"
+    },
+    {
+     "from": "warning",
+     "phase": "prefill",
+     "raw_line": 1659,
+     "raw_observations": [
+      {
+       "clear_level_c": 75.0,
+       "clear_run": {
+        "count": 1,
+        "first_index": 1658,
+        "last_index": 1658,
+        "samples": [
+         {
+          "raw_line": 1659,
+          "sample_index": 1658,
+          "source": "vram",
+          "t": 1658.001,
+          "value": 74.0
+         }
+        ]
+       },
+       "event": "cleared",
+       "gpu": "gpu1",
+       "phase": "prefill",
+       "raw_line": 1659,
+       "rule": "warn-75",
+       "sample_index": 1658,
+       "source": "vram",
+       "t": 1658.001,
+       "value": 74.0
+      }
+     ],
+     "rule_events": [
+      "gpu1:warn-75:cleared"
+     ],
+     "sample_index": 1658,
+     "t": 1658.001,
+     "to": "ok"
+    },
+    {
+     "from": "ok",
+     "phase": "prefill",
+     "raw_line": 1660,
+     "raw_observations": [
+      {
+       "condition_run": {
+        "count": 1,
+        "first_index": 1659,
+        "last_index": 1659,
+        "samples": [
+         {
+          "raw_line": 1660,
+          "sample_index": 1659,
+          "source": "vram",
+          "t": 1659.001,
+          "value": 80.0
+         }
+        ]
+       },
+       "coverage": null,
+       "event": "activated",
+       "gpu": "gpu1",
+       "phase": "prefill",
+       "raw_line": 1660,
+       "rule": "warn-75",
+       "sample_index": 1659,
+       "source": "vram",
+       "t": 1659.001,
+       "value": 80.0
+      }
+     ],
+     "rule_events": [
+      "gpu1:warn-75:activated"
+     ],
+     "sample_index": 1659,
+     "t": 1659.001,
+     "to": "warning"
+    },
+    {
+     "from": "warning",
+     "phase": "prefill",
+     "raw_line": 1790,
+     "raw_observations": [
+      {
+       "clear_level_c": 75.0,
+       "clear_run": {
+        "count": 1,
+        "first_index": 1789,
+        "last_index": 1789,
+        "samples": [
+         {
+          "raw_line": 1790,
+          "sample_index": 1789,
+          "source": "vram",
+          "t": 1789.001,
+          "value": 74.0
+         }
+        ]
+       },
+       "event": "cleared",
+       "gpu": "gpu1",
+       "phase": "prefill",
+       "raw_line": 1790,
+       "rule": "warn-75",
+       "sample_index": 1789,
+       "source": "vram",
+       "t": 1789.001,
+       "value": 74.0
+      }
+     ],
+     "rule_events": [
+      "gpu1:warn-75:cleared"
+     ],
+     "sample_index": 1789,
+     "t": 1789.001,
+     "to": "ok"
+    },
+    {
+     "from": "ok",
+     "phase": "prefill",
+     "raw_line": 1791,
+     "raw_observations": [
+      {
+       "condition_run": {
+        "count": 1,
+        "first_index": 1790,
+        "last_index": 1790,
+        "samples": [
+         {
+          "raw_line": 1791,
+          "sample_index": 1790,
+          "source": "vram",
+          "t": 1790.001,
+          "value": 80.0
+         }
+        ]
+       },
+       "coverage": null,
+       "event": "activated",
+       "gpu": "gpu1",
+       "phase": "prefill",
+       "raw_line": 1791,
+       "rule": "warn-75",
+       "sample_index": 1790,
+       "source": "vram",
+       "t": 1790.001,
+       "value": 80.0
+      }
+     ],
+     "rule_events": [
+      "gpu1:warn-75:activated"
+     ],
+     "sample_index": 1790,
+     "t": 1790.001,
+     "to": "warning"
+    },
+    {
+     "from": "warning",
+     "phase": "prefill",
+     "raw_line": 1846,
+     "raw_observations": [
+      {
+       "clear_level_c": 75.0,
+       "clear_run": {
+        "count": 1,
+        "first_index": 1845,
+        "last_index": 1845,
+        "samples": [
+         {
+          "raw_line": 1846,
+          "sample_index": 1845,
+          "source": "vram",
+          "t": 1845.001,
+          "value": 74.0
+         }
+        ]
+       },
+       "event": "cleared",
+       "gpu": "gpu1",
+       "phase": "prefill",
+       "raw_line": 1846,
+       "rule": "warn-75",
+       "sample_index": 1845,
+       "source": "vram",
+       "t": 1845.001,
+       "value": 74.0
+      }
+     ],
+     "rule_events": [
+      "gpu1:warn-75:cleared"
+     ],
+     "sample_index": 1845,
+     "t": 1845.001,
+     "to": "ok"
+    },
+    {
+     "from": "ok",
+     "phase": "prefill",
+     "raw_line": 1847,
+     "raw_observations": [
+      {
+       "condition_run": {
+        "count": 1,
+        "first_index": 1846,
+        "last_index": 1846,
+        "samples": [
+         {
+          "raw_line": 1847,
+          "sample_index": 1846,
+          "source": "vram",
+          "t": 1846.001,
+          "value": 80.0
+         }
+        ]
+       },
+       "coverage": null,
+       "event": "activated",
+       "gpu": "gpu1",
+       "phase": "prefill",
+       "raw_line": 1847,
+       "rule": "warn-75",
+       "sample_index": 1846,
+       "source": "vram",
+       "t": 1846.001,
+       "value": 80.0
+      }
+     ],
+     "rule_events": [
+      "gpu1:warn-75:activated"
+     ],
+     "sample_index": 1846,
+     "t": 1846.001,
+     "to": "warning"
+    },
+    {
+     "from": "warning",
+     "phase": "prefill",
+     "raw_line": 2239,
+     "raw_observations": [
+      {
+       "clear_level_c": 75.0,
+       "clear_run": {
+        "count": 1,
+        "first_index": 2238,
+        "last_index": 2238,
+        "samples": [
+         {
+          "raw_line": 2239,
+          "sample_index": 2238,
+          "source": "vram",
+          "t": 2238.001,
+          "value": 74.0
+         }
+        ]
+       },
+       "event": "cleared",
+       "gpu": "gpu1",
+       "phase": "prefill",
+       "raw_line": 2239,
+       "rule": "warn-75",
+       "sample_index": 2238,
+       "source": "vram",
+       "t": 2238.001,
+       "value": 74.0
+      }
+     ],
+     "rule_events": [
+      "gpu1:warn-75:cleared"
+     ],
+     "sample_index": 2238,
+     "t": 2238.001,
+     "to": "ok"
+    },
+    {
+     "from": "ok",
+     "phase": "prefill",
+     "raw_line": 2240,
+     "raw_observations": [
+      {
+       "condition_run": {
+        "count": 1,
+        "first_index": 2239,
+        "last_index": 2239,
+        "samples": [
+         {
+          "raw_line": 2240,
+          "sample_index": 2239,
+          "source": "vram",
+          "t": 2239.001,
+          "value": 80.0
+         }
+        ]
+       },
+       "coverage": null,
+       "event": "activated",
+       "gpu": "gpu1",
+       "phase": "prefill",
+       "raw_line": 2240,
+       "rule": "warn-75",
+       "sample_index": 2239,
+       "source": "vram",
+       "t": 2239.001,
+       "value": 80.0
+      }
+     ],
+     "rule_events": [
+      "gpu1:warn-75:activated"
+     ],
+     "sample_index": 2239,
+     "t": 2239.001,
+     "to": "warning"
+    },
+    {
+     "from": "warning",
+     "phase": "prefill",
+     "raw_line": 2295,
+     "raw_observations": [
+      {
+       "clear_level_c": 75.0,
+       "clear_run": {
+        "count": 1,
+        "first_index": 2294,
+        "last_index": 2294,
+        "samples": [
+         {
+          "raw_line": 2295,
+          "sample_index": 2294,
+          "source": "vram",
+          "t": 2294.001,
+          "value": 74.0
+         }
+        ]
+       },
+       "event": "cleared",
+       "gpu": "gpu1",
+       "phase": "prefill",
+       "raw_line": 2295,
+       "rule": "warn-75",
+       "sample_index": 2294,
+       "source": "vram",
+       "t": 2294.001,
+       "value": 74.0
+      }
+     ],
+     "rule_events": [
+      "gpu1:warn-75:cleared"
+     ],
+     "sample_index": 2294,
+     "t": 2294.001,
+     "to": "ok"
+    },
+    {
+     "from": "ok",
+     "phase": "prefill",
+     "raw_line": 2296,
+     "raw_observations": [
+      {
+       "condition_run": {
+        "count": 1,
+        "first_index": 2295,
+        "last_index": 2295,
+        "samples": [
+         {
+          "raw_line": 2296,
+          "sample_index": 2295,
+          "source": "vram",
+          "t": 2295.001,
+          "value": 80.0
+         }
+        ]
+       },
+       "coverage": null,
+       "event": "activated",
+       "gpu": "gpu1",
+       "phase": "prefill",
+       "raw_line": 2296,
+       "rule": "warn-75",
+       "sample_index": 2295,
+       "source": "vram",
+       "t": 2295.001,
+       "value": 80.0
+      }
+     ],
+     "rule_events": [
+      "gpu1:warn-75:activated"
+     ],
+     "sample_index": 2295,
+     "t": 2295.001,
+     "to": "warning"
+    },
+    {
+     "from": "warning",
+     "phase": "prefill",
+     "raw_line": 2370,
+     "raw_observations": [
+      {
+       "clear_level_c": 75.0,
+       "clear_run": {
+        "count": 1,
+        "first_index": 2369,
+        "last_index": 2369,
+        "samples": [
+         {
+          "raw_line": 2370,
+          "sample_index": 2369,
+          "source": "vram",
+          "t": 2369.001,
+          "value": 74.0
+         }
+        ]
+       },
+       "event": "cleared",
+       "gpu": "gpu1",
+       "phase": "prefill",
+       "raw_line": 2370,
+       "rule": "warn-75",
+       "sample_index": 2369,
+       "source": "vram",
+       "t": 2369.001,
+       "value": 74.0
+      }
+     ],
+     "rule_events": [
+      "gpu1:warn-75:cleared"
+     ],
+     "sample_index": 2369,
+     "t": 2369.001,
+     "to": "ok"
+    },
+    {
+     "from": "ok",
+     "phase": "prefill",
+     "raw_line": 2371,
+     "raw_observations": [
+      {
+       "condition_run": {
+        "count": 1,
+        "first_index": 2370,
+        "last_index": 2370,
+        "samples": [
+         {
+          "raw_line": 2371,
+          "sample_index": 2370,
+          "source": "vram",
+          "t": 2370.001,
+          "value": 80.0
+         }
+        ]
+       },
+       "coverage": null,
+       "event": "activated",
+       "gpu": "gpu1",
+       "phase": "prefill",
+       "raw_line": 2371,
+       "rule": "warn-75",
+       "sample_index": 2370,
+       "source": "vram",
+       "t": 2370.001,
+       "value": 80.0
+      }
+     ],
+     "rule_events": [
+      "gpu1:warn-75:activated"
+     ],
+     "sample_index": 2370,
+     "t": 2370.001,
+     "to": "warning"
+    },
+    {
+     "from": "warning",
+     "phase": "prefill",
+     "raw_line": 2426,
+     "raw_observations": [
+      {
+       "clear_level_c": 75.0,
+       "clear_run": {
+        "count": 1,
+        "first_index": 2425,
+        "last_index": 2425,
+        "samples": [
+         {
+          "raw_line": 2426,
+          "sample_index": 2425,
+          "source": "vram",
+          "t": 2425.001,
+          "value": 74.0
+         }
+        ]
+       },
+       "event": "cleared",
+       "gpu": "gpu1",
+       "phase": "prefill",
+       "raw_line": 2426,
+       "rule": "warn-75",
+       "sample_index": 2425,
+       "source": "vram",
+       "t": 2425.001,
+       "value": 74.0
+      }
+     ],
+     "rule_events": [
+      "gpu1:warn-75:cleared"
+     ],
+     "sample_index": 2425,
+     "t": 2425.001,
+     "to": "ok"
+    },
+    {
+     "from": "ok",
+     "phase": "prefill",
+     "raw_line": 2427,
+     "raw_observations": [
+      {
+       "condition_run": {
+        "count": 1,
+        "first_index": 2426,
+        "last_index": 2426,
+        "samples": [
+         {
+          "raw_line": 2427,
+          "sample_index": 2426,
+          "source": "vram",
+          "t": 2426.001,
+          "value": 80.0
+         }
+        ]
+       },
+       "coverage": null,
+       "event": "activated",
+       "gpu": "gpu1",
+       "phase": "prefill",
+       "raw_line": 2427,
+       "rule": "warn-75",
+       "sample_index": 2426,
+       "source": "vram",
+       "t": 2426.001,
+       "value": 80.0
+      }
+     ],
+     "rule_events": [
+      "gpu1:warn-75:activated"
+     ],
+     "sample_index": 2426,
+     "t": 2426.001,
+     "to": "warning"
+    },
+    {
+     "from": "warning",
+     "phase": "prefill",
+     "raw_line": 2632,
+     "raw_observations": [
+      {
+       "clear_level_c": 75.0,
+       "clear_run": {
+        "count": 1,
+        "first_index": 2631,
+        "last_index": 2631,
+        "samples": [
+         {
+          "raw_line": 2632,
+          "sample_index": 2631,
+          "source": "vram",
+          "t": 2631.001,
+          "value": 74.0
+         }
+        ]
+       },
+       "event": "cleared",
+       "gpu": "gpu1",
+       "phase": "prefill",
+       "raw_line": 2632,
+       "rule": "warn-75",
+       "sample_index": 2631,
+       "source": "vram",
+       "t": 2631.001,
+       "value": 74.0
+      }
+     ],
+     "rule_events": [
+      "gpu1:warn-75:cleared"
+     ],
+     "sample_index": 2631,
+     "t": 2631.001,
+     "to": "ok"
+    },
+    {
+     "from": "ok",
+     "phase": "prefill",
+     "raw_line": 2633,
+     "raw_observations": [
+      {
+       "condition_run": {
+        "count": 1,
+        "first_index": 2632,
+        "last_index": 2632,
+        "samples": [
+         {
+          "raw_line": 2633,
+          "sample_index": 2632,
+          "source": "vram",
+          "t": 2632.001,
+          "value": 80.0
+         }
+        ]
+       },
+       "coverage": null,
+       "event": "activated",
+       "gpu": "gpu1",
+       "phase": "prefill",
+       "raw_line": 2633,
+       "rule": "warn-75",
+       "sample_index": 2632,
+       "source": "vram",
+       "t": 2632.001,
+       "value": 80.0
+      }
+     ],
+     "rule_events": [
+      "gpu1:warn-75:activated"
+     ],
+     "sample_index": 2632,
+     "t": 2632.001,
+     "to": "warning"
+    },
+    {
+     "from": "warning",
+     "phase": "prefill",
+     "raw_line": 2688,
+     "raw_observations": [
+      {
+       "clear_level_c": 75.0,
+       "clear_run": {
+        "count": 1,
+        "first_index": 2687,
+        "last_index": 2687,
+        "samples": [
+         {
+          "raw_line": 2688,
+          "sample_index": 2687,
+          "source": "vram",
+          "t": 2687.001,
+          "value": 74.0
+         }
+        ]
+       },
+       "event": "cleared",
+       "gpu": "gpu1",
+       "phase": "prefill",
+       "raw_line": 2688,
+       "rule": "warn-75",
+       "sample_index": 2687,
+       "source": "vram",
+       "t": 2687.001,
+       "value": 74.0
+      }
+     ],
+     "rule_events": [
+      "gpu1:warn-75:cleared"
+     ],
+     "sample_index": 2687,
+     "t": 2687.001,
+     "to": "ok"
+    },
+    {
+     "from": "ok",
+     "phase": "prefill",
+     "raw_line": 2689,
+     "raw_observations": [
+      {
+       "condition_run": {
+        "count": 1,
+        "first_index": 2688,
+        "last_index": 2688,
+        "samples": [
+         {
+          "raw_line": 2689,
+          "sample_index": 2688,
+          "source": "vram",
+          "t": 2688.001,
+          "value": 80.0
+         }
+        ]
+       },
+       "coverage": null,
+       "event": "activated",
+       "gpu": "gpu1",
+       "phase": "prefill",
+       "raw_line": 2689,
+       "rule": "warn-75",
+       "sample_index": 2688,
+       "source": "vram",
+       "t": 2688.001,
+       "value": 80.0
+      }
+     ],
+     "rule_events": [
+      "gpu1:warn-75:activated"
+     ],
+     "sample_index": 2688,
+     "t": 2688.001,
+     "to": "warning"
+    },
+    {
+     "from": "warning",
+     "phase": "cooldown",
+     "raw_line": 2769,
+     "raw_observations": [
+      {
+       "clear_level_c": 75.0,
+       "clear_run": {
+        "count": 1,
+        "first_index": 2768,
+        "last_index": 2768,
+        "samples": [
+         {
+          "raw_line": 2769,
+          "sample_index": 2768,
+          "source": "vram",
+          "t": 2768.001,
+          "value": 74.0
+         }
+        ]
+       },
+       "event": "cleared",
+       "gpu": "gpu1",
+       "phase": "cooldown",
+       "raw_line": 2769,
+       "rule": "warn-75",
+       "sample_index": 2768,
+       "source": "vram",
+       "t": 2768.001,
+       "value": 74.0
+      }
+     ],
+     "rule_events": [
+      "gpu1:warn-75:cleared"
+     ],
+     "sample_index": 2768,
+     "t": 2768.001,
+     "to": "ok"
+    }
+   ]
+  }
+ },
+ "input": {
+  "duration_s": 3244.0,
+  "gpus": [
+   "gpu0",
+   "gpu1"
+  ],
+  "injections": [],
+  "phases": {
+   "baseline": 120,
+   "cooldown": 480,
+   "decode": 1320,
+   "done": 3,
+   "init": 1,
+   "prefill": 1320
+  },
+  "raw_file": "/home/mike/nexus-code/experiments/thermal-soak-2026-10-03/raw/thermal-soak-20261003T170044Z/samples.jsonl",
+  "raw_sha256": "6946e9e6d6f94374a367076868ee54c20294a829f8582d2d34579e431a879982",
+  "samples": 3244
+ },
+ "policy": {
+  "description": "The CURRENT configuration restated as a policy for comparison: hottest sensor of any kind, warning 75, critical 85 (monitoring) and abort 90 (benchmark harness), all instantaneous with no hysteresis. Reproduces existing behaviour; recommends nothing.",
+  "name": "reference-current-75-85-90",
+  "rules": [
+   {
+    "clear_persistence_s": 1.0,
+    "gpus": "all",
+    "hysteresis_c": 0.0,
+    "id": "warn-75",
+    "missing": "hold",
+    "persistence_s": 1.0,
+    "sensor_class": "any_sensor",
+    "state": "warning",
+    "threshold_c": 75
+   },
+   {
+    "clear_persistence_s": 1.0,
+    "gpus": "all",
+    "hysteresis_c": 0.0,
+    "id": "crit-85",
+    "missing": "hold",
+    "persistence_s": 1.0,
+    "sensor_class": "any_sensor",
+    "state": "critical",
+    "threshold_c": 85
+   },
+   {
+    "clear_persistence_s": 1.0,
+    "gpus": "all",
+    "hysteresis_c": 0.0,
+    "id": "abort-90",
+    "missing": "hold",
+    "persistence_s": 1.0,
+    "sensor_class": "any_sensor",
+    "state": "abort",
+    "threshold_c": 90
+   }
+  ],
+  "status": "reference_current_configuration"
+ },
+ "rules": [
+  {
+   "active_seconds": 1032.0,
+   "active_seconds_by_phase": {
+    "decode": 1017.0,
+    "prefill": 15.0
+   },
+   "episodes": [
+    {
+     "activated_index": 400,
+     "activated_phase": "decode",
+     "activated_t": 400.001,
+     "activated_to_condition_start_latency_s": 0.0,
+     "clear_run": {
+      "count": 1,
+      "first_index": 401,
+      "last_index": 401,
+      "samples": [
+       {
+        "raw_line": 402,
+        "sample_index": 401,
+        "source": "vram",
+        "t": 401.001,
+        "value": 74.0
+       }
+      ]
+     },
+     "clear_trigger": {
+      "clear_level_c": 75.0,
+      "phase": "decode",
+      "raw_line": 402,
+      "sample_index": 401,
+      "source": "vram",
+      "t": 401.001,
+      "value": 74.0
+     },
+     "cleared_index": 401,
+     "cleared_t": 401.001,
+     "condition_run": {
+      "count": 1,
+      "first_index": 400,
+      "last_index": 400,
+      "samples": [
+       {
+        "raw_line": 401,
+        "sample_index": 400,
+        "source": "vram",
+        "t": 400.001,
+        "value": 76.0
+       }
+      ]
+     },
+     "condition_started_index": 400,
+     "condition_started_t": 400.001,
+     "duration_s": 1.0,
+     "peak": 76.0,
+     "peak_index": 400,
+     "sources_during_episode": {
+      "vram": 1
+     },
+     "trigger": {
+      "coverage": null,
+      "phase": "decode",
+      "raw_line": 401,
+      "sample_index": 400,
+      "source": "vram",
+      "t": 400.001,
+      "value": 76.0
+     }
+    },
+    {
+     "activated_index": 409,
+     "activated_phase": "decode",
+     "activated_t": 409.001,
+     "activated_to_condition_start_latency_s": 0.0,
+     "clear_run": {
+      "count": 1,
+      "first_index": 411,
+      "last_index": 411,
+      "samples": [
+       {
+        "raw_line": 412,
+        "sample_index": 411,
+        "source": "vram",
+        "t": 411.001,
+        "value": 74.0
+       }
+      ]
+     },
+     "clear_trigger": {
+      "clear_level_c": 75.0,
+      "phase": "decode",
+      "raw_line": 412,
+      "sample_index": 411,
+      "source": "vram",
+      "t": 411.001,
+      "value": 74.0
+     },
+     "cleared_index": 411,
+     "cleared_t": 411.001,
+     "condition_run": {
+      "count": 1,
+      "first_index": 409,
+      "last_index": 409,
+      "samples": [
+       {
+        "raw_line": 410,
+        "sample_index": 409,
+        "source": "vram",
+        "t": 409.001,
+        "value": 76.0
+       }
+      ]
+     },
+     "condition_started_index": 409,
+     "condition_started_t": 409.001,
+     "duration_s": 2.0,
+     "peak": 76.0,
+     "peak_index": 409,
+     "sources_during_episode": {
+      "vram": 2
+     },
+     "trigger": {
+      "coverage": null,
+      "phase": "decode",
+      "raw_line": 410,
+      "sample_index": 409,
+      "source": "vram",
+      "t": 409.001,
+      "value": 76.0
+     }
+    },
+    {
+     "activated_index": 412,
+     "activated_phase": "decode",
+     "activated_t": 412.001,
+     "activated_to_condition_start_latency_s": 0.0,
+     "clear_run": {
+      "count": 1,
+      "first_index": 425,
+      "last_index": 425,
+      "samples": [
+       {
+        "raw_line": 426,
+        "sample_index": 425,
+        "source": "vram",
+        "t": 425.001,
+        "value": 74.0
+       }
+      ]
+     },
+     "clear_trigger": {
+      "clear_level_c": 75.0,
+      "phase": "decode",
+      "raw_line": 426,
+      "sample_index": 425,
+      "source": "vram",
+      "t": 425.001,
+      "value": 74.0
+     },
+     "cleared_index": 425,
+     "cleared_t": 425.001,
+     "condition_run": {
+      "count": 1,
+      "first_index": 412,
+      "last_index": 412,
+      "samples": [
+       {
+        "raw_line": 413,
+        "sample_index": 412,
+        "source": "vram",
+        "t": 412.001,
+        "value": 76.0
+       }
+      ]
+     },
+     "condition_started_index": 412,
+     "condition_started_t": 412.001,
+     "duration_s": 13.0,
+     "peak": 76.0,
+     "peak_index": 412,
+     "sources_during_episode": {
+      "vram": 13
+     },
+     "trigger": {
+      "coverage": null,
+      "phase": "decode",
+      "raw_line": 413,
+      "sample_index": 412,
+      "source": "vram",
+      "t": 412.001,
+      "value": 76.0
+     }
+    },
+    {
+     "activated_index": 426,
+     "activated_phase": "decode",
+     "activated_t": 426.001,
+     "activated_to_condition_start_latency_s": 0.0,
+     "clear_run": {
+      "count": 1,
+      "first_index": 442,
+      "last_index": 442,
+      "samples": [
+       {
+        "raw_line": 443,
+        "sample_index": 442,
+        "source": "vram",
+        "t": 442.001,
+        "value": 74.0
+       }
+      ]
+     },
+     "clear_trigger": {
+      "clear_level_c": 75.0,
+      "phase": "decode",
+      "raw_line": 443,
+      "sample_index": 442,
+      "source": "vram",
+      "t": 442.001,
+      "value": 74.0
+     },
+     "cleared_index": 442,
+     "cleared_t": 442.001,
+     "condition_run": {
+      "count": 1,
+      "first_index": 426,
+      "last_index": 426,
+      "samples": [
+       {
+        "raw_line": 427,
+        "sample_index": 426,
+        "source": "vram",
+        "t": 426.001,
+        "value": 76.0
+       }
+      ]
+     },
+     "condition_started_index": 426,
+     "condition_started_t": 426.001,
+     "duration_s": 16.0,
+     "peak": 76.0,
+     "peak_index": 426,
+     "sources_during_episode": {
+      "vram": 16
+     },
+     "trigger": {
+      "coverage": null,
+      "phase": "decode",
+      "raw_line": 427,
+      "sample_index": 426,
+      "source": "vram",
+      "t": 426.001,
+      "value": 76.0
+     }
+    },
+    {
+     "activated_index": 443,
+     "activated_phase": "decode",
+     "activated_t": 443.001,
+     "activated_to_condition_start_latency_s": 0.0,
+     "clear_run": {
+      "count": 1,
+      "first_index": 472,
+      "last_index": 472,
+      "samples": [
+       {
+        "raw_line": 473,
+        "sample_index": 472,
+        "source": "vram",
+        "t": 472.001,
+        "value": 74.0
+       }
+      ]
+     },
+     "clear_trigger": {
+      "clear_level_c": 75.0,
+      "phase": "decode",
+      "raw_line": 473,
+      "sample_index": 472,
+      "source": "vram",
+      "t": 472.001,
+      "value": 74.0
+     },
+     "cleared_index": 472,
+     "cleared_t": 472.001,
+     "condition_run": {
+      "count": 1,
+      "first_index": 443,
+      "last_index": 443,
+      "samples": [
+       {
+        "raw_line": 444,
+        "sample_index": 443,
+        "source": "vram",
+        "t": 443.001,
+        "value": 76.0
+       }
+      ]
+     },
+     "condition_started_index": 443,
+     "condition_started_t": 443.001,
+     "duration_s": 29.0,
+     "peak": 76.0,
+     "peak_index": 443,
+     "sources_during_episode": {
+      "vram": 29
+     },
+     "trigger": {
+      "coverage": null,
+      "phase": "decode",
+      "raw_line": 444,
+      "sample_index": 443,
+      "source": "vram",
+      "t": 443.001,
+      "value": 76.0
+     }
+    },
+    {
+     "activated_index": 474,
+     "activated_phase": "decode",
+     "activated_t": 474.001,
+     "activated_to_condition_start_latency_s": 0.0,
+     "clear_run": {
+      "count": 1,
+      "first_index": 477,
+      "last_index": 477,
+      "samples": [
+       {
+        "raw_line": 478,
+        "sample_index": 477,
+        "source": "vram",
+        "t": 477.001,
+        "value": 74.0
+       }
+      ]
+     },
+     "clear_trigger": {
+      "clear_level_c": 75.0,
+      "phase": "decode",
+      "raw_line": 478,
+      "sample_index": 477,
+      "source": "vram",
+      "t": 477.001,
+      "value": 74.0
+     },
+     "cleared_index": 477,
+     "cleared_t": 477.001,
+     "condition_run": {
+      "count": 1,
+      "first_index": 474,
+      "last_index": 474,
+      "samples": [
+       {
+        "raw_line": 475,
+        "sample_index": 474,
+        "source": "vram",
+        "t": 474.001,
+        "value": 76.0
+       }
+      ]
+     },
+     "condition_started_index": 474,
+     "condition_started_t": 474.001,
+     "duration_s": 3.0,
+     "peak": 76.0,
+     "peak_index": 474,
+     "sources_during_episode": {
+      "vram": 3
+     },
+     "trigger": {
+      "coverage": null,
+      "phase": "decode",
+      "raw_line": 475,
+      "sample_index": 474,
+      "source": "vram",
+      "t": 474.001,
+      "value": 76.0
+     }
+    },
+    {
+     "activated_index": 478,
+     "activated_phase": "decode",
+     "activated_t": 478.001,
+     "activated_to_condition_start_latency_s": 0.0,
+     "clear_run": {
+      "count": 1,
+      "first_index": 644,
+      "last_index": 644,
+      "samples": [
+       {
+        "raw_line": 645,
+        "sample_index": 644,
+        "source": "vram",
+        "t": 644.001,
+        "value": 74.0
+       }
+      ]
+     },
+     "clear_trigger": {
+      "clear_level_c": 75.0,
+      "phase": "decode",
+      "raw_line": 645,
+      "sample_index": 644,
+      "source": "vram",
+      "t": 644.001,
+      "value": 74.0
+     },
+     "cleared_index": 644,
+     "cleared_t": 644.001,
+     "condition_run": {
+      "count": 1,
+      "first_index": 478,
+      "last_index": 478,
+      "samples": [
+       {
+        "raw_line": 479,
+        "sample_index": 478,
+        "source": "vram",
+        "t": 478.001,
+        "value": 76.0
+       }
+      ]
+     },
+     "condition_started_index": 478,
+     "condition_started_t": 478.001,
+     "duration_s": 166.0,
+     "peak": 76.0,
+     "peak_index": 478,
+     "sources_during_episode": {
+      "vram": 166
+     },
+     "trigger": {
+      "coverage": null,
+      "phase": "decode",
+      "raw_line": 479,
+      "sample_index": 478,
+      "source": "vram",
+      "t": 478.001,
+      "value": 76.0
+     }
+    },
+    {
+     "activated_index": 645,
+     "activated_phase": "decode",
+     "activated_t": 645.001,
+     "activated_to_condition_start_latency_s": 0.0,
+     "clear_run": {
+      "count": 1,
+      "first_index": 917,
+      "last_index": 917,
+      "samples": [
+       {
+        "raw_line": 918,
+        "sample_index": 917,
+        "source": "vram",
+        "t": 917.001,
+        "value": 74.0
+       }
+      ]
+     },
+     "clear_trigger": {
+      "clear_level_c": 75.0,
+      "phase": "decode",
+      "raw_line": 918,
+      "sample_index": 917,
+      "source": "vram",
+      "t": 917.001,
+      "value": 74.0
+     },
+     "cleared_index": 917,
+     "cleared_t": 917.001,
+     "condition_run": {
+      "count": 1,
+      "first_index": 645,
+      "last_index": 645,
+      "samples": [
+       {
+        "raw_line": 646,
+        "sample_index": 645,
+        "source": "vram",
+        "t": 645.001,
+        "value": 76.0
+       }
+      ]
+     },
+     "condition_started_index": 645,
+     "condition_started_t": 645.001,
+     "duration_s": 272.0,
+     "peak": 76.0,
+     "peak_index": 645,
+     "sources_during_episode": {
+      "vram": 272
+     },
+     "trigger": {
+      "coverage": null,
+      "phase": "decode",
+      "raw_line": 646,
+      "sample_index": 645,
+      "source": "vram",
+      "t": 645.001,
+      "value": 76.0
+     }
+    },
+    {
+     "activated_index": 918,
+     "activated_phase": "decode",
+     "activated_t": 918.001,
+     "activated_to_condition_start_latency_s": 0.0,
+     "clear_run": {
+      "count": 1,
+      "first_index": 985,
+      "last_index": 985,
+      "samples": [
+       {
+        "raw_line": 986,
+        "sample_index": 985,
+        "source": "vram",
+        "t": 985.001,
+        "value": 74.0
+       }
+      ]
+     },
+     "clear_trigger": {
+      "clear_level_c": 75.0,
+      "phase": "decode",
+      "raw_line": 986,
+      "sample_index": 985,
+      "source": "vram",
+      "t": 985.001,
+      "value": 74.0
+     },
+     "cleared_index": 985,
+     "cleared_t": 985.001,
+     "condition_run": {
+      "count": 1,
+      "first_index": 918,
+      "last_index": 918,
+      "samples": [
+       {
+        "raw_line": 919,
+        "sample_index": 918,
+        "source": "vram",
+        "t": 918.001,
+        "value": 76.0
+       }
+      ]
+     },
+     "condition_started_index": 918,
+     "condition_started_t": 918.001,
+     "duration_s": 67.0,
+     "peak": 76.0,
+     "peak_index": 918,
+     "sources_during_episode": {
+      "vram": 67
+     },
+     "trigger": {
+      "coverage": null,
+      "phase": "decode",
+      "raw_line": 919,
+      "sample_index": 918,
+      "source": "vram",
+      "t": 918.001,
+      "value": 76.0
+     }
+    },
+    {
+     "activated_index": 986,
+     "activated_phase": "decode",
+     "activated_t": 986.001,
+     "activated_to_condition_start_latency_s": 0.0,
+     "clear_run": {
+      "count": 1,
+      "first_index": 1003,
+      "last_index": 1003,
+      "samples": [
+       {
+        "raw_line": 1004,
+        "sample_index": 1003,
+        "source": "vram",
+        "t": 1003.001,
+        "value": 74.0
+       }
+      ]
+     },
+     "clear_trigger": {
+      "clear_level_c": 75.0,
+      "phase": "decode",
+      "raw_line": 1004,
+      "sample_index": 1003,
+      "source": "vram",
+      "t": 1003.001,
+      "value": 74.0
+     },
+     "cleared_index": 1003,
+     "cleared_t": 1003.001,
+     "condition_run": {
+      "count": 1,
+      "first_index": 986,
+      "last_index": 986,
+      "samples": [
+       {
+        "raw_line": 987,
+        "sample_index": 986,
+        "source": "vram",
+        "t": 986.001,
+        "value": 76.0
+       }
+      ]
+     },
+     "condition_started_index": 986,
+     "condition_started_t": 986.001,
+     "duration_s": 17.0,
+     "peak": 76.0,
+     "peak_index": 986,
+     "sources_during_episode": {
+      "vram": 17
+     },
+     "trigger": {
+      "coverage": null,
+      "phase": "decode",
+      "raw_line": 987,
+      "sample_index": 986,
+      "source": "vram",
+      "t": 986.001,
+      "value": 76.0
+     }
+    },
+    {
+     "activated_index": 1004,
+     "activated_phase": "decode",
+     "activated_t": 1004.001,
+     "activated_to_condition_start_latency_s": 0.0,
+     "clear_run": {
+      "count": 1,
+      "first_index": 1098,
+      "last_index": 1098,
+      "samples": [
+       {
+        "raw_line": 1099,
+        "sample_index": 1098,
+        "source": "vram",
+        "t": 1098.001,
+        "value": 74.0
+       }
+      ]
+     },
+     "clear_trigger": {
+      "clear_level_c": 75.0,
+      "phase": "decode",
+      "raw_line": 1099,
+      "sample_index": 1098,
+      "source": "vram",
+      "t": 1098.001,
+      "value": 74.0
+     },
+     "cleared_index": 1098,
+     "cleared_t": 1098.001,
+     "condition_run": {
+      "count": 1,
+      "first_index": 1004,
+      "last_index": 1004,
+      "samples": [
+       {
+        "raw_line": 1005,
+        "sample_index": 1004,
+        "source": "vram",
+        "t": 1004.001,
+        "value": 76.0
+       }
+      ]
+     },
+     "condition_started_index": 1004,
+     "condition_started_t": 1004.001,
+     "duration_s": 94.0,
+     "peak": 76.0,
+     "peak_index": 1004,
+     "sources_during_episode": {
+      "vram": 94
+     },
+     "trigger": {
+      "coverage": null,
+      "phase": "decode",
+      "raw_line": 1005,
+      "sample_index": 1004,
+      "source": "vram",
+      "t": 1004.001,
+      "value": 76.0
+     }
+    },
+    {
+     "activated_index": 1099,
+     "activated_phase": "decode",
+     "activated_t": 1099.001,
+     "activated_to_condition_start_latency_s": 0.0,
+     "clear_run": {
+      "count": 1,
+      "first_index": 1183,
+      "last_index": 1183,
+      "samples": [
+       {
+        "raw_line": 1184,
+        "sample_index": 1183,
+        "source": "vram",
+        "t": 1183.001,
+        "value": 74.0
+       }
+      ]
+     },
+     "clear_trigger": {
+      "clear_level_c": 75.0,
+      "phase": "decode",
+      "raw_line": 1184,
+      "sample_index": 1183,
+      "source": "vram",
+      "t": 1183.001,
+      "value": 74.0
+     },
+     "cleared_index": 1183,
+     "cleared_t": 1183.001,
+     "condition_run": {
+      "count": 1,
+      "first_index": 1099,
+      "last_index": 1099,
+      "samples": [
+       {
+        "raw_line": 1100,
+        "sample_index": 1099,
+        "source": "vram",
+        "t": 1099.001,
+        "value": 76.0
+       }
+      ]
+     },
+     "condition_started_index": 1099,
+     "condition_started_t": 1099.001,
+     "duration_s": 84.0,
+     "peak": 76.0,
+     "peak_index": 1099,
+     "sources_during_episode": {
+      "vram": 84
+     },
+     "trigger": {
+      "coverage": null,
+      "phase": "decode",
+      "raw_line": 1100,
+      "sample_index": 1099,
+      "source": "vram",
+      "t": 1099.001,
+      "value": 76.0
+     }
+    },
+    {
+     "activated_index": 1184,
+     "activated_phase": "decode",
+     "activated_t": 1184.001,
+     "activated_to_condition_start_latency_s": 0.0,
+     "clear_run": {
+      "count": 1,
+      "first_index": 1290,
+      "last_index": 1290,
+      "samples": [
+       {
+        "raw_line": 1291,
+        "sample_index": 1290,
+        "source": "vram",
+        "t": 1290.001,
+        "value": 74.0
+       }
+      ]
+     },
+     "clear_trigger": {
+      "clear_level_c": 75.0,
+      "phase": "decode",
+      "raw_line": 1291,
+      "sample_index": 1290,
+      "source": "vram",
+      "t": 1290.001,
+      "value": 74.0
+     },
+     "cleared_index": 1290,
+     "cleared_t": 1290.001,
+     "condition_run": {
+      "count": 1,
+      "first_index": 1184,
+      "last_index": 1184,
+      "samples": [
+       {
+        "raw_line": 1185,
+        "sample_index": 1184,
+        "source": "vram",
+        "t": 1184.001,
+        "value": 76.0
+       }
+      ]
+     },
+     "condition_started_index": 1184,
+     "condition_started_t": 1184.001,
+     "duration_s": 106.0,
+     "peak": 76.0,
+     "peak_index": 1184,
+     "sources_during_episode": {
+      "vram": 106
+     },
+     "trigger": {
+      "coverage": null,
+      "phase": "decode",
+      "raw_line": 1185,
+      "sample_index": 1184,
+      "source": "vram",
+      "t": 1184.001,
+      "value": 76.0
+     }
+    },
+    {
+     "activated_index": 1291,
+     "activated_phase": "decode",
+     "activated_t": 1291.001,
+     "activated_to_condition_start_latency_s": 0.0,
+     "clear_run": {
+      "count": 1,
+      "first_index": 1326,
+      "last_index": 1326,
+      "samples": [
+       {
+        "raw_line": 1327,
+        "sample_index": 1326,
+        "source": "vram",
+        "t": 1326.001,
+        "value": 74.0
+       }
+      ]
+     },
+     "clear_trigger": {
+      "clear_level_c": 75.0,
+      "phase": "decode",
+      "raw_line": 1327,
+      "sample_index": 1326,
+      "source": "vram",
+      "t": 1326.001,
+      "value": 74.0
+     },
+     "cleared_index": 1326,
+     "cleared_t": 1326.001,
+     "condition_run": {
+      "count": 1,
+      "first_index": 1291,
+      "last_index": 1291,
+      "samples": [
+       {
+        "raw_line": 1292,
+        "sample_index": 1291,
+        "source": "vram",
+        "t": 1291.001,
+        "value": 76.0
+       }
+      ]
+     },
+     "condition_started_index": 1291,
+     "condition_started_t": 1291.001,
+     "duration_s": 35.0,
+     "peak": 76.0,
+     "peak_index": 1291,
+     "sources_during_episode": {
+      "vram": 35
+     },
+     "trigger": {
+      "coverage": null,
+      "phase": "decode",
+      "raw_line": 1292,
+      "sample_index": 1291,
+      "source": "vram",
+      "t": 1291.001,
+      "value": 76.0
+     }
+    },
+    {
+     "activated_index": 1327,
+     "activated_phase": "decode",
+     "activated_t": 1327.001,
+     "activated_to_condition_start_latency_s": 0.0,
+     "clear_run": {
+      "count": 1,
+      "first_index": 1338,
+      "last_index": 1338,
+      "samples": [
+       {
+        "raw_line": 1339,
+        "sample_index": 1338,
+        "source": "vram",
+        "t": 1338.001,
+        "value": 74.0
+       }
+      ]
+     },
+     "clear_trigger": {
+      "clear_level_c": 75.0,
+      "phase": "decode",
+      "raw_line": 1339,
+      "sample_index": 1338,
+      "source": "vram",
+      "t": 1338.001,
+      "value": 74.0
+     },
+     "cleared_index": 1338,
+     "cleared_t": 1338.001,
+     "condition_run": {
+      "count": 1,
+      "first_index": 1327,
+      "last_index": 1327,
+      "samples": [
+       {
+        "raw_line": 1328,
+        "sample_index": 1327,
+        "source": "vram",
+        "t": 1327.001,
+        "value": 76.0
+       }
+      ]
+     },
+     "condition_started_index": 1327,
+     "condition_started_t": 1327.001,
+     "duration_s": 11.0,
+     "peak": 76.0,
+     "peak_index": 1327,
+     "sources_during_episode": {
+      "vram": 11
+     },
+     "trigger": {
+      "coverage": null,
+      "phase": "decode",
+      "raw_line": 1328,
+      "sample_index": 1327,
+      "source": "vram",
+      "t": 1327.001,
+      "value": 76.0
+     }
+    },
+    {
+     "activated_index": 1339,
+     "activated_phase": "decode",
+     "activated_t": 1339.001,
+     "activated_to_condition_start_latency_s": 0.0,
+     "clear_run": {
+      "count": 1,
+      "first_index": 1373,
+      "last_index": 1373,
+      "samples": [
+       {
+        "raw_line": 1374,
+        "sample_index": 1373,
+        "source": "vram",
+        "t": 1373.001,
+        "value": 74.0
+       }
+      ]
+     },
+     "clear_trigger": {
+      "clear_level_c": 75.0,
+      "phase": "decode",
+      "raw_line": 1374,
+      "sample_index": 1373,
+      "source": "vram",
+      "t": 1373.001,
+      "value": 74.0
+     },
+     "cleared_index": 1373,
+     "cleared_t": 1373.001,
+     "condition_run": {
+      "count": 1,
+      "first_index": 1339,
+      "last_index": 1339,
+      "samples": [
+       {
+        "raw_line": 1340,
+        "sample_index": 1339,
+        "source": "vram",
+        "t": 1339.001,
+        "value": 76.0
+       }
+      ]
+     },
+     "condition_started_index": 1339,
+     "condition_started_t": 1339.001,
+     "duration_s": 34.0,
+     "peak": 76.0,
+     "peak_index": 1339,
+     "sources_during_episode": {
+      "vram": 34
+     },
+     "trigger": {
+      "coverage": null,
+      "phase": "decode",
+      "raw_line": 1340,
+      "sample_index": 1339,
+      "source": "vram",
+      "t": 1339.001,
+      "value": 76.0
+     }
+    },
+    {
+     "activated_index": 1374,
+     "activated_phase": "decode",
+     "activated_t": 1374.001,
+     "activated_to_condition_start_latency_s": 0.0,
+     "clear_run": {
+      "count": 1,
+      "first_index": 1456,
+      "last_index": 1456,
+      "samples": [
+       {
+        "raw_line": 1457,
+        "sample_index": 1456,
+        "source": "vram",
+        "t": 1456.001,
+        "value": 74.0
+       }
+      ]
+     },
+     "clear_trigger": {
+      "clear_level_c": 75.0,
+      "phase": "prefill",
+      "raw_line": 1457,
+      "sample_index": 1456,
+      "source": "vram",
+      "t": 1456.001,
+      "value": 74.0
+     },
+     "cleared_index": 1456,
+     "cleared_t": 1456.001,
+     "condition_run": {
+      "count": 1,
+      "first_index": 1374,
+      "last_index": 1374,
+      "samples": [
+       {
+        "raw_line": 1375,
+        "sample_index": 1374,
+        "source": "vram",
+        "t": 1374.001,
+        "value": 76.0
+       }
+      ]
+     },
+     "condition_started_index": 1374,
+     "condition_started_t": 1374.001,
+     "duration_s": 82.0,
+     "peak": 76.0,
+     "peak_index": 1374,
+     "sources_during_episode": {
+      "vram": 82
+     },
+     "trigger": {
+      "coverage": null,
+      "phase": "decode",
+      "raw_line": 1375,
+      "sample_index": 1374,
+      "source": "vram",
+      "t": 1374.001,
+      "value": 76.0
+     }
+    }
+   ],
+   "first_activation_t": 400.001,
+   "gpu": "gpu0",
+   "last_activation_t": 1374.001,
+   "last_clear_t": 1456.001,
+   "longest_episode_s": 272.0,
+   "mean_episode_s": 60.71,
+   "open_at_end_of_trace": false,
+   "re_trips": 16,
+   "rule": {
+    "clear_persistence_s": 1.0,
+    "gpus": "all",
+    "hysteresis_c": 0.0,
+    "id": "warn-75",
+    "missing": "hold",
+    "persistence_s": 1.0,
+    "sensor_class": "any_sensor",
+    "state": "warning",
+    "threshold_c": 75
+   },
+   "short_episode_s": 10.0,
+   "short_episodes": 3,
+   "shortest_episode_s": 1.0,
+   "transitions": 34,
+   "trips": 17
+  },
+  {
+   "active_seconds": 2530.0,
+   "active_seconds_by_phase": {
+    "cooldown": 7.0,
+    "decode": 1212.0,
+    "prefill": 1311.0
+   },
+   "episodes": [
+    {
+     "activated_index": 229,
+     "activated_phase": "decode",
+     "activated_t": 229.001,
+     "activated_to_condition_start_latency_s": 0.0,
+     "clear_run": {
+      "count": 1,
+      "first_index": 1658,
+      "last_index": 1658,
+      "samples": [
+       {
+        "raw_line": 1659,
+        "sample_index": 1658,
+        "source": "vram",
+        "t": 1658.001,
+        "value": 74.0
+       }
+      ]
+     },
+     "clear_trigger": {
+      "clear_level_c": 75.0,
+      "phase": "prefill",
+      "raw_line": 1659,
+      "sample_index": 1658,
+      "source": "vram",
+      "t": 1658.001,
+      "value": 74.0
+     },
+     "cleared_index": 1658,
+     "cleared_t": 1658.001,
+     "condition_run": {
+      "count": 1,
+      "first_index": 229,
+      "last_index": 229,
+      "samples": [
+       {
+        "raw_line": 230,
+        "sample_index": 229,
+        "source": "vram",
+        "t": 229.001,
+        "value": 76.0
+       }
+      ]
+     },
+     "condition_started_index": 229,
+     "condition_started_t": 229.001,
+     "duration_s": 1429.0,
+     "peak": 84.0,
+     "peak_index": 466,
+     "sources_during_episode": {
+      "vram": 1414,
+      "vram_ch_2": 12,
+      "vram_ch_8": 3
+     },
+     "trigger": {
+      "coverage": null,
+      "phase": "decode",
+      "raw_line": 230,
+      "sample_index": 229,
+      "source": "vram",
+      "t": 229.001,
+      "value": 76.0
+     }
+    },
+    {
+     "activated_index": 1659,
+     "activated_phase": "prefill",
+     "activated_t": 1659.001,
+     "activated_to_condition_start_latency_s": 0.0,
+     "clear_run": {
+      "count": 1,
+      "first_index": 1789,
+      "last_index": 1789,
+      "samples": [
+       {
+        "raw_line": 1790,
+        "sample_index": 1789,
+        "source": "vram",
+        "t": 1789.001,
+        "value": 74.0
+       }
+      ]
+     },
+     "clear_trigger": {
+      "clear_level_c": 75.0,
+      "phase": "prefill",
+      "raw_line": 1790,
+      "sample_index": 1789,
+      "source": "vram",
+      "t": 1789.001,
+      "value": 74.0
+     },
+     "cleared_index": 1789,
+     "cleared_t": 1789.001,
+     "condition_run": {
+      "count": 1,
+      "first_index": 1659,
+      "last_index": 1659,
+      "samples": [
+       {
+        "raw_line": 1660,
+        "sample_index": 1659,
+        "source": "vram",
+        "t": 1659.001,
+        "value": 80.0
+       }
+      ]
+     },
+     "condition_started_index": 1659,
+     "condition_started_t": 1659.001,
+     "duration_s": 130.0,
+     "peak": 80.0,
+     "peak_index": 1659,
+     "sources_during_episode": {
+      "vram": 130
+     },
+     "trigger": {
+      "coverage": null,
+      "phase": "prefill",
+      "raw_line": 1660,
+      "sample_index": 1659,
+      "source": "vram",
+      "t": 1659.001,
+      "value": 80.0
+     }
+    },
+    {
+     "activated_index": 1790,
+     "activated_phase": "prefill",
+     "activated_t": 1790.001,
+     "activated_to_condition_start_latency_s": 0.0,
+     "clear_run": {
+      "count": 1,
+      "first_index": 1845,
+      "last_index": 1845,
+      "samples": [
+       {
+        "raw_line": 1846,
+        "sample_index": 1845,
+        "source": "vram",
+        "t": 1845.001,
+        "value": 74.0
+       }
+      ]
+     },
+     "clear_trigger": {
+      "clear_level_c": 75.0,
+      "phase": "prefill",
+      "raw_line": 1846,
+      "sample_index": 1845,
+      "source": "vram",
+      "t": 1845.001,
+      "value": 74.0
+     },
+     "cleared_index": 1845,
+     "cleared_t": 1845.001,
+     "condition_run": {
+      "count": 1,
+      "first_index": 1790,
+      "last_index": 1790,
+      "samples": [
+       {
+        "raw_line": 1791,
+        "sample_index": 1790,
+        "source": "vram",
+        "t": 1790.001,
+        "value": 80.0
+       }
+      ]
+     },
+     "condition_started_index": 1790,
+     "condition_started_t": 1790.001,
+     "duration_s": 55.0,
+     "peak": 80.0,
+     "peak_index": 1790,
+     "sources_during_episode": {
+      "vram": 55
+     },
+     "trigger": {
+      "coverage": null,
+      "phase": "prefill",
+      "raw_line": 1791,
+      "sample_index": 1790,
+      "source": "vram",
+      "t": 1790.001,
+      "value": 80.0
+     }
+    },
+    {
+     "activated_index": 1846,
+     "activated_phase": "prefill",
+     "activated_t": 1846.001,
+     "activated_to_condition_start_latency_s": 0.0,
+     "clear_run": {
+      "count": 1,
+      "first_index": 2238,
+      "last_index": 2238,
+      "samples": [
+       {
+        "raw_line": 2239,
+        "sample_index": 2238,
+        "source": "vram",
+        "t": 2238.001,
+        "value": 74.0
+       }
+      ]
+     },
+     "clear_trigger": {
+      "clear_level_c": 75.0,
+      "phase": "prefill",
+      "raw_line": 2239,
+      "sample_index": 2238,
+      "source": "vram",
+      "t": 2238.001,
+      "value": 74.0
+     },
+     "cleared_index": 2238,
+     "cleared_t": 2238.001,
+     "condition_run": {
+      "count": 1,
+      "first_index": 1846,
+      "last_index": 1846,
+      "samples": [
+       {
+        "raw_line": 1847,
+        "sample_index": 1846,
+        "source": "vram",
+        "t": 1846.001,
+        "value": 80.0
+       }
+      ]
+     },
+     "condition_started_index": 1846,
+     "condition_started_t": 1846.001,
+     "duration_s": 392.0,
+     "peak": 82.0,
+     "peak_index": 2137,
+     "sources_during_episode": {
+      "vram": 392
+     },
+     "trigger": {
+      "coverage": null,
+      "phase": "prefill",
+      "raw_line": 1847,
+      "sample_index": 1846,
+      "source": "vram",
+      "t": 1846.001,
+      "value": 80.0
+     }
+    },
+    {
+     "activated_index": 2239,
+     "activated_phase": "prefill",
+     "activated_t": 2239.001,
+     "activated_to_condition_start_latency_s": 0.0,
+     "clear_run": {
+      "count": 1,
+      "first_index": 2294,
+      "last_index": 2294,
+      "samples": [
+       {
+        "raw_line": 2295,
+        "sample_index": 2294,
+        "source": "vram",
+        "t": 2294.001,
+        "value": 74.0
+       }
+      ]
+     },
+     "clear_trigger": {
+      "clear_level_c": 75.0,
+      "phase": "prefill",
+      "raw_line": 2295,
+      "sample_index": 2294,
+      "source": "vram",
+      "t": 2294.001,
+      "value": 74.0
+     },
+     "cleared_index": 2294,
+     "cleared_t": 2294.001,
+     "condition_run": {
+      "count": 1,
+      "first_index": 2239,
+      "last_index": 2239,
+      "samples": [
+       {
+        "raw_line": 2240,
+        "sample_index": 2239,
+        "source": "vram",
+        "t": 2239.001,
+        "value": 80.0
+       }
+      ]
+     },
+     "condition_started_index": 2239,
+     "condition_started_t": 2239.001,
+     "duration_s": 55.0,
+     "peak": 82.0,
+     "peak_index": 2252,
+     "sources_during_episode": {
+      "vram": 55
+     },
+     "trigger": {
+      "coverage": null,
+      "phase": "prefill",
+      "raw_line": 2240,
+      "sample_index": 2239,
+      "source": "vram",
+      "t": 2239.001,
+      "value": 80.0
+     }
+    },
+    {
+     "activated_index": 2295,
+     "activated_phase": "prefill",
+     "activated_t": 2295.001,
+     "activated_to_condition_start_latency_s": 0.0,
+     "clear_run": {
+      "count": 1,
+      "first_index": 2369,
+      "last_index": 2369,
+      "samples": [
+       {
+        "raw_line": 2370,
+        "sample_index": 2369,
+        "source": "vram",
+        "t": 2369.001,
+        "value": 74.0
+       }
+      ]
+     },
+     "clear_trigger": {
+      "clear_level_c": 75.0,
+      "phase": "prefill",
+      "raw_line": 2370,
+      "sample_index": 2369,
+      "source": "vram",
+      "t": 2369.001,
+      "value": 74.0
+     },
+     "cleared_index": 2369,
+     "cleared_t": 2369.001,
+     "condition_run": {
+      "count": 1,
+      "first_index": 2295,
+      "last_index": 2295,
+      "samples": [
+       {
+        "raw_line": 2296,
+        "sample_index": 2295,
+        "source": "vram",
+        "t": 2295.001,
+        "value": 80.0
+       }
+      ]
+     },
+     "condition_started_index": 2295,
+     "condition_started_t": 2295.001,
+     "duration_s": 74.0,
+     "peak": 82.0,
+     "peak_index": 2362,
+     "sources_during_episode": {
+      "vram": 74
+     },
+     "trigger": {
+      "coverage": null,
+      "phase": "prefill",
+      "raw_line": 2296,
+      "sample_index": 2295,
+      "source": "vram",
+      "t": 2295.001,
+      "value": 80.0
+     }
+    },
+    {
+     "activated_index": 2370,
+     "activated_phase": "prefill",
+     "activated_t": 2370.001,
+     "activated_to_condition_start_latency_s": 0.0,
+     "clear_run": {
+      "count": 1,
+      "first_index": 2425,
+      "last_index": 2425,
+      "samples": [
+       {
+        "raw_line": 2426,
+        "sample_index": 2425,
+        "source": "vram",
+        "t": 2425.001,
+        "value": 74.0
+       }
+      ]
+     },
+     "clear_trigger": {
+      "clear_level_c": 75.0,
+      "phase": "prefill",
+      "raw_line": 2426,
+      "sample_index": 2425,
+      "source": "vram",
+      "t": 2425.001,
+      "value": 74.0
+     },
+     "cleared_index": 2425,
+     "cleared_t": 2425.001,
+     "condition_run": {
+      "count": 1,
+      "first_index": 2370,
+      "last_index": 2370,
+      "samples": [
+       {
+        "raw_line": 2371,
+        "sample_index": 2370,
+        "source": "vram",
+        "t": 2370.001,
+        "value": 80.0
+       }
+      ]
+     },
+     "condition_started_index": 2370,
+     "condition_started_t": 2370.001,
+     "duration_s": 55.0,
+     "peak": 80.0,
+     "peak_index": 2370,
+     "sources_during_episode": {
+      "vram": 55
+     },
+     "trigger": {
+      "coverage": null,
+      "phase": "prefill",
+      "raw_line": 2371,
+      "sample_index": 2370,
+      "source": "vram",
+      "t": 2370.001,
+      "value": 80.0
+     }
+    },
+    {
+     "activated_index": 2426,
+     "activated_phase": "prefill",
+     "activated_t": 2426.001,
+     "activated_to_condition_start_latency_s": 0.0,
+     "clear_run": {
+      "count": 1,
+      "first_index": 2631,
+      "last_index": 2631,
+      "samples": [
+       {
+        "raw_line": 2632,
+        "sample_index": 2631,
+        "source": "vram",
+        "t": 2631.001,
+        "value": 74.0
+       }
+      ]
+     },
+     "clear_trigger": {
+      "clear_level_c": 75.0,
+      "phase": "prefill",
+      "raw_line": 2632,
+      "sample_index": 2631,
+      "source": "vram",
+      "t": 2631.001,
+      "value": 74.0
+     },
+     "cleared_index": 2631,
+     "cleared_t": 2631.001,
+     "condition_run": {
+      "count": 1,
+      "first_index": 2426,
+      "last_index": 2426,
+      "samples": [
+       {
+        "raw_line": 2427,
+        "sample_index": 2426,
+        "source": "vram",
+        "t": 2426.001,
+        "value": 80.0
+       }
+      ]
+     },
+     "condition_started_index": 2426,
+     "condition_started_t": 2426.001,
+     "duration_s": 205.0,
+     "peak": 80.0,
+     "peak_index": 2426,
+     "sources_during_episode": {
+      "vram": 205
+     },
+     "trigger": {
+      "coverage": null,
+      "phase": "prefill",
+      "raw_line": 2427,
+      "sample_index": 2426,
+      "source": "vram",
+      "t": 2426.001,
+      "value": 80.0
+     }
+    },
+    {
+     "activated_index": 2632,
+     "activated_phase": "prefill",
+     "activated_t": 2632.001,
+     "activated_to_condition_start_latency_s": 0.0,
+     "clear_run": {
+      "count": 1,
+      "first_index": 2687,
+      "last_index": 2687,
+      "samples": [
+       {
+        "raw_line": 2688,
+        "sample_index": 2687,
+        "source": "vram",
+        "t": 2687.001,
+        "value": 74.0
+       }
+      ]
+     },
+     "clear_trigger": {
+      "clear_level_c": 75.0,
+      "phase": "prefill",
+      "raw_line": 2688,
+      "sample_index": 2687,
+      "source": "vram",
+      "t": 2687.001,
+      "value": 74.0
+     },
+     "cleared_index": 2687,
+     "cleared_t": 2687.001,
+     "condition_run": {
+      "count": 1,
+      "first_index": 2632,
+      "last_index": 2632,
+      "samples": [
+       {
+        "raw_line": 2633,
+        "sample_index": 2632,
+        "source": "vram",
+        "t": 2632.001,
+        "value": 80.0
+       }
+      ]
+     },
+     "condition_started_index": 2632,
+     "condition_started_t": 2632.001,
+     "duration_s": 55.0,
+     "peak": 80.0,
+     "peak_index": 2632,
+     "sources_during_episode": {
+      "vram": 55
+     },
+     "trigger": {
+      "coverage": null,
+      "phase": "prefill",
+      "raw_line": 2633,
+      "sample_index": 2632,
+      "source": "vram",
+      "t": 2632.001,
+      "value": 80.0
+     }
+    },
+    {
+     "activated_index": 2688,
+     "activated_phase": "prefill",
+     "activated_t": 2688.001,
+     "activated_to_condition_start_latency_s": 0.0,
+     "clear_run": {
+      "count": 1,
+      "first_index": 2768,
+      "last_index": 2768,
+      "samples": [
+       {
+        "raw_line": 2769,
+        "sample_index": 2768,
+        "source": "vram",
+        "t": 2768.001,
+        "value": 74.0
+       }
+      ]
+     },
+     "clear_trigger": {
+      "clear_level_c": 75.0,
+      "phase": "cooldown",
+      "raw_line": 2769,
+      "sample_index": 2768,
+      "source": "vram",
+      "t": 2768.001,
+      "value": 74.0
+     },
+     "cleared_index": 2768,
+     "cleared_t": 2768.001,
+     "condition_run": {
+      "count": 1,
+      "first_index": 2688,
+      "last_index": 2688,
+      "samples": [
+       {
+        "raw_line": 2689,
+        "sample_index": 2688,
+        "source": "vram",
+        "t": 2688.001,
+        "value": 80.0
+       }
+      ]
+     },
+     "condition_started_index": 2688,
+     "condition_started_t": 2688.001,
+     "duration_s": 80.0,
+     "peak": 80.0,
+     "peak_index": 2688,
+     "sources_during_episode": {
+      "vram": 80
+     },
+     "trigger": {
+      "coverage": null,
+      "phase": "prefill",
+      "raw_line": 2689,
+      "sample_index": 2688,
+      "source": "vram",
+      "t": 2688.001,
+      "value": 80.0
+     }
+    }
+   ],
+   "first_activation_t": 229.001,
+   "gpu": "gpu1",
+   "last_activation_t": 2688.001,
+   "last_clear_t": 2768.001,
+   "longest_episode_s": 1429.0,
+   "mean_episode_s": 253.0,
+   "open_at_end_of_trace": false,
+   "re_trips": 9,
+   "rule": {
+    "clear_persistence_s": 1.0,
+    "gpus": "all",
+    "hysteresis_c": 0.0,
+    "id": "warn-75",
+    "missing": "hold",
+    "persistence_s": 1.0,
+    "sensor_class": "any_sensor",
+    "state": "warning",
+    "threshold_c": 75
+   },
+   "short_episode_s": 10.0,
+   "short_episodes": 0,
+   "shortest_episode_s": 55.0,
+   "transitions": 20,
+   "trips": 10
+  },
+  {
+   "active_seconds": 0,
+   "active_seconds_by_phase": {},
+   "episodes": [],
+   "first_activation_t": null,
+   "gpu": "gpu0",
+   "last_activation_t": null,
+   "last_clear_t": null,
+   "longest_episode_s": 0,
+   "mean_episode_s": 0,
+   "open_at_end_of_trace": false,
+   "re_trips": 0,
+   "rule": {
+    "clear_persistence_s": 1.0,
+    "gpus": "all",
+    "hysteresis_c": 0.0,
+    "id": "crit-85",
+    "missing": "hold",
+    "persistence_s": 1.0,
+    "sensor_class": "any_sensor",
+    "state": "critical",
+    "threshold_c": 85
+   },
+   "short_episode_s": 10.0,
+   "short_episodes": 0,
+   "shortest_episode_s": 0,
+   "transitions": 0,
+   "trips": 0
+  },
+  {
+   "active_seconds": 0,
+   "active_seconds_by_phase": {},
+   "episodes": [],
+   "first_activation_t": null,
+   "gpu": "gpu1",
+   "last_activation_t": null,
+   "last_clear_t": null,
+   "longest_episode_s": 0,
+   "mean_episode_s": 0,
+   "open_at_end_of_trace": false,
+   "re_trips": 0,
+   "rule": {
+    "clear_persistence_s": 1.0,
+    "gpus": "all",
+    "hysteresis_c": 0.0,
+    "id": "crit-85",
+    "missing": "hold",
+    "persistence_s": 1.0,
+    "sensor_class": "any_sensor",
+    "state": "critical",
+    "threshold_c": 85
+   },
+   "short_episode_s": 10.0,
+   "short_episodes": 0,
+   "shortest_episode_s": 0,
+   "transitions": 0,
+   "trips": 0
+  },
+  {
+   "active_seconds": 0,
+   "active_seconds_by_phase": {},
+   "episodes": [],
+   "first_activation_t": null,
+   "gpu": "gpu0",
+   "last_activation_t": null,
+   "last_clear_t": null,
+   "longest_episode_s": 0,
+   "mean_episode_s": 0,
+   "open_at_end_of_trace": false,
+   "re_trips": 0,
+   "rule": {
+    "clear_persistence_s": 1.0,
+    "gpus": "all",
+    "hysteresis_c": 0.0,
+    "id": "abort-90",
+    "missing": "hold",
+    "persistence_s": 1.0,
+    "sensor_class": "any_sensor",
+    "state": "abort",
+    "threshold_c": 90
+   },
+   "short_episode_s": 10.0,
+   "short_episodes": 0,
+   "shortest_episode_s": 0,
+   "transitions": 0,
+   "trips": 0
+  },
+  {
+   "active_seconds": 0,
+   "active_seconds_by_phase": {},
+   "episodes": [],
+   "first_activation_t": null,
+   "gpu": "gpu1",
+   "last_activation_t": null,
+   "last_clear_t": null,
+   "longest_episode_s": 0,
+   "mean_episode_s": 0,
+   "open_at_end_of_trace": false,
+   "re_trips": 0,
+   "rule": {
+    "clear_persistence_s": 1.0,
+    "gpus": "all",
+    "hysteresis_c": 0.0,
+    "id": "abort-90",
+    "missing": "hold",
+    "persistence_s": 1.0,
+    "sensor_class": "any_sensor",
+    "state": "abort",
+    "threshold_c": 90
+   },
+   "short_episode_s": 10.0,
+   "short_episodes": 0,
+   "shortest_episode_s": 0,
+   "transitions": 0,
+   "trips": 0
+  }
+ ],
+ "tool": {
+  "definitions": "(also in README.md)\n  sample          one record of samples.jsonl; `sample_index` is its 0-based line number (raw line = sample_index + 1).\n  sensor class    package | vram (the firmware's VRAM sensor) | vram_hottest_channel (max over vram_ch_*, never averaged) |\n                  memory_controller | pcie | any_sensor (hottest of every GPU temperature sensor = the benchmark harness' semantics).\n  rule            state (warning|critical|abort), sensor_class, gpus, threshold_c, persistence_s, hysteresis_c,\n                  clear_persistence_s, missing (hold|clear|fail_closed). Rules are evaluated independently per GPU.\n  at/above        value >= threshold_c. Below clear level: value < threshold_c - hysteresis_c.\n  persistence     the rule activates when it has seen `ceil(persistence_s / dt)` CONSECUTIVE at/above samples (dt = nominal sample period,\n                  1 s here). persistence_s <= dt is therefore instantaneous. Clearing needs `ceil(clear_persistence_s / dt)` consecutive\n                  below-clear-level samples; samples inside the hysteresis band neither clear nor re-arm.\n  missing sample  value None. hold = neither counts toward activation/clearing nor resets either run; clear = treated as below clear level\n                  and not at/above; fail_closed = treated as at/above and not below clear level.\n  trip            one activation of a rule (instantaneous or persistent per its settings). re-trips = trips - 1.\n  state time      each sample i contributes dt_i (t[i+1]-t[i]; the last sample the nominal dt) to the state in force after processing it.\n  combined state  per GPU (and \"system\" = any GPU) the highest active rule state: ok < warning < critical < abort.\n  flap            an escalation of the combined state followed by a de-escalation less than 60 s later.",
+  "dt_s": 1.0,
+  "name": "thermal_policy_replay",
+  "version": "1.0"
+ }
+}

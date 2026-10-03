@@ -1,0 +1,90 @@
+==============================================================================================================
+POLICY REPLAY  example-class-split-demo   [ILLUSTRATIVE_EXAMPLE]
+  ILLUSTRATIVE EXAMPLE ONLY - not a recommendation. Values are chosen to straddle the observed soak plateaus so the tool's behaviour is visible; they are derived from no limit or safety analysis. Package and hottest-channel VRAM are separate classes with separate warning/critical values (package 65/75, VRAM 78/88), to show how the classes behave differently. Instantaneous, no hysteresis.
+  This is an offline replay of the preserved soak. It is NOT a recommendation and changes nothing.
+==============================================================================================================
+  raw: /home/mike/nexus-code/experiments/thermal-soak-2026-10-03/raw/thermal-soak-20261003T170044Z/samples.jsonl  sha256 6946e9e6d6f94374...  samples 3244  duration 3244.0 s  dt 1.0 s  phases {'init': 1, 'baseline': 120, 'decode': 1320, 'prefill': 1320, 'cooldown': 480, 'done': 3}
+
+RULES
+  pkg-warn-65                  warning  package                >= 65 C  persistence 1s  hysteresis 0 C  clear-persistence 1s  missing=hold  gpus=all
+  pkg-crit-75                  critical package                >= 75 C  persistence 1s  hysteresis 0 C  clear-persistence 1s  missing=hold  gpus=all
+  vramch-warn-78               warning  vram_hottest_channel   >= 78 C  persistence 1s  hysteresis 0 C  clear-persistence 1s  missing=hold  gpus=all
+  vramch-crit-88               critical vram_hottest_channel   >= 88 C  persistence 1s  hysteresis 0 C  clear-persistence 1s  missing=hold  gpus=all
+
+PER-RULE RESULTS (per GPU)
+  rule                      gpu   trips re-trips trans.  active s short<10s longest s first act. t last act. t last clear t
+  pkg-warn-65               gpu0     97       96    194      2369        30       358      301.001        2734         2768
+  pkg-warn-65               gpu1     26       25     52      2541         0      1140      197.001        2688         2763
+  pkg-crit-75               gpu0      0        0      0         0         0         0            -           -            -
+  pkg-crit-75               gpu1      0        0      0         0         0         0            -           -            -
+  vramch-warn-78            gpu0      0        0      0         0         0         0            -           -            -
+  vramch-warn-78            gpu1     20       19     40      2501         1      1277      247.001        2707         2768
+  vramch-crit-88            gpu0      0        0      0         0         0         0            -           -            -
+  vramch-crit-88            gpu1      0        0      0         0         0         0            -           -            -
+
+COMBINED STATE (highest active rule state)
+  gpu0    time in state (s): ok=875  warning=2369  critical=0  abort=0   transitions 194  first 301.001  last 2768  flaps(<60s up->down) 93
+  gpu1    time in state (s): ok=685  warning=2559  critical=0  abort=0   transitions 26  first 197.001  last 2768  flaps(<60s up->down) 4
+  system  time in state (s): ok=674  warning=2570  critical=0  abort=0   transitions 4  first 197.001  last 2768  flaps(<60s up->down) 0
+
+RAW OBSERVATIONS BEHIND TRANSITIONS (first 8 activations per rule/GPU; every one is in result.json; raw line = line number in samples.jsonl)
+  pkg-warn-65             gpu0 t=301.001 line 302   decode   value 65.0 from pkg  run[1]=65  peak 65.0  dur 2s  cleared t=303.001 value 64.0 (<65)
+  pkg-warn-65             gpu0 t=306.001 line 307   decode   value 65.0 from pkg  run[1]=65  peak 66.0  dur 302s  cleared t=608.001 value 63.0 (<65)
+  pkg-warn-65             gpu0 t=609.001 line 610   decode   value 66.0 from pkg  run[1]=66  peak 66.0  dur 17s  cleared t=626.001 value 64.0 (<65)
+  pkg-warn-65             gpu0 t=627.001 line 628   decode   value 66.0 from pkg  run[1]=66  peak 66.0  dur 304s  cleared t=931.001 value 64.0 (<65)
+  pkg-warn-65             gpu0 t=932.001 line 933   decode   value 66.0 from pkg  run[1]=66  peak 66.0  dur 358s  cleared t=1290 value 64.0 (<65)
+  pkg-warn-65             gpu0 t=1291    line 1292  decode   value 66.0 from pkg  run[1]=66  peak 66.0  dur 17s  cleared t=1308 value 63.0 (<65)
+  pkg-warn-65             gpu0 t=1309    line 1310  decode   value 66.0 from pkg  run[1]=66  peak 66.0  dur 143s  cleared t=1452 value 64.0 (<65)
+  pkg-warn-65             gpu0 t=1453    line 1454  prefill  value 67.0 from pkg  run[1]=67  peak 67.0  dur 10s  cleared t=1463 value 63.0 (<65)
+  pkg-warn-65             gpu0 ... 89 more episodes in result.json
+  pkg-warn-65             gpu1 t=197.001 line 198   decode   value 65.0 from pkg  run[1]=65  peak 70.0  dur 151s  cleared t=348.001 value 64.0 (<65)
+  pkg-warn-65             gpu1 t=349.001 line 350   decode   value 69.0 from pkg  run[1]=69  peak 70.0  dur 1140s  cleared t=1489 value 64.0 (<65)
+  pkg-warn-65             gpu1 t=1490    line 1491  prefill  value 69.0 from pkg  run[1]=69  peak 70.0  dur 37s  cleared t=1527 value 64.0 (<65)
+  pkg-warn-65             gpu1 t=1528    line 1529  prefill  value 68.0 from pkg  run[1]=68  peak 70.0  dur 36s  cleared t=1564 value 63.0 (<65)
+  pkg-warn-65             gpu1 t=1565    line 1566  prefill  value 69.0 from pkg  run[1]=69  peak 70.0  dur 18s  cleared t=1583 value 63.0 (<65)
+  pkg-warn-65             gpu1 t=1584    line 1585  prefill  value 69.0 from pkg  run[1]=69  peak 70.0  dur 36s  cleared t=1620 value 64.0 (<65)
+  pkg-warn-65             gpu1 t=1621    line 1622  prefill  value 69.0 from pkg  run[1]=69  peak 70.0  dur 37s  cleared t=1658 value 63.0 (<65)
+  pkg-warn-65             gpu1 t=1659    line 1660  prefill  value 69.0 from pkg  run[1]=69  peak 70.0  dur 36s  cleared t=1695 value 64.0 (<65)
+  pkg-warn-65             gpu1 ... 18 more episodes in result.json
+  vramch-warn-78          gpu1 t=247.001 line 248   decode   value 78.0 from vram_ch_2  run[1]=78  peak 78.0  dur 1s  cleared t=248.001 value 76.0 (<78)
+  vramch-warn-78          gpu1 t=250.001 line 251   decode   value 78.0 from vram_ch_2  run[1]=78  peak 84.0  dur 1277s  cleared t=1527 value 76.0 (<78)
+  vramch-warn-78          gpu1 t=1528    line 1529  prefill  value 80.0 from vram_ch_2  run[1]=80  peak 82.0  dur 74s  cleared t=1602 value 76.0 (<78)
+  vramch-warn-78          gpu1 t=1603    line 1604  prefill  value 80.0 from vram_ch_2  run[1]=80  peak 80.0  dur 55s  cleared t=1658 value 74.0 (<78)
+  vramch-warn-78          gpu1 t=1659    line 1660  prefill  value 80.0 from vram_ch_2  run[1]=80  peak 80.0  dur 130s  cleared t=1789 value 74.0 (<78)
+  vramch-warn-78          gpu1 t=1790    line 1791  prefill  value 80.0 from vram_ch_2  run[1]=80  peak 80.0  dur 55s  cleared t=1845 value 74.0 (<78)
+  vramch-warn-78          gpu1 t=1846    line 1847  prefill  value 80.0 from vram_ch_2  run[1]=80  peak 80.0  dur 74s  cleared t=1920 value 76.0 (<78)
+  vramch-warn-78          gpu1 t=1921    line 1922  prefill  value 80.0 from vram_ch_2  run[1]=80  peak 80.0  dur 130s  cleared t=2051 value 76.0 (<78)
+  vramch-warn-78          gpu1 ... 12 more episodes in result.json
+
+SENSOR-CLASS BEHAVIOUR DURING LOADED PHASES (instantaneous run structure at each rule threshold; independent of persistence)
+  gpu0.package                   min/mean/p99/max 30/64.77/66/67 C
+      >=    65 C:  89.5% of loaded samples in 97 runs, run lengths {'1': 3, '2-4': 8, '5-29': 77, '30-59': 5, '>=60': 4}
+  gpu0.vram                      min/mean/p99/max 32/72.76/76/76 C
+      >=    65 C:  94.9% of loaded samples in 3 runs, run lengths {'1': 0, '2-4': 0, '5-29': 2, '30-59': 0, '>=60': 1}
+      >=    75 C:  39.1% of loaded samples in 17 runs, run lengths {'1': 1, '2-4': 2, '5-29': 5, '30-59': 2, '>=60': 7}
+  gpu0.vram_hottest_channel      min/mean/p99/max 32/72.76/76/76 C
+      >=    65 C:  94.9% of loaded samples in 3 runs, run lengths {'1': 0, '2-4': 0, '5-29': 2, '30-59': 0, '>=60': 1}
+      >=    75 C:  39.0% of loaded samples in 18 runs, run lengths {'1': 1, '2-4': 3, '5-29': 5, '30-59': 2, '>=60': 7}
+  gpu0.memory_controller         min/mean/p99/max 22/48.18/49/49 C
+  gpu0.pcie                      min/mean/p99/max 32/65.51/67/67 C
+      >=    65 C:  93.2% of loaded samples in 13 runs, run lengths {'1': 0, '2-4': 0, '5-29': 0, '30-59': 5, '>=60': 8}
+  gpu0.any_sensor                min/mean/p99/max 32/72.77/76/76 C
+      >=    65 C:  94.9% of loaded samples in 3 runs, run lengths {'1': 0, '2-4': 0, '5-29': 2, '30-59': 0, '>=60': 1}
+      >=    75 C:  39.1% of loaded samples in 17 runs, run lengths {'1': 1, '2-4': 2, '5-29': 5, '30-59': 2, '>=60': 7}
+  gpu1.package                   min/mean/p99/max 31/68.55/70/70 C
+      >=    65 C:  96.2% of loaded samples in 26 runs, run lengths {'1': 0, '2-4': 0, '5-29': 6, '30-59': 12, '>=60': 8}
+  gpu1.vram                      min/mean/p99/max 34/80.21/84/84 C
+      >=    65 C:  97.6% of loaded samples in 1 runs, run lengths {'1': 0, '2-4': 0, '5-29': 0, '30-59': 0, '>=60': 1}
+      >=    75 C:  95.6% of loaded samples in 10 runs, run lengths {'1': 0, '2-4': 0, '5-29': 0, '30-59': 4, '>=60': 6}
+      >=    78 C:  94.5% of loaded samples in 20 runs, run lengths {'1': 1, '2-4': 0, '5-29': 2, '30-59': 9, '>=60': 8}
+  gpu1.vram_hottest_channel      min/mean/p99/max 34/80.22/84/84 C
+      >=    65 C:  97.6% of loaded samples in 1 runs, run lengths {'1': 0, '2-4': 0, '5-29': 0, '30-59': 0, '>=60': 1}
+      >=    75 C:  95.6% of loaded samples in 10 runs, run lengths {'1': 0, '2-4': 0, '5-29': 0, '30-59': 4, '>=60': 6}
+      >=    78 C:  94.5% of loaded samples in 20 runs, run lengths {'1': 1, '2-4': 0, '5-29': 2, '30-59': 9, '>=60': 8}
+  gpu1.memory_controller         min/mean/p99/max 23/50.42/51/51 C
+  gpu1.pcie                      min/mean/p99/max 32/68.81/70/70 C
+      >=    65 C:  97.2% of loaded samples in 1 runs, run lengths {'1': 0, '2-4': 0, '5-29': 0, '30-59': 0, '>=60': 1}
+  gpu1.any_sensor                min/mean/p99/max 34/80.23/84/84 C
+      >=    65 C:  97.6% of loaded samples in 1 runs, run lengths {'1': 0, '2-4': 0, '5-29': 0, '30-59': 0, '>=60': 1}
+      >=    75 C:  95.6% of loaded samples in 10 runs, run lengths {'1': 0, '2-4': 0, '5-29': 0, '30-59': 4, '>=60': 6}
+      >=    78 C:  94.5% of loaded samples in 20 runs, run lengths {'1': 1, '2-4': 0, '5-29': 2, '30-59': 9, '>=60': 8}

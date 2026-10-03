@@ -1,0 +1,52 @@
+==============================================================================================================
+POLICY REPLAY  example-boundary-demo   [ILLUSTRATIVE_EXAMPLE]
+  ILLUSTRATIVE EXAMPLE ONLY - not a recommendation. Values are chosen to straddle the observed soak plateaus so the tool's behaviour is visible; they are derived from no limit or safety analysis. One VRAM warning at 80 C, instantaneous. GPU 1's VRAM hovers at 80-84 C in decode, so this sits on a boundary. Run with --compare-persistence to compare instantaneous and persistent behaviour directly.
+  This is an offline replay of the preserved soak. It is NOT a recommendation and changes nothing.
+==============================================================================================================
+  raw: /home/mike/nexus-code/experiments/thermal-soak-2026-10-03/raw/thermal-soak-20261003T170044Z/samples.jsonl  sha256 6946e9e6d6f94374...  samples 3244  duration 3244.0 s  dt 1.0 s  phases {'init': 1, 'baseline': 120, 'decode': 1320, 'prefill': 1320, 'cooldown': 480, 'done': 3}
+
+RULES
+  vram-warn-80                 warning  vram_hottest_channel   >= 80 C  persistence 1s  hysteresis 0 C  clear-persistence 1s  missing=hold  gpus=all
+
+PER-RULE RESULTS (per GPU)
+  rule                      gpu   trips re-trips trans.  active s short<10s longest s first act. t last act. t last clear t
+  vram-warn-80              gpu0      0        0      0         0         0         0            -           -            -
+  vram-warn-80              gpu1     47       46     94      2439         3      1204      278.001        2744         2763
+
+COMBINED STATE (highest active rule state)
+  gpu0    time in state (s): ok=3244  warning=0  critical=0  abort=0   transitions 0  first -  last -  flaps(<60s up->down) 0
+  gpu1    time in state (s): ok=805  warning=2439  critical=0  abort=0   transitions 94  first 278.001  last 2763  flaps(<60s up->down) 46
+  system  time in state (s): ok=805  warning=2439  critical=0  abort=0   transitions 94  first 278.001  last 2763  flaps(<60s up->down) 46
+
+RAW OBSERVATIONS BEHIND TRANSITIONS (first 8 activations per rule/GPU; every one is in result.json; raw line = line number in samples.jsonl)
+  vram-warn-80            gpu1 t=278.001 line 279   decode   value 80.0 from vram_ch_2  run[1]=80  peak 80.0  dur 6s  cleared t=284.001 value 78.0 (<80)
+  vram-warn-80            gpu1 t=285.001 line 286   decode   value 80.0 from vram_ch_2  run[1]=80  peak 84.0  dur 1204s  cleared t=1489 value 78.0 (<80)
+  vram-warn-80            gpu1 t=1490    line 1491  prefill  value 80.0 from vram_ch_2  run[1]=80  peak 82.0  dur 33s  cleared t=1523 value 78.0 (<80)
+  vram-warn-80            gpu1 t=1524    line 1525  prefill  value 80.0 from vram_ch_2  run[1]=80  peak 80.0  dur 3s  cleared t=1527 value 76.0 (<80)
+  vram-warn-80            gpu1 t=1528    line 1529  prefill  value 80.0 from vram_ch_2  run[1]=80  peak 80.0  dur 18s  cleared t=1546 value 78.0 (<80)
+  vram-warn-80            gpu1 t=1547    line 1548  prefill  value 80.0 from vram_ch_2  run[1]=80  peak 82.0  dur 17s  cleared t=1564 value 78.0 (<80)
+  vram-warn-80            gpu1 t=1565    line 1566  prefill  value 80.0 from vram_ch_2  run[1]=80  peak 80.0  dur 37s  cleared t=1602 value 76.0 (<80)
+  vram-warn-80            gpu1 t=1603    line 1604  prefill  value 80.0 from vram_ch_2  run[1]=80  peak 80.0  dur 18s  cleared t=1621 value 78.0 (<80)
+  vram-warn-80            gpu1 ... 39 more episodes in result.json
+
+SENSOR-CLASS BEHAVIOUR DURING LOADED PHASES (instantaneous run structure at each rule threshold; independent of persistence)
+  gpu0.package                   min/mean/p99/max 30/64.77/66/67 C
+  gpu0.vram                      min/mean/p99/max 32/72.76/76/76 C
+  gpu0.vram_hottest_channel      min/mean/p99/max 32/72.76/76/76 C
+  gpu0.memory_controller         min/mean/p99/max 22/48.18/49/49 C
+  gpu0.pcie                      min/mean/p99/max 32/65.51/67/67 C
+  gpu0.any_sensor                min/mean/p99/max 32/72.77/76/76 C
+  gpu1.package                   min/mean/p99/max 31/68.55/70/70 C
+  gpu1.vram                      min/mean/p99/max 34/80.21/84/84 C
+      >=    80 C:  92.3% of loaded samples in 47 runs, run lengths {'1': 1, '2-4': 1, '5-29': 25, '30-59': 19, '>=60': 1}
+  gpu1.vram_hottest_channel      min/mean/p99/max 34/80.22/84/84 C
+      >=    80 C:  92.3% of loaded samples in 47 runs, run lengths {'1': 1, '2-4': 1, '5-29': 25, '30-59': 19, '>=60': 1}
+  gpu1.memory_controller         min/mean/p99/max 23/50.42/51/51 C
+  gpu1.pcie                      min/mean/p99/max 32/68.81/70/70 C
+  gpu1.any_sensor                min/mean/p99/max 34/80.23/84/84 C
+      >=    80 C:  92.3% of loaded samples in 47 runs, run lengths {'1': 1, '2-4': 1, '5-29': 25, '30-59': 19, '>=60': 1}
+
+INSTANTANEOUS vs PERSISTENT: policy 'example-boundary-demo' [illustrative_example], persistence overridden on every rule (1 s = instantaneous). Cells: trips / active seconds / episodes shorter than 10 s.
+  rule                      gpu                N=1s              N=5s             N=10s             N=30s             N=60s
+  vram-warn-80              gpu0          0 / 0 / 0         0 / 0 / 0         0 / 0 / 0         0 / 0 / 0         0 / 0 / 0
+  vram-warn-80              gpu1      47 / 2439 / 3     45 / 2255 / 1    44 / 2033 / 23    20 / 1420 / 13      1 / 1145 / 0

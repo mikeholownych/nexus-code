@@ -1,0 +1,65 @@
+==============================================================================================================
+POLICY REPLAY  example-persistence-demo   [ILLUSTRATIVE_EXAMPLE]
+  ILLUSTRATIVE EXAMPLE ONLY - not a recommendation. Values are chosen to straddle the observed soak plateaus so the tool's behaviour is visible; they are derived from no limit or safety analysis. Same thresholds as the reference with persistence added (warning 30 s, critical 10 s, abort 5 s) to show what persistence changes.
+  This is an offline replay of the preserved soak. It is NOT a recommendation and changes nothing.
+==============================================================================================================
+  raw: /home/mike/nexus-code/experiments/thermal-soak-2026-10-03/raw/thermal-soak-20261003T170044Z/samples.jsonl  sha256 6946e9e6d6f94374...  samples 3244  duration 3244.0 s  dt 1.0 s  phases {'init': 1, 'baseline': 120, 'decode': 1320, 'prefill': 1320, 'cooldown': 480, 'done': 3}
+
+RULES
+  warn-75-p30                  warning  any_sensor             >= 75 C  persistence 30s  hysteresis 0 C  clear-persistence 1s  missing=hold  gpus=all
+  crit-85-p10                  critical any_sensor             >= 85 C  persistence 10s  hysteresis 0 C  clear-persistence 1s  missing=hold  gpus=all
+  abort-90-p5                  abort    any_sensor             >= 90 C  persistence 5s  hysteresis 0 C  clear-persistence 1s  missing=hold  gpus=all
+
+PER-RULE RESULTS (per GPU)
+  rule                      gpu   trips re-trips trans.  active s short<10s longest s first act. t last act. t last clear t
+  warn-75-p30               gpu0      9        8     18       679         2       243      507.001        1403         1456
+  warn-75-p30               gpu1     10        9     20      2240         0      1400      258.001        2717         2768
+  crit-85-p10               gpu0      0        0      0         0         0         0            -           -            -
+  crit-85-p10               gpu1      0        0      0         0         0         0            -           -            -
+  abort-90-p5               gpu0      0        0      0         0         0         0            -           -            -
+  abort-90-p5               gpu1      0        0      0         0         0         0            -           -            -
+
+COMBINED STATE (highest active rule state)
+  gpu0    time in state (s): ok=2565  warning=679  critical=0  abort=0   transitions 18  first 507.001  last 1456  flaps(<60s up->down) 5
+  gpu1    time in state (s): ok=1004  warning=2240  critical=0  abort=0   transitions 20  first 258.001  last 2768  flaps(<60s up->down) 6
+  system  time in state (s): ok=1004  warning=2240  critical=0  abort=0   transitions 20  first 258.001  last 2768  flaps(<60s up->down) 6
+
+RAW OBSERVATIONS BEHIND TRANSITIONS (first 8 activations per rule/GPU; every one is in result.json; raw line = line number in samples.jsonl)
+  warn-75-p30             gpu0 t=507.001 line 508   decode   value 76.0 from vram  run[30]=76,76,76,76,76,76 (+24 elided)  peak 76.0  dur 137s  cleared t=644.001 value 74.0 (<75)
+  warn-75-p30             gpu0 t=674.001 line 675   decode   value 76.0 from vram  run[30]=76,76,76,76,76,76 (+24 elided)  peak 76.0  dur 243s  cleared t=917.001 value 74.0 (<75)
+  warn-75-p30             gpu0 t=947.001 line 948   decode   value 76.0 from vram  run[30]=76,76,76,76,76,76 (+24 elided)  peak 76.0  dur 38s  cleared t=985.001 value 74.0 (<75)
+  warn-75-p30             gpu0 t=1033    line 1034  decode   value 76.0 from vram  run[30]=76,76,76,76,76,76 (+24 elided)  peak 76.0  dur 65s  cleared t=1098 value 74.0 (<75)
+  warn-75-p30             gpu0 t=1128    line 1129  decode   value 76.0 from vram  run[30]=76,76,76,76,76,76 (+24 elided)  peak 76.0  dur 55s  cleared t=1183 value 74.0 (<75)
+  warn-75-p30             gpu0 t=1213    line 1214  decode   value 76.0 from vram  run[30]=76,76,76,76,76,76 (+24 elided)  peak 76.0  dur 77s  cleared t=1290 value 74.0 (<75)
+  warn-75-p30             gpu0 t=1320    line 1321  decode   value 76.0 from vram  run[30]=76,76,76,76,76,76 (+24 elided)  peak 76.0  dur 6s  cleared t=1326 value 74.0 (<75)
+  warn-75-p30             gpu0 t=1368    line 1369  decode   value 76.0 from vram  run[30]=76,76,76,76,76,76 (+24 elided)  peak 76.0  dur 5s  cleared t=1373 value 74.0 (<75)
+  warn-75-p30             gpu0 ... 1 more episodes in result.json
+  warn-75-p30             gpu1 t=258.001 line 259   decode   value 78.0 from vram  run[30]=76,76,76,78,78,78 (+24 elided)  peak 84.0  dur 1400s  cleared t=1658 value 74.0 (<75)
+  warn-75-p30             gpu1 t=1688    line 1689  prefill  value 80.0 from vram  run[30]=80,80,80,80,80,80 (+24 elided)  peak 80.0  dur 101s  cleared t=1789 value 74.0 (<75)
+  warn-75-p30             gpu1 t=1819    line 1820  prefill  value 80.0 from vram  run[30]=80,80,80,80,80,80 (+24 elided)  peak 80.0  dur 26s  cleared t=1845 value 74.0 (<75)
+  warn-75-p30             gpu1 t=1875    line 1876  prefill  value 80.0 from vram  run[30]=80,80,80,80,80,80 (+24 elided)  peak 82.0  dur 363s  cleared t=2238 value 74.0 (<75)
+  warn-75-p30             gpu1 t=2268    line 2269  prefill  value 80.0 from vram  run[30]=80,80,80,80,80,80 (+24 elided)  peak 82.0  dur 26s  cleared t=2294 value 74.0 (<75)
+  warn-75-p30             gpu1 t=2324    line 2325  prefill  value 80.0 from vram  run[30]=80,80,80,80,80,80 (+24 elided)  peak 82.0  dur 45s  cleared t=2369 value 74.0 (<75)
+  warn-75-p30             gpu1 t=2399    line 2400  prefill  value 80.0 from vram  run[30]=80,80,80,80,80,80 (+24 elided)  peak 80.0  dur 26s  cleared t=2425 value 74.0 (<75)
+  warn-75-p30             gpu1 t=2455    line 2456  prefill  value 80.0 from vram  run[30]=80,80,80,80,80,80 (+24 elided)  peak 80.0  dur 176s  cleared t=2631 value 74.0 (<75)
+  warn-75-p30             gpu1 ... 2 more episodes in result.json
+
+SENSOR-CLASS BEHAVIOUR DURING LOADED PHASES (instantaneous run structure at each rule threshold; independent of persistence)
+  gpu0.package                   min/mean/p99/max 30/64.77/66/67 C
+  gpu0.vram                      min/mean/p99/max 32/72.76/76/76 C
+      >=    75 C:  39.1% of loaded samples in 17 runs, run lengths {'1': 1, '2-4': 2, '5-29': 5, '30-59': 2, '>=60': 7}
+  gpu0.vram_hottest_channel      min/mean/p99/max 32/72.76/76/76 C
+      >=    75 C:  39.0% of loaded samples in 18 runs, run lengths {'1': 1, '2-4': 3, '5-29': 5, '30-59': 2, '>=60': 7}
+  gpu0.memory_controller         min/mean/p99/max 22/48.18/49/49 C
+  gpu0.pcie                      min/mean/p99/max 32/65.51/67/67 C
+  gpu0.any_sensor                min/mean/p99/max 32/72.77/76/76 C
+      >=    75 C:  39.1% of loaded samples in 17 runs, run lengths {'1': 1, '2-4': 2, '5-29': 5, '30-59': 2, '>=60': 7}
+  gpu1.package                   min/mean/p99/max 31/68.55/70/70 C
+  gpu1.vram                      min/mean/p99/max 34/80.21/84/84 C
+      >=    75 C:  95.6% of loaded samples in 10 runs, run lengths {'1': 0, '2-4': 0, '5-29': 0, '30-59': 4, '>=60': 6}
+  gpu1.vram_hottest_channel      min/mean/p99/max 34/80.22/84/84 C
+      >=    75 C:  95.6% of loaded samples in 10 runs, run lengths {'1': 0, '2-4': 0, '5-29': 0, '30-59': 4, '>=60': 6}
+  gpu1.memory_controller         min/mean/p99/max 23/50.42/51/51 C
+  gpu1.pcie                      min/mean/p99/max 32/68.81/70/70 C
+  gpu1.any_sensor                min/mean/p99/max 34/80.23/84/84 C
+      >=    75 C:  95.6% of loaded samples in 10 runs, run lengths {'1': 0, '2-4': 0, '5-29': 0, '30-59': 4, '>=60': 6}

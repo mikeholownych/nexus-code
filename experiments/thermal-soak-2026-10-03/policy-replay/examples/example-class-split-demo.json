@@ -1,0 +1,31 @@
+{
+  "name": "example-class-split-demo",
+  "status": "illustrative_example",
+  "description": "ILLUSTRATIVE EXAMPLE ONLY - not a recommendation. Values are chosen to straddle the observed soak plateaus so the tool's behaviour is visible; they are derived from no limit or safety analysis. Package and hottest-channel VRAM are separate classes with separate warning/critical values (package 65/75, VRAM 78/88), to show how the classes behave differently. Instantaneous, no hysteresis.",
+  "rules": [
+    {
+      "id": "pkg-warn-65",
+      "sensor_class": "package",
+      "state": "warning",
+      "threshold_c": 65
+    },
+    {
+      "id": "pkg-crit-75",
+      "sensor_class": "package",
+      "state": "critical",
+      "threshold_c": 75
+    },
+    {
+      "id": "vramch-warn-78",
+      "sensor_class": "vram_hottest_channel",
+      "state": "warning",
+      "threshold_c": 78
+    },
+    {
+      "id": "vramch-crit-88",
+      "sensor_class": "vram_hottest_channel",
+      "state": "critical",
+      "threshold_c": 88
+    }
+  ]
+}

@@ -1,0 +1,40 @@
+{
+  "name": "example-missing-samples-demo",
+  "status": "illustrative_example",
+  "description": "ILLUSTRATIVE EXAMPLE ONLY - not a recommendation. Values are chosen to straddle the observed soak plateaus so the tool's behaviour is visible; they are derived from no limit or safety analysis. The same hottest-channel VRAM rule (80 C, persistence 5 s) three times, differing only in missing-sample handling. Meant to be run with --drop to inject a SYNTHETIC in-memory dropout; the raw evidence has no missing samples.",
+  "rules": [
+    {
+      "id": "vramch-hold",
+      "sensor_class": "vram_hottest_channel",
+      "state": "warning",
+      "threshold_c": 80,
+      "persistence_s": 5,
+      "missing": "hold",
+      "gpus": [
+        1
+      ]
+    },
+    {
+      "id": "vramch-clear",
+      "sensor_class": "vram_hottest_channel",
+      "state": "warning",
+      "threshold_c": 80,
+      "persistence_s": 5,
+      "missing": "clear",
+      "gpus": [
+        1
+      ]
+    },
+    {
+      "id": "vramch-failclosed",
+      "sensor_class": "vram_hottest_channel",
+      "state": "warning",
+      "threshold_c": 80,
+      "persistence_s": 5,
+      "missing": "fail_closed",
+      "gpus": [
+        1
+      ]
+    }
+  ]
+}

@@ -1,0 +1,1240 @@
+{
+ "class_profile": {
+  "gpu0.any_sensor": {
+   "by_threshold": {
+    "75": {
+     "run_length_buckets": {
+      "1": 1,
+      "2-4": 2,
+      "30-59": 2,
+      "5-29": 5,
+      ">=60": 7
+     },
+     "runs": 17,
+     "samples_at_or_above": 1032,
+     "share_of_loaded_pct": 39.09
+    },
+    "85": {
+     "run_length_buckets": {
+      "1": 0,
+      "2-4": 0,
+      "30-59": 0,
+      "5-29": 0,
+      ">=60": 0
+     },
+     "runs": 0,
+     "samples_at_or_above": 0,
+     "share_of_loaded_pct": 0.0
+    }
+   },
+   "loaded_samples": 2640,
+   "max": 76.0,
+   "mean": 72.77,
+   "min": 32.0,
+   "p50": 74.0,
+   "p99": 76.0,
+   "present_samples": 2640
+  },
+  "gpu0.memory_controller": {
+   "by_threshold": {
+    "75": {
+     "run_length_buckets": {
+      "1": 0,
+      "2-4": 0,
+      "30-59": 0,
+      "5-29": 0,
+      ">=60": 0
+     },
+     "runs": 0,
+     "samples_at_or_above": 0,
+     "share_of_loaded_pct": 0.0
+    },
+    "85": {
+     "run_length_buckets": {
+      "1": 0,
+      "2-4": 0,
+      "30-59": 0,
+      "5-29": 0,
+      ">=60": 0
+     },
+     "runs": 0,
+     "samples_at_or_above": 0,
+     "share_of_loaded_pct": 0.0
+    }
+   },
+   "loaded_samples": 2640,
+   "max": 49.0,
+   "mean": 48.18,
+   "min": 22.0,
+   "p50": 49.0,
+   "p99": 49.0,
+   "present_samples": 2640
+  },
+  "gpu0.package": {
+   "by_threshold": {
+    "75": {
+     "run_length_buckets": {
+      "1": 0,
+      "2-4": 0,
+      "30-59": 0,
+      "5-29": 0,
+      ">=60": 0
+     },
+     "runs": 0,
+     "samples_at_or_above": 0,
+     "share_of_loaded_pct": 0.0
+    },
+    "85": {
+     "run_length_buckets": {
+      "1": 0,
+      "2-4": 0,
+      "30-59": 0,
+      "5-29": 0,
+      ">=60": 0
+     },
+     "runs": 0,
+     "samples_at_or_above": 0,
+     "share_of_loaded_pct": 0.0
+    }
+   },
+   "loaded_samples": 2640,
+   "max": 67.0,
+   "mean": 64.77,
+   "min": 30.0,
+   "p50": 66.0,
+   "p99": 66.0,
+   "present_samples": 2640
+  },
+  "gpu0.pcie": {
+   "by_threshold": {
+    "75": {
+     "run_length_buckets": {
+      "1": 0,
+      "2-4": 0,
+      "30-59": 0,
+      "5-29": 0,
+      ">=60": 0
+     },
+     "runs": 0,
+     "samples_at_or_above": 0,
+     "share_of_loaded_pct": 0.0
+    },
+    "85": {
+     "run_length_buckets": {
+      "1": 0,
+      "2-4": 0,
+      "30-59": 0,
+      "5-29": 0,
+      ">=60": 0
+     },
+     "runs": 0,
+     "samples_at_or_above": 0,
+     "share_of_loaded_pct": 0.0
+    }
+   },
+   "loaded_samples": 2640,
+   "max": 67.0,
+   "mean": 65.51,
+   "min": 32.0,
+   "p50": 66.0,
+   "p99": 67.0,
+   "present_samples": 2640
+  },
+  "gpu0.vram": {
+   "by_threshold": {
+    "75": {
+     "run_length_buckets": {
+      "1": 1,
+      "2-4": 2,
+      "30-59": 2,
+      "5-29": 5,
+      ">=60": 7
+     },
+     "runs": 17,
+     "samples_at_or_above": 1032,
+     "share_of_loaded_pct": 39.09
+    },
+    "85": {
+     "run_length_buckets": {
+      "1": 0,
+      "2-4": 0,
+      "30-59": 0,
+      "5-29": 0,
+      ">=60": 0
+     },
+     "runs": 0,
+     "samples_at_or_above": 0,
+     "share_of_loaded_pct": 0.0
+    }
+   },
+   "loaded_samples": 2640,
+   "max": 76.0,
+   "mean": 72.76,
+   "min": 32.0,
+   "p50": 74.0,
+   "p99": 76.0,
+   "present_samples": 2640
+  },
+  "gpu0.vram_hottest_channel": {
+   "by_threshold": {
+    "75": {
+     "run_length_buckets": {
+      "1": 1,
+      "2-4": 3,
+      "30-59": 2,
+      "5-29": 5,
+      ">=60": 7
+     },
+     "runs": 18,
+     "samples_at_or_above": 1031,
+     "share_of_loaded_pct": 39.05
+    },
+    "85": {
+     "run_length_buckets": {
+      "1": 0,
+      "2-4": 0,
+      "30-59": 0,
+      "5-29": 0,
+      ">=60": 0
+     },
+     "runs": 0,
+     "samples_at_or_above": 0,
+     "share_of_loaded_pct": 0.0
+    }
+   },
+   "loaded_samples": 2640,
+   "max": 76.0,
+   "mean": 72.76,
+   "min": 32.0,
+   "p50": 74.0,
+   "p99": 76.0,
+   "present_samples": 2640
+  },
+  "gpu1.any_sensor": {
+   "by_threshold": {
+    "75": {
+     "run_length_buckets": {
+      "1": 0,
+      "2-4": 0,
+      "30-59": 4,
+      "5-29": 0,
+      ">=60": 6
+     },
+     "runs": 10,
+     "samples_at_or_above": 2523,
+     "share_of_loaded_pct": 95.57
+    },
+    "85": {
+     "run_length_buckets": {
+      "1": 0,
+      "2-4": 0,
+      "30-59": 0,
+      "5-29": 0,
+      ">=60": 0
+     },
+     "runs": 0,
+     "samples_at_or_above": 0,
+     "share_of_loaded_pct": 0.0
+    }
+   },
+   "loaded_samples": 2640,
+   "max": 84.0,
+   "mean": 80.23,
+   "min": 34.0,
+   "p50": 80.0,
+   "p99": 84.0,
+   "present_samples": 2640
+  },
+  "gpu1.memory_controller": {
+   "by_threshold": {
+    "75": {
+     "run_length_buckets": {
+      "1": 0,
+      "2-4": 0,
+      "30-59": 0,
+      "5-29": 0,
+      ">=60": 0
+     },
+     "runs": 0,
+     "samples_at_or_above": 0,
+     "share_of_loaded_pct": 0.0
+    },
+    "85": {
+     "run_length_buckets": {
+      "1": 0,
+      "2-4": 0,
+      "30-59": 0,
+      "5-29": 0,
+      ">=60": 0
+     },
+     "runs": 0,
+     "samples_at_or_above": 0,
+     "share_of_loaded_pct": 0.0
+    }
+   },
+   "loaded_samples": 2640,
+   "max": 51.0,
+   "mean": 50.42,
+   "min": 23.0,
+   "p50": 51.0,
+   "p99": 51.0,
+   "present_samples": 2640
+  },
+  "gpu1.package": {
+   "by_threshold": {
+    "75": {
+     "run_length_buckets": {
+      "1": 0,
+      "2-4": 0,
+      "30-59": 0,
+      "5-29": 0,
+      ">=60": 0
+     },
+     "runs": 0,
+     "samples_at_or_above": 0,
+     "share_of_loaded_pct": 0.0
+    },
+    "85": {
+     "run_length_buckets": {
+      "1": 0,
+      "2-4": 0,
+      "30-59": 0,
+      "5-29": 0,
+      ">=60": 0
+     },
+     "runs": 0,
+     "samples_at_or_above": 0,
+     "share_of_loaded_pct": 0.0
+    }
+   },
+   "loaded_samples": 2640,
+   "max": 70.0,
+   "mean": 68.55,
+   "min": 31.0,
+   "p50": 69.0,
+   "p99": 70.0,
+   "present_samples": 2640
+  },
+  "gpu1.pcie": {
+   "by_threshold": {
+    "75": {
+     "run_length_buckets": {
+      "1": 0,
+      "2-4": 0,
+      "30-59": 0,
+      "5-29": 0,
+      ">=60": 0
+     },
+     "runs": 0,
+     "samples_at_or_above": 0,
+     "share_of_loaded_pct": 0.0
+    },
+    "85": {
+     "run_length_buckets": {
+      "1": 0,
+      "2-4": 0,
+      "30-59": 0,
+      "5-29": 0,
+      ">=60": 0
+     },
+     "runs": 0,
+     "samples_at_or_above": 0,
+     "share_of_loaded_pct": 0.0
+    }
+   },
+   "loaded_samples": 2640,
+   "max": 70.0,
+   "mean": 68.81,
+   "min": 32.0,
+   "p50": 69.0,
+   "p99": 70.0,
+   "present_samples": 2640
+  },
+  "gpu1.vram": {
+   "by_threshold": {
+    "75": {
+     "run_length_buckets": {
+      "1": 0,
+      "2-4": 0,
+      "30-59": 4,
+      "5-29": 0,
+      ">=60": 6
+     },
+     "runs": 10,
+     "samples_at_or_above": 2523,
+     "share_of_loaded_pct": 95.57
+    },
+    "85": {
+     "run_length_buckets": {
+      "1": 0,
+      "2-4": 0,
+      "30-59": 0,
+      "5-29": 0,
+      ">=60": 0
+     },
+     "runs": 0,
+     "samples_at_or_above": 0,
+     "share_of_loaded_pct": 0.0
+    }
+   },
+   "loaded_samples": 2640,
+   "max": 84.0,
+   "mean": 80.21,
+   "min": 34.0,
+   "p50": 80.0,
+   "p99": 84.0,
+   "present_samples": 2640
+  },
+  "gpu1.vram_hottest_channel": {
+   "by_threshold": {
+    "75": {
+     "run_length_buckets": {
+      "1": 0,
+      "2-4": 0,
+      "30-59": 4,
+      "5-29": 0,
+      ">=60": 6
+     },
+     "runs": 10,
+     "samples_at_or_above": 2523,
+     "share_of_loaded_pct": 95.57
+    },
+    "85": {
+     "run_length_buckets": {
+      "1": 0,
+      "2-4": 0,
+      "30-59": 0,
+      "5-29": 0,
+      ">=60": 0
+     },
+     "runs": 0,
+     "samples_at_or_above": 0,
+     "share_of_loaded_pct": 0.0
+    }
+   },
+   "loaded_samples": 2640,
+   "max": 84.0,
+   "mean": 80.22,
+   "min": 34.0,
+   "p50": 80.0,
+   "p99": 84.0,
+   "present_samples": 2640
+  }
+ },
+ "combined": {
+  "gpu0": {
+   "first_transition_t": 400.001,
+   "flaps": 0,
+   "last_transition_t": 2777.001,
+   "time_in_state_by_phase_s": {
+    "abort": {},
+    "critical": {},
+    "ok": {
+     "baseline": 120.0,
+     "cooldown": 464.0,
+     "decode": 279.0,
+     "done": 3.0,
+     "init": 1.0
+    },
+    "warning": {
+     "cooldown": 16.0,
+     "decode": 1041.0,
+     "prefill": 1320.0
+    }
+   },
+   "time_in_state_s": {
+    "abort": 0.0,
+    "critical": 0.0,
+    "ok": 867.0,
+    "warning": 2377.0
+   },
+   "transition_count": 2,
+   "transitions": [
+    {
+     "from": "ok",
+     "phase": "decode",
+     "raw_line": 401,
+     "raw_observations": [
+      {
+       "condition_run": {
+        "count": 1,
+        "first_index": 400,
+        "last_index": 400,
+        "samples": [
+         {
+          "raw_line": 401,
+          "sample_index": 400,
+          "source": "vram",
+          "t": 400.001,
+          "value": 76.0
+         }
+        ]
+       },
+       "coverage": null,
+       "event": "activated",
+       "gpu": "gpu0",
+       "phase": "decode",
+       "raw_line": 401,
+       "rule": "warn-75-h3",
+       "sample_index": 400,
+       "source": "vram",
+       "t": 400.001,
+       "value": 76.0
+      }
+     ],
+     "rule_events": [
+      "warn-75-h3:activated"
+     ],
+     "sample_index": 400,
+     "t": 400.001,
+     "to": "warning"
+    },
+    {
+     "from": "warning",
+     "phase": "cooldown",
+     "raw_line": 2778,
+     "raw_observations": [
+      {
+       "clear_level_c": 72,
+       "clear_run": {
+        "count": 10,
+        "first_index": 2768,
+        "last_index": 2777,
+        "samples": [
+         {
+          "raw_line": 2769,
+          "sample_index": 2768,
+          "source": "vram",
+          "t": 2768.001,
+          "value": 70.0
+         },
+         {
+          "raw_line": 2770,
+          "sample_index": 2769,
+          "source": "vram",
+          "t": 2769.001,
+          "value": 70.0
+         },
+         {
+          "raw_line": 2771,
+          "sample_index": 2770,
+          "source": "vram",
+          "t": 2770.001,
+          "value": 70.0
+         },
+         {
+          "raw_line": 2776,
+          "sample_index": 2775,
+          "source": "vram",
+          "t": 2775.001,
+          "value": 68.0
+         },
+         {
+          "raw_line": 2777,
+          "sample_index": 2776,
+          "source": "vram",
+          "t": 2776.001,
+          "value": 68.0
+         },
+         {
+          "raw_line": 2778,
+          "sample_index": 2777,
+          "source": "vram",
+          "t": 2777.001,
+          "value": 68.0
+         }
+        ],
+        "samples_elided": 4
+       },
+       "event": "cleared",
+       "gpu": "gpu0",
+       "phase": "cooldown",
+       "raw_line": 2778,
+       "rule": "warn-75-h3",
+       "sample_index": 2777,
+       "source": "vram",
+       "t": 2777.001,
+       "value": 68.0
+      }
+     ],
+     "rule_events": [
+      "warn-75-h3:cleared"
+     ],
+     "sample_index": 2777,
+     "t": 2777.001,
+     "to": "ok"
+    }
+   ]
+  },
+  "gpu1": {
+   "first_transition_t": 229.001,
+   "flaps": 0,
+   "last_transition_t": 2782.001,
+   "time_in_state_by_phase_s": {
+    "abort": {},
+    "critical": {},
+    "ok": {
+     "baseline": 120.0,
+     "cooldown": 459.0,
+     "decode": 108.0,
+     "done": 3.0,
+     "init": 1.0
+    },
+    "warning": {
+     "cooldown": 21.0,
+     "decode": 1212.0,
+     "prefill": 1320.0
+    }
+   },
+   "time_in_state_s": {
+    "abort": 0.0,
+    "critical": 0.0,
+    "ok": 691.0,
+    "warning": 2553.0
+   },
+   "transition_count": 2,
+   "transitions": [
+    {
+     "from": "ok",
+     "phase": "decode",
+     "raw_line": 230,
+     "raw_observations": [
+      {
+       "condition_run": {
+        "count": 1,
+        "first_index": 229,
+        "last_index": 229,
+        "samples": [
+         {
+          "raw_line": 230,
+          "sample_index": 229,
+          "source": "vram",
+          "t": 229.001,
+          "value": 76.0
+         }
+        ]
+       },
+       "coverage": null,
+       "event": "activated",
+       "gpu": "gpu1",
+       "phase": "decode",
+       "raw_line": 230,
+       "rule": "warn-75-h3",
+       "sample_index": 229,
+       "source": "vram",
+       "t": 229.001,
+       "value": 76.0
+      }
+     ],
+     "rule_events": [
+      "warn-75-h3:activated"
+     ],
+     "sample_index": 229,
+     "t": 229.001,
+     "to": "warning"
+    },
+    {
+     "from": "warning",
+     "phase": "cooldown",
+     "raw_line": 2783,
+     "raw_observations": [
+      {
+       "clear_level_c": 72,
+       "clear_run": {
+        "count": 10,
+        "first_index": 2773,
+        "last_index": 2782,
+        "samples": [
+         {
+          "raw_line": 2774,
+          "sample_index": 2773,
+          "source": "vram",
+          "t": 2773.001,
+          "value": 70.0
+         },
+         {
+          "raw_line": 2775,
+          "sample_index": 2774,
+          "source": "vram",
+          "t": 2774.001,
+          "value": 70.0
+         },
+         {
+          "raw_line": 2776,
+          "sample_index": 2775,
+          "source": "vram",
+          "t": 2775.001,
+          "value": 70.0
+         },
+         {
+          "raw_line": 2781,
+          "sample_index": 2780,
+          "source": "vram",
+          "t": 2780.001,
+          "value": 68.0
+         },
+         {
+          "raw_line": 2782,
+          "sample_index": 2781,
+          "source": "vram",
+          "t": 2781.001,
+          "value": 68.0
+         },
+         {
+          "raw_line": 2783,
+          "sample_index": 2782,
+          "source": "vram",
+          "t": 2782.001,
+          "value": 68.0
+         }
+        ],
+        "samples_elided": 4
+       },
+       "event": "cleared",
+       "gpu": "gpu1",
+       "phase": "cooldown",
+       "raw_line": 2783,
+       "rule": "warn-75-h3",
+       "sample_index": 2782,
+       "source": "vram",
+       "t": 2782.001,
+       "value": 68.0
+      }
+     ],
+     "rule_events": [
+      "warn-75-h3:cleared"
+     ],
+     "sample_index": 2782,
+     "t": 2782.001,
+     "to": "ok"
+    }
+   ]
+  },
+  "system": {
+   "first_transition_t": 229.001,
+   "flaps": 0,
+   "last_transition_t": 2782.001,
+   "time_in_state_by_phase_s": {
+    "abort": {},
+    "critical": {},
+    "ok": {
+     "baseline": 120.0,
+     "cooldown": 459.0,
+     "decode": 108.0,
+     "done": 3.0,
+     "init": 1.0
+    },
+    "warning": {
+     "cooldown": 21.0,
+     "decode": 1212.0,
+     "prefill": 1320.0
+    }
+   },
+   "time_in_state_s": {
+    "abort": 0.0,
+    "critical": 0.0,
+    "ok": 691.0,
+    "warning": 2553.0
+   },
+   "transition_count": 2,
+   "transitions": [
+    {
+     "from": "ok",
+     "phase": "decode",
+     "raw_line": 230,
+     "raw_observations": [
+      {
+       "condition_run": {
+        "count": 1,
+        "first_index": 229,
+        "last_index": 229,
+        "samples": [
+         {
+          "raw_line": 230,
+          "sample_index": 229,
+          "source": "vram",
+          "t": 229.001,
+          "value": 76.0
+         }
+        ]
+       },
+       "coverage": null,
+       "event": "activated",
+       "gpu": "gpu1",
+       "phase": "decode",
+       "raw_line": 230,
+       "rule": "warn-75-h3",
+       "sample_index": 229,
+       "source": "vram",
+       "t": 229.001,
+       "value": 76.0
+      }
+     ],
+     "rule_events": [
+      "gpu1:warn-75-h3:activated"
+     ],
+     "sample_index": 229,
+     "t": 229.001,
+     "to": "warning"
+    },
+    {
+     "from": "warning",
+     "phase": "cooldown",
+     "raw_line": 2783,
+     "raw_observations": [
+      {
+       "clear_level_c": 72,
+       "clear_run": {
+        "count": 10,
+        "first_index": 2773,
+        "last_index": 2782,
+        "samples": [
+         {
+          "raw_line": 2774,
+          "sample_index": 2773,
+          "source": "vram",
+          "t": 2773.001,
+          "value": 70.0
+         },
+         {
+          "raw_line": 2775,
+          "sample_index": 2774,
+          "source": "vram",
+          "t": 2774.001,
+          "value": 70.0
+         },
+         {
+          "raw_line": 2776,
+          "sample_index": 2775,
+          "source": "vram",
+          "t": 2775.001,
+          "value": 70.0
+         },
+         {
+          "raw_line": 2781,
+          "sample_index": 2780,
+          "source": "vram",
+          "t": 2780.001,
+          "value": 68.0
+         },
+         {
+          "raw_line": 2782,
+          "sample_index": 2781,
+          "source": "vram",
+          "t": 2781.001,
+          "value": 68.0
+         },
+         {
+          "raw_line": 2783,
+          "sample_index": 2782,
+          "source": "vram",
+          "t": 2782.001,
+          "value": 68.0
+         }
+        ],
+        "samples_elided": 4
+       },
+       "event": "cleared",
+       "gpu": "gpu1",
+       "phase": "cooldown",
+       "raw_line": 2783,
+       "rule": "warn-75-h3",
+       "sample_index": 2782,
+       "source": "vram",
+       "t": 2782.001,
+       "value": 68.0
+      }
+     ],
+     "rule_events": [
+      "gpu1:warn-75-h3:cleared"
+     ],
+     "sample_index": 2782,
+     "t": 2782.001,
+     "to": "ok"
+    }
+   ]
+  }
+ },
+ "input": {
+  "duration_s": 3244.0,
+  "gpus": [
+   "gpu0",
+   "gpu1"
+  ],
+  "injections": [],
+  "phases": {
+   "baseline": 120,
+   "cooldown": 480,
+   "decode": 1320,
+   "done": 3,
+   "init": 1,
+   "prefill": 1320
+  },
+  "raw_file": "/home/mike/nexus-code/experiments/thermal-soak-2026-10-03/raw/thermal-soak-20261003T170044Z/samples.jsonl",
+  "raw_sha256": "6946e9e6d6f94374a367076868ee54c20294a829f8582d2d34579e431a879982",
+  "samples": 3244
+ },
+ "policy": {
+  "description": "ILLUSTRATIVE EXAMPLE ONLY - not a recommendation. Values are chosen to straddle the observed soak plateaus so the tool's behaviour is visible; they are derived from no limit or safety analysis. Instantaneous activation, but clearing needs 3 C of hysteresis held for 10 s, to show the effect on flapping around a boundary.",
+  "name": "example-hysteresis-demo",
+  "rules": [
+   {
+    "clear_persistence_s": 10,
+    "gpus": "all",
+    "hysteresis_c": 3,
+    "id": "warn-75-h3",
+    "missing": "hold",
+    "persistence_s": 1.0,
+    "sensor_class": "any_sensor",
+    "state": "warning",
+    "threshold_c": 75
+   },
+   {
+    "clear_persistence_s": 10,
+    "gpus": "all",
+    "hysteresis_c": 3,
+    "id": "crit-85-h3",
+    "missing": "hold",
+    "persistence_s": 1.0,
+    "sensor_class": "any_sensor",
+    "state": "critical",
+    "threshold_c": 85
+   }
+  ],
+  "status": "illustrative_example"
+ },
+ "rules": [
+  {
+   "active_seconds": 2377.0,
+   "active_seconds_by_phase": {
+    "cooldown": 16.0,
+    "decode": 1041.0,
+    "prefill": 1320.0
+   },
+   "episodes": [
+    {
+     "activated_index": 400,
+     "activated_phase": "decode",
+     "activated_t": 400.001,
+     "activated_to_condition_start_latency_s": 0.0,
+     "clear_run": {
+      "count": 10,
+      "first_index": 2768,
+      "last_index": 2777,
+      "samples": [
+       {
+        "raw_line": 2769,
+        "sample_index": 2768,
+        "source": "vram",
+        "t": 2768.001,
+        "value": 70.0
+       },
+       {
+        "raw_line": 2770,
+        "sample_index": 2769,
+        "source": "vram",
+        "t": 2769.001,
+        "value": 70.0
+       },
+       {
+        "raw_line": 2771,
+        "sample_index": 2770,
+        "source": "vram",
+        "t": 2770.001,
+        "value": 70.0
+       },
+       {
+        "raw_line": 2776,
+        "sample_index": 2775,
+        "source": "vram",
+        "t": 2775.001,
+        "value": 68.0
+       },
+       {
+        "raw_line": 2777,
+        "sample_index": 2776,
+        "source": "vram",
+        "t": 2776.001,
+        "value": 68.0
+       },
+       {
+        "raw_line": 2778,
+        "sample_index": 2777,
+        "source": "vram",
+        "t": 2777.001,
+        "value": 68.0
+       }
+      ],
+      "samples_elided": 4
+     },
+     "clear_trigger": {
+      "clear_level_c": 72,
+      "phase": "cooldown",
+      "raw_line": 2778,
+      "sample_index": 2777,
+      "source": "vram",
+      "t": 2777.001,
+      "value": 68.0
+     },
+     "cleared_index": 2777,
+     "cleared_t": 2777.001,
+     "condition_run": {
+      "count": 1,
+      "first_index": 400,
+      "last_index": 400,
+      "samples": [
+       {
+        "raw_line": 401,
+        "sample_index": 400,
+        "source": "vram",
+        "t": 400.001,
+        "value": 76.0
+       }
+      ]
+     },
+     "condition_started_index": 400,
+     "condition_started_t": 400.001,
+     "duration_s": 2377.0,
+     "peak": 76.0,
+     "peak_index": 400,
+     "sources_during_episode": {
+      "vram": 2373,
+      "vram_ch_12": 2,
+      "vram_ch_8": 2
+     },
+     "trigger": {
+      "coverage": null,
+      "phase": "decode",
+      "raw_line": 401,
+      "sample_index": 400,
+      "source": "vram",
+      "t": 400.001,
+      "value": 76.0
+     }
+    }
+   ],
+   "first_activation_t": 400.001,
+   "gpu": "gpu0",
+   "last_activation_t": 400.001,
+   "last_clear_t": 2777.001,
+   "longest_episode_s": 2377.0,
+   "mean_episode_s": 2377.0,
+   "open_at_end_of_trace": false,
+   "re_trips": 0,
+   "rule": {
+    "clear_persistence_s": 10,
+    "gpus": "all",
+    "hysteresis_c": 3,
+    "id": "warn-75-h3",
+    "missing": "hold",
+    "persistence_s": 1.0,
+    "sensor_class": "any_sensor",
+    "state": "warning",
+    "threshold_c": 75
+   },
+   "short_episode_s": 10.0,
+   "short_episodes": 0,
+   "shortest_episode_s": 2377.0,
+   "transitions": 2,
+   "trips": 1
+  },
+  {
+   "active_seconds": 2553.0,
+   "active_seconds_by_phase": {
+    "cooldown": 21.0,
+    "decode": 1212.0,
+    "prefill": 1320.0
+   },
+   "episodes": [
+    {
+     "activated_index": 229,
+     "activated_phase": "decode",
+     "activated_t": 229.001,
+     "activated_to_condition_start_latency_s": 0.0,
+     "clear_run": {
+      "count": 10,
+      "first_index": 2773,
+      "last_index": 2782,
+      "samples": [
+       {
+        "raw_line": 2774,
+        "sample_index": 2773,
+        "source": "vram",
+        "t": 2773.001,
+        "value": 70.0
+       },
+       {
+        "raw_line": 2775,
+        "sample_index": 2774,
+        "source": "vram",
+        "t": 2774.001,
+        "value": 70.0
+       },
+       {
+        "raw_line": 2776,
+        "sample_index": 2775,
+        "source": "vram",
+        "t": 2775.001,
+        "value": 70.0
+       },
+       {
+        "raw_line": 2781,
+        "sample_index": 2780,
+        "source": "vram",
+        "t": 2780.001,
+        "value": 68.0
+       },
+       {
+        "raw_line": 2782,
+        "sample_index": 2781,
+        "source": "vram",
+        "t": 2781.001,
+        "value": 68.0
+       },
+       {
+        "raw_line": 2783,
+        "sample_index": 2782,
+        "source": "vram",
+        "t": 2782.001,
+        "value": 68.0
+       }
+      ],
+      "samples_elided": 4
+     },
+     "clear_trigger": {
+      "clear_level_c": 72,
+      "phase": "cooldown",
+      "raw_line": 2783,
+      "sample_index": 2782,
+      "source": "vram",
+      "t": 2782.001,
+      "value": 68.0
+     },
+     "cleared_index": 2782,
+     "cleared_t": 2782.001,
+     "condition_run": {
+      "count": 1,
+      "first_index": 229,
+      "last_index": 229,
+      "samples": [
+       {
+        "raw_line": 230,
+        "sample_index": 229,
+        "source": "vram",
+        "t": 229.001,
+        "value": 76.0
+       }
+      ]
+     },
+     "condition_started_index": 229,
+     "condition_started_t": 229.001,
+     "duration_s": 2553.0,
+     "peak": 84.0,
+     "peak_index": 466,
+     "sources_during_episode": {
+      "vram": 2538,
+      "vram_ch_2": 12,
+      "vram_ch_8": 3
+     },
+     "trigger": {
+      "coverage": null,
+      "phase": "decode",
+      "raw_line": 230,
+      "sample_index": 229,
+      "source": "vram",
+      "t": 229.001,
+      "value": 76.0
+     }
+    }
+   ],
+   "first_activation_t": 229.001,
+   "gpu": "gpu1",
+   "last_activation_t": 229.001,
+   "last_clear_t": 2782.001,
+   "longest_episode_s": 2553.0,
+   "mean_episode_s": 2553.0,
+   "open_at_end_of_trace": false,
+   "re_trips": 0,
+   "rule": {
+    "clear_persistence_s": 10,
+    "gpus": "all",
+    "hysteresis_c": 3,
+    "id": "warn-75-h3",
+    "missing": "hold",
+    "persistence_s": 1.0,
+    "sensor_class": "any_sensor",
+    "state": "warning",
+    "threshold_c": 75
+   },
+   "short_episode_s": 10.0,
+   "short_episodes": 0,
+   "shortest_episode_s": 2553.0,
+   "transitions": 2,
+   "trips": 1
+  },
+  {
+   "active_seconds": 0,
+   "active_seconds_by_phase": {},
+   "episodes": [],
+   "first_activation_t": null,
+   "gpu": "gpu0",
+   "last_activation_t": null,
+   "last_clear_t": null,
+   "longest_episode_s": 0,
+   "mean_episode_s": 0,
+   "open_at_end_of_trace": false,
+   "re_trips": 0,
+   "rule": {
+    "clear_persistence_s": 10,
+    "gpus": "all",
+    "hysteresis_c": 3,
+    "id": "crit-85-h3",
+    "missing": "hold",
+    "persistence_s": 1.0,
+    "sensor_class": "any_sensor",
+    "state": "critical",
+    "threshold_c": 85
+   },
+   "short_episode_s": 10.0,
+   "short_episodes": 0,
+   "shortest_episode_s": 0,
+   "transitions": 0,
+   "trips": 0
+  },
+  {
+   "active_seconds": 0,
+   "active_seconds_by_phase": {},
+   "episodes": [],
+   "first_activation_t": null,
+   "gpu": "gpu1",
+   "last_activation_t": null,
+   "last_clear_t": null,
+   "longest_episode_s": 0,
+   "mean_episode_s": 0,
+   "open_at_end_of_trace": false,
+   "re_trips": 0,
+   "rule": {
+    "clear_persistence_s": 10,
+    "gpus": "all",
+    "hysteresis_c": 3,
+    "id": "crit-85-h3",
+    "missing": "hold",
+    "persistence_s": 1.0,
+    "sensor_class": "any_sensor",
+    "state": "critical",
+    "threshold_c": 85
+   },
+   "short_episode_s": 10.0,
+   "short_episodes": 0,
+   "shortest_episode_s": 0,
+   "transitions": 0,
+   "trips": 0
+  }
+ ],
+ "tool": {
+  "definitions": "(also in README.md)\n  sample          one record of samples.jsonl; `sample_index` is its 0-based line number (raw line = sample_index + 1).\n  sensor class    package | vram (the firmware's VRAM sensor) | vram_hottest_channel (max over vram_ch_*, never averaged) |\n                  memory_controller | pcie | any_sensor (hottest of every GPU temperature sensor = the benchmark harness' semantics).\n  rule            state (warning|critical|abort), sensor_class, gpus, threshold_c, persistence_s, hysteresis_c,\n                  clear_persistence_s, missing (hold|clear|fail_closed). Rules are evaluated independently per GPU.\n  at/above        value >= threshold_c. Below clear level: value < threshold_c - hysteresis_c.\n  persistence     the rule activates when it has seen `ceil(persistence_s / dt)` CONSECUTIVE at/above samples (dt = nominal sample period,\n                  1 s here). persistence_s <= dt is therefore instantaneous. Clearing needs `ceil(clear_persistence_s / dt)` consecutive\n                  below-clear-level samples; samples inside the hysteresis band neither clear nor re-arm.\n  missing sample  value None. hold = neither counts toward activation/clearing nor resets either run; clear = treated as below clear level\n                  and not at/above; fail_closed = treated as at/above and not below clear level.\n  trip            one activation of a rule (instantaneous or persistent per its settings). re-trips = trips - 1.\n  state time      each sample i contributes dt_i (t[i+1]-t[i]; the last sample the nominal dt) to the state in force after processing it.\n  combined state  per GPU (and \"system\" = any GPU) the highest active rule state: ok < warning < critical < abort.\n  flap            an escalation of the combined state followed by a de-escalation less than 60 s later.",
+  "dt_s": 1.0,
+  "name": "thermal_policy_replay",
+  "version": "1.0"
+ }
+}

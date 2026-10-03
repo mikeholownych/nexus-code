@@ -1,0 +1,25 @@
+{
+  "name": "reference-current-75-85-90",
+  "status": "reference_current_configuration",
+  "description": "The CURRENT configuration restated as a policy for comparison: hottest sensor of any kind, warning 75, critical 85 (monitoring) and abort 90 (benchmark harness), all instantaneous with no hysteresis. Reproduces existing behaviour; recommends nothing.",
+  "rules": [
+    {
+      "id": "warn-75",
+      "sensor_class": "any_sensor",
+      "state": "warning",
+      "threshold_c": 75
+    },
+    {
+      "id": "crit-85",
+      "sensor_class": "any_sensor",
+      "state": "critical",
+      "threshold_c": 85
+    },
+    {
+      "id": "abort-90",
+      "sensor_class": "any_sensor",
+      "state": "abort",
+      "threshold_c": 90
+    }
+  ]
+}

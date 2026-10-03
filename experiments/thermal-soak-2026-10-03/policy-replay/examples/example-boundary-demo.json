@@ -1,0 +1,13 @@
+{
+  "name": "example-boundary-demo",
+  "status": "illustrative_example",
+  "description": "ILLUSTRATIVE EXAMPLE ONLY - not a recommendation. Values are chosen to straddle the observed soak plateaus so the tool's behaviour is visible; they are derived from no limit or safety analysis. One VRAM warning at 80 C, instantaneous. GPU 1's VRAM hovers at 80-84 C in decode, so this sits on a boundary. Run with --compare-persistence to compare instantaneous and persistent behaviour directly.",
+  "rules": [
+    {
+      "id": "vram-warn-80",
+      "sensor_class": "vram_hottest_channel",
+      "state": "warning",
+      "threshold_c": 80
+    }
+  ]
+}

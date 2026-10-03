@@ -1,0 +1,28 @@
+{
+  "name": "example-persistence-demo",
+  "status": "illustrative_example",
+  "description": "ILLUSTRATIVE EXAMPLE ONLY - not a recommendation. Values are chosen to straddle the observed soak plateaus so the tool's behaviour is visible; they are derived from no limit or safety analysis. Same thresholds as the reference with persistence added (warning 30 s, critical 10 s, abort 5 s) to show what persistence changes.",
+  "rules": [
+    {
+      "id": "warn-75-p30",
+      "sensor_class": "any_sensor",
+      "state": "warning",
+      "threshold_c": 75,
+      "persistence_s": 30
+    },
+    {
+      "id": "crit-85-p10",
+      "sensor_class": "any_sensor",
+      "state": "critical",
+      "threshold_c": 85,
+      "persistence_s": 10
+    },
+    {
+      "id": "abort-90-p5",
+      "sensor_class": "any_sensor",
+      "state": "abort",
+      "threshold_c": 90,
+      "persistence_s": 5
+    }
+  ]
+}

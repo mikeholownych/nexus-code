@@ -1,0 +1,69 @@
+==============================================================================================================
+POLICY REPLAY  example-missing-samples-demo   [ILLUSTRATIVE_EXAMPLE]
+  ILLUSTRATIVE EXAMPLE ONLY - not a recommendation. Values are chosen to straddle the observed soak plateaus so the tool's behaviour is visible; they are derived from no limit or safety analysis. The same hottest-channel VRAM rule (80 C, persistence 5 s) three times, differing only in missing-sample handling. Meant to be run with --drop to inject a SYNTHETIC in-memory dropout; the raw evidence has no missing samples.
+  This is an offline replay of the preserved soak. It is NOT a recommendation and changes nothing.
+==============================================================================================================
+  raw: /home/mike/nexus-code/experiments/thermal-soak-2026-10-03/raw/thermal-soak-20261003T170044Z/samples.jsonl  sha256 6946e9e6d6f94374...  samples 3244  duration 3244.0 s  dt 1.0 s  phases {'init': 1, 'baseline': 120, 'decode': 1320, 'prefill': 1320, 'cooldown': 480, 'done': 3}
+  !! SYNTHETIC dropout injected in memory for demonstration; raw evidence unchanged: gpu1:vram_hottest_channel:1200:1230 (30 samples)
+
+RULES
+  vramch-hold                  warning  vram_hottest_channel   >= 80 C  persistence 5s  hysteresis 0 C  clear-persistence 1s  missing=hold  gpus=[1]
+  vramch-clear                 warning  vram_hottest_channel   >= 80 C  persistence 5s  hysteresis 0 C  clear-persistence 1s  missing=clear  gpus=[1]
+  vramch-failclosed            warning  vram_hottest_channel   >= 80 C  persistence 5s  hysteresis 0 C  clear-persistence 1s  missing=fail_closed  gpus=[1]
+
+PER-RULE RESULTS (per GPU)
+  rule                      gpu   trips re-trips trans.  active s short<10s longest s first act. t last act. t last clear t
+  vramch-hold               gpu1     45       44     90      2255         1      1200      282.001        2748         2763
+  vramch-clear              gpu1     46       45     92      2221         1       911      282.001        2748         2763
+  vramch-failclosed         gpu1     45       44     90      2255         1      1200      282.001        2748         2763
+
+COMBINED STATE (highest active rule state)
+  gpu0    time in state (s): ok=3244  warning=0  critical=0  abort=0   transitions 0  first -  last -  flaps(<60s up->down) 0
+  gpu1    time in state (s): ok=989  warning=2255  critical=0  abort=0   transitions 90  first 282.001  last 2763  flaps(<60s up->down) 44
+  system  time in state (s): ok=989  warning=2255  critical=0  abort=0   transitions 90  first 282.001  last 2763  flaps(<60s up->down) 44
+
+RAW OBSERVATIONS BEHIND TRANSITIONS (first 8 activations per rule/GPU; every one is in result.json; raw line = line number in samples.jsonl)
+  vramch-hold             gpu1 t=282.001 line 283   decode   value 80.0 from vram_ch_2  run[5]=80,80,80,80,80  peak 80.0  dur 2s  cleared t=284.001 value 78.0 (<80)
+  vramch-hold             gpu1 t=289.001 line 290   decode   value 80.0 from vram_ch_2  run[5]=80,80,80,80,80  peak 84.0  dur 1200s  cleared t=1489 value 78.0 (<80)
+  vramch-hold             gpu1 t=1494    line 1495  prefill  value 82.0 from vram_ch_2  run[5]=80,80,80,82,82  peak 82.0  dur 29s  cleared t=1523 value 78.0 (<80)
+  vramch-hold             gpu1 t=1532    line 1533  prefill  value 80.0 from vram_ch_2  run[5]=80,80,80,80,80  peak 80.0  dur 14s  cleared t=1546 value 78.0 (<80)
+  vramch-hold             gpu1 t=1551    line 1552  prefill  value 80.0 from vram_ch_2  run[5]=80,80,80,80,80  peak 82.0  dur 13s  cleared t=1564 value 78.0 (<80)
+  vramch-hold             gpu1 t=1569    line 1570  prefill  value 80.0 from vram_ch_2  run[5]=80,80,80,80,80  peak 80.0  dur 33s  cleared t=1602 value 76.0 (<80)
+  vramch-hold             gpu1 t=1607    line 1608  prefill  value 80.0 from vram_ch_2  run[5]=80,80,80,80,80  peak 80.0  dur 14s  cleared t=1621 value 78.0 (<80)
+  vramch-hold             gpu1 t=1626    line 1627  prefill  value 80.0 from vram_ch_0  run[5]=80,80,80,80,80  peak 80.0  dur 12s  cleared t=1638 value 78.0 (<80)
+  vramch-hold             gpu1 ... 37 more episodes in result.json
+  vramch-clear            gpu1 t=282.001 line 283   decode   value 80.0 from vram_ch_2  run[5]=80,80,80,80,80  peak 80.0  dur 2s  cleared t=284.001 value 78.0 (<80)
+  vramch-clear            gpu1 t=289.001 line 290   decode   value 80.0 from vram_ch_2  run[5]=80,80,80,80,80  peak 84.0  dur 911s  cleared t=1200 value None (<80)
+  vramch-clear            gpu1 t=1234    line 1235  decode   value 82.0 from vram_ch_0  run[5]=82,82,82,82,82  peak 84.0  dur 255s  cleared t=1489 value 78.0 (<80)
+  vramch-clear            gpu1 t=1494    line 1495  prefill  value 82.0 from vram_ch_2  run[5]=80,80,80,82,82  peak 82.0  dur 29s  cleared t=1523 value 78.0 (<80)
+  vramch-clear            gpu1 t=1532    line 1533  prefill  value 80.0 from vram_ch_2  run[5]=80,80,80,80,80  peak 80.0  dur 14s  cleared t=1546 value 78.0 (<80)
+  vramch-clear            gpu1 t=1551    line 1552  prefill  value 80.0 from vram_ch_2  run[5]=80,80,80,80,80  peak 82.0  dur 13s  cleared t=1564 value 78.0 (<80)
+  vramch-clear            gpu1 t=1569    line 1570  prefill  value 80.0 from vram_ch_2  run[5]=80,80,80,80,80  peak 80.0  dur 33s  cleared t=1602 value 76.0 (<80)
+  vramch-clear            gpu1 t=1607    line 1608  prefill  value 80.0 from vram_ch_2  run[5]=80,80,80,80,80  peak 80.0  dur 14s  cleared t=1621 value 78.0 (<80)
+  vramch-clear            gpu1 ... 38 more episodes in result.json
+  vramch-failclosed       gpu1 t=282.001 line 283   decode   value 80.0 from vram_ch_2  run[5]=80,80,80,80,80  peak 80.0  dur 2s  cleared t=284.001 value 78.0 (<80)
+  vramch-failclosed       gpu1 t=289.001 line 290   decode   value 80.0 from vram_ch_2  run[5]=80,80,80,80,80  peak 84.0  dur 1200s  cleared t=1489 value 78.0 (<80)
+  vramch-failclosed       gpu1 t=1494    line 1495  prefill  value 82.0 from vram_ch_2  run[5]=80,80,80,82,82  peak 82.0  dur 29s  cleared t=1523 value 78.0 (<80)
+  vramch-failclosed       gpu1 t=1532    line 1533  prefill  value 80.0 from vram_ch_2  run[5]=80,80,80,80,80  peak 80.0  dur 14s  cleared t=1546 value 78.0 (<80)
+  vramch-failclosed       gpu1 t=1551    line 1552  prefill  value 80.0 from vram_ch_2  run[5]=80,80,80,80,80  peak 82.0  dur 13s  cleared t=1564 value 78.0 (<80)
+  vramch-failclosed       gpu1 t=1569    line 1570  prefill  value 80.0 from vram_ch_2  run[5]=80,80,80,80,80  peak 80.0  dur 33s  cleared t=1602 value 76.0 (<80)
+  vramch-failclosed       gpu1 t=1607    line 1608  prefill  value 80.0 from vram_ch_2  run[5]=80,80,80,80,80  peak 80.0  dur 14s  cleared t=1621 value 78.0 (<80)
+  vramch-failclosed       gpu1 t=1626    line 1627  prefill  value 80.0 from vram_ch_0  run[5]=80,80,80,80,80  peak 80.0  dur 12s  cleared t=1638 value 78.0 (<80)
+  vramch-failclosed       gpu1 ... 37 more episodes in result.json
+
+SENSOR-CLASS BEHAVIOUR DURING LOADED PHASES (instantaneous run structure at each rule threshold; independent of persistence)
+  gpu0.package                   min/mean/p99/max 30/64.77/66/67 C
+  gpu0.vram                      min/mean/p99/max 32/72.76/76/76 C
+  gpu0.vram_hottest_channel      min/mean/p99/max 32/72.76/76/76 C
+  gpu0.memory_controller         min/mean/p99/max 22/48.18/49/49 C
+  gpu0.pcie                      min/mean/p99/max 32/65.51/67/67 C
+  gpu0.any_sensor                min/mean/p99/max 32/72.77/76/76 C
+  gpu1.package                   min/mean/p99/max 31/68.55/70/70 C
+  gpu1.vram                      min/mean/p99/max 34/80.21/84/84 C
+      >=    80 C:  92.3% of loaded samples in 47 runs, run lengths {'1': 1, '2-4': 1, '5-29': 25, '30-59': 19, '>=60': 1}
+  gpu1.vram_hottest_channel      min/mean/p99/max 34/80.19/84/84 C
+      >=    80 C:  91.2% of loaded samples in 47 runs, run lengths {'1': 1, '2-4': 1, '5-29': 25, '30-59': 19, '>=60': 1}
+  gpu1.memory_controller         min/mean/p99/max 23/50.42/51/51 C
+  gpu1.pcie                      min/mean/p99/max 32/68.81/70/70 C
+  gpu1.any_sensor                min/mean/p99/max 34/80.23/84/84 C
+      >=    80 C:  92.3% of loaded samples in 47 runs, run lengths {'1': 1, '2-4': 1, '5-29': 25, '30-59': 19, '>=60': 1}
