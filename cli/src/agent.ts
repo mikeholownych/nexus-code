@@ -288,6 +288,7 @@ export class AutonomousAgent {
         model: config.plannerModel || config.model,
         endpoint: config.plannerEndpoint || config.endpoint,
         apiKey: config.plannerApiKey || config.apiKey,
+        taskClass: config.plannerTaskClass ?? config.taskClass,
       };
       const coderConfig: HarnessConfig = {
         ...config,

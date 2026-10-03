@@ -49,6 +49,8 @@ export interface HarnessConfig {
   dryRun?: boolean;          // Dry-run simulation mode without persisting file modifications
   readOnly?: boolean;        // Reject all mutating tool executions and commands
   fullAccess?: boolean;      // Broad full-access mode executing without confirmation prompts (AUTH-007, AUTH-008)
+  taskClass?: string;        // Routing hint sent to the gateway as X-Task-Class (e.g. "review", "architecture")
+  plannerTaskClass?: string; // Same, for the planner client
   fallbackEndpoints?: string[]; // Failover endpoint URLs if primary endpoint is unavailable
   contextLimit?: number;     // Maximum model context window token limit (default: 65536)
   completionReserveTokens?: number; // Context reserved for each model completion (default: 8192)

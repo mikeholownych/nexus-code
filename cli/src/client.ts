@@ -63,6 +63,7 @@ export class LocalLlmClient {
   private boundary: InformationFlowBoundary;
   private taskId?: string;
   private sessionId?: string;
+  private taskClass?: string;
 
   constructor(
     config: HarnessConfig,
@@ -70,6 +71,7 @@ export class LocalLlmClient {
       boundary?: InformationFlowBoundary;
       taskId?: string;
       sessionId?: string;
+      taskClass?: string;
     }
   ) {
     const normalizeEp = (urlStr: string) => {
@@ -107,6 +109,16 @@ export class LocalLlmClient {
     this.boundary = options?.boundary || InformationFlowBoundary.getGlobalInstance();
     this.taskId = options?.taskId;
     this.sessionId = options?.sessionId;
+    this.taskClass = options?.taskClass ?? config.taskClass;
+  }
+
+  /** Hint the gateway's route table (sent as X-Task-Class); undefined sends none. */
+  public setTaskClass(taskClass?: string): void {
+    this.taskClass = taskClass;
+  }
+
+  private routingHeaders(): Record<string, string> {
+    return this.taskClass && /^[A-Za-z0-9_.-]{1,64}$/.test(this.taskClass) ? { "X-Task-Class": this.taskClass } : {};
   }
 
   public setTaskId(taskId?: string): void {
@@ -308,6 +320,7 @@ export class LocalLlmClient {
           "Content-Type": "application/json",
           Authorization: `Bearer ${this.apiKey}`,
           "X-Request-ID": requestId,
+          ...this.routingHeaders(),
         },
         body: JSON.stringify(payload),
       });
@@ -406,6 +419,7 @@ export class LocalLlmClient {
             "Content-Type": "application/json",
             Authorization: `Bearer ${this.apiKey}`,
             "X-Request-ID": requestId,
+            ...this.routingHeaders(),
           },
           body: JSON.stringify(payload),
         });

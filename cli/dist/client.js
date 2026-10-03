@@ -45,6 +45,7 @@ export class LocalLlmClient {
     boundary;
     taskId;
     sessionId;
+    taskClass;
     constructor(config, options) {
         const normalizeEp = (urlStr) => {
             let ep = urlStr.trim().replace(/\/+$/, "");
@@ -79,6 +80,14 @@ export class LocalLlmClient {
         this.boundary = options?.boundary || InformationFlowBoundary.getGlobalInstance();
         this.taskId = options?.taskId;
         this.sessionId = options?.sessionId;
+        this.taskClass = options?.taskClass ?? config.taskClass;
+    }
+    /** Hint the gateway's route table (sent as X-Task-Class); undefined sends none. */
+    setTaskClass(taskClass) {
+        this.taskClass = taskClass;
+    }
+    routingHeaders() {
+        return this.taskClass && /^[A-Za-z0-9_.-]{1,64}$/.test(this.taskClass) ? { "X-Task-Class": this.taskClass } : {};
     }
     setTaskId(taskId) {
         this.taskId = taskId;
@@ -224,6 +233,7 @@ export class LocalLlmClient {
                     "Content-Type": "application/json",
                     Authorization: `Bearer ${this.apiKey}`,
                     "X-Request-ID": requestId,
+                    ...this.routingHeaders(),
                 },
                 body: JSON.stringify(payload),
             });
@@ -293,6 +303,7 @@ export class LocalLlmClient {
                         "Content-Type": "application/json",
                         Authorization: `Bearer ${this.apiKey}`,
                         "X-Request-ID": requestId,
+                        ...this.routingHeaders(),
                     },
                     body: JSON.stringify(payload),
                 });
