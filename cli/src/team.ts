@@ -98,9 +98,18 @@ export class TeamOrchestrator {
     const profile = ROLE_PROFILES[role] || ROLE_PROFILES.implementer;
     const t0 = Date.now();
 
+    // Route hints for the inference gateway: architecture and verification benefit from the deeper model.
+    const roleTaskClass: Record<AgentRole, string | undefined> = {
+      researcher: "subagent",
+      architect: "architecture",
+      implementer: undefined,
+      tester: "review",
+    };
     const roleConfig: HarnessConfig = {
       ...this.config,
       maxSteps: Math.min(this.config.maxSteps, 15),
+      taskClass: roleTaskClass[role] ?? this.config.taskClass,
+      plannerTaskClass: roleTaskClass[role] ?? this.config.plannerTaskClass,
     };
 
     const agent = new AutonomousAgent(roleConfig, 1);

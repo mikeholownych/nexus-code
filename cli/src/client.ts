@@ -117,8 +117,43 @@ export class LocalLlmClient {
     this.taskClass = taskClass;
   }
 
+  /**
+   * Tool-call arguments must be a JSON string on the wire: servers such as llama.cpp parse the history
+   * and reject the whole request (HTTP 500) when any earlier assistant tool call has malformed arguments.
+   * Malformed arguments are wrapped so the history stays valid and the original text is preserved.
+   */
+  private sanitizeHistory(messages: ChatMessage[]): ChatMessage[] {
+    let changed = false;
+    const out = messages.map((m) => {
+      if (m.role !== "assistant" || !m.tool_calls?.length) return m;
+      const calls = m.tool_calls.map((tc) => {
+        const a = tc.function?.arguments;
+        if (typeof a !== "string") return tc;
+        try {
+          JSON.parse(a || "{}");
+          return tc;
+        } catch {
+          changed = true;
+          return { ...tc, function: { ...tc.function, arguments: JSON.stringify({ raw: a }) } };
+        }
+      });
+      return { ...m, tool_calls: calls };
+    });
+    return changed ? out : messages;
+  }
+
   private routingHeaders(): Record<string, string> {
     return this.taskClass && /^[A-Za-z0-9_.-]{1,64}$/.test(this.taskClass) ? { "X-Task-Class": this.taskClass } : {};
+  }
+
+  /** Switch the model in place so session, task, boundary and routing state survive the change. */
+  public setModel(model: string): void {
+    this.model = model;
+  }
+
+  private requestTimeoutMs(): number {
+    const raw = Number(process.env.LOCAL_LLM_TIMEOUT_MS);
+    return Number.isFinite(raw) && raw > 0 ? raw : 900_000;
   }
 
   public setTaskId(taskId?: string): void {
@@ -276,7 +311,7 @@ export class LocalLlmClient {
         );
       }
 
-      const outboundMessages: ChatMessage[] = egressEvaluation.sanitizedPayload || messages;
+      const outboundMessages: ChatMessage[] = this.sanitizeHistory(egressEvaluation.sanitizedPayload || messages);
 
       let outboundTools = tools;
       if (tools.length > 0) {
@@ -323,6 +358,7 @@ export class LocalLlmClient {
           ...this.routingHeaders(),
         },
         body: JSON.stringify(payload),
+        signal: AbortSignal.timeout(this.requestTimeoutMs()),
       });
 
       if (res.status === 401 && this.reloadAuthToken()) {
@@ -339,7 +375,11 @@ export class LocalLlmClient {
         throw new Error("Model returned empty choices array");
       }
 
-      return data.choices[0].message;
+      const choice = data.choices[0] as { message: ChatMessage; finish_reason?: string };
+      if (choice.finish_reason === "length" && choice.message.tool_calls?.length) {
+        throw new Error("Model output was truncated (finish_reason=length) inside a tool call; refusing to run partial arguments.");
+      }
+      return choice.message;
     });
   }
 
@@ -372,7 +412,7 @@ export class LocalLlmClient {
         );
       }
 
-      const outboundMessages: ChatMessage[] = egressEvaluation.sanitizedPayload || messages;
+      const outboundMessages: ChatMessage[] = this.sanitizeHistory(egressEvaluation.sanitizedPayload || messages);
 
       let outboundTools = tools;
       if (tools.length > 0) {
@@ -422,6 +462,7 @@ export class LocalLlmClient {
             ...this.routingHeaders(),
           },
           body: JSON.stringify(payload),
+          signal: AbortSignal.timeout(this.requestTimeoutMs()),
         });
       } catch {
         // Fallback to non-streaming if network error
@@ -438,6 +479,7 @@ export class LocalLlmClient {
       }
 
       let fullContent = "";
+      let finishReason: string | undefined;
       const toolCallsMap: Map<number, { id: string; name: string; args: string }> = new Map();
 
       const reader = res.body.getReader();
@@ -463,6 +505,7 @@ export class LocalLlmClient {
               const jsonStr = trimmed.slice(6);
               try {
                 const chunk = JSON.parse(jsonStr);
+                if (chunk.choices?.[0]?.finish_reason) finishReason = chunk.choices[0].finish_reason;
                 const delta = chunk.choices?.[0]?.delta;
                 if (!delta) continue;
 
@@ -477,7 +520,17 @@ export class LocalLlmClient {
                 // 2. Tool call chunks
                 if (delta.tool_calls && Array.isArray(delta.tool_calls)) {
                   for (const tc of delta.tool_calls) {
-                    const idx = tc.index ?? 0;
+                    // Spec streams give every fragment an index. Some servers (and re-streamed non-streaming
+                    // responses) omit it; then a fragment that carries an id or a name starts a NEW call, and
+                    // one with neither continues the latest call. Never fold distinct calls into index 0.
+                    let idx: number;
+                    if (typeof tc.index === "number") {
+                      idx = tc.index;
+                    } else if (tc.id || tc.function?.name) {
+                      idx = toolCallsMap.size === 0 ? 0 : Math.max(...toolCallsMap.keys()) + 1;
+                    } else {
+                      idx = toolCallsMap.size === 0 ? 0 : Math.max(...toolCallsMap.keys());
+                    }
                     const current = toolCallsMap.get(idx) || { id: "", name: "", args: "" };
 
                     if (tc.id) current.id = tc.id;
@@ -511,6 +564,10 @@ export class LocalLlmClient {
             },
           });
         }
+      }
+
+      if (finishReason === "length" && assembledToolCalls.length > 0) {
+        throw new Error("Model output was truncated (finish_reason=length) inside a tool call; refusing to run partial arguments.");
       }
 
       if (!fullContent && assembledToolCalls.length === 0) {
