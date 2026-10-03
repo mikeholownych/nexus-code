@@ -1,0 +1,250 @@
+{
+ "started_utc": "20261003T170044Z",
+ "scale": 1.0,
+ "phases": [
+  [
+   "baseline",
+   120,
+   null
+  ],
+  [
+   "decode",
+   1320,
+   "decode"
+  ],
+  [
+   "prefill",
+   1320,
+   "prefill"
+  ],
+  [
+   "cooldown",
+   480,
+   null
+  ]
+ ],
+ "safety_stop_c": 90.0,
+ "kernel": "7.0.0-34-generic",
+ "script_sha256": "6f12d6676035dce754db2e0122b9fb3c66cbf2f1175695247166bcb6665116ff",
+ "dmi": {
+  "product_name": "Precision 5820 Tower",
+  "bios_version": "2.51.1",
+  "bios_date": "08/21/2026"
+ },
+ "gateway_release": "/var/lib/aihost/releases/t5820-gateway-b4051cc",
+ "gpus": {
+  "0000:51:00.0": {
+   "ordinal": 0,
+   "hwmon": "hwmon4",
+   "limits": {
+    "vram_ch_4": {
+     "crit": 105000.0,
+     "emergency": 120000.0
+    },
+    "vram_ch_5": {
+     "crit": 105000.0,
+     "emergency": 120000.0
+    },
+    "vram_ch_6": {
+     "crit": 105000.0,
+     "emergency": 120000.0
+    },
+    "vram_ch_7": {
+     "crit": 105000.0,
+     "emergency": 120000.0
+    },
+    "vram_ch_8": {
+     "crit": 105000.0,
+     "emergency": 120000.0
+    },
+    "vram_ch_9": {
+     "crit": 105000.0,
+     "emergency": 120000.0
+    },
+    "vram_ch_10": {
+     "crit": 105000.0,
+     "emergency": 120000.0
+    },
+    "vram_ch_11": {
+     "crit": 105000.0,
+     "emergency": 120000.0
+    },
+    "vram_ch_12": {
+     "crit": 105000.0,
+     "emergency": 120000.0
+    },
+    "vram_ch_13": {
+     "crit": 105000.0,
+     "emergency": 120000.0
+    },
+    "vram_ch_14": {
+     "crit": 105000.0,
+     "emergency": 120000.0
+    },
+    "vram_ch_15": {
+     "crit": 105000.0,
+     "emergency": 120000.0
+    },
+    "pkg": {
+     "crit": 100000.0,
+     "emergency": 125000.0,
+     "max": 60000.0
+    },
+    "vram": {
+     "crit": 105000.0,
+     "emergency": 120000.0
+    },
+    "mctrl": {
+     "crit": 100000.0,
+     "emergency": 125000.0
+    },
+    "pcie": {
+     "crit": 100000.0,
+     "emergency": 125000.0
+    },
+    "vram_ch_0": {
+     "crit": 105000.0,
+     "emergency": 120000.0
+    },
+    "vram_ch_1": {
+     "crit": 105000.0,
+     "emergency": 120000.0
+    },
+    "vram_ch_2": {
+     "crit": 105000.0,
+     "emergency": 120000.0
+    },
+    "vram_ch_3": {
+     "crit": 105000.0,
+     "emergency": 120000.0
+    }
+   },
+   "power_cap_uw": "200000000",
+   "power_crit_uw": "400000000",
+   "gt": {
+    "gt0": {
+     "rp0_freq": "2400",
+     "rpn_freq": "400",
+     "max_freq": "2400",
+     "min_freq": "400"
+    },
+    "gt1": {
+     "rp0_freq": "1500",
+     "rpn_freq": "400",
+     "max_freq": "1500",
+     "min_freq": "400"
+    }
+   }
+  },
+  "0000:93:00.0": {
+   "ordinal": 1,
+   "hwmon": "hwmon5",
+   "limits": {
+    "vram_ch_4": {
+     "crit": 105000.0,
+     "emergency": 120000.0
+    },
+    "vram_ch_5": {
+     "crit": 105000.0,
+     "emergency": 120000.0
+    },
+    "vram_ch_6": {
+     "crit": 105000.0,
+     "emergency": 120000.0
+    },
+    "vram_ch_7": {
+     "crit": 105000.0,
+     "emergency": 120000.0
+    },
+    "vram_ch_8": {
+     "crit": 105000.0,
+     "emergency": 120000.0
+    },
+    "vram_ch_9": {
+     "crit": 105000.0,
+     "emergency": 120000.0
+    },
+    "vram_ch_10": {
+     "crit": 105000.0,
+     "emergency": 120000.0
+    },
+    "vram_ch_11": {
+     "crit": 105000.0,
+     "emergency": 120000.0
+    },
+    "vram_ch_12": {
+     "crit": 105000.0,
+     "emergency": 120000.0
+    },
+    "vram_ch_13": {
+     "crit": 105000.0,
+     "emergency": 120000.0
+    },
+    "vram_ch_14": {
+     "crit": 105000.0,
+     "emergency": 120000.0
+    },
+    "vram_ch_15": {
+     "crit": 105000.0,
+     "emergency": 120000.0
+    },
+    "pkg": {
+     "crit": 100000.0,
+     "emergency": 125000.0,
+     "max": 60000.0
+    },
+    "vram": {
+     "crit": 105000.0,
+     "emergency": 120000.0
+    },
+    "mctrl": {
+     "crit": 100000.0,
+     "emergency": 125000.0
+    },
+    "pcie": {
+     "crit": 100000.0,
+     "emergency": 125000.0
+    },
+    "vram_ch_0": {
+     "crit": 105000.0,
+     "emergency": 120000.0
+    },
+    "vram_ch_1": {
+     "crit": 105000.0,
+     "emergency": 120000.0
+    },
+    "vram_ch_2": {
+     "crit": 105000.0,
+     "emergency": 120000.0
+    },
+    "vram_ch_3": {
+     "crit": 105000.0,
+     "emergency": 120000.0
+    }
+   },
+   "power_cap_uw": "200000000",
+   "power_crit_uw": "400000000",
+   "gt": {
+    "gt0": {
+     "rp0_freq": "2400",
+     "rpn_freq": "400",
+     "max_freq": "2400",
+     "min_freq": "400"
+    },
+    "gt1": {
+     "rp0_freq": "1500",
+     "rpn_freq": "400",
+     "max_freq": "1500",
+     "min_freq": "400"
+    }
+   }
+  }
+ },
+ "dell_smm_temp_inputs_unlabeled": [
+  "temp1_input",
+  "temp2_input",
+  "temp5_input",
+  "temp7_input",
+  "temp8_input"
+ ]
+}

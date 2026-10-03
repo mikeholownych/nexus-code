@@ -1,0 +1,6 @@
+{"t": 0.001, "ts": 1791046844.156439, "event": "start", "out": "/var/lib/local-ai/evidence/thermal-soak-20261003T170044Z"}
+{"t": 0.002, "ts": 1791046844.1574545, "event": "phase", "name": "baseline", "planned_secs": 120.0, "load": null}
+{"t": 120.053, "ts": 1791046964.2084615, "event": "phase", "name": "decode", "planned_secs": 1320.0, "load": "decode"}
+{"t": 1440.294, "ts": 1791048284.4495478, "event": "phase", "name": "prefill", "planned_secs": 1320.0, "load": "prefill"}
+{"t": 2760.631, "ts": 1791049604.7867208, "event": "phase", "name": "cooldown", "planned_secs": 480.0, "load": null}
+{"t": 3240.826, "ts": 1791050084.9820187, "event": "finished", "safety_tripped": false}
