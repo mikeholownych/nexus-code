@@ -693,7 +693,12 @@ export class AutonomousAgent {
     }
     setModel(newModel) {
         this.config.model = newModel;
-        this.client = new LocalLlmClient(this.config);
+        this.client.setModel(newModel);
+        // In planner/coder mode an explicit /model choice applies to both tiers.
+        if (this.plannerClient !== this.client)
+            this.plannerClient.setModel(newModel);
+        if (this.coderClient !== this.client)
+            this.coderClient.setModel(newModel);
     }
     totalTokens = { prompt: 0, completion: 0, total: 0 };
     getTokenStats() {
@@ -1234,6 +1239,8 @@ Always explain your reasoning before or alongside your tool calls.`;
             const subagentConfig = {
                 ...this.config,
                 maxSteps: subMaxSteps,
+                taskClass: "subagent",
+                plannerTaskClass: "subagent",
                 ...(inheritedWorktreeScope
                     ? {
                         workspace: inheritedWorktreeScope.workspace,

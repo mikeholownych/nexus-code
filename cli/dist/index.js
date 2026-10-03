@@ -29,8 +29,12 @@ const globalConfig = path.join(os.homedir(), ".config/nexus/config.env");
 if (fs.existsSync(globalConfig)) {
     loadDotenv({ path: globalConfig, override: true });
 }
-// 3. Current working directory overrides
-loadDotenv({ path: path.resolve(process.cwd(), ".env"), override: true });
+// 3. Current working directory overrides (skipped when cwd is the install directory: that file is the
+//    shipped default already applied in step 1 and must not outrank the user's global config)
+const cwdEnv = path.resolve(process.cwd(), ".env");
+if (cwdEnv !== path.resolve(__dirname, "../.env")) {
+    loadDotenv({ path: cwdEnv, override: true });
+}
 const program = new Command();
 program
     .name("harness")
@@ -57,7 +61,11 @@ function buildConfig(options) {
     const coderModel = options.coderModel || process.env.CODER_LLM_MODEL;
     const coderEndpoint = options.coderEndpoint || process.env.CODER_LLM_ENDPOINT;
     const tdd = Boolean(options.tdd);
+    const taskClass = process.env.NEXUS_TASK_CLASS || undefined;
+    const plannerTaskClass = process.env.PLANNER_TASK_CLASS || undefined;
     return {
+        taskClass,
+        plannerTaskClass,
         endpoint,
         model,
         apiKey,

@@ -48,6 +48,7 @@ export class InteractiveRepl {
     agent;
     config;
     rl = null;
+    knownModels = [];
     autoApprove = true;
     historyFile;
     history = [];
@@ -349,8 +350,7 @@ export class InteractiveRepl {
                 }
                 // If completing /model
                 if (parts[0] === "/model") {
-                    const models = ["qwen2.5-coder", "deepseek-coder", "llama-3.1", "claude-3-7-sonnet", "gpt-4o", "mistral-large"];
-                    const hits = models.filter((m) => m.startsWith(lastToken));
+                    const hits = this.knownModels.filter((m) => m.startsWith(lastToken));
                     return [hits, lastToken];
                 }
                 // If completing /skill
@@ -389,6 +389,8 @@ export class InteractiveRepl {
                 return [[], lastToken];
             },
         });
+        // Populate /model completion from the endpoint's real model list (best effort, never blocks the prompt).
+        new LocalLlmClient(this.config).listModels().then((models) => { this.knownModels = models; }).catch(() => { });
         this.agent.getSkillManager().startWatcher((skills) => {
             console.log(pc.dim(`\n🔄 [Hot-Reload] Skills library updated (${skills.length} available).`));
         });

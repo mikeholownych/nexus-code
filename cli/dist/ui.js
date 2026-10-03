@@ -26,6 +26,11 @@ export class TerminalUI {
         this.spinner = ora({
             text: pc.yellow(text),
             spinner: "dots",
+            // ora's default stdin discarding puts stdin in raw mode and leaves readline paused afterwards,
+            // which kills the REPL prompt after the first agent turn.
+            discardStdin: false,
+            // A TTY that reports no width makes ora compute an unbounded number of lines to clear and spin forever.
+            isEnabled: Boolean(process.stdout.isTTY && (process.stdout.columns ?? 0) > 0),
         }).start();
     }
     updateSpinner(text) {

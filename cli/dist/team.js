@@ -60,9 +60,18 @@ export class TeamOrchestrator {
     async executeRoleTask(role, task, contextHandoff) {
         const profile = ROLE_PROFILES[role] || ROLE_PROFILES.implementer;
         const t0 = Date.now();
+        // Route hints for the inference gateway: architecture and verification benefit from the deeper model.
+        const roleTaskClass = {
+            researcher: "subagent",
+            architect: "architecture",
+            implementer: undefined,
+            tester: "review",
+        };
         const roleConfig = {
             ...this.config,
             maxSteps: Math.min(this.config.maxSteps, 15),
+            taskClass: roleTaskClass[role] ?? this.config.taskClass,
+            plannerTaskClass: roleTaskClass[role] ?? this.config.plannerTaskClass,
         };
         const agent = new AutonomousAgent(roleConfig, 1);
         try {
