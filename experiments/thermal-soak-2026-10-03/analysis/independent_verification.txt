@@ -1,0 +1,119 @@
+0. INTEGRITY: raw files against the hashes taken on the host
+  [OK  ] files whose hash differs from the host copy                published         0  recomputed         0
+
+1. RUN SHAPE
+  [OK  ] samples                                                    published      3244  recomputed      3244
+  [OK  ] loaded samples (decode+prefill, by each sample's own label) published      2640  recomputed      2640
+
+2. THROTTLE FLAGS, counted by regex on the raw text (independent of record layout)
+  [OK  ] non-zero thermal/prochot/vr_thermalert/ratl flags in whole run published         0  recomputed         0
+  [OK  ] GPU0 PL2 samples (any phase)                               published         0  recomputed         0
+  [OK  ] GPU1 PL2 samples (any phase)                               published      2482  recomputed      2482
+  [OK  ] GPU1 PL2 share of loaded samples (%)                       published     94.00  recomputed     94.02  (tol 0.2 pp)
+
+3. PLATEAUS AND SLOPES (last 300 s of each load phase)
+  [OK  ] gpu0 pkg decode steady-state mean (C)                      published     65.95  recomputed     65.95  (tol 0.15)
+  [OK  ] gpu0 pkg decode steady-state min / max                     published     63/66  recomputed     63/66
+  [OK  ] gpu0 pkg prefill steady-state mean (C)                     published     65.24  recomputed     65.24  (tol 0.15)
+  [OK  ] gpu0 pkg prefill steady-state min / max                    published     62/67  recomputed     62/67
+  [OK  ] gpu0 vram decode steady-state mean (C)                     published     75.97  recomputed     75.97  (tol 0.15)
+  [OK  ] gpu0 vram decode steady-state min / max                    published     74/76  recomputed     74/76
+  [OK  ] gpu0 vram prefill steady-state mean (C)                    published     72.29  recomputed     72.29  (tol 0.15)
+  [OK  ] gpu0 vram prefill steady-state min / max                   published     70/74  recomputed     70/74
+  [OK  ] gpu0 peak VRAM over the whole run (C)                      published      76.0  recomputed      76.0
+  [OK  ] gpu0 peak package over the whole run (C)                   published      67.0  recomputed      67.0
+  [OK  ] gpu1 pkg decode steady-state mean (C)                      published     69.03  recomputed     69.03  (tol 0.15)
+  [OK  ] gpu1 pkg decode steady-state min / max                     published     66/70  recomputed     66/70
+  [OK  ] gpu1 pkg prefill steady-state mean (C)                     published     69.03  recomputed     69.03  (tol 0.15)
+  [OK  ] gpu1 pkg prefill steady-state min / max                    published     63/70  recomputed     63/70
+  [OK  ] gpu1 vram decode steady-state mean (C)                     published     82.63  recomputed     82.63  (tol 0.15)
+  [OK  ] gpu1 vram decode steady-state min / max                    published     80/84  recomputed     80/84
+  [OK  ] gpu1 vram prefill steady-state mean (C)                    published     79.89  recomputed     79.89  (tol 0.15)
+  [OK  ] gpu1 vram prefill steady-state min / max                   published     74/80  recomputed     74/80
+  [OK  ] gpu1 peak VRAM over the whole run (C)                      published      84.0  recomputed      84.0
+  [OK  ] gpu1 peak package over the whole run (C)                   published      70.0  recomputed      70.0
+  [info] Theil-Sen slopes are 0.000 C/min on every window (a median-based slope on 1 C-quantised flat data is always zero): consistent with no trend, but NOT a test of the published least-squares figures; see the next checks
+  [OK  ] gpu0 pkg decode least-squares slope (C/min)                published     -0.00  recomputed     -0.00  (tol 0.02)
+  [OK  ] gpu0 pkg decode: mean of last 150 s minus first 150 s of the window = -0.03 C (no drift if |d| <= 1 C, the sensor resolution)
+  [OK  ] gpu0 pkg prefill least-squares slope (C/min)               published     -0.01  recomputed     -0.01  (tol 0.02)
+  [OK  ] gpu0 pkg prefill: mean of last 150 s minus first 150 s of the window = -0.01 C (no drift if |d| <= 1 C, the sensor resolution)
+  [OK  ] gpu0 vram decode least-squares slope (C/min)               published     -0.00  recomputed     -0.00  (tol 0.02)
+  [OK  ] gpu0 vram decode: mean of last 150 s minus first 150 s of the window = -0.04 C (no drift if |d| <= 1 C, the sensor resolution)
+  [OK  ] gpu0 vram prefill least-squares slope (C/min)              published     -0.06  recomputed     -0.06  (tol 0.02)
+  [OK  ] gpu0 vram prefill: mean of last 150 s minus first 150 s of the window = -0.13 C (no drift if |d| <= 1 C, the sensor resolution)
+  [OK  ] gpu1 pkg decode least-squares slope (C/min)                published     -0.00  recomputed     -0.00  (tol 0.02)
+  [OK  ] gpu1 pkg decode: mean of last 150 s minus first 150 s of the window = -0.03 C (no drift if |d| <= 1 C, the sensor resolution)
+  [OK  ] gpu1 pkg prefill least-squares slope (C/min)               published     -0.01  recomputed     -0.01  (tol 0.02)
+  [OK  ] gpu1 pkg prefill: mean of last 150 s minus first 150 s of the window = -0.11 C (no drift if |d| <= 1 C, the sensor resolution)
+  [OK  ] gpu1 vram decode least-squares slope (C/min)               published     -0.13  recomputed     -0.13  (tol 0.02)
+  [OK  ] gpu1 vram decode: mean of last 150 s minus first 150 s of the window = -0.29 C (no drift if |d| <= 1 C, the sensor resolution)
+  [OK  ] gpu1 vram prefill least-squares slope (C/min)              published     -0.01  recomputed     -0.01  (tol 0.02)
+  [OK  ] gpu1 vram prefill: mean of last 150 s minus first 150 s of the window = -0.04 C (no drift if |d| <= 1 C, the sensor resolution)
+
+4. WARM-UP: first SUSTAINED (5 consecutive samples) crossing of 90% of the rise, unsmoothed, seconds after load start
+  [OK  ] gpu0 pkg time to 90% of rise (s)                           published    155.00  recomputed    156.00  (tol 25 s)
+  [OK  ] gpu0 vram time to 90% of rise (s)                          published    189.00  recomputed    190.00  (tol 25 s)
+  [OK  ] gpu1 pkg time to 90% of rise (s)                           published     83.00  recomputed     82.00  (tol 25 s)
+  [OK  ] gpu1 vram time to 90% of rise (s)                          published    129.00  recomputed    129.00  (tol 25 s)
+
+5. THROUGHPUT (per-request tokens/s, bucketed by completion time)
+  [OK  ] decode lead first-5-min median tok/s                       published     83.10  recomputed     83.08  (tol 1.0 tok/s)
+  [OK  ] decode lead last-5-min median tok/s                        published     83.60  recomputed     83.61  (tol 1.0 tok/s)
+  [OK  ] decode lead failed requests                                published         0  recomputed         0
+  [OK  ] decode deep first-5-min median tok/s                       published     21.50  recomputed     21.55  (tol 1.0 tok/s)
+  [OK  ] decode deep last-5-min median tok/s                        published     21.60  recomputed     21.55  (tol 1.0 tok/s)
+  [OK  ] decode deep failed requests                                published         0  recomputed         0
+  [OK  ] prefill lead first-5-min median tok/s                      published   1212.40  recomputed   1212.79  (tol 12.127887082976905 tok/s)
+  [OK  ] prefill lead last-5-min median tok/s                       published   1209.10  recomputed   1209.12  (tol 12.091219096334186 tok/s)
+  [OK  ] prefill lead failed requests                               published         0  recomputed         0
+  [OK  ] prefill deep first-5-min median tok/s                      published    758.90  recomputed    758.92  (tol 7.589180503481521 tok/s)
+  [OK  ] prefill deep last-5-min median tok/s                       published    759.10  recomputed    759.12  (tol 7.591225254146602 tok/s)
+  [OK  ] prefill deep failed requests                               published         0  recomputed         0
+
+6. TIME ABOVE THE CURRENT 75 C WARNING (VRAM, share of loaded samples)
+  [OK  ] gpu0 vram >= 75 C share of loaded time (%)                 published     39.10  recomputed     39.09  (tol 0.3 pp)
+  [OK  ] gpu1 vram >= 75 C share of loaded time (%)                 published     95.50  recomputed     95.57  (tol 0.3 pp)
+
+7. WHAT-IF: separate trips = runs of >= N consecutive samples at/above T (hottest sensor)
+  [OK  ] gpu0 T=75 persistence N=1s: trips                          published        17  recomputed        17
+  [OK  ] gpu0 T=75 persistence N=30s: trips                         published         9  recomputed         9
+  [OK  ] gpu0 T=75 persistence N=60s: trips                         published         7  recomputed         7
+  [OK  ] gpu0 T=80 persistence N=1s: trips                          published         0  recomputed         0
+  [OK  ] gpu0 T=80 persistence N=30s: trips                         published         0  recomputed         0
+  [OK  ] gpu0 T=80 persistence N=60s: trips                         published         0  recomputed         0
+  [OK  ] gpu0 T=85 persistence N=1s: trips                          published         0  recomputed         0
+  [OK  ] gpu0 T=85 persistence N=30s: trips                         published         0  recomputed         0
+  [OK  ] gpu0 T=85 persistence N=60s: trips                         published         0  recomputed         0
+  [OK  ] gpu1 T=75 persistence N=1s: trips                          published        10  recomputed        10
+  [OK  ] gpu1 T=75 persistence N=30s: trips                         published        10  recomputed        10
+  [OK  ] gpu1 T=75 persistence N=60s: trips                         published         6  recomputed         6
+  [OK  ] gpu1 T=80 persistence N=1s: trips                          published        47  recomputed        47
+  [OK  ] gpu1 T=80 persistence N=30s: trips                         published        20  recomputed        20
+  [OK  ] gpu1 T=80 persistence N=60s: trips                         published         1  recomputed         1
+  [OK  ] gpu1 T=85 persistence N=1s: trips                          published         0  recomputed         0
+  [OK  ] gpu1 T=85 persistence N=30s: trips                         published         0  recomputed         0
+  [OK  ] gpu1 T=85 persistence N=60s: trips                         published         0  recomputed         0
+
+8. SINGLE-SAMPLE SPIKES, different definition: +-2 neighbours, sample >= 2 C above the neighbours' mean, neighbours within 1 C
+  [OK  ] gpu0 VRAM channels: 461 isolated upward spikes = 1.09% of channel-samples, largest +2.00 C   (claim: under 1%, never above +2 C; accepting <1.5% and <=3 C under this stricter-neighbourhood definition)
+  [OK  ] gpu1 VRAM channels: 589 isolated upward spikes = 1.39% of channel-samples, largest +2.00 C   (claim: under 1%, never above +2 C; accepting <1.5% and <=3 C under this stricter-neighbourhood definition)
+
+9. HOST
+  [OK  ] busiest CPU core during load (%)                           published     98.30  recomputed     98.26  (tol 1.0)
+  [OK  ] mean CPU busy during load (%)                              published     27.90  recomputed     27.86  (tol 1.0)
+  [info] gpu0 median fan rpm in decode: 1680
+  [info] gpu1 median fan rpm in decode: 2460
+
+9b. POWER, FREQUENCY AND COOLDOWN (not covered above)
+  [OK  ] gpu0 decode mean card power (W), mean of per-second deltas published    140.90  recomputed    140.81  (tol 3.0 W)
+  [OK  ] gpu0 prefill mean card power (W), mean of per-second deltas published    136.00  recomputed    136.05  (tol 3.0 W)
+  [OK  ] gpu1 decode mean card power (W), mean of per-second deltas published    198.30  recomputed    198.25  (tol 3.0 W)
+  [OK  ] gpu1 decode median actual frequency while drawing >100 W (MHz) published   2333.00  recomputed   2333.00  (tol 60 MHz)
+  [OK  ] gpu1 prefill mean card power (W), mean of per-second deltas published    191.30  recomputed    191.28  (tol 3.0 W)
+  [OK  ] gpu1 prefill median actual frequency while drawing >100 W (MHz) published   2250.00  recomputed   2250.00  (tol 60 MHz)
+  [OK  ] gpu0 cooldown: seconds to lose 50% of the excess over idle published     92.00  recomputed     92.00  (tol 30 s)
+  [OK  ] gpu0 cooldown: seconds to lose 90% of the excess over idle published    379.00  recomputed    382.00  (tol 30 s)
+  [OK  ] gpu1 cooldown: seconds to lose 50% of the excess over idle published     63.00  recomputed     63.00  (tol 30 s)
+  [OK  ] gpu1 cooldown: seconds to lose 90% of the excess over idle published    346.00  recomputed    346.00  (tol 30 s)
+
+SUMMARY: 93 of 93 cross-checks agree within tolerance

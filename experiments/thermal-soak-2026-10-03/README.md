@@ -52,8 +52,9 @@ sits at 198 W (cap 200 W) and the actual frequency runs at a median 2333 MHz in 
 75 C warning is effectively an "inference is running" signal, while the 85 C critical was never reached (peak 84 C).
 
 **Single-sample behaviour (the abort evidence).** Sensors have 1 C resolution. Isolated one-sample upward excursions >= 2 C
-occur in 0.66% (GPU 0) / 0.81% (GPU 1) of VRAM channel-samples and **never exceed +2 C**; larger sample-to-sample jumps are real
-transitions. So noise is small; the issue is proximity. What a threshold T with persistence N seconds would have done to the
+occur in 0.66% (GPU 0) / 0.81% (GPU 1) of VRAM channel-samples under the primary definition (neighbours +-3 samples) and in
+1.09% / 1.39% under the independent cross-check's stricter definition (neighbours +-2 samples); the share therefore depends on
+the definition, but **the largest excursion is +2 C under both**. Larger sample-to-sample jumps are real transitions. So noise is small; the issue is proximity. What a threshold T with persistence N seconds would have done to the
 hottest sensor in the loaded phases (separate trips):
 
 | | N=1 s | 3 | 5 | 10 | 30 | 60 |
@@ -67,6 +68,37 @@ hottest sensor in the loaded phases (separate trips):
 about 1080 rpm and runs 1680; GPU 1 **idles at 0 rpm** and runs 2400-2460. During load the busiest CPU core is at **98%**
 with total CPU at 28% (the single-thread bottleneck persists under llama.cpp). Ambient: no labeled sensor; `dell_smm` `temp5`
 read a constant 25.0 C and `temp7` rose 26.2 -> 28.0 C, so the room was probably about 25-28 C. **Identity unverified.**
+
+## Scoped conclusion
+Within this workload, ambient condition (about 25-28 C, unverified), hardware configuration and observation period, the
+cooling system reached thermal equilibrium while both GPUs sustained useful inference, with no observed thermal throttling and
+no temperature-correlated throughput degradation. This says nothing about warmer rooms, restricted airflow, other workloads,
+component aging or maximum safe temperatures; Intel's recommended continuous operating temperature remains unknown.
+
+## Independent cross-check of the numbers
+`analysis/verify_independent.py` recomputes the published figures from the raw files with a deliberately different
+implementation (generic data walking, regex flag counting from the raw text, least-squares and Theil-Sen slopes, sustained
+unsmoothed threshold crossings, a different spike definition, per-sample phase labels, requests bucketed by completion time)
+and does not reuse `analyze.py`. Result (`analysis/independent_verification.txt`): **93 of 93 checks agree within their
+stated tolerances**, covering raw-file integrity against the host hashes, run shape, every throttle flag, plateau mean/min/max
+for package and VRAM in both phases, least-squares slopes and first-half/second-half drift, warm-up times, throughput,
+time above 75 C, the persistence what-if table, power, frequency and cooldown. Two honest notes: Theil-Sen slopes are
+identically 0.000 on 1 C-quantised flat data, so they do not test the published least-squares slopes (those are checked
+separately and match); and the spike percentage is definition-dependent (above). This is a second implementation by the same
+author, not third-party review.
+
+## Operator observation (relayed, subjective)
+As relayed by the operator in review commentary on 2026-10-03 (not witnessed or measured by the analysis): no conspicuous
+fan-noise excursion was perceived during the sustained load, in a noisy multi-host environment. It is an uncalibrated
+impression and is **not** used to infer fan RPM, cooling-controller behaviour or acoustic limits; the RPM figures above come
+from the sensors.
+
+## Observations preserved for future work (nothing was tuned)
+- GPU 1 (27B) meets a **power-control boundary (PL2, 200 W card limit) before any thermal boundary**; whether changing power
+  limits would improve useful performance is untested.
+- The busiest CPU core is at 98% while total CPU is 28% during llama.cpp inference: a single-thread bottleneck remains in the path.
+- The two phases exercise materially different regimes (memory-bound decode, compute-bound cold prefill), which also explains
+  the different cache and throughput behaviour seen in the console during the run.
 
 ## Caveats and limits
 - One soak, one ambient (about 25-28 C, unverified), llama.cpp workloads only, two 22-minute phases. Nothing here says what
@@ -83,4 +115,4 @@ as a baseline for later power tuning (preserved here as an observation only).
 
 ## Layout
 `raw/` original host files + `host-sha256.txt` (verified identical after copy) | `analysis/analyze.py`, `plots.py`,
-`summary.json`, `analysis_output.txt`, `plots/` | `research/` | `SHA256SUMS`.
+`verify_independent.py`, `independent_verification.txt`, `summary.json`, `analysis_output.txt`, `plots/` | `research/` | `SHA256SUMS`.
