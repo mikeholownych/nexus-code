@@ -1,0 +1,112 @@
+[
+ {
+  "task": "T01-pagination",
+  "ok": false,
+  "stage": "visible",
+  "secs": 21,
+  "steps": 2,
+  "declared_done": false,
+  "timeout": false,
+  "msg": "F\n=================================== FAILURES ===================================\n_______________________________ test_first_page _____________________________"
+ },
+ {
+  "task": "T02-money",
+  "ok": false,
+  "stage": "visible",
+  "secs": 17,
+  "steps": 2,
+  "declared_done": false,
+  "timeout": false,
+  "msg": "F\n=================================== FAILURES ===================================\n_______________________________ test_cents_exact ____________________________"
+ },
+ {
+  "task": "T03-cache-collision",
+  "ok": false,
+  "stage": "visible",
+  "secs": 16,
+  "steps": 2,
+  "declared_done": false,
+  "timeout": false,
+  "msg": "F\n=================================== FAILURES ===================================\n______________________ test_distinct_users_do_not_collide ___________________"
+ },
+ {
+  "task": "T04-dry-run",
+  "ok": true,
+  "stage": "hidden",
+  "secs": 190,
+  "steps": 25,
+  "declared_done": false,
+  "timeout": false,
+  "msg": "all hidden tests pass"
+ },
+ {
+  "task": "T05-iterative-tree",
+  "ok": false,
+  "stage": "visible",
+  "secs": 18,
+  "steps": 2,
+  "declared_done": false,
+  "timeout": false,
+  "msg": "...\n in flatten\n    out.extend(flatten(child))\n               ^^^^^^^^^^^^^^\ntree.py:10: in flatten\n    out.extend(flatten(child))\n               ^^^^^^^^^^^^^^"
+ },
+ {
+  "task": "T06-api-rename",
+  "ok": true,
+  "stage": "hidden",
+  "secs": 159,
+  "steps": 25,
+  "declared_done": true,
+  "timeout": false,
+  "msg": "all hidden tests pass"
+ },
+ {
+  "task": "T07-parse-duration",
+  "ok": false,
+  "stage": "visible",
+  "secs": 22,
+  "steps": 2,
+  "declared_done": false,
+  "timeout": false,
+  "msg": "F\n=================================== FAILURES ===================================\n__________________________________ test_basic _______________________________"
+ },
+ {
+  "task": "T08-safe-join",
+  "ok": false,
+  "stage": "hidden",
+  "secs": 155,
+  "steps": 25,
+  "declared_done": true,
+  "timeout": false,
+  "msg": "E   AssertionError: assert False\nE    +  where False = <built-in method endswith of str object at 0x7d50a4f97b40>('real/f.txt')\nE    +    where <built-in method"
+ },
+ {
+  "task": "T09-token-bucket",
+  "ok": true,
+  "stage": "hidden",
+  "secs": 81,
+  "steps": 14,
+  "declared_done": true,
+  "timeout": false,
+  "msg": "all hidden tests pass"
+ },
+ {
+  "task": "T10-sqlite-migration",
+  "ok": false,
+  "stage": "hidden",
+  "secs": 379,
+  "steps": 25,
+  "declared_done": false,
+  "timeout": false,
+  "msg": "E   AssertionError: {'a': 'foo.org', 'b': None, 'c': None, 'd': '@bar.net', ...}\nE   assert {'a': 'foo.or...bar.net', ...} == {'a': 'foo.or...bar.net', ...}\nE  "
+ },
+ {
+  "task": "T12-nested-config",
+  "ok": true,
+  "stage": "hidden",
+  "secs": 134,
+  "steps": 24,
+  "declared_done": true,
+  "timeout": false,
+  "msg": "all hidden tests pass"
+ }
+]

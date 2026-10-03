@@ -1,0 +1,112 @@
+[
+ {
+  "task": "T01-pagination",
+  "ok": true,
+  "stage": "hidden",
+  "secs": 65,
+  "steps": 16,
+  "declared_done": true,
+  "timeout": false,
+  "msg": "all hidden tests pass"
+ },
+ {
+  "task": "T02-money",
+  "ok": false,
+  "stage": "hidden",
+  "secs": 140,
+  "steps": 25,
+  "declared_done": false,
+  "timeout": false,
+  "msg": "E   AssertionError: assert 1082 == 1083\nE    +  where 1082 = cents()\nE    +    where cents = Money(10.82).cents\nE    +      where Money(10.82) = apply_tax(Money"
+ },
+ {
+  "task": "T03-cache-collision",
+  "ok": false,
+  "stage": "hidden",
+  "secs": 78,
+  "steps": 18,
+  "declared_done": true,
+  "timeout": false,
+  "msg": "E   AssertionError: assert 3 == 4\nE    +  where 3 = get_or_compute(('a', 'b,c'), <function test_separator_in_parts.<locals>.<lambda> at 0x78e732be8180>)\nE    + "
+ },
+ {
+  "task": "T04-dry-run",
+  "ok": true,
+  "stage": "hidden",
+  "secs": 67,
+  "steps": 15,
+  "declared_done": true,
+  "timeout": false,
+  "msg": "all hidden tests pass"
+ },
+ {
+  "task": "T05-iterative-tree",
+  "ok": true,
+  "stage": "hidden",
+  "secs": 65,
+  "steps": 15,
+  "declared_done": true,
+  "timeout": false,
+  "msg": "all hidden tests pass"
+ },
+ {
+  "task": "T06-api-rename",
+  "ok": true,
+  "stage": "hidden",
+  "secs": 50,
+  "steps": 20,
+  "declared_done": true,
+  "timeout": false,
+  "msg": "all hidden tests pass"
+ },
+ {
+  "task": "T07-parse-duration",
+  "ok": true,
+  "stage": "hidden",
+  "secs": 237,
+  "steps": 25,
+  "declared_done": false,
+  "timeout": false,
+  "msg": "all hidden tests pass"
+ },
+ {
+  "task": "T08-safe-join",
+  "ok": false,
+  "stage": "hidden",
+  "secs": 214,
+  "steps": 25,
+  "declared_done": false,
+  "timeout": false,
+  "msg": "E   AssertionError: assert (False)\nE    +  where False = rejects('/tmp/tmpto1ski7y', 'link/secret')"
+ },
+ {
+  "task": "T09-token-bucket",
+  "ok": true,
+  "stage": "hidden",
+  "secs": 65,
+  "steps": 15,
+  "declared_done": true,
+  "timeout": false,
+  "msg": "all hidden tests pass"
+ },
+ {
+  "task": "T10-sqlite-migration",
+  "ok": false,
+  "stage": "hidden",
+  "secs": 148,
+  "steps": 22,
+  "declared_done": true,
+  "timeout": false,
+  "msg": "E   AssertionError: {'a': 'foo.org', 'b': None, 'c': None, 'd': 'y@bar.net', ...}\nE   assert {'a': 'foo.or...bar.net', ...} == {'a': 'foo.or...bar.net', ...}\nE "
+ },
+ {
+  "task": "T12-nested-config",
+  "ok": true,
+  "stage": "hidden",
+  "secs": 54,
+  "steps": 12,
+  "declared_done": true,
+  "timeout": false,
+  "msg": "all hidden tests pass"
+ }
+]

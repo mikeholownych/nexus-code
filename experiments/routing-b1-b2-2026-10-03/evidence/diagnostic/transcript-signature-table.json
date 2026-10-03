@@ -1,0 +1,74 @@
+[
+ {
+  "task": "_T01-pagination",
+  "steps": 2,
+  "merged_tool_names": [
+   "find_fileslist_dir"
+  ],
+  "fatal_http": "503"
+ },
+ {
+  "task": "_T02-money",
+  "steps": 25,
+  "merged_tool_names": [],
+  "fatal_http": null
+ },
+ {
+  "task": "_T03-cache-collision",
+  "steps": 2,
+  "merged_tool_names": [
+   "file_treesearch_code"
+  ],
+  "fatal_http": "503"
+ },
+ {
+  "task": "_T04-dry-run",
+  "steps": 21,
+  "merged_tool_names": [],
+  "fatal_http": null
+ },
+ {
+  "task": "_T05-iterative-tree",
+  "steps": 19,
+  "merged_tool_names": [],
+  "fatal_http": null
+ },
+ {
+  "task": "_T06-api-rename",
+  "steps": 2,
+  "merged_tool_names": [
+   "file_treefind_files"
+  ],
+  "fatal_http": "503"
+ },
+ {
+  "task": "_T07-parse-duration",
+  "steps": 25,
+  "merged_tool_names": [],
+  "fatal_http": null
+ },
+ {
+  "task": "_T08-safe-join",
+  "steps": 25,
+  "merged_tool_names": [],
+  "fatal_http": null
+ },
+ {
+  "task": "_T09-token-bucket",
+  "steps": 11,
+  "merged_tool_names": [],
+  "fatal_http": null
+ },
+ {
+  "task": "_T10-sqlite-migration",
+  "steps": 20,
+  "merged_tool_names": [],
+  "fatal_http": null
+ },
+ {
+  "task": "_T12-nested-config",
+  "steps": 18,
+  "merged_tool_names": [],
+  "fatal_http": null
+ }
+]

@@ -1,0 +1,163 @@
+{
+ "aihost_repo": {
+  "gateway_code_commit": "2d75d4c77859d0cdf67753fa67a7cad4d550353e",
+  "head": "721a0cc87302344a7e5446178ad548210ca670e1"
+ },
+ "harness": {
+  "engx.py": "58470b97e1f8e3fe9004a8a1f40c17d30b77090f7a1d31b652d6cbf369d8a086",
+  "engx_tasks.py": "f67439429a074e7a9514514f9d8871303ca30c067ddbcf5389ba823721756b9e",
+  "freeze.py": "ce411c0691f28e81b4082831e1bd8467752799782f257352f76b12f35e41d462",
+  "nxbench2.py": "6742b7f066cd9eb96675252edc5fa8dcc2d3b17723da294189e0346244385702",
+  "qualify.mjs": "92775c7ee0ba7ec441198e00d57fa3f943e945a56b10b539c4aa3228fd9f7c7c",
+  "remote_snapshot.py": "c57ff64b928eb21dd8261d7d43362b9217d4604e2a246f819954cf15c00e472e"
+ },
+ "nexus": {
+  "cli_src_clean": true,
+  "config_env_nonsecret": {
+   "LOCAL_HARNESS_SHELL": "bash",
+   "LOCAL_LLM_ENDPOINT": "http://127.0.0.1:18010/v1",
+   "LOCAL_LLM_MODEL": "engineering/b0"
+  },
+  "default_temperature": 0.2,
+  "dist_files": {
+   "agent.js": "8439e02e5fd04cdc0bdb6b87da8a4cb71c9a45278cd48af855f2861b86c9c879",
+   "browser.js": "f5d3dad3f109fb00c159c036c1f6166ad69c94016633029d3c0192f9542d5343",
+   "checkpoint.js": "ba8cd9acc4669996a0a6c30b739e7acbc26be0fd238d64d7853f3d63ae3b140d",
+   "client.js": "9161885d598d8597c459349cec108b313c08de27493912b4807fc4c25ff0bc87",
+   "clipboard.js": "032129513ef455187807d4b3c1798daafe7b2163b8a52074b83cd6663df1dab7",
+   "diagnostics.js": "02dadc2dd82af70624c408e4bfc47d758154150d2d1a7d91545dec77a1d0090f",
+   "embeddings.js": "2ea519eed314bced167703d4b2cfba161ad8a4f392095ae89c084458efd07602",
+   "evaluator.js": "d41e6a424970cfd1400eb58ecbe7afda867dfe77e48e76cc61e4c354f2ddd6a2",
+   "fewshots.js": "1a80c3364152ce4c458ffb7d807e953ef7607c7448f81b2b8e66af18a4375feb",
+   "flight.js": "d9ecda2395f6296d43d6041cfa4aff54cd3a7151a880a57cd78f471dbd45fca2",
+   "git.js": "240bc6fc0013138510cb784bdf053e9279bfcbd78f948802cd684e0b2216ce31",
+   "image.js": "56eb94857175dd3fb8050b9b41682d4874507cf7f6787049a7b496fbdac49bc3",
+   "index.js": "c4cface822fe44da40aa5c74dccfeea0dd0e0191a3c7fc50f1a5f10c6990f345",
+   "knowledge.js": "f6efb79fcf6d2fcd4dcb4d974ec779b3fb9310dcdc1c599b0332bacca9420ddd",
+   "lsp.js": "1d6508dd0ea5b391790e822842cad04e19bf64eaa56d9a894b8a6527e72d7212",
+   "mcp.js": "462de40b713feac81c7947467ed027d33eb307ec6649162a3074921937fef182",
+   "onboard.js": "2b15a55050faa5ba74831800288366f475f5cc0f4860e2010edfa8839c916eda",
+   "parser.js": "341087923f670e3694f7da6efbeb031990236d368df05a377932e38899458c3a",
+   "plugins.js": "a1db8d69f182e7ab92607133870d415c29f523ef74769f2e73ff5de8c7375a13",
+   "repl.js": "542f915467ee892bdf704bf95dcee2301a93133701ec5e76916845ffa452d8c1",
+   "sandbox.js": "910f1e753f8048271c0df3e777e767afc3b91ee43f96be01d432f3175203597d",
+   "search_web.js": "78932c3ef57c73cb6453789e83c4ba585d48b354573d7a0d9a281705bfd3bb46",
+   "security.js": "fdeaf907538697f1cb0b7e3d7c95f0dff82e452069355cd9ac02c888fe2a4f30",
+   "session.js": "ecdab6dbc41639af82e924800550938cea4cf0f4657b239284c14f254039d150",
+   "skills.js": "373635d27bebd16cdc50e88fb49947b91506cb79aa70033216816d79153a49c3",
+   "stager.js": "8129a0ba9cacb5d4f8b718dfd2c7a592063f5dc526ed827c5f217ca66687dc70",
+   "syntax.js": "2d7b5a1ed14e9c42af4688e5f9f5b3ba234df24846a14d1aed7edba7da322fba",
+   "synthesizer.js": "ae284583aa0fa87d90ea33ec63e2881489dfaa49d2fde5be3db59804e6c97c9a",
+   "team.js": "dbb1d879815355b02dbb4ed5bb4550f0de39ea237903b91b6633679383cd4eb7",
+   "tester.js": "11775b2bf46f25546cfa7604cab3462af4e48ac79aec840629c8592a370819f5",
+   "theme.js": "665cf1e767e1a3bda9a94a65a904030fb43cb797501cbc1d31cfd92df9af0839",
+   "tokens.js": "2b9c21da18b5d213544efd0b42be3ba6fafd03f9e3b2392374df3fd64d73e643",
+   "tools.js": "f89a1953ab493c36d293a7db89b5fe608c2b475fe8249f6878998bd1b6ca329a",
+   "tui.js": "49ffdc99a036365ccddc7df42aec956563f45a953a7c0c39dd40578d76d894c0",
+   "types.js": "8e609bb71c20b858c77f0e9f90bb1319db8477b13f9f965f1a1e18524bf50881",
+   "ui.js": "5ec68d08dc551f1da6453b996cdf8c95f05e8f322e06af151f155cfad9699627",
+   "worktree.js": "7f72e721343966f605908c85a0f4c546c700960102126f9baeca6beec1a405d7"
+  },
+  "dist_sha256": "deae61d045a2e18d7035718ec7c7b90b273da7c4f80fb2d320d5a06b6bf2b9fe",
+  "max_steps": 25,
+  "node": "v24.21.0",
+  "per_task_timeout_s": 900,
+  "repo_head": "098ce4a46fc66c27a54cb80b4c7a65331c2a6e2e",
+  "src_fix_commit": "01727b623ae48e9a59732b66f30016645b7aee34"
+ },
+ "remote": {
+  "gateway": {
+   "active_since": "Sat 2026-10-03 14:06:47 UTC",
+   "config": {
+    "ORCHESTRATOR_ALLOW_WORKER_PINNING": "true",
+    "ORCHESTRATOR_MODEL_ALIASES": "{\"engineering/lead\":\"lead\",\"engineering/deep\":\"deep\"}",
+    "ORCHESTRATOR_PUBLIC_MODEL_ID": "engineering/b0",
+    "ORCHESTRATOR_ROUTES": "[{\"id\":\"deep-tasks\",\"match\":{\"task_class\":[\"review\",\"escalate\",\"architecture\",\"debug-hard\"]},\"pool\":\"deep\",\"fallback\":[\"lead\"]},{\"id\":\"default\",\"match\":{},\"pool\":\"lead\",\"fallback\":[\"deep\"]}]",
+    "ORCHESTRATOR_SCHEDULING_MODE": "CONFIGURATION_B_PLUS",
+    "worker_specs": [
+     {
+      "artifact_digest": "sha256:fadc3e5f8d42bf7e894a785b05082e47daee4df26680389817e2093056f088ad",
+      "context_limit": 65536,
+      "endpoint": "http://127.0.0.1:8000",
+      "engine": "llama.cpp",
+      "max_concurrency": 1,
+      "max_output_tokens": 1024,
+      "model_id": "Qwen3-Coder-30B-A3B-Instruct-Q4_K_M",
+      "pool": "lead",
+      "revision": "gguf-fadc3e5f8d42",
+      "runtime_image_digest": "sha256:2f4940610095fe48aabff3db7f87feb4f553081302b1a5a8744a589eb123b451",
+      "worker_id": "b0-live-llama-worker1"
+     },
+     {
+      "artifact_digest": "sha256:84b5f7f112156d63836a01a69dc3f11a6ba63b10a23b8ca7a7efaf52d5a2d806",
+      "context_limit": 65536,
+      "endpoint": "http://127.0.0.1:8001",
+      "engine": "llama.cpp",
+      "max_concurrency": 1,
+      "max_output_tokens": 1024,
+      "model_id": "Qwen3.5-27B-Q4_K_M",
+      "pool": "deep",
+      "revision": "gguf-84b5f7f11215",
+      "runtime_image_digest": "sha256:2f4940610095fe48aabff3db7f87feb4f553081302b1a5a8744a589eb123b451",
+      "worker_id": "b0-live-llama-deep-worker2"
+     }
+    ]
+   },
+   "env_sha256": "d6c84429d9f7a77823f1d4a32fdb58b1230e84ef1f29073d346a8bba5e4e6d25",
+   "files": {
+    "RELEASE_ID": "d18567db14804a27a7b5c8781bdf43b361cae82c69f9cea43e8be101a43d67a2",
+    "orchestrator_contract/__init__.py": "9a4870a874345d6f34d406756df095f52344966fe40cd572c928f53a408a8f5a",
+    "orchestrator_contract/core.py": "70b886544b85d1422248946f164c669ba453e8cbdce27f0b4a79d216870517e2",
+    "orchestrator_gateway/__init__.py": "03c93d772033ace293a05d280d8b9fd68492094513c22c91ebe4a9d104892d89",
+    "orchestrator_gateway/__main__.py": "a0ef9a530fc81b003b75f35fa8896bb42e8357fef59278015c2bfb1c21a94845",
+    "orchestrator_gateway/server.py": "a101b88054c9e09fc39c63eb0f188ecca6544f6462a3c177e72e2d01d397e511",
+    "orchestrator_runtime/__init__.py": "c3929f5cadf914e339c305c056bdedc0fde70e84cc870315e672d1c0ed8f7967",
+    "orchestrator_runtime/engine_stats.py": "c5e57b17f869b73464f3f863e6debb96232815b4f862fc4aa556a15e77bd2687",
+    "orchestrator_runtime/health.py": "dd562b8fd0bd6241fee84c12a646f9c2516b1dff8b833170a81fd55dbaceeae2",
+    "orchestrator_runtime/metrics.py": "8ec5a822118ab991423bc546f1a8b9b67732e99a39c48cefc27de35fa52c2a0a",
+    "orchestrator_runtime/routing.py": "69165ecfb0ed2949bdcdd552078c6e432636b6169c755bc1aa9e85592bd07b26",
+    "orchestrator_runtime/runtime.py": "5c853b0c3f428788377aa779fd114a424209212a7187e7bb88b7217b177f9ecd"
+   },
+   "main_pid": "903871",
+   "proc_cwd": "/var/lib/aihost/releases/t5820-gateway-2d75d4c",
+   "release_dir": "/var/lib/aihost/releases/t5820-gateway-2d75d4c",
+   "unit_sha256": "8134f29edff58a6609f50e4be10f7f075ef3059efc586d2b9c6d7e9df43a9da4"
+  },
+  "host": {
+   "Qwen3-Coder-30B-A3B-Instruct-Q4_K_M.gguf": {
+    "mtime": 1790973889,
+    "size": 18556689568
+   },
+   "Qwen3.5-27B-Q4_K_M.gguf": {
+    "mtime": 1790981032,
+    "size": 16740812704
+   },
+   "boot_id": "4d18cf41-f048-42e1-ab07-64ddd12700ed",
+   "kernel": "7.0.0-34-generic"
+  },
+  "workers": {
+   "aihost-llama-worker1": {
+    "active_since": "Sat 2026-10-03 12:29:42 UTC",
+    "exec_start": [
+     "  -m /models/Qwen3-Coder-30B-A3B-Instruct-Q4_K_M.gguf -c 65536 \\"
+    ],
+    "image": [
+     "ghcr.io/ggml-org/llama.cpp@sha256:2f4940610095fe48aabff3db7f87feb4f553081302b1a5a8744a589eb123b451 \\"
+    ],
+    "main_pid": "716232",
+    "unit_sha256": "ab3077544d35fceff6da8b08917be3bb25652eb7fc2a457046a68edb07e6006d"
+   },
+   "aihost-llama-worker2": {
+    "active_since": "Sat 2026-10-03 12:30:53 UTC",
+    "exec_start": [
+     "  -m /models/Qwen3.5-27B-Q4_K_M.gguf -c 65536 \\"
+    ],
+    "image": [
+     "ghcr.io/ggml-org/llama.cpp@sha256:2f4940610095fe48aabff3db7f87feb4f553081302b1a5a8744a589eb123b451 \\"
+    ],
+    "main_pid": "718384",
+    "unit_sha256": "108598fa3d66e004bd8741d48deff7d0b9282e93435f5296cb0d0a1af905603e"
+   }
+  }
+ }
+}

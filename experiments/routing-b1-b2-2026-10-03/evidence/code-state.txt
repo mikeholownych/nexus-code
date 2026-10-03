@@ -1,0 +1,4 @@
+dist/src state when B2-run-1 and diagnostics ran:
+1b88429 feat(cli): send X-Task-Class routing hint to the inference gateway
+ M cli/src/agent.ts  M cli/src/client.ts  M cli/src/index.ts  M cli/src/repl.ts  M cli/src/team.ts  M cli/src/ui.ts 
+ 6 files changed, 58 insertions(+), 6 deletions(-)

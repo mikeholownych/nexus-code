@@ -1,0 +1,58 @@
+{
+ "paired": {
+  "both_pass": [
+   "T01-pagination",
+   "T04-dry-run",
+   "T05-iterative-tree",
+   "T06-api-rename",
+   "T09-token-bucket"
+  ],
+  "neither_pass": [
+   "T07-parse-duration",
+   "T08-safe-join",
+   "T10-sqlite-migration"
+  ],
+  "B1_only": [
+   "T02-money",
+   "T12-nested-config"
+  ],
+  "B2_only": [
+   "T03-cache-collision"
+  ],
+  "discordant_exact_sign_test_two_sided_p": 1.0
+ },
+ "aggregate": {
+  "B1-run-2": {
+   "validated": 7,
+   "n": 11,
+   "total_secs": 1150,
+   "avg_steps": 19.8,
+   "classes": {
+    "validated": 7,
+    "false_completion": 3,
+    "step_limit_not_done": 1
+   },
+   "gateway_requests": 218,
+   "gateway_errors": 0,
+   "fallbacks": 0
+  },
+  "B2-run-2": {
+   "validated": 6,
+   "n": 11,
+   "total_secs": 1387,
+   "avg_steps": 18.2,
+   "classes": {
+    "validated": 6,
+    "step_limit_not_done": 2,
+    "false_completion": 3
+   },
+   "gateway_requests": 208,
+   "gateway_errors": 0,
+   "fallbacks": 0
+  }
+ },
+ "B1_run1_vs_run2_same_config_flips": [
+  "T02-money",
+  "T07-parse-duration"
+ ]
+}
