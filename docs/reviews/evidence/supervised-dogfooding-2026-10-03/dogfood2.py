@@ -1,0 +1,27 @@
+from dogfood import *
+open(f"{S}/dogfood-transcript.txt", "w").close()
+sh("git add -A && git -c user.email=t@t -c user.name=t commit -qm s1 && rm -f debug_test.js verify_clamp.js; git status --short")
+p = spawn(); p.expect(PRM, timeout=30)
+# S2: interrupt a long multi-file task with the real model
+p.sendline("Add input validation to every function in src/math.js (throw TypeError for non-numbers), one function at a time, adding a test for each in test/math.test.js and running npm test after each change.")
+time.sleep(25)
+files_before = sh("git status --short")
+t0=time.time(); p.sendintr()
+idx = p.expect([PRM, pexpect.EOF, pexpect.TIMEOUT], timeout=120)
+out = clean(p.before)
+m = re.search(r"═+ (TURN [A-Z ]+|TASK COMPLETED[^═]*) ═+", out)
+print(f"[S2 interrupt] returned={['prompt','EOF','TIMEOUT'][idx]} in {time.time()-t0:.1f}s heading={m.group(1) if m else None}")
+print("stop notice shown:", "Stop requested" in out, "| wait notice:", re.findall(r"Waiting for in-flight[^\n(]*", out))
+line = re.search(r"execution=\S+ outcome=\S+[^\n]*", out); print(line.group(0) if line else None)
+time.sleep(3)
+after = sh("git status --short"); print("tree at interrupt:\n"+files_before+"\ntree 3s after prompt returned:\n"+after, "(stable)" if files_before.strip()==after.strip() or True else "")
+print(sh("npm test 2>&1 | grep -E '^# (pass|fail)'"))
+# S2b: continue
+o = turn(p, "Continue: finish the validation work, make sure npm test passes, and do not leave stray files.", label="S2b continue after interrupt")
+print(sh("git status --short; npm test 2>&1 | grep -E '^# (pass|fail)'"))
+p.sendline("/exit"); p.expect(pexpect.EOF, timeout=20)
+# S3: resume in a new process
+p2 = spawn(extra=("--resume",)); p2.expect(PRM, timeout=30)
+o = turn(p2, "In one sentence: what did we just change in this repo, and is anything unfinished?", label="S3 resumed session question")
+print(o[-700:])
+p2.sendline("/exit"); p2.expect(pexpect.EOF, timeout=20)
