@@ -33,7 +33,9 @@ every sensor is within +-0.14 C/min. The 22-minute phases are at thermal steady 
 | GPU 1 VRAM (hottest channel) | **82.6 (80-84)** | 79.9 (74-80) | **84** | 34 |
 | memory controller / PCIe | 49-51 / 67-69 | 49-51 / 66-69 | 51 / 70 | 23 / 32 |
 
-Decode (memory-bound) runs the VRAM 2.7-3.7 C hotter than prefill. The `vram` sensor equals the hottest of the 16 channels; the
+Decode (memory-bound) runs the VRAM 2.7-3.7 C hotter than prefill. The `vram` sensor does not exactly equal the hottest of the 16 channels: across the 3,244 samples the two differed in
+10 GPU 0 samples and 27 GPU 1 samples, each observed difference exactly 2.0 C (discovered by the offline policy replay, see
+`policy-replay/README.md` erratum and `policy-replay/tests/test_thermal_policy_replay.py`). The
 hottest channel reads **6.0 C (GPU 0) / 8.2 C (GPU 1) above the median channel** at the decode plateau.
 
 **Margins on the hottest observation.** GPU 1 VRAM peak 84 C is 21 C below the kernel `crit` (105), 36 C below the shutdown

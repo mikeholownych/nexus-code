@@ -45,5 +45,5 @@ has been made.
 ## Erratum to the soak README
 The soak README states that the `vram` sensor equals the hottest of the 16 channels. This is inexact: they differ in
 10 (gpu0) and 27 (gpu1) of 3,244 samples, always by exactly 2.0 C (agree 99.7% / 99.2%). The soak's conclusions
-(based on hottest-of-all-sensors and channel-vs-median figures) are unaffected. The soak README has been left
-unchanged as instructed; the one-line correction is left to the owner's decision.
+(based on hottest-of-all-sensors and channel-vs-median figures) are unaffected. The soak README was subsequently corrected
+at the owner's instruction; see `../README.CORRECTION.txt` for before/after hashes.
