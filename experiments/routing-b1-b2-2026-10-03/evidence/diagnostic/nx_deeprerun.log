@@ -1,0 +1,12 @@
+{"task": "T01-pagination", "ok": false, "stage": "visible", "secs": 19, "steps": 2, "declared_done": false, "timeout": false, "msg": "F\n=================================== FAILURES ===================================\n_______________________________ test_first_page _____________________________"}
+{"task": "T02-money", "ok": true, "stage": "hidden", "secs": 116, "steps": 25, "declared_done": false, "timeout": false, "msg": "all hidden tests pass"}
+{"task": "T03-cache-collision", "ok": false, "stage": "visible", "secs": 16, "steps": 2, "declared_done": false, "timeout": false, "msg": "F\n=================================== FAILURES ===================================\n______________________ test_distinct_users_do_not_collide ___________________"}
+{"task": "T04-dry-run", "ok": true, "stage": "hidden", "secs": 138, "steps": 21, "declared_done": true, "timeout": false, "msg": "all hidden tests pass"}
+{"task": "T05-iterative-tree", "ok": true, "stage": "hidden", "secs": 96, "steps": 19, "declared_done": true, "timeout": false, "msg": "all hidden tests pass"}
+{"task": "T06-api-rename", "ok": false, "stage": "visible", "secs": 15, "steps": 2, "declared_done": false, "timeout": false, "msg": "F\n=================================== FAILURES ===================================\n___________________________ test_new_parameter_name _________________________"}
+{"task": "T07-parse-duration", "ok": true, "stage": "hidden", "secs": 263, "steps": 25, "declared_done": false, "timeout": false, "msg": "all hidden tests pass"}
+{"task": "T08-safe-join", "ok": false, "stage": "hidden", "secs": 184, "steps": 25, "declared_done": true, "timeout": false, "msg": "E   AssertionError: assert (False)\nE    +  where False = rejects('/tmp/tmpv8yyqioo', 'link/secret')"}
+{"task": "T09-token-bucket", "ok": true, "stage": "hidden", "secs": 66, "steps": 11, "declared_done": true, "timeout": false, "msg": "all hidden tests pass"}
+{"task": "T10-sqlite-migration", "ok": false, "stage": "hidden", "secs": 114, "steps": 20, "declared_done": true, "timeout": false, "msg": "E   AssertionError: {'a': 'foo.org', 'b': None, 'c': None, 'd': 'y@bar.net', ...}\nE   assert {'a': 'foo.or...bar.net', ...} == {'a': 'foo.or...bar.net', ...}\nE "}
+{"task": "T12-nested-config", "ok": true, "stage": "hidden", "secs": 101, "steps": 18, "declared_done": true, "timeout": false, "msg": "all hidden tests pass"}
+SUMMARY deeprerun validated 6/11 avg_secs 102 avg_steps 15.5 claimed_done_but_failed 2
