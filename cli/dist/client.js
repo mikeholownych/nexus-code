@@ -36,6 +36,55 @@ export function readLatestAuthToken() {
     }
     return null;
 }
+/**
+ * Typed inference failure. `failoverEligible` is false for operator aborts and client-originated faults
+ * (malformed/truncated output, HTTP 4xx): another endpoint will not fix those.
+ */
+export class InferenceError extends Error {
+    kind;
+    origin;
+    httpStatus;
+    requestId;
+    partialText;
+    failoverEligible;
+    constructor(kind, origin, message, opts = {}) {
+        super(message);
+        this.name = "InferenceError";
+        this.kind = kind;
+        this.origin = origin;
+        this.httpStatus = opts.httpStatus;
+        this.requestId = opts.requestId;
+        this.partialText = opts.partialText ?? "";
+        this.failoverEligible = opts.failoverEligible ?? (kind === "http_error" || kind === "network_error" || kind === "timeout" || kind === "stream_interrupted");
+    }
+    toFailure() {
+        return {
+            kind: this.kind,
+            origin: this.origin,
+            message: this.message,
+            httpStatus: this.httpStatus,
+            requestId: this.requestId,
+            partialTextChars: this.partialText.length || undefined,
+        };
+    }
+}
+function abortedError(requestId, partialText) {
+    return new InferenceError("aborted", "operator", "Inference request aborted by operator", { requestId, partialText, failoverEligible: false });
+}
+/** Classify a fetch/read rejection. `operatorSignal` distinguishes operator abort from the request timeout. */
+function classifyTransportError(err, operatorSignal, requestId, phase, partialText = "") {
+    if (err instanceof InferenceError)
+        return err;
+    if (operatorSignal?.aborted)
+        return abortedError(requestId, partialText);
+    if (err?.name === "TimeoutError") {
+        return new InferenceError("timeout", "transport", `Inference request timed out: ${err.message}`, { requestId, partialText });
+    }
+    const msg = err?.message || String(err);
+    return phase === "stream"
+        ? new InferenceError("stream_interrupted", "transport", `Inference stream interrupted before completion: ${msg}`, { requestId, partialText })
+        : new InferenceError("network_error", "transport", `Inference request failed: ${msg}`, { requestId });
+}
 export class LocalLlmClient {
     endpoints = [];
     activeEndpointIndex = 0;
@@ -187,6 +236,8 @@ export class LocalLlmClient {
             }
             catch (err) {
                 lastError = err;
+                if (err instanceof InferenceError && !err.failoverEligible)
+                    throw err;
                 if (total > 1 && attempt < total - 1) {
                     const nextIdx = (idx + 1) % total;
                     console.warn(pc.dim(`⚠️ [Failover] ${operationName} failed on ${currentEp} (${err.message}). Trying backup endpoint ${this.endpoints[nextIdx]}...`));
@@ -222,8 +273,10 @@ export class LocalLlmClient {
             return data.data?.map((m) => m.id) || [];
         });
     }
-    async chatCompletion(messages, tools, requestId = randomUUID()) {
+    async chatCompletion(messages, tools, requestId = randomUUID(), signal) {
         return this.executeWithFailover("chatCompletion", async (currentEp) => {
+            if (signal?.aborted)
+                throw abortedError(requestId);
             const url = `${currentEp}/chat/completions`;
             // 1. Egress Interception & Quarantine (DISC-001..003, CTX-006, FAIL-003)
             const egressEvaluation = this.boundary.evaluateEgress(messages, currentEp, {
@@ -262,31 +315,40 @@ export class LocalLlmClient {
                 payload.tools = outboundTools;
                 payload.tool_choice = "auto";
             }
-            const res = await fetch(url, {
-                method: "POST",
-                headers: {
-                    "Content-Type": "application/json",
-                    Authorization: `Bearer ${this.apiKey}`,
-                    "X-Request-ID": requestId,
-                    ...this.routingHeaders(),
-                },
-                body: JSON.stringify(payload),
-                signal: AbortSignal.timeout(this.requestTimeoutMs()),
-            });
-            if (res.status === 401 && this.reloadAuthToken()) {
-                return this.chatCompletion(messages, tools, requestId);
+            let res;
+            let data;
+            try {
+                res = await fetch(url, {
+                    method: "POST",
+                    headers: {
+                        "Content-Type": "application/json",
+                        Authorization: `Bearer ${this.apiKey}`,
+                        "X-Request-ID": requestId,
+                        ...this.routingHeaders(),
+                    },
+                    body: JSON.stringify(payload),
+                    signal: this.combinedSignal(signal),
+                });
+                if (res.status === 401 && this.reloadAuthToken()) {
+                    return this.chatCompletion(messages, tools, requestId, signal);
+                }
+                if (!res.ok) {
+                    const errText = await res.text();
+                    throw this.httpError(res.status, errText, requestId);
+                }
+                data = (await res.json());
             }
-            if (!res.ok) {
-                const errText = await res.text();
-                throw new Error(`Inference error (HTTP ${res.status}): ${errText}`);
+            catch (err) {
+                throw classifyTransportError(err, signal, requestId, "connect");
             }
-            const data = (await res.json());
             if (!data.choices || data.choices.length === 0) {
-                throw new Error("Model returned empty choices array");
+                throw new InferenceError("protocol_error", "provider", "Model returned empty choices array", { requestId, failoverEligible: false });
             }
             const choice = data.choices[0];
-            if (choice.finish_reason === "length" && choice.message.tool_calls?.length) {
-                throw new Error("Model output was truncated (finish_reason=length) inside a tool call; refusing to run partial arguments.");
+            if (choice.finish_reason === "length") {
+                throw new InferenceError("output_truncated", "client", choice.message.tool_calls?.length
+                    ? "Model output was truncated (finish_reason=length) inside a tool call; refusing to run partial arguments."
+                    : "Model output was truncated (finish_reason=length); refusing to treat it as a complete answer.", { requestId, partialText: typeof choice.message.content === "string" ? choice.message.content : "", failoverEligible: false });
             }
             return choice.message;
         });
@@ -294,8 +356,10 @@ export class LocalLlmClient {
     /**
      * Real-time SSE token streaming for typewriter terminal output (matching Codex / Claude Code)
      */
-    async chatCompletionStream(messages, tools, onToken, requestId = randomUUID()) {
+    async chatCompletionStream(messages, tools, onToken, requestId = randomUUID(), signal) {
         return this.executeWithFailover("chatCompletionStream", async (currentEp) => {
+            if (signal?.aborted)
+                throw abortedError(requestId);
             const url = `${currentEp}/chat/completions`;
             // 1. Egress Interception & Quarantine (DISC-001..003, CTX-006, FAIL-003)
             const egressEvaluation = this.boundary.evaluateEgress(messages, currentEp, {
@@ -346,26 +410,101 @@ export class LocalLlmClient {
                         ...this.routingHeaders(),
                     },
                     body: JSON.stringify(payload),
-                    signal: AbortSignal.timeout(this.requestTimeoutMs()),
+                    signal: this.combinedSignal(signal),
                 });
             }
-            catch {
-                // Fallback to non-streaming if network error
-                return this.chatCompletion(messages, tools, requestId);
+            catch (err) {
+                const classified = classifyTransportError(err, signal, requestId, "connect");
+                if (classified.kind === "aborted")
+                    throw classified;
+                // Network error establishing the stream: fall back to a non-streaming request that keeps
+                // the same correlation id (the gateway can tie both attempts to one logical request).
+                return this.chatCompletion(messages, tools, requestId, signal);
             }
             if (res.status === 401 && this.reloadAuthToken()) {
-                return this.chatCompletionStream(messages, tools, onToken, requestId);
+                return this.chatCompletionStream(messages, tools, onToken, requestId, signal);
             }
             if (!res.ok || !res.body) {
                 const errText = await res.text().catch(() => res.statusText);
-                throw new Error(`Inference error (HTTP ${res.status}): ${errText}`);
+                throw this.httpError(res.status, errText, requestId);
             }
             let fullContent = "";
             let finishReason;
+            let sawDone = false;
             const toolCallsMap = new Map();
             const reader = res.body.getReader();
             const decoder = new TextDecoder("utf-8");
             let buffer = "";
+            // Positive completion evidence for this protocol: a chunk carrying a non-null finish_reason, or the
+            // terminal `data: [DONE]` event. Absence of both means the stream ended early.
+            const handleLine = (line) => {
+                const trimmed = line.trim();
+                if (!trimmed || trimmed.startsWith(":"))
+                    return;
+                if (trimmed === "data: [DONE]") {
+                    sawDone = true;
+                    return;
+                }
+                if (!trimmed.startsWith("data: "))
+                    return;
+                let chunk;
+                try {
+                    chunk = JSON.parse(trimmed.slice(6));
+                }
+                catch {
+                    throw new InferenceError("malformed_event", "provider", `Malformed stream event: ${trimmed.slice(0, 120)}`, {
+                        requestId,
+                        partialText: fullContent,
+                        failoverEligible: false,
+                    });
+                }
+                if (chunk && typeof chunk === "object" && chunk.error) {
+                    const em = typeof chunk.error === "string" ? chunk.error : chunk.error.message || JSON.stringify(chunk.error);
+                    throw new InferenceError("provider_error_frame", "provider", `Provider error frame mid-stream: ${em}`, {
+                        requestId,
+                        partialText: fullContent,
+                        failoverEligible: true,
+                    });
+                }
+                if (chunk.choices?.[0]?.finish_reason)
+                    finishReason = chunk.choices[0].finish_reason;
+                const delta = chunk.choices?.[0]?.delta;
+                if (!delta)
+                    return;
+                // 1. Text token chunk
+                if (delta.content) {
+                    fullContent += delta.content;
+                    if (onToken) {
+                        onToken(delta.content);
+                    }
+                }
+                // 2. Tool call chunks
+                if (delta.tool_calls && Array.isArray(delta.tool_calls)) {
+                    for (const tc of delta.tool_calls) {
+                        // Spec streams give every fragment an index. Some servers (and re-streamed non-streaming
+                        // responses) omit it; then a fragment that carries an id or a name starts a NEW call, and
+                        // one with neither continues the latest call. Never fold distinct calls into index 0.
+                        let idx;
+                        if (typeof tc.index === "number") {
+                            idx = tc.index;
+                        }
+                        else if (tc.id || tc.function?.name) {
+                            idx = toolCallsMap.size === 0 ? 0 : Math.max(...toolCallsMap.keys()) + 1;
+                        }
+                        else {
+                            idx = toolCallsMap.size === 0 ? 0 : Math.max(...toolCallsMap.keys());
+                        }
+                        const current = toolCallsMap.get(idx) || { id: "", name: "", args: "" };
+                        if (tc.id)
+                            current.id = tc.id;
+                        if (tc.function?.name)
+                            current.name += tc.function.name;
+                        if (tc.function?.arguments)
+                            current.args += tc.function.arguments;
+                        toolCallsMap.set(idx, current);
+                    }
+                }
+            };
             try {
                 while (true) {
                     const { done, value } = await reader.read();
@@ -374,65 +513,25 @@ export class LocalLlmClient {
                     buffer += decoder.decode(value, { stream: true });
                     const lines = buffer.split("\n");
                     buffer = lines.pop() || "";
-                    for (const line of lines) {
-                        const trimmed = line.trim();
-                        if (!trimmed || trimmed.startsWith(":") || trimmed === "data: [DONE]") {
-                            continue;
-                        }
-                        if (trimmed.startsWith("data: ")) {
-                            const jsonStr = trimmed.slice(6);
-                            try {
-                                const chunk = JSON.parse(jsonStr);
-                                if (chunk.choices?.[0]?.finish_reason)
-                                    finishReason = chunk.choices[0].finish_reason;
-                                const delta = chunk.choices?.[0]?.delta;
-                                if (!delta)
-                                    continue;
-                                // 1. Text token chunk
-                                if (delta.content) {
-                                    fullContent += delta.content;
-                                    if (onToken) {
-                                        onToken(delta.content);
-                                    }
-                                }
-                                // 2. Tool call chunks
-                                if (delta.tool_calls && Array.isArray(delta.tool_calls)) {
-                                    for (const tc of delta.tool_calls) {
-                                        // Spec streams give every fragment an index. Some servers (and re-streamed non-streaming
-                                        // responses) omit it; then a fragment that carries an id or a name starts a NEW call, and
-                                        // one with neither continues the latest call. Never fold distinct calls into index 0.
-                                        let idx;
-                                        if (typeof tc.index === "number") {
-                                            idx = tc.index;
-                                        }
-                                        else if (tc.id || tc.function?.name) {
-                                            idx = toolCallsMap.size === 0 ? 0 : Math.max(...toolCallsMap.keys()) + 1;
-                                        }
-                                        else {
-                                            idx = toolCallsMap.size === 0 ? 0 : Math.max(...toolCallsMap.keys());
-                                        }
-                                        const current = toolCallsMap.get(idx) || { id: "", name: "", args: "" };
-                                        if (tc.id)
-                                            current.id = tc.id;
-                                        if (tc.function?.name)
-                                            current.name += tc.function.name;
-                                        if (tc.function?.arguments)
-                                            current.args += tc.function.arguments;
-                                        toolCallsMap.set(idx, current);
-                                    }
-                                }
-                            }
-                            catch {
-                                // Ignore malformed partial chunks
-                            }
-                        }
-                    }
+                    for (const line of lines)
+                        handleLine(line);
                 }
+                if (buffer.trim())
+                    handleLine(buffer);
             }
             catch (streamErr) {
-                if (!fullContent && toolCallsMap.size === 0) {
-                    throw streamErr;
+                try {
+                    await reader.cancel();
                 }
+                catch { }
+                const classified = classifyTransportError(streamErr, signal, requestId, "stream", fullContent);
+                // A transport error after the terminal event cannot change the (already complete) response.
+                const postCompletionTransportError = (finishReason || sawDone) && !(streamErr instanceof InferenceError) && classified.kind !== "aborted";
+                if (!postCompletionTransportError)
+                    throw classified;
+            }
+            if (!finishReason && !sawDone) {
+                throw new InferenceError("stream_incomplete", "transport", "Inference stream ended without a finish_reason or [DONE]; response is incomplete.", { requestId, partialText: fullContent });
             }
             const assembledToolCalls = [];
             for (const [_, tc] of toolCallsMap.entries()) {
@@ -447,17 +546,32 @@ export class LocalLlmClient {
                     });
                 }
             }
-            if (finishReason === "length" && assembledToolCalls.length > 0) {
-                throw new Error("Model output was truncated (finish_reason=length) inside a tool call; refusing to run partial arguments.");
+            if (finishReason === "length") {
+                throw new InferenceError("output_truncated", "client", assembledToolCalls.length > 0
+                    ? "Model output was truncated (finish_reason=length) inside a tool call; refusing to run partial arguments."
+                    : "Model output was truncated (finish_reason=length); refusing to treat it as a complete answer.", { requestId, partialText: fullContent, failoverEligible: false });
             }
             if (!fullContent && assembledToolCalls.length === 0) {
-                return this.chatCompletion(messages, tools);
+                return this.chatCompletion(messages, tools, requestId, signal);
             }
             return {
                 role: "assistant",
                 content: fullContent || null,
                 ...(assembledToolCalls.length > 0 ? { tool_calls: assembledToolCalls } : {}),
             };
+        });
+    }
+    combinedSignal(operatorSignal) {
+        const timeout = AbortSignal.timeout(this.requestTimeoutMs());
+        return operatorSignal ? AbortSignal.any([timeout, operatorSignal]) : timeout;
+    }
+    /** HTTP 5xx/429 are provider-side and may succeed elsewhere; other 4xx are request faults (client origin). */
+    httpError(status, body, requestId) {
+        const providerSide = status >= 500 || status === 429 || status === 408;
+        return new InferenceError("http_error", providerSide ? "provider" : "client", `Inference error (HTTP ${status}): ${body}`, {
+            httpStatus: status,
+            requestId,
+            failoverEligible: providerSide,
         });
     }
     getModel() {

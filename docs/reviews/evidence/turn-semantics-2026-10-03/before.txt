@@ -1,0 +1,34 @@
+== http500
+  "success": true,
+  "status": "in_progress",
+EXIT=0
+== steplimit
+  "success": true,
+  "status": "in_progress",
+EXIT=0
+== echo(final text)
+  "success": true,
+  "status": "in_progress",
+EXIT=0
+== noverify/giveup
+  Verification Oracle: The selected verifier did not pass.
+Command: npm test
+════════════════════════ TASK COMPLETED ════════════════════════
+EXIT=0
+== falseclear
+  "success": true,
+  "status": "in_progress",
+EXIT=0
+== trunc
+  "success": true,
+  "output": "I have refactored the module and all tests pa",
+EXIT=0
+== midstream
+  "success": true,
+  "output": "Partial answer before provider error",
+EXIT=0
+== ctrlc_slowloop
+[slowloop] files at Ctrl-C: ['loop_1.txt']
+[slowloop] 7s after Ctrl-C: files: ['loop_1.txt', 'loop_2.txt', 'loop_3.txt', 'loop_4.txt'] | process alive: True
+[slowloop] after 2nd Ctrl-C alive: False signalstatus 2 exit None
+[slowloop] final files: ['loop_1.txt', 'loop_2.txt', 'loop_3.txt', 'loop_4.txt']

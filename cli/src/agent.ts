@@ -38,7 +38,20 @@ import { selectRelevantFewShots } from "./fewshots.js";
 import { FlightRecorder } from "./flight.js";
 import { WorktreeManager } from "./worktree.js";
 import { isSandboxAvailable } from "./sandbox.js";
-import { runTestSuiteWithExecutor } from "./tester.js";
+import { runTestSuiteWithExecutor, discoverVerifier } from "./tester.js";
+import { InferenceError } from "./client.js";
+import {
+  TurnResult,
+  VerificationEvidence,
+  InterruptionRecord,
+  InferenceFailure,
+  ModelStop,
+  assertTurnResultInvariants,
+  deepFreezeTurn,
+  summarizeTurn,
+  lifecycleStatusForTurn,
+} from "./core/turn.js";
+import { createHash } from "node:crypto";
 import { HybridSearchEngine } from "./embeddings.js";
 import { SynthesizerEngine } from "./synthesizer.js";
 import { BrowserDriver } from "./browser.js";
@@ -237,6 +250,20 @@ export class AutonomousAgent {
   private extensibilityInitialized: boolean = false;
   private activePlan: Array<{ name: string; status: string; detail?: string }> = [];
   private hasPendingModifications: boolean = false;
+  /** Evidence from the verifier run that covers the current workspace changes. Cleared by any later mutation. */
+  private verificationEvidence?: VerificationEvidence;
+  private turnMutations: number = 0;
+  private activeTurn?: {
+    controller: AbortController;
+    phase: "idle" | "inference" | "tool" | "confirmation";
+    step: number;
+    currentTool?: string;
+    cancelRequestedAt?: string;
+    /** Tool that was executing when the stop request arrived (cannot be force-stopped). */
+    toolInFlightAtCancel?: string;
+  };
+  private lastTurnResult?: TurnResult;
+  private completionSummary?: { summary: string; notes?: string };
   private verifiedWorktreeCompletion: boolean = false;
   private worktreeRunTurnAuthorized: boolean = false;
   private managedWorktreeWorkspaceSwitch: boolean = false;
@@ -419,6 +446,8 @@ export class AutonomousAgent {
         },
         candidateMutation: async (event, context) => {
           this.hasPendingModifications = true;
+          this.verificationEvidence = undefined;
+          this.turnMutations++;
           await this.candidateTracker.createMutationHook()(event, context);
         },
       },
@@ -471,7 +500,7 @@ export class AutonomousAgent {
     return this.initialStatePersistenceFailure;
   }
 
-  public checkpointDurableState(notes?: string): DurableTaskState {
+  public checkpointDurableState(notes?: string, turn?: TurnResult): DurableTaskState {
     const state: DurableTaskState = {
       schemaVersion: 1,
       taskId: this.currentTaskId,
@@ -483,7 +512,8 @@ export class AutonomousAgent {
       model: this.config.model,
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
-      status: this.verifiedWorktreeCompletion ? "completed" : "in_progress",
+      status: turn ? lifecycleStatusForTurn(turn) : this.verifiedWorktreeCompletion ? "completed" : "in_progress",
+      lastTurn: turn ?? this.lastTurnResult ?? null,
       activePlan: this.activePlan,
       milestones: [],
       worktreeBinding: this.activeWorktree
@@ -1275,6 +1305,7 @@ Always explain your reasoning before or alongside your tool calls.`;
         ? this.worktreeManager.hasChanges(this.activeWorktree.taskId)
         : false;
       let verifierSucceeded = false;
+      let noApplicableVerifier = false;
 
       if (
         (this.hasPendingModifications || worktreeHasChanges) &&
@@ -1282,28 +1313,51 @@ Always explain your reasoning before or alongside your tool calls.`;
         !this.config.readOnly
       ) {
         try {
-          const authoritativeVerifier = this.config.authoritativeVerifierCommand?.trim();
-          const testRes = await runTestSuiteWithExecutor(
-            this.config.workspace,
-            (command) => this.bridge.executeTool("run_command", { command }),
-            authoritativeVerifier || undefined
-          );
-          if (!testRes.success || testRes.command === "none") {
-            const hints = formatDiagnosticHints(testRes.diagnostics);
-            const oracleFailContent = `Verification Oracle: The selected verifier did not pass.\nCommand: ${testRes.command}\n${foldVoluminousOutput(testRes.rawOutput || "")}${hints}\nResolve the verification failure before calling task_completed.`;
-            return {
-              success: false,
-              output: "",
-              error: oracleFailContent,
-            };
-          }
-          verifierSucceeded = true;
-          if (this.activeWorktree && !authoritativeVerifier) {
-            console.log(
-              pc.yellow(
-                `Verification command '${testRes.command}' passed, but no authoritative verifier is configured; changes will remain in the worktree.`
-              )
+          const configured = this.config.authoritativeVerifierCommand?.trim();
+          const discovered = configured ? null : discoverVerifier(this.config.workspace);
+          const verifierCommand = configured || discovered?.command;
+          const source: "configured" | "discovered" = configured ? "configured" : "discovered";
+          if (!verifierCommand) {
+            // No repository evidence supports any verifier. Completion is allowed but honestly UNVERIFIED.
+            noApplicableVerifier = true;
+            this.verificationEvidence = { status: "NO_APPLICABLE_VERIFIER", at: new Date().toISOString() };
+          } else {
+            const testRes = await runTestSuiteWithExecutor(
+              this.config.workspace,
+              (command) => this.bridge.executeTool("run_command", { command }),
+              verifierCommand
             );
+            let candidateId: string | undefined;
+            try {
+              candidateId = this.candidateTracker.computeCandidateIdentitySync(this.config.workspace).candidateId;
+            } catch {}
+            const evidence: VerificationEvidence = {
+              status: testRes.success ? "PASSED" : "FAILED",
+              command: verifierCommand,
+              source,
+              exitSuccess: testRes.success,
+              outputSha256: createHash("sha256").update(testRes.rawOutput || "").digest("hex"),
+              candidateId,
+              at: new Date().toISOString(),
+            };
+            this.verificationEvidence = evidence;
+            if (!testRes.success) {
+              const hints = formatDiagnosticHints(testRes.diagnostics);
+              const oracleFailContent = `Verification Oracle: The selected verifier did not pass.\nCommand: ${testRes.command}\n${foldVoluminousOutput(testRes.rawOutput || "")}${hints}\nResolve the verification failure before calling task_completed.`;
+              return {
+                success: false,
+                output: "",
+                error: oracleFailContent,
+              };
+            }
+            verifierSucceeded = true;
+            if (this.activeWorktree && !configured) {
+              console.log(
+                pc.yellow(
+                  `Verification command '${testRes.command}' passed, but no authoritative verifier is configured; changes will remain in the worktree.`
+                )
+              );
+            }
           }
         } catch (err: any) {
           return {
@@ -1314,7 +1368,8 @@ Always explain your reasoning before or alongside your tool calls.`;
         }
       }
 
-      this.hasPendingModifications = false;
+      // The obligation is discharged only by a passing run of the selected verifier (never by command text).
+      if (!noApplicableVerifier) this.hasPendingModifications = false;
       if (this.activeWorktree) {
         const canValidate =
           verifierSucceeded &&
@@ -1356,13 +1411,14 @@ Always explain your reasoning before or alongside your tool calls.`;
           this.verifiedWorktreeCompletion = !worktreeHasChanges;
         }
       }
-      this.ui.taskCompleted(args.summary || "Task completed.", args.notes);
+      this.completionSummary = { summary: args.summary || "Task completed.", notes: args.notes };
       return {
         success: true,
         output: JSON.stringify({
           status: "completed",
           summary: args.summary || "Task completed.",
           notes: args.notes || "",
+          verification: noApplicableVerifier ? "NO_APPLICABLE_VERIFIER" : verifierSucceeded ? "PASSED" : "NOT_REQUIRED",
         }),
       };
     });
@@ -1809,260 +1865,436 @@ Always explain your reasoning before or alongside your tool calls.`;
     return { receipt, shouldExit };
   }
 
-  async runTurn(taskPrompt: string | any[], onConfirm?: ConfirmHandler): Promise<void> {
+  /**
+   * Operator stop request. This is an authority event: once recorded, no new inference request or tool
+   * dispatch is admitted for the active turn. An already-executing tool call cannot be force-stopped
+   * (the Rust RPC daemon has no cancel verb); it is awaited and reported as outstanding until it settles.
+   * Returns false when no turn is active or cancellation was already requested.
+   */
+  public requestCancel(reason: string = "operator"): boolean {
+    const turn = this.activeTurn;
+    if (!turn || turn.cancelRequestedAt) return false;
+    turn.cancelRequestedAt = new Date().toISOString();
+    if (turn.phase === "tool") turn.toolInFlightAtCancel = turn.currentTool;
+    turn.controller.abort(new Error(`turn cancelled: ${reason}`));
+    logAudit({
+      workspace: this.config.workspace,
+      tool: "turn_cancel",
+      args: { reason, phase: turn.phase, step: turn.step, outstandingTool: turn.toolInFlightAtCancel },
+      success: true,
+      durationMs: 0,
+    });
+    return true;
+  }
+
+  /** Structured snapshot of the active turn for UIs; undefined when idle. */
+  public getTurnLifecycle(): { phase: string; step: number; currentTool?: string; cancellationRequested: boolean } | undefined {
+    const t = this.activeTurn;
+    if (!t) return undefined;
+    return { phase: t.phase, step: t.step, currentTool: t.currentTool, cancellationRequested: Boolean(t.cancelRequestedAt) };
+  }
+
+  public getLastTurnResult(): TurnResult | undefined {
+    return this.lastTurnResult;
+  }
+
+  /** The AbortSignal of the active turn, for operator prompts that must unblock on cancellation. */
+  public getActiveTurnSignal(): AbortSignal | undefined {
+    return this.activeTurn?.controller.signal;
+  }
+
+  async runTurn(taskPrompt: string | any[], onConfirm?: ConfirmHandler, options?: { signal?: AbortSignal }): Promise<TurnResult> {
     // The REPL calls runTurn directly. Route worktree-enabled turns through the
     // same establishment and resolution boundary as one-shot `run` tasks.
     if (this.config.worktree && this.activeWorktree && !this.worktreeRunTurnAuthorized) {
       throw new Error(`Cannot start a new task: unresolved worktree ${this.activeWorktree.taskId}; merge or discard it first.`);
     }
     if (this.config.worktree && !this.worktreeRunTurnAuthorized) {
-      await this.run(taskPrompt, onConfirm);
-      return;
+      return await this.run(taskPrompt, onConfirm, options);
     }
+    if (this.activeTurn) throw new Error("A turn is already active; wait for it to finish or cancel it.");
     await this.initExtensibility();
     const promptText = typeof taskPrompt === "string" ? taskPrompt : "[Multi-modal Vision Input]";
     await this.pluginManager.notifyTurnStart(promptText, this.config.workspace);
 
-    if (this.flightRecorder) {
-      if (!this.flightRecorder.isSessionActive()) {
-        this.flightRecorder.startSession({
-          model: this.config.model,
-          endpoint: this.config.endpoint,
-          taskPrompt: promptText,
-        });
-      }
-      this.flightRecorder.recordTurnStart(1, promptText);
+    const turn: NonNullable<AutonomousAgent["activeTurn"]> = { controller: new AbortController(), phase: "idle", step: 0 };
+    this.activeTurn = turn;
+    const signal = turn.controller.signal;
+    if (options?.signal) {
+      if (options.signal.aborted) this.requestCancel("external signal");
+      else options.signal.addEventListener("abort", () => this.requestCancel("external signal"), { once: true });
     }
-
-    // Dynamic runtime state injected into turn-level context without invalidating system prompt prefix cache
-    const gitInfo = getGitInfo(this.config.workspace);
-    let runtimeContext = "";
-    if (gitInfo.isRepo) {
-      runtimeContext += `\n[Git Status: ${gitInfo.branch} (${gitInfo.dirtyCount} uncommitted dirty files)]`;
-    }
-    if (this.activePlan && this.activePlan.length > 0) {
-      runtimeContext += `\n[Active Plan: ${this.activePlan.map((p, i) => `${i + 1}. [${p.status}] ${p.name}`).join(" -> ")}]`;
-    }
-
-    const effectiveUserContent = typeof taskPrompt === "string"
-      ? (runtimeContext ? `${taskPrompt}\n${runtimeContext}` : taskPrompt)
-      : taskPrompt;
-
-    this.messages.push({
-      role: "user",
-      content: effectiveUserContent,
-    });
-
-    let currentStep = 1;
-    let isFinished = false;
-
-    while (currentStep <= this.config.maxSteps && !isFinished) {
-      this.ui.stepHeader(currentStep, this.config.maxSteps);
-      if (currentStep > 1 && this.flightRecorder) {
-        this.flightRecorder.recordTurnStart(currentStep, promptText);
-      }
-      const requestId = randomUUID();
-      this.admitContext(currentStep, requestId);
-      this.ui.startSpinner("Thinking and analyzing next step...");
-
-      const { client: activeClient } = this.selectCognitiveClient(currentStep, this.messages);
-      if (this.cognitiveRoutingEnabled && currentStep === 1) {
-        process.stdout.write(pc.dim(`\n🧭 Dual-Model Routing: [Planner: ${this.plannerClient.getModel()} | Coder: ${this.coderClient.getModel()}]\n`));
-      }
-
-      let assistantMessage: ChatMessage;
-      let streamedTokens = false;
-      try {
-        assistantMessage = await activeClient.chatCompletionStream(
-          this.messages,
-          this.getEffectiveTools(),
-          (token: string) => {
-            if (!streamedTokens) {
-              this.ui.stopSpinner(true);
-              process.stdout.write(pc.bold(pc.magenta("\n💭 Assistant: ")));
-              streamedTokens = true;
-            }
-            process.stdout.write(token);
-          },
-          requestId,
-        );
-        if (streamedTokens) {
-          process.stdout.write("\n\n");
-        } else {
-          this.ui.stopSpinner(true);
-        }
-      } catch (err: any) {
-        this.ui.stopSpinner(false, `Inference error: ${err.message}`);
-        console.error(`\nFatal error communicating with LLM server: ${err.message}`);
-        if (err instanceof ContextBudgetError) throw err;
-        return;
-      }
-
-      // Parse the response using hybrid parser
-      const parsed = parseModelResponse(assistantMessage);
-
-      // Update cumulative token usage
-      const promptEst = calculateContextBudget(
-        this.messages,
-        this.getEffectiveTools(),
-        this.config.contextLimit || 65536
-      ).totalActiveTokens;
-      const compContent = typeof assistantMessage.content === "string"
-        ? assistantMessage.content
-        : Array.isArray(assistantMessage.content)
-        ? JSON.stringify(assistantMessage.content)
-        : "";
-      const compEst =
-        countTokens(compContent) +
-        countTokens(JSON.stringify(assistantMessage.tool_calls || []));
-      this.totalTokens.prompt += promptEst;
-      this.totalTokens.completion += compEst;
-      this.totalTokens.total = this.totalTokens.prompt + this.totalTokens.completion;
-
-      // Print any thought or explanation text only if not already streamed
-      if (parsed.thoughtText) {
-        if (!streamedTokens) {
-          this.ui.printThought(parsed.thoughtText);
-        }
-        if (this.flightRecorder) {
-          this.flightRecorder.recordThought(currentStep, parsed.thoughtText);
-        }
-      }
-
-      // Record assistant's response in history
-      this.messages.push({
-        role: "assistant",
-        content: assistantMessage.content || "",
-        ...(parsed.toolCalls.length > 0 ? { tool_calls: parsed.toolCalls } : {}),
-      });
-
-      // If no tool calls were requested, the model thinks it's done or answered conversationally
-      if (parsed.toolCalls.length === 0) {
-        console.log("ℹ Model finished without further tool calls.");
-        this.ui.taskCompleted(parsed.thoughtText || "Completed without additional tool invocations.");
-        isFinished = true;
-        if (this.flightRecorder) {
-          this.flightRecorder.recordSessionEnd(
-            parsed.thoughtText || "Completed without additional tool invocations.",
-            true,
-            this.totalTokens
-          );
-        }
-        break;
-      }
-
-      // Parallel execution optimization: if multiple tool calls in this turn are all read-only, execute concurrently through ExecutionSpine
-      if (parsed.toolCalls.length > 1 && parsed.toolCalls.every((call) => READ_ONLY_TOOLS.has(call.function.name))) {
-        this.ui.startSpinner(`Executing ${parsed.toolCalls.length} read operations in parallel...`);
-        const parallelResults = await Promise.all(
-          parsed.toolCalls.map(async (call) => {
-            const { receipt } = await this.dispatchToolCall(call, currentStep, "agent");
-            return { call, toolName: call.function.name, receipt };
-          })
-        );
-        this.ui.stopSpinner(true);
-
-        for (const item of parallelResults) {
-          let content = item.receipt.success
-            ? item.receipt.output
-            : `Error executing ${item.toolName}: ${item.receipt.error || "Unknown error"}`;
-          if (item.toolName === "run_command") {
-            const diags = extractCompilerDiagnostics((item.receipt.output || "") + "\n" + (item.receipt.error || ""));
-            if (diags.length > 0) {
-              content += formatDiagnosticHints(diags);
-            }
-          }
-          this.messages.push({
-            role: "tool",
-            tool_call_id: item.call.id,
-            name: item.toolName,
-            content,
-          });
-        }
-        currentStep++;
-        continue;
-      }
-
-      // Execute each tool call through ExecutionSpine
-      for (const call of parsed.toolCalls) {
-        const toolName = call.function.name;
-        let rawArgs: any = {};
-        try {
-          rawArgs =
-            typeof call.function.arguments === "string"
-              ? JSON.parse(call.function.arguments)
-              : call.function.arguments;
-        } catch {
-          rawArgs = {};
-        }
-
-        const { receipt, shouldExit } = await this.dispatchToolCall(
-          call,
-          currentStep,
-          "agent",
-          onConfirm
-        );
-
-        let finalContent = receipt.success
-          ? receipt.output
-          : `Error executing ${toolName}: ${receipt.error || "Unknown error"}`;
-
-        if (toolName === "run_command" || toolName === "run_tests") {
-          const combined = (receipt.output || "") + "\n" + (receipt.error || "");
-          const diags = extractCompilerDiagnostics(combined);
-          if (diags.length > 0) {
-            finalContent += formatDiagnosticHints(diags);
-          }
-          finalContent = foldVoluminousOutput(finalContent);
-
-          if (
-            receipt.success &&
-            (toolName === "run_tests" ||
-              (rawArgs.command &&
-                /test|check|lint|cargo\s+test|npm\s+test|pytest/i.test(rawArgs.command)))
-          ) {
-            this.hasPendingModifications = false;
-          }
-        }
-
-        this.messages.push({
-          role: "tool",
-          tool_call_id: call.id,
-          name: toolName,
-          content: finalContent,
-        });
-
-        if (shouldExit) {
-          isFinished = true;
-          break;
-        }
-      }
-
-      currentStep++;
-    }
-
-    triggerNotification("Nexus Code", "Turn completed.");
+    this.completionSummary = undefined;
+    this.turnMutations = 0;
 
     try {
-      this.knowledge.autoExtract(promptText, "");
-    } catch {}
+      if (this.flightRecorder) {
+        if (!this.flightRecorder.isSessionActive()) {
+          this.flightRecorder.startSession({
+            model: this.config.model,
+            endpoint: this.config.endpoint,
+            taskPrompt: promptText,
+          });
+        }
+        this.flightRecorder.recordTurnStart(1, promptText);
+      }
 
-    if (!isFinished && this.flightRecorder) {
-      this.flightRecorder.recordSessionEnd(
-        `Turn completed after ${currentStep - 1} steps`,
-        false,
-        this.totalTokens
-      );
-    }
+      // Dynamic runtime state injected into turn-level context without invalidating system prompt prefix cache
+      const gitInfo = getGitInfo(this.config.workspace);
+      let runtimeContext = "";
+      if (gitInfo.isRepo) {
+        runtimeContext += `\n[Git Status: ${gitInfo.branch} (${gitInfo.dirtyCount} uncommitted dirty files)]`;
+      }
+      if (this.activePlan && this.activePlan.length > 0) {
+        runtimeContext += `\n[Active Plan: ${this.activePlan.map((p, i) => `${i + 1}. [${p.status}] ${p.name}`).join(" -> ")}]`;
+      }
 
-    if (!isFinished && currentStep > this.config.maxSteps) {
-      console.log(
-        `\n⚠️ Reached maximum step limit (${this.config.maxSteps}). Halting loop to prevent runaway execution.`
-      );
+      const effectiveUserContent = typeof taskPrompt === "string"
+        ? (runtimeContext ? `${taskPrompt}\n${runtimeContext}` : taskPrompt)
+        : taskPrompt;
+
+      this.messages.push({
+        role: "user",
+        content: effectiveUserContent,
+      });
+
+      let currentStep = 1;
+      let stepsUsed = 0;
+      let modelStop: ModelStop = "NONE";
+      let finalOutputComplete = false;
+      let inferenceFailure: InferenceFailure | null = null;
+      let interruption: InterruptionRecord | null = null;
+      let undispatched = 0;
+
+      const markInterrupted = (phase: InterruptionRecord["phase"], extra: Partial<InterruptionRecord> = {}) => {
+        interruption = {
+          requestedAt: turn.cancelRequestedAt || new Date().toISOString(),
+          phase,
+          undispatchedToolCalls: undispatched,
+          ...extra,
+        };
+      };
+      const cancelledToolMessage = (call: ToolCall) => ({
+        role: "tool" as const,
+        tool_call_id: call.id,
+        name: call.function.name,
+        content: "Cancelled by operator before execution. No action was taken.",
+      });
+
+      while (currentStep <= this.config.maxSteps && modelStop === "NONE" && !interruption && !inferenceFailure) {
+        if (signal.aborted) {
+          markInterrupted("between_steps");
+          break;
+        }
+        turn.step = currentStep;
+        this.ui.stepHeader(currentStep, this.config.maxSteps);
+        if (currentStep > 1 && this.flightRecorder) {
+          this.flightRecorder.recordTurnStart(currentStep, promptText);
+        }
+        const requestId = randomUUID();
+        this.admitContext(currentStep, requestId);
+        this.ui.startSpinner("Thinking and analyzing next step...");
+        turn.phase = "inference";
+
+        const { client: activeClient } = this.selectCognitiveClient(currentStep, this.messages);
+        if (this.cognitiveRoutingEnabled && currentStep === 1) {
+          process.stdout.write(pc.dim(`\n🧭 Dual-Model Routing: [Planner: ${this.plannerClient.getModel()} | Coder: ${this.coderClient.getModel()}]\n`));
+        }
+
+        let assistantMessage: ChatMessage;
+        let streamedTokens = false;
+        try {
+          assistantMessage = await activeClient.chatCompletionStream(
+            this.messages,
+            this.getEffectiveTools(),
+            (token: string) => {
+              if (!streamedTokens) {
+                this.ui.stopSpinner(true);
+                process.stdout.write(pc.bold(pc.magenta("\n💭 Assistant: ")));
+                streamedTokens = true;
+              }
+              process.stdout.write(token);
+            },
+            requestId,
+            signal,
+          );
+          if (streamedTokens) {
+            process.stdout.write("\n\n");
+          } else {
+            this.ui.stopSpinner(true);
+          }
+        } catch (err: any) {
+          if (err instanceof ContextBudgetError) {
+            this.ui.stopSpinner(false, `Inference error: ${err.message}`);
+            throw err;
+          }
+          if (streamedTokens) process.stdout.write("\n");
+          if (err instanceof InferenceError && err.kind === "aborted") {
+            this.ui.stopSpinner(false, "Inference request aborted by operator");
+            markInterrupted("inference");
+            break;
+          }
+          this.ui.stopSpinner(false, `Inference error: ${err.message}`);
+          console.error(`\nFatal error communicating with LLM server: ${err.message}`);
+          inferenceFailure = err instanceof InferenceError
+            ? err.toFailure()
+            : { kind: "protocol_error", origin: "client", message: err?.message || String(err), requestId };
+          break;
+        }
+        stepsUsed = currentStep;
+
+        // Parse the response using hybrid parser
+        const parsed = parseModelResponse(assistantMessage);
+
+        // Update cumulative token usage
+        const promptEst = calculateContextBudget(
+          this.messages,
+          this.getEffectiveTools(),
+          this.config.contextLimit || 65536
+        ).totalActiveTokens;
+        const compContent = typeof assistantMessage.content === "string"
+          ? assistantMessage.content
+          : Array.isArray(assistantMessage.content)
+          ? JSON.stringify(assistantMessage.content)
+          : "";
+        const compEst =
+          countTokens(compContent) +
+          countTokens(JSON.stringify(assistantMessage.tool_calls || []));
+        this.totalTokens.prompt += promptEst;
+        this.totalTokens.completion += compEst;
+        this.totalTokens.total = this.totalTokens.prompt + this.totalTokens.completion;
+
+        // Print any thought or explanation text only if not already streamed
+        if (parsed.thoughtText) {
+          if (!streamedTokens) {
+            this.ui.printThought(parsed.thoughtText);
+          }
+          if (this.flightRecorder) {
+            this.flightRecorder.recordThought(currentStep, parsed.thoughtText);
+          }
+        }
+
+        // Cancellation observed after the response arrived: admit none of its actions. The assistant
+        // message is dropped so the history never holds tool_calls without tool results.
+        if (signal.aborted) {
+          undispatched = parsed.toolCalls.length;
+          markInterrupted("inference");
+          break;
+        }
+
+        // Record assistant's response in history
+        this.messages.push({
+          role: "assistant",
+          content: assistantMessage.content || "",
+          ...(parsed.toolCalls.length > 0 ? { tool_calls: parsed.toolCalls } : {}),
+        });
+
+        // No tool calls: the model stopped acting. That is a fact about the model, not evidence of success.
+        if (parsed.toolCalls.length === 0) {
+          modelStop = "FINAL_TEXT";
+          finalOutputComplete = true;
+          break;
+        }
+
+        // Parallel execution optimization: if multiple tool calls in this turn are all read-only, execute concurrently through ExecutionSpine
+        if (parsed.toolCalls.length > 1 && parsed.toolCalls.every((call) => READ_ONLY_TOOLS.has(call.function.name))) {
+          this.ui.startSpinner(`Executing ${parsed.toolCalls.length} read operations in parallel...`);
+          turn.phase = "tool";
+          turn.currentTool = `${parsed.toolCalls.length} parallel reads`;
+          const parallelResults = await Promise.all(
+            parsed.toolCalls.map(async (call) => {
+              const { receipt } = await this.dispatchToolCall(call, currentStep, "agent");
+              return { call, toolName: call.function.name, receipt };
+            })
+          );
+          this.ui.stopSpinner(true);
+          turn.currentTool = undefined;
+
+          for (const item of parallelResults) {
+            let content = item.receipt.success
+              ? item.receipt.output
+              : `Error executing ${item.toolName}: ${item.receipt.error || "Unknown error"}`;
+            if (item.toolName === "run_command") {
+              const diags = extractCompilerDiagnostics((item.receipt.output || "") + "\n" + (item.receipt.error || ""));
+              if (diags.length > 0) {
+                content += formatDiagnosticHints(diags);
+              }
+            }
+            this.messages.push({
+              role: "tool",
+              tool_call_id: item.call.id,
+              name: item.toolName,
+              content,
+            });
+          }
+          currentStep++;
+          continue;
+        }
+
+        // Execute each tool call through ExecutionSpine
+        for (let ci = 0; ci < parsed.toolCalls.length; ci++) {
+          const call = parsed.toolCalls[ci];
+          const toolName = call.function.name;
+          // Admission check: no NEW tool dispatch begins once cancellation is observed.
+          if (signal.aborted) {
+            for (const rest of parsed.toolCalls.slice(ci)) this.messages.push(cancelledToolMessage(rest));
+            undispatched = parsed.toolCalls.length - ci;
+            markInterrupted(
+              turn.toolInFlightAtCancel ? "tool_settling" : "tool_dispatch",
+              turn.toolInFlightAtCancel ? { outstandingTool: turn.toolInFlightAtCancel, outstandingToolSettled: true } : {},
+            );
+            break;
+          }
+          let rawArgs: any = {};
+          try {
+            rawArgs =
+              typeof call.function.arguments === "string"
+                ? JSON.parse(call.function.arguments)
+                : call.function.arguments;
+          } catch {
+            rawArgs = {};
+          }
+
+          turn.phase = "tool";
+          turn.currentTool = toolName;
+          const { receipt, shouldExit } = await this.dispatchToolCall(
+            call,
+            currentStep,
+            "agent",
+            onConfirm
+          );
+          turn.currentTool = undefined;
+
+          let finalContent = receipt.success
+            ? receipt.output
+            : `Error executing ${toolName}: ${receipt.error || "Unknown error"}`;
+
+          if (toolName === "run_command" || toolName === "run_tests") {
+            const combined = (receipt.output || "") + "\n" + (receipt.error || "");
+            const diags = extractCompilerDiagnostics(combined);
+            if (diags.length > 0) {
+              finalContent += formatDiagnosticHints(diags);
+            }
+            finalContent = foldVoluminousOutput(finalContent);
+          }
+
+          this.messages.push({
+            role: "tool",
+            tool_call_id: call.id,
+            name: toolName,
+            content: finalContent,
+          });
+
+          if (shouldExit) {
+            modelStop = "TASK_COMPLETED_TOOL";
+            finalOutputComplete = true;
+            break;
+          }
+        }
+        if (interruption) break;
+
+        // The tool that was running when the operator asked to stop has now settled.
+        if (signal.aborted && modelStop === "NONE") {
+          markInterrupted(turn.toolInFlightAtCancel ? "tool_settling" : "tool_dispatch", turn.toolInFlightAtCancel ? { outstandingTool: turn.toolInFlightAtCancel, outstandingToolSettled: true } : {});
+          break;
+        }
+
+        currentStep++;
+      }
+
+      triggerNotification("Nexus Code", "Turn finished.");
+
+      try {
+        this.knowledge.autoExtract(promptText, "");
+      } catch {}
+
+      const limitReached = !interruption && !inferenceFailure && modelStop === "NONE" && currentStep > this.config.maxSteps;
+      const result = this.buildTurnResult({
+        modelStop,
+        finalOutputComplete,
+        inferenceFailure,
+        interruption,
+        limitReached,
+        stepsUsed: stepsUsed || Math.min(currentStep, this.config.maxSteps),
+      });
+      this.lastTurnResult = result;
+      if (this.flightRecorder) {
+        this.flightRecorder.recordSessionEnd(
+          `${summarizeTurn(result).heading}: ${summarizeTurn(result).line}`,
+          result.execution === "COMPLETED" && (result.outcome === "VERIFIED" || result.outcome === "NOT_REQUIRED"),
+          this.totalTokens
+        );
+      }
+      this.ui.turnSummary(result, this.completionSummary);
+      return result;
+    } finally {
+      this.activeTurn = undefined;
     }
   }
 
-  async run(taskPrompt: string | any[], onConfirm?: ConfirmHandler): Promise<void> {
+  /** Single place where a turn's execution/outcome dimensions are derived from evidence held by the agent. */
+  private buildTurnResult(input: {
+    modelStop: ModelStop;
+    finalOutputComplete: boolean;
+    inferenceFailure: InferenceFailure | null;
+    interruption: InterruptionRecord | null;
+    limitReached: boolean;
+    stepsUsed: number;
+  }): TurnResult {
+    const evidence = this.verificationEvidence ?? null;
+    const base = {
+      acceptance: "NOT_REQUESTED" as const,
+      modelStop: input.modelStop,
+      finalOutputComplete: input.finalOutputComplete,
+      verification: evidence,
+      interruption: input.interruption,
+      inferenceFailure: input.inferenceFailure,
+      steps: { used: input.stepsUsed, max: this.config.maxSteps, limitReached: input.limitReached },
+      unverifiedChangesPending: this.hasPendingModifications,
+      finishedAt: new Date().toISOString(),
+    };
+
+    if (input.interruption) {
+      return deepFreezeTurn(assertTurnResultInvariants({
+        ...base, execution: "INTERRUPTED", outcome: "NOT_ESTABLISHED", reason: "OPERATOR_INTERRUPT", finalOutputComplete: false,
+      }));
+    }
+    if (input.inferenceFailure) {
+      return deepFreezeTurn(assertTurnResultInvariants({
+        ...base, execution: "FAILED", outcome: "NOT_ESTABLISHED", reason: "INFERENCE_FAILED",
+        detail: `${input.inferenceFailure.kind}/${input.inferenceFailure.origin}${input.inferenceFailure.httpStatus ? ` HTTP ${input.inferenceFailure.httpStatus}` : ""}`,
+        finalOutputComplete: false,
+      }));
+    }
+    if (input.limitReached) {
+      return deepFreezeTurn(assertTurnResultInvariants({
+        ...base, execution: "LIMIT_REACHED", outcome: "NOT_ESTABLISHED", reason: "STEP_LIMIT_REACHED", finalOutputComplete: false,
+      }));
+    }
+
+    // Execution COMPLETED: derive the engineering outcome strictly from verifier evidence.
+    if (this.hasPendingModifications) {
+      if (evidence?.status === "FAILED") {
+        return deepFreezeTurn(assertTurnResultInvariants({ ...base, execution: "COMPLETED", outcome: "NOT_ESTABLISHED", reason: "VERIFIER_FAILED", detail: evidence.command }));
+      }
+      const noVerifier = evidence?.status === "NO_APPLICABLE_VERIFIER" ||
+        (!evidence && !this.config.authoritativeVerifierCommand?.trim() && !discoverVerifier(this.config.workspace));
+      return deepFreezeTurn(assertTurnResultInvariants({
+        ...base, execution: "COMPLETED", outcome: "UNVERIFIED",
+        reason: noVerifier ? "NO_APPLICABLE_VERIFIER" : "VERIFICATION_NOT_RUN",
+      }));
+    }
+    if (this.turnMutations > 0) {
+      if (evidence?.status === "PASSED") {
+        return deepFreezeTurn(assertTurnResultInvariants({ ...base, execution: "COMPLETED", outcome: "VERIFIED" }));
+      }
+      // Defensive: changes were made, nothing is pending, yet no passing evidence is held.
+      return deepFreezeTurn(assertTurnResultInvariants({ ...base, execution: "COMPLETED", outcome: "UNVERIFIED", reason: "VERIFICATION_NOT_RUN" }));
+    }
+    return deepFreezeTurn(assertTurnResultInvariants({ ...base, execution: "COMPLETED", outcome: "NOT_REQUIRED" }));
+  }
+
+  async run(taskPrompt: string | any[], onConfirm?: ConfirmHandler, options?: { signal?: AbortSignal }): Promise<TurnResult> {
     this.ui.banner();
     console.log(`🎯 Task: ${typeof taskPrompt === "string" ? taskPrompt : "[Multi-modal task input]"}\n`);
     console.log(`📁 Workspace: ${this.config.workspace}`);
@@ -2101,17 +2333,27 @@ Always explain your reasoning before or alongside your tool calls.`;
 
     this.resetConversation();
     this.worktreeRunTurnAuthorized = true;
+    let turnResult: TurnResult | undefined;
     try {
       if (this.config.tdd) {
         this.config.tdd = false;
         try {
           if (typeof taskPrompt !== "string") throw new Error("TDD mode does not accept multimodal task input.");
-          await this.synthesizer.runAutonomousTdd(this, taskPrompt);
+          const tdd = await this.synthesizer.runAutonomousTdd(this, taskPrompt);
+          // The TDD workflow is several turns; report the last turn, downgraded if the workflow itself did not succeed.
+          const last = this.lastTurnResult;
+          if (last && !tdd.success && last.execution === "COMPLETED" && (last.outcome === "VERIFIED" || last.outcome === "NOT_REQUIRED")) {
+            turnResult = deepFreezeTurn(assertTurnResultInvariants({
+              ...last, outcome: "NOT_ESTABLISHED", reason: "VERIFIER_FAILED", detail: `TDD workflow: ${tdd.summary}`, verification: last.verification,
+            }));
+          } else {
+            turnResult = last;
+          }
         } finally {
           this.config.tdd = true;
         }
       } else {
-        await this.runTurn(taskPrompt, onConfirm);
+        turnResult = await this.runTurn(taskPrompt, onConfirm, options);
       }
     } finally {
       this.worktreeRunTurnAuthorized = false;
@@ -2139,6 +2381,8 @@ Always explain your reasoning before or alongside your tool calls.`;
         }
       }
     }
+    if (!turnResult) throw new Error("Turn ended without a result");
+    return turnResult;
   }
 
   public async runSubagent(prompt: string): Promise<string> {

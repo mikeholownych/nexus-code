@@ -742,7 +742,13 @@ error[E0308]: mismatched types
       assert.strictEqual(fs.existsSync(path.join(active!.worktreePath, "unverified.txt")), true);
       assert.strictEqual(fs.existsSync(path.join(repo, "unverified.txt")), false);
       assert.strictEqual(agent.discardActiveWorktree().success, true);
-      assert.strictEqual(requests, 2);
+      // With no applicable verifier, task_completed is accepted as UNVERIFIED (no guessed `npm test` refusal loop),
+      // so the model is not asked for a second turn.
+      assert.strictEqual(requests, 1);
+      const turn = agent.getLastTurnResult();
+      assert.strictEqual(turn?.execution, "COMPLETED");
+      assert.strictEqual(turn?.outcome, "UNVERIFIED");
+      assert.strictEqual(turn?.reason, "NO_APPLICABLE_VERIFIER");
     } finally {
       if (agent?.getActiveWorktree()) agent.discardActiveWorktree();
       agent?.shutdown();

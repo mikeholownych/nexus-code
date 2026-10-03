@@ -177,16 +177,32 @@ program
     }
     const app = new ApplicationCore(config);
     const resumeTaskId = typeof options.resume === "string" ? options.resume : options.resume ? "latest" : undefined;
+    // Operator stop authority: first SIGINT cancels the active turn; a second one terminates immediately.
+    const abort = new AbortController();
+    let sigints = 0;
+    const onSigint = () => {
+        sigints++;
+        if (sigints === 1) {
+            abort.abort(new Error("SIGINT"));
+            if (!isJson)
+                console.error(pc.yellow("\nInterrupt received: no further work will be started (Ctrl-C again to terminate immediately)."));
+        }
+        else {
+            process.exit(130);
+        }
+    };
+    process.on("SIGINT", onSigint);
     try {
         const result = await app.runTask(prompt, {
             json: isJson,
             resumeTaskId,
+            signal: abort.signal,
         });
         if (isJson) {
             console.log(JSON.stringify(result, null, 2));
         }
         app.shutdown();
-        process.exit(result.success ? 0 : 1);
+        process.exit(result.exitCode);
     }
     catch (err) {
         if (isJson) {
@@ -656,4 +672,4 @@ if (process.argv.length <= 2) {
     process.argv.push("repl");
 }
 program.parse(process.argv);
-export { ApplicationCore, } from "./core/app.js";
+export { ApplicationCore } from "./core/app.js";

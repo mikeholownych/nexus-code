@@ -92,6 +92,20 @@ harness run "Inspect the project, write comprehensive unit tests, and verify wit
 
 For worktree-isolated runs, automatic merge requires an explicitly trusted verifier command. Configure it with `--authoritative-verifier "make test"` (or the corresponding `authoritativeVerifierCommand` in `HarnessConfig`). Automatically discovered test commands can still provide diagnostic evidence, but success alone does not authorize merging a worktree.
 
+### Turn outcomes and exit codes
+
+Every turn returns one structured result with three independent dimensions (`cli/src/core/turn.ts`):
+
+| Dimension | Values |
+| :--- | :--- |
+| `execution` | `COMPLETED`, `INTERRUPTED`, `FAILED`, `BLOCKED`, `LIMIT_REACHED` |
+| `outcome` | `VERIFIED` (selected verifier ran and passed), `UNVERIFIED` (changes made, not verified; see `reason`, e.g. `NO_APPLICABLE_VERIFIER`, `VERIFICATION_NOT_RUN`), `NOT_ESTABLISHED`, `NOT_REQUIRED` (no workspace change) |
+| `acceptance` | `NOT_REQUESTED` (Nexus never sets `ACCEPTED`) |
+
+A model that stops calling tools has only stopped; it has not demonstrated anything. `harness run` exits **0** for verified or nothing-to-verify completion, **2** for completed-but-unverified, **130** when interrupted, and **1** for failure, blocked, step-limit or unverified-verifier-failure. `--json` output carries the full `turn` object and `exitCode`.
+
+Ctrl-C while a turn is running requests cancellation: no new inference request or tool dispatch is admitted, and a tool that is already executing is awaited (it cannot be force-stopped). A second Ctrl-C terminates immediately. At an idle prompt Ctrl-C exits the REPL.
+
 ---
 
 ## 🎮 Slash Commands Cheatsheet

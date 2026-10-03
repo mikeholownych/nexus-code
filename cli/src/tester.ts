@@ -61,6 +61,46 @@ export function detectTestCommand(workspace: string, filterPattern?: string): st
   return "npm test";
 }
 
+
+export interface DiscoveredVerifier {
+  command: string;
+  /** Repository file that justifies selecting this verifier. */
+  evidence: string;
+}
+
+/**
+ * Select a verifier only when repository files justify one. Unlike detectTestCommand there is no
+ * `npm test` fallback: a workspace with no applicable verifier has none (returns null).
+ */
+export function discoverVerifier(workspace: string): DiscoveredVerifier | null {
+  const root = path.resolve(workspace);
+  const has = (p: string) => fs.existsSync(path.join(root, p));
+
+  if (has("Makefile")) {
+    try {
+      if (/^test:/m.test(fs.readFileSync(path.join(root, "Makefile"), "utf-8"))) return { command: "make test", evidence: "Makefile:test" };
+    } catch {}
+  }
+  if (has("Cargo.toml")) return { command: "cargo test", evidence: "Cargo.toml" };
+  if (has("core/Cargo.toml")) return { command: "cargo test --manifest-path core/Cargo.toml", evidence: "core/Cargo.toml" };
+
+  const npmTest = (pkgRel: string): boolean => {
+    try {
+      const pkg = JSON.parse(fs.readFileSync(path.join(root, pkgRel), "utf-8"));
+      const script = pkg?.scripts?.test;
+      return typeof script === "string" && script.trim().length > 0 && !/no test specified/i.test(script);
+    } catch {
+      return false;
+    }
+  };
+  if (has("package.json") && npmTest("package.json")) return { command: "npm test", evidence: "package.json:scripts.test" };
+  if (has("cli/package.json") && npmTest("cli/package.json")) return { command: "npm --prefix cli test", evidence: "cli/package.json:scripts.test" };
+
+  if (has("pyproject.toml") || has("setup.py")) return { command: "pytest", evidence: has("pyproject.toml") ? "pyproject.toml" : "setup.py" };
+  if (has("go.mod")) return { command: "go test ./...", evidence: "go.mod" };
+  return null;
+}
+
 /**
  * Execute automated test suite with diagnostic error parsing (Candidate #47)
  */

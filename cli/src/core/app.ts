@@ -26,12 +26,15 @@ import { CapabilityRegistry } from "./capabilities.js";
 import { AuthorityAdmissionEngine } from "./authority.js";
 import { CandidateTracker, CandidateIdentity, ValidationReceipt } from "./candidate.js";
 import { CheckpointManager } from "../checkpoint.js";
+import { TurnResult, exitCodeForTurn, turnSucceeded, lifecycleStatusForTurn, failedTurnFromError } from "./turn.js";
 
 export interface RunTaskOptions {
   json?: boolean;
   quiet?: boolean;
   onConfirm?: (tool: string, args: any) => Promise<boolean>;
   resumeTaskId?: string;
+  /** Operator cancellation authority for this task. */
+  signal?: AbortSignal;
 }
 
 export interface TaskExecutionResult {
@@ -54,6 +57,10 @@ export interface TaskExecutionResult {
   durationMs: number;
   error?: string;
   logs?: string[];
+  /** Authoritative turn semantics; `success`/`status` are projections of this. */
+  turn: TurnResult;
+  /** Process exit code contract: 0 verified/nothing to verify, 2 completed-unverified, 130 interrupted, 1 otherwise. */
+  exitCode: number;
 }
 
 export interface SlashCommandResult {
@@ -194,11 +201,19 @@ export class ApplicationCore extends EventEmitter {
       console.error = (...args: any[]) => {
         capturedLogs.push("[ERROR] " + args.map((a) => (typeof a === "string" ? a : JSON.stringify(a))).join(" "));
       };
+      // Streamed model tokens are written with process.stdout.write; capture them too so --json stdout is only the JSON document.
+      (process.stdout as any).write = (chunk: any, encoding?: any, cb?: any): boolean => {
+        capturedLogs.push(typeof chunk === "string" ? chunk : Buffer.from(chunk).toString("utf-8"));
+        const done = typeof encoding === "function" ? encoding : cb;
+        if (typeof done === "function") done();
+        return true;
+      };
     }
 
     let taskError: Error | undefined;
+    let turn: TurnResult | undefined;
     try {
-      await this.agent.run(prompt, options.onConfirm);
+      turn = await this.agent.run(prompt, options.onConfirm, { signal: options.signal });
     } catch (err: any) {
       taskError = err;
     } finally {
@@ -206,13 +221,16 @@ export class ApplicationCore extends EventEmitter {
         console.log = originalLog;
         console.warn = originalWarn;
         console.error = originalError;
+        process.stdout.write = originalStdoutWrite as typeof process.stdout.write;
       }
     }
+
+    const finalTurn: TurnResult = turn ?? failedTurnFromError(taskError, this.config.maxSteps);
 
     // Capture durable task state snapshot
     let durableState: DurableTaskState;
     try {
-      durableState = this.agent.checkpointDurableState("Task execution finished");
+      durableState = this.agent.checkpointDurableState("Task execution finished", finalTurn);
     } catch {
       durableState = this.getTaskState();
     }
@@ -228,7 +246,8 @@ export class ApplicationCore extends EventEmitter {
       updatedAt: new Date().toISOString(),
       workspace: this.config.workspace,
       model: this.config.model,
-      status: taskError ? "failed" : durableState.status || "completed",
+      status: lifecycleStatusForTurn(finalTurn),
+      lastTurn: finalTurn,
       messages,
       tokenStats: this.agent.getTokenStats(),
       activePlan: durableState.activePlan,
@@ -249,12 +268,12 @@ export class ApplicationCore extends EventEmitter {
     }
 
     const durationMs = Date.now() - startTime;
-    const success = !taskError && durableState.status !== "failed" && durableState.status !== "interrupted";
+    const success = turnSucceeded(finalTurn);
 
     const result: TaskExecutionResult = {
       taskId,
       success,
-      status: taskError ? "failed" : durableState.status,
+      status: lifecycleStatusForTurn(finalTurn),
       prompt,
       output: outputText,
       plan: durableState.activePlan || [],
@@ -267,6 +286,8 @@ export class ApplicationCore extends EventEmitter {
       durationMs,
       error: taskError ? taskError.message : undefined,
       logs: shouldCapture ? capturedLogs : undefined,
+      turn: finalTurn,
+      exitCode: exitCodeForTurn(finalTurn),
     };
 
     this.emit("task:end", result);

@@ -64,13 +64,17 @@ test("a tool call cut off by the token limit is rejected, not executed", async (
   );
 });
 
-test("a truncated plain-text answer is still returned", async () => {
+test("a truncated plain-text answer is rejected as incomplete, with the partial text preserved for diagnosis", async () => {
+  // Superseded contract (truthful-turns slice): finish_reason=length means the answer was cut off, so it is
+  // not a complete model response. The partial text stays available on the error for diagnosis.
   await withServer(
     (_req, res) => json(res, { choices: [{ finish_reason: "length", message: { role: "assistant", content: "partial answer" } }] }),
     async (base) => {
       const c = new LocalLlmClient({ model: "m", endpoint: base, apiKey: "k" } as any);
-      const m = await c.chatCompletion([{ role: "user", content: "x" }], []);
-      assert.equal(m.content, "partial answer");
+      await assert.rejects(
+        () => c.chatCompletion([{ role: "user", content: "x" }], []),
+        (e: any) => e.kind === "output_truncated" && e.partialText === "partial answer",
+      );
     },
   );
 });

@@ -6,6 +6,7 @@
  * requiring revalidation, and ephemeral handles.
  */
 
+import type { TurnResult } from "./turn.js";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
@@ -112,6 +113,9 @@ export interface DurableTaskState {
   candidateId?: string | null;
   candidateIdentity?: CandidateIdentity | null;
   validationReceipts: ValidationReceipt[];
+
+  // Authoritative result of the most recent turn (execution / outcome / acceptance dimensions)
+  lastTurn?: TurnResult | null;
 
   // In-flight operation tracking for interrupted-state detection (PERS-002, F-07)
   currentOperation?: InFlightOperationRecord | null;

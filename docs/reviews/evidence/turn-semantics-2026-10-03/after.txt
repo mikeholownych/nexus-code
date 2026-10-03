@@ -1,0 +1,73 @@
+== http500
+  "success": false,
+  "status": "failed",
+    "\n════════════════════════ TURN FAILED ════════════════════════",
+      "kind": "http_error",
+    "execution": "FAILED",
+    "outcome": "NOT_ESTABLISHED",
+    "reason": "INFERENCE_FAILED",
+EXIT=1
+== steplimit
+  "success": false,
+  "status": "failed",
+    "\n════════════════════════ STEP LIMIT REACHED ════════════════════════",
+    "execution": "LIMIT_REACHED",
+    "outcome": "NOT_ESTABLISHED",
+    "reason": "STEP_LIMIT_REACHED"
+EXIT=1
+== echo(final text, read-only)
+  "success": true,
+  "status": "completed",
+    "\n════════════════════════ TURN ENDED - NO CHANGES TO VERIFY ════════════════════════",
+    "execution": "COMPLETED",
+    "outcome": "NOT_REQUIRED"
+EXIT=0
+== noverify/giveup (no verifier in ws)
+    "status": "overwritten"
+  {"status":"completed","summary":"done","notes":"","verification":"NO_APPLICABLE_VERIFIER"}
+════════════════════════ TURN ENDED - UNVERIFIED ════════════════════════
+EXIT=2
+== falseclear
+  "success": false,
+  "status": "completed",
+    "\n════════════════════════ TURN ENDED - UNVERIFIED ════════════════════════",
+    "modelStop": "TASK_COMPLETED_TOOL",
+      "status": "NO_APPLICABLE_VERIFIER",
+    "execution": "COMPLETED",
+    "outcome": "UNVERIFIED",
+    "reason": "NO_APPLICABLE_VERIFIER"
+EXIT=2
+== trunc
+  "success": false,
+  "status": "failed",
+    "\n════════════════════════ TURN FAILED ════════════════════════",
+      "kind": "timeout",
+    "execution": "FAILED",
+    "outcome": "NOT_ESTABLISHED",
+    "reason": "INFERENCE_FAILED",
+EXIT=1
+== midstream
+  "success": false,
+  "status": "failed",
+    "\n════════════════════════ TURN FAILED ════════════════════════",
+      "kind": "provider_error_frame",
+    "execution": "FAILED",
+    "outcome": "NOT_ESTABLISHED",
+    "reason": "INFERENCE_FAILED",
+EXIT=1
+== multi
+[multi] prompt 2 returned OK
+[multi] prompt 3 returned OK
+  req 13 msgs 2 last user
+  req 14 msgs 4 last tool
+  req 15 msgs 6 last user
+  req 16 msgs 8 last tool
+  req 17 msgs 10 last user
+  req 18 msgs 12 last tool
+== tui(leak unchanged, out of scope)
+[tui] after /tui + 'q' then '/status': unknown-command= Unknown command: /statusq. | status-shown= False
+== ctrlc_slowloop (final build; 2nd Ctrl-C arrives at the idle prompt and exits deliberately)
+[slowloop] files at Ctrl-C: ['loop_1.txt']
+[slowloop] 7s after Ctrl-C: files: ['loop_1.txt'] | process alive: True
+[slowloop] after 2nd Ctrl-C alive: False signalstatus None exit 0
+[slowloop] final files: ['loop_1.txt']

@@ -26,6 +26,7 @@ import { ThemeManager } from "./theme.js";
 import { TeamOrchestrator, AgentRole, ROLE_PROFILES } from "./team.js";
 import { TerminalDashboard } from "./tui.js";
 import { HunkStager } from "./stager.js";
+import { TurnResult, lifecycleStatusForTurn } from "./core/turn.js";
 
 interface PatchHunk {
   header: string;
@@ -70,6 +71,7 @@ export class InteractiveRepl {
   private checkpointManager: CheckpointManager;
   private currentSessionId: string;
   private themeManager: ThemeManager = new ThemeManager();
+  private exitResolve?: () => void;
 
   constructor(appOrConfig: ApplicationCore | HarnessConfig, autoApprove: boolean = true, resumeSessionId?: string) {
     if ("getAgent" in appOrConfig && typeof (appOrConfig as any).getAgent === "function") {
@@ -114,7 +116,20 @@ export class InteractiveRepl {
     return this.app;
   }
 
-  private saveCurrentSession(titlePrompt?: string): void {
+  /** Runs one agent turn with the operator's stop authority wired to it, then records the structured result. */
+  private async runInteractiveTurn(prompt: string | any[], titlePrompt?: string): Promise<TurnResult> {
+    const label = titlePrompt ?? (typeof prompt === "string" ? prompt : "[multimodal]");
+    let result: TurnResult;
+    try {
+      result = await this.agent.runTurn(prompt, (tool, args) => this.confirmAction(tool, args));
+    } finally {
+      // Persist even if the turn threw, so the transcript of work done so far is not lost.
+      this.saveCurrentSession(label, this.agent.getLastTurnResult());
+    }
+    return result;
+  }
+
+  private saveCurrentSession(titlePrompt?: string, turn?: TurnResult): void {
     const messages = this.agent.getMessages();
     if (messages.length <= 1) return;
     this.sessionManager.saveSession({
@@ -126,6 +141,7 @@ export class InteractiveRepl {
       model: this.config.model,
       messages,
       tokenStats: this.agent.getTokenStats(),
+      ...(turn ? { status: lifecycleStatusForTurn(turn), lastTurn: turn } : {}),
     }, this.agent.getWorkspacePathIdentity());
   }
 
@@ -238,6 +254,18 @@ export class InteractiveRepl {
     console.log(`  ${pc.bold(pc.yellow("/commit [msg]"))}       Generate or execute conventional git commit\n`);
   }
 
+  /** Asks the operator during a turn; returns null if the turn is cancelled while waiting (treated as denial). */
+  private async askDuringTurn(question: string): Promise<string | null> {
+    const signal = this.agent.getActiveTurnSignal();
+    if (signal?.aborted) return null;
+    try {
+      return signal ? await this.rl!.question(question, { signal }) : await this.rl!.question(question);
+    } catch (err: any) {
+      if (signal?.aborted || err?.name === "AbortError") return null;
+      throw err;
+    }
+  }
+
   private async confirmAction(toolName: string, args: Record<string, any>): Promise<boolean> {
     if (this.autoApprove) return true;
     if (!this.rl) return true;
@@ -250,9 +278,10 @@ export class InteractiveRepl {
       console.log(`  Target: ${pc.cyan(args.path)} (${hunks.length} hunks)`);
 
       if (hunks.length > 1) {
-        const reviewMode = await this.rl.question(
+        const reviewMode = await this.askDuringTurn(
           pc.bold(pc.white(`  Review ${hunks.length} hunks individually? [y/N]: `))
         );
+        if (reviewMode === null) return false;
         if (reviewMode.trim().toLowerCase() === "y") {
           const acceptedHunks: PatchHunk[] = [];
           for (let i = 0; i < hunks.length; i++) {
@@ -263,9 +292,10 @@ export class InteractiveRepl {
               else if (hl.startsWith("-")) console.log(pc.red(`    ${hl}`));
               else console.log(pc.gray(`    ${hl}`));
             }
-            const hunkAns = await this.rl.question(
+            const hunkAns = await this.askDuringTurn(
               pc.bold(pc.white(`  Accept hunk [y]es, [n]o, [a]ccept all remaining, [q]uit? [Y/n/a/q]: `))
             );
+            if (hunkAns === null) return false;
             const trimmedHunk = hunkAns.trim().toLowerCase();
             if (trimmedHunk === "q") {
               console.log(pc.dim("  Patch review aborted by user."));
@@ -308,10 +338,11 @@ export class InteractiveRepl {
     }
 
     while (true) {
-      const answer = await this.rl.question(
+      const answer = await this.askDuringTurn(
         pc.bold(pc.white(`  Approve [y]es, [n]o, [d]iff preview, [a]lways allow session? [Y/n/d/a]: `))
       );
 
+      if (answer === null) return false;
       const trimmed = answer.trim().toLowerCase();
       if (trimmed === "a" || trimmed === "always") {
         this.autoApprove = true;
@@ -417,12 +448,35 @@ export class InteractiveRepl {
       },
     });
 
+    // Ctrl-C is an operator authority event, not just a keystroke. While a turn is active it requests
+    // cancellation (no new inference or tool dispatch is admitted); a second press terminates the process.
+    // While idle it keeps its deliberate-exit meaning.
+    this.rl.on("SIGINT", () => {
+      if (this.agent.getTurnLifecycle()) {
+        if (this.agent.requestCancel("operator Ctrl-C")) {
+          const life = this.agent.getTurnLifecycle();
+          const waiting = life?.phase === "tool" && life.currentTool ? ` Waiting for in-flight ${life.currentTool} to settle.` : "";
+          console.log(pc.yellow(`\n⏹  Stop requested: no new work will be started.${waiting} (Ctrl-C again to terminate immediately)`));
+        } else {
+          console.log(pc.red("\nTerminating immediately."));
+          this.agent.shutdown();
+          process.exit(130);
+        }
+      } else {
+        console.log(pc.dim("\nSession ended. Goodbye!"));
+        this.exitResolve?.();
+        this.rl?.close();
+      }
+    });
+
     // Populate /model completion from the endpoint's real model list (best effort, never blocks the prompt).
     new LocalLlmClient(this.config).listModels().then((models) => { this.knownModels = models; }).catch(() => {});
 
     this.agent.getSkillManager().startWatcher((skills) => {
       console.log(pc.dim(`\n🔄 [Hot-Reload] Skills library updated (${skills.length} available).`));
     });
+
+    const exitRequested = new Promise<void>((resolve) => { this.exitResolve = resolve; });
 
     const promptLoop = async () => {
       while (true) {
@@ -433,7 +487,11 @@ export class InteractiveRepl {
 
         let line: string;
         try {
-          line = await this.rl!.question(promptString);
+          // Raced with the deliberate-exit signal: closing readline does not reliably settle a pending question.
+          line = await Promise.race([
+            this.rl!.question(promptString),
+            exitRequested.then((): string => { throw new Error("exit requested"); }),
+          ]);
         } catch {
           break;
         }
@@ -987,8 +1045,7 @@ export class InteractiveRepl {
                 const recalled = this.history[idx];
                 console.log(pc.cyan(`⚡ Running from history [#${idx + 1}]: ${pc.bold(recalled)}`));
                 this.checkpointManager.createCheckpoint(`Turn: ${recalled.slice(0, 30)}`);
-                await this.agent.runTurn(recalled, (tool, args) => this.confirmAction(tool, args));
-                this.saveCurrentSession(recalled);
+                await this.runInteractiveTurn(recalled);
               } else {
                 console.log(pc.red(`History index out of range: ${rawNum}\n`));
               }
@@ -1091,8 +1148,7 @@ export class InteractiveRepl {
               const confirm = await this.rl!.question(pc.bold(pc.white(`\nSend clipboard content as user prompt? [y/N]: `)));
               if (confirm.trim().toLowerCase() === "y" || confirm.trim().toLowerCase() === "yes") {
                 this.checkpointManager.createCheckpoint(`Turn: ${res.text.slice(0, 30)}`);
-                await this.agent.runTurn(res.text, (tool, args) => this.confirmAction(tool, args));
-                this.saveCurrentSession(res.text);
+                await this.runInteractiveTurn(res.text);
               } else {
                 console.log(pc.dim("Paste cancelled.\n"));
               }
@@ -1114,8 +1170,7 @@ export class InteractiveRepl {
             console.log(pc.cyan(`🖼️  Loaded image: ${pc.bold(path.basename(encoded.filePath))} (${(encoded.sizeBytes / 1024).toFixed(1)} KB)`));
             const visionPayload = formatVisionContent(userPrompt, encoded.dataUri);
             this.checkpointManager.createCheckpoint(`Vision: ${userPrompt.slice(0, 30)}`);
-            await this.agent.runTurn(visionPayload, (tool, args) => this.confirmAction(tool, args));
-            this.saveCurrentSession(userPrompt);
+            await this.runInteractiveTurn(visionPayload, userPrompt);
             continue;
           } else if (cmd === "theme") {
             if (!arg) {
@@ -1401,8 +1456,7 @@ export class InteractiveRepl {
         // Regular user prompt: run agent turn
         try {
           this.checkpointManager.createCheckpoint(`Turn: ${trimmed.slice(0, 30)}`);
-          await this.agent.runTurn(trimmed, (tool, args) => this.confirmAction(tool, args));
-          this.saveCurrentSession(trimmed);
+          await this.runInteractiveTurn(trimmed);
         } catch (err: any) {
           console.error(pc.red(`\nTurn error: ${err.message}\n`));
         }

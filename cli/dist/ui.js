@@ -1,5 +1,6 @@
 import pc from "picocolors";
 import ora from "ora";
+import { summarizeTurn } from "./core/turn.js";
 import { highlightDiff, highlightCode, highlightMarkdownCodeBlocks } from "./syntax.js";
 export function redactSecrets(text) {
     if (!text)
@@ -124,14 +125,25 @@ export class TerminalUI {
         const sanitized = redactSecrets(code);
         console.log(highlightCode(sanitized, lang, { showLineNumbers }));
     }
-    taskCompleted(summary, notes) {
-        console.log(pc.bold(pc.green("\n════════════════════════ TASK COMPLETED ════════════════════════")));
-        console.log(pc.bold(pc.white("\nSummary:")));
-        console.log(redactSecrets(summary));
-        if (notes && notes.trim()) {
-            console.log(pc.bold(pc.yellow("\nNotes:")));
-            console.log(redactSecrets(notes));
+    /** Terminal projection of a TurnResult. Reads the structured result; adds no semantics of its own. */
+    turnSummary(result, modelSummary) {
+        const { heading, line } = summarizeTurn(result);
+        const verified = result.execution === "COMPLETED" && (result.outcome === "VERIFIED" || result.outcome === "NOT_REQUIRED");
+        const paint = verified ? pc.green : result.execution === "COMPLETED" ? pc.yellow : pc.red;
+        console.log(paint(pc.bold(`\n════════════════════════ ${heading} ════════════════════════`)));
+        console.log(pc.dim(line));
+        if (result.inferenceFailure) {
+            const f = result.inferenceFailure;
+            console.log(pc.red(`Inference ${f.kind} (origin: ${f.origin}${f.httpStatus ? `, HTTP ${f.httpStatus}` : ""}): ${redactSecrets(f.message).slice(0, 300)}`));
         }
-        console.log(pc.bold(pc.green("════════════════════════════════════════════════════════════════\n")));
+        if (modelSummary && result.execution === "COMPLETED") {
+            console.log(pc.bold(pc.white("\nModel-reported summary (not independently verified):")));
+            console.log(redactSecrets(modelSummary.summary));
+            if (modelSummary.notes && modelSummary.notes.trim()) {
+                console.log(pc.bold(pc.yellow("\nNotes:")));
+                console.log(redactSecrets(modelSummary.notes));
+            }
+        }
+        console.log(paint(pc.bold("════════════════════════════════════════════════════════════════\n")));
     }
 }
