@@ -35,7 +35,7 @@ pub fn parse(draft: &str) -> Option<Invocation> {
         return None;
     }
     let name = name.to_lowercase();
-    if multiline && matches!(name.as_str(), "exit" | "quit" | "q" | "help" | "?" | "tui" | "!") {
+    if multiline && !takes_text_body(&name) {
         return None;
     }
     Some(match name.as_str() {
@@ -47,6 +47,12 @@ pub fn parse(draft: &str) -> Option<Invocation> {
             args: args.trim().into(),
         },
     })
+}
+
+/// Commands whose argument is free text, so a multiline draft can carry it. Any other multiline draft is a
+/// prompt: a pasted objective that begins with `/undo` or `/exit` must not run it and drop the rest.
+fn takes_text_body(name: &str) -> bool {
+    matches!(name, "commit" | "tdd" | "team" | "image")
 }
 
 /// Catalogue entries whose name starts with the typed `/prefix`. Empty unless the draft is a single `/word`.
@@ -131,6 +137,12 @@ mod tests {
         assert_eq!(parse("\n/exit"), None);
         assert_eq!(parse("\n\n!rm -rf build\n"), None);
         assert_eq!(parse("/help\r\n"), Some(Invocation::Help));
+        assert_eq!(parse("/undo\nthen fix the parser"), None);
+        assert_eq!(parse("/compact\nobjective text"), None);
+        assert_eq!(
+            parse("/team full build it\nwith tests"),
+            Some(remote("team", "full build it\nwith tests"))
+        );
     }
 
     #[test]
