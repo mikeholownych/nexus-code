@@ -336,7 +336,7 @@ fn event_loop(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::live_state::{Entry, Overlay, Verdict};
+    use crate::live_state::{APPROVAL_GRACE, Entry, Overlay, Verdict};
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
     use std::time::Instant;
 
@@ -435,9 +435,16 @@ exit 0"#
         pump_until(&mut app, |s| {
             matches!(s.overlay, Some(Overlay::Approval(_)))
         });
+        let Some(Overlay::Approval(approval)) = &app.state.overlay else {
+            unreachable!("pump_until waited for the approval modal");
+        };
+        let past_grace = approval.opened + APPROVAL_GRACE;
         let approve = app
             .state
-            .on_key(KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE))
+            .on_key_at(
+                KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE),
+                past_grace,
+            )
             .unwrap();
         assert!(app.handle(approve));
         pump_until(&mut app, |s| {

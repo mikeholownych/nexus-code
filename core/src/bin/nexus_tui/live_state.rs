@@ -3,6 +3,7 @@
 use crate::composer::Composer;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use serde_json::Value;
+use std::time::{Duration, Instant};
 
 use crate::protocol::{Command, Event, PROTOCOL_VERSION, Review};
 use crate::review::{ReviewLine, review_lines};
@@ -103,7 +104,11 @@ pub struct Approval {
     pub subject: String,
     pub lines: Vec<ReviewLine>,
     pub scroll: usize,
+    pub opened: Instant,
 }
+
+/// Keystrokes typed for the draft must not answer an approval modal that opened mid-typing.
+pub const APPROVAL_GRACE: Duration = Duration::from_millis(400);
 
 /// Modal panels. While one is open it receives every key except Ctrl-C.
 #[derive(Clone, Debug, PartialEq)]
@@ -236,6 +241,7 @@ impl LiveState {
                     subject,
                     lines,
                     scroll: 0,
+                    opened: Instant::now(),
                 }));
             }
             Event::TurnResult { heading, line, turn, model_summary } => {
@@ -291,7 +297,7 @@ impl LiveState {
     }
 
     pub fn on_paste(&mut self, text: &str) {
-        if !matches!(self.link, Link::Crashed { .. }) {
+        if !matches!(self.link, Link::Crashed { .. }) && self.overlay.is_none() {
             self.composer.insert(text);
         }
     }
@@ -317,7 +323,7 @@ impl LiveState {
         rows.saturating_sub(1).max(1)
     }
 
-    fn on_approval_key(&mut self, key: KeyEvent) -> Option<Action> {
+    fn on_approval_key(&mut self, key: KeyEvent, now: Instant) -> Option<Action> {
         let verdict = match key.code {
             KeyCode::Char('y' | 'Y') | KeyCode::Enter => Verdict::Approved,
             KeyCode::Char('a' | 'A') => Verdict::ApprovedForSession,
@@ -327,6 +333,11 @@ impl LiveState {
                 return None;
             }
         };
+        if let Some(Overlay::Approval(approval)) = &self.overlay
+            && now.saturating_duration_since(approval.opened) < APPROVAL_GRACE
+        {
+            return None;
+        }
         let Some(Overlay::Approval(approval)) = self.overlay.take() else {
             return None;
         };
@@ -394,6 +405,10 @@ impl LiveState {
     }
 
     pub fn on_key(&mut self, key: KeyEvent) -> Option<Action> {
+        self.on_key_at(key, Instant::now())
+    }
+
+    pub fn on_key_at(&mut self, key: KeyEvent, now: Instant) -> Option<Action> {
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
         if matches!(self.link, Link::Crashed { .. }) {
             return match key.code {
@@ -407,7 +422,7 @@ impl LiveState {
             return self.on_ctrl_c();
         }
         match self.overlay {
-            Some(Overlay::Approval(_)) => return self.on_approval_key(key),
+            Some(Overlay::Approval(_)) => return self.on_approval_key(key, now),
             Some(Overlay::Help { .. }) => {
                 self.on_help_key(key);
                 return None;
@@ -1026,6 +1041,7 @@ mod tests {
             state.transcript,
             vec![Entry::Notice("BUSY: A turn is already running".into())]
         );
+        let opened = opened_at(&state);
         assert_eq!(
             state.overlay,
             Some(Overlay::Approval(Approval {
@@ -1034,6 +1050,7 @@ mod tests {
                 subject: "x.txt".into(),
                 lines: review_lines(&Review::Unknown),
                 scroll: 0,
+                opened,
             }))
         );
     }
@@ -1046,6 +1063,109 @@ mod tests {
         assert!(state.on_key(key(KeyCode::Enter)).is_some());
         state.apply(ev(APPROVAL));
         state
+    }
+
+    fn opened_at(state: &LiveState) -> Instant {
+        let Some(Overlay::Approval(approval)) = &state.overlay else {
+            panic!("expected the approval modal");
+        };
+        approval.opened
+    }
+
+    fn past_grace(state: &mut LiveState, code: KeyCode) -> Option<Action> {
+        let now = opened_at(state) + APPROVAL_GRACE;
+        state.on_key_at(key(code), now)
+    }
+
+    #[test]
+    fn a_decision_key_right_after_the_modal_opens_is_ignored() {
+        let mut state = ready();
+        type_text(&mut state, "make x");
+        assert!(state.on_key(key(KeyCode::Enter)).is_some());
+        type_text(&mut state, "dra");
+        state.apply(ev(APPROVAL));
+        let opened = opened_at(&state);
+        let transcript = state.transcript.clone();
+        let almost = opened + APPROVAL_GRACE - Duration::from_millis(1);
+        for (code, now) in [
+            (KeyCode::Char('y'), opened),
+            (KeyCode::Enter, opened),
+            (KeyCode::Char('n'), opened),
+            (KeyCode::Esc, opened),
+            (KeyCode::Char('y'), almost),
+        ] {
+            assert_eq!(state.on_key_at(key(code), now), None, "{code:?}");
+        }
+        assert_eq!(state.transcript, transcript, "no decision is recorded");
+        assert!(matches!(state.overlay, Some(Overlay::Approval(_))));
+        assert_eq!(state.composer, "dra", "ignored keys do not reach the draft");
+    }
+
+    #[test]
+    fn a_decision_key_after_the_grace_approves() {
+        let mut state = busy_with_approval();
+        assert_eq!(
+            past_grace(&mut state, KeyCode::Char('y')),
+            Some(Action::Send(Command::Approve {
+                id: "approval-1".into(),
+                always: false
+            }))
+        );
+        assert_eq!(state.overlay, None);
+        assert!(matches!(
+            state.transcript.last(),
+            Some(Entry::Decision {
+                verdict: Verdict::Approved,
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn always_right_after_the_modal_opens_is_ignored() {
+        let mut state = busy_with_approval();
+        let opened = opened_at(&state);
+        let transcript = state.transcript.clone();
+        assert_eq!(state.on_key_at(key(KeyCode::Char('a')), opened), None);
+        assert_eq!(state.transcript, transcript);
+        assert!(matches!(state.overlay, Some(Overlay::Approval(_))));
+        assert_eq!(state.composer, "");
+        assert_eq!(
+            past_grace(&mut state, KeyCode::Char('a')),
+            Some(Action::Send(Command::Approve {
+                id: "approval-1".into(),
+                always: true
+            }))
+        );
+    }
+
+    #[test]
+    fn ctrl_c_right_after_the_modal_opens_still_cancels() {
+        let mut state = busy_with_approval();
+        let opened = opened_at(&state);
+        assert_eq!(
+            state.on_key_at(ctrl('c'), opened),
+            Some(Action::Send(Command::Cancel))
+        );
+        assert_eq!(state.overlay, None);
+        assert!(state.cancel_requested());
+    }
+
+    #[test]
+    fn a_paste_under_an_overlay_leaves_the_draft_alone() {
+        let mut state = ready();
+        type_text(&mut state, "make x");
+        assert!(state.on_key(key(KeyCode::Enter)).is_some());
+        type_text(&mut state, "dra");
+        state.apply(ev(APPROVAL));
+        state.on_paste("ft");
+        assert_eq!(state.composer, "dra");
+        state.overlay = Some(Overlay::Help { scroll: 0 });
+        state.on_paste("ft");
+        assert_eq!(state.composer, "dra");
+        state.overlay = None;
+        state.on_paste("ft");
+        assert_eq!(state.composer, "draft");
     }
 
     #[test]
@@ -1063,7 +1183,7 @@ mod tests {
         assert_eq!(state.on_key(key(KeyCode::Char('x'))), None);
         assert_eq!(state.composer, "", "keys go to the modal, not the composer");
         assert_eq!(
-            state.on_key(key(KeyCode::Char('y'))),
+            past_grace(&mut state, KeyCode::Char('y')),
             Some(Action::Send(Command::Approve {
                 id: "approval-1".into(),
                 always: false
@@ -1080,7 +1200,7 @@ mod tests {
         );
         state.apply(ev(APPROVAL));
         assert_eq!(
-            state.on_key(key(KeyCode::Char('a'))),
+            past_grace(&mut state, KeyCode::Char('a')),
             Some(Action::Send(Command::Approve {
                 id: "approval-1".into(),
                 always: true
@@ -1088,7 +1208,7 @@ mod tests {
         );
         state.apply(ev(APPROVAL));
         assert_eq!(
-            state.on_key(key(KeyCode::Esc)),
+            past_grace(&mut state, KeyCode::Esc),
             Some(Action::Send(Command::Deny {
                 id: "approval-1".into()
             }))
