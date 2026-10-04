@@ -14,7 +14,7 @@ export function redactedJson(value) {
 function redactedOutput(text) {
     try {
         const parsed = JSON.parse(text);
-        if (parsed !== null && typeof parsed === "object")
+        if (typeof parsed === "string" || (parsed !== null && typeof parsed === "object"))
             return redactedJson(parsed);
     }
     catch {

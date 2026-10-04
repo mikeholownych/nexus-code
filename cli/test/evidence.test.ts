@@ -27,6 +27,9 @@ describe("evidence ledger", () => {
     const content = 'API_KEY="abcdef1234567890"\nkey: sk-abcdefgh\x1b[0mijklmnopqrstuvwxyz123456';
     const ledger = new EvidenceLedger();
     const args = ledger.get(ledger.start("t1", "write_file", ".env", { path: ".env", content }))!.args;
+    const id = ledger.start("t1", "run_command", "x", {});
+    ledger.end(id, true, JSON.stringify('API_KEY="abcdef1234567890" done'));
+    assert.doesNotMatch(ledger.get(id)!.output, /abcdef1234567890/);
     for (const text of [args, redactedJson({ path: ".env", content })]) {
       assert.doesNotMatch(text, /abcdef1234567890/);
       assert.doesNotMatch(text, /ijklmnopqrstuvwxyz123456/);

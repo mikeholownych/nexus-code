@@ -38,7 +38,7 @@ export function redactedJson(value: unknown): string {
 function redactedOutput(text: string): string {
   try {
     const parsed: unknown = JSON.parse(text);
-    if (parsed !== null && typeof parsed === "object") return redactedJson(parsed);
+    if (typeof parsed === "string" || (parsed !== null && typeof parsed === "object")) return redactedJson(parsed);
   } catch {
     // Plain text output.
   }
