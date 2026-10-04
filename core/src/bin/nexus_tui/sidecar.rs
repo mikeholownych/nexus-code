@@ -2,7 +2,7 @@
 //! (a full pipe would block the child) into a bounded tail that is redacted on capture.
 use std::collections::VecDeque;
 use std::io::{self, BufRead, BufReader, Write};
-use std::process::{Child, ChildStdin, Command as Process, Stdio};
+use std::process::{Child, ChildStdin, Command as Process, ExitStatus, Stdio};
 use std::sync::{Arc, Mutex, mpsc};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -11,6 +11,8 @@ use crate::protocol::{Command, Event, encode_command, parse_event};
 use crate::redact::StderrRedactor;
 
 pub const STDERR_TAIL_LINES: usize = 40;
+/// Time the process group gets between SIGTERM and SIGKILL.
+const GROUP_GRACE: Duration = Duration::from_millis(300);
 
 #[derive(Debug)]
 pub enum SidecarMsg {
@@ -29,6 +31,8 @@ pub struct SidecarSpec {
 
 pub struct Sidecar {
     child: Child,
+    reaped: bool,
+    status: Option<ExitStatus>,
     stdin: Option<ChildStdin>,
     stderr_tail: Arc<Mutex<VecDeque<String>>>,
     stderr_done: mpsc::Receiver<()>,
@@ -82,6 +86,8 @@ impl Sidecar {
 
         Ok(Sidecar {
             child,
+            reaped: false,
+            status: None,
             stdin,
             stderr_tail,
             stderr_done,
@@ -97,19 +103,19 @@ impl Sidecar {
         stdin.flush()
     }
 
-    /// Waits up to `grace` for the child to exit, then kills it. Returns the exit code, or `None` when it was
-    /// ended by a signal.
+    /// Waits up to `grace` for the child to exit, then ends its process group and reaps it. Returns the exit
+    /// code, or `None` when it was ended by a signal.
     pub fn reap(&mut self, grace: Duration) -> Option<i32> {
-        let deadline = Instant::now() + grace;
-        let status = loop {
-            match self.child.try_wait() {
-                Ok(Some(status)) => break Some(status),
-                Ok(None) if Instant::now() < deadline => thread::sleep(Duration::from_millis(20)),
-                _ => break self.kill(),
+        if !self.reaped {
+            let deadline = Instant::now() + grace;
+            while !self.exited() && Instant::now() < deadline {
+                thread::sleep(Duration::from_millis(20));
             }
-        };
+            self.status = self.end_group();
+            self.reaped = true;
+        }
         let _ = self.stderr_done.recv_timeout(Duration::from_millis(500));
-        status.and_then(|status| status.code())
+        self.status.and_then(|status| status.code())
     }
 
     /// Asks the sidecar to shut down, closes its stdin, and reaps it.
@@ -123,25 +129,58 @@ impl Sidecar {
         self.stderr_tail.lock().unwrap().iter().cloned().collect()
     }
 
-    /// Kills the child's process group, then the child itself, and waits for it. Only call this before the child
-    /// has been reaped: until then its pid, which is also the group id, cannot be reused.
-    fn kill(&mut self) -> Option<std::process::ExitStatus> {
+    /// True once the child has exited. Does not reap it, so its pid, which is also its group id, stays reserved.
+    #[cfg(unix)]
+    fn exited(&self) -> bool {
+        // SAFETY: waitid writes only into `info`; WNOWAIT leaves the child waitable. A zeroed `info` keeps
+        // `si_signo` at 0 when no child has exited yet.
+        unsafe {
+            let mut info: libc::siginfo_t = std::mem::zeroed();
+            let found = libc::waitid(
+                libc::P_PID,
+                self.child.id(),
+                &mut info,
+                libc::WEXITED | libc::WNOHANG | libc::WNOWAIT,
+            );
+            found != 0 || info.si_signo == libc::SIGCHLD
+        }
+    }
+
+    #[cfg(not(unix))]
+    fn exited(&mut self) -> bool {
+        matches!(self.child.try_wait(), Ok(Some(_)))
+    }
+
+    /// Ends the child's process group, SIGTERM first so tools can release locks, then SIGKILL, and reaps the
+    /// child. Only call this before the child has been reaped: until then the group id cannot be reused, even
+    /// after the child has exited.
+    fn end_group(&mut self) -> Option<ExitStatus> {
         #[cfg(unix)]
-        if let Ok(group) = libc::pid_t::try_from(self.child.id()) {
-            // SAFETY: killpg only sends a signal; `group` is the group created for this child at spawn.
-            unsafe {
-                libc::killpg(group, libc::SIGKILL);
-            }
+        {
+            self.signal_group(libc::SIGTERM);
+            thread::sleep(GROUP_GRACE);
+            self.signal_group(libc::SIGKILL);
         }
         let _ = self.child.kill();
         self.child.wait().ok()
+    }
+
+    #[cfg(unix)]
+    fn signal_group(&self, signal: libc::c_int) {
+        if let Ok(group) = libc::pid_t::try_from(self.child.id()) {
+            // SAFETY: killpg only sends a signal; `group` is the group created for this child at spawn. ESRCH,
+            // when nothing is left in it, is harmless.
+            unsafe {
+                libc::killpg(group, signal);
+            }
+        }
     }
 }
 
 impl Drop for Sidecar {
     fn drop(&mut self) {
-        if let Ok(None) = self.child.try_wait() {
-            self.kill();
+        if !self.reaped {
+            self.end_group();
         }
     }
 }
@@ -220,6 +259,26 @@ mod tests {
         assert!(started.elapsed() < Duration::from_secs(3));
     }
 
+    #[test]
+    fn a_forced_stop_lets_the_group_clean_up_before_killing_it() {
+        let (tx, rx) = mpsc::channel();
+        let mut sidecar = Sidecar::spawn(
+            &sh(r#"trap 'echo cleaned up >&2; exit 7' TERM; echo '{"v":1,"type":"hello","protocol":1,"pid":7}'; while :; do :; done"#),
+            tx,
+        )
+        .unwrap();
+        assert!(rx.recv_timeout(WAIT).is_ok());
+        let started = Instant::now();
+        assert_eq!(sidecar.reap(Duration::ZERO), Some(7));
+        assert!(started.elapsed() < Duration::from_secs(2));
+        let tail = sidecar.stderr_tail();
+        assert_eq!(
+            tail.last().map(String::as_str),
+            Some("cleaned up"),
+            "{tail:?}"
+        );
+    }
+
     /// True once `pid` has exited (a zombie awaiting its new parent counts as exited).
     #[cfg(target_os = "linux")]
     fn exited_within(pid: &str, limit: Duration) -> bool {
@@ -280,6 +339,44 @@ mod tests {
             }
             let _ = std::fs::remove_file(&pidfile);
             assert!(gone, "{case}: grandchild {grandchild} survived the sidecar");
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_sidecar_that_exits_on_its_own_takes_its_children_with_it() {
+        for case in ["reap", "shutdown", "drop"] {
+            let pidfile = std::env::temp_dir().join(format!(
+                "nexus-sidecar-orphan-{}-{case}",
+                std::process::id()
+            ));
+            let _ = std::fs::remove_file(&pidfile);
+            let script = format!(
+                "sleep 30 & echo $! > '{}.tmp'; mv '{0}.tmp' '{0}'; exit 1",
+                pidfile.display()
+            );
+            let (tx, _rx) = mpsc::channel();
+            let mut sidecar = Sidecar::spawn(&sh(&script), tx).unwrap();
+            let shell = sidecar.child.id().to_string();
+            assert!(
+                exited_within(&shell, WAIT),
+                "{case}: the fake shell never exited"
+            );
+            let grandchild = std::fs::read_to_string(&pidfile)
+                .unwrap()
+                .trim()
+                .to_string();
+            match case {
+                "reap" => assert_eq!(sidecar.reap(WAIT), Some(1), "{case}"),
+                "shutdown" => assert_eq!(sidecar.shutdown(WAIT), Some(1), "{case}"),
+                _ => drop(sidecar),
+            }
+            let gone = exited_within(&grandchild, WAIT);
+            if !gone {
+                let _ = Process::new("kill").args(["-KILL", &grandchild]).status();
+            }
+            let _ = std::fs::remove_file(&pidfile);
+            assert!(gone, "{case}: grandchild {grandchild} outlived the sidecar");
         }
     }
 
