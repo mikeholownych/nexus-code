@@ -158,7 +158,17 @@ fn render_approval(frame: &mut Frame, area: Rect, approval: &Approval) -> (usize
     let inner = block.inner(rect);
     frame.render_widget(Clear, rect);
     frame.render_widget(block, rect);
-    let [head, body] = Layout::vertical([Constraint::Length(2), Constraint::Min(1)]).areas(inner);
+    // The heading names the action being approved, so it keeps its row before the review gets any.
+    let head_rows = inner.height.min(2);
+    let head = Rect {
+        height: head_rows,
+        ..inner
+    };
+    let body = Rect {
+        y: inner.y + head_rows,
+        height: inner.height - head_rows,
+        ..inner
+    };
     frame.render_widget(
         Paragraph::new(Line::from(vec![
             Span::styled(
@@ -1342,6 +1352,19 @@ mod tests {
         let x = u16::try_from(lines[added][..column].chars().count()).unwrap();
         let cell = &terminal.backend().buffer()[(x, u16::try_from(added).unwrap())];
         assert_eq!(cell.fg, Color::Green);
+    }
+
+    #[test]
+    fn a_cramped_approval_keeps_the_action_heading_before_the_review() {
+        let mut state = ready();
+        let request = approval(
+            r#"{"kind":"change","path":"src/x.txt","before":"a\nb\nc\n","after":"a\nB\nc\n","created":false,"truncated":false}"#,
+        );
+        feed(&mut state, &[BUSY, request.as_str()]);
+        state.composer = "one\ntwo\nthree\nfour\nfive\nsix".into();
+        for height in [11, 12] {
+            assert_shows(&draw(&state, 40, height), &["Edit src/x.txt"]);
+        }
     }
 
     #[test]
