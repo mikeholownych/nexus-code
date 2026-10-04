@@ -6,6 +6,10 @@ use regex::Regex;
 
 static ANSI: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\x1b\[[0-9;?]*[ -/]*[@-~]").unwrap());
 
+/// OSC sequences (`ESC ] ... BEL` or `ESC ] ... ESC \`) and the remaining two-character escapes such as `ESC c`.
+static OTHER_ESCAPES: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b[ -/]*[0-~]").unwrap());
+
 static PATTERNS: LazyLock<Vec<(Regex, &'static str)>> = LazyLock::new(|| {
     vec![
         (
@@ -34,6 +38,15 @@ impl StderrRedactor {
     /// Returns the redacted line, or `None` when the line is part of a private key being suppressed.
     pub fn line(&mut self, raw: &str) -> Option<String> {
         let line = ANSI.replace_all(raw, "");
+        let line: String = OTHER_ESCAPES
+            .replace_all(&line, "")
+            .chars()
+            .filter_map(|c| match c {
+                '\t' => Some(' '),
+                c if c.is_control() => None,
+                c => Some(c),
+            })
+            .collect();
         let is_key_marker = |kind: &str| line.contains(kind) && line.contains("PRIVATE KEY-----");
         if self.in_private_key {
             if is_key_marker("-----END") {
@@ -45,7 +58,7 @@ impl StderrRedactor {
             self.in_private_key = !is_key_marker("-----END");
             return Some("[REDACTED_PRIVATE_KEY]".to_string());
         }
-        let mut out = line.into_owned();
+        let mut out = line;
         for (pattern, replacement) in PATTERNS.iter() {
             out = pattern.replace_all(&out, *replacement).into_owned();
         }
@@ -90,6 +103,17 @@ mod tests {
                 .line("\x1b[31m✖ Working: run_command\x1b[39m")
                 .unwrap(),
             "✖ Working: run_command"
+        );
+    }
+
+    #[test]
+    fn strips_other_escape_sequences_and_control_characters() {
+        let mut redactor = StderrRedactor::default();
+        assert_eq!(
+            redactor
+                .line("\x1b]8;;http://x\x07link\x1b]8;;\x07 done\tnow\x1bc\x07")
+                .unwrap(),
+            "link done now"
         );
     }
 
