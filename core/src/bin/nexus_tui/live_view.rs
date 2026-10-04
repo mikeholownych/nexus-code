@@ -6,11 +6,14 @@ use ratatui::{
     layout::{Alignment, Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span, Text},
-    widgets::{Block, Borders, Paragraph, Wrap},
+    widgets::{Block, BorderType, Borders, Clear, Paragraph, Wrap},
 };
 
 use crate::composer::{ComposerLayout, PREFIX_WIDTH};
-use crate::live_state::{Entry, Focus, Link, LiveLayout, LiveState, Tone, ToolStatus, Verdict};
+use crate::live_state::{
+    Approval, Entry, Focus, Link, LiveLayout, LiveState, Overlay, Tone, ToolStatus, Verdict,
+};
+use crate::review::{LineKind, ReviewLine};
 use crate::{ACCENT, MUTED, SURFACE};
 
 pub const MIN_WIDTH: u16 = 40;
@@ -76,7 +79,159 @@ pub fn render_live(frame: &mut Frame, state: &LiveState) -> LiveLayout {
     let inner = block.inner(rows[2]);
     frame.render_widget(block, rows[2]);
     render_composer(frame, inner, state, &composer);
+    match &state.overlay {
+        Some(Overlay::Approval(approval)) => {
+            (layout.overlay_rows, layout.overlay_limit) = render_approval(frame, rows[1], approval);
+        }
+        Some(Overlay::Help { scroll }) => {
+            (layout.overlay_rows, layout.overlay_limit) = render_help(frame, rows[1], *scroll);
+        }
+        None => {}
+    }
     layout
+}
+
+const HELP: &[(&str, &str)] = &[
+    ("", "Keys"),
+    ("enter", "send the prompt"),
+    (
+        "shift+enter",
+        "new line (alt+enter where shift is not reported)",
+    ),
+    (
+        "↑ / ↓",
+        "move between lines; recall earlier prompts from the first line",
+    ),
+    ("ctrl+a / ctrl+e", "start / end of the line"),
+    ("ctrl+u / ctrl+k", "delete to the start / end of the line"),
+    ("ctrl+w", "delete the previous word"),
+    ("ctrl+l", "clear the draft"),
+    ("tab", "switch between the composer and the transcript"),
+    ("pgup / pgdn", "scroll the transcript"),
+    ("esc", "close this panel; cancel a running turn"),
+    (
+        "ctrl+c",
+        "cancel a running turn, twice to quit; quit when idle and empty",
+    ),
+    ("", ""),
+    ("", "Approvals (review mode)"),
+    ("y / enter", "approve this action"),
+    (
+        "a",
+        "approve this and every later action (switches to auto)",
+    ),
+    ("n / esc", "deny"),
+];
+
+/// A modal rectangle at the top of `area`: one column of margin each side, at most `max_width` wide and
+/// `wanted_height` tall, centred horizontally.
+fn modal(area: Rect, max_width: u16, wanted_height: u16) -> Rect {
+    let width = area.width.saturating_sub(2).min(max_width);
+    let height = area.height.min(wanted_height);
+    Rect::new(area.x + (area.width - width) / 2, area.y, width, height)
+}
+
+fn modal_block(title: &'static str) -> Block<'static> {
+    Block::bordered()
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(ACCENT))
+        .title(Span::styled(
+            title,
+            Style::default().fg(ACCENT).add_modifier(Modifier::BOLD),
+        ))
+}
+
+/// Draws the approval modal; returns the rows available to the review and the largest useful scroll.
+fn render_approval(frame: &mut Frame, area: Rect, approval: &Approval) -> (usize, usize) {
+    let key = Style::default().fg(ACCENT).add_modifier(Modifier::BOLD);
+    let rect = modal(area, area.width, area.height);
+    let block = modal_block(" Approval needed ").title_bottom(Line::from(vec![
+        Span::styled(" y", key),
+        Span::raw(" approve  "),
+        Span::styled("a", key),
+        Span::raw(" always  "),
+        Span::styled("n", key),
+        Span::raw(" deny  "),
+        Span::styled("↑↓", key),
+        Span::raw(" scroll "),
+    ]));
+    let inner = block.inner(rect);
+    frame.render_widget(Clear, rect);
+    frame.render_widget(block, rect);
+    let [head, body] = Layout::vertical([Constraint::Length(2), Constraint::Min(1)]).areas(inner);
+    frame.render_widget(
+        Paragraph::new(Line::from(vec![
+            Span::styled(
+                tool_verb(&approval.tool),
+                Style::default()
+                    .fg(Color::White)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(format!(" {}", approval.subject), Style::default().fg(MUTED)),
+        ])),
+        head,
+    );
+    let rows = usize::from(body.height);
+    let limit = approval.lines.len().saturating_sub(rows);
+    let lines: Vec<Line> = approval
+        .lines
+        .iter()
+        .skip(approval.scroll.min(limit))
+        .take(rows)
+        .map(review_line)
+        .collect();
+    frame.render_widget(Paragraph::new(lines), body);
+    (rows, limit)
+}
+
+fn review_line(line: &ReviewLine) -> Line<'_> {
+    let style = match line.kind {
+        LineKind::Added => Style::default().fg(Color::Green),
+        LineKind::Removed => Style::default().fg(Color::Red),
+        LineKind::Hunk => Style::default().fg(Color::Cyan),
+        LineKind::Meta => Style::default().fg(MUTED),
+        LineKind::Command => Style::default()
+            .fg(Color::White)
+            .add_modifier(Modifier::BOLD),
+        LineKind::Context => Style::default().fg(Color::White),
+    };
+    Line::from(Span::styled(expand_tabs(&line.text), style))
+}
+
+/// Draws the help panel; returns its visible rows and the largest useful scroll.
+fn render_help(frame: &mut Frame, area: Rect, scroll: usize) -> (usize, usize) {
+    let key = Style::default().fg(ACCENT).add_modifier(Modifier::BOLD);
+    let lines: Vec<Line> = HELP
+        .iter()
+        .map(|(keys, text)| {
+            if keys.is_empty() {
+                Line::from(Span::styled(
+                    *text,
+                    Style::default()
+                        .fg(Color::White)
+                        .add_modifier(Modifier::BOLD),
+                ))
+            } else {
+                Line::from(vec![
+                    Span::styled(format!("  {keys:<17}"), key),
+                    Span::styled(*text, Style::default().fg(Color::White)),
+                ])
+            }
+        })
+        .collect();
+    let wanted = u16::try_from(lines.len() + 2).unwrap_or(u16::MAX);
+    let rect = modal(area, 84, wanted);
+    let block = modal_block(" Help ");
+    let inner = block.inner(rect);
+    frame.render_widget(Clear, rect);
+    frame.render_widget(block, rect);
+    let rows = usize::from(inner.height);
+    let limit = lines.len().saturating_sub(rows);
+    frame.render_widget(
+        Paragraph::new(lines).scroll((u16::try_from(scroll.min(limit)).unwrap_or(0), 0)),
+        inner,
+    );
+    (rows, limit)
 }
 
 /// Draws the composer rows that hold the cursor and places the terminal cursor while the operator is typing.
@@ -486,7 +641,7 @@ fn composer_hint(state: &LiveState) -> &'static str {
         _ if state.closing => " shutting down the agent… ",
         (Link::Crashed { .. }, _) => " r restart · q quit ",
         _ if state.connecting() => " starting the agent… ",
-        _ if matches!(state.overlay, Some(crate::live_state::Overlay::Approval(_))) => {
+        _ if matches!(state.overlay, Some(Overlay::Approval(_))) => {
             " approval needed · y approve · n deny "
         }
         _ if state.overlay.is_some() => " esc close help ",
@@ -1145,5 +1300,90 @@ mod tests {
         let mut state = ready();
         state.closing = true;
         assert_shows(&draw(&state, 80, 20), &["shutting down the agent"]);
+    }
+
+    fn approval(review: &str) -> String {
+        format!(
+            r#"{{"v":1,"type":"approval.request","id":"approval-1","turn_id":"t1","tool":"edit_file","subject":"src/x.txt","preview":"{{}}","review":{review}}}"#
+        )
+    }
+
+    #[test]
+    fn the_approval_modal_shows_the_action_a_coloured_diff_and_the_keys() {
+        let mut state = ready();
+        let request = approval(
+            r#"{"kind":"change","path":"src/x.txt","before":"a\nb\nc\n","after":"a\nB\nc\n","created":false,"truncated":false}"#,
+        );
+        feed(&mut state, &[BUSY, request.as_str()]);
+        let mut terminal = Terminal::new(TestBackend::new(80, 24)).unwrap();
+        terminal
+            .draw(|frame| {
+                render_live(frame, &state);
+            })
+            .unwrap();
+        let screen = terminal.backend().to_string();
+        assert_shows(
+            &screen,
+            &[
+                "Approval needed",
+                "Edit src/x.txt",
+                "@@ -1,3 +1,3 @@",
+                "-b",
+                "+B",
+                "y approve",
+                "a always",
+                "n deny",
+                "approval needed · y approve · n deny",
+            ],
+        );
+        let lines = rows(&screen);
+        let added = lines.iter().position(|row| row.contains("+B")).unwrap();
+        let column = lines[added].find("+B").unwrap();
+        let x = u16::try_from(lines[added][..column].chars().count()).unwrap();
+        let cell = &terminal.backend().buffer()[(x, u16::try_from(added).unwrap())];
+        assert_eq!(cell.fg, Color::Green);
+    }
+
+    #[test]
+    fn long_reviews_report_rows_and_limit_and_scroll() {
+        let mut state = ready();
+        let after: String = (1..=100).map(|n| format!("line {n}\n")).collect();
+        let request = approval(&format!(
+            r#"{{"kind":"change","path":"n.txt","before":null,"after":{after:?},"created":true,"truncated":false}}"#
+        ));
+        feed(&mut state, &[request.as_str()]);
+        let (screen, layout) = draw_measured(&state, 80, 24);
+        assert_eq!(layout.overlay_rows, 17);
+        assert_eq!(layout.overlay_limit, 104 - 17);
+        assert_shows(&screen, &["new file n.txt", "+line 1"]);
+        state.note_layout(layout);
+        state.on_key(KeyEvent::new(KeyCode::End, KeyModifiers::NONE));
+        assert_shows(&draw(&state, 80, 24), &["+line 100"]);
+    }
+
+    #[test]
+    fn help_lists_the_keys() {
+        let mut state = ready();
+        state.on_key(KeyEvent::new(KeyCode::Char('?'), KeyModifiers::NONE));
+        assert_shows(
+            &draw(&state, 100, 30),
+            &[
+                "Keys",
+                "shift+enter",
+                "ctrl+c",
+                "approve this action",
+                "esc close help",
+            ],
+        );
+    }
+
+    #[test]
+    fn overlays_fit_the_minimum_terminal() {
+        let mut state = ready();
+        let request = approval(r#"{"kind":"command","command":"npm test"}"#);
+        feed(&mut state, &[request.as_str()]);
+        assert_shows(&draw(&state, 40, 10), &["$ npm test"]);
+        state.overlay = Some(crate::live_state::Overlay::Help { scroll: 0 });
+        assert_shows(&draw(&state, 40, 10), &["Keys"]);
     }
 }
