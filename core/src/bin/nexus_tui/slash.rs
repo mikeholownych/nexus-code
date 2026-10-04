@@ -55,7 +55,8 @@ fn takes_text_body(name: &str) -> bool {
     matches!(name, "commit" | "tdd" | "team" | "image")
 }
 
-/// Catalogue entries whose name starts with the typed `/prefix`. Empty unless the draft is a single `/word`.
+/// Catalogue entries whose name starts with the typed `/prefix`, an exact name first. Empty unless the draft
+/// is a single `/word`.
 pub fn matches<'a>(commands: &'a [SlashSpec], draft: &str) -> Vec<&'a SlashSpec> {
     let Some(typed) = draft.strip_prefix('/') else {
         return Vec::new();
@@ -64,10 +65,12 @@ pub fn matches<'a>(commands: &'a [SlashSpec], draft: &str) -> Vec<&'a SlashSpec>
         return Vec::new();
     }
     let typed = typed.to_lowercase();
-    commands
+    let mut found: Vec<&SlashSpec> = commands
         .iter()
         .filter(|spec| spec.name.starts_with(&typed))
-        .collect()
+        .collect();
+    found.sort_by_key(|spec| spec.name != typed);
+    found
 }
 
 /// True when the usage has a required `<argument>` outside `[optional]` brackets.
@@ -158,6 +161,12 @@ mod tests {
         assert!(matches(&commands, "/x").is_empty());
         assert!(matches(&commands, "diff").is_empty());
         assert!(matches(&commands, "/etc/").is_empty());
+        let commands = catalogue(&["skills", "skill", "sessions"]);
+        assert_eq!(names(matches(&commands, "/skill")), vec!["skill", "skills"]);
+        assert_eq!(
+            names(matches(&commands, "/s")),
+            vec!["skills", "skill", "sessions"]
+        );
     }
 
     #[test]

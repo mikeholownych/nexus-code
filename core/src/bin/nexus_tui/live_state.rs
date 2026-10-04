@@ -657,7 +657,7 @@ impl LiveState {
             KeyCode::Down => self.slash_pick = (pick + 1) % count,
             KeyCode::Esc => self.slash_dismissed = true,
             KeyCode::Tab => self.complete(&chosen.name),
-            KeyCode::Enter if key.modifiers.is_empty() => {
+            KeyCode::Enter if key.modifiers.is_empty() && !self.session.busy => {
                 self.complete(&chosen.name);
                 if slash::needs_args(&chosen.usage) {
                     return Some(None);
@@ -1680,6 +1680,16 @@ mod tests {
             state.transcript.last(),
             Some(&Entry::Info("Resumed session a (4 messages).".into()))
         );
+    }
+
+    #[test]
+    fn enter_on_the_list_while_busy_leaves_the_draft_alone() {
+        let mut state = ready();
+        state.apply(hello_with(&[("clear", "/clear"), ("diff", "/diff")]));
+        state.session.busy = true;
+        type_text(&mut state, "/c");
+        assert_eq!(state.on_key(key(KeyCode::Enter)), None);
+        assert_eq!(state.composer, "/c");
     }
 
     #[test]
