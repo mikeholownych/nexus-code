@@ -18,7 +18,7 @@ pub enum Invocation {
 /// `/etc/hosts is wrong`.
 pub fn parse(draft: &str) -> Option<Invocation> {
     let text = draft.trim();
-    let multiline = text.contains('\n');
+    let multiline = draft.trim_end().contains('\n');
     if let Some(rest) = text.strip_prefix('!') {
         if multiline {
             return None;
@@ -35,7 +35,7 @@ pub fn parse(draft: &str) -> Option<Invocation> {
         return None;
     }
     let name = name.to_lowercase();
-    if multiline && matches!(name.as_str(), "exit" | "quit" | "q" | "help" | "?" | "tui") {
+    if multiline && matches!(name.as_str(), "exit" | "quit" | "q" | "help" | "?" | "tui" | "!") {
         return None;
     }
     Some(match name.as_str() {
@@ -127,6 +127,10 @@ mod tests {
         assert_eq!(parse("/help\nwhy does this fail?"), None);
         assert_eq!(parse("!ls\nrm -rf build"), None);
         assert_eq!(parse("fix it\n/exit\nthen test"), None);
+        assert_eq!(parse("/! ls\nrm -rf build"), None);
+        assert_eq!(parse("\n/exit"), None);
+        assert_eq!(parse("\n\n!rm -rf build\n"), None);
+        assert_eq!(parse("/help\r\n"), Some(Invocation::Help));
     }
 
     #[test]
