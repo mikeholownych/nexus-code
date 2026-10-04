@@ -629,9 +629,12 @@ impl LiveState {
     }
 
     /// Slash commands matching the draft while it is a bare `/word` with the cursor at its end, and the
-    /// highlighted row.
+    /// highlighted row. Hidden while the agent is busy, so Esc cancels the turn and Enter cannot run a pick.
     pub fn completion(&self) -> Option<(Vec<&SlashSpec>, usize)> {
         if self.slash_dismissed
+            || self.link != Link::Ready
+            || self.closing
+            || self.session.busy
             || self.overlay.is_some()
             || self.focus != Focus::Composer
             || !self.composer.at_end()
@@ -657,7 +660,7 @@ impl LiveState {
             KeyCode::Down => self.slash_pick = (pick + 1) % count,
             KeyCode::Esc => self.slash_dismissed = true,
             KeyCode::Tab => self.complete(&chosen.name),
-            KeyCode::Enter if key.modifiers.is_empty() && !self.session.busy => {
+            KeyCode::Enter if key.modifiers.is_empty() => {
                 self.complete(&chosen.name);
                 if slash::needs_args(&chosen.usage) {
                     return Some(None);
@@ -1683,13 +1686,25 @@ mod tests {
     }
 
     #[test]
-    fn enter_on_the_list_while_busy_leaves_the_draft_alone() {
+    fn the_list_hides_while_busy_or_crashed_and_esc_still_cancels() {
         let mut state = ready();
         state.apply(hello_with(&[("clear", "/clear"), ("diff", "/diff")]));
-        state.session.busy = true;
         type_text(&mut state, "/c");
+        assert!(state.completion().is_some());
+        state.session.busy = true;
+        assert!(state.completion().is_none());
+        assert_eq!(
+            state.on_key(key(KeyCode::Esc)),
+            Some(Action::Send(Command::Cancel))
+        );
         assert_eq!(state.on_key(key(KeyCode::Enter)), None);
         assert_eq!(state.composer, "/c");
+        state.session.busy = false;
+        state.closing = true;
+        assert!(state.completion().is_none());
+        state.closing = false;
+        state.fail("gone".into(), None, Vec::new());
+        assert!(state.completion().is_none());
     }
 
     #[test]
