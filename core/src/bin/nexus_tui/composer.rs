@@ -50,6 +50,7 @@ impl Composer {
         self.text.is_empty()
     }
 
+    #[cfg(test)]
     pub fn cursor(&self) -> usize {
         self.cursor
     }

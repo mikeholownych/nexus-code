@@ -4,22 +4,54 @@ use std::{
     error::Error,
     io::{self, IsTerminal, Write},
     path::PathBuf,
-    sync::mpsc,
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        mpsc,
+    },
     time::Duration,
 };
 
 use crossterm::{
-    event::{self, DisableBracketedPaste, EnableBracketedPaste, Event as TermEvent, KeyEventKind},
-    execute,
+    event::{
+        self, DisableBracketedPaste, EnableBracketedPaste, Event as TermEvent, KeyEventKind,
+        KeyboardEnhancementFlags, PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
+    },
+    execute, terminal,
 };
 
-use crate::live_state::{Action, Link, LiveState};
+use crate::live_state::{Action, Link, LiveLayout, LiveState};
 use crate::live_view::render_live;
 use crate::sidecar::{Sidecar, SidecarMsg, SidecarSpec};
 
 const SHUTDOWN_GRACE: Duration = Duration::from_secs(3);
 const EXIT_GRACE: Duration = Duration::from_secs(2);
 const INPUT_POLL: Duration = Duration::from_millis(30);
+
+static STOP: AtomicBool = AtomicBool::new(false);
+
+#[cfg(unix)]
+extern "C" fn request_stop(_signal: libc::c_int) {
+    STOP.store(true, Ordering::SeqCst);
+}
+
+/// SIGTERM and SIGHUP (terminal closed) end the session like `q`: the sidecar is shut down and the terminal
+/// restored by the normal exit path.
+#[cfg(unix)]
+fn install_stop_signals() {
+    for signal in [libc::SIGTERM, libc::SIGHUP] {
+        // SAFETY: the handler only stores to an atomic, which is async-signal-safe.
+        unsafe {
+            libc::signal(signal, request_stop as *const () as libc::sighandler_t);
+        }
+    }
+}
+
+#[cfg(not(unix))]
+fn install_stop_signals() {}
+
+fn stop_requested() -> bool {
+    STOP.swap(false, Ordering::SeqCst)
+}
 
 pub const LIVE_USAGE: &str =
     "usage: nexus-tui --live [--sidecar PATH] [--node BIN] [-- SIDECAR_ARGS...]";
@@ -197,24 +229,47 @@ impl LiveApp {
 }
 
 /// Restores the terminal on every exit path. ratatui's panic hook restores raw mode and the alternate screen
-/// but not bracketed paste, so the paste mode is undone here, during unwinding as well.
-struct TerminalGuard;
+/// but not bracketed paste or the keyboard protocol, so those are undone here, during unwinding as well.
+struct TerminalGuard {
+    keyboard_protocol: bool,
+}
 
 impl Drop for TerminalGuard {
     fn drop(&mut self) {
+        if self.keyboard_protocol {
+            let _ = execute!(io::stdout(), PopKeyboardEnhancementFlags);
+        }
         let _ = execute!(io::stdout(), DisableBracketedPaste);
         ratatui::restore();
     }
 }
 
 pub fn run_live(spec: SidecarSpec) -> Result<(), Box<dyn std::error::Error>> {
-    let _guard = TerminalGuard;
+    install_stop_signals();
+    let mut guard = TerminalGuard {
+        keyboard_protocol: false,
+    };
     let mut terminal = ratatui::try_init()?;
     execute!(io::stdout(), EnableBracketedPaste)?;
+    // Lets Shift+Enter arrive as its own key on terminals that speak the kitty keyboard protocol.
+    if terminal::supports_keyboard_enhancement().unwrap_or(false) {
+        execute!(
+            io::stdout(),
+            PushKeyboardEnhancementFlags(KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES)
+        )?;
+        guard.keyboard_protocol = true;
+    }
     let mut app = LiveApp::start(spec);
     let result = event_loop(&mut terminal, &mut app);
     app.handle(Action::Quit);
     result
+}
+
+fn draw(terminal: &mut ratatui::DefaultTerminal, app: &mut LiveApp) -> io::Result<()> {
+    let mut layout = LiveLayout::default();
+    terminal.draw(|frame| layout = render_live(frame, &app.state))?;
+    app.state.note_layout(layout);
+    Ok(())
 }
 
 fn event_loop(
@@ -223,11 +278,14 @@ fn event_loop(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let mut redraw = true;
     loop {
+        if stop_requested() {
+            app.state.closing = true;
+            draw(terminal, app)?;
+            return Ok(());
+        }
         redraw |= app.pump();
         if redraw {
-            terminal.draw(|frame| {
-                render_live(frame, &app.state);
-            })?;
+            draw(terminal, app)?;
             redraw = false;
         }
         if !event::poll(INPUT_POLL)? {
@@ -243,9 +301,14 @@ fn event_loop(
             _ => continue,
         };
         redraw = true;
-        if let Some(action) = action
-            && !app.handle(action)
-        {
+        let Some(action) = action else {
+            continue;
+        };
+        if action == Action::Quit {
+            app.state.closing = true;
+            draw(terminal, app)?;
+        }
+        if !app.handle(action) {
             return Ok(());
         }
     }
@@ -254,7 +317,7 @@ fn event_loop(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::live_state::Entry;
+    use crate::live_state::{Entry, Overlay, Verdict};
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
     use std::time::Instant;
 
@@ -323,6 +386,73 @@ case "$shutdown" in *'"type":"shutdown"'*) exit 0;; *) exit 8;; esac"#
             .on_key(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL));
         assert_eq!(quit, Some(Action::Quit));
         assert!(!app.handle(quit.unwrap()));
+    }
+
+    #[test]
+    fn an_approval_round_trips_through_the_sidecar() {
+        let script = format!(
+            r#"{HELLO}
+read prompt
+echo '{{"v":1,"type":"session.state","workspace":"/w","workspace_name":"w","model":"m","mode":"review","git":null,"busy":true}}'
+echo '{{"v":1,"type":"approval.request","id":"approval-1","turn_id":"t1","tool":"write_file","subject":"x.txt","preview":"{{}}","review":{{"kind":"change","path":"x.txt","before":null,"after":"hi","created":true,"truncated":false}}}}'
+read answer
+case "$answer" in *'"type":"approve"'*) ;; *) exit 7;; esac
+case "$answer" in *'"id":"approval-1"'*) ;; *) exit 7;; esac
+case "$answer" in *'"always":false'*) ;; *) exit 7;; esac
+echo '{{"v":1,"type":"turn.result","turn_id":"t1","heading":"TURN ENDED - UNVERIFIED","line":"x.txt written","turn":{{"execution":"COMPLETED","outcome":"UNVERIFIED"}},"model_summary":null}}'
+echo '{{"v":1,"type":"session.state","workspace":"/w","workspace_name":"w","model":"m","mode":"review","git":null,"busy":false}}'
+read shutdown
+exit 0"#
+        );
+        let mut app = LiveApp::start(fake_sidecar(&script));
+        pump_until(&mut app, |s| {
+            s.link == Link::Ready && s.session.model == "m"
+        });
+        for code in [KeyCode::Char('g'), KeyCode::Char('o'), KeyCode::Enter] {
+            if let Some(action) = app.state.on_key(KeyEvent::new(code, KeyModifiers::NONE)) {
+                assert!(app.handle(action));
+            }
+        }
+        pump_until(&mut app, |s| {
+            matches!(s.overlay, Some(Overlay::Approval(_)))
+        });
+        let approve = app
+            .state
+            .on_key(KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE))
+            .unwrap();
+        assert!(app.handle(approve));
+        pump_until(&mut app, |s| {
+            !s.session.busy
+                && s.transcript
+                    .iter()
+                    .any(|e| matches!(e, Entry::Banner { .. }))
+        });
+        assert_eq!(
+            app.state.link,
+            Link::Ready,
+            "the fake exits 7 on a wrong answer"
+        );
+        assert!(app.state.transcript.iter().any(|e| matches!(
+            e,
+            Entry::Decision {
+                verdict: Verdict::Approved,
+                ..
+            }
+        )));
+        assert!(!app.handle(Action::Quit));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn sigterm_requests_a_clean_stop_once() {
+        install_stop_signals();
+        assert!(!stop_requested());
+        // SAFETY: the handler installed above only stores to an atomic.
+        unsafe {
+            libc::raise(libc::SIGTERM);
+        }
+        assert!(stop_requested());
+        assert!(!stop_requested(), "the request is consumed");
     }
 
     #[test]
