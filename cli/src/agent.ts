@@ -68,6 +68,13 @@ import pc from "picocolors";
 
 export type ConfirmHandler = (toolName: string, args: Record<string, any>) => Promise<boolean>;
 
+/** Structured projection of turn activity for non-terminal surfaces such as the TUI sidecar. Observers must not throw. */
+export interface AgentObserver {
+  onAssistantDelta?(text: string): void;
+  onToolStart?(event: { callId: string; tool: string; args: Record<string, any> }): void;
+  onToolEnd?(event: { callId: string; tool: string; success: boolean; output: string; error?: string }): void;
+}
+
 export class ContextBudgetError extends Error {
   constructor(
     public readonly estimatedTokens: number,
@@ -264,6 +271,7 @@ export class AutonomousAgent {
   };
   private lastTurnResult?: TurnResult;
   private completionSummary?: { summary: string; notes?: string };
+  private observer?: AgentObserver;
   private verifiedWorktreeCompletion: boolean = false;
   private worktreeRunTurnAuthorized: boolean = false;
   private managedWorktreeWorkspaceSwitch: boolean = false;
@@ -790,6 +798,14 @@ export class AutonomousAgent {
 
   public getUi(): TerminalUI {
     return this.ui;
+  }
+
+  public setObserver(observer: AgentObserver | undefined): void {
+    this.observer = observer;
+  }
+
+  public getCompletionSummary(): { summary: string; notes?: string } | undefined {
+    return this.completionSummary;
   }
 
   public getConfig(): HarnessConfig {
@@ -1696,6 +1712,7 @@ Always explain your reasoning before or alongside your tool calls.`;
     }
 
     this.ui.printToolCall(toolName, args);
+    this.observer?.onToolStart?.({ callId: call.id, tool: toolName, args });
 
     if (
       onConfirm &&
@@ -1738,6 +1755,7 @@ Always explain your reasoning before or alongside your tool calls.`;
             "Rejected by user"
           );
         }
+        this.observer?.onToolEnd?.({ callId: call.id, tool: toolName, success: false, output: "", error: cancelMsg });
         return { receipt, shouldExit: false };
       }
     }
@@ -1860,6 +1878,7 @@ Always explain your reasoning before or alongside your tool calls.`;
       receipt.output,
       receipt.error
     );
+    this.observer?.onToolEnd?.({ callId: call.id, tool: toolName, success: receipt.success, output: receipt.output, error: receipt.error });
 
     const shouldExit = toolName === "task_completed" && receipt.success;
     return { receipt, shouldExit };
@@ -2014,6 +2033,7 @@ Always explain your reasoning before or alongside your tool calls.`;
                 streamedTokens = true;
               }
               process.stdout.write(token);
+              this.observer?.onAssistantDelta?.(token);
             },
             requestId,
             signal,
