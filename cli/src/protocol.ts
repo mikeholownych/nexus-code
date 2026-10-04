@@ -50,8 +50,12 @@ export class ProtocolError extends Error {
   }
 }
 
+const LONE_SURROGATE = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g;
+
+/** Truncation can split a surrogate pair; a lone surrogate would serialize as JSON the client cannot decode. */
 export function encodeEvent(event: SidecarEvent): string {
-  return JSON.stringify({ v: PROTOCOL_VERSION, ...event }) + "\n";
+  const wellFormed = (_key: string, value: unknown) => (typeof value === "string" ? value.replace(LONE_SURROGATE, "\uFFFD") : value);
+  return JSON.stringify({ v: PROTOCOL_VERSION, ...event }, wellFormed) + "\n";
 }
 
 export function parseCommand(line: string): SidecarCommand {
@@ -100,9 +104,16 @@ export function capText(text: string, max: number = MAX_TEXT_FIELD): string {
   return `${text.slice(0, max)}…[truncated ${text.length - max} chars]`;
 }
 
+/** CSI sequences, OSC sequences (BEL or ST terminated), then the remaining two-character escapes. */
+const TERMINAL_ESCAPE = /\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b[ -/]*[0-~]/g;
+
+function stripEscapes(text: string): string {
+  return text.replace(TERMINAL_ESCAPE, "");
+}
+
 export function toolSubject(args: Record<string, any>): string {
   const subject = args.path ?? args.file_path ?? args.command ?? args.url ?? args.query ?? args.name ?? "";
-  return redactSecrets(String(subject)).replace(/\s+/g, " ").trim().slice(0, 200);
+  return redactSecrets(stripEscapes(String(subject))).replace(/\s+/g, " ").trim().slice(0, 200);
 }
 
 /** Copy of a turn with secrets redacted from its free-text fields; enums, counts, ids and hashes are left as-is. */
@@ -118,7 +129,7 @@ export function projectTurn(turn: TurnResult): TurnResult {
 }
 
 export function toolSummary(success: boolean, output: string, error?: string): { summary: string; lines: number } {
-  const text = redactSecrets(success ? output || "" : error || output || "").trim();
+  const text = redactSecrets(stripEscapes(success ? output || "" : error || output || "")).trim();
   const first = text.split(/\r?\n/).find((line) => line.trim())?.trim() ?? (success ? "Completed" : "Tool failed");
   return { summary: first.replace(/\s+/g, " ").slice(0, MAX_SUMMARY), lines: text ? text.split(/\r?\n/).length : 0 };
 }

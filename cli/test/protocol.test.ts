@@ -10,6 +10,22 @@ describe("protocol: encodeEvent", () => {
     assert.equal(line.indexOf("\n"), line.length - 1);
     assert.deepEqual(JSON.parse(line), { v: 1, type: "assistant.delta", turn_id: "t1", text: "hi" });
   });
+
+  test("never emits a lone UTF-16 surrogate, even when truncation splits an emoji", () => {
+    const lone = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/;
+    const { summary, lines } = toolSummary(true, "a" + "😀".repeat(200));
+    assert.ok(lone.test(summary), "the fixture must split a surrogate pair");
+    const line = encodeEvent({ type: "tool.end", turn_id: "t1", call_id: "c1", tool: "run_command", success: true, summary, lines });
+    assert.equal(/\\u[dD][89a-fA-F][0-9a-fA-F]{2}/.test(line), false, line);
+    const parsed = JSON.parse(line);
+    assert.equal(lone.test(parsed.summary), false);
+    assert.ok(parsed.summary.startsWith("a😀"));
+    assert.ok(parsed.summary.endsWith("\uFFFD"));
+    const subject = toolSubject({ command: "😀".repeat(150) });
+    const start = JSON.parse(encodeEvent({ type: "tool.start", turn_id: "t1", call_id: "c2", tool: "run_command", subject }));
+    assert.equal(lone.test(start.subject), false);
+    assert.equal(JSON.parse(encodeEvent({ type: "assistant.delta", turn_id: "t1", text: "x\uDE00y😀" })).text, "x\uFFFDy😀");
+  });
 });
 
 describe("protocol: parseCommand", () => {
@@ -52,6 +68,14 @@ describe("protocol: projection helpers", () => {
     assert.deepEqual(toolSummary(true, "\nfirst line\nsecond\n"), { summary: "first line", lines: 2 });
     assert.deepEqual(toolSummary(true, ""), { summary: "Completed", lines: 0 });
     assert.deepEqual(toolSummary(false, "", "boom happened"), { summary: "boom happened", lines: 1 });
+  });
+
+  test("tool summaries and subjects drop terminal escape sequences", () => {
+    assert.equal(toolSummary(false, "\x1b[31mFAIL\x1b[39m src/a.test.ts\n").summary, "FAIL src/a.test.ts");
+    assert.equal(toolSummary(true, "\x1b]8;;https://x.test\x07link\x1b]8;;\x07 done").summary, "link done");
+    assert.equal(toolSubject({ command: "echo \x1b[1;32mok\x1b[0m\x1bc" }), "echo ok");
+    const colored = "\x1b[32m" + "y".repeat(300) + "\x1b[0m";
+    assert.equal(toolSummary(true, colored).summary, "y".repeat(160));
   });
 
   test("projectTurn redacts every free-text field and leaves the rest intact", () => {
