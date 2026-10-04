@@ -2,9 +2,11 @@ import { test, describe } from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
+import { spawn } from "node:child_process";
+import { fileURLToPath } from "node:url";
 import { ApplicationCore } from "../src/core/app.js";
 import { SidecarServer } from "../src/sidecar.js";
-import { startGateway, makeRepo, waitForEvent, Reply } from "./helpers/fixtures.js";
+import { startGateway, makeRepo, makeHome, waitForEvent, waitUntil, Reply } from "./helpers/fixtures.js";
 
 interface Rig {
   server: SidecarServer;
@@ -225,5 +227,65 @@ describe("SidecarServer: slash and shutdown", () => {
       await send({ type: "shutdown" });
       assert.equal(shutdowns, 1);
     }, () => shutdowns++);
+  });
+});
+
+const cliRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const sidecarSrc = path.join(cliRoot, "src", "sidecar.ts");
+
+function spawnSidecar(gwUrl: string, repo: string, home: string) {
+  const child = spawn(process.execPath, ["--import", "tsx", sidecarSrc, "-w", repo, "-e", gwUrl, "-m", "m"], {
+    cwd: cliRoot,
+    env: { ...process.env, HOME: home, NEXUS_DEBUG: "0" },
+  });
+  let stdout = "";
+  let stderr = "";
+  child.stdout.on("data", (d) => (stdout += d.toString()));
+  child.stderr.on("data", (d) => (stderr += d.toString()));
+  const exited = new Promise<number | null>((resolve) => child.on("exit", (code) => resolve(code)));
+  return { child, exited, lines: () => stdout.split("\n").filter(Boolean), stderr: () => stderr };
+}
+
+describe("sidecar process", () => {
+  test("stdout carries only NDJSON protocol lines across a full turn", async () => {
+    const gw = await startGateway(readOnlyTurn);
+    const repo = makeRepo();
+    const home = makeHome();
+    const proc = spawnSidecar(gw.url, repo, home);
+    try {
+      await waitUntil(() => proc.lines().some((l) => l.includes('"type":"hello"')), 20000);
+      proc.child.stdin.write(JSON.stringify({ v: 1, type: "prompt.submit", id: "t1", text: "what is here?" }) + "\n");
+      await waitUntil(() => proc.lines().some((l) => l.includes('"type":"turn.result"')), 30000);
+      proc.child.stdin.write(JSON.stringify({ v: 1, type: "shutdown" }) + "\n");
+      assert.equal(await proc.exited, 0, proc.stderr());
+      const messages = proc.lines().map((l) => JSON.parse(l));
+      for (const m of messages) {
+        assert.equal(m.v, 1);
+        assert.equal(typeof m.type, "string");
+      }
+      assert.equal(messages.find((m) => m.type === "turn.result").turn.outcome, "NOT_REQUIRED");
+    } finally {
+      proc.child.kill("SIGKILL");
+      await gw.close();
+      fs.rmSync(repo, { recursive: true, force: true });
+      fs.rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  test("closing stdin shuts the sidecar down cleanly", async () => {
+    const gw = await startGateway(readOnlyTurn);
+    const repo = makeRepo();
+    const home = makeHome();
+    const proc = spawnSidecar(gw.url, repo, home);
+    try {
+      await waitUntil(() => proc.lines().some((l) => l.includes('"type":"hello"')), 20000);
+      proc.child.stdin.end();
+      assert.equal(await proc.exited, 0, proc.stderr());
+    } finally {
+      proc.child.kill("SIGKILL");
+      await gw.close();
+      fs.rmSync(repo, { recursive: true, force: true });
+      fs.rmSync(home, { recursive: true, force: true });
+    }
   });
 });

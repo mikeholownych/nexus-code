@@ -1,4 +1,8 @@
 import * as path from "node:path";
+import * as readline from "node:readline";
+import { fileURLToPath } from "node:url";
+import { Command } from "commander";
+import { autoDetectModel, buildConfig, loadEnvironment } from "./config.js";
 import { ApplicationCore } from "./core/app.js";
 import { TurnResult, failedTurnFromError, summarizeTurn } from "./core/turn.js";
 import { getGitInfo } from "./git.js";
@@ -199,4 +203,66 @@ export class SidecarServer {
   private emit(event: SidecarEvent): void {
     this.write(encodeEvent(event));
   }
+}
+
+/**
+ * Process entry point. Stdout is reserved for protocol lines: the real writer is captured first, then every
+ * other stdout write (agent banners, spinners, console.log) is dropped, or sent to stderr with NEXUS_DEBUG=1.
+ */
+async function main(argv: string[]): Promise<void> {
+  const protocolWrite = process.stdout.write.bind(process.stdout);
+  const debug = process.env.NEXUS_DEBUG === "1";
+  (process.stdout as any).write = (chunk: unknown, encoding?: unknown, cb?: unknown): boolean => {
+    if (debug) process.stderr.write(typeof chunk === "string" ? chunk : Buffer.from(chunk as Uint8Array));
+    const done = typeof encoding === "function" ? encoding : cb;
+    if (typeof done === "function") (done as () => void)();
+    return true;
+  };
+  const toStderr = (...args: unknown[]): void => {
+    if (debug) process.stderr.write(args.map((a) => (typeof a === "string" ? a : JSON.stringify(a))).join(" ") + "\n");
+  };
+  console.log = toStderr;
+  console.info = toStderr;
+  console.warn = toStderr;
+  console.debug = toStderr;
+
+  loadEnvironment();
+  const program = new Command()
+    .name("nexus-sidecar")
+    .option("-e, --endpoint <url>", "Local LLM endpoint")
+    .option("-m, --model <name>", "Model name")
+    .option("-w, --workspace <path>", "Workspace directory")
+    .option("-s, --max-steps <number>", "Maximum steps per turn")
+    .option("--shell <type>", "Shell for commands", "bash")
+    .option("--approve", "Require operator approval before edits and shell commands")
+    .parse(argv);
+  const options = program.opts();
+  const config = await autoDetectModel(buildConfig(options));
+  const app = new ApplicationCore(config);
+  const server = new SidecarServer({
+    app,
+    mode: options.approve ? "review" : "auto",
+    write: (line) => {
+      protocolWrite(line);
+    },
+    onShutdown: () => process.exit(0),
+  });
+
+  const report = (err: unknown) => process.stderr.write(`nexus sidecar: ${err instanceof Error ? err.message : String(err)}\n`);
+  const input = readline.createInterface({ input: process.stdin, crlfDelay: Infinity });
+  input.on("line", (line) => {
+    server.handleLine(line).catch(report);
+  });
+  input.on("close", () => {
+    server.handleLine(JSON.stringify({ v: PROTOCOL_VERSION, type: "shutdown" })).catch(report);
+  });
+  server.start();
+}
+
+const entry = process.argv[1] ? path.resolve(process.argv[1]) : "";
+if (entry === fileURLToPath(import.meta.url)) {
+  main(process.argv).catch((err) => {
+    process.stderr.write(`nexus sidecar failed to start: ${err instanceof Error ? err.message : String(err)}\n`);
+    process.exit(1);
+  });
 }
