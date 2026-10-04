@@ -18,6 +18,14 @@ pub struct ModelSummary {
     pub notes: Option<String>,
 }
 
+/// One entry of the slash-command catalogue the sidecar announces in `hello`.
+#[derive(Clone, Debug, Deserialize, PartialEq)]
+pub struct SlashSpec {
+    pub name: String,
+    pub usage: String,
+    pub summary: String,
+}
+
 /// What the operator is asked to approve (`approvalReview` in `cli/src/approval_review.ts`). Text is already
 /// redacted and capped by the sidecar.
 #[derive(Clone, Debug, Deserialize, PartialEq)]
@@ -51,7 +59,11 @@ pub enum Review {
 #[serde(tag = "type")]
 pub enum Event {
     #[serde(rename = "hello")]
-    Hello { protocol: u64 },
+    Hello {
+        protocol: u64,
+        #[serde(default)]
+        commands: Vec<SlashSpec>,
+    },
     #[serde(rename = "session.state")]
     SessionState {
         workspace_name: String,
@@ -90,6 +102,22 @@ pub enum Event {
         turn: Value,
         model_summary: Option<ModelSummary>,
     },
+    #[serde(rename = "slash.result")]
+    SlashResult {
+        id: String,
+        command: String,
+        success: bool,
+        output: String,
+        #[serde(default)]
+        format: Option<String>,
+        #[serde(default)]
+        composer: Option<String>,
+        /// Set when the command started a turn with this prompt; the turn's events follow under the same id.
+        #[serde(default)]
+        prompt: Option<String>,
+    },
+    #[serde(rename = "notice")]
+    Notice { text: String },
     #[serde(rename = "error")]
     Error {
         #[serde(default)]
@@ -97,7 +125,7 @@ pub enum Event {
         code: String,
         message: String,
     },
-    /// Event types this client does not render yet, such as `slash.result`.
+    /// Event types newer than this client.
     #[serde(other)]
     Unknown,
 }
@@ -114,6 +142,12 @@ pub enum Command {
     Approve { id: String, always: bool },
     #[serde(rename = "deny")]
     Deny { id: String },
+    #[serde(rename = "slash")]
+    Slash {
+        id: String,
+        command: String,
+        args: String,
+    },
     #[serde(rename = "shutdown")]
     Shutdown,
 }
@@ -184,7 +218,10 @@ mod tests {
     fn parses_every_rendered_event_type() {
         assert_eq!(
             parse_event(r#"{"v":1,"type":"hello","protocol":1,"pid":42}"#),
-            Ok(Event::Hello { protocol: 1 })
+            Ok(Event::Hello {
+                protocol: 1,
+                commands: Vec::new()
+            })
         );
         assert_eq!(
             parse_event(
@@ -311,10 +348,49 @@ mod tests {
     #[test]
     fn unknown_event_types_are_tolerated() {
         assert_eq!(
-            parse_event(
-                r#"{"v":1,"type":"slash.result","id":"s1","command":"status","success":true,"output":"{}"}"#
-            ),
+            parse_event(r#"{"v":1,"type":"future.event","x":1}"#),
             Ok(Event::Unknown)
+        );
+    }
+
+    #[test]
+    fn hello_carries_the_catalogue_and_slash_results_and_notices_parse() {
+        assert_eq!(
+            parse_event(
+                r#"{"v":1,"type":"hello","protocol":1,"pid":1,"commands":[{"name":"diff","usage":"/diff","summary":"Uncommitted changes as a diff"}]}"#
+            ),
+            Ok(Event::Hello {
+                protocol: 1,
+                commands: vec![SlashSpec {
+                    name: "diff".into(),
+                    usage: "/diff".into(),
+                    summary: "Uncommitted changes as a diff".into()
+                }]
+            })
+        );
+        assert_eq!(
+            parse_event(
+                r#"{"v":1,"type":"slash.result","id":"s1","command":"diff","success":true,"output":"-a\n+b","format":"diff"}"#
+            ),
+            Ok(Event::SlashResult {
+                id: "s1".into(),
+                command: "diff".into(),
+                success: true,
+                output: "-a\n+b".into(),
+                format: Some("diff".into()),
+                composer: None,
+                prompt: None,
+            })
+        );
+        assert!(matches!(
+            parse_event(r#"{"v":1,"type":"slash.result","id":"s2","command":"history","success":true,"output":"","prompt":"fix it"}"#),
+            Ok(Event::SlashResult { prompt: Some(ref prompt), .. }) if prompt == "fix it"
+        ));
+        assert_eq!(
+            parse_event(r#"{"v":1,"type":"notice","text":"Resumed session a (4 messages)."}"#),
+            Ok(Event::Notice {
+                text: "Resumed session a (4 messages).".into()
+            })
         );
     }
 
@@ -369,6 +445,14 @@ mod tests {
                     id: "approval-1".into(),
                 },
                 serde_json::json!({"v":1,"type":"deny","id":"approval-1"}),
+            ),
+            (
+                Command::Slash {
+                    id: "s1".into(),
+                    command: "diff".into(),
+                    args: String::new(),
+                },
+                serde_json::json!({"v":1,"type":"slash","id":"s1","command":"diff","args":""}),
             ),
         ] {
             let line = encode_command(&command);

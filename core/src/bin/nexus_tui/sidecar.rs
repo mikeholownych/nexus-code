@@ -278,7 +278,7 @@ mod tests {
         .unwrap();
         assert!(matches!(
             rx.recv_timeout(WAIT).unwrap(),
-            SidecarMsg::Event(Event::Hello { protocol: 1 })
+            SidecarMsg::Event(Event::Hello { protocol: 1, .. })
         ));
         assert!(matches!(
             rx.recv_timeout(WAIT).unwrap(),
@@ -510,7 +510,7 @@ echo '{"v":1,"type":"hello","protocol":1,"pid":7}'"#),
         let sidecar = Sidecar::spawn(&spec, tx).unwrap();
         assert!(matches!(
             rx.recv_timeout(Duration::from_secs(20)).unwrap(),
-            SidecarMsg::Event(Event::Hello { protocol: 1 })
+            SidecarMsg::Event(Event::Hello { protocol: 1, .. })
         ));
         match rx.recv_timeout(Duration::from_secs(20)).unwrap() {
             SidecarMsg::Event(Event::SessionState { model, busy, .. }) => {

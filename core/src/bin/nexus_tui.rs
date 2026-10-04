@@ -22,6 +22,8 @@ mod protocol;
 mod review;
 #[path = "nexus_tui/composer.rs"]
 mod composer;
+#[path = "nexus_tui/slash.rs"]
+mod slash;
 #[path = "nexus_tui/redact.rs"]
 mod redact;
 #[path = "nexus_tui/sidecar.rs"]

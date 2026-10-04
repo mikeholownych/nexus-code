@@ -5,7 +5,7 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use serde_json::Value;
 use std::time::{Duration, Instant};
 
-use crate::protocol::{Command, Event, PROTOCOL_VERSION, Review};
+use crate::protocol::{Command, Event, PROTOCOL_VERSION, Review, SlashSpec};
 use crate::review::{ReviewLine, review_lines};
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -147,6 +147,7 @@ pub struct LiveState {
     /// Quit was requested; the frame says so while the sidecar shuts down.
     pub closing: bool,
     layout: LiveLayout,
+    pub commands: Vec<SlashSpec>,
 }
 
 impl LiveState {
@@ -164,6 +165,7 @@ impl LiveState {
             scroll_back: 0,
             closing: false,
             layout: LiveLayout::default(),
+            commands: Vec::new(),
         }
     }
 
@@ -185,8 +187,11 @@ impl LiveState {
             return;
         }
         match event {
-            Event::Hello { protocol } if protocol == PROTOCOL_VERSION => self.link = Link::Ready,
-            Event::Hello { protocol } => self.fail(
+            Event::Hello { protocol, commands } if protocol == PROTOCOL_VERSION => {
+                self.commands = commands;
+                self.link = Link::Ready;
+            }
+            Event::Hello { protocol, .. } => self.fail(
                 format!("The agent sidecar speaks protocol {protocol}; this view needs protocol {PROTOCOL_VERSION}."),
                 None,
                 Vec::new(),
@@ -269,6 +274,7 @@ impl LiveState {
                 }
                 self.transcript.push(Entry::Notice(format!("{code}: {message}")));
             }
+            Event::SlashResult { .. } | Event::Notice { .. } => {}
             Event::Unknown => {}
         }
     }
@@ -1388,7 +1394,10 @@ mod tests {
     #[test]
     fn a_protocol_mismatch_fails_the_link() {
         let mut state = LiveState::new();
-        state.apply(Event::Hello { protocol: 2 });
+        state.apply(Event::Hello {
+            protocol: 2,
+            commands: Vec::new(),
+        });
         assert!(
             matches!(&state.link, Link::Crashed { reason, .. } if reason.contains("protocol 2"))
         );

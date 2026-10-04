@@ -128,6 +128,10 @@ impl Composer {
         self.cursor = self.current_line_end();
     }
 
+    pub fn at_end(&self) -> bool {
+        self.cursor == self.text.len()
+    }
+
     pub fn kill_to_line_start(&mut self) {
         let start = self.current_line_start();
         self.remove(start, self.cursor);
@@ -316,6 +320,16 @@ mod tests {
         let mut composer = Composer::default();
         composer.insert(text);
         composer
+    }
+
+    #[test]
+    fn at_end_follows_the_cursor() {
+        let mut composer = Composer::from("ab");
+        assert!(composer.at_end());
+        composer.left();
+        assert!(!composer.at_end());
+        composer.line_end();
+        assert!(composer.at_end());
     }
 
     #[test]
