@@ -1,4 +1,4 @@
-import { execSync } from "node:child_process";
+import { execFileSync, execSync } from "node:child_process";
 import * as path from "node:path";
 import * as fs from "node:fs";
 
@@ -154,8 +154,8 @@ export function generateConventionalCommit(workspace: string): { message: string
 
 export function commitChanges(workspace: string, message: string): { success: boolean; hash?: string; error?: string } {
   try {
-    execSync("git add -A", { cwd: workspace, stdio: ["pipe", "pipe", "pipe"] });
-    execSync(`git commit -m "${message.replace(/"/g, '\\"')}"`, {
+    execFileSync("git", ["add", "-A"], { cwd: workspace, stdio: ["pipe", "pipe", "pipe"] });
+    execFileSync("git", ["commit", "-m", message], {
       cwd: workspace,
       encoding: "utf-8",
       stdio: ["pipe", "pipe", "pipe"],
