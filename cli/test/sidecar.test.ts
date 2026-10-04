@@ -224,6 +224,20 @@ describe("SidecarServer: approvals", () => {
     });
   });
 
+  test("the approval preview redacts quoted secrets in arguments", async () => {
+    const envTurn = (n: number): Reply => n === 1
+      ? { kind: "tools", calls: [{ name: "write_file", args: { path: ".env", content: 'API_KEY="abcdef1234567890"\n' } }] }
+      : { kind: "text", content: "ok" };
+    await withSidecar(envTurn, "review", async ({ server, events, send }) => {
+      await send({ type: "prompt.submit", id: "t1", text: "write env" });
+      const req = await waitForEvent(events, (e) => e.type === "approval.request");
+      assert.ok(req.preview.includes(".env"));
+      assert.doesNotMatch(req.preview, /abcdef1234567890/);
+      await send({ type: "deny", id: req.id });
+      await server.idle();
+    });
+  });
+
   test("an unknown approval id is reported, not ignored", async () => {
     await withSidecar(writeTurn, "review", async ({ events, send }) => {
       await send({ type: "approve", id: "approval-999" });

@@ -13,6 +13,7 @@ import { TurnResult, failedTurnFromError, lifecycleStatusForTurn, summarizeTurn 
 import { getGitInfo } from "./git.js";
 import { redactSecrets } from "./ui.js";
 import { approvalReview } from "./approval_review.js";
+import { redactedJson } from "./evidence.js";
 import {
   MAX_SLASH_OUTPUT,
   PROTOCOL_VERSION,
@@ -238,7 +239,7 @@ export class SidecarServer {
         turn_id: turnId,
         tool,
         subject: toolSubject(args),
-        preview: capText(redactSecrets(JSON.stringify(args, null, 2))),
+        preview: capText(redactedJson(args)),
         review: approvalReview(tool, args, this.app.getConfig().workspace),
       });
     });

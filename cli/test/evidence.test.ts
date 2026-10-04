@@ -2,7 +2,7 @@ import { test, describe } from "node:test";
 import assert from "node:assert/strict";
 import type { ValidationReceipt } from "../src/core/candidate.js";
 import type { TurnResult } from "../src/core/turn.js";
-import { EvidenceLedger, MAX_DETAIL, receiptSections, receiptText } from "../src/evidence.js";
+import { EvidenceLedger, MAX_DETAIL, receiptSections, receiptText, redactedJson } from "../src/evidence.js";
 
 function clock(...times: number[]): () => number {
   return () => times.shift() ?? 0;
@@ -23,6 +23,17 @@ const verifiedTurn: TurnResult = {
 };
 
 describe("evidence ledger", () => {
+  test("quoted and escape-split secrets in arguments are redacted", () => {
+    const content = 'API_KEY="abcdef1234567890"\nkey: sk-abcdefgh\x1b[0mijklmnopqrstuvwxyz123456';
+    const ledger = new EvidenceLedger();
+    const args = ledger.get(ledger.start("t1", "write_file", ".env", { path: ".env", content }))!.args;
+    for (const text of [args, redactedJson({ path: ".env", content })]) {
+      assert.doesNotMatch(text, /abcdef1234567890/);
+      assert.doesNotMatch(text, /ijklmnopqrstuvwxyz123456/);
+      assert.match(text, /"path": "\.env"/);
+    }
+  });
+
   test("each call gets a new id and a running record that the end fills in", () => {
     const ledger = new EvidenceLedger(200, clock(1000, 1250, 2000));
     const first = ledger.start("t1", "read_file", "a.ts", { path: "a.ts" });

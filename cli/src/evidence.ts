@@ -25,6 +25,15 @@ export interface EvidenceRecord {
   durationMs: number | null;
 }
 
+/**
+ * Pretty JSON with each string value redacted before encoding: quoting turns `KEY="value"` into `KEY=\"value\"`
+ * and escapes into literal `\u001b`, both of which a pass over the encoded text misses.
+ */
+export function redactedJson(value: unknown): string {
+  const json = JSON.stringify(value ?? {}, (_key, v) => (typeof v === "string" ? redactSecrets(stripEscapes(v)) : v), 2);
+  return redactSecrets(json);
+}
+
 function clean(text: string): string {
   return capText(redactSecrets(stripEscapes(text)), MAX_DETAIL);
 }
@@ -46,7 +55,7 @@ export class EvidenceLedger {
       turnId,
       tool,
       subject,
-      args: clean(JSON.stringify(args ?? {}, null, 2)),
+      args: clean(redactedJson(args)),
       status: "running",
       output: "",
       startedAt: this.now(),

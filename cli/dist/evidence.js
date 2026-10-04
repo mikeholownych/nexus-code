@@ -2,6 +2,14 @@ import { capText, stripEscapes } from "./protocol.js";
 import { redactSecrets } from "./ui.js";
 export const MAX_DETAIL = 64_000;
 export const MAX_EVIDENCE = 200;
+/**
+ * Pretty JSON with each string value redacted before encoding: quoting turns `KEY="value"` into `KEY=\"value\"`
+ * and escapes into literal `\u001b`, both of which a pass over the encoded text misses.
+ */
+export function redactedJson(value) {
+    const json = JSON.stringify(value ?? {}, (_key, v) => (typeof v === "string" ? redactSecrets(stripEscapes(v)) : v), 2);
+    return redactSecrets(json);
+}
 function clean(text) {
     return capText(redactSecrets(stripEscapes(text)), MAX_DETAIL);
 }
@@ -22,7 +30,7 @@ export class EvidenceLedger {
             turnId,
             tool,
             subject,
-            args: clean(JSON.stringify(args ?? {}, null, 2)),
+            args: clean(redactedJson(args)),
             status: "running",
             output: "",
             startedAt: this.now(),

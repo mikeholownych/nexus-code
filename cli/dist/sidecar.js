@@ -12,6 +12,7 @@ import { failedTurnFromError, lifecycleStatusForTurn, summarizeTurn } from "./co
 import { getGitInfo } from "./git.js";
 import { redactSecrets } from "./ui.js";
 import { approvalReview } from "./approval_review.js";
+import { redactedJson } from "./evidence.js";
 import { MAX_SLASH_OUTPUT, PROTOCOL_VERSION, ProtocolError, capText, encodeEvent, parseCommand, projectTurn, stripEscapes, toolSubject, toolSummary, } from "./protocol.js";
 import { errorText, findSlash, slashCatalog } from "./slash/catalog.js";
 import { routeSlash } from "./slash/router.js";
@@ -211,7 +212,7 @@ export class SidecarServer {
                 turn_id: turnId,
                 tool,
                 subject: toolSubject(args),
-                preview: capText(redactSecrets(JSON.stringify(args, null, 2))),
+                preview: capText(redactedJson(args)),
                 review: approvalReview(tool, args, this.app.getConfig().workspace),
             });
         });
