@@ -1,0 +1,33 @@
+H 0.000000 START_TIME 2026-10-04 00:05:04+00:00
+H 0.000000 TERM dumb
+H 0.000000 TTY /dev/pts/3
+H 0.000000 COLUMNS 80
+H 0.000000 LINES 24
+H 0.000000 SHELL /usr/bin/zsh
+H 0.000000 COMMAND stty cols 100 rows 30; TERM=xterm-256color exec core/target/release/nexus-tui docs/reviews/evidence/nexus-ratatui-facelift-2026-10-03/session-fixture.json
+H 0.000000 TIMING_LOG docs/reviews/evidence/nexus-ratatui-facelift-2026-10-03/tui-session-100x30.timing
+H 0.000000 OUTPUT_LOG docs/reviews/evidence/nexus-ratatui-facelift-2026-10-03/tui-session-100x30.typescript
+H 0.000000 INPUT_LOG docs/reviews/evidence/nexus-ratatui-facelift-2026-10-03/tui-session-100x30.typescript
+O 0.009067 8
+O 0.000969 1024
+O 0.000043 692
+I 5.465502 2
+O 0.001009 354
+O 0.000746 946
+I 3.340715 1
+O 0.000925 725
+I 2.831331 1
+O 0.000954 1410
+I 4.237239 1
+O 0.000897 1024
+O 0.000052 139
+I 2.824122 1
+O 0.001017 1024
+O 0.000044 506
+I 5.866616 1
+O 0.001359 1024
+O 0.000028 251
+I 2.715139 1
+O 0.000917 33
+H 0.000000 DURATION 27.309376
+H 0.000000 EXIT_CODE 0

@@ -1,0 +1,58 @@
+
+╔════════════════════════════════════════════════════════════════╗
+║           NEXUS CODE HARNESS - CODEX / CLAUDE-CODE REPL        ║
+╚════════════════════════════════════════════════════════════════╝
+Type your prompt or task, or type /help for slash commands.
+
+Session Status:
+  • Workspace:   /tmp/nexus-ui-baseline-2026-10-03 (nexus-ui-baseline-2026-10-03)
+  • Model:       baseline-model
+  • Endpoint:    http://127.0.0.1:1
+  • Shell:       bash
+  • Mode:        auto (autonomous execution)
+  • Session ID:   session_20261003_232736_u4b5
+  • Context:     1 messages in memory
+
+nexus (baseline-model) nexus-ui-baseline-2026-10-03 ❯ 
+Available Slash Commands:
+  /help               Show this commands cheatsheet
+  /status             Show active model, workspace, endpoint, git badge
+  /clear              Reset conversation context memory
+  /compact            Condense earlier messages to free token budget
+  /mode [auto|review] Toggle autonomous execution vs human review approval
+  /diff               Show colored git diff of uncommitted changes
+  /stage [reset]       Inspect and stage individual diff hunks
+  /worktree [status|merge|discard] Manage isolated ephemeral git worktrees
+  /tdd <issue>         Execute strict RED-GREEN-REFACTOR TDD cycle
+  /knowledge [set|del] Manage persistent project knowledge graph
+  /browse <url>        Verify URL in headless browser driver
+  /git                Show current git status and modified files
+  /sessions           List past saved sessions
+  /save [name]        Save current session snapshot to ~/.nexus/sessions/
+  /resume [id]        Load a past session into memory
+  /skills             List discovered agent skills (SKILL.md)
+  /skill [init <name>|<name>] View or scaffold specialized skill
+  /mcp [add|resources|prompts] Manage MCP servers, tools, resources, and prompts
+  /plugins            List loaded custom plugins and lifecycle hooks
+  /team <role|full> <task> Multi-agent collaborative team orchestration
+  /image <path> [prompt] Ingest multi-modal image into vision model
+  /theme [name]       View or switch terminal color theme
+  /tui                Launch full-screen interactive TUI dashboard
+  /checkpoint [name]   Save rollback snapshot of current workspace
+  /checkpoint diff <id> Inspect diff of a checkpoint vs current or another
+  /checkpoint prune [n] Prune old checkpoints beyond retention limit
+  /checkpoints         List all saved workspace snapshots
+  /undo                Rollback workspace changes to last checkpoint
+  /audit [count]       View recent tool execution history and metrics
+  /export [md|json]    Export session transcript to file in workspace
+  /tokens             Show context message count and token usage
+  /init               Scaffold AGENTS.md rules file in workspace
+  /model [name]       View or switch loaded model
+  /shell [bash|zsh]   Switch Linux execution shell
+  /cd <path>          Change active workspace directory
+  /history [query|!n] Search history or re-execute item by index
+  /copy [diff|code|last] Copy diff, code blocks, or response to clipboard
+  /paste               Paste clipboard content into prompt
+  /commit [msg]       Generate or execute conventional git commit
+
+nexus (baseline-model) nexus-ui-baseline-2026-10-03 ❯ 

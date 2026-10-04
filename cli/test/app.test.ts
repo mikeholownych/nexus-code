@@ -153,13 +153,31 @@ describe("WP-10: Application Core & CLI/TUI Projection Convergence (INC-11, UI-0
     const dashboard = new TerminalDashboard(app);
     const snapshot = dashboard.renderSnapshot(100, 30);
 
-    assert.ok(snapshot.includes("NEXUS CODE FULL-SCREEN TUI DASHBOARD"));
+    assert.ok(snapshot.includes("NEXUS"));
     assert.ok(snapshot.includes("Discovery"), "Must project Phase 1 from ApplicationCore");
     assert.ok(snapshot.includes("Validation"), "Must project Phase 2 from ApplicationCore");
-    assert.ok(snapshot.includes(app.getTaskId()), "Must project Task ID from ApplicationCore");
+    assert.ok(snapshot.includes(`task ${app.getTaskId()}`), "Must project Task ID from ApplicationCore");
     assert.ok(snapshot.includes(candidate.candidateId.slice(0, 12)), "Must project Candidate ID");
     assert.ok(snapshot.includes("PASSED"), "Must project validation receipt status from ApplicationCore");
     assert.strictEqual(app.getActiveValidationReceipt()?.receiptId, receipt.receiptId, "ApplicationCore must expose active validation receipt");
+  });
+
+  test("Ratatui projection prioritizes objective and human activity summaries", () => {
+    const app = createApp();
+    const syntheticSecret = "sk-testpresentationcanary0123456789abcdef";
+    app.getAgent().setMessages([
+      { role: "user", content: `Map the auth flow ${syntheticSecret}` },
+      { role: "assistant", content: "", tool_calls: [{ id: "call-1", type: "function", function: { name: "read_file", arguments: JSON.stringify({ path: "src/auth/guard.ts" }) } }] },
+      { role: "tool", name: "read_file", content: `Authentication rejects a missing principal\napi_key=${syntheticSecret}` },
+      { role: "assistant", content: "The route enforces a principal before dispatch." },
+    ]);
+
+    const snapshot = new TerminalDashboard(app).renderSnapshot(100, 28);
+    assert.ok(snapshot.includes("OBJECTIVE  Map the auth flow"));
+    assert.ok(snapshot.includes("Reading file"));
+    assert.ok(snapshot.includes("Authentication rejects a missing principal"));
+    assert.ok(snapshot.includes("Model response"));
+    assert.equal(snapshot.includes(syntheticSecret), false, "TUI projection must redact sensitive values from view data");
   });
 
   test("UI-006: Unified slash commands via ApplicationCore", async () => {

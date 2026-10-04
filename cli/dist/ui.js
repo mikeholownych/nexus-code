@@ -1,7 +1,7 @@
 import pc from "picocolors";
 import ora from "ora";
 import { summarizeTurn } from "./core/turn.js";
-import { highlightDiff, highlightCode, highlightMarkdownCodeBlocks } from "./syntax.js";
+import { highlightDiff, highlightCode } from "./syntax.js";
 export function redactSecrets(text) {
     if (!text)
         return text;
@@ -14,18 +14,16 @@ export function redactSecrets(text) {
 export class TerminalUI {
     spinner = null;
     banner() {
-        console.log(pc.bold(pc.cyan("\n╔════════════════════════════════════════════════════════════════╗")));
-        console.log(pc.bold(pc.cyan("║           NEXUS CODE HARNESS - LOCAL AI AUTONOMOUS CLI        ║")));
-        console.log(pc.bold(pc.cyan("╚════════════════════════════════════════════════════════════════╝\n")));
+        console.log(`\n${pc.bold(pc.black(pc.bgCyan(" NEXUS ")))} ${pc.dim("local engineering agent")}`);
+        console.log(pc.dim("Understand the work. Inspect the evidence. Keep the decision yours.\n"));
     }
     stepHeader(step, maxSteps) {
-        console.log(pc.bgCyan(pc.black(` STEP ${step}/${maxSteps} `)) +
-            " " +
-            pc.gray("─".repeat(50)));
+        if (process.env.NEXUS_DEBUG === "1")
+            console.log(pc.dim(`\nwork step ${step}/${maxSteps}`));
     }
     startSpinner(text) {
         this.spinner = ora({
-            text: pc.yellow(text),
+            text: pc.cyan(this.humanActivity(text)),
             spinner: "dots",
             // ora's default stdin discarding puts stdin in raw mode and leaves readline paused afterwards,
             // which kills the REPL prompt after the first agent turn.
@@ -36,7 +34,7 @@ export class TerminalUI {
     }
     updateSpinner(text) {
         if (this.spinner) {
-            this.spinner.text = pc.yellow(text);
+            this.spinner.text = pc.cyan(this.humanActivity(text));
         }
     }
     stopSpinner(success = true, message) {
@@ -71,9 +69,9 @@ export class TerminalUI {
         console.log();
     }
     printThought(thought) {
-        if (!thought || !thought.trim())
+        if (process.env.NEXUS_DEBUG !== "1" || !thought || !thought.trim())
             return;
-        console.log(pc.bold(pc.magenta("\n💭 Thought:")));
+        console.log(pc.bold(pc.magenta("\nModel rationale (unverified):")));
         const sanitized = redactSecrets(thought.trim());
         const lines = sanitized.split("\n");
         for (const line of lines) {
@@ -82,33 +80,18 @@ export class TerminalUI {
         console.log();
     }
     printToolCall(name, args) {
-        const rawArgs = JSON.stringify(args);
-        const sanitized = redactSecrets(rawArgs);
-        console.log(pc.bold(pc.blue("⚡ Tool Call: ")) +
-            pc.bold(pc.white(name)) +
-            pc.gray(" ") +
-            pc.dim(sanitized));
+        const subject = args.path ?? args.file_path ?? args.command ?? args.url ?? args.query ?? args.name ?? "";
+        console.log(pc.cyan("  · ") + pc.white(this.humanTool(name)) + (subject ? pc.dim(`  ${redactSecrets(String(subject)).replace(/\s+/g, " ").slice(0, 100)}`) : ""));
     }
     printToolResult(toolName, success, output, error) {
         if (success) {
-            console.log(pc.bold(pc.green("✔ Result:")));
-            if ((toolName === "edit_file" || toolName === "patch_file") && output) {
-                this.renderDiff(output);
-            }
-            else if ((toolName === "read_file" || toolName === "batch_read") && output) {
-                const sanitized = redactSecrets(output);
-                const preview = sanitized.length > 800 ? sanitized.substring(0, 800) + "\n... [TRUNCATED]" : sanitized;
-                console.log(highlightCode(preview, undefined, { showLineNumbers: false }));
-            }
-            else {
-                const sanitized = redactSecrets(output);
-                const preview = sanitized.length > 500 ? sanitized.substring(0, 500) + "\n... [TRUNCATED]" : sanitized;
-                const formatted = highlightMarkdownCodeBlocks(preview);
-                const lines = formatted.split("\n");
-                for (const line of lines) {
-                    console.log(pc.gray("  ") + line);
-                }
-            }
+            const compact = redactSecrets(output).trim();
+            const first = compact.split(/\r?\n/).find((line) => line.trim())?.trim() ?? "Completed";
+            const count = compact ? `${compact.split(/\r?\n/).length} lines` : "no output";
+            const material = /^(write|edit|patch|delete|move|commit|stage)/i.test(toolName) ? pc.cyan("change") : pc.green("done");
+            console.log(`  ${material} ${pc.dim(count)}${first ? `  ${first.replace(/\s+/g, " ").slice(0, 150)}` : ""}`);
+            if (compact.length > 180 || compact.split(/\r?\n/).length > 2)
+                console.log(pc.dim("    Full output retained in session evidence; use /tui and open this activity."));
         }
         else {
             console.log(pc.bold(pc.red("✖ Tool Error:")));
@@ -125,13 +108,26 @@ export class TerminalUI {
         const sanitized = redactSecrets(code);
         console.log(highlightCode(sanitized, lang, { showLineNumbers }));
     }
+    humanActivity(text) {
+        if (/Thinking and analyzing/i.test(text))
+            return "Nexus is considering the next step";
+        return text.replace(/^Executing /, "Working: ").replace(/\.\.\.$/, "");
+    }
+    humanTool(name) {
+        const labels = {
+            read_file: "Reading file", batch_read: "Reading files", list_dir: "Exploring workspace",
+            run_command: "Running command", run_tests: "Validating", write_file: "Writing file",
+            edit_file: "Updating file", patch_file: "Applying change", search_files: "Searching workspace",
+            git_status: "Checking changes", git_diff: "Reviewing diff",
+        };
+        return labels[name] || name.replace(/_/g, " ").replace(/\b\w/g, (letter) => letter.toUpperCase());
+    }
     /** Terminal projection of a TurnResult. Reads the structured result; adds no semantics of its own. */
     turnSummary(result, modelSummary) {
         const { heading, line } = summarizeTurn(result);
         const verified = result.execution === "COMPLETED" && (result.outcome === "VERIFIED" || result.outcome === "NOT_REQUIRED");
         const paint = verified ? pc.green : result.execution === "COMPLETED" ? pc.yellow : pc.red;
-        console.log(paint(pc.bold(`\n════════════════════════ ${heading} ════════════════════════`)));
-        console.log(pc.dim(line));
+        console.log(`\n${paint(pc.bold(`${verified ? "✓" : result.execution === "COMPLETED" ? "!" : "×"} ${heading}`))}  ${pc.dim(line)}`);
         if (result.inferenceFailure) {
             const f = result.inferenceFailure;
             console.log(pc.red(`Inference ${f.kind} (origin: ${f.origin}${f.httpStatus ? `, HTTP ${f.httpStatus}` : ""}): ${redactSecrets(f.message).slice(0, 300)}`));
@@ -144,6 +140,6 @@ export class TerminalUI {
                 console.log(redactSecrets(modelSummary.notes));
             }
         }
-        console.log(paint(pc.bold("════════════════════════════════════════════════════════════════\n")));
+        console.log();
     }
 }

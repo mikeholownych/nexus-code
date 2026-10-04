@@ -1,0 +1,59 @@
+{
+  "model": "qwen-coder-local",
+  "workspace": "/workspace/atlas-service",
+  "task_id": "task_demo_42",
+  "objective": "Trace federated login and verify the callback behavior after the credential refresh change",
+  "activity": [
+    {
+      "kind": "tool",
+      "title": "Reading source",
+      "summary": "/workspace/packages/services/identity/providers/enterprise/federated-credential-renewal.ts",
+      "detail": "/workspace/packages/services/identity/providers/enterprise/federated-credential-renewal.ts\n\nL1: synthetic source evidence for the callback path and the bound state check.\nL2: synthetic source evidence for the callback path and the bound state check.\nL3: synthetic source evidence for the callback path and the bound state check.\nL4: synthetic source evidence for the callback path and the bound state check.\nL5: synthetic source evidence for the callback path and the bound state check.\nL6: synthetic source evidence for the callback path and the bound state check.\nL7: synthetic source evidence for the callback path and the bound state check.\nL8: synthetic source evidence for the callback path and the bound state check.\nL9: synthetic source evidence for the callback path and the bound state check.\nL10: synthetic source evidence for the callback path and the bound state check.\nL11: synthetic source evidence for the callback path and the bound state check.\nL12: synthetic source evidence for the callback path and the bound state check.\nL13: synthetic source evidence for the callback path and the bound state check.\nL14: synthetic source evidence for the callback path and the bound state check.\nL15: synthetic source evidence for the callback path and the bound state check.\nL16: synthetic source evidence for the callback path and the bound state check.\nL17: synthetic source evidence for the callback path and the bound state check.\nL18: synthetic source evidence for the callback path and the bound state check.\nL19: synthetic source evidence for the callback path and the bound state check.\nL20: synthetic source evidence for the callback path and the bound state check.\nL21: synthetic source evidence for the callback path and the bound state check.\nL22: synthetic source evidence for the callback path and the bound state check.\nL23: synthetic source evidence for the callback path and the bound state check.\nL24: synthetic source evidence for the callback path and the bound state check.\nL25: synthetic source evidence for the callback path and the bound state check.\nL26: synthetic source evidence for the callback path and the bound state check.\nL27: synthetic source evidence for the callback path and the bound state check.\nL28: synthetic source evidence for the callback path and the bound state check.\nL29: synthetic source evidence for the callback path and the bound state check.\nL30: synthetic source evidence for the callback path and the bound state check.\nL31: synthetic source evidence for the callback path and the bound state check.\nL32: synthetic source evidence for the callback path and the bound state check."
+    },
+    {
+      "kind": "finding",
+      "title": "Callback state check",
+      "summary": "Model reports state validation occurs before token exchange",
+      "detail": "Model-reported response · not independently verified\n\nThe callback compares the returned state with the stored request state before exchanging credentials."
+    },
+    {
+      "kind": "change",
+      "title": "Updated callback guard",
+      "summary": "packages/services/identity/callback.ts",
+      "detail": "Synthetic change evidence. No source was modified by this fixture."
+    },
+    {
+      "kind": "warning",
+      "title": "Operator review available",
+      "summary": "A generated change is awaiting human review",
+      "detail": "Warning fixture state: the operator must review the evidence before accepting the change."
+    },
+    {
+      "kind": "tool",
+      "title": "Validation complete",
+      "summary": "428 passed · 0 failed · 18.4s",
+      "detail": "Synthetic verifier evidence. 428 test cases passed, 0 failed, duration 18.4s. Full command output retained in this evidence detail."
+    }
+  ],
+  "plan": [
+    {
+      "name": "Trace callback lifecycle",
+      "status": "completed"
+    },
+    {
+      "name": "Verify refresh behavior",
+      "status": "in_progress"
+    },
+    {
+      "name": "Review remaining failure",
+      "status": "pending"
+    }
+  ],
+  "validation": {
+    "status": "PASSED",
+    "candidate_id": "candidate_demo_f0e21c",
+    "verifier": "cargo test -p identity"
+  },
+  "context": "12 messages · 8,416 tokens",
+  "status": "VERIFIED"
+}

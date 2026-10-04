@@ -2823,11 +2823,11 @@ error[E0308]: mismatched types
       }, tm);
 
       const snapshot = dashboard.renderSnapshot(100, 30);
-      assert.ok(snapshot.includes("TUI DASHBOARD"));
+      assert.ok(snapshot.includes("NEXUS"));
       assert.ok(snapshot.includes("qwen2.5-coder-32b"));
       assert.ok(snapshot.includes("Setup environment"));
       assert.ok(snapshot.includes("Execute migration"));
-      assert.ok(snapshot.includes("Return to REPL"));
+      assert.ok(snapshot.includes("q return to REPL"));
     } finally {
       agent.shutdown();
     }

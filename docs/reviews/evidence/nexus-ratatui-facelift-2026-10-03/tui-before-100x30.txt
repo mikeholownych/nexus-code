@@ -1,0 +1,17 @@
+╔══════════════════════════════════════════════════════════════════════════════════════════════════╗
+║  ⚡ NEXUS CODE FULL-SCREEN TUI DASHBOARD   Model: baseline-model │ Workspace: nexus-code          ║
+╚══════════════════════════════════════════════════════════════════════════════════════════════════╝
+── Recent Agent Activity & Thoughts ──                 │ ── Project Status & Engine ──              
+No turns executed yet. Type a task in the REPL.        │ Execution Plan:                            
+                                                       │   (No active milestones defined)           
+                                                       │                                            
+                                                       │ Context & Tokens:                          
+                                                       │   [░░░░░░░░░░░░░░] 0% (0 / 65,536)         
+                                                       │                                            
+                                                       │ Active Subsystems & Identity:              
+                                                       │   • Task ID: baseline-task                 
+                                                       │   • Theme: default                         
+                                                       │   • History: 0 messages                    
+                                                       │   • Sandbox: Off                           
+────────────────────────────────────────────────────────────────────────────────────────────────────
+ [q/Esc] Return to REPL  │  [/help] Help  │  [/plan] Plan  │  [/tokens] Budget  │  Theme: default   

@@ -174,26 +174,22 @@ export class InteractiveRepl {
         return "";
     }
     printWelcome() {
-        console.log(pc.bold(pc.cyan("\n╔════════════════════════════════════════════════════════════════╗")));
-        console.log(pc.bold(pc.cyan("║           NEXUS CODE HARNESS - CODEX / CLAUDE-CODE REPL        ║")));
-        console.log(pc.bold(pc.cyan("╚════════════════════════════════════════════════════════════════╝")));
-        console.log(pc.dim("Type your prompt or task, or type ") + pc.bold(pc.yellow("/help")) + pc.dim(" for slash commands.\n"));
+        console.log(`\n${pc.bold(pc.black(pc.bgCyan(" NEXUS ")))} ${pc.dim("local engineering agent")}`);
+        console.log(pc.dim("Describe the outcome you want. Nexus will show meaningful activity and keep full evidence in the session."));
+        console.log(pc.dim("Type /help for commands · /tui for the session view\n"));
         this.printStatus();
     }
-    printStatus() {
+    printStatus(verbose = false) {
         const wsName = path.basename(this.config.workspace) || this.config.workspace;
         const gitInfo = getGitInfo(this.config.workspace);
         const gitBadge = gitInfo.isRepo
             ? pc.cyan(` [git: ${pc.bold(gitInfo.formattedBadge)}]`)
             : "";
-        console.log(pc.bold(pc.white("Session Status:")));
-        console.log(`  • ${pc.bold("Workspace:")}   ${pc.cyan(this.config.workspace)} (${pc.yellow(wsName)})${gitBadge}`);
-        console.log(`  • ${pc.bold("Model:")}       ${pc.green(this.config.model)}`);
-        console.log(`  • ${pc.bold("Endpoint:")}    ${pc.dim(this.config.endpoint)}`);
-        console.log(`  • ${pc.bold("Shell:")}       ${pc.magenta(this.config.shell)}`);
-        console.log(`  • ${pc.bold("Mode:")}        ${this.autoApprove ? pc.green("auto (autonomous execution)") : pc.yellow("review (confirm destructive actions)")}`);
-        console.log(`  • ${pc.bold("Session ID:")}   ${pc.dim(this.currentSessionId)}`);
-        console.log(`  • ${pc.bold("Context:")}     ${this.agent.getHistoryCount()} messages in memory\n`);
+        console.log(`${pc.bold(pc.cyan("WORKSPACE"))}  ${pc.white(wsName)}${gitBadge}  ${pc.dim(this.config.workspace)}`);
+        console.log(`${pc.bold(pc.cyan("MODEL"))}      ${pc.green(this.config.model)}  ${pc.dim(`· ${this.autoApprove ? "autonomous" : "review mode"}`)}`);
+        if (verbose)
+            console.log(`${pc.bold(pc.cyan("RUNTIME"))}   ${this.config.endpoint}  ·  ${this.config.shell}  ·  ${this.agent.getHistoryCount()} messages`);
+        console.log(`${pc.dim(`session ${this.currentSessionId} · ${this.agent.getHistoryCount()} messages · ${this.config.shell}`)}\n`);
     }
     printHelp() {
         console.log(pc.bold(pc.white("\nAvailable Slash Commands:")));
@@ -458,7 +454,7 @@ export class InteractiveRepl {
                 const wsName = path.basename(this.config.workspace) || this.config.workspace;
                 const gitInfo = getGitInfo(this.config.workspace);
                 const gitSegment = gitInfo.isRepo ? pc.gray(`:${pc.cyan(gitInfo.formattedBadge)}`) : "";
-                const promptString = `${pc.bold(pc.cyan("nexus"))} ${pc.gray("(")}${pc.green(this.config.model)}${pc.gray(")")} ${pc.yellow(wsName)}${gitSegment} ${pc.bold(pc.cyan("❯"))} `;
+                const promptString = `${pc.bold(pc.cyan("nexus"))} ${pc.yellow(wsName)}${gitSegment} ${pc.bold(pc.cyan("❯"))} `;
                 let line;
                 try {
                     // Raced with the deliberate-exit signal: closing readline does not reliably settle a pending question.
@@ -554,7 +550,7 @@ export class InteractiveRepl {
                         continue;
                     }
                     else if (cmd === "status") {
-                        this.printStatus();
+                        this.printStatus(true);
                         continue;
                     }
                     else if (cmd === "mode") {
