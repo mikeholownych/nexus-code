@@ -9,7 +9,8 @@ use ratatui::{
     widgets::{Block, Borders, Paragraph, Wrap},
 };
 
-use crate::live_state::{Entry, Link, LiveState, Tone, ToolStatus};
+use crate::composer::{ComposerLayout, PREFIX_WIDTH};
+use crate::live_state::{Entry, Focus, Link, LiveLayout, LiveState, Tone, ToolStatus, Verdict};
 use crate::{ACCENT, MUTED, SURFACE};
 
 pub const MIN_WIDTH: u16 = 40;
@@ -19,7 +20,7 @@ const MAX_COMPOSER_ROWS: u16 = 6;
 const MAX_FAILURE_CHARS: usize = 300;
 const TAGLINE: &str = "Understand the work. Inspect the evidence. Keep the decision yours.";
 
-pub fn render_live(frame: &mut Frame, state: &LiveState) {
+pub fn render_live(frame: &mut Frame, state: &LiveState) -> LiveLayout {
     let area = frame.area();
     if area.width < MIN_WIDTH || area.height < MIN_HEIGHT {
         frame.render_widget(
@@ -30,13 +31,13 @@ pub fn render_live(frame: &mut Frame, state: &LiveState) {
             .wrap(Wrap { trim: true }),
             area,
         );
-        return;
+        return LiveLayout::default();
     }
-    let composer = composer_paragraph(state);
+    let composer = state.composer.layout(area.width);
     let composer_rows = if matches!(state.link, Link::Crashed { .. }) {
         1
     } else {
-        u16::try_from(composer.line_count(area.width))
+        u16::try_from(composer.rows.len())
             .unwrap_or(MAX_COMPOSER_ROWS)
             .clamp(1, MAX_COMPOSER_ROWS)
     };
@@ -49,6 +50,10 @@ pub fn render_live(frame: &mut Frame, state: &LiveState) {
         ])
         .split(area);
     render_status(frame, rows[0], state);
+    let mut layout = LiveLayout {
+        transcript_rows: usize::from(rows[1].height),
+        ..LiveLayout::default()
+    };
     match &state.link {
         Link::Crashed {
             code,
@@ -56,7 +61,10 @@ pub fn render_live(frame: &mut Frame, state: &LiveState) {
             stderr,
         } => render_crash(frame, rows[1], *code, reason, stderr),
         _ if state.transcript.is_empty() => render_empty(frame, rows[1]),
-        _ => render_transcript(frame, rows[1], &state.transcript),
+        _ => {
+            layout.scroll_limit =
+                render_transcript(frame, rows[1], &state.transcript, state.scroll_back);
+        }
     }
     let block = Block::default()
         .borders(Borders::TOP)
@@ -67,14 +75,36 @@ pub fn render_live(frame: &mut Frame, state: &LiveState) {
         ));
     let inner = block.inner(rows[2]);
     frame.render_widget(block, rows[2]);
-    render_pinned(frame, inner, composer);
+    render_composer(frame, inner, state, &composer);
+    layout
 }
 
-/// Renders a wrapped paragraph scrolled so its last line sits at the bottom of `area`.
-fn render_pinned(frame: &mut Frame, area: Rect, paragraph: Paragraph<'_>) {
-    let total = u16::try_from(paragraph.line_count(area.width)).unwrap_or(u16::MAX);
-    let scroll = total.saturating_sub(area.height);
-    frame.render_widget(paragraph.scroll((scroll, 0)), area);
+/// Draws the composer rows that hold the cursor and places the terminal cursor while the operator is typing.
+fn render_composer(frame: &mut Frame, area: Rect, state: &LiveState, layout: &ComposerLayout) {
+    let prompt = Style::default().fg(ACCENT).add_modifier(Modifier::BOLD);
+    let height = usize::from(area.height);
+    let top = (layout.cursor.0 + 1).saturating_sub(height);
+    let lines: Vec<Line> = layout
+        .rows
+        .iter()
+        .enumerate()
+        .skip(top)
+        .take(height)
+        .map(|(index, row)| {
+            Line::from(vec![
+                Span::styled(if index == 0 { "› " } else { "  " }, prompt),
+                Span::raw(row.as_str()),
+            ])
+        })
+        .collect();
+    frame.render_widget(Paragraph::new(lines), area);
+    let typing = !matches!(state.link, Link::Crashed { .. })
+        && state.overlay.is_none()
+        && state.focus == Focus::Composer
+        && !state.closing;
+    if typing && let Ok(row) = u16::try_from(layout.cursor.0 - top) {
+        frame.set_cursor_position((area.x + PREFIX_WIDTH + layout.cursor.1, area.y + row));
+    }
 }
 
 fn render_status(frame: &mut Frame, area: Rect, state: &LiveState) {
@@ -146,28 +176,78 @@ fn render_empty(frame: &mut Frame, area: Rect) {
     frame.render_widget(paragraph, Rect::new(area.x, top, area.width, height));
 }
 
-/// Renders only the newest entries that fill `area`, bottom-aligned once they overflow it. Wrapping is
-/// per line, so the rows of the selected lines equal the bottom rows of the whole transcript.
-fn render_transcript(frame: &mut Frame, area: Rect, transcript: &[Entry]) {
+/// Renders the transcript window `scroll_back` rows above the newest line. Only the entries needed to fill the
+/// window are laid out, so the cost follows the window, not the transcript. Returns the largest useful
+/// `scroll_back` (`usize::MAX` when the walk stopped before the first entry).
+fn render_transcript(
+    frame: &mut Frame,
+    area: Rect,
+    transcript: &[Entry],
+    scroll_back: usize,
+) -> usize {
     let height = usize::from(area.height);
+    let want = height.saturating_add(scroll_back);
     let mut tail = Vec::new();
     let mut total = 0;
+    let mut reached_top = true;
     'entries: for (index, entry) in transcript.iter().enumerate().rev() {
         for line in entry_lines(entry, index == 0).into_iter().rev() {
-            total += wrapped_rows(&line, area.width);
-            tail.push(line);
-            if total >= height {
+            let rows = wrapped_rows(&line, area.width);
+            total += rows;
+            tail.push((line, rows));
+            if total >= want {
+                reached_top = false;
                 break 'entries;
             }
         }
     }
+    let limit = if reached_top {
+        total.saturating_sub(height)
+    } else {
+        usize::MAX
+    };
+    let back = scroll_back.min(limit);
+    let first_row = total.saturating_sub(height + back);
     tail.reverse();
-    let scroll = u16::try_from(total.saturating_sub(height)).unwrap_or(u16::MAX);
+    let mut skipped = 0;
+    let mut covered = 0;
+    let mut lines = Vec::new();
+    for (line, rows) in tail {
+        if lines.is_empty() && skipped + rows <= first_row {
+            skipped += rows;
+            continue;
+        }
+        if covered >= height + (first_row - skipped) {
+            break;
+        }
+        covered += rows;
+        lines.push(line);
+    }
+    let offset = u16::try_from(first_row - skipped).unwrap_or(u16::MAX);
     frame.render_widget(
-        Paragraph::new(tail)
+        Paragraph::new(lines)
             .wrap(Wrap { trim: false })
-            .scroll((scroll, 0)),
+            .scroll((offset, 0)),
         area,
+    );
+    if back > 0 {
+        render_scroll_badge(frame, area, back);
+    }
+    limit
+}
+
+fn render_scroll_badge(frame: &mut Frame, area: Rect, rows_below: usize) {
+    let text = format!(" ↓ {rows_below} more rows · pgdn ");
+    let width = u16::try_from(text.chars().count())
+        .unwrap_or(area.width)
+        .min(area.width);
+    let at = Rect::new(area.right() - width, area.bottom() - 1, width, 1);
+    frame.render_widget(
+        Paragraph::new(Span::styled(
+            text,
+            Style::default().fg(Color::Black).bg(ACCENT),
+        )),
+        at,
     );
 }
 
@@ -251,7 +331,7 @@ fn entry_lines(entry: &Entry, first: bool) -> Vec<Line<'_>> {
             tone,
             failure,
             summary,
-            notes: _,
+            notes,
         } => {
             let (glyph, color) = match tone {
                 Tone::Good => ("✓", Color::Green),
@@ -288,13 +368,41 @@ fn entry_lines(entry: &Entry, first: bool) -> Vec<Line<'_>> {
                         .split('\n')
                         .map(|row| Line::from(Span::styled(expand_tabs(row), white))),
                 );
+                if let Some(notes) = notes {
+                    lines.push(Line::from(Span::styled("Notes:", muted)));
+                    lines.extend(
+                        notes
+                            .split('\n')
+                            .map(|row| Line::from(Span::styled(expand_tabs(row), muted))),
+                    );
+                }
             }
         }
         Entry::Notice(text) => lines.push(Line::from(Span::styled(
             format!("  ! {}", one_line(text)),
             Style::default().fg(Color::Yellow),
         ))),
-        Entry::Decision { .. } => {}
+        Entry::Decision {
+            tool,
+            subject,
+            verdict,
+        } => {
+            let (glyph, color, label) = match verdict {
+                Verdict::Approved | Verdict::ApprovedForSession => ("✓", Color::Green, "approved"),
+                Verdict::Denied => ("×", Color::Red, "denied"),
+            };
+            let mut spans = vec![
+                Span::styled(format!("  {glyph} {label} "), Style::default().fg(color)),
+                Span::styled(tool_verb(tool), white),
+            ];
+            if !subject.is_empty() {
+                spans.push(Span::styled(format!(" {subject}"), muted));
+            }
+            if *verdict == Verdict::ApprovedForSession {
+                spans.push(Span::styled(" · later actions run without asking", muted));
+            }
+            lines.push(Line::from(spans));
+        }
     }
     if first && lines.first().is_some_and(|line| line.spans.is_empty()) {
         lines.remove(0);
@@ -373,34 +481,19 @@ fn render_crash(frame: &mut Frame, area: Rect, code: Option<i32>, reason: &str, 
     frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), area);
 }
 
-fn composer_paragraph(state: &LiveState) -> Paragraph<'_> {
-    let prompt = Style::default().fg(ACCENT).add_modifier(Modifier::BOLD);
-    let mut lines: Vec<Line> = state
-        .composer
-        .text()
-        .split('\n')
-        .enumerate()
-        .map(|(index, text)| {
-            Line::from(vec![
-                Span::styled(if index == 0 { "› " } else { "  " }, prompt),
-                Span::raw(expand_tabs(text)),
-            ])
-        })
-        .collect();
-    let crashed = matches!(state.link, Link::Crashed { .. });
-    if let Some(last) = lines.last_mut().filter(|_| !crashed) {
-        last.push_span(Span::styled("▏", Style::default().fg(ACCENT)));
-    }
-    Paragraph::new(lines).wrap(Wrap { trim: false })
-}
-
 fn composer_hint(state: &LiveState) -> &'static str {
     match (&state.link, state.session.busy) {
+        _ if state.closing => " shutting down the agent… ",
         (Link::Crashed { .. }, _) => " r restart · q quit ",
         _ if state.connecting() => " starting the agent… ",
+        _ if matches!(state.overlay, Some(crate::live_state::Overlay::Approval(_))) => {
+            " approval needed · y approve · n deny "
+        }
+        _ if state.overlay.is_some() => " esc close help ",
+        _ if state.focus == Focus::Transcript => " transcript · ↑↓ scroll · tab back ",
         (_, true) if state.cancel_requested() => " cancelling… ctrl-c again to quit ",
         (_, true) => " waiting for the agent ",
-        (_, false) => " enter send · alt+enter newline · ctrl-c quit ",
+        (_, false) => " enter send · shift+enter newline · ? help ",
     }
 }
 
@@ -435,14 +528,22 @@ pub fn tool_verb(tool: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::live_state::{Focus, LiveLayout, Verdict};
     use crate::protocol::{Event, parse_event};
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
-    use ratatui::{Terminal, backend::TestBackend};
+    use ratatui::{Terminal, backend::TestBackend, layout::Position};
 
     fn draw(state: &LiveState, width: u16, height: u16) -> String {
+        draw_measured(state, width, height).0
+    }
+
+    fn draw_measured(state: &LiveState, width: u16, height: u16) -> (String, LiveLayout) {
         let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
-        terminal.draw(|frame| render_live(frame, state)).unwrap();
-        terminal.backend().to_string()
+        let mut layout = LiveLayout::default();
+        terminal
+            .draw(|frame| layout = render_live(frame, state))
+            .unwrap();
+        (terminal.backend().to_string(), layout)
     }
 
     fn feed(state: &mut LiveState, lines: &[&str]) {
@@ -716,7 +817,11 @@ mod tests {
         );
         feed(&mut state, &[result.as_str()]);
         let mut terminal = Terminal::new(TestBackend::new(100, 20)).unwrap();
-        terminal.draw(|frame| render_live(frame, &state)).unwrap();
+        terminal
+            .draw(|frame| {
+                render_live(frame, &state);
+            })
+            .unwrap();
         let screen = rows(&terminal.backend().to_string());
         let banner = screen
             .iter()
@@ -905,5 +1010,117 @@ mod tests {
         let screen = draw(&state, 120, 40);
         assert!(screen.contains("paragraph 99999 lorem"), "{screen}");
         assert!(!screen.contains("paragraph 99900 lorem"), "{screen}");
+    }
+
+    fn press(state: &mut LiveState, text: &str) {
+        for c in text.chars() {
+            state.on_key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE));
+        }
+    }
+
+    #[test]
+    fn the_terminal_cursor_sits_at_the_composer_cursor() {
+        let mut state = ready();
+        press(&mut state, "fix");
+        state.on_key(KeyEvent::new(KeyCode::Left, KeyModifiers::NONE));
+        let mut terminal = Terminal::new(TestBackend::new(80, 20)).unwrap();
+        terminal
+            .draw(|frame| {
+                render_live(frame, &state);
+            })
+            .unwrap();
+        assert_eq!(
+            terminal.get_cursor_position().unwrap(),
+            Position::new(4, 19)
+        );
+    }
+
+    #[test]
+    fn long_drafts_wrap_by_character_and_keep_the_cursor_row_visible() {
+        let mut state = ready();
+        state.composer = format!("{}END", "x".repeat(400)).as_str().into();
+        let screen = rows(&draw(&state, 40, 20));
+        assert_eq!(screen[19], format!("  {}END", "x".repeat(400 % 38)));
+        assert!(
+            screen[13].contains("enter send"),
+            "composer is capped at 6 rows: {screen:#?}"
+        );
+    }
+
+    #[test]
+    fn scrolled_back_transcripts_show_older_rows_and_a_badge() {
+        let mut state = ready();
+        let text = (1..=80)
+            .map(|n| format!("row {n}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        state.apply(Event::AssistantDelta {
+            turn_id: "t1".into(),
+            text,
+        });
+        state.scroll_back = 30;
+        let (screen, layout) = draw_measured(&state, 60, 16);
+        assert_eq!(layout.transcript_rows, 13);
+        assert_eq!(
+            layout.scroll_limit,
+            usize::MAX,
+            "the walk stopped before the first entry, so the top is not known yet"
+        );
+        assert_shows(&screen, &["row 38", "row 50", "↓ 30 more rows · pgdn"]);
+        assert!(
+            !screen.contains("row 37") && !screen.contains("row 51"),
+            "{screen}"
+        );
+        state.scroll_back = usize::MAX;
+        let (top, layout) = draw_measured(&state, 60, 16);
+        assert_eq!(layout.scroll_limit, 67);
+        assert_shows(&top, &["row 1", "row 13", "↓ 67 more rows"]);
+        assert!(!top.contains("row 14"), "{top}");
+    }
+
+    #[test]
+    fn decisions_notes_and_focus_render() {
+        let mut state = ready();
+        state.transcript.push(Entry::Decision {
+            tool: "write_file".into(),
+            subject: "x.txt".into(),
+            verdict: Verdict::Approved,
+        });
+        state.transcript.push(Entry::Decision {
+            tool: "run_command".into(),
+            subject: "rm -rf build".into(),
+            verdict: Verdict::Denied,
+        });
+        state.transcript.push(Entry::Decision {
+            tool: "edit_file".into(),
+            subject: "a.ts".into(),
+            verdict: Verdict::ApprovedForSession,
+        });
+        feed(
+            &mut state,
+            &[
+                r#"{"v":1,"type":"turn.result","turn_id":"t1","heading":"H","line":"L","turn":{"execution":"COMPLETED","outcome":"VERIFIED"},"model_summary":{"summary":"Done.","notes":"Watch the cache."}}"#,
+            ],
+        );
+        state.focus = Focus::Transcript;
+        let screen = draw(&state, 100, 24);
+        assert_shows(
+            &screen,
+            &[
+                "✓ approved Write x.txt",
+                "× denied Run rm -rf build",
+                "✓ approved Edit a.ts · later actions run without asking",
+                "Notes:",
+                "Watch the cache.",
+                "transcript · ↑↓ scroll · tab back",
+            ],
+        );
+    }
+
+    #[test]
+    fn closing_says_so() {
+        let mut state = ready();
+        state.closing = true;
+        assert_shows(&draw(&state, 80, 20), &["shutting down the agent"]);
     }
 }

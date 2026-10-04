@@ -225,7 +225,9 @@ fn event_loop(
     loop {
         redraw |= app.pump();
         if redraw {
-            terminal.draw(|frame| render_live(frame, &app.state))?;
+            terminal.draw(|frame| {
+                render_live(frame, &app.state);
+            })?;
             redraw = false;
         }
         if !event::poll(INPUT_POLL)? {
