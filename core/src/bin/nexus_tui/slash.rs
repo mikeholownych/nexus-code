@@ -7,6 +7,7 @@ pub enum Invocation {
     Quit,
     Help,
     AlreadyLive,
+    Receipt,
     /// Runs in the sidecar. `command` is lowercase without the slash; `!` marks a direct shell command.
     Remote {
         command: String,
@@ -42,6 +43,7 @@ pub fn parse(draft: &str) -> Option<Invocation> {
         "exit" | "quit" | "q" => Invocation::Quit,
         "help" | "?" => Invocation::Help,
         "tui" => Invocation::AlreadyLive,
+        "receipt" => Invocation::Receipt,
         _ => Invocation::Remote {
             command: name,
             args: args.trim().into(),
@@ -121,6 +123,8 @@ mod tests {
         assert_eq!(parse("/help"), Some(Invocation::Help));
         assert_eq!(parse("/?"), Some(Invocation::Help));
         assert_eq!(parse("/tui"), Some(Invocation::AlreadyLive));
+        assert_eq!(parse("/receipt"), Some(Invocation::Receipt));
+        assert_eq!(parse("/receipt\nwhy did the verifier fail?"), None);
         assert_eq!(parse("/Diff"), Some(remote("diff", "")));
         assert_eq!(
             parse("/commit fix: parser\n\nbody"),

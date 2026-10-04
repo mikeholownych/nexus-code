@@ -26,6 +26,16 @@ pub struct SlashSpec {
     pub summary: String,
 }
 
+/// One block of the turn receipt: labelled rows, or a note saying why there are none.
+#[derive(Clone, Debug, Deserialize, PartialEq)]
+pub struct ReceiptSection {
+    pub title: String,
+    #[serde(default)]
+    pub rows: Vec<(String, String)>,
+    #[serde(default)]
+    pub note: Option<String>,
+}
+
 /// What the operator is asked to approve (`approvalReview` in `cli/src/approval_review.ts`). Text is already
 /// redacted and capped by the sidecar.
 #[derive(Clone, Debug, Deserialize, PartialEq)]
@@ -79,6 +89,9 @@ pub enum Event {
         call_id: String,
         tool: String,
         subject: String,
+        /// Handle for this call's full record in the sidecar; empty from sidecars that keep none.
+        #[serde(default)]
+        evidence: String,
     },
     #[serde(rename = "tool.end")]
     ToolEnd {
@@ -118,6 +131,20 @@ pub enum Event {
     },
     #[serde(rename = "notice")]
     Notice { text: String },
+    #[serde(rename = "tool.detail")]
+    ToolDetail {
+        id: String,
+        status: String,
+        args: String,
+        output: String,
+        #[serde(default)]
+        duration_ms: Option<u64>,
+    },
+    #[serde(rename = "receipt")]
+    Receipt {
+        id: String,
+        sections: Vec<ReceiptSection>,
+    },
     #[serde(rename = "error")]
     Error {
         #[serde(default)]
@@ -148,6 +175,10 @@ pub enum Command {
         command: String,
         args: String,
     },
+    #[serde(rename = "tool.detail")]
+    ToolDetail { id: String, evidence: String },
+    #[serde(rename = "receipt")]
+    Receipt { id: String },
     #[serde(rename = "shutdown")]
     Shutdown,
 }
@@ -262,7 +293,8 @@ mod tests {
             Ok(Event::ToolStart {
                 call_id: "c1".into(),
                 tool: "read_file".into(),
-                subject: "src/a.ts".into()
+                subject: "src/a.ts".into(),
+                evidence: String::new(),
             })
         );
         assert_eq!(
@@ -341,6 +373,46 @@ mod tests {
             Ok(Event::AssistantDelta {
                 turn_id: "t1".into(),
                 text: "\u{fffd} 😀 \\ud83d \u{fffd}A".into()
+            })
+        );
+    }
+
+    #[test]
+    fn evidence_details_and_receipts_parse() {
+        assert!(matches!(
+            parse_event(r#"{"v":1,"type":"tool.start","turn_id":"t1","call_id":"c1","tool":"read_file","subject":"a.ts","evidence":"e4"}"#),
+            Ok(Event::ToolStart { ref evidence, .. }) if evidence == "e4"
+        ));
+        assert_eq!(
+            parse_event(
+                r#"{"v":1,"type":"tool.detail","id":"d1","evidence":"e4","tool":"read_file","subject":"a.ts","status":"running","args":"{}","output":"","duration_ms":null}"#
+            ),
+            Ok(Event::ToolDetail {
+                id: "d1".into(),
+                status: "running".into(),
+                args: "{}".into(),
+                output: String::new(),
+                duration_ms: None,
+            })
+        );
+        assert_eq!(
+            parse_event(
+                r#"{"v":1,"type":"receipt","id":"r1","sections":[{"title":"Last turn","rows":[["outcome","VERIFIED"]]},{"title":"Validation receipt","rows":[],"note":"None yet."}]}"#
+            ),
+            Ok(Event::Receipt {
+                id: "r1".into(),
+                sections: vec![
+                    ReceiptSection {
+                        title: "Last turn".into(),
+                        rows: vec![("outcome".into(), "VERIFIED".into())],
+                        note: None,
+                    },
+                    ReceiptSection {
+                        title: "Validation receipt".into(),
+                        rows: Vec::new(),
+                        note: Some("None yet.".into()),
+                    },
+                ],
             })
         );
     }
@@ -453,6 +525,17 @@ mod tests {
                     args: String::new(),
                 },
                 serde_json::json!({"v":1,"type":"slash","id":"s1","command":"diff","args":""}),
+            ),
+            (
+                Command::ToolDetail {
+                    id: "d1".into(),
+                    evidence: "e4".into(),
+                },
+                serde_json::json!({"v":1,"type":"tool.detail","id":"d1","evidence":"e4"}),
+            ),
+            (
+                Command::Receipt { id: "r1".into() },
+                serde_json::json!({"v":1,"type":"receipt","id":"r1"}),
             ),
         ] {
             let line = encode_command(&command);

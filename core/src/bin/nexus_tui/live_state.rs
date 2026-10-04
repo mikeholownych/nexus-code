@@ -37,6 +37,7 @@ pub enum Entry {
         subject: String,
         status: ToolStatus,
         summary: String,
+        evidence: String,
     },
     Banner {
         heading: String,
@@ -231,7 +232,7 @@ impl LiveState {
                 Some(Entry::Assistant { turn_id: last, text: body }) if *last == turn_id => body.push_str(&text),
                 _ => self.transcript.push(Entry::Assistant { turn_id, text }),
             },
-            Event::ToolStart { call_id, tool, subject } => {
+            Event::ToolStart { call_id, tool, subject, evidence } => {
                 if !HIDDEN_TOOLS.contains(&tool.as_str()) {
                     self.transcript.push(Entry::Tool {
                         call_id,
@@ -239,6 +240,7 @@ impl LiveState {
                         subject,
                         status: ToolStatus::Running,
                         summary: String::new(),
+                        evidence,
                     });
                 }
             }
@@ -324,6 +326,7 @@ impl LiveState {
                 }
             }
             Event::Notice { text } => self.transcript.push(Entry::Info(text)),
+            Event::ToolDetail { .. } | Event::Receipt { .. } => {}
             Event::Unknown => {}
         }
     }
@@ -617,6 +620,7 @@ impl LiveState {
                     .push(Entry::Info("You are already in the live view.".into()));
                 None
             }
+            Invocation::Receipt => None,
             Invocation::Remote { command, args } => {
                 self.slash_seq += 1;
                 let id = format!("s{}", self.slash_seq);
@@ -979,6 +983,7 @@ mod tests {
                     subject: "a.ts".into(),
                     status: ToolStatus::Succeeded,
                     summary: "const a = 1;".into(),
+                    evidence: String::new(),
                 },
                 Entry::Tool {
                     call_id: "b".into(),
@@ -986,6 +991,7 @@ mod tests {
                     subject: "b.ts".into(),
                     status: ToolStatus::Failed,
                     summary: "No such file".into(),
+                    evidence: String::new(),
                 },
                 Entry::Assistant {
                     turn_id: "t1".into(),
@@ -1014,6 +1020,7 @@ mod tests {
                 subject: "npm test".into(),
                 status: ToolStatus::Failed,
                 summary: "1 test failed".into(),
+                evidence: String::new(),
             }]
         );
     }
@@ -1031,6 +1038,7 @@ mod tests {
                 subject: "npm test".into(),
                 status: ToolStatus::Running,
                 summary: String::new(),
+                evidence: String::new(),
             }]
         );
     }
