@@ -1,3 +1,4 @@
+import * as fs from "node:fs";
 import * as path from "node:path";
 import * as readline from "node:readline";
 import { fileURLToPath } from "node:url";
@@ -15,6 +16,7 @@ import {
   capText,
   encodeEvent,
   parseCommand,
+  projectTurn,
   toolSubject,
   toolSummary,
 } from "./protocol.js";
@@ -32,12 +34,13 @@ export class SidecarServer {
   private readonly app: ApplicationCore;
   private readonly write: (line: string) => void;
   private readonly onShutdown: () => void;
-  private readonly mode: "auto" | "review";
+  private mode: "auto" | "review";
   private alwaysApprove = false;
   private activeTurn?: Promise<void>;
   private turnAbort?: AbortController;
   private pendingApproval?: { id: string; settle: (approved: boolean) => void };
   private approvalSeq = 0;
+  private shutdownPromise?: Promise<void>;
 
   constructor(options: SidecarOptions) {
     this.app = options.app;
@@ -89,17 +92,23 @@ export class SidecarServer {
   }
 
   private submit(id: string, text: string): void {
+    if (this.shutdownPromise) {
+      this.emit({ type: "error", id, code: "BUSY", message: "The sidecar is shutting down." });
+      return;
+    }
     if (this.activeTurn) {
       this.emit({ type: "error", id, code: "BUSY", message: "A turn is already running; cancel it or wait for its result." });
       return;
     }
     const abort = new AbortController();
     this.turnAbort = abort;
-    this.activeTurn = this.runTurn(id, text, abort.signal).finally(() => {
-      this.activeTurn = undefined;
-      this.turnAbort = undefined;
-      this.emitSessionState();
-    });
+    this.activeTurn = this.runTurn(id, text, abort.signal)
+      .catch((err) => this.emit({ type: "error", id, code: "INTERNAL", message: redactSecrets(err instanceof Error ? err.message : String(err)) }))
+      .finally(() => {
+        this.activeTurn = undefined;
+        this.turnAbort = undefined;
+        this.emitSessionState();
+      });
     this.emitSessionState();
   }
 
@@ -129,7 +138,7 @@ export class SidecarServer {
       turn_id: turnId,
       heading,
       line: redactSecrets(line),
-      turn,
+      turn: projectTurn(turn),
       model_summary: summary
         ? { summary: redactSecrets(summary.summary), ...(summary.notes ? { notes: redactSecrets(summary.notes) } : {}) }
         : null,
@@ -166,11 +175,20 @@ export class SidecarServer {
       this.emit({ type: "error", id, code: "NO_PENDING_APPROVAL", message: `No pending approval with id ${id}.` });
       return;
     }
-    if (approved && always) this.alwaysApprove = true;
+    if (approved && always) {
+      this.alwaysApprove = true;
+      this.mode = "auto";
+      this.emitSessionState();
+    }
     pending.settle(approved);
   }
 
   private async slash(id: string, command: string, args: string): Promise<void> {
+    if (this.shutdownPromise || this.activeTurn) {
+      const reason = this.shutdownPromise ? "The sidecar is shutting down." : "A turn is running; cancel it or wait for its result.";
+      this.emit({ type: "error", id, code: "BUSY", message: reason });
+      return;
+    }
     try {
       const result = await this.app.executeSlashCommand(command, args);
       this.emit({ type: "slash.result", id, command: result.command, success: result.success, output: capText(redactSecrets(result.output)) });
@@ -179,11 +197,14 @@ export class SidecarServer {
     }
   }
 
-  private async shutdown(): Promise<void> {
-    this.turnAbort?.abort(new Error("sidecar shutdown"));
-    await this.idle();
-    this.app.shutdown();
-    this.onShutdown();
+  private shutdown(): Promise<void> {
+    this.shutdownPromise ??= (async () => {
+      this.turnAbort?.abort(new Error("sidecar shutdown"));
+      await this.idle();
+      this.app.shutdown();
+      this.onShutdown();
+    })();
+    return this.shutdownPromise;
   }
 
   private emitSessionState(): void {
@@ -253,14 +274,25 @@ async function main(argv: string[]): Promise<void> {
   input.on("line", (line) => {
     server.handleLine(line).catch(report);
   });
-  input.on("close", () => {
+  const requestShutdown = () => {
     server.handleLine(JSON.stringify({ v: PROTOCOL_VERSION, type: "shutdown" })).catch(report);
-  });
+  };
+  input.on("close", requestShutdown);
+  process.stdout.on("error", requestShutdown);
   server.start();
 }
 
-const entry = process.argv[1] ? path.resolve(process.argv[1]) : "";
-if (entry === fileURLToPath(import.meta.url)) {
+/** True when argv[1] names this module, comparing real paths so a symlinked launcher still counts. */
+function isEntryPoint(argv1: string | undefined, moduleUrl: string): boolean {
+  if (!argv1) return false;
+  try {
+    return fs.realpathSync(path.resolve(argv1)) === fs.realpathSync(fileURLToPath(moduleUrl));
+  } catch {
+    return false;
+  }
+}
+
+if (isEntryPoint(process.argv[1], import.meta.url)) {
   main(process.argv).catch((err) => {
     process.stderr.write(`nexus sidecar failed to start: ${err instanceof Error ? err.message : String(err)}\n`);
     process.exit(1);

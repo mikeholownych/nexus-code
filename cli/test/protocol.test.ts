@@ -1,6 +1,7 @@
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
-import { capText, encodeEvent, parseCommand, ProtocolError, toolSubject, toolSummary, MAX_TEXT_FIELD } from "../src/protocol.js";
+import { capText, encodeEvent, parseCommand, projectTurn, ProtocolError, toolSubject, toolSummary, MAX_TEXT_FIELD } from "../src/protocol.js";
+import type { TurnResult } from "../src/core/turn.js";
 
 describe("protocol: encodeEvent", () => {
   test("emits one versioned JSON line", () => {
@@ -51,5 +52,39 @@ describe("protocol: projection helpers", () => {
     assert.deepEqual(toolSummary(true, "\nfirst line\nsecond\n"), { summary: "first line", lines: 2 });
     assert.deepEqual(toolSummary(true, ""), { summary: "Completed", lines: 0 });
     assert.deepEqual(toolSummary(false, "", "boom happened"), { summary: "boom happened", lines: 1 });
+  });
+
+  test("projectTurn redacts every free-text field and leaves the rest intact", () => {
+    const secret = "Bearer abcdefghijklmnopqrstuvwxyz0123";
+    const turn: TurnResult = Object.freeze({
+      execution: "FAILED",
+      outcome: "NOT_ESTABLISHED",
+      acceptance: "NOT_REQUESTED",
+      reason: "INFERENCE_FAILED",
+      detail: `boom ${secret}`,
+      modelStop: "NONE",
+      finalOutputComplete: false,
+      verification: { status: "FAILED", command: `curl -H '${secret}'`, source: "configured", exitSuccess: false, outputSha256: "abc123", at: "2026-01-01T00:00:00Z" },
+      interruption: { requestedAt: "2026-01-01T00:00:00Z", phase: "tool_dispatch", outstandingTool: `run ${secret}`, outstandingToolSettled: false, undispatchedToolCalls: 1 },
+      inferenceFailure: { kind: "http_error", origin: "provider", message: `HTTP 500: ${secret}`, httpStatus: 500, requestId: "req-1" },
+      steps: { used: 1, max: 6, limitReached: false },
+      unverifiedChangesPending: false,
+      finishedAt: "2026-01-01T00:00:00Z",
+    });
+    const projected = projectTurn(turn);
+    assert.equal(JSON.stringify(projected).includes("abcdefghijklmnopqrstuvwxyz0123"), false);
+    assert.equal(projected.detail, "boom Bearer [REDACTED_TOKEN]");
+    assert.equal(projected.inferenceFailure?.message, "HTTP 500: Bearer [REDACTED_TOKEN]");
+    assert.equal(projected.verification?.command, "curl -H 'Bearer [REDACTED_TOKEN]'");
+    assert.equal(projected.interruption?.outstandingTool, "run Bearer [REDACTED_TOKEN]");
+    assert.deepEqual({ ...projected, detail: turn.detail, inferenceFailure: turn.inferenceFailure, verification: turn.verification, interruption: turn.interruption }, turn);
+    assert.equal(projected.inferenceFailure?.requestId, "req-1");
+    assert.equal(projected.verification?.outputSha256, "abc123");
+
+    const bare = projectTurn({ ...turn, detail: undefined, verification: null, interruption: null, inferenceFailure: null });
+    assert.equal(bare.detail, undefined);
+    assert.equal(bare.verification, null);
+    assert.equal(bare.interruption, null);
+    assert.equal(bare.inferenceFailure, null);
   });
 });

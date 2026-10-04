@@ -1,6 +1,7 @@
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
@@ -91,6 +92,32 @@ describe("SidecarServer: session and turns", () => {
     });
   });
 
+  test("turn.result redacts secrets inside the embedded turn object", async () => {
+    const body = '{"error":"upstream rejected Bearer abcdefghijklmnopqrstuvwxyz0123"}';
+    await withSidecar(() => ({ kind: "http", status: 500, body }), "auto", async ({ server, events, send }) => {
+      await send({ type: "prompt.submit", id: "t1", text: "do work" });
+      await server.idle();
+      const result = events.find((e) => e.type === "turn.result");
+      assert.equal(result.turn.execution, "FAILED");
+      assert.equal(JSON.stringify(result).includes("Bearer abcdefghijklmnopqrstuvwxyz0123"), false);
+      assert.equal(JSON.stringify(result).includes("abcdefghijklmnopqrstuvwxyz0123"), false);
+    });
+  });
+
+  test("an exception escaping runTurn is reported as INTERNAL and idle() still resolves", async () => {
+    await withSidecar(readOnlyTurn, "auto", async ({ server, events, send }) => {
+      (server as any).app.getAgent = () => {
+        throw new Error("agent exploded token=supersecretvalue");
+      };
+      await send({ type: "prompt.submit", id: "t1", text: "x" });
+      await server.idle();
+      const err = events.find((e) => e.type === "error" && e.id === "t1");
+      assert.equal(err.code, "INTERNAL");
+      assert.equal(err.message.includes("supersecretvalue"), false);
+      assert.deepEqual(events.at(-1), { ...events.at(-1), type: "session.state", busy: false });
+    });
+  });
+
   test("a second prompt while busy is rejected with BUSY", async () => {
     await withSidecar(() => ({ kind: "text", content: "slow", delayMs: 1500 }), "auto", async ({ events, send }) => {
       await send({ type: "prompt.submit", id: "t1", text: "one" });
@@ -163,6 +190,25 @@ describe("SidecarServer: approvals", () => {
     });
   });
 
+  test("approve with always=true switches the reported mode to auto", async () => {
+    const script = (n: number): Reply => n === 1
+      ? { kind: "tools", calls: [{ name: "write_file", args: { path: "a.txt", content: "a" } }] }
+      : { kind: "text", content: "done" };
+    await withSidecar(script, "review", async ({ server, events, send }) => {
+      assert.equal(events[1].mode, "review");
+      await send({ type: "prompt.submit", id: "t1", text: "make files" });
+      const req = await waitForEvent(events, (e) => e.type === "approval.request");
+      const approvedAt = events.length;
+      await send({ type: "approve", id: req.id, always: true });
+      const switched = events.slice(approvedAt).find((e) => e.type === "session.state");
+      assert.ok(switched, "session.state emitted right after approve-always");
+      assert.equal(switched.mode, "auto");
+      await server.idle();
+      const states = events.filter((e) => e.type === "session.state");
+      assert.equal(states.at(-1).mode, "auto");
+    });
+  });
+
   test("an unknown approval id is reported, not ignored", async () => {
     await withSidecar(writeTurn, "review", async ({ events, send }) => {
       await send({ type: "approve", id: "approval-999" });
@@ -221,6 +267,17 @@ describe("SidecarServer: slash and shutdown", () => {
     });
   });
 
+  test("slash while a turn is running is rejected with BUSY", async () => {
+    await withSidecar(() => ({ kind: "text", content: "slow", delayMs: 1500 }), "auto", async ({ events, send }) => {
+      await send({ type: "prompt.submit", id: "t1", text: "one" });
+      await send({ type: "slash", id: "s1", command: "status" });
+      const busy = events.find((e) => e.type === "error" && e.id === "s1");
+      assert.ok(busy, "slash rejected synchronously");
+      assert.equal(busy.code, "BUSY");
+      assert.equal(events.some((e) => e.type === "slash.result"), false);
+    });
+  });
+
   test("shutdown calls onShutdown", async () => {
     let shutdowns = 0;
     await withSidecar(readOnlyTurn, "auto", async ({ send }) => {
@@ -228,13 +285,27 @@ describe("SidecarServer: slash and shutdown", () => {
       assert.equal(shutdowns, 1);
     }, () => shutdowns++);
   });
+
+  test("repeated shutdown runs once and later commands are rejected", async () => {
+    let shutdowns = 0;
+    await withSidecar(readOnlyTurn, "auto", async ({ events, send }) => {
+      await Promise.all([send({ type: "shutdown" }), send({ type: "shutdown" })]);
+      await send({ type: "shutdown" });
+      assert.equal(shutdowns, 1);
+      await send({ type: "prompt.submit", id: "t1", text: "x" });
+      await send({ type: "slash", id: "s1", command: "status" });
+      assert.equal(events.find((e) => e.type === "error" && e.id === "t1")?.code, "BUSY");
+      assert.equal(events.find((e) => e.type === "error" && e.id === "s1")?.code, "BUSY");
+      assert.equal(events.some((e) => e.type === "turn.result" || e.type === "slash.result"), false);
+    }, () => shutdowns++);
+  });
 });
 
 const cliRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const sidecarSrc = path.join(cliRoot, "src", "sidecar.ts");
 
-function spawnSidecar(gwUrl: string, repo: string, home: string) {
-  const child = spawn(process.execPath, ["--import", "tsx", sidecarSrc, "-w", repo, "-e", gwUrl, "-m", "m"], {
+function spawnSidecar(gwUrl: string, repo: string, home: string, entry: string = sidecarSrc) {
+  const child = spawn(process.execPath, ["--import", "tsx", entry, "-w", repo, "-e", gwUrl, "-m", "m"], {
     cwd: cliRoot,
     env: { ...process.env, HOME: home, NEXUS_DEBUG: "0" },
   });
@@ -284,6 +355,28 @@ describe("sidecar process", () => {
     } finally {
       proc.child.kill("SIGKILL");
       await gw.close();
+      fs.rmSync(repo, { recursive: true, force: true });
+      fs.rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  test("starts when launched through a symlinked path", async () => {
+    const gw = await startGateway(readOnlyTurn);
+    const repo = makeRepo();
+    const home = makeHome();
+    const linkDir = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-sidecar-link-"));
+    const cliLink = path.join(linkDir, "cli-link");
+    fs.symlinkSync(cliRoot, cliLink, "dir");
+    const proc = spawnSidecar(gw.url, repo, home, path.join(cliLink, "src", "sidecar.ts"));
+    try {
+      await waitUntil(() => proc.lines().some((l) => l.includes('"type":"hello"')), 20000);
+      proc.child.stdin.write(JSON.stringify({ v: 1, type: "shutdown" }) + "\n");
+      assert.equal(await proc.exited, 0, proc.stderr());
+    } finally {
+      proc.child.kill("SIGKILL");
+      await gw.close();
+      fs.unlinkSync(cliLink);
+      fs.rmdirSync(linkDir);
       fs.rmSync(repo, { recursive: true, force: true });
       fs.rmSync(home, { recursive: true, force: true });
     }

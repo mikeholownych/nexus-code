@@ -105,6 +105,18 @@ export function toolSubject(args: Record<string, any>): string {
   return redactSecrets(String(subject)).replace(/\s+/g, " ").trim().slice(0, 200);
 }
 
+/** Copy of a turn with secrets redacted from its free-text fields; enums, counts, ids and hashes are left as-is. */
+export function projectTurn(turn: TurnResult): TurnResult {
+  const redactOptional = (text: string | undefined) => (text === undefined ? undefined : redactSecrets(text));
+  return {
+    ...turn,
+    detail: redactOptional(turn.detail),
+    verification: turn.verification ? { ...turn.verification, command: redactOptional(turn.verification.command) } : null,
+    interruption: turn.interruption ? { ...turn.interruption, outstandingTool: redactOptional(turn.interruption.outstandingTool) } : null,
+    inferenceFailure: turn.inferenceFailure ? { ...turn.inferenceFailure, message: redactSecrets(turn.inferenceFailure.message) } : null,
+  };
+}
+
 export function toolSummary(success: boolean, output: string, error?: string): { summary: string; lines: number } {
   const text = redactSecrets(success ? output || "" : error || output || "").trim();
   const first = text.split(/\r?\n/).find((line) => line.trim())?.trim() ?? (success ? "Completed" : "Tool failed");
