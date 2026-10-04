@@ -1,0 +1,11 @@
+import { RustCoreBridge } from "/tmp/inv/cli/dist/tools.js";
+import { runTestSuiteWithExecutor } from "/tmp/inv/cli/dist/tester.js";
+const b = new RustCoreBridge("/tmp/inv/ws", "bash");
+const s = Date.now();
+const r = await b.executeTool("run_command", { command: "echo partial-output; sleep 10", timeout_secs: 1 });
+console.log("rust-side timeout after", ((Date.now()-s)/1000).toFixed(1)+"s", "success=", r.success, JSON.parse(r.output));
+const t = await runTestSuiteWithExecutor("/tmp/inv/ws", (c) => b.executeTool("run_command", { command: c, timeout_secs: 1 }), "echo partial-output; sleep 10");
+console.log("oracle view -> success:", t.success, "| rawOutput:", JSON.stringify(t.rawOutput), "| failures:", t.failures);
+const f = await runTestSuiteWithExecutor("/tmp/inv/ws", (c) => b.executeTool("run_command", { command: c, timeout_secs: 5 }), "echo some-failure; exit 3");
+console.log("ordinary failure oracle view -> success:", f.success, "| rawOutput:", JSON.stringify(f.rawOutput));
+b.shutdown?.(); process.exit(0);
