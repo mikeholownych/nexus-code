@@ -1,5 +1,6 @@
 //! Live session state. Pure: protocol events and keys go in, actions come out. Outcomes are projected exactly as
 //! the sidecar reports them.
+use crate::composer::Composer;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use serde_json::Value;
 
@@ -80,7 +81,7 @@ pub struct LiveState {
     pub link: Link,
     pub session: Session,
     pub transcript: Vec<Entry>,
-    pub composer: String,
+    pub composer: Composer,
     turn_seq: u64,
     /// Id of the submitted prompt the sidecar has not yet answered with a `turn.result`.
     pending: Option<String>,
@@ -94,7 +95,7 @@ impl LiveState {
             link: Link::Connecting,
             session: Session::default(),
             transcript: Vec::new(),
-            composer: String::new(),
+            composer: Composer::default(),
             turn_seq: 0,
             pending: None,
             cancel_requested: false,
@@ -213,8 +214,7 @@ impl LiveState {
 
     pub fn on_paste(&mut self, text: &str) {
         if !matches!(self.link, Link::Crashed { .. }) {
-            self.composer
-                .push_str(&text.replace("\r\n", "\n").replace('\r', "\n"));
+            self.composer.insert(text);
         }
     }
 
@@ -229,55 +229,73 @@ impl LiveState {
             };
         }
         match key.code {
-            KeyCode::Char('c') if ctrl => {
-                if self.session.busy && self.cancel_requested {
-                    Some(Action::Quit)
-                } else if self.session.busy {
-                    self.cancel_requested = true;
-                    Some(Action::Send(Command::Cancel))
-                } else if !self.composer.is_empty() {
-                    self.composer.clear();
-                    None
-                } else {
-                    Some(Action::Quit)
-                }
-            }
-            KeyCode::Char('l') if ctrl => {
-                self.composer.clear();
-                None
-            }
+            KeyCode::Char('c') if ctrl => self.on_ctrl_c(),
             KeyCode::Esc if self.session.busy => Some(Action::Send(Command::Cancel)),
-            KeyCode::Enter
-                if key
-                    .modifiers
-                    .intersects(KeyModifiers::ALT | KeyModifiers::SHIFT) =>
-            {
-                self.composer.push('\n');
-                None
-            }
-            KeyCode::Enter => self.submit(),
-            KeyCode::Backspace => {
-                self.composer.pop();
-                None
-            }
-            KeyCode::Char(c) if !ctrl && !key.modifiers.contains(KeyModifiers::ALT) => {
-                self.composer.push(c);
-                None
-            }
-            _ => None,
+            KeyCode::Esc => None,
+            _ => self.on_composer_key(key),
         }
+    }
+
+    fn on_ctrl_c(&mut self) -> Option<Action> {
+        if self.session.busy && self.cancel_requested {
+            Some(Action::Quit)
+        } else if self.session.busy {
+            self.cancel_requested = true;
+            Some(Action::Send(Command::Cancel))
+        } else if !self.composer.is_empty() {
+            self.composer.clear();
+            None
+        } else {
+            Some(Action::Quit)
+        }
+    }
+
+    /// Readline-style editing: ctrl+a/e/u/k/w/l, alt+b/f, arrows, home/end, word jumps and word delete.
+    fn on_composer_key(&mut self, key: KeyEvent) -> Option<Action> {
+        let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+        let alt = key.modifiers.contains(KeyModifiers::ALT);
+        let shift = key.modifiers.contains(KeyModifiers::SHIFT);
+        if key.code == KeyCode::Enter && !alt && !shift {
+            return self.submit();
+        }
+        let composer = &mut self.composer;
+        match key.code {
+            KeyCode::Enter => composer.insert("\n"),
+            KeyCode::Backspace if ctrl || alt => composer.delete_word_back(),
+            KeyCode::Backspace => composer.backspace(),
+            KeyCode::Delete => composer.delete(),
+            KeyCode::Left if ctrl || alt => composer.word_left(),
+            KeyCode::Right if ctrl || alt => composer.word_right(),
+            KeyCode::Left => composer.left(),
+            KeyCode::Right => composer.right(),
+            KeyCode::Home => composer.line_start(),
+            KeyCode::End => composer.line_end(),
+            KeyCode::Up => composer.up(),
+            KeyCode::Down => composer.down(),
+            KeyCode::Char('a') if ctrl => composer.line_start(),
+            KeyCode::Char('e') if ctrl => composer.line_end(),
+            KeyCode::Char('u') if ctrl => composer.kill_to_line_start(),
+            KeyCode::Char('k') if ctrl => composer.kill_to_line_end(),
+            KeyCode::Char('w') if ctrl => composer.delete_word_back(),
+            KeyCode::Char('l') if ctrl => composer.clear(),
+            KeyCode::Char('b') if alt => composer.word_left(),
+            KeyCode::Char('f') if alt => composer.word_right(),
+            KeyCode::Char(c) if !ctrl && !alt => composer.insert(c.encode_utf8(&mut [0; 4])),
+            _ => {}
+        }
+        None
     }
 
     fn submit(&mut self) -> Option<Action> {
         if self.link != Link::Ready
             || self.connecting()
             || self.session.busy
-            || self.composer.trim().is_empty()
+            || self.composer.text().trim().is_empty()
         {
             return None;
         }
         self.turn_seq += 1;
-        let text = std::mem::take(&mut self.composer);
+        let text = self.composer.take();
         self.transcript.push(Entry::User(text.clone()));
         self.session.busy = true;
         let id = format!("t{}", self.turn_seq);
@@ -333,6 +351,65 @@ mod tests {
         for c in text.chars() {
             assert_eq!(state.on_key(key(KeyCode::Char(c))), None);
         }
+    }
+
+    fn with(code: KeyCode, modifiers: KeyModifiers) -> KeyEvent {
+        KeyEvent::new(code, modifiers)
+    }
+
+    #[test]
+    fn editing_keys_edit_at_the_cursor() {
+        let mut state = ready();
+        type_text(&mut state, "fix bug");
+        for _ in 0..3 {
+            assert_eq!(state.on_key(key(KeyCode::Left)), None);
+        }
+        type_text(&mut state, "the ");
+        assert_eq!(state.composer, "fix the bug");
+        assert_eq!(state.on_key(ctrl('e')), None);
+        assert_eq!(state.on_key(ctrl('w')), None);
+        assert_eq!(state.composer, "fix the ");
+        assert_eq!(
+            state.on_key(with(KeyCode::Left, KeyModifiers::CONTROL)),
+            None
+        );
+        assert_eq!(state.on_key(ctrl('k')), None);
+        assert_eq!(state.composer, "fix ");
+        assert_eq!(
+            state.on_key(with(KeyCode::Backspace, KeyModifiers::ALT)),
+            None
+        );
+        assert_eq!(state.composer, "");
+    }
+
+    #[test]
+    fn up_recalls_the_previous_prompt_after_a_turn() {
+        let mut state = ready();
+        type_text(&mut state, "first");
+        assert!(state.on_key(key(KeyCode::Enter)).is_some());
+        state.apply(ev(r#"{"v":1,"type":"session.state","workspace":"/w/app","workspace_name":"app","model":"m","mode":"auto","git":null,"busy":false}"#));
+        assert_eq!(state.on_key(key(KeyCode::Up)), None);
+        assert_eq!(state.composer, "first");
+        assert_eq!(
+            state.on_key(key(KeyCode::Enter)),
+            Some(Action::Send(Command::PromptSubmit {
+                id: "t2".into(),
+                text: "first".into()
+            }))
+        );
+    }
+
+    #[test]
+    fn paste_inserts_at_the_cursor_and_typing_while_busy_keeps_a_draft() {
+        let mut state = ready();
+        type_text(&mut state, "ab");
+        assert_eq!(state.on_key(key(KeyCode::Left)), None);
+        state.on_paste("X\r\nY");
+        assert_eq!(state.composer, "aX\nYb");
+        state.session.busy = true;
+        type_text(&mut state, "!");
+        assert_eq!(state.on_key(key(KeyCode::Enter)), None);
+        assert_eq!(state.composer, "aX\nY!b");
     }
 
     #[test]

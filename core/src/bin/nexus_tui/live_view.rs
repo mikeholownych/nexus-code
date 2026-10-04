@@ -375,6 +375,7 @@ fn composer_paragraph(state: &LiveState) -> Paragraph<'_> {
     let prompt = Style::default().fg(ACCENT).add_modifier(Modifier::BOLD);
     let mut lines: Vec<Line> = state
         .composer
+        .text()
         .split('\n')
         .enumerate()
         .map(|(index, text)| {
