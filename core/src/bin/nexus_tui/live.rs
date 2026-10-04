@@ -26,12 +26,17 @@ use crate::sidecar::{Sidecar, SidecarMsg, SidecarSpec};
 const SHUTDOWN_GRACE: Duration = Duration::from_secs(3);
 const EXIT_GRACE: Duration = Duration::from_secs(2);
 const INPUT_POLL: Duration = Duration::from_millis(30);
+/// Must outlast the graceful shutdown (SHUTDOWN_GRACE plus the sidecar's group and stderr waits).
+const STOP_WATCHDOG_GRACE: Duration = Duration::from_secs(6);
 
 static STOP: AtomicBool = AtomicBool::new(false);
+/// Set with STOP but never cleared, so the watchdog sees a stop even after the event loop consumed it.
+static STOP_SIGNALLED: AtomicBool = AtomicBool::new(false);
 
 #[cfg(unix)]
 extern "C" fn request_stop(_signal: libc::c_int) {
     STOP.store(true, Ordering::SeqCst);
+    STOP_SIGNALLED.store(true, Ordering::SeqCst);
 }
 
 /// SIGTERM and SIGHUP (terminal closed) end the session like `q`: the sidecar is shut down and the terminal
@@ -51,6 +56,19 @@ fn install_stop_signals() {}
 
 fn stop_requested() -> bool {
     STOP.swap(false, Ordering::SeqCst)
+}
+
+/// Exits the process when a stop signal has not ended the session within STOP_WATCHDOG_GRACE. crossterm's
+/// input poll can spin forever on a hung-up terminal, so the event loop may never see the stop. Exiting closes
+/// the sidecar's stdin, and the sidecar shuts itself down.
+fn spawn_stop_watchdog() {
+    std::thread::spawn(|| {
+        while !STOP_SIGNALLED.load(Ordering::SeqCst) {
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        std::thread::sleep(STOP_WATCHDOG_GRACE);
+        std::process::exit(1);
+    });
 }
 
 pub const LIVE_USAGE: &str =
@@ -246,6 +264,7 @@ impl Drop for TerminalGuard {
 
 pub fn run_live(spec: SidecarSpec) -> Result<(), Box<dyn std::error::Error>> {
     install_stop_signals();
+    spawn_stop_watchdog();
     let mut guard = TerminalGuard {
         keyboard_protocol: false,
     };
