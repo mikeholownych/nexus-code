@@ -193,7 +193,13 @@ test("a pasted multiline objective reaches the agent intact as exactly one promp
     assert.deepEqual(JSON.parse(after[1]), { v: 1, type: "shutdown" });
     assert.ok(read(commandsLog).endsWith("\n"));
   } finally {
-    if (child && child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
+    if (child && child.exitCode === null && child.signalCode === null) {
+      // Killing `script` first would hang up the TUI's terminal and leave it to the 6 s stop watchdog.
+      const gone = new Promise((resolve) => child!.once("exit", resolve));
+      child.stdin?.write("\x03\x03\x03");
+      await Promise.race([gone, new Promise((resolve) => setTimeout(resolve, 3000).unref())]);
+      if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
+    }
     await gw.close();
     for (const dir of [repo, home, logs]) fs.rmSync(dir, { recursive: true, force: true });
   }

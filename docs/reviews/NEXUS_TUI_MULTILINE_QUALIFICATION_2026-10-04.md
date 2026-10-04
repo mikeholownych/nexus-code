@@ -20,7 +20,7 @@ The test fails, not skips, when `nexus-tui`, `cli/dist/sidecar.js` or `script` i
 
 ## Results
 
-Three consecutive runs on `feat/tui-interaction-core` at `ee06548`, all PASS: 3.87 s, 3.78 s, 4.01 s. No `nexus-tui`, sidecar or core process remained afterwards.
+Three consecutive runs of the test as committed in `0ef762d` (on top of `ee06548`), all PASS: 3.87 s, 3.78 s, 4.01 s. An independent review rerun gave 4.12 s, 4.12 s, 4.18 s and confirmed that mutating one character of `EXPECTED`, or submitting a second prompt, makes the test fail. No `nexus-tui`, sidecar or core process remained afterwards.
 
 Recorded command log of a separate run with the same rig:
 
