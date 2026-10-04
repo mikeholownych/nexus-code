@@ -13,7 +13,7 @@ import { TurnResult, failedTurnFromError, lifecycleStatusForTurn, summarizeTurn 
 import { getGitInfo } from "./git.js";
 import { redactSecrets } from "./ui.js";
 import { approvalReview } from "./approval_review.js";
-import { redactedJson } from "./evidence.js";
+import { EvidenceLedger, LastTurn, MAX_EVIDENCE, ReceiptSection, receiptSections, redactedJson } from "./evidence.js";
 import {
   MAX_SLASH_OUTPUT,
   PROTOCOL_VERSION,
@@ -61,6 +61,8 @@ export class SidecarServer {
   private checkpointManager: CheckpointManager;
   /** The running slash command; undefined for prompt turns and for commands that became turns. */
   private activeSpec?: SlashSpec;
+  private readonly evidence = new EvidenceLedger();
+  private lastTurn: LastTurn | null = null;
 
   constructor(options: SidecarOptions) {
     this.app = options.app;
@@ -116,6 +118,12 @@ export class SidecarServer {
       case "slash":
         this.slash(command.id, command.command, command.args);
         return;
+      case "tool.detail":
+        this.toolDetail(command.id, command.evidence);
+        return;
+      case "receipt":
+        this.emit({ type: "receipt", id: command.id, sections: this.receipt() });
+        return;
       case "shutdown":
         await this.shutdown();
         return;
@@ -168,11 +176,21 @@ export class SidecarServer {
   }
 
   private observerFor(turnId: string): AgentObserver {
+    const open = new Map<string, string>();
     return {
       onAssistantDelta: (delta) => this.emit({ type: "assistant.delta", turn_id: turnId, text: redactSecrets(delta) }),
-      onToolStart: ({ callId, tool, args }) => this.emit({ type: "tool.start", turn_id: turnId, call_id: callId, tool, subject: toolSubject(args) }),
-      onToolEnd: ({ callId, tool, success, output, error }) =>
-        this.emit({ type: "tool.end", turn_id: turnId, call_id: callId, tool, success, ...toolSummary(success, output, error) }),
+      onToolStart: ({ callId, tool, args }) => {
+        const subject = toolSubject(args);
+        const evidence = this.evidence.start(turnId, tool, subject, args);
+        open.set(callId, evidence);
+        this.emit({ type: "tool.start", turn_id: turnId, call_id: callId, tool, subject, evidence });
+      },
+      onToolEnd: ({ callId, tool, success, output, error }) => {
+        const evidence = open.get(callId) ?? "";
+        open.delete(callId);
+        this.evidence.end(evidence, success, output, error);
+        this.emit({ type: "tool.end", turn_id: turnId, call_id: callId, tool, success, evidence, ...toolSummary(success, output, error) });
+      },
     };
   }
 
@@ -207,13 +225,15 @@ export class SidecarServer {
       this.emit({ type: "notice", text: `The session could not be saved: ${redactSecrets(errorText(err))}` });
     }
     const { heading, line } = summarizeTurn(turn);
+    const projected = projectTurn(turn);
+    this.lastTurn = { heading, turn: projected };
     const summary = turn.execution === "COMPLETED" ? agent.getCompletionSummary() : undefined;
     this.emit({
       type: "turn.result",
       turn_id: turnId,
       heading,
       line: redactSecrets(line),
-      turn: projectTurn(turn),
+      turn: projected,
       model_summary: summary
         ? { summary: redactSecrets(summary.summary), ...(summary.notes ? { notes: redactSecrets(summary.notes) } : {}) }
         : null,
@@ -306,7 +326,32 @@ export class SidecarServer {
       resumeSession: (sessionId) => this.resumeSession(sessionId),
       history: () => this.history,
       confirm: (signal) => this.confirmFor(id, signal),
+      receipt: () => this.receipt(),
     };
+  }
+
+  private toolDetail(id: string, evidence: string): void {
+    const record = this.evidence.get(evidence);
+    if (!record) {
+      const message = `No record of tool call ${capText(redactSecrets(stripEscapes(evidence)))}; only the latest ${MAX_EVIDENCE} are kept.`;
+      this.emit({ type: "error", id, code: "NOT_FOUND", message });
+      return;
+    }
+    this.emit({
+      type: "tool.detail",
+      id,
+      evidence,
+      tool: record.tool,
+      subject: record.subject,
+      status: record.status,
+      args: record.args,
+      output: record.output,
+      duration_ms: record.durationMs,
+    });
+  }
+
+  private receipt(): ReceiptSection[] {
+    return receiptSections(this.lastTurn, this.app.getActiveValidationReceipt());
   }
 
   private setWorkspace(dir: string): void {

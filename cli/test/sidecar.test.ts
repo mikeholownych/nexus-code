@@ -488,6 +488,79 @@ describe("SidecarServer: sessions and slash commands", () => {
   });
 });
 
+describe("SidecarServer: evidence and receipts", () => {
+  test("tool events share one evidence id per call, and tool.detail returns the full record", async () => {
+    await withSidecar(readOnlyTurn, "auto", async ({ server, events, send }) => {
+      await send({ type: "prompt.submit", id: "t1", text: "what is here?" });
+      await server.idle();
+      const start = events.find((e) => e.type === "tool.start");
+      const end = events.find((e) => e.type === "tool.end");
+      assert.match(start.evidence, /^e\d+$/);
+      assert.equal(end.evidence, start.evidence);
+      await send({ type: "tool.detail", id: "d1", evidence: start.evidence });
+      const detail = events.find((e) => e.type === "tool.detail");
+      assert.equal(detail.id, "d1");
+      assert.equal(detail.evidence, start.evidence);
+      assert.equal(detail.tool, "list_dir");
+      assert.equal(detail.subject, ".");
+      assert.equal(detail.status, "succeeded");
+      assert.deepEqual(JSON.parse(detail.args), { path: "." });
+      assert.match(detail.output, /base\.txt/);
+      assert.equal(typeof detail.duration_ms, "number");
+    });
+  });
+
+  test("an unknown evidence id is NOT_FOUND", async () => {
+    await withSidecar(readOnlyTurn, "auto", async ({ events, send }) => {
+      await send({ type: "tool.detail", id: "d1", evidence: "e999" });
+      const error = events.find((e) => e.type === "error");
+      assert.equal(error.id, "d1");
+      assert.equal(error.code, "NOT_FOUND");
+      assert.equal(error.message, "No record of tool call e999; only the latest 200 are kept.");
+    });
+  });
+
+  test("a running call's record is available before it finishes", async () => {
+    const slowCommand = (n: number): Reply => n === 1
+      ? { kind: "tools", calls: [{ name: "run_command", args: { command: "sleep 1; echo slept" } }] }
+      : { kind: "text", content: "ok" };
+    await withSidecar(slowCommand, "auto", async ({ server, events, send }) => {
+      await send({ type: "prompt.submit", id: "t1", text: "wait for it" });
+      const start = await waitForEvent(events, (e) => e.type === "tool.start");
+      await send({ type: "tool.detail", id: "d1", evidence: start.evidence });
+      assert.equal(events.find((e) => e.type === "tool.detail" && e.id === "d1").status, "running");
+      assert.equal(events.some((e) => e.type === "error" && e.code === "BUSY"), false);
+      await server.idle();
+      await send({ type: "tool.detail", id: "d2", evidence: start.evidence });
+      const done = events.find((e) => e.type === "tool.detail" && e.id === "d2");
+      assert.equal(done.status, "succeeded");
+      assert.match(done.output, /slept/);
+    });
+  });
+
+  test("the receipt describes the last turn and says when no validation receipt exists", async () => {
+    await withSidecar(readOnlyTurn, "auto", async ({ server, events, send }) => {
+      await send({ type: "receipt", id: "r1" });
+      assert.equal(events.find((e) => e.type === "receipt" && e.id === "r1").sections[0].note, "No turn has finished in this session yet.");
+      await send({ type: "prompt.submit", id: "t1", text: "what is here?" });
+      await server.idle();
+      await send({ type: "receipt", id: "r2" });
+      const sections = events.find((e) => e.type === "receipt" && e.id === "r2").sections;
+      assert.deepEqual(sections[0].rows.slice(0, 3), [["result", "TURN ENDED - NO CHANGES TO VERIFY"], ["execution", "COMPLETED"], ["outcome", "NOT_REQUIRED"]]);
+      assert.match(sections.find((s: any) => s.title === "Validation receipt").note, /^No validation receipt is active\./);
+    });
+  });
+
+  test("a receipt is answered while a turn is running", async () => {
+    await withSidecar(() => ({ kind: "text", content: "slow", delayMs: 1500 }), "auto", async ({ events, send }) => {
+      await send({ type: "prompt.submit", id: "t1", text: "go" });
+      await send({ type: "receipt", id: "r1" });
+      assert.ok(events.some((e) => e.type === "receipt" && e.id === "r1"));
+      assert.equal(events.some((e) => e.type === "error" && e.code === "BUSY"), false);
+    });
+  });
+});
+
 const cliRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const sidecarSrc = path.join(cliRoot, "src", "sidecar.ts");
 

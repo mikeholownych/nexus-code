@@ -2,6 +2,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { LocalLlmClient } from "../client.js";
 import { writeProtectedTextFile } from "../core/persistence_protection.js";
+import { receiptText } from "../evidence.js";
 import { getGitInfo, scaffoldProjectRules } from "../git.js";
 import { scanAndOnboardWorkspace } from "../onboard.js";
 import { ThemeManager } from "../theme.js";
@@ -208,6 +209,7 @@ export const SESSION_HANDLERS: Record<string, SlashHandler> = {
   init,
   onboard,
   theme,
+  receipt: ({ host }) => reply("receipt", receiptText(host.receipt())),
   tui: () => reply("tui", "You are already in the live view."),
   exit: () => reply("exit", "Press q, or ctrl+c with an empty composer, to quit."),
 };

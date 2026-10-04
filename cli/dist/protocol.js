@@ -57,6 +57,15 @@ export function parseCommand(line) {
                 throw new ProtocolError("slash requires command", requestId);
             return { type: "slash", id: requestId, command, args: typeof msg.args === "string" ? msg.args : "" };
         }
+        case "tool.detail": {
+            const requestId = requireId("tool.detail");
+            const evidence = msg.evidence;
+            if (typeof evidence !== "string" || !evidence)
+                throw new ProtocolError("tool.detail requires evidence", requestId);
+            return { type: "tool.detail", id: requestId, evidence };
+        }
+        case "receipt":
+            return { type: "receipt", id: requireId("receipt") };
         case "shutdown":
             return { type: "shutdown" };
         default:

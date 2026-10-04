@@ -6,13 +6,14 @@ import type { TurnResult } from "./core/turn.js";
 import { redactSecrets } from "./ui.js";
 import type { ApprovalReview } from "./approval_review.js";
 import type { SlashSpec } from "./slash/catalog.js";
+import type { EvidenceStatus, ReceiptSection } from "./evidence.js";
 
 export const PROTOCOL_VERSION = 1;
 export const MAX_TEXT_FIELD = 8000;
 export const MAX_SUMMARY = 160;
 export const MAX_SLASH_OUTPUT = 32_000;
 
-export type ErrorCode = "BAD_REQUEST" | "BUSY" | "NO_PENDING_APPROVAL" | "INTERNAL";
+export type ErrorCode = "BAD_REQUEST" | "BUSY" | "NO_PENDING_APPROVAL" | "NOT_FOUND" | "INTERNAL";
 
 export interface ModelSummary {
   summary: string;
@@ -31,8 +32,8 @@ export type SidecarEvent =
       busy: boolean;
     }
   | { type: "assistant.delta"; turn_id: string; text: string }
-  | { type: "tool.start"; turn_id: string; call_id: string; tool: string; subject: string }
-  | { type: "tool.end"; turn_id: string; call_id: string; tool: string; success: boolean; summary: string; lines: number }
+  | { type: "tool.start"; turn_id: string; call_id: string; tool: string; subject: string; evidence: string }
+  | { type: "tool.end"; turn_id: string; call_id: string; tool: string; success: boolean; summary: string; lines: number; evidence: string }
   | { type: "approval.request"; id: string; turn_id: string; tool: string; subject: string; preview: string; review: ApprovalReview }
   | { type: "turn.result"; turn_id: string; heading: string; line: string; turn: TurnResult; model_summary: ModelSummary | null }
   | {
@@ -49,6 +50,18 @@ export type SidecarEvent =
       prompt?: string;
     }
   | { type: "notice"; text: string }
+  | {
+      type: "tool.detail";
+      id: string;
+      evidence: string;
+      tool: string;
+      subject: string;
+      status: EvidenceStatus;
+      args: string;
+      output: string;
+      duration_ms: number | null;
+    }
+  | { type: "receipt"; id: string; sections: ReceiptSection[] }
   | { type: "error"; id?: string; code: ErrorCode; message: string };
 
 export type SidecarCommand =
@@ -57,6 +70,8 @@ export type SidecarCommand =
   | { type: "approve"; id: string; always: boolean }
   | { type: "deny"; id: string }
   | { type: "slash"; id: string; command: string; args: string }
+  | { type: "tool.detail"; id: string; evidence: string }
+  | { type: "receipt"; id: string }
   | { type: "shutdown" };
 
 export class ProtocolError extends Error {
@@ -108,6 +123,14 @@ export function parseCommand(line: string): SidecarCommand {
       if (typeof command !== "string" || !command.trim()) throw new ProtocolError("slash requires command", requestId);
       return { type: "slash", id: requestId, command, args: typeof msg.args === "string" ? msg.args : "" };
     }
+    case "tool.detail": {
+      const requestId = requireId("tool.detail");
+      const evidence = msg.evidence;
+      if (typeof evidence !== "string" || !evidence) throw new ProtocolError("tool.detail requires evidence", requestId);
+      return { type: "tool.detail", id: requestId, evidence };
+    }
+    case "receipt":
+      return { type: "receipt", id: requireId("receipt") };
     case "shutdown":
       return { type: "shutdown" };
     default:

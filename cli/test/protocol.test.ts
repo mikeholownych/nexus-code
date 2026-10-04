@@ -37,6 +37,13 @@ describe("protocol: parseCommand", () => {
     assert.deepEqual(parseCommand('{"v":1,"type":"deny","id":"a1"}'), { type: "deny", id: "a1" });
     assert.deepEqual(parseCommand('{"v":1,"type":"slash","id":"s1","command":"status"}'), { type: "slash", id: "s1", command: "status", args: "" });
     assert.deepEqual(parseCommand('{"v":1,"type":"shutdown"}'), { type: "shutdown" });
+    assert.deepEqual(parseCommand('{"v":1,"type":"tool.detail","id":"d1","evidence":"e3"}'), { type: "tool.detail", id: "d1", evidence: "e3" });
+    assert.deepEqual(parseCommand('{"v":1,"type":"receipt","id":"r1"}'), { type: "receipt", id: "r1" });
+  });
+
+  test("tool.detail needs an evidence id and receipt needs a request id", () => {
+    assert.throws(() => parseCommand('{"v":1,"type":"tool.detail","id":"d1"}'), (err: unknown) => err instanceof ProtocolError && err.id === "d1" && /requires evidence/.test(err.message));
+    assert.throws(() => parseCommand('{"v":1,"type":"receipt"}'), /receipt requires id/);
   });
 
   test("rejects malformed input with ProtocolError, keeping the id when present", () => {

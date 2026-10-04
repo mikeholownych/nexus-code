@@ -9,6 +9,7 @@ import { ApplicationCore } from "../src/core/app.js";
 import { CheckpointManager } from "../src/checkpoint.js";
 import { BANG, SLASH_COMMANDS, SlashHost, SlashOutcome, SlashReply, findSlash } from "../src/slash/catalog.js";
 import { hasHandler, routeSlash } from "../src/slash/router.js";
+import { receiptSections } from "../src/evidence.js";
 import { makeHome, makeRepo } from "./helpers/fixtures.js";
 
 const cliRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -58,6 +59,7 @@ async function withRig(fn: (rig: Rig) => Promise<void>): Promise<void> {
     resumeSession: (id) => ({ ok: false, message: `Session not found: ${id ?? "latest"}` }),
     history: () => prompts,
     confirm: () => undefined,
+    receipt: () => receiptSections(null, null),
   };
   const run = (command: string, args = "") => routeSlash(host, command, args, new AbortController().signal);
   const reply = async (command: string, args = "") => {
@@ -235,6 +237,12 @@ describe("slash router: session commands", () => {
       assert.equal((await reply("tui")).output, "You are already in the live view.");
       assert.equal((await reply("quit")).output, "Press q, or ctrl+c with an empty composer, to quit.");
       assert.equal((await reply("compact")).success, true);
+    });
+  });
+
+  test("receipt reports that no turn has finished yet", async () => {
+    await withRig(async ({ reply }) => {
+      assert.match((await reply("receipt")).output, /^Last turn\n  No turn has finished in this session yet\.$/m);
     });
   });
 });

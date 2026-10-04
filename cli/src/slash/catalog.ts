@@ -5,6 +5,7 @@
 import type { ConfirmHandler } from "../agent.js";
 import type { CheckpointManager } from "../checkpoint.js";
 import type { ApplicationCore } from "../core/app.js";
+import type { ReceiptSection } from "../evidence.js";
 
 export interface SlashSpec {
   name: string;
@@ -30,6 +31,8 @@ export interface SlashHost {
   history(): string[];
   /** Approval callback for agent runs a command starts; undefined in auto mode. */
   confirm(signal: AbortSignal): ConfirmHandler | undefined;
+  /** Receipt sections for the last turn and the active validation receipt. */
+  receipt(): ReceiptSection[];
 }
 
 export interface SlashContext {
@@ -97,6 +100,7 @@ export const SLASH_COMMANDS: SlashSpec[] = [
   { name: "undo", usage: "/undo", summary: "Roll the workspace back to the last snapshot" },
   { name: "worktree", usage: "/worktree [status|merge|discard]", summary: "Manage the speculative git worktree" },
   { name: "audit", usage: "/audit [count]", summary: "Recent tool executions" },
+  { name: "receipt", usage: "/receipt", summary: "Turn outcome, verifier evidence and validation receipt" },
   { name: "test", usage: "/test [pattern]", summary: "Run the project's test suite" },
   { name: "copy", usage: "/copy [diff|code|last]", summary: "Copy the diff, code blocks or the last reply" },
   { name: "paste", usage: "/paste", summary: "Put the clipboard into the composer" },
