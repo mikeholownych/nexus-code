@@ -69,7 +69,7 @@ export function capText(text, max = MAX_TEXT_FIELD) {
 }
 /** CSI sequences, OSC sequences (BEL or ST terminated), then the remaining two-character escapes. */
 const TERMINAL_ESCAPE = /\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b[ -/]*[0-~]/g;
-function stripEscapes(text) {
+export function stripEscapes(text) {
     return text.replace(TERMINAL_ESCAPE, "");
 }
 export function toolSubject(args) {

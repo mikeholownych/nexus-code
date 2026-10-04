@@ -1,0 +1,23 @@
+/** Runs one slash command for the sidecar. Handlers never write to stdout; everything comes back as an outcome. */
+import { stripEscapes } from "../protocol.js";
+import { SlashHandler, SlashHost, SlashOutcome, errorText, findSlash, reply } from "./catalog.js";
+import { SESSION_HANDLERS } from "./session_commands.js";
+
+const HANDLERS: Record<string, SlashHandler> = { ...SESSION_HANDLERS };
+
+export function hasHandler(name: string): boolean {
+  return Object.hasOwn(HANDLERS, name);
+}
+
+export async function routeSlash(host: SlashHost, command: string, args: string, signal: AbortSignal): Promise<SlashOutcome> {
+  const spec = findSlash(command);
+  const name = spec?.name ?? command.trim().replace(/^\//, "").toLowerCase();
+  const handler = spec && hasHandler(spec.name) ? HANDLERS[spec.name] : undefined;
+  if (!handler) return reply(name, `Unknown command: /${name}. Type /help for the list.`, false);
+  try {
+    const outcome = await handler({ host, args, signal });
+    return outcome.kind === "reply" ? { ...outcome, output: stripEscapes(outcome.output) } : outcome;
+  } catch (err) {
+    return reply(name, `${name === "!" ? "!" : `/${name}`} failed: ${errorText(err)}`, false);
+  }
+}
