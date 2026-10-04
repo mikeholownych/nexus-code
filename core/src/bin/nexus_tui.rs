@@ -22,6 +22,8 @@ mod protocol;
 mod redact;
 #[path = "nexus_tui/sidecar.rs"]
 mod sidecar;
+#[path = "nexus_tui/live_state.rs"]
+mod live_state;
 
 const ACCENT: Color = Color::Rgb(103, 232, 249);
 const MUTED: Color = Color::Rgb(125, 145, 158);
