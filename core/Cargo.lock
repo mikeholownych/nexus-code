@@ -451,6 +451,8 @@ dependencies = [
  "serde_json",
  "similar",
  "tokio",
+ "unicode-segmentation",
+ "unicode-width",
  "walkdir",
 ]
 

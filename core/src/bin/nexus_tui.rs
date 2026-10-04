@@ -20,6 +20,8 @@ use serde::Deserialize;
 mod protocol;
 #[path = "nexus_tui/review.rs"]
 mod review;
+#[path = "nexus_tui/composer.rs"]
+mod composer;
 #[path = "nexus_tui/redact.rs"]
 mod redact;
 #[path = "nexus_tui/sidecar.rs"]
