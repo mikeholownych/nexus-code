@@ -104,6 +104,8 @@ pub fn review_lines(review: &Review) -> Vec<ReviewLine> {
 fn hunk_range(range: Range<usize>) -> String {
     if range.is_empty() {
         format!("{},0", range.start)
+    } else if range.len() == 1 {
+        format!("{}", range.start + 1)
     } else {
         format!("{},{}", range.start + 1, range.len())
     }
@@ -213,6 +215,18 @@ mod tests {
             texts(&lines, LineKind::Hunk),
             vec!["@@ -1,5 +1,5 @@", "@@ -15,6 +15,6 @@"]
         );
+    }
+
+    #[test]
+    fn single_line_ranges_omit_the_count_like_git() {
+        let lines = review_lines(&Review::Change {
+            path: "f".into(),
+            before: Some("a\n".into()),
+            after: "b\nc\n".into(),
+            created: false,
+            truncated: false,
+        });
+        assert_eq!(texts(&lines, LineKind::Hunk), vec!["@@ -1 +1,2 @@"]);
     }
 
     #[test]
