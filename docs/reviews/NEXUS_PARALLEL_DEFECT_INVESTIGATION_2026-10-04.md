@@ -6,7 +6,7 @@ Authority: `docs/reviews/NEXUS_DEFECT_RECONCILIATION_PHASE3_2026-10-04.md` (0024
 
 **Repository state at start:** main `0024449`; worktrees: `~/nexus-code-tui-interaction` (Cursor, `feat/tui-interaction-core`, `f6987bd`; treated read-only, never entered with a write);
 nothing staged on main; main's working tree showed uncommitted edits to `docs/superpowers/plans/…phase3b…` and `docs/superpowers/specs/…live-default-design.md` (not mine; Cursor's concurrent activity; untouched) and an untracked `graphify-out/`.
-Earlier in the session one staged file was observed on main (path not read); the index was empty when I looked again and my earlier commit did not include it.
+Correction to my earlier report: the "one staged file" I noted before the previous commit was a false alarm. The `rtk` output wrapper prepends a `Changes:` line to `git diff --cached` output, which `wc -l` counted; the index was empty on every check.
 
 Tags: OBSERVED / REPRODUCED / ESTABLISHED (mechanism demonstrated with controls) / HYPOTHESIS / UNKNOWN.
 
