@@ -2960,6 +2960,108 @@ git commit -m "feat(tui): layout feedback, kitty keyboard protocol, closing fram
 
 ---
 
+### Task 9A: Multiline objective integrity across the live boundary (acceptance addendum)
+
+Added after the defect reconciliation review (`docs/reviews/NEXUS_DEFECT_RECONCILIATION_PHASE3_2026-10-04.md`, main commit `0024449`). The legacy readline REPL drops every pasted line after the first (defect D1). The TUI composer is a separate input path, and this task proves that path across the real boundary: PTY keystrokes → `nexus-tui` → NDJSON `prompt.submit` → real sidecar → agent → gateway. It changes no product code. It does not touch `repl.ts`, `harness run -j`, verifier timeouts or context budgeting (D2–D4 are out of scope).
+
+**Files:**
+- Create: `cli/test/helpers/sidecar_recorder.mjs`
+- Create: `cli/test/tui_multiline_e2e.test.ts`
+- Create: `docs/reviews/NEXUS_TUI_MULTILINE_QUALIFICATION_2026-10-04.md`
+
+**Composer contract under test** (`composer.rs` `insert`, used by `on_paste`): `\r\n` becomes `\n`, then a lone `\r` becomes `\n`; tab and newline are kept; other control characters are dropped. `take()` submits the draft verbatim (no trimming). The agent's only established transformation (`cli/src/agent.ts`, `effectiveUserContent`) is that in a git workspace the first user message is `prompt + "\n" + runtimeContext`, where `runtimeContext` starts with `"\n[Git Status: <branch> (<n> uncommitted dirty files)]"`. No active plan exists in a fresh session, so nothing else is appended. Confirm both against the code before writing assertions; if either differs, assert the real contract and report the difference.
+
+- [ ] **Step 1: Recorder shim**
+
+`nexus-tui --live --sidecar PATH --node BIN -- ARGS` runs `BIN PATH ARGS`. Create `cli/test/helpers/sidecar_recorder.mjs`, a transparent shim launched as that `PATH`. It spawns `process.execPath` with `[process.env.NEXUS_RECORD_SIDECAR, ...process.argv.slice(2)]` and `stdio: ["pipe", "pipe", "inherit"]`. Every stdin chunk is appended to `process.env.NEXUS_RECORD_COMMANDS` and forwarded to the child; stdin end ends the child's stdin. Every child stdout chunk is appended to `process.env.NEXUS_RECORD_EVENTS` and forwarded to `process.stdout`. It forwards SIGTERM, SIGINT and SIGHUP to the child and exits with the child's exit code (1 if it was killed by a signal). Use synchronous appends so the logs are complete when the process exits. The shim never parses, filters or rewrites bytes.
+
+- [ ] **Step 2: The end-to-end test**
+
+Create `cli/test/tui_multiline_e2e.test.ts` with one test: "a pasted multiline objective reaches the agent intact as exactly one prompt".
+
+Prerequisites: `core/target/release/nexus-tui`, `cli/dist/sidecar.js` and `script` (util-linux) must exist. If any is missing, fail with a message naming `make build`. Do not skip: a skipped acceptance test is not evidence.
+
+Rig:
+- `startGateway((n) => ({ kind: "text", content: "Noted." }))`, `makeRepo()` and `makeHome()` from `./helpers/fixtures.js`. Use temp files for the two recorder logs.
+- Spawn `script -qfec "<cmd>" /dev/null` with `stdio: ["pipe", "pipe", "pipe"]`. `<cmd>` is `stty rows 40 cols 120; exec <tui> --live --sidecar <recorder> --node <process.execPath> -- -w <repo> -e <gw.url> -m m`, with every path shell-quoted. The env is `{ ...process.env, HOME: home, NEXUS_DEBUG: "0", NEXUS_RECORD_SIDECAR: <abs cli/dist/sidecar.js>, NEXUS_RECORD_COMMANDS, NEXUS_RECORD_EVENTS }`.
+- Answer the terminal like a real terminal without the kitty keyboard protocol: whenever new PTY output contains `\x1b[c`, write `\x1b[?62c` (send no `\x1b[?u` answer). Otherwise crossterm waits out its query timeout.
+- Readiness: wait until the events log contains a `session.state` line and the PTY output contains a hint that live_view only draws once the link is ready (find the exact text in `live_view.rs`). Then wait 300 ms more.
+
+Objective (22 lines; LF form shown; `⇥` is a literal tab):
+
+```
+Fix the flaky retry logic in the payment webhook handler.
+
+Context:
+The handler in src/webhooks/payment.ts retries failed deliveries, but
+retries sometimes fire twice when the upstream returns 502 & then times out.
+
+Requirements:
+  1. Keep the public API unchanged; callers rely on `handle(event, opts)`.
+  2. Cap retries at 3, with exponential backoff (250ms, 500ms, 1s).
+     - Jitter must stay within +/-10%.
+     - Do not retry 4xx responses, except 429.
+  3. Log each attempt as: "attempt=<n> status=<code> delay=<ms>".
+
+⇥Tab-indented note: the queue lives in src/queue/index.ts.
+
+Notes from the incident channel, pasted verbatim:
+/exit
+> that line above was someone trying to leave the chat, ignore it.
+    // keep this code-looking comment exactly as written
+
+Acceptance: all tests in test/webhooks pass; no new dependencies.
+Deadline: Friday?! Questions -> ask in #payments. Owner: TBD
+```
+
+Input sequence, each write separate, about 150 ms apart:
+1. Bracketed paste: `\x1b[200~` + the objective joined with `\r\n`, except that the break between the `> that line above…` line and the `    // keep this…` line is a lone `\r` + `\x1b[201~`. There is no trailing line break.
+2. In-composer edits: Backspace (`\x7f`) three times and then `mike`, which edits the last line. Then Up (`\x1b[A`) to the `Acceptance:` line, End (`\x1b[F`), then ` Run the suite twice.`
+3. Enter (`\r`), exactly once.
+
+Write `EXPECTED` as a literal in the test, not computed from the input: the LF objective with the last line `Deadline: Friday?! Questions -> ask in #payments. Owner: mike` and the `Acceptance:` line ending `no new dependencies. Run the suite twice.`.
+
+Assertions, in this order:
+1. Wait (≤ 30 s) for a `turn.result` in the events log. The commands log then holds exactly one line, and it parses to `{ v: 1, type: "prompt.submit", id, text }` with `text === EXPECTED` (byte-exact; LF only: no `\r` anywhere).
+2. `EXPECTED` itself (sanity, catches a wrong literal): 22 lines, 5 blank lines, contains `"\n/exit\n"`, `"\n\tTab-indented"`, `"\n    // keep"` and `"\n     - Jitter"`.
+3. The events log has exactly one `turn.result`, no `error` event, and its `turn.execution` is `COMPLETED`.
+4. The gateway's first request's first `role: "user"` message equals `EXPECTED + "\n\n[Git Status: " + …`: assert `content.startsWith(EXPECTED + "\n")` and that the remainder matches `/^\n\[Git Status: [^\]\n]+ \(\d+ uncommitted dirty files\)\]$/`.
+5. `/exit` did not end the session: wait 1 s; the `script` child is still running and the commands log still has exactly one line.
+6. Quit with Ctrl-C (`\x03`, idle with an empty composer, so the TUI quits). The `script` child exits 0 within 20 s. The commands log is then exactly two lines: the `prompt.submit` above and a `shutdown`. No other command was sent at any point.
+
+Cleanup in `finally`: SIGKILL the child if still running, close the gateway, remove the repo, home and logs.
+
+- [ ] **Step 3: Run it**
+
+Run: `cd cli && node --import tsx --test test/tui_multiline_e2e.test.ts > /tmp/t9a.txt 2>&1`
+Expected: PASS, 1 test. Then run it twice more; it must pass all three times (no flakiness). Then `pgrep -af 'sidecar.js|nexus-core rpc|nexus-tui'` must show nothing the test started.
+
+If it fails because the product drops, splits, reorders or executes text, do not edit the assertions to match. Stop and report the failure with the logs: that is a Phase 3A defect.
+
+- [ ] **Step 4: Probe terminals without bracketed paste (evidence only, not a suite test)**
+
+With the same rig in a throwaway script under `/tmp`, have the gateway reply after `delayMs: 3000`. Send the same 22 lines as plain keystrokes, with `\r` between lines and no `\x1b[200~`/`\x1b[201~` markers, which is how such a terminal delivers a paste. After the turn ends, wait 1 s and copy the commands log. Capture the composer from the screen (use `pyte` as in Task 10, or the raw PTY output). Then quit with Ctrl-C twice: the first clears the draft. Record exactly which `prompt.submit` commands were sent, their text, and what remained in the composer. Do not change product code because of this probe.
+
+- [ ] **Step 5: Qualification record**
+
+Write `docs/reviews/NEXUS_TUI_MULTILINE_QUALIFICATION_2026-10-04.md` (keep it short):
+- What the test proves and where it lives, plus the boundary crossed: PTY bytes → crossterm paste and key events → composer → `Command::PromptSubmit` → recorder (raw bytes) → real `cli/dist/sidecar.js` → agent → fake gateway request body.
+- The observed results of three consecutive runs.
+- The non-bracketed-paste probe: the observed behaviour, stated plainly. In particular, say whether the first line ran as its own prompt and whether line breaks or text were lost. Disposition `BOUNDED`: Phase 3 enables bracketed paste and relies on it for multiline paste. On terminals that do not provide it, multiline paste is unsupported, and the TUI does not claim otherwise. Making it reliable would need paste-burst heuristics, which are out of Phase 3 scope.
+- `LEGACY_REPL_MULTILINE_DEFECT: REMAINS_OPEN` (the TUI bypasses `repl.ts`; it is not fixed). D2, D3 and D4 are untouched.
+- The status block: `MULTILINE_OBJECTIVE_E2E`, `MULTILINE_SINGLE_SUBMISSION`, `MULTILINE_CONTENT_INTEGRITY`, `COMMAND_LIKE_TEXT_PRESERVED_AS_DATA`, `NON_BRACKETED_PASTE`, `LEGACY_REPL_MULTILINE_DEFECT`.
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add cli/test/helpers/sidecar_recorder.mjs cli/test/tui_multiline_e2e.test.ts docs/reviews/NEXUS_TUI_MULTILINE_QUALIFICATION_2026-10-04.md
+git commit -m "test(tui): end-to-end multiline objective integrity through the live sidecar boundary"
+```
+
+Count effect: the CLI suite becomes 308 tests (307 + 1) and the only allowed failure is still `SCAN-001 & SCAN-004`. Rust counts are unchanged by this task.
+
+---
+
 ### Task 10: Full verification and PTY smoke
 
 **Files:**
@@ -2974,7 +3076,7 @@ command cargo test --manifest-path core/Cargo.toml > /tmp/v-test.txt 2>&1
 cd cli && node --import tsx --test test/*.test.ts > /tmp/v-cli.txt 2>&1
 ```
 
-Expected: build succeeds; no clippy findings pointing into `core/src/bin/nexus_tui.rs` or `core/src/bin/nexus_tui/` (pre-existing `harness-core` warnings are out of scope); all cargo tests pass (100 in `nexus-tui`); CLI suite 307 tests with only the known `SCAN-001 & SCAN-004` failure.
+Expected: build succeeds; no clippy findings pointing into `core/src/bin/nexus_tui.rs` or `core/src/bin/nexus_tui/` (pre-existing `harness-core` warnings are out of scope); all cargo tests pass (101 in `nexus-tui`: the 100 planned plus the single-line hunk header test added during review); CLI suite 308 tests (Task 9A added one), with only the known `SCAN-001 & SCAN-004` failure; `tui_multiline_e2e.test.ts` passes.
 
 - [ ] **Step 2: PTY driver**
 

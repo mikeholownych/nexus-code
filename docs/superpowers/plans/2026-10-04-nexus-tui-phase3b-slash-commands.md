@@ -33,7 +33,8 @@
 - **Busy.** One activity at a time: a prompt, or a command. Anything else gets `BUSY`. The sidecar reports `busy: true` before a command starts, so synchronous commands such as `/test` show as busy.
 - **Per-turn bookkeeping (REPL parity).** Before every turn: `createCheckpoint("Turn: <first 30 chars>")` (`"Vision: …"` for images). If that throws, the turn does not start and the error names the reason (the REPL behaves the same). After every turn: save the session (id from `--resume` or a new one). Submitted prompts join the in-memory history that `/history` and `!<n>` read; the REPL history file is read at startup and never written by the sidecar.
 - **Sidecar options** match `harness repl`: endpoint, model, workspace, max steps, temperature, shell, fallback, context limit, dry run, read only, sandbox, worktree, authoritative verifier, record flight, planner/coder model and endpoint, approve, resume.
-- **Typed input.** A draft starting with `!` followed by text is a direct shell command (`!<n>` reruns prompt n). A draft starting with `/` is a command when its first word contains no further `/`; `/etc/hosts is broken` stays a prompt. `/exit`, `/quit`, `/q` quit; `/help` and `/?` open the help panel; `/tui` says the live view is already open. Everything else goes to the sidecar, which reports unknown commands.
+- **Typed input.** A draft starting with `!` followed by text is a direct shell command (`!<n>` reruns prompt n). A draft starting with `/` is a command when its first word contains no further `/`; `/etc/hosts is broken` stays a prompt. `/exit`, `/quit`, `/q` quit; `/help` and `/?` open the help panel; `/tui` says the live view is already open. Everything else goes to the sidecar, which reports unknown commands. **Multiline drafts (3A acceptance addendum):** a draft spanning several lines is never a local command and never a `!` shell command; it is sent as a prompt, so a pasted objective that begins with `/exit` or `!ls` cannot quit the session or run its later lines as shell. Remote commands keep multiline arguments (a `/commit` message body). A `/exit` line inside an objective is always data.
+- **Count baseline after 3A:** 3A finished with Rust 101 (one extra review test) and CLI 308 (`tui_multiline_e2e.test.ts`). Add 1 to every Rust and every CLI count in this plan. `tui_multiline_e2e.test.ts` must keep passing at every task that runs the CLI suite.
 - **Completion.** While the draft is a single `/word` with the cursor at its end, up to six matching commands show above the composer. Up/Down move the highlight, Tab completes, Enter completes and runs (or waits for input when the usage has a required `<argument>` outside brackets), Esc hides the list until the draft changes.
 - **Rendering.** The typed command is echoed in accent colour; its reply follows indented, red when it failed, with `+`/`-`/`@@` colouring for diffs. `/clear` clears the transcript. Sidecar notices render as quiet `·` lines. The help panel lists the catalogue after the keys.
 - **Default entry.** `harness` with no arguments execs the live TUI when `core/target/release/nexus-tui` exists and both stdin and stdout are terminals; otherwise it runs the REPL (with a one-line note on stderr when the TUI is not built). `harness --repl [options]` runs the REPL. `harness --live [sidecar options]` stays.
@@ -2119,7 +2120,11 @@ pub enum Invocation {
 /// `/etc/hosts is wrong`.
 pub fn parse(draft: &str) -> Option<Invocation> {
     let text = draft.trim();
+    let multiline = text.contains('\n');
     if let Some(rest) = text.strip_prefix('!') {
+        if multiline {
+            return None;
+        }
         let args = rest.trim();
         return (!args.is_empty()).then(|| Invocation::Remote {
             command: "!".into(),
@@ -2132,6 +2137,9 @@ pub fn parse(draft: &str) -> Option<Invocation> {
         return None;
     }
     let name = name.to_lowercase();
+    if multiline && matches!(name.as_str(), "exit" | "quit" | "q" | "help" | "?" | "tui") {
+        return None;
+    }
     Some(match name.as_str() {
         "exit" | "quit" | "q" => Invocation::Quit,
         "help" | "?" => Invocation::Help,
@@ -2217,6 +2225,10 @@ mod tests {
         assert_eq!(parse("/"), None);
         assert_eq!(parse("/etc/hosts is wrong"), None);
         assert_eq!(parse("fix /diff"), None);
+        assert_eq!(parse("/exit\nplease fix the parser"), None);
+        assert_eq!(parse("/help\nwhy does this fail?"), None);
+        assert_eq!(parse("!ls\nrm -rf build"), None);
+        assert_eq!(parse("fix it\n/exit\nthen test"), None);
     }
 
     #[test]

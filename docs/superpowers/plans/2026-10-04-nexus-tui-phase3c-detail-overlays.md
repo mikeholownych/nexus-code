@@ -31,6 +31,7 @@
 - **Read-only commands never wait.** `tool.detail` and `receipt` are answered immediately while a turn or command runs; they are not jobs and never produce `BUSY`.
 - **Keys.** In transcript focus: `[` selects the previous (older) tool call, `]` the next; the first press selects the newest. Selection moves the window just enough to show the call, once; scrolling afterwards is free. Enter opens the selected call's details (Enter without a selection still returns to the composer). `v` opens the receipt. Esc clears the selection, a second Esc returns to the composer; entering transcript focus starts without a selection. In a panel: arrows, page keys, Home/End scroll; Esc, Enter, `q` or `?` close; Ctrl-C closes. An approval request replaces any open panel.
 - **Panels** cover the transcript area (status strip and composer hint stay visible), open immediately with a loading line, ignore answers for other request ids, and show a failed request's error inside the panel rather than in the transcript.
+- **Count baseline after 3B:** 3A added one Rust test (review) and one CLI test (`tui_multiline_e2e.test.ts`), and the 3B multiline-draft rule added parse assertions only. Add 1 to every Rust and every CLI count in this plan, unless 3B's final verification recorded different numbers, in which case use those. `tui_multiline_e2e.test.ts` must keep passing.
 - **Out of scope:** per-hunk patch approval (phase 4), opening records of hidden tools (`task_completed` and the like are not in the transcript), persisting the ledger across restarts.
 
 ## File structure
