@@ -4,6 +4,7 @@
  */
 import type { TurnResult } from "./core/turn.js";
 import { redactSecrets } from "./ui.js";
+import type { ApprovalReview } from "./approval_review.js";
 
 export const PROTOCOL_VERSION = 1;
 export const MAX_TEXT_FIELD = 8000;
@@ -30,7 +31,7 @@ export type SidecarEvent =
   | { type: "assistant.delta"; turn_id: string; text: string }
   | { type: "tool.start"; turn_id: string; call_id: string; tool: string; subject: string }
   | { type: "tool.end"; turn_id: string; call_id: string; tool: string; success: boolean; summary: string; lines: number }
-  | { type: "approval.request"; id: string; turn_id: string; tool: string; subject: string; preview: string }
+  | { type: "approval.request"; id: string; turn_id: string; tool: string; subject: string; preview: string; review: ApprovalReview }
   | { type: "turn.result"; turn_id: string; heading: string; line: string; turn: TurnResult; model_summary: ModelSummary | null }
   | { type: "slash.result"; id: string; command: string; success: boolean; output: string }
   | { type: "error"; id?: string; code: ErrorCode; message: string };

@@ -8,6 +8,7 @@ import { ApplicationCore } from "./core/app.js";
 import { failedTurnFromError, summarizeTurn } from "./core/turn.js";
 import { getGitInfo } from "./git.js";
 import { redactSecrets } from "./ui.js";
+import { approvalReview } from "./approval_review.js";
 import { PROTOCOL_VERSION, ProtocolError, capText, encodeEvent, parseCommand, projectTurn, toolSubject, toolSummary, } from "./protocol.js";
 /** Drives one ApplicationCore from protocol commands and reports its activity as protocol events. */
 export class SidecarServer {
@@ -144,6 +145,7 @@ export class SidecarServer {
                 tool,
                 subject: toolSubject(args),
                 preview: capText(redactSecrets(JSON.stringify(args, null, 2))),
+                review: approvalReview(tool, args, this.app.getConfig().workspace),
             });
         });
     }

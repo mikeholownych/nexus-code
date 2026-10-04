@@ -8,6 +8,7 @@ import { ApplicationCore } from "./core/app.js";
 import { TurnResult, failedTurnFromError, summarizeTurn } from "./core/turn.js";
 import { getGitInfo } from "./git.js";
 import { redactSecrets } from "./ui.js";
+import { approvalReview } from "./approval_review.js";
 import {
   PROTOCOL_VERSION,
   ProtocolError,
@@ -165,6 +166,7 @@ export class SidecarServer {
         tool,
         subject: toolSubject(args),
         preview: capText(redactSecrets(JSON.stringify(args, null, 2))),
+        review: approvalReview(tool, args, this.app.getConfig().workspace),
       });
     });
   }

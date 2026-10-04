@@ -154,6 +154,7 @@ describe("SidecarServer: approvals", () => {
       assert.equal(req.tool, "write_file");
       assert.equal(req.subject, "x.txt");
       assert.ok(req.preview.includes("x.txt"));
+      assert.deepEqual(req.review, { kind: "change", path: "x.txt", before: null, after: "hi", created: true, truncated: false });
       await send({ type: "deny", id: req.id });
       await server.idle();
       assert.equal(fs.existsSync(path.join(repo, "x.txt")), false);
