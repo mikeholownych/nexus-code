@@ -1,10 +1,11 @@
 /** Runs one slash command for the sidecar. Handlers never write to stdout; everything comes back as an outcome. */
 import { stripEscapes } from "../protocol.js";
 import { SlashHandler, SlashHost, SlashOutcome, errorText, findSlash, reply } from "./catalog.js";
+import { EXTENSION_HANDLERS } from "./extension_commands.js";
 import { SESSION_HANDLERS } from "./session_commands.js";
 import { WORKSPACE_HANDLERS } from "./workspace_commands.js";
 
-const HANDLERS: Record<string, SlashHandler> = { ...SESSION_HANDLERS, ...WORKSPACE_HANDLERS };
+const HANDLERS: Record<string, SlashHandler> = { ...SESSION_HANDLERS, ...WORKSPACE_HANDLERS, ...EXTENSION_HANDLERS };
 
 export function hasHandler(name: string): boolean {
   return Object.hasOwn(HANDLERS, name);

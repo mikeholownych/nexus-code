@@ -344,3 +344,113 @@ describe("slash router: workspace commands", () => {
     });
   });
 });
+
+describe("slash router: extensions and turns", () => {
+  test("plan adds, starts, completes and clears phases", async () => {
+    await withRig(async ({ reply }) => {
+      assert.equal((await reply("plan")).output, "No active plan. Add a phase with /plan add <description>.");
+      await reply("plan", "add write the parser");
+      await reply("plan", "add test it");
+      assert.equal((await reply("plan", "start 1")).output, "Phase 1 in progress.\n1. [~] write the parser\n2. [ ] test it");
+      assert.equal((await reply("plan", "done 1")).output, "Phase 1 completed.\n1. [x] write the parser\n2. [ ] test it");
+      assert.equal((await reply("plan", "done 7")).success, false);
+      assert.equal((await reply("plan", "clear")).output, "Plan cleared.");
+    });
+  });
+
+  test("knowledge sets, lists and deletes entries", async () => {
+    await withRig(async ({ reply }) => {
+      assert.equal((await reply("knowledge", "set style use tabs")).output, "Saved [rule] style");
+      assert.match((await reply("knowledge")).output, /• \[rule\] style: use tabs/);
+      assert.equal((await reply("knowledge", "delete style")).output, "Deleted style");
+      assert.equal((await reply("knowledge", "delete style")).success, false);
+    });
+  });
+
+  test("skills, skill lookup and skill scaffolding", async () => {
+    await withRig(async ({ reply }) => {
+      assert.equal((await reply("skills")).success, true);
+      assert.equal((await reply("skill", "no-such-skill")).success, false);
+      assert.match((await reply("skill", "init lint-fixer")).output, /^Scaffolded lint-fixer at /);
+    });
+  });
+
+  test("image validates its file and resolves to a vision turn", async () => {
+    await withRig(async ({ reply, run, repo }) => {
+      assert.equal((await reply("image")).output, "Usage: /image <path> [prompt]");
+      assert.match((await reply("image", "missing.png")).output, /^Could not load the image: /);
+      fs.writeFileSync(path.join(repo, "dot.png"), Buffer.from("89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c489", "hex"));
+      const turn = await run("image", "dot.png what is this");
+      assert.equal(turn.kind, "turn");
+      if (turn.kind !== "turn") return;
+      assert.equal(turn.label, "what is this [image dot.png]");
+      assert.equal(turn.checkpoint, "Vision: what is this");
+      assert.ok(Array.isArray(turn.prompt));
+    });
+  });
+
+  test("commands that need arguments explain their usage", async () => {
+    await withRig(async ({ reply }) => {
+      const usages: Array<[string, string]> = [
+        ["tdd", "Usage: /tdd <issue description>"],
+        ["team", "Usage: /team <researcher|architect|implementer|tester|full> <objective>"],
+        ["browse", "Usage: /browse <url>"],
+        ["skill", "Usage: /skill <name> or /skill init <name>"],
+      ];
+      for (const [command, usage] of usages) {
+        const out = await reply(command);
+        assert.equal(out.success, false, command);
+        assert.equal(out.output, usage);
+      }
+      assert.match((await reply("mcp", "add only-a-name")).output, /^Usage: \/mcp add/);
+      assert.equal((await reply("team", "juggler do it")).output, "Unknown role juggler. Roles: researcher, architect, implementer, tester, full");
+    });
+  });
+
+  test("mcp and plugins describe what is configured", async () => {
+    await withRig(async ({ reply }) => {
+      assert.match((await reply("mcp")).output, /^No MCP servers configured/);
+      assert.equal((await reply("plugins")).success, true);
+    });
+  });
+
+  test("! runs a shell command directly and !<n> reruns a prompt", async () => {
+    await withRig(async ({ reply, run, prompts }) => {
+      const out = await reply("!", "echo hello-from-bang");
+      assert.equal(out.success, true, out.output);
+      assert.match(out.output, /hello-from-bang/);
+      assert.equal((await reply("!", "")).output, "Usage: !<shell command> or !<history number>");
+      prompts.push("first prompt");
+      assert.deepEqual(await run("!", "1"), { kind: "turn", command: "!", prompt: "first prompt", label: "first prompt", checkpoint: "Turn: first prompt" });
+    });
+  });
+
+  test("a cancelled TDD cycle stops after the running phase", async () => {
+    await withRig(async ({ app }) => {
+      const controller = new AbortController();
+      let runs = 0;
+      const agent = {
+        run: async () => {
+          runs += 1;
+          controller.abort();
+          return {};
+        },
+      } as any;
+      const result = await app.getAgent().getSynthesizer().runAutonomousTdd(agent, "fix it", undefined, { signal: controller.signal });
+      assert.equal(runs, 1);
+      assert.equal(result.success, false);
+      assert.equal(result.summary, "Stopped by operator.");
+    });
+  });
+
+  test("every REPL slash command has a TUI counterpart", () => {
+    const repl = fs.readFileSync(path.join(cliRoot, "src", "repl.ts"), "utf-8");
+    const names = new Set([...repl.matchAll(/cmd === "([^"]+)"/g)].map((m) => m[1]));
+    assert.ok(names.size >= 40, `found only ${names.size} REPL commands`);
+    for (const name of names) assert.ok(findSlash(name), `/${name} is missing from SLASH_COMMANDS`);
+  });
+
+  test("every catalogue command has a handler", () => {
+    for (const spec of [...SLASH_COMMANDS, BANG]) assert.ok(hasHandler(spec.name), spec.name);
+  });
+});

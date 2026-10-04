@@ -183,7 +183,7 @@ export class SynthesizerEngine {
     /**
      * Orchestrates an end-to-end TDD session with an autonomous agent.
      */
-    async runAutonomousTdd(agent, issuePrompt, reproductionHint) {
+    async runAutonomousTdd(agent, issuePrompt, reproductionHint, options = {}) {
         this.startSession(issuePrompt, reproductionHint);
         console.log(pc.bold(pc.cyan("\n🔴 === TDD PHASE 1: RED (Create Reproduction Test) ===\n")));
         const redPrompt = [
@@ -198,7 +198,9 @@ export class SynthesizerEngine {
             `4. DO NOT modify any production / source files yet.`,
             `5. Once the reproduction test is written and confirmed failing, call task_completed with a summary of the failing test.`,
         ].filter(Boolean).join("\n");
-        await agent.run(redPrompt);
+        await agent.run(redPrompt, options.onConfirm, { signal: options.signal });
+        if (options.signal?.aborted)
+            return this.stopped();
         // Verify RED phase
         let target = this.state.reproductionTestTarget || reproductionHint;
         if (!target) {
@@ -221,7 +223,9 @@ export class SynthesizerEngine {
             `3. Run the reproduction test using run_command to verify it now PASSES.`,
             `4. When the reproduction test passes, call task_completed with a summary of the fix.`,
         ].join("\n");
-        await agent.run(greenPrompt);
+        await agent.run(greenPrompt, options.onConfirm, { signal: options.signal });
+        if (options.signal?.aborted)
+            return this.stopped();
         console.log(pc.bold(pc.magenta("\n🔵 === TDD PHASE 3: REFACTOR (Regression Suite Verification) ===\n")));
         const refactorResult = await this.verifyRefactorPhase();
         if (!refactorResult.success) {
@@ -236,7 +240,11 @@ export class SynthesizerEngine {
                 `2. Run the test suite to confirm all tests pass cleanly.`,
                 `3. Call task_completed when all tests pass.`,
             ].join("\n");
-            await agent.run(healingPrompt);
+            if (options.signal?.aborted)
+                return this.stopped();
+            await agent.run(healingPrompt, options.onConfirm, { signal: options.signal });
+            if (options.signal?.aborted)
+                return this.stopped();
             const recheck = await this.verifyRefactorPhase();
             if (!recheck.success) {
                 return {
@@ -253,5 +261,8 @@ export class SynthesizerEngine {
             summary: "TDD workflow completed successfully: RED -> GREEN -> REFACTOR verified.",
             state: this.getState(),
         };
+    }
+    stopped() {
+        return { success: false, finalPhase: this.state.currentPhase, summary: "Stopped by operator.", state: this.getState() };
     }
 }
