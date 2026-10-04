@@ -207,6 +207,18 @@ describe("slash router: session commands", () => {
     });
   });
 
+  test("a rejected save name keeps the previous session id", async () => {
+    await withRig(async ({ app, host, reply }) => {
+      host.saveSession = (title) => {
+        app.getSessionManager().saveSession({ id: host.sessionId(), title, workspace: app.getConfig().workspace, messages: app.getAgent().getMessages() });
+      };
+      converse(app);
+      assert.equal((await reply("save", "my session")).success, false);
+      assert.equal(host.sessionId(), "session-1");
+      assert.equal((await reply("save")).output, "Session saved as session-1.");
+    });
+  });
+
   test("init and onboard write project rules into the workspace", async () => {
     await withRig(async ({ reply }) => {
       const init = await reply("init");

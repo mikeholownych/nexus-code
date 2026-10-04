@@ -104,8 +104,14 @@ function sessions({ host }: SlashContext): SlashOutcome {
 
 function save({ host, args }: SlashContext): SlashOutcome {
   if (host.app.getAgent().getMessages().length <= 1) return reply("save", "Nothing to save yet: the conversation is empty.", false);
+  const previous = host.sessionId();
   if (args.trim()) host.setSessionId(args.trim());
-  host.saveSession("Snapshot");
+  try {
+    host.saveSession("Snapshot");
+  } catch (err) {
+    host.setSessionId(previous);
+    throw err;
+  }
   return reply("save", `Session saved as ${host.sessionId()}.`);
 }
 
