@@ -13,6 +13,7 @@ use crate::composer::{ComposerLayout, PREFIX_WIDTH};
 use crate::live_state::{
     Approval, Entry, Focus, Link, LiveLayout, LiveState, Overlay, Tone, ToolStatus, Verdict,
 };
+use crate::protocol::SlashSpec;
 use crate::review::{LineKind, ReviewLine};
 use crate::{ACCENT, MUTED, SURFACE};
 
@@ -79,12 +80,16 @@ pub fn render_live(frame: &mut Frame, state: &LiveState) -> LiveLayout {
     let inner = block.inner(rows[2]);
     frame.render_widget(block, rows[2]);
     render_composer(frame, inner, state, &composer);
+    if let Some((found, pick)) = state.completion() {
+        render_completion(frame, rows[1], &found, pick);
+    }
     match &state.overlay {
         Some(Overlay::Approval(approval)) => {
             (layout.overlay_rows, layout.overlay_limit) = render_approval(frame, rows[1], approval);
         }
         Some(Overlay::Help { scroll }) => {
-            (layout.overlay_rows, layout.overlay_limit) = render_help(frame, rows[1], *scroll);
+            (layout.overlay_rows, layout.overlay_limit) =
+                render_help(frame, rows[1], *scroll, &state.commands);
         }
         None => {}
     }
@@ -106,6 +111,11 @@ const HELP: &[(&str, &str)] = &[
     ("ctrl+u / ctrl+k", "delete to the start / end of the line"),
     ("ctrl+w", "delete the previous word"),
     ("ctrl+l", "clear the draft"),
+    ("/", "slash commands: type / to list them, tab completes"),
+    (
+        "!command",
+        "run a shell command directly; !n runs prompt n again",
+    ),
     ("tab", "switch between the composer and the transcript"),
     ("pgup / pgdn", "scroll the transcript"),
     ("esc", "close this panel; cancel a running turn"),
@@ -194,8 +204,8 @@ fn render_approval(frame: &mut Frame, area: Rect, approval: &Approval) -> (usize
     (rows, limit)
 }
 
-fn review_line(line: &ReviewLine) -> Line<'_> {
-    let style = match line.kind {
+fn line_style(kind: LineKind) -> Style {
+    match kind {
         LineKind::Added => Style::default().fg(Color::Green),
         LineKind::Removed => Style::default().fg(Color::Red),
         LineKind::Hunk => Style::default().fg(Color::Cyan),
@@ -204,33 +214,115 @@ fn review_line(line: &ReviewLine) -> Line<'_> {
             .fg(Color::White)
             .add_modifier(Modifier::BOLD),
         LineKind::Context => Style::default().fg(Color::White),
-    };
-    Line::from(Span::styled(expand_tabs(&line.text), style))
+    }
 }
 
-/// Draws the help panel; returns its visible rows and the largest useful scroll.
-fn render_help(frame: &mut Frame, area: Rect, scroll: usize) -> (usize, usize) {
+fn review_line(line: &ReviewLine) -> Line<'_> {
+    Line::from(Span::styled(expand_tabs(&line.text), line_style(line.kind)))
+}
+
+/// How a row of a command's `diff` output is coloured: rows that are not part of a hunk read as headers.
+fn diff_row_kind(row: &str) -> LineKind {
+    if row.starts_with('+') && !row.starts_with("+++") {
+        LineKind::Added
+    } else if row.starts_with('-') && !row.starts_with("---") {
+        LineKind::Removed
+    } else if row.starts_with("@@") {
+        LineKind::Hunk
+    } else if row.starts_with(' ') {
+        LineKind::Context
+    } else {
+        LineKind::Meta
+    }
+}
+
+const MAX_COMPLETION_ROWS: usize = 6;
+
+/// Slash-command completion: up to six rows at the bottom of the transcript area, the highlighted one in accent.
+fn render_completion(frame: &mut Frame, area: Rect, found: &[&SlashSpec], pick: usize) {
+    let shown = found
+        .len()
+        .min(MAX_COMPLETION_ROWS)
+        .min(usize::from(area.height));
+    if shown == 0 {
+        return;
+    }
+    let first = (pick + 1).saturating_sub(shown);
+    let width = found
+        .iter()
+        .map(|spec| spec.usage.chars().count())
+        .max()
+        .unwrap_or(0)
+        .min(40);
+    let lines: Vec<Line> = found
+        .iter()
+        .enumerate()
+        .skip(first)
+        .take(shown)
+        .map(|(index, spec)| {
+            let style = if index == pick {
+                Style::default().fg(Color::Black).bg(ACCENT)
+            } else {
+                Style::default().fg(Color::White).bg(SURFACE)
+            };
+            Line::from(Span::styled(
+                format!(" {:<width$}  {} ", spec.usage, spec.summary),
+                style,
+            ))
+        })
+        .collect();
+    let height = u16::try_from(shown).unwrap_or(0);
+    let rect = Rect::new(area.x, area.bottom() - height, area.width, height);
+    frame.render_widget(Clear, rect);
+    frame.render_widget(
+        Paragraph::new(lines).style(Style::default().bg(SURFACE)),
+        rect,
+    );
+}
+
+/// Draws the help panel: keys, then the sidecar's slash commands. Returns its visible rows and largest scroll.
+fn render_help(
+    frame: &mut Frame,
+    area: Rect,
+    scroll: usize,
+    commands: &[SlashSpec],
+) -> (usize, usize) {
     let key = Style::default().fg(ACCENT).add_modifier(Modifier::BOLD);
-    let lines: Vec<Line> = HELP
+    let heading = Style::default()
+        .fg(Color::White)
+        .add_modifier(Modifier::BOLD);
+    let white = Style::default().fg(Color::White);
+    let mut lines: Vec<Line> = HELP
         .iter()
         .map(|(keys, text)| {
             if keys.is_empty() {
-                Line::from(Span::styled(
-                    *text,
-                    Style::default()
-                        .fg(Color::White)
-                        .add_modifier(Modifier::BOLD),
-                ))
+                Line::from(Span::styled(*text, heading))
             } else {
                 Line::from(vec![
                     Span::styled(format!("  {keys:<17}"), key),
-                    Span::styled(*text, Style::default().fg(Color::White)),
+                    Span::styled(*text, white),
                 ])
             }
         })
         .collect();
+    if !commands.is_empty() {
+        let width = commands
+            .iter()
+            .map(|spec| spec.usage.chars().count())
+            .max()
+            .unwrap_or(0)
+            .min(34);
+        lines.push(Line::default());
+        lines.push(Line::from(Span::styled("Commands", heading)));
+        lines.extend(commands.iter().map(|spec| {
+            Line::from(vec![
+                Span::styled(format!("  {:<width$}  ", spec.usage), key),
+                Span::styled(spec.summary.as_str(), white),
+            ])
+        }));
+    }
     let wanted = u16::try_from(lines.len() + 2).unwrap_or(u16::MAX);
-    let rect = modal(area, 84, wanted);
+    let rect = modal(area, 96, wanted);
     let block = modal_block(" Help ");
     let inner = block.inner(rect);
     frame.render_widget(Clear, rect);
@@ -568,7 +660,38 @@ fn entry_lines(entry: &Entry, first: bool) -> Vec<Line<'_>> {
             }
             lines.push(Line::from(spans));
         }
-        Entry::Command(_) | Entry::Output { .. } | Entry::Info(_) => {}
+        Entry::Command(text) => {
+            lines.push(Line::default());
+            for (index, row) in text.split('\n').enumerate() {
+                lines.push(Line::from(vec![
+                    Span::styled(if index == 0 { "› " } else { "  " }, prompt),
+                    Span::styled(expand_tabs(row), Style::default().fg(ACCENT)),
+                ]));
+            }
+        }
+        Entry::Output {
+            success,
+            text,
+            diff,
+        } => {
+            let base = if *success {
+                white
+            } else {
+                Style::default().fg(Color::Red)
+            };
+            lines.extend(text.split('\n').map(|row| {
+                let style = if *diff {
+                    line_style(diff_row_kind(row))
+                } else {
+                    base
+                };
+                Line::from(Span::styled(format!("  {}", expand_tabs(row)), style))
+            }));
+        }
+        Entry::Info(text) => lines.push(Line::from(Span::styled(
+            format!("  · {}", one_line(text)),
+            muted,
+        ))),
     }
     if first && lines.first().is_some_and(|line| line.spans.is_empty()) {
         lines.remove(0);
@@ -656,6 +779,7 @@ fn composer_hint(state: &LiveState) -> &'static str {
             " approval needed · y approve · n deny "
         }
         _ if state.overlay.is_some() => " esc close help ",
+        _ if state.completion().is_some() => " tab complete · enter run · esc close ",
         _ if state.focus == Focus::Transcript => " transcript · ↑↓ scroll · tab back ",
         (_, true) if state.cancel_requested() => " cancelling… ctrl-c again to quit ",
         (_, true) => " waiting for the agent ",
@@ -695,7 +819,7 @@ pub fn tool_verb(tool: &str) -> String {
 mod tests {
     use super::*;
     use crate::live_state::{Focus, LiveLayout, Verdict};
-    use crate::protocol::{Event, parse_event};
+    use crate::protocol::{Event, SlashSpec, parse_event};
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
     use ratatui::{Terminal, backend::TestBackend, layout::Position};
 
@@ -1409,5 +1533,127 @@ mod tests {
         assert_shows(&draw(&state, 40, 10), &["$ npm test"]);
         state.overlay = Some(crate::live_state::Overlay::Help { scroll: 0 });
         assert_shows(&draw(&state, 40, 10), &["Keys"]);
+    }
+
+    fn spec(name: &str, usage: &str, summary: &str) -> SlashSpec {
+        SlashSpec {
+            name: name.into(),
+            usage: usage.into(),
+            summary: summary.into(),
+        }
+    }
+
+    #[test]
+    fn commands_replies_and_info_render_in_the_transcript() {
+        let mut state = ready();
+        state.transcript = vec![
+            Entry::Command("/diff".into()),
+            Entry::Output {
+                success: true,
+                text: "diff --git a/x b/x\n@@ -1 +1 @@\n-old\n+new".into(),
+                diff: true,
+            },
+            Entry::Output {
+                success: false,
+                text: "Commit failed: nothing staged".into(),
+                diff: false,
+            },
+            Entry::Info("Resumed session a.".into()),
+        ];
+        let mut terminal = Terminal::new(TestBackend::new(80, 20)).unwrap();
+        terminal
+            .draw(|frame| {
+                render_live(frame, &state);
+            })
+            .unwrap();
+        let screen = terminal.backend().to_string();
+        assert_shows(
+            &screen,
+            &[
+                "› /diff",
+                "  -old",
+                "  +new",
+                "  Commit failed: nothing staged",
+                "  · Resumed session a.",
+            ],
+        );
+        let lines = rows(&screen);
+        for (text, color) in [
+            ("+new", Color::Green),
+            ("-old", Color::Red),
+            ("Commit failed", Color::Red),
+        ] {
+            let row = lines.iter().position(|line| line.contains(text)).unwrap();
+            let column = lines[row].find(text).unwrap();
+            let x = u16::try_from(lines[row][..column].chars().count()).unwrap();
+            let y = u16::try_from(row).unwrap();
+            assert_eq!(terminal.backend().buffer()[(x, y)].fg, color, "{text}");
+        }
+    }
+
+    #[test]
+    fn the_completion_list_sits_above_the_composer_with_the_pick_highlighted() {
+        let mut state = ready();
+        state.commands = vec![
+            spec("help", "/help", "List the slash commands"),
+            spec(
+                "history",
+                "/history [query|run <n>]",
+                "Search earlier prompts",
+            ),
+        ];
+        for c in "/h".chars() {
+            state.on_key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE));
+        }
+        state.on_key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+        let mut terminal = Terminal::new(TestBackend::new(80, 20)).unwrap();
+        terminal
+            .draw(|frame| {
+                render_live(frame, &state);
+            })
+            .unwrap();
+        let screen = terminal.backend().to_string();
+        assert_shows(
+            &screen,
+            &[
+                "/help",
+                "List the slash commands",
+                "/history [query|run <n>]",
+                "tab complete · enter run · esc close",
+            ],
+        );
+        let lines = rows(&screen);
+        let picked = lines
+            .iter()
+            .position(|line| line.contains("Search earlier prompts"))
+            .unwrap();
+        let composer = lines
+            .iter()
+            .position(|line| line.starts_with("› /h"))
+            .unwrap();
+        assert_eq!(
+            picked + 2,
+            composer,
+            "the list ends right above the composer border"
+        );
+        let y = u16::try_from(picked).unwrap();
+        assert_eq!(terminal.backend().buffer()[(1, y)].bg, ACCENT);
+    }
+
+    #[test]
+    fn help_lists_the_slash_commands_after_the_keys() {
+        let mut state = ready();
+        state.commands = vec![spec("diff", "/diff", "Uncommitted changes as a diff")];
+        state.overlay = Some(crate::live_state::Overlay::Help { scroll: 0 });
+        assert_shows(
+            &draw(&state, 100, 40),
+            &[
+                "Keys",
+                "!command",
+                "Commands",
+                "/diff",
+                "Uncommitted changes as a diff",
+            ],
+        );
     }
 }
