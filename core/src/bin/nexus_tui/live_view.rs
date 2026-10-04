@@ -334,7 +334,7 @@ fn render_crash(frame: &mut Frame, area: Rect, code: Option<i32>, reason: &str, 
     ];
     // Priority when rows are short: reason and exit code, recovery keys, heading, spacing, then stderr.
     let mut room = usize::from(area.height)
-        .saturating_sub(rows(&detail) + recovery.iter().map(|line| rows(line)).sum::<usize>());
+        .saturating_sub(rows(&detail) + recovery.iter().map(&rows).sum::<usize>());
     let mut lines = Vec::new();
     if room > 0 {
         lines.push(heading);

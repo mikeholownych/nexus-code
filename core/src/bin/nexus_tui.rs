@@ -172,11 +172,11 @@ where
                                     .min(snapshot.activity.len().saturating_sub(1));
                                 state.scroll = 0;
                             }
-                            KeyCode::Enter | KeyCode::Char('d') => {
-                                if !snapshot.activity.is_empty() {
-                                    state.overlay = Overlay::Detail;
-                                    state.scroll = 0;
-                                }
+                            KeyCode::Enter | KeyCode::Char('d')
+                                if !snapshot.activity.is_empty() =>
+                            {
+                                state.overlay = Overlay::Detail;
+                                state.scroll = 0;
                             }
                             KeyCode::Char('v') if snapshot.validation.is_some() => {
                                 state.overlay = Overlay::Validation;
