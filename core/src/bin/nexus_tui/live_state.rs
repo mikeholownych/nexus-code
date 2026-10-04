@@ -162,7 +162,7 @@ impl LiveState {
                     *slot = summary;
                 }
             }
-            Event::ApprovalRequest { tool, subject } => self.transcript.push(Entry::Notice(format!(
+            Event::ApprovalRequest { tool, subject, .. } => self.transcript.push(Entry::Notice(format!(
                 "{tool} {subject} is waiting for approval, which this view cannot give yet. Press Esc to cancel the turn."
             ))),
             Event::TurnResult { heading, line, turn, model_summary } => {

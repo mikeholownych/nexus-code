@@ -14,6 +14,36 @@ pub struct GitInfo {
 #[derive(Clone, Debug, Deserialize, PartialEq)]
 pub struct ModelSummary {
     pub summary: String,
+    #[serde(default)]
+    pub notes: Option<String>,
+}
+
+/// What the operator is asked to approve (`approvalReview` in `cli/src/approval_review.ts`). Text is already
+/// redacted and capped by the sidecar.
+#[derive(Clone, Debug, Deserialize, PartialEq)]
+#[serde(tag = "kind")]
+pub enum Review {
+    #[serde(rename = "change")]
+    Change {
+        path: String,
+        before: Option<String>,
+        after: String,
+        created: bool,
+        truncated: bool,
+    },
+    #[serde(rename = "patch")]
+    Patch {
+        path: String,
+        patch: String,
+        truncated: bool,
+    },
+    #[serde(rename = "command")]
+    Shell { command: String },
+    #[serde(rename = "args")]
+    Args { text: String, truncated: bool },
+    /// A review kind this client does not know; the modal still asks, without a preview.
+    #[serde(other)]
+    Unknown,
 }
 
 /// Sidecar → UI events. Fields this client does not use are ignored by serde.
@@ -46,7 +76,13 @@ pub enum Event {
         summary: String,
     },
     #[serde(rename = "approval.request")]
-    ApprovalRequest { tool: String, subject: String },
+    ApprovalRequest {
+        id: String,
+        tool: String,
+        subject: String,
+        #[serde(default)]
+        review: Option<Review>,
+    },
     #[serde(rename = "turn.result")]
     TurnResult {
         heading: String,
@@ -74,6 +110,10 @@ pub enum Command {
     PromptSubmit { id: String, text: String },
     #[serde(rename = "cancel")]
     Cancel,
+    #[serde(rename = "approve")]
+    Approve { id: String, always: bool },
+    #[serde(rename = "deny")]
+    Deny { id: String },
     #[serde(rename = "shutdown")]
     Shutdown,
 }
@@ -204,8 +244,10 @@ mod tests {
                 r#"{"v":1,"type":"approval.request","id":"approval-1","turn_id":"t1","tool":"write_file","subject":"x.txt","preview":"{}"}"#
             ),
             Ok(Event::ApprovalRequest {
+                id: "approval-1".into(),
                 tool: "write_file".into(),
-                subject: "x.txt".into()
+                subject: "x.txt".into(),
+                review: None,
             })
         );
         assert_eq!(
@@ -238,9 +280,11 @@ mod tests {
         assert_eq!(turn["outcome"], "NOT_ESTABLISHED");
         assert_eq!(model_summary, None);
         let with_summary = parse_event(r#"{"v":1,"type":"turn.result","turn_id":"t2","heading":"H","line":"L","turn":{},"model_summary":{"summary":"Fixed it.","notes":"n"}}"#).unwrap();
-        assert!(
-            matches!(with_summary, Event::TurnResult { model_summary: Some(ModelSummary { ref summary }), .. } if summary == "Fixed it.")
-        );
+        assert!(matches!(
+            with_summary,
+            Event::TurnResult { model_summary: Some(ModelSummary { ref summary, ref notes }), .. }
+                if summary == "Fixed it." && notes.as_deref() == Some("n")
+        ));
     }
 
     #[test]
@@ -313,6 +357,19 @@ mod tests {
                 Command::Shutdown,
                 serde_json::json!({"v":1,"type":"shutdown"}),
             ),
+            (
+                Command::Approve {
+                    id: "approval-1".into(),
+                    always: true,
+                },
+                serde_json::json!({"v":1,"type":"approve","id":"approval-1","always":true}),
+            ),
+            (
+                Command::Deny {
+                    id: "approval-1".into(),
+                },
+                serde_json::json!({"v":1,"type":"deny","id":"approval-1"}),
+            ),
         ] {
             let line = encode_command(&command);
             assert!(line.ends_with('\n'));
@@ -323,5 +380,49 @@ mod tests {
             );
             assert_eq!(serde_json::from_str::<Value>(&line).unwrap(), expected);
         }
+    }
+
+    #[test]
+    fn approval_requests_carry_each_review_kind() {
+        let review = |json: &str| match parse_event(&format!(
+            r#"{{"v":1,"type":"approval.request","id":"a1","turn_id":"t1","tool":"t","subject":"s","preview":"{{}}","review":{json}}}"#
+        )) {
+            Ok(Event::ApprovalRequest { review, .. }) => review,
+            other => panic!("{other:?}"),
+        };
+        assert_eq!(
+            review(
+                r#"{"kind":"change","path":"x.txt","before":null,"after":"hi\n","created":true,"truncated":false}"#
+            ),
+            Some(Review::Change {
+                path: "x.txt".into(),
+                before: None,
+                after: "hi\n".into(),
+                created: true,
+                truncated: false
+            })
+        );
+        assert_eq!(
+            review(r#"{"kind":"patch","path":"a.ts","patch":"@@ -1 +1 @@","truncated":true}"#),
+            Some(Review::Patch {
+                path: "a.ts".into(),
+                patch: "@@ -1 +1 @@".into(),
+                truncated: true
+            })
+        );
+        assert_eq!(
+            review(r#"{"kind":"command","command":"npm test"}"#),
+            Some(Review::Shell {
+                command: "npm test".into()
+            })
+        );
+        assert_eq!(
+            review(r#"{"kind":"args","text":"{}","truncated":false}"#),
+            Some(Review::Args {
+                text: "{}".into(),
+                truncated: false
+            })
+        );
+        assert_eq!(review(r#"{"kind":"hologram"}"#), Some(Review::Unknown));
     }
 }
