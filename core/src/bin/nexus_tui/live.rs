@@ -468,6 +468,50 @@ exit 0"#
         assert!(!app.handle(Action::Quit));
     }
 
+    #[test]
+    fn a_slash_command_round_trips_through_the_sidecar() {
+        let script = format!(
+            r#"{HELLO}
+read cmd
+case "$cmd" in *'"type":"slash"'*) ;; *) exit 9;; esac
+case "$cmd" in *'"command":"diff"'*) ;; *) exit 9;; esac
+case "$cmd" in *'"id":"s1"'*) ;; *) exit 9;; esac
+echo '{{"v":1,"type":"session.state","workspace":"/w","workspace_name":"w","model":"m","mode":"auto","git":null,"busy":true}}'
+echo '{{"v":1,"type":"slash.result","id":"s1","command":"diff","success":true,"output":"+added line","format":"diff"}}'
+echo '{{"v":1,"type":"session.state","workspace":"/w","workspace_name":"w","model":"m","mode":"auto","git":null,"busy":false}}'
+read shutdown
+case "$shutdown" in *'"type":"shutdown"'*) exit 0;; *) exit 8;; esac"#
+        );
+        let mut app = LiveApp::start(fake_sidecar(&script));
+        pump_until(&mut app, |s| {
+            s.link == Link::Ready && s.session.model == "m"
+        });
+        for c in "/diff".chars() {
+            assert_eq!(
+                app.state
+                    .on_key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE)),
+                None
+            );
+        }
+        let send = app
+            .state
+            .on_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
+            .expect("enter sends the command");
+        assert!(app.handle(send));
+        pump_until(&mut app, |s| {
+            !s.session.busy
+                && s.transcript.iter().any(|e| {
+                    matches!(e, Entry::Output { text, diff: true, .. } if text == "+added line")
+                })
+        });
+        assert_eq!(app.state.link, Link::Ready);
+        let quit = app
+            .state
+            .on_key(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL));
+        assert_eq!(quit, Some(Action::Quit));
+        assert!(!app.handle(quit.unwrap()));
+    }
+
     #[cfg(unix)]
     #[test]
     fn sigterm_requests_a_clean_stop_once() {
