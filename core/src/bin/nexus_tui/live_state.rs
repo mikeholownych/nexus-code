@@ -7,6 +7,7 @@ use std::time::{Duration, Instant};
 
 use crate::protocol::{Command, Event, PROTOCOL_VERSION, Review, SlashSpec};
 use crate::review::{ReviewLine, review_lines};
+use crate::slash::{self, Invocation};
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum ToolStatus {
@@ -47,6 +48,16 @@ pub enum Entry {
         notes: Option<String>,
     },
     Notice(String),
+    /// A slash or `!` command as the operator typed it.
+    Command(String),
+    /// What a command reported. `diff` asks for unified-diff colouring.
+    Output {
+        success: bool,
+        text: String,
+        diff: bool,
+    },
+    /// A quiet informational line from the sidecar or the view.
+    Info(String),
     /// The operator's answer to an approval request.
     Decision {
         tool: String,
@@ -148,6 +159,11 @@ pub struct LiveState {
     pub closing: bool,
     layout: LiveLayout,
     pub commands: Vec<SlashSpec>,
+    slash_seq: u64,
+    /// Highlighted completion row.
+    slash_pick: usize,
+    /// Esc hid the completion list; editing the draft shows it again.
+    slash_dismissed: bool,
 }
 
 impl LiveState {
@@ -166,6 +182,9 @@ impl LiveState {
             closing: false,
             layout: LiveLayout::default(),
             commands: Vec::new(),
+            slash_seq: 0,
+            slash_pick: 0,
+            slash_dismissed: false,
         }
     }
 
@@ -274,7 +293,37 @@ impl LiveState {
                 }
                 self.transcript.push(Entry::Notice(format!("{code}: {message}")));
             }
-            Event::SlashResult { .. } | Event::Notice { .. } => {}
+            Event::SlashResult {
+                id,
+                command,
+                success,
+                output,
+                format,
+                composer,
+                prompt,
+            } => {
+                if command == "clear" && success {
+                    self.transcript.clear();
+                    self.scroll_back = 0;
+                }
+                if !output.is_empty() || !success {
+                    self.transcript.push(Entry::Output {
+                        success,
+                        text: output,
+                        diff: format.as_deref() == Some("diff"),
+                    });
+                }
+                if let Some(text) = composer {
+                    self.composer.insert(&text);
+                }
+                match prompt {
+                    // The command started a turn under its id; `turn.result` releases the composer.
+                    Some(prompt) => self.transcript.push(Entry::User(prompt)),
+                    None if self.pending.as_deref() == Some(id.as_str()) => self.pending = None,
+                    None => {}
+                }
+            }
+            Event::Notice { text } => self.transcript.push(Entry::Info(text)),
             Event::Unknown => {}
         }
     }
@@ -304,6 +353,8 @@ impl LiveState {
 
     pub fn on_paste(&mut self, text: &str) {
         if !matches!(self.link, Link::Crashed { .. }) && self.overlay.is_none() {
+            self.slash_pick = 0;
+            self.slash_dismissed = false;
             self.composer.insert(text);
         }
     }
@@ -435,6 +486,9 @@ impl LiveState {
             }
             None => {}
         }
+        if let Some(action) = self.on_completion_key(key) {
+            return action;
+        }
         let page = Self::page(self.layout.transcript_rows);
         match key.code {
             KeyCode::Tab => {
@@ -495,6 +549,9 @@ impl LiveState {
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
         let alt = key.modifiers.contains(KeyModifiers::ALT);
         let shift = key.modifiers.contains(KeyModifiers::SHIFT);
+        self.slash_pick = 0;
+        // Up/Down walk lines or recalled prompts; a recalled `/diff` must not open the list and take the next Up.
+        self.slash_dismissed = matches!(key.code, KeyCode::Up | KeyCode::Down);
         if key.code == KeyCode::Enter && !alt && !shift {
             return self.submit();
         }
@@ -534,15 +591,87 @@ impl LiveState {
         {
             return None;
         }
-        self.turn_seq += 1;
         let text = self.composer.take();
         self.scroll_back = 0;
         self.focus = Focus::Composer;
+        if let Some(invocation) = slash::parse(&text) {
+            return self.invoke(text, invocation);
+        }
+        self.turn_seq += 1;
         self.transcript.push(Entry::User(text.clone()));
         self.session.busy = true;
         let id = format!("t{}", self.turn_seq);
         self.pending = Some(id.clone());
         Some(Action::Send(Command::PromptSubmit { id, text }))
+    }
+
+    fn invoke(&mut self, typed: String, invocation: Invocation) -> Option<Action> {
+        match invocation {
+            Invocation::Quit => Some(Action::Quit),
+            Invocation::Help => {
+                self.overlay = Some(Overlay::Help { scroll: 0 });
+                None
+            }
+            Invocation::AlreadyLive => {
+                self.transcript
+                    .push(Entry::Info("You are already in the live view.".into()));
+                None
+            }
+            Invocation::Remote { command, args } => {
+                self.slash_seq += 1;
+                let id = format!("s{}", self.slash_seq);
+                self.transcript.push(Entry::Command(typed));
+                self.session.busy = true;
+                self.pending = Some(id.clone());
+                Some(Action::Send(Command::Slash { id, command, args }))
+            }
+        }
+    }
+
+    /// Slash commands matching the draft while it is a bare `/word` with the cursor at its end, and the
+    /// highlighted row.
+    pub fn completion(&self) -> Option<(Vec<&SlashSpec>, usize)> {
+        if self.slash_dismissed
+            || self.overlay.is_some()
+            || self.focus != Focus::Composer
+            || !self.composer.at_end()
+        {
+            return None;
+        }
+        let found = slash::matches(&self.commands, self.composer.text());
+        if found.is_empty() {
+            return None;
+        }
+        let pick = self.slash_pick.min(found.len() - 1);
+        Some((found, pick))
+    }
+
+    /// Keys the completion list takes while it is shown. `None` lets the key through to the composer.
+    fn on_completion_key(&mut self, key: KeyEvent) -> Option<Option<Action>> {
+        let (count, pick, chosen) = {
+            let (found, pick) = self.completion()?;
+            (found.len(), pick, found[pick].clone())
+        };
+        match key.code {
+            KeyCode::Up => self.slash_pick = (pick + count - 1) % count,
+            KeyCode::Down => self.slash_pick = (pick + 1) % count,
+            KeyCode::Esc => self.slash_dismissed = true,
+            KeyCode::Tab => self.complete(&chosen.name),
+            KeyCode::Enter if key.modifiers.is_empty() => {
+                self.complete(&chosen.name);
+                if slash::needs_args(&chosen.usage) {
+                    return Some(None);
+                }
+                return Some(self.submit());
+            }
+            _ => return None,
+        }
+        Some(None)
+    }
+
+    fn complete(&mut self, name: &str) {
+        self.composer.clear();
+        self.composer.insert(&format!("/{name} "));
     }
 
     fn interrupt_running_tools(&mut self) {
@@ -1401,5 +1530,241 @@ mod tests {
         assert!(
             matches!(&state.link, Link::Crashed { reason, .. } if reason.contains("protocol 2"))
         );
+    }
+
+    const IDLE_STATE: &str = r#"{"v":1,"type":"session.state","workspace":"/w/app","workspace_name":"app","model":"m","mode":"auto","git":null,"busy":false}"#;
+
+    fn hello_with(commands: &[(&str, &str)]) -> Event {
+        Event::Hello {
+            protocol: 1,
+            commands: commands
+                .iter()
+                .map(|(name, usage)| SlashSpec {
+                    name: (*name).into(),
+                    usage: (*usage).into(),
+                    summary: format!("{name} summary"),
+                })
+                .collect(),
+        }
+    }
+
+    #[test]
+    fn slash_commands_go_to_the_sidecar_and_results_land_in_the_transcript() {
+        let mut state = ready();
+        type_text(&mut state, "/diff");
+        assert_eq!(
+            state.on_key(key(KeyCode::Enter)),
+            Some(Action::Send(Command::Slash {
+                id: "s1".into(),
+                command: "diff".into(),
+                args: String::new()
+            }))
+        );
+        assert_eq!(state.transcript, vec![Entry::Command("/diff".into())]);
+        assert!(state.session.busy);
+        state.apply(ev(r#"{"v":1,"type":"slash.result","id":"s1","command":"diff","success":true,"output":"-a\n+b","format":"diff"}"#));
+        assert_eq!(
+            state.transcript.last(),
+            Some(&Entry::Output {
+                success: true,
+                text: "-a\n+b".into(),
+                diff: true
+            })
+        );
+        assert_eq!(state.pending, None);
+        state.apply(ev(IDLE_STATE));
+        type_text(&mut state, "!ls -la");
+        assert_eq!(
+            state.on_key(key(KeyCode::Enter)),
+            Some(Action::Send(Command::Slash {
+                id: "s2".into(),
+                command: "!".into(),
+                args: "ls -la".into()
+            }))
+        );
+    }
+
+    #[test]
+    fn local_commands_never_reach_the_sidecar() {
+        let mut state = ready();
+        type_text(&mut state, "/help");
+        assert_eq!(state.on_key(key(KeyCode::Enter)), None);
+        assert_eq!(state.overlay, Some(Overlay::Help { scroll: 0 }));
+        state.on_key(key(KeyCode::Esc));
+        type_text(&mut state, "/tui");
+        assert_eq!(state.on_key(key(KeyCode::Enter)), None);
+        assert_eq!(
+            state.transcript.last(),
+            Some(&Entry::Info("You are already in the live view.".into()))
+        );
+        assert!(!state.session.busy);
+        type_text(&mut state, "/etc/hosts is wrong");
+        assert_eq!(
+            state.on_key(key(KeyCode::Enter)),
+            Some(Action::Send(Command::PromptSubmit {
+                id: "t1".into(),
+                text: "/etc/hosts is wrong".into()
+            }))
+        );
+        state.apply(ev(IDLE_STATE));
+        type_text(&mut state, "/quit");
+        assert_eq!(state.on_key(key(KeyCode::Enter)), Some(Action::Quit));
+    }
+
+    #[test]
+    fn a_command_that_starts_a_turn_stays_pending_until_the_turn_result() {
+        let mut state = ready();
+        type_text(&mut state, "/history run 1");
+        assert_eq!(
+            state.on_key(key(KeyCode::Enter)),
+            Some(Action::Send(Command::Slash {
+                id: "s1".into(),
+                command: "history".into(),
+                args: "run 1".into()
+            }))
+        );
+        state.apply(ev(r#"{"v":1,"type":"slash.result","id":"s1","command":"history","success":true,"output":"","prompt":"fix it"}"#));
+        assert_eq!(state.pending.as_deref(), Some("s1"));
+        assert_eq!(
+            state.transcript,
+            vec![
+                Entry::Command("/history run 1".into()),
+                Entry::User("fix it".into())
+            ]
+        );
+        state.apply(ev(
+            r#"{"v":1,"type":"assistant.delta","turn_id":"s1","text":"On it."}"#,
+        ));
+        state.apply(ev(r#"{"v":1,"type":"turn.result","turn_id":"s1","heading":"TURN ENDED - NO CHANGES TO VERIFY","line":"No files changed","turn":{"execution":"COMPLETED","outcome":"NOT_REQUIRED"},"model_summary":null}"#));
+        assert_eq!(state.pending, None);
+        assert!(matches!(
+            state.transcript.last(),
+            Some(Entry::Banner { .. })
+        ));
+        state.apply(ev(IDLE_STATE));
+        type_text(&mut state, "/status");
+        assert!(state.on_key(key(KeyCode::Enter)).is_some());
+        state.apply(ev(
+            r#"{"v":1,"type":"error","id":"s2","code":"INTERNAL","message":"boom"}"#,
+        ));
+        assert!(
+            !state.session.busy,
+            "an error for the pending command unlocks the composer"
+        );
+    }
+
+    #[test]
+    fn clear_paste_and_notices_change_the_view() {
+        let mut state = ready();
+        state.transcript.push(Entry::User("old".into()));
+        type_text(&mut state, "/clear");
+        assert!(state.on_key(key(KeyCode::Enter)).is_some());
+        state.apply(ev(r#"{"v":1,"type":"slash.result","id":"s1","command":"clear","success":true,"output":"Conversation context reset."}"#));
+        assert_eq!(
+            state.transcript,
+            vec![Entry::Output {
+                success: true,
+                text: "Conversation context reset.".into(),
+                diff: false
+            }]
+        );
+        state.apply(ev(IDLE_STATE));
+        type_text(&mut state, "/paste");
+        assert!(state.on_key(key(KeyCode::Enter)).is_some());
+        state.apply(ev(r#"{"v":1,"type":"slash.result","id":"s2","command":"paste","success":true,"output":"Pasted 11 characters into the composer.","composer":"pasted text"}"#));
+        assert_eq!(state.composer, "pasted text");
+        state.apply(ev(
+            r#"{"v":1,"type":"notice","text":"Resumed session a (4 messages)."}"#,
+        ));
+        assert_eq!(
+            state.transcript.last(),
+            Some(&Entry::Info("Resumed session a (4 messages).".into()))
+        );
+    }
+
+    #[test]
+    fn completion_lists_matches_and_tab_or_enter_completes() {
+        let mut state = ready();
+        state.apply(hello_with(&[
+            ("diff", "/diff"),
+            ("help", "/help"),
+            ("history", "/history [query|run <n>]"),
+            ("tdd", "/tdd <issue>"),
+        ]));
+        let shown = |state: &LiveState| {
+            state.completion().map(|(found, pick)| {
+                (
+                    found
+                        .iter()
+                        .map(|spec| spec.name.clone())
+                        .collect::<Vec<_>>(),
+                    pick,
+                )
+            })
+        };
+        type_text(&mut state, "/h");
+        assert_eq!(
+            shown(&state),
+            Some((vec!["help".to_string(), "history".to_string()], 0))
+        );
+        state.on_key(key(KeyCode::Down));
+        assert_eq!(shown(&state).unwrap().1, 1);
+        state.on_key(key(KeyCode::Up));
+        assert_eq!(shown(&state).unwrap().1, 0);
+        assert_eq!(state.on_key(key(KeyCode::Tab)), None);
+        assert_eq!(state.composer, "/help ");
+        assert_eq!(shown(&state), None);
+        assert_eq!(
+            state.focus,
+            Focus::Composer,
+            "tab completed instead of switching focus"
+        );
+        state.on_key(ctrl('l'));
+        type_text(&mut state, "/hi");
+        assert_eq!(
+            state.on_key(key(KeyCode::Enter)),
+            Some(Action::Send(Command::Slash {
+                id: "s1".into(),
+                command: "history".into(),
+                args: String::new()
+            }))
+        );
+        state.apply(ev(IDLE_STATE));
+        type_text(&mut state, "/td");
+        assert_eq!(
+            state.on_key(key(KeyCode::Enter)),
+            None,
+            "a command with a required argument waits for it"
+        );
+        assert_eq!(state.composer, "/tdd ");
+        state.on_key(ctrl('l'));
+        type_text(&mut state, "/d");
+        state.on_key(key(KeyCode::Esc));
+        assert_eq!(shown(&state), None);
+        state.on_key(key(KeyCode::Backspace));
+        assert_eq!(shown(&state).map(|(found, _)| found.len()), Some(4));
+    }
+
+    #[test]
+    fn history_recall_walks_past_a_recalled_slash_command() {
+        let mut state = ready();
+        type_text(&mut state, "fix it");
+        assert!(state.on_key(key(KeyCode::Enter)).is_some());
+        state.apply(ev(IDLE_STATE));
+        type_text(&mut state, "/diff");
+        assert!(state.on_key(key(KeyCode::Enter)).is_some());
+        state.apply(ev(IDLE_STATE));
+        state.apply(hello_with(&[("diff", "/diff"), ("help", "/help")]));
+        assert_eq!(state.on_key(key(KeyCode::Up)), None);
+        assert_eq!(state.composer, "/diff");
+        assert!(
+            state.completion().is_none(),
+            "a recalled command does not open the list"
+        );
+        assert_eq!(state.on_key(key(KeyCode::Up)), None);
+        assert_eq!(state.composer, "fix it");
+        assert_eq!(state.on_key(key(KeyCode::Down)), None);
+        assert_eq!(state.on_key(key(KeyCode::Backspace)), None);
+        assert!(state.completion().is_some(), "editing shows the list again");
     }
 }

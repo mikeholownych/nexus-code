@@ -568,6 +568,7 @@ fn entry_lines(entry: &Entry, first: bool) -> Vec<Line<'_>> {
             }
             lines.push(Line::from(spans));
         }
+        Entry::Command(_) | Entry::Output { .. } | Entry::Info(_) => {}
     }
     if first && lines.first().is_some_and(|line| line.spans.is_empty()) {
         lines.remove(0);
