@@ -238,3 +238,109 @@ describe("slash router: session commands", () => {
     });
   });
 });
+
+describe("slash router: workspace commands", () => {
+  test("diff reports a clean tree, then the change as a diff", async () => {
+    await withRig(async ({ reply, repo }) => {
+      assert.equal((await reply("diff")).output, "Working tree clean: no uncommitted changes.");
+      fs.writeFileSync(path.join(repo, "base.txt"), "changed\n");
+      const out = await reply("diff");
+      assert.equal(out.format, "diff");
+      assert.match(out.output, /^-base$/m);
+      assert.match(out.output, /^\+changed$/m);
+    });
+  });
+
+  test("git shows the short status", async () => {
+    await withRig(async ({ reply, repo }) => {
+      assert.equal((await reply("git")).output, "Working tree clean.");
+      fs.writeFileSync(path.join(repo, "base.txt"), "changed\n");
+      assert.match((await reply("git")).output, / M base\.txt/);
+    });
+  });
+
+  test("stage lists hunks and reset unstages", async () => {
+    await withRig(async ({ reply, repo }) => {
+      assert.equal((await reply("stage")).output, "No unstaged hunks in the working tree.");
+      fs.writeFileSync(path.join(repo, "base.txt"), "changed\n");
+      const out = await reply("stage");
+      assert.match(out.output, /base\.txt \(1 hunks\)/);
+      assert.match(out.output, /\+changed/);
+      assert.equal((await reply("stage", "reset")).output, "Unstaged all changes.");
+    });
+  });
+
+  test("commit suggests a message into the composer, then commits", async () => {
+    await withRig(async ({ reply, repo }) => {
+      assert.equal((await reply("commit")).output, "Working tree clean: nothing to commit.");
+      fs.writeFileSync(path.join(repo, "base.txt"), "changed\n");
+      const suggestion = await reply("commit");
+      assert.ok(suggestion.composer?.startsWith("/commit "), suggestion.composer);
+      const done = await reply("commit", "fix: change base");
+      assert.equal(done.success, true, done.output);
+      assert.equal(execSync("git log -1 --format=%s", { cwd: repo, encoding: "utf-8" }).trim(), "fix: change base");
+    });
+  });
+
+  test("checkpoint, checkpoints, checkpoint diff and undo", async () => {
+    await withRig(async ({ reply, repo }) => {
+      assert.equal((await reply("checkpoints")).output, "No saved checkpoints.");
+      const saved = await reply("checkpoint", "before change");
+      const id = /\((cp_[^)]+)\)$/.exec(saved.output)?.[1];
+      assert.ok(id, saved.output);
+      assert.match((await reply("checkpoints")).output, /before change/);
+      fs.writeFileSync(path.join(repo, "base.txt"), "changed\n");
+      const diff = await reply("checkpoint", `diff ${id}`);
+      assert.equal(diff.format, "diff");
+      assert.match(diff.output, /\+changed/);
+      assert.equal((await reply("checkpoint", "diff")).success, false);
+      assert.equal((await reply("undo")).success, true);
+      assert.equal(fs.readFileSync(path.join(repo, "base.txt"), "utf-8"), "base\n");
+    });
+  });
+
+  test("worktree and audit describe an empty state", async () => {
+    await withRig(async ({ reply }) => {
+      assert.match((await reply("worktree")).output, /^No speculative worktrees/);
+      assert.equal((await reply("worktree", "merge")).output, "No active speculative worktree to merge.");
+      assert.equal((await reply("audit")).output, "No audit records yet.");
+    });
+  });
+
+  test("git commands outside a repository say so", async () => {
+    await withRig(async ({ reply }) => {
+      const plain = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-plain-"));
+      try {
+        assert.equal((await reply("cd", plain)).success, true);
+        for (const command of ["diff", "git", "stage", "commit"]) {
+          const out = await reply(command);
+          assert.equal(out.success, false, command);
+          assert.equal(out.output, "This workspace is not inside a git repository.");
+        }
+      } finally {
+        fs.rmSync(plain, { recursive: true, force: true });
+      }
+    });
+  });
+
+  test("copy needs a reply; paste fills the composer or reports the clipboard error", async () => {
+    await withRig(async ({ reply }) => {
+      const copy = await reply("copy");
+      assert.equal(copy.success, false);
+      assert.equal(copy.output, "No assistant reply to copy yet.");
+      // An empty PATH keeps the clipboard tools out of reach, so the real system clipboard is never read.
+      const emptyBin = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-nobin-"));
+      const previousPath = process.env.PATH;
+      process.env.PATH = emptyBin;
+      let paste: SlashReply;
+      try {
+        paste = await reply("paste");
+      } finally {
+        process.env.PATH = previousPath;
+        fs.rmSync(emptyBin, { recursive: true, force: true });
+      }
+      if (paste.success) assert.equal(typeof paste.composer, "string");
+      else assert.match(paste.output, /^Clipboard error: /);
+    });
+  });
+});

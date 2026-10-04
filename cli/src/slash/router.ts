@@ -2,8 +2,9 @@
 import { stripEscapes } from "../protocol.js";
 import { SlashHandler, SlashHost, SlashOutcome, errorText, findSlash, reply } from "./catalog.js";
 import { SESSION_HANDLERS } from "./session_commands.js";
+import { WORKSPACE_HANDLERS } from "./workspace_commands.js";
 
-const HANDLERS: Record<string, SlashHandler> = { ...SESSION_HANDLERS };
+const HANDLERS: Record<string, SlashHandler> = { ...SESSION_HANDLERS, ...WORKSPACE_HANDLERS };
 
 export function hasHandler(name: string): boolean {
   return Object.hasOwn(HANDLERS, name);

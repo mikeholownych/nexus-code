@@ -2,7 +2,8 @@
 import { stripEscapes } from "../protocol.js";
 import { errorText, findSlash, reply } from "./catalog.js";
 import { SESSION_HANDLERS } from "./session_commands.js";
-const HANDLERS = { ...SESSION_HANDLERS };
+import { WORKSPACE_HANDLERS } from "./workspace_commands.js";
+const HANDLERS = { ...SESSION_HANDLERS, ...WORKSPACE_HANDLERS };
 export function hasHandler(name) {
     return Object.hasOwn(HANDLERS, name);
 }
