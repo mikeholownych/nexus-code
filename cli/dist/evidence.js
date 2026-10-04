@@ -10,6 +10,18 @@ export function redactedJson(value) {
     const json = JSON.stringify(value ?? {}, (_key, v) => (typeof v === "string" ? redactSecrets(stripEscapes(v)) : v), 2);
     return redactSecrets(json);
 }
+/** Tool output is usually JSON text; its string values are redacted before re-encoding, as with arguments. */
+function redactedOutput(text) {
+    try {
+        const parsed = JSON.parse(text);
+        if (parsed !== null && typeof parsed === "object")
+            return redactedJson(parsed);
+    }
+    catch {
+        // Plain text output.
+    }
+    return text;
+}
 function clean(text) {
     return capText(redactSecrets(stripEscapes(text)), MAX_DETAIL);
 }
@@ -49,7 +61,7 @@ export class EvidenceLedger {
             return;
         const parts = success || !error || error === output ? [output] : [output, error];
         record.status = success ? "succeeded" : "failed";
-        record.output = clean(parts.filter(Boolean).join("\n"));
+        record.output = clean(parts.filter(Boolean).map(redactedOutput).join("\n"));
         record.durationMs = Math.max(0, this.now() - record.startedAt);
     }
     get(evidence) {

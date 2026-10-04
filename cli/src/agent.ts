@@ -71,8 +71,9 @@ export type ConfirmHandler = (toolName: string, args: Record<string, any>) => Pr
 /** Structured projection of turn activity for non-terminal surfaces such as the TUI sidecar. Observers must not throw. */
 export interface AgentObserver {
   onAssistantDelta?(text: string): void;
-  onToolStart?(event: { callId: string; tool: string; args: Record<string, any> }): void;
-  onToolEnd?(event: { callId: string; tool: string; success: boolean; output: string; error?: string }): void;
+  /** `dispatch` is unique per call within this agent; model call ids can repeat, even within one step. */
+  onToolStart?(event: { dispatch: number; callId: string; tool: string; args: Record<string, any> }): void;
+  onToolEnd?(event: { dispatch: number; callId: string; tool: string; success: boolean; output: string; error?: string }): void;
 }
 
 export class ContextBudgetError extends Error {
@@ -272,6 +273,7 @@ export class AutonomousAgent {
   private lastTurnResult?: TurnResult;
   private completionSummary?: { summary: string; notes?: string };
   private observer?: AgentObserver;
+  private toolDispatchSeq = 0;
   private verifiedWorktreeCompletion: boolean = false;
   private worktreeRunTurnAuthorized: boolean = false;
   private managedWorktreeWorkspaceSwitch: boolean = false;
@@ -1712,7 +1714,8 @@ Always explain your reasoning before or alongside your tool calls.`;
     }
 
     this.ui.printToolCall(toolName, args);
-    this.observer?.onToolStart?.({ callId: call.id, tool: toolName, args });
+    const dispatch = ++this.toolDispatchSeq;
+    this.observer?.onToolStart?.({ dispatch, callId: call.id, tool: toolName, args });
 
     if (
       onConfirm &&
@@ -1755,7 +1758,7 @@ Always explain your reasoning before or alongside your tool calls.`;
             "Rejected by user"
           );
         }
-        this.observer?.onToolEnd?.({ callId: call.id, tool: toolName, success: false, output: "", error: cancelMsg });
+        this.observer?.onToolEnd?.({ dispatch, callId: call.id, tool: toolName, success: false, output: "", error: cancelMsg });
         return { receipt, shouldExit: false };
       }
     }
@@ -1878,7 +1881,7 @@ Always explain your reasoning before or alongside your tool calls.`;
       receipt.output,
       receipt.error
     );
-    this.observer?.onToolEnd?.({ callId: call.id, tool: toolName, success: receipt.success, output: receipt.output, error: receipt.error });
+    this.observer?.onToolEnd?.({ dispatch, callId: call.id, tool: toolName, success: receipt.success, output: receipt.output, error: receipt.error });
 
     const shouldExit = toolName === "task_completed" && receipt.success;
     return { receipt, shouldExit };

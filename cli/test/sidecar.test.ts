@@ -510,6 +510,55 @@ describe("SidecarServer: evidence and receipts", () => {
     });
   });
 
+  test("tool.detail redacts quoted and escape-split secrets in tool output", async () => {
+    const readConf = (n: number): Reply => n === 1
+      ? { kind: "tools", calls: [{ name: "read_file", args: { path: "conf.yml" } }] }
+      : { kind: "text", content: "ok" };
+    await withSidecar(readConf, "auto", async ({ server, events, repo, send }) => {
+      fs.writeFileSync(path.join(repo, "conf.yml"), 'password: "yamlsecret777"\nkey: sk-ABCDEFGH\x1b[0mIJKLMNOPQRSTUVWXYZ123456\n');
+      await send({ type: "prompt.submit", id: "t1", text: "read it" });
+      await server.idle();
+      const start = events.find((e) => e.type === "tool.start");
+      await send({ type: "tool.detail", id: "d1", evidence: start.evidence });
+      const detail = events.find((e) => e.type === "tool.detail");
+      assert.equal(detail.status, "succeeded");
+      assert.match(detail.output, /password/);
+      assert.doesNotMatch(detail.output, /yamlsecret777/);
+      assert.doesNotMatch(detail.output, /IJKLMNOPQRSTUVWXYZ123456/);
+    });
+  });
+
+  test("parallel calls that share a model call id keep separate records", async () => {
+    const sameIds = (n: number): Reply => n === 1
+      ? { kind: "tools", calls: [{ name: "list_dir", args: { path: "." }, id: "dup" }, { name: "read_file", args: { path: "base.txt" }, id: "dup" }] }
+      : { kind: "text", content: "ok" };
+    await withSidecar(sameIds, "auto", async ({ server, events, send }) => {
+      await send({ type: "prompt.submit", id: "t1", text: "look" });
+      await server.idle();
+      for (const tool of ["list_dir", "read_file"]) {
+        const start = events.find((e) => e.type === "tool.start" && e.tool === tool);
+        const end = events.find((e) => e.type === "tool.end" && e.tool === tool);
+        assert.match(start.evidence, /^e\d+$/, tool);
+        assert.equal(end.evidence, start.evidence, tool);
+      }
+    });
+  });
+
+  test("a tool name with terminal escapes is cleaned on every event", async () => {
+    const oddName = (n: number): Reply => n === 1
+      ? { kind: "tools", calls: [{ name: "no_such\x1b]0;pwned\x07tool", args: {} }] }
+      : { kind: "text", content: "ok" };
+    await withSidecar(oddName, "auto", async ({ server, events, send }) => {
+      await send({ type: "prompt.submit", id: "t1", text: "go" });
+      await server.idle();
+      const start = events.find((e) => e.type === "tool.start");
+      const end = events.find((e) => e.type === "tool.end");
+      await send({ type: "tool.detail", id: "d1", evidence: start.evidence });
+      const detail = events.find((e) => e.type === "tool.detail");
+      for (const event of [start, end, detail]) assert.doesNotMatch(event.tool, /\x1b|\x07/);
+    });
+  });
+
   test("an unknown evidence id is NOT_FOUND", async () => {
     await withSidecar(readOnlyTurn, "auto", async ({ events, send }) => {
       await send({ type: "tool.detail", id: "d1", evidence: "e999" });

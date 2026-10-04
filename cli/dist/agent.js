@@ -185,6 +185,7 @@ export class AutonomousAgent {
     lastTurnResult;
     completionSummary;
     observer;
+    toolDispatchSeq = 0;
     verifiedWorktreeCompletion = false;
     worktreeRunTurnAuthorized = false;
     managedWorktreeWorkspaceSwitch = false;
@@ -1519,7 +1520,8 @@ Always explain your reasoning before or alongside your tool calls.`;
             this.flightRecorder.recordToolCall(currentStep, call.id, toolName, args);
         }
         this.ui.printToolCall(toolName, args);
-        this.observer?.onToolStart?.({ callId: call.id, tool: toolName, args });
+        const dispatch = ++this.toolDispatchSeq;
+        this.observer?.onToolStart?.({ dispatch, callId: call.id, tool: toolName, args });
         if (onConfirm &&
             (toolName === "edit_file" ||
                 toolName === "write_file" ||
@@ -1549,7 +1551,7 @@ Always explain your reasoning before or alongside your tool calls.`;
                 if (this.flightRecorder) {
                     this.flightRecorder.recordToolResult(currentStep, call.id, toolName, false, cancelMsg, 0, "Rejected by user");
                 }
-                this.observer?.onToolEnd?.({ callId: call.id, tool: toolName, success: false, output: "", error: cancelMsg });
+                this.observer?.onToolEnd?.({ dispatch, callId: call.id, tool: toolName, success: false, output: "", error: cancelMsg });
                 return { receipt, shouldExit: false };
             }
         }
@@ -1637,7 +1639,7 @@ Always explain your reasoning before or alongside your tool calls.`;
             }
         }
         this.ui.printToolResult(toolName, receipt.success, receipt.output, receipt.error);
-        this.observer?.onToolEnd?.({ callId: call.id, tool: toolName, success: receipt.success, output: receipt.output, error: receipt.error });
+        this.observer?.onToolEnd?.({ dispatch, callId: call.id, tool: toolName, success: receipt.success, output: receipt.output, error: receipt.error });
         const shouldExit = toolName === "task_completed" && receipt.success;
         return { receipt, shouldExit };
     }

@@ -6,7 +6,7 @@ import path from "node:path";
 import { execSync } from "node:child_process";
 
 export type Reply =
-  | { kind: "tools"; calls: Array<{ name: string; args: unknown }>; content?: string; delayMs?: number }
+  | { kind: "tools"; calls: Array<{ name: string; args: unknown; id?: string }>; content?: string; delayMs?: number }
   | { kind: "text"; content: string; delayMs?: number }
   | { kind: "http"; status: number; body?: string; delayMs?: number };
 
@@ -26,7 +26,7 @@ function streamBody(r: Extract<Reply, { kind: "tools" | "text" }>): string {
   else {
     if (r.content) out += sse({ choices: [{ index: 0, delta: { content: r.content } }] });
     r.calls.forEach((c, i) => {
-      out += sse({ choices: [{ index: 0, delta: { tool_calls: [{ index: i, id: `call_${i}_${Math.random().toString(36).slice(2, 7)}`, type: "function", function: { name: c.name, arguments: JSON.stringify(c.args) } }] } }] });
+      out += sse({ choices: [{ index: 0, delta: { tool_calls: [{ index: i, id: c.id ?? `call_${i}_${Math.random().toString(36).slice(2, 7)}`, type: "function", function: { name: c.name, arguments: JSON.stringify(c.args) } }] } }] });
     });
   }
   out += sse({ choices: [{ index: 0, delta: {}, finish_reason: r.kind === "tools" ? "tool_calls" : "stop" }] });
@@ -62,7 +62,7 @@ export async function startGateway(script: (n: number) => Reply): Promise<Gatewa
           res.setHeader("content-type", "application/json");
           const message = r.kind === "text"
             ? { role: "assistant", content: r.content }
-            : { role: "assistant", content: r.content ?? null, tool_calls: r.calls.map((c, i) => ({ id: `call_${i}`, type: "function", function: { name: c.name, arguments: JSON.stringify(c.args) } })) };
+            : { role: "assistant", content: r.content ?? null, tool_calls: r.calls.map((c, i) => ({ id: c.id ?? `call_${i}`, type: "function", function: { name: c.name, arguments: JSON.stringify(c.args) } })) };
           res.end(JSON.stringify({ choices: [{ index: 0, message, finish_reason: "stop" }] }));
         }
       };

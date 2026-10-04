@@ -176,18 +176,21 @@ export class SidecarServer {
   }
 
   private observerFor(turnId: string): AgentObserver {
-    const open = new Map<string, string>();
+    const open = new Map<number, string>();
+    const toolName = (tool: string) => capText(redactSecrets(stripEscapes(tool)), 200);
     return {
       onAssistantDelta: (delta) => this.emit({ type: "assistant.delta", turn_id: turnId, text: redactSecrets(delta) }),
-      onToolStart: ({ callId, tool, args }) => {
+      onToolStart: ({ dispatch, callId, tool: rawTool, args }) => {
+        const tool = toolName(rawTool);
         const subject = toolSubject(args);
         const evidence = this.evidence.start(turnId, tool, subject, args);
-        open.set(callId, evidence);
+        open.set(dispatch, evidence);
         this.emit({ type: "tool.start", turn_id: turnId, call_id: callId, tool, subject, evidence });
       },
-      onToolEnd: ({ callId, tool, success, output, error }) => {
-        const evidence = open.get(callId) ?? "";
-        open.delete(callId);
+      onToolEnd: ({ dispatch, callId, tool: rawTool, success, output, error }) => {
+        const tool = toolName(rawTool);
+        const evidence = open.get(dispatch) ?? "";
+        open.delete(dispatch);
         this.evidence.end(evidence, success, output, error);
         this.emit({ type: "tool.end", turn_id: turnId, call_id: callId, tool, success, evidence, ...toolSummary(success, output, error) });
       },
