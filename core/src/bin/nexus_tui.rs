@@ -26,6 +26,8 @@ mod sidecar;
 mod live_state;
 #[path = "nexus_tui/live_view.rs"]
 mod live_view;
+#[path = "nexus_tui/live.rs"]
+mod live;
 
 const ACCENT: Color = Color::Rgb(103, 232, 249);
 const MUTED: Color = Color::Rgb(125, 145, 158);
@@ -96,9 +98,22 @@ enum Overlay {
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut args = env::args_os().skip(1);
-    let first = args
-        .next()
-        .ok_or("usage: nexus-tui [--plain] SNAPSHOT.json")?;
+    let first = args.next().ok_or(
+        "usage: nexus-tui [--plain] SNAPSHOT.json\n       nexus-tui --live [--sidecar PATH] [--node BIN] [-- SIDECAR_ARGS...]",
+    )?;
+    if first == "--live" {
+        let rest = args.map(|arg| arg.to_string_lossy().into_owned()).collect();
+        let spec = live::resolve_spec(
+            rest,
+            env::var("NEXUS_SIDECAR").ok(),
+            env::var("NEXUS_NODE").ok(),
+            env::current_exe().ok(),
+        )?;
+        if !io::stdin().is_terminal() || !io::stdout().is_terminal() {
+            return Err("interactive Nexus TUI requires a terminal".into());
+        }
+        return live::run_live(spec);
+    }
     let plain = first == "--plain";
     let snapshot_path = PathBuf::from(if plain {
         args.next()
