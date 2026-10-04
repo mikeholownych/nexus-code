@@ -1079,6 +1079,29 @@ mod tests {
     }
 
     #[test]
+    fn a_window_that_starts_inside_a_wrapped_line_keeps_the_short_lines_after_it() {
+        let mut state = ready();
+        let mut text = vec!["w".repeat(100)];
+        text.extend((1..=20).map(|n| format!("short {n}")));
+        state.apply(Event::AssistantDelta {
+            turn_id: "t1".into(),
+            text: text.join("\n"),
+        });
+        state.scroll_back = 9;
+        let screen = rows(&draw(&state, 40, 16));
+        assert_eq!(screen[1], "w".repeat(40), "{screen:#?}");
+        assert_eq!(screen[2], "w".repeat(20), "{screen:#?}");
+        for n in 1..=10 {
+            assert_eq!(screen[2 + n], format!("short {n}"), "{screen:#?}");
+        }
+        assert!(screen[13].starts_with("short 11"), "{screen:#?}");
+        assert!(
+            !screen.iter().any(|row| row.contains("short 12")),
+            "{screen:#?}"
+        );
+    }
+
+    #[test]
     fn decisions_notes_and_focus_render() {
         let mut state = ready();
         state.transcript.push(Entry::Decision {
