@@ -16,6 +16,9 @@ use ratatui::{
 };
 use serde::Deserialize;
 
+#[path = "nexus_tui/protocol.rs"]
+mod protocol;
+
 const ACCENT: Color = Color::Rgb(103, 232, 249);
 const MUTED: Color = Color::Rgb(125, 145, 158);
 const SURFACE: Color = Color::Rgb(18, 27, 37);
