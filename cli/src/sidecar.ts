@@ -74,7 +74,12 @@ export class SidecarServer {
 
   start(): void {
     this.emit({ type: "hello", protocol: PROTOCOL_VERSION, pid: process.pid, commands: slashCatalog() });
-    const resumed = this.resume ? this.resumeSession(this.resume) : undefined;
+    let resumed: { ok: boolean; message: string } | undefined;
+    try {
+      resumed = this.resume ? this.resumeSession(this.resume) : undefined;
+    } catch (err) {
+      resumed = { ok: false, message: `Could not resume ${this.resume}: ${redactSecrets(errorText(err))}` };
+    }
     this.emitSessionState();
     if (resumed) this.emit({ type: "notice", text: resumed.message });
   }
@@ -304,8 +309,8 @@ export class SidecarServer {
   }
 
   private setWorkspace(dir: string): void {
-    this.app.getConfig().workspace = dir;
     this.app.getAgent().setWorkspace(dir);
+    this.app.getConfig().workspace = dir;
     this.checkpointManager = new CheckpointManager(dir);
   }
 
@@ -336,8 +341,9 @@ export class SidecarServer {
     const manager = this.app.getSessionManager();
     const session = !id || id === "latest" ? manager.getLatestSession() : manager.loadSession(id);
     if (!session) return { ok: false, message: `Session not found: ${id || "latest"}` };
-    this.sessionId = session.id;
+    if (!Array.isArray(session.messages)) return { ok: false, message: `Session ${session.id} is unreadable: it has no message list.` };
     if (session.workspace && fs.existsSync(session.workspace)) this.setWorkspace(session.workspace);
+    this.sessionId = session.id;
     this.app.getAgent().setMessages(session.messages);
     return { ok: true, message: `Resumed session ${session.id} (${session.messages.length} messages).` };
   }

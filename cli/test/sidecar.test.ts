@@ -421,6 +421,57 @@ describe("SidecarServer: sessions and slash commands", () => {
       return { resume: "old-session" };
     });
   });
+
+  test("a refused /cd leaves the reported workspace unchanged", async () => {
+    const other = makeRepo();
+    try {
+      await withSidecar(readOnlyTurn, "auto", async ({ server, events, repo, app, send }) => {
+        (app.getAgent() as any).activeWorktree = { branch: "nexus/x", worktreePath: repo };
+        try {
+          await send({ type: "slash", id: "s1", command: "cd", args: other });
+          await server.idle();
+        } finally {
+          (app.getAgent() as any).activeWorktree = undefined;
+        }
+        const reply = events.find((e) => e.type === "slash.result");
+        assert.equal(reply.success, false);
+        assert.match(reply.output, /speculative worktree is unresolved/);
+        assert.equal(app.getConfig().workspace, repo);
+        assert.equal(events.filter((e) => e.type === "session.state").at(-1).workspace, repo);
+      });
+    } finally {
+      fs.rmSync(other, { recursive: true, force: true });
+    }
+  });
+
+  test("/resume of a session record without messages is refused and changes nothing", async () => {
+    await withSidecar(readOnlyTurn, "auto", async ({ server, events, app, send }) => {
+      const now = new Date().toISOString();
+      app.getSessionManager().saveSession({
+        id: "broken-session",
+        title: "broken",
+        createdAt: now,
+        updatedAt: now,
+        workspace: app.getConfig().workspace,
+        model: "m",
+        messages: [{ role: "system", content: "s" }, { role: "user", content: "q" }] as any,
+      });
+      const dir = path.join(process.env.HOME!, ".nexus", "sessions");
+      const file = fs.readdirSync(dir).map((f) => path.join(dir, f)).find((f) => fs.readFileSync(f, "utf-8").includes("broken-session"))!;
+      const record = JSON.parse(fs.readFileSync(file, "utf-8"));
+      delete record.messages;
+      fs.writeFileSync(file, JSON.stringify(record));
+      const before = app.getAgent().getMessages();
+      const sessionId = (server as any).sessionId;
+      await send({ type: "slash", id: "s1", command: "resume", args: "broken-session" });
+      await server.idle();
+      const reply = events.find((e) => e.type === "slash.result");
+      assert.equal(reply.success, false);
+      assert.match(reply.output, /Session broken-session is unreadable/);
+      assert.deepEqual(app.getAgent().getMessages(), before);
+      assert.equal((server as any).sessionId, sessionId);
+    });
+  });
 });
 
 const cliRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
