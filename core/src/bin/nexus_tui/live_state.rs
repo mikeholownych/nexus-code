@@ -105,6 +105,15 @@ impl LiveState {
         self.cancel_requested
     }
 
+    /// No session yet: the link is starting, or `hello` arrived but the first `session.state` has not.
+    pub fn connecting(&self) -> bool {
+        match self.link {
+            Link::Connecting => true,
+            Link::Ready => self.session.workspace_name.is_empty(),
+            Link::Crashed { .. } => false,
+        }
+    }
+
     pub fn apply(&mut self, event: Event) {
         if matches!(self.link, Link::Crashed { .. }) {
             return;
@@ -143,14 +152,11 @@ impl LiveState {
                     });
                 }
             }
-            Event::ToolEnd { call_id, success, summary } => {
-                let open = self
-                    .transcript
-                    .iter_mut()
-                    .rev()
-                    .find(|entry| {
-                        matches!(entry, Entry::Tool { call_id: id, status: ToolStatus::Running, .. } if *id == call_id)
-                    });
+            Event::ToolEnd { call_id, tool, success, summary } => {
+                let open = self.transcript.iter_mut().rev().find(|entry| {
+                    matches!(entry, Entry::Tool { call_id: id, tool: name, status: ToolStatus::Running, .. }
+                        if *id == call_id && *name == tool)
+                });
                 if let Some(Entry::Tool { status, summary: slot, .. }) = open {
                     *status = if success { ToolStatus::Succeeded } else { ToolStatus::Failed };
                     *slot = summary;
@@ -172,7 +178,8 @@ impl LiveState {
                 });
             }
             Event::Error { id, code, message } => {
-                if id.is_some() && id == self.pending {
+                // BUSY means the sidecar is still running a turn, so the composer stays locked.
+                if id.is_some() && id == self.pending && code != "BUSY" {
                     self.pending = None;
                     self.session.busy = false;
                     self.cancel_requested = false;
@@ -262,7 +269,11 @@ impl LiveState {
     }
 
     fn submit(&mut self) -> Option<Action> {
-        if self.link != Link::Ready || self.session.busy || self.composer.trim().is_empty() {
+        if self.link != Link::Ready
+            || self.connecting()
+            || self.session.busy
+            || self.composer.trim().is_empty()
+        {
             return None;
         }
         self.turn_seq += 1;
@@ -379,6 +390,35 @@ mod tests {
         state.session.busy = true;
         assert_eq!(state.on_key(key(KeyCode::Enter)), None);
         assert_eq!(state.composer, "work");
+    }
+
+    #[test]
+    fn enter_does_nothing_between_hello_and_the_first_session_state() {
+        let mut state = LiveState::new();
+        state.apply(ev(r#"{"v":1,"type":"hello","protocol":1,"pid":1}"#));
+        assert!(state.connecting());
+        type_text(&mut state, "early");
+        assert_eq!(state.on_key(key(KeyCode::Enter)), None);
+        assert_eq!(state.composer, "early");
+        assert!(state.transcript.is_empty());
+        assert!(!ready().connecting());
+    }
+
+    #[test]
+    fn a_busy_rejection_of_the_pending_prompt_keeps_the_composer_locked() {
+        let mut state = ready();
+        type_text(&mut state, "fix it");
+        assert!(state.on_key(key(KeyCode::Enter)).is_some());
+        state.apply(ev(r#"{"v":1,"type":"error","id":"t1","code":"BUSY","message":"A turn is already running; cancel it or wait for its result."}"#));
+        assert!(state.session.busy, "the sidecar is still running a turn");
+        type_text(&mut state, "again");
+        assert_eq!(state.on_key(key(KeyCode::Enter)), None);
+        assert_eq!(
+            state.transcript.last(),
+            Some(&Entry::Notice(
+                "BUSY: A turn is already running; cancel it or wait for its result.".into()
+            ))
+        );
     }
 
     #[test]
@@ -521,6 +561,23 @@ mod tests {
                 subject: "npm test".into(),
                 status: ToolStatus::Failed,
                 summary: "1 test failed".into(),
+            }]
+        );
+    }
+
+    #[test]
+    fn a_hidden_tool_end_does_not_close_a_running_tool_with_the_same_call_id() {
+        let mut state = ready();
+        state.apply(ev(r#"{"v":1,"type":"tool.start","turn_id":"t1","call_id":"call_0","tool":"run_command","subject":"npm test"}"#));
+        state.apply(ev(r#"{"v":1,"type":"tool.end","turn_id":"t1","call_id":"call_0","tool":"task_completed","success":true,"summary":"Completed","lines":0}"#));
+        assert_eq!(
+            state.transcript,
+            vec![Entry::Tool {
+                call_id: "call_0".into(),
+                tool: "run_command".into(),
+                subject: "npm test".into(),
+                status: ToolStatus::Running,
+                summary: String::new(),
             }]
         );
     }

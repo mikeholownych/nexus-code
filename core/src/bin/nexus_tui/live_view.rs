@@ -15,6 +15,8 @@ use crate::{ACCENT, MUTED, SURFACE};
 pub const MIN_WIDTH: u16 = 40;
 pub const MIN_HEIGHT: u16 = 10;
 const MAX_COMPOSER_ROWS: u16 = 6;
+/// Same cap as the inference failure line in `TerminalUI.turnSummary` (`cli/src/ui.ts`).
+const MAX_FAILURE_CHARS: usize = 300;
 const TAGLINE: &str = "Understand the work. Inspect the evidence. Keep the decision yours.";
 
 pub fn render_live(frame: &mut Frame, state: &LiveState) {
@@ -75,15 +77,6 @@ fn render_pinned(frame: &mut Frame, area: Rect, paragraph: Paragraph<'_>) {
     frame.render_widget(paragraph.scroll((scroll, 0)), area);
 }
 
-/// `hello` arrived but the first `session.state` has not, so there is no workspace to show yet.
-fn connecting(state: &LiveState) -> bool {
-    match state.link {
-        Link::Connecting => true,
-        Link::Ready => state.session.workspace_name.is_empty(),
-        Link::Crashed { .. } => false,
-    }
-}
-
 fn render_status(frame: &mut Frame, area: Rect, state: &LiveState) {
     let session = &state.session;
     let muted = Style::default().fg(MUTED);
@@ -96,13 +89,13 @@ fn render_status(frame: &mut Frame, area: Rect, state: &LiveState) {
             .add_modifier(Modifier::BOLD),
     )];
     let busy = Span::styled(" ● working · esc to cancel ", Style::default().fg(ACCENT));
-    let busy_width = if session.busy && !connecting(state) {
+    let busy_width = if session.busy && !state.connecting() {
         u16::try_from(busy.width()).unwrap_or(area.width)
     } else {
         0
     };
     match &state.link {
-        _ if connecting(state) => spans.push(Span::styled("  connecting to the agent…", muted)),
+        _ if state.connecting() => spans.push(Span::styled("  connecting to the agent…", muted)),
         Link::Crashed { .. } => spans.push(Span::styled(
             "  agent stopped",
             Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
@@ -273,12 +266,15 @@ fn entry_lines(entry: &Entry, first: bool) -> Vec<Line<'_>> {
                 Span::styled(format!("  {}", one_line(line)), muted),
             ]));
             if let Some(failure) = failure {
-                lines.extend(failure.split('\n').map(|row| {
-                    Line::from(Span::styled(
-                        expand_tabs(row),
-                        Style::default().fg(Color::Red),
-                    ))
-                }));
+                let mut detail = one_line(failure);
+                if let Some((cut, _)) = detail.char_indices().nth(MAX_FAILURE_CHARS) {
+                    detail.truncate(cut);
+                    detail.push('…');
+                }
+                lines.push(Line::from(Span::styled(
+                    detail,
+                    Style::default().fg(Color::Red),
+                )));
             }
             if let Some(summary) = summary {
                 lines.push(Line::default());
@@ -398,7 +394,7 @@ fn composer_paragraph(state: &LiveState) -> Paragraph<'_> {
 fn composer_hint(state: &LiveState) -> &'static str {
     match (&state.link, state.session.busy) {
         (Link::Crashed { .. }, _) => " r restart · q quit ",
-        _ if connecting(state) => " starting the agent… ",
+        _ if state.connecting() => " starting the agent… ",
         (_, true) if state.cancel_requested() => " cancelling… ctrl-c again to quit ",
         (_, true) => " waiting for the agent ",
         (_, false) => " enter send · alt+enter newline · ctrl-c quit ",
@@ -734,6 +730,26 @@ mod tests {
         assert!(banner < failure && failure < summary, "{screen:#?}");
         let cell = &terminal.backend().buffer()[(0, u16::try_from(failure).unwrap())];
         assert_eq!(cell.fg, Color::Red);
+    }
+
+    #[test]
+    fn a_long_inference_failure_is_capped_to_one_line() {
+        let mut state = ready();
+        let message = format!("line one\nline   two {}", "é".repeat(400));
+        let result = turn_result(
+            "FAILED",
+            "NOT_ESTABLISHED",
+            "Inference failed",
+            &format!(
+                r#","inferenceFailure":{{"kind":"http_error","origin":"provider","message":{message:?}}}"#
+            ),
+            "null",
+        );
+        feed(&mut state, &[result.as_str()]);
+        let screen = rows(&draw(&state, 400, 20));
+        let expected = format!("line one line two {}…", "é".repeat(282));
+        assert!(screen.contains(&expected), "{screen:#?}");
+        assert!(!screen.iter().any(|row| row == "line one"), "{screen:#?}");
     }
 
     #[test]

@@ -41,6 +41,7 @@ pub enum Event {
     #[serde(rename = "tool.end")]
     ToolEnd {
         call_id: String,
+        tool: String,
         success: bool,
         summary: String,
     },
@@ -78,7 +79,9 @@ pub enum Command {
 }
 
 pub fn parse_event(line: &str) -> Result<Event, String> {
-    let value: Value = serde_json::from_str(line).map_err(|err| format!("not JSON: {err}"))?;
+    let value: Value = serde_json::from_str(line)
+        .or_else(|err| serde_json::from_str(&replace_lone_surrogates(line)).map_err(|_| err))
+        .map_err(|err| format!("not JSON: {err}"))?;
     if value.get("v").and_then(Value::as_u64) != Some(PROTOCOL_VERSION) {
         return Err(format!(
             "unsupported protocol version: {}",
@@ -86,6 +89,43 @@ pub fn parse_event(line: &str) -> Result<Event, String> {
         ));
     }
     serde_json::from_value(value).map_err(|err| format!("invalid event: {err}"))
+}
+
+/// The UTF-16 code unit of a `\uXXXX` escape at the start of `text`.
+fn escape_unit(text: &str) -> Option<u16> {
+    let hex = text.strip_prefix("\\u")?.get(..4)?;
+    if !hex.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return None;
+    }
+    u16::from_str_radix(hex, 16).ok()
+}
+
+/// Rewrites escapes of lone UTF-16 surrogates as `\ufffd`; serde_json rejects them, and a sidecar that truncates
+/// text mid-pair can emit one.
+fn replace_lone_surrogates(line: &str) -> String {
+    let mut out = String::with_capacity(line.len());
+    let mut rest = line;
+    while let Some(at) = rest.find('\\') {
+        out.push_str(&rest[..at]);
+        let tail = &rest[at..];
+        let consumed = match escape_unit(tail) {
+            Some(0xD800..=0xDBFF) if matches!(escape_unit(&tail[6..]), Some(0xDC00..=0xDFFF)) => 12,
+            Some(0xD800..=0xDFFF) => {
+                out.push_str("\\ufffd");
+                rest = &tail[6..];
+                continue;
+            }
+            Some(_) => 6,
+            None => tail
+                .char_indices()
+                .nth(2)
+                .map_or(tail.len(), |(index, _)| index),
+        };
+        out.push_str(&tail[..consumed]);
+        rest = &tail[consumed..];
+    }
+    out.push_str(rest);
+    out
 }
 
 pub fn encode_command(command: &Command) -> String {
@@ -154,6 +194,7 @@ mod tests {
             ),
             Ok(Event::ToolEnd {
                 call_id: "c1".into(),
+                tool: "read_file".into(),
                 success: false,
                 summary: "No such file".into()
             })
@@ -199,6 +240,27 @@ mod tests {
         let with_summary = parse_event(r#"{"v":1,"type":"turn.result","turn_id":"t2","heading":"H","line":"L","turn":{},"model_summary":{"summary":"Fixed it.","notes":"n"}}"#).unwrap();
         assert!(
             matches!(with_summary, Event::TurnResult { model_summary: Some(ModelSummary { ref summary }), .. } if summary == "Fixed it.")
+        );
+    }
+
+    #[test]
+    fn lone_surrogate_escapes_become_replacement_characters() {
+        let event = parse_event(
+            r#"{"v":1,"type":"tool.end","turn_id":"t1","call_id":"c1","tool":"run_command","success":true,"summary":"ok \ud83d","lines":1}"#,
+        );
+        assert!(
+            matches!(&event, Ok(Event::ToolEnd { summary, .. }) if summary == "ok \u{fffd}"),
+            "{event:?}"
+        );
+        let event = parse_event(
+            r#"{"v":1,"type":"assistant.delta","turn_id":"t1","text":"\ude00 \ud83d\ude00 \\ud83d \ud83d\u0041"}"#,
+        );
+        assert_eq!(
+            event,
+            Ok(Event::AssistantDelta {
+                turn_id: "t1".into(),
+                text: "\u{fffd} 😀 \\ud83d \u{fffd}A".into()
+            })
         );
     }
 

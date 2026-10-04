@@ -1,7 +1,7 @@
 //! Owns the sidecar child process. Stdout lines arrive as `SidecarMsg`s on a channel. Stderr is always drained
 //! (a full pipe would block the child) into a bounded tail that is redacted on capture.
 use std::collections::VecDeque;
-use std::io::{self, BufRead, BufReader, Write};
+use std::io::{self, BufRead, BufReader, Read, Write};
 use std::process::{Child, ChildStdin, Command as Process, ExitStatus, Stdio};
 use std::sync::{Arc, Mutex, mpsc};
 use std::thread;
@@ -11,6 +11,10 @@ use crate::protocol::{Command, Event, encode_command, parse_event};
 use crate::redact::StderrRedactor;
 
 pub const STDERR_TAIL_LINES: usize = 40;
+/// A longer stdout line is not a protocol event.
+const STDOUT_LINE_CAP: usize = 1 << 20;
+/// Longer stderr lines are cut to this many bytes.
+const STDERR_LINE_CAP: usize = 8 << 10;
 /// Time the process group gets between SIGTERM and SIGKILL.
 const GROUP_GRACE: Duration = Duration::from_millis(300);
 
@@ -59,7 +63,10 @@ impl Sidecar {
         let (done, stderr_done) = mpsc::channel();
         thread::spawn(move || {
             let mut redactor = StderrRedactor::default();
-            for line in BufReader::new(stderr).lines().map_while(Result::ok) {
+            for_each_line(stderr, STDERR_LINE_CAP, |mut line, cut| {
+                if cut {
+                    line.push('…');
+                }
                 if let Some(clean) = redactor.line(&line) {
                     let mut tail = tail.lock().unwrap();
                     if tail.len() == STDERR_TAIL_LINES {
@@ -67,21 +74,26 @@ impl Sidecar {
                     }
                     tail.push_back(clean);
                 }
-            }
+                true
+            });
             let _ = done.send(());
         });
 
         thread::spawn(move || {
-            for line in BufReader::new(stdout).lines().map_while(Result::ok) {
+            let open = for_each_line(stdout, STDOUT_LINE_CAP, |line, cut| {
                 if line.trim().is_empty() {
-                    continue;
+                    return true;
                 }
-                let message = parse_event(&line).map_or(SidecarMsg::Malformed, SidecarMsg::Event);
-                if events.send(message).is_err() {
-                    return;
-                }
+                let message = if cut {
+                    SidecarMsg::Malformed
+                } else {
+                    parse_event(&line).map_or(SidecarMsg::Malformed, SidecarMsg::Event)
+                };
+                events.send(message).is_ok()
+            });
+            if open {
+                let _ = events.send(SidecarMsg::Closed);
             }
-            let _ = events.send(SidecarMsg::Closed);
         });
 
         Ok(Sidecar {
@@ -177,6 +189,63 @@ impl Sidecar {
     }
 }
 
+/// Calls `each` with every line of `stream`, decoded lossily and without its line ending, until the stream ends
+/// (returns true) or `each` returns false (returns false). A line longer than `cap` bytes is cut to `cap` and
+/// flagged; the rest of it is skipped.
+fn for_each_line(
+    stream: impl Read,
+    cap: usize,
+    mut each: impl FnMut(String, bool) -> bool,
+) -> bool {
+    let mut reader = BufReader::new(stream);
+    let mut line = Vec::new();
+    loop {
+        line.clear();
+        match (&mut reader)
+            .take(cap as u64 + 1)
+            .read_until(b'\n', &mut line)
+        {
+            Ok(0) | Err(_) => return true,
+            Ok(_) => {}
+        }
+        let cut = line.len() > cap && line.last() != Some(&b'\n');
+        if cut {
+            line.truncate(cap);
+            if skip_line(&mut reader).is_err() {
+                return true;
+            }
+        } else if line.ends_with(b"\n") {
+            line.pop();
+            if line.ends_with(b"\r") {
+                line.pop();
+            }
+        }
+        if !each(String::from_utf8_lossy(&line).into_owned(), cut) {
+            return false;
+        }
+    }
+}
+
+/// Discards input up to and including the next newline.
+fn skip_line(reader: &mut impl BufRead) -> io::Result<()> {
+    loop {
+        let chunk = reader.fill_buf()?;
+        if chunk.is_empty() {
+            return Ok(());
+        }
+        match chunk.iter().position(|&byte| byte == b'\n') {
+            Some(at) => {
+                reader.consume(at + 1);
+                return Ok(());
+            }
+            None => {
+                let len = chunk.len();
+                reader.consume(len);
+            }
+        }
+    }
+}
+
 impl Drop for Sidecar {
     fn drop(&mut self) {
         if !self.reaped {
@@ -248,6 +317,40 @@ mod tests {
             "{tail:?}"
         );
         assert!(tail.iter().all(|line| line.contains("[REDACTED_TOKEN]") && !line.contains("abcdefghijklmnop")));
+    }
+
+    #[test]
+    fn invalid_utf8_and_oversized_lines_do_not_stop_the_readers() {
+        let (tx, rx) = mpsc::channel();
+        let mut sidecar = Sidecar::spawn(
+            &sh(r#"printf 'bad \377\376 bytes\r\nafter\n' >&2
+head -c 9000 /dev/zero | tr '\0' x >&2; printf '\nlast\n' >&2
+printf '\377\n'; head -c 1048577 /dev/zero | tr '\0' x; echo
+echo '{"v":1,"type":"hello","protocol":1,"pid":7}'"#),
+            tx,
+        )
+        .unwrap();
+        for _ in 0..2 {
+            assert!(matches!(
+                rx.recv_timeout(WAIT).unwrap(),
+                SidecarMsg::Malformed
+            ));
+        }
+        assert!(matches!(
+            rx.recv_timeout(WAIT).unwrap(),
+            SidecarMsg::Event(Event::Hello { .. })
+        ));
+        assert!(matches!(rx.recv_timeout(WAIT).unwrap(), SidecarMsg::Closed));
+        assert_eq!(sidecar.reap(WAIT), Some(0));
+        assert_eq!(
+            sidecar.stderr_tail(),
+            vec![
+                "bad \u{fffd}\u{fffd} bytes".to_string(),
+                "after".to_string(),
+                format!("{}…", "x".repeat(STDERR_LINE_CAP)),
+                "last".to_string(),
+            ]
+        );
     }
 
     #[test]
