@@ -1,15 +1,20 @@
 import * as fs from "node:fs";
+import * as os from "node:os";
 import * as path from "node:path";
 import * as readline from "node:readline";
 import { fileURLToPath } from "node:url";
 import { Command } from "commander";
+import type { AgentObserver } from "./agent.js";
+import { CheckpointManager } from "./checkpoint.js";
 import { autoDetectModel, buildConfig, loadEnvironment } from "./config.js";
 import { ApplicationCore } from "./core/app.js";
-import { TurnResult, failedTurnFromError, summarizeTurn } from "./core/turn.js";
+import { redactForPersistence } from "./core/persistence_protection.js";
+import { TurnResult, failedTurnFromError, lifecycleStatusForTurn, summarizeTurn } from "./core/turn.js";
 import { getGitInfo } from "./git.js";
 import { redactSecrets } from "./ui.js";
 import { approvalReview } from "./approval_review.js";
 import {
+  MAX_SLASH_OUTPUT,
   PROTOCOL_VERSION,
   ProtocolError,
   SidecarCommand,
@@ -18,9 +23,12 @@ import {
   encodeEvent,
   parseCommand,
   projectTurn,
+  stripEscapes,
   toolSubject,
   toolSummary,
 } from "./protocol.js";
+import { SlashHost, SlashOutcome, SlashSpec, errorText, findSlash, slashCatalog } from "./slash/catalog.js";
+import { routeSlash } from "./slash/router.js";
 
 export interface SidecarOptions {
   app: ApplicationCore;
@@ -28,6 +36,10 @@ export interface SidecarOptions {
   write: (line: string) => void;
   mode: "auto" | "review";
   onShutdown?: () => void;
+  /** Session to continue: an id, or "latest". */
+  resume?: string;
+  /** Prompt history file; defaults to ~/.nexus_history. */
+  historyFile?: string;
 }
 
 /** Drives one ApplicationCore from protocol commands and reports its activity as protocol events. */
@@ -42,17 +54,29 @@ export class SidecarServer {
   private pendingApproval?: { id: string; settle: (approved: boolean) => void };
   private approvalSeq = 0;
   private shutdownPromise?: Promise<void>;
+  private readonly resume?: string;
+  private readonly history: string[];
+  private sessionId: string;
+  private checkpointManager: CheckpointManager;
+  /** The running slash command; undefined for prompt turns and for commands that became turns. */
+  private activeSpec?: SlashSpec;
 
   constructor(options: SidecarOptions) {
     this.app = options.app;
     this.write = options.write;
     this.mode = options.mode;
     this.onShutdown = options.onShutdown ?? (() => {});
+    this.resume = options.resume;
+    this.checkpointManager = this.app.getCheckpointManager();
+    this.sessionId = this.app.getSessionManager().generateSessionId();
+    this.history = loadPromptHistory(options.historyFile ?? path.join(os.homedir(), ".nexus_history"));
   }
 
   start(): void {
-    this.emit({ type: "hello", protocol: PROTOCOL_VERSION, pid: process.pid });
+    this.emit({ type: "hello", protocol: PROTOCOL_VERSION, pid: process.pid, commands: slashCatalog() });
+    const resumed = this.resume ? this.resumeSession(this.resume) : undefined;
     this.emitSessionState();
+    if (resumed) this.emit({ type: "notice", text: resumed.message });
   }
 
   /** Resolves once no turn is running. */
@@ -75,7 +99,7 @@ export class SidecarServer {
         this.submit(command.id, command.text);
         return;
       case "cancel":
-        this.turnAbort?.abort(new Error("operator cancel"));
+        this.cancel();
         return;
       case "approve":
         this.resolveApproval(command.id, true, command.always);
@@ -84,7 +108,7 @@ export class SidecarServer {
         this.resolveApproval(command.id, false, false);
         return;
       case "slash":
-        await this.slash(command.id, command.command, command.args);
+        this.slash(command.id, command.command, command.args);
         return;
       case "shutdown":
         await this.shutdown();
@@ -92,45 +116,89 @@ export class SidecarServer {
     }
   }
 
-  private submit(id: string, text: string): void {
-    if (this.shutdownPromise) {
-      this.emit({ type: "error", id, code: "BUSY", message: "The sidecar is shutting down." });
+  private cancel(): void {
+    const spec = this.activeSpec;
+    if (this.activeTurn && spec && !spec.cancellable) {
+      const name = spec.name === "!" ? "!" : `/${spec.name}`;
+      this.emit({ type: "notice", text: `${name} cannot be cancelled; it finishes on its own.` });
       return;
     }
-    if (this.activeTurn) {
-      this.emit({ type: "error", id, code: "BUSY", message: "A turn is already running; cancel it or wait for its result." });
-      return;
-    }
+    this.turnAbort?.abort(new Error("operator cancel"));
+  }
+
+  /** Reports BUSY for `id` when a turn or command is running or the sidecar is shutting down. */
+  private rejectBusy(id: string): boolean {
+    if (!this.shutdownPromise && !this.activeTurn) return false;
+    const message = this.shutdownPromise ? "The sidecar is shutting down." : "A turn or command is running; cancel it or wait for its result.";
+    this.emit({ type: "error", id, code: "BUSY", message });
+    return true;
+  }
+
+  /** Runs one turn or command as the session's only activity. Busy is reported before `body` starts. */
+  private runJob(id: string, spec: SlashSpec | undefined, body: (signal: AbortSignal) => Promise<void>): void {
     const abort = new AbortController();
     this.turnAbort = abort;
-    this.activeTurn = this.runTurn(id, text, abort.signal)
-      .catch((err) => this.emit({ type: "error", id, code: "INTERNAL", message: redactSecrets(err instanceof Error ? err.message : String(err)) }))
+    this.activeSpec = spec;
+    let settle!: () => void;
+    this.activeTurn = new Promise<void>((resolve) => {
+      settle = resolve;
+    });
+    this.emitSessionState();
+    void body(abort.signal)
+      .catch((err) => this.emit({ type: "error", id, code: "INTERNAL", message: redactSecrets(errorText(err)) }))
       .finally(() => {
         this.activeTurn = undefined;
         this.turnAbort = undefined;
+        this.activeSpec = undefined;
         this.emitSessionState();
+        settle();
       });
-    this.emitSessionState();
   }
 
-  private async runTurn(turnId: string, text: string, signal: AbortSignal): Promise<void> {
-    const agent = this.app.getAgent();
-    agent.setObserver({
+  private submit(id: string, text: string): void {
+    if (this.rejectBusy(id)) return;
+    this.history.push(text.trim());
+    this.runJob(id, undefined, (signal) => this.turn(id, text, text, `Turn: ${text.slice(0, 30)}`, signal));
+  }
+
+  private observerFor(turnId: string): AgentObserver {
+    return {
       onAssistantDelta: (delta) => this.emit({ type: "assistant.delta", turn_id: turnId, text: redactSecrets(delta) }),
       onToolStart: ({ callId, tool, args }) => this.emit({ type: "tool.start", turn_id: turnId, call_id: callId, tool, subject: toolSubject(args) }),
       onToolEnd: ({ callId, tool, success, output, error }) =>
         this.emit({ type: "tool.end", turn_id: turnId, call_id: callId, tool, success, ...toolSummary(success, output, error) }),
-    });
-    const confirm = this.mode === "review"
+    };
+  }
+
+  private confirmFor(turnId: string, signal: AbortSignal) {
+    return this.mode === "review"
       ? (tool: string, args: Record<string, any>) => this.requestApproval(turnId, signal, tool, args)
       : undefined;
+  }
+
+  /** One agent turn: checkpoint, run, save the session, report the result. */
+  private async turn(turnId: string, prompt: string | any[], label: string, checkpoint: string, signal: AbortSignal): Promise<void> {
+    try {
+      this.checkpointManager.createCheckpoint(checkpoint);
+    } catch (err) {
+      const message = `No checkpoint could be saved, so the turn did not start: ${redactSecrets(errorText(err))}`;
+      this.emit({ type: "error", id: turnId, code: "INTERNAL", message });
+      return;
+    }
+    const agent = this.app.getAgent();
+    agent.setObserver(this.observerFor(turnId));
     let turn: TurnResult;
     try {
-      turn = await agent.runTurn(text, confirm, { signal });
+      turn = await agent.runTurn(prompt, this.confirmFor(turnId, signal), { signal });
     } catch (err) {
       turn = failedTurnFromError(err, this.app.getConfig().maxSteps);
     } finally {
       agent.setObserver(undefined);
+    }
+    try {
+      this.saveSession(label, turn);
+    } catch (err) {
+      this.emit({ type: "notice", text: `The session could not be saved: ${redactSecrets(errorText(err))}` });
     }
     const { heading, line } = summarizeTurn(turn);
     const summary = turn.execution === "COMPLETED" ? agent.getCompletionSummary() : undefined;
@@ -185,18 +253,93 @@ export class SidecarServer {
     pending.settle(approved);
   }
 
-  private async slash(id: string, command: string, args: string): Promise<void> {
-    if (this.shutdownPromise || this.activeTurn) {
-      const reason = this.shutdownPromise ? "The sidecar is shutting down." : "A turn is running; cancel it or wait for its result.";
-      this.emit({ type: "error", id, code: "BUSY", message: reason });
-      return;
-    }
-    try {
-      const result = await this.app.executeSlashCommand(command, args);
-      this.emit({ type: "slash.result", id, command: result.command, success: result.success, output: capText(redactSecrets(result.output)) });
-    } catch (err) {
-      this.emit({ type: "error", id, code: "INTERNAL", message: redactSecrets(err instanceof Error ? err.message : String(err)) });
-    }
+  private slash(id: string, command: string, args: string): void {
+    if (this.rejectBusy(id)) return;
+    this.runJob(id, findSlash(command), async (signal) => {
+      const agent = this.app.getAgent();
+      agent.setObserver(this.observerFor(id));
+      let outcome: SlashOutcome;
+      try {
+        outcome = await routeSlash(this.slashHost(id), command, args, signal);
+      } finally {
+        agent.setObserver(undefined);
+      }
+      if (outcome.kind === "turn") {
+        this.activeSpec = undefined;
+        this.emit({ type: "slash.result", id, command: outcome.command, success: true, output: "", prompt: capText(redactSecrets(stripEscapes(outcome.label))) });
+        await this.turn(id, outcome.prompt, outcome.label, outcome.checkpoint, signal);
+        return;
+      }
+      this.emit({
+        type: "slash.result",
+        id,
+        command: outcome.command,
+        success: outcome.success,
+        output: capText(redactSecrets(stripEscapes(outcome.output)), MAX_SLASH_OUTPUT),
+        ...(outcome.format ? { format: outcome.format } : {}),
+        ...(outcome.composer !== undefined ? { composer: outcome.composer } : {}),
+      });
+    });
+  }
+
+  private slashHost(id: string): SlashHost {
+    return {
+      app: this.app,
+      mode: () => this.mode,
+      setMode: (mode) => {
+        this.mode = mode;
+        if (mode === "review") this.alwaysApprove = false;
+      },
+      sessionId: () => this.sessionId,
+      setSessionId: (sessionId) => {
+        this.sessionId = sessionId;
+      },
+      checkpoints: () => this.checkpointManager,
+      setWorkspace: (dir) => this.setWorkspace(dir),
+      saveSession: (title) => this.saveSession(title),
+      resumeSession: (sessionId) => this.resumeSession(sessionId),
+      history: () => this.history,
+      confirm: (signal) => this.confirmFor(id, signal),
+    };
+  }
+
+  private setWorkspace(dir: string): void {
+    this.app.getConfig().workspace = dir;
+    this.app.getAgent().setWorkspace(dir);
+    this.checkpointManager = new CheckpointManager(dir);
+  }
+
+  /** Same record the REPL saves after each turn. Skipped while the conversation holds only the system prompt. */
+  private saveSession(title?: string, turn?: TurnResult): void {
+    const agent = this.app.getAgent();
+    const messages = agent.getMessages();
+    if (messages.length <= 1) return;
+    const config = this.app.getConfig();
+    const now = new Date().toISOString();
+    this.app.getSessionManager().saveSession(
+      {
+        id: this.sessionId,
+        title: title ? title.slice(0, 60).replace(/\n/g, " ") : "Active Session",
+        createdAt: now,
+        updatedAt: now,
+        workspace: config.workspace,
+        model: config.model,
+        messages,
+        tokenStats: agent.getTokenStats(),
+        ...(turn ? { status: lifecycleStatusForTurn(turn), lastTurn: turn } : {}),
+      },
+      agent.getWorkspacePathIdentity(),
+    );
+  }
+
+  private resumeSession(id?: string): { ok: boolean; message: string } {
+    const manager = this.app.getSessionManager();
+    const session = !id || id === "latest" ? manager.getLatestSession() : manager.loadSession(id);
+    if (!session) return { ok: false, message: `Session not found: ${id || "latest"}` };
+    this.sessionId = session.id;
+    if (session.workspace && fs.existsSync(session.workspace)) this.setWorkspace(session.workspace);
+    this.app.getAgent().setMessages(session.messages);
+    return { ok: true, message: `Resumed session ${session.id} (${session.messages.length} messages).` };
   }
 
   private shutdown(): Promise<void> {
@@ -228,6 +371,17 @@ export class SidecarServer {
   }
 }
 
+/** Prompt history from the REPL's file, redacted; empty when the file is missing or unreadable. */
+function loadPromptHistory(file: string): string[] {
+  try {
+    return redactForPersistence(fs.readFileSync(file, "utf-8"))
+      .split("\n")
+      .filter((line) => line.trim());
+  } catch {
+    return [];
+  }
+}
+
 /**
  * Process entry point. Stdout is reserved for protocol lines: the real writer is captured first, then every
  * other stdout write (agent banners, spinners, console.log) is dropped, or sent to stderr with NEXUS_DEBUG=1.
@@ -256,8 +410,22 @@ async function main(argv: string[]): Promise<void> {
     .option("-m, --model <name>", "Model name")
     .option("-w, --workspace <path>", "Workspace directory")
     .option("-s, --max-steps <number>", "Maximum steps per turn")
+    .option("-t, --temperature <number>", "Model temperature")
     .option("--shell <type>", "Shell for commands", "bash")
+    .option("--fallback <urls>", "Comma-separated fallback LLM endpoints")
+    .option("--context-limit <tokens>", "Model context window limit in tokens")
+    .option("--dry-run", "Simulate file modifications without writing changes to disk")
+    .option("--read-only", "Reject all mutating tool executions and commands")
+    .option("--sandbox [mode]", "Isolate command execution using bubblewrap or Docker")
+    .option("--worktree", "Isolate execution inside an ephemeral git worktree")
+    .option("--authoritative-verifier <command>", "Trusted command whose success may authorize automatic worktree merge")
+    .option("--record-flight", "Record execution into an append-only .flightlog")
+    .option("--planner-model <name>", "Deep reasoning model for planning")
+    .option("--planner-endpoint <url>", "Inference endpoint for the planner model")
+    .option("--coder-model <name>", "Model for code implementation")
+    .option("--coder-endpoint <url>", "Inference endpoint for the coder model")
     .option("--approve", "Require operator approval before edits and shell commands")
+    .option("-r, --resume [id]", "Resume a saved session (the latest when no id is given)")
     .parse(argv);
   const options = program.opts();
   const config = await autoDetectModel(buildConfig(options));
@@ -265,6 +433,7 @@ async function main(argv: string[]): Promise<void> {
   const server = new SidecarServer({
     app,
     mode: options.approve ? "review" : "auto",
+    resume: typeof options.resume === "string" ? options.resume : options.resume ? "latest" : undefined,
     write: (line) => {
       protocolWrite(line);
     },

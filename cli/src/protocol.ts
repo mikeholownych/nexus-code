@@ -5,10 +5,12 @@
 import type { TurnResult } from "./core/turn.js";
 import { redactSecrets } from "./ui.js";
 import type { ApprovalReview } from "./approval_review.js";
+import type { SlashSpec } from "./slash/catalog.js";
 
 export const PROTOCOL_VERSION = 1;
 export const MAX_TEXT_FIELD = 8000;
 export const MAX_SUMMARY = 160;
+export const MAX_SLASH_OUTPUT = 32_000;
 
 export type ErrorCode = "BAD_REQUEST" | "BUSY" | "NO_PENDING_APPROVAL" | "INTERNAL";
 
@@ -18,7 +20,7 @@ export interface ModelSummary {
 }
 
 export type SidecarEvent =
-  | { type: "hello"; protocol: number; pid: number }
+  | { type: "hello"; protocol: number; pid: number; commands: Array<Pick<SlashSpec, "name" | "usage" | "summary">> }
   | {
       type: "session.state";
       workspace: string;
@@ -33,7 +35,20 @@ export type SidecarEvent =
   | { type: "tool.end"; turn_id: string; call_id: string; tool: string; success: boolean; summary: string; lines: number }
   | { type: "approval.request"; id: string; turn_id: string; tool: string; subject: string; preview: string; review: ApprovalReview }
   | { type: "turn.result"; turn_id: string; heading: string; line: string; turn: TurnResult; model_summary: ModelSummary | null }
-  | { type: "slash.result"; id: string; command: string; success: boolean; output: string }
+  | {
+      type: "slash.result";
+      id: string;
+      command: string;
+      success: boolean;
+      output: string;
+      /** "diff": colour unified-diff lines. */
+      format?: "diff";
+      /** Text for the client to put into the composer. */
+      composer?: string;
+      /** The command started a turn with this prompt; the turn's events follow under the same id. */
+      prompt?: string;
+    }
+  | { type: "notice"; text: string }
   | { type: "error"; id?: string; code: ErrorCode; message: string };
 
 export type SidecarCommand =

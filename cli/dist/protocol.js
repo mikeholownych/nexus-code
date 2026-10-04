@@ -2,6 +2,7 @@ import { redactSecrets } from "./ui.js";
 export const PROTOCOL_VERSION = 1;
 export const MAX_TEXT_FIELD = 8000;
 export const MAX_SUMMARY = 160;
+export const MAX_SLASH_OUTPUT = 32_000;
 export class ProtocolError extends Error {
     id;
     constructor(message, id) {

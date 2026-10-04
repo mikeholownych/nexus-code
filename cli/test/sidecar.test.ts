@@ -6,31 +6,45 @@ import path from "node:path";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { ApplicationCore } from "../src/core/app.js";
-import { SidecarServer } from "../src/sidecar.js";
+import { SidecarOptions, SidecarServer } from "../src/sidecar.js";
+import { slashCatalog } from "../src/slash/catalog.js";
 import { startGateway, makeRepo, makeHome, waitForEvent, waitUntil, Reply } from "./helpers/fixtures.js";
 
 interface Rig {
   server: SidecarServer;
   events: any[];
   repo: string;
+  app: ApplicationCore;
   send(msg: Record<string, unknown>): Promise<void>;
 }
 
-async function withSidecar(script: (n: number) => Reply, mode: "auto" | "review", fn: (rig: Rig) => Promise<void>, onShutdown?: () => void): Promise<void> {
+async function withSidecar(
+  script: (n: number) => Reply,
+  mode: "auto" | "review",
+  fn: (rig: Rig) => Promise<void>,
+  onShutdown?: () => void,
+  setup?: (app: ApplicationCore) => Partial<SidecarOptions>,
+): Promise<void> {
   const gw = await startGateway(script);
   const repo = makeRepo();
+  const home = makeHome();
+  const previousHome = process.env.HOME;
+  process.env.HOME = home;
   const app = new ApplicationCore({ endpoint: gw.url, model: "m", maxSteps: 6, temperature: 0, workspace: repo, shell: "bash" } as any);
   const events: any[] = [];
-  const server = new SidecarServer({ app, mode, write: (line) => events.push(JSON.parse(line)), onShutdown });
+  const server = new SidecarServer({ app, mode, write: (line) => events.push(JSON.parse(line)), onShutdown, ...setup?.(app) });
   server.start();
   try {
-    await fn({ server, events, repo, send: (msg) => server.handleLine(JSON.stringify({ v: 1, ...msg })) });
+    await fn({ server, events, repo, app, send: (msg) => server.handleLine(JSON.stringify({ v: 1, ...msg })) });
   } finally {
     await server.handleLine(JSON.stringify({ v: 1, type: "cancel" }));
     await server.idle();
     app.shutdown();
     await gw.close();
+    if (previousHome === undefined) delete process.env.HOME;
+    else process.env.HOME = previousHome;
     fs.rmSync(repo, { recursive: true, force: true });
+    fs.rmSync(home, { recursive: true, force: true });
   }
 }
 
@@ -41,7 +55,7 @@ const readOnlyTurn = (n: number): Reply => n === 1
 describe("SidecarServer: session and turns", () => {
   test("start announces the protocol and an idle session", async () => {
     await withSidecar(readOnlyTurn, "auto", async ({ events, repo }) => {
-      assert.deepEqual(events[0], { v: 1, type: "hello", protocol: 1, pid: process.pid });
+      assert.deepEqual(events[0], { v: 1, type: "hello", protocol: 1, pid: process.pid, commands: slashCatalog() });
       const state = events[1];
       assert.equal(state.type, "session.state");
       assert.equal(state.workspace, repo);
@@ -258,13 +272,16 @@ describe("SidecarServer: cancellation", () => {
 
 describe("SidecarServer: slash and shutdown", () => {
   test("slash status replies with slash.result", async () => {
-    await withSidecar(readOnlyTurn, "auto", async ({ events, send }) => {
+    await withSidecar(readOnlyTurn, "auto", async ({ server, events, send }) => {
       await send({ type: "slash", id: "s1", command: "status" });
+      await server.idle();
       const reply = events.find((e) => e.type === "slash.result");
       assert.equal(reply.id, "s1");
       assert.equal(reply.command, "status");
       assert.equal(reply.success, true);
-      assert.equal(JSON.parse(reply.output).model, "m");
+      assert.match(reply.output, /^model\s+m$/m);
+      const order = events.slice(2).map((e) => (e.type === "session.state" ? `state:${e.busy}` : e.type));
+      assert.deepEqual(order, ["state:true", "slash.result", "state:false"]);
     });
   });
 
@@ -299,6 +316,110 @@ describe("SidecarServer: slash and shutdown", () => {
       assert.equal(events.find((e) => e.type === "error" && e.id === "s1")?.code, "BUSY");
       assert.equal(events.some((e) => e.type === "turn.result" || e.type === "slash.result"), false);
     }, () => shutdowns++);
+  });
+});
+
+describe("SidecarServer: sessions and slash commands", () => {
+  test("a prompt turn is checkpointed first, saved after, and joins the history", async () => {
+    await withSidecar(readOnlyTurn, "auto", async ({ server, events, app, send }) => {
+      await send({ type: "prompt.submit", id: "t1", text: "what is here?" });
+      await server.idle();
+      const checkpoints = app.getCheckpointManager().listCheckpoints();
+      assert.equal(checkpoints.length, 1);
+      assert.equal(checkpoints[0].name, "Turn: what is here?");
+      const sessions = app.getSessionManager().listSessions();
+      assert.equal(sessions.length, 1);
+      assert.equal(sessions[0].title, "what is here?");
+      await send({ type: "slash", id: "s1", command: "history" });
+      await server.idle();
+      assert.match(events.find((e) => e.type === "slash.result").output, /^\[1\] what is here\?$/m);
+    });
+  });
+
+  test("a diff reply is marked for diff colouring", async () => {
+    await withSidecar(readOnlyTurn, "auto", async ({ server, events, repo, send }) => {
+      fs.writeFileSync(path.join(repo, "base.txt"), "changed\n");
+      await send({ type: "slash", id: "s1", command: "diff" });
+      await server.idle();
+      const reply = events.find((e) => e.type === "slash.result");
+      assert.equal(reply.format, "diff");
+      assert.match(reply.output, /^\+changed$/m);
+    });
+  });
+
+  test("a command that resolves to a prompt runs it as a turn under the command id", async () => {
+    await withSidecar(readOnlyTurn, "auto", async ({ server, events, send }) => {
+      await send({ type: "prompt.submit", id: "t1", text: "what is here?" });
+      await server.idle();
+      const before = events.length;
+      await send({ type: "slash", id: "s1", command: "history", args: "run 1" });
+      await server.idle();
+      const later = events.slice(before);
+      const reply = later.find((e) => e.type === "slash.result");
+      assert.equal(reply.prompt, "what is here?");
+      assert.equal(reply.output, "");
+      const result = later.find((e) => e.type === "turn.result");
+      assert.equal(result.turn_id, "s1");
+      assert.ok(later.indexOf(reply) < later.indexOf(result));
+    });
+  });
+
+  test("/mode review makes later writes wait for approval", async () => {
+    await withSidecar(writeTurn, "auto", async ({ server, events, send }) => {
+      await send({ type: "slash", id: "s1", command: "mode", args: "review" });
+      await server.idle();
+      assert.equal(events.filter((e) => e.type === "session.state").at(-1).mode, "review");
+      await send({ type: "prompt.submit", id: "t1", text: "make x" });
+      const req = await waitForEvent(events, (e) => e.type === "approval.request");
+      await send({ type: "deny", id: req.id });
+      await server.idle();
+    });
+  });
+
+  test("cancelling a command that cannot stop says so and lets it finish", async () => {
+    await withSidecar(readOnlyTurn, "auto", async ({ server, events, send }) => {
+      await send({ type: "slash", id: "s1", command: "!", args: "sleep 0.5; echo done-sleeping" });
+      await send({ type: "cancel" });
+      await server.idle();
+      assert.equal(events.find((e) => e.type === "notice").text, "! cannot be cancelled; it finishes on its own.");
+      const reply = events.find((e) => e.type === "slash.result");
+      assert.equal(reply.success, true);
+      assert.match(reply.output, /done-sleeping/);
+    });
+  });
+
+  test("cancelling /tdd stops it with an honest result", async () => {
+    await withSidecar(() => ({ kind: "text", content: "slow answer", delayMs: 3000 }), "auto", async ({ server, events, send }) => {
+      const started = Date.now();
+      await send({ type: "slash", id: "s1", command: "tdd", args: "fix the parser" });
+      await new Promise((r) => setTimeout(r, 200));
+      await send({ type: "cancel" });
+      await server.idle();
+      assert.ok(Date.now() - started < 2500, "stopped well before the gateway replied");
+      const reply = events.find((e) => e.type === "slash.result");
+      assert.equal(reply.success, false);
+      assert.match(reply.output, /Stopped by operator\./);
+    });
+  });
+
+  test("--resume restores a saved session and says so", async () => {
+    await withSidecar(readOnlyTurn, "auto", async ({ events, app }) => {
+      assert.equal(events[2].type, "notice");
+      assert.equal(events[2].text, "Resumed session old-session (2 messages).");
+      assert.deepEqual(app.getAgent().getMessages().map((m) => m.content), ["s", "earlier question"]);
+    }, undefined, (app) => {
+      const now = new Date().toISOString();
+      app.getSessionManager().saveSession({
+        id: "old-session",
+        title: "earlier",
+        createdAt: now,
+        updatedAt: now,
+        workspace: app.getConfig().workspace,
+        model: "m",
+        messages: [{ role: "system", content: "s" }, { role: "user", content: "earlier question" }] as any,
+      });
+      return { resume: "old-session" };
+    });
   });
 });
 
