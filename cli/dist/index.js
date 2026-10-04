@@ -4,10 +4,9 @@ import * as path from "node:path";
 import * as fs from "node:fs";
 import { execSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import { config as loadDotenv } from "dotenv";
 import { ApplicationCore } from "./core/app.js";
 import { InteractiveRepl } from "./repl.js";
-import { LocalLlmClient, readLatestAuthToken } from "./client.js";
+import { LocalLlmClient } from "./client.js";
 import { SessionManager } from "./session.js";
 import { SkillManager } from "./skills.js";
 import { McpClientManager } from "./mcp.js";
@@ -18,76 +17,17 @@ import { HunkStager } from "./stager.js";
 import { BenchmarkEvaluator } from "./evaluator.js";
 import { BrowserDriver } from "./browser.js";
 import { KnowledgeGraph } from "./knowledge.js";
+import { buildConfig, loadEnvironment } from "./config.js";
 import pc from "picocolors";
 import * as os from "node:os";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-// 1. Installation directory defaults
-loadDotenv({ path: path.resolve(__dirname, "../.env") });
-// 2. Global user config (~/.config/nexus/config.env)
-const globalConfig = path.join(os.homedir(), ".config/nexus/config.env");
-if (fs.existsSync(globalConfig)) {
-    loadDotenv({ path: globalConfig, override: true });
-}
-// 3. Current working directory overrides (skipped when cwd is the install directory: that file is the
-//    shipped default already applied in step 1 and must not outrank the user's global config)
-const cwdEnv = path.resolve(process.cwd(), ".env");
-if (cwdEnv !== path.resolve(__dirname, "../.env")) {
-    loadDotenv({ path: cwdEnv, override: true });
-}
+loadEnvironment();
 const program = new Command();
 program
     .name("harness")
     .description("Nexus Code - Custom Autonomous Coding Harness for Local AI (LM Studio / vLLM)")
     .version("1.2.1");
-function buildConfig(options) {
-    const endpoint = options.endpoint || process.env.LOCAL_LLM_ENDPOINT || "http://localhost:1234/v1";
-    const model = options.model || process.env.LOCAL_LLM_MODEL || "local-model";
-    const apiKey = options.apiKey || process.env.LOCAL_LLM_API_KEY || readLatestAuthToken() || "local";
-    const workspace = options.workspace ? path.resolve(options.workspace) : process.cwd();
-    const maxSteps = options.maxSteps ? parseInt(options.maxSteps, 10) : 30;
-    const temperature = options.temperature ? parseFloat(options.temperature) : 0.2;
-    const shell = options.shell || process.env.LOCAL_HARNESS_SHELL || "bash";
-    const dryRun = Boolean(options.dryRun);
-    const readOnly = Boolean(options.readOnly);
-    const sandbox = options.sandbox ? (typeof options.sandbox === "string" ? options.sandbox : true) : undefined;
-    const fallbackEndpoints = options.fallback ? options.fallback.split(",").map((s) => s.trim()) : undefined;
-    const contextLimit = options.contextLimit ? parseInt(options.contextLimit, 10) : undefined;
-    const worktree = Boolean(options.worktree);
-    const authoritativeVerifierCommand = options.authoritativeVerifier;
-    const recordFlight = Boolean(options.recordFlight || options.flight);
-    const plannerModel = options.plannerModel || process.env.PLANNER_LLM_MODEL;
-    const plannerEndpoint = options.plannerEndpoint || process.env.PLANNER_LLM_ENDPOINT;
-    const coderModel = options.coderModel || process.env.CODER_LLM_MODEL;
-    const coderEndpoint = options.coderEndpoint || process.env.CODER_LLM_ENDPOINT;
-    const tdd = Boolean(options.tdd);
-    const taskClass = process.env.NEXUS_TASK_CLASS || undefined;
-    const plannerTaskClass = process.env.PLANNER_TASK_CLASS || undefined;
-    return {
-        taskClass,
-        plannerTaskClass,
-        endpoint,
-        model,
-        apiKey,
-        workspace,
-        maxSteps,
-        temperature,
-        shell,
-        dryRun,
-        readOnly,
-        sandbox,
-        fallbackEndpoints,
-        contextLimit,
-        worktree,
-        authoritativeVerifierCommand,
-        recordFlight,
-        plannerModel,
-        plannerEndpoint,
-        coderModel,
-        coderEndpoint,
-        tdd,
-    };
-}
 program
     .command("repl")
     .description("Start interactive coding session (REPL / TUI)")
