@@ -5,7 +5,7 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use serde_json::Value;
 use std::time::{Duration, Instant};
 
-use crate::protocol::{Command, Event, PROTOCOL_VERSION, Review, SlashSpec};
+use crate::protocol::{Command, Event, PROTOCOL_VERSION, ReceiptSection, Review, SlashSpec};
 use crate::review::{ReviewLine, review_lines};
 use crate::slash::{self, Invocation};
 
@@ -119,6 +119,40 @@ pub struct Approval {
     pub opened: Instant,
 }
 
+/// A panel's content: requested from the sidecar, then filled by its answer.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Loaded<T> {
+    Waiting,
+    Ready(T),
+    Failed(String),
+}
+
+/// A tool call's full record as the sidecar keeps it.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ToolRecord {
+    pub status: String,
+    pub args: String,
+    pub output: String,
+    pub duration_ms: Option<u64>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct Detail {
+    /// Request id; answers for other ids are ignored.
+    pub request: String,
+    pub tool: String,
+    pub subject: String,
+    pub record: Loaded<ToolRecord>,
+    pub scroll: usize,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct ReceiptPanel {
+    pub request: String,
+    pub sections: Loaded<Vec<ReceiptSection>>,
+    pub scroll: usize,
+}
+
 /// Keystrokes typed for the draft must not answer an approval modal that opened mid-typing.
 pub const APPROVAL_GRACE: Duration = Duration::from_millis(400);
 
@@ -127,6 +161,8 @@ pub const APPROVAL_GRACE: Duration = Duration::from_millis(400);
 pub enum Overlay {
     Approval(Approval),
     Help { scroll: usize },
+    Detail(Detail),
+    Receipt(ReceiptPanel),
 }
 
 /// What the last frame measured. Key handling uses it for page sizes, and it clamps scrolling at the top.
@@ -137,6 +173,8 @@ pub struct LiveLayout {
     pub scroll_limit: usize,
     pub overlay_rows: usize,
     pub overlay_limit: usize,
+    /// Set when the frame moved the transcript window to show the selected tool call: the `scroll_back` it drew.
+    pub followed: Option<usize>,
 }
 
 /// Tool calls whose result the turn banner already reports.
@@ -165,6 +203,11 @@ pub struct LiveState {
     slash_pick: usize,
     /// Esc hid the completion list; editing the draft shows it again.
     slash_dismissed: bool,
+    /// Transcript index of the selected tool call (transcript focus only).
+    pub selected: Option<usize>,
+    /// The next frame should move the window to show the selection.
+    pub follow: bool,
+    panel_seq: u64,
 }
 
 impl LiveState {
@@ -186,6 +229,9 @@ impl LiveState {
             slash_seq: 0,
             slash_pick: 0,
             slash_dismissed: false,
+            selected: None,
+            follow: false,
+            panel_seq: 0,
         }
     }
 
@@ -286,6 +332,18 @@ impl LiveState {
                     notes,
                 });
             }
+            Event::Error {
+                id: Some(id),
+                code,
+                message,
+            } if self.waiting_panel() == Some(id.as_str()) => {
+                let message = format!("{code}: {message}");
+                match &mut self.overlay {
+                    Some(Overlay::Detail(detail)) => detail.record = Loaded::Failed(message),
+                    Some(Overlay::Receipt(panel)) => panel.sections = Loaded::Failed(message),
+                    _ => {}
+                }
+            }
             Event::Error { id, code, message } => {
                 // BUSY means the sidecar is still running a turn, so the composer stays locked.
                 if id.is_some() && id == self.pending && code != "BUSY" {
@@ -307,6 +365,7 @@ impl LiveState {
                 if command == "clear" && success {
                     self.transcript.clear();
                     self.scroll_back = 0;
+                    self.selected = None;
                 }
                 if !output.is_empty() || !success {
                     self.transcript.push(Entry::Output {
@@ -326,7 +385,31 @@ impl LiveState {
                 }
             }
             Event::Notice { text } => self.transcript.push(Entry::Info(text)),
-            Event::ToolDetail { .. } | Event::Receipt { .. } => {}
+            Event::ToolDetail {
+                id,
+                status,
+                args,
+                output,
+                duration_ms,
+            } => {
+                if let Some(Overlay::Detail(detail)) = &mut self.overlay
+                    && detail.request == id
+                {
+                    detail.record = Loaded::Ready(ToolRecord {
+                        status,
+                        args,
+                        output,
+                        duration_ms,
+                    });
+                }
+            }
+            Event::Receipt { id, sections } => {
+                if let Some(Overlay::Receipt(panel)) = &mut self.overlay
+                    && panel.request == id
+                {
+                    panel.sections = Loaded::Ready(sections);
+                }
+            }
             Event::Unknown => {}
         }
     }
@@ -364,9 +447,17 @@ impl LiveState {
 
     /// Records what the frame measured and clamps scrolling to it.
     pub fn note_layout(&mut self, layout: LiveLayout) {
+        if let Some(back) = layout.followed {
+            self.scroll_back = back;
+            self.follow = false;
+        }
         self.scroll_back = self.scroll_back.min(layout.scroll_limit);
-        if let Some(Overlay::Approval(Approval { scroll, .. }) | Overlay::Help { scroll }) =
-            &mut self.overlay
+        if let Some(
+            Overlay::Approval(Approval { scroll, .. })
+            | Overlay::Help { scroll }
+            | Overlay::Detail(Detail { scroll, .. })
+            | Overlay::Receipt(ReceiptPanel { scroll, .. }),
+        ) = &mut self.overlay
         {
             *scroll = (*scroll).min(layout.overlay_limit);
         }
@@ -425,8 +516,12 @@ impl LiveState {
     /// Scrolls the open overlay. The next frame clamps past-the-end values through `note_layout`.
     fn scroll_overlay(&mut self, code: KeyCode) {
         let page = Self::page(self.layout.overlay_rows);
-        if let Some(Overlay::Approval(Approval { scroll, .. }) | Overlay::Help { scroll }) =
-            &mut self.overlay
+        if let Some(
+            Overlay::Approval(Approval { scroll, .. })
+            | Overlay::Help { scroll }
+            | Overlay::Detail(Detail { scroll, .. })
+            | Overlay::Receipt(ReceiptPanel { scroll, .. }),
+        ) = &mut self.overlay
         {
             *scroll = match code {
                 KeyCode::Up | KeyCode::Char('k') => scroll.saturating_sub(1),
@@ -442,6 +537,10 @@ impl LiveState {
 
     fn on_transcript_key(&mut self, key: KeyEvent) -> Option<Action> {
         match key.code {
+            KeyCode::Char('[') => self.select_tool(true),
+            KeyCode::Char(']') => self.select_tool(false),
+            KeyCode::Char('v') => return self.open_receipt(),
+            KeyCode::Enter if self.selected.is_some() => return self.open_detail(),
             KeyCode::Up | KeyCode::Char('k') => {
                 self.scroll_back = self.scroll_back.saturating_add(1)
             }
@@ -483,7 +582,7 @@ impl LiveState {
         }
         match self.overlay {
             Some(Overlay::Approval(_)) => return self.on_approval_key(key, now),
-            Some(Overlay::Help { .. }) => {
+            Some(Overlay::Help { .. } | Overlay::Detail(_) | Overlay::Receipt(_)) => {
                 self.on_help_key(key);
                 return None;
             }
@@ -499,6 +598,7 @@ impl LiveState {
                     Focus::Composer => Focus::Transcript,
                     Focus::Transcript => Focus::Composer,
                 };
+                self.selected = None;
                 None
             }
             KeyCode::PageUp => {
@@ -510,7 +610,9 @@ impl LiveState {
                 None
             }
             KeyCode::Esc if self.focus == Focus::Transcript => {
-                self.focus = Focus::Composer;
+                if self.selected.take().is_none() {
+                    self.focus = Focus::Composer;
+                }
                 None
             }
             KeyCode::Esc if self.session.busy => Some(Action::Send(Command::Cancel)),
@@ -526,7 +628,7 @@ impl LiveState {
 
     fn on_ctrl_c(&mut self) -> Option<Action> {
         match self.overlay {
-            Some(Overlay::Help { .. }) => {
+            Some(Overlay::Help { .. } | Overlay::Detail(_) | Overlay::Receipt(_)) => {
                 self.overlay = None;
                 return None;
             }
@@ -620,7 +722,7 @@ impl LiveState {
                     .push(Entry::Info("You are already in the live view.".into()));
                 None
             }
-            Invocation::Receipt => None,
+            Invocation::Receipt => self.open_receipt(),
             Invocation::Remote { command, args } => {
                 self.slash_seq += 1;
                 let id = format!("s{}", self.slash_seq);
@@ -679,6 +781,103 @@ impl LiveState {
     fn complete(&mut self, name: &str) {
         self.composer.clear();
         self.composer.insert(&format!("/{name} "));
+    }
+
+    /// Moves the tool selection one call older or newer; the first press selects the newest call.
+    fn select_tool(&mut self, older: bool) {
+        let tools: Vec<usize> = self
+            .transcript
+            .iter()
+            .enumerate()
+            .filter(|(_, entry)| matches!(entry, Entry::Tool { .. }))
+            .map(|(index, _)| index)
+            .collect();
+        let Some(&newest) = tools.last() else {
+            return;
+        };
+        self.selected = Some(match self.selected.filter(|index| tools.contains(index)) {
+            None => newest,
+            Some(current) if older => tools
+                .iter()
+                .rev()
+                .copied()
+                .find(|&index| index < current)
+                .unwrap_or(current),
+            Some(current) => tools
+                .iter()
+                .copied()
+                .find(|&index| index > current)
+                .unwrap_or(current),
+        });
+        self.follow = true;
+    }
+
+    fn open_detail(&mut self) -> Option<Action> {
+        let found = self
+            .selected
+            .and_then(|index| match self.transcript.get(index) {
+                Some(Entry::Tool {
+                    tool,
+                    subject,
+                    evidence,
+                    ..
+                }) => Some((tool.clone(), subject.clone(), evidence.clone())),
+                _ => None,
+            });
+        let Some((tool, subject, evidence)) = found else {
+            self.selected = None;
+            return None;
+        };
+        if evidence.is_empty() {
+            self.transcript.push(Entry::Info(
+                "This tool call has no recorded details.".into(),
+            ));
+            return None;
+        }
+        self.panel_seq += 1;
+        let request = format!("d{}", self.panel_seq);
+        self.overlay = Some(Overlay::Detail(Detail {
+            request: request.clone(),
+            tool,
+            subject,
+            record: Loaded::Waiting,
+            scroll: 0,
+        }));
+        Some(Action::Send(Command::ToolDetail {
+            id: request,
+            evidence,
+        }))
+    }
+
+    fn open_receipt(&mut self) -> Option<Action> {
+        if self.link != Link::Ready {
+            return None;
+        }
+        self.panel_seq += 1;
+        let request = format!("r{}", self.panel_seq);
+        self.overlay = Some(Overlay::Receipt(ReceiptPanel {
+            request: request.clone(),
+            sections: Loaded::Waiting,
+            scroll: 0,
+        }));
+        Some(Action::Send(Command::Receipt { id: request }))
+    }
+
+    /// Request id of the open detail or receipt panel while it waits for its answer.
+    fn waiting_panel(&self) -> Option<&str> {
+        match &self.overlay {
+            Some(Overlay::Detail(Detail {
+                request,
+                record: Loaded::Waiting,
+                ..
+            }))
+            | Some(Overlay::Receipt(ReceiptPanel {
+                request,
+                sections: Loaded::Waiting,
+                ..
+            })) => Some(request.as_str()),
+            _ => None,
+        }
     }
 
     fn interrupt_running_tools(&mut self) {
@@ -1389,6 +1588,7 @@ mod tests {
             scroll_limit: 0,
             overlay_rows: 4,
             overlay_limit: 6,
+            ..LiveLayout::default()
         });
         for code in [KeyCode::Down, KeyCode::Char('j'), KeyCode::PageDown] {
             assert_eq!(state.on_key(key(code)), None);
@@ -1403,6 +1603,7 @@ mod tests {
             scroll_limit: 0,
             overlay_rows: 4,
             overlay_limit: 6,
+            ..LiveLayout::default()
         });
         assert!(matches!(
             &state.overlay,
@@ -1438,6 +1639,7 @@ mod tests {
             scroll_limit: 50,
             overlay_rows: 0,
             overlay_limit: 0,
+            ..LiveLayout::default()
         };
         state.note_layout(layout);
         assert_eq!(state.on_key(key(KeyCode::PageUp)), None);
@@ -1799,5 +2001,162 @@ mod tests {
         assert_eq!(state.on_key(key(KeyCode::Down)), None);
         assert_eq!(state.on_key(key(KeyCode::Backspace)), None);
         assert!(state.completion().is_some(), "editing shows the list again");
+    }
+
+    fn tool_call(state: &mut LiveState, call: &str, evidence: &str) {
+        state.apply(ev(&format!(
+            r#"{{"v":1,"type":"tool.start","turn_id":"t1","call_id":"{call}","tool":"read_file","subject":"{call}.ts","evidence":"{evidence}"}}"#
+        )));
+        state.apply(ev(&format!(
+            r#"{{"v":1,"type":"tool.end","turn_id":"t1","call_id":"{call}","tool":"read_file","success":true,"summary":"ok","lines":1,"evidence":"{evidence}"}}"#
+        )));
+    }
+
+    #[test]
+    fn brackets_select_tool_calls_newest_first() {
+        let mut state = ready();
+        tool_call(&mut state, "a", "e1");
+        state.transcript.push(Entry::Info("between".into()));
+        tool_call(&mut state, "b", "e2");
+        state.on_key(key(KeyCode::Tab));
+        assert_eq!(state.selected, None);
+        state.on_key(key(KeyCode::Char('[')));
+        assert_eq!(state.selected, Some(2));
+        assert!(state.follow);
+        state.on_key(key(KeyCode::Char('[')));
+        assert_eq!(state.selected, Some(0));
+        state.on_key(key(KeyCode::Char('[')));
+        assert_eq!(state.selected, Some(0), "the oldest call stays selected");
+        state.on_key(key(KeyCode::Char(']')));
+        assert_eq!(state.selected, Some(2));
+        state.on_key(key(KeyCode::Esc));
+        assert_eq!((state.selected, state.focus), (None, Focus::Transcript));
+        state.on_key(key(KeyCode::Esc));
+        assert_eq!(state.focus, Focus::Composer);
+        state.on_key(key(KeyCode::Tab));
+        state.on_key(key(KeyCode::Char(']')));
+        assert_eq!(state.selected, Some(2));
+        state.on_key(key(KeyCode::Tab));
+        assert_eq!((state.selected, state.focus), (None, Focus::Composer));
+    }
+
+    #[test]
+    fn enter_on_a_selected_tool_requests_its_detail_and_the_answer_fills_the_panel() {
+        let mut state = ready();
+        tool_call(&mut state, "a", "e7");
+        state.on_key(key(KeyCode::Tab));
+        state.on_key(key(KeyCode::Char('[')));
+        assert_eq!(
+            state.on_key(key(KeyCode::Enter)),
+            Some(Action::Send(Command::ToolDetail {
+                id: "d1".into(),
+                evidence: "e7".into()
+            }))
+        );
+        assert!(matches!(
+            &state.overlay,
+            Some(Overlay::Detail(Detail { request, tool, subject, record: Loaded::Waiting, .. }))
+                if request == "d1" && tool == "read_file" && subject == "a.ts"
+        ));
+        state.apply(ev(r#"{"v":1,"type":"tool.detail","id":"d0","evidence":"e7","tool":"read_file","subject":"a.ts","status":"succeeded","args":"{}","output":"stale","duration_ms":1}"#));
+        assert!(matches!(
+            &state.overlay,
+            Some(Overlay::Detail(Detail {
+                record: Loaded::Waiting,
+                ..
+            }))
+        ));
+        state.apply(ev(r#"{"v":1,"type":"tool.detail","id":"d1","evidence":"e7","tool":"read_file","subject":"a.ts","status":"succeeded","args":"{\n  \"path\": \"a.ts\"\n}","output":"const a = 1;","duration_ms":12}"#));
+        assert!(matches!(
+            &state.overlay,
+            Some(Overlay::Detail(Detail { record: Loaded::Ready(record), .. }))
+                if record.output == "const a = 1;" && record.duration_ms == Some(12) && record.status == "succeeded"
+        ));
+        state.on_key(key(KeyCode::Esc));
+        assert_eq!(state.overlay, None);
+        assert_eq!(state.focus, Focus::Transcript);
+    }
+
+    #[test]
+    fn a_tool_without_a_record_says_so_and_failed_requests_stay_in_the_panel() {
+        let mut state = ready();
+        tool_call(&mut state, "a", "");
+        state.on_key(key(KeyCode::Tab));
+        state.on_key(key(KeyCode::Char('[')));
+        assert_eq!(state.on_key(key(KeyCode::Enter)), None);
+        assert_eq!(
+            state.transcript.last(),
+            Some(&Entry::Info(
+                "This tool call has no recorded details.".into()
+            ))
+        );
+        tool_call(&mut state, "b", "e9");
+        state.on_key(key(KeyCode::Char(']')));
+        assert!(state.on_key(key(KeyCode::Enter)).is_some());
+        let before = state.transcript.len();
+        state.apply(ev(r#"{"v":1,"type":"error","id":"d1","code":"NOT_FOUND","message":"No record of tool call e9."}"#));
+        assert!(matches!(
+            &state.overlay,
+            Some(Overlay::Detail(Detail { record: Loaded::Failed(message), .. }))
+                if message == "NOT_FOUND: No record of tool call e9."
+        ));
+        assert_eq!(state.transcript.len(), before);
+    }
+
+    #[test]
+    fn v_and_slash_receipt_open_the_receipt_panel() {
+        let mut state = ready();
+        state.on_key(key(KeyCode::Tab));
+        assert_eq!(
+            state.on_key(key(KeyCode::Char('v'))),
+            Some(Action::Send(Command::Receipt { id: "r1".into() }))
+        );
+        state.apply(ev(r#"{"v":1,"type":"receipt","id":"r1","sections":[{"title":"Last turn","rows":[["outcome","VERIFIED"]]},{"title":"Validation receipt","rows":[],"note":"No validation receipt is active."}]}"#));
+        assert!(matches!(
+            &state.overlay,
+            Some(Overlay::Receipt(ReceiptPanel { sections: Loaded::Ready(sections), .. }))
+                if sections.len() == 2 && sections[0].rows == vec![("outcome".to_string(), "VERIFIED".to_string())]
+        ));
+        state.on_key(key(KeyCode::Esc));
+        state.on_key(key(KeyCode::Esc));
+        assert_eq!(state.focus, Focus::Composer);
+        type_text(&mut state, "/receipt");
+        assert_eq!(
+            state.on_key(key(KeyCode::Enter)),
+            Some(Action::Send(Command::Receipt { id: "r2".into() }))
+        );
+        assert!(!state.session.busy);
+        assert!(state.transcript.is_empty());
+    }
+
+    #[test]
+    fn ctrl_c_closes_a_panel_and_approvals_take_its_place() {
+        let mut state = ready();
+        state.on_key(key(KeyCode::Tab));
+        assert!(state.on_key(key(KeyCode::Char('v'))).is_some());
+        assert_eq!(state.on_key(ctrl('c')), None);
+        assert_eq!(state.overlay, None);
+        assert!(state.on_key(key(KeyCode::Char('v'))).is_some());
+        state.apply(ev(r#"{"v":1,"type":"approval.request","id":"approval-1","turn_id":"t1","tool":"write_file","subject":"x.txt","preview":"{}"}"#));
+        assert!(matches!(state.overlay, Some(Overlay::Approval(_))));
+    }
+
+    #[test]
+    fn the_frame_moves_the_window_to_the_selection_once() {
+        let mut state = ready();
+        state.follow = true;
+        state.note_layout(LiveLayout {
+            transcript_rows: 10,
+            scroll_limit: 40,
+            followed: Some(12),
+            ..LiveLayout::default()
+        });
+        assert_eq!((state.scroll_back, state.follow), (12, false));
+        state.note_layout(LiveLayout {
+            transcript_rows: 10,
+            scroll_limit: 40,
+            ..LiveLayout::default()
+        });
+        assert_eq!(state.scroll_back, 12);
     }
 }

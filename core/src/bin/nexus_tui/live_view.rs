@@ -91,6 +91,7 @@ pub fn render_live(frame: &mut Frame, state: &LiveState) -> LiveLayout {
             (layout.overlay_rows, layout.overlay_limit) =
                 render_help(frame, rows[1], *scroll, &state.commands);
         }
+        Some(Overlay::Detail(_) | Overlay::Receipt(_)) => {}
         None => {}
     }
     layout
