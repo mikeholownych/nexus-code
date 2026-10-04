@@ -68,6 +68,17 @@ export function toolSubject(args) {
     const subject = args.path ?? args.file_path ?? args.command ?? args.url ?? args.query ?? args.name ?? "";
     return redactSecrets(String(subject)).replace(/\s+/g, " ").trim().slice(0, 200);
 }
+/** Copy of a turn with secrets redacted from its free-text fields; enums, counts, ids and hashes are left as-is. */
+export function projectTurn(turn) {
+    const redactOptional = (text) => (text === undefined ? undefined : redactSecrets(text));
+    return {
+        ...turn,
+        detail: redactOptional(turn.detail),
+        verification: turn.verification ? { ...turn.verification, command: redactOptional(turn.verification.command) } : null,
+        interruption: turn.interruption ? { ...turn.interruption, outstandingTool: redactOptional(turn.interruption.outstandingTool) } : null,
+        inferenceFailure: turn.inferenceFailure ? { ...turn.inferenceFailure, message: redactSecrets(turn.inferenceFailure.message) } : null,
+    };
+}
 export function toolSummary(success, output, error) {
     const text = redactSecrets(success ? output || "" : error || output || "").trim();
     const first = text.split(/\r?\n/).find((line) => line.trim())?.trim() ?? (success ? "Completed" : "Tool failed");

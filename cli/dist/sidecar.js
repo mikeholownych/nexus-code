@@ -1,3 +1,4 @@
+import * as fs from "node:fs";
 import * as path from "node:path";
 import * as readline from "node:readline";
 import { fileURLToPath } from "node:url";
@@ -7,7 +8,7 @@ import { ApplicationCore } from "./core/app.js";
 import { failedTurnFromError, summarizeTurn } from "./core/turn.js";
 import { getGitInfo } from "./git.js";
 import { redactSecrets } from "./ui.js";
-import { PROTOCOL_VERSION, ProtocolError, capText, encodeEvent, parseCommand, toolSubject, toolSummary, } from "./protocol.js";
+import { PROTOCOL_VERSION, ProtocolError, capText, encodeEvent, parseCommand, projectTurn, toolSubject, toolSummary, } from "./protocol.js";
 /** Drives one ApplicationCore from protocol commands and reports its activity as protocol events. */
 export class SidecarServer {
     app;
@@ -19,6 +20,7 @@ export class SidecarServer {
     turnAbort;
     pendingApproval;
     approvalSeq = 0;
+    shutdownPromise;
     constructor(options) {
         this.app = options.app;
         this.write = options.write;
@@ -68,13 +70,19 @@ export class SidecarServer {
         }
     }
     submit(id, text) {
+        if (this.shutdownPromise) {
+            this.emit({ type: "error", id, code: "BUSY", message: "The sidecar is shutting down." });
+            return;
+        }
         if (this.activeTurn) {
             this.emit({ type: "error", id, code: "BUSY", message: "A turn is already running; cancel it or wait for its result." });
             return;
         }
         const abort = new AbortController();
         this.turnAbort = abort;
-        this.activeTurn = this.runTurn(id, text, abort.signal).finally(() => {
+        this.activeTurn = this.runTurn(id, text, abort.signal)
+            .catch((err) => this.emit({ type: "error", id, code: "INTERNAL", message: redactSecrets(err instanceof Error ? err.message : String(err)) }))
+            .finally(() => {
             this.activeTurn = undefined;
             this.turnAbort = undefined;
             this.emitSessionState();
@@ -108,7 +116,7 @@ export class SidecarServer {
             turn_id: turnId,
             heading,
             line: redactSecrets(line),
-            turn,
+            turn: projectTurn(turn),
             model_summary: summary
                 ? { summary: redactSecrets(summary.summary), ...(summary.notes ? { notes: redactSecrets(summary.notes) } : {}) }
                 : null,
@@ -145,11 +153,19 @@ export class SidecarServer {
             this.emit({ type: "error", id, code: "NO_PENDING_APPROVAL", message: `No pending approval with id ${id}.` });
             return;
         }
-        if (approved && always)
+        if (approved && always) {
             this.alwaysApprove = true;
+            this.mode = "auto";
+            this.emitSessionState();
+        }
         pending.settle(approved);
     }
     async slash(id, command, args) {
+        if (this.shutdownPromise || this.activeTurn) {
+            const reason = this.shutdownPromise ? "The sidecar is shutting down." : "A turn is running; cancel it or wait for its result.";
+            this.emit({ type: "error", id, code: "BUSY", message: reason });
+            return;
+        }
         try {
             const result = await this.app.executeSlashCommand(command, args);
             this.emit({ type: "slash.result", id, command: result.command, success: result.success, output: capText(redactSecrets(result.output)) });
@@ -158,11 +174,14 @@ export class SidecarServer {
             this.emit({ type: "error", id, code: "INTERNAL", message: redactSecrets(err instanceof Error ? err.message : String(err)) });
         }
     }
-    async shutdown() {
-        this.turnAbort?.abort(new Error("sidecar shutdown"));
-        await this.idle();
-        this.app.shutdown();
-        this.onShutdown();
+    shutdown() {
+        this.shutdownPromise ??= (async () => {
+            this.turnAbort?.abort(new Error("sidecar shutdown"));
+            await this.idle();
+            this.app.shutdown();
+            this.onShutdown();
+        })();
+        return this.shutdownPromise;
     }
     emitSessionState() {
         const config = this.app.getConfig();
@@ -230,13 +249,25 @@ async function main(argv) {
     input.on("line", (line) => {
         server.handleLine(line).catch(report);
     });
-    input.on("close", () => {
+    const requestShutdown = () => {
         server.handleLine(JSON.stringify({ v: PROTOCOL_VERSION, type: "shutdown" })).catch(report);
-    });
+    };
+    input.on("close", requestShutdown);
+    process.stdout.on("error", requestShutdown);
     server.start();
 }
-const entry = process.argv[1] ? path.resolve(process.argv[1]) : "";
-if (entry === fileURLToPath(import.meta.url)) {
+/** True when argv[1] names this module, comparing real paths so a symlinked launcher still counts. */
+function isEntryPoint(argv1, moduleUrl) {
+    if (!argv1)
+        return false;
+    try {
+        return fs.realpathSync(path.resolve(argv1)) === fs.realpathSync(fileURLToPath(moduleUrl));
+    }
+    catch {
+        return false;
+    }
+}
+if (isEntryPoint(process.argv[1], import.meta.url)) {
     main(process.argv).catch((err) => {
         process.stderr.write(`nexus sidecar failed to start: ${err instanceof Error ? err.message : String(err)}\n`);
         process.exit(1);
