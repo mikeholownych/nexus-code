@@ -18,6 +18,8 @@ use serde::Deserialize;
 
 #[path = "nexus_tui/protocol.rs"]
 mod protocol;
+#[path = "nexus_tui/redact.rs"]
+mod redact;
 
 const ACCENT: Color = Color::Rgb(103, 232, 249);
 const MUTED: Color = Color::Rgb(125, 145, 158);
