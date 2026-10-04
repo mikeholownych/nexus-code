@@ -38,6 +38,8 @@ pub enum Entry {
         heading: String,
         line: String,
         tone: Tone,
+        /// Redacted `inferenceFailure.message`, when the turn reports one.
+        failure: Option<String>,
         summary: Option<String>,
     },
     Notice(String),
@@ -156,6 +158,7 @@ impl LiveState {
                     heading,
                     line,
                     tone: tone_for(&turn),
+                    failure: turn["inferenceFailure"]["message"].as_str().map(str::to_string),
                     summary: model_summary.map(|model| model.summary),
                 });
             }
@@ -494,6 +497,7 @@ mod tests {
                 heading: "TURN INTERRUPTED".into(),
                 line: "Stopped by operator".into(),
                 tone: Tone::Bad,
+                failure: None,
                 summary: None
             }
         );
@@ -504,6 +508,7 @@ mod tests {
                 heading: "TURN COMPLETE - VERIFIED".into(),
                 line: "cargo test passed".into(),
                 tone: Tone::Good,
+                failure: None,
                 summary: Some("Fixed the parser.".into()),
             }
         );
@@ -522,6 +527,32 @@ mod tests {
                 "{execution}/{outcome}"
             );
         }
+    }
+
+    #[test]
+    fn turn_result_carries_the_inference_failure_message() {
+        let mut state = ready();
+        state.apply(ev(r#"{"v":1,"type":"turn.result","turn_id":"t1","heading":"TURN FAILED","line":"Inference failed","turn":{"execution":"FAILED","outcome":"NOT_ESTABLISHED","inferenceFailure":{"kind":"timeout","origin":"gateway","message":"upstream timed out after 60s"}},"model_summary":null}"#));
+        state.apply(ev(r#"{"v":1,"type":"turn.result","turn_id":"t2","heading":"TURN FAILED","line":"Stopped","turn":{"execution":"FAILED","outcome":"NOT_ESTABLISHED","inferenceFailure":null},"model_summary":null}"#));
+        assert_eq!(
+            state.transcript,
+            vec![
+                Entry::Banner {
+                    heading: "TURN FAILED".into(),
+                    line: "Inference failed".into(),
+                    tone: Tone::Bad,
+                    failure: Some("upstream timed out after 60s".into()),
+                    summary: None,
+                },
+                Entry::Banner {
+                    heading: "TURN FAILED".into(),
+                    line: "Stopped".into(),
+                    tone: Tone::Bad,
+                    failure: None,
+                    summary: None,
+                },
+            ]
+        );
     }
 
     #[test]

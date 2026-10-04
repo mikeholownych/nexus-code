@@ -1,4 +1,6 @@
 //! Rendering for `nexus-tui --live`. Reads `LiveState` only; never decides outcomes.
+use std::borrow::Cow;
+
 use ratatui::{
     Frame,
     layout::{Alignment, Constraint, Direction, Layout, Rect},
@@ -29,9 +31,13 @@ pub fn render_live(frame: &mut Frame, state: &LiveState) {
         return;
     }
     let composer = composer_paragraph(state);
-    let composer_rows = u16::try_from(composer.line_count(area.width))
-        .unwrap_or(MAX_COMPOSER_ROWS)
-        .clamp(1, MAX_COMPOSER_ROWS);
+    let composer_rows = if matches!(state.link, Link::Crashed { .. }) {
+        1
+    } else {
+        u16::try_from(composer.line_count(area.width))
+            .unwrap_or(MAX_COMPOSER_ROWS)
+            .clamp(1, MAX_COMPOSER_ROWS)
+    };
     let rows = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
@@ -48,11 +54,7 @@ pub fn render_live(frame: &mut Frame, state: &LiveState) {
             stderr,
         } => render_crash(frame, rows[1], *code, reason, stderr),
         _ if state.transcript.is_empty() => render_empty(frame, rows[1]),
-        _ => render_pinned(
-            frame,
-            rows[1],
-            Paragraph::new(transcript_lines(state)).wrap(Wrap { trim: false }),
-        ),
+        _ => render_transcript(frame, rows[1], &state.transcript),
     }
     let block = Block::default()
         .borders(Borders::TOP)
@@ -73,9 +75,19 @@ fn render_pinned(frame: &mut Frame, area: Rect, paragraph: Paragraph<'_>) {
     frame.render_widget(paragraph.scroll((scroll, 0)), area);
 }
 
+/// `hello` arrived but the first `session.state` has not, so there is no workspace to show yet.
+fn connecting(state: &LiveState) -> bool {
+    match state.link {
+        Link::Connecting => true,
+        Link::Ready => state.session.workspace_name.is_empty(),
+        Link::Crashed { .. } => false,
+    }
+}
+
 fn render_status(frame: &mut Frame, area: Rect, state: &LiveState) {
     let session = &state.session;
     let muted = Style::default().fg(MUTED);
+    let surface = Style::default().bg(SURFACE);
     let mut spans = vec![Span::styled(
         " NEXUS ",
         Style::default()
@@ -83,13 +95,19 @@ fn render_status(frame: &mut Frame, area: Rect, state: &LiveState) {
             .bg(ACCENT)
             .add_modifier(Modifier::BOLD),
     )];
+    let busy = Span::styled(" ● working · esc to cancel ", Style::default().fg(ACCENT));
+    let busy_width = if session.busy && !connecting(state) {
+        u16::try_from(busy.width()).unwrap_or(area.width)
+    } else {
+        0
+    };
     match &state.link {
-        Link::Connecting => spans.push(Span::styled("  connecting to the agent…", muted)),
+        _ if connecting(state) => spans.push(Span::styled("  connecting to the agent…", muted)),
         Link::Crashed { .. } => spans.push(Span::styled(
             "  agent stopped",
             Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
         )),
-        Link::Ready => {
+        _ => {
             spans.push(Span::styled(
                 format!("  {}", session.workspace_name),
                 Style::default()
@@ -107,18 +125,14 @@ fn render_status(frame: &mut Frame, area: Rect, state: &LiveState) {
             }
             spans.push(Span::styled(format!("  {}", session.model), muted));
             spans.push(Span::styled(format!("  {}", session.mode), muted));
-            if session.busy {
-                spans.push(Span::styled(
-                    "  ● working · esc to cancel",
-                    Style::default().fg(ACCENT),
-                ));
-            }
         }
     }
-    frame.render_widget(
-        Paragraph::new(Line::from(spans)).style(Style::default().bg(SURFACE)),
-        area,
-    );
+    let [identity, activity] =
+        Layout::horizontal([Constraint::Min(0), Constraint::Length(busy_width)]).areas(area);
+    frame.render_widget(Paragraph::new(Line::from(spans)).style(surface), identity);
+    if busy_width > 0 {
+        frame.render_widget(Paragraph::new(Line::from(busy)).style(surface), activity);
+    }
 }
 
 fn render_empty(frame: &mut Frame, area: Rect) {
@@ -139,92 +153,152 @@ fn render_empty(frame: &mut Frame, area: Rect) {
     frame.render_widget(paragraph, Rect::new(area.x, top, area.width, height));
 }
 
-fn transcript_lines(state: &LiveState) -> Vec<Line<'_>> {
+/// Renders only the newest entries that fill `area`, bottom-aligned once they overflow it. Wrapping is
+/// per line, so the rows of the selected lines equal the bottom rows of the whole transcript.
+fn render_transcript(frame: &mut Frame, area: Rect, transcript: &[Entry]) {
+    let height = usize::from(area.height);
+    let mut tail = Vec::new();
+    let mut total = 0;
+    'entries: for (index, entry) in transcript.iter().enumerate().rev() {
+        for line in entry_lines(entry, index == 0).into_iter().rev() {
+            total += wrapped_rows(&line, area.width);
+            tail.push(line);
+            if total >= height {
+                break 'entries;
+            }
+        }
+    }
+    tail.reverse();
+    let scroll = u16::try_from(total.saturating_sub(height)).unwrap_or(u16::MAX);
+    frame.render_widget(
+        Paragraph::new(tail)
+            .wrap(Wrap { trim: false })
+            .scroll((scroll, 0)),
+        area,
+    );
+}
+
+fn wrapped_rows(line: &Line<'_>, width: u16) -> usize {
+    Paragraph::new(line.clone())
+        .wrap(Wrap { trim: false })
+        .line_count(width)
+}
+
+fn expand_tabs(row: &str) -> Cow<'_, str> {
+    if row.contains('\t') {
+        Cow::Owned(row.replace('\t', "    "))
+    } else {
+        Cow::Borrowed(row)
+    }
+}
+
+fn one_line(text: &str) -> String {
+    text.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+/// Lines for one transcript entry. Entries that open with a blank separator drop it when they come first.
+fn entry_lines(entry: &Entry, first: bool) -> Vec<Line<'_>> {
     let white = Style::default().fg(Color::White);
     let muted = Style::default().fg(MUTED);
     let prompt = Style::default().fg(ACCENT).add_modifier(Modifier::BOLD);
     let mut lines = Vec::new();
-    for entry in &state.transcript {
-        match entry {
-            Entry::User(text) => {
-                lines.push(Line::default());
-                for (index, row) in text.split('\n').enumerate() {
-                    lines.push(Line::from(vec![
-                        Span::styled(if index == 0 { "› " } else { "  " }, prompt),
-                        Span::styled(row, white.add_modifier(Modifier::BOLD)),
-                    ]));
-                }
+    match entry {
+        Entry::User(text) => {
+            lines.push(Line::default());
+            for (index, row) in text.split('\n').enumerate() {
+                lines.push(Line::from(vec![
+                    Span::styled(if index == 0 { "› " } else { "  " }, prompt),
+                    Span::styled(expand_tabs(row), white.add_modifier(Modifier::BOLD)),
+                ]));
             }
-            Entry::Assistant { text, .. } => {
+        }
+        Entry::Assistant { text, .. } => {
+            lines.push(Line::default());
+            lines.extend(
+                text.split('\n')
+                    .map(|row| Line::from(Span::styled(expand_tabs(row), white))),
+            );
+        }
+        Entry::Tool {
+            tool,
+            subject,
+            status,
+            summary,
+            ..
+        } => {
+            let (glyph, color) = match status {
+                ToolStatus::Running => ("•", ACCENT),
+                ToolStatus::Succeeded => ("✓", Color::Green),
+                ToolStatus::Failed => ("×", Color::Red),
+                ToolStatus::Interrupted => ("◌", Color::Yellow),
+            };
+            let mut spans = vec![
+                Span::styled(format!("  {glyph} "), Style::default().fg(color)),
+                Span::styled(tool_verb(tool), white),
+            ];
+            if !subject.is_empty() {
+                spans.push(Span::styled(format!(" {subject}"), muted));
+            }
+            match status {
+                ToolStatus::Failed if !summary.is_empty() => spans.push(Span::styled(
+                    format!(" — {summary}"),
+                    Style::default().fg(Color::Red),
+                )),
+                ToolStatus::Interrupted => spans.push(Span::styled(
+                    " — interrupted",
+                    Style::default().fg(Color::Yellow),
+                )),
+                _ => {}
+            }
+            lines.push(Line::from(spans));
+        }
+        Entry::Banner {
+            heading,
+            line,
+            tone,
+            failure,
+            summary,
+        } => {
+            let (glyph, color) = match tone {
+                Tone::Good => ("✓", Color::Green),
+                Tone::Caution => ("!", Color::Yellow),
+                Tone::Bad => ("×", Color::Red),
+            };
+            lines.push(Line::default());
+            lines.push(Line::from(vec![
+                Span::styled(
+                    format!("{glyph} {heading}"),
+                    Style::default().fg(color).add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(format!("  {}", one_line(line)), muted),
+            ]));
+            if let Some(failure) = failure {
+                lines.extend(failure.split('\n').map(|row| {
+                    Line::from(Span::styled(
+                        expand_tabs(row),
+                        Style::default().fg(Color::Red),
+                    ))
+                }));
+            }
+            if let Some(summary) = summary {
                 lines.push(Line::default());
+                lines.push(Line::from(Span::styled(
+                    "Model-reported summary (not independently verified):",
+                    white.add_modifier(Modifier::BOLD),
+                )));
                 lines.extend(
-                    text.split('\n')
-                        .map(|row| Line::from(Span::styled(row, white))),
+                    summary
+                        .split('\n')
+                        .map(|row| Line::from(Span::styled(expand_tabs(row), white))),
                 );
             }
-            Entry::Tool {
-                tool,
-                subject,
-                status,
-                summary,
-                ..
-            } => {
-                let (glyph, color) = match status {
-                    ToolStatus::Running => ("•", ACCENT),
-                    ToolStatus::Succeeded => ("✓", Color::Green),
-                    ToolStatus::Failed => ("×", Color::Red),
-                    ToolStatus::Interrupted => ("◌", Color::Yellow),
-                };
-                let mut spans = vec![
-                    Span::styled(format!("  {glyph} "), Style::default().fg(color)),
-                    Span::styled(tool_verb(tool), white),
-                ];
-                if !subject.is_empty() {
-                    spans.push(Span::styled(format!(" {subject}"), muted));
-                }
-                match status {
-                    ToolStatus::Failed if !summary.is_empty() => spans.push(Span::styled(
-                        format!(" — {summary}"),
-                        Style::default().fg(Color::Red),
-                    )),
-                    ToolStatus::Interrupted => spans.push(Span::styled(
-                        " — interrupted",
-                        Style::default().fg(Color::Yellow),
-                    )),
-                    _ => {}
-                }
-                lines.push(Line::from(spans));
-            }
-            Entry::Banner {
-                heading,
-                line,
-                tone,
-                summary,
-            } => {
-                let (glyph, color) = match tone {
-                    Tone::Good => ("✓", Color::Green),
-                    Tone::Caution => ("!", Color::Yellow),
-                    Tone::Bad => ("×", Color::Red),
-                };
-                lines.push(Line::default());
-                lines.push(Line::from(vec![
-                    Span::styled(
-                        format!("{glyph} {heading}"),
-                        Style::default().fg(color).add_modifier(Modifier::BOLD),
-                    ),
-                    Span::styled(format!("  {line}"), muted),
-                ]));
-                if let Some(summary) = summary {
-                    lines.push(Line::from(Span::styled(summary.as_str(), muted)));
-                }
-            }
-            Entry::Notice(text) => lines.push(Line::from(Span::styled(
-                format!("  ! {text}"),
-                Style::default().fg(Color::Yellow),
-            ))),
         }
+        Entry::Notice(text) => lines.push(Line::from(Span::styled(
+            format!("  ! {}", one_line(text)),
+            Style::default().fg(Color::Yellow),
+        ))),
     }
-    if lines.first().is_some_and(|line| line.spans.is_empty()) {
+    if first && lines.first().is_some_and(|line| line.spans.is_empty()) {
         lines.remove(0);
     }
     lines
@@ -237,19 +311,16 @@ fn render_crash(frame: &mut Frame, area: Rect, code: Option<i32>, reason: &str, 
         || "no exit code".to_string(),
         |code| format!("exit code {code}"),
     );
-    let mut lines = vec![
-        Line::from(Span::styled(
-            "× The agent sidecar stopped",
-            Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
-        )),
-        Line::from(Span::styled(
-            format!("{reason} ({exit})"),
-            Style::default().fg(Color::White),
-        )),
-        Line::default(),
-    ];
-    let footer = vec![
-        Line::default(),
+    let rows = |line: &Line<'_>| wrapped_rows(line, area.width);
+    let heading = Line::from(Span::styled(
+        "× The agent sidecar stopped",
+        Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+    ));
+    let detail = Line::from(Span::styled(
+        format!("{} ({exit})", one_line(reason)),
+        Style::default().fg(Color::White),
+    ));
+    let recovery = [
         Line::from(vec![
             Span::styled("r", key),
             Span::raw(" restart   "),
@@ -261,20 +332,47 @@ fn render_crash(frame: &mut Frame, area: Rect, code: Option<i32>, reason: &str, 
             muted,
         )),
     ];
-    if !stderr.is_empty() {
-        lines.push(Line::from(Span::styled(
-            "Last diagnostic lines (secrets redacted):",
-            muted,
-        )));
-        let room = usize::from(area.height).saturating_sub(lines.len() + footer.len());
-        lines.extend(
-            stderr[stderr.len().saturating_sub(room)..]
-                .iter()
-                .map(|row| Line::from(Span::styled(format!("  {row}"), muted))),
-        );
+    // Priority when rows are short: reason and exit code, recovery keys, heading, spacing, then stderr.
+    let mut room = usize::from(area.height)
+        .saturating_sub(rows(&detail) + recovery.iter().map(|line| rows(line)).sum::<usize>());
+    let mut lines = Vec::new();
+    if room > 0 {
+        lines.push(heading);
+        room -= 1;
     }
-    lines.extend(footer);
-    frame.render_widget(Paragraph::new(lines), area);
+    lines.push(detail);
+    let gap = room > 0;
+    if gap {
+        room -= 1;
+    }
+    let label = Line::from(Span::styled(
+        "Last diagnostic lines (secrets redacted):",
+        muted,
+    ));
+    let overhead = 1 + rows(&label);
+    if room > overhead {
+        room -= overhead;
+        let mut tail = Vec::new();
+        for row in stderr.iter().rev() {
+            let line = Line::from(Span::styled(format!("  {row}"), muted));
+            let need = rows(&line);
+            if need > room {
+                break;
+            }
+            room -= need;
+            tail.push(line);
+        }
+        if !tail.is_empty() {
+            lines.push(Line::default());
+            lines.push(label);
+            lines.extend(tail.into_iter().rev());
+        }
+    }
+    if gap {
+        lines.push(Line::default());
+    }
+    lines.extend(recovery);
+    frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), area);
 }
 
 fn composer_paragraph(state: &LiveState) -> Paragraph<'_> {
@@ -286,7 +384,7 @@ fn composer_paragraph(state: &LiveState) -> Paragraph<'_> {
         .map(|(index, text)| {
             Line::from(vec![
                 Span::styled(if index == 0 { "› " } else { "  " }, prompt),
-                Span::raw(text),
+                Span::raw(expand_tabs(text)),
             ])
         })
         .collect();
@@ -300,9 +398,9 @@ fn composer_paragraph(state: &LiveState) -> Paragraph<'_> {
 fn composer_hint(state: &LiveState) -> &'static str {
     match (&state.link, state.session.busy) {
         (Link::Crashed { .. }, _) => " r restart · q quit ",
-        (Link::Connecting, _) => " starting the agent… ",
-        (Link::Ready, true) => " waiting for the agent ",
-        (Link::Ready, false) => " enter send · alt+enter newline · ctrl-c quit ",
+        _ if connecting(state) => " starting the agent… ",
+        (_, true) => " waiting for the agent ",
+        (_, false) => " enter send · alt+enter newline · ctrl-c quit ",
     }
 }
 
@@ -538,5 +636,241 @@ mod tests {
         assert_eq!(tool_verb("read_file"), "Read");
         assert_eq!(tool_verb("run_command"), "Run");
         assert_eq!(tool_verb("browser_click"), "browser click");
+    }
+
+    fn rows(screen: &str) -> Vec<String> {
+        screen
+            .lines()
+            .map(|row| row.trim_matches('"').trim_end().to_string())
+            .collect()
+    }
+
+    /// Screen text with row breaks and runs of spaces collapsed, for asserting on wrapped prose.
+    fn flat(screen: &str) -> String {
+        rows(screen)
+            .join(" ")
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ")
+    }
+
+    fn turn_result(
+        execution: &str,
+        outcome: &str,
+        line: &str,
+        extra: &str,
+        summary: &str,
+    ) -> String {
+        format!(
+            r#"{{"v":1,"type":"turn.result","turn_id":"t1","heading":"HEADING","line":{line:?},"turn":{{"execution":"{execution}","outcome":"{outcome}"{extra}}},"model_summary":{summary}}}"#
+        )
+    }
+
+    #[test]
+    fn the_model_summary_is_labelled_unverified_and_split_into_rows() {
+        let mut state = ready();
+        let result = turn_result(
+            "COMPLETED",
+            "VERIFIED",
+            "cargo test passed",
+            "",
+            r#"{"summary":"Fixed the parser.\nAdded a regression test."}"#,
+        );
+        feed(&mut state, &[result.as_str()]);
+        let screen = rows(&draw(&state, 100, 20));
+        let label = screen
+            .iter()
+            .position(|row| row == "Model-reported summary (not independently verified):");
+        let first = screen.iter().position(|row| row == "Fixed the parser.");
+        let second = screen
+            .iter()
+            .position(|row| row == "Added a regression test.");
+        assert!(
+            label.is_some() && label < first && first < second,
+            "{screen:#?}"
+        );
+    }
+
+    #[test]
+    fn an_inference_failure_renders_red_between_the_banner_and_the_summary() {
+        let mut state = ready();
+        let result = turn_result(
+            "FAILED",
+            "NOT_ESTABLISHED",
+            "Inference failed",
+            r#","inferenceFailure":{"kind":"timeout","origin":"gateway","message":"upstream timed out after 60s"}"#,
+            r#"{"summary":"Partial work."}"#,
+        );
+        feed(&mut state, &[result.as_str()]);
+        let mut terminal = Terminal::new(TestBackend::new(100, 20)).unwrap();
+        terminal.draw(|frame| render_live(frame, &state)).unwrap();
+        let screen = rows(&terminal.backend().to_string());
+        let banner = screen
+            .iter()
+            .position(|row| row.starts_with("× HEADING"))
+            .unwrap();
+        let failure = screen
+            .iter()
+            .position(|row| row == "upstream timed out after 60s")
+            .expect("failure row");
+        let summary = screen
+            .iter()
+            .position(|row| row == "Partial work.")
+            .unwrap();
+        assert!(banner < failure && failure < summary, "{screen:#?}");
+        let cell = &terminal.backend().buffer()[(0, u16::try_from(failure).unwrap())];
+        assert_eq!(cell.fg, Color::Red);
+    }
+
+    #[test]
+    fn notices_and_banner_lines_collapse_onto_one_line() {
+        let mut state = ready();
+        let result = turn_result(
+            "FAILED",
+            "NOT_ESTABLISHED",
+            "line one\nline   two",
+            "",
+            "null",
+        );
+        feed(
+            &mut state,
+            &[
+                r#"{"v":1,"type":"error","code":"BUSY","message":"first\nsecond"}"#,
+                result.as_str(),
+            ],
+        );
+        let screen = draw(&state, 100, 20);
+        assert_shows(
+            &screen,
+            &["! BUSY: first second", "× HEADING  line one line two"],
+        );
+    }
+
+    #[test]
+    fn tabs_expand_for_display_only() {
+        let mut state = ready();
+        state.composer = "x\ty".into();
+        assert!(
+            state
+                .on_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
+                .is_some()
+        );
+        state.apply(Event::AssistantDelta {
+            turn_id: "t1".into(),
+            text: "a\tb".into(),
+        });
+        state.composer = "c\td".into();
+        let screen = draw(&state, 80, 20);
+        assert_shows(&screen, &["› x    y", "a    b", "› c    d"]);
+        assert_eq!(state.composer, "c\td");
+        assert_eq!(state.transcript[0], Entry::User("x\ty".into()));
+    }
+
+    #[test]
+    fn the_crash_screen_keeps_reason_exit_code_and_recovery_at_40x10() {
+        let mut state = ready();
+        state.composer = "one\ntwo\nthree\nfour\nfive".into();
+        state.fail(
+            "The agent sidecar exited unexpectedly while streaming a very long response.".into(),
+            Some(3),
+            (1..=20).map(|n| format!("stderr line {n}")).collect(),
+        );
+        let small = flat(&draw(&state, 40, 10));
+        assert_shows(
+            &small,
+            &[
+                "agent stopped",
+                "The agent sidecar exited unexpectedly while streaming a very long response. (exit code 3)",
+                "r restart q quit",
+                "A restarted agent does not remember this conversation.",
+            ],
+        );
+        let tall = flat(&draw(&state, 40, 18));
+        assert_shows(
+            &tall,
+            &[
+                "× The agent sidecar stopped",
+                "secrets redacted",
+                "stderr line 20",
+                "does not remember",
+            ],
+        );
+    }
+
+    #[test]
+    fn hello_without_session_state_still_reads_as_connecting() {
+        let mut state = LiveState::new();
+        feed(
+            &mut state,
+            &[r#"{"v":1,"type":"hello","protocol":1,"pid":1}"#],
+        );
+        let screen = draw(&state, 80, 20);
+        assert_shows(&screen, &["connecting to the agent", "starting the agent"]);
+        assert!(!screen.contains("enter send"), "{screen}");
+    }
+
+    #[test]
+    fn the_busy_marker_survives_a_40_column_status_strip() {
+        let mut state = ready();
+        feed(&mut state, &[BUSY]);
+        let status = rows(&draw(&state, 40, 10)).remove(0);
+        assert!(
+            status.contains("NEXUS") && status.contains("● working · esc to cancel"),
+            "{status}"
+        );
+    }
+
+    #[test]
+    fn the_tail_matches_the_bottom_of_a_full_render_at_narrow_widths() {
+        let mut state = ready();
+        state.composer = "first prompt that is long enough to wrap at forty columns".into();
+        assert!(
+            state
+                .on_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
+                .is_some()
+        );
+        let result = turn_result(
+            "COMPLETED",
+            "UNVERIFIED",
+            "no verifier ran",
+            "",
+            r#"{"summary":"Did the thing."}"#,
+        );
+        feed(
+            &mut state,
+            &[
+                r#"{"v":1,"type":"assistant.delta","turn_id":"t1","text":"A streamed paragraph that wraps over several rows when the terminal is only forty columns wide.\n\nThen 日本語の長いテキストを折り返します."}"#,
+                r#"{"v":1,"type":"tool.start","turn_id":"t1","call_id":"a","tool":"run_command","subject":"npm test -- --runInBand src/payments/parser.test.ts"}"#,
+                r#"{"v":1,"type":"tool.end","turn_id":"t1","call_id":"a","tool":"run_command","success":false,"summary":"1 test failed: expected 3 to equal 4","lines":3}"#,
+                result.as_str(),
+                r#"{"v":1,"type":"error","code":"BUSY","message":"A turn is already running"}"#,
+            ],
+        );
+        let full = rows(&draw(&state, 40, 200));
+        let content = full[1..full.len() - 2]
+            .iter()
+            .rposition(|row| !row.is_empty())
+            .unwrap()
+            + 1;
+        for height in 10..=30usize {
+            let screen = rows(&draw(&state, 40, u16::try_from(height).unwrap()));
+            let visible = height - 3;
+            let expected = &full[1 + content.saturating_sub(visible)..1 + content];
+            assert_eq!(&screen[1..1 + expected.len()], expected, "height {height}");
+        }
+    }
+
+    #[test]
+    fn a_hundred_thousand_entries_still_show_the_newest_line() {
+        let mut state = ready();
+        for n in 0..100_000 {
+            state.apply(Event::AssistantDelta {
+                turn_id: format!("t{n}"),
+                text: format!("paragraph {n} lorem ipsum dolor sit amet"),
+            });
+        }
+        let screen = draw(&state, 120, 40);
+        assert!(screen.contains("paragraph 99999 lorem"), "{screen}");
+        assert!(!screen.contains("paragraph 99900 lorem"), "{screen}");
     }
 }
