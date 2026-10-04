@@ -54,7 +54,12 @@ pub enum Event {
         model_summary: Option<ModelSummary>,
     },
     #[serde(rename = "error")]
-    Error { code: String, message: String },
+    Error {
+        #[serde(default)]
+        id: Option<String>,
+        code: String,
+        message: String,
+    },
     /// Event types this client does not render yet, such as `slash.result`.
     #[serde(other)]
     Unknown,
@@ -167,6 +172,7 @@ mod tests {
                 r#"{"v":1,"type":"error","id":"t2","code":"BUSY","message":"A turn is already running"}"#
             ),
             Ok(Event::Error {
+                id: Some("t2".into()),
                 code: "BUSY".into(),
                 message: "A turn is already running".into()
             })

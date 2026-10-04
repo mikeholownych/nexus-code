@@ -80,6 +80,8 @@ pub struct LiveState {
     pub transcript: Vec<Entry>,
     pub composer: String,
     turn_seq: u64,
+    /// Id of the submitted prompt the sidecar has not yet answered with a `turn.result`.
+    pending: Option<String>,
 }
 
 impl LiveState {
@@ -90,6 +92,7 @@ impl LiveState {
             transcript: Vec::new(),
             composer: String::new(),
             turn_seq: 0,
+            pending: None,
         }
     }
 
@@ -135,7 +138,9 @@ impl LiveState {
                     .transcript
                     .iter_mut()
                     .rev()
-                    .find(|entry| matches!(entry, Entry::Tool { call_id: id, .. } if *id == call_id));
+                    .find(|entry| {
+                        matches!(entry, Entry::Tool { call_id: id, status: ToolStatus::Running, .. } if *id == call_id)
+                    });
                 if let Some(Entry::Tool { status, summary: slot, .. }) = open {
                     *status = if success { ToolStatus::Succeeded } else { ToolStatus::Failed };
                     *slot = summary;
@@ -145,6 +150,7 @@ impl LiveState {
                 "{tool} {subject} is waiting for approval, which this view cannot give yet. Press Esc to cancel the turn."
             ))),
             Event::TurnResult { heading, line, turn, model_summary } => {
+                self.pending = None;
                 self.interrupt_running_tools();
                 self.transcript.push(Entry::Banner {
                     heading,
@@ -153,7 +159,13 @@ impl LiveState {
                     summary: model_summary.map(|model| model.summary),
                 });
             }
-            Event::Error { code, message } => self.transcript.push(Entry::Notice(format!("{code}: {message}"))),
+            Event::Error { id, code, message } => {
+                if id.is_some() && id == self.pending {
+                    self.pending = None;
+                    self.session.busy = false;
+                }
+                self.transcript.push(Entry::Notice(format!("{code}: {message}")));
+            }
             Event::Unknown => {}
         }
     }
@@ -239,10 +251,9 @@ impl LiveState {
         let text = std::mem::take(&mut self.composer);
         self.transcript.push(Entry::User(text.clone()));
         self.session.busy = true;
-        Some(Action::Send(Command::PromptSubmit {
-            id: format!("t{}", self.turn_seq),
-            text,
-        }))
+        let id = format!("t{}", self.turn_seq);
+        self.pending = Some(id.clone());
+        Some(Action::Send(Command::PromptSubmit { id, text }))
     }
 
     fn interrupt_running_tools(&mut self) {
@@ -435,6 +446,29 @@ mod tests {
     }
 
     #[test]
+    fn a_reused_call_id_does_not_rewrite_a_finished_tool() {
+        let mut state = ready();
+        for line in [
+            r#"{"v":1,"type":"tool.start","turn_id":"t1","call_id":"call_0","tool":"run_command","subject":"npm test"}"#,
+            r#"{"v":1,"type":"tool.end","turn_id":"t1","call_id":"call_0","tool":"run_command","success":false,"summary":"1 test failed","lines":1}"#,
+            r#"{"v":1,"type":"tool.start","turn_id":"t1","call_id":"call_0","tool":"task_completed","subject":""}"#,
+            r#"{"v":1,"type":"tool.end","turn_id":"t1","call_id":"call_0","tool":"task_completed","success":true,"summary":"Completed","lines":0}"#,
+        ] {
+            state.apply(ev(line));
+        }
+        assert_eq!(
+            state.transcript,
+            vec![Entry::Tool {
+                call_id: "call_0".into(),
+                tool: "run_command".into(),
+                subject: "npm test".into(),
+                status: ToolStatus::Failed,
+                summary: "1 test failed".into(),
+            }]
+        );
+    }
+
+    #[test]
     fn task_completed_is_left_to_the_banner() {
         let mut state = ready();
         state.apply(ev(r#"{"v":1,"type":"tool.start","turn_id":"t1","call_id":"z","tool":"task_completed","subject":""}"#));
@@ -488,6 +522,53 @@ mod tests {
                 "{execution}/{outcome}"
             );
         }
+    }
+
+    #[test]
+    fn a_rejected_submit_unlocks_the_composer() {
+        let mut state = ready();
+        type_text(&mut state, "fix it");
+        assert_eq!(
+            state.on_key(key(KeyCode::Enter)),
+            Some(Action::Send(Command::PromptSubmit {
+                id: "t1".into(),
+                text: "fix it".into()
+            }))
+        );
+        state.apply(ev(r#"{"v":1,"type":"error","id":"approval-1","code":"NO_PENDING_APPROVAL","message":"No pending approval with id approval-1."}"#));
+        state.apply(ev(
+            r#"{"v":1,"type":"error","code":"BAD_REQUEST","message":"not JSON"}"#,
+        ));
+        assert!(
+            state.session.busy,
+            "an error for another request must not unlock a running turn"
+        );
+        state.apply(ev(r#"{"v":1,"type":"error","id":"t1","code":"BAD_REQUEST","message":"prompt.submit needs text"}"#));
+        assert!(!state.session.busy);
+        assert_eq!(
+            state.transcript.last(),
+            Some(&Entry::Notice(
+                "BAD_REQUEST: prompt.submit needs text".into()
+            ))
+        );
+        state.apply(ev(
+            r#"{"v":1,"type":"error","id":"t1","code":"BUSY","message":"late"}"#,
+        ));
+        type_text(&mut state, "again");
+        assert_eq!(
+            state.on_key(key(KeyCode::Enter)),
+            Some(Action::Send(Command::PromptSubmit {
+                id: "t2".into(),
+                text: "again".into()
+            }))
+        );
+        state.apply(ev(
+            r#"{"v":1,"type":"error","id":"t1","code":"BUSY","message":"stale"}"#,
+        ));
+        assert!(
+            state.session.busy,
+            "an error for an earlier prompt must not unlock the current turn"
+        );
     }
 
     #[test]
