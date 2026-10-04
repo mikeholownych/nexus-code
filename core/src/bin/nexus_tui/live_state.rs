@@ -84,6 +84,8 @@ pub struct LiveState {
     turn_seq: u64,
     /// Id of the submitted prompt the sidecar has not yet answered with a `turn.result`.
     pending: Option<String>,
+    /// Ctrl-C already asked the running turn to stop; another Ctrl-C quits.
+    cancel_requested: bool,
 }
 
 impl LiveState {
@@ -95,7 +97,12 @@ impl LiveState {
             composer: String::new(),
             turn_seq: 0,
             pending: None,
+            cancel_requested: false,
         }
+    }
+
+    pub fn cancel_requested(&self) -> bool {
+        self.cancel_requested
     }
 
     pub fn apply(&mut self, event: Event) {
@@ -118,6 +125,7 @@ impl LiveState {
                     dirty: git.map_or(0, |git| git.dirty),
                     busy,
                 };
+                self.cancel_requested &= busy;
                 self.link = Link::Ready;
             }
             Event::AssistantDelta { turn_id, text } => match self.transcript.last_mut() {
@@ -153,6 +161,7 @@ impl LiveState {
             ))),
             Event::TurnResult { heading, line, turn, model_summary } => {
                 self.pending = None;
+                self.cancel_requested = false;
                 self.interrupt_running_tools();
                 self.transcript.push(Entry::Banner {
                     heading,
@@ -166,6 +175,7 @@ impl LiveState {
                 if id.is_some() && id == self.pending {
                     self.pending = None;
                     self.session.busy = false;
+                    self.cancel_requested = false;
                 }
                 self.transcript.push(Entry::Notice(format!("{code}: {message}")));
             }
@@ -177,6 +187,7 @@ impl LiveState {
     pub fn fail(&mut self, reason: String, code: Option<i32>, stderr: Vec<String>) {
         self.interrupt_running_tools();
         self.session.busy = false;
+        self.cancel_requested = false;
         self.link = Link::Crashed {
             code,
             reason,
@@ -187,6 +198,7 @@ impl LiveState {
     pub fn restarted(&mut self) {
         self.link = Link::Connecting;
         self.session.busy = false;
+        self.cancel_requested = false;
         self.transcript.push(Entry::Notice(
             "Started a new agent sidecar. It does not remember the conversation above.".to_string(),
         ));
@@ -211,7 +223,10 @@ impl LiveState {
         }
         match key.code {
             KeyCode::Char('c') if ctrl => {
-                if self.session.busy {
+                if self.session.busy && self.cancel_requested {
+                    Some(Action::Quit)
+                } else if self.session.busy {
+                    self.cancel_requested = true;
                     Some(Action::Send(Command::Cancel))
                 } else if !self.composer.is_empty() {
                     self.composer.clear();
@@ -403,6 +418,45 @@ mod tests {
         assert_eq!(state.on_key(ctrl('c')), None);
         assert_eq!(state.composer, "");
         assert_eq!(state.on_key(ctrl('c')), Some(Action::Quit));
+    }
+
+    #[test]
+    fn a_second_ctrl_c_while_busy_force_quits_but_esc_only_cancels() {
+        let mut state = ready();
+        type_text(&mut state, "fix it");
+        assert!(state.on_key(key(KeyCode::Enter)).is_some());
+        assert_eq!(
+            state.on_key(key(KeyCode::Esc)),
+            Some(Action::Send(Command::Cancel))
+        );
+        assert_eq!(state.on_key(ctrl('c')), Some(Action::Send(Command::Cancel)));
+        assert!(state.cancel_requested());
+        assert_eq!(
+            state.on_key(key(KeyCode::Esc)),
+            Some(Action::Send(Command::Cancel))
+        );
+        assert_eq!(state.on_key(ctrl('c')), Some(Action::Quit));
+    }
+
+    #[test]
+    fn the_force_quit_arms_again_only_after_the_turn_ends() {
+        let busy = r#"{"v":1,"type":"session.state","workspace":"/w/app","workspace_name":"app","model":"m","mode":"auto","git":null,"busy":true}"#;
+        let idle = r#"{"v":1,"type":"session.state","workspace":"/w/app","workspace_name":"app","model":"m","mode":"auto","git":null,"busy":false}"#;
+        let mut state = ready();
+        state.apply(ev(busy));
+        assert_eq!(state.on_key(ctrl('c')), Some(Action::Send(Command::Cancel)));
+        state.apply(ev(r#"{"v":1,"type":"turn.result","turn_id":"t1","heading":"TURN INTERRUPTED","line":"Stopped by operator","turn":{"execution":"INTERRUPTED","outcome":"NOT_ESTABLISHED"},"model_summary":null}"#));
+        assert!(!state.cancel_requested());
+        assert_eq!(state.on_key(ctrl('c')), Some(Action::Send(Command::Cancel)));
+        state.apply(ev(idle));
+        assert!(!state.cancel_requested());
+        state.apply(ev(busy));
+        assert_eq!(state.on_key(ctrl('c')), Some(Action::Send(Command::Cancel)));
+        state.fail("gone".into(), None, Vec::new());
+        assert!(!state.cancel_requested());
+        state.restarted();
+        state.apply(ev(busy));
+        assert_eq!(state.on_key(ctrl('c')), Some(Action::Send(Command::Cancel)));
     }
 
     #[test]

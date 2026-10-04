@@ -103,16 +103,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     )?;
     if first == "--live" {
         let rest = args.map(|arg| arg.to_string_lossy().into_owned()).collect();
-        let spec = live::resolve_spec(
-            rest,
-            env::var("NEXUS_SIDECAR").ok(),
-            env::var("NEXUS_NODE").ok(),
-            env::current_exe().ok(),
-        )?;
-        if !io::stdin().is_terminal() || !io::stdout().is_terminal() {
-            return Err("interactive Nexus TUI requires a terminal".into());
-        }
-        return live::run_live(spec);
+        std::process::exit(live::main(rest, &mut io::stderr()));
     }
     let plain = first == "--plain";
     let snapshot_path = PathBuf::from(if plain {

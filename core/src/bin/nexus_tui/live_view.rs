@@ -399,6 +399,7 @@ fn composer_hint(state: &LiveState) -> &'static str {
     match (&state.link, state.session.busy) {
         (Link::Crashed { .. }, _) => " r restart · q quit ",
         _ if connecting(state) => " starting the agent… ",
+        (_, true) if state.cancel_requested() => " cancelling… ctrl-c again to quit ",
         (_, true) => " waiting for the agent ",
         (_, false) => " enter send · alt+enter newline · ctrl-c quit ",
     }
@@ -550,6 +551,19 @@ mod tests {
             ],
         );
         assert!(!done.contains("working"));
+    }
+
+    #[test]
+    fn the_hint_offers_a_force_quit_after_the_first_ctrl_c() {
+        let mut state = ready();
+        feed(&mut state, &[BUSY]);
+        assert_shows(&draw(&state, 40, 12), &["waiting for the agent"]);
+        assert!(
+            state
+                .on_key(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL))
+                .is_some()
+        );
+        assert_shows(&draw(&state, 40, 12), &["cancelling… ctrl-c again to quit"]);
     }
 
     #[test]

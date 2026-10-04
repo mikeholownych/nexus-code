@@ -1,5 +1,12 @@
 //! `nexus-tui --live`: runs the agent sidecar and renders its protocol events in the terminal.
-use std::{io, path::PathBuf, sync::mpsc, time::Duration};
+use std::{
+    env,
+    error::Error,
+    io::{self, IsTerminal, Write},
+    path::PathBuf,
+    sync::mpsc,
+    time::Duration,
+};
 
 use crossterm::{
     event::{self, DisableBracketedPaste, EnableBracketedPaste, Event as TermEvent, KeyEventKind},
@@ -16,6 +23,30 @@ const INPUT_POLL: Duration = Duration::from_millis(30);
 
 pub const LIVE_USAGE: &str =
     "usage: nexus-tui --live [--sidecar PATH] [--node BIN] [-- SIDECAR_ARGS...]";
+
+/// Runs `nexus-tui --live ARGS...`. A launch error is written to `stderr` as plain text. Returns the exit status.
+pub fn main(args: Vec<String>, stderr: &mut dyn Write) -> i32 {
+    match launch(args) {
+        Ok(()) => 0,
+        Err(err) => {
+            let _ = writeln!(stderr, "nexus-tui: {err}");
+            1
+        }
+    }
+}
+
+fn launch(args: Vec<String>) -> Result<(), Box<dyn Error>> {
+    let spec = resolve_spec(
+        args,
+        env::var("NEXUS_SIDECAR").ok(),
+        env::var("NEXUS_NODE").ok(),
+        env::current_exe().ok(),
+    )?;
+    if !io::stdin().is_terminal() || !io::stdout().is_terminal() {
+        return Err("interactive Nexus TUI requires a terminal".into());
+    }
+    run_live(spec)
+}
 
 /// Resolves the sidecar command line. Precedence: flags, then `NEXUS_SIDECAR` / `NEXUS_NODE`, then the
 /// `cli/dist/sidecar.js` of the checkout whose `core/target/<profile>/` holds this binary.
@@ -329,6 +360,16 @@ case "$shutdown" in *'"type":"shutdown"'*) exit 0;; *) exit 8;; esac"#
             |s| matches!(&s.link, Link::Crashed { reason, .. } if reason.contains("not part of the protocol")),
         );
         assert!(started.elapsed() < Duration::from_secs(5));
+    }
+
+    #[test]
+    fn launch_errors_read_as_plain_text_with_exit_status_1() {
+        let mut stderr = Vec::new();
+        assert_eq!(main(vec!["--bogus".into()], &mut stderr), 1);
+        assert_eq!(
+            String::from_utf8(stderr).unwrap(),
+            format!("nexus-tui: unknown option --bogus\n{LIVE_USAGE}\n")
+        );
     }
 
     #[test]

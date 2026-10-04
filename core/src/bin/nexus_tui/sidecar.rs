@@ -36,12 +36,16 @@ pub struct Sidecar {
 
 impl Sidecar {
     pub fn spawn(spec: &SidecarSpec, events: mpsc::Sender<SidecarMsg>) -> io::Result<Sidecar> {
-        let mut child = Process::new(&spec.program)
+        let mut process = Process::new(&spec.program);
+        process
             .args(&spec.args)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()?;
+            .stderr(Stdio::piped());
+        // Its own process group, so a kill also reaches the tools and shells it started.
+        #[cfg(unix)]
+        std::os::unix::process::CommandExt::process_group(&mut process, 0);
+        let mut child = process.spawn()?;
         let stdin = child.stdin.take();
         let stdout = child.stdout.take().expect("stdout is piped");
         let stderr = child.stderr.take().expect("stderr is piped");
@@ -101,10 +105,7 @@ impl Sidecar {
             match self.child.try_wait() {
                 Ok(Some(status)) => break Some(status),
                 Ok(None) if Instant::now() < deadline => thread::sleep(Duration::from_millis(20)),
-                _ => {
-                    let _ = self.child.kill();
-                    break self.child.wait().ok();
-                }
+                _ => break self.kill(),
             }
         };
         let _ = self.stderr_done.recv_timeout(Duration::from_millis(500));
@@ -121,13 +122,26 @@ impl Sidecar {
     pub fn stderr_tail(&self) -> Vec<String> {
         self.stderr_tail.lock().unwrap().iter().cloned().collect()
     }
+
+    /// Kills the child's process group, then the child itself, and waits for it. Only call this before the child
+    /// has been reaped: until then its pid, which is also the group id, cannot be reused.
+    fn kill(&mut self) -> Option<std::process::ExitStatus> {
+        #[cfg(unix)]
+        if let Ok(group) = libc::pid_t::try_from(self.child.id()) {
+            // SAFETY: killpg only sends a signal; `group` is the group created for this child at spawn.
+            unsafe {
+                libc::killpg(group, libc::SIGKILL);
+            }
+        }
+        let _ = self.child.kill();
+        self.child.wait().ok()
+    }
 }
 
 impl Drop for Sidecar {
     fn drop(&mut self) {
         if let Ok(None) = self.child.try_wait() {
-            let _ = self.child.kill();
-            let _ = self.child.wait();
+            self.kill();
         }
     }
 }
@@ -204,6 +218,69 @@ mod tests {
         let started = Instant::now();
         assert_eq!(sidecar.shutdown(Duration::from_millis(200)), None);
         assert!(started.elapsed() < Duration::from_secs(3));
+    }
+
+    /// True once `pid` has exited (a zombie awaiting its new parent counts as exited).
+    #[cfg(target_os = "linux")]
+    fn exited_within(pid: &str, limit: Duration) -> bool {
+        let deadline = Instant::now() + limit;
+        loop {
+            match std::fs::read_to_string(format!("/proc/{pid}/stat")) {
+                Err(_) => return true,
+                Ok(stat)
+                    if stat
+                        .rsplit(')')
+                        .next()
+                        .is_some_and(|rest| rest.trim_start().starts_with('Z')) =>
+                {
+                    return true;
+                }
+                Ok(_) if Instant::now() >= deadline => return false,
+                Ok(_) => thread::sleep(Duration::from_millis(20)),
+            }
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn killing_the_sidecar_also_kills_its_children() {
+        for (case, junk) in [("reap", true), ("drop", false)] {
+            let pidfile = std::env::temp_dir().join(format!(
+                "nexus-sidecar-grandchild-{}-{case}",
+                std::process::id()
+            ));
+            let _ = std::fs::remove_file(&pidfile);
+            let script = format!(
+                "sleep 30 & echo $! > '{}'; echo {}; exec sleep 30",
+                pidfile.display(),
+                if junk {
+                    "not-protocol"
+                } else {
+                    r#"'{"v":1,"type":"hello","protocol":1,"pid":7}'"#
+                }
+            );
+            let (tx, rx) = mpsc::channel();
+            let mut sidecar = Sidecar::spawn(&sh(&script), tx).unwrap();
+            assert!(
+                rx.recv_timeout(WAIT).is_ok(),
+                "{case}: the fake never wrote its line"
+            );
+            let grandchild = std::fs::read_to_string(&pidfile)
+                .unwrap()
+                .trim()
+                .to_string();
+            if junk {
+                assert_eq!(sidecar.reap(Duration::ZERO), None, "{case}");
+            } else {
+                drop(sidecar);
+            }
+            let gone = exited_within(&grandchild, WAIT);
+            if !gone {
+                let _ = Process::new("kill").args(["-KILL", &grandchild]).status();
+            }
+            let _ = std::fs::remove_file(&pidfile);
+            assert!(gone, "{case}: grandchild {grandchild} survived the sidecar");
+        }
     }
 
     #[test]
