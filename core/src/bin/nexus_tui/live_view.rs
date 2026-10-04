@@ -251,6 +251,7 @@ fn entry_lines(entry: &Entry, first: bool) -> Vec<Line<'_>> {
             tone,
             failure,
             summary,
+            notes: _,
         } => {
             let (glyph, color) = match tone {
                 Tone::Good => ("✓", Color::Green),
@@ -293,6 +294,7 @@ fn entry_lines(entry: &Entry, first: bool) -> Vec<Line<'_>> {
             format!("  ! {}", one_line(text)),
             Style::default().fg(Color::Yellow),
         ))),
+        Entry::Decision { .. } => {}
     }
     if first && lines.first().is_some_and(|line| line.spans.is_empty()) {
         lines.remove(0);

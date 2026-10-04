@@ -4,7 +4,8 @@ use crate::composer::Composer;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use serde_json::Value;
 
-use crate::protocol::{Command, Event, PROTOCOL_VERSION};
+use crate::protocol::{Command, Event, PROTOCOL_VERSION, Review};
+use crate::review::{ReviewLine, review_lines};
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum ToolStatus {
@@ -42,8 +43,15 @@ pub enum Entry {
         /// Redacted `inferenceFailure.message`, when the turn reports one.
         failure: Option<String>,
         summary: Option<String>,
+        notes: Option<String>,
     },
     Notice(String),
+    /// The operator's answer to an approval request.
+    Decision {
+        tool: String,
+        subject: String,
+        verdict: Verdict,
+    },
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -74,6 +82,46 @@ pub enum Action {
     Restart,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Verdict {
+    Approved,
+    /// Approved, and every later action in the session runs without asking (the sidecar switches to auto).
+    ApprovedForSession,
+    Denied,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Focus {
+    Composer,
+    Transcript,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct Approval {
+    pub id: String,
+    pub tool: String,
+    pub subject: String,
+    pub lines: Vec<ReviewLine>,
+    pub scroll: usize,
+}
+
+/// Modal panels. While one is open it receives every key except Ctrl-C.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Overlay {
+    Approval(Approval),
+    Help { scroll: usize },
+}
+
+/// What the last frame measured. Key handling uses it for page sizes, and it clamps scrolling at the top.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct LiveLayout {
+    pub transcript_rows: usize,
+    /// Largest useful `scroll_back`; `usize::MAX` when the frame did not reach the top of the transcript.
+    pub scroll_limit: usize,
+    pub overlay_rows: usize,
+    pub overlay_limit: usize,
+}
+
 /// Tool calls whose result the turn banner already reports.
 const HIDDEN_TOOLS: &[&str] = &["task_completed"];
 
@@ -87,6 +135,13 @@ pub struct LiveState {
     pending: Option<String>,
     /// Ctrl-C already asked the running turn to stop; another Ctrl-C quits.
     cancel_requested: bool,
+    pub focus: Focus,
+    pub overlay: Option<Overlay>,
+    /// Transcript rows hidden below the viewport; 0 follows the newest line.
+    pub scroll_back: usize,
+    /// Quit was requested; the frame says so while the sidecar shuts down.
+    pub closing: bool,
+    layout: LiveLayout,
 }
 
 impl LiveState {
@@ -99,6 +154,11 @@ impl LiveState {
             turn_seq: 0,
             pending: None,
             cancel_requested: false,
+            focus: Focus::Composer,
+            overlay: None,
+            scroll_back: 0,
+            closing: false,
+            layout: LiveLayout::default(),
         }
     }
 
@@ -163,19 +223,35 @@ impl LiveState {
                     *slot = summary;
                 }
             }
-            Event::ApprovalRequest { tool, subject, .. } => self.transcript.push(Entry::Notice(format!(
-                "{tool} {subject} is waiting for approval, which this view cannot give yet. Press Esc to cancel the turn."
-            ))),
+            Event::ApprovalRequest {
+                id,
+                tool,
+                subject,
+                review,
+            } => {
+                let lines = review_lines(review.as_ref().unwrap_or(&Review::Unknown));
+                self.overlay = Some(Overlay::Approval(Approval {
+                    id,
+                    tool,
+                    subject,
+                    lines,
+                    scroll: 0,
+                }));
+            }
             Event::TurnResult { heading, line, turn, model_summary } => {
                 self.pending = None;
                 self.cancel_requested = false;
                 self.interrupt_running_tools();
+                self.close_approval();
+                let (summary, notes) = model_summary
+                    .map_or((None, None), |model| (Some(model.summary), model.notes));
                 self.transcript.push(Entry::Banner {
                     heading,
                     line,
                     tone: tone_for(&turn),
                     failure: turn["inferenceFailure"]["message"].as_str().map(str::to_string),
-                    summary: model_summary.map(|model| model.summary),
+                    summary,
+                    notes,
                 });
             }
             Event::Error { id, code, message } => {
@@ -193,6 +269,7 @@ impl LiveState {
 
     /// The sidecar stopped or broke protocol; nothing still running can finish.
     pub fn fail(&mut self, reason: String, code: Option<i32>, stderr: Vec<String>) {
+        self.close_approval();
         self.interrupt_running_tools();
         self.session.busy = false;
         self.cancel_requested = false;
@@ -204,6 +281,7 @@ impl LiveState {
     }
 
     pub fn restarted(&mut self) {
+        self.close_approval();
         self.link = Link::Connecting;
         self.session.busy = false;
         self.cancel_requested = false;
@@ -218,6 +296,103 @@ impl LiveState {
         }
     }
 
+    /// Records what the frame measured and clamps scrolling to it.
+    pub fn note_layout(&mut self, layout: LiveLayout) {
+        self.scroll_back = self.scroll_back.min(layout.scroll_limit);
+        if let Some(Overlay::Approval(Approval { scroll, .. }) | Overlay::Help { scroll }) =
+            &mut self.overlay
+        {
+            *scroll = (*scroll).min(layout.overlay_limit);
+        }
+        self.layout = layout;
+    }
+
+    fn close_approval(&mut self) {
+        if matches!(self.overlay, Some(Overlay::Approval(_))) {
+            self.overlay = None;
+        }
+    }
+
+    fn page(rows: usize) -> usize {
+        rows.saturating_sub(1).max(1)
+    }
+
+    fn on_approval_key(&mut self, key: KeyEvent) -> Option<Action> {
+        let verdict = match key.code {
+            KeyCode::Char('y' | 'Y') | KeyCode::Enter => Verdict::Approved,
+            KeyCode::Char('a' | 'A') => Verdict::ApprovedForSession,
+            KeyCode::Char('n' | 'N') | KeyCode::Esc => Verdict::Denied,
+            code => {
+                self.scroll_overlay(code);
+                return None;
+            }
+        };
+        let Some(Overlay::Approval(approval)) = self.overlay.take() else {
+            return None;
+        };
+        self.transcript.push(Entry::Decision {
+            tool: approval.tool,
+            subject: approval.subject,
+            verdict,
+        });
+        Some(Action::Send(match verdict {
+            Verdict::Denied => Command::Deny { id: approval.id },
+            verdict => Command::Approve {
+                id: approval.id,
+                always: verdict == Verdict::ApprovedForSession,
+            },
+        }))
+    }
+
+    fn on_help_key(&mut self, key: KeyEvent) {
+        match key.code {
+            KeyCode::Esc | KeyCode::Enter | KeyCode::Char('?' | 'q') => self.overlay = None,
+            code => self.scroll_overlay(code),
+        }
+    }
+
+    /// Scrolls the open overlay. The next frame clamps past-the-end values through `note_layout`.
+    fn scroll_overlay(&mut self, code: KeyCode) {
+        let page = Self::page(self.layout.overlay_rows);
+        if let Some(Overlay::Approval(Approval { scroll, .. }) | Overlay::Help { scroll }) =
+            &mut self.overlay
+        {
+            *scroll = match code {
+                KeyCode::Up | KeyCode::Char('k') => scroll.saturating_sub(1),
+                KeyCode::Down | KeyCode::Char('j') => scroll.saturating_add(1),
+                KeyCode::PageUp => scroll.saturating_sub(page),
+                KeyCode::PageDown => scroll.saturating_add(page),
+                KeyCode::Home => 0,
+                KeyCode::End => usize::MAX,
+                _ => *scroll,
+            };
+        }
+    }
+
+    fn on_transcript_key(&mut self, key: KeyEvent) -> Option<Action> {
+        match key.code {
+            KeyCode::Up | KeyCode::Char('k') => {
+                self.scroll_back = self.scroll_back.saturating_add(1)
+            }
+            KeyCode::Down | KeyCode::Char('j') => {
+                self.scroll_back = self.scroll_back.saturating_sub(1)
+            }
+            KeyCode::Home | KeyCode::Char('g') => self.scroll_back = usize::MAX,
+            KeyCode::End | KeyCode::Char('G') => self.scroll_back = 0,
+            KeyCode::Enter => self.focus = Focus::Composer,
+            KeyCode::Char(_)
+                if !key
+                    .modifiers
+                    .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) =>
+            {
+                self.focus = Focus::Composer;
+                return self.on_composer_key(key);
+            }
+            _ => {}
+        }
+        None
+    }
+
     pub fn on_key(&mut self, key: KeyEvent) -> Option<Action> {
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
         if matches!(self.link, Link::Crashed { .. }) {
@@ -228,15 +403,59 @@ impl LiveState {
                 _ => None,
             };
         }
+        if key.code == KeyCode::Char('c') && ctrl {
+            return self.on_ctrl_c();
+        }
+        match self.overlay {
+            Some(Overlay::Approval(_)) => return self.on_approval_key(key),
+            Some(Overlay::Help { .. }) => {
+                self.on_help_key(key);
+                return None;
+            }
+            None => {}
+        }
+        let page = Self::page(self.layout.transcript_rows);
         match key.code {
-            KeyCode::Char('c') if ctrl => self.on_ctrl_c(),
+            KeyCode::Tab => {
+                self.focus = match self.focus {
+                    Focus::Composer => Focus::Transcript,
+                    Focus::Transcript => Focus::Composer,
+                };
+                None
+            }
+            KeyCode::PageUp => {
+                self.scroll_back = self.scroll_back.saturating_add(page);
+                None
+            }
+            KeyCode::PageDown => {
+                self.scroll_back = self.scroll_back.saturating_sub(page);
+                None
+            }
+            KeyCode::Esc if self.focus == Focus::Transcript => {
+                self.focus = Focus::Composer;
+                None
+            }
             KeyCode::Esc if self.session.busy => Some(Action::Send(Command::Cancel)),
             KeyCode::Esc => None,
+            _ if self.focus == Focus::Transcript => self.on_transcript_key(key),
+            KeyCode::Char('?') if !ctrl && self.composer.is_empty() => {
+                self.overlay = Some(Overlay::Help { scroll: 0 });
+                None
+            }
             _ => self.on_composer_key(key),
         }
     }
 
     fn on_ctrl_c(&mut self) -> Option<Action> {
+        match self.overlay {
+            Some(Overlay::Help { .. }) => {
+                self.overlay = None;
+                return None;
+            }
+            // Cancelling the turn settles the pending approval on the sidecar; the turn result reports it.
+            Some(Overlay::Approval(_)) => self.overlay = None,
+            None => {}
+        }
         if self.session.busy && self.cancel_requested {
             Some(Action::Quit)
         } else if self.session.busy {
@@ -296,6 +515,8 @@ impl LiveState {
         }
         self.turn_seq += 1;
         let text = self.composer.take();
+        self.scroll_back = 0;
+        self.focus = Focus::Composer;
         self.transcript.push(Entry::User(text.clone()));
         self.session.busy = true;
         let id = format!("t{}", self.turn_seq);
@@ -326,7 +547,9 @@ pub fn tone_for(turn: &Value) -> Tone {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::protocol::Review;
     use crate::protocol::parse_event;
+    use crate::review::{LineKind, review_lines};
 
     fn ev(json: &str) -> Event {
         parse_event(json).unwrap()
@@ -686,7 +909,8 @@ mod tests {
                 line: "Stopped by operator".into(),
                 tone: Tone::Bad,
                 failure: None,
-                summary: None
+                summary: None,
+                notes: None,
             }
         );
         state.apply(ev(r#"{"v":1,"type":"turn.result","turn_id":"t2","heading":"TURN COMPLETE - VERIFIED","line":"cargo test passed","turn":{"execution":"COMPLETED","outcome":"VERIFIED"},"model_summary":{"summary":"Fixed the parser."}}"#));
@@ -698,6 +922,7 @@ mod tests {
                 tone: Tone::Good,
                 failure: None,
                 summary: Some("Fixed the parser.".into()),
+                notes: None,
             }
         );
         for (execution, outcome, tone) in [
@@ -731,6 +956,7 @@ mod tests {
                     tone: Tone::Bad,
                     failure: Some("upstream timed out after 60s".into()),
                     summary: None,
+                    notes: None,
                 },
                 Entry::Banner {
                     heading: "TURN FAILED".into(),
@@ -738,6 +964,7 @@ mod tests {
                     tone: Tone::Bad,
                     failure: None,
                     summary: None,
+                    notes: None,
                 },
             ]
         );
@@ -791,17 +1018,207 @@ mod tests {
     }
 
     #[test]
-    fn errors_and_approval_requests_become_notices() {
+    fn errors_become_notices_and_approval_requests_open_the_review() {
         let mut state = ready();
         state.apply(ev(r#"{"v":1,"type":"error","id":"t9","code":"BUSY","message":"A turn is already running"}"#));
         state.apply(ev(r#"{"v":1,"type":"approval.request","id":"approval-1","turn_id":"t1","tool":"write_file","subject":"x.txt","preview":"{}"}"#));
         assert_eq!(
-            state.transcript[0],
-            Entry::Notice("BUSY: A turn is already running".into())
+            state.transcript,
+            vec![Entry::Notice("BUSY: A turn is already running".into())]
         );
+        assert_eq!(
+            state.overlay,
+            Some(Overlay::Approval(Approval {
+                id: "approval-1".into(),
+                tool: "write_file".into(),
+                subject: "x.txt".into(),
+                lines: review_lines(&Review::Unknown),
+                scroll: 0,
+            }))
+        );
+    }
+
+    const APPROVAL: &str = r#"{"v":1,"type":"approval.request","id":"approval-1","turn_id":"t1","tool":"write_file","subject":"x.txt","preview":"{}","review":{"kind":"change","path":"x.txt","before":null,"after":"hi\n","created":true,"truncated":false}}"#;
+
+    fn busy_with_approval() -> LiveState {
+        let mut state = ready();
+        type_text(&mut state, "make x");
+        assert!(state.on_key(key(KeyCode::Enter)).is_some());
+        state.apply(ev(APPROVAL));
+        state
+    }
+
+    #[test]
+    fn the_approval_modal_takes_keys_and_records_the_decision() {
+        let mut state = busy_with_approval();
+        let Some(Overlay::Approval(approval)) = &state.overlay else {
+            panic!("expected the approval modal");
+        };
         assert!(
-            matches!(&state.transcript[1], Entry::Notice(text) if text.contains("write_file x.txt") && text.contains("Esc"))
+            approval
+                .lines
+                .iter()
+                .any(|line| line.kind == LineKind::Added && line.text == "+hi")
         );
+        assert_eq!(state.on_key(key(KeyCode::Char('x'))), None);
+        assert_eq!(state.composer, "", "keys go to the modal, not the composer");
+        assert_eq!(
+            state.on_key(key(KeyCode::Char('y'))),
+            Some(Action::Send(Command::Approve {
+                id: "approval-1".into(),
+                always: false
+            }))
+        );
+        assert_eq!(state.overlay, None);
+        assert_eq!(
+            state.transcript.last(),
+            Some(&Entry::Decision {
+                tool: "write_file".into(),
+                subject: "x.txt".into(),
+                verdict: Verdict::Approved
+            })
+        );
+        state.apply(ev(APPROVAL));
+        assert_eq!(
+            state.on_key(key(KeyCode::Char('a'))),
+            Some(Action::Send(Command::Approve {
+                id: "approval-1".into(),
+                always: true
+            }))
+        );
+        state.apply(ev(APPROVAL));
+        assert_eq!(
+            state.on_key(key(KeyCode::Esc)),
+            Some(Action::Send(Command::Deny {
+                id: "approval-1".into()
+            }))
+        );
+        assert!(matches!(
+            state.transcript.last(),
+            Some(Entry::Decision {
+                verdict: Verdict::Denied,
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn ctrl_c_and_the_turn_result_close_a_pending_approval() {
+        let mut state = busy_with_approval();
+        assert_eq!(state.on_key(ctrl('c')), Some(Action::Send(Command::Cancel)));
+        assert_eq!(state.overlay, None);
+        state.apply(ev(APPROVAL));
+        state.apply(ev(r#"{"v":1,"type":"turn.result","turn_id":"t1","heading":"TURN INTERRUPTED","line":"Stopped","turn":{"execution":"INTERRUPTED","outcome":"NOT_ESTABLISHED"},"model_summary":null}"#));
+        assert_eq!(state.overlay, None);
+        state.apply(ev(APPROVAL));
+        state.fail("gone".into(), None, Vec::new());
+        assert_eq!(state.overlay, None);
+    }
+
+    #[test]
+    fn approval_scrolling_is_clamped_by_the_last_frame() {
+        let mut state = busy_with_approval();
+        state.note_layout(LiveLayout {
+            transcript_rows: 10,
+            scroll_limit: 0,
+            overlay_rows: 4,
+            overlay_limit: 6,
+        });
+        for code in [KeyCode::Down, KeyCode::Char('j'), KeyCode::PageDown] {
+            assert_eq!(state.on_key(key(code)), None);
+        }
+        assert!(matches!(
+            &state.overlay,
+            Some(Overlay::Approval(Approval { scroll: 5, .. }))
+        ));
+        assert_eq!(state.on_key(key(KeyCode::End)), None);
+        state.note_layout(LiveLayout {
+            transcript_rows: 10,
+            scroll_limit: 0,
+            overlay_rows: 4,
+            overlay_limit: 6,
+        });
+        assert!(matches!(
+            &state.overlay,
+            Some(Overlay::Approval(Approval { scroll: 6, .. }))
+        ));
+    }
+
+    #[test]
+    fn question_mark_opens_help_only_on_an_empty_composer() {
+        let mut state = ready();
+        assert_eq!(state.on_key(key(KeyCode::Char('?'))), None);
+        assert_eq!(state.overlay, Some(Overlay::Help { scroll: 0 }));
+        assert_eq!(state.on_key(key(KeyCode::Char('x'))), None);
+        assert_eq!(state.composer, "");
+        assert_eq!(state.on_key(key(KeyCode::Esc)), None);
+        assert_eq!(state.overlay, None);
+        type_text(&mut state, "why?");
+        assert_eq!(state.composer, "why?");
+        assert_eq!(state.overlay, None);
+        state.overlay = Some(Overlay::Help { scroll: 0 });
+        state.apply(ev(APPROVAL));
+        assert!(
+            matches!(state.overlay, Some(Overlay::Approval(_))),
+            "an approval replaces help"
+        );
+    }
+
+    #[test]
+    fn tab_switches_focus_and_the_transcript_scrolls() {
+        let mut state = ready();
+        let layout = LiveLayout {
+            transcript_rows: 10,
+            scroll_limit: 50,
+            overlay_rows: 0,
+            overlay_limit: 0,
+        };
+        state.note_layout(layout);
+        assert_eq!(state.on_key(key(KeyCode::PageUp)), None);
+        assert_eq!(state.scroll_back, 9, "pgup scrolls from the composer too");
+        assert_eq!(state.on_key(key(KeyCode::Tab)), None);
+        assert_eq!(state.focus, Focus::Transcript);
+        assert_eq!(state.on_key(key(KeyCode::Up)), None);
+        assert_eq!(state.on_key(key(KeyCode::Char('k'))), None);
+        assert_eq!(state.scroll_back, 11);
+        assert_eq!(state.on_key(key(KeyCode::Down)), None);
+        assert_eq!(state.scroll_back, 10);
+        assert_eq!(state.on_key(key(KeyCode::Home)), None);
+        state.note_layout(layout);
+        assert_eq!(state.scroll_back, 50);
+        assert_eq!(state.on_key(key(KeyCode::Char('G'))), None);
+        assert_eq!(state.scroll_back, 0);
+        assert_eq!(state.on_key(key(KeyCode::Esc)), None);
+        assert_eq!(state.focus, Focus::Composer);
+        assert_eq!(state.on_key(key(KeyCode::Tab)), None);
+        type_text(&mut state, "x");
+        assert_eq!(
+            state.focus,
+            Focus::Composer,
+            "typing returns to the composer"
+        );
+        assert_eq!(state.composer, "x");
+    }
+
+    #[test]
+    fn submitting_returns_to_the_newest_line() {
+        let mut state = ready();
+        state.scroll_back = 7;
+        state.focus = Focus::Transcript;
+        assert_eq!(state.on_key(key(KeyCode::Char('h'))), None);
+        assert!(state.on_key(key(KeyCode::Enter)).is_some());
+        assert_eq!(state.scroll_back, 0);
+    }
+
+    #[test]
+    fn model_notes_ride_along_with_the_summary() {
+        let mut state = ready();
+        state.apply(ev(r#"{"v":1,"type":"turn.result","turn_id":"t1","heading":"H","line":"L","turn":{"execution":"COMPLETED","outcome":"VERIFIED"},"model_summary":{"summary":"Done.","notes":"Watch the cache."}}"#));
+        assert!(matches!(
+            state.transcript.last(),
+            Some(Entry::Banner { summary: Some(summary), notes: Some(notes), .. })
+                if summary == "Done." && notes == "Watch the cache."
+        ));
     }
 
     #[test]
