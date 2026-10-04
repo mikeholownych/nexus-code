@@ -59,6 +59,7 @@
 | `core/src/bin/nexus_tui.rs` | Modify | `#[path]` for `slash` |
 | `core/src/bin/nexus_tui/protocol.rs` | Modify | `SlashSpec`, `Hello.commands`, `SlashResult`, `Notice`, `Command::Slash` |
 | `core/src/bin/nexus_tui/slash.rs` | Create | `parse`, `matches`, `needs_args` |
+| `core/src/bin/nexus_tui/sidecar.rs` | Modify | Two test patterns follow the new `Hello` shape |
 | `core/src/bin/nexus_tui/composer.rs` | Modify | `at_end()` |
 | `core/src/bin/nexus_tui/live_state.rs` | Modify | Command entries, invocation, results, notices, completion |
 | `core/src/bin/nexus_tui/live_view.rs` | Modify | Command/output/info rendering, completion list, help commands, hint |
