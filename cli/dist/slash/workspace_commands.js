@@ -198,10 +198,14 @@ function copy(ctx) {
     const result = copyToClipboard(text);
     return result.success ? reply("copy", `Copied ${label} to the clipboard.`) : reply("copy", `Clipboard error: ${result.error}`, false);
 }
+/** Keeps the escaped `slash.result` line under the TUI's 1 MiB protocol line cap. */
+const MAX_PASTE = 100_000;
 function paste() {
     const result = readFromClipboard();
     if (!result.success || !result.text)
         return reply("paste", `Clipboard error: ${result.error || "the clipboard is empty"}`, false);
+    if (result.text.length > MAX_PASTE)
+        return reply("paste", `The clipboard holds ${result.text.length} characters; /paste takes at most ${MAX_PASTE}.`, false);
     return reply("paste", `Pasted ${result.text.length} characters into the composer.`, true, { composer: result.text });
 }
 export const WORKSPACE_HANDLERS = {

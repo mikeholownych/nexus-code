@@ -343,6 +343,27 @@ describe("slash router: workspace commands", () => {
       else assert.match(paste.output, /^Clipboard error: /);
     });
   });
+
+  test("paste refuses a clipboard too large for one protocol line", async () => {
+    await withRig(async ({ reply }) => {
+      const fakeBin = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-fakeclip-"));
+      const content = path.join(fakeBin, "content.txt");
+      fs.writeFileSync(content, "a".repeat(100_001));
+      fs.writeFileSync(path.join(fakeBin, "wl-paste"), `#!/bin/sh\nexec /bin/cat "${content}"\n`, { mode: 0o755 });
+      const previousPath = process.env.PATH;
+      process.env.PATH = fakeBin;
+      let paste: SlashReply;
+      try {
+        paste = await reply("paste");
+      } finally {
+        process.env.PATH = previousPath;
+        fs.rmSync(fakeBin, { recursive: true, force: true });
+      }
+      assert.equal(paste.success, false);
+      assert.equal(paste.output, "The clipboard holds 100001 characters; /paste takes at most 100000.");
+      assert.equal(paste.composer, undefined);
+    });
+  });
 });
 
 describe("slash router: extensions and turns", () => {
@@ -386,6 +407,8 @@ describe("slash router: extensions and turns", () => {
       assert.equal(turn.label, "what is this [image dot.png]");
       assert.equal(turn.checkpoint, "Vision: what is this");
       assert.ok(Array.isArray(turn.prompt));
+      const multiline = await run("image", "dot.png what is this\nand why");
+      assert.equal(multiline.kind === "turn" && multiline.label, "what is this\nand why [image dot.png]");
     });
   });
 

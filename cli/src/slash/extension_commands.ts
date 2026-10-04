@@ -157,10 +157,16 @@ async function browse({ host, args }: SlashContext): Promise<SlashOutcome> {
   return reply("browse", `${page.title} · HTTP ${page.status}\n\n${page.contentSnippet.slice(0, 300)}…`, page.status === 200);
 }
 
+/** The first word and the remainder untouched, so a multiline prompt or objective keeps its line breaks. */
+function firstWord(args: string): [string, string] {
+  const match = /^(\S+)\s*([\s\S]*)$/.exec(args.trim());
+  return match ? [match[1], match[2]] : ["", ""];
+}
+
 function image({ host, args }: SlashContext): SlashOutcome {
-  const [file, ...rest] = args.trim().split(/\s+/).filter(Boolean);
+  const [file, rest] = firstWord(args);
   if (!file) return reply("image", "Usage: /image <path> [prompt]", false);
-  const prompt = rest.join(" ") || IMAGE_PROMPT;
+  const prompt = rest || IMAGE_PROMPT;
   const encoded = encodeImageFile(file, host.app.getConfig().workspace);
   if (!encoded.success) return reply("image", `Could not load the image: ${encoded.error}`, false);
   return {
@@ -183,8 +189,7 @@ async function tdd({ host, args, signal }: SlashContext): Promise<SlashOutcome> 
 }
 
 async function team({ host, args }: SlashContext): Promise<SlashOutcome> {
-  const [role, ...rest] = args.trim().split(/\s+/).filter(Boolean);
-  const objective = rest.join(" ");
+  const [role, objective] = firstWord(args);
   if (!role || !objective) return reply("team", "Usage: /team <researcher|architect|implementer|tester|full> <objective>", false);
   const name = role.toLowerCase();
   if (name !== "full" && !ROLES.includes(name)) return reply("team", `Unknown role ${role}. Roles: ${[...ROLES, "full"].join(", ")}`, false);
