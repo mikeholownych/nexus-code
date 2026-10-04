@@ -81,7 +81,7 @@ export function generateConventionalCommit(workspace) {
             cwd: workspace,
             encoding: "utf-8",
             stdio: ["pipe", "pipe", "ignore"],
-        }).trim();
+        }).trimEnd();
         if (!statusOut) {
             return { message: "chore(repo): update repository", files: [] };
         }

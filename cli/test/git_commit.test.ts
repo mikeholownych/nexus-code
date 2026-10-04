@@ -6,6 +6,17 @@ import { execFileSync } from "node:child_process";
 import { commitChanges, generateConventionalCommit } from "../src/git.js";
 import { makeRepo } from "./helpers/fixtures.js";
 
+test("the suggested message names the first changed file in full", () => {
+  const repo = makeRepo();
+  try {
+    fs.writeFileSync(path.join(repo, "base.txt"), "changed\n");
+    const { files } = generateConventionalCommit(repo);
+    assert.deepEqual(files, ["base.txt"]);
+  } finally {
+    fs.rmSync(repo, { recursive: true, force: true });
+  }
+});
+
 test("commit messages are committed verbatim and never run by a shell", () => {
   const repo = makeRepo();
   try {
