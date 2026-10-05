@@ -583,7 +583,12 @@ impl LiveState {
         self.on_key_at(key, Instant::now())
     }
 
-    pub fn on_key_at(&mut self, key: KeyEvent, now: Instant) -> Option<Action> {
+    pub fn on_key_at(&mut self, mut key: KeyEvent, now: Instant) -> Option<Action> {
+        // Terminals with `stty erase ^H` send 0x08 for Backspace, which crossterm reports as ctrl+h.
+        if key.code == KeyCode::Char('h') && key.modifiers.contains(KeyModifiers::CONTROL) {
+            key.code = KeyCode::Backspace;
+            key.modifiers.remove(KeyModifiers::CONTROL);
+        }
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
         if matches!(self.link, Link::Crashed { .. }) {
             return match key.code {
@@ -985,6 +990,28 @@ mod tests {
             None
         );
         assert_eq!(state.composer, "");
+    }
+
+    #[test]
+    fn ctrl_h_from_a_terminal_whose_backspace_sends_bs_deletes_like_backspace() {
+        let mut state = ready();
+        type_text(&mut state, "fix the bug 👍🏽");
+        assert_eq!(state.on_key(ctrl('h')), None);
+        assert_eq!(state.composer, "fix the bug ");
+        state.on_key(key(KeyCode::Left));
+        state.on_key(ctrl('h'));
+        assert_eq!(state.composer, "fix the bu ");
+        state.on_key(with(
+            KeyCode::Char('h'),
+            KeyModifiers::CONTROL | KeyModifiers::ALT,
+        ));
+        assert_eq!(state.composer, "fix the  ");
+        state.composer.clear();
+        state.apply(hello_with(&[("diff", "/diff")]));
+        type_text(&mut state, "/di");
+        assert!(state.completion().is_some());
+        state.on_key(ctrl('h'));
+        assert_eq!(state.composer, "/d");
     }
 
     #[test]
