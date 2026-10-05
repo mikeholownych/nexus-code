@@ -422,7 +422,7 @@ fn render_detail(frame: &mut Frame, area: Rect, detail: &Detail) -> (usize, usiz
         height: inner.height - head_rows,
         ..inner
     };
-    let mut title = vec![
+    let title = Line::from(vec![
         Span::styled(
             tool_verb(&detail.tool),
             Style::default()
@@ -430,14 +430,15 @@ fn render_detail(frame: &mut Frame, area: Rect, detail: &Detail) -> (usize, usiz
                 .add_modifier(Modifier::BOLD),
         ),
         Span::styled(format!(" {}", detail.subject), muted),
-    ];
+    ]);
+    let mut status = Vec::new();
     let lines = match &detail.record {
         Loaded::Waiting => vec![Line::from(Span::styled(
             "Loading the recorded call…",
             muted,
         ))],
         Loaded::Failed(message) => vec![Line::from(Span::styled(
-            message.as_str(),
+            one_line(message),
             Style::default().fg(Color::Red),
         ))],
         Loaded::Ready(record) => {
@@ -446,20 +447,15 @@ fn render_detail(frame: &mut Frame, area: Rect, detail: &Detail) -> (usize, usiz
                 "failed" => ("failed", Color::Red),
                 _ => ("running", ACCENT),
             };
-            title.push(Span::styled(
-                format!("  {label}"),
-                Style::default().fg(color),
-            ));
+            status.push(Span::styled(label, Style::default().fg(color)));
             if let Some(ms) = record.duration_ms {
-                title.push(Span::styled(format!(" · {}", duration(ms)), muted));
+                status.push(Span::styled(format!(" · {}", duration(ms)), muted));
             }
             record_lines(record)
         }
     };
-    frame.render_widget(
-        Paragraph::new(Line::from(title)).wrap(Wrap { trim: false }),
-        head,
-    );
+    // A long subject (a whole command line) is clipped so the status row stays visible.
+    frame.render_widget(Paragraph::new(vec![title, Line::from(status)]), head);
     scroll_body(frame, body, lines, detail.scroll)
 }
 
@@ -501,7 +497,7 @@ fn render_receipt(frame: &mut Frame, area: Rect, panel: &ReceiptPanel) -> (usize
     let lines = match &panel.sections {
         Loaded::Waiting => vec![Line::from(Span::styled("Loading the receipt…", muted))],
         Loaded::Failed(message) => vec![Line::from(Span::styled(
-            message.as_str(),
+            one_line(message),
             Style::default().fg(Color::Red),
         ))],
         Loaded::Ready(sections) => receipt_lines(sections),
@@ -656,8 +652,8 @@ fn render_empty(frame: &mut Frame, area: Rect) {
 }
 
 /// Renders the transcript window `scroll_back` rows above the newest line, with `selected` highlighted. With
-/// `follow`, the window first moves the least distance that shows the whole selected entry (its top when it is
-/// taller than the window). Only the entries needed to fill the window are laid out, so the cost follows the
+/// `follow`, the window first moves the least distance that shows the whole selected entry above the bottom row
+/// (its top when it is taller than the window). Only the entries needed to fill the window are laid out, so the cost follows the
 /// window, not the transcript. Returns the largest useful `scroll_back` (`usize::MAX` when the walk stopped
 /// before the first entry) and the `scroll_back` drawn.
 fn render_transcript(
@@ -679,7 +675,7 @@ fn render_transcript(
         let highlight = selected == Some(index);
         for line in entry_lines(entry, index == 0).into_iter().rev() {
             let line = if highlight {
-                line.patch_style(Style::default().bg(SELECTED))
+                line.patch_style(Style::default().bg(SELECTED).add_modifier(Modifier::BOLD))
             } else {
                 line
             };
@@ -692,7 +688,10 @@ fn render_transcript(
             }
         }
         if target == Some(index) {
-            back = back.min(below).max(total.saturating_sub(height));
+            // One row short of the bottom, where the scroll badge would cover the entry.
+            back = back
+                .min(below.saturating_sub(1))
+                .max(total.saturating_sub(height));
             target = None;
             if total >= height.saturating_add(back) {
                 reached_top = false;
@@ -1920,8 +1919,8 @@ mod tests {
         state.on_key(KeyEvent::new(code, KeyModifiers::NONE));
     }
 
-    /// Background and foreground of the cell where `text` starts.
-    fn cell_at(state: &LiveState, width: u16, height: u16, text: &str) -> (Color, Color) {
+    /// Background, foreground and modifiers of the cell where `text` starts.
+    fn cell_at(state: &LiveState, width: u16, height: u16, text: &str) -> (Color, Color, Modifier) {
         let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
         terminal
             .draw(|frame| {
@@ -1933,7 +1932,7 @@ mod tests {
         let column = lines[row].find(text).unwrap();
         let x = u16::try_from(lines[row][..column].chars().count()).unwrap();
         let cell = &terminal.backend().buffer()[(x, u16::try_from(row).unwrap())];
-        (cell.bg, cell.fg)
+        (cell.bg, cell.fg, cell.modifier)
     }
 
     #[test]
@@ -1942,6 +1941,10 @@ mod tests {
         press_key(&mut state, KeyCode::Tab);
         press_key(&mut state, KeyCode::Char('['));
         assert_eq!(cell_at(&state, 80, 20, "a.ts").0, SELECTED);
+        assert!(
+            cell_at(&state, 80, 20, "a.ts").2.contains(Modifier::BOLD),
+            "the selection shows without colour too"
+        );
         press_key(&mut state, KeyCode::Tab);
         assert_ne!(cell_at(&state, 80, 20, "a.ts").0, SELECTED);
     }
@@ -1959,7 +1962,10 @@ mod tests {
         let (screen, layout) = draw_measured(&state, 80, 20);
         assert_shows(&screen, &["a.ts"]);
         let back = layout.followed.expect("the frame followed the selection");
-        assert!(back > 0);
+        assert_eq!(
+            back, 45,
+            "the window moved just far enough to show the call"
+        );
         state.note_layout(layout);
         assert_eq!((state.scroll_back, state.follow), (back, false));
         let (_, again) = draw_measured(&state, 80, 20);
@@ -1997,6 +2003,68 @@ mod tests {
                 "const b = 2;",
             ],
         );
+    }
+
+    #[test]
+    fn a_newer_selected_call_is_not_hidden_under_the_scroll_badge() {
+        let mut state = with_tool("e1");
+        let long: Vec<String> = (1..=60).map(|n| format!("line {n}")).collect();
+        let filler = |state: &mut LiveState| {
+            state.transcript.push(Entry::Assistant {
+                turn_id: "t1".into(),
+                text: long.join("\n"),
+            })
+        };
+        filler(&mut state);
+        feed(
+            &mut state,
+            &[
+                r#"{"v":1,"type":"tool.start","turn_id":"t1","call_id":"b","tool":"read_file","subject":"b.ts","evidence":"e2"}"#,
+                r#"{"v":1,"type":"tool.end","turn_id":"t1","call_id":"b","tool":"read_file","success":true,"summary":"ok","lines":1}"#,
+            ],
+        );
+        filler(&mut state);
+        press_key(&mut state, KeyCode::Tab);
+        for code in [KeyCode::Char('['), KeyCode::Char('['), KeyCode::Char(']')] {
+            press_key(&mut state, code);
+            let (_, layout) = draw_measured(&state, 80, 20);
+            state.note_layout(layout);
+        }
+        let screen = draw(&state, 80, 20);
+        let lines = rows(&screen);
+        let row = lines
+            .iter()
+            .find(|line| line.contains("b.ts"))
+            .expect("b.ts is on screen");
+        assert!(!row.contains("more rows"), "{screen}");
+        assert_shows(&screen, &["more rows"]);
+    }
+
+    #[test]
+    fn a_long_subject_leaves_the_status_visible_and_failures_keep_their_lines() {
+        let mut state = ready();
+        state.overlay = Some(Overlay::Detail(Detail {
+            request: "d1".into(),
+            tool: "run_command".into(),
+            subject: "x".repeat(190),
+            record: Loaded::Ready(ToolRecord {
+                status: "failed".into(),
+                args: "{}".into(),
+                output: String::new(),
+                duration_ms: Some(1500),
+            }),
+            scroll: 0,
+        }));
+        assert_shows(&draw(&state, 80, 24), &["failed · 1.5 s", "Arguments"]);
+        assert_shows(&draw(&state, 40, 12), &["failed · 1.5 s"]);
+        state.overlay = Some(Overlay::Detail(Detail {
+            request: "d1".into(),
+            tool: "read_file".into(),
+            subject: "a.ts".into(),
+            record: Loaded::Failed("NOT_FOUND: line one\nline two".into()),
+            scroll: 0,
+        }));
+        assert_shows(&draw(&state, 80, 24), &["line one line two"]);
     }
 
     #[test]
