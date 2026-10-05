@@ -30,6 +30,17 @@ const __dirname = path.dirname(__filename);
 
 loadEnvironment();
 
+/**
+ * Exits once stdout and stderr have accepted everything written so far. A write to a pipe is asynchronous, so an immediate
+ * `process.exit()` drops whatever the pipe has not yet taken (65,536 bytes on Linux) while still exiting with the intended code.
+ */
+function exitAfterFlush(code: number): void {
+  let pending = 2;
+  const done = () => { if (--pending === 0) process.exit(code); };
+  process.stdout.write("", done);
+  process.stderr.write("", done);
+}
+
 const program = new Command();
 
 program
@@ -154,7 +165,7 @@ program
       }
 
       app.shutdown();
-      process.exit(result.exitCode);
+      exitAfterFlush(result.exitCode);
     } catch (err: any) {
       if (isJson) {
         console.log(JSON.stringify({
@@ -174,7 +185,7 @@ program
         console.error(pc.red(`\nTask failed: ${err.message}`));
       }
       app.shutdown();
-      process.exit(1);
+      exitAfterFlush(1);
     }
   });
 
