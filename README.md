@@ -106,6 +106,10 @@ A model that stops calling tools has only stopped; it has not demonstrated anyth
 
 Ctrl-C while a turn is running requests cancellation: no new inference request or tool dispatch is admitted, and a tool that is already executing is awaited (it cannot be force-stopped). A second Ctrl-C terminates immediately. At an idle prompt Ctrl-C exits the REPL.
 
+### Legacy readline REPL (`harness --repl`)
+
+The default interface is the live TUI, which has a real multi-line composer. The legacy REPL reads one line at a time: lines that arrive together with a prompt (a multi-line paste, piped input) or while a turn is running cannot become prompts. They are not silently dropped: the REPL prints how many lines were ignored and the first one. To submit multi-line input there, wrap it in `"""` … `"""` (or ```` ``` ````), or use the TUI.
+
 ---
 
 ## 🎮 Slash Commands Cheatsheet

@@ -473,8 +473,26 @@ export class InteractiveRepl {
 
     const exitRequested = new Promise<void>((resolve) => { this.exitResolve = resolve; });
 
+    // readline emits `line` only for input that no pending `question()` consumed: pasted/piped lines that arrive in the same
+    // chunk as a prompt, or typed while a turn is running. This REPL reads one line at a time, so those lines cannot become
+    // prompts; they are counted so the loss is reported instead of silent.
+    const ignoredLines: string[] = [];
+    this.rl.on("line", (l: string) => { ignoredLines.push(l); });
+    const reportIgnoredLines = () => {
+      const lines = ignoredLines.splice(0);
+      if (lines.length === 0) return;
+      const n = lines.length;
+      const first = lines.find((l) => l.trim()) ?? "";
+      console.error(pc.yellow(
+        `⚠ ${n} line${n === 1 ? "" : "s"} arrived while no prompt was waiting and ${n === 1 ? "was" : "were"} ignored` +
+        `${first ? ` (first: "${first.slice(0, 60)}${first.length > 60 ? "…" : ""}")` : ""}. ` +
+        `This REPL reads one line at a time: wrap multi-line input in """ … """, or use the default TUI (\`harness\`).`,
+      ));
+    };
+
     const promptLoop = async () => {
       while (true) {
+        reportIgnoredLines();
         const wsName = path.basename(this.config.workspace) || this.config.workspace;
         const gitInfo = getGitInfo(this.config.workspace);
         const gitSegment = gitInfo.isRepo ? pc.gray(`:${pc.cyan(gitInfo.formattedBadge)}`) : "";
@@ -490,6 +508,9 @@ export class InteractiveRepl {
         } catch {
           break;
         }
+        // Same-chunk lines were emitted before this continuation ran; yield once more for lines split across chunks.
+        await new Promise<void>((resolve) => setImmediate(resolve));
+        reportIgnoredLines();
 
         let fullInput = line;
 

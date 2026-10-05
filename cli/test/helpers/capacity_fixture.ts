@@ -11,6 +11,7 @@ export interface Gw { url: string; requests: number; close(): Promise<void> }
 export async function gateway(script: (n: number) => { tool?: { name: string; args: unknown }; text?: string; fail?: boolean }): Promise<Gw> {
   const gw: Gw = { url: "", requests: 0, close: async () => {} };
   const server = http.createServer((req, res) => {
+    if (req.url?.endsWith("/models")) { res.setHeader("content-type", "application/json"); res.end('{"data":[{"id":"m"}]}'); return; }   // not a model request
     let raw = "";
     req.on("data", (c) => (raw += c));
     req.on("end", () => {
