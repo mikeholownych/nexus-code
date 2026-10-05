@@ -336,7 +336,7 @@ fn event_loop(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::live_state::{APPROVAL_GRACE, Entry, Overlay, Verdict};
+    use crate::live_state::{APPROVAL_GRACE, Detail, Entry, Loaded, Overlay, Verdict};
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
     use std::time::Instant;
 
@@ -664,5 +664,54 @@ case "$shutdown" in *'"type":"shutdown"'*) exit 0;; *) exit 8;; esac"#
                 .contains("usage")
         );
         std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn a_tool_detail_round_trips_through_the_sidecar() {
+        let script = format!(
+            r#"{HELLO}
+echo '{{"v":1,"type":"tool.start","turn_id":"t1","call_id":"a","tool":"read_file","subject":"a.ts","evidence":"e1"}}'
+echo '{{"v":1,"type":"tool.end","turn_id":"t1","call_id":"a","tool":"read_file","success":true,"summary":"ok","lines":1,"evidence":"e1"}}'
+read cmd
+case "$cmd" in *'"type":"tool.detail"'*) ;; *) exit 9;; esac
+case "$cmd" in *'"evidence":"e1"'*) ;; *) exit 9;; esac
+case "$cmd" in *'"id":"d1"'*) ;; *) exit 9;; esac
+echo '{{"v":1,"type":"tool.detail","id":"d1","evidence":"e1","tool":"read_file","subject":"a.ts","status":"succeeded","args":"{{}}","output":"const a = 1;","duration_ms":3}}'
+read shutdown
+case "$shutdown" in *'"type":"shutdown"'*) exit 0;; *) exit 8;; esac"#
+        );
+        let mut app = LiveApp::start(fake_sidecar(&script));
+        pump_until(&mut app, |s| {
+            s.link == Link::Ready
+                && s.transcript
+                    .iter()
+                    .any(|e| matches!(e, Entry::Tool { evidence, .. } if evidence == "e1"))
+        });
+        for code in [KeyCode::Tab, KeyCode::Char('[')] {
+            assert_eq!(
+                app.state.on_key(KeyEvent::new(code, KeyModifiers::NONE)),
+                None
+            );
+        }
+        let send = app
+            .state
+            .on_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
+            .expect("enter requests the detail");
+        assert!(app.handle(send));
+        pump_until(&mut app, |s| {
+            matches!(&s.overlay, Some(Overlay::Detail(Detail { record: Loaded::Ready(record), .. }))
+                if record.output == "const a = 1;")
+        });
+        assert_eq!(app.state.link, Link::Ready);
+        assert_eq!(
+            app.state
+                .on_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)),
+            None
+        );
+        let quit = app
+            .state
+            .on_key(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL));
+        assert_eq!(quit, Some(Action::Quit));
+        assert!(!app.handle(quit.unwrap()));
     }
 }
