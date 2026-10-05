@@ -113,12 +113,15 @@ export async function runTestSuiteWithExecutor(workspace, execute, commandOverri
     try {
         const result = await execute(command);
         let commandSucceeded = false;
+        let timedOut = result.timedOut === true;
         let rawOutput = [result.output, result.error].filter(Boolean).join("\n");
         if (result.success) {
             try {
                 const execution = JSON.parse(result.output);
-                if (execution && typeof execution === "object" && typeof execution.exit_code === "number") {
-                    commandSucceeded = execution.exit_code === 0 && execution.timed_out !== true;
+                // The runner's envelope is always unwrapped: a killed or timed-out command has `exit_code: null`.
+                if (execution && typeof execution === "object" && "exit_code" in execution) {
+                    timedOut = execution.timed_out === true;
+                    commandSucceeded = execution.exit_code === 0 && !timedOut;
                     rawOutput = [execution.stdout, execution.stderr, result.error].filter(Boolean).join("\n");
                 }
             }
@@ -126,7 +129,8 @@ export async function runTestSuiteWithExecutor(workspace, execute, commandOverri
                 // Unknown executor output is not proof that the command exited successfully.
             }
         }
-        return summarizeTestRun(command, commandSucceeded, rawOutput);
+        const summary = summarizeTestRun(command, commandSucceeded, rawOutput);
+        return timedOut ? { ...summary, success: false, timedOut: true } : summary;
     }
     catch (error) {
         return summarizeTestRun(command, false, error?.message || "Verification command execution failed.");

@@ -46,6 +46,8 @@ export function buildConfig(options: any): HarnessConfig {
   const coderModel = options.coderModel || process.env.CODER_LLM_MODEL;
   const coderEndpoint = options.coderEndpoint || process.env.CODER_LLM_ENDPOINT;
   const tdd = Boolean(options.tdd);
+  const verifierTimeoutRaw = Number(process.env.NEXUS_VERIFIER_TIMEOUT_SECS);
+  const verifierTimeoutSecs = Number.isFinite(verifierTimeoutRaw) && verifierTimeoutRaw > 0 ? verifierTimeoutRaw : undefined;
   const taskClass = process.env.NEXUS_TASK_CLASS || undefined;
   const plannerTaskClass = process.env.PLANNER_TASK_CLASS || undefined;
   return {
@@ -65,6 +67,7 @@ export function buildConfig(options: any): HarnessConfig {
     contextLimit,
     worktree,
     authoritativeVerifierCommand,
+    verifierTimeoutSecs,
     recordFlight,
     plannerModel,
     plannerEndpoint,

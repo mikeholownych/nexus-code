@@ -58,6 +58,7 @@ export interface HarnessConfig {
   sandbox?: boolean | string; // Linux namespace / bwrap / container isolation (default: false)
   worktree?: boolean;        // Isolated ephemeral git worktree execution (default: false)
   authoritativeVerifierCommand?: string; // Explicit trusted verifier required to authorize automatic worktree merge
+  verifierTimeoutSecs?: number; // Deadline for the completion verifier (default 300); env NEXUS_VERIFIER_TIMEOUT_SECS
   recordFlight?: boolean;    // Deterministic .flightlog session recording (default: false)
   plannerModel?: string;     // Deep reasoning / architecture planner (e.g. Claude 3.7 Thinking / o3 / DeepSeek R1)
   plannerEndpoint?: string;  // Dedicated endpoint for planner model
@@ -72,4 +73,6 @@ export interface ExecutionResult {
   success: boolean;
   output: string;
   error?: string;
+  /** The operation's deadline expired before an answer was received (bridge-level; the runner reports its own via `timed_out`). */
+  timedOut?: boolean;
 }

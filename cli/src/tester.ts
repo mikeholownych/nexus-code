@@ -6,12 +6,14 @@ import { extractCompilerDiagnostics, Diagnostic } from "./diagnostics.js";
 export interface TestRunResult {
   command: string;
   success: boolean;
+  /** The verifier hit its deadline (runner `timed_out`, or the bridge got no answer). Never combined with success. */
+  timedOut?: boolean;
   rawOutput: string;
   failures: string[];
   diagnostics: Diagnostic[];
 }
 
-export type TestCommandExecutor = (command: string) => Promise<{ success: boolean; output: string; error?: string }>;
+export type TestCommandExecutor = (command: string) => Promise<{ success: boolean; output: string; error?: string; timedOut?: boolean }>;
 
 /**
  * Auto-detect project test command (Candidate #47)
@@ -138,19 +140,23 @@ export async function runTestSuiteWithExecutor(
   try {
     const result = await execute(command);
     let commandSucceeded = false;
+    let timedOut = result.timedOut === true;
     let rawOutput = [result.output, result.error].filter(Boolean).join("\n");
     if (result.success) {
       try {
         const execution = JSON.parse(result.output);
-        if (execution && typeof execution === "object" && typeof execution.exit_code === "number") {
-          commandSucceeded = execution.exit_code === 0 && execution.timed_out !== true;
+        // The runner's envelope is always unwrapped: a killed or timed-out command has `exit_code: null`.
+        if (execution && typeof execution === "object" && "exit_code" in execution) {
+          timedOut = execution.timed_out === true;
+          commandSucceeded = execution.exit_code === 0 && !timedOut;
           rawOutput = [execution.stdout, execution.stderr, result.error].filter(Boolean).join("\n");
         }
       } catch {
         // Unknown executor output is not proof that the command exited successfully.
       }
     }
-    return summarizeTestRun(command, commandSucceeded, rawOutput);
+    const summary = summarizeTestRun(command, commandSucceeded, rawOutput);
+    return timedOut ? { ...summary, success: false, timedOut: true } : summary;
   } catch (error: any) {
     return summarizeTestRun(command, false, error?.message || "Verification command execution failed.");
   }

@@ -67,6 +67,9 @@ import { InformationFlowBoundary } from "./core/egress.js";
 import { WorkspacePath } from "./core/workspace_path.js";
 import pc from "picocolors";
 
+/** Default deadline for the completion verifier (seconds); override with HarnessConfig.verifierTimeoutSecs / NEXUS_VERIFIER_TIMEOUT_SECS. */
+export const DEFAULT_VERIFIER_TIMEOUT_SECS = 300;
+
 export type ConfirmHandler = (toolName: string, args: Record<string, any>) => Promise<boolean>;
 
 /** Structured projection of turn activity for non-terminal surfaces such as the TUI sidecar. Observers must not throw. */
@@ -1341,9 +1344,11 @@ Always explain your reasoning before or alongside your tool calls.`;
             noApplicableVerifier = true;
             this.verificationEvidence = { status: "NO_APPLICABLE_VERIFIER", at: new Date().toISOString() };
           } else {
+            // The oracle owns the verifier's deadline (never an incidental bridge default); the runner enforces it.
+            const deadlineSecs = this.config.verifierTimeoutSecs ?? DEFAULT_VERIFIER_TIMEOUT_SECS;
             const testRes = await runTestSuiteWithExecutor(
               this.config.workspace,
-              (command) => this.bridge.executeTool("run_command", { command }),
+              (command) => this.bridge.executeTool("run_command", { command, timeout_secs: deadlineSecs }),
               verifierCommand
             );
             let candidateId: string | undefined;
@@ -1351,15 +1356,24 @@ Always explain your reasoning before or alongside your tool calls.`;
               candidateId = this.candidateTracker.computeCandidateIdentitySync(this.config.workspace).candidateId;
             } catch {}
             const evidence: VerificationEvidence = {
-              status: testRes.success ? "PASSED" : "FAILED",
+              status: testRes.success ? "PASSED" : testRes.timedOut ? "TIMED_OUT" : "FAILED",
               command: verifierCommand,
               source,
               exitSuccess: testRes.success,
+              ...(testRes.timedOut ? { deadlineSecs } : {}),
               outputSha256: createHash("sha256").update(testRes.rawOutput || "").digest("hex"),
               candidateId,
               at: new Date().toISOString(),
             };
             this.verificationEvidence = evidence;
+            if (testRes.timedOut) {
+              const partial = foldVoluminousOutput(testRes.rawOutput || "(no output received)");
+              return {
+                success: false,
+                output: "",
+                error: `Verification Oracle: the selected verifier timed out after ${deadlineSecs}s, so the changes are NOT verified.\nCommand: ${testRes.command}\nThis is a timeout, not a test failure. The verifier's process tree was terminated, so it is safe to retry.\nPartial output:\n${partial}\nUse a faster verifier, or ask the operator to raise the verifier deadline (NEXUS_VERIFIER_TIMEOUT_SECS); do not claim completion until the verifier can finish.`,
+              };
+            }
             if (!testRes.success) {
               const hints = formatDiagnosticHints(testRes.diagnostics);
               const oracleFailContent = `Verification Oracle: The selected verifier did not pass.\nCommand: ${testRes.command}\n${foldVoluminousOutput(testRes.rawOutput || "")}${hints}\nResolve the verification failure before calling task_completed.`;
@@ -2338,6 +2352,9 @@ Always explain your reasoning before or alongside your tool calls.`;
     if (this.hasPendingModifications) {
       if (evidence?.status === "FAILED") {
         return deepFreezeTurn(assertTurnResultInvariants({ ...base, execution: "COMPLETED", outcome: "NOT_ESTABLISHED", reason: "VERIFIER_FAILED", detail: evidence.command }));
+      }
+      if (evidence?.status === "TIMED_OUT") {
+        return deepFreezeTurn(assertTurnResultInvariants({ ...base, execution: "COMPLETED", outcome: "NOT_ESTABLISHED", reason: "VERIFIER_TIMED_OUT", detail: `${evidence.command} (deadline ${evidence.deadlineSecs}s)` }));
       }
       const noVerifier = evidence?.status === "NO_APPLICABLE_VERIFIER" ||
         (!evidence && !this.config.authoritativeVerifierCommand?.trim() && !discoverVerifier(this.config.workspace));

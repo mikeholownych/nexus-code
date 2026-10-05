@@ -28,6 +28,7 @@ export type TurnReason =
   | "NO_APPLICABLE_VERIFIER"
   | "VERIFICATION_NOT_RUN"
   | "VERIFIER_FAILED"
+  | "VERIFIER_TIMED_OUT"
   | "INFERENCE_FAILED"
   | "STEP_LIMIT_REACHED"
   | "OPERATOR_INTERRUPT"
@@ -62,7 +63,7 @@ export interface InferenceFailure {
   partialTextChars?: number;
 }
 
-export type VerificationStatus = "PASSED" | "FAILED" | "NO_APPLICABLE_VERIFIER";
+export type VerificationStatus = "PASSED" | "FAILED" | "TIMED_OUT" | "NO_APPLICABLE_VERIFIER";
 
 export interface VerificationEvidence {
   status: VerificationStatus;
@@ -70,6 +71,8 @@ export interface VerificationEvidence {
   command?: string;
   source?: "configured" | "discovered";
   exitSuccess?: boolean;
+  /** Deadline the verifier was given, recorded when it timed out. */
+  deadlineSecs?: number;
   outputSha256?: string;
   candidateId?: string;
   at: string;

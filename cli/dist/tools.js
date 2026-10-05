@@ -62,6 +62,22 @@ export function isSafeOutboundUrl(urlStr) {
     }
     return { safe: true };
 }
+/** Default `run_command` deadline in the Rust runner (seconds); mirrored here so the bridge can outlast it. */
+export const RUN_COMMAND_DEFAULT_TIMEOUT_SECS = 60;
+/** Extra time the bridge waits beyond the runner's own deadline (kill grace + reply), so the runner's structured result wins. */
+export const RPC_GRACE_SECS = 5;
+const RPC_DEFAULT_TIMEOUT_MS = 35_000;
+/**
+ * Deadline ownership for one RPC. For `run_command` the runner owns the command deadline (`runnerSecs`) and the bridge's
+ * outer timer is strictly longer; for other tools only the bridge timer applies.
+ */
+export function rpcDeadlines(toolName, args) {
+    if (toolName === "run_command") {
+        const runnerSecs = typeof args.timeout_secs === "number" && args.timeout_secs > 0 ? args.timeout_secs : RUN_COMMAND_DEFAULT_TIMEOUT_SECS;
+        return { runnerSecs, bridgeMs: (runnerSecs + RPC_GRACE_SECS) * 1000 };
+    }
+    return { bridgeMs: args.timeout_secs ? (args.timeout_secs + RPC_GRACE_SECS) * 1000 : RPC_DEFAULT_TIMEOUT_MS };
+}
 export class RustCoreBridge {
     static activeBridges = new Set();
     workspace;
@@ -240,20 +256,24 @@ export class RustCoreBridge {
             return null;
         }
         const id = this.nextRequestId++;
+        const deadlines = rpcDeadlines(toolName, args);
+        // The runner's deadline is stated explicitly (never left to the Rust default) so the two timers cannot disagree.
+        const params = deadlines.runnerSecs === undefined ? args : { ...args, timeout_secs: deadlines.runnerSecs };
         const payload = JSON.stringify({
             id,
             method: toolName,
-            params: args,
+            params,
         });
         return new Promise((resolve) => {
-            const timeoutMs = (args.timeout_secs ? (args.timeout_secs + 5) * 1000 : 35000);
+            const timeoutMs = deadlines.bridgeMs;
             const timeoutTimer = setTimeout(() => {
                 if (this.pendingRequests.has(id)) {
                     this.pendingRequests.delete(id);
                     resolve({
                         success: false,
                         output: "",
-                        error: `RPC request for '${toolName}' timed out after ${timeoutMs / 1000}s`,
+                        error: `RPC request for '${toolName}' timed out after ${timeoutMs / 1000}s without an answer from the command runner (result unknown)`,
+                        timedOut: true,
                     });
                 }
             }, timeoutMs);

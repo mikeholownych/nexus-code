@@ -152,6 +152,11 @@ pub fn run_command(args: RunCommandArgs, base_dir: &Path) -> Result<RunCommandRe
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
 
+    // Own process group, so a timeout can end the shell AND everything it started. Killing only the shell leaves
+    // descendants alive holding the output pipes (the call then blocks until they exit, and they outlive it).
+    #[cfg(unix)]
+    std::os::unix::process::CommandExt::process_group(&mut cmd, 0);
+
     let mut child = cmd.spawn().map_err(|e| {
         format!("Failed to execute '{}' via {shell_name}: {e}", args.command)
     })?;
@@ -182,9 +187,8 @@ pub fn run_command(args: RunCommandArgs, base_dir: &Path) -> Result<RunCommandRe
             Ok(Some(status)) => break Some(status),
             Ok(None) => {
                 if start.elapsed() > timeout {
-                    let _ = child.kill();
+                    terminate_process_tree(&mut child);
                     timed_out = true;
-                    let _ = child.wait();
                     break None;
                 }
                 std::thread::sleep(poll_interval);
@@ -211,6 +215,30 @@ pub fn run_command(args: RunCommandArgs, base_dir: &Path) -> Result<RunCommandRe
         duration_ms,
         timed_out,
     })
+}
+
+/// Ends the command's whole process group: SIGTERM first so well-behaved tools can clean up, then SIGKILL for
+/// anything still alive (the group id stays valid while any member lives, so descendants are covered even after
+/// the shell has exited). Always reaps the shell.
+fn terminate_process_tree(child: &mut std::process::Child) {
+    #[cfg(unix)]
+    {
+        let pgid = child.id() as libc::pid_t;
+        unsafe { libc::killpg(pgid, libc::SIGTERM) };
+        let grace = Instant::now();
+        while grace.elapsed() < Duration::from_millis(500) {
+            if matches!(child.try_wait(), Ok(Some(_))) {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        unsafe { libc::killpg(pgid, libc::SIGKILL) };
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = child.kill();
+    }
+    let _ = child.wait();
 }
 
 /**
@@ -400,6 +428,53 @@ mod tests {
         }
 
         let _ = std::fs::remove_dir_all(&temp_base);
+    }
+
+    #[cfg(unix)]
+    fn count_processes(pattern: &str) -> usize {
+        let out = Command::new("pgrep").args(["-f", pattern]).output().unwrap();
+        String::from_utf8_lossy(&out.stdout).lines().count()
+    }
+
+    /// D3: a timeout must end the whole process group, not only the shell; a descendant that inherited the
+    /// output pipes must neither keep the call blocked nor survive it.
+    #[cfg(unix)]
+    #[test]
+    fn test_timeout_terminates_descendants_and_returns_promptly() {
+        let cwd = std::env::current_dir().unwrap();
+        let marker = "sleep 31.417";
+        let started = Instant::now();
+        let res = run_command(RunCommandArgs {
+            command: format!("echo before-timeout; (bash -c '{marker}' &) ; {marker}"),
+            cwd: None,
+            timeout_secs: 1,
+            shell: default_shell(),
+            pty: false,
+        }, &cwd).unwrap();
+        let elapsed = started.elapsed();
+
+        assert!(res.timed_out, "timeout must be reported as such");
+        assert_eq!(res.exit_code, None);
+        assert!(res.stdout.contains("before-timeout"), "partial output must survive: {:?}", res.stdout);
+        assert!(elapsed < Duration::from_secs(6), "returned after {elapsed:?}: a descendant holding the pipe kept the call blocked");
+        std::thread::sleep(Duration::from_millis(300));
+        assert_eq!(count_processes(marker), 0, "descendants survived the timeout");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_ordinary_failure_is_not_a_timeout() {
+        let cwd = std::env::current_dir().unwrap();
+        let res = run_command(RunCommandArgs {
+            command: "echo failing; exit 3".to_string(),
+            cwd: None,
+            timeout_secs: 5,
+            shell: default_shell(),
+            pty: false,
+        }, &cwd).unwrap();
+        assert!(!res.timed_out);
+        assert_eq!(res.exit_code, Some(3));
+        assert!(res.stdout.contains("failing"));
     }
 }
 
