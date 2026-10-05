@@ -13,7 +13,7 @@ import { CheckpointManager } from "../src/checkpoint.js";
 import { SkillManager } from "../src/skills.js";
 import { extractCompilerDiagnostics, formatDiagnosticHints } from "../src/diagnostics.js";
 import { generateConventionalCommit } from "../src/git.js";
-import { AutonomousAgent, ContextBudgetError, foldVoluminousOutput } from "../src/agent.js";
+import { AutonomousAgent, foldVoluminousOutput } from "../src/agent.js";
 import { SecurityManager } from "../src/security.js";
 import { countTokens, calculateContextBudget, isContextAdmissible, renderTokenGauge } from "../src/tokens.js";
 import { selectRelevantFewShots } from "../src/fewshots.js";
@@ -1820,11 +1820,11 @@ error[E0308]: mismatched types
     ]);
     (overflowAgent as any).client = { chatCompletionStream: async () => { dispatchCount++; return { role: "assistant", content: "unexpected" }; } };
     try {
-      await assert.rejects(
-        overflowAgent.runTurn("Continue image inspection."),
-        (error: Error) => error instanceof ContextBudgetError && /Context budget exceeded/.test(error.message),
-      );
+      const blocked = await overflowAgent.runTurn("Continue image inspection.");
+      assert.strictEqual(blocked.execution, "BLOCKED");
+      assert.strictEqual(blocked.reason, "CONTEXT_CAPACITY_EXCEEDED");
       assert.strictEqual(dispatchCount, 0, "unrepresentable oversized image content must fail before provider dispatch");
+      assert.strictEqual(overflowAgent.getMessages().length, 2, "the oversized image message is retained; only the refused submission is withdrawn");
     } finally {
       overflowAgent.shutdown();
     }
@@ -2090,11 +2090,15 @@ error[E0308]: mismatched types
     let dispatched = false;
     (agent as any).client = { chatCompletionStream: async () => { dispatched = true; return { role: "assistant", content: "unexpected" }; } };
     try {
-      await assert.rejects(
-        agent.runTurn(`Keep this task requirement intact: ${"critical ".repeat(70_000)}`),
-        (error: Error) => error instanceof ContextBudgetError && /Context budget exceeded/.test(error.message),
-      );
+      // Capacity refusal is a bounded BLOCKED result (not a thrown error); the protected invariant is unchanged:
+      // an unsafe prompt never reaches the inference client, and the oversized submission is not left in history.
+      const blocked = await agent.runTurn(`Keep this task requirement intact: ${"critical ".repeat(70_000)}`);
+      assert.strictEqual(blocked.execution, "BLOCKED");
+      assert.strictEqual(blocked.reason, "CONTEXT_CAPACITY_EXCEEDED");
       assert.strictEqual(dispatched, false, "an unsafe prompt must never reach the inference client");
+      assert.strictEqual(blocked.capacity?.modelCalled, false);
+      assert.strictEqual(blocked.capacity?.pendingMessageRetained, false);
+      assert.strictEqual(agent.getMessages().length, 1, "the refused submission is not retained");
     } finally {
       agent.shutdown();
     }
@@ -2124,11 +2128,14 @@ error[E0308]: mismatched types
       })),
     ]);
     try {
-      await assert.rejects(
-        agent.runTurn("Continue without losing any required findings."),
-        (error: Error) => error instanceof ContextBudgetError && /Context budget exceeded/.test(error.message),
-      );
+      const blocked = await agent.runTurn("Continue without losing any required findings.");
+      assert.strictEqual(blocked.execution, "BLOCKED");
+      assert.strictEqual(blocked.reason, "CONTEXT_CAPACITY_EXCEEDED");
       assert.strictEqual(dispatchCount, 0, "required durable state that cannot fit must not reach the provider");
+      // Required durable state is neither dispatched nor silently discarded: all 400 findings are still in history,
+      // and only the refused submission is withdrawn.
+      assert.strictEqual(agent.getMessages().length, 402, "system + original user + 400 findings remain, refused submission removed");
+      assert.strictEqual(agent.getMessages().filter((m) => m.role === "tool").length, 400);
     } finally {
       agent.shutdown();
     }

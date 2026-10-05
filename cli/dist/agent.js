@@ -1728,12 +1728,15 @@ Always explain your reasoning before or alongside your tool calls.`;
             const effectiveUserContent = typeof taskPrompt === "string"
                 ? (runtimeContext ? `${taskPrompt}\n${runtimeContext}` : taskPrompt)
                 : taskPrompt;
+            const historyBeforeSubmission = this.messages.length;
             this.messages.push({
                 role: "user",
                 content: effectiveUserContent,
             });
+            const pendingMessageChars = typeof effectiveUserContent === "string" ? effectiveUserContent.length : JSON.stringify(effectiveUserContent).length;
             let currentStep = 1;
             let stepsUsed = 0;
+            let capacityBlock = null;
             let modelStop = "NONE";
             let finalOutputComplete = false;
             let inferenceFailure = null;
@@ -1764,7 +1767,34 @@ Always explain your reasoning before or alongside your tool calls.`;
                     this.flightRecorder.recordTurnStart(currentStep, promptText);
                 }
                 const requestId = randomUUID();
-                this.admitContext(currentStep, requestId);
+                try {
+                    this.admitContext(currentStep, requestId);
+                }
+                catch (err) {
+                    if (!(err instanceof ContextBudgetError))
+                        throw err;
+                    // Fail-closed admission refused the request before any inference call. A refusal is a bounded
+                    // condition, not a crash. If no model call has happened in this turn the submission is withdrawn
+                    // from history so that retrying cannot stack duplicate user messages; if earlier steps already ran,
+                    // the conversation and tool evidence are kept untouched.
+                    const modelCalled = stepsUsed > 0;
+                    let retained = true;
+                    if (!modelCalled && this.messages.length === historyBeforeSubmission + 1) {
+                        this.messages.length = historyBeforeSubmission;
+                        retained = false;
+                    }
+                    capacityBlock = {
+                        estimatedPromptTokens: err.estimatedTokens,
+                        completionReserveTokens: err.completionReserveTokens,
+                        toolResponseReserveTokens: err.toolResponseReserveTokens,
+                        contextLimit: err.contextLimit,
+                        step: currentStep,
+                        modelCalled,
+                        pendingMessageRetained: retained,
+                        pendingMessageChars,
+                    };
+                    break;
+                }
                 this.ui.startSpinner("Thinking and analyzing next step...");
                 turn.phase = "inference";
                 const { client: activeClient } = this.selectCognitiveClient(currentStep, this.messages);
@@ -1946,13 +1976,14 @@ Always explain your reasoning before or alongside your tool calls.`;
                 this.knowledge.autoExtract(promptText, "");
             }
             catch { }
-            const limitReached = !interruption && !inferenceFailure && modelStop === "NONE" && currentStep > this.config.maxSteps;
+            const limitReached = !interruption && !inferenceFailure && !capacityBlock && modelStop === "NONE" && currentStep > this.config.maxSteps;
             const result = this.buildTurnResult({
                 modelStop,
                 finalOutputComplete,
                 inferenceFailure,
                 interruption,
                 limitReached,
+                capacityBlock,
                 stepsUsed: stepsUsed || Math.min(currentStep, this.config.maxSteps),
             });
             this.lastTurnResult = result;
@@ -1990,6 +2021,14 @@ Always explain your reasoning before or alongside your tool calls.`;
                 ...base, execution: "FAILED", outcome: "NOT_ESTABLISHED", reason: "INFERENCE_FAILED",
                 detail: `${input.inferenceFailure.kind}/${input.inferenceFailure.origin}${input.inferenceFailure.httpStatus ? ` HTTP ${input.inferenceFailure.httpStatus}` : ""}`,
                 finalOutputComplete: false,
+            }));
+        }
+        if (input.capacityBlock) {
+            const c = input.capacityBlock;
+            return deepFreezeTurn(assertTurnResultInvariants({
+                ...base, execution: "BLOCKED", outcome: "NOT_ESTABLISHED", reason: "CONTEXT_CAPACITY_EXCEEDED",
+                detail: `${c.estimatedPromptTokens}+${c.completionReserveTokens}+${c.toolResponseReserveTokens}>${c.contextLimit}`,
+                finalOutputComplete: false, capacity: c,
             }));
         }
         if (input.limitReached) {

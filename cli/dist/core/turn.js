@@ -37,6 +37,9 @@ export function assertTurnResultInvariants(t) {
     if (t.execution === "INTERRUPTED" && t.outcome !== "NOT_ESTABLISHED") {
         throw new TurnResultInvariantError("INTERRUPTED must not claim an engineering outcome");
     }
+    if (t.execution === "BLOCKED" && t.outcome !== "NOT_ESTABLISHED") {
+        throw new TurnResultInvariantError("BLOCKED must not claim an engineering outcome");
+    }
     if (t.execution === "FAILED" && t.outcome !== "NOT_ESTABLISHED") {
         throw new TurnResultInvariantError("FAILED must not claim an engineering outcome");
     }
@@ -83,6 +86,16 @@ export function summarizeTurn(t) {
     }
     if (exec === "FAILED")
         return { heading: "TURN FAILED", line: `execution=FAILED outcome=NOT_ESTABLISHED${tail}` };
+    if (exec === "BLOCKED" && t.capacity) {
+        const c = t.capacity;
+        const fate = c.pendingMessageRetained ? "your message and the conversation so far are kept" : "your message was not added to the conversation";
+        return {
+            heading: "TURN BLOCKED - CONTEXT FULL",
+            line: `execution=BLOCKED outcome=NOT_ESTABLISHED (CONTEXT_CAPACITY_EXCEEDED: ${c.estimatedPromptTokens} prompt + ${c.completionReserveTokens} completion + ${c.toolResponseReserveTokens} tool reserve > ${c.contextLimit} limit). ` +
+                `${c.modelCalled ? "No further request was sent" : "No request was sent"}; ${fate}. ` +
+                `Raise --context-limit, run /clear, or ask for something narrower; /compact may not help if one retained result is itself too large.`,
+        };
+    }
     if (exec === "BLOCKED")
         return { heading: "TURN BLOCKED", line: `execution=BLOCKED outcome=NOT_ESTABLISHED${tail}` };
     if (exec === "LIMIT_REACHED")

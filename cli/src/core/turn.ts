@@ -32,6 +32,7 @@ export type TurnReason =
   | "STEP_LIMIT_REACHED"
   | "OPERATOR_INTERRUPT"
   | "REPOSITORY_STATE_CHANGED"
+  | "CONTEXT_CAPACITY_EXCEEDED"
   | "UNHANDLED_ERROR";
 
 /** What made the model/agent loop stop issuing actions. Not itself evidence of success. */
@@ -85,6 +86,22 @@ export interface InterruptionRecord {
   undispatchedToolCalls: number;
 }
 
+/**
+ * Evidence for a context-admission refusal (the request was rejected before any inference call, fail-closed).
+ * `modelCalled` says whether an earlier step of the same turn already reached the model; `pendingMessageRetained`
+ * says whether the operator's submission is part of the conversation history after the refusal.
+ */
+export interface CapacityRecord {
+  estimatedPromptTokens: number;
+  completionReserveTokens: number;
+  toolResponseReserveTokens: number;
+  contextLimit: number;
+  step: number;
+  modelCalled: boolean;
+  pendingMessageRetained: boolean;
+  pendingMessageChars: number;
+}
+
 export interface TurnResult {
   execution: ExecutionState;
   outcome: EngineeringOutcome;
@@ -98,6 +115,8 @@ export interface TurnResult {
   interruption: InterruptionRecord | null;
   inferenceFailure: InferenceFailure | null;
   steps: { used: number; max: number; limitReached: boolean };
+  /** Present only when execution is BLOCKED by context admission. */
+  capacity?: CapacityRecord | null;
   /** Workspace has changes that no passing verifier run covers (may predate this turn). */
   unverifiedChangesPending: boolean;
   finishedAt: string;
@@ -126,6 +145,9 @@ export function assertTurnResultInvariants(t: TurnResult): TurnResult {
   if (t.execution === "INTERRUPTED" && !t.interruption) throw new TurnResultInvariantError("INTERRUPTED requires an interruption record");
   if (t.execution === "INTERRUPTED" && t.outcome !== "NOT_ESTABLISHED") {
     throw new TurnResultInvariantError("INTERRUPTED must not claim an engineering outcome");
+  }
+  if (t.execution === "BLOCKED" && t.outcome !== "NOT_ESTABLISHED") {
+    throw new TurnResultInvariantError("BLOCKED must not claim an engineering outcome");
   }
   if (t.execution === "FAILED" && t.outcome !== "NOT_ESTABLISHED") {
     throw new TurnResultInvariantError("FAILED must not claim an engineering outcome");
@@ -172,6 +194,16 @@ export function summarizeTurn(t: TurnResult): { heading: string; line: string } 
     return { heading: "TURN INTERRUPTED", line: `execution=INTERRUPTED outcome=NOT_ESTABLISHED${extra}; ${i?.undispatchedToolCalls ?? 0} tool call(s) not dispatched` };
   }
   if (exec === "FAILED") return { heading: "TURN FAILED", line: `execution=FAILED outcome=NOT_ESTABLISHED${tail}` };
+  if (exec === "BLOCKED" && t.capacity) {
+    const c = t.capacity;
+    const fate = c.pendingMessageRetained ? "your message and the conversation so far are kept" : "your message was not added to the conversation";
+    return {
+      heading: "TURN BLOCKED - CONTEXT FULL",
+      line: `execution=BLOCKED outcome=NOT_ESTABLISHED (CONTEXT_CAPACITY_EXCEEDED: ${c.estimatedPromptTokens} prompt + ${c.completionReserveTokens} completion + ${c.toolResponseReserveTokens} tool reserve > ${c.contextLimit} limit). ` +
+        `${c.modelCalled ? "No further request was sent" : "No request was sent"}; ${fate}. ` +
+        `Raise --context-limit, run /clear, or ask for something narrower; /compact may not help if one retained result is itself too large.`,
+    };
+  }
   if (exec === "BLOCKED") return { heading: "TURN BLOCKED", line: `execution=BLOCKED outcome=NOT_ESTABLISHED${tail}` };
   if (exec === "LIMIT_REACHED") return { heading: "STEP LIMIT REACHED", line: `execution=LIMIT_REACHED outcome=NOT_ESTABLISHED (${t.steps.used}/${t.steps.max} steps)` };
   switch (t.outcome) {
