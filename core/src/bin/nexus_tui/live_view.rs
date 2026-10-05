@@ -11,9 +11,10 @@ use ratatui::{
 
 use crate::composer::{ComposerLayout, PREFIX_WIDTH};
 use crate::live_state::{
-    Approval, Entry, Focus, Link, LiveLayout, LiveState, Overlay, Tone, ToolStatus, Verdict,
+    Approval, Detail, Entry, Focus, Link, LiveLayout, LiveState, Loaded, Overlay, ReceiptPanel,
+    Tone, ToolRecord, ToolStatus, Verdict,
 };
-use crate::protocol::SlashSpec;
+use crate::protocol::{ReceiptSection, SlashSpec};
 use crate::review::{LineKind, ReviewLine};
 use crate::{ACCENT, MUTED, SURFACE};
 
@@ -23,6 +24,8 @@ const MAX_COMPOSER_ROWS: u16 = 6;
 /// Same cap as the inference failure line in `TerminalUI.turnSummary` (`cli/src/ui.ts`).
 const MAX_FAILURE_CHARS: usize = 300;
 const TAGLINE: &str = "Understand the work. Inspect the evidence. Keep the decision yours.";
+/// Background of the selected tool call in the transcript.
+const SELECTED: Color = Color::Rgb(38, 52, 66);
 
 pub fn render_live(frame: &mut Frame, state: &LiveState) -> LiveLayout {
     let area = frame.area();
@@ -66,8 +69,17 @@ pub fn render_live(frame: &mut Frame, state: &LiveState) -> LiveLayout {
         } => render_crash(frame, rows[1], *code, reason, stderr),
         _ if state.transcript.is_empty() => render_empty(frame, rows[1]),
         _ => {
-            layout.scroll_limit =
-                render_transcript(frame, rows[1], &state.transcript, state.scroll_back);
+            let selected = state.selected.filter(|_| state.focus == Focus::Transcript);
+            let (limit, back) = render_transcript(
+                frame,
+                rows[1],
+                &state.transcript,
+                state.scroll_back,
+                selected,
+                state.follow,
+            );
+            layout.scroll_limit = limit;
+            layout.followed = state.follow.then_some(back);
         }
     }
     let block = Block::default()
@@ -91,7 +103,12 @@ pub fn render_live(frame: &mut Frame, state: &LiveState) -> LiveLayout {
             (layout.overlay_rows, layout.overlay_limit) =
                 render_help(frame, rows[1], *scroll, &state.commands);
         }
-        Some(Overlay::Detail(_) | Overlay::Receipt(_)) => {}
+        Some(Overlay::Detail(detail)) => {
+            (layout.overlay_rows, layout.overlay_limit) = render_detail(frame, rows[1], detail);
+        }
+        Some(Overlay::Receipt(panel)) => {
+            (layout.overlay_rows, layout.overlay_limit) = render_receipt(frame, rows[1], panel);
+        }
         None => {}
     }
     layout
@@ -119,6 +136,15 @@ const HELP: &[(&str, &str)] = &[
     ),
     ("tab", "switch between the composer and the transcript"),
     ("pgup / pgdn", "scroll the transcript"),
+    (
+        "[ / ]",
+        "in the transcript: select the previous / next tool call",
+    ),
+    (
+        "enter",
+        "in the transcript: open the selected tool call's details",
+    ),
+    ("v", "in the transcript: open the receipt for the last turn"),
     ("esc", "close this panel; cancel a running turn"),
     (
         "ctrl+c",
@@ -337,6 +363,201 @@ fn render_help(
     (rows, limit)
 }
 
+fn panel_keys() -> Line<'static> {
+    let key = Style::default().fg(ACCENT).add_modifier(Modifier::BOLD);
+    Line::from(vec![
+        Span::styled(" esc", key),
+        Span::raw(" close  "),
+        Span::styled("↑↓", key),
+        Span::raw(" scroll "),
+    ])
+}
+
+/// Renders wrapped `lines` from wrapped row `scroll`; returns the visible rows and the largest useful scroll.
+fn scroll_body(
+    frame: &mut Frame,
+    area: Rect,
+    lines: Vec<Line<'_>>,
+    scroll: usize,
+) -> (usize, usize) {
+    let rows = usize::from(area.height);
+    let total: usize = lines
+        .iter()
+        .map(|line| wrapped_rows(line, area.width))
+        .sum();
+    let limit = total.saturating_sub(rows);
+    frame.render_widget(
+        Paragraph::new(lines)
+            .wrap(Wrap { trim: false })
+            .scroll((u16::try_from(scroll.min(limit)).unwrap_or(u16::MAX), 0)),
+        area,
+    );
+    (rows, limit)
+}
+
+fn duration(ms: u64) -> String {
+    if ms < 1000 {
+        format!("{ms} ms")
+    } else {
+        format!("{:.1} s", ms as f64 / 1000.0)
+    }
+}
+
+/// Draws a tool call's full record; returns the rows available to it and the largest useful scroll.
+fn render_detail(frame: &mut Frame, area: Rect, detail: &Detail) -> (usize, usize) {
+    let muted = Style::default().fg(MUTED);
+    let rect = modal(area, area.width, area.height);
+    let block = modal_block(" Tool call ").title_bottom(panel_keys());
+    let inner = block.inner(rect);
+    frame.render_widget(Clear, rect);
+    frame.render_widget(block, rect);
+    // The heading names the call, so it keeps its rows before the record gets any.
+    let head_rows = inner.height.min(2);
+    let head = Rect {
+        height: head_rows,
+        ..inner
+    };
+    let body = Rect {
+        y: inner.y + head_rows,
+        height: inner.height - head_rows,
+        ..inner
+    };
+    let mut title = vec![
+        Span::styled(
+            tool_verb(&detail.tool),
+            Style::default()
+                .fg(Color::White)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(format!(" {}", detail.subject), muted),
+    ];
+    let lines = match &detail.record {
+        Loaded::Waiting => vec![Line::from(Span::styled(
+            "Loading the recorded call…",
+            muted,
+        ))],
+        Loaded::Failed(message) => vec![Line::from(Span::styled(
+            message.as_str(),
+            Style::default().fg(Color::Red),
+        ))],
+        Loaded::Ready(record) => {
+            let (label, color) = match record.status.as_str() {
+                "succeeded" => ("succeeded", Color::Green),
+                "failed" => ("failed", Color::Red),
+                _ => ("running", ACCENT),
+            };
+            title.push(Span::styled(
+                format!("  {label}"),
+                Style::default().fg(color),
+            ));
+            if let Some(ms) = record.duration_ms {
+                title.push(Span::styled(format!(" · {}", duration(ms)), muted));
+            }
+            record_lines(record)
+        }
+    };
+    frame.render_widget(
+        Paragraph::new(Line::from(title)).wrap(Wrap { trim: false }),
+        head,
+    );
+    scroll_body(frame, body, lines, detail.scroll)
+}
+
+fn record_lines(record: &ToolRecord) -> Vec<Line<'_>> {
+    let heading = Style::default()
+        .fg(Color::White)
+        .add_modifier(Modifier::BOLD);
+    let white = Style::default().fg(Color::White);
+    let mut lines = vec![Line::from(Span::styled("Arguments", heading))];
+    lines.extend(
+        record
+            .args
+            .split('\n')
+            .map(|row| Line::from(Span::styled(expand_tabs(row), white))),
+    );
+    lines.push(Line::default());
+    lines.push(Line::from(Span::styled("Output", heading)));
+    if record.output.is_empty() {
+        let empty = if record.status == "running" {
+            "(still running)"
+        } else {
+            "(no output)"
+        };
+        lines.push(Line::from(Span::styled(empty, Style::default().fg(MUTED))));
+    } else {
+        lines.extend(
+            record
+                .output
+                .split('\n')
+                .map(|row| Line::from(Span::styled(expand_tabs(row), white))),
+        );
+    }
+    lines
+}
+
+/// Draws the receipt panel; returns its visible rows and the largest useful scroll.
+fn render_receipt(frame: &mut Frame, area: Rect, panel: &ReceiptPanel) -> (usize, usize) {
+    let muted = Style::default().fg(MUTED);
+    let lines = match &panel.sections {
+        Loaded::Waiting => vec![Line::from(Span::styled("Loading the receipt…", muted))],
+        Loaded::Failed(message) => vec![Line::from(Span::styled(
+            message.as_str(),
+            Style::default().fg(Color::Red),
+        ))],
+        Loaded::Ready(sections) => receipt_lines(sections),
+    };
+    let inner_width = area.width.saturating_sub(2).min(96).saturating_sub(2);
+    let content: usize = lines
+        .iter()
+        .map(|line| wrapped_rows(line, inner_width))
+        .sum();
+    let wanted = u16::try_from(content.saturating_add(2)).unwrap_or(u16::MAX);
+    let rect = modal(area, 96, wanted);
+    let block = modal_block(" Receipt ").title_bottom(panel_keys());
+    let inner = block.inner(rect);
+    frame.render_widget(Clear, rect);
+    frame.render_widget(block, rect);
+    scroll_body(frame, inner, lines, panel.scroll)
+}
+
+fn receipt_lines(sections: &[ReceiptSection]) -> Vec<Line<'_>> {
+    let heading = Style::default()
+        .fg(Color::White)
+        .add_modifier(Modifier::BOLD);
+    let muted = Style::default().fg(MUTED);
+    let mut lines = Vec::new();
+    for (index, section) in sections.iter().enumerate() {
+        if index > 0 {
+            lines.push(Line::default());
+        }
+        lines.push(Line::from(Span::styled(one_line(&section.title), heading)));
+        for (label, value) in &section.rows {
+            lines.push(Line::from(vec![
+                Span::styled(format!("  {:<15}", one_line(label)), muted),
+                Span::styled(one_line(value), Style::default().fg(verdict_color(value))),
+            ]));
+        }
+        if let Some(note) = &section.note {
+            lines.push(Line::from(Span::styled(
+                format!("  {}", one_line(note)),
+                muted,
+            )));
+        }
+    }
+    lines
+}
+
+/// Colours outcome words in the receipt; every other value stays white.
+fn verdict_color(value: &str) -> Color {
+    match value {
+        "PASSED" | "VERIFIED" | "COMPLETED" | "success" => Color::Green,
+        "FAILED" | "INVALIDATED" | "NOT_ESTABLISHED" | "INTERRUPTED" | "BLOCKED"
+        | "LIMIT_REACHED" | "failure" => Color::Red,
+        "UNVERIFIED" => Color::Yellow,
+        _ => Color::White,
+    }
+}
+
 /// Draws the composer rows that hold the cursor and places the terminal cursor while the operator is typing.
 fn render_composer(frame: &mut Frame, area: Rect, state: &LiveState, layout: &ComposerLayout) {
     let prompt = Style::default().fg(ACCENT).add_modifier(Modifier::BOLD);
@@ -434,28 +655,48 @@ fn render_empty(frame: &mut Frame, area: Rect) {
     frame.render_widget(paragraph, Rect::new(area.x, top, area.width, height));
 }
 
-/// Renders the transcript window `scroll_back` rows above the newest line. Only the entries needed to fill the
-/// window are laid out, so the cost follows the window, not the transcript. Returns the largest useful
-/// `scroll_back` (`usize::MAX` when the walk stopped before the first entry).
+/// Renders the transcript window `scroll_back` rows above the newest line, with `selected` highlighted. With
+/// `follow`, the window first moves the least distance that shows the whole selected entry (its top when it is
+/// taller than the window). Only the entries needed to fill the window are laid out, so the cost follows the
+/// window, not the transcript. Returns the largest useful `scroll_back` (`usize::MAX` when the walk stopped
+/// before the first entry) and the `scroll_back` drawn.
 fn render_transcript(
     frame: &mut Frame,
     area: Rect,
     transcript: &[Entry],
     scroll_back: usize,
-) -> usize {
+    selected: Option<usize>,
+    follow: bool,
+) -> (usize, usize) {
     let height = usize::from(area.height);
-    let want = height.saturating_add(scroll_back);
+    let mut back = scroll_back;
+    let mut target = selected.filter(|_| follow);
     let mut tail = Vec::new();
-    let mut total = 0;
+    let mut total: usize = 0;
     let mut reached_top = true;
     'entries: for (index, entry) in transcript.iter().enumerate().rev() {
+        let below = total;
+        let highlight = selected == Some(index);
         for line in entry_lines(entry, index == 0).into_iter().rev() {
+            let line = if highlight {
+                line.patch_style(Style::default().bg(SELECTED))
+            } else {
+                line
+            };
             let rows = wrapped_rows(&line, area.width);
-            total += rows;
+            total = total.saturating_add(rows);
             tail.push((line, rows));
-            if total >= want {
+            if target.is_none() && total >= height.saturating_add(back) {
                 reached_top = false;
                 break 'entries;
+            }
+        }
+        if target == Some(index) {
+            back = back.min(below).max(total.saturating_sub(height));
+            target = None;
+            if total >= height.saturating_add(back) {
+                reached_top = false;
+                break;
             }
         }
     }
@@ -464,8 +705,8 @@ fn render_transcript(
     } else {
         usize::MAX
     };
-    let back = scroll_back.min(limit);
-    let first_row = total.saturating_sub(height + back);
+    let back = back.min(limit);
+    let first_row = total.saturating_sub(height.saturating_add(back));
     tail.reverse();
     let mut skipped = 0;
     let mut covered = 0;
@@ -491,7 +732,7 @@ fn render_transcript(
     if back > 0 {
         render_scroll_badge(frame, area, back);
     }
-    limit
+    (limit, back)
 }
 
 fn render_scroll_badge(frame: &mut Frame, area: Rect, rows_below: usize) {
@@ -779,9 +1020,12 @@ fn composer_hint(state: &LiveState) -> &'static str {
         _ if matches!(state.overlay, Some(Overlay::Approval(_))) => {
             " approval needed · y approve · n deny "
         }
-        _ if state.overlay.is_some() => " esc close help ",
+        _ if matches!(state.overlay, Some(Overlay::Help { .. })) => " esc close help ",
+        _ if state.overlay.is_some() => " esc close · ↑↓ scroll ",
         _ if state.completion().is_some() => " tab complete · enter run · esc close ",
-        _ if state.focus == Focus::Transcript => " transcript · ↑↓ scroll · tab back ",
+        _ if state.focus == Focus::Transcript => {
+            " transcript · ↑↓ scroll · [ ] tools · enter details · v receipt · tab back "
+        }
         (_, true) if state.cancel_requested() => " cancelling… ctrl-c again to quit ",
         (_, true) => " waiting for the agent ",
         (_, false) => " enter send · shift+enter newline · ? help ",
@@ -1426,7 +1670,7 @@ mod tests {
                 "✓ approved Edit a.ts · later actions run without asking",
                 "Notes:",
                 "Watch the cache.",
-                "transcript · ↑↓ scroll · tab back",
+                "transcript · ↑↓ scroll · [ ] tools · enter details · v receipt · tab back",
             ],
         );
     }
@@ -1656,5 +1900,130 @@ mod tests {
                 "Uncommitted changes as a diff",
             ],
         );
+    }
+
+    fn with_tool(evidence: &str) -> LiveState {
+        let mut state = ready();
+        feed(
+            &mut state,
+            &[
+                &format!(
+                    r#"{{"v":1,"type":"tool.start","turn_id":"t1","call_id":"a","tool":"read_file","subject":"a.ts","evidence":"{evidence}"}}"#
+                ),
+                r#"{"v":1,"type":"tool.end","turn_id":"t1","call_id":"a","tool":"read_file","success":true,"summary":"ok","lines":1}"#,
+            ],
+        );
+        state
+    }
+
+    fn press_key(state: &mut LiveState, code: KeyCode) {
+        state.on_key(KeyEvent::new(code, KeyModifiers::NONE));
+    }
+
+    /// Background and foreground of the cell where `text` starts.
+    fn cell_at(state: &LiveState, width: u16, height: u16, text: &str) -> (Color, Color) {
+        let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+        terminal
+            .draw(|frame| {
+                render_live(frame, state);
+            })
+            .unwrap();
+        let lines = rows(&terminal.backend().to_string());
+        let row = lines.iter().position(|line| line.contains(text)).unwrap();
+        let column = lines[row].find(text).unwrap();
+        let x = u16::try_from(lines[row][..column].chars().count()).unwrap();
+        let cell = &terminal.backend().buffer()[(x, u16::try_from(row).unwrap())];
+        (cell.bg, cell.fg)
+    }
+
+    #[test]
+    fn the_selected_tool_is_highlighted_while_the_transcript_has_focus() {
+        let mut state = with_tool("e1");
+        press_key(&mut state, KeyCode::Tab);
+        press_key(&mut state, KeyCode::Char('['));
+        assert_eq!(cell_at(&state, 80, 20, "a.ts").0, SELECTED);
+        press_key(&mut state, KeyCode::Tab);
+        assert_ne!(cell_at(&state, 80, 20, "a.ts").0, SELECTED);
+    }
+
+    #[test]
+    fn selecting_a_tool_above_the_window_scrolls_it_into_view_once() {
+        let mut state = with_tool("e1");
+        let long: Vec<String> = (1..=60).map(|n| format!("line {n}")).collect();
+        state.transcript.push(Entry::Assistant {
+            turn_id: "t1".into(),
+            text: long.join("\n"),
+        });
+        press_key(&mut state, KeyCode::Tab);
+        press_key(&mut state, KeyCode::Char('['));
+        let (screen, layout) = draw_measured(&state, 80, 20);
+        assert_shows(&screen, &["a.ts"]);
+        let back = layout.followed.expect("the frame followed the selection");
+        assert!(back > 0);
+        state.note_layout(layout);
+        assert_eq!((state.scroll_back, state.follow), (back, false));
+        let (_, again) = draw_measured(&state, 80, 20);
+        assert_eq!(again.followed, None);
+    }
+
+    #[test]
+    fn the_detail_panel_shows_status_arguments_and_output() {
+        let mut state = with_tool("e1");
+        press_key(&mut state, KeyCode::Tab);
+        press_key(&mut state, KeyCode::Char('['));
+        press_key(&mut state, KeyCode::Enter);
+        assert_shows(
+            &draw(&state, 80, 24),
+            &[
+                "Tool call",
+                "Loading the recorded call…",
+                "esc close · ↑↓ scroll",
+            ],
+        );
+        feed(
+            &mut state,
+            &[
+                r#"{"v":1,"type":"tool.detail","id":"d1","evidence":"e1","tool":"read_file","subject":"a.ts","status":"succeeded","args":"{\n  \"path\": \"a.ts\"\n}","output":"const a = 1;\nconst b = 2;","duration_ms":1500}"#,
+            ],
+        );
+        assert_shows(
+            &draw(&state, 80, 24),
+            &[
+                "Read a.ts",
+                "succeeded · 1.5 s",
+                "Arguments",
+                "\"path\": \"a.ts\"",
+                "Output",
+                "const b = 2;",
+            ],
+        );
+    }
+
+    #[test]
+    fn the_receipt_panel_lists_sections_rows_and_notes() {
+        let mut state = ready();
+        press_key(&mut state, KeyCode::Tab);
+        assert_shows(
+            &draw(&state, 100, 24),
+            &["[ ] tools · enter details · v receipt · tab back"],
+        );
+        press_key(&mut state, KeyCode::Char('v'));
+        feed(
+            &mut state,
+            &[
+                r#"{"v":1,"type":"receipt","id":"r1","sections":[{"title":"Last turn","rows":[["execution","COMPLETED"],["outcome","VERIFIED"]]},{"title":"Validation receipt","rows":[],"note":"No validation receipt is active."}]}"#,
+            ],
+        );
+        assert_shows(
+            &draw(&state, 100, 24),
+            &[
+                "Receipt",
+                "Last turn",
+                "outcome",
+                "Validation receipt",
+                "No validation receipt is active.",
+            ],
+        );
+        assert_eq!(cell_at(&state, 100, 24, "VERIFIED").1, Color::Green);
     }
 }
