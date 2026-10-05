@@ -112,6 +112,11 @@ export function receiptSections(last: LastTurn | null, receipt: ValidationReceip
   return [turnSection(last), verifierSection(last?.turn ?? null), validationSection(receipt)];
 }
 
+/** Receipts can be read back from state files written by older or damaged runs, so any field may be missing. */
+function row(rows: ReceiptRow[], label: string, value: unknown): void {
+  if (value !== null && value !== undefined) rows.push([label, clean(String(value))]);
+}
+
 function turnSection(last: LastTurn | null): ReceiptSection {
   if (!last) return { title: "Last turn", rows: [], note: "No turn has finished in this session yet." };
   const t = last.turn;
@@ -158,17 +163,16 @@ function validationSection(receipt: ValidationReceipt | null): ReceiptSection {
       note: "No validation receipt is active. Authoritative verifier runs (--authoritative-verifier) record one.",
     };
   }
-  const rows: ReceiptRow[] = [
-    ["status", receipt.status],
-    ["receipt", receipt.receiptId],
-    ["command", clean(receipt.verifierCommand)],
-    ["exit code", String(receipt.exitCode)],
-    ["stdout sha256", receipt.stdoutHash],
-    ["candidate", receipt.candidateId],
-    ["recorded", receipt.timestamp],
-  ];
+  const rows: ReceiptRow[] = [];
+  row(rows, "status", receipt.status);
+  row(rows, "receipt", receipt.receiptId);
+  row(rows, "command", receipt.verifierCommand);
+  row(rows, "exit code", receipt.exitCode);
+  row(rows, "stdout sha256", receipt.stdoutHash);
+  row(rows, "candidate", receipt.candidateId);
+  row(rows, "recorded", receipt.timestamp);
   if (receipt.invalidationReason) {
-    rows.push(["invalidated", `${clean(receipt.invalidationReason)}${receipt.invalidatedAt ? ` (${receipt.invalidatedAt})` : ""}`]);
+    row(rows, "invalidated", `${receipt.invalidationReason}${receipt.invalidatedAt ? ` (${receipt.invalidatedAt})` : ""}`);
   }
   return { title: "Validation receipt", rows };
 }

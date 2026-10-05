@@ -132,4 +132,10 @@ describe("receipt projection", () => {
     assert.match(text, /^Last turn\n  result        TURN VERIFIED$/m);
     assert.match(text, /^Validation receipt\n  status        PASSED$/m);
   });
+
+  test("a receipt read back from disk with missing fields drops those rows instead of sending null", () => {
+    const partial = { status: "PASSED", exitCode: 0, timestamp: "\x1b[31m2026-10-04\x1b[0m" } as unknown as ValidationReceipt;
+    const rows = receiptSections(null, partial)[2].rows;
+    assert.deepEqual(rows, [["status", "PASSED"], ["exit code", "0"], ["recorded", "2026-10-04"]]);
+  });
 });

@@ -119,10 +119,14 @@ export class SidecarServer {
         this.slash(command.id, command.command, command.args);
         return;
       case "tool.detail":
-        this.toolDetail(command.id, command.evidence);
-        return;
       case "receipt":
-        this.emit({ type: "receipt", id: command.id, sections: this.receipt() });
+        try {
+          if (command.type === "tool.detail") this.toolDetail(command.id, command.evidence);
+          else this.emit({ type: "receipt", id: command.id, sections: this.receipt() });
+        } catch (err) {
+          const message = capText(redactSecrets(stripEscapes((err as Error).message ?? String(err))));
+          this.emit({ type: "error", id: command.id, code: "INTERNAL", message });
+        }
         return;
       case "shutdown":
         await this.shutdown();
@@ -299,6 +303,7 @@ export class SidecarServer {
         await this.turn(id, outcome.prompt, outcome.label, outcome.checkpoint, signal);
         return;
       }
+      if (outcome.command === "clear" && outcome.success) this.lastTurn = null;
       this.emit({
         type: "slash.result",
         id,
@@ -394,6 +399,7 @@ export class SidecarServer {
     if (session.workspace && fs.existsSync(session.workspace)) this.setWorkspace(session.workspace);
     this.sessionId = session.id;
     this.app.getAgent().setMessages(session.messages);
+    this.lastTurn = null;
     return { ok: true, message: `Resumed session ${session.id} (${session.messages.length} messages).` };
   }
 

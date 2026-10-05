@@ -600,6 +600,27 @@ describe("SidecarServer: evidence and receipts", () => {
     });
   });
 
+  test("a receipt that cannot be built fails in its panel, and /clear forgets the last turn", async () => {
+    await withSidecar(readOnlyTurn, "auto", async ({ server, events, send }) => {
+      await send({ type: "prompt.submit", id: "t1", text: "what is here?" });
+      await server.idle();
+      const app = (server as any).app;
+      app.getActiveValidationReceipt = () => {
+        throw new Error("state unreadable");
+      };
+      await send({ type: "receipt", id: "r1" });
+      const error = events.find((e) => e.type === "error" && e.id === "r1");
+      assert.equal(error?.code, "INTERNAL");
+      assert.match(error.message, /state unreadable/);
+      delete app.getActiveValidationReceipt;
+      await send({ type: "slash", id: "s1", command: "clear" });
+      await server.idle();
+      await send({ type: "receipt", id: "r2" });
+      const sections = events.find((e) => e.type === "receipt" && e.id === "r2").sections;
+      assert.equal(sections[0].note, "No turn has finished in this session yet.");
+    });
+  });
+
   test("a receipt is answered while a turn is running", async () => {
     await withSidecar(() => ({ kind: "text", content: "slow", delayMs: 1500 }), "auto", async ({ events, send }) => {
       await send({ type: "prompt.submit", id: "t1", text: "go" });
