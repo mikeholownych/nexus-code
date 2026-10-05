@@ -336,9 +336,11 @@ impl LiveState {
                 id: Some(id),
                 code,
                 message,
-            } if self.waiting_panel() == Some(id.as_str()) => {
+            } if self.issued_panel(&id) => {
+                let waiting = self.waiting_panel() == Some(id.as_str());
                 let message = format!("{code}: {message}");
                 match &mut self.overlay {
+                    _ if !waiting => {}
                     Some(Overlay::Detail(detail)) => detail.record = Loaded::Failed(message),
                     Some(Overlay::Receipt(panel)) => panel.sections = Loaded::Failed(message),
                     _ => {}
@@ -429,6 +431,15 @@ impl LiveState {
 
     pub fn restarted(&mut self) {
         self.close_approval();
+        if matches!(self.overlay, Some(Overlay::Detail(_) | Overlay::Receipt(_))) {
+            self.overlay = None;
+        }
+        // Evidence ids are numbered per sidecar process; the new one would answer for other calls.
+        for entry in &mut self.transcript {
+            if let Entry::Tool { evidence, .. } = entry {
+                evidence.clear();
+            }
+        }
         self.link = Link::Connecting;
         self.session.busy = false;
         self.cancel_requested = false;
@@ -536,11 +547,16 @@ impl LiveState {
     }
 
     fn on_transcript_key(&mut self, key: KeyEvent) -> Option<Action> {
+        let plain = !key
+            .modifiers
+            .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT);
         match key.code {
-            KeyCode::Char('[') => self.select_tool(true),
-            KeyCode::Char(']') => self.select_tool(false),
-            KeyCode::Char('v') => return self.open_receipt(),
-            KeyCode::Enter if self.selected.is_some() => return self.open_detail(),
+            KeyCode::Char('[') if plain => self.select_tool(true),
+            KeyCode::Char(']') if plain => self.select_tool(false),
+            KeyCode::Char('v') if plain => return self.open_receipt(),
+            KeyCode::Enter if self.selected.is_some() && key.modifiers.is_empty() => {
+                return self.open_detail();
+            }
             KeyCode::Up | KeyCode::Char('k') => {
                 self.scroll_back = self.scroll_back.saturating_add(1)
             }
@@ -549,13 +565,13 @@ impl LiveState {
             }
             KeyCode::Home | KeyCode::Char('g') => self.scroll_back = usize::MAX,
             KeyCode::End | KeyCode::Char('G') => self.scroll_back = 0,
-            KeyCode::Enter => self.focus = Focus::Composer,
-            KeyCode::Char(_)
-                if !key
-                    .modifiers
-                    .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) =>
-            {
+            KeyCode::Enter => {
                 self.focus = Focus::Composer;
+                self.selected = None;
+            }
+            KeyCode::Char(_) if plain => {
+                self.focus = Focus::Composer;
+                self.selected = None;
                 return self.on_composer_key(key);
             }
             _ => {}
@@ -813,6 +829,9 @@ impl LiveState {
     }
 
     fn open_detail(&mut self) -> Option<Action> {
+        if self.link != Link::Ready {
+            return None;
+        }
         let found = self
             .selected
             .and_then(|index| match self.transcript.get(index) {
@@ -861,6 +880,13 @@ impl LiveState {
             scroll: 0,
         }));
         Some(Action::Send(Command::Receipt { id: request }))
+    }
+
+    /// Whether `id` names a detail or receipt request this client sent, open or not.
+    fn issued_panel(&self, id: &str) -> bool {
+        id.strip_prefix(['d', 'r'])
+            .and_then(|n| n.parse::<u64>().ok())
+            .is_some_and(|n| (1..=self.panel_seq).contains(&n))
     }
 
     /// Request id of the open detail or receipt panel while it waits for its answer.
@@ -2139,6 +2165,82 @@ mod tests {
         assert!(state.on_key(key(KeyCode::Char('v'))).is_some());
         state.apply(ev(r#"{"v":1,"type":"approval.request","id":"approval-1","turn_id":"t1","tool":"write_file","subject":"x.txt","preview":"{}"}"#));
         assert!(matches!(state.overlay, Some(Overlay::Approval(_))));
+    }
+
+    #[test]
+    fn a_restarted_sidecar_is_never_asked_for_the_old_sidecars_records() {
+        let mut state = ready();
+        tool_call(&mut state, "a", "e3");
+        state.on_key(key(KeyCode::Tab));
+        state.on_key(key(KeyCode::Char('[')));
+        assert!(state.on_key(key(KeyCode::Enter)).is_some());
+        state.fail("exited".into(), Some(1), Vec::new());
+        state.restarted();
+        assert_eq!(state.overlay, None, "the old sidecar will never answer");
+        assert_eq!(state.focus, Focus::Transcript);
+        state.on_key(key(KeyCode::Char('[')));
+        let before = state.transcript.len();
+        assert_eq!(
+            state.on_key(key(KeyCode::Enter)),
+            None,
+            "nothing is sent before the new sidecar says hello"
+        );
+        assert_eq!(
+            (state.overlay.is_none(), state.transcript.len()),
+            (true, before)
+        );
+        state.apply(ev(r#"{"v":1,"type":"hello","protocol":1,"pid":2}"#));
+        assert_eq!(state.on_key(key(KeyCode::Enter)), None);
+        assert_eq!(
+            state.transcript.last(),
+            Some(&Entry::Info(
+                "This tool call has no recorded details.".into()
+            ))
+        );
+        tool_call(&mut state, "b", "e1");
+        state.on_key(key(KeyCode::Char(']')));
+        assert!(matches!(
+            state.on_key(key(KeyCode::Enter)),
+            Some(Action::Send(Command::ToolDetail { evidence, .. })) if evidence == "e1"
+        ));
+    }
+
+    #[test]
+    fn a_late_error_for_a_closed_panel_stays_out_of_the_transcript() {
+        let mut state = ready();
+        tool_call(&mut state, "a", "e1");
+        state.on_key(key(KeyCode::Tab));
+        state.on_key(key(KeyCode::Char('[')));
+        assert!(state.on_key(key(KeyCode::Enter)).is_some());
+        state.on_key(key(KeyCode::Esc));
+        let before = state.transcript.len();
+        state.apply(ev(r#"{"v":1,"type":"error","id":"d1","code":"NOT_FOUND","message":"No record of tool call e1."}"#));
+        assert_eq!(state.transcript.len(), before);
+        state.apply(ev(
+            r#"{"v":1,"type":"error","id":"d9","code":"NOT_FOUND","message":"never asked"}"#,
+        ));
+        assert_eq!(state.transcript.len(), before + 1);
+    }
+
+    #[test]
+    fn panel_keys_ignore_ctrl_and_alt_and_typing_drops_the_selection() {
+        let mut state = ready();
+        tool_call(&mut state, "a", "e1");
+        state.on_key(key(KeyCode::Tab));
+        assert_eq!(state.on_key(ctrl('v')), None);
+        assert_eq!(
+            state.on_key(with(KeyCode::Char('['), KeyModifiers::ALT)),
+            None
+        );
+        assert_eq!((state.overlay.is_none(), state.selected), (true, None));
+        state.on_key(key(KeyCode::Char('[')));
+        assert_eq!(state.on_key(with(KeyCode::Enter, KeyModifiers::ALT)), None);
+        assert_eq!(state.overlay, None);
+        assert_eq!(state.focus, Focus::Composer);
+        state.on_key(key(KeyCode::Tab));
+        state.on_key(key(KeyCode::Char('[')));
+        type_text(&mut state, "x");
+        assert_eq!((state.focus, state.selected), (Focus::Composer, None));
     }
 
     #[test]
