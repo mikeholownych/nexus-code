@@ -53,6 +53,40 @@ export type InferenceFailureKind =
 
 export type InferenceFailureOrigin = "provider" | "transport" | "client" | "operator";
 
+/**
+ * What a failed inference request says about the provider. The first four are temporary: the agent loop may wait
+ * for them. The rest need a different request, configuration, or the operator.
+ */
+export type ProviderCondition =
+  | "TEMPORARILY_UNAVAILABLE"
+  | "RATE_LIMITED"
+  | "OVERLOADED"
+  | "DRAINING"
+  | "AUTH_FAILURE"
+  | "CAPACITY_REJECTED"
+  | "REQUEST_REJECTED"
+  | "PERMANENT_FAILURE"
+  | "AVAILABLE";
+
+/**
+ * What is known about whether the provider executed the failed request.
+ * NOT_EXECUTED: proven not run (never sent, refused, or answered with a rejection status).
+ * UNKNOWN: it may have been admitted and generated; nothing complete reached Nexus.
+ * COMPLETED: the provider finished it (terminal evidence was received).
+ */
+export type ExecutionStatus = "NOT_EXECUTED" | "UNKNOWN" | "COMPLETED";
+
+/** Retry metadata a provider advertised with a failure. All optional: plain OpenAI-compatible servers send none. */
+export interface ProviderHints {
+  retryAfterMs?: number;
+  rateLimitResetMs?: number;
+  remainingRequests?: number;
+  remainingTokens?: number;
+  /** Provider error code, e.g. `context_length_exceeded`, `gateway_restarting`, `pre_generation`. */
+  errorCode?: string;
+  errorType?: string;
+}
+
 /** One level of a transport error's cause chain (socket, TLS, or parser error beneath `fetch failed`). */
 export interface TransportCause {
   name?: string;
@@ -77,6 +111,46 @@ export interface InferenceFailure {
   partialTextChars?: number;
   /** Lower-level transport errors, outermost first. */
   transportCause?: TransportCause[];
+  condition?: ProviderCondition;
+  execution?: ExecutionStatus;
+  hints?: ProviderHints;
+}
+
+/** One submission of an inference request that failed while the agent loop was recovering the provider. */
+export interface RecoverySubmissionRecord {
+  requestId: string;
+  attempt: number;
+  previousRequestId?: string;
+  failedAt: string;
+  kind: InferenceFailureKind;
+  condition: ProviderCondition;
+  execution: ExecutionStatus;
+  httpStatus?: number;
+  retryAfterMs?: number;
+  message: string;
+}
+
+/**
+ * Provider recovery for one inference step. WAITING/PROBING are live states (also checkpointed durably);
+ * the rest are final. Created only when a submission fails.
+ */
+export interface ProviderRecoveryRecord {
+  state: "WAITING" | "PROBING" | "RESUMED" | "EXHAUSTED" | "NOT_RECOVERABLE" | "CANCELLED";
+  step: number;
+  startedAt: string;
+  updatedAt: string;
+  nextAttemptAt?: string;
+  resumedAt?: string;
+  /** X-Request-ID of the submission that completed; it replaces the last entry of `submissions`. */
+  resumedRequestId?: string;
+  /** Latest provider condition observed by a submission or probe. */
+  condition: ProviderCondition;
+  reason?: string;
+  submissions: RecoverySubmissionRecord[];
+  probes: number;
+  waitedMs: number;
+  unknownReplays: number;
+  policy: { deadlineMs: number; maxDelayMs: number; maxUnknownReplays: number };
 }
 
 export type VerificationStatus = "PASSED" | "FAILED" | "TIMED_OUT" | "NO_APPLICABLE_VERIFIER";
@@ -97,7 +171,7 @@ export interface VerificationEvidence {
 export interface InterruptionRecord {
   requestedAt: string;
   /** Where the turn was when cancellation was observed. */
-  phase: "between_steps" | "inference" | "tool_dispatch" | "tool_settling" | "confirmation";
+  phase: "between_steps" | "inference" | "provider_wait" | "tool_dispatch" | "tool_settling" | "confirmation";
   /** A tool that was already executing when cancellation was requested. It cannot be force-stopped; it is awaited. */
   outstandingTool?: string;
   outstandingToolSettled?: boolean;
@@ -136,6 +210,8 @@ export interface TurnResult {
   steps: { used: number; max: number; limitReached: boolean };
   /** Present only when execution is BLOCKED by context admission. */
   capacity?: CapacityRecord | null;
+  /** Steps of this turn whose inference had to recover the provider (resumed or not). */
+  providerRecovery?: ProviderRecoveryRecord[];
   /** Workspace has changes that no passing verifier run covers (may predate this turn). */
   unverifiedChangesPending: boolean;
   finishedAt: string;

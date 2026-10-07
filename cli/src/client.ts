@@ -5,7 +5,23 @@ import { randomUUID } from "node:crypto";
 import { ChatMessage, ToolDefinition, HarnessConfig, ToolCall } from "./types.js";
 import { InformationFlowBoundary, DestinationTrustBoundary } from "./core/egress.js";
 import pc from "picocolors";
-import type { InferenceFailure, InferenceFailureKind, InferenceFailureOrigin, TransportCause } from "./core/turn.js";
+import type {
+  ExecutionStatus,
+  InferenceFailure,
+  InferenceFailureKind,
+  InferenceFailureOrigin,
+  ProviderCondition,
+  ProviderHints,
+  TransportCause,
+} from "./core/turn.js";
+import {
+  classifyHttpFailure,
+  classifyTransportFailure,
+  providerHints,
+  TEMPORARY_CONDITIONS,
+  type ProbeResult,
+  type ProviderClassification,
+} from "./core/provider_recovery.js";
 import { redactSecrets } from "./ui.js";
 
 export function readLatestAuthToken(): string | null {
@@ -56,9 +72,23 @@ export interface ChatCompletionResponse {
 
 export type StreamTokenCallback = (token: string) => void;
 
+const DEFAULT_CLASSIFICATION: Record<InferenceFailureKind, ProviderClassification> = {
+  http_error: { condition: "PERMANENT_FAILURE", execution: "UNKNOWN" },
+  network_error: { condition: "TEMPORARILY_UNAVAILABLE", execution: "UNKNOWN" },
+  timeout: { condition: "TEMPORARILY_UNAVAILABLE", execution: "UNKNOWN" },
+  stream_interrupted: { condition: "TEMPORARILY_UNAVAILABLE", execution: "UNKNOWN" },
+  stream_incomplete: { condition: "TEMPORARILY_UNAVAILABLE", execution: "UNKNOWN" },
+  provider_error_frame: { condition: "TEMPORARILY_UNAVAILABLE", execution: "UNKNOWN" },
+  malformed_event: { condition: "PERMANENT_FAILURE", execution: "UNKNOWN" },
+  output_truncated: { condition: "AVAILABLE", execution: "COMPLETED" },
+  protocol_error: { condition: "PERMANENT_FAILURE", execution: "COMPLETED" },
+  aborted: { condition: "AVAILABLE", execution: "UNKNOWN" },
+};
+
 /**
- * Typed inference failure. `failoverEligible` is false for operator aborts and client-originated faults
- * (malformed/truncated output, HTTP 4xx): another endpoint will not fix those.
+ * Typed inference failure. `condition` is what the failure says about the provider; `execution` is what is known
+ * about whether the provider ran the request. Another endpoint is tried immediately only when the request is
+ * proven not executed and the condition is temporary; anything else is the agent loop's recovery decision.
  */
 export class InferenceError extends Error {
   readonly kind: InferenceFailureKind;
@@ -68,12 +98,24 @@ export class InferenceError extends Error {
   readonly partialText: string;
   readonly failoverEligible: boolean;
   readonly transportCause: TransportCause[];
+  readonly condition: ProviderCondition;
+  readonly execution: ExecutionStatus;
+  readonly hints: ProviderHints;
 
   constructor(
     kind: InferenceFailureKind,
     origin: InferenceFailureOrigin,
     message: string,
-    opts: { httpStatus?: number; requestId?: string; partialText?: string; failoverEligible?: boolean; transportCause?: TransportCause[] } = {},
+    opts: {
+      httpStatus?: number;
+      requestId?: string;
+      partialText?: string;
+      failoverEligible?: boolean;
+      transportCause?: TransportCause[];
+      condition?: ProviderCondition;
+      execution?: ExecutionStatus;
+      hints?: ProviderHints;
+    } = {},
   ) {
     super(message);
     this.name = "InferenceError";
@@ -82,8 +124,11 @@ export class InferenceError extends Error {
     this.httpStatus = opts.httpStatus;
     this.requestId = opts.requestId;
     this.partialText = opts.partialText ?? "";
-    this.failoverEligible = opts.failoverEligible ?? (kind === "http_error" || kind === "network_error" || kind === "timeout" || kind === "stream_interrupted");
     this.transportCause = opts.transportCause ?? [];
+    this.condition = opts.condition ?? DEFAULT_CLASSIFICATION[kind].condition;
+    this.execution = opts.execution ?? DEFAULT_CLASSIFICATION[kind].execution;
+    this.hints = opts.hints ?? {};
+    this.failoverEligible = opts.failoverEligible ?? (this.execution === "NOT_EXECUTED" && TEMPORARY_CONDITIONS.has(this.condition));
   }
 
   toFailure(): InferenceFailure {
@@ -95,9 +140,13 @@ export class InferenceError extends Error {
       requestId: this.requestId,
       partialTextChars: this.partialText.length || undefined,
       ...(this.transportCause.length ? { transportCause: this.transportCause } : {}),
+      condition: this.condition,
+      execution: this.execution,
+      ...(Object.keys(this.hints).length ? { hints: this.hints } : {}),
     };
   }
 }
+
 
 function abortedError(requestId?: string, partialText?: string): InferenceError {
   return new InferenceError("aborted", "operator", "Inference request aborted by operator", { requestId, partialText, failoverEligible: false });
@@ -138,13 +187,15 @@ function classifyTransportError(err: any, operatorSignal: AbortSignal | undefine
   if (err instanceof InferenceError) return err;
   if (operatorSignal?.aborted) return abortedError(requestId, partialText);
   const transportCause = transportCauseChain(err);
-  if (err?.name === "TimeoutError") {
-    return new InferenceError("timeout", "transport", `Inference request timed out: ${err.message}${formatCause(transportCause)}`, { requestId, partialText, transportCause });
+  const timedOut = err?.name === "TimeoutError";
+  const classification = classifyTransportFailure(transportCause, phase, timedOut);
+  if (timedOut) {
+    return new InferenceError("timeout", "transport", `Inference request timed out: ${err.message}${formatCause(transportCause)}`, { requestId, partialText, transportCause, ...classification });
   }
   const msg = `${err?.message || String(err)}${formatCause(transportCause)}`;
   return phase === "stream"
-    ? new InferenceError("stream_interrupted", "transport", `Inference stream interrupted before completion: ${msg}`, { requestId, partialText, transportCause })
-    : new InferenceError("network_error", "transport", `Inference request failed: ${msg}`, { requestId, transportCause });
+    ? new InferenceError("stream_interrupted", "transport", `Inference stream interrupted before completion: ${msg}`, { requestId, partialText, transportCause, ...classification })
+    : new InferenceError("network_error", "transport", `Inference request failed: ${msg}`, { requestId, transportCause, ...classification });
 }
 
 export class LocalLlmClient {
@@ -380,6 +431,42 @@ export class LocalLlmClient {
     });
   }
 
+  /**
+   * Side-effect-free reachability check (GET /models) used while waiting out a provider failure. Any answer other
+   * than 408/429/5xx shows the server is serving again; the first endpoint that answers becomes active.
+   * `preferAlternate` starts with the next endpoint, so a request of unknown status is resubmitted elsewhere
+   * when another endpoint is available.
+   */
+  async probeAvailability(signal?: AbortSignal, opts: { timeoutMs?: number; preferAlternate?: boolean } = {}): Promise<ProbeResult> {
+    const total = this.endpoints.length;
+    const start = opts.preferAlternate && total > 1 ? (this.activeEndpointIndex + 1) % total : this.activeEndpointIndex;
+    let last: ProbeResult = { available: false, condition: "TEMPORARILY_UNAVAILABLE" };
+    for (let i = 0; i < total; i++) {
+      const idx = (start + i) % total;
+      const timeout = AbortSignal.timeout(opts.timeoutMs ?? 5_000);
+      try {
+        const res = await fetch(`${this.endpoints[idx]}/models`, {
+          headers: { Authorization: `Bearer ${this.apiKey}` },
+          signal: signal ? AbortSignal.any([timeout, signal]) : timeout,
+        });
+        const body = await res.text().catch(() => "");
+        if (res.status < 500 && res.status !== 429 && res.status !== 408) {
+          this.activeEndpointIndex = idx;
+          return { available: true, condition: "AVAILABLE", httpStatus: res.status };
+        }
+        const hints = providerHints(res.headers, body);
+        last = { ...classifyHttpFailure(res.status, hints, body), available: false, httpStatus: res.status, hints, detail: `HTTP ${res.status}` };
+      } catch (err: any) {
+        if (signal?.aborted) throw err;
+        const chain = transportCauseChain(err);
+        const { condition } = classifyTransportFailure(chain, "connect", err?.name === "TimeoutError");
+        last = { available: false, condition, detail: `${err?.message ?? err}${formatCause(chain)}` };
+        if (!TEMPORARY_CONDITIONS.has(condition)) return last;
+      }
+    }
+    return last;
+  }
+
   async chatCompletion(
     messages: ChatMessage[],
     tools: ToolDefinition[],
@@ -466,7 +553,7 @@ export class LocalLlmClient {
 
         if (!res.ok) {
           const errText = await res.text();
-          throw this.httpError(res.status, errText, requestId);
+          throw this.httpError(res.status, errText, requestId, res.headers);
         }
         data = (await res.json()) as ChatCompletionResponse;
       } catch (err: any) {
@@ -575,8 +662,8 @@ export class LocalLlmClient {
           signal: this.combinedSignal(signal),
         });
       } catch (err: any) {
-        // No resend: a rejected fetch does not prove the gateway never admitted the request, and a
-        // second attempt would replace this error with its own.
+        // No resend here: a rejected fetch does not prove the gateway never admitted the request, and a
+        // second attempt would replace this error with its own. Recovery belongs to the agent loop.
         throw classifyTransportError(err, signal, requestId, "connect");
       }
 
@@ -586,7 +673,7 @@ export class LocalLlmClient {
 
       if (!res.ok || !res.body) {
         const errText = await res.text().catch(() => res.statusText);
-        throw this.httpError(res.status, errText, requestId);
+        throw this.httpError(res.status, errText, requestId, res.headers);
       }
 
       let fullContent = "";
@@ -620,10 +707,17 @@ export class LocalLlmClient {
         }
         if (chunk && typeof chunk === "object" && chunk.error) {
           const em = typeof chunk.error === "string" ? chunk.error : chunk.error.message || JSON.stringify(chunk.error);
+          const hints = providerHints(undefined, JSON.stringify({ error: chunk.error }));
+          // The request was admitted. Only an explicit pre-generation code proves the model never ran it.
+          const classification: ProviderClassification =
+            hints.errorCode === "context_length_exceeded"
+              ? { condition: "CAPACITY_REJECTED", execution: "NOT_EXECUTED" }
+              : { condition: "TEMPORARILY_UNAVAILABLE", execution: hints.errorCode === "pre_generation" && !fullContent ? "NOT_EXECUTED" : "UNKNOWN" };
           throw new InferenceError("provider_error_frame", "provider", `Provider error frame mid-stream: ${em}`, {
             requestId,
             partialText: fullContent,
-            failoverEligible: true,
+            hints,
+            ...classification,
           });
         }
         if (chunk.choices?.[0]?.finish_reason) finishReason = chunk.choices[0].finish_reason;
@@ -716,8 +810,10 @@ export class LocalLlmClient {
         );
       }
 
+      // The stream completed with nothing in it; the non-streaming re-request is a new operation with its own
+      // X-Request-ID so the provider's records never show two executions under one request ID.
       if (!fullContent && assembledToolCalls.length === 0) {
-        return this.chatCompletion(messages, tools, requestId, signal);
+        return this.chatCompletion(messages, tools, randomUUID(), signal);
       }
 
       return {
@@ -733,13 +829,15 @@ export class LocalLlmClient {
     return operatorSignal ? AbortSignal.any([timeout, operatorSignal]) : timeout;
   }
 
-  /** HTTP 5xx/429 are provider-side and may succeed elsewhere; other 4xx are request faults (client origin). */
-  private httpError(status: number, body: string, requestId: string): InferenceError {
+  /** HTTP 5xx/429/408 are provider-side; other 4xx are request faults (client origin). */
+  private httpError(status: number, body: string, requestId: string, headers?: Headers): InferenceError {
     const providerSide = status >= 500 || status === 429 || status === 408;
+    const hints = providerHints(headers, body);
     return new InferenceError("http_error", providerSide ? "provider" : "client", `Inference error (HTTP ${status}): ${body}`, {
       httpStatus: status,
       requestId,
-      failoverEligible: providerSide,
+      hints,
+      ...classifyHttpFailure(status, hints, body),
     });
   }
 

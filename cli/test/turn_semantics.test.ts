@@ -34,7 +34,7 @@ type Reply =
 
 interface Gateway {
   url: string;
-  requests: Array<{ body: any; id: string | undefined }>;
+  requests: Array<{ body: any; id: string | undefined; attempt?: string; previous?: string }>;
   close(): Promise<void>;
 }
 
@@ -69,7 +69,12 @@ async function startGateway(script: (n: number, body: any) => Reply): Promise<Ga
     req.on("end", () => {
       let body: any = {};
       try { body = JSON.parse(raw); } catch {}
-      requests.push({ body, id: req.headers["x-request-id"] as string | undefined });
+      requests.push({
+        body,
+        id: req.headers["x-request-id"] as string | undefined,
+        attempt: req.headers["x-aihost-attempt"] as string | undefined,
+        previous: req.headers["x-aihost-previous-request"] as string | undefined,
+      });
       const r = script(requests.length, body);
       const respond = () => {
         if (r.kind === "http") {
@@ -400,14 +405,20 @@ describe("A-4 stream integrity", () => {
     } finally { await primary.close(); await backup.close(); }
   });
 
-  test("non-streaming fallback for an empty stream keeps the original X-Request-ID", async () => {
+  test("non-streaming fallback for an empty stream is a new request with its own X-Request-ID", async () => {
     const gw = await startGateway((n, body) => body.stream
       ? { kind: "raw", chunks: [sse({ choices: [{ delta: {}, finish_reason: "stop" }] }), "data: [DONE]\n\n"] }
       : { kind: "text", content: "from fallback" });
     try {
       const m = await client(gw).chatCompletionStream(msgs, [], undefined, "rid-9");
       assert.equal(m.content, "from fallback");
-      assert.deepEqual(gw.requests.map((r) => r.id), ["rid-9", "rid-9"]);
+      assert.equal(gw.requests.length, 2);
+      const [first, second] = gw.requests;
+      assert.equal(first.id, "rid-9");
+      assert.equal(first.attempt, undefined);
+      assert.ok(second.id && second.id !== "rid-9", "the re-request carries its own X-Request-ID");
+      assert.equal(second.attempt, undefined, "no task-retry header: it would change gateway routing");
+      assert.equal(second.previous, undefined);
     } finally { await gw.close(); }
   });
 
