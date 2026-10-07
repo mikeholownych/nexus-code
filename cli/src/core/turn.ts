@@ -53,6 +53,20 @@ export type InferenceFailureKind =
 
 export type InferenceFailureOrigin = "provider" | "transport" | "client" | "operator";
 
+/** One level of a transport error's cause chain (socket, TLS, or parser error beneath `fetch failed`). */
+export interface TransportCause {
+  name?: string;
+  code?: string;
+  errno?: number;
+  syscall?: string;
+  address?: string;
+  port?: number;
+  /** Bytes the socket had written/read when it failed; 0 written means the request never left this host. */
+  bytesWritten?: number;
+  bytesRead?: number;
+  message?: string;
+}
+
 export interface InferenceFailure {
   kind: InferenceFailureKind;
   origin: InferenceFailureOrigin;
@@ -61,6 +75,8 @@ export interface InferenceFailure {
   requestId?: string;
   /** Text received before the failure. Diagnostic only - never a complete answer. */
   partialTextChars?: number;
+  /** Lower-level transport errors, outermost first. */
+  transportCause?: TransportCause[];
 }
 
 export type VerificationStatus = "PASSED" | "FAILED" | "TIMED_OUT" | "NO_APPLICABLE_VERIFIER";

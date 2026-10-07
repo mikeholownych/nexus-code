@@ -5,7 +5,8 @@ import { randomUUID } from "node:crypto";
 import { ChatMessage, ToolDefinition, HarnessConfig, ToolCall } from "./types.js";
 import { InformationFlowBoundary, DestinationTrustBoundary } from "./core/egress.js";
 import pc from "picocolors";
-import type { InferenceFailure, InferenceFailureKind, InferenceFailureOrigin } from "./core/turn.js";
+import type { InferenceFailure, InferenceFailureKind, InferenceFailureOrigin, TransportCause } from "./core/turn.js";
+import { redactSecrets } from "./ui.js";
 
 export function readLatestAuthToken(): string | null {
   // 1. Check opencode client token file
@@ -66,12 +67,13 @@ export class InferenceError extends Error {
   readonly requestId?: string;
   readonly partialText: string;
   readonly failoverEligible: boolean;
+  readonly transportCause: TransportCause[];
 
   constructor(
     kind: InferenceFailureKind,
     origin: InferenceFailureOrigin,
     message: string,
-    opts: { httpStatus?: number; requestId?: string; partialText?: string; failoverEligible?: boolean } = {},
+    opts: { httpStatus?: number; requestId?: string; partialText?: string; failoverEligible?: boolean; transportCause?: TransportCause[] } = {},
   ) {
     super(message);
     this.name = "InferenceError";
@@ -81,6 +83,7 @@ export class InferenceError extends Error {
     this.requestId = opts.requestId;
     this.partialText = opts.partialText ?? "";
     this.failoverEligible = opts.failoverEligible ?? (kind === "http_error" || kind === "network_error" || kind === "timeout" || kind === "stream_interrupted");
+    this.transportCause = opts.transportCause ?? [];
   }
 
   toFailure(): InferenceFailure {
@@ -91,6 +94,7 @@ export class InferenceError extends Error {
       httpStatus: this.httpStatus,
       requestId: this.requestId,
       partialTextChars: this.partialText.length || undefined,
+      ...(this.transportCause.length ? { transportCause: this.transportCause } : {}),
     };
   }
 }
@@ -99,17 +103,48 @@ function abortedError(requestId?: string, partialText?: string): InferenceError 
   return new InferenceError("aborted", "operator", "Inference request aborted by operator", { requestId, partialText, failoverEligible: false });
 }
 
+/** Walk `err.cause` (and AggregateError members): fetch reports only "fetch failed"/"terminated" at the top. */
+export function transportCauseChain(err: any): TransportCause[] {
+  const out: TransportCause[] = [];
+  const seen = new Set<unknown>();
+  const visit = (e: any): void => {
+    if (!e || typeof e !== "object" || seen.has(e) || out.length >= 8) return;
+    seen.add(e);
+    const c: TransportCause = {};
+    if (typeof e.name === "string") c.name = e.name;
+    if (typeof e.code === "string") c.code = e.code;
+    if (typeof e.errno === "number") c.errno = e.errno;
+    if (typeof e.syscall === "string") c.syscall = e.syscall;
+    if (typeof e.address === "string") c.address = e.address;
+    if (typeof e.port === "number") c.port = e.port;
+    if (typeof e.socket?.bytesWritten === "number") c.bytesWritten = e.socket.bytesWritten;
+    if (typeof e.socket?.bytesRead === "number") c.bytesRead = e.socket.bytesRead;
+    if (typeof e.message === "string" && e.message) c.message = redactSecrets(e.message);
+    out.push(c);
+    if (Array.isArray(e.errors)) for (const sub of e.errors) visit(sub);
+    visit(e.cause);
+  };
+  visit(err?.cause);
+  return out;
+}
+
+function formatCause(chain: TransportCause[]): string {
+  if (!chain.length) return "";
+  return ` (cause: ${chain.map((c) => [c.code, c.message].filter(Boolean).join(": ") || c.name).join(" <- ")})`;
+}
+
 /** Classify a fetch/read rejection. `operatorSignal` distinguishes operator abort from the request timeout. */
 function classifyTransportError(err: any, operatorSignal: AbortSignal | undefined, requestId: string, phase: "connect" | "stream", partialText = ""): InferenceError {
   if (err instanceof InferenceError) return err;
   if (operatorSignal?.aborted) return abortedError(requestId, partialText);
+  const transportCause = transportCauseChain(err);
   if (err?.name === "TimeoutError") {
-    return new InferenceError("timeout", "transport", `Inference request timed out: ${err.message}`, { requestId, partialText });
+    return new InferenceError("timeout", "transport", `Inference request timed out: ${err.message}${formatCause(transportCause)}`, { requestId, partialText, transportCause });
   }
-  const msg = err?.message || String(err);
+  const msg = `${err?.message || String(err)}${formatCause(transportCause)}`;
   return phase === "stream"
-    ? new InferenceError("stream_interrupted", "transport", `Inference stream interrupted before completion: ${msg}`, { requestId, partialText })
-    : new InferenceError("network_error", "transport", `Inference request failed: ${msg}`, { requestId });
+    ? new InferenceError("stream_interrupted", "transport", `Inference stream interrupted before completion: ${msg}`, { requestId, partialText, transportCause })
+    : new InferenceError("network_error", "transport", `Inference request failed: ${msg}`, { requestId, transportCause });
 }
 
 export class LocalLlmClient {
@@ -540,11 +575,9 @@ export class LocalLlmClient {
           signal: this.combinedSignal(signal),
         });
       } catch (err: any) {
-        const classified = classifyTransportError(err, signal, requestId, "connect");
-        if (classified.kind === "aborted") throw classified;
-        // Network error establishing the stream: fall back to a non-streaming request that keeps
-        // the same correlation id (the gateway can tie both attempts to one logical request).
-        return this.chatCompletion(messages, tools, requestId, signal);
+        // No resend: a rejected fetch does not prove the gateway never admitted the request, and a
+        // second attempt would replace this error with its own.
+        throw classifyTransportError(err, signal, requestId, "connect");
       }
 
       if (res.status === 401 && this.reloadAuthToken()) {
