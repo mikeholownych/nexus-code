@@ -2,7 +2,7 @@
  * Nexus sidecar protocol v1: newline-delimited JSON between the Ratatui client (parent) and the
  * Node agent sidecar (child). The sidecar projects agent state; it never asks the client to decide outcomes.
  */
-import type { TurnResult } from "./core/turn.js";
+import type { ProviderRecoveryRecord, TurnResult } from "./core/turn.js";
 import { redactSecrets } from "./ui.js";
 import type { ApprovalReview } from "./approval_review.js";
 import type { SlashSpec } from "./slash/catalog.js";
@@ -164,7 +164,35 @@ export function projectTurn(turn: TurnResult): TurnResult {
     verification: turn.verification ? { ...turn.verification, command: redactOptional(turn.verification.command) } : null,
     interruption: turn.interruption ? { ...turn.interruption, outstandingTool: redactOptional(turn.interruption.outstandingTool) } : null,
     inferenceFailure: turn.inferenceFailure ? { ...turn.inferenceFailure, message: redactSecrets(turn.inferenceFailure.message) } : null,
+    ...(turn.providerRecovery
+      ? {
+          providerRecovery: turn.providerRecovery.map((r) => ({
+            ...r,
+            reason: redactOptional(r.reason),
+            submissions: r.submissions.map((s) => ({ ...s, message: redactSecrets(s.message) })),
+          })),
+        }
+      : {}),
   };
+}
+
+/** One-line operator notice for a provider recovery transition; PROBING produces none. */
+export function providerRecoveryNotice(record: ProviderRecoveryRecord, discardedPartialOutput: boolean): string | undefined {
+  const last = record.submissions[record.submissions.length - 1];
+  const condition = record.condition.toLowerCase().replace(/_/g, " ");
+  const discarded = discardedPartialOutput ? " The partial response was discarded." : "";
+  switch (record.state) {
+    case "WAITING": {
+      const secs = record.nextAttemptAt ? Math.max(0, Math.round((Date.parse(record.nextAttemptAt) - Date.parse(record.updatedAt)) / 1000)) : 0;
+      return `Inference provider ${condition} (${last?.httpStatus ? `HTTP ${last.httpStatus}` : last?.kind ?? "failure"}); waiting ${secs}s before checking again. Work is preserved.${discarded}`;
+    }
+    case "RESUMED":
+      return `Inference provider recovered after ${Math.round(record.waitedMs / 1000)}s; step ${record.step} resumed.`;
+    case "PROBING":
+      return undefined;
+    default:
+      return redactSecrets(`Provider recovery ${record.state.toLowerCase()}: ${record.reason ?? condition}`);
+  }
 }
 
 export function toolSummary(success: boolean, output: string, error?: string): { summary: string; lines: number } {

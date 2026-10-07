@@ -6,7 +6,7 @@
  * requiring revalidation, and ephemeral handles.
  */
 
-import type { TurnResult } from "./turn.js";
+import type { ProviderRecoveryRecord, TurnResult } from "./turn.js";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
@@ -119,6 +119,9 @@ export interface DurableTaskState {
 
   // In-flight operation tracking for interrupted-state detection (PERS-002, F-07)
   currentOperation?: InFlightOperationRecord | null;
+
+  // Inference step waiting out a temporary provider failure (no tool or history change happens while waiting)
+  providerRecovery?: ProviderRecoveryRecord | null;
 
   // Context & conversation memory
   messages: ChatMessage[];

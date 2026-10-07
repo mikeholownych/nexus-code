@@ -33,6 +33,7 @@ import { KnowledgeGraph } from "./knowledge.js";
 import { DurableStateManager, } from "./core/state.js";
 import { InformationFlowBoundary } from "./core/egress.js";
 import { WorkspacePath } from "./core/workspace_path.js";
+import { ProviderRecoveryController, RecoveryCancelled, realRecoveryClock, recoveryPolicyFromEnv, } from "./core/provider_recovery.js";
 import pc from "picocolors";
 /** Default deadline for the completion verifier (seconds); override with HarnessConfig.verifierTimeoutSecs / NEXUS_VERIFIER_TIMEOUT_SECS. */
 export const DEFAULT_VERIFIER_TIMEOUT_SECS = 300;
@@ -183,6 +184,11 @@ export class AutonomousAgent {
     /** Evidence from the verifier run that covers the current workspace changes. Cleared by any later mutation. */
     verificationEvidence;
     turnMutations = 0;
+    /** Provider recovery bounds; undefined reads LOCAL_LLM_RECOVERY_* at each turn. */
+    recoveryPolicy;
+    recoveryClock = realRecoveryClock;
+    /** Recovery of the inference step in progress, persisted with the durable task state while waiting. */
+    activeProviderRecovery = null;
     activeTurn;
     lastTurnResult;
     completionSummary;
@@ -435,6 +441,7 @@ export class AutonomousAgent {
             validationReceipts: this.activeValidationReceipt ? [this.activeValidationReceipt] : [],
             messages: this.messages,
             durableNotes: notes ? [notes] : undefined,
+            providerRecovery: this.activeProviderRecovery,
             cognitiveRouting: {
                 activeTier: this.activeTier,
                 plannerModel: this.config.plannerModel,
@@ -1689,6 +1696,38 @@ Always explain your reasoning before or alongside your tool calls.`;
     getLastTurnResult() {
         return this.lastTurnResult;
     }
+    /** Recovery of the current inference step; null when no provider failure is being waited out. */
+    getProviderRecovery() {
+        return this.activeProviderRecovery;
+    }
+    onProviderRecoveryState(record, turn, discardedPartialOutput) {
+        this.activeProviderRecovery = record;
+        const waiting = record.state === "WAITING" || record.state === "PROBING";
+        turn.phase = waiting ? "provider_wait" : "inference";
+        const last = record.submissions[record.submissions.length - 1];
+        if (record.state === "WAITING") {
+            this.ui.stopSpinner(false, `Inference provider ${record.condition.toLowerCase().replace(/_/g, " ")}`);
+            const secs = record.nextAttemptAt ? Math.max(0, Math.round((Date.parse(record.nextAttemptAt) - Date.parse(record.updatedAt)) / 1000)) : 0;
+            console.warn(pc.yellow(`⏳ Provider recovery (step ${record.step}): ${last?.kind ?? "failure"}${last?.httpStatus ? ` HTTP ${last.httpStatus}` : ""}, ` +
+                `execution ${last?.execution ?? "UNKNOWN"}; next check in ${secs}s (request ${last?.requestId ?? "?"}).`));
+        }
+        else if (record.state === "RESUMED") {
+            console.warn(pc.green(`✓ Provider recovered after ${Math.round(record.waitedMs / 1000)}s; step ${record.step} completed on attempt ${record.submissions.length + 1}.`));
+        }
+        else if (record.state !== "PROBING") {
+            console.warn(pc.red(`✗ Provider recovery ${record.state.toLowerCase()}: ${record.reason ?? ""}`));
+        }
+        if (record.state === "WAITING" || record.state === "RESUMED") {
+            try {
+                this.checkpointDurableState(`provider recovery ${record.state.toLowerCase()}`);
+            }
+            catch { }
+        }
+        try {
+            this.observer?.onProviderRecovery?.({ record, discardedPartialOutput });
+        }
+        catch { }
+    }
     /** The AbortSignal of the active turn, for operator prompts that must unblock on cancellation. */
     getActiveTurnSignal() {
         return this.activeTurn?.controller.signal;
@@ -1755,6 +1794,7 @@ Always explain your reasoning before or alongside your tool calls.`;
             let inferenceFailure = null;
             let interruption = null;
             let undispatched = 0;
+            const providerRecoveries = [];
             const markInterrupted = (phase, extra = {}) => {
                 interruption = {
                     requestedAt: turn.cancelRequestedAt || new Date().toISOString(),
@@ -1816,16 +1856,37 @@ Always explain your reasoning before or alongside your tool calls.`;
                 }
                 let assistantMessage;
                 let streamedTokens = false;
+                // Temporary provider failures are waited out here, at the inference boundary: history and tool state
+                // are untouched while waiting, and a submission's output is used only once it is complete.
+                const policy = this.recoveryPolicy ?? recoveryPolicyFromEnv();
+                const recovery = new ProviderRecoveryController(policy, this.recoveryClock, currentStep);
                 try {
-                    assistantMessage = await activeClient.chatCompletionStream(this.messages, this.getEffectiveTools(), (token) => {
-                        if (!streamedTokens) {
-                            this.ui.stopSpinner(true);
-                            process.stdout.write(pc.bold(pc.magenta("\n💭 Assistant: ")));
-                            streamedTokens = true;
-                        }
-                        process.stdout.write(token);
-                        this.observer?.onAssistantDelta?.(token);
-                    }, requestId, signal);
+                    assistantMessage = await recovery.run(requestId, {
+                        submit: (s) => activeClient.chatCompletionStream(this.messages, this.getEffectiveTools(), (token) => {
+                            if (!streamedTokens) {
+                                this.ui.stopSpinner(true);
+                                process.stdout.write(pc.bold(pc.magenta("\n💭 Assistant: ")));
+                                streamedTokens = true;
+                            }
+                            process.stdout.write(token);
+                            this.observer?.onAssistantDelta?.(token);
+                        }, s.requestId, signal),
+                        probe: (probeSignal, opts) => typeof activeClient.probeAvailability === "function"
+                            ? activeClient.probeAvailability(probeSignal, { timeoutMs: policy.probeTimeoutMs, ...opts })
+                            : Promise.resolve({ available: true, condition: "AVAILABLE" }),
+                        classify: (err) => (err instanceof InferenceError ? err.toFailure() : null),
+                        newRequestId: () => randomUUID(),
+                        onState: (record) => {
+                            if (streamedTokens && record.state === "RESUMED")
+                                process.stdout.write("\n");
+                            const discarded = streamedTokens && record.state === "WAITING";
+                            if (discarded) {
+                                process.stdout.write(pc.dim("\n[partial response discarded: the provider failed before completing it]\n"));
+                                streamedTokens = false;
+                            }
+                            this.onProviderRecoveryState(record, turn, discarded);
+                        },
+                    }, signal);
                     if (streamedTokens) {
                         process.stdout.write("\n\n");
                     }
@@ -1840,6 +1901,11 @@ Always explain your reasoning before or alongside your tool calls.`;
                     }
                     if (streamedTokens)
                         process.stdout.write("\n");
+                    if (err instanceof RecoveryCancelled) {
+                        this.ui.stopSpinner(false, "Stopped while waiting for the inference provider");
+                        markInterrupted("provider_wait");
+                        break;
+                    }
                     if (err instanceof InferenceError && err.kind === "aborted") {
                         this.ui.stopSpinner(false, "Inference request aborted by operator");
                         markInterrupted("inference");
@@ -1851,6 +1917,12 @@ Always explain your reasoning before or alongside your tool calls.`;
                         ? err.toFailure()
                         : { kind: "protocol_error", origin: "client", message: err?.message || String(err), requestId };
                     break;
+                }
+                finally {
+                    if (recovery.record)
+                        providerRecoveries.push(recovery.record);
+                    turn.phase = "inference";
+                    this.activeProviderRecovery = null;
                 }
                 stepsUsed = currentStep;
                 // Parse the response using hybrid parser
@@ -1998,6 +2070,7 @@ Always explain your reasoning before or alongside your tool calls.`;
                 limitReached,
                 capacityBlock,
                 stepsUsed: stepsUsed || Math.min(currentStep, this.config.maxSteps),
+                providerRecoveries,
             });
             this.lastTurnResult = result;
             if (this.flightRecorder) {
@@ -2013,7 +2086,10 @@ Always explain your reasoning before or alongside your tool calls.`;
     /** Single place where a turn's execution/outcome dimensions are derived from evidence held by the agent. */
     buildTurnResult(input) {
         const evidence = this.verificationEvidence ?? null;
+        const recoveries = input.providerRecoveries ?? [];
+        const lastRecovery = recoveries[recoveries.length - 1];
         const base = {
+            ...(recoveries.length ? { providerRecovery: recoveries } : {}),
             acceptance: "NOT_REQUESTED",
             modelStop: input.modelStop,
             finalOutputComplete: input.finalOutputComplete,
@@ -2032,7 +2108,8 @@ Always explain your reasoning before or alongside your tool calls.`;
         if (input.inferenceFailure) {
             return deepFreezeTurn(assertTurnResultInvariants({
                 ...base, execution: "FAILED", outcome: "NOT_ESTABLISHED", reason: "INFERENCE_FAILED",
-                detail: `${input.inferenceFailure.kind}/${input.inferenceFailure.origin}${input.inferenceFailure.httpStatus ? ` HTTP ${input.inferenceFailure.httpStatus}` : ""}`,
+                detail: `${input.inferenceFailure.kind}/${input.inferenceFailure.origin}${input.inferenceFailure.httpStatus ? ` HTTP ${input.inferenceFailure.httpStatus}` : ""}` +
+                    (lastRecovery?.state === "EXHAUSTED" ? `; provider recovery exhausted after ${lastRecovery.submissions.length} submissions, ${Math.round(lastRecovery.waitedMs / 1000)}s waiting` : ""),
                 finalOutputComplete: false,
             }));
         }

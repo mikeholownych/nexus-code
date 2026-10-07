@@ -9,6 +9,7 @@ import { InteractiveRepl } from "../src/repl.js";
 import { TerminalDashboard } from "../src/tui.js";
 import { HarnessConfig } from "../src/types.js";
 import { CandidateTracker, hashContent } from "../src/core/candidate.js";
+import { DEFAULT_RECOVERY_POLICY } from "../src/core/provider_recovery.js";
 
 describe("WP-10: Application Core & CLI/TUI Projection Convergence (INC-11, UI-001..UI-007)", () => {
   let tmpDir: string;
@@ -86,6 +87,8 @@ describe("WP-10: Application Core & CLI/TUI Projection Convergence (INC-11, UI-0
 
     // Populate plan milestones in agent
     const agent = app.getAgent();
+    // Nothing listens on the test endpoint; fail the inference at once instead of waiting for the provider.
+    (agent as any).recoveryPolicy = { ...DEFAULT_RECOVERY_POLICY, deadlineMs: 0 };
     agent.setActivePlan([
       { name: "Inspect architecture", status: "completed", detail: "Done" },
       { name: "Implement changes", status: "in_progress" },

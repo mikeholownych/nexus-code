@@ -14,6 +14,7 @@ import fs from "node:fs";
 import { AutonomousAgent } from "../src/agent.js";
 import { ApplicationCore } from "../src/core/app.js";
 import { exitCodeForTurn } from "../src/core/turn.js";
+import { DEFAULT_RECOVERY_POLICY } from "../src/core/provider_recovery.js";
 import { gateway, repo, mute, roles } from "./helpers/capacity_fixture.js";
 
 /** The inference-failure path prints to stderr via console.error; keep it out of the interleaved test stream. */
@@ -31,6 +32,9 @@ describe("D4 context capacity is a bounded condition", () => {
     const ws = repo();
     // 6,000 is below the fixed overhead (system prompt + tool schemas) plus scaled reserves, so admission must refuse.
     const agent = mute(new AutonomousAgent({ endpoint: gw.url, model: "m", maxSteps: 4, temperature: 0, workspace: ws, shell: "bash", contextLimit: 6000 } as any));
+    // HTTP 500 has unknown execution status and is replayed by provider recovery (provider_recovery.test.ts);
+    // with replays off, the request count below measures admissions only.
+    (agent as any).recoveryPolicy = { ...DEFAULT_RECOVERY_POLICY, maxUnknownReplays: 0 };
     try {
       const before = roles(agent);
       for (let i = 1; i <= 3; i++) {
