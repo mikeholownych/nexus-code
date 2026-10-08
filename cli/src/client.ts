@@ -5,37 +5,79 @@ import { randomUUID } from "node:crypto";
 import { ChatMessage, ToolDefinition, HarnessConfig, ToolCall } from "./types.js";
 import { InformationFlowBoundary, DestinationTrustBoundary } from "./core/egress.js";
 import pc from "picocolors";
-import type { InferenceFailure, InferenceFailureKind, InferenceFailureOrigin } from "./core/turn.js";
+import type {
+  ExecutionStatus,
+  InferenceFailure,
+  InferenceFailureKind,
+  InferenceFailureOrigin,
+  ProviderCondition,
+  ProviderHints,
+  TransportCause,
+} from "./core/turn.js";
+import {
+  classifyHttpFailure,
+  classifyTransportFailure,
+  providerHints,
+  TEMPORARY_CONDITIONS,
+  type ProbeResult,
+  type ProviderClassification,
+} from "./core/provider_recovery.js";
+import { redactSecrets } from "./ui.js";
 
-export function readLatestAuthToken(): string | null {
-  // 1. Check opencode client token file
-  const opencodeTokenPath = path.join(os.homedir(), ".config/opencode/t5820-client-token");
-  if (fs.existsSync(opencodeTokenPath)) {
-    try {
-      const val = fs.readFileSync(opencodeTokenPath, "utf-8").trim();
-      if (val) return val;
-    } catch {}
+function originOf(url: string | undefined): string | undefined {
+  if (!url?.trim()) return undefined;
+  try {
+    return new URL(url.trim()).origin;
+  } catch {
+    return undefined;
   }
+}
 
-  // 2. Check ~/.config/nexus/config.env
-  const configEnvPath = path.join(os.homedir(), ".config/nexus/config.env");
-  if (fs.existsSync(configEnvPath)) {
-    try {
-      const lines = fs.readFileSync(configEnvPath, "utf-8").split("\n");
-      for (const line of lines) {
-        if (line.startsWith("LOCAL_LLM_API_KEY=")) {
-          const val = line.substring("LOCAL_LLM_API_KEY=".length).trim();
-          if (val) return val;
-        }
-      }
-    } catch {}
+/** The origin a credential configured for `endpoint` belongs to. */
+export function credentialOriginOf(endpoint: string | undefined): string | undefined {
+  return originOf(endpoint);
+}
+
+function readConfigEnv(): Record<string, string> {
+  const out: Record<string, string> = {};
+  try {
+    for (const line of fs.readFileSync(path.join(os.homedir(), ".config/nexus/config.env"), "utf-8").split("\n")) {
+      const m = /^([A-Z0-9_]+)=(.*)$/.exec(line.trim());
+      if (m) out[m[1]] = m[2].trim();
+    }
+  } catch {}
+  return out;
+}
+
+function readGatewayTokenFile(): string | undefined {
+  try {
+    return fs.readFileSync(path.join(os.homedir(), ".config/opencode/t5820-client-token"), "utf-8").trim() || undefined;
+  } catch {
+    return undefined;
   }
+}
 
-  // 3. Check environment
-  if (process.env.LOCAL_LLM_API_KEY) {
-    return process.env.LOCAL_LLM_API_KEY.trim();
+/**
+ * The locally stored credential for `endpoint`, only if it belongs to that endpoint's gateway; null otherwise.
+ *
+ * Stored credentials are scoped to where they were configured: the gateway token file and the config.env key belong
+ * to config.env's LOCAL_LLM_ENDPOINT (or, without one, $LOCAL_LLM_ENDPOINT) and to origins the operator lists in
+ * LOCAL_LLM_CREDENTIAL_ORIGINS; $LOCAL_LLM_API_KEY belongs to $LOCAL_LLM_ENDPOINT. A credential is never attached to
+ * another provider merely because that provider has no key of its own.
+ */
+export function storedCredentialFor(endpoint: string): string | null {
+  const target = originOf(endpoint);
+  if (!target) return null;
+  const file = readConfigEnv();
+  const envEndpoint = originOf(process.env.LOCAL_LLM_ENDPOINT);
+  const gateway = originOf(file.LOCAL_LLM_ENDPOINT) ?? envEndpoint;
+  const listed = new Set((process.env.LOCAL_LLM_CREDENTIAL_ORIGINS ?? "").split(",").map((o) => originOf(o)).filter(Boolean));
+  if (target === gateway || listed.has(target)) {
+    const token = readGatewayTokenFile() || file.LOCAL_LLM_API_KEY;
+    if (token) return token;
   }
-
+  const envKey = process.env.LOCAL_LLM_API_KEY?.trim();
+  if (target === envEndpoint && envKey) return envKey;
   return null;
 }
 
@@ -55,9 +97,23 @@ export interface ChatCompletionResponse {
 
 export type StreamTokenCallback = (token: string) => void;
 
+const DEFAULT_CLASSIFICATION: Record<InferenceFailureKind, ProviderClassification> = {
+  http_error: { condition: "PERMANENT_FAILURE", execution: "UNKNOWN" },
+  network_error: { condition: "TEMPORARILY_UNAVAILABLE", execution: "UNKNOWN" },
+  timeout: { condition: "TEMPORARILY_UNAVAILABLE", execution: "UNKNOWN" },
+  stream_interrupted: { condition: "TEMPORARILY_UNAVAILABLE", execution: "UNKNOWN" },
+  stream_incomplete: { condition: "TEMPORARILY_UNAVAILABLE", execution: "UNKNOWN" },
+  provider_error_frame: { condition: "TEMPORARILY_UNAVAILABLE", execution: "UNKNOWN" },
+  malformed_event: { condition: "PERMANENT_FAILURE", execution: "UNKNOWN" },
+  output_truncated: { condition: "AVAILABLE", execution: "COMPLETED" },
+  protocol_error: { condition: "PERMANENT_FAILURE", execution: "COMPLETED" },
+  aborted: { condition: "AVAILABLE", execution: "UNKNOWN" },
+};
+
 /**
- * Typed inference failure. `failoverEligible` is false for operator aborts and client-originated faults
- * (malformed/truncated output, HTTP 4xx): another endpoint will not fix those.
+ * Typed inference failure. `condition` is what the failure says about the provider; `execution` is what is known
+ * about whether the provider ran the request. Another endpoint is tried immediately only when the request is
+ * proven not executed and the condition is temporary; anything else is the agent loop's recovery decision.
  */
 export class InferenceError extends Error {
   readonly kind: InferenceFailureKind;
@@ -66,12 +122,25 @@ export class InferenceError extends Error {
   readonly requestId?: string;
   readonly partialText: string;
   readonly failoverEligible: boolean;
+  readonly transportCause: TransportCause[];
+  readonly condition: ProviderCondition;
+  readonly execution: ExecutionStatus;
+  readonly hints: ProviderHints;
 
   constructor(
     kind: InferenceFailureKind,
     origin: InferenceFailureOrigin,
     message: string,
-    opts: { httpStatus?: number; requestId?: string; partialText?: string; failoverEligible?: boolean } = {},
+    opts: {
+      httpStatus?: number;
+      requestId?: string;
+      partialText?: string;
+      failoverEligible?: boolean;
+      transportCause?: TransportCause[];
+      condition?: ProviderCondition;
+      execution?: ExecutionStatus;
+      hints?: ProviderHints;
+    } = {},
   ) {
     super(message);
     this.name = "InferenceError";
@@ -80,7 +149,11 @@ export class InferenceError extends Error {
     this.httpStatus = opts.httpStatus;
     this.requestId = opts.requestId;
     this.partialText = opts.partialText ?? "";
-    this.failoverEligible = opts.failoverEligible ?? (kind === "http_error" || kind === "network_error" || kind === "timeout" || kind === "stream_interrupted");
+    this.transportCause = opts.transportCause ?? [];
+    this.condition = opts.condition ?? DEFAULT_CLASSIFICATION[kind].condition;
+    this.execution = opts.execution ?? DEFAULT_CLASSIFICATION[kind].execution;
+    this.hints = opts.hints ?? {};
+    this.failoverEligible = opts.failoverEligible ?? (this.execution === "NOT_EXECUTED" && TEMPORARY_CONDITIONS.has(this.condition));
   }
 
   toFailure(): InferenceFailure {
@@ -91,31 +164,74 @@ export class InferenceError extends Error {
       httpStatus: this.httpStatus,
       requestId: this.requestId,
       partialTextChars: this.partialText.length || undefined,
+      ...(this.transportCause.length ? { transportCause: this.transportCause } : {}),
+      condition: this.condition,
+      execution: this.execution,
+      ...(Object.keys(this.hints).length ? { hints: this.hints } : {}),
     };
   }
 }
 
+
 function abortedError(requestId?: string, partialText?: string): InferenceError {
   return new InferenceError("aborted", "operator", "Inference request aborted by operator", { requestId, partialText, failoverEligible: false });
+}
+
+/** Walk `err.cause` (and AggregateError members): fetch reports only "fetch failed"/"terminated" at the top. */
+export function transportCauseChain(err: any): TransportCause[] {
+  const out: TransportCause[] = [];
+  const seen = new Set<unknown>();
+  const visit = (e: any): void => {
+    if (!e || typeof e !== "object" || seen.has(e) || out.length >= 8) return;
+    seen.add(e);
+    const c: TransportCause = {};
+    if (typeof e.name === "string") c.name = e.name;
+    if (typeof e.code === "string") c.code = e.code;
+    if (typeof e.errno === "number") c.errno = e.errno;
+    if (typeof e.syscall === "string") c.syscall = e.syscall;
+    if (typeof e.address === "string") c.address = e.address;
+    if (typeof e.port === "number") c.port = e.port;
+    if (typeof e.socket?.bytesWritten === "number") c.bytesWritten = e.socket.bytesWritten;
+    if (typeof e.socket?.bytesRead === "number") c.bytesRead = e.socket.bytesRead;
+    if (typeof e.message === "string" && e.message) c.message = redactSecrets(e.message);
+    out.push(c);
+    if (Array.isArray(e.errors)) for (const sub of e.errors) visit(sub);
+    visit(e.cause);
+  };
+  visit(err?.cause);
+  return out;
+}
+
+function formatCause(chain: TransportCause[]): string {
+  if (!chain.length) return "";
+  return ` (cause: ${chain.map((c) => [c.code, c.message].filter(Boolean).join(": ") || c.name).join(" <- ")})`;
 }
 
 /** Classify a fetch/read rejection. `operatorSignal` distinguishes operator abort from the request timeout. */
 function classifyTransportError(err: any, operatorSignal: AbortSignal | undefined, requestId: string, phase: "connect" | "stream", partialText = ""): InferenceError {
   if (err instanceof InferenceError) return err;
   if (operatorSignal?.aborted) return abortedError(requestId, partialText);
-  if (err?.name === "TimeoutError") {
-    return new InferenceError("timeout", "transport", `Inference request timed out: ${err.message}`, { requestId, partialText });
+  const transportCause = transportCauseChain(err);
+  const timedOut = err?.name === "TimeoutError";
+  const classification = classifyTransportFailure(transportCause, phase, timedOut);
+  if (timedOut) {
+    return new InferenceError("timeout", "transport", `Inference request timed out: ${err.message}${formatCause(transportCause)}`, { requestId, partialText, transportCause, ...classification });
   }
-  const msg = err?.message || String(err);
+  const msg = `${err?.message || String(err)}${formatCause(transportCause)}`;
   return phase === "stream"
-    ? new InferenceError("stream_interrupted", "transport", `Inference stream interrupted before completion: ${msg}`, { requestId, partialText })
-    : new InferenceError("network_error", "transport", `Inference request failed: ${msg}`, { requestId });
+    ? new InferenceError("stream_interrupted", "transport", `Inference stream interrupted before completion: ${msg}`, { requestId, partialText, transportCause, ...classification })
+    : new InferenceError("network_error", "transport", `Inference request failed: ${msg}`, { requestId, transportCause, ...classification });
 }
 
 export class LocalLlmClient {
   private endpoints: string[] = [];
   private activeEndpointIndex: number = 0;
-  private apiKey: string;
+  /** Explicitly configured key and the origin it belongs to (config.credentialOrigin, else the primary endpoint). */
+  private explicitKey?: string;
+  private explicitOrigin?: string;
+  /** Stored credentials resolved per origin; an origin whose stored credential rotated in supersedes its explicit key. */
+  private storedKeys = new Map<string, string | null>();
+  private rotated = new Set<string>();
   private model: string;
   private temperature: number;
   private boundary: InformationFlowBoundary;
@@ -141,14 +257,14 @@ export class LocalLlmClient {
     };
 
     const endpointList: string[] = [normalizeEp(config.endpoint)];
-    if (config.fallbackEndpoints && Array.isArray(config.fallbackEndpoints)) {
+    if (!config.pinEndpoint && config.fallbackEndpoints && Array.isArray(config.fallbackEndpoints)) {
       for (const fb of config.fallbackEndpoints) {
         if (fb && typeof fb === "string") {
           endpointList.push(normalizeEp(fb));
         }
       }
     }
-    if (process.env.LOCAL_LLM_FALLBACK_ENDPOINTS) {
+    if (!config.pinEndpoint && process.env.LOCAL_LLM_FALLBACK_ENDPOINTS) {
       for (const fb of process.env.LOCAL_LLM_FALLBACK_ENDPOINTS.split(",")) {
         if (fb.trim()) {
           endpointList.push(normalizeEp(fb));
@@ -158,10 +274,10 @@ export class LocalLlmClient {
     this.endpoints = Array.from(new Set(endpointList));
     this.activeEndpointIndex = 0;
 
-    this.apiKey =
-      config.apiKey && config.apiKey !== "local" && config.apiKey !== "not-needed"
-        ? config.apiKey
-        : readLatestAuthToken() || "not-needed";
+    if (config.apiKey && config.apiKey !== "local" && config.apiKey !== "not-needed") {
+      this.explicitKey = config.apiKey;
+      this.explicitOrigin = originOf(config.credentialOrigin ?? normalizeEp(config.endpoint));
+    }
     this.model = config.model;
     this.temperature = config.temperature ?? 0.2;
     this.boundary = options?.boundary || InformationFlowBoundary.getGlobalInstance();
@@ -260,17 +376,35 @@ export class LocalLlmClient {
     }
   }
 
+  /** Sets the key for the active endpoint's origin. */
   public setApiKey(key: string): void {
-    this.apiKey = key;
+    this.explicitKey = key;
+    this.explicitOrigin = originOf(this.endpoints[this.activeEndpointIndex]);
+    if (this.explicitOrigin) this.rotated.delete(this.explicitOrigin);
   }
 
-  public reloadAuthToken(): boolean {
-    const fresh = readLatestAuthToken();
-    if (fresh && fresh !== this.apiKey) {
-      this.apiKey = fresh;
-      return true;
-    }
-    return false;
+  /** The credential sent to `url`: its own explicit key, else its gateway's stored credential, else none. */
+  private credentialFor(url: string): string | undefined {
+    const origin = originOf(url);
+    if (!origin) return undefined;
+    if (this.explicitKey && this.explicitOrigin === origin && !this.rotated.has(origin)) return this.explicitKey;
+    if (!this.storedKeys.has(origin)) this.storedKeys.set(origin, storedCredentialFor(url));
+    return this.storedKeys.get(origin) ?? undefined;
+  }
+
+  private authorization(url: string): { Authorization: string } {
+    return { Authorization: `Bearer ${this.credentialFor(url) ?? "not-needed"}` };
+  }
+
+  /** After a 401 from `url`: re-read that gateway's stored credential (rotation). Never borrows another provider's. */
+  public reloadAuthToken(url: string = this.endpoints[this.activeEndpointIndex]): boolean {
+    const origin = originOf(url);
+    if (!origin) return false;
+    const fresh = storedCredentialFor(url);
+    if (!fresh || fresh === this.credentialFor(url)) return false;
+    this.storedKeys.set(origin, fresh);
+    this.rotated.add(origin);
+    return true;
   }
 
   private async executeWithFailover<T>(
@@ -319,16 +453,12 @@ export class LocalLlmClient {
     return this.executeWithFailover("listModels", async (currentEp) => {
       const url = `${currentEp}/models`;
       const res = await fetch(url, {
-        headers: {
-          Authorization: `Bearer ${this.apiKey}`,
-        },
+        headers: this.authorization(url),
       });
 
-      if (res.status === 401 && this.reloadAuthToken()) {
+      if (res.status === 401 && this.reloadAuthToken(url)) {
         const retryRes = await fetch(url, {
-          headers: {
-            Authorization: `Bearer ${this.apiKey}`,
-          },
+          headers: this.authorization(url),
         });
         if (retryRes.ok) {
           const data = (await retryRes.json()) as { data?: Array<{ id: string }> };
@@ -343,6 +473,52 @@ export class LocalLlmClient {
       const data = (await res.json()) as { data?: Array<{ id: string }> };
       return data.data?.map((m) => m.id) || [];
     });
+  }
+
+  /** Raw `/models` entries. Providers that publish capability metadata let the scheduler qualify resources. */
+  async listModelCatalog(signal?: AbortSignal): Promise<Array<Record<string, any>>> {
+    return this.executeWithFailover("listModelCatalog", async (currentEp) => {
+      const res = await fetch(`${currentEp}/models`, { headers: this.authorization(currentEp), signal });
+      if (!res.ok) throw new Error(`Server returned HTTP ${res.status}: ${res.statusText}`);
+      const data = (await res.json()) as { data?: Array<Record<string, any>> };
+      return Array.isArray(data.data) ? data.data : [];
+    });
+  }
+
+  /**
+   * Side-effect-free reachability check (GET /models) used while waiting out a provider failure. Any answer other
+   * than 408/429/5xx shows the server is serving again; the first endpoint that answers becomes active.
+   * `preferAlternate` starts with the next endpoint, so a request of unknown status is resubmitted elsewhere
+   * when another endpoint is available.
+   */
+  async probeAvailability(signal?: AbortSignal, opts: { timeoutMs?: number; preferAlternate?: boolean } = {}): Promise<ProbeResult> {
+    const total = this.endpoints.length;
+    const start = opts.preferAlternate && total > 1 ? (this.activeEndpointIndex + 1) % total : this.activeEndpointIndex;
+    let last: ProbeResult = { available: false, condition: "TEMPORARILY_UNAVAILABLE" };
+    for (let i = 0; i < total; i++) {
+      const idx = (start + i) % total;
+      const timeout = AbortSignal.timeout(opts.timeoutMs ?? 5_000);
+      try {
+        const res = await fetch(`${this.endpoints[idx]}/models`, {
+          headers: this.authorization(this.endpoints[idx]),
+          signal: signal ? AbortSignal.any([timeout, signal]) : timeout,
+        });
+        const body = await res.text().catch(() => "");
+        if (res.status < 500 && res.status !== 429 && res.status !== 408) {
+          this.activeEndpointIndex = idx;
+          return { available: true, condition: "AVAILABLE", httpStatus: res.status };
+        }
+        const hints = providerHints(res.headers, body);
+        last = { ...classifyHttpFailure(res.status, hints, body), available: false, httpStatus: res.status, hints, detail: `HTTP ${res.status}` };
+      } catch (err: any) {
+        if (signal?.aborted) throw err;
+        const chain = transportCauseChain(err);
+        const { condition } = classifyTransportFailure(chain, "connect", err?.name === "TimeoutError");
+        last = { available: false, condition, detail: `${err?.message ?? err}${formatCause(chain)}` };
+        if (!TEMPORARY_CONDITIONS.has(condition)) return last;
+      }
+    }
+    return last;
   }
 
   async chatCompletion(
@@ -417,7 +593,7 @@ export class LocalLlmClient {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
-            Authorization: `Bearer ${this.apiKey}`,
+            ...this.authorization(url),
             "X-Request-ID": requestId,
             ...this.routingHeaders(),
           },
@@ -425,13 +601,13 @@ export class LocalLlmClient {
           signal: this.combinedSignal(signal),
         });
 
-        if (res.status === 401 && this.reloadAuthToken()) {
+        if (res.status === 401 && this.reloadAuthToken(url)) {
           return this.chatCompletion(messages, tools, requestId, signal);
         }
 
         if (!res.ok) {
           const errText = await res.text();
-          throw this.httpError(res.status, errText, requestId);
+          throw this.httpError(res.status, errText, requestId, res.headers);
         }
         data = (await res.json()) as ChatCompletionResponse;
       } catch (err: any) {
@@ -532,7 +708,7 @@ export class LocalLlmClient {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
-            Authorization: `Bearer ${this.apiKey}`,
+            ...this.authorization(url),
             "X-Request-ID": requestId,
             ...this.routingHeaders(),
           },
@@ -540,20 +716,18 @@ export class LocalLlmClient {
           signal: this.combinedSignal(signal),
         });
       } catch (err: any) {
-        const classified = classifyTransportError(err, signal, requestId, "connect");
-        if (classified.kind === "aborted") throw classified;
-        // Network error establishing the stream: fall back to a non-streaming request that keeps
-        // the same correlation id (the gateway can tie both attempts to one logical request).
-        return this.chatCompletion(messages, tools, requestId, signal);
+        // No resend here: a rejected fetch does not prove the gateway never admitted the request, and a
+        // second attempt would replace this error with its own. Recovery belongs to the agent loop.
+        throw classifyTransportError(err, signal, requestId, "connect");
       }
 
-      if (res.status === 401 && this.reloadAuthToken()) {
+      if (res.status === 401 && this.reloadAuthToken(url)) {
         return this.chatCompletionStream(messages, tools, onToken, requestId, signal);
       }
 
       if (!res.ok || !res.body) {
         const errText = await res.text().catch(() => res.statusText);
-        throw this.httpError(res.status, errText, requestId);
+        throw this.httpError(res.status, errText, requestId, res.headers);
       }
 
       let fullContent = "";
@@ -587,10 +761,17 @@ export class LocalLlmClient {
         }
         if (chunk && typeof chunk === "object" && chunk.error) {
           const em = typeof chunk.error === "string" ? chunk.error : chunk.error.message || JSON.stringify(chunk.error);
+          const hints = providerHints(undefined, JSON.stringify({ error: chunk.error }));
+          // The request was admitted. Only an explicit pre-generation code proves the model never ran it.
+          const classification: ProviderClassification =
+            hints.errorCode === "context_length_exceeded"
+              ? { condition: "CAPACITY_REJECTED", execution: "NOT_EXECUTED" }
+              : { condition: "TEMPORARILY_UNAVAILABLE", execution: hints.errorCode === "pre_generation" && !fullContent ? "NOT_EXECUTED" : "UNKNOWN" };
           throw new InferenceError("provider_error_frame", "provider", `Provider error frame mid-stream: ${em}`, {
             requestId,
             partialText: fullContent,
-            failoverEligible: true,
+            hints,
+            ...classification,
           });
         }
         if (chunk.choices?.[0]?.finish_reason) finishReason = chunk.choices[0].finish_reason;
@@ -683,8 +864,10 @@ export class LocalLlmClient {
         );
       }
 
+      // The stream completed with nothing in it; the non-streaming re-request is a new operation with its own
+      // X-Request-ID so the provider's records never show two executions under one request ID.
       if (!fullContent && assembledToolCalls.length === 0) {
-        return this.chatCompletion(messages, tools, requestId, signal);
+        return this.chatCompletion(messages, tools, randomUUID(), signal);
       }
 
       return {
@@ -700,13 +883,15 @@ export class LocalLlmClient {
     return operatorSignal ? AbortSignal.any([timeout, operatorSignal]) : timeout;
   }
 
-  /** HTTP 5xx/429 are provider-side and may succeed elsewhere; other 4xx are request faults (client origin). */
-  private httpError(status: number, body: string, requestId: string): InferenceError {
+  /** HTTP 5xx/429/408 are provider-side; other 4xx are request faults (client origin). */
+  private httpError(status: number, body: string, requestId: string, headers?: Headers): InferenceError {
     const providerSide = status >= 500 || status === 429 || status === 408;
+    const hints = providerHints(headers, body);
     return new InferenceError("http_error", providerSide ? "provider" : "client", `Inference error (HTTP ${status}): ${body}`, {
       httpStatus: status,
       requestId,
-      failoverEligible: providerSide,
+      hints,
+      ...classifyHttpFailure(status, hints, body),
     });
   }
 
@@ -741,7 +926,7 @@ export class LocalLlmClient {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          Authorization: `Bearer ${this.apiKey}`,
+          ...this.authorization(url),
         },
         body: JSON.stringify({
           model: model || this.model,

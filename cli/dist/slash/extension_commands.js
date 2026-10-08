@@ -1,10 +1,13 @@
 import * as path from "node:path";
 import { encodeImageFile, formatVisionContent } from "../image.js";
-import { TeamOrchestrator } from "../team.js";
+import { TEAM_ROLES, TeamOrchestrator } from "../team.js";
 import { reply } from "./catalog.js";
 import { recall } from "./session_commands.js";
 const IMAGE_PROMPT = "Please analyze this image, describe its contents, and provide relevant technical solutions.";
-const ROLES = ["researcher", "architect", "implementer", "tester"];
+const ROLES = TEAM_ROLES;
+const TEAM_USAGE = `Usage: /team <${[...TEAM_ROLES, "full"].join("|")}> [--independent-review] <objective>`;
+/** Longer waits leave the team WAITING durably (resumable) instead of holding the prompt. */
+const TEAM_INTERACTIVE_WAIT_MS = 60_000;
 function planLines(phases) {
     return phases.map((p, index) => `${index + 1}. ${p.status === "completed" ? "[x]" : p.status === "in_progress" ? "[~]" : "[ ]"} ${p.name}`);
 }
@@ -194,20 +197,25 @@ async function tdd({ host, args, signal }) {
         ? reply("tdd", "TDD cycle completed: RED → GREEN → REFACTOR verified.")
         : reply("tdd", `TDD cycle ended at ${result.finalPhase}: ${result.summary}`, false);
 }
-async function team({ host, args }) {
-    const [role, objective] = firstWord(args);
+async function team({ host, args, signal }) {
+    const [role, rest] = firstWord(args);
+    const independentReview = /^--independent-review\b/.test(rest);
+    const objective = rest.replace(/^--independent-review\b\s*/, "").trim();
     if (!role || !objective)
-        return reply("team", "Usage: /team <researcher|architect|implementer|tester|full> <objective>", false);
+        return reply("team", TEAM_USAGE, false);
     const name = role.toLowerCase();
     if (name !== "full" && !ROLES.includes(name))
         return reply("team", `Unknown role ${role}. Roles: ${[...ROLES, "full"].join(", ")}`, false);
-    const orchestrator = new TeamOrchestrator(host.app.getConfig());
-    if (name === "full") {
-        const result = await orchestrator.runFullWorkflow(objective);
-        return reply("team", result.finalReport, result.success);
-    }
-    const result = await orchestrator.executeRoleTask(name, objective);
-    return reply("team", `${name.toUpperCase()} summary:\n${result.summary}\n\n${(result.durationMs / 1000).toFixed(1)}s · ${result.steps} steps`, result.success);
+    const events = [];
+    const orchestrator = new TeamOrchestrator(host.app.getConfig(), {
+        signal,
+        independentReview,
+        maxInProcessWaitMs: TEAM_INTERACTIVE_WAIT_MS,
+        onEvent: (e) => events.push(e),
+    });
+    const result = await orchestrator.run(name === "full" ? "full" : name, objective);
+    const log = events.map((e) => `◆ ${e.message}`);
+    return reply("team", [...log, "", result.report].join("\n").trim(), result.success);
 }
 async function recover({ host, args }) {
     const result = await host.app.executeSlashCommand("recover", args);

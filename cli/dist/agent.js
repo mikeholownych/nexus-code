@@ -23,7 +23,7 @@ import { FlightRecorder } from "./flight.js";
 import { WorktreeManager } from "./worktree.js";
 import { isSandboxAvailable } from "./sandbox.js";
 import { runTestSuiteWithExecutor, discoverVerifier } from "./tester.js";
-import { InferenceError } from "./client.js";
+import { credentialOriginOf, InferenceError } from "./client.js";
 import { assertTurnResultInvariants, deepFreezeTurn, summarizeTurn, lifecycleStatusForTurn, } from "./core/turn.js";
 import { createHash } from "node:crypto";
 import { HybridSearchEngine } from "./embeddings.js";
@@ -33,6 +33,7 @@ import { KnowledgeGraph } from "./knowledge.js";
 import { DurableStateManager, } from "./core/state.js";
 import { InformationFlowBoundary } from "./core/egress.js";
 import { WorkspacePath } from "./core/workspace_path.js";
+import { ProviderRecoveryController, RecoveryCancelled, realRecoveryClock, recoveryPolicyFromEnv, } from "./core/provider_recovery.js";
 import pc from "picocolors";
 /** Default deadline for the completion verifier (seconds); override with HarnessConfig.verifierTimeoutSecs / NEXUS_VERIFIER_TIMEOUT_SECS. */
 export const DEFAULT_VERIFIER_TIMEOUT_SECS = 300;
@@ -264,6 +265,13 @@ export class AutonomousAgent {
     /** Evidence from the verifier run that covers the current workspace changes. Cleared by any later mutation. */
     verificationEvidence;
     turnMutations = 0;
+    /** Provider recovery bounds; undefined reads LOCAL_LLM_RECOVERY_* at each turn. */
+    recoveryPolicy;
+    recoveryClock = realRecoveryClock;
+    /** Recovery of the inference step in progress, persisted with the durable task state while waiting. */
+    activeProviderRecovery = null;
+    /** Set by the operation scheduler: resource condition observations and the yield decision. */
+    providerRecoveryHooks;
     activeTurn;
     lastTurnResult;
     completionSummary;
@@ -315,6 +323,7 @@ export class AutonomousAgent {
                 model: config.plannerModel || config.model,
                 endpoint: config.plannerEndpoint || config.endpoint,
                 apiKey: config.plannerApiKey || config.apiKey,
+                credentialOrigin: config.plannerApiKey ? credentialOriginOf(config.plannerEndpoint || config.endpoint) : config.credentialOrigin ?? credentialOriginOf(config.endpoint),
                 taskClass: config.plannerTaskClass ?? config.taskClass,
             };
             const coderConfig = {
@@ -322,6 +331,7 @@ export class AutonomousAgent {
                 model: config.coderModel || config.model,
                 endpoint: config.coderEndpoint || config.endpoint,
                 apiKey: config.coderApiKey || config.apiKey,
+                credentialOrigin: config.coderApiKey ? credentialOriginOf(config.coderEndpoint || config.endpoint) : config.credentialOrigin ?? credentialOriginOf(config.endpoint),
             };
             this.plannerClient = new LocalLlmClient(plannerConfig);
             this.coderClient = new LocalLlmClient(coderConfig);
@@ -516,6 +526,7 @@ export class AutonomousAgent {
             validationReceipts: this.activeValidationReceipt ? [this.activeValidationReceipt] : [],
             messages: this.messages,
             durableNotes: notes ? [notes] : undefined,
+            providerRecovery: this.activeProviderRecovery,
             cognitiveRouting: {
                 activeTier: this.activeTier,
                 plannerModel: this.config.plannerModel,
@@ -1430,11 +1441,14 @@ Always explain your reasoning before or alongside your tool calls.`;
             try {
                 const subagent = new AutonomousAgent(subagentConfig, this.depth + 1, inheritedWorktreeScope);
                 const subResult = await subagent.runSubagent(subPrompt);
-                this.ui.stopSpinner(true);
+                this.ui.stopSpinner(subResult.completed);
+                if (!subResult.completed) {
+                    return { success: false, output: subResult.summary, error: `Subagent did not complete: ${subResult.reason}` };
+                }
                 console.log(pc.cyan(`\n🤖 [Subagent Report Received]\n`));
                 return {
                     success: true,
-                    output: subResult,
+                    output: subResult.summary,
                 };
             }
             catch (subErr) {
@@ -1803,6 +1817,44 @@ Always explain your reasoning before or alongside your tool calls.`;
     getLastTurnResult() {
         return this.lastTurnResult;
     }
+    /** Recovery of the current inference step; null when no provider failure is being waited out. */
+    getProviderRecovery() {
+        return this.activeProviderRecovery;
+    }
+    setProviderRecoveryHooks(hooks) {
+        this.providerRecoveryHooks = hooks;
+    }
+    onProviderRecoveryState(record, turn, discardedPartialOutput) {
+        this.activeProviderRecovery = record;
+        const waiting = record.state === "WAITING" || record.state === "PROBING";
+        turn.phase = waiting ? "provider_wait" : "inference";
+        const last = record.submissions[record.submissions.length - 1];
+        if (record.state === "WAITING") {
+            this.ui.stopSpinner(false, `Inference provider ${record.condition.toLowerCase().replace(/_/g, " ")}`);
+            const secs = record.nextAttemptAt ? Math.max(0, Math.round((Date.parse(record.nextAttemptAt) - Date.parse(record.updatedAt)) / 1000)) : 0;
+            console.warn(pc.yellow(`⏳ Provider recovery (step ${record.step}): ${last?.kind ?? "failure"}${last?.httpStatus ? ` HTTP ${last.httpStatus}` : ""}, ` +
+                `execution ${last?.execution ?? "UNKNOWN"}; next check in ${secs}s (request ${last?.requestId ?? "?"}).`));
+        }
+        else if (record.state === "RESUMED") {
+            console.warn(pc.green(`✓ Provider recovered after ${Math.round(record.waitedMs / 1000)}s; step ${record.step} completed on attempt ${record.submissions.length + 1}.`));
+        }
+        else if (record.state === "YIELDED") {
+            console.warn(pc.yellow(`↪ Provider ${record.condition.toLowerCase().replace(/_/g, " ")}: step ${record.step} handed back to the operation scheduler (not executed).`));
+        }
+        else if (record.state !== "PROBING") {
+            console.warn(pc.red(`✗ Provider recovery ${record.state.toLowerCase()}: ${record.reason ?? ""}`));
+        }
+        if (record.state === "WAITING" || record.state === "RESUMED") {
+            try {
+                this.checkpointDurableState(`provider recovery ${record.state.toLowerCase()}`);
+            }
+            catch { }
+        }
+        try {
+            this.observer?.onProviderRecovery?.({ record, discardedPartialOutput });
+        }
+        catch { }
+    }
     /** The AbortSignal of the active turn, for operator prompts that must unblock on cancellation. */
     getActiveTurnSignal() {
         return this.activeTurn?.controller.signal;
@@ -1869,6 +1921,7 @@ Always explain your reasoning before or alongside your tool calls.`;
             let inferenceFailure = null;
             let interruption = null;
             let undispatched = 0;
+            const providerRecoveries = [];
             const markInterrupted = (phase, extra = {}) => {
                 interruption = {
                     requestedAt: turn.cancelRequestedAt || new Date().toISOString(),
@@ -1930,16 +1983,39 @@ Always explain your reasoning before or alongside your tool calls.`;
                 }
                 let assistantMessage;
                 let streamedTokens = false;
+                // Temporary provider failures are waited out here, at the inference boundary: history and tool state
+                // are untouched while waiting, and a submission's output is used only once it is complete.
+                const policy = this.recoveryPolicy ?? recoveryPolicyFromEnv();
+                const recovery = new ProviderRecoveryController(policy, this.recoveryClock, currentStep);
                 try {
-                    assistantMessage = await activeClient.chatCompletionStream(this.messages, this.getEffectiveTools(), (token) => {
-                        if (!streamedTokens) {
-                            this.ui.stopSpinner(true);
-                            process.stdout.write(pc.bold(pc.magenta("\n💭 Assistant: ")));
-                            streamedTokens = true;
-                        }
-                        process.stdout.write(token);
-                        this.observer?.onAssistantDelta?.(token);
-                    }, requestId, signal);
+                    assistantMessage = await recovery.run(requestId, {
+                        submit: (s) => activeClient.chatCompletionStream(this.messages, this.getEffectiveTools(), (token) => {
+                            if (!streamedTokens) {
+                                this.ui.stopSpinner(true);
+                                process.stdout.write(pc.bold(pc.magenta("\n💭 Assistant: ")));
+                                streamedTokens = true;
+                            }
+                            process.stdout.write(token);
+                            this.observer?.onAssistantDelta?.(token);
+                        }, s.requestId, signal),
+                        probe: (probeSignal, opts) => typeof activeClient.probeAvailability === "function"
+                            ? activeClient.probeAvailability(probeSignal, { timeoutMs: policy.probeTimeoutMs, ...opts })
+                            : Promise.resolve({ available: true, condition: "AVAILABLE" }),
+                        classify: (err) => (err instanceof InferenceError ? err.toFailure() : null),
+                        newRequestId: () => randomUUID(),
+                        onFailure: this.providerRecoveryHooks?.onFailure,
+                        shouldYield: this.providerRecoveryHooks?.shouldYield,
+                        onState: (record) => {
+                            if (streamedTokens && record.state === "RESUMED")
+                                process.stdout.write("\n");
+                            const discarded = streamedTokens && record.state === "WAITING";
+                            if (discarded) {
+                                process.stdout.write(pc.dim("\n[partial response discarded: the provider failed before completing it]\n"));
+                                streamedTokens = false;
+                            }
+                            this.onProviderRecoveryState(record, turn, discarded);
+                        },
+                    }, signal);
                     if (streamedTokens) {
                         process.stdout.write("\n\n");
                     }
@@ -1954,6 +2030,11 @@ Always explain your reasoning before or alongside your tool calls.`;
                     }
                     if (streamedTokens)
                         process.stdout.write("\n");
+                    if (err instanceof RecoveryCancelled) {
+                        this.ui.stopSpinner(false, "Stopped while waiting for the inference provider");
+                        markInterrupted("provider_wait");
+                        break;
+                    }
                     if (err instanceof InferenceError && err.kind === "aborted") {
                         this.ui.stopSpinner(false, "Inference request aborted by operator");
                         markInterrupted("inference");
@@ -1965,6 +2046,12 @@ Always explain your reasoning before or alongside your tool calls.`;
                         ? err.toFailure()
                         : { kind: "protocol_error", origin: "client", message: err?.message || String(err), requestId };
                     break;
+                }
+                finally {
+                    if (recovery.record)
+                        providerRecoveries.push(recovery.record);
+                    turn.phase = "inference";
+                    this.activeProviderRecovery = null;
                 }
                 stepsUsed = currentStep;
                 // Parse the response using hybrid parser
@@ -2112,6 +2199,7 @@ Always explain your reasoning before or alongside your tool calls.`;
                 limitReached,
                 capacityBlock,
                 stepsUsed: stepsUsed || Math.min(currentStep, this.config.maxSteps),
+                providerRecoveries,
             });
             this.lastTurnResult = result;
             if (this.flightRecorder) {
@@ -2127,7 +2215,10 @@ Always explain your reasoning before or alongside your tool calls.`;
     /** Single place where a turn's execution/outcome dimensions are derived from evidence held by the agent. */
     buildTurnResult(input) {
         const evidence = this.verificationEvidence ?? null;
+        const recoveries = input.providerRecoveries ?? [];
+        const lastRecovery = recoveries[recoveries.length - 1];
         const base = {
+            ...(recoveries.length ? { providerRecovery: recoveries } : {}),
             acceptance: "NOT_REQUESTED",
             modelStop: input.modelStop,
             finalOutputComplete: input.finalOutputComplete,
@@ -2146,7 +2237,8 @@ Always explain your reasoning before or alongside your tool calls.`;
         if (input.inferenceFailure) {
             return deepFreezeTurn(assertTurnResultInvariants({
                 ...base, execution: "FAILED", outcome: "NOT_ESTABLISHED", reason: "INFERENCE_FAILED",
-                detail: `${input.inferenceFailure.kind}/${input.inferenceFailure.origin}${input.inferenceFailure.httpStatus ? ` HTTP ${input.inferenceFailure.httpStatus}` : ""}`,
+                detail: `${input.inferenceFailure.kind}/${input.inferenceFailure.origin}${input.inferenceFailure.httpStatus ? ` HTTP ${input.inferenceFailure.httpStatus}` : ""}` +
+                    (lastRecovery?.state === "EXHAUSTED" ? `; provider recovery exhausted after ${lastRecovery.submissions.length} submissions, ${Math.round(lastRecovery.waitedMs / 1000)}s waiting` : ""),
                 finalOutputComplete: false,
             }));
         }
@@ -2277,6 +2369,12 @@ Always explain your reasoning before or alongside your tool calls.`;
             throw new Error("Turn ended without a result");
         return turnResult;
     }
+    /**
+     * In-turn delegation for the spawn_subagent tool: a bounded, non-durable helper loop whose result is part of the
+     * parent's turn (the parent is the durable unit). Completed only when the subagent called task_completed or
+     * delivered a final report; inference failure and step exhaustion are reported as not completed. Durable
+     * autonomous work (/team, nexus operation) does not use this path: it runs as scheduled work units.
+     */
     async runSubagent(prompt) {
         if (this.config.worktree && !this.activeWorktree && !this.inheritedWorktreeScope) {
             throw new Error("Cannot run a worktree-enabled subagent without an established worktree authority.");
@@ -2297,10 +2395,19 @@ Always explain your reasoning before or alongside your tool calls.`;
             const { client: activeClient } = this.selectCognitiveClient(currentStep, this.messages);
             try {
                 this.admitContext(currentStep, requestId);
-                assistantMessage = await activeClient.chatCompletion(this.messages, HARNESS_TOOLS, requestId);
+                const policy = this.recoveryPolicy ?? recoveryPolicyFromEnv();
+                assistantMessage = await new ProviderRecoveryController(policy, this.recoveryClock, currentStep).run(requestId, {
+                    submit: (s) => activeClient.chatCompletion(this.messages, HARNESS_TOOLS, s.requestId),
+                    probe: (probeSignal, opts) => typeof activeClient.probeAvailability === "function"
+                        ? activeClient.probeAvailability(probeSignal, { timeoutMs: policy.probeTimeoutMs, ...opts })
+                        : Promise.resolve({ available: true, condition: "AVAILABLE" }),
+                    classify: (err) => (err instanceof InferenceError ? err.toFailure() : null),
+                    newRequestId: () => randomUUID(),
+                });
             }
             catch (err) {
-                return `Subagent failed during LLM inference: ${err.message}`;
+                const what = err instanceof ContextBudgetError ? "context admission refused the request" : "inference failed";
+                return { completed: false, summary: finalSummary, reason: `${what}: ${err?.message ?? err}` };
             }
             const parsed = parseModelResponse(assistantMessage);
             this.messages.push({
@@ -2309,8 +2416,10 @@ Always explain your reasoning before or alongside your tool calls.`;
                 ...(parsed.toolCalls.length > 0 ? { tool_calls: parsed.toolCalls } : {}),
             });
             if (parsed.toolCalls.length === 0) {
-                finalSummary = parsed.thoughtText || (typeof assistantMessage.content === "string" ? assistantMessage.content : "Subagent finished without remarks.");
-                break;
+                const report = parsed.thoughtText || (typeof assistantMessage.content === "string" ? assistantMessage.content : "");
+                if (report.trim())
+                    return { completed: true, summary: report };
+                return { completed: false, summary: "", reason: "the subagent stopped without a report" };
             }
             for (const call of parsed.toolCalls) {
                 const toolName = call.function.name;
@@ -2324,8 +2433,7 @@ Always explain your reasoning before or alongside your tool calls.`;
                                 : call.function.arguments;
                     }
                     catch { }
-                    finalSummary = args.summary || "Subagent finished objective.";
-                    return finalSummary;
+                    return { completed: true, summary: args.summary || "Subagent finished objective." };
                 }
                 this.messages.push({
                     role: "tool",
@@ -2336,8 +2444,9 @@ Always explain your reasoning before or alongside your tool calls.`;
                         : `Error executing ${toolName}: ${receipt.error || "Unknown error"}`,
                 });
             }
+            finalSummary = parsed.thoughtText || finalSummary;
             currentStep++;
         }
-        return finalSummary || "Subagent completed assigned steps.";
+        return { completed: false, summary: finalSummary, reason: `step limit ${this.config.maxSteps} reached without task_completed` };
     }
 }

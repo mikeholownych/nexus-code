@@ -24,6 +24,7 @@ import {
   encodeEvent,
   parseCommand,
   projectTurn,
+  providerRecoveryNotice,
   stripEscapes,
   toolSubject,
   toolSummary,
@@ -197,6 +198,10 @@ export class SidecarServer {
         open.delete(dispatch);
         this.evidence.end(evidence, success, output, error);
         this.emit({ type: "tool.end", turn_id: turnId, call_id: callId, tool, success, evidence, ...toolSummary(success, output, error) });
+      },
+      onProviderRecovery: ({ record, discardedPartialOutput }) => {
+        const text = providerRecoveryNotice(record, discardedPartialOutput);
+        if (text) this.emit({ type: "notice", text });
       },
     };
   }

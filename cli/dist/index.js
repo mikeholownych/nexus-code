@@ -18,6 +18,7 @@ import { BenchmarkEvaluator } from "./evaluator.js";
 import { BrowserDriver } from "./browser.js";
 import { KnowledgeGraph } from "./knowledge.js";
 import { buildConfig, loadEnvironment } from "./config.js";
+import { registerOperationCommands } from "./operation_cli.js";
 import pc from "picocolors";
 import * as os from "node:os";
 const __filename = fileURLToPath(import.meta.url);
@@ -622,5 +623,6 @@ program
 if (process.argv.length <= 2) {
     process.argv.push("repl");
 }
+registerOperationCommands(program);
 program.parse(process.argv);
 export { ApplicationCore } from "./core/app.js";

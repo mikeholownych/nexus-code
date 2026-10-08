@@ -3,7 +3,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { config as loadDotenv } from "dotenv";
-import { LocalLlmClient, readLatestAuthToken } from "./client.js";
+import { credentialOriginOf, LocalLlmClient } from "./client.js";
 import { HarnessConfig } from "./types.js";
 
 const installEnv = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../.env");
@@ -28,7 +28,10 @@ export function loadEnvironment(): void {
 export function buildConfig(options: any): HarnessConfig {
   const endpoint = options.endpoint || process.env.LOCAL_LLM_ENDPOINT || "http://localhost:1234/v1";
   const model = options.model || process.env.LOCAL_LLM_MODEL || "local-model";
-  const apiKey = options.apiKey || process.env.LOCAL_LLM_API_KEY || readLatestAuthToken() || "local";
+  // Stored gateway credentials are not baked in here: the client attaches them only to the gateway they belong to.
+  const apiKey = options.apiKey || process.env.LOCAL_LLM_API_KEY || "local";
+  const keyEndpoint = options.apiKey ? endpoint : process.env.LOCAL_LLM_ENDPOINT || endpoint;
+  const credentialOrigin = apiKey !== "local" ? credentialOriginOf(keyEndpoint) : undefined;
   const workspace = options.workspace ? path.resolve(options.workspace) : process.cwd();
   const maxSteps = options.maxSteps ? parseInt(options.maxSteps, 10) : 30;
   const temperature = options.temperature ? parseFloat(options.temperature) : 0.2;
@@ -56,6 +59,7 @@ export function buildConfig(options: any): HarnessConfig {
     endpoint,
     model,
     apiKey,
+    ...(credentialOrigin ? { credentialOrigin } : {}),
     workspace,
     maxSteps,
     temperature,

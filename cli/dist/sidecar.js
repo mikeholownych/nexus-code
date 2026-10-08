@@ -13,7 +13,7 @@ import { getGitInfo } from "./git.js";
 import { redactSecrets } from "./ui.js";
 import { approvalReview } from "./approval_review.js";
 import { EvidenceLedger, MAX_EVIDENCE, receiptSections, redactedJson } from "./evidence.js";
-import { MAX_SLASH_OUTPUT, PROTOCOL_VERSION, ProtocolError, capText, encodeEvent, parseCommand, projectTurn, stripEscapes, toolSubject, toolSummary, } from "./protocol.js";
+import { MAX_SLASH_OUTPUT, PROTOCOL_VERSION, ProtocolError, capText, encodeEvent, parseCommand, projectTurn, providerRecoveryNotice, stripEscapes, toolSubject, toolSummary, } from "./protocol.js";
 import { errorText, findSlash, slashCatalog } from "./slash/catalog.js";
 import { routeSlash } from "./slash/router.js";
 /** Drives one ApplicationCore from protocol commands and reports its activity as protocol events. */
@@ -171,6 +171,11 @@ export class SidecarServer {
                 open.delete(dispatch);
                 this.evidence.end(evidence, success, output, error);
                 this.emit({ type: "tool.end", turn_id: turnId, call_id: callId, tool, success, evidence, ...toolSummary(success, output, error) });
+            },
+            onProviderRecovery: ({ record, discardedPartialOutput }) => {
+                const text = providerRecoveryNotice(record, discardedPartialOutput);
+                if (text)
+                    this.emit({ type: "notice", text });
             },
         };
     }

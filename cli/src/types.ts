@@ -52,6 +52,8 @@ export interface HarnessConfig {
   taskClass?: string;        // Routing hint sent to the gateway as X-Task-Class (e.g. "review", "architecture")
   plannerTaskClass?: string; // Same, for the planner client
   fallbackEndpoints?: string[]; // Failover endpoint URLs if primary endpoint is unavailable
+  pinEndpoint?: boolean;     // Use only `endpoint` (no fallbacks): the operation scheduler owns resource selection
+  credentialOrigin?: string;     // Origin apiKey belongs to (default: endpoint's origin); never sent elsewhere
   contextLimit?: number;     // Maximum model context window token limit (default: 65536)
   completionReserveTokens?: number; // Context reserved for each model completion (default: 8192)
   toolResponseReserveTokens?: number; // Context reserved for the following tool results (default: 4096)

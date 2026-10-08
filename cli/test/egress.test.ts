@@ -381,10 +381,10 @@ MIIEowIBAAKCAQEA0Z3vV4k8t...fake...pem...body...content...
       const syntheticSecret = "sk-proj-fallbacksecret1234567890abcdef123456";
       let capturedPayloadOnBackup: string | null = null;
 
-      // 1. Create a primary endpoint that fails (simulating local vLLM crash)
+      // 1. Create a primary endpoint that is unavailable (503: refused without executing, so failover is safe)
       const primaryServer = http.createServer((_req, res) => {
-        res.writeHead(500, { "Content-Type": "application/json" });
-        res.end(JSON.stringify({ error: "Local vLLM crashed" }));
+        res.writeHead(503, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: "Local vLLM unavailable" }));
       });
 
       // 2. Create a backup public endpoint that captures the payload

@@ -16,7 +16,7 @@ import { runTestSuite } from "./tester.js";
 import { copyToClipboard, readFromClipboard } from "./clipboard.js";
 import { encodeImageFile, formatVisionContent } from "./image.js";
 import { ThemeManager } from "./theme.js";
-import { TeamOrchestrator } from "./team.js";
+import { TeamOrchestrator, TEAM_ROLES } from "./team.js";
 import { TerminalDashboard } from "./tui.js";
 import { HunkStager } from "./stager.js";
 import { lifecycleStatusForTurn } from "./core/turn.js";
@@ -58,6 +58,8 @@ export class InteractiveRepl {
     currentSessionId;
     themeManager = new ThemeManager();
     exitResolve;
+    /** Cancels a running /team operation (Ctrl-C). */
+    teamAbort;
     constructor(appOrConfig, autoApprove = true, resumeSessionId) {
         if ("getAgent" in appOrConfig && typeof appOrConfig.getAgent === "function") {
             this.app = appOrConfig;
@@ -425,6 +427,11 @@ export class InteractiveRepl {
         // cancellation (no new inference or tool dispatch is admitted); a second press terminates the process.
         // While idle it keeps its deliberate-exit meaning.
         this.rl.on("SIGINT", () => {
+            if (this.teamAbort && !this.teamAbort.signal.aborted) {
+                this.teamAbort.abort();
+                console.log(pc.yellow("\n⏹  Stop requested: the team operation is cancelled after its current step; its state is preserved."));
+                return;
+            }
             if (this.agent.getTurnLifecycle()) {
                 if (this.agent.requestCancel("operator Ctrl-C")) {
                     const life = this.agent.getTurnLifecycle();
@@ -1265,31 +1272,32 @@ export class InteractiveRepl {
                         const subParts = arg.trim().split(/\s+/);
                         const subCmd = subParts[0]?.toLowerCase();
                         const task = subParts.slice(1).join(" ").trim();
-                        if (!subCmd || !task) {
-                            console.log(pc.yellow("Usage: /team <researcher|architect|implementer|tester|full> <objective>\n"));
+                        const independentReview = task.startsWith("--independent-review");
+                        const objective = task.replace(/^--independent-review\s*/, "").trim();
+                        if (!subCmd || !objective) {
+                            console.log(pc.yellow(`Usage: /team <${[...TEAM_ROLES, "full"].join("|")}> [--independent-review] <objective>\n`));
                             continue;
                         }
-                        const orchestrator = new TeamOrchestrator(this.config);
-                        if (subCmd === "full") {
-                            console.log(pc.bold(pc.cyan(`\n👥 Launching Multi-Agent Collaborative Team Workflow...`)));
-                            console.log(pc.dim(`Objective: ${task}\n`));
-                            this.agent.getUi().startSpinner("Orchestrating team phases (Researcher -> Architect -> Implementer -> Tester)...");
-                            const result = await orchestrator.runFullWorkflow(task);
-                            this.agent.getUi().stopSpinner(result.success);
-                            console.log(result.finalReport);
-                            console.log();
+                        if (subCmd !== "full" && !TEAM_ROLES.includes(subCmd)) {
+                            console.log(pc.red(`Unknown role '${subCmd}'. Available: ${[...TEAM_ROLES, "full"].join(", ")}\n`));
+                            continue;
                         }
-                        else if (["researcher", "architect", "implementer", "tester"].includes(subCmd)) {
-                            console.log(pc.bold(pc.cyan(`\n👤 Delegating to Specialized Role: ${subCmd.toUpperCase()}...`)));
-                            this.agent.getUi().startSpinner(`Executing ${subCmd} task...`);
-                            const result = await orchestrator.executeRoleTask(subCmd, task);
-                            this.agent.getUi().stopSpinner(result.success);
-                            console.log(pc.bold(pc.white(`\nRole [${subCmd.toUpperCase()}] Summary:`)));
-                            console.log(result.summary);
-                            console.log(pc.dim(`Duration: ${(result.durationMs / 1000).toFixed(1)}s | Steps: ${result.steps}\n`));
+                        this.teamAbort = new AbortController();
+                        try {
+                            const orchestrator = new TeamOrchestrator(this.config, {
+                                signal: this.teamAbort.signal,
+                                independentReview,
+                                maxInProcessWaitMs: 60_000,
+                                onEvent: (e) => {
+                                    console.log((e.type.startsWith("RESOURCE_") ? pc.dim : pc.cyan)(`◆ ${e.message}`));
+                                },
+                            });
+                            console.log(pc.bold(pc.cyan(`\n👥 Team ${subCmd === "full" ? "workflow" : `role ${subCmd}`} as a durable operation`)));
+                            const result = await orchestrator.run(subCmd === "full" ? "full" : subCmd, objective);
+                            console.log((result.success ? pc.green : pc.yellow)(`\n${result.report}\n`));
                         }
-                        else {
-                            console.log(pc.red(`Unknown role '${subCmd}'. Available: researcher, architect, implementer, tester, full\n`));
+                        finally {
+                            this.teamAbort = undefined;
                         }
                         continue;
                     }
