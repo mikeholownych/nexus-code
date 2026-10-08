@@ -167,8 +167,8 @@ function operationRig(config: HarnessConfig, gw: Gw) {
   return {
     id,
     start: (units: WorkUnitSpec[]) => muted(() => driveOperation(newOperation(id, "continuity", units, [resource], Date.now()), { store, executor })),
-    decide: (decisionId: string, option: string) => {
-      applyOperatorDecision(store, id, decisionId, option);
+    decide: (decisionId: string, option: string, note?: string) => {
+      applyOperatorDecision(store, id, decisionId, option, note);
       return muted(() => driveOperation(store.load(id), { store, executor }));
     },
     /** The unit's durable conversation task file. */
@@ -356,6 +356,47 @@ describe("V2: unverified changes survive retries, step limits, restarts and resu
   });
 });
 
+describe("V2: a tool still running when an interactive host ends", () => {
+  test("interactive /resume after the host ended inside a writing command: the change is still unverified", async () => {
+    await withHome(async () => {
+      const gw = await gateway((b) =>
+        lastUser(b).startsWith("Run the writer") && toolResults(b) === 0
+          ? { tools: [{ name: "run_command", args: { command: "printf x > out.txt; sleep 6" } }] }
+          : done("nothing left"));
+      const repo = makeRepo();
+      const config = cfg(gw, repo);
+      const app1 = new ApplicationCore(config as any);
+      quiet(app1.getAgent());
+      const server1 = new SidecarServer({ app: app1, mode: "auto", write: () => {} });
+      let app2: ApplicationCore | undefined;
+      server1.start();
+      const abandoned = muted(() => server1.handleLine(JSON.stringify({ v: 1, type: "prompt.submit", id: "t", text: "Run the writer." })));
+      try {
+        await until(() => fs.existsSync(path.join(repo, "out.txt")), 15_000);
+        // Second host: a new application resumes the latest session from disk while the command is still running.
+        app2 = new ApplicationCore(config as any);
+        quiet(app2.getAgent());
+        const events: any[] = [];
+        const server2 = new SidecarServer({ app: app2, mode: "auto", write: (line) => events.push(JSON.parse(line)), resume: "latest" });
+        server2.start();
+        await muted(async () => {
+          await server2.handleLine(JSON.stringify({ v: 1, type: "prompt.submit", id: "t2", text: "Anything left?" }));
+          await server2.idle();
+        });
+        const result = events.find((e) => e.type === "turn.result");
+        assert.equal(result.turn.outcome, "UNVERIFIED", `resumed turn: ${result.turn.outcome}`);
+      } finally {
+        await server1.handleLine(JSON.stringify({ v: 1, type: "cancel" }));
+        await Promise.race([abandoned.catch(() => {}), new Promise((r) => setTimeout(r, 10_000))]);
+        await gw.close();
+        app2?.shutdown();
+        app1.shutdown();
+        fs.rmSync(repo, { recursive: true, force: true });
+      }
+    });
+  });
+});
+
 // ---------------------------------------------------------------- V1: missing or inconsistent durable history
 
 describe("V1: a unit whose durable history is missing or inconsistent is blocked, never completed", () => {
@@ -377,6 +418,18 @@ describe("V1: a unit whose durable history is missing or inconsistent is blocked
     { name: "inconsistent conversation (a replacement objective)", corrupt: (f) => edit(f, (s) => ({ ...s, messages: [s.messages[0], { role: "user", content: "Merge the segment files into one." }] })), problem: /does not contain the unit's authorized task/, restartedOutcome: "COMPLETE" },
     { name: "partial history after a write (the obligation record survives)", corrupt: (f) => edit(f, (s) => ({ ...s, messages: [] })), problem: /no conversation was recorded/, restartedOutcome: "BLOCKED", firstTurnWrites: true },
     { name: "missing durable state (task file deleted)", corrupt: (f) => fs.rmSync(f), problem: /could not be loaded/, restartedOutcome: "BLOCKED" },
+    {
+      name: "a task file written before obligations were recorded, with no conversation",
+      corrupt: (f) => edit(f, ({ unverifiedChangesPending: _p, lastTurn: _t, ...s }) => ({ ...s, messages: [] })),
+      problem: /no conversation was recorded/,
+      restartedOutcome: "BLOCKED",
+    },
+    {
+      name: "a conversation truncated to its system prompt, with no obligation record",
+      corrupt: (f) => edit(f, ({ unverifiedChangesPending: _p, lastTurn: _t, ...s }) => ({ ...s, messages: [s.messages[0]] })),
+      problem: /does not contain the unit's authorized task/,
+      restartedOutcome: "BLOCKED",
+    },
   ];
 
   for (const c of corruptions) {
@@ -431,6 +484,53 @@ describe("V1: a unit whose durable history is missing or inconsistent is blocked
         }));
         const more = decisionOf(op, "markers").options.find((o) => o.label === "continue with more steps")!;
         op = await rig.decide(decisionOf(op, "markers").id, more.id);
+        assert.equal(unitOf(op, "markers").status, "COMPLETE", `${unitOf(op, "markers").blocked?.reason}`);
+      } finally {
+        rig.close();
+        await gw.close();
+        fs.rmSync(repo, { recursive: true, force: true });
+      }
+    });
+  });
+
+  test("a conversation where nothing happened yet (only the system prompt) starts the unit, without a restart decision", async () => {
+    await withHome(async () => {
+      const gw = await gateway(reader);
+      const repo = makeRepo(files);
+      const rig = operationRig(cfg(gw, repo, { maxSteps: 2 }), gw);
+      try {
+        let op = await rig.start([UNIT]);
+        edit(rig.taskFile(op, "markers"), (s) => ({ ...s, messages: [s.messages[0]] }));
+        const before = gw.requests.length;
+        const more = decisionOf(op, "markers").options.find((o) => o.label === "continue with more steps")!;
+        op = await rig.decide(decisionOf(op, "markers").id, more.id);
+        const first = gw.requests[before];
+        assert.ok(first, `no request: ${unitOf(op, "markers").blocked?.reason}`);
+        assert.ok(lastUser(first).startsWith("[Work unit 'markers'") && !lastUser(first).includes("record was lost"));
+        assert.doesNotMatch(unitOf(op, "markers").blocked?.reason ?? "", /unusable/);
+      } finally {
+        rig.close();
+        await gw.close();
+        fs.rmSync(repo, { recursive: true, force: true });
+      }
+    });
+  });
+
+  test("an operator revision continues the unit's recorded conversation (the history predates the revision)", async () => {
+    await withHome(async () => {
+      const gw = await gateway(reader);
+      const repo = makeRepo(files);
+      const rig = operationRig(cfg(gw, repo, { maxSteps: 2 }), gw);
+      try {
+        let op = await rig.start([UNIT]);
+        const revise = decisionOf(op, "markers").options.find((o) => o.label.startsWith("revise the unit"))!;
+        assert.ok(revise, `offered: ${decisionOf(op, "markers").options.map((o) => o.label).join(", ")}`);
+        const before = gw.requests.length;
+        op = await rig.decide(decisionOf(op, "markers").id, revise.id, "REVISED-NOTE: report the markers in upper case");
+        const first = gw.requests[before];
+        assert.ok(first, `no request: ${unitOf(op, "markers").blocked?.reason}`);
+        assert.ok(resumed(first) && lastUser(first).includes("REVISED-NOTE"), "the revised task is restated on resume");
+        assert.equal(toolResults(first), 2, "the earlier progress was kept");
         assert.equal(unitOf(op, "markers").status, "COMPLETE", `${unitOf(op, "markers").blocked?.reason}`);
       } finally {
         rig.close();
@@ -585,6 +685,41 @@ describe("V1: process death mid-turn, then restart and resume", () => {
       const resumedRun = await cli(["operation", "decide", "cont-inflight", decision.id, decision.options[0].id, "-w", ws, "-s", "6", "-j"], { cwd: ws, home });
       op = opState(resumedRun.out);
       assert.ok(gw.requests.some((b) => lastUser(b).includes("Nexus stopped while run_command")), "the model is told the tool may have partially run");
+      assert.equal(unitOf(op, "markers").status, "BLOCKED", `after continuing: ${unitOf(op, "markers").status}`);
+      assert.match(unitOf(op, "markers").blocked!.reason, /UNVERIFIED/);
+    } finally {
+      run?.kill();
+      await gw.close();
+      fs.rmSync(home, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("V2: process death while a subagent ran", () => {
+  test("a subagent that wrote before the kill leaves the unit unverified after continuing", async () => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-cont-kill-"));
+    const isChild = (b: any) => allText(b).includes("[Subagent Objective]");
+    const gw = await gateway((b) => {
+      if (isChild(b)) return toolResults(b) === 0 ? write("child.txt") : { hold: true };
+      if (!allText(b).includes("OBJ-DELEGATE")) return done("nothing to do");
+      if (lastUser(b).includes("Nexus stopped while")) return done("checked; nothing else to do");
+      return toolResults(b) === 0 ? { tools: [{ name: "spawn_subagent", args: { prompt: "Write child.txt.", max_steps: 4 } }] } : done("delegated");
+    });
+    const ws = path.join(home, "ws");
+    fs.mkdirSync(ws);
+    let run: ReturnType<typeof cliProcess> | undefined;
+    try {
+      const spec = writeSpec(home, "cont-subagent", gw, "OBJ-DELEGATE: have a subagent write child.txt.");
+      run = cliProcess(["operation", "run", spec, "-w", ws, "-s", "6"], { cwd: ws, home });
+      await until(() => gw.held && fs.existsSync(path.join(ws, "child.txt")));
+      run.kill();
+      await run.done();
+      let op = opState((await cli(["operation", "resume", "cont-subagent", "-w", ws, "-s", "6", "-j"], { cwd: ws, home })).out);
+      assert.equal(op.status, "BLOCKED");
+      assert.match(unitOf(op, "markers").blocked!.reason, /spawn_subagent/);
+      const decision = decisionOf(op, "markers");
+      op = opState((await cli(["operation", "decide", "cont-subagent", decision.id, decision.options[0].id, "-w", ws, "-s", "6", "-j"], { cwd: ws, home })).out);
+      assert.ok(gw.requests.some((b) => lastUser(b).includes("Nexus stopped while spawn_subagent")), "the continuation ran");
       assert.equal(unitOf(op, "markers").status, "BLOCKED", `after continuing: ${unitOf(op, "markers").status}`);
       assert.match(unitOf(op, "markers").blocked!.reason, /UNVERIFIED/);
     } finally {

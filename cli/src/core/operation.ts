@@ -42,6 +42,15 @@ import type { InferenceFailure } from "./turn.js";
 export type WorkUnitStatus = "RUNNABLE" | "RUNNING" | "PARKED" | "WAITING_ON_DEPENDENCY" | "COMPLETE" | "BLOCKED";
 export type OperationStatus = "RUNNING" | "WAITING" | "BLOCKED" | "COMPLETE" | "CANCELLED";
 
+/** Separates a unit's task from the operator revisions appended to it. */
+const REVISION_MARKER = "\n\nOperator revision: ";
+
+/** The task a unit was given before any operator revision (its conversation began with this). */
+export function unitBaseTask(prompt: string): string {
+  const at = prompt.indexOf(REVISION_MARKER);
+  return at < 0 ? prompt : prompt.slice(0, at);
+}
+
 /** What applying a decision option does. Every option Nexus offers is one of these; nothing else is accepted. */
 export type DecisionAction =
   /**
@@ -566,7 +575,7 @@ export class ConvergenceScheduler {
         u.status = "RUNNABLE";
         break;
       case "revise":
-        u.prompt = `${u.prompt}\n\nOperator revision: ${text}`;
+        u.prompt = `${u.prompt}${REVISION_MARKER}${text}`;
         u.runsBase = u.runs;
         u.status = "RUNNABLE";
         break;

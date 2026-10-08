@@ -10,7 +10,8 @@ import { AutonomousAgent } from "../agent.js";
 import { LocalLlmClient, mayBindCredential, storedCredentialFor } from "../client.js";
 import type { ChatMessage, HarnessConfig } from "../types.js";
 import { realRecoveryClock, type RecoveryClock } from "./provider_recovery.js";
-import { ConvergenceScheduler, type Decision, type DurableOperationState, type OperationEvent, type UnitRunResult, type WorkUnit } from "./operation.js";
+import { ConvergenceScheduler, unitBaseTask, type Decision, type DurableOperationState, type OperationEvent, type UnitRunResult, type WorkUnit } from "./operation.js";
+import { redactForPersistence } from "./persistence_protection.js";
 import { ROLE_PROFILES } from "./roles.js";
 import {
   applyProviderCatalog,
@@ -479,16 +480,22 @@ export interface AgentExecutorOptions {
 
 /**
  * Why a recovered conversation cannot continue `unit`, or undefined when it holds the system prompt and a unit prompt
- * Nexus issued with the authorized task (the first prompt, or a resume prompt where compaction kept only that).
+ * Nexus issued with the authorized task (the first prompt, or a resume prompt where compaction kept only that). The
+ * task is matched before operator revisions (an earlier conversation predates them) and as persisted (redacted).
  */
 function resumeHistoryProblem(messages: ChatMessage[], unit: WorkUnit): string | undefined {
   if (messages.length === 0) return "no conversation was recorded";
   if (messages[0].role !== "system") return "its recorded conversation has no system prompt";
+  const task = unitBaseTask(unit.prompt);
+  const forms = [task, redactForPersistence(task)];
   const holdsTask = (m: ChatMessage) =>
-    m.role === "user" && typeof m.content === "string" && m.content.startsWith("[Work unit ") && m.content.includes(unit.prompt);
+    m.role === "user" && typeof m.content === "string" && m.content.startsWith("[Work unit ") && forms.some((f) => (m.content as string).includes(f));
   if (!messages.some(holdsTask)) return "its recorded conversation does not contain the unit's authorized task";
   return undefined;
 }
+
+/** Nothing happened in the conversation yet (for example, its first prompt was withdrawn before inference). */
+const conversationNotStarted = (messages: ChatMessage[]): boolean => messages.length === 1 && messages[0].role === "system";
 
 /**
  * Runs a work unit as one truthful agent turn pinned to the chosen resource. The unit's conversation is its own
@@ -550,7 +557,10 @@ export class AgentWorkUnitExecutor implements WorkUnitExecutor {
             options: [{ label: "continue after inspection", action: { kind: "retry" } }],
           };
         }
-        unusable ??= resumeHistoryProblem(agent.getMessages(), unit);
+        // Only a record that tracks obligations can show that nothing happened; without one, earlier work is unknown.
+        const notStarted =
+          !unusable && recovered?.state.unverifiedChangesPending !== undefined && conversationNotStarted(agent.getMessages());
+        if (!notStarted) unusable ??= resumeHistoryProblem(agent.getMessages(), unit);
         const decision = ctx.operatorDecision
           ? `The operator decided: ${ctx.operatorDecision.label}${ctx.operatorDecision.note ? ` — ${ctx.operatorDecision.note}` : ""}.\n`
           : "";
@@ -565,10 +575,14 @@ export class AgentWorkUnitExecutor implements WorkUnitExecutor {
               options: [{ label: "restart the unit from its authorized task", action: { kind: "retry", restart: true } }],
             };
           }
-          agent.restartConversation(!recovered);
+          // Without a recorded obligation (state unloadable, or written before obligations were recorded) earlier
+          // changes are unknown, so they count as unverified.
+          agent.restartConversation(!recovered || recovered.state.unverifiedChangesPending === undefined);
           prompt =
             `${this.initialPrompt(unit, ctx)}\n\n${decision}` +
             `Note: an earlier attempt at this unit ran, but its record was lost (${unusable}). Workspace changes it may have made are unknown and unverified; check the workspace before relying on it.`;
+        } else if (notStarted) {
+          prompt = `${this.initialPrompt(unit, ctx)}${decision ? `\n\n${decision}` : ""}`;
         } else {
           const op = recovered?.state.currentOperation;
           const stopped = op?.status === "interrupted"

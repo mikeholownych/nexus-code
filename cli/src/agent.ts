@@ -791,10 +791,11 @@ export class AutonomousAgent {
     const interruptedTool = state.currentOperation?.status === "interrupted" ? state.currentOperation.toolName : undefined;
     const pending =
       (state.unverifiedChangesPending ?? state.lastTurn?.unverifiedChangesPending ?? this.historyHasChanges(this.messages)) ||
-      [...unsettled, ...(interruptedTool ? [interruptedTool] : [])].some((tool) => !this.isReadOnlyTool(tool));
+      [...unsettled, ...(interruptedTool ? [interruptedTool] : [])].some((tool) => this.mayWrite(tool));
     this.hasPendingModifications = pending;
     this.verificationEvidence = undefined;
-    if (state.unverifiedChangesPending !== pending) this.persistProgress({ unverifiedChangesPending: pending });
+    // A derived "no changes" is not written back: a record without the obligation stays unknown for later recoveries.
+    if (pending && !state.unverifiedChangesPending) this.persistProgress({ unverifiedChangesPending: true });
 
     if (state.worktreeBinding && recoveryResult.worktreeStatus === "consistent") {
       this.activeWorktree = {
@@ -1003,7 +1004,7 @@ export class AutonomousAgent {
     this.messages = [...msgs];
     const unsettled = this.settleUnrecordedToolCalls();
     const pending =
-      (unverifiedChangesPending ?? this.historyHasChanges(this.messages)) || unsettled.some((tool) => !this.isReadOnlyTool(tool));
+      (unverifiedChangesPending ?? this.historyHasChanges(this.messages)) || unsettled.some((tool) => this.mayWrite(tool));
     if (pending) this.verificationEvidence = undefined;
     this.setUnverifiedChanges(this.hasPendingModifications || pending);
   }
@@ -1081,14 +1082,18 @@ export class AutonomousAgent {
     return unsettled.map((call) => call.function.name);
   }
 
-  private isReadOnlyTool(toolName: string): boolean {
-    return this.capabilityRegistry.getByToolName(toolName)?.mutating === false;
+  /**
+   * Whether a call of `toolName` may have changed the workspace. A subagent's writes reach this agent's obligation only
+   * when the child returns, so a subagent call whose outcome was not recorded may have written.
+   */
+  private mayWrite(toolName: string): boolean {
+    return toolName === "spawn_subagent" || this.capabilityRegistry.getByToolName(toolName)?.mutating !== false;
   }
 
   /** Whether a conversation holds a successful result of a tool that writes (used when no obligation was recorded). */
   private historyHasChanges(messages: ChatMessage[]): boolean {
     return messages.some(
-      (m) => m.role === "tool" && typeof m.name === "string" && !this.isReadOnlyTool(m.name) &&
+      (m) => m.role === "tool" && typeof m.name === "string" && this.mayWrite(m.name) &&
         !(typeof m.content === "string" && m.content.startsWith("Error executing")),
     );
   }
@@ -2624,6 +2629,9 @@ Always explain your reasoning before or alongside your tool calls.`;
           content: assistantMessage.content || "",
           ...(parsed.toolCalls.length > 0 ? { tool_calls: parsed.toolCalls } : {}),
         });
+
+        // The calls are durable before any of them runs: a crash mid-tool leaves them unsettled, not forgotten.
+        if (parsed.toolCalls.length > 0) this.persistProgress({ messages: true });
 
         // No tool calls: the model stopped acting. That is a fact about the model, not evidence of success.
         if (parsed.toolCalls.length === 0) {
