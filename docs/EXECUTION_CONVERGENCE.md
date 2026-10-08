@@ -27,7 +27,7 @@ Read from the code, not from earlier reports. "Turn" = `AutonomousAgent.runTurn`
 | `nexus eval` | one turn per instance | `agent.run` | yes | yes | benchmark patch/test check | report | in-turn only | turn `BLOCKED` | task state | n/a | primary | no | no |
 | **`/team full`** (slash + legacy REPL) | 4 sequential `runSubagent` calls | `chatCompletion` (non-streaming) | **none** | `admitContext` per step | **`success: true` unless an exception escapes** | **inference error returned as report text → SUCCESS** | **no** | **no** | **none** | implicit fixed order, failure does not stop later roles | **none** (base model for every role, task-class header only) | **no** (no signal) | **no** |
 | **`/team <role>`** | one `runSubagent` | same | **none** | per step | **same false success** | same | no | no | none | n/a | none | no | no |
-| `spawn_subagent` tool | nested `runSubagent` inside a parent turn | same | **none** | per step | **tool `success: true` for any returned string**, incl. inference failure and step-limit exhaustion | same false success to the parent model | no | no | none (parent turn is durable) | n/a | parent config | no | no |
+| `spawn_subagent` tool | nested `runSubagent` inside a parent turn | same | **none** | per step | **tool `success: true` for any returned string**, incl. inference failure and step-limit exhaustion (historical; see §8) | same false success to the parent model | no | no | none (parent turn is durable) | n/a | parent config | no | no |
 | `nexus operation run/resume` | durable operation of work units (`OperationRunner`) | unit = `runTurn` pinned to a resource | yes (+ YIELDED to scheduler) | yes (per-resource limit) | unit `TurnResult` classified by `AgentWorkUnitExecutor.classify` | unit → BLOCKED with decision; operation BLOCKED | **yes** (durable) | **yes** | operation + per-unit task state, driver lock | yes (validated DAG) | yes (registry, conditions, capabilities, independence) | yes | yes (`resume`) |
 
 Contradictions found:
@@ -63,7 +63,7 @@ One model for durable autonomous work, defined in `core/operation.ts` (header) a
 | RUNNING | a turn is executing on its assigned resource |
 | PARKED | a qualified resource will be eligible again at a known time; no model context is held |
 | WAITING_ON_DEPENDENCY | some dependency is not COMPLETE (a BLOCKED dependency keeps it here) |
-| COMPLETE | the turn completed with an established result: `TurnResult.execution === "COMPLETED"` and outcome ≠ `NOT_ESTABLISHED` |
+| COMPLETE | the turn completed with an established result: `turnSucceeded(TurnResult)`, the same predicate as `nexus run` exit 0 (outcome `VERIFIED`, or `NOT_REQUIRED`). `UNVERIFIED` work is not complete |
 | BLOCKED | no safe autonomous transition; carries one structured decision |
 
 | Operation state | Meaning |
@@ -77,7 +77,17 @@ One model for durable autonomous work, defined in `core/operation.ts` (header) a
 There is no FAILED state. Terminal execution failure (provider rejection, step limit, unknown execution with its
 replay budget spent, interrupted tool, no qualified resource) is BLOCKED with a decision; environmental conditions
 (rate limit, capacity, transport outage) park or reroute. `TurnResult` remains the per-turn vocabulary; the unit
-state is derived from it in `AgentWorkUnitExecutor.classify`, so no second set of execution enums exists.
+state is derived from it in `AgentWorkUnitExecutor.classify`, so no second set of execution enums exists. A turn
+that completed without an established result (`UNVERIFIED`: verification not run, no applicable verifier, or
+`CONTEXT_EVIDENCE_NOT_RETAINED`) is BLOCKED with a retry/revise decision, never COMPLETE.
+
+`NOT_REQUIRED` means the turn changed nothing *and* every tool output it relied on was still in its context. When
+context compaction removes a tool observation (elided or truncated by the detail budget) and the turn does not run
+that tool with the same arguments again, the turn is `UNVERIFIED` with reason `CONTEXT_EVIDENCE_NOT_RETAINED`. The
+durable record tells the model exactly which outputs left its context (`Output no longer in context (rerun to see it
+again): <tool> <args>`), carries which notes still hold full output (`retainedObservations`), and a resumed unit
+re-derives what it no longer holds from its recovered conversation. Removal tracking is per turn (plus resumed
+conversations); an interactive REPL turn relying on output compacted away in an earlier turn is not flagged.
 
 ### Decisions
 
@@ -152,13 +162,25 @@ Remediation (no secret-management redesign):
   key belongs to; scheduler resources with `apiKeyEnv` get that key scoped to their own endpoint.
 - Credential values never appear in operation state, events, reports or errors (test 26 checks all of them).
 
+Origin authority (I6 remediation): only the operator decides where a stored credential may go. `loadEnvironment`
+snapshots the process environment before any env file is read and overlays `~/.config/nexus/config.env`; that is
+the credential authority (`setCredentialAuthority`). The install `.env` and the working-directory `.env` still
+configure endpoints and models, but their `LOCAL_LLM_CREDENTIAL_ORIGINS` / `LOCAL_LLM_ENDPOINT` never widen or
+re-home a stored credential (token file, config.env key, or the operator's `LOCAL_LLM_API_KEY`). A key a project
+`.env` supplies itself is bound only to that project's endpoint. `mayBindCredential` applies the same rule to a
+scheduler resource's `apiKeyEnv`, so a spec cannot point a stored credential at another origin.
+
 ## 8. Single-agent boundary
 
 An interactive turn stays a direct `runTurn`: one turn whose `TurnResult` is the outcome, with provider recovery
 and context admission inside it. Wrapping it in an operation would add a store and lock but no new truth. Work that
 has dependencies, must outlive a resource becoming unavailable, may wait, or must resume after a restart is an
 operation. `spawn_subagent` is in-turn delegation: its result is a tool result of the parent's durable turn and is
-now truthful (`SubagentResult.completed`; the tool reports `success: false` when the child did not complete).
+now truthful (`SubagentResult.completed`; the tool reports `success: false` when the child did not complete). The
+child is complete only by `turnSucceeded` on its own turn: its `task_completed` goes through the same receipt
+validation as any turn (a rejected receipt keeps it working), and a plain-text report over unverified changes is
+not completion. The child's workspace changes count as the parent's, so the parent must verify them before it can
+complete; it cannot finish as `NOT_REQUIRED`.
 
 ## 9. Restart and reboot
 
@@ -181,5 +203,9 @@ a user systemd unit or `@reboot` cron entry. That hook is not installed by Nexus
   left as follow-up.
 - The legacy REPL and the slash router each wire `/team` to `TeamOrchestrator` (display only; same operation).
 - Roles run sequentially; the scheduler would allow parallel units but no concurrency was added.
+- Open (I3): an exhausted 502/504 or ENOTFOUND blocks the unit instead of parking it, and a context-capacity
+  block does not reroute to a larger qualified resource. Open (I4): parked advisory work can hide a required unit's
+  decision in the report. Open: stale-lock takeover can race between two resumers, and a corrupt lock never
+  becomes stale. See `docs/reviews/NEXUS_CONVERGENCE_INVARIANT_REMEDIATION.md`.
 - Resource requirements per role are qualification labels; real capability metadata depends on provider catalogs
   (`--discover`), which aihost aliases do not publish beyond the model list.
