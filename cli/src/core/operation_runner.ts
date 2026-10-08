@@ -7,7 +7,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { AutonomousAgent } from "../agent.js";
-import { LocalLlmClient, storedCredentialFor } from "../client.js";
+import { LocalLlmClient, mayBindCredential, storedCredentialFor } from "../client.js";
 import type { HarnessConfig } from "../types.js";
 import { realRecoveryClock, type RecoveryClock } from "./provider_recovery.js";
 import { ConvergenceScheduler, type Decision, type DurableOperationState, type OperationEvent, type UnitRunResult, type WorkUnit } from "./operation.js";
@@ -21,7 +21,7 @@ import {
   type ResourceDescriptor,
 } from "./resources.js";
 import { DurableStateManager, type DurableTaskState } from "./state.js";
-import type { InferenceFailure, TurnResult } from "./turn.js";
+import { turnSucceeded, type InferenceFailure, type TurnResult } from "./turn.js";
 import { WorkspacePath } from "./workspace_path.js";
 
 export interface UnitRunContext {
@@ -488,8 +488,10 @@ export class AgentWorkUnitExecutor implements WorkUnitExecutor {
   configFor(resource: ResourceDescriptor, unit?: WorkUnit): HarnessConfig {
     const base = this.opts.baseConfig;
     // The client sends a key only to the origin it belongs to, so the configured key never reaches another provider.
+    // A spec names apiKeyEnv for its own provider keys; it cannot re-home a stored credential to another origin.
+    const specKey = resource.apiKeyEnv ? process.env[resource.apiKeyEnv] : undefined;
     const credential = resource.apiKeyEnv
-      ? { apiKey: process.env[resource.apiKeyEnv], credentialOrigin: origin(resource.endpoint) }
+      ? { apiKey: mayBindCredential(specKey, resource.endpoint) ? specKey : undefined, credentialOrigin: origin(resource.endpoint) }
       : { apiKey: base.apiKey, credentialOrigin: base.credentialOrigin ?? origin(normalizeEndpoint(base.endpoint)) };
     const contextLimit = Math.min(base.contextLimit ?? 65_536, resource.contextLength ?? Number.POSITIVE_INFINITY);
     return {
@@ -576,7 +578,7 @@ export class AgentWorkUnitExecutor implements WorkUnitExecutor {
     ctx: UnitRunContext,
   ): UnitRunResult {
     if (turn.execution === "INTERRUPTED") return { kind: "cancelled" };
-    if (turn.execution === "COMPLETED" && turn.outcome !== "NOT_ESTABLISHED") {
+    if (turnSucceeded(turn)) {
       ctx.observeSuccess();
       return { kind: "completed", summary: summary ?? turn.detail ?? "completed", outcome: turn.outcome };
     }

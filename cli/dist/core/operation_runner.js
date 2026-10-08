@@ -7,12 +7,13 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { AutonomousAgent } from "../agent.js";
-import { LocalLlmClient, storedCredentialFor } from "../client.js";
+import { LocalLlmClient, mayBindCredential, storedCredentialFor } from "../client.js";
 import { realRecoveryClock } from "./provider_recovery.js";
 import { ConvergenceScheduler } from "./operation.js";
 import { ROLE_PROFILES } from "./roles.js";
 import { applyProviderCatalog, credentialFingerprint, ResourceRegistry, } from "./resources.js";
 import { DurableStateManager } from "./state.js";
+import { turnSucceeded } from "./turn.js";
 import { WorkspacePath } from "./workspace_path.js";
 const ENDPOINT_SCOPES = new Set(["endpoint", "provider"]);
 export class OperationRunner {
@@ -420,8 +421,10 @@ export class AgentWorkUnitExecutor {
     configFor(resource, unit) {
         const base = this.opts.baseConfig;
         // The client sends a key only to the origin it belongs to, so the configured key never reaches another provider.
+        // A spec names apiKeyEnv for its own provider keys; it cannot re-home a stored credential to another origin.
+        const specKey = resource.apiKeyEnv ? process.env[resource.apiKeyEnv] : undefined;
         const credential = resource.apiKeyEnv
-            ? { apiKey: process.env[resource.apiKeyEnv], credentialOrigin: origin(resource.endpoint) }
+            ? { apiKey: mayBindCredential(specKey, resource.endpoint) ? specKey : undefined, credentialOrigin: origin(resource.endpoint) }
             : { apiKey: base.apiKey, credentialOrigin: base.credentialOrigin ?? origin(normalizeEndpoint(base.endpoint)) };
         const contextLimit = Math.min(base.contextLimit ?? 65_536, resource.contextLength ?? Number.POSITIVE_INFINITY);
         return {
@@ -501,7 +504,7 @@ export class AgentWorkUnitExecutor {
     classify(unit, resource, turn, summary, condition, ctx) {
         if (turn.execution === "INTERRUPTED")
             return { kind: "cancelled" };
-        if (turn.execution === "COMPLETED" && turn.outcome !== "NOT_ESTABLISHED") {
+        if (turnSucceeded(turn)) {
             ctx.observeSuccess();
             return { kind: "completed", summary: summary ?? turn.detail ?? "completed", outcome: turn.outcome };
         }

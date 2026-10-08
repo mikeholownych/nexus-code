@@ -58,27 +58,84 @@ function readGatewayTokenFile(): string | undefined {
 }
 
 /**
+ * Settings with authority over where credentials may be sent: the operator's process environment as it was before
+ * any env file was loaded, overlaid by ~/.config/nexus/config.env. Project and installation .env files are excluded:
+ * they may choose endpoints and carry their own keys, but they never decide where a stored credential goes.
+ * Undefined until loadEnvironment() records it; until then nothing but the operator has written process.env.
+ */
+let credentialAuthority: Readonly<Record<string, string | undefined>> | undefined;
+
+export function setCredentialAuthority(settings: Record<string, string | undefined>): void {
+  credentialAuthority = Object.freeze({ ...settings });
+}
+
+function authoritySetting(key: string): string | undefined {
+  return (credentialAuthority ? credentialAuthority[key] : process.env[key])?.trim() || undefined;
+}
+
+/** Origins that stored credentials belong to, and the operator-environment key with its own origin. */
+function storedCredentialHomes(): { gateway?: string; listed: Set<string>; envKey?: string; envKeyOrigin?: string } {
+  const file = readConfigEnv();
+  const envKeyOrigin = originOf(authoritySetting("LOCAL_LLM_ENDPOINT"));
+  const gateway = originOf(file.LOCAL_LLM_ENDPOINT) ?? envKeyOrigin;
+  const listed = new Set(
+    (authoritySetting("LOCAL_LLM_CREDENTIAL_ORIGINS") ?? "").split(",").map((o) => originOf(o)).filter((o): o is string => Boolean(o)),
+  );
+  return { gateway, listed, envKey: authoritySetting("LOCAL_LLM_API_KEY"), envKeyOrigin };
+}
+
+/**
  * The locally stored credential for `endpoint`, only if it belongs to that endpoint's gateway; null otherwise.
  *
  * Stored credentials are scoped to where they were configured: the gateway token file and the config.env key belong
- * to config.env's LOCAL_LLM_ENDPOINT (or, without one, $LOCAL_LLM_ENDPOINT) and to origins the operator lists in
- * LOCAL_LLM_CREDENTIAL_ORIGINS; $LOCAL_LLM_API_KEY belongs to $LOCAL_LLM_ENDPOINT. A credential is never attached to
- * another provider merely because that provider has no key of its own.
+ * to config.env's LOCAL_LLM_ENDPOINT (or, without one, the operator's $LOCAL_LLM_ENDPOINT) and to origins the operator
+ * lists in LOCAL_LLM_CREDENTIAL_ORIGINS; the operator's $LOCAL_LLM_API_KEY belongs to the operator's
+ * $LOCAL_LLM_ENDPOINT. Only the credential authority (see setCredentialAuthority) decides these bindings. A
+ * credential is never attached to another provider merely because that provider has no key of its own.
  */
 export function storedCredentialFor(endpoint: string): string | null {
   const target = originOf(endpoint);
   if (!target) return null;
-  const file = readConfigEnv();
-  const envEndpoint = originOf(process.env.LOCAL_LLM_ENDPOINT);
-  const gateway = originOf(file.LOCAL_LLM_ENDPOINT) ?? envEndpoint;
-  const listed = new Set((process.env.LOCAL_LLM_CREDENTIAL_ORIGINS ?? "").split(",").map((o) => originOf(o)).filter(Boolean));
-  if (target === gateway || listed.has(target)) {
-    const token = readGatewayTokenFile() || file.LOCAL_LLM_API_KEY;
+  const homes = storedCredentialHomes();
+  if (target === homes.gateway || homes.listed.has(target)) {
+    const token = readGatewayTokenFile() || readConfigEnv().LOCAL_LLM_API_KEY;
     if (token) return token;
   }
-  const envKey = process.env.LOCAL_LLM_API_KEY?.trim();
-  if (target === envEndpoint && envKey) return envKey;
+  if (target === homes.envKeyOrigin && homes.envKey) return homes.envKey;
   return null;
+}
+
+/** True when `value` is one of the locally stored credentials (token file, config.env key, operator env key). */
+function isStoredCredential(value: string): boolean {
+  const homes = storedCredentialHomes();
+  return [readGatewayTokenFile(), readConfigEnv().LOCAL_LLM_API_KEY, homes.envKey].some((stored) => stored && stored === value);
+}
+
+/**
+ * Whether `key`, supplied for `endpoint` by configuration other than the credential authority (an operation spec's
+ * apiKeyEnv, for example), may be sent there. Keys of their own are; a stored credential only to where it belongs.
+ */
+export function mayBindCredential(key: string | undefined, endpoint: string): boolean {
+  const value = key?.trim();
+  if (!value || !isStoredCredential(value)) return true;
+  const target = originOf(endpoint);
+  if (!target) return false;
+  const homes = storedCredentialHomes();
+  return target === homes.gateway || homes.listed.has(target) || (target === homes.envKeyOrigin && value === homes.envKey);
+}
+
+/**
+ * $LOCAL_LLM_API_KEY and the origin it is bound to. The operator's key belongs to the operator's endpoint (or, when
+ * the operator configured none, `operatorEndpoint`: the command-line endpoint or the built-in default). A key that a
+ * project .env supplied belongs to the endpoint that configuration selects; it is that project's credential.
+ */
+export function environmentCredential(operatorEndpoint: string): { apiKey: string; origin: string | undefined } | undefined {
+  const apiKey = process.env.LOCAL_LLM_API_KEY?.trim();
+  if (!apiKey) return undefined;
+  const operatorKey = authoritySetting("LOCAL_LLM_API_KEY");
+  if (operatorKey === apiKey) return { apiKey, origin: originOf(authoritySetting("LOCAL_LLM_ENDPOINT") ?? operatorEndpoint) };
+  if (isStoredCredential(apiKey)) return undefined;
+  return { apiKey, origin: originOf(process.env.LOCAL_LLM_ENDPOINT ?? operatorEndpoint) };
 }
 
 export interface ChatCompletionResponse {

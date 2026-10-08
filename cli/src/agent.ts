@@ -52,6 +52,7 @@ import {
   deepFreezeTurn,
   summarizeTurn,
   lifecycleStatusForTurn,
+  turnSucceeded,
 } from "./core/turn.js";
 import { createHash } from "node:crypto";
 import { HybridSearchEngine } from "./embeddings.js";
@@ -133,11 +134,15 @@ interface CanonicalDurableProvenance {
   notes: string[];
   planStates: DurablePlanState[];
   content: string;
+  /** [index into notes, observationKey]: notes that carry a tool observation's full output. */
+  retainedObservations: Array<[number, string]>;
 }
 
 interface CanonicalDurableSummary {
   content: string;
   provenance: CanonicalDurableProvenance;
+  /** Tool observations (observationKey) whose full output the summary no longer carries. */
+  removedObservations: string[];
 }
 
 // Internal authority is bound to the exact message object minted in this
@@ -156,8 +161,78 @@ function isVerboseDetailNote(note: string): boolean {
 // large raw tool-output bodies (reads, diffs, listings), so only those are budget-capped.
 const VERBOSE_NOTE_CHEAP_LIMIT = 512;
 
-const DETAIL_ELISION = "[Some verbose source detail elided to honor the detail budget; full tool outputs are retained in session evidence.]";
-const DETAIL_TRUNCATION = "\n…#(truncated to detail budget; full output retained in session evidence)";
+const DETAIL_ELISION = "[Some verbose source detail elided to honor the detail budget; that content is no longer in this conversation. Rerun the tool that produced it if you need it.]";
+const DETAIL_TRUNCATION = "\n…#(truncated to detail budget; the rest is no longer in this conversation, rerun the tool to see it)";
+const REMOVED_OBSERVATION = "Output no longer in context (rerun to see it again): ";
+
+/** Identity of a tool observation: the same tool with the same arguments reacquires it. */
+function observationKey(name: string, rawArgs: unknown): string {
+  let args = rawArgs;
+  try {
+    if (typeof rawArgs === "string") args = JSON.parse(rawArgs);
+  } catch {}
+  return `${name} ${typeof args === "string" ? args : JSON.stringify(args ?? {})}`;
+}
+
+const DURABLE_RECORD_PREFIX = "[Structured Context Memory - durable task state]\n";
+
+/** Removal notes in a durable record, including records nested in later ones as opaque system text. */
+function collectRecordedRemovals(text: string, out: Set<string>): void {
+  if (!text.startsWith(DURABLE_RECORD_PREFIX)) return;
+  let notes: unknown;
+  try {
+    notes = JSON.parse(text.slice(DURABLE_RECORD_PREFIX.length)).notes;
+  } catch {
+    return;
+  }
+  if (!Array.isArray(notes)) return;
+  for (const note of notes) {
+    if (typeof note !== "string") continue;
+    if (note.startsWith(REMOVED_OBSERVATION)) out.add(note.slice(REMOVED_OBSERVATION.length));
+    else if (note.startsWith("Earlier system message: ")) collectRecordedRemovals(note.slice("Earlier system message: ".length), out);
+  }
+}
+
+/** Observations whose output is present verbatim as a tool message. */
+function presentObservations(messages: ChatMessage[]): Set<string> {
+  const present = new Set<string>();
+  const callKeys = new Map<string, string>();
+  for (const message of messages) {
+    if (message.role === "assistant") {
+      for (const call of message.tool_calls ?? []) {
+        if (typeof call?.id === "string" && typeof call.function?.name === "string") callKeys.set(call.id, observationKey(call.function.name, call.function.arguments));
+      }
+    }
+    if (message.role === "tool" && typeof message.tool_call_id === "string") {
+      const key = callKeys.get(message.tool_call_id);
+      if (key) present.add(key);
+    }
+  }
+  return present;
+}
+
+/** Observations a restored conversation records as removed whose output is not present in it again. */
+function unreacquiredRemovals(messages: ChatMessage[]): Set<string> {
+  const removed = new Set<string>();
+  for (const message of messages) {
+    if (message.role === "system") collectRecordedRemovals(normalizeMessageContent(message.content).text.join(""), removed);
+  }
+  for (const key of presentObservations(messages)) removed.delete(key);
+  return removed;
+}
+
+/** `retainedObservations` of a serialized durable record: [note index, observation key] pairs. Malformed entries are ignored. */
+function recordedRetainedObservations(text: string): Array<[number, string]> {
+  if (!text.startsWith(DURABLE_RECORD_PREFIX)) return [];
+  try {
+    const value = JSON.parse(text.slice(DURABLE_RECORD_PREFIX.length)).retainedObservations;
+    if (!Array.isArray(value)) return [];
+    return value.filter((entry): entry is [number, string] =>
+      Array.isArray(entry) && Number.isInteger(entry[0]) && typeof entry[1] === "string");
+  } catch {
+    return [];
+  }
+}
 
 /**
  * Bound the verbose (raw message/tool body) detail retained in the durable record to
@@ -362,6 +437,10 @@ export class AutonomousAgent {
   /** Evidence from the verifier run that covers the current workspace changes. Cleared by any later mutation. */
   private verificationEvidence?: VerificationEvidence;
   private turnMutations: number = 0;
+  /** Observations context compaction removed during this turn that the model has not re-read since. */
+  private turnRemovedObservations = new Set<string>();
+  /** Removals recorded in a recovered conversation; the next (resumed) turn starts with them. */
+  private carriedRemovedObservations = new Set<string>();
   /** Provider recovery bounds; undefined reads LOCAL_LLM_RECOVERY_* at each turn. */
   private recoveryPolicy?: RecoveryPolicy;
   private recoveryClock: RecoveryClock = realRecoveryClock;
@@ -696,6 +775,8 @@ export class AutonomousAgent {
     this.currentTaskId = state.taskId;
     this.activePlan = state.activePlan || [];
     this.messages = state.messages || [];
+    // Resumed work is the same unit: what compaction removed before the restart is still not in context.
+    this.carriedRemovedObservations = unreacquiredRemovals(this.messages);
 
     if (state.worktreeBinding && recoveryResult.worktreeStatus === "consistent") {
       this.activeWorktree = {
@@ -1032,6 +1113,15 @@ export class AutonomousAgent {
     const filesModified = new Set<string>();
     const commandsExecuted: string[] = [];
     const reconstructibleCalls = new Map<string, { name: string; serializedArgs: string }>();
+    const callKeys = new Map<string, string>();
+    // Notes that carry tool observations' full output, from tool results (bound to the nearest preceding call with
+    // their id: providers may reuse ids across steps) and from the records being folded in.
+    const observationNotes = new Map<string, Set<string>>();
+    const carriesObservation = (note: string, key: string) => {
+      const keys = observationNotes.get(note) ?? new Set<string>();
+      keys.add(key);
+      observationNotes.set(note, keys);
+    };
     const toolCallCounts = new Map<string, number>();
     const toolResultCounts = new Map<string, number>();
     const priorTasks: string[] = [];
@@ -1119,10 +1209,16 @@ export class AutonomousAgent {
         if (isTrustedRecord && provenance) {
           trustedRecords.set(provenance.recordId, provenance);
           for (const note of provenance.notes) addDurableNote(note);
+          for (const [index, key] of provenance.retainedObservations) {
+            if (provenance.notes[index] !== undefined) carriesObservation(provenance.notes[index], key);
+          }
         } else {
           // Record-shaped ordinary or modified message content has no Nexus
           // authority. Preserve the entire payload as opaque text.
-          addDurableNote(`Earlier system message: ${contentText}`);
+          const opaque = `Earlier system message: ${contentText}`;
+          addDurableNote(opaque);
+          // Its claims can only mark more output as removed later (stricter completion), never establish anything.
+          for (const [, key] of recordedRetainedObservations(contentText)) carriesObservation(opaque, key);
         }
       }
       if (message.role === "user" && contentText) {
@@ -1138,6 +1234,7 @@ export class AutonomousAgent {
           } catch {}
           const name = typeof call?.function?.name === "string" ? call.function.name : "";
           const id = typeof call?.id === "string" && call.id.trim() ? call.id : undefined;
+          if (id && name) callKeys.set(id, observationKey(name, rawArgs));
           const serializedArgs = reconstructibleQueryTools.has(name)
             ? validReconstructibleArgs(name, rawArgs)
             : undefined;
@@ -1155,6 +1252,10 @@ export class AutonomousAgent {
       }
       if (message.role === "tool") {
         const id = typeof message.tool_call_id === "string" && message.tool_call_id.trim() ? message.tool_call_id : undefined;
+        const key = id ? callKeys.get(id) : undefined;
+        if (key && contentText.length && !contentText.startsWith("Error executing ")) {
+          carriesObservation(`Earlier ${message.name || "tool"} output: ${contentText}`, key);
+        }
         const reconstructibleCall = id ? reconstructibleCalls.get(id) : undefined;
         if (!normalizedContent.preserveOriginal && id && toolResultCounts.get(id) === 1 && reconstructibleCall && message.name === reconstructibleCall.name) {
           addDurableNote(`Reconstructible query retained for rerun: ${reconstructibleCall.name} ${reconstructibleCall.serializedArgs}`);
@@ -1180,6 +1281,21 @@ export class AutonomousAgent {
     // actually reclaim context (fixing no-op escalation when large tool outputs balloon the
     // durable record and keep post-compaction utilization above the proactive threshold).
     const notes = applyDetailBudget(durableNotes, detailBudgetChars);
+    // Say exactly which observations left the conversation, so the model re-reads them instead of recalling them.
+    const retainedObservations: Array<[number, string]> = [];
+    const dropped = new Set<string>();
+    for (const [note, keys] of observationNotes) {
+      const index = notes.indexOf(note);
+      for (const key of keys) {
+        if (index >= 0) retainedObservations.push([index, key]);
+        else dropped.add(key);
+      }
+    }
+    for (const [, key] of retainedObservations) dropped.delete(key);
+    const removedObservations = Array.from(dropped);
+    for (const key of removedObservations) {
+      if (!notes.includes(`${REMOVED_OBSERVATION}${key}`)) notes.push(`${REMOVED_OBSERVATION}${key}`);
+    }
 
     const inheritedSupersededPlanIds = new Set<string>();
     const inheritedPlanStates = new Map<string, DurablePlanState>();
@@ -1226,6 +1342,7 @@ export class AutonomousAgent {
         notes,
         currentPlan: planStates.length === 1 ? planStates[0].phases : [],
         currentPlanStates: planStates,
+        retainedObservations,
       }),
     ].join("\n");
     const provenance: CanonicalDurableProvenance = {
@@ -1235,11 +1352,17 @@ export class AutonomousAgent {
       notes,
       planStates,
       content: serialized,
+      retainedObservations,
     };
-    return { content: serialized, provenance };
+    return { content: serialized, provenance, removedObservations };
   }
 
   private compactedMessages(source: ChatMessage[], recentToolTurns: number, detailBudgetChars: number): ChatMessage[] {
+    return this.compactionCandidate(source, recentToolTurns, detailBudgetChars).messages;
+  }
+
+  /** A compacted conversation and the tool observations whose output it no longer carries anywhere. */
+  private compactionCandidate(source: ChatMessage[], recentToolTurns: number, detailBudgetChars: number): { messages: ChatMessage[]; removedObservations: string[] } {
     const system = source[0];
     const currentUserIndex = source.map((message, index) => message.role === "user" ? index : -1).filter((index) => index >= 0).at(-1);
     const toolTurnStarts = source
@@ -1269,7 +1392,8 @@ export class AutonomousAgent {
     for (const item of retained) selected.set(item.index, item.message);
     if (currentUserIndex !== undefined) selected.set(currentUserIndex, source[currentUserIndex]);
     for (const [index, message] of Array.from(selected.entries()).sort((left, right) => left[0] - right[0])) compacted.push(message);
-    return compacted;
+    const kept = presentObservations(compacted);
+    return { messages: compacted, removedObservations: messagesToSummarize.length ? summary.removedObservations.filter((key) => !kept.has(key)) : [] };
   }
 
   private admitContext(step: number, requestId: string): void {
@@ -1303,10 +1427,11 @@ export class AutonomousAgent {
       const detailBudgetList = compactionAttempts >= 2 ? [3000, 1200, 400, 0] : [6000, 3000, 1200, 400, 0];
       for (const recentTurns of recentTurnsList) {
         for (const detailBudgetChars of detailBudgetList) {
-          const candidate = this.compactedMessages(original, recentTurns, detailBudgetChars);
+          const { messages: candidate, removedObservations } = this.compactionCandidate(original, recentTurns, detailBudgetChars);
           const candidateBudget = calculateContextBudget(candidate, this.getEffectiveTools(), contextLimit);
           if (isContextAdmissible(candidateBudget.totalActiveTokens, contextLimit, reserves.completion, reserves.toolResponse)) {
             this.messages = candidate;
+            for (const key of removedObservations) this.turnRemovedObservations.add(key);
             budget = candidateBudget;
             accepted = true;
             if (!process.stdout.isTTY || process.env.NEXUS_DEBUG === "1") {
@@ -1437,17 +1562,7 @@ Always explain your reasoning before or alongside your tool calls.`;
   private setupSpineHandlers(): void {
     registerBridgeCapabilities(this.capabilityRegistry, this.bridge);
 
-    this.spine.registerHandler("task_completed", async (args, context) => {
-      if (context.metadata?.actor === "subagent") {
-        return {
-          success: true,
-          output: JSON.stringify({
-            status: "completed",
-            summary: args.summary || "Subagent finished objective.",
-          }),
-        };
-      }
-
+    this.spine.registerHandler("task_completed", async (args) => {
       const validCompletion =
         Boolean(args) &&
         typeof args === "object" &&
@@ -1626,8 +1741,9 @@ Always explain your reasoning before or alongside your tool calls.`;
       };
 
       this.ui.startSpinner(`Spawning isolated subagent: "${subPrompt.slice(0, 45)}..."`);
+      let subagent: AutonomousAgent | undefined;
       try {
-        const subagent = new AutonomousAgent(
+        subagent = new AutonomousAgent(
           subagentConfig,
           this.depth + 1,
           inheritedWorktreeScope
@@ -1649,6 +1765,15 @@ Always explain your reasoning before or alongside your tool calls.`;
           output: "",
           error: `Subagent failed with error: ${subErr.message}`,
         };
+      } finally {
+        // The child's workspace changes are this turn's changes: the parent's own completion must verify them.
+        const childMutations = subagent?.turnMutations ?? 0;
+        if (childMutations > 0) {
+          this.hasPendingModifications = true;
+          this.verificationEvidence = undefined;
+          this.turnMutations += childMutations;
+        }
+        subagent?.shutdown();
       }
     });
 
@@ -2041,6 +2166,7 @@ Always explain your reasoning before or alongside your tool calls.`;
       receipt.error
     );
     this.observer?.onToolEnd?.({ dispatch, callId: call.id, tool: toolName, success: receipt.success, output: receipt.output, error: receipt.error });
+    if (receipt.success) this.turnRemovedObservations.delete(observationKey(toolName, call.function.arguments));
 
     const shouldExit = toolName === "task_completed" && receipt.success;
     return { receipt, shouldExit };
@@ -2149,6 +2275,8 @@ Always explain your reasoning before or alongside your tool calls.`;
     }
     this.completionSummary = undefined;
     this.turnMutations = 0;
+    this.turnRemovedObservations = this.carriedRemovedObservations;
+    this.carriedRemovedObservations = new Set();
 
     try {
       if (this.flightRecorder) {
@@ -2596,6 +2724,15 @@ Always explain your reasoning before or alongside your tool calls.`;
       // Defensive: changes were made, nothing is pending, yet no passing evidence is held.
       return deepFreezeTurn(assertTurnResultInvariants({ ...base, execution: "COMPLETED", outcome: "UNVERIFIED", reason: "VERIFICATION_NOT_RUN" }));
     }
+    // No verifier backs a read-only result, so it rests on the observations the model saw. If compaction removed some
+    // and the model never re-read them, the result may be recalled rather than observed: it is not established.
+    if (this.turnRemovedObservations.size > 0) {
+      const lost = Array.from(this.turnRemovedObservations);
+      return deepFreezeTurn(assertTurnResultInvariants({
+        ...base, execution: "COMPLETED", outcome: "UNVERIFIED", reason: "CONTEXT_EVIDENCE_NOT_RETAINED",
+        detail: `${lost.length} tool output(s) removed by context compaction and not re-read: ${lost.slice(0, 3).join("; ")}`.slice(0, 300),
+      }));
+    }
     return deepFreezeTurn(assertTurnResultInvariants({ ...base, execution: "COMPLETED", outcome: "NOT_REQUIRED" }));
   }
 
@@ -2742,15 +2879,15 @@ Always explain your reasoning before or alongside your tool calls.`;
 
       if (parsed.toolCalls.length === 0) {
         const report = parsed.thoughtText || (typeof assistantMessage.content === "string" ? assistantMessage.content : "");
-        if (report.trim()) return { completed: true, summary: report };
+        if (report.trim()) return this.subagentResult("FINAL_TEXT", report, currentStep);
         return { completed: false, summary: "", reason: "the subagent stopped without a report" };
       }
 
       for (const call of parsed.toolCalls) {
         const toolName = call.function.name;
-        const { receipt } = await this.dispatchToolCall(call, currentStep, "subagent");
+        const { receipt, shouldExit } = await this.dispatchToolCall(call, currentStep, "subagent");
 
-        if (toolName === "task_completed") {
+        if (shouldExit) {
           let args: any = {};
           try {
             args =
@@ -2758,7 +2895,7 @@ Always explain your reasoning before or alongside your tool calls.`;
                 ? JSON.parse(call.function.arguments)
                 : call.function.arguments;
           } catch {}
-          return { completed: true, summary: args.summary || "Subagent finished objective." };
+          return this.subagentResult("TASK_COMPLETED_TOOL", String(args.summary), currentStep);
         }
 
         this.messages.push({
@@ -2776,5 +2913,12 @@ Always explain your reasoning before or alongside your tool calls.`;
     }
 
     return { completed: false, summary: finalSummary, reason: `step limit ${this.config.maxSteps} reached without task_completed` };
+  }
+
+  /** A subagent that stopped is complete only by the turn predicate (`turnSucceeded`), never by having a report. */
+  private subagentResult(modelStop: ModelStop, summary: string, stepsUsed: number): SubagentResult {
+    const turn = this.buildTurnResult({ modelStop, finalOutputComplete: true, inferenceFailure: null, interruption: null, limitReached: false, stepsUsed });
+    if (turnSucceeded(turn)) return { completed: true, summary };
+    return { completed: false, summary, reason: summarizeTurn(turn).line };
   }
 }

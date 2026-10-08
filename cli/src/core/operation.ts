@@ -12,8 +12,9 @@
  *
  * Lifecycle (the one model for durable autonomous work; `nexus operation` and `/team` both use it):
  *
- *   unit COMPLETE              its turn completed with an established result (TurnResult execution COMPLETED and
- *                              outcome other than NOT_ESTABLISHED). A function returning is not completion.
+ *   unit COMPLETE              its turn completed with an established result: turnSucceeded(TurnResult), the same
+ *                              predicate as `nexus run` exit 0 (VERIFIED, or NOT_REQUIRED). UNVERIFIED work is not
+ *                              complete. A function returning is not completion.
  *   unit PARKED                a qualified resource will be eligible again at a known time; nothing is held.
  *   unit WAITING_ON_DEPENDENCY a dependency is not COMPLETE (a BLOCKED dependency keeps it here: it never runs on
  *                              unfinished inputs).

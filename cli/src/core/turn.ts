@@ -16,9 +16,11 @@ export type ExecutionState = "COMPLETED" | "INTERRUPTED" | "FAILED" | "BLOCKED" 
 
 /**
  * VERIFIED        - the verifier selected for this workspace ran and passed against the current changes
- * UNVERIFIED      - work ended with changes that were not (or could not be) verified; see reason
+ * UNVERIFIED      - work ended with a result that was not (or could not be) verified; see reason. Either changes
+ *                   no passing verifier covers, or an answer resting on tool output that context compaction removed
+ *                   during the turn and the model did not re-read (CONTEXT_EVIDENCE_NOT_RETAINED)
  * NOT_ESTABLISHED - no engineering result was established (turn did not complete, or verifier failed)
- * NOT_REQUIRED    - the turn made no workspace change, so there is nothing to verify
+ * NOT_REQUIRED    - the turn made no workspace change and every tool output it relied on was still in context
  */
 export type EngineeringOutcome = "VERIFIED" | "UNVERIFIED" | "NOT_ESTABLISHED" | "NOT_REQUIRED";
 
@@ -27,6 +29,7 @@ export type OperatorAcceptance = "NOT_REQUESTED" | "ACCEPTED" | "NOT_ACCEPTED";
 export type TurnReason =
   | "NO_APPLICABLE_VERIFIER"
   | "VERIFICATION_NOT_RUN"
+  | "CONTEXT_EVIDENCE_NOT_RETAINED"
   | "VERIFIER_FAILED"
   | "VERIFIER_TIMED_OUT"
   | "INFERENCE_FAILED"
