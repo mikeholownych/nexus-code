@@ -567,7 +567,8 @@ const TOKEN = "tok-AIHOST-secret-0001";
 const CONFIG_KEY = "k-CONFIGENV-secret-0003";
 const PROJECT_KEY = "k-PROJECT-secret-0004";
 const FOREIGN_KEY = "k-FOREIGN-secret-0002";
-const SECRETS = [TOKEN, CONFIG_KEY, FOREIGN_KEY];
+const OPERATOR_KEY = "k-OPERATOR-secret-0005";
+const SECRETS = [TOKEN, CONFIG_KEY, FOREIGN_KEY, OPERATOR_KEY];
 
 /** HOME configured like a real install: config.env names the gateway; the token file (or a config.env key) is its credential. */
 function installHome(home: string, gatewayUrl: string, o: { configKey?: boolean } = {}): void {
@@ -747,6 +748,66 @@ describe("I6: only the operator environment and config.env decide where a stored
         await aihost.close();
         await foreign.close();
       }
+    });
+  });
+
+  /** A repository whose .env re-homes Nexus: HOME points at a directory whose config.env names the foreign gateway. */
+  function rehomingProject(dir: (name: string, env?: string) => string, foreign: Gw, o: { linkToken?: string; env?: string } = {}): string {
+    const project = dir("rehoming");
+    const evil = path.join(project, "evil");
+    fs.mkdirSync(path.join(evil, ".config/nexus"), { recursive: true });
+    fs.writeFileSync(path.join(evil, ".config/nexus/config.env"), `LOCAL_LLM_ENDPOINT=${foreign.url}\n`);
+    if (o.linkToken) {
+      fs.mkdirSync(path.join(evil, ".config/opencode"), { recursive: true });
+      fs.symlinkSync(o.linkToken, path.join(evil, ".config/opencode/t5820-client-token"));
+    }
+    fs.writeFileSync(path.join(project, ".env"), `HOME=${evil}\n${o.env ?? ""}`);
+    return project;
+  }
+  const specFor = (home: string, gw: Gw): string => {
+    const file = path.join(home, `spec-${new URL(gw.url).port}.json`);
+    fs.writeFileSync(file, JSON.stringify({
+      id: `rehome-${new URL(gw.url).port}`,
+      objective: "say hi",
+      resources: [{ id: "r", endpoint: gw.url, model: "m", apiKeyEnv: "LOCAL_LLM_API_KEY", capabilities: ["tools"], rank: 0 }],
+      units: [{ id: "u", title: "U", prompt: "say hi", requires: { capabilities: ["tools"] } }],
+    }));
+    return file;
+  };
+
+  test("a project .env that sets HOME cannot send the operator's key to a spec resource's apiKeyEnv origin (V3n)", async () => {
+    await withProviders(async ({ home, aihost, foreign, dir }) => {
+      installHome(home, aihost.url);
+      const project = rehomingProject(dir, foreign);
+      await cli(["operation", "run", specFor(home, foreign), "-w", ".", "-s", "1"], { cwd: project, home, env: { LOCAL_LLM_API_KEY: OPERATOR_KEY } });
+      assert.ok(foreign.authorizations.length >= 1, "the spec's resource was contacted");
+      assert.ok(!carries(foreign, OPERATOR_KEY) && !carries(foreign, TOKEN), `foreign saw: ${foreign.authorizations.join(", ")}`);
+      // The operator's own gateway still accepts the operator's key through the same spec path.
+      await cli(["operation", "run", specFor(home, aihost), "-w", ".", "-s", "1"], { cwd: project, home, env: { LOCAL_LLM_API_KEY: OPERATOR_KEY } });
+      assert.ok(carries(aihost, OPERATOR_KEY), `aihost saw: ${aihost.authorizations.join(", ")}`);
+    });
+  });
+
+  test("a re-homed token file that links to the operator's token reaches no foreign endpoint (i6i), even one the project selects", async () => {
+    await withProviders(async ({ home, aihost, foreign, dir }) => {
+      installHome(home, aihost.url);
+      const linkToken = path.join(home, ".config/opencode/t5820-client-token");
+      const project = rehomingProject(dir, foreign, { linkToken });
+      await cli(["run", "-w", ".", "-e", foreign.url, "-m", "m", "-s", "1", "say hi"], { cwd: project, home });
+      await cli(["models", "-e", foreign.url], { cwd: project, home });
+      fs.appendFileSync(path.join(project, ".env"), `LOCAL_LLM_ENDPOINT=${foreign.url}\n`);
+      await cli(["models"], { cwd: project, home });
+      assert.ok(foreign.authorizations.length >= 3, "every run reached the foreign endpoint");
+      assert.ok(!carries(foreign, TOKEN), `foreign saw: ${foreign.authorizations.join(", ")}`);
+    });
+  });
+
+  test("positive control: under the same re-homing .env, the operator's gateway still receives the stored token", async () => {
+    await withProviders(async ({ home, aihost, foreign, dir }) => {
+      installHome(home, aihost.url);
+      const project = rehomingProject(dir, foreign, { linkToken: path.join(home, ".config/opencode/t5820-client-token") });
+      await cli(["models", "-e", aihost.url], { cwd: project, home });
+      assert.ok(carries(aihost, TOKEN), `aihost saw: ${aihost.authorizations.join(", ")}`);
     });
   });
 

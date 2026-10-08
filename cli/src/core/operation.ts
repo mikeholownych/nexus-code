@@ -44,8 +44,11 @@ export type OperationStatus = "RUNNING" | "WAITING" | "BLOCKED" | "COMPLETE" | "
 
 /** What applying a decision option does. Every option Nexus offers is one of these; nothing else is accepted. */
 export type DecisionAction =
-  /** Run the unit again from its history; where execution was unknown this authorizes the replay. */
-  | { kind: "retry"; clearResources?: string[] }
+  /**
+   * Run the unit again from its history; where execution was unknown this authorizes the replay. `restart` starts it
+   * over from its authorized task when its history cannot be recovered (its verification obligation is kept).
+   */
+  | { kind: "retry"; clearResources?: string[]; restart?: boolean }
   /** Restart the wait bound and keep waiting for the parked resources. */
   | { kind: "keep_waiting" }
   /** Run the unit on this resource, accepting the listed unmet requirements (never the trust boundary). */
@@ -111,7 +114,7 @@ export interface WorkUnit {
   parked?: { since: string; reason: string; resourceIds: string[]; wakeAt?: string };
   blocked?: { since: string; reason: string; decision: EscalationDecision };
   /** A decision applied since the unit last ran, told to the unit when it resumes. */
-  pendingDecision?: { label: string; note?: string };
+  pendingDecision?: { label: string; note?: string; restart?: boolean };
   decisions?: AppliedDecision[];
   dropped?: boolean;
   result?: { summary: string; completedAt: string; resourceId: string; outcome: string; overriding?: string[] };
@@ -573,7 +576,9 @@ export class ConvergenceScheduler {
       case "cancel_operation":
         break;
     }
-    if (action.kind !== "drop" && action.kind !== "cancel_operation") u.pendingDecision = { label: option.label, ...(text ? { note: text } : {}) };
+    if (action.kind !== "drop" && action.kind !== "cancel_operation") {
+      u.pendingDecision = { label: option.label, ...(text ? { note: text } : {}), ...(action.kind === "retry" && action.restart ? { restart: true } : {}) };
+    }
     this.emit("DECISION_APPLIED", `${u.title}: operator chose "${option.label}"${text ? ` (${text})` : ""}.`, {
       unitId: u.id,
       detail: { decisionId, optionId, action },

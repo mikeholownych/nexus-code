@@ -41,7 +41,7 @@ export function credentialOriginOf(endpoint: string | undefined): string | undef
 function readConfigEnv(): Record<string, string> {
   const out: Record<string, string> = {};
   try {
-    for (const line of fs.readFileSync(path.join(os.homedir(), ".config/nexus/config.env"), "utf-8").split("\n")) {
+    for (const line of fs.readFileSync(path.join(credentialStorageHome(), ".config/nexus/config.env"), "utf-8").split("\n")) {
       const m = /^([A-Z0-9_]+)=(.*)$/.exec(line.trim());
       if (m) out[m[1]] = m[2].trim();
     }
@@ -51,7 +51,7 @@ function readConfigEnv(): Record<string, string> {
 
 function readGatewayTokenFile(): string | undefined {
   try {
-    return fs.readFileSync(path.join(os.homedir(), ".config/opencode/t5820-client-token"), "utf-8").trim() || undefined;
+    return fs.readFileSync(path.join(credentialStorageHome(), ".config/opencode/t5820-client-token"), "utf-8").trim() || undefined;
   } catch {
     return undefined;
   }
@@ -64,9 +64,20 @@ function readGatewayTokenFile(): string | undefined {
  * Undefined until loadEnvironment() records it; until then nothing but the operator has written process.env.
  */
 let credentialAuthority: Readonly<Record<string, string | undefined>> | undefined;
+/**
+ * The operator's home directory as resolved when the authority was recorded: the stored credentials (config.env, the
+ * gateway token file) are read from there, never from a HOME that an env file set later.
+ */
+let credentialHome: string | undefined;
 
-export function setCredentialAuthority(settings: Record<string, string | undefined>): void {
+export function setCredentialAuthority(settings: Record<string, string | undefined>, operatorHome: string = os.homedir()): void {
   credentialAuthority = Object.freeze({ ...settings });
+  credentialHome = operatorHome;
+}
+
+/** Where the operator's stored credentials live (the live home only before any authority is recorded). */
+export function credentialStorageHome(): string {
+  return credentialHome ?? os.homedir();
 }
 
 function authoritySetting(key: string): string | undefined {

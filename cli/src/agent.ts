@@ -437,6 +437,12 @@ export class AutonomousAgent {
   /** Evidence from the verifier run that covers the current workspace changes. Cleared by any later mutation. */
   private verificationEvidence?: VerificationEvidence;
   private turnMutations: number = 0;
+  /** The turn started with unverified changes from earlier work (an earlier turn, attempt, or process). */
+  private turnCarriedChanges = false;
+  /** Key for the durable operation record of each tool call (provider call ids may be redacted on disk). */
+  private operationSeq = 0;
+  /** Told after each durable progress write, so a host can keep its own session record in step. */
+  private progressListener?: () => void;
   /** Observations context compaction removed during this turn that the model has not re-read since. */
   private turnRemovedObservations = new Set<string>();
   /** Removals recorded in a recovered conversation; the next (resumed) turn starts with them. */
@@ -644,7 +650,7 @@ export class AutonomousAgent {
           };
         },
         candidateMutation: async (event, context) => {
-          this.hasPendingModifications = true;
+          this.setUnverifiedChanges(true);
           this.verificationEvidence = undefined;
           this.turnMutations++;
           await this.candidateTracker.createMutationHook()(event, context);
@@ -688,6 +694,7 @@ export class AutonomousAgent {
         validationReceipts: this.activeValidationReceipt ? [this.activeValidationReceipt] : [],
         messages: this.messages,
         currentOperation: null,
+        unverifiedChangesPending: this.hasPendingModifications,
       });
     } catch {
       this.initialStatePersistenceFailure =
@@ -726,6 +733,7 @@ export class AutonomousAgent {
       candidateId: this.activeValidationReceipt?.candidateId || null,
       validationReceipts: this.activeValidationReceipt ? [this.activeValidationReceipt] : [],
       messages: this.messages,
+      unverifiedChangesPending: this.hasPendingModifications,
       durableNotes: notes ? [notes] : undefined,
       providerRecovery: this.activeProviderRecovery,
       cognitiveRouting: {
@@ -775,8 +783,18 @@ export class AutonomousAgent {
     this.currentTaskId = state.taskId;
     this.activePlan = state.activePlan || [];
     this.messages = state.messages || [];
+    const unsettled = this.settleUnrecordedToolCalls();
     // Resumed work is the same unit: what compaction removed before the restart is still not in context.
     this.carriedRemovedObservations = unreacquiredRemovals(this.messages);
+    // Changes made before the restart are still unverified unless a verifier established them. A tool that may have
+    // run without its outcome being recorded counts as a change unless it is known not to write.
+    const interruptedTool = state.currentOperation?.status === "interrupted" ? state.currentOperation.toolName : undefined;
+    const pending =
+      (state.unverifiedChangesPending ?? state.lastTurn?.unverifiedChangesPending ?? this.historyHasChanges(this.messages)) ||
+      [...unsettled, ...(interruptedTool ? [interruptedTool] : [])].some((tool) => !this.isReadOnlyTool(tool));
+    this.hasPendingModifications = pending;
+    this.verificationEvidence = undefined;
+    if (state.unverifiedChangesPending !== pending) this.persistProgress({ unverifiedChangesPending: pending });
 
     if (state.worktreeBinding && recoveryResult.worktreeStatus === "consistent") {
       this.activeWorktree = {
@@ -975,6 +993,104 @@ export class AutonomousAgent {
 
   public setMessages(msgs: ChatMessage[]): void {
     this.messages = [...msgs];
+  }
+
+  /**
+   * Continues a saved interactive session: its conversation and its outstanding verification obligation. Sessions
+   * saved before the obligation was recorded count any successful write in their history as unverified.
+   */
+  public restoreSession(msgs: ChatMessage[], unverifiedChangesPending?: boolean): void {
+    this.messages = [...msgs];
+    const unsettled = this.settleUnrecordedToolCalls();
+    const pending =
+      (unverifiedChangesPending ?? this.historyHasChanges(this.messages)) || unsettled.some((tool) => !this.isReadOnlyTool(tool));
+    if (pending) this.verificationEvidence = undefined;
+    this.setUnverifiedChanges(this.hasPendingModifications || pending);
+  }
+
+  /**
+   * Starts the task's conversation over (its recorded history could not be used) while keeping its verification
+   * obligation; `priorChangesUnknown` adds one when no obligation record survived either.
+   */
+  public restartConversation(priorChangesUnknown: boolean): void {
+    this.resetConversation();
+    this.carriedRemovedObservations = new Set();
+    if (priorChangesUnknown) {
+      this.verificationEvidence = undefined;
+      this.setUnverifiedChanges(true);
+    }
+  }
+
+  /** Whether workspace changes made by this conversation still await verification. */
+  public hasUnverifiedChanges(): boolean {
+    return this.hasPendingModifications;
+  }
+
+  public setProgressListener(listener: (() => void) | undefined): void {
+    this.progressListener = listener;
+  }
+
+  /** Sets the unverified-change obligation and records it durably at once: it must survive a crash right after. */
+  private setUnverifiedChanges(pending: boolean): void {
+    if (this.hasPendingModifications === pending) return;
+    this.hasPendingModifications = pending;
+    this.persistProgress({ unverifiedChangesPending: pending });
+  }
+
+  /**
+   * Durable progress within a turn. A failed write is tolerated here: the turn-end checkpoint writes the same state,
+   * and an operation whose result never reached the durable conversation is detected on recovery.
+   */
+  private persistProgress(progress: { messages?: boolean; unverifiedChangesPending?: boolean }): void {
+    try {
+      if (this.stateManager && !this.stateManager.hasTaskState(this.currentTaskId)) this.checkpointDurableState();
+      else this.stateManager?.recordProgress(this.currentTaskId, {
+        ...(progress.messages ? { messages: this.messages, unverifiedChangesPending: this.hasPendingModifications } : {}),
+        ...(progress.unverifiedChangesPending !== undefined ? { unverifiedChangesPending: progress.unverifiedChangesPending } : {}),
+      });
+    } catch {}
+    try {
+      this.progressListener?.();
+    } catch {}
+  }
+
+  /**
+   * Gives every tool call in a recovered conversation a result: a call whose result was never recorded gets a note
+   * that its outcome is unknown. Returns the tools of those calls.
+   */
+  private settleUnrecordedToolCalls(): string[] {
+    let last = -1;
+    for (let i = this.messages.length - 1; i >= 0; i--) {
+      if (this.messages[i].role === "assistant" && this.messages[i].tool_calls?.length) {
+        last = i;
+        break;
+      }
+    }
+    if (last < 0) return [];
+    const calls = this.messages[last].tool_calls!;
+    const recorded = this.messages.slice(last + 1).filter((m) => m.role === "tool").length;
+    const unsettled = calls.slice(recorded);
+    for (const call of unsettled) {
+      this.messages.push({
+        role: "tool",
+        tool_call_id: call.id,
+        name: call.function.name,
+        content: "No result was recorded for this call: Nexus stopped before it finished or before its result was saved. Its effects, if any, are unknown; check them before relying on them.",
+      });
+    }
+    return unsettled.map((call) => call.function.name);
+  }
+
+  private isReadOnlyTool(toolName: string): boolean {
+    return this.capabilityRegistry.getByToolName(toolName)?.mutating === false;
+  }
+
+  /** Whether a conversation holds a successful result of a tool that writes (used when no obligation was recorded). */
+  private historyHasChanges(messages: ChatMessage[]): boolean {
+    return messages.some(
+      (m) => m.role === "tool" && typeof m.name === "string" && !this.isReadOnlyTool(m.name) &&
+        !(typeof m.content === "string" && m.content.startsWith("Error executing")),
+    );
   }
 
   public resetConversation(): void {
@@ -1658,7 +1774,7 @@ Always explain your reasoning before or alongside your tool calls.`;
       }
 
       // The obligation is discharged only by a passing run of the selected verifier (never by command text).
-      if (!noApplicableVerifier) this.hasPendingModifications = false;
+      if (!noApplicableVerifier) this.setUnverifiedChanges(false);
       if (this.activeWorktree) {
         const canValidate =
           verifierSucceeded &&
@@ -1769,7 +1885,7 @@ Always explain your reasoning before or alongside your tool calls.`;
         // The child's workspace changes are this turn's changes: the parent's own completion must verify them.
         const childMutations = subagent?.turnMutations ?? 0;
         if (childMutations > 0) {
-          this.hasPendingModifications = true;
+          this.setUnverifiedChanges(true);
           this.verificationEvidence = undefined;
           this.turnMutations += childMutations;
         }
@@ -2075,10 +2191,12 @@ Always explain your reasoning before or alongside your tool calls.`;
     if (typeof (this.client as any)?.setTaskId === "function") this.client.setTaskId(effectiveTaskId);
     if (typeof (this.plannerClient as any)?.setTaskId === "function") this.plannerClient.setTaskId(effectiveTaskId);
     if (typeof (this.coderClient as any)?.setTaskId === "function") this.coderClient.setTaskId(effectiveTaskId);
+    const operationSeq = ++this.operationSeq;
     if (this.stateManager && effectiveTaskId) {
       try {
         this.stateManager.recordOperationStart(effectiveTaskId, {
           invocationId: call.id,
+          seq: operationSeq,
           toolName,
           targetResources: args.path ? [args.path] : (args.target_file ? [args.target_file] : undefined),
           argsSummary: JSON.stringify(args).slice(0, 200),
@@ -2104,7 +2222,7 @@ Always explain your reasoning before or alongside your tool calls.`;
         this.stateManager.recordOperationEnd(effectiveTaskId, call.id, {
           success: receipt.success,
           error: receipt.error,
-        });
+        }, operationSeq);
       } catch {}
     }
 
@@ -2275,6 +2393,7 @@ Always explain your reasoning before or alongside your tool calls.`;
     }
     this.completionSummary = undefined;
     this.turnMutations = 0;
+    this.turnCarriedChanges = this.hasPendingModifications;
     this.turnRemovedObservations = this.carriedRemovedObservations;
     this.carriedRemovedObservations = new Set();
 
@@ -2309,6 +2428,8 @@ Always explain your reasoning before or alongside your tool calls.`;
         role: "user",
         content: effectiveUserContent,
       });
+      // The objective is durable before anything acts on it.
+      this.persistProgress({ messages: true });
       const pendingMessageChars = typeof effectiveUserContent === "string" ? effectiveUserContent.length : JSON.stringify(effectiveUserContent).length;
 
       let currentStep = 1;
@@ -2360,6 +2481,7 @@ Always explain your reasoning before or alongside your tool calls.`;
           if (!modelCalled && this.messages.length === historyBeforeSubmission + 1) {
             this.messages.length = historyBeforeSubmission;
             retained = false;
+            this.persistProgress({ messages: true });
           }
           capacityBlock = {
             estimatedPromptTokens: err.estimatedTokens,
@@ -2541,6 +2663,7 @@ Always explain your reasoning before or alongside your tool calls.`;
               content,
             });
           }
+          this.persistProgress({ messages: true });
           currentStep++;
           continue;
         }
@@ -2598,6 +2721,7 @@ Always explain your reasoning before or alongside your tool calls.`;
             name: toolName,
             content: finalContent,
           });
+          this.persistProgress({ messages: true });
 
           if (shouldExit) {
             modelStop = "TASK_COMPLETED_TOOL";
@@ -2717,7 +2841,7 @@ Always explain your reasoning before or alongside your tool calls.`;
         reason: noVerifier ? "NO_APPLICABLE_VERIFIER" : "VERIFICATION_NOT_RUN",
       }));
     }
-    if (this.turnMutations > 0) {
+    if (this.turnMutations > 0 || this.turnCarriedChanges) {
       if (evidence?.status === "PASSED") {
         return deepFreezeTurn(assertTurnResultInvariants({ ...base, execution: "COMPLETED", outcome: "VERIFIED" }));
       }
