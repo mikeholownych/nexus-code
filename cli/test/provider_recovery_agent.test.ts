@@ -265,4 +265,3 @@ describe("operator surfaces", () => {
     assert.doesNotMatch(JSON.stringify(projectTurn(turn)), /sk-secret-token/);
   });
 });
-

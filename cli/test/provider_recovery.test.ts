@@ -367,4 +367,3 @@ describe("client: failover and empty-stream re-request under ambiguity", () => {
     } finally { await gw.close(); }
   });
 });
-
