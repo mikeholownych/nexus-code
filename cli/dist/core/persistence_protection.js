@@ -62,14 +62,22 @@ export function redactTaskStateForPersistence(value, workspacePaths = []) {
     };
 }
 /**
- * Refuse a durable copy when redaction would alter its source-of-truth content.
- * Checkpoint snapshots use this instead of creating a sanitized, unrestorable
- * workspace copy.
+ * Refuse a durable copy when its source-of-truth content is positively classified
+ * as sensitive. Checkpoint snapshots use this instead of creating a sanitized,
+ * unrestorable workspace copy.
+ *
+ * Only positive findings (non-UNCERTAIN) block persistence. UNCERTAIN high-entropy
+ * tokens are a low-confidence heuristic (DATA-004, confidence 0.55) that can
+ * false-positive on ordinary long identifiers, so they are redacted where possible
+ * but do not fail the checkpoint.
  */
 export function assertNoSensitivePersistenceContent(value, destination) {
     try {
-        const protectedValue = redactForPersistence(value);
-        if (JSON.stringify(protectedValue) !== JSON.stringify(value)) {
+        const text = typeof value === "string" ? value : JSON.stringify(value);
+        if (text === undefined)
+            return;
+        const positive = InformationFlowBoundary.getGlobalInstance().classifyText(text);
+        if (positive.some((finding) => finding.classificationType !== "UNCERTAIN")) {
             throw new SensitivePersistenceError(destination);
         }
     }
