@@ -33,7 +33,7 @@ import { McpClientManager } from "./mcp.js";
 import { PluginManager } from "./plugins.js";
 import { extractCompilerDiagnostics, formatDiagnosticHints } from "./diagnostics.js";
 import { SecurityManager } from "./security.js";
-import { calculateContextBudget, countTokens, isContextAdmissible, TokenBudget } from "./tokens.js";
+import { calculateContextBudget, countTokens, isContextAdmissible, isContextPressureHigh, estimateNextRequestTokens, TokenBudget } from "./tokens.js";
 import { selectRelevantFewShots } from "./fewshots.js";
 import { FlightRecorder } from "./flight.js";
 import { WorktreeManager } from "./worktree.js";
@@ -124,6 +124,84 @@ interface CanonicalDurableSummary {
 // Internal authority is bound to the exact message object minted in this
 // process; record-shaped message text alone can never create provenance.
 const canonicalDurableProvenance = new WeakMap<object, WeakMap<ChatMessage, CanonicalDurableProvenance>>();
+
+const VERBOSE_DETAIL_NOTE = /^Earlier (system message|assistant message|[A-Za-z0-9_]+ output):/;
+
+/** Whether a durable note carries raw message/tool body text, which the detail budget caps. */
+function isVerboseDetailNote(note: string): boolean {
+  return VERBOSE_DETAIL_NOTE.test(note);
+}
+
+// Short verbose notes (reasoning/decision text, terse tool responses) are decision-critical
+// durable state: they must survive compaction. The bloat that forces compaction comes from
+// large raw tool-output bodies (reads, diffs, listings), so only those are budget-capped.
+const VERBOSE_NOTE_CHEAP_LIMIT = 512;
+
+const DETAIL_ELISION = "[Some verbose source detail elided to honor the detail budget; full tool outputs are retained in session evidence.]";
+const DETAIL_TRUNCATION = "\n…#(truncated to detail budget; full output retained in session evidence)";
+
+/**
+ * Bound the verbose (raw message/tool body) detail retained in the durable record to
+ * `budgetChars` while always keeping the compact engineering facts (task requests, files,
+ * commands, reconstructible queries) and short decision/reasoning notes. Large raw bodies
+ * are retained newest-first (continuity toward the current work survives), truncated to the
+ * remaining budget, and elided beyond it. A budget of zero retains no raw detail. This is
+ * what makes the escalation ladder's detail-budget passes strictly stronger than weaker ones
+ * instead of no-ops.
+ */
+function applyDetailBudget(notes: string[], detailBudgetChars: number): string[] {
+  const budget = Number.isFinite(detailBudgetChars) ? detailBudgetChars : 0;
+  const verbose = notes.map((note, index) => ({ note, index })).filter(({ note }) => isVerboseDetailNote(note));
+  if (verbose.length === 0) return notes;
+  // The origin decision (oldest short assistant note) is pinned durable state: it must survive
+  // every rung of the ladder, matching the "first-turn decision survives repeated compactions"
+  // invariant, while large raw tool-output bodies are what actually get budgeted.
+  const pin = verbose[0].note.length <= VERBOSE_NOTE_CHEAP_LIMIT ? verbose[0] : undefined;
+  if (budget <= 0) {
+    const essential = notes.filter((note) => !isVerboseDetailNote(note) && note !== DETAIL_ELISION);
+    const pinned = pin ? [pin.note] : [];
+    return pinned.length || essential.length !== notes.length
+      ? essential.concat(pinned, essential.concat(pinned).length < notes.length ? [DETAIL_ELISION] : [])
+      : notes;
+  }
+  const cheap = verbose.filter(({ note }) => note.length <= VERBOSE_NOTE_CHEAP_LIMIT);
+  const large = verbose.filter(({ note }) => note.length > VERBOSE_NOTE_CHEAP_LIMIT);
+  const retained = new Map<number, string>();
+  let remaining = budget;
+  if (pin) {
+    retained.set(pin.index, pin.note);
+    remaining -= pin.note.length;
+  }
+  if (remaining > 0) {
+    for (const item of [...cheap.filter((candidate) => candidate.index !== pin?.index)].reverse()) {
+      if (remaining <= 0) break;
+      retained.set(item.index, remaining >= item.note.length ? item.note : `${item.note.slice(0, remaining)}${DETAIL_TRUNCATION}`);
+      remaining = Math.max(0, remaining - item.note.length);
+    }
+  }
+  if (remaining > 0) {
+    for (const item of [...large].reverse()) {
+      if (remaining <= 0) break;
+      retained.set(item.index, remaining >= item.note.length ? item.note : `${item.note.slice(0, remaining)}${DETAIL_TRUNCATION}`);
+      remaining = Math.max(0, remaining - item.note.length);
+    }
+  }
+  if (retained.size === verbose.length) return notes;
+  const result: string[] = [];
+  let elidedAny = false;
+  for (let index = 0; index < notes.length; index++) {
+    const note = notes[index];
+    if (note === DETAIL_ELISION || !isVerboseDetailNote(note)) {
+      if (note !== DETAIL_ELISION) result.push(note);
+      continue;
+    }
+    const kept = retained.get(index);
+    if (kept !== undefined) result.push(kept);
+    else elidedAny = true;
+  }
+  if (elidedAny) result.push(DETAIL_ELISION);
+  return result;
+}
 
 function normalizeMessageContent(content: ChatMessage["content"]): NormalizedMessageContent {
   if (typeof content === "string") return { text: [content], preserveOriginal: false };
@@ -920,7 +998,7 @@ export class AutonomousAgent {
     return { completion, toolResponse, total: completion + toolResponse };
   }
 
-  private summarizeDiscardedHistory(messages: ChatMessage[], _detailBudgetChars: number): CanonicalDurableSummary {
+  private summarizeDiscardedHistory(messages: ChatMessage[], detailBudgetChars: number): CanonicalDurableSummary {
     const filesRead = new Set<string>();
     const filesModified = new Set<string>();
     const commandsExecuted: string[] = [];
@@ -1069,6 +1147,11 @@ export class AutonomousAgent {
       }
     }
 
+    // Bound raw message/tool body detail to the requested budget so stronger ladder passes
+    // actually reclaim context (fixing no-op escalation when large tool outputs balloon the
+    // durable record and keep post-compaction utilization above the proactive threshold).
+    const notes = applyDetailBudget(durableNotes, detailBudgetChars);
+
     const inheritedSupersededPlanIds = new Set<string>();
     const inheritedPlanStates = new Map<string, DurablePlanState>();
     for (const record of trustedRecords.values()) {
@@ -1098,7 +1181,7 @@ export class AutonomousAgent {
 
     const previous = trustedRecords.size === 1 ? Array.from(trustedRecords.values())[0] : undefined;
     const unchanged = Boolean(previous &&
-      JSON.stringify(previous.notes) === JSON.stringify(durableNotes) &&
+      JSON.stringify(previous.notes) === JSON.stringify(notes) &&
       JSON.stringify(previous.planStates.filter((state) => !supersededPlanStateIds.has(state.id))) === JSON.stringify(planStates) &&
       JSON.stringify(previous.supersededPlanStateIds) === JSON.stringify(Array.from(supersededPlanStateIds)) &&
       (!this.activePlan.length || planMatchesCurrent));
@@ -1111,7 +1194,7 @@ export class AutonomousAgent {
       "[Structured Context Memory - durable task state]",
       JSON.stringify({
         version: 2,
-        notes: durableNotes,
+        notes,
         currentPlan: planStates.length === 1 ? planStates[0].phases : [],
         currentPlanStates: planStates,
       }),
@@ -1120,7 +1203,7 @@ export class AutonomousAgent {
       recordId,
       predecessorIds,
       supersededPlanStateIds: Array.from(supersededPlanStateIds),
-      notes: durableNotes,
+      notes,
       planStates,
       content: serialized,
     };
@@ -1166,28 +1249,57 @@ export class AutonomousAgent {
     const original = this.messages;
     let budget = calculateContextBudget(original, this.getEffectiveTools(), contextLimit);
     let compacted = false;
+    let compactionAttempts = 0;
+    const maxCompactionAttempts = 5;
+    // Anti-thrashing: only re-compact when the previous ladder pass actually shrank the
+    // context. Once a pass yields no token reduction, a stronger pass would also be a no-op.
+    let lastPassShrank = true;
 
-    if (!isContextAdmissible(budget.totalActiveTokens, contextLimit, reserves.completion, reserves.toolResponse)) {
+    // Check if we need to compact due to pressure (predictive or current).
+    // Predictive soft-threshold (80%) triggers a proactive compaction even when the
+    // request would still be admissible, so a long autonomous turn keeps going without
+    // an operator `/compact`.
+    while (lastPassShrank && compactionAttempts < maxCompactionAttempts &&
+           (compactionAttempts === 0
+             ? (!isContextAdmissible(budget.totalActiveTokens, contextLimit, reserves.completion, reserves.toolResponse) ||
+                isContextPressureHigh(original, this.getEffectiveTools(), contextLimit, 80, reserves.completion, reserves.toolResponse, 1000))
+             : !isContextAdmissible(budget.totalActiveTokens, contextLimit, reserves.completion, reserves.toolResponse))) {
       compacted = true;
+      compactionAttempts++;
       let accepted = false;
-      for (const recentTurns of [2, 1, 0]) {
-        for (const detailBudgetChars of [6000, 3000, 1200, 400, 0]) {
+      const passBudgetBefore = budget.totalActiveTokens;
+      // Escalate reduction hardness across attempts: fewer recent turns, then smaller
+      // detail budget, so each re-compaction is strictly stronger than the last.
+      const recentTurnsList = compactionAttempts >= 2 ? [1, 0] : [2, 1, 0];
+      const detailBudgetList = compactionAttempts >= 2 ? [3000, 1200, 400, 0] : [6000, 3000, 1200, 400, 0];
+      for (const recentTurns of recentTurnsList) {
+        for (const detailBudgetChars of detailBudgetList) {
           const candidate = this.compactedMessages(original, recentTurns, detailBudgetChars);
           const candidateBudget = calculateContextBudget(candidate, this.getEffectiveTools(), contextLimit);
           if (isContextAdmissible(candidateBudget.totalActiveTokens, contextLimit, reserves.completion, reserves.toolResponse)) {
             this.messages = candidate;
             budget = candidateBudget;
             accepted = true;
+            if (!process.stdout.isTTY || process.env.NEXUS_DEBUG === "1") {
+              console.log(`[context_admission] step=${step} request_id=${requestId} state=auto_compacted attempts=${compactionAttempts} estimated_tokens=${budget.totalActiveTokens} completion_reserve=${reserves.completion} tool_response_reserve=${reserves.toolResponse} limit=${contextLimit} compacted=${compacted} messages=${this.messages.length}`);
+            }
             break;
           }
         }
         if (accepted) break;
       }
       if (!accepted) {
-        budget = calculateContextBudget(original, this.getEffectiveTools(), contextLimit);
-        if (!process.stdout.isTTY || process.env.NEXUS_DEBUG === "1") console.log(`[context_admission] step=${step} request_id=${requestId} state=blocked estimated_tokens=${budget.totalActiveTokens} completion_reserve=${reserves.completion} tool_response_reserve=${reserves.toolResponse} limit=${contextLimit}`);
-        throw new ContextBudgetError(budget.totalActiveTokens, reserves.completion, reserves.toolResponse, contextLimit);
+        budget = calculateContextBudget(this.messages, this.getEffectiveTools(), contextLimit);
+        if (!process.stdout.isTTY || process.env.NEXUS_DEBUG === "1") console.log(`[context_admission] step=${step} request_id=${requestId} state=compaction_insufficient attempts=${compactionAttempts} estimated_tokens=${budget.totalActiveTokens} completion_reserve=${reserves.completion} tool_response_reserve=${reserves.toolResponse} limit=${contextLimit}`);
+        lastPassShrank = false;
+        break;
       }
+      lastPassShrank = budget.totalActiveTokens < passBudgetBefore - 1;
+    }
+
+    if (!isContextAdmissible(budget.totalActiveTokens, contextLimit, reserves.completion, reserves.toolResponse)) {
+      if (!process.stdout.isTTY || process.env.NEXUS_DEBUG === "1") console.log(`[context_admission] step=${step} request_id=${requestId} state=blocked estimated_tokens=${budget.totalActiveTokens} completion_reserve=${reserves.completion} tool_response_reserve=${reserves.toolResponse} limit=${contextLimit} compacted=${compacted} messages=${this.messages.length}`);
+      throw new ContextBudgetError(budget.totalActiveTokens, reserves.completion, reserves.toolResponse, contextLimit);
     }
 
     if (!process.stdout.isTTY || process.env.NEXUS_DEBUG === "1") console.log(`[context_admission] step=${step} request_id=${requestId} state=admitted estimated_tokens=${budget.totalActiveTokens} completion_reserve=${reserves.completion} tool_response_reserve=${reserves.toolResponse} limit=${contextLimit} compacted=${compacted} messages=${this.messages.length}`);

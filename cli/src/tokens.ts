@@ -139,3 +139,63 @@ export function renderTokenGauge(budget: TokenBudget): string {
 
   return lines.join("\n");
 }
+
+// Predictive next-request token estimation
+export interface NextRequestEstimation {
+  estimatedPromptTokens: number;
+  estimatedTokens: number; // alias
+  completionReserveTokens: number;
+  toolResponseReserveTokens: number;
+  safetyMarginTokens: number;
+  totalPredictedTokens: number;
+  utilizationPercent: number;
+}
+
+export function estimateNextRequestTokens(
+  messages: ChatMessage[],
+  tools: ToolDefinition[],
+  contextLimit: number = 65536,
+  completionReserveTokens: number = 8192,
+  toolResponseReserveTokens: number = 4096,
+  safetyMarginTokens: number = 1000
+): NextRequestEstimation {
+  const budget = calculateContextBudget(messages, tools, contextLimit);
+
+  // Estimate overhead for formatting/protocol
+  const overhead = countTokens(JSON.stringify({ role: "assistant", content: "", tool_calls: [] })) * 2;
+
+  const estimatedPromptTokens = budget.totalActiveTokens + overhead;
+  const totalPredictedTokens = estimatedPromptTokens + completionReserveTokens + toolResponseReserveTokens + safetyMarginTokens;
+  const utilizationPercent = Math.min(100, Math.round((totalPredictedTokens / contextLimit) * 1000) / 10);
+
+  return {
+    estimatedPromptTokens,
+    estimatedTokens: estimatedPromptTokens,
+    completionReserveTokens,
+    toolResponseReserveTokens,
+    safetyMarginTokens,
+    totalPredictedTokens,
+    utilizationPercent,
+  };
+}
+
+export function isContextPressureHigh(
+  messages: ChatMessage[],
+  tools: ToolDefinition[],
+  contextLimit: number = 65536,
+  softThresholdPercent: number = 80,
+  completionReserveTokens: number = 8192,
+  toolResponseReserveTokens: number = 4096,
+  safetyMarginTokens: number = 1000
+): boolean {
+  const estimation = estimateNextRequestTokens(
+    messages,
+    tools,
+    contextLimit,
+    completionReserveTokens,
+    toolResponseReserveTokens,
+    safetyMarginTokens
+  );
+  return estimation.utilizationPercent >= softThresholdPercent ||
+    !isContextAdmissible(estimation.estimatedPromptTokens, contextLimit, completionReserveTokens, toolResponseReserveTokens);
+}

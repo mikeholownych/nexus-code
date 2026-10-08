@@ -106,3 +106,25 @@ export function renderTokenGauge(budget) {
     lines.push(`\n  ${pc.dim("Available Headroom:")} ${pc.bold(pc.cyan(headroom.toLocaleString()))} tokens remaining.`);
     return lines.join("\n");
 }
+export function estimateNextRequestTokens(messages, tools, contextLimit = 65536, completionReserveTokens = 8192, toolResponseReserveTokens = 4096, safetyMarginTokens = 1000) {
+    const budget = calculateContextBudget(messages, tools, contextLimit);
+    // Estimate overhead for formatting/protocol
+    const overhead = countTokens(JSON.stringify({ role: "assistant", content: "", tool_calls: [] })) * 2;
+    const estimatedPromptTokens = budget.totalActiveTokens + overhead;
+    const totalPredictedTokens = estimatedPromptTokens + completionReserveTokens + toolResponseReserveTokens + safetyMarginTokens;
+    const utilizationPercent = Math.min(100, Math.round((totalPredictedTokens / contextLimit) * 1000) / 10);
+    return {
+        estimatedPromptTokens,
+        estimatedTokens: estimatedPromptTokens,
+        completionReserveTokens,
+        toolResponseReserveTokens,
+        safetyMarginTokens,
+        totalPredictedTokens,
+        utilizationPercent,
+    };
+}
+export function isContextPressureHigh(messages, tools, contextLimit = 65536, softThresholdPercent = 80, completionReserveTokens = 8192, toolResponseReserveTokens = 4096, safetyMarginTokens = 1000) {
+    const estimation = estimateNextRequestTokens(messages, tools, contextLimit, completionReserveTokens, toolResponseReserveTokens, safetyMarginTokens);
+    return estimation.utilizationPercent >= softThresholdPercent ||
+        !isContextAdmissible(estimation.estimatedPromptTokens, contextLimit, completionReserveTokens, toolResponseReserveTokens);
+}

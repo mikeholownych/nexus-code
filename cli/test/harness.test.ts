@@ -2104,19 +2104,29 @@ error[E0308]: mismatched types
     }
   });
 
-  test("durable-state overflow refuses locally without provider dispatch", async () => {
+  test("durable-state overflow compacts into a bounded record and every dispatch stays within budget", async () => {
     const agent = new AutonomousAgent({
       endpoint: "http://localhost:1234/v1",
       model: "test-model",
       workspace: process.cwd(),
-      maxSteps: 1,
+      maxSteps: 2,
       shell: "bash",
       contextLimit: 65_536,
       completionReserveTokens: 8_192,
       toolResponseReserveTokens: 4_096,
     });
     let dispatchCount = 0;
-    (agent as any).client = { chatCompletionStream: async () => { dispatchCount++; return { role: "assistant", content: "unexpected" }; } };
+    const dispatched: number[] = [];
+    // The 400 oversized tool findings are reduced by auto-compaction into a budget-bounded durable
+    // record (with elision markers pointing at session evidence) instead of refusing the turn, so a
+    // long-lived autonomous run keeps making progress. The irreducible-overload refusal is the next test.
+    (agent as any).client = {
+      chatCompletionStream: async (messages: any[], tools: any[]) => {
+        dispatchCount++;
+        dispatched.push(calculateContextBudget(messages, tools, 65_536).totalActiveTokens);
+        return { role: "assistant", content: "unexpected" };
+      },
+    };
     agent.setMessages([
       agent.getMessages()[0],
       { role: "user", content: "Preserve every required finding before continuing." },
@@ -2128,14 +2138,14 @@ error[E0308]: mismatched types
       })),
     ]);
     try {
-      const blocked = await agent.runTurn("Continue without losing any required findings.");
-      assert.strictEqual(blocked.execution, "BLOCKED");
-      assert.strictEqual(blocked.reason, "CONTEXT_CAPACITY_EXCEEDED");
-      assert.strictEqual(dispatchCount, 0, "required durable state that cannot fit must not reach the provider");
-      // Required durable state is neither dispatched nor silently discarded: all 400 findings are still in history,
-      // and only the refused submission is withdrawn.
-      assert.strictEqual(agent.getMessages().length, 402, "system + original user + 400 findings remain, refused submission removed");
-      assert.strictEqual(agent.getMessages().filter((m) => m.role === "tool").length, 400);
+      const result = await agent.runTurn("Continue without losing any required findings.");
+      assert.notStrictEqual(result.execution, "BLOCKED", "durable-state overflow must compact, not wedge the run");
+      assert.strictEqual(dispatchCount, 1);
+      assert.ok(dispatched.every((estimate) => estimate + 8_192 + 4_096 <= 65_536), "the compacted dispatch must stay within budget");
+      const finalHistory = agent.getMessages().map((m) => typeof m.content === "string" ? m.content : "").join("\n");
+      assert.ok(finalHistory.includes("[Some verbose source detail elided"), "elision markers must point at session evidence (not silently drop facts)");
+      const record = agent.getMessages().find((m) => typeof m.content === "string" && m.content.startsWith("[Structured Context Memory"));
+      assert.ok(record && String(record.content).length < 30_000, "the durable record must be bounded after compacting 400 oversized findings");
     } finally {
       agent.shutdown();
     }
