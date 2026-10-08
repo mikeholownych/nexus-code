@@ -9,19 +9,84 @@
  * The scheduler is pure decision logic over durable state; the OperationRunner owns time, execution and
  * persistence. Provider recovery stays beneath it: the recovery controller decides how one inference step survives
  * a failure; the scheduler decides what to work on next.
+ *
+ * Lifecycle (the one model for durable autonomous work; `nexus operation` and `/team` both use it):
+ *
+ *   unit COMPLETE              its turn completed with an established result (TurnResult execution COMPLETED and
+ *                              outcome other than NOT_ESTABLISHED). A function returning is not completion.
+ *   unit PARKED                a qualified resource will be eligible again at a known time; nothing is held.
+ *   unit WAITING_ON_DEPENDENCY a dependency is not COMPLETE (a BLOCKED dependency keeps it here: it never runs on
+ *                              unfinished inputs).
+ *   unit BLOCKED               no safe autonomous transition: terminal execution failure, unknown execution with
+ *                              its replay budget spent, an interrupted tool, or no qualified resource. Carries one
+ *                              structured decision; only an applied operator decision moves it on.
+ *   operation RUNNING          (active) some unit is runnable or running.
+ *   operation WAITING          nothing can run now and some required work is parked on a known time.
+ *   operation BLOCKED          nothing can run or wait; required work needs a decision.
+ *   operation COMPLETE         every required unit is COMPLETE (advisory units are reported, never awaited).
+ *   operation CANCELLED        the operator stopped it; units and their history are preserved.
+ *
+ * There is no separate FAILED state: a failed unit is BLOCKED on a decision (retry, revise, reassign, stop), and
+ * environmental conditions are never failures (they park or reroute).
+ *
+ * Boundary: an interactive turn (REPL, TUI sidecar, `nexus run`) stays a direct runTurn — one turn, whose
+ * TurnResult is the outcome, with provider recovery and context admission inside it. Work that has dependencies,
+ * must outlive a resource becoming unavailable, may wait, or must resume after a restart is an operation.
+ * spawn_subagent is in-turn delegation: its result is a tool result of the parent's (durable) turn.
  */
-import type { AgentRole } from "../team.js";
+import type { AgentRole } from "./roles.js";
 import type { ResourceConditionRecord, ResourceDescriptor, ResourceRegistry, WorkRequirements } from "./resources.js";
 import type { InferenceFailure } from "./turn.js";
 
 export type WorkUnitStatus = "RUNNABLE" | "RUNNING" | "PARKED" | "WAITING_ON_DEPENDENCY" | "COMPLETE" | "BLOCKED";
 export type OperationStatus = "RUNNING" | "WAITING" | "BLOCKED" | "COMPLETE" | "CANCELLED";
 
+/** What applying a decision option does. Every option Nexus offers is one of these; nothing else is accepted. */
+export type DecisionAction =
+  /** Run the unit again from its history; where execution was unknown this authorizes the replay. */
+  | { kind: "retry"; clearResources?: string[] }
+  /** Restart the wait bound and keep waiting for the parked resources. */
+  | { kind: "keep_waiting" }
+  /** Run the unit on this resource, accepting the listed unmet requirements (never the trust boundary). */
+  | { kind: "assign"; resourceId: string; overriding: string[] }
+  /** Append the operator's note to the unit's task and run it again. */
+  | { kind: "revise" }
+  /** Drop an advisory unit (required units cannot be dropped: the objective would be unmet). */
+  | { kind: "drop" }
+  | { kind: "cancel_operation" };
+
+export interface DecisionOption {
+  id: string;
+  label: string;
+  action: DecisionAction;
+}
+
+export type BlockCause =
+  | "EXECUTION_FAILED"
+  | "EXECUTION_UNKNOWN"
+  | "INTERRUPTED"
+  | "NO_QUALIFIED_RESOURCE"
+  | "RESOURCE_NEEDS_OPERATOR"
+  | "WAIT_BOUND"
+  | "RUN_BUDGET"
+  | "NOT_CONVERGING";
+
 /** The smallest decision that unblocks progress, with the concrete options Nexus can act on. */
 export interface EscalationDecision {
+  id: string;
   unitId: string;
+  cause: BlockCause;
   question: string;
-  options: string[];
+  options: DecisionOption[];
+}
+
+export interface AppliedDecision {
+  decisionId: string;
+  optionId: string;
+  label: string;
+  action: DecisionAction;
+  note?: string;
+  at: string;
 }
 
 export interface WorkUnit {
@@ -31,16 +96,28 @@ export interface WorkUnit {
   prompt: string;
   dependsOn: string[];
   requires: WorkRequirements;
+  /** False for advisory work: reported, run when possible, never awaited for completion. */
+  required?: boolean;
+  /** X-Task-Class routing hint for this unit (used when the resource has none of its own). */
+  taskClass?: string;
   status: WorkUnitStatus;
   /** Resource the unit last ran on (its conversation continues from there). */
   assignment?: { resourceId: string; model: string; since: string };
+  /** Operator-authorized assignment that replaces requirement matching for this unit. */
+  override?: { resourceId: string; overriding: string[]; decisionId: string };
   /** Durable task state holding the unit's conversation, for resumption without live model context. */
   agentTaskId?: string;
   parked?: { since: string; reason: string; resourceIds: string[]; wakeAt?: string };
   blocked?: { since: string; reason: string; decision: EscalationDecision };
-  result?: { summary: string; completedAt: string; resourceId: string; outcome: string };
+  /** A decision applied since the unit last ran, told to the unit when it resumes. */
+  pendingDecision?: { label: string; note?: string };
+  decisions?: AppliedDecision[];
+  dropped?: boolean;
+  result?: { summary: string; completedAt: string; resourceId: string; outcome: string; overriding?: string[] };
   reroutes: Array<{ at: string; from: string; to: string; reason: string }>;
   runs: number;
+  /** `runs` when the operator last authorized more attempts (the run budget counts from here). */
+  runsBase?: number;
   /** Executions started whose inference outcome was never received (process ended mid-run). */
   unknownResumes: number;
   modelsUsed: string[];
@@ -60,7 +137,8 @@ export type OperationEventType =
   | "OPERATION_RESUMED"
   | "OPERATION_BLOCKED"
   | "OPERATION_COMPLETED"
-  | "OPERATION_CANCELLED";
+  | "OPERATION_CANCELLED"
+  | "DECISION_APPLIED";
 
 export interface OperationEvent {
   type: OperationEventType;
@@ -106,13 +184,28 @@ export interface DurableOperationState {
   policy: OperationPolicy;
 }
 
+/** An option before it is numbered into a decision. */
+export interface OptionSpec {
+  label: string;
+  action: DecisionAction;
+}
+
+export interface BlockSpec {
+  cause: BlockCause;
+  reason: string;
+  question: string;
+  options: OptionSpec[];
+  /** Also offer assigning the unit to each other resource it may use (the scheduler knows which). */
+  offerReassign?: boolean;
+}
+
 export type UnitRunResult =
   | { kind: "completed"; summary: string; outcome: string }
   /** The resource could not take the work and nothing executed (or the condition is recorded at resource scope). */
   | { kind: "resource_unavailable"; failure: InferenceFailure; condition: ResourceConditionRecord }
   /** Inference may have executed and its bounded replays are spent: never resubmitted elsewhere automatically. */
   | { kind: "execution_unknown"; failure: InferenceFailure }
-  | { kind: "failed"; reason: string; question: string; options: string[] }
+  | ({ kind: "failed" } & BlockSpec)
   | { kind: "cancelled" };
 
 export type Decision =
@@ -121,8 +214,13 @@ export type Decision =
   | { kind: "complete" }
   | { kind: "blocked"; decisions: EscalationDecision[] };
 
+/** An operator decision Nexus will not apply (stale, not offered, or outside the unit's authority). */
+export class DecisionRejected extends Error {}
+
 const MAX_EVENTS = 300;
 const TERMINAL: WorkUnitStatus[] = ["COMPLETE", "BLOCKED"];
+
+export const isRequired = (u: Pick<WorkUnit, "required">): boolean => u.required !== false;
 
 export interface WorkUnitSpec {
   id: string;
@@ -131,6 +229,8 @@ export interface WorkUnitSpec {
   prompt: string;
   dependsOn?: string[];
   requires?: WorkRequirements;
+  required?: boolean;
+  taskClass?: string;
 }
 
 export function newOperation(
@@ -146,10 +246,17 @@ export function newOperation(
     if (!u.id || ids.has(u.id)) throw new Error(`Work unit ids must be unique and non-empty (got '${u.id}')`);
     ids.add(u.id);
   }
+  const byId = new Map(units.map((u) => [u.id, u]));
   for (const u of units) {
-    for (const d of u.dependsOn ?? []) if (!ids.has(d)) throw new Error(`Work unit '${u.id}' depends on unknown unit '${d}'`);
+    for (const d of u.dependsOn ?? []) {
+      if (!ids.has(d)) throw new Error(`Work unit '${u.id}' depends on unknown unit '${d}'`);
+      if (u.required !== false && byId.get(d)!.required === false) {
+        throw new Error(`Required work unit '${u.id}' depends on advisory unit '${d}'; mark '${d}' required or drop the dependency`);
+      }
+    }
     for (const d of u.requires?.independentOf ?? []) if (!ids.has(d)) throw new Error(`Work unit '${u.id}' is independent of unknown unit '${d}'`);
   }
+  if (!units.some((u) => u.required !== false)) throw new Error("An operation needs at least one required work unit");
   assertAcyclic(units);
   const at = new Date(now).toISOString();
   return {
@@ -166,6 +273,8 @@ export function newOperation(
       prompt: u.prompt,
       dependsOn: u.dependsOn ?? [],
       requires: u.requires ?? {},
+      ...(u.required === false ? { required: false } : {}),
+      ...(u.taskClass ? { taskClass: u.taskClass } : {}),
       status: "WAITING_ON_DEPENDENCY",
       reroutes: [],
       runs: 0,
@@ -219,6 +328,10 @@ export class ConvergenceScheduler {
     } catch {}
   }
 
+  private excludedModels(u: WorkUnit): Set<string> {
+    return new Set((u.requires.independentOf ?? []).flatMap((id) => this.unit(id).modelsUsed));
+  }
+
   /**
    * Re-derives every non-terminal unit's status from dependencies and resource eligibility, then chooses the next
    * transition. Called after every change (completion, resource condition, wake), never acting on stale state.
@@ -237,8 +350,7 @@ export class ConvergenceScheduler {
         delete u.parked;
         continue;
       }
-      const excluded = new Set((u.requires.independentOf ?? []).flatMap((id) => this.unit(id).modelsUsed));
-      const sel = this.registry.select(u.requires, excluded, now);
+      const sel = u.override ? this.overrideSelection(u, now) : this.registry.select(u.requires, this.excludedModels(u), now);
       if (sel.chosen) {
         u.status = "RUNNABLE";
         const from = u.assignment?.resourceId;
@@ -248,9 +360,11 @@ export class ConvergenceScheduler {
           const elig = prior ? this.registry.eligibility(prior, now) : undefined;
           const reason = !prior
             ? "previous resource is no longer configured"
-            : elig && !elig.eligible
-              ? elig.blocking.map((b) => b.reason).join("; ")
-              : `${sel.chosen.id} is the preferred qualified resource`;
+            : u.override?.resourceId === sel.chosen.id
+              ? `operator assigned ${sel.chosen.id}`
+              : elig && !elig.eligible
+                ? elig.blocking.map((b) => b.reason).join("; ")
+                : `${sel.chosen.id} is the preferred qualified resource`;
           reroutedFrom = { resourceId: from, reason };
         }
         choices.set(u.id, { resource: sel.chosen, ...(reroutedFrom ? { reroutedFrom } : {}) });
@@ -288,24 +402,23 @@ export class ConvergenceScheduler {
       }
     }
 
-    const runnable = this.state.units.filter((u) => u.status === "RUNNABLE" && choices.has(u.id));
+    // Required work first; advisory work runs when it can but never ahead of the objective.
+    const runnable = this.state.units
+      .filter((u) => u.status === "RUNNABLE" && choices.has(u.id))
+      .sort((a, b) => Number(!isRequired(a)) - Number(!isRequired(b)));
     if (runnable.length) {
       const unit = runnable[0];
       const choice = choices.get(unit.id)!;
       return { kind: "run", unit, resource: choice.resource, ...(choice.reroutedFrom ? { reroutedFrom: choice.reroutedFrom } : {}) };
     }
 
+    if (this.state.units.filter(isRequired).every((u) => u.status === "COMPLETE")) return { kind: "complete" };
+
     const parked = this.state.units.filter((u) => u.status === "PARKED");
     if (parked.length) {
       const waitSince = this.state.wait ? Date.parse(this.state.wait.since) : now;
       if (now - waitSince >= this.state.policy.maxWaitMs) {
-        for (const u of parked) {
-          this.block(u, {
-            reason: `waited ${Math.round((now - waitSince) / 60_000)} min for ${u.parked!.resourceIds.join(", ")}`,
-            question: `${u.title} has waited longer than the operation's wait bound for ${u.parked!.resourceIds.join(", ")}. Keep waiting, or assign it to another resource?`,
-            options: ["keep waiting", ...this.state.resources.filter((r) => !u.parked!.resourceIds.includes(r.id)).map((r) => `assign to ${r.id}`), "abandon unit"],
-          });
-        }
+        for (const u of parked) this.block(u, this.waitBound(u, now - waitSince));
         return this.decide();
       }
       const wakeAt = Math.max(now + this.state.policy.minWaitMs, Math.min(...parked.map((u) => Date.parse(u.parked!.wakeAt!))));
@@ -317,23 +430,47 @@ export class ConvergenceScheduler {
       };
     }
 
-    if (this.state.units.every((u) => u.status === "COMPLETE")) return { kind: "complete" };
-
     const decisions = this.state.units.filter((u) => u.status === "BLOCKED" && u.blocked).map((u) => u.blocked!.decision);
     return { kind: "blocked", decisions };
+  }
+
+  /** The operator-assigned resource, if eligible; parks on it when temporarily unavailable. */
+  private overrideSelection(u: WorkUnit, now: number): ReturnType<ResourceRegistry["select"]> {
+    const r = this.registry.get(u.override!.resourceId);
+    if (!r) return { qualified: [], rejected: [{ resourceId: u.override!.resourceId, reasons: ["no longer configured"] }] };
+    const eligibility = this.registry.eligibility(r, now);
+    return { ...(eligibility.eligible ? { chosen: r } : {}), qualified: [{ resource: r, eligibility }], rejected: [] };
   }
 
   private productiveOthers(exceptId: string, choices: Map<string, unknown>): number {
     return this.state.units.filter((u) => u.id !== exceptId && (u.status === "RUNNING" || (u.status === "RUNNABLE" && choices.has(u.id)))).length;
   }
 
-  private noQualifiedResource(u: WorkUnit, sel: ReturnType<ResourceRegistry["select"]>): { reason: string; question: string; options: string[] } {
+  /** Resources the operator may assign `u` to, with the requirements each would override (never trust). */
+  private assignable(u: WorkUnit, exclude: string[] = []): OptionSpec[] {
+    const excluded = this.excludedModels(u);
+    const out: OptionSpec[] = [];
+    for (const r of this.registry.list()) {
+      if (exclude.includes(r.id)) continue;
+      if (u.requires.minTrust && this.registry.qualifies(r, { minTrust: u.requires.minTrust }, new Set()).length) continue;
+      const overriding = this.registry.qualifies(r, u.requires, excluded);
+      out.push({
+        label: overriding.length ? `assign to ${r.id} despite: ${overriding.join(", ")}` : `assign to ${r.id}`,
+        action: { kind: "assign", resourceId: r.id, overriding },
+      });
+    }
+    return out;
+  }
+
+  private noQualifiedResource(u: WorkUnit, sel: ReturnType<ResourceRegistry["select"]>): BlockSpec {
     if (sel.qualified.length) {
+      const ids = sel.qualified.map((c) => c.resource.id);
       const why = sel.qualified.map((c) => `${c.resource.id}: ${c.eligibility.blocking.map((b) => b.reason).join(", ")}`).join("; ");
       return {
+        cause: "RESOURCE_NEEDS_OPERATOR",
         reason: `every qualified resource is unavailable without a recovery window (${why})`,
-        question: `${u.title} can only run on ${sel.qualified.map((c) => c.resource.id).join(", ")}, which need operator action (${why}). Fix the resource, or assign the unit elsewhere?`,
-        options: ["retry after fixing the resource", ...sel.rejected.map((r) => `assign to ${r.resourceId} despite: ${r.reasons.join(", ")}`), "abandon unit"],
+        question: `${u.title} can only run on ${ids.join(", ")}, which need operator action (${why}). Fix the resource, or assign the unit elsewhere?`,
+        options: [{ label: `retry after fixing ${ids.join(", ")}`, action: { kind: "retry", clearResources: ids } }, ...this.assignable(u, ids)],
       };
     }
     const req = u.requires;
@@ -341,19 +478,112 @@ export class ConvergenceScheduler {
       ...(req.capabilities ?? []).map((c) => `capability '${c}'`),
       ...(req.qualification ? [`qualification '${req.qualification}'`] : []),
       ...(req.minContext ? [`context >= ${req.minContext}`] : []),
+      ...(req.independentOf?.length ? [`a model independent of ${req.independentOf.join(", ")}`] : []),
     ].join(", ");
     return {
+      cause: "NO_QUALIFIED_RESOURCE",
       reason: `no configured resource is qualified (${sel.rejected.map((r) => `${r.resourceId}: ${r.reasons.join(", ")}`).join("; ")})`,
-      question: `${u.title} needs ${need || "a qualified resource"}, and no configured resource provides it. Configure one, or relax the requirement?`,
-      options: ["configure a qualified resource", ...sel.rejected.map((r) => `relax requirement and use ${r.resourceId}`), "abandon unit"],
+      question: `${u.title} needs ${need || "a qualified resource"}, and no configured resource provides it. Configure one and start a new operation, or relax the requirement?`,
+      options: this.assignable(u),
     };
   }
 
-  block(u: WorkUnit, why: { reason: string; question: string; options: string[] }): void {
+  private waitBound(u: WorkUnit, waitedMs: number): BlockSpec {
+    const ids = u.parked!.resourceIds;
+    return {
+      cause: "WAIT_BOUND",
+      reason: `waited ${Math.round(waitedMs / 60_000)} min for ${ids.join(", ")}`,
+      question: `${u.title} has waited longer than the operation's wait bound for ${ids.join(", ")}. Keep waiting, or assign it to another resource?`,
+      options: [{ label: "keep waiting", action: { kind: "keep_waiting" } }, ...this.assignable(u, ids)],
+    };
+  }
+
+  block(u: WorkUnit, why: BlockSpec): void {
     u.status = "BLOCKED";
     delete u.parked;
-    u.blocked = { since: new Date(this.now()).toISOString(), reason: why.reason, decision: { unitId: u.id, question: why.question, options: why.options } };
-    this.emit("WORK_BLOCKED", `${u.title} needs a decision: ${why.question}`, { unitId: u.id, detail: { reason: why.reason } });
+    const terminal: OptionSpec = isRequired(u)
+      ? { label: "stop the operation", action: { kind: "cancel_operation" } }
+      : { label: "drop this advisory unit", action: { kind: "drop" } };
+    const options = [...why.options, terminal].map((o, i) => ({ id: String(i + 1), label: o.label, action: o.action }));
+    const decision: EscalationDecision = { id: `${u.id}#${(u.decisions?.length ?? 0) + 1}`, unitId: u.id, cause: why.cause, question: why.question, options };
+    u.blocked = { since: new Date(this.now()).toISOString(), reason: why.reason, decision };
+    this.emit("WORK_BLOCKED", `${u.title} needs a decision: ${why.question}`, { unitId: u.id, detail: { reason: why.reason, cause: why.cause, decisionId: decision.id } });
+  }
+
+  /**
+   * Applies an operator decision to a BLOCKED unit: validates it against the pending decision, records it durably
+   * on the unit, and makes the unit schedulable again. The next decide() re-evaluates; nothing runs here.
+   */
+  resolve(decisionId: string, optionId: string, note?: string): AppliedDecision {
+    if (this.state.status === "COMPLETE" || this.state.status === "CANCELLED") {
+      throw new DecisionRejected(`Operation ${this.state.id} is ${this.state.status}; it has no pending decisions.`);
+    }
+    const u = this.state.units.find((x) => x.status === "BLOCKED" && x.blocked?.decision.id === decisionId);
+    if (!u) {
+      const pending = this.state.units.filter((x) => x.status === "BLOCKED" && x.blocked).map((x) => x.blocked!.decision.id);
+      throw new DecisionRejected(`No pending decision '${decisionId}' (pending: ${pending.join(", ") || "none"}).`);
+    }
+    const decision = u.blocked!.decision;
+    const option = decision.options.find((o) => o.id === optionId);
+    if (!option) {
+      throw new DecisionRejected(`Option '${optionId}' was not offered for ${decisionId} (offered: ${decision.options.map((o) => `${o.id}=${o.label}`).join("; ")}).`);
+    }
+    const action = option.action;
+    const text = note?.trim();
+    if (action.kind === "revise" && !text) throw new DecisionRejected("Revising a unit requires a note describing the revision.");
+    if (action.kind === "drop" && isRequired(u)) throw new DecisionRejected(`${u.title} is required; dropping it would leave the objective unmet.`);
+    if (action.kind === "assign") {
+      const r = this.registry.get(action.resourceId);
+      if (!r) throw new DecisionRejected(`Resource ${action.resourceId} is not configured for this operation.`);
+      if (u.requires.minTrust && this.registry.qualifies(r, { minTrust: u.requires.minTrust }, new Set()).length) {
+        throw new DecisionRejected(`${action.resourceId} is outside ${u.title}'s trust boundary; that cannot be overridden by a decision.`);
+      }
+    }
+    const applied: AppliedDecision = { decisionId, optionId, label: option.label, action, ...(text ? { note: text } : {}), at: new Date(this.now()).toISOString() };
+    (u.decisions ??= []).push(applied);
+    delete u.blocked;
+    switch (action.kind) {
+      case "retry":
+        for (const id of action.clearResources ?? []) {
+          const r = this.registry.get(id);
+          if (r) this.registry.clearOperatorConditions(r);
+        }
+        u.runsBase = u.runs;
+        u.unknownResumes = 0;
+        u.status = "RUNNABLE";
+        break;
+      case "keep_waiting":
+        delete this.state.wait;
+        u.status = "RUNNABLE";
+        break;
+      case "assign":
+        u.override = { resourceId: action.resourceId, overriding: action.overriding, decisionId };
+        u.runsBase = u.runs;
+        u.status = "RUNNABLE";
+        break;
+      case "revise":
+        u.prompt = `${u.prompt}\n\nOperator revision: ${text}`;
+        u.runsBase = u.runs;
+        u.status = "RUNNABLE";
+        break;
+      case "drop":
+        u.dropped = true;
+        break;
+      case "cancel_operation":
+        break;
+    }
+    if (action.kind !== "drop" && action.kind !== "cancel_operation") u.pendingDecision = { label: option.label, ...(text ? { note: text } : {}) };
+    this.emit("DECISION_APPLIED", `${u.title}: operator chose "${option.label}"${text ? ` (${text})` : ""}.`, {
+      unitId: u.id,
+      detail: { decisionId, optionId, action },
+    });
+    if (action.kind === "cancel_operation") {
+      this.cancel();
+    } else if (this.state.status === "BLOCKED") {
+      this.state.status = "RUNNING";
+      delete this.state.blocked;
+    }
+    return applied;
   }
 
   /** Marks the unit RUNNING on `resource`, recording the reroute and the operation resuming if it was waiting. */
@@ -394,32 +624,41 @@ export class ConvergenceScheduler {
     const u = this.unit(unitId);
     const at = new Date(this.now()).toISOString();
     const resourceId = u.assignment?.resourceId ?? "unknown";
+    if (result.kind !== "cancelled") delete u.pendingDecision;
     switch (result.kind) {
       case "completed":
         u.status = "COMPLETE";
-        u.result = { summary: result.summary, completedAt: at, resourceId, outcome: result.outcome };
-        this.emit("WORK_COMPLETED", `${u.title} completed on ${resourceId}.`, { unitId, resourceId });
+        u.result = {
+          summary: result.summary,
+          completedAt: at,
+          resourceId,
+          outcome: result.outcome,
+          ...(u.override?.overriding.length && u.override.resourceId === resourceId ? { overriding: u.override.overriding } : {}),
+        };
+        this.emit("WORK_COMPLETED", `${u.title} completed on ${resourceId}.`, { unitId, resourceId, detail: { outcome: result.outcome } });
         return;
       case "resource_unavailable":
         // The condition is in the registry; the next decide() reroutes or parks with the unit's history intact.
         u.status = "RUNNABLE";
-        if (u.runs >= this.state.policy.maxRunsPerUnit) {
+        if (u.runs - (u.runsBase ?? 0) >= this.state.policy.maxRunsPerUnit) {
           this.block(u, {
+            cause: "RUN_BUDGET",
             reason: `resources failed ${u.runs} times`,
-            question: `${u.title} has been displaced by resource failures ${u.runs} times. Keep trying, or abandon it?`,
-            options: ["keep trying", "abandon unit"],
+            question: `${u.title} has been displaced by resource failures ${u.runs} times. Keep trying?`,
+            options: [{ label: "keep trying", action: { kind: "retry" } }],
           });
         }
         return;
       case "execution_unknown":
         this.block(u, {
+          cause: "EXECUTION_UNKNOWN",
           reason: `inference on ${resourceId} may have executed (request ${result.failure.requestId ?? "?"}); its replay budget is spent`,
-          question: `${u.title}: Nexus cannot tell whether its last request to ${resourceId} executed, and will not resubmit it elsewhere on its own. Replay the step, or stop this unit?`,
-          options: ["replay the step", "abandon unit"],
+          question: `${u.title}: Nexus cannot tell whether its last request to ${resourceId} executed, and will not resubmit it elsewhere on its own. Replay the step, or stop?`,
+          options: [{ label: "replay the step", action: { kind: "retry" } }],
         });
         return;
       case "failed":
-        this.block(u, { reason: result.reason, question: result.question, options: result.options });
+        this.block(u, { ...result, options: [...result.options, ...(result.offerReassign ? this.assignable(u, [resourceId]) : [])] });
         return;
       case "cancelled":
         u.status = "RUNNABLE";
@@ -433,9 +672,10 @@ export class ConvergenceScheduler {
       u.unknownResumes++;
       if (u.unknownResumes > this.state.policy.unknownResumeBudget) {
         this.block(u, {
+          cause: "INTERRUPTED",
           reason: `interrupted ${u.unknownResumes} times with an unknown outcome`,
-          question: `${u.title} was interrupted mid-run ${u.unknownResumes} times. Resume it again, or stop it?`,
-          options: ["resume again", "abandon unit"],
+          question: `${u.title} was interrupted mid-run ${u.unknownResumes} times. Resume it again, or stop?`,
+          options: [{ label: "resume again", action: { kind: "retry" } }],
         });
       } else {
         u.status = "RUNNABLE";
@@ -460,7 +700,13 @@ export class ConvergenceScheduler {
     if (d.kind === "complete") {
       this.state.status = "COMPLETE";
       delete this.state.blocked;
-      this.emit("OPERATION_COMPLETED", `Objective complete: ${this.state.units.length} work units done.`);
+      const required = this.state.units.filter(isRequired).length;
+      const advisoryOpen = this.state.units.filter((u) => !isRequired(u) && u.status !== "COMPLETE").map((u) => u.title);
+      this.emit(
+        "OPERATION_COMPLETED",
+        `Objective complete: ${required} required work ${required === 1 ? "unit" : "units"} done.` +
+          (advisoryOpen.length ? ` Advisory work not done: ${advisoryOpen.join(", ")}.` : ""),
+      );
       return;
     }
     this.state.status = "BLOCKED";
@@ -468,7 +714,7 @@ export class ConvergenceScheduler {
     const first = d.decisions[0];
     this.emit(
       "OPERATION_BLOCKED",
-      first ? `Decision needed: ${first.question} Options: ${first.options.join(" | ")}.` : "Operation blocked with no runnable work.",
+      first ? `Decision needed: ${first.question} Options: ${first.options.map((o) => `[${o.id}] ${o.label}`).join(" | ")}.` : "Operation blocked with no runnable work.",
       { detail: { decisions: d.decisions } },
     );
   }

@@ -583,7 +583,8 @@ describe("compatibility and convergence", () => {
     const d = out.blocked!.decisions[0];
     assert.equal(d.unitId, "x");
     assert.match(d.question, /Deep review needs capability 'deep-review', and no configured resource provides it/);
-    assert.ok(d.options.includes("configure a qualified resource"));
+    assert.deepEqual(d.options.map((o) => o.label), ["assign to a despite: lacks capability 'deep-review'", "stop the operation"]);
+    assert.deepEqual(d.options[0].action, { kind: "assign", resourceId: "a", overriding: ["lacks capability 'deep-review'"] });
     assert.match(out.events.at(-1)!.message, /^Decision needed: /);
   });
 });

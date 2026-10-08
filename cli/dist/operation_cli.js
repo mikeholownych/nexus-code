@@ -4,14 +4,18 @@
  * Spec (JSON): { "objective": string, "id"?: string, "units": WorkUnitSpec[], "resources"?: ResourceDescriptor[],
  * "discoverCatalog"?: boolean, "policy"?: Partial<OperationPolicy> }. Without "resources" the configured endpoint,
  * fallbacks and planner/coder models are the resources.
+ *
+ * `nexus operation decide <id> <decision> <option>` applies an operator decision to a BLOCKED unit: it is validated
+ * against the persisted decision, recorded on the unit, and the operation is re-evaluated (and resumed unless
+ * --no-resume). /team operations are ordinary operations and use the same commands.
  */
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { randomUUID } from "node:crypto";
 import pc from "picocolors";
 import { buildConfig } from "./config.js";
-import { newOperation } from "./core/operation.js";
-import { AgentWorkUnitExecutor, OperationRunner, OperationStore, resourcesFromConfig } from "./core/operation_runner.js";
+import { DecisionRejected, newOperation } from "./core/operation.js";
+import { AgentWorkUnitExecutor, applyOperatorDecision, driveOperation, OperationStore, resourcesFromConfig } from "./core/operation_runner.js";
 import { credentialFingerprint } from "./core/resources.js";
 function normalizeResources(spec, config) {
     if (!spec.resources?.length)
@@ -40,21 +44,25 @@ function printStatus(op) {
     }
     if (op.wait)
         console.log(pc.yellow(`Waiting until ${op.wait.wakeAt}: ${op.wait.reason}`));
-    for (const d of op.blocked?.decisions ?? [])
-        console.log(pc.red(`Decision needed: ${d.question}\n  Options: ${d.options.join(" | ")}`));
+    for (const d of op.blocked?.decisions ?? []) {
+        console.log(pc.red(`Decision ${d.id} needed: ${d.question}`));
+        for (const o of d.options)
+            console.log(pc.red(`  [${o.id}] ${o.label}`));
+        if (d.options.length)
+            console.log(pc.dim(`  nexus operation decide ${op.id} ${d.id} <option> [--note <text>]`));
+    }
 }
 async function drive(op, config, store, discoverCatalog, json) {
-    const release = store.acquire(op.id);
     const controller = new AbortController();
     const onSignal = () => controller.abort();
     process.once("SIGINT", onSignal);
     try {
-        const runner = new OperationRunner(op, {
+        const out = await driveOperation(op, {
+            store,
+            signal: controller.signal,
             executor: new AgentWorkUnitExecutor({ baseConfig: config, discoverCatalog }),
-            persist: (s) => store.save(s),
-            onEvent: json ? undefined : printEvent,
+            ...(json ? {} : { onEvent: printEvent }),
         });
-        const out = await runner.run(controller.signal);
         if (json)
             console.log(JSON.stringify(out, null, 2));
         else
@@ -63,7 +71,6 @@ async function drive(op, config, store, discoverCatalog, json) {
     }
     finally {
         process.off("SIGINT", onSignal);
-        release();
     }
 }
 export function registerOperationCommands(program) {
@@ -99,6 +106,28 @@ export function registerOperationCommands(program) {
             throw new Error("No waiting or running operation in this workspace.");
         if (state.status === "CANCELLED")
             state.status = "RUNNING";
+        await drive(state, config, store, Boolean(options.discover), Boolean(options.json));
+    });
+    common(op.command("decide").argument("<id>", "Operation id").argument("<decision>", "Decision id (e.g. review#1)").argument("<option>", "Option id"))
+        .option("--note <text>", "Operator note (required to revise a unit)")
+        .option("--no-resume", "Record the decision without resuming the operation")
+        .description("Apply an operator decision to a blocked unit, then resume the operation")
+        .action(async (id, decisionId, optionId, options) => {
+        const config = buildConfig(options);
+        const store = new OperationStore(config.workspace);
+        let state;
+        try {
+            state = applyOperatorDecision(store, id, decisionId, optionId, options.note, { onEvent: printEvent });
+        }
+        catch (err) {
+            if (!(err instanceof DecisionRejected))
+                throw err;
+            console.error(pc.red(`Decision rejected: ${err.message}`));
+            process.exitCode = 2;
+            return;
+        }
+        if (options.resume === false)
+            return void printStatus(state);
         await drive(state, config, store, Boolean(options.discover), Boolean(options.json));
     });
     op.command("status")

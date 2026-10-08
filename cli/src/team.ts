@@ -1,200 +1,142 @@
-import * as path from "node:path";
-import * as fs from "node:fs";
-import { AutonomousAgent } from "./agent.js";
-import { HarnessConfig, ToolDefinition, ExecutionResult } from "./types.js";
-import pc from "picocolors";
+/**
+ * /team: an orchestration strategy over the convergence foundation.
+ *
+ * A team is a durable operation whose work units are roles with real dependencies. Every role runs through the same
+ * lower path as any scheduled unit — a truthful agent turn with provider recovery and context admission, on a
+ * resource chosen by qualification and eligibility, with durable state, replay safety and cancellation — and the
+ * team is COMPLETE only when every required role is COMPLETE. A role whose turn did not establish a result is
+ * BLOCKED on a decision, never reported as done.
+ */
+import { randomUUID } from "node:crypto";
+import { isRequired, newOperation, type DurableOperationState, type OperationEvent, type WorkUnit, type WorkUnitSpec } from "./core/operation.js";
+import { AgentWorkUnitExecutor, driveOperation, OperationStore, resourcesFromConfig, type WorkUnitExecutor } from "./core/operation_runner.js";
+import type { RecoveryClock } from "./core/provider_recovery.js";
+import type { ResourceDescriptor } from "./core/resources.js";
+import { ROLE_PROFILES, ROLE_REQUIREMENTS, roleRequirements, type AgentRole } from "./core/roles.js";
+import type { HarnessConfig } from "./types.js";
 
-export type AgentRole = "researcher" | "architect" | "implementer" | "tester";
+export { ROLE_PROFILES, ROLE_REQUIREMENTS, type AgentRole, type RoleProfile } from "./core/roles.js";
 
-export interface RoleProfile {
-  role: AgentRole;
-  title: string;
-  description: string;
-  systemPromptAddendum: string;
-  recommendedTools: string[];
-}
+export const TEAM_ROLES: AgentRole[] = ["researcher", "architect", "implementer", "tester", "reviewer"];
 
-export const ROLE_PROFILES: Record<AgentRole, RoleProfile> = {
-  researcher: {
-    role: "researcher",
-    title: "Codebase & Technology Researcher",
-    description: "Investigates code structure, dependencies, technical documentation, and external solutions.",
-    systemPromptAddendum: `\n### Specialized Role: RESEARCHER
-You are a senior codebase and technology researcher. Your objective is thorough investigation without making destructive mutations.
-- Deeply inspect existing patterns, function definitions, configurations, and imports.
-- Utilize batch_read, file_info, search_code, and search_web.
-- Conclude with a clear, factual architectural briefing with file paths and line references.`,
-    recommendedTools: ["read_file", "batch_read", "search_code", "search_symbols", "find_files", "file_info", "search_web", "task_completed"],
-  },
-  architect: {
-    role: "architect",
-    title: "System & Software Architect",
-    description: "Formulates modular designs, data flows, interface specifications, and milestone execution plans.",
-    systemPromptAddendum: `\n### Specialized Role: ARCHITECT
-You are a principal software architect. Your objective is to design clean, modular solutions adhering to existing codebase idioms.
-- Define explicit interface boundaries, type signatures, and data contracts.
-- Plan the implementation sequence using update_plan with distinct milestone phases.
-- Produce structured technical specifications and handoff guidelines for the Implementer.`,
-    recommendedTools: ["read_file", "search_code", "file_tree", "update_plan", "file_info", "task_completed"],
-  },
-  implementer: {
-    role: "implementer",
-    title: "Core Software Implementer",
-    description: "Writes production-grade, modular, idiomatic code and applies surgical file edits.",
-    systemPromptAddendum: `\n### Specialized Role: IMPLEMENTER
-You are a senior software engineer. Your objective is precise, idiomatic implementation of architectural designs.
-- Maintain existing coding conventions, documentation comments, and typing rules.
-- Make minimal, surgical edits using edit_file and patch_file.
-- Verify syntactical correctness and avoid unintended breaking changes.`,
-    recommendedTools: ["read_file", "write_file", "edit_file", "patch_file", "run_command", "run_tests", "task_completed"],
-  },
-  tester: {
-    role: "tester",
-    title: "Quality Assurance & Test Engineer",
-    description: "Validates functionality, writes unit/integration tests, runs test suites, and diagnoses regressions.",
-    systemPromptAddendum: `\n### Specialized Role: TESTER
-You are a QA automation and test engineer. Your objective is rigorous verification and defect discovery.
-- Run automated test suites via run_tests or run_command.
-- Analyze test failures, parse compiler/test diagnostics, and pinpoint regressions.
-- Author unit and integration tests covering positive paths, error handling, and boundary conditions.`,
-    recommendedTools: ["run_tests", "run_command", "read_file", "write_file", "edit_file", "search_code", "task_completed"],
-  },
-};
+export type TeamTarget = AgentRole | "full";
 
-export interface RoleTaskResult {
-  role: AgentRole;
-  summary: string;
-  steps: number;
-  durationMs: number;
-  success: boolean;
-}
+const UNIT_ID: Record<AgentRole, string> = { researcher: "research", architect: "design", implementer: "implement", tester: "verify", reviewer: "review" };
 
-export interface TeamWorkflowResult {
-  objective: string;
-  phases: RoleTaskResult[];
-  finalReport: string;
-  success: boolean;
-}
+/** Role turns keep the step bound the team has always used. */
+const ROLE_MAX_STEPS = 15;
 
 /**
- * Hierarchical Multi-Agent Team Orchestrator (Candidate #13)
- * Coordinates specialized agent sub-roles with structured handoffs.
+ * The work graph for a team target. The full workflow's chain is a genuine data dependency (design needs the
+ * research, implementation needs the design, verification needs the implementation). Independent review needs only
+ * the implementation, so it runs alongside verification, and must use a model the implementation did not use.
  */
+export function teamUnits(target: TeamTarget, objective: string, opts: { independentReview?: boolean } = {}): WorkUnitSpec[] {
+  const unit = (role: AgentRole, dependsOn: string[], independentOf?: string[]): WorkUnitSpec => ({
+    id: UNIT_ID[role],
+    title: ROLE_PROFILES[role].title,
+    role,
+    prompt: objective,
+    dependsOn,
+    requires: roleRequirements(role, independentOf ? { independentOf } : {}),
+    ...(ROLE_REQUIREMENTS[role].taskClass ? { taskClass: ROLE_REQUIREMENTS[role].taskClass } : {}),
+  });
+  if (target !== "full") return [unit(target, [])];
+  const units = [unit("researcher", []), unit("architect", ["research"]), unit("implementer", ["design"]), unit("tester", ["implement"])];
+  if (opts.independentReview) units.push(unit("reviewer", ["implement"], ["implement"]));
+  return units;
+}
+
+export interface TeamRunOptions {
+  signal?: AbortSignal;
+  onEvent?: (e: OperationEvent) => void;
+  /** Add an independent reviewer to the full workflow. */
+  independentReview?: boolean;
+  /** Interactive callers: waits longer than this return a durable WAITING team instead of blocking the prompt. */
+  maxInProcessWaitMs?: number;
+  /** Defaults: the workspace operation store, config-derived resources, agent-turn executor, real clock. */
+  store?: OperationStore;
+  resources?: ResourceDescriptor[];
+  executor?: WorkUnitExecutor;
+  clock?: RecoveryClock;
+  id?: string;
+}
+
+export interface TeamOutcome {
+  operation: DurableOperationState;
+  /** True only when the operation is COMPLETE: every required role established its result. */
+  success: boolean;
+  report: string;
+}
+
 export class TeamOrchestrator {
-  private config: HarnessConfig;
+  constructor(
+    private readonly config: HarnessConfig,
+    private readonly opts: TeamRunOptions = {},
+  ) {}
 
-  constructor(config: HarnessConfig) {
-    this.config = config;
+  plan(target: TeamTarget, objective: string): DurableOperationState {
+    const now = this.opts.clock?.now() ?? Date.now();
+    const resources = this.opts.resources ?? resourcesFromConfig(this.config);
+    return newOperation(this.opts.id ?? `team-${randomUUID().slice(0, 8)}`, objective, teamUnits(target, objective, this.opts), resources, now);
   }
 
-  /**
-   * Execute a focused task delegated to a specific team role
-   */
-  public async executeRoleTask(
-    role: AgentRole,
-    task: string,
-    contextHandoff?: string
-  ): Promise<RoleTaskResult> {
-    const profile = ROLE_PROFILES[role] || ROLE_PROFILES.implementer;
-    const t0 = Date.now();
-
-    // Route hints for the inference gateway: architecture and verification benefit from the deeper model.
-    const roleTaskClass: Record<AgentRole, string | undefined> = {
-      researcher: "subagent",
-      architect: "architecture",
-      implementer: undefined,
-      tester: "review",
-    };
-    const roleConfig: HarnessConfig = {
-      ...this.config,
-      maxSteps: Math.min(this.config.maxSteps, 15),
-      taskClass: roleTaskClass[role] ?? this.config.taskClass,
-      plannerTaskClass: roleTaskClass[role] ?? this.config.plannerTaskClass,
-    };
-
-    const agent = new AutonomousAgent(roleConfig, 1);
-
-    try {
-      const enrichedPrompt = `[Role: ${profile.title}]\nObjective: ${task}\n${
-        contextHandoff ? `\n[Handoff Context from Previous Phase]:\n${contextHandoff}\n` : ""
-      }\nExecute tools necessary to fulfill this objective, then report your findings/results via task_completed.`;
-
-      const summary = await agent.runSubagent(enrichedPrompt);
-
-      return {
-        role,
-        summary: summary || `Role ${role} completed objective.`,
-        steps: agent.getHistory().length,
-        durationMs: Date.now() - t0,
-        success: true,
-      };
-    } catch (err: any) {
-      return {
-        role,
-        summary: `Role ${role} encountered an error: ${err.message}`,
-        steps: 0,
-        durationMs: Date.now() - t0,
-        success: false,
-      };
-    } finally {
-      agent.shutdown();
-    }
+  async run(target: TeamTarget, objective: string): Promise<TeamOutcome> {
+    return this.drive(this.plan(target, objective));
   }
 
-  /**
-   * Run full collaborative team workflow:
-   * 1. Researcher -> 2. Architect -> 3. Implementer -> 4. Tester
-   */
-  public async runFullWorkflow(objective: string): Promise<TeamWorkflowResult> {
-    const phases: RoleTaskResult[] = [];
-    let cumulativeContext = `Primary Task: ${objective}`;
-
-    // Phase 1: Research
-    const researchRes = await this.executeRoleTask(
-      "researcher",
-      `Survey relevant files, APIs, and patterns for: "${objective}"`,
-      cumulativeContext
-    );
-    phases.push(researchRes);
-    cumulativeContext += `\n\n[Research Findings]:\n${researchRes.summary}`;
-
-    // Phase 2: Architecture & Design
-    const archRes = await this.executeRoleTask(
-      "architect",
-      `Design the implementation plan, file modifications, and interface signatures for: "${objective}"`,
-      cumulativeContext
-    );
-    phases.push(archRes);
-    cumulativeContext += `\n\n[Architectural Design]:\n${archRes.summary}`;
-
-    // Phase 3: Implementation
-    const implRes = await this.executeRoleTask(
-      "implementer",
-      `Implement the required code changes according to architectural specification for: "${objective}"`,
-      cumulativeContext
-    );
-    phases.push(implRes);
-    cumulativeContext += `\n\n[Implementation Summary]:\n${implRes.summary}`;
-
-    // Phase 4: Test & Verification
-    const testRes = await this.executeRoleTask(
-      "tester",
-      `Verify changes by running the test suite, authoring new tests if needed, and reporting status for: "${objective}"`,
-      cumulativeContext
-    );
-    phases.push(testRes);
-
-    const overallSuccess = phases.every((p) => p.success);
-    const finalReport = `=== Multi-Agent Team Execution Report ===\n` +
-      `Objective: ${objective}\n` +
-      phases.map((p) => `\n[${p.role.toUpperCase()}] (${(p.durationMs / 1000).toFixed(1)}s):\n${p.summary}`).join("\n") +
-      `\n\nResult: ${overallSuccess ? "SUCCESS" : "FAILURES DETECTED"}`;
-
-    return {
-      objective,
-      phases,
-      finalReport,
-      success: overallSuccess,
-    };
+  async drive(state: DurableOperationState): Promise<TeamOutcome> {
+    const store = this.opts.store ?? new OperationStore(this.config.workspace);
+    const executor =
+      this.opts.executor ?? new AgentWorkUnitExecutor({ baseConfig: { ...this.config, maxSteps: Math.min(this.config.maxSteps, ROLE_MAX_STEPS) } });
+    const operation = await driveOperation(state, {
+      store,
+      executor,
+      signal: this.opts.signal,
+      ...(this.opts.clock ? { clock: this.opts.clock } : {}),
+      ...(this.opts.onEvent ? { onEvent: this.opts.onEvent } : {}),
+      ...(this.opts.maxInProcessWaitMs !== undefined ? { maxInProcessWaitMs: this.opts.maxInProcessWaitMs } : {}),
+    });
+    const success = operation.status === "COMPLETE";
+    return { operation, success, report: teamReport(operation) };
   }
+}
+
+function independence(op: DurableOperationState, u: WorkUnit): string {
+  const of = u.requires.independentOf ?? [];
+  if (!of.length || u.status !== "COMPLETE") return "";
+  if (u.result?.overriding?.some((r) => r.includes("not independent"))) return " — NOT independent (operator decision)";
+  const others = of.flatMap((id) => op.units.find((x) => x.id === id)?.modelsUsed ?? []);
+  return ` — independent of ${of.join(", ")} (${u.modelsUsed.join(", ")} vs ${others.join(", ") || "none"})`;
+}
+
+function unitLine(op: DurableOperationState, u: WorkUnit): string[] {
+  const head = `[${(u.role ?? u.id).toUpperCase()}] ${u.status}${isRequired(u) ? "" : " (advisory)"}`;
+  switch (u.status) {
+    case "COMPLETE":
+      return [`${head} on ${u.result!.resourceId} (${u.result!.outcome})${independence(op, u)}`, `  ${u.result!.summary}`];
+    case "PARKED":
+      return [`${head} — ${u.parked!.reason}; eligible again ${u.parked!.wakeAt}`];
+    case "BLOCKED":
+      if (!u.blocked) return [`${head}${u.dropped ? " — dropped by operator" : ""}`];
+      return [
+        `${head} — ${u.blocked.reason}`,
+        `  Decision ${u.blocked.decision.id}: ${u.blocked.decision.question}`,
+        ...u.blocked.decision.options.map((o) => `    [${o.id}] ${o.label}`),
+        `  Apply with: nexus operation decide ${op.id} ${u.blocked.decision.id} <option> [--note <text>]`,
+      ];
+    case "WAITING_ON_DEPENDENCY":
+      return [`${head} — needs ${u.dependsOn.filter((d) => op.units.find((x) => x.id === d)?.status !== "COMPLETE").join(", ")}`];
+    default:
+      return [`${head}${u.assignment ? ` on ${u.assignment.resourceId}` : ""}`];
+  }
+}
+
+export function teamReport(op: DurableOperationState): string {
+  const lines = [`=== Team ${op.id}: ${op.status} ===`, `Objective: ${op.objective}`, ""];
+  for (const u of op.units) lines.push(...unitLine(op, u), "");
+  if (op.wait) lines.push(`Waiting until ${op.wait.wakeAt}: ${op.wait.reason}`);
+  lines.push(op.status === "COMPLETE" ? "Result: COMPLETE" : `Result: NOT COMPLETE (${op.status})`);
+  if (op.status === "WAITING" || op.status === "CANCELLED") lines.push(`Resume with: nexus operation resume ${op.id}`);
+  return lines.join("\n");
 }

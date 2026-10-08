@@ -40,6 +40,8 @@ export interface ResourceDescriptor {
   capabilities: string[];
   /** Roles/task classes this resource is qualified for; undefined qualifies it for any. */
   qualifications?: string[];
+  /** Qualifications this resource is the preferred choice for; it outranks resources merely qualified for them. */
+  preferredFor?: string[];
   contextLength?: number;
   /** Lower is preferred. */
   rank?: number;
@@ -276,6 +278,12 @@ export class ResourceRegistry {
     this.clear((c) => c.key === key && c.source === "provider-catalog");
   }
 
+  /** The operator attested (through a recorded decision) that the resource's operator-action conditions are fixed. */
+  clearOperatorConditions(resource: ResourceDescriptor): void {
+    const keys = new Set(SCOPES.map((s) => scopeKey(resource, s)).filter(Boolean));
+    this.clear((c) => keys.has(c.key) && !c.temporary);
+  }
+
   /** A completed request proves every scope it touched usable again. */
   observeSuccess(resource: ResourceDescriptor): void {
     const keys = new Set(SCOPES.map((s) => scopeKey(resource, s)).filter(Boolean));
@@ -328,7 +336,10 @@ export class ResourceRegistry {
     return reasons;
   }
 
-  /** Best qualified, eligible resource (lowest rank, then configuration order); never an unqualified one. */
+  /**
+   * Best qualified, eligible resource (preferred for the qualification, then lowest rank, then configuration order);
+   * never an unqualified one.
+   */
   select(req: WorkRequirements, excludedModels: Set<string> = new Set(), now = this.clock.now()): Selection {
     const qualified: Candidate[] = [];
     const rejected: Selection["rejected"] = [];
@@ -337,10 +348,11 @@ export class ResourceRegistry {
       if (reasons.length) rejected.push({ resourceId: resource.id, reasons });
       else qualified.push({ resource, eligibility: this.eligibility(resource, now) });
     });
+    const preferred = (r: ResourceDescriptor) => (req.qualification && r.preferredFor?.includes(req.qualification) ? 0 : 1);
     const eligible = qualified
       .map((c, order) => ({ c, order }))
       .filter(({ c }) => c.eligibility.eligible)
-      .sort((a, b) => (a.c.resource.rank ?? 100) - (b.c.resource.rank ?? 100) || a.order - b.order);
+      .sort((a, b) => preferred(a.c.resource) - preferred(b.c.resource) || (a.c.resource.rank ?? 100) - (b.c.resource.rank ?? 100) || a.order - b.order);
     return { chosen: eligible[0]?.c.resource, qualified, rejected };
   }
 

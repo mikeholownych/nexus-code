@@ -83,6 +83,13 @@ export const DEFAULT_VERIFIER_TIMEOUT_SECS = 300;
 export type ConfirmHandler = (toolName: string, args: Record<string, any>) => Promise<boolean>;
 
 /** Structured projection of turn activity for non-terminal surfaces such as the TUI sidecar. Observers must not throw. */
+/** Outcome of in-turn delegation (spawn_subagent). `summary` is whatever report exists, even when not completed. */
+export interface SubagentResult {
+  completed: boolean;
+  summary: string;
+  reason?: string;
+}
+
 export interface AgentObserver {
   onAssistantDelta?(text: string): void;
   /** `dispatch` is unique per call within this agent; model call ids can repeat, even within one step. */
@@ -1514,11 +1521,14 @@ Always explain your reasoning before or alongside your tool calls.`;
           inheritedWorktreeScope
         );
         const subResult = await subagent.runSubagent(subPrompt);
-        this.ui.stopSpinner(true);
+        this.ui.stopSpinner(subResult.completed);
+        if (!subResult.completed) {
+          return { success: false, output: subResult.summary, error: `Subagent did not complete: ${subResult.reason}` };
+        }
         console.log(pc.cyan(`\n🤖 [Subagent Report Received]\n`));
         return {
           success: true,
-          output: subResult,
+          output: subResult.summary,
         };
       } catch (subErr: any) {
         this.ui.stopSpinner(false);
@@ -2568,7 +2578,13 @@ Always explain your reasoning before or alongside your tool calls.`;
     return turnResult;
   }
 
-  public async runSubagent(prompt: string): Promise<string> {
+  /**
+   * In-turn delegation for the spawn_subagent tool: a bounded, non-durable helper loop whose result is part of the
+   * parent's turn (the parent is the durable unit). Completed only when the subagent called task_completed or
+   * delivered a final report; inference failure and step exhaustion are reported as not completed. Durable
+   * autonomous work (/team, nexus operation) does not use this path: it runs as scheduled work units.
+   */
+  public async runSubagent(prompt: string): Promise<SubagentResult> {
     if (this.config.worktree && !this.activeWorktree && !this.inheritedWorktreeScope) {
       throw new Error("Cannot run a worktree-enabled subagent without an established worktree authority.");
     }
@@ -2590,9 +2606,19 @@ Always explain your reasoning before or alongside your tool calls.`;
       const { client: activeClient } = this.selectCognitiveClient(currentStep, this.messages);
       try {
         this.admitContext(currentStep, requestId);
-        assistantMessage = await activeClient.chatCompletion(this.messages, HARNESS_TOOLS, requestId);
+        const policy = this.recoveryPolicy ?? recoveryPolicyFromEnv();
+        assistantMessage = await new ProviderRecoveryController(policy, this.recoveryClock, currentStep).run(requestId, {
+          submit: (s) => activeClient.chatCompletion(this.messages, HARNESS_TOOLS, s.requestId),
+          probe: (probeSignal, opts) =>
+            typeof activeClient.probeAvailability === "function"
+              ? activeClient.probeAvailability(probeSignal, { timeoutMs: policy.probeTimeoutMs, ...opts })
+              : Promise.resolve({ available: true, condition: "AVAILABLE" as const }),
+          classify: (err) => (err instanceof InferenceError ? err.toFailure() : null),
+          newRequestId: () => randomUUID(),
+        });
       } catch (err: any) {
-        return `Subagent failed during LLM inference: ${err.message}`;
+        const what = err instanceof ContextBudgetError ? "context admission refused the request" : "inference failed";
+        return { completed: false, summary: finalSummary, reason: `${what}: ${err?.message ?? err}` };
       }
 
       const parsed = parseModelResponse(assistantMessage);
@@ -2603,8 +2629,9 @@ Always explain your reasoning before or alongside your tool calls.`;
       });
 
       if (parsed.toolCalls.length === 0) {
-        finalSummary = parsed.thoughtText || (typeof assistantMessage.content === "string" ? assistantMessage.content : "Subagent finished without remarks.");
-        break;
+        const report = parsed.thoughtText || (typeof assistantMessage.content === "string" ? assistantMessage.content : "");
+        if (report.trim()) return { completed: true, summary: report };
+        return { completed: false, summary: "", reason: "the subagent stopped without a report" };
       }
 
       for (const call of parsed.toolCalls) {
@@ -2619,8 +2646,7 @@ Always explain your reasoning before or alongside your tool calls.`;
                 ? JSON.parse(call.function.arguments)
                 : call.function.arguments;
           } catch {}
-          finalSummary = args.summary || "Subagent finished objective.";
-          return finalSummary;
+          return { completed: true, summary: args.summary || "Subagent finished objective." };
         }
 
         this.messages.push({
@@ -2633,9 +2659,10 @@ Always explain your reasoning before or alongside your tool calls.`;
         });
       }
 
+      finalSummary = parsed.thoughtText || finalSummary;
       currentStep++;
     }
 
-    return finalSummary || "Subagent completed assigned steps.";
+    return { completed: false, summary: finalSummary, reason: `step limit ${this.config.maxSteps} reached without task_completed` };
   }
 }

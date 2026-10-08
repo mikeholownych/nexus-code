@@ -8,9 +8,9 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { AutonomousAgent } from "../agent.js";
 import { LocalLlmClient, storedCredentialFor } from "../client.js";
-import { ROLE_PROFILES } from "../team.js";
 import { realRecoveryClock } from "./provider_recovery.js";
 import { ConvergenceScheduler } from "./operation.js";
+import { ROLE_PROFILES } from "./roles.js";
 import { applyProviderCatalog, credentialFingerprint, ResourceRegistry, } from "./resources.js";
 import { DurableStateManager } from "./state.js";
 import { WorkspacePath } from "./workspace_path.js";
@@ -64,6 +64,8 @@ export class OperationRunner {
             if (d.kind === "wait") {
                 this.scheduler.wait(d);
                 this.save();
+                if (this.opts.maxInProcessWaitMs !== undefined && d.wakeAt - this.clock.now() > this.opts.maxInProcessWaitMs)
+                    return this.state;
                 try {
                     await this.clock.sleep(Math.max(0, d.wakeAt - this.clock.now()), signal);
                 }
@@ -79,7 +81,13 @@ export class OperationRunner {
         }
         this.scheduler.finish({
             kind: "blocked",
-            decisions: [{ unitId: "*", question: `The scheduler made ${maxIterations} transitions without converging. Resume, or stop the operation?`, options: ["resume", "stop"] }],
+            decisions: [{
+                    id: "operation#not-converging",
+                    unitId: "*",
+                    cause: "NOT_CONVERGING",
+                    question: `The scheduler made ${maxIterations} transitions without converging. Resume (nexus operation resume), or stop the operation?`,
+                    options: [],
+                }],
         });
         this.save();
         return this.state;
@@ -93,7 +101,15 @@ export class OperationRunner {
                 const dep = this.scheduler.unit(id);
                 return { id, title: dep.title, summary: dep.result?.summary ?? "" };
             }),
-            ...(unit.agentTaskId ? { resumeReason: d.reroutedFrom?.reason ?? unit.parked?.reason ?? "resource became eligible again" } : {}),
+            ...(unit.agentTaskId
+                ? {
+                    resumeReason: d.reroutedFrom?.reason ??
+                        (unit.pendingDecision ? `operator decision "${unit.pendingDecision.label}"` : undefined) ??
+                        unit.parked?.reason ??
+                        "resource became eligible again",
+                }
+                : {}),
+            ...(unit.pendingDecision ? { operatorDecision: unit.pendingDecision } : {}),
             bindAgentTask: (taskId) => {
                 if (unit.agentTaskId === taskId)
                     return;
@@ -112,9 +128,10 @@ export class OperationRunner {
                 return { kind: "cancelled" };
             return {
                 kind: "failed",
+                cause: "EXECUTION_FAILED",
                 reason: `executor error: ${err?.message ?? err}`,
-                question: `${unit.title} failed with an internal error (${err?.message ?? err}). Retry it, or stop it?`,
-                options: ["retry", "abandon unit"],
+                question: `${unit.title} failed with an internal error (${err?.message ?? err}). Retry it, or stop?`,
+                options: [{ label: "retry", action: { kind: "retry" } }],
             };
         }
     }
@@ -282,7 +299,9 @@ export class OperationStore {
                 holder = JSON.parse(fs.readFileSync(lockPath, "utf-8"));
             }
             catch { }
-            if (holder.host !== os.hostname() || (holder.pid !== undefined && processAlive(holder.pid))) {
+            // A lock written before this host last booted is stale even if its pid has since been reused.
+            const beforeBoot = holder.at !== undefined && Date.parse(holder.at) < Date.now() - os.uptime() * 1000;
+            if (holder.host !== os.hostname() || (!beforeBoot && holder.pid !== undefined && processAlive(holder.pid))) {
                 throw new Error(`Operation ${id} is already being driven by pid ${holder.pid ?? "?"} on ${holder.host ?? "?"} (lock ${lockPath}).`);
             }
             fs.rmSync(lockPath, { force: true });
@@ -299,6 +318,37 @@ export class OperationStore {
     /** Most recently updated operation in this workspace that is waiting or running (to resume after restart). */
     latestResumable() {
         return this.list().find((op) => op.status === "WAITING" || op.status === "RUNNING");
+    }
+}
+/** Runs an operation under its driver lock, persisting every transition through the store. */
+export async function driveOperation(state, opts) {
+    const { store, signal, ...runnerOpts } = opts;
+    const release = store.acquire(state.id);
+    try {
+        return await new OperationRunner(state, { ...runnerOpts, persist: (s) => store.save(s) }).run(signal);
+    }
+    finally {
+        release();
+    }
+}
+/**
+ * Applies an operator decision under the driver lock: validated against the persisted decision (DecisionRejected
+ * otherwise), recorded on the unit, persisted. The next run re-evaluates the operation from there.
+ */
+export function applyOperatorDecision(store, id, decisionId, optionId, note, opts = {}) {
+    const release = store.acquire(id);
+    try {
+        const state = store.load(id);
+        const now = opts.now ?? Date.now;
+        const registry = new ResourceRegistry(state.resources, state.conditions, { now, random: Math.random });
+        new ConvergenceScheduler(state, registry, now, opts.onEvent).resolve(decisionId, optionId, note);
+        state.conditions = registry.snapshot();
+        state.updatedAt = new Date(now()).toISOString();
+        store.save(state);
+        return state;
+    }
+    finally {
+        release();
     }
 }
 function processAlive(pid) {
@@ -323,10 +373,13 @@ function normalizeEndpoint(ep) {
     const e = ep.trim().replace(/\/+$/, "");
     return e.endsWith("/v1") ? e : `${e}/v1`;
 }
+/** The configured planner/coder models keep their cognitive-routing roles as scheduling preferences. */
+const PLANNER_PREFERRED = ["research", "architecture", "review"];
+const CODER_PREFERRED = ["implementation", "verification"];
 /** Resources implied by the existing configuration (primary model, fallback endpoints, planner and coder slots). */
 export function resourcesFromConfig(config) {
     const account = credentialFingerprint(config.apiKey) ?? credentialFingerprint(storedCredentialFor(config.endpoint) ?? undefined);
-    const make = (id, endpoint, model, rank, taskClass, key = account) => ({
+    const make = (id, endpoint, model, rank, taskClass, key = account, preferredFor) => ({
         id,
         provider: origin(normalizeEndpoint(endpoint)),
         endpoint: normalizeEndpoint(endpoint),
@@ -335,14 +388,15 @@ export function resourcesFromConfig(config) {
         rank,
         ...(key ? { account: key } : {}),
         ...(taskClass ? { taskClass } : {}),
+        ...(preferredFor ? { preferredFor } : {}),
     });
     const out = [make("primary", config.endpoint, config.model, 0, config.taskClass)];
     (config.fallbackEndpoints ?? []).forEach((ep, i) => out.push(make(`primary@fallback${i + 1}`, ep, config.model, 1, config.taskClass)));
     if (config.plannerModel) {
-        out.push(make("planner", config.plannerEndpoint ?? config.endpoint, config.plannerModel, 2, config.plannerTaskClass, credentialFingerprint(config.plannerApiKey) ?? account));
+        out.push(make("planner", config.plannerEndpoint ?? config.endpoint, config.plannerModel, 2, config.plannerTaskClass, credentialFingerprint(config.plannerApiKey) ?? account, PLANNER_PREFERRED));
     }
     if (config.coderModel) {
-        out.push(make("coder", config.coderEndpoint ?? config.endpoint, config.coderModel, 2, config.taskClass, credentialFingerprint(config.coderApiKey) ?? account));
+        out.push(make("coder", config.coderEndpoint ?? config.endpoint, config.coderModel, 2, config.taskClass, credentialFingerprint(config.coderApiKey) ?? account, CODER_PREFERRED));
     }
     const seen = new Set();
     return out.filter((r) => {
@@ -363,7 +417,7 @@ export class AgentWorkUnitExecutor {
     constructor(opts) {
         this.opts = opts;
     }
-    configFor(resource) {
+    configFor(resource, unit) {
         const base = this.opts.baseConfig;
         // The client sends a key only to the origin it belongs to, so the configured key never reaches another provider.
         const credential = resource.apiKeyEnv
@@ -377,7 +431,7 @@ export class AgentWorkUnitExecutor {
             ...credential,
             pinEndpoint: true,
             fallbackEndpoints: [],
-            taskClass: resource.taskClass ?? base.taskClass,
+            taskClass: resource.taskClass ?? unit?.taskClass ?? base.taskClass,
             contextLimit,
             plannerModel: undefined,
             plannerEndpoint: undefined,
@@ -388,7 +442,7 @@ export class AgentWorkUnitExecutor {
         };
     }
     async run(unit, resource, ctx) {
-        const config = this.configFor(resource);
+        const config = this.configFor(resource, unit);
         const agent = this.opts.createAgent ? this.opts.createAgent(config) : new AutonomousAgent(config, 1);
         let lastCondition = null;
         try {
@@ -399,13 +453,17 @@ export class AgentWorkUnitExecutor {
                     const op = recovered.interruptedOperation;
                     return {
                         kind: "failed",
+                        cause: "INTERRUPTED",
                         reason: `tool ${op?.toolName ?? "?"} was in flight when the process stopped`,
-                        question: `${unit.title}: tool '${op?.toolName ?? "?"}' may have partially run before Nexus stopped. Inspect and continue, or stop this unit?`,
-                        options: ["continue after inspection", "abandon unit"],
+                        question: `${unit.title}: tool '${op?.toolName ?? "?"}' may have partially run before Nexus stopped. Inspect and continue, or stop?`,
+                        options: [{ label: "continue after inspection", action: { kind: "retry" } }],
                     };
                 }
+                const decision = ctx.operatorDecision
+                    ? `The operator decided: ${ctx.operatorDecision.label}${ctx.operatorDecision.note ? ` — ${ctx.operatorDecision.note}` : ""}.\n`
+                    : "";
                 prompt =
-                    `[Work unit resumed on ${resource.id} (${resource.model}) after: ${ctx.resumeReason ?? "a resource change"}]\n` +
+                    `[Work unit resumed on ${resource.id} (${resource.model}) after: ${ctx.resumeReason ?? "a resource change"}]\n${decision}` +
                         `Your earlier progress on this unit is above; tools that already ran are not repeated. Continue the unit and call task_completed with a concise summary when done.`;
             }
             else {
@@ -455,32 +513,47 @@ export class AgentWorkUnitExecutor {
                 return { kind: "execution_unknown", failure: f };
             return {
                 kind: "failed",
+                cause: "EXECUTION_FAILED",
                 reason: `inference rejected by ${resource.id}: ${f.message.slice(0, 200)}`,
-                question: `${unit.title}: ${resource.id} rejected the request (${f.condition ?? f.kind}${f.httpStatus ? `, HTTP ${f.httpStatus}` : ""}). Change the unit, or assign it to another resource?`,
-                options: ["revise the unit", "assign to another resource", "abandon unit"],
+                question: `${unit.title}: ${resource.id} rejected the request (${f.condition ?? f.kind}${f.httpStatus ? `, HTTP ${f.httpStatus}` : ""}). Revise the unit, retry after fixing the resource, or assign it elsewhere?`,
+                options: [
+                    { label: "revise the unit (note required)", action: { kind: "revise" } },
+                    { label: `retry after fixing ${resource.id}`, action: { kind: "retry", clearResources: [resource.id] } },
+                ],
+                offerReassign: true,
             };
         }
         if (turn.execution === "BLOCKED" && turn.capacity) {
             return {
                 kind: "failed",
+                cause: "EXECUTION_FAILED",
                 reason: `context capacity exceeded on ${resource.id} (limit ${turn.capacity.contextLimit})`,
-                question: `${unit.title} needs more context than ${resource.id} admits (${turn.capacity.estimatedPromptTokens} of ${turn.capacity.contextLimit} tokens). Split the unit, or require a larger-context resource?`,
-                options: ["split the unit", "require a larger-context resource", "abandon unit"],
+                question: `${unit.title} needs more context than ${resource.id} admits (${turn.capacity.estimatedPromptTokens} of ${turn.capacity.contextLimit} tokens). Assign it to a larger-context resource, or revise it to need less?`,
+                options: [{ label: "revise the unit (note required)", action: { kind: "revise" } }],
+                offerReassign: true,
             };
         }
         if (turn.execution === "LIMIT_REACHED") {
             return {
                 kind: "failed",
+                cause: "EXECUTION_FAILED",
                 reason: `step limit ${turn.steps.max} reached`,
-                question: `${unit.title} used all ${turn.steps.max} steps without finishing. Continue with more steps, or split the unit?`,
-                options: ["continue with more steps", "split the unit", "abandon unit"],
+                question: `${unit.title} used all ${turn.steps.max} steps without finishing. Continue from its history with a fresh step budget, or revise it?`,
+                options: [
+                    { label: "continue with more steps", action: { kind: "retry" } },
+                    { label: "revise the unit (note required)", action: { kind: "revise" } },
+                ],
             };
         }
         return {
             kind: "failed",
+            cause: "EXECUTION_FAILED",
             reason: `${turn.execution}/${turn.outcome}${turn.reason ? ` (${turn.reason})` : ""}${turn.detail ? `: ${turn.detail}` : ""}`.slice(0, 300),
             question: `${unit.title} ended ${turn.execution.toLowerCase()} without an established result${turn.reason ? ` (${turn.reason})` : ""}. Retry it, or revise it?`,
-            options: ["retry", "revise the unit", "abandon unit"],
+            options: [
+                { label: "retry", action: { kind: "retry" } },
+                { label: "revise the unit (note required)", action: { kind: "revise" } },
+            ],
         };
     }
     async probe(resource, signal) {
