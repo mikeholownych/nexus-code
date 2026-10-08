@@ -160,6 +160,7 @@ export class LocalLlmClient {
     endpoints = [];
     activeEndpointIndex = 0;
     apiKey;
+    noAmbientCredentials = false;
     model;
     temperature;
     boundary;
@@ -175,14 +176,14 @@ export class LocalLlmClient {
             return ep;
         };
         const endpointList = [normalizeEp(config.endpoint)];
-        if (config.fallbackEndpoints && Array.isArray(config.fallbackEndpoints)) {
+        if (!config.pinEndpoint && config.fallbackEndpoints && Array.isArray(config.fallbackEndpoints)) {
             for (const fb of config.fallbackEndpoints) {
                 if (fb && typeof fb === "string") {
                     endpointList.push(normalizeEp(fb));
                 }
             }
         }
-        if (process.env.LOCAL_LLM_FALLBACK_ENDPOINTS) {
+        if (!config.pinEndpoint && process.env.LOCAL_LLM_FALLBACK_ENDPOINTS) {
             for (const fb of process.env.LOCAL_LLM_FALLBACK_ENDPOINTS.split(",")) {
                 if (fb.trim()) {
                     endpointList.push(normalizeEp(fb));
@@ -191,10 +192,11 @@ export class LocalLlmClient {
         }
         this.endpoints = Array.from(new Set(endpointList));
         this.activeEndpointIndex = 0;
+        this.noAmbientCredentials = Boolean(config.noAmbientCredentials);
         this.apiKey =
             config.apiKey && config.apiKey !== "local" && config.apiKey !== "not-needed"
                 ? config.apiKey
-                : readLatestAuthToken() || "not-needed";
+                : (this.noAmbientCredentials ? null : readLatestAuthToken()) || "not-needed";
         this.model = config.model;
         this.temperature = config.temperature ?? 0.2;
         this.boundary = options?.boundary || InformationFlowBoundary.getGlobalInstance();
@@ -284,6 +286,8 @@ export class LocalLlmClient {
         this.apiKey = key;
     }
     reloadAuthToken() {
+        if (this.noAmbientCredentials)
+            return false;
         const fresh = readLatestAuthToken();
         if (fresh && fresh !== this.apiKey) {
             this.apiKey = fresh;
@@ -342,6 +346,16 @@ export class LocalLlmClient {
             }
             const data = (await res.json());
             return data.data?.map((m) => m.id) || [];
+        });
+    }
+    /** Raw `/models` entries. Providers that publish capability metadata let the scheduler qualify resources. */
+    async listModelCatalog(signal) {
+        return this.executeWithFailover("listModelCatalog", async (currentEp) => {
+            const res = await fetch(`${currentEp}/models`, { headers: { Authorization: `Bearer ${this.apiKey}` }, signal });
+            if (!res.ok)
+                throw new Error(`Server returned HTTP ${res.status}: ${res.statusText}`);
+            const data = (await res.json());
+            return Array.isArray(data.data) ? data.data : [];
         });
     }
     /**

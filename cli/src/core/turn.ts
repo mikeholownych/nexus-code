@@ -135,7 +135,8 @@ export interface RecoverySubmissionRecord {
  * the rest are final. Created only when a submission fails.
  */
 export interface ProviderRecoveryRecord {
-  state: "WAITING" | "PROBING" | "RESUMED" | "EXHAUSTED" | "NOT_RECOVERABLE" | "CANCELLED";
+  /** YIELDED: the operation scheduler took the step back (NOT_EXECUTED only) to reroute or park the work. */
+  state: "WAITING" | "PROBING" | "RESUMED" | "EXHAUSTED" | "NOT_RECOVERABLE" | "CANCELLED" | "YIELDED";
   step: number;
   startedAt: string;
   updatedAt: string;

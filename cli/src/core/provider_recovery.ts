@@ -247,6 +247,13 @@ export interface RecoveryHooks<T> {
   classify(err: unknown): InferenceFailure | null;
   newRequestId(): string;
   onState?(record: ProviderRecoveryRecord): void;
+  /** Every classified failure, so a resource registry can record the condition at its evidenced scope. */
+  onFailure?(failure: InferenceFailure): void;
+  /**
+   * Asked before waiting in place on a NOT_EXECUTED failure (never on UNKNOWN). True ends recovery as YIELDED
+   * and rethrows, so a scheduler can reroute or park the work instead of this step waiting on one resource.
+   */
+  shouldYield?(failure: InferenceFailure, plannedDelayMs: number): boolean;
 }
 
 /**
@@ -287,6 +294,9 @@ export class ProviderRecoveryController {
         }
         const condition = failure.condition ?? "PERMANENT_FAILURE";
         const execution = failure.execution ?? "UNKNOWN";
+        try {
+          hooks.onFailure?.(failure);
+        } catch {}
         this.ensureRecord(condition);
         this.record!.submissions.push({
           requestId: submission.requestId,
@@ -325,6 +335,9 @@ export class ProviderRecoveryController {
         for (;;) {
           const delay = nextDelayMs(consecutive, hints, this.policy, this.clock.random);
           const elapsed = this.clock.now() - firstFailureAt;
+          if (execution === "NOT_EXECUTED" && hooks.shouldYield?.(failure, delay)) {
+            stop("YIELDED", `${condition} (not executed); handed to the scheduler instead of waiting ${Math.round(delay / 1000)}s in place`);
+          }
           if (elapsed + delay > this.policy.deadlineMs) {
             stop("EXHAUSTED", `provider did not recover within ${Math.round(this.policy.deadlineMs / 1000)}s (next wait ${Math.round(delay / 1000)}s would exceed it)`);
           }

@@ -70,6 +70,7 @@ import {
   ProviderRecoveryController,
   RecoveryCancelled,
   RecoveryClock,
+  RecoveryHooks,
   RecoveryPolicy,
   realRecoveryClock,
   recoveryPolicyFromEnv,
@@ -281,6 +282,8 @@ export class AutonomousAgent {
   private recoveryClock: RecoveryClock = realRecoveryClock;
   /** Recovery of the inference step in progress, persisted with the durable task state while waiting. */
   private activeProviderRecovery: ProviderRecoveryRecord | null = null;
+  /** Set by the operation scheduler: resource condition observations and the yield decision. */
+  private providerRecoveryHooks?: Pick<RecoveryHooks<unknown>, "onFailure" | "shouldYield">;
   private activeTurn?: {
     controller: AbortController;
     phase: "idle" | "inference" | "provider_wait" | "tool" | "confirmation";
@@ -1957,6 +1960,10 @@ Always explain your reasoning before or alongside your tool calls.`;
     return this.activeProviderRecovery;
   }
 
+  public setProviderRecoveryHooks(hooks: Pick<RecoveryHooks<unknown>, "onFailure" | "shouldYield"> | undefined): void {
+    this.providerRecoveryHooks = hooks;
+  }
+
   private onProviderRecoveryState(
     record: ProviderRecoveryRecord,
     turn: NonNullable<AutonomousAgent["activeTurn"]>,
@@ -1975,6 +1982,8 @@ Always explain your reasoning before or alongside your tool calls.`;
       ));
     } else if (record.state === "RESUMED") {
       console.warn(pc.green(`✓ Provider recovered after ${Math.round(record.waitedMs / 1000)}s; step ${record.step} completed on attempt ${record.submissions.length + 1}.`));
+    } else if (record.state === "YIELDED") {
+      console.warn(pc.yellow(`↪ Provider ${record.condition.toLowerCase().replace(/_/g, " ")}: step ${record.step} handed back to the operation scheduler (not executed).`));
     } else if (record.state !== "PROBING") {
       console.warn(pc.red(`✗ Provider recovery ${record.state.toLowerCase()}: ${record.reason ?? ""}`));
     }
@@ -2150,6 +2159,8 @@ Always explain your reasoning before or alongside your tool calls.`;
                 : Promise.resolve({ available: true, condition: "AVAILABLE" as const }),
             classify: (err) => (err instanceof InferenceError ? err.toFailure() : null),
             newRequestId: () => randomUUID(),
+            onFailure: this.providerRecoveryHooks?.onFailure,
+            shouldYield: this.providerRecoveryHooks?.shouldYield,
             onState: (record) => {
               if (streamedTokens && record.state === "RESUMED") process.stdout.write("\n");
               const discarded = streamedTokens && record.state === "WAITING";

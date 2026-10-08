@@ -189,6 +189,8 @@ export class AutonomousAgent {
     recoveryClock = realRecoveryClock;
     /** Recovery of the inference step in progress, persisted with the durable task state while waiting. */
     activeProviderRecovery = null;
+    /** Set by the operation scheduler: resource condition observations and the yield decision. */
+    providerRecoveryHooks;
     activeTurn;
     lastTurnResult;
     completionSummary;
@@ -1700,6 +1702,9 @@ Always explain your reasoning before or alongside your tool calls.`;
     getProviderRecovery() {
         return this.activeProviderRecovery;
     }
+    setProviderRecoveryHooks(hooks) {
+        this.providerRecoveryHooks = hooks;
+    }
     onProviderRecoveryState(record, turn, discardedPartialOutput) {
         this.activeProviderRecovery = record;
         const waiting = record.state === "WAITING" || record.state === "PROBING";
@@ -1713,6 +1718,9 @@ Always explain your reasoning before or alongside your tool calls.`;
         }
         else if (record.state === "RESUMED") {
             console.warn(pc.green(`✓ Provider recovered after ${Math.round(record.waitedMs / 1000)}s; step ${record.step} completed on attempt ${record.submissions.length + 1}.`));
+        }
+        else if (record.state === "YIELDED") {
+            console.warn(pc.yellow(`↪ Provider ${record.condition.toLowerCase().replace(/_/g, " ")}: step ${record.step} handed back to the operation scheduler (not executed).`));
         }
         else if (record.state !== "PROBING") {
             console.warn(pc.red(`✗ Provider recovery ${record.state.toLowerCase()}: ${record.reason ?? ""}`));
@@ -1876,6 +1884,8 @@ Always explain your reasoning before or alongside your tool calls.`;
                             : Promise.resolve({ available: true, condition: "AVAILABLE" }),
                         classify: (err) => (err instanceof InferenceError ? err.toFailure() : null),
                         newRequestId: () => randomUUID(),
+                        onFailure: this.providerRecoveryHooks?.onFailure,
+                        shouldYield: this.providerRecoveryHooks?.shouldYield,
                         onState: (record) => {
                             if (streamedTokens && record.state === "RESUMED")
                                 process.stdout.write("\n");

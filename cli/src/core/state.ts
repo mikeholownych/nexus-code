@@ -7,6 +7,7 @@
  */
 
 import type { ProviderRecoveryRecord, TurnResult } from "./turn.js";
+import type { DurableOperationState } from "./operation.js";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
@@ -122,6 +123,9 @@ export interface DurableTaskState {
 
   // Inference step waiting out a temporary provider failure (no tool or history change happens while waiting)
   providerRecovery?: ProviderRecoveryRecord | null;
+
+  // Convergence-scheduled operation: work units, resource conditions and the wake condition while waiting
+  operation?: DurableOperationState;
 
   // Context & conversation memory
   messages: ChatMessage[];
