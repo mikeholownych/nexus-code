@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url";
 import { AutonomousAgent } from "./agent.js";
 import { ApplicationCore } from "./core/app.js";
 import { InteractiveRepl } from "./repl.js";
-import { LocalLlmClient, readLatestAuthToken } from "./client.js";
+import { LocalLlmClient } from "./client.js";
 import { SessionManager } from "./session.js";
 import { SkillManager } from "./skills.js";
 import { McpClientManager } from "./mcp.js";

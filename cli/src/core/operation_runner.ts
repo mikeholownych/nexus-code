@@ -7,7 +7,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { AutonomousAgent } from "../agent.js";
-import { LocalLlmClient } from "../client.js";
+import { LocalLlmClient, storedCredentialFor } from "../client.js";
 import { ROLE_PROFILES } from "../team.js";
 import type { HarnessConfig } from "../types.js";
 import { realRecoveryClock, type RecoveryClock } from "./provider_recovery.js";
@@ -365,7 +365,7 @@ function normalizeEndpoint(ep: string): string {
 
 /** Resources implied by the existing configuration (primary model, fallback endpoints, planner and coder slots). */
 export function resourcesFromConfig(config: HarnessConfig): ResourceDescriptor[] {
-  const account = credentialFingerprint(config.apiKey);
+  const account = credentialFingerprint(config.apiKey) ?? credentialFingerprint(storedCredentialFor(config.endpoint) ?? undefined);
   const make = (id: string, endpoint: string, model: string, rank: number, taskClass?: string, key = account): ResourceDescriptor => ({
     id,
     provider: origin(normalizeEndpoint(endpoint)),
@@ -413,16 +413,17 @@ export class AgentWorkUnitExecutor implements WorkUnitExecutor {
 
   configFor(resource: ResourceDescriptor): HarnessConfig {
     const base = this.opts.baseConfig;
-    const sameProvider = origin(normalizeEndpoint(base.endpoint)) === resource.provider;
-    const apiKey = resource.apiKeyEnv ? process.env[resource.apiKeyEnv] : sameProvider ? base.apiKey : undefined;
+    // The client sends a key only to the origin it belongs to, so the configured key never reaches another provider.
+    const credential = resource.apiKeyEnv
+      ? { apiKey: process.env[resource.apiKeyEnv], credentialOrigin: origin(resource.endpoint) }
+      : { apiKey: base.apiKey, credentialOrigin: base.credentialOrigin ?? origin(normalizeEndpoint(base.endpoint)) };
     const contextLimit = Math.min(base.contextLimit ?? 65_536, resource.contextLength ?? Number.POSITIVE_INFINITY);
     return {
       ...base,
       endpoint: resource.endpoint,
       model: resource.model,
-      apiKey,
+      ...credential,
       pinEndpoint: true,
-      noAmbientCredentials: !sameProvider,
       fallbackEndpoints: [],
       taskClass: resource.taskClass ?? base.taskClass,
       contextLimit,

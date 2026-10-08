@@ -39,8 +39,10 @@ export type Reply =
 
 export interface Gateway {
   url: string;
-  requests: Array<{ id?: string; attempt?: string; previous?: string; body: any }>;
+  requests: Array<{ id?: string; attempt?: string; previous?: string; authorization?: string; body: any }>;
   probes: number;
+  /** Authorization header of every request, chat and /models alike, in arrival order. */
+  authorizations: Array<string | undefined>;
   script: (n: number, body: any) => Reply;
   down(): Promise<void>;
   up(): Promise<void>;
@@ -55,6 +57,7 @@ export async function startGateway(script: (n: number, body: any) => Reply, opts
     url: "",
     requests: [],
     probes: 0,
+    authorizations: [],
     script,
     down: async () => {
       for (const s of sockets) s.destroy();
@@ -66,6 +69,7 @@ export async function startGateway(script: (n: number, body: any) => Reply, opts
     close: async () => gw.down(),
   };
   const server = http.createServer((req, res) => {
+    gw.authorizations.push(req.headers.authorization);
     if (req.url?.endsWith("/models")) {
       gw.probes++;
       res.setHeader("content-type", "application/json");
@@ -82,6 +86,7 @@ export async function startGateway(script: (n: number, body: any) => Reply, opts
         id: req.headers["x-request-id"] as string | undefined,
         attempt: req.headers["x-aihost-attempt"] as string | undefined,
         previous: req.headers["x-aihost-previous-request"] as string | undefined,
+        authorization: req.headers.authorization,
       });
       const r = gw.script(gw.requests.length, body);
       if (r.kind === "reset") return void req.socket.destroy();

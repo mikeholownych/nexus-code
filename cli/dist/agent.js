@@ -23,7 +23,7 @@ import { FlightRecorder } from "./flight.js";
 import { WorktreeManager } from "./worktree.js";
 import { isSandboxAvailable } from "./sandbox.js";
 import { runTestSuiteWithExecutor, discoverVerifier } from "./tester.js";
-import { InferenceError } from "./client.js";
+import { credentialOriginOf, InferenceError } from "./client.js";
 import { assertTurnResultInvariants, deepFreezeTurn, summarizeTurn, lifecycleStatusForTurn, } from "./core/turn.js";
 import { createHash } from "node:crypto";
 import { HybridSearchEngine } from "./embeddings.js";
@@ -242,6 +242,7 @@ export class AutonomousAgent {
                 model: config.plannerModel || config.model,
                 endpoint: config.plannerEndpoint || config.endpoint,
                 apiKey: config.plannerApiKey || config.apiKey,
+                credentialOrigin: config.plannerApiKey ? credentialOriginOf(config.plannerEndpoint || config.endpoint) : config.credentialOrigin ?? credentialOriginOf(config.endpoint),
                 taskClass: config.plannerTaskClass ?? config.taskClass,
             };
             const coderConfig = {
@@ -249,6 +250,7 @@ export class AutonomousAgent {
                 model: config.coderModel || config.model,
                 endpoint: config.coderEndpoint || config.endpoint,
                 apiKey: config.coderApiKey || config.apiKey,
+                credentialOrigin: config.coderApiKey ? credentialOriginOf(config.coderEndpoint || config.endpoint) : config.credentialOrigin ?? credentialOriginOf(config.endpoint),
             };
             this.plannerClient = new LocalLlmClient(plannerConfig);
             this.coderClient = new LocalLlmClient(coderConfig);

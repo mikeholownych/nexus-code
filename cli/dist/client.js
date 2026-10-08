@@ -6,36 +6,64 @@ import { InformationFlowBoundary } from "./core/egress.js";
 import pc from "picocolors";
 import { classifyHttpFailure, classifyTransportFailure, providerHints, TEMPORARY_CONDITIONS, } from "./core/provider_recovery.js";
 import { redactSecrets } from "./ui.js";
-export function readLatestAuthToken() {
-    // 1. Check opencode client token file
-    const opencodeTokenPath = path.join(os.homedir(), ".config/opencode/t5820-client-token");
-    if (fs.existsSync(opencodeTokenPath)) {
-        try {
-            const val = fs.readFileSync(opencodeTokenPath, "utf-8").trim();
-            if (val)
-                return val;
+function originOf(url) {
+    if (!url?.trim())
+        return undefined;
+    try {
+        return new URL(url.trim()).origin;
+    }
+    catch {
+        return undefined;
+    }
+}
+/** The origin a credential configured for `endpoint` belongs to. */
+export function credentialOriginOf(endpoint) {
+    return originOf(endpoint);
+}
+function readConfigEnv() {
+    const out = {};
+    try {
+        for (const line of fs.readFileSync(path.join(os.homedir(), ".config/nexus/config.env"), "utf-8").split("\n")) {
+            const m = /^([A-Z0-9_]+)=(.*)$/.exec(line.trim());
+            if (m)
+                out[m[1]] = m[2].trim();
         }
-        catch { }
     }
-    // 2. Check ~/.config/nexus/config.env
-    const configEnvPath = path.join(os.homedir(), ".config/nexus/config.env");
-    if (fs.existsSync(configEnvPath)) {
-        try {
-            const lines = fs.readFileSync(configEnvPath, "utf-8").split("\n");
-            for (const line of lines) {
-                if (line.startsWith("LOCAL_LLM_API_KEY=")) {
-                    const val = line.substring("LOCAL_LLM_API_KEY=".length).trim();
-                    if (val)
-                        return val;
-                }
-            }
-        }
-        catch { }
+    catch { }
+    return out;
+}
+function readGatewayTokenFile() {
+    try {
+        return fs.readFileSync(path.join(os.homedir(), ".config/opencode/t5820-client-token"), "utf-8").trim() || undefined;
     }
-    // 3. Check environment
-    if (process.env.LOCAL_LLM_API_KEY) {
-        return process.env.LOCAL_LLM_API_KEY.trim();
+    catch {
+        return undefined;
     }
+}
+/**
+ * The locally stored credential for `endpoint`, only if it belongs to that endpoint's gateway; null otherwise.
+ *
+ * Stored credentials are scoped to where they were configured: the gateway token file and the config.env key belong
+ * to config.env's LOCAL_LLM_ENDPOINT (or, without one, $LOCAL_LLM_ENDPOINT) and to origins the operator lists in
+ * LOCAL_LLM_CREDENTIAL_ORIGINS; $LOCAL_LLM_API_KEY belongs to $LOCAL_LLM_ENDPOINT. A credential is never attached to
+ * another provider merely because that provider has no key of its own.
+ */
+export function storedCredentialFor(endpoint) {
+    const target = originOf(endpoint);
+    if (!target)
+        return null;
+    const file = readConfigEnv();
+    const envEndpoint = originOf(process.env.LOCAL_LLM_ENDPOINT);
+    const gateway = originOf(file.LOCAL_LLM_ENDPOINT) ?? envEndpoint;
+    const listed = new Set((process.env.LOCAL_LLM_CREDENTIAL_ORIGINS ?? "").split(",").map((o) => originOf(o)).filter(Boolean));
+    if (target === gateway || listed.has(target)) {
+        const token = readGatewayTokenFile() || file.LOCAL_LLM_API_KEY;
+        if (token)
+            return token;
+    }
+    const envKey = process.env.LOCAL_LLM_API_KEY?.trim();
+    if (target === envEndpoint && envKey)
+        return envKey;
     return null;
 }
 const DEFAULT_CLASSIFICATION = {
@@ -159,8 +187,12 @@ function classifyTransportError(err, operatorSignal, requestId, phase, partialTe
 export class LocalLlmClient {
     endpoints = [];
     activeEndpointIndex = 0;
-    apiKey;
-    noAmbientCredentials = false;
+    /** Explicitly configured key and the origin it belongs to (config.credentialOrigin, else the primary endpoint). */
+    explicitKey;
+    explicitOrigin;
+    /** Stored credentials resolved per origin; an origin whose stored credential rotated in supersedes its explicit key. */
+    storedKeys = new Map();
+    rotated = new Set();
     model;
     temperature;
     boundary;
@@ -192,11 +224,10 @@ export class LocalLlmClient {
         }
         this.endpoints = Array.from(new Set(endpointList));
         this.activeEndpointIndex = 0;
-        this.noAmbientCredentials = Boolean(config.noAmbientCredentials);
-        this.apiKey =
-            config.apiKey && config.apiKey !== "local" && config.apiKey !== "not-needed"
-                ? config.apiKey
-                : (this.noAmbientCredentials ? null : readLatestAuthToken()) || "not-needed";
+        if (config.apiKey && config.apiKey !== "local" && config.apiKey !== "not-needed") {
+            this.explicitKey = config.apiKey;
+            this.explicitOrigin = originOf(config.credentialOrigin ?? normalizeEp(config.endpoint));
+        }
         this.model = config.model;
         this.temperature = config.temperature ?? 0.2;
         this.boundary = options?.boundary || InformationFlowBoundary.getGlobalInstance();
@@ -282,18 +313,38 @@ export class LocalLlmClient {
             this.endpoints.push(ep);
         }
     }
+    /** Sets the key for the active endpoint's origin. */
     setApiKey(key) {
-        this.apiKey = key;
+        this.explicitKey = key;
+        this.explicitOrigin = originOf(this.endpoints[this.activeEndpointIndex]);
+        if (this.explicitOrigin)
+            this.rotated.delete(this.explicitOrigin);
     }
-    reloadAuthToken() {
-        if (this.noAmbientCredentials)
+    /** The credential sent to `url`: its own explicit key, else its gateway's stored credential, else none. */
+    credentialFor(url) {
+        const origin = originOf(url);
+        if (!origin)
+            return undefined;
+        if (this.explicitKey && this.explicitOrigin === origin && !this.rotated.has(origin))
+            return this.explicitKey;
+        if (!this.storedKeys.has(origin))
+            this.storedKeys.set(origin, storedCredentialFor(url));
+        return this.storedKeys.get(origin) ?? undefined;
+    }
+    authorization(url) {
+        return { Authorization: `Bearer ${this.credentialFor(url) ?? "not-needed"}` };
+    }
+    /** After a 401 from `url`: re-read that gateway's stored credential (rotation). Never borrows another provider's. */
+    reloadAuthToken(url = this.endpoints[this.activeEndpointIndex]) {
+        const origin = originOf(url);
+        if (!origin)
             return false;
-        const fresh = readLatestAuthToken();
-        if (fresh && fresh !== this.apiKey) {
-            this.apiKey = fresh;
-            return true;
-        }
-        return false;
+        const fresh = storedCredentialFor(url);
+        if (!fresh || fresh === this.credentialFor(url))
+            return false;
+        this.storedKeys.set(origin, fresh);
+        this.rotated.add(origin);
+        return true;
     }
     async executeWithFailover(operationName, operation) {
         const total = this.endpoints.length;
@@ -326,15 +377,11 @@ export class LocalLlmClient {
         return this.executeWithFailover("listModels", async (currentEp) => {
             const url = `${currentEp}/models`;
             const res = await fetch(url, {
-                headers: {
-                    Authorization: `Bearer ${this.apiKey}`,
-                },
+                headers: this.authorization(url),
             });
-            if (res.status === 401 && this.reloadAuthToken()) {
+            if (res.status === 401 && this.reloadAuthToken(url)) {
                 const retryRes = await fetch(url, {
-                    headers: {
-                        Authorization: `Bearer ${this.apiKey}`,
-                    },
+                    headers: this.authorization(url),
                 });
                 if (retryRes.ok) {
                     const data = (await retryRes.json());
@@ -351,7 +398,7 @@ export class LocalLlmClient {
     /** Raw `/models` entries. Providers that publish capability metadata let the scheduler qualify resources. */
     async listModelCatalog(signal) {
         return this.executeWithFailover("listModelCatalog", async (currentEp) => {
-            const res = await fetch(`${currentEp}/models`, { headers: { Authorization: `Bearer ${this.apiKey}` }, signal });
+            const res = await fetch(`${currentEp}/models`, { headers: this.authorization(currentEp), signal });
             if (!res.ok)
                 throw new Error(`Server returned HTTP ${res.status}: ${res.statusText}`);
             const data = (await res.json());
@@ -373,7 +420,7 @@ export class LocalLlmClient {
             const timeout = AbortSignal.timeout(opts.timeoutMs ?? 5_000);
             try {
                 const res = await fetch(`${this.endpoints[idx]}/models`, {
-                    headers: { Authorization: `Bearer ${this.apiKey}` },
+                    headers: this.authorization(this.endpoints[idx]),
                     signal: signal ? AbortSignal.any([timeout, signal]) : timeout,
                 });
                 const body = await res.text().catch(() => "");
@@ -445,14 +492,14 @@ export class LocalLlmClient {
                     method: "POST",
                     headers: {
                         "Content-Type": "application/json",
-                        Authorization: `Bearer ${this.apiKey}`,
+                        ...this.authorization(url),
                         "X-Request-ID": requestId,
                         ...this.routingHeaders(),
                     },
                     body: JSON.stringify(payload),
                     signal: this.combinedSignal(signal),
                 });
-                if (res.status === 401 && this.reloadAuthToken()) {
+                if (res.status === 401 && this.reloadAuthToken(url)) {
                     return this.chatCompletion(messages, tools, requestId, signal);
                 }
                 if (!res.ok) {
@@ -528,7 +575,7 @@ export class LocalLlmClient {
                     method: "POST",
                     headers: {
                         "Content-Type": "application/json",
-                        Authorization: `Bearer ${this.apiKey}`,
+                        ...this.authorization(url),
                         "X-Request-ID": requestId,
                         ...this.routingHeaders(),
                     },
@@ -541,7 +588,7 @@ export class LocalLlmClient {
                 // second attempt would replace this error with its own. Recovery belongs to the agent loop.
                 throw classifyTransportError(err, signal, requestId, "connect");
             }
-            if (res.status === 401 && this.reloadAuthToken()) {
+            if (res.status === 401 && this.reloadAuthToken(url)) {
                 return this.chatCompletionStream(messages, tools, onToken, requestId, signal);
             }
             if (!res.ok || !res.body) {
@@ -724,7 +771,7 @@ export class LocalLlmClient {
                 method: "POST",
                 headers: {
                     "Content-Type": "application/json",
-                    Authorization: `Bearer ${this.apiKey}`,
+                    ...this.authorization(url),
                 },
                 body: JSON.stringify({
                     model: model || this.model,

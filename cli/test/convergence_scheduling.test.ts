@@ -14,6 +14,7 @@ import { applyProviderCatalog, ResourceRegistry, type ResourceDescriptor } from 
 import { ProviderRecoveryController, DEFAULT_RECOVERY_POLICY, providerHints } from "../src/core/provider_recovery.js";
 import type { InferenceFailure } from "../src/core/turn.js";
 import { LocalLlmClient } from "../src/client.js";
+import type { HarnessConfig } from "../src/types.js";
 import { fakeClock, type FakeClock } from "./helpers/provider_fixture.js";
 
 // ---------------------------------------------------------------- fixtures
@@ -521,16 +522,15 @@ describe("compatibility and convergence", () => {
     assert.deepEqual(small.fallbackEndpoints, []);
     assert.equal(small.plannerModel, undefined);
     assert.equal(small.coderModel, undefined);
-    assert.equal(small.apiKey, "k-base", "same provider keeps the configured credential");
     const large = ex.configFor(res("l", { provider: "https://p1.test", contextLength: 1_000_000 }));
     assert.equal(large.contextLimit, 65_536, "a resource never raises the configured admission limit");
+    // The configured key stays scoped to its own origin; the client boundary enforces it for every resource.
     const other = ex.configFor(res("o", { provider: "https://other.test" }));
-    assert.equal(other.apiKey, undefined, "the configured credential is not sent to another provider");
-    assert.equal(other.noAmbientCredentials, true, "nor is a locally stored gateway token");
-    assert.equal(small.noAmbientCredentials, false);
-    const client = new LocalLlmClient({ ...other, temperature: 0 });
-    assert.equal((client as any).apiKey, "not-needed", "no stored token is attached for another provider");
-    assert.equal(client.reloadAuthToken(), false);
+    assert.equal(other.credentialOrigin, "https://p1.test");
+    const credentialFor = (c: HarnessConfig) => (new LocalLlmClient({ ...c, temperature: 0 }) as any).credentialFor(c.endpoint);
+    assert.equal(credentialFor(small), "k-base", "same provider keeps the configured credential");
+    assert.equal(credentialFor(other), undefined, "the configured credential is not sent to another provider");
+    assert.equal(new LocalLlmClient({ ...other, temperature: 0 }).reloadAuthToken(), false, "nor is a stored gateway token");
   });
 
   test("32. durable state survives park, wait and resume", async () => {
