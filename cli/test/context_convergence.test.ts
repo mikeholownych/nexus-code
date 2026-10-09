@@ -817,6 +817,23 @@ describe("E: an operator-configured verifier gates every completion", () => {
     });
   });
 
+  test("a work unit run at depth 1, as the operation runner builds it, is still gated by the configured verifier", async () => {
+    for (const ending of ["task_completed", "plain answer"]) {
+      await isolated(async (repo) => {
+        const gw = await gateway((r) => (r.n === 1 && ending === "task_completed" ? { tools: [done("a.txt is present")] } : { text: "a.txt is present." }));
+        const agent = quiet(new AutonomousAgent(cfg(gw, repo, { authoritativeVerifierCommand: "false" }), 1));
+        try {
+          const turn = await muted(() => agent.runTurn("Is a.txt present?"));
+          assert.ok(!turnSucceeded(turn), `${ending}: ${turn.outcome} ${turn.reason ?? ""}`);
+          assert.notEqual(turn.outcome, "NOT_REQUIRED", ending);
+        } finally {
+          agent.shutdown();
+          await gw.close();
+        }
+      });
+    }
+  });
+
   test("a passing gate changes nothing about a read-only outcome: NOT_REQUIRED, or UNVERIFIED when evidence left the context", async () => {
     await isolated(async (repo) => {
       const gw = await gateway(() => ({ tools: [done("nothing to change")] }));

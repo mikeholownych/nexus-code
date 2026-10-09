@@ -502,6 +502,7 @@ export class AutonomousAgent {
   private ui: TerminalUI;
   private messages: ChatMessage[] = [];
   private depth: number;
+  private runningAsSubagent = false;
   private skillManager: SkillManager;
   private mcpManager: McpClientManager;
   private pluginManager: PluginManager;
@@ -3104,11 +3105,12 @@ Always explain your reasoning before or alongside your tool calls.`;
   }
 
   /**
-   * Whether the operator-configured verifier must pass before any completion of this agent. A subagent's own changes
-   * are verified as before and again by its parent, so its read-only reports are not gated.
+   * Whether the operator-configured verifier must pass before any completion of this agent. An in-turn subagent's own
+   * changes are verified as before and again by its parent, so its read-only reports are not gated. Work units also run
+   * at depth 1 but have no parent turn to verify them, so they are gated.
    */
   private configuredVerifierGatesCompletion(): boolean {
-    return this.depth === 0 && Boolean(this.config.authoritativeVerifierCommand?.trim());
+    return !this.runningAsSubagent && Boolean(this.config.authoritativeVerifierCommand?.trim());
   }
 
   /** Single place where a turn's execution/outcome dimensions are derived from evidence held by the agent. */
@@ -3315,6 +3317,7 @@ Always explain your reasoning before or alongside your tool calls.`;
     if (this.inheritedWorktreeScope && path.resolve(this.config.workspace) !== path.resolve(this.inheritedWorktreeScope.workspace)) {
       throw new Error("Subagent workspace no longer matches its inherited worktree authority.");
     }
+    this.runningAsSubagent = true;
     this.resetConversation();
     this.messages.push({
       role: "user",
