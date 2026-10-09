@@ -2019,7 +2019,7 @@ Always explain your reasoning before or alongside your tool calls.`;
 
       // An operator-configured verifier gates every completion, not only one that follows changes.
       if (
-        (this.hasPendingModifications || worktreeHasChanges || Boolean(this.config.authoritativeVerifierCommand?.trim())) &&
+        (this.hasPendingModifications || worktreeHasChanges || this.configuredVerifierGatesCompletion()) &&
         !this.config.dryRun &&
         !this.config.readOnly
       ) {
@@ -3095,6 +3095,14 @@ Always explain your reasoning before or alongside your tool calls.`;
     }
   }
 
+  /**
+   * Whether the operator-configured verifier must pass before any completion of this agent. A subagent's own changes
+   * are verified as before and again by its parent, so its read-only reports are not gated.
+   */
+  private configuredVerifierGatesCompletion(): boolean {
+    return this.depth === 0 && Boolean(this.config.authoritativeVerifierCommand?.trim());
+  }
+
   /** Single place where a turn's execution/outcome dimensions are derived from evidence held by the agent. */
   private buildTurnResult(input: {
     modelStop: ModelStop;
@@ -3180,7 +3188,7 @@ Always explain your reasoning before or alongside your tool calls.`;
     }
     // The operator's verifier must pass before any completion; a turn that ended without it passing (a final answer
     // without task_completed, or a dry-run or read-only turn, which never runs it) is not verified.
-    if (this.config.authoritativeVerifierCommand?.trim() && this.turnConfiguredVerifier !== "PASSED") {
+    if (this.configuredVerifierGatesCompletion() && this.turnConfiguredVerifier !== "PASSED") {
       return deepFreezeTurn(assertTurnResultInvariants({ ...base, execution: "COMPLETED", outcome: "UNVERIFIED", reason: "VERIFICATION_NOT_RUN" }));
     }
     // No verifier backs a read-only result, so it rests on the observations the model saw. If compaction removed some

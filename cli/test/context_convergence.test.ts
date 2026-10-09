@@ -715,6 +715,29 @@ describe("E: an operator-configured verifier gates every completion", () => {
     }
   });
 
+  test("a subagent's read-only report is not gated by the parent's configured verifier; the parent's completion is", async () => {
+    await isolated(async (repo) => {
+      const runs = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "nexus-cc-runs-")), "runs");
+      const gw = await gateway((r) => {
+        const lastUser = [...r.body.messages].reverse().find((m: any) => m.role === "user");
+        if (String(lastUser?.content).startsWith("[Subagent Objective]")) return { tools: [done("a.txt is present")] };
+        return r.n === 1 ? { tools: [{ name: "spawn_subagent", args: { prompt: "Is a.txt present?" } }] } : { tools: [done("a.txt is present")] };
+      });
+      const agent = quiet(new AutonomousAgent(cfg(gw, repo, { authoritativeVerifierCommand: `echo run >> ${runs}` })));
+      try {
+        const turn = await muted(() => agent.runTurn("Use a subagent to check whether a.txt is present."));
+        const spawned = gw.requests.flatMap((q) => q.body.messages).find((m: any) => m.role === "tool" && m.name === "spawn_subagent");
+        assert.ok(spawned && !String(spawned.content).startsWith("Error executing"), String(spawned?.content));
+        assert.equal(fs.readFileSync(runs, "utf8").trim().split("\n").length, 1, "only the parent's completion ran the verifier");
+        assert.equal(turn.outcome, "NOT_REQUIRED", `${turn.outcome} ${turn.reason ?? ""}`);
+      } finally {
+        agent.shutdown();
+        await gw.close();
+        fs.rmSync(path.dirname(runs), { recursive: true, force: true });
+      }
+    });
+  });
+
   test("a passing gate changes nothing about a read-only outcome: NOT_REQUIRED, or UNVERIFIED when evidence left the context", async () => {
     await isolated(async (repo) => {
       const gw = await gateway(() => ({ tools: [done("nothing to change")] }));
