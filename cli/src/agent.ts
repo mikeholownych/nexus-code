@@ -1657,13 +1657,13 @@ export class AutonomousAgent {
 
   /**
    * Admits the next request (see `admitContext`). When that compaction removed tool output the model had already been
-   * shown, first asks the model to record what that output established, then admits again from the same history so
-   * the durable record carries those findings.
+   * shown, first asks the model, on `client` (the one this step's inference uses), to record what that output
+   * established, then admits again from the same history so the durable record carries those findings.
    */
-  private async admitWithFindings(step: number, requestId: string, signal?: AbortSignal): Promise<void> {
+  private async admitWithFindings(client: LocalLlmClient, step: number, requestId: string, signal?: AbortSignal): Promise<void> {
     const original = this.messages;
     const removed = this.admitContext(step, requestId);
-    if (!removed.length || !(await this.recordFindings(step, original, removed, signal))) return;
+    if (!removed.length || !(await this.recordFindings(client, step, original, removed, signal))) return;
     const admitted = this.messages;
     this.messages = original;
     try {
@@ -1679,7 +1679,7 @@ export class AutonomousAgent {
    * establish for the current request. The findings are the model's own words, labelled with the observations they
    * came from; nothing is recorded when the call fails or returns nothing. Returns whether anything was recorded.
    */
-  private async recordFindings(step: number, source: ChatMessage[], removed: string[], signal?: AbortSignal): Promise<boolean> {
+  private async recordFindings(client: LocalLlmClient, step: number, source: ChatMessage[], removed: string[], signal?: AbortSignal): Promise<boolean> {
     const wanted = new Set(removed.filter((key) => !this.distilledObservations.has(key)));
     const unseen = new Set(this.unseenToolResults(source));
     const callKeys = new Map<string, string>();
@@ -1730,7 +1730,7 @@ export class AutonomousAgent {
       ];
       let text = "";
       try {
-        const res = await this.client.chatCompletion(prompt, [], randomUUID(), signal);
+        const res = await client.chatCompletion(prompt, [], randomUUID(), signal);
         text = typeof res.content === "string" ? res.content.trim() : "";
         this.totalTokens.prompt += calculateContextBudget(prompt, [], contextLimit).totalActiveTokens;
         this.totalTokens.completion += countTokens(text);
@@ -1748,7 +1748,7 @@ export class AutonomousAgent {
       for (const item of group) this.distilledObservations.set(item.key, { step, digest: item.digest });
       recorded = true;
     }
-    if (recorded) await this.consolidateFindings(step, request, signal);
+    if (recorded) await this.consolidateFindings(client, step, request, signal);
     return recorded;
   }
 
@@ -1757,7 +1757,7 @@ export class AutonomousAgent {
    * the model merges the oldest notes (at least half the budget) into one labelled note in their place. When that
    * yields nothing, the notes are left as they are and the durable record elides the oldest ones.
    */
-  private async consolidateFindings(step: number, request: string, signal?: AbortSignal): Promise<void> {
+  private async consolidateFindings(client: LocalLlmClient, step: number, request: string, signal?: AbortSignal): Promise<void> {
     const total = this.findingNotes.reduce((chars, note) => chars + note.length, 0);
     if (total <= FINDINGS_BUDGET_CHARS || this.findingNotes.length < 2 || signal?.aborted) return;
     let count = 0;
@@ -1770,7 +1770,7 @@ export class AutonomousAgent {
     ];
     let text = "";
     try {
-      const res = await this.client.chatCompletion(prompt, [], randomUUID(), signal);
+      const res = await client.chatCompletion(prompt, [], randomUUID(), signal);
       text = typeof res.content === "string" ? res.content.trim() : "";
       this.totalTokens.prompt += calculateContextBudget(prompt, [], this.config.contextLimit || 65536).totalActiveTokens;
       this.totalTokens.completion += countTokens(text);
@@ -2787,8 +2787,9 @@ Always explain your reasoning before or alongside your tool calls.`;
           this.flightRecorder.recordTurnStart(currentStep, promptText);
         }
         const requestId = randomUUID();
+        const { client: activeClient } = this.selectCognitiveClient(currentStep, this.messages);
         try {
-          await this.admitWithFindings(currentStep, requestId, signal);
+          await this.admitWithFindings(activeClient, currentStep, requestId, signal);
         } catch (err) {
           if (!(err instanceof ContextBudgetError)) throw err;
           // Fail-closed admission refused the request before any inference call. A refusal is a bounded
@@ -2817,7 +2818,6 @@ Always explain your reasoning before or alongside your tool calls.`;
         this.ui.startSpinner("Thinking and analyzing next step...");
         turn.phase = "inference";
 
-        const { client: activeClient } = this.selectCognitiveClient(currentStep, this.messages);
         if (this.cognitiveRoutingEnabled && currentStep === 1) {
           process.stdout.write(pc.dim(`\n🧭 Dual-Model Routing: [Planner: ${this.plannerClient.getModel()} | Coder: ${this.coderClient.getModel()}]\n`));
         }
@@ -3307,7 +3307,7 @@ Always explain your reasoning before or alongside your tool calls.`;
       const requestId = randomUUID();
       const { client: activeClient } = this.selectCognitiveClient(currentStep, this.messages);
       try {
-        await this.admitWithFindings(currentStep, requestId);
+        await this.admitWithFindings(activeClient, currentStep, requestId);
         const policy = this.recoveryPolicy ?? recoveryPolicyFromEnv();
         assistantMessage = await new ProviderRecoveryController(policy, this.recoveryClock, currentStep).run(requestId, {
           submit: (s) => activeClient.chatCompletion(this.messages, HARNESS_TOOLS, s.requestId),

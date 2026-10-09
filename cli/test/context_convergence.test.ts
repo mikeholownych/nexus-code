@@ -408,6 +408,23 @@ describe("D: findings checkpoint before shown output leaves the context", () => 
     });
   });
 
+  test("checkpoints go to the endpoint the step's inference is routed to, never to another configured one", async () => {
+    await isolated(async (repo) => {
+      const routed = await gateway(sequentialReader, honestNotes);
+      const base = await gateway(() => ({ tools: [done("base endpoint used")] }), honestNotes);
+      const agent = quiet(new AutonomousAgent(cfg(base, repo, { plannerModel: "m", plannerEndpoint: routed.url, coderModel: "m", coderEndpoint: routed.url })));
+      try {
+        await muted(() => agent.runTurn(PROMPT));
+        assert.ok(routed.requests.length > FILES.length && routed.checkpoints.length >= 1, `routed: ${routed.requests.length} steps, ${routed.checkpoints.length} checkpoints`);
+        assert.equal(base.requests.length + base.checkpoints.length, 0, "nothing was sent to the unrouted endpoint");
+      } finally {
+        agent.shutdown();
+        await routed.close();
+        await base.close();
+      }
+    });
+  });
+
   test("recorded findings survive a restart and later compactions of the restored record", async () => {
     await isolated(async (repo) => {
       const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-cc-state-"));
