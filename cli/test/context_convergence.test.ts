@@ -549,3 +549,87 @@ describe("D: findings checkpoint before shown output leaves the context", () => 
     });
   });
 });
+
+describe("E: an operator-configured verifier gates every completion", () => {
+  const write = (file: string, content: string): Call => ({ name: "write_file", args: { path: file, content } });
+  const TASK = "Write out.md containing the word ready, then call task_completed.";
+
+  test("a completion with no changes is refused with the verifier's output; the model continues and finishes verified", async () => {
+    await isolated(async (repo) => {
+      const gw = await gateway((r) => (r.n === 1 ? { tools: [done("nothing to change")] } : r.n === 2 ? { tools: [write("out.md", "ready\n")] } : { tools: [done("wrote out.md")] }));
+      const agent = quiet(new AutonomousAgent(cfg(gw, repo, { authoritativeVerifierCommand: "grep -q ready out.md && echo VERIFIER-OK || { echo VERIFIER-SAYS-out.md-missing; exit 1; }" })));
+      try {
+        const turn = await muted(() => agent.runTurn(TASK));
+        const refusal = gw.requests[1].body.messages.filter((m: any) => m.role === "tool").at(-1);
+        assert.match(String(refusal?.content), /Verification Oracle: The selected verifier did not pass/);
+        assert.match(String(refusal?.content), /VERIFIER-SAYS-out\.md-missing/);
+        assert.equal(turn.execution, "COMPLETED");
+        assert.equal(turn.outcome, "VERIFIED", `${turn.outcome} ${turn.reason ?? ""}`);
+        assert.equal(gw.requests.length, 3);
+      } finally {
+        agent.shutdown();
+        await gw.close();
+      }
+    });
+  });
+
+  test("a refused completion followed by a plain answer is not established", async () => {
+    await isolated(async (repo) => {
+      const gw = await gateway((r) => (r.n === 1 ? { tools: [done("nothing to change")] } : { text: "I am done." }));
+      const agent = quiet(new AutonomousAgent(cfg(gw, repo, { authoritativeVerifierCommand: "false" })));
+      try {
+        const turn = await muted(() => agent.runTurn(TASK));
+        assert.equal(turn.execution, "COMPLETED");
+        assert.equal(turn.outcome, "NOT_ESTABLISHED");
+        assert.equal(turn.reason, "VERIFIER_FAILED");
+        assert.equal(turnSucceeded(turn), false);
+      } finally {
+        agent.shutdown();
+        await gw.close();
+      }
+    });
+  });
+
+  test("a passing gate changes nothing about a read-only outcome: NOT_REQUIRED, or UNVERIFIED when evidence left the context", async () => {
+    await isolated(async (repo) => {
+      const gw = await gateway(() => ({ tools: [done("nothing to change")] }));
+      const agent = quiet(new AutonomousAgent(cfg(gw, repo, { authoritativeVerifierCommand: "true" })));
+      try {
+        const turn = await muted(() => agent.runTurn("Is a.txt present? Answer via task_completed."));
+        assert.equal(turn.outcome, "NOT_REQUIRED", `${turn.outcome} ${turn.reason ?? ""}`);
+      } finally {
+        agent.shutdown();
+        await gw.close();
+      }
+    });
+    await isolated(async (repo) => {
+      const FILES = ["a.txt", "b.txt", "c.txt", "d.txt"];
+      const gw = await gateway((r) => (r.n <= FILES.length ? { tools: [read(FILES[r.n - 1])] } : { tools: [done("markers reported")] }));
+      const agent = quiet(new AutonomousAgent(cfg(gw, repo, { authoritativeVerifierCommand: "true" })));
+      try {
+        const turn = await muted(() => agent.runTurn("Read a.txt, b.txt, c.txt and d.txt one at a time, then report the marker word of each via task_completed."));
+        assert.equal(turn.outcome, "UNVERIFIED");
+        assert.equal(turn.reason, "CONTEXT_EVIDENCE_NOT_RETAINED");
+      } finally {
+        agent.shutdown();
+        await gw.close();
+      }
+    });
+  });
+
+  test("without a configured verifier a read-only completion runs no verifier, even when one is discoverable and failing", async () => {
+    await isolated(async (repo) => {
+      fs.writeFileSync(path.join(repo, "Makefile"), "test:\n\tfalse\n");
+      const gw = await gateway(() => ({ tools: [done("nothing to change")] }));
+      const agent = quiet(new AutonomousAgent(cfg(gw, repo)));
+      try {
+        const turn = await muted(() => agent.runTurn("Is a.txt present? Answer via task_completed."));
+        assert.equal(turn.outcome, "NOT_REQUIRED", `${turn.outcome} ${turn.reason ?? ""}`);
+        assert.equal(gw.requests.length, 1);
+      } finally {
+        agent.shutdown();
+        await gw.close();
+      }
+    });
+  });
+});

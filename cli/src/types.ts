@@ -59,7 +59,7 @@ export interface HarnessConfig {
   toolResponseReserveTokens?: number; // Context reserved for the following tool results (default: 4096)
   sandbox?: boolean | string; // Linux namespace / bwrap / container isolation (default: false)
   worktree?: boolean;        // Isolated ephemeral git worktree execution (default: false)
-  authoritativeVerifierCommand?: string; // Explicit trusted verifier required to authorize automatic worktree merge
+  authoritativeVerifierCommand?: string; // Explicit trusted verifier: gates every task completion and authorizes automatic worktree merge
   verifierTimeoutSecs?: number; // Deadline for the completion verifier (default 300); env NEXUS_VERIFIER_TIMEOUT_SECS
   recordFlight?: boolean;    // Deterministic .flightlog session recording (default: false)
   plannerModel?: string;     // Deep reasoning / architecture planner (e.g. Claude 3.7 Thinking / o3 / DeepSeek R1)

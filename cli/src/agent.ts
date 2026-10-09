@@ -497,6 +497,8 @@ export class AutonomousAgent {
   private turnMutations: number = 0;
   /** The turn started with unverified changes from earlier work (an earlier turn, attempt, or process). */
   private turnCarriedChanges = false;
+  /** The operator-configured verifier refused a completion in this turn and has not passed since. */
+  private turnConfiguredVerifierFailed = false;
   /** Key for the durable operation record of each tool call (provider call ids may be redacted on disk). */
   private operationSeq = 0;
   /** Told after each durable progress write, so a host can keep its own session record in step. */
@@ -1965,8 +1967,9 @@ Always explain your reasoning before or alongside your tool calls.`;
       let verifierSucceeded = false;
       let noApplicableVerifier = false;
 
+      // An operator-configured verifier gates every completion, not only one that follows changes.
       if (
-        (this.hasPendingModifications || worktreeHasChanges) &&
+        (this.hasPendingModifications || worktreeHasChanges || Boolean(this.config.authoritativeVerifierCommand?.trim())) &&
         !this.config.dryRun &&
         !this.config.readOnly
       ) {
@@ -2002,6 +2005,7 @@ Always explain your reasoning before or alongside your tool calls.`;
               at: new Date().toISOString(),
             };
             this.verificationEvidence = evidence;
+            if (configured) this.turnConfiguredVerifierFailed = !testRes.success;
             if (testRes.timedOut) {
               const partial = foldVoluminousOutput(testRes.rawOutput || "(no output received)");
               return {
@@ -2657,6 +2661,7 @@ Always explain your reasoning before or alongside your tool calls.`;
     }
     this.completionSummary = undefined;
     this.turnMutations = 0;
+    this.turnConfiguredVerifierFailed = false;
     this.turnCarriedChanges = this.hasPendingModifications;
     this.turnRemovedObservations = this.carriedRemovedObservations;
     this.carriedRemovedObservations = new Set();
@@ -3114,6 +3119,13 @@ Always explain your reasoning before or alongside your tool calls.`;
       }
       // Defensive: changes were made, nothing is pending, yet no passing evidence is held.
       return deepFreezeTurn(assertTurnResultInvariants({ ...base, execution: "COMPLETED", outcome: "UNVERIFIED", reason: "VERIFICATION_NOT_RUN" }));
+    }
+    // The operator's verifier refused this turn's completion and the turn ended anyway (e.g. with a final answer).
+    if (this.turnConfiguredVerifierFailed && (evidence?.status === "FAILED" || evidence?.status === "TIMED_OUT")) {
+      return deepFreezeTurn(assertTurnResultInvariants({
+        ...base, execution: "COMPLETED", outcome: "NOT_ESTABLISHED",
+        reason: evidence.status === "FAILED" ? "VERIFIER_FAILED" : "VERIFIER_TIMED_OUT", detail: evidence.command,
+      }));
     }
     // No verifier backs a read-only result, so it rests on the observations the model saw. If compaction removed some
     // and the model never re-read them, the result may be recalled rather than observed: it is not established.
