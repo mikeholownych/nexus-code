@@ -786,16 +786,19 @@ export class AutonomousAgent {
     const unsettled = this.settleUnrecordedToolCalls();
     // Resumed work is the same unit: what compaction removed before the restart is still not in context.
     this.carriedRemovedObservations = unreacquiredRemovals(this.messages);
-    // Changes made before the restart are still unverified unless a verifier established them. A tool that may have
-    // run without its outcome being recorded counts as a change unless it is known not to write.
+    // Changes made before the restart are still unverified unless a verifier established them. A record without the
+    // obligation (written before it was recorded) cannot show that nothing changed: its writes in an interrupted turn
+    // are in neither its conversation nor its last turn. A tool that may have run without its outcome being recorded
+    // counts as a change unless it is known not to write.
     const interruptedTool = state.currentOperation?.status === "interrupted" ? state.currentOperation.toolName : undefined;
     const pending =
-      (state.unverifiedChangesPending ?? state.lastTurn?.unverifiedChangesPending ?? this.historyHasChanges(this.messages)) ||
+      (state.unverifiedChangesPending ?? true) ||
       [...unsettled, ...(interruptedTool ? [interruptedTool] : [])].some((tool) => this.mayWrite(tool));
     this.hasPendingModifications = pending;
     this.verificationEvidence = undefined;
-    // A derived "no changes" is not written back: a record without the obligation stays unknown for later recoveries.
-    if (pending && !state.unverifiedChangesPending) this.persistProgress({ unverifiedChangesPending: true });
+    // An absent obligation already reads as pending and stays absent: the record remains recognizably one that did not
+    // track obligations (see the executor's restart and not-started checks).
+    if (pending && state.unverifiedChangesPending === false) this.persistProgress({ unverifiedChangesPending: true });
 
     if (state.worktreeBinding && recoveryResult.worktreeStatus === "consistent") {
       this.activeWorktree = {
@@ -997,14 +1000,13 @@ export class AutonomousAgent {
   }
 
   /**
-   * Continues a saved interactive session: its conversation and its outstanding verification obligation. Sessions
-   * saved before the obligation was recorded count any successful write in their history as unverified.
+   * Continues a saved interactive session: its conversation and its outstanding verification obligation. A session
+   * saved before the obligation was recorded has an unknown obligation, which counts as pending.
    */
   public restoreSession(msgs: ChatMessage[], unverifiedChangesPending?: boolean): void {
     this.messages = [...msgs];
     const unsettled = this.settleUnrecordedToolCalls();
-    const pending =
-      (unverifiedChangesPending ?? this.historyHasChanges(this.messages)) || unsettled.some((tool) => this.mayWrite(tool));
+    const pending = (unverifiedChangesPending ?? true) || unsettled.some((tool) => this.mayWrite(tool));
     if (pending) this.verificationEvidence = undefined;
     this.setUnverifiedChanges(this.hasPendingModifications || pending);
   }
@@ -1088,14 +1090,6 @@ export class AutonomousAgent {
    */
   private mayWrite(toolName: string): boolean {
     return toolName === "spawn_subagent" || this.capabilityRegistry.getByToolName(toolName)?.mutating !== false;
-  }
-
-  /** Whether a conversation holds a successful result of a tool that writes (used when no obligation was recorded). */
-  private historyHasChanges(messages: ChatMessage[]): boolean {
-    return messages.some(
-      (m) => m.role === "tool" && typeof m.name === "string" && this.mayWrite(m.name) &&
-        !(typeof m.content === "string" && m.content.startsWith("Error executing")),
-    );
   }
 
   public resetConversation(): void {

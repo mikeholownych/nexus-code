@@ -397,6 +397,102 @@ describe("V2: a tool still running when an interactive host ends", () => {
   });
 });
 
+// ---------------------------------------------------------------- R1: state written before the obligation was recorded
+
+describe("R1: task state and sessions without a recorded obligation (written by earlier builds)", () => {
+  test("an operation interrupted after an earlier clean turn: after 'continue after inspection' the unit stays UNVERIFIED and its dependent never runs", async () => {
+    await withHome(async () => {
+      const gw = await gateway((b) => {
+        if (lastUser(b).includes("Review the markers")) return done("reviewed");
+        if (resumed(b)) return done("x.txt written and c.txt read");
+        return [read("a.txt"), read("b.txt")][Math.min(toolResults(b), 1)];
+      });
+      const repo = makeRepo({ "a.txt": "MARK-a\n", "b.txt": "MARK-b\n", "c.txt": "MARK-c\n" });
+      const rig = operationRig(cfg(gw, repo, { maxSteps: 2 }), gw);
+      try {
+        let op = await rig.start([
+          { id: "markers", title: "Markers", prompt: "OBJ-LEGACY: read a.txt, b.txt and c.txt, write x.txt, report." },
+          { id: "review", prompt: "Review the markers.", dependsOn: ["markers"] },
+        ]);
+        assert.match(unitOf(op, "markers").blocked!.reason, /step limit/);
+        // The file as an earlier build left it when killed in a later turn: that turn's write and its reads are not in
+        // the conversation (saved only at turn end), its last tool's record is `completed`, and there is no obligation
+        // field; only the earlier, read-only turn is recorded (lastTurn: no unverified changes).
+        const file = rig.taskFile(op, "markers");
+        edit(file, ({ unverifiedChangesPending: _p, ...s }) => ({
+          ...s,
+          currentOperation: {
+            invocationId: "call_read_c",
+            toolName: "read_file",
+            argsSummary: "c.txt",
+            startedAt: new Date().toISOString(),
+            completedAt: new Date().toISOString(),
+            status: "completed",
+          },
+        }));
+        const legacy = JSON.parse(fs.readFileSync(file, "utf-8"));
+        assert.equal("unverifiedChangesPending" in legacy, false);
+        assert.equal(legacy.lastTurn?.unverifiedChangesPending, false, "precondition: the recorded turn was clean");
+        assert.equal(legacy.messages.filter((m: any) => m.role === "tool").length, 2);
+        fs.writeFileSync(path.join(repo, "x.txt"), "x");
+
+        const more = decisionOf(op, "markers").options.find((o) => o.label === "continue with more steps")!;
+        const before = gw.requests.length;
+        op = await rig.decide(decisionOf(op, "markers").id, more.id);
+        assert.match(unitOf(op, "markers").blocked!.reason, /read_file/, "the interrupted tool is reported");
+        assert.equal(gw.requests.length, before, "no inference before the operator inspects");
+        const inspect = decisionOf(op, "markers").options.find((o) => o.label === "continue after inspection")!;
+        op = await rig.decide(decisionOf(op, "markers").id, inspect.id);
+        assert.ok(gw.requests.slice(before).some(resumed), "the continuation ran");
+        assert.equal(unitOf(op, "markers").status, "BLOCKED", `markers: ${JSON.stringify(unitOf(op, "markers").result)}`);
+        assert.match(unitOf(op, "markers").blocked!.reason, /UNVERIFIED/);
+        assert.equal(unitOf(op, "review").status, "WAITING_ON_DEPENDENCY");
+        assert.ok(gw.requests.every((b) => !lastUser(b).includes("Review the markers")), "the dependent never ran");
+        assert.notEqual(op.status, "COMPLETE");
+      } finally {
+        rig.close();
+        await gw.close();
+        fs.rmSync(repo, { recursive: true, force: true });
+      }
+    });
+  });
+
+  test("interactive /resume (sidecar): a session without the obligation field resumes UNVERIFIED; a recorded false stays false", async () => {
+    await withHome(async (home) => {
+      const gw = await gateway((b) => (lastUser(b).startsWith("Read a.txt") && toolResults(b) === 0 ? read("a.txt") : done("nothing left")));
+      const repo = makeRepo({ "a.txt": "MARK-a\n" });
+      const config = cfg(gw, repo);
+      const turn = async (resume: string | undefined, text: string) => {
+        const app = new ApplicationCore(config as any);
+        quiet(app.getAgent());
+        const events: any[] = [];
+        const server = new SidecarServer({ app, mode: "auto", write: (line) => events.push(JSON.parse(line)), ...(resume ? { resume } : {}) });
+        server.start();
+        await muted(async () => {
+          await server.handleLine(JSON.stringify({ v: 1, type: "prompt.submit", id: "t", text }));
+          await server.idle();
+        });
+        app.shutdown();
+        return events.find((e) => e.type === "turn.result").turn.outcome;
+      };
+      const sessions = () => {
+        const dir = path.join(home, ".nexus", "sessions");
+        return fs.readdirSync(dir).filter((f) => f.endsWith(".json")).map((f) => path.join(dir, f));
+      };
+      try {
+        assert.equal(await turn(undefined, "Read a.txt."), "NOT_REQUIRED");
+        assert.ok(sessions().every((f) => JSON.parse(fs.readFileSync(f, "utf-8")).unverifiedChangesPending === false), "precondition: recorded false");
+        assert.equal(await turn("latest", "Anything left?"), "NOT_REQUIRED", "a recorded false stays false");
+        for (const f of sessions()) edit(f, ({ unverifiedChangesPending: _p, ...s }) => s);
+        assert.equal(await turn("latest", "Anything left?"), "UNVERIFIED", "an absent obligation is pending");
+      } finally {
+        await gw.close();
+        fs.rmSync(repo, { recursive: true, force: true });
+      }
+    });
+  });
+});
+
 // ---------------------------------------------------------------- V1: missing or inconsistent durable history
 
 describe("V1: a unit whose durable history is missing or inconsistent is blocked, never completed", () => {
