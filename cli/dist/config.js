@@ -3,18 +3,19 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { config as loadDotenv, parse as parseDotenv } from "dotenv";
-import { credentialOriginOf, environmentCredential, LocalLlmClient, setCredentialAuthority } from "./client.js";
+import { credentialOriginOf, credentialStorageHome, environmentCredential, LocalLlmClient, setCredentialAuthority } from "./client.js";
 const installEnv = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../.env");
 const DEFAULT_ENDPOINT = "http://localhost:1234/v1";
 let credentialAuthorityRecorded = false;
 /** Loads env files in precedence order; CLI flags are applied afterwards by buildConfig. */
 export function loadEnvironment() {
-    // The operator's own environment, before any file has written to process.env.
+    // The operator's own environment and home, before any file has written to process.env.
     const operatorEnvironment = credentialAuthorityRecorded ? undefined : { ...process.env };
+    const operatorHome = credentialAuthorityRecorded ? credentialStorageHome() : os.homedir();
     // 1. Installation directory defaults
     loadDotenv({ path: installEnv });
     // 2. Global user config (~/.config/nexus/config.env)
-    const globalConfig = path.join(os.homedir(), ".config/nexus/config.env");
+    const globalConfig = path.join(operatorHome, ".config/nexus/config.env");
     let userConfig = {};
     if (fs.existsSync(globalConfig)) {
         loadDotenv({ path: globalConfig, override: true });
@@ -22,7 +23,7 @@ export function loadEnvironment() {
     }
     // Credential bindings are decided by the operator environment and config.env only (see setCredentialAuthority).
     if (operatorEnvironment) {
-        setCredentialAuthority({ ...operatorEnvironment, ...userConfig });
+        setCredentialAuthority({ ...operatorEnvironment, ...userConfig }, operatorHome);
         credentialAuthorityRecorded = true;
     }
     // 3. Current working directory overrides (skipped when cwd is the install directory: that file is the

@@ -248,6 +248,7 @@ export class DurableStateManager {
         const state = this.loadTaskState(taskId);
         state.currentOperation = {
             invocationId: operation.invocationId,
+            ...(operation.seq !== undefined ? { seq: operation.seq } : {}),
             toolName: operation.toolName,
             targetResources: operation.targetResources,
             argsSummary: operation.argsSummary,
@@ -261,13 +262,31 @@ export class DurableStateManager {
     /**
      * Records the completion or failure of an operation atomically.
      */
-    recordOperationEnd(taskId, invocationId, result) {
+    recordOperationEnd(taskId, invocationId, result, seq) {
         const state = this.loadTaskState(taskId);
-        if (state.currentOperation && state.currentOperation.invocationId === invocationId) {
-            state.currentOperation.status = result.success ? "completed" : "failed";
-            state.currentOperation.completedAt = new Date().toISOString();
-            state.currentOperation.error = result.error;
+        const op = state.currentOperation;
+        if (op && (seq !== undefined && op.seq !== undefined ? op.seq === seq : op.invocationId === invocationId)) {
+            op.status = result.success ? "completed" : "failed";
+            op.completedAt = new Date().toISOString();
+            op.error = result.error;
         }
+        this.saveTaskState(state);
+        return state;
+    }
+    /**
+     * Durably records a task's progress within a turn: the conversation so far and/or its unverified-change
+     * obligation. Once the conversation holds a settled operation's result, the operation record is cleared; an
+     * in-flight record is kept so recovery still detects it.
+     */
+    recordProgress(taskId, progress) {
+        const state = this.loadTaskState(taskId);
+        if (progress.messages) {
+            state.messages = progress.messages;
+            if (state.currentOperation && state.currentOperation.status !== "in_flight")
+                state.currentOperation = null;
+        }
+        if (progress.unverifiedChangesPending !== undefined)
+            state.unverifiedChangesPending = progress.unverifiedChangesPending;
         this.saveTaskState(state);
         return state;
     }
@@ -340,14 +359,18 @@ export class DurableStateManager {
         const diagnostics = [];
         let interrupted = false;
         let interruptedOp;
-        // 1. In-flight operation detection (PERS-002, F-07)
-        if (state.currentOperation && state.currentOperation.status === "in_flight") {
+        // 1. In-flight operation detection (PERS-002, F-07). A finished operation whose record was never cleared did not
+        //    get its result into the durable conversation either: the history is partial, so it is treated the same way.
+        const op = state.currentOperation;
+        if (op && (op.status === "in_flight" || op.status === "completed" || op.status === "failed")) {
             interrupted = true;
-            state.currentOperation.status = "interrupted";
-            state.currentOperation.error = "Operation was interrupted by process termination or crash.";
-            interruptedOp = { ...state.currentOperation };
+            op.error = op.status === "in_flight"
+                ? "Operation was interrupted by process termination or crash."
+                : `Operation ${op.status === "failed" ? "failed" : "finished"}, but its result was not recorded before the process stopped.`;
+            op.status = "interrupted";
+            interruptedOp = { ...op };
             state.status = "interrupted";
-            diagnostics.push(`Interrupted in-flight operation detected: tool '${state.currentOperation.toolName}' (invocation: ${state.currentOperation.invocationId}). Marked as interrupted.`);
+            diagnostics.push(`Interrupted in-flight operation detected: tool '${op.toolName}' (invocation: ${op.invocationId}). Marked as interrupted.`);
         }
         // 2. Ephemeral handle cleanup (PERS-002)
         // Subprocess PIDs, pipes, and handles are never resurrected as live.

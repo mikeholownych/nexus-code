@@ -196,6 +196,8 @@ export class SidecarServer {
         }
         const agent = this.app.getAgent();
         agent.setObserver(this.observerFor(turnId));
+        // Work done so far, and changes still awaiting verification, survive the process ending mid-turn.
+        agent.setProgressListener(() => this.saveSession(label));
         let turn;
         try {
             turn = await agent.runTurn(prompt, this.confirmFor(turnId, signal), { signal });
@@ -205,6 +207,7 @@ export class SidecarServer {
         }
         finally {
             agent.setObserver(undefined);
+            agent.setProgressListener(undefined);
         }
         try {
             this.saveSession(label, turn);
@@ -363,6 +366,7 @@ export class SidecarServer {
             workspace: config.workspace,
             model: config.model,
             messages,
+            unverifiedChangesPending: agent.hasUnverifiedChanges(),
             tokenStats: agent.getTokenStats(),
             ...(turn ? { status: lifecycleStatusForTurn(turn), lastTurn: turn } : {}),
         }, agent.getWorkspacePathIdentity());
@@ -377,7 +381,7 @@ export class SidecarServer {
         if (session.workspace && fs.existsSync(session.workspace))
             this.setWorkspace(session.workspace);
         this.sessionId = session.id;
-        this.app.getAgent().setMessages(session.messages);
+        this.app.getAgent().restoreSession(session.messages, session.unverifiedChangesPending);
         this.lastTurn = null;
         return { ok: true, message: `Resumed session ${session.id} (${session.messages.length} messages).` };
     }

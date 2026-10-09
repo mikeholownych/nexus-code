@@ -59,6 +59,7 @@ export class SessionManager {
             validationReceipts: session.validationReceipts || [],
             currentOperation: session.currentOperation || null,
             messages: session.messages || [],
+            ...(session.unverifiedChangesPending !== undefined ? { unverifiedChangesPending: session.unverifiedChangesPending } : {}),
             durableNotes: session.durableNotes,
             compactionProvenance: session.compactionProvenance,
             cognitiveRouting: session.cognitiveRouting,

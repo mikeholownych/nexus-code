@@ -168,6 +168,7 @@ export class ApplicationCore extends EventEmitter {
             status: lifecycleStatusForTurn(finalTurn),
             lastTurn: finalTurn,
             messages,
+            unverifiedChangesPending: this.agent.hasUnverifiedChanges(),
             tokenStats: this.agent.getTokenStats(),
             activePlan: durableState.activePlan,
             milestones: durableState.milestones,

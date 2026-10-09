@@ -89,7 +89,7 @@ export class InteractiveRepl {
                     this.agent.setWorkspace(sess.workspace);
                     this.checkpointManager = new CheckpointManager(sess.workspace);
                 }
-                this.agent.setMessages(sess.messages);
+                this.agent.restoreSession(sess.messages, sess.unverifiedChangesPending);
                 console.log(pc.green(`✔ Restored previous session ${pc.bold(sess.id)} (${sess.messages.length} messages)`));
             }
             else {
@@ -107,10 +107,13 @@ export class InteractiveRepl {
     async runInteractiveTurn(prompt, titlePrompt) {
         const label = titlePrompt ?? (typeof prompt === "string" ? prompt : "[multimodal]");
         let result;
+        // Work done so far, and changes still awaiting verification, survive the process ending mid-turn.
+        this.agent.setProgressListener(() => this.saveCurrentSession(label));
         try {
             result = await this.agent.runTurn(prompt, (tool, args) => this.confirmAction(tool, args));
         }
         finally {
+            this.agent.setProgressListener(undefined);
             // Persist even if the turn threw, so the transcript of work done so far is not lost.
             this.saveCurrentSession(label, this.agent.getLastTurnResult());
         }
@@ -128,6 +131,7 @@ export class InteractiveRepl {
             workspace: this.config.workspace,
             model: this.config.model,
             messages,
+            unverifiedChangesPending: this.agent.hasUnverifiedChanges(),
             tokenStats: this.agent.getTokenStats(),
             ...(turn ? { status: lifecycleStatusForTurn(turn), lastTurn: turn } : {}),
         }, this.agent.getWorkspacePathIdentity());
@@ -808,7 +812,7 @@ export class InteractiveRepl {
                                 this.config.workspace = sess.workspace;
                                 this.agent.setWorkspace(sess.workspace);
                             }
-                            this.agent.setMessages(sess.messages);
+                            this.agent.restoreSession(sess.messages, sess.unverifiedChangesPending);
                             console.log(pc.green(`✔ Resumed session ${pc.bold(sess.id)} (${sess.messages.length} messages loaded).\n`));
                         }
                         continue;

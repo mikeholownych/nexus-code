@@ -9,7 +9,8 @@ import * as path from "node:path";
 import { AutonomousAgent } from "../agent.js";
 import { LocalLlmClient, mayBindCredential, storedCredentialFor } from "../client.js";
 import { realRecoveryClock } from "./provider_recovery.js";
-import { ConvergenceScheduler } from "./operation.js";
+import { ConvergenceScheduler, unitBaseTask } from "./operation.js";
+import { redactForPersistence } from "./persistence_protection.js";
 import { ROLE_PROFILES } from "./roles.js";
 import { applyProviderCatalog, credentialFingerprint, ResourceRegistry, } from "./resources.js";
 import { DurableStateManager } from "./state.js";
@@ -409,6 +410,25 @@ export function resourcesFromConfig(config) {
     });
 }
 /**
+ * Why a recovered conversation cannot continue `unit`, or undefined when it holds the system prompt and a unit prompt
+ * Nexus issued with the authorized task (the first prompt, or a resume prompt where compaction kept only that). The
+ * task is matched before operator revisions (an earlier conversation predates them) and as persisted (redacted).
+ */
+function resumeHistoryProblem(messages, unit) {
+    if (messages.length === 0)
+        return "no conversation was recorded";
+    if (messages[0].role !== "system")
+        return "its recorded conversation has no system prompt";
+    const task = unitBaseTask(unit.prompt);
+    const forms = [task, redactForPersistence(task)];
+    const holdsTask = (m) => m.role === "user" && typeof m.content === "string" && m.content.startsWith("[Work unit ") && forms.some((f) => m.content.includes(f));
+    if (!messages.some(holdsTask))
+        return "its recorded conversation does not contain the unit's authorized task";
+    return undefined;
+}
+/** Nothing happened in the conversation yet (for example, its first prompt was withdrawn before inference). */
+const conversationNotStarted = (messages) => messages.length === 1 && messages[0].role === "system";
+/**
  * Runs a work unit as one truthful agent turn pinned to the chosen resource. The unit's conversation is its own
  * durable task, so a parked or rerouted unit resumes from its history (tools already run are not repeated) on
  * whichever qualified resource the scheduler picks next.
@@ -451,23 +471,63 @@ export class AgentWorkUnitExecutor {
         try {
             let prompt;
             if (unit.agentTaskId) {
-                const recovered = await agent.recoverFromTaskState(unit.agentTaskId);
-                if (recovered.interrupted) {
+                let recovered;
+                let unusable;
+                try {
+                    recovered = await agent.recoverFromTaskState(unit.agentTaskId);
+                }
+                catch (err) {
+                    unusable = `its durable state could not be loaded (${String(err?.message ?? err).slice(0, 160)})`;
+                }
+                if (recovered?.interrupted) {
                     const op = recovered.interruptedOperation;
+                    const what = op?.completedAt ? "finished, but its result was not saved before the process stopped" : "was in flight when the process stopped";
                     return {
                         kind: "failed",
                         cause: "INTERRUPTED",
-                        reason: `tool ${op?.toolName ?? "?"} was in flight when the process stopped`,
+                        reason: `tool ${op?.toolName ?? "?"} ${what}`,
                         question: `${unit.title}: tool '${op?.toolName ?? "?"}' may have partially run before Nexus stopped. Inspect and continue, or stop?`,
                         options: [{ label: "continue after inspection", action: { kind: "retry" } }],
                     };
                 }
+                // Only a record that tracks obligations can show that nothing happened; without one, earlier work is unknown.
+                const notStarted = !unusable && recovered?.state.unverifiedChangesPending !== undefined && conversationNotStarted(agent.getMessages());
+                if (!notStarted)
+                    unusable ??= resumeHistoryProblem(agent.getMessages(), unit);
                 const decision = ctx.operatorDecision
                     ? `The operator decided: ${ctx.operatorDecision.label}${ctx.operatorDecision.note ? ` — ${ctx.operatorDecision.note}` : ""}.\n`
                     : "";
-                prompt =
-                    `[Work unit resumed on ${resource.id} (${resource.model}) after: ${ctx.resumeReason ?? "a resource change"}]\n${decision}` +
-                        `Your earlier progress on this unit is above; tools that already ran are not repeated. Continue the unit and call task_completed with a concise summary when done.`;
+                if (unusable) {
+                    // A partial record is never continued or taken as evidence; only the operator can start the unit over.
+                    if (!ctx.operatorDecision?.restart) {
+                        return {
+                            kind: "failed",
+                            cause: "INTERRUPTED",
+                            reason: `durable history unusable: ${unusable}`,
+                            question: `${unit.title} cannot be resumed: ${unusable}. Restart it from its authorized task (its earlier progress is lost, and changes it may have made stay unverified), or stop?`,
+                            options: [{ label: "restart the unit from its authorized task", action: { kind: "retry", restart: true } }],
+                        };
+                    }
+                    // Without a recorded obligation (state unloadable, or written before obligations were recorded) earlier
+                    // changes are unknown, so they count as unverified.
+                    agent.restartConversation(!recovered || recovered.state.unverifiedChangesPending === undefined);
+                    prompt =
+                        `${this.initialPrompt(unit, ctx)}\n\n${decision}` +
+                            `Note: an earlier attempt at this unit ran, but its record was lost (${unusable}). Workspace changes it may have made are unknown and unverified; check the workspace before relying on it.`;
+                }
+                else if (notStarted) {
+                    prompt = `${this.initialPrompt(unit, ctx)}${decision ? `\n\n${decision}` : ""}`;
+                }
+                else {
+                    const op = recovered?.state.currentOperation;
+                    const stopped = op?.status === "interrupted"
+                        ? `Nexus stopped while ${op.toolName} ${op.argsSummary ?? ""} was running or before its result was saved; it may have partially run. Check its effects before relying on them.\n`
+                        : "";
+                    prompt =
+                        `[Work unit resumed on ${resource.id} (${resource.model}) after: ${ctx.resumeReason ?? "a resource change"}]\n${decision}` +
+                            `The unit's authorized task, which remains its only objective:\n${unit.prompt}\n${stopped}` +
+                            `Your earlier progress on this unit is above; tools that already ran are not repeated. Continue the unit and call task_completed with a concise summary when done.`;
+                }
             }
             else {
                 prompt = this.initialPrompt(unit, ctx);

@@ -23,7 +23,7 @@ export function credentialOriginOf(endpoint) {
 function readConfigEnv() {
     const out = {};
     try {
-        for (const line of fs.readFileSync(path.join(os.homedir(), ".config/nexus/config.env"), "utf-8").split("\n")) {
+        for (const line of fs.readFileSync(path.join(credentialStorageHome(), ".config/nexus/config.env"), "utf-8").split("\n")) {
             const m = /^([A-Z0-9_]+)=(.*)$/.exec(line.trim());
             if (m)
                 out[m[1]] = m[2].trim();
@@ -34,7 +34,7 @@ function readConfigEnv() {
 }
 function readGatewayTokenFile() {
     try {
-        return fs.readFileSync(path.join(os.homedir(), ".config/opencode/t5820-client-token"), "utf-8").trim() || undefined;
+        return fs.readFileSync(path.join(credentialStorageHome(), ".config/opencode/t5820-client-token"), "utf-8").trim() || undefined;
     }
     catch {
         return undefined;
@@ -47,8 +47,18 @@ function readGatewayTokenFile() {
  * Undefined until loadEnvironment() records it; until then nothing but the operator has written process.env.
  */
 let credentialAuthority;
-export function setCredentialAuthority(settings) {
+/**
+ * The operator's home directory as resolved when the authority was recorded: the stored credentials (config.env, the
+ * gateway token file) are read from there, never from a HOME that an env file set later.
+ */
+let credentialHome;
+export function setCredentialAuthority(settings, operatorHome = os.homedir()) {
     credentialAuthority = Object.freeze({ ...settings });
+    credentialHome = operatorHome;
+}
+/** Where the operator's stored credentials live (the live home only before any authority is recorded). */
+export function credentialStorageHome() {
+    return credentialHome ?? os.homedir();
 }
 function authoritySetting(key) {
     return (credentialAuthority ? credentialAuthority[key] : process.env[key])?.trim() || undefined;

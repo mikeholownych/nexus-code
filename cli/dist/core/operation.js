@@ -1,3 +1,10 @@
+/** Separates a unit's task from the operator revisions appended to it. */
+const REVISION_MARKER = "\n\nOperator revision: ";
+/** The task a unit was given before any operator revision (its conversation began with this). */
+export function unitBaseTask(prompt) {
+    const at = prompt.indexOf(REVISION_MARKER);
+    return at < 0 ? prompt : prompt.slice(0, at);
+}
 export const DEFAULT_OPERATION_POLICY = {
     maxWaitMs: 12 * 60 * 60_000,
     unknownResumeBudget: 2,
@@ -335,7 +342,7 @@ export class ConvergenceScheduler {
                 u.status = "RUNNABLE";
                 break;
             case "revise":
-                u.prompt = `${u.prompt}\n\nOperator revision: ${text}`;
+                u.prompt = `${u.prompt}${REVISION_MARKER}${text}`;
                 u.runsBase = u.runs;
                 u.status = "RUNNABLE";
                 break;
@@ -345,8 +352,9 @@ export class ConvergenceScheduler {
             case "cancel_operation":
                 break;
         }
-        if (action.kind !== "drop" && action.kind !== "cancel_operation")
-            u.pendingDecision = { label: option.label, ...(text ? { note: text } : {}) };
+        if (action.kind !== "drop" && action.kind !== "cancel_operation") {
+            u.pendingDecision = { label: option.label, ...(text ? { note: text } : {}), ...(action.kind === "retry" && action.restart ? { restart: true } : {}) };
+        }
         this.emit("DECISION_APPLIED", `${u.title}: operator chose "${option.label}"${text ? ` (${text})` : ""}.`, {
             unitId: u.id,
             detail: { decisionId, optionId, action },
