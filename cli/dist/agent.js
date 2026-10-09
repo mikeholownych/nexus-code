@@ -68,6 +68,14 @@ const VERBOSE_NOTE_CHEAP_LIMIT = 512;
 const DETAIL_ELISION = "[Some verbose source detail elided to honor the detail budget; that content is no longer in this conversation. Rerun the tool that produced it if you need it.]";
 const DETAIL_TRUNCATION = "\n…#(truncated to detail budget; the rest is no longer in this conversation, rerun the tool to see it)";
 const REMOVED_OBSERVATION = "Output no longer in context (rerun to see it again): ";
+function unseenTruncationNotice(shown, total) {
+    return `\n[Nexus: output truncated to fit the context window; showed the first ${shown} of ${total} characters. The rest was not shown to you, so do not assume what it contains. Note what you learned from this part, then inspect the specific parts you still need with narrower calls (outline_file, search_code, find_files) instead of repeating this one.]`;
+}
+// Only a well-formed trailing notice marks a truncated result; file text that quotes the template does not.
+const UNSEEN_TRUNCATION = /\n\[Nexus: output truncated to fit the context window; showed the first \d+ of \d+ characters\.[^\]\n]*\]$/;
+function isTruncatedObservation(message) {
+    return message.role === "tool" && UNSEEN_TRUNCATION.test(normalizeMessageContent(message.content).text.join(""));
+}
 /** Identity of a tool observation: the same tool with the same arguments reacquires it. */
 function observationKey(name, rawArgs) {
     let args = rawArgs;
@@ -101,9 +109,10 @@ function collectRecordedRemovals(text, out) {
             collectRecordedRemovals(note.slice("Earlier system message: ".length), out);
     }
 }
-/** Observations whose output is present verbatim as a tool message. */
-function presentObservations(messages) {
+/** Observations whose output is present in full as a tool message, and those present only truncated. */
+function observationPresence(messages) {
     const present = new Set();
+    const truncated = new Set();
     const callKeys = new Map();
     for (const message of messages) {
         if (message.role === "assistant") {
@@ -115,19 +124,26 @@ function presentObservations(messages) {
         if (message.role === "tool" && typeof message.tool_call_id === "string") {
             const key = callKeys.get(message.tool_call_id);
             if (key)
-                present.add(key);
+                (isTruncatedObservation(message) ? truncated : present).add(key);
         }
     }
-    return present;
+    for (const key of present)
+        truncated.delete(key);
+    return { present, truncated };
 }
-/** Observations a restored conversation records as removed whose output is not present in it again. */
+/** Observations whose output is present in full as a tool message. */
+function presentObservations(messages) {
+    return observationPresence(messages).present;
+}
+/** Observations a restored conversation records as removed, or carries only truncated, whose full output is not present in it again. */
 function unreacquiredRemovals(messages) {
-    const removed = new Set();
+    const { present, truncated } = observationPresence(messages);
+    const removed = new Set(truncated);
     for (const message of messages) {
         if (message.role === "system")
             collectRecordedRemovals(normalizeMessageContent(message.content).text.join(""), removed);
     }
-    for (const key of presentObservations(messages))
+    for (const key of present)
         removed.delete(key);
     return removed;
 }
@@ -186,8 +202,10 @@ function applyDetailBudget(notes, detailBudgetChars) {
             remaining = Math.max(0, remaining - item.note.length);
         }
     }
+    // The model's own analysis cannot be reacquired by rerunning a tool, so it is budgeted before raw tool output.
+    const isAnalysis = (note) => note.startsWith("Earlier assistant message: ");
     if (remaining > 0) {
-        for (const item of [...large].reverse()) {
+        for (const item of [...large.filter(({ note }) => isAnalysis(note)).reverse(), ...large.filter(({ note }) => !isAnalysis(note)).reverse()]) {
             if (remaining <= 0)
                 break;
             retained.set(item.index, remaining >= item.note.length ? item.note : `${item.note.slice(0, remaining)}${DETAIL_TRUNCATION}`);
@@ -1040,6 +1058,8 @@ export class AutonomousAgent {
             keys.add(key);
             observationNotes.set(note, keys);
         };
+        // Observations whose output was truncated before the model saw it: never fully observed, whatever note survives.
+        const partialObservations = new Set();
         const toolCallCounts = new Map();
         const toolResultCounts = new Map();
         const priorTasks = [];
@@ -1203,7 +1223,10 @@ export class AutonomousAgent {
             if (message.role === "tool") {
                 const id = typeof message.tool_call_id === "string" && message.tool_call_id.trim() ? message.tool_call_id : undefined;
                 const key = id ? callKeys.get(id) : undefined;
-                if (key && contentText.length && !contentText.startsWith("Error executing ")) {
+                if (key && isTruncatedObservation(message)) {
+                    partialObservations.add(key);
+                }
+                else if (key && contentText.length && !contentText.startsWith("Error executing ")) {
                     carriesObservation(`Earlier ${message.name || "tool"} output: ${contentText}`, key);
                 }
                 const reconstructibleCall = id ? reconstructibleCalls.get(id) : undefined;
@@ -1242,6 +1265,8 @@ export class AutonomousAgent {
                     dropped.add(key);
             }
         }
+        for (const key of partialObservations)
+            dropped.add(key);
         for (const [, key] of retainedObservations)
             dropped.delete(key);
         const removedObservations = Array.from(dropped);
@@ -1313,8 +1338,19 @@ export class AutonomousAgent {
     compactedMessages(source, recentToolTurns, detailBudgetChars) {
         return this.compactionCandidate(source, recentToolTurns, detailBudgetChars).messages;
     }
-    /** A compacted conversation and the tool observations whose output it no longer carries anywhere. */
-    compactionCandidate(source, recentToolTurns, detailBudgetChars) {
+    /** Indices of the tool results after the last assistant message, when that message called tools: output the model has not seen yet. */
+    unseenToolResults(source) {
+        const lastAssistant = source.map((message) => message.role).lastIndexOf("assistant");
+        if (lastAssistant < 0 || !source[lastAssistant].tool_calls?.length)
+            return [];
+        return source.map((message, index) => index > lastAssistant && message.role === "tool" ? index : -1).filter((index) => index >= 0);
+    }
+    /**
+     * A compacted conversation and the tool observations whose output it no longer carries in full.
+     * With `unseenOutputChars`, the latest tool turn is kept and its not-yet-seen string results are cut to that many
+     * characters in total (shortest kept whole first), each cut marked as truncated and counted as removed.
+     */
+    compactionCandidate(source, recentToolTurns, detailBudgetChars, unseenOutputChars) {
         const system = source[0];
         const currentUserIndex = source.map((message, index) => message.role === "user" ? index : -1).filter((index) => index >= 0).at(-1);
         const toolTurnStarts = source
@@ -1346,10 +1382,27 @@ export class AutonomousAgent {
             selected.set(item.index, item.message);
         if (currentUserIndex !== undefined)
             selected.set(currentUserIndex, source[currentUserIndex]);
+        if (unseenOutputChars !== undefined) {
+            const unseen = this.unseenToolResults(source)
+                .filter((index) => selected.has(index) && typeof source[index].content === "string" && !retainedOriginalContent.has(index))
+                .map((index) => ({ index, text: source[index].content }))
+                .sort((left, right) => left.text.length - right.text.length);
+            let remaining = Math.max(0, Math.floor(unseenOutputChars));
+            unseen.forEach(({ index, text }, position) => {
+                const share = Math.min(text.length, Math.floor(remaining / (unseen.length - position)));
+                remaining -= share;
+                if (share < text.length)
+                    selected.set(index, { ...source[index], content: `${text.slice(0, share)}${unseenTruncationNotice(share, text.length)}` });
+            });
+        }
         for (const [index, message] of Array.from(selected.entries()).sort((left, right) => left[0] - right[0]))
             compacted.push(message);
-        const kept = presentObservations(compacted);
-        return { messages: compacted, removedObservations: messagesToSummarize.length ? summary.removedObservations.filter((key) => !kept.has(key)) : [] };
+        const { present: kept, truncated } = observationPresence(compacted);
+        const removed = messagesToSummarize.length ? summary.removedObservations.filter((key) => !kept.has(key)) : [];
+        for (const key of truncated)
+            if (!removed.includes(key))
+                removed.push(key);
+        return { messages: compacted, removedObservations: removed };
     }
     admitContext(step, requestId) {
         const contextLimit = this.config.contextLimit || 65536;
@@ -1379,19 +1432,42 @@ export class AutonomousAgent {
             // detail budget, so each re-compaction is strictly stronger than the last.
             const recentTurnsList = compactionAttempts >= 2 ? [1, 0] : [2, 1, 0];
             const detailBudgetList = compactionAttempts >= 2 ? [3000, 1200, 400, 0] : [6000, 3000, 1200, 400, 0];
+            const accept = (candidate, truncatedUnseen = false) => {
+                const candidateBudget = calculateContextBudget(candidate.messages, this.getEffectiveTools(), contextLimit);
+                if (!isContextAdmissible(candidateBudget.totalActiveTokens, contextLimit, reserves.completion, reserves.toolResponse))
+                    return false;
+                this.messages = candidate.messages;
+                for (const key of candidate.removedObservations)
+                    this.turnRemovedObservations.add(key);
+                budget = candidateBudget;
+                if (!process.stdout.isTTY || process.env.NEXUS_DEBUG === "1") {
+                    console.log(`[context_admission] step=${step} request_id=${requestId} state=auto_compacted attempts=${compactionAttempts} estimated_tokens=${budget.totalActiveTokens} completion_reserve=${reserves.completion} tool_response_reserve=${reserves.toolResponse} limit=${contextLimit} compacted=${compacted} messages=${this.messages.length}${truncatedUnseen ? " unseen_output=truncated" : ""}`);
+                }
+                return true;
+            };
+            const unseen = this.unseenToolResults(original);
             for (const recentTurns of recentTurnsList) {
-                for (const detailBudgetChars of detailBudgetList) {
-                    const { messages: candidate, removedObservations } = this.compactionCandidate(original, recentTurns, detailBudgetChars);
-                    const candidateBudget = calculateContextBudget(candidate, this.getEffectiveTools(), contextLimit);
-                    if (isContextAdmissible(candidateBudget.totalActiveTokens, contextLimit, reserves.completion, reserves.toolResponse)) {
-                        this.messages = candidate;
-                        for (const key of removedObservations)
-                            this.turnRemovedObservations.add(key);
-                        budget = candidateBudget;
-                        accepted = true;
-                        if (!process.stdout.isTTY || process.env.NEXUS_DEBUG === "1") {
-                            console.log(`[context_admission] step=${step} request_id=${requestId} state=auto_compacted attempts=${compactionAttempts} estimated_tokens=${budget.totalActiveTokens} completion_reserve=${reserves.completion} tool_response_reserve=${reserves.toolResponse} limit=${contextLimit} compacted=${compacted} messages=${this.messages.length}`);
+                // Summarizing away results the model has not seen yet makes it repeat the same calls; keep them, truncated, first.
+                if (recentTurns === 0 && unseen.length) {
+                    const unseenText = unseen.map((index) => normalizeMessageContent(original[index].content).text.join("")).join("");
+                    const tokensPerChar = unseenText.length ? Math.max(countTokens(unseenText) / unseenText.length, 0.05) : 1;
+                    for (const detailBudgetChars of detailBudgetList) {
+                        const floor = this.compactionCandidate(original, 1, detailBudgetChars, 0);
+                        const room = contextLimit - reserves.completion - reserves.toolResponse - calculateContextBudget(floor.messages, this.getEffectiveTools(), contextLimit).totalActiveTokens;
+                        if (room <= 0)
+                            continue;
+                        for (let chars = Math.floor(room / tokensPerChar), tries = 0; tries < 4 && !accepted; chars = Math.floor(chars * 0.75), tries++) {
+                            accepted = accept(this.compactionCandidate(original, 1, detailBudgetChars, chars), true);
                         }
+                        if (accepted)
+                            break;
+                    }
+                    if (accepted)
+                        break;
+                }
+                for (const detailBudgetChars of detailBudgetList) {
+                    if (accept(this.compactionCandidate(original, recentTurns, detailBudgetChars))) {
+                        accepted = true;
                         break;
                     }
                 }
@@ -1508,6 +1584,7 @@ ${rulesSection}${skillsSection}${knowledgeSection}
 5. VERIFICATION: After making code changes, use \`run_command\` with bash/zsh commands to run tests, builds, or linting (e.g. \`cargo check\`, \`cargo test\`, \`npm test\`, \`pytest\`).
 6. SELF-CORRECTION: If a command or tool returns an error, analyze the error message, identify the root cause, and fix it.
 7. AUTONOMOUS COMPLETION: Keep executing tools until the entire task is thoroughly resolved. When everything is verified and done, invoke \`task_completed\` with a detailed summary.
+8. BOUNDED CONTEXT: Your context window is limited, and earlier tool output is compacted out of the conversation as you work; your own messages are what carry forward. After inspecting evidence, state the findings you will rely on (with file and symbol references) in your reply before moving on. Re-read earlier output only when you need a specific detail you did not record or it may have changed.
 ${fewShotSection}${tddSection}
 Always explain your reasoning before or alongside your tool calls.`;
     }
