@@ -175,6 +175,7 @@ const REMOVAL_PREFIXES = [REMOVED_OBSERVATION, REMOVED_UNSEEN, REMOVED_PARTIAL, 
 
 // Model-written findings captured from inspected output before compaction removes it. Claims, not evidence.
 const FINDINGS_PREFIX = "Findings recorded from inspected output [";
+const FINDINGS_LABEL = "; model-written, not independent proof]";
 const FINDINGS_NOTE_LIMIT = 3_000;
 const FINDINGS_BUDGET_CHARS = 24_000;
 const FINDINGS_ELISION = "[Older recorded findings elided to bound this memory.]";
@@ -277,7 +278,7 @@ function recordedFindings(text: string): string[] {
   }
   if (!Array.isArray(notes)) return [];
   return notes.flatMap((note) => typeof note !== "string" ? []
-    : note.startsWith(FINDINGS_PREFIX) ? [note]
+    : note.startsWith(FINDINGS_PREFIX) && note.split("\n", 1)[0].endsWith(FINDINGS_LABEL) ? [note]
     : note.startsWith("Earlier system message: ") ? recordedFindings(note.slice("Earlier system message: ".length))
     : []);
 }
