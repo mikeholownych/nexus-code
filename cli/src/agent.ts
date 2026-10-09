@@ -179,8 +179,8 @@ const FINDINGS_LABEL = "; model-written, not independent proof]";
 const FINDINGS_NOTE_LIMIT = 3_000;
 const FINDINGS_BUDGET_CHARS = 24_000;
 const FINDINGS_ELISION = "[Older recorded findings elided to bound this memory.]";
-const FINDINGS_CONSOLIDATED_LIMIT = 6_000;
-const FINDINGS_CONSOLIDATION_INSTRUCTIONS = "You keep the working notes of an autonomous software-engineering agent. The notes below are its earlier recorded findings, oldest first; they no longer fit its memory and must be merged into one shorter note. Keep, for the agent's current request, every concrete established fact (file paths, symbol names, line numbers, anything shown to be missing or inconsistent) and which areas were already examined; drop repetition. Do not add facts, speculate, plan, or restate the request. Plain text, at most 600 words.";
+const FINDINGS_SHORT_CHARS = 400;
+const FINDINGS_SHORTENED = " …[shortened to fit this memory]";
 const FINDINGS_INSTRUCTIONS = "You keep the working notes of an autonomous software-engineering agent. The tool output below is about to be removed from the agent's context window. Record, for the agent's current request, what this output actually shows: concrete facts with file paths, symbol names and line numbers, and anything it shows to be missing or inconsistent. State only what the output itself shows; do not speculate, plan, or restate the request. If the output is irrelevant to the request, say so in one line. Plain text, at most 250 words.";
 
 function unseenTruncationNotice(shown: number, total: number): string {
@@ -265,6 +265,17 @@ const RERUN_NOTICE = /^\[Nexus: you ran this same call before;[^\]]*\]\n/;
 /** Content identity of a tool output, to tell whether a re-run returned what was inspected before. */
 function outputDigest(text: string): string {
   return createHash("sha256").update(text).digest("hex");
+}
+
+/** A findings note cut to its header and the start of its text (at a sentence end where one is near), marked as cut. */
+function shortenedFinding(note: string): string {
+  const newline = note.indexOf("\n");
+  const body = newline < 0 ? "" : note.slice(newline + 1);
+  if (body.length <= FINDINGS_SHORT_CHARS || body.endsWith(FINDINGS_SHORTENED)) return note;
+  let cut = body.slice(0, FINDINGS_SHORT_CHARS);
+  const sentence = cut.lastIndexOf(". ");
+  if (sentence > FINDINGS_SHORT_CHARS / 2) cut = cut.slice(0, sentence + 1);
+  return `${note.slice(0, newline)}\n${cut}${FINDINGS_SHORTENED}`;
 }
 
 /** Findings notes of a serialized durable record, including records nested in it as opaque system text. */
@@ -515,8 +526,6 @@ export class AutonomousAgent {
   private carriedRemovedObservations = new Set<string>();
   // Findings the model recorded from inspected output just before compaction removed it, and those observations.
   private findingNotes: string[] = [];
-  /** Finding notes a consolidation replaced; earlier durable records still carry them. */
-  private mergedFindingNotes = new Set<string>();
   /** Observations whose findings were recorded: the step they were recorded at and the digest of the output they came from. */
   private distilledObservations = new Map<string, { step: number; digest?: string }>();
   /** Provider recovery bounds; undefined reads LOCAL_LLM_RECOVERY_* at each turn. */
@@ -856,7 +865,6 @@ export class AutonomousAgent {
     this.activePlan = state.activePlan || [];
     this.messages = state.messages || [];
     this.findingNotes = [];
-    this.mergedFindingNotes = new Set();
     this.distilledObservations = new Map();
     const unsettled = this.settleUnrecordedToolCalls();
     // Resumed work is the same unit: what compaction removed before the restart is still not in context.
@@ -1081,7 +1089,6 @@ export class AutonomousAgent {
   public restoreSession(msgs: ChatMessage[], unverifiedChangesPending?: boolean): void {
     this.messages = [...msgs];
     this.findingNotes = [];
-    this.mergedFindingNotes = new Set();
     this.distilledObservations = new Map();
     const unsettled = this.settleUnrecordedToolCalls();
     const pending = (unverifiedChangesPending ?? true) || unsettled.some((tool) => this.mayWrite(tool));
@@ -1172,7 +1179,6 @@ export class AutonomousAgent {
 
   public resetConversation(): void {
     this.findingNotes = [];
-    this.mergedFindingNotes = new Set();
     this.distilledObservations = new Map();
     this.messages = [
       {
@@ -1486,11 +1492,26 @@ export class AutonomousAgent {
     }
 
     for (const note of this.findingNotes) addDurableNote(note);
-    for (let index = durableNotes.length - 1; index >= 0; index--) if (this.mergedFindingNotes.has(durableNotes[index])) durableNotes.splice(index, 1);
-    const findings = durableNotes.filter((note) => note.startsWith(FINDINGS_PREFIX));
-    let findingsChars = findings.reduce((total, note) => total + note.length, 0);
-    for (const note of findings) {
-      if (findingsChars <= this.findingsBudgetChars()) break;
+    // One version of each finding (an earlier record may carry it shortened), then fit them to their budget: shorten
+    // the oldest first, so every finding keeps its sources and the start of what it established; drop whole ones last.
+    const findingHeader = (note: string) => note.split("\n", 1)[0];
+    const fullest = new Map<string, string>();
+    for (const note of durableNotes) {
+      if (note.startsWith(FINDINGS_PREFIX) && note.length > (fullest.get(findingHeader(note))?.length ?? -1)) fullest.set(findingHeader(note), note);
+    }
+    for (let index = durableNotes.length - 1; index >= 0; index--) {
+      if (durableNotes[index].startsWith(FINDINGS_PREFIX) && fullest.get(findingHeader(durableNotes[index])) !== durableNotes[index]) durableNotes.splice(index, 1);
+    }
+    const findingsBudget = this.findingsBudgetChars();
+    let findingsChars = durableNotes.reduce((total, note) => total + (note.startsWith(FINDINGS_PREFIX) ? note.length : 0), 0);
+    for (const note of durableNotes.filter((candidate) => candidate.startsWith(FINDINGS_PREFIX))) {
+      if (findingsChars <= findingsBudget) break;
+      const shortened = shortenedFinding(note);
+      durableNotes[durableNotes.indexOf(note)] = shortened;
+      findingsChars -= note.length - shortened.length;
+    }
+    for (const note of durableNotes.filter((candidate) => candidate.startsWith(FINDINGS_PREFIX))) {
+      if (findingsChars <= findingsBudget) break;
       durableNotes.splice(durableNotes.indexOf(note), 1, ...(durableNotes.includes(FINDINGS_ELISION) ? [] : [FINDINGS_ELISION]));
       findingsChars -= note.length;
     }
@@ -1770,49 +1791,7 @@ export class AutonomousAgent {
       for (const item of group) this.distilledObservations.set(item.key, { step, digest: item.digest });
       recorded = true;
     }
-    if (recorded) await this.consolidateFindings(client, step, request, signal);
     return recorded;
-  }
-
-  /**
-   * Keeps recorded findings within their budget (`findingsBudgetChars`) without dropping what they established: once they exceed it,
-   * the model merges the oldest notes (at least half the budget) into one labelled note in their place. When that
-   * yields nothing, the notes are left as they are and the durable record elides the oldest ones.
-   */
-  private async consolidateFindings(client: LocalLlmClient, step: number, request: string, signal?: AbortSignal): Promise<void> {
-    const total = this.findingNotes.reduce((chars, note) => chars + note.length, 0);
-    const budget = this.findingsBudgetChars();
-    if (total <= budget || this.findingNotes.length < 2 || signal?.aborted) return;
-    let count = 0;
-    let chars = 0;
-    while (count < this.findingNotes.length - 1 && (count < 2 || chars < budget / 2)) chars += this.findingNotes[count++].length;
-    const oldest = this.findingNotes.slice(0, count);
-    const prompt: ChatMessage[] = [
-      { role: "system", content: FINDINGS_CONSOLIDATION_INSTRUCTIONS },
-      { role: "user", content: `Current request:\n${request}\n\nEarlier findings notes, oldest first:\n\n${oldest.join("\n\n")}` },
-    ];
-    let text = "";
-    try {
-      const res = await client.chatCompletion(prompt, [], randomUUID(), signal);
-      text = typeof res.content === "string" ? res.content.trim() : "";
-      this.totalTokens.prompt += calculateContextBudget(prompt, [], this.config.contextLimit || 65536).totalActiveTokens;
-      this.totalTokens.completion += countTokens(text);
-      this.totalTokens.total = this.totalTokens.prompt + this.totalTokens.completion;
-    } catch {
-      text = "";
-    }
-    if (!process.stdout.isTTY || process.env.NEXUS_DEBUG === "1") {
-      console.log(`[context_findings] step=${step} consolidated=${count} recorded=${text ? "yes" : "no"} chars=${text.length}`);
-    }
-    if (!text) return;
-    const header = (note: string) => /^\[steps? (\d+)(?:-\d+)?; (?:from|consolidated from \d+ notes on) (.*?); model-written, not independent proof\]/.exec(note.slice(FINDINGS_PREFIX.length - 1));
-    const firstStep = header(oldest[0])?.[1] ?? "?";
-    const lastStep = /^\[steps? (?:\d+-)?(\d+);/.exec(oldest[count - 1].slice(FINDINGS_PREFIX.length - 1))?.[1] ?? "?";
-    let sources = oldest.map((note) => header(note)?.[2]).filter(Boolean).join("; ");
-    if (sources.length > 1_500) sources = `${sources.slice(0, 1_500)} …`;
-    const clipped = text.length > FINDINGS_CONSOLIDATED_LIMIT ? `${text.slice(0, FINDINGS_CONSOLIDATED_LIMIT)} …[clipped]` : text;
-    for (const note of oldest) this.mergedFindingNotes.add(note);
-    this.findingNotes.splice(0, count, `${FINDINGS_PREFIX}steps ${firstStep}-${lastStep}; consolidated from ${count} notes on ${sources}; model-written, not independent proof]\n${clipped}`);
   }
 
   /**
