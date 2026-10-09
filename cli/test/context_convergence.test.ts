@@ -1,0 +1,326 @@
+/**
+ * Context-compaction convergence: a batch of tool results too large to fit was compacted away before the model
+ * ever saw it, so the model re-issued the same batch every few steps and never progressed (dogfood run_4fb9da8:
+ * 30 steps, an 8-call reacquisition cycle x10, no artifact).
+ *
+ *   A  continuity: the objective and the model's recorded findings survive compaction, nothing is fabricated, and
+ *      the investigation is not restarted.
+ *   B  reacquisition: unseen output is shown (truncated, marked) instead of dropped, so nothing is re-read just
+ *      because of compaction; a truncated result is never treated as fully observed.
+ *   C  verification and authority: compaction between a mutation and completion keeps the verification
+ *      obligation, completion is never NOT_REQUIRED, dependents stay blocked, and no authority is broadened.
+ *
+ * Real AutonomousAgent turns and real tools against a local scripted OpenAI-compatible gateway.
+ */
+import { test, describe } from "node:test";
+import assert from "node:assert/strict";
+import fs from "node:fs";
+import http from "node:http";
+import os from "node:os";
+import path from "node:path";
+import { execSync } from "node:child_process";
+import { AutonomousAgent } from "../src/agent.js";
+import { newOperation } from "../src/core/operation.js";
+import { AgentWorkUnitExecutor, driveOperation, OperationStore } from "../src/core/operation_runner.js";
+import type { ResourceDescriptor } from "../src/core/resources.js";
+import { DurableStateManager } from "../src/core/state.js";
+import { turnSucceeded } from "../src/core/turn.js";
+import type { HarnessConfig } from "../src/types.js";
+
+type Call = { name: string; args: unknown };
+type Reply = { content?: string; tools: Call[] } | { text: string };
+interface Req { n: number; body: any }
+interface Gw { url: string; origin: string; requests: Req[]; issued: Call[]; close(): Promise<void> }
+
+async function gateway(script: (req: Req) => Reply): Promise<Gw> {
+  const gw: Gw = { url: "", origin: "", requests: [], issued: [], close: async () => {} };
+  let ids = 0;
+  const server = http.createServer((req, res) => {
+    if (req.url?.endsWith("/models")) {
+      res.setHeader("content-type", "application/json");
+      return void res.end('{"data":[{"id":"m"}]}');
+    }
+    let raw = "";
+    req.on("data", (c) => (raw += c));
+    req.on("end", () => {
+      let body: any = {};
+      try { body = JSON.parse(raw); } catch {}
+      const r: Req = { n: gw.requests.length + 1, body };
+      gw.requests.push(r);
+      const reply = script(r);
+      if ("tools" in reply) gw.issued.push(...reply.tools);
+      const calls = "tools" in reply
+        ? reply.tools.map((c, index) => ({ index, id: `call_${++ids}`, type: "function", function: { name: c.name, arguments: JSON.stringify(c.args) } }))
+        : undefined;
+      const content = "tools" in reply ? reply.content ?? null : reply.text;
+      if (!body.stream) {
+        res.setHeader("content-type", "application/json");
+        return void res.end(JSON.stringify({ choices: [{ index: 0, message: { role: "assistant", content, tool_calls: calls }, finish_reason: calls ? "tool_calls" : "stop" }] }));
+      }
+      res.writeHead(200, { "content-type": "text/event-stream" });
+      const delta = { ...(content ? { content } : {}), ...(calls ? { tool_calls: calls } : {}) };
+      res.end(`data: ${JSON.stringify({ choices: [{ index: 0, delta, finish_reason: calls ? "tool_calls" : "stop" }] })}\n\ndata: [DONE]\n\n`);
+    });
+  });
+  await new Promise<void>((r) => server.listen(0, "127.0.0.1", () => r()));
+  gw.url = `http://127.0.0.1:${(server.address() as any).port}/v1`;
+  gw.origin = new URL(gw.url).origin;
+  gw.close = () => new Promise<void>((r) => { server.closeAllConnections(); server.close(() => r()); });
+  return gw;
+}
+
+const allText = (body: any): string => (body.messages ?? []).map((m: any) => (typeof m.content === "string" ? m.content : JSON.stringify(m.content ?? ""))).join("\n");
+const read = (file: string): Call => ({ name: "read_file", args: { path: file } });
+const done = (summary: string): Call => ({ name: "task_completed", args: { summary } });
+
+const MARKERS: Record<string, string> = { "a.txt": "copper-falcon", "b.txt": "silent-orchard", "c.txt": "amber-lattice", "d.txt": "north-quarry" };
+const BATCH = ["a.txt", "b.txt", "c.txt"];
+
+/** ~25 KB of filler behind a marker line: three of these cannot fit beside the system prompt at a 40k limit. */
+function bigFile(file: string): string {
+  let out = `MARKER ${file}: ${MARKERS[file]}\n`;
+  for (let i = 0; out.length < 24_800; i++) out += `record ${file}.${String(i).padStart(3, "0")} value=${(i * 7919) % 100000} status=ok note=filler text to occupy context budget\n`;
+  return out;
+}
+const visible = (body: any, file: string): boolean => allText(body).includes(`MARKER ${file}: ${MARKERS[file]}`);
+
+const GATEWAY_KEYS = ["HOME", "LOCAL_LLM_ENDPOINT", "LOCAL_LLM_API_KEY", "LOCAL_LLM_CREDENTIAL_ORIGINS", "LOCAL_LLM_FALLBACK_ENDPOINTS"];
+
+async function isolated<T>(fn: (repo: string) => Promise<T>): Promise<T> {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-cc-home-"));
+  const repo = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-cc-"));
+  for (const file of Object.keys(MARKERS)) fs.writeFileSync(path.join(repo, file), bigFile(file));
+  execSync("git init -q && git config user.name t && git config user.email t@t.invalid && git add . && git commit -qm base", { cwd: repo, stdio: "ignore" });
+  const saved = Object.fromEntries(GATEWAY_KEYS.map((k) => [k, process.env[k]]));
+  for (const k of GATEWAY_KEYS) delete process.env[k];
+  process.env.HOME = home;
+  try {
+    return await fn(repo);
+  } finally {
+    for (const k of GATEWAY_KEYS) {
+      if (saved[k] === undefined) delete process.env[k];
+      else process.env[k] = saved[k];
+    }
+    fs.rmSync(home, { recursive: true, force: true });
+    fs.rmSync(repo, { recursive: true, force: true });
+  }
+}
+
+function quiet(agent: AutonomousAgent): AutonomousAgent {
+  (agent as any).ui = new Proxy({}, { get: () => () => {} });
+  return agent;
+}
+
+async function muted<T>(fn: () => Promise<T>, admissions?: string[]): Promise<T> {
+  const log = console.log;
+  console.log = (...a: any[]) => { const s = String(a[0]); if (admissions && s.startsWith("[context_admission]")) admissions.push(s); };
+  try {
+    return await fn();
+  } finally {
+    console.log = log;
+  }
+}
+
+const cfg = (gw: Gw, workspace: string, o: Partial<HarnessConfig> = {}): HarnessConfig =>
+  ({ endpoint: gw.url, model: "m", maxSteps: 8, temperature: 0, workspace, shell: "bash", contextLimit: 40_000, ...o });
+
+const OBJECTIVE = "Review a.txt, b.txt, c.txt and d.txt. Write review.md listing the marker word of each file, then call task_completed.";
+
+/**
+ * A model that behaves like the dogfood one: it reads a batch in one step, re-reads the batch whenever it cannot see
+ * it, records findings only for what it can see, then reads d.txt and writes the review from what is in context.
+ */
+function reviewer(): (r: Req) => Reply {
+  let wrote = false;
+  return (r) => {
+    const body = r.body;
+    const findings = allText(body).match(/Findings: (a\.txt=[a-z-]+, b\.txt=[a-z-]+, c\.txt=[a-z-]+)/)?.[1];
+    if (!findings) {
+      if (BATCH.every((file) => visible(body, file))) {
+        return { content: `Findings: ${BATCH.map((file) => `${file}=${MARKERS[file]}`).join(", ")}. Next: d.txt.`, tools: [read("d.txt")] };
+      }
+      return { content: "Reading the batch.", tools: BATCH.map(read) };
+    }
+    if (!visible(body, "d.txt")) return { tools: [read("d.txt")] };
+    if (!wrote) {
+      wrote = true;
+      return { tools: [{ name: "write_file", args: { path: "review.md", content: `${findings}, d.txt=${MARKERS["d.txt"]}\n` } }] };
+    }
+    return { tools: [done("review.md written")] };
+  };
+}
+
+describe("A+B: compaction keeps the investigation moving instead of re-reading", () => {
+  test("A: objective and recorded findings survive, nothing fabricated, investigation not restarted; B: no reacquisition cycle", async () => {
+    await isolated(async (repo) => {
+      const gw = await gateway(reviewer());
+      const admissions: string[] = [];
+      const agent = quiet(new AutonomousAgent(cfg(gw, repo, { authoritativeVerifierCommand: "grep -q 'a.txt=copper-falcon, b.txt=silent-orchard, c.txt=amber-lattice, d.txt=north-quarry' review.md" })));
+      try {
+        const turn = await muted(() => agent.runTurn(OBJECTIVE), admissions);
+        const reads = (file: string) => gw.issued.filter((c) => c.name === "read_file" && (c.args as { path: string }).path === file).length;
+        const trail = `${turn.execution} ${turn.outcome} ${turn.reason ?? ""} ${turn.detail ?? ""}\n${gw.requests.map((q) => `req ${q.n}: ${BATCH.concat("d.txt").map((f) => `${f}=${visible(q.body, f)}`).join(" ")}`).join("\n")}\n${admissions.join("\n")}`;
+
+        // The workload genuinely needs compaction of an unseen batch (else this proves nothing).
+        assert.ok(admissions.some((l) => l.includes("state=auto_compacted")), trail);
+        // B: each file of the batch is read once; compaction alone never causes a re-read.
+        assert.deepEqual(BATCH.map(reads), [1, 1, 1], trail);
+        assert.equal(reads("d.txt"), 1, trail);
+        // C (forward progress): the review is written from evidence and verified.
+        assert.equal(turn.outcome, "VERIFIED", `${turn.outcome} ${turn.reason ?? ""} ${turn.detail ?? ""}\n${trail}`);
+        assert.equal(fs.readFileSync(path.join(repo, "review.md"), "utf-8").trim(), "a.txt=copper-falcon, b.txt=silent-orchard, c.txt=amber-lattice, d.txt=north-quarry");
+        // A: every request carries the objective; the findings outlive the batch's output; nothing restarted.
+        for (const q of gw.requests) assert.ok(allText(q.body).includes(OBJECTIVE), `req ${q.n} lost the objective`);
+        const last = gw.requests.at(-1)!.body;
+        assert.ok(!last.messages.some((m: any) => m.role === "tool" && BATCH.some((file) => String(m.content).includes(`MARKER ${file}`))), "the batch's tool results have left the context");
+        assert.ok(!visible(last, "a.txt"), "a.txt's output is gone; only the recorded finding carries it");
+        assert.match(allText(last), /Findings: a\.txt=copper-falcon, b\.txt=silent-orchard, c\.txt=amber-lattice/);
+        assert.ok(gw.requests.length <= 6, trail);
+        // Nothing fabricated: what the model was shown of each file is an exact prefix of it, honestly labelled.
+        const shown = gw.requests[1].body.messages.filter((m: any) => m.role === "tool");
+        assert.equal(shown.length, 3);
+        for (const m of shown) {
+          const notice = /\n\[Nexus: output truncated to fit the context window; showed the first (\d+) of (\d+) characters\.[^\]]*\]$/.exec(m.content);
+          assert.ok(notice, `unseen output kept and marked as truncated: ${String(m.content).slice(-300)}`);
+          assert.equal(m.content.length - notice[0].length, Number(notice[1]));
+          assert.ok(Number(notice[1]) < Number(notice[2]));
+        }
+      } finally {
+        agent.shutdown();
+        await gw.close();
+      }
+    });
+  });
+
+  test("B: a result shown only truncated is not fully observed, so a read-only answer on it is not established", async () => {
+    await isolated(async (repo) => {
+      const gw = await gateway((r) => (r.n === 1 ? { tools: BATCH.map(read) } : { tools: [done(`markers: ${BATCH.map((f) => (visible(r.body, f) ? MARKERS[f] : "?")).join(", ")}`)] }));
+      const agent = quiet(new AutonomousAgent(cfg(gw, repo)));
+      try {
+        const turn = await muted(() => agent.runTurn("Report the marker word of a.txt, b.txt and c.txt via task_completed."));
+        assert.ok(BATCH.every((file) => visible(gw.requests[1].body, file)), "the model saw the start of every file");
+        assert.equal(turn.outcome, "UNVERIFIED");
+        assert.equal(turn.reason, "CONTEXT_EVIDENCE_NOT_RETAINED");
+        assert.equal(turnSucceeded(turn), false);
+      } finally {
+        agent.shutdown();
+        await gw.close();
+      }
+    });
+  });
+
+  test("B: truncation state is recognised only from a well-formed trailing notice; full re-reads count as observed", async () => {
+    await isolated(async (repo) => {
+      const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-cc-state-"));
+      const make = () => {
+        const a = quiet(new AutonomousAgent({ endpoint: "http://127.0.0.1:9/v1", model: "m", maxSteps: 2, temperature: 0, workspace: repo, shell: "bash" })) as any;
+        a.stateManager = new DurableStateManager({ baseDir: stateDir, workspacePaths: [a.primaryWorkspacePathIdentity] });
+        return a as AutonomousAgent;
+      };
+      /** Removed observations a recovered agent carries into its next turn. */
+      const recovered = async (messages: unknown[]): Promise<string[]> => {
+        const first = make() as any;
+        first.messages = messages;
+        const taskId = first.getTaskId();
+        first.checkpointDurableState("checkpoint");
+        first.shutdown();
+        const second = make() as any;
+        try {
+          await second.recoverFromTaskState(taskId);
+          return Array.from(second.carriedRemovedObservations as Set<string>);
+        } finally {
+          second.shutdown();
+        }
+      };
+      const agent = make();
+      try {
+        const notice = "\n[Nexus: output truncated to fit the context window; showed the first 5 of 900 characters. The rest was not shown to you.]";
+        const turn = (id: string, file: string, content: string) => [
+          { role: "assistant" as const, content: "", tool_calls: [{ id, type: "function" as const, function: { name: "read_file", arguments: JSON.stringify({ path: file }) } }] },
+          { role: "tool" as const, tool_call_id: id, name: "read_file", content },
+        ];
+        const key = (file: string) => `read_file {"path":"${file}"}`;
+        const quoted = "const n = `\\n[Nexus: output truncated to fit the context window; showed the first ${shown} of ${total} characters.]`;";
+        const history = [...turn("c1", "cut.txt", `hello${notice}`), ...turn("c2", "src.ts", quoted), ...turn("c3", "whole.txt", "x")];
+        const s = (agent as any).summarizeDiscardedHistory(history, 1_000_000);
+        assert.deepEqual(s.removedObservations, [key("cut.txt")], "only the truncated result is unobserved; quoting source is not");
+
+        // A recovered conversation still carrying the truncated result treats it as removed until it is re-read in full.
+        const conversation = [{ role: "system", content: "sys" }, { role: "user", content: "go" }, ...history, { role: "assistant", content: "noted" }];
+        assert.deepEqual(await recovered(conversation), [key("cut.txt")]);
+        assert.deepEqual(await recovered([...conversation, ...turn("c4", "cut.txt", "hello world in full"), { role: "assistant", content: "noted" }]), []);
+      } finally {
+        agent.shutdown();
+        fs.rmSync(stateDir, { recursive: true, force: true });
+      }
+    });
+  });
+});
+
+describe("C: compaction between a mutation and completion", () => {
+  /** Writes, then reads a batch too large to fit (compacted before it is seen), then completes. */
+  const mutateThenRead = () => {
+    let step = 0;
+    return (): Reply => {
+      step++;
+      return step === 1 ? { tools: [{ name: "write_file", args: { path: "impl.txt", content: "implementation\n" } }] }
+        : step === 2 ? { tools: BATCH.map(read) }
+        : { tools: [done("implemented")] };
+    };
+  };
+
+  test("the verification obligation survives: completion is not NOT_REQUIRED and the change stays pending", async () => {
+    await isolated(async (repo) => {
+      const gw = await gateway(mutateThenRead());
+      const admissions: string[] = [];
+      const agent = quiet(new AutonomousAgent(cfg(gw, repo)));
+      try {
+        const toolsBefore = JSON.stringify((agent as any).getEffectiveTools());
+        const turn = await muted(() => agent.runTurn("Write impl.txt, review a.txt, b.txt and c.txt, then call task_completed."), admissions);
+        assert.ok(admissions.some((l) => l.includes("state=auto_compacted")), admissions.join("\n"));
+        assert.notEqual(turn.outcome, "NOT_REQUIRED");
+        assert.equal(turn.outcome, "UNVERIFIED");
+        assert.equal(turn.reason, "NO_APPLICABLE_VERIFIER");
+        assert.equal(turnSucceeded(turn), false);
+        assert.equal(agent.hasUnverifiedChanges(), true);
+        assert.equal(JSON.stringify((agent as any).getEffectiveTools()), toolsBefore, "compaction grants no tools");
+      } finally {
+        agent.shutdown();
+        await gw.close();
+      }
+    });
+  });
+
+  test("a dependent of the unverified unit never runs", async () => {
+    await isolated(async (repo) => {
+      const implement = mutateThenRead();
+      const gw = await gateway((r) => (allText(r.body).includes("Review impl.txt") ? { tools: [done("reviewed")] } : implement()));
+      const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-cc-state-"));
+      const config = cfg(gw, repo, { authoritativeVerifierCommand: "false" });
+      try {
+        const resource: ResourceDescriptor = { id: "primary", provider: gw.origin, endpoint: gw.url, model: "m", capabilities: ["tools"], rank: 0 };
+        const executor = new AgentWorkUnitExecutor({
+          baseConfig: config,
+          createAgent: (c) => {
+            const agent = quiet(new AutonomousAgent(c, 1));
+            const a = agent as any;
+            a.stateManager = new DurableStateManager({ baseDir: stateDir, workspacePaths: [a.primaryWorkspacePathIdentity] });
+            return agent;
+          },
+        });
+        const state = newOperation(`cc-${Date.now()}`, "convergence", [
+          { id: "implement", prompt: "Write impl.txt, review a.txt, b.txt and c.txt, then call task_completed." },
+          { id: "review", prompt: "Review impl.txt.", dependsOn: ["implement"] },
+        ], [resource], Date.now());
+        const op = await muted(() => driveOperation(state, { store: new OperationStore(repo, stateDir), executor }));
+        assert.equal(op.status, "BLOCKED");
+        assert.deepEqual(Object.fromEntries(op.units.map((u) => [u.id, u.status])), { implement: "BLOCKED", review: "WAITING_ON_DEPENDENCY" });
+        assert.ok(gw.requests.some((r) => r.body.messages.some((m: any) => m.role === "tool" && /\[Nexus: output truncated/.test(m.content))), "the unit compacted an unseen batch");
+        assert.ok(gw.requests.every((r) => !allText(r.body).includes("Review impl.txt")), "the dependent never ran");
+      } finally {
+        await gw.close();
+        fs.rmSync(stateDir, { recursive: true, force: true });
+      }
+    });
+  });
+});
