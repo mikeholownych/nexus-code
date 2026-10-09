@@ -258,6 +258,9 @@ function unreacquiredRemovals(messages: ChatMessage[]): Set<string> {
   return removed;
 }
 
+/** The note `toolResultContent` puts before a re-run's output; not part of the output's identity. */
+const RERUN_NOTICE = /^\[Nexus: you ran this same call before;[^\]]*\]\n/;
+
 /** Content identity of a tool output, to tell whether a re-run returned what was inspected before. */
 function outputDigest(text: string): string {
   return createHash("sha256").update(text).digest("hex");
@@ -514,7 +517,7 @@ export class AutonomousAgent {
   /** Finding notes a consolidation replaced; earlier durable records still carry them. */
   private mergedFindingNotes = new Set<string>();
   /** Observations whose findings were recorded: the step they were recorded at and the digest of the output they came from. */
-  private distilledObservations = new Map<string, { step: number; digest: string }>();
+  private distilledObservations = new Map<string, { step: number; digest?: string }>();
   /** Provider recovery bounds; undefined reads LOCAL_LLM_RECOVERY_* at each turn. */
   private recoveryPolicy?: RecoveryPolicy;
   private recoveryClock: RecoveryClock = realRecoveryClock;
@@ -1323,6 +1326,10 @@ export class AutonomousAgent {
     const seenKeys = new Set<string>();
     const unseenKeys = new Set<string>();
     const keyPaths = new Map<string, string>();
+    // Call order of each path's latest write and each observation's latest call: a source changed after it was observed.
+    const lastWrite = new Map<string, number>();
+    const lastCall = new Map<string, number>();
+    let callOrder = 0;
     const toolCallCounts = new Map<string, number>();
     const toolResultCounts = new Map<string, number>();
     const priorTasks: string[] = [];
@@ -1439,6 +1446,8 @@ export class AutonomousAgent {
           const id = typeof call?.id === "string" && call.id.trim() ? call.id : undefined;
           if (id && name) callKeys.set(id, observationKey(name, rawArgs));
           if (id && name && typeof args.path === "string") keyPaths.set(observationKey(name, rawArgs), args.path);
+          callOrder++;
+          if (name) lastCall.set(observationKey(name, rawArgs), callOrder);
           const serializedArgs = reconstructibleQueryTools.has(name)
             ? validReconstructibleArgs(name, rawArgs)
             : undefined;
@@ -1447,7 +1456,10 @@ export class AutonomousAgent {
           }
           if (["read_file", "file_info"].includes(name) && args.path) filesRead.add(String(args.path));
           if (name === "batch_read" && Array.isArray(args.paths)) args.paths.forEach((value: string) => filesRead.add(String(value)));
-          if (["write_file", "edit_file", "patch_file"].includes(name) && args.path) filesModified.add(String(args.path));
+          if (["write_file", "edit_file", "patch_file"].includes(name) && args.path) {
+            filesModified.add(String(args.path));
+            lastWrite.set(String(args.path), callOrder);
+          }
           if (name === "run_command" && args.command) commandsExecuted.push(String(args.command));
         }
       }
@@ -1507,7 +1519,8 @@ export class AutonomousAgent {
     const removalPrefix = (key: string): string => {
       if (partialObservations.has(key)) return REMOVED_PARTIAL;
       const path = keyPaths.get(key);
-      if (path !== undefined && filesModified.has(path) && !key.startsWith("write_file ") && !key.startsWith("edit_file ") && !key.startsWith("patch_file ")) return REMOVED_CHANGED;
+      const written = path === undefined ? undefined : lastWrite.get(path);
+      if (written !== undefined && written > (lastCall.get(key) ?? 0) && !key.startsWith("write_file ") && !key.startsWith("edit_file ") && !key.startsWith("patch_file ")) return REMOVED_CHANGED;
       if (this.distilledObservations.has(key)) return REMOVED_RECORDED;
       if (seenKeys.has(key)) return REMOVED_UNRECORDED;
       if (unseenKeys.has(key)) return REMOVED_UNSEEN;
@@ -1519,7 +1532,7 @@ export class AutonomousAgent {
       if (!prefix) continue;
       const key = notes[index].slice(prefix.length);
       if (dropped.has(key)) notes.splice(index, 1);
-      else if (this.distilledObservations.has(key) && prefix !== REMOVED_RECORDED && prefix !== REMOVED_CHANGED) notes[index] = `${REMOVED_RECORDED}${key}`;
+      else if (this.distilledObservations.has(key) && prefix !== REMOVED_RECORDED && prefix !== REMOVED_CHANGED && prefix !== REMOVED_PARTIAL) notes[index] = `${REMOVED_RECORDED}${key}`;
     }
     for (const key of removedObservations) {
       const note = `${removalPrefix(key)}${key}`;
@@ -1688,7 +1701,7 @@ export class AutonomousAgent {
     const wanted = new Set(removed.filter((key) => !this.distilledObservations.has(key)));
     const unseen = new Set(this.unseenToolResults(source));
     const callKeys = new Map<string, string>();
-    const pending: Array<{ key: string; text: string; partial: boolean; digest: string }> = [];
+    const pending: Array<{ key: string; text: string; partial: boolean; digest?: string }> = [];
     source.forEach((message, index) => {
       if (message.role === "assistant") {
         for (const call of message.tool_calls ?? []) {
@@ -1699,7 +1712,8 @@ export class AutonomousAgent {
       const key = callKeys.get(message.tool_call_id);
       const text = normalizeMessageContent(message.content).text.join("");
       if (!key || !wanted.has(key) || pending.some((item) => item.key === key) || !text || text.startsWith("Error executing ")) return;
-      pending.push({ key, text, partial: isTruncatedObservation(message), digest: outputDigest(text) });
+      const partial = isTruncatedObservation(message);
+      pending.push({ key, text, partial, digest: partial ? undefined : outputDigest(text.replace(RERUN_NOTICE, "")) });
     });
     if (!pending.length) return false;
     let recorded = false;
@@ -1716,6 +1730,7 @@ export class AutonomousAgent {
       if (tokens > inputBudget) {
         item.text = `${item.text.slice(0, Math.floor(item.text.length * (inputBudget / tokens) * 0.9))}\n[cut to fit this checkpoint]`;
         item.partial = true;
+        item.digest = undefined;
         tokens = countTokens(item.text);
       }
       if (!groups.length || used + tokens > inputBudget) {
@@ -1805,10 +1820,16 @@ export class AutonomousAgent {
    * The note leads the output so that fitting an oversized result to the context, which keeps its beginning, keeps it.
    */
   private toolResultContent(call: ToolCall, content: string, step: number, maxSteps: number): string {
-    const recorded = this.distilledObservations.get(observationKey(call.function.name, call.function.arguments));
+    const key = observationKey(call.function.name, call.function.arguments);
+    const recorded = this.distilledObservations.get(key);
     if (!recorded) return content;
-    const same = outputDigest(content) === recorded.digest ? "identical to" : "different from";
-    return `[Nexus: you ran this same call before; findings from its output were recorded at step ${recorded.step} and are in your memory. This output is ${same} the output they were recorded from. This is step ${step} of ${maxSteps}. If those findings already cover what you need, use them and move on to the next part of your task.]\n${content}`;
+    const same = recorded.digest === undefined ? undefined : outputDigest(content) === recorded.digest;
+    const comparison = same === undefined
+      ? "They were recorded from only part of its output."
+      : `This output is ${same ? "identical to" : "different from"} the output they were recorded from.`;
+    // Findings from a partial or now-different output do not cover this one: record findings again when it is removed.
+    if (!same) this.distilledObservations.delete(key);
+    return `[Nexus: you ran this same call before; findings from its output were recorded at step ${recorded.step} and are in your memory. ${comparison} This is step ${step} of ${maxSteps}. If those findings already cover what you need, use them and move on to the next part of your task.]\n${content}`;
   }
 
   /** Returns the observations the accepted compaction removed (none when no compaction was needed). */

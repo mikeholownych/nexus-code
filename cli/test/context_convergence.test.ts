@@ -590,6 +590,36 @@ describe("D: findings checkpoint before shown output leaves the context", () => 
     }
   });
 
+  test("findings from an output that has since changed, or was seen only in part, are recorded again; the comparison ignores the note", async () => {
+    await isolated(async (repo) => {
+      // Reads a..d, changes a.txt and re-reads it, reads b..d again (a's new output is distilled), then reads a.txt a third time.
+      const order = [...FILES, "a.txt", "b.txt", "c.txt", "d.txt", "a.txt"];
+      const gw = await gateway((r) => {
+        if (r.n === FILES.length + 1) fs.appendFileSync(path.join(repo, "a.txt"), "appended later\n");
+        return r.n <= order.length ? { tools: [read(order[r.n - 1])] } : { tools: [done("stop")] };
+      }, honestNotes);
+      const agent = quiet(new AutonomousAgent(cfg(gw, repo, { maxSteps: order.length + 1 }))) as any;
+      try {
+        await muted(() => agent.runTurn(PROMPT));
+        const notice = (n: number) => /^\[Nexus: you ran this same call before; findings from its output were recorded at step (\d+)[^\]]*?(identical to|different from|only part of its output)/.exec(String(gw.requests[n].body.messages.filter((m: any) => m.role === "tool").at(-1)?.content));
+        const second = notice(FILES.length + 1);
+        assert.equal(second?.[2], "different from");
+        const third = notice(order.length);
+        assert.ok(third, "the third read is marked: the changed output's findings were recorded");
+        assert.equal(third[2], "identical to", "compared with the output itself, not the note before it");
+        assert.ok(Number(third[1]) > FILES.length + 1, `recorded again after the change (step ${third[1]})`);
+        // A finding recorded from part of an output does not claim the whole: a re-run says so and is recorded afresh.
+        agent.distilledObservations.set(key("b.txt"), { step: 3 });
+        const content = agent.toolResultContent({ id: "x", type: "function", function: { name: "read_file", arguments: JSON.stringify({ path: "b.txt" }) } }, "full body", 9, 12);
+        assert.ok(content.startsWith("[Nexus: you ran this same call before; findings from its output were recorded at step 3 and are in your memory. They were recorded from only part of its output. This is step 9 of 12."), content);
+        assert.equal(agent.distilledObservations.has(key("b.txt")), false);
+      } finally {
+        agent.shutdown();
+        await gw.close();
+      }
+    });
+  });
+
   test("the re-run note survives when an oversized re-run is cut to fit the context", async () => {
     await isolated(async (repo) => {
       // Reads a..d one at a time (findings recorded as their output leaves), then re-reads all four in one batch.
@@ -639,6 +669,8 @@ describe("D: findings checkpoint before shown output leaves the context", () => 
           call("c3", "read_file", { path: "part.txt" }), result("c3", "read_file", `hello${cut}`),
           call("c4", "read_file", { path: "edited.txt" }), result("c4", "read_file", "old body\n"),
           call("c6", "write_file", { path: "edited.txt", content: "new body\n" }), result("c6", "write_file", "ok"),
+          call("c7", "write_file", { path: "after.txt", content: "body\n" }), result("c7", "write_file", "ok"),
+          call("c8", "read_file", { path: "after.txt" }), result("c8", "read_file", "body\n"),
           call("c5", "read_file", { path: "fresh.txt" }), unseen,
         ];
         agent.distilledObservations.set(key("noted.txt"), { step: 1, digest: "" });
@@ -649,7 +681,14 @@ describe("D: findings checkpoint before shown output leaves the context", () => 
         assert.match(wording("noted.txt")!, /^Inspected earlier; output no longer in context \(findings recorded in this memory; /);
         assert.match(wording("part.txt")!, /^Shown to you only in part \(truncated\); output no longer in context: /);
         assert.match(wording("edited.txt")!, /^Source changed after you inspected it; /);
+        assert.match(wording("after.txt")!, /^Inspected earlier; output no longer in context \(no findings were recorded from it\): /, "read after its write: not changed since");
         assert.match(wording("fresh.txt")!, /^Never shown to you; output no longer in context \(run it to see it\): /);
+        // A later compaction keeps an inherited partial note partial, even once findings were recorded from that view.
+        agent.distilledObservations.set(key("part.txt"), { step: 2 });
+        const record = agent.compactionCandidate([{ role: "system", content: "sys" }, { role: "user", content: "go" }, ...history], 0, 0).messages[1];
+        const again = agent.summarizeDiscardedHistory([record, { role: "assistant", content: "next" }], 0, new Set());
+        const againNotes: string[] = JSON.parse(again.content.slice(DURABLE.length)).notes;
+        assert.ok(againNotes.includes(`Shown to you only in part (truncated); output no longer in context: ${key("part.txt")}`), againNotes.filter((n) => n.includes("part.txt")).join("\n"));
         // Every wording, and the legacy one, marks the observation as removed for completion.
         const legacy = { role: "system" as const, content: `${DURABLE}${JSON.stringify({ version: 2, notes: [`Output no longer in context (rerun to see it again): ${key("old.txt")}`] })}` };
         const conversation = [{ role: "system", content: "sys" }, { role: "user", content: "go" }, legacy, { role: "system" as const, content: s.content }, { role: "assistant", content: "noted" }];
@@ -668,7 +707,8 @@ describe("D: findings checkpoint before shown output leaves the context", () => 
           await recoverer.recoverFromTaskState(taskId);
           const carried = Array.from(recoverer.carriedRemovedObservations as Set<string>).sort();
           const write = `write_file ${JSON.stringify({ path: "edited.txt", content: "new body\n" })}`;
-          assert.deepEqual(carried, [...["edited.txt", "fresh.txt", "noted.txt", "old.txt", "part.txt", "seen.txt"].map(key), write].sort());
+          const writeAfter = `write_file ${JSON.stringify({ path: "after.txt", content: "body\n" })}`;
+          assert.deepEqual(carried, [...["after.txt", "edited.txt", "fresh.txt", "noted.txt", "old.txt", "part.txt", "seen.txt"].map(key), write, writeAfter].sort());
         } finally {
           saver.shutdown();
           recoverer.shutdown();
