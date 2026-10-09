@@ -527,6 +527,34 @@ describe("D: findings checkpoint before shown output leaves the context", () => 
     }
   });
 
+  test("in a small context window recorded findings are bounded to fit, so they never block the investigation", async () => {
+    const SMALL = Array.from({ length: 12 }, (_, i) => `s${i + 1}.txt`);
+    const fact = (f: string) => `FACT ${f} holds marker mk-${f.slice(0, -4)}.`;
+    const limit = 16_000;
+    await isolated(async (repo) => {
+      for (const f of SMALL) fs.writeFileSync(path.join(repo, f), `${fact(f)}\n${"filler line to occupy context budget\n".repeat(160)}`);
+      const gw = await gateway(
+        (r) => (r.n <= SMALL.length ? { tools: [read(SMALL[r.n - 1])] } : { tools: [done("stop")] }),
+        (r) => {
+          const facts = SMALL.filter((f) => allText(r.body).includes(fact(f))).map(fact).join(" ");
+          return facts ? `${facts} ${"supporting detail ".repeat(160)}` : "";
+        },
+      );
+      const agent = quiet(new AutonomousAgent(cfg(gw, repo, { contextLimit: limit, maxSteps: SMALL.length + 2 })));
+      try {
+        const turn = await muted(() => agent.runTurn("Read s1.txt to s12.txt one at a time, then report the marker of each via task_completed."));
+        assert.ok(gw.checkpoints.length >= 4, `findings were recorded (${gw.checkpoints.length} checkpoints)`);
+        assert.notEqual(turn.reason, "CONTEXT_CAPACITY_EXCEEDED", `${turn.execution} ${turn.reason} ${turn.detail ?? ""} after ${gw.requests.length} requests`);
+        assert.equal(gw.issued.filter((c) => c.name === "read_file").length, SMALL.length);
+        const findings = recordNotes(gw.requests.at(-1)!.body.messages).filter((n) => n.startsWith("Findings recorded from inspected output ["));
+        assert.ok(findings.length >= 1 && findings.reduce((n, note) => n + note.length, 0) <= Math.floor(24_000 * limit / 65_536), "findings are kept, within a bound scaled to the window");
+      } finally {
+        agent.shutdown();
+        await gw.close();
+      }
+    });
+  });
+
   test("re-running a call whose findings were recorded is answered in full, marked with when, whether it changed, and the step", async () => {
     for (const changeSource of [false, true]) {
       await isolated(async (repo) => {

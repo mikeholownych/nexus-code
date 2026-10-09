@@ -1477,7 +1477,7 @@ export class AutonomousAgent {
     const findings = durableNotes.filter((note) => note.startsWith(FINDINGS_PREFIX));
     let findingsChars = findings.reduce((total, note) => total + note.length, 0);
     for (const note of findings) {
-      if (findingsChars <= FINDINGS_BUDGET_CHARS) break;
+      if (findingsChars <= this.findingsBudgetChars()) break;
       durableNotes.splice(durableNotes.indexOf(note), 1, ...(durableNotes.includes(FINDINGS_ELISION) ? [] : [FINDINGS_ELISION]));
       findingsChars -= note.length;
     }
@@ -1655,6 +1655,11 @@ export class AutonomousAgent {
     return { messages: compacted, removedObservations: removed };
   }
 
+  /** Characters recorded findings may take in the durable record: FINDINGS_BUDGET_CHARS in a 64k-token window, less in a smaller one. */
+  private findingsBudgetChars(): number {
+    return Math.floor(FINDINGS_BUDGET_CHARS * Math.min(1, (this.config.contextLimit || 65536) / 65536));
+  }
+
   /**
    * Admits the next request (see `admitContext`). When that compaction removed tool output the model had already been
    * shown, first asks the model, on `client` (the one this step's inference uses), to record what that output
@@ -1743,7 +1748,8 @@ export class AutonomousAgent {
       }
       if (!text) continue;
       const clipped = text.length > FINDINGS_NOTE_LIMIT ? `${text.slice(0, FINDINGS_NOTE_LIMIT)} …[clipped]` : text;
-      const sources = group.map((item) => `${item.key}${item.partial ? " (partial)" : ""}`).join("; ");
+      let sources = group.map((item) => `${item.key}${item.partial ? " (partial)" : ""}`).join("; ");
+      if (sources.length > 1_500) sources = `${sources.slice(0, 1_500)} …`;
       this.findingNotes.push(`${FINDINGS_PREFIX}step ${step}; from ${sources}; model-written, not independent proof]\n${clipped}`);
       for (const item of group) this.distilledObservations.set(item.key, { step, digest: item.digest });
       recorded = true;
@@ -1753,16 +1759,17 @@ export class AutonomousAgent {
   }
 
   /**
-   * Keeps recorded findings within FINDINGS_BUDGET_CHARS without dropping what they established: once they exceed it,
+   * Keeps recorded findings within their budget (`findingsBudgetChars`) without dropping what they established: once they exceed it,
    * the model merges the oldest notes (at least half the budget) into one labelled note in their place. When that
    * yields nothing, the notes are left as they are and the durable record elides the oldest ones.
    */
   private async consolidateFindings(client: LocalLlmClient, step: number, request: string, signal?: AbortSignal): Promise<void> {
     const total = this.findingNotes.reduce((chars, note) => chars + note.length, 0);
-    if (total <= FINDINGS_BUDGET_CHARS || this.findingNotes.length < 2 || signal?.aborted) return;
+    const budget = this.findingsBudgetChars();
+    if (total <= budget || this.findingNotes.length < 2 || signal?.aborted) return;
     let count = 0;
     let chars = 0;
-    while (count < this.findingNotes.length - 1 && (count < 2 || chars < FINDINGS_BUDGET_CHARS / 2)) chars += this.findingNotes[count++].length;
+    while (count < this.findingNotes.length - 1 && (count < 2 || chars < budget / 2)) chars += this.findingNotes[count++].length;
     const oldest = this.findingNotes.slice(0, count);
     const prompt: ChatMessage[] = [
       { role: "system", content: FINDINGS_CONSOLIDATION_INSTRUCTIONS },
