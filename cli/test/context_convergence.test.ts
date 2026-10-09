@@ -444,6 +444,49 @@ describe("D: findings checkpoint before shown output leaves the context", () => 
     });
   });
 
+  test("findings beyond the memory bound are merged by the model, not dropped; a failed merge still bounds the memory", async () => {
+    const MANY = Array.from({ length: 16 }, (_, i) => `f${i + 1}.txt`);
+    const fact = (f: string) => `FACT ${f} holds marker mk-${f.slice(0, -4)}.`;
+    const isMerge = (r: Req) => allText(r.body).includes("Earlier findings notes, oldest first");
+    for (const merges of [true, false]) {
+      await isolated(async (repo) => {
+        for (const f of MANY) fs.writeFileSync(path.join(repo, f), `${fact(f)}\n${"filler line to occupy context budget\n".repeat(650)}`);
+        // Each finding is long, so a dozen of them exceed the bound; a merge keeps every fact it was given and nothing else.
+        const gw = await gateway(
+          (r) => (r.n <= MANY.length ? { tools: [read(MANY[r.n - 1])] } : { tools: [done("stop")] }),
+          (r) => {
+            const facts = MANY.filter((f) => allText(r.body).includes(fact(f))).map(fact).join(" ");
+            if (isMerge(r)) return merges ? facts : "";
+            return facts ? `${facts} ${"supporting detail ".repeat(160)}` : "";
+          },
+        );
+        const agent = quiet(new AutonomousAgent(cfg(gw, repo, { maxSteps: MANY.length + 2 })));
+        try {
+          await muted(() => agent.runTurn("Read f1.txt to f16.txt one at a time, then report the marker of each via task_completed."));
+          const merge = gw.checkpoints.filter(isMerge);
+          const distilled = MANY.filter((f) => gw.checkpoints.some((c) => !isMerge(c) && allText(c.body).includes(fact(f))));
+          assert.ok(merge.length >= 1, "the findings outgrew the bound (else this proves nothing)");
+          for (const c of merge) assert.equal(c.body.tools, undefined, "a merge grants no tools");
+          const findings = recordNotes(gw.requests.at(-1)!.body.messages).filter((n) => n.startsWith("Findings recorded from inspected output ["));
+          const text = findings.join("\n");
+          assert.ok(findings.reduce((n, note) => n + note.length, 0) <= 24_000, "recorded findings stay within their bound");
+          if (merges) {
+            const oldest = distilled[0].replace(".", "\\.");
+            assert.ok(findings.some((n) => new RegExp(`^Findings recorded from inspected output \\[steps \\d+-\\d+; consolidated from \\d+ notes on read_file \\{"path":"${oldest}"\\}.*; model-written, not independent proof\\]\\n`).test(n)), text.slice(0, 600));
+            for (const f of distilled) assert.ok(text.includes(fact(f)), `${f}'s finding survived the bound`);
+            assert.ok(!recordNotes(gw.requests.at(-1)!.body.messages).includes("[Older recorded findings elided to bound this memory.]"));
+          } else {
+            assert.ok(recordNotes(gw.requests.at(-1)!.body.messages).includes("[Older recorded findings elided to bound this memory.]"));
+            assert.ok(!text.includes(fact(distilled[0])), "a failed merge invents nothing; the oldest finding is elided");
+          }
+        } finally {
+          agent.shutdown();
+          await gw.close();
+        }
+      });
+    }
+  });
+
   test("re-running a call whose findings were recorded is answered in full, marked with when, whether it changed, and the step", async () => {
     for (const changeSource of [false, true]) {
       await isolated(async (repo) => {

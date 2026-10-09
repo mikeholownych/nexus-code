@@ -178,6 +178,8 @@ const FINDINGS_PREFIX = "Findings recorded from inspected output [";
 const FINDINGS_NOTE_LIMIT = 3_000;
 const FINDINGS_BUDGET_CHARS = 24_000;
 const FINDINGS_ELISION = "[Older recorded findings elided to bound this memory.]";
+const FINDINGS_CONSOLIDATED_LIMIT = 6_000;
+const FINDINGS_CONSOLIDATION_INSTRUCTIONS = "You keep the working notes of an autonomous software-engineering agent. The notes below are its earlier recorded findings, oldest first; they no longer fit its memory and must be merged into one shorter note. Keep, for the agent's current request, every concrete established fact (file paths, symbol names, line numbers, anything shown to be missing or inconsistent) and which areas were already examined; drop repetition. Do not add facts, speculate, plan, or restate the request. Plain text, at most 600 words.";
 const FINDINGS_INSTRUCTIONS = "You keep the working notes of an autonomous software-engineering agent. The tool output below is about to be removed from the agent's context window. Record, for the agent's current request, what this output actually shows: concrete facts with file paths, symbol names and line numbers, and anything it shows to be missing or inconsistent. State only what the output itself shows; do not speculate, plan, or restate the request. If the output is irrelevant to the request, say so in one line. Plain text, at most 250 words.";
 
 function unseenTruncationNotice(shown: number, total: number): string {
@@ -509,6 +511,8 @@ export class AutonomousAgent {
   private carriedRemovedObservations = new Set<string>();
   // Findings the model recorded from inspected output just before compaction removed it, and those observations.
   private findingNotes: string[] = [];
+  /** Finding notes a consolidation replaced; earlier durable records still carry them. */
+  private mergedFindingNotes = new Set<string>();
   /** Observations whose findings were recorded: the step they were recorded at and the digest of the output they came from. */
   private distilledObservations = new Map<string, { step: number; digest: string }>();
   /** Provider recovery bounds; undefined reads LOCAL_LLM_RECOVERY_* at each turn. */
@@ -848,6 +852,7 @@ export class AutonomousAgent {
     this.activePlan = state.activePlan || [];
     this.messages = state.messages || [];
     this.findingNotes = [];
+    this.mergedFindingNotes = new Set();
     this.distilledObservations = new Map();
     const unsettled = this.settleUnrecordedToolCalls();
     // Resumed work is the same unit: what compaction removed before the restart is still not in context.
@@ -1072,6 +1077,7 @@ export class AutonomousAgent {
   public restoreSession(msgs: ChatMessage[], unverifiedChangesPending?: boolean): void {
     this.messages = [...msgs];
     this.findingNotes = [];
+    this.mergedFindingNotes = new Set();
     this.distilledObservations = new Map();
     const unsettled = this.settleUnrecordedToolCalls();
     const pending = (unverifiedChangesPending ?? true) || unsettled.some((tool) => this.mayWrite(tool));
@@ -1162,6 +1168,7 @@ export class AutonomousAgent {
 
   public resetConversation(): void {
     this.findingNotes = [];
+    this.mergedFindingNotes = new Set();
     this.distilledObservations = new Map();
     this.messages = [
       {
@@ -1466,6 +1473,7 @@ export class AutonomousAgent {
     }
 
     for (const note of this.findingNotes) addDurableNote(note);
+    for (let index = durableNotes.length - 1; index >= 0; index--) if (this.mergedFindingNotes.has(durableNotes[index])) durableNotes.splice(index, 1);
     const findings = durableNotes.filter((note) => note.startsWith(FINDINGS_PREFIX));
     let findingsChars = findings.reduce((total, note) => total + note.length, 0);
     for (const note of findings) {
@@ -1740,7 +1748,48 @@ export class AutonomousAgent {
       for (const item of group) this.distilledObservations.set(item.key, { step, digest: item.digest });
       recorded = true;
     }
+    if (recorded) await this.consolidateFindings(step, request, signal);
     return recorded;
+  }
+
+  /**
+   * Keeps recorded findings within FINDINGS_BUDGET_CHARS without dropping what they established: once they exceed it,
+   * the model merges the oldest notes (at least half the budget) into one labelled note in their place. When that
+   * yields nothing, the notes are left as they are and the durable record elides the oldest ones.
+   */
+  private async consolidateFindings(step: number, request: string, signal?: AbortSignal): Promise<void> {
+    const total = this.findingNotes.reduce((chars, note) => chars + note.length, 0);
+    if (total <= FINDINGS_BUDGET_CHARS || this.findingNotes.length < 2 || signal?.aborted) return;
+    let count = 0;
+    let chars = 0;
+    while (count < this.findingNotes.length - 1 && (count < 2 || chars < FINDINGS_BUDGET_CHARS / 2)) chars += this.findingNotes[count++].length;
+    const oldest = this.findingNotes.slice(0, count);
+    const prompt: ChatMessage[] = [
+      { role: "system", content: FINDINGS_CONSOLIDATION_INSTRUCTIONS },
+      { role: "user", content: `Current request:\n${request}\n\nEarlier findings notes, oldest first:\n\n${oldest.join("\n\n")}` },
+    ];
+    let text = "";
+    try {
+      const res = await this.client.chatCompletion(prompt, [], randomUUID(), signal);
+      text = typeof res.content === "string" ? res.content.trim() : "";
+      this.totalTokens.prompt += calculateContextBudget(prompt, [], this.config.contextLimit || 65536).totalActiveTokens;
+      this.totalTokens.completion += countTokens(text);
+      this.totalTokens.total = this.totalTokens.prompt + this.totalTokens.completion;
+    } catch {
+      text = "";
+    }
+    if (!process.stdout.isTTY || process.env.NEXUS_DEBUG === "1") {
+      console.log(`[context_findings] step=${step} consolidated=${count} recorded=${text ? "yes" : "no"} chars=${text.length}`);
+    }
+    if (!text) return;
+    const header = (note: string) => /^\[steps? (\d+)(?:-\d+)?; (?:from|consolidated from \d+ notes on) (.*?); model-written, not independent proof\]/.exec(note.slice(FINDINGS_PREFIX.length - 1));
+    const firstStep = header(oldest[0])?.[1] ?? "?";
+    const lastStep = /^\[steps? (?:\d+-)?(\d+);/.exec(oldest[count - 1].slice(FINDINGS_PREFIX.length - 1))?.[1] ?? "?";
+    let sources = oldest.map((note) => header(note)?.[2]).filter(Boolean).join("; ");
+    if (sources.length > 1_500) sources = `${sources.slice(0, 1_500)} …`;
+    const clipped = text.length > FINDINGS_CONSOLIDATED_LIMIT ? `${text.slice(0, FINDINGS_CONSOLIDATED_LIMIT)} …[clipped]` : text;
+    for (const note of oldest) this.mergedFindingNotes.add(note);
+    this.findingNotes.splice(0, count, `${FINDINGS_PREFIX}steps ${firstStep}-${lastStep}; consolidated from ${count} notes on ${sources}; model-written, not independent proof]\n${clipped}`);
   }
 
   /**
