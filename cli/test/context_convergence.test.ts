@@ -693,6 +693,28 @@ describe("E: an operator-configured verifier gates every completion", () => {
     });
   });
 
+  test("a turn that ends without the configured verifier passing is not verified: a plain answer, read-only, or dry-run", async () => {
+    const cases: Array<[string, Partial<HarnessConfig>, Reply]> = [
+      ["plain answer", {}, { text: "a.txt is present." }],
+      ["read-only", { readOnly: true }, { tools: [done("a.txt is present")] }],
+      ["dry-run", { dryRun: true }, { tools: [done("a.txt is present")] }],
+    ];
+    for (const [label, mode, reply] of cases) {
+      await isolated(async (repo) => {
+        const gw = await gateway((r) => (r.n === 1 ? reply : { text: "a.txt is present." }));
+        const agent = quiet(new AutonomousAgent(cfg(gw, repo, { authoritativeVerifierCommand: "true", ...mode })));
+        try {
+          const turn = await muted(() => agent.runTurn("Is a.txt present?"));
+          assert.equal(`${turn.execution} ${turn.outcome} ${turn.reason}`, "COMPLETED UNVERIFIED VERIFICATION_NOT_RUN", label);
+          assert.equal(turnSucceeded(turn), false, label);
+        } finally {
+          agent.shutdown();
+          await gw.close();
+        }
+      });
+    }
+  });
+
   test("a passing gate changes nothing about a read-only outcome: NOT_REQUIRED, or UNVERIFIED when evidence left the context", async () => {
     await isolated(async (repo) => {
       const gw = await gateway(() => ({ tools: [done("nothing to change")] }));

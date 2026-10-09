@@ -499,8 +499,8 @@ export class AutonomousAgent {
   private turnMutations: number = 0;
   /** The turn started with unverified changes from earlier work (an earlier turn, attempt, or process). */
   private turnCarriedChanges = false;
-  /** The operator-configured verifier refused a completion in this turn and has not passed since. */
-  private turnConfiguredVerifierFailed = false;
+  /** The operator-configured verifier's latest result in this turn (FAILED: it refused a completion and has not passed since). */
+  private turnConfiguredVerifier: "NOT_RUN" | "PASSED" | "FAILED" = "NOT_RUN";
   /** Key for the durable operation record of each tool call (provider call ids may be redacted on disk). */
   private operationSeq = 0;
   /** Told after each durable progress write, so a host can keep its own session record in step. */
@@ -2055,7 +2055,7 @@ Always explain your reasoning before or alongside your tool calls.`;
               at: new Date().toISOString(),
             };
             this.verificationEvidence = evidence;
-            if (configured) this.turnConfiguredVerifierFailed = !testRes.success;
+            if (configured) this.turnConfiguredVerifier = testRes.success ? "PASSED" : "FAILED";
             if (testRes.timedOut) {
               const partial = foldVoluminousOutput(testRes.rawOutput || "(no output received)");
               return {
@@ -2711,7 +2711,7 @@ Always explain your reasoning before or alongside your tool calls.`;
     }
     this.completionSummary = undefined;
     this.turnMutations = 0;
-    this.turnConfiguredVerifierFailed = false;
+    this.turnConfiguredVerifier = "NOT_RUN";
     this.turnCarriedChanges = this.hasPendingModifications;
     // What compaction removed earlier in this conversation is still not in context, whichever way the turn began.
     this.turnRemovedObservations = new Set([...this.carriedRemovedObservations, ...unreacquiredRemovals(this.messages)]);
@@ -3172,11 +3172,16 @@ Always explain your reasoning before or alongside your tool calls.`;
       return deepFreezeTurn(assertTurnResultInvariants({ ...base, execution: "COMPLETED", outcome: "UNVERIFIED", reason: "VERIFICATION_NOT_RUN" }));
     }
     // The operator's verifier refused this turn's completion and the turn ended anyway (e.g. with a final answer).
-    if (this.turnConfiguredVerifierFailed && (evidence?.status === "FAILED" || evidence?.status === "TIMED_OUT")) {
+    if (this.turnConfiguredVerifier === "FAILED" && (evidence?.status === "FAILED" || evidence?.status === "TIMED_OUT")) {
       return deepFreezeTurn(assertTurnResultInvariants({
         ...base, execution: "COMPLETED", outcome: "NOT_ESTABLISHED",
         reason: evidence.status === "FAILED" ? "VERIFIER_FAILED" : "VERIFIER_TIMED_OUT", detail: evidence.command,
       }));
+    }
+    // The operator's verifier must pass before any completion; a turn that ended without it passing (a final answer
+    // without task_completed, or a dry-run or read-only turn, which never runs it) is not verified.
+    if (this.config.authoritativeVerifierCommand?.trim() && this.turnConfiguredVerifier !== "PASSED") {
+      return deepFreezeTurn(assertTurnResultInvariants({ ...base, execution: "COMPLETED", outcome: "UNVERIFIED", reason: "VERIFICATION_NOT_RUN" }));
     }
     // No verifier backs a read-only result, so it rests on the observations the model saw. If compaction removed some
     // and the model never re-read them, the result may be recalled rather than observed: it is not established.
