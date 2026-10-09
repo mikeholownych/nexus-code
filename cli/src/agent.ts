@@ -1744,14 +1744,15 @@ export class AutonomousAgent {
   }
 
   /**
-   * Tool output for the model. When the call repeats one whose findings were recorded, says so (and whether the output
-   * is unchanged) with the step position, so a re-run is a choice made knowing what the memory already holds.
+   * Tool output for the model. When the call repeats one whose findings were recorded, says so first (and whether the
+   * output is unchanged) with the step position, so a re-run is a choice made knowing what the memory already holds.
+   * The note leads the output so that fitting an oversized result to the context, which keeps its beginning, keeps it.
    */
   private toolResultContent(call: ToolCall, content: string, step: number, maxSteps: number): string {
     const recorded = this.distilledObservations.get(observationKey(call.function.name, call.function.arguments));
     if (!recorded) return content;
     const same = outputDigest(content) === recorded.digest ? "identical to" : "different from";
-    return `${content}\n[Nexus: you ran this same call before; findings from its output were recorded at step ${recorded.step} and are in your memory. This output is ${same} the output they were recorded from. This is step ${step} of ${maxSteps}. If those findings already cover what you need, use them and move on to the next part of your task.]`;
+    return `[Nexus: you ran this same call before; findings from its output were recorded at step ${recorded.step} and are in your memory. This output is ${same} the output they were recorded from. This is step ${step} of ${maxSteps}. If those findings already cover what you need, use them and move on to the next part of your task.]\n${content}`;
   }
 
   /** Returns the observations the accepted compaction removed (none when no compaction was needed). */

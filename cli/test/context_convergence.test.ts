@@ -460,12 +460,13 @@ describe("D: findings checkpoint before shown output leaves the context", () => 
         try {
           await muted(() => agent.runTurn(PROMPT));
           const reread = gw.requests[FILES.length + 1].body.messages.filter((m: any) => m.role === "tool").at(-1);
-          const notice = /\n\[Nexus: you ran this same call before; findings from its output were recorded at step (\d+) and are in your memory\. This output is (identical to|different from) the output they were recorded from\. This is step (\d+) of 8\.[^\]]*\]$/.exec(String(reread?.content));
+          // The note leads the output, so it survives when an oversized result is cut to its beginning.
+          const notice = /^\[Nexus: you ran this same call before; findings from its output were recorded at step (\d+) and are in your memory\. This output is (identical to|different from) the output they were recorded from\. This is step (\d+) of 8\.[^\]]*\]\n/.exec(String(reread?.content));
           assert.ok(notice, String(reread?.content).slice(-400));
           assert.equal(notice[2], changeSource ? "different from" : "identical to");
           assert.equal(Number(notice[3]), FILES.length + 1);
           assert.ok(Number(notice[1]) <= FILES.length, "the findings predate the re-run");
-          assert.ok(String(reread.content).startsWith("{") && String(reread.content).includes(`MARKER a.txt: ${MARKERS["a.txt"]}`), "the re-run output is returned in full, not replaced");
+          assert.ok(String(reread.content).slice(notice[0].length).startsWith("{") && String(reread.content).includes(`MARKER a.txt: ${MARKERS["a.txt"]}`), "the re-run output is returned in full, not replaced");
           // First reads carry no such notice.
           for (const q of gw.requests.slice(0, FILES.length + 1)) {
             for (const m of q.body.messages) if (m.role === "tool") assert.ok(!String(m.content).includes("you ran this same call before"));
@@ -476,6 +477,25 @@ describe("D: findings checkpoint before shown output leaves the context", () => 
         }
       });
     }
+  });
+
+  test("the re-run note survives when an oversized re-run is cut to fit the context", async () => {
+    await isolated(async (repo) => {
+      // Reads a..d one at a time (findings recorded as their output leaves), then re-reads all four in one batch.
+      const gw = await gateway((r) => (r.n <= FILES.length ? { tools: [read(FILES[r.n - 1])] } : r.n === FILES.length + 1 ? { tools: FILES.map(read) } : { tools: [done("stop")] }), honestNotes);
+      const agent = quiet(new AutonomousAgent(cfg(gw, repo)));
+      try {
+        await muted(() => agent.runTurn(PROMPT));
+        const shown = gw.requests[FILES.length + 1].body.messages.filter((m: any) => m.role === "tool").slice(-FILES.length);
+        const cut = shown.filter((m: any) => /\n\[Nexus: output truncated to fit the context window;[^\]]*\]$/.test(String(m.content)));
+        assert.ok(cut.length >= 1, "the batch was cut to fit (else this proves nothing)");
+        const noted = cut.filter((m: any) => String(m.content).startsWith("[Nexus: you ran this same call before;"));
+        assert.ok(noted.length >= 1, cut.map((m: any) => String(m.content).slice(0, 120)).join("\n"));
+      } finally {
+        agent.shutdown();
+        await gw.close();
+      }
+    });
   });
 
   test("without recorded findings a repeated call carries no notice", async () => {
