@@ -5,10 +5,11 @@ objective and continuity, V2 durable verification obligations, V3 credential sto
 accepted convergence (I1, G) and credential-authority (I6) invariants. Not merged, not pushed; the post-remediation
 dogfood was not run.
 
-**Verdict: `NEXUS_I1_I6_ACCEPTANCE_BLOCKED`.** V3 is closed. V1 and V2 are closed for every state the candidate
-writes, but task state written by the current production build (`fef7cde`) still resumes to a false COMPLETE
-(`NOT_REQUIRED`) after an interrupted multi-turn unit. That was reproduced against the candidate (section 6, R1). The
-minimum remediation is in section 8.
+**Verdict: `NEXUS_I1_I6_ACCEPTANCE_BLOCKERS_REMEDIATED_WITH_LIMITATIONS`** (candidate `4fb9da8`). V1, V2 and V3 no
+longer reproduce. R1 was found on `5d1917b` and closed in `4fb9da8`: task state from the previous production build
+(`fef7cde`) resumed to a false COMPLETE (`NOT_REQUIRED`). The independent delta review returned `R1_CLOSED`. The
+remaining limitations (section 7) are baseline-equivalent, untested, or explicitly deferred; none is an acceptance
+blocker.
 
 ## 1. Identities
 
@@ -18,8 +19,8 @@ minimum remediation is in section 8.
 | Canonical dirty set (unchanged) | 41 entries; `git status --porcelain` sha256 `6b769ebd4e22b2da0917b20c64c216438744ea49a5d9946e05e8bcbcdf3cbe52`; tracked diff sha256 `d07bc7fa5a8fca84d7f4693ce30f2fccb11f7e4e1058b8dece2d57a317b93d09` (both identical to the values recorded before this work) |
 | Concurrent `nexus-tui` session | pid 719442 against main; observed running before and after; not touched |
 | Acceptance report | `1334e0a` on `fix/convergence-invariants` (`/home/mike/nexus-remed`), code identical to `fef7cde` |
-| Candidate | **`5d1917be0f1297b7c5197b0ce94be5e2870d38b9`** on `fix/i1-i6-blockers`, tree `123207a9458194af08211968bef3c3fb380993e6`. Two commits on `1334e0a`: `101c539` (the remediation) and `5d1917b` (independent-review follow-ups, section 6) |
-| First candidate (superseded) | `101c53904ff4c8d2472a1638b2e06c6030d07c1b`, tree `a5d2d42869a231d1c3c09661a068a03ae9348446` |
+| Candidate | **`4fb9da831aabb3ff318a1dfcc5105e681f47fb5b`** on `fix/i1-i6-blockers`, tree `6136d1f8befb709e79d258a89b76d95ceba2aac0`. Commits on `1334e0a`: `101c539` (the remediation), `5d1917b` (review follow-ups, section 6), `50b3941` (this report, docs only), `4fb9da8` (R1, section 6) |
+| Earlier candidates (superseded) | `101c53904ff4c8d2472a1638b2e06c6030d07c1b` (tree `a5d2d428…`); `5d1917be0f1297b7c5197b0ce94be5e2870d38b9` (tree `123207a9…`) |
 | Candidate build used for probes | `~/df2/postdog/cand_5d1917b`: `git archive 5d1917b cli`, `tsc` build, `node_modules` linked from the worktree; `core/` linked to `/home/mike/nexus-code/core` (`core/` is unchanged `fef7cde..5d1917b`; the same `harness-core` binary the earlier post probes used). The first candidate's build is `~/df2/postdog/cand_101c539` |
 | Comparison builds | pre = `d037bc0` (`/home/mike/nexus-canon`), post = `fef7cde` (`/home/mike/nexus-code`), from the acceptance report |
 | Runtime | node v24.21.0, Linux 6.8 |
@@ -85,13 +86,16 @@ Changes:
 - `DurableTaskState.unverifiedChangesPending` is written when the change happens (`setUnverifiedChanges` in the
   mutation hook and for subagent child mutations) and cleared only by a passing verifier.
 - It is restored in `recoverFromTaskState` (operation resume, retry, step-limit continuation, `run --resume`,
-  `/recover`). Legacy files fall back to `lastTurn.unverifiedChangesPending` and then to the history. Recovery itself
-  writes back only a derived `true` (`5d1917b`), but the first progress write of the resumed turn persists the
-  in-memory value, including a derived `false`. **This legacy fallback is the confirmed blocker in section 6.**
+  `/recover`). An absent field (state or sessions written before the obligation was recorded) means the obligation is
+  unknown and counts as pending; an explicit `true` or `false` is used as recorded (`4fb9da8`, R1). Before `4fb9da8`,
+  legacy files fell back to `lastTurn` and then to the history, which produced R1 (section 6). Recovery writes `true`
+  back only over an explicit `false` (when an unsettled or interrupted call may have written), so an absent field stays
+  absent and the executor still recognizes the record as legacy.
 - `buildTurnResult`: a turn that starts with a carried obligation (`turnCarriedChanges`) is `UNVERIFIED` unless the
   verifier passes, in which case it is `VERIFIED`.
 - Interactive sessions store the obligation (`SessionManager.saveSession`, sidecar, REPL, `ApplicationCore.runTask`)
-  and restore it (`restoreSession` in sidecar `/resume`, REPL startup restore and REPL `/resume`). The sidecar and
+  and restore it (`restoreSession` in sidecar `/resume`, REPL startup restore and REPL `/resume`). A session without
+  the field restores as pending (`4fb9da8`). The sidecar and
   REPL also save the session after each durable progress write (`setProgressListener`), so a host that dies mid-turn
   still leaves the change and its obligation on disk.
 - Dependents: unchanged scheduler semantics. A unit releases dependents only on `turnSucceeded`, which an
@@ -257,9 +261,9 @@ note).
 
 ## 6. Independent review
 
-Two rounds by the same independent automated reviewer, read-only. Round 1 covered `101c539`; round 2 covered the
-`101c539..5d1917b` follow-ups. The reviewer's severities were re-assessed here against the approved requirements,
-not adopted as given.
+Three rounds by the same independent automated reviewer, read-only. Round 1 covered `101c539`; round 2 covered the
+`101c539..5d1917b` follow-ups; round 3 was a delta review limited to R1 (`50b3941..4fb9da8`). The reviewer's
+severities were re-assessed here against the approved requirements, not adopted as given.
 
 Round 1 verdicts on `101c539`: V1 yes-with-limitations, V2 no, V3 yes. Round 2 verdicts on `5d1917b`: V1 and V2
 yes-with-limitations, V3 yes. Round 2 found no new false-completion path introduced by the follow-up, confirmed that
@@ -272,14 +276,16 @@ the new tests run the real decision and resume flows (none can pass vacuously), 
 | S1: revise and capacity withdrawal force a restart | should-fix | **Resolved** | two tests; round 2: closed (revision marker inside the text and redaction cases checked; the only residual is a spurious block, which fails safe) |
 | S3: tool calls not durable before they run | should-fix | **Resolved** | sidecar test; round 2: closed. The test opens the second host while the first is still inside the tool (same disk state as a kill, not a SIGKILL) |
 | S2: legacy obligation on restart | should-fix | **Resolved** for the restart path | corruption tests; round 2: closed for restart |
-| **R1** (S2 residual): legacy task state whose history still looks usable | should-fix | **Confirmed acceptance blocker** | reproduced against the candidate; see below |
+| **R1** (S2 residual): legacy task state whose history still looks usable | should-fix | Confirmed acceptance blocker on `5d1917b`; **resolved** in `4fb9da8` | reproduced, fixed, re-probed; round 3: `R1_CLOSED`; see below |
 | S4: synchronous full-state write per tool and per model step | should-fix | Limitation, not blocking | performance, not correctness: about 0.2 s per write at 172 KB and 1 s at 1.3 MB (measured in round 1). No requirement bounds it |
 | S5: worktree mode records no operation records | should-fix | Limitation, baseline-equivalent | predates `101c539`; mitigated by persisting tool calls before they run; a tool that already wrote but whose change was not recorded is not covered in worktree mode (untested) |
 | Session switch carries the previous obligation | note | Limitation | over-strict (UNVERIFIED for a clean session), cannot report false success |
 | Kill after a passing verifier, during `task_completed` | note | Limitation | a repeated `task_completed` reports NOT_REQUIRED instead of VERIFIED for changes that were verified: a wrong label, not false completion |
 | `mayWrite` treats unregistered tools and cancelled calls as writes | note | Accepted | stricter only |
+| Legacy task files and sessions now always resume UNVERIFIED (round 3) | note | Accepted, by design | fail-closed for state whose obligation is unknown; without a verifier such a unit needs a verifier pass or a restart to reach COMPLETE |
+| `task_completed` under `--dry-run`/`--read-only` clears the obligation without running a verifier (round 3, outside the delta) | note | Follow-up, outside this scope | not run here; predates `101c539`; `operation` has no such flags; the current turn still reports UNVERIFIED, but a later `run --resume` could report NOT_REQUIRED |
 
-**R1: confirmed acceptance blocker.**
+**R1: confirmed acceptance blocker on `5d1917b`, resolved in `4fb9da8`.**
 
 - **Requirement violated.** V1: "Missing or inconsistent durable state must fail closed. It must never be interpreted
   as `NOT_REQUIRED` or successful completion." Acceptance criterion: "Incomplete or inconsistent recovery state
@@ -306,7 +312,29 @@ the new tests run the real decision and resume flows (none can pass vacuously), 
   `nexus-tui` session against it was running throughout.
 - **Not a candidate regression.** The same scenario completes falsely on `fef7cde` as well, without an upgrade. The
   candidate closes it for every state it writes itself: all its task files carry the field (`initTaskState` and every
-  progress write). It does not close it for state from the build it replaces.
+  progress write). `5d1917b` did not close it for state from the build it replaces.
+- **Fix (`4fb9da8`).** An absent `unverifiedChangesPending` means the obligation is unknown and counts as pending:
+  `state.unverifiedChangesPending ?? true` in `recoverFromTaskState`, and `unverifiedChangesPending ?? true` in
+  `restoreSession`. An explicit `true` or `false` is used as recorded. The `lastTurn` and history fallbacks
+  (`historyHasChanges`) are removed. Detection of dangling and interrupted tool calls is unchanged. Recovery writes
+  `true` back only over an explicit `false`. The first version wrote it back whenever the field was absent, and that
+  broke an existing guard test ("a conversation truncated to its system prompt, with no obligation record"): the
+  record lost its legacy shape during the blocked resume, so the restart took the not-started path without the
+  "record was lost" note. The narrowed write-back was the single corrective iteration.
+- **Fix evidence.**
+  - Two regressions in `durable_continuity.test.ts`, describe "R1":
+    - Test A: legacy operation recovery through the real executor and decision flow. INTERRUPTED with no inference,
+      then "continue after inspection", ends BLOCKED `UNVERIFIED`, and the dependent never runs.
+    - Test B: sidecar `/resume`. A recorded `false` stays `NOT_REQUIRED`; a session with the field stripped resumes
+      `UNVERIFIED`.
+  - Both fail on `5d1917b`'s `agent.ts` (A: COMPLETE `NOT_REQUIRED`; B: "an absent obligation is pending") and pass on
+    `4fb9da8`.
+  - `legacy_upgrade_probe.sh` → `legacy_r1/`: the identical legacy state at the kill now ends **BLOCKED
+    COMPLETED/UNVERIFIED (NO_APPLICABLE_VERIFIER)**, with the decision "retry / revise / stop". No credential was
+    presented to the fixture.
+  - Round 3: `R1_CLOSED`. It covered true/false/absent semantics on both paths, confirmed that no path persists an
+    absent field as `false` before real work, that interrupted-call detection is unchanged, and that the tests run
+    the real paths.
 
 ## 7. Remaining limitations
 
@@ -315,7 +343,8 @@ Proven by direct execution (sections 3 and 4; real gateway in section 3):
 - Original V1, V2 and V3 adversarial reproductions no longer reproduce on the candidate build.
 - Kill and restart, then resume (child-process SIGKILL, real gateway). Missing, partial, inconsistent and legacy
   restart history blocks without inference. Step-limit continuation, retry after UNVERIFIED, `run --resume`,
-  `/recover`, sidecar resume and dependent admission all hold the obligation for state the candidate wrote.
+  `/recover`, sidecar resume and dependent admission all hold the obligation. That covers state the candidate wrote
+  and, since `4fb9da8`, legacy task state and sessions (Test A, Test B, `legacy_r1/`).
 - Project `HOME`, `apiKeyEnv` and symlink redirection send no credential to a foreign origin, and the operator's
   existing credential flows still work.
 
@@ -334,36 +363,44 @@ Untested:
 - A real SIGKILL of an interactive host (the S3 test uses an abandoned host).
 - A real capacity withdrawal (simulated by editing the file down to the system prompt).
 - The opt-in sandbox combined with a `HOME` redirect.
-- The legacy interactive-session variant of R1 (code inspection only).
+- The legacy interactive-session variant of R1 is tested through the sidecar (Test B), but not with a session file
+  actually written by `fef7cde`. Test B strips the field from a candidate-written session; that is the only
+  difference that matters to `restoreSession`.
 
 Other limitations: S4 performance. A unit whose history is unusable can only be restarted, and a unit interrupted
-inside any tool still needs an operator decision. The independent review was automated, not human.
+inside any tool still needs an operator decision. Legacy state always resumes UNVERIFIED. The independent review was
+automated, not human.
 
-Confirmed blockers: R1 (section 6).
+Deferred follow-ups, outside this acceptance scope: finding 3 (anchor state roots), S4, S5, the random-id test
+fixture, and `task_completed` under `--dry-run`/`--read-only` clearing the obligation.
+
+Confirmed blockers: none open. R1 was confirmed on `5d1917b` and resolved in `4fb9da8` (section 6).
 
 ## 8. Integration readiness
 
-**Not ready. Verdict: `NEXUS_I1_I6_ACCEPTANCE_BLOCKED`.** Not merged, not pushed. The post-remediation dogfood was
-not run: its gate is a candidate that has passed acceptance.
+**Verdict: `NEXUS_I1_I6_ACCEPTANCE_BLOCKERS_REMEDIATED_WITH_LIMITATIONS`** (candidate `4fb9da8`).
 
 | Requirement | Evidence | Status |
 |---|---|---|
 | V1: objective survives kill and resume; no model-generated replacement | `resume_cand2` (8 messages, objective present); RG3 on the real gateway; kill tests; replacement-objective corruption test | met |
-| V1: missing or inconsistent state fails closed | corruption matrix (6 cases), legacy restart cases | **not met for legacy usable-history state (R1)** |
-| V2: obligations survive step limit, retry, restart, resume; dependents held | `blockers_cand2` V2a/V2b; tests for retry, continue, `run --resume`, `/recover`, sidecar, B1, S3 | met for candidate-written state; **not met for R1** |
+| V1: missing or inconsistent state fails closed | corruption matrix (6 cases), legacy restart cases, R1 Test A, `legacy_r1/` | met |
+| V2: obligations survive step limit, retry, restart, resume; dependents held | `blockers_cand2` V2a/V2b; tests for retry, continue, `run --resume`, `/recover`, sidecar, B1, S3, R1 A/B | met |
 | V3: no credential re-homing or origin expansion via project `HOME` | V3n, i6i ×3, unit invariance, positive controls, leak scans 0 | met |
-| Existing workflows | full suite 582/584 (2 baseline-equivalent); I1/I6 matrix identical to post; real gateway RG1/RG2 | met |
-| No unrelated working-tree changes | main `fef7cde`, 41 entries, status and diff hashes unchanged; PID 719442 untouched | met |
+| Existing workflows | full suite 584/586 on `4fb9da8` (2 baseline-equivalent); focused suites 54/54; I1/I6 matrix identical to post; real gateway RG1/RG2 | met |
+| No unrelated working-tree changes | main `fef7cde`, 41 entries, status and diff hashes unchanged | met |
 
-Minimum remediation for R1 (not implemented here):
+Qualification of `4fb9da8` was targeted: the change is confined to the obligation expressions in
+`recoverFromTaskState` and `restoreSession`.
 
-- In `recoverFromTaskState` and `restoreSession`, treat an absent recorded obligation as pending:
-  `state.unverifiedChangesPending ?? true` and `unverifiedChangesPending ?? true`. That drops the `lastTurn` and
-  history fallbacks for the obligation (history-based detection of dangling and interrupted calls stays).
-- Every file the candidate writes carries the field, so this changes behaviour only for legacy state. Legacy work
-  then resumes UNVERIFIED unless a verifier passes, which is over-strict but fail-closed.
-- Regression test: the R1 scenario as a task file with `lastTurn.unverifiedChangesPending: false`, no field, and a
-  completed `read_file` record; after "continue after inspection" the unit must end BLOCKED `UNVERIFIED`. Add the
-  matching legacy-session case for `restoreSession`.
-- Re-qualify with `legacy_upgrade_probe.sh` plus the focused suites. The rest of the evidence is unaffected by a
-  change confined to these two expressions.
+- `npx tsc --noEmit`: clean.
+- R1 Tests A and B: pass (both fail on `5d1917b`).
+- Focused suites (`durable_continuity`, `credential_home`, `convergence_invariants`, serial):
+  - First run, on the first version of the fix: 52/54. One failure was the existing guard test (the write-back
+    issue in section 6); the other was the known random-id fixture flake.
+  - After the narrowed write-back: 54/54.
+- Full suite, run once: 584/586. The 2 failures are the baseline `security_gates` tests.
+- `legacy_upgrade_probe.sh` → `legacy_r1/`: BLOCKED UNVERIFIED.
+- The V3, credential, I1/I6-probe and real-gateway evidence was gathered on `5d1917b`. Those code paths are unchanged
+  in `4fb9da8` (`git diff 5d1917b 4fb9da8 -- cli/src` touches only `agent.ts` recovery and session restore).
+
+DOGFOOD_PLACEHOLDER
