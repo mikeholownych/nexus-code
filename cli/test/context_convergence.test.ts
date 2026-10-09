@@ -425,6 +425,29 @@ describe("D: findings checkpoint before shown output leaves the context", () => 
     });
   });
 
+  test("a follow-up turn, in process or in a restored session, still cannot rest on output an earlier turn compacted away", async () => {
+    await isolated(async (repo) => {
+      // Turn 1 reads a..d one at a time; every later request answers straight away from memory.
+      const gw = await gateway(sequentialReader, honestNotes);
+      const agent = quiet(new AutonomousAgent(cfg(gw, repo)));
+      const restored = quiet(new AutonomousAgent(cfg(gw, repo)));
+      try {
+        const t1 = await muted(() => agent.runTurn(PROMPT));
+        assert.equal(t1.outcome, "UNVERIFIED");
+        assert.ok(recordNotes(agent.getMessages()).some((n) => n.startsWith("Findings recorded from inspected output [")), "turn 1 recorded findings");
+        const t2 = await muted(() => agent.runTurn("Which markers did you find?"));
+        assert.equal(`${t2.outcome} ${t2.reason}`, "UNVERIFIED CONTEXT_EVIDENCE_NOT_RETAINED", "in-process follow-up");
+        restored.restoreSession(agent.getMessages(), false);
+        const t3 = await muted(() => restored.runTurn("Which markers did you find?"));
+        assert.equal(`${t3.outcome} ${t3.reason}`, "UNVERIFIED CONTEXT_EVIDENCE_NOT_RETAINED", "restored session");
+      } finally {
+        agent.shutdown();
+        restored.shutdown();
+        await gw.close();
+      }
+    });
+  });
+
   test("recorded findings survive a restart and later compactions of the restored record", async () => {
     await isolated(async (repo) => {
       const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-cc-state-"));

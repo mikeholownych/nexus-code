@@ -2713,7 +2713,8 @@ Always explain your reasoning before or alongside your tool calls.`;
     this.turnMutations = 0;
     this.turnConfiguredVerifierFailed = false;
     this.turnCarriedChanges = this.hasPendingModifications;
-    this.turnRemovedObservations = this.carriedRemovedObservations;
+    // What compaction removed earlier in this conversation is still not in context, whichever way the turn began.
+    this.turnRemovedObservations = new Set([...this.carriedRemovedObservations, ...unreacquiredRemovals(this.messages)]);
     this.carriedRemovedObservations = new Set();
 
     try {
