@@ -256,6 +256,11 @@ function unreacquiredRemovals(messages: ChatMessage[]): Set<string> {
   return removed;
 }
 
+/** Content identity of a tool output, to tell whether a re-run returned what was inspected before. */
+function outputDigest(text: string): string {
+  return createHash("sha256").update(text).digest("hex");
+}
+
 /** Findings notes of a serialized durable record, including records nested in it as opaque system text. */
 function recordedFindings(text: string): string[] {
   if (!text.startsWith(DURABLE_RECORD_PREFIX)) return [];
@@ -502,7 +507,8 @@ export class AutonomousAgent {
   private carriedRemovedObservations = new Set<string>();
   // Findings the model recorded from inspected output just before compaction removed it, and those observations.
   private findingNotes: string[] = [];
-  private distilledObservations = new Set<string>();
+  /** Observations whose findings were recorded: the step they were recorded at and the digest of the output they came from. */
+  private distilledObservations = new Map<string, { step: number; digest: string }>();
   /** Provider recovery bounds; undefined reads LOCAL_LLM_RECOVERY_* at each turn. */
   private recoveryPolicy?: RecoveryPolicy;
   private recoveryClock: RecoveryClock = realRecoveryClock;
@@ -840,7 +846,7 @@ export class AutonomousAgent {
     this.activePlan = state.activePlan || [];
     this.messages = state.messages || [];
     this.findingNotes = [];
-    this.distilledObservations = new Set();
+    this.distilledObservations = new Map();
     const unsettled = this.settleUnrecordedToolCalls();
     // Resumed work is the same unit: what compaction removed before the restart is still not in context.
     this.carriedRemovedObservations = unreacquiredRemovals(this.messages);
@@ -1064,7 +1070,7 @@ export class AutonomousAgent {
   public restoreSession(msgs: ChatMessage[], unverifiedChangesPending?: boolean): void {
     this.messages = [...msgs];
     this.findingNotes = [];
-    this.distilledObservations = new Set();
+    this.distilledObservations = new Map();
     const unsettled = this.settleUnrecordedToolCalls();
     const pending = (unverifiedChangesPending ?? true) || unsettled.some((tool) => this.mayWrite(tool));
     if (pending) this.verificationEvidence = undefined;
@@ -1154,7 +1160,7 @@ export class AutonomousAgent {
 
   public resetConversation(): void {
     this.findingNotes = [];
-    this.distilledObservations = new Set();
+    this.distilledObservations = new Map();
     this.messages = [
       {
         role: "system",
@@ -1667,7 +1673,7 @@ export class AutonomousAgent {
     const wanted = new Set(removed.filter((key) => !this.distilledObservations.has(key)));
     const unseen = new Set(this.unseenToolResults(source));
     const callKeys = new Map<string, string>();
-    const pending: Array<{ key: string; text: string; partial: boolean }> = [];
+    const pending: Array<{ key: string; text: string; partial: boolean; digest: string }> = [];
     source.forEach((message, index) => {
       if (message.role === "assistant") {
         for (const call of message.tool_calls ?? []) {
@@ -1678,7 +1684,7 @@ export class AutonomousAgent {
       const key = callKeys.get(message.tool_call_id);
       const text = normalizeMessageContent(message.content).text.join("");
       if (!key || !wanted.has(key) || pending.some((item) => item.key === key) || !text || text.startsWith("Error executing ")) return;
-      pending.push({ key, text, partial: isTruncatedObservation(message) });
+      pending.push({ key, text, partial: isTruncatedObservation(message), digest: outputDigest(text) });
     });
     if (!pending.length) return false;
     let recorded = false;
@@ -1729,10 +1735,21 @@ export class AutonomousAgent {
       const clipped = text.length > FINDINGS_NOTE_LIMIT ? `${text.slice(0, FINDINGS_NOTE_LIMIT)} …[clipped]` : text;
       const sources = group.map((item) => `${item.key}${item.partial ? " (partial)" : ""}`).join("; ");
       this.findingNotes.push(`${FINDINGS_PREFIX}step ${step}; from ${sources}; model-written, not independent proof]\n${clipped}`);
-      for (const item of group) this.distilledObservations.add(item.key);
+      for (const item of group) this.distilledObservations.set(item.key, { step, digest: item.digest });
       recorded = true;
     }
     return recorded;
+  }
+
+  /**
+   * Tool output for the model. When the call repeats one whose findings were recorded, says so (and whether the output
+   * is unchanged) with the step position, so a re-run is a choice made knowing what the memory already holds.
+   */
+  private toolResultContent(call: ToolCall, content: string, step: number, maxSteps: number): string {
+    const recorded = this.distilledObservations.get(observationKey(call.function.name, call.function.arguments));
+    if (!recorded) return content;
+    const same = outputDigest(content) === recorded.digest ? "identical to" : "different from";
+    return `${content}\n[Nexus: you ran this same call before; findings from its output were recorded at step ${recorded.step} and are in your memory. This output is ${same} the output they were recorded from. This is step ${step} of ${maxSteps}. If those findings already cover what you need, use them and move on to the next part of your task.]`;
   }
 
   /** Returns the observations the accepted compaction removed (none when no compaction was needed). */
@@ -2910,7 +2927,7 @@ Always explain your reasoning before or alongside your tool calls.`;
               role: "tool",
               tool_call_id: item.call.id,
               name: item.toolName,
-              content,
+              content: item.receipt.success ? this.toolResultContent(item.call, content, currentStep, this.config.maxSteps) : content,
             });
           }
           this.persistProgress({ messages: true });
@@ -2969,7 +2986,7 @@ Always explain your reasoning before or alongside your tool calls.`;
             role: "tool",
             tool_call_id: call.id,
             name: toolName,
-            content: finalContent,
+            content: receipt.success ? this.toolResultContent(call, finalContent, currentStep, this.config.maxSteps) : finalContent,
           });
           this.persistProgress({ messages: true });
 
@@ -3277,7 +3294,7 @@ Always explain your reasoning before or alongside your tool calls.`;
           tool_call_id: call.id,
           name: toolName,
           content: receipt.success
-            ? receipt.output
+            ? this.toolResultContent(call, receipt.output, currentStep, this.config.maxSteps)
             : `Error executing ${toolName}: ${receipt.error || "Unknown error"}`,
         });
       }

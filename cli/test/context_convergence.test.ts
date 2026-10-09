@@ -444,6 +444,55 @@ describe("D: findings checkpoint before shown output leaves the context", () => 
     });
   });
 
+  test("re-running a call whose findings were recorded is answered in full, marked with when, whether it changed, and the step", async () => {
+    for (const changeSource of [false, true]) {
+      await isolated(async (repo) => {
+        // Reads a..d (a.txt's output is distilled and removed along the way), re-reads a.txt, then stops.
+        const gw = await gateway((r) => {
+          if (r.n <= FILES.length) return { tools: [read(FILES[r.n - 1])] };
+          if (r.n === FILES.length + 1) {
+            if (changeSource) fs.appendFileSync(path.join(repo, "a.txt"), "appended later\n");
+            return { tools: [read("a.txt")] };
+          }
+          return { tools: [done("stop")] };
+        }, honestNotes);
+        const agent = quiet(new AutonomousAgent(cfg(gw, repo)));
+        try {
+          await muted(() => agent.runTurn(PROMPT));
+          const reread = gw.requests[FILES.length + 1].body.messages.filter((m: any) => m.role === "tool").at(-1);
+          const notice = /\n\[Nexus: you ran this same call before; findings from its output were recorded at step (\d+) and are in your memory\. This output is (identical to|different from) the output they were recorded from\. This is step (\d+) of 8\.[^\]]*\]$/.exec(String(reread?.content));
+          assert.ok(notice, String(reread?.content).slice(-400));
+          assert.equal(notice[2], changeSource ? "different from" : "identical to");
+          assert.equal(Number(notice[3]), FILES.length + 1);
+          assert.ok(Number(notice[1]) <= FILES.length, "the findings predate the re-run");
+          assert.ok(String(reread.content).startsWith("{") && String(reread.content).includes(`MARKER a.txt: ${MARKERS["a.txt"]}`), "the re-run output is returned in full, not replaced");
+          // First reads carry no such notice.
+          for (const q of gw.requests.slice(0, FILES.length + 1)) {
+            for (const m of q.body.messages) if (m.role === "tool") assert.ok(!String(m.content).includes("you ran this same call before"));
+          }
+        } finally {
+          agent.shutdown();
+          await gw.close();
+        }
+      });
+    }
+  });
+
+  test("without recorded findings a repeated call carries no notice", async () => {
+    await isolated(async (repo) => {
+      const gw = await gateway((r) => (r.n <= FILES.length ? { tools: [read(FILES[r.n - 1])] } : r.n === FILES.length + 1 ? { tools: [read("a.txt")] } : { tools: [done("stop")] }));
+      const agent = quiet(new AutonomousAgent(cfg(gw, repo)));
+      try {
+        await muted(() => agent.runTurn(PROMPT));
+        assert.ok(gw.checkpoints.length >= 1);
+        for (const q of gw.requests) for (const m of q.body.messages) if (m.role === "tool") assert.ok(!String(m.content).includes("you ran this same call before"));
+      } finally {
+        agent.shutdown();
+        await gw.close();
+      }
+    });
+  });
+
   test("removal notes say what the model had of each observation; the legacy wording is still honoured", async () => {
     await isolated(async (repo) => {
       const agent = quiet(new AutonomousAgent({ endpoint: "http://127.0.0.1:9/v1", model: "m", maxSteps: 2, temperature: 0, workspace: repo, shell: "bash" })) as any;
@@ -461,7 +510,7 @@ describe("D: findings checkpoint before shown output leaves the context", () => 
           call("c6", "write_file", { path: "edited.txt", content: "new body\n" }), result("c6", "write_file", "ok"),
           call("c5", "read_file", { path: "fresh.txt" }), unseen,
         ];
-        agent.distilledObservations.add(key("noted.txt"));
+        agent.distilledObservations.set(key("noted.txt"), { step: 1, digest: "" });
         const s = agent.summarizeDiscardedHistory(history, 0, new Set([unseen]));
         const notes: string[] = JSON.parse(s.content.slice(DURABLE.length)).notes;
         const wording = (file: string) => notes.find((n) => n.endsWith(key(file)) && n.includes("no longer in context"));
