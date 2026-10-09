@@ -403,4 +403,53 @@ Qualification of `4fb9da8` was targeted: the change is confined to the obligatio
 - The V3, credential, I1/I6-probe and real-gateway evidence was gathered on `5d1917b`. Those code paths are unchanged
   in `4fb9da8` (`git diff 5d1917b 4fb9da8 -- cli/src` touches only `agent.ts` recovery and session restore).
 
-DOGFOOD_PLACEHOLDER
+### Dogfood (one run, established workflow)
+
+Setup:
+
+- Driver: `~/df2/postdog/dogfood/drive_sidecar.mjs`, the sidecar the TUI uses. One `prompt.submit`, auto mode, no
+  cancel or intervention, then `/export json`, `/export md`, a receipt and shutdown.
+- Objective: the preserved control objective (`control/objective.txt`, sha256 `883989f2…`) minus the git-status line
+  Nexus appends: `run_4fb9da8/objective.txt`, sha256 `aef36c2f…`.
+- Build: `~/df2/postdog/cand_4fb9da8`, identical to the `dist` committed with this candidate.
+- Workspace: a clean detached worktree of `4fb9da8` (`~/df2/postdog/dogfood_ws`), so the canonical checkout was not
+  touched.
+- Operator configuration: the real gateway, `engineering/b0`, the default step limit of 30.
+
+Evidence is in `~/df2/postdog/dogfood/run_4fb9da8/`: `events.jsonl`, the session JSON and Markdown exports,
+`audit_window.jsonl`, `driver.log` and `started_at`.
+
+| | Control turn 1 (`d037bc0`) | Control turn 2 | Candidate `4fb9da8` |
+|---|---|---|---|
+| Steps / tool calls | 30 / 29 | 30 / 30 | 30 / 80 (parallel read batches) |
+| Termination | operator cancel at step 30 | step budget | step budget: `LIMIT_REACHED`, `NOT_ESTABLISHED` |
+| Prompt tokens | 670,911 (gateway) | 780,962 (gateway) | 726,430 (session) |
+| Completion tokens | 4,169 over both turns | | 4,720 |
+| Pattern | 6-call reacquisition cycle ×5 | 8-call cycle ×3.75 | 8-call cycle ×10: `file_tree`, `git_log`, `ARCHITECTURE.md`, `AGENTS.md`, `EXECUTION_CONVERGENCE.md`, `types.ts`, `client.ts`, `agent.ts` |
+| Artifact | none | none | none |
+
+Outcome: **not convergent**. The run did not produce `docs/DOGFOOD_ARCHITECTURE_REVIEW.md`.
+
+Classification: **baseline defect, not an acceptance-invariant violation and not a candidate regression.**
+
+- It is the compaction-driven reacquisition loop that the pre-remediation control also showed (section 16 of the
+  dogfood qualification report). Context retrieval and compaction are outside this remediation's scope, and
+  `4fb9da8` does not change them.
+- Nexus reported the outcome truthfully. The step budget was exhausted, the outcome is `NOT_ESTABLISHED`, there was no
+  false COMPLETE, and no write occurred: all 80 audited calls are reads, and `unverifiedChangesPending: false` is
+  correct.
+- Nothing was weakened or tuned to help the run: the same objective, the step limit and no intervention.
+
+Under the integration rule (only an invariant violation or a candidate regression blocks), integration proceeds. The
+dogfood workload's non-convergence remains an open product limitation for the context-management stream.
+
+### Integration
+
+- Method: the repository's established procedure, `git merge --ff-only` of `fix/i1-i6-blockers` into `main` in the
+  canonical checkout. `main` (`fef7cde`) is an ancestor of the branch.
+- `cli/dist` is tracked and is committed with source changes (as in `a27901c`). The branch therefore carries a build
+  commit: `tsc` output at `4fb9da8`, byte-identical to the probed and dogfooded candidate build, changing only the 10
+  files whose sources changed.
+- The branch's changed paths (`cli/src`, `cli/test`, `cli/dist`, `docs/reviews`) do not overlap the canonical
+  checkout's 41 pre-existing entries, so those entries are preserved as they are.
+- The repository has no configured remote, so there is nothing to push: canonical `main` is the local branch.
