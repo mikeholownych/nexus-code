@@ -30,10 +30,14 @@ import type { HarnessConfig } from "../src/types.js";
 type Call = { name: string; args: unknown };
 type Reply = { content?: string; tools: Call[] } | { text: string };
 interface Req { n: number; body: any }
-interface Gw { url: string; origin: string; requests: Req[]; issued: Call[]; close(): Promise<void> }
+interface Gw { url: string; origin: string; requests: Req[]; issued: Call[]; checkpoints: Req[]; close(): Promise<void> }
 
-async function gateway(script: (req: Req) => Reply): Promise<Gw> {
-  const gw: Gw = { url: "", origin: "", requests: [], issued: [], close: async () => {} };
+/** A findings checkpoint: Nexus asks, without tools, what inspected output about to leave the context established. */
+const isCheckpoint = (body: any): boolean => String(body.messages?.[0]?.content ?? "").startsWith("You keep the working notes");
+
+/** `checkpoint` answers findings checkpoints, which do not count as model steps; by default it records nothing. */
+async function gateway(script: (req: Req) => Reply, checkpoint: (req: Req) => string = () => ""): Promise<Gw> {
+  const gw: Gw = { url: "", origin: "", requests: [], issued: [], checkpoints: [], close: async () => {} };
   let ids = 0;
   const server = http.createServer((req, res) => {
     if (req.url?.endsWith("/models")) {
@@ -45,9 +49,9 @@ async function gateway(script: (req: Req) => Reply): Promise<Gw> {
     req.on("end", () => {
       let body: any = {};
       try { body = JSON.parse(raw); } catch {}
-      const r: Req = { n: gw.requests.length + 1, body };
-      gw.requests.push(r);
-      const reply = script(r);
+      const r: Req = { n: (isCheckpoint(body) ? gw.checkpoints : gw.requests).length + 1, body };
+      (isCheckpoint(body) ? gw.checkpoints : gw.requests).push(r);
+      const reply: Reply = isCheckpoint(body) ? { text: checkpoint(r) } : script(r);
       if ("tools" in reply) gw.issued.push(...reply.tools);
       const calls = "tools" in reply
         ? reply.tools.map((c, index) => ({ index, id: `call_${++ids}`, type: "function", function: { name: c.name, arguments: JSON.stringify(c.args) } }))
@@ -320,6 +324,178 @@ describe("C: compaction between a mutation and completion", () => {
       } finally {
         await gw.close();
         fs.rmSync(stateDir, { recursive: true, force: true });
+      }
+    });
+  });
+});
+
+describe("D: findings checkpoint before shown output leaves the context", () => {
+  const DURABLE = "[Structured Context Memory - durable task state]\n";
+  /** Notes of every durable record in a request or conversation, including records nested as opaque text. */
+  const recordNotes = (messages: any[]): string[] => {
+    const out: string[] = [];
+    const collect = (text: string) => {
+      if (!text.startsWith(DURABLE)) return;
+      for (const note of JSON.parse(text.slice(DURABLE.length)).notes ?? []) {
+        out.push(note);
+        if (typeof note === "string" && note.startsWith("Earlier system message: ")) collect(note.slice("Earlier system message: ".length));
+      }
+    };
+    for (const m of messages) if (m.role === "system" && typeof m.content === "string") collect(m.content);
+    return out;
+  };
+  const key = (file: string) => `read_file {"path":"${file}"}`;
+  const FILES = ["a.txt", "b.txt", "c.txt", "d.txt"];
+  const PROMPT = "Read a.txt, b.txt, c.txt and d.txt one at a time, then report the marker word of each via task_completed.";
+  /** Reads one file per step, then reports the markers it can still see (in tool output or in recorded findings). */
+  const sequentialReader = (r: Req): Reply => (r.n <= FILES.length ? { tools: [read(FILES[r.n - 1])] } : { tools: [done(`markers: ${FILES.map((f) => (allText(r.body).includes(MARKERS[f]) ? MARKERS[f] : "?")).join(", ")}`)] });
+  /** A findings writer that states only what its evidence shows. */
+  const honestNotes = (r: Req): string => FILES.filter((f) => visible(r.body, f)).map((f) => `${f} starts with marker ${MARKERS[f]}.`).join(" ");
+
+  test("shown output is distilled into labelled, sourced findings that never count as proof", async () => {
+    await isolated(async (repo) => {
+      const gw = await gateway(sequentialReader, honestNotes);
+      const findingsLog: string[] = [];
+      const agent = quiet(new AutonomousAgent(cfg(gw, repo)));
+      try {
+        const turn = await muted(async () => {
+          const log = console.log;
+          console.log = (...a: any[]) => { const s = String(a[0]); if (s.startsWith("[context_findings]")) findingsLog.push(s); else log(...a); };
+          try { return await agent.runTurn(PROMPT); } finally { console.log = log; }
+        });
+        const trail = `${turn.outcome} ${turn.reason ?? ""}\n${findingsLog.join("\n")}\n${gw.requests.map((q) => `req ${q.n}: ${FILES.map((f) => `${f}=${visible(q.body, f)}`).join(" ")}`).join("\n")}`;
+        assert.ok(gw.checkpoints.length >= 1, `a checkpoint ran when shown output was compacted away\n${trail}`);
+        for (const c of gw.checkpoints) {
+          assert.equal(c.body.tools, undefined, "a checkpoint grants no tools");
+          assert.ok(allText(c.body).includes(PROMPT), "a checkpoint is asked about the current request");
+          // Only output the model was already shown is distilled: each file in a checkpoint was visible in an earlier step.
+          const shownBefore = (f: string) => gw.requests.some((q) => visible(q.body, f));
+          for (const f of FILES) if (visible(c.body, f)) assert.ok(shownBefore(f), `${f} was distilled before the model saw it`);
+        }
+        const last = gw.requests.at(-1)!.body;
+        const notes = recordNotes(last.messages);
+        const findings = notes.filter((n) => n.startsWith("Findings recorded from inspected output ["));
+        assert.ok(findings.some((n) => n.includes(`from ${key("a.txt")}`) && n.includes("model-written, not independent proof]") && n.includes("a.txt starts with marker copper-falcon.")), `${notes.join("\n")}\n${trail}`);
+        assert.ok(!visible(last, "a.txt"), "a.txt's output itself left the context");
+        assert.ok(notes.includes(`Inspected earlier; output no longer in context (findings recorded in this memory; re-run only for a detail they lack or if the source may have changed): ${key("a.txt")}`), notes.join("\n"));
+        // G is unchanged: a read-only answer resting on removed output is not established by recorded findings.
+        assert.equal(turn.outcome, "UNVERIFIED", trail);
+        assert.equal(turn.reason, "CONTEXT_EVIDENCE_NOT_RETAINED");
+        assert.equal(turnSucceeded(turn), false);
+        // The model was not re-asked to re-read anything because of compaction.
+        for (const f of FILES) assert.equal(gw.issued.filter((c) => c.name === "read_file" && (c.args as { path: string }).path === f).length, 1, trail);
+      } finally {
+        agent.shutdown();
+        await gw.close();
+      }
+    });
+  });
+
+  test("nothing is recorded when the checkpoint yields nothing; the removal says so", async () => {
+    await isolated(async (repo) => {
+      const gw = await gateway(sequentialReader);
+      const agent = quiet(new AutonomousAgent(cfg(gw, repo)));
+      try {
+        await muted(() => agent.runTurn(PROMPT));
+        assert.ok(gw.checkpoints.length >= 1);
+        const notes = recordNotes(gw.requests.at(-1)!.body.messages);
+        assert.ok(!notes.some((n) => n.startsWith("Findings recorded from inspected output [")), notes.join("\n"));
+        assert.ok(notes.includes(`Inspected earlier; output no longer in context (no findings were recorded from it): ${key("a.txt")}`), notes.join("\n"));
+      } finally {
+        agent.shutdown();
+        await gw.close();
+      }
+    });
+  });
+
+  test("recorded findings survive a restart and later compactions of the restored record", async () => {
+    await isolated(async (repo) => {
+      const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-cc-state-"));
+      const gw = await gateway((r) => ({ tools: [read(FILES[Math.min(r.n, FILES.length) - 1])] }), honestNotes);
+      const withState = (a: AutonomousAgent) => {
+        (a as any).stateManager = new DurableStateManager({ baseDir: stateDir, workspacePaths: [(a as any).primaryWorkspacePathIdentity] });
+        return a;
+      };
+      try {
+        const first = withState(quiet(new AutonomousAgent(cfg(gw, repo, { maxSteps: 4 }))));
+        const taskId = first.getTaskId();
+        const t1 = await muted(() => first.runTurn(PROMPT));
+        assert.equal(t1.execution, "LIMIT_REACHED");
+        const before = recordNotes(first.getMessages()).filter((n) => n.startsWith("Findings recorded from inspected output ["));
+        assert.ok(before.length >= 1, "findings were recorded before the restart");
+        first.checkpointDurableState("before restart", t1);
+        first.shutdown();
+        const second = withState(quiet(new AutonomousAgent(cfg(gw, repo))));
+        try {
+          await second.recoverFromTaskState(taskId);
+          const restored = recordNotes(second.getMessages());
+          for (const note of before) assert.ok(restored.includes(note), `restored: ${note.slice(0, 120)}`);
+          // The restored record is opaque text to the new process; a compaction of it still carries the findings verbatim.
+          const again = (second as any).compactionCandidate(second.getMessages(), 0, 0);
+          const carried = recordNotes(again.messages);
+          for (const note of before) assert.ok(carried.includes(note), `carried: ${note.slice(0, 120)}`);
+        } finally {
+          second.shutdown();
+        }
+      } finally {
+        await gw.close();
+        fs.rmSync(stateDir, { recursive: true, force: true });
+      }
+    });
+  });
+
+  test("removal notes say what the model had of each observation; the legacy wording is still honoured", async () => {
+    await isolated(async (repo) => {
+      const agent = quiet(new AutonomousAgent({ endpoint: "http://127.0.0.1:9/v1", model: "m", maxSteps: 2, temperature: 0, workspace: repo, shell: "bash" })) as any;
+      try {
+        const call = (id: string, name: string, args: unknown) => ({ role: "assistant" as const, content: "", tool_calls: [{ id, type: "function" as const, function: { name, arguments: JSON.stringify(args) } }] });
+        const result = (id: string, name: string, content: string) => ({ role: "tool" as const, tool_call_id: id, name, content });
+        const cut = "\n[Nexus: output truncated to fit the context window; showed the first 5 of 900 characters. The rest was not shown to you.]";
+        const unseen = result("c5", "read_file", "fresh\n");
+        const history = [
+          { role: "assistant" as const, content: "Plan: inspect the files." },
+          call("c1", "read_file", { path: "seen.txt" }), result("c1", "read_file", "seen\n"),
+          call("c2", "read_file", { path: "noted.txt" }), result("c2", "read_file", "noted\n"),
+          call("c3", "read_file", { path: "part.txt" }), result("c3", "read_file", `hello${cut}`),
+          call("c4", "read_file", { path: "edited.txt" }), result("c4", "read_file", "old body\n"),
+          call("c6", "write_file", { path: "edited.txt", content: "new body\n" }), result("c6", "write_file", "ok"),
+          call("c5", "read_file", { path: "fresh.txt" }), unseen,
+        ];
+        agent.distilledObservations.add(key("noted.txt"));
+        const s = agent.summarizeDiscardedHistory(history, 0, new Set([unseen]));
+        const notes: string[] = JSON.parse(s.content.slice(DURABLE.length)).notes;
+        const wording = (file: string) => notes.find((n) => n.endsWith(key(file)) && n.includes("no longer in context"));
+        assert.match(wording("seen.txt")!, /^Inspected earlier; output no longer in context \(no findings were recorded from it\): /);
+        assert.match(wording("noted.txt")!, /^Inspected earlier; output no longer in context \(findings recorded in this memory; /);
+        assert.match(wording("part.txt")!, /^Shown to you only in part \(truncated\); output no longer in context: /);
+        assert.match(wording("edited.txt")!, /^Source changed after you inspected it; /);
+        assert.match(wording("fresh.txt")!, /^Never shown to you; output no longer in context \(run it to see it\): /);
+        // Every wording, and the legacy one, marks the observation as removed for completion.
+        const legacy = { role: "system" as const, content: `${DURABLE}${JSON.stringify({ version: 2, notes: [`Output no longer in context (rerun to see it again): ${key("old.txt")}`] })}` };
+        const conversation = [{ role: "system", content: "sys" }, { role: "user", content: "go" }, legacy, { role: "system" as const, content: s.content }, { role: "assistant", content: "noted" }];
+        const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-cc-state-"));
+        const make = () => {
+          const a = quiet(new AutonomousAgent({ endpoint: "http://127.0.0.1:9/v1", model: "m", maxSteps: 2, temperature: 0, workspace: repo, shell: "bash" })) as any;
+          a.stateManager = new DurableStateManager({ baseDir: stateDir, workspacePaths: [a.primaryWorkspacePathIdentity] });
+          return a;
+        };
+        const saver = make();
+        const recoverer = make();
+        try {
+          saver.messages = conversation;
+          const taskId = saver.getTaskId();
+          saver.checkpointDurableState("checkpoint");
+          await recoverer.recoverFromTaskState(taskId);
+          const carried = Array.from(recoverer.carriedRemovedObservations as Set<string>).sort();
+          const write = `write_file ${JSON.stringify({ path: "edited.txt", content: "new body\n" })}`;
+          assert.deepEqual(carried, [...["edited.txt", "fresh.txt", "noted.txt", "old.txt", "part.txt", "seen.txt"].map(key), write].sort());
+        } finally {
+          saver.shutdown();
+          recoverer.shutdown();
+          fs.rmSync(stateDir, { recursive: true, force: true });
+        }
+      } finally {
+        agent.shutdown();
       }
     });
   });

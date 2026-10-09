@@ -163,10 +163,25 @@ const VERBOSE_NOTE_CHEAP_LIMIT = 512;
 
 const DETAIL_ELISION = "[Some verbose source detail elided to honor the detail budget; that content is no longer in this conversation. Rerun the tool that produced it if you need it.]";
 const DETAIL_TRUNCATION = "\n…#(truncated to detail budget; the rest is no longer in this conversation, rerun the tool to see it)";
+// Removal notes say what the model actually had of each observation that left its context. Every variant is a
+// removal (completion treats them alike); the legacy prefix is still parsed from persisted records.
 const REMOVED_OBSERVATION = "Output no longer in context (rerun to see it again): ";
+const REMOVED_UNSEEN = "Never shown to you; output no longer in context (run it to see it): ";
+const REMOVED_PARTIAL = "Shown to you only in part (truncated); output no longer in context: ";
+const REMOVED_CHANGED = "Source changed after you inspected it; output no longer in context (re-read it for current content): ";
+const REMOVED_RECORDED = "Inspected earlier; output no longer in context (findings recorded in this memory; re-run only for a detail they lack or if the source may have changed): ";
+const REMOVED_UNRECORDED = "Inspected earlier; output no longer in context (no findings were recorded from it): ";
+const REMOVAL_PREFIXES = [REMOVED_OBSERVATION, REMOVED_UNSEEN, REMOVED_PARTIAL, REMOVED_CHANGED, REMOVED_RECORDED, REMOVED_UNRECORDED];
+
+// Model-written findings captured from inspected output before compaction removes it. Claims, not evidence.
+const FINDINGS_PREFIX = "Findings recorded from inspected output [";
+const FINDINGS_NOTE_LIMIT = 3_000;
+const FINDINGS_BUDGET_CHARS = 24_000;
+const FINDINGS_ELISION = "[Older recorded findings elided to bound this memory.]";
+const FINDINGS_INSTRUCTIONS = "You keep the working notes of an autonomous software-engineering agent. The tool output below is about to be removed from the agent's context window. Record, for the agent's current request, what this output actually shows: concrete facts with file paths, symbol names and line numbers, and anything it shows to be missing or inconsistent. State only what the output itself shows; do not speculate, plan, or restate the request. If the output is irrelevant to the request, say so in one line. Plain text, at most 250 words.";
 
 function unseenTruncationNotice(shown: number, total: number): string {
-  return `\n[Nexus: output truncated to fit the context window; showed the first ${shown} of ${total} characters. The rest was not shown to you, so do not assume what it contains. Note what you learned from this part, then inspect the specific parts you still need with narrower calls (outline_file, search_code, find_files) instead of repeating this one.]`;
+  return `\n[Nexus: output truncated to fit the context window; showed the first ${shown} of ${total} characters. The rest was not shown to you, so do not assume what it contains. Note what you learned from this part, then inspect the specific parts you still need with narrower calls (read_file with start_line/end_line, outline_file, search_code) instead of repeating this one.]`;
 }
 
 // Only a well-formed trailing notice marks a truncated result; file text that quotes the template does not.
@@ -199,7 +214,8 @@ function collectRecordedRemovals(text: string, out: Set<string>): void {
   if (!Array.isArray(notes)) return;
   for (const note of notes) {
     if (typeof note !== "string") continue;
-    if (note.startsWith(REMOVED_OBSERVATION)) out.add(note.slice(REMOVED_OBSERVATION.length));
+    const prefix = REMOVAL_PREFIXES.find((candidate) => note.startsWith(candidate));
+    if (prefix) out.add(note.slice(prefix.length));
     else if (note.startsWith("Earlier system message: ")) collectRecordedRemovals(note.slice("Earlier system message: ".length), out);
   }
 }
@@ -238,6 +254,22 @@ function unreacquiredRemovals(messages: ChatMessage[]): Set<string> {
   }
   for (const key of present) removed.delete(key);
   return removed;
+}
+
+/** Findings notes of a serialized durable record, including records nested in it as opaque system text. */
+function recordedFindings(text: string): string[] {
+  if (!text.startsWith(DURABLE_RECORD_PREFIX)) return [];
+  let notes: unknown;
+  try {
+    notes = JSON.parse(text.slice(DURABLE_RECORD_PREFIX.length)).notes;
+  } catch {
+    return [];
+  }
+  if (!Array.isArray(notes)) return [];
+  return notes.flatMap((note) => typeof note !== "string" ? []
+    : note.startsWith(FINDINGS_PREFIX) ? [note]
+    : note.startsWith("Earlier system message: ") ? recordedFindings(note.slice("Earlier system message: ".length))
+    : []);
 }
 
 /** `retainedObservations` of a serialized durable record: [note index, observation key] pairs. Malformed entries are ignored. */
@@ -468,6 +500,9 @@ export class AutonomousAgent {
   private turnRemovedObservations = new Set<string>();
   /** Removals recorded in a recovered conversation; the next (resumed) turn starts with them. */
   private carriedRemovedObservations = new Set<string>();
+  // Findings the model recorded from inspected output just before compaction removed it, and those observations.
+  private findingNotes: string[] = [];
+  private distilledObservations = new Set<string>();
   /** Provider recovery bounds; undefined reads LOCAL_LLM_RECOVERY_* at each turn. */
   private recoveryPolicy?: RecoveryPolicy;
   private recoveryClock: RecoveryClock = realRecoveryClock;
@@ -804,6 +839,8 @@ export class AutonomousAgent {
     this.currentTaskId = state.taskId;
     this.activePlan = state.activePlan || [];
     this.messages = state.messages || [];
+    this.findingNotes = [];
+    this.distilledObservations = new Set();
     const unsettled = this.settleUnrecordedToolCalls();
     // Resumed work is the same unit: what compaction removed before the restart is still not in context.
     this.carriedRemovedObservations = unreacquiredRemovals(this.messages);
@@ -1026,6 +1063,8 @@ export class AutonomousAgent {
    */
   public restoreSession(msgs: ChatMessage[], unverifiedChangesPending?: boolean): void {
     this.messages = [...msgs];
+    this.findingNotes = [];
+    this.distilledObservations = new Set();
     const unsettled = this.settleUnrecordedToolCalls();
     const pending = (unverifiedChangesPending ?? true) || unsettled.some((tool) => this.mayWrite(tool));
     if (pending) this.verificationEvidence = undefined;
@@ -1114,6 +1153,8 @@ export class AutonomousAgent {
   }
 
   public resetConversation(): void {
+    this.findingNotes = [];
+    this.distilledObservations = new Set();
     this.messages = [
       {
         role: "system",
@@ -1244,7 +1285,11 @@ export class AutonomousAgent {
     return { completion, toolResponse, total: completion + toolResponse };
   }
 
-  private summarizeDiscardedHistory(messages: ChatMessage[], detailBudgetChars: number): CanonicalDurableSummary {
+  /**
+   * @param unseen tool results in `messages` the model has not been shown yet (default: those after the last
+   *   assistant message in `messages`).
+   */
+  private summarizeDiscardedHistory(messages: ChatMessage[], detailBudgetChars: number, unseen: ReadonlySet<ChatMessage> = new Set(this.unseenToolResults(messages).map((index) => messages[index]))): CanonicalDurableSummary {
     const filesRead = new Set<string>();
     const filesModified = new Set<string>();
     const commandsExecuted: string[] = [];
@@ -1260,6 +1305,9 @@ export class AutonomousAgent {
     };
     // Observations whose output was truncated before the model saw it: never fully observed, whatever note survives.
     const partialObservations = new Set<string>();
+    const seenKeys = new Set<string>();
+    const unseenKeys = new Set<string>();
+    const keyPaths = new Map<string, string>();
     const toolCallCounts = new Map<string, number>();
     const toolResultCounts = new Map<string, number>();
     const priorTasks: string[] = [];
@@ -1357,6 +1405,8 @@ export class AutonomousAgent {
           addDurableNote(opaque);
           // Its claims can only mark more output as removed later (stricter completion), never establish anything.
           for (const [, key] of recordedRetainedObservations(contentText)) carriesObservation(opaque, key);
+          // Recorded findings are labelled model claims, not authority: they stay findable after a restart.
+          for (const note of recordedFindings(contentText)) addDurableNote(note);
         }
       }
       if (message.role === "user" && contentText) {
@@ -1373,6 +1423,7 @@ export class AutonomousAgent {
           const name = typeof call?.function?.name === "string" ? call.function.name : "";
           const id = typeof call?.id === "string" && call.id.trim() ? call.id : undefined;
           if (id && name) callKeys.set(id, observationKey(name, rawArgs));
+          if (id && name && typeof args.path === "string") keyPaths.set(observationKey(name, rawArgs), args.path);
           const serializedArgs = reconstructibleQueryTools.has(name)
             ? validReconstructibleArgs(name, rawArgs)
             : undefined;
@@ -1391,6 +1442,7 @@ export class AutonomousAgent {
       if (message.role === "tool") {
         const id = typeof message.tool_call_id === "string" && message.tool_call_id.trim() ? message.tool_call_id : undefined;
         const key = id ? callKeys.get(id) : undefined;
+        if (key) (unseen.has(message) ? unseenKeys : seenKeys).add(key);
         if (key && isTruncatedObservation(message)) {
           partialObservations.add(key);
         } else if (key && contentText.length && !contentText.startsWith("Error executing ")) {
@@ -1403,6 +1455,15 @@ export class AutonomousAgent {
         }
         if (contentText.length) addDurableNote(`Earlier ${message.name || "tool"} output: ${contentText}`);
       }
+    }
+
+    for (const note of this.findingNotes) addDurableNote(note);
+    const findings = durableNotes.filter((note) => note.startsWith(FINDINGS_PREFIX));
+    let findingsChars = findings.reduce((total, note) => total + note.length, 0);
+    for (const note of findings) {
+      if (findingsChars <= FINDINGS_BUDGET_CHARS) break;
+      durableNotes.splice(durableNotes.indexOf(note), 1, ...(durableNotes.includes(FINDINGS_ELISION) ? [] : [FINDINGS_ELISION]));
+      findingsChars -= note.length;
     }
 
     const freshSections: Array<[string, string[]]> = [
@@ -1421,21 +1482,37 @@ export class AutonomousAgent {
     // actually reclaim context (fixing no-op escalation when large tool outputs balloon the
     // durable record and keep post-compaction utilization above the proactive threshold).
     const notes = applyDetailBudget(durableNotes, detailBudgetChars);
-    // Say exactly which observations left the conversation, so the model re-reads them instead of recalling them.
-    const retainedObservations: Array<[number, string]> = [];
+    // Say exactly which observations left the conversation, and what the model had of each.
     const dropped = new Set<string>();
+    for (const [note, keys] of observationNotes) if (!notes.includes(note)) for (const key of keys) dropped.add(key);
+    for (const key of partialObservations) dropped.add(key);
+    for (const [note, keys] of observationNotes) if (notes.includes(note)) for (const key of keys) dropped.delete(key);
+    const removedObservations = Array.from(dropped);
+    const removalPrefix = (key: string): string => {
+      if (partialObservations.has(key)) return REMOVED_PARTIAL;
+      const path = keyPaths.get(key);
+      if (path !== undefined && filesModified.has(path) && !key.startsWith("write_file ") && !key.startsWith("edit_file ") && !key.startsWith("patch_file ")) return REMOVED_CHANGED;
+      if (this.distilledObservations.has(key)) return REMOVED_RECORDED;
+      if (seenKeys.has(key)) return REMOVED_UNRECORDED;
+      if (unseenKeys.has(key)) return REMOVED_UNSEEN;
+      return REMOVED_OBSERVATION;
+    };
+    // One removal note per observation, worded by what is known now (an earlier note may predate its findings).
+    for (let index = notes.length - 1; index >= 0; index--) {
+      const prefix = REMOVAL_PREFIXES.find((candidate) => notes[index].startsWith(candidate));
+      if (!prefix) continue;
+      const key = notes[index].slice(prefix.length);
+      if (dropped.has(key)) notes.splice(index, 1);
+      else if (this.distilledObservations.has(key) && prefix !== REMOVED_RECORDED && prefix !== REMOVED_CHANGED) notes[index] = `${REMOVED_RECORDED}${key}`;
+    }
+    for (const key of removedObservations) {
+      const note = `${removalPrefix(key)}${key}`;
+      if (!notes.includes(note)) notes.push(note);
+    }
+    const retainedObservations: Array<[number, string]> = [];
     for (const [note, keys] of observationNotes) {
       const index = notes.indexOf(note);
-      for (const key of keys) {
-        if (index >= 0) retainedObservations.push([index, key]);
-        else dropped.add(key);
-      }
-    }
-    for (const key of partialObservations) dropped.add(key);
-    for (const [, key] of retainedObservations) dropped.delete(key);
-    const removedObservations = Array.from(dropped);
-    for (const key of removedObservations) {
-      if (!notes.includes(`${REMOVED_OBSERVATION}${key}`)) notes.push(`${REMOVED_OBSERVATION}${key}`);
+      if (index >= 0) for (const key of keys) retainedObservations.push([index, key]);
     }
 
     const inheritedSupersededPlanIds = new Set<string>();
@@ -1533,7 +1610,7 @@ export class AutonomousAgent {
     const messagesToSummarize = source
       .map((message, index) => ({ message, index }))
       .filter(({ message, index }) => index > 0 && index !== currentUserIndex && (retainedOriginalContent.has(index) || !(index >= recentStart && message.role !== "system")));
-    const summary = this.summarizeDiscardedHistory(messagesToSummarize.map(({ message }) => message), detailBudgetChars);
+    const summary = this.summarizeDiscardedHistory(messagesToSummarize.map(({ message }) => message), detailBudgetChars, new Set(this.unseenToolResults(source).map((index) => source[index])));
     const compacted: ChatMessage[] = [system];
     if (messagesToSummarize.length) {
       const summaryMessage: ChatMessage = { role: "system", content: summary.content };
@@ -1562,7 +1639,104 @@ export class AutonomousAgent {
     return { messages: compacted, removedObservations: removed };
   }
 
-  private admitContext(step: number, requestId: string): void {
+  /**
+   * Admits the next request (see `admitContext`). When that compaction removed tool output the model had already been
+   * shown, first asks the model to record what that output established, then admits again from the same history so
+   * the durable record carries those findings.
+   */
+  private async admitWithFindings(step: number, requestId: string, signal?: AbortSignal): Promise<void> {
+    const original = this.messages;
+    const removed = this.admitContext(step, requestId);
+    if (!removed.length || !(await this.recordFindings(step, original, removed, signal))) return;
+    const admitted = this.messages;
+    this.messages = original;
+    try {
+      this.admitContext(step, requestId);
+    } catch (err) {
+      if (!(err instanceof ContextBudgetError)) throw err;
+      this.messages = admitted;
+    }
+  }
+
+  /**
+   * Asks the model (one inference per batch, no tools) what the shown, unrecorded observations among `removed`
+   * establish for the current request. The findings are the model's own words, labelled with the observations they
+   * came from; nothing is recorded when the call fails or returns nothing. Returns whether anything was recorded.
+   */
+  private async recordFindings(step: number, source: ChatMessage[], removed: string[], signal?: AbortSignal): Promise<boolean> {
+    const wanted = new Set(removed.filter((key) => !this.distilledObservations.has(key)));
+    const unseen = new Set(this.unseenToolResults(source));
+    const callKeys = new Map<string, string>();
+    const pending: Array<{ key: string; text: string; partial: boolean }> = [];
+    source.forEach((message, index) => {
+      if (message.role === "assistant") {
+        for (const call of message.tool_calls ?? []) {
+          if (typeof call?.id === "string" && typeof call.function?.name === "string") callKeys.set(call.id, observationKey(call.function.name, call.function.arguments));
+        }
+      }
+      if (message.role !== "tool" || unseen.has(index) || typeof message.tool_call_id !== "string") return;
+      const key = callKeys.get(message.tool_call_id);
+      const text = normalizeMessageContent(message.content).text.join("");
+      if (!key || !wanted.has(key) || pending.some((item) => item.key === key) || !text || text.startsWith("Error executing ")) return;
+      pending.push({ key, text, partial: isTruncatedObservation(message) });
+    });
+    if (!pending.length) return false;
+    let recorded = false;
+
+    const lastUser = [...source].reverse().find((message) => message.role === "user");
+    const request = normalizeMessageContent(lastUser?.content ?? "").text.join("").slice(0, 8_000);
+    const contextLimit = this.config.contextLimit || 65536;
+    const inputBudget = contextLimit - this.getContextReserves().completion - countTokens(FINDINGS_INSTRUCTIONS) - countTokens(request) - 1_000;
+    if (inputBudget <= 0) return false;
+    const groups: Array<typeof pending> = [];
+    let used = 0;
+    for (const item of pending) {
+      let tokens = countTokens(item.text);
+      if (tokens > inputBudget) {
+        item.text = `${item.text.slice(0, Math.floor(item.text.length * (inputBudget / tokens) * 0.9))}\n[cut to fit this checkpoint]`;
+        item.partial = true;
+        tokens = countTokens(item.text);
+      }
+      if (!groups.length || used + tokens > inputBudget) {
+        groups.push([]);
+        used = 0;
+      }
+      groups[groups.length - 1].push(item);
+      used += tokens;
+    }
+
+    for (const group of groups) {
+      if (signal?.aborted) break;
+      const evidence = group.map((item) => `### ${item.key}${item.partial ? " (shown only in part)" : ""}\n${item.text}`).join("\n\n");
+      const prompt: ChatMessage[] = [
+        { role: "system", content: FINDINGS_INSTRUCTIONS },
+        { role: "user", content: `Current request:\n${request}\n\nTool output you inspected, about to leave your context:\n\n${evidence}` },
+      ];
+      let text = "";
+      try {
+        const res = await this.client.chatCompletion(prompt, [], randomUUID(), signal);
+        text = typeof res.content === "string" ? res.content.trim() : "";
+        this.totalTokens.prompt += calculateContextBudget(prompt, [], contextLimit).totalActiveTokens;
+        this.totalTokens.completion += countTokens(text);
+        this.totalTokens.total = this.totalTokens.prompt + this.totalTokens.completion;
+      } catch {
+        text = "";
+      }
+      if (!process.stdout.isTTY || process.env.NEXUS_DEBUG === "1") {
+        console.log(`[context_findings] step=${step} observations=${group.length} recorded=${text ? "yes" : "no"} chars=${text.length}`);
+      }
+      if (!text) continue;
+      const clipped = text.length > FINDINGS_NOTE_LIMIT ? `${text.slice(0, FINDINGS_NOTE_LIMIT)} …[clipped]` : text;
+      const sources = group.map((item) => `${item.key}${item.partial ? " (partial)" : ""}`).join("; ");
+      this.findingNotes.push(`${FINDINGS_PREFIX}step ${step}; from ${sources}; model-written, not independent proof]\n${clipped}`);
+      for (const item of group) this.distilledObservations.add(item.key);
+      recorded = true;
+    }
+    return recorded;
+  }
+
+  /** Returns the observations the accepted compaction removed (none when no compaction was needed). */
+  private admitContext(step: number, requestId: string): string[] {
     const contextLimit = this.config.contextLimit || 65536;
     const reserves = this.getContextReserves();
     const original = this.messages;
@@ -1570,6 +1744,7 @@ export class AutonomousAgent {
     let compacted = false;
     let compactionAttempts = 0;
     const maxCompactionAttempts = 5;
+    const removedNow: string[] = [];
     // Anti-thrashing: only re-compact when the previous ladder pass actually shrank the
     // context. Once a pass yields no token reduction, a stronger pass would also be a no-op.
     let lastPassShrank = true;
@@ -1596,6 +1771,7 @@ export class AutonomousAgent {
         if (!isContextAdmissible(candidateBudget.totalActiveTokens, contextLimit, reserves.completion, reserves.toolResponse)) return false;
         this.messages = candidate.messages;
         for (const key of candidate.removedObservations) this.turnRemovedObservations.add(key);
+        removedNow.push(...candidate.removedObservations);
         budget = candidateBudget;
         if (!process.stdout.isTTY || process.env.NEXUS_DEBUG === "1") {
           console.log(`[context_admission] step=${step} request_id=${requestId} state=auto_compacted attempts=${compactionAttempts} estimated_tokens=${budget.totalActiveTokens} completion_reserve=${reserves.completion} tool_response_reserve=${reserves.toolResponse} limit=${contextLimit} compacted=${compacted} messages=${this.messages.length}${truncatedUnseen ? " unseen_output=truncated" : ""}`);
@@ -1642,6 +1818,7 @@ export class AutonomousAgent {
     }
 
     if (!process.stdout.isTTY || process.env.NEXUS_DEBUG === "1") console.log(`[context_admission] step=${step} request_id=${requestId} state=admitted estimated_tokens=${budget.totalActiveTokens} completion_reserve=${reserves.completion} tool_response_reserve=${reserves.toolResponse} limit=${contextLimit} compacted=${compacted} messages=${this.messages.length}`);
+    return Array.from(new Set(removedNow));
   }
 
   public getActivePlan(): Array<{ name: string; status: string; detail?: string }> {
@@ -2539,7 +2716,7 @@ Always explain your reasoning before or alongside your tool calls.`;
         }
         const requestId = randomUUID();
         try {
-          this.admitContext(currentStep, requestId);
+          await this.admitWithFindings(currentStep, requestId, signal);
         } catch (err) {
           if (!(err instanceof ContextBudgetError)) throw err;
           // Fail-closed admission refused the request before any inference call. A refusal is a bounded
@@ -3051,7 +3228,7 @@ Always explain your reasoning before or alongside your tool calls.`;
       const requestId = randomUUID();
       const { client: activeClient } = this.selectCognitiveClient(currentStep, this.messages);
       try {
-        this.admitContext(currentStep, requestId);
+        await this.admitWithFindings(currentStep, requestId);
         const policy = this.recoveryPolicy ?? recoveryPolicyFromEnv();
         assistantMessage = await new ProviderRecoveryController(policy, this.recoveryClock, currentStep).run(requestId, {
           submit: (s) => activeClient.chatCompletion(this.messages, HARNESS_TOOLS, s.requestId),
