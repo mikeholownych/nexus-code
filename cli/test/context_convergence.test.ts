@@ -511,6 +511,11 @@ describe("D: findings checkpoint before shown output leaves the context", () => 
         assert.ok(findings.some((n) => n.endsWith(" …[shortened to fit this memory]")), "the findings outgrew the bound (else this proves nothing)");
         assert.ok(!notes.includes("[Older recorded findings elided to bound this memory.]"));
         assert.equal(notes.filter((n) => n.startsWith("[Nexus: your recorded findings have outgrown this memory.") && n.includes("Write what you have established into your work product now")).length, 1, "the model is told, once, to write what it has established before more is lost");
+        const latestOutput = gw.requests.map((q) => String(q.body.messages.filter((m: any) => m.role === "tool").at(-1)?.content ?? ""));
+        const outgrownAt = gw.requests.findIndex((q) => recordNotes(q.body.messages).some((n) => n.startsWith("[Nexus: your recorded findings have outgrown this memory.")));
+        const alarmed = (output: string) => /^\[Nexus: your recorded findings have outgrown your memory;[^\]]*This is step \d+ of \d+\.\]\n/.test(output);
+        assert.ok(outgrownAt > 0 && !latestOutput.slice(0, outgrownAt + 1).some(alarmed), "no alarm in output before the bound is passed");
+        assert.ok(latestOutput.slice(outgrownAt + 1).some(alarmed), "after it is passed, the next output leads with it");
         for (const f of distilled) {
           assert.ok(findings.some((n) => n.split("\n", 1)[0].includes(`read_file {"path":"${f}"}`) && n.split("\n", 1)[0].endsWith("; model-written, not independent proof]") && n.includes(fact(f))), `${f}'s finding kept its sources and its start`);
         }
@@ -575,7 +580,7 @@ describe("D: findings checkpoint before shown output leaves the context", () => 
         const held = notesAtReread.filter((n) => n.startsWith("Findings recorded from inspected output [")).map((n) => n.split("\n", 1)[0]);
         assert.ok(!held.some((h) => h.includes(key(MANY[0]))), `${MANY[0]}'s finding was among those dropped`);
         assert.ok(rereadOutput.includes(fact(MANY[0])), "the re-read output is the file");
-        assert.ok(!rereadOutput.startsWith("[Nexus: you ran this same call before"), "a re-run is not told dropped findings are in memory");
+        assert.ok(!rereadOutput.includes("[Nexus: you ran this same call before"), "a re-run is not told dropped findings are in memory");
         for (const note of notesAtReread.filter((n) => n.startsWith("Inspected earlier; output no longer in context (findings recorded in this memory"))) {
           assert.ok(held.some((h) => h.includes(note.slice(note.indexOf("): ") + 3))), `claimed but not held: ${note}`);
         }
@@ -606,6 +611,64 @@ describe("D: findings checkpoint before shown output leaves the context", () => 
         agent.findingNotes.splice(0, agent.findingNotes.length, finding(3, `OLD: version=1 ${"detail ".repeat(40)}`), finding(3, "NEW: version=2."));
         const collided = findingsOf(agent.summarizeDiscardedHistory([{ role: "assistant", content: "next" }], 0, new Set()).content);
         assert.ok(collided.some((n) => n.includes("OLD: version=1")) && collided.some((n) => n.includes("NEW: version=2.")), collided.join("\n---\n"));
+      } finally {
+        agent.shutdown();
+      }
+    });
+  });
+
+  test("while findings exceed their bound, the first output of each step says so with the step position; recording ignores it", async () => {
+    await isolated(async (repo) => {
+      const agent = quiet(new AutonomousAgent({ endpoint: "http://127.0.0.1:9/v1", model: "m", maxSteps: 2, temperature: 0, workspace: repo, shell: "bash" })) as any;
+      try {
+        const call = (id: string, file: string) => ({ id, type: "function" as const, function: { name: "read_file", arguments: JSON.stringify({ path: file }) } });
+        const NOTICE = /^\[Nexus: your recorded findings have outgrown your memory;[^\]]*Write what you have established into your work product now[^\]]*\]\n/;
+        assert.equal(agent.toolResultContent(call("c0", "a.txt"), "alpha", 3, 120), "alpha", "within the bound nothing is added");
+        agent.findingsOutgrown = true;
+        const first = agent.toolResultContent(call("c1", "a.txt"), "alpha", 4, 120);
+        assert.match(first, NOTICE);
+        assert.ok(first.includes("This is step 4 of 120.]\nalpha"), first);
+        assert.equal(agent.toolResultContent(call("c2", "b.txt"), "beta", 4, 120), "beta", "once per step");
+        assert.match(agent.toolResultContent(call("c3", "b.txt"), "beta", 5, 120), NOTICE);
+        // The digest a finding is recorded with is that of the output itself, with or without the notes leading it.
+        const digestOf = async (content: string) => {
+          agent.distilledObservations = new Map();
+          const source = [{ role: "system", content: "sys" }, { role: "user", content: "go" }, { role: "assistant", content: "", tool_calls: [call("c9", "a.txt")] }, { role: "tool", tool_call_id: "c9", name: "read_file", content }, { role: "assistant", content: "next" }];
+          await agent.recordFindings({ chatCompletion: async () => ({ content: "a.txt reads alpha." }) }, 6, source, [key("a.txt")]);
+          return agent.distilledObservations.get(key("a.txt"))?.digest;
+        };
+        const plain = await digestOf("alpha");
+        assert.ok(plain);
+        assert.equal(await digestOf(first), plain);
+      } finally {
+        agent.shutdown();
+      }
+    });
+  });
+
+  test("a finding holds exactly the observations it came from: past the header's cap, and not another tool's whose key contains it", async () => {
+    await isolated(async (repo) => {
+      const agent = quiet(new AutonomousAgent({ endpoint: "http://127.0.0.1:9/v1", model: "m", maxSteps: 2, temperature: 0, workspace: repo, shell: "bash" })) as any;
+      try {
+        const long = { command: `grep -c alpha a.txt ${"--include=x ".repeat(140)}` };
+        const longKey = `run_command ${JSON.stringify(long)}`;
+        const history = [
+          { role: "assistant" as const, content: "", tool_calls: [{ id: "e1", type: "function" as const, function: { name: "run_command", arguments: JSON.stringify(long) } }] },
+          { role: "tool" as const, tool_call_id: "e1", name: "run_command", content: "alpha\n".repeat(200) },
+          { role: "assistant" as const, content: "", tool_calls: [{ id: "r1", type: "function" as const, function: { name: "read_file", arguments: JSON.stringify({ path: "b.txt" }) } }] },
+          { role: "tool" as const, tool_call_id: "r1", name: "read_file", content: "bravo\n".repeat(200) },
+          { role: "assistant" as const, content: "next" },
+        ];
+        assert.ok(longKey.length > 1_500);
+        await agent.recordFindings({ chatCompletion: async () => ({ content: "a.txt has alpha on every line." }) }, 2, [{ role: "system", content: "sys" }, { role: "user", content: "go" }, ...history.slice(0, 2), { role: "assistant", content: "next" }], [longKey]);
+        // A finding lifted from an earlier record names only an MCP tool whose key contains the native read's.
+        agent.findingNotes.push(`Findings recorded from inspected output [step 1; from mcp__fs__${key("b.txt")}; model-written, not independent proof]\nb.txt reads bravo.`);
+        agent.distilledObservations.set(key("b.txt"), { step: 1, digest: "" });
+        const notes: string[] = JSON.parse(agent.summarizeDiscardedHistory(history, 0, new Set()).content.slice(DURABLE.length)).notes;
+        assert.ok(notes.includes(`Inspected earlier; output no longer in context (findings recorded in this memory; re-run only for a detail they lack or if the source may have changed): ${longKey}`), "a source past the header's cap is still held");
+        assert.ok(agent.distilledObservations.has(longKey));
+        assert.ok(notes.includes(`Inspected earlier; output no longer in context (findings recorded from it were later dropped to bound this memory; re-run it if you need them): ${key("b.txt")}`), "another tool's finding does not hold this one's");
+        assert.ok(!agent.distilledObservations.has(key("b.txt")));
       } finally {
         agent.shutdown();
       }

@@ -182,7 +182,7 @@ const FINDINGS_BUDGET_CHARS = 24_000;
 const FINDINGS_ELISION = "[Older recorded findings elided to bound this memory.]";
 const FINDINGS_SHORT_CHARS = 400;
 const FINDINGS_SHORTENED = " …[shortened to fit this memory]";
-const FINDINGS_OUTGROWN = "[Nexus: your recorded findings have outgrown this memory. The oldest are shortened, then dropped, as more are recorded, so what is established only here will be lost. Write what you have established into your work product now (the file or change you were asked to produce), then continue with what remains.]";
+const FINDINGS_OUTGROWN = "[Nexus: your recorded findings have outgrown this memory. The oldest are shortened, then dropped, as more are recorded, so what is established only here will be lost. Write what you have established into your work product now (the file or change your task produces; if it produces none, state it in your reply), then continue with what remains.]";
 const FINDINGS_INSTRUCTIONS = "You keep the working notes of an autonomous software-engineering agent. The tool output below is about to be removed from the agent's context window. Record, for the agent's current request, what this output actually shows: concrete facts with file paths, symbol names and line numbers, and anything it shows to be missing or inconsistent. State only what the output itself shows; do not speculate, plan, or restate the request. If the output is irrelevant to the request, say so in one line. Plain text, at most 250 words.";
 
 function unseenTruncationNotice(shown: number, total: number): string {
@@ -263,6 +263,7 @@ function unreacquiredRemovals(messages: ChatMessage[]): Set<string> {
 
 /** The note `toolResultContent` puts before a re-run's output; not part of the output's identity. */
 const RERUN_NOTICE = /^\[Nexus: you ran this same call before;[^\]]*\]\n/;
+const OUTGROWN_NOTICE = /^\[Nexus: your recorded findings have outgrown your memory;[^\]]*\]\n/;
 
 /** Content identity of a tool output, to tell whether a re-run returned what was inspected before. */
 function outputDigest(text: string): string {
@@ -531,6 +532,11 @@ export class AutonomousAgent {
   private findingNotes: string[] = [];
   /** Observations whose findings were recorded: the step they were recorded at and the digest of the output they came from. */
   private distilledObservations = new Map<string, { step: number; digest?: string }>();
+  /** The observations each finding recorded in this process came from, by its header (which caps their list). */
+  private findingSources = new Map<string, Set<string>>();
+  /** Whether the last durable record had more findings than their bound, and the step whose output last said so. */
+  private findingsOutgrown = false;
+  private outgrownNoticeStep = 0;
   /** Provider recovery bounds; undefined reads LOCAL_LLM_RECOVERY_* at each turn. */
   private recoveryPolicy?: RecoveryPolicy;
   private recoveryClock: RecoveryClock = realRecoveryClock;
@@ -869,6 +875,8 @@ export class AutonomousAgent {
     this.messages = state.messages || [];
     this.findingNotes = [];
     this.distilledObservations = new Map();
+    this.findingSources = new Map();
+    this.findingsOutgrown = false;
     const unsettled = this.settleUnrecordedToolCalls();
     // Resumed work is the same unit: what compaction removed before the restart is still not in context.
     this.carriedRemovedObservations = unreacquiredRemovals(this.messages);
@@ -1093,6 +1101,8 @@ export class AutonomousAgent {
     this.messages = [...msgs];
     this.findingNotes = [];
     this.distilledObservations = new Map();
+    this.findingSources = new Map();
+    this.findingsOutgrown = false;
     const unsettled = this.settleUnrecordedToolCalls();
     const pending = (unverifiedChangesPending ?? true) || unsettled.some((tool) => this.mayWrite(tool));
     if (pending) this.verificationEvidence = undefined;
@@ -1183,6 +1193,8 @@ export class AutonomousAgent {
   public resetConversation(): void {
     this.findingNotes = [];
     this.distilledObservations = new Map();
+    this.findingSources = new Map();
+    this.findingsOutgrown = false;
     this.messages = [
       {
         role: "system",
@@ -1510,7 +1522,8 @@ export class AutonomousAgent {
     const findingsBudget = this.findingsBudgetChars();
     let findingsChars = durableNotes.reduce((total, note) => total + (note.startsWith(FINDINGS_PREFIX) ? note.length : 0), 0);
     if (durableNotes.includes(FINDINGS_OUTGROWN)) durableNotes.splice(durableNotes.indexOf(FINDINGS_OUTGROWN), 1);
-    if (findingsChars > findingsBudget) durableNotes.push(FINDINGS_OUTGROWN);
+    this.findingsOutgrown = findingsChars > findingsBudget;
+    if (this.findingsOutgrown) durableNotes.push(FINDINGS_OUTGROWN);
     for (const note of durableNotes.filter((candidate) => candidate.startsWith(FINDINGS_PREFIX))) {
       if (findingsChars <= findingsBudget) break;
       const shortened = shortenedFinding(note);
@@ -1524,9 +1537,15 @@ export class AutonomousAgent {
     }
     // Findings are in this memory only while a retained finding names their observation; a re-run is no longer told
     // they are, and the observation's output is recorded again when it next leaves the context.
-    const retainedFindingSources = durableNotes.filter((note) => note.startsWith(FINDINGS_PREFIX)).map(findingHeader);
-    const findingsHeld = (key: string) => retainedFindingSources.some((header) => header.includes(key));
-    for (const key of Array.from(this.distilledObservations.keys())) if (!findingsHeld(key)) this.distilledObservations.delete(key);
+    const retainedFindingHeaders = durableNotes.filter((note) => note.startsWith(FINDINGS_PREFIX)).map(findingHeader);
+    const findingsHeld = (key: string) => retainedFindingHeaders.some((header) => {
+      const sources = this.findingSources.get(header);
+      if (sources) return sources.has(key);
+      // A finding lifted from an earlier record: its header lists its sources, each after "from " or "; ".
+      return [`from ${key};`, `from ${key} (partial)`, `; ${key};`, `; ${key} (partial)`].some((listed) => header.includes(listed));
+    });
+    const droppedFindings = new Set(Array.from(this.distilledObservations.keys()).filter((key) => !findingsHeld(key)));
+    for (const key of droppedFindings) this.distilledObservations.delete(key);
 
     const freshSections: Array<[string, string[]]> = [
       ["Earlier task requests", priorTasks],
@@ -1556,6 +1575,7 @@ export class AutonomousAgent {
       const written = path === undefined ? undefined : lastWrite.get(path);
       if (written !== undefined && written > (lastCall.get(key) ?? 0) && !key.startsWith("write_file ") && !key.startsWith("edit_file ") && !key.startsWith("patch_file ")) return REMOVED_CHANGED;
       if (this.distilledObservations.has(key)) return REMOVED_RECORDED;
+      if (droppedFindings.has(key)) return REMOVED_DROPPED;
       if (seenKeys.has(key)) return REMOVED_UNRECORDED;
       if (unseenKeys.has(key)) return REMOVED_UNSEEN;
       return REMOVED_OBSERVATION;
@@ -1566,7 +1586,7 @@ export class AutonomousAgent {
       if (!prefix) continue;
       const key = notes[index].slice(prefix.length);
       if (dropped.has(key)) notes.splice(index, 1);
-      else if (prefix !== REMOVED_CHANGED && prefix !== REMOVED_PARTIAL && (this.distilledObservations.has(key) || prefix === REMOVED_RECORDED || prefix === REMOVED_DROPPED)) {
+      else if (prefix !== REMOVED_CHANGED && prefix !== REMOVED_PARTIAL && (this.distilledObservations.has(key) || droppedFindings.has(key) || prefix === REMOVED_RECORDED || prefix === REMOVED_DROPPED)) {
         notes[index] = `${findingsHeld(key) ? REMOVED_RECORDED : REMOVED_DROPPED}${key}`;
       }
     }
@@ -1749,7 +1769,7 @@ export class AutonomousAgent {
       const text = normalizeMessageContent(message.content).text.join("");
       if (!key || !wanted.has(key) || pending.some((item) => item.key === key) || !text || text.startsWith("Error executing ")) return;
       const partial = isTruncatedObservation(message);
-      pending.push({ key, text, partial, digest: partial ? undefined : outputDigest(text.replace(RERUN_NOTICE, "")) });
+      pending.push({ key, text, partial, digest: partial ? undefined : outputDigest(text.replace(OUTGROWN_NOTICE, "").replace(RERUN_NOTICE, "")) });
     });
     if (!pending.length) return false;
     let recorded = false;
@@ -1801,7 +1821,11 @@ export class AutonomousAgent {
       const clipped = text.length > FINDINGS_NOTE_LIMIT ? `${text.slice(0, FINDINGS_NOTE_LIMIT)} …[clipped]` : text;
       let sources = group.map((item) => `${item.key}${item.partial ? " (partial)" : ""}`).join("; ");
       if (sources.length > 1_500) sources = `${sources.slice(0, 1_500)} …`;
-      this.findingNotes.push(`${FINDINGS_PREFIX}step ${step}; from ${sources}; model-written, not independent proof]\n${clipped}`);
+      const header = `${FINDINGS_PREFIX}step ${step}; from ${sources}; model-written, not independent proof]`;
+      this.findingNotes.push(`${header}\n${clipped}`);
+      const held = this.findingSources.get(header) ?? new Set<string>();
+      for (const item of group) held.add(item.key);
+      this.findingSources.set(header, held);
       for (const item of group) this.distilledObservations.set(item.key, { step, digest: item.digest });
       recorded = true;
     }
@@ -1811,9 +1835,17 @@ export class AutonomousAgent {
   /**
    * Tool output for the model. When the call repeats one whose findings were recorded, says so first (and whether the
    * output is unchanged) with the step position, so a re-run is a choice made knowing what the memory already holds.
-   * The note leads the output so that fitting an oversized result to the context, which keeps its beginning, keeps it.
+   * While recorded findings exceed their bound, the first output of each step says that before anything else.
+   * Notes lead the output so that fitting an oversized result to the context, which keeps its beginning, keeps them.
    */
   private toolResultContent(call: ToolCall, content: string, step: number, maxSteps: number): string {
+    const result = this.rerunNotedContent(call, content, step, maxSteps);
+    if (!this.findingsOutgrown || this.outgrownNoticeStep === step) return result;
+    this.outgrownNoticeStep = step;
+    return `[Nexus: your recorded findings have outgrown your memory; the oldest are being shortened and dropped. Write what you have established into your work product now (the file or change your task produces; if it produces none, state it in your reply), before investigating further, then continue with what remains. This is step ${step} of ${maxSteps}.]\n${result}`;
+  }
+
+  private rerunNotedContent(call: ToolCall, content: string, step: number, maxSteps: number): string {
     const key = observationKey(call.function.name, call.function.arguments);
     const recorded = this.distilledObservations.get(key);
     if (!recorded) return content;
@@ -2737,6 +2769,7 @@ Always explain your reasoning before or alongside your tool calls.`;
     this.turnCarriedChanges = this.hasPendingModifications;
     // What compaction removed earlier in this conversation is still not in context, whichever way the turn began.
     this.turnRemovedObservations = new Set([...this.carriedRemovedObservations, ...unreacquiredRemovals(this.messages)]);
+    this.outgrownNoticeStep = 0;
     this.carriedRemovedObservations = new Set();
 
     try {
