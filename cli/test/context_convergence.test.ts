@@ -548,6 +548,44 @@ describe("D: findings checkpoint before shown output leaves the context", () => 
     });
   });
 
+  test("findings dropped to bound the memory are no longer claimed: removal notes say so, a re-run is not told, and they are recorded again", async () => {
+    const MANY = Array.from({ length: 16 }, (_, i) => `d${i + 1}.txt`);
+    const LATER = ["x1.txt", "x2.txt", "x3.txt"];
+    const fact = (f: string) => `FACT ${f} holds marker mk-${f.slice(0, -4)}.`;
+    const limit = 16_000;
+    await isolated(async (repo) => {
+      for (const f of [...MANY, ...LATER]) fs.writeFileSync(path.join(repo, f), `${fact(f)}\n${"filler line to occupy context budget\n".repeat(160)}`);
+      const order = [...MANY, MANY[0], ...LATER];
+      const gw = await gateway(
+        (r) => (r.n <= order.length ? { tools: [read(order[r.n - 1])] } : { tools: [done("stop")] }),
+        (r) => {
+          const facts = [...MANY, ...LATER].filter((f) => allText(r.body).includes(fact(f))).map(fact).join(" ");
+          return facts ? `${facts} ${"supporting detail ".repeat(160)}` : "";
+        },
+      );
+      const agent = quiet(new AutonomousAgent(cfg(gw, repo, { contextLimit: limit, maxSteps: order.length + 2 })));
+      try {
+        await muted(() => agent.runTurn("Read the files one at a time, then report the marker of each via task_completed."));
+        const reread = gw.requests.findIndex((q) => q.body.messages.filter((m: any) => m.role === "tool").length && q.n === MANY.length + 2);
+        const rereadOutput = String(gw.requests[reread]?.body.messages.filter((m: any) => m.role === "tool").at(-1)?.content);
+        const notesAtReread = recordNotes(gw.requests[reread].body.messages);
+        assert.ok(notesAtReread.includes("[Older recorded findings elided to bound this memory.]"), "findings were dropped (else this proves nothing)");
+        const held = notesAtReread.filter((n) => n.startsWith("Findings recorded from inspected output [")).map((n) => n.split("\n", 1)[0]);
+        assert.ok(!held.some((h) => h.includes(key(MANY[0]))), `${MANY[0]}'s finding was among those dropped`);
+        assert.ok(rereadOutput.includes(fact(MANY[0])), "the re-read output is the file");
+        assert.ok(!rereadOutput.startsWith("[Nexus: you ran this same call before"), "a re-run is not told dropped findings are in memory");
+        for (const note of notesAtReread.filter((n) => n.startsWith("Inspected earlier; output no longer in context (findings recorded in this memory"))) {
+          assert.ok(held.some((h) => h.includes(note.slice(note.indexOf("): ") + 3))), `claimed but not held: ${note}`);
+        }
+        assert.ok(notesAtReread.includes(`Inspected earlier; output no longer in context (findings recorded from it were later dropped to bound this memory; re-run it if you need them): ${key(MANY[0])}`));
+        assert.ok(gw.checkpoints.filter((c) => allText(c.body).includes(fact(MANY[0]))).length >= 2, "the re-read output is recorded again when it leaves the context");
+      } finally {
+        agent.shutdown();
+        await gw.close();
+      }
+    });
+  });
+
   test("only labelled findings are lifted out of an untrusted record; anything else stays opaque", async () => {
     await isolated(async (repo) => {
       const agent = quiet(new AutonomousAgent({ endpoint: "http://127.0.0.1:9/v1", model: "m", maxSteps: 2, temperature: 0, workspace: repo, shell: "bash" })) as any;
@@ -685,6 +723,7 @@ describe("D: findings checkpoint before shown output leaves the context", () => 
           call("c5", "read_file", { path: "fresh.txt" }), unseen,
         ];
         agent.distilledObservations.set(key("noted.txt"), { step: 1, digest: "" });
+        agent.findingNotes.push(`Findings recorded from inspected output [step 1; from ${key("noted.txt")}; model-written, not independent proof]\nnoted.txt reads "noted".`);
         const s = agent.summarizeDiscardedHistory(history, 0, new Set([unseen]));
         const notes: string[] = JSON.parse(s.content.slice(DURABLE.length)).notes;
         const wording = (file: string) => notes.find((n) => n.endsWith(key(file)) && n.includes("no longer in context"));

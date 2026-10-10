@@ -171,7 +171,8 @@ const REMOVED_PARTIAL = "Shown to you only in part (truncated); output no longer
 const REMOVED_CHANGED = "Source changed after you inspected it; output no longer in context (re-read it for current content): ";
 const REMOVED_RECORDED = "Inspected earlier; output no longer in context (findings recorded in this memory; re-run only for a detail they lack or if the source may have changed): ";
 const REMOVED_UNRECORDED = "Inspected earlier; output no longer in context (no findings were recorded from it): ";
-const REMOVAL_PREFIXES = [REMOVED_OBSERVATION, REMOVED_UNSEEN, REMOVED_PARTIAL, REMOVED_CHANGED, REMOVED_RECORDED, REMOVED_UNRECORDED];
+const REMOVED_DROPPED = "Inspected earlier; output no longer in context (findings recorded from it were later dropped to bound this memory; re-run it if you need them): ";
+const REMOVAL_PREFIXES = [REMOVED_OBSERVATION, REMOVED_UNSEEN, REMOVED_PARTIAL, REMOVED_CHANGED, REMOVED_RECORDED, REMOVED_UNRECORDED, REMOVED_DROPPED];
 
 // Model-written findings captured from inspected output before compaction removes it. Claims, not evidence.
 const FINDINGS_PREFIX = "Findings recorded from inspected output [";
@@ -1516,6 +1517,11 @@ export class AutonomousAgent {
       durableNotes.splice(durableNotes.indexOf(note), 1, ...(durableNotes.includes(FINDINGS_ELISION) ? [] : [FINDINGS_ELISION]));
       findingsChars -= note.length;
     }
+    // Findings are in this memory only while a retained finding names their observation; a re-run is no longer told
+    // they are, and the observation's output is recorded again when it next leaves the context.
+    const retainedFindingSources = durableNotes.filter((note) => note.startsWith(FINDINGS_PREFIX)).map(findingHeader);
+    const findingsHeld = (key: string) => retainedFindingSources.some((header) => header.includes(key));
+    for (const key of Array.from(this.distilledObservations.keys())) if (!findingsHeld(key)) this.distilledObservations.delete(key);
 
     const freshSections: Array<[string, string[]]> = [
       ["Earlier task requests", priorTasks],
@@ -1555,7 +1561,9 @@ export class AutonomousAgent {
       if (!prefix) continue;
       const key = notes[index].slice(prefix.length);
       if (dropped.has(key)) notes.splice(index, 1);
-      else if (this.distilledObservations.has(key) && prefix !== REMOVED_RECORDED && prefix !== REMOVED_CHANGED && prefix !== REMOVED_PARTIAL) notes[index] = `${REMOVED_RECORDED}${key}`;
+      else if (prefix !== REMOVED_CHANGED && prefix !== REMOVED_PARTIAL && (this.distilledObservations.has(key) || prefix === REMOVED_RECORDED || prefix === REMOVED_DROPPED)) {
+        notes[index] = `${findingsHeld(key) ? REMOVED_RECORDED : REMOVED_DROPPED}${key}`;
+      }
     }
     for (const key of removedObservations) {
       const note = `${removalPrefix(key)}${key}`;
