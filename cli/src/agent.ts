@@ -1837,17 +1837,17 @@ export class AutonomousAgent {
    * Tool output for the model. When the call repeats one whose findings were recorded, says so first (and whether the
    * output is unchanged) with the step position, so a re-run is a choice made knowing what the memory already holds.
    * In the last tenth of the step budget (at least 3 steps), or while recorded findings exceed their bound, the first
-   * output of each step says so before anything else.
+   * output of each step that another step follows says so before anything else.
    * Notes lead the output so that fitting an oversized result to the context, which keeps its beginning, keeps them.
    */
   private toolResultContent(call: ToolCall, content: string, step: number, maxSteps: number): string {
     const result = this.rerunNotedContent(call, content, step, maxSteps);
     const remaining = maxSteps - step;
     const closing = remaining < Math.max(3, Math.ceil(maxSteps / 10));
-    if ((!closing && !this.findingsOutgrown) || this.stepNoticeStep === step) return result;
+    if ((!closing && !this.findingsOutgrown) || this.stepNoticeStep === step || remaining <= 0) return result;
     this.stepNoticeStep = step;
     if (closing) {
-      return `[Nexus: this is step ${step} of ${maxSteps}; ${remaining} step${remaining === 1 ? "" : "s"} remain after it. Stop investigating: make your work product complete and consistent now, then finish the task. Work left unfinished at the step limit is reported as not established.]\n${result}`;
+      return `[Nexus: this is step ${step} of ${maxSteps}; ${remaining === 1 ? "1 step remains" : `${remaining} steps remain`} after it. Stop investigating: make your work product complete and consistent now (if your task produces none, state in your reply what remains unestablished), then finish the task. Work left unfinished at the step limit is reported as not established.]\n${result}`;
     }
     return `[Nexus: your recorded findings have outgrown your memory; the oldest are being shortened and dropped. Write what you have established into your work product now (the file or change your task produces; if it produces none, state it in your reply), before investigating further, then continue with what remains. This is step ${step} of ${maxSteps}.]\n${result}`;
   }
@@ -2778,6 +2778,10 @@ Always explain your reasoning before or alongside your tool calls.`;
     this.turnRemovedObservations = new Set([...this.carriedRemovedObservations, ...unreacquiredRemovals(this.messages)]);
     this.findingsOutgrown = false;
     this.stepNoticeStep = 0;
+    // Step notices speak for the turn that issued them; this turn has its own step budget.
+    for (const message of this.messages) {
+      if (message.role === "tool" && typeof message.content === "string") message.content = message.content.replace(STEP_NOTICE, "");
+    }
     this.carriedRemovedObservations = new Set();
 
     try {
@@ -2820,6 +2824,7 @@ Always explain your reasoning before or alongside your tool calls.`;
       let capacityBlock: CapacityRecord | null = null;
       let modelStop: ModelStop = "NONE";
       let finalOutputComplete = false;
+      let previousReplyEmpty = false;
       let inferenceFailure: InferenceFailure | null = null;
       let interruption: InterruptionRecord | null = null;
       let undispatched = 0;
@@ -3013,10 +3018,26 @@ Always explain your reasoning before or alongside your tool calls.`;
 
         // No tool calls: the model stopped acting. That is a fact about the model, not evidence of success.
         if (parsed.toolCalls.length === 0) {
+          // An empty reply (no text either) is no answer. Once in a row, the model is told and the turn goes on.
+          const replied = Boolean(parsed.thoughtText?.trim()) ||
+            (typeof assistantMessage.content === "string" ? assistantMessage.content.trim() !== "" : Boolean(assistantMessage.content));
+          if (!replied && !previousReplyEmpty) {
+            previousReplyEmpty = true;
+            if (currentStep < this.config.maxSteps) {
+              this.messages.push({
+                role: "user",
+                content: `[Nexus: your reply was empty: no text and no tool call. It does not finish the task. This is step ${currentStep} of ${this.config.maxSteps}. Continue the task where you left off; call task_completed when it is done.]`,
+              });
+            }
+            this.persistProgress({ messages: true });
+            currentStep++;
+            continue;
+          }
           modelStop = "FINAL_TEXT";
-          finalOutputComplete = true;
+          finalOutputComplete = replied;
           break;
         }
+        previousReplyEmpty = false;
 
         // Parallel execution optimization: if multiple tool calls in this turn are all read-only, execute concurrently through ExecutionSpine
         if (parsed.toolCalls.length > 1 && parsed.toolCalls.every((call) => READ_ONLY_TOOLS.has(call.function.name))) {

@@ -651,7 +651,7 @@ describe("D: findings checkpoint before shown output leaves the context", () => 
       const agent = quiet(new AutonomousAgent({ endpoint: "http://127.0.0.1:9/v1", model: "m", maxSteps: 2, temperature: 0, workspace: repo, shell: "bash" })) as any;
       try {
         const call = (id: string, file: string) => ({ id, type: "function" as const, function: { name: "read_file", arguments: JSON.stringify({ path: file }) } });
-        const CLOSING = /^\[Nexus: this is step (\d+) of 120; (\d+) steps? remains? after it\. Stop investigating: make your work product complete and consistent now, then finish the task\.[^\]]*\]\n/;
+        const CLOSING = /^\[Nexus: this is step (\d+) of 120; (\d+) (?:step remains|steps remain) after it\. Stop investigating: make your work product complete and consistent now \(if your task produces none, state in your reply what remains unestablished\), then finish the task\.[^\]]*\]\n/;
         assert.equal(agent.toolResultContent(call("c1", "a.txt"), "alpha", 108, 120), "alpha", "before the last tenth nothing is added");
         const first = agent.toolResultContent(call("c2", "a.txt"), "alpha", 109, 120);
         assert.deepEqual(CLOSING.exec(first)?.slice(1, 3), ["109", "11"]);
@@ -661,6 +661,7 @@ describe("D: findings checkpoint before shown output leaves the context", () => 
         const last = agent.toolResultContent(call("c4", "b.txt"), "beta", 119, 120);
         assert.deepEqual(CLOSING.exec(last)?.slice(1, 3), ["119", "1"], "near the end, finishing comes before the memory notice");
         assert.ok(!last.includes("outgrown"));
+        assert.equal(agent.toolResultContent(call("c5", "c.txt"), "gamma", 120, 120), "gamma", "no step follows the last, so nothing is said");
         const digestOf = async (content: string) => {
           agent.distilledObservations = new Map();
           const source = [{ role: "system", content: "sys" }, { role: "user", content: "go" }, { role: "assistant", content: "", tool_calls: [call("c9", "a.txt")] }, { role: "tool", tool_call_id: "c9", name: "read_file", content }, { role: "assistant", content: "next" }];
@@ -683,6 +684,25 @@ describe("D: findings checkpoint before shown output leaves the context", () => 
         await muted(() => agent.runTurn("Read a.txt."));
         const output = String(gw.requests[1].body.messages.filter((m: any) => m.role === "tool").at(-1)?.content);
         assert.ok(output.includes(MARKERS["a.txt"]) && !output.startsWith("[Nexus:"), output.slice(0, 200));
+      } finally {
+        agent.shutdown();
+        await gw.close();
+      }
+    });
+  });
+
+  test("step notices speak only for the turn that issued them: a follow-up or retried turn does not see an earlier turn's", async () => {
+    await isolated(async (repo) => {
+      const gw = await gateway((r) => (r.n === 1 ? { tools: [read("a.txt")] } : { tools: [done("a.txt read")] }));
+      const agent = quiet(new AutonomousAgent(cfg(gw, repo, { maxSteps: 3 })));
+      try {
+        await muted(() => agent.runTurn("Read a.txt."));
+        const toolOutputs = (n: number) => gw.requests[n].body.messages.filter((m: any) => m.role === "tool").map((m: any) => String(m.content));
+        assert.match(toolOutputs(1)[0], /^\[Nexus: this is step 1 of 3; 2 steps remain after it\./);
+        await muted(() => agent.runTurn("Is a.txt still there?"));
+        assert.equal(gw.requests.length, 3);
+        const earlier = toolOutputs(2)[0];
+        assert.ok(earlier.includes(MARKERS["a.txt"]) && !earlier.startsWith("[Nexus:"), earlier.slice(0, 200));
       } finally {
         agent.shutdown();
         await gw.close();
@@ -1047,5 +1067,50 @@ describe("E: an operator-configured verifier gates every completion", () => {
         await gw.close();
       }
     });
+  });
+});
+
+describe("F: an empty reply is not an answer", () => {
+  const write = (file: string, content: string): Call => ({ name: "write_file", args: { path: file, content } });
+  const TASK = "Write out.md containing the word ready, then call task_completed.";
+  const VERIFIER = "grep -q ready out.md";
+
+  // An empty stream is already re-requested once without streaming; an empty reply is one whose re-request is empty too.
+  test("a reply with no text and no tool call does not end the task: the model is told so and continues to a verified finish", async () => {
+    await isolated(async (repo) => {
+      const gw = await gateway((r) => (r.n <= 2 ? { text: "" } : r.n === 3 ? { tools: [write("out.md", "ready\n")] } : { tools: [done("wrote out.md")] }));
+      const agent = quiet(new AutonomousAgent(cfg(gw, repo, { authoritativeVerifierCommand: VERIFIER })));
+      try {
+        const turn = await muted(() => agent.runTurn(TASK));
+        assert.equal(turn.outcome, "VERIFIED", `${turn.outcome} ${turn.reason ?? ""}`);
+        assert.equal(gw.requests.length, 4);
+        assert.ok(gw.requests[0].body.stream && !gw.requests[1].body.stream);
+        const notice = gw.requests[2].body.messages.at(-1);
+        assert.equal(notice.role, "user");
+        assert.match(String(notice.content), /^\[Nexus: your reply was empty: no text and no tool call\. It does not finish the task\. This is step 1 of 8\./);
+      } finally {
+        agent.shutdown();
+        await gw.close();
+      }
+    });
+  });
+
+  test("a second empty reply in a row ends the turn without a complete answer; at the step limit an empty reply is the limit", async () => {
+    for (const [label, maxSteps, requests, result] of [["in a row", 8, 4, "COMPLETED UNVERIFIED VERIFICATION_NOT_RUN"], ["at the limit", 1, 2, "LIMIT_REACHED NOT_ESTABLISHED STEP_LIMIT_REACHED"]] as const) {
+      await isolated(async (repo) => {
+        const gw = await gateway(() => ({ text: "" }));
+        const agent = quiet(new AutonomousAgent(cfg(gw, repo, { authoritativeVerifierCommand: "true", maxSteps })));
+        try {
+          const turn = await muted(() => agent.runTurn(TASK));
+          assert.equal(`${turn.execution} ${turn.outcome} ${turn.reason}`, result, label);
+          assert.equal(turn.finalOutputComplete, false, label);
+          assert.equal(gw.requests.length, requests, label);
+          assert.equal(turnSucceeded(turn), false, label);
+        } finally {
+          agent.shutdown();
+          await gw.close();
+        }
+      });
+    }
   });
 });
