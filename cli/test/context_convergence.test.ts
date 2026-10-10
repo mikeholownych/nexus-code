@@ -377,6 +377,7 @@ describe("D: findings checkpoint before shown output leaves the context", () => 
         const findings = notes.filter((n) => n.startsWith("Findings recorded from inspected output ["));
         assert.ok(findings.some((n) => n.includes(`from ${key("a.txt")}`) && n.includes("model-written, not independent proof]") && n.includes("a.txt starts with marker copper-falcon.")), `${notes.join("\n")}\n${trail}`);
         assert.ok(!visible(last, "a.txt"), "a.txt's output itself left the context");
+        assert.ok(!notes.some((n) => n.startsWith("[Nexus: your recorded findings have outgrown this memory.")), "findings within their bound raise no alarm");
         assert.ok(notes.includes(`Inspected earlier; output no longer in context (findings recorded in this memory; re-run only for a detail they lack or if the source may have changed): ${key("a.txt")}`), notes.join("\n"));
         // G is unchanged: a read-only answer resting on removed output is not established by recorded findings.
         assert.equal(turn.outcome, "UNVERIFIED", trail);
@@ -509,6 +510,7 @@ describe("D: findings checkpoint before shown output leaves the context", () => 
         assert.ok(findings.reduce((n, note) => n + note.length, 0) <= 24_000, "recorded findings stay within their bound");
         assert.ok(findings.some((n) => n.endsWith(" …[shortened to fit this memory]")), "the findings outgrew the bound (else this proves nothing)");
         assert.ok(!notes.includes("[Older recorded findings elided to bound this memory.]"));
+        assert.equal(notes.filter((n) => n.startsWith("[Nexus: your recorded findings have outgrown this memory.") && n.includes("Write what you have established into your work product now")).length, 1, "the model is told, once, to write what it has established before more is lost");
         for (const f of distilled) {
           assert.ok(findings.some((n) => n.split("\n", 1)[0].includes(`read_file {"path":"${f}"}`) && n.split("\n", 1)[0].endsWith("; model-written, not independent proof]") && n.includes(fact(f))), `${f}'s finding kept its sources and its start`);
         }

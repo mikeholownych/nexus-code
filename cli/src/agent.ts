@@ -182,6 +182,7 @@ const FINDINGS_BUDGET_CHARS = 24_000;
 const FINDINGS_ELISION = "[Older recorded findings elided to bound this memory.]";
 const FINDINGS_SHORT_CHARS = 400;
 const FINDINGS_SHORTENED = " …[shortened to fit this memory]";
+const FINDINGS_OUTGROWN = "[Nexus: your recorded findings have outgrown this memory. The oldest are shortened, then dropped, as more are recorded, so what is established only here will be lost. Write what you have established into your work product now (the file or change you were asked to produce), then continue with what remains.]";
 const FINDINGS_INSTRUCTIONS = "You keep the working notes of an autonomous software-engineering agent. The tool output below is about to be removed from the agent's context window. Record, for the agent's current request, what this output actually shows: concrete facts with file paths, symbol names and line numbers, and anything it shows to be missing or inconsistent. State only what the output itself shows; do not speculate, plan, or restate the request. If the output is irrelevant to the request, say so in one line. Plain text, at most 250 words.";
 
 function unseenTruncationNotice(shown: number, total: number): string {
@@ -1506,6 +1507,8 @@ export class AutonomousAgent {
     }
     const findingsBudget = this.findingsBudgetChars();
     let findingsChars = durableNotes.reduce((total, note) => total + (note.startsWith(FINDINGS_PREFIX) ? note.length : 0), 0);
+    if (durableNotes.includes(FINDINGS_OUTGROWN)) durableNotes.splice(durableNotes.indexOf(FINDINGS_OUTGROWN), 1);
+    if (findingsChars > findingsBudget) durableNotes.push(FINDINGS_OUTGROWN);
     for (const note of durableNotes.filter((candidate) => candidate.startsWith(FINDINGS_PREFIX))) {
       if (findingsChars <= findingsBudget) break;
       const shortened = shortenedFinding(note);
