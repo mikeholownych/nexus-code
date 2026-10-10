@@ -174,6 +174,38 @@ const REMOVED_UNRECORDED = "Inspected earlier; output no longer in context (no f
 const REMOVED_DROPPED = "Inspected earlier; output no longer in context (findings recorded from it were later dropped to bound this memory; re-run it if you need them): ";
 const REMOVAL_PREFIXES = [REMOVED_OBSERVATION, REMOVED_UNSEEN, REMOVED_PARTIAL, REMOVED_CHANGED, REMOVED_RECORDED, REMOVED_UNRECORDED, REMOVED_DROPPED];
 
+// Everything else the memory notes (requests, files, commands, queries, removals) has its own bound beside findings
+// and raw detail. Past it the oldest commands, then file and query notes, then removal notes give way. Omitted
+// removals stand for output that is not in the context and can never be re-read into it, so nothing later rests on it.
+const MEMORY_NOTES_BUDGET_CHARS = 16_000;
+const NOTES_OMITTED = "[Older command, file and query notes omitted to bound this memory.]";
+const REMOVALS_OMITTED = "[Nexus: older notes on output that left your context were omitted to bound this memory; that output is not in your context.]";
+const OMITTED_REMOVALS_KEY = "(output whose removal notes were omitted to bound this memory)";
+
+/** Fits the notes that are neither findings nor raw detail to `budget` characters, oldest first, in place. */
+function boundMemoryNotes(notes: string[], budget: number): void {
+  const counted = (note: string) => !note.startsWith(FINDINGS_PREFIX) && !isVerboseDetailNote(note);
+  let chars = notes.reduce((total, note) => total + (counted(note) ? note.length : 0), 0);
+  const tiers: Array<[(note: string) => boolean, string]> = [
+    [(note) => note.startsWith("Recent commands: "), NOTES_OMITTED],
+    [(note) => note.startsWith("Inspected files: ") || note.startsWith("Reconstructible query retained for rerun: "), NOTES_OMITTED],
+    [(note) => REMOVAL_PREFIXES.some((prefix) => note.startsWith(prefix)), REMOVALS_OMITTED],
+  ];
+  for (const [givesWay, marker] of tiers) {
+    for (const note of notes.filter(givesWay)) {
+      if (chars <= budget) return;
+      const index = notes.indexOf(note);
+      if (notes.includes(marker)) {
+        notes.splice(index, 1);
+        chars -= note.length;
+      } else {
+        notes.splice(index, 1, marker);
+        chars += marker.length - note.length;
+      }
+    }
+  }
+}
+
 // Model-written findings captured from inspected output before compaction removes it. Claims, not evidence.
 const FINDINGS_PREFIX = "Findings recorded from inspected output [";
 const FINDINGS_LABEL = "; model-written, not independent proof]";
@@ -196,13 +228,21 @@ function isTruncatedObservation(message: ChatMessage): boolean {
   return message.role === "tool" && UNSEEN_TRUNCATION.test(normalizeMessageContent(message.content).text.join(""));
 }
 
-/** Identity of a tool observation: the same tool with the same arguments reacquires it. */
-function observationKey(name: string, rawArgs: unknown): string {
+const OBSERVATION_KEY_ARGS_LIMIT = 400;
+const OBSERVATION_KEY_ARGS_SHOWN = 160;
+
+/**
+ * Identity of a tool observation: the same tool with the same arguments reacquires it. Long arguments (a file
+ * written whole, a long command) are named by their start and a hash, so the memory never carries them in full.
+ */
+export function observationKey(name: string, rawArgs: unknown): string {
   let args = rawArgs;
   try {
     if (typeof rawArgs === "string") args = JSON.parse(rawArgs);
   } catch {}
-  return `${name} ${typeof args === "string" ? args : JSON.stringify(args ?? {})}`;
+  const serialized = typeof args === "string" ? args : JSON.stringify(args ?? {});
+  if (serialized.length <= OBSERVATION_KEY_ARGS_LIMIT) return `${name} ${serialized}`;
+  return `${name} ${serialized.slice(0, OBSERVATION_KEY_ARGS_SHOWN)}… #${outputDigest(serialized).slice(0, 16)}`;
 }
 
 const DURABLE_RECORD_PREFIX = "[Structured Context Memory - durable task state]\n";
@@ -221,6 +261,7 @@ function collectRecordedRemovals(text: string, out: Set<string>): void {
     if (typeof note !== "string") continue;
     const prefix = REMOVAL_PREFIXES.find((candidate) => note.startsWith(candidate));
     if (prefix) out.add(note.slice(prefix.length));
+    else if (note === REMOVALS_OMITTED) out.add(OMITTED_REMOVALS_KEY);
     else if (note.startsWith("Earlier system message: ")) collectRecordedRemovals(note.slice("Earlier system message: ".length), out);
   }
 }
@@ -1595,6 +1636,7 @@ export class AutonomousAgent {
       const note = `${removalPrefix(key)}${key}`;
       if (!notes.includes(note)) notes.push(note);
     }
+    boundMemoryNotes(notes, this.memoryNotesBudgetChars());
     const retainedObservations: Array<[number, string]> = [];
     for (const [note, keys] of observationNotes) {
       const index = notes.indexOf(note);
@@ -1728,6 +1770,11 @@ export class AutonomousAgent {
   /** Characters recorded findings may take in the durable record: FINDINGS_BUDGET_CHARS in a 64k-token window, less in a smaller one. */
   private findingsBudgetChars(): number {
     return Math.floor(FINDINGS_BUDGET_CHARS * Math.min(1, (this.config.contextLimit || 65536) / 65536));
+  }
+
+  /** Characters the memory's other notes may take: MEMORY_NOTES_BUDGET_CHARS in a 64k-token window, less in a smaller one. */
+  private memoryNotesBudgetChars(): number {
+    return Math.floor(MEMORY_NOTES_BUDGET_CHARS * Math.min(1, (this.config.contextLimit || 65536) / 65536));
   }
 
   /**

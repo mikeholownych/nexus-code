@@ -19,7 +19,7 @@ import http from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { execSync } from "node:child_process";
-import { AutonomousAgent } from "../src/agent.js";
+import { AutonomousAgent, observationKey } from "../src/agent.js";
 import { newOperation } from "../src/core/operation.js";
 import { AgentWorkUnitExecutor, driveOperation, OperationStore } from "../src/core/operation_runner.js";
 import type { ResourceDescriptor } from "../src/core/resources.js";
@@ -710,21 +710,98 @@ describe("D: findings checkpoint before shown output leaves the context", () => 
     });
   });
 
+  test("the whole memory is bounded: past its budget the oldest commands, then removal notes, give way, so the record stays flat", async () => {
+    await isolated(async (repo) => {
+      const agent = quiet(new AutonomousAgent({ endpoint: "http://127.0.0.1:9/v1", model: "m", maxSteps: 2, temperature: 0, workspace: repo, shell: "bash" })) as any;
+      try {
+        const command = (i: number) => `grep -n step${i} notes.txt`;
+        const history = (n: number) => [
+          ...Array.from({ length: n }, (_, i) => [
+            { role: "assistant", content: "", tool_calls: [{ id: `c${i}`, type: "function", function: { name: "run_command", arguments: JSON.stringify({ command: command(i) }) } }] },
+            { role: "tool", tool_call_id: `c${i}`, name: "run_command", content: `step${i}\n${"output line\n".repeat(60)}` },
+          ]).flat(),
+          { role: "assistant", content: "next" },
+        ];
+        const record = (n: number) => agent.summarizeDiscardedHistory(history(n), 0, new Set()).content as string;
+        const notesOf = (content: string): string[] => JSON.parse(content.slice(DURABLE.length)).notes;
+        const removal = (i: number) => `Inspected earlier; output no longer in context (no findings were recorded from it): run_command ${JSON.stringify({ command: command(i) })}`;
+        const small = notesOf(record(20));
+        assert.ok(small.includes(`Recent commands: ${command(0)}`) && small.includes(removal(0)), "within the budget nothing gives way");
+        assert.ok(!small.some((n) => n.includes("omitted to bound this memory")));
+        const [large, larger] = [record(300), record(600)];
+        assert.ok(larger.length - large.length < 1_000, `the record stays flat as history grows: ${large.length} -> ${larger.length}`);
+        assert.ok(larger.length < 30_000, `${larger.length}`);
+        const notes = notesOf(larger);
+        assert.ok(notes.includes(removal(599)) && !notes.includes(removal(0)), "the newest removal notes are kept, the oldest give way");
+        assert.ok(!notes.some((n) => n.startsWith("Recent commands: ")), "commands give way before removal notes");
+        assert.ok(notes.includes("[Older command, file and query notes omitted to bound this memory.]"));
+        assert.ok(notes.includes("[Nexus: older notes on output that left your context were omitted to bound this memory; that output is not in your context.]"));
+      } finally {
+        agent.shutdown();
+      }
+    });
+  });
+
+  test("a follow-up turn on a record whose removal notes were omitted cannot rest on the output they covered", async () => {
+    await isolated(async (repo) => {
+      const gw = await gateway(() => ({ tools: [done("step0 was found")] }));
+      const agent = quiet(new AutonomousAgent(cfg(gw, repo)));
+      try {
+        const record = { role: "system" as const, content: `${DURABLE}${JSON.stringify({ version: 2, notes: ["[Nexus: older notes on output that left your context were omitted to bound this memory; that output is not in your context.]"] })}` };
+        agent.restoreSession([{ role: "system", content: "sys" }, record, { role: "user", content: "Find step0." }, { role: "assistant", content: "Found it." }], false);
+        const turn = await muted(() => agent.runTurn("Where was step0?"));
+        assert.equal(`${turn.outcome} ${turn.reason}`, "UNVERIFIED CONTEXT_EVIDENCE_NOT_RETAINED");
+        assert.equal(turnSucceeded(turn), false);
+      } finally {
+        agent.shutdown();
+        await gw.close();
+      }
+    });
+  });
+
+  test("an observation's identity is bounded: a large write is named by its start and a hash, still distinct, and the record does not carry its content", async () => {
+    await isolated(async (repo) => {
+      const agent = quiet(new AutonomousAgent({ endpoint: "http://127.0.0.1:9/v1", model: "m", maxSteps: 2, temperature: 0, workspace: repo, shell: "bash" })) as any;
+      try {
+        const write = (id: string, body: string) => [
+          { role: "assistant", content: "", tool_calls: [{ id, type: "function", function: { name: "write_file", arguments: JSON.stringify({ path: "review.md", content: body }) } }] },
+          { role: "tool", tool_call_id: id, name: "write_file", content: '{"success":true,"path":"review.md"}' },
+        ];
+        const [first, second] = [`# Review\n${"first draft line\n".repeat(700)}`, `# Review\n${"second draft line\n".repeat(700)}`];
+        const keys = [first, second].map((body) => observationKey("write_file", JSON.stringify({ path: "review.md", content: body })));
+        assert.notEqual(keys[0], keys[1]);
+        for (const key of keys) assert.ok(key.length < 300 && key.startsWith('write_file {"path":"review.md","content":"# Review'), key.slice(0, 300));
+        assert.equal(observationKey("read_file", JSON.stringify({ path: "a.txt" })), 'read_file {"path":"a.txt"}', "short identities are unchanged");
+        const content = agent.summarizeDiscardedHistory([...write("w1", first), ...write("w2", second), { role: "assistant", content: "next" }], 6_000, new Set()).content as string;
+        const parsed = JSON.parse(content.slice(DURABLE.length));
+        assert.deepEqual(parsed.retainedObservations.map(([, key]: [number, string]) => key).sort(), [...keys].sort());
+        assert.ok(content.length < 4_000, `${content.length}`);
+      } finally {
+        agent.shutdown();
+      }
+    });
+  });
+
   test("a finding holds exactly the observations it came from: past the header's cap, and not another tool's whose key contains it", async () => {
     await isolated(async (repo) => {
       const agent = quiet(new AutonomousAgent({ endpoint: "http://127.0.0.1:9/v1", model: "m", maxSteps: 2, temperature: 0, workspace: repo, shell: "bash" })) as any;
       try {
-        const long = { command: `grep -c alpha a.txt ${"--include=x ".repeat(140)}` };
-        const longKey = `run_command ${JSON.stringify(long)}`;
+        const commands = Array.from({ length: 12 }, (_, i) => ({ command: `grep -c alpha${i} a.txt ${"--include=x ".repeat(40)}` }));
+        const keys = commands.map((c) => observationKey("run_command", JSON.stringify(c)));
+        const longKey = keys.at(-1)!;
+        const runs = commands.flatMap((c, i) => [
+          { role: "assistant" as const, content: "", tool_calls: [{ id: `e${i}`, type: "function" as const, function: { name: "run_command", arguments: JSON.stringify(c) } }] },
+          { role: "tool" as const, tool_call_id: `e${i}`, name: "run_command", content: "alpha\n".repeat(200) },
+        ]);
         const history = [
-          { role: "assistant" as const, content: "", tool_calls: [{ id: "e1", type: "function" as const, function: { name: "run_command", arguments: JSON.stringify(long) } }] },
-          { role: "tool" as const, tool_call_id: "e1", name: "run_command", content: "alpha\n".repeat(200) },
+          ...runs,
           { role: "assistant" as const, content: "", tool_calls: [{ id: "r1", type: "function" as const, function: { name: "read_file", arguments: JSON.stringify({ path: "b.txt" }) } }] },
           { role: "tool" as const, tool_call_id: "r1", name: "read_file", content: "bravo\n".repeat(200) },
           { role: "assistant" as const, content: "next" },
         ];
-        assert.ok(longKey.length > 1_500);
-        await agent.recordFindings({ chatCompletion: async () => ({ content: "a.txt has alpha on every line." }) }, 2, [{ role: "system", content: "sys" }, { role: "user", content: "go" }, ...history.slice(0, 2), { role: "assistant", content: "next" }], [longKey]);
+        assert.ok(keys.join("; ").length > 1_500);
+        await agent.recordFindings({ chatCompletion: async () => ({ content: "a.txt has alpha on every line." }) }, 2, [{ role: "system", content: "sys" }, { role: "user", content: "go" }, ...runs, { role: "assistant", content: "next" }], keys);
+        assert.ok(!agent.findingNotes[0].split("\n", 1)[0].includes(longKey), "the last source is past the header's cap");
         // A finding lifted from an earlier record names only an MCP tool whose key contains the native read's.
         agent.findingNotes.push(`Findings recorded from inspected output [step 1; from mcp__fs__${key("b.txt")}; model-written, not independent proof]\nb.txt reads bravo.`);
         agent.distilledObservations.set(key("b.txt"), { step: 1, digest: "" });
