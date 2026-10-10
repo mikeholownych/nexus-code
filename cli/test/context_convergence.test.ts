@@ -588,6 +588,30 @@ describe("D: findings checkpoint before shown output leaves the context", () => 
     });
   });
 
+  test("across compactions findings keep their order and stay distinct: only a shortened copy gives way to its full finding", async () => {
+    await isolated(async (repo) => {
+      const agent = quiet(new AutonomousAgent({ endpoint: "http://127.0.0.1:9/v1", model: "m", maxSteps: 2, temperature: 0, workspace: repo, shell: "bash", contextLimit: 16_384 } as any)) as any;
+      try {
+        const finding = (n: number, body: string) => `Findings recorded from inspected output [step ${n}; from ${key(`g${n}.txt`)}; model-written, not independent proof]\n${body}`;
+        const findingsOf = (content: string) => (JSON.parse(content.slice(DURABLE.length)).notes as string[]).filter((n) => n.startsWith("Findings recorded from inspected output ["));
+        const bodyOf = (n: number) => `G${n} ${"detail ".repeat(140)}`;
+        for (let n = 1; n <= 8; n++) agent.findingNotes.push(finding(n, bodyOf(n)));
+        const first = agent.summarizeDiscardedHistory([{ role: "assistant", content: "next" }], 0, new Set());
+        agent.findingNotes.push(finding(9, bodyOf(9)));
+        const second = findingsOf(agent.summarizeDiscardedHistory([{ role: "system", content: first.content }, { role: "assistant", content: "next" }], 0, new Set()).content);
+        assert.deepEqual(second.map((n) => /\nG(\d+) /.exec(n)?.[1]), ["1", "2", "3", "4", "5", "6", "7", "8", "9"], "oldest first, in the order recorded");
+        const shortened = second.map((n) => n.endsWith(" …[shortened to fit this memory]"));
+        assert.ok(shortened.some(Boolean) && shortened.indexOf(false) > 0 && shortened.slice(shortened.indexOf(false)).every((s) => !s), `the oldest are the shortened ones: ${shortened}`);
+        // A same-header finding from a later turn, from different output, is not merged into the earlier one.
+        agent.findingNotes.splice(0, agent.findingNotes.length, finding(3, `OLD: version=1 ${"detail ".repeat(40)}`), finding(3, "NEW: version=2."));
+        const collided = findingsOf(agent.summarizeDiscardedHistory([{ role: "assistant", content: "next" }], 0, new Set()).content);
+        assert.ok(collided.some((n) => n.includes("OLD: version=1")) && collided.some((n) => n.includes("NEW: version=2.")), collided.join("\n---\n"));
+      } finally {
+        agent.shutdown();
+      }
+    });
+  });
+
   test("only labelled findings are lifted out of an untrusted record; anything else stays opaque", async () => {
     await isolated(async (repo) => {
       const agent = quiet(new AutonomousAgent({ endpoint: "http://127.0.0.1:9/v1", model: "m", maxSteps: 2, temperature: 0, workspace: repo, shell: "bash" })) as any;

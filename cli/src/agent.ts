@@ -1495,15 +1495,17 @@ export class AutonomousAgent {
     }
 
     for (const note of this.findingNotes) addDurableNote(note);
-    // One version of each finding (an earlier record may carry it shortened), then fit them to their budget: shorten
-    // the oldest first, so every finding keeps its sources and the start of what it established; drop whole ones last.
+    // One version of each finding: a shortened copy an earlier record carries gives way, in its place, to the finding it
+    // was cut from. Then fit them to their budget: shorten the oldest first, so every finding keeps its sources and the
+    // start of what it established; drop whole ones last.
     const findingHeader = (note: string) => note.split("\n", 1)[0];
-    const fullest = new Map<string, string>();
-    for (const note of durableNotes) {
-      if (note.startsWith(FINDINGS_PREFIX) && note.length > (fullest.get(findingHeader(note))?.length ?? -1)) fullest.set(findingHeader(note), note);
-    }
     for (let index = durableNotes.length - 1; index >= 0; index--) {
-      if (durableNotes[index].startsWith(FINDINGS_PREFIX) && fullest.get(findingHeader(durableNotes[index])) !== durableNotes[index]) durableNotes.splice(index, 1);
+      const note = durableNotes[index];
+      if (!note.startsWith(FINDINGS_PREFIX) || !note.endsWith(FINDINGS_SHORTENED)) continue;
+      const full = durableNotes.find((other) => other !== note && other.startsWith(FINDINGS_PREFIX) && shortenedFinding(other) === note);
+      if (full === undefined) continue;
+      durableNotes.splice(durableNotes.indexOf(full), 1);
+      durableNotes.splice(durableNotes.indexOf(note), 1, full);
     }
     const findingsBudget = this.findingsBudgetChars();
     let findingsChars = durableNotes.reduce((total, note) => total + (note.startsWith(FINDINGS_PREFIX) ? note.length : 0), 0);
