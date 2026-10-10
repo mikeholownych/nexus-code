@@ -646,6 +646,50 @@ describe("D: findings checkpoint before shown output leaves the context", () => 
     });
   });
 
+  test("in the last tenth of the step budget the first output of each step says how many remain and asks to finish; recording ignores it", async () => {
+    await isolated(async (repo) => {
+      const agent = quiet(new AutonomousAgent({ endpoint: "http://127.0.0.1:9/v1", model: "m", maxSteps: 2, temperature: 0, workspace: repo, shell: "bash" })) as any;
+      try {
+        const call = (id: string, file: string) => ({ id, type: "function" as const, function: { name: "read_file", arguments: JSON.stringify({ path: file }) } });
+        const CLOSING = /^\[Nexus: this is step (\d+) of 120; (\d+) steps? remains? after it\. Stop investigating: make your work product complete and consistent now, then finish the task\.[^\]]*\]\n/;
+        assert.equal(agent.toolResultContent(call("c1", "a.txt"), "alpha", 108, 120), "alpha", "before the last tenth nothing is added");
+        const first = agent.toolResultContent(call("c2", "a.txt"), "alpha", 109, 120);
+        assert.deepEqual(CLOSING.exec(first)?.slice(1, 3), ["109", "11"]);
+        assert.ok(first.endsWith("]\nalpha"));
+        assert.equal(agent.toolResultContent(call("c3", "b.txt"), "beta", 109, 120), "beta", "once per step");
+        agent.findingsOutgrown = true;
+        const last = agent.toolResultContent(call("c4", "b.txt"), "beta", 119, 120);
+        assert.deepEqual(CLOSING.exec(last)?.slice(1, 3), ["119", "1"], "near the end, finishing comes before the memory notice");
+        assert.ok(!last.includes("outgrown"));
+        const digestOf = async (content: string) => {
+          agent.distilledObservations = new Map();
+          const source = [{ role: "system", content: "sys" }, { role: "user", content: "go" }, { role: "assistant", content: "", tool_calls: [call("c9", "a.txt")] }, { role: "tool", tool_call_id: "c9", name: "read_file", content }, { role: "assistant", content: "next" }];
+          await agent.recordFindings({ chatCompletion: async () => ({ content: "a.txt reads alpha." }) }, 6, source, [key("a.txt")]);
+          return agent.distilledObservations.get(key("a.txt"))?.digest;
+        };
+        assert.equal(await digestOf(first), await digestOf("alpha"));
+      } finally {
+        agent.shutdown();
+      }
+    });
+  });
+
+  test("a new request does not inherit the memory notice: it returns only once that request's own compaction finds findings over their bound", async () => {
+    await isolated(async (repo) => {
+      const gw = await gateway((r) => (r.n === 1 ? { tools: [read("a.txt")] } : { tools: [done("a.txt read")] }));
+      const agent = quiet(new AutonomousAgent(cfg(gw, repo, { maxSteps: 30 }))) as any;
+      try {
+        agent.findingsOutgrown = true;
+        await muted(() => agent.runTurn("Read a.txt."));
+        const output = String(gw.requests[1].body.messages.filter((m: any) => m.role === "tool").at(-1)?.content);
+        assert.ok(output.includes(MARKERS["a.txt"]) && !output.startsWith("[Nexus:"), output.slice(0, 200));
+      } finally {
+        agent.shutdown();
+        await gw.close();
+      }
+    });
+  });
+
   test("a finding holds exactly the observations it came from: past the header's cap, and not another tool's whose key contains it", async () => {
     await isolated(async (repo) => {
       const agent = quiet(new AutonomousAgent({ endpoint: "http://127.0.0.1:9/v1", model: "m", maxSteps: 2, temperature: 0, workspace: repo, shell: "bash" })) as any;
@@ -739,7 +783,7 @@ describe("D: findings checkpoint before shown output leaves the context", () => 
       const agent = quiet(new AutonomousAgent(cfg(gw, repo, { maxSteps: order.length + 1 }))) as any;
       try {
         await muted(() => agent.runTurn(PROMPT));
-        const notice = (n: number) => /^\[Nexus: you ran this same call before; findings from its output were recorded at step (\d+)[^\]]*?(identical to|different from|only part of its output)/.exec(String(gw.requests[n].body.messages.filter((m: any) => m.role === "tool").at(-1)?.content));
+        const notice = (n: number) => /^(?:\[Nexus: this is step \d+ of \d+;[^\]]*\]\n)?\[Nexus: you ran this same call before; findings from its output were recorded at step (\d+)[^\]]*?(identical to|different from|only part of its output)/.exec(String(gw.requests[n].body.messages.filter((m: any) => m.role === "tool").at(-1)?.content));
         const second = notice(FILES.length + 1);
         assert.equal(second?.[2], "different from");
         const third = notice(order.length);

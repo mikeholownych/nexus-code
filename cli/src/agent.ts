@@ -263,7 +263,7 @@ function unreacquiredRemovals(messages: ChatMessage[]): Set<string> {
 
 /** The note `toolResultContent` puts before a re-run's output; not part of the output's identity. */
 const RERUN_NOTICE = /^\[Nexus: you ran this same call before;[^\]]*\]\n/;
-const OUTGROWN_NOTICE = /^\[Nexus: your recorded findings have outgrown your memory;[^\]]*\]\n/;
+const STEP_NOTICE = /^\[Nexus: (your recorded findings have outgrown your memory|this is step \d+ of \d+);[^\]]*\]\n/;
 
 /** Content identity of a tool output, to tell whether a re-run returned what was inspected before. */
 function outputDigest(text: string): string {
@@ -534,9 +534,9 @@ export class AutonomousAgent {
   private distilledObservations = new Map<string, { step: number; digest?: string }>();
   /** The observations each finding recorded in this process came from, by its header (which caps their list). */
   private findingSources = new Map<string, Set<string>>();
-  /** Whether the last durable record had more findings than their bound, and the step whose output last said so. */
+  /** Whether the last durable record this turn had more findings than their bound, and the step last told its state. */
   private findingsOutgrown = false;
-  private outgrownNoticeStep = 0;
+  private stepNoticeStep = 0;
   /** Provider recovery bounds; undefined reads LOCAL_LLM_RECOVERY_* at each turn. */
   private recoveryPolicy?: RecoveryPolicy;
   private recoveryClock: RecoveryClock = realRecoveryClock;
@@ -1195,6 +1195,7 @@ export class AutonomousAgent {
     this.distilledObservations = new Map();
     this.findingSources = new Map();
     this.findingsOutgrown = false;
+    this.stepNoticeStep = 0;
     this.messages = [
       {
         role: "system",
@@ -1769,7 +1770,7 @@ export class AutonomousAgent {
       const text = normalizeMessageContent(message.content).text.join("");
       if (!key || !wanted.has(key) || pending.some((item) => item.key === key) || !text || text.startsWith("Error executing ")) return;
       const partial = isTruncatedObservation(message);
-      pending.push({ key, text, partial, digest: partial ? undefined : outputDigest(text.replace(OUTGROWN_NOTICE, "").replace(RERUN_NOTICE, "")) });
+      pending.push({ key, text, partial, digest: partial ? undefined : outputDigest(text.replace(STEP_NOTICE, "").replace(RERUN_NOTICE, "")) });
     });
     if (!pending.length) return false;
     let recorded = false;
@@ -1835,13 +1836,19 @@ export class AutonomousAgent {
   /**
    * Tool output for the model. When the call repeats one whose findings were recorded, says so first (and whether the
    * output is unchanged) with the step position, so a re-run is a choice made knowing what the memory already holds.
-   * While recorded findings exceed their bound, the first output of each step says that before anything else.
+   * In the last tenth of the step budget (at least 3 steps), or while recorded findings exceed their bound, the first
+   * output of each step says so before anything else.
    * Notes lead the output so that fitting an oversized result to the context, which keeps its beginning, keeps them.
    */
   private toolResultContent(call: ToolCall, content: string, step: number, maxSteps: number): string {
     const result = this.rerunNotedContent(call, content, step, maxSteps);
-    if (!this.findingsOutgrown || this.outgrownNoticeStep === step) return result;
-    this.outgrownNoticeStep = step;
+    const remaining = maxSteps - step;
+    const closing = remaining < Math.max(3, Math.ceil(maxSteps / 10));
+    if ((!closing && !this.findingsOutgrown) || this.stepNoticeStep === step) return result;
+    this.stepNoticeStep = step;
+    if (closing) {
+      return `[Nexus: this is step ${step} of ${maxSteps}; ${remaining} step${remaining === 1 ? "" : "s"} remain after it. Stop investigating: make your work product complete and consistent now, then finish the task. Work left unfinished at the step limit is reported as not established.]\n${result}`;
+    }
     return `[Nexus: your recorded findings have outgrown your memory; the oldest are being shortened and dropped. Write what you have established into your work product now (the file or change your task produces; if it produces none, state it in your reply), before investigating further, then continue with what remains. This is step ${step} of ${maxSteps}.]\n${result}`;
   }
 
@@ -2769,7 +2776,8 @@ Always explain your reasoning before or alongside your tool calls.`;
     this.turnCarriedChanges = this.hasPendingModifications;
     // What compaction removed earlier in this conversation is still not in context, whichever way the turn began.
     this.turnRemovedObservations = new Set([...this.carriedRemovedObservations, ...unreacquiredRemovals(this.messages)]);
-    this.outgrownNoticeStep = 0;
+    this.findingsOutgrown = false;
+    this.stepNoticeStep = 0;
     this.carriedRemovedObservations = new Set();
 
     try {
