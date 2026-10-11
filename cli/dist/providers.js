@@ -56,6 +56,8 @@ export const PROVIDERS = Object.freeze({
         staticHeaders: { originator: "nexus" },
         usage: "native",
         streamOnly: true,
+        // The Codex backend serves reasoning models only and sets its own output limit.
+        omitParams: ["temperature", "max_output_tokens"],
         methods: [{ id: "chatgpt-oauth", label: "Sign in with ChatGPT (unofficial)", kind: "browser", unofficial: true }],
     },
     /** GitHub Copilot subscription (unofficial: VS Code Copilot sign-in). */
@@ -105,7 +107,7 @@ export function protocolFor(providerId, model) {
 export function connectionFor(providerId, model = "") {
     const def = providerDefinition(providerId);
     if (!def) {
-        return { label: "endpoint", protocol: "openai-chat", auth: "bearer", staticHeaders: {}, usage: "none", sendTaskClass: true, streamOnly: false };
+        return { label: "endpoint", protocol: "openai-chat", auth: "bearer", staticHeaders: {}, usage: "none", sendTaskClass: true, streamOnly: false, omitParams: [] };
     }
     return {
         providerId: def.id,
@@ -116,6 +118,7 @@ export function connectionFor(providerId, model = "") {
         usage: def.usage,
         sendTaskClass: false,
         streamOnly: Boolean(def.streamOnly),
+        omitParams: [...(def.omitParams ?? [])],
     };
 }
 /**

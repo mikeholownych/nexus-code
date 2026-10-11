@@ -181,6 +181,17 @@ function modelIds(body) {
         return body.models.filter((m) => !m?.visibility || m.visibility === "list").map((m) => m?.slug ?? m?.id).filter((id) => typeof id === "string");
     return [];
 }
+/** Optional request parameters a provider may reject; dropping one never changes what the request asks for. */
+const DROPPABLE_PARAMS = new Set(["temperature", "top_p", "max_output_tokens", "stream_options"]);
+/** The parameter a 400 answer names as unsupported ("Unsupported parameter: temperature", OpenAI `param`). */
+export function unsupportedParameter(message) {
+    const named = /unsupported (?:parameter|value)[:\s'"`]+([a-z_]+)/i.exec(message)?.[1];
+    if (named)
+        return named.toLowerCase();
+    if (/unsupported_parameter|not supported/i.test(message))
+        return /"param"\s*:\s*"([a-z_]+)"/i.exec(message)?.[1]?.toLowerCase();
+    return undefined;
+}
 /** Cloud destinations announced in this process (the disclosure notice is shown once per origin). */
 const announcedDestinations = new Set();
 /** Provider error bodies are bounded and redacted before they reach messages, logs or the UI. */
@@ -310,6 +321,11 @@ export class LocalLlmClient {
     conn;
     /** ChatGPT account the signed-in token belongs to (sent as chatgpt-account-id). */
     oauthAccountId;
+    /**
+     * Parameters this connection does not send: those its provider never accepts, plus any the provider rejected as
+     * unsupported during this session (learned once, then omitted from every later request).
+     */
+    unsupportedParams = new Set();
     /** Copilot API token exchanged from another client's GitHub token; held in memory only. */
     exchangedToken;
     authorizedOrigins;
@@ -326,6 +342,7 @@ export class LocalLlmClient {
     reservations = [];
     constructor(config, options) {
         this.conn = connectionFor(config.provider, config.model);
+        this.unsupportedParams = new Set(this.conn.omitParams);
         // A provider's base URL already carries its API path and version; only the legacy endpoint path appends /v1.
         const normalizeEp = (urlStr) => {
             let ep = urlStr.trim().replace(/\/+$/, "");
@@ -521,6 +538,35 @@ export class LocalLlmClient {
         this.model = model;
         // Some providers serve a model over a different protocol (Copilot gpt-5 via Responses).
         this.conn = connectionFor(this.conn.providerId, model);
+        // Learned rejections belong to the previous model.
+        this.unsupportedParams = new Set(this.conn.omitParams);
+    }
+    /** Removes parameters this provider connection does not accept (provider connections only). */
+    omitUnsupported(body) {
+        if (!this.conn.providerId)
+            return;
+        for (const p of this.unsupportedParams)
+            delete body[p];
+    }
+    /**
+     * When a provider answers 400 naming an optional parameter as unsupported, the request was not executed: drop that
+     * parameter for this connection and resend once. Bounded by the small set of droppable parameters.
+     */
+    async withParameterRetry(run) {
+        for (;;) {
+            try {
+                return await run();
+            }
+            catch (err) {
+                if (!this.conn.providerId || !(err instanceof InferenceError) || err.httpStatus !== 400)
+                    throw err;
+                const param = unsupportedParameter(err.message);
+                if (!param || !DROPPABLE_PARAMS.has(param) || this.unsupportedParams.has(param))
+                    throw err;
+                this.unsupportedParams.add(param);
+                console.error(pc.dim(`[nexus] ${this.conn.label} rejected '${param}' for ${this.model}; resending without it.`));
+            }
+        }
     }
     /**
      * Resolves a sign-in provider's token for this request: Nexus's own sign-in is refreshed when it is about to expire
@@ -780,7 +826,7 @@ export class LocalLlmClient {
     async chatCompletion(messages, tools, requestId = randomUUID(), signal, 
     /** Receipt role override for auxiliary calls (e.g. "compaction"). */
     purpose) {
-        return this.withReceipt(requestId, purpose, () => this.withOAuthRetry(this.endpoint, requestId, () => this.chatCompletionOnce(messages, tools, requestId, signal)));
+        return this.withReceipt(requestId, purpose, () => this.withOAuthRetry(this.endpoint, requestId, () => this.withParameterRetry(() => this.chatCompletionOnce(messages, tools, requestId, signal))));
     }
     async chatCompletionOnce(messages, tools, requestId, signal) {
         if (this.conn.protocol !== "openai-chat")
@@ -832,6 +878,7 @@ export class LocalLlmClient {
             }
             if (this.conn.usage === "openrouter")
                 payload.usage = { include: true };
+            this.omitUnsupported(payload);
             let res;
             let data;
             try {
@@ -882,7 +929,7 @@ export class LocalLlmClient {
      * Real-time SSE token streaming for typewriter terminal output (matching Codex / Claude Code)
      */
     async chatCompletionStream(messages, tools, onToken, requestId = randomUUID(), signal) {
-        return this.withReceipt(requestId, undefined, () => this.withOAuthRetry(this.endpoint, requestId, () => this.chatCompletionStreamOnce(messages, tools, onToken, requestId, signal)));
+        return this.withReceipt(requestId, undefined, () => this.withOAuthRetry(this.endpoint, requestId, () => this.withParameterRetry(() => this.chatCompletionStreamOnce(messages, tools, onToken, requestId, signal))));
     }
     async chatCompletionStreamOnce(messages, tools, onToken, requestId, signal) {
         if (this.conn.protocol !== "openai-chat")
@@ -935,6 +982,7 @@ export class LocalLlmClient {
                 payload.usage = { include: true };
             if (this.conn.usage === "openrouter" || this.conn.usage === "stream-options")
                 payload.stream_options = { include_usage: true };
+            this.omitUnsupported(payload);
             let res;
             try {
                 res = await fetch(url, {
@@ -1179,9 +1227,7 @@ export class LocalLlmClient {
                 thinkingBudget: this.thinkingBudget,
             };
             const req = anthropic ? buildAnthropicRequest(input) : buildResponsesRequest(input);
-            // The ChatGPT Codex backend rejects max_output_tokens.
-            if (this.conn.providerId === "chatgpt")
-                delete req.body.max_output_tokens;
+            this.omitUnsupported(req.body);
             if (req.droppedState) {
                 console.error(pc.dim(`[nexus] ${req.droppedState} earlier assistant turn(s) carry reasoning state owned by another provider/model or altered since capture; it is not replayed to ${owner} (visible text and tool calls are kept).`));
             }
