@@ -223,3 +223,47 @@ classified as a high-entropy secret, so identity validation fails closed; passes
 
 `~/df2/postdog/cc_evidence/review8_followups.md`: review 8's memory-retention follow-ups and review 9a's note on the
 findings-outgrown notice wording.
+
+### Dogfood `run_19ca1b1_prov_deep120` (provisioned workspace)
+
+Scenario correction: `harness-core` built from 19ca1b1's core (`cargo build --release --locked`, sha256 `08b78903…`)
+in the install and the reviewed workspace; everything else unchanged.
+
+- LIMIT_REACHED / NOT_ESTABLISHED at 120/120 (5 h 28 min). One `task_completed`, at step 119: verifier 17/21
+  (nonexistent doc paths; a section citing no existing file; findings without the evidence/consequence/disposition
+  form or an existing file).
+- 0 Rust RPC failures; the full workspace suite ran in about 2 min. The provisioning removed the RPC failures and
+  the investigation they caused (test-related calls: 12 steps, 47–92).
+- The closing notice fired (step 97 on) but did not bring the submission forward: the model investigated further,
+  rewrote the artifact twice (about 9 min of generation each) and submitted with one step left.
+- Defect: compaction copies the notice prefixed to a tool result into the durable record
+  (`Earlier run_command output: [Nexus: this is step 115 of 120; …]`), about 600 chars a copy with stale counts.
+- Remaining environmental failures (3 of 623; the runner's counts were reported correctly): `npm audit` fails with
+  `EALLOWSCRIPTS` from the user's npm configuration, which the gate reports as a High/Critical vulnerability; and
+  `nexus-tui` was not provisioned (`make build-core` builds it). The artifact's readiness argument rests on both, and
+  it states false repository facts (commit range, five docs that do not exist). Details:
+  `~/df2/postdog/dogfood/run_19ca1b1_prov_deep120/RESULT.md`.
+
+## 11. Merge of main (`f7498cf`, `e9422c9`), 2026-10-11
+
+Pre-merge state preserved: branch `fix/context-convergence-premerge-9da832c` and
+`~/df2/postdog/cc_evidence/PREMERGE_SNAPSHOT_2026-10-11.md`. Merges `cf84700` (main `f7498cf`) and `d88a897`
+(main `e9422c9`, which removes the tracked secret-scan baseline log that failed SCAN-003). Nothing published.
+
+How the two lines of work were reconciled:
+
+| Area | Main | Branch | Combined |
+|---|---|---|---|
+| Context construction | pinned Objective Ledger after the system prompt on every request (`requestMessages`) | findings memory and bounded durable record | both; admission's fit-to-budget loop measures `requestMessages(...)`, so the ledger is counted |
+| Compaction | archive of replaced history (`archiveReplaced`) | findings checkpoints, removal notes, unseen results kept first | both |
+| Retained history | `pinnedUserText`: objective and steering not repeated as "Earlier task requests" | — | main's (partly addresses review 8 follow-up 2) |
+| Observation keys | 240 chars + sha256 suffix | 400/160 + hash | main's supersedes the branch's |
+| Continuation | on by default (300 steps, 120 min, stagnation 12), completion nudges for open requirements | empty-reply continuation, closing notice | empty reply first, then nudges; notices count against `maxTotalSteps` |
+| Objective persistence / recovery | ledger persisted and restored; reset on new session | findings memory reset on restore/reset | both reset together |
+| Token accounting | provider-reported usage; estimated vs reported counters | — | main's |
+| Verifier | skip on unchanged inputs | per-turn configured verifier | both |
+
+Tests on `d88a897`: `tsc` clean; full suite 752/752; core `cargo test --release --locked` 192/192.
+Scenario adjustment for dogfood: main's continuation defaults would cut the 7 h run at 120 minutes, so the turn is
+pinned to the established budget (`-s 120 --max-total-steps 120 --max-turn-minutes 420`); stagnation detection is
+left at main's default. `nexus-tui` is now provisioned alongside `harness-core` (`launch_deep120_v5.sh`).
