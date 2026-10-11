@@ -20,9 +20,13 @@ import {
   type StreamParser,
 } from "./common.js";
 
-/** Reasoning models (o-series, gpt-5 family) reject sampling temperature. */
+/**
+ * Reasoning models reject sampling temperature: the o-series, gpt-5 and every later generation (gpt-5.6, gpt-6, ...),
+ * and Codex models. A model this misses is still handled: the client drops a parameter the provider reports as
+ * unsupported and retries once.
+ */
 export function acceptsTemperature(model: string, reasoningEffort?: string): boolean {
-  return !reasoningEffort && !/^(o\d|gpt-5)/i.test(model.replace(/^.*\//, ""));
+  return !reasoningEffort && !/^(o\d|gpt-(?:[5-9]|\d{2,})|.*codex)/i.test(model.replace(/^.*\//, ""));
 }
 
 function userContent(content: ChatMessage["content"]): string | any[] {

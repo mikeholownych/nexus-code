@@ -774,3 +774,61 @@ describe("operation resources naming a provider", () => {
     assert.deepEqual(derived.map((r) => [r.id, r.providerId, r.endpoint]), [["primary", "openrouter", "https://openrouter.ai/api/v1"]], "no /v1 suffix, no fallback resources");
   });
 });
+
+// ---------------------------------------------------------------- unsupported parameters
+
+describe("parameters a provider rejects", () => {
+  const rejectTemperature = (s: Seen, res: http.ServerResponse) =>
+    s.body?.temperature !== undefined
+      ? json(res, 400, { detail: "Unsupported parameter: temperature" })
+      : sendSse(res, r.text("ok") + r.completed([{ type: "message", content: [{ type: "output_text", text: "ok" }] }]));
+
+  test("ChatGPT plan never sends temperature or max_output_tokens (gpt-6-luna regression)", async () => {
+    const m = await mock(rejectTemperature);
+    try {
+      const client = new LocalLlmClient(cfg("chatgpt", m.url, { model: "gpt-6-luna", apiKey: "at" }));
+      (client as any).prepareCredential = async () => {}; // the sign-in itself is covered in provider_connect.test.ts
+      const out = await client.chatCompletionStream(msgs, TOOLS, undefined);
+      assert.equal(out.content, "ok");
+      assert.equal(m.seen.length, 1, "no rejected first attempt");
+      assert.equal("temperature" in m.seen[0].body, false);
+      assert.equal("max_output_tokens" in m.seen[0].body, false);
+    } finally { await m.close(); }
+  });
+
+  test("the model rule covers every reasoning generation after gpt-5", async () => {
+    const { acceptsTemperature } = await import("../src/protocols/openai_responses.js");
+    for (const m of ["gpt-5", "gpt-5.6-luna", "gpt-6-luna", "gpt-6.1-sol", "gpt-10", "o3", "openai/gpt-6", "gpt-5-codex"]) assert.equal(acceptsTemperature(m), false, m);
+    for (const m of ["gpt-4.1", "gpt-4o-mini", "openai/gpt-4o"]) assert.equal(acceptsTemperature(m), true, m);
+  });
+
+  test("an unknown model's rejected parameter is dropped once, remembered, and the request resent", async () => {
+    const m = await mock(rejectTemperature);
+    try {
+      const client = new LocalLlmClient(cfg("openai", `${m.url}/v1`, { model: "acme-reasoner-2" }));
+      assert.equal((await client.chatCompletionStream(msgs, [], undefined, "req-a")).content, "ok");
+      assert.deepEqual(m.seen.map((s) => "temperature" in s.body), [true, false]);
+      assert.equal((await client.chatCompletionStream(msgs, [], undefined, "req-b")).content, "ok");
+      assert.equal("temperature" in m.seen[2].body, false, "learned: omitted from the start");
+      assert.equal(m.seen.length, 3);
+      assert.deepEqual(UsageLedger.global().all().map((x) => [x.requestId, x.outcome]), [["req-a", "completed"], ["req-b", "completed"]], "one receipt per request");
+    } finally { await m.close(); }
+  });
+
+  test("a rejection naming a required parameter is not retried", async () => {
+    const m = await mock((_s, res) => json(res, 400, { error: { message: "Unsupported parameter: tools", param: "tools", code: "unsupported_parameter" } }));
+    try {
+      const e = await rejects(new LocalLlmClient(cfg("openai", `${m.url}/v1`, { model: "x" })).chatCompletionStream(msgs, TOOLS, undefined));
+      assert.equal(e.httpStatus, 400);
+      assert.equal(m.seen.length, 1);
+    } finally { await m.close(); }
+  });
+
+  test("the appliance path is unchanged: no parameter dropping", async () => {
+    const m = await mock((_s, res) => json(res, 400, { detail: "Unsupported parameter: temperature" }));
+    try {
+      await rejects(new LocalLlmClient(cfg(undefined, m.url, { apiKey: "local" })).chatCompletion(msgs, []));
+      assert.equal(m.seen.length, 1);
+    } finally { await m.close(); }
+  });
+});

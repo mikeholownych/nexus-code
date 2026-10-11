@@ -34,6 +34,8 @@ export interface ProviderDefinition {
   methods: ConnectMethod[];
   /** The backend accepts streamed requests only; non-streaming calls are streamed internally. */
   streamOnly?: boolean;
+  /** Request parameters this backend rejects for every model; never sent. */
+  omitParams?: string[];
   auth: AuthStyle;
   /** Headers this provider requires on every request. */
   staticHeaders?: Record<string, string>;
@@ -87,6 +89,8 @@ export const PROVIDERS: Readonly<Record<string, ProviderDefinition>> = Object.fr
     staticHeaders: { originator: "nexus" },
     usage: "native",
     streamOnly: true,
+    // The Codex backend serves reasoning models only and sets its own output limit.
+    omitParams: ["temperature", "max_output_tokens"],
     methods: [{ id: "chatgpt-oauth", label: "Sign in with ChatGPT (unofficial)", kind: "browser", unofficial: true }],
   },
   /** GitHub Copilot subscription (unofficial: VS Code Copilot sign-in). */
@@ -140,6 +144,7 @@ export interface ResolvedConnection {
   /** Whether requests carry the appliance's X-Task-Class routing hint. */
   sendTaskClass: boolean;
   streamOnly: boolean;
+  omitParams: string[];
 }
 
 /** Copilot serves some models through the Responses API only. */
@@ -151,7 +156,7 @@ export function protocolFor(providerId: string | undefined, model: string): Wire
 export function connectionFor(providerId: string | undefined, model = ""): ResolvedConnection {
   const def = providerDefinition(providerId);
   if (!def) {
-    return { label: "endpoint", protocol: "openai-chat", auth: "bearer", staticHeaders: {}, usage: "none", sendTaskClass: true, streamOnly: false };
+    return { label: "endpoint", protocol: "openai-chat", auth: "bearer", staticHeaders: {}, usage: "none", sendTaskClass: true, streamOnly: false, omitParams: [] };
   }
   return {
     providerId: def.id,
@@ -162,6 +167,7 @@ export function connectionFor(providerId: string | undefined, model = ""): Resol
     usage: def.usage,
     sendTaskClass: false,
     streamOnly: Boolean(def.streamOnly),
+    omitParams: [...(def.omitParams ?? [])],
   };
 }
 

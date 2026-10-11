@@ -10,6 +10,7 @@ store was written.
 |---|---|---|---|---|
 | openrouter | crush `providers.openrouter.api_key` | OpenAI Chat Completions | `openai/gpt-4o-mini` | PASS 3/3, 2026-10-11T16:14:12Z |
 | chatgpt (unofficial sign-in) | Codex CLI `~/.codex/auth.json` | OpenAI Responses, ChatGPT Codex backend | `gpt-5.6-luna` | PASS 3/3, 2026-10-11T16:14:17Z |
+| chatgpt (unofficial sign-in) | Codex CLI `~/.codex/auth.json` | OpenAI Responses, ChatGPT Codex backend | `gpt-6-luna` | PASS 3/3, 2026-10-11T16:23:15Z (after the temperature fix below) |
 
 Model discovery before the checks: OpenRouter listed 458 models; the Codex backend listed 7.
 
@@ -26,3 +27,13 @@ Receipts (sanitized request ids, provider-reported usage):
 
 Not qualified live: `openai` and `anthropic` (no API keys configured), `copilot` (no Copilot sign-in on this machine),
 `compatible`. A connectivity check is not evidence of task-completion quality.
+
+## Defect found in operator use: `temperature` sent to `gpt-6-luna`
+
+`/model chatgpt gpt-6-luna` then a task failed with `HTTP 400 {"detail":"Unsupported parameter: temperature"}`.
+`temperature` was decided by a model-name pattern (`o\d|gpt-5`) that `gpt-5.6-luna` matched and `gpt-6-luna` did not.
+Fix: the `chatgpt` provider declares `temperature` and `max_output_tokens` as never sent; the name rule covers every
+generation from gpt-5 on and Codex models; and a provider connection that is told an optional parameter is
+unsupported (400, request not executed) drops it, remembers it for the session, and resends once. Regression tests
+fail on the previous source (3/5) and pass after; live re-check on `gpt-6-luna` passed (receipts
+`resp_00448a85a9bf…`, `resp_09fe100a817d…`, `resp_07b5b4d3b6e6…`).
