@@ -169,3 +169,57 @@ instruction inside the durable record at the moment of compaction, not only in t
 dogfood. If `engineering/b0` still states no findings, the objective cannot converge at this context size and step
 budget without an operator decision on objective scope or model. Separately, the operator must decide the
 acceptance verifier for documentation-only dogfood output.
+
+## 10. Later iterations (2026-10-09 to 2026-10-11)
+
+Status at 2026-10-11 05:40Z: not integrated; main remains `486d38f`. One dogfood reported VERIFIED (below), but the
+result is not attributable to the change under test and the artifact has material substantive errors, so acceptance
+is not established. Evidence: `~/df2/postdog/dogfood/run_*` and `~/df2/postdog/cc_evidence/`.
+
+Each candidate made one causal change, with a regression test that fails on the previous candidate, the full suite and
+`tsc`. Dogfood runs: engineering/deep, the same objective (a3a81ae7) and authoritative verifier, 64k context.
+
+| Run | Steps | Result | What it showed |
+|---|---|---|---|
+| `8eee328`, `547525b`, `00a10ed` (30 and 120 steps) | 30/30, 120/120 | LIMIT_REACHED | findings recorded, but rereads and no artifact |
+| `33cb238` | 7/30 | COMPLETED UNVERIFIED (CONTEXT_EVIDENCE_NOT_RETAINED) | completion honestly refused after removals |
+| `8674520` | 17/120 | stopped by operator | superseded by `d25ba71` |
+| `d25ba71` | 40/120 | stopped by operator | model-written findings merge timed out (300 s per checkpoint) |
+| `e1eb245`, `58ed70a` | 120/120 | LIMIT_REACHED | memory notice lost to per-step compaction; no artifact |
+| `67779f5` | 118/120 | killed by the 5 h wall clock | artifact at step 55, 2 verifier failures; timeout raised to 7 h |
+| `2269313` | 43/120 | COMPLETED UNVERIFIED (VERIFICATION_NOT_RUN) | an empty reply was taken as the answer (fixed in `a809bb7`) |
+| `a809bb7` | 95/120 | BLOCKED (CONTEXT_CAPACITY_EXCEEDED) | durable record 117K chars; only findings were bounded (fixed in `9cd75da`) |
+| `9cd75da` | 120/120 | LIMIT_REACHED | flat footprint; closing notice at 109, first submission at 117, 2 citation failures left |
+| `19ca1b1` | 95/120 | **COMPLETED VERIFIED** | see below |
+
+### `574bbb4` + `19ca1b1`: closing notice in the last fifth
+
+The closing notice starts when fewer than max(3, ceil(maxSteps/5)) steps remain (step 97 of 120, was 109), and asks
+the model to consolidate inspected evidence into the work product, check every requirement and cited path, call
+`task_completed` (the operator's verifier, when configured, checks it) and keep steps for corrections. `19ca1b1`
+applies review 9's should-fix: unestablished items go in the `task_completed` summary, because a plain-text reply ends
+the turn without the verifier. Reviews 9 and 9a: 0 blockers. Full suite 620/623: SCAN-001/004 baseline plus one
+intermittent `TaskStateWriteError` in an operation-based invariant test (the `inv-<ms>-<rand>` test id is sometimes
+classified as a high-entropy secret, so identity validation fails closed; passes on rerun; documented 2026-10-08).
+
+### Dogfood `run_19ca1b1_deep120`
+
+- COMPLETED / VERIFIED at step 95 of 120 in 3 h 38 min; independent verifier rerun: 21/21. Artifact first written at
+  step 41; first `task_completed` at step 88 refused (missing dispositions on F-07..F-09; F-09 cited no existing
+  file); both repaired by step 92; accepted at step 95.
+- Prompt tokens 15,748–53,146 (ceiling 53,248); durable record 41–53K chars and flat after step 45; no admission
+  failures; exact repeated calls: 2 of 155.
+- 18 steps (about 1 h) ran or read the workspace's tests.
+- **Attribution:** the closing notice never fired (onset 97, end 95), and nothing else differs from `9cd75da`. The
+  outcome difference from `run_9cd75da_deep120` is run-to-run variance; the change is untested by this run.
+- **Substance:** largely repository-grounded (spot-checks confirmed most cited facts), but F-04 is false (it reads a
+  past-tense defect history in `docs/EXECUTION_CONVERGENCE.md` as stale design) and the headline blocker F-01 counts
+  UI glyphs as assertions (85/73; the runner reported 19 failed of 62) and generalises an environmental failure.
+- **Environment finding:** dogfood workspaces lack the prebuilt `core/target/*/harness-core` that the canonical
+  checkout has (the launcher links only `node_modules`), so the workspace's own tests fail with "Rust core RPC daemon
+  disconnected". This shaped the test investigations in this run and in earlier runs, and F-01.
+
+### Deferred
+
+`~/df2/postdog/cc_evidence/review8_followups.md`: review 8's memory-retention follow-ups and review 9a's note on the
+findings-outgrown notice wording.
