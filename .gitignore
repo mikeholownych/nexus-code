@@ -7,3 +7,8 @@ core/target/
 .DS_Store
 .cloudflare/
 .wrangler/
+# Generated caches (graphify knowledge graph, Python bytecode)
+graphify-out/
+__pycache__/
+# The pre-commit implementation diff is superseded by the landed commits; it stays inside the evidence bundle
+docs/reviews/evidence/nexus_maturity_2026-10-11_verification/implementation.patch
