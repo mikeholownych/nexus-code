@@ -10,5 +10,7 @@ core/target/
 # Generated caches (graphify knowledge graph, Python bytecode)
 graphify-out/
 __pycache__/
-# The pre-commit implementation diff is superseded by the landed commits; it stays inside the evidence bundle
+# Evidence files that quote test-fixture secrets (the superseded pre-commit diff; the raw log of the failing baseline
+# secret scan): kept on disk and inside the evidence bundle, not tracked, so the repository secret scan stays clean
 docs/reviews/evidence/nexus_maturity_2026-10-11_verification/implementation.patch
+docs/reviews/evidence/nexus_maturity_2026-10-11_verification/baseline_57c070d_security_gates_direct.log

@@ -19,6 +19,7 @@ Raw, unedited outputs. Everything here was produced from the working tree on top
 `SHA256SUMS` lists the digests of these files and of the TUI evidence files.
 
 Landed on `main` as commits (see `git log`); those commits are the authoritative implementation diff.
-`implementation.patch` is not tracked in git (it contains removed test-fixture strings that the repository's secret
-scan rejects in tracked files); it remains inside `../nexus_maturity_2026-10-11_bundle.tar.gz`, whose digest is
+`implementation.patch` and `baseline_57c070d_security_gates_direct.log` are not tracked in git (both quote the
+test-fixture strings that the repository's secret scan rejects in tracked files; the log is the raw output of that
+failing scan); they remain on disk, listed in `SHA256SUMS`, and inside `../nexus_maturity_2026-10-11_bundle.tar.gz`, whose digest is
 unchanged by landing.
