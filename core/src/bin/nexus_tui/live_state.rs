@@ -3,9 +3,11 @@
 use crate::composer::Composer;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use serde_json::Value;
+use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
-use crate::protocol::{Command, Event, PROTOCOL_VERSION, ReceiptSection, Review, SlashSpec};
+use crate::models::{AuthInfo, Connect, ConnectIntent, Fetch, Picker, PickerIntent, Step};
+use crate::protocol::{Catalog, Command, Event, PROTOCOL_VERSION, ReceiptSection, Review, Secret, SlashSpec};
 use crate::review::{ReviewLine, review_lines};
 use crate::slash::{self, Invocation};
 
@@ -65,6 +67,77 @@ pub enum Entry {
         subject: String,
         verdict: Verdict,
     },
+    /// Steering the operator sent while the agent worked, and what became of it.
+    Steer {
+        id: String,
+        /// As typed, with paste buffers shown by their labels.
+        text: String,
+        state: SteerState,
+        message: String,
+    },
+    /// The change one file-edit call made (a bounded preview; the call's detail record holds the whole diff).
+    Diff {
+        call_id: String,
+        evidence: String,
+        path: String,
+        kind: String,
+        added: u64,
+        removed: u64,
+        preview: String,
+        truncated: bool,
+        total_lines: u64,
+        note: Option<String>,
+    },
+}
+
+/// Where operator steering stands, as the sidecar acknowledged it.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum SteerState {
+    /// Written to the sidecar; no acknowledgement yet.
+    Sending,
+    /// Held for the agent's next step.
+    Queued,
+    /// Given to the agent.
+    Applied,
+    /// The turn was finishing; it starts a follow-up turn.
+    Deferred,
+    /// The turn ended first; the text went back to the composer.
+    Cancelled,
+    /// Nothing could take it (a command was running); the text went back to the composer.
+    Rejected,
+    /// The sidecar had already received it.
+    Duplicate,
+    /// The sidecar stopped before acknowledging it; the text went back to the composer.
+    Lost,
+}
+
+impl SteerState {
+    fn from_ack(status: &str) -> SteerState {
+        match status {
+            "queued" => SteerState::Queued,
+            "applied" => SteerState::Applied,
+            "deferred" => SteerState::Deferred,
+            "cancelled" => SteerState::Cancelled,
+            "duplicate" => SteerState::Duplicate,
+            _ => SteerState::Rejected,
+        }
+    }
+
+    /// Still owed an outcome by the sidecar.
+    pub fn open(self) -> bool {
+        matches!(self, SteerState::Sending | SteerState::Queued | SteerState::Deferred)
+    }
+}
+
+/// What the running turn reported it is doing, and since when (this client's clock).
+#[derive(Clone, Debug, PartialEq)]
+pub struct Activity {
+    pub phase: String,
+    pub step: u64,
+    pub segment: u64,
+    pub tool: Option<String>,
+    pub subject: Option<String>,
+    pub since: Instant,
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -134,6 +207,8 @@ pub struct ToolRecord {
     pub args: String,
     pub output: String,
     pub duration_ms: Option<u64>,
+    /// The whole diff of the file change the call made.
+    pub diff: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -163,6 +238,12 @@ pub enum Overlay {
     Help { scroll: usize },
     Detail(Detail),
     Receipt(ReceiptPanel),
+    /// `/model`: choose a model from any connected provider.
+    Models(Picker),
+    /// ctrl+p in the picker (or `/connect`): connect a provider.
+    Connect(Connect),
+    /// ctrl+o in the composer: a paste buffer's full content.
+    Paste { number: u32, scroll: usize },
 }
 
 /// What the last frame measured. Key handling uses it for page sizes, and it clamps scrolling at the top.
@@ -208,6 +289,17 @@ pub struct LiveState {
     /// The next frame should move the window to show the selection.
     pub follow: bool,
     panel_seq: u64,
+    /// Commands a sidecar event asked to send (the live loop drains them after applying events).
+    outbox: Vec<Action>,
+    /// What the running turn last reported doing.
+    pub activity: Option<Activity>,
+    /// When the current turn started (this client's clock); drives the elapsed time while busy.
+    pub turn_started: Option<Instant>,
+    steer_seq: u64,
+    /// Exact text of steering the sidecar still owes an outcome for, by id, to give back if it is not applied.
+    steer_texts: HashMap<String, String>,
+    /// The clock frames are drawn at; the live loop advances it before each draw.
+    pub now: Instant,
 }
 
 impl LiveState {
@@ -232,7 +324,176 @@ impl LiveState {
             selected: None,
             follow: false,
             panel_seq: 0,
+            outbox: Vec::new(),
+            activity: None,
+            turn_started: None,
+            steer_seq: 0,
+            steer_texts: HashMap::new(),
+            now: Instant::now(),
         }
+    }
+
+    /// Advances the drawing clock (the live loop calls it before each frame).
+    pub fn set_now(&mut self, now: Instant) {
+        self.now = now;
+    }
+
+    /// The activity indicator animates only while a turn runs on a live link.
+    pub fn animating(&self) -> bool {
+        self.session.busy && self.link == Link::Ready && !self.closing && !self.connecting()
+    }
+
+    /// Puts returned steering back into the draft (at the end, as a paste buffer when it is long or multi-line).
+    fn restore_draft(&mut self, text: &str) {
+        if text.trim().is_empty() {
+            return;
+        }
+        if !self.composer.is_empty() {
+            self.composer.line_end();
+            while !self.composer.at_end() {
+                self.composer.down();
+                self.composer.line_end();
+            }
+            self.composer.insert("\n");
+        }
+        self.composer.paste(text);
+    }
+
+    /// Commands queued while applying sidecar events.
+    pub fn take_outbox(&mut self) -> Vec<Action> {
+        std::mem::take(&mut self.outbox)
+    }
+
+    fn next_id(&mut self, prefix: char) -> String {
+        self.panel_seq += 1;
+        format!("{prefix}{}", self.panel_seq)
+    }
+
+    /// Opens the model picker and asks the sidecar for the catalog.
+    fn open_models(&mut self, connect: bool, only: Option<String>) -> Option<Action> {
+        if self.link != Link::Ready {
+            return None;
+        }
+        let id = self.next_id('m');
+        let mut picker = Picker::new(id.clone());
+        picker.connect_on_load = connect;
+        picker.only = only;
+        self.overlay = Some(Overlay::Models(picker));
+        Some(Action::Send(Command::ModelsList { id }))
+    }
+
+    fn on_models_key(&mut self, key: KeyEvent) -> Option<Action> {
+        let Some(Overlay::Models(picker)) = &mut self.overlay else {
+            return None;
+        };
+        let providers = match &picker.catalog {
+            Fetch::Ready(catalog) => catalog.providers.clone(),
+            _ => Vec::new(),
+        };
+        match picker.on_key(key)? {
+            PickerIntent::Close => {
+                self.overlay = None;
+                None
+            }
+            PickerIntent::Select { provider, model } => {
+                self.overlay = None;
+                let id = self.next_id('x');
+                self.transcript.push(Entry::Command(format!("/model {provider} {model}")));
+                Some(Action::Send(Command::ModelSelect { id, provider, model }))
+            }
+            PickerIntent::Connect(at) => {
+                let (flow, intent) = Connect::new(providers, at.as_deref());
+                self.overlay = Some(Overlay::Connect(flow));
+                intent.and_then(|intent| self.connect_intent(intent))
+            }
+        }
+    }
+
+    fn connect_intent(&mut self, intent: ConnectIntent) -> Option<Action> {
+        match intent {
+            ConnectIntent::Back => self.open_models(false, None),
+            ConnectIntent::Connect { provider, method, key } => {
+                let id = self.next_id('c');
+                if let Some(Overlay::Connect(flow)) = &mut self.overlay {
+                    flow.step = Step::Waiting {
+                        request: id.clone(),
+                        provider: provider.clone(),
+                        method: method.clone(),
+                        auth: None,
+                    };
+                }
+                Some(Action::Send(Command::ProviderConnect {
+                    id,
+                    provider,
+                    method,
+                    key: key.map(Secret),
+                }))
+            }
+            ConnectIntent::Cancel { request } => Some(Action::Send(Command::ProviderCancel { id: request })),
+            ConnectIntent::Disconnect { provider } => {
+                let id = self.next_id('c');
+                Some(Action::Send(Command::ProviderDisconnect { id, provider }))
+            }
+        }
+    }
+
+    fn on_connect_key(&mut self, key: KeyEvent) -> Option<Action> {
+        let Some(Overlay::Connect(flow)) = &mut self.overlay else {
+            return None;
+        };
+        let intent = flow.on_key(key)?;
+        self.connect_intent(intent)
+    }
+
+    fn on_catalog(&mut self, id: String, catalog: Catalog) {
+        match &mut self.overlay {
+            Some(Overlay::Models(picker)) if picker.request == id => {
+                let providers = catalog.providers.clone();
+                picker.catalog = Fetch::Ready(catalog);
+                picker.focus_current();
+                if picker.connect_on_load {
+                    let (flow, intent) = Connect::new(providers, None);
+                    self.overlay = Some(Overlay::Connect(flow));
+                    if let Some(action) = intent.and_then(|intent| self.connect_intent(intent)) {
+                        self.outbox.push(action);
+                    }
+                }
+            }
+            Some(Overlay::Connect(flow)) if flow.refresh.as_deref() == Some(id.as_str()) => {
+                flow.providers = catalog.providers;
+                flow.refresh = None;
+            }
+            _ => {}
+        }
+    }
+
+    fn on_provider_result(&mut self, id: String, provider: String, success: bool, message: String) {
+        if let Some(Overlay::Connect(flow)) = &mut self.overlay {
+            let waiting = matches!(&flow.step, Step::Waiting { request, .. } if *request == id);
+            if waiting {
+                if flow.on_result(&id, success, message.clone()) {
+                    self.transcript.push(Entry::Info(message));
+                    // Connected: show that provider's models.
+                    if let Some(action) = self.open_models(false, Some(provider)) {
+                        self.outbox.push(action);
+                    }
+                }
+                return;
+            }
+            // A disconnect (or a late answer): report it and refresh the provider list.
+            flow.notice = Some((success, message));
+            let refresh = self.next_id('m');
+            if let Some(Overlay::Connect(flow)) = &mut self.overlay {
+                flow.refresh = Some(refresh.clone());
+            }
+            self.outbox.push(Action::Send(Command::ModelsList { id: refresh }));
+            return;
+        }
+        self.transcript.push(Entry::Output {
+            success,
+            text: message,
+            diff: false,
+        });
     }
 
     pub fn cancel_requested(&self) -> bool {
@@ -273,6 +534,62 @@ impl LiveState {
                 };
                 self.cancel_requested &= busy;
                 self.link = Link::Ready;
+                if busy && self.turn_started.is_none() {
+                    self.turn_started = Some(Instant::now());
+                }
+                if !busy {
+                    self.turn_started = None;
+                    self.activity = None;
+                }
+            }
+            Event::Activity { phase, step, segment, tool, subject } => {
+                let since = match &self.activity {
+                    Some(previous) if previous.phase == phase && previous.tool == tool => previous.since,
+                    _ => Instant::now(),
+                };
+                self.activity = Some(Activity { phase, step, segment, tool, subject, since });
+            }
+            Event::FileDiff {
+                call_id,
+                evidence,
+                path,
+                kind,
+                added,
+                removed,
+                preview,
+                truncated,
+                total_lines,
+                note,
+            } => self.transcript.push(Entry::Diff {
+                call_id,
+                evidence,
+                path,
+                kind,
+                added,
+                removed,
+                preview,
+                truncated,
+                total_lines,
+                note,
+            }),
+            Event::SteerAck { id, status, message, text } => {
+                let state = SteerState::from_ack(&status);
+                if let Some(Entry::Steer { state: slot, message: note, .. }) = self
+                    .transcript
+                    .iter_mut()
+                    .rev()
+                    .find(|entry| matches!(entry, Entry::Steer { id: sent, .. } if *sent == id))
+                {
+                    *slot = state;
+                    *note = message.clone();
+                }
+                if !state.open() {
+                    let kept = self.steer_texts.remove(&id);
+                    if matches!(state, SteerState::Cancelled | SteerState::Rejected) {
+                        let returned = text.or(kept).unwrap_or_default();
+                        self.restore_draft(&returned);
+                    }
+                }
             }
             Event::AssistantDelta { turn_id, text } => match self.transcript.last_mut() {
                 Some(Entry::Assistant { turn_id: last, text: body }) if *last == turn_id => body.push_str(&text),
@@ -319,6 +636,7 @@ impl LiveState {
             Event::TurnResult { heading, line, turn, model_summary } => {
                 self.pending = None;
                 self.cancel_requested = false;
+                self.activity = None;
                 self.interrupt_running_tools();
                 self.close_approval();
                 let (summary, notes) = model_summary
@@ -331,6 +649,9 @@ impl LiveState {
                     summary,
                     notes,
                 });
+                if let Some(objective) = objective_note(&turn) {
+                    self.transcript.push(Entry::Info(objective));
+                }
             }
             Event::Error {
                 id: Some(id),
@@ -340,9 +661,15 @@ impl LiveState {
                 let waiting = self.waiting_panel() == Some(id.as_str());
                 let message = format!("{code}: {message}");
                 match &mut self.overlay {
+                    // A connect or model-select answer with no panel waiting for it still reaches the operator.
+                    _ if !waiting && id.starts_with(['c', 'x']) => self.transcript.push(Entry::Notice(message)),
                     _ if !waiting => {}
                     Some(Overlay::Detail(detail)) => detail.record = Loaded::Failed(message),
                     Some(Overlay::Receipt(panel)) => panel.sections = Loaded::Failed(message),
+                    Some(Overlay::Models(picker)) => picker.catalog = Fetch::Failed(message),
+                    Some(Overlay::Connect(flow)) => {
+                        flow.on_result(&id, false, message);
+                    }
                     _ => {}
                 }
             }
@@ -393,6 +720,7 @@ impl LiveState {
                 args,
                 output,
                 duration_ms,
+                diff,
             } => {
                 if let Some(Overlay::Detail(detail)) = &mut self.overlay
                     && detail.request == id
@@ -402,6 +730,7 @@ impl LiveState {
                         args,
                         output,
                         duration_ms,
+                        diff,
                     });
                 }
             }
@@ -411,6 +740,27 @@ impl LiveState {
                 {
                     panel.sections = Loaded::Ready(sections);
                 }
+            }
+            Event::ModelsCatalog { id, providers, models, current, recent } => {
+                self.on_catalog(id, Catalog { providers, models, current, recent });
+            }
+            Event::ProviderAuth { id, url, user_code, instructions, .. } => {
+                if let Some(Overlay::Connect(flow)) = &mut self.overlay
+                    && let Step::Waiting { request, auth, .. } = &mut flow.step
+                    && *request == id
+                {
+                    *auth = Some(AuthInfo { url, user_code, instructions });
+                }
+            }
+            Event::ProviderResult { id, provider, success, message } => {
+                self.on_provider_result(id, provider, success, message);
+            }
+            Event::ModelResult { success, message, .. } => {
+                self.transcript.push(Entry::Output {
+                    success,
+                    text: message,
+                    diff: false,
+                });
             }
             Event::Unknown => {}
         }
@@ -422,6 +772,24 @@ impl LiveState {
         self.interrupt_running_tools();
         self.session.busy = false;
         self.cancel_requested = false;
+        self.activity = None;
+        self.turn_started = None;
+        // Steering the sidecar never acknowledged as applied goes back to the operator instead of vanishing.
+        let mut returned = Vec::new();
+        for entry in &mut self.transcript {
+            if let Entry::Steer { id, state, message, .. } = entry
+                && state.open()
+            {
+                *state = SteerState::Lost;
+                *message = "The agent stopped before applying it; the text is back in the composer.".into();
+                if let Some(text) = self.steer_texts.remove(id) {
+                    returned.push(text);
+                }
+            }
+        }
+        for text in returned {
+            self.restore_draft(&text);
+        }
         self.link = Link::Crashed {
             code,
             reason,
@@ -431,7 +799,10 @@ impl LiveState {
 
     pub fn restarted(&mut self) {
         self.close_approval();
-        if matches!(self.overlay, Some(Overlay::Detail(_) | Overlay::Receipt(_))) {
+        if matches!(
+            self.overlay,
+            Some(Overlay::Detail(_) | Overlay::Receipt(_) | Overlay::Models(_) | Overlay::Connect(_))
+        ) {
             self.overlay = None;
         }
         // Evidence ids are numbered per sidecar process; the new one would answer for other calls.
@@ -449,10 +820,22 @@ impl LiveState {
     }
 
     pub fn on_paste(&mut self, text: &str) {
+        if matches!(self.overlay, Some(Overlay::Paste { .. })) {
+            return;
+        }
+        match &mut self.overlay {
+            Some(Overlay::Connect(flow)) => return flow.on_paste(text),
+            Some(Overlay::Models(picker)) => {
+                picker.query.push_str(text.trim());
+                picker.pick = 0;
+                return;
+            }
+            _ => {}
+        }
         if !matches!(self.link, Link::Crashed { .. }) && self.overlay.is_none() {
             self.slash_pick = 0;
             self.slash_dismissed = false;
-            self.composer.insert(text);
+            self.composer.paste(text);
         }
     }
 
@@ -466,6 +849,7 @@ impl LiveState {
         if let Some(
             Overlay::Approval(Approval { scroll, .. })
             | Overlay::Help { scroll }
+            | Overlay::Paste { scroll, .. }
             | Overlay::Detail(Detail { scroll, .. })
             | Overlay::Receipt(ReceiptPanel { scroll, .. }),
         ) = &mut self.overlay
@@ -530,6 +914,7 @@ impl LiveState {
         if let Some(
             Overlay::Approval(Approval { scroll, .. })
             | Overlay::Help { scroll }
+            | Overlay::Paste { scroll, .. }
             | Overlay::Detail(Detail { scroll, .. })
             | Overlay::Receipt(ReceiptPanel { scroll, .. }),
         ) = &mut self.overlay
@@ -603,7 +988,14 @@ impl LiveState {
         }
         match self.overlay {
             Some(Overlay::Approval(_)) => return self.on_approval_key(key, now),
-            Some(Overlay::Help { .. } | Overlay::Detail(_) | Overlay::Receipt(_)) => {
+            Some(Overlay::Models(_)) => return self.on_models_key(key),
+            Some(Overlay::Connect(_)) => return self.on_connect_key(key),
+            Some(Overlay::Help { .. } | Overlay::Detail(_) | Overlay::Receipt(_) | Overlay::Paste { .. }) => {
+                if matches!(self.overlay, Some(Overlay::Paste { .. })) && key.code == KeyCode::Char('x') && ctrl {
+                    self.overlay = None;
+                    self.composer.expand_paste_at_cursor();
+                    return None;
+                }
                 self.on_help_key(key);
                 return None;
             }
@@ -648,8 +1040,20 @@ impl LiveState {
     }
 
     fn on_ctrl_c(&mut self) -> Option<Action> {
-        match self.overlay {
-            Some(Overlay::Help { .. } | Overlay::Detail(_) | Overlay::Receipt(_)) => {
+        match &self.overlay {
+            Some(Overlay::Connect(Connect { step: Step::Waiting { request, auth: Some(_), .. }, .. })) => {
+                let id = request.clone();
+                self.overlay = None;
+                return Some(Action::Send(Command::ProviderCancel { id }));
+            }
+            Some(
+                Overlay::Help { .. }
+                | Overlay::Detail(_)
+                | Overlay::Receipt(_)
+                | Overlay::Models(_)
+                | Overlay::Connect(_)
+                | Overlay::Paste { .. },
+            ) => {
                 self.overlay = None;
                 return None;
             }
@@ -701,6 +1105,14 @@ impl LiveState {
             KeyCode::Char('k') if ctrl => composer.kill_to_line_end(),
             KeyCode::Char('w') if ctrl => composer.delete_word_back(),
             KeyCode::Char('l') if ctrl => composer.clear(),
+            KeyCode::Char('o') if ctrl => {
+                if let Some(paste) = composer.paste_at_cursor() {
+                    self.overlay = Some(Overlay::Paste { number: paste.number, scroll: 0 });
+                }
+            }
+            KeyCode::Char('x') if ctrl => {
+                composer.expand_paste_at_cursor();
+            }
             KeyCode::Char('b') if alt => composer.word_left(),
             KeyCode::Char('f') if alt => composer.word_right(),
             KeyCode::Char(c) if !ctrl && !alt => composer.insert(c.encode_utf8(&mut [0; 4])),
@@ -710,25 +1122,80 @@ impl LiveState {
     }
 
     fn submit(&mut self) -> Option<Action> {
-        if self.link != Link::Ready
-            || self.connecting()
-            || self.session.busy
-            || self.composer.text().trim().is_empty()
-        {
+        if self.link != Link::Ready || self.connecting() || self.composer.expand(self.composer.text()).trim().is_empty() {
             return None;
+        }
+        // Slash commands are read from the draft as typed: a paste buffer is data, never a command name.
+        let raw = self.composer.text().to_string();
+        let display = self.composer.display(&raw);
+        let invocation = slash::parse(&raw).map(|invocation| match invocation {
+            Invocation::Remote { command, args } => Invocation::Remote {
+                command,
+                args: self.composer.expand(&args),
+            },
+            other => other,
+        });
+        if self.session.busy {
+            return self.submit_while_busy(display, invocation);
         }
         let text = self.composer.take();
         self.scroll_back = 0;
         self.focus = Focus::Composer;
-        if let Some(invocation) = slash::parse(&text) {
-            return self.invoke(text, invocation);
+        if let Some(invocation) = invocation {
+            return self.invoke(display, invocation);
         }
         self.turn_seq += 1;
-        self.transcript.push(Entry::User(text.clone()));
+        self.transcript.push(Entry::User(display));
         self.session.busy = true;
+        self.turn_started = Some(Instant::now());
+        self.activity = None;
         let id = format!("t{}", self.turn_seq);
         self.pending = Some(id.clone());
         Some(Action::Send(Command::PromptSubmit { id, text }))
+    }
+
+    /// Enter while the agent works: text becomes steering; read-only commands that are safe during a turn run;
+    /// anything else stays in the draft with an explanation.
+    fn submit_while_busy(&mut self, display: String, invocation: Option<Invocation>) -> Option<Action> {
+        match invocation {
+            None => {}
+            Some(Invocation::Help) => {
+                self.composer.take();
+                self.overlay = Some(Overlay::Help { scroll: 0 });
+                return None;
+            }
+            Some(Invocation::Receipt) => {
+                self.composer.take();
+                return self.open_receipt();
+            }
+            Some(Invocation::Quit) => return Some(Action::Quit),
+            Some(Invocation::Remote { command, args }) if command == "doctor" && !args.split_whitespace().any(|a| a == "--fix") => {
+                self.composer.take();
+                self.slash_seq += 1;
+                let id = format!("s{}", self.slash_seq);
+                self.transcript.push(Entry::Command(display));
+                return Some(Action::Send(Command::Slash { id, command, args }));
+            }
+            Some(_) => {
+                self.transcript.push(Entry::Notice(
+                    "Commands run when the agent is idle (esc cancels the turn). Text without a leading / is sent as steering.".into(),
+                ));
+                return None;
+            }
+        }
+        let text = self.composer.take();
+        self.scroll_back = 0;
+        self.focus = Focus::Composer;
+        self.steer_seq += 1;
+        let id = format!("g{}{}", steer_prefix(), self.steer_seq);
+        self.steer_texts.insert(id.clone(), text.clone());
+        self.transcript.push(Entry::Steer {
+            id: id.clone(),
+            text: display,
+            state: SteerState::Sending,
+            message: String::new(),
+        });
+        Some(Action::Send(Command::Steer { id, text }))
     }
 
     fn invoke(&mut self, typed: String, invocation: Invocation) -> Option<Action> {
@@ -738,12 +1205,9 @@ impl LiveState {
                 self.overlay = Some(Overlay::Help { scroll: 0 });
                 None
             }
-            Invocation::AlreadyLive => {
-                self.transcript
-                    .push(Entry::Info("You are already in the live view.".into()));
-                None
-            }
             Invocation::Receipt => self.open_receipt(),
+            Invocation::Models => self.open_models(false, None),
+            Invocation::Connect => self.open_models(true, None),
             Invocation::Remote { command, args } => {
                 self.slash_seq += 1;
                 let id = format!("s{}", self.slash_seq);
@@ -810,7 +1274,7 @@ impl LiveState {
             .transcript
             .iter()
             .enumerate()
-            .filter(|(_, entry)| matches!(entry, Entry::Tool { .. }))
+            .filter(|(_, entry)| matches!(entry, Entry::Tool { .. } | Entry::Diff { .. }))
             .map(|(index, _)| index)
             .collect();
         let Some(&newest) = tools.last() else {
@@ -846,6 +1310,7 @@ impl LiveState {
                     evidence,
                     ..
                 }) => Some((tool.clone(), subject.clone(), evidence.clone())),
+                Some(Entry::Diff { path, evidence, .. }) => Some(("edit_file".to_string(), path.clone(), evidence.clone())),
                 _ => None,
             });
         let Some((tool, subject, evidence)) = found else {
@@ -889,7 +1354,7 @@ impl LiveState {
 
     /// Whether `id` names a detail or receipt request this client sent, open or not.
     fn issued_panel(&self, id: &str) -> bool {
-        id.strip_prefix(['d', 'r'])
+        id.strip_prefix(['d', 'r', 'm', 'c', 'x'])
             .and_then(|n| n.parse::<u64>().ok())
             .is_some_and(|n| (1..=self.panel_seq).contains(&n))
     }
@@ -906,6 +1371,15 @@ impl LiveState {
                 request,
                 sections: Loaded::Waiting,
                 ..
+            }))
+            | Some(Overlay::Models(Picker {
+                request,
+                catalog: Fetch::Waiting,
+                ..
+            })) => Some(request.as_str()),
+            Some(Overlay::Connect(Connect {
+                step: Step::Waiting { request, .. },
+                ..
             })) => Some(request.as_str()),
             _ => None,
         }
@@ -920,6 +1394,46 @@ impl LiveState {
             }
         }
     }
+}
+
+/// Prefix that makes steering ids unique across TUI processes: a resumed session keeps the ids it already applied,
+/// so a new `g1` must not look like a resend of an old one. Tests use bare ids.
+fn steer_prefix() -> String {
+    if cfg!(test) {
+        return String::new();
+    }
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_nanos());
+    static PREFIX: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    PREFIX
+        .get_or_init(|| format!("{:x}{:x}-", std::process::id(), nanos % 0xffff_ffff))
+        .clone()
+}
+
+/// One line on where the operator's objective stands, when the turn reports open requirements or a failed check.
+pub fn objective_note(turn: &Value) -> Option<String> {
+    let objective = turn.get("objective")?;
+    let status = objective["status"].as_str()?;
+    if status == "completed" {
+        return None;
+    }
+    let mut parts = vec![format!("Objective {status}")];
+    if let Some(remaining) = objective["remaining"].as_array().filter(|items| !items.is_empty()) {
+        let ids: Vec<String> = remaining
+            .iter()
+            .filter_map(Value::as_str)
+            .map(|item| item.split_whitespace().take(2).collect::<Vec<_>>().join(" "))
+            .collect();
+        parts.push(format!("remaining: {}", ids.join(", ")));
+    }
+    if let Some(check) = objective["failedCheck"].as_str() {
+        parts.push(format!("failed check: {check}"));
+    }
+    if let Some(next) = objective["nextAction"].as_str() {
+        parts.push(format!("next: {next}"));
+    }
+    Some(parts.join(" · "))
 }
 
 /// Same projection as `TerminalUI.turnSummary` in `cli/src/ui.ts`.
@@ -965,6 +1479,130 @@ mod tests {
 
     fn with(code: KeyCode, modifiers: KeyModifiers) -> KeyEvent {
         KeyEvent::new(code, modifiers)
+    }
+
+    fn busy() -> LiveState {
+        let mut state = ready();
+        type_text(&mut state, "long task");
+        assert!(state.on_key(key(KeyCode::Enter)).is_some());
+        state.apply(ev(r#"{"v":1,"type":"session.state","workspace":"/w/app","workspace_name":"app","model":"m","mode":"auto","git":null,"busy":true}"#));
+        state
+    }
+
+    fn steer_state(state: &LiveState, wanted: &str) -> Option<SteerState> {
+        state.transcript.iter().find_map(|e| match e {
+            Entry::Steer { id, state, .. } if id == wanted => Some(*state),
+            _ => None,
+        })
+    }
+
+    #[test]
+    fn steering_is_sent_while_busy_and_follows_its_acknowledgements() {
+        let mut state = busy();
+        type_text(&mut state, "use tabs");
+        assert_eq!(
+            state.on_key(key(KeyCode::Enter)),
+            Some(Action::Send(Command::Steer { id: "g1".into(), text: "use tabs".into() }))
+        );
+        assert_eq!(steer_state(&state, "g1"), Some(SteerState::Sending));
+        state.apply(ev(r#"{"v":1,"type":"steer.ack","id":"g1","status":"queued","message":"Steering queued"}"#));
+        assert_eq!(steer_state(&state, "g1"), Some(SteerState::Queued));
+        state.apply(ev(r#"{"v":1,"type":"steer.ack","id":"g1","status":"applied","message":"Applied at step 4."}"#));
+        assert_eq!(steer_state(&state, "g1"), Some(SteerState::Applied));
+        assert!(state.composer.is_empty(), "applied steering is not given back");
+    }
+
+    #[test]
+    fn cancelled_or_rejected_steering_returns_to_the_composer() {
+        let mut state = busy();
+        type_text(&mut state, "stop and summarise");
+        state.on_key(key(KeyCode::Enter));
+        state.apply(ev(r#"{"v":1,"type":"steer.ack","id":"g1","status":"cancelled","message":"Not applied","text":"stop and summarise"}"#));
+        assert_eq!(steer_state(&state, "g1"), Some(SteerState::Cancelled));
+        assert_eq!(state.composer.expand(state.composer.text()), "stop and summarise");
+        state.composer.clear();
+        state.on_paste("line one\nline two");
+        state.on_key(key(KeyCode::Enter));
+        state.apply(ev(r#"{"v":1,"type":"steer.ack","id":"g2","status":"rejected","message":"/test is running"}"#));
+        assert_eq!(state.composer.expand(state.composer.text()), "line one\nline two", "text kept by the client when the ack carries none");
+    }
+
+    #[test]
+    fn steering_the_sidecar_never_acknowledged_returns_when_it_crashes() {
+        let mut state = busy();
+        type_text(&mut state, "add tests too");
+        state.on_key(key(KeyCode::Enter));
+        state.fail("The agent sidecar exited unexpectedly.".into(), Some(1), Vec::new());
+        assert_eq!(steer_state(&state, "g1"), Some(SteerState::Lost));
+        assert_eq!(state.composer.text(), "add tests too");
+    }
+
+    #[test]
+    fn read_only_doctor_runs_while_busy_but_doctor_fix_waits() {
+        let mut state = busy();
+        type_text(&mut state, "/doctor");
+        assert!(matches!(state.on_key(key(KeyCode::Enter)), Some(Action::Send(Command::Slash { ref command, .. })) if command == "doctor"));
+        type_text(&mut state, "/doctor --fix");
+        assert_eq!(state.on_key(key(KeyCode::Enter)), None);
+        assert_eq!(state.composer, "/doctor --fix");
+    }
+
+    #[test]
+    fn a_pasted_slash_command_is_data_not_a_command() {
+        let mut state = ready();
+        state.on_paste("/exit\nand then fix the bug");
+        assert_eq!(
+            state.on_key(key(KeyCode::Enter)),
+            Some(Action::Send(Command::PromptSubmit { id: "t1".into(), text: "/exit\nand then fix the bug".into() }))
+        );
+        assert_eq!(state.transcript.last(), Some(&Entry::User("[Pasted text #1: 2 lines]".into())));
+    }
+
+    #[test]
+    fn ctrl_o_opens_the_paste_and_ctrl_x_there_makes_it_editable() {
+        let mut state = ready();
+        state.on_paste("a\nb");
+        assert_eq!(state.on_key(ctrl('o')), None);
+        assert_eq!(state.overlay, Some(Overlay::Paste { number: 1, scroll: 0 }));
+        assert_eq!(state.on_key(ctrl('x')), None);
+        assert_eq!(state.overlay, None);
+        assert_eq!(state.composer, "a\nb");
+    }
+
+    #[test]
+    fn activity_tracks_phases_and_clears_on_result_or_idle() {
+        let mut state = busy();
+        assert!(state.turn_started.is_some() && state.animating());
+        state.apply(ev(r#"{"v":1,"type":"activity","turn_id":"t1","phase":"tool","step":31,"segment":2,"tool":"run_command","subject":"make test"}"#));
+        let first = state.activity.clone().unwrap();
+        assert_eq!((first.step, first.segment, first.tool.as_deref()), (31, 2, Some("run_command")));
+        state.apply(ev(r#"{"v":1,"type":"activity","turn_id":"t1","phase":"tool","step":31,"segment":2,"tool":"run_command","subject":"make test"}"#));
+        assert_eq!(state.activity.as_ref().unwrap().since, first.since, "the same phase keeps its start time");
+        state.apply(ev(r#"{"v":1,"type":"turn.result","turn_id":"t1","heading":"H","line":"L","turn":{"execution":"COMPLETED","outcome":"VERIFIED"},"model_summary":null}"#));
+        assert!(state.activity.is_none());
+        state.apply(ev(r#"{"v":1,"type":"session.state","workspace":"/w/app","workspace_name":"app","model":"m","mode":"auto","git":null,"busy":false}"#));
+        assert!(state.turn_started.is_none() && !state.animating());
+    }
+
+    #[test]
+    fn a_file_diff_lands_in_the_transcript_and_is_selectable_for_its_full_record() {
+        let mut state = busy();
+        state.apply(ev(r#"{"v":1,"type":"tool.start","turn_id":"t1","call_id":"c1","tool":"edit_file","subject":"a.ts","evidence":"e1"}"#));
+        state.apply(ev(r#"{"v":1,"type":"file.diff","turn_id":"t1","call_id":"c1","evidence":"e1","path":"a.ts","kind":"modified","added":1,"removed":1,"preview":"--- a/a.ts\n+++ b/a.ts\n@@ -1 +1 @@\n-a\n+b","truncated":true,"total_lines":90}"#));
+        assert!(matches!(state.transcript.last(), Some(Entry::Diff { added: 1, removed: 1, truncated: true, .. })));
+        state.on_key(key(KeyCode::Tab));
+        state.on_key(key(KeyCode::Char('[')));
+        assert!(matches!(state.on_key(key(KeyCode::Enter)), Some(Action::Send(Command::ToolDetail { ref evidence, .. })) if evidence == "e1"));
+    }
+
+    #[test]
+    fn open_requirements_from_the_turn_are_reported_under_the_banner() {
+        let mut state = busy();
+        state.apply(ev(r#"{"v":1,"type":"turn.result","turn_id":"t1","heading":"TURN ENDED - REQUIREMENTS OPEN","line":"L","turn":{"execution":"COMPLETED","outcome":"NOT_ESTABLISHED","objective":{"status":"incomplete","remaining":["R2 [open] Reject negatives"],"failedCheck":"not ok 3","nextAction":"Fix R2"}},"model_summary":null}"#));
+        assert_eq!(
+            state.transcript.last(),
+            Some(&Entry::Info("Objective incomplete · remaining: R2 [open] · failed check: not ok 3 · next: Fix R2".into()))
+        );
     }
 
     #[test]
@@ -1037,11 +1675,18 @@ mod tests {
         type_text(&mut state, "ab");
         assert_eq!(state.on_key(key(KeyCode::Left)), None);
         state.on_paste("X\r\nY");
-        assert_eq!(state.composer, "aX\nYb");
+        // A multi-line paste is one buffer in the draft; its exact content is what gets submitted.
+        assert_eq!(state.composer.expand(state.composer.text()), "aX\nYb");
+        assert_eq!(state.composer.display(state.composer.text()), "a[Pasted text #1: 2 lines]b");
         state.session.busy = true;
         type_text(&mut state, "!");
-        assert_eq!(state.on_key(key(KeyCode::Enter)), None);
-        assert_eq!(state.composer, "aX\nY!b");
+        assert_eq!(state.composer.expand(state.composer.text()), "aX\nY!b");
+        // Enter while the agent works sends the draft as steering (exactly as typed and pasted).
+        assert_eq!(
+            state.on_key(key(KeyCode::Enter)),
+            Some(Action::Send(Command::Steer { id: "g1".into(), text: "aX\nY!b".into() }))
+        );
+        assert!(state.composer.is_empty());
     }
 
     #[test]
@@ -1088,7 +1733,7 @@ mod tests {
     }
 
     #[test]
-    fn enter_does_nothing_while_connecting_busy_or_empty() {
+    fn enter_does_nothing_while_connecting_or_empty_and_steers_while_busy() {
         let mut connecting = LiveState::new();
         type_text(&mut connecting, "x");
         assert_eq!(connecting.on_key(key(KeyCode::Enter)), None);
@@ -1097,8 +1742,15 @@ mod tests {
         assert_eq!(state.on_key(key(KeyCode::Enter)), None);
         state.composer = "work".into();
         state.session.busy = true;
+        assert_eq!(
+            state.on_key(key(KeyCode::Enter)),
+            Some(Action::Send(Command::Steer { id: "g1".into(), text: "work".into() }))
+        );
+        // A command other than a read-only one stays in the draft while busy, with an explanation.
+        state.composer = "/undo".into();
         assert_eq!(state.on_key(key(KeyCode::Enter)), None);
-        assert_eq!(state.composer, "work");
+        assert_eq!(state.composer, "/undo");
+        assert!(matches!(state.transcript.last(), Some(Entry::Notice(text)) if text.contains("sent as steering")));
     }
 
     #[test]
@@ -1120,13 +1772,17 @@ mod tests {
         assert!(state.on_key(key(KeyCode::Enter)).is_some());
         state.apply(ev(r#"{"v":1,"type":"error","id":"t1","code":"BUSY","message":"A turn is already running; cancel it or wait for its result."}"#));
         assert!(state.session.busy, "the sidecar is still running a turn");
-        type_text(&mut state, "again");
-        assert_eq!(state.on_key(key(KeyCode::Enter)), None);
         assert_eq!(
             state.transcript.last(),
             Some(&Entry::Notice(
                 "BUSY: A turn is already running; cancel it or wait for its result.".into()
             ))
+        );
+        // The composer stays usable: the next Enter is steering for the running turn, not a second prompt.
+        type_text(&mut state, "again");
+        assert_eq!(
+            state.on_key(key(KeyCode::Enter)),
+            Some(Action::Send(Command::Steer { id: "g1".into(), text: "again".into() }))
         );
     }
 
@@ -1857,12 +2513,9 @@ mod tests {
         assert_eq!(state.on_key(key(KeyCode::Enter)), None);
         assert_eq!(state.overlay, Some(Overlay::Help { scroll: 0 }));
         state.on_key(key(KeyCode::Esc));
-        type_text(&mut state, "/tui");
-        assert_eq!(state.on_key(key(KeyCode::Enter)), None);
-        assert_eq!(
-            state.transcript.last(),
-            Some(&Entry::Info("You are already in the live view.".into()))
-        );
+        type_text(&mut state, "/receipt");
+        assert!(matches!(state.on_key(key(KeyCode::Enter)), Some(Action::Send(Command::Receipt { .. }))));
+        state.on_key(key(KeyCode::Esc));
         assert!(!state.session.busy);
         type_text(&mut state, "/etc/hosts is wrong");
         assert_eq!(
@@ -2288,4 +2941,68 @@ mod tests {
         });
         assert_eq!(state.scroll_back, 12);
     }
+
+    const CATALOG: &str = r#"{"v":1,"type":"models.catalog","id":"ID","providers":[{"id":"appliance","label":"Appliance (10.0.8.5:8443)","disclosure":"local","connected":true,"methods":[],"status":"ok"},{"id":"chatgpt","label":"ChatGPT plan","disclosure":"cloud","connected":true,"source":"Codex CLI","external":true,"methods":[{"id":"chatgpt-oauth","label":"Sign in with ChatGPT (unofficial)","kind":"browser","unofficial":true}],"status":"ok"},{"id":"anthropic","label":"Anthropic","disclosure":"cloud","connected":false,"methods":[{"id":"api-key","label":"API key","kind":"key"}],"status":"disconnected"}],"models":[{"provider":"appliance","id":"engineering/b0"},{"provider":"chatgpt","id":"gpt-5-codex"}],"current":{"provider":"appliance","model":"engineering/b0"},"recent":[]}"#;
+
+    fn catalog(id: &str) -> Event {
+        ev(&CATALOG.replace("\"ID\"", &format!("\"{id}\"")))
+    }
+
+    #[test]
+    fn model_slash_opens_the_picker_and_selecting_switches_through_the_sidecar() {
+        let mut state = ready();
+        type_text(&mut state, "/model");
+        let Some(Action::Send(Command::ModelsList { id })) = state.on_key(key(KeyCode::Enter)) else {
+            panic!("expected models.list");
+        };
+        assert!(matches!(state.overlay, Some(Overlay::Models(_))));
+        assert!(!state.session.busy, "the picker does not lock the composer");
+        state.apply(catalog(&id));
+        type_text(&mut state, "codex");
+        assert_eq!(
+            state.on_key(key(KeyCode::Enter)),
+            Some(Action::Send(Command::ModelSelect { id: "x2".into(), provider: "chatgpt".into(), model: "gpt-5-codex".into() }))
+        );
+        assert!(state.overlay.is_none());
+        state.apply(ev(r#"{"v":1,"type":"model.result","id":"x2","success":true,"message":"Model: gpt-5-codex via ChatGPT plan"}"#));
+        assert!(matches!(state.transcript.last(), Some(Entry::Output { success: true, .. })));
+    }
+
+    #[test]
+    fn ctrl_p_connects_a_provider_with_a_key_then_shows_its_models() {
+        let mut state = ready();
+        type_text(&mut state, "/model");
+        let Some(Action::Send(Command::ModelsList { id })) = state.on_key(key(KeyCode::Enter)) else { panic!() };
+        state.apply(catalog(&id));
+        assert_eq!(state.on_key(ctrl('p')), None);
+        assert!(matches!(state.overlay, Some(Overlay::Connect(_))));
+        state.on_key(key(KeyCode::Down)); // chatgpt -> anthropic
+        assert_eq!(state.on_key(key(KeyCode::Enter)), None, "a single key method opens the key field");
+        state.on_paste("sk-ant-SECRET-1\n");
+        let Some(Action::Send(Command::ProviderConnect { id: request, provider, method, key: Some(secret) })) = state.on_key(key(KeyCode::Enter)) else {
+            panic!("expected provider.connect");
+        };
+        assert_eq!((provider.as_str(), method.as_str(), secret.0.as_str()), ("anthropic", "api-key", "sk-ant-SECRET-1"));
+        assert!(!format!("{:?}", Command::ProviderConnect { id: request.clone(), provider: "a".into(), method: "m".into(), key: Some(secret) }).contains("SECRET"));
+        state.apply(ev(&format!(r#"{{"v":1,"type":"provider.result","id":"{request}","provider":"anthropic","success":true,"message":"Anthropic connected (3 models available)."}}"#)));
+        let outbox = state.take_outbox();
+        assert!(matches!(outbox.as_slice(), [Action::Send(Command::ModelsList { .. })]), "reopens the picker for the provider");
+        assert!(matches!(&state.overlay, Some(Overlay::Models(p)) if p.only.as_deref() == Some("anthropic")));
+    }
+
+    #[test]
+    fn a_sign_in_shows_where_to_go_and_esc_cancels_it() {
+        let mut state = ready();
+        type_text(&mut state, "/connect");
+        let Some(Action::Send(Command::ModelsList { id })) = state.on_key(key(KeyCode::Enter)) else { panic!() };
+        state.apply(catalog(&id));
+        assert!(matches!(state.overlay, Some(Overlay::Connect(_))), "/connect opens the connect panel once providers are known");
+        let Some(Action::Send(Command::ProviderConnect { id: request, key: None, .. })) = state.on_key(key(KeyCode::Enter)) else {
+            panic!("chatgpt's only method is a sign-in");
+        };
+        state.apply(ev(&format!(r#"{{"v":1,"type":"provider.auth","id":"{request}","provider":"chatgpt","url":"https://auth.example/x","instructions":"Sign in"}}"#)));
+        assert!(matches!(&state.overlay, Some(Overlay::Connect(c)) if matches!(&c.step, crate::models::Step::Waiting { auth: Some(_), .. })));
+        assert_eq!(state.on_key(key(KeyCode::Esc)), Some(Action::Send(Command::ProviderCancel { id: request })));
+    }
+
 }

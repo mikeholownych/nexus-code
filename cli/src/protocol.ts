@@ -7,6 +7,7 @@ import { redactSecrets } from "./ui.js";
 import type { ApprovalReview } from "./approval_review.js";
 import type { SlashSpec } from "./slash/catalog.js";
 import type { EvidenceStatus, ReceiptSection } from "./evidence.js";
+import type { Catalog } from "./model_catalog.js";
 
 export const PROTOCOL_VERSION = 1;
 export const MAX_TEXT_FIELD = 8000;
@@ -14,6 +15,18 @@ export const MAX_SUMMARY = 160;
 export const MAX_SLASH_OUTPUT = 32_000;
 
 export type ErrorCode = "BAD_REQUEST" | "BUSY" | "NO_PENDING_APPROVAL" | "NOT_FOUND" | "INTERNAL";
+
+/** Lines of a file diff shown in the transcript; the full diff is in the tool call's detail record. */
+export const DIFF_PREVIEW_LINES = 40;
+export const DIFF_PREVIEW_CHARS = 6000;
+
+/**
+ * What became of operator steering sent while work was running. `queued`: held for the next step boundary.
+ * `applied`: given to the agent (at a step boundary, or as a follow-up turn). `deferred`: the turn was finishing; it
+ * starts a follow-up turn. `cancelled`: the turn ended first; `text` is returned to the operator. `rejected`: nothing
+ * it could steer (a command is running); `text` is returned. `duplicate`: this id was already received.
+ */
+export type SteerStatus = "queued" | "applied" | "deferred" | "cancelled" | "rejected" | "duplicate";
 
 export interface ModelSummary {
   summary: string;
@@ -32,6 +45,24 @@ export type SidecarEvent =
       busy: boolean;
     }
   | { type: "assistant.delta"; turn_id: string; text: string }
+  /** What the running turn is doing; sent on every phase change, independent of model output. */
+  | { type: "activity"; turn_id: string; phase: string; step: number; segment: number; tool?: string; subject?: string }
+  /** A file-edit tool changed a file: that operation's own diff (bounded preview; `evidence` opens the full one). */
+  | {
+      type: "file.diff";
+      turn_id: string;
+      call_id: string;
+      evidence: string;
+      path: string;
+      kind: "added" | "modified" | "deleted";
+      added: number;
+      removed: number;
+      preview: string;
+      truncated: boolean;
+      total_lines: number;
+      note?: string;
+    }
+  | { type: "steer.ack"; id: string; status: SteerStatus; message: string; text?: string }
   | { type: "tool.start"; turn_id: string; call_id: string; tool: string; subject: string; evidence: string }
   | { type: "tool.end"; turn_id: string; call_id: string; tool: string; success: boolean; summary: string; lines: number; evidence: string }
   | { type: "approval.request"; id: string; turn_id: string; tool: string; subject: string; preview: string; review: ApprovalReview }
@@ -60,18 +91,36 @@ export type SidecarEvent =
       args: string;
       output: string;
       duration_ms: number | null;
+      /** Full unified diff of the change this call made, when it changed a file. */
+      diff?: string;
     }
   | { type: "receipt"; id: string; sections: ReceiptSection[] }
-  | { type: "error"; id?: string; code: ErrorCode; message: string };
+  | { type: "error"; id?: string; code: ErrorCode; message: string }
+  /** Answer to models.list: providers (with connection source, never a credential), models, current and recent. */
+  | ({ type: "models.catalog"; id: string } & Catalog)
+  /** A sign-in needs the operator: open `url` (and type `user_code` for a device flow). */
+  | { type: "provider.auth"; id: string; provider: string; url: string; user_code?: string; instructions: string }
+  /** Outcome of provider.connect / provider.disconnect. */
+  | { type: "provider.result"; id: string; provider: string; success: boolean; message: string }
+  /** Outcome of model.select. */
+  | { type: "model.result"; id: string; success: boolean; message: string };
 
 export type SidecarCommand =
   | { type: "prompt.submit"; id: string; text: string }
+  /** Operator guidance for the work in progress (see SteerStatus). */
+  | { type: "steer"; id: string; text: string }
   | { type: "cancel" }
   | { type: "approve"; id: string; always: boolean }
   | { type: "deny"; id: string }
   | { type: "slash"; id: string; command: string; args: string }
   | { type: "tool.detail"; id: string; evidence: string }
   | { type: "receipt"; id: string }
+  | { type: "models.list"; id: string }
+  | { type: "model.select"; id: string; provider: string; model: string }
+  /** `key` only for method "api-key"; it is never echoed back or logged. */
+  | { type: "provider.connect"; id: string; provider: string; method: string; key?: string }
+  | { type: "provider.cancel"; id: string }
+  | { type: "provider.disconnect"; id: string; provider: string }
   | { type: "shutdown" };
 
 export class ProtocolError extends Error {
@@ -111,6 +160,12 @@ export function parseCommand(line: string): SidecarCommand {
       if (typeof text !== "string" || !text.trim()) throw new ProtocolError("prompt.submit requires non-empty text", requestId);
       return { type: "prompt.submit", id: requestId, text };
     }
+    case "steer": {
+      const requestId = requireId("steer");
+      const text = msg.text;
+      if (typeof text !== "string" || !text.trim()) throw new ProtocolError("steer requires non-empty text", requestId);
+      return { type: "steer", id: requestId, text };
+    }
     case "cancel":
       return { type: "cancel" };
     case "approve":
@@ -131,6 +186,30 @@ export function parseCommand(line: string): SidecarCommand {
     }
     case "receipt":
       return { type: "receipt", id: requireId("receipt") };
+    case "models.list":
+      return { type: "models.list", id: requireId("models.list") };
+    case "model.select": {
+      const requestId = requireId("model.select");
+      if (typeof msg.provider !== "string" || !msg.provider || typeof msg.model !== "string" || !msg.model.trim()) {
+        throw new ProtocolError("model.select requires provider and model", requestId);
+      }
+      return { type: "model.select", id: requestId, provider: msg.provider, model: msg.model };
+    }
+    case "provider.connect": {
+      const requestId = requireId("provider.connect");
+      if (typeof msg.provider !== "string" || !msg.provider || typeof msg.method !== "string" || !msg.method) {
+        throw new ProtocolError("provider.connect requires provider and method", requestId);
+      }
+      if (msg.key !== undefined && typeof msg.key !== "string") throw new ProtocolError("provider.connect key must be a string", requestId);
+      return { type: "provider.connect", id: requestId, provider: msg.provider, method: msg.method, ...(typeof msg.key === "string" ? { key: msg.key } : {}) };
+    }
+    case "provider.cancel":
+      return { type: "provider.cancel", id: requireId("provider.cancel") };
+    case "provider.disconnect": {
+      const requestId = requireId("provider.disconnect");
+      if (typeof msg.provider !== "string" || !msg.provider) throw new ProtocolError("provider.disconnect requires provider", requestId);
+      return { type: "provider.disconnect", id: requestId, provider: msg.provider };
+    }
     case "shutdown":
       return { type: "shutdown" };
     default:

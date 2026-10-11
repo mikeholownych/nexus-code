@@ -21,6 +21,7 @@ import {
 import { AuthorityAdmissionEngine } from "./authority.js";
 import { WorktreeManager } from "../worktree.js";
 import { redactForPersistence, redactTaskStateForPersistence } from "./persistence_protection.js";
+import type { ObjectiveLedger } from "./objective.js";
 import { WorkspacePath } from "./workspace_path.js";
 
 export const CURRENT_STATE_SCHEMA_VERSION = 1;
@@ -145,6 +146,21 @@ export interface DurableTaskState {
     prompt: number;
     completion: number;
     total: number;
+    /** Inference requests counted, and how many totals came from provider usage reports rather than estimates. */
+    requests?: number;
+    reportedRequests?: number;
+    estimatedRequests?: number;
+  };
+
+  // The operator's objective, acceptance requirements, steering and verifier attempts (core/objective.ts)
+  objective?: ObjectiveLedger | null;
+
+  // How complete `messages` is as a history: context compaction replaces earlier messages with summaries, and the
+  // replaced originals are archived beside the task state (see SessionManager.appendArchivedHistory).
+  history?: {
+    complete: boolean;
+    compactions: number;
+    archivedMessages: number;
   };
 }
 
@@ -252,12 +268,17 @@ export interface DurableStateManagerOptions {
   workspacePaths?: WorkspacePath[];
 }
 
+/** Where durable task state is written unless a directory is given. */
+export function defaultTaskStateDir(): string {
+  return path.join(os.homedir(), ".nexus", "tasks");
+}
+
 export class DurableStateManager {
   private readonly baseDir: string;
   private workspacePaths: WorkspacePath[];
 
   constructor(options: DurableStateManagerOptions = {}) {
-    this.baseDir = options.baseDir || path.join(os.homedir(), ".nexus", "tasks");
+    this.baseDir = options.baseDir || defaultTaskStateDir();
     this.workspacePaths = options.workspacePaths || [];
     if (!fs.existsSync(this.baseDir)) {
       fs.mkdirSync(this.baseDir, { recursive: true });

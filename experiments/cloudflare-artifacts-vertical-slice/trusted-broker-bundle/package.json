@@ -1,0 +1,11 @@
+{
+  "name": "nexus-cloudflare-trusted-cf-runtime",
+  "private": true,
+  "version": "1.0.0",
+  "engines": {
+    "node": "24.21.0"
+  },
+  "dependencies": {
+    "cf": "1.0.0-beta.10"
+  }
+}

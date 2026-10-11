@@ -80,6 +80,8 @@ export function providerHints(headers: HeaderSource, body?: string, now: number 
 // ---------------------------------------------------------------- classification
 
 const CAPACITY_CODES = new Set(["context_length_exceeded", "string_above_max_length"]);
+/** Cloud billing/quota exhaustion (OpenAI insufficient_quota, Anthropic billing_error). Waiting does not fix these. */
+const QUOTA_CODES = new Set(["insufficient_quota", "billing_error", "payment_required"]);
 const NOT_EXECUTED_CODES = new Set(["pre_generation", "gateway_restarting", "pool_unavailable", "adapter_unavailable", "quota_exceeded"]);
 
 /**
@@ -89,6 +91,9 @@ const NOT_EXECUTED_CODES = new Set(["pre_generation", "gateway_restarting", "poo
 export function classifyHttpFailure(status: number, hints: ProviderHints = {}, body = ""): ProviderClassification {
   const code = hints.errorCode;
   if (code && CAPACITY_CODES.has(code)) return { condition: "CAPACITY_REJECTED", execution: "NOT_EXECUTED" };
+  if (status === 402 || (code && QUOTA_CODES.has(code)) || (hints.errorType && QUOTA_CODES.has(hints.errorType))) {
+    return { condition: "QUOTA_EXHAUSTED", execution: "NOT_EXECUTED" };
+  }
   if (status === 401 || status === 403) return { condition: "AUTH_FAILURE", execution: "NOT_EXECUTED" };
   if (status === 429) return { condition: "RATE_LIMITED", execution: "NOT_EXECUTED" };
   if (status === 503) {
@@ -96,6 +101,8 @@ export function classifyHttpFailure(status: number, hints: ProviderHints = {}, b
     return { condition: draining ? "DRAINING" : "OVERLOADED", execution: "NOT_EXECUTED" };
   }
   if (status === 408) return { condition: "TEMPORARILY_UNAVAILABLE", execution: "NOT_EXECUTED" };
+  // 529: Anthropic's "overloaded" answer, given instead of executing the request.
+  if (status === 529) return { condition: "OVERLOADED", execution: "NOT_EXECUTED" };
   if (status === 413 || (status === 400 && /context length|context window|maximum context|too many tokens/i.test(body))) {
     return { condition: "CAPACITY_REJECTED", execution: "NOT_EXECUTED" };
   }

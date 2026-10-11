@@ -1,0 +1,451 @@
+2026-10-11T19:01:07Z
+warning: this boolean expression can be simplified
+  --> src/cst.rs:92:16
+   |
+92 |             if !trimmed.contains('{') && !trimmed.contains(';') && !(ext == "py" && trimmed.ends_with(':')) {
+   |                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: try: `!(trimmed.contains('{') || trimmed.contains(';') || ext == "py" && trimmed.ends_with(':'))`
+   |
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.95.0/index.html#nonminimal_bool
+   = note: `#[warn(clippy::nonminimal_bool)]` on by default
+
+warning: the function `is_binary_file_descriptor` doesn't need a mutable reference
+  --> src/file_ops.rs:99:31
+   |
+99 |     is_binary_file_descriptor(&mut file)
+   |                               ^^^^^^^^^
+   |
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.95.0/index.html#unnecessary_mut_passed
+   = note: `#[warn(clippy::unnecessary_mut_passed)]` on by default
+help: remove this `mut`
+   |
+99 -     is_binary_file_descriptor(&mut file)
+99 +     is_binary_file_descriptor(&file)
+   |
+
+warning: this `if` statement can be collapsed
+   --> src/file_ops.rs:197:12
+    |
+197 |       } else if matches!(ext, "rs" | "ts" | "tsx" | "js" | "jsx" | "go" | "c" | "cpp") {
+    |  ____________^
+198 | |         if let Err(msg) = validate_syntax_delimiters(&args.content, ext) {
+199 | |             return Err(format!(
+200 | |                 "Pre-flight syntax validation rejected write to {}: {msg}. The file was not modified.",
+...   |
+204 | |     }
+    | |_____^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.95.0/index.html#collapsible_if
+    = note: `#[warn(clippy::collapsible_if)]` on by default
+help: collapse nested if block
+    |
+197 ~     } else if matches!(ext, "rs" | "ts" | "tsx" | "js" | "jsx" | "go" | "c" | "cpp")
+198 ~         && let Err(msg) = validate_syntax_delimiters(&args.content, ext) {
+199 |             return Err(format!(
+...
+202 |             ));
+203 ~         }
+    |
+
+warning: this `if` statement can be collapsed
+   --> src/file_ops.rs:579:12
+    |
+579 |       } else if matches!(ext, "rs" | "ts" | "tsx" | "js" | "jsx" | "go" | "c" | "cpp") {
+    |  ____________^
+580 | |         if let Err(msg) = validate_syntax_delimiters(&new_file_content, ext) {
+581 | |             return Err(format!(
+582 | |                 "Pre-flight syntax validation rejected edit on {}: {msg}. The file was not modified. Please adjust your edit to m...
+...   |
+586 | |     }
+    | |_____^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.95.0/index.html#collapsible_if
+help: collapse nested if block
+    |
+579 ~     } else if matches!(ext, "rs" | "ts" | "tsx" | "js" | "jsx" | "go" | "c" | "cpp")
+580 ~         && let Err(msg) = validate_syntax_delimiters(&new_file_content, ext) {
+581 |             return Err(format!(
+...
+584 |             ));
+585 ~         }
+    |
+
+warning: this `if` statement can be collapsed
+   --> src/file_ops.rs:659:9
+    |
+659 | /         if let Ok(path_canon) = path.canonicalize() {
+660 | |             if path_canon.starts_with(&base_canon) {
+661 | |                 return Ok(path_canon);
+662 | |             }
+663 | |         }
+    | |_________^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.95.0/index.html#collapsible_if
+help: collapse nested if block
+    |
+659 ~         if let Ok(path_canon) = path.canonicalize()
+660 ~             && path_canon.starts_with(&base_canon) {
+661 |                 return Ok(path_canon);
+662 ~             }
+    |
+
+warning: this `if` statement can be collapsed
+   --> src/file_ops.rs:750:5
+    |
+750 | /     if let Ok(canon) = target.canonicalize() {
+751 | |         if !canon.starts_with(&base_canon) {
+752 | |             return Err(format!("Security Violation: Path escapes workspace jail: {}", args.path));
+753 | |         }
+754 | |     }
+    | |_____^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.95.0/index.html#collapsible_if
+help: collapse nested if block
+    |
+750 ~     if let Ok(canon) = target.canonicalize()
+751 ~         && !canon.starts_with(&base_canon) {
+752 |             return Err(format!("Security Violation: Path escapes workspace jail: {}", args.path));
+753 ~         }
+    |
+
+warning: this `if` statement can be collapsed
+   --> src/file_ops.rs:766:5
+    |
+766 | /     if is_file {
+767 | |         if let Ok(file) = File::open(&target) {
+768 | |             if verify_descriptor_confinement(&file, &base_canon).is_ok() {
+769 | |                 is_bin = is_binary_file_descriptor(&file).unwrap_or(false);
+...   |
+782 | |     }
+    | |_____^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.95.0/index.html#collapsible_if
+help: collapse nested if block
+    |
+766 ~     if is_file
+767 ~         && let Ok(file) = File::open(&target) {
+768 |             if verify_descriptor_confinement(&file, &base_canon).is_ok() {
+...
+780 |             }
+781 ~         }
+    |
+
+warning: this `if` statement can be collapsed
+   --> src/file_ops.rs:767:9
+    |
+767 | /         if let Ok(file) = File::open(&target) {
+768 | |             if verify_descriptor_confinement(&file, &base_canon).is_ok() {
+769 | |                 is_bin = is_binary_file_descriptor(&file).unwrap_or(false);
+770 | |                 if !is_bin {
+...   |
+781 | |         }
+    | |_________^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.95.0/index.html#collapsible_if
+help: collapse nested if block
+    |
+767 ~         if let Ok(file) = File::open(&target)
+768 ~             && verify_descriptor_confinement(&file, &base_canon).is_ok() {
+769 |                 is_bin = is_binary_file_descriptor(&file).unwrap_or(false);
+...
+779 |                 }
+780 ~             }
+    |
+
+warning: `filter_map()` will run forever if the iterator repeatedly produces an `Err`
+   --> src/file_ops.rs:885:69
+    |
+885 |                         let all_lines: Vec<String> = reader.lines().filter_map(Result::ok).collect();
+    |                                                                     ^^^^^^^^^^^^^^^^^^^^^^ help: replace with: `map_while(Result::ok)`
+    |
+note: this expression returning a `std::io::Lines` may produce an infinite number of `Err` in case of a read error
+   --> src/file_ops.rs:885:54
+    |
+885 |                         let all_lines: Vec<String> = reader.lines().filter_map(Result::ok).collect();
+    |                                                      ^^^^^^^^^^^^^^
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.95.0/index.html#lines_filter_map_ok
+    = note: `#[warn(clippy::lines_filter_map_ok)]` on by default
+
+warning: stripping a prefix manually
+   --> src/file_ops.rs:994:30
+    |
+994 |             current_old.push(line[1..].to_string());
+    |                              ^^^^^^^^^
+    |
+note: the prefix was tested here
+   --> src/file_ops.rs:993:9
+    |
+993 |         if line.starts_with('-') {
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^^
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.95.0/index.html#manual_strip
+    = note: `#[warn(clippy::manual_strip)]` on by default
+help: try using the `strip_prefix` method
+    |
+993 ~         if let Some(<stripped>) = line.strip_prefix('-') {
+994 ~             current_old.push(<stripped>.to_string());
+    |
+
+warning: stripping a prefix manually
+   --> src/file_ops.rs:996:30
+    |
+996 |             current_new.push(line[1..].to_string());
+    |                              ^^^^^^^^^
+    |
+note: the prefix was tested here
+   --> src/file_ops.rs:995:16
+    |
+995 |         } else if line.starts_with('+') {
+    |                ^^^^^^^^^^^^^^^^^^^^^^^^^
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.95.0/index.html#manual_strip
+help: try using the `strip_prefix` method
+    |
+995 ~         } else if let Some(<stripped>) = line.strip_prefix('+') {
+996 ~             current_new.push(<stripped>.to_string());
+    |
+
+warning: stripping a prefix manually
+   --> src/file_ops.rs:998:30
+    |
+998 |             current_old.push(line[1..].to_string());
+    |                              ^^^^^^^^^
+    |
+note: the prefix was tested here
+   --> src/file_ops.rs:997:16
+    |
+997 |         } else if line.starts_with(' ') {
+    |                ^^^^^^^^^^^^^^^^^^^^^^^^^
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.95.0/index.html#manual_strip
+help: try using the `strip_prefix` method
+    |
+997 ~         } else if let Some(<stripped>) = line.strip_prefix(' ') {
+998 ~             current_old.push(<stripped>.to_string());
+999 ~             current_new.push(<stripped>.to_string());
+    |
+
+warning: unnecessary `if let` since only the `Ok` variant of the iterator element is used
+   --> src/git_ops.rs:160:5
+    |
+160 | /     for id_res in revwalk.take(args.max_commits) {
+161 | |         if let Ok(id) = id_res {
+162 | |             if let Ok(commit) = repo.find_commit(id) {
+163 | |                 let time_secs = commit.time().seconds();
+...   |
+173 | |     }
+    | |_____^
+    |
+help: try `.flatten()` and remove the `if let` statement in the for loop
+   --> src/git_ops.rs:161:9
+    |
+161 | /         if let Ok(id) = id_res {
+162 | |             if let Ok(commit) = repo.find_commit(id) {
+163 | |                 let time_secs = commit.time().seconds();
+164 | |                 let summary_str = commit.summary().ok().flatten().unwrap_or("").to_string();
+...   |
+172 | |         }
+    | |_________^
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.95.0/index.html#manual_flatten
+    = note: `#[warn(clippy::manual_flatten)]` on by default
+help: try
+    |
+160 ~     for id in revwalk.take(args.max_commits).flatten() {
+161 +         if let Ok(commit) = repo.find_commit(id) {
+162 +             let time_secs = commit.time().seconds();
+163 +             let summary_str = commit.summary().ok().flatten().unwrap_or("").to_string();
+164 +             commits.push(GitCommitEntry {
+165 +                 id: id.to_string(),
+166 +                 author: commit.author().name().unwrap_or("Unknown").to_string(),
+167 +                 summary: summary_str,
+168 +                 time_iso: format!("epoch_secs:{time_secs}"),
+169 +             });
+170 +         }
+171 +     }
+    |
+
+warning: this `if` statement can be collapsed
+   --> src/git_ops.rs:161:9
+    |
+161 | /         if let Ok(id) = id_res {
+162 | |             if let Ok(commit) = repo.find_commit(id) {
+163 | |                 let time_secs = commit.time().seconds();
+164 | |                 let summary_str = commit.summary().ok().flatten().unwrap_or("").to_string();
+...   |
+172 | |         }
+    | |_________^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.95.0/index.html#collapsible_if
+help: collapse nested if block
+    |
+161 ~         if let Ok(id) = id_res
+162 ~             && let Ok(commit) = repo.find_commit(id) {
+163 |                 let time_secs = commit.time().seconds();
+...
+170 |                 });
+171 ~             }
+    |
+
+warning: using `Option.and_then(|x| Some(y))`, which is more succinctly expressed as `map(|x| y)`
+   --> src/runner.rs:316:20
+    |
+316 |         exit_code: exit_status.and_then(|s| if s.success() { Some(0) } else { Some(1) }),
+    |                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.95.0/index.html#bind_instead_of_map
+    = note: `#[warn(clippy::bind_instead_of_map)]` on by default
+help: use `map` instead
+    |
+316 -         exit_code: exit_status.and_then(|s| if s.success() { Some(0) } else { Some(1) }),
+316 +         exit_code: exit_status.map(|s| if s.success() { 0 } else { 1 }),
+    |
+
+warning: this `if` statement can be collapsed
+   --> src/search.rs:157:13
+    |
+157 | /             if let Some(ref filter) = file_filter {
+158 | |                 if !filter.is_match(&rel_path) {
+159 | |                     continue;
+160 | |                 }
+161 | |             }
+    | |_____________^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.95.0/index.html#collapsible_if
+help: collapse nested if block
+    |
+157 ~             if let Some(ref filter) = file_filter
+158 ~                 && !filter.is_match(&rel_path) {
+159 |                     continue;
+160 ~                 }
+    |
+
+warning: this `if` statement can be collapsed
+   --> src/search.rs:335:21
+    |
+335 | /                     if let Ok(line) = line_res {
+336 | |                         if let Some(caps) = symbol_regex.captures(&line) {
+337 | |                             let kind = caps.get(1).map_or("", |m| m.as_str()).to_string();
+338 | |                             let name = caps.get(2).map_or("", |m| m.as_str()).to_string();
+...   |
+354 | |                     }
+    | |_____________________^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.95.0/index.html#collapsible_if
+help: collapse nested if block
+    |
+335 ~                     if let Ok(line) = line_res
+336 ~                         && let Some(caps) = symbol_regex.captures(&line) {
+337 |                             let kind = caps.get(1).map_or("", |m| m.as_str()).to_string();
+...
+352 |                             });
+353 ~                         }
+    |
+
+warning: this `if` statement can be collapsed
+   --> src/search.rs:340:29
+    |
+340 | / ...                   if let Some(ref filter) = filter_pattern {
+341 | | ...                       if !name.to_lowercase().contains(filter) {
+342 | | ...                           continue;
+343 | | ...                       }
+344 | | ...                   }
+    | |_______________________^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.95.0/index.html#collapsible_if
+help: collapse nested if block
+    |
+340 ~                             if let Some(ref filter) = filter_pattern
+341 ~                                 && !name.to_lowercase().contains(filter) {
+342 |                                     continue;
+343 ~                                 }
+    |
+
+warning: this `if` statement can be collapsed
+  --> src/trigram.rs:62:17
+   |
+62 | /                 if matches!(ext, "rs" | "ts" | "js" | "py" | "go" | "c" | "cpp" | "json" | "md" | "toml") {
+63 | |                     if let Ok(mut f) = File::open(p) {
+64 | |                         let mut buf = Vec::new();
+65 | |                         if f.read_to_end(&mut buf).is_ok() {
+...  |
+69 | |                 }
+   | |_________________^
+   |
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.95.0/index.html#collapsible_if
+help: collapse nested if block
+   |
+62 ~                 if matches!(ext, "rs" | "ts" | "js" | "py" | "go" | "c" | "cpp" | "json" | "md" | "toml")
+63 ~                     && let Ok(mut f) = File::open(p) {
+64 |                         let mut buf = Vec::new();
+...
+67 |                         }
+68 ~                     }
+   |
+
+warning: this `if` statement can be collapsed
+   --> src/trigram.rs:153:17
+    |
+153 | /                 if let Ok(line) = line_res {
+154 | |                     if line.to_lowercase().contains(&lower_q) {
+155 | |                         matches.push(TrigramMatch {
+156 | |                             file: rel.clone(),
+...   |
+161 | |                 }
+    | |_________________^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.95.0/index.html#collapsible_if
+help: collapse nested if block
+    |
+153 ~                 if let Ok(line) = line_res
+154 ~                     && line.to_lowercase().contains(&lower_q) {
+155 |                         matches.push(TrigramMatch {
+...
+159 |                         });
+160 ~                     }
+    |
+
+warning: this `if` statement can be collapsed
+   --> src/main.rs:241:9
+    |
+241 | /         if let Value::String(ref s) = v {
+242 | |             if let Ok(nested) = serde_json::from_str::<Value>(s) {
+243 | |                 return Ok(nested);
+244 | |             }
+245 | |         }
+    | |_________^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.95.0/index.html#collapsible_if
+help: collapse nested if block
+    |
+241 ~         if let Value::String(ref s) = v
+242 ~             && let Ok(nested) = serde_json::from_str::<Value>(s) {
+243 |                 return Ok(nested);
+244 ~             }
+    |
+
+warning: items after a test module
+    --> src/bin/nexus_tui/live_view.rs:1267:1
+     |
+1267 | mod tests {
+     | ^^^^^^^^^
+...
+2423 | fn titled_block(title: String) -> Block<'static> {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+2430 | fn key_hints(pairs: &[(&'static str, &'static str)]) -> Line<'static> {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+2441 | fn list_window(frame: &mut Frame, area: Rect, lines: Vec<Line<'_>>, focus: usize) {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+2448 | fn render_models(frame: &mut Frame, area: Rect, picker: &Picker) {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+2532 | fn render_connect(frame: &mut Frame, area: Rect, flow: &Connect) {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.95.0/index.html#items_after_test_module
+     = note: `#[warn(clippy::items_after_test_module)]` on by default
+     = help: move the items to before the test module was defined
+
+warning: `harness-core` (bin "harness-core") generated 21 warnings (run `cargo clippy --fix --bin "harness-core" -p harness-core -- ` to apply 16 suggestions)
+warning: `harness-core` (bin "nexus-tui" test) generated 1 warning (run `cargo clippy --fix --bin "nexus-tui" -p harness-core --tests -- ` to apply 1 suggestion)
+warning: `harness-core` (bin "harness-core" test) generated 21 warnings (21 duplicates)
+    Finished `release` profile [optimized] target(s) in 0.27s
+CLIPPY=0

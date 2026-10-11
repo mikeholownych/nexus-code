@@ -1,0 +1,9 @@
+2026-10-11T18:59:03Z
+cargo build --release --manifest-path core/Cargo.toml
+[1m[92m    Finished[0m `release` profile [optimized] target(s) in 0.40s
+npm --prefix cli run build
+
+> local-code-harness@1.2.1 build
+> tsc
+
+BUILD=0

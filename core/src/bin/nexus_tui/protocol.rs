@@ -2,6 +2,7 @@
 //! outcome; these types carry what it reports and nothing more.
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::fmt;
 
 pub const PROTOCOL_VERSION: u64 = 1;
 
@@ -24,6 +25,66 @@ pub struct SlashSpec {
     pub name: String,
     pub usage: String,
     pub summary: String,
+}
+
+/// A way to connect a provider: an API key, a browser sign-in, or a device-code sign-in.
+#[derive(Clone, Debug, Deserialize, PartialEq)]
+pub struct ConnectMethod {
+    pub id: String,
+    pub label: String,
+    pub kind: String,
+    /// Signs in as another vendor's client; the provider's terms may not permit it.
+    #[serde(default)]
+    pub unofficial: bool,
+}
+
+/// A provider as the model picker shows it. `source` names where its credential comes from, never the credential.
+#[derive(Clone, Debug, Deserialize, PartialEq)]
+pub struct CatalogProvider {
+    pub id: String,
+    pub label: String,
+    pub disclosure: String,
+    pub connected: bool,
+    #[serde(default)]
+    pub source: Option<String>,
+    #[serde(default)]
+    pub external: bool,
+    #[serde(default)]
+    pub methods: Vec<ConnectMethod>,
+    pub status: String,
+    #[serde(default)]
+    pub error: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq)]
+pub struct CatalogModel {
+    pub provider: String,
+    pub id: String,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq)]
+pub struct ModelRef {
+    pub provider: String,
+    pub model: String,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct Catalog {
+    pub providers: Vec<CatalogProvider>,
+    pub models: Vec<CatalogModel>,
+    pub current: ModelRef,
+    pub recent: Vec<ModelRef>,
+}
+
+/// A credential typed by the operator. Serializes as the plain string; never prints.
+#[derive(Clone, PartialEq, Serialize)]
+#[serde(transparent)]
+pub struct Secret(pub String);
+
+impl fmt::Debug for Secret {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("Secret(***)")
+    }
 }
 
 /// One block of the turn receipt: labelled rows, or a note saying why there are none.
@@ -84,6 +145,47 @@ pub enum Event {
     },
     #[serde(rename = "assistant.delta")]
     AssistantDelta { turn_id: String, text: String },
+    /// What the running turn is doing; sent on each phase change, independent of model output.
+    #[serde(rename = "activity")]
+    Activity {
+        phase: String,
+        #[serde(default)]
+        step: u64,
+        #[serde(default)]
+        segment: u64,
+        #[serde(default)]
+        tool: Option<String>,
+        #[serde(default)]
+        subject: Option<String>,
+    },
+    /// A file-edit tool changed a file: that operation's own diff, as a bounded preview.
+    #[serde(rename = "file.diff")]
+    FileDiff {
+        call_id: String,
+        #[serde(default)]
+        evidence: String,
+        path: String,
+        kind: String,
+        added: u64,
+        removed: u64,
+        preview: String,
+        #[serde(default)]
+        truncated: bool,
+        #[serde(default)]
+        total_lines: u64,
+        #[serde(default)]
+        note: Option<String>,
+    },
+    /// What became of operator steering: queued, applied, deferred, cancelled, rejected or duplicate.
+    #[serde(rename = "steer.ack")]
+    SteerAck {
+        id: String,
+        status: String,
+        message: String,
+        /// Returned text for cancelled or rejected steering.
+        #[serde(default)]
+        text: Option<String>,
+    },
     #[serde(rename = "tool.start")]
     ToolStart {
         call_id: String,
@@ -139,6 +241,9 @@ pub enum Event {
         output: String,
         #[serde(default)]
         duration_ms: Option<u64>,
+        /// Full diff of the file change the call made.
+        #[serde(default)]
+        diff: Option<String>,
     },
     #[serde(rename = "receipt")]
     Receipt {
@@ -152,6 +257,38 @@ pub enum Event {
         code: String,
         message: String,
     },
+    #[serde(rename = "models.catalog")]
+    ModelsCatalog {
+        id: String,
+        providers: Vec<CatalogProvider>,
+        models: Vec<CatalogModel>,
+        current: ModelRef,
+        #[serde(default)]
+        recent: Vec<ModelRef>,
+    },
+    /// A sign-in waits for the operator: open `url`, and type `user_code` for a device sign-in.
+    #[serde(rename = "provider.auth")]
+    ProviderAuth {
+        id: String,
+        provider: String,
+        url: String,
+        #[serde(default)]
+        user_code: Option<String>,
+        instructions: String,
+    },
+    #[serde(rename = "provider.result")]
+    ProviderResult {
+        id: String,
+        provider: String,
+        success: bool,
+        message: String,
+    },
+    #[serde(rename = "model.result")]
+    ModelResult {
+        id: String,
+        success: bool,
+        message: String,
+    },
     /// Event types newer than this client.
     #[serde(other)]
     Unknown,
@@ -163,6 +300,9 @@ pub enum Event {
 pub enum Command {
     #[serde(rename = "prompt.submit")]
     PromptSubmit { id: String, text: String },
+    /// Guidance for the work in progress; the sidecar answers with `steer.ack`.
+    #[serde(rename = "steer")]
+    Steer { id: String, text: String },
     #[serde(rename = "cancel")]
     Cancel,
     #[serde(rename = "approve")]
@@ -179,6 +319,26 @@ pub enum Command {
     ToolDetail { id: String, evidence: String },
     #[serde(rename = "receipt")]
     Receipt { id: String },
+    #[serde(rename = "models.list")]
+    ModelsList { id: String },
+    #[serde(rename = "model.select")]
+    ModelSelect {
+        id: String,
+        provider: String,
+        model: String,
+    },
+    #[serde(rename = "provider.connect")]
+    ProviderConnect {
+        id: String,
+        provider: String,
+        method: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        key: Option<Secret>,
+    },
+    #[serde(rename = "provider.cancel")]
+    ProviderCancel { id: String },
+    #[serde(rename = "provider.disconnect")]
+    ProviderDisconnect { id: String, provider: String },
     #[serde(rename = "shutdown")]
     Shutdown,
 }
@@ -393,6 +553,7 @@ mod tests {
                 args: "{}".into(),
                 output: String::new(),
                 duration_ms: None,
+                diff: None,
             })
         );
         assert_eq!(
@@ -414,6 +575,38 @@ mod tests {
                     },
                 ],
             })
+        );
+    }
+
+    #[test]
+    fn activity_diff_and_steering_events_parse() {
+        assert_eq!(
+            parse_event(r#"{"v":1,"type":"activity","turn_id":"t1","phase":"tool","step":31,"segment":2,"tool":"run_command","subject":"make test"}"#),
+            Ok(Event::Activity {
+                phase: "tool".into(),
+                step: 31,
+                segment: 2,
+                tool: Some("run_command".into()),
+                subject: Some("make test".into()),
+            })
+        );
+        assert!(matches!(
+            parse_event(r#"{"v":1,"type":"file.diff","turn_id":"t1","call_id":"c1","evidence":"e2","path":"a.ts","kind":"modified","added":1,"removed":1,"preview":"--- a/a.ts\n+++ b/a.ts\n@@ -1 +1 @@\n-a\n+b","truncated":false,"total_lines":5}"#),
+            Ok(Event::FileDiff { ref path, added: 1, removed: 1, ref kind, .. }) if path == "a.ts" && kind == "modified"
+        ));
+        assert_eq!(
+            parse_event(r#"{"v":1,"type":"steer.ack","id":"g1","status":"cancelled","message":"Not applied","text":"use tabs"}"#),
+            Ok(Event::SteerAck {
+                id: "g1".into(),
+                status: "cancelled".into(),
+                message: "Not applied".into(),
+                text: Some("use tabs".into()),
+            })
+        );
+        let line = encode_command(&Command::Steer { id: "g1".into(), text: "use\ntabs".into() });
+        assert_eq!(
+            serde_json::from_str::<Value>(&line).unwrap(),
+            serde_json::json!({"v":1,"type":"steer","id":"g1","text":"use\ntabs"})
         );
     }
 

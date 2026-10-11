@@ -23,6 +23,16 @@ import {
   type ProviderClassification,
 } from "./core/provider_recovery.js";
 import { redactSecrets } from "./ui.js";
+import { connectionFor, disclosureClass, operatorSettingKeyForAuth, type ResolvedConnection } from "./providers.js";
+import { ProviderStreamError, readSse, type NativeRequestInput, type NativeResult } from "./protocols/common.js";
+import { anthropicStreamParser, buildAnthropicRequest, parseAnthropicResponse } from "./protocols/anthropic.js";
+import { buildResponsesRequest, parseResponsesResponse, responsesStreamParser } from "./protocols/openai_responses.js";
+import { UsageLedger, type UsageReport } from "./usage.js";
+import { resolveCredential, saveCredential, type StoredCredential } from "./credentials.js";
+import { COPILOT_HEADERS, copilotToken, refreshOAuth } from "./oauth.js";
+import { providerDefinition } from "./providers.js";
+
+type OAuthCredential = Extract<StoredCredential, { type: "oauth" }>;
 
 function originOf(url: string | undefined): string | undefined {
   if (!url?.trim()) return undefined;
@@ -82,6 +92,11 @@ export function credentialStorageHome(): string {
 
 function authoritySetting(key: string): string | undefined {
   return (credentialAuthority ? credentialAuthority[key] : process.env[key])?.trim() || undefined;
+}
+
+/** A setting as the operator configured it (operator environment + config.env; never a project or install .env). */
+export function operatorSetting(key: string): string | undefined {
+  return authoritySetting(key);
 }
 
 /** Origins that stored credentials belong to, and the operator-environment key with its own origin. */
@@ -176,7 +191,48 @@ const DEFAULT_CLASSIFICATION: Record<InferenceFailureKind, ProviderClassificatio
   output_truncated: { condition: "AVAILABLE", execution: "COMPLETED" },
   protocol_error: { condition: "PERMANENT_FAILURE", execution: "COMPLETED" },
   aborted: { condition: "AVAILABLE", execution: "UNKNOWN" },
+  policy_denied: { condition: "REQUEST_REJECTED", execution: "NOT_EXECUTED" },
+  configuration_error: { condition: "REQUEST_REJECTED", execution: "NOT_EXECUTED" },
 };
+
+/** Chat Completions usage (OpenRouter adds `cost`). */
+function chatUsage(u: any): UsageReport | undefined {
+  if (!u || typeof u !== "object") return undefined;
+  const n = (v: unknown) => (typeof v === "number" && Number.isFinite(v) ? v : undefined);
+  const r: UsageReport = {};
+  if (n(u.prompt_tokens) !== undefined) r.inputTokens = u.prompt_tokens;
+  if (n(u.completion_tokens) !== undefined) r.outputTokens = u.completion_tokens;
+  if (n(u.prompt_tokens_details?.cached_tokens) !== undefined) r.cachedInputTokens = u.prompt_tokens_details.cached_tokens;
+  if (n(u.completion_tokens_details?.reasoning_tokens) !== undefined) r.reasoningTokens = u.completion_tokens_details.reasoning_tokens;
+  if (n(u.cost) !== undefined) r.costUsd = u.cost;
+  return r;
+}
+
+/** What the provider reported about the request in progress (for its receipt). */
+interface PendingRequest { usage?: UsageReport; providerRequestId?: string; effectiveModel?: string; endpoint?: string }
+
+/** Model ids from a `/models` answer: OpenAI-style `data[].id`, or the ChatGPT backend's listed `models[].slug`. */
+function modelIds(body: any): string[] {
+  if (Array.isArray(body?.data)) return body.data.map((m: any) => m?.id).filter((id: unknown): id is string => typeof id === "string");
+  if (Array.isArray(body?.models)) return body.models.filter((m: any) => !m?.visibility || m.visibility === "list").map((m: any) => m?.slug ?? m?.id).filter((id: unknown): id is string => typeof id === "string");
+  return [];
+}
+
+/** Optional request parameters a provider may reject; dropping one never changes what the request asks for. */
+const DROPPABLE_PARAMS = new Set(["temperature", "top_p", "max_output_tokens", "stream_options"]);
+
+/** The parameter a 400 answer names as unsupported ("Unsupported parameter: temperature", OpenAI `param`). */
+export function unsupportedParameter(message: string): string | undefined {
+  const named = /unsupported (?:parameter|value)[:\s'"`]+([a-z_]+)/i.exec(message)?.[1];
+  if (named) return named.toLowerCase();
+  if (/unsupported_parameter|not supported/i.test(message)) return /"param"\s*:\s*"([a-z_]+)"/i.exec(message)?.[1]?.toLowerCase();
+  return undefined;
+}
+
+/** Cloud destinations announced in this process (the disclosure notice is shown once per origin). */
+const announcedDestinations = new Set<string>();
+/** Provider error bodies are bounded and redacted before they reach messages, logs or the UI. */
+const MAX_PROVIDER_ERROR_CHARS = 2_000;
 
 /**
  * Typed inference failure. `condition` is what the failure says about the provider; `execution` is what is known
@@ -306,6 +362,29 @@ export class LocalLlmClient {
   private taskId?: string;
   private sessionId?: string;
   private taskClass?: string;
+  /** The connection's provider, protocol, auth style and disclosure behaviour (legacy endpoint path when no provider). */
+  private conn: ResolvedConnection;
+  /** ChatGPT account the signed-in token belongs to (sent as chatgpt-account-id). */
+  private oauthAccountId?: string;
+  /**
+   * Parameters this connection does not send: those its provider never accepts, plus any the provider rejected as
+   * unsupported during this session (learned once, then omitted from every later request).
+   */
+  private unsupportedParams = new Set<string>();
+  /** Copilot API token exchanged from another client's GitHub token; held in memory only. */
+  private exchangedToken?: OAuthCredential;
+  private readonly authorizedOrigins: Set<string>;
+  private readonly cloudRoutedOrigins: string[];
+  private readonly workspace?: string;
+  private readonly role: string;
+  private readonly maxOutputTokens: number;
+  private readonly reasoningEffort?: string;
+  private readonly thinkingBudget?: number;
+  /** Usage the provider reported for the most recent completed request on this client (provider connections only). */
+  private lastUsageReport?: UsageReport;
+  private pending?: PendingRequest;
+  /** Ledger reservations taken by the request in progress (released when its receipt is recorded). */
+  private reservations: string[] = [];
 
   constructor(
     config: HarnessConfig,
@@ -314,25 +393,30 @@ export class LocalLlmClient {
       taskId?: string;
       sessionId?: string;
       taskClass?: string;
+      /** Receipt label: main, planner, coder, subagent, work-unit. */
+      role?: string;
     }
   ) {
+    this.conn = connectionFor(config.provider, config.model);
+    this.unsupportedParams = new Set(this.conn.omitParams);
+    // A provider's base URL already carries its API path and version; only the legacy endpoint path appends /v1.
     const normalizeEp = (urlStr: string) => {
       let ep = urlStr.trim().replace(/\/+$/, "");
-      if (!ep.endsWith("/v1")) {
+      if (!this.conn.providerId && !ep.endsWith("/v1")) {
         ep = `${ep}/v1`;
       }
       return ep;
     };
 
     const endpointList: string[] = [normalizeEp(config.endpoint)];
-    if (!config.pinEndpoint && config.fallbackEndpoints && Array.isArray(config.fallbackEndpoints)) {
+    if (!config.pinEndpoint && !this.conn.providerId && config.fallbackEndpoints && Array.isArray(config.fallbackEndpoints)) {
       for (const fb of config.fallbackEndpoints) {
         if (fb && typeof fb === "string") {
           endpointList.push(normalizeEp(fb));
         }
       }
     }
-    if (!config.pinEndpoint && process.env.LOCAL_LLM_FALLBACK_ENDPOINTS) {
+    if (!config.pinEndpoint && !this.conn.providerId && process.env.LOCAL_LLM_FALLBACK_ENDPOINTS) {
       for (const fb of process.env.LOCAL_LLM_FALLBACK_ENDPOINTS.split(",")) {
         if (fb.trim()) {
           endpointList.push(normalizeEp(fb));
@@ -352,6 +436,131 @@ export class LocalLlmClient {
     this.taskId = options?.taskId;
     this.sessionId = options?.sessionId;
     this.taskClass = options?.taskClass ?? config.taskClass;
+    // Configurations built by buildConfig carry the operator's authorization; programmatic configurations authorize
+    // the destinations they name directly (never their fallbacks).
+    this.authorizedOrigins = new Set(
+      (config.authorizedDisclosureOrigins ?? [config.endpoint, config.plannerEndpoint, config.coderEndpoint].map((e) => (e ? originOf(normalizeEp(e)) : undefined)))
+        .filter((o): o is string => Boolean(o)),
+    );
+    this.cloudRoutedOrigins = config.cloudRoutedOrigins ?? [];
+    this.workspace = config.workspace;
+    this.role = options?.role ?? (config.taskClass === "subagent" ? "subagent" : "main");
+    this.maxOutputTokens = config.completionReserveTokens ?? 8192;
+    this.reasoningEffort = config.reasoningEffort;
+    this.thinkingBudget = config.anthropicThinkingBudget;
+  }
+
+  /** Provider id of this connection; undefined on the legacy appliance/endpoint path. */
+  public getProviderId(): string | undefined {
+    return this.conn.providerId;
+  }
+
+  /** Usage the provider reported for the last completed request (undefined on the appliance path or when unreported). */
+  public getLastUsage(): UsageReport | undefined {
+    return this.lastUsageReport;
+  }
+
+  /** "cloud" when `url` (default: the active endpoint) receives content outside the operator's machines/network. */
+  public disclosureOf(url: string = this.endpoint): "local" | "cloud" {
+    return disclosureClass(url, this.conn.providerId, this.cloudRoutedOrigins);
+  }
+
+  /** Why task content may not be sent to `url`, or undefined when it may. */
+  private disclosureDenial(url: string, requestId?: string): InferenceError | undefined {
+    if (this.disclosureOf(url) !== "cloud") return undefined;
+    const origin = originOf(url);
+    if (origin && this.authorizedOrigins.has(origin)) return undefined;
+    return new InferenceError(
+      "policy_denied",
+      "client",
+      `Refusing to send task content to ${origin ?? url}: it is a cloud destination the operator has not authorized. ` +
+        `Select it explicitly (--provider / --endpoint, or ~/.config/nexus/config.env) or list it in NEXUS_CLOUD_DISCLOSURE_ORIGINS.`,
+      { requestId, failoverEligible: false },
+    );
+  }
+
+  /**
+   * Checks made before a content-bearing request leaves: model and credential present (provider connections), and the
+   * shared cloud spending limits. Shows the disclosure notice the first time a cloud origin is used in this process.
+   */
+  private preflight(url: string, requestId: string, payloadChars: number): void {
+    if (this.conn.providerId) {
+      if (!this.model) {
+        throw new InferenceError("configuration_error", "client", `Provider '${this.conn.providerId}' needs an explicit model: pass --model or set NEXUS_MODEL.`, { requestId, failoverEligible: false });
+      }
+      if (this.conn.auth !== "none" && !this.credentialFor(url) && !this.declaredAuthless()) {
+        const variable = operatorSettingKeyForAuth(this.conn.providerId);
+        throw new InferenceError("configuration_error", "client", `No credential for provider '${this.conn.providerId}': set ${variable}. Nexus never substitutes another provider's or the appliance's credential.`, {
+          requestId,
+          failoverEligible: false,
+          condition: "AUTH_FAILURE",
+        });
+      }
+    }
+    if (this.disclosureOf(url) !== "cloud") return;
+    // Spending limits cover provider connections, whose requests are recorded; the legacy endpoint path has no receipts.
+    if (this.conn.providerId) {
+      this.reservations.push(requestId);
+      const reason = UsageLedger.global().admit(requestId, Math.ceil(payloadChars / 4) + this.maxOutputTokens, this.conn.usage === "openrouter");
+      if (reason) throw new InferenceError("policy_denied", "client", `Cloud spending limit: ${reason}.`, { requestId, failoverEligible: false });
+    }
+    const origin = originOf(url) ?? url;
+    if (!announcedDestinations.has(origin)) {
+      announcedDestinations.add(origin);
+      console.error(pc.dim(`[nexus] Cloud inference: ${this.conn.label} (${origin}), model ${this.model || "(unset)"}. Task content — prompts, tool results and file excerpts — is sent to this provider.`));
+    }
+  }
+
+  /** `compatible` connections may run without a key only when the operator declares it (NEXUS_COMPATIBLE_AUTH=none). */
+  private declaredAuthless(): boolean {
+    return this.conn.providerId === "compatible" && authoritySetting("NEXUS_COMPATIBLE_AUTH") === "none";
+  }
+
+  /** Records a receipt for a provider-connection request (appliance requests keep their existing records only). */
+  private async withReceipt<T>(requestId: string, purpose: string | undefined, run: () => Promise<T>): Promise<T> {
+    if (!this.conn.providerId) return run();
+    this.pending = undefined;
+    this.reservations = [];
+    const pending = (): PendingRequest | undefined => this.pending;
+    const base = () => {
+      const p = pending();
+      return {
+      at: new Date().toISOString(),
+      requestId,
+      role: purpose ?? this.role,
+      providerId: this.conn.providerId!,
+      selectedModel: this.model,
+      ...(p?.effectiveModel ? { effectiveModel: p.effectiveModel } : {}),
+      endpointOrigin: originOf(p?.endpoint ?? this.endpoint) ?? "",
+      protocol: this.conn.protocol,
+      disclosure: this.disclosureOf(p?.endpoint ?? this.endpoint),
+      ...(p?.providerRequestId ? { providerRequestId: p.providerRequestId } : {}),
+      ...(p?.usage ? { usage: p.usage } : {}),
+      costConfidence: p?.usage?.costUsd !== undefined ? ("provider-reported" as const) : ("unknown" as const),
+      };
+    };
+    const releaseAll = () => {
+      for (const id of this.reservations) UsageLedger.global().release(id);
+      this.reservations = [];
+    };
+    try {
+      const result = await run();
+      releaseAll();
+      this.lastUsageReport = pending()?.usage;
+      UsageLedger.global().record({ ...base(), outcome: "completed", usageConfidence: pending()?.usage ? "provider" : "uncertain" }, this.workspace);
+      return result;
+    } catch (err: any) {
+      releaseAll();
+      const notSent = err instanceof InferenceError && (err.kind === "policy_denied" || err.kind === "configuration_error");
+      const maybeBilled = !(err instanceof InferenceError) || err.execution !== "NOT_EXECUTED";
+      UsageLedger.global().record({
+        ...base(),
+        outcome: err instanceof InferenceError && err.kind === "aborted" ? "aborted" : "failed",
+        failureKind: err instanceof InferenceError ? err.kind : "error",
+        usageConfidence: pending()?.usage ? "provider" : notSent || !maybeBilled ? "none" : "uncertain",
+      }, notSent ? undefined : this.workspace);
+      throw err;
+    }
   }
 
   /** Hint the gateway's route table (sent as X-Task-Class); undefined sends none. */
@@ -385,12 +594,103 @@ export class LocalLlmClient {
   }
 
   private routingHeaders(): Record<string, string> {
+    if (!this.conn.sendTaskClass) return {};
     return this.taskClass && /^[A-Za-z0-9_.-]{1,64}$/.test(this.taskClass) ? { "X-Task-Class": this.taskClass } : {};
   }
 
   /** Switch the model in place so session, task, boundary and routing state survive the change. */
   public setModel(model: string): void {
     this.model = model;
+    // Some providers serve a model over a different protocol (Copilot gpt-5 via Responses).
+    this.conn = connectionFor(this.conn.providerId, model);
+    // Learned rejections belong to the previous model.
+    this.unsupportedParams = new Set(this.conn.omitParams);
+  }
+
+  /** Removes parameters this provider connection does not accept (provider connections only). */
+  private omitUnsupported(body: Record<string, unknown>): void {
+    if (!this.conn.providerId) return;
+    for (const p of this.unsupportedParams) delete body[p];
+  }
+
+  /**
+   * When a provider answers 400 naming an optional parameter as unsupported, the request was not executed: drop that
+   * parameter for this connection and resend once. Bounded by the small set of droppable parameters.
+   */
+  private async withParameterRetry<T>(run: () => Promise<T>): Promise<T> {
+    for (;;) {
+      try {
+        return await run();
+      } catch (err) {
+        if (!this.conn.providerId || !(err instanceof InferenceError) || err.httpStatus !== 400) throw err;
+        const param = unsupportedParameter(err.message);
+        if (!param || !DROPPABLE_PARAMS.has(param) || this.unsupportedParams.has(param)) throw err;
+        this.unsupportedParams.add(param);
+        console.error(pc.dim(`[nexus] ${this.conn.label} rejected '${param}' for ${this.model}; resending without it.`));
+      }
+    }
+  }
+
+  /**
+   * Resolves a sign-in provider's token for this request: Nexus's own sign-in is refreshed when it is about to expire
+   * (one attempt) and saved; a token owned by another client is re-read from that client and never refreshed
+   * (refresh tokens rotate; refreshing would sign that client out). A Copilot GitHub token from another client is
+   * exchanged for a Copilot API token in memory, which rotates nothing.
+   */
+  private async prepareCredential(url: string, requestId?: string, force = false): Promise<void> {
+    if (this.conn.auth !== "oauth" || !this.conn.providerId) return;
+    const id = this.conn.providerId;
+    const label = providerDefinition(id)?.label ?? id;
+    const found = resolveCredential(id);
+    const fail = (message: string) =>
+      new InferenceError("configuration_error", "client", message, { requestId, failoverEligible: false, condition: "AUTH_FAILURE" });
+    if (!found || found.credential.type !== "oauth") {
+      this.explicitKey = undefined;
+      return; // preflight reports the missing sign-in
+    }
+    let cred: OAuthCredential = found.credential;
+    const fresh = (c?: OAuthCredential) => Boolean(c?.access) && (c!.expiresAt === undefined || c!.expiresAt - Date.now() > 60_000);
+    if (!fresh(cred) || force) {
+      try {
+        if (found.refreshable) {
+          cred = (await refreshOAuth(id, cred)) as OAuthCredential;
+          saveCredential(id, cred);
+        } else if (id === "copilot" && cred.refresh) {
+          if (force || !fresh(this.exchangedToken) || this.exchangedToken?.refresh !== cred.refresh) {
+            this.exchangedToken = (await copilotToken(cred.refresh)) as OAuthCredential;
+          }
+          cred = this.exchangedToken!;
+        } else if (!fresh(cred)) {
+          throw new Error(`the ${label} sign-in read from ${found.source} has expired. Use ${found.source} once to refresh it, or sign in from Nexus (/model, then ctrl+p).`);
+        }
+      } catch (err: any) {
+        throw fail(`Cannot use ${label}: ${redactSecrets(err?.message ?? String(err))}`);
+      }
+    }
+    this.explicitKey = cred.access;
+    this.explicitOrigin = originOf(url);
+    this.rotated.delete(this.explicitOrigin ?? "");
+    this.oauthAccountId = cred.accountId;
+  }
+
+  /** One forced refresh-and-retry when a signed-in provider answers 401 (its token was revoked or rotated). */
+  private async withOAuthRetry<T>(url: string, requestId: string, run: () => Promise<T>): Promise<T> {
+    try {
+      return await run();
+    } catch (err) {
+      if (this.conn.auth !== "oauth" || !(err instanceof InferenceError) || err.httpStatus !== 401) throw err;
+      await this.prepareCredential(url, requestId, true);
+      return run();
+    }
+  }
+
+  /** Headers a provider requires that depend on the request (sign-in account, Copilot editor identity). */
+  private providerHeaders(messages: ChatMessage[]): Record<string, string> {
+    if (this.conn.providerId === "chatgpt") return this.oauthAccountId ? { "chatgpt-account-id": this.oauthAccountId } : {};
+    if (this.conn.providerId === "copilot") {
+      return { ...COPILOT_HEADERS, "X-Initiator": messages.some((m) => m.role === "assistant") ? "agent" : "user" };
+    }
+    return {};
   }
 
   private requestTimeoutMs(): number {
@@ -456,18 +756,29 @@ export class LocalLlmClient {
     const origin = originOf(url);
     if (!origin) return undefined;
     if (this.explicitKey && this.explicitOrigin === origin && !this.rotated.has(origin)) return this.explicitKey;
+    // A provider connection uses only its own key: never the appliance's stored token or any other credential.
+    if (this.conn.providerId) return undefined;
     if (!this.storedKeys.has(origin)) this.storedKeys.set(origin, storedCredentialFor(url));
     return this.storedKeys.get(origin) ?? undefined;
   }
 
-  private authorization(url: string): { Authorization: string } {
-    return { Authorization: `Bearer ${this.credentialFor(url) ?? "not-needed"}` };
+  private authorization(url: string): Record<string, string> {
+    if (!this.conn.providerId) return { Authorization: `Bearer ${this.credentialFor(url) ?? "not-needed"}` };
+    const key = this.credentialFor(url);
+    const auth: Record<string, string> = !key ? {} : this.conn.auth === "x-api-key" ? { "x-api-key": key } : { Authorization: `Bearer ${key}` };
+    if (this.conn.providerId === "copilot") Object.assign(auth, COPILOT_HEADERS);
+    return { ...this.conn.staticHeaders, ...auth };
+  }
+
+  /** Provider connections refuse redirects: a credential-bearing request never follows a server to another origin. */
+  private fetchPolicy(): { redirect?: "error" } {
+    return this.conn.providerId ? { redirect: "error" } : {};
   }
 
   /** After a 401 from `url`: re-read that gateway's stored credential (rotation). Never borrows another provider's. */
   public reloadAuthToken(url: string = this.endpoints[this.activeEndpointIndex]): boolean {
     const origin = originOf(url);
-    if (!origin) return false;
+    if (!origin || this.conn.providerId) return false;
     const fresh = storedCredentialFor(url);
     if (!fresh || fresh === this.credentialFor(url)) return false;
     this.storedKeys.set(origin, fresh);
@@ -485,6 +796,12 @@ export class LocalLlmClient {
     for (let attempt = 0; attempt < total; attempt++) {
       const idx = (this.activeEndpointIndex + attempt) % total;
       const currentEp = this.endpoints[idx];
+      // An endpoint not authorized for cloud disclosure is never tried; a fallback never widens disclosure.
+      const denial = this.disclosureDenial(currentEp);
+      if (denial) {
+        lastError = lastError ?? denial;
+        continue;
+      }
 
       try {
         const result = await operation(currentEp);
@@ -519,34 +836,33 @@ export class LocalLlmClient {
 
   async listModels(): Promise<string[]> {
     return this.executeWithFailover("listModels", async (currentEp) => {
-      const url = `${currentEp}/models`;
+      await this.prepareCredential(currentEp);
+      const query = this.conn.protocol === "anthropic-messages" ? "?limit=1000" : this.conn.providerId === "chatgpt" ? "?client_version=1.0.0" : "";
+      const url = `${currentEp}/models${query}`;
       const res = await fetch(url, {
         headers: this.authorization(url),
+        ...this.fetchPolicy(),
       });
 
       if (res.status === 401 && this.reloadAuthToken(url)) {
         const retryRes = await fetch(url, {
           headers: this.authorization(url),
         });
-        if (retryRes.ok) {
-          const data = (await retryRes.json()) as { data?: Array<{ id: string }> };
-          return data.data?.map((m) => m.id) || [];
-        }
+        if (retryRes.ok) return modelIds(await retryRes.json());
       }
 
       if (!res.ok) {
         throw new Error(`Server returned HTTP ${res.status}: ${res.statusText}`);
       }
 
-      const data = (await res.json()) as { data?: Array<{ id: string }> };
-      return data.data?.map((m) => m.id) || [];
+      return modelIds(await res.json());
     });
   }
 
   /** Raw `/models` entries. Providers that publish capability metadata let the scheduler qualify resources. */
   async listModelCatalog(signal?: AbortSignal): Promise<Array<Record<string, any>>> {
     return this.executeWithFailover("listModelCatalog", async (currentEp) => {
-      const res = await fetch(`${currentEp}/models`, { headers: this.authorization(currentEp), signal });
+      const res = await fetch(`${currentEp}/models`, { headers: this.authorization(currentEp), signal, ...this.fetchPolicy() });
       if (!res.ok) throw new Error(`Server returned HTTP ${res.status}: ${res.statusText}`);
       const data = (await res.json()) as { data?: Array<Record<string, any>> };
       return Array.isArray(data.data) ? data.data : [];
@@ -570,6 +886,7 @@ export class LocalLlmClient {
         const res = await fetch(`${this.endpoints[idx]}/models`, {
           headers: this.authorization(this.endpoints[idx]),
           signal: signal ? AbortSignal.any([timeout, signal]) : timeout,
+          ...this.fetchPolicy(),
         });
         const body = await res.text().catch(() => "");
         if (res.status < 500 && res.status !== 429 && res.status !== 408) {
@@ -594,10 +911,22 @@ export class LocalLlmClient {
     tools: ToolDefinition[],
     requestId: string = randomUUID(),
     signal?: AbortSignal,
+    /** Receipt role override for auxiliary calls (e.g. "compaction"). */
+    purpose?: string,
   ): Promise<ChatMessage> {
+    return this.withReceipt(requestId, purpose, () =>
+      this.withOAuthRetry(this.endpoint, requestId, () => this.withParameterRetry(() => this.chatCompletionOnce(messages, tools, requestId, signal))),
+    );
+  }
+
+  private async chatCompletionOnce(messages: ChatMessage[], tools: ToolDefinition[], requestId: string, signal?: AbortSignal): Promise<ChatMessage> {
+    if (this.conn.protocol !== "openai-chat") return this.nativeCompletion(messages, tools, undefined, requestId, signal, this.conn.streamOnly);
+    if (this.conn.streamOnly) return this.chatCompletionStreamOnce(messages, tools, undefined, requestId, signal);
     return this.executeWithFailover("chatCompletion", async (currentEp) => {
       if (signal?.aborted) throw abortedError(requestId);
       const url = `${currentEp}/chat/completions`;
+      await this.prepareCredential(currentEp, requestId);
+      this.preflight(currentEp, requestId, JSON.stringify(messages).length + JSON.stringify(tools).length);
 
       // 1. Egress Interception & Quarantine (DISC-001..003, CTX-006, FAIL-003)
       const egressEvaluation = this.boundary.evaluateEgress(
@@ -653,6 +982,8 @@ export class LocalLlmClient {
         payload.tools = outboundTools;
         payload.tool_choice = "auto";
       }
+      if (this.conn.usage === "openrouter") payload.usage = { include: true };
+      this.omitUnsupported(payload);
 
       let res: Response;
       let data: ChatCompletionResponse;
@@ -662,11 +993,13 @@ export class LocalLlmClient {
           headers: {
             "Content-Type": "application/json",
             ...this.authorization(url),
+            ...this.providerHeaders(messages),
             "X-Request-ID": requestId,
             ...this.routingHeaders(),
           },
           body: JSON.stringify(payload),
           signal: this.combinedSignal(signal),
+          ...this.fetchPolicy(),
         });
 
         if (res.status === 401 && this.reloadAuthToken(url)) {
@@ -681,11 +1014,17 @@ export class LocalLlmClient {
       } catch (err: any) {
         throw classifyTransportError(err, signal, requestId, "connect");
       }
+      if (this.conn.providerId) {
+        this.pending = { usage: chatUsage(data.usage), providerRequestId: data.id, effectiveModel: (data as any).model, endpoint: currentEp };
+      }
       if (!data.choices || data.choices.length === 0) {
         throw new InferenceError("protocol_error", "provider", "Model returned empty choices array", { requestId, failoverEligible: false });
       }
 
       const choice = data.choices[0] as { message: ChatMessage; finish_reason?: string };
+      if (this.conn.providerId && choice.finish_reason === "error") {
+        throw new InferenceError("provider_error_frame", "provider", "Provider ended the response with finish_reason=error.", { requestId, partialText: typeof choice.message?.content === "string" ? choice.message.content : "" });
+      }
       if (choice.finish_reason === "length") {
         throw new InferenceError(
           "output_truncated",
@@ -710,9 +1049,26 @@ export class LocalLlmClient {
     requestId: string = randomUUID(),
     signal?: AbortSignal,
   ): Promise<ChatMessage> {
+    return this.withReceipt(requestId, undefined, () =>
+      this.withOAuthRetry(this.endpoint, requestId, () =>
+        this.withParameterRetry(() => this.chatCompletionStreamOnce(messages, tools, onToken, requestId, signal)),
+      ),
+    );
+  }
+
+  private async chatCompletionStreamOnce(
+    messages: ChatMessage[],
+    tools: ToolDefinition[],
+    onToken: StreamTokenCallback | undefined,
+    requestId: string,
+    signal?: AbortSignal,
+  ): Promise<ChatMessage> {
+    if (this.conn.protocol !== "openai-chat") return this.nativeCompletion(messages, tools, onToken, requestId, signal, true);
     return this.executeWithFailover("chatCompletionStream", async (currentEp) => {
       if (signal?.aborted) throw abortedError(requestId);
       const url = `${currentEp}/chat/completions`;
+      await this.prepareCredential(currentEp, requestId);
+      this.preflight(currentEp, requestId, JSON.stringify(messages).length + JSON.stringify(tools).length);
 
       // 1. Egress Interception & Quarantine (DISC-001..003, CTX-006, FAIL-003)
       const egressEvaluation = this.boundary.evaluateEgress(
@@ -769,6 +1125,9 @@ export class LocalLlmClient {
         payload.tools = outboundTools;
         payload.tool_choice = "auto";
       }
+      if (this.conn.usage === "openrouter") payload.usage = { include: true };
+      if (this.conn.usage === "openrouter" || this.conn.usage === "stream-options") payload.stream_options = { include_usage: true };
+      this.omitUnsupported(payload);
 
       let res: Response;
       try {
@@ -777,11 +1136,13 @@ export class LocalLlmClient {
           headers: {
             "Content-Type": "application/json",
             ...this.authorization(url),
+            ...this.providerHeaders(messages),
             "X-Request-ID": requestId,
             ...this.routingHeaders(),
           },
           body: JSON.stringify(payload),
           signal: this.combinedSignal(signal),
+          ...this.fetchPolicy(),
         });
       } catch (err: any) {
         // No resend here: a rejected fetch does not prove the gateway never admitted the request, and a
@@ -801,6 +1162,7 @@ export class LocalLlmClient {
       let fullContent = "";
       let finishReason: string | undefined;
       let sawDone = false;
+      if (this.conn.providerId) this.pending = { endpoint: currentEp };
       const toolCallsMap: Map<number, { id: string; name: string; args: string }> = new Map();
 
       const reader = res.body.getReader();
@@ -841,6 +1203,11 @@ export class LocalLlmClient {
             hints,
             ...classification,
           });
+        }
+        if (this.pending && chunk && typeof chunk === "object") {
+          if (chunk.usage) this.pending.usage = chatUsage(chunk.usage);
+          if (typeof chunk.id === "string") this.pending.providerRequestId ??= chunk.id;
+          if (typeof chunk.model === "string") this.pending.effectiveModel ??= chunk.model;
         }
         if (chunk.choices?.[0]?.finish_reason) finishReason = chunk.choices[0].finish_reason;
         const delta = chunk.choices?.[0]?.delta;
@@ -898,6 +1265,9 @@ export class LocalLlmClient {
         if (!postCompletionTransportError) throw classified;
       }
 
+      if (this.conn.providerId && finishReason === "error") {
+        throw new InferenceError("provider_error_frame", "provider", "Provider ended the stream with finish_reason=error.", { requestId, partialText: fullContent });
+      }
       if (!finishReason && !sawDone) {
         throw new InferenceError(
           "stream_incomplete",
@@ -935,6 +1305,8 @@ export class LocalLlmClient {
       // The stream completed with nothing in it; the non-streaming re-request is a new operation with its own
       // X-Request-ID so the provider's records never show two executions under one request ID.
       if (!fullContent && assembledToolCalls.length === 0) {
+        // Provider connections stay under this request's single receipt.
+        if (this.conn.providerId) return this.chatCompletionOnce(messages, tools, randomUUID(), signal);
         return this.chatCompletion(messages, tools, randomUUID(), signal);
       }
 
@@ -943,6 +1315,147 @@ export class LocalLlmClient {
         content: fullContent || null,
         ...(assembledToolCalls.length > 0 ? { tool_calls: assembledToolCalls } : {}),
       };
+    });
+  }
+
+  /** Egress interception (DISC-001..003, CTX-006, FAIL-003) of messages and tools bound for `currentEp`. */
+  private egress(messages: ChatMessage[], tools: ToolDefinition[], currentEp: string): { messages: ChatMessage[]; tools: ToolDefinition[] } {
+    const ctx = { taskId: this.taskId, sessionId: this.sessionId, sourceBoundary: "HOST_LOCAL" as const };
+    const m = this.boundary.evaluateEgress(messages, currentEp, ctx);
+    if (!m.allowed) throw new Error(m.reason || `Egress to endpoint '${currentEp}' denied by InformationFlowBoundary [FAIL-003].`);
+    let outTools = tools;
+    if (tools.length > 0) {
+      const t = this.boundary.evaluateEgress(tools, currentEp, ctx);
+      if (!t.allowed) throw new Error(t.reason || `Egress of tools to endpoint '${currentEp}' denied by InformationFlowBoundary [FAIL-003].`);
+      outTools = t.sanitizedPayload || tools;
+    }
+    return { messages: this.sanitizeHistory(m.sanitizedPayload || messages), tools: outTools };
+  }
+
+  /** A provider-reported stream error, typed by what it says about the provider. Partial output is never used. */
+  private fromStreamError(e: ProviderStreamError, requestId: string): InferenceError {
+    if (e.malformed) return new InferenceError("malformed_event", "provider", e.message, { requestId, partialText: e.partialText, failoverEligible: false });
+    const t = e.errorType ?? "";
+    const classification: ProviderClassification =
+      t === "context_length_exceeded" ? { condition: "CAPACITY_REJECTED", execution: "NOT_EXECUTED" }
+      : t === "overloaded_error" ? { condition: "OVERLOADED", execution: "UNKNOWN" }
+      : t === "rate_limit_error" || t === "rate_limit_exceeded" ? { condition: "RATE_LIMITED", execution: "UNKNOWN" }
+      : t === "invalid_request_error" ? { condition: "REQUEST_REJECTED", execution: "UNKNOWN" }
+      : t === "authentication_error" || t === "permission_error" ? { condition: "AUTH_FAILURE", execution: "UNKNOWN" }
+      : t === "billing_error" || t === "insufficient_quota" ? { condition: "QUOTA_EXHAUSTED", execution: "UNKNOWN" }
+      : { condition: "TEMPORARILY_UNAVAILABLE", execution: "UNKNOWN" };
+    return new InferenceError("provider_error_frame", "provider", redactSecrets(e.message).slice(0, MAX_PROVIDER_ERROR_CHARS), {
+      requestId,
+      partialText: e.partialText,
+      hints: t ? { errorType: t } : {},
+      ...classification,
+    });
+  }
+
+  /**
+   * Anthropic Messages / OpenAI Responses request. The result is used only when the provider's terminal event arrived:
+   * an incomplete stream, a truncated output or a provider error yields a typed failure and no tool call runs.
+   */
+  private async nativeCompletion(
+    messages: ChatMessage[],
+    tools: ToolDefinition[],
+    onToken: StreamTokenCallback | undefined,
+    requestId: string,
+    signal: AbortSignal | undefined,
+    stream: boolean,
+  ): Promise<ChatMessage> {
+    return this.executeWithFailover(stream ? "chatCompletionStream" : "chatCompletion", async (currentEp) => {
+      if (signal?.aborted) throw abortedError(requestId);
+      await this.prepareCredential(currentEp, requestId);
+      this.preflight(currentEp, requestId, JSON.stringify(messages).length + JSON.stringify(tools).length);
+      const outbound = this.egress(messages, tools, currentEp);
+      const anthropic = this.conn.protocol === "anthropic-messages";
+      const owner = `${this.conn.providerId}:${this.model}`;
+      const input: NativeRequestInput = {
+        model: this.model,
+        messages: outbound.messages,
+        tools: outbound.tools,
+        temperature: this.temperature,
+        maxOutputTokens: this.maxOutputTokens,
+        stream,
+        owner,
+        reasoningEffort: this.reasoningEffort,
+        thinkingBudget: this.thinkingBudget,
+      };
+      const req = anthropic ? buildAnthropicRequest(input) : buildResponsesRequest(input);
+      this.omitUnsupported(req.body);
+      if (req.droppedState) {
+        console.error(pc.dim(`[nexus] ${req.droppedState} earlier assistant turn(s) carry reasoning state owned by another provider/model or altered since capture; it is not replayed to ${owner} (visible text and tool calls are kept).`));
+      }
+      const url = `${currentEp}${req.path}`;
+      this.pending = { endpoint: currentEp };
+      let res: Response;
+      try {
+        res = await fetch(url, {
+          method: "POST",
+          headers: { "Content-Type": "application/json", ...this.authorization(url), ...this.providerHeaders(outbound.messages), "X-Request-ID": requestId },
+          body: JSON.stringify(req.body),
+          signal: this.combinedSignal(signal),
+          ...this.fetchPolicy(),
+        });
+      } catch (err: any) {
+        throw classifyTransportError(err, signal, requestId, "connect");
+      }
+      if (!res.ok || (stream && !res.body)) {
+        const errText = await res.text().catch(() => res.statusText);
+        throw this.httpError(res.status, errText, requestId, res.headers);
+      }
+      const keepReasoning = Boolean(this.reasoningEffort);
+      let result: NativeResult;
+      if (!stream) {
+        let data: any;
+        try {
+          data = await res.json();
+        } catch (err: any) {
+          if (err?.name === "SyntaxError") throw new InferenceError("malformed_event", "provider", "Provider returned a non-JSON response body.", { requestId, failoverEligible: false });
+          throw classifyTransportError(err, signal, requestId, "stream");
+        }
+        try {
+          result = anthropic ? parseAnthropicResponse(data, owner) : parseResponsesResponse(data, owner, keepReasoning);
+        } catch (e) {
+          throw e instanceof ProviderStreamError ? this.fromStreamError(e, requestId) : e;
+        }
+      } else {
+        const parser = anthropic ? anthropicStreamParser(owner, onToken) : responsesStreamParser(owner, keepReasoning, onToken);
+        try {
+          await readSse(res.body!, (name, raw) => {
+            let data: any;
+            try {
+              data = JSON.parse(raw);
+            } catch {
+              throw new ProviderStreamError(`Malformed stream event: ${raw.slice(0, 120)}`, undefined, parser.text(), true);
+            }
+            parser.event(name, data);
+          });
+        } catch (err: any) {
+          if (err instanceof ProviderStreamError) throw this.fromStreamError(err, requestId);
+          throw classifyTransportError(err, signal, requestId, "stream", parser.text());
+        }
+        result = parser.result();
+      }
+      this.pending = { endpoint: currentEp, usage: result.usage, providerRequestId: result.providerRequestId, effectiveModel: result.effectiveModel };
+      if (result.finish === "incomplete") {
+        throw new InferenceError("stream_incomplete", "transport", "Inference stream ended before the provider's terminal event; response is incomplete and no tool call from it runs.", {
+          requestId,
+          partialText: result.text,
+        });
+      }
+      if (result.finish === "length") {
+        throw new InferenceError(
+          "output_truncated",
+          "client",
+          result.message.tool_calls?.length
+            ? "Model output was truncated (max output tokens) inside a tool call; refusing to run partial arguments."
+            : "Model output was truncated (max output tokens); refusing to treat it as a complete answer.",
+          { requestId, partialText: result.text, failoverEligible: false },
+        );
+      }
+      return result.message;
     });
   }
 
@@ -955,7 +1468,8 @@ export class LocalLlmClient {
   private httpError(status: number, body: string, requestId: string, headers?: Headers): InferenceError {
     const providerSide = status >= 500 || status === 429 || status === 408;
     const hints = providerHints(headers, body);
-    return new InferenceError("http_error", providerSide ? "provider" : "client", `Inference error (HTTP ${status}): ${body}`, {
+    const shown = this.conn.providerId ? redactSecrets(body).slice(0, MAX_PROVIDER_ERROR_CHARS) : body;
+    return new InferenceError("http_error", providerSide ? "provider" : "client", `Inference error (HTTP ${status}): ${shown}`, {
       httpStatus: status,
       requestId,
       hints,
@@ -968,6 +1482,10 @@ export class LocalLlmClient {
   }
 
   async generateEmbedding(text: string, model?: string): Promise<number[]> {
+    // Bulk repository indexing is not a disclosure any provider selection authorizes; search stays lexical instead.
+    if (this.conn.providerId && this.disclosureOf() === "cloud") {
+      throw new Error(`Embeddings are not sent to cloud provider '${this.conn.providerId}'.`);
+    }
     return this.executeWithFailover("generateEmbedding", async (currentEp) => {
       const url = `${currentEp}/embeddings`;
 

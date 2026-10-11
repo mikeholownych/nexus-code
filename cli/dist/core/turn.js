@@ -98,8 +98,20 @@ export function summarizeTurn(t) {
     }
     if (exec === "BLOCKED")
         return { heading: "TURN BLOCKED", line: `execution=BLOCKED outcome=NOT_ESTABLISHED${tail}` };
-    if (exec === "LIMIT_REACHED")
+    if (exec === "LIMIT_REACHED") {
+        const c = t.continuation;
+        const segments = c && c.segments > 1 ? ` across ${c.segments} segments of ${c.segmentSteps}` : "";
+        if (t.reason === "STAGNATION_DETECTED") {
+            return { heading: "STOPPED - NO PROGRESS", line: `execution=LIMIT_REACHED outcome=NOT_ESTABLISHED (STAGNATION_DETECTED${t.detail ? `: ${t.detail}` : ""}; ${t.steps.used} steps${segments})` };
+        }
+        if (t.reason === "TIME_BUDGET_EXHAUSTED") {
+            return { heading: "TIME BUDGET EXHAUSTED", line: `execution=LIMIT_REACHED outcome=NOT_ESTABLISHED (TIME_BUDGET_EXHAUSTED${t.detail ? `: ${t.detail}` : ""}; ${t.steps.used} steps${segments})` };
+        }
+        if (t.reason === "STEP_BUDGET_EXHAUSTED") {
+            return { heading: "STEP BUDGET EXHAUSTED", line: `execution=LIMIT_REACHED outcome=NOT_ESTABLISHED (${t.steps.used}/${t.steps.max} steps${segments}; raise --max-total-steps to allow more)` };
+        }
         return { heading: "STEP LIMIT REACHED", line: `execution=LIMIT_REACHED outcome=NOT_ESTABLISHED (${t.steps.used}/${t.steps.max} steps)` };
+    }
     switch (t.outcome) {
         case "VERIFIED":
             return { heading: "TASK COMPLETED - VERIFIED", line: `execution=COMPLETED outcome=VERIFIED (${t.verification?.command})` };
@@ -108,6 +120,9 @@ export function summarizeTurn(t) {
         case "UNVERIFIED":
             return { heading: "TURN ENDED - UNVERIFIED", line: `execution=COMPLETED outcome=UNVERIFIED${tail}` };
         default:
+            if (t.reason === "REQUIREMENTS_INCOMPLETE") {
+                return { heading: "TURN ENDED - REQUIREMENTS OPEN", line: `execution=COMPLETED outcome=NOT_ESTABLISHED${tail}` };
+            }
             return { heading: "TURN ENDED - NOT ESTABLISHED", line: `execution=COMPLETED outcome=NOT_ESTABLISHED${tail}` };
     }
 }

@@ -64,11 +64,15 @@ export class WorkspaceIdentityMismatchError extends TaskStateError {
         this.name = "WorkspaceIdentityMismatchError";
     }
 }
+/** Where durable task state is written unless a directory is given. */
+export function defaultTaskStateDir() {
+    return path.join(os.homedir(), ".nexus", "tasks");
+}
 export class DurableStateManager {
     baseDir;
     workspacePaths;
     constructor(options = {}) {
-        this.baseDir = options.baseDir || path.join(os.homedir(), ".nexus", "tasks");
+        this.baseDir = options.baseDir || defaultTaskStateDir();
         this.workspacePaths = options.workspacePaths || [];
         if (!fs.existsSync(this.baseDir)) {
             fs.mkdirSync(this.baseDir, { recursive: true });

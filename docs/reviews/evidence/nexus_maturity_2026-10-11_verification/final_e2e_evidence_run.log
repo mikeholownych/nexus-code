@@ -1,0 +1,11 @@
+2026-10-11T18:59:13Z
+✔ the active TUI end to end through a pseudo-terminal (18371.31172ms)
+ℹ tests 1
+ℹ suites 0
+ℹ pass 1
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 18680.317913
+E2E=0

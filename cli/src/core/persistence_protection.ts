@@ -1,5 +1,5 @@
 import * as fs from "node:fs";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { InformationFlowBoundary } from "./egress.js";
 import { WorkspacePath } from "./workspace_path.js";
 
@@ -18,6 +18,39 @@ export function redactForPersistence<T>(value: T): T {
   return InformationFlowBoundary.getGlobalInstance().redactForDurablePersistence(value);
 }
 
+/** Provider tool-call ids at least this long are eligible for the high-entropy classifier (see egress.ts). */
+const ENTROPY_CHECKED_LENGTH = 20;
+
+/**
+ * A short, stable stand-in for a long provider tool-call id. Irreversible and below the high-entropy classifier's
+ * length, so the call and its result keep the same, distinct id on disk instead of all becoming one redaction marker.
+ */
+export function stableToolCallId(id: string): string {
+  if (typeof id !== "string" || id.length < ENTROPY_CHECKED_LENGTH) return id;
+  return `call_${createHash("sha256").update(id).digest("hex").slice(0, 12)}`;
+}
+
+/** Messages ready for a durable archive: stable tool-call ids, then the canonical irreversible redaction. */
+export function protectArchivedMessages<T>(messages: T[]): T[] {
+  return redactForPersistence(withStableToolCallIds({ messages }).messages);
+}
+
+/** Copy of a record whose `messages` carry stable tool-call ids (see `stableToolCallId`). */
+function withStableToolCallIds<T>(value: T): T {
+  const record = value as unknown as { messages?: unknown };
+  if (!record || typeof record !== "object" || !Array.isArray(record.messages)) return value;
+  const messages = record.messages.map((message: any) => {
+    if (!message || typeof message !== "object") return message;
+    let next = message;
+    if (typeof message.tool_call_id === "string") next = { ...next, tool_call_id: stableToolCallId(message.tool_call_id) };
+    if (Array.isArray(message.tool_calls)) {
+      next = { ...next, tool_calls: message.tool_calls.map((call: any) => (call && typeof call.id === "string" ? { ...call, id: stableToolCallId(call.id) } : call)) };
+    }
+    return next;
+  });
+  return { ...(value as any), messages } as T;
+}
+
 /**
  * Protect a task-state record while preserving only the WorkspacePath supplied
  * by the selected workspace model. Arbitrary objects receive no path exception.
@@ -26,7 +59,8 @@ export function redactTaskStateForPersistence<T extends {
   workspacePath: string;
   workspace?: string;
   worktreeBinding?: { worktreePath?: string } | null;
-}>(value: T, workspacePaths: readonly WorkspacePath[] = []): T {
+}>(original: T, workspacePaths: readonly WorkspacePath[] = []): T {
+  const value = withStableToolCallIds(original);
   if (workspacePaths.length === 0) return redactForPersistence(value);
 
   for (const identity of workspacePaths) identity.assertCurrent();

@@ -180,3 +180,24 @@ Settings are loaded with the following precedence:
 2. **Current Directory** (`.env` in current workspace)
 3. **Global User Config** (`~/.config/nexus/config.env`)
 4. **Installation Defaults** (`/home/mike/nexus-code/cli/.env`)
+
+Cloud destinations and credentials are the exception: only CLI flags, the operator's own environment and
+`~/.config/nexus/config.env` can select a cloud provider (`--provider`, `NEXUS_PROVIDER`) or decide where a stored
+credential is sent. A project `.env` cannot.
+
+## ☁️ Cloud Providers (opt-in)
+
+The appliance stays the default. OpenRouter, OpenAI (Responses), Anthropic (Messages) and any OpenAI-compatible
+service can be selected explicitly, each with its own key:
+
+In the live view, `/model` opens a model picker across the appliance and every connected provider; **ctrl+p**
+there connects a provider (API key, OpenRouter sign-in, or unofficial ChatGPT-plan / GitHub Copilot sign-in).
+Connections already registered in Codex CLI, opencode, crush or the Copilot plugins are picked up automatically.
+
+```bash
+nexus providers                                              # providers, credential status, destinations
+nexus providers verify --provider anthropic --model <id>     # live completion + tool round trip, no workspace content
+nexus run --provider openrouter --model anthropic/claude-sonnet-4.5 "..."
+```
+
+See [docs/CLOUD_PROVIDERS.md](docs/CLOUD_PROVIDERS.md) for setup, disclosure rules, roles, limits and receipts.

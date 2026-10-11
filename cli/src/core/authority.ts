@@ -14,7 +14,7 @@ import {
   ResourceConfinementHook,
   extractTargetResources,
 } from "./spine.js";
-import { defaultRegistry } from "./capabilities.js";
+import { CapabilityRegistry, defaultRegistry } from "./capabilities.js";
 
 export type AuthorityScope = "exact" | "subtree" | "workspace" | "full_access";
 
@@ -34,6 +34,8 @@ export interface AuthorityConfig {
   grants?: AuthorityGrant[];
   allowedDomains?: string[];
   safeReadOnlyCommandRegex?: RegExp;
+  /** Registry tool names resolve against; defaults to the shared baseline registry. */
+  registry?: CapabilityRegistry;
 }
 
 /**
@@ -135,8 +137,10 @@ export class AuthorityAdmissionEngine {
   private grants: AuthorityGrant[] = [];
   private allowedDomains: Set<string> | null = null;
   private safeCommandRegex: RegExp = DEFAULT_SAFE_READONLY_COMMAND_REGEX;
+  private readonly registry: CapabilityRegistry;
 
   constructor(config: AuthorityConfig = {}) {
+    this.registry = config.registry ?? defaultRegistry;
     this.fullAccess = Boolean(config.fullAccess);
     this.readOnly = Boolean(config.readOnly);
     this.grants = config.grants ? [...config.grants] : [];
@@ -197,7 +201,7 @@ export class AuthorityAdmissionEngine {
     }
 
     // Resolve canonical capability
-    const capability = defaultRegistry.getByToolName(toolName);
+    const capability = this.registry.getByToolName(toolName);
     if (!capability) {
       return {
         admitted: false,
@@ -267,7 +271,7 @@ export class AuthorityAdmissionEngine {
     const wsRoot = path.resolve(context.workspaceRoot || process.cwd());
     const actor = request.actor || "agent";
     const domain = request.executionDomain || "agent_orchestration";
-    const capability = defaultRegistry.getByToolName(request.toolName);
+    const capability = this.registry.getByToolName(request.toolName);
     const capId = capability ? capability.id : request.toolName;
 
     // In full-access mode, resource confinement is broad (AUTH-007, AUTH-008)

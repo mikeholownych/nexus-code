@@ -13,10 +13,11 @@ export const BANG = { name: "!", usage: "!<command>", summary: "Run a shell comm
 export const SLASH_COMMANDS = [
     { name: "help", usage: "/help", summary: "List the slash commands", aliases: ["?"] },
     { name: "status", usage: "/status", summary: "Workspace, model, mode, endpoint and session" },
+    { name: "doctor", usage: "/doctor [--deep] [--fix [--yes]]", summary: "Diagnose this session's configuration, endpoint, engine, shell and state; --fix repairs (runs while busy without --fix)" },
     { name: "clear", usage: "/clear", summary: "Reset the conversation context", aliases: ["reset"] },
     { name: "compact", usage: "/compact [--llm]", summary: "Condense earlier messages to free context" },
     { name: "mode", usage: "/mode [auto|review]", summary: "Run edits and commands freely, or ask first" },
-    { name: "model", usage: "/model [name]", summary: "List available models or switch" },
+    { name: "model", usage: "/model [provider] [model]", summary: "Choose a model from any connected provider (ctrl+p connects one)" },
     { name: "shell", usage: "/shell [bash|zsh|sh]", summary: "Show or switch the command shell" },
     { name: "cd", usage: "/cd [path]", summary: "Show or change the workspace directory" },
     { name: "tokens", usage: "/tokens", summary: "Context window use and session token totals", aliases: ["cost"] },
@@ -41,6 +42,7 @@ export const SLASH_COMMANDS = [
     { name: "init", usage: "/init", summary: "Create a project rules file" },
     { name: "onboard", usage: "/onboard", summary: "Scan the workspace and write a tailored AGENTS.md" },
     { name: "plan", usage: "/plan [add <phase>|start <n>|done <n>|clear]", summary: "Show or edit the active plan" },
+    { name: "requirements", usage: "/requirements [accept <id>...|clear]", summary: "The objective's acceptance requirements; accept a scope reduction, or clear the objective to start a new one" },
     { name: "knowledge", usage: "/knowledge [set <key> <rule>|delete <key>]", summary: "Persistent project knowledge" },
     { name: "skills", usage: "/skills", summary: "Discovered agent skills" },
     { name: "skill", usage: "/skill <name> | init <name>", summary: "Show a skill or scaffold a new one" },
@@ -52,7 +54,6 @@ export const SLASH_COMMANDS = [
     { name: "team", usage: "/team <role|full> [--independent-review] <objective>", summary: "Run a role or the full team as a durable operation (researcher, architect, implementer, tester, reviewer)" },
     { name: "theme", usage: "/theme [name]", summary: "Show or save the colour theme" },
     { name: "recover", usage: "/recover [task-id]", summary: "Recover durable task state" },
-    { name: "tui", usage: "/tui", summary: "This is the live view" },
     { name: "exit", usage: "/exit", summary: "Quit Nexus", aliases: ["quit", "q"] },
 ];
 /** The catalogue as announced in `hello`. */

@@ -3,6 +3,16 @@ import * as path from "node:path";
 import * as os from "node:os";
 import { pathToFileURL } from "node:url";
 import { Worker } from "node:worker_threads";
+/** Directories Nexus loads plugin modules (`*.js`, `*.mjs`) from at turn start. */
+export function pluginDirs(workspace) {
+    return [
+        path.join(workspace, ".nexus", "plugins"),
+        path.join(workspace, "plugins"),
+        path.join(os.homedir(), ".nexus", "plugins"),
+        path.join(os.homedir(), ".config", "nexus", "plugins"),
+        path.join(os.homedir(), ".config", "opencode", "plugins"),
+    ];
+}
 export class PluginManager {
     workspace;
     plugins = new Map();
@@ -15,14 +25,7 @@ export class PluginManager {
         this.plugins.clear();
         this.customToolsMap.clear();
         this.customToolDefs = [];
-        const pluginDirs = [
-            path.join(this.workspace, ".nexus", "plugins"),
-            path.join(this.workspace, "plugins"),
-            path.join(os.homedir(), ".nexus", "plugins"),
-            path.join(os.homedir(), ".config", "nexus", "plugins"),
-            path.join(os.homedir(), ".config", "opencode", "plugins"),
-        ];
-        for (const dir of pluginDirs) {
+        for (const dir of pluginDirs(this.workspace)) {
             if (!fs.existsSync(dir))
                 continue;
             try {

@@ -129,6 +129,10 @@ test("a pasted multiline objective reaches the agent intact as exactly one promp
     await sleep(300);
 
     await send(pasteBytes());
+    // A multi-line paste is one buffer ([Pasted text #1: 22 lines]); ctrl+x turns it back into editable draft text.
+    // The terminal is redrawn by changed cells only, so spaces may be cursor moves in the raw stream.
+    assert.ok(stripCsi(pty).replace(/\s/g, "").includes("[Pastedtext#1:22lines]"), `no paste buffer label${diag()}`);
+    await send("\x18");
     await send("\x7f");
     await send("\x7f");
     await send("\x7f");

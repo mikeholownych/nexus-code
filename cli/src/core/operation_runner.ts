@@ -8,6 +8,8 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { AutonomousAgent } from "../agent.js";
 import { LocalLlmClient, mayBindCredential, storedCredentialFor } from "../client.js";
+import { providerDefinition } from "../providers.js";
+import { providerApiKey } from "../credentials.js";
 import type { ChatMessage, HarnessConfig } from "../types.js";
 import { realRecoveryClock, type RecoveryClock } from "./provider_recovery.js";
 import { ConvergenceScheduler, unitBaseTask, type Decision, type DurableOperationState, type OperationEvent, type UnitRunResult, type WorkUnit } from "./operation.js";
@@ -439,25 +441,30 @@ const CODER_PREFERRED = ["implementation", "verification"];
 
 /** Resources implied by the existing configuration (primary model, fallback endpoints, planner and coder slots). */
 export function resourcesFromConfig(config: HarnessConfig): ResourceDescriptor[] {
-  const account = credentialFingerprint(config.apiKey) ?? credentialFingerprint(storedCredentialFor(config.endpoint) ?? undefined);
-  const make = (id: string, endpoint: string, model: string, rank: number, taskClass?: string, key = account, preferredFor?: string[]): ResourceDescriptor => ({
+  const account = credentialFingerprint(config.apiKey) ?? (config.provider ? undefined : credentialFingerprint(storedCredentialFor(config.endpoint) ?? undefined));
+  const make = (id: string, endpoint: string, model: string, rank: number, taskClass?: string, key = account, preferredFor?: string[], providerId?: string): ResourceDescriptor => ({
     id,
-    provider: origin(normalizeEndpoint(endpoint)),
-    endpoint: normalizeEndpoint(endpoint),
+    provider: providerId ?? origin(normalizeEndpoint(endpoint)),
+    endpoint: providerId ? endpoint.trim().replace(/\/+$/, "") : normalizeEndpoint(endpoint),
     model,
+    ...(providerId ? { providerId } : {}),
     capabilities: ["tools"],
     rank,
     ...(key ? { account: key } : {}),
     ...(taskClass ? { taskClass } : {}),
     ...(preferredFor ? { preferredFor } : {}),
   });
-  const out: ResourceDescriptor[] = [make("primary", config.endpoint, config.model, 0, config.taskClass)];
-  (config.fallbackEndpoints ?? []).forEach((ep, i) => out.push(make(`primary@fallback${i + 1}`, ep, config.model, 1, config.taskClass)));
+  const out: ResourceDescriptor[] = [make("primary", config.endpoint, config.model, 0, config.taskClass, account, undefined, config.provider)];
+  if (!config.provider) (config.fallbackEndpoints ?? []).forEach((ep, i) => out.push(make(`primary@fallback${i + 1}`, ep, config.model, 1, config.taskClass)));
+  // Same role binding as the agent: own provider, else own endpoint, else the main connection.
+  const roleProvider = (own?: string, ownEndpoint?: string) => own ?? (ownEndpoint ? undefined : config.provider);
   if (config.plannerModel) {
-    out.push(make("planner", config.plannerEndpoint ?? config.endpoint, config.plannerModel, 2, config.plannerTaskClass, credentialFingerprint(config.plannerApiKey) ?? account, PLANNER_PREFERRED));
+    const p = roleProvider(config.plannerProvider, config.plannerEndpoint);
+    out.push(make("planner", config.plannerEndpoint ?? config.endpoint, config.plannerModel, 2, config.plannerTaskClass, credentialFingerprint(config.plannerApiKey) ?? account, PLANNER_PREFERRED, p));
   }
   if (config.coderModel) {
-    out.push(make("coder", config.coderEndpoint ?? config.endpoint, config.coderModel, 2, config.taskClass, credentialFingerprint(config.coderApiKey) ?? account, CODER_PREFERRED));
+    const p = roleProvider(config.coderProvider, config.coderEndpoint);
+    out.push(make("coder", config.coderEndpoint ?? config.endpoint, config.coderModel, 2, config.taskClass, credentialFingerprint(config.coderApiKey) ?? account, CODER_PREFERRED, p));
   }
   const seen = new Set<string>();
   return out.filter((r) => {
@@ -510,15 +517,24 @@ export class AgentWorkUnitExecutor implements WorkUnitExecutor {
     // The client sends a key only to the origin it belongs to, so the configured key never reaches another provider.
     // A spec names apiKeyEnv for its own provider keys; it cannot re-home a stored credential to another origin.
     const specKey = resource.apiKeyEnv ? process.env[resource.apiKeyEnv] : undefined;
-    const credential = resource.apiKeyEnv
-      ? { apiKey: mayBindCredential(specKey, resource.endpoint) ? specKey : undefined, credentialOrigin: origin(resource.endpoint) }
+    const def = providerDefinition(resource.providerId);
+    // A provider resource uses its own key (apiKeyEnv, else the provider's variable), bound to its own origin.
+    const ownKey = def ? specKey ?? providerApiKey(def.id, def.credentialEnv) : specKey;
+    const credential = def || resource.apiKeyEnv
+      ? { apiKey: mayBindCredential(ownKey, resource.endpoint) ? ownKey : undefined, credentialOrigin: origin(resource.endpoint) }
       : { apiKey: base.apiKey, credentialOrigin: base.credentialOrigin ?? origin(normalizeEndpoint(base.endpoint)) };
+    // A resource that names a cloud provider in the operator's spec is an explicit selection of that destination.
+    const authorizedDisclosureOrigins = def
+      ? [...(base.authorizedDisclosureOrigins ?? []), origin(resource.endpoint)]
+      : base.authorizedDisclosureOrigins;
     const contextLimit = Math.min(base.contextLimit ?? 65_536, resource.contextLength ?? Number.POSITIVE_INFINITY);
     return {
       ...base,
       endpoint: resource.endpoint,
       model: resource.model,
+      provider: resource.providerId,
       ...credential,
+      ...(authorizedDisclosureOrigins ? { authorizedDisclosureOrigins } : {}),
       pinEndpoint: true,
       fallbackEndpoints: [],
       taskClass: resource.taskClass ?? unit?.taskClass ?? base.taskClass,
@@ -529,6 +545,8 @@ export class AgentWorkUnitExecutor implements WorkUnitExecutor {
       coderModel: undefined,
       coderEndpoint: undefined,
       coderApiKey: undefined,
+      plannerProvider: undefined,
+      coderProvider: undefined,
     };
   }
 
@@ -666,11 +684,18 @@ export class AgentWorkUnitExecutor implements WorkUnitExecutor {
       };
     }
     if (turn.execution === "LIMIT_REACHED") {
+      // A continued unit stops only on a budget or on stagnation; say which, so the operator's choice is informed.
+      const why =
+        turn.reason === "STAGNATION_DETECTED"
+          ? `stopped making progress after ${turn.steps.used} steps${turn.detail ? ` (${turn.detail})` : ""}`
+          : turn.reason === "TIME_BUDGET_EXHAUSTED"
+            ? `ran out of its time budget after ${turn.steps.used} steps`
+            : `used all ${turn.steps.max} steps without finishing`;
       return {
         kind: "failed",
         cause: "EXECUTION_FAILED",
-        reason: `step limit ${turn.steps.max} reached`,
-        question: `${unit.title} used all ${turn.steps.max} steps without finishing. Continue from its history with a fresh step budget, or revise it?`,
+        reason: turn.reason === "STAGNATION_DETECTED" || turn.reason === "TIME_BUDGET_EXHAUSTED" ? `${turn.reason}: ${why}` : `step limit ${turn.steps.max} reached`,
+        question: `${unit.title} ${why}. Continue from its history with a fresh step budget, or revise it?`,
         options: [
           { label: "continue with more steps", action: { kind: "retry" } },
           { label: "revise the unit (note required)", action: { kind: "revise" } },

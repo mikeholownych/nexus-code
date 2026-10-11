@@ -15,6 +15,11 @@ export interface ChatMessage {
   tool_calls?: ToolCall[];
   tool_call_id?: string;
   name?: string;
+  /**
+   * Opaque provider-owned replay state (reasoning signatures / encrypted reasoning items). Never sent to any provider
+   * other than `owner` ("<provider>:<model>"); `digest` detects alteration (e.g. by persistence redaction).
+   */
+  provider_state?: { owner: string; items: any[]; digest: string };
 }
 
 export interface ToolParameterProperty {
@@ -41,7 +46,12 @@ export interface HarnessConfig {
   endpoint: string;          // e.g. "http://localhost:1234/v1" (LM Studio) or "http://localhost:8000/v1" (vLLM)
   model: string;             // e.g. "qwen2.5-coder-32b-instruct"
   apiKey?: string;           // Optional for local servers (defaults to "local")
-  maxSteps: number;          // Default 30
+  maxSteps: number;          // Steps per segment (default 30). With `continuation`, a segment boundary is a checkpoint, not the end of the task.
+  /**
+   * Automatic continuation past `maxSteps` while the work makes progress (see AutonomousAgent.runTurn). Absent:
+   * `maxSteps` ends the turn (LIMIT_REACHED), the legacy single-segment behaviour.
+   */
+  continuation?: ContinuationBudget;
   temperature: number;       // Default 0.2 for precise coding
   workspace: string;         // Working directory for tools
   shell: string;             // Linux shell: "bash", "zsh", "sh" (default: "bash")
@@ -69,6 +79,15 @@ export interface HarnessConfig {
   coderEndpoint?: string;    // Dedicated endpoint for coder model
   coderApiKey?: string;      // API key for coder model
   tdd?: boolean;             // Enforce strict RED-GREEN-REFACTOR protocol
+  provider?: string;         // Cloud provider id (see providers.ts); undefined = the appliance/endpoint path
+  plannerProvider?: string;  // Provider for the planner role; undefined inherits the rules in agent.ts
+  coderProvider?: string;    // Provider for the coder role
+  /** Origins the operator authorized to receive task content when they are cloud destinations. */
+  authorizedDisclosureOrigins?: string[];
+  /** Origins that look local but forward to a cloud service (treated as cloud disclosure). */
+  cloudRoutedOrigins?: string[];
+  reasoningEffort?: string;  // OpenAI Responses reasoning effort; enables owner-scoped reasoning replay
+  anthropicThinkingBudget?: number; // Anthropic extended-thinking budget tokens; enables signed thinking replay
 }
 
 export interface ExecutionResult {
@@ -78,3 +97,25 @@ export interface ExecutionResult {
   /** The operation's deadline expired before an answer was received (bridge-level; the runner reports its own via `timed_out`). */
   timedOut?: boolean;
 }
+
+/** Resource budgets that bound an automatically continued turn. Each has its own termination reason. */
+export interface ContinuationBudget {
+  /** Total steps a turn may run across all segments (STEP_BUDGET_EXHAUSTED). */
+  maxTotalSteps: number;
+  /** Wall-clock budget of one turn in minutes (TIME_BUDGET_EXHAUSTED). */
+  maxTurnMinutes: number;
+  /** Consecutive steps without observed progress before the turn stops (STAGNATION_DETECTED). */
+  stagnationSteps: number;
+  /** Recovery notes the agent may inject for a repeated identical action before stopping (bounded recovery). */
+  maxRecoveries: number;
+  /** Times the agent may be asked to continue when it stops with acceptance requirements still open. */
+  maxCompletionNudges: number;
+}
+
+export const DEFAULT_CONTINUATION: ContinuationBudget = {
+  maxTotalSteps: 300,
+  maxTurnMinutes: 120,
+  stagnationSteps: 12,
+  maxRecoveries: 2,
+  maxCompletionNudges: 2,
+};

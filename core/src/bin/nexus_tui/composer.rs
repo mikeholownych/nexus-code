@@ -4,13 +4,49 @@ use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
 
 const HISTORY_LIMIT: usize = 200;
+/// Pastes with a line break, or longer than this many characters, become a paste buffer instead of draft text.
+pub const PASTE_BUFFER_CHARS: usize = 800;
+/// First placeholder character (Supplementary Private Use Area-A); paste n is `TOKEN_BASE + n`.
+const TOKEN_BASE: u32 = 0xF0000;
+const TOKEN_LIMIT: u32 = 0xFFFD;
 /// Columns taken by the `› ` / `  ` prefix in front of every composer row.
 pub const PREFIX_WIDTH: u16 = 2;
 const TAB: &str = "    ";
 
+/// Pasted text held outside the draft. The draft holds a single placeholder character for it, so the paste moves,
+/// deletes and wraps as one unit, and its content reaches the agent exactly as pasted.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Paste {
+    pub number: u32,
+    pub content: String,
+}
+
+impl Paste {
+    /// `[Pasted text #1: 24 lines]`, or the character count for one long line.
+    pub fn label(&self) -> String {
+        let lines = self.content.lines().count().max(1);
+        if self.content.contains('\n') {
+            let unit = if lines == 1 { "line" } else { "lines" };
+            format!("[Pasted text #{}: {lines} {unit}]", self.number)
+        } else {
+            format!("[Pasted text #{}: {} chars]", self.number, self.content.chars().count())
+        }
+    }
+}
+
+fn token_number(c: char) -> Option<u32> {
+    let code = u32::from(c);
+    (TOKEN_BASE..TOKEN_BASE + TOKEN_LIMIT)
+        .contains(&code)
+        .then(|| code - TOKEN_BASE)
+}
+
 #[derive(Clone, Debug, Default)]
 pub struct Composer {
     text: String,
+    /// Paste buffers referenced by placeholders in `text` (kept until the draft is submitted or cleared).
+    pastes: Vec<Paste>,
+    paste_seq: u32,
     /// Byte offset into `text`, always on a grapheme boundary.
     cursor: usize,
     history: Vec<String>,
@@ -58,17 +94,104 @@ impl Composer {
     pub fn clear(&mut self) {
         self.edited();
         self.text.clear();
+        self.pastes.clear();
         self.cursor = 0;
     }
 
+    /// A bracketed (or detected) paste. A paste with a line break, or a long one, becomes a paste buffer shown as
+    /// `[Pasted text #n: N lines]`; its content is kept exactly, apart from terminal line endings (CR, CRLF) which
+    /// become newlines. Short single-line pastes are ordinary draft text.
+    pub fn paste(&mut self, text: &str) {
+        let content = text.replace("\r\n", "\n").replace('\r', "\n");
+        if content.is_empty() {
+            return;
+        }
+        if !content.contains('\n') && content.chars().count() <= PASTE_BUFFER_CHARS {
+            self.insert(&content);
+            return;
+        }
+        if self.paste_seq + 1 >= TOKEN_LIMIT {
+            self.insert(&content);
+            return;
+        }
+        self.paste_seq += 1;
+        let number = self.paste_seq;
+        self.pastes.push(Paste { number, content });
+        let token = char::from_u32(TOKEN_BASE + number).expect("private-use code point");
+        self.edited();
+        self.text.insert(self.cursor, token);
+        self.cursor += token.len_utf8();
+    }
+
+    /// The paste whose placeholder is just before the cursor, else just after it.
+    pub fn paste_at_cursor(&self) -> Option<&Paste> {
+        let before = self.text[..self.cursor].chars().next_back().and_then(token_number);
+        let after = self.text[self.cursor..].chars().next().and_then(token_number);
+        before
+            .or(after)
+            .and_then(|number| self.pastes.iter().find(|p| p.number == number))
+    }
+
+    /// Replaces the placeholder at the cursor with its content as ordinary, editable draft text.
+    pub fn expand_paste_at_cursor(&mut self) -> bool {
+        let before = self.text[..self.cursor]
+            .char_indices()
+            .next_back()
+            .filter(|(_, c)| token_number(*c).is_some());
+        let after = self.text[self.cursor..]
+            .char_indices()
+            .next()
+            .filter(|(_, c)| token_number(*c).is_some())
+            .map(|(i, c)| (self.cursor + i, c));
+        let Some((at, token)) = before.or(after) else {
+            return false;
+        };
+        let number = token_number(token).unwrap_or_default();
+        let Some(content) = self.pastes.iter().find(|p| p.number == number).map(|p| p.content.clone()) else {
+            return false;
+        };
+        self.edited();
+        self.text.replace_range(at..at + token.len_utf8(), &content);
+        self.cursor = at + content.len();
+        true
+    }
+
+    /// The draft with each placeholder replaced by its paste, exactly as it will be submitted.
+    pub fn expand(&self, text: &str) -> String {
+        text.chars().fold(String::with_capacity(text.len()), |mut out, c| {
+            match token_number(c).and_then(|n| self.pastes.iter().find(|p| p.number == n)) {
+                Some(paste) => out.push_str(&paste.content),
+                None => out.push(c),
+            }
+            out
+        })
+    }
+
+    /// The draft with each placeholder shown as its label, for the transcript.
+    pub fn display(&self, text: &str) -> String {
+        text.chars().fold(String::with_capacity(text.len()), |mut out, c| {
+            match token_number(c).and_then(|n| self.pastes.iter().find(|p| p.number == n)) {
+                Some(paste) => out.push_str(&paste.label()),
+                None => out.push(c),
+            }
+            out
+        })
+    }
+
+    /// A paste buffer by number, while the draft still holds it.
+    pub fn paste_buffer(&self, number: u32) -> Option<&Paste> {
+        self.pastes.iter().find(|p| p.number == number)
+    }
+
     /// Inserts at the cursor. Carriage returns become newlines; control characters other than newline and tab
-    /// are dropped (the terminal would not show them and they would throw off the cursor column).
+    /// are dropped (the terminal would not show them and they would throw off the cursor column), and so are
+    /// paste placeholder characters, which only `paste` may create.
     pub fn insert(&mut self, text: &str) {
         let clean: String = text
             .replace("\r\n", "\n")
             .replace('\r', "\n")
             .chars()
-            .filter(|c| !c.is_control() || matches!(c, '\n' | '\t'))
+            .filter(|c| (!c.is_control() || matches!(c, '\n' | '\t')) && token_number(*c).is_none())
             .collect();
         if clean.is_empty() {
             return;
@@ -171,9 +294,12 @@ impl Composer {
         self.cursor = self.offset_in_line(next, next_end, column);
     }
 
-    /// Hands the draft over for submission, records it in history, and starts an empty draft.
+    /// Hands the draft over for submission with every paste expanded, records it in history, and starts an empty
+    /// draft.
     pub fn take(&mut self) -> String {
-        let text = std::mem::take(&mut self.text);
+        let raw = std::mem::take(&mut self.text);
+        let text = self.expand(&raw);
+        self.pastes.clear();
         self.cursor = 0;
         self.recall = None;
         self.stash.clear();
@@ -201,7 +327,17 @@ impl Composer {
             }
             let mut used = 0;
             for grapheme in line.graphemes(true) {
-                let shown = if grapheme == "\t" { TAB } else { grapheme };
+                let label = grapheme
+                    .chars()
+                    .next()
+                    .and_then(token_number)
+                    .and_then(|n| self.pastes.iter().find(|p| p.number == n))
+                    .map(|paste| fit(&paste.label(), room));
+                let shown = match &label {
+                    Some(label) => label.as_str(),
+                    None if grapheme == "\t" => TAB,
+                    None => grapheme,
+                };
                 let cols = shown.width();
                 if used > 0 && used + cols > room {
                     rows.push(String::new());
@@ -225,6 +361,11 @@ impl Composer {
             }
         }
         ComposerLayout { rows, cursor }
+    }
+
+    #[cfg(test)]
+    pub fn pastes(&self) -> &[Paste] {
+        &self.pastes
     }
 
     /// Any edit ends history recall; the recalled text becomes the draft.
@@ -312,9 +453,83 @@ impl Composer {
     }
 }
 
+/// `label` cut to `room` columns (with an ellipsis) so a placeholder never overflows its row.
+fn fit(label: &str, room: usize) -> String {
+    if label.width() <= room {
+        return label.to_string();
+    }
+    let mut out = String::new();
+    for c in label.chars() {
+        if out.width() + 2 > room {
+            break;
+        }
+        out.push(c);
+    }
+    out.push('…');
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn multiline_and_long_pastes_become_buffers_that_expand_exactly() {
+        let mut composer = Composer::default();
+        composer.insert("fix ");
+        let pasted = "  é—中文 🦀\ttab\r\nline two  \r\n\r\n/exit\nlast";
+        composer.paste(pasted);
+        composer.insert(" and ");
+        composer.paste(&"y".repeat(PASTE_BUFFER_CHARS + 1));
+        composer.insert(" done");
+        assert_eq!(composer.pastes().len(), 2);
+        assert_eq!(
+            composer.display(composer.text()),
+            format!("fix [Pasted text #1: 5 lines] and [Pasted text #2: {} chars] done", PASTE_BUFFER_CHARS + 1)
+        );
+        let expected = format!("fix   é—中文 🦀\ttab\nline two  \n\n/exit\nlast and {} done", "y".repeat(PASTE_BUFFER_CHARS + 1));
+        assert_eq!(composer.take(), expected, "CRLF from the terminal becomes LF; everything else is exact");
+        assert!(composer.pastes().is_empty());
+    }
+
+    #[test]
+    fn a_short_single_line_paste_is_plain_text_and_typed_placeholders_are_dropped() {
+        let mut composer = Composer::default();
+        composer.paste("hello");
+        composer.insert("\u{F0001}x");
+        assert_eq!(composer.text(), "hellox");
+        assert!(composer.pastes().is_empty());
+    }
+
+    #[test]
+    fn a_paste_buffer_moves_deletes_and_expands_as_one_unit() {
+        let mut composer = Composer::default();
+        composer.insert("a");
+        composer.paste("one\ntwo");
+        composer.insert("b");
+        composer.left();
+        assert_eq!(composer.paste_at_cursor().map(|p| p.number), Some(1));
+        composer.left();
+        assert_eq!(composer.cursor(), 1, "one Left crosses the whole placeholder");
+        composer.right();
+        composer.backspace();
+        assert_eq!(composer.expand(composer.text()), "ab", "backspace removes the buffer");
+        composer.paste("x\ny");
+        assert!(composer.expand_paste_at_cursor());
+        assert_eq!(composer.text(), "ax\nyb", "ctrl+x leaves ordinary, editable text");
+        assert!(composer.paste_at_cursor().is_none());
+    }
+
+    #[test]
+    fn a_paste_label_takes_its_display_width_and_never_overflows_a_row() {
+        let mut composer = Composer::default();
+        composer.paste("1\n2\n3");
+        let layout = composer.layout(80);
+        assert_eq!(layout.rows, vec!["[Pasted text #1: 3 lines]".to_string()]);
+        assert_eq!(layout.cursor, (0, 25));
+        let narrow = composer.layout(14);
+        assert!(narrow.rows.iter().all(|row| row.width() <= 12), "{:?}", narrow.rows);
+    }
 
     fn typed(text: &str) -> Composer {
         let mut composer = Composer::default();

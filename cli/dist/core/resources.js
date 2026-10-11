@@ -57,6 +57,8 @@ export function conditionFromFailure(resource, failure) {
             return { condition: "DRAINING", scope: "endpoint", temporary: true };
         case "AUTH_FAILURE":
             return { condition: "AUTH_FAILED", scope: "account", temporary: false };
+        case "QUOTA_EXHAUSTED":
+            return { condition: "PERMANENTLY_UNAVAILABLE", scope: "account", temporary: false };
         case "TEMPORARILY_UNAVAILABLE":
             // Connect-level failures are evidence about the endpoint; a 408/5xx is evidence about this model's serving.
             if (failure.kind === "network_error" || failure.kind === "timeout") {

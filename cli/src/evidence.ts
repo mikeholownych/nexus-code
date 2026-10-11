@@ -6,8 +6,11 @@ import type { ValidationReceipt } from "./core/candidate.js";
 import type { TurnResult } from "./core/turn.js";
 import { capText, stripEscapes } from "./protocol.js";
 import { redactSecrets } from "./ui.js";
+import { type ObjectiveLedger, requirementRows } from "./core/objective.js";
 
 export const MAX_DETAIL = 64_000;
+/** Full diffs are kept larger than other detail: inspecting the complete change is their purpose. */
+export const MAX_DIFF_DETAIL = 256_000;
 export const MAX_EVIDENCE = 200;
 
 export type EvidenceStatus = "running" | "succeeded" | "failed";
@@ -23,6 +26,8 @@ export interface EvidenceRecord {
   output: string;
   startedAt: number;
   durationMs: number | null;
+  /** Unified diff of the file change this call made (redacted, capped at MAX_DIFF_DETAIL). */
+  diff?: string;
 }
 
 /**
@@ -88,6 +93,14 @@ export class EvidenceLedger {
     record.durationMs = Math.max(0, this.now() - record.startedAt);
   }
 
+  /** Attaches the diff of the change the call made; several files (rare) are appended in order. */
+  attachDiff(evidence: string, diff: string): void {
+    const record = this.records.get(evidence);
+    if (!record || !diff) return;
+    const text = capText(redactSecrets(stripEscapes(diff)), MAX_DIFF_DETAIL);
+    record.diff = record.diff ? capText(`${record.diff}\n${text}`, MAX_DIFF_DETAIL) : text;
+  }
+
   get(evidence: string): EvidenceRecord | undefined {
     return this.records.get(evidence);
   }
@@ -108,8 +121,24 @@ export interface LastTurn {
   turn: TurnResult;
 }
 
-export function receiptSections(last: LastTurn | null, receipt: ValidationReceipt | null): ReceiptSection[] {
-  return [turnSection(last), verifierSection(last?.turn ?? null), validationSection(receipt)];
+export function receiptSections(last: LastTurn | null, receipt: ValidationReceipt | null, objective?: ObjectiveLedger): ReceiptSection[] {
+  return [turnSection(last), ...(objective ? [requirementSection(objective)] : []), verifierSection(last?.turn ?? null), validationSection(receipt)];
+}
+
+/** Requirement-level state of the operator's objective; a completed plan phase never stands in for these rows. */
+function requirementSection(ledger: ObjectiveLedger): ReceiptSection {
+  const rows: ReceiptRow[] = requirementRows(ledger).map(([id, value]) => [id, clean(value)]);
+  const outcome = ledger.outcome;
+  if (outcome) {
+    rows.push(["objective", outcome.status.toUpperCase()]);
+    if (outcome.failedCheck) rows.push(["failed check", clean(outcome.failedCheck)]);
+    if (outcome.nextAction) rows.push(["next action", clean(outcome.nextAction)]);
+  }
+  const steering = ledger.steering.filter((s) => s.status !== "cancelled");
+  if (steering.length) rows.push(["steering", `${steering.filter((s) => s.status === "applied").length} applied, ${steering.filter((s) => s.status === "queued").length} queued`]);
+  if (ledger.scopeChanges.length) rows.push(["scope changes", ledger.scopeChanges.map((c) => `${c.requirement} ${c.from}->${c.to}`).join(", ")]);
+  const note = rows.length ? undefined : "The objective is a single request; no separate acceptance requirements were listed.";
+  return { title: "Requirements", rows, ...(note ? { note } : {}) };
 }
 
 /** Receipts can be read back from state files written by older or damaged runs, so any field may be missing. */
