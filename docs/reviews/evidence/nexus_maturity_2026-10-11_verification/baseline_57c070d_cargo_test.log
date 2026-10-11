@@ -1,0 +1,199 @@
+[1m[92m    Finished[0m `test` profile [unoptimized + debuginfo] target(s) in 0.28s
+[1m[92m     Running[0m unittests src/main.rs (core/target/debug/deps/harness_core-9586fe156c3f1a8b)
+
+running 15 tests
+test file_ops::tests::test_resolve_safe_path ... ok
+test file_ops::tests::test_symlink_boundary_confinement ... ok
+test file_ops::tests::test_dec01_descriptor_confinement ... ok
+test runner::tests::test_dangerous_command_detection ... ok
+test file_ops::tests::test_preflight_syntax_validation ... ok
+test trigram::tests::test_trigram_indexing ... ok
+test file_ops::tests::test_file_info_and_batch_read ... ok
+test cst::tests::test_cst_symbol_parsing ... ok
+test search::tests::test_file_tree_and_find_files ... ok
+test runner::tests::test_ordinary_failure_is_not_a_timeout ... ok
+test git_ops::tests::test_git_status_and_log ... ok
+test runner::tests::test_run_command_pty ... ok
+test runner::tests::test_cwd_workspace_confinement ... ok
+test file_ops::tests::test_dec01_symlink_race_adversarial ... ok
+test runner::tests::test_timeout_terminates_descendants_and_returns_promptly ... ok
+
+test result: ok. 15 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.42s
+
+[1m[92m     Running[0m unittests src/bin/nexus_tui.rs (core/target/debug/deps/nexus_tui-ad2520bfe33945f0)
+
+running 156 tests
+test composer::tests::inserted_text_normalises_line_endings_and_drops_control_characters ... ok
+test composer::tests::at_end_follows_the_cursor ... ok
+test composer::tests::history_recalls_prompts_and_restores_the_draft ... ok
+test composer::tests::inserts_at_the_cursor_and_moves_by_grapheme ... ok
+test composer::tests::up_and_down_keep_the_column_where_they_can ... ok
+test composer::tests::layout_wraps_by_character_and_places_the_cursor ... ok
+test composer::tests::word_motions_and_word_delete ... ok
+test composer::tests::line_keys_work_on_the_current_line ... ok
+test live::tests::launch_errors_read_as_plain_text_with_exit_status_1 ... ok
+test live::tests::a_missing_program_is_reported_not_panicked ... ok
+test live::tests::sigterm_requests_a_clean_stop_once ... ok
+test live_state::tests::a_busy_rejection_of_the_pending_prompt_keeps_the_composer_locked ... ok
+test live_state::tests::a_command_that_starts_a_turn_stays_pending_until_the_turn_result ... ok
+test live_state::tests::a_decision_key_after_the_grace_approves ... ok
+test live_state::tests::a_decision_key_right_after_the_modal_opens_is_ignored ... ok
+test live_state::tests::a_failed_sidecar_offers_restart_and_quit_only ... ok
+test live_state::tests::a_hidden_tool_end_does_not_close_a_running_tool_with_the_same_call_id ... ok
+test live::tests::resolve_spec_prefers_flags_then_env_then_the_build_layout ... ok
+test live_state::tests::a_reused_call_id_does_not_rewrite_a_finished_tool ... ok
+test live_state::tests::a_second_ctrl_c_while_busy_force_quits_but_esc_only_cancels ... ok
+test live_state::tests::a_paste_under_an_overlay_leaves_the_draft_alone ... ok
+test live_state::tests::a_late_error_for_a_closed_panel_stays_out_of_the_transcript ... ok
+test live_state::tests::a_protocol_mismatch_fails_the_link ... ok
+test live_state::tests::a_restarted_sidecar_is_never_asked_for_the_old_sidecars_records ... ok
+test live_state::tests::always_right_after_the_modal_opens_is_ignored ... ok
+test live_state::tests::approval_scrolling_is_clamped_by_the_last_frame ... ok
+test live_state::tests::a_rejected_submit_unlocks_the_composer ... ok
+test live_state::tests::a_tool_without_a_record_says_so_and_failed_requests_stay_in_the_panel ... ok
+test live_state::tests::a_sign_in_shows_where_to_go_and_esc_cancels_it ... ok
+test live_state::tests::brackets_select_tool_calls_newest_first ... ok
+test live_state::tests::clear_paste_and_notices_change_the_view ... ok
+test live_state::tests::ctrl_c_cancels_when_busy_clears_a_draft_and_quits_when_idle ... ok
+test live_state::tests::completion_lists_matches_and_tab_or_enter_completes ... ok
+test live_state::tests::ctrl_c_closes_a_panel_and_approvals_take_its_place ... ok
+test live_state::tests::ctrl_c_and_the_turn_result_close_a_pending_approval ... ok
+test live_state::tests::ctrl_h_from_a_terminal_whose_backspace_sends_bs_deletes_like_backspace ... ok
+test live_state::tests::ctrl_c_right_after_the_modal_opens_still_cancels ... ok
+test live_state::tests::editing_keys_edit_at_the_cursor ... ok
+test live_state::tests::enter_does_nothing_between_hello_and_the_first_session_state ... ok
+test live_state::tests::enter_does_nothing_while_connecting_busy_or_empty ... ok
+test live_state::tests::ctrl_p_connects_a_provider_with_a_key_then_shows_its_models ... ok
+test live_state::tests::enter_submits_the_composer_with_increasing_turn_ids ... ok
+test live_state::tests::enter_on_a_selected_tool_requests_its_detail_and_the_answer_fills_the_panel ... ok
+test live_state::tests::errors_become_notices_and_approval_requests_open_the_review ... ok
+test live_state::tests::model_notes_ride_along_with_the_summary ... ok
+test live_state::tests::history_recall_walks_past_a_recalled_slash_command ... ok
+test live_state::tests::panel_keys_ignore_ctrl_and_alt_and_typing_drops_the_selection ... ok
+test live_state::tests::paste_inserts_at_the_cursor_and_typing_while_busy_keeps_a_draft ... ok
+test live_state::tests::local_commands_never_reach_the_sidecar ... ok
+test live_state::tests::pasted_blocks_and_alt_enter_keep_newlines_in_one_prompt ... ok
+test live_state::tests::session_state_fills_the_status_strip ... ok
+test live_state::tests::question_mark_opens_help_only_on_an_empty_composer ... ok
+test live_state::tests::model_slash_opens_the_picker_and_selecting_switches_through_the_sidecar ... ok
+test live_state::tests::slash_commands_go_to_the_sidecar_and_results_land_in_the_transcript ... ok
+test live_state::tests::tab_switches_focus_and_the_transcript_scrolls ... ok
+test live_state::tests::streamed_text_groups_by_turn_and_tools_pair_by_call_id ... ok
+test live_state::tests::submitting_returns_to_the_newest_line ... ok
+test live_state::tests::task_completed_is_left_to_the_banner ... ok
+test live_state::tests::the_frame_moves_the_window_to_the_selection_once ... ok
+test live_state::tests::the_list_hides_while_busy_or_crashed_and_esc_still_cancels ... ok
+test live_state::tests::turn_result_carries_the_inference_failure_message ... ok
+test live_state::tests::the_force_quit_arms_again_only_after_the_turn_ends ... ok
+test live_state::tests::the_approval_modal_takes_keys_and_records_the_decision ... ok
+test live_state::tests::up_recalls_the_previous_prompt_after_a_turn ... ok
+test live_state::tests::v_and_slash_receipt_open_the_receipt_panel ... ok
+test live_state::tests::turn_result_projects_the_reported_outcome_and_closes_open_tools ... ok
+test live_view::tests::a_cramped_approval_keeps_the_action_heading_before_the_review ... ok
+test live_view::tests::a_turn_renders_prompt_stream_tool_lines_and_a_truthful_banner ... ok
+test live_view::tests::a_window_that_starts_inside_a_wrapped_line_keeps_the_short_lines_after_it ... ok
+test live_view::tests::a_long_inference_failure_is_capped_to_one_line ... ok
+test live_view::tests::an_inference_failure_renders_red_between_the_banner_and_the_summary ... ok
+test live_view::tests::a_long_subject_leaves_the_status_visible_and_failures_keep_their_lines ... ok
+test live_view::tests::a_newer_selected_call_is_not_hidden_under_the_scroll_badge ... ok
+test live_view::tests::commands_replies_and_info_render_in_the_transcript ... ok
+test live_view::tests::closing_says_so ... ok
+test live_view::tests::connecting_view_says_so ... ok
+test live_view::tests::banner_glyph_follows_the_reported_outcome ... ok
+test live_view::tests::empty_session_shows_identity_status_and_composer_only ... ok
+test live_view::tests::decisions_notes_and_focus_render ... ok
+test live_view::tests::crash_screen_shows_reason_exit_redacted_tail_and_recovery_keys ... ok
+test live_view::tests::hello_without_session_state_still_reads_as_connecting ... ok
+test live_view::tests::help_lists_the_keys ... ok
+test live_view::tests::long_drafts_wrap_by_character_and_keep_the_cursor_row_visible ... ok
+test live_view::tests::help_lists_the_slash_commands_after_the_keys ... ok
+test live_view::tests::key_entry_is_masked_and_unofficial_sign_in_is_labelled ... ok
+test live_view::tests::long_transcripts_stay_pinned_to_the_newest_line ... ok
+test live_view::tests::multi_line_drafts_grow_the_composer ... ok
+test live_view::tests::notices_and_banner_lines_collapse_onto_one_line ... ok
+test live_view::tests::long_reviews_report_rows_and_limit_and_scroll ... ok
+test live_view::tests::overlays_fit_the_minimum_terminal ... ok
+test live_view::tests::the_approval_modal_shows_the_action_a_coloured_diff_and_the_keys ... ok
+test live_view::tests::tabs_expand_for_display_only ... ok
+test live_view::tests::selecting_a_tool_above_the_window_scrolls_it_into_view_once ... ok
+test live_view::tests::model_picker_groups_providers_marks_current_and_offers_connect ... ok
+test live_view::tests::scrolled_back_transcripts_show_older_rows_and_a_badge ... ok
+test live_view::tests::the_busy_marker_survives_a_40_column_status_strip ... ok
+test live_view::tests::the_completion_list_sits_above_the_composer_with_the_pick_highlighted ... ok
+test live_view::tests::the_crash_screen_keeps_reason_exit_code_and_recovery_at_40x10 ... ok
+test live_view::tests::the_model_summary_is_labelled_unverified_and_split_into_rows ... ok
+test live_view::tests::the_hint_offers_a_force_quit_after_the_first_ctrl_c ... ok
+test live_view::tests::the_detail_panel_shows_status_arguments_and_output ... ok
+test live_view::tests::tiny_terminals_get_a_size_message ... ok
+test live_view::tests::tool_verbs_cover_core_tools_and_fall_back_to_the_name ... ok
+test models::tests::a_rejected_key_returns_to_the_key_field_with_the_reason ... ok
+test models::tests::a_sole_sign_in_method_starts_immediately ... ok
+test models::tests::api_key_flow_sends_the_trimmed_pasted_key ... ok
+test models::tests::ctrl_d_asks_to_disconnect_the_highlighted_provider ... ok
+test models::tests::ctrl_p_connects_and_connect_rows_jump_to_their_provider ... ok
+test models::tests::opens_on_the_current_model_and_enter_selects ... ok
+test models::tests::rows_group_recent_then_connected_providers_then_connect_rows ... ok
+test models::tests::several_methods_ask_which_and_a_sign_in_can_be_cancelled ... ok
+test live_view::tests::the_terminal_cursor_sits_at_the_composer_cursor ... ok
+test models::tests::typing_filters_by_provider_and_model_terms ... ok
+test protocol::tests::approval_requests_carry_each_review_kind ... ok
+test protocol::tests::commands_encode_as_single_versioned_lines ... ok
+test protocol::tests::evidence_details_and_receipts_parse ... ok
+test protocol::tests::hello_carries_the_catalogue_and_slash_results_and_notices_parse ... ok
+test protocol::tests::lone_surrogate_escapes_become_replacement_characters ... ok
+test protocol::tests::parses_every_rendered_event_type ... ok
+test protocol::tests::rejects_non_protocol_lines ... ok
+test protocol::tests::turn_result_keeps_the_reported_turn_verbatim ... ok
+test protocol::tests::unknown_event_types_are_tolerated ... ok
+test redact::tests::collapses_a_multi_line_private_key_to_one_marker ... ok
+test live_view::tests::the_selected_tool_is_highlighted_while_the_transcript_has_focus ... ok
+test redact::tests::strips_terminal_escape_sequences ... ok
+test redact::tests::strips_other_escape_sequences_and_control_characters ... ok
+test review::tests::a_change_renders_as_a_unified_diff_with_context ... ok
+test review::tests::distant_changes_get_separate_hunks ... ok
+test review::tests::new_files_unknown_content_and_truncation_are_labelled ... ok
+test review::tests::patches_commands_and_args_are_shown_as_sent ... ok
+test review::tests::single_line_ranges_omit_the_count_like_git ... ok
+test redact::tests::redacts_the_same_secrets_as_the_sidecar ... ok
+test live_view::tests::the_receipt_panel_lists_sections_rows_and_notes ... ok
+test live_view::tests::a_hundred_thousand_entries_still_show_the_newest_line ... ok
+test live_view::tests::the_tail_matches_the_bottom_of_a_full_render_at_narrow_widths ... ok
+test live::tests::non_protocol_output_stops_the_sidecar_promptly ... ok
+test live::tests::drives_a_full_turn_and_quits_cleanly ... ok
+test live::tests::a_slash_command_round_trips_through_the_sidecar ... ok
+test slash::tests::matches_complete_a_single_slash_word ... ok
+test slash::tests::needs_args_ignores_optional_arguments ... ok
+test slash::tests::parse_separates_local_remote_and_prompt_drafts ... ok
+test live::tests::a_tool_detail_round_trips_through_the_sidecar ... ok
+test tests::compact_terminal_keeps_objective_and_validation_visible ... ok
+test tests::narrow_terminal_shows_recovery_instruction ... ok
+test tests::selected_theme_changes_the_primary_accent ... ok
+test tests::evidence_overlay_keeps_complete_tool_output_inspectable ... ok
+test live::tests::an_approval_round_trips_through_the_sidecar ... ok
+test sidecar::tests::a_forced_stop_lets_the_group_clean_up_before_killing_it ... ok
+test sidecar::tests::forwards_events_flags_malformed_lines_and_reports_the_exit_code ... ok
+test sidecar::tests::invalid_utf8_and_oversized_lines_do_not_stop_the_readers ... ok
+test live::tests::an_exiting_sidecar_becomes_a_crash_screen_and_restart_starts_a_new_one ... ok
+test sidecar::tests::killing_the_sidecar_also_kills_its_children ... ok
+test sidecar::tests::shutdown_kills_a_child_that_ignores_it ... ok
+test sidecar::tests::a_sidecar_that_exits_on_its_own_takes_its_children_with_it ... ok
+test sidecar::tests::speaks_to_the_real_node_sidecar ... ok
+test sidecar::tests::a_stderr_flood_cannot_block_the_child_and_the_tail_stays_bounded_and_redacted ... ok
+
+test result: ok. 156 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.52s
+
+[1m[92m     Running[0m tests/adversarial_path_traversal.rs (core/target/debug/deps/adversarial_path_traversal-e25354b6d4071bea)
+
+running 1 test
+test test_cli_runner_cwd_escape_rejected ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s
+
+[1m[92m     Running[0m tests/segregation_boundary.rs (core/target/debug/deps/segregation_boundary-7d69d60a88646509)
+
+running 1 test
+test test_core_segregation_boundary_and_fault_isolation ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.04s
+
+CARGO_EXIT=0

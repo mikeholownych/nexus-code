@@ -1,0 +1,34 @@
+{
+  "receipts_file_sha256": "d7aea0c20de1043fbebf57e477cd4430480334070d1ade8604e6486689834ee6",
+  "session_file_sha256": "903771fd4b2b15ff7317d4c6e7e017a62f4ed46ac71c80b48f45bdbab0977edd",
+  "window": {
+    "from": "2026-10-11T16:19:27.241Z",
+    "to": "2026-10-11T16:47:12.251Z"
+  },
+  "requests": 89,
+  "by_outcome": {
+    "completed": 87,
+    "failed": 2
+  },
+  "by_usage_confidence": {
+    "none": 2,
+    "provider": 87
+  },
+  "distinct_request_ids": 89,
+  "sum_reported_input_tokens": 2506632,
+  "sum_reported_output_tokens": 17038,
+  "sum_cached_input_tokens": 606720,
+  "session_tokenStats": {
+    "prompt": 2506632,
+    "completion": 17038,
+    "total": 2523670
+  },
+  "prompt_equals_sum_of_reported_input": true,
+  "completion_equals_sum_of_reported_output": true,
+  "input_tokens_per_request": {
+    "min": 10745,
+    "p50": 29992,
+    "p90": 37488,
+    "max": 45725
+  }
+}

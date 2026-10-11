@@ -1,0 +1,72 @@
+{
+  "run": {
+    "id": "27684a47-b56d-4db3-9159-740f98ff3502",
+    "generatedAt": "2026-10-11T18:59:32.743Z",
+    "gitHead": "57c070d2ce4d170e7a425964de8387fdd91436e6",
+    "workingTreeDirty": true,
+    "tuiSha256": "779a3facfb3a8aaf9f0754fcb1b8885d4cccfe4da2ffa7c119bb1dc21462c627",
+    "sidecarSha256": "ca55733fe9b7334a0e6fd4c026b0adf90c8a275d59c6c2ccbf636daa85aa54fb"
+  },
+  "steps": [],
+  "slow_inference": {
+    "spinner_frames_seen": [
+      "⠇",
+      "⠋",
+      "⠏",
+      "⠙",
+      "⠦",
+      "⠧",
+      "⠴",
+      "⠸",
+      "⠹",
+      "⠼"
+    ],
+    "thinking_shown": true,
+    "elapsed_shown": true,
+    "busy_line": " ⠦ thinking · 0:01 · step 1 ────────────────────────────────────────────────────────────────────────────────────────────",
+    "status_line": " NEXUS   nexus-sidecar-L5eHmc  ⎇ main  m  auto                                                ⠦ working · esc to cancel",
+    "busy_cpu_fraction": 0.0111,
+    "steering_echoed": true
+  },
+  "long_turn": {
+    "diff_shown": true,
+    "diff_lines_shown": true,
+    "failed_edit_marked": true,
+    "steering_applied_shown": true,
+    "segment_2_shown": true
+  },
+  "idle": {
+    "bytes_written": 0,
+    "cpu_fraction": 0
+  },
+  "resize": {
+    "redraw_bytes": [
+      1578,
+      2704
+    ],
+    "alive": true,
+    "hint_visible_after_each": [
+      true,
+      true
+    ],
+    "last_frame_rows": 40
+  },
+  "paste": {
+    "label_shown": true,
+    "alive_after": true
+  },
+  "resize_busy": true,
+  "cancel": {
+    "bytes_after_settle": 0,
+    "idle_hint_back": true
+  },
+  "first_exit": 0,
+  "second_exit": 0,
+  "resumed_shown": true,
+  "recording": {
+    "frames": 70,
+    "duration_s": 17.8336,
+    "monotonic": true,
+    "sessions": 2
+  }
+}

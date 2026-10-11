@@ -58,6 +58,44 @@ Press `<TAB>` at any prompt to autocomplete slash commands and directory paths.
 - Enter triple quotes (`"""`) or triple backticks (` ``` `) to open a multiline input block. Complete the block by closing with `"""` or ` ``` `.
 - Alternatively, end any line with a trailing backslash (`\`) to continue on the next line.
 
+### Live TUI: activity, steering, paste buffers and diffs
+
+- **Activity line.** While the agent works, the line above the composer animates (`⠋ thinking · 0:42 · step 31 ·
+  segment 2`) from the clock, not from model output, and names the phase: thinking, the running tool and its subject,
+  waiting for the provider, verifying, compacting. It stops on completion, cancellation, failure or disconnection;
+  an approval request replaces it with the approval hint.
+- **Steering.** Enter while the agent works sends the draft as steering. It shows in the transcript as
+  `↳ text · steering · queued`, then `applied` once the agent takes it at its next step. Steering that arrives as
+  the turn finishes starts a follow-up turn; steering that cannot be applied (the turn was cancelled, a command was
+  running, the agent stopped) is put back into the composer. Slash commands wait for idle, except read-only `/doctor`,
+  `/help` and `/receipt`.
+- **Paste buffers.** A multi-line or long paste becomes `[Pasted text #1: 24 lines]` in the composer; its content is
+  submitted exactly as pasted (newlines in it never send, and a pasted `/exit` is text). Ctrl+O shows a buffer,
+  Ctrl+X turns it back into editable text, Backspace after it removes it. Terminals without bracketed paste: a burst
+  of keys with a line break inside it is treated as a paste.
+- **File diffs.** Each successful edit shows that operation's own diff under its tool line (`± src/a.ts modified +3
+  -1`, a bounded preview); pre-existing uncommitted changes are never attributed to the agent, and failed edits show
+  none. Tab, `[`/`]` to select it, Enter opens the full diff.
+
+### Long tasks: continuation instead of a 30-step stop
+
+`--max-steps` (default 30) is now a segment: at each segment boundary the turn checkpoints and continues on its own
+while it makes progress. It stops with a stated reason on `--max-total-steps` (300), `--max-turn-minutes` (120),
+`--stagnation-steps` without progress (12), a repeated identical action after two recovery notes, cancellation, or
+the model finishing. `--no-continuation` restores the old single-segment turn. The operator's objective and its
+numbered requirements are pinned for the model on every request (never summarised away); the agent records
+requirement progress with evidence, and a turn that stops with requirements open ends `REQUIREMENTS_INCOMPLETE`
+with the remaining items, failed check and next action (see `/receipt`). Only the operator can reduce scope: a
+requirement the agent marks descoped stays unresolved until you run `/requirements accept <id>` (`/requirements`
+lists them). While an objective with listed requirements is unfinished, every message you send — however long, even
+with its own numbered list — continues it (numbered items are added as further requirements, and a notice says so);
+`/requirements clear` (or `/clear`) starts a new objective. A requirement counts as *verified* only when a passing
+verifier run (`run_tests`, or the completion verifier) is recorded on the current workspace; any later change demotes
+it to *implemented (model-reported)*. Each requirement keeps its complete wording; when the objective is too long to
+repeat on every request, the unresolved requirements are carried in full and the agent reads the rest with
+`read_objective`. A verifier failure is not re-run while nothing it depends on has changed (same workspace files, no
+mutating command since, same dependency/environment markers, same process).
+
 ### Direct Shell Execution (`!`)
 Run raw bash/zsh commands instantly inside the active workspace without invoking the LLM:
 ```text
@@ -73,7 +111,8 @@ nexus (engineering/b0) my-app ❯ !npm test
 | `/help` | Display cheatsheet of all available commands |
 | `/status` | View active model, endpoint, shell, and git badge |
 | `/plan [add\|done\|start\|clear]` | Formulate and manage multi-phase milestone execution plan |
-| `/tui` | Launch full-screen interactive TUI dashboard with split-pane view |
+| `/tui` | REPL only: open the session dashboard (not offered in the live TUI, where it had no purpose) |
+| `/doctor [--deep] [--fix [--yes]]` | Diagnose this session's configuration, endpoint, engine, shell and state (see `docs/DOCTOR_TROUBLESHOOTING.md`) |
 | `/theme [name]` | View or switch terminal color theme (Catppuccin, Nord, Dracula, etc.) |
 | `/team <role\|full> <task>` | Orchestrate multi-agent team (Researcher, Architect, Implementer, Tester) |
 | `/image <path> [prompt]` | Ingest multi-modal image / screenshot into vision model context |
