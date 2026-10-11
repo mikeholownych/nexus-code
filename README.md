@@ -190,6 +190,10 @@ credential is sent. A project `.env` cannot.
 The appliance stays the default. OpenRouter, OpenAI (Responses), Anthropic (Messages) and any OpenAI-compatible
 service can be selected explicitly, each with its own key:
 
+In the live view, `/model` opens a model picker across the appliance and every connected provider; **ctrl+p**
+there connects a provider (API key, OpenRouter sign-in, or unofficial ChatGPT-plan / GitHub Copilot sign-in).
+Connections already registered in Codex CLI, opencode, crush or the Copilot plugins are picked up automatically.
+
 ```bash
 nexus providers                                              # providers, credential status, destinations
 nexus providers verify --provider anthropic --model <id>     # live completion + tool round trip, no workspace content

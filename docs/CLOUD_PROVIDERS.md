@@ -9,6 +9,45 @@ and use their own credentials. Nothing in this document changes how the applianc
 | `openai` | OpenAI Responses (stateless, `store: false`) | `https://api.openai.com/v1` | `OPENAI_API_KEY` |
 | `anthropic` | Anthropic Messages | `https://api.anthropic.com/v1` | `ANTHROPIC_API_KEY` |
 | `compatible` | OpenAI Chat Completions, any service | none — must be configured | `NEXUS_COMPATIBLE_API_KEY` |
+| `chatgpt` | OpenAI Responses via the ChatGPT Codex backend | `https://chatgpt.com/backend-api/codex` | sign-in only (**unofficial**) |
+| `copilot` | Chat Completions (Responses for `gpt-5*`) | `https://api.githubcopilot.com` | sign-in only (**unofficial**) |
+
+## Choosing a model and connecting providers in the live view
+
+- `/model` opens the picker: **Recent**, then the appliance and each connected provider with its models (the current
+  one marked ●) and where its credential comes from; providers not yet connected show **+ Connect …**. Type to
+  filter by provider or model, ↑↓ to move, Enter to switch. The switch applies to every role and the next turn.
+- **ctrl+p** in the picker (or `/connect`) opens **Connect a provider**: ✓/○ status per provider, then its methods:
+  - **API key** — paste or type it (shown as •••• only); Nexus lists the provider's models with it and saves it only
+    if that works.
+  - **Sign in with OpenRouter** — OpenRouter's official PKCE flow for apps; it issues a user API key.
+  - **Sign in with ChatGPT (unofficial)** — the Codex CLI's browser sign-in, for ChatGPT Plus/Pro plans.
+  - **Sign in with GitHub (unofficial)** — the VS Code Copilot device-code sign-in, for Copilot subscriptions.
+  After connecting, the picker reopens on that provider's models. **ctrl+d** removes Nexus's saved credential.
+- Without the live view: `/model` lists everything as text, `/model <provider> <model>` switches
+  (`/model appliance engineering/b0` returns to the appliance), `nexus connect <provider> [--method <id>]` (key typed
+  hidden or piped on stdin) and `nexus disconnect <provider>`.
+
+**Unofficial sign-ins** reuse another vendor's OAuth client identity (Codex CLI, VS Code Copilot), as opencode and
+crush do. OpenAI and GitHub do not offer these to third-party apps; their terms may not permit it. They are labelled
+in the UI and were included at the operator's explicit request.
+
+## Where credentials come from
+
+In order: the provider's environment variable → Nexus's store `~/.config/nexus/credentials.json` (mode 0600,
+written atomically) → a connection already registered in another client, read in place:
+
+| Client | File | Used for |
+|---|---|---|
+| Codex CLI | `~/.codex/auth.json` | `chatgpt` |
+| opencode | `~/.local/share/opencode/auth.json` | API keys (`openrouter`, `openai`, `anthropic`), `openai` OAuth → `chatgpt`, `github-copilot` → `copilot` |
+| crush | `~/.local/share/crush/crush.json` | `providers.*.api_key` (not `$VAR` references), OAuth tokens |
+| GitHub Copilot plugins | `~/.config/github-copilot/apps.json`, `hosts.json` | `copilot` (GitHub token) |
+
+Nexus never writes those files and never refreshes another client's OAuth token (refresh tokens rotate, so doing so
+would sign that client out). An expired token is re-read on each request; if it is still expired, Nexus asks you to
+use that client once or sign in from Nexus. A Copilot GitHub token from a plugin is exchanged for a short-lived
+Copilot token in memory (nothing rotates). Nexus-owned sign-ins are refreshed before expiry, and once more after a 401.
 
 ## Setup
 
@@ -94,8 +133,11 @@ rather than guessed). These are budgets, not a guarantee of the provider's invoi
 
 ## Limitations
 
-- Implemented: OpenRouter, OpenAI (Responses), Anthropic (Messages), generic OpenAI-compatible. Not implemented:
-  Gemini, Azure OpenAI, Bedrock, Vertex, account OAuth/subscription sign-in.
+- Implemented: OpenRouter, OpenAI (Responses), Anthropic (Messages), generic OpenAI-compatible, ChatGPT plan and
+  GitHub Copilot (unofficial sign-ins). Not implemented: Gemini, Azure OpenAI, Bedrock, Vertex, Anthropic
+  Claude Pro/Max sign-in, GitHub Enterprise Copilot.
+- The ChatGPT Codex backend and Copilot request formats follow crush's implementation and are verified against mocks
+  only; they can change without notice.
 - No cross-provider model-fallback chain; recovery stays on the selected target.
 - No model catalog cache or embedded per-model context/pricing metadata: set `--context-limit` for large windows.
 - Provider-hosted tools (web search, code execution) are not enabled; all tools run through Nexus authorization.
