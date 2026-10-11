@@ -16,7 +16,7 @@ export const SLASH_COMMANDS = [
     { name: "clear", usage: "/clear", summary: "Reset the conversation context", aliases: ["reset"] },
     { name: "compact", usage: "/compact [--llm]", summary: "Condense earlier messages to free context" },
     { name: "mode", usage: "/mode [auto|review]", summary: "Run edits and commands freely, or ask first" },
-    { name: "model", usage: "/model [name]", summary: "List available models or switch" },
+    { name: "model", usage: "/model [provider] [model]", summary: "Choose a model from any connected provider (ctrl+p connects one)" },
     { name: "shell", usage: "/shell [bash|zsh|sh]", summary: "Show or switch the command shell" },
     { name: "cd", usage: "/cd [path]", summary: "Show or change the workspace directory" },
     { name: "tokens", usage: "/tokens", summary: "Context window use and session token totals", aliases: ["cost"] },

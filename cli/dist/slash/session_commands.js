@@ -1,14 +1,16 @@
 import { UsageLedger } from "../usage.js";
+import { APPLIANCE, buildCatalog } from "../model_catalog.js";
+import { selectModel } from "../provider_connect.js";
+import { providerDefinition } from "../providers.js";
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { LocalLlmClient } from "../client.js";
 import { writeProtectedTextFile } from "../core/persistence_protection.js";
 import { receiptText } from "../evidence.js";
 import { getGitInfo, scaffoldProjectRules } from "../git.js";
 import { scanAndOnboardWorkspace } from "../onboard.js";
 import { ThemeManager } from "../theme.js";
 import { renderTokenGauge } from "../tokens.js";
-import { SLASH_COMMANDS, errorText, oneLine, reply } from "./catalog.js";
+import { SLASH_COMMANDS, oneLine, reply } from "./catalog.js";
 function help() {
     const width = Math.max(...SLASH_COMMANDS.map((spec) => spec.usage.length));
     return reply("help", SLASH_COMMANDS.map((spec) => `${spec.usage.padEnd(width)}  ${spec.summary}`).join("\n"));
@@ -50,18 +52,29 @@ function mode({ host, args }) {
 async function model({ host, args }) {
     const config = host.app.getConfig();
     const name = args.trim();
-    if (name) {
-        config.model = name;
-        host.app.getAgent().setModel(name);
-        return reply("model", `Model: ${name}`);
+    // `/model <provider> <model>`: switch provider and model ("appliance" for the local appliance).
+    const [first, ...rest] = name.split(/\s+/);
+    if (rest.length && (first === APPLIANCE || providerDefinition(first))) {
+        const r = selectModel(host.app.getAgent(), config, { provider: first, model: rest.join(" ") });
+        return reply("model", r.message, r.ok);
     }
-    try {
-        const models = await new LocalLlmClient(config).listModels();
-        return reply("model", ["Available models:", ...models.map((m) => (m === config.model ? `* ${m} (active)` : `  ${m}`))].join("\n"));
+    if (!name) {
+        const catalog = await buildCatalog(config);
+        const lines = [];
+        for (const p of catalog.providers) {
+            const status = p.connected ? `connected${p.source ? ` via ${p.source}` : ""}${p.status === "cached" ? " · offline, cached list" : p.status === "error" ? ` · ${p.error}` : ""}` : `not connected — nexus connect ${p.id}`;
+            lines.push(`${p.label} [${p.id}] — ${status}`);
+            for (const m of catalog.models.filter((m) => m.provider === p.id)) {
+                const active = m.provider === catalog.current.provider && m.id === catalog.current.model;
+                lines.push(`  ${active ? "*" : " "} ${m.id}${active ? " (active)" : ""}`);
+            }
+        }
+        lines.push("", "Switch with /model <provider> <model>. In the live view, /model opens the picker and ctrl+p connects a provider.");
+        return reply("model", lines.join("\n"));
     }
-    catch (err) {
-        return reply("model", `Could not list models from ${config.endpoint}: ${errorText(err)}`, false);
-    }
+    config.model = name;
+    host.app.getAgent().setModel(name);
+    return reply("model", `Model: ${name}`);
 }
 function shell({ host, args }) {
     const config = host.app.getConfig();

@@ -4,6 +4,8 @@ import { InferenceError, LocalLlmClient, operatorSetting } from "./client.js";
 import { buildConfig } from "./config.js";
 import { baseUrlSetting, disclosureClass, originOf, PROVIDERS } from "./providers.js";
 import { UsageLedger } from "./usage.js";
+import { resolveCredential } from "./credentials.js";
+import { connectWithKey, disconnect, startSignIn } from "./provider_connect.js";
 /** One line naming each role's selected destination and its disclosure class. */
 export function describeTarget(config) {
     const target = (provider, endpoint, model) => {
@@ -89,7 +91,68 @@ export async function verifyProvider(config, signal) {
     });
     return steps;
 }
+/** Reads a secret: piped stdin as-is, or typed at the terminal without echo. */
+async function readSecret(prompt) {
+    if (!process.stdin.isTTY) {
+        let data = "";
+        for await (const chunk of process.stdin)
+            data += chunk;
+        return data.trim();
+    }
+    const readline = await import("node:readline");
+    const rl = readline.createInterface({ input: process.stdin, output: process.stdout, terminal: true });
+    let muted = false;
+    rl._writeToOutput = (text) => { if (!muted || text.includes("\n"))
+        process.stdout.write(muted ? "\n" : text); };
+    return new Promise((resolve) => {
+        rl.question(prompt, (answer) => { rl.close(); resolve(answer.trim()); });
+        muted = true;
+    });
+}
 export function registerProviderCommands(program) {
+    program
+        .command("connect")
+        .description("Connect a cloud provider: save an API key (verified first) or sign in")
+        .argument("<provider>", "openrouter, openai, anthropic, chatgpt, copilot, compatible")
+        .option("--method <id>", "api-key (default where offered), openrouter-oauth, chatgpt-oauth, copilot-device")
+        .action(async (providerId, options) => {
+        const def = PROVIDERS[providerId];
+        if (!def) {
+            console.error(pc.red(`Unknown provider '${providerId}'. Known: ${Object.keys(PROVIDERS).join(", ")}`));
+            process.exit(2);
+        }
+        const method = def.methods.find((m) => m.id === (options.method ?? def.methods[0].id));
+        if (!method) {
+            console.error(pc.red(`${def.label} methods: ${def.methods.map((m) => m.id).join(", ")}`));
+            process.exit(2);
+        }
+        const base = buildConfig({});
+        const existing = resolveCredential(def.id, def.credentialEnv);
+        if (existing)
+            console.log(pc.dim(`${def.label} is already connected via ${existing.source}; a new connection is saved in Nexus.`));
+        if (method.unofficial)
+            console.log(pc.yellow(`${method.label}: unofficial — it signs in as another vendor's client, which the provider's terms may not permit.`));
+        if (method.kind === "key") {
+            const r = await connectWithKey(base, def.id, await readSecret(`${def.label} API key: `));
+            console.log(r.ok ? pc.green(r.message) : pc.red(r.message));
+            process.exitCode = r.ok ? 0 : 1;
+            return;
+        }
+        const signIn = await startSignIn(base, def.id, method.id);
+        process.once("SIGINT", () => signIn.cancel());
+        console.log(`\n${signIn.prompt.instructions}\n  ${pc.bold(signIn.prompt.url)}${signIn.prompt.userCode ? `\n  code: ${pc.bold(signIn.prompt.userCode)}` : ""}\n`);
+        const r = await signIn.done;
+        console.log(r.ok ? pc.green(r.message) : pc.red(r.message));
+        process.exitCode = r.ok ? 0 : 1;
+    });
+    program
+        .command("disconnect")
+        .description("Remove the credential Nexus saved for a provider (environment and other clients are untouched)")
+        .argument("<provider>")
+        .action((providerId) => {
+        const r = disconnect(providerId);
+        console.log(r.ok ? pc.green(r.message) : pc.yellow(r.message));
+    });
     const providers = program
         .command("providers")
         .description("List cloud inference providers, credential status and the selected destinations")
@@ -97,9 +160,10 @@ export function registerProviderCommands(program) {
         console.log(pc.bold("\nCloud inference providers\n"));
         for (const def of Object.values(PROVIDERS)) {
             const base = operatorSetting(baseUrlSetting(def.id)) || def.baseUrl || "(set --base-url or " + baseUrlSetting(def.id) + ")";
-            const key = process.env[def.credentialEnv]?.trim() ? pc.green("credential set") : pc.yellow("credential not set");
+            const found = resolveCredential(def.id, def.credentialEnv);
+            const key = found ? pc.green(`connected via ${found.source}`) : pc.yellow(`not connected (${def.credentialEnv ? `$${def.credentialEnv} or ` : ""}nexus connect ${def.id})`);
             console.log(`  ${pc.bold(def.id.padEnd(11))} ${def.protocol.padEnd(19)} ${base}`);
-            console.log(pc.dim(`  ${"".padEnd(11)} ${def.credentialEnv}: `) + key);
+            console.log(`  ${"".padEnd(11)} ${key}${def.methods.some((m) => m.unofficial) ? pc.dim("  · unofficial sign-in") : ""}`);
         }
         let config;
         try {

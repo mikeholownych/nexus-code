@@ -11,6 +11,9 @@ import { ProviderStreamError, readSse } from "./protocols/common.js";
 import { anthropicStreamParser, buildAnthropicRequest, parseAnthropicResponse } from "./protocols/anthropic.js";
 import { buildResponsesRequest, parseResponsesResponse, responsesStreamParser } from "./protocols/openai_responses.js";
 import { UsageLedger } from "./usage.js";
+import { resolveCredential, saveCredential } from "./credentials.js";
+import { COPILOT_HEADERS, copilotToken, refreshOAuth } from "./oauth.js";
+import { providerDefinition } from "./providers.js";
 function originOf(url) {
     if (!url?.trim())
         return undefined;
@@ -170,6 +173,14 @@ function chatUsage(u) {
         r.costUsd = u.cost;
     return r;
 }
+/** Model ids from a `/models` answer: OpenAI-style `data[].id`, or the ChatGPT backend's listed `models[].slug`. */
+function modelIds(body) {
+    if (Array.isArray(body?.data))
+        return body.data.map((m) => m?.id).filter((id) => typeof id === "string");
+    if (Array.isArray(body?.models))
+        return body.models.filter((m) => !m?.visibility || m.visibility === "list").map((m) => m?.slug ?? m?.id).filter((id) => typeof id === "string");
+    return [];
+}
 /** Cloud destinations announced in this process (the disclosure notice is shown once per origin). */
 const announcedDestinations = new Set();
 /** Provider error bodies are bounded and redacted before they reach messages, logs or the UI. */
@@ -297,6 +308,10 @@ export class LocalLlmClient {
     taskClass;
     /** The connection's provider, protocol, auth style and disclosure behaviour (legacy endpoint path when no provider). */
     conn;
+    /** ChatGPT account the signed-in token belongs to (sent as chatgpt-account-id). */
+    oauthAccountId;
+    /** Copilot API token exchanged from another client's GitHub token; held in memory only. */
+    exchangedToken;
     authorizedOrigins;
     cloudRoutedOrigins;
     workspace;
@@ -310,7 +325,7 @@ export class LocalLlmClient {
     /** Ledger reservations taken by the request in progress (released when its receipt is recorded). */
     reservations = [];
     constructor(config, options) {
-        this.conn = connectionFor(config.provider);
+        this.conn = connectionFor(config.provider, config.model);
         // A provider's base URL already carries its API path and version; only the legacy endpoint path appends /v1.
         const normalizeEp = (urlStr) => {
             let ep = urlStr.trim().replace(/\/+$/, "");
@@ -504,6 +519,73 @@ export class LocalLlmClient {
     /** Switch the model in place so session, task, boundary and routing state survive the change. */
     setModel(model) {
         this.model = model;
+        // Some providers serve a model over a different protocol (Copilot gpt-5 via Responses).
+        this.conn = connectionFor(this.conn.providerId, model);
+    }
+    /**
+     * Resolves a sign-in provider's token for this request: Nexus's own sign-in is refreshed when it is about to expire
+     * (one attempt) and saved; a token owned by another client is re-read from that client and never refreshed
+     * (refresh tokens rotate; refreshing would sign that client out). A Copilot GitHub token from another client is
+     * exchanged for a Copilot API token in memory, which rotates nothing.
+     */
+    async prepareCredential(url, requestId, force = false) {
+        if (this.conn.auth !== "oauth" || !this.conn.providerId)
+            return;
+        const id = this.conn.providerId;
+        const label = providerDefinition(id)?.label ?? id;
+        const found = resolveCredential(id);
+        const fail = (message) => new InferenceError("configuration_error", "client", message, { requestId, failoverEligible: false, condition: "AUTH_FAILURE" });
+        if (!found || found.credential.type !== "oauth") {
+            this.explicitKey = undefined;
+            return; // preflight reports the missing sign-in
+        }
+        let cred = found.credential;
+        const fresh = (c) => Boolean(c?.access) && (c.expiresAt === undefined || c.expiresAt - Date.now() > 60_000);
+        if (!fresh(cred) || force) {
+            try {
+                if (found.refreshable) {
+                    cred = (await refreshOAuth(id, cred));
+                    saveCredential(id, cred);
+                }
+                else if (id === "copilot" && cred.refresh) {
+                    if (force || !fresh(this.exchangedToken) || this.exchangedToken?.refresh !== cred.refresh) {
+                        this.exchangedToken = (await copilotToken(cred.refresh));
+                    }
+                    cred = this.exchangedToken;
+                }
+                else if (!fresh(cred)) {
+                    throw new Error(`the ${label} sign-in read from ${found.source} has expired. Use ${found.source} once to refresh it, or sign in from Nexus (/model, then ctrl+p).`);
+                }
+            }
+            catch (err) {
+                throw fail(`Cannot use ${label}: ${redactSecrets(err?.message ?? String(err))}`);
+            }
+        }
+        this.explicitKey = cred.access;
+        this.explicitOrigin = originOf(url);
+        this.rotated.delete(this.explicitOrigin ?? "");
+        this.oauthAccountId = cred.accountId;
+    }
+    /** One forced refresh-and-retry when a signed-in provider answers 401 (its token was revoked or rotated). */
+    async withOAuthRetry(url, requestId, run) {
+        try {
+            return await run();
+        }
+        catch (err) {
+            if (this.conn.auth !== "oauth" || !(err instanceof InferenceError) || err.httpStatus !== 401)
+                throw err;
+            await this.prepareCredential(url, requestId, true);
+            return run();
+        }
+    }
+    /** Headers a provider requires that depend on the request (sign-in account, Copilot editor identity). */
+    providerHeaders(messages) {
+        if (this.conn.providerId === "chatgpt")
+            return this.oauthAccountId ? { "chatgpt-account-id": this.oauthAccountId } : {};
+        if (this.conn.providerId === "copilot") {
+            return { ...COPILOT_HEADERS, "X-Initiator": messages.some((m) => m.role === "assistant") ? "agent" : "user" };
+        }
+        return {};
     }
     requestTimeoutMs() {
         const raw = Number(process.env.LOCAL_LLM_TIMEOUT_MS);
@@ -571,6 +653,8 @@ export class LocalLlmClient {
             return { Authorization: `Bearer ${this.credentialFor(url) ?? "not-needed"}` };
         const key = this.credentialFor(url);
         const auth = !key ? {} : this.conn.auth === "x-api-key" ? { "x-api-key": key } : { Authorization: `Bearer ${key}` };
+        if (this.conn.providerId === "copilot")
+            Object.assign(auth, COPILOT_HEADERS);
         return { ...this.conn.staticHeaders, ...auth };
     }
     /** Provider connections refuse redirects: a credential-bearing request never follows a server to another origin. */
@@ -624,7 +708,9 @@ export class LocalLlmClient {
     }
     async listModels() {
         return this.executeWithFailover("listModels", async (currentEp) => {
-            const url = `${currentEp}/models${this.conn.protocol === "anthropic-messages" ? "?limit=1000" : ""}`;
+            await this.prepareCredential(currentEp);
+            const query = this.conn.protocol === "anthropic-messages" ? "?limit=1000" : this.conn.providerId === "chatgpt" ? "?client_version=1.0.0" : "";
+            const url = `${currentEp}/models${query}`;
             const res = await fetch(url, {
                 headers: this.authorization(url),
                 ...this.fetchPolicy(),
@@ -633,16 +719,13 @@ export class LocalLlmClient {
                 const retryRes = await fetch(url, {
                     headers: this.authorization(url),
                 });
-                if (retryRes.ok) {
-                    const data = (await retryRes.json());
-                    return data.data?.map((m) => m.id) || [];
-                }
+                if (retryRes.ok)
+                    return modelIds(await retryRes.json());
             }
             if (!res.ok) {
                 throw new Error(`Server returned HTTP ${res.status}: ${res.statusText}`);
             }
-            const data = (await res.json());
-            return data.data?.map((m) => m.id) || [];
+            return modelIds(await res.json());
         });
     }
     /** Raw `/models` entries. Providers that publish capability metadata let the scheduler qualify resources. */
@@ -697,15 +780,18 @@ export class LocalLlmClient {
     async chatCompletion(messages, tools, requestId = randomUUID(), signal, 
     /** Receipt role override for auxiliary calls (e.g. "compaction"). */
     purpose) {
-        return this.withReceipt(requestId, purpose, () => this.chatCompletionOnce(messages, tools, requestId, signal));
+        return this.withReceipt(requestId, purpose, () => this.withOAuthRetry(this.endpoint, requestId, () => this.chatCompletionOnce(messages, tools, requestId, signal)));
     }
     async chatCompletionOnce(messages, tools, requestId, signal) {
         if (this.conn.protocol !== "openai-chat")
-            return this.nativeCompletion(messages, tools, undefined, requestId, signal, false);
+            return this.nativeCompletion(messages, tools, undefined, requestId, signal, this.conn.streamOnly);
+        if (this.conn.streamOnly)
+            return this.chatCompletionStreamOnce(messages, tools, undefined, requestId, signal);
         return this.executeWithFailover("chatCompletion", async (currentEp) => {
             if (signal?.aborted)
                 throw abortedError(requestId);
             const url = `${currentEp}/chat/completions`;
+            await this.prepareCredential(currentEp, requestId);
             this.preflight(currentEp, requestId, JSON.stringify(messages).length + JSON.stringify(tools).length);
             // 1. Egress Interception & Quarantine (DISC-001..003, CTX-006, FAIL-003)
             const egressEvaluation = this.boundary.evaluateEgress(messages, currentEp, {
@@ -754,6 +840,7 @@ export class LocalLlmClient {
                     headers: {
                         "Content-Type": "application/json",
                         ...this.authorization(url),
+                        ...this.providerHeaders(messages),
                         "X-Request-ID": requestId,
                         ...this.routingHeaders(),
                     },
@@ -795,7 +882,7 @@ export class LocalLlmClient {
      * Real-time SSE token streaming for typewriter terminal output (matching Codex / Claude Code)
      */
     async chatCompletionStream(messages, tools, onToken, requestId = randomUUID(), signal) {
-        return this.withReceipt(requestId, undefined, () => this.chatCompletionStreamOnce(messages, tools, onToken, requestId, signal));
+        return this.withReceipt(requestId, undefined, () => this.withOAuthRetry(this.endpoint, requestId, () => this.chatCompletionStreamOnce(messages, tools, onToken, requestId, signal)));
     }
     async chatCompletionStreamOnce(messages, tools, onToken, requestId, signal) {
         if (this.conn.protocol !== "openai-chat")
@@ -804,6 +891,7 @@ export class LocalLlmClient {
             if (signal?.aborted)
                 throw abortedError(requestId);
             const url = `${currentEp}/chat/completions`;
+            await this.prepareCredential(currentEp, requestId);
             this.preflight(currentEp, requestId, JSON.stringify(messages).length + JSON.stringify(tools).length);
             // 1. Egress Interception & Quarantine (DISC-001..003, CTX-006, FAIL-003)
             const egressEvaluation = this.boundary.evaluateEgress(messages, currentEp, {
@@ -854,6 +942,7 @@ export class LocalLlmClient {
                     headers: {
                         "Content-Type": "application/json",
                         ...this.authorization(url),
+                        ...this.providerHeaders(messages),
                         "X-Request-ID": requestId,
                         ...this.routingHeaders(),
                     },
@@ -1073,6 +1162,7 @@ export class LocalLlmClient {
         return this.executeWithFailover(stream ? "chatCompletionStream" : "chatCompletion", async (currentEp) => {
             if (signal?.aborted)
                 throw abortedError(requestId);
+            await this.prepareCredential(currentEp, requestId);
             this.preflight(currentEp, requestId, JSON.stringify(messages).length + JSON.stringify(tools).length);
             const outbound = this.egress(messages, tools, currentEp);
             const anthropic = this.conn.protocol === "anthropic-messages";
@@ -1089,6 +1179,9 @@ export class LocalLlmClient {
                 thinkingBudget: this.thinkingBudget,
             };
             const req = anthropic ? buildAnthropicRequest(input) : buildResponsesRequest(input);
+            // The ChatGPT Codex backend rejects max_output_tokens.
+            if (this.conn.providerId === "chatgpt")
+                delete req.body.max_output_tokens;
             if (req.droppedState) {
                 console.error(pc.dim(`[nexus] ${req.droppedState} earlier assistant turn(s) carry reasoning state owned by another provider/model or altered since capture; it is not replayed to ${owner} (visible text and tool calls are kept).`));
             }
@@ -1098,7 +1191,7 @@ export class LocalLlmClient {
             try {
                 res = await fetch(url, {
                     method: "POST",
-                    headers: { "Content-Type": "application/json", ...this.authorization(url), "X-Request-ID": requestId },
+                    headers: { "Content-Type": "application/json", ...this.authorization(url), ...this.providerHeaders(outbound.messages), "X-Request-ID": requestId },
                     body: JSON.stringify(req.body),
                     signal: this.combinedSignal(signal),
                     ...this.fetchPolicy(),

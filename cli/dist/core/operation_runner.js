@@ -9,6 +9,7 @@ import * as path from "node:path";
 import { AutonomousAgent } from "../agent.js";
 import { LocalLlmClient, mayBindCredential, storedCredentialFor } from "../client.js";
 import { providerDefinition } from "../providers.js";
+import { providerApiKey } from "../credentials.js";
 import { realRecoveryClock } from "./provider_recovery.js";
 import { ConvergenceScheduler, unitBaseTask } from "./operation.js";
 import { redactForPersistence } from "./persistence_protection.js";
@@ -452,7 +453,7 @@ export class AgentWorkUnitExecutor {
         const specKey = resource.apiKeyEnv ? process.env[resource.apiKeyEnv] : undefined;
         const def = providerDefinition(resource.providerId);
         // A provider resource uses its own key (apiKeyEnv, else the provider's variable), bound to its own origin.
-        const ownKey = def ? specKey ?? process.env[def.credentialEnv] : specKey;
+        const ownKey = def ? specKey ?? providerApiKey(def.id, def.credentialEnv) : specKey;
         const credential = def || resource.apiKeyEnv
             ? { apiKey: mayBindCredential(ownKey, resource.endpoint) ? ownKey : undefined, credentialOrigin: origin(resource.endpoint) }
             : { apiKey: base.apiKey, credentialOrigin: base.credentialOrigin ?? origin(normalizeEndpoint(base.endpoint)) };

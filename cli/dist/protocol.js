@@ -66,6 +66,32 @@ export function parseCommand(line) {
         }
         case "receipt":
             return { type: "receipt", id: requireId("receipt") };
+        case "models.list":
+            return { type: "models.list", id: requireId("models.list") };
+        case "model.select": {
+            const requestId = requireId("model.select");
+            if (typeof msg.provider !== "string" || !msg.provider || typeof msg.model !== "string" || !msg.model.trim()) {
+                throw new ProtocolError("model.select requires provider and model", requestId);
+            }
+            return { type: "model.select", id: requestId, provider: msg.provider, model: msg.model };
+        }
+        case "provider.connect": {
+            const requestId = requireId("provider.connect");
+            if (typeof msg.provider !== "string" || !msg.provider || typeof msg.method !== "string" || !msg.method) {
+                throw new ProtocolError("provider.connect requires provider and method", requestId);
+            }
+            if (msg.key !== undefined && typeof msg.key !== "string")
+                throw new ProtocolError("provider.connect key must be a string", requestId);
+            return { type: "provider.connect", id: requestId, provider: msg.provider, method: msg.method, ...(typeof msg.key === "string" ? { key: msg.key } : {}) };
+        }
+        case "provider.cancel":
+            return { type: "provider.cancel", id: requireId("provider.cancel") };
+        case "provider.disconnect": {
+            const requestId = requireId("provider.disconnect");
+            if (typeof msg.provider !== "string" || !msg.provider)
+                throw new ProtocolError("provider.disconnect requires provider", requestId);
+            return { type: "provider.disconnect", id: requestId, provider: msg.provider };
+        }
         case "shutdown":
             return { type: "shutdown" };
         default:

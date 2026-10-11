@@ -20,6 +20,10 @@ export const PROVIDERS = Object.freeze({
         auth: "bearer",
         staticHeaders: { "X-Title": "Nexus" },
         usage: "openrouter",
+        methods: [
+            { id: "api-key", label: "API key", kind: "key" },
+            { id: "openrouter-oauth", label: "Sign in with OpenRouter", kind: "browser" },
+        ],
     },
     openai: {
         id: "openai",
@@ -29,6 +33,7 @@ export const PROVIDERS = Object.freeze({
         credentialEnv: "OPENAI_API_KEY",
         auth: "bearer",
         usage: "native",
+        methods: [{ id: "api-key", label: "API key", kind: "key" }],
     },
     anthropic: {
         id: "anthropic",
@@ -39,6 +44,29 @@ export const PROVIDERS = Object.freeze({
         auth: "x-api-key",
         staticHeaders: { "anthropic-version": "2023-06-01" },
         usage: "native",
+        methods: [{ id: "api-key", label: "API key", kind: "key" }],
+    },
+    /** ChatGPT Plus/Pro plan through the Codex backend (unofficial: Codex CLI sign-in). */
+    chatgpt: {
+        id: "chatgpt",
+        label: "ChatGPT plan",
+        protocol: "openai-responses",
+        baseUrl: "https://chatgpt.com/backend-api/codex",
+        auth: "oauth",
+        staticHeaders: { originator: "nexus" },
+        usage: "native",
+        streamOnly: true,
+        methods: [{ id: "chatgpt-oauth", label: "Sign in with ChatGPT (unofficial)", kind: "browser", unofficial: true }],
+    },
+    /** GitHub Copilot subscription (unofficial: VS Code Copilot sign-in). */
+    copilot: {
+        id: "copilot",
+        label: "GitHub Copilot",
+        protocol: "openai-chat",
+        baseUrl: "https://api.githubcopilot.com",
+        auth: "oauth",
+        usage: "native",
+        methods: [{ id: "copilot-device", label: "Sign in with GitHub (unofficial)", kind: "device", unofficial: true }],
     },
     /** Any other OpenAI-compatible Chat Completions service; its base URL must be configured by the operator. */
     compatible: {
@@ -48,6 +76,7 @@ export const PROVIDERS = Object.freeze({
         credentialEnv: "NEXUS_COMPATIBLE_API_KEY",
         auth: "bearer",
         usage: "stream-options",
+        methods: [{ id: "api-key", label: "API key", kind: "key" }],
     },
 });
 export function providerDefinition(id) {
@@ -67,19 +96,26 @@ export function originOf(url) {
         return undefined;
     }
 }
-export function connectionFor(providerId) {
+/** Copilot serves some models through the Responses API only. */
+export function protocolFor(providerId, model) {
+    if (providerId === "copilot" && /^gpt-5/i.test(model))
+        return "openai-responses";
+    return undefined;
+}
+export function connectionFor(providerId, model = "") {
     const def = providerDefinition(providerId);
     if (!def) {
-        return { label: "endpoint", protocol: "openai-chat", auth: "bearer", staticHeaders: {}, usage: "none", sendTaskClass: true };
+        return { label: "endpoint", protocol: "openai-chat", auth: "bearer", staticHeaders: {}, usage: "none", sendTaskClass: true, streamOnly: false };
     }
     return {
         providerId: def.id,
         label: def.label,
-        protocol: def.protocol,
+        protocol: protocolFor(def.id, model) ?? def.protocol,
         auth: def.auth,
         staticHeaders: { ...(def.staticHeaders ?? {}) },
         usage: def.usage,
         sendTaskClass: false,
+        streamOnly: Boolean(def.streamOnly),
     };
 }
 /**
@@ -101,5 +137,6 @@ export function parseOriginList(raw) {
 }
 /** The environment variable a provider connection reads its key from (for operator-facing messages). */
 export function operatorSettingKeyForAuth(id) {
-    return providerDefinition(id)?.credentialEnv ?? "the provider's API key variable";
+    const def = providerDefinition(id);
+    return def?.credentialEnv ?? (def ? `sign in with /model → ctrl+p → ${def.label}` : "the provider's API key variable");
 }
