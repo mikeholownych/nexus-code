@@ -1883,18 +1883,19 @@ export class AutonomousAgent {
   /**
    * Tool output for the model. When the call repeats one whose findings were recorded, says so first (and whether the
    * output is unchanged) with the step position, so a re-run is a choice made knowing what the memory already holds.
-   * In the last tenth of the step budget (at least 3 steps), or while recorded findings exceed their bound, the first
-   * output of each step that another step follows says so before anything else.
+   * In the last fifth of the step budget (at least 3 steps), or while recorded findings exceed their bound, the first
+   * output of each step that another step follows says so before anything else. The last fifth leaves room for a
+   * submission, the corrections validation asks for, and a resubmission.
    * Notes lead the output so that fitting an oversized result to the context, which keeps its beginning, keeps them.
    */
   private toolResultContent(call: ToolCall, content: string, step: number, maxSteps: number): string {
     const result = this.rerunNotedContent(call, content, step, maxSteps);
     const remaining = maxSteps - step;
-    const closing = remaining < Math.max(3, Math.ceil(maxSteps / 10));
+    const closing = remaining < Math.max(3, Math.ceil(maxSteps / 5));
     if ((!closing && !this.findingsOutgrown) || this.stepNoticeStep === step || remaining <= 0) return result;
     this.stepNoticeStep = step;
     if (closing) {
-      return `[Nexus: this is step ${step} of ${maxSteps}; ${remaining === 1 ? "1 step remains" : `${remaining} steps remain`} after it. Stop investigating: make your work product complete and consistent now (if your task produces none, state in your reply what remains unestablished), then finish the task. Work left unfinished at the step limit is reported as not established.]\n${result}`;
+      return `[Nexus: this is step ${step} of ${maxSteps}; ${remaining === 1 ? "1 step remains" : `${remaining} steps remain`} after it. Finish now, leaving room for validation: consolidate what the output you inspected established into your work product (if your task produces none, state in your reply what remains unestablished), check it against every requirement of the task and that every file path it cites exists, then call task_completed to submit it for validation, keeping steps in hand to correct what validation reports and submit again. Investigate further only where a requirement still lacks evidence; do not state what the evidence does not support. Work left unfinished at the step limit is reported as not established.]\n${result}`;
     }
     return `[Nexus: your recorded findings have outgrown your memory; the oldest are being shortened and dropped. Write what you have established into your work product now (the file or change your task produces; if it produces none, state it in your reply), before investigating further, then continue with what remains. This is step ${step} of ${maxSteps}.]\n${result}`;
   }

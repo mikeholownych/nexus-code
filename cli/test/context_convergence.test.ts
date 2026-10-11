@@ -646,17 +646,17 @@ describe("D: findings checkpoint before shown output leaves the context", () => 
     });
   });
 
-  test("in the last tenth of the step budget the first output of each step says how many remain and asks to finish; recording ignores it", async () => {
+  test("in the last fifth of the step budget the first output of each step says how many remain and asks to finish, leaving room for validation; recording ignores it", async () => {
     await isolated(async (repo) => {
       const agent = quiet(new AutonomousAgent({ endpoint: "http://127.0.0.1:9/v1", model: "m", maxSteps: 2, temperature: 0, workspace: repo, shell: "bash" })) as any;
       try {
         const call = (id: string, file: string) => ({ id, type: "function" as const, function: { name: "read_file", arguments: JSON.stringify({ path: file }) } });
-        const CLOSING = /^\[Nexus: this is step (\d+) of 120; (\d+) (?:step remains|steps remain) after it\. Stop investigating: make your work product complete and consistent now \(if your task produces none, state in your reply what remains unestablished\), then finish the task\.[^\]]*\]\n/;
-        assert.equal(agent.toolResultContent(call("c1", "a.txt"), "alpha", 108, 120), "alpha", "before the last tenth nothing is added");
-        const first = agent.toolResultContent(call("c2", "a.txt"), "alpha", 109, 120);
-        assert.deepEqual(CLOSING.exec(first)?.slice(1, 3), ["109", "11"]);
+        const CLOSING = /^\[Nexus: this is step (\d+) of 120; (\d+) (?:step remains|steps remain) after it\. Finish now, leaving room for validation: consolidate what the output you inspected established into your work product \(if your task produces none, state in your reply what remains unestablished\), check it against every requirement of the task and that every file path it cites exists, then call task_completed to submit it for validation, keeping steps in hand to correct what validation reports and submit again\. Investigate further only where a requirement still lacks evidence; do not state what the evidence does not support\.[^\]]*\]\n/;
+        assert.equal(agent.toolResultContent(call("c1", "a.txt"), "alpha", 96, 120), "alpha", "before the last fifth nothing is added");
+        const first = agent.toolResultContent(call("c2", "a.txt"), "alpha", 97, 120);
+        assert.deepEqual(CLOSING.exec(first)?.slice(1, 3), ["97", "23"]);
         assert.ok(first.endsWith("]\nalpha"));
-        assert.equal(agent.toolResultContent(call("c3", "b.txt"), "beta", 109, 120), "beta", "once per step");
+        assert.equal(agent.toolResultContent(call("c3", "b.txt"), "beta", 97, 120), "beta", "once per step");
         agent.findingsOutgrown = true;
         const last = agent.toolResultContent(call("c4", "b.txt"), "beta", 119, 120);
         assert.deepEqual(CLOSING.exec(last)?.slice(1, 3), ["119", "1"], "near the end, finishing comes before the memory notice");
