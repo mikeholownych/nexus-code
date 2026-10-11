@@ -267,3 +267,25 @@ Tests on `d88a897`: `tsc` clean; full suite 752/752; core `cargo test --release 
 Scenario adjustment for dogfood: main's continuation defaults would cut the 7 h run at 120 minutes, so the turn is
 pinned to the established budget (`-s 120 --max-total-steps 120 --max-turn-minutes 420`); stagnation detection is
 left at main's default. `nexus-tui` is now provisioned alongside `harness-core` (`launch_deep120_v5.sh`).
+
+### Dogfood on the combined code: `run_d88a897_comb_deep120`
+
+- COMPLETED / VERIFIED at step 113 of 120 (3 h 25 min); independent verifier 21/21. Closing notice from step 97;
+  first submission at 105 refused (2 failures), corrected, accepted at 113.
+- Context: prompt ≤ 52.3K estimated tokens (limit 53,248), 91 compactions, 0 admission failures; durable record
+  50K chars. The gateway reported no usage (`reportedRequests 0`), so main's accounting ran on estimates.
+- The earlier failure modes (capacity exhaustion, reread loops, no artifact, no submission) did not reproduce.
+- Still reproduces: lossy retention under findings-budget pressure. 43 findings, 73.7K chars against a 24K budget.
+  A fact observed at step 58 (`cli/src/tools.ts` spawns `harness-core` as the tool-execution daemon) was shortened
+  out of memory, never reached the artifact, and a later truncated re-check led to the false statement that no TS
+  code spawns the Rust core. Other substantive errors: tracked-file count (306 vs 1,118).
+- Substantive acceptance not met; not integrated. Details: `~/df2/postdog/dogfood/run_d88a897_comb_deep120/RESULT.md`.
+
+### Remaining
+
+1. Findings retention: when findings outgrow their budget, a shortened finding loses its later facts silently.
+   Next causal change to evaluate: keep each finding's distinct facts (not its first characters) when shortening,
+   or have the outgrown notice name what was shortened so it is written into the work product.
+2. Closing-notice text copied into the durable record from tool results (seen in run_19ca1b1_prov).
+3. Review 8 follow-ups and review 9a wording note (`cc_evidence/review8_followups.md`).
+4. Independent delta review of the merge, then final acceptance; integration only after substantive acceptance.
