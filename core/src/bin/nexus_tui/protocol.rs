@@ -2,6 +2,7 @@
 //! outcome; these types carry what it reports and nothing more.
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::fmt;
 
 pub const PROTOCOL_VERSION: u64 = 1;
 
@@ -24,6 +25,66 @@ pub struct SlashSpec {
     pub name: String,
     pub usage: String,
     pub summary: String,
+}
+
+/// A way to connect a provider: an API key, a browser sign-in, or a device-code sign-in.
+#[derive(Clone, Debug, Deserialize, PartialEq)]
+pub struct ConnectMethod {
+    pub id: String,
+    pub label: String,
+    pub kind: String,
+    /// Signs in as another vendor's client; the provider's terms may not permit it.
+    #[serde(default)]
+    pub unofficial: bool,
+}
+
+/// A provider as the model picker shows it. `source` names where its credential comes from, never the credential.
+#[derive(Clone, Debug, Deserialize, PartialEq)]
+pub struct CatalogProvider {
+    pub id: String,
+    pub label: String,
+    pub disclosure: String,
+    pub connected: bool,
+    #[serde(default)]
+    pub source: Option<String>,
+    #[serde(default)]
+    pub external: bool,
+    #[serde(default)]
+    pub methods: Vec<ConnectMethod>,
+    pub status: String,
+    #[serde(default)]
+    pub error: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq)]
+pub struct CatalogModel {
+    pub provider: String,
+    pub id: String,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq)]
+pub struct ModelRef {
+    pub provider: String,
+    pub model: String,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct Catalog {
+    pub providers: Vec<CatalogProvider>,
+    pub models: Vec<CatalogModel>,
+    pub current: ModelRef,
+    pub recent: Vec<ModelRef>,
+}
+
+/// A credential typed by the operator. Serializes as the plain string; never prints.
+#[derive(Clone, PartialEq, Serialize)]
+#[serde(transparent)]
+pub struct Secret(pub String);
+
+impl fmt::Debug for Secret {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("Secret(***)")
+    }
 }
 
 /// One block of the turn receipt: labelled rows, or a note saying why there are none.
@@ -152,6 +213,38 @@ pub enum Event {
         code: String,
         message: String,
     },
+    #[serde(rename = "models.catalog")]
+    ModelsCatalog {
+        id: String,
+        providers: Vec<CatalogProvider>,
+        models: Vec<CatalogModel>,
+        current: ModelRef,
+        #[serde(default)]
+        recent: Vec<ModelRef>,
+    },
+    /// A sign-in waits for the operator: open `url`, and type `user_code` for a device sign-in.
+    #[serde(rename = "provider.auth")]
+    ProviderAuth {
+        id: String,
+        provider: String,
+        url: String,
+        #[serde(default)]
+        user_code: Option<String>,
+        instructions: String,
+    },
+    #[serde(rename = "provider.result")]
+    ProviderResult {
+        id: String,
+        provider: String,
+        success: bool,
+        message: String,
+    },
+    #[serde(rename = "model.result")]
+    ModelResult {
+        id: String,
+        success: bool,
+        message: String,
+    },
     /// Event types newer than this client.
     #[serde(other)]
     Unknown,
@@ -179,6 +272,26 @@ pub enum Command {
     ToolDetail { id: String, evidence: String },
     #[serde(rename = "receipt")]
     Receipt { id: String },
+    #[serde(rename = "models.list")]
+    ModelsList { id: String },
+    #[serde(rename = "model.select")]
+    ModelSelect {
+        id: String,
+        provider: String,
+        model: String,
+    },
+    #[serde(rename = "provider.connect")]
+    ProviderConnect {
+        id: String,
+        provider: String,
+        method: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        key: Option<Secret>,
+    },
+    #[serde(rename = "provider.cancel")]
+    ProviderCancel { id: String },
+    #[serde(rename = "provider.disconnect")]
+    ProviderDisconnect { id: String, provider: String },
     #[serde(rename = "shutdown")]
     Shutdown,
 }

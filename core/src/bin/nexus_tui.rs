@@ -28,6 +28,8 @@ mod slash;
 mod redact;
 #[path = "nexus_tui/sidecar.rs"]
 mod sidecar;
+#[path = "nexus_tui/models.rs"]
+mod models;
 #[path = "nexus_tui/live_state.rs"]
 mod live_state;
 #[path = "nexus_tui/live_view.rs"]

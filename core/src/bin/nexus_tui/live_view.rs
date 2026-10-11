@@ -14,6 +14,7 @@ use crate::live_state::{
     Approval, Detail, Entry, Focus, Link, LiveLayout, LiveState, Loaded, Overlay, ReceiptPanel,
     Tone, ToolRecord, ToolStatus, Verdict,
 };
+use crate::models::{Connect, Fetch, Picker, Row, Step};
 use crate::protocol::{ReceiptSection, SlashSpec};
 use crate::review::{LineKind, ReviewLine};
 use crate::{ACCENT, MUTED, SURFACE};
@@ -109,6 +110,8 @@ pub fn render_live(frame: &mut Frame, state: &LiveState) -> LiveLayout {
         Some(Overlay::Receipt(panel)) => {
             (layout.overlay_rows, layout.overlay_limit) = render_receipt(frame, rows[1], panel);
         }
+        Some(Overlay::Models(picker)) => render_models(frame, rows[1], picker),
+        Some(Overlay::Connect(flow)) => render_connect(frame, rows[1], flow),
         None => {}
     }
     layout
@@ -130,6 +133,8 @@ const HELP: &[(&str, &str)] = &[
     ("ctrl+w", "delete the previous word"),
     ("ctrl+l", "clear the draft"),
     ("/", "slash commands: type / to list them, tab completes"),
+    ("/model", "choose a model from the appliance or any connected cloud provider"),
+    ("ctrl+p", "in /model: connect a provider (API key or sign-in); /connect opens it directly"),
     (
         "!command",
         "run a shell command directly; !n runs prompt n again",
@@ -2094,4 +2099,269 @@ mod tests {
         );
         assert_eq!(cell_at(&state, 100, 24, "VERIFIED").1, Color::Green);
     }
+
+    const CATALOG: &str = r#"{"v":1,"type":"models.catalog","id":"ID","providers":[{"id":"appliance","label":"Appliance (10.0.8.5:8443)","disclosure":"local","connected":true,"methods":[],"status":"ok"},{"id":"chatgpt","label":"ChatGPT plan","disclosure":"cloud","connected":true,"source":"Codex CLI","external":true,"methods":[{"id":"chatgpt-oauth","label":"Sign in with ChatGPT (unofficial)","kind":"browser","unofficial":true}],"status":"ok"},{"id":"anthropic","label":"Anthropic","disclosure":"cloud","connected":false,"methods":[{"id":"api-key","label":"API key","kind":"key"}],"status":"disconnected"}],"models":[{"provider":"appliance","id":"engineering/b0"},{"provider":"chatgpt","id":"gpt-5-codex"}],"current":{"provider":"appliance","model":"engineering/b0"},"recent":[]}"#;
+
+    #[test]
+    fn model_picker_groups_providers_marks_current_and_offers_connect() {
+        let mut state = ready();
+        for c in "/model".chars() {
+            state.on_key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE));
+        }
+        state.on_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        let screen = draw(&state, 100, 24);
+        assert!(screen.contains("Select model"));
+        assert!(screen.contains("Listing models"));
+        feed(&mut state, &[&CATALOG.replace("\"ID\"", "\"m1\"")]);
+        let screen = draw(&state, 100, 24);
+        assert!(screen.contains("Appliance (10.0.8.5:8443)"), "{screen}");
+        assert!(screen.contains("● engineering/b0"), "{screen}");
+        assert!(screen.contains("via Codex CLI"), "{screen}");
+        assert!(screen.contains("+ Connect Anthropic"), "{screen}");
+        assert!(screen.contains("ctrl+p"), "{screen}");
+    }
+
+    #[test]
+    fn key_entry_is_masked_and_unofficial_sign_in_is_labelled() {
+        let mut state = ready();
+        for c in "/model".chars() {
+            state.on_key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE));
+        }
+        state.on_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        feed(&mut state, &[&CATALOG.replace("\"ID\"", "\"m1\"")]);
+        state.on_key(KeyEvent::new(KeyCode::Char('p'), KeyModifiers::CONTROL));
+        let screen = draw(&state, 100, 24);
+        assert!(screen.contains("Connect a provider"), "{screen}");
+        assert!(screen.contains("connected via Codex CLI"), "{screen}");
+        assert!(screen.contains("unofficial sign-in"), "{screen}");
+        state.on_key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+        state.on_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        state.on_paste("sk-ant-VISIBLE-NEVER");
+        let screen = draw(&state, 100, 24);
+        assert!(!screen.contains("VISIBLE"), "the key is never drawn: {screen}");
+        assert!(screen.contains("••••"), "{screen}");
+        assert!(screen.contains("20 characters"), "{screen}");
+    }
+
+}
+
+
+// ---------------------------------------------------------------- model picker and provider connection
+
+fn titled_block(title: String) -> Block<'static> {
+    Block::bordered()
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(ACCENT))
+        .title(Span::styled(title, Style::default().fg(ACCENT).add_modifier(Modifier::BOLD)))
+}
+
+fn key_hints(pairs: &[(&'static str, &'static str)]) -> Line<'static> {
+    let key = Style::default().fg(ACCENT).add_modifier(Modifier::BOLD);
+    let mut spans = Vec::new();
+    for (k, text) in pairs {
+        spans.push(Span::styled(format!(" {k}"), key));
+        spans.push(Span::styled(format!(" {text} "), Style::default().fg(MUTED)));
+    }
+    Line::from(spans)
+}
+
+/// Draws `lines` in `area`, scrolled so that line `focus` is visible.
+fn list_window(frame: &mut Frame, area: Rect, lines: Vec<Line<'_>>, focus: usize) {
+    let rows = usize::from(area.height);
+    let offset = if rows == 0 { 0 } else { (focus + 1).saturating_sub(rows) };
+    let shown: Vec<Line> = lines.into_iter().skip(offset).take(rows).collect();
+    frame.render_widget(Paragraph::new(shown), area);
+}
+
+fn render_models(frame: &mut Frame, area: Rect, picker: &Picker) {
+    let rect = modal(area, 96, area.height);
+    let title = match (&picker.only, &picker.catalog) {
+        (Some(only), Fetch::Ready(catalog)) => {
+            let label = catalog.providers.iter().find(|p| &p.id == only).map_or(only.as_str(), |p| p.label.as_str());
+            format!(" Select model — {label} ")
+        }
+        _ => " Select model ".to_string(),
+    };
+    let block = titled_block(title);
+    let inner = block.inner(rect);
+    frame.render_widget(Clear, rect);
+    frame.render_widget(block, rect);
+    if inner.height < 3 {
+        return;
+    }
+    let search = Rect::new(inner.x, inner.y, inner.width, 1);
+    let list = Rect::new(inner.x, inner.y + 2, inner.width, inner.height.saturating_sub(3));
+    let footer = Rect::new(inner.x, inner.bottom() - 1, inner.width, 1);
+    let prompt = Span::styled("› ", Style::default().fg(ACCENT).add_modifier(Modifier::BOLD));
+    let query = if picker.query.is_empty() {
+        Span::styled("type to filter by provider or model", Style::default().fg(MUTED))
+    } else {
+        Span::styled(format!("{}▏", picker.query), Style::default().fg(Color::White))
+    };
+    frame.render_widget(Paragraph::new(Line::from(vec![prompt, query])), search);
+    frame.render_widget(
+        Paragraph::new(key_hints(&[("enter", "use"), ("ctrl+p", "connect a provider"), ("↑↓", "move"), ("esc", "close")])),
+        footer,
+    );
+    match &picker.catalog {
+        Fetch::Waiting => frame.render_widget(
+            Paragraph::new(Span::styled("Listing models from the appliance and connected providers…", Style::default().fg(MUTED))),
+            list,
+        ),
+        Fetch::Failed(message) => frame.render_widget(
+            Paragraph::new(Span::styled(format!("Could not list models: {message}"), Style::default().fg(Color::Red)))
+                .wrap(Wrap { trim: false }),
+            list,
+        ),
+        Fetch::Ready(_) => {
+            let rows = picker.rows();
+            let selected = picker.selected().map(|(index, _)| index);
+            let filtered = !picker.query.trim().is_empty();
+            if rows.is_empty() {
+                frame.render_widget(Paragraph::new(Span::styled("No model matches.", Style::default().fg(MUTED))), list);
+                return;
+            }
+            let mut in_recent = false;
+            let lines: Vec<Line> = rows
+                .iter()
+                .enumerate()
+                .map(|(index, row)| {
+                    let highlight = Some(index) == selected;
+                    let base = if highlight { Style::default().fg(Color::Black).bg(ACCENT) } else { Style::default().fg(Color::White) };
+                    match row {
+                        Row::Header { title, detail } => {
+                            in_recent = title == "Recent";
+                            Line::from(vec![
+                                Span::styled(title.clone(), Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
+                                Span::styled(if detail.is_empty() { String::new() } else { format!("  {detail}") }, Style::default().fg(MUTED)),
+                            ])
+                        }
+                        Row::Model { model, provider_label, current, .. } => {
+                            let marker = if *current { "● " } else { "  " };
+                            let mut spans = vec![Span::styled(format!("  {marker}{model}"), if *current && !highlight { base.fg(ACCENT) } else { base })];
+                            if filtered || in_recent {
+                                spans.push(Span::styled(format!("  {provider_label}"), if highlight { base } else { Style::default().fg(MUTED) }));
+                            }
+                            Line::from(spans)
+                        }
+                        Row::Connect { label, .. } => Line::from(Span::styled(
+                            format!("  + Connect {label}…"),
+                            if highlight { base } else { Style::default().fg(Color::Yellow) },
+                        )),
+                        Row::Note(note) => Line::from(Span::styled(format!("  {note}"), Style::default().fg(MUTED).add_modifier(Modifier::ITALIC))),
+                    }
+                })
+                .collect();
+            list_window(frame, list, lines, selected.unwrap_or(0));
+        }
+    }
+}
+
+fn render_connect(frame: &mut Frame, area: Rect, flow: &Connect) {
+    let rect = modal(area, 96, area.height.min(24));
+    let block = titled_block(" Connect a provider ".into());
+    let inner = block.inner(rect);
+    frame.render_widget(Clear, rect);
+    frame.render_widget(block, rect);
+    if inner.height < 3 {
+        return;
+    }
+    let white = Style::default().fg(Color::White);
+    let muted = Style::default().fg(MUTED);
+    let warn = Style::default().fg(Color::Yellow);
+    let selected = Style::default().fg(Color::Black).bg(ACCENT);
+    let mut lines: Vec<Line> = Vec::new();
+    if let Some((ok, message)) = &flow.notice {
+        lines.push(Line::from(Span::styled(message.clone(), Style::default().fg(if *ok { Color::Green } else { Color::Red }))));
+        lines.push(Line::default());
+    }
+    let label = |id: &str| flow.provider(id).map_or_else(|| id.to_string(), |p| p.label.clone());
+    let mut focus = 0;
+    let hints: &[(&'static str, &'static str)] = match &flow.step {
+        Step::Providers { pick } => {
+            for (index, p) in flow.list().iter().enumerate() {
+                if index == *pick {
+                    focus = lines.len();
+                }
+                let (mark, mark_style) = if p.connected { ("✓", Style::default().fg(Color::Green)) } else { ("○", muted) };
+                let status = match (&p.source, p.connected) {
+                    (Some(source), true) => format!("connected via {source}"),
+                    _ => "not connected".to_string(),
+                };
+                let unofficial = p.methods.iter().any(|m| m.unofficial);
+                let row = if index == *pick { selected } else { white };
+                lines.push(Line::from(vec![
+                    Span::styled(format!(" {mark} "), if index == *pick { selected } else { mark_style }),
+                    Span::styled(format!("{:<20}", p.label), row),
+                    Span::styled(format!(" {status}"), if index == *pick { selected } else { muted }),
+                    Span::styled(if unofficial { "  unofficial sign-in".to_string() } else { String::new() }, if index == *pick { selected } else { warn }),
+                ]));
+            }
+            &[("enter", "connect"), ("ctrl+d", "remove Nexus's saved credential"), ("esc", "back to models")]
+        }
+        Step::Methods { provider, pick } => {
+            lines.push(Line::from(Span::styled(format!("How do you want to connect {}?", label(provider)), white.add_modifier(Modifier::BOLD))));
+            lines.push(Line::default());
+            let methods = flow.methods(provider);
+            for (index, m) in methods.iter().enumerate() {
+                if index == *pick {
+                    focus = lines.len();
+                }
+                lines.push(Line::from(Span::styled(format!("  {}", m.label), if index == *pick { selected } else { white })));
+            }
+            if methods.get(*pick).is_some_and(|m| m.unofficial) {
+                lines.push(Line::default());
+                lines.push(Line::from(Span::styled(
+                    "Unofficial: this signs in as another vendor's client. The provider's terms may not permit it.",
+                    warn,
+                )));
+            }
+            &[("enter", "choose"), ("esc", "back")]
+        }
+        Step::Key { provider, input, error } => {
+            lines.push(Line::from(Span::styled(format!("{} API key", label(provider)), white.add_modifier(Modifier::BOLD))));
+            lines.push(Line::default());
+            let dots = "•".repeat(input.chars().count().min(48));
+            lines.push(Line::from(vec![
+                Span::styled("› ", Style::default().fg(ACCENT).add_modifier(Modifier::BOLD)),
+                Span::styled(format!("{dots}▏"), white),
+                Span::styled(if input.is_empty() { String::new() } else { format!("  {} characters", input.chars().count()) }, muted),
+            ]));
+            focus = lines.len() - 1;
+            if let Some(error) = error {
+                lines.push(Line::from(Span::styled(error.clone(), Style::default().fg(Color::Red))));
+            }
+            lines.push(Line::default());
+            lines.push(Line::from(Span::styled(
+                format!("Paste or type the key. Nexus checks it with {} before saving it to ~/.config/nexus/credentials.json (owner-only).", label(provider)),
+                muted,
+            )));
+            &[("enter", "verify and save"), ("ctrl+u", "clear"), ("esc", "back")]
+        }
+        Step::Waiting { provider, method, auth, .. } => {
+            match auth {
+                None if method == "api-key" => lines.push(Line::from(Span::styled(format!("Checking the key with {}…", label(provider)), white))),
+                None => lines.push(Line::from(Span::styled(format!("Starting {} sign-in…", label(provider)), white))),
+                Some(info) => {
+                    lines.push(Line::from(Span::styled(info.instructions.clone(), white)));
+                    lines.push(Line::default());
+                    lines.push(Line::from(vec![Span::styled("Open  ", muted), Span::styled(info.url.clone(), Style::default().fg(ACCENT).add_modifier(Modifier::UNDERLINED))]));
+                    if let Some(code) = &info.user_code {
+                        lines.push(Line::from(vec![Span::styled("Code  ", muted), Span::styled(code.clone(), white.add_modifier(Modifier::BOLD))]));
+                    }
+                    lines.push(Line::default());
+                    lines.push(Line::from(Span::styled("Waiting for you to finish in the browser…", muted)));
+                }
+            }
+            if auth.is_some() { &[("esc", "cancel sign-in")] } else { &[("esc", "back")] }
+        }
+    };
+    let body = Rect::new(inner.x, inner.y, inner.width, inner.height.saturating_sub(1));
+    let footer = Rect::new(inner.x, inner.bottom() - 1, inner.width, 1);
+    if matches!(flow.step, Step::Providers { .. } | Step::Methods { .. }) {
+        list_window(frame, body, lines, focus);
+    } else {
+        frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), body);
+    }
+    frame.render_widget(Paragraph::new(key_hints(hints)), footer);
 }

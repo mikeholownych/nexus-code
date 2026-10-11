@@ -5,7 +5,8 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use serde_json::Value;
 use std::time::{Duration, Instant};
 
-use crate::protocol::{Command, Event, PROTOCOL_VERSION, ReceiptSection, Review, SlashSpec};
+use crate::models::{AuthInfo, Connect, ConnectIntent, Fetch, Picker, PickerIntent, Step};
+use crate::protocol::{Catalog, Command, Event, PROTOCOL_VERSION, ReceiptSection, Review, Secret, SlashSpec};
 use crate::review::{ReviewLine, review_lines};
 use crate::slash::{self, Invocation};
 
@@ -163,6 +164,10 @@ pub enum Overlay {
     Help { scroll: usize },
     Detail(Detail),
     Receipt(ReceiptPanel),
+    /// `/model`: choose a model from any connected provider.
+    Models(Picker),
+    /// ctrl+p in the picker (or `/connect`): connect a provider.
+    Connect(Connect),
 }
 
 /// What the last frame measured. Key handling uses it for page sizes, and it clamps scrolling at the top.
@@ -208,6 +213,8 @@ pub struct LiveState {
     /// The next frame should move the window to show the selection.
     pub follow: bool,
     panel_seq: u64,
+    /// Commands a sidecar event asked to send (the live loop drains them after applying events).
+    outbox: Vec<Action>,
 }
 
 impl LiveState {
@@ -232,7 +239,145 @@ impl LiveState {
             selected: None,
             follow: false,
             panel_seq: 0,
+            outbox: Vec::new(),
         }
+    }
+
+    /// Commands queued while applying sidecar events.
+    pub fn take_outbox(&mut self) -> Vec<Action> {
+        std::mem::take(&mut self.outbox)
+    }
+
+    fn next_id(&mut self, prefix: char) -> String {
+        self.panel_seq += 1;
+        format!("{prefix}{}", self.panel_seq)
+    }
+
+    /// Opens the model picker and asks the sidecar for the catalog.
+    fn open_models(&mut self, connect: bool, only: Option<String>) -> Option<Action> {
+        if self.link != Link::Ready {
+            return None;
+        }
+        let id = self.next_id('m');
+        let mut picker = Picker::new(id.clone());
+        picker.connect_on_load = connect;
+        picker.only = only;
+        self.overlay = Some(Overlay::Models(picker));
+        Some(Action::Send(Command::ModelsList { id }))
+    }
+
+    fn on_models_key(&mut self, key: KeyEvent) -> Option<Action> {
+        let Some(Overlay::Models(picker)) = &mut self.overlay else {
+            return None;
+        };
+        let providers = match &picker.catalog {
+            Fetch::Ready(catalog) => catalog.providers.clone(),
+            _ => Vec::new(),
+        };
+        match picker.on_key(key)? {
+            PickerIntent::Close => {
+                self.overlay = None;
+                None
+            }
+            PickerIntent::Select { provider, model } => {
+                self.overlay = None;
+                let id = self.next_id('x');
+                self.transcript.push(Entry::Command(format!("/model {provider} {model}")));
+                Some(Action::Send(Command::ModelSelect { id, provider, model }))
+            }
+            PickerIntent::Connect(at) => {
+                let (flow, intent) = Connect::new(providers, at.as_deref());
+                self.overlay = Some(Overlay::Connect(flow));
+                intent.and_then(|intent| self.connect_intent(intent))
+            }
+        }
+    }
+
+    fn connect_intent(&mut self, intent: ConnectIntent) -> Option<Action> {
+        match intent {
+            ConnectIntent::Back => self.open_models(false, None),
+            ConnectIntent::Connect { provider, method, key } => {
+                let id = self.next_id('c');
+                if let Some(Overlay::Connect(flow)) = &mut self.overlay {
+                    flow.step = Step::Waiting {
+                        request: id.clone(),
+                        provider: provider.clone(),
+                        method: method.clone(),
+                        auth: None,
+                    };
+                }
+                Some(Action::Send(Command::ProviderConnect {
+                    id,
+                    provider,
+                    method,
+                    key: key.map(Secret),
+                }))
+            }
+            ConnectIntent::Cancel { request } => Some(Action::Send(Command::ProviderCancel { id: request })),
+            ConnectIntent::Disconnect { provider } => {
+                let id = self.next_id('c');
+                Some(Action::Send(Command::ProviderDisconnect { id, provider }))
+            }
+        }
+    }
+
+    fn on_connect_key(&mut self, key: KeyEvent) -> Option<Action> {
+        let Some(Overlay::Connect(flow)) = &mut self.overlay else {
+            return None;
+        };
+        let intent = flow.on_key(key)?;
+        self.connect_intent(intent)
+    }
+
+    fn on_catalog(&mut self, id: String, catalog: Catalog) {
+        match &mut self.overlay {
+            Some(Overlay::Models(picker)) if picker.request == id => {
+                let providers = catalog.providers.clone();
+                picker.catalog = Fetch::Ready(catalog);
+                picker.focus_current();
+                if picker.connect_on_load {
+                    let (flow, intent) = Connect::new(providers, None);
+                    self.overlay = Some(Overlay::Connect(flow));
+                    if let Some(action) = intent.and_then(|intent| self.connect_intent(intent)) {
+                        self.outbox.push(action);
+                    }
+                }
+            }
+            Some(Overlay::Connect(flow)) if flow.refresh.as_deref() == Some(id.as_str()) => {
+                flow.providers = catalog.providers;
+                flow.refresh = None;
+            }
+            _ => {}
+        }
+    }
+
+    fn on_provider_result(&mut self, id: String, provider: String, success: bool, message: String) {
+        if let Some(Overlay::Connect(flow)) = &mut self.overlay {
+            let waiting = matches!(&flow.step, Step::Waiting { request, .. } if *request == id);
+            if waiting {
+                if flow.on_result(&id, success, message.clone()) {
+                    self.transcript.push(Entry::Info(message));
+                    // Connected: show that provider's models.
+                    if let Some(action) = self.open_models(false, Some(provider)) {
+                        self.outbox.push(action);
+                    }
+                }
+                return;
+            }
+            // A disconnect (or a late answer): report it and refresh the provider list.
+            flow.notice = Some((success, message));
+            let refresh = self.next_id('m');
+            if let Some(Overlay::Connect(flow)) = &mut self.overlay {
+                flow.refresh = Some(refresh.clone());
+            }
+            self.outbox.push(Action::Send(Command::ModelsList { id: refresh }));
+            return;
+        }
+        self.transcript.push(Entry::Output {
+            success,
+            text: message,
+            diff: false,
+        });
     }
 
     pub fn cancel_requested(&self) -> bool {
@@ -340,9 +485,15 @@ impl LiveState {
                 let waiting = self.waiting_panel() == Some(id.as_str());
                 let message = format!("{code}: {message}");
                 match &mut self.overlay {
+                    // A connect or model-select answer with no panel waiting for it still reaches the operator.
+                    _ if !waiting && id.starts_with(['c', 'x']) => self.transcript.push(Entry::Notice(message)),
                     _ if !waiting => {}
                     Some(Overlay::Detail(detail)) => detail.record = Loaded::Failed(message),
                     Some(Overlay::Receipt(panel)) => panel.sections = Loaded::Failed(message),
+                    Some(Overlay::Models(picker)) => picker.catalog = Fetch::Failed(message),
+                    Some(Overlay::Connect(flow)) => {
+                        flow.on_result(&id, false, message);
+                    }
                     _ => {}
                 }
             }
@@ -412,6 +563,27 @@ impl LiveState {
                     panel.sections = Loaded::Ready(sections);
                 }
             }
+            Event::ModelsCatalog { id, providers, models, current, recent } => {
+                self.on_catalog(id, Catalog { providers, models, current, recent });
+            }
+            Event::ProviderAuth { id, url, user_code, instructions, .. } => {
+                if let Some(Overlay::Connect(flow)) = &mut self.overlay
+                    && let Step::Waiting { request, auth, .. } = &mut flow.step
+                    && *request == id
+                {
+                    *auth = Some(AuthInfo { url, user_code, instructions });
+                }
+            }
+            Event::ProviderResult { id, provider, success, message } => {
+                self.on_provider_result(id, provider, success, message);
+            }
+            Event::ModelResult { success, message, .. } => {
+                self.transcript.push(Entry::Output {
+                    success,
+                    text: message,
+                    diff: false,
+                });
+            }
             Event::Unknown => {}
         }
     }
@@ -431,7 +603,10 @@ impl LiveState {
 
     pub fn restarted(&mut self) {
         self.close_approval();
-        if matches!(self.overlay, Some(Overlay::Detail(_) | Overlay::Receipt(_))) {
+        if matches!(
+            self.overlay,
+            Some(Overlay::Detail(_) | Overlay::Receipt(_) | Overlay::Models(_) | Overlay::Connect(_))
+        ) {
             self.overlay = None;
         }
         // Evidence ids are numbered per sidecar process; the new one would answer for other calls.
@@ -449,6 +624,15 @@ impl LiveState {
     }
 
     pub fn on_paste(&mut self, text: &str) {
+        match &mut self.overlay {
+            Some(Overlay::Connect(flow)) => return flow.on_paste(text),
+            Some(Overlay::Models(picker)) => {
+                picker.query.push_str(text.trim());
+                picker.pick = 0;
+                return;
+            }
+            _ => {}
+        }
         if !matches!(self.link, Link::Crashed { .. }) && self.overlay.is_none() {
             self.slash_pick = 0;
             self.slash_dismissed = false;
@@ -603,6 +787,8 @@ impl LiveState {
         }
         match self.overlay {
             Some(Overlay::Approval(_)) => return self.on_approval_key(key, now),
+            Some(Overlay::Models(_)) => return self.on_models_key(key),
+            Some(Overlay::Connect(_)) => return self.on_connect_key(key),
             Some(Overlay::Help { .. } | Overlay::Detail(_) | Overlay::Receipt(_)) => {
                 self.on_help_key(key);
                 return None;
@@ -648,8 +834,13 @@ impl LiveState {
     }
 
     fn on_ctrl_c(&mut self) -> Option<Action> {
-        match self.overlay {
-            Some(Overlay::Help { .. } | Overlay::Detail(_) | Overlay::Receipt(_)) => {
+        match &self.overlay {
+            Some(Overlay::Connect(Connect { step: Step::Waiting { request, auth: Some(_), .. }, .. })) => {
+                let id = request.clone();
+                self.overlay = None;
+                return Some(Action::Send(Command::ProviderCancel { id }));
+            }
+            Some(Overlay::Help { .. } | Overlay::Detail(_) | Overlay::Receipt(_) | Overlay::Models(_) | Overlay::Connect(_)) => {
                 self.overlay = None;
                 return None;
             }
@@ -744,6 +935,8 @@ impl LiveState {
                 None
             }
             Invocation::Receipt => self.open_receipt(),
+            Invocation::Models => self.open_models(false, None),
+            Invocation::Connect => self.open_models(true, None),
             Invocation::Remote { command, args } => {
                 self.slash_seq += 1;
                 let id = format!("s{}", self.slash_seq);
@@ -889,7 +1082,7 @@ impl LiveState {
 
     /// Whether `id` names a detail or receipt request this client sent, open or not.
     fn issued_panel(&self, id: &str) -> bool {
-        id.strip_prefix(['d', 'r'])
+        id.strip_prefix(['d', 'r', 'm', 'c', 'x'])
             .and_then(|n| n.parse::<u64>().ok())
             .is_some_and(|n| (1..=self.panel_seq).contains(&n))
     }
@@ -905,6 +1098,15 @@ impl LiveState {
             | Some(Overlay::Receipt(ReceiptPanel {
                 request,
                 sections: Loaded::Waiting,
+                ..
+            }))
+            | Some(Overlay::Models(Picker {
+                request,
+                catalog: Fetch::Waiting,
+                ..
+            })) => Some(request.as_str()),
+            Some(Overlay::Connect(Connect {
+                step: Step::Waiting { request, .. },
                 ..
             })) => Some(request.as_str()),
             _ => None,
@@ -2288,4 +2490,68 @@ mod tests {
         });
         assert_eq!(state.scroll_back, 12);
     }
+
+    const CATALOG: &str = r#"{"v":1,"type":"models.catalog","id":"ID","providers":[{"id":"appliance","label":"Appliance (10.0.8.5:8443)","disclosure":"local","connected":true,"methods":[],"status":"ok"},{"id":"chatgpt","label":"ChatGPT plan","disclosure":"cloud","connected":true,"source":"Codex CLI","external":true,"methods":[{"id":"chatgpt-oauth","label":"Sign in with ChatGPT (unofficial)","kind":"browser","unofficial":true}],"status":"ok"},{"id":"anthropic","label":"Anthropic","disclosure":"cloud","connected":false,"methods":[{"id":"api-key","label":"API key","kind":"key"}],"status":"disconnected"}],"models":[{"provider":"appliance","id":"engineering/b0"},{"provider":"chatgpt","id":"gpt-5-codex"}],"current":{"provider":"appliance","model":"engineering/b0"},"recent":[]}"#;
+
+    fn catalog(id: &str) -> Event {
+        ev(&CATALOG.replace("\"ID\"", &format!("\"{id}\"")))
+    }
+
+    #[test]
+    fn model_slash_opens_the_picker_and_selecting_switches_through_the_sidecar() {
+        let mut state = ready();
+        type_text(&mut state, "/model");
+        let Some(Action::Send(Command::ModelsList { id })) = state.on_key(key(KeyCode::Enter)) else {
+            panic!("expected models.list");
+        };
+        assert!(matches!(state.overlay, Some(Overlay::Models(_))));
+        assert!(!state.session.busy, "the picker does not lock the composer");
+        state.apply(catalog(&id));
+        type_text(&mut state, "codex");
+        assert_eq!(
+            state.on_key(key(KeyCode::Enter)),
+            Some(Action::Send(Command::ModelSelect { id: "x2".into(), provider: "chatgpt".into(), model: "gpt-5-codex".into() }))
+        );
+        assert!(state.overlay.is_none());
+        state.apply(ev(r#"{"v":1,"type":"model.result","id":"x2","success":true,"message":"Model: gpt-5-codex via ChatGPT plan"}"#));
+        assert!(matches!(state.transcript.last(), Some(Entry::Output { success: true, .. })));
+    }
+
+    #[test]
+    fn ctrl_p_connects_a_provider_with_a_key_then_shows_its_models() {
+        let mut state = ready();
+        type_text(&mut state, "/model");
+        let Some(Action::Send(Command::ModelsList { id })) = state.on_key(key(KeyCode::Enter)) else { panic!() };
+        state.apply(catalog(&id));
+        assert_eq!(state.on_key(ctrl('p')), None);
+        assert!(matches!(state.overlay, Some(Overlay::Connect(_))));
+        state.on_key(key(KeyCode::Down)); // chatgpt -> anthropic
+        assert_eq!(state.on_key(key(KeyCode::Enter)), None, "a single key method opens the key field");
+        state.on_paste("sk-ant-SECRET-1\n");
+        let Some(Action::Send(Command::ProviderConnect { id: request, provider, method, key: Some(secret) })) = state.on_key(key(KeyCode::Enter)) else {
+            panic!("expected provider.connect");
+        };
+        assert_eq!((provider.as_str(), method.as_str(), secret.0.as_str()), ("anthropic", "api-key", "sk-ant-SECRET-1"));
+        assert!(!format!("{:?}", Command::ProviderConnect { id: request.clone(), provider: "a".into(), method: "m".into(), key: Some(secret) }).contains("SECRET"));
+        state.apply(ev(&format!(r#"{{"v":1,"type":"provider.result","id":"{request}","provider":"anthropic","success":true,"message":"Anthropic connected (3 models available)."}}"#)));
+        let outbox = state.take_outbox();
+        assert!(matches!(outbox.as_slice(), [Action::Send(Command::ModelsList { .. })]), "reopens the picker for the provider");
+        assert!(matches!(&state.overlay, Some(Overlay::Models(p)) if p.only.as_deref() == Some("anthropic")));
+    }
+
+    #[test]
+    fn a_sign_in_shows_where_to_go_and_esc_cancels_it() {
+        let mut state = ready();
+        type_text(&mut state, "/connect");
+        let Some(Action::Send(Command::ModelsList { id })) = state.on_key(key(KeyCode::Enter)) else { panic!() };
+        state.apply(catalog(&id));
+        assert!(matches!(state.overlay, Some(Overlay::Connect(_))), "/connect opens the connect panel once providers are known");
+        let Some(Action::Send(Command::ProviderConnect { id: request, key: None, .. })) = state.on_key(key(KeyCode::Enter)) else {
+            panic!("chatgpt's only method is a sign-in");
+        };
+        state.apply(ev(&format!(r#"{{"v":1,"type":"provider.auth","id":"{request}","provider":"chatgpt","url":"https://auth.example/x","instructions":"Sign in"}}"#)));
+        assert!(matches!(&state.overlay, Some(Overlay::Connect(c)) if matches!(&c.step, crate::models::Step::Waiting { auth: Some(_), .. })));
+        assert_eq!(state.on_key(key(KeyCode::Esc)), Some(Action::Send(Command::ProviderCancel { id: request })));
+    }
+
 }

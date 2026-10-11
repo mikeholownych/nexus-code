@@ -192,6 +192,9 @@ impl LiveApp {
             match message {
                 SidecarMsg::Event(event) => {
                     self.state.apply(event);
+                    for action in self.state.take_outbox() {
+                        self.handle(action);
+                    }
                     if matches!(self.state.link, Link::Crashed { .. })
                         && let Some(mut sidecar) = self.sidecar.take()
                     {
