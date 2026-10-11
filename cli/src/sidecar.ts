@@ -14,9 +14,13 @@ import { getGitInfo } from "./git.js";
 import { redactSecrets } from "./ui.js";
 import { approvalReview } from "./approval_review.js";
 import { EvidenceLedger, LastTurn, MAX_EVIDENCE, ReceiptSection, receiptSections, redactedJson } from "./evidence.js";
+import { previewDiff } from "./file_diff.js";
 import {
+  DIFF_PREVIEW_CHARS,
+  DIFF_PREVIEW_LINES,
   MAX_SLASH_OUTPUT,
   PROTOCOL_VERSION,
+  SteerStatus,
   ProtocolError,
   SidecarCommand,
   SidecarEvent,
@@ -66,6 +70,10 @@ export class SidecarServer {
   private activeSpec?: SlashSpec;
   private readonly evidence = new EvidenceLedger();
   private lastTurn: LastTurn | null = null;
+  /** Steering ids already received: a resend is acknowledged, never applied twice. */
+  private readonly steerSeen = new Set<string>();
+  /** Steering that arrived as a turn was finishing: it starts a follow-up turn once that turn ends. */
+  private followUps: Array<{ id: string; text: string }> = [];
 
   constructor(options: SidecarOptions) {
     this.app = options.app;
@@ -108,6 +116,9 @@ export class SidecarServer {
     switch (command.type) {
       case "prompt.submit":
         this.submit(command.id, command.text);
+        return;
+      case "steer":
+        this.steer(command.id, command.text);
         return;
       case "cancel":
         this.cancel();
@@ -202,7 +213,65 @@ export class SidecarServer {
     }
   }
 
+  private steerAck(id: string, status: SteerStatus, message: string, text?: string): void {
+    this.emit({ type: "steer.ack", id, status, message, ...(text !== undefined ? { text: capText(text, 64_000) } : {}) });
+  }
+
+  /**
+   * Operator steering while work runs. Held by the agent and applied at its next step boundary; if the turn is already
+   * finishing it starts a follow-up turn; if nothing is running it starts a turn. Never applied twice, never dropped
+   * without telling the client (which then gets the text back).
+   */
+  private steer(id: string, text: string): void {
+    // Seen by this process, or recorded in the session's objective ledger (applied before a restart and resume).
+    if (this.steerSeen.has(id) || this.app.getAgent().getObjective()?.steering.some((s) => s.id === id)) {
+      this.steerAck(id, "duplicate", "Already received; it is not applied again.");
+      return;
+    }
+    this.steerSeen.add(id);
+    if (this.shutdownPromise) {
+      this.steerAck(id, "rejected", "The sidecar is shutting down; your message was not applied.", text);
+      return;
+    }
+    if (!this.activeTurn) {
+      this.history.push(text.trim());
+      this.steerAck(id, "applied", "Nothing was running, so your message started a new turn.");
+      this.runJob(id, undefined, (signal) => this.turn(id, text, text, `Turn: ${text.slice(0, 30)}`, signal));
+      return;
+    }
+    if (this.activeSpec) {
+      const name = this.activeSpec.name === "!" ? "!" : `/${this.activeSpec.name}`;
+      this.steerAck(id, "rejected", `${name} is running, and steering applies to agent turns; your message is back in the composer.`, text);
+      return;
+    }
+    const queued = this.app.getAgent().queueSteering(id, text);
+    if (queued.status === "queued") {
+      this.history.push(text.trim());
+      this.steerAck(id, "queued", "Steering queued; the agent applies it at its next step.");
+      return;
+    }
+    if (queued.status === "duplicate") {
+      this.steerAck(id, "duplicate", "Already received; it is not applied again.");
+      return;
+    }
+    this.history.push(text.trim());
+    this.followUps.push({ id, text });
+    this.steerAck(id, "deferred", "The turn is finishing; your message starts a follow-up turn as soon as it ends.");
+  }
+
+  /** Runs deferred steering as one follow-up turn under the first message's id. */
+  private startFollowUp(): void {
+    const followUps = this.followUps;
+    this.followUps = [];
+    const id = followUps[0].id;
+    const text = followUps.map((f) => f.text).join("\n\n");
+    for (const f of followUps) this.steerAck(f.id, "applied", "Applied as a follow-up turn.");
+    this.runJob(id, undefined, (signal) => this.turn(id, text, text, `Turn: ${text.slice(0, 30)}`, signal));
+  }
+
   private cancel(): void {
+    for (const f of this.followUps) this.steerAck(f.id, "cancelled", "Cancelled with the turn before it could start; your message is back in the composer.", f.text);
+    this.followUps = [];
     const spec = this.activeSpec;
     if (this.activeTurn && spec && !spec.cancellable) {
       const name = spec.name === "!" ? "!" : `/${spec.name}`;
@@ -236,6 +305,12 @@ export class SidecarServer {
         this.activeTurn = undefined;
         this.turnAbort = undefined;
         this.activeSpec = undefined;
+        // Deferred steering starts its turn without an idle state in between, so nothing can slip into the gap.
+        if (this.followUps.length && !this.shutdownPromise) {
+          settle();
+          this.startFollowUp();
+          return;
+        }
         this.emitSessionState();
         settle();
       });
@@ -270,6 +345,39 @@ export class SidecarServer {
         const text = providerRecoveryNotice(record, discardedPartialOutput);
         if (text) this.emit({ type: "notice", text });
       },
+      onActivity: ({ phase, step, segment, tool, subject }) =>
+        this.emit({
+          type: "activity",
+          turn_id: turnId,
+          phase,
+          step,
+          segment,
+          ...(tool ? { tool: toolName(tool) } : {}),
+          ...(subject ? { subject: capText(redactSecrets(stripEscapes(subject)), 200) } : {}),
+        }),
+      onFileChange: ({ dispatch, callId, path: file, change }) => {
+        const evidence = open.get(dispatch) ?? "";
+        this.evidence.attachDiff(evidence, change.diff);
+        const { preview, truncated, totalLines } = previewDiff(redactSecrets(stripEscapes(change.diff)), DIFF_PREVIEW_LINES, DIFF_PREVIEW_CHARS);
+        this.emit({
+          type: "file.diff",
+          turn_id: turnId,
+          call_id: callId,
+          evidence,
+          path: capText(redactSecrets(stripEscapes(file)), 400),
+          kind: change.kind,
+          added: change.added,
+          removed: change.removed,
+          preview,
+          truncated,
+          total_lines: totalLines,
+          ...(change.note ? { note: change.note } : {}),
+        });
+      },
+      onSteering: ({ id, status, step, text, reason }) => {
+        if (status === "applied") this.steerAck(id, "applied", `Applied at step ${step}.`);
+        else this.steerAck(id, "cancelled", `Not applied: ${reason ?? "the turn ended first"}. Your message is back in the composer.`, text);
+      },
     };
   }
 
@@ -289,6 +397,15 @@ export class SidecarServer {
       return;
     }
     const agent = this.app.getAgent();
+    if (typeof prompt === "string") {
+      const decision = agent.objectiveDecision(prompt);
+      if (decision.kind === "amend") {
+        this.emit({
+          type: "notice",
+          text: `This message continues the unfinished objective (${decision.unresolved} unresolved requirement${decision.unresolved === 1 ? "" : "s"}); its numbered items, if any, are added to it. /requirements clear starts a new objective.`,
+        });
+      }
+    }
     agent.setObserver(this.observerFor(turnId));
     // Work done so far, and changes still awaiting verification, survive the process ending mid-turn.
     agent.setProgressListener(() => this.saveSession(label));
@@ -362,6 +479,11 @@ export class SidecarServer {
   }
 
   private slash(id: string, command: string, args: string): void {
+    // Read-only diagnostics run beside a turn: they touch no conversation or workspace state the turn uses.
+    if (this.activeTurn && !this.shutdownPromise && busySafe(command, args)) {
+      void this.busySafeSlash(id, command, args);
+      return;
+    }
     if (this.rejectBusy(id)) return;
     this.runJob(id, findSlash(command), async (signal) => {
       const agent = this.app.getAgent();
@@ -389,6 +511,22 @@ export class SidecarServer {
         ...(outcome.composer !== undefined ? { composer: outcome.composer } : {}),
       });
     });
+  }
+
+  private async busySafeSlash(id: string, command: string, args: string): Promise<void> {
+    try {
+      const outcome = await routeSlash(this.slashHost(id), command, args, new AbortController().signal);
+      if (outcome.kind !== "reply") throw new Error(`/${command} cannot start a turn while another is running`);
+      this.emit({
+        type: "slash.result",
+        id,
+        command: outcome.command,
+        success: outcome.success,
+        output: capText(redactSecrets(stripEscapes(outcome.output)), MAX_SLASH_OUTPUT),
+      });
+    } catch (err) {
+      this.emit({ type: "error", id, code: "INTERNAL", message: capText(redactSecrets(errorText(err))) });
+    }
   }
 
   private slashHost(id: string): SlashHost {
@@ -430,11 +568,12 @@ export class SidecarServer {
       args: record.args,
       output: record.output,
       duration_ms: record.durationMs,
+      ...(record.diff ? { diff: record.diff } : {}),
     });
   }
 
   private receipt(): ReceiptSection[] {
-    return receiptSections(this.lastTurn, this.app.getActiveValidationReceipt());
+    return receiptSections(this.lastTurn, this.app.getActiveValidationReceipt() ?? null, this.app.getAgent().getObjective());
   }
 
   private setWorkspace(dir: string): void {
@@ -450,7 +589,13 @@ export class SidecarServer {
     if (messages.length <= 1) return;
     const config = this.app.getConfig();
     const now = new Date().toISOString();
-    this.app.getSessionManager().saveSession(
+    const manager = this.app.getSessionManager();
+    // Messages compaction replaced are archived beside the session, so the record can say how complete it is.
+    const archived = agent.drainArchivedHistory();
+    if (archived.length) manager.appendArchivedHistory(this.sessionId, archived);
+    const receipt = this.app.getActiveValidationReceipt();
+    const lastTurn = turn ?? agent.getLastTurnResult();
+    manager.saveSession(
       {
         id: this.sessionId,
         title: title ? title.slice(0, 60).replace(/\n/g, " ") : "Active Session",
@@ -461,7 +606,14 @@ export class SidecarServer {
         messages,
         unverifiedChangesPending: agent.hasUnverifiedChanges(),
         tokenStats: agent.getTokenStats(),
-        ...(turn ? { status: lifecycleStatusForTurn(turn), lastTurn: turn } : {}),
+        // The authoritative task state, not only the conversation: plan, milestones, receipts, objective and history.
+        activePlan: agent.getActivePlan(),
+        milestones: agentMilestones(agent),
+        validationReceipts: receipt ? [receipt] : [],
+        objective: agent.getObjective() ?? null,
+        history: agent.getHistoryCompleteness(),
+        ...(turn ? { status: lifecycleStatusForTurn(turn) } : {}),
+        ...(lastTurn ? { lastTurn } : {}),
       },
       agent.getWorkspacePathIdentity(),
     );
@@ -474,7 +626,8 @@ export class SidecarServer {
     if (!Array.isArray(session.messages)) return { ok: false, message: `Session ${session.id} is unreadable: it has no message list.` };
     if (session.workspace && fs.existsSync(session.workspace)) this.setWorkspace(session.workspace);
     this.sessionId = session.id;
-    this.app.getAgent().restoreSession(session.messages, session.unverifiedChangesPending);
+    this.app.getAgent().restoreSession(session.messages, session.unverifiedChangesPending, session.objective);
+    if (Array.isArray(session.activePlan)) this.app.getAgent().setActivePlan(session.activePlan);
     this.lastTurn = null;
     return { ok: true, message: `Resumed session ${session.id} (${session.messages.length} messages).` };
   }
@@ -507,6 +660,22 @@ export class SidecarServer {
 
   private emit(event: SidecarEvent): void {
     this.write(encodeEvent(event));
+  }
+}
+
+/** Commands that may run while a turn is in progress: diagnosis without repairs. */
+function busySafe(command: string, args: string): boolean {
+  const name = command.trim().replace(/^\//, "").toLowerCase();
+  return name === "doctor" && !args.split(/\s+/).includes("--fix");
+}
+
+/** Milestones the agent recorded in its own durable task state (update_plan completions); empty when unreadable. */
+function agentMilestones(agent: ReturnType<ApplicationCore["getAgent"]>): any[] {
+  try {
+    const manager = agent.getStateManager();
+    return manager.hasTaskState(agent.getTaskId()) ? manager.loadTaskState(agent.getTaskId()).milestones ?? [] : [];
+  } catch {
+    return [];
   }
 }
 
@@ -548,7 +717,11 @@ async function main(argv: string[]): Promise<void> {
     .option("-e, --endpoint <url>", "Local LLM endpoint")
     .option("-m, --model <name>", "Model name")
     .option("-w, --workspace <path>", "Workspace directory")
-    .option("-s, --max-steps <number>", "Maximum steps per turn")
+    .option("-s, --max-steps <number>", "Steps per segment (continuation checkpoints there instead of stopping)")
+    .option("--max-total-steps <number>", "Continuation: total steps a turn may run across segments (default 300)")
+    .option("--max-turn-minutes <number>", "Continuation: wall-clock budget of one turn in minutes (default 120)")
+    .option("--stagnation-steps <number>", "Continuation: stop after this many steps without progress (default 12)")
+    .option("--no-continuation", "End a turn at --max-steps instead of continuing while it makes progress")
     .option("-t, --temperature <number>", "Model temperature")
     .option("--shell <type>", "Shell for commands", "bash")
     .option("--fallback <urls>", "Comma-separated fallback LLM endpoints")

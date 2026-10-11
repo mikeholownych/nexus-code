@@ -8,19 +8,20 @@ use std::{
         atomic::{AtomicBool, Ordering},
         mpsc,
     },
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use crossterm::{
     event::{
-        self, DisableBracketedPaste, EnableBracketedPaste, Event as TermEvent, KeyEventKind,
-        KeyboardEnhancementFlags, PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
+        self, DisableBracketedPaste, EnableBracketedPaste, Event as TermEvent, KeyCode, KeyEvent,
+        KeyEventKind, KeyModifiers, KeyboardEnhancementFlags, PopKeyboardEnhancementFlags,
+        PushKeyboardEnhancementFlags,
     },
     execute, terminal,
 };
 
 use crate::live_state::{Action, Link, LiveLayout, LiveState};
-use crate::live_view::render_live;
+use crate::live_view::{FRAME, render_live};
 use crate::sidecar::{Sidecar, SidecarMsg, SidecarSpec};
 
 const SHUTDOWN_GRACE: Duration = Duration::from_secs(3);
@@ -288,10 +289,41 @@ pub fn run_live(spec: SidecarSpec) -> Result<(), Box<dyn std::error::Error>> {
 }
 
 fn draw(terminal: &mut ratatui::DefaultTerminal, app: &mut LiveApp) -> io::Result<()> {
+    app.state.set_now(Instant::now());
     let mut layout = LiveLayout::default();
     terminal.draw(|frame| layout = render_live(frame, &app.state))?;
     app.state.note_layout(layout);
     Ok(())
+}
+
+/// A key a terminal without bracketed paste would deliver as part of pasted text.
+fn pasteable(key: &KeyEvent) -> bool {
+    key.kind == KeyEventKind::Press
+        && !key.modifiers.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT)
+        && matches!(key.code, KeyCode::Char(_) | KeyCode::Enter | KeyCode::Tab)
+}
+
+/// Text of a burst of keys that arrived together. Without bracketed paste a paste is typed at machine speed, so its
+/// keys are already queued when the first is read. A line break inside the burst (with more text after it) means
+/// pasted lines, which must not send at the first newline; a trailing Enter is always a key, so a line typed or
+/// sent quickly still submits.
+fn burst_text(keys: &[KeyEvent]) -> Option<String> {
+    let enter_inside = keys
+        .iter()
+        .position(|key| key.code == KeyCode::Enter)
+        .is_some_and(|at| at + 1 < keys.len());
+    if !enter_inside {
+        return None;
+    }
+    Some(
+        keys.iter()
+            .map(|key| match key.code {
+                KeyCode::Char(c) => c,
+                KeyCode::Tab => '\t',
+                _ => '\n',
+            })
+            .collect(),
+    )
 }
 
 fn event_loop(
@@ -299,6 +331,10 @@ fn event_loop(
     app: &mut LiveApp,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let mut redraw = true;
+    // Frame index of the activity animation last drawn; the loop redraws when the clock moves past it, so the
+    // indicator advances during slow inference and tools without any sidecar event, and idles otherwise.
+    let mut drawn_frame: Option<u128> = None;
+    let mut pending: Option<TermEvent> = None;
     loop {
         if stop_requested() {
             app.state.closing = true;
@@ -306,14 +342,58 @@ fn event_loop(
             return Ok(());
         }
         redraw |= app.pump();
+        let frame = app
+            .state
+            .animating()
+            .then(|| app.state.turn_started.map(|t| t.elapsed().as_millis() / FRAME.as_millis()).unwrap_or(0));
+        if frame.is_some() && frame != drawn_frame {
+            redraw = true;
+        }
         if redraw {
             draw(terminal, app)?;
+            drawn_frame = frame;
             redraw = false;
         }
-        if !event::poll(INPUT_POLL)? {
-            continue;
-        }
-        let action = match event::read()? {
+        let event = match pending.take() {
+            Some(event) => event,
+            None => {
+                let wait = if frame.is_some() { INPUT_POLL.min(FRAME) } else { INPUT_POLL };
+                if !event::poll(wait)? {
+                    continue;
+                }
+                event::read()?
+            }
+        };
+        let action = match event {
+            TermEvent::Key(key) if pasteable(&key) && event::poll(Duration::ZERO)? => {
+                let mut keys = vec![key];
+                while event::poll(Duration::ZERO)? {
+                    match event::read()? {
+                        TermEvent::Key(next) if pasteable(&next) => keys.push(next),
+                        TermEvent::Key(next) if next.kind != KeyEventKind::Press => {}
+                        other => {
+                            pending = Some(other);
+                            break;
+                        }
+                    }
+                }
+                match burst_text(&keys) {
+                    Some(text) => {
+                        app.state.on_paste(&text);
+                        None
+                    }
+                    None => {
+                        let mut last = None;
+                        for key in keys {
+                            if let Some(action) = app.state.on_key(key) {
+                                last = Some(action);
+                                break;
+                            }
+                        }
+                        last
+                    }
+                }
+            }
             TermEvent::Key(key) if key.kind == KeyEventKind::Press => app.state.on_key(key),
             TermEvent::Paste(text) => {
                 app.state.on_paste(&text);
@@ -565,6 +645,19 @@ case "$shutdown" in *'"type":"shutdown"'*) exit 0;; *) exit 8;; esac"#
             |s| matches!(&s.link, Link::Crashed { reason, .. } if reason.contains("not part of the protocol")),
         );
         assert!(started.elapsed() < Duration::from_secs(5));
+    }
+
+    #[test]
+    fn a_burst_with_a_line_break_inside_is_a_paste_but_quick_typing_is_not() {
+        let k = |c: char| KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE);
+        let enter = KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE);
+        assert_eq!(burst_text(&[k('a'), enter, k('b')]), Some("a\nb".into()));
+        assert_eq!(burst_text(&[k('o'), k('k'), enter]), None, "a typed line then Enter still sends");
+        assert_eq!(burst_text(&[k('x'), k('y')]), None);
+        let mut typed: Vec<KeyEvent> = "a long line sent by a script".chars().map(k).collect();
+        typed.push(enter);
+        assert_eq!(burst_text(&typed), None, "a quickly sent line still submits on its trailing Enter");
+        assert!(!pasteable(&KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL)));
     }
 
     #[test]

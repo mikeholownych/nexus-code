@@ -684,11 +684,18 @@ export class AgentWorkUnitExecutor implements WorkUnitExecutor {
       };
     }
     if (turn.execution === "LIMIT_REACHED") {
+      // A continued unit stops only on a budget or on stagnation; say which, so the operator's choice is informed.
+      const why =
+        turn.reason === "STAGNATION_DETECTED"
+          ? `stopped making progress after ${turn.steps.used} steps${turn.detail ? ` (${turn.detail})` : ""}`
+          : turn.reason === "TIME_BUDGET_EXHAUSTED"
+            ? `ran out of its time budget after ${turn.steps.used} steps`
+            : `used all ${turn.steps.max} steps without finishing`;
       return {
         kind: "failed",
         cause: "EXECUTION_FAILED",
-        reason: `step limit ${turn.steps.max} reached`,
-        question: `${unit.title} used all ${turn.steps.max} steps without finishing. Continue from its history with a fresh step budget, or revise it?`,
+        reason: turn.reason === "STAGNATION_DETECTED" || turn.reason === "TIME_BUDGET_EXHAUSTED" ? `${turn.reason}: ${why}` : `step limit ${turn.steps.max} reached`,
+        question: `${unit.title} ${why}. Continue from its history with a fresh step budget, or revise it?`,
         options: [
           { label: "continue with more steps", action: { kind: "retry" } },
           { label: "revise the unit (note required)", action: { kind: "revise" } },

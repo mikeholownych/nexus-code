@@ -3,7 +3,7 @@ import assert from "node:assert";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
-import { execFileSync, execSync } from "node:child_process";
+import { execFileSync, execSync, spawnSync } from "node:child_process";
 
 describe("WP-11: Security Lifecycle Gates & Segregation (INC-12, SCAN-001..005, REL-001..004, SEGR-001..003)", () => {
   const rootDir = path.resolve(import.meta.dirname, "../..");
@@ -59,21 +59,69 @@ describe("WP-11: Security Lifecycle Gates & Segregation (INC-12, SCAN-001..005, 
     );
   });
 
-  test("SCAN-001 & SCAN-004: Rust vulnerability scanner unavailable fails closed", () => {
-    const scriptPath = path.join(scriptsDir, "security_gates.sh");
-    assert.throws(
-      () => {
-        execFileSync("bash", [scriptPath], {
-          cwd: rootDir,
-          env: { ...process.env, SIMULATE_RUST_SCANNER_UNAVAILABLE: "1" },
-          stdio: "pipe",
-        });
-      },
-      (err: any) => {
-        const stderr = err.stderr ? err.stderr.toString() : "";
-        return stderr.includes("Rust vulnerability scanner unavailable");
-      }
+  /**
+   * A stand-in `npm` first on PATH, so Gate 1's outcome is fixed and a later gate's assertion cannot be masked by a
+   * network or npm configuration problem. Like npm 11, it refuses an inherited npm_config_allow_scripts.
+   */
+  function stubNpm(report: "clean" | "findings" | "error"): string {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-stub-npm-"));
+    const bodies = {
+      clean: `echo '{"metadata":{"vulnerabilities":{"info":0,"low":1,"moderate":0,"high":0,"critical":0}}}'; exit 0`,
+      findings: `echo '{"metadata":{"vulnerabilities":{"info":0,"low":0,"moderate":0,"high":2,"critical":1}}}'; exit 1`,
+      error: `echo '{"error":{"code":"ENOTFOUND","summary":"request to https://registry.npmjs.org failed"}}'; echo 'npm error code ENOTFOUND' >&2; exit 1`,
+    };
+    fs.writeFileSync(
+      path.join(dir, "npm"),
+      `#!/usr/bin/env bash
+if [[ -n "\${npm_config_allow_scripts:-}" ]]; then
+  echo '{"error":{"code":"EALLOWSCRIPTS","summary":"--allow-scripts is not allowed in project-scoped installs."}}'
+  exit 1
+fi
+${bodies[report]}
+`,
+      { mode: 0o755 },
     );
+    return dir;
+  }
+
+  function runGate(npmDir: string, extraEnv: Record<string, string> = {}): { status: number; stderr: string; stdout: string } {
+    const res = spawnSync("bash", [path.join(scriptsDir, "security_gates.sh")], {
+      cwd: rootDir,
+      env: { ...process.env, PATH: `${npmDir}:${process.env.PATH}`, ...extraEnv },
+      encoding: "utf-8",
+    });
+    fs.rmSync(npmDir, { recursive: true, force: true });
+    return { status: res.status ?? -1, stderr: res.stderr, stdout: res.stdout };
+  }
+
+  test("SCAN-001 & SCAN-004: Rust vulnerability scanner unavailable fails closed", () => {
+    // Gate 1 is pinned clean, so the failure can only come from the simulated Rust scanner.
+    const res = runGate(stubNpm("clean"), { SIMULATE_RUST_SCANNER_UNAVAILABLE: "1" });
+    assert.notEqual(res.status, 0);
+    assert.ok(res.stdout.includes("[+] [Gate 1] Node.js dependencies clean"), res.stdout + res.stderr);
+    assert.ok(res.stderr.includes("Rust vulnerability scanner unavailable"), res.stderr);
+  });
+
+  test("SCAN-005: an npm audit that cannot run is a scanner failure, not a vulnerability finding", () => {
+    const res = runGate(stubNpm("error"));
+    assert.notEqual(res.status, 0);
+    assert.ok(res.stderr.includes("[SCAN-005]") && res.stderr.includes("scanner could not run"), res.stderr);
+    assert.ok(res.stderr.includes("ENOTFOUND"), res.stderr);
+    assert.ok(!res.stderr.includes("High or Critical vulnerability detected"), res.stderr);
+  });
+
+  test("SCAN-004: High/Critical npm audit findings fail the gate as findings", () => {
+    const res = runGate(stubNpm("findings"));
+    assert.notEqual(res.status, 0);
+    assert.ok(res.stderr.includes("[SCAN-004]") && res.stderr.includes("high=2 critical=1"), res.stderr);
+    assert.ok(!res.stderr.includes("[SCAN-005]"), res.stderr);
+  });
+
+  test("SCAN-005: an allow-scripts setting inherited from `npm test` does not reach npm audit", () => {
+    // Under `npm test`, npm exports a user-level `allow-scripts` as npm_config_allow_scripts; npm 11 rejects it.
+    const res = runGate(stubNpm("clean"), { npm_config_allow_scripts: "workerd", SIMULATE_RUST_SCANNER_UNAVAILABLE: "1" });
+    assert.ok(res.stdout.includes("[+] [Gate 1] Node.js dependencies clean"), res.stdout + res.stderr);
+    assert.ok(!res.stderr.includes("EALLOWSCRIPTS"), res.stderr);
   });
 
   test("SCAN-002: Rust dependency vulnerability detection on fixture fails closed", () => {

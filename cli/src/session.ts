@@ -10,6 +10,7 @@ import {
   CURRENT_STATE_SCHEMA_VERSION,
 } from "./core/state.js";
 import { WorkspacePath } from "./core/workspace_path.js";
+import { protectArchivedMessages } from "./core/persistence_protection.js";
 
 // Re-export core state primitives
 export * from "./core/state.js";
@@ -23,13 +24,18 @@ export interface SessionData extends DurableTaskState {
   model: string;
 }
 
+/** Where interactive sessions are saved unless a directory is given. */
+export function defaultSessionsDir(): string {
+  return path.join(os.homedir(), ".nexus", "sessions");
+}
+
 export class SessionManager {
   private sessionsDir: string;
   private stateManager: DurableStateManager;
   private readonly selectedWorkspace: (() => WorkspacePath) | undefined;
 
   constructor(customDir?: string, selectedWorkspace?: () => WorkspacePath) {
-    this.sessionsDir = customDir || path.join(os.homedir(), ".nexus", "sessions");
+    this.sessionsDir = customDir || defaultSessionsDir();
     this.selectedWorkspace = selectedWorkspace;
     if (!fs.existsSync(this.sessionsDir)) {
       fs.mkdirSync(this.sessionsDir, { recursive: true });
@@ -87,6 +93,9 @@ export class SessionManager {
       compactionProvenance: session.compactionProvenance,
       cognitiveRouting: session.cognitiveRouting,
       tokenStats: session.tokenStats,
+      ...(session.lastTurn !== undefined ? { lastTurn: session.lastTurn } : {}),
+      ...(session.objective !== undefined ? { objective: session.objective } : {}),
+      ...(session.history !== undefined ? { history: session.history } : {}),
     };
 
     this.stateManager.saveTaskState(fullState, selectedWorkspace ? [selectedWorkspace] : []);
@@ -146,6 +155,39 @@ export class SessionManager {
     } catch {
       return null;
     }
+  }
+
+  /** Archive of messages context compaction replaced in this session (redacted JSON lines beside the record). */
+  public archivedHistoryPath(sessionId: string): string {
+    if (!/^[A-Za-z0-9._-]{1,160}$/.test(sessionId)) throw new Error("Session identity is not a safe persistence name");
+    return path.join(this.sessionsDir, `${sessionId}.history.jsonl`);
+  }
+
+  public appendArchivedHistory(sessionId: string, messages: ChatMessage[]): void {
+    if (!messages.length) return;
+    const lines = protectArchivedMessages(messages).map((message) => JSON.stringify({ archivedAt: new Date().toISOString(), message }));
+    fs.appendFileSync(this.archivedHistoryPath(sessionId), `${lines.join("\n")}\n`, { encoding: "utf8", mode: 0o600 });
+  }
+
+  /** The archived originals, oldest first; empty when there is no archive. Unreadable lines are counted, not hidden. */
+  public readArchivedHistory(sessionId: string): { messages: ChatMessage[]; unreadableLines: number } {
+    let raw = "";
+    try {
+      raw = fs.readFileSync(this.archivedHistoryPath(sessionId), "utf8");
+    } catch {
+      return { messages: [], unreadableLines: 0 };
+    }
+    const messages: ChatMessage[] = [];
+    let unreadableLines = 0;
+    for (const line of raw.split("\n")) {
+      if (!line.trim()) continue;
+      try {
+        messages.push(JSON.parse(line).message);
+      } catch {
+        unreadableLines++;
+      }
+    }
+    return { messages, unreadableLines };
   }
 
   public getLatestSession(): SessionData | null {

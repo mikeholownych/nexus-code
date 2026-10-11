@@ -145,6 +145,47 @@ pub enum Event {
     },
     #[serde(rename = "assistant.delta")]
     AssistantDelta { turn_id: String, text: String },
+    /// What the running turn is doing; sent on each phase change, independent of model output.
+    #[serde(rename = "activity")]
+    Activity {
+        phase: String,
+        #[serde(default)]
+        step: u64,
+        #[serde(default)]
+        segment: u64,
+        #[serde(default)]
+        tool: Option<String>,
+        #[serde(default)]
+        subject: Option<String>,
+    },
+    /// A file-edit tool changed a file: that operation's own diff, as a bounded preview.
+    #[serde(rename = "file.diff")]
+    FileDiff {
+        call_id: String,
+        #[serde(default)]
+        evidence: String,
+        path: String,
+        kind: String,
+        added: u64,
+        removed: u64,
+        preview: String,
+        #[serde(default)]
+        truncated: bool,
+        #[serde(default)]
+        total_lines: u64,
+        #[serde(default)]
+        note: Option<String>,
+    },
+    /// What became of operator steering: queued, applied, deferred, cancelled, rejected or duplicate.
+    #[serde(rename = "steer.ack")]
+    SteerAck {
+        id: String,
+        status: String,
+        message: String,
+        /// Returned text for cancelled or rejected steering.
+        #[serde(default)]
+        text: Option<String>,
+    },
     #[serde(rename = "tool.start")]
     ToolStart {
         call_id: String,
@@ -200,6 +241,9 @@ pub enum Event {
         output: String,
         #[serde(default)]
         duration_ms: Option<u64>,
+        /// Full diff of the file change the call made.
+        #[serde(default)]
+        diff: Option<String>,
     },
     #[serde(rename = "receipt")]
     Receipt {
@@ -256,6 +300,9 @@ pub enum Event {
 pub enum Command {
     #[serde(rename = "prompt.submit")]
     PromptSubmit { id: String, text: String },
+    /// Guidance for the work in progress; the sidecar answers with `steer.ack`.
+    #[serde(rename = "steer")]
+    Steer { id: String, text: String },
     #[serde(rename = "cancel")]
     Cancel,
     #[serde(rename = "approve")]
@@ -506,6 +553,7 @@ mod tests {
                 args: "{}".into(),
                 output: String::new(),
                 duration_ms: None,
+                diff: None,
             })
         );
         assert_eq!(
@@ -527,6 +575,38 @@ mod tests {
                     },
                 ],
             })
+        );
+    }
+
+    #[test]
+    fn activity_diff_and_steering_events_parse() {
+        assert_eq!(
+            parse_event(r#"{"v":1,"type":"activity","turn_id":"t1","phase":"tool","step":31,"segment":2,"tool":"run_command","subject":"make test"}"#),
+            Ok(Event::Activity {
+                phase: "tool".into(),
+                step: 31,
+                segment: 2,
+                tool: Some("run_command".into()),
+                subject: Some("make test".into()),
+            })
+        );
+        assert!(matches!(
+            parse_event(r#"{"v":1,"type":"file.diff","turn_id":"t1","call_id":"c1","evidence":"e2","path":"a.ts","kind":"modified","added":1,"removed":1,"preview":"--- a/a.ts\n+++ b/a.ts\n@@ -1 +1 @@\n-a\n+b","truncated":false,"total_lines":5}"#),
+            Ok(Event::FileDiff { ref path, added: 1, removed: 1, ref kind, .. }) if path == "a.ts" && kind == "modified"
+        ));
+        assert_eq!(
+            parse_event(r#"{"v":1,"type":"steer.ack","id":"g1","status":"cancelled","message":"Not applied","text":"use tabs"}"#),
+            Ok(Event::SteerAck {
+                id: "g1".into(),
+                status: "cancelled".into(),
+                message: "Not applied".into(),
+                text: Some("use tabs".into()),
+            })
+        );
+        let line = encode_command(&Command::Steer { id: "g1".into(), text: "use\ntabs".into() });
+        assert_eq!(
+            serde_json::from_str::<Value>(&line).unwrap(),
+            serde_json::json!({"v":1,"type":"steer","id":"g1","text":"use\ntabs"})
         );
     }
 

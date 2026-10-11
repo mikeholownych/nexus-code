@@ -7,7 +7,7 @@ import { execSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { ApplicationCore } from "../src/core/app.js";
 import { CheckpointManager } from "../src/checkpoint.js";
-import { BANG, SLASH_COMMANDS, SlashHost, SlashOutcome, SlashReply, findSlash } from "../src/slash/catalog.js";
+import { BANG, SLASH_COMMANDS, SlashHost, SlashOutcome, SlashReply, findSlash, slashCatalog } from "../src/slash/catalog.js";
 import { hasHandler, routeSlash } from "../src/slash/router.js";
 import { receiptSections } from "../src/evidence.js";
 import { makeHome, makeRepo } from "./helpers/fixtures.js";
@@ -230,11 +230,16 @@ describe("slash router: session commands", () => {
     });
   });
 
-  test("theme, tui, exit and compact answer plainly", async () => {
+  test("theme, exit and compact answer plainly; /tui is not a live-view command", async () => {
     await withRig(async ({ reply }) => {
       assert.match((await reply("theme")).output, /Save one with \/theme <name>\./);
       assert.equal((await reply("theme", "no-such-theme")).success, false);
-      assert.equal((await reply("tui")).output, "You are already in the live view.");
+      // /tui only ever told the live view it was the live view; it is gone from the catalogue, help and completion.
+      const tui = await reply("tui");
+      assert.equal(tui.success, false);
+      assert.equal(tui.output, "Unknown command: /tui. Type /help for the list.");
+      assert.ok(!slashCatalog().some((spec) => spec.name === "tui"));
+      assert.ok(!(await reply("help")).output.includes("/tui"));
       assert.equal((await reply("quit")).output, "Press q, or ctrl+c with an empty composer, to quit.");
       assert.equal((await reply("compact")).success, true);
     });
@@ -478,7 +483,10 @@ describe("slash router: extensions and turns", () => {
     const repl = fs.readFileSync(path.join(cliRoot, "src", "repl.ts"), "utf-8");
     const names = new Set([...repl.matchAll(/cmd === "([^"]+)"/g)].map((m) => m[1]));
     assert.ok(names.size >= 40, `found only ${names.size} REPL commands`);
-    for (const name of names) assert.ok(findSlash(name), `/${name} is missing from SLASH_COMMANDS`);
+    // /tui opens the REPL's own session dashboard; inside the live TUI it has no purpose and is deliberately absent.
+    const replOnly = new Set(["tui"]);
+    for (const name of names) if (!replOnly.has(name)) assert.ok(findSlash(name), `/${name} is missing from SLASH_COMMANDS`);
+    for (const name of replOnly) assert.equal(findSlash(name), undefined, `/${name} must not be offered in the live TUI`);
   });
 
   test("every catalogue command has a handler", () => {

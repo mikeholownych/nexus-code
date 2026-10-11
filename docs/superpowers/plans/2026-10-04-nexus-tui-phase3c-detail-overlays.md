@@ -121,7 +121,7 @@ describe("evidence ledger", () => {
 
   test("secrets and terminal escapes are removed and long output is capped", () => {
     const ledger = new EvidenceLedger();
-    const id = ledger.start("t1", "write_file", "env.ts", { path: "env.ts", content: "token = sk-abcdefghijklmnopqrstuvwxyz123456" });
+    const id = ledger.start("t1", "write_file", "env.ts", { path: "env.ts", content: `token = sk-${"abcdefghijklmnopqrstuvwxyz123456"}` });
     assert.equal(ledger.get(id)?.args.includes("sk-abcdefghij"), false);
     ledger.end(id, true, "\x1b[31mred\x1b[0m " + "x".repeat(MAX_DETAIL + 6000));
     const output = ledger.get(id)?.output ?? "";

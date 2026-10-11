@@ -27,10 +27,46 @@ fi
 # -----------------------------------------------------------------------------
 echo "[*] [Gate 1] Auditing Node.js dependencies via npm audit..."
 cd "${ROOT_DIR}/cli"
-if ! npm audit --audit-level=high; then
-  echo "[-] FAIL [SCAN-004]: High or Critical vulnerability detected in Node.js dependencies." >&2
-  exit 1
-fi
+# npm exports its configuration to child processes as npm_config_* variables. When this gate runs under
+# `npm test`, a user-level `allow-scripts` setting from ~/.npmrc arrives here as npm_config_allow_scripts, which
+# npm 11 treats as a command-line option and refuses for project-scoped commands (EALLOWSCRIPTS). Dropping the
+# inherited copy changes nothing else: npm still reads the same ~/.npmrc and project configuration itself.
+AUDIT_ERR="$(mktemp)"
+trap 'rm -f "${AUDIT_ERR}"' EXIT
+set +e
+AUDIT_JSON="$(env -u npm_config_allow_scripts npm audit --json --audit-level=high 2>"${AUDIT_ERR}")"
+AUDIT_STATUS=$?
+set -e
+# A scanner that could not run is not a vulnerability finding, and neither is a pass: both fail the gate, with
+# different reasons.
+AUDIT_VERDICT="$(printf '%s' "${AUDIT_JSON}" | node -e '
+let raw = "";
+process.stdin.on("data", (c) => (raw += c)).on("end", () => {
+  let report;
+  try { report = JSON.parse(raw); } catch { console.log("unreadable"); return; }
+  if (report.error) { console.log(`error ${report.error.code || "unknown"}: ${report.error.summary || ""}`.trim()); return; }
+  const counts = report.metadata && report.metadata.vulnerabilities;
+  if (!counts || typeof counts.high !== "number" || typeof counts.critical !== "number") { console.log("unreadable"); return; }
+  console.log(counts.high + counts.critical > 0 ? `findings high=${counts.high} critical=${counts.critical}` : "clean");
+});' 2>/dev/null || echo "unreadable")"
+case "${AUDIT_VERDICT}" in
+  clean)
+    if [[ ${AUDIT_STATUS} -ne 0 ]]; then
+      echo "[-] FAIL [SCAN-005]: npm audit exited ${AUDIT_STATUS} without reporting High/Critical findings; the scan result cannot be trusted." >&2
+      exit 1
+    fi
+    ;;
+  findings*)
+    echo "${AUDIT_VERDICT}" >&2
+    echo "[-] FAIL [SCAN-004]: High or Critical vulnerability detected in Node.js dependencies (${AUDIT_VERDICT#findings })." >&2
+    exit 1
+    ;;
+  *)
+    sed -n '1,5p' "${AUDIT_ERR}" >&2
+    echo "[-] FAIL [SCAN-005]: Node.js vulnerability scanner could not run (${AUDIT_VERDICT}; exit ${AUDIT_STATUS}). This is a scanner execution or configuration failure, not a vulnerability finding; dependency safety is not established." >&2
+    exit 1
+    ;;
+esac
 echo "[+] [Gate 1] Node.js dependencies clean (zero High/Critical vulnerabilities)."
 
 echo "[*] [Gate 1] Verifying Rust core dependencies..."

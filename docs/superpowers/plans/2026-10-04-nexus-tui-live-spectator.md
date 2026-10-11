@@ -316,7 +316,7 @@ mod tests {
             redactor.line(r#"✖ Inference error (HTTP 500): {"error":"upstream rejected Bearer abcdefghijklmnopqrstuvwxyz0123"}"#).unwrap(),
             r#"✖ Inference error (HTTP 500): {"error":"upstream rejected Bearer [REDACTED_TOKEN]"}"#
         );
-        assert_eq!(redactor.line("key sk-abcdefghijklmnop1234 leaked").unwrap(), "key [REDACTED_KEY] leaked");
+        assert_eq!(redactor.line(&format!("key sk-{} leaked", "abcdefghijklmnop1234")).unwrap(), "key [REDACTED_KEY] leaked");
         assert_eq!(redactor.line("api_key=hunter2hunter2 next").unwrap(), "api_key=[REDACTED] next");
         assert_eq!(redactor.line(r#""password": "s3cretvalue""#).unwrap(), r#""password": "[REDACTED]""#);
         assert_eq!(redactor.line("plain diagnostic").unwrap(), "plain diagnostic");

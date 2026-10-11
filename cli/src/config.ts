@@ -6,7 +6,7 @@ import { config as loadDotenv, parse as parseDotenv } from "dotenv";
 import { credentialOriginOf, credentialStorageHome, environmentCredential, LocalLlmClient, operatorSetting, setCredentialAuthority } from "./client.js";
 import { baseUrlSetting, originOf, parseOriginList, PROVIDERS, providerDefinition } from "./providers.js";
 import { providerApiKey } from "./credentials.js";
-import { HarnessConfig } from "./types.js";
+import { ContinuationBudget, DEFAULT_CONTINUATION, HarnessConfig } from "./types.js";
 
 const installEnv = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../.env");
 const DEFAULT_ENDPOINT = "http://localhost:1234/v1";
@@ -99,6 +99,7 @@ export function buildConfig(options: any): HarnessConfig {
   const credentialOrigin = apiKey === "local" ? undefined : options.apiKey || provider ? credentialOriginOf(endpoint) : envCredential?.origin;
   const workspace = options.workspace ? path.resolve(options.workspace) : process.cwd();
   const maxSteps = options.maxSteps ? parseInt(options.maxSteps, 10) : 30;
+  const continuation = continuationBudget(options);
   const temperature = options.temperature ? parseFloat(options.temperature) : 0.2;
   const shell = options.shell || process.env.LOCAL_HARNESS_SHELL || "bash";
   const dryRun = Boolean(options.dryRun);
@@ -150,6 +151,7 @@ export function buildConfig(options: any): HarnessConfig {
     ...(credentialOrigin ? { credentialOrigin } : {}),
     workspace,
     maxSteps,
+    ...(continuation ? { continuation } : {}),
     temperature,
     shell,
     dryRun,
@@ -173,6 +175,29 @@ export function buildConfig(options: any): HarnessConfig {
     ...(cloudRoutedOrigins.length ? { cloudRoutedOrigins } : {}),
     ...(reasoningEffort ? { reasoningEffort } : {}),
     ...(anthropicThinkingBudget ? { anthropicThinkingBudget } : {}),
+  };
+}
+
+/**
+ * Continuation budgets: flags, then NEXUS_MAX_TOTAL_STEPS / NEXUS_MAX_TURN_MINUTES / NEXUS_STAGNATION_STEPS, then
+ * defaults. `--no-continuation` (or NEXUS_CONTINUATION=0) restores the single-segment turn that ends at --max-steps.
+ */
+export function continuationBudget(options: any): ContinuationBudget | undefined {
+  if (options.continuation === false || process.env.NEXUS_CONTINUATION === "0") return undefined;
+  const positive = (flag: unknown, env: string | undefined, fallback: number): number => {
+    for (const raw of [flag, env]) {
+      if (raw === undefined || raw === null || raw === "") continue;
+      const value = Number(raw);
+      if (!Number.isFinite(value) || value <= 0) throw new Error(`Invalid continuation budget '${String(raw)}': expected a positive number.`);
+      return value;
+    }
+    return fallback;
+  };
+  return {
+    ...DEFAULT_CONTINUATION,
+    maxTotalSteps: Math.floor(positive(options.maxTotalSteps, process.env.NEXUS_MAX_TOTAL_STEPS, DEFAULT_CONTINUATION.maxTotalSteps)),
+    maxTurnMinutes: positive(options.maxTurnMinutes, process.env.NEXUS_MAX_TURN_MINUTES, DEFAULT_CONTINUATION.maxTurnMinutes),
+    stagnationSteps: Math.floor(positive(options.stagnationSteps, process.env.NEXUS_STAGNATION_STEPS, DEFAULT_CONTINUATION.stagnationSteps)),
   };
 }
 

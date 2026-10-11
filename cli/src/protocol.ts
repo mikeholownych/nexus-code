@@ -16,6 +16,18 @@ export const MAX_SLASH_OUTPUT = 32_000;
 
 export type ErrorCode = "BAD_REQUEST" | "BUSY" | "NO_PENDING_APPROVAL" | "NOT_FOUND" | "INTERNAL";
 
+/** Lines of a file diff shown in the transcript; the full diff is in the tool call's detail record. */
+export const DIFF_PREVIEW_LINES = 40;
+export const DIFF_PREVIEW_CHARS = 6000;
+
+/**
+ * What became of operator steering sent while work was running. `queued`: held for the next step boundary.
+ * `applied`: given to the agent (at a step boundary, or as a follow-up turn). `deferred`: the turn was finishing; it
+ * starts a follow-up turn. `cancelled`: the turn ended first; `text` is returned to the operator. `rejected`: nothing
+ * it could steer (a command is running); `text` is returned. `duplicate`: this id was already received.
+ */
+export type SteerStatus = "queued" | "applied" | "deferred" | "cancelled" | "rejected" | "duplicate";
+
 export interface ModelSummary {
   summary: string;
   notes?: string;
@@ -33,6 +45,24 @@ export type SidecarEvent =
       busy: boolean;
     }
   | { type: "assistant.delta"; turn_id: string; text: string }
+  /** What the running turn is doing; sent on every phase change, independent of model output. */
+  | { type: "activity"; turn_id: string; phase: string; step: number; segment: number; tool?: string; subject?: string }
+  /** A file-edit tool changed a file: that operation's own diff (bounded preview; `evidence` opens the full one). */
+  | {
+      type: "file.diff";
+      turn_id: string;
+      call_id: string;
+      evidence: string;
+      path: string;
+      kind: "added" | "modified" | "deleted";
+      added: number;
+      removed: number;
+      preview: string;
+      truncated: boolean;
+      total_lines: number;
+      note?: string;
+    }
+  | { type: "steer.ack"; id: string; status: SteerStatus; message: string; text?: string }
   | { type: "tool.start"; turn_id: string; call_id: string; tool: string; subject: string; evidence: string }
   | { type: "tool.end"; turn_id: string; call_id: string; tool: string; success: boolean; summary: string; lines: number; evidence: string }
   | { type: "approval.request"; id: string; turn_id: string; tool: string; subject: string; preview: string; review: ApprovalReview }
@@ -61,6 +91,8 @@ export type SidecarEvent =
       args: string;
       output: string;
       duration_ms: number | null;
+      /** Full unified diff of the change this call made, when it changed a file. */
+      diff?: string;
     }
   | { type: "receipt"; id: string; sections: ReceiptSection[] }
   | { type: "error"; id?: string; code: ErrorCode; message: string }
@@ -75,6 +107,8 @@ export type SidecarEvent =
 
 export type SidecarCommand =
   | { type: "prompt.submit"; id: string; text: string }
+  /** Operator guidance for the work in progress (see SteerStatus). */
+  | { type: "steer"; id: string; text: string }
   | { type: "cancel" }
   | { type: "approve"; id: string; always: boolean }
   | { type: "deny"; id: string }
@@ -125,6 +159,12 @@ export function parseCommand(line: string): SidecarCommand {
       const text = msg.text;
       if (typeof text !== "string" || !text.trim()) throw new ProtocolError("prompt.submit requires non-empty text", requestId);
       return { type: "prompt.submit", id: requestId, text };
+    }
+    case "steer": {
+      const requestId = requireId("steer");
+      const text = msg.text;
+      if (typeof text !== "string" || !text.trim()) throw new ProtocolError("steer requires non-empty text", requestId);
+      return { type: "steer", id: requestId, text };
     }
     case "cancel":
       return { type: "cancel" };

@@ -34,6 +34,14 @@ export type TurnReason =
   | "VERIFIER_TIMED_OUT"
   | "INFERENCE_FAILED"
   | "STEP_LIMIT_REACHED"
+  /** Continued turn: the total step budget across segments is spent. */
+  | "STEP_BUDGET_EXHAUSTED"
+  /** Continued turn: the wall-clock budget is spent. */
+  | "TIME_BUDGET_EXHAUSTED"
+  /** Continued turn: no progress for the configured number of steps, or bounded recovery from a repeated action failed. */
+  | "STAGNATION_DETECTED"
+  /** The work stopped with operator acceptance requirements still open or blocked (see TurnResult.objective). */
+  | "REQUIREMENTS_INCOMPLETE"
   | "OPERATOR_INTERRUPT"
   | "REPOSITORY_STATE_CHANGED"
   | "CONTEXT_CAPACITY_EXCEEDED"
@@ -225,6 +233,17 @@ export interface TurnResult {
   /** Workspace has changes that no passing verifier run covers (may predate this turn). */
   unverifiedChangesPending: boolean;
   finishedAt: string;
+  /** Automatic continuation: segments run and why the turn stopped (absent for single-segment turns). */
+  continuation?: { segments: number; segmentSteps: number; stopReason?: string; stepsWithoutProgress: number };
+  /** Where the operator's objective stands: open requirements, the failed check and the next action. */
+  objective?: {
+    status: "completed" | "incomplete" | "blocked";
+    remaining: string[];
+    /** Requirements counted done on the model's report alone (implemented, not verified by a bound verifier run). */
+    implementedOnly?: string[];
+    failedCheck?: string;
+    nextAction?: string;
+  };
 }
 
 export class TurnResultInvariantError extends Error {
@@ -310,7 +329,20 @@ export function summarizeTurn(t: TurnResult): { heading: string; line: string } 
     };
   }
   if (exec === "BLOCKED") return { heading: "TURN BLOCKED", line: `execution=BLOCKED outcome=NOT_ESTABLISHED${tail}` };
-  if (exec === "LIMIT_REACHED") return { heading: "STEP LIMIT REACHED", line: `execution=LIMIT_REACHED outcome=NOT_ESTABLISHED (${t.steps.used}/${t.steps.max} steps)` };
+  if (exec === "LIMIT_REACHED") {
+    const c = t.continuation;
+    const segments = c && c.segments > 1 ? ` across ${c.segments} segments of ${c.segmentSteps}` : "";
+    if (t.reason === "STAGNATION_DETECTED") {
+      return { heading: "STOPPED - NO PROGRESS", line: `execution=LIMIT_REACHED outcome=NOT_ESTABLISHED (STAGNATION_DETECTED${t.detail ? `: ${t.detail}` : ""}; ${t.steps.used} steps${segments})` };
+    }
+    if (t.reason === "TIME_BUDGET_EXHAUSTED") {
+      return { heading: "TIME BUDGET EXHAUSTED", line: `execution=LIMIT_REACHED outcome=NOT_ESTABLISHED (TIME_BUDGET_EXHAUSTED${t.detail ? `: ${t.detail}` : ""}; ${t.steps.used} steps${segments})` };
+    }
+    if (t.reason === "STEP_BUDGET_EXHAUSTED") {
+      return { heading: "STEP BUDGET EXHAUSTED", line: `execution=LIMIT_REACHED outcome=NOT_ESTABLISHED (${t.steps.used}/${t.steps.max} steps${segments}; raise --max-total-steps to allow more)` };
+    }
+    return { heading: "STEP LIMIT REACHED", line: `execution=LIMIT_REACHED outcome=NOT_ESTABLISHED (${t.steps.used}/${t.steps.max} steps)` };
+  }
   switch (t.outcome) {
     case "VERIFIED":
       return { heading: "TASK COMPLETED - VERIFIED", line: `execution=COMPLETED outcome=VERIFIED (${t.verification?.command})` };
@@ -319,6 +351,9 @@ export function summarizeTurn(t: TurnResult): { heading: string; line: string } 
     case "UNVERIFIED":
       return { heading: "TURN ENDED - UNVERIFIED", line: `execution=COMPLETED outcome=UNVERIFIED${tail}` };
     default:
+      if (t.reason === "REQUIREMENTS_INCOMPLETE") {
+        return { heading: "TURN ENDED - REQUIREMENTS OPEN", line: `execution=COMPLETED outcome=NOT_ESTABLISHED${tail}` };
+      }
       return { heading: "TURN ENDED - NOT ESTABLISHED", line: `execution=COMPLETED outcome=NOT_ESTABLISHED${tail}` };
   }
 }

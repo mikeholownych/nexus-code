@@ -155,7 +155,8 @@ async function operation(config: HarnessConfig, gw: Gw, units: WorkUnitSpec[]) {
     },
   });
   try {
-    const state = newOperation(`inv-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`, "invariants", units, [resource], Date.now());
+    // Under 20 characters: longer random ids are sometimes classified as secrets (high entropy) and refused as durable identities.
+    const state = newOperation(`inv-${(Date.now() % 1e6).toString(36)}-${Math.random().toString(36).slice(2, 6)}`, "invariants", units, [resource], Date.now());
     return await muted(() => driveOperation(state, { store, executor }));
   } finally {
     fs.rmSync(stateDir, { recursive: true, force: true });
