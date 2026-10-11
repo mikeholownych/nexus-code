@@ -52,7 +52,11 @@ export type InferenceFailureKind =
   | "malformed_event"
   | "output_truncated"
   | "protocol_error"
-  | "aborted";
+  | "aborted"
+  /** Refused before sending: disclosure not authorized, or a spending limit reached. */
+  | "policy_denied"
+  /** Refused before sending: the connection lacks a required credential or model. */
+  | "configuration_error";
 
 export type InferenceFailureOrigin = "provider" | "transport" | "client" | "operator";
 
@@ -66,6 +70,8 @@ export type ProviderCondition =
   | "OVERLOADED"
   | "DRAINING"
   | "AUTH_FAILURE"
+  /** Billing or quota exhausted (HTTP 402, insufficient_quota): not waited out, never retried. */
+  | "QUOTA_EXHAUSTED"
   | "CAPACITY_REJECTED"
   | "REQUEST_REJECTED"
   | "PERMANENT_FAILURE"

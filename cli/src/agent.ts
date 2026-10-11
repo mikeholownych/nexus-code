@@ -513,8 +513,10 @@ export class AutonomousAgent {
     this.client = new LocalLlmClient(config);
     if (config.plannerModel || config.coderModel) {
       this.cognitiveRoutingEnabled = true;
+      // Role binding: a role's own provider, else its own (legacy) endpoint, else the main connection's provider.
       const plannerConfig: HarnessConfig = {
         ...config,
+        provider: config.plannerProvider ?? (config.plannerEndpoint ? undefined : config.provider),
         model: config.plannerModel || config.model,
         endpoint: config.plannerEndpoint || config.endpoint,
         apiKey: config.plannerApiKey || config.apiKey,
@@ -523,13 +525,14 @@ export class AutonomousAgent {
       };
       const coderConfig: HarnessConfig = {
         ...config,
+        provider: config.coderProvider ?? (config.coderEndpoint ? undefined : config.provider),
         model: config.coderModel || config.model,
         endpoint: config.coderEndpoint || config.endpoint,
         apiKey: config.coderApiKey || config.apiKey,
         credentialOrigin: config.coderApiKey ? credentialOriginOf(config.coderEndpoint || config.endpoint) : config.credentialOrigin ?? credentialOriginOf(config.endpoint),
       };
-      this.plannerClient = new LocalLlmClient(plannerConfig);
-      this.coderClient = new LocalLlmClient(coderConfig);
+      this.plannerClient = new LocalLlmClient(plannerConfig, { role: "planner" });
+      this.coderClient = new LocalLlmClient(coderConfig, { role: "coder" });
     } else {
       this.plannerClient = this.client;
       this.coderClient = this.client;
@@ -1612,7 +1615,7 @@ export class AutonomousAgent {
         } finally {
           this.messages = originalMessages;
         }
-        const res = await this.client.chatCompletion(admittedPrompt, [], requestId);
+        const res = await this.client.chatCompletion(admittedPrompt, [], requestId, undefined, "compaction");
         if (typeof res.content === "string" && res.content.trim()) {
           summaryText += `\nExecutive Summary:\n${res.content.trim()}\n`;
         }
@@ -2499,7 +2502,7 @@ Always explain your reasoning before or alongside your tool calls.`;
 
         const { client: activeClient } = this.selectCognitiveClient(currentStep, this.messages);
         if (this.cognitiveRoutingEnabled && currentStep === 1) {
-          process.stdout.write(pc.dim(`\n🧭 Dual-Model Routing: [Planner: ${this.plannerClient.getModel()} | Coder: ${this.coderClient.getModel()}]\n`));
+          process.stdout.write(pc.dim(`\n🧭 Dual-Model Routing: [Planner: ${this.plannerClient.getProviderId?.() ? `${this.plannerClient.getProviderId?.()}:` : ""}${this.plannerClient.getModel()} | Coder: ${this.coderClient.getProviderId?.() ? `${this.coderClient.getProviderId?.()}:` : ""}${this.coderClient.getModel()}]\n`));
         }
 
         let assistantMessage: ChatMessage;
@@ -2595,8 +2598,10 @@ Always explain your reasoning before or alongside your tool calls.`;
         const compEst =
           countTokens(compContent) +
           countTokens(JSON.stringify(assistantMessage.tool_calls || []));
-        this.totalTokens.prompt += promptEst;
-        this.totalTokens.completion += compEst;
+        // Provider connections report their own usage; estimates remain the measure where none is reported.
+        const reported = activeClient.getProviderId?.() ? activeClient.getLastUsage?.() : undefined;
+        this.totalTokens.prompt += reported?.inputTokens ?? promptEst;
+        this.totalTokens.completion += reported?.outputTokens ?? compEst;
         this.totalTokens.total = this.totalTokens.prompt + this.totalTokens.completion;
 
         // Print any thought or explanation text only if not already streamed

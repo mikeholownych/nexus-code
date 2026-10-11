@@ -18,13 +18,15 @@ import { buildConfig } from "./config.js";
 import { DecisionRejected, newOperation, type DurableOperationState, type OperationEvent, type OperationPolicy, type WorkUnitSpec } from "./core/operation.js";
 import { AgentWorkUnitExecutor, applyOperatorDecision, driveOperation, OperationStore, resourcesFromConfig } from "./core/operation_runner.js";
 import { credentialFingerprint, type ResourceDescriptor } from "./core/resources.js";
+import { operatorSetting } from "./client.js";
+import { baseUrlSetting, originOf, providerDefinition } from "./providers.js";
 import type { HarnessConfig } from "./types.js";
 
 interface OperationSpec {
   id?: string;
   objective: string;
   units: WorkUnitSpec[];
-  resources?: Array<Partial<ResourceDescriptor> & { id: string; endpoint: string; model: string }>;
+  resources?: Array<Partial<ResourceDescriptor> & { id: string; endpoint?: string; model: string }>;
   discoverCatalog?: boolean;
   policy?: Partial<OperationPolicy>;
 }
@@ -33,9 +35,16 @@ function normalizeResources(spec: OperationSpec, config: HarnessConfig): Resourc
   if (!spec.resources?.length) return resourcesFromConfig(config);
   const configOrigin = new URL(config.endpoint.replace(/\/+$/, "")).origin;
   return spec.resources.map((r) => {
-    const endpoint = r.endpoint.replace(/\/+$/, "").endsWith("/v1") ? r.endpoint.replace(/\/+$/, "") : `${r.endpoint.replace(/\/+$/, "")}/v1`;
-    const provider = r.provider ?? new URL(endpoint).origin;
-    const key = r.apiKeyEnv ? process.env[r.apiKeyEnv] : provider === configOrigin ? config.apiKey : undefined;
+    const def = providerDefinition(r.providerId);
+    if (r.providerId && !def) throw new Error(`Resource ${r.id}: unknown providerId '${r.providerId}'.`);
+    const base = def ? (r.endpoint || operatorSetting(baseUrlSetting(def.id)) || def.baseUrl || "") : "";
+    if (def && !originOf(base)) throw new Error(`Resource ${r.id}: provider '${def.id}' needs an endpoint (base URL).`);
+    if (!def && !r.endpoint) throw new Error(`Resource ${r.id}: endpoint is required unless providerId is given.`);
+    const plain = (r.endpoint ?? "").replace(/\/+$/, "");
+    // A provider base URL carries its own API path; only plain endpoints get the legacy /v1 suffix.
+    const endpoint = def ? base.replace(/\/+$/, "") : plain.endsWith("/v1") ? plain : `${plain}/v1`;
+    const provider = r.provider ?? (def ? def.id : new URL(endpoint).origin);
+    const key = r.apiKeyEnv ? process.env[r.apiKeyEnv] : def ? process.env[def.credentialEnv] : provider === configOrigin ? config.apiKey : undefined;
     const account = r.account ?? credentialFingerprint(key);
     return { ...r, endpoint, provider, capabilities: r.capabilities ?? ["tools"], ...(account ? { account } : {}) } as ResourceDescriptor;
   });
@@ -89,6 +98,7 @@ export function registerOperationCommands(program: Command): void {
     c
       .option("-e, --endpoint <url>", "Default endpoint (for resources not listed in the spec)")
       .option("-m, --model <name>", "Default model")
+      .option("--provider <id>", "Default cloud provider (openrouter, openai, anthropic, compatible)")
       .option("-w, --workspace <path>", "Workspace directory (default: current directory)")
       .option("-s, --max-steps <number>", "Maximum steps per work unit", "30")
       .option("-t, --temperature <number>", "Model temperature", "0.2")

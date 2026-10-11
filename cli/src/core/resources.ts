@@ -37,6 +37,8 @@ export interface ResourceDescriptor {
   /** Credential identity label (a fingerprint, never the secret). */
   account?: string;
   apiKeyEnv?: string;
+  /** Cloud provider id (providers.ts); the endpoint is then that provider's base URL and its key its own. */
+  providerId?: string;
   capabilities: string[];
   /** Roles/task classes this resource is qualified for; undefined qualifies it for any. */
   qualifications?: string[];
@@ -157,6 +159,8 @@ export function conditionFromFailure(
       return { condition: "DRAINING", scope: "endpoint", temporary: true };
     case "AUTH_FAILURE":
       return { condition: "AUTH_FAILED", scope: "account", temporary: false };
+    case "QUOTA_EXHAUSTED":
+      return { condition: "PERMANENTLY_UNAVAILABLE", scope: "account", temporary: false };
     case "TEMPORARILY_UNAVAILABLE":
       // Connect-level failures are evidence about the endpoint; a 408/5xx is evidence about this model's serving.
       if (failure.kind === "network_error" || failure.kind === "timeout") {
