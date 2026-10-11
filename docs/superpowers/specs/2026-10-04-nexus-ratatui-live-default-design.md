@@ -81,7 +81,7 @@ One composition: the `NEXUS` mark, one short tagline, a quiet status strip (work
 | Typing | Compose |
 | Enter | Submit |
 | Shift+Enter / Alt+Enter | Newline |
-| Esc | Close overlay; otherwise no-op |
+| Esc | Close the open overlay; with no overlay, cancel the running turn |
 | Ctrl-C | Cancel the running turn (same semantics as TIT); at idle with an empty composer, exit |
 | Ctrl-L | Clear the composer |
 | `/` at start of composer | Slash command |
