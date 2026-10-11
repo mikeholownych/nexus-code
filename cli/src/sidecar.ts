@@ -31,6 +31,8 @@ import {
 } from "./protocol.js";
 import { SlashHost, SlashOutcome, SlashSpec, errorText, findSlash, slashCatalog } from "./slash/catalog.js";
 import { routeSlash } from "./slash/router.js";
+import { buildCatalog } from "./model_catalog.js";
+import { connectWithKey, disconnect, selectModel, startSignIn } from "./provider_connect.js";
 
 export interface SidecarOptions {
   app: ApplicationCore;
@@ -129,9 +131,74 @@ export class SidecarServer {
           this.emit({ type: "error", id: command.id, code: "INTERNAL", message });
         }
         return;
+      case "models.list":
+        void this.modelsList(command.id);
+        return;
+      case "model.select":
+        this.modelSelect(command.id, command.provider, command.model);
+        return;
+      case "provider.connect":
+        void this.providerConnect(command.id, command.provider, command.method, command.key);
+        return;
+      case "provider.cancel":
+        this.signIns.get(command.id)?.cancel();
+        return;
+      case "provider.disconnect": {
+        const r = disconnect(command.provider);
+        this.emit({ type: "provider.result", id: command.id, provider: command.provider, success: r.ok, message: r.message });
+        return;
+      }
       case "shutdown":
         await this.shutdown();
         return;
+    }
+  }
+
+  /** Sign-ins in progress, by request id (provider.cancel stops one). */
+  private signIns = new Map<string, { cancel(): void }>();
+
+  private async modelsList(id: string): Promise<void> {
+    try {
+      const catalog = await buildCatalog(this.app.getConfig());
+      this.emit({ type: "models.catalog", id, ...catalog });
+    } catch (err) {
+      this.emit({ type: "error", id, code: "INTERNAL", message: capText(redactSecrets(String((err as Error).message ?? err))) });
+    }
+  }
+
+  /** Switching models between turns is the operator's choice; during a turn it is refused like any command. */
+  private modelSelect(id: string, provider: string, model: string): void {
+    if (this.rejectBusy(id)) return;
+    const r = selectModel(this.app.getAgent(), this.app.getConfig(), { provider, model });
+    this.emit({ type: "model.result", id, success: r.ok, message: r.message });
+    if (r.ok) this.emitSessionState();
+  }
+
+  private async providerConnect(id: string, provider: string, method: string, key?: string): Promise<void> {
+    const result = (success: boolean, message: string) =>
+      this.emit({ type: "provider.result", id, provider, success, message: capText(redactSecrets(message)) });
+    try {
+      if (method === "api-key") {
+        const r = await connectWithKey(this.app.getConfig(), provider, key ?? "");
+        result(r.ok, r.message);
+        return;
+      }
+      const signIn = await startSignIn(this.app.getConfig(), provider, method);
+      this.signIns.set(id, signIn);
+      this.emit({
+        type: "provider.auth",
+        id,
+        provider,
+        url: signIn.prompt.url,
+        ...(signIn.prompt.userCode ? { user_code: signIn.prompt.userCode } : {}),
+        instructions: signIn.prompt.instructions,
+      });
+      const r = await signIn.done;
+      this.signIns.delete(id);
+      result(r.ok, r.message);
+    } catch (err) {
+      this.signIns.delete(id);
+      result(false, String((err as Error).message ?? err));
     }
   }
 
@@ -413,6 +480,8 @@ export class SidecarServer {
   }
 
   private shutdown(): Promise<void> {
+    for (const signIn of this.signIns.values()) signIn.cancel();
+    this.signIns.clear();
     this.shutdownPromise ??= (async () => {
       this.turnAbort?.abort(new Error("sidecar shutdown"));
       await this.idle();
@@ -429,7 +498,7 @@ export class SidecarServer {
       type: "session.state",
       workspace: config.workspace,
       workspace_name: path.basename(config.workspace),
-      model: config.model,
+      model: config.provider ? `${config.provider} · ${config.model}` : config.model,
       mode: this.mode,
       git: git.isRepo ? { branch: git.branch, dirty: git.dirtyCount } : null,
       busy: Boolean(this.activeTurn),

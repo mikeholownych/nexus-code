@@ -20,6 +20,7 @@ import { AgentWorkUnitExecutor, applyOperatorDecision, driveOperation, Operation
 import { credentialFingerprint, type ResourceDescriptor } from "./core/resources.js";
 import { operatorSetting } from "./client.js";
 import { baseUrlSetting, originOf, providerDefinition } from "./providers.js";
+import { providerApiKey } from "./credentials.js";
 import type { HarnessConfig } from "./types.js";
 
 interface OperationSpec {
@@ -44,7 +45,7 @@ function normalizeResources(spec: OperationSpec, config: HarnessConfig): Resourc
     // A provider base URL carries its own API path; only plain endpoints get the legacy /v1 suffix.
     const endpoint = def ? base.replace(/\/+$/, "") : plain.endsWith("/v1") ? plain : `${plain}/v1`;
     const provider = r.provider ?? (def ? def.id : new URL(endpoint).origin);
-    const key = r.apiKeyEnv ? process.env[r.apiKeyEnv] : def ? process.env[def.credentialEnv] : provider === configOrigin ? config.apiKey : undefined;
+    const key = r.apiKeyEnv ? process.env[r.apiKeyEnv] : def ? providerApiKey(def.id, def.credentialEnv) : provider === configOrigin ? config.apiKey : undefined;
     const account = r.account ?? credentialFingerprint(key);
     return { ...r, endpoint, provider, capabilities: r.capabilities ?? ["tools"], ...(account ? { account } : {}) } as ResourceDescriptor;
   });

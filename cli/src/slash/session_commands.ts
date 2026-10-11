@@ -1,4 +1,7 @@
 import { UsageLedger } from "../usage.js";
+import { APPLIANCE, buildCatalog } from "../model_catalog.js";
+import { selectModel } from "../provider_connect.js";
+import { providerDefinition } from "../providers.js";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { LocalLlmClient } from "../client.js";
@@ -56,17 +59,29 @@ function mode({ host, args }: SlashContext): SlashOutcome {
 async function model({ host, args }: SlashContext): Promise<SlashOutcome> {
   const config = host.app.getConfig();
   const name = args.trim();
-  if (name) {
-    config.model = name;
-    host.app.getAgent().setModel(name);
-    return reply("model", `Model: ${name}`);
+  // `/model <provider> <model>`: switch provider and model ("appliance" for the local appliance).
+  const [first, ...rest] = name.split(/\s+/);
+  if (rest.length && (first === APPLIANCE || providerDefinition(first))) {
+    const r = selectModel(host.app.getAgent(), config, { provider: first, model: rest.join(" ") });
+    return reply("model", r.message, r.ok);
   }
-  try {
-    const models = await new LocalLlmClient(config).listModels();
-    return reply("model", ["Available models:", ...models.map((m) => (m === config.model ? `* ${m} (active)` : `  ${m}`))].join("\n"));
-  } catch (err) {
-    return reply("model", `Could not list models from ${config.endpoint}: ${errorText(err)}`, false);
+  if (!name) {
+    const catalog = await buildCatalog(config);
+    const lines: string[] = [];
+    for (const p of catalog.providers) {
+      const status = p.connected ? `connected${p.source ? ` via ${p.source}` : ""}${p.status === "cached" ? " · offline, cached list" : p.status === "error" ? ` · ${p.error}` : ""}` : `not connected — nexus connect ${p.id}`;
+      lines.push(`${p.label} [${p.id}] — ${status}`);
+      for (const m of catalog.models.filter((m) => m.provider === p.id)) {
+        const active = m.provider === catalog.current.provider && m.id === catalog.current.model;
+        lines.push(`  ${active ? "*" : " "} ${m.id}${active ? " (active)" : ""}`);
+      }
+    }
+    lines.push("", "Switch with /model <provider> <model>. In the live view, /model opens the picker and ctrl+p connects a provider.");
+    return reply("model", lines.join("\n"));
   }
+  config.model = name;
+  host.app.getAgent().setModel(name);
+  return reply("model", `Model: ${name}`);
 }
 
 function shell({ host, args }: SlashContext): SlashOutcome {

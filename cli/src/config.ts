@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 import { config as loadDotenv, parse as parseDotenv } from "dotenv";
 import { credentialOriginOf, credentialStorageHome, environmentCredential, LocalLlmClient, operatorSetting, setCredentialAuthority } from "./client.js";
 import { baseUrlSetting, originOf, parseOriginList, PROVIDERS, providerDefinition } from "./providers.js";
+import { providerApiKey } from "./credentials.js";
 import { HarnessConfig } from "./types.js";
 
 const installEnv = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../.env");
@@ -62,7 +63,7 @@ function selectProvider(flag: string | undefined, key: string): string | undefin
 }
 
 /** Base URL of a provider connection: the operator's override (flag or NEXUS_<ID>_BASE_URL), else the provider default. */
-function providerBaseUrl(id: string, flag?: string): string {
+export function providerBaseUrl(id: string, flag?: string): string {
   const url = flag?.trim() || operatorSetting(baseUrlSetting(id)) || providerDefinition(id)?.baseUrl;
   if (!url || !originOf(url)) {
     throw new Error(`Provider '${id}' needs a base URL: pass --base-url or set ${baseUrlSetting(id)} in ~/.config/nexus/config.env.`);
@@ -70,9 +71,13 @@ function providerBaseUrl(id: string, flag?: string): string {
   return url.trim().replace(/\/+$/, "");
 }
 
-/** The provider's own key; it is bound to the connection's origin and never sent anywhere else. */
-function providerKey(id: string): string | undefined {
-  return process.env[providerDefinition(id)!.credentialEnv]?.trim() || undefined;
+/**
+ * The provider's own key — its variable, Nexus's credential store, or a connection registered in another client —
+ * bound to the connection's origin and never sent anywhere else. Sign-in (OAuth) providers resolve their token per
+ * request in the client instead.
+ */
+export function providerKey(id: string): string | undefined {
+  return providerApiKey(id, providerDefinition(id)!.credentialEnv);
 }
 
 /** True when the operator (not a project .env) chose this setting's current value. */
@@ -82,7 +87,9 @@ function operatorChose(key: string): boolean {
 }
 
 export function buildConfig(options: any): HarnessConfig {
-  const provider = selectProvider(options.provider, "NEXUS_PROVIDER");
+  // `appliance: true` resolves the appliance connection regardless of any provider selection (the model picker's
+  // appliance entry).
+  const provider = options.appliance ? undefined : selectProvider(options.provider, "NEXUS_PROVIDER");
   const endpoint = provider ? providerBaseUrl(provider, options.baseUrl) : options.endpoint || process.env.LOCAL_LLM_ENDPOINT || DEFAULT_ENDPOINT;
   // A cloud model is named explicitly; the appliance's LOCAL_LLM_MODEL never selects a billable cloud model.
   const model = provider ? options.model || operatorSetting("NEXUS_MODEL") || "" : options.model || process.env.LOCAL_LLM_MODEL || "local-model";

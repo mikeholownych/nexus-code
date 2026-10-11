@@ -1200,6 +1200,36 @@ export class AutonomousAgent {
     }
   }
 
+  /**
+   * Switches the inference connection for every role (main, planner, coder) in place: an explicit operator selection,
+   * like /model. The new connection keeps this session's task, session and information-flow boundary. Embedding-backed
+   * search stays on its original connection (embeddings are never sent to cloud providers).
+   */
+  public setInferenceTarget(target: {
+    provider?: string;
+    endpoint: string;
+    model: string;
+    apiKey?: string;
+    credentialOrigin?: string;
+    authorizedDisclosureOrigins?: string[];
+  }): void {
+    const previous = this.client;
+    Object.assign(this.config, {
+      provider: target.provider,
+      endpoint: target.endpoint,
+      model: target.model,
+      apiKey: target.apiKey,
+      credentialOrigin: target.credentialOrigin,
+      authorizedDisclosureOrigins: target.authorizedDisclosureOrigins ?? this.config.authorizedDisclosureOrigins,
+      fallbackEndpoints: target.provider ? undefined : this.config.fallbackEndpoints,
+    });
+    const next = new LocalLlmClient(this.config, { boundary: previous.getBoundary(), taskId: previous.getTaskId(), sessionId: previous.getSessionId() });
+    this.client = next;
+    this.plannerClient = next;
+    this.coderClient = next;
+    this.cognitiveRoutingEnabled = false;
+  }
+
   public setModel(newModel: string): void {
     this.config.model = newModel;
     this.client.setModel(newModel);

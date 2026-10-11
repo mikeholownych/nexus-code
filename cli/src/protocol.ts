@@ -7,6 +7,7 @@ import { redactSecrets } from "./ui.js";
 import type { ApprovalReview } from "./approval_review.js";
 import type { SlashSpec } from "./slash/catalog.js";
 import type { EvidenceStatus, ReceiptSection } from "./evidence.js";
+import type { Catalog } from "./model_catalog.js";
 
 export const PROTOCOL_VERSION = 1;
 export const MAX_TEXT_FIELD = 8000;
@@ -62,7 +63,15 @@ export type SidecarEvent =
       duration_ms: number | null;
     }
   | { type: "receipt"; id: string; sections: ReceiptSection[] }
-  | { type: "error"; id?: string; code: ErrorCode; message: string };
+  | { type: "error"; id?: string; code: ErrorCode; message: string }
+  /** Answer to models.list: providers (with connection source, never a credential), models, current and recent. */
+  | ({ type: "models.catalog"; id: string } & Catalog)
+  /** A sign-in needs the operator: open `url` (and type `user_code` for a device flow). */
+  | { type: "provider.auth"; id: string; provider: string; url: string; user_code?: string; instructions: string }
+  /** Outcome of provider.connect / provider.disconnect. */
+  | { type: "provider.result"; id: string; provider: string; success: boolean; message: string }
+  /** Outcome of model.select. */
+  | { type: "model.result"; id: string; success: boolean; message: string };
 
 export type SidecarCommand =
   | { type: "prompt.submit"; id: string; text: string }
@@ -72,6 +81,12 @@ export type SidecarCommand =
   | { type: "slash"; id: string; command: string; args: string }
   | { type: "tool.detail"; id: string; evidence: string }
   | { type: "receipt"; id: string }
+  | { type: "models.list"; id: string }
+  | { type: "model.select"; id: string; provider: string; model: string }
+  /** `key` only for method "api-key"; it is never echoed back or logged. */
+  | { type: "provider.connect"; id: string; provider: string; method: string; key?: string }
+  | { type: "provider.cancel"; id: string }
+  | { type: "provider.disconnect"; id: string; provider: string }
   | { type: "shutdown" };
 
 export class ProtocolError extends Error {
@@ -131,6 +146,30 @@ export function parseCommand(line: string): SidecarCommand {
     }
     case "receipt":
       return { type: "receipt", id: requireId("receipt") };
+    case "models.list":
+      return { type: "models.list", id: requireId("models.list") };
+    case "model.select": {
+      const requestId = requireId("model.select");
+      if (typeof msg.provider !== "string" || !msg.provider || typeof msg.model !== "string" || !msg.model.trim()) {
+        throw new ProtocolError("model.select requires provider and model", requestId);
+      }
+      return { type: "model.select", id: requestId, provider: msg.provider, model: msg.model };
+    }
+    case "provider.connect": {
+      const requestId = requireId("provider.connect");
+      if (typeof msg.provider !== "string" || !msg.provider || typeof msg.method !== "string" || !msg.method) {
+        throw new ProtocolError("provider.connect requires provider and method", requestId);
+      }
+      if (msg.key !== undefined && typeof msg.key !== "string") throw new ProtocolError("provider.connect key must be a string", requestId);
+      return { type: "provider.connect", id: requestId, provider: msg.provider, method: msg.method, ...(typeof msg.key === "string" ? { key: msg.key } : {}) };
+    }
+    case "provider.cancel":
+      return { type: "provider.cancel", id: requireId("provider.cancel") };
+    case "provider.disconnect": {
+      const requestId = requireId("provider.disconnect");
+      if (typeof msg.provider !== "string" || !msg.provider) throw new ProtocolError("provider.disconnect requires provider", requestId);
+      return { type: "provider.disconnect", id: requestId, provider: msg.provider };
+    }
     case "shutdown":
       return { type: "shutdown" };
     default:
