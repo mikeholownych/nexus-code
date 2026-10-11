@@ -1,3 +1,4 @@
+import { UsageLedger } from "../usage.js";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { LocalLlmClient } from "../client.js";
@@ -88,6 +89,9 @@ function tokens({ host }) {
     if (total.total > 0) {
         lines.push("", `Session usage: ${total.prompt.toLocaleString()} prompt, ${total.completion.toLocaleString()} completion (${total.total.toLocaleString()} total tokens)`);
     }
+    const cloud = UsageLedger.global().summary();
+    if (cloud)
+        lines.push(cloud);
     return reply("tokens", lines.join("\n"));
 }
 function sessions({ host }) {

@@ -17,7 +17,19 @@ import { HunkStager } from "./stager.js";
 import { BenchmarkEvaluator } from "./evaluator.js";
 import { BrowserDriver } from "./browser.js";
 import { KnowledgeGraph } from "./knowledge.js";
-import { buildConfig, loadEnvironment } from "./config.js";
+import { buildConfig as buildConfigOrThrow, loadEnvironment } from "./config.js";
+import { describeTarget, registerProviderCommands } from "./provider_cli.js";
+import { UsageLedger } from "./usage.js";
+/** Configuration errors (unknown provider, missing model or base URL) end the command with a message, not a trace. */
+function buildConfig(options) {
+    try {
+        return buildConfigOrThrow(options);
+    }
+    catch (err) {
+        console.error(pc.red(`Configuration error: ${err?.message ?? err}`));
+        process.exit(2);
+    }
+}
 import { registerOperationCommands } from "./operation_cli.js";
 import pc from "picocolors";
 import * as os from "node:os";
@@ -62,6 +74,10 @@ program
     .option("--coder-model <name>", "High-throughput model for surgical code implementation (Qwen 2.5 Coder)")
     .option("--coder-endpoint <url>", "Dedicated inference endpoint for coder model")
     .option("--approve", "Require human approval before destructive actions (edits, shell commands)")
+    .option("--provider <id>", "Cloud inference provider: openrouter, openai, anthropic, compatible (default: appliance endpoint)")
+    .option("--base-url <url>", "Override the provider's base URL (operator-only; required for 'compatible')")
+    .option("--planner-provider <id>", "Cloud provider for the planner model (requires --planner-model)")
+    .option("--coder-provider <id>", "Cloud provider for the coder model (requires --coder-model)")
     .option("-r, --resume [id]", "Resume previous session (defaults to latest if id omitted)")
     .action(async (options) => {
     const config = buildConfig(options);
@@ -78,6 +94,8 @@ program
         }
     }
     const resumeId = typeof options.resume === "string" ? options.resume : options.resume ? "latest" : undefined;
+    if (config.provider || config.plannerProvider || config.coderProvider)
+        console.error(pc.dim(describeTarget(config)));
     const app = new ApplicationCore(config);
     const repl = new InteractiveRepl(app, !options.approve, resumeId);
     await repl.start();
@@ -105,6 +123,10 @@ program
     .option("--coder-model <name>", "High-throughput model for surgical code implementation (Qwen 2.5 Coder)")
     .option("--coder-endpoint <url>", "Dedicated inference endpoint for coder model")
     .option("--tdd", "Enforce strict RED-GREEN-REFACTOR Test-Driven Development protocol")
+    .option("--provider <id>", "Cloud inference provider: openrouter, openai, anthropic, compatible (default: appliance endpoint)")
+    .option("--base-url <url>", "Override the provider's base URL (operator-only; required for 'compatible')")
+    .option("--planner-provider <id>", "Cloud provider for the planner model (requires --planner-model)")
+    .option("--coder-provider <id>", "Cloud provider for the coder model (requires --coder-model)")
     .option("-j, --json", "Output machine-readable JSON structured result (UI-002, UI-003)")
     .option("-r, --resume [id]", "Resume previous session or task state")
     .action(async (promptParts, options) => {
@@ -127,6 +149,8 @@ program
             // Fallback to default
         }
     }
+    if (!isJson && (config.provider || config.plannerProvider || config.coderProvider))
+        console.error(pc.dim(describeTarget(config)));
     const app = new ApplicationCore(config);
     const resumeTaskId = typeof options.resume === "string" ? options.resume : options.resume ? "latest" : undefined;
     // Operator stop authority: first SIGINT cancels the active turn; a second one terminates immediately.
@@ -150,8 +174,12 @@ program
             resumeTaskId,
             signal: abort.signal,
         });
+        const cloud = UsageLedger.global().cloudTotals();
         if (isJson) {
-            console.log(JSON.stringify(result, null, 2));
+            console.log(JSON.stringify(cloud.requests ? { ...result, cloudUsage: cloud } : result, null, 2));
+        }
+        else if (cloud.requests) {
+            console.error(pc.dim(UsageLedger.global().summary()));
         }
         app.shutdown();
         exitAfterFlush(result.exitCode);
@@ -184,6 +212,8 @@ program
     .description("List loaded models from your local LM Studio or vLLM server")
     .option("-e, --endpoint <url>", "Local LLM endpoint (default: $LOCAL_LLM_ENDPOINT)")
     .option("-k, --api-key <key>", "API key / token (default: $LOCAL_LLM_API_KEY)")
+    .option("--provider <id>", "Cloud inference provider (openrouter, openai, anthropic, compatible)")
+    .option("--base-url <url>", "Override the provider's base URL")
     .action(async (options) => {
     const config = buildConfig(options);
     const client = new LocalLlmClient(config);
@@ -210,6 +240,8 @@ program
     .description("Verify local LLM connectivity, Rust engine, and Linux shell environment")
     .option("-e, --endpoint <url>", "Local LLM endpoint (default: $LOCAL_LLM_ENDPOINT)")
     .option("-k, --api-key <key>", "API key / token (default: $LOCAL_LLM_API_KEY)")
+    .option("--provider <id>", "Cloud inference provider (openrouter, openai, anthropic, compatible)")
+    .option("--base-url <url>", "Override the provider's base URL")
     .option("--shell <type>", "Linux shell to test")
     .action(async (options) => {
     const config = buildConfig(options);
@@ -624,5 +656,6 @@ if (process.argv.length <= 2) {
     process.argv.push("repl");
 }
 registerOperationCommands(program);
+registerProviderCommands(program);
 program.parse(process.argv);
 export { ApplicationCore } from "./core/app.js";
