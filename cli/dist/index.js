@@ -2,7 +2,6 @@
 import { Command } from "commander";
 import * as path from "node:path";
 import * as fs from "node:fs";
-import { execSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { ApplicationCore } from "./core/app.js";
 import { InteractiveRepl } from "./repl.js";
@@ -20,6 +19,7 @@ import { KnowledgeGraph } from "./knowledge.js";
 import { buildConfig as buildConfigOrThrow, loadEnvironment } from "./config.js";
 import { describeTarget, registerProviderCommands } from "./provider_cli.js";
 import { UsageLedger } from "./usage.js";
+import { DOCTOR_EXIT, DOCTOR_SCHEMA_VERSION, doctorExitCode, redactDiagnostic, renderDoctorJson, renderDoctorText, runDoctor, runRepairs } from "./doctor.js";
 /** Configuration errors (unknown provider, missing model or base URL) end the command with a message, not a trace. */
 function buildConfig(options) {
     try {
@@ -58,7 +58,11 @@ program
     .option("-e, --endpoint <url>", "Local LLM endpoint (default: $LOCAL_LLM_ENDPOINT)")
     .option("-m, --model <name>", "Model name identifier (default: active model in vLLM)")
     .option("-w, --workspace <path>", "Workspace directory (default: current directory)")
-    .option("-s, --max-steps <number>", "Maximum steps per turn (default: 30)")
+    .option("-s, --max-steps <number>", "Steps per segment; continuation checkpoints there instead of stopping (default: 30)")
+    .option("--max-total-steps <number>", "Continuation: total steps a turn may run across segments (default 300)")
+    .option("--max-turn-minutes <number>", "Continuation: wall-clock budget of one turn in minutes (default 120)")
+    .option("--stagnation-steps <number>", "Continuation: stop after this many steps without progress (default 12)")
+    .option("--no-continuation", "End a turn at --max-steps instead of continuing while it makes progress")
     .option("-t, --temperature <number>", "Model temperature (default: 0.2)")
     .option("--shell <type>", "Linux shell to use: bash, zsh, or sh (default: bash)", "bash")
     .option("--fallback <urls>", "Comma-separated fallback LLM endpoints if primary is unavailable")
@@ -107,7 +111,11 @@ program
     .option("-e, --endpoint <url>", "Local LLM endpoint (default: http://localhost:1234/v1 or $LOCAL_LLM_ENDPOINT)")
     .option("-m, --model <name>", "Model name identifier (default: active model in LM Studio/vLLM)")
     .option("-w, --workspace <path>", "Workspace directory to inspect and modify (default: current directory)")
-    .option("-s, --max-steps <number>", "Maximum autonomous agent steps", "30")
+    .option("-s, --max-steps <number>", "Steps per segment; continuation checkpoints there instead of stopping", "30")
+    .option("--max-total-steps <number>", "Continuation: total steps a turn may run across segments (default 300)")
+    .option("--max-turn-minutes <number>", "Continuation: wall-clock budget of one turn in minutes (default 120)")
+    .option("--stagnation-steps <number>", "Continuation: stop after this many steps without progress (default 12)")
+    .option("--no-continuation", "End a turn at --max-steps instead of continuing while it makes progress")
     .option("-t, --temperature <number>", "Model temperature", "0.2")
     .option("--shell <type>", "Linux shell to use: bash, zsh, or sh (default: bash or $LOCAL_HARNESS_SHELL)", "bash")
     .option("--fallback <urls>", "Comma-separated fallback LLM endpoints if primary is unavailable")
@@ -235,55 +243,89 @@ program
     }
     console.log();
 });
-program
-    .command("check")
-    .description("Verify local LLM connectivity, Rust engine, and Linux shell environment")
-    .option("-e, --endpoint <url>", "Local LLM endpoint (default: $LOCAL_LLM_ENDPOINT)")
-    .option("-k, --api-key <key>", "API key / token (default: $LOCAL_LLM_API_KEY)")
-    .option("--provider <id>", "Cloud inference provider (openrouter, openai, anthropic, compatible)")
-    .option("--base-url <url>", "Override the provider's base URL")
-    .option("--shell <type>", "Linux shell to test")
-    .action(async (options) => {
-    const config = buildConfig(options);
-    console.log(pc.bold(pc.cyan("\n=== Nexus Code Harness Health Check ===\n")));
-    // 1. Check Local Server
-    process.stdout.write("1. Local LLM Server: ");
+/** Shared by `doctor` and its compatibility alias `check`. */
+async function doctorCommand(options) {
+    const controller = new AbortController();
+    const onInterrupt = () => controller.abort();
+    process.once("SIGINT", onInterrupt);
     try {
-        const client = new LocalLlmClient(config);
-        const models = await client.listModels();
-        console.log(pc.green(`CONNECTED (${config.endpoint})`));
-        console.log(pc.dim(`   Loaded models: ${models.join(", ") || "None loaded"}`));
+        let config;
+        let configError;
+        try {
+            config = buildConfigOrThrow(options);
+        }
+        catch (error) {
+            configError = error;
+        }
+        const timeoutMs = options.timeout ? Number(options.timeout) : undefined;
+        const base = { context: "cli", config, configError, flags: options, deep: Boolean(options.deep), signal: controller.signal, timeoutMs };
+        let report = await runDoctor(base);
+        if (options.fix) {
+            const interactive = Boolean(process.stdin.isTTY && process.stderr.isTTY && !options.json);
+            report = await runRepairs(report, {
+                ...base,
+                readOnly: Boolean(options.readOnly || config?.readOnly),
+                confirm: async (proposals) => {
+                    if (options.yes)
+                        return true;
+                    if (!interactive) {
+                        process.stderr.write(`doctor --fix: ${proposals.length} repair(s) proposed; none applied without confirmation. Re-run with --yes to apply:\n${proposals.map((p) => `  - ${p.description}`).join("\n")}\n`);
+                        return false;
+                    }
+                    process.stderr.write(`Proposed repairs:\n${proposals.map((p) => `  - ${p.description}`).join("\n")}\nApply them? [y/N] `);
+                    const answer = await new Promise((resolve) => {
+                        process.stdin.resume();
+                        process.stdin.once("data", (d) => {
+                            process.stdin.pause();
+                            resolve(String(d).trim().toLowerCase());
+                        });
+                    });
+                    return answer === "y" || answer === "yes";
+                },
+            });
+        }
+        console.log(options.json ? renderDoctorJson(report) : renderDoctorText(report));
+        exitAfterFlush(doctorExitCode(report));
     }
     catch (err) {
-        console.log(pc.yellow(`UNREACHABLE (${err.message})`));
-        console.log(pc.dim("   Make sure LM Studio (Local Server ON) or vLLM is running."));
+        // The doctor itself failed (not a finding): exit 3 with a redacted message, JSON when asked for.
+        const message = redactDiagnostic(err?.message ?? String(err));
+        if (options.json)
+            console.log(JSON.stringify({ schemaVersion: DOCTOR_SCHEMA_VERSION, tool: "nexus doctor", error: message }, null, 2));
+        else
+            console.error(`nexus doctor could not run: ${message}`);
+        exitAfterFlush(DOCTOR_EXIT.error);
     }
-    // 2. Check Rust Core
-    process.stdout.write("2. Rust Core Engine: ");
-    const candidateRelease = path.resolve(__dirname, "../../core/target/release/harness-core");
-    const candidateDebug = path.resolve(__dirname, "../../core/target/debug/harness-core");
-    const candidateReleaseExe = path.resolve(__dirname, "../../core/target/release/harness-core.exe");
-    const candidateDebugExe = path.resolve(__dirname, "../../core/target/debug/harness-core.exe");
-    const resolvedBin = [candidateRelease, candidateDebug, candidateReleaseExe, candidateDebugExe].find(fs.existsSync);
-    if (resolvedBin) {
-        console.log(pc.green(`READY (${resolvedBin})`));
+    finally {
+        process.removeListener("SIGINT", onInterrupt);
     }
-    else {
-        console.log(pc.yellow("NOT COMPILED (Will run via `cargo run` automatically)"));
-    }
-    // 3. Check Linux Shell
-    process.stdout.write(`3. Linux Shell (${config.shell}): `);
-    try {
-        const out = execSync(`${config.shell} -c "uname -a"`, { encoding: "utf-8" }).trim();
-        console.log(pc.green(`READY`));
-        console.log(pc.dim(`   System: ${out}`));
-    }
-    catch (err) {
-        console.log(pc.red(`FAILED (${err.message})`));
-        console.log(pc.dim(`   Ensure ${config.shell} is installed and in PATH.`));
-    }
-    console.log(pc.bold(pc.cyan("\n========================================\n")));
-});
+}
+function doctorOptions(command) {
+    return command
+        .option("-e, --endpoint <url>", "Endpoint to diagnose (default: as a session would resolve it)")
+        .option("-m, --model <name>", "Model to check for")
+        .option("-k, --api-key <key>", "Credential to test (never printed)")
+        .option("--provider <id>", "Cloud inference provider (openrouter, openai, anthropic, compatible, ...)")
+        .option("--base-url <url>", "Override the provider's base URL")
+        .option("-w, --workspace <path>", "Workspace directory")
+        .option("--shell <type>", "Shell to check")
+        .option("--json", "Emit only the versioned JSON report (schemaVersion 2)")
+        .option("--deep", "Also run deeper checks: one minimal inference request (costs model work), an engine tool call, state write probes, all session records")
+        .option("--fix", "Propose the supported repairs and apply them after confirmation")
+        .option("--yes", "With --fix: apply the supported repairs without asking (unattended)")
+        .option("--read-only", "Refuse every repair (diagnosis only)")
+        .option("--timeout <ms>", "Per-check time limit in milliseconds (default 4000)")
+        .addHelpText("after", `
+Exit codes: 0 healthy · 1 warnings only · 2 at least one failure · 3 the doctor itself could not run.
+Statuses: pass, warn (works, but degraded or at risk), fail (prevents normal operation), skip (not applicable or not run).
+Supported repairs (--fix): create missing ~/.nexus state directories (0700); restrict group/world-writable state
+directories to 0700; restrict a group/world-readable credential store to 0600. Previous modes are recorded under
+~/.nexus/doctor-backups. Nothing else is ever changed: no configuration reset, session deletion, credential rotation,
+dependency installation, TLS change or service restart.`)
+        .action(doctorCommand);
+}
+doctorOptions(program.command("doctor").description("Diagnose configuration, endpoint, credentials, engine, shell, state and extensions without starting an agent"));
+doctorOptions(program.command("check").description("Compatibility alias for `doctor` (the former health check)"));
 program
     .command("sessions")
     .description("List past interactive sessions and saved transcripts")

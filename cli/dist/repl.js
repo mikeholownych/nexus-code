@@ -20,6 +20,7 @@ import { TeamOrchestrator, TEAM_ROLES } from "./team.js";
 import { TerminalDashboard } from "./tui.js";
 import { HunkStager } from "./stager.js";
 import { lifecycleStatusForTurn } from "./core/turn.js";
+import { buildSessionExport } from "./session_export.js";
 function parsePatchHunks(patch) {
     const lines = patch.split("\n");
     const fileHeaderLines = [];
@@ -89,7 +90,7 @@ export class InteractiveRepl {
                     this.agent.setWorkspace(sess.workspace);
                     this.checkpointManager = new CheckpointManager(sess.workspace);
                 }
-                this.agent.restoreSession(sess.messages, sess.unverifiedChangesPending);
+                this.agent.restoreSession(sess.messages, sess.unverifiedChangesPending, sess.objective);
                 console.log(pc.green(`✔ Restored previous session ${pc.bold(sess.id)} (${sess.messages.length} messages)`));
             }
             else {
@@ -133,8 +134,18 @@ export class InteractiveRepl {
             messages,
             unverifiedChangesPending: this.agent.hasUnverifiedChanges(),
             tokenStats: this.agent.getTokenStats(),
+            activePlan: this.agent.getActivePlan(),
+            objective: this.agent.getObjective() ?? null,
+            history: this.agent.getHistoryCompleteness(),
             ...(turn ? { status: lifecycleStatusForTurn(turn), lastTurn: turn } : {}),
         }, this.agent.getWorkspacePathIdentity());
+        const archived = this.agent.drainArchivedHistory();
+        if (archived.length) {
+            try {
+                this.sessionManager.appendArchivedHistory(this.currentSessionId, archived);
+            }
+            catch { }
+        }
     }
     loadHistory() {
         if (fs.existsSync(this.historyFile)) {
@@ -201,6 +212,7 @@ export class InteractiveRepl {
         console.log(pc.bold(pc.white("\nAvailable Slash Commands:")));
         console.log(`  ${pc.bold(pc.yellow("/help"))}               Show this commands cheatsheet`);
         console.log(`  ${pc.bold(pc.yellow("/status"))}             Show active model, workspace, endpoint, git badge`);
+        console.log(`  ${pc.bold(pc.yellow("/doctor"))}             Diagnose this session's configuration and runtime (--deep, --fix [--yes])`);
         console.log(`  ${pc.bold(pc.yellow("/clear"))}              Reset conversation context memory`);
         console.log(`  ${pc.bold(pc.yellow("/compact"))}            Condense earlier messages to free token budget`);
         console.log(`  ${pc.bold(pc.yellow("/mode [auto|review]"))} Toggle autonomous execution vs human review approval`);
@@ -369,7 +381,7 @@ export class InteractiveRepl {
             prompt: "",
             completer: (line) => {
                 const completions = [
-                    "/help", "/status", "/clear", "/reset", "/compact", "/mode",
+                    "/help", "/status", "/doctor", "/clear", "/reset", "/compact", "/mode",
                     "/diff", "/git", "/commit", "/sessions", "/save", "/resume", "/skills",
                     "/skill", "/mcp", "/plugins", "/plan", "/checkpoint",
                     "/checkpoints", "/undo", "/audit", "/export", "/tokens", "/init",
@@ -577,6 +589,21 @@ export class InteractiveRepl {
                     else if (cmd === "compact") {
                         const report = await this.agent.compactConversation(arg.includes("--llm"));
                         console.log(pc.green(`✔ ${report}\n`));
+                        continue;
+                    }
+                    else if (cmd === "doctor") {
+                        const { runDoctor, runRepairs, renderDoctorText } = await import("./doctor.js");
+                        const flags = arg.split(/\s+/).filter(Boolean);
+                        const base = { context: "session", config: this.config, flags: {}, deep: flags.includes("--deep") };
+                        let report = await runDoctor(base);
+                        if (flags.includes("--fix")) {
+                            report = await runRepairs(report, {
+                                ...base,
+                                readOnly: Boolean(this.config.readOnly),
+                                confirm: async (proposals) => flags.includes("--yes") || /^y(es)?$/i.test((await this.rl.question(`Apply ${proposals.length} repair(s)?\n${proposals.map((p) => `  - ${p.description}`).join("\n")}\n[y/N] `)).trim()),
+                            });
+                        }
+                        console.log(renderDoctorText(report) + "\n");
                         continue;
                     }
                     else if (cmd === "status") {
@@ -812,7 +839,7 @@ export class InteractiveRepl {
                                 this.config.workspace = sess.workspace;
                                 this.agent.setWorkspace(sess.workspace);
                             }
-                            this.agent.restoreSession(sess.messages, sess.unverifiedChangesPending);
+                            this.agent.restoreSession(sess.messages, sess.unverifiedChangesPending, sess.objective);
                             console.log(pc.green(`✔ Resumed session ${pc.bold(sess.id)} (${sess.messages.length} messages loaded).\n`));
                         }
                         continue;
@@ -1509,20 +1536,10 @@ export class InteractiveRepl {
                             ? `nexus-session-${this.currentSessionId}.json`
                             : `nexus-session-${this.currentSessionId}.md`;
                         const outPath = path.join(this.config.workspace, outFilename);
-                        if (format === "json") {
-                            writeProtectedTextFile(outPath, JSON.stringify(sess, null, 2));
-                        }
-                        else {
-                            let md = `# Nexus Code Session Export\n\n- **Session ID:** \`${sess.id}\`\n- **Workspace:** \`${sess.workspace}\`\n- **Date:** ${sess.createdAt}\n- **Model:** \`${sess.model}\`\n\n---\n\n`;
-                            for (const m of sess.messages) {
-                                if (m.role === "system")
-                                    continue;
-                                md += `### ${m.role === "user" ? "👤 User" : m.role === "assistant" ? "🤖 Nexus" : "⚡ Tool (" + m.name + ")"}\n\n`;
-                                md += `${m.content}\n\n---\n\n`;
-                            }
-                            writeProtectedTextFile(outPath, md);
-                        }
-                        console.log(pc.green(`✔ Session transcript exported to: ${pc.bold(outPath)}\n`));
+                        const exported = buildSessionExport(this.sessionManager, sess);
+                        writeProtectedTextFile(outPath, format === "json" ? JSON.stringify(exported.json, null, 2) : exported.markdown);
+                        console.log(pc.green(`✔ Session transcript exported to: ${pc.bold(outPath)}`));
+                        console.log(pc.dim(`${exported.json.export.history.note}\n`));
                         continue;
                     }
                     else if (cmd === "cd") {

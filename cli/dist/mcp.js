@@ -407,6 +407,16 @@ export class McpConnection {
         this.connected = false;
     }
 }
+/** MCP configuration files Nexus reads, in precedence order (the first definition of a server name wins). */
+export function mcpConfigFiles(workspace) {
+    return [
+        path.join(workspace, ".mcp.json"),
+        path.join(workspace, "mcp.json"),
+        path.join(os.homedir(), ".config", "nexus", "mcp.json"),
+        path.join(os.homedir(), ".nexus", "mcp.json"),
+        path.join(os.homedir(), ".config", "opencode", "mcp.json"),
+    ];
+}
 export class McpClientManager {
     static activeManagers = new Set();
     workspace;
@@ -424,14 +434,7 @@ export class McpClientManager {
     }
     async loadAndConnect() {
         this.shutdownAll();
-        const configFiles = [
-            path.join(this.workspace, ".mcp.json"),
-            path.join(this.workspace, "mcp.json"),
-            path.join(os.homedir(), ".config", "nexus", "mcp.json"),
-            path.join(os.homedir(), ".nexus", "mcp.json"),
-            path.join(os.homedir(), ".config", "opencode", "mcp.json"),
-        ];
-        for (const file of configFiles) {
+        for (const file of mcpConfigFiles(this.workspace)) {
             if (fs.existsSync(file)) {
                 try {
                     const content = fs.readFileSync(file, "utf-8");

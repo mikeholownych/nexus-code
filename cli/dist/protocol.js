@@ -3,6 +3,9 @@ export const PROTOCOL_VERSION = 1;
 export const MAX_TEXT_FIELD = 8000;
 export const MAX_SUMMARY = 160;
 export const MAX_SLASH_OUTPUT = 32_000;
+/** Lines of a file diff shown in the transcript; the full diff is in the tool call's detail record. */
+export const DIFF_PREVIEW_LINES = 40;
+export const DIFF_PREVIEW_CHARS = 6000;
 export class ProtocolError extends Error {
     id;
     constructor(message, id) {
@@ -43,6 +46,13 @@ export function parseCommand(line) {
             if (typeof text !== "string" || !text.trim())
                 throw new ProtocolError("prompt.submit requires non-empty text", requestId);
             return { type: "prompt.submit", id: requestId, text };
+        }
+        case "steer": {
+            const requestId = requireId("steer");
+            const text = msg.text;
+            if (typeof text !== "string" || !text.trim())
+                throw new ProtocolError("steer requires non-empty text", requestId);
+            return { type: "steer", id: requestId, text };
         }
         case "cancel":
             return { type: "cancel" };

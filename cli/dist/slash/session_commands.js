@@ -6,6 +6,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { writeProtectedTextFile } from "../core/persistence_protection.js";
 import { receiptText } from "../evidence.js";
+import { buildSessionExport } from "../session_export.js";
 import { getGitInfo, scaffoldProjectRules } from "../git.js";
 import { scanAndOnboardWorkspace } from "../onboard.js";
 import { ThemeManager } from "../theme.js";
@@ -14,6 +15,72 @@ import { SLASH_COMMANDS, oneLine, reply } from "./catalog.js";
 function help() {
     const width = Math.max(...SLASH_COMMANDS.map((spec) => spec.usage.length));
     return reply("help", SLASH_COMMANDS.map((spec) => `${spec.usage.padEnd(width)}  ${spec.summary}`).join("\n"));
+}
+/**
+ * `/doctor [--deep] [--fix [--yes]]`: the same engine as `nexus doctor`, on the running session's configuration (model
+ * switches and workspace changes included). Read-only diagnosis may run during a turn; repairs wait for idle (the
+ * sidecar refuses them while busy). Repairs need `--yes` in auto mode, or the approval prompt in review mode, and are
+ * refused under --read-only.
+ */
+async function doctor({ host, args, signal }) {
+    const { runDoctor, runRepairs, renderDoctorText } = await import("../doctor.js");
+    const flags = args.split(/\s+/).filter(Boolean);
+    const config = host.app.getConfig();
+    const base = { context: "session", config, flags: {}, deep: flags.includes("--deep"), signal };
+    let report = await runDoctor(base);
+    if (flags.includes("--fix")) {
+        const confirm = host.confirm(signal);
+        report = await runRepairs(report, {
+            ...base,
+            readOnly: Boolean(config.readOnly),
+            confirm: async (proposals) => {
+                if (flags.includes("--yes"))
+                    return true;
+                if (confirm)
+                    return confirm("doctor_repair", { repairs: proposals.map((p) => p.description) });
+                return false;
+            },
+        });
+        const declined = report.repairs?.some((r) => r.status === "declined");
+        if (declined && !confirm && !flags.includes("--yes")) {
+            return reply("doctor", `${renderDoctorText(report)}\nRepairs need confirmation: run /doctor --fix --yes (or switch to /mode review to approve each run).`);
+        }
+    }
+    const failed = report.findings.some((f) => f.status === "fail");
+    return reply("doctor", renderDoctorText(report), !failed);
+}
+/**
+ * `/requirements`: the acceptance requirements of the current objective. `accept <id>...` is the operator's authority
+ * to let a requirement the agent descoped count as done; the agent cannot do this itself.
+ */
+async function requirements({ host, args }) {
+    const { acceptDescoping, requirementRows } = await import("../core/objective.js");
+    const ledger = host.app.getAgent().getObjective();
+    if (!ledger)
+        return reply("requirements", "No objective is being tracked yet.");
+    const [verb, ...ids] = args.split(/\s+/).filter(Boolean);
+    let note = "";
+    if (verb === "clear") {
+        const dropped = host.app.getAgent().clearObjective();
+        host.saveSession();
+        const open = dropped ? requirementRows(dropped).filter(([, v]) => !/^(IMPLEMENTED|VERIFIED|DESCOPED \(accepted\))/.test(v)).map(([id]) => id) : [];
+        return reply("requirements", `The objective is cleared${open.length ? ` (unresolved when cleared: ${open.join(", ")})` : ""}; your next message starts a new one.`);
+    }
+    if (verb === "accept") {
+        if (!ids.length)
+            return reply("requirements", "Name the requirements to accept, e.g. /requirements accept R2.", false);
+        const { accepted, refused } = acceptDescoping(ledger, ids);
+        if (accepted.length)
+            host.saveSession();
+        note = `${accepted.length ? `Accepted the descoping of ${accepted.join(", ")}.` : ""}${refused.length ? ` Not descoped (nothing to accept): ${refused.join(", ")}.` : ""}\n\n`;
+    }
+    else if (verb) {
+        return reply("requirements", "Usage: /requirements [accept <id>...|clear]", false);
+    }
+    const rows = requirementRows(ledger);
+    if (!rows.length)
+        return reply("requirements", `${note}The objective is a single request; no separate acceptance requirements were listed.`);
+    return reply("requirements", `${note}${rows.map(([id, value]) => `${id.padEnd(4)} ${value}`).join("\n")}`);
 }
 function status({ host }) {
     const config = host.app.getConfig();
@@ -166,20 +233,10 @@ function exportSession({ host, args }) {
         return reply("export", "Nothing to export yet: this session has not been saved.", false);
     const json = args.trim().toLowerCase() === "json";
     const out = path.join(host.app.getConfig().workspace, `nexus-session-${session.id}.${json ? "json" : "md"}`);
-    if (json) {
-        writeProtectedTextFile(out, JSON.stringify(session, null, 2));
-    }
-    else {
-        let md = `# Nexus Code Session Export\n\n- **Session ID:** \`${session.id}\`\n- **Workspace:** \`${session.workspace}\`\n- **Date:** ${session.createdAt}\n- **Model:** \`${session.model}\`\n\n---\n\n`;
-        for (const m of session.messages) {
-            if (m.role === "system")
-                continue;
-            const who = m.role === "user" ? "User" : m.role === "assistant" ? "Nexus" : `Tool (${m.name})`;
-            md += `### ${who}\n\n${typeof m.content === "string" ? m.content : JSON.stringify(m.content)}\n\n---\n\n`;
-        }
-        writeProtectedTextFile(out, md);
-    }
-    return reply("export", `Transcript written to ${out}`);
+    const exported = buildSessionExport(host.app.getSessionManager(), session);
+    writeProtectedTextFile(out, json ? JSON.stringify(exported.json, null, 2) : exported.markdown);
+    const history = exported.json.export.history;
+    return reply("export", `Transcript written to ${out}\n${history.note}`);
 }
 function init({ host }) {
     return reply("init", `Project instructions file ready at: ${scaffoldProjectRules(host.app.getConfig().workspace)}`);
@@ -206,6 +263,8 @@ function theme({ args }) {
 }
 export const SESSION_HANDLERS = {
     help,
+    doctor,
+    requirements,
     status,
     clear,
     compact,
@@ -223,6 +282,5 @@ export const SESSION_HANDLERS = {
     onboard,
     theme,
     receipt: ({ host }) => reply("receipt", receiptText(host.receipt())),
-    tui: () => reply("tui", "You are already in the live view."),
     exit: () => reply("exit", "Press q, or ctrl+c with an empty composer, to quit."),
 };

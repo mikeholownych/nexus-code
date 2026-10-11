@@ -6,6 +6,23 @@ import { SecurityManager } from "./security.js";
 import { InformationFlowBoundary } from "./core/egress.js";
 import { HARNESS_TOOLS, defaultRegistry } from "./core/capabilities.js";
 export { HARNESS_TOOLS, defaultRegistry };
+/** Rust engine binaries the bridge looks for, in order (release before debug). */
+export function coreBinaryCandidates() {
+    return [
+        path.resolve(__dirname, "../../core/target/release/harness-core"),
+        path.resolve(__dirname, "../../core/target/debug/harness-core"),
+        path.resolve(__dirname, "../../core/target/release/harness-core.exe"),
+        path.resolve(__dirname, "../../core/target/debug/harness-core.exe"),
+    ];
+}
+/** The engine binary the bridge would run, or undefined when it falls back to `cargo run`. */
+export function resolveCoreBinary() {
+    return coreBinaryCandidates().find((candidate) => fs.existsSync(candidate));
+}
+/** Cargo manifest the bridge's `cargo run` fallback builds. */
+export function coreCargoManifest() {
+    return path.resolve(__dirname, "../../core/Cargo.toml");
+}
 export const SAFE_READONLY_COMMAND_REGEX = /^(git\s+(status|diff|log|branch|show|rev-parse)|ls|dir|cat|head|tail|grep|find|which|echo|pwd|cargo\s+(check|clippy)|npm\s+(test|run\s+lint)|pytest)/i;
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -123,18 +140,9 @@ export class RustCoreBridge {
         this.sandbox = sandbox;
     }
     resolveBinary() {
-        const candidates = [
-            path.resolve(__dirname, "../../core/target/release/harness-core"),
-            path.resolve(__dirname, "../../core/target/debug/harness-core"),
-            path.resolve(__dirname, "../../core/target/release/harness-core.exe"),
-            path.resolve(__dirname, "../../core/target/debug/harness-core.exe"),
-        ];
-        for (const cand of candidates) {
-            if (fs.existsSync(cand)) {
-                this.coreBinaryPath = cand;
-                return;
-            }
-        }
+        const found = resolveCoreBinary();
+        if (found)
+            this.coreBinaryPath = found;
     }
     ensureRpcDaemon() {
         if (this.rpcProcess && !this.rpcProcess.killed && this.rpcProcess.stdin && !this.rpcProcess.stdin.destroyed) {
