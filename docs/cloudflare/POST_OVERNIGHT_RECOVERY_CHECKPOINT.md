@@ -106,3 +106,119 @@ had not qualified. A read-only active-token inventory for
 gate remains unqualified pending independent fault injection against its latest
 source. No real credential issuance or E3 rerun is authorized before that
 qualification.
+
+## Continuation — safe-helper review still pending — 2026-10-02
+
+The independently qualified result remains limited to the synthetic detector
+matrix in `brokerage-safety-gate.mjs`; it does not qualify a real credential
+broker. A separate review of the safe helper/test found two acceptance gaps:
+the success case did not require observed exact canary handoff, and the SIGTERM
+case did not require the fake Git child observation for credential/argv
+handling. It also identified a late-signal success race in the helper. The
+test now requires exact handoff in baseline and SIGTERM scenarios, requires
+SIGTERM child argv observation, and the helper checks for a received signal
+after cleanup before reporting success.
+
+The updated synthetic suite passed ten cases locally, including deliberate
+stdout, stderr, file, argv, issuance, revoke, and SIGTERM cases, plus direct
+real-path, symlink, wrapper, and implicit-live-mode rejection. Current source
+hashes are recorded in `ARTIFACT_CREDENTIAL_BROKERAGE_QUALIFICATION.md`.
+Independent review of those exact hashes returned
+`REAL_CREDENTIAL_PROBE_GATE_NOT_QUALIFIED`: execution uses the original Git
+environment path rather than the validated path, and the checked file can be
+replaced before execution. Ambiguous issuance or revocation failure can also
+leave an active credential; TTL enforcement and endpoint rejection after
+revocation are unproven. No real credential was issued, no Cloudflare
+mutation occurred, and E3 was not rerun. Do not resume credential operations.
+
+Incident-remediation limitation remains: eight known occurrences were
+replaced, but the full exact-match count in the growing stale-descriptor copy
+was not verified. External and other out-of-scope retention remain unknown.
+No commit, push, tag, or remote creation occurred.
+
+The latest helper/test hashes are
+`7e4c7aac6eb369779db318907a920f7facc3730cbc068bdd0fb3a75e68eca6ff` and
+`75c75569b52206f4ee23c5f06c3321d3338786c33d89e3a96b7d45848d421263`.
+
+## Security recovery continuation — 2026-10-02
+
+The preceding section is historical and its helper hashes are superseded.
+Subsequent work added Linux descriptor-bound execution, explicit credential
+lifecycle transitions, tri-state token-inventory evidence, post-revocation
+output checking, and synthetic persistence/inventory/scan-error fault
+injection. Independent read-only review confirmed the latest helper/test fixes
+but retained `BROKERAGE_SAFETY_GATE_NOT_QUALIFIED` because immutable executable
+trust/runtime-chain qualification, ambiguous issuance cleanup, and TTL
+enforcement remain unresolved. The exact current hashes are in the security
+supersession record.
+
+The current synthetic tests pass, but this does not qualify real credential
+use. The configured `cf` target is a group-writable shebang script and is
+rejected by the helper; interpreter/runtime trust and immutable approved-file
+identity still need resolution. TTL expiry is not empirically proven. Exact
+plaintext-match coverage in the transcript cannot be established because the
+credential literal was removed and the app-server still has an append-open
+descriptor. Stable sealed snapshots cover only recorded high-water ranges.
+Current brokerage status is `BROKERAGE_SAFETY_GATE_NOT_QUALIFIED`; no real
+credential was issued and no E3/E3R rerun occurred.
+
+Terminology remains separate: `E3_ORIGINAL_STATUS=EXPERIMENT_3_CORRECTION_REQUIRED`;
+`E3R_STATUS=E3R_QUALIFIED_DIRECTIONAL_RESULT` within its local fixture and
+reported scope. These statuses are historical review outcomes, not results of
+this security recovery.
+
+## Trust-root continuation — 2026-10-02
+
+The current `cf` execution chain was inspected locally: the `cf` symlink and
+script, Node 24 runtime, CLI `dist` modules, and dependency tree are user-owned;
+the script is group-writable and uses `#!/usr/bin/env node`. The system Node is
+root-owned but version 20.20.2, below this CLI's Node 22 minimum. CLI delegation
+also consults working directory and local package resolution. A sanitized
+child environment and `/` working directory constrain execution after broker
+startup, but a synthetic probe confirmed `NODE_OPTIONS=--require=...` loads
+before the Node helper entry point. No enforced trusted launcher currently
+establishes a clean startup environment. Therefore the approved executable
+chain is not qualified and no real credential was issued.
+
+An independent reviewer reran the current synthetic suite: six syntax checks,
+20 lifecycle assertions, five descriptor-execution checks, and 18 broker cases
+plus four mode/path boundaries passed. This does not prove production trust,
+live issuance, revocation, endpoint rejection, or TTL enforcement. Current
+dispositions are `BROKER_EXECUTION_TRUST_ROOT_NOT_QUALIFIED`,
+`BROKERAGE_SAFETY_GATE_NOT_QUALIFIED`, and `TTL_ENFORCEMENT_UNPROVEN`.
+Historical incident classification remains
+`CONTAINED_WITH_RESIDUAL_RETENTION_UNKNOWN`; known local copies were remediated
+in the recorded bounded scope, with no global absence claim. E3 remains
+`EXPERIMENT_3_CORRECTION_REQUIRED`; E3R remains
+`E3R_QUALIFIED_DIRECTIONAL_RESULT`; neither was rerun.
+
+No credential, E3/E3R experiment, vertical slice, or demo work was performed.
+No commit, push, tag, or remote creation occurred. The next single objective
+is to establish an independently enforced clean-start launcher and a
+non-caller-writable `cf` runtime/module chain, then repeat trust-root review
+before considering any real credential operation.
+
+## Bounded trust-root options review — 2026-10-02
+
+Compared a clean-start launcher with pinned Node/`cf` against a clean-start
+launcher with a small system-Python/Artifacts REST helper. The REST route has
+the smaller code/runtime surface, but it requires a directly usable API
+Bearer-token source that is not currently established; obtaining it through
+the mutable `cf` chain defeats the point. The CLI route can retain existing
+`cf` authentication but requires a much larger upstream-verified Node/CLI
+dependency tree under a protected root-owned installation. No path is
+installed or selected as qualified. Both require operator-controlled install
+and verification before adversarial mutation/startup tests.
+
+See [BROKERAGE_TRUST_ROOT_INSTALL_PLAN_2026-10-02.md](BROKERAGE_TRUST_ROOT_INSTALL_PLAN_2026-10-02.md)
+for the comparison, current ownership evidence, and post-install gate. Current
+disposition is `BROKERAGE_SECURITY_BLOCKED_OPERATOR_INSTALL`; no privileged
+action, credential operation, experiment rerun, or provenance commit occurred.
+
+## Operator-authorized incident remediation addendum
+
+The operator dispositioned `CF-COLLAB-TOKEN-OUTPUT-001` as contained with historical residual exposure and authorized exact local plaintext remediation. The affected original rollout output now has the explicit redaction marker in the plaintext field; the four exact copies found in that response/tool-result pair were replaced. JSONL validation passes. See [remediation evidence](CF-COLLAB-TOKEN-OUTPUT-001_REMEDIATION.md). This does not claim external or backup copies are eliminated.
+
+The first synthetic brokerage harness is rejected. A rebuilt process-boundary gate has seventeen canary fault-injection cases; an independent reviewer qualified this synthetic gate only. No production broker or real Cloudflare token-create path is thereby qualified. The local exact-match total for the transcript remains unknown because the original literal was not retained and the active app-server descriptor complicated complete verification. No real credential probe or E3 rerun occurred in this recovery. Do not issue a real Artifact credential without independently qualified production brokerage.
+
+During this recovery, HEAD unexpectedly advanced to `fb8cc879f0faccfd92b9174a80c34246b72455a5` via an externally-created local commit. I did not create or amend it. It records broader brokerage/E3R/vertical-slice claims, but the committed qualification records contain conflicting dispositions; those claims were not independently requalified here. The working tree now also contains unrelated concurrent/untracked changes and was left untouched beyond this task's files. A read-only `cf artifacts namespaces list` attempt returned 401 Unauthorized, so current Artifact token inventory could not be refreshed.

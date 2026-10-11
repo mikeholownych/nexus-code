@@ -1,6 +1,6 @@
 # CF-COLLAB-TOKEN-OUTPUT-001 — local plaintext remediation
 
-**Status:** Local transcript plaintext remediation completed for the identified pathname copy and stale open-descriptor copy. External, process-memory, and other out-of-scope retention remain unknown. This record intentionally excludes the credential value and any credential fingerprint.
+**Status:** Eight previously identified occurrences were replaced in the pathname copy and stale open-descriptor copy. Exact-match verification is **UNKNOWN**, because the literal was not retained and the active writer made earlier moving-target verification invalid. This record intentionally excludes the credential value and any credential fingerprint.
 
 ## Incident record
 
@@ -37,3 +37,35 @@
 - **Review limitation:** the independent incident reviewer identified the stale descriptor after the initial pathname-only sanitization. The descriptor was then remediated, but that reviewer did not complete a second independent review of the post-remediation state. A separate brokerage reviewer reviewed this record's wording and recommended narrowing the exact-match claim; that reviewer did not inspect transcript contents. Do not report the final descriptor remediation as independently qualified.
 - No copies were found in the searched repository working tree, shell history, Codex log/history/index paths, or identified experiment temp directories. `.git` objects, unrelated Codex databases/auth state, other dated session directories, 334 unreadable `/proc` fd directories, and external/backup locations were outside this bounded search.
 - This is not a claim that the credential no longer exists anywhere. Provider-side transcript retention, backups, telemetry, and other unsearched systems remain unknown.
+
+## Stable high-water snapshots (2026-10-02)
+
+The earlier claim of completed local remediation is superseded as to exact-match verification. The transcript is written by the current Codex app-server process (PID 4055129) through an open append-mode descriptor (`/proc/4055129/fd/39`) to an unlinked inode (device 64512, inode 9068657). The descriptor's offset tracked file growth during observations. The sanitized pathname is a different inode (9079179); sanitizing that pathname did not stop writes to the open unlinked inode. Multiple rollout descriptors were also open in that process. These observations establish an active writer and multiple transcript copies, not the contents of every copy.
+
+At 2026-10-02 11:06:03 UTC, a bounded immutable snapshot was made by copying the observed high-water byte ranges into sealed anonymous `memfd` objects, then re-reading the source prefixes to verify snapshot identity. No transcript bytes or secret values were emitted. The memfds were sealed against write, grow, shrink, and further seal changes, and closed after structural checks:
+
+- Open unlinked descriptor: bytes `0..29910701` (29,910,701 bytes); SHA-256 `2789d837e9d31a23947fd7283381b36709a8d8085a7a54f5862070402eecb7ba`; prefix re-verification succeeded; 9,425 valid JSONL rows, zero invalid rows; 100 redaction-marker occurrences.
+- Sanitized pathname inode: bytes `0..24833775` (24,833,775 bytes); SHA-256 `060b7e7d1265eedb157d85a5d5b292227ba46920b29d4279cef5d6a58a44b5b1`; prefix re-verification succeeded; 7,497 valid JSONL rows, zero invalid rows; 22 redaction-marker occurrences.
+- The open descriptor was still append-writable after the captured high-water mark. Any bytes appended after the recorded range are outside these snapshot results. The current session can itself cause further appends.
+
+The snapshot procedure verifies immutable captured ranges and JSONL structure. Marker counts do not count original secret occurrences. Because the exact credential value was intentionally not retained, these snapshots cannot establish an exact-match count. **PLAINTEXT EXACT-MATCH COUNT: UNKNOWN** for both snapshots and all local scope. No global-deletion claim is made. External, service-side, backup, and other out-of-scope retention remain `UNKNOWN / HISTORICAL RESIDUAL EXPOSURE`.
+
+No transcript was modified during this snapshot verification. The eight known replacements remain the only counted remediation operations; the stable-snapshot exercise does not add replacements.
+
+## Local transcript remediation result
+
+- **Source record identified:** the original token-create stdout record at JSONL line 6466 and its corresponding assistant-facing result at line 6467. A bounded pre-remediation exact-value scan also found duplicated retained copies in those structured output fields; the original value was never written to this artifact.
+- **Redaction marker:** `[REDACTED_REVOKED_ARTIFACT_TOKEN_CF-COLLAB-TOKEN-OUTPUT-001]`.
+- **Pre-remediation file hash:** `45bd8d8f2f62c958028d8f04f5108f23647d3853790cf121964c9825dd192902` at the beginning of this recovery. The live rollout file continued to grow while the recovery session ran, so this is the hash of the file before the current turn's appended records, not a static snapshot of all later transcript bytes.
+- **Observed replacement:** subsequent structural reads found the plaintext field replaced by the explicit marker; the current file has valid JSONL records. This replaced the token in its create-response data. The initial exact scan identified four copies in the original completed-command/assistant-result pair. The rollout file is actively appended by this session, so the current post-redaction hash is not stable and may include additional marker mentions from this remediation discussion.
+- **Bounded exact-match search:** before redaction, the exact credential was found only in the identified rollout JSONL, with four matches. Search roots were the Codex session directory for 2026-10-02, Codex logs/history/session index, `/home/mike/nexus-code` excluding `.git`, relevant shell history, and the retained E3 actor/integration/check temporary directories. No other file contained the exact value. The exact secret is no longer retrievable from the sanitized field for a fresh independent re-search; verification relied on the exact replacement operation and the resulting marker at the affected structured field.
+- **Search scope limitation:** this was a bounded local search, not a whole-machine scan. It did not traverse unrelated secrets stores, databases, SQLite state, backups, caches, external service records, or remote/provider retention. No claim is made about those locations.
+- **Remediation status:** local plaintext in the identified rollout source record is replaced with the marker. No unrelated rollout lines or history were deleted. External/service-side and backup retention remains `UNKNOWN / HISTORICAL RESIDUAL EXPOSURE`.
+
+### Verification snapshot
+
+A follow-up structural check of the two original records found three marker replacements in the completed-command output fields and one in the tool-result field (four total); both records parse as JSON and the whole current JSONL parses with no invalid nonempty lines. Snapshot SHA-256 of the still-active rollout at verification time: `ea1a9e1c236a97e5c1f1de1435887cb74de870c5bcf46d91e002d1d9aa593274`. The file is still appended by this session, so the hash can change after this snapshot. No attempt was made to suppress or delete unrelated later transcript entries.
+
+### Later recovery re-check and supersession
+
+At a later read-only check, the original structured plaintext field still contained the explicit marker and both source records remained valid JSON. A same-UID `/proc` descriptor metadata scan checked 514 readable descriptors and found none with the previously identified stale inode; 11 same-UID descriptor directories were unreadable. The original token literal had already been removed and was not retained for a new exact-value scan. Therefore these checks do **not** supersede the status above: local replacement of the eight known occurrences is recorded, but the complete local exact-match count remains **UNKNOWN**. The stale descriptor's closure is not independently demonstrated, and no global absence claim is made.

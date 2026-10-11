@@ -2,7 +2,7 @@
 
 **Date:** 2026-10-02
 
-**Current status:** Synthetic gate run passed its own negative controls; independent fault-injection review of the current revision is pending. This is not real Cloudflare credential evidence and does not authorize a real token probe until independent qualification.
+**Current status:** `BROKERAGE_SAFETY_GATE_NOT_QUALIFIED`. The earlier synthetic-only qualification claim is superseded by later adversarial findings. No real credential operation is authorized.
 
 ## Previous harness rejection
 
@@ -27,12 +27,32 @@ The safe handoff scenario sends the synthetic authorization header only through 
 - Scratch cleanup: true; final evidence contains no canary.
 - Cloudflare API or credential operations: none.
 
-The current source SHA-256 is `6741b6d15fc97d2d0113b0690455820e61f7e99e2e37c65f860a503dba7d2e0a`. This revision was changed after independent review exposed false negatives in earlier versions. The full-header and token-only argument controls now check the captured child observation and the exact injected argument; the safe-handoff result consumes the child's argv/output booleans; scans fail closed on traversal errors; and cleanup result checks inspect both output streams and scan cleanup scratch before deletion. These changes are not independently accepted yet.
+The independent reviewer ran a baseline plus 25 fault injections against source SHA-256 `6741b6d15fc97d2d0113b0690455820e61f7e99e2e37c65f860a503dba7d2e0a`. All 25 faults were rejected, including cleanup scratch-file leakage; all captured outputs were canary-free. This qualifies the synthetic detector matrix only.
 
 An untracked draft at [ARTIFACT_CREDENTIAL_BROKERAGE_QUALIFICATION.md](ARTIFACT_CREDENTIAL_BROKERAGE_QUALIFICATION.md) previously asserted qualification and a real probe. That assertion is withdrawn: the earlier gate was rejected, no trustworthy probe provenance was established, and the current read-only token inventory found zero active tokens on the named repository. The adjacent `real-credential-probe.mjs` source is not approved to run because it logs token identifiers and may surface raw Git stderr.
 
-## Scope and remaining gate
+## Safe probe helper test
 
-This synthetic test has not yet been independently qualified. A passing self-run is insufficient; the reviewer must mutate the harness and confirm each leak control causes failure while no synthetic secret reaches reviewer/tool output.
+The new safe probe helper and fake CLI/Git harness have also been run locally with ten synthetic cases: baseline success, issuer stderr reflection, nonzero issuance after creation, missing token ID, Git stdout/stderr/file reflection, revocation failure, Git argv guard injection, and SIGTERM during Git work. The harness reported the expected result for each case and found no canary in captured output, argv, or retained fixture files. The missing-ID and revoke-failure cases intentionally report active fake credentials and failure; the TTL parameter was only requested, not observed to expire. Source hashes and limits are recorded in `ARTIFACT_CREDENTIAL_BROKERAGE_QUALIFICATION.md`. Independent review of these exact two files is pending; no Cloudflare operation occurred.
 
-The harness is not the production broker. If qualified, implement the narrow real broker around the installed `cf` token-create/revoke commands: capture both streams in-process, parse only validated fields, pass the credential to a read-only Git child through ephemeral environment configuration, suppress child output, revoke by non-secret token ID in a `finally` path, and verify token inventory. Independently review that helper before the single read-only real token probe. No real credential has been issued in this recovery.
+Independent review then found the helper's synthetic mode accepted arbitrary CLI paths, including authenticated `cf`, and invocation without a mode defaulted to live operations. The helper now requires explicit mode selection, confines synthetic executable paths to the isolated test directory, removes inherited environment from synthetic CLI invocations, and the test checks rejection of both real executable paths and implicit live mode. These corrected hashes still require independent review; the real credential gate remains unqualified.
+
+The subsequent exact-hash review found the Git path validated is not necessarily the path executed, and the validated pathname can be replaced before execution. Ambiguous issuance/revocation, TTL enforcement, and authentication rejection after revocation also remain unproven. See [superseding security record](BROKERAGE_SECURITY_SUPERSESSION_2026-10-02.md). The earlier synthetic matrix result is historical, not current gate qualification.
+
+The test harness is not proof of actual Cloudflare authentication or token lifecycle. Do not issue a real credential until the helper is independently reviewed for output, argv, persistence, error, revocation, and failure-path handling. No real credential has been issued in this recovery turn.
+
+## 2026-10-02 superseding source review
+
+The current helper and its expanded synthetic test include descriptor-bound
+launch, explicit lifecycle states, persistence fault injection with write
+witnesses, and a post-revocation output-reflection control. The latest
+independent source review still does not qualify real brokerage: an open inode
+may be modified in place, the ELF-only test does not qualify the configured
+`cf` shebang/interpreter chain, and the current `cf` target (UID 1000, mode
+`0775`) is correctly rejected by the trust policy. The configured `cf` digest
+is not pinned. TTL enforcement and live credential lifecycle remain untested.
+The latest bounded snapshot evidence also cannot establish exact-match absence
+because the revoked plaintext literal was not retained and the stale transcript
+descriptor remains append-open. Current status remains
+`BROKERAGE_SAFETY_GATE_NOT_QUALIFIED`; no real Artifact credential issuance is
+authorized.
