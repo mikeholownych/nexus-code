@@ -138,6 +138,19 @@ impl Sidecar {
         self.reap(grace)
     }
 
+    /// The signal that ended the child, once reaped (unix).
+    pub fn signal(&self) -> Option<i32> {
+        #[cfg(unix)]
+        {
+            use std::os::unix::process::ExitStatusExt;
+            self.status.and_then(|status| status.signal())
+        }
+        #[cfg(not(unix))]
+        {
+            None
+        }
+    }
+
     pub fn stderr_tail(&self) -> Vec<String> {
         self.stderr_tail.lock().unwrap().iter().cloned().collect()
     }

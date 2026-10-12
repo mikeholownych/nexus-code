@@ -272,6 +272,8 @@ pub struct Palette {
     pub bar: Color,
     pub text: Color,
     pub meta: Color,
+    /// Background of code blocks and command output in the transcript.
+    pub code_bg: Option<Color>,
     pub syntax: Option<Syntax>,
 }
 
@@ -313,6 +315,7 @@ pub fn palette(depth: Depth) -> Palette {
             bar: Color::Rgb(62, 76, 88),
             text: Color::Rgb(222, 228, 233),
             meta: Color::Rgb(125, 145, 158),
+            code_bg: Some(Color::Rgb(22, 29, 38)),
             syntax: Some(Syntax {
                 keyword: Color::Rgb(212, 172, 255),
                 string: Color::Rgb(240, 202, 142),
@@ -332,6 +335,7 @@ pub fn palette(depth: Depth) -> Palette {
             bar: Color::Indexed(239),
             text: Color::Indexed(254),
             meta: Color::Indexed(247),
+            code_bg: Some(Color::Indexed(234)),
             syntax: Some(Syntax {
                 keyword: Color::Indexed(189),
                 string: Color::Indexed(223),
@@ -351,6 +355,7 @@ pub fn palette(depth: Depth) -> Palette {
             bar: Color::DarkGray,
             text: Color::Reset,
             meta: Color::DarkGray,
+            code_bg: None,
             syntax: None,
         },
     }
@@ -536,6 +541,31 @@ fn fit_rows(cells: Vec<Cell>, width: usize, fit: Fit) -> Vec<Vec<Cell>> {
             vec![row]
         }
     }
+}
+
+/// Content laid out for display outside a diff row (code blocks, command output): each row's spans (syntax colours
+/// when `lang` is given and the palette has them, else `fg`) on `bg`, and the columns it uses. Tabs expand to stops,
+/// control characters become visible stand-ins, wide characters are never split.
+pub fn content_rows(text: &str, lang: Option<&Lang>, width: usize, fit: Fit, pal: &Palette, fg: Color, bg: Option<Color>) -> Vec<(Vec<Span<'static>>, usize)> {
+    let base = bg.map_or_else(Style::default, |bg| Style::default().bg(bg));
+    fit_rows(cells(text, lang.filter(|_| pal.syntax.is_some())), width.max(1), fit)
+        .into_iter()
+        .map(|row| {
+            let used = row.iter().map(|c| c.width).sum();
+            let spans = row
+                .into_iter()
+                .map(|cell| {
+                    let color = match (cell.token, pal.syntax) {
+                        (None, _) => pal.meta,
+                        (Some(token), Some(syntax)) if lang.is_some() => syntax.color(token, fg),
+                        _ => fg,
+                    };
+                    Span::styled(cell.text, base.fg(color))
+                })
+                .collect();
+            (spans, used)
+        })
+        .collect()
 }
 
 /// The rows (one, or more when wrapping) that show one diff line, each exactly `geo.width` columns wide.
@@ -1248,7 +1278,7 @@ diff --git a/new.rs b/new.rs\nnew file mode 100644\n--- /dev/null\n+++ b/new.rs\
         for depth in [Depth::TrueColor, Depth::Ansi256] {
             let pal = palette(depth);
             let syntax = pal.syntax.unwrap();
-            let backgrounds = [rgb(pal.add_bg.unwrap()), rgb(pal.del_bg.unwrap()), (0, 0, 0), (18, 27, 37)];
+            let backgrounds = [rgb(pal.add_bg.unwrap()), rgb(pal.del_bg.unwrap()), rgb(pal.code_bg.unwrap()), (0, 0, 0), (18, 27, 37)];
             for fg in [pal.text, pal.add_fg, pal.del_fg, syntax.keyword, syntax.string, syntax.comment, syntax.number, syntax.type_name] {
                 for bg in backgrounds {
                     let ratio = contrast(rgb(fg), bg);

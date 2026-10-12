@@ -11,9 +11,10 @@ use ratatui::{
 
 use crate::composer::{ComposerLayout, PREFIX_WIDTH};
 use crate::diff_view::{self, CardContext, Fit, Geometry, Palette};
+use crate::markdown::{self, Prose};
 use crate::live_state::{
     Approval, Detail, DiffReview, Entry, Focus, Link, LiveLayout, LiveState, Loaded, Overlay, ReceiptPanel,
-    ReviewScope, SteerState, Tone, ToolRecord, ToolStatus, Verdict,
+    ReviewScope, SteerState, Tone, ToolRecord, ToolRun, ToolStatus, Verdict,
 };
 use crate::theme;
 use std::time::Duration;
@@ -90,7 +91,8 @@ pub fn activity_line(state: &LiveState) -> String {
         _ => {}
     }
     let tail = if parts.is_empty() { String::new() } else { format!(" · {}", parts.join(" · ")) };
-    format!(" {} {} · {}{tail} ", spinner_frame(elapsed), phase_text(state), clock(elapsed))
+    let cancel = if state.activity.as_ref().is_some_and(|a| a.phase == "approval") { "" } else { " · esc cancels" };
+    format!(" {} {} · {}{tail}{cancel} ", spinner_frame(elapsed), phase_text(state), clock(elapsed))
 }
 
 pub fn render_live(frame: &mut Frame, state: &LiveState) -> LiveLayout {
@@ -142,22 +144,32 @@ pub fn render_live(frame: &mut Frame, state: &LiveState) -> LiveLayout {
             layout.anchored = drawn.anchored;
         }
     }
-    let block = Block::default()
+    let mut block = Block::default()
         .borders(Borders::TOP)
         .border_style(Style::default().fg(Color::DarkGray))
         .title(Span::styled(
             composer_hint(state),
             Style::default().fg(MUTED),
         ));
+    if composer.rows.len() > usize::from(MAX_COMPOSER_ROWS) {
+        // A draft taller than the composer: where the cursor is, so hidden lines are not a surprise.
+        block = block.title(
+            Line::from(Span::styled(format!(" line {} of {} ", composer.cursor.0 + 1, composer.rows.len()), Style::default().fg(MUTED))).right_aligned(),
+        );
+    }
     let inner = block.inner(rows[2]);
     frame.render_widget(block, rows[2]);
     render_composer(frame, inner, state, &composer);
     if let Some((found, pick)) = state.completion() {
         render_completion(frame, rows[1], &found, pick);
     }
+    if state.overlay.is_some() {
+        // A panel takes the transcript area: nothing half-covered shows beside it.
+        frame.render_widget(Clear, rows[1]);
+    }
     match &state.overlay {
         Some(Overlay::Approval(approval)) => {
-            (layout.overlay_rows, layout.overlay_limit) = render_approval(frame, rows[1], approval);
+            (layout.overlay_rows, layout.overlay_limit) = render_approval(frame, rows[1], approval, state.depth);
         }
         Some(Overlay::Help { scroll }) => {
             (layout.overlay_rows, layout.overlay_limit) =
@@ -400,6 +412,7 @@ const HELP: &[(&str, &str)] = &[
     ),
     ("tab", "switch between the composer and the transcript"),
     ("pgup / pgdn", "scroll the transcript"),
+    ("ctrl+end", "back to the newest output (the badge says when new output arrived)"),
     (
         "[ / ]",
         "in the transcript: select the previous / next tool call",
@@ -424,7 +437,8 @@ const HELP: &[(&str, &str)] = &[
     ),
     ("", ""),
     ("", "Approvals (review mode)"),
-    ("y / enter", "approve this action"),
+    ("y", "approve this action"),
+    ("← / → / enter", "move the focus between the decisions; enter takes the focused one"),
     (
         "a",
         "approve this and every later action (switches to auto)",
@@ -450,56 +464,79 @@ fn modal_block(title: &'static str) -> Block<'static> {
         ))
 }
 
-/// Draws the approval modal; returns the rows available to the review and the largest useful scroll.
-fn render_approval(frame: &mut Frame, area: Rect, approval: &Approval) -> (usize, usize) {
+/// Draws the approval panel: what is proposed and on what, the change itself (file changes through the shared diff
+/// view), and the three decisions as buttons with the focused one highlighted. Returns the review's rows and the
+/// largest useful scroll.
+fn render_approval(frame: &mut Frame, area: Rect, approval: &Approval, depth: theme::Depth) -> (usize, usize) {
+    let pal = diff_view::palette(depth);
     let key = Style::default().fg(ACCENT).add_modifier(Modifier::BOLD);
-    let rect = modal(area, area.width, area.height);
-    let block = modal_block(" Approval needed ").title_bottom(Line::from(vec![
-        Span::styled(" y", key),
-        Span::raw(" approve  "),
-        Span::styled("a", key),
-        Span::raw(" always  "),
-        Span::styled("n", key),
-        Span::raw(" deny  "),
-        Span::styled("↑↓", key),
-        Span::raw(" scroll "),
-    ]));
+    let muted = Style::default().fg(MUTED);
+    let rect = area;
+    let block = modal_block(" Approval needed ");
     let inner = block.inner(rect);
     frame.render_widget(Clear, rect);
     frame.render_widget(block, rect);
-    // The heading names the action being approved, so it keeps its row before the review gets any.
-    let head_rows = inner.height.min(2);
-    let head = Rect {
-        height: head_rows,
-        ..inner
-    };
-    let body = Rect {
-        y: inner.y + head_rows,
-        height: inner.height - head_rows,
-        ..inner
-    };
-    frame.render_widget(
-        Paragraph::new(Line::from(vec![
-            Span::styled(
-                tool_verb(&approval.tool),
-                Style::default()
-                    .fg(Color::White)
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::styled(format!(" {}", approval.subject), Style::default().fg(MUTED)),
-        ])),
-        head,
+    let width = usize::from(inner.width);
+    // What is proposed, and the target.
+    let mut head = markdown::wrap(
+        vec![
+            Span::styled(tool_verb(&approval.tool), Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
+            Span::styled(format!(" {}", diff_view::safe_text(&approval.subject)), Style::default().fg(Color::White)),
+        ],
+        width,
+        Vec::new(),
+        vec![Span::raw("  ")],
     );
+    let kind = match &approval.patch {
+        Some(patch) => patch.files.first().map(|file| {
+            let (added, removed) = file.counts();
+            format!("{} {} · +{added} {}{removed}", match file.status {
+                diff_view::Status::Added => "creates",
+                diff_view::Status::Deleted => "deletes",
+                _ => "changes",
+            }, diff_view::safe_text(file.path()), diff_view::MINUS)
+        }),
+        None if approval.tool == "run_command" => Some("runs a shell command in the workspace".to_string()),
+        None => None,
+    };
+    if let Some(kind) = kind {
+        head.push(Line::from(Span::styled(format!("Nexus wants to: {kind}"), muted)));
+    }
+    // Room goes first to the heading (what is proposed), then the decisions, then the change itself.
+    let head_rows = u16::try_from(head.len()).unwrap_or(u16::MAX).min(inner.height.saturating_sub(3).max(inner.height.min(1)));
+    // The decisions, as buttons.
+    let button = |label: &str, verdict: Verdict, hotkey: &str| -> Vec<Span<'static>> {
+        let focused = approval.focus == verdict;
+        let style = if focused { Style::default().fg(Color::Black).bg(ACCENT).add_modifier(Modifier::BOLD) } else { Style::default().fg(Color::White).bg(SURFACE) };
+        let marker = if focused { "▸" } else { " " };
+        vec![Span::styled(format!("{marker}{hotkey} {label} "), style), Span::raw("  ")]
+    };
+    let mut buttons = Vec::new();
+    buttons.extend(button("Approve", Verdict::Approved, "y"));
+    buttons.extend(button("Approve all later actions", Verdict::ApprovedForSession, "a"));
+    buttons.extend(button("Deny", Verdict::Denied, "n"));
+    let mut footer = markdown::wrap(buttons, width, Vec::new(), Vec::new());
+    footer.push(Line::from(vec![Span::styled("←→", key), Span::styled(" choose  ", muted), Span::styled("enter", key), Span::styled(" confirms  ", muted), Span::styled("↑↓", key), Span::styled(" scroll the change", muted)]));
+    let footer_rows = u16::try_from(footer.len()).unwrap_or(2).min(inner.height.saturating_sub(head_rows));
+    let gap = u16::from(inner.height > head_rows + footer_rows + 1);
+    let body = Rect { y: inner.y + head_rows + gap, height: inner.height.saturating_sub(head_rows + footer_rows + gap), ..inner };
+    let lines: Vec<Line> = match &approval.patch {
+        Some(patch) => {
+            let geo = Geometry { width, indent: 1, num_width: diff_view::patch_num_width(patch) };
+            diff_view::panel_rows(patch)
+                .into_iter()
+                .filter(|row| !matches!(row, diff_view::Row::File(_) | diff_view::Row::Blank))
+                .flat_map(|row| diff_view::panel_row_lines(patch, row, geo, Fit::Wrap, &pal))
+                .collect()
+        }
+        None => approval.lines.iter().map(review_line).collect(),
+    };
     let rows = usize::from(body.height);
-    let limit = approval.lines.len().saturating_sub(rows);
-    let lines: Vec<Line> = approval
-        .lines
-        .iter()
-        .skip(approval.scroll.min(limit))
-        .take(rows)
-        .map(review_line)
-        .collect();
-    frame.render_widget(Paragraph::new(lines), body);
+    let limit = lines.len().saturating_sub(rows);
+    let shown: Vec<Line> = lines.into_iter().skip(approval.scroll.min(limit)).take(rows).collect();
+    frame.render_widget(Paragraph::new(head), Rect { height: head_rows, ..inner });
+    frame.render_widget(Paragraph::new(shown), body);
+    frame.render_widget(Paragraph::new(footer), Rect { y: inner.y + inner.height - footer_rows, height: footer_rows, ..inner });
     (rows, limit)
 }
 
@@ -564,10 +601,14 @@ fn render_completion(frame: &mut Frame, area: Rect, found: &[&SlashSpec], pick: 
             } else {
                 Style::default().fg(Color::White).bg(SURFACE)
             };
-            Line::from(Span::styled(
-                format!(" {:<width$}  {} ", spec.usage, spec.summary),
-                style,
-            ))
+            let position = if index == pick { format!(" {}/{} ", pick + 1, found.len()) } else { String::new() };
+            let room = usize::from(area.width).saturating_sub(width + 4 + position.chars().count());
+            let summary = diff_view::clip(&spec.summary, room);
+            let pad = room.saturating_sub(unicode_width::UnicodeWidthStr::width(summary.as_str()));
+            Line::from(vec![
+                Span::styled(format!(" {:<width$}  {summary}{}", spec.usage, " ".repeat(pad)), style),
+                Span::styled(position, if index == pick { style.add_modifier(Modifier::BOLD) } else { style }),
+            ])
         })
         .collect();
     let height = u16::try_from(shown).unwrap_or(0);
@@ -591,16 +632,14 @@ fn render_help(
         .fg(Color::White)
         .add_modifier(Modifier::BOLD);
     let white = Style::default().fg(Color::White);
+    let help_width = usize::from(area.width.saturating_sub(2).min(96).saturating_sub(2));
     let mut lines: Vec<Line> = HELP
         .iter()
-        .map(|(keys, text)| {
+        .flat_map(|(keys, text)| {
             if keys.is_empty() {
-                Line::from(Span::styled(*text, heading))
+                vec![Line::from(Span::styled(*text, heading))]
             } else {
-                Line::from(vec![
-                    Span::styled(format!("  {keys:<17}"), key),
-                    Span::styled(*text, white),
-                ])
+                markdown::wrap(vec![Span::styled(*text, white)], help_width, vec![Span::styled(format!("  {keys:<17}"), key)], vec![Span::raw(" ".repeat(19))])
             }
         })
         .collect();
@@ -853,6 +892,17 @@ fn render_composer(frame: &mut Frame, area: Rect, state: &LiveState, layout: &Co
         })
         .collect();
     frame.render_widget(Paragraph::new(lines), area);
+    if state.composer.is_empty() && state.overlay.is_none() && state.focus == Focus::Composer && state.link == Link::Ready && !state.closing {
+        let placeholder = if state.session.busy {
+            "type to steer the running turn · esc cancels it"
+        } else {
+            "ask Nexus · / for commands · ? for keys"
+        };
+        frame.render_widget(
+            Paragraph::new(Span::styled(placeholder, Style::default().fg(MUTED).add_modifier(Modifier::DIM))),
+            Rect { x: area.x + PREFIX_WIDTH, width: area.width.saturating_sub(PREFIX_WIDTH), height: 1, ..area },
+        );
+    }
     let typing = !matches!(state.link, Link::Crashed { .. })
         && state.overlay.is_none()
         && state.focus == Focus::Composer
@@ -862,61 +912,53 @@ fn render_composer(frame: &mut Frame, area: Rect, state: &LiveState, layout: &Co
     }
 }
 
+/// The status bar: identity only (workspace, branch, model, mode). Activity is shown once, on the composer line.
+/// Segments are dropped from the least important when the terminal is narrow.
 fn render_status(frame: &mut Frame, area: Rect, state: &LiveState) {
     let session = &state.session;
     let muted = Style::default().fg(MUTED);
     let surface = Style::default().bg(SURFACE);
-    let mut spans = vec![Span::styled(
-        " NEXUS ",
-        Style::default()
-            .fg(Color::Black)
-            .bg(ACCENT)
-            .add_modifier(Modifier::BOLD),
-    )];
-    let elapsed = state
-        .now
-        .saturating_duration_since(state.turn_started.unwrap_or(state.now));
-    let busy = Span::styled(
-        format!(" {} working · esc to cancel ", spinner_frame(elapsed)),
-        Style::default().fg(ACCENT),
-    );
-    let busy_width = if session.busy && !state.connecting() {
-        u16::try_from(busy.width()).unwrap_or(area.width)
-    } else {
-        0
-    };
+    let badge = Span::styled(" NEXUS ", Style::default().fg(Color::Black).bg(ACCENT).add_modifier(Modifier::BOLD));
+    let mut spans = vec![badge];
     match &state.link {
         _ if state.connecting() => spans.push(Span::styled("  connecting to the agent…", muted)),
-        Link::Crashed { .. } => spans.push(Span::styled(
-            "  agent stopped",
-            Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
-        )),
+        Link::Crashed { .. } => spans.push(Span::styled("  agent stopped — not running", Style::default().fg(Color::Red).add_modifier(Modifier::BOLD))),
         _ => {
-            spans.push(Span::styled(
-                format!("  {}", session.workspace_name),
-                Style::default()
-                    .fg(Color::White)
-                    .add_modifier(Modifier::BOLD),
-            ));
+            // (priority, spans): lower numbers are kept first.
+            let mut segments: Vec<(u8, Vec<Span>)> = vec![(0, vec![Span::styled(format!("  {}", session.workspace_name), Style::default().fg(Color::White).add_modifier(Modifier::BOLD))])];
             if let Some(branch) = &session.branch {
-                spans.push(Span::styled(format!("  ⎇ {branch}"), muted));
+                let mut branch_spans = vec![Span::styled(format!("  ⎇ {branch}"), muted)];
                 if session.dirty > 0 {
-                    spans.push(Span::styled(
-                        format!(" ●{}", session.dirty),
-                        Style::default().fg(Color::Yellow),
-                    ));
+                    branch_spans.push(Span::styled(format!(" ●{}", session.dirty), Style::default().fg(Color::Yellow)));
+                }
+                segments.push((3, branch_spans));
+            }
+            segments.push((2, vec![Span::styled("  model ", muted), Span::styled(session.model.clone(), Style::default().fg(Color::White))]));
+            if session.mode == "review" {
+                segments.push((1, vec![Span::styled("  review mode: approvals on", Style::default().fg(Color::Yellow))]));
+            } else {
+                segments.push((4, vec![Span::styled(format!("  {}", session.mode), muted)]));
+            }
+            let room = usize::from(area.width).saturating_sub(7);
+            let mut keep: Vec<bool> = vec![false; segments.len()];
+            let mut used = 0;
+            let mut order: Vec<usize> = (0..segments.len()).collect();
+            order.sort_by_key(|&i| segments[i].0);
+            for i in order {
+                let w: usize = segments[i].1.iter().map(Span::width).sum();
+                if used + w <= room {
+                    used += w;
+                    keep[i] = true;
                 }
             }
-            spans.push(Span::styled(format!("  {}", session.model), muted));
-            spans.push(Span::styled(format!("  {}", session.mode), muted));
+            for (i, (_, segment)) in segments.into_iter().enumerate() {
+                if keep[i] {
+                    spans.extend(segment);
+                }
+            }
         }
     }
-    let [identity, activity] =
-        Layout::horizontal([Constraint::Min(0), Constraint::Length(busy_width)]).areas(area);
-    frame.render_widget(Paragraph::new(Line::from(spans)).style(surface), identity);
-    if busy_width > 0 {
-        frame.render_widget(Paragraph::new(Line::from(busy)).style(surface), activity);
-    }
+    frame.render_widget(Paragraph::new(Line::from(spans)).style(surface), area);
 }
 
 fn render_empty(frame: &mut Frame, area: Rect) {
@@ -977,6 +1019,8 @@ fn render_transcript(frame: &mut Frame, area: Rect, state: &LiveState) -> Transc
                 after_card: index > 0 && transcript[index - 1].card().is_some(),
                 review_hint,
                 pal: &pal,
+                streaming: state.session.busy && index + 1 == transcript.len() && matches!(transcript[index], Entry::Assistant { .. }),
+                now: state.now,
             },
         )
     };
@@ -1058,13 +1102,28 @@ fn render_transcript(frame: &mut Frame, area: Rect, state: &LiveState) -> Transc
         area,
     );
     if back > 0 {
-        render_scroll_badge(frame, area, back);
+        render_scroll_badge(frame, area, back, state.unseen);
     }
     TranscriptFrame { limit, back, top, anchored }
 }
 
-fn render_scroll_badge(frame: &mut Frame, area: Rect, rows_below: usize) {
-    let text = format!(" ↓ {rows_below} more rows · pgdn ");
+fn render_scroll_badge(frame: &mut Frame, area: Rect, rows_below: usize, unseen: bool) {
+    // The longest wording that fits half the width, so the badge never hides a whole row of the transcript.
+    let variants = if unseen {
+        [
+            format!(" ↓ new output · {rows_below} rows below · pgdn · ctrl+end newest "),
+            " ↓ new output · pgdn · ctrl+end ".to_string(),
+            " ↓ new · pgdn ".to_string(),
+        ]
+    } else {
+        [
+            format!(" ↓ {rows_below} more rows · pgdn · ctrl+end newest "),
+            format!(" ↓ {rows_below} more rows · pgdn "),
+            format!(" ↓ {rows_below} "),
+        ]
+    };
+    let half = usize::from(area.width / 2).max(8);
+    let text = variants.iter().find(|v| v.chars().count() <= half).unwrap_or(&variants[2]).clone();
     let width = u16::try_from(text.chars().count())
         .unwrap_or(area.width)
         .min(area.width);
@@ -1106,6 +1165,57 @@ struct EntryContext<'a> {
     /// The control that opens this entry's complete diff, as the omission line names it.
     review_hint: &'a str,
     pal: &'a Palette,
+    /// The entry is the reply still streaming (unclosed formatting on its last line is hidden).
+    streaming: bool,
+    now: std::time::Instant,
+}
+
+/// Prose colours for Markdown, from the theme.
+fn prose(pal: &Palette, dim: bool) -> Prose {
+    let string = pal.syntax.map_or(Color::Yellow, |s| s.string);
+    if dim {
+        return Prose { text: MUTED, heading: MUTED, muted: MUTED, code: MUTED, link: MUTED };
+    }
+    Prose { text: Color::White, heading: ACCENT, muted: MUTED, code: string, link: ACCENT }
+}
+
+/// Lines of output shown under a command in the transcript before its omission line.
+const OUTPUT_PREVIEW_LINES: usize = 6;
+/// Lines of a pasted prompt shown in the transcript before its omission line.
+const PASTE_PREVIEW_LINES: usize = 6;
+
+/// `1.2s`, `45s`, `2m 05s`.
+fn short_duration(ms: u64) -> String {
+    match ms {
+        0..=59_999 => format!("{:.1}s", ms as f64 / 1000.0),
+        _ => format!("{}m {:02}s", ms / 60_000, (ms / 1000) % 60),
+    }
+}
+
+/// A quiet block under an entry (command output, pasted text): a gutter bar and wrapped rows on the code
+/// background, at most `limit` source lines, then the exact count of the rest and how to see it.
+fn quiet_block(text: &str, total: u64, limit: usize, width: usize, pal: &Palette, more: &str) -> Vec<Line<'static>> {
+    let bar = Span::styled("    ▎ ", Style::default().fg(pal.bar));
+    let room = width.saturating_sub(6).max(8);
+    let base = pal.code_bg.map_or_else(Style::default, |bg| Style::default().bg(bg));
+    let mut out = Vec::new();
+    let rows: Vec<&str> = if text.is_empty() { Vec::new() } else { text.split('\n').collect() };
+    for row in rows.iter().take(limit) {
+        for (mut spans, used) in diff_view::content_rows(row, None, room, Fit::Wrap, pal, Color::Rgb(196, 204, 212), pal.code_bg) {
+            let mut line = vec![bar.clone()];
+            line.append(&mut spans);
+            if used < room {
+                line.push(Span::styled(" ".repeat(room - used), base));
+            }
+            out.push(Line::from(line));
+        }
+    }
+    let shown = rows.len().min(limit) as u64;
+    if total > shown {
+        let rest = total - shown;
+        out.extend(diff_view::meta_rows(Geometry { width, indent: 4, num_width: 1 }, pal, &format!("… {rest} more line{} · {more}", if rest == 1 { "" } else { "s" })));
+    }
+    out
 }
 
 /// Lines for one transcript entry. Entries that open with a blank separator drop it when they come first.
@@ -1115,6 +1225,7 @@ fn entry_lines<'a>(entry: &'a Entry, ctx: &EntryContext<'_>) -> Vec<Line<'a>> {
     let prompt = Style::default().fg(ACCENT).add_modifier(Modifier::BOLD);
     let highlight = Style::default().bg(SELECTED).add_modifier(Modifier::BOLD);
     let width = usize::from(ctx.width);
+    let detail_hint = if ctx.selected { "enter for the full output" } else { "tab, [ ] then enter for the full output" };
     let card_context = |glyph: (&'static str, Color)| CardContext {
         width,
         glyph,
@@ -1162,16 +1273,35 @@ fn entry_lines<'a>(entry: &'a Entry, ctx: &EntryContext<'_>) -> Vec<Line<'a>> {
         }
         Entry::Assistant { text, .. } => {
             lines.push(Line::default());
-            lines.extend(
-                text.split('\n')
-                    .map(|row| Line::from(Span::styled(expand_tabs(row), white))),
-            );
+            lines.extend(markdown::render(text, width, ctx.pal, &prose(ctx.pal, false), ctx.streaming));
+        }
+        Entry::Pasted(text) => {
+            let total = text.split('\n').count() as u64;
+            lines.extend(quiet_block(text, total, PASTE_PREVIEW_LINES, width, ctx.pal, "the full text was sent"));
+        }
+        Entry::Earlier { role, text } => {
+            if role == "steering" {
+                lines.push(Line::default());
+                lines.push(Line::from(vec![Span::styled("↳ ", muted), Span::styled(expand_tabs(text).into_owned(), muted)]));
+            } else if role == "user" {
+                lines.push(Line::default());
+                for (index, row) in text.split('\n').take(8).enumerate() {
+                    lines.push(Line::from(vec![
+                        Span::styled(if index == 0 { "› " } else { "  " }, muted),
+                        Span::styled(expand_tabs(row).into_owned(), muted.add_modifier(Modifier::BOLD)),
+                    ]));
+                }
+            } else {
+                lines.push(Line::default());
+                lines.extend(markdown::render(text, width, ctx.pal, &prose(ctx.pal, true), false));
+            }
         }
         Entry::Tool {
             tool,
             subject,
             status,
             summary,
+            run,
             ..
         } => {
             let (glyph, color) = match status {
@@ -1180,50 +1310,71 @@ fn entry_lines<'a>(entry: &'a Entry, ctx: &EntryContext<'_>) -> Vec<Line<'a>> {
                 ToolStatus::Failed => ("×", Color::Red),
                 ToolStatus::Interrupted => ("◌", Color::Yellow),
             };
-            let mut spans = vec![
-                Span::styled(format!("  {glyph} "), Style::default().fg(color)),
-                Span::styled(tool_verb(tool), white),
-            ];
+            let mut spans = vec![Span::styled(tool_verb(tool), white)];
             if !subject.is_empty() {
-                spans.push(Span::styled(format!(" {subject}"), muted));
+                spans.push(Span::styled(format!(" {}", diff_view::safe_text(subject)), muted));
             }
             if ctx.after_card {
                 lines.push(Line::default());
             }
+            let ToolRun { started, duration_ms, output } = run.as_ref();
             match status {
                 ToolStatus::Failed if !summary.is_empty() => spans.push(Span::styled(
-                    format!(" — {summary}"),
+                    format!(" — {}", diff_view::safe_text(summary)),
                     Style::default().fg(Color::Red),
                 )),
+                ToolStatus::Failed => spans.push(Span::styled(" — failed", Style::default().fg(Color::Red))),
                 ToolStatus::Interrupted => spans.push(Span::styled(
-                    " — interrupted",
+                    " — interrupted before it finished",
                     Style::default().fg(Color::Yellow),
                 )),
+                // A command says what it produced: exit code and line count, or that it printed nothing.
+                ToolStatus::Succeeded if output.is_some() => spans.push(Span::styled(format!(" · {}", diff_view::safe_text(summary)), muted)),
                 _ => {}
             }
-            lines.push(Line::from(spans));
+            match (status, duration_ms, started) {
+                (ToolStatus::Running, _, Some(started)) if ctx.now.saturating_duration_since(*started) >= Duration::from_secs(2) => {
+                    spans.push(Span::styled(format!(" · {}", clock(ctx.now.saturating_duration_since(*started))), muted));
+                }
+                (ToolStatus::Succeeded | ToolStatus::Failed, Some(ms), _) if *ms >= 500 => {
+                    spans.push(Span::styled(format!(" · {}", short_duration(*ms)), muted));
+                }
+                _ => {}
+            }
+            lines.extend(markdown::wrap(spans, width, vec![Span::styled(format!("  {glyph} "), Style::default().fg(color))], vec![Span::raw("    ")]));
+            if let Some(output) = output {
+                lines.extend(quiet_block(&output.preview, output.lines, OUTPUT_PREVIEW_LINES, width, ctx.pal, detail_hint));
+            }
         }
         Entry::Banner {
-            heading,
-            line,
+            outcome,
             tone,
             failure,
             summary,
             notes,
+            ..
         } => {
             let (glyph, color) = match tone {
                 Tone::Good => ("✓", Color::Green),
                 Tone::Caution => ("!", Color::Yellow),
                 Tone::Bad => ("×", Color::Red),
             };
+            let glyph = if outcome.title == "Cancelled" { "◌" } else { glyph };
+            let color = if outcome.title == "Cancelled" { Color::Yellow } else { color };
             lines.push(Line::default());
-            lines.push(Line::from(vec![
-                Span::styled(
-                    format!("{glyph} {heading}"),
-                    Style::default().fg(color).add_modifier(Modifier::BOLD),
-                ),
-                Span::styled(format!("  {}", one_line(line)), muted),
-            ]));
+            let mut head = vec![Span::styled(outcome.title.clone(), Style::default().fg(color).add_modifier(Modifier::BOLD))];
+            if let Some(cause) = &outcome.cause {
+                head.push(Span::styled(format!("  {}", one_line(&diff_view::safe_text(cause))), muted));
+            }
+            lines.extend(markdown::wrap(head, width, vec![Span::styled(format!("{glyph} "), Style::default().fg(color).add_modifier(Modifier::BOLD))], vec![Span::raw("  ")]));
+            for item in &outcome.items {
+                lines.extend(markdown::wrap(vec![Span::styled(diff_view::safe_text(item), white)], width, vec![Span::styled("  • ", muted)], vec![Span::raw("    ")]));
+            }
+            // The next action, when there is one; the receipt key rides along (non-breaking, so it never splits).
+            if let Some(next) = &outcome.next {
+                let tail = vec![Span::styled(format!("next: {next}"), muted), Span::styled(" · v\u{a0}receipt", muted.add_modifier(Modifier::DIM))];
+                lines.extend(markdown::wrap(tail, width, vec![Span::styled("  → ", muted)], vec![Span::raw("    ")]));
+            }
             if let Some(failure) = failure {
                 let mut detail = one_line(failure);
                 if let Some((cut, _)) = detail.char_indices().nth(MAX_FAILURE_CHARS) {
@@ -1371,15 +1522,17 @@ fn render_crash(frame: &mut Frame, area: Rect, code: Option<i32>, reason: &str, 
     let recovery = [
         Line::from(vec![
             Span::styled("r", key),
-            Span::raw(" restart   "),
+            Span::raw(" restart the agent   "),
             Span::styled("q", key),
             Span::raw(" quit"),
         ]),
         Line::from(Span::styled(
-            "A restarted agent does not remember this conversation.",
+            "Your draft is kept. After r, /resume reloads the saved conversation.",
             muted,
         )),
     ];
+    let stderr = diagnostic_lines(stderr);
+    let stderr = stderr.as_slice();
     // Priority when rows are short: reason and exit code, recovery keys, heading, spacing, then stderr.
     let mut room = usize::from(area.height)
         .saturating_sub(rows(&detail) + recovery.iter().map(&rows).sum::<usize>());
@@ -1421,6 +1574,27 @@ fn render_crash(frame: &mut Frame, area: Rect, code: Option<i32>, reason: &str, 
     }
     lines.extend(recovery);
     frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), area);
+}
+
+/// The sidecar's last stderr lines worth showing: spinner and progress chatter (`- …`, `✔ …`, repeated lines) is
+/// dropped, and at most eight lines are kept.
+fn diagnostic_lines(stderr: &[String]) -> Vec<String> {
+    let mut seen = std::collections::HashSet::new();
+    let mut kept: Vec<String> = Vec::new();
+    for line in stderr.iter().rev() {
+        let text = line.trim();
+        let body = text.trim_start_matches(['-', '✔', '✖', '⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏', ' ']);
+        let progress = text.starts_with("- ") || text.starts_with("✔ ") || text.starts_with('⠋') || body.starts_with("Nexus is considering") || body.starts_with("Working:");
+        if text.is_empty() || progress || !seen.insert(body.to_string()) {
+            continue;
+        }
+        kept.push(one_line(&diff_view::safe_text(text)));
+        if kept.len() == 8 {
+            break;
+        }
+    }
+    kept.reverse();
+    kept
 }
 
 fn composer_hint(state: &LiveState) -> Cow<'static, str> {
@@ -1653,7 +1827,7 @@ mod tests {
                 "✓ Read src/parser.ts",
                 "× Run npm test — 1 test failed",
                 "• Edit src/parser.ts",
-                "working · esc to cancel",
+                "esc cancels",
             ],
         );
         assert!(
@@ -1672,8 +1846,8 @@ mod tests {
             &done,
             &[
                 "◌ Edit src/parser.ts — interrupted",
-                "× TURN INTERRUPTED",
-                "Stopped by operator during edit_file",
+                "◌ Cancelled",
+                "You stopped the turn during work.",
                 "enter send",
             ],
         );
@@ -1696,9 +1870,9 @@ mod tests {
     #[test]
     fn banner_glyph_follows_the_reported_outcome() {
         for (execution, outcome, glyph) in [
-            ("COMPLETED", "VERIFIED", "✓"),
-            ("COMPLETED", "UNVERIFIED", "!"),
-            ("FAILED", "NOT_ESTABLISHED", "×"),
+            ("COMPLETED", "VERIFIED", "✓ Done · verified"),
+            ("COMPLETED", "UNVERIFIED", "! Done · not verified"),
+            ("FAILED", "NOT_ESTABLISHED", "× Turn failed"),
         ] {
             let mut state = ready();
             let result = format!(
@@ -1709,7 +1883,7 @@ mod tests {
             assert_shows(
                 &screen,
                 &[
-                    format!("{glyph} HEADING {execution}").as_str(),
+                    glyph,
                     "Model says done.",
                 ],
             );
@@ -1752,9 +1926,10 @@ mod tests {
                 "exited unexpectedly. (exit code 3)",
                 "secrets redacted",
                 "at main (sidecar.js:1)",
-                "r restart",
+                "r restart the agent",
                 "q quit",
-                "does not remember",
+                "Your draft is kept",
+                "/resume reloads the saved conversation",
             ],
         );
     }
@@ -1852,8 +2027,8 @@ mod tests {
         let screen = rows(&terminal.backend().to_string());
         let banner = screen
             .iter()
-            .position(|row| row.starts_with("× HEADING"))
-            .unwrap();
+            .position(|row| row.starts_with("× Model request failed"))
+            .unwrap_or_else(|| panic!("{screen:#?}"));
         let failure = screen
             .iter()
             .position(|row| row == "upstream timed out after 60s")
@@ -1907,7 +2082,7 @@ mod tests {
         let screen = draw(&state, 100, 20);
         assert_shows(
             &screen,
-            &["! BUSY: first second", "× HEADING  line one line two"],
+            &["! BUSY: first second", "× Turn failed"],
         );
     }
 
@@ -1926,7 +2101,7 @@ mod tests {
         });
         state.composer = "c\td".into();
         let screen = draw(&state, 80, 20);
-        assert_shows(&screen, &["› x    y", "a    b", "› c    d"]);
+        assert_shows(&screen, &["› x    y", "a   b", "› c    d"]);
         assert_eq!(state.composer, "c\td");
         assert_eq!(state.transcript[0], Entry::User("x\ty".into()));
     }
@@ -1946,8 +2121,8 @@ mod tests {
             &[
                 "agent stopped",
                 "The agent sidecar exited unexpectedly while streaming a very long response. (exit code 3)",
-                "r restart q quit",
-                "A restarted agent does not remember this conversation.",
+                "r restart the agent q quit",
+                "Your draft is kept.",
             ],
         );
         let tall = flat(&draw(&state, 40, 18));
@@ -1957,7 +2132,7 @@ mod tests {
                 "× The agent sidecar stopped",
                 "secrets redacted",
                 "stderr line 20",
-                "does not remember",
+                "/resume reloads",
             ],
         );
     }
@@ -1978,11 +2153,11 @@ mod tests {
     fn the_busy_marker_survives_a_40_column_status_strip() {
         let mut state = ready();
         feed(&mut state, &[BUSY]);
-        let status = rows(&draw(&state, 40, 10)).remove(0);
-        assert!(
-            status.contains("NEXUS") && status.contains("working · esc to cancel"),
-            "{status}"
-        );
+        // Activity is shown once, on the composer line, and keeps its spinner and phase at 40 columns.
+        let screen = rows(&draw(&state, 40, 10));
+        let activity = &screen[screen.len() - 2];
+        assert!(screen[0].contains("NEXUS") && !screen[0].contains("working"), "{screen:#?}");
+        assert!(SPINNER.iter().any(|f| activity.contains(f)) && activity.contains("waiting for the agent"), "{screen:#?}");
     }
 
     #[test]
@@ -2199,21 +2374,23 @@ mod tests {
             &[
                 "Approval needed",
                 "Edit src/x.txt",
-                "@@ -1,3 +1,3 @@",
-                "-b",
-                "+B",
-                "y approve",
-                "a always",
-                "n deny",
+                "Nexus wants to: changes src/x.txt · +1 −1",
+                "@@ −1,3 +1,3 @@",
+                "− b",
+                "+ B",
+                "▸y Approve",
+                "a Approve all later actions",
+                "n Deny",
+                "enter confirms",
                 "approval needed · y approve · n deny",
             ],
         );
         let lines = rows(&screen);
-        let added = lines.iter().position(|row| row.contains("+B")).unwrap();
-        let column = lines[added].find("+B").unwrap();
+        let added = lines.iter().position(|row| row.contains("+ B")).unwrap();
+        let column = lines[added].find("+ B").unwrap();
         let x = u16::try_from(lines[added][..column].chars().count()).unwrap();
         let cell = &terminal.backend().buffer()[(x, u16::try_from(added).unwrap())];
-        assert_eq!(cell.fg, Color::Green);
+        assert_eq!(cell.bg, Color::Rgb(22, 56, 36), "the added row is tinted by the shared diff palette");
     }
 
     #[test]
@@ -2238,12 +2415,13 @@ mod tests {
         ));
         feed(&mut state, &[request.as_str()]);
         let (screen, layout) = draw_measured(&state, 80, 24);
-        assert_eq!(layout.overlay_rows, 17);
-        assert_eq!(layout.overlay_limit, 104 - 17);
-        assert_shows(&screen, &["new file n.txt", "+line 1"]);
+        // A hunk row and the hundred added lines, scrolled within the rows left by the heading and the decisions.
+        assert!(layout.overlay_rows >= 12, "{}", layout.overlay_rows);
+        assert_eq!(layout.overlay_limit, 101 - layout.overlay_rows);
+        assert_shows(&screen, &["Nexus wants to: creates n.txt · +100 −0", "+ line 1"]);
         state.note_layout(layout);
         state.on_key(KeyEvent::new(KeyCode::End, KeyModifiers::NONE));
-        assert_shows(&draw(&state, 80, 24), &["+line 100"]);
+        assert_shows(&draw(&state, 80, 24), &["+ line 100"]);
     }
 
     #[test]
@@ -3150,5 +3328,266 @@ mod diff_tests {
         let removed = rows.iter().position(|r| r.contains("− last")).unwrap();
         assert!(rows[removed + 1].contains("\\ no newline at end of file"), "{rows:#?}");
         assert!(rows[removed + 2].contains("+ last"));
+    }
+}
+
+#[cfg(test)]
+mod surface_tests {
+    //! The transcript, composer, status, tools, approvals, outcomes and recovery as the operator sees them.
+    use super::*;
+    use crate::live_state::{Action, Outcome};
+    use crate::protocol::{Command, parse_event};
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+    use ratatui::{Terminal, backend::TestBackend};
+    use std::time::Instant;
+
+    const HELLO: &str = r#"{"v":1,"type":"hello","protocol":1,"pid":1}"#;
+    const IDLE: &str = r#"{"v":1,"type":"session.state","workspace":"/w/app","workspace_name":"app","model":"engineering/b0","mode":"auto","git":{"branch":"main","dirty":2},"busy":false}"#;
+    const BUSY: &str = r#"{"v":1,"type":"session.state","workspace":"/w/app","workspace_name":"app","model":"engineering/b0","mode":"auto","git":{"branch":"main","dirty":2},"busy":true}"#;
+
+    fn state(busy: bool) -> LiveState {
+        let mut state = LiveState::new();
+        feed(&mut state, &[HELLO, if busy { BUSY } else { IDLE }]);
+        state
+    }
+
+    fn feed(state: &mut LiveState, lines: &[&str]) {
+        for line in lines {
+            state.apply(parse_event(line).unwrap());
+        }
+    }
+
+    fn screen(state: &mut LiveState, width: u16, height: u16) -> (Vec<String>, Terminal<TestBackend>) {
+        let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+        let mut layout = LiveLayout::default();
+        terminal.draw(|frame| layout = render_live(frame, state)).unwrap();
+        state.note_layout(layout);
+        let buffer = terminal.backend().buffer().clone();
+        let rows = (0..buffer.area.height)
+            .map(|y| {
+                let mut row = String::new();
+                let mut x = 0;
+                while x < buffer.area.width {
+                    let symbol = buffer[(x, y)].symbol();
+                    row.push_str(symbol);
+                    x += u16::try_from(unicode_width::UnicodeWidthStr::width(symbol).max(1)).unwrap();
+                }
+                row.trim_end().to_string()
+            })
+            .collect();
+        (rows, terminal)
+    }
+
+    fn result(turn: &str) -> String {
+        format!(r#"{{"v":1,"type":"turn.result","turn_id":"t1","heading":"RAW HEADING","line":"execution=X outcome=Y","turn":{turn},"model_summary":null}}"#)
+    }
+
+    #[test]
+    fn outcomes_read_as_words_with_cause_and_next_action_never_as_raw_fields() {
+        let cases = [
+            (r#"{"execution":"COMPLETED","outcome":"VERIFIED","verification":{"command":"npm test"}}"#, "✓ Done · verified", Some("npm test passed")),
+            (r#"{"execution":"COMPLETED","outcome":"UNVERIFIED","reason":"VERIFICATION_NOT_RUN"}"#, "! Done · not verified", Some("next: run /test")),
+            (r#"{"execution":"COMPLETED","outcome":"NOT_ESTABLISHED","reason":"VERIFIER_FAILED","detail":"npm test"}"#, "× Verification failed", Some("npm test failed")),
+            (r#"{"execution":"INTERRUPTED","outcome":"NOT_ESTABLISHED","reason":"OPERATOR_INTERRUPT","interruption":{"phase":"inference","undispatchedToolCalls":0}}"#, "◌ Cancelled", Some("You stopped the turn during inference.")),
+            (r#"{"execution":"LIMIT_REACHED","outcome":"NOT_ESTABLISHED","reason":"STEP_BUDGET_EXHAUSTED","detail":"300 steps"}"#, "! Stopped at the step budget", Some("next: reply to continue")),
+            (r#"{"execution":"FAILED","outcome":"NOT_ESTABLISHED","reason":"INFERENCE_FAILED","inferenceFailure":{"message":"HTTP 503 from the gateway"}}"#, "× Model request failed", Some("HTTP 503 from the gateway")),
+            (r#"{"execution":"BLOCKED","outcome":"NOT_ESTABLISHED","reason":"CONTEXT_CAPACITY_EXCEEDED","detail":"9000+1000+500>8192"}"#, "× Context is full", Some("next: /compact")),
+        ];
+        for (turn, title, extra) in cases {
+            let mut state = state(false);
+            feed(&mut state, &[result(turn).as_str()]);
+            let (rows, _) = screen(&mut state, 100, 16);
+            let all = rows.join("\n");
+            assert!(all.contains(title), "{title}:\n{all}");
+            if let Some(extra) = extra {
+                assert!(all.contains(extra), "{extra}:\n{all}");
+            }
+            assert!(!all.contains("execution=") && !all.contains("RAW HEADING") && !all.contains("0 tool call"), "raw fields stay in the receipt:\n{all}");
+        }
+    }
+
+    #[test]
+    fn open_requirements_are_listed_once_with_their_text() {
+        let mut state = state(false);
+        feed(&mut state, &[result(r#"{"execution":"COMPLETED","outcome":"NOT_ESTABLISHED","reason":"REQUIREMENTS_INCOMPLETE","objective":{"status":"incomplete","remaining":["R1 [open] add a README section","R2 [open] add a changelog entry"]}}"#).as_str()]);
+        let (rows, _) = screen(&mut state, 100, 16);
+        let all = rows.join("\n");
+        assert!(all.contains("! Requirements still open  The agent finished with 2 requirements not done."), "{all}");
+        assert_eq!(all.matches("R1 [open] add a README section").count(), 1, "{all}");
+        assert!(all.contains("• R2 [open] add a changelog entry"));
+    }
+
+    #[test]
+    fn each_model_reply_is_its_own_paragraph_and_deltas_of_one_reply_merge() {
+        let mut state = state(true);
+        feed(
+            &mut state,
+            &[
+                r#"{"v":1,"type":"activity","turn_id":"t1","phase":"inference","step":1,"segment":1}"#,
+                r#"{"v":1,"type":"assistant.delta","turn_id":"t1","text":"Both items "}"#,
+                r#"{"v":1,"type":"assistant.delta","turn_id":"t1","text":"are handled."}"#,
+                r#"{"v":1,"type":"notice","text":"Requirements still open (R1, R2): Nexus asked the agent to continue (1 of 2)."}"#,
+                r#"{"v":1,"type":"activity","turn_id":"t1","phase":"inference","step":2,"segment":1}"#,
+                r#"{"v":1,"type":"assistant.delta","turn_id":"t1","text":"Both items are handled."}"#,
+                r#"{"v":1,"type":"activity","turn_id":"t1","phase":"inference","step":3,"segment":1}"#,
+                r#"{"v":1,"type":"assistant.delta","turn_id":"t1","text":"Still handled."}"#,
+            ],
+        );
+        let replies: Vec<&str> = state.transcript.iter().filter_map(|e| if let Entry::Assistant { text, .. } = e { Some(text.as_str()) } else { None }).collect();
+        assert_eq!(replies, vec!["Both items are handled.", "Both items are handled.", "Still handled."]);
+        let (rows, _) = screen(&mut state, 100, 20);
+        assert!(!rows.iter().any(|r| r.contains("handled.Both")), "{rows:#?}");
+        assert!(rows.iter().any(|r| r.contains("asked the agent to continue (1 of 2)")), "the reason for the repeat is shown: {rows:#?}");
+    }
+
+    #[test]
+    fn command_output_is_bounded_with_an_exact_count_and_failures_never_look_successful() {
+        let mut state = state(true);
+        let preview: Vec<String> = (1..=8).map(|n| n.to_string()).collect();
+        feed(
+            &mut state,
+            &[
+                r#"{"v":1,"type":"tool.start","turn_id":"t1","call_id":"c1","tool":"run_command","subject":"seq 1 120","evidence":"e1"}"#,
+                &format!(r#"{{"v":1,"type":"tool.end","turn_id":"t1","call_id":"c1","tool":"run_command","success":true,"summary":"exit 0 · 120 lines","lines":120,"evidence":"e1","preview":{},"exit_code":0,"duration_ms":1500}}"#, serde_json::to_string(&preview.join("\n")).unwrap()),
+                r#"{"v":1,"type":"tool.start","turn_id":"t1","call_id":"c2","tool":"run_command","subject":"true","evidence":"e2"}"#,
+                r#"{"v":1,"type":"tool.end","turn_id":"t1","call_id":"c2","tool":"run_command","success":true,"summary":"exit 0 · no output","lines":0,"evidence":"e2","preview":"","exit_code":0}"#,
+                r#"{"v":1,"type":"tool.start","turn_id":"t1","call_id":"c3","tool":"run_command","subject":"npm test","evidence":"e3"}"#,
+                r#"{"v":1,"type":"tool.end","turn_id":"t1","call_id":"c3","tool":"run_command","success":false,"summary":"Command exited with code 1","lines":2,"evidence":"e3","preview":"FAIL parser\n\u001b[31mexpected 3\u001b[0m","exit_code":1}"#,
+            ],
+        );
+        let (rows, terminal) = screen(&mut state, 100, 30);
+        let all = rows.join("\n");
+        assert!(all.contains("✓ Run seq 1 120 · exit 0 · 120 lines · 1.5s"), "{all}");
+        assert_eq!(rows.iter().filter(|r| r.trim_start().starts_with("▎ ") && r.trim().trim_start_matches("▎ ").parse::<u32>().is_ok()).count(), OUTPUT_PREVIEW_LINES, "{all}");
+        assert!(all.contains(&format!("… {} more lines · tab, [ ] then enter for the full output", 120 - OUTPUT_PREVIEW_LINES)), "{all}");
+        assert!(all.contains("✓ Run true · exit 0 · no output"), "{all}");
+        assert!(all.contains("× Run npm test — Command exited with code 1"), "{all}");
+        assert!(all.contains("␛[31mexpected 3␛[0m"), "escapes in output are shown: {all}");
+        assert!(terminal.backend().buffer().content.iter().all(|c| !c.symbol().chars().any(char::is_control)));
+    }
+
+    #[test]
+    fn new_output_while_scrolled_back_is_announced_and_ctrl_end_returns() {
+        let mut state = state(true);
+        for n in 0..60 {
+            state.transcript.push(Entry::Info(format!("line {n}")));
+        }
+        screen(&mut state, 80, 16);
+        state.on_key(KeyEvent::new(KeyCode::PageUp, KeyModifiers::NONE));
+        let (before, _) = screen(&mut state, 80, 16);
+        assert!(before.iter().any(|r| r.contains("more rows · pgdn")), "{before:#?}");
+        feed(&mut state, &[r#"{"v":1,"type":"assistant.delta","turn_id":"t1","text":"fresh output"}"#]);
+        let (after, _) = screen(&mut state, 80, 16);
+        assert!(after.iter().any(|r| r.contains("↓ new output")), "{after:#?}");
+        assert_eq!(before[1..10], after[1..10], "the reading position is kept");
+        state.on_key(KeyEvent::new(KeyCode::End, KeyModifiers::CONTROL));
+        let (bottom, _) = screen(&mut state, 80, 16);
+        assert!(bottom.iter().any(|r| r.contains("fresh output")) && !bottom.iter().any(|r| r.contains('↓')), "{bottom:#?}");
+        assert!(!state.unseen);
+    }
+
+    #[test]
+    fn the_composer_has_a_placeholder_and_a_line_indicator_for_tall_drafts() {
+        let mut idle = state(false);
+        let (rows, _) = screen(&mut idle, 80, 12);
+        assert!(rows.last().unwrap().contains("ask Nexus · / for commands · ? for keys"), "{rows:#?}");
+        let mut busy = state(true);
+        let (rows, _) = screen(&mut busy, 80, 12);
+        assert!(rows.last().unwrap().contains("type to steer the running turn"), "{rows:#?}");
+        let mut tall = state(false);
+        tall.composer = (1..=10).map(|n| format!("line {n}")).collect::<Vec<_>>().join("\n").as_str().into();
+        let (rows, _) = screen(&mut tall, 80, 20);
+        assert!(rows.iter().any(|r| r.contains("line 10 of 10")), "{rows:#?}");
+    }
+
+    #[test]
+    fn approval_decisions_have_a_visible_focus_that_arrows_move_and_enter_takes() {
+        let mut state = state(true);
+        feed(&mut state, &[r#"{"v":1,"type":"approval.request","id":"a1","turn_id":"t1","tool":"run_command","subject":"rm -rf build","preview":"","review":{"kind":"command","command":"rm -rf build"}}"#]);
+        let (rows, _) = screen(&mut state, 100, 20);
+        let all = rows.join("\n");
+        assert!(all.contains("Run rm -rf build") && all.contains("Nexus wants to: runs a shell command in the workspace"), "{all}");
+        assert!(all.contains("▸y Approve"), "{all}");
+        let later = Instant::now() + std::time::Duration::from_secs(5);
+        assert_eq!(state.on_key_at(KeyEvent::new(KeyCode::Right, KeyModifiers::NONE), later), None);
+        assert_eq!(state.on_key_at(KeyEvent::new(KeyCode::Right, KeyModifiers::NONE), later), None);
+        let (rows, _) = screen(&mut state, 100, 20);
+        assert!(rows.join("\n").contains("▸n Deny"), "{rows:#?}");
+        assert_eq!(state.on_key_at(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE), later), Some(Action::Send(Command::Deny { id: "a1".into() })));
+    }
+
+    #[test]
+    fn a_resumed_session_shows_its_earlier_conversation_under_a_divider() {
+        let mut state = state(false);
+        feed(&mut state, &[
+            r###"{"v":1,"type":"history","session":"s1","total":3,"messages":[{"role":"user","text":"Explain the plan"},{"role":"assistant","text":"## Plan\n\n- **first** step"},{"role":"steering","text":"prefer an LRU policy"}]}"###,
+            r#"{"v":1,"type":"notice","text":"Resumed session s1 (9 messages)."}"#,
+        ]);
+        let (rows, _) = screen(&mut state, 80, 16);
+        let all = rows.join("\n");
+        assert!(all.contains("Earlier conversation of session s1 (3 messages)"), "{all}");
+        assert!(all.contains("› Explain the plan") && all.contains("• first step") && all.contains("↳ prefer an LRU policy"), "{all}");
+        assert!(!all.contains("**") && !all.contains("##"), "{all}");
+    }
+
+    #[test]
+    fn the_crash_screen_drops_progress_chatter_and_keeps_the_draft() {
+        let mut state = state(false);
+        state.composer = "my unsent draft".into();
+        let mut stderr: Vec<String> = Vec::new();
+        for _ in 0..10 {
+            stderr.push("- Nexus is considering the next step".into());
+            stderr.push("✔ Nexus is considering the next step".into());
+        }
+        stderr.push("Error: ECONNRESET reading the gateway".into());
+        state.fail("The agent sidecar exited unexpectedly. It was ended by signal 9 (SIGKILL).".into(), None, stderr);
+        let (rows, _) = screen(&mut state, 100, 20);
+        let all = rows.join("\n");
+        assert!(!all.contains("considering the next step"), "{all}");
+        assert!(all.contains("ECONNRESET") && all.contains("signal 9 (SIGKILL)") && all.contains("my unsent draft"), "{all}");
+        assert!(all.contains("/resume reloads the saved conversation"), "{all}");
+    }
+
+    #[test]
+    fn the_status_bar_keeps_identity_drops_least_important_first_and_never_shows_activity() {
+        let mut state = state(true);
+        feed(&mut state, &[r#"{"v":1,"type":"session.state","workspace":"/w/app","workspace_name":"app","model":"engineering/b0","mode":"review","git":{"branch":"feature/a-long-branch-name","dirty":2},"busy":true}"#]);
+        for width in [40u16, 60, 100] {
+            let (rows, _) = screen(&mut state, width, 12);
+            let status = &rows[0];
+            assert!(unicode_width::UnicodeWidthStr::width(status.as_str()) <= usize::from(width));
+            assert!(status.contains("NEXUS") && status.contains("app"), "{width}: {status}");
+            assert!(!SPINNER.iter().any(|f| status.contains(f)), "one activity indicator, on the composer line: {status}");
+            if width >= 60 {
+                assert!(status.contains("review mode: approvals on"), "{width}: {status}");
+            }
+        }
+        let (rows, _) = screen(&mut state, 100, 12);
+        assert!(rows[0].contains("model engineering/b0") && rows[0].contains("⎇ feature/a-long-branch-name"), "{}", rows[0]);
+    }
+
+    #[test]
+    fn completion_shows_the_position_and_cuts_long_descriptions_with_an_ellipsis() {
+        let mut state = state(false);
+        feed(&mut state, &[r#"{"v":1,"type":"hello","protocol":1,"pid":1,"commands":[{"name":"receipt","usage":"/receipt","summary":"Turn outcome"},{"name":"requirements","usage":"/requirements [accept <id>...|clear]","summary":"The objective's acceptance requirements; accept a scope reduction, or clear the objective to start a new one"}]}"#, IDLE]);
+        for c in "/re".chars() {
+            state.on_key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE));
+        }
+        let (rows, _) = screen(&mut state, 80, 14);
+        let all = rows.join("\n");
+        assert!(all.contains("1/2"), "{all}");
+        assert!(all.contains('…'), "{all}");
+        assert!(rows.iter().all(|r| unicode_width::UnicodeWidthStr::width(r.as_str()) <= 80));
+    }
+
+    #[test]
+    fn outcome_mapping_comes_from_the_reported_fields_only() {
+        let outcome = crate::live_state::outcome_for(&serde_json::json!({"execution":"COMPLETED","outcome":"UNVERIFIED","reason":"NO_APPLICABLE_VERIFIER"}));
+        assert_eq!(outcome, Outcome {
+            title: "Done · not verified".into(),
+            cause: Some("Files changed, and no test command was found for this workspace.".into()),
+            next: Some("check the changes yourself (/diff), or run /test <command>".into()),
+            items: vec![],
+        });
     }
 }

@@ -36,6 +36,8 @@ mod theme;
 mod highlight;
 #[path = "nexus_tui/diff_view.rs"]
 mod diff_view;
+#[path = "nexus_tui/markdown.rs"]
+mod markdown;
 #[path = "nexus_tui/live_state.rs"]
 mod live_state;
 #[path = "nexus_tui/live_view.rs"]

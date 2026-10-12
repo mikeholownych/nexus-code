@@ -15,6 +15,12 @@ import { redactSecrets } from "./ui.js";
 import { approvalReview } from "./approval_review.js";
 import { EvidenceLedger, LastTurn, MAX_DIFF_DETAIL, MAX_EVIDENCE, ReceiptSection, receiptSections, redactedJson, safeDiffText } from "./evidence.js";
 import { countDiffLines, previewDiff, visibleControls } from "./file_diff.js";
+import type { ChatMessage } from "./types.js";
+import { STEERING_PREFIX } from "./core/objective.js";
+
+/** Messages of a resumed conversation sent to the client, and the characters kept of each. */
+const HISTORY_MESSAGES = 20;
+const HISTORY_CHARS = 4000;
 import {
   DIFF_PREVIEW_CHARS,
   DIFF_PREVIEW_LINES,
@@ -381,6 +387,13 @@ export class SidecarServer {
           ...(change.note ? { note: change.note } : {}),
         });
       },
+      onContinuation: ({ kind, n, max, detail }) => {
+        const text =
+          kind === "requirements"
+            ? `Requirements still open (${capText(redactSecrets(detail), 120)}): Nexus asked the agent to continue (${n} of ${max}).`
+            : `The agent repeated ${toolName(detail)} with an unchanged result: Nexus told it to change approach (${n} of ${max}).`;
+        this.emit({ type: "notice", text });
+      },
       onSteering: ({ id, status, step, text, reason }) => {
         if (status === "applied") this.steerAck(id, "applied", `Applied at step ${step}.`);
         else this.steerAck(id, "cancelled", `Not applied: ${reason ?? "the turn ended first"}. Your message is back in the composer.`, text);
@@ -682,7 +695,28 @@ export class SidecarServer {
     this.app.getAgent().restoreSession(session.messages, session.unverifiedChangesPending, session.objective);
     if (Array.isArray(session.activePlan)) this.app.getAgent().setActivePlan(session.activePlan);
     this.lastTurn = null;
+    this.emitHistory(session.id, session.messages);
     return { ok: true, message: `Resumed session ${session.id} (${session.messages.length} messages).` };
+  }
+
+  /**
+   * The resumed conversation for the client to show: the latest user and assistant text messages (tool results,
+   * system context and tool-call-only replies are left out), redacted and bounded.
+   */
+  private emitHistory(sessionId: string, messages: ChatMessage[]): void {
+    const text = (m: ChatMessage) => (typeof m.content === "string" ? m.content : Array.isArray(m.content) ? m.content.map((p: any) => (typeof p?.text === "string" ? p.text : "")).join("") : "");
+    // Messages Nexus itself added to the conversation (continuation and recovery prompts) are not the operator's.
+    const shown = messages.filter((m) => (m.role === "user" || m.role === "assistant") && text(m).trim() && !(m.role === "user" && text(m).startsWith("[Nexus ")));
+    const recent = shown.slice(-HISTORY_MESSAGES).map((m) => {
+      const body = text(m);
+      // Steering is stored as "[Operator steering <id>]: text": shown as steering, without the marker.
+      const steering = m.role === "user" && body.startsWith(STEERING_PREFIX);
+      // The runtime context the agent appends to a stored prompt ("[Git Status: …]", "[Active Plan: …]") is not the operator's text.
+      const typed = m.role === "user" ? body.replace(/(\n+\[(?:Git Status|Active Plan): [^\n]*\])+\s*$/, "") : body;
+      const shownText = steering ? typed.slice(typed.indexOf("]:") + 2).trim() : typed;
+      return { role: steering ? ("steering" as const) : (m.role as "user" | "assistant"), text: capText(visibleControls(redactSecrets(shownText)), HISTORY_CHARS) };
+    });
+    this.emit({ type: "history", session: sessionId, total: shown.length, messages: recent });
   }
 
   private shutdown(): Promise<void> {

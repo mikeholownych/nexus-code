@@ -125,6 +125,12 @@ pub enum Review {
     Unknown,
 }
 
+#[derive(Clone, Debug, Deserialize, PartialEq)]
+pub struct HistoryMessage {
+    pub role: String,
+    pub text: String,
+}
+
 /// Sidecar → UI events. Fields this client does not use are ignored by serde.
 #[derive(Clone, Debug, Deserialize, PartialEq)]
 #[serde(tag = "type")]
@@ -209,6 +215,18 @@ pub enum Event {
         tool: String,
         success: bool,
         summary: String,
+        /// Lines of output the tool produced (commands: stdout and stderr).
+        #[serde(default)]
+        lines: u64,
+        /// Commands: the first lines of their output, exit code, run time and whether they timed out.
+        #[serde(default)]
+        preview: Option<String>,
+        #[serde(default)]
+        exit_code: Option<i64>,
+        #[serde(default)]
+        duration_ms: Option<u64>,
+        #[serde(default)]
+        timed_out: bool,
     },
     #[serde(rename = "approval.request")]
     ApprovalRequest {
@@ -241,6 +259,13 @@ pub enum Event {
     },
     #[serde(rename = "notice")]
     Notice { text: String },
+    /// A resumed session's recent conversation, oldest first.
+    #[serde(rename = "history")]
+    History {
+        session: String,
+        total: u64,
+        messages: Vec<HistoryMessage>,
+    },
     #[serde(rename = "tool.detail")]
     ToolDetail {
         id: String,
@@ -478,7 +503,12 @@ mod tests {
                 call_id: "c1".into(),
                 tool: "read_file".into(),
                 success: false,
-                summary: "No such file".into()
+                summary: "No such file".into(),
+                lines: 1,
+                preview: None,
+                exit_code: None,
+                duration_ms: None,
+                timed_out: false,
             })
         );
         assert_eq!(

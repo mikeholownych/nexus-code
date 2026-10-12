@@ -7,7 +7,8 @@ import { execSync } from "node:child_process";
 
 export type Reply =
   | { kind: "tools"; calls: Array<{ name: string; args: unknown; id?: string }>; content?: string; delayMs?: number }
-  | { kind: "text"; content: string; delayMs?: number }
+  /** `chunks`: stream the text in these pieces, `gapMs` apart (the default sends it in one delta). */
+  | { kind: "text"; content: string; delayMs?: number; chunks?: string[]; gapMs?: number }
   | { kind: "http"; status: number; body?: string; delayMs?: number };
 
 export interface Gateway {
@@ -33,8 +34,8 @@ function streamBody(r: Extract<Reply, { kind: "tools" | "text" }>): string {
   return out + "data: [DONE]\n\n";
 }
 
-/** Deterministic OpenAI-compatible gateway. `script(n)` decides the reply to the n-th chat request (1-based). */
-export async function startGateway(script: (n: number) => Reply): Promise<Gateway> {
+/** Deterministic OpenAI-compatible gateway. `script(n, body)` decides the reply to the n-th chat request (1-based). */
+export async function startGateway(script: (n: number, body?: any) => Reply): Promise<Gateway> {
   const requests: unknown[] = [];
   const sockets = new Set<Socket>();
   const server = http.createServer((req, res) => {
@@ -49,12 +50,26 @@ export async function startGateway(script: (n: number) => Reply): Promise<Gatewa
       let body: any = {};
       try { body = JSON.parse(raw); } catch {}
       requests.push(body);
-      const r = script(requests.length);
+      const r = script(requests.length, body);
       const respond = () => {
         if (res.writableEnded || res.destroyed) return;
         if (r.kind === "http") {
           res.statusCode = r.status;
           res.end(r.body ?? "{}");
+        } else if (body.stream && r.kind === "text" && r.chunks?.length) {
+          res.writeHead(200, { "content-type": "text/event-stream" });
+          const pieces = [...r.chunks];
+          const next = () => {
+            if (res.writableEnded || res.destroyed) return;
+            const piece = pieces.shift();
+            if (piece === undefined) {
+              res.end(sse({ choices: [{ index: 0, delta: {}, finish_reason: "stop" }] }) + "data: [DONE]\n\n");
+              return;
+            }
+            res.write(sse({ choices: [{ index: 0, delta: { content: piece } }] }));
+            setTimeout(next, r.gapMs ?? 50);
+          };
+          next();
         } else if (body.stream) {
           res.writeHead(200, { "content-type": "text/event-stream" });
           res.end(streamBody(r));

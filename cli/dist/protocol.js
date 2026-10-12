@@ -1,4 +1,5 @@
 import { redactSecrets } from "./ui.js";
+import { visibleControls } from "./file_diff.js";
 export const PROTOCOL_VERSION = 1;
 export const MAX_TEXT_FIELD = 8000;
 export const MAX_SUMMARY = 160;
@@ -160,8 +161,50 @@ export function providerRecoveryNotice(record, discardedPartialOutput) {
             return redactSecrets(`Provider recovery ${record.state.toLowerCase()}: ${record.reason ?? condition}`);
     }
 }
+/** Lines of a command's output carried in `tool.end` for the transcript preview. */
+export const TOOL_PREVIEW_LINES = 8;
+/**
+ * What the transcript shows for a finished tool. A command's JSON result (`stdout`, `stderr`, `exit_code`) becomes a
+ * real summary (`exit 0 · 122 lines`, or `no output`), the count of its output lines and a bounded preview of them;
+ * other tools keep the first line of their output (or error) as the summary.
+ */
 export function toolSummary(success, output, error) {
+    const command = commandResult(output);
+    if (command) {
+        const body = [command.stdout.trimEnd(), command.stderr.trimEnd()].filter(Boolean).join("\n");
+        const rows = body ? body.split(/\r?\n/) : [];
+        const exit = command.timed_out ? "timed out" : command.exit_code === null ? "no exit code" : `exit ${command.exit_code}`;
+        const failure = success ? "" : (error ?? "").split(/\r?\n/).find((line) => line.trim())?.trim() ?? "";
+        const summary = failure && !failure.startsWith("{") ? failure : `${exit} · ${rows.length ? `${rows.length} line${rows.length === 1 ? "" : "s"}` : "no output"}`;
+        return {
+            summary: redactSecrets(stripEscapes(summary)).replace(/\s+/g, " ").slice(0, MAX_SUMMARY),
+            lines: rows.length,
+            preview: rows.slice(0, TOOL_PREVIEW_LINES).map((row) => visibleControls(redactSecrets(row)).slice(0, 400)).join("\n"),
+            exit_code: command.exit_code,
+            ...(command.duration_ms !== undefined ? { duration_ms: command.duration_ms } : {}),
+            ...(command.timed_out ? { timed_out: true } : {}),
+        };
+    }
     const text = redactSecrets(stripEscapes(success ? output || "" : error || output || "")).trim();
     const first = text.split(/\r?\n/).find((line) => line.trim())?.trim() ?? (success ? "Completed" : "Tool failed");
     return { summary: first.replace(/\s+/g, " ").slice(0, MAX_SUMMARY), lines: text ? text.split(/\r?\n/).length : 0 };
+}
+/** The structured result of a shell command tool, when `output` is one. */
+function commandResult(output) {
+    if (!output || output.trimStart()[0] !== "{")
+        return undefined;
+    try {
+        const parsed = JSON.parse(output);
+        if (parsed && typeof parsed === "object" && typeof parsed.stdout === "string" && "exit_code" in parsed) {
+            return {
+                stdout: parsed.stdout,
+                stderr: typeof parsed.stderr === "string" ? parsed.stderr : "",
+                exit_code: typeof parsed.exit_code === "number" ? parsed.exit_code : null,
+                ...(typeof parsed.duration_ms === "number" ? { duration_ms: parsed.duration_ms } : {}),
+                ...(parsed.timed_out === true ? { timed_out: true } : {}),
+            };
+        }
+    }
+    catch { }
+    return undefined;
 }

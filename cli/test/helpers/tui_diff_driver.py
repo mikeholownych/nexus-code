@@ -207,7 +207,7 @@ def main():
     wait_events(events, "file.diff", 5, 40, s)
     s.set_size(120, 40)
     s.pump(0.6)
-    result["busy_after_resize"] = has(s.color.lines(), "esc to cancel")
+    result["busy_after_resize"] = has(s.color.lines(), "esc cancels")
     wait_events(events, "turn.result", 1, 90, s)
     s.wait_idle()
     s.pump(0.5)

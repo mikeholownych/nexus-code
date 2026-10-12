@@ -1,0 +1,17 @@
+{"id":"t1","text":"Explain the plan for the cache layer.","type":"prompt.submit","v":1}
+{"id":"t2","text":"Inspect the repository and add the cache module.","type":"prompt.submit","v":1}
+{"id":"g2e86aedf65d608-1","text":"prefer an LRU policy","type":"steer","v":1}
+{"id":"t3","text":"line one of the note\n\tindented line ✓ 字\nline three","type":"prompt.submit","v":1}
+{"args":"review","command":"mode","id":"s1","type":"slash","v":1}
+{"id":"t4","text":"Write the config file.","type":"prompt.submit","v":1}
+{"always":false,"id":"approval-1","type":"approve","v":1}
+{"args":"auto","command":"mode","id":"s2","type":"slash","v":1}
+{"id":"t5","text":"Take a long time on this.","type":"prompt.submit","v":1}
+{"type":"cancel","v":1}
+{"args":"","command":"compact","id":"s3","type":"slash","v":1}
+{"id":"t6","text":"Fix the parser bug.","type":"prompt.submit","v":1}
+{"id":"t7","text":"Do these:\n1. add a README section\n2. add a changelog entry","type":"prompt.submit","v":1}
+{"evidence":"e6","id":"d1","type":"tool.detail","v":1}
+{"id":"t8","text":"Stream another answer.","type":"prompt.submit","v":1}
+{"type":"shutdown","v":1}
+{"type":"shutdown","v":1}

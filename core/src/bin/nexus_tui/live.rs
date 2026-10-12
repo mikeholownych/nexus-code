@@ -217,8 +217,17 @@ impl LiveApp {
     fn stop(&mut self, reason: &str, grace: Duration) {
         if let Some(mut sidecar) = self.sidecar.take() {
             let code = sidecar.reap(grace);
-            self.state
-                .fail(reason.to_string(), code, sidecar.stderr_tail());
+            let reason = match (code, sidecar.signal()) {
+                (None, Some(signal)) => format!("{reason} It was ended by signal {signal}{}.", match signal {
+                    9 => " (SIGKILL)",
+                    15 => " (SIGTERM)",
+                    11 => " (SIGSEGV)",
+                    6 => " (SIGABRT)",
+                    _ => "",
+                }),
+                _ => reason.to_string(),
+            };
+            self.state.fail(reason, code, sidecar.stderr_tail());
         }
     }
 

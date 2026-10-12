@@ -126,8 +126,11 @@ export class TerminalUI {
     turnSummary(result, modelSummary) {
         const { heading, line } = summarizeTurn(result);
         const verified = result.execution === "COMPLETED" && (result.outcome === "VERIFIED" || result.outcome === "NOT_REQUIRED");
-        const paint = verified ? pc.green : result.execution === "COMPLETED" ? pc.yellow : pc.red;
-        console.log(`\n${paint(pc.bold(`${verified ? "✓" : result.execution === "COMPLETED" ? "!" : "×"} ${heading}`))}  ${pc.dim(line)}`);
+        // A failing or timed-out verifier is a failure; an operator's cancel or a budget stop is not (same as the live TUI).
+        const verifierFailed = result.execution === "COMPLETED" && (result.reason === "VERIFIER_FAILED" || result.reason === "VERIFIER_TIMED_OUT");
+        const caution = !verifierFailed && (result.execution === "COMPLETED" || result.execution === "INTERRUPTED" || result.execution === "LIMIT_REACHED");
+        const paint = verified ? pc.green : caution ? pc.yellow : pc.red;
+        console.log(`\n${paint(pc.bold(`${verified ? "✓" : caution ? "!" : "×"} ${heading}`))}  ${pc.dim(line)}`);
         if (result.inferenceFailure) {
             const f = result.inferenceFailure;
             console.log(pc.red(`Inference ${f.kind} (origin: ${f.origin}${f.httpStatus ? `, HTTP ${f.httpStatus}` : ""}): ${redactSecrets(f.message).slice(0, 300)}`));

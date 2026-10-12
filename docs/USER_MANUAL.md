@@ -64,6 +64,29 @@ Press `<TAB>` at any prompt to autocomplete slash commands and directory paths.
   segment 2`) from the clock, not from model output, and names the phase: thinking, the running tool and its subject,
   waiting for the provider, verifying, compacting. It stops on completion, cancellation, failure or disconnection;
   an approval request replaces it with the approval hint.
+- **Transcript.** Replies are rendered Markdown: headings, emphasis, inline code, lists with hanging indents, block
+  quotes, fenced code in a gutter block with syntax colours (long lines wrap onto rows marked `↪`), and tables
+  aligned in columns (listed row by row when too wide). Each model reply is its own paragraph; when Nexus asks the
+  agent to continue on its own (open requirements, a repeated action), a quiet line says so. Commands show their exit
+  code and line count, the first 6 output lines and the exact number not shown (`… 115 more lines`); Tab, `[`/`]` and
+  Enter open the full record. Tools that took noticeable time show their duration. A pasted prompt shows the text that
+  was sent under its `[Pasted text #n]` label.
+- **Outcomes.** A turn ends with one line in words — `Done`, `Done · verified`, `Done · not verified`, `Verification
+  failed`, `Requirements still open` (with the open items), `Cancelled`, `Stopped at …` (a budget), `Model request
+  failed`, `Context is full` — the cause, and the next action; `v` opens the receipt with the raw fields.
+- **Scrolling.** Scrolled back, the view stays where you are while output arrives; the badge then says `new output`.
+  PgDn or Ctrl+End returns to the newest line.
+- **Status.** The top line shows identity only: workspace, branch, model and mode (`review mode: approvals on` in
+  review mode), dropping the least important on narrow terminals. Activity is shown once, on the composer line.
+- **Composer.** An empty composer says what Enter does (send, or steer while the agent works); a draft taller than
+  six rows shows `line n of m`. Drafts are kept while panels are open and across a sidecar crash.
+- **Approvals.** A full panel states what is proposed and on which target (`Nexus wants to: creates config.json · +1
+  −0`), shows file changes with the diff view, and offers three buttons — Approve (`y`), Approve all later actions
+  (`a`), Deny (`n`) — with the focused one marked `▸`; ←/→ move the focus and Enter takes it. Keys typed in the moment
+  before the panel opens, and pastes, never answer it.
+- **Recovery.** If the agent sidecar stops, the screen names the exit code or signal, keeps the last relevant
+  diagnostic lines (progress chatter is dropped) and your draft; `r` starts a new agent, after which `/resume` reloads
+  the saved conversation. Resuming (`-r` or `/resume`) shows the earlier conversation under a divider.
 - **Steering.** Enter while the agent works sends the draft as steering. It shows in the transcript as
   `↳ text · steering · queued`, then `applied` once the agent takes it at its next step. Steering that arrives as
   the turn finishes starts a follow-up turn; steering that cannot be applied (the turn was cancelled, a command was

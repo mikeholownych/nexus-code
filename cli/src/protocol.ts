@@ -8,6 +8,7 @@ import type { ApprovalReview } from "./approval_review.js";
 import type { SlashSpec } from "./slash/catalog.js";
 import type { EvidenceStatus, ReceiptSection } from "./evidence.js";
 import type { Catalog } from "./model_catalog.js";
+import { visibleControls } from "./file_diff.js";
 
 export const PROTOCOL_VERSION = 1;
 export const MAX_TEXT_FIELD = 8000;
@@ -69,7 +70,21 @@ export type SidecarEvent =
     }
   | { type: "steer.ack"; id: string; status: SteerStatus; message: string; text?: string }
   | { type: "tool.start"; turn_id: string; call_id: string; tool: string; subject: string; evidence: string }
-  | { type: "tool.end"; turn_id: string; call_id: string; tool: string; success: boolean; summary: string; lines: number; evidence: string }
+  | {
+      type: "tool.end";
+      turn_id: string;
+      call_id: string;
+      tool: string;
+      success: boolean;
+      summary: string;
+      lines: number;
+      evidence: string;
+      /** Commands: the first lines of their output (stdout, then stderr), redacted, controls made visible. */
+      preview?: string;
+      exit_code?: number | null;
+      duration_ms?: number;
+      timed_out?: boolean;
+    }
   | { type: "approval.request"; id: string; turn_id: string; tool: string; subject: string; preview: string; review: ApprovalReview }
   | { type: "turn.result"; turn_id: string; heading: string; line: string; turn: TurnResult; model_summary: ModelSummary | null }
   | {
@@ -86,6 +101,8 @@ export type SidecarEvent =
       prompt?: string;
     }
   | { type: "notice"; text: string }
+  /** A resumed session's recent conversation (user and assistant text only), oldest first; `total` counts all of it. */
+  | { type: "history"; session: string; total: number; messages: Array<{ role: "user" | "assistant" | "steering"; text: string }> }
   | {
       type: "tool.detail";
       id: string;
@@ -283,8 +300,59 @@ export function providerRecoveryNotice(record: ProviderRecoveryRecord, discarded
   }
 }
 
-export function toolSummary(success: boolean, output: string, error?: string): { summary: string; lines: number } {
+/** Lines of a command's output carried in `tool.end` for the transcript preview. */
+export const TOOL_PREVIEW_LINES = 8;
+
+export interface ToolSummary {
+  summary: string;
+  lines: number;
+  preview?: string;
+  exit_code?: number | null;
+  duration_ms?: number;
+  timed_out?: boolean;
+}
+
+/**
+ * What the transcript shows for a finished tool. A command's JSON result (`stdout`, `stderr`, `exit_code`) becomes a
+ * real summary (`exit 0 · 122 lines`, or `no output`), the count of its output lines and a bounded preview of them;
+ * other tools keep the first line of their output (or error) as the summary.
+ */
+export function toolSummary(success: boolean, output: string, error?: string): ToolSummary {
+  const command = commandResult(output);
+  if (command) {
+    const body = [command.stdout.trimEnd(), command.stderr.trimEnd()].filter(Boolean).join("\n");
+    const rows = body ? body.split(/\r?\n/) : [];
+    const exit = command.timed_out ? "timed out" : command.exit_code === null ? "no exit code" : `exit ${command.exit_code}`;
+    const failure = success ? "" : (error ?? "").split(/\r?\n/).find((line) => line.trim())?.trim() ?? "";
+    const summary = failure && !failure.startsWith("{") ? failure : `${exit} · ${rows.length ? `${rows.length} line${rows.length === 1 ? "" : "s"}` : "no output"}`;
+    return {
+      summary: redactSecrets(stripEscapes(summary)).replace(/\s+/g, " ").slice(0, MAX_SUMMARY),
+      lines: rows.length,
+      preview: rows.slice(0, TOOL_PREVIEW_LINES).map((row) => visibleControls(redactSecrets(row)).slice(0, 400)).join("\n"),
+      exit_code: command.exit_code,
+      ...(command.duration_ms !== undefined ? { duration_ms: command.duration_ms } : {}),
+      ...(command.timed_out ? { timed_out: true } : {}),
+    };
+  }
   const text = redactSecrets(stripEscapes(success ? output || "" : error || output || "")).trim();
   const first = text.split(/\r?\n/).find((line) => line.trim())?.trim() ?? (success ? "Completed" : "Tool failed");
   return { summary: first.replace(/\s+/g, " ").slice(0, MAX_SUMMARY), lines: text ? text.split(/\r?\n/).length : 0 };
+}
+
+/** The structured result of a shell command tool, when `output` is one. */
+function commandResult(output: string): { stdout: string; stderr: string; exit_code: number | null; duration_ms?: number; timed_out?: boolean } | undefined {
+  if (!output || output.trimStart()[0] !== "{") return undefined;
+  try {
+    const parsed = JSON.parse(output);
+    if (parsed && typeof parsed === "object" && typeof parsed.stdout === "string" && "exit_code" in parsed) {
+      return {
+        stdout: parsed.stdout,
+        stderr: typeof parsed.stderr === "string" ? parsed.stderr : "",
+        exit_code: typeof parsed.exit_code === "number" ? parsed.exit_code : null,
+        ...(typeof parsed.duration_ms === "number" ? { duration_ms: parsed.duration_ms } : {}),
+        ...(parsed.timed_out === true ? { timed_out: true } : {}),
+      };
+    }
+  } catch {}
+  return undefined;
 }

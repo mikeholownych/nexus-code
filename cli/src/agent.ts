@@ -129,6 +129,11 @@ export interface AgentObserver {
   onFileChange?(event: { dispatch: number; callId: string; tool: string; path: string; change: FileChange }): void;
   /** Operator steering was applied at a step boundary, or cancelled because the turn ended before one. */
   onSteering?(event: { id: string; status: "applied" | "cancelled"; step?: number; text: string; reason?: string }): void;
+  /**
+   * The loop told the model to keep going on its own: `requirements` (it stopped with acceptance requirements open)
+   * or `recovery` (it repeated an action with an unchanged result). `n` of `max` such prompts this turn.
+   */
+  onContinuation?(event: { kind: "requirements" | "recovery"; n: number; max: number; detail: string }): void;
 }
 
 export interface AgentActivity {
@@ -2958,6 +2963,9 @@ Always explain your reasoning before or alongside your tool calls.`;
           repeatedActions.set(key, 0);
           if (recoveries < budget.maxRecoveries) {
             recoveries++;
+            try {
+              this.observer?.onContinuation?.({ kind: "recovery", n: recoveries, max: budget.maxRecoveries, detail: name });
+            } catch {}
             pendingRecoveryNote =
               `[Nexus recovery ${recoveries}/${budget.maxRecoveries}] You have called ${name} with the same arguments ${count} times and received the same result each time. ` +
               `Repeating it will not change the outcome. Use the result you already have or change approach; if the remaining work is blocked, ` +
@@ -3166,6 +3174,9 @@ Always explain your reasoning before or alongside your tool calls.`;
           const open = budget && this.objective ? openRequirements(this.objective) : [];
           if (budget && open.length && completionNudges < budget.maxCompletionNudges) {
             completionNudges++;
+            try {
+              this.observer?.onContinuation?.({ kind: "requirements", n: completionNudges, max: budget.maxCompletionNudges, detail: open.map((r) => r.id).join(", ") });
+            } catch {}
             this.messages.push({
               role: "user",
               content:

@@ -44,10 +44,14 @@ pub enum Entry {
         evidence: String,
         /// The change this call made to a file, when it is a file edit that succeeded.
         diff: Option<Box<DiffCard>>,
+        /// When it started (this client's clock), how long it took, and what a command printed.
+        run: Box<ToolRun>,
     },
     Banner {
         heading: String,
         line: String,
+        /// The outcome in words, its cause, the next action and any items it names (open requirements).
+        outcome: Box<Outcome>,
         tone: Tone,
         /// Redacted `inferenceFailure.message`, when the turn reports one.
         failure: Option<String>,
@@ -57,6 +61,10 @@ pub enum Entry {
     Notice(String),
     /// A slash or `!` command as the operator typed it.
     Command(String),
+    /// The full text of a submitted prompt that held paste buffers (the prompt line shows their labels).
+    Pasted(String),
+    /// A message of a resumed conversation, shown under the resume divider.
+    Earlier { role: String, text: String },
     /// What a command reported. `diff` asks for unified-diff colouring.
     Output {
         success: bool,
@@ -97,6 +105,39 @@ impl Entry {
     pub fn reviewable(&self) -> bool {
         self.card().is_some() || matches!(self, Entry::Output { diff: true, success: true, .. })
     }
+}
+
+/// A tool call's timing and, for commands, its output. Timing comes from this client's clock, so it is
+/// presentation, not identity: two runs compare equal when their output does.
+#[derive(Clone, Debug, Default)]
+pub struct ToolRun {
+    pub started: Option<Instant>,
+    pub duration_ms: Option<u64>,
+    pub output: Option<ToolOutput>,
+}
+
+impl PartialEq for ToolRun {
+    fn eq(&self, other: &Self) -> bool {
+        self.output == other.output
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct ToolOutput {
+    /// The first lines (bounded by the sidecar), and how many lines there were in all.
+    pub preview: String,
+    pub lines: u64,
+    pub exit_code: Option<i64>,
+    pub timed_out: bool,
+}
+
+/// A turn's outcome as the operator reads it: derived only from the reported execution, outcome and reason.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Outcome {
+    pub title: String,
+    pub cause: Option<String>,
+    pub next: Option<String>,
+    pub items: Vec<String>,
 }
 
 /// Where operator steering stands, as the sidecar acknowledged it.
@@ -197,6 +238,10 @@ pub struct Approval {
     pub tool: String,
     pub subject: String,
     pub lines: Vec<ReviewLine>,
+    /// The proposed file change as a diff, when the review carries one (drawn with the shared diff view).
+    pub patch: Option<Patch>,
+    /// The decision Enter takes; ←/→ or tab move it.
+    pub focus: Verdict,
     pub scroll: usize,
     pub opened: Instant,
 }
@@ -376,6 +421,10 @@ pub struct LiveState {
     pub anchor: Option<(usize, usize)>,
     /// Transcript index of the newest entry the diff review can open.
     pub last_reviewable: Option<usize>,
+    /// Output arrived below the window while the operator was scrolled back.
+    pub unseen: bool,
+    /// The next assistant text starts a new reply (a new model step began since the last text).
+    assistant_break: bool,
 }
 
 impl LiveState {
@@ -409,6 +458,8 @@ impl LiveState {
             depth: Depth::TrueColor,
             anchor: None,
             last_reviewable: None,
+            unseen: false,
+            assistant_break: false,
         }
     }
 
@@ -589,6 +640,25 @@ impl LiveState {
     }
 
     pub fn apply(&mut self, event: Event) {
+        let content = matches!(
+            event,
+            Event::AssistantDelta { .. }
+                | Event::ToolStart { .. }
+                | Event::ToolEnd { .. }
+                | Event::FileDiff { .. }
+                | Event::TurnResult { .. }
+                | Event::Notice { .. }
+                | Event::SlashResult { .. }
+                | Event::SteerAck { .. }
+                | Event::History { .. }
+        );
+        self.apply_event(event);
+        if content && self.scroll_back > 0 {
+            self.unseen = true;
+        }
+    }
+
+    fn apply_event(&mut self, event: Event) {
         if matches!(self.link, Link::Crashed { .. }) {
             return;
         }
@@ -622,6 +692,9 @@ impl LiveState {
                 }
             }
             Event::Activity { phase, step, segment, tool, subject } => {
+                if self.activity.as_ref().is_none_or(|previous| previous.step != step) {
+                    self.assistant_break = true;
+                }
                 let since = match &self.activity {
                     Some(previous) if previous.phase == phase && previous.tool == tool => previous.since,
                     _ => Instant::now(),
@@ -678,9 +751,13 @@ impl LiveState {
                     }
                 }
             }
+            // One entry per model reply: text after a new step (a tool call, a continuation) starts a new one.
             Event::AssistantDelta { turn_id, text } => match self.transcript.last_mut() {
-                Some(Entry::Assistant { turn_id: last, text: body }) if *last == turn_id => body.push_str(&text),
-                _ => self.transcript.push(Entry::Assistant { turn_id, text }),
+                Some(Entry::Assistant { turn_id: last, text: body }) if *last == turn_id && !self.assistant_break => body.push_str(&text),
+                _ => {
+                    self.assistant_break = false;
+                    self.transcript.push(Entry::Assistant { turn_id, text });
+                }
             },
             Event::ToolStart { call_id, tool, subject, evidence } => {
                 if !HIDDEN_TOOLS.contains(&tool.as_str()) {
@@ -692,17 +769,22 @@ impl LiveState {
                         summary: String::new(),
                         evidence,
                         diff: None,
+                        run: Box::new(ToolRun { started: Some(self.now.max(Instant::now())), ..ToolRun::default() }),
                     });
                 }
             }
-            Event::ToolEnd { call_id, tool, success, summary } => {
+            Event::ToolEnd { call_id, tool, success, summary, lines, preview, exit_code, duration_ms, timed_out } => {
                 let open = self.transcript.iter_mut().rev().find(|entry| {
                     matches!(entry, Entry::Tool { call_id: id, tool: name, status: ToolStatus::Running, .. }
                         if *id == call_id && *name == tool)
                 });
-                if let Some(Entry::Tool { status, summary: slot, diff, .. }) = open {
+                if let Some(Entry::Tool { status, summary: slot, diff, run, .. }) = open {
                     *status = if success { ToolStatus::Succeeded } else { ToolStatus::Failed };
                     *slot = summary;
+                    run.duration_ms = duration_ms.or_else(|| run.started.map(|t| u64::try_from(t.elapsed().as_millis()).unwrap_or(u64::MAX)));
+                    if let Some(preview) = preview {
+                        run.output = Some(ToolOutput { preview, lines, exit_code, timed_out });
+                    }
                     // A failed call never shows a change as if it had succeeded.
                     if !success {
                         *diff = None;
@@ -716,11 +798,21 @@ impl LiveState {
                 review,
             } => {
                 let lines = review_lines(review.as_ref().unwrap_or(&Review::Unknown));
+                let text: String = lines.iter().map(|line| line.text.as_str()).collect::<Vec<_>>().join("\n");
+                let mut patch = Some(diff_view::parse(&text)).filter(|patch| patch.files.iter().any(|file| !file.hunks.is_empty()));
+                // The review says whether the file is new; its diff headers do not (no /dev/null side).
+                if let (Some(patch), Some(Review::Change { created: true, .. })) = (patch.as_mut(), review.as_ref())
+                    && let Some(file) = patch.files.first_mut()
+                {
+                    file.status = diff_view::Status::Added;
+                }
                 self.overlay = Some(Overlay::Approval(Approval {
                     id,
                     tool,
                     subject,
                     lines,
+                    patch,
+                    focus: Verdict::Approved,
                     scroll: 0,
                     opened: Instant::now(),
                 }));
@@ -736,14 +828,12 @@ impl LiveState {
                 self.transcript.push(Entry::Banner {
                     heading,
                     line,
+                    outcome: Box::new(outcome_for(&turn)),
                     tone: tone_for(&turn),
                     failure: turn["inferenceFailure"]["message"].as_str().map(str::to_string),
                     summary,
                     notes,
                 });
-                if let Some(objective) = objective_note(&turn) {
-                    self.transcript.push(Entry::Info(objective));
-                }
             }
             Event::Error {
                 id: Some(id),
@@ -813,6 +903,17 @@ impl LiveState {
                 }
             }
             Event::Notice { text } => self.transcript.push(Entry::Info(text)),
+            Event::History { session, total, messages } => {
+                let shown = messages.len();
+                self.transcript.push(Entry::Info(if shown as u64 == total {
+                    format!("Earlier conversation of session {session} ({total} messages)")
+                } else {
+                    format!("Earlier conversation of session {session} (the last {shown} of {total} messages)")
+                }));
+                for message in messages {
+                    self.transcript.push(Entry::Earlier { role: message.role, text: message.text });
+                }
+            }
             Event::ToolDetail {
                 id,
                 status,
@@ -979,6 +1080,9 @@ impl LiveState {
         }
         self.scroll_back = self.scroll_back.min(layout.scroll_limit);
         self.anchor = if self.scroll_back > 0 { layout.top } else { None };
+        if self.scroll_back == 0 {
+            self.unseen = false;
+        }
         if let Some(Overlay::Review(review)) = &mut self.overlay {
             review.top = review.top.min(layout.overlay_limit);
             review.left = review.left.min(layout.overlay_hlimit);
@@ -1007,8 +1111,28 @@ impl LiveState {
     }
 
     fn on_approval_key(&mut self, key: KeyEvent, now: Instant) -> Option<Action> {
+        const ORDER: [Verdict; 3] = [Verdict::Approved, Verdict::ApprovedForSession, Verdict::Denied];
+        if let Some(Overlay::Approval(approval)) = &mut self.overlay {
+            let at = ORDER.iter().position(|v| *v == approval.focus).unwrap_or(0);
+            match key.code {
+                KeyCode::Left | KeyCode::BackTab => {
+                    approval.focus = ORDER[(at + ORDER.len() - 1) % ORDER.len()];
+                    return None;
+                }
+                KeyCode::Right | KeyCode::Tab => {
+                    approval.focus = ORDER[(at + 1) % ORDER.len()];
+                    return None;
+                }
+                _ => {}
+            }
+        }
+        let focused = match &self.overlay {
+            Some(Overlay::Approval(approval)) => approval.focus,
+            _ => Verdict::Approved,
+        };
         let verdict = match key.code {
-            KeyCode::Char('y' | 'Y') | KeyCode::Enter => Verdict::Approved,
+            KeyCode::Enter => focused,
+            KeyCode::Char('y' | 'Y') => Verdict::Approved,
             KeyCode::Char('a' | 'A') => Verdict::ApprovedForSession,
             KeyCode::Char('n' | 'N') | KeyCode::Esc => Verdict::Denied,
             code => {
@@ -1155,6 +1279,12 @@ impl LiveState {
         if key.code == KeyCode::Char('d') && ctrl {
             return self.open_review(None);
         }
+        if key.code == KeyCode::End && ctrl {
+            self.scroll_back = 0;
+            self.follow = false;
+            self.unseen = false;
+            return None;
+        }
         let page = Self::page(self.layout.transcript_rows);
         match key.code {
             KeyCode::Tab => {
@@ -1297,7 +1427,11 @@ impl LiveState {
             return self.invoke(display, invocation);
         }
         self.turn_seq += 1;
+        let pasted = display != text;
         self.transcript.push(Entry::User(display));
+        if pasted {
+            self.transcript.push(Entry::Pasted(text.clone()));
+        }
         self.session.busy = true;
         self.turn_started = Some(Instant::now());
         self.activity = None;
@@ -1724,36 +1858,107 @@ fn steer_prefix() -> String {
         .clone()
 }
 
-/// One line on where the operator's objective stands, when the turn reports open requirements or a failed check.
-pub fn objective_note(turn: &Value) -> Option<String> {
-    let objective = turn.get("objective")?;
-    let status = objective["status"].as_str()?;
-    if status == "completed" {
-        return None;
-    }
-    let mut parts = vec![format!("Objective {status}")];
-    if let Some(remaining) = objective["remaining"].as_array().filter(|items| !items.is_empty()) {
-        let ids: Vec<String> = remaining
-            .iter()
-            .filter_map(Value::as_str)
-            .map(|item| item.split_whitespace().take(2).collect::<Vec<_>>().join(" "))
-            .collect();
-        parts.push(format!("remaining: {}", ids.join(", ")));
-    }
-    if let Some(check) = objective["failedCheck"].as_str() {
-        parts.push(format!("failed check: {check}"));
-    }
-    if let Some(next) = objective["nextAction"].as_str() {
-        parts.push(format!("next: {next}"));
-    }
-    Some(parts.join(" · "))
+/// The outcome in words, from the reported execution, outcome and reason only. Raw fields stay in the receipt.
+pub fn outcome_for(turn: &Value) -> Outcome {
+    let execution = turn["execution"].as_str().unwrap_or("");
+    let outcome = turn["outcome"].as_str().unwrap_or("");
+    let reason = turn["reason"].as_str().unwrap_or("");
+    let detail = turn["detail"].as_str().filter(|d| !d.is_empty()).map(str::to_string);
+    let verifier = turn["verification"]["command"].as_str().map(str::to_string);
+    let text = |s: &str| Some(s.to_string()).filter(|s| !s.is_empty());
+    let mut items = Vec::new();
+    let objective = &turn["objective"];
+    let open_objective = objective["status"].as_str().is_some_and(|status| status != "completed")
+        && objective["remaining"].as_array().is_some_and(|remaining| !remaining.is_empty());
+    let inference_failed = turn["inferenceFailure"].is_object();
+    let reason = if reason.is_empty() && open_objective && execution == "COMPLETED" {
+        "REQUIREMENTS_INCOMPLETE"
+    } else if reason.is_empty() && inference_failed {
+        "INFERENCE_FAILED"
+    } else {
+        reason
+    };
+    let (title, cause, next) = match (execution, outcome, reason) {
+        ("COMPLETED", "VERIFIED", _) => ("Done · verified".to_string(), verifier.map(|c| format!("{c} passed")), None),
+        ("COMPLETED", "NOT_REQUIRED", _) => ("Done".to_string(), text("No files changed, so there was nothing to verify."), None),
+        ("COMPLETED", "UNVERIFIED", "NO_APPLICABLE_VERIFIER") => (
+            "Done · not verified".to_string(),
+            text("Files changed, and no test command was found for this workspace."),
+            text("check the changes yourself (/diff), or run /test <command>"),
+        ),
+        ("COMPLETED", "UNVERIFIED", _) => (
+            "Done · not verified".to_string(),
+            text("Files changed, but no verifier ran before the agent finished."),
+            text("run /test, or ask Nexus to verify the change"),
+        ),
+        ("COMPLETED", "NOT_ESTABLISHED", "VERIFIER_FAILED") => (
+            "Verification failed".to_string(),
+            Some(format!("{} failed", detail.clone().or(verifier).unwrap_or_else(|| "the verifier".into()))),
+            text("v shows the failing check; ask Nexus to fix it"),
+        ),
+        ("COMPLETED", "NOT_ESTABLISHED", "VERIFIER_TIMED_OUT") => (
+            "Verification timed out".to_string(),
+            detail.clone(),
+            text("raise NEXUS_VERIFIER_TIMEOUT_SECS, or run the tests yourself"),
+        ),
+        ("COMPLETED", "NOT_ESTABLISHED", "REQUIREMENTS_INCOMPLETE") => {
+            if let Some(remaining) = turn["objective"]["remaining"].as_array() {
+                items = remaining.iter().filter_map(Value::as_str).map(str::to_string).collect();
+            }
+            let open = items.len();
+            let mut cause = format!("The agent finished with {open} requirement{} not done.", if open == 1 { "" } else { "s" });
+            if let Some(check) = objective["failedCheck"].as_str() {
+                cause.push_str(&format!(" Failed check: {check}."));
+            }
+            (
+                "Requirements still open".to_string(),
+                Some(cause),
+                objective["nextAction"]
+                    .as_str()
+                    .map(str::to_string)
+                    .or_else(|| text("reply to continue, or /requirements to review or accept a reduced scope")),
+            )
+        }
+        ("COMPLETED", _, _) => ("Done · result not established".to_string(), detail.clone().or_else(|| text(reason)), text("v shows the receipt")),
+        ("INTERRUPTED", _, _) => {
+            let phase = turn["interruption"]["phase"].as_str().unwrap_or("work").replace('_', " ");
+            let skipped = turn["interruption"]["undispatchedToolCalls"].as_u64().unwrap_or(0);
+            let mut cause = format!("You stopped the turn during {phase}.");
+            if skipped > 0 {
+                cause.push_str(&format!(" {skipped} planned tool call{} did not run.", if skipped == 1 { "" } else { "s" }));
+            }
+            ("Cancelled".to_string(), Some(cause), None)
+        }
+        ("FAILED", _, "INFERENCE_FAILED") => ("Model request failed".to_string(), if inference_failed { None } else { detail.clone() }, text("send again, or choose another model with /model")),
+        ("FAILED", _, _) => ("Turn failed".to_string(), detail.clone().or_else(|| text(reason)), text("v shows the receipt")),
+        ("BLOCKED", _, "CONTEXT_CAPACITY_EXCEEDED") => (
+            "Context is full".to_string(),
+            detail.clone().map(|d| format!("The request would exceed the model's context ({d} tokens).")),
+            text("/compact, then send again"),
+        ),
+        ("BLOCKED", _, _) => ("Blocked".to_string(), detail.clone().or_else(|| text(reason)), text("v shows the receipt")),
+        ("LIMIT_REACHED", _, _) => {
+            let what = match reason {
+                "STEP_BUDGET_EXHAUSTED" | "STEP_LIMIT_REACHED" => "the step budget",
+                "TIME_BUDGET_EXHAUSTED" => "the time budget",
+                "STAGNATION_DETECTED" => "too many steps without progress",
+                _ => "a limit",
+            };
+            (format!("Stopped at {what}"), detail.clone(), text("reply to continue from here, or raise the budget"))
+        }
+        _ => ("Turn ended".to_string(), detail.clone().or_else(|| text(reason)), text("v shows the receipt")),
+    };
+    Outcome { title, cause, next, items }
 }
 
-/// Same projection as `TerminalUI.turnSummary` in `cli/src/ui.ts`.
+/// Same projection as `TerminalUI.turnSummary` in `cli/src/ui.ts`: a failing or timed-out verifier is a failure;
+/// an operator's cancel or a budget stop is not.
 pub fn tone_for(turn: &Value) -> Tone {
-    match (turn["execution"].as_str(), turn["outcome"].as_str()) {
-        (Some("COMPLETED"), Some("VERIFIED" | "NOT_REQUIRED")) => Tone::Good,
-        (Some("COMPLETED"), _) => Tone::Caution,
+    match (turn["execution"].as_str(), turn["outcome"].as_str(), turn["reason"].as_str()) {
+        (Some("COMPLETED"), Some("VERIFIED" | "NOT_REQUIRED"), _) => Tone::Good,
+        (Some("COMPLETED"), _, Some("VERIFIER_FAILED" | "VERIFIER_TIMED_OUT")) => Tone::Bad,
+        (Some("COMPLETED"), _, _) => Tone::Caution,
+        (Some("INTERRUPTED" | "LIMIT_REACHED"), _, _) => Tone::Caution,
         _ => Tone::Bad,
     }
 }
@@ -1868,7 +2073,10 @@ mod tests {
             state.on_key(key(KeyCode::Enter)),
             Some(Action::Send(Command::PromptSubmit { id: "t1".into(), text: "/exit\nand then fix the bug".into() }))
         );
-        assert_eq!(state.transcript.last(), Some(&Entry::User("[Pasted text #1: 2 lines]".into())));
+        // The prompt line keeps the paste label; the text that was sent follows it, bounded in the view.
+        let n = state.transcript.len();
+        assert_eq!(state.transcript[n - 2], Entry::User("[Pasted text #1: 2 lines]".into()));
+        assert_eq!(state.transcript[n - 1], Entry::Pasted("/exit\nand then fix the bug".into()));
     }
 
     #[test]
@@ -1917,10 +2125,12 @@ mod tests {
     fn open_requirements_from_the_turn_are_reported_under_the_banner() {
         let mut state = busy();
         state.apply(ev(r#"{"v":1,"type":"turn.result","turn_id":"t1","heading":"TURN ENDED - REQUIREMENTS OPEN","line":"L","turn":{"execution":"COMPLETED","outcome":"NOT_ESTABLISHED","objective":{"status":"incomplete","remaining":["R2 [open] Reject negatives"],"failedCheck":"not ok 3","nextAction":"Fix R2"}},"model_summary":null}"#));
-        assert_eq!(
-            state.transcript.last(),
-            Some(&Entry::Info("Objective incomplete · remaining: R2 [open] · failed check: not ok 3 · next: Fix R2".into()))
-        );
+        let Some(Entry::Banner { outcome, .. }) = state.transcript.last() else { panic!("{:?}", state.transcript) };
+        assert_eq!(outcome.title, "Requirements still open");
+        assert_eq!(outcome.items, vec!["R2 [open] Reject negatives".to_string()]);
+        assert_eq!(outcome.cause.as_deref(), Some("The agent finished with 1 requirement not done. Failed check: not ok 3."));
+        assert_eq!(outcome.next.as_deref(), Some("Fix R2"));
+        assert!(!state.transcript.iter().any(|e| matches!(e, Entry::Info(_))), "the requirements are reported once, in the outcome");
     }
 
     #[test]
@@ -2211,6 +2421,7 @@ mod tests {
                     summary: "const a = 1;".into(),
                     evidence: String::new(),
                     diff: None,
+                    run: Box::default(),
                 },
                 Entry::Tool {
                     call_id: "b".into(),
@@ -2220,6 +2431,7 @@ mod tests {
                     summary: "No such file".into(),
                     evidence: String::new(),
                     diff: None,
+                    run: Box::default(),
                 },
                 Entry::Assistant {
                     turn_id: "t1".into(),
@@ -2250,6 +2462,7 @@ mod tests {
                 summary: "1 test failed".into(),
                 evidence: String::new(),
                 diff: None,
+                run: Box::default(),
             }]
         );
     }
@@ -2269,6 +2482,7 @@ mod tests {
                 summary: String::new(),
                 evidence: String::new(),
                 diff: None,
+                run: Box::default(),
             }]
         );
     }
@@ -2298,7 +2512,8 @@ mod tests {
             Entry::Banner {
                 heading: "TURN INTERRUPTED".into(),
                 line: "Stopped by operator".into(),
-                tone: Tone::Bad,
+                outcome: Box::new(Outcome { title: "Cancelled".into(), cause: Some("You stopped the turn during work.".into()), next: None, items: vec![] }),
+                tone: Tone::Caution,
                 failure: None,
                 summary: None,
                 notes: None,
@@ -2310,6 +2525,7 @@ mod tests {
             Entry::Banner {
                 heading: "TURN COMPLETE - VERIFIED".into(),
                 line: "cargo test passed".into(),
+                outcome: Box::new(Outcome { title: "Done · verified".into(), cause: None, next: None, items: vec![] }),
                 tone: Tone::Good,
                 failure: None,
                 summary: Some("Fixed the parser.".into()),
@@ -2323,7 +2539,8 @@ mod tests {
             ("COMPLETED", "NOT_ESTABLISHED", Tone::Caution),
             ("FAILED", "NOT_ESTABLISHED", Tone::Bad),
             ("BLOCKED", "NOT_ESTABLISHED", Tone::Bad),
-            ("LIMIT_REACHED", "UNVERIFIED", Tone::Bad),
+            ("LIMIT_REACHED", "UNVERIFIED", Tone::Caution),
+            ("INTERRUPTED", "NOT_ESTABLISHED", Tone::Caution),
         ] {
             assert_eq!(
                 tone_for(&serde_json::json!({"execution": execution, "outcome": outcome})),
@@ -2344,6 +2561,7 @@ mod tests {
                 Entry::Banner {
                     heading: "TURN FAILED".into(),
                     line: "Inference failed".into(),
+                    outcome: Box::new(Outcome { title: "Model request failed".into(), cause: None, next: Some("send again, or choose another model with /model".into()), items: vec![] }),
                     tone: Tone::Bad,
                     failure: Some("upstream timed out after 60s".into()),
                     summary: None,
@@ -2352,6 +2570,7 @@ mod tests {
                 Entry::Banner {
                     heading: "TURN FAILED".into(),
                     line: "Stopped".into(),
+                    outcome: Box::new(Outcome { title: "Turn failed".into(), cause: None, next: Some("v shows the receipt".into()), items: vec![] }),
                     tone: Tone::Bad,
                     failure: None,
                     summary: None,
@@ -2425,6 +2644,8 @@ mod tests {
                 tool: "write_file".into(),
                 subject: "x.txt".into(),
                 lines: review_lines(&Review::Unknown),
+                patch: None,
+                focus: Verdict::Approved,
                 scroll: 0,
                 opened,
             }))
