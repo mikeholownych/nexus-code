@@ -1437,6 +1437,13 @@ describe("G: recorded findings under memory pressure stay distinct, sourced and 
         assert.ok(elided.includes("1 (F2) shortened in an earlier session, whose full text is not kept"), elided);
         assert.ok(!elided.includes("recorded in an earlier session, whose full text is not kept"), "none goes unlisted");
         assert.equal(readFindings(agent.getFindings(), { id: "F1" }).text, full.replace("[step 4;", "[F1; step 4;"));
+
+        // A record that showed them indexed does not stand in for the kept copy: the shortened one is still said to be.
+        const indexed = `${DURABLE}${JSON.stringify({ version: 2, notes: kept.map(indexFinding), currentPlan: [], currentPlanStates: [], retainedObservations: [] })}`;
+        const third = notesOf(agent.summarizeDiscardedHistory([{ role: "system", content: indexed }, { role: "assistant", content: "next" }], 0, new Set()).content);
+        const again = third.find((n) => n.startsWith("[Nexus: recorded findings not shown here, to bound this memory: "));
+        assert.ok(again && namesFinding(again, "F2"), again ?? third.join("\n").slice(0, 600));
+        assert.ok(again.includes("1 (F2) shortened in an earlier session, whose full text is not kept"), again);
       } finally {
         agent.shutdown();
       }

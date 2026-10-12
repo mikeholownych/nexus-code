@@ -220,7 +220,7 @@ const CUT_NOTICE = /^\[Nexus: your response at step \d+ was cut off[^\]]*\]\n/;
 /** A response that failed after running this long was most likely ended by the provider's limit on how long one may take. */
 const LONG_RESPONSE_MS = 120_000;
 function cutResponseNotice(step, seconds) {
-    return `[Nexus: your response at step ${step} was cut off after ${seconds} s, before it was complete: the provider ends a response that takes too long, and none of it was used. Respond with less at once. Write a long file in parts: write_file with its first part, then add each further part with edit_file in later steps (replace the file's last line with that line followed by the next part). Keep every response short enough to finish well within ${seconds} s.]`;
+    return `[Nexus: your response at step ${step} was cut off after ${seconds} s, before it was complete, most likely because the provider ends a response that takes too long; none of it was used. Respond with less at once. Write a long file in parts: write_file with its first part, then add each further part with edit_file in later steps, replacing the file's last few lines (enough that they occur nowhere earlier in it) with those lines followed by the next part. End each part where every bracket it opens is closed. Keep every response short enough to finish well within ${seconds} s.]`;
 }
 /** Content identity of a tool output, to tell whether a re-run returned what was inspected before. */
 function outputDigest(text) {
@@ -1207,6 +1207,7 @@ export class AutonomousAgent {
     }
     resetConversation() {
         this.stepNoticeStep = 0;
+        this.cutResponse = undefined;
         this.objective = undefined;
         this.compactions = 0;
         this.archivedTotal = 0;
@@ -1697,15 +1698,16 @@ export class AutonomousAgent {
                     addDurableNote(`Earlier ${message.name || "tool"} output: ${outputText}`);
             }
         }
-        // One version of each finding, oldest first: the full text this conversation keeps over a condensed or indexed copy
-        // an earlier record carries. Findings without ids (recorded by an earlier version) come first, as they are.
+        // One version of each finding, oldest first: the copy this conversation keeps over a condensed or indexed copy an
+        // earlier record carries. Findings without ids (recorded by an earlier version) come first, as they are.
         const findingSlot = durableNotes.findIndex((note) => note.startsWith(FINDINGS_PREFIX) || note.startsWith(ELIDED_FINDINGS_PREFIX));
+        const storedFindings = new Set(this.findingNotes);
         let findings = [];
         for (const note of [...durableNotes.filter((note) => note.startsWith(FINDINGS_PREFIX)), ...this.findingNotes]) {
             const id = findingId(note);
             const at = id ? findings.findIndex((held) => findingId(held) === id) : findings.findIndex((held) => !findingId(held) && shortenedFrom(held, note));
             if (at >= 0) {
-                if (isCondensedFinding(findings[at]) && !isCondensedFinding(note))
+                if ((id && storedFindings.has(note)) || (isCondensedFinding(findings[at]) && !isCondensedFinding(note)))
                     findings[at] = note;
             }
             else if (!findings.includes(note) && (id || !findings.some((held) => !findingId(held) && shortenedFrom(note, held)))) {
@@ -1732,7 +1734,8 @@ export class AutonomousAgent {
         if (adopted.length)
             this.findingNotes = [...adopted, ...this.findingNotes];
         // Oldest first: as kept (findings kept only in an earlier record, before those kept here).
-        const position = (note) => this.findingNotes.findIndex((held) => findingId(held) === findingId(note));
+        const positions = new Map(this.findingNotes.map((held, index) => [findingId(held), index]));
+        const position = (note) => positions.get(findingId(note)) ?? -1;
         findings.sort((left, right) => position(left) - position(right));
         for (let index = durableNotes.length - 1; index >= 0; index--) {
             const note = durableNotes[index];
@@ -1773,7 +1776,7 @@ export class AutonomousAgent {
         if (this.findingsOutgrown)
             durableNotes.push(FINDINGS_OUTGROWN);
         // What this memory holds of each observation's findings: shown in full, or kept in full and shown only condensed,
-        // indexed or by id. A copy an earlier version shortened is held only while shown, as its full text was never kept.
+        // indexed or by id. A copy an earlier version shortened is never held, as its full text was never kept.
         // A re-run is told findings are held only while they are; an observation whose findings are not is recorded again
         // when it next leaves.
         const findingsHeld = (key) => {
@@ -3149,6 +3152,7 @@ Always explain your reasoning before or alongside your tool calls.`;
         this.turnRemovedObservations = new Set([...this.carriedRemovedObservations, ...unreacquiredRemovals(this.messages)]);
         this.findingsOutgrown = false;
         this.stepNoticeStep = 0;
+        this.cutResponse = undefined;
         // Step notices speak for the turn that issued them; this turn has its own step budget.
         for (const message of this.messages) {
             if (message.role === "tool" && typeof message.content === "string")
