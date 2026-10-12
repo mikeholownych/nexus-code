@@ -243,7 +243,10 @@ pub struct Approval {
     /// The decision Enter takes; ←/→ or tab move it.
     pub focus: Verdict,
     pub scroll: usize,
+    /// When the panel was first on screen (until then, when the request arrived); the grace period counts from it.
     pub opened: Instant,
+    /// The panel has been drawn. No decision is taken before that.
+    pub shown: bool,
 }
 
 /// A panel's content: requested from the sidecar, then filled by its answer.
@@ -815,6 +818,7 @@ impl LiveState {
                     focus: Verdict::Approved,
                     scroll: 0,
                     opened: Instant::now(),
+                    shown: false,
                 }));
             }
             Event::TurnResult { heading, line, turn, model_summary } => {
@@ -1069,8 +1073,27 @@ impl LiveState {
         }
     }
 
+    /// Id of the approval waiting for a decision, if any.
+    pub fn approval_id(&self) -> Option<&str> {
+        match &self.overlay {
+            Some(Overlay::Approval(approval)) => Some(approval.id.as_str()),
+            _ => None,
+        }
+    }
+
+    /// The approval panel is on screen now: its grace period starts here, not when the request arrived.
+    pub fn note_approval_shown(&mut self, now: Instant) {
+        if let Some(Overlay::Approval(approval)) = &mut self.overlay
+            && !approval.shown
+        {
+            approval.shown = true;
+            approval.opened = now;
+        }
+    }
+
     /// Records what the frame measured and clamps scrolling to it.
     pub fn note_layout(&mut self, layout: LiveLayout) {
+        self.note_approval_shown(Instant::now());
         if let Some(back) = layout.followed {
             self.scroll_back = back;
             self.follow = false;
@@ -1140,8 +1163,10 @@ impl LiveState {
                 return None;
             }
         };
+        // A decision needs the panel on screen for the grace period first: keys typed for the draft, or queued
+        // before the panel appeared, never answer it.
         if let Some(Overlay::Approval(approval)) = &self.overlay
-            && now.saturating_duration_since(approval.opened) < APPROVAL_GRACE
+            && (!approval.shown || now.saturating_duration_since(approval.opened) < APPROVAL_GRACE)
         {
             return None;
         }
@@ -2636,7 +2661,7 @@ mod tests {
             state.transcript,
             vec![Entry::Notice("BUSY: A turn is already running".into())]
         );
-        let opened = opened_at(&state);
+        let opened = opened_at(&mut state);
         assert_eq!(
             state.overlay,
             Some(Overlay::Approval(Approval {
@@ -2648,6 +2673,7 @@ mod tests {
                 focus: Verdict::Approved,
                 scroll: 0,
                 opened,
+                shown: true,
             }))
         );
     }
@@ -2662,7 +2688,9 @@ mod tests {
         state
     }
 
-    fn opened_at(state: &LiveState) -> Instant {
+    /// The approval panel's display time (the panel is marked shown, as the first frame would).
+    fn opened_at(state: &mut LiveState) -> Instant {
+        state.note_approval_shown(Instant::now());
         let Some(Overlay::Approval(approval)) = &state.overlay else {
             panic!("expected the approval modal");
         };
@@ -2681,7 +2709,7 @@ mod tests {
         assert!(state.on_key(key(KeyCode::Enter)).is_some());
         type_text(&mut state, "dra");
         state.apply(ev(APPROVAL));
-        let opened = opened_at(&state);
+        let opened = opened_at(&mut state);
         let transcript = state.transcript.clone();
         let almost = opened + APPROVAL_GRACE - Duration::from_millis(1);
         for (code, now) in [
@@ -2721,7 +2749,7 @@ mod tests {
     #[test]
     fn always_right_after_the_modal_opens_is_ignored() {
         let mut state = busy_with_approval();
-        let opened = opened_at(&state);
+        let opened = opened_at(&mut state);
         let transcript = state.transcript.clone();
         assert_eq!(state.on_key_at(key(KeyCode::Char('a')), opened), None);
         assert_eq!(state.transcript, transcript);
@@ -2739,7 +2767,7 @@ mod tests {
     #[test]
     fn ctrl_c_right_after_the_modal_opens_still_cancels() {
         let mut state = busy_with_approval();
-        let opened = opened_at(&state);
+        let opened = opened_at(&mut state);
         assert_eq!(
             state.on_key_at(ctrl('c'), opened),
             Some(Action::Send(Command::Cancel))

@@ -307,6 +307,37 @@ fn draw(terminal: &mut ratatui::DefaultTerminal, app: &mut LiveApp) -> io::Resul
 }
 
 /// A key a terminal without bracketed paste would deliver as part of pasted text.
+/// Applies pending sidecar messages. When they open an approval, input already queued (and a stashed event) is
+/// discarded. Returns whether the screen changed and whether an approval opened.
+fn pump_guarding_approvals(app: &mut LiveApp, pending: &mut Option<TermEvent>) -> (bool, bool) {
+    let before = app.state.approval_id().map(str::to_string);
+    let mut changed = app.pump();
+    let opened = app.state.approval_id().is_some_and(|id| before.as_deref() != Some(id));
+    if opened {
+        if pending.as_ref().is_some_and(|event| !matches!(event, TermEvent::Resize(..))) {
+            *pending = None;
+        }
+        let queued = std::iter::from_fn(|| match event::poll(Duration::ZERO) {
+            Ok(true) => event::read().ok(),
+            _ => None,
+        });
+        changed |= discard_queued_input(queued);
+    }
+    (changed, opened)
+}
+
+/// Input that was already queued when an approval opened was typed before the operator could see the panel: it is
+/// discarded (keys and pastes), never read as a decision. Returns whether a resize was among it (the frame redraws).
+fn discard_queued_input(queued: impl Iterator<Item = TermEvent>) -> bool {
+    queued.fold(false, |resized, event| resized || matches!(event, TermEvent::Resize(..)))
+}
+
+/// Several keys arriving together (typed faster than anyone decides, or pasted by a terminal without bracketed
+/// paste) never answer an approval; one deliberate key does.
+fn burst_may_answer(approval_open: bool, keys: usize) -> bool {
+    !approval_open || keys <= 1
+}
+
 fn pasteable(key: &KeyEvent) -> bool {
     key.kind == KeyEventKind::Press
         && !key.modifiers.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT)
@@ -351,7 +382,8 @@ fn event_loop(
             draw(terminal, app)?;
             return Ok(());
         }
-        redraw |= app.pump();
+        let (changed, _) = pump_guarding_approvals(app, &mut pending);
+        redraw |= changed;
         let frame = app
             .state
             .animating()
@@ -371,7 +403,15 @@ fn event_loop(
                 if !event::poll(wait)? {
                     continue;
                 }
-                event::read()?
+                let event = event::read()?;
+                // Sidecar messages that arrived while waiting are applied before this input: if they opened an
+                // approval, the input was typed before the panel existed and is discarded with the rest.
+                let (changed, opened) = pump_guarding_approvals(app, &mut pending);
+                redraw |= changed;
+                if opened && !matches!(event, TermEvent::Resize(..)) {
+                    continue;
+                }
+                event
             }
         };
         let action = match event {
@@ -388,6 +428,7 @@ fn event_loop(
                     }
                 }
                 match burst_text(&keys) {
+                    _ if !burst_may_answer(app.state.approval_id().is_some(), keys.len()) => None,
                     Some(text) => {
                         app.state.on_paste(&text);
                         None
@@ -428,6 +469,25 @@ fn event_loop(
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn input_queued_when_an_approval_opens_is_discarded_and_bursts_never_decide() {
+        use crossterm::event::{Event as TermEvent, KeyCode, KeyEvent, KeyModifiers};
+        let queued = vec![
+            TermEvent::Key(KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE)),
+            TermEvent::Key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)),
+            TermEvent::Paste("y\n".into()),
+        ];
+        let mut source = queued.into_iter();
+        assert!(!discard_queued_input(&mut source), "no resize among the queued input");
+        assert!(source.next().is_none(), "everything queued was consumed, none of it handled");
+        let with_resize = vec![TermEvent::Key(KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE)), TermEvent::Resize(80, 24)];
+        assert!(discard_queued_input(with_resize.into_iter()), "a queued resize still redraws");
+        assert!(!burst_may_answer(true, 3), "a burst never answers an approval");
+        assert!(burst_may_answer(true, 1), "a single deliberate key may");
+        assert!(burst_may_answer(false, 5), "bursts outside approvals are typing or paste as before");
+    }
+
     use super::*;
     use crate::live_state::{APPROVAL_GRACE, Detail, Entry, Loaded, Overlay, Verdict};
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
@@ -528,6 +588,9 @@ exit 0"#
         pump_until(&mut app, |s| {
             matches!(s.overlay, Some(Overlay::Approval(_)))
         });
+        // No decision before the panel is on screen: the first frame marks it shown and starts the grace period.
+        assert_eq!(app.state.on_key_at(KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE), Instant::now() + APPROVAL_GRACE * 10), None);
+        app.state.note_approval_shown(Instant::now());
         let Some(Overlay::Approval(approval)) = &app.state.overlay else {
             unreachable!("pump_until waited for the approval modal");
         };
