@@ -20,6 +20,8 @@ import os from "node:os";
 import path from "node:path";
 import { execSync } from "node:child_process";
 import { AutonomousAgent, observationKey } from "../src/agent.js";
+import { condenseFinding, incompleteOutputNotice, readFindings } from "../src/core/findings.js";
+import { RustCoreBridge } from "../src/tools.js";
 import { newOperation } from "../src/core/operation.js";
 import { AgentWorkUnitExecutor, driveOperation, OperationStore } from "../src/core/operation_runner.js";
 import type { ResourceDescriptor } from "../src/core/resources.js";
@@ -86,6 +88,9 @@ function bigFile(file: string): string {
   for (let i = 0; out.length < 24_800; i++) out += `record ${file}.${String(i).padStart(3, "0")} value=${(i * 7919) % 100000} status=ok note=filler text to occupy context budget\n`;
   return out;
 }
+/** Whether a note naming findings by id ("F1–F5, F7") names `id`. */
+const namesFinding = (note: string, id: string): boolean =>
+  [...note.matchAll(/F(\d+)(?:–F(\d+))?/g)].some((m) => Number(id.slice(1)) >= Number(m[1]) && Number(id.slice(1)) <= Number(m[2] ?? m[1]));
 const visible = (body: any, file: string): boolean => allText(body).includes(`MARKER ${file}: ${MARKERS[file]}`);
 
 const GATEWAY_KEYS = ["HOME", "LOCAL_LLM_ENDPOINT", "LOCAL_LLM_API_KEY", "LOCAL_LLM_CREDENTIAL_ORIGINS", "LOCAL_LLM_FALLBACK_ENDPOINTS"];
@@ -345,6 +350,8 @@ describe("D: findings checkpoint before shown output leaves the context", () => 
     return out;
   };
   const key = (file: string) => `read_file {"path":"${file}"}`;
+  /** A finding the durable record shows only condensed or indexed. */
+  const REDUCED = /\n\[(?:Condensed|Indexed only,) to fit this memory: /;
   const FILES = ["a.txt", "b.txt", "c.txt", "d.txt"];
   const PROMPT = "Read a.txt, b.txt, c.txt and d.txt one at a time, then report the marker word of each via task_completed.";
   /** Reads one file per step, then reports the markers it can still see (in tool output or in recorded findings). */
@@ -485,7 +492,7 @@ describe("D: findings checkpoint before shown output leaves the context", () => 
     });
   });
 
-  test("findings beyond the memory bound are shortened, oldest first, not dropped: each keeps its sources and what it began with", async () => {
+  test("findings beyond the memory bound are condensed, oldest first, never lost: each keeps its sources, says it is condensed, and is returned in full by read_findings", async () => {
     const MANY = Array.from({ length: 16 }, (_, i) => `f${i + 1}.txt`);
     const fact = (f: string) => `FACT ${f} holds marker mk-${f.slice(0, -4)}.`;
     await isolated(async (repo) => {
@@ -507,19 +514,33 @@ describe("D: findings checkpoint before shown output leaves the context", () => 
         const distilled = MANY.filter((f) => gw.checkpoints.some((c) => allText(c.body).includes(fact(f))));
         const notes = recordNotes(gw.requests.at(-1)!.body.messages);
         const findings = notes.filter((n) => n.startsWith("Findings recorded from inspected output ["));
-        assert.ok(findings.reduce((n, note) => n + note.length, 0) <= 24_000, "recorded findings stay within their bound");
-        assert.ok(findings.some((n) => n.endsWith(" …[shortened to fit this memory]")), "the findings outgrew the bound (else this proves nothing)");
+        const elided = notes.filter((n) => n.startsWith("[Nexus: recorded findings not shown here, to bound this memory: "));
+        assert.ok([...findings, ...elided].reduce((n, note) => n + note.length, 0) <= 24_000, "recorded findings stay within their bound");
+        const reduced = findings.filter((n) => REDUCED.test(n));
+        assert.ok(reduced.length || elided.length, "the findings outgrew the bound (else this proves nothing)");
+        for (const n of reduced) assert.match(n, /full text: read_findings \{"id":"F\d+"\}/, "a finding not shown in full says how to read it");
         assert.ok(!notes.includes("[Older recorded findings elided to bound this memory.]"));
-        assert.equal(notes.filter((n) => n.startsWith("[Nexus: your recorded findings have outgrown this memory.") && n.includes("Write what you have established into your work product now")).length, 1, "the model is told, once, to write what it has established before more is lost");
+        assert.equal(notes.filter((n) => n.startsWith("[Nexus: your recorded findings have outgrown this memory.") && n.includes("Write what you have established into your work product now") && n.includes("read_findings")).length, 1, "the model is told, once, to write what it has established, and how to read findings in full");
         const latestOutput = gw.requests.map((q) => String(q.body.messages.filter((m: any) => m.role === "tool").at(-1)?.content ?? ""));
         const outgrownAt = gw.requests.findIndex((q) => recordNotes(q.body.messages).some((n) => n.startsWith("[Nexus: your recorded findings have outgrown this memory.")));
         const alarmed = (output: string) => /^\[Nexus: your recorded findings have outgrown your memory;[^\]]*This is step \d+ of \d+\.\]\n/.test(output);
         assert.ok(outgrownAt > 0 && !latestOutput.slice(0, outgrownAt + 1).some(alarmed), "no alarm in output before the bound is passed");
         assert.ok(latestOutput.slice(outgrownAt + 1).some(alarmed), "after it is passed, the next output leads with it");
+        const kept: string[] = agent.getFindings();
         for (const f of distilled) {
-          assert.ok(findings.some((n) => n.split("\n", 1)[0].includes(`read_file {"path":"${f}"}`) && n.split("\n", 1)[0].endsWith("; model-written, not independent proof]") && n.includes(fact(f))), `${f}'s finding kept its sources and its start`);
+          const full = kept.find((n) => n.split("\n", 1)[0].includes(`read_file {"path":"${f}"}`) && n.includes(fact(f)));
+          assert.ok(full && full.endsWith("supporting detail"), `${f}'s finding is kept in full`);
+          const id = /^[^\n]*\[(F\d+); step \d+;/.exec(full!)![1];
+          const shown = findings.find((n) => n.includes(`[${id}; step `));
+          if (shown) {
+            assert.ok(shown.split("\n", 1)[0].includes(`read_file {"path":"${f}"}`) && shown.split("\n", 1)[0].endsWith("; model-written, not independent proof]"), `${f}'s finding keeps its sources`);
+            assert.ok(shown.includes(fact(f)) || shown.includes(f), `${f}'s finding still shows what it is about`);
+          } else {
+            assert.ok(elided.some((n) => namesFinding(n, id)), `${f}'s finding is named among those not shown`);
+          }
+          assert.equal(readFindings(kept, { id }).text, full, `read_findings returns ${id} in full`);
         }
-        assert.equal(new Set(findings.map((n) => n.split("\n", 1)[0])).size, findings.length, "one version of each finding");
+        assert.equal(new Set(findings.map((n) => /\[(F\d+); step /.exec(n)?.[1])).size, findings.length, "one version of each finding");
       } finally {
         agent.shutdown();
         await gw.close();
@@ -555,11 +576,11 @@ describe("D: findings checkpoint before shown output leaves the context", () => 
     });
   });
 
-  test("findings dropped to bound the memory are no longer claimed: removal notes say so, a re-run is not told, and they are recorded again", async () => {
+  test("findings not shown in full to bound the memory are claimed only as recoverable: removal notes and a re-run say read_findings returns them in full", async () => {
     const MANY = Array.from({ length: 16 }, (_, i) => `d${i + 1}.txt`);
     const LATER = ["x1.txt", "x2.txt", "x3.txt"];
     const fact = (f: string) => `FACT ${f} holds marker mk-${f.slice(0, -4)}.`;
-    const limit = 16_000;
+    const limit = 17_000;
     await isolated(async (repo) => {
       for (const f of [...MANY, ...LATER]) fs.writeFileSync(path.join(repo, f), `${fact(f)}\n${"filler line to occupy context budget\n".repeat(160)}`);
       const order = [...MANY, MANY[0], ...LATER];
@@ -576,16 +597,21 @@ describe("D: findings checkpoint before shown output leaves the context", () => 
         const reread = gw.requests.findIndex((q) => q.body.messages.filter((m: any) => m.role === "tool").length && q.n === MANY.length + 2);
         const rereadOutput = String(gw.requests[reread]?.body.messages.filter((m: any) => m.role === "tool").at(-1)?.content);
         const notesAtReread = recordNotes(gw.requests[reread].body.messages);
-        assert.ok(notesAtReread.includes("[Older recorded findings elided to bound this memory.]"), "findings were dropped (else this proves nothing)");
-        const held = notesAtReread.filter((n) => n.startsWith("Findings recorded from inspected output [")).map((n) => n.split("\n", 1)[0]);
-        assert.ok(!held.some((h) => h.includes(key(MANY[0]))), `${MANY[0]}'s finding was among those dropped`);
-        assert.ok(rereadOutput.includes(fact(MANY[0])), "the re-read output is the file");
-        assert.ok(!rereadOutput.includes("[Nexus: you ran this same call before"), "a re-run is not told dropped findings are in memory");
+        const shownFindings = notesAtReread.filter((n) => n.startsWith("Findings recorded from inspected output ["));
+        const inFull = shownFindings.filter((n) => !REDUCED.test(n)).map((n) => n.split("\n", 1)[0]);
+        const first = (agent.getFindings() as string[]).find((n) => n.split("\n", 1)[0].includes(key(MANY[0])))!;
+        const id = /\[(F\d+); step /.exec(first)![1];
+        assert.ok(Number(/; step (\d+); /.exec(first)![1]) < MANY.length + 1, `${MANY[0]}'s findings were recorded before the re-read (else this proves nothing)`);
+        assert.ok(!inFull.some((h) => h.includes(`[${id}; `)), `${MANY[0]}'s finding is not shown in full (else this proves nothing)`);
+        assert.ok(shownFindings.some((n) => n.includes(`[${id}; `)) || notesAtReread.some((n) => n.startsWith("[Nexus: recorded findings not shown here") && namesFinding(n, id)), `${MANY[0]}'s finding is still named`);
+        assert.ok(rereadOutput.includes(fact(MANY[0])), `the re-read output is the file: ${rereadOutput.slice(0, 600)}`);
+        assert.match(rereadOutput, new RegExp(`^(?:\\[Nexus: your recorded findings have outgrown your memory;[^\\]]*\\]\\n)?\\[Nexus: you ran this same call before; findings from its output were recorded at step \\d+ \\(${id}\\) and are in your memory\\.`), "a re-run is told which finding holds them and how to read it");
         for (const note of notesAtReread.filter((n) => n.startsWith("Inspected earlier; output no longer in context (findings recorded in this memory"))) {
-          assert.ok(held.some((h) => h.includes(note.slice(note.indexOf("): ") + 3))), `claimed but not held: ${note}`);
+          assert.ok(inFull.some((h) => h.includes(note.slice(note.indexOf("): ") + 3))), `claimed as shown but not shown in full: ${note}`);
         }
-        assert.ok(notesAtReread.includes(`Inspected earlier; output no longer in context (findings recorded from it were later dropped to bound this memory; re-run it if you need them): ${key(MANY[0])}`));
-        assert.ok(gw.checkpoints.filter((c) => allText(c.body).includes(fact(MANY[0]))).length >= 2, "the re-read output is recorded again when it leaves the context");
+        assert.ok(notesAtReread.includes(`Inspected earlier; output no longer in context (its findings are shown here condensed or by id; read_findings returns them in full): ${key(MANY[0])}`));
+        assert.ok(!notesAtReread.some((n) => n.startsWith("Inspected earlier; output no longer in context (findings recorded from it were later dropped")), "nothing recorded in this conversation is dropped");
+        assert.equal(readFindings(agent.getFindings(), { query: `mk-${MANY[0].slice(0, -4)}.` }).text.includes(fact(MANY[0])), true, "read_findings finds it by what it says");
       } finally {
         agent.shutdown();
         await gw.close();
@@ -593,22 +619,30 @@ describe("D: findings checkpoint before shown output leaves the context", () => 
     });
   });
 
-  test("across compactions findings keep their order and stay distinct: only a shortened copy gives way to its full finding", async () => {
+  test("across compactions findings keep their order and stay distinct: only a condensed or shortened copy gives way to its full finding", async () => {
     await isolated(async (repo) => {
       const agent = quiet(new AutonomousAgent({ endpoint: "http://127.0.0.1:9/v1", model: "m", maxSteps: 2, temperature: 0, workspace: repo, shell: "bash", contextLimit: 16_384 } as any)) as any;
       try {
-        const finding = (n: number, body: string) => `Findings recorded from inspected output [step ${n}; from ${key(`g${n}.txt`)}; model-written, not independent proof]\n${body}`;
+        const finding = (n: number, body: string) => `Findings recorded from inspected output [F${n}; step ${n}; from ${key(`g${n}.txt`)}; model-written, not independent proof]\n${body}`;
+        const legacy = (n: number, body: string) => `Findings recorded from inspected output [step ${n}; from ${key(`g${n}.txt`)}; model-written, not independent proof]\n${body}`;
         const findingsOf = (content: string) => (JSON.parse(content.slice(DURABLE.length)).notes as string[]).filter((n) => n.startsWith("Findings recorded from inspected output ["));
         const bodyOf = (n: number) => `G${n} ${"detail ".repeat(140)}`;
         for (let n = 1; n <= 8; n++) agent.findingNotes.push(finding(n, bodyOf(n)));
         const first = agent.summarizeDiscardedHistory([{ role: "assistant", content: "next" }], 0, new Set());
         agent.findingNotes.push(finding(9, bodyOf(9)));
         const second = findingsOf(agent.summarizeDiscardedHistory([{ role: "system", content: first.content }, { role: "assistant", content: "next" }], 0, new Set()).content);
-        assert.deepEqual(second.map((n) => /\nG(\d+) /.exec(n)?.[1]), ["1", "2", "3", "4", "5", "6", "7", "8", "9"], "oldest first, in the order recorded");
-        const shortened = second.map((n) => n.endsWith(" …[shortened to fit this memory]"));
-        assert.ok(shortened.some(Boolean) && shortened.indexOf(false) > 0 && shortened.slice(shortened.indexOf(false)).every((s) => !s), `the oldest are the shortened ones: ${shortened}`);
+        assert.deepEqual(second.map((n) => /\[F(\d+); step /.exec(n)?.[1]), ["1", "2", "3", "4", "5", "6", "7", "8", "9"], "oldest first, in the order recorded");
+        // 0 shown in full, 1 condensed, 2 indexed: no finding is reduced more than an older one, and the oldest most.
+        const levels = second.map((n) => (n.includes("\n[Indexed only, to fit this memory: ") ? 2 : n.includes("\n[Condensed to fit this memory: ") ? 1 : 0));
+        assert.ok(levels[0] > levels.at(-1)! && levels.every((level, i) => i === 0 || level <= levels[i - 1]), `the oldest are the most reduced: ${levels}`);
+        for (const n of second.filter((n) => REDUCED.test(n))) assert.match(n, /read_findings \{"id":"F\d+"\}/);
+        // A copy an earlier version shortened gives way, in its place, to the full finding it was cut from.
+        const cut = `${legacy(3, `OLD: version=1 ${"detail ".repeat(40)}`).slice(0, 200)} …[shortened to fit this memory]`;
+        agent.findingNotes.splice(0, agent.findingNotes.length, legacy(3, `OLD: version=1 ${"detail ".repeat(40)}`));
+        const restored = findingsOf(agent.summarizeDiscardedHistory([{ role: "system", content: `${DURABLE}${JSON.stringify({ version: 2, notes: [cut] })}` }, { role: "assistant", content: "next" }], 0, new Set()).content);
+        assert.deepEqual(restored, [legacy(3, `OLD: version=1 ${"detail ".repeat(40)}`)]);
         // A same-header finding from a later turn, from different output, is not merged into the earlier one.
-        agent.findingNotes.splice(0, agent.findingNotes.length, finding(3, `OLD: version=1 ${"detail ".repeat(40)}`), finding(3, "NEW: version=2."));
+        agent.findingNotes.splice(0, agent.findingNotes.length, legacy(3, `OLD: version=1 ${"detail ".repeat(40)}`), legacy(3, "NEW: version=2."));
         const collided = findingsOf(agent.summarizeDiscardedHistory([{ role: "assistant", content: "next" }], 0, new Set()).content);
         assert.ok(collided.some((n) => n.includes("OLD: version=1")) && collided.some((n) => n.includes("NEW: version=2.")), collided.join("\n---\n"));
       } finally {
@@ -851,7 +885,7 @@ describe("D: findings checkpoint before shown output leaves the context", () => 
           await muted(() => agent.runTurn(PROMPT));
           const reread = gw.requests[FILES.length + 1].body.messages.filter((m: any) => m.role === "tool").at(-1);
           // The note leads the output, so it survives when an oversized result is cut to its beginning.
-          const notice = /^\[Nexus: you ran this same call before; findings from its output were recorded at step (\d+) and are in your memory\. This output is (identical to|different from) the output they were recorded from\. This is step (\d+) of 8\.[^\]]*\]\n/.exec(String(reread?.content));
+          const notice = /^\[Nexus: you ran this same call before; findings from its output were recorded at step (\d+) \(F\d+\) and are in your memory\. This output is (identical to|different from) the output they were recorded from\. This is step (\d+) of 8\.[^\]]*\]\n/.exec(String(reread?.content));
           assert.ok(notice, String(reread?.content).slice(-400));
           assert.equal(notice[2], changeSource ? "different from" : "identical to");
           assert.equal(Number(notice[3]), FILES.length + 1);
@@ -1188,6 +1222,249 @@ describe("F: an empty reply is not an answer", () => {
           await gw.close();
         }
       });
+    }
+  });
+});
+
+describe("G: recorded findings under memory pressure stay distinct, sourced and recoverable; cut-off output cannot show absence", () => {
+  const DURABLE = "[Structured Context Memory - durable task state]\n";
+  const REPO_ROOT = path.resolve(import.meta.dirname, "../..");
+  const LABEL = "; model-written, not independent proof]";
+  const finding = (n: number, sources: string, body: string) => `Findings recorded from inspected output [F${n}; step ${n}; from ${sources}${LABEL}\n${body}`;
+  const notesOf = (content: string): string[] => JSON.parse(content.slice(DURABLE.length)).notes;
+  const LATE = "cli/src/tools.ts:380 calls spawnSync on the harness-core binary resolved at tools.ts:14-17 (RustCoreBridge).";
+  /** A long finding whose decisive fact is its last claim, after many that name nothing. */
+  const longWithLateFact = (n: number) => finding(n, `run_command {"command":"grep -rn spawn cli/src"}`, [
+    ...Array.from({ length: 13 }, (_, i) => `- Line group ${i + 1} of the output lists ordinary matches with nothing notable in them at all.`),
+    `- ${LATE}`,
+  ].join("\n"));
+  const filler = (n: number) => finding(n, `read_file {"path":"doc${n}.md"}`, `doc${n}.md describes topic ${n}. ${"It repeats background detail at length. ".repeat(30)}`);
+  const agentAt = (repo: string, contextLimit = 65_536) =>
+    quiet(new AutonomousAgent({ endpoint: "http://127.0.0.1:9/v1", model: "m", maxSteps: 2, temperature: 0, workspace: repo, shell: "bash", contextLimit } as any)) as any;
+
+  test("a fact late in a long finding survives condensing as a claim or a mention, and read_findings returns it in full", () => {
+    const note = longWithLateFact(12);
+    const condensed = condenseFinding(note);
+    assert.ok(condensed.length < note.length);
+    assert.match(condensed, /\[Condensed to fit this memory: 14 claims, \d+ not shown; full text: read_findings \{"id":"F12"\}\]/);
+    assert.ok(condensed.includes(LATE) || ["cli/src/tools.ts:380", "harness-core", "RustCoreBridge"].every((term) => condensed.includes(term)), condensed);
+    assert.equal(readFindings([note], { id: "f12" }).text, note);
+    assert.equal(readFindings([filler(1), note], { query: "HARNESS-CORE" }).text, note);
+    assert.match(readFindings([note], { query: "execFileSync" }).text, /^No recorded finding mentions "execFileSync"\. This searches only the findings recorded in this conversation, not the workspace: it does not show that the workspace lacks it\.$/);
+  });
+
+  test("findings far beyond the 24K bound: the record stays within it, every finding is shown or named, and a late fact stays visible and recoverable", async () => {
+    await isolated(async (repo) => {
+      const agent = agentAt(repo);
+      try {
+        const store = [filler(1), filler(2), longWithLateFact(3), ...Array.from({ length: 60 }, (_, i) => filler(i + 4))];
+        assert.ok(store.reduce((n, note) => n + note.length, 0) > 73_700, "more than the dogfood run's 73.7K");
+        agent.restoreFindings(store);
+        const notes = notesOf(agent.summarizeDiscardedHistory([{ role: "assistant", content: "next" }], 0, new Set()).content);
+        const shown = notes.filter((n) => n.startsWith("Findings recorded from inspected output ["));
+        const elided = notes.filter((n) => n.startsWith("[Nexus: recorded findings not shown here, to bound this memory: "));
+        assert.ok([...shown, ...elided].reduce((n, note) => n + note.length, 0) <= 24_000);
+        assert.ok(elided.length <= 1, "those not shown are named in one note");
+        for (const note of store) {
+          const id = /\[(F\d+); /.exec(note)![1];
+          assert.ok(shown.some((n) => n.includes(`[${id}; `)) || namesFinding(elided[0] ?? "", id), `${id} is shown or named`);
+        }
+        const record = [...shown, ...elided].join("\n");
+        assert.ok(["tools.ts:380", "harness-core"].every((term) => record.includes(term)), "the late fact's references are still in the memory");
+        assert.ok(shown.at(-1) === store.at(-1), "the newest finding is shown in full");
+        assert.equal(agent.getFindings().length, store.length, "nothing leaves the store");
+        assert.ok(readFindings(agent.getFindings(), { query: "harness-core" }).text.includes(LATE));
+        assert.equal(agent.findingsOutgrown, true);
+        assert.equal(agent.findingsCondensed, true);
+      } finally {
+        agent.shutdown();
+      }
+    });
+  });
+
+  test("conflicting findings are both kept, in order and unmerged, and a search of the findings returns both", async () => {
+    await isolated(async (repo) => {
+      const agent = agentAt(repo, 16_384);
+      try {
+        const positive = finding(1, `run_command {"command":"grep -rn harness-core cli/src"}`, "cli/src/tools.ts:380 launches harness-core with spawnSync.\ncli/src/tools.ts:416 keeps it as a persistent JSON-RPC daemon.");
+        const negative = finding(2, `run_command {"command":"grep -rn spawn cli/src | head -20"}`, "The first 20 matches show no TypeScript file that spawns harness-core.");
+        agent.restoreFindings([positive, negative, ...Array.from({ length: 12 }, (_, i) => filler(i + 3))]);
+        const notes = notesOf(agent.summarizeDiscardedHistory([{ role: "assistant", content: "next" }], 0, new Set()).content);
+        const memory = notes.filter((n) => n.startsWith("Findings recorded") || n.startsWith("[Nexus: recorded findings not shown")).join("\n---\n");
+        for (const id of ["F1", "F2"]) assert.ok(memory.includes(`[${id}; `) || namesFinding(memory, id), `${id} is still in the memory`);
+        assert.equal(readFindings(agent.getFindings(), { query: "harness-core" }).text, `${positive}\n\n${negative}`);
+      } finally {
+        agent.shutdown();
+      }
+    });
+  });
+
+  test("a condensed finding keeps its source list's start, every source it came from stays held, and its removal note says how to read it", async () => {
+    await isolated(async (repo) => {
+      const agent = agentAt(repo);
+      try {
+        const commands = Array.from({ length: 12 }, (_, i) => ({ command: `grep -c alpha${i} a.txt ${"--include=x ".repeat(40)}` }));
+        const keys = commands.map((c) => observationKey("run_command", JSON.stringify(c)));
+        const runs = commands.flatMap((c, i) => [
+          { role: "assistant" as const, content: "", tool_calls: [{ id: `e${i}`, type: "function" as const, function: { name: "run_command", arguments: JSON.stringify(c) } }] },
+          { role: "tool" as const, tool_call_id: `e${i}`, name: "run_command", content: "alpha\n".repeat(200) },
+        ]);
+        await agent.recordFindings({ chatCompletion: async () => ({ content: `a.txt has alpha on every line. ${"Each match is the same plain line. ".repeat(60)}` }) }, 2, [{ role: "system", content: "sys" }, { role: "user", content: "go" }, ...runs, { role: "assistant", content: "next" }], keys);
+        const [recorded] = agent.getFindings();
+        agent.restoreFindings([recorded, ...Array.from({ length: 24 }, (_, i) => filler(i + 2))]);
+        agent.findingSources.set("F1", new Set(keys));
+        for (const k of keys) agent.distilledObservations.set(k, { step: 2, id: "F1" });
+        const notes = notesOf(agent.summarizeDiscardedHistory([...runs, { role: "assistant", content: "next" }], 0, new Set()).content);
+        const shown = notes.find((n) => n.includes("[F1; step 2; "))!;
+        const header = shown.split("\n", 1)[0];
+        assert.match(shown, /\n\[(Condensed|Indexed only,) to fit this memory: /);
+        assert.ok(header.startsWith(`Findings recorded from inspected output [F1; step 2; from ${keys[0]}`) && header.endsWith(LABEL) && header.includes("(more sources in its full text)"), header);
+        assert.ok(header.length < recorded.split("\n", 1)[0].length);
+        for (const k of keys) {
+          assert.ok(notes.includes(`Inspected earlier; output no longer in context (its findings are shown here condensed or by id; read_findings returns them in full): ${k}`), k.slice(0, 60));
+        }
+        assert.ok(readFindings(agent.getFindings(), { id: "F1" }).text.split("\n", 1)[0].includes(keys[5]), "the full text lists the sources the header cut");
+      } finally {
+        agent.shutdown();
+      }
+    });
+  });
+
+  test("findings persist with the task state: a restart restores them in full, and the next finding continues their ids", async () => {
+    await isolated(async (repo) => {
+      const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-cc-state-"));
+      const withState = (a: any) => {
+        a.stateManager = new DurableStateManager({ baseDir: stateDir, workspacePaths: [a.primaryWorkspacePathIdentity] });
+        return a;
+      };
+      const first = withState(agentAt(repo));
+      let second: any;
+      try {
+        const store = [longWithLateFact(1), filler(2), filler(3)];
+        first.restoreFindings(store);
+        first.checkpointDurableState("before restart");
+        const taskId = first.getTaskId();
+        second = withState(agentAt(repo));
+        await second.recoverFromTaskState(taskId);
+        assert.deepEqual(second.getFindings(), store);
+        const call = { id: "c1", type: "function", function: { name: "read_file", arguments: JSON.stringify({ path: "x.txt" }) } };
+        await second.recordFindings({ chatCompletion: async () => ({ content: "x.txt reads xray." }) }, 9, [{ role: "system", content: "sys" }, { role: "user", content: "go" }, { role: "assistant", content: "", tool_calls: [call] }, { role: "tool", tool_call_id: "c1", name: "read_file", content: "xray" }, { role: "assistant", content: "next" }], [`read_file {"path":"x.txt"}`]);
+        assert.match(second.getFindings().at(-1), /^Findings recorded from inspected output \[F4; step 9; /);
+        assert.ok(readFindings(second.getFindings(), { query: "harness-core" }).text.includes(LATE));
+      } finally {
+        first.shutdown();
+        second?.shutdown();
+        fs.rmSync(stateDir, { recursive: true, force: true });
+      }
+    });
+  });
+
+  test("a step's notices stay with that step: durable notes and findings checkpoints get only what the tool returned", async () => {
+    await isolated(async (repo) => {
+      const agent = agentAt(repo);
+      try {
+        const call = { id: "c1", type: "function" as const, function: { name: "read_file", arguments: JSON.stringify({ path: "a.txt" }) } };
+        agent.distilledObservations.set(`read_file {"path":"a.txt"}`, { step: 3, digest: "x", id: "F1" });
+        agent.findingsCondensed = true;
+        const content = agent.toolResultContent(call, '{"content":"alpha"}', 100, 120);
+        assert.match(content, /^\[Nexus: this is step 100 of 120;[^\]]*check with read_findings any claim that something is absent[^\]]*\]\n\[Nexus: you ran this same call before; findings from its output were recorded at step 3 \(F1\) and are in your memory\./);
+        const history = [{ role: "assistant", content: "", tool_calls: [call] }, { role: "tool", tool_call_id: "c1", name: "read_file", content }, { role: "assistant", content: "next" }];
+        const notes = notesOf(agent.summarizeDiscardedHistory(history, 6_000, new Set()).content);
+        assert.ok(notes.includes('Earlier read_file output: {"content":"alpha"}'), notes.join("\n"));
+        assert.ok(!notes.some((n) => n.includes("[Nexus: this is step") || n.includes("you ran this same call before")));
+        let seen = "";
+        agent.distilledObservations.clear();
+        await agent.recordFindings({ chatCompletion: async (prompt: any[]) => { seen = String(prompt[1].content); return { content: "a.txt reads alpha." }; } }, 101, [{ role: "system", content: "sys" }, { role: "user", content: "go" }, ...history], [`read_file {"path":"a.txt"}`]);
+        assert.ok(seen.includes('{"content":"alpha"}') && !seen.includes("[Nexus: this is step"), seen);
+        agent.findingsCondensed = false;
+        agent.stepNoticeStep = 0;
+        assert.ok(!agent.toolResultContent({ ...call, id: "c2" }, "beta", 101, 120).includes("read_findings"), "without condensed findings the closing notice is unchanged");
+      } finally {
+        agent.shutdown();
+      }
+    });
+  });
+
+  test("the model can read its findings through the read_findings tool", async () => {
+    await isolated(async (repo) => {
+      const late = "Late in the output: a.txt names the launcher harness-core at line 999.";
+      const gw = await gateway(
+        (r) => (r.n <= 3 ? { tools: [read(["a.txt", "b.txt", "c.txt"][r.n - 1])] } : r.n === 4 ? { tools: [{ name: "read_findings", args: { query: "copper-falcon" } }] } : { tools: [done("stop")] }),
+        (r) => (visible(r.body, "a.txt") ? `a.txt starts with marker ${MARKERS["a.txt"]}. ${"It continues with records. ".repeat(40)}${late}` : ""),
+      );
+      const agent = quiet(new AutonomousAgent(cfg(gw, repo, { maxSteps: 6 })));
+      try {
+        await muted(() => agent.runTurn("Read a.txt, b.txt and c.txt, then report."));
+        assert.ok(gw.requests[0].body.tools.some((t: any) => t.function?.name === "read_findings"));
+        assert.ok(agent.getFindings().some((n) => n.includes(late)), "a finding was recorded (else this proves nothing)");
+        const output = String(gw.requests[4].body.messages.filter((m: any) => m.role === "tool").at(-1)?.content);
+        assert.ok(output.includes(late) && output.includes("[F1; step "), output.slice(0, 400));
+      } finally {
+        agent.shutdown();
+        await gw.close();
+      }
+    });
+  });
+
+  test("the model sees, as part of the output, that a head-limited command and a depth-bounded file_tree may not show everything", async () => {
+    await isolated(async (repo) => {
+      fs.mkdirSync(path.join(repo, "src", "deep"), { recursive: true });
+      fs.writeFileSync(path.join(repo, "src", "deep", "x.ts"), "export const x = 1;\n");
+      const gw = await gateway((r) => (r.n === 1 ? { tools: [{ name: "run_command", args: { command: "seq 1 50 | head -20" } }, { name: "file_tree", args: { path: ".", max_depth: 1 } }] } : { tools: [done("stop")] }));
+      const agent = quiet(new AutonomousAgent(cfg(gw, repo, { maxSteps: 20 })));
+      try {
+        await muted(() => agent.runTurn("List what is here."));
+        const outputs = gw.requests[1].body.messages.filter((m: any) => m.role === "tool").map((m: any) => String(m.content));
+        assert.match(outputs[0], /^\[Nexus: this output may be incomplete: the command limits what it prints \(`head -20`\) and printed at least 20 lines\./);
+        assert.match(outputs[1], /^\[Nexus: file_tree stops at max_depth 1: the contents of 1 directory at that depth are not listed/);
+      } finally {
+        agent.shutdown();
+        await gw.close();
+      }
+    });
+  });
+
+  test("output cut short by a limit says so: a head-limited command, a fold, a search at its cap, and file_tree's depth", () => {
+    const run = (command: string, stdout: string) => JSON.stringify({ command, exit_code: 0, stdout, stderr: "" }, null, 2);
+    const twenty = Array.from({ length: 20 }, (_, i) => `f${i}.ts:1: spawn`).join("\n") + "\n";
+    assert.match(incompleteOutputNotice("run_command", { command: "grep -rn spawn src | head -20" }, run("grep -rn spawn src | head -20", twenty))!, /`head -20`\) and printed at least 20 lines[^\]]*do not take a missing match here as absence/);
+    assert.equal(incompleteOutputNotice("run_command", { command: "grep -rn spawn src | head -20" }, run("grep -rn spawn src | head -20", "a.ts:1: spawn\n")), undefined, "fewer lines than the limit: nothing was cut");
+    assert.ok(incompleteOutputNotice("run_command", { command: "git log | head" }, run("git log | head", "x\n".repeat(10))), "a bare head limits to 10");
+    assert.equal(incompleteOutputNotice("run_command", { command: "head -c 100 a.bin" }, run("head -c 100 a.bin", "x")), undefined);
+    const cut = `${run("grep -rn x .", "y\n".repeat(3000)).slice(0, 4000)}\n... [TRUNCATED]`;
+    assert.match(incompleteOutputNotice("run_command", { command: "grep -rn x ." }, cut)!, /its output was cut to fit/);
+    assert.match(incompleteOutputNotice("run_command", { command: "grep -rn x . | head -50" }, cut)!, /`head -50`\) and printed at least 50 lines; and its output was cut to fit/, "a cut output still counts the lines it shows");
+    assert.ok(incompleteOutputNotice("search_code", { query: "x" }, JSON.stringify({ matches: [], total_matches: 50 })));
+    assert.equal(incompleteOutputNotice("search_code", { query: "x" }, JSON.stringify({ matches: [], total_matches: 49 })), undefined);
+    assert.equal(incompleteOutputNotice("read_findings", { query: "x" }, "No recorded finding mentions"), undefined);
+  });
+
+  test("against this repository: a depth-bounded file_tree count is marked as not the tracked-file count, and a head-limited search as unable to show absence", async () => {
+    const bridge = new RustCoreBridge(REPO_ROOT, "bash");
+    try {
+      const tracked = execSync("git ls-files", { cwd: REPO_ROOT, encoding: "utf-8" }).split("\n").filter(Boolean).length;
+      const tree = await bridge.executeTool("file_tree", { path: ".", max_depth: 3 });
+      assert.ok(tree.success, tree.error);
+      const listed = JSON.parse(tree.output).total_files;
+      assert.notEqual(listed, tracked, "file_tree at depth 3 does not count every tracked file (else this proves nothing)");
+      const treeNotice = incompleteOutputNotice("file_tree", { path: ".", max_depth: 3 }, tree.output);
+      assert.ok(treeNotice?.includes(`total_files (${listed})`) && treeNotice.includes("not the files in the workspace or in git"), treeNotice);
+
+      // The repository's own evidence: which files under cli/src mention launching a process, in full and cut to 20 lines.
+      const command = 'grep -rn -E "spawn|execFile" cli/src --include=*.ts | head -20';
+      const full = execSync('grep -rn -E "spawn|execFile" cli/src --include=*.ts || true', { cwd: REPO_ROOT, encoding: "utf-8" }).split("\n").filter(Boolean);
+      const launcher = full.filter((line) => line.startsWith("cli/src/tools.ts:"));
+      assert.ok(launcher.length && /harness-core/.test(fs.readFileSync(path.join(REPO_ROOT, "cli/src/tools.ts"), "utf-8")), "tools.ts launches the Rust core (repository evidence)");
+      const limited = await bridge.executeTool("run_command", { command });
+      assert.ok(limited.success, limited.error);
+      if (full.length >= 20) {
+        assert.match(incompleteOutputNotice("run_command", { command }, limited.output)!, /do not take a missing match here as absence/);
+      }
+      if (!JSON.parse(limited.output).stdout.includes("cli/src/tools.ts:")) {
+        assert.ok(incompleteOutputNotice("run_command", { command }, limited.output), "a cut search that misses the launcher says it may have");
+      }
+    } finally {
+      bridge.shutdown();
     }
   });
 });

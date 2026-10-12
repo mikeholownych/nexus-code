@@ -99,6 +99,17 @@ import {
   recordAttempt,
   renderPinnedLedger,
 } from "./core/objective.js";
+import {
+  ELIDED_FINDINGS_PREFIX,
+  READ_FINDINGS_CAPABILITY,
+  condenseFinding,
+  elidedFindingsNote,
+  findingId,
+  incompleteOutputNotice,
+  indexFinding,
+  isCondensedFinding,
+  readFindings,
+} from "./core/findings.js";
 import { FileChange, describeChange, editTarget, snapshot } from "./file_diff.js";
 import type { TurnReason } from "./core/turn.js";
 import pc from "picocolors";
@@ -210,8 +221,9 @@ const REMOVED_PARTIAL = "Shown to you only in part (truncated); output no longer
 const REMOVED_CHANGED = "Source changed after you inspected it; output no longer in context (re-read it for current content): ";
 const REMOVED_RECORDED = "Inspected earlier; output no longer in context (findings recorded in this memory; re-run only for a detail they lack or if the source may have changed): ";
 const REMOVED_UNRECORDED = "Inspected earlier; output no longer in context (no findings were recorded from it): ";
+const REMOVED_CONDENSED = "Inspected earlier; output no longer in context (its findings are shown here condensed or by id; read_findings returns them in full): ";
 const REMOVED_DROPPED = "Inspected earlier; output no longer in context (findings recorded from it were later dropped to bound this memory; re-run it if you need them): ";
-const REMOVAL_PREFIXES = [REMOVED_OBSERVATION, REMOVED_UNSEEN, REMOVED_PARTIAL, REMOVED_CHANGED, REMOVED_RECORDED, REMOVED_UNRECORDED, REMOVED_DROPPED];
+const REMOVAL_PREFIXES = [REMOVED_OBSERVATION, REMOVED_UNSEEN, REMOVED_PARTIAL, REMOVED_CHANGED, REMOVED_RECORDED, REMOVED_CONDENSED, REMOVED_UNRECORDED, REMOVED_DROPPED];
 
 // Everything else the memory notes (requests, files, commands, queries, removals) has its own bound beside findings
 // and raw detail. Past it the oldest commands, then file and query notes, then removal notes give way. Omitted
@@ -250,11 +262,10 @@ const FINDINGS_PREFIX = "Findings recorded from inspected output [";
 const FINDINGS_LABEL = "; model-written, not independent proof]";
 const FINDINGS_NOTE_LIMIT = 3_000;
 const FINDINGS_BUDGET_CHARS = 24_000;
-const FINDINGS_ELISION = "[Older recorded findings elided to bound this memory.]";
-const FINDINGS_SHORT_CHARS = 400;
-const FINDINGS_SHORTENED = " …[shortened to fit this memory]";
-const FINDINGS_OUTGROWN = "[Nexus: your recorded findings have outgrown this memory. The oldest are shortened, then dropped, as more are recorded, so what is established only here will be lost. Write what you have established into your work product now (the file or change your task produces; if it produces none, state it in your reply), then continue with what remains.]";
-const FINDINGS_INSTRUCTIONS = "You keep the working notes of an autonomous software-engineering agent. The tool output below is about to be removed from the agent's context window. Record, for the agent's current request, what this output actually shows: concrete facts with file paths, symbol names and line numbers, and anything it shows to be missing or inconsistent. State only what the output itself shows; do not speculate, plan, or restate the request. If the output is irrelevant to the request, say so in one line. Plain text, at most 250 words.";
+/** How an earlier version marked a finding it cut to its start; such copies are still read from persisted records. */
+const LEGACY_SHORTENED = " …[shortened to fit this memory]";
+const FINDINGS_OUTGROWN = "[Nexus: your recorded findings have outgrown this memory. As more are recorded, the oldest are shown condensed, then only indexed, then only listed by id; read_findings returns any of them in full. Write what you have established into your work product now (the file or change your task produces; if it produces none, state it in the task_completed summary), and before stating that something is absent or never happens, check your findings with read_findings; then continue with what remains.]";
+const FINDINGS_INSTRUCTIONS = "You keep the working notes of an autonomous software-engineering agent. The tool output below is about to be removed from the agent's context window. Record, for the agent's current request, what this output actually shows: concrete facts with file paths, symbol names and line numbers, and anything it shows to be missing or inconsistent. Write each fact as its own line, with the file path or symbol it concerns. State only what the output itself shows; do not speculate, plan, or restate the request. Where output is marked as cut off, limited or incomplete, say what it could not show, and do not record that something is absent on the strength of it. If the output is irrelevant to the request, say so in one line. Plain text, at most 250 words.";
 
 function unseenTruncationNotice(shown: number, total: number): string {
   return `\n[Nexus: output truncated to fit the context window; showed the first ${shown} of ${total} characters. The rest was not shown to you, so do not assume what it contains. Note what you learned from this part, then inspect the specific parts you still need with narrower calls (read_file with start_line/end_line, outline_file, search_code) instead of repeating this one.]`;
@@ -351,15 +362,21 @@ function outputDigest(text: string): string {
   return createHash("sha256").update(text).digest("hex");
 }
 
-/** A findings note cut to its header and the start of its text (at a sentence end where one is near), marked as cut. */
-function shortenedFinding(note: string): string {
-  const newline = note.indexOf("\n");
-  const body = newline < 0 ? "" : note.slice(newline + 1);
-  if (body.length <= FINDINGS_SHORT_CHARS || body.endsWith(FINDINGS_SHORTENED)) return note;
-  let cut = body.slice(0, FINDINGS_SHORT_CHARS);
-  const sentence = cut.lastIndexOf(". ");
-  if (sentence > FINDINGS_SHORT_CHARS / 2) cut = cut.slice(0, sentence + 1);
-  return `${note.slice(0, newline)}\n${cut}${FINDINGS_SHORTENED}`;
+/** A tool output without the notes toolResultContent put before it for this step (not part of what the tool returned). */
+function withoutStepNotices(text: string): string {
+  return text.replace(STEP_NOTICE, "").replace(RERUN_NOTICE, "");
+}
+
+/** Where a finding's note in the memory came from: its id, or, for one recorded without ids, its header. */
+function findingIdentity(note: string): string {
+  return findingId(note) ?? note.split("\n", 1)[0];
+}
+
+/** Whether `short` is a copy an earlier version shortened from `full` (a finding without an id, cut to its start). */
+function shortenedFrom(short: string, full: string): boolean {
+  const header = short.split("\n", 1)[0];
+  if (short === full || !short.endsWith(LEGACY_SHORTENED) || full.split("\n", 1)[0] !== header) return false;
+  return full.slice(header.length + 1).startsWith(short.slice(header.length + 1, -LEGACY_SHORTENED.length));
 }
 
 /** Findings notes of a serialized durable record, including records nested in it as opaque system text. */
@@ -637,13 +654,18 @@ export class AutonomousAgent {
   /** Removals recorded in a recovered conversation; the next (resumed) turn starts with them. */
   private carriedRemovedObservations = new Set<string>();
   // Findings the model recorded from inspected output just before compaction removed it, and those observations.
+  // Their full text is kept here (and persisted with the session) however the durable record shows them.
   private findingNotes: string[] = [];
+  /** Number of the last finding id (F<n>) given out. */
+  private findingSeq = 0;
   /** Observations whose findings were recorded: the step they were recorded at and the digest of the output they came from. */
-  private distilledObservations = new Map<string, { step: number; digest?: string }>();
-  /** The observations each finding recorded in this process came from, by its header (which caps their list). */
+  private distilledObservations = new Map<string, { step: number; digest?: string; id?: string }>();
+  /** The observations each finding recorded in this process came from, by its identity (its header caps their list). */
   private findingSources = new Map<string, Set<string>>();
   /** Whether the last durable record this turn had more findings than their bound, and the step last told its state. */
   private findingsOutgrown = false;
+  /** Whether the last durable record showed any finding only condensed, indexed or not at all. */
+  private findingsCondensed = false;
   private stepNoticeStep = 0;
   /** Provider recovery bounds; undefined reads LOCAL_LLM_RECOVERY_* at each turn. */
   private recoveryPolicy?: RecoveryPolicy;
@@ -881,6 +903,7 @@ export class AutonomousAgent {
       this.capabilityRegistry.register(REQUIREMENTS_CAPABILITY);
       this.capabilityRegistry.register(READ_OBJECTIVE_CAPABILITY);
     }
+    this.capabilityRegistry.register(READ_FINDINGS_CAPABILITY);
     this.setupSpineHandlers();
     this.stateManager = new DurableStateManager({ workspacePaths: [this.primaryWorkspacePathIdentity] });
     if (typeof (this.client as any)?.setTaskId === "function") this.client.setTaskId(this.currentTaskId);
@@ -961,6 +984,7 @@ export class AutonomousAgent {
       durableNotes: notes ? [notes] : undefined,
       providerRecovery: this.activeProviderRecovery,
       objective: this.objective ?? null,
+      findings: this.getFindings(),
       history: this.getHistoryCompleteness(),
       tokenStats: { ...this.totalTokens },
       cognitiveRouting: {
@@ -1010,10 +1034,7 @@ export class AutonomousAgent {
     this.currentTaskId = state.taskId;
     this.activePlan = state.activePlan || [];
     this.messages = state.messages || [];
-    this.findingNotes = [];
-    this.distilledObservations = new Map();
-    this.findingSources = new Map();
-    this.findingsOutgrown = false;
+    this.restoreFindings(state.findings);
     this.objective = state.objective ?? undefined;
     const unsettled = this.settleUnrecordedToolCalls();
     // Resumed work is the same unit: what compaction removed before the restart is still not in context.
@@ -1215,6 +1236,7 @@ export class AutonomousAgent {
     return [
       ...HARNESS_TOOLS,
       ...(this.depth === 0 ? [REQUIREMENTS_CAPABILITY.toolDefinition as ToolDefinition, READ_OBJECTIVE_CAPABILITY.toolDefinition as ToolDefinition] : []),
+      READ_FINDINGS_CAPABILITY.toolDefinition as ToolDefinition,
       ...this.mcpManager.getToolDefinitions(),
       ...this.pluginManager.getCustomToolDefinitions(),
     ];
@@ -1236,12 +1258,24 @@ export class AutonomousAgent {
    * Continues a saved interactive session: its conversation and its outstanding verification obligation. A session
    * saved before the obligation was recorded has an unknown obligation, which counts as pending.
    */
-  public restoreSession(msgs: ChatMessage[], unverifiedChangesPending?: boolean, objective?: ObjectiveLedger | null): void {
-    this.messages = [...msgs];
-    this.findingNotes = [];
+  /** Full text of the findings recorded in this conversation, oldest first (persisted with the session). */
+  public getFindings(): string[] {
+    return [...this.findingNotes];
+  }
+
+  /** Starts from `findings` as the conversation's recorded findings (none when absent); later ids follow theirs. */
+  private restoreFindings(findings: readonly unknown[] | null | undefined): void {
+    this.findingNotes = (findings ?? []).filter((note): note is string => typeof note === "string" && note.startsWith(FINDINGS_PREFIX));
+    this.findingSeq = this.findingNotes.reduce((max, note) => Math.max(max, Number(findingId(note)?.slice(1) ?? 0)), 0);
     this.distilledObservations = new Map();
     this.findingSources = new Map();
     this.findingsOutgrown = false;
+    this.findingsCondensed = false;
+  }
+
+  public restoreSession(msgs: ChatMessage[], unverifiedChangesPending?: boolean, objective?: ObjectiveLedger | null, findings?: readonly string[] | null): void {
+    this.messages = [...msgs];
+    this.restoreFindings(findings);
     this.objective = objective ?? undefined;
     if (this.objective) {
       // Steering that was queued but never applied when the session was saved is not silently dropped: it is shown
@@ -1336,10 +1370,7 @@ export class AutonomousAgent {
   }
 
   public resetConversation(): void {
-    this.findingNotes = [];
-    this.distilledObservations = new Map();
-    this.findingSources = new Map();
-    this.findingsOutgrown = false;
+    this.restoreFindings(undefined);
     this.stepNoticeStep = 0;
     this.objective = undefined;
     this.compactions = 0;
@@ -1811,59 +1842,89 @@ export class AutonomousAgent {
       if (message.role === "tool") {
         const id = typeof message.tool_call_id === "string" && message.tool_call_id.trim() ? message.tool_call_id : undefined;
         const key = id ? callKeys.get(id) : undefined;
+        // A step's notices were for that step: a durable note keeps only what the tool returned.
+        const outputText = withoutStepNotices(contentText);
         if (key) (unseen.has(message) ? unseenKeys : seenKeys).add(key);
         if (key && isTruncatedObservation(message)) {
           partialObservations.add(key);
-        } else if (key && contentText.length && !contentText.startsWith("Error executing ")) {
-          carriesObservation(`Earlier ${message.name || "tool"} output: ${contentText}`, key);
+        } else if (key && outputText.length && !outputText.startsWith("Error executing ")) {
+          carriesObservation(`Earlier ${message.name || "tool"} output: ${outputText}`, key);
         }
         const reconstructibleCall = id ? reconstructibleCalls.get(id) : undefined;
         if (!normalizedContent.preserveOriginal && id && toolResultCounts.get(id) === 1 && reconstructibleCall && message.name === reconstructibleCall.name) {
           addDurableNote(`Reconstructible query retained for rerun: ${reconstructibleCall.name} ${reconstructibleCall.serializedArgs}`);
           continue;
         }
-        if (contentText.length) addDurableNote(`Earlier ${message.name || "tool"} output: ${contentText}`);
+        if (outputText.length) addDurableNote(`Earlier ${message.name || "tool"} output: ${outputText}`);
       }
     }
 
-    for (const note of this.findingNotes) addDurableNote(note);
-    // One version of each finding: a shortened copy an earlier record carries gives way, in its place, to the finding it
-    // was cut from. Then fit them to their budget: shorten the oldest first, so every finding keeps its sources and the
-    // start of what it established; drop whole ones last.
-    const findingHeader = (note: string) => note.split("\n", 1)[0];
+    // One version of each finding, oldest first: the full text this conversation keeps over a condensed or indexed copy
+    // an earlier record carries. Findings without ids (recorded by an earlier version) come first, as they are.
+    const findingSlot = durableNotes.findIndex((note) => note.startsWith(FINDINGS_PREFIX));
+    const findings: string[] = [];
+    for (const note of [...durableNotes.filter((note) => note.startsWith(FINDINGS_PREFIX)), ...this.findingNotes]) {
+      const id = findingId(note);
+      const at = id ? findings.findIndex((held) => findingId(held) === id) : findings.findIndex((held) => !findingId(held) && shortenedFrom(held, note));
+      if (at >= 0) {
+        if (isCondensedFinding(findings[at]) && !isCondensedFinding(note)) findings[at] = note;
+      } else if (!findings.includes(note) && (id || !findings.some((held) => !findingId(held) && shortenedFrom(note, held)))) {
+        findings.push(note);
+      }
+    }
+    const idNumber = (note: string) => Number(findingId(note)?.slice(1) ?? 0);
+    findings.sort((left, right) => idNumber(left) - idNumber(right));
     for (let index = durableNotes.length - 1; index >= 0; index--) {
       const note = durableNotes[index];
-      if (!note.startsWith(FINDINGS_PREFIX) || !note.endsWith(FINDINGS_SHORTENED)) continue;
-      const full = durableNotes.find((other) => other !== note && other.startsWith(FINDINGS_PREFIX) && shortenedFinding(other) === note);
-      if (full === undefined) continue;
-      durableNotes.splice(durableNotes.indexOf(full), 1);
-      durableNotes.splice(durableNotes.indexOf(note), 1, full);
+      if (note.startsWith(FINDINGS_PREFIX) || note.startsWith(ELIDED_FINDINGS_PREFIX) || note === FINDINGS_OUTGROWN) durableNotes.splice(index, 1);
     }
+    // Fit them to their budget, the oldest giving way first: shown condensed (the start of every claim, and what the
+    // claims it cannot show mention), then only indexed (what it mentions), then named by id in one note. Each says how
+    // to read it in full; the full text stays with the conversation.
     const findingsBudget = this.findingsBudgetChars();
-    let findingsChars = durableNotes.reduce((total, note) => total + (note.startsWith(FINDINGS_PREFIX) ? note.length : 0), 0);
-    if (durableNotes.includes(FINDINGS_OUTGROWN)) durableNotes.splice(durableNotes.indexOf(FINDINGS_OUTGROWN), 1);
+    const shown = [...findings];
+    let findingsChars = shown.reduce((total, note) => total + note.length, 0);
     this.findingsOutgrown = findingsChars > findingsBudget;
+    // The newest, from output that has only just left the context, gives way only after every older one is indexed.
+    const older = Array.from({ length: Math.max(0, shown.length - 1) }, (_, index) => index);
+    for (const [reduce, indexes] of [[condenseFinding, older], [indexFinding, older], [condenseFinding, [shown.length - 1]], [indexFinding, [shown.length - 1]]] as const) {
+      for (const index of indexes) {
+        if (findingsChars <= findingsBudget || index < 0) break;
+        const reduced = reduce(findings[index]);
+        if (reduced.length >= shown[index].length) continue;
+        findingsChars -= shown[index].length - reduced.length;
+        shown[index] = reduced;
+      }
+    }
+    let elided = 0;
+    let elidedNote = "";
+    while (findingsChars > findingsBudget && elided < shown.length) {
+      findingsChars -= shown[elided].length + elidedNote.length;
+      elided++;
+      elidedNote = elidedFindingsNote(findings.slice(0, elided));
+      findingsChars += elidedNote.length;
+    }
+    this.findingsCondensed = elided > 0 || shown.some((note, index) => note !== findings[index] || isCondensedFinding(note));
+    const recordedNotes = [...(elidedNote ? [elidedNote] : []), ...shown.slice(elided)];
+    durableNotes.splice(findingSlot < 0 ? durableNotes.length : Math.min(findingSlot, durableNotes.length), 0, ...recordedNotes);
     if (this.findingsOutgrown) durableNotes.push(FINDINGS_OUTGROWN);
-    for (const note of durableNotes.filter((candidate) => candidate.startsWith(FINDINGS_PREFIX))) {
-      if (findingsChars <= findingsBudget) break;
-      const shortened = shortenedFinding(note);
-      durableNotes[durableNotes.indexOf(note)] = shortened;
-      findingsChars -= note.length - shortened.length;
-    }
-    for (const note of durableNotes.filter((candidate) => candidate.startsWith(FINDINGS_PREFIX))) {
-      if (findingsChars <= findingsBudget) break;
-      durableNotes.splice(durableNotes.indexOf(note), 1, ...(durableNotes.includes(FINDINGS_ELISION) ? [] : [FINDINGS_ELISION]));
-      findingsChars -= note.length;
-    }
-    // Findings are in this memory only while a retained finding names their observation; a re-run is no longer told
-    // they are, and the observation's output is recorded again when it next leaves the context.
-    const retainedFindingHeaders = durableNotes.filter((note) => note.startsWith(FINDINGS_PREFIX)).map(findingHeader);
-    const findingsHeld = (key: string) => retainedFindingHeaders.some((header) => {
-      const sources = this.findingSources.get(header);
-      if (sources) return sources.has(key);
-      // A finding lifted from an earlier record: its header lists its sources, each after "from " or "; ".
-      return [`from ${key};`, `from ${key} (partial)`, `; ${key};`, `; ${key} (partial)`].some((listed) => header.includes(listed));
-    });
+    // What this memory holds of each observation's findings: shown in full, or kept in full and shown only condensed,
+    // indexed or by id. Findings without ids are held only while some copy of them is shown. A re-run is told findings
+    // are held only while they are; an observation whose findings are not is recorded again when it next leaves.
+    const findingsHeld = (key: string): "full" | "condensed" | undefined => {
+      let held: "full" | "condensed" | undefined;
+      findings.forEach((note, index) => {
+        const header = note.split("\n", 1)[0];
+        const sources = this.findingSources.get(findingIdentity(note));
+        // A finding restored or lifted from an earlier record: its header lists its sources, each after "from " or "; ".
+        const from = sources ? sources.has(key) : [`from ${key};`, `from ${key} (partial)`, `; ${key};`, `; ${key} (partial)`].some((listed) => header.includes(listed));
+        if (!from) return;
+        const inFull = index >= elided && !isCondensedFinding(shown[index]);
+        if (inFull || (index >= elided && !findingId(note))) held = "full";
+        else if (findingId(note) && held === undefined) held = "condensed";
+      });
+      return held;
+    };
     const droppedFindings = new Set(Array.from(this.distilledObservations.keys()).filter((key) => !findingsHeld(key)));
     for (const key of droppedFindings) this.distilledObservations.delete(key);
 
@@ -1889,12 +1950,16 @@ export class AutonomousAgent {
     for (const key of partialObservations) dropped.add(key);
     for (const [note, keys] of observationNotes) if (notes.includes(note)) for (const key of keys) dropped.delete(key);
     const removedObservations = Array.from(dropped);
+    const heldPrefix = (key: string): string => {
+      const held = findingsHeld(key);
+      return held === "full" ? REMOVED_RECORDED : held === "condensed" ? REMOVED_CONDENSED : REMOVED_DROPPED;
+    };
     const removalPrefix = (key: string): string => {
       if (partialObservations.has(key)) return REMOVED_PARTIAL;
       const path = keyPaths.get(key);
       const written = path === undefined ? undefined : lastWrite.get(path);
       if (written !== undefined && written > (lastCall.get(key) ?? 0) && !key.startsWith("write_file ") && !key.startsWith("edit_file ") && !key.startsWith("patch_file ")) return REMOVED_CHANGED;
-      if (this.distilledObservations.has(key)) return REMOVED_RECORDED;
+      if (this.distilledObservations.has(key)) return heldPrefix(key);
       if (droppedFindings.has(key)) return REMOVED_DROPPED;
       if (seenKeys.has(key)) return REMOVED_UNRECORDED;
       if (unseenKeys.has(key)) return REMOVED_UNSEEN;
@@ -1906,8 +1971,8 @@ export class AutonomousAgent {
       if (!prefix) continue;
       const key = notes[index].slice(prefix.length);
       if (dropped.has(key)) notes.splice(index, 1);
-      else if (prefix !== REMOVED_CHANGED && prefix !== REMOVED_PARTIAL && (this.distilledObservations.has(key) || droppedFindings.has(key) || prefix === REMOVED_RECORDED || prefix === REMOVED_DROPPED)) {
-        notes[index] = `${findingsHeld(key) ? REMOVED_RECORDED : REMOVED_DROPPED}${key}`;
+      else if (prefix !== REMOVED_CHANGED && prefix !== REMOVED_PARTIAL && (this.distilledObservations.has(key) || droppedFindings.has(key) || prefix === REMOVED_RECORDED || prefix === REMOVED_CONDENSED || prefix === REMOVED_DROPPED)) {
+        notes[index] = `${heldPrefix(key)}${key}`;
       }
     }
     for (const key of removedObservations) {
@@ -2093,9 +2158,11 @@ export class AutonomousAgent {
       if (message.role !== "tool" || unseen.has(index) || typeof message.tool_call_id !== "string") return;
       const key = callKeys.get(message.tool_call_id);
       const text = normalizeMessageContent(message.content).text.join("");
-      if (!key || !wanted.has(key) || pending.some((item) => item.key === key) || !text || text.startsWith("Error executing ")) return;
+      // What read_findings and read_objective return is already in this memory, in full.
+      if (!key || !wanted.has(key) || key.startsWith("read_findings ") || key.startsWith("read_objective ") || pending.some((item) => item.key === key) || !text || text.startsWith("Error executing ")) return;
       const partial = isTruncatedObservation(message);
-      pending.push({ key, text, partial, digest: partial ? undefined : outputDigest(text.replace(STEP_NOTICE, "").replace(RERUN_NOTICE, "")) });
+      const output = withoutStepNotices(text);
+      pending.push({ key, text: output, partial, digest: partial ? undefined : outputDigest(output) });
     });
     if (!pending.length) return false;
     let recorded = false;
@@ -2147,12 +2214,11 @@ export class AutonomousAgent {
       const clipped = text.length > FINDINGS_NOTE_LIMIT ? `${text.slice(0, FINDINGS_NOTE_LIMIT)} …[clipped]` : text;
       let sources = group.map((item) => `${item.key}${item.partial ? " (partial)" : ""}`).join("; ");
       if (sources.length > 1_500) sources = `${sources.slice(0, 1_500)} …`;
-      const header = `${FINDINGS_PREFIX}step ${step}; from ${sources}; model-written, not independent proof]`;
+      const id = `F${++this.findingSeq}`;
+      const header = `${FINDINGS_PREFIX}${id}; step ${step}; from ${sources}; model-written, not independent proof]`;
       this.findingNotes.push(`${header}\n${clipped}`);
-      const held = this.findingSources.get(header) ?? new Set<string>();
-      for (const item of group) held.add(item.key);
-      this.findingSources.set(header, held);
-      for (const item of group) this.distilledObservations.set(item.key, { step, digest: item.digest });
+      this.findingSources.set(id, new Set(group.map((item) => item.key)));
+      for (const item of group) this.distilledObservations.set(item.key, { step, digest: item.digest, id });
       recorded = true;
     }
     return recorded;
@@ -2164,18 +2230,24 @@ export class AutonomousAgent {
    * In the last fifth of the step budget (at least 3 steps), or while recorded findings exceed their bound, the first
    * output of each step that another step follows says so before anything else. The last fifth leaves room for a
    * submission, the corrections validation asks for, and a resubmission.
+   * Output cut short by a limit says so as part of the output (core/findings.ts: it cannot show that something is absent).
    * Notes lead the output so that fitting an oversized result to the context, which keeps its beginning, keeps them.
    */
   private toolResultContent(call: ToolCall, content: string, step: number, maxSteps: number): string {
-    const result = this.rerunNotedContent(call, content, step, maxSteps);
+    let args: unknown;
+    try {
+      args = typeof call.function.arguments === "string" ? JSON.parse(call.function.arguments) : call.function.arguments;
+    } catch {}
+    const incomplete = incompleteOutputNotice(call.function.name, args, content);
+    const result = this.rerunNotedContent(call, incomplete ? `${incomplete}\n${content}` : content, step, maxSteps);
     const remaining = maxSteps - step;
     const closing = remaining < Math.max(3, Math.ceil(maxSteps / 5));
     if ((!closing && !this.findingsOutgrown) || this.stepNoticeStep === step || remaining <= 0) return result;
     this.stepNoticeStep = step;
     if (closing) {
-      return `[Nexus: this is step ${step} of ${maxSteps}; ${remaining === 1 ? "1 step remains" : `${remaining} steps remain`} after it. Finish now, leaving room for validation: consolidate what the output you inspected established into your work product (if your task produces none, state in the task_completed summary what remains unestablished), check it against every requirement of the task and that every file path it cites exists, then call task_completed to submit it (the operator's verifier, when configured, checks it), keeping steps in hand to correct what validation reports and submit again. Investigate further only where a requirement still lacks evidence; do not state what the evidence does not support. Work left unfinished at the step limit is reported as not established.]\n${result}`;
+      return `[Nexus: this is step ${step} of ${maxSteps}; ${remaining === 1 ? "1 step remains" : `${remaining} steps remain`} after it. Finish now, leaving room for validation: consolidate what the output you inspected established into your work product (if your task produces none, state in the task_completed summary what remains unestablished), check it against every requirement of the task and that every file path it cites exists, then call task_completed to submit it (the operator's verifier, when configured, checks it), keeping steps in hand to correct what validation reports and submit again. Investigate further only where a requirement still lacks evidence; do not state what the evidence does not support.${this.findingsCondensed ? " Some of your recorded findings are shown in your memory only condensed or not at all: before you submit, check with read_findings any claim that something is absent, never happens or is not used, and any claim those findings bear on." : ""} Work left unfinished at the step limit is reported as not established.]\n${result}`;
     }
-    return `[Nexus: your recorded findings have outgrown your memory; the oldest are being shortened and dropped. Write what you have established into your work product now (the file or change your task produces; if it produces none, state it in your reply), before investigating further, then continue with what remains. This is step ${step} of ${maxSteps}.]\n${result}`;
+    return `[Nexus: your recorded findings have outgrown your memory; the oldest are shown condensed or by id (read_findings returns them in full). Write what you have established into your work product now (the file or change your task produces; if it produces none, state it in the task_completed summary), before investigating further, then continue with what remains. This is step ${step} of ${maxSteps}.]\n${result}`;
   }
 
   private rerunNotedContent(call: ToolCall, content: string, step: number, maxSteps: number): string {
@@ -2188,7 +2260,7 @@ export class AutonomousAgent {
       : `This output is ${same ? "identical to" : "different from"} the output they were recorded from.`;
     // Findings from a partial or now-different output do not cover this one: record findings again when it is removed.
     if (!same) this.distilledObservations.delete(key);
-    return `[Nexus: you ran this same call before; findings from its output were recorded at step ${recorded.step} and are in your memory. ${comparison} This is step ${step} of ${maxSteps}. If those findings already cover what you need, use them and move on to the next part of your task.]\n${content}`;
+    return `[Nexus: you ran this same call before; findings from its output were recorded at step ${recorded.step}${recorded.id ? ` (${recorded.id})` : ""} and are in your memory. ${comparison} This is step ${step} of ${maxSteps}. If those findings already cover what you need, use them and move on to the next part of your task.]\n${content}`;
   }
 
   /** Returns the observations the accepted compaction removed (none when no compaction was needed). */
@@ -2828,6 +2900,11 @@ Always explain your reasoning before or alongside your tool calls.`;
     this.spine.registerHandler("read_objective", async (args) => {
       if (!this.objective) return { success: false, output: "", error: "No operator objective is being tracked in this conversation." };
       const result = readObjective(this.objective, args ?? {});
+      return result.ok ? { success: true, output: result.text } : { success: false, output: "", error: result.text };
+    });
+
+    this.spine.registerHandler("read_findings", async (args) => {
+      const result = readFindings(this.findingNotes, args ?? {});
       return result.ok ? { success: true, output: result.text } : { success: false, output: "", error: result.text };
     });
 
@@ -4083,7 +4160,7 @@ Always explain your reasoning before or alongside your tool calls.`;
         await this.admitWithFindings(activeClient, currentStep, requestId);
         const policy = this.recoveryPolicy ?? recoveryPolicyFromEnv();
         assistantMessage = await new ProviderRecoveryController(policy, this.recoveryClock, currentStep).run(requestId, {
-          submit: (s) => activeClient.chatCompletion(this.messages, HARNESS_TOOLS, s.requestId),
+          submit: (s) => activeClient.chatCompletion(this.messages, [...HARNESS_TOOLS, READ_FINDINGS_CAPABILITY.toolDefinition as ToolDefinition], s.requestId),
           probe: (probeSignal, opts) =>
             typeof activeClient.probeAvailability === "function"
               ? activeClient.probeAvailability(probeSignal, { timeoutMs: policy.probeTimeoutMs, ...opts })

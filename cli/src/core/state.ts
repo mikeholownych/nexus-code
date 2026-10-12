@@ -155,6 +155,10 @@ export interface DurableTaskState {
   // The operator's objective, acceptance requirements, steering and verifier attempts (core/objective.ts)
   objective?: ObjectiveLedger | null;
 
+  // Full text of the findings the model recorded from inspected output (core/findings.ts); the durable record in
+  // `messages` may show them only condensed or by id.
+  findings?: string[];
+
   // How complete `messages` is as a history: context compaction replaces earlier messages with summaries, and the
   // replaced originals are archived beside the task state (see SessionManager.appendArchivedHistory).
   history?: {

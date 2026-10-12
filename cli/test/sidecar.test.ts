@@ -436,6 +436,27 @@ describe("SidecarServer: sessions and slash commands", () => {
     });
   });
 
+  test("--resume restores the findings recorded in the saved session in full, and the next one continues their ids", async () => {
+    const finding = "Findings recorded from inspected output [F7; step 3; from read_file {\"path\":\"a.ts\"}; model-written, not independent proof]\na.ts:12 calls spawn on harness-core.";
+    await withSidecar(readOnlyTurn, "auto", async ({ app }) => {
+      assert.deepEqual(app.getAgent().getFindings(), [finding]);
+      assert.equal((app.getAgent() as any).findingSeq, 7);
+    }, undefined, (app) => {
+      const now = new Date().toISOString();
+      app.getSessionManager().saveSession({
+        id: "old-session",
+        title: "earlier",
+        createdAt: now,
+        updatedAt: now,
+        workspace: app.getConfig().workspace,
+        model: "m",
+        messages: [{ role: "system", content: "s" }, { role: "user", content: "earlier question" }] as any,
+        findings: [finding],
+      });
+      return { resume: "old-session" };
+    });
+  });
+
   test("a refused /cd leaves the reported workspace unchanged", async () => {
     const other = makeRepo();
     try {

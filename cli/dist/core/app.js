@@ -175,6 +175,7 @@ export class ApplicationCore extends EventEmitter {
             candidateId: durableState.candidateId,
             validationReceipts: durableState.validationReceipts,
             worktreeBinding: durableState.worktreeBinding,
+            findings: durableState.findings,
         }, this.agent.getWorkspacePathIdentity());
         // Extract last assistant output
         let outputText = "";

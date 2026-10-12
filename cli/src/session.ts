@@ -95,6 +95,7 @@ export class SessionManager {
       tokenStats: session.tokenStats,
       ...(session.lastTurn !== undefined ? { lastTurn: session.lastTurn } : {}),
       ...(session.objective !== undefined ? { objective: session.objective } : {}),
+      ...(session.findings !== undefined ? { findings: session.findings } : {}),
       ...(session.history !== undefined ? { history: session.history } : {}),
     };
 
