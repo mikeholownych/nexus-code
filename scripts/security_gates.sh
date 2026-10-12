@@ -114,8 +114,9 @@ SECRET_PATTERNS=(
 
 DETECTED_SECRETS=0
 for pattern in "${SECRET_PATTERNS[@]}"; do
-  # Scan git-tracked files, excluding tests designed to test secret redactors or fixtures
-  MATCHES=$(git grep -EI "${pattern}" -- ':!cli/test/' ':!cli/dist/' ':!scripts/' 2>/dev/null || true)
+  # Scan git-tracked files, excluding tests designed to test secret redactors or fixtures (including the synthetic
+  # credentials in review reproduction tests; the review documents themselves are scanned)
+  MATCHES=$(git grep -EI "${pattern}" -- ':!cli/test/' ':!cli/dist/' ':!scripts/' ':(glob,exclude)docs/reviews/evidence/*/repro/**' 2>/dev/null || true)
   if [[ -n "${MATCHES}" ]]; then
     echo "[-] FAIL [SCAN-003]: Potential plaintext secret detected matching pattern: ${pattern}" >&2
     echo "${MATCHES}" >&2
