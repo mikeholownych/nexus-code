@@ -22,13 +22,14 @@ export type ExecutionState = "COMPLETED" | "INTERRUPTED" | "FAILED" | "BLOCKED" 
  * NOT_ESTABLISHED - no engineering result was established (turn did not complete, or verifier failed)
  * NOT_REQUIRED    - the turn made no workspace change and every tool output it relied on was still in context
  */
-export type EngineeringOutcome = "VERIFIED" | "UNVERIFIED" | "NOT_ESTABLISHED" | "NOT_REQUIRED";
+export type EngineeringOutcome = "VERIFIED" | "REGRESSION_FREE" | "UNVERIFIED" | "NOT_ESTABLISHED" | "NOT_REQUIRED";
 
 export type OperatorAcceptance = "NOT_REQUESTED" | "ACCEPTED" | "NOT_ACCEPTED";
 
 export type TurnReason =
   | "NO_APPLICABLE_VERIFIER"
   | "VERIFICATION_NOT_RUN"
+  | "REGRESSION_FREE"
   | "CONTEXT_EVIDENCE_NOT_RETAINED"
   | "VERIFIER_FAILED"
   | "VERIFIER_TIMED_OUT"
@@ -179,6 +180,7 @@ export interface VerificationEvidence {
   command?: string;
   source?: "configured" | "discovered";
   exitSuccess?: boolean;
+  isDeliverableBound?: boolean;
   /** Deadline the verifier was given, recorded when it timed out. */
   deadlineSecs?: number;
   outputSha256?: string;
@@ -263,6 +265,13 @@ export function assertTurnResultInvariants(t: TurnResult): TurnResult {
     }
     if (t.unverifiedChangesPending) throw new TurnResultInvariantError("VERIFIED conflicts with pending unverified changes");
   }
+  if (t.outcome === "REGRESSION_FREE") {
+    if (t.execution !== "COMPLETED") throw new TurnResultInvariantError("REGRESSION_FREE requires execution COMPLETED");
+    const v = t.verification;
+    if (!v || v.status !== "PASSED" || !v.command || v.exitSuccess !== true) {
+      throw new TurnResultInvariantError("REGRESSION_FREE requires passing verifier evidence");
+    }
+  }
   if (t.outcome === "NOT_REQUIRED" && (t.execution !== "COMPLETED" || t.unverifiedChangesPending)) {
     throw new TurnResultInvariantError("NOT_REQUIRED requires a completed turn with no pending changes");
   }
@@ -286,12 +295,12 @@ export function deepFreezeTurn(t: TurnResult): TurnResult {
   return Object.freeze(t);
 }
 
-/** Process exit contract for `harness run`: 0 verified/nothing-to-verify, 2 completed but unverified, 130 interrupted, 1 otherwise. */
+/** Process exit contract for `harness run`: 0 verified/nothing-to-verify, 2 completed but unverified/regression-free, 130 interrupted, 1 otherwise. */
 export function exitCodeForTurn(t: TurnResult): number {
   if (t.execution === "INTERRUPTED") return 130;
   if (t.execution === "COMPLETED") {
     if (t.outcome === "VERIFIED" || t.outcome === "NOT_REQUIRED") return 0;
-    if (t.outcome === "UNVERIFIED") return 2;
+    if (t.outcome === "REGRESSION_FREE" || t.outcome === "UNVERIFIED") return 2;
   }
   return 1;
 }
@@ -346,6 +355,8 @@ export function summarizeTurn(t: TurnResult): { heading: string; line: string } 
   switch (t.outcome) {
     case "VERIFIED":
       return { heading: "TASK COMPLETED - VERIFIED", line: `execution=COMPLETED outcome=VERIFIED (${t.verification?.command})` };
+    case "REGRESSION_FREE":
+      return { heading: "TASK COMPLETED - REGRESSION FREE", line: `execution=COMPLETED outcome=REGRESSION_FREE (${t.verification?.command})${tail}` };
     case "NOT_REQUIRED":
       return { heading: "TURN ENDED - NO CHANGES TO VERIFY", line: `execution=COMPLETED outcome=NOT_REQUIRED modelStop=${t.modelStop}` };
     case "UNVERIFIED":

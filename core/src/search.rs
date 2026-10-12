@@ -64,7 +64,7 @@ pub struct SearchCodeResult {
 }
 
 pub fn list_dir(args: ListDirArgs, base_dir: &Path) -> Result<ListDirResult, String> {
-    let target = base_dir.join(&args.path);
+    let target = crate::file_ops::resolve_safe_path(base_dir, &args.path)?;
     if !target.exists() {
         return Err(format!("Path does not exist: {}", args.path));
     }
@@ -384,7 +384,7 @@ pub struct FileTreeResult {
 }
 
 pub fn file_tree(args: FileTreeArgs, base_dir: &Path) -> Result<FileTreeResult, String> {
-    let target = base_dir.join(&args.path);
+    let target = crate::file_ops::resolve_safe_path(base_dir, &args.path)?;
     if !target.exists() {
         return Err(format!("Path does not exist: {}", args.path));
     }

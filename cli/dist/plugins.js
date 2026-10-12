@@ -3,29 +3,36 @@ import * as path from "node:path";
 import * as os from "node:os";
 import { pathToFileURL } from "node:url";
 import { Worker } from "node:worker_threads";
+import { isWorkspaceTrusted, WORKSPACE_PLUGIN_DIRS } from "./workspace_trust.js";
 /** Directories Nexus loads plugin modules (`*.js`, `*.mjs`) from at turn start. */
-export function pluginDirs(workspace) {
-    return [
-        path.join(workspace, ".nexus", "plugins"),
-        path.join(workspace, "plugins"),
+export function pluginDirs(workspace, isWorkspaceTrusted = false) {
+    const dirs = [
         path.join(os.homedir(), ".nexus", "plugins"),
         path.join(os.homedir(), ".config", "nexus", "plugins"),
         path.join(os.homedir(), ".config", "opencode", "plugins"),
     ];
+    if (isWorkspaceTrusted)
+        dirs.unshift(...WORKSPACE_PLUGIN_DIRS.map((dir) => path.join(workspace, dir)));
+    return dirs;
 }
 export class PluginManager {
     workspace;
+    readOnly;
+    trusted;
     plugins = new Map();
     customToolsMap = new Map();
     customToolDefs = [];
-    constructor(workspace) {
+    constructor(workspace, options) {
         this.workspace = path.resolve(workspace);
+        this.readOnly = Boolean(options?.readOnly);
+        this.trusted = options?.trusted !== undefined ? options.trusted : isWorkspaceTrusted(this.workspace, this.readOnly);
     }
     async loadPlugins() {
         this.plugins.clear();
         this.customToolsMap.clear();
         this.customToolDefs = [];
-        for (const dir of pluginDirs(this.workspace)) {
+        const allowWorkspace = this.trusted && !this.readOnly;
+        for (const dir of pluginDirs(this.workspace, allowWorkspace)) {
             if (!fs.existsSync(dir))
                 continue;
             try {

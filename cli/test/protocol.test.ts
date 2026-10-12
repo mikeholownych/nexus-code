@@ -104,10 +104,10 @@ describe("protocol: projection helpers", () => {
     });
     const projected = projectTurn(turn);
     assert.equal(JSON.stringify(projected).includes("abcdefghijklmnopqrstuvwxyz0123"), false);
-    assert.equal(projected.detail, "boom Bearer [REDACTED_TOKEN]");
-    assert.equal(projected.inferenceFailure?.message, "HTTP 500: Bearer [REDACTED_TOKEN]");
-    assert.equal(projected.verification?.command, "curl -H 'Bearer [REDACTED_TOKEN]'");
-    assert.equal(projected.interruption?.outstandingTool, "run Bearer [REDACTED_TOKEN]");
+    assert.equal(projected.detail, "boom Bearer [REDACTED:BEARER_AUTH_HEADER]");
+    assert.equal(projected.inferenceFailure?.message, "HTTP 500: Bearer [REDACTED:BEARER_AUTH_HEADER]");
+    assert.equal(projected.verification?.command, "curl -H 'Bearer [REDACTED:BEARER_AUTH_HEADER]'");
+    assert.equal(projected.interruption?.outstandingTool, "run Bearer [REDACTED:BEARER_AUTH_HEADER]");
     assert.deepEqual({ ...projected, detail: turn.detail, inferenceFailure: turn.inferenceFailure, verification: turn.verification, interruption: turn.interruption }, turn);
     assert.equal(projected.inferenceFailure?.requestId, "req-1");
     assert.equal(projected.verification?.outputSha256, "abc123");

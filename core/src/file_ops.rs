@@ -43,6 +43,8 @@ pub struct EditFileArgs {
     pub path: String,
     pub old_content: String,
     pub new_content: String,
+    #[serde(default)]
+    pub replace_all: Option<bool>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -82,6 +84,107 @@ pub fn verify_descriptor_confinement<F: AsRawFd>(file: &F, base_canon: &Path) ->
         let _ = base_canon;
     }
     Ok(())
+}
+
+static ATOMIC_WRITE_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// Atomically writes content to target file via a temporary file in the same directory, syncing data to disk and
+/// renaming it over the target path.
+///
+/// - The parent directory is checked against the workspace before any directory is created.
+/// - An existing read-only file is refused (as an in-place write would be).
+/// - An existing file's permission bits are kept; the temporary file is private (0600) until they are applied.
+/// - A file with other hard links is written in place, so the links keep sharing the content.
+/// - On any failure the temporary file is removed.
+///
+/// Ownership, ACLs and extended attributes of an existing file are not carried over to the new inode.
+pub fn write_file_atomically(target: &Path, content: &[u8], base_canon: &Path) -> Result<(), String> {
+    let effective_target = if target.is_symlink() {
+        let canon = target.canonicalize().map_err(|e| {
+            if e.kind() == io::ErrorKind::NotFound {
+                format!("File does not exist: {e}")
+            } else {
+                format!("Security Violation: Failed to open symlink: {e}")
+            }
+        })?;
+        if !canon.starts_with(base_canon) {
+            return Err("Security Violation: Symlink points outside workspace jail".into());
+        }
+        canon
+    } else {
+        target.to_path_buf()
+    };
+
+    if let Some(parent) = effective_target.parent() {
+        // The nearest existing ancestor must be inside the workspace before anything is created under it.
+        let mut existing = parent;
+        while !existing.exists() {
+            existing = existing.parent().ok_or_else(|| format!("Invalid parent directory: {}", parent.display()))?;
+        }
+        let existing_canon = existing.canonicalize().map_err(|e| format!("Invalid parent directory: {e}"))?;
+        if !existing_canon.starts_with(base_canon) {
+            return Err(format!("Security Violation: Parent directory escapes workspace jail: {}", parent.display()));
+        }
+        fs::create_dir_all(parent).map_err(|e| format!("Failed to create directories: {e}"))?;
+        let parent_canon = parent.canonicalize().map_err(|e| format!("Invalid parent directory: {e}"))?;
+        if !parent_canon.starts_with(base_canon) {
+            return Err(format!("Security Violation: Parent directory escapes workspace jail: {}", parent.display()));
+        }
+    }
+
+    let existing = effective_target.metadata().ok();
+    if let Some(meta) = &existing {
+        if meta.permissions().readonly() {
+            return Err(format!("Permission denied: {} is read-only", effective_target.display()));
+        }
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::MetadataExt;
+            if meta.nlink() > 1 {
+                let mut file = std::fs::OpenOptions::new()
+                    .write(true)
+                    .truncate(true)
+                    .open(&effective_target)
+                    .map_err(|e| format!("Failed to open file: {e}"))?;
+                verify_descriptor_confinement(&file, base_canon)?;
+                file.write_all(content).map_err(|e| format!("Failed to write file: {e}"))?;
+                return file.sync_all().map_err(|e| format!("Failed to sync file: {e}"));
+            }
+        }
+    }
+
+    let temp_name = format!(
+        ".{}.tmp_atomic.{}.{}",
+        effective_target.file_name().and_then(|s| s.to_str()).unwrap_or("file"),
+        std::process::id(),
+        ATOMIC_WRITE_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+    );
+    let temp_path = effective_target.parent().unwrap_or_else(|| Path::new(".")).join(temp_name);
+
+    let written = (|| -> Result<(), String> {
+        let mut options = std::fs::OpenOptions::new();
+        options.write(true).create_new(true);
+        // A new file gets the default mode under the umask (applied by the kernel). Replacing a file, the temporary
+        // file stays private until the original's permission bits are applied, so its content is never more
+        // widely readable than the original's.
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(if existing.is_some() { 0o600 } else { 0o666 });
+        }
+        let mut temp_file = options.open(&temp_path).map_err(|e| format!("Failed to open temp file: {e}"))?;
+        verify_descriptor_confinement(&temp_file, base_canon)?;
+        temp_file.write_all(content).map_err(|e| format!("Failed to write to temp file: {e}"))?;
+        temp_file.sync_all().map_err(|e| format!("Failed to sync temp file: {e}"))?;
+        if let Some(meta) = &existing {
+            fs::set_permissions(&temp_path, meta.permissions()).map_err(|e| format!("Failed to set permissions: {e}"))?;
+        }
+        fs::rename(&temp_path, &effective_target).map_err(|e| format!("Security Violation: Failed to commit write: {e}"))
+    })();
+    if written.is_err() {
+        let _ = fs::remove_file(&temp_path);
+    }
+    written
 }
 
 /// Helper to verify an open file descriptor is not binary
@@ -178,7 +281,8 @@ pub fn write_file(args: WriteFileArgs, base_dir: &Path) -> Result<WriteFileResul
     let base_canon = base_dir.canonicalize().map_err(|e| format!("Invalid workspace directory: {e}"))?;
     let target = resolve_safe_path(base_dir, &args.path)?;
 
-    if target.exists() && !args.overwrite {
+    let was_existing = target.exists();
+    if was_existing && !args.overwrite {
         return Err(format!(
             "File already exists: {}. Specify overwrite: true to replace it.",
             args.path
@@ -203,32 +307,12 @@ pub fn write_file(args: WriteFileArgs, base_dir: &Path) -> Result<WriteFileResul
         }
     }
 
-    if let Some(parent) = target.parent() {
-        fs::create_dir_all(parent).map_err(|e| format!("Failed to create directories: {e}"))?;
-        let parent_canon = parent.canonicalize().map_err(|e| format!("Invalid parent directory: {e}"))?;
-        if !parent_canon.starts_with(&base_canon) {
-            return Err(format!("Security Violation: Parent directory escapes workspace jail: {}", parent.display()));
-        }
-    }
-
-    let mut file = std::fs::OpenOptions::new()
-        .write(true)
-        .create(true)
-        .truncate(false)
-        .open(&target)
-        .map_err(|e| format!("Failed to open file for writing: {e}"))?;
-
-    verify_descriptor_confinement(&file, &base_canon)?;
-
-    file.set_len(0).map_err(|e| format!("Failed to truncate file: {e}"))?;
-    file.write_all(args.content.as_bytes())
-        .map_err(|e| format!("Failed to write to file: {e}"))?;
-    file.flush().map_err(|e| format!("Failed to flush file: {e}"))?;
+    write_file_atomically(&target, args.content.as_bytes(), &base_canon)?;
 
     Ok(WriteFileResult {
         path: args.path,
         bytes_written: args.content.len(),
-        status: if target.exists() { "overwritten".into() } else { "created".into() },
+        status: if was_existing { "overwritten".into() } else { "created".into() },
     })
 }
 
@@ -237,90 +321,58 @@ fn normalize_newlines(s: &str) -> String {
     s.replace("\r\n", "\n")
 }
 
-/// Attempts fuzzy matching for `edit_file` when exact and normalized substring matches fail.
-/// 1. Tries line-by-line trimmed matching (ignoring indentation / whitespace variations per line).
-/// 2. Tries sliding window similarity using `similar::TextDiff` ratio (threshold >= 0.85).
-fn fuzzy_find_and_replace(
-    original: &str,
-    old_content: &str,
-    new_content: &str,
-) -> Option<(String, usize)> {
+/// Where `old_content` matches the file only when indentation is ignored: the 1-based line of the single such
+/// match and the file's exact lines there. Edits are never applied this way (the replacement would carry the model's
+/// indentation); the caller reports the exact lines so the edit can be retried precisely.
+fn indentation_only_match(original: &str, old_content: &str) -> Option<(usize, String)> {
     let norm_orig = normalize_newlines(original);
     let norm_old = normalize_newlines(old_content);
-    let norm_new = normalize_newlines(new_content);
-
     let orig_lines: Vec<&str> = norm_orig.lines().collect();
     let old_lines: Vec<&str> = norm_old.lines().collect();
-
-    // Strip leading and trailing empty lines from old_lines if needed
-    let mut start = 0;
-    while start < old_lines.len() && old_lines[start].trim().is_empty() {
-        start += 1;
-    }
-    let mut end = old_lines.len();
-    while end > start && old_lines[end - 1].trim().is_empty() {
-        end -= 1;
-    }
-    if start >= end {
+    let start = old_lines.iter().position(|l| !l.trim().is_empty())?;
+    let end = old_lines.iter().rposition(|l| !l.trim().is_empty())? + 1;
+    let window = &old_lines[start..end];
+    if orig_lines.len() < window.len() {
         return None;
     }
-    let trimmed_old_lines = &old_lines[start..end];
-    let window_size = trimmed_old_lines.len();
-
-    if window_size == 0 || orig_lines.len() < window_size {
-        return None;
+    let matches: Vec<usize> = (0..=(orig_lines.len() - window.len()))
+        .filter(|&i| window.iter().enumerate().all(|(k, l)| orig_lines[i + k].trim() == l.trim()))
+        .collect();
+    match matches.as_slice() {
+        [i] => Some((i + 1, orig_lines[*i..*i + window.len()].iter().take(20).copied().collect::<Vec<_>>().join("\n"))),
+        _ => None,
     }
+}
 
-    // Step 1: Check for exact line-by-line trimmed match (handles indentation differences)
-    for i in 0..=(orig_lines.len() - window_size) {
-        let mut matches = true;
-        for k in 0..window_size {
-            if orig_lines[i + k].trim() != trimmed_old_lines[k].trim() {
-                matches = false;
-                break;
-            }
-        }
-        if matches {
-            let mut result_lines = Vec::new();
-            result_lines.extend_from_slice(&orig_lines[0..i]);
-            result_lines.push(&norm_new);
-            result_lines.extend_from_slice(&orig_lines[(i + window_size)..]);
-            let mut reconstructed = result_lines.join("\n");
-            if norm_orig.ends_with('\n') && !reconstructed.ends_with('\n') {
-                reconstructed.push('\n');
-            }
-            return Some((reconstructed, 1));
-        }
+/// Replaces `old` with `new` in `hay`: once (an error when `old` occurs more than once without `replace_all`) or
+/// everywhere. Only occurrences at positions `accept` allows count.
+fn replace_occurrences(
+    hay: &str,
+    old: &str,
+    new: &str,
+    replace_all: bool,
+    path: &str,
+    accept: impl Fn(usize, usize) -> bool,
+) -> Result<Option<(String, usize)>, String> {
+    let positions: Vec<usize> = hay.match_indices(old).map(|(i, _)| i).filter(|&i| accept(i, i + old.len())).collect();
+    if positions.is_empty() {
+        return Ok(None);
     }
-
-    // Step 2: Sliding window TextDiff ratio match (>= 0.85 similarity)
-    let old_joined = trimmed_old_lines.join("\n");
-    let mut best_idx = None;
-    let mut best_ratio = 0.85f32;
-
-    for i in 0..=(orig_lines.len() - window_size) {
-        let window_joined = orig_lines[i..(i + window_size)].join("\n");
-        let diff = TextDiff::from_lines(&window_joined, &old_joined);
-        let ratio = diff.ratio();
-        if ratio > best_ratio {
-            best_ratio = ratio;
-            best_idx = Some(i);
-        }
+    if positions.len() > 1 && !replace_all {
+        return Err(format!(
+            "Ambiguous edit in {path}: found {} occurrences of target text. Provide more context to make the edit unique, or set replace_all: true.",
+            positions.len()
+        ));
     }
-
-    if let Some(i) = best_idx {
-        let mut result_lines = Vec::new();
-        result_lines.extend_from_slice(&orig_lines[0..i]);
-        result_lines.push(&norm_new);
-        result_lines.extend_from_slice(&orig_lines[(i + window_size)..]);
-        let mut reconstructed = result_lines.join("\n");
-        if norm_orig.ends_with('\n') && !reconstructed.ends_with('\n') {
-            reconstructed.push('\n');
-        }
-        return Some((reconstructed, 1));
+    let mut out = String::with_capacity(hay.len());
+    let mut last = 0;
+    for &i in positions.iter().take(if replace_all { usize::MAX } else { 1 }) {
+        out.push_str(&hay[last..i]);
+        out.push_str(new);
+        last = i + old.len();
     }
-
-    None
+    out.push_str(&hay[last..]);
+    Ok(Some((out, positions.len())))
 }
 
 /// Pre-flight syntax delimiter validation for source files.
@@ -537,33 +589,58 @@ pub fn edit_file(args: EditFileArgs, base_dir: &Path) -> Result<EditFileResult, 
         content
     };
 
-    // Try exact replacement first
-    let (new_file_content, count) = if raw_original.contains(&args.old_content) {
-        let count = raw_original.matches(&args.old_content).count();
-        (raw_original.replacen(&args.old_content, &args.new_content, 1), count)
-    } else {
-        // Fallback: newline-normalized matching
-        let norm_orig = normalize_newlines(&raw_original);
-        let norm_old = normalize_newlines(&args.old_content);
-        let norm_new = normalize_newlines(&args.new_content);
+    let replace_all = args.replace_all.unwrap_or(false);
+    // A file that uses CRLF throughout gets CRLF in the text the model sends; a file with mixed endings is matched
+    // exactly as it is, and none of its other lines is rewritten.
+    let crlf_file = raw_original.contains("\r\n") && !raw_original.replace("\r\n", "").contains('\n');
+    let to_file_eol = |text: &str| if crlf_file { normalize_newlines(text).replace('\n', "\r\n") } else { text.to_string() };
+    let anywhere = |_: usize, _: usize| true;
 
-        if norm_orig.contains(&norm_old) {
-            let count = norm_orig.matches(&norm_old).count();
-            (norm_orig.replacen(&norm_old, &norm_new, 1), count)
-        } else {
-            // Trim leading/trailing whitespace lines fallback (common local LLM artifact)
-            let trimmed_old = norm_old.trim();
-            if !trimmed_old.is_empty() && norm_orig.contains(trimmed_old) {
-                let count = norm_orig.matches(trimmed_old).count();
-                (norm_orig.replacen(trimmed_old, norm_new.trim(), 1), count)
-            } else if let Some((fuzzy_content, count)) = fuzzy_find_and_replace(&raw_original, &args.old_content, &args.new_content) {
-                (fuzzy_content, count)
-            } else {
-                return Err(format!(
-                    "Could not find exact or fuzzy text match in {}. Ensure the snippet matches the existing file contents.",
-                    args.path
-                ));
+    let exact = replace_occurrences(&raw_original, &args.old_content, &to_file_eol(&args.new_content), replace_all, &args.path, anywhere)?;
+    let eol = if exact.is_none() && crlf_file {
+        replace_occurrences(&raw_original, &to_file_eol(&args.old_content), &to_file_eol(&args.new_content), replace_all, &args.path, anywhere)?
+    } else {
+        None
+    };
+    // Leading and trailing blank lines around the snippet (a common local-model artifact) are ignored, but what
+    // remains must match whole lines: it starts at a line start and ends at a line end.
+    let whole_lines = if exact.is_none() && eol.is_none() {
+        let hay = if crlf_file { normalize_newlines(&raw_original) } else { raw_original.clone() };
+        let strip = |text: &str| -> String {
+            let text = normalize_newlines(text);
+            let lines: Vec<&str> = text.lines().collect();
+            match (lines.iter().position(|l| !l.trim().is_empty()), lines.iter().rposition(|l| !l.trim().is_empty())) {
+                (Some(a), Some(b)) => lines[a..=b].join("\n").trim_end().to_string(),
+                _ => String::new(),
             }
+        };
+        let old = strip(&args.old_content);
+        let new = strip(&args.new_content);
+        if old.is_empty() {
+            None
+        } else {
+            let bytes = hay.as_bytes();
+            let at_line_start = |i: usize| i == 0 || bytes[i - 1] == b'\n';
+            let at_line_end = |j: usize| hay[j..].chars().take_while(|c| *c != '\n').all(|c| c == ' ' || c == '\t' || c == '\r');
+            replace_occurrences(&hay, &old, &new, replace_all, &args.path, |i, j| at_line_start(i) && at_line_end(j))?
+                .map(|(text, n)| (if crlf_file { text.replace('\n', "\r\n") } else { text }, n))
+        }
+    } else {
+        None
+    };
+    let (new_file_content, count) = match exact.or(eol).or(whole_lines) {
+        Some(found) => found,
+        None => {
+            return Err(match indentation_only_match(&raw_original, &args.old_content) {
+                Some((line, actual)) => format!(
+                    "No exact match in {}: the snippet matches line {line} only if indentation is ignored. Retry with the file's exact text:\n{actual}",
+                    args.path
+                ),
+                None => format!(
+                    "Could not find exact text match in {}. Ensure the snippet matches the existing file contents.",
+                    args.path
+                ),
+            });
         }
     };
 
@@ -597,17 +674,7 @@ pub fn edit_file(args: EditFileArgs, base_dir: &Path) -> Result<EditFileResult, 
         diff_str.push_str(&format!("{sign}{change}"));
     }
 
-    // Write modified content with descriptor verification
-    let mut file = std::fs::OpenOptions::new()
-        .write(true)
-        .truncate(false)
-        .open(&target)
-        .map_err(|e| format!("Failed to open file for writing: {e}"))?;
-    verify_descriptor_confinement(&file, &base_canon)?;
-    file.set_len(0).map_err(|e| format!("Failed to truncate file: {e}"))?;
-    file.write_all(new_file_content.as_bytes())
-        .map_err(|e| format!("Failed to write edited content: {e}"))?;
-    file.flush().map_err(|e| format!("Failed to flush edited content: {e}"))?;
+    write_file_atomically(&target, new_file_content.as_bytes(), &base_canon)?;
 
     Ok(EditFileResult {
         path: args.path,
@@ -619,6 +686,8 @@ pub fn edit_file(args: EditFileArgs, base_dir: &Path) -> Result<EditFileResult, 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct DeleteFileArgs {
     pub path: String,
+    #[serde(default)]
+    pub recursive: Option<bool>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -637,7 +706,18 @@ pub fn delete_file(args: DeleteFileArgs, base_dir: &Path) -> Result<DeleteFileRe
     if !canon.starts_with(&base_canon) {
         return Err(format!("Security Violation: Path escapes workspace jail: {}", args.path));
     }
+    if canon == base_canon {
+        return Err("Security Violation: Cannot delete workspace root directory".into());
+    }
+    // Nothing in the repository's own data: `.git` or anything under it (objects, HEAD, refs).
+    let inside_git = |path: &Path| path.strip_prefix(&base_canon).is_ok_and(|rel| rel.components().any(|c| c.as_os_str() == ".git"));
+    if inside_git(&canon) || target.strip_prefix(base_dir).is_ok_and(|rel| rel.components().any(|c| c.as_os_str() == ".git")) {
+        return Err("Security Violation: Cannot delete .git or anything inside it".into());
+    }
     if target.is_dir() {
+        if !args.recursive.unwrap_or(false) {
+            return Err(format!("Path is a directory: {}. Use recursive=true to delete directories", args.path));
+        }
         fs::remove_dir_all(&target).map_err(|e| format!("Failed to remove directory: {e}"))?;
     } else {
         fs::remove_file(&target).map_err(|e| format!("Failed to remove file: {e}"))?;
@@ -1051,22 +1131,12 @@ pub fn patch_file(args: PatchFileArgs, base_dir: &Path) -> Result<PatchFileResul
         new_content.push('\n');
     }
 
-    let temp_path = target.with_extension("tmp_patch");
-    {
-        let mut temp_file = std::fs::OpenOptions::new()
-            .write(true)
-            .create(true)
-            .truncate(false)
-            .open(&temp_path)
-            .map_err(|e| format!("Failed to open temp patch file: {e}"))?;
-        verify_descriptor_confinement(&temp_file, &base_canon)?;
-        temp_file.set_len(0).map_err(|e| format!("Failed to truncate temp patch file: {e}"))?;
-        temp_file.write_all(new_content.as_bytes())
-            .map_err(|e| format!("Failed to write patched file: {e}"))?;
-        temp_file.flush().map_err(|e| format!("Failed to flush temp patch file: {e}"))?;
+    let has_crlf = original_content.contains("\r\n");
+    if has_crlf {
+        new_content = new_content.replace("\r\n", "\n").replace('\n', "\r\n");
     }
-    fs::rename(&temp_path, &target)
-        .map_err(|e| format!("Failed to commit patched file: {e}"))?;
+
+    write_file_atomically(&target, new_content.as_bytes(), &base_canon)?;
 
     let diff = TextDiff::from_lines(&original_content, &new_content);
     let mut diff_str = String::new();
@@ -1165,15 +1235,25 @@ mod tests {
         let updated = fs::read_to_string(&f1).unwrap();
         assert!(updated.contains("Line 2 Patched"));
 
-        // Test edit_file with fuzzy indentation mismatch
+        // An indentation mismatch is reported with the file's exact lines, not applied.
         let code_file = dir.join("code.rs");
         fs::write(&code_file, "fn main() {\n    let val = 42;\n    println!(\"{}\", val);\n}\n").unwrap();
 
         // Model provides old_content with no indentation
-        let edit_res = edit_file(EditFileArgs {
+        let err = edit_file(EditFileArgs {
             path: "code.rs".into(),
             old_content: "let val = 42;\nprintln!(\"{}\", val);".into(),
             new_content: "    let val = 100;\n    println!(\"Updated: {}\", val);".into(),
+            replace_all: None,
+        }, &dir).unwrap_err();
+        assert!(err.contains("line 2 only if indentation is ignored") && err.contains("    let val = 42;"), "{err}");
+
+        // Retried with the exact text it quoted, the edit applies.
+        let edit_res = edit_file(EditFileArgs {
+            path: "code.rs".into(),
+            old_content: "    let val = 42;\n    println!(\"{}\", val);".into(),
+            new_content: "    let val = 100;\n    println!(\"Updated: {}\", val);".into(),
+            replace_all: None,
         }, &dir).unwrap();
 
         assert_eq!(edit_res.replacements, 1);
@@ -1223,6 +1303,7 @@ mod tests {
             path: "math.ts".into(),
             old_content: "return a + b;".into(),
             new_content: "return { a + b;".into(), // introduces unclosed brace
+            replace_all: None,
         }, &dir);
         assert!(edit_err.is_err());
         assert!(edit_err.unwrap_err().contains("Pre-flight syntax validation rejected edit"));
@@ -1397,6 +1478,218 @@ mod tests {
         );
 
         let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn test_exact_edits_fuzzy_rejected_t1() {
+        let dir = std::env::temp_dir().join(format!("test_t1_{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let target = dir.join("f.rs");
+        let orig = "fn f() {\n    let a = 1;\n    let b = 2;\n    audit_log(a);\n    let c = 3;\n    let d = 4;\n    let e = 5;\n    let g = 6;\n}\n";
+        fs::write(&target, orig).unwrap();
+
+        // 85% similar snippet with check_permissions instead of audit_log
+        let old_content = "    let a = 1;\n    let b = 2;\n    check_permissions(a);\n    let c = 3;\n    let d = 4;\n    let e = 5;\n    let g = 6;";
+        let new_content = "    let a = 1;\n    let b = 2;\n    let c = 3;\n    let d = 4;\n    let e = 5;\n    let g = 7;";
+
+        let res = edit_file(EditFileArgs {
+            path: "f.rs".into(),
+            old_content: old_content.into(),
+            new_content: new_content.into(),
+            replace_all: None,
+        }, &dir);
+
+        assert!(res.is_err(), "Expected fuzzy match to be rejected");
+        let content_after = fs::read_to_string(&target).unwrap();
+        assert_eq!(content_after, orig, "File must remain byte-identical on rejected edit");
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    fn edit_in(name: &str, file: &str, orig: &str, old: &str, new: &str) -> (Result<EditFileResult, String>, String) {
+        let dir = std::env::temp_dir().join(format!("test_edit_{name}_{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join(file), orig).unwrap();
+        let res = edit_file(EditFileArgs { path: file.into(), old_content: old.into(), new_content: new.into(), replace_all: None }, &dir);
+        let after = fs::read_to_string(dir.join(file)).unwrap();
+        let _ = fs::remove_dir_all(&dir);
+        (res, after)
+    }
+
+    #[test]
+    fn test_trimmed_snippet_matches_whole_lines_only() {
+        // Blank lines and surrounding whitespace around the snippet are tolerated...
+        let (res, after) = edit_in("trim_ok", "a.txt", "x = 1\ny = 2\n", "\n  \nx = 1\n\n", "x = 3\n");
+        assert!(res.is_ok(), "{res:?}");
+        assert_eq!(after, "x = 3\ny = 2\n");
+        // ...but the rest must be whole lines: `x = 1` is not inside `x = 10`.
+        let (res, after) = edit_in("trim_token", "b.txt", "x = 10\n", "\nx = 1\n", "x = 2\n");
+        assert!(res.is_err(), "{res:?}");
+        assert_eq!(after, "x = 10\n");
+    }
+
+    #[test]
+    fn test_indentation_only_match_is_reported_not_applied() {
+        let orig = "fn f() {\n    let a = 1;\n}\n";
+        let (res, after) = edit_in("indent", "f.rs", orig, "let a = 1;\n", "let a = 2;\n");
+        // `let a = 1;` occurs exactly (inside the indented line) — whole-line matching would be wrong, exact is fine:
+        assert!(res.is_ok());
+        assert_eq!(after, "fn f() {\n    let a = 2;\n}\n");
+        let (res, after) = edit_in("indent2", "g.rs", orig, "fn f() {\nlet a = 1;\n}", "fn f() {\nlet a = 2;\n}");
+        let err = res.unwrap_err();
+        assert!(err.contains("only if indentation is ignored") && err.contains("    let a = 1;"), "{err}");
+        assert_eq!(after, orig, "nothing is written");
+    }
+
+    #[test]
+    fn test_line_endings_follow_the_file() {
+        // A CRLF file: an LF snippet matches and the replacement is written with CRLF.
+        let (res, after) = edit_in("crlf", "c.txt", "a\r\nb\r\nc\r\n", "a\nb\n", "a\nB\nB2\n");
+        assert!(res.is_ok(), "{res:?}");
+        assert_eq!(after, "a\r\nB\r\nB2\r\nc\r\n");
+        // A mixed file: untouched LF lines stay LF.
+        let (res, after) = edit_in("mixed", "m.txt", "a\r\nb\nc\n", "c", "C");
+        assert!(res.is_ok(), "{res:?}");
+        assert_eq!(after, "a\r\nb\nC\n");
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn test_atomic_write_keeps_mode_links_and_refuses_read_only() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = std::env::temp_dir().join(format!("test_atomic_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let base = dir.canonicalize().unwrap();
+
+        let script = base.join("run.sh");
+        fs::write(&script, "old").unwrap();
+        fs::set_permissions(&script, fs::Permissions::from_mode(0o750)).unwrap();
+        write_file_atomically(&script, b"new", &base).unwrap();
+        assert_eq!(fs::read_to_string(&script).unwrap(), "new");
+        assert_eq!(fs::metadata(&script).unwrap().permissions().mode() & 0o7777, 0o750, "the mode is kept");
+
+        let locked = base.join("locked.txt");
+        fs::write(&locked, "keep").unwrap();
+        fs::set_permissions(&locked, fs::Permissions::from_mode(0o444)).unwrap();
+        assert!(write_file_atomically(&locked, b"x", &base).unwrap_err().contains("read-only"));
+        assert_eq!(fs::read_to_string(&locked).unwrap(), "keep");
+
+        let linked = base.join("a.txt");
+        fs::write(&linked, "one").unwrap();
+        fs::hard_link(&linked, base.join("b.txt")).unwrap();
+        write_file_atomically(&linked, b"two", &base).unwrap();
+        assert_eq!(fs::read_to_string(base.join("b.txt")).unwrap(), "two", "a hard link still shares the content");
+
+        // An escape through the parent is refused before any directory is created.
+        let outside = std::env::temp_dir().join(format!("test_atomic_outside_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&outside);
+        fs::create_dir_all(&outside).unwrap();
+        std::os::unix::fs::symlink(&outside, base.join("out")).unwrap();
+        assert!(write_file_atomically(&base.join("out/new_dir/f.txt"), b"x", &base).is_err());
+        assert!(!outside.join("new_dir").exists(), "no directory was created outside the workspace");
+
+        let leftovers: Vec<_> = fs::read_dir(&base).unwrap().filter_map(|e| e.ok()).filter(|e| e.file_name().to_string_lossy().contains("tmp_atomic")).collect();
+        assert!(leftovers.is_empty(), "no temporary file is left behind");
+        fs::set_permissions(&locked, fs::Permissions::from_mode(0o644)).unwrap();
+        let _ = fs::remove_dir_all(&dir);
+        let _ = fs::remove_dir_all(&outside);
+    }
+
+    #[test]
+    fn test_delete_refuses_git_and_anything_inside_it() {
+        let dir = std::env::temp_dir().join(format!("test_delete_git_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(dir.join(".git/objects")).unwrap();
+        fs::write(dir.join(".git/HEAD"), "ref").unwrap();
+        fs::write(dir.join(".gitignore"), "x").unwrap();
+        for path in [".git", ".git/objects", ".git/HEAD", "./.git/HEAD"] {
+            let res = delete_file(DeleteFileArgs { path: path.into(), recursive: Some(true) }, &dir);
+            assert!(res.unwrap_err().contains(".git"), "{path}");
+        }
+        assert!(dir.join(".git/HEAD").exists() && dir.join(".git/objects").exists());
+        assert!(delete_file(DeleteFileArgs { path: ".gitignore".into(), recursive: None }, &dir).is_ok());
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_ambiguous_edit_rejected_t2() {
+        let dir = std::env::temp_dir().join(format!("test_t2_{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let target = dir.join("dup.txt");
+        let orig = "a = 1\nb = 2\na = 1\n";
+        fs::write(&target, orig).unwrap();
+
+        // 1. Without replace_all, ambiguous edit must fail
+        let res_err = edit_file(EditFileArgs {
+            path: "dup.txt".into(),
+            old_content: "a = 1".into(),
+            new_content: "a = 9".into(),
+            replace_all: None,
+        }, &dir);
+        assert!(res_err.is_err());
+        assert!(res_err.unwrap_err().contains("Ambiguous edit"));
+        assert_eq!(fs::read_to_string(&target).unwrap(), orig);
+
+        // 2. With replace_all: true, replaces both
+        let res_ok = edit_file(EditFileArgs {
+            path: "dup.txt".into(),
+            old_content: "a = 1".into(),
+            new_content: "a = 9".into(),
+            replace_all: Some(true),
+        }, &dir).unwrap();
+        assert_eq!(res_ok.replacements, 2);
+        assert_eq!(fs::read_to_string(&target).unwrap(), "a = 9\nb = 2\na = 9\n");
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_crlf_preservation_and_status_t3() {
+        let dir = std::env::temp_dir().join(format!("test_t3_{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+
+        // 1. write_file created vs overwritten status
+        let res_create = write_file(WriteFileArgs {
+            path: "new.txt".into(),
+            content: "hello\n".into(),
+            overwrite: false,
+        }, &dir).unwrap();
+        assert_eq!(res_create.status, "created");
+
+        let res_overwrite = write_file(WriteFileArgs {
+            path: "new.txt".into(),
+            content: "hello updated\n".into(),
+            overwrite: true,
+        }, &dir).unwrap();
+        assert_eq!(res_overwrite.status, "overwritten");
+
+        // 2. CRLF preservation in edit_file
+        let crlf_file = dir.join("crlf.txt");
+        fs::write(&crlf_file, "line1\r\nline2\r\nline3\r\n").unwrap();
+
+        let edit_res = edit_file(EditFileArgs {
+            path: "crlf.txt".into(),
+            old_content: "line1\nline2".into(),
+            new_content: "LINE1\nline2".into(),
+            replace_all: None,
+        }, &dir).unwrap();
+        assert_eq!(edit_res.replacements, 1);
+
+        let content_after = fs::read(&crlf_file).unwrap();
+        assert_eq!(content_after, b"LINE1\r\nline2\r\nline3\r\n");
+
+        // 3. CRLF preservation in patch_file
+        let patch_res = patch_file(PatchFileArgs {
+            path: "crlf.txt".into(),
+            patch: "@@ -1,3 +1,3 @@\n LINE1\n-line2\n+LINE2\n line3\n".into(),
+        }, &dir).unwrap();
+        assert_eq!(patch_res.applied_hunks, 1);
+
+        let patch_after = fs::read(&crlf_file).unwrap();
+        assert_eq!(patch_after, b"LINE1\r\nLINE2\r\nline3\r\n");
+
+        let _ = fs::remove_dir_all(&dir);
     }
 }
 

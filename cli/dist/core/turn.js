@@ -29,6 +29,14 @@ export function assertTurnResultInvariants(t) {
         if (t.unverifiedChangesPending)
             throw new TurnResultInvariantError("VERIFIED conflicts with pending unverified changes");
     }
+    if (t.outcome === "REGRESSION_FREE") {
+        if (t.execution !== "COMPLETED")
+            throw new TurnResultInvariantError("REGRESSION_FREE requires execution COMPLETED");
+        const v = t.verification;
+        if (!v || v.status !== "PASSED" || !v.command || v.exitSuccess !== true) {
+            throw new TurnResultInvariantError("REGRESSION_FREE requires passing verifier evidence");
+        }
+    }
     if (t.outcome === "NOT_REQUIRED" && (t.execution !== "COMPLETED" || t.unverifiedChangesPending)) {
         throw new TurnResultInvariantError("NOT_REQUIRED requires a completed turn with no pending changes");
     }
@@ -51,14 +59,14 @@ export function assertTurnResultInvariants(t) {
 export function deepFreezeTurn(t) {
     return Object.freeze(t);
 }
-/** Process exit contract for `harness run`: 0 verified/nothing-to-verify, 2 completed but unverified, 130 interrupted, 1 otherwise. */
+/** Process exit contract for `harness run`: 0 verified/nothing-to-verify, 2 completed but unverified/regression-free, 130 interrupted, 1 otherwise. */
 export function exitCodeForTurn(t) {
     if (t.execution === "INTERRUPTED")
         return 130;
     if (t.execution === "COMPLETED") {
         if (t.outcome === "VERIFIED" || t.outcome === "NOT_REQUIRED")
             return 0;
-        if (t.outcome === "UNVERIFIED")
+        if (t.outcome === "REGRESSION_FREE" || t.outcome === "UNVERIFIED")
             return 2;
     }
     return 1;
@@ -115,6 +123,8 @@ export function summarizeTurn(t) {
     switch (t.outcome) {
         case "VERIFIED":
             return { heading: "TASK COMPLETED - VERIFIED", line: `execution=COMPLETED outcome=VERIFIED (${t.verification?.command})` };
+        case "REGRESSION_FREE":
+            return { heading: "TASK COMPLETED - REGRESSION FREE", line: `execution=COMPLETED outcome=REGRESSION_FREE (${t.verification?.command})${tail}` };
         case "NOT_REQUIRED":
             return { heading: "TURN ENDED - NO CHANGES TO VERIFY", line: `execution=COMPLETED outcome=NOT_REQUIRED modelStop=${t.modelStop}` };
         case "UNVERIFIED":

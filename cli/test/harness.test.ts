@@ -68,7 +68,8 @@ describe("Nexus Code Test Suite", () => {
       content: "<thought>Let's inspect the directory structure first.</thought>\n```json\n{\"tool\": \"file_tree\", \"arguments\": {\"max_depth\": 2}}\n```",
     };
     const parsed = parseModelResponse(mockMessage);
-    assert.ok(parsed.thoughtText.includes("Let's inspect the directory structure"), "Failed to extract thought");
+    assert.ok(parsed.reasoningText?.includes("Let's inspect the directory structure"), "the reasoning is extracted");
+    assert.ok(!parsed.thoughtText.includes("Let's inspect"), "and kept out of the reply text");
     assert.strictEqual(parsed.toolCalls.length, 1, "Failed to parse json tool call");
     assert.strictEqual(parsed.toolCalls[0].function.name, "file_tree");
   });
@@ -414,6 +415,11 @@ error[E0308]: mismatched types
           const shell = await agent.bridge.executeTool("run_command", { command: `printf blocked > ${transition}-shell.txt` });
           assert.match(file.error || "", /Read-only mode violation/);
           assert.match(shell.error || "", /Read-only mode violation/);
+          // Commands that run project code are not read-only, whatever they are called.
+          for (const command of ["npm test", "pytest", "cargo check", "rg --pre ./x pattern"]) {
+            const ran = await agent.bridge.executeTool("run_command", { command });
+            assert.match(ran.error || "", /Read-only mode violation/, command);
+          }
           assert.strictEqual(fs.existsSync(path.join(repositories[1], `${transition}.txt`)), false);
           assert.strictEqual(fs.existsSync(path.join(repositories[1], `${transition}-shell.txt`)), false);
         }
@@ -3551,8 +3557,10 @@ Workspace path: /home/user/project.
     assert.ok(!sanitized.includes("[SECRET_REF_"));
     assert.ok(sanitized.includes("/home/user/project"));
 
-    // 2. Restore sanitized text for local execution
-    const restored = vault.restore(sanitized);
+    // 2. Restore sanitized text for local execution: only for an explicitly authorized sink
+    assert.strictEqual(vault.restore(sanitized), sanitized, "no context: nothing is restored");
+    assert.strictEqual(vault.restore(sanitized, { isAuthorizedSink: false }), sanitized);
+    const restored = vault.restore(sanitized, { isAuthorizedSink: true });
     assert.ok(restored.includes("sk-proj-1234567890abcdef1234567890123456789012"));
     assert.ok(restored.includes("ghp_123456789012345678901234567890123456"));
     assert.ok(restored.includes("Bearer bAGOhOwLeY7Mabcdef123456789"));

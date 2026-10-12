@@ -3,7 +3,7 @@
  * Nexus Issue #12 — WP-01 (INC-02, EXEC-001..013, FAIL-001..004, F-09)
  */
 import { randomUUID } from "node:crypto";
-import { defaultRegistry, } from "./capabilities.js";
+import { defaultRegistry, changesWorkspace, } from "./capabilities.js";
 export const DEFAULT_SPINE_HOOKS = {
     authorityAdmission: async () => ({ admitted: true }),
     resourceConfinement: async () => ({ confined: true }),
@@ -364,7 +364,7 @@ export class ExecutionSpine {
             // Degraded-mode per FAIL-003: lifecycle notification error does not overwrite tool outcome
         }
         // Stage 6: Post-Execution Evidence & Receipt Generation
-        const candidateMutated = Boolean(result.success && capability.mutating && !context.dryRun);
+        const candidateMutated = Boolean(result.success && changesWorkspace(capability) && !context.dryRun);
         if (candidateMutated) {
             try {
                 await this.hooks.candidateMutation({

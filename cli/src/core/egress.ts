@@ -216,7 +216,17 @@ export class InformationFlowBoundary {
     // Slack Tokens
     { name: "SLACK_TOKEN", regex: /\b(?:xox[baprs]-[0-9a-zA-Z]{10,48})\b/g },
     // Bearer / Authorization tokens
-    { name: "BEARER_AUTH_HEADER", regex: /Bearer\s+([a-zA-Z0-9_\-\.]{16,128})/g },
+    { name: "BEARER_AUTH_HEADER", regex: /\bBearer\s+([a-zA-Z0-9_\-\.]{16,128})/g },
+    // JWT Tokens (3 base64url segments separated by dots)
+    {
+      name: "JWT_TOKEN",
+      regex: /\b(?:eyJ[a-zA-Z0-9_-]{10,}\.eyJ[a-zA-Z0-9_-]{10,}\.[a-zA-Z0-9_-]{10,})\b/g,
+    },
+    // Database URL / Connection String Credentials
+    {
+      name: "DATABASE_URL_PASSWORD",
+      regex: /\b(?:[a-zA-Z][a-zA-Z0-9+.-]{1,20}:\/\/[^:\s\/]+:)([^@\s\/\\\\'"]{3,96})(?:@[^:\s\/]+)/g,
+    },
     // PEM format private keys (RSA, EC, DSA, OPENSSH)
     {
       name: "PEM_PRIVATE_KEY",
@@ -226,13 +236,21 @@ export class InformationFlowBoundary {
 
   // Contextual key-value assignments (DATA-002, DATA-003: matches RHS value only, preserving variable names)
   private static CONTEXTUAL_PATTERNS: Array<{ name: string; regex: RegExp }> = [
+    // A quoted value assigned to a credential-named key (`db_password = "…"`, `"apiKey": "…"`). The quotes are
+    // required: unquoted right-hand sides are code (`password = process.env.DB_PASSWORD`, `password: Optional[str]`).
     {
       name: "KEY_VALUE_SECRET",
-      regex: /(?:(?:password|passwd|secret|api_key|apiKey|access_token|private_key)["']?\s*[:=]\s*["'])([^"' \t\r\n]{8,96})(?:["'])/gi,
+      regex: /\b[a-zA-Z0-9_-]{0,32}?(?:password|passwd|secret|api_key|apikey|access_token|private_key|auth_token|secret_key)["']?\s*[:=]\s*["']([^"'\s\\]{8,96})["']/gi,
+    },
+    // An unquoted value in an env-file style line: an upper-case credential-named variable at line start, not a
+    // `$REFERENCE`, with nothing after the value.
+    {
+      name: "ENV_ASSIGNMENT_SECRET",
+      regex: /^[ \t]*(?:export[ \t]+)?[A-Z0-9_]*(?:PASSWORD|PASSWD|SECRET|API_KEY|ACCESS_TOKEN|AUTH_TOKEN|PRIVATE_KEY)[A-Z0-9_]*=(?!\$)([^\s"'#()[\]]{8,96})[ \t]*$/gm,
     },
     {
       name: "AWS_SECRET_KEY_PAIR",
-      regex: /(?:(?:aws_secret_access_key|secret_key)\s*[:=]\s*["']?)([a-zA-Z0-9/+=]{40})(?:["']?)/gi,
+      regex: /\b(?:(?:aws_secret_access_key|secret_key)\s*[:=]\s*["']?)([a-zA-Z0-9/+=]{40})/gi,
     },
   ];
 
@@ -262,27 +280,65 @@ export class InformationFlowBoundary {
   }
 
   /**
+   * Values of credential-named environment variables, classified like operator-declared secrets. Reading the
+   * environment is slow (each value is copied out of the process environment), so a caller classifying many strings
+   * reads it once and passes the result to classifyText.
+   */
+  private environmentSecrets(): string[] {
+    const envSecrets: string[] = [];
+    const sensitiveEnvKeys = [
+      "OPENAI_API_KEY",
+      "ANTHROPIC_API_KEY",
+      "LOCAL_LLM_API_KEY",
+      "NEXUS_API_KEY",
+      "GITHUB_TOKEN",
+      "GH_TOKEN",
+      "AWS_SECRET_ACCESS_KEY",
+      "AWS_SESSION_TOKEN",
+    ];
+    for (const [k, v] of Object.entries(process.env)) {
+      // Short values, paths and plain flags/numbers are too common to replace wherever they appear.
+      if (!v || typeof v !== "string" || v.length < 16 || /^[~/.]/.test(v) || /^(?:true|false|\d+)$/i.test(v)) continue;
+      const upper = k.toUpperCase();
+      if (
+        sensitiveEnvKeys.includes(upper) ||
+        upper.includes("API_KEY") ||
+        upper.includes("SECRET") ||
+        upper.includes("PASSWORD") ||
+        upper.includes("AUTH_TOKEN") ||
+        upper.includes("PRIVATE_KEY")
+      ) {
+        envSecrets.push(v);
+      }
+    }
+    return envSecrets;
+  }
+
+  /**
    * Classify sensitive data within a text string (DATA-001, DATA-002, DATA-003, DATA-004).
    */
-  public classifyText(text: string): ClassifiedSecret[] {
+  public classifyText(text: string, envSecrets: string[] = this.environmentSecrets()): ClassifiedSecret[] {
     if (!text || typeof text !== "string") return [];
 
     const classified: ClassifiedSecret[] = [];
     const seenSecrets = new Set<string>();
 
     // 1. Explicit Operator Classifications (DATA-002: Category 1)
-    if (this.policy.explicitSecrets && this.policy.explicitSecrets.length > 0) {
-      for (const explicit of this.policy.explicitSecrets) {
-        if (explicit && text.includes(explicit) && !seenSecrets.has(explicit)) {
-          seenSecrets.add(explicit);
-          classified.push({
-            secret: explicit,
-            classificationType: "OPERATOR_EXPLICIT",
-            classifierId: "operator:policy",
-            confidence: 1.0,
-            patternName: "EXPLICIT_SECRET",
-          });
-        }
+    const explicitList = [
+      ...(this.policy.explicitSecrets || []),
+      ...envSecrets,
+    ];
+
+    for (const explicit of explicitList) {
+      if (explicit && text.includes(explicit) && !seenSecrets.has(explicit)) {
+        seenSecrets.add(explicit);
+        classified.push({
+          secret: explicit,
+          classificationType: "OPERATOR_EXPLICIT",
+          classifierId: "operator:policy",
+          confidence: 1.0,
+          patternName: "EXPLICIT_SECRET",
+        });
       }
     }
 
@@ -293,8 +349,15 @@ export class InformationFlowBoundary {
       while ((match = re.exec(text)) !== null) {
         const fullMatch = match[0];
         // If capture group exists (e.g. Bearer token), extract captured secret, else fullMatch
-        const secretVal = match[1] && typeof match[1] === "string" ? match[1] : fullMatch;
-        if (secretVal.length >= 8 && !secretVal.startsWith("[NEXUS_SEC_REF_") && !seenSecrets.has(secretVal)) {
+        let secretVal = match[1] && typeof match[1] === "string" ? match[1] : fullMatch;
+        secretVal = secretVal.replace(/["';,]+$/, "");
+        if (
+          secretVal.length >= 8 &&
+          !secretVal.startsWith("[NEXUS_SEC_REF_") &&
+          !secretVal.startsWith("[SECRET_REF_") &&
+          !secretVal.startsWith("[REDACTED:") &&
+          !seenSecrets.has(secretVal)
+        ) {
           seenSecrets.add(secretVal);
           classified.push({
             secret: secretVal,
@@ -312,16 +375,29 @@ export class InformationFlowBoundary {
       const re = new RegExp(regex.source, regex.flags);
       let match: RegExpExecArray | null;
       while ((match = re.exec(text)) !== null) {
-        const secretVal = match[1];
+        let secretVal = match[1];
+        if (!secretVal) continue;
+        secretVal = secretVal.replace(/["';,]+$/, "");
         if (
-          secretVal &&
           secretVal.length >= 8 &&
           !secretVal.startsWith("[NEXUS_SEC_REF_") &&
+          !secretVal.startsWith("[SECRET_REF_") &&
+          !secretVal.startsWith("[REDACTED:") &&
           !seenSecrets.has(secretVal)
         ) {
           // Avoid matching obvious non-secrets / placeholders
           const lower = secretVal.toLowerCase();
-          if (lower === "password" || lower === "changeme" || lower === "your_api_key_here") {
+          if (
+            lower === "password" ||
+            lower === "changeme" ||
+            lower === "your_api_key_here" ||
+            lower === "undefined" ||
+            lower === "true" ||
+            lower === "false" ||
+            lower === "null" ||
+            lower === "secret" ||
+            lower === "not_set"
+          ) {
             continue;
           }
           seenSecrets.add(secretVal);
@@ -338,9 +414,17 @@ export class InformationFlowBoundary {
 
     // 4. High-Entropy Token Detection (DATA-002: Category 4 / DATA-004)
     // Check individual non-whitespace tokens length >= 20 with high Shannon entropy
-    const tokens = text.split(/[\s,;'"()\[\]{}]+/);
+    const tokens = text.split(/[\s,;'"()\[\]{}=:]+/);
     for (const tok of tokens) {
-      if (tok.length >= 20 && tok.length <= 128 && !tok.startsWith("[NEXUS_SEC_REF_") && !seenSecrets.has(tok)) {
+      if (
+        tok.length >= 20 &&
+        tok.length <= 128 &&
+        !tok.startsWith("[NEXUS_SEC_REF_") &&
+        !tok.startsWith("[SECRET_REF_") &&
+        !tok.startsWith("[REDACTED:") &&
+        !seenSecrets.has(tok)
+      ) {
+        // No dots: file paths and dotted names are not tokens (JWTs have their own pattern above).
         if (/^[a-zA-Z0-9+/=_-]+$/.test(tok)) {
           const entropy = calculateShannonEntropy(tok);
           // Scaled entropy threshold: >= 4.0 for length 20-31, >= 4.5 for length >= 32
@@ -381,10 +465,11 @@ export class InformationFlowBoundary {
   }
 
   private redactClassifiedValue<T>(value: T): T {
+    const envSecrets = this.environmentSecrets();
     const visit = (item: any): any => {
       if (typeof item === "string") {
         let sanitized = item;
-        for (const secret of this.classifyText(item)) {
+        for (const secret of this.classifyText(item, envSecrets)) {
           sanitized = sanitized.replaceAll(secret.secret, `[REDACTED:${secret.patternName || "SECRET"}]`);
         }
         return sanitized;
@@ -407,7 +492,7 @@ export class InformationFlowBoundary {
     const serialized = JSON.stringify(recursivelySanitized);
     if (serialized === undefined) throw new Error("Telemetry payload is not JSON serializable");
     let sanitizedSerialized = serialized;
-    for (const secret of this.classifyText(serialized)) {
+    for (const secret of this.classifyText(serialized, envSecrets)) {
       sanitizedSerialized = sanitizedSerialized.replaceAll(secret.secret, `[REDACTED:${secret.patternName || "SECRET"}]`);
     }
     return JSON.parse(sanitizedSerialized) as T;

@@ -369,7 +369,7 @@ export class SidecarServer {
         const evidence = open.get(dispatch) ?? "";
         const safe = safeDiffText(change.diff);
         const fullPath = this.keepOperationDiff(evidence, callId, safe);
-        this.evidence.attachDiff(evidence, change.diff, fullPath);
+        this.evidence.attachDiff(evidence, safe, fullPath);
         const { preview, truncated, totalLines } = previewDiff(safe, DIFF_PREVIEW_LINES, DIFF_PREVIEW_CHARS);
         this.emit({
           type: "file.diff",
@@ -396,6 +396,7 @@ export class SidecarServer {
             : `The agent repeated ${toolName(detail)} with an unchanged result: Nexus told it to change approach (${n} of ${max}).`;
         this.emit({ type: "notice", text });
       },
+      onNotice: (text) => this.emit({ type: "notice", text: redactSecrets(text) }),
       onSteering: ({ id, status, step, text, reason }) => {
         if (status === "applied") this.steerAck(id, "applied", `Applied at step ${step}.`);
         else this.steerAck(id, "cancelled", `Not applied: ${reason ?? "the turn ended first"}. Your message is back in the composer.`, text);

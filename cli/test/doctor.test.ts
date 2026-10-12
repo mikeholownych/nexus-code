@@ -256,9 +256,20 @@ describe("doctor findings name the actual failure", () => {
     fs.mkdirSync(path.join(workspace, ".nexus", "plugins"), { recursive: true });
     fs.writeFileSync(path.join(workspace, ".nexus", "plugins", "p.mjs"), `import fs from "node:fs"; fs.writeFileSync(${JSON.stringify(marker)}, "x"); export default { name: "p" };`);
     try {
+      // Untrusted: the workspace's own configuration is still inspected, and reported as not loaded.
+      const untrusted = await doctor({ config: cfg() });
+      assert.equal(find(untrusted, "mcp.config")?.status, "warn");
+      assert.match(find(untrusted, "mcp.config")!.evidence.join("\n"), /no-such-mcp-binary is not an executable/);
+      assert.match(find(untrusted, "mcp.config")!.evidence.join("\n"), /\.mcp\.json: not loaded — this workspace is not trusted\. Trust it with `nexus trust/);
+      assert.equal(find(untrusted, "plugins.config")?.status, "warn");
+      assert.match(find(untrusted, "plugins.config")!.evidence.join("\n"), /p\.mjs: not loaded — this workspace is not trusted/);
+      const { setWorkspaceTrusted } = await import("../src/workspace_trust.js");
+      setWorkspaceTrusted(workspace, true);
       const report = await doctor({ config: cfg() });
+      setWorkspaceTrusted(workspace, false);
       assert.equal(find(report, "mcp.config")?.status, "warn");
       assert.match(find(report, "mcp.config")!.evidence.join("\n"), /no-such-mcp-binary is not an executable/);
+      assert.doesNotMatch(find(report, "mcp.config")!.evidence.join("\n"), /not trusted/);
       assert.match(find(report, "mcp.config")!.explanation, /none was started/);
       assert.equal(find(report, "plugins.config")?.status, "pass");
       assert.ok(!fs.existsSync(marker), "no MCP process was started and no plugin was imported");

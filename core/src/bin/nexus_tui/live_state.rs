@@ -2003,6 +2003,12 @@ pub fn outcome_for(turn: &Value) -> Outcome {
     };
     let (title, cause, next) = match (execution, outcome, reason) {
         ("COMPLETED", "VERIFIED", _) => ("Done · verified".to_string(), verifier.map(|c| format!("{c} passed")), None),
+        // The suite passed but nothing shows it tested the change: nothing else broke, the change itself is unproven.
+        ("COMPLETED", "REGRESSION_FREE", _) => (
+            "Done · tests passed, change not covered".to_string(),
+            Some(format!("{} passed, but none of the tests it ran covers the changed files.", verifier.unwrap_or_else(|| "The test command".into()))),
+            text("add a test for the change (or run one that names it), or check it yourself with /diff"),
+        ),
         ("COMPLETED", "NOT_REQUIRED", _) => ("Done".to_string(), text("No files changed, so there was nothing to verify."), None),
         ("COMPLETED", "UNVERIFIED", "NO_APPLICABLE_VERIFIER") => (
             "Done · not verified".to_string(),
@@ -2090,6 +2096,15 @@ pub fn tone_for(turn: &Value) -> Tone {
 mod tests {
     use super::*;
     use crate::protocol::Review;
+
+    #[test]
+    fn a_suite_that_did_not_cover_the_change_reads_as_unproven_not_verified() {
+        let turn: Value = serde_json::from_str(r#"{"execution":"COMPLETED","outcome":"REGRESSION_FREE","reason":"REGRESSION_FREE","verification":{"status":"PASSED","command":"npm test"}}"#).unwrap();
+        let outcome = outcome_for(&turn);
+        assert_eq!(outcome.title, "Done · tests passed, change not covered");
+        assert_eq!(outcome.cause.as_deref(), Some("npm test passed, but none of the tests it ran covers the changed files."));
+        assert!(matches!(tone_for(&turn), Tone::Caution));
+    }
     use crate::protocol::parse_event;
     use crate::review::{LineKind, review_lines};
 

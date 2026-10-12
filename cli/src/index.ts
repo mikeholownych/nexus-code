@@ -55,12 +55,14 @@ function exitAfterFlush(code: number): void {
   process.stderr.write("", done);
 }
 
+import { getBuildIdentity } from "./build_identity.js";
+
 const program = new Command();
 
 program
   .name("harness")
   .description("Nexus Code - Custom Autonomous Coding Harness for Local AI (LM Studio / vLLM)")
-  .version("1.2.1");
+  .version(getBuildIdentity().string);
 
 program
   .command("repl")
@@ -379,6 +381,10 @@ program
   .action(async (options: any) => {
     const ws = options.workspace ? path.resolve(options.workspace) : process.cwd();
     const mcp = new McpClientManager(ws);
+    const { untrustedWorkspaceExtensions } = await import("./workspace_trust.js");
+    for (const file of untrustedWorkspaceExtensions(ws).filter((f) => /(^|[\\/])\.?mcp\.json$/.test(f))) {
+      console.log(pc.yellow(`Not loaded (workspace not trusted; run \`nexus trust\`): ${file}`));
+    }
     console.log(pc.dim("\nConnecting to configured MCP servers..."));
     await mcp.loadAndConnect();
     const servers = mcp.listServers();
@@ -414,6 +420,10 @@ program
   .action(async (options: any) => {
     const ws = options.workspace ? path.resolve(options.workspace) : process.cwd();
     const pm = new PluginManager(ws);
+    const { untrustedWorkspaceExtensions } = await import("./workspace_trust.js");
+    for (const file of untrustedWorkspaceExtensions(ws).filter((f) => !/(^|[\\/])\.?mcp\.json$/.test(f))) {
+      console.log(pc.yellow(`Not loaded (workspace not trusted; run \`nexus trust\`): ${file}`));
+    }
     await pm.loadPlugins();
     const plugins = pm.listPlugins();
     if (plugins.length === 0) {
@@ -424,6 +434,28 @@ program
     for (const p of plugins) {
       console.log(`• ${pc.bold(pc.green(p.name))}: ${p.description} (custom tools: ${p.customToolCount})\n`);
     }
+  });
+
+program
+  .command("trust [path]")
+  .description("Trust a workspace so its own .mcp.json servers and plugins are loaded (they run code from the workspace)")
+  .option("--remove", "Stop trusting the workspace")
+  .option("--list", "List trusted workspaces")
+  .action(async (target: string | undefined, options: any) => {
+    const { listTrustedWorkspaces, setWorkspaceTrusted } = await import("./workspace_trust.js");
+    if (options.list) {
+      const list = listTrustedWorkspaces();
+      console.log(list.length ? list.join("\n") : "No trusted workspaces.");
+      return;
+    }
+    const ws = path.resolve(target ?? process.cwd());
+    if (!fs.existsSync(ws) || !fs.statSync(ws).isDirectory()) {
+      console.error(pc.red(`Not a directory: ${ws}`));
+      process.exitCode = 1;
+      return;
+    }
+    const real = setWorkspaceTrusted(ws, !options.remove);
+    console.log(options.remove ? `No longer trusted: ${real}` : `Trusted: ${real}\nIts .mcp.json servers and plugins will be loaded (they run code from this workspace). Undo with \`nexus trust --remove\`.`);
   });
 
 program

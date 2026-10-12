@@ -2,10 +2,20 @@ import pc from "picocolors";
 import ora from "ora";
 import { summarizeTurn } from "./core/turn.js";
 import { highlightDiff, highlightCode } from "./syntax.js";
+import { InformationFlowBoundary } from "./core/egress.js";
 export function redactSecrets(text) {
     if (!text)
         return text;
-    return text
+    let result = text;
+    try {
+        const boundary = InformationFlowBoundary.getGlobalInstance();
+        const redacted = boundary.redactForTelemetry(text);
+        if (typeof redacted === "string") {
+            result = redacted;
+        }
+    }
+    catch { }
+    return result
         .replace(/Bearer\s+[A-Za-z0-9_\-\.]{15,}/gi, "Bearer [REDACTED_TOKEN]")
         .replace(/(?:sk-|ghp_|gho_|glpat-|xoxb-|xoxp-)[A-Za-z0-9_\-]{16,}/g, "[REDACTED_KEY]")
         .replace(/-----BEGIN[ A-Z0-9_-]*PRIVATE KEY-----[\s\S]*?-----END[ A-Z0-9_-]*PRIVATE KEY-----/g, "[REDACTED_PRIVATE_KEY]")

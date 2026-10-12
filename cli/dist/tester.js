@@ -7,6 +7,15 @@ import { extractCompilerDiagnostics } from "./diagnostics.js";
  */
 export function detectTestCommand(workspace, filterPattern) {
     const root = path.resolve(workspace);
+    if (filterPattern) {
+        // The filter is interpolated into a shell command: letters, digits and `_ : . / -` with single spaces only (no
+        // newline, quote or shell metacharacter), and it may not start with `-` (it would become a runner flag).
+        const trimmed = filterPattern.trim();
+        if (!/^[A-Za-z0-9_:./ -]+$/.test(trimmed) || trimmed.startsWith("-")) {
+            throw new Error(`Invalid test filter pattern '${filterPattern}': contains unsafe characters.`);
+        }
+        filterPattern = trimmed;
+    }
     // 1. Makefile with test target
     const makefile = path.join(root, "Makefile");
     if (fs.existsSync(makefile)) {
@@ -158,4 +167,181 @@ function summarizeTestRun(command, success, rawOutput) {
         failures,
         diagnostics,
     };
+}
+/**
+ * Whether a verifier command runs only part of the suite: a name filter (`-t`, `-k`, `--test-name-pattern`, `--grep`,
+ * `-run`, `FILTER=`), a pytest node id (`file.py::test`), or a positional test name for `cargo test`. A filtered run
+ * can show that a test passes, not that nothing else broke.
+ */
+export function isFilteredVerifierCommand(command) {
+    if (!command)
+        return false;
+    if (/(?:^|\s)(?:-t|-k|--grep|-g)(?:\s|=)\S/.test(command))
+        return true;
+    if (/(?:^|\s)(?:--test-name-pattern|--testNamePattern|-run|--run)(?:\s|=)\S/.test(command))
+        return true;
+    if (/(?:^|\s)FILTER=\S/.test(command))
+        return true;
+    if (/\S\.py::\S/.test(command))
+        return true;
+    const cargo = command.match(/\bcargo\s+test\b(.*)$/);
+    if (cargo) {
+        const tokens = cargo[1].trim().split(/\s+/).filter(Boolean);
+        const takesValue = new Set(["--manifest-path", "-p", "--package", "--features", "-F", "--target", "--profile", "-j", "--jobs", "--bin", "--test", "--example", "--bench", "--exclude", "--target-dir", "--color", "--message-format"]);
+        for (let i = 0; i < tokens.length; i++) {
+            const token = tokens[i];
+            if (token === "--")
+                return tokens.slice(i + 1).some((t) => !t.startsWith("-"));
+            if (takesValue.has(token)) {
+                i++;
+                continue;
+            }
+            if (token.startsWith("-") || /[;&|]/.test(token)) {
+                if (/[;&|]/.test(token))
+                    break;
+                continue;
+            }
+            return true;
+        }
+    }
+    return false;
+}
+/**
+ * Whether a test run's output shows that at least one test executed. Runners that report counts are read (node:test,
+ * cargo, pytest, jest/vitest, go); output with no recognisable report — including no output — is not evidence.
+ */
+export function hasExecutedTests(rawOutput) {
+    if (!rawOutput)
+        return false;
+    const count = (re) => [...rawOutput.matchAll(re)].reduce((sum, m) => sum + Number(m[1]), 0);
+    const node = [...rawOutput.matchAll(/ℹ\s+tests\s+(\d+)/g)];
+    if (node.length)
+        return count(/ℹ\s+tests\s+(\d+)/g) > 0;
+    const cargo = [...rawOutput.matchAll(/test result: \w+\. (\d+) passed; (\d+) failed/g)];
+    if (cargo.length)
+        return cargo.some((m) => Number(m[1]) + Number(m[2]) > 0);
+    const jest = rawOutput.match(/Tests:\s+(?:.*?(\d+) passed)?.*?(\d+) total/);
+    if (jest)
+        return Number(jest[2]) > 0;
+    const pytest = rawOutput.match(/=+ .*?(\d+) passed/);
+    if (pytest)
+        return Number(pytest[1]) > 0;
+    if (/collected 0 items|no tests ran/i.test(rawOutput))
+        return false;
+    // go test: an `ok <package>` line that ran tests (not `[no tests to run]`), or verbose `--- PASS` lines.
+    if ([...rawOutput.matchAll(/^ok\s+\S+.*$/gm)].some((m) => !m[0].includes("[no tests to run]")))
+        return true;
+    if (/^--- PASS: /m.test(rawOutput))
+        return true;
+    return false;
+}
+const TEST_PATH = /(?:^|[\\/])(?:tests?|__tests__|spec)[\\/]|(?:^|[\\/])test_[^\\/]+\.py$|[._-](?:test|spec)\.[A-Za-z0-9]+$|_test\.(?:go|rs|py)$/i;
+const SKIP_DIRS = new Set(["node_modules", ".git", "target", "dist", "build", "vendor", ".venv", "venv", "__pycache__", ".nexus"]);
+const MAX_TEST_FILES = 2000;
+const MAX_TEST_BYTES = 256 * 1024;
+/** Test files of a workspace (bounded: depth 6, 2000 files, generated and dependency directories skipped). */
+function workspaceTestFiles(root) {
+    const found = [];
+    const walk = (dir, depth) => {
+        if (depth > 6 || found.length >= MAX_TEST_FILES)
+            return;
+        let entries;
+        try {
+            entries = fs.readdirSync(dir, { withFileTypes: true });
+        }
+        catch {
+            return;
+        }
+        for (const entry of entries) {
+            if (found.length >= MAX_TEST_FILES)
+                return;
+            const full = path.join(dir, entry.name);
+            if (entry.isDirectory()) {
+                if (!SKIP_DIRS.has(entry.name))
+                    walk(full, depth + 1);
+            }
+            else if (TEST_PATH.test(path.relative(root, full))) {
+                found.push(full);
+            }
+        }
+    };
+    walk(root, 0);
+    return found;
+}
+/** Whether `content` (a test file) imports the module `file`: an import specifier ending in its name, not a substring. */
+function importsModule(content, file) {
+    const stem = path.basename(file).replace(/\.[^.]+$/, "");
+    if (!stem || stem === "index" || stem === "mod" || stem === "__init__") {
+        // Imported through its directory: match the directory name instead.
+        const dir = path.basename(path.dirname(file));
+        return dir ? importsName(content, dir) : false;
+    }
+    return importsName(content, stem);
+}
+function importsName(content, name) {
+    const n = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    // JS/TS: from "…/name(.ext)" / require("…/name") / import("…/name")
+    if (new RegExp(`(?:from|require\\(|import\\()\\s*["'][^"']*(?:^|/)${n}(?:\\.[cm]?[jt]sx?)?["']`).test(content))
+        return true;
+    // Python: from pkg.name import … / import pkg.name / from . import name
+    if (new RegExp(`^\\s*(?:from\\s+[\\w.]*\\b${n}\\b\\s+import|import\\s+[\\w.]*\\b${n}\\b|from\\s+[\\w.]+\\s+import\\s+.*\\b${n}\\b)`, "m").test(content))
+        return true;
+    // Rust: use crate::name / use super::name / mod name
+    if (new RegExp(`\\buse\\s+(?:crate|super|self|\\w+)::(?:[\\w:]*::)?${n}\\b|\\bmod\\s+${n}\\b`).test(content))
+        return true;
+    return false;
+}
+/**
+ * Whether a passing verifier run is evidence about the changed files (VERIFIED) rather than only a regression check
+ * (REGRESSION_FREE). It must show that tests executed, and then one of:
+ * - a changed file is a test file (the change brings its own test);
+ * - the command or the run's output names a changed file;
+ * - the change has inline tests the run executes (a Rust file with `#[cfg(test)]` under `cargo test`; a Go package
+ *   with `_test.go` files under `go test`);
+ * - a workspace test file imports a changed module (by import specifier, not by substring).
+ * With no changed files recorded (e.g. changes carried over from a resumed session), executed tests are the evidence.
+ */
+export function isVerifierDeliverableBound(workspace, changedFiles, verifierCommand, testOutput = "") {
+    if (!hasExecutedTests(testOutput))
+        return false;
+    if (!changedFiles || changedFiles.length === 0)
+        return true;
+    const root = path.resolve(workspace);
+    const rel = (file) => path.relative(root, path.resolve(root, file));
+    if (changedFiles.some((file) => TEST_PATH.test(rel(file))))
+        return true;
+    for (const file of changedFiles) {
+        const r = rel(file);
+        const base = path.basename(file);
+        if (verifierCommand.includes(r) || testOutput.includes(r) || (base.includes(".") && (verifierCommand.includes(base) || testOutput.includes(base))))
+            return true;
+    }
+    const read = (file) => {
+        try {
+            const stat = fs.statSync(file);
+            return stat.size <= MAX_TEST_BYTES ? fs.readFileSync(file, "utf8") : "";
+        }
+        catch {
+            return "";
+        }
+    };
+    for (const file of changedFiles) {
+        const full = path.resolve(root, file);
+        if (/\bcargo\s+test\b/.test(verifierCommand) && full.endsWith(".rs") && /#\[cfg\(test\)\]/.test(read(full)))
+            return true;
+        if (/\bgo\s+test\b/.test(verifierCommand) && full.endsWith(".go")) {
+            try {
+                if (fs.readdirSync(path.dirname(full)).some((name) => name.endsWith("_test.go")))
+                    return true;
+            }
+            catch { }
+        }
+    }
+    const tests = workspaceTestFiles(root);
+    for (const test of tests) {
+        const content = read(test);
+        if (content && changedFiles.some((file) => importsModule(content, path.resolve(root, file))))
+            return true;
+    }
+    return false;
 }

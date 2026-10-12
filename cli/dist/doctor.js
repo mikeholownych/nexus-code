@@ -23,6 +23,8 @@ import { LocalLlmClient, credentialStorageHome } from "./client.js";
 import { credentialsPath } from "./credentials.js";
 import { mcpConfigFiles } from "./mcp.js";
 import { pluginDirs } from "./plugins.js";
+import { untrustedWorkspaceExtensions, WORKSPACE_MCP_FILES } from "./workspace_trust.js";
+import { getBuildIdentity } from "./build_identity.js";
 import { defaultSessionsDir } from "./session.js";
 import { defaultTaskStateDir } from "./core/state.js";
 import { coreCargoManifest, resolveCoreBinary } from "./tools.js";
@@ -230,9 +232,13 @@ export function configSources(config, flags, home = credentialStorageHome()) {
 // Checks
 // ---------------------------------------------------------------------------------------------------------------
 const installCheck = async () => {
-    const version = nexusVersion();
+    const build = getBuildIdentity();
     const dist = path.join(INSTALL_ROOT, "cli/dist/index.js");
-    const evidence = [`version ${version}`, `install root ${INSTALL_ROOT}`];
+    const evidence = [
+        `version ${build.version}`,
+        build.commit === "unknown" ? "build identity unknown (built before build-info was recorded; run `make build`)" : `built from ${build.commit}${build.dirty ? " with uncommitted changes" : ""}${build.branch ? ` on ${build.branch}` : ""}`,
+        `install root ${INSTALL_ROOT}`,
+    ];
     if (!fs.existsSync(dist))
         return f("install.build", "install", "fail", "The CLI build (cli/dist) is missing.", evidence, `Run \`make build\` in ${INSTALL_ROOT}.`);
     const built = fs.statSync(dist).mtimeMs;
@@ -586,7 +592,8 @@ const mcpCheck = async (ctx) => {
     const servers = [];
     const problems = [];
     const seen = new Set();
-    for (const file of mcpConfigFiles(workspace)) {
+    // Every configuration file is inspected, including a workspace's own that is not loaded because it is untrusted.
+    for (const file of mcpConfigFiles(workspace, true)) {
         if (!fs.existsSync(file))
             continue;
         let config;
@@ -624,6 +631,9 @@ const mcpCheck = async (ctx) => {
             }
         }
     }
+    for (const file of untrustedWorkspaceExtensions(workspace).filter((f) => WORKSPACE_MCP_FILES.includes(path.basename(f)))) {
+        problems.push(`${file}: not loaded — this workspace is not trusted. Trust it with \`nexus trust ${workspace}\` to use its MCP servers.`);
+    }
     const note = "Servers were inspected from configuration only; none was started.";
     if (problems.length)
         out.push(f("mcp.config", "extensions", "warn", `${problems.length} configured MCP server problem(s); affected servers will not provide tools. ${note}`, [...problems, ...servers], "Fix the listed configuration entries."));
@@ -635,7 +645,10 @@ const pluginCheck = async (ctx) => {
     const workspace = ctx.config?.workspace ?? process.cwd();
     const found = [];
     const risky = [];
-    for (const dir of pluginDirs(workspace)) {
+    for (const file of untrustedWorkspaceExtensions(workspace).filter((f) => !WORKSPACE_MCP_FILES.includes(path.basename(f)))) {
+        risky.push(`${file}: not loaded — this workspace is not trusted. Trust it with \`nexus trust ${workspace}\` to load its plugins.`);
+    }
+    for (const dir of pluginDirs(workspace, true)) {
         let names;
         try {
             names = fs.readdirSync(dir);
@@ -653,7 +666,7 @@ const pluginCheck = async (ctx) => {
     }
     const note = "Plugin modules were listed, not loaded (loading runs their code).";
     if (risky.length)
-        return f("plugins.config", "extensions", "warn", `${risky.length} plugin file(s) are writable by any user. ${note}`, [...risky, ...found.slice(0, 10)], "Restrict them with `chmod o-w <file>`.");
+        return f("plugins.config", "extensions", "warn", `${risky.length} plugin problem(s): untrusted workspace plugins are not loaded; world-writable plugin files could be changed by anyone. ${note}`, [...risky, ...found.slice(0, 10)], "Trust the workspace (`nexus trust`) or remove its plugins; restrict writable files with `chmod o-w <file>`.");
     return f("plugins.config", "extensions", found.length ? "pass" : "skip", found.length ? `${found.length} plugin module(s) found. ${note}` : "No plugins are installed (optional).", found.slice(0, 10));
 };
 const CHECKS = [
@@ -727,6 +740,7 @@ export async function runDoctor(optionsOrConfig = {}, legacyError) {
         schemaVersion: DOCTOR_SCHEMA_VERSION,
         tool: "nexus doctor",
         nexusVersion: nexusVersion(),
+        buildIdentity: getBuildIdentity(),
         context: options.context ?? "cli",
         deep: ctx.deep,
         generatedAt: new Date().toISOString(),

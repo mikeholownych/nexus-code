@@ -1174,14 +1174,15 @@ export class LocalLlmClient {
       const handleLine = (line: string): void => {
         const trimmed = line.trim();
         if (!trimmed || trimmed.startsWith(":")) return;
-        if (trimmed === "data: [DONE]") {
+        if (trimmed === "data: [DONE]" || trimmed === "data:[DONE]") {
           sawDone = true;
           return;
         }
-        if (!trimmed.startsWith("data: ")) return;
+        if (!trimmed.startsWith("data:") && !trimmed.startsWith("data: ")) return;
+        const payload = trimmed.startsWith("data: ") ? trimmed.slice(6) : trimmed.slice(5);
         let chunk: any;
         try {
-          chunk = JSON.parse(trimmed.slice(6));
+          chunk = JSON.parse(payload);
         } catch {
           throw new InferenceError("malformed_event", "provider", `Malformed stream event: ${trimmed.slice(0, 120)}`, {
             requestId,

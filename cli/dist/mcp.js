@@ -3,7 +3,36 @@ import * as path from "node:path";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import { HARNESS_TOOLS, RustCoreBridge } from "./tools.js";
+import { isWorkspaceTrusted, WORKSPACE_MCP_FILES } from "./workspace_trust.js";
 import pc from "picocolors";
+/**
+ * The environment an MCP server starts with: basic process, locale, proxy and CA-trust variables only (no credentials
+ * or other secrets of the Nexus process), plus the server's own `env` from its configuration — which is where a server
+ * that needs a token gets it.
+ */
+export function buildMcpEnvironment(customEnv) {
+    const SAFE_VARS = new Set([
+        "PATH", "HOME", "LANG", "LC_ALL", "LC_CTYPE", "TERM", "USER", "LOGNAME",
+        "SHELL", "TMPDIR", "NODE_PATH", "XDG_RUNTIME_DIR", "XDG_CONFIG_HOME", "XDG_DATA_HOME",
+        // Network access through a proxy and custom certificate authorities (no credentials are implied by these).
+        "HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "no_proxy", "all_proxy",
+        "SSL_CERT_FILE", "SSL_CERT_DIR", "NODE_EXTRA_CA_CERTS", "REQUESTS_CA_BUNDLE", "CURL_CA_BUNDLE",
+    ]);
+    const env = {};
+    for (const [k, v] of Object.entries(process.env)) {
+        if (v !== undefined && SAFE_VARS.has(k)) {
+            env[k] = v;
+        }
+    }
+    if (customEnv) {
+        for (const [k, v] of Object.entries(customEnv)) {
+            if (v !== undefined) {
+                env[k] = v;
+            }
+        }
+    }
+    return env;
+}
 export class McpConnection {
     serverName;
     config;
@@ -55,7 +84,7 @@ export class McpConnection {
     async connectStdio() {
         if (!this.config.command)
             return false;
-        const env = { ...process.env, ...this.config.env };
+        const env = buildMcpEnvironment(this.config.env);
         const cwd = this.config.cwd || process.cwd();
         this.child = spawn(this.config.command, this.config.args || [], {
             cwd,
@@ -408,22 +437,24 @@ export class McpConnection {
     }
 }
 /** MCP configuration files Nexus reads, in precedence order (the first definition of a server name wins). */
-export function mcpConfigFiles(workspace) {
-    return [
-        path.join(workspace, ".mcp.json"),
-        path.join(workspace, "mcp.json"),
-        path.join(os.homedir(), ".config", "nexus", "mcp.json"),
-        path.join(os.homedir(), ".nexus", "mcp.json"),
-        path.join(os.homedir(), ".config", "opencode", "mcp.json"),
-    ];
+export function mcpConfigFiles(workspace, trusted = false, readOnly = false) {
+    const configs = [];
+    if (trusted && !readOnly)
+        configs.push(...WORKSPACE_MCP_FILES.map((file) => path.join(workspace, file)));
+    configs.push(path.join(os.homedir(), ".config", "nexus", "mcp.json"), path.join(os.homedir(), ".nexus", "mcp.json"), path.join(os.homedir(), ".config", "opencode", "mcp.json"));
+    return configs;
 }
 export class McpClientManager {
     static activeManagers = new Set();
     workspace;
+    readOnly;
+    trusted;
     connections = new Map();
     toolToServerMap = new Map();
-    constructor(workspace) {
+    constructor(workspace, options = {}) {
         this.workspace = path.resolve(workspace);
+        this.readOnly = options.readOnly ?? false;
+        this.trusted = options.trusted ?? isWorkspaceTrusted(this.workspace, this.readOnly);
         McpClientManager.activeManagers.add(this);
     }
     static shutdownAllGlobal() {
@@ -434,7 +465,7 @@ export class McpClientManager {
     }
     async loadAndConnect() {
         this.shutdownAll();
-        for (const file of mcpConfigFiles(this.workspace)) {
+        for (const file of mcpConfigFiles(this.workspace, this.trusted, this.readOnly)) {
             if (fs.existsSync(file)) {
                 try {
                     const content = fs.readFileSync(file, "utf-8");

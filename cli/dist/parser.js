@@ -1,8 +1,136 @@
+import { HARNESS_TOOLS } from "./tools.js";
+const KNOWN_TOOLS = new Set(HARNESS_TOOLS.map((t) => t.function.name));
+["update_requirements", "task_completed", "manage_knowledge", "update_plan", "spawn_subagent"].forEach((t) => KNOWN_TOOLS.add(t));
+export function isKnownToolName(name) {
+    if (typeof name !== "string")
+        return false;
+    return KNOWN_TOOLS.has(name) || name.startsWith("mcp__") || name.startsWith("custom__");
+}
+function escapeControlCharsInStrings(str) {
+    let inString = false;
+    let isEscaped = false;
+    let quoteChar = "";
+    let buf = "";
+    for (let i = 0; i < str.length; i++) {
+        const ch = str[i];
+        if (inString) {
+            if (isEscaped) {
+                buf += ch;
+                isEscaped = false;
+            }
+            else if (ch === "\\") {
+                buf += ch;
+                isEscaped = true;
+            }
+            else if (ch === quoteChar) {
+                buf += ch;
+                inString = false;
+                quoteChar = "";
+            }
+            else if (ch === "\n") {
+                buf += "\\n";
+            }
+            else if (ch === "\r") {
+                buf += "\\r";
+            }
+            else if (ch === "\t") {
+                buf += "\\t";
+            }
+            else {
+                buf += ch;
+            }
+        }
+        else {
+            if (ch === '"' || ch === "'") {
+                inString = true;
+                quoteChar = ch;
+            }
+            buf += ch;
+        }
+    }
+    return buf;
+}
+function replaceUnquotedPythonLiterals(str) {
+    let result = "";
+    let inString = false;
+    let isEscaped = false;
+    let quoteChar = "";
+    let i = 0;
+    while (i < str.length) {
+        const ch = str[i];
+        if (inString) {
+            result += ch;
+            if (isEscaped) {
+                isEscaped = false;
+            }
+            else if (ch === "\\") {
+                isEscaped = true;
+            }
+            else if (ch === quoteChar) {
+                inString = false;
+                quoteChar = "";
+            }
+            i++;
+        }
+        else {
+            if (ch === '"' || ch === "'") {
+                inString = true;
+                quoteChar = ch;
+                result += ch;
+                i++;
+            }
+            else if (str.startsWith("True", i) && !/[a-zA-Z0-9_]/.test(str[i + 4] || "")) {
+                result += "true";
+                i += 4;
+            }
+            else if (str.startsWith("False", i) && !/[a-zA-Z0-9_]/.test(str[i + 5] || "")) {
+                result += "false";
+                i += 5;
+            }
+            else if (str.startsWith("None", i) && !/[a-zA-Z0-9_]/.test(str[i + 4] || "")) {
+                result += "null";
+                i += 4;
+            }
+            else {
+                result += ch;
+                i++;
+            }
+        }
+    }
+    return result;
+}
 /**
  * Lenient self-healing JSON parser tailored for local LLM formatting artifacts.
- * Automatically repairs trailing commas, single quotes, unquoted keys, Python literals,
- * unescaped newlines/tabs inside string values, and markdown code fences.
+ * Automatically repairs trailing commas, single quotes, unquoted keys, Python literals outside strings,
+ * unescaped newlines/tabs inside string values, and missing closing brackets.
  */
+/** Applies `fix` to the parts of `str` outside double-quoted JSON strings, leaving string contents untouched. */
+function mapOutsideStrings(str, fix) {
+    let out = "";
+    let segment = "";
+    let inString = false;
+    let escaped = false;
+    for (const ch of str) {
+        if (inString) {
+            out += ch;
+            if (escaped)
+                escaped = false;
+            else if (ch === "\\")
+                escaped = true;
+            else if (ch === '"')
+                inString = false;
+        }
+        else if (ch === '"') {
+            out += fix(segment) + ch;
+            segment = "";
+            inString = true;
+        }
+        else {
+            segment += ch;
+        }
+    }
+    return out + (inString ? segment : fix(segment));
+}
 export function repairJson(raw) {
     if (typeof raw !== "string")
         return raw;
@@ -19,17 +147,32 @@ export function repairJson(raw) {
     catch {
         // Proceed to heuristic repairs
     }
-    let cleaned = str;
-    // 1. Replace Python boolean and null literals
-    cleaned = cleaned
-        .replace(/\bTrue\b/g, "true")
-        .replace(/\bFalse\b/g, "false")
-        .replace(/\bNone\b/g, "null");
-    // 2. Remove trailing commas before closing braces/brackets
-    cleaned = cleaned.replace(/,\s*([}\]])/g, "$1");
-    // 3. Fix unquoted keys: { key: "value" } -> { "key": "value" }
-    cleaned = cleaned.replace(/([{,]\s*)([a-zA-Z_][a-zA-Z0-9_-]*)\s*:/g, '$1"$2":');
-    // 4. Try parsing after structural repairs
+    // 1. Escape unescaped newlines/tabs inside string literals
+    const controlsEscaped = escapeControlCharsInStrings(str);
+    try {
+        return JSON.parse(controlsEscaped);
+    }
+    catch {
+        // Continue
+    }
+    // 2. Replace Python literals outside string values
+    let cleaned = replaceUnquotedPythonLiterals(controlsEscaped);
+    try {
+        return JSON.parse(cleaned);
+    }
+    catch {
+        // Continue
+    }
+    // 3. Remove trailing commas before closing braces/brackets
+    cleaned = mapOutsideStrings(cleaned, (part) => part.replace(/,\s*([}\]])/g, "$1"));
+    try {
+        return JSON.parse(cleaned);
+    }
+    catch {
+        // Continue
+    }
+    // 4. Fix unquoted keys: { key: "value" } -> { "key": "value" }
+    cleaned = mapOutsideStrings(cleaned, (part) => part.replace(/([{,]\s*)([a-zA-Z_][a-zA-Z0-9_-]*)\s*:/g, '$1"$2":'));
     try {
         return JSON.parse(cleaned);
     }
@@ -45,52 +188,51 @@ export function repairJson(raw) {
         return JSON.parse(singleQuoteCleaned);
     }
     catch {
-        // Continue to control character repairs
+        // Continue to bracket repair
     }
-    // 6. Handle unescaped control characters inside string literals (common in multiline code snippets)
-    let inString = false;
-    let isEscaped = false;
-    let buf = "";
+    // 6. Handle truncated/missing closing braces/brackets and unclosed quotes
+    let openBraces = 0;
+    let openBrackets = 0;
+    let inStr = false;
+    let isEsc = false;
     for (let i = 0; i < cleaned.length; i++) {
         const ch = cleaned[i];
-        if (inString) {
-            if (isEscaped) {
-                buf += ch;
-                isEscaped = false;
-            }
-            else if (ch === "\\") {
-                buf += ch;
-                isEscaped = true;
-            }
-            else if (ch === '"') {
-                buf += ch;
-                inString = false;
-            }
-            else if (ch === "\n") {
-                buf += "\\n";
-            }
-            else if (ch === "\r") {
-                buf += "\\r";
-            }
-            else if (ch === "\t") {
-                buf += "\\t";
-            }
-            else {
-                buf += ch;
-            }
+        if (inStr) {
+            if (isEsc)
+                isEsc = false;
+            else if (ch === "\\")
+                isEsc = true;
+            else if (ch === '"')
+                inStr = false;
         }
         else {
-            if (ch === '"') {
-                inString = true;
-            }
-            buf += ch;
+            if (ch === '"')
+                inStr = true;
+            else if (ch === "{")
+                openBraces++;
+            else if (ch === "}")
+                openBraces = Math.max(0, openBraces - 1);
+            else if (ch === "[")
+                openBrackets++;
+            else if (ch === "]")
+                openBrackets = Math.max(0, openBrackets - 1);
         }
     }
+    let balanced = cleaned;
+    if (inStr)
+        balanced += '"';
+    while (openBrackets > 0) {
+        balanced += "]";
+        openBrackets--;
+    }
+    while (openBraces > 0) {
+        balanced += "}";
+        openBraces--;
+    }
     try {
-        return JSON.parse(buf);
+        return JSON.parse(balanced);
     }
     catch {
-        // Fall back to original attempt to trigger standard SyntaxError
         return JSON.parse(str);
     }
 }
@@ -125,7 +267,7 @@ function normalizeToolArgs(args) {
 /**
  * Extracts balanced JSON substrings containing tool definitions from unstructured text.
  */
-function extractBalancedJsonObjects(text) {
+function extractBalancedJsonObjects(text, known = isKnownToolName) {
     const results = [];
     let depth = 0;
     let startIdx = -1;
@@ -160,8 +302,11 @@ function extractBalancedJsonObjects(text) {
                 const candidate = text.slice(startIdx, i + 1);
                 try {
                     const parsed = repairJson(candidate);
-                    if (parsed && typeof parsed === "object" && (parsed.name || parsed.tool || parsed.action)) {
-                        results.push({ raw: candidate, start: startIdx, end: i + 1, parsed });
+                    if (parsed && typeof parsed === "object") {
+                        const name = parsed.name || parsed.tool || parsed.action;
+                        if (name && typeof name === "string" && known(name)) {
+                            results.push({ raw: candidate, start: startIdx, end: i + 1, parsed });
+                        }
                     }
                 }
                 catch {
@@ -178,7 +323,13 @@ function extractBalancedJsonObjects(text) {
  * Isolates DeepSeek R1 reasoning (<think> tags), handles standard tool_calls,
  * XML <tool_call> tags, Markdown json codeblocks, and embedded JSON objects with self-healing JSON repair.
  */
-export function parseModelResponse(message) {
+/**
+ * Parses an assistant message into reply text, reasoning and tool calls. Tool calls written as text (JSON blocks,
+ * `<tool_call>` tags) are accepted only for tools offered on that request (`offered`, when given) or known built-ins.
+ */
+export function parseModelResponse(message, offered) {
+    const offeredNames = offered ? new Set(offered) : null;
+    const known = (name) => (offeredNames ? offeredNames.has(name) : isKnownToolName(name));
     const toolCalls = [];
     let thoughtText = typeof message.content === "string"
         ? message.content
@@ -197,8 +348,7 @@ export function parseModelResponse(message) {
     }
     if (thinkMatches.length > 0) {
         reasoningText = thinkMatches.join("\n\n");
-        const remainingText = thoughtText.replace(thinkRegex, "").trim();
-        thoughtText = remainingText ? `${reasoningText}\n\n${remainingText}` : reasoningText;
+        thoughtText = thoughtText.replace(thinkRegex, "").trim();
     }
     // 2. If standard OpenAI function calling tool_calls are present:
     if (message.tool_calls && Array.isArray(message.tool_calls) && message.tool_calls.length > 0) {
@@ -226,7 +376,7 @@ export function parseModelResponse(message) {
             const parsed = repairJson(raw);
             const name = parsed.name || parsed.tool || parsed.function;
             const args = parsed.arguments || parsed.parameters || parsed.args || {};
-            if (name) {
+            if (name && typeof name === "string" && known(name)) {
                 toolCalls.push({
                     id: `call_${Math.random().toString(36).substring(2, 9)}`,
                     type: "function",
@@ -255,7 +405,7 @@ export function parseModelResponse(message) {
             if (typeof parsed === "object" && parsed !== null) {
                 const name = parsed.name || parsed.tool || parsed.action;
                 const args = parsed.arguments || parsed.parameters || parsed.args || parsed.input;
-                if (name && typeof name === "string") {
+                if (name && typeof name === "string" && known(name)) {
                     toolCalls.push({
                         id: `call_${Math.random().toString(36).substring(2, 9)}`,
                         type: "function",
@@ -276,12 +426,12 @@ export function parseModelResponse(message) {
         return { thoughtText, reasoningText, toolCalls };
     }
     // 5. Try embedded balanced JSON objects in text (e.g. model generates explanation + raw JSON without markdown)
-    const balancedObjects = extractBalancedJsonObjects(thoughtText);
+    const balancedObjects = extractBalancedJsonObjects(thoughtText, known);
     if (balancedObjects.length > 0) {
         for (const item of balancedObjects) {
             const name = item.parsed.name || item.parsed.tool || item.parsed.action;
             const args = item.parsed.arguments || item.parsed.parameters || item.parsed.args || item.parsed.input;
-            if (name && typeof name === "string") {
+            if (name && typeof name === "string" && known(name)) {
                 toolCalls.push({
                     id: `call_${Math.random().toString(36).substring(2, 9)}`,
                     type: "function",
@@ -295,27 +445,6 @@ export function parseModelResponse(message) {
         }
         if (toolCalls.length > 0) {
             return { thoughtText, reasoningText, toolCalls };
-        }
-    }
-    // 6. Rescue tool call if accidentally placed inside DeepSeek <think> reasoning
-    if (reasoningText && toolCalls.length === 0) {
-        const thinkBalanced = extractBalancedJsonObjects(reasoningText);
-        if (thinkBalanced.length > 0) {
-            for (const item of thinkBalanced) {
-                const name = item.parsed.name || item.parsed.tool;
-                const args = item.parsed.arguments || item.parsed.parameters || item.parsed.args;
-                if (name && typeof name === "string") {
-                    toolCalls.push({
-                        id: `call_${Math.random().toString(36).substring(2, 9)}`,
-                        type: "function",
-                        function: {
-                            name,
-                            arguments: normalizeToolArgs(args),
-                        },
-                    });
-                    reasoningText = reasoningText.replace(item.raw, "").trim();
-                }
-            }
         }
     }
     return { thoughtText, reasoningText, toolCalls };

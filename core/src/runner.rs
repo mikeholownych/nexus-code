@@ -42,11 +42,19 @@ const MAX_OUTPUT_CHARS: usize = 32_000;
 fn truncate_output(s: &str) -> String {
     if s.len() > MAX_OUTPUT_CHARS {
         let half = MAX_OUTPUT_CHARS / 2;
+        let mut head_idx = half;
+        while !s.is_char_boundary(head_idx) && head_idx > 0 {
+            head_idx -= 1;
+        }
+        let mut tail_idx = s.len().saturating_sub(half);
+        while !s.is_char_boundary(tail_idx) && tail_idx < s.len() {
+            tail_idx += 1;
+        }
         format!(
             "{}\n\n... [TRUNCATED {} BYTES] ...\n\n{}",
-            &s[..half],
-            s.len() - MAX_OUTPUT_CHARS,
-            &s[s.len() - half..]
+            &s[..head_idx],
+            s.len() - (head_idx + (s.len() - tail_idx)),
+            &s[tail_idx..]
         )
     } else {
         s.to_string()
@@ -149,6 +157,7 @@ pub fn run_command(args: RunCommandArgs, base_dir: &Path) -> Result<RunCommandRe
     cmd.args(["-c", &args.command]);
 
     cmd.current_dir(&working_dir)
+        .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
 
@@ -164,19 +173,26 @@ pub fn run_command(args: RunCommandArgs, base_dir: &Path) -> Result<RunCommandRe
     let stdout = child.stdout.take().ok_or("Failed to capture stdout")?;
     let stderr = child.stderr.take().ok_or("Failed to capture stderr")?;
 
-    let stdout_handle = std::thread::spawn(move || {
-        let mut reader = std::io::BufReader::new(stdout);
-        let mut buf = Vec::new();
-        let _ = std::io::Read::read_to_end(&mut reader, &mut buf);
-        buf
-    });
-
-    let stderr_handle = std::thread::spawn(move || {
-        let mut reader = std::io::BufReader::new(stderr);
-        let mut buf = Vec::new();
-        let _ = std::io::Read::read_to_end(&mut reader, &mut buf);
-        buf
-    });
+    // Readers append to shared buffers, so output already read is kept even if a pipe stays open past the drain.
+    let reader = |pipe: Box<dyn std::io::Read + Send>| {
+        let collected = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let sink = std::sync::Arc::clone(&collected);
+        let (done_tx, done_rx) = std::sync::mpsc::channel::<()>();
+        std::thread::spawn(move || {
+            let mut pipe = pipe;
+            let mut chunk = [0u8; 8192];
+            loop {
+                match pipe.read(&mut chunk) {
+                    Ok(0) | Err(_) => break,
+                    Ok(n) => sink.lock().unwrap().extend_from_slice(&chunk[..n]),
+                }
+            }
+            let _ = done_tx.send(());
+        });
+        (collected, done_rx)
+    };
+    let (stdout_buf, stdout_done) = reader(Box::new(stdout));
+    let (stderr_buf, stderr_done) = reader(Box::new(stderr));
 
     let timeout = Duration::from_secs(args.timeout_secs);
     let poll_interval = Duration::from_millis(50);
@@ -199,8 +215,14 @@ pub fn run_command(args: RunCommandArgs, base_dir: &Path) -> Result<RunCommandRe
         }
     };
 
-    let stdout_bytes = stdout_handle.join().unwrap_or_default();
-    let stderr_bytes = stderr_handle.join().unwrap_or_default();
+    // How long to wait for the pipes to close after the shell ended. A process the command left running in the
+    // background (`server &`) can hold them open: what was read so far is returned and that process is left alone.
+    let drain = if timed_out { Duration::from_millis(100) } else { Duration::from_millis(500) };
+    let drain_deadline = Instant::now() + drain;
+    let _ = stdout_done.recv_timeout(drain_deadline.saturating_duration_since(Instant::now()));
+    let _ = stderr_done.recv_timeout(drain_deadline.saturating_duration_since(Instant::now()));
+    let stdout_bytes = std::mem::take(&mut *stdout_buf.lock().unwrap());
+    let stderr_bytes = std::mem::take(&mut *stderr_buf.lock().unwrap());
     let duration_ms = start.elapsed().as_millis();
 
     let raw_stdout = String::from_utf8_lossy(&stdout_bytes).to_string();
@@ -324,6 +346,22 @@ pub fn run_command_pty(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    #[cfg(unix)]
+    fn output_is_kept_when_a_background_process_holds_the_pipe() {
+        let dir = std::env::temp_dir();
+        let started = Instant::now();
+        let result = run_command(
+            RunCommandArgs { command: "echo before; sleep 3 & echo after".into(), cwd: None, timeout_secs: 30, shell: default_shell(), pty: false },
+            &dir,
+        )
+        .unwrap();
+        assert!(started.elapsed() < Duration::from_secs(2), "returned after the drain, not when the background job ended");
+        assert!(result.stdout.contains("before") && result.stdout.contains("after"), "{:?}", result.stdout);
+        assert_eq!(result.exit_code, Some(0));
+        assert!(!result.timed_out);
+    }
 
     #[test]
     fn test_dangerous_command_detection() {

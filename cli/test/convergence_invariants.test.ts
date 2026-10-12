@@ -166,8 +166,13 @@ async function operation(config: HarnessConfig, gw: Gw, units: WorkUnitSpec[]) {
 // ---------------------------------------------------------------- I1: one completion predicate
 
 /** Model behaviours keyed by how many tool results the request already carries (one fresh conversation each). */
-const BEHAVIOURS: Record<string, { script: (r: Req) => Reply; verifier?: string; succeeds: boolean; outcome: string; reason?: string }> = {
-  verified: { script: (r) => [write(), done()][toolResults(r.body)] ?? { text: "done" }, verifier: "true", succeeds: true, outcome: "VERIFIED" },
+/** A verifier that checks the deliverable (impl.txt) and reports the test it ran. */
+const COVERING = 'test -s impl.txt && echo "✔ impl.txt has content" && echo "ℹ tests 1"';
+
+const BEHAVIOURS: Record<string, { script: (r: Req) => Reply; verifier?: string; files?: Record<string, string>; succeeds: boolean; outcome: string; reason?: string }> = {
+  verified: { script: (r) => [write(), done()][toolResults(r.body)] ?? { text: "done" }, verifier: COVERING, succeeds: true, outcome: "VERIFIED" },
+  // A discovered suite (not the operator's configured check) that passes without running a test of the change.
+  "discovered suite passing without testing the change (REGRESSION_FREE)": { script: (r) => [write(), done()][toolResults(r.body)] ?? { text: "done" }, files: { Makefile: "test:\n\t@true\n" }, succeeds: false, outcome: "REGRESSION_FREE", reason: "REGRESSION_FREE" },
   "read-only (NOT_REQUIRED)": { script: (r) => [read("notes.txt"), done("42")][toolResults(r.body)] ?? { text: "done" }, succeeds: true, outcome: "NOT_REQUIRED" },
   "edited, stopped in plain text (VERIFICATION_NOT_RUN)": { script: (r) => (toolResults(r.body) === 0 ? write() : { text: "I wrote impl.txt. Done." }), verifier: "false", succeeds: false, outcome: "UNVERIFIED", reason: "VERIFICATION_NOT_RUN" },
   "failing validator": { script: (r) => [write(), done()][toolResults(r.body)] ?? { text: "done" }, verifier: "false", succeeds: false, outcome: "NOT_ESTABLISHED", reason: "VERIFIER_FAILED" },
@@ -179,7 +184,7 @@ describe("I1: one completion predicate for every execution path", () => {
     test(`${name}: direct turn and durable operation agree (${b.succeeds ? "COMPLETE" : "not COMPLETE"})`, async () => {
       await withHome(async () => {
         const gw = await gateway(b.script);
-        const repo = makeRepo();
+        const repo = makeRepo(b.files);
         try {
           const config = cfg(gw, repo, b.verifier ? { authoritativeVerifierCommand: b.verifier } : {});
           const { turn, agent } = await directTurn(config, "Write impl.txt, then call task_completed.");
@@ -286,7 +291,7 @@ describe("I1: spawn_subagent cannot manufacture success", () => {
       const gw = await gateway(delegating((r) => (toolResults(r.body) === 0 ? write() : { text: "I wrote impl.txt." })));
       const repo = makeRepo();
       try {
-        const { turn, agent } = await directTurn(cfg(gw, repo, { authoritativeVerifierCommand: "true" }), "delegate the change");
+        const { turn, agent } = await directTurn(cfg(gw, repo, { authoritativeVerifierCommand: COVERING }), "delegate the change");
         try {
           assert.match(delegationResult(agent), /Subagent did not complete: .*outcome=UNVERIFIED \(VERIFICATION_NOT_RUN\)/);
           assert.equal(turn.outcome, "VERIFIED", "the parent verified the child's change itself before completing");
@@ -305,11 +310,11 @@ describe("I1: spawn_subagent cannot manufacture success", () => {
       const gw = await gateway(delegating((r) => [write(), done("sub verified")][toolResults(r.body)] ?? { text: "x" }));
       const repo = makeRepo();
       try {
-        const { turn, agent } = await directTurn(cfg(gw, repo, { authoritativeVerifierCommand: "true" }), "delegate the change");
+        const { turn, agent } = await directTurn(cfg(gw, repo, { authoritativeVerifierCommand: COVERING }), "delegate the change");
         try {
           assert.doesNotMatch(delegationResult(agent), /^Error/, "a verified child completes");
           assert.equal(turn.outcome, "VERIFIED");
-          assert.ok(turn.verification?.command === "true", "verified by the parent's own verifier run");
+          assert.ok(turn.verification?.command === COVERING, "verified by the parent's own verifier run");
         } finally {
           agent.shutdown();
         }

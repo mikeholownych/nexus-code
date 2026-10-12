@@ -36,6 +36,7 @@ describe("WP-02: Authority Admission & Resource Confinement (INC-03)", () => {
     // 1. Allowed safe commands
     assert.strictEqual(isSafeReadOnlyCommand("ls"), true);
     assert.strictEqual(isSafeReadOnlyCommand("ls -la"), true);
+    assert.strictEqual(isSafeReadOnlyCommand("rg --hostname-bin ./x pattern"), false, "--hostname-bin runs a program");
     assert.strictEqual(isSafeReadOnlyCommand("pwd"), true);
     assert.strictEqual(isSafeReadOnlyCommand("git status"), true);
     assert.strictEqual(isSafeReadOnlyCommand("git log -n 5"), true);

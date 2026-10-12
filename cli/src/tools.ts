@@ -6,6 +6,7 @@ import { ToolDefinition, ExecutionResult } from "./types.js";
 import { SecurityManager } from "./security.js";
 import { InformationFlowBoundary } from "./core/egress.js";
 import { CapabilityRegistry, HARNESS_TOOLS, defaultRegistry } from "./core/capabilities.js";
+import { isSafeReadOnlyCommand } from "./core/authority.js";
 export { HARNESS_TOOLS, defaultRegistry };
 
 /** Rust engine binaries the bridge looks for, in order (release before debug). */
@@ -28,12 +29,22 @@ export function coreCargoManifest(): string {
   return path.resolve(__dirname, "../../core/Cargo.toml");
 }
 
-export const SAFE_READONLY_COMMAND_REGEX =
-  /^(git\s+(status|diff|log|branch|show|rev-parse)|ls|dir|cat|head|tail|grep|find|which|echo|pwd|cargo\s+(check|clippy)|npm\s+(test|run\s+lint)|pytest)/i;
-
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
+
+/**
+ * Why deleting `target` is refused, or null: the workspace root itself, and `.git` or anything inside it. The Rust
+ * engine enforces the same rule; checking here denies the call before it is dispatched (or offered for approval).
+ */
+export function forbiddenDeletion(workspace: string, target: string): string | null {
+  const p = target.trim();
+  const root = path.resolve(workspace);
+  const resolved = path.resolve(root, p);
+  if (!p || resolved === root) return "Security Violation: Cannot delete workspace root directory";
+  if (path.relative(root, resolved).split(/[\\/]/).includes(".git")) return "Security Violation: Cannot delete .git or anything inside it";
+  return null;
+}
 
 export function isSafeOutboundUrl(urlStr: string): { safe: boolean; reason?: string } {
   let parsed: URL;
@@ -429,7 +440,7 @@ export class RustCoreBridge {
       }
     }
 
-    if (["write_file", "edit_file", "patch_file", "delete_file", "read_file"].includes(toolName)) {
+    if (["write_file", "edit_file", "patch_file", "delete_file", "read_file", "list_dir", "file_tree", "outline_file", "cst_symbols"].includes(toolName)) {
       const targetPath = args.path || "";
       const check = this.securityManager.isPathProtected(targetPath);
       if (check.protected) {
@@ -439,6 +450,24 @@ export class RustCoreBridge {
           error: check.reason,
         };
       }
+    }
+
+    if (toolName === "batch_read" && Array.isArray(args.paths)) {
+      for (const p of args.paths) {
+        const check = this.securityManager.isPathProtected(p || "");
+        if (check.protected) {
+          return {
+            success: false,
+            output: "",
+            error: check.reason,
+          };
+        }
+      }
+    }
+
+    if (toolName === "delete_file") {
+      const refused = forbiddenDeletion(this.workspace, String(args.path || ""));
+      if (refused) return { success: false, output: "", error: refused };
     }
 
     // 2. Read-only mode enforcement
@@ -452,7 +481,8 @@ export class RustCoreBridge {
       }
       if (toolName === "run_command") {
         const cmd = (args.command || "").trim();
-        if (!SAFE_READONLY_COMMAND_REGEX.test(cmd)) {
+        // The same check as the authority engine: one allowlist, with argument-level escapes (find -exec, rg --pre…).
+        if (!isSafeReadOnlyCommand(cmd)) {
           return {
             success: false,
             output: "",
@@ -522,7 +552,7 @@ export class RustCoreBridge {
       }
       if (toolName === "run_command") {
         const cmd = (args.command || "").trim();
-        if (!SAFE_READONLY_COMMAND_REGEX.test(cmd)) {
+        if (!isSafeReadOnlyCommand(cmd)) {
           return {
             success: true,
             output: `[DRY-RUN SIMULATION] Command '${cmd}' simulated without execution to protect disk state.`,
@@ -567,6 +597,8 @@ export class RustCoreBridge {
           passed: res.success,
           failures: res.failures,
           diagnostics: res.diagnostics,
+          // The end of the run's output (where runners report counts): bounded, and what coverage is judged from.
+          report: (res.rawOutput || "").split("\n").slice(-40).join("\n").slice(-4000),
           summary: res.success
             ? "Test suite passed successfully."
             : `Test suite failed with ${res.failures.length} failing tests and ${res.diagnostics.length} diagnostics.`,

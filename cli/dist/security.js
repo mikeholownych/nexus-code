@@ -14,6 +14,8 @@ const DEFAULT_BLOCKED_COMMANDS = [
 ];
 const DEFAULT_PROTECTED_PATHS = [
     ".git",
+    // The operator's list of trusted workspaces: the agent must not trust a workspace for itself.
+    "trusted_workspaces.json",
     ".env",
     "id_rsa",
     "id_ed25519",
@@ -193,14 +195,18 @@ export class SecretsVault {
         if (!sanitizedText || typeof sanitizedText !== "string") {
             return sanitizedText;
         }
+        // Fail closed: secrets are restored only for a sink the caller explicitly declares authorized.
+        if (context?.isAuthorizedSink !== true) {
+            return sanitizedText;
+        }
         // Attempt authoritative rehydration through InformationFlowBoundary
         const rehydrated = this.boundary.rehydrate(sanitizedText, {
             taskId: context?.taskId || "default_task",
             sessionId: context?.sessionId || "default_session",
-            isAuthorizedSink: context?.isAuthorizedSink !== false, // default to authorized for local restore
+            isAuthorizedSink: true,
         });
         let restored = rehydrated.rehydrated;
-        // Fallback for any legacy refMap entries
+        // Fallback for any legacy refMap entries (only for authorized sink)
         for (const [placeholder, secret] of this.refMap.entries()) {
             if (typeof restored === "string" && restored.includes(placeholder)) {
                 restored = restored.replaceAll(placeholder, secret);

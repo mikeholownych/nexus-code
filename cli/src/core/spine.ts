@@ -10,6 +10,7 @@ import {
   CapabilityRegistry,
   defaultRegistry,
   CapabilityHandler,
+  changesWorkspace,
 } from "./capabilities.js";
 
 export interface InvocationRequest {
@@ -572,7 +573,7 @@ export class ExecutionSpine {
 
     // Stage 6: Post-Execution Evidence & Receipt Generation
     const candidateMutated = Boolean(
-      result.success && capability.mutating && !context.dryRun
+      result.success && changesWorkspace(capability) && !context.dryRun
     );
 
     if (candidateMutated) {

@@ -9,6 +9,7 @@
  * Pure data and pure functions; the agent owns persistence and presentation.
  */
 import { createHash } from "node:crypto";
+import { isFilteredVerifierCommand } from "../tester.js";
 export const LEDGER_VERSION = 1;
 export const PINNED_LEDGER_PREFIX = "[Objective Ledger - pinned by Nexus; never summarised]";
 export const STEERING_PREFIX = "[Operator steering";
@@ -212,6 +213,14 @@ currentPass) {
                 if (!currentPass || currentPass.status !== "PASSED") {
                     errors.push(`${requirement.id}: verified needs a passing verifier run on the current workspace, and none is recorded since the last change. ` +
                         `Mark it implemented with your evidence; run the verifier (run_tests, or task_completed) and mark it verified afterwards.`);
+                    continue;
+                }
+                if (currentPass.filtered || isFilteredVerifierCommand(currentPass.command)) {
+                    errors.push(`${requirement.id}: verified requires an authoritative full test suite run without filters. The recorded run '${currentPass.command}' was filtered. Run tests without a filter or mark as implemented.`);
+                    continue;
+                }
+                if (currentPass.isDeliverableBound === false) {
+                    errors.push(`${requirement.id}: verified requires a test run that covers the deliverable. The recorded run '${currentPass.command}' passed generic tests but did not test the changed files. Mark as implemented.`);
                     continue;
                 }
                 requirement.verifiedBy = { attempt: currentPass.n, command: currentPass.command, inputs: currentPass.inputs, at: currentPass.at };

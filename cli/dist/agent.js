@@ -4,8 +4,8 @@ import * as os from "node:os";
 import { randomUUID } from "node:crypto";
 import { exec } from "node:child_process";
 import { LocalLlmClient } from "./client.js";
-import { HARNESS_TOOLS, RustCoreBridge, registerBridgeCapabilities } from "./tools.js";
-import { createDefaultRegistry, } from "./core/capabilities.js";
+import { HARNESS_TOOLS, RustCoreBridge, forbiddenDeletion, registerBridgeCapabilities } from "./tools.js";
+import { createDefaultRegistry, changesWorkspace, } from "./core/capabilities.js";
 import { ExecutionSpine, extractTargetResources, } from "./core/spine.js";
 import { AuthorityAdmissionEngine } from "./core/authority.js";
 import { CandidateTracker, hashContent, } from "./core/candidate.js";
@@ -22,7 +22,7 @@ import { selectRelevantFewShots } from "./fewshots.js";
 import { FlightRecorder } from "./flight.js";
 import { WorktreeManager } from "./worktree.js";
 import { isSandboxAvailable } from "./sandbox.js";
-import { runTestSuiteWithExecutor, discoverVerifier } from "./tester.js";
+import { runTestSuiteWithExecutor, discoverVerifier, isVerifierDeliverableBound, isFilteredVerifierCommand } from "./tester.js";
 import { credentialOriginOf, InferenceError } from "./client.js";
 import { assertTurnResultInvariants, deepFreezeTurn, summarizeTurn, lifecycleStatusForTurn, turnSucceeded, } from "./core/turn.js";
 import { createHash } from "node:crypto";
@@ -37,6 +37,7 @@ import { ProviderRecoveryController, RecoveryCancelled, realRecoveryClock, recov
 import { READ_OBJECTIVE_CAPABILITY, REQUIREMENTS_CAPABILITY, STEERING_PREFIX, amendObjective, applyRequirementUpdates, invalidateVerified, readObjective, requirementDone, blockedRequirements, createLedger, failedCheckFrom, gatingRequirements, isNewObjective, ledgerNeedsPinning, openRequirements, priorAttempt, queueSteering, recordAttempt, renderPinnedLedger, } from "./core/objective.js";
 import { describeChange, editTarget, snapshot } from "./file_diff.js";
 import pc from "picocolors";
+import { untrustedWorkspaceExtensions } from "./workspace_trust.js";
 /** Default deadline for the completion verifier (seconds); override with HarnessConfig.verifierTimeoutSecs / NEXUS_VERIFIER_TIMEOUT_SECS. */
 export const DEFAULT_VERIFIER_TIMEOUT_SECS = 300;
 export class ContextBudgetError extends Error {
@@ -269,7 +270,6 @@ const READ_ONLY_TOOLS = new Set([
     "search_symbols",
     "fetch_web",
     "search_web",
-    "run_tests",
     "lsp_hover",
     "lsp_definition",
     "lsp_diagnostics",
@@ -379,8 +379,11 @@ export class AutonomousAgent {
     extensibilityInitialized = false;
     activePlan = [];
     hasPendingModifications = false;
+    /** Modified files tracked during the session/task for deliverable verification boundaries. */
+    modifiedFiles = new Set();
     /** Evidence from the verifier run that covers the current workspace changes. Cleared by any later mutation. */
     verificationEvidence;
+    verificationEvidenceRawOutput = "";
     turnMutations = 0;
     /** The turn started with unverified changes from earlier work (an earlier turn, attempt, or process). */
     turnCarriedChanges = false;
@@ -488,8 +491,8 @@ export class AutonomousAgent {
         this.securityManager = new SecurityManager(ws);
         this.ui = new TerminalUI();
         this.skillManager = new SkillManager(ws);
-        this.mcpManager = new McpClientManager(ws);
-        this.pluginManager = new PluginManager(ws);
+        this.mcpManager = new McpClientManager(ws, { readOnly: config.readOnly });
+        this.pluginManager = new PluginManager(ws, { readOnly: config.readOnly });
         this.worktreeManager = new WorktreeManager(ws);
         if (config.recordFlight) {
             this.flightRecorder = new FlightRecorder(ws);
@@ -511,9 +514,17 @@ export class AutonomousAgent {
                     const toolName = request.toolName;
                     const args = request.args || {};
                     const effectiveTaskId = request.taskId || this.currentTaskId;
-                    // 1. If tool is fetch_web, evaluate egress against external URL
-                    if (toolName === "fetch_web" && typeof args.url === "string") {
-                        const destUrl = args.url;
+                    // 1. External / Public egress tools must NEVER rehydrate secrets
+                    const isPublicTool = [
+                        "search_web",
+                        "fetch_web",
+                        "browser_navigate",
+                        "browser_type",
+                    ].includes(toolName);
+                    if (isPublicTool) {
+                        const destUrl = (toolName === "fetch_web" || toolName === "browser_navigate") && typeof args.url === "string"
+                            ? args.url
+                            : "EXTERNAL_PUBLIC";
                         const egressResult = boundary.evaluateEgress(args, destUrl, {
                             taskId: effectiveTaskId,
                             sourceBoundary: "HOST_LOCAL",
@@ -521,26 +532,7 @@ export class AutonomousAgent {
                         if (!egressResult.allowed) {
                             return {
                                 allowed: false,
-                                reason: egressResult.reason || `Egress to '${destUrl}' blocked by InformationFlowBoundary [FAIL-003]`,
-                            };
-                        }
-                        return {
-                            allowed: true,
-                            quarantined: egressResult.quarantinedCount > 0,
-                            sanitizedArgs: egressResult.sanitizedPayload || args,
-                        };
-                    }
-                    // 2. If tool is browser navigation, evaluate egress against URL
-                    if (toolName === "browser_navigate" && typeof args.url === "string") {
-                        const destUrl = args.url;
-                        const egressResult = boundary.evaluateEgress(args, destUrl, {
-                            taskId: effectiveTaskId,
-                            sourceBoundary: "HOST_LOCAL",
-                        });
-                        if (!egressResult.allowed) {
-                            return {
-                                allowed: false,
-                                reason: egressResult.reason || `Browser navigation to '${destUrl}' blocked by InformationFlowBoundary [FAIL-003]`,
+                                reason: egressResult.reason || `Egress via '${toolName}' blocked by InformationFlowBoundary [FAIL-003]`,
                             };
                         }
                         return {
@@ -781,6 +773,17 @@ export class AutonomousAgent {
             await this.pluginManager.loadPlugins();
             await this.mcpManager.loadAndConnect();
             this.extensibilityInitialized = true;
+            const skipped = untrustedWorkspaceExtensions(this.config.workspace, this.config.readOnly);
+            if (skipped.length && this.depth === 0) {
+                const names = skipped.map((file) => path.relative(this.config.workspace, file)).join(", ");
+                const text = this.config.readOnly
+                    ? `Workspace MCP servers and plugins are not loaded in read-only mode (${names}).`
+                    : `Workspace MCP servers and plugins are not loaded because this workspace is not trusted (${names}). Run \`nexus trust\` in it to allow them.`;
+                if (this.observer?.onNotice)
+                    this.observer.onNotice(text);
+                else
+                    console.warn(pc.yellow(text));
+            }
         }
         catch {
             // Ignore background extensibility init errors
@@ -996,7 +999,8 @@ export class AutonomousAgent {
      * when the child returns, so a subagent call whose outcome was not recorded may have written.
      */
     mayWrite(toolName) {
-        return toolName === "spawn_subagent" || this.capabilityRegistry.getByToolName(toolName)?.mutating !== false;
+        const capability = this.capabilityRegistry.getByToolName(toolName);
+        return toolName === "spawn_subagent" || !capability || changesWorkspace(capability);
     }
     resetConversation() {
         this.objective = undefined;
@@ -1049,8 +1053,8 @@ export class AutonomousAgent {
         // specimen worktree, not the repository manager's authority root.
         if (!this.managedWorktreeWorkspaceSwitch)
             this.worktreeManager = new WorktreeManager(newWorkspace);
-        this.mcpManager = new McpClientManager(newWorkspace);
-        this.pluginManager = new PluginManager(newWorkspace);
+        this.mcpManager = new McpClientManager(newWorkspace, { readOnly: this.config.readOnly });
+        this.pluginManager = new PluginManager(newWorkspace, { readOnly: this.config.readOnly });
         this.hybridSearch = new HybridSearchEngine(newWorkspace, this.client);
         this.synthesizer = new SynthesizerEngine(newWorkspace, (command) => this.bridge.executeTool("run_command", { command, timeout_secs: 120 }));
         this.browser = new BrowserDriver(newWorkspace);
@@ -1851,17 +1855,22 @@ Always explain your reasoning before or alongside your tool calls.`;
                         const deadlineSecs = this.config.verifierTimeoutSecs ?? DEFAULT_VERIFIER_TIMEOUT_SECS;
                         this.activity("verifying", { tool: verifierCommand });
                         const testRes = await runTestSuiteWithExecutor(this.config.workspace, (command) => this.bridge.executeTool("run_command", { command, timeout_secs: deadlineSecs }), verifierCommand);
+                        // The operator's own verifier is their acceptance check for the change; a verifier Nexus discovered must
+                        // show that it ran tests covering the changed files.
+                        const isDeliverableBound = source === "configured" || isVerifierDeliverableBound(this.config.workspace, Array.from(this.modifiedFiles), verifierCommand, testRes.rawOutput || "");
                         const evidence = {
                             status: testRes.success ? "PASSED" : testRes.timedOut ? "TIMED_OUT" : "FAILED",
                             command: verifierCommand,
                             source,
                             exitSuccess: testRes.success,
+                            isDeliverableBound,
                             ...(testRes.timedOut ? { deadlineSecs } : {}),
                             outputSha256: createHash("sha256").update(testRes.rawOutput || "").digest("hex"),
                             candidateId,
                             at: new Date().toISOString(),
                         };
                         this.verificationEvidence = evidence;
+                        this.verificationEvidenceRawOutput = testRes.rawOutput || "";
                         if (this.objective && candidateId) {
                             recordAttempt(this.objective, {
                                 command: verifierCommand,
@@ -1871,6 +1880,8 @@ Always explain your reasoning before or alongside your tool calls.`;
                                 mutationSeq: this.mutationSeq,
                                 external: externalInputsFingerprint(this.config.workspace),
                                 status: evidence.status,
+                                isDeliverableBound,
+                                filtered: isFilteredVerifierCommand(verifierCommand),
                                 ...(evidence.status === "PASSED" ? {} : { failedCheck: failedCheckFrom(testRes.rawOutput || "") }),
                             });
                         }
@@ -1908,6 +1919,9 @@ Always explain your reasoning before or alongside your tool calls.`;
             // The obligation is discharged only by a passing run of the selected verifier (never by command text).
             if (!noApplicableVerifier)
                 this.setUnverifiedChanges(false);
+            // Files a passing run covered are verified; ones it did not cover stay for a later run to cover.
+            if (verifierSucceeded && this.verificationEvidence?.isDeliverableBound)
+                this.modifiedFiles.clear();
             if (this.activeWorktree) {
                 const canValidate = verifierSucceeded &&
                     this.config.authoritativeVerifierCommand?.trim() &&
@@ -1990,7 +2004,15 @@ Always explain your reasoning before or alongside your tool calls.`;
             let subagent;
             try {
                 subagent = new AutonomousAgent(subagentConfig, this.depth + 1, inheritedWorktreeScope);
-                const subResult = await subagent.runSubagent(subPrompt);
+                const subResult = await subagent.runSubagent(subPrompt, this.activeTurn?.onConfirm);
+                if (subagent.turnMutations > 0 || subagent.turnCarriedChanges) {
+                    this.turnMutations += subagent.turnMutations;
+                    this.mutationSeq += subagent.mutationSeq;
+                    this.hasPendingModifications = true;
+                    if (this.objective) {
+                        invalidateVerified(this.objective, `subagent changed workspace`);
+                    }
+                }
                 this.ui.stopSpinner(subResult.completed);
                 if (!subResult.completed) {
                     return { success: false, output: subResult.summary, error: `Subagent did not complete: ${subResult.reason}` };
@@ -2236,26 +2258,51 @@ Always explain your reasoning before or alongside your tool calls.`;
             args = toolName === "task_completed" ? {} : { raw: call.function.arguments };
         }
         try {
-            const serialized = JSON.stringify(args);
-            const restored = this.securityManager.getVault().restore(serialized);
-            if (restored !== serialized) {
-                args = JSON.parse(restored);
+            const isPublicEgress = ["search_web", "fetch_web", "browser_navigate", "browser_type"].includes(toolName);
+            if (!isPublicEgress) {
+                const serialized = JSON.stringify(args);
+                const restored = this.securityManager.getVault().restore(serialized, { isAuthorizedSink: true });
+                if (restored !== serialized) {
+                    args = JSON.parse(restored);
+                }
             }
         }
         catch { }
         if (this.flightRecorder) {
             this.flightRecorder.recordToolCall(currentStep, call.id, toolName, args);
         }
+        // Safety guard against dangerous deletion targets: denied before dispatch or any approval prompt.
+        const refusedDeletion = toolName === "delete_file" ? forbiddenDeletion(this.config.workspace, String(args.path || "")) : null;
+        if (refusedDeletion) {
+            return {
+                receipt: {
+                    invocationId: call.id,
+                    taskId: this.activeWorktree?.taskId || this.currentTaskId,
+                    actor,
+                    executionDomain: actor === "subagent" ? "subagent" : "agent_orchestration",
+                    capabilityId: this.capabilityRegistry.getByToolName(toolName)?.id || "fs_delete",
+                    toolName,
+                    targetResources: extractTargetResources(toolName, args),
+                    success: false,
+                    output: "",
+                    error: `${refusedDeletion}.`,
+                    durationMs: 0,
+                    candidateMutated: false,
+                    status: "DENIED",
+                    timestamp: new Date().toISOString(),
+                    simulated: Boolean(this.config.dryRun),
+                },
+                shouldExit: false,
+            };
+        }
         this.ui.printToolCall(toolName, args);
         const dispatch = ++this.toolDispatchSeq;
         this.observer?.onToolStart?.({ dispatch, callId: call.id, tool: toolName, args });
         const subject = String(args.path ?? args.file_path ?? args.command ?? args.url ?? args.query ?? "").replace(/\s+/g, " ").slice(0, 120);
         this.activity("tool", { tool: toolName, ...(subject ? { subject } : {}) });
-        if (onConfirm &&
-            (toolName === "edit_file" ||
-                toolName === "write_file" ||
-                toolName === "patch_file" ||
-                toolName === "run_command")) {
+        const cap = this.capabilityRegistry.getByToolName(toolName);
+        const isMutating = cap ? cap.mutating : !READ_ONLY_TOOLS.has(toolName);
+        if (onConfirm && isMutating) {
             this.activity("approval", { tool: toolName, ...(subject ? { subject } : {}) });
             const approved = await onConfirm(toolName, args);
             if (approved)
@@ -2358,9 +2405,13 @@ Always explain your reasoning before or alongside your tool calls.`;
                 const parsed = JSON.parse(receipt.output || "{}");
                 const state = this.verifierState();
                 if (state && typeof parsed.command === "string") {
+                    const isDeliverableBound = isVerifierDeliverableBound(this.config.workspace, Array.from(this.modifiedFiles), parsed.command, receipt.output || "");
+                    const filtered = Boolean(args.filter) || isFilteredVerifierCommand(parsed.command);
                     recordAttempt(this.objective, {
                         command: parsed.command,
                         ...state,
+                        isDeliverableBound,
+                        filtered,
                         status: parsed.passed === true && receipt.success ? "PASSED" : "FAILED",
                         ...(parsed.passed === true ? {} : { failedCheck: failedCheckFrom(`${receipt.output}\n${receipt.error ?? ""}`) }),
                     });
@@ -2368,13 +2419,22 @@ Always explain your reasoning before or alongside your tool calls.`;
             }
             catch { }
         }
+        // Track file modifications
+        if (receipt.success && ["write_file", "edit_file", "patch_file", "delete_file"].includes(toolName)) {
+            const p = args.path || args.target_file || args.file_path;
+            if (typeof p === "string" && p.trim()) {
+                this.modifiedFiles.add(path.resolve(this.config.workspace, p.trim()));
+            }
+        }
         // Only a successful operation that actually changed its file is reported as a change.
         if (diffTarget && before && receipt.success) {
             try {
                 const display = path.relative(this.config.workspace, diffTarget) || path.basename(diffTarget);
                 const change = describeChange(display, before, snapshot(diffTarget));
-                if (change)
+                if (change) {
+                    this.modifiedFiles.add(diffTarget);
                     this.observer?.onFileChange?.({ dispatch, callId: call.id, tool: toolName, path: display, change });
+                }
             }
             catch { }
         }
@@ -2499,7 +2559,7 @@ Always explain your reasoning before or alongside your tool calls.`;
         await this.initExtensibility();
         const promptText = typeof taskPrompt === "string" ? taskPrompt : "[Multi-modal Vision Input]";
         await this.pluginManager.notifyTurnStart(promptText, this.config.workspace);
-        const turn = { controller: new AbortController(), phase: "idle", step: 0 };
+        const turn = { controller: new AbortController(), phase: "idle", step: 0, onConfirm };
         this.activeTurn = turn;
         const signal = turn.controller.signal;
         if (options?.signal) {
@@ -2809,7 +2869,7 @@ Always explain your reasoning before or alongside your tool calls.`;
                 }
                 stepsUsed = currentStep;
                 // Parse the response using hybrid parser
-                const parsed = parseModelResponse(assistantMessage);
+                const parsed = parseModelResponse(assistantMessage, this.getEffectiveTools().map((t) => t.function.name));
                 // Update cumulative token usage
                 const promptEst = calculateContextBudget(this.requestMessages(this.messages), this.getEffectiveTools(), this.config.contextLimit || 65536).totalActiveTokens;
                 const compContent = typeof assistantMessage.content === "string"
@@ -2830,13 +2890,12 @@ Always explain your reasoning before or alongside your tool calls.`;
                 else
                     this.totalTokens.estimatedRequests++;
                 // Print any thought or explanation text only if not already streamed
-                if (parsed.thoughtText) {
-                    if (!streamedTokens) {
-                        this.ui.printThought(parsed.thoughtText);
-                    }
-                    if (this.flightRecorder) {
-                        this.flightRecorder.recordThought(currentStep, parsed.thoughtText);
-                    }
+                if (parsed.thoughtText && !streamedTokens) {
+                    this.ui.printThought(parsed.thoughtText);
+                }
+                // Reasoning (<think> blocks) is kept apart from the reply: recorded, never shown as output or parsed for tools.
+                if ((parsed.thoughtText || parsed.reasoningText) && this.flightRecorder) {
+                    this.flightRecorder.recordThought(currentStep, parsed.thoughtText, parsed.reasoningText);
                 }
                 // Cancellation observed after the response arrived: admit none of its actions. The assistant
                 // message is dropped so the history never holds tool_calls without tool results.
@@ -3117,6 +3176,15 @@ Always explain your reasoning before or alongside your tool calls.`;
         }
         if (this.turnMutations > 0 || this.turnCarriedChanges) {
             if (evidence?.status === "PASSED") {
+                if (evidence.isDeliverableBound === false) {
+                    return deepFreezeTurn(assertTurnResultInvariants({
+                        ...base,
+                        execution: "COMPLETED",
+                        outcome: "REGRESSION_FREE",
+                        reason: "REGRESSION_FREE",
+                        detail: "Passing test run did not cover the modified deliverables.",
+                    }));
+                }
                 return deepFreezeTurn(assertTurnResultInvariants({ ...base, execution: "COMPLETED", outcome: "VERIFIED" }));
             }
             // Defensive: changes were made, nothing is pending, yet no passing evidence is held.
@@ -3256,7 +3324,7 @@ Always explain your reasoning before or alongside your tool calls.`;
      * delivered a final report; inference failure and step exhaustion are reported as not completed. Durable
      * autonomous work (/team, nexus operation) does not use this path: it runs as scheduled work units.
      */
-    async runSubagent(prompt) {
+    async runSubagent(prompt, onConfirm) {
         if (this.config.worktree && !this.activeWorktree && !this.inheritedWorktreeScope) {
             throw new Error("Cannot run a worktree-enabled subagent without an established worktree authority.");
         }
@@ -3290,7 +3358,7 @@ Always explain your reasoning before or alongside your tool calls.`;
                 const what = err instanceof ContextBudgetError ? "context admission refused the request" : "inference failed";
                 return { completed: false, summary: finalSummary, reason: `${what}: ${err?.message ?? err}` };
             }
-            const parsed = parseModelResponse(assistantMessage);
+            const parsed = parseModelResponse(assistantMessage, this.getEffectiveTools().map((t) => t.function.name));
             this.messages.push({
                 role: "assistant",
                 content: assistantMessage.content || "",
@@ -3304,7 +3372,7 @@ Always explain your reasoning before or alongside your tool calls.`;
             }
             for (const call of parsed.toolCalls) {
                 const toolName = call.function.name;
-                const { receipt, shouldExit } = await this.dispatchToolCall(call, currentStep, "subagent");
+                const { receipt, shouldExit } = await this.dispatchToolCall(call, currentStep, "subagent", onConfirm);
                 if (shouldExit) {
                     let args = {};
                     try {

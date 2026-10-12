@@ -143,7 +143,7 @@ pub fn parse_cst_symbols(file_path: &Path, rel_path: &str, query_filter: Option<
  * Scan workspace files and parse CST symbols
  */
 pub fn scan_workspace_cst(base_dir: &Path, args: CstParseArgs) -> Result<CstParseResult, String> {
-    let target = base_dir.join(&args.path);
+    let target = crate::file_ops::resolve_safe_path(base_dir, &args.path)?;
     let mut all_symbols = Vec::new();
 
     if target.is_file() {

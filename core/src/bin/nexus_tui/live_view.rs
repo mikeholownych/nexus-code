@@ -930,7 +930,7 @@ fn verdict_color(value: &str) -> Color {
         "PASSED" | "VERIFIED" | "COMPLETED" | "success" => Color::Green,
         "FAILED" | "INVALIDATED" | "NOT_ESTABLISHED" | "INTERRUPTED" | "BLOCKED"
         | "LIMIT_REACHED" | "failure" => Color::Red,
-        "UNVERIFIED" => Color::Yellow,
+        "UNVERIFIED" | "REGRESSION_FREE" => Color::Yellow,
         _ => Color::White,
     }
 }

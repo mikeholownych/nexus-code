@@ -131,6 +131,10 @@ export class CapabilityRegistry {
         return undefined;
     }
 }
+/** Whether a successful call of the capability changes workspace content. */
+export function changesWorkspace(capability) {
+    return capability.changesWorkspace ?? capability.mutating;
+}
 export const BASELINE_CAPABILITIES = [
     {
         "id": "fs_read",
@@ -229,6 +233,10 @@ export const BASELINE_CAPABILITIES = [
                         "new_content": {
                             "type": "string",
                             "description": "The new replacement snippet."
+                        },
+                        "replace_all": {
+                            "type": "boolean",
+                            "description": "Replace every occurrence of old_content. Without it, old_content must occur exactly once."
                         }
                     },
                     "required": [
@@ -410,19 +418,23 @@ export const BASELINE_CAPABILITIES = [
         "modelToolName": "delete_file",
         "category": "fs",
         "mutating": true,
-        "sideEffectContract": "Delete a file from the workspace",
+        "sideEffectContract": "Delete a file, or a directory with recursive: true, from the workspace",
         "backend": "rust_rpc",
         "toolDefinition": {
             "type": "function",
             "function": {
                 "name": "delete_file",
-                "description": "Delete a file or directory inside the workspace.",
+                "description": "Delete a file or directory inside the workspace. A directory needs recursive: true. The workspace root and .git cannot be deleted.",
                 "parameters": {
                     "type": "object",
                     "properties": {
                         "path": {
                             "type": "string",
                             "description": "Relative path to file or directory to remove."
+                        },
+                        "recursive": {
+                            "type": "boolean",
+                            "description": "Required to delete a directory and everything in it."
                         }
                     },
                     "required": [
@@ -730,7 +742,8 @@ export const BASELINE_CAPABILITIES = [
         "id": "test_discover_run",
         "modelToolName": "run_tests",
         "category": "proc",
-        "mutating": false,
+        "mutating": true,
+        "changesWorkspace": false,
         "sideEffectContract": "Discover and execute workspace test suite",
         "backend": "ts_native",
         "toolDefinition": {
@@ -1172,7 +1185,8 @@ export const BASELINE_CAPABILITIES = [
         "id": "browser_interact",
         "modelToolName": "browser_type",
         "category": "browser",
-        "mutating": false,
+        "mutating": true,
+        "changesWorkspace": false,
         "sideEffectContract": "Simulate keyboard text typing into DOM selector element",
         "backend": "ts_native",
         "toolDefinition": {

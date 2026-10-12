@@ -642,3 +642,59 @@ MIIEowIBAAKCAQEA0Z3vV4k8t...fake...pem...body...content...
     });
   });
 });
+
+describe("environment-declared secrets", () => {
+  test("a redaction pass over many strings reads the environment once, and still redacts its secrets", () => {
+    const original = process.env;
+    let enumerations = 0;
+    process.env = new Proxy({ ...original, NEXUS_TEST_API_KEY: "env-secret-value-0123" }, {
+      ownKeys(target) {
+        enumerations++;
+        return Reflect.ownKeys(target);
+      },
+    }) as NodeJS.ProcessEnv;
+    try {
+      const payload = { messages: Array.from({ length: 2000 }, (_, i) => ({ role: "tool", content: `line ${i}` })), note: "uses env-secret-value-0123" };
+      const redacted = new InformationFlowBoundary().redactForTelemetry(payload);
+      assert.ok(enumerations <= 1, `the environment was enumerated ${enumerations} times`);
+      assert.ok(!JSON.stringify(redacted).includes("env-secret-value-0123"), "the environment secret is redacted");
+    } finally {
+      process.env = original;
+    }
+  });
+});
+
+describe("contextual secrets in code", () => {
+  test("code that names a credential is left intact; quoted values and env-file values are classified", () => {
+    const boundary = new InformationFlowBoundary();
+    const code = [
+      "password = process.env.DB_PASSWORD",
+      'secret = os.environ["X"]',
+      'auth = require("./auth")',
+      "password: Optional[str]",
+      "self.auth_token = self._generate_token()",
+      "const apiKey = config.apiKey;",
+    ].join("\n");
+    assert.deepEqual(boundary.classifyText(code).filter((s) => s.classificationType !== "UNCERTAIN").map((s) => s.secret), [], "no code is classified");
+    const secrets = [
+      'db_password = "hunter2-correct-horse"',
+      '{"apiKey": "k3y-v4lue-0123456789"}',
+      "DATABASE_PASSWORD=plain-env-value-42",
+      "export STRIPE_SECRET=whsec_live_value_99",
+    ].join("\n");
+    const found = boundary.classifyText(secrets).map((s) => s.secret);
+    for (const value of ["hunter2-correct-horse", "k3y-v4lue-0123456789", "plain-env-value-42", "whsec_live_value_99"]) {
+      assert.ok(found.includes(value), `${value} is classified: ${JSON.stringify(found)}`);
+    }
+    assert.ok(!boundary.classifyText("API_KEY=$OTHER_VARIABLE_NAME").some((s) => s.patternName === "ENV_ASSIGNMENT_SECRET"), "a reference is not a value");
+  });
+});
+
+describe("paths are not secrets", () => {
+  test("workspace and worktree paths are not classified as high-entropy tokens", () => {
+    const boundary = new InformationFlowBoundary();
+    for (const p of ["/tmp/nexus-journey-x7Hq2a/.nexus/worktrees/task_20261012_223700_ab12cd", "/home/mike/.nexus/worktrees/task-mk8f2x9q1-7f3a9c2b/src/index.ts"]) {
+      assert.deepEqual(boundary.classifyText(p), [], p);
+    }
+  });
+});

@@ -85,6 +85,12 @@ export function isSafeReadOnlyCommand(command, customRegex) {
             }
         }
     }
+    // 3d. 'rg' / 'grep' command: reject flags that execute programs (--pre, --pre-glob, --hostname-bin)
+    if (/^\s*(rg|grep)\b/i.test(trimmed)) {
+        if (/\s(--pre\b|--pre-glob\b|--pre=|--hostname-bin\b)/i.test(trimmed)) {
+            return false;
+        }
+    }
     return true;
 }
 /**

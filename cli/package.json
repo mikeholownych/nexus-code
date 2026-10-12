@@ -8,7 +8,7 @@
     "harness": "./dist/index.js"
   },
   "scripts": {
-    "build": "tsc",
+    "build": "tsc && node scripts/write_build_info.mjs",
     "test": "tsx --test test/*.test.ts",
     "start": "node dist/index.js",
     "dev": "tsx watch src/index.ts"

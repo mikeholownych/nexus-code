@@ -4,6 +4,7 @@ import * as os from "node:os";
 import { pathToFileURL } from "node:url";
 import { Worker } from "node:worker_threads";
 import { ToolDefinition, ExecutionResult } from "./types.js";
+import { isWorkspaceTrusted, WORKSPACE_PLUGIN_DIRS } from "./workspace_trust.js";
 import pc from "picocolors";
 
 export interface SandboxedExecutionOptions {
@@ -43,24 +44,28 @@ export interface PluginHooks {
 }
 
 /** Directories Nexus loads plugin modules (`*.js`, `*.mjs`) from at turn start. */
-export function pluginDirs(workspace: string): string[] {
-  return [
-    path.join(workspace, ".nexus", "plugins"),
-    path.join(workspace, "plugins"),
+export function pluginDirs(workspace: string, isWorkspaceTrusted = false): string[] {
+  const dirs = [
     path.join(os.homedir(), ".nexus", "plugins"),
     path.join(os.homedir(), ".config", "nexus", "plugins"),
     path.join(os.homedir(), ".config", "opencode", "plugins"),
   ];
+  if (isWorkspaceTrusted) dirs.unshift(...WORKSPACE_PLUGIN_DIRS.map((dir) => path.join(workspace, dir)));
+  return dirs;
 }
 
 export class PluginManager {
   private workspace: string;
+  private readOnly: boolean;
+  private trusted: boolean;
   private plugins: Map<string, PluginHooks> = new Map();
   private customToolsMap: Map<string, (args: Record<string, any>) => Promise<ExecutionResult>> = new Map();
   private customToolDefs: ToolDefinition[] = [];
 
-  constructor(workspace: string) {
+  constructor(workspace: string, options?: { readOnly?: boolean; trusted?: boolean }) {
     this.workspace = path.resolve(workspace);
+    this.readOnly = Boolean(options?.readOnly);
+    this.trusted = options?.trusted !== undefined ? options.trusted : isWorkspaceTrusted(this.workspace, this.readOnly);
   }
 
   public async loadPlugins(): Promise<void> {
@@ -68,7 +73,8 @@ export class PluginManager {
     this.customToolsMap.clear();
     this.customToolDefs = [];
 
-    for (const dir of pluginDirs(this.workspace)) {
+    const allowWorkspace = this.trusted && !this.readOnly;
+    for (const dir of pluginDirs(this.workspace, allowWorkspace)) {
       if (!fs.existsSync(dir)) continue;
 
       try {

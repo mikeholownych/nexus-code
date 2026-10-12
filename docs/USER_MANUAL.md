@@ -72,9 +72,15 @@ Press `<TAB>` at any prompt to autocomplete slash commands and directory paths.
   code and line count, the exact number of earlier lines not shown (`… 115 earlier lines`) and the last 6 lines; Tab, `[`/`]` and
   Enter open the full record. Tools that took noticeable time show their duration. A pasted prompt shows the text that
   was sent under its `[Pasted text #n]` label.
-- **Outcomes.** A turn ends with one line in words — `Done`, `Done · verified`, `Done · not verified`, `Verification
-  failed`, `Requirements still open` (with the open items), `Cancelled`, `Stopped at …` (a budget), `Model request
-  failed`, `Context is full` — the cause, and the next action; `v` opens the receipt with the raw fields.
+- **Outcomes.** A turn ends with one line in words — `Done`, `Done · verified`, `Done · tests passed, change not
+  covered`, `Done · not verified`, `Verification failed`, `Requirements still open` (with the open items),
+  `Cancelled`, `Stopped at …` (a budget), `Model request failed`, `Context is full` — the cause, and the next action;
+  `v` opens the receipt with the raw fields. **Verified** means the passing test run is evidence about the change: it
+  ran tests (its output reports at least one), ran the whole suite (no name filter), and covers the changed files — a
+  changed file is a test, the run names a changed file, a test imports a changed module, or the change has inline
+  tests the run executes (Rust `#[cfg(test)]` under `cargo test`, Go `_test.go` files under `go test`). A passing run
+  that shows none of that only shows nothing else broke: the outcome is `tests passed, change not covered`
+  (`REGRESSION_FREE`, exit code 2), and requirements cannot be marked `verified` on it.
 - **Scrolling.** Scrolled back, the view stays where you are while output arrives; the badge then says `new output`.
   PgDn or Ctrl+End returns to the newest line.
 - **Status.** The top line shows identity only: workspace, branch with the number of changed files (`●3 changed`),
@@ -214,7 +220,7 @@ Nexus Code provides high-performance tools executed via compiled native 64-bit R
 2. **`batch_read`**: Read multiple files in parallel in a single turn.
 3. **`file_tree`**: Render directory tree hierarchy respecting `.gitignore`.
 4. **`file_info`**: Inspect file size, permissions, line count, binary status, and modified timestamps.
-5. **`edit_file`**: Precise search-and-replace using unique snippet matching with fuzzy recovery.
+5. **`edit_file`**: Exact search-and-replace of a snippet that must occur once (or every occurrence with `replace_all`). Blank lines around the snippet are tolerated; a snippet that matches only with different indentation is refused with the file's exact lines quoted. CRLF files keep CRLF.
 6. **`patch_file`**: Apply standard unified diffs and patch hunks.
 7. **`search_code`**: Multi-threaded ripgrep code search across workspace.
 8. **`trigram_search`**: Ultra-fast code search accelerated by Rust inverted trigram index.
@@ -246,6 +252,9 @@ Nexus Code provides high-performance tools executed via compiled native 64-bit R
   - `--read-only`: Rejects all file modifications and non-read shell commands with an immediate error.
 - **Lightweight Container Sandboxing (`--sandbox`)**: Restricts filesystem mutation strictly to the target workspace using Linux Bubblewrap (`bwrap`) or Docker isolation.
 - **Worker Thread Plugin Sandboxing**: Untrusted or custom plugin handlers execute in isolated Node.js `worker_threads` with strict timeout boundaries and memory caps.
+- **Workspace Trust**: A workspace's own `.mcp.json` / `mcp.json` servers and `.nexus/plugins/` / `plugins/` modules run code from the workspace, so they are loaded only after you trust it: `nexus trust [path]` (undo with `nexus trust --remove`, list with `nexus trust --list`; recorded in `~/.config/nexus/trusted_workspaces.json`, which the agent's file tools cannot write). Untrusted, they are not loaded and Nexus says so (a notice at start, `nexus doctor`, `nexus mcp`, `nexus plugins`); in `--read-only` mode they are never loaded. Servers and plugins in your home configuration (`~/.config/nexus/`, `~/.nexus/`) are always loaded.
+- **MCP Server Environment**: MCP servers start with basic process, locale, proxy (`HTTPS_PROXY`, `NO_PROXY`, …) and CA-trust (`SSL_CERT_FILE`, `NODE_EXTRA_CA_CERTS`, …) variables only — not Nexus's own credentials. Give a server the token it needs in its `env` block in `mcp.json`.
+- **Build Identity**: `nexus --version` and `nexus doctor` show the commit the running build was made from, its branch, and whether the source had uncommitted changes (`1.2.1 (cc177be91d15-dirty, feat/tui-surface)`), recorded at `make build`.
 - **Pseudo-Terminal (PTY) Allocation**: Commands requiring TTY capabilities run inside allocated virtual pseudo-terminals via `portable-pty`.
 - **Multi-Provider Failover**: Specify secondary fallback endpoints via `--fallback <url1,url2>` or `$LOCAL_LLM_FALLBACK_ENDPOINTS`. Automatic failover occurs if the primary LLM server drops connection or runs out of GPU VRAM (HTTP 503).
 - **BPE Token Accounting & Context Gauge**: Real-time token breakdown across system instructions, tools schema, user messages, assistant thinking, and tool output payloads with visual ANSI progress gauge.

@@ -23,6 +23,8 @@ import { LocalLlmClient, credentialStorageHome } from "./client.js";
 import { credentialsPath } from "./credentials.js";
 import { mcpConfigFiles } from "./mcp.js";
 import { pluginDirs } from "./plugins.js";
+import { untrustedWorkspaceExtensions, WORKSPACE_MCP_FILES } from "./workspace_trust.js";
+import { BuildIdentity, getBuildIdentity } from "./build_identity.js";
 import { defaultSessionsDir } from "./session.js";
 import { defaultTaskStateDir } from "./core/state.js";
 import { coreCargoManifest, resolveCoreBinary } from "./tools.js";
@@ -63,6 +65,7 @@ export interface DoctorReport {
   schemaVersion: typeof DOCTOR_SCHEMA_VERSION;
   tool: "nexus doctor";
   nexusVersion: string;
+  buildIdentity?: BuildIdentity;
   /** `cli`: a fresh configuration built from flags and environment. `session`: the running session's configuration. */
   context: "cli" | "session";
   deep: boolean;
@@ -299,9 +302,13 @@ export function configSources(config: HarnessConfig, flags: Record<string, any>,
 // ---------------------------------------------------------------------------------------------------------------
 
 const installCheck: Check = async () => {
-  const version = nexusVersion();
+  const build = getBuildIdentity();
   const dist = path.join(INSTALL_ROOT, "cli/dist/index.js");
-  const evidence = [`version ${version}`, `install root ${INSTALL_ROOT}`];
+  const evidence = [
+    `version ${build.version}`,
+    build.commit === "unknown" ? "build identity unknown (built before build-info was recorded; run `make build`)" : `built from ${build.commit}${build.dirty ? " with uncommitted changes" : ""}${build.branch ? ` on ${build.branch}` : ""}`,
+    `install root ${INSTALL_ROOT}`,
+  ];
   if (!fs.existsSync(dist)) return f("install.build", "install", "fail", "The CLI build (cli/dist) is missing.", evidence, `Run \`make build\` in ${INSTALL_ROOT}.`);
   const built = fs.statSync(dist).mtimeMs;
   const source = newestMtime(path.join(INSTALL_ROOT, "cli/src"), ".ts");
@@ -645,7 +652,8 @@ const mcpCheck: Check = async (ctx) => {
   const servers: string[] = [];
   const problems: string[] = [];
   const seen = new Set<string>();
-  for (const file of mcpConfigFiles(workspace)) {
+  // Every configuration file is inspected, including a workspace's own that is not loaded because it is untrusted.
+  for (const file of mcpConfigFiles(workspace, true)) {
     if (!fs.existsSync(file)) continue;
     let config: any;
     try {
@@ -676,6 +684,9 @@ const mcpCheck: Check = async (ctx) => {
       }
     }
   }
+  for (const file of untrustedWorkspaceExtensions(workspace).filter((f) => WORKSPACE_MCP_FILES.includes(path.basename(f)))) {
+    problems.push(`${file}: not loaded — this workspace is not trusted. Trust it with \`nexus trust ${workspace}\` to use its MCP servers.`);
+  }
   const note = "Servers were inspected from configuration only; none was started.";
   if (problems.length) out.push(f("mcp.config", "extensions", "warn", `${problems.length} configured MCP server problem(s); affected servers will not provide tools. ${note}`, [...problems, ...servers], "Fix the listed configuration entries."));
   else out.push(f("mcp.config", "extensions", seen.size ? "pass" : "skip", seen.size ? `${seen.size} MCP server(s) are configured with resolvable commands or valid URLs. ${note}` : "No MCP servers are configured (optional).", servers));
@@ -686,7 +697,10 @@ const pluginCheck: Check = async (ctx) => {
   const workspace = ctx.config?.workspace ?? process.cwd();
   const found: string[] = [];
   const risky: string[] = [];
-  for (const dir of pluginDirs(workspace)) {
+  for (const file of untrustedWorkspaceExtensions(workspace).filter((f) => !WORKSPACE_MCP_FILES.includes(path.basename(f)))) {
+    risky.push(`${file}: not loaded — this workspace is not trusted. Trust it with \`nexus trust ${workspace}\` to load its plugins.`);
+  }
+  for (const dir of pluginDirs(workspace, true)) {
     let names: string[];
     try {
       names = fs.readdirSync(dir);
@@ -701,7 +715,7 @@ const pluginCheck: Check = async (ctx) => {
     }
   }
   const note = "Plugin modules were listed, not loaded (loading runs their code).";
-  if (risky.length) return f("plugins.config", "extensions", "warn", `${risky.length} plugin file(s) are writable by any user. ${note}`, [...risky, ...found.slice(0, 10)], "Restrict them with `chmod o-w <file>`.");
+  if (risky.length) return f("plugins.config", "extensions", "warn", `${risky.length} plugin problem(s): untrusted workspace plugins are not loaded; world-writable plugin files could be changed by anyone. ${note}`, [...risky, ...found.slice(0, 10)], "Trust the workspace (`nexus trust`) or remove its plugins; restrict writable files with `chmod o-w <file>`.");
   return f("plugins.config", "extensions", found.length ? "pass" : "skip", found.length ? `${found.length} plugin module(s) found. ${note}` : "No plugins are installed (optional).", found.slice(0, 10));
 };
 
@@ -775,6 +789,7 @@ export async function runDoctor(optionsOrConfig: DoctorOptions | HarnessConfig |
     schemaVersion: DOCTOR_SCHEMA_VERSION,
     tool: "nexus doctor",
     nexusVersion: nexusVersion(),
+    buildIdentity: getBuildIdentity(),
     context: options.context ?? "cli",
     deep: ctx.deep,
     generatedAt: new Date().toISOString(),

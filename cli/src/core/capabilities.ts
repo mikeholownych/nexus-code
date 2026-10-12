@@ -26,8 +26,13 @@ export interface CanonicalCapability {
     | "orchestration"
     | "extension"
     | string;
-  /** Whether the capability performs mutating side effects */
+  /** Whether the capability performs side effects (read-only mode refuses it; review mode asks before it runs) */
   mutating: boolean;
+  /**
+   * Whether a successful call changes the workspace content (makes a verifier result stale, counts as a change to
+   * verify). Defaults to `mutating`; false for side effects outside the workspace, such as running tests.
+   */
+  changesWorkspace?: boolean;
   /** Human- and audit-readable side-effect contract */
   sideEffectContract: string;
   /** Backend execution engine type */
@@ -188,6 +193,11 @@ export class CapabilityRegistry {
   }
 }
 
+/** Whether a successful call of the capability changes workspace content. */
+export function changesWorkspace(capability: Pick<CanonicalCapability, "mutating" | "changesWorkspace">): boolean {
+  return capability.changesWorkspace ?? capability.mutating;
+}
+
 export const BASELINE_CAPABILITIES: CanonicalCapability[] = [
   {
     "id": "fs_read",
@@ -286,6 +296,10 @@ export const BASELINE_CAPABILITIES: CanonicalCapability[] = [
             "new_content": {
               "type": "string",
               "description": "The new replacement snippet."
+            },
+            "replace_all": {
+              "type": "boolean",
+              "description": "Replace every occurrence of old_content. Without it, old_content must occur exactly once."
             }
           },
           "required": [
@@ -467,19 +481,23 @@ export const BASELINE_CAPABILITIES: CanonicalCapability[] = [
     "modelToolName": "delete_file",
     "category": "fs",
     "mutating": true,
-    "sideEffectContract": "Delete a file from the workspace",
+    "sideEffectContract": "Delete a file, or a directory with recursive: true, from the workspace",
     "backend": "rust_rpc",
     "toolDefinition": {
       "type": "function",
       "function": {
         "name": "delete_file",
-        "description": "Delete a file or directory inside the workspace.",
+        "description": "Delete a file or directory inside the workspace. A directory needs recursive: true. The workspace root and .git cannot be deleted.",
         "parameters": {
           "type": "object",
           "properties": {
             "path": {
               "type": "string",
               "description": "Relative path to file or directory to remove."
+            },
+            "recursive": {
+              "type": "boolean",
+              "description": "Required to delete a directory and everything in it."
             }
           },
           "required": [
@@ -787,7 +805,8 @@ export const BASELINE_CAPABILITIES: CanonicalCapability[] = [
     "id": "test_discover_run",
     "modelToolName": "run_tests",
     "category": "proc",
-    "mutating": false,
+    "mutating": true,
+    "changesWorkspace": false,
     "sideEffectContract": "Discover and execute workspace test suite",
     "backend": "ts_native",
     "toolDefinition": {
@@ -1229,7 +1248,8 @@ export const BASELINE_CAPABILITIES: CanonicalCapability[] = [
     "id": "browser_interact",
     "modelToolName": "browser_type",
     "category": "browser",
-    "mutating": false,
+    "mutating": true,
+    "changesWorkspace": false,
     "sideEffectContract": "Simulate keyboard text typing into DOM selector element",
     "backend": "ts_native",
     "toolDefinition": {

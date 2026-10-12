@@ -382,7 +382,7 @@ describe("the objective survives detailed follow-ups and stays complete in conte
 
 describe("verified means a recorded passing verifier run on the current workspace", () => {
   test("verified without a current pass is refused; after a passing run_tests it binds that run; a later change demotes it", { timeout: 60_000 }, async () => {
-    const repo = makeRepo({ Makefile: "test:\n\t@echo ok\n" });
+    const repo = makeRepo({ Makefile: 'test:\n\t@echo "✔ importer works" && echo "ℹ tests 1"\n' });
     const script = (n: number): Reply =>
       n === 1
         ? { kind: "tools", calls: [{ name: "update_requirements", args: { requirements: [{ id: "R1", status: "verified", evidence: ["I checked it"] }] } }] }
@@ -428,7 +428,7 @@ describe("verified means a recorded passing verifier run on the current workspac
 describe("verifier attempts are remembered against their inputs", () => {
   test("an unchanged failing verifier is not rerun; a change reruns it; the gate stays closed until it passes", { timeout: 60_000 }, async () => {
     const counter = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "nexus-verifier-runs-")), "runs.log");
-    const repo = makeRepo({ Makefile: `test:\n\techo run >> ${counter}\n\ttest -f fixed.txt || (echo "FAIL fixed.txt missing"; exit 1)\n` });
+    const repo = makeRepo({ Makefile: `test:\n\techo run >> ${counter}\n\ttest -f fixed.txt || (echo "FAIL fixed.txt missing"; exit 1)\n\t@echo "ℹ tests 1"\n` });
     const gw = await startGateway((n) =>
       n === 1
         ? write("change.txt")
