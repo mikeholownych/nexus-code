@@ -190,6 +190,24 @@ describe("doctor findings name the actual failure", () => {
     }
   });
 
+  test("--deep engine probe passes in a large workspace (a listing bigger than the output cap is not a failure)", async () => {
+    // A home-directory workspace lists thousands of entries: the probe must not depend on how much the workspace holds.
+    const big = tmp("nexus-doctor-bigws-");
+    for (let d = 0; d < 20; d++) {
+      const sub = path.join(big, `directory-with-a-long-name-${d}`);
+      fs.mkdirSync(sub);
+      for (let i = 0; i < 100; i++) fs.writeFileSync(path.join(sub, `file-with-a-reasonably-long-name-${i}.txt`), "");
+    }
+    for (let i = 0; i < 1500; i++) fs.writeFileSync(path.join(big, `top-level-file-with-a-reasonably-long-name-${i}.txt`), "");
+    const m = await mock({ models: ["m"] });
+    try {
+      const report = await doctor({ config: cfg({ endpoint: m.url, workspace: big }), deep: true });
+      assert.equal(find(report, "engine.tool")?.status, "pass", JSON.stringify(find(report, "engine.tool")));
+    } finally {
+      await m.close();
+    }
+  });
+
   test("a shell that is not on PATH fails shell.executable", async () => {
     const report = await doctor({ config: cfg({ shell: "no-such-shell-xyz" }) });
     assert.equal(find(report, "shell.executable")?.status, "fail");

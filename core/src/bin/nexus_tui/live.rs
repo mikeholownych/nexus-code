@@ -192,7 +192,7 @@ impl LiveApp {
             changed = true;
             match message {
                 SidecarMsg::Event(event) => {
-                    self.state.apply(event);
+                    self.state.apply(*event);
                     for action in self.state.take_outbox() {
                         self.handle(action);
                     }
@@ -283,6 +283,7 @@ pub fn run_live(spec: SidecarSpec) -> Result<(), Box<dyn std::error::Error>> {
         guard.keyboard_protocol = true;
     }
     let mut app = LiveApp::start(spec);
+    app.state.depth = crate::theme::Depth::from_env();
     let result = event_loop(&mut terminal, &mut app);
     app.handle(Action::Quit);
     result

@@ -73,9 +73,33 @@ Press `<TAB>` at any prompt to autocomplete slash commands and directory paths.
   submitted exactly as pasted (newlines in it never send, and a pasted `/exit` is text). Ctrl+O shows a buffer,
   Ctrl+X turns it back into editable text, Backspace after it removes it. Terminals without bracketed paste: a burst
   of keys with a line break inside it is treated as a paste.
-- **File diffs.** Each successful edit shows that operation's own diff under its tool line (`± src/a.ts modified +3
-  -1`, a bounded preview); pre-existing uncommitted changes are never attributed to the agent, and failed edits show
-  none. Tab, `[`/`]` to select it, Enter opens the full diff.
+- **File diffs.** Each successful edit replaces its tool line with a card: `✓ Edited src/a.ts  +3 −1` (`Created`,
+  `Deleted`), then up to 14 diff lines in a block marked by a gutter bar — aligned old/new line numbers (blank where a
+  number does not apply), an explicit `+`/`−` marker, the content with tabs expanded to 4-column stops and syntax
+  colours, on a muted green (added) or red (removed) background that spans the row; unchanged lines stay neutral.
+  Hunks are separated by `⋯ N unchanged lines`, a file without a final newline is marked `\ no newline at end of
+  file` under the line concerned, and long lines wrap with a faint repeated marker. A longer diff ends with the exact
+  count of what is not shown and the control that opens it: `… 48 more lines in 1 more hunk · ctrl+d to review`.
+  The diff is the operation's own before/after, so uncommitted changes that were already in the file are never
+  attributed to the agent; a failed edit shows its error (`× Edit a.ts — …`) and never a change. Binary, oversized
+  (over 2 MB) or unreadable files say so instead of showing lines. Control characters in file content are shown as
+  visible stand-ins (`␛` for ESC, `␍` for CR, `<U+202E>` for direction overrides), never sent to the terminal.
+- **Reviewing a complete diff.** Ctrl+D opens the selected edit (or the newest one, or the newest `/diff`) in a
+  full panel: `n`/`p` next/previous hunk, `]`/`[` next/previous edit (files, for `/diff`), arrows or `j`/`k` and
+  PgUp/PgDn to scroll, `←`/`→` to pan long lines (`‹`/`›` mark clipped content, `0` returns to the start), `w` to wrap
+  instead, `i` for the edit's tool-call record, Esc to return — the transcript position and the draft in the composer
+  are kept. Enter on a selected edit (Tab, then `[`/`]`) opens it too. The panel says which diff it is: `Edit diff ·
+  this operation only` (with `edit 3 of 8`) or `Workspace diff · unstaged changes to tracked files (git diff)`, which
+  includes changes not made in the session. Every operation's complete diff is also written, redacted, to
+  `~/.nexus/sessions/<session>.diffs/` (mode 0600); when a diff is larger than the 256,000 characters kept in memory,
+  the panel says how much it shows and names that file.
+- **What diffs cover.** File-edit tools (`write_file`, `edit_file`, `patch_file`, `delete_file`) get per-operation
+  diffs. Changes made by shell commands (`run_command`, `!command`) do not; they appear in `/diff` only. Renames are
+  shown when git reports them in `/diff`; no edit tool renames files.
+- **Colour.** 24-bit colour with `COLORTERM=truecolor`; otherwise 256 colours for a `TERM` naming them, else the 16
+  standard colours (no row backgrounds: the changed text itself is green or red). `NO_COLOR` or `TERM=dumb` removes
+  colour; `NEXUS_COLOR=truecolor|256|16|none` overrides. The `+`/`−` markers and labels carry the meaning at every
+  depth.
 
 ### Long tasks: continuation instead of a 30-step stop
 

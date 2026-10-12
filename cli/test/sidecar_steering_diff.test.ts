@@ -10,6 +10,8 @@ import path from "node:path";
 import { execSync } from "node:child_process";
 import { ApplicationCore } from "../src/core/app.js";
 import { SidecarServer } from "../src/sidecar.js";
+import { EvidenceLedger } from "../src/evidence.js";
+import { countDiffLines, unifiedDiff, visibleControls } from "../src/file_diff.js";
 import { DEFAULT_CONTINUATION, HarnessConfig } from "../src/types.js";
 import { startGateway, makeRepo, makeHome, waitForEvent, waitUntil, Reply } from "./helpers/fixtures.js";
 
@@ -239,10 +241,74 @@ describe("per-operation file diffs", () => {
       assert.equal(diff.truncated, true);
       assert.ok(diff.preview.split("\n").length <= 40);
       assert.equal(diff.total_lines, 403);
+      assert.equal(diff.diff_lines, 400, "what an omission line counts: changed and context lines only");
+      assert.equal(diff.hunks, 1);
       await send({ type: "tool.detail", id: "d1", evidence: diff.evidence });
       const detail = await waitForEvent(events, (e) => e.type === "tool.detail");
       assert.equal(detail.diff.split("\n").length, 403);
+      assert.equal(detail.diff_chars, detail.diff.length);
+      // The complete diff is also kept on disk beside the saved session, private to the operator.
+      assert.equal(detail.diff_path, diff.full_path);
+      assert.ok(diff.full_path.includes(`${path.sep}.nexus${path.sep}sessions${path.sep}`), diff.full_path);
+      assert.equal(fs.statSync(diff.full_path).mode & 0o777, 0o600);
+      assert.equal(fs.readFileSync(diff.full_path, "utf8"), `${detail.diff}\n`);
     });
+  });
+
+  test("file content keeps its meaning: control characters are shown, never stripped or sent raw", async () => {
+    const content = "plain\n\u001b[31mred\u001b[0m and a bell\u0007\r\n";
+    await withSidecar((n) => (n === 1 ? { kind: "tools", calls: [{ name: "write_file", args: { path: "esc.txt", content } }] } : { kind: "text", content: "ok" }), async ({ server, events, send }) => {
+      await send({ type: "prompt.submit", id: "t1", text: "write" });
+      await server.idle();
+      const diff = events.find((e) => e.type === "file.diff");
+      assert.match(diff.preview, /\+␛\[31mred␛\[0m and a bell␇␍/);
+      assert.ok(!/[\u0000-\u0008\u000b-\u001f\u007f]/.test(diff.preview), "no raw control character leaves the sidecar");
+    });
+  });
+
+  test("a record dropped from memory still yields its complete diff from disk", async () => {
+    const script = (n: number): Reply =>
+      n === 1
+        ? { kind: "tools", calls: [{ name: "write_file", args: { path: "one.txt", content: "first\n" } }] }
+        : n === 2
+          ? { kind: "tools", calls: [{ name: "write_file", args: { path: "two.txt", content: "second\n" } }] }
+          : { kind: "text", content: "ok" };
+    await withSidecar(script, async ({ server, events, send }) => {
+      // Keep only the newest record in memory, so the first edit's record is dropped.
+      (server as any).evidence = new EvidenceLedger(1);
+      await send({ type: "prompt.submit", id: "t1", text: "write two files" });
+      await server.idle();
+      const first = events.find((e) => e.type === "file.diff" && e.path === "one.txt");
+      await send({ type: "tool.detail", id: "d1", evidence: first.evidence });
+      const detail = await waitForEvent(events, (e) => e.id === "d1");
+      assert.equal(detail.type, "tool.detail", JSON.stringify(detail));
+      assert.match(detail.diff, /\+first/);
+      assert.equal(detail.diff_path, first.full_path);
+    });
+  });
+});
+
+describe("diff text", () => {
+  test("adding or removing only the final newline is a change, marked on the line it belongs to", () => {
+    const removed = unifiedDiff("n.txt", "a\nlast\n", "a\nlast");
+    assert.equal(removed.diff, "--- a/n.txt\n+++ b/n.txt\n@@ -1,2 +1,2 @@\n a\n-last\n+last\n\\ No newline at end of file");
+    const added = unifiedDiff("n.txt", "last", "last\n");
+    assert.equal(added.diff, "--- a/n.txt\n+++ b/n.txt\n@@ -1,1 +1,1 @@\n-last\n\\ No newline at end of file\n+last");
+    const both = unifiedDiff("n.txt", "a\nend", "b\nend");
+    assert.ok(both.diff.endsWith(" end\n\\ No newline at end of file"), both.diff);
+    assert.equal(both.hunks, 1);
+  });
+
+  test("hunks are counted and separated, and omission counts exclude headers and markers", () => {
+    const before = Array.from({ length: 40 }, (_, i) => `l${i}`).join("\n") + "\n";
+    const after = before.replace("l2\n", "L2\n").replace("l30\n", "L30\n");
+    const change = unifiedDiff("f.txt", before, after);
+    assert.equal(change.hunks, 2);
+    assert.equal(countDiffLines(change.diff), 2 * 7 + 2 - 1 + 0, change.diff);
+  });
+
+  test("controls become visible stand-ins; tabs, newlines and text are untouched", () => {
+    assert.equal(visibleControls("a\tb\nc\u001b[0m\u007f\u009b\u202e"), "a\tb\nc␛[0m␡<U+009B><U+202E>");
   });
 });
 

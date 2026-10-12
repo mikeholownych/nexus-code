@@ -7,6 +7,7 @@ import type { TurnResult } from "./core/turn.js";
 import { capText, stripEscapes } from "./protocol.js";
 import { redactSecrets } from "./ui.js";
 import { type ObjectiveLedger, requirementRows } from "./core/objective.js";
+import { visibleControls } from "./file_diff.js";
 
 export const MAX_DETAIL = 64_000;
 /** Full diffs are kept larger than other detail: inspecting the complete change is their purpose. */
@@ -28,6 +29,10 @@ export interface EvidenceRecord {
   durationMs: number | null;
   /** Unified diff of the file change this call made (redacted, capped at MAX_DIFF_DETAIL). */
   diff?: string;
+  /** Characters in the complete (redacted) diff, before the cap. */
+  diffChars?: number;
+  /** Where the complete diff was written, when it was. */
+  diffPath?: string;
 }
 
 /**
@@ -48,6 +53,11 @@ function redactedOutput(text: string): string {
     // Plain text output.
   }
   return text;
+}
+
+/** A diff as it may be shown or stored: secrets redacted, then control characters made visible. */
+export function safeDiffText(diff: string): string {
+  return visibleControls(redactSecrets(diff));
 }
 
 function clean(text: string): string {
@@ -93,12 +103,18 @@ export class EvidenceLedger {
     record.durationMs = Math.max(0, this.now() - record.startedAt);
   }
 
-  /** Attaches the diff of the change the call made; several files (rare) are appended in order. */
-  attachDiff(evidence: string, diff: string): void {
+  /**
+   * Attaches the diff of the change the call made; several files (rare) are appended in order. Control characters are
+   * made visible rather than removed, so the diff still says what the file holds.
+   */
+  attachDiff(evidence: string, diff: string, diffPath?: string): void {
     const record = this.records.get(evidence);
     if (!record || !diff) return;
-    const text = capText(redactSecrets(stripEscapes(diff)), MAX_DIFF_DETAIL);
-    record.diff = record.diff ? capText(`${record.diff}\n${text}`, MAX_DIFF_DETAIL) : text;
+    const full = safeDiffText(diff);
+    const joined = record.diff ? `${record.diff}\n${full}` : full;
+    record.diffChars = (record.diffChars ?? 0) + full.length + (record.diff ? 1 : 0);
+    record.diff = capText(joined, MAX_DIFF_DETAIL);
+    if (diffPath) record.diffPath = diffPath;
   }
 
   get(evidence: string): EvidenceRecord | undefined {

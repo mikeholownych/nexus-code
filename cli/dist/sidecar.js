@@ -12,8 +12,8 @@ import { failedTurnFromError, lifecycleStatusForTurn, summarizeTurn } from "./co
 import { getGitInfo } from "./git.js";
 import { redactSecrets } from "./ui.js";
 import { approvalReview } from "./approval_review.js";
-import { EvidenceLedger, MAX_EVIDENCE, receiptSections, redactedJson } from "./evidence.js";
-import { previewDiff } from "./file_diff.js";
+import { EvidenceLedger, MAX_DIFF_DETAIL, MAX_EVIDENCE, receiptSections, redactedJson, safeDiffText } from "./evidence.js";
+import { countDiffLines, previewDiff, visibleControls } from "./file_diff.js";
 import { DIFF_PREVIEW_CHARS, DIFF_PREVIEW_LINES, MAX_SLASH_OUTPUT, PROTOCOL_VERSION, ProtocolError, capText, encodeEvent, parseCommand, projectTurn, providerRecoveryNotice, stripEscapes, toolSubject, toolSummary, } from "./protocol.js";
 import { errorText, findSlash, slashCatalog } from "./slash/catalog.js";
 import { routeSlash } from "./slash/router.js";
@@ -38,6 +38,8 @@ export class SidecarServer {
     /** The running slash command; undefined for prompt turns and for commands that became turns. */
     activeSpec;
     evidence = new EvidenceLedger();
+    /** Evidence id → the complete diff written for that call (outlives the in-memory record). */
+    diffFiles = new Map();
     lastTurn = null;
     /** Steering ids already received: a resend is acknowledged, never applied twice. */
     steerSeen = new Set();
@@ -325,20 +327,25 @@ export class SidecarServer {
             }),
             onFileChange: ({ dispatch, callId, path: file, change }) => {
                 const evidence = open.get(dispatch) ?? "";
-                this.evidence.attachDiff(evidence, change.diff);
-                const { preview, truncated, totalLines } = previewDiff(redactSecrets(stripEscapes(change.diff)), DIFF_PREVIEW_LINES, DIFF_PREVIEW_CHARS);
+                const safe = safeDiffText(change.diff);
+                const fullPath = this.keepOperationDiff(evidence, callId, safe);
+                this.evidence.attachDiff(evidence, change.diff, fullPath);
+                const { preview, truncated, totalLines } = previewDiff(safe, DIFF_PREVIEW_LINES, DIFF_PREVIEW_CHARS);
                 this.emit({
                     type: "file.diff",
                     turn_id: turnId,
                     call_id: callId,
                     evidence,
-                    path: capText(redactSecrets(stripEscapes(file)), 400),
+                    path: capText(visibleControls(redactSecrets(file)), 400),
                     kind: change.kind,
                     added: change.added,
                     removed: change.removed,
                     preview,
                     truncated,
                     total_lines: totalLines,
+                    diff_lines: countDiffLines(safe),
+                    hunks: change.hunks ?? 0,
+                    ...(fullPath ? { full_path: fullPath } : {}),
                     ...(change.note ? { note: change.note } : {}),
                 });
             },
@@ -480,7 +487,8 @@ export class SidecarServer {
                 id,
                 command: outcome.command,
                 success: outcome.success,
-                output: capText(redactSecrets(stripEscapes(outcome.output)), MAX_SLASH_OUTPUT),
+                // A diff keeps what the files say: control characters are made visible rather than removed.
+                output: capText(outcome.format === "diff" ? safeDiffText(outcome.output) : redactSecrets(stripEscapes(outcome.output)), MAX_SLASH_OUTPUT),
                 ...(outcome.format ? { format: outcome.format } : {}),
                 ...(outcome.composer !== undefined ? { composer: outcome.composer } : {}),
             });
@@ -525,8 +533,54 @@ export class SidecarServer {
             receipt: () => this.receipt(),
         };
     }
+    /**
+     * Writes an operation's complete (already redacted) diff beside the saved session, so it can be reviewed whole
+     * after the in-memory record is cut to MAX_DIFF_DETAIL or dropped with the oldest records. Returns its path, or
+     * undefined when it could not be written (the in-memory record is then the only copy, and says so).
+     */
+    keepOperationDiff(evidence, callId, diff) {
+        if (!diff)
+            return undefined;
+        try {
+            const name = `${evidence}-${callId}`.replace(/[^A-Za-z0-9._-]/g, "_").slice(0, 160);
+            const file = this.app.getSessionManager().operationDiffPath(this.sessionId, name);
+            fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
+            fs.writeFileSync(file, diff.endsWith("\n") ? diff : `${diff}\n`, { encoding: "utf8", mode: 0o600 });
+            this.diffFiles.set(evidence, file);
+            return file;
+        }
+        catch {
+            return undefined;
+        }
+    }
     toolDetail(id, evidence) {
         const record = this.evidence.get(evidence);
+        const kept = this.diffFiles.get(evidence);
+        if (!record && kept) {
+            // The record was dropped with the oldest; the complete diff is still on disk.
+            let diff = "";
+            try {
+                diff = fs.readFileSync(kept, "utf8").replace(/\n$/, "");
+            }
+            catch { }
+            if (diff) {
+                this.emit({
+                    type: "tool.detail",
+                    id,
+                    evidence,
+                    tool: "",
+                    subject: "",
+                    status: "succeeded",
+                    args: "(not kept: only the latest " + MAX_EVIDENCE + " tool calls keep their arguments and output)",
+                    output: "",
+                    duration_ms: null,
+                    diff: capText(diff, MAX_DIFF_DETAIL),
+                    diff_chars: diff.length,
+                    diff_path: kept,
+                });
+                return;
+            }
+        }
         if (!record) {
             const message = `No record of tool call ${capText(redactSecrets(stripEscapes(evidence)))}; only the latest ${MAX_EVIDENCE} are kept.`;
             this.emit({ type: "error", id, code: "NOT_FOUND", message });
@@ -542,7 +596,8 @@ export class SidecarServer {
             args: record.args,
             output: record.output,
             duration_ms: record.durationMs,
-            ...(record.diff ? { diff: record.diff } : {}),
+            ...(record.diff ? { diff: record.diff, diff_chars: record.diffChars ?? record.diff.length } : {}),
+            ...(record.diffPath ? { diff_path: record.diffPath } : {}),
         });
     }
     receipt() {

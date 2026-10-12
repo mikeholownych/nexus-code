@@ -134,6 +134,13 @@ export class SessionManager {
             throw new Error("Session identity is not a safe persistence name");
         return path.join(this.sessionsDir, `${sessionId}.history.jsonl`);
     }
+    /** Where the complete diff of one file operation in this session is kept (redacted; mode 0600). */
+    operationDiffPath(sessionId, name) {
+        if (!/^[A-Za-z0-9._-]{1,160}$/.test(sessionId) || !/^[A-Za-z0-9._-]{1,160}$/.test(name)) {
+            throw new Error("Session identity is not a safe persistence name");
+        }
+        return path.join(this.sessionsDir, `${sessionId}.diffs`, `${name}.diff`);
+    }
     appendArchivedHistory(sessionId, messages) {
         if (!messages.length)
             return;

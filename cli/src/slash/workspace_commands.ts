@@ -20,7 +20,7 @@ function diff(ctx: SlashContext): SlashOutcome {
   const cwd = workspace(ctx);
   if (!getGitInfo(cwd).isRepo) return reply("diff", NOT_A_REPO, false);
   try {
-    const out = git(cwd, ["diff"]);
+    const out = git(cwd, ["diff", "--no-color"]);
     return out.trim() ? reply("diff", out.trimEnd(), true, { format: "diff" }) : reply("diff", "Working tree clean: no uncommitted changes.");
   } catch (err) {
     return reply("diff", `git diff failed: ${errorText(err)}`, false);

@@ -173,6 +173,14 @@ pub enum Event {
         truncated: bool,
         #[serde(default)]
         total_lines: u64,
+        /// Changed and context lines in the whole diff, and its hunks (absent from older sidecars).
+        #[serde(default)]
+        diff_lines: Option<u64>,
+        #[serde(default)]
+        hunks: Option<u64>,
+        /// The complete diff on disk.
+        #[serde(default)]
+        full_path: Option<String>,
         #[serde(default)]
         note: Option<String>,
     },
@@ -241,9 +249,14 @@ pub enum Event {
         output: String,
         #[serde(default)]
         duration_ms: Option<u64>,
-        /// Full diff of the file change the call made.
+        /// Full diff of the file change the call made (cut to the sidecar's in-memory limit).
         #[serde(default)]
         diff: Option<String>,
+        /// Characters in the complete diff, and where it is on disk.
+        #[serde(default)]
+        diff_chars: Option<u64>,
+        #[serde(default)]
+        diff_path: Option<String>,
     },
     #[serde(rename = "receipt")]
     Receipt {
@@ -554,6 +567,8 @@ mod tests {
                 output: String::new(),
                 duration_ms: None,
                 diff: None,
+                diff_chars: None,
+                diff_path: None,
             })
         );
         assert_eq!(

@@ -10,10 +10,12 @@ use ratatui::{
 };
 
 use crate::composer::{ComposerLayout, PREFIX_WIDTH};
+use crate::diff_view::{self, CardContext, Fit, Geometry, Palette};
 use crate::live_state::{
-    Approval, Detail, Entry, Focus, Link, LiveLayout, LiveState, Loaded, Overlay, ReceiptPanel,
-    SteerState, Tone, ToolRecord, ToolStatus, Verdict,
+    Approval, Detail, DiffReview, Entry, Focus, Link, LiveLayout, LiveState, Loaded, Overlay, ReceiptPanel,
+    ReviewScope, SteerState, Tone, ToolRecord, ToolStatus, Verdict,
 };
+use crate::theme;
 use std::time::Duration;
 use crate::models::{Connect, Fetch, Picker, Row, Step};
 use crate::protocol::{ReceiptSection, SlashSpec};
@@ -133,17 +135,11 @@ pub fn render_live(frame: &mut Frame, state: &LiveState) -> LiveLayout {
         } => render_crash(frame, rows[1], *code, reason, stderr),
         _ if state.transcript.is_empty() => render_empty(frame, rows[1]),
         _ => {
-            let selected = state.selected.filter(|_| state.focus == Focus::Transcript);
-            let (limit, back) = render_transcript(
-                frame,
-                rows[1],
-                &state.transcript,
-                state.scroll_back,
-                selected,
-                state.follow,
-            );
-            layout.scroll_limit = limit;
-            layout.followed = state.follow.then_some(back);
+            let drawn = render_transcript(frame, rows[1], state);
+            layout.scroll_limit = drawn.limit;
+            layout.followed = state.follow.then_some(drawn.back);
+            layout.top = drawn.top;
+            layout.anchored = drawn.anchored;
         }
     }
     let block = Block::default()
@@ -178,9 +174,164 @@ pub fn render_live(frame: &mut Frame, state: &LiveState) -> LiveLayout {
         Some(Overlay::Paste { number, scroll }) => {
             (layout.overlay_rows, layout.overlay_limit) = render_paste(frame, rows[1], state, *number, *scroll);
         }
+        Some(Overlay::Review(review)) => {
+            (layout.overlay_rows, layout.overlay_limit, layout.overlay_hlimit) = render_review(frame, rows[1], state, review);
+        }
         None => {}
     }
+    theme::downsample(frame.buffer_mut(), state.depth);
     layout
+}
+
+/// The complete diff of one operation (or the cumulative workspace diff), with hunk and file/edit navigation,
+/// vertical and horizontal scrolling and a wrap toggle. Returns the body rows, the largest useful `top` and the
+/// largest useful `left`.
+fn render_review(frame: &mut Frame, area: Rect, state: &LiveState, review: &DiffReview) -> (usize, usize, usize) {
+    let pal = diff_view::palette(state.depth);
+    let muted = Style::default().fg(MUTED);
+    let key = Style::default().fg(ACCENT).add_modifier(Modifier::BOLD);
+    // The whole transcript area: tinted transcript rows never show beside the panel.
+    let rect = area;
+    let (title, between) = match &review.scope {
+        ReviewScope::Operation { .. } => (" Edit diff · this operation only ", "edit"),
+        ReviewScope::Workspace { .. } => (" Workspace diff · unstaged changes to tracked files (git diff) ", "file"),
+    };
+    let mut keys = vec![Span::styled(" esc", key), Span::raw(" back  "), Span::styled("↑↓", key), Span::raw(" scroll  ")];
+    if !review.wrap {
+        keys.extend([Span::styled("←→", key), Span::raw(" pan  ")]);
+    }
+    keys.extend([Span::styled("n p", key), Span::raw(" hunk  "), Span::styled("[ ]", key), Span::raw(format!(" {between}  "))]);
+    keys.extend([Span::styled("w", key), Span::raw(if review.wrap { " no wrap " } else { " wrap " })]);
+    if matches!(review.scope, ReviewScope::Operation { .. }) {
+        keys.extend([Span::raw(" "), Span::styled("i", key), Span::raw(" call ")]);
+    }
+    let mut block = Block::bordered()
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(ACCENT))
+        .title(Span::styled(title, Style::default().fg(ACCENT).add_modifier(Modifier::BOLD)))
+        .title_bottom(Line::from(keys));
+    let inner_width = usize::from(rect.width.saturating_sub(2));
+    // The heading: what is shown, the operation's place among this session's edits, and any limit on it.
+    let mut head: Vec<Line> = Vec::new();
+    match &review.scope {
+        ReviewScope::Operation { entry, path } => {
+            let card = state.transcript.get(*entry).and_then(Entry::card);
+            let edits: Vec<usize> = state.transcript.iter().enumerate().filter(|(_, e)| e.card().is_some()).map(|(i, _)| i).collect();
+            let rank = edits.iter().position(|i| i == entry).map_or(0, |p| p + 1);
+            let (status, mut counts) = card.map_or((diff_view::Status::Modified, None), |c| (c.status(), c.note.is_none().then_some((c.added as usize, c.removed as usize))));
+            // Once the complete diff is loaded, its own counts are authoritative.
+            if let Loaded::Ready(content) = &review.content
+                && let Some(file) = content.patch.files.first()
+                && file.notes.is_empty()
+            {
+                counts = Some(file.counts());
+            }
+            let mut spans = diff_view::heading_spans(Vec::new(), status, path, None, counts, usize::MAX / 2, &pal);
+            spans.push(Span::styled(format!("   edit {rank} of {}", edits.len()), muted));
+            head.extend(wrap_line(Line::from(spans), inner_width));
+        }
+        ReviewScope::Workspace { .. } => {
+            if let Loaded::Ready(content) = &review.content {
+                let (added, removed) = content.patch.files.iter().map(diff_view::FilePatch::counts).fold((0, 0), |a, c| (a.0 + c.0, a.1 + c.1));
+                let files = content.patch.files.len();
+                head.extend(wrap_line(Line::from(vec![
+                    Span::styled(format!("{files} file{} changed  ", if files == 1 { "" } else { "s" }), Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
+                    Span::styled(format!("+{added}"), Style::default().fg(pal.add_fg)),
+                    Span::raw(" "),
+                    Span::styled(format!("{}{removed}", diff_view::MINUS), Style::default().fg(pal.del_fg)),
+                    Span::styled("   includes changes not made in this session", muted),
+                ]), inner_width));
+            }
+        }
+    }
+    if let Loaded::Ready(content) = &review.content
+        && let Some(limit) = &content.limit
+    {
+        head.extend(wrap_line(Line::from(Span::styled(diff_view::safe_text(limit), Style::default().fg(Color::Yellow))), inner_width));
+    }
+    let inner = block.clone().inner(rect);
+    let head_rows = u16::try_from(head.len()).unwrap_or(u16::MAX).min(inner.height.saturating_sub(1));
+    let body = Rect { y: inner.y + head_rows, height: inner.height - head_rows, ..inner };
+    let height = usize::from(body.height);
+    let (lines, limit, hlimit) = match &review.content {
+        Loaded::Waiting => (vec![Line::from(Span::styled("Loading the complete diff…", muted))], 0, 0),
+        Loaded::Failed(message) => (
+            vec![
+                Line::from(Span::styled(one_line(message), Style::default().fg(Color::Red))),
+                Line::from(Span::styled("The preview in the transcript is unchanged.", muted)),
+            ],
+            0,
+            0,
+        ),
+        Loaded::Ready(content) => {
+            let geo = Geometry { width: usize::from(body.width), indent: 1, num_width: content.num_width };
+            let hlimit = content.max_width.saturating_sub(geo.content());
+            // Clamped here as well as after the frame: a pan past the end must never draw an empty row.
+            let fit = if review.wrap { Fit::Wrap } else { Fit::Clip(review.left.min(hlimit)) };
+            let row_lines = |row| diff_view::panel_row_lines(&content.patch, row, geo, fit, &pal);
+            // The largest `top` that still fills the body: walk up from the last row.
+            let mut limit = content.rows.len();
+            let mut filled = 0;
+            while limit > 0 && filled < height {
+                limit -= 1;
+                filled += row_lines(content.rows[limit]).len();
+            }
+            if filled > height {
+                limit += 1;
+            }
+            let limit = limit.min(content.rows.len().saturating_sub(1));
+            let top = review.top.min(limit);
+            let mut lines = Vec::new();
+            for row in content.rows.iter().skip(top) {
+                if lines.len() >= height {
+                    break;
+                }
+                lines.extend(row_lines(*row));
+            }
+            lines.truncate(height);
+            if content.rows.is_empty() {
+                lines.push(Line::from(Span::styled("The diff has no line changes.", muted)));
+            }
+            let shown_last = (top + lines.len()).min(content.rows.len());
+            block = block.title(
+                Line::from(Span::styled(format!(" rows {}–{shown_last} of {} ", top + 1, content.rows.len()), muted)).right_aligned(),
+            );
+            (lines, limit, hlimit)
+        }
+    };
+    frame.render_widget(Clear, rect);
+    frame.render_widget(block, rect);
+    frame.render_widget(Paragraph::new(head), Rect { height: head_rows, ..inner });
+    frame.render_widget(Paragraph::new(lines), body);
+    (height, limit, hlimit)
+}
+
+/// Breaks a styled line into lines no wider than `width`, after a space or `/` where possible (paths and headings).
+fn wrap_line(line: Line<'static>, width: usize) -> Vec<Line<'static>> {
+    let width = width.max(1);
+    // Characters with their styles, then the break points chosen on the plain text.
+    let cells: Vec<(char, Style)> = line.spans.iter().flat_map(|span| span.content.chars().map(move |c| (c, span.style))).collect();
+    let text: String = cells.iter().map(|(c, _)| *c).collect();
+    let rows = diff_view::wrap_at_breaks(&text, width);
+    let mut out = Vec::new();
+    let mut at = 0;
+    for row in rows {
+        // Skip the spaces a break consumed.
+        while at < cells.len() && cells[at].0 == ' ' && !row.starts_with(' ') {
+            at += 1;
+        }
+        let count = row.chars().count();
+        let mut spans: Vec<Span<'static>> = Vec::new();
+        for (c, style) in &cells[at..(at + count).min(cells.len())] {
+            match spans.last_mut() {
+                Some(last) if last.style == *style => last.content.to_mut().push(*c),
+                _ => spans.push(Span::styled(c.to_string(), *style)),
+            }
+        }
+        at += count;
+        out.push(Line::from(spans));
+    }
+    out
 }
 
 /// A paste buffer's full content, as it will be submitted.
@@ -233,6 +384,7 @@ const HELP: &[(&str, &str)] = &[
     ("ctrl+l", "clear the draft"),
     ("paste", "multi-line or long pastes become [Pasted text #n] buffers; newlines in them never send"),
     ("ctrl+o", "view the paste buffer at the cursor"),
+    ("ctrl+d", "review the complete diff of the selected (or newest) edit or /diff"),
     ("ctrl+x", "edit the paste buffer at the cursor as ordinary text"),
     ("backspace", "right after a paste buffer: remove it"),
     (
@@ -257,6 +409,14 @@ const HELP: &[(&str, &str)] = &[
         "in the transcript: open the selected tool call's details",
     ),
     ("v", "in the transcript: open the receipt for the last turn"),
+    ("", ""),
+    ("", "Diff review (ctrl+d, or enter on an edit)"),
+    ("n / p", "next / previous hunk"),
+    ("] / [", "next / previous edit (workspace diff: file)"),
+    ("← → / 0", "pan long lines; back to the start"),
+    ("w", "wrap long lines instead of panning"),
+    ("i", "the edit's tool call record"),
+    ("note", "edits by file tools show their own diff; changes made by shell commands appear only in /diff"),
     ("esc", "close this panel; cancel a running turn"),
     (
         "ctrl+c",
@@ -588,7 +748,7 @@ fn record_lines(record: &ToolRecord) -> Vec<Line<'_>> {
         lines.push(Line::from(Span::styled("Diff (this call's change only)", heading)));
         lines.extend(
             diff.split('\n')
-                .map(|row| Line::from(Span::styled(expand_tabs(row), line_style(diff_row_kind(row))))),
+                .map(|row| Line::from(Span::styled(expand_tabs(&diff_view::safe_text(row)).into_owned(), line_style(diff_row_kind(row))))),
         );
     }
     lines.push(Line::default());
@@ -777,37 +937,75 @@ fn render_empty(frame: &mut Frame, area: Rect) {
     frame.render_widget(paragraph, Rect::new(area.x, top, area.width, height));
 }
 
-/// Renders the transcript window `scroll_back` rows above the newest line, with `selected` highlighted. With
-/// `follow`, the window first moves the least distance that shows the whole selected entry above the bottom row
-/// (its top when it is taller than the window). Only the entries needed to fill the window are laid out, so the cost follows the
-/// window, not the transcript. Returns the largest useful `scroll_back` (`usize::MAX` when the walk stopped
-/// before the first entry) and the `scroll_back` drawn.
-fn render_transcript(
-    frame: &mut Frame,
-    area: Rect,
-    transcript: &[Entry],
-    scroll_back: usize,
-    selected: Option<usize>,
-    follow: bool,
-) -> (usize, usize) {
+/// What the transcript frame drew, for `LiveLayout`.
+struct TranscriptFrame {
+    /// Largest useful `scroll_back` (`usize::MAX` when the walk stopped before the first entry).
+    limit: usize,
+    /// The `scroll_back` drawn.
+    back: usize,
+    /// The row at the top of the window: (entry index, rows from it to the end of its entry).
+    top: Option<(usize, usize)>,
+    /// Set when the window was kept on `LiveState::anchor`: the `scroll_back` that took.
+    anchored: Option<usize>,
+}
+
+/// Renders the transcript window `scroll_back` rows above the newest line, with the selected entry highlighted.
+/// With `follow`, the window first moves the least distance that shows the whole selected entry above the bottom row
+/// (its top when it is taller than the window). While scrolled back, the window stays on the row it showed at its
+/// top (`LiveState::anchor`) as entries arrive or grow below it, so reading is never interrupted by a scroll jump.
+/// Only the entries needed to fill the window are laid out, so the cost follows the window, not the transcript.
+fn render_transcript(frame: &mut Frame, area: Rect, state: &LiveState) -> TranscriptFrame {
+    let transcript = &state.transcript;
+    let selected = state.selected.filter(|_| state.focus == Focus::Transcript);
     let height = usize::from(area.height);
-    let mut back = scroll_back;
-    let mut target = selected.filter(|_| follow);
+    let pal = diff_view::palette(state.depth);
+    let selected_reviewable = selected.filter(|&i| transcript.get(i).is_some_and(Entry::reviewable));
+    let lines_of = |index: usize| -> Vec<Line<'_>> {
+        let review_hint = if selected == Some(index) {
+            "enter to review"
+        } else if selected_reviewable.is_none() && state.last_reviewable == Some(index) {
+            "ctrl+d to review"
+        } else {
+            "tab, [ ] to select, enter to review"
+        };
+        entry_lines(
+            &transcript[index],
+            &EntryContext {
+                first: index == 0,
+                width: area.width,
+                selected: selected == Some(index),
+                after_card: index > 0 && transcript[index - 1].card().is_some(),
+                review_hint,
+                pal: &pal,
+            },
+        )
+    };
+    let rows_of = |lines: &[Line<'_>]| lines.iter().map(|line| wrapped_rows(line, area.width)).sum::<usize>();
+    let mut back = state.scroll_back;
+    let mut anchored = None;
+    let mut target = selected.filter(|_| state.follow);
+    if back > 0
+        && target.is_none()
+        && let Some((entry, rows_in_entry)) = state.anchor
+        && entry < transcript.len()
+    {
+        let below: usize = (entry + 1..transcript.len()).map(|i| rows_of(&lines_of(i))).sum();
+        back = (rows_in_entry + below).saturating_sub(height);
+        anchored = Some(back);
+    }
+    // Walked from the newest line up: (line, its rows, entry index, rows from it to its entry's end, rows from it to
+    // the bottom).
     let mut tail = Vec::new();
     let mut total: usize = 0;
     let mut reached_top = true;
-    'entries: for (index, entry) in transcript.iter().enumerate().rev() {
+    'entries: for index in (0..transcript.len()).rev() {
         let below = total;
-        let highlight = selected == Some(index);
-        for line in entry_lines(entry, index == 0).into_iter().rev() {
-            let line = if highlight {
-                line.patch_style(Style::default().bg(SELECTED).add_modifier(Modifier::BOLD))
-            } else {
-                line
-            };
+        let mut in_entry = 0;
+        for line in lines_of(index).into_iter().rev() {
             let rows = wrapped_rows(&line, area.width);
             total = total.saturating_add(rows);
-            tail.push((line, rows));
+            in_entry += rows;
+            tail.push((line, rows, index, in_entry, total));
             if target.is_none() && total >= height.saturating_add(back) {
                 reached_top = false;
                 break 'entries;
@@ -832,11 +1030,16 @@ fn render_transcript(
     };
     let back = back.min(limit);
     let first_row = total.saturating_sub(height.saturating_add(back));
+    let reach = height.saturating_add(back);
+    let top = tail
+        .iter()
+        .find(|(_, _, _, _, to_bottom)| *to_bottom >= reach)
+        .map(|(_, _, index, in_entry, to_bottom)| (*index, in_entry - (to_bottom - reach)));
     tail.reverse();
     let mut skipped = 0;
     let mut covered = 0;
     let mut lines = Vec::new();
-    for (line, rows) in tail {
+    for (line, rows, ..) in tail {
         if lines.is_empty() && skipped + rows <= first_row {
             skipped += rows;
             continue;
@@ -857,7 +1060,7 @@ fn render_transcript(
     if back > 0 {
         render_scroll_badge(frame, area, back);
     }
-    (limit, back)
+    TranscriptFrame { limit, back, top, anchored }
 }
 
 fn render_scroll_badge(frame: &mut Frame, area: Rect, rows_below: usize) {
@@ -893,13 +1096,61 @@ fn one_line(text: &str) -> String {
     text.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
+/// How one transcript entry is drawn: its place and the frame it is drawn into.
+struct EntryContext<'a> {
+    first: bool,
+    width: u16,
+    selected: bool,
+    /// The entry before it is an edit card (a plain tool row then opens with a blank row, so cards stay separated).
+    after_card: bool,
+    /// The control that opens this entry's complete diff, as the omission line names it.
+    review_hint: &'a str,
+    pal: &'a Palette,
+}
+
 /// Lines for one transcript entry. Entries that open with a blank separator drop it when they come first.
-fn entry_lines(entry: &Entry, first: bool) -> Vec<Line<'_>> {
+fn entry_lines<'a>(entry: &'a Entry, ctx: &EntryContext<'_>) -> Vec<Line<'a>> {
     let white = Style::default().fg(Color::White);
     let muted = Style::default().fg(MUTED);
     let prompt = Style::default().fg(ACCENT).add_modifier(Modifier::BOLD);
+    let highlight = Style::default().bg(SELECTED).add_modifier(Modifier::BOLD);
+    let width = usize::from(ctx.width);
+    let card_context = |glyph: (&'static str, Color)| CardContext {
+        width,
+        glyph,
+        selected: ctx.selected.then_some(highlight),
+        review_hint: ctx.review_hint,
+    };
     let mut lines = Vec::new();
     match entry {
+        // An edit that succeeded (or is finishing) shows its change as a card on its own tool row.
+        Entry::Tool { status, diff: Some(card), .. } if *status != ToolStatus::Failed => {
+            let glyph = match status {
+                ToolStatus::Running => ("•", ACCENT),
+                ToolStatus::Interrupted => ("◌", Color::Yellow),
+                _ => ("✓", Color::Green),
+            };
+            let mut lines = diff_view::card_lines(card, ctx.pal, &card_context(glyph));
+            if ctx.first {
+                lines.remove(0);
+            }
+            return lines;
+        }
+        Entry::Diff { card, .. } => {
+            let mut lines = diff_view::card_lines(card, ctx.pal, &card_context(("✓", Color::Green)));
+            if ctx.first {
+                lines.remove(0);
+            }
+            return lines;
+        }
+        Entry::Output { success: true, text, diff: true } => {
+            if let Some(lines) = diff_view::workspace_lines(text, ctx.pal, width, ctx.selected.then_some(highlight), ctx.review_hint) {
+                return lines;
+            }
+            lines.extend(text.split('\n').map(|row| {
+                Line::from(Span::styled(format!("  {}", expand_tabs(&diff_view::safe_text(row))), line_style(diff_row_kind(row))))
+            }));
+        }
         Entry::User(text) => {
             lines.push(Line::default());
             for (index, row) in text.split('\n').enumerate() {
@@ -935,6 +1186,9 @@ fn entry_lines(entry: &Entry, first: bool) -> Vec<Line<'_>> {
             ];
             if !subject.is_empty() {
                 spans.push(Span::styled(format!(" {subject}"), muted));
+            }
+            if ctx.after_card {
+                lines.push(Line::default());
             }
             match status {
                 ToolStatus::Failed if !summary.is_empty() => spans.push(Span::styled(
@@ -1088,48 +1342,12 @@ fn entry_lines(entry: &Entry, first: bool) -> Vec<Line<'_>> {
             }
             lines.push(Line::from(status));
         }
-        Entry::Diff {
-            path,
-            kind,
-            added,
-            removed,
-            preview,
-            truncated,
-            total_lines,
-            note,
-            ..
-        } => {
-            let verb = match kind.as_str() {
-                "added" => "added",
-                "deleted" => "deleted",
-                _ => "modified",
-            };
-            lines.push(Line::from(vec![
-                Span::styled(format!("    ± {path}"), Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
-                Span::styled(format!(" {verb} "), muted),
-                Span::styled(format!("+{added}"), Style::default().fg(Color::Green)),
-                Span::styled(format!(" -{removed}"), Style::default().fg(Color::Red)),
-            ]));
-            if let Some(note) = note {
-                lines.push(Line::from(Span::styled(format!("      {}", one_line(note)), muted)));
-            }
-            for row in preview.split('\n').filter(|row| !row.starts_with("--- ") && !row.starts_with("+++ ")) {
-                if row.is_empty() && preview.is_empty() {
-                    continue;
-                }
-                lines.push(Line::from(Span::styled(format!("      {}", expand_tabs(row)), line_style(diff_row_kind(row)))));
-            }
-            if *truncated {
-                let shown = preview.split('\n').count() as u64;
-                lines.push(Line::from(Span::styled(
-                    format!("      … {} more diff lines · tab, then [ ] to select, enter for the full diff", total_lines.saturating_sub(shown)),
-                    muted,
-                )));
-            }
-        }
     }
-    if first && lines.first().is_some_and(|line| line.spans.is_empty()) {
+    if ctx.first && lines.first().is_some_and(|line| line.spans.is_empty()) {
         lines.remove(0);
+    }
+    if ctx.selected {
+        lines = lines.into_iter().map(|line| line.patch_style(highlight)).collect();
     }
     lines
 }
@@ -1214,10 +1432,11 @@ fn composer_hint(state: &LiveState) -> Cow<'static, str> {
             " approval needed · y approve · n deny "
         }
         _ if matches!(state.overlay, Some(Overlay::Help { .. })) => " esc close help ",
+        _ if matches!(state.overlay, Some(Overlay::Review(_))) => " reviewing a diff · esc returns to the transcript and your draft ",
         _ if state.overlay.is_some() => " esc close · ↑↓ scroll ",
         _ if state.completion().is_some() => " tab complete · enter run · esc close ",
         _ if state.focus == Focus::Transcript => {
-            " transcript · ↑↓ scroll · [ ] tools · enter details · v receipt · tab back "
+            " transcript · ↑↓ scroll · [ ] tools · enter details · ctrl+d diff · v receipt · tab back "
         }
         _ if state.composer.paste_at_cursor().is_some() => {
             " ctrl+o view paste · ctrl+x edit inline · backspace remove "
@@ -1334,7 +1553,7 @@ mod tests {
         state.composer = "keep the CSV format".into();
         state.on_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
         let screen = draw(&state, 100, 24);
-        assert_shows(&screen, &["± src/a.ts modified +2 -1", "-old", "+new", "more diff lines", "± gone.txt deleted +0 -3", "↳ keep the CSV format", "steering · sending"]);
+        assert_shows(&screen, &["✓ Edited src/a.ts  +2 −1", "▎ 1   − old", "▎   1 + new", "… 113 more lines", "✓ Deleted gone.txt  +0 −3", "↳ keep the CSV format", "steering · sending"]);
         state.overlay = Some(Overlay::Detail(Detail {
             request: "d1".into(),
             tool: "edit_file".into(),
@@ -1943,7 +2162,7 @@ mod tests {
                 "✓ approved Edit a.ts · later actions run without asking",
                 "Notes:",
                 "Watch the cache.",
-                "transcript · ↑↓ scroll · [ ] tools · enter details · v receipt · tab back",
+                "transcript · ↑↓ scroll · [ ] tools · enter details · ctrl+d diff · v receipt · tab back",
             ],
         );
     }
@@ -2032,7 +2251,7 @@ mod tests {
         let mut state = ready();
         state.on_key(KeyEvent::new(KeyCode::Char('?'), KeyModifiers::NONE));
         assert_shows(
-            &draw(&state, 100, 40),
+            &draw(&state, 100, 60),
             &[
                 "Keys",
                 "shift+enter",
@@ -2091,16 +2310,18 @@ mod tests {
             &screen,
             &[
                 "› /diff",
-                "  -old",
-                "  +new",
+                "Workspace diff (git diff: unstaged changes to tracked files)",
+                "Edited x  +1 −1",
+                "▎ 1   − old",
+                "▎   1 + new",
                 "  Commit failed: nothing staged",
                 "  · Resumed session a.",
             ],
         );
         let lines = rows(&screen);
         for (text, color) in [
-            ("+new", Color::Green),
-            ("-old", Color::Red),
+            ("+ new", Color::Rgb(126, 231, 135)),
+            ("− old", Color::Rgb(255, 138, 138)),
             ("Commit failed", Color::Red),
         ] {
             let row = lines.iter().position(|line| line.contains(text)).unwrap();
@@ -2166,7 +2387,7 @@ mod tests {
         state.commands = vec![spec("diff", "/diff", "Uncommitted changes as a diff")];
         state.overlay = Some(crate::live_state::Overlay::Help { scroll: 0 });
         assert_shows(
-            &draw(&state, 100, 40),
+            &draw(&state, 100, 60),
             &[
                 "Keys",
                 "!command",
@@ -2350,7 +2571,7 @@ mod tests {
         press_key(&mut state, KeyCode::Tab);
         assert_shows(
             &draw(&state, 100, 24),
-            &["[ ] tools · enter details · v receipt · tab back"],
+            &["[ ] tools · enter details · ctrl+d diff · v receipt · tab back"],
         );
         press_key(&mut state, KeyCode::Char('v'));
         feed(
@@ -2636,4 +2857,298 @@ fn render_connect(frame: &mut Frame, area: Rect, flow: &Connect) {
         frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), body);
     }
     frame.render_widget(Paragraph::new(key_hints(hints)), footer);
+}
+
+#[cfg(test)]
+mod diff_tests {
+    //! The edit cards, the workspace diff and the review panel as the operator sees them.
+    use super::*;
+    use crate::live_state::{Action, ReviewContent};
+    use crate::protocol::{Command, parse_event};
+    use crate::theme::Depth;
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+    use ratatui::{Terminal, backend::TestBackend};
+
+    const HELLO: &str = r#"{"v":1,"type":"hello","protocol":1,"pid":1}"#;
+    const BUSY: &str = r#"{"v":1,"type":"session.state","workspace":"/w/app","workspace_name":"app","model":"m","mode":"auto","git":null,"busy":true}"#;
+
+    fn state() -> LiveState {
+        let mut state = LiveState::new();
+        feed(&mut state, &[HELLO, BUSY]);
+        state
+    }
+
+    fn feed(state: &mut LiveState, lines: &[&str]) {
+        for line in lines {
+            state.apply(parse_event(line).unwrap());
+        }
+    }
+
+    fn draw(state: &mut LiveState, width: u16, height: u16) -> Terminal<TestBackend> {
+        let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+        let mut layout = LiveLayout::default();
+        terminal.draw(|frame| layout = render_live(frame, state)).unwrap();
+        state.note_layout(layout);
+        terminal
+    }
+
+    fn screen(terminal: &Terminal<TestBackend>) -> Vec<String> {
+        let buffer = terminal.backend().buffer();
+        (0..buffer.area.height)
+            .map(|y| {
+                let mut row = String::new();
+                let mut x = 0;
+                while x < buffer.area.width {
+                    let cell = &buffer[(x, y)];
+                    row.push_str(cell.symbol());
+                    x += u16::try_from(unicode_width::UnicodeWidthStr::width(cell.symbol()).max(1)).unwrap();
+                }
+                row.trim_end().to_string()
+            })
+            .collect()
+    }
+
+    fn key(code: KeyCode) -> KeyEvent {
+        KeyEvent::new(code, KeyModifiers::NONE)
+    }
+
+    fn ctrl(c: char) -> KeyEvent {
+        KeyEvent::new(KeyCode::Char(c), KeyModifiers::CONTROL)
+    }
+
+    fn json(text: &str) -> String {
+        serde_json::to_string(text).unwrap()
+    }
+
+    fn edit(call: &str, evidence: &str, path: &str, diff: &str, extra: &str) -> Vec<String> {
+        vec![
+            format!(r#"{{"v":1,"type":"tool.start","turn_id":"t1","call_id":"{call}","tool":"edit_file","subject":"{path}","evidence":"{evidence}"}}"#),
+            format!(
+                r#"{{"v":1,"type":"file.diff","turn_id":"t1","call_id":"{call}","evidence":"{evidence}","path":"{path}","kind":"modified","added":1,"removed":1,"preview":{},"truncated":false,"total_lines":0{extra}}}"#,
+                json(diff)
+            ),
+            format!(r#"{{"v":1,"type":"tool.end","turn_id":"t1","call_id":"{call}","tool":"edit_file","success":true,"summary":"ok","lines":1,"evidence":"{evidence}"}}"#),
+        ]
+    }
+
+    fn feed_owned(state: &mut LiveState, lines: Vec<String>) {
+        for line in lines {
+            state.apply(parse_event(&line).unwrap());
+        }
+    }
+
+    const SMALL: &str = "--- a/src/a.rs\n+++ b/src/a.rs\n@@ -1,3 +1,3 @@\n fn a() {}\n-let x = 1;\n+let x = 2;\n \n";
+
+    #[test]
+    fn an_edit_shows_once_as_a_card_on_its_tool_row_and_a_repeated_event_replaces_it() {
+        let mut state = state();
+        feed_owned(&mut state, edit("c1", "e1", "src/a.rs", SMALL, r#","diff_lines":4,"hunks":1"#));
+        feed_owned(&mut state, edit("c1", "e1", "src/a.rs", SMALL, r#","diff_lines":4,"hunks":1"#)[1..2].to_vec());
+        let rows = screen(&draw(&mut state, 80, 16));
+        assert_eq!(rows.iter().filter(|r| r.contains("Edited src/a.rs")).count(), 1, "{rows:#?}");
+        assert!(!rows.iter().any(|r| r.contains("Edit src/a.rs")), "the plain tool row is replaced by the card: {rows:#?}");
+        assert!(rows.iter().any(|r| r == &format!("  ✓ Edited src/a.rs  +1 {}1", diff_view::MINUS)), "{rows:#?}");
+        assert!(rows.iter().any(|r| r.starts_with("    ▎ 2   − let x = 1;")), "{rows:#?}");
+        assert!(!rows.iter().any(|r| r.contains("more line")), "a complete preview has no omission line");
+    }
+
+    #[test]
+    fn a_failed_edit_shows_its_error_and_never_a_change() {
+        let mut state = state();
+        let mut events = edit("c1", "e1", "src/a.rs", SMALL, "");
+        events[2] = r#"{"v":1,"type":"tool.end","turn_id":"t1","call_id":"c1","tool":"edit_file","success":false,"summary":"old_string not found","lines":1,"evidence":"e1"}"#.into();
+        feed_owned(&mut state, events);
+        // A file.diff that arrives after the failure is not attached to the failed call either.
+        feed_owned(&mut state, edit("c1", "e1", "src/a.rs", SMALL, "")[1..2].to_vec());
+        let rows = screen(&draw(&mut state, 80, 16));
+        assert!(rows.iter().any(|r| r.contains("× Edit src/a.rs — old_string not found")), "{rows:#?}");
+        let failed_row = rows.iter().position(|r| r.contains("× Edit")).unwrap();
+        assert!(!rows[failed_row..].iter().skip(1).take(1).any(|r| r.contains("− let x")), "no diff under the failure: {rows:#?}");
+        let Entry::Tool { diff, .. } = &state.transcript.iter().find(|e| matches!(e, Entry::Tool { .. })).unwrap() else { unreachable!() };
+        assert!(diff.is_none());
+    }
+
+    #[test]
+    fn rows_stay_aligned_and_inside_narrow_terminals_with_long_paths_lines_unicode_and_tabs() {
+        let long_line = format!("+\tlet message = \"{}\"; // 字符 é", "x".repeat(120));
+        let diff = format!("--- a/a/very/long/path/to/some/deeply/nested/module/file_name.ts\n+++ b/a/very/long/path/to/some/deeply/nested/module/file_name.ts\n@@ -9,2 +9,3 @@\n context\n-\told\n{long_line}\n+\n");
+        let mut state = state();
+        feed_owned(&mut state, edit("c1", "e1", "a/very/long/path/to/some/deeply/nested/module/file_name.ts", &diff, ""));
+        for width in [40u16, 60, 120] {
+            let terminal = draw(&mut state, width, 30);
+            let rows = screen(&terminal);
+            for row in &rows {
+                assert!(unicode_width::UnicodeWidthStr::width(row.as_str()) <= usize::from(width), "{width}: {row:?}");
+            }
+            let heading = rows.iter().find(|r| r.contains("file_name.ts")).unwrap_or_else(|| panic!("{rows:#?}"));
+            assert!(heading.contains("Edited"), "{heading}");
+            // Every numbered diff row puts its marker in the same column.
+            let markers: Vec<usize> = rows
+                .iter()
+                .filter(|r| r.starts_with("    ▎") && r.chars().nth(6).is_some_and(|c| c.is_ascii_digit() || c == ' ') && !r.contains('⋯'))
+                .filter_map(|r| r.chars().position(|c| c == '+' || c == '−'))
+                .collect();
+            assert!(markers.windows(2).all(|w| w[0] == w[1]), "{width}: {markers:?} {rows:#?}");
+            assert!(rows.iter().any(|r| r.contains("字符")), "wide characters survive wrapping at {width}");
+        }
+    }
+
+    #[test]
+    fn ctrl_d_opens_the_complete_diff_and_esc_returns_with_the_draft_and_position_kept() {
+        let mut state = state();
+        for i in 0..30 {
+            state.transcript.push(Entry::Info(format!("line {i}")));
+        }
+        feed_owned(&mut state, edit("c1", "e1", "src/a.rs", SMALL, ""));
+        state.composer = "half-typed thought".into();
+        draw(&mut state, 80, 20);
+        state.on_key(key(KeyCode::PageUp));
+        draw(&mut state, 80, 20);
+        let back = state.scroll_back;
+        assert!(back > 0);
+        let action = state.on_key(ctrl('d'));
+        let Some(Action::Send(Command::ToolDetail { id, evidence })) = action else { panic!("{action:?}") };
+        assert_eq!(evidence, "e1");
+        let mut full = String::from("--- a/src/a.rs\n+++ b/src/a.rs\n@@ -1,3 +1,3 @@\n fn a() {}\n-let x = 1;\n+let x = 2;\n \n@@ -200,2 +200,2 @@\n-old tail\n+new tail\n same");
+        full.push('\n');
+        feed(&mut state, &[&format!(
+            r#"{{"v":1,"type":"tool.detail","id":"{id}","evidence":"e1","tool":"edit_file","subject":"src/a.rs","status":"succeeded","args":"{{}}","output":"","duration_ms":3,"diff":{},"diff_chars":99999,"diff_path":"/home/u/.nexus/sessions/s.diffs/e1-c1.diff"}}"#,
+            json(&full)
+        )]);
+        let rows = screen(&draw(&mut state, 80, 20));
+        let all = rows.join("\n");
+        assert!(all.contains("Edit diff · this operation only"), "{all}");
+        assert!(all.contains("edit 1 of 1"), "{all}");
+        let unwrapped: String = rows.iter().map(|r| r.trim_start_matches(' ').trim_start_matches('│').trim_end_matches('│').trim_end()).collect();
+        assert!(unwrapped.contains("The complete diff is in /home/u/.nexus/sessions/s.diffs/e1-c1.diff"), "the limit and the retrieval path are disclosed: {all}");
+        assert_eq!(rows.iter().filter(|r| r.contains("Edited src/a.rs")).count(), 1, "one heading, with the full diff's counts: {all}");
+        assert!(all.contains(&format!("Edited src/a.rs  +2 {}2", diff_view::MINUS)), "{all}");
+        assert!(all.contains("@@ −200,2 +200,2 @@"), "{all}");
+        // n jumps to the next hunk (in a panel too short to show both).
+        draw(&mut state, 80, 13);
+        state.on_key(key(KeyCode::Char('n')));
+        let rows = screen(&draw(&mut state, 80, 13));
+        let body: Vec<&String> = rows.iter().skip_while(|r| !r.contains("e1-c1.diff")).skip(1).take_while(|r| !r.contains("╰")).collect();
+        assert!(body.iter().any(|r| r.contains("@@ −200,2")), "{rows:#?}");
+        assert!(!body.iter().any(|r| r.contains("fn a()")), "the first hunk scrolled away: {rows:#?}");
+        state.on_key(key(KeyCode::Esc));
+        assert!(state.overlay.is_none());
+        draw(&mut state, 80, 20);
+        assert_eq!(state.composer.text(), "half-typed thought");
+        assert_eq!(state.scroll_back, back, "the transcript position is where it was");
+    }
+
+    #[test]
+    fn the_review_pans_long_lines_with_markers_and_wraps_on_request() {
+        let mut state = state();
+        let long = format!("--- a/x.txt\n+++ b/x.txt\n@@ -1 +1 @@\n-short\n+{}END", "abcdefghij".repeat(20));
+        state.overlay = Some(Overlay::Review(DiffReview {
+            request: String::new(),
+            scope: ReviewScope::Workspace { entry: 0 },
+            content: Loaded::Ready(ReviewContent::new(diff_view::parse(&long), None)),
+            top: 0,
+            left: 0,
+            wrap: false,
+        }));
+        state.transcript.push(Entry::Output { success: true, text: long.clone(), diff: true });
+        let rows = screen(&draw(&mut state, 60, 16));
+        let added = rows.iter().find(|r| r.contains("+ abcdefghij")).unwrap().clone();
+        assert!(added.contains("›│"), "clipped content is marked at the panel edge: {added:?}");
+        for _ in 0..40 {
+            state.on_key(key(KeyCode::Right));
+        }
+        let rows = screen(&draw(&mut state, 60, 16));
+        let added = rows.iter().find(|r| r.contains('‹') && r.contains(" + ")).unwrap_or_else(|| panic!("{rows:#?}"));
+        assert!(added.contains("END"), "panning reaches the end of the line: {added:?}");
+        state.on_key(key(KeyCode::Char('w')));
+        let rows = screen(&draw(&mut state, 60, 16));
+        let panel = &rows[..rows.len() - 1];
+        assert!(panel.iter().any(|r| r.contains("END")) && !panel.iter().any(|r| r.contains('›')), "{rows:#?}");
+    }
+
+    #[test]
+    fn while_scrolled_back_arriving_diffs_do_not_move_what_the_operator_reads() {
+        let mut state = state();
+        for i in 0..60 {
+            state.transcript.push(Entry::Info(format!("history line {i}")));
+        }
+        draw(&mut state, 80, 20);
+        state.on_key(key(KeyCode::PageUp));
+        let before = screen(&draw(&mut state, 80, 20));
+        feed_owned(&mut state, edit("c1", "e1", "src/a.rs", SMALL, ""));
+        feed_owned(&mut state, edit("c2", "e2", "src/b.rs", SMALL, ""));
+        let after = screen(&draw(&mut state, 80, 20));
+        assert_eq!(before[1..15], after[1..15], "the reading window stays put");
+        for _ in 0..10 {
+            state.on_key(key(KeyCode::PageDown));
+        }
+        let bottom = screen(&draw(&mut state, 80, 20));
+        assert!(bottom.iter().any(|r| r.contains("Edited src/b.rs")), "end returns to the newest: {bottom:#?}");
+    }
+
+    #[test]
+    fn limited_colour_and_monochrome_keep_markers_and_drop_backgrounds() {
+        for depth in [Depth::Ansi256, Depth::Ansi16, Depth::Mono] {
+            let mut state = state();
+            state.depth = depth;
+            feed_owned(&mut state, edit("c1", "e1", "src/a.rs", SMALL, ""));
+            let terminal = draw(&mut state, 80, 14);
+            let rows = screen(&terminal);
+            let y = rows.iter().position(|r| r.contains("− let x = 1;")).unwrap_or_else(|| panic!("{depth:?} {rows:#?}"));
+            let buffer = terminal.backend().buffer();
+            for x in 0..80u16 {
+                let cell = &buffer[(x, u16::try_from(y).unwrap())];
+                assert!(!matches!(cell.fg, Color::Rgb(..)) && !matches!(cell.bg, Color::Rgb(..)), "{depth:?}: no 24-bit colour is sent");
+                if depth == Depth::Mono {
+                    assert_eq!((cell.fg, cell.bg), (Color::Reset, Color::Reset));
+                }
+                if depth == Depth::Ansi16 {
+                    assert!(matches!(cell.bg, Color::Reset), "16 colours: no row backgrounds");
+                }
+            }
+            assert!(rows.iter().any(|r| r.contains("+ let x = 2;")), "{depth:?}: markers carry the meaning");
+        }
+    }
+
+    #[test]
+    fn terminal_escapes_in_file_content_are_shown_never_emitted() {
+        let mut state = state();
+        let diff = "--- a/e.txt\n+++ b/e.txt\n@@ -1 +1 @@\n-plain\n+\u{1b}]52;c;aGk=\u{7}\u{1b}[2Jgone\u{9b}x";
+        feed_owned(&mut state, edit("c1", "e1", "e.txt", diff, ""));
+        let terminal = draw(&mut state, 80, 12);
+        let buffer = terminal.backend().buffer();
+        assert!(buffer.content.iter().all(|cell| !cell.symbol().chars().any(char::is_control)), "no control character is drawn");
+        let rows = screen(&terminal);
+        assert!(rows.iter().any(|r| r.contains("+ ␛]52;c;aGk=␇␛[2Jgone<U+009B>x")), "{rows:#?}");
+    }
+
+    #[test]
+    fn a_large_edit_is_bounded_with_an_exact_omission_count_and_the_review_shortcut() {
+        let mut diff = String::from("--- a/big.txt\n+++ b/big.txt\n@@ -1,0 +1,62 @@\n");
+        for i in 1..=37 {
+            diff.push_str(&format!("+line {i}\n"));
+        }
+        let mut state = state();
+        feed_owned(&mut state, edit("c1", "e1", "big.txt", diff.trim_end(), r#","diff_lines":62,"hunks":1"#));
+        let rows = screen(&draw(&mut state, 80, 30));
+        assert_eq!(rows.iter().filter(|r| r.contains("+ line")).count(), diff_view::PREVIEW_LINES);
+        let omission = format!("… {} more lines · ctrl+d to review", 62 - diff_view::PREVIEW_LINES);
+        assert!(rows.iter().any(|r| r.contains(&omission)), "{rows:#?}");
+        // Selected in the transcript, the same card names enter.
+        state.on_key(key(KeyCode::Tab));
+        state.on_key(key(KeyCode::Char('[')));
+        let rows = screen(&draw(&mut state, 80, 30));
+        assert!(rows.iter().any(|r| r.contains("more lines · enter to review")), "{rows:#?}");
+    }
+
+    #[test]
+    fn a_missing_final_newline_is_marked_on_the_line_it_belongs_to() {
+        let mut state = state();
+        let diff = "--- a/n.txt\n+++ b/n.txt\n@@ -1 +1 @@\n-last\n\\ No newline at end of file\n+last";
+        feed_owned(&mut state, edit("c1", "e1", "n.txt", diff, ""));
+        let rows = screen(&draw(&mut state, 80, 12));
+        let removed = rows.iter().position(|r| r.contains("− last")).unwrap();
+        assert!(rows[removed + 1].contains("\\ no newline at end of file"), "{rows:#?}");
+        assert!(rows[removed + 2].contains("+ last"));
+    }
 }

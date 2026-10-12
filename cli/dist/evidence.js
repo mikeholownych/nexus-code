@@ -1,6 +1,7 @@
 import { capText, stripEscapes } from "./protocol.js";
 import { redactSecrets } from "./ui.js";
 import { requirementRows } from "./core/objective.js";
+import { visibleControls } from "./file_diff.js";
 export const MAX_DETAIL = 64_000;
 /** Full diffs are kept larger than other detail: inspecting the complete change is their purpose. */
 export const MAX_DIFF_DETAIL = 256_000;
@@ -24,6 +25,10 @@ function redactedOutput(text) {
         // Plain text output.
     }
     return text;
+}
+/** A diff as it may be shown or stored: secrets redacted, then control characters made visible. */
+export function safeDiffText(diff) {
+    return visibleControls(redactSecrets(diff));
 }
 function clean(text) {
     return capText(redactSecrets(stripEscapes(text)), MAX_DETAIL);
@@ -67,13 +72,20 @@ export class EvidenceLedger {
         record.output = clean(parts.filter(Boolean).map(redactedOutput).join("\n"));
         record.durationMs = Math.max(0, this.now() - record.startedAt);
     }
-    /** Attaches the diff of the change the call made; several files (rare) are appended in order. */
-    attachDiff(evidence, diff) {
+    /**
+     * Attaches the diff of the change the call made; several files (rare) are appended in order. Control characters are
+     * made visible rather than removed, so the diff still says what the file holds.
+     */
+    attachDiff(evidence, diff, diffPath) {
         const record = this.records.get(evidence);
         if (!record || !diff)
             return;
-        const text = capText(redactSecrets(stripEscapes(diff)), MAX_DIFF_DETAIL);
-        record.diff = record.diff ? capText(`${record.diff}\n${text}`, MAX_DIFF_DETAIL) : text;
+        const full = safeDiffText(diff);
+        const joined = record.diff ? `${record.diff}\n${full}` : full;
+        record.diffChars = (record.diffChars ?? 0) + full.length + (record.diff ? 1 : 0);
+        record.diff = capText(joined, MAX_DIFF_DETAIL);
+        if (diffPath)
+            record.diffPath = diffPath;
     }
     get(evidence) {
         return this.records.get(evidence);
