@@ -1,3 +1,4 @@
+import { test } from "node:test";
 import http from "node:http";
 import type { Socket } from "node:net";
 import fs from "node:fs";
@@ -125,4 +126,53 @@ export async function waitForEvent(events: any[], pred: (e: any) => boolean, tim
     throw new Error(`timed out waiting for event; saw: ${events.map((e) => e.type).join(", ")}`);
   }
   return events.find(pred);
+}
+
+/**
+ * Pseudo-terminal scenarios measure timing (spinner frames, idle redraws, approval grace) and drive real processes;
+ * run concurrently by the test runner they starve each other and keys arrive late. `ptyTest` holds a cross-process
+ * lock (a directory under the system temp dir, taken over when its owner is gone) so they run one at a time.
+ */
+export async function acquirePtyLock(timeoutMs = 15 * 60_000): Promise<() => void> {
+  const dir = path.join(os.tmpdir(), "nexus-pty-test.lock");
+  const owner = path.join(dir, "pid");
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    try {
+      fs.mkdirSync(dir);
+      fs.writeFileSync(owner, String(process.pid));
+      return () => fs.rmSync(dir, { recursive: true, force: true });
+    } catch (err: any) {
+      if (err?.code !== "EEXIST") throw err;
+      let pid = 0;
+      try {
+        pid = Number(fs.readFileSync(owner, "utf8"));
+      } catch {}
+      let alive = false;
+      try {
+        if (pid > 0) {
+          process.kill(pid, 0);
+          alive = true;
+        }
+      } catch {}
+      // A lock without a live owner (crashed run, or an owner not yet written for a while) is taken over.
+      if (!alive && (pid > 0 || Date.now() - fs.statSync(dir).mtimeMs > 5_000)) {
+        fs.rmSync(dir, { recursive: true, force: true });
+        continue;
+      }
+      if (Date.now() > deadline) throw new Error(`timed out waiting for the PTY test lock held by pid ${pid}`);
+      await new Promise((r) => setTimeout(r, 200));
+    }
+  }
+}
+
+export function ptyTest(name: string, options: { timeout?: number }, fn: () => Promise<void>): void {
+  test(name, { ...options, timeout: (options.timeout ?? 120_000) + 15 * 60_000 }, async () => {
+    const release = await acquirePtyLock();
+    try {
+      await fn();
+    } finally {
+      release();
+    }
+  });
 }

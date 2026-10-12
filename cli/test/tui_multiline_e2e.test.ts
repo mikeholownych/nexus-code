@@ -1,11 +1,10 @@
-import { test } from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import { startGateway, makeRepo, makeHome, waitUntil } from "./helpers/fixtures.js";
+import { startGateway, makeRepo, makeHome, waitUntil, ptyTest } from "./helpers/fixtures.js";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const TUI = path.resolve(here, "../../core/target/release/nexus-tui");
@@ -77,7 +76,7 @@ function pasteBytes(): string {
   return `\x1b[200~${body}\x1b[201~`;
 }
 
-test("a pasted multiline objective reaches the agent intact as exactly one prompt", { timeout: 120_000 }, async () => {
+ptyTest("a pasted multiline objective reaches the agent intact as exactly one prompt", { timeout: 120_000 }, async () => {
   const missing = [TUI, SIDECAR].filter((p) => !fs.existsSync(p));
   if (spawnSync("script", ["--version"]).status !== 0) missing.push("script (util-linux)");
   assert.deepEqual(missing, [], `missing prerequisites (run \`make build\`): ${missing.join(", ")}`);

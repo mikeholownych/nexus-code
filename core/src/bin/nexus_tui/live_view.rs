@@ -83,9 +83,21 @@ pub fn activity_line(state: &LiveState) -> String {
     let mut parts = Vec::new();
     match &state.activity {
         Some(activity) if activity.step > 0 => {
-            parts.push(format!("step {}", activity.step));
+            // The step budget is shown with the step, so a long turn's headroom is always visible.
+            parts.push(match activity.max_steps {
+                Some(max) => format!("step {} of {max}", activity.step),
+                None => format!("step {}", activity.step),
+            });
             if activity.segment > 1 {
                 parts.push(format!("segment {}", activity.segment));
+            }
+            // The time limit is shown only when it is near: the last quarter, or the last 15 minutes.
+            if let Some(minutes) = activity.max_minutes {
+                let limit = Duration::from_secs(minutes * 60);
+                let left = limit.saturating_sub(elapsed);
+                if left < limit / 4 || left < Duration::from_secs(15 * 60) {
+                    parts.push(format!("{} min left", left.as_secs().div_ceil(60)));
+                }
             }
         }
         _ => {}
@@ -144,11 +156,20 @@ pub fn render_live(frame: &mut Frame, state: &LiveState) -> LiveLayout {
             layout.anchored = drawn.anchored;
         }
     }
+    let raw_hint = composer_hint(state);
+    let max_hint = usize::from(area.width.saturating_sub(4));
+    let hint_text = if raw_hint.chars().count() > max_hint && max_hint > 3 {
+        let mut s: String = raw_hint.chars().take(max_hint - 1).collect();
+        s.push('…');
+        Cow::Owned(s)
+    } else {
+        raw_hint
+    };
     let mut block = Block::default()
         .borders(Borders::TOP)
         .border_style(Style::default().fg(Color::DarkGray))
         .title(Span::styled(
-            composer_hint(state),
+            hint_text,
             Style::default().fg(MUTED),
         ));
     if composer.rows.len() > usize::from(MAX_COMPOSER_ROWS) {
@@ -169,7 +190,7 @@ pub fn render_live(frame: &mut Frame, state: &LiveState) -> LiveLayout {
     }
     match &state.overlay {
         Some(Overlay::Approval(approval)) => {
-            (layout.overlay_rows, layout.overlay_limit) = render_approval(frame, rows[1], approval, state.depth);
+            (layout.overlay_rows, layout.overlay_limit, layout.approval_drawn) = render_approval(frame, rows[1], approval, state.depth);
         }
         Some(Overlay::Help { scroll }) => {
             (layout.overlay_rows, layout.overlay_limit) =
@@ -467,16 +488,12 @@ fn modal_block(title: &'static str) -> Block<'static> {
 /// Draws the approval panel: what is proposed and on what, the change itself (file changes through the shared diff
 /// view), and the three decisions as buttons with the focused one highlighted. Returns the review's rows and the
 /// largest useful scroll.
-fn render_approval(frame: &mut Frame, area: Rect, approval: &Approval, depth: theme::Depth) -> (usize, usize) {
+fn render_approval(frame: &mut Frame, area: Rect, approval: &Approval, depth: theme::Depth) -> (usize, usize, bool) {
     let pal = diff_view::palette(depth);
     let key = Style::default().fg(ACCENT).add_modifier(Modifier::BOLD);
     let muted = Style::default().fg(MUTED);
-    let rect = area;
-    let block = modal_block(" Approval needed ");
-    let inner = block.inner(rect);
-    frame.render_widget(Clear, rect);
-    frame.render_widget(block, rect);
-    let width = usize::from(inner.width);
+    let width = usize::from(area.width.saturating_sub(2));
+    let narrow = width < 60;
     // What is proposed, and the target.
     let mut head = markdown::wrap(
         vec![
@@ -491,35 +508,34 @@ fn render_approval(frame: &mut Frame, area: Rect, approval: &Approval, depth: th
         Some(patch) => patch.files.first().map(|file| {
             let (added, removed) = file.counts();
             format!("{} {} · +{added} {}{removed}", match file.status {
-                diff_view::Status::Added => "creates",
-                diff_view::Status::Deleted => "deletes",
-                _ => "changes",
+                diff_view::Status::Added => "create",
+                diff_view::Status::Deleted => "delete",
+                _ => "change",
             }, diff_view::safe_text(file.path()), diff_view::MINUS)
         }),
-        None if approval.tool == "run_command" => Some("runs a shell command in the workspace".to_string()),
+        None if approval.tool == "run_command" => Some("run a shell command in the workspace".to_string()),
         None => None,
     };
     if let Some(kind) = kind {
-        head.push(Line::from(Span::styled(format!("Nexus wants to: {kind}"), muted)));
+        head.extend(markdown::wrap(vec![Span::styled(format!("Proposed: {kind}"), muted)], width, Vec::new(), vec![Span::raw("  ")]));
     }
-    // Room goes first to the heading (what is proposed), then the decisions, then the change itself.
-    let head_rows = u16::try_from(head.len()).unwrap_or(u16::MAX).min(inner.height.saturating_sub(3).max(inner.height.min(1)));
-    // The decisions, as buttons.
+    // The decisions, as buttons; none is focused until the operator chooses one.
     let button = |label: &str, verdict: Verdict, hotkey: &str| -> Vec<Span<'static>> {
-        let focused = approval.focus == verdict;
+        let focused = approval.focus == Some(verdict);
         let style = if focused { Style::default().fg(Color::Black).bg(ACCENT).add_modifier(Modifier::BOLD) } else { Style::default().fg(Color::White).bg(SURFACE) };
         let marker = if focused { "▸" } else { " " };
-        vec![Span::styled(format!("{marker}{hotkey} {label} "), style), Span::raw("  ")]
+        vec![Span::styled(format!("{marker}{hotkey} {label} "), style), Span::raw(" ")]
     };
     let mut buttons = Vec::new();
     buttons.extend(button("Approve", Verdict::Approved, "y"));
-    buttons.extend(button("Approve all later actions", Verdict::ApprovedForSession, "a"));
+    buttons.extend(button(if narrow { "All later" } else { "Approve all later actions" }, Verdict::ApprovedForSession, "a"));
     buttons.extend(button("Deny", Verdict::Denied, "n"));
     let mut footer = markdown::wrap(buttons, width, Vec::new(), Vec::new());
-    footer.push(Line::from(vec![Span::styled("←→", key), Span::styled(" choose  ", muted), Span::styled("enter", key), Span::styled(" confirms  ", muted), Span::styled("↑↓", key), Span::styled(" scroll the change", muted)]));
-    let footer_rows = u16::try_from(footer.len()).unwrap_or(2).min(inner.height.saturating_sub(head_rows));
-    let gap = u16::from(inner.height > head_rows + footer_rows + 1);
-    let body = Rect { y: inner.y + head_rows + gap, height: inner.height.saturating_sub(head_rows + footer_rows + gap), ..inner };
+    let hint = match approval.focus {
+        Some(Verdict::ApprovedForSession) => vec![Span::styled("enter", key), Span::styled(" confirms approving this and every later action", muted)],
+        Some(_) => vec![Span::styled("enter", key), Span::styled(" confirms  ", muted), Span::styled("←→", key), Span::styled(" choose  ", muted), Span::styled("↑↓", key), Span::styled(" scroll", muted)],
+        None => vec![Span::styled("y", key), Span::styled(" or ", muted), Span::styled("n", key), Span::styled(", or ", muted), Span::styled("←→", key), Span::styled(" then ", muted), Span::styled("enter", key), Span::styled(if narrow { "" } else { " · ↑↓ scroll the change" }, muted)],
+    };
     let lines: Vec<Line> = match &approval.patch {
         Some(patch) => {
             let geo = Geometry { width, indent: 1, num_width: diff_view::patch_num_width(patch) };
@@ -531,13 +547,44 @@ fn render_approval(frame: &mut Frame, area: Rect, approval: &Approval, depth: th
         }
         None => approval.lines.iter().map(review_line).collect(),
     };
-    let rows = usize::from(body.height);
-    let limit = lines.len().saturating_sub(rows);
-    let shown: Vec<Line> = lines.into_iter().skip(approval.scroll.min(limit)).take(rows).collect();
+    // The panel fits its content (heading, the change, decisions) and never needs more than the area; the hint row
+    // is the first thing dropped when space is short, then the gap rows.
+    let available = usize::from(area.height.saturating_sub(2));
+    let fixed = head.len() + footer.len();
+    let with_hint = available >= fixed + 1 + 1 + usize::from(!lines.is_empty());
+    if with_hint {
+        footer.push(Line::from(hint));
+    }
+    let gaps = usize::from(available >= head.len() + footer.len() + 2 + lines.len().min(1));
+    let body_room = available.saturating_sub(head.len() + footer.len() + gaps * 2);
+    let rows = lines.len().min(body_room);
+    let height = (head.len() + footer.len() + gaps * 2 + rows + 2).min(usize::from(area.height));
+    let rect = Rect { height: u16::try_from(height).unwrap_or(area.height), ..area };
+    let block = modal_block(" Approval needed ");
+    let inner = block.inner(rect);
+    frame.render_widget(Clear, rect);
+    frame.render_widget(block, rect);
+    let head_rows = u16::try_from(head.len()).unwrap_or(0).min(inner.height);
+    let footer_rows = u16::try_from(footer.len()).unwrap_or(0).min(inner.height.saturating_sub(head_rows));
+    let gap = u16::try_from(gaps).unwrap_or(0);
+    let body = Rect {
+        y: inner.y + head_rows + gap,
+        height: inner.height.saturating_sub(head_rows + footer_rows + gap * 2),
+        ..inner
+    };
+    let limit = lines.len().saturating_sub(usize::from(body.height));
+    // Shown means: the heading, the decisions and at least one row of the change (when there is one) are on screen.
+    let drawn = usize::from(head_rows) == head.len() && footer_rows >= 1 && (lines.is_empty() || body.height >= 1);
+    if !drawn && footer_rows >= 1 {
+        // Not enough room to show the change: say so where the decisions are, and decide nothing until it fits.
+        let last = footer.len() - 1;
+        footer[last] = Line::from(Span::styled("enlarge the terminal to see the proposed change", Style::default().fg(Color::Yellow)));
+    }
+    let shown: Vec<Line> = lines.into_iter().skip(approval.scroll.min(limit)).take(usize::from(body.height)).collect();
     frame.render_widget(Paragraph::new(head), Rect { height: head_rows, ..inner });
     frame.render_widget(Paragraph::new(shown), body);
     frame.render_widget(Paragraph::new(footer), Rect { y: inner.y + inner.height - footer_rows, height: footer_rows, ..inner });
-    (rows, limit)
+    (usize::from(body.height), limit, drawn)
 }
 
 fn line_style(kind: LineKind) -> Style {
@@ -632,7 +679,7 @@ fn render_help(
         .fg(Color::White)
         .add_modifier(Modifier::BOLD);
     let white = Style::default().fg(Color::White);
-    let help_width = usize::from(area.width.saturating_sub(2).min(96).saturating_sub(2));
+    let help_width = usize::from(area.width.saturating_sub(2).min(96).saturating_sub(4));
     let mut lines: Vec<Line> = HELP
         .iter()
         .flat_map(|(keys, text)| {
@@ -661,12 +708,27 @@ fn render_help(
     }
     let wanted = u16::try_from(lines.len() + 2).unwrap_or(u16::MAX);
     let rect = modal(area, 96, wanted);
-    let block = modal_block(" Help ");
-    let inner = block.inner(rect);
-    frame.render_widget(Clear, rect);
-    frame.render_widget(block, rect);
+    let inner = modal_block(" Help ").inner(rect);
     let rows = usize::from(inner.height);
     let limit = lines.len().saturating_sub(rows);
+    let mut block = modal_block(" Help ");
+    if limit > 0 {
+        let muted = Style::default().fg(MUTED);
+        block = block.title_bottom(Line::from(vec![
+            Span::styled(" esc", key),
+            Span::raw(" close  "),
+            Span::styled("↑↓", key),
+            Span::raw(" scroll  "),
+            Span::styled(format!("{}–{} of {} ", scroll.min(limit) + 1, scroll.min(limit) + rows, lines.len()), muted),
+        ]));
+    } else {
+        block = block.title_bottom(Line::from(vec![
+            Span::styled(" esc", key),
+            Span::raw(" close "),
+        ]));
+    }
+    frame.render_widget(Clear, rect);
+    frame.render_widget(block, rect);
     frame.render_widget(
         Paragraph::new(lines).scroll((u16::try_from(scroll.min(limit)).unwrap_or(0), 0)),
         inner,
@@ -929,13 +991,17 @@ fn render_status(frame: &mut Frame, area: Rect, state: &LiveState) {
             if let Some(branch) = &session.branch {
                 let mut branch_spans = vec![Span::styled(format!("  ⎇ {branch}"), muted)];
                 if session.dirty > 0 {
-                    branch_spans.push(Span::styled(format!(" ●{}", session.dirty), Style::default().fg(Color::Yellow)));
+                    branch_spans.push(Span::styled(format!(" ●{} changed", session.dirty), Style::default().fg(Color::Yellow)));
                 }
                 segments.push((3, branch_spans));
             }
             segments.push((2, vec![Span::styled("  model ", muted), Span::styled(session.model.clone(), Style::default().fg(Color::White))]));
+            // The session id (what /resume takes) is kept only when there is room for it.
+            if let Some(id) = &session.session_id {
+                segments.push((5, vec![Span::styled(format!("  {id}"), muted)]));
+            }
             if session.mode == "review" {
-                segments.push((1, vec![Span::styled("  review mode: approvals on", Style::default().fg(Color::Yellow))]));
+                segments.push((1, vec![Span::styled("  review mode", Style::default().fg(Color::Yellow))]));
             } else {
                 segments.push((4, vec![Span::styled(format!("  {}", session.mode), muted)]));
             }
@@ -1296,6 +1362,13 @@ fn entry_lines<'a>(entry: &'a Entry, ctx: &EntryContext<'_>) -> Vec<Line<'a>> {
                 lines.extend(markdown::render(text, width, ctx.pal, &prose(ctx.pal, true), false));
             }
         }
+        Entry::EarlierTool { tool, subject } => {
+            let mut spans = vec![Span::styled(tool_verb(tool), muted)];
+            if !subject.is_empty() {
+                spans.push(Span::styled(format!(" {}", diff_view::safe_text(subject)), muted));
+            }
+            lines.extend(markdown::wrap(spans, width, vec![Span::styled("  · ", muted)], vec![Span::raw("    ")]));
+        }
         Entry::Tool {
             tool,
             subject,
@@ -1506,17 +1579,18 @@ fn entry_lines<'a>(entry: &'a Entry, ctx: &EntryContext<'_>) -> Vec<Line<'a>> {
 fn render_crash(frame: &mut Frame, area: Rect, code: Option<i32>, reason: &str, stderr: &[String]) {
     let muted = Style::default().fg(MUTED);
     let key = Style::default().fg(ACCENT).add_modifier(Modifier::BOLD);
-    let exit = code.map_or_else(
-        || "no exit code".to_string(),
-        |code| format!("exit code {code}"),
-    );
     let rows = |line: &Line<'_>| wrapped_rows(line, area.width);
     let heading = Line::from(Span::styled(
         "× The agent sidecar stopped",
         Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
     ));
+    let detail_text = match code {
+        Some(code) => format!("{} (exit code {code})", one_line(reason)),
+        None if reason.contains("signal") => one_line(reason).to_string(),
+        None => format!("{} (no exit code)", one_line(reason)),
+    };
     let detail = Line::from(Span::styled(
-        format!("{} ({exit})", one_line(reason)),
+        detail_text,
         Style::default().fg(Color::White),
     ));
     let recovery = [
@@ -1601,10 +1675,13 @@ fn composer_hint(state: &LiveState) -> Cow<'static, str> {
     let hint = match (&state.link, state.session.busy) {
         _ if state.closing => " shutting down the agent… ",
         (Link::Crashed { .. }, _) => " r restart · q quit ",
+        _ if state.connecting() && state.submit_when_ready => " starting the agent… your message is sent when it is ready ",
         _ if state.connecting() => " starting the agent… ",
         _ if matches!(state.overlay, Some(Overlay::Approval(_))) => {
-            " approval needed · y approve · n deny "
+            " approval needed · y approve · n deny (after a pause in typing) "
         }
+        // An approval waits behind the open panel: say so, and how to reach it.
+        _ if state.approval_waiting() => " approval waiting · esc closes this panel to review it ",
         _ if matches!(state.overlay, Some(Overlay::Help { .. })) => " esc close help ",
         _ if matches!(state.overlay, Some(Overlay::Review(_))) => " reviewing a diff · esc returns to the transcript and your draft ",
         _ if state.overlay.is_some() => " esc close · ↑↓ scroll ",
@@ -2374,14 +2451,14 @@ mod tests {
             &[
                 "Approval needed",
                 "Edit src/x.txt",
-                "Nexus wants to: changes src/x.txt · +1 −1",
+                "Proposed: change src/x.txt · +1 −1",
                 "@@ −1,3 +1,3 @@",
                 "− b",
                 "+ B",
-                "▸y Approve",
+                "y Approve",
                 "a Approve all later actions",
                 "n Deny",
-                "enter confirms",
+                "y or n, or ←→ then enter",
                 "approval needed · y approve · n deny",
             ],
         );
@@ -2418,7 +2495,7 @@ mod tests {
         // A hunk row and the hundred added lines, scrolled within the rows left by the heading and the decisions.
         assert!(layout.overlay_rows >= 12, "{}", layout.overlay_rows);
         assert_eq!(layout.overlay_limit, 101 - layout.overlay_rows);
-        assert_shows(&screen, &["Nexus wants to: creates n.txt · +100 −0", "+ line 1"]);
+        assert_shows(&screen, &["Proposed: create n.txt · +100 −0", "+ line 1"]);
         state.note_layout(layout);
         state.on_key(KeyEvent::new(KeyCode::End, KeyModifiers::NONE));
         assert_shows(&draw(&state, 80, 24), &["+ line 100"]);
@@ -2574,6 +2651,26 @@ mod tests {
                 "Uncommitted changes as a diff",
             ],
         );
+    }
+
+    #[test]
+    fn help_taller_than_the_screen_says_where_it_is_and_how_to_scroll() {
+        let mut state = ready();
+        state.overlay = Some(crate::live_state::Overlay::Help { scroll: 10_000 });
+        let screen = draw(&state, 100, 20);
+        assert!(screen.contains("↑↓ scroll"), "{screen}");
+        let footer = screen.lines().find(|line| line.contains('╰')).unwrap_or_else(|| panic!("{screen}"));
+        let (shown, total) = footer
+            .split_once(" of ")
+            .and_then(|(before, after)| {
+                let range = before.rsplit(' ').next()?;
+                let total: usize = after.split(' ').next()?.parse().ok()?;
+                Some((range.split_once('–')?.1.parse::<usize>().ok()?, total))
+            })
+            .unwrap_or_else(|| panic!("{screen}"));
+        assert_eq!(shown, total, "scrolled past the end, it shows the last row: {screen}");
+        let short = draw(&state, 100, 60);
+        assert!(short.contains("esc close") && !short.contains("↑↓ scroll"), "{short}");
     }
 
     fn with_tool(evidence: &str) -> LiveState {
@@ -3506,14 +3603,96 @@ mod surface_tests {
         feed(&mut state, &[r#"{"v":1,"type":"approval.request","id":"a1","turn_id":"t1","tool":"run_command","subject":"rm -rf build","preview":"","review":{"kind":"command","command":"rm -rf build"}}"#]);
         let (rows, _) = screen(&mut state, 100, 20);
         let all = rows.join("\n");
-        assert!(all.contains("Run rm -rf build") && all.contains("Nexus wants to: runs a shell command in the workspace"), "{all}");
-        assert!(all.contains("▸y Approve"), "{all}");
+        assert!(all.contains("Run rm -rf build") && all.contains("Proposed: run a shell command in the workspace"), "{all}");
+        assert!(!all.contains('▸'), "no decision is focused until the operator chooses one: {all}");
         let later = Instant::now() + std::time::Duration::from_secs(5);
-        assert_eq!(state.on_key_at(KeyEvent::new(KeyCode::Right, KeyModifiers::NONE), later), None);
-        assert_eq!(state.on_key_at(KeyEvent::new(KeyCode::Right, KeyModifiers::NONE), later), None);
+        assert_eq!(state.on_key_at(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE), later), None, "Enter without a choice decides nothing");
+        let later = later + std::time::Duration::from_secs(5);
+        assert_eq!(state.on_key_at(KeyEvent::new(KeyCode::Left, KeyModifiers::NONE), later), None);
         let (rows, _) = screen(&mut state, 100, 20);
         assert!(rows.join("\n").contains("▸n Deny"), "{rows:#?}");
         assert_eq!(state.on_key_at(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE), later), Some(Action::Send(Command::Deny { id: "a1".into() })));
+    }
+
+    const WRITE_APPROVAL: &str = r#"{"v":1,"type":"approval.request","id":"a1","turn_id":"t1","tool":"write_file","subject":"config.json","preview":"","review":{"kind":"change","path":"config.json","before":null,"after":"{ \"cache\": true }\n","created":true,"truncated":false}}"#;
+
+    #[test]
+    fn typing_that_continues_across_the_approval_panel_never_decides() {
+        let mut state = state(true);
+        let t0 = Instant::now();
+        let ms = |n: u64| t0 + std::time::Duration::from_millis(n);
+        // The operator is typing "please add tests now" at ~8 keys a second; the panel appears after "please ".
+        let text = "please add tests now\r";
+        let mut at = 0;
+        for (i, c) in text.chars().enumerate() {
+            if i == 7 {
+                feed(&mut state, &[WRITE_APPROVAL]);
+                screen(&mut state, 100, 24);
+                // The frame marks the panel shown; pretend it was drawn at this moment.
+                state.note_approval_shown(ms(at));
+            }
+            let code = if c == '\r' { KeyCode::Enter } else { KeyCode::Char(c) };
+            assert_eq!(state.on_key_at(KeyEvent::new(code, KeyModifiers::NONE), ms(at)), None, "key {c:?} must not decide");
+            at += 120;
+        }
+        let Some(Overlay::Approval(approval)) = &state.overlay else { panic!("the approval is still open") };
+        assert_eq!(approval.focus, None, "the `a` in `add` did not even select approve-all");
+        assert!(!state.transcript.iter().any(|e| matches!(e, Entry::Decision { .. })));
+        // After a pause, one deliberate key decides.
+        assert_eq!(
+            state.on_key_at(KeyEvent::new(KeyCode::Char('n'), KeyModifiers::NONE), ms(at + 1000)),
+            Some(Action::Send(Command::Deny { id: "a1".into() }))
+        );
+    }
+
+    #[test]
+    fn an_approval_too_small_to_show_its_change_cannot_be_decided() {
+        let mut state = state(true);
+        feed(&mut state, &[WRITE_APPROVAL]);
+        let (_, _) = screen(&mut state, 39, 9);
+        let later = Instant::now() + std::time::Duration::from_secs(5);
+        assert_eq!(state.on_key_at(KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE), later), None, "below 40x10 nothing is shown, nothing decides");
+        // At the minimum size the change itself is on screen, and then a deliberate key decides.
+        let (rows, _) = screen(&mut state, 40, 10);
+        let all = rows.join("\n");
+        assert!(all.contains("+ { \"cache\": true }") || all.contains("+ {"), "the change is visible at 40x10:\n{all}");
+        assert!(rows.iter().all(|r| unicode_width::UnicodeWidthStr::width(r.as_str()) <= 40));
+        let later = Instant::now() + std::time::Duration::from_secs(10);
+        assert_eq!(state.on_key_at(KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE), later), Some(Action::Send(Command::Approve { id: "a1".into(), always: false })));
+    }
+
+    #[test]
+    fn an_approval_waits_behind_an_open_panel_and_that_panels_keys_do_not_decide() {
+        let mut state = state(true);
+        state.transcript.push(Entry::Output { success: true, text: "diff --git a/x b/x\n--- a/x\n+++ b/x\n@@ -1 +1 @@\n-a\n+b".into(), diff: true });
+        state.last_reviewable = Some(state.transcript.len() - 1);
+        assert_eq!(state.on_key(KeyEvent::new(KeyCode::Char('d'), KeyModifiers::CONTROL)), None);
+        assert!(matches!(state.overlay, Some(Overlay::Review(_))));
+        feed(&mut state, &[WRITE_APPROVAL]);
+        assert!(matches!(state.overlay, Some(Overlay::Review(_))) && state.approval_waiting(), "the review stays open");
+        let (rows, _) = screen(&mut state, 100, 20);
+        assert!(rows.iter().any(|r| r.contains("approval waiting")), "{rows:#?}");
+        // `n` in the review is hunk navigation, Esc closes it: neither answers the approval.
+        let later = Instant::now() + std::time::Duration::from_secs(5);
+        assert_eq!(state.on_key_at(KeyEvent::new(KeyCode::Char('n'), KeyModifiers::NONE), later), None);
+        assert_eq!(state.on_key_at(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE), later), None);
+        let Some(Overlay::Approval(approval)) = &state.overlay else { panic!("the approval opens when the panel closes") };
+        assert!(!approval.shown, "its grace starts when it is first drawn");
+        assert!(!state.transcript.iter().any(|e| matches!(e, Entry::Decision { .. })));
+    }
+
+    #[test]
+    fn enter_while_the_agent_starts_sends_the_draft_once_it_is_ready() {
+        let mut state = LiveState::new();
+        state.composer = "/resume".into();
+        assert_eq!(state.on_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)), None);
+        assert!(state.submit_when_ready);
+        let (rows, _) = screen(&mut state, 100, 12);
+        assert!(rows.iter().any(|r| r.contains("your message is sent when it is ready")), "{rows:#?}");
+        feed(&mut state, &[HELLO, IDLE]);
+        let sent = state.take_outbox();
+        assert!(matches!(sent.as_slice(), [Action::Send(Command::Slash { command, .. })] if command == "resume"), "{sent:?}");
+        assert!(!state.submit_when_ready && state.composer.is_empty());
     }
 
     #[test]
@@ -3528,6 +3707,22 @@ mod surface_tests {
         assert!(all.contains("Earlier conversation of session s1 (3 messages)"), "{all}");
         assert!(all.contains("› Explain the plan") && all.contains("• first step") && all.contains("↳ prefer an LRU policy"), "{all}");
         assert!(!all.contains("**") && !all.contains("##"), "{all}");
+    }
+
+    #[test]
+    fn a_resumed_session_shows_the_tools_it_ran_and_how_its_last_turn_ended() {
+        let mut state = state(false);
+        feed(&mut state, &[
+            r#"{"v":1,"type":"history","session":"s1","total":2,"messages":[{"role":"user","text":"Fix the cache"},{"role":"tool","tool":"read_file","text":"src/cache.ts"},{"role":"tool","tool":"run_command","text":"npm test"},{"role":"assistant","text":"Fixed."},{"role":"outcome","heading":"VERIFIED","text":"execution=COMPLETED outcome=VERIFIED","turn":{"execution":"COMPLETED","outcome":"VERIFIED","acceptance":"NOT_REQUESTED","modelStop":"TASK_COMPLETED_TOOL","finalOutputComplete":true,"verification":{"status":"PASSED","command":"npm test"},"interruption":null,"inferenceFailure":null,"steps":{"used":3,"max":30,"limitReached":false},"unverifiedChangesPending":false}}]}"#,
+        ]);
+        let (rows, _) = screen(&mut state, 80, 20);
+        let all = rows.join("\n");
+        assert!(all.contains("Earlier conversation of session s1 (2 messages)"), "tools and the outcome are not counted as messages: {all}");
+        let read = rows.iter().position(|r| r.contains("· Read src/cache.ts")).unwrap_or_else(|| panic!("{all}"));
+        let ran = rows.iter().position(|r| r.contains("npm test") && r.contains("·")).unwrap_or_else(|| panic!("{all}"));
+        assert_eq!(ran, read + 1, "consecutive tools sit on consecutive rows: {all}");
+        assert!(matches!(state.transcript.last(), Some(Entry::Banner { tone: Tone::Good, .. })), "{:?}", state.transcript.last());
+        assert!(all.contains("✓ Done · verified  npm test passed"), "the outcome reads as it did when the turn ended: {all}");
     }
 
     #[test]
@@ -3558,9 +3753,8 @@ mod surface_tests {
             assert!(unicode_width::UnicodeWidthStr::width(status.as_str()) <= usize::from(width));
             assert!(status.contains("NEXUS") && status.contains("app"), "{width}: {status}");
             assert!(!SPINNER.iter().any(|f| status.contains(f)), "one activity indicator, on the composer line: {status}");
-            if width >= 60 {
-                assert!(status.contains("review mode: approvals on"), "{width}: {status}");
-            }
+            // Review mode is the most important segment after the workspace: kept even at 40 columns.
+            assert!(status.contains("review mode"), "{width}: {status}");
         }
         let (rows, _) = screen(&mut state, 100, 12);
         assert!(rows[0].contains("model engineering/b0") && rows[0].contains("⎇ feature/a-long-branch-name"), "{}", rows[0]);

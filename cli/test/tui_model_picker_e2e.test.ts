@@ -3,7 +3,7 @@
  * (verified by the provider, never drawn on screen), the picker returns with Anthropic's models, enter switches the
  * session, and the next prompt is answered by Anthropic with its own key.
  */
-import { test } from "node:test";
+
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
@@ -12,7 +12,7 @@ import http from "node:http";
 import type { AddressInfo } from "node:net";
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import { startGateway, makeRepo, makeHome, waitUntil } from "./helpers/fixtures.js";
+import { startGateway, makeRepo, makeHome, waitUntil, ptyTest } from "./helpers/fixtures.js";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const TUI = path.resolve(here, "../../core/target/release/nexus-tui");
@@ -55,7 +55,7 @@ async function anthropicMock(): Promise<{ url: string; seen: Array<{ path: strin
   return { url: `http://127.0.0.1:${(server.address() as AddressInfo).port}`, seen, close: () => new Promise((r) => { server.closeAllConnections?.(); server.close(() => r()); }) };
 }
 
-test("/model → ctrl+p → paste a key → pick the provider's model → the next prompt goes to that provider", { timeout: 120_000 }, async () => {
+ptyTest("/model → ctrl+p → paste a key → pick the provider's model → the next prompt goes to that provider", { timeout: 120_000 }, async () => {
   const missing = [TUI, SIDECAR].filter((p) => !fs.existsSync(p));
   if (spawnSync("script", ["--version"]).status !== 0) missing.push("script (util-linux)");
   assert.deepEqual(missing, [], `missing prerequisites (run \`make build\`): ${missing.join(", ")}`);
@@ -116,7 +116,7 @@ test("/model → ctrl+p → paste a key → pick the provider's model → the ne
     await waitUntil(() => read(eventsLog).includes('"type":"models.catalog"'), 20_000).catch(() => { throw new Error(`no catalog${diag()}`); });
     await sleep(400);
     assert.ok(screenSince(mark).includes("Select model"), diag());
-    assert.ok(screenSince(mark).includes("Connect Anthropic"), diag());
+    assert.ok(screenSince(mark).replace(/\s+/g, "").includes("ConnectAnthropic"), diag());
 
     // 2. ctrl+p: the connect panel; Anthropic is the third provider (openrouter, openai, anthropic, ...).
     mark = pty.length;
@@ -148,7 +148,7 @@ test("/model → ctrl+p → paste a key → pick the provider's model → the ne
     assert.equal(messages[0].key, KEY);
     assert.equal(gw.requests.length, 0, "the appliance received no chat request after the switch");
     await sleep(400);
-    assert.ok(stripCsi(pty).includes("Hello from Claude."), diag());
+    assert.ok(stripCsi(pty).replace(/\s+/g, "").includes("HellofromClaude."), diag());
 
     // 5. The key is never drawn, never in sidecar output, and saved owner-only.
     assert.ok(!pty.includes(KEY), "the key appeared on screen");

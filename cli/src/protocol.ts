@@ -29,6 +29,15 @@ export const DIFF_PREVIEW_CHARS = 6000;
  */
 export type SteerStatus = "queued" | "applied" | "deferred" | "cancelled" | "rejected" | "duplicate";
 
+/** One entry of a resumed conversation: a message, a tool the agent called, or the last turn's outcome. */
+export interface HistoryEntry {
+  role: "user" | "assistant" | "steering" | "tool" | "outcome";
+  text: string;
+  tool?: string;
+  heading?: string;
+  turn?: TurnResult;
+}
+
 export interface ModelSummary {
   summary: string;
   notes?: string;
@@ -44,10 +53,23 @@ export type SidecarEvent =
       mode: "auto" | "review";
       git: { branch: string; dirty: number } | null;
       busy: boolean;
+      /** The id the session is saved under (shown so it can be resumed or referred to). */
+      session?: string;
     }
   | { type: "assistant.delta"; turn_id: string; text: string }
   /** What the running turn is doing; sent on every phase change, independent of model output. */
-  | { type: "activity"; turn_id: string; phase: string; step: number; segment: number; tool?: string; subject?: string }
+  | {
+      type: "activity";
+      turn_id: string;
+      phase: string;
+      step: number;
+      segment: number;
+      tool?: string;
+      subject?: string;
+      /** The turn's budget: total steps across segments, and the wall-clock limit in minutes (when continuation is on). */
+      max_steps?: number;
+      max_minutes?: number;
+    }
   /** A file-edit tool changed a file: that operation's own diff (bounded preview; `evidence` opens the full one). */
   | {
       type: "file.diff";
@@ -102,7 +124,7 @@ export type SidecarEvent =
     }
   | { type: "notice"; text: string }
   /** A resumed session's recent conversation (user and assistant text only), oldest first; `total` counts all of it. */
-  | { type: "history"; session: string; total: number; messages: Array<{ role: "user" | "assistant" | "steering"; text: string }> }
+  | { type: "history"; session: string; total: number; messages: HistoryEntry[] }
   | {
       type: "tool.detail";
       id: string;
@@ -328,7 +350,7 @@ export function toolSummary(success: boolean, output: string, error?: string): T
     return {
       summary: redactSecrets(stripEscapes(summary)).replace(/\s+/g, " ").slice(0, MAX_SUMMARY),
       lines: rows.length,
-      preview: rows.slice(0, TOOL_PREVIEW_LINES).map((row) => visibleControls(redactSecrets(row)).slice(0, 400)).join("\n"),
+      preview: (rows.length > TOOL_PREVIEW_LINES ? rows.slice(-TOOL_PREVIEW_LINES) : rows).map((row) => visibleControls(redactSecrets(row)).slice(0, 400)).join("\n"),
       exit_code: command.exit_code,
       ...(command.duration_ms !== undefined ? { duration_ms: command.duration_ms } : {}),
       ...(command.timed_out ? { timed_out: true } : {}),

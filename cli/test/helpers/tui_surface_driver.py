@@ -92,7 +92,7 @@ def main():
     s.send("Write the config file.\r", settle=0.05)
     s.send("yyy", settle=0.05)
     s.wait_screen(lambda lines: has(lines, "Approval needed"), 20, "the approval modal")
-    s.pump(0.5)
+    s.pump(0.9)  # a pause in typing before the deliberate decision
     shot(s, "10-approval")
     result["approval_survived_buffered_keys"] = has(s.color.lines(), "Approval needed")
     s.send("y", settle=0.4)
@@ -148,7 +148,11 @@ def main():
     s.send("[", settle=0.3)
     shot(s, "16-transcript-focus")
     s.send("\r", settle=0.6)
-    shot(s, "17-tool-detail")
+    shot(s, "17-entry-review")
+    # From the edit's review, `i` opens the call record itself (tool, arguments, output).
+    s.send("i", settle=0.2)
+    s.wait_screen(lambda lines: has(lines, "Tool call") and not has(lines, "Loading the recorded call"), 10, "the tool detail panel")
+    shot(s, "17b-tool-detail")
     s.send("\x1b", settle=0.3)
     s.send("\t", settle=0.2)
     s.send("\x1b", settle=0.2)
@@ -189,7 +193,8 @@ def main():
     s.pump(0.5)
     shot(s, "22-crashed")
     s.send("r", settle=0.3)
-    s.wait_text("enter send", 30)
+    # Wait on the current screen, not the output history (which still holds the hint from before the crash).
+    s.wait_screen(lambda lines: has(lines, "enter send"), 30, "the restarted agent's idle hint")
     s.pump(0.5)
     shot(s, "23-restarted")
     # The recovery the crash screen names: /resume reloads the saved conversation in the new agent.

@@ -5,7 +5,7 @@
  * the saved session. The Python driver owns the terminal (resize, CPU time, asciicast); this test owns the mock
  * gateway and checks the sidecar's command and event logs. The recording and transcript are kept as evidence.
  */
-import { test } from "node:test";
+
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
@@ -13,7 +13,7 @@ import path from "node:path";
 import { execFileSync, spawn } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
-import { startGateway, makeRepo, makeHome, Reply } from "./helpers/fixtures.js";
+import { startGateway, makeRepo, makeHome, Reply, ptyTest } from "./helpers/fixtures.js";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(here, "../..");
@@ -39,7 +39,7 @@ const script = (n: number): Reply => {
 
 const lines = (file: string) => (fs.existsSync(file) ? fs.readFileSync(file, "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l)) : []);
 
-test("the active TUI end to end through a pseudo-terminal", { timeout: 240_000 }, async () => {
+ptyTest("the active TUI end to end through a pseudo-terminal", { timeout: 240_000 }, async () => {
   for (const p of [TUI, SIDECAR]) assert.ok(fs.existsSync(p), `missing ${p} (run make build)`);
   const gw = await startGateway(script);
   const repo = makeRepo({ "notes.txt": "line 1\nline 2\nline 3\n" });

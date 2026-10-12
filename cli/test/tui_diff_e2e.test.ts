@@ -15,7 +15,7 @@ import path from "node:path";
 import { execFileSync, execSync, spawn } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
-import { startGateway, makeRepo, makeHome, Reply } from "./helpers/fixtures.js";
+import { startGateway, makeRepo, makeHome, Reply, ptyTest } from "./helpers/fixtures.js";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(here, "../..");
@@ -106,7 +106,7 @@ const lines = (file: string) => (fs.existsSync(file) ? fs.readFileSync(file, "ut
 const squeeze = (text: string) => text.replace(/\s/g, "");
 const shows = (screen: string[], text: string) => screen.some((line) => squeeze(line).includes(squeeze(text)));
 
-test("diff output in the real TUI: every edit kind, resizing, review, workspace diff and colour depths", { timeout: 300_000 }, async () => {
+ptyTest("diff output in the real TUI: every edit kind, resizing, review, workspace diff and colour depths", { timeout: 300_000 }, async () => {
   for (const p of [TUI, SIDECAR]) assert.ok(fs.existsSync(p), `missing ${p} (run make build)`);
   const repo = makeRepo({ "legacy.txt": "old one\nold two\nold three\n", "nofinal.txt": "alpha\nbeta", "big.txt": BIG, "small.txt": "colour: blue\n" });
   fs.mkdirSync(path.join(repo, "src"));

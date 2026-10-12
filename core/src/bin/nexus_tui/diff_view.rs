@@ -477,16 +477,32 @@ fn spaces(n: usize) -> Cell {
     Cell { text: " ".repeat(n), width: n, token: Some(Token::Plain) }
 }
 
-/// Splits content cells into rows of at most `width` columns.
+/// Splits content cells into rows of at most `width` columns. Wrapping breaks after a space when one falls in the
+/// latter two thirds of the row (the space stays at the row's end, so no character is lost), else at the edge.
 fn fit_rows(cells: Vec<Cell>, width: usize, fit: Fit) -> Vec<Vec<Cell>> {
     match fit {
         Fit::Wrap => {
-            let mut rows = vec![Vec::new()];
+            let mut rows: Vec<Vec<Cell>> = vec![Vec::new()];
             let mut used = 0;
             for cell in cells {
                 if used + cell.width > width && used > 0 {
-                    rows.push(Vec::new());
-                    used = 0;
+                    let row = rows.last_mut().expect("a row is open");
+                    let mut carried = Vec::new();
+                    if cell.text != " " {
+                        let mut at = 0;
+                        let mut space = None;
+                        for (index, c) in row.iter().enumerate() {
+                            at += c.width;
+                            if c.text == " " && at * 3 > width {
+                                space = Some(index);
+                            }
+                        }
+                        if let Some(index) = space {
+                            carried = row.split_off(index + 1);
+                        }
+                    }
+                    used = carried.iter().map(|c| c.width).sum();
+                    rows.push(carried);
                 }
                 used += cell.width;
                 rows.last_mut().expect("a row is open").push(cell);
@@ -1205,6 +1221,27 @@ diff --git a/new.rs b/new.rs\nnew file mode 100644\n--- /dev/null\n+++ b/new.rs\
         let text = text_of(&clipped[0]);
         assert_eq!(clipped[0].width(), 40);
         assert!(text.contains('‹') && text.ends_with('›'), "{text:?}");
+    }
+
+    #[test]
+    fn wrapped_text_breaks_between_words_and_keeps_every_character() {
+        let text = "    \"long banner text long banner text long banner text long banner text END\"";
+        let line = DLine { kind: Kind::Added, old: None, new: Some(6), text: text.into(), no_eol: false };
+        let pal = palette(Depth::TrueColor);
+        let geo = Geometry { width: 40, indent: 4, num_width: 1 };
+        let rows = line_rows(&line, geo, Fit::Wrap, &pal, None);
+        assert!(rows.len() > 2);
+        let content: Vec<String> = rows.iter().map(|row| text_of(row).chars().skip(geo.width - geo.content()).collect()).collect();
+        for (row, next) in content.iter().zip(content.iter().skip(1)) {
+            assert!(row.trim_end().ends_with(|c: char| !c.is_alphanumeric()) || row.ends_with(' ') || next.starts_with(' '), "no word is split: {content:#?}");
+        }
+        assert_eq!(content.iter().map(|r| r.trim_end()).collect::<Vec<_>>().join(" ").split_whitespace().collect::<Vec<_>>(), text.split_whitespace().collect::<Vec<_>>(), "{content:#?}");
+        for row in &rows {
+            assert_eq!(row.width(), 40, "{:?}", text_of(row));
+        }
+        // A run with no space in reach still breaks at the edge.
+        let solid = DLine { kind: Kind::Added, old: None, new: Some(6), text: "x".repeat(80), no_eol: false };
+        assert!(line_rows(&solid, geo, Fit::Wrap, &pal, None).len() > 2);
     }
 
     #[test]

@@ -179,7 +179,7 @@ export function toolSummary(success, output, error) {
         return {
             summary: redactSecrets(stripEscapes(summary)).replace(/\s+/g, " ").slice(0, MAX_SUMMARY),
             lines: rows.length,
-            preview: rows.slice(0, TOOL_PREVIEW_LINES).map((row) => visibleControls(redactSecrets(row)).slice(0, 400)).join("\n"),
+            preview: (rows.length > TOOL_PREVIEW_LINES ? rows.slice(-TOOL_PREVIEW_LINES) : rows).map((row) => visibleControls(redactSecrets(row)).slice(0, 400)).join("\n"),
             exit_code: command.exit_code,
             ...(command.duration_ms !== undefined ? { duration_ms: command.duration_ms } : {}),
             ...(command.timed_out ? { timed_out: true } : {}),

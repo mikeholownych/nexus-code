@@ -60,15 +60,16 @@ Press `<TAB>` at any prompt to autocomplete slash commands and directory paths.
 
 ### Live TUI: activity, steering, paste buffers and diffs
 
-- **Activity line.** While the agent works, the line above the composer animates (`⠋ thinking · 0:42 · step 31 ·
-  segment 2`) from the clock, not from model output, and names the phase: thinking, the running tool and its subject,
-  waiting for the provider, verifying, compacting. It stops on completion, cancellation, failure or disconnection;
-  an approval request replaces it with the approval hint.
+- **Activity line.** While the agent works, the line above the composer animates (`⠋ thinking · 0:42 · step 31 of
+  300 · segment 2`) from the clock, not from model output, and names the phase: thinking, the running tool and its
+  subject, waiting for the provider, verifying, compacting. The step budget is always shown; the time limit appears
+  (`12 min left`) in its last quarter or last 15 minutes. It stops on completion, cancellation, failure or
+  disconnection; an approval request replaces it with the approval hint. Lines too long for the window end in `…`.
 - **Transcript.** Replies are rendered Markdown: headings, emphasis, inline code, lists with hanging indents, block
   quotes, fenced code in a gutter block with syntax colours (long lines wrap onto rows marked `↪`), and tables
   aligned in columns (listed row by row when too wide). Each model reply is its own paragraph; when Nexus asks the
   agent to continue on its own (open requirements, a repeated action), a quiet line says so. Commands show their exit
-  code and line count, the first 6 output lines and the exact number not shown (`… 115 more lines`); Tab, `[`/`]` and
+  code and line count, the last 6 output lines and the exact number not shown (`… 115 more lines`); Tab, `[`/`]` and
   Enter open the full record. Tools that took noticeable time show their duration. A pasted prompt shows the text that
   was sent under its `[Pasted text #n]` label.
 - **Outcomes.** A turn ends with one line in words — `Done`, `Done · verified`, `Done · not verified`, `Verification
@@ -76,17 +77,26 @@ Press `<TAB>` at any prompt to autocomplete slash commands and directory paths.
   failed`, `Context is full` — the cause, and the next action; `v` opens the receipt with the raw fields.
 - **Scrolling.** Scrolled back, the view stays where you are while output arrives; the badge then says `new output`.
   PgDn or Ctrl+End returns to the newest line.
-- **Status.** The top line shows identity only: workspace, branch, model and mode (`review mode: approvals on` in
-  review mode), dropping the least important on narrow terminals. Activity is shown once, on the composer line.
+- **Status.** The top line shows identity only: workspace, branch with the number of changed files (`●3 changed`),
+  model, mode (`review mode` in review mode) and the session id (what `/resume` takes), dropping the least important
+  on narrow terminals. Activity is shown once, on the composer line.
 - **Composer.** An empty composer says what Enter does (send, or steer while the agent works); a draft taller than
   six rows shows `line n of m`. Drafts are kept while panels are open and across a sidecar crash.
-- **Approvals.** A full panel states what is proposed and on which target (`Nexus wants to: creates config.json · +1
-  −0`), shows file changes with the diff view, and offers three buttons — Approve (`y`), Approve all later actions
-  (`a`), Deny (`n`) — with the focused one marked `▸`; ←/→ move the focus and Enter takes it. Keys typed in the moment
-  before the panel opens, and pastes, never answer it.
+- **Approvals.** A panel sized to its content states what is proposed and on which target (`Proposed: create
+  config.json · +1 −0`), shows file changes with the diff view, and offers three buttons — Approve (`y`), Approve all
+  later actions (`a`), Deny (`n`). Nothing is focused at first, so Enter alone decides nothing; ←/→ choose a button
+  (marked `▸`) and Enter takes it. `a` only selects "approve all later actions"; Enter confirms it. A decision key
+  counts only once the panel has been on screen briefly **and** you have paused typing (about half a second): keys
+  typed before the panel appeared or in the middle of typing, bursts and pastes never answer it; Esc denies once the
+  panel has been shown. The panel is not answerable until its change is visible — on a window too small to show it,
+  it asks you to enlarge the terminal. An approval that arrives while another panel (help, a diff review) is open
+  waits behind it; the composer line says so, and it opens when you close that panel.
 - **Recovery.** If the agent sidecar stops, the screen names the exit code or signal, keeps the last relevant
   diagnostic lines (progress chatter is dropped) and your draft; `r` starts a new agent, after which `/resume` reloads
-  the saved conversation. Resuming (`-r` or `/resume`) shows the earlier conversation under a divider.
+  the saved conversation. Resuming (`-r` or `/resume`) shows the earlier conversation under a divider: your prompts,
+  steering, the agent's replies, the tools it called (`· Read src/cache.ts`), and how the last turn ended. Diagnostics
+  from turns that already finished are not shown as the cause of a later stop. Enter pressed while the agent is still
+  starting sends the draft once it is ready.
 - **Steering.** Enter while the agent works sends the draft as steering. It shows in the transcript as
   `↳ text · steering · queued`, then `applied` once the agent takes it at its next step. Steering that arrives as
   the turn finishes starts a follow-up turn; steering that cannot be applied (the turn was cancelled, a command was

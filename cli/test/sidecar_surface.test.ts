@@ -92,10 +92,15 @@ describe("continuation and resume", () => {
           { role: "assistant", content: "## Plan\n\n- first" },
           { role: "user", content: "[Nexus continuation 1/2] The operator's acceptance requirements are still open." },
           { role: "user", content: "[Operator steering g1]: prefer an LRU policy" },
-          { role: "assistant", content: null, tool_calls: [{ id: "c1", type: "function", function: { name: "read_file", arguments: "{}" } }] } as any,
+          { role: "assistant", content: null, tool_calls: [{ id: "c1", type: "function", function: { name: "read_file", arguments: '{"path":"src/cache.ts"}' } }] } as any,
           { role: "tool", content: "file body", tool_call_id: "c1" } as any,
           { role: "assistant", content: "Done with key sk-test-0123456789abcdefghij0123" },
         ],
+        lastTurn: {
+          execution: "COMPLETED", outcome: "VERIFIED", acceptance: "NOT_REQUESTED", modelStop: "TASK_COMPLETED_TOOL", finalOutputComplete: true,
+          verification: { status: "PASSED", command: "npm test", source: "discovered", exitSuccess: true, outputSha256: "abc", candidateId: "c-1", at: "2026-10-12T00:00:00.000Z" },
+          interruption: null, inferenceFailure: null, steps: { used: 3, max: 30, limitReached: false }, unverifiedChangesPending: false, finishedAt: "2026-10-12T00:00:01.000Z",
+        },
       } as any, identity);
       if (previousHome === undefined) delete process.env.HOME;
       else process.env.HOME = previousHome;
@@ -107,9 +112,14 @@ describe("continuation and resume", () => {
           ["user", "Explain the plan"],
           ["assistant", "## Plan\n\n- first"],
           ["steering", "prefer an LRU policy"],
+          ["tool", "src/cache.ts"],
           ["assistant", "Done with key [REDACTED:"],
+          ["outcome", "execution=COMPLETED outc"],
         ]);
-        assert.equal(history.total, 4);
+        assert.equal(history.messages[3].tool, "read_file", "the tool the agent called, with its subject");
+        assert.equal(history.messages[5].turn.outcome, "VERIFIED", "the last turn's outcome closes the resumed conversation");
+        assert.ok(history.messages[5].heading, "with the heading it was reported under");
+        assert.equal(history.total, 4, "total counts the conversation's messages, not tools or the outcome");
         const notice = events.find((e) => e.type === "notice");
         assert.ok(events.indexOf(history) < events.indexOf(notice), "the conversation comes before the resume notice");
       }, { resume: "latest", home, repo });

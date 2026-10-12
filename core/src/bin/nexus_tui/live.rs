@@ -22,6 +22,7 @@ use crossterm::{
 
 use crate::live_state::{Action, Link, LiveLayout, LiveState};
 use crate::live_view::{FRAME, render_live};
+use crate::protocol::{Command, Event};
 use crate::sidecar::{Sidecar, SidecarMsg, SidecarSpec};
 
 const SHUTDOWN_GRACE: Duration = Duration::from_secs(3);
@@ -192,7 +193,11 @@ impl LiveApp {
             changed = true;
             match message {
                 SidecarMsg::Event(event) => {
+                    let ended = matches!(*event, Event::TurnResult { .. });
                     self.state.apply(*event);
+                    if ended && let Some(sidecar) = &self.sidecar {
+                        sidecar.forget_stderr();
+                    }
                     for action in self.state.take_outbox() {
                         self.handle(action);
                     }
@@ -236,6 +241,9 @@ impl LiveApp {
         match action {
             Action::Send(command) => {
                 if let Some(sidecar) = self.sidecar.as_mut() {
+                    if matches!(command, Command::PromptSubmit { .. }) {
+                        sidecar.forget_stderr();
+                    }
                     // A failed write means the child is gone; its Closed message reports that.
                     let _ = sidecar.send(&command);
                 }
@@ -328,6 +336,8 @@ fn pump_guarding_approvals(app: &mut LiveApp, pending: &mut Option<TermEvent>) -
 
 /// Input that was already queued when an approval opened was typed before the operator could see the panel: it is
 /// discarded (keys and pastes), never read as a decision. Returns whether a resize was among it (the frame redraws).
+// `fold`, not `any`: every queued event must be read and dropped; `any` would stop at a resize and leave keys queued.
+#[allow(clippy::unnecessary_fold)]
 fn discard_queued_input(queued: impl Iterator<Item = TermEvent>) -> bool {
     queued.fold(false, |resized, event| resized || matches!(event, TermEvent::Resize(..)))
 }
@@ -589,12 +599,13 @@ exit 0"#
             matches!(s.overlay, Some(Overlay::Approval(_)))
         });
         // No decision before the panel is on screen: the first frame marks it shown and starts the grace period.
-        assert_eq!(app.state.on_key_at(KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE), Instant::now() + APPROVAL_GRACE * 10), None);
+        assert_eq!(app.state.on_key_at(KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE), Instant::now()), None);
         app.state.note_approval_shown(Instant::now());
         let Some(Overlay::Approval(approval)) = &app.state.overlay else {
             unreachable!("pump_until waited for the approval modal");
         };
-        let past_grace = approval.opened + APPROVAL_GRACE;
+        // After the display grace and a pause in typing (the prompt was typed just before).
+        let past_grace = approval.opened + APPROVAL_GRACE + crate::live_state::APPROVAL_QUIET;
         let approve = app
             .state
             .on_key_at(

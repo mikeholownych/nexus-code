@@ -65,6 +65,8 @@ pub enum Entry {
     Pasted(String),
     /// A message of a resumed conversation, shown under the resume divider.
     Earlier { role: String, text: String },
+    /// A tool the agent called in a resumed conversation: name and subject (its result stays in the session record).
+    EarlierTool { tool: String, subject: String },
     /// What a command reported. `diff` asks for unified-diff colouring.
     Output {
         success: bool,
@@ -188,6 +190,9 @@ pub struct Activity {
     pub tool: Option<String>,
     pub subject: Option<String>,
     pub since: Instant,
+    /// The turn's step budget and time limit, when the sidecar reports them.
+    pub max_steps: Option<u64>,
+    pub max_minutes: Option<u64>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -198,6 +203,8 @@ pub struct Session {
     pub branch: Option<String>,
     pub dirty: u64,
     pub busy: bool,
+    /// The saved session's id, when the sidecar reports it.
+    pub session_id: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -240,8 +247,9 @@ pub struct Approval {
     pub lines: Vec<ReviewLine>,
     /// The proposed file change as a diff, when the review carries one (drawn with the shared diff view).
     pub patch: Option<Patch>,
-    /// The decision Enter takes; ←/→ or tab move it.
-    pub focus: Verdict,
+    /// The decision Enter takes, once the operator has chosen one with ←/→, tab or `a`; none at first, so a stray
+    /// Enter never decides.
+    pub focus: Option<Verdict>,
     pub scroll: usize,
     /// When the panel was first on screen (until then, when the request arrived); the grace period counts from it.
     pub opened: Instant,
@@ -340,6 +348,9 @@ pub struct DiffReview {
 
 /// Keystrokes typed for the draft must not answer an approval modal that opened mid-typing.
 pub const APPROVAL_GRACE: Duration = Duration::from_millis(400);
+/// A decision key counts only after a pause in typing this long: a `y`, `n` or Enter inside a run of typed text is
+/// part of that text, not an answer (people type several keys a second; nobody decides that fast mid-word).
+pub const APPROVAL_QUIET: Duration = Duration::from_millis(600);
 
 /// Modal panels. While one is open it receives every key except Ctrl-C.
 #[derive(Clone, Debug, PartialEq)]
@@ -374,6 +385,8 @@ pub struct LiveLayout {
     pub top: Option<(usize, usize)>,
     /// Set when the frame kept the window on `LiveState::anchor` while content arrived: the `scroll_back` it drew.
     pub anchored: Option<usize>,
+    /// The approval panel was drawn with its heading, decisions and at least one row of the change visible.
+    pub approval_drawn: bool,
 }
 
 /// Tool calls whose result the turn banner already reports.
@@ -426,6 +439,12 @@ pub struct LiveState {
     pub last_reviewable: Option<usize>,
     /// Output arrived below the window while the operator was scrolled back.
     pub unseen: bool,
+    /// When the operator last typed a character, Enter or Backspace (the quiet period for approvals).
+    last_typed: Option<Instant>,
+    /// An approval that arrived while another panel was open.
+    pending_approval: Option<Approval>,
+    /// Enter was pressed while the agent was starting: send the draft once it is ready.
+    pub submit_when_ready: bool,
     /// The next assistant text starts a new reply (a new model step began since the last text).
     assistant_break: bool,
 }
@@ -463,6 +482,9 @@ impl LiveState {
             last_reviewable: None,
             unseen: false,
             assistant_break: false,
+            last_typed: None,
+            pending_approval: None,
+            submit_when_ready: false,
         }
     }
 
@@ -656,6 +678,13 @@ impl LiveState {
                 | Event::History { .. }
         );
         self.apply_event(event);
+        self.promote_pending_approval();
+        if self.submit_when_ready && self.link == Link::Ready && !self.connecting() {
+            self.submit_when_ready = false;
+            if let Some(action) = self.submit() {
+                self.outbox.push(action);
+            }
+        }
         if content && self.scroll_back > 0 {
             self.unseen = true;
         }
@@ -675,8 +704,9 @@ impl LiveState {
                 None,
                 Vec::new(),
             ),
-            Event::SessionState { workspace_name, model, mode, git, busy } => {
+            Event::SessionState { workspace_name, model, mode, git, busy, session } => {
                 self.session = Session {
+                    session_id: session,
                     workspace_name,
                     model,
                     mode,
@@ -694,7 +724,7 @@ impl LiveState {
                     self.activity = None;
                 }
             }
-            Event::Activity { phase, step, segment, tool, subject } => {
+            Event::Activity { phase, step, segment, tool, subject, max_steps, max_minutes } => {
                 if self.activity.as_ref().is_none_or(|previous| previous.step != step) {
                     self.assistant_break = true;
                 }
@@ -702,7 +732,7 @@ impl LiveState {
                     Some(previous) if previous.phase == phase && previous.tool == tool => previous.since,
                     _ => Instant::now(),
                 };
-                self.activity = Some(Activity { phase, step, segment, tool, subject, since });
+                self.activity = Some(Activity { phase, step, segment, tool, subject, since, max_steps, max_minutes });
             }
             Event::FileDiff {
                 call_id,
@@ -809,17 +839,23 @@ impl LiveState {
                 {
                     file.status = diff_view::Status::Added;
                 }
-                self.overlay = Some(Overlay::Approval(Approval {
+                let approval = Approval {
                     id,
                     tool,
                     subject,
                     lines,
                     patch,
-                    focus: Verdict::Approved,
+                    focus: None,
                     scroll: 0,
                     opened: Instant::now(),
                     shown: false,
-                }));
+                };
+                // Another panel is open: the approval waits behind it (a key meant for that panel must never answer
+                // it), and opens as soon as that panel closes.
+                match &self.overlay {
+                    Some(Overlay::Approval(_)) | None => self.overlay = Some(Overlay::Approval(approval)),
+                    Some(_) => self.pending_approval = Some(approval),
+                }
             }
             Event::TurnResult { heading, line, turn, model_summary } => {
                 self.pending = None;
@@ -908,14 +944,31 @@ impl LiveState {
             }
             Event::Notice { text } => self.transcript.push(Entry::Info(text)),
             Event::History { session, total, messages } => {
-                let shown = messages.len();
+                let shown = messages.iter().filter(|m| m.role != "tool" && m.role != "outcome").count();
                 self.transcript.push(Entry::Info(if shown as u64 == total {
                     format!("Earlier conversation of session {session} ({total} messages)")
                 } else {
                     format!("Earlier conversation of session {session} (the last {shown} of {total} messages)")
                 }));
                 for message in messages {
-                    self.transcript.push(Entry::Earlier { role: message.role, text: message.text });
+                    match (message.role.as_str(), message.turn) {
+                        ("tool", _) => self.transcript.push(Entry::EarlierTool {
+                            tool: message.tool.unwrap_or_default(),
+                            subject: message.text,
+                        }),
+                        // The last turn's outcome, as it was reported when the turn ended.
+                        ("outcome", Some(turn)) => self.transcript.push(Entry::Banner {
+                            heading: message.heading.unwrap_or_default(),
+                            line: message.text,
+                            outcome: Box::new(outcome_for(&turn)),
+                            tone: tone_for(&turn),
+                            failure: turn["inferenceFailure"]["message"].as_str().map(str::to_string),
+                            summary: None,
+                            notes: None,
+                        }),
+                        ("outcome", None) => {}
+                        _ => self.transcript.push(Entry::Earlier { role: message.role, text: message.text }),
+                    }
                 }
             }
             Event::ToolDetail {
@@ -995,6 +1048,7 @@ impl LiveState {
 
     /// The sidecar stopped or broke protocol; nothing still running can finish.
     pub fn fail(&mut self, reason: String, code: Option<i32>, stderr: Vec<String>) {
+        self.submit_when_ready = false;
         self.close_approval();
         self.interrupt_running_tools();
         self.session.busy = false;
@@ -1093,7 +1147,10 @@ impl LiveState {
 
     /// Records what the frame measured and clamps scrolling to it.
     pub fn note_layout(&mut self, layout: LiveLayout) {
-        self.note_approval_shown(Instant::now());
+        // Shown only when the frame drew the panel with its change visible (not on a too-small screen).
+        if layout.approval_drawn {
+            self.note_approval_shown(Instant::now());
+        }
         if let Some(back) = layout.followed {
             self.scroll_back = back;
             self.follow = false;
@@ -1124,9 +1181,27 @@ impl LiveState {
     }
 
     fn close_approval(&mut self) {
+        self.pending_approval = None;
         if matches!(self.overlay, Some(Overlay::Approval(_))) {
             self.overlay = None;
         }
+    }
+
+    /// An approval waiting behind a panel opens once no panel is open. It starts unshown: its grace and quiet
+    /// periods begin when it is first drawn.
+    fn promote_pending_approval(&mut self) {
+        if self.overlay.is_none()
+            && let Some(mut approval) = self.pending_approval.take()
+        {
+            approval.shown = false;
+            approval.opened = Instant::now();
+            self.overlay = Some(Overlay::Approval(approval));
+        }
+    }
+
+    /// An approval is waiting behind the open panel.
+    pub fn approval_waiting(&self) -> bool {
+        self.pending_approval.is_some()
     }
 
     fn page(rows: usize) -> usize {
@@ -1135,49 +1210,58 @@ impl LiveState {
 
     fn on_approval_key(&mut self, key: KeyEvent, now: Instant) -> Option<Action> {
         const ORDER: [Verdict; 3] = [Verdict::Approved, Verdict::ApprovedForSession, Verdict::Denied];
-        if let Some(Overlay::Approval(approval)) = &mut self.overlay {
-            let at = ORDER.iter().position(|v| *v == approval.focus).unwrap_or(0);
-            match key.code {
-                KeyCode::Left | KeyCode::BackTab => {
-                    approval.focus = ORDER[(at + ORDER.len() - 1) % ORDER.len()];
-                    return None;
-                }
-                KeyCode::Right | KeyCode::Tab => {
-                    approval.focus = ORDER[(at + 1) % ORDER.len()];
-                    return None;
-                }
-                _ => {}
-            }
-        }
-        let focused = match &self.overlay {
-            Some(Overlay::Approval(approval)) => approval.focus,
-            _ => Verdict::Approved,
+        let quiet = self.last_typed.is_none_or(|at| now.saturating_duration_since(at) >= APPROVAL_QUIET);
+        let Some(Overlay::Approval(approval)) = &mut self.overlay else {
+            return None;
         };
+        // No decision before the panel has been on screen for the grace period, nor inside a run of typing.
+        let ready = approval.shown && now.saturating_duration_since(approval.opened) >= APPROVAL_GRACE && quiet;
+        let at = approval.focus.and_then(|focus| ORDER.iter().position(|v| *v == focus));
         let verdict = match key.code {
-            KeyCode::Enter => focused,
+            KeyCode::Left | KeyCode::BackTab => {
+                approval.focus = Some(ORDER[at.map_or(ORDER.len() - 1, |i| (i + ORDER.len() - 1) % ORDER.len())]);
+                return None;
+            }
+            KeyCode::Right | KeyCode::Tab => {
+                approval.focus = Some(ORDER[at.map_or(0, |i| (i + 1) % ORDER.len())]);
+                return None;
+            }
+            // Approving every later action is session-wide: `a` only selects it, Enter confirms.
+            KeyCode::Char('a' | 'A') => {
+                if ready {
+                    approval.focus = Some(Verdict::ApprovedForSession);
+                }
+                return None;
+            }
+            KeyCode::Enter => approval.focus?,
             KeyCode::Char('y' | 'Y') => Verdict::Approved,
-            KeyCode::Char('a' | 'A') => Verdict::ApprovedForSession,
             KeyCode::Char('n' | 'N') | KeyCode::Esc => Verdict::Denied,
             code => {
                 self.scroll_overlay(code);
                 return None;
             }
         };
-        // A decision needs the panel on screen for the grace period first: keys typed for the draft, or queued
-        // before the panel appeared, never answer it.
-        if let Some(Overlay::Approval(approval)) = &self.overlay
-            && (!approval.shown || now.saturating_duration_since(approval.opened) < APPROVAL_GRACE)
-        {
+        // Esc never occurs in typed text and denies (the safe direction): it needs only the display grace.
+        let esc_ready = key.code == KeyCode::Esc && approval.shown && now.saturating_duration_since(approval.opened) >= APPROVAL_GRACE;
+        if !ready && !esc_ready {
             return None;
         }
         let Some(Overlay::Approval(approval)) = self.overlay.take() else {
             return None;
         };
-        self.transcript.push(Entry::Decision {
+        let insert_idx = self.transcript.iter().rposition(|e| match e {
+            Entry::Tool { tool, status: ToolStatus::Running, .. } => *tool == approval.tool,
+            _ => false,
+        });
+        let decision_entry = Entry::Decision {
             tool: approval.tool,
             subject: approval.subject,
             verdict,
-        });
+        };
+        match insert_idx {
+            Some(idx) => self.transcript.insert(idx, decision_entry),
+            None => self.transcript.push(decision_entry),
+        };
         Some(Action::Send(match verdict {
             Verdict::Denied => Command::Deny { id: approval.id },
             verdict => Command::Approve {
@@ -1257,6 +1341,11 @@ impl LiveState {
     pub fn on_key_at(&mut self, key: KeyEvent, now: Instant) -> Option<Action> {
         let before = self.scroll_back;
         let action = self.handle_key(key, now);
+        // Typing keys (characters, Enter, Backspace) start the quiet period a decision needs; navigation does not.
+        if matches!(key.code, KeyCode::Char(_) | KeyCode::Enter | KeyCode::Backspace) {
+            self.last_typed = Some(now);
+        }
+        self.promote_pending_approval();
         // The operator moved the window: the next frame keeps their position instead of the previous anchor.
         if self.scroll_back != before {
             self.anchor = None;
@@ -1429,7 +1518,16 @@ impl LiveState {
     }
 
     fn submit(&mut self) -> Option<Action> {
-        if self.link != Link::Ready || self.connecting() || self.composer.expand(self.composer.text()).trim().is_empty() {
+        if self.composer.expand(self.composer.text()).trim().is_empty() {
+            return None;
+        }
+        if matches!(self.link, Link::Crashed { .. }) {
+            return None;
+        }
+        // The agent is still starting (first launch or a restart): the message is sent as soon as it is ready,
+        // instead of the Enter being silently dropped.
+        if self.link != Link::Ready || self.connecting() {
+            self.submit_when_ready = true;
             return None;
         }
         // Slash commands are read from the draft as typed: a paste buffer is data, never a command name.
@@ -2255,6 +2353,7 @@ mod tests {
                 branch: Some("main".into()),
                 dirty: 0,
                 busy: false,
+                session_id: None,
             }
         );
     }
@@ -2670,7 +2769,7 @@ mod tests {
                 subject: "x.txt".into(),
                 lines: review_lines(&Review::Unknown),
                 patch: None,
-                focus: Verdict::Approved,
+                focus: None,
                 scroll: 0,
                 opened,
                 shown: true,
@@ -2697,8 +2796,9 @@ mod tests {
         approval.opened
     }
 
+    /// A key after both the display grace and a pause in typing (the prompt was typed just before the panel opened).
     fn past_grace(state: &mut LiveState, code: KeyCode) -> Option<Action> {
-        let now = opened_at(state) + APPROVAL_GRACE;
+        let now = opened_at(state) + APPROVAL_GRACE + APPROVAL_QUIET;
         state.on_key_at(key(code), now)
     }
 
@@ -2755,8 +2855,12 @@ mod tests {
         assert_eq!(state.transcript, transcript);
         assert!(matches!(state.overlay, Some(Overlay::Approval(_))));
         assert_eq!(state.composer, "");
+        // `a` selects "approve all later actions"; only Enter confirms that session-wide decision.
+        assert_eq!(past_grace(&mut state, KeyCode::Char('a')), None);
+        assert!(matches!(&state.overlay, Some(Overlay::Approval(a)) if a.focus == Some(Verdict::ApprovedForSession)));
+        let later = opened_at(&mut state) + APPROVAL_GRACE + APPROVAL_QUIET * 3;
         assert_eq!(
-            past_grace(&mut state, KeyCode::Char('a')),
+            state.on_key_at(key(KeyCode::Enter), later),
             Some(Action::Send(Command::Approve {
                 id: "approval-1".into(),
                 always: true
@@ -2824,8 +2928,10 @@ mod tests {
             })
         );
         state.apply(ev(APPROVAL));
+        let base = opened_at(&mut state) + Duration::from_secs(10);
+        assert_eq!(state.on_key_at(key(KeyCode::Char('a')), base), None, "`a` only selects the session-wide approval");
         assert_eq!(
-            past_grace(&mut state, KeyCode::Char('a')),
+            state.on_key_at(key(KeyCode::Enter), base + Duration::from_secs(1)),
             Some(Action::Send(Command::Approve {
                 id: "approval-1".into(),
                 always: true
@@ -2906,9 +3012,12 @@ mod tests {
         state.overlay = Some(Overlay::Help { scroll: 0 });
         state.apply(ev(APPROVAL));
         assert!(
-            matches!(state.overlay, Some(Overlay::Approval(_))),
-            "an approval replaces help"
+            matches!(state.overlay, Some(Overlay::Help { .. })) && state.approval_waiting(),
+            "an approval waits behind help instead of replacing it"
         );
+        // The key meant for help (Enter closes it) does not answer the approval; the approval then opens.
+        assert_eq!(state.on_key(key(KeyCode::Enter)), None);
+        assert!(matches!(state.overlay, Some(Overlay::Approval(_))));
     }
 
     #[test]
@@ -3415,7 +3524,10 @@ mod tests {
         assert_eq!(state.overlay, None);
         assert!(state.on_key(key(KeyCode::Char('v'))).is_some());
         state.apply(ev(r#"{"v":1,"type":"approval.request","id":"approval-1","turn_id":"t1","tool":"write_file","subject":"x.txt","preview":"{}"}"#));
-        assert!(matches!(state.overlay, Some(Overlay::Approval(_))));
+        // The receipt panel stays; the approval waits behind it and opens when it closes.
+        assert!(matches!(state.overlay, Some(Overlay::Receipt(_))) && state.approval_waiting());
+        assert_eq!(state.on_key(key(KeyCode::Esc)), None);
+        assert!(matches!(state.overlay, Some(Overlay::Approval(_))) && !state.approval_waiting());
     }
 
     #[test]

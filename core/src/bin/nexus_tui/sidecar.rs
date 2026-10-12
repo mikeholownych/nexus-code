@@ -155,6 +155,11 @@ impl Sidecar {
         self.stderr_tail.lock().unwrap().iter().cloned().collect()
     }
 
+    /// Drops the diagnostics kept so far: what a finished turn logged does not explain a later stop.
+    pub fn forget_stderr(&self) {
+        self.stderr_tail.lock().unwrap().clear();
+    }
+
     /// True once the child has exited. Does not reap it, so its pid, which is also its group id, stays reserved.
     #[cfg(unix)]
     fn exited(&self) -> bool {

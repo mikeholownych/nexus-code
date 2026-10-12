@@ -13,7 +13,7 @@ import path from "node:path";
 import { execFileSync, spawn } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
-import { startGateway, makeRepo, makeHome, Reply } from "./helpers/fixtures.js";
+import { startGateway, makeRepo, makeHome, Reply, ptyTest } from "./helpers/fixtures.js";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(here, "../..");
@@ -89,7 +89,7 @@ const lines = (file: string) => (fs.existsSync(file) ? fs.readFileSync(file, "ut
 const squeeze = (text: string) => text.replace(/\s/g, "");
 const shows = (screen: string[], text: string) => screen.some((line) => squeeze(line).includes(squeeze(text)));
 
-test("the whole live TUI through a pseudo-terminal", { timeout: 420_000 }, async () => {
+ptyTest("the whole live TUI through a pseudo-terminal", { timeout: 420_000 }, async () => {
   for (const p of [TUI, SIDECAR]) assert.ok(fs.existsSync(p), `missing ${p} (run make build)`);
   const repo = makeRepo({
     "README.md": "# Demo\n\nA small repository.\n",
@@ -188,7 +188,7 @@ function assertSurface(r: any, events: any[], commands: any[], shows: (screen: s
   assert.ok(shows(screens["07-tools-final"].concat(all), "line one of the note"), "pasted text shown");
   // Approval: target and decisions with focus; buffered keys did not decide.
   const approval = screens["10-approval"];
-  assert.ok(shows(approval, "Approval needed") && shows(approval, "Nexus wants to: creates config.json") && shows(approval, "▸y Approve"), approval.join("\n"));
+  assert.ok(shows(approval, "Approval needed") && shows(approval, "Proposed: create config.json") && shows(approval, "y Approve"), approval.join("\n"));
   assert.ok(r.approval_survived_buffered_keys);
   // Requirements: listed once, and the repeated replies are explained.
   const req = screens["14-requirements-incomplete"];

@@ -446,6 +446,21 @@ mod tests {
     }
 
     #[test]
+    fn a_wrapped_code_row_keeps_the_code_background_across_the_block() {
+        let pal = diff_view::palette(Depth::TrueColor);
+        let text = "```rust\nlet window = compute_the_size_of_the_terminal_window(width, height);\n```";
+        let lines = render(text, 40, &pal, &prose(), false);
+        let code: Vec<&Line> = lines.iter().filter(|l| l.spans.first().is_some_and(|s| s.content.contains('▎')) && l.spans.len() > 2).collect();
+        assert!(code.len() >= 2, "{:#?}", texts(&lines));
+        for line in code {
+            for span in line.spans.iter().skip(1) {
+                assert_eq!(span.style.bg, pal.code_bg, "every cell after the bar is on the code background: {:?} in {line:?}", span.content);
+            }
+            assert_eq!(line.spans.iter().skip(1).map(|s| UnicodeWidthStr::width(s.content.as_ref())).sum::<usize>(), 35, "{line:?}");
+        }
+    }
+
+    #[test]
     fn a_wide_table_lists_rows_instead_of_cutting_cells() {
         let text = "| Name | Description |\n|---|---|\n| cache | a description long enough that the aligned table would not fit in forty columns |";
         let all = texts(&render(text, 40, &diff_view::palette(Depth::TrueColor), &prose(), false));

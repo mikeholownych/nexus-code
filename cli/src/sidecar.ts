@@ -19,10 +19,11 @@ import type { ChatMessage } from "./types.js";
 import { STEERING_PREFIX } from "./core/objective.js";
 
 /** Messages of a resumed conversation sent to the client, and the characters kept of each. */
-const HISTORY_MESSAGES = 20;
+const HISTORY_ENTRIES = 60;
 const HISTORY_CHARS = 4000;
 import {
   DIFF_PREVIEW_CHARS,
+  HistoryEntry,
   DIFF_PREVIEW_LINES,
   MAX_SLASH_OUTPUT,
   PROTOCOL_VERSION,
@@ -360,6 +361,7 @@ export class SidecarServer {
           phase,
           step,
           segment,
+          ...this.budget(),
           ...(tool ? { tool: toolName(tool) } : {}),
           ...(subject ? { subject: capText(redactSecrets(stripEscapes(subject)), 200) } : {}),
         }),
@@ -399,6 +401,13 @@ export class SidecarServer {
         else this.steerAck(id, "cancelled", `Not applied: ${reason ?? "the turn ended first"}. Your message is back in the composer.`, text);
       },
     };
+  }
+
+  /** The running turn's budget as the client shows it: total steps (across segments) and the time limit. */
+  private budget(): { max_steps: number; max_minutes?: number } {
+    const config = this.app.getConfig();
+    const continuation = config.continuation;
+    return continuation ? { max_steps: continuation.maxTotalSteps, max_minutes: continuation.maxTurnMinutes } : { max_steps: config.maxSteps };
   }
 
   private confirmFor(turnId: string, signal: AbortSignal) {
@@ -695,28 +704,45 @@ export class SidecarServer {
     this.app.getAgent().restoreSession(session.messages, session.unverifiedChangesPending, session.objective);
     if (Array.isArray(session.activePlan)) this.app.getAgent().setActivePlan(session.activePlan);
     this.lastTurn = null;
-    this.emitHistory(session.id, session.messages);
+    this.emitHistory(session.id, session.messages, session.lastTurn);
     return { ok: true, message: `Resumed session ${session.id} (${session.messages.length} messages).` };
   }
 
   /**
-   * The resumed conversation for the client to show: the latest user and assistant text messages (tool results,
-   * system context and tool-call-only replies are left out), redacted and bounded.
+   * The resumed conversation for the client to show, in order: operator prompts, steering, the agent's replies, the
+   * tools it called (name and subject; results stay in the session record), and the last turn's outcome. Nexus's own
+   * prompts (continuation, recovery) and the runtime context appended to prompts are left out; text is redacted and
+   * bounded, and only the latest HISTORY_ENTRIES entries are sent.
    */
-  private emitHistory(sessionId: string, messages: ChatMessage[]): void {
+  private emitHistory(sessionId: string, messages: ChatMessage[], lastTurn?: TurnResult | null): void {
     const text = (m: ChatMessage) => (typeof m.content === "string" ? m.content : Array.isArray(m.content) ? m.content.map((p: any) => (typeof p?.text === "string" ? p.text : "")).join("") : "");
-    // Messages Nexus itself added to the conversation (continuation and recovery prompts) are not the operator's.
-    const shown = messages.filter((m) => (m.role === "user" || m.role === "assistant") && text(m).trim() && !(m.role === "user" && text(m).startsWith("[Nexus ")));
-    const recent = shown.slice(-HISTORY_MESSAGES).map((m) => {
+    const safe = (value: string, max = HISTORY_CHARS) => capText(visibleControls(redactSecrets(value)), max);
+    const entries: HistoryEntry[] = [];
+    for (const m of messages) {
       const body = text(m);
-      // Steering is stored as "[Operator steering <id>]: text": shown as steering, without the marker.
-      const steering = m.role === "user" && body.startsWith(STEERING_PREFIX);
-      // The runtime context the agent appends to a stored prompt ("[Git Status: …]", "[Active Plan: …]") is not the operator's text.
-      const typed = m.role === "user" ? body.replace(/(\n+\[(?:Git Status|Active Plan): [^\n]*\])+\s*$/, "") : body;
-      const shownText = steering ? typed.slice(typed.indexOf("]:") + 2).trim() : typed;
-      return { role: steering ? ("steering" as const) : (m.role as "user" | "assistant"), text: capText(visibleControls(redactSecrets(shownText)), HISTORY_CHARS) };
-    });
-    this.emit({ type: "history", session: sessionId, total: shown.length, messages: recent });
+      if (m.role === "user") {
+        if (!body.trim() || body.startsWith("[Nexus ")) continue;
+        // Steering is stored as "[Operator steering <id>]: text": shown as steering, without the marker.
+        const typed = body.replace(/(\n+\[(?:Git Status|Active Plan): [^\n]*\])+\s*$/, "");
+        if (typed.startsWith(STEERING_PREFIX)) entries.push({ role: "steering", text: safe(typed.slice(typed.indexOf("]:") + 2).trim()) });
+        else entries.push({ role: "user", text: safe(typed) });
+      } else if (m.role === "assistant") {
+        if (body.trim()) entries.push({ role: "assistant", text: safe(body) });
+        for (const call of m.tool_calls ?? []) {
+          let args: Record<string, any> = {};
+          try {
+            args = JSON.parse(call.function.arguments || "{}");
+          } catch {}
+          entries.push({ role: "tool", tool: safe(call.function.name, 80), text: safe(toolSubject(args), 200) });
+        }
+      }
+    }
+    if (lastTurn) {
+      const { heading, line } = summarizeTurn(lastTurn);
+      entries.push({ role: "outcome", heading, text: redactSecrets(line), turn: projectTurn(lastTurn) });
+    }
+    const conversation = entries.filter((e) => e.role !== "tool" && e.role !== "outcome").length;
+    this.emit({ type: "history", session: sessionId, total: conversation, messages: entries.slice(-HISTORY_ENTRIES) });
   }
 
   private shutdown(): Promise<void> {
@@ -742,6 +768,7 @@ export class SidecarServer {
       mode: this.mode,
       git: git.isRepo ? { branch: git.branch, dirty: git.dirtyCount } : null,
       busy: Boolean(this.activeTurn),
+      session: this.sessionId,
     });
   }
 

@@ -70,6 +70,16 @@ def main():
     s.pump(0.8)
     s.send("y", settle=0.5)
     result["after_approve"] = decisions(commands)
+
+    # 5. Typing that continues across the third approval panel's appearance never decides.
+    typed = "please add tests and then run them now"
+    for ch in typed:
+        s.send(ch, settle=0.1)
+    s.pump(0.2)
+    result["after_typing_across"] = {"decisions": decisions(commands), "panel_open": has(s.color.lines(), "Approval needed")}
+    s.pump(1.0)
+    s.send("n", settle=0.5)
+    result["after_typing_then_deny"] = decisions(commands)
     wait_events(events, "turn.result", 1, 30, s)
     s.wait_idle()
     result["transcript"] = s.color.lines()

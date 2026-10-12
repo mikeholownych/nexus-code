@@ -127,8 +127,16 @@ pub enum Review {
 
 #[derive(Clone, Debug, Deserialize, PartialEq)]
 pub struct HistoryMessage {
+    /// `user`, `assistant`, `steering`, `tool` (a tool the agent called; `text` is its subject) or `outcome` (the
+    /// last turn's result; `text` is its line).
     pub role: String,
     pub text: String,
+    #[serde(default)]
+    pub tool: Option<String>,
+    #[serde(default)]
+    pub heading: Option<String>,
+    #[serde(default)]
+    pub turn: Option<Value>,
 }
 
 /// Sidecar → UI events. Fields this client does not use are ignored by serde.
@@ -148,6 +156,9 @@ pub enum Event {
         mode: String,
         git: Option<GitInfo>,
         busy: bool,
+        /// The id the session is saved under (absent from older sidecars).
+        #[serde(default)]
+        session: Option<String>,
     },
     #[serde(rename = "assistant.delta")]
     AssistantDelta { turn_id: String, text: String },
@@ -163,6 +174,11 @@ pub enum Event {
         tool: Option<String>,
         #[serde(default)]
         subject: Option<String>,
+        /// The turn's budget: total steps across segments, and the time limit in minutes.
+        #[serde(default)]
+        max_steps: Option<u64>,
+        #[serde(default)]
+        max_minutes: Option<u64>,
     },
     /// A file-edit tool changed a file: that operation's own diff, as a bounded preview.
     #[serde(rename = "file.diff")]
@@ -465,6 +481,7 @@ mod tests {
                     dirty: 2
                 }),
                 busy: false,
+                session: None,
             })
         );
         assert!(matches!(
@@ -633,6 +650,8 @@ mod tests {
                 segment: 2,
                 tool: Some("run_command".into()),
                 subject: Some("make test".into()),
+                max_steps: None,
+                max_minutes: None,
             })
         );
         assert!(matches!(
