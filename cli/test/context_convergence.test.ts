@@ -526,6 +526,19 @@ describe("D: findings checkpoint before shown output leaves the context", () => 
         const alarmed = (output: string) => /^\[Nexus: your recorded findings have outgrown your memory;[^\]]*This is step \d+ of \d+\.\]\n/.test(output);
         assert.ok(outgrownAt > 0 && !latestOutput.slice(0, outgrownAt + 1).some(alarmed), "no alarm in output before the bound is passed");
         assert.ok(latestOutput.slice(outgrownAt + 1).some(alarmed), "after it is passed, the next output leads with it");
+        // It says how many findings the memory before it no longer shows in full: what deferring the write has cost.
+        let counted = 0;
+        for (let at = outgrownAt + 1; at < gw.requests.length; at++) {
+          const said = /^\[Nexus: your recorded findings have outgrown your memory; (\d+) of (\d+) are no longer shown in it in full/.exec(latestOutput[at]);
+          if (!said) continue;
+          counted++;
+          const record = recordNotes(gw.requests[at - 1].body.messages);
+          const shown = record.filter((n) => n.startsWith("Findings recorded from inspected output ["));
+          const listed = record.find((n) => n.startsWith("[Nexus: recorded findings not shown here, to bound this memory: "));
+          const unlisted = listed ? Array.from(listed.split(". They mention: ")[0].matchAll(/(?::|;) (\d+) /g)).reduce((n, m) => n + Number(m[1]), 0) : 0;
+          assert.deepEqual([Number(said[1]), Number(said[2])], [shown.filter((n) => REDUCED.test(n)).length + unlisted, shown.length + unlisted], latestOutput[at].slice(0, 200));
+        }
+        assert.ok(counted > 0, "a notice was checked (else this proves nothing)");
         const kept: string[] = agent.getFindings();
         for (const f of distilled) {
           const full = kept.find((n) => n.split("\n", 1)[0].includes(`read_file {"path":"${f}"}`) && n.includes(fact(f)));
@@ -661,8 +674,10 @@ describe("D: findings checkpoint before shown output leaves the context", () => 
         const NOTICE = /^\[Nexus: your recorded findings have outgrown your memory;[^\]]*Write what you have established into your work product now[^\]]*\]\n/;
         assert.equal(agent.toolResultContent(call("c0", "a.txt"), "alpha", 3, 120), "alpha", "within the bound nothing is added");
         agent.findingsOutgrown = true;
+        agent.findingsShown = { reduced: 3, total: 9 };
         const first = agent.toolResultContent(call("c1", "a.txt"), "alpha", 4, 120);
         assert.match(first, NOTICE);
+        assert.ok(first.startsWith("[Nexus: your recorded findings have outgrown your memory; 3 of 9 are no longer shown in it in full, more give way with each finding you record, and reading them back with read_findings takes steps. Write what"), first);
         assert.ok(first.includes("This is step 4 of 120.]\nalpha"), first);
         assert.equal(agent.toolResultContent(call("c2", "b.txt"), "beta", 4, 120), "beta", "once per step");
         assert.match(agent.toolResultContent(call("c3", "b.txt"), "beta", 5, 120), NOTICE);

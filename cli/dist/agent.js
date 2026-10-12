@@ -570,6 +570,8 @@ export class AutonomousAgent {
     findingSources = new Map();
     /** Whether the last durable record this turn had more findings than their bound, and the step last told its state. */
     findingsOutgrown = false;
+    /** Of the findings the latest memory record holds, how many it shows other than in full. */
+    findingsShown = { reduced: 0, total: 0 };
     /** Whether the last durable record showed any finding only condensed, indexed or not at all. */
     findingsCondensed = false;
     stepNoticeStep = 0;
@@ -1771,6 +1773,7 @@ export class AutonomousAgent {
             findingsChars += elidedNote.length;
         }
         this.findingsCondensed = elided > 0 || shown.some((note, index) => note !== findings[index] || isCondensedFinding(note));
+        this.findingsShown = { reduced: findings.filter((note, index) => index < elided || shown[index] !== note || isCondensedFinding(note)).length, total: findings.length };
         const recordedNotes = [...(elidedNote ? [elidedNote] : []), ...shown.slice(elided)];
         durableNotes.splice(findingSlot < 0 ? durableNotes.length : Math.min(findingSlot, durableNotes.length), 0, ...recordedNotes);
         if (this.findingsOutgrown)
@@ -2179,7 +2182,8 @@ export class AutonomousAgent {
         if (closing) {
             return `[Nexus: this is step ${step} of ${maxSteps}; ${remaining === 1 ? "1 step remains" : `${remaining} steps remain`} after it. Finish now, leaving room for validation: consolidate what the output you inspected established into your work product (if your task produces none, state in the task_completed summary what remains unestablished), check it against every requirement of the task and that every file path it cites exists, then call task_completed to submit it (the operator's verifier, when configured, checks it), keeping steps in hand to correct what validation reports and submit again. Investigate further only where a requirement still lacks evidence; do not state what the evidence does not support.${this.findingsCondensed ? " Some of your recorded findings are shown in your memory only condensed or not at all: before you submit, check with read_findings any claim that something is absent, never happens or is not used, and any claim those findings bear on." : ""} Work left unfinished at the step limit is reported as not established.]\n${result}`;
         }
-        return `[Nexus: your recorded findings have outgrown your memory; the oldest are shown condensed or by id (read_findings returns them in full). Write what you have established into your work product now (the file or change your task produces; if it produces none, state it in the task_completed summary), before investigating further, then continue with what remains. This is step ${step} of ${maxSteps}.]\n${result}`;
+        const { reduced, total } = this.findingsShown;
+        return `[Nexus: your recorded findings have outgrown your memory; ${reduced} of ${total} are no longer shown in it in full, more give way with each finding you record, and reading them back with read_findings takes steps. Write what you have established into your work product now (the file or change your task produces; if it produces none, state it in the task_completed summary), before investigating further, then continue with what remains. This is step ${step} of ${maxSteps}.]\n${result}`;
     }
     rerunNotedContent(call, content, step, maxSteps) {
         const key = observationKey(call.function.name, call.function.arguments);
