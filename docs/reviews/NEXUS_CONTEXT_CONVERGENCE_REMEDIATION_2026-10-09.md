@@ -289,3 +289,93 @@ left at main's default. `nexus-tui` is now provisioned alongside `harness-core` 
 2. Closing-notice text copied into the durable record from tool results (seen in run_19ca1b1_prov).
 3. Review 8 follow-ups and review 9a wording note (`cc_evidence/review8_followups.md`).
 4. Independent delta review of the merge, then final acceptance; integration only after substantive acceptance.
+
+## 12. Retention and convergence iterations R1–R3 (2026-10-12)
+
+Each iteration made one causal change on `fix/context-convergence` and showed its tests fail on the previous
+candidate. Each ran the full CLI suite and `tsc`, then reran the d88a897 reproduction in the same configuration:
+engineering/deep via the gateway, 64K context, objective a3a81ae7, `review_verifier.mjs`,
+`-s 120 --max-total-steps 120 --max-turn-minutes 420`, and the d88a897 Rust binaries, whose core tree is unchanged.
+Evidence is in `~/df2/postdog/cc_evidence/iter_retention`, `iter_cut` and `iter_urgency`, plus each run's `RESULT.md`.
+
+### Baseline trace (`iter_retention/TRACE.md`)
+
+The step-58 launch fact was lost in four places:
+1. `shortenedFinding` kept only a finding's opening characters.
+2. The full finding was never stored durably.
+3. The removal note still said the finding was held.
+4. A recheck cut by `head -20` carried no incompleteness notice.
+
+The tracked-file count has a different cause. The model reported a depth-3 `file_tree` count (306) as the
+repository total; the repository count was never observed.
+
+Severity criterion: HIGH requires a path through current code from a reachable entry point to the consequence. A
+consequence that depends on future or non-existent code supports at most MEDIUM.
+
+### R1 `31d6622` (+ review fixes `da6a6f5`): findings retention
+
+Change:
+- Findings get ids (F<n>), and a full, persisted store keeps every one.
+- Under pressure the memory shows each finding condensed (the start of every claim), then indexed (what it mentions),
+  then named by id in one note. Each form says how to recover the full text with `read_findings`.
+- Output cut by `head`, `grep -m`, `--max-count` or the fold limit carries an incompleteness notice. The model is told
+  not to conclude absence from it.
+- Step notices are kept out of durable notes and checkpoints.
+
+Review fixes (`da6a6f5`, after an independent delta review: 1 blocker, 3 should-fix):
+- findings are saved with mid-turn progress;
+- id seeding comes from the restored memory;
+- legacy id-less findings are adopted under ids;
+- shortened legacy copies are never claimed recoverable;
+- the elided note is built in linear time.
+
+Suite: 765/765.
+
+Run `run_31d6622_r1_deep120`: FAILED at step 119 with no artifact.
+- Retention held: the store kept 30 findings (90K chars), including the launch path (F16/F20/F24/F27), the 1,120
+  tracked-file count (F2) and the truncation qualifications. `read_findings` was called 14 times.
+- Two new failures:
+  - The model ignored the outgrown notice for 70 steps.
+  - Every whole-artifact generation hit the gateway's 600 s stream limit, and recovery replayed the identical request.
+
+### R2 `45af267` (+ review fixes `e0a59cf`): a response cut off at the provider's limit is not resubmitted unchanged
+
+Change: after a submission fails with UNKNOWN execution once it has run ≥ 120 s, later submissions of that step carry
+a request-only note. The note says to respond with less at once and to write long files in parts. The step's first
+tool result carries the same note. There are no new retries.
+
+Review (no blockers) led to fixes in `e0a59cf`:
+- the stored copy of a finding wins over a record's copy;
+- the notice is scoped to its turn;
+- the `edit_file` advice is anchored on lines unique in the file;
+- the wording says "most likely".
+
+Suite: 768/768.
+
+Run `run_45af267_r2_deep120`: LIMIT_REACHED at step 120, verifier 19/21.
+- One 600 s cut-off occurred at step 103. The resubmission was delivered, and the model then wrote in parts with no
+  further cut-off.
+- Writing began only at the closing notice (step 103), and the single submission at step 120 failed 2 checks.
+- Substantive errors in the artifact:
+  - The Rust core is called "a separate local harness rather than part of the TS execution substrate". This was
+    never observed in the run; `cli/src/tools.ts:209` spawns it.
+  - F-3 claims the findings budget grows with the context limit, but it is capped by `Math.min(1, …)`.
+  - F-1's HIGH rests on `catch {}` sites that guard refresh, probes and lock-file reads, not store writes.
+
+### R3 `25208c1`: the outgrown notice states what deferring the write costs
+
+Change: the notice now says "N of M are no longer shown in it in full, more give way with each finding you record, and
+reading them back with read_findings takes steps". R1's wording had removed the loss framing that d88a897's model acted
+on at step 40. Neither R1's nor R2's model wrote before the closing notice.
+
+Suite: 768/768. Run: `run_25208c1_r3_deep120` (results below once complete).
+
+### Status
+
+Not accepted. Nothing has been integrated, published or deployed.
+
+Separate open items:
+- review 8 follow-ups;
+- `foldVoluminousOutput` cut not treated as partial in completion gating;
+- `app.ts` not saving the objective;
+- the stagnation recovery note becoming the last user message.
