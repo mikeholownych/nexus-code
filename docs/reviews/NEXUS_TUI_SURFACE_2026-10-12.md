@@ -36,9 +36,9 @@ These narrow the original request and are tracked as open, not as passed:
 
 | Item | Requirement it narrows | State |
 |---|---|---|
-| O1 | Activity/status: "display continuation/budget information when relevant" | OPEN — the activity line shows step and segment; the budget (step n of 300, time left) is not shown live, because `activity` events do not carry it. Needs a sidecar field. |
-| O2 | Status: "keep … session information identifiable" | OPEN — the session id appears only in the resume line and the receipt, not in the status bar. |
-| O3 | Recovery: "understandable … resume states" | OPEN — a resumed session shows its earlier text messages (up to 20); tool calls, diffs and outcomes from before the resume are not re-listed (the receipt and `/export` keep them). |
+| O1 | Activity/status: "display continuation/budget information when relevant" | DONE (follow-up commit) — `activity` carries `max_steps`/`max_minutes`; the line shows `step n of N` and, in the last quarter or last 15 minutes, `X min left`. |
+| O2 | Status: "keep … session information identifiable" | DONE (follow-up commit) — `session.state` carries the session id; the status bar shows it as its lowest-priority segment; the dirty count reads `●3 changed`. |
+| O3 | Recovery: "understandable … resume states" | DONE (follow-up commit) — the `history` event lists prompts, steering, replies, each tool call (name and subject) and the last turn's outcome, shown as `· Read src/cache.ts` rows and the outcome line it ended with. Tool results and diffs stay in the receipt and `/export`. |
 | O4 | Transcript: Markdown | LIMITATION — no nested blocks inside list items; paragraph line breaks are kept rather than reflowed; HTML and images shown as text. |
 | O5 | Tools: durations | LIMITATION — non-command tools are timed by this client's clock (start/end events), not by the engine. |
 | O6 | Approvals: input typed before a panel appears | BY DESIGN, disclosed — text typed while the agent works, before any panel exists, is steering (shown in the transcript), even if the operator meant it as an answer. It never decides an approval. When the TUI is stalled, whether such input is read before or after the approval event depends on when the sidecar reader thread delivers the event. |
@@ -61,20 +61,49 @@ the approval arrives and `y⏎` is typed, resumes it after the grace period, the
 paste: none decides; a single deliberate `n` denies (the file is not written) and a single `y` approves (it is). The
 test passed 3 of 3 runs at `804c5df` and fails against `83e7405`.
 
+## Independent review follow-up (review of `804c5df`; fixed in `09bf1a4` and `404fa64`)
+
+An independent read-only review accepted the visuals with defects and did **not** accept approval safety. Resolution:
+
+| Finding | Resolution | Evidence |
+|---|---|---|
+| F1 typing that continues across the panel's appearance approves (`a` of "add" approved all later actions) | A decision key counts only after the grace period **and** 600 ms without typing (`APPROVAL_QUIET`); no default focus (Enter alone decides nothing); `a` only selects "approve all later actions", Enter confirms | unit `typing_that_continues_across_the_approval_panel_never_decides`; PTY step 5 of `tui_approval_input_e2e` types a sentence at 100 ms/key across the third approval: no decision, `third.txt` not written, then a deliberate `n` after a pause denies |
+| F2 decidable while not on screen (below 40×10) or with no change visible | "Shown" is set only when the frame drew the panel with heading, buttons and at least one change row (`LiveLayout.approval_drawn`); otherwise the panel asks to enlarge the terminal | unit `an_approval_too_small_to_show_its_change_cannot_be_decided` |
+| F3 an approval replaces the open panel; that panel's keys decide | The approval waits behind help/review/receipt panels (`pending_approval`), the composer line says "approval waiting · esc closes this panel to review it"; it opens unshown when the panel closes | unit `an_approval_waits_behind_an_open_panel_and_that_panels_keys_do_not_decide` |
+| F5 PTY scenarios timing-sensitive; `/resume` lost after restart | Cause: after a restart the driver matched "enter send" in output history while the new agent was still connecting, and the TUI dropped Enter while connecting. The driver now waits on the screen; the TUI keeps the draft and sends it when the agent is ready; PTY tests take a cross-process lock | unit `enter_while_the_agent_starts_sends_the_draft_once_it_is_ready`; all six PTY scenarios 10 runs serially and 3 runs with 8 CPU-bound processes at `09bf1a4`: 78 of 78 passed |
+| F6 O1–O3 open | Done — see the open items table | as above |
+| Approval panel: empty rows between change and buttons; "Nexus wants to: creates" | The panel fits its content; copy reads "Proposed: create config.json · +1 −0"; compact buttons below 60 columns | screen 10 |
+| 11 decision drawn after its effect | The decision line is inserted before the tool entry it decided | screen 11 |
+| 03/04/06 wrapped code row loses background | Not reproduced: the cell data and the PNG pixels both carry the code background on the `↪` row; the dimmed `↪` marker next to code that starts one column later read as a gap | cell dump of screen 03, pixel samples |
+| 07 command preview shows the head | The preview shows the last 6 lines (where results and errors are) after "… N earlier lines". `09bf1a4` still showed the first 6 of the 8 tail lines the sidecar sends (found in its evidence); fixed in `404fa64` | screen 07; unit `command_output_is_bounded_…`; PTY asserts the last output line is visible |
+| 17 not the tool-detail panel | The driver now captures the entry review (17) and, via `i`, the tool-call panel (17b) | screens 17, 17b |
+| 18 help cut with no indicator | The footer shows `↑↓ scroll` and the visible row range when help is taller than the window | unit `help_taller_than_the_screen_says_where_it_is_and_how_to_scroll`; screen 18 |
+| 22 "(no exit code)" after a signal; stale diagnostic | A named signal is not followed by "(no exit code)"; the diagnostics kept are cleared when a turn ends and when a prompt is sent | screen 22 |
+| 23b/24 resumed view lacks tools and outcome | O3 | screens 23b, 24 |
+| 40 columns: activity line and hint cut without ellipsis | Both end in `…` when cut | unit + screen 19 |
+| tui_diff/11 narrow wrap breaks mid-word | Wrapping breaks after a space in the latter two thirds of the row (no character lost); continuation rows start at the content column (they never restarted at the number column) | unit `wrapped_text_breaks_between_words_and_keeps_every_character` (fails without the change) |
+| tui_diff evidence predates the surface work | Re-captured from the follow-up commit | `docs/reviews/evidence/tui_diff/` |
+
+Found while verifying the follow-up: per-request secret classification enumerated `process.env` once per string of
+each redacted payload (8004 enumerations per pass), which made the 35-step PTY turn 5× slower (19.8 s → 111 s) and
+timed out under load. That code is part of the separate, uncommitted qualification work; it was fixed there (one
+environment read per pass, regression test) and is not part of this commit.
+
 ## Result
 
 Implementation commits on branch `feat/tui-surface` (not merged): `83e7405` (the surface work), `804c5df` (approval
-input). The visual evidence was captured at `83e7405`; `804c5df` changes only approval input handling
-(`live.rs`, `live_state.rs`) and adds its own PTY test.
+input), `09bf1a4` (independent-review follow-up, O1–O3), `404fa64` (command output tail). `29a9270` fixes the security
+gate that the assessment commit broke (also on main as `604687c`). The current evidence is from `404fa64`.
 
 | Revision | Build identity | What was run there |
 |---|---|---|
 | working tree before `83e7405` (same source except the help-overlay text) | — | `make build`; `make test`: Rust 236/236, CLI 727/727, gates pass |
 | working tree = `83e7405` | — | `cargo test --release --bin nexus-tui` 219/219; clippy 0 warnings in `src/bin/nexus_tui/` |
-| clean worktree of `83e7405` | `nexus-tui` `823fae68…2a96`, `sidecar.js` `55e65b28…fc6ff` | `tui_surface_e2e` evidence run `c5b5b1f8` (recording 181 frames, 33.9 s, monotonic; 25 screens) — `docs/reviews/evidence/tui_surface/` |
+| clean worktree of `83e7405` | `nexus-tui` `823fae68…2a96`, `sidecar.js` `55e65b28…fc6ff` | `tui_surface_e2e` evidence run (superseded) |
 | `83e7405` build | as above | `tui_approval_input_e2e` (added later): **fails** — burst approved |
-| working tree = `804c5df` | — | `cargo test --release --bin nexus-tui` 220/220; `tui_approval_input_e2e` 3/3 |
-| clean worktree of `804c5df` | `nexus-tui` `c56080de19078f20…`, `sidecar.js` `55e65b28…fc6ff` | `make build`; `make test`: Rust 237/237, CLI 728/728 (includes `tui_maturity_e2e`, `tui_diff_e2e`, `tui_surface_e2e`, `tui_approval_input_e2e`), gates pass |
+| clean worktree of `804c5df` | `nexus-tui` `c56080de19078f20…`, `sidecar.js` `55e65b28…fc6ff` | `make build`; `make test`: Rust 237/237, CLI 728/728, gates pass |
+| clean worktree = `09bf1a4` content (before commit) | — | `make build`; `make test`: Rust 18/18 + TUI 228/228 + 2, CLI 728/728 (all six PTY scenarios included), gates pass after `29a9270`; clippy 0 warnings in `src/bin/nexus_tui/`; PTY scenarios 13 runs (10 serial, 3 under load): 78/78 |
+| clean worktree of `404fa64` | `nexus-tui` `a43712d90d0310f7…`, `sidecar.js` `2066ae9175eb3cb3…` | TUI 228/228; all six PTY scenarios 6/6; evidence runs `tui_surface` and `tui_diff` (gitHead `404fa64`) — `docs/reviews/evidence/tui_surface/`, `docs/reviews/evidence/tui_diff/` |
 
 ### Changes
 
@@ -98,10 +127,10 @@ expectations in existing view/state/sidecar tests.
 ### Runtime state on this host
 
 The installed launcher (`/usr/local/bin/nexus` → `/home/mike/nexus-code/harness.sh`) runs whatever is built in the
-`/home/mike/nexus-code` checkout. That checkout is on the unmerged branch `feat/tui-surface`, and its release
-binaries are the `804c5df` build (`nexus-tui` SHA-256 prefix `c56080de19078f20`). **Dogfooding on this host since
-2026-10-12 ~06:50 UTC uses the branch build, not main.** Switching the checkout back to main requires `git switch
-main` and `make build`.
+`/home/mike/nexus-code` checkout. That checkout is on the unmerged branch `feat/tui-surface`, and its working tree also
+holds **uncommitted** qualification-remediation work (stages 0–5 of the top-tier assessment, under review). Its build
+is therefore neither `404fa64` nor main. Switching back to main requires committing or setting aside that work,
+`git switch main` and `make build`.
 
 ### Remaining limitations
 
@@ -111,8 +140,8 @@ actual output.
 
 ### Status
 
-**Implementation self-assessment passed; independent acceptance pending.** Rows 1–20 pass in the evidence run or in
-named regression tests at the revisions listed above; O1–O3 are open acceptance items and O4–O6 are disclosed
-limitations. The rendered screens were inspected by the implementer and the defects found were fixed before the
-evidence run; an independent read-only review of the patch, screenshots, recording and approval-input tests has not
-yet happened.
+**Implementation self-assessment passed for the follow-up; independent re-acceptance pending.** F1–F3 and F5 are
+fixed with unit and PTY tests; O1–O3 are done; the visual defects from the review are fixed or, for the code-block
+background, shown not to reproduce. The screens were inspected by the implementer, which found and fixed the command
+preview defect (`404fa64`). A reviewer other than the implementer has not yet re-accepted the visuals and approval
+behaviour.

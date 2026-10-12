@@ -1,6 +1,6 @@
 {"id":"t1","text":"Explain the plan for the cache layer.","type":"prompt.submit","v":1}
 {"id":"t2","text":"Inspect the repository and add the cache module.","type":"prompt.submit","v":1}
-{"id":"g32628761e38aeb-1","text":"prefer an LRU policy","type":"steer","v":1}
+{"id":"g181cdbcc393791-1","text":"prefer an LRU policy","type":"steer","v":1}
 {"id":"t3","text":"line one of the note\n\tindented line ✓ 字\nline three","type":"prompt.submit","v":1}
 {"args":"review","command":"mode","id":"s1","type":"slash","v":1}
 {"id":"t4","text":"Write the config file.","type":"prompt.submit","v":1}
@@ -13,6 +13,7 @@
 {"args":"clear","command":"requirements","id":"s4","type":"slash","v":1}
 {"id":"t7","text":"Fix the parser bug.","type":"prompt.submit","v":1}
 {"evidence":"e6","id":"d1","type":"tool.detail","v":1}
+{"evidence":"e6","id":"d2","type":"tool.detail","v":1}
 {"id":"t8","text":"Stream another answer.","type":"prompt.submit","v":1}
 {"args":"","command":"resume","id":"s5","type":"slash","v":1}
 {"type":"shutdown","v":1}
