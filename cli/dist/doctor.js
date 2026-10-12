@@ -92,7 +92,7 @@ function run(command, args, opts) {
             settled = true;
             clearTimeout(timer);
             opts.signal.removeEventListener("abort", onAbort);
-            resolve({ ...result, stdout: stdout.slice(0, 64_000), stderr: stderr.slice(0, 16_000), timedOut });
+            resolve({ ...result, stdout: stdout.slice(0, opts.maxStdout ?? 64_000), stderr: stderr.slice(0, 16_000), timedOut });
         };
         let child;
         try {
@@ -414,7 +414,9 @@ const engineCheck = async (ctx, signal) => {
     }
     if (ctx.deep) {
         const workspace = ctx.config?.workspace ?? process.cwd();
-        const call = await run(binary, ["-w", workspace, "call", "--tool", "list_dir", "--args", JSON.stringify({ path: "." })], { timeoutMs: ctx.timeoutMs, signal });
+        // One level only, and the whole answer kept: a large workspace (a home directory) lists thousands of entries, and a
+        // listing cut at the usual output cap would not parse and would look like an engine failure.
+        const call = await run(binary, ["-w", workspace, "call", "--tool", "list_dir", "--args", JSON.stringify({ path: ".", max_depth: 1 })], { timeoutMs: ctx.timeoutMs, signal, maxStdout: 16_000_000 });
         let ok = false;
         try {
             ok = Array.isArray(JSON.parse(call.stdout).entries);

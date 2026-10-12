@@ -161,7 +161,7 @@ const f = (
 });
 
 /** Runs a process with a deadline; never throws. */
-function run(command: string, args: string[], opts: { cwd?: string; timeoutMs: number; signal: AbortSignal }): Promise<{ code: number | null; stdout: string; stderr: string; error?: string; timedOut: boolean }> {
+function run(command: string, args: string[], opts: { cwd?: string; timeoutMs: number; signal: AbortSignal; maxStdout?: number }): Promise<{ code: number | null; stdout: string; stderr: string; error?: string; timedOut: boolean }> {
   return new Promise((resolve) => {
     let stdout = "";
     let stderr = "";
@@ -172,7 +172,7 @@ function run(command: string, args: string[], opts: { cwd?: string; timeoutMs: n
       settled = true;
       clearTimeout(timer);
       opts.signal.removeEventListener("abort", onAbort);
-      resolve({ ...result, stdout: stdout.slice(0, 64_000), stderr: stderr.slice(0, 16_000), timedOut });
+      resolve({ ...result, stdout: stdout.slice(0, opts.maxStdout ?? 64_000), stderr: stderr.slice(0, 16_000), timedOut });
     };
     let child: ReturnType<typeof spawn>;
     try {
@@ -485,7 +485,9 @@ const engineCheck: Check = async (ctx, signal) => {
   }
   if (ctx.deep) {
     const workspace = ctx.config?.workspace ?? process.cwd();
-    const call = await run(binary, ["-w", workspace, "call", "--tool", "list_dir", "--args", JSON.stringify({ path: "." })], { timeoutMs: ctx.timeoutMs, signal });
+    // One level only, and the whole answer kept: a large workspace (a home directory) lists thousands of entries, and a
+    // listing cut at the usual output cap would not parse and would look like an engine failure.
+    const call = await run(binary, ["-w", workspace, "call", "--tool", "list_dir", "--args", JSON.stringify({ path: ".", max_depth: 1 })], { timeoutMs: ctx.timeoutMs, signal, maxStdout: 16_000_000 });
     let ok = false;
     try {
       ok = Array.isArray(JSON.parse(call.stdout).entries);
