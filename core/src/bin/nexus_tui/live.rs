@@ -438,7 +438,10 @@ fn event_loop(
                     }
                 }
                 match burst_text(&keys) {
-                    _ if !burst_may_answer(app.state.approval_id().is_some(), keys.len()) => None,
+                    _ if !burst_may_answer(app.state.approval_id().is_some(), keys.len()) => {
+                        app.state.note_input_ignored_by_approval(Instant::now());
+                        None
+                    }
                     Some(text) => {
                         app.state.on_paste(&text);
                         None
@@ -600,7 +603,8 @@ exit 0"#
         });
         // No decision before the panel is on screen: the first frame marks it shown and starts the grace period.
         assert_eq!(app.state.on_key_at(KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE), Instant::now()), None);
-        app.state.note_approval_shown(Instant::now());
+        // Drawn a moment after the operator last typed (so `y` may answer it).
+        app.state.note_approval_shown(Instant::now() + crate::live_state::APPROVAL_TYPING_RECENT);
         let Some(Overlay::Approval(approval)) = &app.state.overlay else {
             unreachable!("pump_until waited for the approval modal");
         };

@@ -7,7 +7,9 @@ sidecar's command log.
    after the grace period has passed. The queued keys must not decide.
 2. A burst `yyy` typed at once, long after the panel appeared, must not decide.
 3. A bracketed paste of `y⏎` must not decide.
-4. One deliberate `n` denies; on the next approval one deliberate `y` approves.
+4. After keys were typed into that panel, `n` is text; Esc denies. The next approval appears to an operator who is
+   not typing, and one deliberate `y` approves it.
+5. Typing that continues across the third panel's appearance never decides, nor does `n` after a pause; Esc denies.
 
 Usage: tui_approval_driver.py PLAN.json
 """
@@ -62,8 +64,12 @@ def main():
     s.send("\x1b[200~y\r\x1b[201~", settle=0.8)
     result["after_paste"] = {"decisions": decisions(commands), "panel_open": has(s.color.lines(), "Approval needed")}
 
-    # 4. One deliberate key denies; the next approval is approved with one deliberate key.
-    s.send("n", settle=0.5)
+    # 4. Keys were typed into this panel (the burst), so its letters are not answers: Esc denies. The pause lets the
+    # next approval appear to an operator who is not typing, where one deliberate `y` approves.
+    s.send("n", settle=0.3)
+    result["n_after_typing"] = decisions(commands)
+    s.pump(2.2)
+    s.send("\x1b", settle=0.5)
     result["after_deny"] = decisions(commands)
     wait_events(events, "approval.request", 2, 20, s)
     s.wait_screen(lambda lines: has(lines, "Approval needed"), 10, "the second approval panel")
@@ -79,6 +85,8 @@ def main():
     result["after_typing_across"] = {"decisions": decisions(commands), "panel_open": has(s.color.lines(), "Approval needed")}
     s.pump(1.0)
     s.send("n", settle=0.5)
+    result["n_after_typing_across"] = decisions(commands)
+    s.send("\x1b", settle=0.5)
     result["after_typing_then_deny"] = decisions(commands)
     wait_events(events, "turn.result", 1, 30, s)
     s.wait_idle()

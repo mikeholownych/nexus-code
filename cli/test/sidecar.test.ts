@@ -419,7 +419,7 @@ describe("SidecarServer: sessions and slash commands", () => {
   test("--resume restores a saved session and says so", async () => {
     await withSidecar(readOnlyTurn, "auto", async ({ events, app }) => {
       const notice = events.find((e) => e.type === "notice");
-      assert.equal(notice.text, "Resumed session old-session (2 messages).");
+      assert.equal(notice.text, "Resumed session old-session.");
       const history = events.find((e) => e.type === "history");
       assert.deepEqual(history.messages, [{ role: "user", text: "earlier question" }], "the earlier conversation is sent before the notice");
       assert.ok(events.indexOf(history) < events.indexOf(notice));

@@ -676,7 +676,8 @@ export class SidecarServer {
             this.app.getAgent().setActivePlan(session.activePlan);
         this.lastTurn = null;
         this.emitHistory(session.id, session.messages, session.lastTurn);
-        return { ok: true, message: `Resumed session ${session.id} (${session.messages.length} messages).` };
+        // The count of the conversation is in the history header shown just before; this names the session.
+        return { ok: true, message: `Resumed session ${session.id}.` };
     }
     /**
      * The resumed conversation for the client to show, in order: operator prompts, steering, the agent's replies, the

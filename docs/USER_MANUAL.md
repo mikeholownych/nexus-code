@@ -90,13 +90,14 @@ Press `<TAB>` at any prompt to autocomplete slash commands and directory paths.
   six rows shows `line n of m`. Drafts are kept while panels are open and across a sidecar crash.
 - **Approvals.** A panel sized to its content states what is proposed and on which target (`Proposed: create
   config.json · +1 −0`), shows file changes with the diff view, and offers three buttons — Approve (`y`), Approve all
-  later actions (`a`), Deny (`n`). Nothing is focused at first, so Enter alone decides nothing; ←/→ choose a button
-  (marked `▸`) and Enter takes it. `a` only selects "approve all later actions"; Enter confirms it. A decision key
-  counts only once the panel has been on screen briefly **and** you have paused typing (about half a second): keys
-  typed before the panel appeared or in the middle of typing, bursts and pastes never answer it; Esc denies once the
-  panel has been shown. The panel is not answerable until its change is visible — on a window too small to show it,
-  it asks you to enlarge the terminal. An approval that arrives while another panel (help, a diff review) is open
-  waits behind it; the composer line says so, and it opens when you close that panel.
+  later actions (`a`), Deny (`n`). A decision needs the panel to have been on screen briefly **and** a pause in typing
+  (about half a second, counted from when it appeared or your last key, whichever is later). `y`, `n` and `a` answer
+  it only if you were not typing when it appeared and have typed nothing into it since; otherwise the panel says
+  `typing ignored` and a decision is ←/→ to choose, then Enter right after (Esc denies). Nothing is focused at first,
+  so Enter alone decides nothing; `a` only selects "approve all later actions", Enter confirms it. Bursts and pastes
+  never answer it. The panel is answerable only while its change is visible — on a window too small to show it, it
+  asks you to enlarge the terminal, and timing starts again when it is drawn. An approval that arrives while another
+  panel (help, a diff review, another approval) is open waits behind it; the composer line says so.
 - **Recovery.** If the agent sidecar stops, the screen names the exit code or signal, keeps the last relevant
   diagnostic lines (progress chatter is dropped) and your draft; `r` starts a new agent, after which `/resume` reloads
   the saved conversation. Resuming (`-r` or `/resume`) shows the earlier conversation under a divider: your prompts,

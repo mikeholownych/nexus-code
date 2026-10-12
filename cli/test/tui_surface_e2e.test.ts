@@ -191,6 +191,7 @@ function assertSurface(r: any, events: any[], commands: any[], shows: (screen: s
   const approval = screens["10-approval"];
   assert.ok(shows(approval, "Approval needed") && shows(approval, "Proposed: create config.json") && shows(approval, "y Approve"), approval.join("\n"));
   assert.ok(r.approval_survived_buffered_keys);
+  assert.ok(r.letters_disarmed_hint, "keys typed just before the panel disarm its letters, and the panel says so");
   // Requirements: listed once, and the repeated replies are explained.
   const req = screens["14-requirements-incomplete"];
   assert.ok(shows(req, "R1 [open] add a README section") && shows(req, "asked the agent to continue"), req.join("\n"));

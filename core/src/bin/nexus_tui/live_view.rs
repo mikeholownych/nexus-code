@@ -534,7 +534,9 @@ fn render_approval(frame: &mut Frame, area: Rect, approval: &Approval, depth: th
     let hint = match approval.focus {
         Some(Verdict::ApprovedForSession) => vec![Span::styled("enter", key), Span::styled(" confirms approving this and every later action", muted)],
         Some(_) => vec![Span::styled("enter", key), Span::styled(" confirms  ", muted), Span::styled("←→", key), Span::styled(" choose  ", muted), Span::styled("↑↓", key), Span::styled(" scroll", muted)],
-        None => vec![Span::styled("y", key), Span::styled(" or ", muted), Span::styled("n", key), Span::styled(", or ", muted), Span::styled("←→", key), Span::styled(" then ", muted), Span::styled("enter", key), Span::styled(if narrow { "" } else { " · ↑↓ scroll the change" }, muted)],
+        None if approval.letters => vec![Span::styled("y", key), Span::styled(" or ", muted), Span::styled("n", key), Span::styled(", or ", muted), Span::styled("←→", key), Span::styled(" then ", muted), Span::styled("enter", key), Span::styled(if narrow { "" } else { " · ↑↓ scroll the change" }, muted)],
+        // The operator was typing: letters are not answers for this panel.
+        None => vec![Span::styled("typing ignored · ", muted), Span::styled("←→", key), Span::styled(" then ", muted), Span::styled("enter", key), Span::styled(" decides · ", muted), Span::styled("esc", key), Span::styled(" denies", muted)],
     };
     let lines: Vec<Line> = match &approval.patch {
         Some(patch) => {
@@ -960,6 +962,12 @@ fn render_composer(frame: &mut Frame, area: Rect, state: &LiveState, layout: &Co
         } else {
             "ask Nexus · / for commands · ? for keys"
         };
+        let room = usize::from(area.width.saturating_sub(PREFIX_WIDTH));
+        let placeholder: Cow<str> = if placeholder.chars().count() > room && room > 1 {
+            Cow::Owned(format!("{}…", placeholder.chars().take(room - 1).collect::<String>()))
+        } else {
+            Cow::Borrowed(placeholder)
+        };
         frame.render_widget(
             Paragraph::new(Span::styled(placeholder, Style::default().fg(MUTED).add_modifier(Modifier::DIM))),
             Rect { x: area.x + PREFIX_WIDTH, width: area.width.saturating_sub(PREFIX_WIDTH), height: 1, ..area },
@@ -1000,10 +1008,11 @@ fn render_status(frame: &mut Frame, area: Rect, state: &LiveState) {
             if let Some(id) = &session.session_id {
                 segments.push((5, vec![Span::styled(format!("  {id}"), muted)]));
             }
+            // The mode is kept at every width: whether changes need approval is never hidden.
             if session.mode == "review" {
                 segments.push((1, vec![Span::styled("  review mode", Style::default().fg(Color::Yellow))]));
             } else {
-                segments.push((4, vec![Span::styled(format!("  {}", session.mode), muted)]));
+                segments.push((1, vec![Span::styled(format!("  {}", session.mode), muted)]));
             }
             let room = usize::from(area.width).saturating_sub(7);
             let mut keep: Vec<bool> = vec![false; segments.len()];
@@ -1692,9 +1701,8 @@ fn composer_hint(state: &LiveState) -> Cow<'static, str> {
         (Link::Crashed { .. }, _) => " r restart · q quit ",
         _ if state.connecting() && state.submit_when_ready => " starting the agent… your message is sent when it is ready ",
         _ if state.connecting() => " starting the agent… ",
-        _ if matches!(state.overlay, Some(Overlay::Approval(_))) => {
-            " approval needed · y approve · n deny (after a pause in typing) "
-        }
+        _ if matches!(&state.overlay, Some(Overlay::Approval(approval)) if approval.letters) => " approval needed · y approve · n deny (after a pause) ",
+        _ if matches!(state.overlay, Some(Overlay::Approval(_))) => " approval needed · ←→ then enter (typing is ignored) · esc denies ",
         // An approval waits behind the open panel: say so, and how to reach it.
         _ if state.approval_waiting() => " approval waiting · esc closes this panel to review it ",
         _ if matches!(state.overlay, Some(Overlay::Help { .. })) => " esc close help ",
@@ -3655,12 +3663,99 @@ mod surface_tests {
         }
         let Some(Overlay::Approval(approval)) = &state.overlay else { panic!("the approval is still open") };
         assert_eq!(approval.focus, None, "the `a` in `add` did not even select approve-all");
+        assert!(!approval.letters, "letters no longer answer a panel that was typed into");
         assert!(!state.transcript.iter().any(|e| matches!(e, Entry::Decision { .. })));
-        // After a pause, one deliberate key decides.
+        // Even after a pause, a letter is text; Esc denies.
+        assert_eq!(state.on_key_at(KeyEvent::new(KeyCode::Char('n'), KeyModifiers::NONE), ms(at + 1000)), None);
         assert_eq!(
-            state.on_key_at(KeyEvent::new(KeyCode::Char('n'), KeyModifiers::NONE), ms(at + 1000)),
+            state.on_key_at(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE), ms(at + 1100)),
             Some(Action::Send(Command::Deny { id: "a1".into() }))
         );
+    }
+
+    /// Feeds `text` as typed keys starting at `start`, one every `gap` ms, with extra `pauses` (index → ms) before
+    /// given keys; returns the first decision and the time after the last key.
+    fn type_with_pauses(state: &mut LiveState, text: &str, start: Instant, gap: u64, pauses: &[(usize, u64)]) -> (Option<Action>, Instant) {
+        let mut at = start;
+        for (i, c) in text.chars().enumerate() {
+            if let Some((_, pause)) = pauses.iter().find(|(index, _)| *index == i) {
+                at += std::time::Duration::from_millis(*pause);
+            }
+            let code = if c == '\r' { KeyCode::Enter } else { KeyCode::Char(c) };
+            if let Some(action) = state.on_key_at(KeyEvent::new(code, KeyModifiers::NONE), at) {
+                return (Some(action), at);
+            }
+            at += std::time::Duration::from_millis(gap);
+        }
+        (None, at)
+    }
+
+    #[test]
+    fn typing_with_thinking_pauses_or_slowly_across_the_panel_never_decides() {
+        let t0 = Instant::now();
+        let ms = |n: u64| t0 + std::time::Duration::from_millis(n);
+        // The independent review's cases: pauses of 800 ms inside a sentence ending in Enter; a 700 ms-per-key typist;
+        // a pause during which the panel appears, then "yes do that".
+        let cases: [(&str, u64, &[(usize, u64)], u64); 3] = [
+            ("please make sure you add tests\r", 120, &[(21, 800), (30, 800)], 1200),
+            ("now try again and add tests\r", 700, &[], 2100),
+            ("yes do that", 120, &[(0, 300)], 0),
+        ];
+        for (text, gap, pauses, panel_at) in cases {
+            let mut state = state(true);
+            // Typing before the panel appears (the prompt or a steering message).
+            for (i, c) in "steer: ".chars().enumerate() {
+                state.on_key_at(KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE), ms(i as u64 * gap.min(200)));
+            }
+            let before = ms(7 * gap.min(200) + 400);
+            feed(&mut state, &[WRITE_APPROVAL]);
+            state.note_approval_shown(before + std::time::Duration::from_millis(panel_at));
+            let (decision, _) = type_with_pauses(&mut state, text, before, gap, pauses);
+            assert_eq!(decision, None, "typing {text:?} decided");
+            assert!(matches!(state.overlay, Some(Overlay::Approval(_))));
+        }
+    }
+
+    #[test]
+    fn arrows_and_tab_while_typing_and_a_late_enter_never_decide() {
+        let t0 = Instant::now();
+        let ms = |n: u64| t0 + std::time::Duration::from_millis(n);
+        let mut state = state(true);
+        feed(&mut state, &[WRITE_APPROVAL]);
+        state.note_approval_shown(ms(0));
+        // Typing, a cursor move inside the typing, a pause, then Enter.
+        state.on_key_at(KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE), ms(500));
+        assert_eq!(state.on_key_at(KeyEvent::new(KeyCode::Right, KeyModifiers::NONE), ms(600)), None);
+        assert_eq!(state.on_key_at(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE), ms(1500)), None, "→ inside typing selects nothing");
+        // A choice made after settling, but not directly before Enter, is not taken.
+        assert_eq!(state.on_key_at(KeyEvent::new(KeyCode::Right, KeyModifiers::NONE), ms(3000)), None);
+        assert_eq!(state.on_key_at(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE), ms(3100)), None);
+        assert_eq!(state.on_key_at(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE), ms(3200)), None, "the choice was not made by the key before Enter");
+        assert_eq!(state.on_key_at(KeyEvent::new(KeyCode::Left, KeyModifiers::NONE), ms(4000)), None);
+        assert_eq!(
+            state.on_key_at(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE), ms(4100)),
+            Some(Action::Send(Command::Deny { id: "a1".into() })),
+            "← from no choice selects Deny; Enter right after takes it"
+        );
+    }
+
+    #[test]
+    fn a_panel_that_stops_being_drawn_cannot_be_decided_and_a_second_request_waits() {
+        let mut state = state(true);
+        feed(&mut state, &[WRITE_APPROVAL]);
+        screen(&mut state, 100, 24);
+        // The terminal shrinks below the minimum: the panel is no longer on screen.
+        screen(&mut state, 30, 8);
+        let later = Instant::now() + std::time::Duration::from_secs(10);
+        assert_eq!(state.on_key_at(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE), later), None, "not on screen: nothing decides");
+        // A second request while the first is open waits; the first is answered first.
+        feed(&mut state, &[&WRITE_APPROVAL.replace("\"id\":\"a1\"", "\"id\":\"a2\"")]);
+        assert!(matches!(&state.overlay, Some(Overlay::Approval(a)) if a.id == "a1"));
+        assert!(state.approval_waiting());
+        screen(&mut state, 100, 24);
+        let later = Instant::now() + std::time::Duration::from_secs(20);
+        assert_eq!(state.on_key_at(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE), later), Some(Action::Send(Command::Deny { id: "a1".into() })));
+        assert!(matches!(&state.overlay, Some(Overlay::Approval(a)) if a.id == "a2" && !a.shown));
     }
 
     #[test]
@@ -3675,8 +3770,10 @@ mod surface_tests {
         let all = rows.join("\n");
         assert!(all.contains("+ { \"cache\": true }") || all.contains("+ {"), "the change is visible at 40x10:\n{all}");
         assert!(rows.iter().all(|r| unicode_width::UnicodeWidthStr::width(r.as_str()) <= 40));
+        // The `y` pressed while nothing was shown counted as typing: a deliberate → then Enter decides.
         let later = Instant::now() + std::time::Duration::from_secs(10);
-        assert_eq!(state.on_key_at(KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE), later), Some(Action::Send(Command::Approve { id: "a1".into(), always: false })));
+        assert_eq!(state.on_key_at(KeyEvent::new(KeyCode::Right, KeyModifiers::NONE), later), None);
+        assert_eq!(state.on_key_at(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE), later), Some(Action::Send(Command::Approve { id: "a1".into(), always: false })));
     }
 
     #[test]
@@ -3711,6 +3808,19 @@ mod surface_tests {
         let sent = state.take_outbox();
         assert!(matches!(sent.as_slice(), [Action::Send(Command::Slash { command, .. })] if command == "resume"), "{sent:?}");
         assert!(!state.submit_when_ready && state.composer.is_empty());
+    }
+
+    #[test]
+    fn narrow_windows_keep_the_mode_and_cut_the_placeholder_with_an_ellipsis_and_resume_reads_as_a_notice() {
+        let mut state = state(false);
+        for width in [40u16, 50, 60] {
+            let (rows, _) = screen(&mut state, width, 12);
+            assert!(rows[0].contains("auto"), "{width}: {}", rows[0]);
+            let last = rows.last().unwrap();
+            assert!(last.contains('…') || last.contains("? for keys"), "{width}: {last}");
+        }
+        feed(&mut state, &[r#"{"v":1,"type":"slash.result","id":"s1","command":"resume","success":true,"output":"Resumed session s1."}"#]);
+        assert_eq!(state.transcript.last(), Some(&Entry::Info("Resumed session s1.".into())));
     }
 
     #[test]

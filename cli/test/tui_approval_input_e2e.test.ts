@@ -64,10 +64,12 @@ ptyTest("queued keys, bursts and pastes never answer an approval; one deliberate
     assert.deepEqual(r.after_queued_keys, { decisions: [], panel_open: true }, "keys queued before the panel was on screen did not decide");
     assert.deepEqual(r.after_burst, { decisions: [], panel_open: true }, "a burst did not decide");
     assert.deepEqual(r.after_paste, { decisions: [], panel_open: true }, "a paste did not decide");
-    assert.deepEqual(r.after_deny, ["deny"], "one deliberate key denied");
+    assert.deepEqual(r.n_after_typing, [], "after typing into the panel, a letter is text");
+    assert.deepEqual(r.after_deny, ["deny"], "Esc denied");
     assert.deepEqual(r.after_approve, ["deny", "approve"], "one deliberate key approved");
     assert.deepEqual(r.after_typing_across, { decisions: ["deny", "approve"], panel_open: true }, "typing across the panel's appearance decided nothing");
-    assert.deepEqual(r.after_typing_then_deny, ["deny", "approve", "deny"], "a deliberate key after a pause decides");
+    assert.deepEqual(r.n_after_typing_across, ["deny", "approve"], "after typing across the panel, a letter is text even after a pause");
+    assert.deepEqual(r.after_typing_then_deny, ["deny", "approve", "deny"], "Esc then denies");
     assert.ok(!fs.existsSync(path.join(repo, "third.txt")), "the write proposed during typing did not happen");
     // Input typed into the frozen terminal is either discarded (the approval event reached the TUI first) or, when it
     // is read before the event (the sidecar reader thread was frozen too), goes where typing goes while the agent
@@ -77,6 +79,59 @@ ptyTest("queued keys, bursts and pastes never answer an approval; one deliberate
     assert.deepEqual(commands.filter((c) => c.type === "approve" || c.type === "deny").map((c) => c.id), ["approval-1", "approval-2", "approval-3"]);
     assert.ok(!fs.existsSync(path.join(repo, "first.txt")), "the denied write did not happen");
     assert.equal(fs.readFileSync(path.join(repo, "second.txt"), "utf8"), "two\n", "the approved write happened");
+  } finally {
+    await gw.close();
+    fs.rmSync(repo, { recursive: true, force: true });
+    fs.rmSync(home, { recursive: true, force: true });
+  }
+});
+
+function typingScript(_n: number, body: any): Reply {
+  const tools = (body?.messages ?? []).filter((m: any) => m.role === "tool").length;
+  if (tools === 0) return { kind: "tools", calls: [{ name: "write_file", args: { path: "first.txt", content: "one\n" } }], delayMs: 1200 };
+  return { kind: "text", content: "Done." };
+}
+
+ptyTest("typing with thinking pauses and a final Enter across the approval panel never decides; Esc then denies", { timeout: 120_000 }, async () => {
+  const gw = await startGateway(typingScript);
+  const repo = makeRepo();
+  const home = makeHome();
+  const logs = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-tui-approval-typing-"));
+  const plan = {
+    tui: TUI,
+    recorder: path.join(here, "helpers/sidecar_recorder.mjs"),
+    node: process.execPath,
+    sidecar_args: ["-w", repo, "-e", gw.url, "-m", "m", "--approve"],
+    env: {
+      HOME: home,
+      TERM: "xterm-256color",
+      COLORTERM: "truecolor",
+      NEXUS_DEBUG: "0",
+      NEXUS_RECORD_SIDECAR: SIDECAR,
+      NEXUS_RECORD_COMMANDS: path.join(logs, "commands.ndjson"),
+      NEXUS_RECORD_EVENTS: path.join(logs, "events.ndjson"),
+    },
+  };
+  const planFile = path.join(logs, "plan.json");
+  fs.writeFileSync(planFile, JSON.stringify(plan));
+  try {
+    const { code, out, err } = await new Promise<{ code: number | null; out: string; err: string }>((resolve) => {
+      const child = spawn("python3", [path.join(here, "helpers/tui_approval_typing_driver.py"), planFile], { stdio: ["ignore", "pipe", "pipe"] });
+      let out = "";
+      let err = "";
+      child.stdout.on("data", (c) => (out += c));
+      child.stderr.on("data", (c) => (err += c));
+      child.on("close", (c) => resolve({ code: c, out, err }));
+    });
+    assert.equal(code, 0, `driver failed:\n${err}\n${out.slice(-2000)}`);
+    const r = JSON.parse(out.trim().split("\n").pop()!);
+    assert.ok(r.approval_arrived && r.panel_seen_while_typing, JSON.stringify(r));
+    assert.deepEqual(r.after_typing, { decisions: [], panel_open: true }, "typing with pauses decided nothing");
+    assert.match(r.hint, /typing ignored/, "the panel says letters are not answers now");
+    assert.deepEqual(r.after_esc, ["deny"], "a deliberate Esc denies");
+    const events = fs.readFileSync(plan.env.NEXUS_RECORD_EVENTS, "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l));
+    assert.ok(events.filter((e) => e.type === "session.state").every((e) => e.mode === "review"), "review mode was never switched off");
+    assert.ok(!fs.existsSync(path.join(repo, "first.txt")), "nothing was written");
   } finally {
     await gw.close();
     fs.rmSync(repo, { recursive: true, force: true });

@@ -95,7 +95,10 @@ def main():
     s.pump(0.9)  # a pause in typing before the deliberate decision
     shot(s, "10-approval")
     result["approval_survived_buffered_keys"] = has(s.color.lines(), "Approval needed")
-    s.send("y", settle=0.4)
+    # Keys were typed just before it opened, so its letters are not answers: → selects Approve, Enter confirms.
+    result["letters_disarmed_hint"] = any("typing ignored" in l for l in s.color.lines())
+    s.send("\x1b[C", settle=0.2)
+    s.send("\r", settle=0.4)
     wait_events(events, "turn.result", 4, 30, s)
     s.wait_idle()
     result["draft_after_approval"] = s.color.lines()[-1]
