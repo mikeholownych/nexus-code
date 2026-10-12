@@ -235,6 +235,11 @@ function shortenedFrom(short, full) {
         return false;
     return full.slice(header.length + 1).startsWith(short.slice(header.length + 1, -LEGACY_SHORTENED.length));
 }
+/** A finding's note as recorded before findings had ids: its header without its id. */
+function withoutFindingId(note) {
+    const id = findingId(note);
+    return id && note.startsWith(`${FINDINGS_PREFIX}${id}; `) ? FINDINGS_PREFIX + note.slice(FINDINGS_PREFIX.length + id.length + 2) : note;
+}
 /** Findings notes of a serialized durable record, including records nested in it as opaque system text. */
 function recordedFindings(text) {
     if (!text.startsWith(DURABLE_RECORD_PREFIX))
@@ -252,6 +257,47 @@ function recordedFindings(text) {
         : note.startsWith(FINDINGS_PREFIX) && note.split("\n", 1)[0].endsWith(FINDINGS_LABEL) ? [note]
             : note.startsWith("Earlier system message: ") ? recordedFindings(note.slice("Earlier system message: ".length))
                 : []);
+}
+/**
+ * The highest finding id a serialized durable record names (shown, or listed in its note of findings not shown), and
+ * whether it shows any finding other than in full.
+ */
+function recordedFindingsState(text) {
+    const state = { highest: 0, reduced: false };
+    if (!text.startsWith(DURABLE_RECORD_PREFIX))
+        return state;
+    let notes;
+    try {
+        notes = JSON.parse(text.slice(DURABLE_RECORD_PREFIX.length)).notes;
+    }
+    catch {
+        return state;
+    }
+    if (!Array.isArray(notes))
+        return state;
+    for (const note of notes) {
+        if (typeof note !== "string")
+            continue;
+        let ids = [];
+        if (note.startsWith(FINDINGS_PREFIX)) {
+            ids = [findingId(note) ?? ""];
+            if (isCondensedFinding(note))
+                state.reduced = true;
+        }
+        else if (note.startsWith(ELIDED_FINDINGS_PREFIX)) {
+            const mentions = note.indexOf(". They mention: ");
+            ids = note.slice(0, mentions < 0 ? undefined : mentions).match(/\bF\d+\b/g) ?? [];
+            state.reduced = true;
+        }
+        else if (note.startsWith("Earlier system message: ")) {
+            const nested = recordedFindingsState(note.slice("Earlier system message: ".length));
+            ids = [`F${nested.highest}`];
+            state.reduced ||= nested.reduced;
+        }
+        for (const id of ids)
+            state.highest = Math.max(state.highest, Number(id.slice(1)) || 0);
+    }
+    return state;
 }
 /** `retainedObservations` of a serialized durable record: [note index, observation key] pairs. Malformed entries are ignored. */
 function recordedRetainedObservations(text) {
@@ -1041,14 +1087,20 @@ export class AutonomousAgent {
     getFindings() {
         return [...this.findingNotes];
     }
-    /** Starts from `findings` as the conversation's recorded findings (none when absent); later ids follow theirs. */
+    /**
+     * Starts from `findings` as the conversation's recorded findings (none when absent). Later ids follow both theirs and
+     * any the restored conversation's memory names, so a store saved before that memory was cannot lead to an id reused.
+     */
     restoreFindings(findings) {
         this.findingNotes = (findings ?? []).filter((note) => typeof note === "string" && note.startsWith(FINDINGS_PREFIX));
-        this.findingSeq = this.findingNotes.reduce((max, note) => Math.max(max, Number(findingId(note)?.slice(1) ?? 0)), 0);
+        const recorded = this.messages
+            .filter((message) => message.role === "system")
+            .map((message) => recordedFindingsState(normalizeMessageContent(message.content).text.join("")));
+        this.findingSeq = Math.max(this.findingNotes.reduce((max, note) => Math.max(max, Number(findingId(note)?.slice(1) ?? 0)), 0), ...recorded.map((state) => state.highest));
         this.distilledObservations = new Map();
         this.findingSources = new Map();
         this.findingsOutgrown = false;
-        this.findingsCondensed = false;
+        this.findingsCondensed = recorded.some((state) => state.reduced);
     }
     restoreSession(msgs, unverifiedChangesPending, objective, findings) {
         this.messages = [...msgs];
@@ -1101,7 +1153,7 @@ export class AutonomousAgent {
                 this.checkpointDurableState();
             else
                 this.stateManager?.recordProgress(this.currentTaskId, {
-                    ...(progress.messages ? { messages: this.messages, unverifiedChangesPending: this.hasPendingModifications } : {}),
+                    ...(progress.messages ? { messages: this.messages, findings: this.getFindings(), unverifiedChangesPending: this.hasPendingModifications } : {}),
                     ...(progress.unverifiedChangesPending !== undefined ? { unverifiedChangesPending: progress.unverifiedChangesPending } : {}),
                 });
         }
@@ -1146,7 +1198,6 @@ export class AutonomousAgent {
         return toolName === "spawn_subagent" || this.capabilityRegistry.getByToolName(toolName)?.mutating !== false;
     }
     resetConversation() {
-        this.restoreFindings(undefined);
         this.stepNoticeStep = 0;
         this.objective = undefined;
         this.compactions = 0;
@@ -1158,6 +1209,7 @@ export class AutonomousAgent {
                 content: this.buildSystemPrompt(),
             },
         ];
+        this.restoreFindings(undefined);
     }
     getHistoryCount() {
         return this.messages.length;
@@ -1639,8 +1691,8 @@ export class AutonomousAgent {
         }
         // One version of each finding, oldest first: the full text this conversation keeps over a condensed or indexed copy
         // an earlier record carries. Findings without ids (recorded by an earlier version) come first, as they are.
-        const findingSlot = durableNotes.findIndex((note) => note.startsWith(FINDINGS_PREFIX));
-        const findings = [];
+        const findingSlot = durableNotes.findIndex((note) => note.startsWith(FINDINGS_PREFIX) || note.startsWith(ELIDED_FINDINGS_PREFIX));
+        let findings = [];
         for (const note of [...durableNotes.filter((note) => note.startsWith(FINDINGS_PREFIX)), ...this.findingNotes]) {
             const id = findingId(note);
             const at = id ? findings.findIndex((held) => findingId(held) === id) : findings.findIndex((held) => !findingId(held) && shortenedFrom(held, note));
@@ -1652,8 +1704,28 @@ export class AutonomousAgent {
                 findings.push(note);
             }
         }
-        const idNumber = (note) => Number(findingId(note)?.slice(1) ?? 0);
-        findings.sort((left, right) => idNumber(left) - idNumber(right));
+        // A finding without an id is kept from here on under one (once: a copy already kept gives way to it), so it stays
+        // listed and readable when the memory no longer shows it.
+        const adopted = [];
+        findings = findings.flatMap((note) => {
+            if (findingId(note))
+                return [note];
+            const kept = this.findingNotes.find((held) => findingId(held) && (withoutFindingId(held) === note || shortenedFrom(note, withoutFindingId(held))));
+            if (kept)
+                return [];
+            const withId = `${FINDINGS_PREFIX}F${++this.findingSeq}; ${note.slice(FINDINGS_PREFIX.length)}`;
+            const stored = this.findingNotes.indexOf(note);
+            if (stored >= 0)
+                this.findingNotes[stored] = withId;
+            else
+                adopted.push(withId);
+            return [withId];
+        });
+        if (adopted.length)
+            this.findingNotes = [...adopted, ...this.findingNotes];
+        // Oldest first: as kept (findings kept only in an earlier record, before those kept here).
+        const position = (note) => this.findingNotes.findIndex((held) => findingId(held) === findingId(note));
+        findings.sort((left, right) => position(left) - position(right));
         for (let index = durableNotes.length - 1; index >= 0; index--) {
             const note = durableNotes[index];
             if (note.startsWith(FINDINGS_PREFIX) || note.startsWith(ELIDED_FINDINGS_PREFIX) || note === FINDINGS_OUTGROWN)
@@ -1693,8 +1765,9 @@ export class AutonomousAgent {
         if (this.findingsOutgrown)
             durableNotes.push(FINDINGS_OUTGROWN);
         // What this memory holds of each observation's findings: shown in full, or kept in full and shown only condensed,
-        // indexed or by id. Findings without ids are held only while some copy of them is shown. A re-run is told findings
-        // are held only while they are; an observation whose findings are not is recorded again when it next leaves.
+        // indexed or by id. A copy an earlier version shortened is held only while shown, as its full text was never kept.
+        // A re-run is told findings are held only while they are; an observation whose findings are not is recorded again
+        // when it next leaves.
         const findingsHeld = (key) => {
             let held;
             findings.forEach((note, index) => {
@@ -1704,10 +1777,9 @@ export class AutonomousAgent {
                 const from = sources ? sources.has(key) : [`from ${key};`, `from ${key} (partial)`, `; ${key};`, `; ${key} (partial)`].some((listed) => header.includes(listed));
                 if (!from)
                     return;
-                const inFull = index >= elided && !isCondensedFinding(shown[index]);
-                if (inFull || (index >= elided && !findingId(note)))
+                if (index >= elided && !isCondensedFinding(shown[index]))
                     held = "full";
-                else if (findingId(note) && held === undefined)
+                else if (findingId(note) && !note.endsWith(LEGACY_SHORTENED) && held === undefined)
                     held = "condensed";
             });
             return held;

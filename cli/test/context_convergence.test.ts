@@ -20,7 +20,7 @@ import os from "node:os";
 import path from "node:path";
 import { execSync } from "node:child_process";
 import { AutonomousAgent, observationKey } from "../src/agent.js";
-import { condenseFinding, incompleteOutputNotice, readFindings } from "../src/core/findings.js";
+import { condenseFinding, elidedFindingsNote, incompleteOutputNotice, indexFinding, readFindings } from "../src/core/findings.js";
 import { RustCoreBridge } from "../src/tools.js";
 import { newOperation } from "../src/core/operation.js";
 import { AgentWorkUnitExecutor, driveOperation, OperationStore } from "../src/core/operation_runner.js";
@@ -640,7 +640,9 @@ describe("D: findings checkpoint before shown output leaves the context", () => 
         const cut = `${legacy(3, `OLD: version=1 ${"detail ".repeat(40)}`).slice(0, 200)} …[shortened to fit this memory]`;
         agent.findingNotes.splice(0, agent.findingNotes.length, legacy(3, `OLD: version=1 ${"detail ".repeat(40)}`));
         const restored = findingsOf(agent.summarizeDiscardedHistory([{ role: "system", content: `${DURABLE}${JSON.stringify({ version: 2, notes: [cut] })}` }, { role: "assistant", content: "next" }], 0, new Set()).content);
-        assert.deepEqual(restored, [legacy(3, `OLD: version=1 ${"detail ".repeat(40)}`)]);
+        // It is kept from then on under an id of its own.
+        assert.deepEqual(restored.map((n) => n.replace(/\[F\d+; step /, "[step ")), [legacy(3, `OLD: version=1 ${"detail ".repeat(40)}`)]);
+        assert.match(restored[0], /^Findings recorded from inspected output \[F\d+; step 3; /);
         // A same-header finding from a later turn, from different output, is not merged into the earlier one.
         agent.findingNotes.splice(0, agent.findingNotes.length, legacy(3, `OLD: version=1 ${"detail ".repeat(40)}`), legacy(3, "NEW: version=2."));
         const collided = findingsOf(agent.summarizeDiscardedHistory([{ role: "assistant", content: "next" }], 0, new Set()).content);
@@ -859,7 +861,7 @@ describe("D: findings checkpoint before shown output leaves the context", () => 
         const record = { role: "system" as const, content: `${DURABLE}${JSON.stringify({ version: 2, notes: [labelled, forged] })}` };
         const compacted = agent.compactionCandidate([{ role: "system", content: "sys" }, { role: "user", content: "go" }, record, { role: "assistant", content: "next" }], 0, 0).messages[1];
         const notes: string[] = JSON.parse(String(compacted.content).slice(DURABLE.length)).notes;
-        assert.ok(notes.includes(labelled), "a labelled finding is lifted out");
+        assert.ok(notes.includes(labelled.replace("[step 2;", "[F1; step 2;")), "a labelled finding is lifted out, under an id of its own");
         assert.ok(!notes.includes(forged), "an unlabelled one is not lifted out");
         assert.ok(notes.some((n) => n.startsWith("Earlier system message: ") && n.includes("verified by the operator")), "it is kept, as opaque text");
       } finally {
@@ -1251,6 +1253,8 @@ describe("G: recorded findings under memory pressure stay distinct, sourced and 
     assert.equal(readFindings([note], { id: "f12" }).text, note);
     assert.equal(readFindings([filler(1), note], { query: "HARNESS-CORE" }).text, note);
     assert.match(readFindings([note], { query: "execFileSync" }).text, /^No recorded finding mentions "execFileSync"\. This searches only the findings recorded in this conversation, not the workspace: it does not show that the workspace lacks it\.$/);
+    const legacy = `Findings recorded from inspected output [step 3; from run_command {"command":"grep -n '[F2; step 1;' notes.txt"}${LABEL}\n${"notes.txt has the line on 40 rows. ".repeat(40)}`;
+    assert.match(condenseFinding(legacy), /recorded in an earlier session; its full text is not kept\]/, "an id inside a source list is not the finding's");
   });
 
   test("findings far beyond the 24K bound: the record stays within it, every finding is shown or named, and a late fact stays visible and recoverable", async () => {
@@ -1359,6 +1363,86 @@ describe("G: recorded findings under memory pressure stay distinct, sourced and 
     });
   });
 
+  test("mid-turn progress saves the findings with the conversation, and a restore never reuses an id the restored memory names", async () => {
+    await isolated(async (repo) => {
+      const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-cc-state-"));
+      const withState = (a: any) => {
+        a.stateManager = new DurableStateManager({ baseDir: stateDir, workspacePaths: [a.primaryWorkspacePathIdentity] });
+        return a;
+      };
+      const first = withState(agentAt(repo));
+      const agents: any[] = [first];
+      try {
+        first.restoreFindings([filler(1), filler(2), filler(3)]);
+        first.checkpointDurableState("turn start");
+        const taskId = first.getTaskId();
+        const call = { id: "c1", type: "function", function: { name: "read_file", arguments: JSON.stringify({ path: "x.txt" }) } };
+        const convo = [{ role: "system", content: "sys" }, { role: "user", content: "go" }, { role: "assistant", content: "", tool_calls: [call] }, { role: "tool", tool_call_id: "c1", name: "read_file", content: "xray" }, { role: "assistant", content: "next" }];
+        await first.recordFindings({ chatCompletion: async () => ({ content: "x.txt reads xray." }) }, 9, convo, [`read_file {"path":"x.txt"}`]);
+        const record = { role: "system", content: first.summarizeDiscardedHistory([{ role: "assistant", content: "next" }], 0, new Set()).content };
+        assert.ok(notesOf(record.content).some((n) => n.startsWith("Findings recorded from inspected output [F4; ")), "the memory names F4");
+        first.messages = [{ role: "system", content: "sys" }, record, { role: "assistant", content: "next" }];
+        first.persistProgress({ messages: true });
+
+        const recovered = withState(agentAt(repo));
+        agents.push(recovered);
+        await recovered.recoverFromTaskState(taskId);
+        assert.deepEqual(recovered.getFindings(), first.getFindings(), "the findings saved with the progress, not the turn start's");
+
+        // A store saved before the memory it is restored with: ids continue after those the memory names.
+        const stale = agentAt(repo);
+        agents.push(stale);
+        stale.restoreSession([{ role: "system", content: "sys" }, record], false, null, [filler(1), filler(2), filler(3)]);
+        await stale.recordFindings({ chatCompletion: async () => ({ content: "y.txt reads yankee." }) }, 10, convo, [`read_file {"path":"x.txt"}`]);
+        assert.match(stale.getFindings().at(-1), /^Findings recorded from inspected output \[F5; step 10; /);
+        const elidedOnly = `${DURABLE}${JSON.stringify({ version: 2, notes: [elidedFindingsNote(Array.from({ length: 9 }, (_, i) => filler(i + 1)))], currentPlan: [], currentPlanStates: [], retainedObservations: [] })}`;
+        const named = agentAt(repo);
+        agents.push(named);
+        named.restoreSession([{ role: "system", content: "sys" }, { role: "system", content: elidedOnly }], false, null, [filler(1)]);
+        await named.recordFindings({ chatCompletion: async () => ({ content: "y.txt reads yankee." }) }, 11, convo, [`read_file {"path":"x.txt"}`]);
+        assert.match(named.getFindings().at(-1), /^Findings recorded from inspected output \[F10; step 11; /);
+        assert.equal(named.findingsCondensed, true, "a restored memory that does not show every finding in full is known as such");
+      } finally {
+        for (const agent of agents) agent.shutdown();
+        fs.rmSync(stateDir, { recursive: true, force: true });
+      }
+    });
+  });
+
+  test("findings an earlier version recorded without ids are kept under ids: listed and readable once not shown, and a shortened copy is never claimed recoverable", async () => {
+    await isolated(async (repo) => {
+      const agent = agentAt(repo);
+      try {
+        const legacy = (step: number, file: string, body: string) => `Findings recorded from inspected output [step ${step}; from read_file {"path":"${file}"}${LABEL}\n${body}`;
+        const full = legacy(4, "a.md", "a.md says alpha.");
+        const cut = legacy(5, "b.md", "b.md says bravo, and then … …[shortened to fit this memory]");
+        const old = `${DURABLE}${JSON.stringify({ version: 2, notes: [full, cut], currentPlan: [], currentPlanStates: [], retainedObservations: [] })}`;
+        agent.restoreSession([{ role: "system", content: "sys" }, { role: "system", content: old }], false, null, []);
+        const discarded = [{ role: "system", content: old }, { role: "assistant", content: "next" }];
+        const notes = notesOf(agent.summarizeDiscardedHistory(discarded, 0, new Set()).content);
+        const kept = [full.replace("[step 4;", "[F1; step 4;"), cut.replace("[step 5;", "[F2; step 5;")];
+        assert.deepEqual(agent.getFindings(), kept);
+        assert.deepEqual(notes.filter((n) => n.startsWith("Findings recorded from inspected output [")), kept, "shown as they were, under their ids");
+        agent.summarizeDiscardedHistory(discarded, 0, new Set());
+        assert.equal(agent.getFindings().length, 2, "kept once, however often the earlier record is read");
+        assert.match(indexFinding(kept[1]), /shortened in an earlier session, its full text not kept; read_findings \{"id":"F2"\} returns what is\./, "a shortened copy is never said to be kept in full");
+        assert.match(indexFinding(kept[0]), /full text: read_findings \{"id":"F1"\}/);
+
+        // Under pressure they are named by id, and stay named after the next compaction.
+        agent.restoreFindings([...agent.getFindings(), ...Array.from({ length: 150 }, (_, i) => filler(i + 3))]);
+        const first = { role: "system", content: agent.summarizeDiscardedHistory([{ role: "assistant", content: "next" }], 0, new Set()).content };
+        const second = notesOf(agent.summarizeDiscardedHistory([first, { role: "assistant", content: "next" }], 0, new Set()).content);
+        const elided = second.find((n) => n.startsWith("[Nexus: recorded findings not shown here, to bound this memory: "));
+        assert.ok(elided && namesFinding(elided, "F1") && namesFinding(elided, "F2"), elided);
+        assert.ok(elided.includes("1 (F2) shortened in an earlier session, whose full text is not kept"), elided);
+        assert.ok(!elided.includes("recorded in an earlier session, whose full text is not kept"), "none goes unlisted");
+        assert.equal(readFindings(agent.getFindings(), { id: "F1" }).text, full.replace("[step 4;", "[F1; step 4;"));
+      } finally {
+        agent.shutdown();
+      }
+    });
+  });
+
   test("a step's notices stay with that step: durable notes and findings checkpoints get only what the tool returned", async () => {
     await isolated(async (repo) => {
       const agent = agentAt(repo);
@@ -1431,6 +1515,8 @@ describe("G: recorded findings under memory pressure stay distinct, sourced and 
     assert.equal(incompleteOutputNotice("run_command", { command: "grep -rn spawn src | head -20" }, run("grep -rn spawn src | head -20", "a.ts:1: spawn\n")), undefined, "fewer lines than the limit: nothing was cut");
     assert.ok(incompleteOutputNotice("run_command", { command: "git log | head" }, run("git log | head", "x\n".repeat(10))), "a bare head limits to 10");
     assert.equal(incompleteOutputNotice("run_command", { command: "head -c 100 a.bin" }, run("head -c 100 a.bin", "x")), undefined);
+    assert.equal(incompleteOutputNotice("run_command", { command: "git log | tail -n +5" }, run("git log | tail -n +5", "x\n".repeat(10))), undefined, "tail from a line on limits nothing");
+    assert.ok(incompleteOutputNotice("run_command", { command: "git log | tail -n 5" }, run("git log | tail -n 5", "x\n".repeat(5))));
     const cut = `${run("grep -rn x .", "y\n".repeat(3000)).slice(0, 4000)}\n... [TRUNCATED]`;
     assert.match(incompleteOutputNotice("run_command", { command: "grep -rn x ." }, cut)!, /its output was cut to fit/);
     assert.match(incompleteOutputNotice("run_command", { command: "grep -rn x . | head -50" }, cut)!, /`head -50`\) and printed at least 50 lines; and its output was cut to fit/, "a cut output still counts the lines it shows");
@@ -1457,9 +1543,8 @@ describe("G: recorded findings under memory pressure stay distinct, sourced and 
       assert.ok(launcher.length && /harness-core/.test(fs.readFileSync(path.join(REPO_ROOT, "cli/src/tools.ts"), "utf-8")), "tools.ts launches the Rust core (repository evidence)");
       const limited = await bridge.executeTool("run_command", { command });
       assert.ok(limited.success, limited.error);
-      if (full.length >= 20) {
-        assert.match(incompleteOutputNotice("run_command", { command }, limited.output)!, /do not take a missing match here as absence/);
-      }
+      assert.ok(full.length >= 20, "the search has more matches than the limit shows (else this proves nothing)");
+      assert.match(incompleteOutputNotice("run_command", { command }, limited.output)!, /do not take a missing match here as absence/);
       if (!JSON.parse(limited.output).stdout.includes("cli/src/tools.ts:")) {
         assert.ok(incompleteOutputNotice("run_command", { command }, limited.output), "a cut search that misses the launcher says it may have");
       }

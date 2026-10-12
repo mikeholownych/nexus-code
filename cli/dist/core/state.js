@@ -278,9 +278,9 @@ export class DurableStateManager {
         return state;
     }
     /**
-     * Durably records a task's progress within a turn: the conversation so far and/or its unverified-change
-     * obligation. Once the conversation holds a settled operation's result, the operation record is cleared; an
-     * in-flight record is kept so recovery still detects it.
+     * Durably records a task's progress within a turn: the conversation so far (with the findings its memory names)
+     * and/or its unverified-change obligation. Once the conversation holds a settled operation's result, the operation
+     * record is cleared; an in-flight record is kept so recovery still detects it.
      */
     recordProgress(taskId, progress) {
         const state = this.loadTaskState(taskId);
@@ -289,6 +289,8 @@ export class DurableStateManager {
             if (state.currentOperation && state.currentOperation.status !== "in_flight")
                 state.currentOperation = null;
         }
+        if (progress.findings)
+            state.findings = progress.findings;
         if (progress.unverifiedChangesPending !== undefined)
             state.unverifiedChangesPending = progress.unverifiedChangesPending;
         this.saveTaskState(state);

@@ -13,7 +13,9 @@
 import type { CanonicalCapability } from "./capabilities.js";
 
 /** Id of a finding recorded by this version ("F12"); findings lifted from older records have none. */
-const FINDING_ID = /^[^\n]*?\[(F\d+); step \d+;/;
+const FINDING_ID = /^Findings recorded from inspected output \[(F\d+); step \d+;/;
+/** The end of a copy an earlier version shortened; its full text was never kept. */
+const LEGACY_SHORTENED = " …[shortened to fit this memory]";
 const CONDENSED_MARK = "[Condensed to fit this memory: ";
 const INDEXED_MARK = "[Indexed only, to fit this memory: ";
 /** Characters a condensed finding's claims may take, and the least each shown claim keeps. */
@@ -36,7 +38,7 @@ function headerAndBody(note: string): [string, string] {
 /** Whether a findings note is shown condensed or only indexed (not in full). */
 export function isCondensedFinding(note: string): boolean {
   const body = headerAndBody(note)[1];
-  return body.startsWith(CONDENSED_MARK) || body.startsWith(INDEXED_MARK) || body.endsWith(" …[shortened to fit this memory]");
+  return body.startsWith(CONDENSED_MARK) || body.startsWith(INDEXED_MARK) || body.endsWith(LEGACY_SHORTENED);
 }
 
 export function isIndexedFinding(note: string): boolean {
@@ -54,21 +56,22 @@ export function claimsOf(body: string): string[] {
 
 /**
  * What a text refers to: paths (with line numbers), file names, `code spans`, and compound identifiers
- * (camelCase, PascalCase, snake_case, kebab-case), in first-mention order, cut to `limit` characters.
+ * (camelCase, PascalCase, snake_case, kebab-case), in first-mention order, cut to `limit` characters. Texts given as
+ * several parts are read in order, only as far as the limit needs.
  */
-export function mentionsOf(text: string, limit = MENTIONS_CHARS): string {
-  const found: string[] = [];
-  const add = (value: string) => {
-    const term = value.trim().replace(/[.,;:)]+$/, "");
-    if (term.length >= 3 && !found.includes(term)) found.push(term);
-  };
+export function mentionsOf(text: string | Iterable<string>, limit = MENTIONS_CHARS): string {
   const pattern = /`([^`\n]{2,80})`|((?:[\w.-]+\/)+[\w.-]+(?::\d+(?:[-–]\d+)?)?)|(\b[\w-]+\.(?:ts|tsx|js|mjs|cjs|rs|md|json|toml|sh|py|ya?ml|lock)(?::\d+(?:[-–]\d+)?)?\b)|(\b[a-z]+(?:[A-Z][a-z0-9]+)+\b|\b[A-Z][a-z0-9]+(?:[A-Z][a-z0-9]*)+\b|\b[a-z][a-z0-9]*(?:_[a-z0-9]+)+\b|\b[a-z][a-z0-9]+(?:-[a-z0-9]+)+\b)/g;
-  for (const match of text.matchAll(pattern)) add(match[1] ?? match[2] ?? match[3] ?? match[4] ?? "");
+  const seen = new Set<string>();
   let out = "";
-  for (const term of found) {
-    const next = out ? `${out}, ${term}` : term;
-    if (next.length > limit) return `${out}, …`;
-    out = next;
+  for (const part of typeof text === "string" ? [text] : text) {
+    for (const match of part.matchAll(pattern)) {
+      const term = (match[1] ?? match[2] ?? match[3] ?? match[4] ?? "").trim().replace(/[.,;:)]+$/, "");
+      if (term.length < 3 || seen.has(term)) continue;
+      seen.add(term);
+      const next = out ? `${out}, ${term}` : term;
+      if (next.length > limit) return `${out}, …`;
+      out = next;
+    }
   }
   return out;
 }
@@ -92,8 +95,12 @@ function shortHeader(header: string): string {
   return `${header.slice(0, from + "; from ".length)}${claimStart(sources, HEADER_SOURCES_CHARS)} (more sources in its full text)${header.slice(label)}`;
 }
 
-function recovery(id: string | undefined): string {
-  return id ? `full text: read_findings {"id":"${id}"}` : "recorded in an earlier session; its full text is not kept";
+function recovery(note: string): string {
+  const id = findingId(note);
+  if (!id) return "recorded in an earlier session; its full text is not kept";
+  return note.endsWith(LEGACY_SHORTENED)
+    ? `shortened in an earlier session, its full text not kept; read_findings {"id":"${id}"} returns what is`
+    : `full text: read_findings {"id":"${id}"}`;
 }
 
 /**
@@ -118,7 +125,7 @@ export function condenseFinding(note: string): string {
   const parts = [`${claims.length} claim${claims.length === 1 ? "" : "s"}`];
   if (cut) parts.push(`${cut} cut to ${cut === 1 ? "its" : "their"} start`);
   if (hidden.length) parts.push(`${hidden.length} not shown`);
-  const lines = [`${CONDENSED_MARK}${parts.join(", ")}; ${recovery(findingId(note))}]`, ...shown.map((start) => `- ${start}`)];
+  const lines = [`${CONDENSED_MARK}${parts.join(", ")}; ${recovery(note)}]`, ...shown.map((start) => `- ${start}`)];
   if (hidden.length) lines.push(`Claims not shown mention: ${mentionsOf(hidden.join("\n")) || "(no paths or symbols)"}`);
   return `${shortHeader(header)}\n${lines.join("\n")}`;
 }
@@ -129,7 +136,7 @@ export function indexFinding(note: string): string {
   if (isIndexedFinding(note)) return note;
   const text = body.startsWith(CONDENSED_MARK) ? body.slice(body.indexOf("\n") + 1) : body;
   const claims = claimsOf(text);
-  return `${shortHeader(header)}\n${INDEXED_MARK}${claims.length} claim${claims.length === 1 ? "" : "s"} not shown; ${recovery(findingId(note))}. It mentions: ${mentionsOf(text) || "(no paths or symbols)"}]`;
+  return `${shortHeader(header)}\n${INDEXED_MARK}${claims.length} claim${claims.length === 1 ? "" : "s"} not shown; ${recovery(note)}. It mentions: ${mentionsOf(text) || "(no paths or symbols)"}]`;
 }
 
 function idRanges(ids: string[]): string {
@@ -146,12 +153,16 @@ function idRanges(ids: string[]): string {
 
 /** The one note naming the findings the record does not show: their ids, what they mention, and how to read them. */
 export function elidedFindingsNote(notes: string[]): string {
-  const ids = notes.map(findingId).filter((id): id is string => Boolean(id));
-  const unkept = notes.length - ids.length;
+  const ids = notes.filter((note) => !note.endsWith(LEGACY_SHORTENED)).map(findingId).filter((id): id is string => Boolean(id));
+  const shortened = notes.filter((note) => note.endsWith(LEGACY_SHORTENED)).map(findingId).filter((id): id is string => Boolean(id));
+  const unkept = notes.length - ids.length - shortened.length;
   const parts: string[] = [];
   if (ids.length) parts.push(`${ids.length} (${idRanges(ids)}), whose full text is kept: read_findings {"id":"${ids[0]}"} returns one, {"query":"…"} searches all`);
+  if (shortened.length) parts.push(`${shortened.length} (${idRanges(shortened)}) shortened in an earlier session, whose full text is not kept (read_findings returns what is)`);
   if (unkept) parts.push(`${unkept} recorded in an earlier session, whose full text is not kept`);
-  const mentions = mentionsOf(notes.map((note) => headerAndBody(note)[1]).join("\n"), ELIDED_MENTIONS_CHARS);
+  const mentions = mentionsOf((function* () {
+    for (const note of notes) yield headerAndBody(note)[1];
+  })(), ELIDED_MENTIONS_CHARS);
   return `${ELIDED_FINDINGS_PREFIX}${parts.join("; ")}. They mention: ${mentions || "(no paths or symbols)"}]`;
 }
 
@@ -241,12 +252,16 @@ function parseJson(text: string): any {
   }
 }
 
-/** Lines of output limiters in a shell command: `| head -20`, `| head -n 20`, `| tail -5`, `| head` (10). */
+/**
+ * Lines of output limiters in a shell command: `| head -20`, `| head -n 20`, `| tail -5`, `| head` (10). `| tail -n +5`
+ * prints everything from a line on, so it is not one.
+ */
 function outputLimits(command: string): Array<{ text: string; lines: number }> {
   const limits: Array<{ text: string; lines: number }> = [];
   for (const match of command.matchAll(/\|\s*(head|tail)\b([^|;&\n)]*)/g)) {
     const options = match[2];
     if (/(^|\s)-c\b|--bytes/.test(options)) continue;
+    if (match[1] === "tail" && /(?:-n\s*|--lines[= ]|^\s*|\s)\+\d/.test(options)) continue;
     const count = /(?:-n\s*|--lines[= ])\+?(\d+)|(?:^|\s)-(\d+)\b/.exec(options);
     const lines = count ? Number(count[1] ?? count[2]) : 10;
     limits.push({ text: `${match[1]}${options.replace(/\s+$/, "")}`.trim(), lines });
