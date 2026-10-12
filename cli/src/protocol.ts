@@ -60,6 +60,11 @@ export type SidecarEvent =
       preview: string;
       truncated: boolean;
       total_lines: number;
+      /** Changed and context lines in the whole diff (what "N more lines" counts), and its hunks. */
+      diff_lines: number;
+      hunks: number;
+      /** The complete diff on disk (redacted), kept for the session whatever the in-memory limits. */
+      full_path?: string;
       note?: string;
     }
   | { type: "steer.ack"; id: string; status: SteerStatus; message: string; text?: string }
@@ -91,8 +96,12 @@ export type SidecarEvent =
       args: string;
       output: string;
       duration_ms: number | null;
-      /** Full unified diff of the change this call made, when it changed a file. */
+      /** Full unified diff of the change this call made, when it changed a file (at most MAX_DIFF_DETAIL chars). */
       diff?: string;
+      /** Characters in the complete diff; more than `diff` holds when it was cut to the in-memory limit. */
+      diff_chars?: number;
+      /** The complete diff on disk. */
+      diff_path?: string;
     }
   | { type: "receipt"; id: string; sections: ReceiptSection[] }
   | { type: "error"; id?: string; code: ErrorCode; message: string }

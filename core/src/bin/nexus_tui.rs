@@ -30,6 +30,12 @@ mod redact;
 mod sidecar;
 #[path = "nexus_tui/models.rs"]
 mod models;
+#[path = "nexus_tui/theme.rs"]
+mod theme;
+#[path = "nexus_tui/highlight.rs"]
+mod highlight;
+#[path = "nexus_tui/diff_view.rs"]
+mod diff_view;
 #[path = "nexus_tui/live_state.rs"]
 mod live_state;
 #[path = "nexus_tui/live_view.rs"]

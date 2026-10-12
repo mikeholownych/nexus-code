@@ -20,7 +20,8 @@ const GROUP_GRACE: Duration = Duration::from_millis(300);
 
 #[derive(Debug)]
 pub enum SidecarMsg {
-    Event(Event),
+    /// Boxed: events are large and the other messages carry nothing.
+    Event(Box<Event>),
     /// A stdout line that is not a protocol event. Its text is dropped: it bypassed the sidecar's redaction.
     Malformed,
     /// Stdout reached end of file; the child is exiting or has exited.
@@ -87,7 +88,7 @@ impl Sidecar {
                 let message = if cut {
                     SidecarMsg::Malformed
                 } else {
-                    parse_event(&line).map_or(SidecarMsg::Malformed, SidecarMsg::Event)
+                    parse_event(&line).map_or(SidecarMsg::Malformed, |event| SidecarMsg::Event(Box::new(event)))
                 };
                 events.send(message).is_ok()
             });
@@ -278,7 +279,7 @@ mod tests {
         .unwrap();
         assert!(matches!(
             rx.recv_timeout(WAIT).unwrap(),
-            SidecarMsg::Event(Event::Hello { protocol: 1, .. })
+            SidecarMsg::Event(event) if matches!(*event, Event::Hello { protocol: 1, .. })
         ));
         assert!(matches!(
             rx.recv_timeout(WAIT).unwrap(),
@@ -306,7 +307,7 @@ mod tests {
         .unwrap();
         assert!(matches!(
             rx.recv_timeout(Duration::from_secs(30)).unwrap(),
-            SidecarMsg::Event(Event::Hello { .. })
+            SidecarMsg::Event(event) if matches!(*event, Event::Hello { .. })
         ));
         assert!(matches!(rx.recv_timeout(WAIT).unwrap(), SidecarMsg::Closed));
         assert_eq!(sidecar.reap(WAIT), Some(0));
@@ -338,7 +339,7 @@ echo '{"v":1,"type":"hello","protocol":1,"pid":7}'"#),
         }
         assert!(matches!(
             rx.recv_timeout(WAIT).unwrap(),
-            SidecarMsg::Event(Event::Hello { .. })
+            SidecarMsg::Event(event) if matches!(*event, Event::Hello { .. })
         ));
         assert!(matches!(rx.recv_timeout(WAIT).unwrap(), SidecarMsg::Closed));
         assert_eq!(sidecar.reap(WAIT), Some(0));
@@ -510,10 +511,11 @@ echo '{"v":1,"type":"hello","protocol":1,"pid":7}'"#),
         let sidecar = Sidecar::spawn(&spec, tx).unwrap();
         assert!(matches!(
             rx.recv_timeout(Duration::from_secs(20)).unwrap(),
-            SidecarMsg::Event(Event::Hello { protocol: 1, .. })
+            SidecarMsg::Event(event) if matches!(*event, Event::Hello { protocol: 1, .. })
         ));
         match rx.recv_timeout(Duration::from_secs(20)).unwrap() {
-            SidecarMsg::Event(Event::SessionState { model, busy, .. }) => {
+            SidecarMsg::Event(event) if matches!(*event, Event::SessionState { .. }) => {
+                let Event::SessionState { model, busy, .. } = *event else { unreachable!() };
                 assert_eq!(model, "m");
                 assert!(!busy);
             }

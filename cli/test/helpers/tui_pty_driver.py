@@ -258,8 +258,8 @@ def main():
     s.pump(0.5)
     whole = s.squeezed()
     result["long_turn"] = {
-        "diff_shown": "±notes.txtmodified+1-1" in whole,
-        "diff_lines_shown": "-line2" in whole and "+linetwo" in whole,
+        "diff_shown": "Editednotes.txt+1−1" in whole,
+        "diff_lines_shown": "−line2" in whole and "+linetwo" in whole,
         "failed_edit_marked": "×" in whole,
         "steering_applied_shown": "steering·applied" in whole,
         "segment_2_shown": "segment2" in whole,

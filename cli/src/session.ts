@@ -163,6 +163,14 @@ export class SessionManager {
     return path.join(this.sessionsDir, `${sessionId}.history.jsonl`);
   }
 
+  /** Where the complete diff of one file operation in this session is kept (redacted; mode 0600). */
+  public operationDiffPath(sessionId: string, name: string): string {
+    if (!/^[A-Za-z0-9._-]{1,160}$/.test(sessionId) || !/^[A-Za-z0-9._-]{1,160}$/.test(name)) {
+      throw new Error("Session identity is not a safe persistence name");
+    }
+    return path.join(this.sessionsDir, `${sessionId}.diffs`, `${name}.diff`);
+  }
+
   public appendArchivedHistory(sessionId: string, messages: ChatMessage[]): void {
     if (!messages.length) return;
     const lines = protectArchivedMessages(messages).map((message) => JSON.stringify({ archivedAt: new Date().toISOString(), message }));

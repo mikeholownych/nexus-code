@@ -45,6 +45,8 @@ export interface FileChange {
   kind: "added" | "modified" | "deleted";
   added: number;
   removed: number;
+  /** Number of hunks in `diff`. */
+  hunks?: number;
   /** Unified diff of the operation (headers `--- a/` `+++ b/`), or empty when line detail is unavailable. */
   diff: string;
   /** Why there is no line detail, when there is none. */
@@ -65,14 +67,27 @@ export function describeChange(displayPath: string, before: FileSnapshot, after:
   return unifiedDiff(displayPath, oldText, newText, kind);
 }
 
+/**
+ * Lines compared by the diff. A last line without a final newline is kept distinct from the same text with one (the
+ * sentinel never occurs in text), so adding or removing only the final newline is a change, as in git.
+ */
+const NO_EOL = "\u0000no-eol";
+
 function splitLines(text: string): string[] {
   if (!text) return [];
   const lines = text.split("\n");
   if (lines[lines.length - 1] === "") lines.pop();
+  else lines[lines.length - 1] += NO_EOL;
   return lines;
 }
 
 type Op = { kind: " " | "-" | "+"; line: string };
+
+/** A diff row for `op`, followed by git's marker when its line is the last one of a file without a final newline. */
+function opRows(op: Op): string[] {
+  if (!op.line.endsWith(NO_EOL)) return [`${op.kind}${op.line}`];
+  return [`${op.kind}${op.line.slice(0, -NO_EOL.length)}`, "\\ No newline at end of file"];
+}
 
 /** Myers O(ND) shortest edit script over lines. */
 function diffLines(a: string[], b: string[]): Op[] {
@@ -138,6 +153,7 @@ export function unifiedDiff(displayPath: string, oldText: string, newText: strin
     kind === "deleted" ? "+++ /dev/null" : `+++ b/${displayPath}`,
   ];
   const hunks: string[] = [];
+  let hunkCount = 0;
   let i = 0;
   // Line numbers before each op.
   const oldNo: number[] = [];
@@ -177,13 +193,23 @@ export function unifiedDiff(displayPath: string, oldText: string, newText: strin
     const oldStart = oldCount === 0 ? oldNo[start] - 1 : oldNo[start];
     const newStart = newCount === 0 ? newNo[start] - 1 : newNo[start];
     hunks.push(`@@ -${oldStart},${oldCount} +${newStart},${newCount} @@`);
-    for (const op of slice) hunks.push(`${op.kind}${op.line}`);
+    for (const op of slice) hunks.push(...opRows(op));
+    hunkCount++;
     i = end;
     start = end;
   }
-  const noNewline = (text: string) => text.length > 0 && !text.endsWith("\n");
-  if (noNewline(oldText) !== noNewline(newText) && hunks.length) hunks.push("\\ No newline at end of file (one side)");
-  return { kind, added, removed, diff: hunks.length ? [...header, ...hunks].join("\n") : "" };
+  return { kind, added, removed, hunks: hunkCount, diff: hunks.length ? [...header, ...hunks].join("\n") : "" };
+}
+
+/** Changed and context lines of a unified diff: what "N more lines" counts (headers and markers are not lines). */
+export function countDiffLines(diff: string): number {
+  let count = 0;
+  let inHunk = false;
+  for (const line of diff ? diff.split("\n") : []) {
+    if (line.startsWith("@@")) inHunk = true;
+    else if (inHunk && (line[0] === " " || line[0] === "+" || line[0] === "-")) count++;
+  }
+  return count;
 }
 
 /** At most `maxLines` lines / `maxChars` characters of a diff, and whether it was cut. */
@@ -197,4 +223,18 @@ export function previewDiff(diff: string, maxLines = 40, maxChars = 6000): { pre
     count++;
   }
   return { preview: out, truncated: count < lines.length, totalLines: lines.length };
+}
+
+/**
+ * File content made safe to print without losing what it says: C0 controls (except tab and newline) become their
+ * Unicode control pictures (ESC is `␛`, CR is `␍`), DEL becomes `␡`, and C1 controls and bidirectional overrides
+ * (which reorder what a terminal shows) become `<U+XXXX>`. A terminal never receives a control sequence from a diff.
+ */
+export function visibleControls(text: string): string {
+  return text.replace(/[\u0000-\u0008\u000b-\u001f\u007f-\u009f\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/g, (c) => {
+    const code = c.charCodeAt(0);
+    if (code < 0x20) return String.fromCharCode(0x2400 + code);
+    if (code === 0x7f) return "\u2421";
+    return `<U+${code.toString(16).toUpperCase().padStart(4, "0")}>`;
+  });
 }

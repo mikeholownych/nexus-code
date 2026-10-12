@@ -1,6 +1,8 @@
 //! Live session state. Pure: protocol events and keys go in, actions come out. Outcomes are projected exactly as
 //! the sidecar reports them.
 use crate::composer::Composer;
+use crate::diff_view::{self, DiffCard, Patch};
+use crate::theme::Depth;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use serde_json::Value;
 use std::collections::HashMap;
@@ -40,6 +42,8 @@ pub enum Entry {
         status: ToolStatus,
         summary: String,
         evidence: String,
+        /// The change this call made to a file, when it is a file edit that succeeded.
+        diff: Option<Box<DiffCard>>,
     },
     Banner {
         heading: String,
@@ -75,19 +79,24 @@ pub enum Entry {
         state: SteerState,
         message: String,
     },
-    /// The change one file-edit call made (a bounded preview; the call's detail record holds the whole diff).
-    Diff {
-        call_id: String,
-        evidence: String,
-        path: String,
-        kind: String,
-        added: u64,
-        removed: u64,
-        preview: String,
-        truncated: bool,
-        total_lines: u64,
-        note: Option<String>,
-    },
+    /// The change one file-edit call made, when no tool row for the call is in the transcript (it is otherwise
+    /// shown on that row). A bounded preview; the call's detail record holds the whole diff.
+    Diff { call_id: String, card: Box<DiffCard> },
+}
+
+impl Entry {
+    /// The edit card this entry shows, if any.
+    pub fn card(&self) -> Option<&DiffCard> {
+        match self {
+            Entry::Tool { diff: Some(card), .. } | Entry::Diff { card, .. } => Some(card),
+            _ => None,
+        }
+    }
+
+    /// Entries the diff review opens: edit cards and successful workspace diffs.
+    pub fn reviewable(&self) -> bool {
+        self.card().is_some() || matches!(self, Entry::Output { diff: true, success: true, .. })
+    }
 }
 
 /// Where operator steering stands, as the sidecar acknowledged it.
@@ -228,6 +237,59 @@ pub struct ReceiptPanel {
     pub scroll: usize,
 }
 
+/// What the diff review shows: one operation's own change, or the cumulative workspace diff.
+#[derive(Clone, Debug, PartialEq)]
+pub enum ReviewScope {
+    /// The edit card at transcript `entry`, whose call's full diff comes from its evidence record.
+    Operation { entry: usize, path: String },
+    /// The `/diff` output at transcript `entry`.
+    Workspace { entry: usize },
+}
+
+/// A diff ready to review: parsed once, with its logical rows and measurements.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ReviewContent {
+    pub patch: Patch,
+    pub rows: Vec<diff_view::Row>,
+    pub num_width: usize,
+    pub max_width: usize,
+    /// Why what is shown is not the whole diff, and how to get the rest.
+    pub limit: Option<String>,
+}
+
+impl ReviewContent {
+    pub fn new(patch: Patch, limit: Option<String>) -> Self {
+        let rows = diff_view::panel_rows(&patch);
+        Self::with_rows(patch, rows, limit)
+    }
+
+    /// One operation's diff: the panel heading already names its file, so the per-file heading row is left out.
+    pub fn operation(patch: Patch, limit: Option<String>) -> Self {
+        let rows = diff_view::panel_rows(&patch).into_iter().filter(|row| !matches!(row, diff_view::Row::File(_) | diff_view::Row::Blank)).collect();
+        Self::with_rows(patch, rows, limit)
+    }
+
+    fn with_rows(patch: Patch, rows: Vec<diff_view::Row>, limit: Option<String>) -> Self {
+        let num_width = diff_view::patch_num_width(&patch);
+        let max_width = diff_view::patch_max_width(&patch);
+        ReviewContent { patch, rows, num_width, max_width, limit }
+    }
+}
+
+/// The full diff review panel.
+#[derive(Clone, Debug, PartialEq)]
+pub struct DiffReview {
+    /// Request id of the detail record it waits for (operation scope).
+    pub request: String,
+    pub scope: ReviewScope,
+    pub content: Loaded<ReviewContent>,
+    /// First logical row shown.
+    pub top: usize,
+    /// Columns panned right (when not wrapping).
+    pub left: usize,
+    pub wrap: bool,
+}
+
 /// Keystrokes typed for the draft must not answer an approval modal that opened mid-typing.
 pub const APPROVAL_GRACE: Duration = Duration::from_millis(400);
 
@@ -244,6 +306,8 @@ pub enum Overlay {
     Connect(Connect),
     /// ctrl+o in the composer: a paste buffer's full content.
     Paste { number: u32, scroll: usize },
+    /// ctrl+d, or enter on an edit card or workspace diff: the complete diff.
+    Review(DiffReview),
 }
 
 /// What the last frame measured. Key handling uses it for page sizes, and it clamps scrolling at the top.
@@ -256,6 +320,12 @@ pub struct LiveLayout {
     pub overlay_limit: usize,
     /// Set when the frame moved the transcript window to show the selected tool call: the `scroll_back` it drew.
     pub followed: Option<usize>,
+    /// Columns the diff review can still pan right, and its content width.
+    pub overlay_hlimit: usize,
+    /// The transcript row at the top of the window: (entry index, rows from that row to the end of its entry).
+    pub top: Option<(usize, usize)>,
+    /// Set when the frame kept the window on `LiveState::anchor` while content arrived: the `scroll_back` it drew.
+    pub anchored: Option<usize>,
 }
 
 /// Tool calls whose result the turn banner already reports.
@@ -300,6 +370,12 @@ pub struct LiveState {
     steer_texts: HashMap<String, String>,
     /// The clock frames are drawn at; the live loop advances it before each draw.
     pub now: Instant,
+    /// Colours the terminal can show.
+    pub depth: Depth,
+    /// While scrolled back: the row the window keeps at its top as entries arrive or grow below it.
+    pub anchor: Option<(usize, usize)>,
+    /// Transcript index of the newest entry the diff review can open.
+    pub last_reviewable: Option<usize>,
 }
 
 impl LiveState {
@@ -330,6 +406,9 @@ impl LiveState {
             steer_seq: 0,
             steer_texts: HashMap::new(),
             now: Instant::now(),
+            depth: Depth::TrueColor,
+            anchor: None,
+            last_reviewable: None,
         }
     }
 
@@ -559,19 +638,27 @@ impl LiveState {
                 preview,
                 truncated,
                 total_lines,
+                diff_lines,
+                hunks,
+                full_path,
                 note,
-            } => self.transcript.push(Entry::Diff {
-                call_id,
-                evidence,
-                path,
-                kind,
-                added,
-                removed,
-                preview,
-                truncated,
-                total_lines,
-                note,
-            }),
+            } => {
+                let card = Box::new(DiffCard {
+                    evidence,
+                    path: diff_view::safe_text(&path),
+                    kind,
+                    added,
+                    removed,
+                    preview: diff_view::parse(&preview),
+                    truncated,
+                    total_lines,
+                    diff_lines,
+                    hunks,
+                    note,
+                    full_path,
+                });
+                self.attach_diff(call_id, card);
+            }
             Event::SteerAck { id, status, message, text } => {
                 let state = SteerState::from_ack(&status);
                 if let Some(Entry::Steer { state: slot, message: note, .. }) = self
@@ -604,6 +691,7 @@ impl LiveState {
                         status: ToolStatus::Running,
                         summary: String::new(),
                         evidence,
+                        diff: None,
                     });
                 }
             }
@@ -612,9 +700,13 @@ impl LiveState {
                     matches!(entry, Entry::Tool { call_id: id, tool: name, status: ToolStatus::Running, .. }
                         if *id == call_id && *name == tool)
                 });
-                if let Some(Entry::Tool { status, summary: slot, .. }) = open {
+                if let Some(Entry::Tool { status, summary: slot, diff, .. }) = open {
                     *status = if success { ToolStatus::Succeeded } else { ToolStatus::Failed };
                     *slot = summary;
+                    // A failed call never shows a change as if it had succeeded.
+                    if !success {
+                        *diff = None;
+                    }
                 }
             }
             Event::ApprovalRequest {
@@ -665,6 +757,7 @@ impl LiveState {
                     _ if !waiting && id.starts_with(['c', 'x']) => self.transcript.push(Entry::Notice(message)),
                     _ if !waiting => {}
                     Some(Overlay::Detail(detail)) => detail.record = Loaded::Failed(message),
+                    Some(Overlay::Review(review)) => review.content = Loaded::Failed(message),
                     Some(Overlay::Receipt(panel)) => panel.sections = Loaded::Failed(message),
                     Some(Overlay::Models(picker)) => picker.catalog = Fetch::Failed(message),
                     Some(Overlay::Connect(flow)) => {
@@ -695,13 +788,19 @@ impl LiveState {
                     self.transcript.clear();
                     self.scroll_back = 0;
                     self.selected = None;
+                    self.anchor = None;
+                    self.last_reviewable = None;
                 }
                 if !output.is_empty() || !success {
+                    let diff = format.as_deref() == Some("diff");
                     self.transcript.push(Entry::Output {
                         success,
                         text: output,
-                        diff: format.as_deref() == Some("diff"),
+                        diff,
                     });
+                    if diff && success {
+                        self.last_reviewable = Some(self.transcript.len() - 1);
+                    }
                 }
                 if let Some(text) = composer {
                     self.composer.insert(&text);
@@ -721,7 +820,30 @@ impl LiveState {
                 output,
                 duration_ms,
                 diff,
+                diff_chars,
+                diff_path,
             } => {
+                if let Some(Overlay::Review(review)) = &mut self.overlay
+                    && review.request == id
+                {
+                    review.content = match diff {
+                        Some(text) => {
+                            let shown = text.chars().count() as u64;
+                            let limit = match (diff_chars, &diff_path) {
+                                (Some(total), Some(path)) if total > shown => Some(format!(
+                                    "Showing the first {shown} of {total} characters. The complete diff is in {path}"
+                                )),
+                                (Some(total), None) if total > shown => Some(format!(
+                                    "Showing the first {shown} of {total} characters; the rest was not kept."
+                                )),
+                                _ => None,
+                            };
+                            Loaded::Ready(ReviewContent::operation(diff_view::parse(&text), limit))
+                        }
+                        None => Loaded::Failed("This call recorded no file change.".to_string()),
+                    };
+                    return;
+                }
                 if let Some(Overlay::Detail(detail)) = &mut self.overlay
                     && detail.request == id
                 {
@@ -801,14 +923,21 @@ impl LiveState {
         self.close_approval();
         if matches!(
             self.overlay,
-            Some(Overlay::Detail(_) | Overlay::Receipt(_) | Overlay::Models(_) | Overlay::Connect(_))
+            Some(Overlay::Detail(_) | Overlay::Receipt(_) | Overlay::Models(_) | Overlay::Connect(_) | Overlay::Review(_))
         ) {
             self.overlay = None;
         }
         // Evidence ids are numbered per sidecar process; the new one would answer for other calls.
         for entry in &mut self.transcript {
-            if let Entry::Tool { evidence, .. } = entry {
-                evidence.clear();
+            match entry {
+                Entry::Tool { evidence, diff, .. } => {
+                    evidence.clear();
+                    if let Some(card) = diff {
+                        card.evidence.clear();
+                    }
+                }
+                Entry::Diff { card, .. } => card.evidence.clear(),
+                _ => {}
             }
         }
         self.link = Link::Connecting;
@@ -845,7 +974,15 @@ impl LiveState {
             self.scroll_back = back;
             self.follow = false;
         }
+        if let Some(back) = layout.anchored {
+            self.scroll_back = back;
+        }
         self.scroll_back = self.scroll_back.min(layout.scroll_limit);
+        self.anchor = if self.scroll_back > 0 { layout.top } else { None };
+        if let Some(Overlay::Review(review)) = &mut self.overlay {
+            review.top = review.top.min(layout.overlay_limit);
+            review.left = review.left.min(layout.overlay_hlimit);
+        }
         if let Some(
             Overlay::Approval(Approval { scroll, .. })
             | Overlay::Help { scroll }
@@ -968,7 +1105,17 @@ impl LiveState {
         self.on_key_at(key, Instant::now())
     }
 
-    pub fn on_key_at(&mut self, mut key: KeyEvent, now: Instant) -> Option<Action> {
+    pub fn on_key_at(&mut self, key: KeyEvent, now: Instant) -> Option<Action> {
+        let before = self.scroll_back;
+        let action = self.handle_key(key, now);
+        // The operator moved the window: the next frame keeps their position instead of the previous anchor.
+        if self.scroll_back != before {
+            self.anchor = None;
+        }
+        action
+    }
+
+    fn handle_key(&mut self, mut key: KeyEvent, now: Instant) -> Option<Action> {
         // Terminals with `stty erase ^H` send 0x08 for Backspace, which crossterm reports as ctrl+h.
         if key.code == KeyCode::Char('h') && key.modifiers.contains(KeyModifiers::CONTROL) {
             key.code = KeyCode::Backspace;
@@ -988,6 +1135,7 @@ impl LiveState {
         }
         match self.overlay {
             Some(Overlay::Approval(_)) => return self.on_approval_key(key, now),
+            Some(Overlay::Review(_)) => return self.on_review_key(key),
             Some(Overlay::Models(_)) => return self.on_models_key(key),
             Some(Overlay::Connect(_)) => return self.on_connect_key(key),
             Some(Overlay::Help { .. } | Overlay::Detail(_) | Overlay::Receipt(_) | Overlay::Paste { .. }) => {
@@ -1003,6 +1151,9 @@ impl LiveState {
         }
         if let Some(action) = self.on_completion_key(key) {
             return action;
+        }
+        if key.code == KeyCode::Char('d') && ctrl {
+            return self.open_review(None);
         }
         let page = Self::page(self.layout.transcript_rows);
         match key.code {
@@ -1052,7 +1203,8 @@ impl LiveState {
                 | Overlay::Receipt(_)
                 | Overlay::Models(_)
                 | Overlay::Connect(_)
-                | Overlay::Paste { .. },
+                | Overlay::Paste { .. }
+                | Overlay::Review(_),
             ) => {
                 self.overlay = None;
                 return None;
@@ -1274,7 +1426,7 @@ impl LiveState {
             .transcript
             .iter()
             .enumerate()
-            .filter(|(_, entry)| matches!(entry, Entry::Tool { .. } | Entry::Diff { .. }))
+            .filter(|(_, entry)| matches!(entry, Entry::Tool { .. } | Entry::Diff { .. }) || entry.reviewable())
             .map(|(index, _)| index)
             .collect();
         let Some(&newest) = tools.last() else {
@@ -1297,22 +1449,178 @@ impl LiveState {
         self.follow = true;
     }
 
+    /// The tool, subject and evidence id of the call at transcript `index`.
+    fn call_record(&self, index: usize) -> Option<(String, String, String)> {
+        match self.transcript.get(index) {
+            Some(Entry::Tool { tool, subject, evidence, .. }) => Some((tool.clone(), subject.clone(), evidence.clone())),
+            Some(Entry::Diff { card, .. }) => Some(("edit_file".to_string(), card.path.clone(), card.evidence.clone())),
+            _ => None,
+        }
+    }
+
+    /// Shows a file change on its call's tool row (or as its own entry when that row is not in the transcript).
+    /// The same call reported again replaces its earlier card rather than adding another.
+    fn attach_diff(&mut self, call_id: String, card: Box<DiffCard>) {
+        let found = self.transcript.iter().rposition(|entry| match entry {
+            Entry::Tool { call_id: id, status, .. } => *id == call_id && *status != ToolStatus::Failed,
+            Entry::Diff { call_id: id, .. } => *id == call_id,
+            _ => false,
+        });
+        match found.map(|index| (index, &mut self.transcript[index])) {
+            Some((index, Entry::Tool { diff, .. })) => {
+                *diff = Some(card);
+                self.last_reviewable = Some(self.last_reviewable.map_or(index, |last| last.max(index)));
+            }
+            Some((_, Entry::Diff { card: slot, .. })) => *slot = card,
+            _ => {
+                self.transcript.push(Entry::Diff { call_id, card });
+                self.last_reviewable = Some(self.transcript.len() - 1);
+            }
+        }
+    }
+
+    /// Opens the diff review at transcript `index`; without one, at the selected reviewable entry, else the newest.
+    fn open_review(&mut self, index: Option<usize>) -> Option<Action> {
+        let selected = self.selected.filter(|&i| self.focus == Focus::Transcript && self.transcript.get(i).is_some_and(Entry::reviewable));
+        let Some(index) = index.or(selected).or(self.last_reviewable).filter(|&i| self.transcript.get(i).is_some_and(Entry::reviewable)) else {
+            self.transcript.push(Entry::Info("No file changes to review yet. Diffs appear here as edits succeed; /diff shows the whole workspace.".into()));
+            return None;
+        };
+        self.review_entry(index, false)
+    }
+
+    fn review_entry(&mut self, index: usize, wrap: bool) -> Option<Action> {
+        match &self.transcript[index] {
+            Entry::Output { text, .. } => {
+                let patch = diff_view::parse(text);
+                let limit = patch.truncated.as_ref().map(|_| {
+                    "Output limit reached: this is the beginning of the diff. Run `git diff` in the workspace for all of it.".to_string()
+                });
+                self.overlay = Some(Overlay::Review(DiffReview {
+                    request: String::new(),
+                    scope: ReviewScope::Workspace { entry: index },
+                    content: Loaded::Ready(ReviewContent::new(patch, limit)),
+                    top: 0,
+                    left: 0,
+                    wrap,
+                }));
+                None
+            }
+            entry => {
+                let card = entry.card()?;
+                let (path, evidence) = (card.path.clone(), card.evidence.clone());
+                self.panel_seq += 1;
+                let request = format!("d{}", self.panel_seq);
+                let unavailable = evidence.is_empty() || self.link != Link::Ready;
+                self.overlay = Some(Overlay::Review(DiffReview {
+                    request: request.clone(),
+                    scope: ReviewScope::Operation { entry: index, path },
+                    content: if unavailable {
+                        Loaded::Failed("This edit's record belongs to an earlier agent process; the preview in the transcript is what remains.".into())
+                    } else {
+                        Loaded::Waiting
+                    },
+                    top: 0,
+                    left: 0,
+                    wrap,
+                }));
+                (!unavailable).then_some(Action::Send(Command::ToolDetail { id: request, evidence }))
+            }
+        }
+    }
+
+    fn on_review_key(&mut self, key: KeyEvent) -> Option<Action> {
+        let page = Self::page(self.layout.overlay_rows);
+        let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+        let Some(Overlay::Review(review)) = &mut self.overlay else {
+            return None;
+        };
+        let rows = match &review.content {
+            Loaded::Ready(content) => content.rows.as_slice(),
+            _ => &[],
+        };
+        let starts = |pick: fn(&diff_view::Row) -> bool| -> Vec<usize> {
+            rows.iter().enumerate().filter(|(_, row)| pick(row)).map(|(i, _)| i).collect()
+        };
+        match key.code {
+            KeyCode::Esc | KeyCode::Char('q') => self.overlay = None,
+            KeyCode::Char('d') if ctrl => self.overlay = None,
+            KeyCode::Up | KeyCode::Char('k') => review.top = review.top.saturating_sub(1),
+            KeyCode::Down | KeyCode::Char('j') => review.top = review.top.saturating_add(1),
+            KeyCode::PageUp => review.top = review.top.saturating_sub(page),
+            KeyCode::PageDown | KeyCode::Char(' ') => review.top = review.top.saturating_add(page),
+            KeyCode::Home | KeyCode::Char('g') => review.top = 0,
+            KeyCode::End | KeyCode::Char('G') => review.top = usize::MAX,
+            KeyCode::Left | KeyCode::Char('h') if !review.wrap => review.left = review.left.saturating_sub(8),
+            KeyCode::Right | KeyCode::Char('l') if !review.wrap => review.left = review.left.saturating_add(8),
+            KeyCode::Char('0') => review.left = 0,
+            KeyCode::Char('w') => {
+                review.wrap = !review.wrap;
+                review.left = 0;
+            }
+            KeyCode::Char('n' | 'p') => {
+                let hunks = starts(|row| matches!(row, diff_view::Row::Gap(..)));
+                let next = if key.code == KeyCode::Char('n') {
+                    hunks.iter().copied().find(|&i| i > review.top)
+                } else {
+                    hunks.iter().rev().copied().find(|&i| i < review.top)
+                };
+                if let Some(next) = next {
+                    review.top = next;
+                }
+            }
+            KeyCode::Char(c @ ('[' | ']')) => match review.scope {
+                ReviewScope::Workspace { .. } => {
+                    let files = starts(|row| matches!(row, diff_view::Row::File(_)));
+                    let next = if c == ']' {
+                        files.iter().copied().find(|&i| i > review.top)
+                    } else {
+                        files.iter().rev().copied().find(|&i| i < review.top)
+                    };
+                    if let Some(next) = next {
+                        review.top = next;
+                    }
+                }
+                ReviewScope::Operation { entry, .. } => {
+                    let wrap = review.wrap;
+                    let next = if c == ']' {
+                        (entry + 1..self.transcript.len()).find(|&i| self.transcript[i].card().is_some())
+                    } else {
+                        (0..entry).rev().find(|&i| self.transcript[i].card().is_some())
+                    };
+                    if let Some(next) = next {
+                        return self.review_entry(next, wrap);
+                    }
+                }
+            },
+            KeyCode::Char('i') => {
+                if let ReviewScope::Operation { entry, .. } = review.scope
+                    && let Some((tool, subject, evidence)) = self.call_record(entry)
+                    && !evidence.is_empty()
+                {
+                    self.panel_seq += 1;
+                    let request = format!("d{}", self.panel_seq);
+                    self.overlay = Some(Overlay::Detail(Detail { request: request.clone(), tool, subject, record: Loaded::Waiting, scroll: 0 }));
+                    return Some(Action::Send(Command::ToolDetail { id: request, evidence }));
+                }
+            }
+            _ => {}
+        }
+        None
+    }
+
     fn open_detail(&mut self) -> Option<Action> {
         if self.link != Link::Ready {
             return None;
         }
+        if let Some(index) = self.selected
+            && self.transcript.get(index).is_some_and(Entry::reviewable)
+        {
+            return self.open_review(Some(index));
+        }
         let found = self
             .selected
-            .and_then(|index| match self.transcript.get(index) {
-                Some(Entry::Tool {
-                    tool,
-                    subject,
-                    evidence,
-                    ..
-                }) => Some((tool.clone(), subject.clone(), evidence.clone())),
-                Some(Entry::Diff { path, evidence, .. }) => Some(("edit_file".to_string(), path.clone(), evidence.clone())),
-                _ => None,
-            });
+            .and_then(|index| self.call_record(index));
         let Some((tool, subject, evidence)) = found else {
             self.selected = None;
             return None;
@@ -1365,6 +1673,11 @@ impl LiveState {
             Some(Overlay::Detail(Detail {
                 request,
                 record: Loaded::Waiting,
+                ..
+            }))
+            | Some(Overlay::Review(DiffReview {
+                request,
+                content: Loaded::Waiting,
                 ..
             }))
             | Some(Overlay::Receipt(ReceiptPanel {
@@ -1589,10 +1902,15 @@ mod tests {
         let mut state = busy();
         state.apply(ev(r#"{"v":1,"type":"tool.start","turn_id":"t1","call_id":"c1","tool":"edit_file","subject":"a.ts","evidence":"e1"}"#));
         state.apply(ev(r#"{"v":1,"type":"file.diff","turn_id":"t1","call_id":"c1","evidence":"e1","path":"a.ts","kind":"modified","added":1,"removed":1,"preview":"--- a/a.ts\n+++ b/a.ts\n@@ -1 +1 @@\n-a\n+b","truncated":true,"total_lines":90}"#));
-        assert!(matches!(state.transcript.last(), Some(Entry::Diff { added: 1, removed: 1, truncated: true, .. })));
+        // The change is shown on the call's own tool row, not as a second entry.
+        let tools: Vec<&Entry> = state.transcript.iter().filter(|e| matches!(e, Entry::Tool { .. } | Entry::Diff { .. })).collect();
+        assert_eq!(tools.len(), 1);
+        let card = tools[0].card().expect("the edit row carries its diff");
+        assert_eq!((card.added, card.removed, card.truncated), (1, 1, true));
         state.on_key(key(KeyCode::Tab));
         state.on_key(key(KeyCode::Char('[')));
         assert!(matches!(state.on_key(key(KeyCode::Enter)), Some(Action::Send(Command::ToolDetail { ref evidence, .. })) if evidence == "e1"));
+        assert!(matches!(state.overlay, Some(Overlay::Review(_))), "enter on an edit opens its complete diff");
     }
 
     #[test]
@@ -1892,6 +2210,7 @@ mod tests {
                     status: ToolStatus::Succeeded,
                     summary: "const a = 1;".into(),
                     evidence: String::new(),
+                    diff: None,
                 },
                 Entry::Tool {
                     call_id: "b".into(),
@@ -1900,6 +2219,7 @@ mod tests {
                     status: ToolStatus::Failed,
                     summary: "No such file".into(),
                     evidence: String::new(),
+                    diff: None,
                 },
                 Entry::Assistant {
                     turn_id: "t1".into(),
@@ -1929,6 +2249,7 @@ mod tests {
                 status: ToolStatus::Failed,
                 summary: "1 test failed".into(),
                 evidence: String::new(),
+                diff: None,
             }]
         );
     }
@@ -1947,6 +2268,7 @@ mod tests {
                 status: ToolStatus::Running,
                 summary: String::new(),
                 evidence: String::new(),
+                diff: None,
             }]
         );
     }
