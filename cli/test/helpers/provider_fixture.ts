@@ -8,6 +8,8 @@ import { RecoveryCancelled, type RecoveryClock } from "../../src/core/provider_r
 export interface FakeClock extends RecoveryClock {
   sleeps: number[];
   elapsed(): number;
+  /** Time passing without a sleep: a provider taking this long to answer. */
+  advance(ms: number): void;
 }
 
 export function fakeClock(onSleep?: (ms: number, n: number) => void | Promise<void>, random = 0.5): FakeClock {
@@ -17,6 +19,9 @@ export function fakeClock(onSleep?: (ms: number, n: number) => void | Promise<vo
   return {
     sleeps,
     elapsed: () => t - start,
+    advance: (ms) => {
+      t += ms;
+    },
     now: () => t,
     random: () => random,
     async sleep(ms, signal) {
@@ -35,7 +40,9 @@ export type Reply =
   | { kind: "tools"; calls: Array<{ name: string; args: any }> }
   | { kind: "http"; status: number; body?: string; headers?: Record<string, string> }
   | { kind: "reset" }
-  | { kind: "empty_stream" };
+  | { kind: "empty_stream" }
+  /** A streamed response the provider ends with an error frame, as a gateway does at its response time limit. */
+  | { kind: "error_frame"; message: string };
 
 export interface Gateway {
   url: string;
@@ -93,6 +100,10 @@ export async function startGateway(script: (n: number, body: any) => Reply, opts
       if (r.kind === "http") {
         res.writeHead(r.status, { "content-type": "application/json", ...(r.headers ?? {}) });
         return void res.end(r.body ?? "{}");
+      }
+      if (r.kind === "error_frame") {
+        res.writeHead(200, { "content-type": "text/event-stream" });
+        return void res.end(sse({ error: { message: r.message } }));
       }
       if (r.kind === "empty_stream") {
         res.writeHead(200, { "content-type": "text/event-stream" });

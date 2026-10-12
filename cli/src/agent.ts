@@ -356,6 +356,13 @@ function unreacquiredRemovals(messages: ChatMessage[]): Set<string> {
 /** The note `toolResultContent` puts before a re-run's output; not part of the output's identity. */
 const RERUN_NOTICE = /^\[Nexus: you ran this same call before;[^\]]*\]\n/;
 const STEP_NOTICE = /^\[Nexus: (your recorded findings have outgrown your memory|this is step \d+ of \d+);[^\]]*\]\n/;
+const CUT_NOTICE = /^\[Nexus: your response at step \d+ was cut off[^\]]*\]\n/;
+/** A response that failed after running this long was most likely ended by the provider's limit on how long one may take. */
+const LONG_RESPONSE_MS = 120_000;
+
+function cutResponseNotice(step: number, seconds: number): string {
+  return `[Nexus: your response at step ${step} was cut off after ${seconds} s, before it was complete: the provider ends a response that takes too long, and none of it was used. Respond with less at once. Write a long file in parts: write_file with its first part, then add each further part with edit_file in later steps (replace the file's last line with that line followed by the next part). Keep every response short enough to finish well within ${seconds} s.]`;
+}
 
 /** Content identity of a tool output, to tell whether a re-run returned what was inspected before. */
 function outputDigest(text: string): string {
@@ -364,7 +371,7 @@ function outputDigest(text: string): string {
 
 /** A tool output without the notes toolResultContent put before it for this step (not part of what the tool returned). */
 function withoutStepNotices(text: string): string {
-  return text.replace(STEP_NOTICE, "").replace(RERUN_NOTICE, "");
+  return text.replace(CUT_NOTICE, "").replace(STEP_NOTICE, "").replace(RERUN_NOTICE, "");
 }
 
 /** Where a finding's note in the memory came from: its id, or, for one recorded without ids, its header. */
@@ -707,6 +714,8 @@ export class AutonomousAgent {
   /** Whether the last durable record showed any finding only condensed, indexed or not at all. */
   private findingsCondensed = false;
   private stepNoticeStep = 0;
+  /** A response of this step was cut off after running this long; its first tool result says so (see submitGuardingLength). */
+  private cutResponse: { step: number; seconds: number } | undefined;
   /** Provider recovery bounds; undefined reads LOCAL_LLM_RECOVERY_* at each turn. */
   private recoveryPolicy?: RecoveryPolicy;
   private recoveryClock: RecoveryClock = realRecoveryClock;
@@ -2298,6 +2307,35 @@ export class AutonomousAgent {
    * Notes lead the output so that fitting an oversized result to the context, which keeps its beginning, keeps them.
    */
   private toolResultContent(call: ToolCall, content: string, step: number, maxSteps: number): string {
+    const noted = this.stepNotedContent(call, content, step, maxSteps);
+    if (this.cutResponse?.step !== step) return noted;
+    const { seconds } = this.cutResponse;
+    this.cutResponse = undefined;
+    return `${cutResponseNotice(step, seconds)}\n${noted}`;
+  }
+
+  /**
+   * Submits one inference request of `step` under provider recovery. A submission that fails with its execution unknown
+   * after running at least LONG_RESPONSE_MS was most likely ended by the provider's limit on how long one response may
+   * take: the same request would run as long and fail the same way. Every later submission of the step says what
+   * happened and asks for less at once, and once one completes, so does the step's first tool result.
+   */
+  private async submitGuardingLength<T>(guard: { step: number; cutAfterMs: number }, messages: ChatMessage[], send: (messages: ChatMessage[]) => Promise<T>): Promise<T> {
+    const seconds = Math.round(guard.cutAfterMs / 1000);
+    const request = guard.cutAfterMs ? [...messages, { role: "user" as const, content: cutResponseNotice(guard.step, seconds) }] : messages;
+    const started = this.recoveryClock.now();
+    try {
+      const result = await send(request);
+      if (guard.cutAfterMs) this.cutResponse = { step: guard.step, seconds };
+      return result;
+    } catch (err) {
+      const ran = this.recoveryClock.now() - started;
+      if (ran >= LONG_RESPONSE_MS && err instanceof InferenceError && err.toFailure().execution === "UNKNOWN") guard.cutAfterMs = Math.max(guard.cutAfterMs, ran);
+      throw err;
+    }
+  }
+
+  private stepNotedContent(call: ToolCall, content: string, step: number, maxSteps: number): string {
     let args: unknown;
     try {
       args = typeof call.function.arguments === "string" ? JSON.parse(call.function.arguments) : call.function.arguments;
@@ -3373,7 +3411,7 @@ Always explain your reasoning before or alongside your tool calls.`;
     this.stepNoticeStep = 0;
     // Step notices speak for the turn that issued them; this turn has its own step budget.
     for (const message of this.messages) {
-      if (message.role === "tool" && typeof message.content === "string") message.content = message.content.replace(STEP_NOTICE, "");
+      if (message.role === "tool" && typeof message.content === "string") message.content = message.content.replace(CUT_NOTICE, "").replace(STEP_NOTICE, "");
     }
     this.carriedRemovedObservations = new Set();
     // The objective this turn works toward: a new one, or a short follow-up on the one still unresolved.
@@ -3599,11 +3637,12 @@ Always explain your reasoning before or alongside your tool calls.`;
         // are untouched while waiting, and a submission's output is used only once it is complete.
         const policy = this.recoveryPolicy ?? recoveryPolicyFromEnv();
         const recovery = new ProviderRecoveryController(policy, this.recoveryClock, currentStep);
+        const lengthGuard = { step: currentStep, cutAfterMs: 0 };
         try {
           assistantMessage = await recovery.run(requestId, {
-            submit: (s) =>
+            submit: (s) => this.submitGuardingLength(lengthGuard, this.requestMessages(this.messages), (request) =>
               activeClient.chatCompletionStream(
-                this.requestMessages(this.messages),
+                request,
                 this.getEffectiveTools(),
                 (token: string) => {
                   if (!streamedTokens) {
@@ -3616,7 +3655,7 @@ Always explain your reasoning before or alongside your tool calls.`;
                 },
                 s.requestId,
                 signal,
-              ),
+              )),
             probe: (probeSignal, opts) =>
               typeof activeClient.probeAvailability === "function"
                 ? activeClient.probeAvailability(probeSignal, { timeoutMs: policy.probeTimeoutMs, ...opts })
@@ -4223,8 +4262,10 @@ Always explain your reasoning before or alongside your tool calls.`;
       try {
         await this.admitWithFindings(activeClient, currentStep, requestId);
         const policy = this.recoveryPolicy ?? recoveryPolicyFromEnv();
+        const lengthGuard = { step: currentStep, cutAfterMs: 0 };
         assistantMessage = await new ProviderRecoveryController(policy, this.recoveryClock, currentStep).run(requestId, {
-          submit: (s) => activeClient.chatCompletion(this.messages, [...HARNESS_TOOLS, READ_FINDINGS_CAPABILITY.toolDefinition as ToolDefinition], s.requestId),
+          submit: (s) => this.submitGuardingLength(lengthGuard, this.messages, (request) =>
+            activeClient.chatCompletion(request, [...HARNESS_TOOLS, READ_FINDINGS_CAPABILITY.toolDefinition as ToolDefinition], s.requestId)),
           probe: (probeSignal, opts) =>
             typeof activeClient.probeAvailability === "function"
               ? activeClient.probeAvailability(probeSignal, { timeoutMs: policy.probeTimeoutMs, ...opts })

@@ -1450,12 +1450,13 @@ describe("G: recorded findings under memory pressure stay distinct, sourced and 
         const call = { id: "c1", type: "function" as const, function: { name: "read_file", arguments: JSON.stringify({ path: "a.txt" }) } };
         agent.distilledObservations.set(`read_file {"path":"a.txt"}`, { step: 3, digest: "x", id: "F1" });
         agent.findingsCondensed = true;
+        agent.cutResponse = { step: 100, seconds: 600 };
         const content = agent.toolResultContent(call, '{"content":"alpha"}', 100, 120);
-        assert.match(content, /^\[Nexus: this is step 100 of 120;[^\]]*check with read_findings any claim that something is absent[^\]]*\]\n\[Nexus: you ran this same call before; findings from its output were recorded at step 3 \(F1\) and are in your memory\./);
+        assert.match(content, /^\[Nexus: your response at step 100 was cut off after 600 s[^\]]*\]\n\[Nexus: this is step 100 of 120;[^\]]*check with read_findings any claim that something is absent[^\]]*\]\n\[Nexus: you ran this same call before; findings from its output were recorded at step 3 \(F1\) and are in your memory\./);
         const history = [{ role: "assistant", content: "", tool_calls: [call] }, { role: "tool", tool_call_id: "c1", name: "read_file", content }, { role: "assistant", content: "next" }];
         const notes = notesOf(agent.summarizeDiscardedHistory(history, 6_000, new Set()).content);
         assert.ok(notes.includes('Earlier read_file output: {"content":"alpha"}'), notes.join("\n"));
-        assert.ok(!notes.some((n) => n.includes("[Nexus: this is step") || n.includes("you ran this same call before")));
+        assert.ok(!notes.some((n) => n.includes("[Nexus: this is step") || n.includes("you ran this same call before") || n.includes("was cut off")));
         let seen = "";
         agent.distilledObservations.clear();
         await agent.recordFindings({ chatCompletion: async (prompt: any[]) => { seen = String(prompt[1].content); return { content: "a.txt reads alpha." }; } }, 101, [{ role: "system", content: "sys" }, { role: "user", content: "go" }, ...history], [`read_file {"path":"a.txt"}`]);
