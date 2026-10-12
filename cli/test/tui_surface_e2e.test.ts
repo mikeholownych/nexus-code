@@ -171,7 +171,8 @@ function assertSurface(r: any, events: any[], commands: any[], shows: (screen: s
   assert.ok(!screens["02-streaming"].some((l) => l.includes("**") || l.includes("## ")), screens["02-streaming"].join("\n"));
   // Tools: bounded command output with an exact count; a failed read stays failed.
   const tools = screens["07-tools-final"];
-  assert.ok(tools.some((l) => l.includes("exit 0 · 121 lines")) && tools.some((l) => l.includes("… 115 more lines")), tools.join("\n"));
+  assert.ok(tools.some((l) => l.includes("exit 0 · 121 lines")) && tools.some((l) => l.includes("… 115 earlier lines")), tools.join("\n"));
+  assert.ok(tools.some((l) => l.includes("esc:") && l.includes("end")), `the output's last line is shown: ${tools.join("\n")}`);
   assert.ok(tools.some((l) => l.includes("× Read missing.txt")), tools.join("\n"));
   assert.equal(r.raw_has_file_escape, false, "the OSC 52 sequence printed by the command never reached the terminal");
   // One activity indicator: the status bar never animates.

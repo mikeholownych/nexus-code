@@ -69,7 +69,7 @@ Press `<TAB>` at any prompt to autocomplete slash commands and directory paths.
   quotes, fenced code in a gutter block with syntax colours (long lines wrap onto rows marked `↪`), and tables
   aligned in columns (listed row by row when too wide). Each model reply is its own paragraph; when Nexus asks the
   agent to continue on its own (open requirements, a repeated action), a quiet line says so. Commands show their exit
-  code and line count, the last 6 output lines and the exact number not shown (`… 115 more lines`); Tab, `[`/`]` and
+  code and line count, the exact number of earlier lines not shown (`… 115 earlier lines`) and the last 6 lines; Tab, `[`/`]` and
   Enter open the full record. Tools that took noticeable time show their duration. A pasted prompt shows the text that
   was sent under its `[Pasted text #n]` label.
 - **Outcomes.** A turn ends with one line in words — `Done`, `Done · verified`, `Done · not verified`, `Verification

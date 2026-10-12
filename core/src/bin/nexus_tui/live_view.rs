@@ -1260,13 +1260,30 @@ fn short_duration(ms: u64) -> String {
 
 /// A quiet block under an entry (command output, pasted text): a gutter bar and wrapped rows on the code
 /// background, at most `limit` source lines, then the exact count of the rest and how to see it.
-fn quiet_block(text: &str, total: u64, limit: usize, width: usize, pal: &Palette, more: &str) -> Vec<Line<'static>> {
+/// Which end of a long block is shown: the start (a pasted text) or the end (command output, where results and
+/// errors are; the count of hidden lines then comes first, as "earlier lines").
+#[derive(Clone, Copy, PartialEq)]
+enum Shown {
+    Head,
+    Tail,
+}
+
+fn quiet_block(text: &str, total: u64, limit: usize, width: usize, pal: &Palette, more: &str, end: Shown) -> Vec<Line<'static>> {
     let bar = Span::styled("    ▎ ", Style::default().fg(pal.bar));
     let room = width.saturating_sub(6).max(8);
     let base = pal.code_bg.map_or_else(Style::default, |bg| Style::default().bg(bg));
     let mut out = Vec::new();
     let rows: Vec<&str> = if text.is_empty() { Vec::new() } else { text.split('\n').collect() };
-    for row in rows.iter().take(limit) {
+    let shown = rows.len().min(limit);
+    let hidden = total.saturating_sub(shown as u64);
+    let note = |word: &str| {
+        diff_view::meta_rows(Geometry { width, indent: 4, num_width: 1 }, pal, &format!("… {hidden} {word}line{} · {more}", if hidden == 1 { "" } else { "s" }))
+    };
+    if end == Shown::Tail && hidden > 0 {
+        out.extend(note("earlier "));
+    }
+    let skip = if end == Shown::Tail { rows.len() - shown } else { 0 };
+    for row in rows.iter().skip(skip).take(limit) {
         for (mut spans, used) in diff_view::content_rows(row, None, room, Fit::Wrap, pal, Color::Rgb(196, 204, 212), pal.code_bg) {
             let mut line = vec![bar.clone()];
             line.append(&mut spans);
@@ -1276,10 +1293,8 @@ fn quiet_block(text: &str, total: u64, limit: usize, width: usize, pal: &Palette
             out.push(Line::from(line));
         }
     }
-    let shown = rows.len().min(limit) as u64;
-    if total > shown {
-        let rest = total - shown;
-        out.extend(diff_view::meta_rows(Geometry { width, indent: 4, num_width: 1 }, pal, &format!("… {rest} more line{} · {more}", if rest == 1 { "" } else { "s" })));
+    if end == Shown::Head && hidden > 0 {
+        out.extend(note("more "));
     }
     out
 }
@@ -1343,7 +1358,7 @@ fn entry_lines<'a>(entry: &'a Entry, ctx: &EntryContext<'_>) -> Vec<Line<'a>> {
         }
         Entry::Pasted(text) => {
             let total = text.split('\n').count() as u64;
-            lines.extend(quiet_block(text, total, PASTE_PREVIEW_LINES, width, ctx.pal, "the full text was sent"));
+            lines.extend(quiet_block(text, total, PASTE_PREVIEW_LINES, width, ctx.pal, "the full text was sent", Shown::Head));
         }
         Entry::Earlier { role, text } => {
             if role == "steering" {
@@ -1416,7 +1431,7 @@ fn entry_lines<'a>(entry: &'a Entry, ctx: &EntryContext<'_>) -> Vec<Line<'a>> {
             }
             lines.extend(markdown::wrap(spans, width, vec![Span::styled(format!("  {glyph} "), Style::default().fg(color))], vec![Span::raw("    ")]));
             if let Some(output) = output {
-                lines.extend(quiet_block(&output.preview, output.lines, OUTPUT_PREVIEW_LINES, width, ctx.pal, detail_hint));
+                lines.extend(quiet_block(&output.preview, output.lines, OUTPUT_PREVIEW_LINES, width, ctx.pal, detail_hint, Shown::Tail));
             }
         }
         Entry::Banner {
@@ -3540,7 +3555,8 @@ mod surface_tests {
     #[test]
     fn command_output_is_bounded_with_an_exact_count_and_failures_never_look_successful() {
         let mut state = state(true);
-        let preview: Vec<String> = (1..=8).map(|n| n.to_string()).collect();
+        // The sidecar sends the output's last lines; the view shows the last of those, after the count of earlier ones.
+        let preview: Vec<String> = (113..=120).map(|n| n.to_string()).collect();
         feed(
             &mut state,
             &[
@@ -3555,8 +3571,10 @@ mod surface_tests {
         let (rows, terminal) = screen(&mut state, 100, 30);
         let all = rows.join("\n");
         assert!(all.contains("✓ Run seq 1 120 · exit 0 · 120 lines · 1.5s"), "{all}");
-        assert_eq!(rows.iter().filter(|r| r.trim_start().starts_with("▎ ") && r.trim().trim_start_matches("▎ ").parse::<u32>().is_ok()).count(), OUTPUT_PREVIEW_LINES, "{all}");
-        assert!(all.contains(&format!("… {} more lines · tab, [ ] then enter for the full output", 120 - OUTPUT_PREVIEW_LINES)), "{all}");
+        let numbers: Vec<u32> = rows.iter().filter_map(|r| r.trim().trim_start_matches("▎ ").parse::<u32>().ok().filter(|_| r.trim_start().starts_with("▎ "))).collect();
+        assert_eq!(numbers, (115..=120).collect::<Vec<u32>>(), "the last lines, ending with the last: {all}");
+        let note = rows.iter().position(|r| r.contains(&format!("… {} earlier lines · tab, [ ] then enter for the full output", 120 - OUTPUT_PREVIEW_LINES))).unwrap_or_else(|| panic!("{all}"));
+        assert!(rows[note + 1].contains("115"), "the count of earlier lines comes first: {all}");
         assert!(all.contains("✓ Run true · exit 0 · no output"), "{all}");
         assert!(all.contains("× Run npm test — Command exited with code 1"), "{all}");
         assert!(all.contains("␛[31mexpected 3␛[0m"), "escapes in output are shown: {all}");
