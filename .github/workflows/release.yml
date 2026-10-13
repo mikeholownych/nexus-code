@@ -10,18 +10,37 @@ permissions:
 jobs:
   package:
     runs-on: ubuntu-22.04
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - run: sudo apt-get update
+      - run: sudo apt-get install --yes make bubblewrap
       - uses: dtolnay/rust-toolchain@stable
       - uses: actions/setup-node@v4
         with:
           node-version: 20
           cache: npm
           cache-dependency-path: cli/package-lock.json
-      - name: Match tag to source version
-        run: test "${GITHUB_REF_NAME#v}" = "$(node -p 'require("./package.json").version')"
+      - name: Require a version-matched tag on main
+        run: |
+          git fetch origin main --no-tags
+          git merge-base --is-ancestor "$GITHUB_SHA" origin/main
+          test "${GITHUB_REF_NAME#v}" = "$(node -p 'require("./package.json").version')"
+      - run: npm ci --prefix cli
+      - run: npm --prefix cli run build
+      - run: cargo test --locked --manifest-path core/Cargo.toml
+      - run: cargo build --locked --release --manifest-path core/Cargo.toml --bin harness-core --bin nexus-tui
+      - run: npm --prefix cli test
+      - run: bash scripts/security_gates.sh
       - run: bash scripts/package-linux.sh "$GITHUB_REF_NAME" "$RUNNER_TEMP/dist"
+      - run: bash scripts/package-linux.sh "$GITHUB_REF_NAME" "$RUNNER_TEMP/repro-check"
+      - run: cmp "$RUNNER_TEMP/dist/nexus-linux-x86_64-$GITHUB_REF_NAME.tar.gz" "$RUNNER_TEMP/repro-check/nexus-linux-x86_64-$GITHUB_REF_NAME.tar.gz"
+      - run: cmp "$RUNNER_TEMP/dist/SHA256SUMS" "$RUNNER_TEMP/repro-check/SHA256SUMS"
       - run: bash scripts/smoke-package.sh "$RUNNER_TEMP/dist/nexus-linux-x86_64-$GITHUB_REF_NAME.tar.gz"
+      - run: bash scripts/installer-smoke.sh "$GITHUB_WORKSPACE/install.sh" "$RUNNER_TEMP/dist/nexus-linux-x86_64-$GITHUB_REF_NAME.tar.gz"
       - uses: softprops/action-gh-release@v2
         with:
           files: ${{ runner.temp }}/dist/*
