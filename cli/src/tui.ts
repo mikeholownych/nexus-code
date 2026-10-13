@@ -63,8 +63,12 @@ export class TerminalDashboard {
     }
 
     const cliRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
-    const binary = path.join(cliRoot, "core", "target", "release", process.platform === "win32" ? "nexus-tui.exe" : "nexus-tui");
+    const packagedHome = process.env.NEXUS_HOME;
+    const binary = packagedHome
+      ? path.join(packagedHome, "lib", "core", process.platform === "win32" ? "nexus-tui.exe" : "nexus-tui")
+      : path.join(cliRoot, "core", "target", "release", process.platform === "win32" ? "nexus-tui.exe" : "nexus-tui");
     if (!fs.existsSync(binary)) {
+      if (packagedHome) throw new Error(`The packaged TUI is missing: ${binary}. Reinstall Nexus Code.`);
       const build = spawnSync("cargo", ["build", "--release", "--manifest-path", path.join(cliRoot, "core/Cargo.toml"), "--bin", "nexus-tui"], { cwd: cliRoot, stdio: "inherit" });
       if (build.error || build.status !== 0 || !fs.existsSync(binary)) {
         throw new Error(`Unable to build the Ratatui client: ${build.error?.message ?? `cargo exited ${build.status}`}`);

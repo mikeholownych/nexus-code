@@ -94,7 +94,10 @@ export interface DoctorOptions {
 }
 
 const here = path.dirname(fileURLToPath(import.meta.url));
-const INSTALL_ROOT = path.resolve(here, "../..");
+const PACKAGED_HOME = process.env.NEXUS_HOME ? path.resolve(process.env.NEXUS_HOME) : undefined;
+const INSTALL_ROOT = PACKAGED_HOME ?? path.resolve(here, "../..");
+const CLI_ROOT = PACKAGED_HOME ? path.join(PACKAGED_HOME, "lib/cli") : path.join(INSTALL_ROOT, "cli");
+const CORE_ROOT = PACKAGED_HOME ? path.join(PACKAGED_HOME, "lib/core") : path.join(INSTALL_ROOT, "core");
 const DEFAULT_TIMEOUT_MS = 4000;
 
 /** Credentials, authorization headers and URL secrets, in any field. */
@@ -125,7 +128,7 @@ function redactDeep<T>(value: T, secrets: string[]): T {
 
 function nexusVersion(): string {
   try {
-    return JSON.parse(fs.readFileSync(path.join(INSTALL_ROOT, "cli/package.json"), "utf8")).version ?? "unknown";
+    return JSON.parse(fs.readFileSync(path.join(CLI_ROOT, "package.json"), "utf8")).version ?? "unknown";
   } catch {
     return "unknown";
   }
@@ -276,7 +279,7 @@ export function configSources(config: HarnessConfig, flags: Record<string, any>,
       return {};
     }
   };
-  const installEnv = path.join(INSTALL_ROOT, "cli/.env");
+  const installEnv = path.join(CLI_ROOT, ".env");
   const cwdEnvPath = path.resolve(process.cwd(), ".env");
   const cwdEnv = cwdEnvPath === installEnv ? {} : read(cwdEnvPath);
   const userEnv = read(path.join(home, ".config/nexus/config.env"));
@@ -303,7 +306,7 @@ export function configSources(config: HarnessConfig, flags: Record<string, any>,
 
 const installCheck: Check = async () => {
   const build = getBuildIdentity();
-  const dist = path.join(INSTALL_ROOT, "cli/dist/index.js");
+  const dist = path.join(CLI_ROOT, "dist/index.js");
   const evidence = [
     `version ${build.version}`,
     build.commit === "unknown" ? "build identity unknown (built before build-info was recorded; run `make build`)" : `built from ${build.commit}${build.dirty ? " with uncommitted changes" : ""}${build.branch ? ` on ${build.branch}` : ""}`,
@@ -311,7 +314,7 @@ const installCheck: Check = async () => {
   ];
   if (!fs.existsSync(dist)) return f("install.build", "install", "fail", "The CLI build (cli/dist) is missing.", evidence, `Run \`make build\` in ${INSTALL_ROOT}.`);
   const built = fs.statSync(dist).mtimeMs;
-  const source = newestMtime(path.join(INSTALL_ROOT, "cli/src"), ".ts");
+  const source = PACKAGED_HOME ? 0 : newestMtime(path.join(CLI_ROOT, "src"), ".ts");
   if (source > built) {
     return f("install.build", "install", "warn", "cli/dist is older than cli/src: the running CLI may not include the latest source changes.", [...evidence, `dist ${new Date(built).toISOString()}`, `newest source ${new Date(source).toISOString()}`], `Run \`npm --prefix ${path.join(INSTALL_ROOT, "cli")} run build\`.`);
   }
@@ -331,12 +334,13 @@ const launcherCheck: Check = async () => {
     real = fs.realpathSync(launcher);
   } catch {}
   const evidence = [`${launcher} -> ${real}`];
-  const ours = real === path.join(INSTALL_ROOT, "harness.sh");
+  const ours = real === (PACKAGED_HOME ? path.join(PACKAGED_HOME, "bin/nexus") : path.join(INSTALL_ROOT, "harness.sh"));
   let routesDoctor = false;
   try {
     routesDoctor = /\[\[ "\$1" == "doctor" \]\]/.test(fs.readFileSync(real, "utf8"));
   } catch {}
-  if (!ours) return f("runtime.launcher", "runtime", "warn", "The `nexus` on PATH is not this installation's launcher.", evidence, `Point it at ${path.join(INSTALL_ROOT, "harness.sh")}, or run this installation directly.`);
+  if (!ours) return f("runtime.launcher", "runtime", "warn", "The `nexus` on PATH is not this installation's launcher.", evidence, PACKAGED_HOME ? "Use the nexus launcher installed by the package." : `Point it at ${path.join(INSTALL_ROOT, "harness.sh")}, or run this installation directly.`);
+  if (PACKAGED_HOME) return f("runtime.launcher", "runtime", "pass", "The `nexus` launcher on PATH is this packaged installation.", evidence);
   if (!routesDoctor) return f("runtime.launcher", "runtime", "fail", "The `nexus` launcher does not route `doctor`; `nexus doctor` would start an agent task instead.", evidence, "Update harness.sh from this checkout.");
   return f("runtime.launcher", "runtime", "pass", "The `nexus` launcher on PATH is this installation and routes `doctor`.", evidence);
 };
@@ -482,7 +486,7 @@ const engineCheck: Check = async (ctx, signal) => {
   }
   const builtAt = fs.statSync(binary).mtimeMs;
   // The engine is built from core/src/*.rs; core/src/bin holds the TUI, checked separately.
-  const sourceAt = newestMtime(path.join(path.dirname(coreCargoManifest()), "src"), ".rs", 2000, false);
+  const sourceAt = PACKAGED_HOME ? 0 : newestMtime(path.join(path.dirname(coreCargoManifest()), "src"), ".rs", 2000, false);
   if (reported !== nexusVersion()) {
     out.push(f("engine.binary", "engine", "warn", `The engine reports version ${reported}, the CLI ${nexusVersion()}.`, evidence, "Rebuild with `make build`."));
   } else if (sourceAt > builtAt) {
@@ -509,12 +513,12 @@ const engineCheck: Check = async (ctx, signal) => {
 /** The live TUI and its sidecar: present and built from current source (a stale build hides recent fixes). */
 const tuiCheck: Check = async () => {
   const core = path.dirname(coreCargoManifest());
-  const tui = path.join(core, "target/release/nexus-tui");
-  const sidecar = path.join(INSTALL_ROOT, "cli/dist/sidecar.js");
+  const tui = PACKAGED_HOME ? path.join(CORE_ROOT, "nexus-tui") : path.join(core, "target/release/nexus-tui");
+  const sidecar = path.join(CLI_ROOT, "dist/sidecar.js");
   if (!fs.existsSync(tui) || !fs.existsSync(sidecar)) {
     return f("tui.build", "install", "warn", "The live TUI is not built; `nexus` without arguments falls back to the readline REPL.", [fs.existsSync(tui) ? sidecar : tui], "Run `make build`.");
   }
-  const sourceAt = newestMtime(path.join(core, "src/bin"), ".rs");
+  const sourceAt = PACKAGED_HOME ? 0 : newestMtime(path.join(core, "src/bin"), ".rs");
   const builtAt = fs.statSync(tui).mtimeMs;
   if (sourceAt > builtAt) {
     return f("tui.build", "install", "warn", "The live TUI binary is older than its source.", [tui, `built ${new Date(builtAt).toISOString()}`, `newest source ${new Date(sourceAt).toISOString()}`], "Run `make build-core`.");

@@ -206,7 +206,9 @@ describe("inference transport: failures are classified, keep their cause, and ar
   test("premature termination after partial output is stream_interrupted with its cause, partial text not returned", async () => {
     await withServer(
       (_q, res) => {
-        sseHead(res);
+        // Force a detectable short body: with a close-delimited/chunked response, both Node 20 and 24
+        // expose a peer reset as ordinary EOF and the client correctly reports stream_incomplete.
+        res.writeHead(200, { "Content-Type": "text/event-stream", Connection: "close", "Content-Length": "1024" });
         res.write(text("partial "));
         setTimeout(() => res.socket?.resetAndDestroy(), 50);
       },

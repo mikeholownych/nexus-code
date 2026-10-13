@@ -1,0 +1,22 @@
+{
+  "name": "@nexus/contest-demo",
+  "version": "1.0.0",
+  "description": "Nexus + Git + Cloudflare Artifacts Agent-Native Collaboration Demo",
+  "type": "module",
+  "main": "nexus-demo.mjs",
+  "bin": {
+    "nexus-demo": "./nexus-demo.mjs"
+  },
+  "scripts": {
+    "demo": "node nexus-demo.mjs",
+    "demo:fast": "node nexus-demo.mjs --fast",
+    "demo:paced": "node nexus-demo.mjs --pacing 1200",
+    "demo:agents": "node nexus-demo.mjs --agents real",
+    "demo:cloudflare": "node nexus-demo.mjs --mode cloudflare",
+		"test": "node test/substrate-adapter.test.mjs && node test/restricted-code-executor.test.mjs && node test/real-agent-runner.test.mjs && node test/demo-smoke.test.mjs"
+  },
+  "dependencies": {
+    "typescript": "5.9.3"
+  },
+  "license": "MIT"
+}

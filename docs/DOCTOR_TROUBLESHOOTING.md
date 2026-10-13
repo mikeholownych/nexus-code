@@ -13,8 +13,8 @@ status is in `docs/reviews/NEXUS_MATURITY_FIXES_2026-10-11.md` (rows D.1–D.14 
 | `nexus check` | Compatibility alias for `nexus doctor` (same options, same engine). |
 | `/doctor` (TUI, REPL) | The running session's own configuration, including `/model` switches and `/cd`. Read-only `/doctor` runs while a turn is in progress; `/doctor --fix` waits until the session is idle. |
 
-`nexus` is the installed launcher (`harness.sh`); it routes `doctor` and `check` to the CLI. Without the launcher, run
-`node cli/dist/index.js doctor`.
+The packaged `nexus` launcher enters the CLI directly. In a source checkout, run `node cli/dist/index.js doctor` or use
+the `harness.sh` launcher when it is configured.
 
 ## Flags
 
@@ -40,10 +40,10 @@ without stopping the others.
 
 | Id | What is checked (and with which Nexus resolver) |
 |---|---|
-| `install.build` | `cli/dist` exists and is not older than `cli/src` (a stale build hides source fixes). |
-| `tui.build` | The live TUI binary and `cli/dist/sidecar.js` exist and are newer than `core/src/bin`. |
+| `install.build` | The packaged CLI build exists; in a source checkout, `cli/dist` is not older than `cli/src`. |
+| `tui.build` | The packaged TUI binary and `cli/dist/sidecar.js` exist; in a source checkout, they are newer than `core/src/bin`. |
 | `runtime.node` | Node.js 20 or later. |
-| `runtime.launcher` | The `nexus` on PATH is this installation's `harness.sh` and routes `doctor`. |
+| `runtime.launcher` | The `nexus` on PATH resolves to this packaged install or the configured source checkout launcher. |
 | `config.valid` | `buildConfig` succeeds with the flags given (provider selection, base URLs, budgets). |
 | `endpoint.configured` | An endpoint is configured; whether a credential is present (never shown). |
 | `endpoint.reachable` | `LocalLlmClient.probeAvailability`: the endpoint answers `GET <endpoint>/models` (the `/v1` path is kept). |

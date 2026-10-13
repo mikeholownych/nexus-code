@@ -1,0 +1,29 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*.*.*"]
+
+permissions:
+  contents: write
+
+jobs:
+  package:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: cli/package-lock.json
+      - name: Match tag to source version
+        run: test "${GITHUB_REF_NAME#v}" = "$(node -p 'require("./package.json").version')"
+      - run: bash scripts/package-linux.sh "$GITHUB_REF_NAME" "$RUNNER_TEMP/dist"
+      - run: bash scripts/smoke-package.sh "$RUNNER_TEMP/dist/nexus-linux-x86_64-$GITHUB_REF_NAME.tar.gz"
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: ${{ runner.temp }}/dist/*
+          generate_release_notes: true
+          prerelease: ${{ contains(github.ref_name, '-') }}

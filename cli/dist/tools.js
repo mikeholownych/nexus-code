@@ -9,7 +9,9 @@ import { isSafeReadOnlyCommand } from "./core/authority.js";
 export { HARNESS_TOOLS, defaultRegistry };
 /** Rust engine binaries the bridge looks for, in order (release before debug). */
 export function coreBinaryCandidates() {
+    const packagedCoreDir = process.env.NEXUS_HOME ? path.join(process.env.NEXUS_HOME, "lib", "core") : undefined;
     return [
+        ...(packagedCoreDir ? [path.join(packagedCoreDir, "harness-core")] : []),
         path.resolve(__dirname, "../../core/target/release/harness-core"),
         path.resolve(__dirname, "../../core/target/debug/harness-core"),
         path.resolve(__dirname, "../../core/target/release/harness-core.exe"),
@@ -22,6 +24,8 @@ export function resolveCoreBinary() {
 }
 /** Cargo manifest the bridge's `cargo run` fallback builds. */
 export function coreCargoManifest() {
+    if (process.env.NEXUS_HOME)
+        return path.resolve(process.env.NEXUS_HOME, "lib", "core", "Cargo.toml");
     return path.resolve(__dirname, "../../core/Cargo.toml");
 }
 const __filename = fileURLToPath(import.meta.url);
