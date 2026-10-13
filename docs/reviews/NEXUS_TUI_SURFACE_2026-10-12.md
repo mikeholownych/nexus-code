@@ -160,6 +160,34 @@ could reach "approve all later actions", each timing threshold only moved the ho
 Verification at `b50ae9a`: `make test` Rust 24 + 238 + 2, CLI 810/810, gates pass; clippy 0 warnings in
 `src/bin/nexus_tui/`; all seven PTY scenarios 13 runs (10 serial, 3 with 8 CPU-bound processes while the host also ran an ansible playbook and other agent sessions): 90/91 — the failure was the maturity scenario's fixed 90 s wait for its 35-step turn (step 10 reached; normally ~20 s), raised to 180 s in `9792d03`.
 
+## Independent re-acceptance, round 5 (review of `7503b23`; follow-up in `028ca90`)
+
+**Approval/input safety: ACCEPTED WITH DEFECTS. Visual acceptance: ACCEPTED WITH DEFECTS. Provenance: verified.** The
+reviewer's exhaustive search (about 2.3 million key sequences over four start states) found approve-all only as `a`/`A`
+⏎ ⏎ on an armed panel, never on panels typed into, opened over a draft or during recent typing; all round-1–4 probes
+and PTY scenarios decide nothing. The reviewer judged the residual risk **acceptable for a review-mode safety gate**:
+what remains is approval of one visible action, not a switch to auto mode. Follow-up in `028ca90`:
+
+| Finding | Resolution | Evidence |
+|---|---|---|
+| P2-1 → (2 s) Enter approves once from draft editing (fix soon) | On a panel whose letters are off, Approve takes Enter twice (the second confirms; Esc denies; other keys cancel); Deny takes one | units updated (`a_typed_into_panel_needs_a_longer_look…`, draft/resize, round-trip) |
+| P3-1 a one-letter message "a" then a second Enter approves all | Not changed: the deliberate path, with the "enter again approves this and every later action" prompt between the Enters | — |
+| P3-2 a first word starting with y/n answers an armed panel | Not changed: inherent to letter shortcuts, only when there was no draft and no typing in the 2 s before | — |
+| P3-3 Delete is not typing | Delete counts as typing | unit (Delete 50 ms before the panel → `y` decides nothing) |
+| P3-4 Esc skips the 1.5 s settle | Esc waits too | unit `the_approval_modal_takes_keys_…` |
+| P3-5 hints during settle / dead approve-all button | Settle-state hint; the two-Enter approval stated where letters are off; approve-all dimmed while letters are off | screen 10 |
+| P3-5 confirmation hint cut at 40–50 columns; "typing ignored" also on a never-typed draft panel; status line omits `a` | Not changed | — |
+| P3-6 recent-typing disarm re-arms only on resize | Not changed (not a safety risk) | — |
+| P3-7 evidence lacks armed, `a`-selected, confirmation and queue states | Not changed (covered by unit tests, not screens) | — |
+| P3-8 renderer glyphs, identical screens, 60-column indent | Not changed | — |
+
+Verification at `028ca90`: `make test` Rust 24 + 238 + 2, CLI 810/810, gates pass (one earlier full run had an
+unrelated CLI test, `sidecar_steering_diff` "steering applied before a restart…", fail at its resume-notice assertion;
+3/3 alone and green on the rerun — recorded); clippy 0 warnings in `src/bin/nexus_tui/`; all seven PTY scenarios 13 runs: 90/91 — the failure was a real defect outside the TUI: about 1 in 70
+generated session ids was classified as a high-entropy secret, so durable-state protection refused to save the session
+and `/resume` found none ("Session not found: latest"); fixed in `88e0700` (also the cause of the intermittent
+`sidecar_steering_diff` failure); after which all seven PTY scenarios passed 13 runs at `88e0700` (10 serial, 3 under load): 91/91.
+
 ## Result
 
 Implementation commits on branch `feat/tui-surface` (not merged): `83e7405` (the surface work), `804c5df` (approval
@@ -169,7 +197,8 @@ pauses approved "all later actions"), `327570b` makes the PTY drivers ignore inh
 main, `d09c08f` is Stage 6 (steering and follow-ups pinned verbatim, saved with mid-turn progress). `fbf77b3` (made
 while a second agent was also committing to the branch) replaced the `d09c08f` evidence with an older `dda2e62` capture.
 `7061b06` fixes the round-3 findings and `416c2bf` the approval scenario's harness race. `b50ae9a` redesigns approval
-input after round 4, `9792d03` widens a PTY driver wait. The current evidence is from `9792d03`.
+input after round 4, `9792d03` widens a PTY driver wait, `028ca90` is the round-5 follow-up and `88e0700` fixes session
+ids being classified as secrets. The current evidence is from `88e0700`.
 
 | Revision | Build identity | What was run there |
 |---|---|---|
@@ -187,7 +216,10 @@ input after round 4, `9792d03` widens a PTY driver wait. The current evidence is
 | checkout = `7061b06` | — | `make test`: Rust 24 + 235 + 2, CLI 810/810, gates pass; clippy 0 warnings in `src/bin/nexus_tui/`; PTY scenarios 13 runs: 90/91 (harness race, fixed in `416c2bf`) |
 | clean worktree of `416c2bf` | `nexus-tui` `329d722d65ecdd08…`, `sidecar.js` `6dd91487bb659dc7…` | approval PTY scenarios 3/3; evidence runs (superseded) |
 | checkout = `b50ae9a` | — | `make test`: Rust 24 + 238 + 2, CLI 810/810, gates pass; clippy 0 warnings in `src/bin/nexus_tui/`; PTY scenarios 13 runs: 90/91 (driver wait, widened in `9792d03`) |
-| clean worktree of `9792d03` | `nexus-tui` `b366340b90a1b983…`, `sidecar.js` `6dd91487bb659dc7…` | maturity scenario 1/1; evidence runs `tui_surface` and `tui_diff` (gitHead `9792d03`), 2/2 — `docs/reviews/evidence/tui_surface/`, `docs/reviews/evidence/tui_diff/`; `sha256sum -c` passes |
+| clean worktree of `9792d03` | `nexus-tui` `b366340b90a1b983…`, `sidecar.js` `6dd91487bb659dc7…` | evidence runs (superseded); independently re-accepted in round 5 (of `7503b23`, docs-only on top) |
+| checkout = `028ca90` | — | `make test`: Rust 24 + 238 + 2, CLI 810/810, gates pass; PTY 13 runs: 90/91 (session-id defect, fixed in `88e0700`) |
+| checkout = `88e0700` | — | `make test`: Rust 24 + 238 + 2, CLI 811/811, gates pass; PTY 13 runs (10 serial, 3 under load): 91/91 |
+| clean worktree of `88e0700` | `nexus-tui` `f979a79c4965c96d…`, `sidecar.js` `6dd91487bb659dc7…` | evidence runs `tui_surface` and `tui_diff` (gitHead `88e0700`), 2/2 — `docs/reviews/evidence/tui_surface/`, `docs/reviews/evidence/tui_diff/`; `sha256sum -c` passes |
 
 ### Changes
 
@@ -224,8 +256,6 @@ actual output.
 
 ### Status
 
-**Round 4 redesign implemented and verified by the implementer; independent re-acceptance (round 5) pending.** F1–F3 and F5 are
-fixed with unit and PTY tests; O1–O3 are done; the visual defects from the review are fixed or, for the code-block
-background, shown not to reproduce. The screens were inspected by the implementer, which found and fixed the command
-preview defect (`404fa64`). A reviewer other than the implementer has not yet re-accepted the visuals and approval
-behaviour.
+**Independent acceptance: ACCEPTED WITH DEFECTS** (round 5, of `7503b23`: approval/input safety and visuals; residual risk
+judged acceptable for a review-mode gate). `028ca90` fixes the round-5 P2 and three P3s; the remaining P3s are listed in
+the round-5 table. The follow-up has been verified by the implementer, not re-reviewed independently.

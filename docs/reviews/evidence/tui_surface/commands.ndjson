@@ -1,6 +1,6 @@
 {"id":"t1","text":"Explain the plan for the cache layer.","type":"prompt.submit","v":1}
 {"id":"t2","text":"Inspect the repository and add the cache module.","type":"prompt.submit","v":1}
-{"id":"g28e91e1f0a37a5-1","text":"prefer an LRU policy","type":"steer","v":1}
+{"id":"g2f4e2710a12250-1","text":"prefer an LRU policy","type":"steer","v":1}
 {"id":"t3","text":"line one of the note\n\tindented line ✓ 字\nline three","type":"prompt.submit","v":1}
 {"args":"review","command":"mode","id":"s1","type":"slash","v":1}
 {"id":"t4","text":"Write the config file.","type":"prompt.submit","v":1}
