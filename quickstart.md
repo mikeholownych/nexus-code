@@ -7,7 +7,7 @@ Nexus Code is a local coding client. It is separate from the Cloudflare Workers 
 On Linux x86-64 with glibc 2.35 or newer and Node.js 20 or newer:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/mikeholownych/nexus-code/main/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/mikeholownych/nexus-code/main/install.sh | NEXUS_VERSION=v0.1.0-alpha.1 sh
 ```
 
 The installer downloads the matching versioned client archive and `SHA256SUMS` from this repository's GitHub Release, verifies the archive, and installs under `~/.local/lib/nexus`. It adds a `nexus` symlink in `~/.local/bin`; it does not edit shell startup files or use root. If `~/.local/bin` is not in `PATH`, add it yourself:
@@ -16,7 +16,7 @@ The installer downloads the matching versioned client archive and `SHA256SUMS` f
 export PATH="$HOME/.local/bin:$PATH"
 ```
 
-The command above follows the latest stable release and reports clearly when no stable release has been published. To install a specific published version, including a prerelease, pipe the same installer with `NEXUS_VERSION` set for the shell:
+The command above pins the current published prerelease. To follow the latest stable release after one is published, omit `NEXUS_VERSION`. To install another specific version, including a prerelease, set the desired tag:
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/mikeholownych/nexus-code/main/install.sh | NEXUS_VERSION=v0.1.0-alpha.1 sh

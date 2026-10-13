@@ -25,11 +25,11 @@ bash scripts/package-linux.sh v0.1.0-alpha.1 ./release
 bash scripts/smoke-package.sh ./release/nexus-linux-x86_64-v0.1.0-alpha.1.tar.gz
 ```
 
-CI builds and uploads the same package on `main` and pull requests. A SemVer tag such as `v0.1.0-alpha.1` matching `package.json` triggers the controlled GitHub Release workflow; prerelease tags are marked prereleases. Do not create the tag until the candidate package and notes are accepted. Releases contain the versioned archive and `SHA256SUMS`.
+CI validates pull requests and `main`. A SemVer tag matching `package.json` triggers the controlled GitHub Release workflow; prerelease tags are marked prereleases. Releases contain the versioned archive and `SHA256SUMS`. The current published candidate is [`v0.1.0-alpha.1`](https://github.com/mikeholownych/nexus-code/releases/tag/v0.1.0-alpha.1).
 
 The installer uses these stable URLs:
 
 - `https://raw.githubusercontent.com/mikeholownych/nexus-code/main/install.sh`
 - `https://github.com/mikeholownych/nexus-code/releases`
 
-Before a release is published, the installer intentionally reports that no stable release exists.
+The no-version installer path follows the latest stable release. While only prereleases are published, use `NEXUS_VERSION` to pin a prerelease as shown in the [quickstart](../quickstart.md).
