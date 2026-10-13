@@ -79,8 +79,14 @@ def main():
 
     # 5. Typing that continues across the third approval panel's appearance never decides.
     typed = "please add tests and then run them now"
+    seen_while_typing = False
     for ch in typed:
         s.send(ch, settle=0.1)
+        seen_while_typing = seen_while_typing or has(s.color.lines(), "Approval needed")
+    result["panel_seen_while_typing"] = seen_while_typing
+    # The third request can arrive late on a loaded host: wait for its panel before checking (nothing may decide).
+    wait_events(events, "approval.request", 3, 20, s)
+    s.wait_screen(lambda lines: has(lines, "Approval needed"), 10, "the third approval panel")
     s.pump(0.2)
     result["after_typing_across"] = {"decisions": decisions(commands), "panel_open": has(s.color.lines(), "Approval needed")}
     s.pump(1.0)
