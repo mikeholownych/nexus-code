@@ -19,7 +19,8 @@ const commit = git("rev-parse", "--short=12", "HEAD");
 const info = {
   commit: commit ?? "unknown",
   commitTime: commit ? git("log", "-1", "--format=%cI") : null,
-  branch: commit ? git("rev-parse", "--abbrev-ref", "HEAD") : null,
+  // A detached checkout has no branch ("HEAD" is not one).
+  branch: commit ? (git("rev-parse", "--abbrev-ref", "HEAD") || "").replace(/^HEAD$/, "") || null : null,
   // Build output is tracked in this repository; a rebuilt cli/dist alone does not make the source dirty.
   dirty: commit ? Boolean(git("status", "--porcelain", "--untracked-files=no", "--", ".", ":(exclude)cli/dist")) : false,
 };

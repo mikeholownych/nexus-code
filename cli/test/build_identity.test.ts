@@ -15,7 +15,8 @@ test("the build writes the commit, its time, the branch and whether the source (
   const info = JSON.parse(fs.readFileSync(path.join(cli, "dist/build-info.json"), "utf8"));
   assert.equal(info.commit, git("rev-parse", "--short=12", "HEAD"));
   assert.equal(info.commitTime, git("log", "-1", "--format=%cI"));
-  assert.equal(info.branch, git("rev-parse", "--abbrev-ref", "HEAD"));
+  const branch = git("rev-parse", "--abbrev-ref", "HEAD");
+  assert.equal(info.branch, branch === "HEAD" ? null : branch, "a detached checkout records no branch");
   const sourceChanges = git("status", "--porcelain", "--untracked-files=no", "--", "..", ":(exclude)../cli/dist");
   assert.equal(info.dirty, sourceChanges.length > 0);
   const again = fs.readFileSync(path.join(cli, "dist/build-info.json"), "utf8");
