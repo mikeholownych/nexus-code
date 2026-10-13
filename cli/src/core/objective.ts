@@ -18,6 +18,8 @@ export const PINNED_LEDGER_PREFIX = "[Objective Ledger - pinned by Nexus; never 
 export const STEERING_PREFIX = "[Operator steering";
 /** Objectives longer than this are pinned in full only while the original message has left the context. */
 export const MAX_PINNED_OBJECTIVE_CHARS = 24_000;
+/** Operator follow-ups and steering pinned verbatim, newest first, up to this many characters (or the block's budget). */
+const MAX_PINNED_OPERATOR_CHARS = 12_000;
 const MAX_REQUIREMENT_TEXT = 240;
 const MAX_EVIDENCE_ITEMS = 6;
 const MAX_EVIDENCE_CHARS = 300;
@@ -489,9 +491,27 @@ export function renderPinnedLedger(ledger: ObjectiveLedger, includeObjective: bo
   } else {
     out.push(`Operator objective: the operator's original message in this conversation (sha256 ${ledger.objectiveSha256.slice(0, 12)}).`);
   }
+  // Operator follow-ups and steering are carried verbatim, newest first within their budget; what does not fit is named
+  // with its size and read_objective returns it in full.
+  const steering = ledger.steering.filter((s) => s.status !== "cancelled");
+  const operatorMessages = [
+    ...ledger.amendments.map((a, i) => ({ key: `amendment:${i}`, at: a.at, size: a.text.length })),
+    ...steering.map((s) => ({ key: `steering:${s.id}`, at: s.receivedAt, size: s.text.length })),
+  ].sort((a, b) => b.at.localeCompare(a.at));
+  let operatorRoom = Math.min(MAX_PINNED_OPERATOR_CHARS, budgetChars);
+  const verbatim = new Set<string>();
+  for (const m of operatorMessages) {
+    if (m.size > operatorRoom) continue;
+    verbatim.add(m.key);
+    operatorRoom -= m.size;
+  }
+  const operatorEntry = (key: string, label: string, text: string, fetch: string) =>
+    verbatim.has(key)
+      ? `- ${label} ${text}`
+      : `- ${label} (${text.length} chars, not shown for space; read_objective ${fetch} returns it verbatim): ${clip(text.replace(/\s+/g, " "), 120)}`;
   if (ledger.amendments.length) {
     out.push("Operator follow-ups on this objective:");
-    for (const amendment of ledger.amendments.slice(-8)) out.push(`- ${clip(amendment.text.replace(/\s+/g, " "), 400)}`);
+    ledger.amendments.forEach((a, i) => out.push(operatorEntry(`amendment:${i}`, `A${i + 1}`, a.text, `amendment "A${i + 1}"`)));
   }
   const gating = gatingRequirements(ledger);
   if (gating.length) {
@@ -507,10 +527,11 @@ export function renderPinnedLedger(ledger: ObjectiveLedger, includeObjective: bo
     out.push("Explicit scope changes:");
     for (const change of ledger.scopeChanges.slice(-8)) out.push(`- ${change.requirement}: ${change.from} -> ${change.to} (${change.reason})`);
   }
-  const steering = ledger.steering.filter((s) => s.status !== "cancelled");
   if (steering.length) {
     out.push("Operator steering received during the work (applies on top of the objective):");
-    for (const s of steering.slice(-10)) out.push(`- ${s.id} [${s.status}${s.appliedAtStep ? ` at step ${s.appliedAtStep}` : ""}] ${clip(s.text.replace(/\s+/g, " "), 600)}`);
+    for (const s of steering) {
+      out.push(operatorEntry(`steering:${s.id}`, `${s.id} [${s.status}${s.appliedAtStep ? ` at step ${s.appliedAtStep}` : ""}]`, s.text, `steering "${s.id}"`));
+    }
   }
   const attempts = ledger.verification.slice(-3);
   if (attempts.length) {
@@ -608,11 +629,13 @@ export const READ_OBJECTIVE_CAPABILITY: CanonicalCapability = {
     function: {
       name: "read_objective",
       description:
-        "Return the operator's objective verbatim: the complete wording of one requirement (requirement: \"R3\"), or a character range (offset, length up to 20000). Use it when the pinned Objective Ledger says part of the objective is not shown.",
+        "Return the operator's words verbatim: the complete wording of one requirement (requirement: \"R3\"), one steering message (steering: its id), one follow-up (amendment: \"A2\"), or a character range of the objective (offset, length up to 20000). Use it when the pinned Objective Ledger says something is not shown.",
       parameters: {
         type: "object",
         properties: {
           requirement: { type: "string", description: "Requirement id, e.g. R3." },
+          steering: { type: "string", description: "Steering id, as named in the ledger." },
+          amendment: { type: "string", description: "Follow-up id, e.g. A2." },
           offset: { type: "number", description: "Start character (0-based)." },
           length: { type: "number", description: "Characters to return (max 20000)." },
         },
@@ -622,7 +645,23 @@ export const READ_OBJECTIVE_CAPABILITY: CanonicalCapability = {
 } as CanonicalCapability;
 
 /** What read_objective returns for `args`. */
-export function readObjective(ledger: ObjectiveLedger, args: { requirement?: unknown; offset?: unknown; length?: unknown }): { ok: boolean; text: string } {
+export function readObjective(
+  ledger: ObjectiveLedger,
+  args: { requirement?: unknown; steering?: unknown; amendment?: unknown; offset?: unknown; length?: unknown },
+): { ok: boolean; text: string } {
+  if (typeof args.steering === "string" && args.steering.trim()) {
+    const id = args.steering.trim();
+    const s = ledger.steering.find((record) => record.id === id);
+    if (!s) return { ok: false, text: `No steering ${id}; known: ${ledger.steering.map((record) => record.id).join(", ") || "none"}.` };
+    return { ok: true, text: `Operator steering ${s.id} [${s.status}] received ${s.receivedAt}\n${s.text}` };
+  }
+  if (typeof args.amendment === "string" && args.amendment.trim()) {
+    const id = args.amendment.trim();
+    const n = Number(/^A(\d+)$/i.exec(id)?.[1] ?? 0);
+    const a = n > 0 ? ledger.amendments[n - 1] : undefined;
+    if (!a) return { ok: false, text: `No follow-up ${id}; known: ${ledger.amendments.length ? `A1-A${ledger.amendments.length}` : "none"}.` };
+    return { ok: true, text: `Operator follow-up A${n} received ${a.at}\n${a.text}` };
+  }
   if (typeof args.requirement === "string" && args.requirement.trim()) {
     const r = ledger.requirements.find((req) => req.id.toLowerCase() === String(args.requirement).trim().toLowerCase());
     if (!r) return { ok: false, text: `No requirement ${String(args.requirement)}; known: ${ledger.requirements.map((req) => req.id).join(", ")}.` };

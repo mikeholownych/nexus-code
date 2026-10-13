@@ -157,8 +157,11 @@ with its own numbered list — continues it (numbered items are added as further
 verifier run (`run_tests`, or the completion verifier) is recorded on the current workspace; any later change demotes
 it to *implemented (model-reported)*. Each requirement keeps its complete wording; when the objective is too long to
 repeat on every request, the unresolved requirements are carried in full and the agent reads the rest with
-`read_objective`. A verifier failure is not re-run while nothing it depends on has changed (same workspace files, no
-mutating command since, same dependency/environment markers, same process).
+`read_objective`. Your steering and follow-up messages are carried verbatim the same way, however many and however
+long, after compaction and after a crash and resume: the newest are repeated in full (about 12,000 characters), and
+any older one that does not fit is named with its size so the agent reads it with `read_objective`. A verifier
+failure is not re-run while nothing it depends on has changed (same workspace files, no mutating command since, same
+dependency/environment markers, same process).
 
 ### Direct Shell Execution (`!`)
 Run raw bash/zsh commands instantly inside the active workspace without invoking the LLM:

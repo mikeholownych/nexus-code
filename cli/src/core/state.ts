@@ -535,7 +535,7 @@ export class DurableStateManager {
    */
   public recordProgress(
     taskId: string,
-    progress: { messages?: ChatMessage[]; findings?: string[]; unverifiedChangesPending?: boolean }
+    progress: { messages?: ChatMessage[]; findings?: string[]; objective?: ObjectiveLedger | null; unverifiedChangesPending?: boolean }
   ): DurableTaskState {
     const state = this.loadTaskState(taskId);
     if (progress.messages) {
@@ -543,6 +543,7 @@ export class DurableStateManager {
       if (state.currentOperation && state.currentOperation.status !== "in_flight") state.currentOperation = null;
     }
     if (progress.findings) state.findings = progress.findings;
+    if (progress.objective !== undefined) state.objective = progress.objective;
     if (progress.unverifiedChangesPending !== undefined) state.unverifiedChangesPending = progress.unverifiedChangesPending;
     this.saveTaskState(state);
     return state;

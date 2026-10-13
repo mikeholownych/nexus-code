@@ -291,6 +291,8 @@ export class DurableStateManager {
         }
         if (progress.findings)
             state.findings = progress.findings;
+        if (progress.objective !== undefined)
+            state.objective = progress.objective;
         if (progress.unverifiedChangesPending !== undefined)
             state.unverifiedChangesPending = progress.unverifiedChangesPending;
         this.saveTaskState(state);

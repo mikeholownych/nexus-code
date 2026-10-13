@@ -14,7 +14,7 @@ import path from "node:path";
 import { AutonomousAgent } from "../src/agent.js";
 import { DEFAULT_CONTINUATION, HarnessConfig } from "../src/types.js";
 import { startGateway, makeRepo, Reply } from "./helpers/fixtures.js";
-import { createLedger, seedRequirements, applyRequirementUpdates, isNewObjective, failedCheckFrom, renderPinnedLedger, acceptDescoping, requirementDone, readObjective, invalidateVerified } from "../src/core/objective.js";
+import { createLedger, seedRequirements, applyRequirementUpdates, isNewObjective, failedCheckFrom, renderPinnedLedger, acceptDescoping, requirementDone, readObjective, invalidateVerified, queueSteering, amendObjective } from "../src/core/objective.js";
 import { stableToolCallId, redactTaskStateForPersistence } from "../src/core/persistence_protection.js";
 import { SessionManager } from "../src/session.js";
 import { WorkspacePath } from "../src/core/workspace_path.js";
@@ -302,6 +302,37 @@ describe("acceptance requirements stay authoritative over the plan", () => {
   });
 });
 
+describe("steering survives a crash mid-turn", () => {
+  test("steering applied mid-turn is saved with the conversation, so a crash before the next checkpoint cannot lose it", { timeout: 60_000 }, async () => {
+    const listDir: Reply = { kind: "tools", calls: [{ name: "list_dir", args: { path: "." } }] };
+    let agent: AutonomousAgent;
+    let atNextRequest: any;
+    const gw = await startGateway((n) => {
+      // What a crash at this point would leave: the durable state as of the request after steering was applied.
+      if (n === 2) atNextRequest = JSON.parse(JSON.stringify((agent as any).stateManager.loadTaskState((agent as any).currentTaskId)));
+      return n === 1 ? { ...listDir, delayMs: 300 } : n === 2 ? listDir : text("stopping here");
+    });
+    const repo = makeRepo();
+    agent = quiet(new AutonomousAgent(cfg(gw.url, repo, { continuation: { ...DEFAULT_CONTINUATION, maxCompletionNudges: 0 } })));
+    try {
+      const pending = agent.runTurn(OBJECTIVE);
+      await inferring(agent);
+      assert.equal(agent.queueSteering("s1", "STEER-CRASH: keep the old CSV format working.").status, "queued");
+      await pending;
+      assert.ok(atNextRequest, "the durable state was read at the request after steering");
+      assert.ok(atNextRequest.messages.some((m: any) => String(m.content).includes("STEER-CRASH")), "the steering message is in the saved conversation");
+      const record = atNextRequest.objective?.steering?.find((s: any) => s.id === "s1");
+      assert.equal(record?.status, "applied", `the saved ledger records the steering as applied: ${JSON.stringify(atNextRequest.objective?.steering)}`);
+      // After a resume, once compaction removes the message, the pinned ledger still carries it.
+      assert.match(renderPinnedLedger(atNextRequest.objective, true), /s1 \[applied at step \d+\] STEER-CRASH: keep the old CSV format working\./);
+    } finally {
+      agent.shutdown();
+      await gw.close();
+      fs.rmSync(repo, { recursive: true, force: true });
+    }
+  });
+});
+
 describe("the objective survives detailed follow-ups and stays complete in context", () => {
   test("long and numbered follow-ups after an incomplete turn amend the objective; nothing asked earlier is lost", { timeout: 60_000 }, async () => {
     const gw = await startGateway(() => text("stopping"));
@@ -331,6 +362,45 @@ describe("the objective survives detailed follow-ups and stays complete in conte
       await gw.close();
       fs.rmSync(repo, { recursive: true, force: true });
     }
+  });
+
+  test("operator steering and follow-ups are pinned verbatim — the oldest, the longest and multi-line ones included", () => {
+    const ledger = createLedger("Build the importer.");
+    const multiline = "STEER-CODE: name the helper like this:\n\n    def parse_row(line):\n        return line.split(\"\\t\")\n\nand nothing else.";
+    const long = `STEER-LONG: use the vendor's date format everywhere. ${"Keep timestamps in UTC; ".repeat(60)}STEER-LONG-END`;
+    queueSteering(ledger, "s-first", "STEER-FIRST: never touch the legacy/ folder.", "2026-10-13T00:00:00.000Z");
+    for (let i = 2; i <= 13; i++) queueSteering(ledger, `s${i}`, `Steering ${i}.`, `2026-10-13T00:00:${String(i).padStart(2, "0")}.000Z`);
+    queueSteering(ledger, "s-code", multiline, "2026-10-13T00:01:00.000Z");
+    queueSteering(ledger, "s-long", long, "2026-10-13T00:02:00.000Z");
+    amendObjective(ledger, "AMEND-FIRST: also support TSV.", "2026-10-12T23:00:00.000Z");
+    for (let i = 2; i <= 10; i++) amendObjective(ledger, `Follow-up ${i}.`, `2026-10-12T23:00:${String(i).padStart(2, "0")}.000Z`);
+    const amendLong = `AMEND-LONG: also log skipped rows. ${"Each with its row number; ".repeat(40)}AMEND-LONG-END`;
+    amendObjective(ledger, amendLong, "2026-10-12T23:30:00.000Z");
+    const pinned = renderPinnedLedger(ledger, false);
+    for (const text of ["STEER-FIRST: never touch the legacy/ folder.", multiline, long, "AMEND-FIRST: also support TSV.", amendLong]) {
+      assert.ok(pinned.includes(text), `pinned verbatim: ${text.slice(0, 40)}`);
+    }
+    assert.ok(!/not shown for space/i.test(pinned), "everything fits; nothing is deferred");
+  });
+
+  test("operator steering beyond the pinned budget is named, the newest kept in full, and read_objective returns it verbatim", () => {
+    const ledger = createLedger("Build the importer.");
+    const big = (tag: string) => `${tag}-START ${"x".repeat(5000)} ${tag}-END`;
+    amendObjective(ledger, big("AMD"), "2026-10-13T00:00:00.000Z");
+    queueSteering(ledger, "s-old", big("OLD"), "2026-10-13T00:01:00.000Z");
+    queueSteering(ledger, "s-mid", big("MID"), "2026-10-13T00:02:00.000Z");
+    queueSteering(ledger, "s-new", big("NEW"), "2026-10-13T00:03:00.000Z");
+    const pinned = renderPinnedLedger(ledger, false);
+    assert.ok(pinned.includes(big("NEW")) && pinned.includes(big("MID")), "the newest operator messages are pinned in full");
+    assert.ok(!pinned.includes("OLD-END") && !pinned.includes("AMD-END"), "older ones are not cut to fit");
+    assert.match(pinned, /s-old .*not shown for space.*read_objective/i);
+    assert.match(pinned, /A1 .*not shown for space.*read_objective/i);
+    assert.equal(readObjective(ledger, { steering: "s-old" }).text.split("\n").slice(1).join("\n"), big("OLD"));
+    assert.equal(readObjective(ledger, { amendment: "A1" }).text.split("\n").slice(1).join("\n"), big("AMD"));
+    const unknown = readObjective(ledger, { steering: "nope" });
+    assert.equal(unknown.ok, false);
+    assert.match(unknown.text, /s-old, s-mid, s-new/);
+    assert.equal(readObjective(ledger, { amendment: "A9" }).ok, false);
   });
 
   test("a long objective keeps every unresolved requirement's full wording in context, and read_objective returns the rest verbatim", { timeout: 60_000 }, async () => {

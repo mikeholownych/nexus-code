@@ -1166,7 +1166,8 @@ export class AutonomousAgent {
                 this.checkpointDurableState();
             else
                 this.stateManager?.recordProgress(this.currentTaskId, {
-                    ...(progress.messages ? { messages: this.messages, findings: this.getFindings(), unverifiedChangesPending: this.hasPendingModifications } : {}),
+                    // The ledger travels with the conversation: steering applied as a message is also a ledger record.
+                    ...(progress.messages ? { messages: this.messages, findings: this.getFindings(), objective: this.objective ?? null, unverifiedChangesPending: this.hasPendingModifications } : {}),
                     ...(progress.unverifiedChangesPending !== undefined ? { unverifiedChangesPending: progress.unverifiedChangesPending } : {}),
                 });
         }
