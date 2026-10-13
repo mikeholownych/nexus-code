@@ -237,6 +237,11 @@ export interface TurnResult {
   finishedAt: string;
   /** Automatic continuation: segments run and why the turn stopped (absent for single-segment turns). */
   continuation?: { segments: number; segmentSteps: number; stopReason?: string; stepsWithoutProgress: number };
+  /**
+   * Tool outputs that left the context during the turn and were not read again, when the turn still ended VERIFIED or
+   * REGRESSION_FREE: the verifier's result stands, but the work may rest on observations the model no longer had.
+   */
+  contextNotRetained?: number;
   /** Where the operator's objective stands: open requirements, the failed check and the next action. */
   objective?: {
     status: "completed" | "incomplete" | "blocked";
@@ -318,6 +323,12 @@ export function lifecycleStatusForTurn(t: TurnResult): "completed" | "failed" | 
 }
 
 /** Single-line projection used by terminal surfaces. Presentation only; semantics live in the fields. */
+/** The context qualifier of a verified result, for its summary line. */
+function contextTail(t: TurnResult): string {
+  const n = t.contextNotRetained;
+  return n ? `; ${n} tool output${n === 1 ? "" : "s"} it may rest on left context and ${n === 1 ? "was" : "were"} not read again` : "";
+}
+
 export function summarizeTurn(t: TurnResult): { heading: string; line: string } {
   const exec = t.execution;
   const tail = t.reason ? ` (${t.reason}${t.detail ? `: ${t.detail}` : ""})` : "";
@@ -354,9 +365,9 @@ export function summarizeTurn(t: TurnResult): { heading: string; line: string } 
   }
   switch (t.outcome) {
     case "VERIFIED":
-      return { heading: "TASK COMPLETED - VERIFIED", line: `execution=COMPLETED outcome=VERIFIED (${t.verification?.command})` };
+      return { heading: "TASK COMPLETED - VERIFIED", line: `execution=COMPLETED outcome=VERIFIED (${t.verification?.command})${contextTail(t)}` };
     case "REGRESSION_FREE":
-      return { heading: "TASK COMPLETED - REGRESSION FREE", line: `execution=COMPLETED outcome=REGRESSION_FREE (${t.verification?.command})${tail}` };
+      return { heading: "TASK COMPLETED - REGRESSION FREE", line: `execution=COMPLETED outcome=REGRESSION_FREE (${t.verification?.command})${tail}${contextTail(t)}` };
     case "NOT_REQUIRED":
       return { heading: "TURN ENDED - NO CHANGES TO VERIFY", line: `execution=COMPLETED outcome=NOT_REQUIRED modelStop=${t.modelStop}` };
     case "UNVERIFIED":

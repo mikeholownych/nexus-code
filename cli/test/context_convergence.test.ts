@@ -26,7 +26,7 @@ import { newOperation } from "../src/core/operation.js";
 import { AgentWorkUnitExecutor, driveOperation, OperationStore } from "../src/core/operation_runner.js";
 import type { ResourceDescriptor } from "../src/core/resources.js";
 import { DurableStateManager } from "../src/core/state.js";
-import { turnSucceeded } from "../src/core/turn.js";
+import { summarizeTurn, turnSucceeded } from "../src/core/turn.js";
 import type { HarnessConfig } from "../src/types.js";
 
 type Call = { name: string; args: unknown };
@@ -194,6 +194,25 @@ describe("A+B: compaction keeps the investigation moving instead of re-reading",
           assert.equal(m.content.length - notice[0].length, Number(notice[1]));
           assert.ok(Number(notice[1]) < Number(notice[2]));
         }
+      } finally {
+        agent.shutdown();
+        await gw.close();
+      }
+    });
+  });
+
+  test("CTX-03: a change that passes its verifier while resting on output it never fully saw is VERIFIED with a context qualifier", async () => {
+    await isolated(async (repo) => {
+      const write = (content: string): Call => ({ name: "write_file", args: { path: "review.md", content } });
+      const gw = await gateway((r) =>
+        r.n === 1 ? { tools: BATCH.map(read) } : r.n === 2 ? { tools: [write("markers reviewed for a.txt, b.txt, c.txt\n")] } : { tools: [done("review.md written")] });
+      const verifier = "test -s review.md && echo '✔ review.md written' && echo 'ℹ tests 1'";
+      const agent = quiet(new AutonomousAgent(cfg(gw, repo, { authoritativeVerifierCommand: verifier })));
+      try {
+        const turn = await muted(() => agent.runTurn("Read a.txt, b.txt and c.txt and write review.md, then call task_completed."));
+        assert.equal(turn.outcome, "VERIFIED", `${turn.outcome} ${turn.reason ?? ""}`);
+        assert.ok((turn.contextNotRetained ?? 0) >= 1, `the result says some output it rests on left context: ${turn.contextNotRetained}`);
+        assert.match(summarizeTurn(turn).line, /tool outputs? it may rest on left context and (was|were) not read again/);
       } finally {
         agent.shutdown();
         await gw.close();

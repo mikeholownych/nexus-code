@@ -3894,16 +3894,20 @@ Always explain your reasoning before or alongside your tool calls.`;
         }
         if (this.turnMutations > 0 || this.turnCarriedChanges) {
             if (evidence?.status === "PASSED") {
+                // The verifier passed on the change; it does not show the change's content rests on what the model saw. Output
+                // that left context during the turn and was not read again is counted on the result (CTX-03).
+                const contextQualifier = this.turnRemovedObservations.size ? { contextNotRetained: this.turnRemovedObservations.size } : {};
                 if (evidence.isDeliverableBound === false) {
                     return deepFreezeTurn(assertTurnResultInvariants({
                         ...base,
+                        ...contextQualifier,
                         execution: "COMPLETED",
                         outcome: "REGRESSION_FREE",
                         reason: "REGRESSION_FREE",
                         detail: "Passing test run did not cover the modified deliverables.",
                     }));
                 }
-                return deepFreezeTurn(assertTurnResultInvariants({ ...base, execution: "COMPLETED", outcome: "VERIFIED" }));
+                return deepFreezeTurn(assertTurnResultInvariants({ ...base, ...contextQualifier, execution: "COMPLETED", outcome: "VERIFIED" }));
             }
             // Defensive: changes were made, nothing is pending, yet no passing evidence is held.
             return deepFreezeTurn(assertTurnResultInvariants({ ...base, execution: "COMPLETED", outcome: "UNVERIFIED", reason: "VERIFICATION_NOT_RUN" }));

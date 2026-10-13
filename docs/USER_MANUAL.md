@@ -81,7 +81,10 @@ Press `<TAB>` at any prompt to autocomplete slash commands and directory paths.
   changed file is a test, the run names a changed file, a test imports a changed module, or the change has inline
   tests the run executes (Rust `#[cfg(test)]` under `cargo test`, Go `_test.go` files under `go test`). A passing run
   that shows none of that only shows nothing else broke: the outcome is `tests passed, change not covered`
-  (`REGRESSION_FREE`, exit code 2), and requirements cannot be marked `verified` on it.
+  (`REGRESSION_FREE`, exit code 2), and requirements cannot be marked `verified` on it. A verifier checks what it
+  checks — for a review or analysis it may check structure only — so when the work may rest on tool output that left
+  the context during the turn and was not read again, the outcome says so (`Done · verified (some context lost)`, and
+  `contextNotRetained` in the receipt): check such a result against the source.
 - **Scrolling.** Scrolled back, the view stays where you are while output arrives; the badge then says `new output`.
   PgDn or Ctrl+End returns to the newest line.
 - **Status.** The top line shows identity only: workspace, branch with the number of changed files (`●3 changed`),

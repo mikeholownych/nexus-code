@@ -2142,7 +2142,20 @@ pub fn outcome_for(turn: &Value) -> Outcome {
         reason
     };
     let (title, cause, next) = match (execution, outcome, reason) {
-        ("COMPLETED", "VERIFIED", _) => ("Done · verified".to_string(), verifier.map(|c| format!("{c} passed")), None),
+        ("COMPLETED", "VERIFIED", _) => match turn["contextNotRetained"].as_u64() {
+            // The verifier passed, but the work may rest on output the model no longer had (CTX-03).
+            Some(n) if n > 0 => (
+                "Done · verified (some context lost)".to_string(),
+                Some(format!(
+                    "{} passed; {n} tool output{} the work may rest on left context and {} not read again.",
+                    verifier.clone().unwrap_or_else(|| "The verifier".into()),
+                    if n == 1 { "" } else { "s" },
+                    if n == 1 { "was" } else { "were" }
+                )),
+                text("check the result against the source yourself (v shows the receipt)"),
+            ),
+            _ => ("Done · verified".to_string(), verifier.map(|c| format!("{c} passed")), None),
+        },
         // The suite passed but nothing shows it tested the change: nothing else broke, the change itself is unproven.
         ("COMPLETED", "REGRESSION_FREE", _) => (
             "Done · tests passed, change not covered".to_string(),
@@ -2224,6 +2237,7 @@ pub fn outcome_for(turn: &Value) -> Outcome {
 /// an operator's cancel or a budget stop is not.
 pub fn tone_for(turn: &Value) -> Tone {
     match (turn["execution"].as_str(), turn["outcome"].as_str(), turn["reason"].as_str()) {
+        (Some("COMPLETED"), Some("VERIFIED"), _) if turn["contextNotRetained"].as_u64().unwrap_or(0) > 0 => Tone::Caution,
         (Some("COMPLETED"), Some("VERIFIED" | "NOT_REQUIRED"), _) => Tone::Good,
         (Some("COMPLETED"), _, Some("VERIFIER_FAILED" | "VERIFIER_TIMED_OUT")) => Tone::Bad,
         (Some("COMPLETED"), _, _) => Tone::Caution,
@@ -2236,6 +2250,18 @@ pub fn tone_for(turn: &Value) -> Tone {
 mod tests {
     use super::*;
     use crate::protocol::Review;
+
+    #[test]
+    fn a_verified_result_that_lost_context_says_so_and_is_not_shown_as_plainly_good() {
+        let turn: Value = serde_json::from_str(r#"{"execution":"COMPLETED","outcome":"VERIFIED","verification":{"status":"PASSED","command":"node review_verifier.mjs"},"contextNotRetained":3}"#).unwrap();
+        let outcome = outcome_for(&turn);
+        assert_eq!(outcome.title, "Done · verified (some context lost)");
+        assert_eq!(outcome.cause.as_deref(), Some("node review_verifier.mjs passed; 3 tool outputs the work may rest on left context and were not read again."));
+        assert!(matches!(tone_for(&turn), Tone::Caution));
+        let plain: Value = serde_json::from_str(r#"{"execution":"COMPLETED","outcome":"VERIFIED","verification":{"status":"PASSED","command":"npm test"}}"#).unwrap();
+        assert_eq!(outcome_for(&plain).title, "Done · verified");
+        assert!(matches!(tone_for(&plain), Tone::Good));
+    }
 
     #[test]
     fn a_suite_that_did_not_cover_the_change_reads_as_unproven_not_verified() {

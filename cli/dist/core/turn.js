@@ -84,6 +84,11 @@ export function lifecycleStatusForTurn(t) {
     return "failed";
 }
 /** Single-line projection used by terminal surfaces. Presentation only; semantics live in the fields. */
+/** The context qualifier of a verified result, for its summary line. */
+function contextTail(t) {
+    const n = t.contextNotRetained;
+    return n ? `; ${n} tool output${n === 1 ? "" : "s"} it may rest on left context and ${n === 1 ? "was" : "were"} not read again` : "";
+}
 export function summarizeTurn(t) {
     const exec = t.execution;
     const tail = t.reason ? ` (${t.reason}${t.detail ? `: ${t.detail}` : ""})` : "";
@@ -122,9 +127,9 @@ export function summarizeTurn(t) {
     }
     switch (t.outcome) {
         case "VERIFIED":
-            return { heading: "TASK COMPLETED - VERIFIED", line: `execution=COMPLETED outcome=VERIFIED (${t.verification?.command})` };
+            return { heading: "TASK COMPLETED - VERIFIED", line: `execution=COMPLETED outcome=VERIFIED (${t.verification?.command})${contextTail(t)}` };
         case "REGRESSION_FREE":
-            return { heading: "TASK COMPLETED - REGRESSION FREE", line: `execution=COMPLETED outcome=REGRESSION_FREE (${t.verification?.command})${tail}` };
+            return { heading: "TASK COMPLETED - REGRESSION FREE", line: `execution=COMPLETED outcome=REGRESSION_FREE (${t.verification?.command})${tail}${contextTail(t)}` };
         case "NOT_REQUIRED":
             return { heading: "TURN ENDED - NO CHANGES TO VERIFY", line: `execution=COMPLETED outcome=NOT_REQUIRED modelStop=${t.modelStop}` };
         case "UNVERIFIED":
