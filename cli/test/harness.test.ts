@@ -2436,7 +2436,10 @@ error[E0308]: mismatched types
     // 3. highlightMarkdownCodeBlocks
     const md = "Here is some code:\n```typescript\nconst x = 10;\n```\nDone.";
     const formatted = highlightMarkdownCodeBlocks(md);
-    assert.ok(formatted.includes("const x = 10;"));
+    // Syntax highlighting deliberately adds ANSI color escapes; verify the
+    // source content survives presentation formatting.
+    const plainFormatted = formatted.replace(/\u001b\[[0-?]*[ -/]*[@-~]/g, "");
+    assert.ok(plainFormatted.includes("const x = 10;"));
   });
 
   test("Clipboard module provides copy and paste interface (Candidate #24)", () => {

@@ -176,11 +176,14 @@ describe("WP-10: Application Core & CLI/TUI Projection Convergence (INC-11, UI-0
     ]);
 
     const snapshot = new TerminalDashboard(app).renderSnapshot(100, 28);
-    assert.ok(snapshot.includes("OBJECTIVE  Map the auth flow"));
-    assert.ok(snapshot.includes("Reading file"));
-    assert.ok(snapshot.includes("Authentication rejects a missing principal"));
-    assert.ok(snapshot.includes("Model response"));
-    assert.equal(snapshot.includes(syntheticSecret), false, "TUI projection must redact sensitive values from view data");
+    // CI and interactive terminals can enable ANSI styling. Assertions below
+    // verify the projected text, independently of its terminal presentation.
+    const plainSnapshot = snapshot.replace(/\u001b\[[0-?]*[ -/]*[@-~]/g, "");
+    assert.ok(plainSnapshot.includes("OBJECTIVE  Map the auth flow"));
+    assert.ok(plainSnapshot.includes("Reading file"));
+    assert.ok(plainSnapshot.includes("Authentication rejects a missing principal"));
+    assert.ok(plainSnapshot.includes("Model response"));
+    assert.equal(plainSnapshot.includes(syntheticSecret), false, "TUI projection must redact sensitive values from view data");
   });
 
   test("UI-006: Unified slash commands via ApplicationCore", async () => {
