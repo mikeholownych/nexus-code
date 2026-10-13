@@ -155,6 +155,10 @@ export interface DurableTaskState {
   // The operator's objective, acceptance requirements, steering and verifier attempts (core/objective.ts)
   objective?: ObjectiveLedger | null;
 
+  // Full text of the findings the model recorded from inspected output (core/findings.ts); the durable record in
+  // `messages` may show them only condensed or by id.
+  findings?: string[];
+
   // How complete `messages` is as a history: context compaction replaces earlier messages with summaries, and the
   // replaced originals are archived beside the task state (see SessionManager.appendArchivedHistory).
   history?: {
@@ -525,19 +529,20 @@ export class DurableStateManager {
   }
 
   /**
-   * Durably records a task's progress within a turn: the conversation so far and/or its unverified-change
-   * obligation. Once the conversation holds a settled operation's result, the operation record is cleared; an
-   * in-flight record is kept so recovery still detects it.
+   * Durably records a task's progress within a turn: the conversation so far (with the findings its memory names)
+   * and/or its unverified-change obligation. Once the conversation holds a settled operation's result, the operation
+   * record is cleared; an in-flight record is kept so recovery still detects it.
    */
   public recordProgress(
     taskId: string,
-    progress: { messages?: ChatMessage[]; unverifiedChangesPending?: boolean }
+    progress: { messages?: ChatMessage[]; findings?: string[]; unverifiedChangesPending?: boolean }
   ): DurableTaskState {
     const state = this.loadTaskState(taskId);
     if (progress.messages) {
       state.messages = progress.messages;
       if (state.currentOperation && state.currentOperation.status !== "in_flight") state.currentOperation = null;
     }
+    if (progress.findings) state.findings = progress.findings;
     if (progress.unverifiedChangesPending !== undefined) state.unverifiedChangesPending = progress.unverifiedChangesPending;
     this.saveTaskState(state);
     return state;

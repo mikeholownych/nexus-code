@@ -35,6 +35,7 @@ import { InformationFlowBoundary } from "./core/egress.js";
 import { WorkspacePath } from "./core/workspace_path.js";
 import { ProviderRecoveryController, RecoveryCancelled, realRecoveryClock, recoveryPolicyFromEnv, } from "./core/provider_recovery.js";
 import { READ_OBJECTIVE_CAPABILITY, REQUIREMENTS_CAPABILITY, STEERING_PREFIX, amendObjective, applyRequirementUpdates, invalidateVerified, readObjective, requirementDone, blockedRequirements, createLedger, failedCheckFrom, gatingRequirements, isNewObjective, ledgerNeedsPinning, openRequirements, priorAttempt, queueSteering, recordAttempt, renderPinnedLedger, } from "./core/objective.js";
+import { ELIDED_FINDINGS_PREFIX, READ_FINDINGS_CAPABILITY, condenseFinding, elidedFindingsNote, findingId, incompleteOutputNotice, indexFinding, isCondensedFinding, readFindings, } from "./core/findings.js";
 import { describeChange, editTarget, snapshot } from "./file_diff.js";
 import pc from "picocolors";
 import { untrustedWorkspaceExtensions } from "./workspace_trust.js";
@@ -70,8 +71,66 @@ function isVerboseDetailNote(note) {
 const VERBOSE_NOTE_CHEAP_LIMIT = 512;
 const DETAIL_ELISION = "[Some verbose source detail elided to honor the detail budget; that content is no longer in this conversation. Rerun the tool that produced it if you need it.]";
 const DETAIL_TRUNCATION = "\n…#(truncated to detail budget; the rest is no longer in this conversation, rerun the tool to see it)";
+// Removal notes say what the model actually had of each observation that left its context. Every variant is a
+// removal (completion treats them alike); the legacy prefix is still parsed from persisted records.
 const REMOVED_OBSERVATION = "Output no longer in context (rerun to see it again): ";
-/** Identity of a tool observation: the same tool with the same arguments reacquires it. */
+const REMOVED_UNSEEN = "Never shown to you; output no longer in context (run it to see it): ";
+const REMOVED_PARTIAL = "Shown to you only in part (truncated); output no longer in context: ";
+const REMOVED_CHANGED = "Source changed after you inspected it; output no longer in context (re-read it for current content): ";
+const REMOVED_RECORDED = "Inspected earlier; output no longer in context (findings recorded in this memory; re-run only for a detail they lack or if the source may have changed): ";
+const REMOVED_UNRECORDED = "Inspected earlier; output no longer in context (no findings were recorded from it): ";
+const REMOVED_CONDENSED = "Inspected earlier; output no longer in context (its findings are shown here condensed or by id; read_findings returns them in full): ";
+const REMOVED_DROPPED = "Inspected earlier; output no longer in context (findings recorded from it were later dropped to bound this memory; re-run it if you need them): ";
+const REMOVAL_PREFIXES = [REMOVED_OBSERVATION, REMOVED_UNSEEN, REMOVED_PARTIAL, REMOVED_CHANGED, REMOVED_RECORDED, REMOVED_CONDENSED, REMOVED_UNRECORDED, REMOVED_DROPPED];
+// Everything else the memory notes (requests, files, commands, queries, removals) has its own bound beside findings
+// and raw detail. Past it the oldest commands, then file and query notes, then removal notes give way. Omitted
+// removals stand for output that is not in the context and can never be re-read into it, so nothing later rests on it.
+const MEMORY_NOTES_BUDGET_CHARS = 16_000;
+const NOTES_OMITTED = "[Older command, file and query notes omitted to bound this memory.]";
+const REMOVALS_OMITTED = "[Nexus: older notes on output that left your context were omitted to bound this memory; that output is not in your context.]";
+const OMITTED_REMOVALS_KEY = "(output whose removal notes were omitted to bound this memory)";
+/** Fits the notes that are neither findings nor raw detail to `budget` characters, oldest first, in place. */
+function boundMemoryNotes(notes, budget) {
+    const counted = (note) => !note.startsWith(FINDINGS_PREFIX) && !isVerboseDetailNote(note);
+    let chars = notes.reduce((total, note) => total + (counted(note) ? note.length : 0), 0);
+    const tiers = [
+        [(note) => note.startsWith("Recent commands: "), NOTES_OMITTED],
+        [(note) => note.startsWith("Inspected files: ") || note.startsWith("Reconstructible query retained for rerun: "), NOTES_OMITTED],
+        [(note) => REMOVAL_PREFIXES.some((prefix) => note.startsWith(prefix)), REMOVALS_OMITTED],
+    ];
+    for (const [givesWay, marker] of tiers) {
+        for (const note of notes.filter(givesWay)) {
+            if (chars <= budget)
+                return;
+            const index = notes.indexOf(note);
+            if (notes.includes(marker)) {
+                notes.splice(index, 1);
+                chars -= note.length;
+            }
+            else {
+                notes.splice(index, 1, marker);
+                chars += marker.length - note.length;
+            }
+        }
+    }
+}
+// Model-written findings captured from inspected output before compaction removes it. Claims, not evidence.
+const FINDINGS_PREFIX = "Findings recorded from inspected output [";
+const FINDINGS_LABEL = "; model-written, not independent proof]";
+const FINDINGS_NOTE_LIMIT = 3_000;
+const FINDINGS_BUDGET_CHARS = 24_000;
+/** How an earlier version marked a finding it cut to its start; such copies are still read from persisted records. */
+const LEGACY_SHORTENED = " …[shortened to fit this memory]";
+const FINDINGS_OUTGROWN = "[Nexus: your recorded findings have outgrown this memory. As more are recorded, the oldest are shown condensed, then only indexed, then only listed by id; read_findings returns any of them in full. Write what you have established into your work product now (the file or change your task produces; if it produces none, state it in the task_completed summary), and before stating that something is absent or never happens, check your findings with read_findings; then continue with what remains.]";
+const FINDINGS_INSTRUCTIONS = "You keep the working notes of an autonomous software-engineering agent. The tool output below is about to be removed from the agent's context window. Record, for the agent's current request, what this output actually shows: concrete facts with file paths, symbol names and line numbers, and anything it shows to be missing or inconsistent. Write each fact as its own line, with the file path or symbol it concerns. State only what the output itself shows; do not speculate, plan, or restate the request. Where output is marked as cut off, limited or incomplete, say what it could not show, and do not record that something is absent on the strength of it. If the output is irrelevant to the request, say so in one line. Plain text, at most 250 words.";
+function unseenTruncationNotice(shown, total) {
+    return `\n[Nexus: output truncated to fit the context window; showed the first ${shown} of ${total} characters. The rest was not shown to you, so do not assume what it contains. Note what you learned from this part, then inspect the specific parts you still need with narrower calls (read_file with start_line/end_line, outline_file, search_code) instead of repeating this one.]`;
+}
+// Only a well-formed trailing notice marks a truncated result; file text that quotes the template does not.
+const UNSEEN_TRUNCATION = /\n\[Nexus: output truncated to fit the context window; showed the first \d+ of \d+ characters\.[^\]\n]*\]$/;
+function isTruncatedObservation(message) {
+    return message.role === "tool" && UNSEEN_TRUNCATION.test(normalizeMessageContent(message.content).text.join(""));
+}
 /** Arguments longer than this are keyed by a preview and a digest instead of in full (see observationKey). */
 const OBSERVATION_KEY_ARGS = 240;
 /**
@@ -79,7 +138,7 @@ const OBSERVATION_KEY_ARGS = 240;
  * to a short preview plus a SHA-256 digest of the full arguments: still unique and stable, but a removal note no
  * longer repeats kilobytes of content on every later request.
  */
-function observationKey(name, rawArgs) {
+export function observationKey(name, rawArgs) {
     let args = rawArgs;
     try {
         if (typeof rawArgs === "string")
@@ -108,15 +167,19 @@ function collectRecordedRemovals(text, out) {
     for (const note of notes) {
         if (typeof note !== "string")
             continue;
-        if (note.startsWith(REMOVED_OBSERVATION))
-            out.add(note.slice(REMOVED_OBSERVATION.length));
+        const prefix = REMOVAL_PREFIXES.find((candidate) => note.startsWith(candidate));
+        if (prefix)
+            out.add(note.slice(prefix.length));
+        else if (note === REMOVALS_OMITTED)
+            out.add(OMITTED_REMOVALS_KEY);
         else if (note.startsWith("Earlier system message: "))
             collectRecordedRemovals(note.slice("Earlier system message: ".length), out);
     }
 }
-/** Observations whose output is present verbatim as a tool message. */
-function presentObservations(messages) {
+/** Observations whose output is present in full as a tool message, and those present only truncated. */
+function observationPresence(messages) {
     const present = new Set();
+    const truncated = new Set();
     const callKeys = new Map();
     for (const message of messages) {
         if (message.role === "assistant") {
@@ -128,21 +191,120 @@ function presentObservations(messages) {
         if (message.role === "tool" && typeof message.tool_call_id === "string") {
             const key = callKeys.get(message.tool_call_id);
             if (key)
-                present.add(key);
+                (isTruncatedObservation(message) ? truncated : present).add(key);
         }
     }
-    return present;
+    for (const key of present)
+        truncated.delete(key);
+    return { present, truncated };
 }
-/** Observations a restored conversation records as removed whose output is not present in it again. */
+/** Observations whose output is present in full as a tool message. */
+function presentObservations(messages) {
+    return observationPresence(messages).present;
+}
+/** Observations a restored conversation records as removed, or carries only truncated, whose full output is not present in it again. */
 function unreacquiredRemovals(messages) {
-    const removed = new Set();
+    const { present, truncated } = observationPresence(messages);
+    const removed = new Set(truncated);
     for (const message of messages) {
         if (message.role === "system")
             collectRecordedRemovals(normalizeMessageContent(message.content).text.join(""), removed);
     }
-    for (const key of presentObservations(messages))
+    for (const key of present)
         removed.delete(key);
     return removed;
+}
+/** The note `toolResultContent` puts before a re-run's output; not part of the output's identity. */
+const RERUN_NOTICE = /^\[Nexus: you ran this same call before;[^\]]*\]\n/;
+const STEP_NOTICE = /^\[Nexus: (your recorded findings have outgrown your memory|this is step \d+ of \d+);[^\]]*\]\n/;
+const CUT_NOTICE = /^\[Nexus: your response at step \d+ was cut off[^\]]*\]\n/;
+/** A response that failed after running this long was most likely ended by the provider's limit on how long one may take. */
+const LONG_RESPONSE_MS = 120_000;
+function cutResponseNotice(step, seconds) {
+    return `[Nexus: your response at step ${step} was cut off after ${seconds} s, before it was complete, most likely because the provider ends a response that takes too long; none of it was used. Respond with less at once. Write a long file in parts: write_file with its first part, then add each further part with edit_file in later steps, replacing the file's last few lines (enough that they occur nowhere earlier in it) with those lines followed by the next part. End each part where every bracket it opens is closed. Keep every response short enough to finish well within ${seconds} s.]`;
+}
+/** Content identity of a tool output, to tell whether a re-run returned what was inspected before. */
+function outputDigest(text) {
+    return createHash("sha256").update(text).digest("hex");
+}
+/** A tool output without the notes toolResultContent put before it for this step (not part of what the tool returned). */
+function withoutStepNotices(text) {
+    return text.replace(CUT_NOTICE, "").replace(STEP_NOTICE, "").replace(RERUN_NOTICE, "");
+}
+/** Where a finding's note in the memory came from: its id, or, for one recorded without ids, its header. */
+function findingIdentity(note) {
+    return findingId(note) ?? note.split("\n", 1)[0];
+}
+/** Whether `short` is a copy an earlier version shortened from `full` (a finding without an id, cut to its start). */
+function shortenedFrom(short, full) {
+    const header = short.split("\n", 1)[0];
+    if (short === full || !short.endsWith(LEGACY_SHORTENED) || full.split("\n", 1)[0] !== header)
+        return false;
+    return full.slice(header.length + 1).startsWith(short.slice(header.length + 1, -LEGACY_SHORTENED.length));
+}
+/** A finding's note as recorded before findings had ids: its header without its id. */
+function withoutFindingId(note) {
+    const id = findingId(note);
+    return id && note.startsWith(`${FINDINGS_PREFIX}${id}; `) ? FINDINGS_PREFIX + note.slice(FINDINGS_PREFIX.length + id.length + 2) : note;
+}
+/** Findings notes of a serialized durable record, including records nested in it as opaque system text. */
+function recordedFindings(text) {
+    if (!text.startsWith(DURABLE_RECORD_PREFIX))
+        return [];
+    let notes;
+    try {
+        notes = JSON.parse(text.slice(DURABLE_RECORD_PREFIX.length)).notes;
+    }
+    catch {
+        return [];
+    }
+    if (!Array.isArray(notes))
+        return [];
+    return notes.flatMap((note) => typeof note !== "string" ? []
+        : note.startsWith(FINDINGS_PREFIX) && note.split("\n", 1)[0].endsWith(FINDINGS_LABEL) ? [note]
+            : note.startsWith("Earlier system message: ") ? recordedFindings(note.slice("Earlier system message: ".length))
+                : []);
+}
+/**
+ * The highest finding id a serialized durable record names (shown, or listed in its note of findings not shown), and
+ * whether it shows any finding other than in full.
+ */
+function recordedFindingsState(text) {
+    const state = { highest: 0, reduced: false };
+    if (!text.startsWith(DURABLE_RECORD_PREFIX))
+        return state;
+    let notes;
+    try {
+        notes = JSON.parse(text.slice(DURABLE_RECORD_PREFIX.length)).notes;
+    }
+    catch {
+        return state;
+    }
+    if (!Array.isArray(notes))
+        return state;
+    for (const note of notes) {
+        if (typeof note !== "string")
+            continue;
+        let ids = [];
+        if (note.startsWith(FINDINGS_PREFIX)) {
+            ids = [findingId(note) ?? ""];
+            if (isCondensedFinding(note))
+                state.reduced = true;
+        }
+        else if (note.startsWith(ELIDED_FINDINGS_PREFIX)) {
+            const mentions = note.indexOf(". They mention: ");
+            ids = note.slice(0, mentions < 0 ? undefined : mentions).match(/\bF\d+\b/g) ?? [];
+            state.reduced = true;
+        }
+        else if (note.startsWith("Earlier system message: ")) {
+            const nested = recordedFindingsState(note.slice("Earlier system message: ".length));
+            ids = [`F${nested.highest}`];
+            state.reduced ||= nested.reduced;
+        }
+        for (const id of ids)
+            state.highest = Math.max(state.highest, Number(id.slice(1)) || 0);
+    }
+    return state;
 }
 /** `retainedObservations` of a serialized durable record: [note index, observation key] pairs. Malformed entries are ignored. */
 function recordedRetainedObservations(text) {
@@ -199,8 +361,10 @@ function applyDetailBudget(notes, detailBudgetChars) {
             remaining = Math.max(0, remaining - item.note.length);
         }
     }
+    // The model's own analysis cannot be reacquired by rerunning a tool, so it is budgeted before raw tool output.
+    const isAnalysis = (note) => note.startsWith("Earlier assistant message: ");
     if (remaining > 0) {
-        for (const item of [...large].reverse()) {
+        for (const item of [...large.filter(({ note }) => isAnalysis(note)).reverse(), ...large.filter(({ note }) => !isAnalysis(note)).reverse()]) {
             if (remaining <= 0)
                 break;
             retained.set(item.index, remaining >= item.note.length ? item.note : `${item.note.slice(0, remaining)}${DETAIL_TRUNCATION}`);
@@ -372,6 +536,7 @@ export class AutonomousAgent {
     ui;
     messages = [];
     depth;
+    runningAsSubagent = false;
     skillManager;
     mcpManager;
     pluginManager;
@@ -387,6 +552,8 @@ export class AutonomousAgent {
     turnMutations = 0;
     /** The turn started with unverified changes from earlier work (an earlier turn, attempt, or process). */
     turnCarriedChanges = false;
+    /** The operator-configured verifier's latest result in this turn (FAILED: it refused a completion and has not passed since). */
+    turnConfiguredVerifier = "NOT_RUN";
     /** Key for the durable operation record of each tool call (provider call ids may be redacted on disk). */
     operationSeq = 0;
     /** Told after each durable progress write, so a host can keep its own session record in step. */
@@ -395,6 +562,24 @@ export class AutonomousAgent {
     turnRemovedObservations = new Set();
     /** Removals recorded in a recovered conversation; the next (resumed) turn starts with them. */
     carriedRemovedObservations = new Set();
+    // Findings the model recorded from inspected output just before compaction removed it, and those observations.
+    // Their full text is kept here (and persisted with the session) however the durable record shows them.
+    findingNotes = [];
+    /** Number of the last finding id (F<n>) given out. */
+    findingSeq = 0;
+    /** Observations whose findings were recorded: the step they were recorded at and the digest of the output they came from. */
+    distilledObservations = new Map();
+    /** The observations each finding recorded in this process came from, by its identity (its header caps their list). */
+    findingSources = new Map();
+    /** Whether the last durable record this turn had more findings than their bound, and the step last told its state. */
+    findingsOutgrown = false;
+    /** Of the findings the latest memory record holds, how many it shows other than in full. */
+    findingsShown = { reduced: 0, total: 0 };
+    /** Whether the last durable record showed any finding only condensed, indexed or not at all. */
+    findingsCondensed = false;
+    stepNoticeStep = 0;
+    /** A response of this step was cut off after running this long; its first tool result says so (see submitGuardingLength). */
+    cutResponse;
     /** Provider recovery bounds; undefined reads LOCAL_LLM_RECOVERY_* at each turn. */
     recoveryPolicy;
     recoveryClock = realRecoveryClock;
@@ -594,6 +779,7 @@ export class AutonomousAgent {
             this.capabilityRegistry.register(REQUIREMENTS_CAPABILITY);
             this.capabilityRegistry.register(READ_OBJECTIVE_CAPABILITY);
         }
+        this.capabilityRegistry.register(READ_FINDINGS_CAPABILITY);
         this.setupSpineHandlers();
         this.stateManager = new DurableStateManager({ workspacePaths: [this.primaryWorkspacePathIdentity] });
         if (typeof this.client?.setTaskId === "function")
@@ -674,6 +860,7 @@ export class AutonomousAgent {
             durableNotes: notes ? [notes] : undefined,
             providerRecovery: this.activeProviderRecovery,
             objective: this.objective ?? null,
+            findings: this.getFindings(),
             history: this.getHistoryCompleteness(),
             tokenStats: { ...this.totalTokens },
             cognitiveRouting: {
@@ -717,6 +904,7 @@ export class AutonomousAgent {
         this.currentTaskId = state.taskId;
         this.activePlan = state.activePlan || [];
         this.messages = state.messages || [];
+        this.restoreFindings(state.findings);
         this.objective = state.objective ?? undefined;
         const unsettled = this.settleUnrecordedToolCalls();
         // Resumed work is the same unit: what compaction removed before the restart is still not in context.
@@ -890,6 +1078,7 @@ export class AutonomousAgent {
         return [
             ...HARNESS_TOOLS,
             ...(this.depth === 0 ? [REQUIREMENTS_CAPABILITY.toolDefinition, READ_OBJECTIVE_CAPABILITY.toolDefinition] : []),
+            READ_FINDINGS_CAPABILITY.toolDefinition,
             ...this.mcpManager.getToolDefinitions(),
             ...this.pluginManager.getCustomToolDefinitions(),
         ];
@@ -907,8 +1096,28 @@ export class AutonomousAgent {
      * Continues a saved interactive session: its conversation and its outstanding verification obligation. A session
      * saved before the obligation was recorded has an unknown obligation, which counts as pending.
      */
-    restoreSession(msgs, unverifiedChangesPending, objective) {
+    /** Full text of the findings recorded in this conversation, oldest first (persisted with the session). */
+    getFindings() {
+        return [...this.findingNotes];
+    }
+    /**
+     * Starts from `findings` as the conversation's recorded findings (none when absent). Later ids follow both theirs and
+     * any the restored conversation's memory names, so a store saved before that memory was cannot lead to an id reused.
+     */
+    restoreFindings(findings) {
+        this.findingNotes = (findings ?? []).filter((note) => typeof note === "string" && note.startsWith(FINDINGS_PREFIX));
+        const recorded = this.messages
+            .filter((message) => message.role === "system")
+            .map((message) => recordedFindingsState(normalizeMessageContent(message.content).text.join("")));
+        this.findingSeq = Math.max(this.findingNotes.reduce((max, note) => Math.max(max, Number(findingId(note)?.slice(1) ?? 0)), 0), ...recorded.map((state) => state.highest));
+        this.distilledObservations = new Map();
+        this.findingSources = new Map();
+        this.findingsOutgrown = false;
+        this.findingsCondensed = recorded.some((state) => state.reduced);
+    }
+    restoreSession(msgs, unverifiedChangesPending, objective, findings) {
         this.messages = [...msgs];
+        this.restoreFindings(findings);
         this.objective = objective ?? undefined;
         if (this.objective) {
             // Steering that was queued but never applied when the session was saved is not silently dropped: it is shown
@@ -957,7 +1166,7 @@ export class AutonomousAgent {
                 this.checkpointDurableState();
             else
                 this.stateManager?.recordProgress(this.currentTaskId, {
-                    ...(progress.messages ? { messages: this.messages, unverifiedChangesPending: this.hasPendingModifications } : {}),
+                    ...(progress.messages ? { messages: this.messages, findings: this.getFindings(), unverifiedChangesPending: this.hasPendingModifications } : {}),
                     ...(progress.unverifiedChangesPending !== undefined ? { unverifiedChangesPending: progress.unverifiedChangesPending } : {}),
                 });
         }
@@ -1003,6 +1212,8 @@ export class AutonomousAgent {
         return toolName === "spawn_subagent" || !capability || changesWorkspace(capability);
     }
     resetConversation() {
+        this.stepNoticeStep = 0;
+        this.cutResponse = undefined;
         this.objective = undefined;
         this.compactions = 0;
         this.archivedTotal = 0;
@@ -1013,6 +1224,7 @@ export class AutonomousAgent {
                 content: this.buildSystemPrompt(),
             },
         ];
+        this.restoreFindings(undefined);
     }
     getHistoryCount() {
         return this.messages.length;
@@ -1273,7 +1485,11 @@ export class AutonomousAgent {
         const toolResponse = this.config.toolResponseReserveTokens ?? Math.min(4096, Math.floor(limit / 8));
         return { completion, toolResponse, total: completion + toolResponse };
     }
-    summarizeDiscardedHistory(messages, detailBudgetChars) {
+    /**
+     * @param unseen tool results in `messages` the model has not been shown yet (default: those after the last
+     *   assistant message in `messages`).
+     */
+    summarizeDiscardedHistory(messages, detailBudgetChars, unseen = new Set(this.unseenToolResults(messages).map((index) => messages[index]))) {
         const filesRead = new Set();
         const filesModified = new Set();
         const commandsExecuted = [];
@@ -1287,6 +1503,15 @@ export class AutonomousAgent {
             keys.add(key);
             observationNotes.set(note, keys);
         };
+        // Observations whose output was truncated before the model saw it: never fully observed, whatever note survives.
+        const partialObservations = new Set();
+        const seenKeys = new Set();
+        const unseenKeys = new Set();
+        const keyPaths = new Map();
+        // Call order of each path's latest write and each observation's latest call: a source changed after it was observed.
+        const lastWrite = new Map();
+        const lastCall = new Map();
+        let callOrder = 0;
         const toolCallCounts = new Map();
         const toolResultCounts = new Map();
         const priorTasks = [];
@@ -1408,6 +1633,9 @@ export class AutonomousAgent {
                     // Its claims can only mark more output as removed later (stricter completion), never establish anything.
                     for (const [, key] of recordedRetainedObservations(contentText))
                         carriesObservation(opaque, key);
+                    // Recorded findings are labelled model claims, not authority: they stay findable after a restart.
+                    for (const note of recordedFindings(contentText))
+                        addDurableNote(note);
                 }
             }
             if (message.role === "user" && contentText && !this.pinnedUserText(contentText)) {
@@ -1428,6 +1656,11 @@ export class AutonomousAgent {
                     const id = typeof call?.id === "string" && call.id.trim() ? call.id : undefined;
                     if (id && name)
                         callKeys.set(id, observationKey(name, rawArgs));
+                    if (id && name && typeof args.path === "string")
+                        keyPaths.set(observationKey(name, rawArgs), args.path);
+                    callOrder++;
+                    if (name)
+                        lastCall.set(observationKey(name, rawArgs), callOrder);
                     const serializedArgs = reconstructibleQueryTools.has(name)
                         ? validReconstructibleArgs(name, rawArgs)
                         : undefined;
@@ -1438,8 +1671,10 @@ export class AutonomousAgent {
                         filesRead.add(String(args.path));
                     if (name === "batch_read" && Array.isArray(args.paths))
                         args.paths.forEach((value) => filesRead.add(String(value)));
-                    if (["write_file", "edit_file", "patch_file"].includes(name) && args.path)
+                    if (["write_file", "edit_file", "patch_file"].includes(name) && args.path) {
                         filesModified.add(String(args.path));
+                        lastWrite.set(String(args.path), callOrder);
+                    }
                     if (name === "run_command" && args.command)
                         commandsExecuted.push(String(args.command));
                 }
@@ -1450,18 +1685,126 @@ export class AutonomousAgent {
             if (message.role === "tool") {
                 const id = typeof message.tool_call_id === "string" && message.tool_call_id.trim() ? message.tool_call_id : undefined;
                 const key = id ? callKeys.get(id) : undefined;
-                if (key && contentText.length && !contentText.startsWith("Error executing ")) {
-                    carriesObservation(`Earlier ${message.name || "tool"} output: ${contentText}`, key);
+                // A step's notices were for that step: a durable note keeps only what the tool returned.
+                const outputText = withoutStepNotices(contentText);
+                if (key)
+                    (unseen.has(message) ? unseenKeys : seenKeys).add(key);
+                if (key && isTruncatedObservation(message)) {
+                    partialObservations.add(key);
+                }
+                else if (key && outputText.length && !outputText.startsWith("Error executing ")) {
+                    carriesObservation(`Earlier ${message.name || "tool"} output: ${outputText}`, key);
                 }
                 const reconstructibleCall = id ? reconstructibleCalls.get(id) : undefined;
                 if (!normalizedContent.preserveOriginal && id && toolResultCounts.get(id) === 1 && reconstructibleCall && message.name === reconstructibleCall.name) {
                     addDurableNote(`Reconstructible query retained for rerun: ${reconstructibleCall.name} ${reconstructibleCall.serializedArgs}`);
                     continue;
                 }
-                if (contentText.length)
-                    addDurableNote(`Earlier ${message.name || "tool"} output: ${contentText}`);
+                if (outputText.length)
+                    addDurableNote(`Earlier ${message.name || "tool"} output: ${outputText}`);
             }
         }
+        // One version of each finding, oldest first: the copy this conversation keeps over a condensed or indexed copy an
+        // earlier record carries. Findings without ids (recorded by an earlier version) come first, as they are.
+        const findingSlot = durableNotes.findIndex((note) => note.startsWith(FINDINGS_PREFIX) || note.startsWith(ELIDED_FINDINGS_PREFIX));
+        const storedFindings = new Set(this.findingNotes);
+        let findings = [];
+        for (const note of [...durableNotes.filter((note) => note.startsWith(FINDINGS_PREFIX)), ...this.findingNotes]) {
+            const id = findingId(note);
+            const at = id ? findings.findIndex((held) => findingId(held) === id) : findings.findIndex((held) => !findingId(held) && shortenedFrom(held, note));
+            if (at >= 0) {
+                if ((id && storedFindings.has(note)) || (isCondensedFinding(findings[at]) && !isCondensedFinding(note)))
+                    findings[at] = note;
+            }
+            else if (!findings.includes(note) && (id || !findings.some((held) => !findingId(held) && shortenedFrom(note, held)))) {
+                findings.push(note);
+            }
+        }
+        // A finding without an id is kept from here on under one (once: a copy already kept gives way to it), so it stays
+        // listed and readable when the memory no longer shows it.
+        const adopted = [];
+        findings = findings.flatMap((note) => {
+            if (findingId(note))
+                return [note];
+            const kept = this.findingNotes.find((held) => findingId(held) && (withoutFindingId(held) === note || shortenedFrom(note, withoutFindingId(held))));
+            if (kept)
+                return [];
+            const withId = `${FINDINGS_PREFIX}F${++this.findingSeq}; ${note.slice(FINDINGS_PREFIX.length)}`;
+            const stored = this.findingNotes.indexOf(note);
+            if (stored >= 0)
+                this.findingNotes[stored] = withId;
+            else
+                adopted.push(withId);
+            return [withId];
+        });
+        if (adopted.length)
+            this.findingNotes = [...adopted, ...this.findingNotes];
+        // Oldest first: as kept (findings kept only in an earlier record, before those kept here).
+        const positions = new Map(this.findingNotes.map((held, index) => [findingId(held), index]));
+        const position = (note) => positions.get(findingId(note)) ?? -1;
+        findings.sort((left, right) => position(left) - position(right));
+        for (let index = durableNotes.length - 1; index >= 0; index--) {
+            const note = durableNotes[index];
+            if (note.startsWith(FINDINGS_PREFIX) || note.startsWith(ELIDED_FINDINGS_PREFIX) || note === FINDINGS_OUTGROWN)
+                durableNotes.splice(index, 1);
+        }
+        // Fit them to their budget, the oldest giving way first: shown condensed (the start of every claim, and what the
+        // claims it cannot show mention), then only indexed (what it mentions), then named by id in one note. Each says how
+        // to read it in full; the full text stays with the conversation.
+        const findingsBudget = this.findingsBudgetChars();
+        const shown = [...findings];
+        let findingsChars = shown.reduce((total, note) => total + note.length, 0);
+        this.findingsOutgrown = findingsChars > findingsBudget;
+        // The newest, from output that has only just left the context, gives way only after every older one is indexed.
+        const older = Array.from({ length: Math.max(0, shown.length - 1) }, (_, index) => index);
+        for (const [reduce, indexes] of [[condenseFinding, older], [indexFinding, older], [condenseFinding, [shown.length - 1]], [indexFinding, [shown.length - 1]]]) {
+            for (const index of indexes) {
+                if (findingsChars <= findingsBudget || index < 0)
+                    break;
+                const reduced = reduce(findings[index]);
+                if (reduced.length >= shown[index].length)
+                    continue;
+                findingsChars -= shown[index].length - reduced.length;
+                shown[index] = reduced;
+            }
+        }
+        let elided = 0;
+        let elidedNote = "";
+        while (findingsChars > findingsBudget && elided < shown.length) {
+            findingsChars -= shown[elided].length + elidedNote.length;
+            elided++;
+            elidedNote = elidedFindingsNote(findings.slice(0, elided));
+            findingsChars += elidedNote.length;
+        }
+        this.findingsCondensed = elided > 0 || shown.some((note, index) => note !== findings[index] || isCondensedFinding(note));
+        this.findingsShown = { reduced: findings.filter((note, index) => index < elided || shown[index] !== note || isCondensedFinding(note)).length, total: findings.length };
+        const recordedNotes = [...(elidedNote ? [elidedNote] : []), ...shown.slice(elided)];
+        durableNotes.splice(findingSlot < 0 ? durableNotes.length : Math.min(findingSlot, durableNotes.length), 0, ...recordedNotes);
+        if (this.findingsOutgrown)
+            durableNotes.push(FINDINGS_OUTGROWN);
+        // What this memory holds of each observation's findings: shown in full, or kept in full and shown only condensed,
+        // indexed or by id. A copy an earlier version shortened is never held, as its full text was never kept.
+        // A re-run is told findings are held only while they are; an observation whose findings are not is recorded again
+        // when it next leaves.
+        const findingsHeld = (key) => {
+            let held;
+            findings.forEach((note, index) => {
+                const header = note.split("\n", 1)[0];
+                const sources = this.findingSources.get(findingIdentity(note));
+                // A finding restored or lifted from an earlier record: its header lists its sources, each after "from " or "; ".
+                const from = sources ? sources.has(key) : [`from ${key};`, `from ${key} (partial)`, `; ${key};`, `; ${key} (partial)`].some((listed) => header.includes(listed));
+                if (!from)
+                    return;
+                if (index >= elided && !isCondensedFinding(shown[index]))
+                    held = "full";
+                else if (findingId(note) && !note.endsWith(LEGACY_SHORTENED) && held === undefined)
+                    held = "condensed";
+            });
+            return held;
+        };
+        const droppedFindings = new Set(Array.from(this.distilledObservations.keys()).filter((key) => !findingsHeld(key)));
+        for (const key of droppedFindings)
+            this.distilledObservations.delete(key);
         const freshSections = [
             ["Earlier task requests", priorTasks],
             ["Modified files", Array.from(filesModified)],
@@ -1477,24 +1820,64 @@ export class AutonomousAgent {
         // actually reclaim context (fixing no-op escalation when large tool outputs balloon the
         // durable record and keep post-compaction utilization above the proactive threshold).
         const notes = applyDetailBudget(durableNotes, detailBudgetChars);
-        // Say exactly which observations left the conversation, so the model re-reads them instead of recalling them.
-        const retainedObservations = [];
+        // Say exactly which observations left the conversation, and what the model had of each.
         const dropped = new Set();
-        for (const [note, keys] of observationNotes) {
-            const index = notes.indexOf(note);
-            for (const key of keys) {
-                if (index >= 0)
-                    retainedObservations.push([index, key]);
-                else
+        for (const [note, keys] of observationNotes)
+            if (!notes.includes(note))
+                for (const key of keys)
                     dropped.add(key);
+        for (const key of partialObservations)
+            dropped.add(key);
+        for (const [note, keys] of observationNotes)
+            if (notes.includes(note))
+                for (const key of keys)
+                    dropped.delete(key);
+        const removedObservations = Array.from(dropped);
+        const heldPrefix = (key) => {
+            const held = findingsHeld(key);
+            return held === "full" ? REMOVED_RECORDED : held === "condensed" ? REMOVED_CONDENSED : REMOVED_DROPPED;
+        };
+        const removalPrefix = (key) => {
+            if (partialObservations.has(key))
+                return REMOVED_PARTIAL;
+            const path = keyPaths.get(key);
+            const written = path === undefined ? undefined : lastWrite.get(path);
+            if (written !== undefined && written > (lastCall.get(key) ?? 0) && !key.startsWith("write_file ") && !key.startsWith("edit_file ") && !key.startsWith("patch_file "))
+                return REMOVED_CHANGED;
+            if (this.distilledObservations.has(key))
+                return heldPrefix(key);
+            if (droppedFindings.has(key))
+                return REMOVED_DROPPED;
+            if (seenKeys.has(key))
+                return REMOVED_UNRECORDED;
+            if (unseenKeys.has(key))
+                return REMOVED_UNSEEN;
+            return REMOVED_OBSERVATION;
+        };
+        // One removal note per observation, worded by what is known now (an earlier note may predate its findings).
+        for (let index = notes.length - 1; index >= 0; index--) {
+            const prefix = REMOVAL_PREFIXES.find((candidate) => notes[index].startsWith(candidate));
+            if (!prefix)
+                continue;
+            const key = notes[index].slice(prefix.length);
+            if (dropped.has(key))
+                notes.splice(index, 1);
+            else if (prefix !== REMOVED_CHANGED && prefix !== REMOVED_PARTIAL && (this.distilledObservations.has(key) || droppedFindings.has(key) || prefix === REMOVED_RECORDED || prefix === REMOVED_CONDENSED || prefix === REMOVED_DROPPED)) {
+                notes[index] = `${heldPrefix(key)}${key}`;
             }
         }
-        for (const [, key] of retainedObservations)
-            dropped.delete(key);
-        const removedObservations = Array.from(dropped);
         for (const key of removedObservations) {
-            if (!notes.includes(`${REMOVED_OBSERVATION}${key}`))
-                notes.push(`${REMOVED_OBSERVATION}${key}`);
+            const note = `${removalPrefix(key)}${key}`;
+            if (!notes.includes(note))
+                notes.push(note);
+        }
+        boundMemoryNotes(notes, this.memoryNotesBudgetChars());
+        const retainedObservations = [];
+        for (const [note, keys] of observationNotes) {
+            const index = notes.indexOf(note);
+            if (index >= 0)
+                for (const key of keys)
+                    retainedObservations.push([index, key]);
         }
         const inheritedSupersededPlanIds = new Set();
         const inheritedPlanStates = new Map();
@@ -1560,8 +1943,19 @@ export class AutonomousAgent {
     compactedMessages(source, recentToolTurns, detailBudgetChars) {
         return this.compactionCandidate(source, recentToolTurns, detailBudgetChars).messages;
     }
-    /** A compacted conversation and the tool observations whose output it no longer carries anywhere. */
-    compactionCandidate(source, recentToolTurns, detailBudgetChars) {
+    /** Indices of the tool results after the last assistant message, when that message called tools: output the model has not seen yet. */
+    unseenToolResults(source) {
+        const lastAssistant = source.map((message) => message.role).lastIndexOf("assistant");
+        if (lastAssistant < 0 || !source[lastAssistant].tool_calls?.length)
+            return [];
+        return source.map((message, index) => index > lastAssistant && message.role === "tool" ? index : -1).filter((index) => index >= 0);
+    }
+    /**
+     * A compacted conversation and the tool observations whose output it no longer carries in full.
+     * With `unseenOutputChars`, the latest tool turn is kept and its not-yet-seen string results are cut to that many
+     * characters in total (shortest kept whole first), each cut marked as truncated and counted as removed.
+     */
+    compactionCandidate(source, recentToolTurns, detailBudgetChars, unseenOutputChars) {
         const system = source[0];
         const currentUserIndex = source.map((message, index) => message.role === "user" ? index : -1).filter((index) => index >= 0).at(-1);
         const toolTurnStarts = source
@@ -1581,7 +1975,7 @@ export class AutonomousAgent {
         const messagesToSummarize = source
             .map((message, index) => ({ message, index }))
             .filter(({ message, index }) => index > 0 && index !== currentUserIndex && (retainedOriginalContent.has(index) || !(index >= recentStart && message.role !== "system")));
-        const summary = this.summarizeDiscardedHistory(messagesToSummarize.map(({ message }) => message), detailBudgetChars);
+        const summary = this.summarizeDiscardedHistory(messagesToSummarize.map(({ message }) => message), detailBudgetChars, new Set(this.unseenToolResults(source).map((index) => source[index])));
         const compacted = [system];
         if (messagesToSummarize.length) {
             const summaryMessage = { role: "system", content: summary.content };
@@ -1593,11 +1987,223 @@ export class AutonomousAgent {
             selected.set(item.index, item.message);
         if (currentUserIndex !== undefined)
             selected.set(currentUserIndex, source[currentUserIndex]);
+        if (unseenOutputChars !== undefined) {
+            const unseen = this.unseenToolResults(source)
+                .filter((index) => selected.has(index) && typeof source[index].content === "string" && !retainedOriginalContent.has(index))
+                .map((index) => ({ index, text: source[index].content }))
+                .sort((left, right) => left.text.length - right.text.length);
+            let remaining = Math.max(0, Math.floor(unseenOutputChars));
+            unseen.forEach(({ index, text }, position) => {
+                const share = Math.min(text.length, Math.floor(remaining / (unseen.length - position)));
+                remaining -= share;
+                if (share < text.length)
+                    selected.set(index, { ...source[index], content: `${text.slice(0, share)}${unseenTruncationNotice(share, text.length)}` });
+            });
+        }
         for (const [index, message] of Array.from(selected.entries()).sort((left, right) => left[0] - right[0]))
             compacted.push(message);
-        const kept = presentObservations(compacted);
-        return { messages: compacted, removedObservations: messagesToSummarize.length ? summary.removedObservations.filter((key) => !kept.has(key)) : [] };
+        const { present: kept, truncated } = observationPresence(compacted);
+        const removed = messagesToSummarize.length ? summary.removedObservations.filter((key) => !kept.has(key)) : [];
+        for (const key of truncated)
+            if (!removed.includes(key))
+                removed.push(key);
+        return { messages: compacted, removedObservations: removed };
     }
+    /** Characters recorded findings may take in the durable record: FINDINGS_BUDGET_CHARS in a 64k-token window, less in a smaller one. */
+    findingsBudgetChars() {
+        return Math.floor(FINDINGS_BUDGET_CHARS * Math.min(1, (this.config.contextLimit || 65536) / 65536));
+    }
+    /** Characters the memory's other notes may take: MEMORY_NOTES_BUDGET_CHARS in a 64k-token window, less in a smaller one. */
+    memoryNotesBudgetChars() {
+        return Math.floor(MEMORY_NOTES_BUDGET_CHARS * Math.min(1, (this.config.contextLimit || 65536) / 65536));
+    }
+    /**
+     * Admits the next request (see `admitContext`). When that compaction removed tool output the model had already been
+     * shown, first asks the model, on `client` (the one this step's inference uses), to record what that output
+     * established, then admits again from the same history so the durable record carries those findings.
+     */
+    async admitWithFindings(client, step, requestId, signal) {
+        const original = this.messages;
+        const removed = this.admitContext(step, requestId);
+        if (!removed.length || !(await this.recordFindings(client, step, original, removed, signal)))
+            return;
+        const admitted = this.messages;
+        this.messages = original;
+        try {
+            this.admitContext(step, requestId);
+        }
+        catch (err) {
+            if (!(err instanceof ContextBudgetError))
+                throw err;
+            this.messages = admitted;
+        }
+    }
+    /**
+     * Asks the model (one inference per batch, no tools) what the shown, unrecorded observations among `removed`
+     * establish for the current request. The findings are the model's own words, labelled with the observations they
+     * came from; nothing is recorded when the call fails or returns nothing. Returns whether anything was recorded.
+     */
+    async recordFindings(client, step, source, removed, signal) {
+        const wanted = new Set(removed.filter((key) => !this.distilledObservations.has(key)));
+        const unseen = new Set(this.unseenToolResults(source));
+        const callKeys = new Map();
+        const pending = [];
+        source.forEach((message, index) => {
+            if (message.role === "assistant") {
+                for (const call of message.tool_calls ?? []) {
+                    if (typeof call?.id === "string" && typeof call.function?.name === "string")
+                        callKeys.set(call.id, observationKey(call.function.name, call.function.arguments));
+                }
+            }
+            if (message.role !== "tool" || unseen.has(index) || typeof message.tool_call_id !== "string")
+                return;
+            const key = callKeys.get(message.tool_call_id);
+            const text = normalizeMessageContent(message.content).text.join("");
+            // What read_findings and read_objective return is already in this memory, in full.
+            if (!key || !wanted.has(key) || key.startsWith("read_findings ") || key.startsWith("read_objective ") || pending.some((item) => item.key === key) || !text || text.startsWith("Error executing "))
+                return;
+            const partial = isTruncatedObservation(message);
+            const output = withoutStepNotices(text);
+            pending.push({ key, text: output, partial, digest: partial ? undefined : outputDigest(output) });
+        });
+        if (!pending.length)
+            return false;
+        let recorded = false;
+        const lastUser = [...source].reverse().find((message) => message.role === "user");
+        const request = normalizeMessageContent(lastUser?.content ?? "").text.join("").slice(0, 8_000);
+        const contextLimit = this.config.contextLimit || 65536;
+        const inputBudget = contextLimit - this.getContextReserves().completion - countTokens(FINDINGS_INSTRUCTIONS) - countTokens(request) - 1_000;
+        if (inputBudget <= 0)
+            return false;
+        const groups = [];
+        let used = 0;
+        for (const item of pending) {
+            let tokens = countTokens(item.text);
+            if (tokens > inputBudget) {
+                item.text = `${item.text.slice(0, Math.floor(item.text.length * (inputBudget / tokens) * 0.9))}\n[cut to fit this checkpoint]`;
+                item.partial = true;
+                item.digest = undefined;
+                tokens = countTokens(item.text);
+            }
+            if (!groups.length || used + tokens > inputBudget) {
+                groups.push([]);
+                used = 0;
+            }
+            groups[groups.length - 1].push(item);
+            used += tokens;
+        }
+        for (const group of groups) {
+            if (signal?.aborted)
+                break;
+            const evidence = group.map((item) => `### ${item.key}${item.partial ? " (shown only in part)" : ""}\n${item.text}`).join("\n\n");
+            const prompt = [
+                { role: "system", content: FINDINGS_INSTRUCTIONS },
+                { role: "user", content: `Current request:\n${request}\n\nTool output you inspected, about to leave your context:\n\n${evidence}` },
+            ];
+            let text = "";
+            try {
+                const res = await client.chatCompletion(prompt, [], randomUUID(), signal);
+                text = typeof res.content === "string" ? res.content.trim() : "";
+                this.totalTokens.prompt += calculateContextBudget(prompt, [], contextLimit).totalActiveTokens;
+                this.totalTokens.completion += countTokens(text);
+                this.totalTokens.total = this.totalTokens.prompt + this.totalTokens.completion;
+            }
+            catch {
+                text = "";
+            }
+            if (!process.stdout.isTTY || process.env.NEXUS_DEBUG === "1") {
+                console.log(`[context_findings] step=${step} observations=${group.length} recorded=${text ? "yes" : "no"} chars=${text.length}`);
+            }
+            if (!text)
+                continue;
+            const clipped = text.length > FINDINGS_NOTE_LIMIT ? `${text.slice(0, FINDINGS_NOTE_LIMIT)} …[clipped]` : text;
+            let sources = group.map((item) => `${item.key}${item.partial ? " (partial)" : ""}`).join("; ");
+            if (sources.length > 1_500)
+                sources = `${sources.slice(0, 1_500)} …`;
+            const id = `F${++this.findingSeq}`;
+            const header = `${FINDINGS_PREFIX}${id}; step ${step}; from ${sources}; model-written, not independent proof]`;
+            this.findingNotes.push(`${header}\n${clipped}`);
+            this.findingSources.set(id, new Set(group.map((item) => item.key)));
+            for (const item of group)
+                this.distilledObservations.set(item.key, { step, digest: item.digest, id });
+            recorded = true;
+        }
+        return recorded;
+    }
+    /**
+     * Tool output for the model. When the call repeats one whose findings were recorded, says so first (and whether the
+     * output is unchanged) with the step position, so a re-run is a choice made knowing what the memory already holds.
+     * In the last fifth of the step budget (at least 3 steps), or while recorded findings exceed their bound, the first
+     * output of each step that another step follows says so before anything else. The last fifth leaves room for a
+     * submission, the corrections validation asks for, and a resubmission.
+     * Output cut short by a limit says so as part of the output (core/findings.ts: it cannot show that something is absent).
+     * Notes lead the output so that fitting an oversized result to the context, which keeps its beginning, keeps them.
+     */
+    toolResultContent(call, content, step, maxSteps) {
+        const noted = this.stepNotedContent(call, content, step, maxSteps);
+        if (this.cutResponse?.step !== step)
+            return noted;
+        const { seconds } = this.cutResponse;
+        this.cutResponse = undefined;
+        return `${cutResponseNotice(step, seconds)}\n${noted}`;
+    }
+    /**
+     * Submits one inference request of `step` under provider recovery. A submission that fails with its execution unknown
+     * after running at least LONG_RESPONSE_MS was most likely ended by the provider's limit on how long one response may
+     * take: the same request would run as long and fail the same way. Every later submission of the step says what
+     * happened and asks for less at once, and once one completes, so does the step's first tool result.
+     */
+    async submitGuardingLength(guard, messages, send) {
+        const seconds = Math.round(guard.cutAfterMs / 1000);
+        const request = guard.cutAfterMs ? [...messages, { role: "user", content: cutResponseNotice(guard.step, seconds) }] : messages;
+        const started = this.recoveryClock.now();
+        try {
+            const result = await send(request);
+            if (guard.cutAfterMs)
+                this.cutResponse = { step: guard.step, seconds };
+            return result;
+        }
+        catch (err) {
+            const ran = this.recoveryClock.now() - started;
+            if (ran >= LONG_RESPONSE_MS && err instanceof InferenceError && err.toFailure().execution === "UNKNOWN")
+                guard.cutAfterMs = Math.max(guard.cutAfterMs, ran);
+            throw err;
+        }
+    }
+    stepNotedContent(call, content, step, maxSteps) {
+        let args;
+        try {
+            args = typeof call.function.arguments === "string" ? JSON.parse(call.function.arguments) : call.function.arguments;
+        }
+        catch { }
+        const incomplete = incompleteOutputNotice(call.function.name, args, content);
+        const result = this.rerunNotedContent(call, incomplete ? `${incomplete}\n${content}` : content, step, maxSteps);
+        const remaining = maxSteps - step;
+        const closing = remaining < Math.max(3, Math.ceil(maxSteps / 5));
+        if ((!closing && !this.findingsOutgrown) || this.stepNoticeStep === step || remaining <= 0)
+            return result;
+        this.stepNoticeStep = step;
+        if (closing) {
+            return `[Nexus: this is step ${step} of ${maxSteps}; ${remaining === 1 ? "1 step remains" : `${remaining} steps remain`} after it. Finish now, leaving room for validation: consolidate what the output you inspected established into your work product (if your task produces none, state in the task_completed summary what remains unestablished), check it against every requirement of the task and that every file path it cites exists, then call task_completed to submit it (the operator's verifier, when configured, checks it), keeping steps in hand to correct what validation reports and submit again. Investigate further only where a requirement still lacks evidence; do not state what the evidence does not support.${this.findingsCondensed ? " Some of your recorded findings are shown in your memory only condensed or not at all: before you submit, check with read_findings any claim that something is absent, never happens or is not used, and any claim those findings bear on." : ""} Work left unfinished at the step limit is reported as not established.]\n${result}`;
+        }
+        const { reduced, total } = this.findingsShown;
+        return `[Nexus: your recorded findings have outgrown your memory; ${reduced} of ${total} are no longer shown in it in full, more give way with each finding you record, and reading them back with read_findings takes steps. Write what you have established into your work product now (the file or change your task produces; if it produces none, state it in the task_completed summary), before investigating further, then continue with what remains. This is step ${step} of ${maxSteps}.]\n${result}`;
+    }
+    rerunNotedContent(call, content, step, maxSteps) {
+        const key = observationKey(call.function.name, call.function.arguments);
+        const recorded = this.distilledObservations.get(key);
+        if (!recorded)
+            return content;
+        const same = recorded.digest === undefined ? undefined : outputDigest(content) === recorded.digest;
+        const comparison = same === undefined
+            ? "They were recorded from only part of its output."
+            : `This output is ${same ? "identical to" : "different from"} the output they were recorded from.`;
+        // Findings from a partial or now-different output do not cover this one: record findings again when it is removed.
+        if (!same)
+            this.distilledObservations.delete(key);
+        return `[Nexus: you ran this same call before; findings from its output were recorded at step ${recorded.step}${recorded.id ? ` (${recorded.id})` : ""} and are in your memory. ${comparison} This is step ${step} of ${maxSteps}. If those findings already cover what you need, use them and move on to the next part of your task.]\n${content}`;
+    }
+    /** Returns the observations the accepted compaction removed (none when no compaction was needed). */
     admitContext(step, requestId) {
         const contextLimit = this.config.contextLimit || 65536;
         const reserves = this.getContextReserves();
@@ -1606,6 +2212,7 @@ export class AutonomousAgent {
         let compacted = false;
         let compactionAttempts = 0;
         const maxCompactionAttempts = 5;
+        const removedNow = [];
         // Anti-thrashing: only re-compact when the previous ladder pass actually shrank the
         // context. Once a pass yields no token reduction, a stronger pass would also be a no-op.
         let lastPassShrank = true;
@@ -1628,19 +2235,43 @@ export class AutonomousAgent {
             // detail budget, so each re-compaction is strictly stronger than the last.
             const recentTurnsList = compactionAttempts >= 2 ? [1, 0] : [2, 1, 0];
             const detailBudgetList = compactionAttempts >= 2 ? [3000, 1200, 400, 0] : [6000, 3000, 1200, 400, 0];
+            const accept = (candidate, truncatedUnseen = false) => {
+                const candidateBudget = calculateContextBudget(this.requestMessages(candidate.messages), this.getEffectiveTools(), contextLimit);
+                if (!isContextAdmissible(candidateBudget.totalActiveTokens, contextLimit, reserves.completion, reserves.toolResponse))
+                    return false;
+                this.messages = candidate.messages;
+                for (const key of candidate.removedObservations)
+                    this.turnRemovedObservations.add(key);
+                removedNow.push(...candidate.removedObservations);
+                budget = candidateBudget;
+                if (!process.stdout.isTTY || process.env.NEXUS_DEBUG === "1") {
+                    console.log(`[context_admission] step=${step} request_id=${requestId} state=auto_compacted attempts=${compactionAttempts} estimated_tokens=${budget.totalActiveTokens} completion_reserve=${reserves.completion} tool_response_reserve=${reserves.toolResponse} limit=${contextLimit} compacted=${compacted} messages=${this.messages.length}${truncatedUnseen ? " unseen_output=truncated" : ""}`);
+                }
+                return true;
+            };
+            const unseen = this.unseenToolResults(original);
             for (const recentTurns of recentTurnsList) {
-                for (const detailBudgetChars of detailBudgetList) {
-                    const { messages: candidate, removedObservations } = this.compactionCandidate(original, recentTurns, detailBudgetChars);
-                    const candidateBudget = calculateContextBudget(this.requestMessages(candidate), this.getEffectiveTools(), contextLimit);
-                    if (isContextAdmissible(candidateBudget.totalActiveTokens, contextLimit, reserves.completion, reserves.toolResponse)) {
-                        this.messages = candidate;
-                        for (const key of removedObservations)
-                            this.turnRemovedObservations.add(key);
-                        budget = candidateBudget;
-                        accepted = true;
-                        if (!process.stdout.isTTY || process.env.NEXUS_DEBUG === "1") {
-                            console.log(`[context_admission] step=${step} request_id=${requestId} state=auto_compacted attempts=${compactionAttempts} estimated_tokens=${budget.totalActiveTokens} completion_reserve=${reserves.completion} tool_response_reserve=${reserves.toolResponse} limit=${contextLimit} compacted=${compacted} messages=${this.messages.length}`);
+                // Summarizing away results the model has not seen yet makes it repeat the same calls; keep them, truncated, first.
+                if (recentTurns === 0 && unseen.length) {
+                    const unseenText = unseen.map((index) => normalizeMessageContent(original[index].content).text.join("")).join("");
+                    const tokensPerChar = unseenText.length ? Math.max(countTokens(unseenText) / unseenText.length, 0.05) : 1;
+                    for (const detailBudgetChars of detailBudgetList) {
+                        const floor = this.compactionCandidate(original, 1, detailBudgetChars, 0);
+                        const room = contextLimit - reserves.completion - reserves.toolResponse - calculateContextBudget(this.requestMessages(floor.messages), this.getEffectiveTools(), contextLimit).totalActiveTokens;
+                        if (room <= 0)
+                            continue;
+                        for (let chars = Math.floor(room / tokensPerChar), tries = 0; tries < 4 && !accepted; chars = Math.floor(chars * 0.75), tries++) {
+                            accepted = accept(this.compactionCandidate(original, 1, detailBudgetChars, chars), true);
                         }
+                        if (accepted)
+                            break;
+                    }
+                    if (accepted)
+                        break;
+                }
+                for (const detailBudgetChars of detailBudgetList) {
+                    if (accept(this.compactionCandidate(original, recentTurns, detailBudgetChars))) {
+                        accepted = true;
                         break;
                     }
                 }
@@ -1666,6 +2297,7 @@ export class AutonomousAgent {
         }
         if (!process.stdout.isTTY || process.env.NEXUS_DEBUG === "1")
             console.log(`[context_admission] step=${step} request_id=${requestId} state=admitted estimated_tokens=${budget.totalActiveTokens} completion_reserve=${reserves.completion} tool_response_reserve=${reserves.toolResponse} limit=${contextLimit} compacted=${compacted} messages=${this.messages.length}`);
+        return Array.from(new Set(removedNow));
     }
     /** Records that compaction replaced messages: the originals (not derived summaries) are kept for the host to archive. */
     archiveReplaced(before, after) {
@@ -1769,7 +2401,8 @@ ${rulesSection}${skillsSection}${knowledgeSection}
 5. VERIFICATION: After making code changes, use \`run_command\` with bash/zsh commands to run tests, builds, or linting (e.g. \`cargo check\`, \`cargo test\`, \`npm test\`, \`pytest\`).
 6. SELF-CORRECTION: If a command or tool returns an error, analyze the error message, identify the root cause, and fix it.
 7. AUTONOMOUS COMPLETION: Keep executing tools until the entire task is thoroughly resolved. When everything is verified and done, invoke \`task_completed\` with a detailed summary.
-8. ACCEPTANCE REQUIREMENTS: When a pinned Objective Ledger lists the operator's requirements, your plan never replaces them. Record progress with \`update_requirements\` (implemented/verified only with evidence; blocked/descoped only with a reason). Steering messages from the operator apply on top of the objective.
+8. BOUNDED CONTEXT: Your context window is limited, and earlier tool output is compacted out of the conversation as you work; your own messages are what carry forward. After inspecting evidence, state the findings you will rely on (with file and symbol references) in your reply before moving on. Re-read earlier output only when you need a specific detail you did not record or it may have changed.
+9. ACCEPTANCE REQUIREMENTS: When a pinned Objective Ledger lists the operator's requirements, your plan never replaces them. Record progress with \`update_requirements\` (implemented/verified only with evidence; blocked/descoped only with a reason). Steering messages from the operator apply on top of the objective.
 ${fewShotSection}${tddSection}
 Always explain your reasoning before or alongside your tool calls.`;
     }
@@ -1812,7 +2445,8 @@ Always explain your reasoning before or alongside your tool calls.`;
                 : false;
             let verifierSucceeded = false;
             let noApplicableVerifier = false;
-            if ((this.hasPendingModifications || worktreeHasChanges) &&
+            // An operator-configured verifier gates every completion, not only one that follows changes.
+            if ((this.hasPendingModifications || worktreeHasChanges || this.configuredVerifierGatesCompletion()) &&
                 !this.config.dryRun &&
                 !this.config.readOnly) {
                 try {
@@ -1871,6 +2505,8 @@ Always explain your reasoning before or alongside your tool calls.`;
                         };
                         this.verificationEvidence = evidence;
                         this.verificationEvidenceRawOutput = testRes.rawOutput || "";
+                        if (configured)
+                            this.turnConfiguredVerifier = testRes.success ? "PASSED" : "FAILED";
                         if (this.objective && candidateId) {
                             recordAttempt(this.objective, {
                                 command: verifierCommand,
@@ -2192,6 +2828,10 @@ Always explain your reasoning before or alongside your tool calls.`;
             if (!this.objective)
                 return { success: false, output: "", error: "No operator objective is being tracked in this conversation." };
             const result = readObjective(this.objective, args ?? {});
+            return result.ok ? { success: true, output: result.text } : { success: false, output: "", error: result.text };
+        });
+        this.spine.registerHandler("read_findings", async (args) => {
+            const result = readFindings(this.findingNotes, args ?? {});
             return result.ok ? { success: true, output: result.text } : { success: false, output: "", error: result.text };
         });
         this.spine.registerHandler("update_requirements", async (args) => {
@@ -2570,8 +3210,18 @@ Always explain your reasoning before or alongside your tool calls.`;
         }
         this.completionSummary = undefined;
         this.turnMutations = 0;
+        this.turnConfiguredVerifier = "NOT_RUN";
         this.turnCarriedChanges = this.hasPendingModifications;
-        this.turnRemovedObservations = this.carriedRemovedObservations;
+        // What compaction removed earlier in this conversation is still not in context, whichever way the turn began.
+        this.turnRemovedObservations = new Set([...this.carriedRemovedObservations, ...unreacquiredRemovals(this.messages)]);
+        this.findingsOutgrown = false;
+        this.stepNoticeStep = 0;
+        this.cutResponse = undefined;
+        // Step notices speak for the turn that issued them; this turn has its own step budget.
+        for (const message of this.messages) {
+            if (message.role === "tool" && typeof message.content === "string")
+                message.content = message.content.replace(CUT_NOTICE, "").replace(STEP_NOTICE, "");
+        }
         this.carriedRemovedObservations = new Set();
         // The objective this turn works toward: a new one, or a short follow-up on the one still unresolved.
         const priorLedger = this.objective ? structuredClone(this.objective) : undefined;
@@ -2626,6 +3276,7 @@ Always explain your reasoning before or alongside your tool calls.`;
             let capacityBlock = null;
             let modelStop = "NONE";
             let finalOutputComplete = false;
+            let previousReplyEmpty = false;
             let inferenceFailure = null;
             let interruption = null;
             let undispatched = 0;
@@ -2757,8 +3408,9 @@ Always explain your reasoning before or alongside your tool calls.`;
                     this.flightRecorder.recordTurnStart(currentStep, promptText);
                 }
                 const requestId = randomUUID();
+                const { client: activeClient } = this.selectCognitiveClient(currentStep, this.messages);
                 try {
-                    this.admitContext(currentStep, requestId);
+                    await this.admitWithFindings(activeClient, currentStep, requestId, signal);
                 }
                 catch (err) {
                     if (!(err instanceof ContextBudgetError))
@@ -2791,7 +3443,6 @@ Always explain your reasoning before or alongside your tool calls.`;
                 this.ui.startSpinner("Thinking and analyzing next step...");
                 turn.phase = "inference";
                 this.activity("inference");
-                const { client: activeClient } = this.selectCognitiveClient(currentStep, this.messages);
                 if (this.cognitiveRoutingEnabled && currentStep === 1) {
                     process.stdout.write(pc.dim(`\n🧭 Dual-Model Routing: [Planner: ${this.plannerClient.getProviderId?.() ? `${this.plannerClient.getProviderId?.()}:` : ""}${this.plannerClient.getModel()} | Coder: ${this.coderClient.getProviderId?.() ? `${this.coderClient.getProviderId?.()}:` : ""}${this.coderClient.getModel()}]\n`));
                 }
@@ -2801,9 +3452,10 @@ Always explain your reasoning before or alongside your tool calls.`;
                 // are untouched while waiting, and a submission's output is used only once it is complete.
                 const policy = this.recoveryPolicy ?? recoveryPolicyFromEnv();
                 const recovery = new ProviderRecoveryController(policy, this.recoveryClock, currentStep);
+                const lengthGuard = { step: currentStep, cutAfterMs: 0 };
                 try {
                     assistantMessage = await recovery.run(requestId, {
-                        submit: (s) => activeClient.chatCompletionStream(this.requestMessages(this.messages), this.getEffectiveTools(), (token) => {
+                        submit: (s) => this.submitGuardingLength(lengthGuard, this.requestMessages(this.messages), (request) => activeClient.chatCompletionStream(request, this.getEffectiveTools(), (token) => {
                             if (!streamedTokens) {
                                 this.ui.stopSpinner(true);
                                 process.stdout.write(pc.bold(pc.magenta("\n💭 Assistant: ")));
@@ -2811,7 +3463,7 @@ Always explain your reasoning before or alongside your tool calls.`;
                             }
                             process.stdout.write(token);
                             this.observer?.onAssistantDelta?.(token);
-                        }, s.requestId, signal),
+                        }, s.requestId, signal)),
                         probe: (probeSignal, opts) => typeof activeClient.probeAvailability === "function"
                             ? activeClient.probeAvailability(probeSignal, { timeoutMs: policy.probeTimeoutMs, ...opts })
                             : Promise.resolve({ available: true, condition: "AVAILABLE" }),
@@ -2921,6 +3573,21 @@ Always explain your reasoning before or alongside your tool calls.`;
                         endStep();
                         continue;
                     }
+                    // An empty reply (no text either) is no answer. Once in a row, the model is told and the turn goes on.
+                    const replied = Boolean(parsed.thoughtText?.trim()) ||
+                        (typeof assistantMessage.content === "string" ? assistantMessage.content.trim() !== "" : Boolean(assistantMessage.content));
+                    if (!replied && !previousReplyEmpty) {
+                        previousReplyEmpty = true;
+                        if (currentStep < maxTotalSteps) {
+                            this.messages.push({
+                                role: "user",
+                                content: `[Nexus: your reply was empty: no text and no tool call. It does not finish the task. This is step ${currentStep} of ${maxTotalSteps}. Continue the task where you left off; call task_completed when it is done.]`,
+                            });
+                        }
+                        this.persistProgress({ messages: true });
+                        endStep();
+                        continue;
+                    }
                     // Stopping with acceptance requirements still open: ask (boundedly) for the rest, or for an explicit block.
                     const open = budget && this.objective ? openRequirements(this.objective) : [];
                     if (budget && open.length && completionNudges < budget.maxCompletionNudges) {
@@ -2940,9 +3607,10 @@ Always explain your reasoning before or alongside your tool calls.`;
                         continue;
                     }
                     modelStop = "FINAL_TEXT";
-                    finalOutputComplete = true;
+                    finalOutputComplete = replied;
                     break;
                 }
+                previousReplyEmpty = false;
                 // Parallel execution optimization: if multiple tool calls in this turn are all read-only, execute concurrently through ExecutionSpine
                 if (parsed.toolCalls.length > 1 && parsed.toolCalls.every((call) => READ_ONLY_TOOLS.has(call.function.name))) {
                     this.ui.startSpinner(`Executing ${parsed.toolCalls.length} read operations in parallel...`);
@@ -2969,7 +3637,7 @@ Always explain your reasoning before or alongside your tool calls.`;
                             role: "tool",
                             tool_call_id: item.call.id,
                             name: item.toolName,
-                            content,
+                            content: item.receipt.success ? this.toolResultContent(item.call, content, currentStep, maxTotalSteps) : content,
                         });
                     }
                     this.persistProgress({ messages: true });
@@ -3018,7 +3686,7 @@ Always explain your reasoning before or alongside your tool calls.`;
                         role: "tool",
                         tool_call_id: call.id,
                         name: toolName,
-                        content: finalContent,
+                        content: receipt.success ? this.toolResultContent(call, finalContent, currentStep, maxTotalSteps) : finalContent,
                     });
                     this.persistProgress({ messages: true });
                     if (shouldExit) {
@@ -3084,6 +3752,14 @@ Always explain your reasoning before or alongside your tool calls.`;
         finally {
             this.activeTurn = undefined;
         }
+    }
+    /**
+     * Whether the operator-configured verifier must pass before any completion of this agent. An in-turn subagent's own
+     * changes are verified as before and again by its parent, so its read-only reports are not gated. Work units also run
+     * at depth 1 but have no parent turn to verify them, so they are gated.
+     */
+    configuredVerifierGatesCompletion() {
+        return !this.runningAsSubagent && Boolean(this.config.authoritativeVerifierCommand?.trim());
     }
     /** Single place where a turn's execution/outcome dimensions are derived from evidence held by the agent. */
     buildTurnResult(input) {
@@ -3188,6 +3864,18 @@ Always explain your reasoning before or alongside your tool calls.`;
                 return deepFreezeTurn(assertTurnResultInvariants({ ...base, execution: "COMPLETED", outcome: "VERIFIED" }));
             }
             // Defensive: changes were made, nothing is pending, yet no passing evidence is held.
+            return deepFreezeTurn(assertTurnResultInvariants({ ...base, execution: "COMPLETED", outcome: "UNVERIFIED", reason: "VERIFICATION_NOT_RUN" }));
+        }
+        // The operator's verifier refused this turn's completion and the turn ended anyway (e.g. with a final answer).
+        if (this.turnConfiguredVerifier === "FAILED" && (evidence?.status === "FAILED" || evidence?.status === "TIMED_OUT")) {
+            return deepFreezeTurn(assertTurnResultInvariants({
+                ...base, execution: "COMPLETED", outcome: "NOT_ESTABLISHED",
+                reason: evidence.status === "FAILED" ? "VERIFIER_FAILED" : "VERIFIER_TIMED_OUT", detail: evidence.command,
+            }));
+        }
+        // The operator's verifier must pass before any completion; a turn that ended without it passing (a final answer
+        // without task_completed, or a dry-run or read-only turn, which never runs it) is not verified.
+        if (this.configuredVerifierGatesCompletion() && this.turnConfiguredVerifier !== "PASSED") {
             return deepFreezeTurn(assertTurnResultInvariants({ ...base, execution: "COMPLETED", outcome: "UNVERIFIED", reason: "VERIFICATION_NOT_RUN" }));
         }
         // No verifier backs a read-only result, so it rests on the observations the model saw. If compaction removed some
@@ -3331,6 +4019,7 @@ Always explain your reasoning before or alongside your tool calls.`;
         if (this.inheritedWorktreeScope && path.resolve(this.config.workspace) !== path.resolve(this.inheritedWorktreeScope.workspace)) {
             throw new Error("Subagent workspace no longer matches its inherited worktree authority.");
         }
+        this.runningAsSubagent = true;
         this.resetConversation();
         this.messages.push({
             role: "user",
@@ -3343,10 +4032,11 @@ Always explain your reasoning before or alongside your tool calls.`;
             const requestId = randomUUID();
             const { client: activeClient } = this.selectCognitiveClient(currentStep, this.messages);
             try {
-                this.admitContext(currentStep, requestId);
+                await this.admitWithFindings(activeClient, currentStep, requestId);
                 const policy = this.recoveryPolicy ?? recoveryPolicyFromEnv();
+                const lengthGuard = { step: currentStep, cutAfterMs: 0 };
                 assistantMessage = await new ProviderRecoveryController(policy, this.recoveryClock, currentStep).run(requestId, {
-                    submit: (s) => activeClient.chatCompletion(this.messages, HARNESS_TOOLS, s.requestId),
+                    submit: (s) => this.submitGuardingLength(lengthGuard, this.messages, (request) => activeClient.chatCompletion(request, [...HARNESS_TOOLS, READ_FINDINGS_CAPABILITY.toolDefinition], s.requestId)),
                     probe: (probeSignal, opts) => typeof activeClient.probeAvailability === "function"
                         ? activeClient.probeAvailability(probeSignal, { timeoutMs: policy.probeTimeoutMs, ...opts })
                         : Promise.resolve({ available: true, condition: "AVAILABLE" }),
@@ -3389,7 +4079,7 @@ Always explain your reasoning before or alongside your tool calls.`;
                     tool_call_id: call.id,
                     name: toolName,
                     content: receipt.success
-                        ? receipt.output
+                        ? this.toolResultContent(call, receipt.output, currentStep, this.config.maxSteps)
                         : `Error executing ${toolName}: ${receipt.error || "Unknown error"}`,
                 });
             }

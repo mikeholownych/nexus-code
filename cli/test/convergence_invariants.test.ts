@@ -36,11 +36,17 @@ const tsxLoader = import.meta.resolve("tsx");
 
 type Reply = { tools: Array<{ name: string; args: unknown }> } | { text: string } | { status: number; body?: string };
 interface Req { n: number; body: any; stream: boolean; authorization?: string }
-interface Gw { url: string; origin: string; requests: Req[]; authorizations: Array<string | undefined>; close(): Promise<void> }
+interface Gw { url: string; origin: string; requests: Req[]; checkpoints: Req[]; authorizations: Array<string | undefined>; close(): Promise<void> }
 
-/** OpenAI-compatible gateway (streaming and non-streaming, unique tool-call ids) that records every Authorization header. */
-async function gateway(script: (req: Req) => Reply): Promise<Gw> {
-  const gw: Gw = { url: "", origin: "", requests: [], authorizations: [], close: async () => {} };
+/** A findings checkpoint: Nexus asks, without tools, what inspected output about to leave the context established. */
+const isCheckpoint = (body: any): boolean => String(body.messages?.[0]?.content ?? "").startsWith("You keep the working notes");
+
+/**
+ * OpenAI-compatible gateway (streaming and non-streaming, unique tool-call ids) that records every Authorization header.
+ * Findings checkpoints are not model steps: `checkpoint` answers them (by default recording nothing) and they are kept apart.
+ */
+async function gateway(script: (req: Req) => Reply, checkpoint: (req: Req) => Reply = () => ({ text: "" })): Promise<Gw> {
+  const gw: Gw = { url: "", origin: "", requests: [], checkpoints: [], authorizations: [], close: async () => {} };
   let ids = 0;
   const server = http.createServer((req, res) => {
     gw.authorizations.push(req.headers.authorization);
@@ -53,9 +59,10 @@ async function gateway(script: (req: Req) => Reply): Promise<Gw> {
     req.on("end", () => {
       let body: any = {};
       try { body = JSON.parse(raw); } catch {}
-      const r: Req = { n: gw.requests.length + 1, body, stream: Boolean(body.stream), authorization: req.headers.authorization };
-      gw.requests.push(r);
-      const reply = script(r);
+      const log = isCheckpoint(body) ? gw.checkpoints : gw.requests;
+      const r: Req = { n: log.length + 1, body, stream: Boolean(body.stream), authorization: req.headers.authorization };
+      log.push(r);
+      const reply = isCheckpoint(body) ? checkpoint(r) : script(r);
       if ("status" in reply) {
         res.writeHead(reply.status, { "content-type": "application/json" });
         return void res.end(reply.body ?? '{"error":{"message":"scripted"}}');
@@ -368,8 +375,9 @@ const gFiles = (): Record<string, string> => Object.fromEntries(MARKERS.map((m, 
 const visibleMarkers = (body: any): string[] => [1, 2, 3, 4].map((n) => new RegExp(`MARKER-${n}: ([a-z-]+)`).exec(allText(body))?.[1] ?? "-");
 /** An honest model: reads the four parts in order, then reports exactly the markers it can still see. */
 const honestReader = (r: Req): Reply => (r.n <= 4 ? read(`part${r.n}.txt`) : done(`markers: ${visibleMarkers(r.body).join(", ")}`));
+/** Removal notes (any wording) for the parts, as `read_file {"path":"partN.txt"}` observation keys. */
 const removalNotes = (agent: AutonomousAgent): string[] =>
-  agent.getMessages().flatMap((m) => (m.role === "system" ? String(m.content).match(/Output no longer in context \(rerun to see it again\): read_file \{\\"path\\":\\"part\d\.txt\\"\}/g) ?? [] : []));
+  agent.getMessages().flatMap((m) => (m.role === "system" ? [...String(m.content).matchAll(/"[A-Z][^"]*no longer in context[^"]*?: (read_file \{\\"path\\":\\"part\d\.txt\\"\})/g)].map((x) => x[1]) : []));
 
 describe("G: compaction never lets a recalled result satisfy completion", () => {
   test("the qualification workload (4 x 25 KB at a 40k limit) ends UNVERIFIED, not COMPLETED/NOT_REQUIRED", async () => {
@@ -474,7 +482,9 @@ describe("G: compaction never lets a recalled result satisfy completion", () => 
           // tiny.txt is kept verbatim, new.txt is truncated to the remaining budget, old.txt is elided.
           const s = (agent as any).summarizeDiscardedHistory(history, budget);
           assert.deepEqual(s.removedObservations.sort(), [key("new.txt"), key("old.txt")], `budget ${budget}`);
-          assert.match(s.content, /Output no longer in context \(rerun to see it again\): read_file/);
+          // Both were shown to the model and no findings were recorded from them.
+          assert.match(s.content, /Inspected earlier; output no longer in context \(no findings were recorded from it\): read_file \{\\"path\\":\\"old\.txt/);
+          assert.match(s.content, /Inspected earlier; output no longer in context \(no findings were recorded from it\): read_file \{\\"path\\":\\"new\.txt/);
         }
         const none = (agent as any).summarizeDiscardedHistory(history, 0);
         assert.deepEqual(none.removedObservations.sort(), [key("new.txt"), key("old.txt"), key("tiny.txt")], "budget 0 keeps no output");

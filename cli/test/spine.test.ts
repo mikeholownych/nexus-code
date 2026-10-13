@@ -326,10 +326,12 @@ describe("WP-01: ExecutionSpine & Invocation Pipeline (INC-02)", () => {
     const agent = new AutonomousAgent(config);
     assert.ok(agent.getSpine(), "Agent must instantiate ExecutionSpine");
     assert.ok(agent.getCapabilityRegistry(), "Agent must instantiate CapabilityRegistry");
-    // The 36 baseline capabilities plus the top-level agent's own orchestration tools: update_requirements, read_objective.
-    assert.strictEqual(agent.getCapabilityRegistry().listCapabilities().length, 38);
+    // The 36 baseline capabilities, read_findings (every agent's), and the top-level agent's own orchestration tools:
+    // update_requirements, read_objective.
+    assert.strictEqual(agent.getCapabilityRegistry().listCapabilities().length, 39);
     assert.ok(agent.getCapabilityRegistry().getByToolName("update_requirements"));
     assert.ok(agent.getCapabilityRegistry().getByToolName("read_objective"));
+    assert.ok(agent.getCapabilityRegistry().getByToolName("read_findings"));
 
     // Mock client to return a tool call
     let turnCount = 0;

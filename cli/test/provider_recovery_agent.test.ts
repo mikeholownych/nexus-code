@@ -96,6 +96,72 @@ describe("agent loop: temporary provider failures become loop state", () => {
     });
   });
 
+  test("a response cut off at the provider's time limit is not resubmitted unchanged: the replay, then the step's tool result, ask for less at once", async () => {
+    const clock = fakeClock();
+    const gw = await startGateway((n) => {
+      if (n === 1) {
+        clock.advance(600_000);
+        return { kind: "error_frame", message: "timeout" };
+      }
+      if (n === 2) return { kind: "tools", calls: [{ name: "write_file", args: { path: "review.md", content: "# Review\n\nPart one.\n" } }] };
+      return { kind: "text", content: "done" };
+    });
+    await withAgent([gw], clock, async (agent) => {
+      const r = await agent.runTurn("write the review");
+      const rec = recoveryOf(r)!;
+      assert.equal(rec.submissions[0].kind, "provider_error_frame");
+      assert.equal(rec.submissions[0].execution, "UNKNOWN");
+      assert.ok(gw.requests.length >= 3);
+      const NOTE = /^\[Nexus: your response at step 1 was cut off after 600 s, before it was complete, most likely because the provider ends a response that takes too long; none of it was used\. Respond with less at once\. Write a long file in parts: write_file with its first part, then add each further part with edit_file in later steps, replacing the file's last few lines \(enough that they occur nowhere earlier in it\) with those lines followed by the next part\. End each part where every bracket it opens is closed\./;
+      const last = (i: number) => gw.requests[i].body.messages.at(-1);
+      assert.ok(!String(last(0).content ?? "").includes("was cut off"));
+      assert.equal(last(1).role, "user");
+      assert.match(last(1).content, NOTE);
+      // It reaches later steps in the step's tool result, and never stands in the conversation as a request.
+      assert.ok(gw.requests[2].body.messages.some((m: any) => m.role === "tool" && NOTE.test(m.content)));
+      const messages = (agent as any).messages as Array<{ role: string; content: unknown }>;
+      assert.ok(!messages.some((m) => m.role === "user" && String(m.content).includes("was cut off")));
+      assert.ok(fs.readFileSync(path.join((agent as any).config.workspace, "review.md"), "utf-8").startsWith("# Review"));
+    });
+  });
+
+  test("a cut-off notice the step never delivered does not reach a later turn's step of the same number", async () => {
+    const clock = fakeClock();
+    const gw = await startGateway((n) => {
+      if (n === 1) {
+        clock.advance(600_000);
+        return { kind: "error_frame", message: "timeout" };
+      }
+      if (n === 3) return { kind: "tools", calls: [{ name: "write_file", args: { path: "notes.md", content: "notes\n" } }] };
+      return { kind: "text", content: "done" };
+    });
+    await withAgent([gw], clock, async (agent) => {
+      await agent.runTurn("summarize");
+      assert.match(String(gw.requests[1].body.messages.at(-1).content), /was cut off/, "the replay asked for less (else this proves nothing)");
+      await agent.runTurn("write notes");
+      assert.ok(gw.requests.length >= 4);
+      const tools = gw.requests[3].body.messages.filter((m: any) => m.role === "tool");
+      assert.ok(tools.length > 0 && !tools.some((m: any) => String(m.content).includes("was cut off")), JSON.stringify(tools).slice(0, 400));
+    });
+  });
+
+  test("an ambiguous failure that did not run long is resubmitted as it was", async () => {
+    const clock = fakeClock();
+    const gw = await startGateway((n) => {
+      if (n === 1) {
+        clock.advance(30_000);
+        return { kind: "error_frame", message: "worker lost" };
+      }
+      return { kind: "text", content: "ok" };
+    });
+    await withAgent([gw], clock, async (agent) => {
+      const r = await agent.runTurn("do work");
+      assert.equal(r.execution, "COMPLETED");
+      assert.equal(gw.requests.length, 2);
+      assert.deepEqual(gw.requests[1].body.messages, gw.requests[0].body.messages);
+    });
+  });
+
   test("temporary 503 with Retry-After, then recovery (10)", async () => {
     const gw = await startGateway((n) => (n <= 2
       ? { kind: "http", status: 503, headers: { "retry-after": "2" }, body: JSON.stringify({ error: { code: "capacity_exhausted" } }) }

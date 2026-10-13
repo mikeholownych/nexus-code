@@ -656,6 +656,7 @@ export class SidecarServer {
             milestones: agentMilestones(agent),
             validationReceipts: receipt ? [receipt] : [],
             objective: agent.getObjective() ?? null,
+            findings: agent.getFindings(),
             history: agent.getHistoryCompleteness(),
             ...(turn ? { status: lifecycleStatusForTurn(turn) } : {}),
             ...(lastTurn ? { lastTurn } : {}),
@@ -671,7 +672,7 @@ export class SidecarServer {
         if (session.workspace && fs.existsSync(session.workspace))
             this.setWorkspace(session.workspace);
         this.sessionId = session.id;
-        this.app.getAgent().restoreSession(session.messages, session.unverifiedChangesPending, session.objective);
+        this.app.getAgent().restoreSession(session.messages, session.unverifiedChangesPending, session.objective, session.findings);
         if (Array.isArray(session.activePlan))
             this.app.getAgent().setActivePlan(session.activePlan);
         this.lastTurn = null;
@@ -819,7 +820,7 @@ async function main(argv) {
         .option("--read-only", "Reject all mutating tool executions and commands")
         .option("--sandbox [mode]", "Isolate command execution using bubblewrap or Docker")
         .option("--worktree", "Isolate execution inside an ephemeral git worktree")
-        .option("--authoritative-verifier <command>", "Trusted command whose success may authorize automatic worktree merge")
+        .option("--authoritative-verifier <command>", "Trusted command that must pass before any task completion; its success may authorize automatic worktree merge")
         .option("--record-flight", "Record execution into an append-only .flightlog")
         .option("--planner-model <name>", "Deep reasoning model for planning")
         .option("--planner-endpoint <url>", "Inference endpoint for the planner model")
