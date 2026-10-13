@@ -28,7 +28,7 @@ The service is the entry. Nexus Code is the harness used to demonstrate it.
 
 ## Reproduce
 
-The published tree must include `demo/` and `experiments/cloudflare-artifacts-vertical-slice/` manifests and lockfiles. Requirements are Node.js 20+, npm, Git, a supported inference endpoint, and a Cloudflare account with permission to create an Artifacts repository and deploy the configured Worker.
+The published tree includes `demo/` and `experiments/cloudflare-artifacts-vertical-slice/` manifests and lockfiles. The supported target for this experiment is Ubuntu 24.04 or newer on x86-64, Node.js 22.18 or newer, npm, Git, `curl`, and a Cloudflare account allowed to create Artifacts repositories and deploy Workers. Real-agent mode also needs a Chat Completions-compatible inference endpoint that can produce the requested TypeScript changes. The captured recording used a private inference service; a judge must supply an endpoint and credentials they control.
 
 1. Clone `https://github.com/mikeholownych/nexus-code` and install the demo and Worker workspace dependencies from their lockfiles:
 
@@ -39,16 +39,19 @@ The published tree must include `demo/` and `experiments/cloudflare-artifacts-ve
    npm ci --prefix experiments/cloudflare-artifacts-vertical-slice
    ```
 
-2. Create and initialize a Cloudflare Artifacts Git repository for the demo. Bind its repository/namespace to the Worker configuration in `experiments/cloudflare-artifacts-vertical-slice/agent-collab-worker/cloudflare.config.ts`. Use a unique namespace for your run.
-3. Authenticate with Cloudflare using Wrangler/`cf`'s documented login flow. Configure any Worker bindings and secrets with the provider CLI; do not put credentials in source, `.env` examples, command history, or demo output. The demo requires separate authorized Artifact Git operations and Worker access. Configure those capabilities through the supported local adapter boundary in `demo/lib/substrate-adapter.mjs`.
-4. Set the inference endpoint, model ID, and any endpoint credential in your local environment. The model must support the OpenAI Chat Completions interface and tool-free JSON coding responses. A local fixture can run without inference or Cloudflare but must be labelled offline.
-5. Build/type-check and deploy the Worker from its directory using the checked-in configuration and your account:
+2. Create a unique Artifacts namespace and repository with the Cloudflare Artifacts REST API. The current Cloudflare API uses the account-level `/artifacts/namespaces` and namespace `/repos` routes; creating a repository returns its ID, remote URL, and initial repo token. Push a single baseline commit to `main` before running the demo. For API token scope and exact response fields, use [Cloudflare’s Artifacts REST API guide](https://developers.cloudflare.com/artifacts/api/rest-api/). The baseline commit is the parent from which this run publishes isolated refs.
+3. Set the following non-secret resource values in the shell that builds/deploys the Worker and runs the controller: `NEXUS_CF_NAMESPACE`, `NEXUS_CF_REPOSITORY`, `NEXUS_CF_REPOSITORY_ID`, `NEXUS_CF_ARTIFACTS_REMOTE`, `NEXUS_CF_DEFAULT_SHA`, `NEXUS_CF_WORKER_NAME`, and `NEXUS_CF_WORKER_ENDPOINT`. `NEXUS_CF_DEFAULT_SHA` is the exact `main` commit you initialized. These values are intentionally not checked into the repository. The Worker config binds the selected namespace and exposes the namespace/repository to the Worker source; the handler refuses requests when those bindings are absent.
+4. Deploy the Worker and set its `EXPERIMENT_AUTH` secret through Cloudflare’s secret command. Keep the Worker bearer and the Artifacts Git token out of shell history, source, `.env.example`, and logs. The protected broker expects separate root-owned `0400` token files at `/etc/nexus-cloudflare-broker/artifacts-git.token` and `/etc/nexus-cloudflare-broker/worker.bearer`.
 
    ```sh
    npm run typecheck --prefix experiments/cloudflare-artifacts-vertical-slice
    npm run deploy --prefix experiments/cloudflare-artifacts-vertical-slice
-   cd ../../../..
+   npx wrangler secret put EXPERIMENT_AUTH --name "$NEXUS_CF_WORKER_NAME"
    ```
+
+   Cloudflare’s `cf` CLI requires Node 22.18 or newer. Authenticate it using the supported login flow or an account-scoped API token. Do not place secrets in repo files or commit ignored local configuration.
+
+5. Set `NEXUS_CF_ARTIFACT_CREDENTIAL_PATH` and `NEXUS_CF_WORKER_BEARER_PATH` if the root-owned capability files use non-default paths. Set the real inference endpoint and model using `LOCAL_LLM_ENDPOINT` and `LOCAL_LLM_MODEL`; store any model credential using the client’s credential store so it is not inherited by the restricted validation process. The endpoint must support OpenAI Chat Completions and tool-free JSON coding responses. A local fixture can run without inference or Cloudflare, but must be labelled offline.
 
 6. Run the offline regression suite, then the real Cloudflare-backed flow:
 
@@ -59,7 +62,7 @@ The published tree must include `demo/` and `experiments/cloudflare-artifacts-ve
 
 The expected flow reports two candidate refs, a structured work-state ref, a Worker retrieval result, Consumer reassessment, and a separate integration validation result. Verify the run refs and commit IDs from the Cloudflare Artifacts repository, and verify the Worker response against the published work-state commit and digest. The run does not change the repository default branch.
 
-**Reproducibility status: blocked.** The captured execution uses a host-installed protected transport executable, a fixed pre-created Artifacts repository, and a pre-deployed Worker. Those dependencies are not included here. The demo adapter still pins the captured namespace/repository identity, and this repository does not provide a self-contained bootstrap and credential path for a judge's own Cloudflare account. The commands above build and deploy the included Worker workspace, but they do not configure the adapter for a new account. Consequently the real Cloudflare run cannot currently be reproduced from a clean clone; offline fixtures are not equivalent evidence. Do not treat deployment success alone as an end-to-end demo.
+**Reproducibility status: blocked pending clean-account acceptance.** Resource identity is now configurable in the demo adapter and Worker rather than pinned to the recorded account. However, the included protected broker installer is still an operator-specific upgrade bundle: it requires a prior root-owned `/opt/nexus-cloudflare-broker` installation, a host-specific runtime/manifest, and credential files provisioned outside the repository. Its launcher clears inherited configuration, so the new per-run configuration has not yet been proven through that installed broker. The restricted validator also requires Linux `sudo`, `setpriv`, `node`, and `tsc` with the specific no-capability UID 65534 boundary. The repo does not yet provide a clean judge bootstrap for those components. The commands above can typecheck and deploy the Worker, but they do not establish a complete fresh-account run. Do not treat local synthetic broker tests or offline fixtures as Cloudflare-backed evidence.
 
 ## Costs and cleanup
 
@@ -83,6 +86,6 @@ See [the Cloudflare evidence archive](cloudflare/) for qualification reports and
 
 **Repository:** https://github.com/mikeholownych/nexus-code
 
-**Run instructions:** Clone the repository, install demo and Worker dependencies as shown in [the judge guide](CLOUDFLARE_CONTEST.md), authenticate with Cloudflare, and deploy the included Worker. A full Cloudflare-backed run currently remains blocked because the demo is pinned to operator repository resources and an external protected transport. Offline tests are useful for code-level checks but do not demonstrate the Cloudflare service path.
+**Run instructions:** Clone the repository, install demo and Worker dependencies as shown in [the judge guide](CLOUDFLARE_CONTEST.md), create an Artifacts repo, configure the per-run resource values, and deploy the included Worker. A full Cloudflare-backed run remains blocked until a clean judge-owned environment can provision and invoke the protected transport and validator. Offline tests are code-level checks and do not demonstrate the Cloudflare service path.
 
 Team/contact/attendee and eligibility fields are intentionally left for the human entrant to complete. The application must be submitted manually under the official rules.

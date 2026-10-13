@@ -49,7 +49,7 @@ try {
 	const workerCanary = "SYNTHETIC_WORKER_BEARER_CANARY_ONLY";
 	const runId = "123e4567-e89b-42d3-a456-426614174000";
 	let tamperWorker = null;
-	const repository = { namespace: "nexus-exp1-oct02", name: "external-git-proof", id: "4v94nnw1eqf0sanw" };
+	const repository = { namespace: "nexus-test", name: "fixture-repo", id: "fixture-repo-id" };
 
 	async function protectedRequest(request) {
 		operations.push(structuredClone(request));
@@ -95,7 +95,7 @@ try {
 		return { ok: false, error: "OPERATION_NOT_ADMITTED" };
 	}
 
-	const adapter = new CloudflareSubstrateAdapter({ runId, protectedRequest, testOnlyExpectedDefaultSha: defaultSha });
+	const adapter = new CloudflareSubstrateAdapter({ runId, protectedRequest, namespace: repository.namespace, repo: repository.name, repositoryId: repository.id, remoteUrl: "https://fixture.invalid/git/nexus-test/fixture-repo.git", workerEndpoint: "https://fixture.invalid/work-state", testOnlyExpectedDefaultSha: defaultSha });
 	await adapter.initialize();
 	assert.equal(adapter.getRemoteUrl(), path.join(adapter.rootDir, "local-origin.git"), "ordinary local candidate Git uses a credential-free mirror");
 
@@ -141,7 +141,7 @@ try {
 	assert.equal(publishedIntegration.sha, integrationSha);
 	assert.equal(observedIntegration.sha, integrationSha);
 
-	assert.throws(() => new CloudflareSubstrateAdapter({ namespace: "attacker", protectedRequest }), /CLOUDFLARE_REPOSITORY_OVERRIDE_REJECTED/);
+	assert.throws(() => new CloudflareSubstrateAdapter({ namespace: "attacker", protectedRequest }), /CLOUDFLARE_DEMO_CONFIG_REQUIRED/);
 	assert.throws(() => new CloudflareSubstrateAdapter({ runId: "../../main", protectedRequest }), /DEMO_RUN_ID_NOT_ADMITTED/);
 	await assert.rejects(adapter.publishCandidate(integration, "main"), /CANDIDATE_ROLE_NOT_ADMITTED/);
 	assert.deepEqual(operations.map((request) => request.operation), [

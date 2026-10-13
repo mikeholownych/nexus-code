@@ -201,13 +201,15 @@ export class CloudflareSubstrateAdapter extends SubstrateAdapterBase {
 	constructor(options = {}) {
 		super({ ...options, mode: "cloudflare" });
 		this.isRealCloudflare = true;
-		if ((options.namespace && options.namespace !== "nexus-exp1-oct02") || (options.repo && options.repo !== "external-git-proof")) throw new Error("CLOUDFLARE_REPOSITORY_OVERRIDE_REJECTED");
-		this.namespace = "nexus-exp1-oct02";
-		this.repo = "external-git-proof";
-		this.repositoryId = "4v94nnw1eqf0sanw";
 		if (!runIdPattern.test(this.runId)) throw new Error("DEMO_RUN_ID_NOT_ADMITTED");
-		this.expectedDefaultSha = options.testOnlyExpectedDefaultSha || "ec3affd0e916b895e3528de6747b632f428359c0";
-		this.remoteUrl = `https://a1a1fe900d3e61ccd4ef3a512867d7c0.artifacts.cloudflare.net/git/${this.namespace}/${this.repo}.git`;
+		this.namespace = options.namespace ?? process.env.NEXUS_CF_NAMESPACE;
+		this.repo = options.repo ?? process.env.NEXUS_CF_REPOSITORY;
+		this.repositoryId = options.repositoryId ?? process.env.NEXUS_CF_REPOSITORY_ID;
+		this.remoteUrl = options.remoteUrl ?? process.env.NEXUS_CF_ARTIFACTS_REMOTE;
+		this.workerEndpoint = options.workerEndpoint ?? process.env.NEXUS_CF_WORKER_ENDPOINT;
+		if (![this.namespace, this.repo, this.repositoryId, this.remoteUrl, this.workerEndpoint].every((value) => typeof value === "string" && value.length > 0)) throw new Error("CLOUDFLARE_DEMO_CONFIG_REQUIRED");
+		if (!/^https:\/\//.test(this.remoteUrl) || !/^https:\/\//.test(this.workerEndpoint)) throw new Error("CLOUDFLARE_DEMO_CONFIG_INVALID");
+		this.expectedDefaultSha = options.testOnlyExpectedDefaultSha ?? process.env.NEXUS_CF_DEFAULT_SHA ?? null;
 		this.rootDir = null;
 		this.originDir = null;
 		this.latestWorkStateDigest = null;
@@ -220,7 +222,8 @@ export class CloudflareSubstrateAdapter extends SubstrateAdapterBase {
 		this.rootDir = await mkdtemp(path.join(os.tmpdir(), "nexus-demo-cf-"));
 		this.originDir = path.join(this.rootDir, "local-origin.git");
 		const initial = await this.requestProtected({ operation: "repo-default" });
-		if (initial.repository?.namespace !== this.namespace || initial.repository?.name !== this.repo || initial.repository?.id !== this.repositoryId || initial.ref !== "refs/heads/main" || initial.sha !== this.expectedDefaultSha) throw new Error("PROTECTED_REPOSITORY_IDENTITY_MISMATCH");
+		if (initial.repository?.namespace !== this.namespace || initial.repository?.name !== this.repo || initial.repository?.id !== this.repositoryId || initial.ref !== "refs/heads/main" || !/^[0-9a-f]{40}$/.test(initial.sha || "") || (this.expectedDefaultSha && initial.sha !== this.expectedDefaultSha)) throw new Error("PROTECTED_REPOSITORY_IDENTITY_MISMATCH");
+		this.expectedDefaultSha ??= initial.sha;
 		const bundlePath = path.join(this.rootDir, "default.bundle");
 		writeFileSync(bundlePath, decodeBundle(initial.bundleBase64), { mode: 0o600, flag: "wx" });
 		this.runGit(this.rootDir, ["init", "--bare", "--quiet", this.originDir]);
@@ -228,7 +231,7 @@ export class CloudflareSubstrateAdapter extends SubstrateAdapterBase {
 		this.runGit(this.rootDir, ["--git-dir", this.originDir, "symbolic-ref", "HEAD", "refs/heads/main"]);
 		if (this.runGit(this.rootDir, ["--git-dir", this.originDir, "rev-parse", "--verify", "refs/heads/main^{commit}"]) !== initial.sha) throw new Error("PROTECTED_REPOSITORY_BUNDLE_SHA_MISMATCH");
 		await rm(bundlePath, { force: true });
-		return { rootDir: this.rootDir, remoteUrl: this.remoteUrl, mode: "cloudflare", isRealCloudflare: true, namespace: this.namespace, repo: this.repo };
+		return { rootDir: this.rootDir, remoteUrl: this.remoteUrl, mode: "cloudflare", isRealCloudflare: true, namespace: this.namespace, repo: this.repo, repositoryId: this.repositoryId, defaultSha: this.expectedDefaultSha, workerEndpoint: this.workerEndpoint };
 	}
 
 	getRemoteUrl() {
@@ -343,7 +346,10 @@ function invokeProtectedTransport(request) {
 	if (!executable || !path.isAbsolute(executable)) throw new Error("PROTECTED_TRANSPORT_NOT_CONFIGURED");
 	const result = spawnSync(executable, ["demo-transport"], {
 		input: `${JSON.stringify(request)}\n`, encoding: "utf8", timeout: 45000, maxBuffer: 32 * 1024 * 1024,
-		env: { PATH: "/usr/bin:/bin", HOME: "/nonexistent", LANG: "C", LC_ALL: "C" },
+		env: {
+			PATH: "/usr/bin:/bin", HOME: "/nonexistent", LANG: "C", LC_ALL: "C",
+			...Object.fromEntries(["NEXUS_CF_NAMESPACE", "NEXUS_CF_REPOSITORY", "NEXUS_CF_REPOSITORY_ID", "NEXUS_CF_ARTIFACTS_REMOTE", "NEXUS_CF_DEFAULT_SHA", "NEXUS_CF_WORKER_ENDPOINT", "NEXUS_CF_ARTIFACT_CREDENTIAL_PATH", "NEXUS_CF_WORKER_BEARER_PATH"].filter((key) => process.env[key]).map((key) => [key, process.env[key]])),
+		},
 	});
 	let response;
 	try { response = JSON.parse(result.stdout || ""); } catch { throw new Error("PROTECTED_TRANSPORT_RESPONSE_INVALID"); }

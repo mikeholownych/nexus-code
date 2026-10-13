@@ -29,13 +29,20 @@ const maximumRequestBytes = 24 * 1024 * 1024;
 const maximumWorkerResponseBytes = 1024 * 1024;
 
 export function createDemoTransport(options = {}) {
-	const repository = options.repository ?? DEMO_REPOSITORY;
+	const repository = options.repository ?? (process.env.NEXUS_CF_NAMESPACE && process.env.NEXUS_CF_REPOSITORY && process.env.NEXUS_CF_REPOSITORY_ID && process.env.NEXUS_CF_ARTIFACTS_REMOTE ? Object.freeze({
+		namespace: process.env.NEXUS_CF_NAMESPACE,
+		name: process.env.NEXUS_CF_REPOSITORY,
+		id: process.env.NEXUS_CF_REPOSITORY_ID,
+		remote: process.env.NEXUS_CF_ARTIFACTS_REMOTE,
+		defaultBranch: "main",
+		defaultSha: process.env.NEXUS_CF_DEFAULT_SHA || null,
+	}) : DEMO_REPOSITORY);
 	const config = {
 		repository,
 		remote: options.remote ?? repository.remote,
-		workerEndpoint: options.workerEndpoint ?? DEMO_WORKER_ENDPOINT,
-		artifactCredentialPath: options.artifactCredentialPath ?? ARTIFACT_CREDENTIAL_PATH,
-		workerBearerPath: options.workerBearerPath ?? WORKER_BEARER_PATH,
+		workerEndpoint: options.workerEndpoint ?? process.env.NEXUS_CF_WORKER_ENDPOINT ?? DEMO_WORKER_ENDPOINT,
+		artifactCredentialPath: options.artifactCredentialPath ?? process.env.NEXUS_CF_ARTIFACT_CREDENTIAL_PATH ?? ARTIFACT_CREDENTIAL_PATH,
+		workerBearerPath: options.workerBearerPath ?? process.env.NEXUS_CF_WORKER_BEARER_PATH ?? WORKER_BEARER_PATH,
 		expectedFileOwner: options.expectedFileOwner ?? 0,
 		expectedFileGroup: options.expectedFileGroup ?? options.expectedFileOwner ?? 0,
 		gitExecutable: options.gitExecutable ?? "/usr/bin/git",
@@ -46,8 +53,8 @@ export function createDemoTransport(options = {}) {
 		onGitInvocation: options.onGitInvocation,
 		onGitResult: options.onGitResult,
 	};
-	if ((config.remote !== DEMO_REPOSITORY.remote || repository !== DEMO_REPOSITORY) && !config.allowLocalRemoteForTest) throw new Error("fixed Artifacts repository cannot be overridden");
-	if (config.workerEndpoint !== DEMO_WORKER_ENDPOINT && !options.allowWorkerEndpointForTest) throw new Error("fixed Worker endpoint cannot be overridden");
+	if ((config.remote !== repository.remote || repository !== DEMO_REPOSITORY) && !options.allowLocalRemoteForTest && !process.env.NEXUS_CF_NAMESPACE) throw new Error("custom Artifacts repository requires explicit contest configuration");
+	if (config.workerEndpoint !== DEMO_WORKER_ENDPOINT && !options.allowWorkerEndpointForTest && !process.env.NEXUS_CF_WORKER_ENDPOINT) throw new Error("custom Worker endpoint requires explicit contest configuration");
 
 	return Object.freeze({
 		handle: async (request) => {
@@ -265,7 +272,7 @@ function exportDefault(config) {
 		const symref = runGit(config, ["ls-remote", "--symref", config.remote, "HEAD"], { token, operation: "remote-read" }).toString("utf8");
 		if (!symref.includes(`ref: refs/heads/${config.repository.defaultBranch}\tHEAD`)) throw failure("ARTIFACTS_BASELINE_MISMATCH");
 		const sha = remoteSha(config, "refs/heads/main", token);
-		if (sha !== config.repository.defaultSha) throw failure("ARTIFACTS_BASELINE_MISMATCH");
+		if (config.repository.defaultSha && sha !== config.repository.defaultSha) throw failure("ARTIFACTS_BASELINE_MISMATCH");
 		return { operation: "repo-default", repository: repositoryIdentity(config.repository), ref: "refs/heads/main", sha, ...createExportBundle(config, "refs/heads/main", token) };
 	} finally { token.fill(0); }
 }
@@ -300,7 +307,7 @@ function publishRef(config, request) {
 			if (oldSha && ["baseline", "work-state"].includes(request.role)) throw failure("REF_STATE_MISMATCH");
 			if (request.role === "baseline") {
 				const mainSha = remoteSha(config, "refs/heads/main", token);
-				if (mainSha !== config.repository.defaultSha) throw failure("ARTIFACTS_BASELINE_MISMATCH");
+				if (config.repository.defaultSha && mainSha !== config.repository.defaultSha) throw failure("ARTIFACTS_BASELINE_MISMATCH");
 				fetchToBare(config, bare, "refs/heads/main", token);
 			} else {
 				const baseline = refFor(request.runId, "baseline");
@@ -337,7 +344,7 @@ function validateCommitPolicy(config, bare, request, ref, commitSha, oldSha, tok
 	const parentText = runGit(config, ["--git-dir", bare, "show", "-s", "--format=%P", commitSha]).toString("ascii").trim();
 	const parents = parentText ? parentText.split(/\s+/) : [];
 	if (request.role === "baseline") {
-		if (parents.length !== 1 || parents[0] !== config.repository.defaultSha) throw failure("COMMIT_POLICY_REJECTED");
+		if (parents.length !== 1 || (config.repository.defaultSha && parents[0] !== config.repository.defaultSha)) throw failure("COMMIT_POLICY_REJECTED");
 	} else if (request.role !== "work-state") {
 		const baseline = refFor(request.runId, "baseline");
 		const baselineSha = runGit(config, ["--git-dir", bare, "rev-parse", "--verify", `${baseline}^{commit}`]).toString("ascii").trim();

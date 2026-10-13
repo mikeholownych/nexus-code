@@ -1,8 +1,6 @@
 import { env } from "cloudflare:workers";
 import { producerCandidateRefForRun, workStateBranchForRun, workStateRefForRun } from "./work-state-contract";
 
-const namespace = "nexus-exp1-oct02";
-const repositoryName = "external-git-proof";
 const statePath = ".agent/work-state.json";
 
 function json(body: unknown, status = 200): Response {
@@ -24,6 +22,10 @@ function authorized(request: Request): boolean {
 
 export default {
 	async fetch(request: Request) {
+		const bindings = env as typeof env & { NEXUS_NAMESPACE?: string; NEXUS_REPOSITORY?: string };
+		const namespace = bindings.NEXUS_NAMESPACE;
+		const repositoryName = bindings.NEXUS_REPOSITORY;
+		if (!namespace || !repositoryName) return json({ error: "Worker repository configuration is missing" }, 503);
 		const url = new URL(request.url);
 		if (url.pathname === "/health" && request.method === "GET") return json({ ok: true });
 		if (!authorized(request)) return json({ error: "Unauthorized" }, 401);
