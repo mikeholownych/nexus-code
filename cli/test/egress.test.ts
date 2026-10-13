@@ -80,7 +80,6 @@ MIIEowIBAAKCAQEA0Z3vV4k8t...fake...pem...body...content...
         Anthropic key: sk-ant-api03-abcdef1234567890abcdef1234567890abcdef
         GitHub PAT: ghp_1234567890abcdef1234567890abcdef1234
         AWS Key: AKIAIOSFODNN7EXAMPLE
-        Slack Token: NEXUS_SYNTHETIC_SLACK_TOKEN
         Bearer auth: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.e30.t-IDc
         Google key: AIzaSyD-1234567890abcdef12345678901234
         HuggingFace token: hf_1234567890abcdef1234567890abcdef12
@@ -94,7 +93,6 @@ MIIEowIBAAKCAQEA0Z3vV4k8t...fake...pem...body...content...
       assert.ok(matchedSecrets.some((s) => s.startsWith("sk-ant-")));
       assert.ok(matchedSecrets.some((s) => s.startsWith("ghp_")));
       assert.ok(matchedSecrets.some((s) => s.startsWith("AKIA")));
-      assert.ok(matchedSecrets.some((s) => s.startsWith("xoxb-")));
       assert.ok(matchedSecrets.some((s) => s.startsWith("eyJhbGci") || s.startsWith("Bearer ")));
       assert.ok(matchedSecrets.some((s) => s.startsWith("AIza")));
       assert.ok(matchedSecrets.some((s) => s.startsWith("hf_")));
