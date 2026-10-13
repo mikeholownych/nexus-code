@@ -16,7 +16,13 @@ The installer downloads the matching versioned client archive and `SHA256SUMS` f
 export PATH="$HOME/.local/bin:$PATH"
 ```
 
-Set `NEXUS_VERSION=vX.Y.Z` before the command to install a specific published version. The command above follows the latest stable release. For inspect-before-running, download [install.sh](https://raw.githubusercontent.com/mikeholownych/nexus-code/main/install.sh), read it, then run `sh install.sh`.
+The command above follows the latest stable release. To install a specific published version, pipe the same installer with `NEXUS_VERSION` set for the shell:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/mikeholownych/nexus-code/main/install.sh | NEXUS_VERSION=v1.2.1 sh
+```
+
+For inspect-before-running, download [install.sh](https://raw.githubusercontent.com/mikeholownych/nexus-code/main/install.sh), read it, then run `sh install.sh`.
 
 The release package includes the TypeScript client, production Node dependencies, `harness-core`, and the Ratatui `nexus-tui` binary. Node is an external runtime prerequisite. Current release support is limited to Linux x86-64/glibc; macOS, Windows, ARM, musl, and other architectures are not claimed.
 
@@ -52,7 +58,7 @@ Nexus reports `VERIFIED` only when its selected verifier passes. `UNVERIFIED`, `
 
 ## Upgrade and remove
 
-Run the same installer to reinstall or upgrade. Pin a version with `NEXUS_VERSION=vX.Y.Z`. Removal is manual and limited to Nexus-owned paths:
+Run the same installer to reinstall or upgrade. Pin an upgrade with the `NEXUS_VERSION` pipeline form above. Removal is manual and limited to Nexus-owned paths:
 
 ```sh
 rm "$HOME/.local/bin/nexus"
