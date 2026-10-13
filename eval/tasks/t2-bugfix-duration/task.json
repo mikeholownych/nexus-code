@@ -1,0 +1,16 @@
+{
+  "id": "t2-bugfix-duration",
+  "tier": "T2",
+  "fixture": "repo",
+  "steps": 60,
+  "minutes": 20,
+  "description": "Bug fix from a failing test: parse_duration mis-weights minutes and rejects seconds-only input.",
+  "objective": "The test suite fails (run: python3 -m unittest discover -s tests). Fix the bug in durations.py so the tests pass. Do not change the tests.",
+  "hidden": {
+    "dir": "hidden",
+    "command": "python3 hidden/test_duration_hidden.py"
+  },
+  "regression": {
+    "command": "python3 -m unittest discover -s tests"
+  }
+}

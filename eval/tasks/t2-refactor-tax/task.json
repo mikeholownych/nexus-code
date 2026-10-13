@@ -1,0 +1,16 @@
+{
+  "id": "t2-refactor-tax",
+  "tier": "T2",
+  "fixture": "repo",
+  "steps": 60,
+  "minutes": 20,
+  "description": "Multi-file refactor: extract duplicated tax rounding into one shared function.",
+  "objective": "cart.py and invoice.py each compute tax with duplicated code. Extract it into a new module pricing.py with a function apply_tax(amount, rate) returning the taxed total rounded to cents (half-up), and make both cart.py and invoice.py use it (no duplicate tax code left in them). Behaviour must not change; keep the existing tests passing.",
+  "hidden": {
+    "dir": "hidden",
+    "command": "python3 hidden/test_tax_hidden.py"
+  },
+  "regression": {
+    "command": "python3 -m unittest discover -s tests"
+  }
+}

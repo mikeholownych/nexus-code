@@ -1,0 +1,16 @@
+{
+  "id": "t2-bugfix-csv",
+  "tier": "T2",
+  "fixture": "repo",
+  "steps": 60,
+  "minutes": 20,
+  "description": "Bug fix from a failing test: CSV line parser splits inside quoted fields.",
+  "objective": "npm test fails. Fix parseLine in csv.js so quoted fields (which may contain commas and doubled quotes \"\") are parsed correctly. Do not change the tests.",
+  "hidden": {
+    "dir": "hidden",
+    "command": "node hidden/csv.hidden.test.js"
+  },
+  "regression": {
+    "command": "npm test --silent"
+  }
+}

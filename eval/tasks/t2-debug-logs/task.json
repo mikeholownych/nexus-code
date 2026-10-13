@@ -1,0 +1,16 @@
+{
+  "id": "t2-debug-logs",
+  "tier": "T2",
+  "fixture": "repo",
+  "steps": 60,
+  "minutes": 20,
+  "description": "Debugging from logs: a production crash recorded in app.log.",
+  "objective": "logs/app.log shows the report job crashing in production. Find the cause and fix it so the report handles that case, then add a regression test. Do not change the report format for normal input.",
+  "hidden": {
+    "dir": "hidden",
+    "command": "node hidden/report.hidden.test.js"
+  },
+  "regression": {
+    "command": "npm test --silent"
+  }
+}

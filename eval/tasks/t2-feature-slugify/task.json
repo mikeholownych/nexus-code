@@ -1,0 +1,16 @@
+{
+  "id": "t2-feature-slugify",
+  "tier": "T2",
+  "fixture": "repo",
+  "steps": 60,
+  "minutes": 20,
+  "description": "Small feature: slugify maxLength option truncating at a word boundary.",
+  "objective": "Add an optional second argument to slugify in slugify.js: an options object with maxLength. When the slug is longer than maxLength, cut it at the last '-' boundary that fits within maxLength (no trailing '-'); if the first word alone is longer than maxLength, cut that word at maxLength. Without the option, behaviour is unchanged. Add tests.",
+  "hidden": {
+    "dir": "hidden",
+    "command": "node hidden/slugify.hidden.test.js"
+  },
+  "regression": {
+    "command": "npm test --silent"
+  }
+}

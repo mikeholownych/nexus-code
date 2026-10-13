@@ -1,0 +1,11 @@
+const assert = require("node:assert/strict");
+const { slugify } = require("../slugify.js");
+assert.equal(slugify("Hello, World!"), "hello-world");
+assert.equal(slugify("Crème Brûlée"), "creme-brulee");
+assert.equal(slugify("The quick brown fox", { maxLength: 15 }), "the-quick-brown");
+assert.equal(slugify("The quick brown fox", { maxLength: 14 }), "the-quick");
+assert.equal(slugify("The quick brown fox", { maxLength: 100 }), "the-quick-brown-fox");
+assert.equal(slugify("Supercalifragilistic word", { maxLength: 5 }), "super");
+assert.equal(slugify("a b", { maxLength: 3 }), "a-b");
+assert.equal(slugify("ab cd", { maxLength: 3 }), "ab");
+console.log("hidden slugify ok");

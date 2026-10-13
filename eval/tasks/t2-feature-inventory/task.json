@@ -1,0 +1,16 @@
+{
+  "id": "t2-feature-inventory",
+  "tier": "T2",
+  "fixture": "repo",
+  "steps": 60,
+  "minutes": 20,
+  "description": "Small feature: remove stock with validation.",
+  "objective": "Add a method remove(name, qty) to Inventory in inventory.py. It decreases the stock of name by qty and returns the remaining quantity; when the remaining quantity is 0 the item is dropped from the inventory. It raises ValueError if qty is not a positive integer, and KeyError if the item is unknown. If there is not enough stock it raises ValueError and leaves the stock unchanged. Add tests for it in tests/.",
+  "hidden": {
+    "dir": "hidden",
+    "command": "python3 hidden/test_inventory_hidden.py"
+  },
+  "regression": {
+    "command": "python3 -m unittest discover -s tests"
+  }
+}

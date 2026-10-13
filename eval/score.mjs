@@ -50,6 +50,7 @@ const rows = [...groups.entries()].map(([key, rs]) => {
     falseVerified: count((r) => r.falseVerified),
     regressions: count((r) => r.regressionPass === false),
     errors: count((r) => r.error),
+    contaminated: count((r) => r.contaminated),
     timedOut: count((r) => r.timedOut),
     medianWallS: median(rs.map((r) => r.wallMs / 1000)),
     medianSteps: median(rs.map((r) => r.turn?.steps?.used)),
@@ -61,16 +62,17 @@ const totals = {
   runs: records.length,
   falseVerified: records.filter((r) => r.falseVerified).length,
   errors: records.filter((r) => r.error).length,
+  contaminated: records.filter((r) => r.contaminated).length,
 };
 
 if (process.argv.includes("--json")) {
   console.log(JSON.stringify({ totals, rows }, null, 2));
 } else {
   const pct = (x) => `${Math.round(x * 100)}%`;
-  console.log(`runs ${totals.runs} · false VERIFIED ${totals.falseVerified} · harness errors ${totals.errors}\n`);
-  console.log("| config | task | tier | n | claimed | correct (95% CI) | false VERIFIED | regressions | timed out | median wall s | median steps | median tokens |");
-  console.log("|---|---|---|---|---|---|---|---|---|---|---|---|");
+  console.log(`runs ${totals.runs} · false VERIFIED ${totals.falseVerified} · harness errors ${totals.errors} · contaminated ${totals.contaminated}\n`);
+  console.log("| config | task | tier | n | claimed | correct (95% CI) | false VERIFIED | regressions | timed out | contaminated | median wall s | median steps | median tokens |");
+  console.log("|---|---|---|---|---|---|---|---|---|---|---|---|---|");
   for (const r of rows) {
-    console.log(`| ${r.config} | ${r.task} | ${r.tier} | ${r.n} | ${r.claimed} | ${r.correct} (${pct(r.correctCI[0])}–${pct(r.correctCI[1])}) | ${r.falseVerified} | ${r.regressions} | ${r.timedOut} | ${r.medianWallS?.toFixed(0) ?? "–"} | ${r.medianSteps ?? "–"} | ${r.medianTokens ?? "–"} |`);
+    console.log(`| ${r.config} | ${r.task} | ${r.tier} | ${r.n} | ${r.claimed} | ${r.correct} (${pct(r.correctCI[0])}–${pct(r.correctCI[1])}) | ${r.falseVerified} | ${r.regressions} | ${r.timedOut} | ${r.contaminated} | ${r.medianWallS?.toFixed(0) ?? "–"} | ${r.medianSteps ?? "–"} | ${r.medianTokens ?? "–"} |`);
   }
 }

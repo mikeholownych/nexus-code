@@ -1,0 +1,11 @@
+{
+  "name": "nexus@gateway/engineering/lead",
+  "agent": "nexus",
+  "endpoint": "https://10.0.8.5:8443/v1",
+  "model": "engineering/lead",
+  "apiKey": { "file": "~/.config/nexus/config.env", "var": "LOCAL_LLM_API_KEY" },
+  "caFile": "~/.config/nexus/t5820-gateway-ca.crt",
+  "limits": { "context": 65536, "output": 8192 },
+  "runs": 5,
+  "args": ["--context-limit", "65536"]
+}

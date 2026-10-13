@@ -27,12 +27,16 @@ const identity = harnessIdentity();
 const tasks = fs.readdirSync(tasksDir).filter((d) => fs.existsSync(path.join(tasksDir, d, "task.json")) && (!only || only.has(d))).sort();
 fs.writeFileSync(path.join(args.out, "manifest.json"), JSON.stringify({ createdAt: new Date().toISOString(), harness: identity, config: redactConfig(config), runs, tasks, host: os.hostname(), node: process.version }, null, 2) + "\n");
 
-for (const id of tasks) {
-  const task = { ...JSON.parse(fs.readFileSync(path.join(tasksDir, id, "task.json"), "utf8")), dir: path.join(tasksDir, id) };
-  for (let run = 1; run <= runs; run++) {
+// Run-major order (every task once, then again): a pass cut short still has the same number of runs per task.
+const apiKey = readApiKey(config.apiKey);
+const caFile = config.caFile ? expandHome(config.caFile) : null;
+const caBundle = caFile ? writeCaBundle(caFile) : null;
+for (let run = 1; run <= runs; run++) {
+  for (const id of tasks) {
+    const task = { ...JSON.parse(fs.readFileSync(path.join(tasksDir, id, "task.json"), "utf8")), dir: path.join(tasksDir, id) };
     const record = await runOnce(task, run);
     fs.appendFileSync(resultsFile, JSON.stringify(record) + "\n");
-    console.log(`${id} run ${run}: ${record.turn?.outcome ?? record.error ?? "?"} hidden=${record.hiddenPass} regression=${record.regressionPass} ${Math.round(record.wallMs / 1000)}s`);
+    console.log(`${new Date().toISOString()} ${config.name} ${id} run ${run}: ${record.turn?.outcome ?? record.error ?? `exit ${record.exitCode}`} hidden=${record.hiddenPass} regression=${record.regressionPass} ${Math.round(record.wallMs / 1000)}s`);
   }
 }
 
@@ -42,13 +46,20 @@ async function runOnce(task, run) {
   const base = { task: task.id, tier: task.tier, config: config.name, agent: config.agent ?? "nexus", run, harness: identity.string, model: config.model, startedAt: new Date().toISOString() };
   try {
     prepareWorkspace(task, ws);
+    const sourceBefore = treeDigest(task.dir);
     const started = Date.now();
     const agent = await runAgent(task, ws, home);
     const wallMs = Date.now() - started;
+    // Agents run as the operator's user, so the task sources (hidden tests included) are readable; a run that changed
+    // them or names their path is marked contaminated rather than silently scored.
+    const contaminated = treeDigest(task.dir) !== sourceBefore || `${agent.stdout}${agent.stderr}`.includes(tasksDir);
     const hidden = runCheck(task, ws, task.hidden, true);
     const regression = task.regression ? runCheck(task, ws, task.regression, false) : null;
     const turn = agent.json?.turn ?? null;
-    const claimedComplete = turn?.execution === "COMPLETED" && ["VERIFIED", "REGRESSION_FREE", "UNVERIFIED", "NOT_REQUIRED"].includes(turn?.outcome);
+    // Nexus reports a structured outcome; for the other agents a clean exit within the budget is their completion claim.
+    const claimedComplete = turn
+      ? turn.execution === "COMPLETED" && ["VERIFIED", "REGRESSION_FREE", "UNVERIFIED", "NOT_REQUIRED"].includes(turn.outcome)
+      : agent.code === 0 && !agent.timedOut;
     return {
       ...base,
       wallMs,
@@ -60,6 +71,7 @@ async function runOnce(task, run) {
       hiddenPass: hidden.pass,
       regressionPass: regression ? regression.pass : null,
       falseVerified: turn?.outcome === "VERIFIED" && !hidden.pass,
+      contaminated,
       tokens: agent.json?.tokenStats ?? null,
       logs: saveLogs(task, run, agent, hidden, regression),
     };
@@ -86,27 +98,73 @@ function prepareWorkspace(task, ws) {
   for (const cmd of task.setup ?? []) sh(cmd, ws);
 }
 
+/**
+ * The command line and environment for one agent run. Each agent gets a fresh HOME holding only its gateway settings
+ * (no operator plugins, extensions or memory), the same endpoint and model, and the key through its environment.
+ */
+function agentCommand(task, ws, home, budget) {
+  const ep = config.endpoint;
+  const keyEnv = apiKey ? { LOCAL_LLM_API_KEY: apiKey, OPENAI_API_KEY: apiKey, GW_KEY: apiKey } : {};
+  const caEnv = caBundle ? { NODE_EXTRA_CA_CERTS: caFile, SSL_CERT_FILE: caBundle, REQUESTS_CA_BUNDLE: caBundle } : {};
+  // PWD too: some agents take the project from $PWD rather than the process's working directory.
+  const env = { ...process.env, ...(config.env ?? {}), ...keyEnv, ...caEnv, HOME: home, PWD: ws, XDG_CONFIG_HOME: path.join(home, ".config"), XDG_DATA_HOME: path.join(home, ".local/share"), XDG_STATE_HOME: path.join(home, ".local/state") };
+  const agent = config.agent ?? "nexus";
+  if (agent === "nexus") {
+    env.LOCAL_LLM_ENDPOINT = ep;
+    return { cmd: process.execPath, argv: [path.join(ROOT, "cli/dist/index.js"), "run", "--json", "-w", ws, "-e", ep, "-m", config.model, "-s", "30", "--max-total-steps", String(budget.steps), "--max-turn-minutes", String(budget.minutes), ...(config.args ?? []), task.objective], env };
+  }
+  if (agent === "aider") {
+    return { cmd: "aider", argv: ["--model", `openai/${config.model}`, "--openai-api-base", ep, "--yes-always", "--no-auto-commits", "--no-dirty-commits", "--no-gitignore", "--no-show-model-warnings", "--no-check-update", "--analytics-disable", "--no-pretty", "--no-fancy-input", ...(config.args ?? []), "--message", task.objective], env };
+  }
+  if (agent === "opencode") {
+    const dir = path.join(home, ".config/opencode");
+    fs.mkdirSync(dir, { recursive: true });
+    const limits = config.limits ?? { context: 65536, output: 8192 };
+    fs.writeFileSync(path.join(dir, "opencode.json"), JSON.stringify({
+      $schema: "https://opencode.ai/config.json",
+      autoupdate: false,
+      share: "disabled",
+      permission: { edit: "allow", bash: "allow", webfetch: "deny" },
+      provider: { gw: { npm: "@ai-sdk/openai-compatible", name: "gateway", options: { baseURL: ep, apiKey: "{env:GW_KEY}" }, models: { [config.model]: { name: config.model, limit: limits } } } },
+      model: `gw/${config.model}`,
+    }, null, 2));
+    // Provider packages are cached across runs (not per run): the cache holds code, not state.
+    env.XDG_CACHE_HOME = path.join(ROOT, "eval/.cache/xdg-cache");
+    return { cmd: "opencode", argv: ["run", "--model", `gw/${config.model}`, ...(config.args ?? []), task.objective], env };
+  }
+  if (agent === "goose") {
+    const u = new URL(ep);
+    Object.assign(env, { GOOSE_PROVIDER: "openai", GOOSE_MODEL: config.model, OPENAI_HOST: u.origin, OPENAI_BASE_PATH: `${u.pathname.replace(/^\/|\/$/g, "")}/chat/completions`, GOOSE_MODE: "auto", GOOSE_DISABLE_KEYRING: "1", GOOSE_CONTEXT_LIMIT: String(config.limits?.context ?? 65536) });
+    return { cmd: "goose", argv: ["run", "--no-session", "--with-builtin", "developer", ...(config.args ?? []), "-t", task.objective], env };
+  }
+  throw new Error(`agent ${agent} has no adapter`);
+}
+
 function runAgent(task, ws, home) {
   const budget = { steps: task.steps ?? config.steps ?? 300, minutes: task.minutes ?? config.minutes ?? 120 };
-  const argv =
-    (config.agent ?? "nexus") === "nexus"
-      ? [path.join(ROOT, "cli/dist/index.js"), "run", "--json", "-w", ws, "-e", config.endpoint, "-m", config.model, "-s", "30", "--max-total-steps", String(budget.steps), "--max-turn-minutes", String(budget.minutes), ...(config.args ?? []), task.objective]
-      : null;
-  if (!argv) throw new Error(`agent ${config.agent} has no adapter yet`);
+  const { cmd, argv, env } = agentCommand(task, ws, home, budget);
   return new Promise((resolve) => {
-    const child = spawn(process.execPath, argv, { cwd: ws, env: { ...process.env, ...(config.env ?? {}), HOME: home }, stdio: ["ignore", "pipe", "pipe"] });
+    const child = spawn(cmd, argv, { cwd: ws, env, stdio: ["ignore", "pipe", "pipe"], detached: true });
     let stdout = "";
     let stderr = "";
     child.stdout.on("data", (c) => (stdout += c));
     child.stderr.on("data", (c) => (stderr += c));
     let timedOut = false;
+    // The whole process group: agents start helpers (servers, shells) that must not outlive the run.
+    const killGroup = (sig) => {
+      try {
+        process.kill(-child.pid, sig);
+      } catch {}
+    };
     const timer = setTimeout(() => {
       timedOut = true;
-      child.kill("SIGTERM");
-      setTimeout(() => child.kill("SIGKILL"), 10_000).unref();
+      killGroup("SIGTERM");
+      setTimeout(() => killGroup("SIGKILL"), 10_000).unref();
     }, (budget.minutes + 5) * 60_000);
+    child.on("error", (err) => (stderr += `spawn error: ${err.message}\n`));
     child.on("close", (code) => {
       clearTimeout(timer);
+      killGroup("SIGKILL");
       resolve({ code, timedOut, stdout, stderr, json: lastJson(stdout) });
     });
   });
@@ -128,6 +186,20 @@ function saveLogs(task, run, agent, hidden, regression) {
   return path.relative(args.out, dir);
 }
 
+function treeDigest(dir) {
+  const hash = createHash("sha256");
+  const walk = (d) => {
+    for (const e of fs.readdirSync(d, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name))) {
+      const p = path.join(d, e.name);
+      hash.update(path.relative(dir, p));
+      if (e.isDirectory()) walk(p);
+      else hash.update(fs.readFileSync(p));
+    }
+  };
+  walk(dir);
+  return hash.digest("hex");
+}
+
 function lastJson(text) {
   const start = text.indexOf("{");
   for (let i = start; i >= 0 && i < text.length; i = text.indexOf("{", i + 1)) {
@@ -145,9 +217,30 @@ function harnessIdentity() {
   return { commit, dirty, string: `${commit}${dirty ? "-dirty" : ""}` };
 }
 
+/** `{ file, var }`: the key is read from a KEY=value file (e.g. ~/.config/nexus/config.env); never logged. */
+function readApiKey(spec) {
+  if (!spec) return null;
+  const file = expandHome(spec.file);
+  const line = fs.readFileSync(file, "utf8").split("\n").find((l) => l.startsWith(`${spec.var}=`));
+  if (!line) throw new Error(`${spec.var} not found in ${spec.file}`);
+  return line.slice(spec.var.length + 1).trim();
+}
+
+/** System CAs plus the gateway's CA, for agents that read SSL_CERT_FILE / REQUESTS_CA_BUNDLE (Python, Rust). */
+function writeCaBundle(caFile) {
+  const system = ["/etc/ssl/certs/ca-certificates.crt", "/etc/pki/tls/certs/ca-bundle.crt"].find((f) => fs.existsSync(f));
+  const bundle = path.join(args.out, "ca-bundle.pem");
+  fs.writeFileSync(bundle, (system ? fs.readFileSync(system, "utf8") : "") + "\n" + fs.readFileSync(caFile, "utf8"));
+  return bundle;
+}
+
 function redactConfig(c) {
   const env = Object.fromEntries(Object.entries(c.env ?? {}).map(([k, v]) => [k, /KEY|TOKEN|SECRET|PASSWORD/i.test(k) ? "***" : v]));
   return { ...c, env };
+}
+
+function expandHome(f) {
+  return f.replace(/^~(?=\/)/, os.homedir());
 }
 
 function sh(cmd, cwd) {
