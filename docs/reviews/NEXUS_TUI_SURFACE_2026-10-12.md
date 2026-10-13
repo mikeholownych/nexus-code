@@ -89,6 +89,33 @@ each redacted payload (8004 enumerations per pass), which made the 35-step PTY t
 timed out under load. That code is part of the separate, uncommitted qualification work; it was fixed there (one
 environment read per pass, regression test) and is not part of this commit.
 
+## Independent re-acceptance, round 2 (review of `cc177be`; fixed in `dda2e62`)
+
+A second independent reviewer accepted the visuals with P3 defects and **did not accept** approval safety: in a PTY,
+typing a steering message at 120 ms per key with 800 ms thinking pauses and a final Enter approved "this and every later
+action" (2 of 2 runs; review mode switched to auto). Resolution in `dda2e62`:
+
+| Finding | Resolution | Evidence |
+|---|---|---|
+| P1-A pauses/slow typing decide; `a` focus survives typing | A decision needs the grace period and 600 ms without typing counted from max(shown, last key). `y`/`n`/`a` answer only a panel that appeared while the operator was not typing (no key in the 2 s before) and has had nothing typed into it (keys, bursts, pastes); otherwise it shows "typing ignored" and a decision is ←/→ then Enter, or Esc to deny. Any typed key drops a choice | units `typing_with_thinking_pauses_or_slowly_across_the_panel_never_decides` (the reviewer's three timings); PTY `typing with thinking pauses and a final Enter …`: no decision, review mode kept, nothing written, Esc then denies |
+| P2-B ←/→/Tab set focus while typing; a late Enter decides | They choose only when settled; Enter takes a choice only directly after the key that made it | unit `arrows_and_tab_while_typing_and_a_late_enter_never_decide` |
+| P3-C shrink after draw still decides | A frame that does not draw the panel clears "shown"; timing restarts when it is drawn | unit `a_panel_that_stops_being_drawn_cannot_be_decided_and_a_second_request_waits` |
+| P3-D a second request replaces an open one | It waits behind the open one | same unit |
+| P3-E1/E2 resume notice style and conflicting counts | `/resume` reads like the startup notice; the notice names the session, the history header carries the count | unit `narrow_windows_keep_the_mode_…_resume_reads_as_a_notice`; screens 23b, 24 |
+| P3-E3 "auto" dropped at narrow width | The mode is kept at every width | same unit; screen 19 |
+| P3-E4 placeholder cut without ellipsis | Ends in "…" when cut | same unit |
+| P3-E5–E7 sparse full-height panels, identical diff screens 06/07, `↪` rows at the content column | Not changed (layout choices; recorded) | — |
+
+The key that sent a prompt, steering or a command, or answered an approval, ends typing rather than continuing it (so a
+prompt's Enter does not disarm the next panel's letters). Keys typed just before a panel opens disarm its letters:
+screen 10 shows "typing ignored" (the surface scenario types `yyy` before the panel and decides with → Enter).
+
+Verification at `dda2e62`: `make test` Rust 24 + 233 + 2, CLI 754/754, gates pass (one earlier run of the same tree had a
+single CLI test, `objective_continuation` "runs past 30 steps", exceed its 60 s timeout; it took 8 s alone and 18 s on
+the full rerun — unexplained, recorded); all seven PTY scenarios 13 runs (10 serial, 3 with 8 CPU-bound processes):
+91/91; evidence re-captured from a clean worktree of `dda2e62` (`nexus-tui` `cb11bc5a8d485da0…`, `sidecar.js`
+`cc4c33afe9e69445…`).
+
 ## Result
 
 Implementation commits on branch `feat/tui-surface` (not merged): `83e7405` (the surface work), `804c5df` (approval
@@ -147,7 +174,7 @@ actual output.
 
 ### Status
 
-**Implementation self-assessment passed for the follow-up; independent re-acceptance pending.** F1–F3 and F5 are
+**Round 2 fixes implemented and verified by the implementer; independent re-acceptance of `dda2e62` pending.** F1–F3 and F5 are
 fixed with unit and PTY tests; O1–O3 are done; the visual defects from the review are fixed or, for the code-block
 background, shown not to reproduce. The screens were inspected by the implementer, which found and fixed the command
 preview defect (`404fa64`). A reviewer other than the implementer has not yet re-accepted the visuals and approval

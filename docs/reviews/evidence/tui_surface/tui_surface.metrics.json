@@ -1,14 +1,14 @@
 {
   "run": {
-    "id": "f914fd12-ae1a-4b57-8b29-5d23cbfc991d",
-    "generatedAt": "2026-10-13T01:52:41.640Z",
-    "gitHead": "d09c08f7c52c1386e8a2ecf2928b583aeac3ec94",
+    "id": "2b13b0ae-d8d9-439e-b401-75177a1e9c86",
+    "generatedAt": "2026-10-13T02:09:16.092Z",
+    "gitHead": "dda2e625a4e2d5611c13a6b2424ec03c8abc9e24",
     "tuiSha256": "cb11bc5a8d485da0bc29f82e7f9a24cc5aa8cfa31be0f941d1be9669be387a3d",
-    "sidecarSha256": "6dd91487bb659dc7281f90fbdcc3eed1d510eb158ca218b5951ffe88a118cdd4"
+    "sidecarSha256": "cc4c33afe9e6944530a6d8d11f57d91f3643eaa3f8fc80b7549c04fbe84eef90"
   },
   "screens": {
     "01-startup": [
-      " NEXUS   nexus-sidecar-OBUMDC  ⎇ main  model m  session_20261013_015206_vc7a  auto",
+      " NEXUS   nexus-sidecar-CLti1j  ⎇ main  model m  session_20261013_020840_748y  auto",
       "",
       "",
       "",
@@ -46,7 +46,7 @@
       "› ask Nexus · / for commands · ? for keys"
     ],
     "02-streaming": [
-      " NEXUS   nexus-sidecar-OBUMDC  ⎇ main  model m  session_20261013_015206_vc7a  auto",
+      " NEXUS   nexus-sidecar-CLti1j  ⎇ main  model m  session_20261013_020840_748y  auto",
       "› Explain the plan for the cache layer.",
       "",
       "Cache layer plan",
@@ -80,11 +80,11 @@
       "",
       "",
       "",
-      " ⠧ thinking · 0:00 · step 1 of 300 · esc cancels ───────────────────────────────────────────────────────────────────────",
+      " ⠇ thinking · 0:00 · step 1 of 300 · esc cancels ───────────────────────────────────────────────────────────────────────",
       "› type to steer the running turn · esc cancels it"
     ],
     "03-markdown-final": [
-      " NEXUS   nexus-sidecar-OBUMDC  ⎇ main  model m  session_20261013_015206_vc7a  auto",
+      " NEXUS   nexus-sidecar-CLti1j  ⎇ main  model m  session_20261013_020840_748y  auto",
       "",
       "Cache layer plan",
       "",
@@ -122,7 +122,7 @@
       "› ask Nexus · / for commands · ? for keys"
     ],
     "04-slow-inference": [
-      " NEXUS   nexus-sidecar-OBUMDC  ⎇ main  model m  session_20261013_015206_vc7a  auto",
+      " NEXUS   nexus-sidecar-CLti1j  ⎇ main  model m  session_20261013_020840_748y  auto",
       "",
       "The cache sits between the loader and the store, so reads stay fast while writes remain authoritative. It keeps the",
       "existing Loader interface.",
@@ -160,7 +160,7 @@
       "› type to steer the running turn · esc cancels it"
     ],
     "05-steering-queued": [
-      " NEXUS   nexus-sidecar-OBUMDC  ⎇ main  model m  session_20261013_015206_vc7a  auto",
+      " NEXUS   nexus-sidecar-CLti1j  ⎇ main  model m  session_20261013_020840_748y  auto",
       "",
       "Steps",
       "",
@@ -194,11 +194,11 @@
       "",
       "↳ prefer an LRU policy",
       "  steering · queued for the next step",
-      " ⠇ thinking · 0:01 · step 1 of 300 · esc cancels ───────────────────────────────────────────────────────────────────────",
+      " ⠧ thinking · 0:01 · step 1 of 300 · esc cancels ───────────────────────────────────────────────────────────────────────",
       "› type to steer the running turn · esc cancels it"
     ],
     "06-scrolled-back-new-output": [
-      " NEXUS   nexus-sidecar-OBUMDC  ⎇ main  model m  session_20261013_015206_vc7a  auto",
+      " NEXUS   nexus-sidecar-CLti1j  ⎇ main  model m  session_20261013_020840_748y  auto",
       "› Explain the plan for the cache layer.",
       "",
       "Cache layer plan",
@@ -232,11 +232,11 @@
       "",
       "Emoji and marks: ✅ café naïve 字符 — done.",
       "                                                                  ↓ new output · 23 rows below · pgdn · ctrl+end newest",
-      " ⠸ thinking · 0:04 · step 5 of 300 · esc cancels ───────────────────────────────────────────────────────────────────────",
+      " ⠙ thinking · 0:04 · step 5 of 300 · esc cancels ───────────────────────────────────────────────────────────────────────",
       "› type to steer the running turn · esc cancels it"
     ],
     "07-tools-final": [
-      " NEXUS   nexus-sidecar-OBUMDC  ⎇ main ●1 changed  model m  session_20261013_015206_vc7a  auto",
+      " NEXUS   nexus-sidecar-CLti1j  ⎇ main ●1 changed  model m  session_20261013_020840_748y  auto",
       "  Option │ Default │ Note",
       "  ───────┼─────────┼──────────",
       "  size   │ 512     │ entries",
@@ -274,7 +274,7 @@
       "› ask Nexus · / for commands · ? for keys"
     ],
     "08-paste-buffer": [
-      " NEXUS   nexus-sidecar-OBUMDC  ⎇ main ●1 changed  model m  session_20261013_015206_vc7a  auto",
+      " NEXUS   nexus-sidecar-CLti1j  ⎇ main ●1 changed  model m  session_20261013_020840_748y  auto",
       "  Option │ Default │ Note",
       "  ───────┼─────────┼──────────",
       "  size   │ 512     │ entries",
@@ -312,7 +312,7 @@
       "› [Pasted text #1: 3 lines]"
     ],
     "09-paste-view": [
-      " NEXUS   nexus-sidecar-OBUMDC  ⎇ main ●1 changed  model m  session_20261013_015206_vc7a  auto",
+      " NEXUS   nexus-sidecar-CLti1j  ⎇ main ●1 changed  model m  session_20261013_020840_748y  auto",
       " ╭ [Pasted text #1: 3 lines] ─────────────────────────────────────────────────────────────────────────────────────────╮",
       " │   1 line one of the note                                                                                           │",
       " │   2     indented line ✓ 字                                                                                         │",
@@ -350,7 +350,7 @@
       "› [Pasted text #1: 3 lines]"
     ],
     "10-approval": [
-      " NEXUS   nexus-sidecar-OBUMDC  ⎇ main ●1 changed  model m  session_20261013_015206_vc7a  review mode",
+      " NEXUS   nexus-sidecar-CLti1j  ⎇ main ●1 changed  model m  session_20261013_020840_748y  review mode",
       "╭ Approval needed ─────────────────────────────────────────────────────────────────────────────────────────────────────╮",
       "│Write config.json                                                                                                     │",
       "│Proposed: create config.json · +1 −0                                                                                  │",
@@ -388,7 +388,7 @@
       "› yyy"
     ],
     "11-cancelled": [
-      " NEXUS   nexus-sidecar-OBUMDC  ⎇ main ●2 changed  model m  session_20261013_015206_vc7a  auto",
+      " NEXUS   nexus-sidecar-CLti1j  ⎇ main ●2 changed  model m  session_20261013_020840_748y  auto",
       "! Done · not verified  Files changed, but no verifier ran before the agent finished.",
       "  → next: run /test, or ask Nexus to verify the change · v receipt",
       "",
@@ -426,7 +426,7 @@
       "› ask Nexus · / for commands · ? for keys"
     ],
     "12-compacted": [
-      " NEXUS   nexus-sidecar-OBUMDC  ⎇ main ●2 changed  model m  session_20261013_015206_vc7a  auto",
+      " NEXUS   nexus-sidecar-CLti1j  ⎇ main ●2 changed  model m  session_20261013_020840_748y  auto",
       "› [Pasted text #1: 3 lines]",
       "    ▎ line one of the note",
       "    ▎     indented line ✓ 字",
@@ -464,7 +464,7 @@
       "› ask Nexus · / for commands · ? for keys"
     ],
     "14-requirements-incomplete": [
-      " NEXUS   nexus-sidecar-OBUMDC  ⎇ main ●2 changed  model m  session_20261013_015206_vc7a  auto",
+      " NEXUS   nexus-sidecar-CLti1j  ⎇ main ●2 changed  model m  session_20261013_020840_748y  auto",
       "    ▎   1 + { \"cache\": true }",
       "",
       "Config written.",
@@ -502,7 +502,7 @@
       "› ask Nexus · / for commands · ? for keys"
     ],
     "13-verification-failed": [
-      " NEXUS   nexus-sidecar-OBUMDC  ⎇ main ●3 changed  model m  session_20261013_015206_vc7a  auto",
+      " NEXUS   nexus-sidecar-CLti1j  ⎇ main ●3 changed  model m  session_20261013_020840_748y  auto",
       "",
       "› /compact",
       "  Compacted context: distilled 16 messages, 6 active messages in memory.",
@@ -540,7 +540,7 @@
       "› ask Nexus · / for commands · ? for keys"
     ],
     "15-completion": [
-      " NEXUS   nexus-sidecar-OBUMDC  ⎇ main ●3 changed  model m  session_20261013_015206_vc7a  auto",
+      " NEXUS   nexus-sidecar-CLti1j  ⎇ main ●3 changed  model m  session_20261013_020840_748y  auto",
       "",
       "› /compact",
       "  Compacted context: distilled 16 messages, 6 active messages in memory.",
@@ -578,7 +578,7 @@
       "› /re"
     ],
     "16-transcript-focus": [
-      " NEXUS   nexus-sidecar-OBUMDC  ⎇ main ●3 changed  model m  session_20261013_015206_vc7a  auto",
+      " NEXUS   nexus-sidecar-CLti1j  ⎇ main ●3 changed  model m  session_20261013_020840_748y  auto",
       "",
       "› /compact",
       "  Compacted context: distilled 16 messages, 6 active messages in memory.",
@@ -616,7 +616,7 @@
       "› a draft I am keeping"
     ],
     "17-entry-review": [
-      " NEXUS   nexus-sidecar-OBUMDC  ⎇ main ●3 changed  model m  session_20261013_015206_vc7a  auto",
+      " NEXUS   nexus-sidecar-CLti1j  ⎇ main ●3 changed  model m  session_20261013_020840_748y  auto",
       "╭ Edit diff · this operation only ────────────────────────────────────────────────────────────────────── rows 1–2 of 2 ╮",
       "│Created parser.js  +1 −0   edit 3 of 3                                                                                │",
       "│ ▎ @@ −0,0 +1,1 @@                                                                                                    │",
@@ -654,10 +654,10 @@
       "› a draft I am keeping"
     ],
     "17b-tool-detail": [
-      " NEXUS   nexus-sidecar-OBUMDC  ⎇ main ●3 changed  model m  session_20261013_015206_vc7a  auto",
+      " NEXUS   nexus-sidecar-CLti1j  ⎇ main ●3 changed  model m  session_20261013_020840_748y  auto",
       " ╭ Tool call ─────────────────────────────────────────────────────────────────────────────────────────────────────────╮",
       " │Write parser.js                                                                                                     │",
-      " │succeeded · 46 ms                                                                                                   │",
+      " │succeeded · 393 ms                                                                                                  │",
       " │Arguments                                                                                                           │",
       " │{                                                                                                                   │",
       " │  \"path\": \"parser.js\",                                                                                              │",
@@ -692,7 +692,7 @@
       "› a draft I am keeping"
     ],
     "18-help": [
-      " NEXUS   nexus-sidecar-OBUMDC  ⎇ main ●3 changed  model m  session_20261013_015206_vc7a  auto",
+      " NEXUS   nexus-sidecar-CLti1j  ⎇ main ●3 changed  model m  session_20261013_020840_748y  auto",
       "            ╭ Help ────────────────────────────────────────────────────────────────────────────────────────╮",
       "            │Keys                                                                                          │",
       "            │  enter            send the prompt                                                            │",
@@ -730,7 +730,7 @@
       "›"
     ],
     "19-narrow": [
-      " NEXUS   nexus-sidecar-OBUMDC  model m  auto",
+      " NEXUS   nexus-sidecar-CLti1j  model m  auto",
       "  requirements not done.",
       "  • R1 [open] add a README section",
       "  • R2 [open] add a changelog entry",
@@ -756,7 +756,7 @@
       "› ask Nexus · / for commands · ? for keys"
     ],
     "20-short": [
-      " NEXUS   nexus-sidecar-OBUMDC  ⎇ main ●3 changed  model m  auto",
+      " NEXUS   nexus-sidecar-CLti1j  ⎇ main ●3 changed  model m  auto",
       "› Fix the parser bug.",
       "",
       "  ✓ Created parser.js  +1 −0",
@@ -770,9 +770,7 @@
       "› ask Nexus · / for commands · ? for keys"
     ],
     "21-resize-during-stream": [
-      " NEXUS   nexus-sidecar-OBUMDC  ⎇ main ●3 changed  model m  auto",
-      "",
-      "The parser test still fails; it needs a tokenizer change I have",
+      " NEXUS   nexus-sidecar-CLti1j  ⎇ main ●3 changed  model m  auto",
       "not made.",
       "",
       "× Verification failed  npm test failed",
@@ -791,6 +789,8 @@
       "",
       "1. Add src/cache.ts with an LRU map.",
       "2. Route load() through it.",
+      "3. Invalidate on write.",
+      "",
       "",
       " ⠹ thinking · 0:01 · step 1 of 300 · esc cancels ───────────────",
       "› type to steer the running turn · esc cancels it"
@@ -834,7 +834,7 @@
       "› a draft before the crash"
     ],
     "23-restarted": [
-      " NEXUS   nexus-sidecar-OBUMDC  ⎇ main ●3 changed  model m  session_20261013_015237_nze8  auto",
+      " NEXUS   nexus-sidecar-CLti1j  ⎇ main ●3 changed  model m  session_20261013_020912_mzwl  auto",
       "",
       "The cache sits between the loader and the store, so reads stay fast while writes remain authoritative. It keeps the",
       "existing Loader interface.",
@@ -872,7 +872,7 @@
       "› a draft before the crash"
     ],
     "23b-restart-then-resume": [
-      " NEXUS   nexus-sidecar-OBUMDC  ⎇ main ●3 changed  model m  session_20261013_015206_vc7a  auto",
+      " NEXUS   nexus-sidecar-CLti1j  ⎇ main ●3 changed  model m  session_20261013_020840_748y  auto",
       "",
       "The cache sits between the loader and the store, so reads stay fast while writes remain authoritative. It keeps the",
       "existing Loader interface.",
@@ -905,12 +905,12 @@
       "",
       "× Verification failed  npm test failed",
       "  → next: v shows the failing check; ask Nexus to fix it · v receipt",
-      "  · Resumed session session_20261013_015206_vc7a.",
+      "  · Resumed session session_20261013_020840_748y.",
       " enter send · shift+enter newline · ? help ─────────────────────────────────────────────────────────────────────────────",
       "› ask Nexus · / for commands · ? for keys"
     ],
     "24-resumed": [
-      " NEXUS   nexus-sidecar-OBUMDC  ⎇ main ●3 changed  model m  session_20261013_015206_vc7a  auto",
+      " NEXUS   nexus-sidecar-CLti1j  ⎇ main ●3 changed  model m  session_20261013_020840_748y  auto",
       "",
       "The cache sits between the loader and the store, so reads stay fast while writes remain authoritative. It keeps the",
       "existing Loader interface.",
@@ -943,7 +943,7 @@
       "",
       "× Verification failed  npm test failed",
       "  → next: v shows the failing check; ask Nexus to fix it · v receipt",
-      "  · Resumed session session_20261013_015206_vc7a.",
+      "  · Resumed session session_20261013_020840_748y.",
       " enter send · shift+enter newline · ? help ─────────────────────────────────────────────────────────────────────────────",
       "› ask Nexus · / for commands · ? for keys"
     ]
@@ -956,9 +956,9 @@
   "first_exit": 0,
   "second_exit": 0,
   "recording": {
-    "frames": 187,
+    "frames": 182,
     "monotonic": true,
-    "duration_s": 35.2144
+    "duration_s": 35.3395
   },
   "raw_has_file_escape": false
 }
