@@ -2,6 +2,8 @@
 
 **Submission project:** Nexus, an agent-oriented collaboration service built with Cloudflare Workers and Artifacts. **Nexus Code** is a separate client and demonstration harness; it is not the submitted service.
 
+**Recorded demonstration:** [Watch on GitHub](https://github.com/mikeholownych/nexus-code/blob/main/docs/cloudflare/evidence/contest-final-video-run-2026-10-03/cloudflare-agent-collaboration-demo.mp4) · [Download MP4](https://raw.githubusercontent.com/mikeholownych/nexus-code/main/docs/cloudflare/evidence/contest-final-video-run-2026-10-03/cloudflare-agent-collaboration-demo.mp4). This is contest evidence, separate from the Nexus Code client release assets.
+
 ## Why this exists
 
 Concurrent agents can act on stale assumptions about a shared codebase. Git records candidate commits, but a commit stream alone does not explain which collaborator assumptions a change invalidates. Nexus adds structured work-state publication and Worker-mediated retrieval so an affected agent can reassess before integration.

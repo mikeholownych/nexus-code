@@ -18,8 +18,9 @@ The associated run record identifies run `6e852c91-5371-43b7-ac7a-90376a2c11a8`,
 
 The captured CLI client bundle hash was `56c72f37cb8130ae2b32d9730fdba499fbed2ab7c56b77d7cdda29c7bb479857`; the current target checkout's `cli/dist/client.js` hash is `78077e6bda5533dbf2af3f075c8072d8bb0771df0ab7c43c69b54e3cbc72a689`. This is a consequential source delta. No clean Cloudflare-backed replay has been made from the target tree, and the external protected transport and fixed account resources used by the captured run are not included as a judge-ready bootstrap. The video is bounded evidence for its recorded environment, not proof that a judge can reproduce the final tree.
 
-The stable public URL after the documented source commit is published is:
+The stable public links are:
 
-`https://github.com/mikeholownych/nexus-code/blob/main/docs/cloudflare/evidence/contest-final-video-run-2026-10-03/cloudflare-agent-collaboration-demo.mp4`
+- Watch: [GitHub video page](https://github.com/mikeholownych/nexus-code/blob/main/docs/cloudflare/evidence/contest-final-video-run-2026-10-03/cloudflare-agent-collaboration-demo.mp4)
+- Download: [Raw MP4](https://raw.githubusercontent.com/mikeholownych/nexus-code/main/docs/cloudflare/evidence/contest-final-video-run-2026-10-03/cloudflare-agent-collaboration-demo.mp4)
 
-The file is included in the existing repository; no alternate repository or hosting account is required.
+The file is committed in the existing target repository and both URLs were checked anonymously. It is contest evidence, separate from the Nexus Code client release assets; no alternate repository or hosting account is required.
