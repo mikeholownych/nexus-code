@@ -486,13 +486,13 @@ export const BASELINE_CAPABILITIES = [
             "type": "function",
             "function": {
                 "name": "task_completed",
-                "description": "Signal that the overall task is finished and report a comprehensive final summary of changes.",
+                "description": "Signal that the overall task is finished and report a short final summary of the changes.",
                 "parameters": {
                     "type": "object",
                     "properties": {
                         "summary": {
                             "type": "string",
-                            "description": "Detailed summary of all changes made and outcomes achieved."
+                            "description": "Short summary (2-4 sentences): what changed and how it was checked."
                         },
                         "notes": {
                             "type": "string",

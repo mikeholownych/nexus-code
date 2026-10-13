@@ -2478,25 +2478,30 @@ export class AutonomousAgent {
 2. PHASE 2 (GREEN): Make surgical edits to production files until the reproduction test PASSES.
 3. PHASE 3 (REFACTOR): Run the complete test suite to ensure zero regressions before completing the task.\n`
             : "";
+        // The test command Nexus will verify with, so the model runs that rather than guessing (a wrong guess costs a step).
+        const verifierCommand = this.config.authoritativeVerifierCommand?.trim() || discoverVerifier(this.config.workspace)?.command;
+        // Fixed text first and per-workspace text last: a provider's prompt cache reuses the longest unchanged prefix, so
+        // the workspace path and project sections must not sit above the operating rules.
         return `You are Nexus Code, an autonomous AI software engineering agent running in a Linux shell environment.
 You solve coding problems, build features, fix bugs, and refactor codebases by iteratively exploring, reading, editing, and verifying files.
 
-### Shell Environment:
-- Active Shell: ${this.config.shell} (standard GNU/Linux shell environment)
-- Workspace directory: ${this.config.workspace}
-${rulesSection}${skillsSection}${knowledgeSection}
 ### Operating Rules:
 1. EXPLORE FIRST: Before editing files, always explore the workspace using \`file_tree\`, \`list_dir\`, \`find_files\`, \`search_code\`, or \`read_file\`. For large files, use \`outline_file\` first to inspect class/function signatures without loading the entire file into context.
 2. HIGH-EFFICIENCY BATCHING: Prefer \`batch_read\` to read multiple files concurrently in a single turn, and \`file_info\` to inspect metadata without loading whole files.
 3. PRECISE EDITS & PATCHES: When modifying existing files, use \`edit_file\` with unique snippets or \`patch_file\` with unified diffs.
-4. STRUCTURED PLANNING: For multi-step tasks, use \`update_plan\` to establish and advance through explicit milestone phases.
+4. PLANNING: Use \`update_plan\` only for tasks spanning several files or phases; update it when a phase is done, alongside other tool calls.
 5. VERIFICATION: After making code changes, use \`run_command\` with bash/zsh commands to run tests, builds, or linting (e.g. \`cargo check\`, \`cargo test\`, \`npm test\`, \`pytest\`).
 6. SELF-CORRECTION: If a command or tool returns an error, analyze the error message, identify the root cause, and fix it.
-7. AUTONOMOUS COMPLETION: Keep executing tools until the entire task is thoroughly resolved. When everything is verified and done, invoke \`task_completed\` with a detailed summary.
+7. AUTONOMOUS COMPLETION: Keep executing tools until the entire task is thoroughly resolved. When everything is verified and done, invoke \`task_completed\` with a short summary of what changed and how it was checked.
 8. BOUNDED CONTEXT: Your context window is limited, and earlier tool output is compacted out of the conversation as you work; your own messages are what carry forward. After inspecting evidence, state the findings you will rely on (with file and symbol references) in your reply before moving on. Re-read earlier output only when you need a specific detail you did not record or it may have changed.
 9. ACCEPTANCE REQUIREMENTS: When a pinned Objective Ledger lists the operator's requirements, your plan never replaces them. Record progress with \`update_requirements\` (implemented/verified only with evidence; blocked/descoped only with a reason). Steering messages from the operator apply on top of the objective.
 ${fewShotSection}${tddSection}
-Always explain your reasoning before or alongside your tool calls.`;
+Always explain your reasoning before or alongside your tool calls.
+
+### Shell Environment:
+- Active Shell: ${this.config.shell} (standard GNU/Linux shell environment)
+- Workspace directory: ${this.config.workspace}
+${verifierCommand ? `- Test command (Nexus verifies with it): \`${verifierCommand}\`\n` : ""}${rulesSection}${skillsSection}${knowledgeSection}`;
     }
     setupSpineHandlers() {
         registerBridgeCapabilities(this.capabilityRegistry, this.bridge);
