@@ -116,14 +116,39 @@ the full rerun — unexplained, recorded); all seven PTY scenarios 13 runs (10 s
 91/91; evidence re-captured from a clean worktree of `dda2e62` (`nexus-tui` `cb11bc5a8d485da0…`, `sidecar.js`
 `cc4c33afe9e69445…`).
 
+## Independent re-acceptance, round 3 (review of `fbf77b3`; fixed in `7061b06`)
+
+The third reviewer re-ran the round-2 probes (all fixed) but again **did not accept** approval safety: composer editing
+keys still reached "approve all later actions" after a pause — `→ → Enter`, `← ← Enter` and `Ctrl+A Enter` in a PTY (2
+of 2 runs each, review mode switched to auto, a later write ran without approval) — and Ctrl/Alt chords counted as
+letter answers. Resolution in `7061b06`:
+
+| Finding | Resolution | Evidence |
+|---|---|---|
+| P1-A′ cursor keys / Tab choose, one Enter takes "all later" | "Approve all later actions" always takes Enter twice (the second after the prompt has been on screen 400 ms; any other key cancels); a ←/→ choice is taken only by the Enter right after it and after 400 ms on screen; no wrapping; Tab never chooses | unit `composer_editing_keys_never_approve_all_later_actions` (every round-3 sequence); PTY typing scenario adds `→ → Enter` and `Ctrl+A Enter` after a pause: no decision |
+| P2-1 Ctrl/Alt chords as letters | Letters only without Ctrl/Alt; chords are typing (disarm, drop the choice) | same unit (`Ctrl+Y`, `Alt+Y`, `Ctrl+N`, `Ctrl+A Enter`) |
+| P2-2 a single `y` after a ≥2 s pause in composing | Letters are also disarmed while the composer holds a draft | unit `a_draft_in_the_composer_disarms_letters_and_a_resize_does_not_rearm_them` |
+| P3-1 resize re-arms a typed-into panel | A panel typed into keeps its letters off | same unit |
+| P3-2 scrolling drops the choice | Scroll keys keep it | same unit (`→ ↓ Enter` approves once) |
+| P3-3 disarmed letters shown on the buttons | Hidden while disarmed | screen 10; surface PTY asserts no `y Approve` |
+| P3-4 Esc ignored on a too-small terminal | Esc denies there | unit `a_panel_that_stops_being_drawn_…` |
+| P3-5 a waiting approval overwritten | Waiting approvals form a queue | same unit (a1, a2, a3 in order) |
+| P3-6 contradictory provenance | Reconciled below: `fbf77b3` (an implementer commit made while a second agent was also committing) replaced the `d09c08f` evidence with the older `dda2e62` capture; the current evidence is re-captured from `416c2bf` | Result table |
+| P3-7 renderer glyph artefacts, identical diff screens 06/07, 40×10 hint row dropped | Not changed (renderer, layout) | — |
+
+Verification at `7061b06`: `make test` Rust 24 + 235 + 2, CLI 810/810, gates pass; clippy 0 warnings in
+`src/bin/nexus_tui/`; all seven PTY scenarios 13 runs (10 serial, 3 with 8 CPU-bound processes): 90/91 — the one failure was a harness race (the third approval arrived after the typing; decisions were correct, none), fixed in `416c2bf`, after which the approval scenarios passed 3/3.
+
 ## Result
 
 Implementation commits on branch `feat/tui-surface` (not merged): `83e7405` (the surface work), `804c5df` (approval
 input), `09bf1a4` (independent-review follow-up, O1–O3), `404fa64` (command output tail). `29a9270` fixes the security
 gate that the assessment commit broke (also on main as `604687c`). `dda2e62` fixes the re-acceptance P1 (typing with
 pauses approved "all later actions"), `327570b` makes the PTY drivers ignore inherited `NO_COLOR`, `70ace1d` merges
-main, `d09c08f` is Stage 6 (steering and follow-ups pinned verbatim, saved with mid-turn progress). The current
-evidence is from `d09c08f`.
+main, `d09c08f` is Stage 6 (steering and follow-ups pinned verbatim, saved with mid-turn progress). `fbf77b3` (made
+while a second agent was also committing to the branch) replaced the `d09c08f` evidence with an older `dda2e62` capture.
+`7061b06` fixes the round-3 findings and `416c2bf` the approval scenario's harness race. The current evidence is from
+`416c2bf`.
 
 | Revision | Build identity | What was run there |
 |---|---|---|
@@ -137,7 +162,9 @@ evidence is from `d09c08f`.
 | checkout = `dda2e62` | `1.2.1 (dda2e625a4e2, feat/tui-surface)` | PTY scenarios 13 runs (10 serial, 3 under 8 busy-loop processes): 91/91; `make test`: Rust 259/259, CLI 753/754 — the 256-colour check failed only because the agent shell exported `NO_COLOR` (fixed in `327570b`); `nexus doctor --deep` on the real configuration 20/20 incl. one inference request |
 | checkout = `70ace1d` (merge of main) | — | `make test`: Rust 259/259, CLI 807/807, gates pass |
 | checkout = `d09c08f` | — | `make test`: Rust 259/259, CLI 810/810, gates pass |
-| clean worktree of `d09c08f` | `nexus-tui` `cb11bc5a8d485da0…`, `sidecar.js` `6dd91487bb659dc7…` | evidence runs `tui_surface` and `tui_diff` (gitHead `d09c08f`), 2/2 — `docs/reviews/evidence/tui_surface/`, `docs/reviews/evidence/tui_diff/`; `sha256sum -c SHA256SUMS` passes (32 + 20 files) |
+| clean worktree of `d09c08f` | `nexus-tui` `cb11bc5a8d485da0…`, `sidecar.js` `6dd91487bb659dc7…` | evidence runs `tui_surface` and `tui_diff` (gitHead `d09c08f`), 2/2 (superseded; replaced in `fbf77b3` by an older `dda2e62` capture) |
+| checkout = `7061b06` | — | `make test`: Rust 24 + 235 + 2, CLI 810/810, gates pass; clippy 0 warnings in `src/bin/nexus_tui/`; PTY scenarios 13 runs: 90/91 (harness race, fixed in `416c2bf`) |
+| clean worktree of `416c2bf` | `nexus-tui` `329d722d65ecdd08…`, `sidecar.js` `6dd91487bb659dc7…` | approval PTY scenarios 3/3; evidence runs `tui_surface` and `tui_diff` (gitHead `416c2bf`), 2/2 — `docs/reviews/evidence/tui_surface/`, `docs/reviews/evidence/tui_diff/`; `sha256sum -c` passes |
 
 ### Changes
 
@@ -174,7 +201,7 @@ actual output.
 
 ### Status
 
-**Round 2 fixes implemented and verified by the implementer; independent re-acceptance of `dda2e62` pending.** F1–F3 and F5 are
+**Round 3 fixes implemented and verified by the implementer; independent re-acceptance (round 4) pending.** F1–F3 and F5 are
 fixed with unit and PTY tests; O1–O3 are done; the visual defects from the review are fixed or, for the code-block
 background, shown not to reproduce. The screens were inspected by the implementer, which found and fixed the command
 preview defect (`404fa64`). A reviewer other than the implementer has not yet re-accepted the visuals and approval
