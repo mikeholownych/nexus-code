@@ -98,6 +98,7 @@ def main():
     # Keys were typed just before it opened, so its letters are not answers: → selects Approve, Enter confirms.
     result["letters_disarmed_hint"] = any("typing ignored" in l for l in s.color.lines())
     s.send("\x1b[C", settle=2.2)  # on a typed-into panel the choice stays on screen 2 s before Enter takes it
+    s.send("\r", settle=0.6)  # where letters are off, approving takes Enter twice
     s.send("\r", settle=0.4)
     wait_events(events, "turn.result", 4, 30, s)
     s.wait_idle()

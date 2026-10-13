@@ -96,10 +96,12 @@ Press `<TAB>` at any prompt to autocomplete slash commands and directory paths.
   - `y` approves and `n` denies — only if you were not typing or holding a draft when the panel appeared and have typed
     nothing into it. Otherwise the panel says `typing ignored` and hides those letters.
   - ←/→ choose Approve or Deny; Enter takes the choice once it has been on screen a moment (2 seconds on a panel you were
-    typing into, where ←/→ are easily cursor keys).
+    typing into, where ←/→ are easily cursor keys). On such a panel Approve takes Enter twice (the second confirms);
+    Deny takes one.
   - **Approve all later actions** (switches to auto mode) is only reached with `a`, on a panel that shows the letters,
     then Enter, then Enter again; Esc denies at that point and any other key cancels. Arrows never reach it.
-  - Esc denies. Keys with Ctrl, Alt, Super or Meta never answer, nor do Tab, bursts of keys or pastes.
+  - Esc denies (it too waits for the moment after a previous answer). Keys with Ctrl, Alt, Super or Meta never answer,
+    nor do Tab, bursts of keys or pastes. Delete and Backspace count as typing.
   The panel is answerable only while its change is visible — on a window too small to show it, it asks you to enlarge
   the terminal (Esc still denies), and timing starts again when it is drawn. Approvals that arrive while another panel
   or approval is open wait in order; the panel title shows how many are waiting.

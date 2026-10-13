@@ -261,8 +261,9 @@ pub struct Approval {
     /// When the current choice was made, by the key just pressed (cleared by any other key except scrolling): Enter
     /// takes a choice only right after the key that made it, once it has been on screen for a moment.
     pub focus_at: Option<Instant>,
-    /// "Approve all later actions" was confirmed once with Enter; a second Enter, a moment later, decides it.
-    pub confirm_all_at: Option<Instant>,
+    /// An approval that takes Enter twice was asked once ("approve all later actions", or approving on a panel whose
+    /// letters are off); a second Enter, a moment later, decides it.
+    pub confirm_at: Option<Instant>,
     /// Something was typed into the panel: its letters never answer it again (even after a resize).
     pub typed_into: bool,
 }
@@ -875,7 +876,7 @@ impl LiveState {
                     // As it would be if drawn now; set again when it is first drawn.
                     letters: self.last_typed.is_none_or(|at| at.elapsed() >= APPROVAL_TYPING_RECENT) && self.composer.is_empty(),
                     focus_at: None,
-                    confirm_all_at: None,
+                    confirm_at: None,
                     typed_into: false,
                 };
                 // Another panel is open: the approval waits behind it (a key meant for that panel must never answer
@@ -1182,7 +1183,7 @@ impl LiveState {
             approval.letters = !approval.typed_into && !typing_recently && !composing;
             approval.focus = None;
             approval.focus_at = None;
-            approval.confirm_all_at = None;
+            approval.confirm_at = None;
         }
     }
 
@@ -1251,9 +1252,14 @@ impl LiveState {
             approval.typed_into = true;
             approval.focus = None;
             approval.focus_at = None;
-            approval.confirm_all_at = None;
+            approval.confirm_at = None;
             self.last_typed = Some(now);
         }
+    }
+
+    /// A request was answered a moment ago: the open panel takes no key yet.
+    pub fn approval_settling(&self) -> bool {
+        self.last_decided.is_some_and(|at| self.now.saturating_duration_since(at) < APPROVAL_AFTER_DECISION)
     }
 
     /// How many approvals wait behind the open one (or another panel).
@@ -1292,7 +1298,7 @@ impl LiveState {
         // The choice counts only for the key right after the one that made it, once it has been visible long enough:
         // a moment on a panel answered by letters, longer on one that was typed into (where ←/→ were cursor keys).
         let chosen_at = approval.focus_at.take();
-        let confirming = approval.confirm_all_at.take();
+        let confirming = approval.confirm_at.take();
         let dwell = if approval.letters { APPROVAL_CHOICE_SHOWN } else { APPROVAL_TYPING_RECENT };
         let held = |at: Option<Instant>, wait: Duration| at.is_some_and(|at| now.saturating_duration_since(at) >= wait);
         // Keys count only unmodified (letters may be shifted): chords are editing commands, never answers.
@@ -1304,11 +1310,12 @@ impl LiveState {
             approval.typed_into = true;
             approval.focus = None;
         };
-        // Confirming "approve all later actions": Enter confirms, Esc denies, any other key only cancels.
+        // Confirming an approval asked once: Enter confirms, Esc denies, any other key only cancels.
         if let Some(asked) = confirming {
             match key.code {
                 KeyCode::Enter if bare && settled && held(Some(asked), APPROVAL_CHOICE_SHOWN) => {
-                    return self.decide(Verdict::ApprovedForSession);
+                    let verdict = approval.focus.unwrap_or(Verdict::Denied);
+                    return self.decide(verdict);
                 }
                 KeyCode::Esc => {}
                 _ => {
@@ -1335,9 +1342,14 @@ impl LiveState {
                 return None;
             }
             KeyCode::Enter if bare && settled && held(chosen_at, dwell) => match approval.focus {
-                // The first Enter on "approve all later actions" asks for a second; that one decides.
+                // The first Enter on "approve all later actions", or on Approve where the operator was typing (→ and
+                // Enter are editing keys there), asks for a second; that one decides. Deny needs one.
                 Some(Verdict::ApprovedForSession) => {
-                    approval.confirm_all_at = Some(now);
+                    approval.confirm_at = Some(now);
+                    return None;
+                }
+                Some(Verdict::Approved) if !approval.letters => {
+                    approval.confirm_at = Some(now);
                     return None;
                 }
                 Some(focus) => focus,
@@ -1356,7 +1368,8 @@ impl LiveState {
         };
         // Esc never occurs in typed text and denies (the safe direction): it needs only the display grace, and on a
         // terminal too small to draw the panel it is the way out.
-        if key.code == KeyCode::Esc && approval.shown && now.saturating_duration_since(approval.opened) < APPROVAL_GRACE {
+        let just_decided = last_decided.is_some_and(|at| now.saturating_duration_since(at) < APPROVAL_AFTER_DECISION);
+        if key.code == KeyCode::Esc && (just_decided || approval.shown && now.saturating_duration_since(approval.opened) < APPROVAL_GRACE) {
             return None;
         }
         self.decide(verdict)
@@ -1465,11 +1478,11 @@ impl LiveState {
         let completed = matches!(
             action,
             Some(Action::Send(Command::PromptSubmit { .. } | Command::Steer { .. } | Command::Slash { .. } | Command::Approve { .. } | Command::Deny { .. }))
-        ) || matches!(&self.overlay, Some(Overlay::Approval(approval)) if approval.confirm_all_at.is_some() || approval.focus_at == Some(now));
+        ) || matches!(&self.overlay, Some(Overlay::Approval(approval)) if approval.confirm_at.is_some() || approval.focus_at == Some(now));
         if matches!(action, Some(Action::Send(Command::Approve { .. } | Command::Deny { .. }))) {
             self.last_decided = Some(now);
         }
-        if !completed && matches!(key.code, KeyCode::Char(_) | KeyCode::Enter | KeyCode::Backspace) {
+        if !completed && matches!(key.code, KeyCode::Char(_) | KeyCode::Enter | KeyCode::Backspace | KeyCode::Delete) {
             self.last_typed = Some(now);
         }
         self.promote_pending_approval();
@@ -2918,7 +2931,7 @@ mod tests {
                 // Shown a while after the prompt was typed: `y`/`n`/`a` may answer it.
                 letters: true,
                 focus_at: None,
-                confirm_all_at: None,
+                confirm_at: None,
                 typed_into: false,
             }))
         );
@@ -3011,8 +3024,10 @@ mod tests {
         assert_eq!(state.on_key_at(key(KeyCode::Right), later), None);
         assert_eq!(state.on_key_at(key(KeyCode::Right), later), None);
         assert!(matches!(&state.overlay, Some(Overlay::Approval(a)) if a.focus == Some(Verdict::Approved)));
+        // On a panel whose letters are off, approving takes Enter twice.
+        assert_eq!(state.on_key_at(key(KeyCode::Enter), later + APPROVAL_TYPING_RECENT), None);
         assert_eq!(
-            state.on_key_at(key(KeyCode::Enter), later + APPROVAL_TYPING_RECENT),
+            state.on_key_at(key(KeyCode::Enter), later + APPROVAL_TYPING_RECENT + APPROVAL_CHOICE_SHOWN),
             Some(Action::Send(Command::Approve {
                 id: "approval-1".into(),
                 always: false
@@ -3068,8 +3083,10 @@ mod tests {
         assert_eq!(state.on_key_at(key(KeyCode::Char('y')), opened + Duration::from_secs(3)), None);
         let later = opened + Duration::from_secs(5);
         assert_eq!(state.on_key_at(key(KeyCode::Right), later), None);
+        // On a panel whose letters are off, approving takes Enter twice.
+        assert_eq!(state.on_key_at(key(KeyCode::Enter), later + APPROVAL_TYPING_RECENT), None);
         assert_eq!(
-            state.on_key_at(key(KeyCode::Enter), later + APPROVAL_TYPING_RECENT),
+            state.on_key_at(key(KeyCode::Enter), later + APPROVAL_TYPING_RECENT + APPROVAL_CHOICE_SHOWN),
             Some(Action::Send(Command::Approve {
                 id: "approval-1".into(),
                 always: false
@@ -3099,8 +3116,11 @@ mod tests {
             }))
         );
         state.apply(ev(APPROVAL));
+        // Esc, too, waits for the moment after the previous decision.
+        state.note_approval_shown(base + Duration::from_secs(2));
+        assert_eq!(state.on_key_at(key(KeyCode::Esc), base + Duration::from_secs(2) + APPROVAL_GRACE), None, "just after a decision");
         assert_eq!(
-            past_grace(&mut state, KeyCode::Esc),
+            state.on_key_at(key(KeyCode::Esc), base + Duration::from_secs(4)),
             Some(Action::Send(Command::Deny {
                 id: "approval-1".into()
             }))
