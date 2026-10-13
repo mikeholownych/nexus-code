@@ -93,7 +93,10 @@ environment read per pass, regression test) and is not part of this commit.
 
 Implementation commits on branch `feat/tui-surface` (not merged): `83e7405` (the surface work), `804c5df` (approval
 input), `09bf1a4` (independent-review follow-up, O1–O3), `404fa64` (command output tail). `29a9270` fixes the security
-gate that the assessment commit broke (also on main as `604687c`). The current evidence is from `404fa64`.
+gate that the assessment commit broke (also on main as `604687c`). `dda2e62` fixes the re-acceptance P1 (typing with
+pauses approved "all later actions"), `327570b` makes the PTY drivers ignore inherited `NO_COLOR`, `70ace1d` merges
+main, `d09c08f` is Stage 6 (steering and follow-ups pinned verbatim, saved with mid-turn progress). The current
+evidence is from `d09c08f`.
 
 | Revision | Build identity | What was run there |
 |---|---|---|
@@ -103,7 +106,11 @@ gate that the assessment commit broke (also on main as `604687c`). The current e
 | `83e7405` build | as above | `tui_approval_input_e2e` (added later): **fails** — burst approved |
 | clean worktree of `804c5df` | `nexus-tui` `c56080de19078f20…`, `sidecar.js` `55e65b28…fc6ff` | `make build`; `make test`: Rust 237/237, CLI 728/728, gates pass |
 | clean worktree = `09bf1a4` content (before commit) | — | `make build`; `make test`: Rust 18/18 + TUI 228/228 + 2, CLI 728/728 (all six PTY scenarios included), gates pass after `29a9270`; clippy 0 warnings in `src/bin/nexus_tui/`; PTY scenarios 13 runs (10 serial, 3 under load): 78/78 |
-| clean worktree of `404fa64` | `nexus-tui` `a43712d90d0310f7…`, `sidecar.js` `2066ae9175eb3cb3…` | TUI 228/228; all six PTY scenarios 6/6; evidence runs `tui_surface` and `tui_diff` (gitHead `404fa64`) — `docs/reviews/evidence/tui_surface/`, `docs/reviews/evidence/tui_diff/` |
+| clean worktree of `404fa64` | `nexus-tui` `a43712d90d0310f7…`, `sidecar.js` `2066ae9175eb3cb3…` | TUI 228/228; all six PTY scenarios 6/6; evidence runs `tui_surface` and `tui_diff` (gitHead `404fa64`, superseded) |
+| checkout = `dda2e62` | `1.2.1 (dda2e625a4e2, feat/tui-surface)` | PTY scenarios 13 runs (10 serial, 3 under 8 busy-loop processes): 91/91; `make test`: Rust 259/259, CLI 753/754 — the 256-colour check failed only because the agent shell exported `NO_COLOR` (fixed in `327570b`); `nexus doctor --deep` on the real configuration 20/20 incl. one inference request |
+| checkout = `70ace1d` (merge of main) | — | `make test`: Rust 259/259, CLI 807/807, gates pass |
+| checkout = `d09c08f` | — | `make test`: Rust 259/259, CLI 810/810, gates pass |
+| clean worktree of `d09c08f` | `nexus-tui` `cb11bc5a8d485da0…`, `sidecar.js` `6dd91487bb659dc7…` | evidence runs `tui_surface` and `tui_diff` (gitHead `d09c08f`), 2/2 — `docs/reviews/evidence/tui_surface/`, `docs/reviews/evidence/tui_diff/`; `sha256sum -c SHA256SUMS` passes (32 + 20 files) |
 
 ### Changes
 
