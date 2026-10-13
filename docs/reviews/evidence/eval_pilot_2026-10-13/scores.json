@@ -1,0 +1,537 @@
+{
+  "totals": {
+    "runs": 120,
+    "falseVerified": 2,
+    "errors": 0,
+    "contaminated": 0,
+    "replacedByRerun": 30
+  },
+  "pooled": [
+    {
+      "config": "nexus@gateway/engineering/lead",
+      "n": 30,
+      "correct": 27,
+      "rate": 0.9,
+      "ci": [
+        0.7437855868473339,
+        0.9654007400402839
+      ],
+      "falseVerified": 2
+    },
+    {
+      "config": "aider@gateway/engineering/lead",
+      "n": 30,
+      "correct": 20,
+      "rate": 0.6666666666666666,
+      "ci": [
+        0.48779725813830266,
+        0.807697044731538
+      ],
+      "falseVerified": 0
+    },
+    {
+      "config": "opencode@gateway/engineering/lead",
+      "n": 30,
+      "correct": 25,
+      "rate": 0.8333333333333334,
+      "ci": [
+        0.6643529481431982,
+        0.9266356575964831
+      ],
+      "falseVerified": 0
+    },
+    {
+      "config": "goose@gateway/engineering/lead",
+      "n": 30,
+      "correct": 24,
+      "rate": 0.8,
+      "ci": [
+        0.6269395261897256,
+        0.9049502189759876
+      ],
+      "falseVerified": 0
+    }
+  ],
+  "rows": [
+    {
+      "config": "nexus@gateway/engineering/lead",
+      "task": "t2-bugfix-csv",
+      "tier": "T2",
+      "n": 5,
+      "claimed": 5,
+      "correct": 5,
+      "correctCI": [
+        0.5655085052479191,
+        1
+      ],
+      "falseVerified": 0,
+      "regressions": 0,
+      "errors": 0,
+      "contaminated": 0,
+      "timedOut": 0,
+      "medianWallS": 34.214,
+      "medianSteps": 6,
+      "medianTokens": 45637
+    },
+    {
+      "config": "nexus@gateway/engineering/lead",
+      "task": "t2-bugfix-duration",
+      "tier": "T2",
+      "n": 5,
+      "claimed": 5,
+      "correct": 5,
+      "correctCI": [
+        0.5655085052479191,
+        1
+      ],
+      "falseVerified": 0,
+      "regressions": 0,
+      "errors": 0,
+      "contaminated": 0,
+      "timedOut": 0,
+      "medianWallS": 27.787,
+      "medianSteps": 5,
+      "medianTokens": 33625
+    },
+    {
+      "config": "nexus@gateway/engineering/lead",
+      "task": "t2-debug-logs",
+      "tier": "T2",
+      "n": 5,
+      "claimed": 5,
+      "correct": 5,
+      "correctCI": [
+        0.5655085052479191,
+        1
+      ],
+      "falseVerified": 0,
+      "regressions": 0,
+      "errors": 0,
+      "contaminated": 0,
+      "timedOut": 0,
+      "medianWallS": 63.218,
+      "medianSteps": 8,
+      "medianTokens": 62989
+    },
+    {
+      "config": "nexus@gateway/engineering/lead",
+      "task": "t2-feature-inventory",
+      "tier": "T2",
+      "n": 5,
+      "claimed": 5,
+      "correct": 5,
+      "correctCI": [
+        0.5655085052479191,
+        1
+      ],
+      "falseVerified": 0,
+      "regressions": 0,
+      "errors": 0,
+      "contaminated": 0,
+      "timedOut": 0,
+      "medianWallS": 52.801,
+      "medianSteps": 9,
+      "medianTokens": 72582
+    },
+    {
+      "config": "nexus@gateway/engineering/lead",
+      "task": "t2-feature-slugify",
+      "tier": "T2",
+      "n": 5,
+      "claimed": 4,
+      "correct": 3,
+      "correctCI": [
+        0.23071993220883708,
+        0.8823817688407467
+      ],
+      "falseVerified": 2,
+      "regressions": 1,
+      "errors": 0,
+      "contaminated": 0,
+      "timedOut": 0,
+      "medianWallS": 137.133,
+      "medianSteps": 15,
+      "medianTokens": 148135
+    },
+    {
+      "config": "nexus@gateway/engineering/lead",
+      "task": "t2-refactor-tax",
+      "tier": "T2",
+      "n": 5,
+      "claimed": 5,
+      "correct": 4,
+      "correctCI": [
+        0.3755282641185388,
+        0.9637768390302125
+      ],
+      "falseVerified": 0,
+      "regressions": 0,
+      "errors": 0,
+      "contaminated": 0,
+      "timedOut": 0,
+      "medianWallS": 63.005,
+      "medianSteps": 16,
+      "medianTokens": 128003
+    },
+    {
+      "config": "aider@gateway/engineering/lead",
+      "task": "t2-bugfix-csv",
+      "tier": "T2",
+      "n": 5,
+      "claimed": 5,
+      "correct": 5,
+      "correctCI": [
+        0.5655085052479191,
+        1
+      ],
+      "falseVerified": 0,
+      "regressions": 0,
+      "errors": 0,
+      "contaminated": 0,
+      "timedOut": 0,
+      "medianWallS": 28.581,
+      "medianSteps": null,
+      "medianTokens": null
+    },
+    {
+      "config": "aider@gateway/engineering/lead",
+      "task": "t2-bugfix-duration",
+      "tier": "T2",
+      "n": 5,
+      "claimed": 5,
+      "correct": 5,
+      "correctCI": [
+        0.5655085052479191,
+        1
+      ],
+      "falseVerified": 0,
+      "regressions": 0,
+      "errors": 0,
+      "contaminated": 0,
+      "timedOut": 0,
+      "medianWallS": 24.873,
+      "medianSteps": null,
+      "medianTokens": null
+    },
+    {
+      "config": "aider@gateway/engineering/lead",
+      "task": "t2-debug-logs",
+      "tier": "T2",
+      "n": 5,
+      "claimed": 5,
+      "correct": 5,
+      "correctCI": [
+        0.5655085052479191,
+        1
+      ],
+      "falseVerified": 0,
+      "regressions": 0,
+      "errors": 0,
+      "contaminated": 0,
+      "timedOut": 0,
+      "medianWallS": 60.891,
+      "medianSteps": null,
+      "medianTokens": null
+    },
+    {
+      "config": "aider@gateway/engineering/lead",
+      "task": "t2-feature-inventory",
+      "tier": "T2",
+      "n": 5,
+      "claimed": 5,
+      "correct": 5,
+      "correctCI": [
+        0.5655085052479191,
+        1
+      ],
+      "falseVerified": 0,
+      "regressions": 0,
+      "errors": 0,
+      "contaminated": 0,
+      "timedOut": 0,
+      "medianWallS": 34.583,
+      "medianSteps": null,
+      "medianTokens": null
+    },
+    {
+      "config": "aider@gateway/engineering/lead",
+      "task": "t2-feature-slugify",
+      "tier": "T2",
+      "n": 5,
+      "claimed": 5,
+      "correct": 0,
+      "correctCI": [
+        0,
+        0.43449149475208104
+      ],
+      "falseVerified": 0,
+      "regressions": 4,
+      "errors": 0,
+      "contaminated": 0,
+      "timedOut": 0,
+      "medianWallS": 72.347,
+      "medianSteps": null,
+      "medianTokens": null
+    },
+    {
+      "config": "aider@gateway/engineering/lead",
+      "task": "t2-refactor-tax",
+      "tier": "T2",
+      "n": 5,
+      "claimed": 5,
+      "correct": 0,
+      "correctCI": [
+        0,
+        0.43449149475208104
+      ],
+      "falseVerified": 0,
+      "regressions": 5,
+      "errors": 0,
+      "contaminated": 0,
+      "timedOut": 0,
+      "medianWallS": 32.878,
+      "medianSteps": null,
+      "medianTokens": null
+    },
+    {
+      "config": "opencode@gateway/engineering/lead",
+      "task": "t2-bugfix-csv",
+      "tier": "T2",
+      "n": 5,
+      "claimed": 5,
+      "correct": 4,
+      "correctCI": [
+        0.3755282641185388,
+        0.9637768390302125
+      ],
+      "falseVerified": 0,
+      "regressions": 0,
+      "errors": 0,
+      "contaminated": 0,
+      "timedOut": 0,
+      "medianWallS": 56.462,
+      "medianSteps": null,
+      "medianTokens": null
+    },
+    {
+      "config": "opencode@gateway/engineering/lead",
+      "task": "t2-bugfix-duration",
+      "tier": "T2",
+      "n": 5,
+      "claimed": 5,
+      "correct": 5,
+      "correctCI": [
+        0.5655085052479191,
+        1
+      ],
+      "falseVerified": 0,
+      "regressions": 0,
+      "errors": 0,
+      "contaminated": 0,
+      "timedOut": 0,
+      "medianWallS": 47.381,
+      "medianSteps": null,
+      "medianTokens": null
+    },
+    {
+      "config": "opencode@gateway/engineering/lead",
+      "task": "t2-debug-logs",
+      "tier": "T2",
+      "n": 5,
+      "claimed": 5,
+      "correct": 5,
+      "correctCI": [
+        0.5655085052479191,
+        1
+      ],
+      "falseVerified": 0,
+      "regressions": 0,
+      "errors": 0,
+      "contaminated": 0,
+      "timedOut": 0,
+      "medianWallS": 63.823,
+      "medianSteps": null,
+      "medianTokens": null
+    },
+    {
+      "config": "opencode@gateway/engineering/lead",
+      "task": "t2-feature-inventory",
+      "tier": "T2",
+      "n": 5,
+      "claimed": 5,
+      "correct": 5,
+      "correctCI": [
+        0.5655085052479191,
+        1
+      ],
+      "falseVerified": 0,
+      "regressions": 0,
+      "errors": 0,
+      "contaminated": 0,
+      "timedOut": 0,
+      "medianWallS": 76.544,
+      "medianSteps": null,
+      "medianTokens": null
+    },
+    {
+      "config": "opencode@gateway/engineering/lead",
+      "task": "t2-feature-slugify",
+      "tier": "T2",
+      "n": 5,
+      "claimed": 5,
+      "correct": 1,
+      "correctCI": [
+        0.03622316096978745,
+        0.6244717358814613
+      ],
+      "falseVerified": 0,
+      "regressions": 0,
+      "errors": 0,
+      "contaminated": 0,
+      "timedOut": 0,
+      "medianWallS": 160.653,
+      "medianSteps": null,
+      "medianTokens": null
+    },
+    {
+      "config": "opencode@gateway/engineering/lead",
+      "task": "t2-refactor-tax",
+      "tier": "T2",
+      "n": 5,
+      "claimed": 4,
+      "correct": 5,
+      "correctCI": [
+        0.5655085052479191,
+        1
+      ],
+      "falseVerified": 0,
+      "regressions": 0,
+      "errors": 0,
+      "contaminated": 0,
+      "timedOut": 0,
+      "medianWallS": 80.813,
+      "medianSteps": null,
+      "medianTokens": null
+    },
+    {
+      "config": "goose@gateway/engineering/lead",
+      "task": "t2-bugfix-csv",
+      "tier": "T2",
+      "n": 5,
+      "claimed": 5,
+      "correct": 5,
+      "correctCI": [
+        0.5655085052479191,
+        1
+      ],
+      "falseVerified": 0,
+      "regressions": 1,
+      "errors": 0,
+      "contaminated": 0,
+      "timedOut": 0,
+      "medianWallS": 60.422,
+      "medianSteps": null,
+      "medianTokens": null
+    },
+    {
+      "config": "goose@gateway/engineering/lead",
+      "task": "t2-bugfix-duration",
+      "tier": "T2",
+      "n": 5,
+      "claimed": 5,
+      "correct": 4,
+      "correctCI": [
+        0.3755282641185388,
+        0.9637768390302125
+      ],
+      "falseVerified": 0,
+      "regressions": 0,
+      "errors": 0,
+      "contaminated": 0,
+      "timedOut": 0,
+      "medianWallS": 49.923,
+      "medianSteps": null,
+      "medianTokens": null
+    },
+    {
+      "config": "goose@gateway/engineering/lead",
+      "task": "t2-debug-logs",
+      "tier": "T2",
+      "n": 5,
+      "claimed": 5,
+      "correct": 5,
+      "correctCI": [
+        0.5655085052479191,
+        1
+      ],
+      "falseVerified": 0,
+      "regressions": 0,
+      "errors": 0,
+      "contaminated": 0,
+      "timedOut": 0,
+      "medianWallS": 72.644,
+      "medianSteps": null,
+      "medianTokens": null
+    },
+    {
+      "config": "goose@gateway/engineering/lead",
+      "task": "t2-feature-inventory",
+      "tier": "T2",
+      "n": 5,
+      "claimed": 5,
+      "correct": 5,
+      "correctCI": [
+        0.5655085052479191,
+        1
+      ],
+      "falseVerified": 0,
+      "regressions": 0,
+      "errors": 0,
+      "contaminated": 0,
+      "timedOut": 0,
+      "medianWallS": 44.493,
+      "medianSteps": null,
+      "medianTokens": null
+    },
+    {
+      "config": "goose@gateway/engineering/lead",
+      "task": "t2-feature-slugify",
+      "tier": "T2",
+      "n": 5,
+      "claimed": 5,
+      "correct": 0,
+      "correctCI": [
+        0,
+        0.43449149475208104
+      ],
+      "falseVerified": 0,
+      "regressions": 3,
+      "errors": 0,
+      "contaminated": 0,
+      "timedOut": 0,
+      "medianWallS": 73.826,
+      "medianSteps": null,
+      "medianTokens": null
+    },
+    {
+      "config": "goose@gateway/engineering/lead",
+      "task": "t2-refactor-tax",
+      "tier": "T2",
+      "n": 5,
+      "claimed": 5,
+      "correct": 5,
+      "correctCI": [
+        0.5655085052479191,
+        1
+      ],
+      "falseVerified": 0,
+      "regressions": 0,
+      "errors": 0,
+      "contaminated": 0,
+      "timedOut": 0,
+      "medianWallS": 48.512,
+      "medianSteps": null,
+      "medianTokens": null
+    }
+  ]
+}

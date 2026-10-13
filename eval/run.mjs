@@ -12,6 +12,7 @@ import { fileURLToPath } from "node:url";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const args = parseArgs(process.argv.slice(2));
+if (args.out) args.out = path.resolve(args.out); // agents run elsewhere: paths handed to them must be absolute
 if (!args.config || !args.out) {
   console.error("usage: eval/run.mjs --config eval/configs/<name>.json --out <dir> [--tasks eval/tasks] [--only id,id] [--runs N]");
   process.exit(2);
@@ -20,6 +21,8 @@ const config = JSON.parse(fs.readFileSync(args.config, "utf8"));
 const tasksDir = path.resolve(args.tasks ?? path.join(ROOT, "eval/tasks"));
 const runs = Number(args.runs ?? config.runs ?? 1);
 const only = args.only ? new Set(String(args.only).split(",")) : null;
+// --pairs "task run,task run": rerun exactly these (runs that failed on infrastructure; see eval/infra.mjs).
+const pairs = args.pairs ? String(args.pairs).split(",").filter(Boolean).map((p) => p.trim().split(/\s+/)) : null;
 fs.mkdirSync(args.out, { recursive: true });
 const resultsFile = path.join(args.out, "results.jsonl");
 
@@ -33,6 +36,7 @@ const caFile = config.caFile ? expandHome(config.caFile) : null;
 const caBundle = caFile ? writeCaBundle(caFile) : null;
 for (let run = 1; run <= runs; run++) {
   for (const id of tasks) {
+    if (pairs && !pairs.some(([t, r]) => t === id && Number(r) === run)) continue;
     const task = { ...JSON.parse(fs.readFileSync(path.join(tasksDir, id, "task.json"), "utf8")), dir: path.join(tasksDir, id) };
     const record = await runOnce(task, run);
     fs.appendFileSync(resultsFile, JSON.stringify(record) + "\n");

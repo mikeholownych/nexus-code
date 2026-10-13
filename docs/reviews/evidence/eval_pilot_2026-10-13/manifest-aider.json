@@ -1,0 +1,37 @@
+{
+  "createdAt": "2026-10-13T12:27:05.669Z",
+  "harness": {
+    "commit": "ede562e63ec9",
+    "dirty": true,
+    "string": "ede562e63ec9-dirty"
+  },
+  "config": {
+    "name": "aider@gateway/engineering/lead",
+    "agent": "aider",
+    "endpoint": "https://10.0.8.5:8443/v1",
+    "model": "engineering/lead",
+    "apiKey": {
+      "file": "~/.config/nexus/config.env",
+      "var": "LOCAL_LLM_API_KEY"
+    },
+    "caFile": "~/.config/nexus/t5820-gateway-ca.crt",
+    "limits": {
+      "context": 65536,
+      "output": 8192
+    },
+    "runs": 5,
+    "args": [],
+    "env": {}
+  },
+  "runs": 5,
+  "tasks": [
+    "t2-bugfix-csv",
+    "t2-bugfix-duration",
+    "t2-debug-logs",
+    "t2-feature-inventory",
+    "t2-feature-slugify",
+    "t2-refactor-tax"
+  ],
+  "host": "mike-dev",
+  "node": "v24.21.0"
+}
