@@ -16,6 +16,7 @@ export default defineConfig({
 			ARTIFACTS: bindings.artifacts({ namespace: required("NEXUS_CF_NAMESPACE") }),
 			NEXUS_NAMESPACE: bindings.text(required("NEXUS_CF_NAMESPACE")),
 			NEXUS_REPOSITORY: bindings.text(required("NEXUS_CF_REPOSITORY")),
+			EXPERIMENT_AUTH: bindings.secret(),
 		},
 		observability: { enabled: false },
 	},

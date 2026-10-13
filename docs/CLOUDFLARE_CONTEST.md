@@ -28,7 +28,7 @@ The service is the entry. Nexus Code is the harness used to demonstrate it.
 
 ## Reproduce
 
-The published tree includes `demo/` and `experiments/cloudflare-artifacts-vertical-slice/` manifests and lockfiles. The supported target for this experiment is Ubuntu 24.04 or newer on x86-64, Node.js 22.18 or newer, npm, Git, `curl`, and a Cloudflare account allowed to create Artifacts repositories and deploy Workers. Real-agent mode also needs a Chat Completions-compatible inference endpoint that can produce the requested TypeScript changes. The captured recording used a private inference service; a judge must supply an endpoint and credentials they control.
+The published tree includes `demo/` and `experiments/cloudflare-artifacts-vertical-slice/` manifests and lockfiles. The intended target is Ubuntu 24.04 or newer on x86-64, Node.js 22.18 or newer, npm, Git, `curl`, `sudo`, and `setpriv` (from `util-linux`). The `cf` CLI uses Node 22.18 or newer. The restricted validator additionally requires a root-owned `/usr/bin/node`, a working `nobody` identity (UID/GID 65534), and passwordless sudo for its fixed `chown`, `rm`, and `setpriv` operations. Do not run the generated-code validator on a shared or production host. A Cloudflare account must be allowed to create Artifacts repositories and deploy Workers. Real-agent mode also needs a Chat Completions-compatible inference endpoint that can produce the requested TypeScript changes. The captured recording used a private inference service; a judge must supply an endpoint and credentials they control.
 
 1. Clone `https://github.com/mikeholownych/nexus-code` and install the demo and Worker workspace dependencies from their lockfiles:
 
@@ -41,12 +41,11 @@ The published tree includes `demo/` and `experiments/cloudflare-artifacts-vertic
 
 2. Create a unique Artifacts namespace and repository with the Cloudflare Artifacts REST API. The current Cloudflare API uses the account-level `/artifacts/namespaces` and namespace `/repos` routes; creating a repository returns its ID, remote URL, and initial repo token. Push a single baseline commit to `main` before running the demo. For API token scope and exact response fields, use [Cloudflare’s Artifacts REST API guide](https://developers.cloudflare.com/artifacts/api/rest-api/). The baseline commit is the parent from which this run publishes isolated refs.
 3. Set the following non-secret resource values in the shell that builds/deploys the Worker and runs the controller: `NEXUS_CF_NAMESPACE`, `NEXUS_CF_REPOSITORY`, `NEXUS_CF_REPOSITORY_ID`, `NEXUS_CF_ARTIFACTS_REMOTE`, `NEXUS_CF_DEFAULT_SHA`, `NEXUS_CF_WORKER_NAME`, and `NEXUS_CF_WORKER_ENDPOINT`. `NEXUS_CF_DEFAULT_SHA` is the exact `main` commit you initialized. These values are intentionally not checked into the repository. The Worker config binds the selected namespace and exposes the namespace/repository to the Worker source; the handler refuses requests when those bindings are absent.
-4. Deploy the Worker and set its `EXPERIMENT_AUTH` secret through Cloudflare’s secret command. Keep the Worker bearer and the Artifacts Git token out of shell history, source, `.env.example`, and logs. The protected broker expects separate root-owned `0400` token files at `/etc/nexus-cloudflare-broker/artifacts-git.token` and `/etc/nexus-cloudflare-broker/worker.bearer`.
+4. Deploy the Worker with a private JSON secrets file containing `EXPERIMENT_AUTH`. Create the file outside the repository with mode `0600`, pass it to `cf deploy --secrets-file`, and delete it after the deployment. The Worker bearer in that file must match the root-owned `0400` file `/etc/nexus-cloudflare-broker/worker.bearer`; the Artifacts Git token belongs in `/etc/nexus-cloudflare-broker/artifacts-git.token`. Keep both tokens out of shell history, source, `.env.example`, and logs. Cloudflare’s `cf` CLI accepts JSON or `.env` secrets files and uploads secrets with the Worker version; see [the deploy reference](https://developers.cloudflare.com/cf/projects/).
 
    ```sh
    npm run typecheck --prefix experiments/cloudflare-artifacts-vertical-slice
-   npm run deploy --prefix experiments/cloudflare-artifacts-vertical-slice
-   npx wrangler secret put EXPERIMENT_AUTH --name "$NEXUS_CF_WORKER_NAME"
+   npm run deploy --prefix experiments/cloudflare-artifacts-vertical-slice -- --secrets-file /absolute/path/to/private-secrets.json
    ```
 
    Cloudflare’s `cf` CLI requires Node 22.18 or newer. Authenticate it using the supported login flow or an account-scoped API token. Do not place secrets in repo files or commit ignored local configuration.
