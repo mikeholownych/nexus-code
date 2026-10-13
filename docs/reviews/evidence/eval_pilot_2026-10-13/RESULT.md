@@ -88,3 +88,25 @@ adds (one suite run per change), and more steps than Goose on debug-logs.
 
 These six tasks were used to find and fix the issues, so this rerun confirms the fixes; it does not qualify Nexus.
 Qualification needs a fresh task set.
+
+## Rerun after speed round 2 (Nexus 4fcbe68, alone, 15:42–16:03 UTC)
+
+Changes: optional tool groups offered on demand (~1.4K fewer schema tokens per request), requirement tools only with an
+objective ledger, narrower planning rule, 15 s maximum wait between recovery probes. `SCORES_rerun_4fcbe68.md`.
+
+False VERIFIED 0/30; correct 25/30 (ed17e99: 26/30; the difference is one slugify run, within noise); no infrastructure
+failures.
+
+| Task | Nexus ed17e99 s | Nexus 4fcbe68 s | Goose s | Steps | Tokens |
+|---|---|---|---|---|---|
+| csv | 25 | 24 | 21 | 6→5 | 45K→29K |
+| duration | 17 | 16 | 15 | 5→5 | 34K→26K |
+| debug-logs | 43 | 41 | 27 | 9→10 | 73K→65K |
+| inventory | 29 | 27 | 30 | 6→6 | 45K→35K |
+| slugify | 75 | 79 | 48 | 11→14 | 107K→139K |
+| refactor-tax | 44 | 47 | 33 | 12→14 | 98K→84K |
+
+Total 20.4 min (ed17e99 22.1, Goose 14.9). Tokens fell 20–35 % on the short tasks; wall time only ~8 %, because on
+this gateway output generation (~47 tokens/s), not prompt size, dominates once the prompt prefix is cached. The
+remaining gap is still bookkeeping: the model kept calling `update_plan` 3–4 times per debug-logs run despite the
+narrower rule (requirement calls are gone), and in 2 of 5 slugify runs (8 plan-related mentions each).
