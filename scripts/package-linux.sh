@@ -30,6 +30,8 @@ exec node "$NEXUS_HOME/lib/cli/dist/index.js" "$@"
 EOF
 chmod 0755 "$PKG/bin/nexus" "$PKG/lib/core/harness-core" "$PKG/lib/core/nexus-tui"
 ARCHIVE="nexus-linux-x86_64-$VERSION.tar.gz"
-tar -C "$WORK" -czf "$OUT/$ARCHIVE" nexus
+SOURCE_DATE_EPOCH=$(git -C "$ROOT" log -1 --format=%ct)
+tar --sort=name --format=pax --mtime="@$SOURCE_DATE_EPOCH" --owner=0 --group=0 --numeric-owner \
+  --pax-option=delete=atime,delete=ctime -C "$WORK" -cf - nexus | gzip -n > "$OUT/$ARCHIVE"
 (cd "$OUT" && sha256sum "$ARCHIVE" > SHA256SUMS)
 printf 'Built %s\n' "$OUT/$ARCHIVE"
