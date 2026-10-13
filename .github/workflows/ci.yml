@@ -28,12 +28,14 @@ jobs:
       - run: cargo build --locked --release --manifest-path core/Cargo.toml --bin harness-core --bin nexus-tui
       - run: npm --prefix cli test
       - run: bash scripts/security_gates.sh
-      - run: bash scripts/package-linux.sh "v$(node -p 'require("./package.json").version')" "$RUNNER_TEMP/dist"
-      - run: bash scripts/package-linux.sh "v$(node -p 'require("./package.json").version')" "$RUNNER_TEMP/repro-check"
-      - run: cmp "$RUNNER_TEMP/dist/nexus-linux-x86_64-v$(node -p 'require("./package.json").version).tar.gz" "$RUNNER_TEMP/repro-check/nexus-linux-x86_64-v$(node -p 'require("./package.json").version).tar.gz"
+      - id: release-version
+        run: echo "version=$(node -p 'require("./package.json").version')" >> "$GITHUB_OUTPUT"
+      - run: bash scripts/package-linux.sh "v${{ steps.release-version.outputs.version }}" "$RUNNER_TEMP/dist"
+      - run: bash scripts/package-linux.sh "v${{ steps.release-version.outputs.version }}" "$RUNNER_TEMP/repro-check"
+      - run: cmp "$RUNNER_TEMP/dist/nexus-linux-x86_64-v${{ steps.release-version.outputs.version }}.tar.gz" "$RUNNER_TEMP/repro-check/nexus-linux-x86_64-v${{ steps.release-version.outputs.version }}.tar.gz"
       - run: cmp "$RUNNER_TEMP/dist/SHA256SUMS" "$RUNNER_TEMP/repro-check/SHA256SUMS"
-      - run: bash scripts/smoke-package.sh "$RUNNER_TEMP/dist/nexus-linux-x86_64-v$(node -p 'require("./package.json").version).tar.gz"
-      - run: bash scripts/installer-smoke.sh "$GITHUB_WORKSPACE/install.sh" "$RUNNER_TEMP/dist/nexus-linux-x86_64-v$(node -p 'require("./package.json").version).tar.gz"
+      - run: bash scripts/smoke-package.sh "$RUNNER_TEMP/dist/nexus-linux-x86_64-v${{ steps.release-version.outputs.version }}.tar.gz"
+      - run: bash scripts/installer-smoke.sh "$GITHUB_WORKSPACE/install.sh" "$RUNNER_TEMP/dist/nexus-linux-x86_64-v${{ steps.release-version.outputs.version }}.tar.gz"
       - uses: actions/upload-artifact@v4
         with:
           name: nexus-linux-x86_64
