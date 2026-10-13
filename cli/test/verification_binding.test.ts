@@ -8,7 +8,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { detectTestCommand, hasExecutedTests, isFilteredVerifierCommand, isVerifierDeliverableBound } from "../src/tester.js";
+import { detectTestCommand, discoverVerifier, hasExecutedTests, isFilteredVerifierCommand, isVerifierDeliverableBound } from "../src/tester.js";
 
 function workspace(files: Record<string, string>): string {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-binding-"));
@@ -131,6 +131,40 @@ describe("deliverable binding", () => {
       assert.equal(isVerifierDeliverableBound(root, [path.join(root, "a.test.js")], "make test", ""), false);
       assert.equal(isVerifierDeliverableBound(root, [], "make test", ""), false);
       assert.equal(isVerifierDeliverableBound(root, [], "make test", NODE_PASS), true, "no recorded change: executed tests are the evidence");
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("Python tests without project configuration (eval pilot 2026-10-13: every such run was NO_APPLICABLE_VERIFIER)", () => {
+  test("test_*.py in tests/, test/ or the root is run with unittest; its report counts as executed tests", () => {
+    const cases: Array<[Record<string, string>, string | null]> = [
+      [{ "durations.py": "", "tests/test_durations.py": "" }, "python3 -m unittest discover -s tests"],
+      [{ "lib.py": "", "test/test_lib.py": "" }, "python3 -m unittest discover -s test"],
+      [{ "lib.py": "", "test_lib.py": "" }, "python3 -m unittest discover"],
+      [{ "lib.py": "", "tests/helpers.py": "" }, null],
+      [{ "pyproject.toml": "", "tests/test_x.py": "" }, "pytest"],
+    ];
+    for (const [files, expected] of cases) {
+      const root = workspace(files);
+      try {
+        assert.equal(discoverVerifier(root)?.command ?? null, expected, JSON.stringify(Object.keys(files)));
+        if (expected) assert.equal(detectTestCommand(root), expected);
+      } finally {
+        fs.rmSync(root, { recursive: true, force: true });
+      }
+    }
+    assert.equal(hasExecutedTests("..\n----------------------------------------------------------------------\nRan 2 tests in 0.000s\n\nOK\n"), true);
+    assert.equal(hasExecutedTests("F.\n======\nFAIL: test_x\n----\nRan 2 tests in 0.001s\n\nFAILED (failures=1)\n"), true);
+    assert.equal(hasExecutedTests("\n----------------------------------------------------------------------\nRan 0 tests in 0.000s\n\nNO TESTS RAN\n"), false);
+    assert.equal(isFilteredVerifierCommand("python3 -m unittest discover -s tests"), false);
+  });
+
+  test("a unittest run whose test imports the changed module covers it", () => {
+    const root = workspace({ "durations.py": "", "tests/test_durations.py": "from durations import parse_duration\n" });
+    try {
+      assert.equal(isVerifierDeliverableBound(root, [path.join(root, "durations.py")], "python3 -m unittest discover -s tests", "..\nRan 2 tests in 0.000s\n\nOK\n"), true);
     } finally {
       fs.rmSync(root, { recursive: true, force: true });
     }

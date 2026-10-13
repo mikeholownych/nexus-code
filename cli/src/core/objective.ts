@@ -93,6 +93,8 @@ export interface VerificationAttempt {
   external?: string;
   status: VerificationStatus | "SKIPPED_UNCHANGED_INPUTS";
   isDeliverableBound?: boolean;
+  /** False when the run passed but nothing independent of the agent shows the change (see core/independent_check). */
+  independent?: boolean;
   filtered?: boolean;
   at: string;
   /** First failing line of the verifier's output, when it failed. */
@@ -355,6 +357,12 @@ export function applyRequirementUpdates(
         if (currentPass.isDeliverableBound === false) {
           errors.push(
             `${requirement.id}: verified requires a test run that covers the deliverable. The recorded run '${currentPass.command}' passed generic tests but did not test the changed files. Mark as implemented.`,
+          );
+          continue;
+        }
+        if (currentPass.independent === false) {
+          errors.push(
+            `${requirement.id}: verified requires a check you did not write: tests that existed before this change and failed before it, or the operator's configured verifier. The recorded run '${currentPass.command}' passed, but only your own tests (or tests that also passed before the change) check this. Mark it implemented.`,
           );
           continue;
         }

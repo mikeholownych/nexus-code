@@ -51,7 +51,32 @@ export function detectTestCommand(workspace, filterPattern) {
     if (fs.existsSync(path.join(root, "go.mod"))) {
         return filterPattern ? `go test ./... -run "${filterPattern}"` : "go test ./...";
     }
+    // 6. Python test files without project configuration: the standard library's runner
+    const unittest = unittestLayout(root);
+    if (unittest)
+        return filterPattern ? `${unittest.command} -k "${filterPattern}"` : unittest.command;
     return "npm test";
+}
+/**
+ * Python tests with no project configuration (no pyproject.toml / setup.py): `test_*.py` files in `tests/` or at the
+ * root, run with the standard library's unittest (always present, unlike pytest).
+ */
+function unittestLayout(root) {
+    const testFiles = (dir) => {
+        try {
+            return fs.readdirSync(path.join(root, dir)).filter((name) => /^test_.*\.py$/.test(name));
+        }
+        catch {
+            return [];
+        }
+    };
+    if (testFiles("tests").length)
+        return { command: "python3 -m unittest discover -s tests", evidence: `tests/${testFiles("tests")[0]}` };
+    if (testFiles("test").length)
+        return { command: "python3 -m unittest discover -s test", evidence: `test/${testFiles("test")[0]}` };
+    if (testFiles(".").length)
+        return { command: "python3 -m unittest discover", evidence: testFiles(".")[0] };
+    return null;
 }
 /**
  * Select a verifier only when repository files justify one. Unlike detectTestCommand there is no
@@ -89,6 +114,9 @@ export function discoverVerifier(workspace) {
         return { command: "pytest", evidence: has("pyproject.toml") ? "pyproject.toml" : "setup.py" };
     if (has("go.mod"))
         return { command: "go test ./...", evidence: "go.mod" };
+    const unittest = unittestLayout(root);
+    if (unittest)
+        return unittest;
     return null;
 }
 /**
@@ -208,7 +236,7 @@ export function isFilteredVerifierCommand(command) {
 }
 /**
  * Whether a test run's output shows that at least one test executed. Runners that report counts are read (node:test,
- * cargo, pytest, jest/vitest, go); output with no recognisable report — including no output — is not evidence.
+ * cargo, pytest, unittest, jest/vitest, go); output with no recognisable report — including no output — is not evidence.
  */
 export function hasExecutedTests(rawOutput) {
     if (!rawOutput)
@@ -226,6 +254,10 @@ export function hasExecutedTests(rawOutput) {
     const pytest = rawOutput.match(/=+ .*?(\d+) passed/);
     if (pytest)
         return Number(pytest[1]) > 0;
+    // unittest: "Ran 3 tests in 0.001s" (it also prints "Ran 0 tests" when discovery finds nothing)
+    const unittest = [...rawOutput.matchAll(/^Ran (\d+) tests? in /gm)];
+    if (unittest.length)
+        return unittest.some((m) => Number(m[1]) > 0);
     if (/collected 0 items|no tests ran/i.test(rawOutput))
         return false;
     // go test: an `ok <package>` line that ran tests (not `[no tests to run]`), or verbose `--- PASS` lines.
@@ -236,11 +268,11 @@ export function hasExecutedTests(rawOutput) {
     return false;
 }
 const TEST_PATH = /(?:^|[\\/])(?:tests?|__tests__|spec)[\\/]|(?:^|[\\/])test_[^\\/]+\.py$|[._-](?:test|spec)\.[A-Za-z0-9]+$|_test\.(?:go|rs|py)$/i;
-const SKIP_DIRS = new Set(["node_modules", ".git", "target", "dist", "build", "vendor", ".venv", "venv", "__pycache__", ".nexus"]);
+export const SKIP_DIRS = new Set(["node_modules", ".git", "target", "dist", "build", "vendor", ".venv", "venv", "__pycache__", ".nexus"]);
 const MAX_TEST_FILES = 2000;
-const MAX_TEST_BYTES = 256 * 1024;
+export const MAX_TEST_BYTES = 256 * 1024;
 /** Test files of a workspace (bounded: depth 6, 2000 files, generated and dependency directories skipped). */
-function workspaceTestFiles(root) {
+export function workspaceTestFiles(root) {
     const found = [];
     const walk = (dir, depth) => {
         if (depth > 6 || found.length >= MAX_TEST_FILES)

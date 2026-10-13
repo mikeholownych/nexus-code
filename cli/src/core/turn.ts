@@ -181,6 +181,13 @@ export interface VerificationEvidence {
   source?: "configured" | "discovered";
   exitSuccess?: boolean;
   isDeliverableBound?: boolean;
+  /**
+   * A discovered verifier's pass is independent evidence of the change: tests that existed before it, unmodified,
+   * failed before and pass after. False (with independenceDetail) when only the agent's own tests, or tests that also
+   * passed before, check it — the turn is then REGRESSION_FREE, not VERIFIED.
+   */
+  independent?: boolean;
+  independenceDetail?: string;
   /** Deadline the verifier was given, recorded when it timed out. */
   deadlineSecs?: number;
   outputSha256?: string;

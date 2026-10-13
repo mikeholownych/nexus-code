@@ -225,6 +225,10 @@ currentPass) {
                     errors.push(`${requirement.id}: verified requires a test run that covers the deliverable. The recorded run '${currentPass.command}' passed generic tests but did not test the changed files. Mark as implemented.`);
                     continue;
                 }
+                if (currentPass.independent === false) {
+                    errors.push(`${requirement.id}: verified requires a check you did not write: tests that existed before this change and failed before it, or the operator's configured verifier. The recorded run '${currentPass.command}' passed, but only your own tests (or tests that also passed before the change) check this. Mark it implemented.`);
+                    continue;
+                }
                 requirement.verifiedBy = { attempt: currentPass.n, command: currentPass.command, inputs: currentPass.inputs, at: currentPass.at };
                 evidence.push(`verifier #${currentPass.n}: ${currentPass.command} PASSED on ${currentPass.inputs.slice(0, 12)}`);
             }

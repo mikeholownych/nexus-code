@@ -514,7 +514,9 @@ describe("verifier attempts are remembered against their inputs", () => {
     try {
       const turn = await agent.runTurn("Make the build pass.");
       const runs = fs.readFileSync(counter, "utf8").trim().split("\n").length;
-      assert.equal(runs, 2, "attempt 2 on unchanged inputs was not run; the change reran it");
+      // The run before the first edit (fail-before evidence), attempt 1, and the rerun after the change; attempt 2 on
+      // unchanged inputs was not run.
+      assert.equal(runs, 3, "attempt 2 on unchanged inputs was not run; the change reran it");
       const attempts = agent.getObjective()!.verification;
       assert.deepEqual(attempts.map((a) => a.status), ["FAILED", "SKIPPED_UNCHANGED_INPUTS", "PASSED"]);
       assert.equal(attempts[0].inputs, attempts[1].inputs);
@@ -574,7 +576,7 @@ describe("a reused verifier failure never blocks a legitimate rerun", () => {
     try {
       await agent.runTurn("Make the build pass.");
       assert.deepEqual(agent.getObjective()!.verification.map((a) => a.status), ["FAILED", "PASSED"]);
-      assert.equal(runs(counter), 2);
+      assert.equal(runs(counter), 3, "the run before the first edit, then both attempts");
     } finally {
       agent.shutdown();
       await gw.close();
@@ -653,7 +655,8 @@ describe("a reused verifier failure never blocks a legitimate rerun", () => {
       assert.deepEqual(attempts.map((a) => a.status), ["FAILED", "FAILED"], "same objective, so both attempts are in its ledger");
       assert.equal(attempts[0].inputs, attempts[1].inputs, "the workspace did not change between the processes");
       assert.notEqual(attempts[0].epoch, attempts[1].epoch);
-      assert.equal(runs(counter), 2, "the resumed process ran the verifier itself");
+      // The first process's run before its edit and its attempt, then the resumed process's own attempt.
+      assert.equal(runs(counter), 3, "the resumed process ran the verifier itself");
     } finally {
       second.shutdown();
       await gw.close();

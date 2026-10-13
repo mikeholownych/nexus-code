@@ -22,7 +22,10 @@ import { selectRelevantFewShots } from "./fewshots.js";
 import { FlightRecorder } from "./flight.js";
 import { WorktreeManager } from "./worktree.js";
 import { isSandboxAvailable } from "./sandbox.js";
-import { runTestSuiteWithExecutor, discoverVerifier, isVerifierDeliverableBound, isFilteredVerifierCommand } from "./tester.js";
+import { runTestSuiteWithExecutor, discoverVerifier, hasExecutedTests, isVerifierDeliverableBound, isFilteredVerifierCommand } from "./tester.js";
+import { judgeWithoutCopy, prepareBaselineTestsCopy, snapshotTests } from "./core/independent_check.js";
+/** Tools that edit files directly: the first one of an unverified change triggers the pre-change verifier run. */
+const FILE_EDIT_TOOLS = new Set(["write_file", "edit_file", "patch_file", "delete_file"]);
 import { credentialOriginOf, InferenceError } from "./client.js";
 import { assertTurnResultInvariants, deepFreezeTurn, summarizeTurn, lifecycleStatusForTurn, turnSucceeded, } from "./core/turn.js";
 import { createHash } from "node:crypto";
@@ -562,6 +565,11 @@ export class AutonomousAgent {
     progressListener;
     /** Observations context compaction removed during this turn that the model has not re-read since. */
     turnRemovedObservations = new Set();
+    /**
+     * The discovered verifier's run and the test files right before the first file edit of the current unverified
+     * change (null: none could be taken). Cleared when a covering run settles the change.
+     */
+    changeBaseline;
     /** Removals recorded in a recovered conversation; the next (resumed) turn starts with them. */
     carriedRemovedObservations = new Set();
     // Findings the model recorded from inspected output just before compaction removed it, and those observations.
@@ -1168,6 +1176,51 @@ export class AutonomousAgent {
      * Durable progress within a turn. A failed write is tolerated here: the turn-end checkpoint writes the same state,
      * and an operation whose result never reached the durable conversation is detected on recovery.
      */
+    /**
+     * Before the first file edit of an unverified change: the discovered verifier's result and the test files as they
+     * are, so a later pass can be judged fail-before / pass-after. Skipped when the operator configured a verifier (their
+     * check decides), in dry-run and read-only modes, and when no verifier is discovered.
+     */
+    async captureChangeBaseline() {
+        if (this.changeBaseline !== undefined || this.config.dryRun || this.config.readOnly || this.config.authoritativeVerifierCommand?.trim())
+            return;
+        const command = discoverVerifier(this.config.workspace)?.command;
+        if (!command) {
+            this.changeBaseline = null;
+            return;
+        }
+        try {
+            const tests = snapshotTests(this.config.workspace);
+            this.activity("verifying", { tool: `${command} (before the change)` });
+            const deadlineSecs = this.config.verifierTimeoutSecs ?? DEFAULT_VERIFIER_TIMEOUT_SECS;
+            const run = await runTestSuiteWithExecutor(this.config.workspace, (c) => this.bridge.executeTool("run_command", { command: c, timeout_secs: deadlineSecs }), command);
+            this.changeBaseline = { command, failed: !run.success, tests, at: new Date().toISOString() };
+        }
+        catch {
+            this.changeBaseline = null;
+        }
+    }
+    /** Whether a passing, covering run of the discovered `command` is independent evidence of the change. */
+    async judgeIndependence(command, deadlineSecs) {
+        const judged = judgeWithoutCopy(this.config.workspace, command, this.changeBaseline);
+        if (judged !== "needs-copy")
+            return judged;
+        // Nexus edited test files: run the tests as they were before the change against the changed code.
+        const dir = prepareBaselineTestsCopy(this.config.workspace, this.changeBaseline.tests);
+        if (!dir)
+            return { independent: false, detail: "the workspace is too large to rerun the pre-change tests without Nexus's own test edits" };
+        try {
+            this.activity("verifying", { tool: `${command} (tests as they were before the change)` });
+            const quoted = `'${dir.replace(/'/g, `'\\''`)}'`;
+            const run = await runTestSuiteWithExecutor(this.config.workspace, (c) => this.bridge.executeTool("run_command", { command: `cd ${quoted} && ${c}`, timeout_secs: deadlineSecs }), command);
+            return run.success && hasExecutedTests(run.rawOutput || "")
+                ? { independent: true, detail: "tests that failed before the change pass after it, with Nexus's own test edits set aside" }
+                : { independent: false, detail: "it passes only with tests Nexus wrote or edited; the tests as they were before the change still fail" };
+        }
+        finally {
+            fs.rmSync(dir, { recursive: true, force: true });
+        }
+    }
     persistProgress(progress) {
         try {
             if (this.stateManager && !this.stateManager.hasTaskState(this.currentTaskId))
@@ -1233,6 +1286,7 @@ export class AutonomousAgent {
         return toolName === "spawn_subagent" || !capability || changesWorkspace(capability);
     }
     resetConversation() {
+        this.changeBaseline = undefined;
         this.stepNoticeStep = 0;
         this.cutResponse = undefined;
         this.objective = undefined;
@@ -2530,12 +2584,16 @@ Always explain your reasoning before or alongside your tool calls.`;
                         // Configured or discovered, a verifier is evidence about the change only when its run shows tests that
                         // executed and cover the changed files.
                         const isDeliverableBound = isVerifierDeliverableBound(this.config.workspace, Array.from(this.modifiedFiles), verifierCommand, testRes.rawOutput || "");
+                        // A discovered verifier's pass makes the change VERIFIED only on independent evidence (fail-before /
+                        // pass-after on tests the change did not write); the operator's configured verifier is their own check.
+                        const independence = source === "discovered" && testRes.success && isDeliverableBound ? await this.judgeIndependence(verifierCommand, deadlineSecs) : undefined;
                         const evidence = {
                             status: testRes.success ? "PASSED" : testRes.timedOut ? "TIMED_OUT" : "FAILED",
                             command: verifierCommand,
                             source,
                             exitSuccess: testRes.success,
                             isDeliverableBound,
+                            ...(independence ? { independent: independence.independent, independenceDetail: independence.detail } : {}),
                             ...(testRes.timedOut ? { deadlineSecs } : {}),
                             outputSha256: createHash("sha256").update(testRes.rawOutput || "").digest("hex"),
                             candidateId,
@@ -2555,6 +2613,7 @@ Always explain your reasoning before or alongside your tool calls.`;
                                 external: externalInputsFingerprint(this.config.workspace),
                                 status: evidence.status,
                                 isDeliverableBound,
+                                ...(independence ? { independent: independence.independent } : {}),
                                 filtered: isFilteredVerifierCommand(verifierCommand),
                                 ...(evidence.status === "PASSED" ? {} : { failedCheck: failedCheckFrom(testRes.rawOutput || "") }),
                             });
@@ -2594,8 +2653,10 @@ Always explain your reasoning before or alongside your tool calls.`;
             if (!noApplicableVerifier)
                 this.setUnverifiedChanges(false);
             // Files a passing run covered are verified; ones it did not cover stay for a later run to cover.
-            if (verifierSucceeded && this.verificationEvidence?.isDeliverableBound)
+            if (verifierSucceeded && this.verificationEvidence?.isDeliverableBound) {
                 this.modifiedFiles.clear();
+                this.changeBaseline = undefined;
+            }
             if (this.activeWorktree) {
                 const canValidate = verifierSucceeded &&
                     this.config.authoritativeVerifierCommand?.trim() &&
@@ -3058,6 +3119,8 @@ Always explain your reasoning before or alongside your tool calls.`;
             }
             catch { }
         }
+        if (FILE_EDIT_TOOLS.has(toolName) && this.depth === 0)
+            await this.captureChangeBaseline();
         const receipt = await this.spine.execute({
             invocationId: call.id,
             taskId: effectiveTaskId,
@@ -3089,10 +3152,17 @@ Always explain your reasoning before or alongside your tool calls.`;
                 if (state && typeof parsed.command === "string") {
                     const isDeliverableBound = isVerifierDeliverableBound(this.config.workspace, Array.from(this.modifiedFiles), parsed.command, receipt.output || "");
                     const filtered = Boolean(args.filter) || isFilteredVerifierCommand(parsed.command);
+                    // Without the copy run (task_completed does that): independent only when unmodified pre-change tests that
+                    // failed before now pass. A configured verifier is the operator's check.
+                    const configuredCommand = this.config.authoritativeVerifierCommand?.trim();
+                    // With no change pending, the tests are the repository's own: a pass is independent of Nexus.
+                    const changePending = this.modifiedFiles.size > 0 || this.hasPendingModifications;
+                    const judged = !changePending || (configuredCommand && parsed.command === configuredCommand) ? undefined : judgeWithoutCopy(this.config.workspace, parsed.command, this.changeBaseline);
                     recordAttempt(this.objective, {
                         command: parsed.command,
                         ...state,
                         isDeliverableBound,
+                        ...(judged ? { independent: judged !== "needs-copy" && judged.independent } : {}),
                         filtered,
                         status: parsed.passed === true && receipt.success ? "PASSED" : "FAILED",
                         ...(parsed.passed === true ? {} : { failedCheck: failedCheckFrom(`${receipt.output}\n${receipt.error ?? ""}`) }),
@@ -3905,6 +3975,16 @@ Always explain your reasoning before or alongside your tool calls.`;
                         outcome: "REGRESSION_FREE",
                         reason: "REGRESSION_FREE",
                         detail: "Passing test run did not cover the modified deliverables.",
+                    }));
+                }
+                if (evidence.source !== "configured" && evidence.independent !== true) {
+                    return deepFreezeTurn(assertTurnResultInvariants({
+                        ...base,
+                        ...contextQualifier,
+                        execution: "COMPLETED",
+                        outcome: "REGRESSION_FREE",
+                        reason: "REGRESSION_FREE",
+                        detail: `Tests pass, but ${evidence.independenceDetail ?? "nothing independent of Nexus shows the change"}.`,
                     }));
                 }
                 return deepFreezeTurn(assertTurnResultInvariants({ ...base, ...contextQualifier, execution: "COMPLETED", outcome: "VERIFIED" }));

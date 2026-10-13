@@ -2157,6 +2157,16 @@ pub fn outcome_for(turn: &Value) -> Outcome {
             _ => ("Done · verified".to_string(), verifier.map(|c| format!("{c} passed")), None),
         },
         // The suite passed but nothing shows it tested the change: nothing else broke, the change itself is unproven.
+        // The tests cover the change, but only tests Nexus wrote (or that passed before it too) check it.
+        ("COMPLETED", "REGRESSION_FREE", _) if turn["verification"]["independent"] == Value::Bool(false) => (
+            "Done · tests pass (own tests only)".to_string(),
+            Some(format!(
+                "{} passed, but {}.",
+                verifier.unwrap_or_else(|| "The test command".into()),
+                turn["verification"]["independenceDetail"].as_str().unwrap_or("nothing independent of Nexus shows the change")
+            )),
+            text("check the change against what you asked for (/diff), or configure a verifier you trust"),
+        ),
         ("COMPLETED", "REGRESSION_FREE", _) => (
             "Done · tests passed, change not covered".to_string(),
             Some(format!("{} passed, but none of the tests it ran covers the changed files.", verifier.unwrap_or_else(|| "The test command".into()))),
@@ -2261,6 +2271,14 @@ mod tests {
         let plain: Value = serde_json::from_str(r#"{"execution":"COMPLETED","outcome":"VERIFIED","verification":{"status":"PASSED","command":"npm test"}}"#).unwrap();
         assert_eq!(outcome_for(&plain).title, "Done · verified");
         assert!(matches!(tone_for(&plain), Tone::Good));
+    }
+
+    #[test]
+    fn a_change_checked_only_by_its_own_tests_says_so() {
+        let turn: Value = serde_json::from_str(r#"{"execution":"COMPLETED","outcome":"REGRESSION_FREE","reason":"REGRESSION_FREE","verification":{"status":"PASSED","command":"npm test","independent":false,"independenceDetail":"the existing tests passed before the change too; the new behaviour is checked only by tests Nexus wrote"}}"#).unwrap();
+        let outcome = outcome_for(&turn);
+        assert_eq!(outcome.title, "Done · tests pass (own tests only)");
+        assert_eq!(outcome.cause.as_deref(), Some("npm test passed, but the existing tests passed before the change too; the new behaviour is checked only by tests Nexus wrote."));
     }
 
     #[test]
