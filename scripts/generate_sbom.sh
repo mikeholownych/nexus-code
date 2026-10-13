@@ -40,7 +40,7 @@ components = []
 components.append({
     "type": "application",
     "name": cli_pkg.get("name", "local-code-harness"),
-    "version": cli_pkg.get("version", "1.2.1"),
+    "version": cli_pkg.get("version", "0.0.0"),
     "description": cli_pkg.get("description", ""),
     "licenses": [{"license": {"id": cli_pkg.get("license", "MIT")}}],
     "purl": f"pkg:npm/{cli_pkg.get('name')}@{cli_pkg.get('version')}"
@@ -104,13 +104,13 @@ sbom = {
             {
                 "vendor": "Nexus",
                 "name": "nexus-sbom-generator",
-                "version": "1.2.1"
+                "version": cli_pkg.get("version", "0.0.0")
             }
         ],
         "component": {
             "type": "application",
             "name": "nexus-code",
-            "version": "1.2.1",
+            "version": cli_pkg.get("version", "0.0.0"),
             "properties": [
                 {"name": "git:commit", "value": git_commit},
                 {"name": "architecture", "value": "x86_64-linux"}

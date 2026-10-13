@@ -21,11 +21,11 @@ The current binary release target is **Linux x86-64 on glibc 2.35 or newer**, bu
 Create and inspect a candidate locally:
 
 ```sh
-bash scripts/package-linux.sh v1.2.1 ./release
-bash scripts/smoke-package.sh ./release/nexus-linux-x86_64-v1.2.1.tar.gz
+bash scripts/package-linux.sh v0.1.0-alpha.1 ./release
+bash scripts/smoke-package.sh ./release/nexus-linux-x86_64-v0.1.0-alpha.1.tar.gz
 ```
 
-CI builds and uploads the same package on `main` and pull requests. A `vX.Y.Z` tag matching `package.json` triggers the controlled GitHub Release workflow. Do not create the tag until the candidate package and notes are accepted. Releases contain the versioned archive and `SHA256SUMS`.
+CI builds and uploads the same package on `main` and pull requests. A SemVer tag such as `v0.1.0-alpha.1` matching `package.json` triggers the controlled GitHub Release workflow; prerelease tags are marked prereleases. Do not create the tag until the candidate package and notes are accepted. Releases contain the versioned archive and `SHA256SUMS`.
 
 The installer uses these stable URLs:
 

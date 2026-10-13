@@ -27,7 +27,7 @@ run_installer() {
 run_installer
 "$TMP/prefix/bin/nexus" --version | grep -F "${VERSION#v}" >/dev/null
 run_installer
-UPGRADE_VERSION=v1.2.2
+UPGRADE_VERSION=v0.1.0-alpha.2
 mkdir -p "$TMP/release/download/$UPGRADE_VERSION" "$TMP/upgrade-unpack"
 tar -xzf "$ARCHIVE" -C "$TMP/upgrade-unpack"
 printf '%s\n' "$UPGRADE_VERSION" > "$TMP/upgrade-unpack/nexus/VERSION"

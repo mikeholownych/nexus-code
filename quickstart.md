@@ -16,10 +16,10 @@ The installer downloads the matching versioned client archive and `SHA256SUMS` f
 export PATH="$HOME/.local/bin:$PATH"
 ```
 
-The command above follows the latest stable release. To install a specific published version, pipe the same installer with `NEXUS_VERSION` set for the shell:
+The command above follows the latest stable release and reports clearly when no stable release has been published. To install a specific published version, including a prerelease, pipe the same installer with `NEXUS_VERSION` set for the shell:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/mikeholownych/nexus-code/main/install.sh | NEXUS_VERSION=v1.2.1 sh
+curl -fsSL https://raw.githubusercontent.com/mikeholownych/nexus-code/main/install.sh | NEXUS_VERSION=v0.1.0-alpha.1 sh
 ```
 
 For inspect-before-running, download [install.sh](https://raw.githubusercontent.com/mikeholownych/nexus-code/main/install.sh), read it, then run `sh install.sh`.
