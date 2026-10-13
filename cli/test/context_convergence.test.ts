@@ -164,7 +164,7 @@ describe("A+B: compaction keeps the investigation moving instead of re-reading",
     await isolated(async (repo) => {
       const gw = await gateway(reviewer());
       const admissions: string[] = [];
-      const agent = quiet(new AutonomousAgent(cfg(gw, repo, { authoritativeVerifierCommand: "grep -q 'a.txt=copper-falcon, b.txt=silent-orchard, c.txt=amber-lattice, d.txt=north-quarry' review.md" })));
+      const agent = quiet(new AutonomousAgent(cfg(gw, repo, { authoritativeVerifierCommand: "grep -q 'a.txt=copper-falcon, b.txt=silent-orchard, c.txt=amber-lattice, d.txt=north-quarry' review.md && echo '✔ review.md lists every value' && echo 'ℹ tests 1'" })));
       try {
         const turn = await muted(() => agent.runTurn(OBJECTIVE), admissions);
         const reads = (file: string) => gw.issued.filter((c) => c.name === "read_file" && (c.args as { path: string }).path === file).length;
@@ -1059,7 +1059,7 @@ describe("E: an operator-configured verifier gates every completion", () => {
   test("a completion with no changes is refused with the verifier's output; the model continues and finishes verified", async () => {
     await isolated(async (repo) => {
       const gw = await gateway((r) => (r.n === 1 ? { tools: [done("nothing to change")] } : r.n === 2 ? { tools: [write("out.md", "ready\n")] } : { tools: [done("wrote out.md")] }));
-      const agent = quiet(new AutonomousAgent(cfg(gw, repo, { authoritativeVerifierCommand: "grep -q ready out.md && echo VERIFIER-OK || { echo VERIFIER-SAYS-out.md-missing; exit 1; }" })));
+      const agent = quiet(new AutonomousAgent(cfg(gw, repo, { authoritativeVerifierCommand: "grep -q ready out.md && { echo VERIFIER-OK out.md; echo 'ℹ tests 1'; } || { echo VERIFIER-SAYS-out.md-missing; exit 1; }" })));
       try {
         const turn = await muted(() => agent.runTurn(TASK));
         const refusal = gw.requests[1].body.messages.filter((m: any) => m.role === "tool").at(-1);
@@ -1201,7 +1201,7 @@ describe("E: an operator-configured verifier gates every completion", () => {
 describe("F: an empty reply is not an answer", () => {
   const write = (file: string, content: string): Call => ({ name: "write_file", args: { path: file, content } });
   const TASK = "Write out.md containing the word ready, then call task_completed.";
-  const VERIFIER = "grep -q ready out.md";
+  const VERIFIER = "grep -q ready out.md && echo '✔ out.md is ready' && echo 'ℹ tests 1'";
 
   // An empty stream is already re-requested once without streaming; an empty reply is one whose re-request is empty too.
   test("a reply with no text and no tool call does not end the task: the model is told so and continues to a verified finish", async () => {

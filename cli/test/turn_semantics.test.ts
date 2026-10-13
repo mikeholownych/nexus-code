@@ -252,6 +252,15 @@ describe("A-3 verifier-backed completion", () => {
     });
   });
 
+  test("an operator-configured verifier follows the same evidence rule: a run showing no test of the change is REGRESSION_FREE", async () => {
+    await withTurn(falseVerifierScript, {}, async (_gw, _repo, agent) => {
+      (agent as any).config.authoritativeVerifierCommand = "true";
+      const r = await quiet(() => agent.runTurn("implement"));
+      assert.equal(r.outcome, "REGRESSION_FREE");
+      assert.equal(r.verification?.source, "configured");
+    });
+  });
+
   test("the same trajectory with a passing verifier is VERIFIED only through the verifier run", async () => {
     await withTurn(falseVerifierScript, { Makefile: covering("x.txt") }, async (_gw, _repo, agent) => {
       const r = await quiet(() => agent.runTurn("implement"));

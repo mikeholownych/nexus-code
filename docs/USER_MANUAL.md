@@ -75,7 +75,8 @@ Press `<TAB>` at any prompt to autocomplete slash commands and directory paths.
 - **Outcomes.** A turn ends with one line in words — `Done`, `Done · verified`, `Done · tests passed, change not
   covered`, `Done · not verified`, `Verification failed`, `Requirements still open` (with the open items),
   `Cancelled`, `Stopped at …` (a budget), `Model request failed`, `Context is full` — the cause, and the next action;
-  `v` opens the receipt with the raw fields. **Verified** means the passing test run is evidence about the change: it
+  `v` opens the receipt with the raw fields. **Verified** means the passing test run — whether you configured the
+  verifier or Nexus found it — is evidence about the change: it
   ran tests (its output reports at least one), ran the whole suite (no name filter), and covers the changed files — a
   changed file is a test, the run names a changed file, a test imports a changed module, or the change has inline
   tests the run executes (Rust `#[cfg(test)]` under `cargo test`, Go `_test.go` files under `go test`). A passing run

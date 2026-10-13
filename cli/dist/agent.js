@@ -2490,9 +2490,9 @@ Always explain your reasoning before or alongside your tool calls.`;
                         const deadlineSecs = this.config.verifierTimeoutSecs ?? DEFAULT_VERIFIER_TIMEOUT_SECS;
                         this.activity("verifying", { tool: verifierCommand });
                         const testRes = await runTestSuiteWithExecutor(this.config.workspace, (command) => this.bridge.executeTool("run_command", { command, timeout_secs: deadlineSecs }), verifierCommand);
-                        // The operator's own verifier is their acceptance check for the change; a verifier Nexus discovered must
-                        // show that it ran tests covering the changed files.
-                        const isDeliverableBound = source === "configured" || isVerifierDeliverableBound(this.config.workspace, Array.from(this.modifiedFiles), verifierCommand, testRes.rawOutput || "");
+                        // Configured or discovered, a verifier is evidence about the change only when its run shows tests that
+                        // executed and cover the changed files.
+                        const isDeliverableBound = isVerifierDeliverableBound(this.config.workspace, Array.from(this.modifiedFiles), verifierCommand, testRes.rawOutput || "");
                         const evidence = {
                             status: testRes.success ? "PASSED" : testRes.timedOut ? "TIMED_OUT" : "FAILED",
                             command: verifierCommand,

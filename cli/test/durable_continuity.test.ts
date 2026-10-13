@@ -232,7 +232,7 @@ describe("V2: unverified changes survive retries, step limits, restarts and resu
     await withHome(async () => {
       const gw = await gateway((b) => (lastUser(b).includes("Review impl.txt") ? done("reviewed") : resumed(b) ? done("finished") : toolResults(b) === 0 ? write() : read("impl.txt")));
       const repo = makeRepo();
-      const rig = operationRig(cfg(gw, repo, { maxSteps: 3, authoritativeVerifierCommand: "test -f impl.txt" }), gw);
+      const rig = operationRig(cfg(gw, repo, { maxSteps: 3, authoritativeVerifierCommand: 'test -f impl.txt && echo "✔ impl.txt exists" && echo "ℹ tests 1"' }), gw);
       try {
         let op = await rig.start([{ id: "implement", prompt: "Write impl.txt." }, { id: "review", prompt: "Review impl.txt.", dependsOn: ["implement"] }]);
         const more = decisionOf(op, "implement").options.find((o) => o.label === "continue with more steps")!;
