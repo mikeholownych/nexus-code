@@ -23,6 +23,7 @@ jobs:
       - run: npm ci --prefix cli
       - run: npm --prefix cli run build
       - run: cargo test --locked --manifest-path core/Cargo.toml
+      - run: cargo build --locked --release --manifest-path core/Cargo.toml --bin harness-core --bin nexus-tui
       - run: npm --prefix cli test
       - run: bash scripts/security_gates.sh
       - run: bash scripts/package-linux.sh "v$(node -p 'require("./package.json").version')" "$RUNNER_TEMP/dist"
