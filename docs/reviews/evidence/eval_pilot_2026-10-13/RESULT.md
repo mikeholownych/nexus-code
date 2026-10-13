@@ -52,3 +52,39 @@ T2 only, Codex excluded — no `/v1/responses`, Aider one `--message` exchange).
 Aider failed every t2-refactor-tax and t2-feature-slugify run (its own suite broken in 9/10); OpenCode and Goose passed
 the refactor 5/5. t2-feature-slugify was the hardest task for every agent (Nexus 3/5, OpenCode 1/5, Aider 0/5, Goose
 0/5).
+
+## Rerun after fixes (Nexus ed17e99, 14:42–15:20 UTC)
+
+Fixes: VERIFIED needs independent evidence — fail-before/pass-after on unmodified pre-change tests, or a configured
+verifier (44786a4); unittest discovery (44786a4); prompt changes from a measured speed profile (ed17e99). Nexus and then
+Goose ran **serially, alone on the gateway** (the pilot ran all four concurrently on a gateway that serves one request
+at a time, which cost Nexus ~9.5 s per step). `SCORES_rerun_ed17e99.md`; manifests `manifest-rerun-nexus-ed17e99.json`,
+`manifest-serial-goose.json`. No infrastructure failures, no contaminated runs.
+
+**False VERIFIED: 0/30** (pilot: 2). Correct: 26/30 (87 %, CI 70–95; pilot 27/30). Outcomes:
+
+| Task | Outcome (×5) | Correct |
+|---|---|---|
+| t2-bugfix-csv, t2-bugfix-duration | VERIFIED (failing test before, passing after) | 10/10 |
+| t2-debug-logs, t2-feature-inventory | REGRESSION_FREE (existing tests passed before; new behaviour checked only by Nexus's tests) | 10/10 |
+| t2-feature-slugify | REGRESSION_FREE | 2/5 — the 3 wrong answers are no longer claimed VERIFIED |
+| t2-refactor-tax | REGRESSION_FREE | 4/5 |
+
+Speed (median wall s; the pilot column was contended, so only the step and token changes are attributable to ed17e99):
+
+| Task | Nexus pilot | Nexus ed17e99 alone | Goose alone | Nexus steps | Nexus tokens |
+|---|---|---|---|---|---|
+| csv | 34 | 25 | 21 | 6→6 | 46K→45K |
+| duration | 28 | 17 | 15 | 5→5 | 34K→34K |
+| debug-logs | 63 | 43 | 27 | 8→9 | 63K→73K |
+| inventory | 53 | 29 | 30 | 9→6 | 73K→45K |
+| slugify | 137 | 75 | 48 | 17→11 | 189K→107K |
+| refactor-tax | 63 | 44 | 33 | 16→12 | 128K→98K |
+
+Total for 30 runs alone: Nexus 22.1 min, Goose 14.9 min (Goose correct 24/30). Nexus is ~1.5× Goose's wall time,
+from ~2× in the pilot; steps fell 30–35 % and tokens 25–43 % on the multi-step tasks. Remaining known costs: ~5.2K
+tokens of tool schemas on every request (pruning not yet done), the pre-change verifier run the new VERIFIED rule
+adds (one suite run per change), and more steps than Goose on debug-logs.
+
+These six tasks were used to find and fix the issues, so this rerun confirms the fixes; it does not qualify Nexus.
+Qualification needs a fresh task set.
