@@ -54,6 +54,12 @@ def main():
     s.pump(0.8)
     s.send("\x01", settle=0.7)
     s.send("\r", settle=0.6)
+    # Round 4: the same with thinking pauses: → → (0.6 s) Enter (0.6 s) Enter.
+    s.pump(0.8)
+    s.send("\x1b[C", settle=0.1)
+    s.send("\x1b[C", settle=0.6)
+    s.send("\r", settle=0.6)
+    s.send("\r", settle=0.6)
     result["after_editing_keys"] = {"decisions": decisions(commands), "panel_open": has(s.color.lines(), "Approval needed")}
     s.pump(0.8)
     s.send("\x1b", settle=0.6)

@@ -616,7 +616,7 @@ exit 0"#
             .state
             .on_key_at(
                 KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
-                past_grace + crate::live_state::APPROVAL_CHOICE_SHOWN,
+                past_grace + crate::live_state::APPROVAL_TYPING_RECENT,
             )
             .unwrap();
         assert!(app.handle(approve));
