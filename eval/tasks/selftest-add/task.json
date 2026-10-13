@@ -1,0 +1,11 @@
+{
+  "id": "selftest-add",
+  "tier": "T1",
+  "description": "Harness self-test (scripted model): an unrelated green suite must not make a wrong deliverable VERIFIED.",
+  "fixture": "repo",
+  "objective": "1. Add math.js exporting add(a, b) that returns a + b.",
+  "steps": 20,
+  "minutes": 5,
+  "hidden": { "dir": "hidden", "into": "hidden", "command": "node hidden/math.hidden.test.js" },
+  "regression": { "command": "npm test --silent" }
+}

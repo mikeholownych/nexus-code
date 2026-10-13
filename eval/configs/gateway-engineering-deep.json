@@ -1,0 +1,11 @@
+{
+  "name": "nexus@gateway/engineering/deep",
+  "agent": "nexus",
+  "endpoint": "REPLACE_WITH_APPLIANCE_GATEWAY_URL/v1",
+  "model": "engineering/deep",
+  "runs": 5,
+  "steps": 300,
+  "minutes": 120,
+  "args": ["--context-limit", "65536"],
+  "env": {}
+}

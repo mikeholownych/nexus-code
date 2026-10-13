@@ -1,0 +1,1 @@
+{ "name": "selftest-add", "version": "1.0.0", "private": true, "scripts": { "test": "node test/other.test.js" } }
