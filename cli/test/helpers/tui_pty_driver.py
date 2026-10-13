@@ -265,7 +265,8 @@ def main():
     }
 
     # 3. The long turn: edits (one failing), then more than 30 steps, continuing without the operator.
-    wait_events(events, "turn.result", 1, 90, s)
+    # Normally ~20 s; generous so a host busy with other work does not fail the scenario (the test allows 240 s).
+    wait_events(events, "turn.result", 1, 180, s)
     s.pump(0.5)
     whole = s.squeezed()
     result["long_turn"] = {
