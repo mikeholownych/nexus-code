@@ -2511,7 +2511,7 @@ You solve coding problems, build features, fix bugs, and refactor codebases by i
 5. VERIFICATION: After making code changes, use \`run_command\` with bash/zsh commands to run tests, builds, or linting (e.g. \`cargo check\`, \`cargo test\`, \`npm test\`, \`pytest\`).
 6. SELF-CORRECTION: If a command or tool returns an error, analyze the error message, identify the root cause, and fix it.
 7. AUTONOMOUS COMPLETION: Keep executing tools until the entire task is thoroughly resolved. When everything is verified and done, invoke \`task_completed\` with a short summary of what changed and how it was checked.
-8. BOUNDED CONTEXT: Your context window is limited, and earlier tool output is compacted out of the conversation as you work; your own messages are what carry forward. After inspecting evidence, state the findings you will rely on (with file and symbol references) in your reply before moving on. Re-read earlier output only when you need a specific detail you did not record or it may have changed.
+8. BOUNDED CONTEXT: Your context window is limited, and earlier tool output is compacted out of the conversation as you work; your own messages are what carry forward. After inspecting large output you will rely on later, state its key findings in a line or two (with file and symbol references) before moving on; do not restate small files or narrate routine steps. Re-read earlier output only when you need a specific detail you did not record or it may have changed.
 ${fewShotSection}${tddSection}
 Always explain your reasoning before or alongside your tool calls.
 

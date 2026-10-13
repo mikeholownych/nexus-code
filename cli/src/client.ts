@@ -219,7 +219,9 @@ function modelIds(body: any): string[] {
 }
 
 /** Optional request parameters a provider may reject; dropping one never changes what the request asks for. */
-const DROPPABLE_PARAMS = new Set(["temperature", "top_p", "max_output_tokens", "stream_options"]);
+const DROPPABLE_PARAMS = new Set(["temperature", "top_p", "max_output_tokens", "max_tokens", "stream_options"]);
+/** Local endpoints may drop only the optional parameters Nexus adds for them, never sampling settings. */
+const LOCAL_DROPPABLE_PARAMS = new Set(["max_tokens", "stream_options"]);
 
 /** The parameter a 400 answer names as unsupported ("Unsupported parameter: temperature", OpenAI `param`). */
 export function unsupportedParameter(message: string): string | undefined {
@@ -455,7 +457,7 @@ export class LocalLlmClient {
     return this.conn.providerId;
   }
 
-  /** Usage the provider reported for the last completed request (undefined on the appliance path or when unreported). */
+  /** Usage the provider or local server reported for the last completed request (undefined when unreported). */
   public getLastUsage(): UsageReport | undefined {
     return this.lastUsageReport;
   }
@@ -518,7 +520,15 @@ export class LocalLlmClient {
 
   /** Records a receipt for a provider-connection request (appliance requests keep their existing records only). */
   private async withReceipt<T>(requestId: string, purpose: string | undefined, run: () => Promise<T>): Promise<T> {
-    if (!this.conn.providerId) return run();
+    if (!this.conn.providerId) {
+      // No receipt, but usage the local server reported (with cached-token counts) replaces the local estimate.
+      this.pending = undefined;
+      this.lastUsageReport = undefined;
+      const result = await run();
+      // Set by run(); read through a function so the narrowing from the assignment above does not apply.
+      this.lastUsageReport = ((): PendingRequest | undefined => this.pending)()?.usage;
+      return result;
+    }
     this.pending = undefined;
     this.reservations = [];
     const pending = (): PendingRequest | undefined => this.pending;
@@ -607,24 +617,24 @@ export class LocalLlmClient {
     this.unsupportedParams = new Set(this.conn.omitParams);
   }
 
-  /** Removes parameters this provider connection does not accept (provider connections only). */
+  /** Removes parameters this connection was found not to accept. */
   private omitUnsupported(body: Record<string, unknown>): void {
-    if (!this.conn.providerId) return;
     for (const p of this.unsupportedParams) delete body[p];
   }
 
   /**
-   * When a provider answers 400 naming an optional parameter as unsupported, the request was not executed: drop that
-   * parameter for this connection and resend once. Bounded by the small set of droppable parameters.
+   * When a provider or local server answers 400 naming an optional parameter as unsupported, the request was not
+   * executed: drop that parameter for this connection and resend once. Bounded by the small set of droppable parameters.
    */
   private async withParameterRetry<T>(run: () => Promise<T>): Promise<T> {
     for (;;) {
       try {
         return await run();
       } catch (err) {
-        if (!this.conn.providerId || !(err instanceof InferenceError) || err.httpStatus !== 400) throw err;
+        if (!(err instanceof InferenceError) || err.httpStatus !== 400) throw err;
         const param = unsupportedParameter(err.message);
-        if (!param || !DROPPABLE_PARAMS.has(param) || this.unsupportedParams.has(param)) throw err;
+        const droppable = this.conn.providerId ? DROPPABLE_PARAMS : LOCAL_DROPPABLE_PARAMS;
+        if (!param || !droppable.has(param) || this.unsupportedParams.has(param)) throw err;
         this.unsupportedParams.add(param);
         console.error(pc.dim(`[nexus] ${this.conn.label} rejected '${param}' for ${this.model}; resending without it.`));
       }
@@ -1125,6 +1135,9 @@ export class LocalLlmClient {
         payload.tools = outboundTools;
         payload.tool_choice = "auto";
       }
+      // Local endpoints: cap a reply at the completion reserve the context budget already assumes, so a runaway
+      // generation cannot run for minutes. (Cloud providers differ on the parameter name and are left to their limits.)
+      if (!this.conn.providerId) payload.max_tokens = this.maxOutputTokens;
       if (this.conn.usage === "openrouter") payload.usage = { include: true };
       if (this.conn.usage === "openrouter" || this.conn.usage === "stream-options") payload.stream_options = { include_usage: true };
       this.omitUnsupported(payload);
@@ -1162,7 +1175,7 @@ export class LocalLlmClient {
       let fullContent = "";
       let finishReason: string | undefined;
       let sawDone = false;
-      if (this.conn.providerId) this.pending = { endpoint: currentEp };
+      this.pending = { endpoint: currentEp };
       const toolCallsMap: Map<number, { id: string; name: string; args: string }> = new Map();
 
       const reader = res.body.getReader();

@@ -732,7 +732,7 @@ export const BASELINE_CAPABILITIES: CanonicalCapability[] = [
       "type": "function",
       "function": {
         "name": "update_plan",
-        "description": "Create or update the structured multi-phase execution plan for the active task. Keeps user and agent aligned on milestones.",
+        "description": "Create or update the task's plan: a short checklist, one item per phase, each a few words.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -743,7 +743,7 @@ export const BASELINE_CAPABILITIES: CanonicalCapability[] = [
                 "properties": {
                   "name": {
                     "type": "string",
-                    "description": "Name or title of this execution phase."
+                    "description": "The item, in a few words."
                   },
                   "status": {
                     "type": "string",
@@ -751,12 +751,7 @@ export const BASELINE_CAPABILITIES: CanonicalCapability[] = [
                       "pending",
                       "in_progress",
                       "completed"
-                    ],
-                    "description": "Current status of the phase."
-                  },
-                  "detail": {
-                    "type": "string",
-                    "description": "Optional details or sub-steps for this phase."
+                    ]
                   }
                 },
                 "required": [
@@ -764,7 +759,7 @@ export const BASELINE_CAPABILITIES: CanonicalCapability[] = [
                   "status"
                 ]
               },
-              "description": "List of plan phases in chronological order."
+              "description": "Checklist items in order."
             }
           },
           "required": [

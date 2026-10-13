@@ -824,7 +824,7 @@ describe("parameters a provider rejects", () => {
     } finally { await m.close(); }
   });
 
-  test("the appliance path is unchanged: no parameter dropping", async () => {
+  test("the appliance path never drops a sampling parameter (only the optional max_tokens / stream_options)", async () => {
     const m = await mock((_s, res) => json(res, 400, { detail: "Unsupported parameter: temperature" }));
     try {
       await rejects(new LocalLlmClient(cfg(undefined, m.url, { apiKey: "local" })).chatCompletion(msgs, []));

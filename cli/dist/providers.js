@@ -107,7 +107,9 @@ export function protocolFor(providerId, model) {
 export function connectionFor(providerId, model = "") {
     const def = providerDefinition(providerId);
     if (!def) {
-        return { label: "endpoint", protocol: "openai-chat", auth: "bearer", staticHeaders: {}, usage: "none", sendTaskClass: true, streamOnly: false, omitParams: [] };
+        // Usage is requested (OpenAI-compatible servers such as llama.cpp, vLLM and the appliance gateway report it, with
+        // cached-token counts); a server that rejects stream_options has it dropped and the request retried.
+        return { label: "endpoint", protocol: "openai-chat", auth: "bearer", staticHeaders: {}, usage: "stream-options", sendTaskClass: true, streamOnly: false, omitParams: [] };
     }
     return {
         providerId: def.id,
