@@ -292,8 +292,10 @@ export class InformationFlowBoundary {
                 !tok.startsWith("[SECRET_REF_") &&
                 !tok.startsWith("[REDACTED:") &&
                 !seenSecrets.has(tok)) {
-                // No dots: file paths and dotted names are not tokens (JWTs have their own pattern above).
-                if (/^[a-zA-Z0-9+/=_-]+$/.test(tok)) {
+                // No dots: file paths and dotted names are not tokens (JWTs have their own pattern above). Nexus's own session
+                // ids (date, time and a short random suffix) are identifiers: about 1 in 70 looked high-entropy, and a redacted
+                // id made the session impossible to save or resume.
+                if (/^[a-zA-Z0-9+/=_-]+$/.test(tok) && !/^session_\d{8}_\d{6}_[a-z0-9]{1,8}$/.test(tok)) {
                     const entropy = calculateShannonEntropy(tok);
                     // Scaled entropy threshold: >= 4.0 for length 20-31, >= 4.5 for length >= 32
                     const threshold = tok.length < 32 ? 4.0 : 4.5;

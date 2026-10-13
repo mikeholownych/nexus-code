@@ -698,3 +698,28 @@ describe("paths are not secrets", () => {
     }
   });
 });
+
+describe("Nexus identifiers are not secrets", () => {
+  test("generated session ids are never classified, while a real high-entropy token still is", async () => {
+    const { SessionManager } = await import("../src/session.js");
+    const generate = SessionManager.prototype.generateSessionId;
+    const boundary = new InformationFlowBoundary();
+    const RealDate = Date;
+    try {
+      // Sessions are created at any time of any day: vary the clock the generator reads.
+      for (let i = 0; i < 5000; i++) {
+        const at = new RealDate(2026, i % 12, 1 + (i % 28), (i * 7) % 24, (i * 13) % 60, (i * 17) % 60);
+        (globalThis as any).Date = class extends RealDate {
+          constructor() {
+            super(at.getTime());
+          }
+        };
+        const id = generate.call({});
+        assert.deepEqual(boundary.classifyText(id), [], id);
+      }
+    } finally {
+      (globalThis as any).Date = RealDate;
+    }
+    assert.ok(boundary.classifyText("token Zx9Qp2Lm7Rt4Vb8Nc1Kd6Hs3Jf5Gw0Ya").length > 0, "a random token is still flagged");
+  });
+});
