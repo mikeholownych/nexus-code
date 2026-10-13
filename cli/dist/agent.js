@@ -23,6 +23,7 @@ import { FlightRecorder } from "./flight.js";
 import { WorktreeManager } from "./worktree.js";
 import { isSandboxAvailable } from "./sandbox.js";
 import { runTestSuiteWithExecutor, discoverVerifier, hasExecutedTests, isVerifierDeliverableBound, isFilteredVerifierCommand } from "./tester.js";
+import { ENABLE_TOOLS_CAPABILITY, TOOL_GROUPS, groupsTriggeredBy, toolGroupOf } from "./core/tool_groups.js";
 import { judgeWithoutCopy, prepareBaselineTestsCopy, snapshotTests } from "./core/independent_check.js";
 /** Tools that edit files directly: the first one of an unverified change triggers the pre-change verifier run. */
 const FILE_EDIT_TOOLS = new Set(["write_file", "edit_file", "patch_file", "delete_file"]);
@@ -570,6 +571,8 @@ export class AutonomousAgent {
      * change (null: none could be taken). Cleared when a covering run settles the change.
      */
     changeBaseline;
+    /** Optional tool groups offered in this conversation (see core/tool_groups). */
+    enabledToolGroups = new Set();
     /** Removals recorded in a recovered conversation; the next (resumed) turn starts with them. */
     carriedRemovedObservations = new Set();
     // Findings the model recorded from inspected output just before compaction removed it, and those observations.
@@ -795,6 +798,7 @@ export class AutonomousAgent {
         }
         this.capabilityRegistry.register(READ_FINDINGS_CAPABILITY);
         this.capabilityRegistry.register(READ_ARCHIVE_CAPABILITY);
+        this.capabilityRegistry.register(ENABLE_TOOLS_CAPABILITY);
         this.setupSpineHandlers();
         this.stateManager = new DurableStateManager({ workspacePaths: [this.primaryWorkspacePathIdentity] });
         if (typeof this.client?.setTaskId === "function")
@@ -1090,9 +1094,22 @@ export class AutonomousAgent {
         this.mcpManager.shutdownAll();
     }
     getEffectiveTools() {
+        const hasSkills = (this.skillManager?.listSkills().length ?? 0) > 0;
+        const offered = HARNESS_TOOLS.filter((tool) => {
+            const name = tool.function.name;
+            if (name === "activate_skill")
+                return hasSkills;
+            const group = toolGroupOf(name);
+            return !group || this.enabledToolGroups.has(group);
+        });
+        const allEnabled = Object.keys(TOOL_GROUPS).every((group) => this.enabledToolGroups.has(group));
         return [
-            ...HARNESS_TOOLS,
-            ...(this.depth === 0 ? [REQUIREMENTS_CAPABILITY.toolDefinition, READ_OBJECTIVE_CAPABILITY.toolDefinition] : []),
+            ...offered,
+            ...(allEnabled ? [] : [ENABLE_TOOLS_CAPABILITY.toolDefinition]),
+            // Only with an objective ledger: without one update_requirements returns nothing and read_objective has nothing to
+            // read, but offered anyway the model spent a step on each (eval debug-logs trace).
+            ...(this.depth === 0 && this.objective ? [READ_OBJECTIVE_CAPABILITY.toolDefinition] : []),
+            ...(this.depth === 0 && this.objective?.requirements.length ? [REQUIREMENTS_CAPABILITY.toolDefinition] : []),
             READ_FINDINGS_CAPABILITY.toolDefinition,
             READ_ARCHIVE_CAPABILITY.toolDefinition,
             ...this.mcpManager.getToolDefinitions(),
@@ -1287,6 +1304,7 @@ export class AutonomousAgent {
     }
     resetConversation() {
         this.changeBaseline = undefined;
+        this.enabledToolGroups = new Set();
         this.stepNoticeStep = 0;
         this.cutResponse = undefined;
         this.objective = undefined;
@@ -2489,19 +2507,21 @@ You solve coding problems, build features, fix bugs, and refactor codebases by i
 1. EXPLORE FIRST: Before editing files, always explore the workspace using \`file_tree\`, \`list_dir\`, \`find_files\`, \`search_code\`, or \`read_file\`. For large files, use \`outline_file\` first to inspect class/function signatures without loading the entire file into context.
 2. HIGH-EFFICIENCY BATCHING: Prefer \`batch_read\` to read multiple files concurrently in a single turn, and \`file_info\` to inspect metadata without loading whole files.
 3. PRECISE EDITS & PATCHES: When modifying existing files, use \`edit_file\` with unique snippets or \`patch_file\` with unified diffs.
-4. PLANNING: Use \`update_plan\` only for tasks spanning several files or phases; update it when a phase is done, alongside other tool calls.
+4. PLANNING: Use \`update_plan\` only for work with three or more distinct phases (not for a fix and its test); update it alongside other tool calls.
 5. VERIFICATION: After making code changes, use \`run_command\` with bash/zsh commands to run tests, builds, or linting (e.g. \`cargo check\`, \`cargo test\`, \`npm test\`, \`pytest\`).
 6. SELF-CORRECTION: If a command or tool returns an error, analyze the error message, identify the root cause, and fix it.
 7. AUTONOMOUS COMPLETION: Keep executing tools until the entire task is thoroughly resolved. When everything is verified and done, invoke \`task_completed\` with a short summary of what changed and how it was checked.
 8. BOUNDED CONTEXT: Your context window is limited, and earlier tool output is compacted out of the conversation as you work; your own messages are what carry forward. After inspecting evidence, state the findings you will rely on (with file and symbol references) in your reply before moving on. Re-read earlier output only when you need a specific detail you did not record or it may have changed.
-9. ACCEPTANCE REQUIREMENTS: When a pinned Objective Ledger lists the operator's requirements, your plan never replaces them. Record progress with \`update_requirements\` (implemented/verified only with evidence; blocked/descoped only with a reason). Steering messages from the operator apply on top of the objective.
 ${fewShotSection}${tddSection}
 Always explain your reasoning before or alongside your tool calls.
 
 ### Shell Environment:
 - Active Shell: ${this.config.shell} (standard GNU/Linux shell environment)
 - Workspace directory: ${this.config.workspace}
-${verifierCommand ? `- Test command (Nexus verifies with it): \`${verifierCommand}\`\n` : ""}${rulesSection}${skillsSection}${knowledgeSection}`;
+${verifierCommand ? `- Test command (Nexus verifies with it): \`${verifierCommand}\`\n` : ""}${this.objective?.requirements.length ? `
+### Acceptance Requirements:
+The pinned Objective Ledger lists the operator's requirements; your plan never replaces them. Record progress with \`update_requirements\` (implemented/verified only with evidence; blocked/descoped only with a reason). Steering messages from the operator apply on top of the objective.
+` : ""}${rulesSection}${skillsSection}${knowledgeSection}`;
     }
     setupSpineHandlers() {
         registerBridgeCapabilities(this.capabilityRegistry, this.bridge);
@@ -2934,6 +2954,15 @@ ${verifierCommand ? `- Test command (Nexus verifies with it): \`${verifierComman
             const result = readObjective(this.objective, args ?? {});
             return result.ok ? { success: true, output: result.text } : { success: false, output: "", error: result.text };
         });
+        this.spine.registerHandler("enable_tools", async (args) => {
+            const asked = Array.isArray(args?.groups) ? args.groups : [];
+            const known = asked.filter((g) => typeof g === "string" && g in TOOL_GROUPS);
+            if (!known.length)
+                return { success: false, output: "", error: `enable_tools: name one or more of: ${Object.keys(TOOL_GROUPS).join(", ")}.` };
+            for (const group of known)
+                this.enabledToolGroups.add(group);
+            return { success: true, output: `Enabled ${known.join(", ")}: ${known.flatMap((g) => TOOL_GROUPS[g].tools).join(", ")} available from your next step.` };
+        });
         this.spine.registerHandler("read_archive", async (args) => {
             const result = readArchive(this.archiveForReading, args ?? {});
             return result.ok ? { success: true, output: result.text } : { success: false, output: "", error: result.text };
@@ -3126,6 +3155,10 @@ ${verifierCommand ? `- Test command (Nexus verifies with it): \`${verifierComman
         }
         if (FILE_EDIT_TOOLS.has(toolName) && this.depth === 0)
             await this.captureChangeBaseline();
+        // A tool of a group not offered yet still runs (the model may know it from earlier); offer its group from now on.
+        const calledGroup = toolGroupOf(toolName);
+        if (calledGroup)
+            this.enabledToolGroups.add(calledGroup);
         const receipt = await this.spine.execute({
             invocationId: call.id,
             taskId: effectiveTaskId,
@@ -3315,6 +3348,8 @@ ${verifierCommand ? `- Test command (Nexus verifies with it): \`${verifierComman
             throw new Error("A turn is already active; wait for it to finish or cancel it.");
         await this.initExtensibility();
         const promptText = typeof taskPrompt === "string" ? taskPrompt : "[Multi-modal Vision Input]";
+        for (const group of groupsTriggeredBy(promptText))
+            this.enabledToolGroups.add(group);
         await this.pluginManager.notifyTurnStart(promptText, this.config.workspace);
         const turn = { controller: new AbortController(), phase: "idle", step: 0, onConfirm };
         this.activeTurn = turn;

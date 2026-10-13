@@ -27,6 +27,7 @@ import { AgentWorkUnitExecutor, driveOperation, OperationStore } from "../src/co
 import type { ResourceDescriptor } from "../src/core/resources.js";
 import { DurableStateManager } from "../src/core/state.js";
 import { summarizeTurn, turnSucceeded } from "../src/core/turn.js";
+import { TOOL_GROUPS } from "../src/core/tool_groups.js";
 import type { HarnessConfig } from "../src/types.js";
 
 type Call = { name: string; args: unknown };
@@ -117,6 +118,9 @@ async function isolated<T>(fn: (repo: string) => Promise<T>): Promise<T> {
 
 function quiet(agent: AutonomousAgent): AutonomousAgent {
   (agent as any).ui = new Proxy({}, { get: () => () => {} });
+  // These scenarios are sized to the full tool list's share of the context budget; offering every optional tool group
+  // keeps that share as designed (which tools are offered is covered by tool_groups.test.ts).
+  for (const group of Object.keys(TOOL_GROUPS)) (agent as any).enabledToolGroups.add(group);
   return agent;
 }
 
@@ -303,7 +307,6 @@ describe("C: compaction between a mutation and completion", () => {
       const admissions: string[] = [];
       const agent = quiet(new AutonomousAgent(cfg(gw, repo)));
       try {
-        const toolsBefore = JSON.stringify((agent as any).getEffectiveTools());
         const turn = await muted(() => agent.runTurn("Write impl.txt, review a.txt, b.txt and c.txt, then call task_completed."), admissions);
         assert.ok(admissions.some((l) => l.includes("state=auto_compacted")), admissions.join("\n"));
         assert.notEqual(turn.outcome, "NOT_REQUIRED");
@@ -311,7 +314,8 @@ describe("C: compaction between a mutation and completion", () => {
         assert.equal(turn.reason, "NO_APPLICABLE_VERIFIER");
         assert.equal(turnSucceeded(turn), false);
         assert.equal(agent.hasUnverifiedChanges(), true);
-        assert.equal(JSON.stringify((agent as any).getEffectiveTools()), toolsBefore, "compaction grants no tools");
+        // Within the turn (the objective, which offers read_objective, exists from its first request).
+        assert.equal(JSON.stringify(gw.requests.at(-1)!.body.tools), JSON.stringify(gw.requests[0].body.tools), "compaction grants no tools");
       } finally {
         agent.shutdown();
         await gw.close();

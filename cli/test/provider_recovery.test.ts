@@ -148,7 +148,8 @@ describe("recovery controller", () => {
     assert.equal(await c.run("rid-0", h), "done");
     assert.equal(h.submitted.length, 2, "no resubmission while the provider is still down");
     assert.equal(h.probes.length, 5);
-    assert.deepEqual(clock.sleeps, [1000, 2000, 4000, 8000, 16000].map((x) => x * 0.75));
+    // Doubling from 1 s, capped at the policy's maximum wait (15 s), with the fixed half of the jitter.
+    assert.deepEqual(clock.sleeps, [1000, 2000, 4000, 8000, 15000].map((x) => x * 0.75));
     assert.equal(c.record?.state, "RESUMED");
     assert.equal(c.record?.waitedMs, clock.sleeps.reduce((a, b) => a + b, 0));
     assert.deepEqual(states.map((s) => s.state).filter((s, i, a) => s !== a[i - 1]).slice(0, 2), ["WAITING", "PROBING"]);
@@ -161,8 +162,9 @@ describe("recovery controller", () => {
     const h = hooks(async (n) => { if (n === 1) throw refused(); return "done"; }, () => up);
     const c = new ProviderRecoveryController(policy(), clock, 1);
     assert.equal(await c.run("rid-0", h), "done");
-    assert.ok(clock.elapsed() >= 390_000 && clock.elapsed() < 390_000 + 60_000);
-    assert.ok(clock.sleeps.length < 20, `bounded number of waits: ${clock.sleeps.length}`);
+    // Resumes within one maximum wait of the provider's return; waits are bounded by outage / (capped wait, half jittered).
+    assert.ok(clock.elapsed() >= 390_000 && clock.elapsed() < 390_000 + DEFAULT_RECOVERY_POLICY.maxDelayMs);
+    assert.ok(clock.sleeps.length < 390_000 / (DEFAULT_RECOVERY_POLICY.maxDelayMs * 0.5) + 6, `bounded number of waits: ${clock.sleeps.length}`);
   });
 
   test("cancellation while waiting stops immediately and is reported as CANCELLED (4)", async () => {
@@ -200,8 +202,8 @@ describe("recovery controller", () => {
     const clock2 = fakeClock();
     const h2 = hooks(async () => { throw refused(); }, () => false);
     await assert.rejects(() => new ProviderRecoveryController(policy({ deadlineMs: 600_000 }), clock2, 1).run("rid-0", h2));
-    assert.ok(clock2.sleeps.length < 25, `exponential spacing bounds attempts: ${clock2.sleeps.length}`);
-    assert.ok(clock2.sleeps.slice(-3).every((ms) => ms >= 30_000), "late waits are near the cap");
+    assert.ok(clock2.sleeps.length < 600_000 / (DEFAULT_RECOVERY_POLICY.maxDelayMs * 0.5) + 6, `exponential spacing bounds attempts: ${clock2.sleeps.length}`);
+    assert.ok(clock2.sleeps.slice(-3).every((ms) => ms >= DEFAULT_RECOVERY_POLICY.maxDelayMs * 0.5), "late waits are near the cap");
   });
 
   test("429 with Retry-After waits the advertised time, then resubmits without probing (8)", async () => {
@@ -366,4 +368,10 @@ describe("client: failover and empty-stream re-request under ambiguity", () => {
       assert.equal(gw.requests.length, 0, "a probe never submits the operation");
     } finally { await gw.close(); }
   });
+});
+
+test("the default wait between probes is capped at 15 s, so recovery resumes soon after the provider is back", async () => {
+  const { DEFAULT_RECOVERY_POLICY, backoffDelayMs } = await import("../src/core/provider_recovery.js");
+  assert.equal(DEFAULT_RECOVERY_POLICY.maxDelayMs, 15_000);
+  for (let n = 1; n <= 40; n++) assert.ok(backoffDelayMs(n, DEFAULT_RECOVERY_POLICY, () => 1) <= 15_000);
 });

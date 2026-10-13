@@ -129,7 +129,9 @@ export function classifyTransportFailure(chain, phase, timedOut) {
 export const DEFAULT_RECOVERY_POLICY = {
     deadlineMs: 20 * 60_000,
     baseDelayMs: 1_000,
-    maxDelayMs: 60_000,
+    // Probing is a cheap model-list request, so the wait between probes stays short: with a 60 s cap a run resumed up to
+    // a minute after the provider came back (eval pilot 2026-10-13). An advertised Retry-After still wins.
+    maxDelayMs: 15_000,
     jitterRatio: 0.5,
     minDelayMs: 500,
     probeTimeoutMs: 5_000,
