@@ -189,7 +189,7 @@ function assertSurface(r: any, events: any[], commands: any[], shows: (screen: s
   assert.ok(shows(screens["07-tools-final"].concat(all), "line one of the note"), "pasted text shown");
   // Approval: target and decisions with focus; buffered keys did not decide.
   const approval = screens["10-approval"];
-  assert.ok(shows(approval, "Approval needed") && shows(approval, "Proposed: create config.json") && shows(approval, "y Approve"), approval.join("\n"));
+  assert.ok(shows(approval, "Approval needed") && shows(approval, "Proposed: create config.json") && shows(approval, "Approve all later actions") && !shows(approval, "y Approve"), approval.join("\n"));
   assert.ok(r.approval_survived_buffered_keys);
   assert.ok(r.letters_disarmed_hint, "keys typed just before the panel disarm its letters, and the panel says so");
   // Requirements: listed once, and the repeated replies are explained.

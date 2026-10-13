@@ -46,6 +46,16 @@ def main():
         "after_typing": {"decisions": decisions(commands), "panel_open": has(s.color.lines(), "Approval needed")},
         "hint": next((l for l in s.color.lines() if "typing ignored" in l), ""),
     }
+    # Composer editing habits after a pause (re-acceptance round 3): cursor keys then Enter, Ctrl+A then Enter.
+    s.pump(0.8)
+    s.send("\x1b[C", settle=0.08)
+    s.send("\x1b[C", settle=0.08)
+    s.send("\r", settle=0.6)
+    s.pump(0.8)
+    s.send("\x01", settle=0.7)
+    s.send("\r", settle=0.6)
+    result["after_editing_keys"] = {"decisions": decisions(commands), "panel_open": has(s.color.lines(), "Approval needed")}
+    s.pump(0.8)
     s.send("\x1b", settle=0.6)
     result["after_esc"] = decisions(commands)
     wait_events(events, "turn.result", 1, 30, s)

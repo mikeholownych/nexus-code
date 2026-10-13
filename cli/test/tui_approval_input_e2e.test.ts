@@ -128,6 +128,7 @@ ptyTest("typing with thinking pauses and a final Enter across the approval panel
     assert.ok(r.approval_arrived && r.panel_seen_while_typing, JSON.stringify(r));
     assert.deepEqual(r.after_typing, { decisions: [], panel_open: true }, "typing with pauses decided nothing");
     assert.match(r.hint, /typing ignored/, "the panel says letters are not answers now");
+    assert.deepEqual(r.after_editing_keys, { decisions: [], panel_open: true }, "→ → Enter and Ctrl+A Enter decided nothing");
     assert.deepEqual(r.after_esc, ["deny"], "a deliberate Esc denies");
     const events = fs.readFileSync(plan.env.NEXUS_RECORD_EVENTS, "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l));
     assert.ok(events.filter((e) => e.type === "session.state").every((e) => e.mode === "review"), "review mode was never switched off");

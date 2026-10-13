@@ -608,13 +608,15 @@ exit 0"#
         let Some(Overlay::Approval(approval)) = &app.state.overlay else {
             unreachable!("pump_until waited for the approval modal");
         };
-        // After the display grace and a pause in typing (the prompt was typed just before).
+        // The `y` pressed before the panel was drawn went into it: its letters are not answers. After the display grace
+        // and a pause, → chooses Approve and Enter, once the choice has been on screen a moment, takes it.
         let past_grace = approval.opened + APPROVAL_GRACE + crate::live_state::APPROVAL_QUIET;
+        assert_eq!(app.state.on_key_at(KeyEvent::new(KeyCode::Right, KeyModifiers::NONE), past_grace), None);
         let approve = app
             .state
             .on_key_at(
-                KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE),
-                past_grace,
+                KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+                past_grace + crate::live_state::APPROVAL_CHOICE_SHOWN,
             )
             .unwrap();
         assert!(app.handle(approve));

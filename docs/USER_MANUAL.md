@@ -89,15 +89,16 @@ Press `<TAB>` at any prompt to autocomplete slash commands and directory paths.
 - **Composer.** An empty composer says what Enter does (send, or steer while the agent works); a draft taller than
   six rows shows `line n of m`. Drafts are kept while panels are open and across a sidecar crash.
 - **Approvals.** A panel sized to its content states what is proposed and on which target (`Proposed: create
-  config.json · +1 −0`), shows file changes with the diff view, and offers three buttons — Approve (`y`), Approve all
+  config.json · +1 −0`), shows file changes with the diff view, and offers three choices — Approve (`y`), Approve all
   later actions (`a`), Deny (`n`). A decision needs the panel to have been on screen briefly **and** a pause in typing
-  (about half a second, counted from when it appeared or your last key, whichever is later). `y`, `n` and `a` answer
-  it only if you were not typing when it appeared and have typed nothing into it since; otherwise the panel says
-  `typing ignored` and a decision is ←/→ to choose, then Enter right after (Esc denies). Nothing is focused at first,
-  so Enter alone decides nothing; `a` only selects "approve all later actions", Enter confirms it. Bursts and pastes
-  never answer it. The panel is answerable only while its change is visible — on a window too small to show it, it
-  asks you to enlarge the terminal, and timing starts again when it is drawn. An approval that arrives while another
-  panel (help, a diff review, another approval) is open waits behind it; the composer line says so.
+  (about half a second, counted from when it appeared or your last key, whichever is later). `y`, `n` and `a` answer it
+  only if you were not typing or holding a draft when it appeared and have typed nothing into it since; otherwise the
+  panel says `typing ignored`, hides the letters, and a decision is ←/→ to choose, a moment's look, then Enter (Esc
+  denies). Ctrl/Alt chords and Tab never choose. Nothing is chosen at first, so Enter alone decides nothing.
+  **Approve all later actions** always takes Enter twice: the first Enter asks, the second (a moment later) confirms;
+  any other key cancels. Bursts and pastes never answer. The panel is answerable only while its change is visible — on
+  a window too small to show it, it asks you to enlarge the terminal (Esc still denies), and timing starts again when it
+  is drawn. Approvals that arrive while another panel or approval is open wait in order; the composer line says so.
 - **Recovery.** If the agent sidecar stops, the screen names the exit code or signal, keeps the last relevant
   diagnostic lines (progress chatter is dropped) and your draft; `r` starts a new agent, after which `/resume` reloads
   the saved conversation. Resuming (`-r` or `/resume`) shows the earlier conversation under a divider: your prompts,

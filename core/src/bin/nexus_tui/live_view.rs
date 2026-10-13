@@ -524,7 +524,9 @@ fn render_approval(frame: &mut Frame, area: Rect, approval: &Approval, depth: th
         let focused = approval.focus == Some(verdict);
         let style = if focused { Style::default().fg(Color::Black).bg(ACCENT).add_modifier(Modifier::BOLD) } else { Style::default().fg(Color::White).bg(SURFACE) };
         let marker = if focused { "▸" } else { " " };
-        vec![Span::styled(format!("{marker}{hotkey} {label} "), style), Span::raw(" ")]
+        // Letters that are not answers right now are not advertised.
+        let hotkey = if approval.letters { format!("{hotkey} ") } else { String::new() };
+        vec![Span::styled(format!("{marker}{hotkey}{label} "), style), Span::raw(" ")]
     };
     let mut buttons = Vec::new();
     buttons.extend(button("Approve", Verdict::Approved, "y"));
@@ -532,7 +534,8 @@ fn render_approval(frame: &mut Frame, area: Rect, approval: &Approval, depth: th
     buttons.extend(button("Deny", Verdict::Denied, "n"));
     let mut footer = markdown::wrap(buttons, width, Vec::new(), Vec::new());
     let hint = match approval.focus {
-        Some(Verdict::ApprovedForSession) => vec![Span::styled("enter", key), Span::styled(" confirms approving this and every later action", muted)],
+        Some(Verdict::ApprovedForSession) if approval.confirm_all_at.is_some() => vec![Span::styled("enter", key), Span::styled(" again approves this and every later action · any other key cancels", muted)],
+        Some(Verdict::ApprovedForSession) => vec![Span::styled("enter", key), Span::styled(", then ", muted), Span::styled("enter", key), Span::styled(" again, approves this and every later action", muted)],
         Some(_) => vec![Span::styled("enter", key), Span::styled(" confirms  ", muted), Span::styled("←→", key), Span::styled(" choose  ", muted), Span::styled("↑↓", key), Span::styled(" scroll", muted)],
         None if approval.letters => vec![Span::styled("y", key), Span::styled(" or ", muted), Span::styled("n", key), Span::styled(", or ", muted), Span::styled("←→", key), Span::styled(" then ", muted), Span::styled("enter", key), Span::styled(if narrow { "" } else { " · ↑↓ scroll the change" }, muted)],
         // The operator was typing: letters are not answers for this panel.
@@ -3636,8 +3639,8 @@ mod surface_tests {
         let later = later + std::time::Duration::from_secs(5);
         assert_eq!(state.on_key_at(KeyEvent::new(KeyCode::Left, KeyModifiers::NONE), later), None);
         let (rows, _) = screen(&mut state, 100, 20);
-        assert!(rows.join("\n").contains("▸n Deny"), "{rows:#?}");
-        assert_eq!(state.on_key_at(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE), later), Some(Action::Send(Command::Deny { id: "a1".into() })));
+        assert!(rows.join("\n").contains("▸Deny"), "the Enter without a choice was typing: no hotkeys shown now: {rows:#?}");
+        assert_eq!(state.on_key_at(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE), later + crate::live_state::APPROVAL_CHOICE_SHOWN), Some(Action::Send(Command::Deny { id: "a1".into() })));
     }
 
     const WRITE_APPROVAL: &str = r#"{"v":1,"type":"approval.request","id":"a1","turn_id":"t1","tool":"write_file","subject":"config.json","preview":"","review":{"kind":"change","path":"config.json","before":null,"after":"{ \"cache\": true }\n","created":true,"truncated":false}}"#;
@@ -3696,7 +3699,9 @@ mod surface_tests {
         let ms = |n: u64| t0 + std::time::Duration::from_millis(n);
         // The independent review's cases: pauses of 800 ms inside a sentence ending in Enter; a 700 ms-per-key typist;
         // a pause during which the panel appears, then "yes do that".
-        let cases: [(&str, u64, &[(usize, u64)], u64); 3] = [
+        // (text, ms per key, extra pauses before key index, when the panel appears after typing resumes)
+        type Case<'a> = (&'a str, u64, &'a [(usize, u64)], u64);
+        let cases: [Case; 3] = [
             ("please make sure you add tests\r", 120, &[(21, 800), (30, 800)], 1200),
             ("now try again and add tests\r", 700, &[], 2100),
             ("yes do that", 120, &[(0, 300)], 0),
@@ -3731,11 +3736,76 @@ mod surface_tests {
         assert_eq!(state.on_key_at(KeyEvent::new(KeyCode::Right, KeyModifiers::NONE), ms(3000)), None);
         assert_eq!(state.on_key_at(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE), ms(3100)), None);
         assert_eq!(state.on_key_at(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE), ms(3200)), None, "the choice was not made by the key before Enter");
+        // Enter right after a cursor key (editing habit) takes nothing; a choice on screen for a moment does.
         assert_eq!(state.on_key_at(KeyEvent::new(KeyCode::Left, KeyModifiers::NONE), ms(4000)), None);
+        assert_eq!(state.on_key_at(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE), ms(4100)), None, "too soon after the choice");
+        assert_eq!(state.on_key_at(KeyEvent::new(KeyCode::Left, KeyModifiers::NONE), ms(5000)), None);
         assert_eq!(
-            state.on_key_at(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE), ms(4100)),
+            state.on_key_at(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE), ms(5450)),
             Some(Action::Send(Command::Deny { id: "a1".into() })),
-            "← from no choice selects Deny; Enter right after takes it"
+            "← from no choice selects Deny; Enter after it has been shown takes it"
+        );
+        // Tab is completion in the composer, not a choice.
+        feed(&mut state, &[WRITE_APPROVAL]);
+        state.note_approval_shown(ms(10_000));
+        assert_eq!(state.on_key_at(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE), ms(12_000)), None);
+        assert_eq!(state.on_key_at(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE), ms(12_500)), None, "Tab chose nothing");
+    }
+
+    #[test]
+    fn composer_editing_keys_never_approve_all_later_actions() {
+        let t0 = Instant::now();
+        let ms = |n: u64| t0 + std::time::Duration::from_millis(n);
+        let k = |code: KeyCode, modifiers: KeyModifiers| KeyEvent::new(code, modifiers);
+        // Re-acceptance round 3: after a pause, → → Enter, ← ← Enter, Home → → Enter, Ctrl+A Enter, Ctrl+Y, Alt+Y.
+        let sequences: Vec<Vec<(KeyEvent, u64)>> = vec![
+            vec![(k(KeyCode::Right, KeyModifiers::NONE), 0), (k(KeyCode::Right, KeyModifiers::NONE), 80), (k(KeyCode::Enter, KeyModifiers::NONE), 160)],
+            vec![(k(KeyCode::Left, KeyModifiers::NONE), 0), (k(KeyCode::Left, KeyModifiers::NONE), 80), (k(KeyCode::Enter, KeyModifiers::NONE), 900)],
+            vec![(k(KeyCode::Home, KeyModifiers::NONE), 0), (k(KeyCode::Right, KeyModifiers::NONE), 80), (k(KeyCode::Right, KeyModifiers::NONE), 160), (k(KeyCode::Enter, KeyModifiers::NONE), 900)],
+            vec![(k(KeyCode::Char('a'), KeyModifiers::CONTROL), 0), (k(KeyCode::Enter, KeyModifiers::NONE), 700)],
+            vec![(k(KeyCode::Char('y'), KeyModifiers::CONTROL), 0)],
+            vec![(k(KeyCode::Char('y'), KeyModifiers::ALT), 0)],
+            vec![(k(KeyCode::Char('n'), KeyModifiers::CONTROL), 0)],
+        ];
+        for keys in sequences {
+            let mut panel = state(true);
+            feed(&mut panel, &[WRITE_APPROVAL]);
+            panel.note_approval_shown(ms(0));
+            for (key, at) in &keys {
+                let action = panel.on_key_at(*key, ms(3000 + at));
+                assert!(
+                    !matches!(action, Some(Action::Send(Command::Approve { always: true, .. }))) && !matches!(&action, Some(Action::Send(Command::Approve { .. })) if key.modifiers != KeyModifiers::NONE),
+                    "{keys:?} decided {action:?}"
+                );
+                assert!(!matches!(action, Some(Action::Send(_))) || key.modifiers == KeyModifiers::NONE, "a chord decided: {keys:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn a_draft_in_the_composer_disarms_letters_and_a_resize_does_not_rearm_them() {
+        let t0 = Instant::now();
+        let ms = |n: u64| t0 + std::time::Duration::from_millis(n);
+        let mut composing = state(true);
+        composing.composer = "a draft in progress".into();
+        feed(&mut composing, &[WRITE_APPROVAL]);
+        composing.note_approval_shown(ms(10_000));
+        assert_eq!(composing.on_key_at(KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE), ms(12_000)), None, "composing: `y` is text");
+        // Typed into, shrunk and regrown later: still disarmed.
+        let mut typed = state(true);
+        let state = &mut typed;
+        feed(state, &[WRITE_APPROVAL]);
+        state.note_approval_shown(ms(0));
+        state.on_key_at(KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE), ms(100));
+        screen(state, 30, 8);
+        state.note_approval_shown(ms(5_000));
+        assert_eq!(state.on_key_at(KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE), ms(8_000)), None, "typed into once: letters stay off");
+        // Scrolling the change keeps the choice: → ↓ then Enter takes Approve.
+        assert_eq!(state.on_key_at(KeyEvent::new(KeyCode::Right, KeyModifiers::NONE), ms(9_000)), None);
+        assert_eq!(state.on_key_at(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE), ms(9_100)), None);
+        assert_eq!(
+            state.on_key_at(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE), ms(9_600)),
+            Some(Action::Send(Command::Approve { id: "a1".into(), always: false }))
         );
     }
 
@@ -3747,15 +3817,18 @@ mod surface_tests {
         // The terminal shrinks below the minimum: the panel is no longer on screen.
         screen(&mut state, 30, 8);
         let later = Instant::now() + std::time::Duration::from_secs(10);
-        assert_eq!(state.on_key_at(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE), later), None, "not on screen: nothing decides");
-        // A second request while the first is open waits; the first is answered first.
-        feed(&mut state, &[&WRITE_APPROVAL.replace("\"id\":\"a1\"", "\"id\":\"a2\"")]);
+        assert_eq!(state.on_key_at(KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE), later), None, "not on screen: `y` decides nothing");
+        // More requests while the first is open wait in order; the first is answered first.
+        feed(&mut state, &[&WRITE_APPROVAL.replace("\"id\":\"a1\"", "\"id\":\"a2\""), &WRITE_APPROVAL.replace("\"id\":\"a1\"", "\"id\":\"a3\"")]);
         assert!(matches!(&state.overlay, Some(Overlay::Approval(a)) if a.id == "a1"));
         assert!(state.approval_waiting());
-        screen(&mut state, 100, 24);
-        let later = Instant::now() + std::time::Duration::from_secs(20);
+        // On a terminal too small to draw it, Esc is the way out (it denies, the safe direction).
         assert_eq!(state.on_key_at(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE), later), Some(Action::Send(Command::Deny { id: "a1".into() })));
         assert!(matches!(&state.overlay, Some(Overlay::Approval(a)) if a.id == "a2" && !a.shown));
+        screen(&mut state, 100, 24);
+        let later = Instant::now() + std::time::Duration::from_secs(20);
+        assert_eq!(state.on_key_at(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE), later), Some(Action::Send(Command::Deny { id: "a2".into() })));
+        assert!(matches!(&state.overlay, Some(Overlay::Approval(a)) if a.id == "a3"), "the third waited too, not replaced");
     }
 
     #[test]
@@ -3773,7 +3846,7 @@ mod surface_tests {
         // The `y` pressed while nothing was shown counted as typing: a deliberate → then Enter decides.
         let later = Instant::now() + std::time::Duration::from_secs(10);
         assert_eq!(state.on_key_at(KeyEvent::new(KeyCode::Right, KeyModifiers::NONE), later), None);
-        assert_eq!(state.on_key_at(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE), later), Some(Action::Send(Command::Approve { id: "a1".into(), always: false })));
+        assert_eq!(state.on_key_at(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE), later + crate::live_state::APPROVAL_CHOICE_SHOWN), Some(Action::Send(Command::Approve { id: "a1".into(), always: false })));
     }
 
     #[test]
