@@ -20,9 +20,9 @@ jobs:
           node-version: 20
           cache: npm
           cache-dependency-path: cli/package-lock.json
-      - run: cargo test --locked --manifest-path core/Cargo.toml
       - run: npm ci --prefix cli
       - run: npm --prefix cli run build
+      - run: cargo test --locked --manifest-path core/Cargo.toml
       - run: npm --prefix cli test
       - run: bash scripts/security_gates.sh
       - run: bash scripts/package-linux.sh "v$(node -p 'require("./package.json").version')" "$RUNNER_TEMP/dist"
