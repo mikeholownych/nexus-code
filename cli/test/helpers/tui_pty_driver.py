@@ -217,9 +217,20 @@ def wait_events(path, kind, count, timeout, session):
         session.pump(0.1)
 
 
+# Colour choices inherited from the caller's shell (agent and CI shells often export NO_COLOR) would override the depth a
+# scenario asks for; crossterm itself drops every colour when NO_COLOR is set.
+COLOUR_OVERRIDES = ("NO_COLOR", "FORCE_COLOR", "NEXUS_COLOR")
+
+
+def pty_env(plan_env):
+    env = {k: v for k, v in os.environ.items() if k not in COLOUR_OVERRIDES}
+    env.update(plan_env)
+    return env
+
+
 def main():
     plan = json.load(open(sys.argv[1]))
-    env = dict(os.environ, **plan["env"])
+    env = pty_env(plan["env"])
     cast = []
     result = {"steps": []}
     events = plan["env"]["NEXUS_RECORD_EVENTS"]

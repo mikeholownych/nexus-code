@@ -19,7 +19,7 @@ import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from tui_diff_driver import DiffSession, has  # noqa: E402
-from tui_pty_driver import T0, count_events, wait_events  # noqa: E402
+from tui_pty_driver import T0, count_events, pty_env, wait_events  # noqa: E402
 
 
 def children(pid):
@@ -32,7 +32,7 @@ def children(pid):
 
 def main():
     plan = json.load(open(sys.argv[1]))
-    env = dict(os.environ, **plan["env"])
+    env = pty_env(plan["env"])
     events = plan["env"]["NEXUS_RECORD_EVENTS"]
     cast, shots, result = [], [], {}
     argv = [plan["tui"], "--live", "--sidecar", plan["recorder"], "--node", plan["node"], "--"] + plan["sidecar_args"]
