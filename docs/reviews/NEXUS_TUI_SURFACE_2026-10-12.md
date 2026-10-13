@@ -139,6 +139,27 @@ letter answers. Resolution in `7061b06`:
 Verification at `7061b06`: `make test` Rust 24 + 235 + 2, CLI 810/810, gates pass; clippy 0 warnings in
 `src/bin/nexus_tui/`; all seven PTY scenarios 13 runs (10 serial, 3 with 8 CPU-bound processes): 90/91 — the one failure was a harness race (the third approval arrived after the typing; decisions were correct, none), fixed in `416c2bf`, after which the approval scenarios passed 3/3.
 
+## Independent re-acceptance, round 4 (review of `5cab42f`; redesigned in `b50ae9a`)
+
+The fourth reviewer confirmed all 32 earlier probes decide nothing, accepted the visuals with P3 defects, and again
+**did not accept** approval safety: `→ → (≥400 ms) Enter (≥400 ms) Enter` approved all later actions in a PTY (3 of 3;
+review mode switched to auto). Four rounds showed the pattern: while keys every typist uses on a draft (arrows, Enter)
+could reach "approve all later actions", each timing threshold only moved the hole. `b50ae9a` changes the design:
+
+| Finding | Resolution | Evidence |
+|---|---|---|
+| P1-A″ arrows + pauses + two Enters reach approve-all | Approve-all is reachable only with `a` on a panel whose letters are armed, then Enter twice; arrows choose only Approve or Deny | unit `approving_all_later_actions_is_never_reachable_with_arrows_shifts_or_scrolling` (every round-4 sequence, armed and typed-into); PTY typing scenario adds `→ → (0.6 s) Enter (0.6 s) Enter`: no decision |
+| P2-1 `→ (400 ms) Enter` approves once from composing | On a panel typed into or opened over a draft, a choice must be on screen 2 s before Enter takes it | unit `a_typed_into_panel_needs_a_longer_look_and_a_repeated_y_answers_only_one_request` |
+| P2-2 a repeated `y` approves the next queued request | After a decision the next panel takes no key for 1.5 s (a key inside that window is typing into it); the title shows "N more waiting" | same unit |
+| P3 confirm-stage hint wrong | In the confirmation Enter confirms, Esc denies, any other key only cancels; the hint says so | unit `the_confirmation_of_approve_all_takes_only_enter_and_esc_denies` |
+| P3 `a` then Enter needs 600 ms | A key that made a choice is not typing | same unit (Enter 450 ms after `a`) |
+| P3 help overlay stale | Rewritten for the current rules | unit `help_lists_the_keys` |
+| P3 Super/Meta/Hyper + y | Letters allow Shift only; arrows/Enter count only unmodified | approve-all unit (Super+y, Meta+a, Shift+→/Enter) |
+| P3 renderer glyphs, identical screens (diff 06/07, surface 23b/24), 60-column hanging indent | Not changed | — |
+
+Verification at `b50ae9a`: `make test` Rust 24 + 238 + 2, CLI 810/810, gates pass; clippy 0 warnings in
+`src/bin/nexus_tui/`; all seven PTY scenarios 13 runs (10 serial, 3 with 8 CPU-bound processes while the host also ran an ansible playbook and other agent sessions): 90/91 — the failure was the maturity scenario's fixed 90 s wait for its 35-step turn (step 10 reached; normally ~20 s), raised to 180 s in `9792d03`.
+
 ## Result
 
 Implementation commits on branch `feat/tui-surface` (not merged): `83e7405` (the surface work), `804c5df` (approval
@@ -147,8 +168,8 @@ gate that the assessment commit broke (also on main as `604687c`). `dda2e62` fix
 pauses approved "all later actions"), `327570b` makes the PTY drivers ignore inherited `NO_COLOR`, `70ace1d` merges
 main, `d09c08f` is Stage 6 (steering and follow-ups pinned verbatim, saved with mid-turn progress). `fbf77b3` (made
 while a second agent was also committing to the branch) replaced the `d09c08f` evidence with an older `dda2e62` capture.
-`7061b06` fixes the round-3 findings and `416c2bf` the approval scenario's harness race. The current evidence is from
-`416c2bf`.
+`7061b06` fixes the round-3 findings and `416c2bf` the approval scenario's harness race. `b50ae9a` redesigns approval
+input after round 4, `9792d03` widens a PTY driver wait. The current evidence is from `9792d03`.
 
 | Revision | Build identity | What was run there |
 |---|---|---|
@@ -164,7 +185,9 @@ while a second agent was also committing to the branch) replaced the `d09c08f` e
 | checkout = `d09c08f` | — | `make test`: Rust 259/259, CLI 810/810, gates pass |
 | clean worktree of `d09c08f` | `nexus-tui` `cb11bc5a8d485da0…`, `sidecar.js` `6dd91487bb659dc7…` | evidence runs `tui_surface` and `tui_diff` (gitHead `d09c08f`), 2/2 (superseded; replaced in `fbf77b3` by an older `dda2e62` capture) |
 | checkout = `7061b06` | — | `make test`: Rust 24 + 235 + 2, CLI 810/810, gates pass; clippy 0 warnings in `src/bin/nexus_tui/`; PTY scenarios 13 runs: 90/91 (harness race, fixed in `416c2bf`) |
-| clean worktree of `416c2bf` | `nexus-tui` `329d722d65ecdd08…`, `sidecar.js` `6dd91487bb659dc7…` | approval PTY scenarios 3/3; evidence runs `tui_surface` and `tui_diff` (gitHead `416c2bf`), 2/2 — `docs/reviews/evidence/tui_surface/`, `docs/reviews/evidence/tui_diff/`; `sha256sum -c` passes |
+| clean worktree of `416c2bf` | `nexus-tui` `329d722d65ecdd08…`, `sidecar.js` `6dd91487bb659dc7…` | approval PTY scenarios 3/3; evidence runs (superseded) |
+| checkout = `b50ae9a` | — | `make test`: Rust 24 + 238 + 2, CLI 810/810, gates pass; clippy 0 warnings in `src/bin/nexus_tui/`; PTY scenarios 13 runs: 90/91 (driver wait, widened in `9792d03`) |
+| clean worktree of `9792d03` | `nexus-tui` `b366340b90a1b983…`, `sidecar.js` `6dd91487bb659dc7…` | maturity scenario 1/1; evidence runs `tui_surface` and `tui_diff` (gitHead `9792d03`), 2/2 — `docs/reviews/evidence/tui_surface/`, `docs/reviews/evidence/tui_diff/`; `sha256sum -c` passes |
 
 ### Changes
 
@@ -201,7 +224,7 @@ actual output.
 
 ### Status
 
-**Round 3 fixes implemented and verified by the implementer; independent re-acceptance (round 4) pending.** F1–F3 and F5 are
+**Round 4 redesign implemented and verified by the implementer; independent re-acceptance (round 5) pending.** F1–F3 and F5 are
 fixed with unit and PTY tests; O1–O3 are done; the visual defects from the review are fixed or, for the code-block
 background, shown not to reproduce. The screens were inspected by the implementer, which found and fixed the command
 preview defect (`404fa64`). A reviewer other than the implementer has not yet re-accepted the visuals and approval
