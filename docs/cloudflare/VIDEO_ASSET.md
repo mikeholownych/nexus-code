@@ -10,7 +10,7 @@ The submission video is [cloudflare-agent-collaboration-demo.mp4](evidence/conte
 - SHA-256: `ce6582112e512692810cd0887cece9194ac535e1ec29f075e8dd60220c4b7085`.
 - Full decode: `ffmpeg -v error -i cloudflare-agent-collaboration-demo.mp4 -f null -` completed without errors. The audio stream also decoded fully.
 - The video labels its terminal section as a captured execution replay and labels Nexus as the demonstration harness. Sampled frames show service-first opening cards followed by the Worker retrieval and Consumer reassessment evidence.
-- Narration is locally synthesized, as disclosed in the supplied recording materials. Technical audio decoding passed; a human listening review of voice intelligibility and word-for-word script alignment remains outstanding.
+- Narration is locally synthesized, as disclosed in the supplied recording materials. Technical audio decoding passed; the user has reviewed the narration and confirmed it follows the approved service-focused script.
 
 ## Capture-to-source mapping
 
