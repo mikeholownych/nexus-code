@@ -632,6 +632,37 @@ describe("D: findings checkpoint before shown output leaves the context", () => 
     });
   });
 
+  test("CTX-07: 30 findings on 5 subjects bounded to the 24K budget keep at least one full claim sentence per subject in view", async () => {
+    await isolated(async (repo) => {
+      const agent = quiet(new AutonomousAgent({ endpoint: "http://127.0.0.1:9/v1", model: "m", maxSteps: 2, temperature: 0, workspace: repo, shell: "bash", contextLimit: 65_536 } as any)) as any;
+      try {
+        const subjects = [
+          ["cli/src/tools.ts", "cli/src/tools.ts spawns harness-core through resolveCoreBinary."],
+          ["core/src/main.rs", "core/src/main.rs serves JSON-RPC on stdin and never reads the network."],
+          ["cli/src/sidecar.ts", "cli/src/sidecar.ts redacts every event before it is written."],
+          ["cli/src/egress.ts", "cli/src/core/egress.ts classifies JWTs before any request leaves."],
+          ["core/src/runner.rs", "core/src/runner.rs ends the whole process group on a timeout."],
+        ] as const;
+        // Sources as a real run records them: the command that produced the output.
+        const source = (n: number) => `run_command {"command":"grep -rn --include='*.ts' --include='*.rs' -e spawn -e resolveCoreBinary -e harness-core cli/src core/src | sort | uniq -c | sort -rn # pass ${n}"}`;
+        const finding = (n: number, body: string) => `Findings recorded from inspected output [F${n}; step ${n}; from ${source(n)}; model-written, not independent proof]\n${body}`;
+        for (let n = 1; n <= 30; n++) {
+          // Grouped by age (F1–F6 on the first subject, …): the oldest subject has only indexed findings.
+          const [, claim] = subjects[Math.floor((n - 1) / 6)];
+          agent.findingNotes.push(finding(n, `${claim}\n${"Supporting detail that the excerpt shows on many lines of output. ".repeat(18)}`));
+        }
+        const record = agent.summarizeDiscardedHistory([{ role: "assistant", content: "next" }], 0, new Set());
+        const noteList = JSON.parse(String(record.content).slice(DURABLE.length)).notes as string[];
+        const notes = noteList.join("\n");
+        assert.ok(noteList.some((n) => n.includes("\n[Indexed only, to fit this memory: ") || n.includes("\nFirst claim: ")), "the budget forces the oldest findings to the indexed form");
+        assert.ok(notes.length < 24_000 + 4_000, `bounded: ${notes.length}`);
+        for (const [, claim] of subjects) assert.ok(notes.includes(claim), `a full claim sentence of each subject is in view: ${claim}`);
+      } finally {
+        agent.shutdown();
+      }
+    });
+  });
+
   test("across compactions findings keep their order and stay distinct: only a condensed or shortened copy gives way to its full finding", async () => {
     await isolated(async (repo) => {
       const agent = quiet(new AutonomousAgent({ endpoint: "http://127.0.0.1:9/v1", model: "m", maxSteps: 2, temperature: 0, workspace: repo, shell: "bash", contextLimit: 16_384 } as any)) as any;
@@ -1548,6 +1579,80 @@ describe("G: recorded findings under memory pressure stay distinct, sourced and 
     assert.equal(incompleteOutputNotice("read_findings", { query: "x" }, "No recorded finding mentions"), undefined);
   });
 
+  test("archive: what compaction replaced is searchable with read_archive, verbatim and bounded", async () => {
+    const { readArchive } = await import("../src/core/findings.js");
+    const archive: any[] = [
+      { role: "user", content: "Review the launch path." },
+      { role: "assistant", content: "", tool_calls: [{ id: "c1", type: "function", function: { name: "read_file", arguments: '{"path":"cli/src/tools.ts"}' } }] },
+      { role: "tool", name: "read_file", tool_call_id: "c1", content: "const child = spawn(coreBinary, ['--rpc']); // the TypeScript CLI launches the Rust core" },
+    ];
+    const found = readArchive(archive, { query: "spawn(coreBinary" });
+    assert.ok(found.ok && found.text.includes("[#3 tool read_file]") && found.text.includes("launches the Rust core"), found.text);
+    assert.match(readArchive(archive, { query: "cli/src/tools.ts" }).text, /\[#2 assistant\][\s\S]*read_file/, "tool calls are searchable too");
+    assert.match(readArchive(archive, { query: "nowhere" }).text, /No archived message contains "nowhere" \(3 archived messages searched\)/);
+    assert.equal(readArchive(archive, {}).ok, false);
+    assert.match(readArchive([], { query: "x" }).text, /Nothing has been compacted/);
+    const many = Array.from({ length: 200 }, (_, i) => ({ role: "tool", name: "run_command", content: `line ${i} needle ${"x".repeat(500)}` }));
+    const bounded = readArchive(many as any, { query: "needle" });
+    assert.ok(bounded.text.length < 14_000 && /200 archived messages contain "needle"; showing the first \d+/.test(bounded.text), bounded.text.slice(0, 200));
+  });
+
+  test("archive: the agent keeps replaced originals searchable and restores them on resume", () => {
+    const agent = new AutonomousAgent({ endpoint: "http://127.0.0.1:1/v1", model: "m", workspace: process.cwd(), maxSteps: 1, shell: "bash" } as any);
+    try {
+      const a: any = agent;
+      const original = { role: "tool", name: "read_file", tool_call_id: "c9", content: "the unique marker zeta-417" };
+      a.archiveReplaced([a.messages[0], original], [a.messages[0]]);
+      assert.ok(agent.getEffectiveTools().some((t) => t.function.name === "read_archive"));
+      assert.equal(agent.drainArchivedHistory().length, 1, "the host still archives it");
+      assert.match(String((a.archiveForReading as any[]).map((m) => m.content)), /zeta-417/, "draining for the host does not drop it from reading");
+      agent.restoreArchive([{ role: "assistant", content: "restored marker omega-9" } as any]);
+      assert.match(String((a.archiveForReading as any[]).map((m) => m.content)), /omega-9/);
+    } finally {
+      agent.shutdown();
+    }
+  });
+
+  test("CTX-06: Nexus's own notes in the user role are not recorded as the operator's task requests", () => {
+    const agent = new AutonomousAgent({ endpoint: "http://127.0.0.1:1/v1", model: "m", workspace: process.cwd(), maxSteps: 1, shell: "bash" } as any);
+    try {
+      const history = [
+        { role: "user", content: "Review the cache layer and report its risks." },
+        { role: "assistant", content: "Working on it." },
+        { role: "user", content: "[Nexus continuation 1/3] The operator's acceptance requirements are still open: R1." },
+        { role: "user", content: "[Nexus recovery 1/2] You have called read_file with the same arguments 3 times." },
+        { role: "user", content: "[Nexus: your reply was empty. Continue the task.]" },
+      ];
+      const content = String((agent as any).summarizeDiscardedHistory(history, 1_000_000).content);
+      assert.match(content, /Earlier task requests: Review the cache layer/);
+      assert.doesNotMatch(content, /Earlier task requests: \[Nexus/, "a harness note is not a task request");
+    } finally {
+      agent.shutdown();
+    }
+  });
+
+  test("CTX-04: grep -m / --max-count, sed -n ranges, sed Nq and awk NR limits are limits too", () => {
+    const run = (command: string, stdout: string) => JSON.stringify({ command, exit_code: 0, stdout, stderr: "" }, null, 2);
+    const lines = (n: number) => "x\n".repeat(n);
+    const cases: Array<[string, number, string]> = [
+      ["grep -rn -m 5 spawn src", 5, "grep -rn -m 5"],
+      ["grep -rn --max-count=3 spawn src", 3, "--max-count=3"],
+      ["grep -rnm4 spawn src", 4, "grep -rnm4"],
+      ["sed -n '1,40p' cli/src/tools.ts", 40, "sed -n '1,40p'"],
+      ["sed -n 12p notes.txt", 1, "sed -n 12p"],
+      ["sed 25q big.log", 25, "sed 25q"],
+      ["awk 'NR<=30' big.log", 30, "awk 'NR<=30'"],
+      ["awk 'NR>=11 && NR<=20' big.log", 10, "awk 'NR>=11 && NR<=20'"],
+    ];
+    for (const [command, limit, shown] of cases) {
+      const notice = incompleteOutputNotice("run_command", { command }, run(command, lines(limit)));
+      assert.ok(notice?.includes(shown) && notice.includes(`printed at least ${limit} lines`), `${command}: ${notice}`);
+      assert.equal(incompleteOutputNotice("run_command", { command }, run(command, lines(Math.max(0, limit - 1)))), limit > 1 ? undefined : incompleteOutputNotice("run_command", { command }, run(command, lines(0))), `${command}: fewer lines than the limit is complete`);
+    }
+    assert.equal(incompleteOutputNotice("run_command", { command: "sed -i 's/a/b/' f" }, run("sed -i 's/a/b/' f", lines(50))), undefined, "an editing sed limits nothing");
+    assert.equal(incompleteOutputNotice("run_command", { command: "awk '{print $1}' f" }, run("awk '{print $1}' f", lines(50))), undefined, "an awk without NR limits nothing");
+  });
+
   test("against this repository: a depth-bounded file_tree count is marked as not the tracked-file count, and a head-limited search as unable to show absence", async () => {
     const bridge = new RustCoreBridge(REPO_ROOT, "bash");
     try {
@@ -1573,6 +1678,33 @@ describe("G: recorded findings under memory pressure stay distinct, sourced and 
       }
     } finally {
       bridge.shutdown();
+    }
+  });
+});
+
+describe("CTX-01 residuals", () => {
+  test("read_findings says a named finding's text was lost rather than never recorded; a failed mid-turn save is reported once", async () => {
+    const { readFindings } = await import("../src/core/findings.js");
+    const lost = readFindings([], { id: "F12" });
+    assert.equal(lost.ok, false);
+    assert.match(lost.text, /F12 is named in your memory but its full text is not kept/);
+    assert.match(readFindings([], {}).text, /No findings have been recorded/);
+    const agent = quiet(new AutonomousAgent({ endpoint: "http://127.0.0.1:9/v1", model: "m", maxSteps: 1, workspace: process.cwd(), shell: "bash" } as any)) as any;
+    try {
+      const notices: string[] = [];
+      agent.observer = { onNotice: (text: string) => notices.push(text) };
+      agent.stateManager = { hasTaskState: () => true, recordProgress: () => { throw new Error("disk full"); } };
+      agent.persistProgress({ messages: true });
+      agent.persistProgress({ messages: true });
+      assert.equal(notices.length, 1, notices.join("\n"));
+      assert.match(notices[0], /Progress could not be saved mid-turn \(disk full\)/);
+      agent.stateManager = { hasTaskState: () => true, recordProgress: () => {} };
+      agent.persistProgress({ messages: true });
+      agent.stateManager = { hasTaskState: () => true, recordProgress: () => { throw new Error("again"); } };
+      agent.persistProgress({ messages: true });
+      assert.equal(notices.length, 2, "reported again after a save succeeded in between");
+    } finally {
+      agent.shutdown();
     }
   });
 });

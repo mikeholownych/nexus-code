@@ -91,6 +91,7 @@ export class InteractiveRepl {
                     this.checkpointManager = new CheckpointManager(sess.workspace);
                 }
                 this.agent.restoreSession(sess.messages, sess.unverifiedChangesPending, sess.objective, sess.findings);
+                this.agent.restoreArchive(this.sessionManager.readArchivedHistory(sess.id).messages);
                 console.log(pc.green(`✔ Restored previous session ${pc.bold(sess.id)} (${sess.messages.length} messages)`));
             }
             else {
@@ -841,6 +842,7 @@ export class InteractiveRepl {
                                 this.agent.setWorkspace(sess.workspace);
                             }
                             this.agent.restoreSession(sess.messages, sess.unverifiedChangesPending, sess.objective, sess.findings);
+                            this.agent.restoreArchive(this.sessionManager.readArchivedHistory(sess.id).messages);
                             console.log(pc.green(`✔ Resumed session ${pc.bold(sess.id)} (${sess.messages.length} messages loaded).\n`));
                         }
                         continue;

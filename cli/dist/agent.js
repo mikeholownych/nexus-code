@@ -10,7 +10,7 @@ import { ExecutionSpine, extractTargetResources, } from "./core/spine.js";
 import { AuthorityAdmissionEngine } from "./core/authority.js";
 import { CandidateTracker, hashContent, } from "./core/candidate.js";
 import { parseModelResponse } from "./parser.js";
-import { TerminalUI } from "./ui.js";
+import { TerminalUI, redactSecrets } from "./ui.js";
 import { getGitInfo, getProjectRules } from "./git.js";
 import { SkillManager } from "./skills.js";
 import { McpClientManager } from "./mcp.js";
@@ -35,7 +35,7 @@ import { InformationFlowBoundary } from "./core/egress.js";
 import { WorkspacePath } from "./core/workspace_path.js";
 import { ProviderRecoveryController, RecoveryCancelled, realRecoveryClock, recoveryPolicyFromEnv, } from "./core/provider_recovery.js";
 import { READ_OBJECTIVE_CAPABILITY, REQUIREMENTS_CAPABILITY, STEERING_PREFIX, amendObjective, applyRequirementUpdates, invalidateVerified, readObjective, requirementDone, blockedRequirements, createLedger, failedCheckFrom, gatingRequirements, isNewObjective, ledgerNeedsPinning, openRequirements, priorAttempt, queueSteering, recordAttempt, renderPinnedLedger, } from "./core/objective.js";
-import { ELIDED_FINDINGS_PREFIX, READ_FINDINGS_CAPABILITY, condenseFinding, elidedFindingsNote, findingId, incompleteOutputNotice, indexFinding, isCondensedFinding, readFindings, } from "./core/findings.js";
+import { ELIDED_FINDINGS_PREFIX, READ_FINDINGS_CAPABILITY, READ_ARCHIVE_CAPABILITY, readArchive, condenseFinding, elidedFindingsNote, findingId, incompleteOutputNotice, indexFinding, isCondensedFinding, readFindings, } from "./core/findings.js";
 import { describeChange, editTarget, snapshot } from "./file_diff.js";
 import pc from "picocolors";
 import { untrustedWorkspaceExtensions } from "./workspace_trust.js";
@@ -87,6 +87,8 @@ const REMOVAL_PREFIXES = [REMOVED_OBSERVATION, REMOVED_UNSEEN, REMOVED_PARTIAL, 
 // removals stand for output that is not in the context and can never be re-read into it, so nothing later rests on it.
 const MEMORY_NOTES_BUDGET_CHARS = 16_000;
 const NOTES_OMITTED = "[Older command, file and query notes omitted to bound this memory.]";
+/** Archived originals kept searchable with read_archive (oldest dropped first). */
+const ARCHIVE_FOR_READING = 5_000;
 const REMOVALS_OMITTED = "[Nexus: older notes on output that left your context were omitted to bound this memory; that output is not in your context.]";
 const OMITTED_REMOVALS_KEY = "(output whose removal notes were omitted to bound this memory)";
 /** Fits the notes that are neither findings nor raw detail to `budget` characters, oldest first, in place. */
@@ -629,6 +631,10 @@ export class AutonomousAgent {
     epoch = `${process.pid}-${randomUUID().slice(0, 8)}`;
     archivedTotal = 0;
     archive = [];
+    /** A mid-turn progress save failed and no save has succeeded since (the notice is given once). */
+    progressSaveFailing = false;
+    /** Every original compaction replaced in this conversation (bounded), searchable with read_archive. */
+    archiveForReading = [];
     constructor(config, depth = 0, inheritedWorktreeScope) {
         canonicalDurableProvenance.set(this, new WeakMap());
         this.config = config;
@@ -780,6 +786,7 @@ export class AutonomousAgent {
             this.capabilityRegistry.register(READ_OBJECTIVE_CAPABILITY);
         }
         this.capabilityRegistry.register(READ_FINDINGS_CAPABILITY);
+        this.capabilityRegistry.register(READ_ARCHIVE_CAPABILITY);
         this.setupSpineHandlers();
         this.stateManager = new DurableStateManager({ workspacePaths: [this.primaryWorkspacePathIdentity] });
         if (typeof this.client?.setTaskId === "function")
@@ -1079,6 +1086,7 @@ export class AutonomousAgent {
             ...HARNESS_TOOLS,
             ...(this.depth === 0 ? [REQUIREMENTS_CAPABILITY.toolDefinition, READ_OBJECTIVE_CAPABILITY.toolDefinition] : []),
             READ_FINDINGS_CAPABILITY.toolDefinition,
+            READ_ARCHIVE_CAPABILITY.toolDefinition,
             ...this.mcpManager.getToolDefinitions(),
             ...this.pluginManager.getCustomToolDefinitions(),
         ];
@@ -1170,8 +1178,20 @@ export class AutonomousAgent {
                     ...(progress.messages ? { messages: this.messages, findings: this.getFindings(), objective: this.objective ?? null, unverifiedChangesPending: this.hasPendingModifications } : {}),
                     ...(progress.unverifiedChangesPending !== undefined ? { unverifiedChangesPending: progress.unverifiedChangesPending } : {}),
                 });
+            this.progressSaveFailing = false;
         }
-        catch { }
+        catch (err) {
+            // Tolerated (the turn-end checkpoint writes the same state), but not silent: a crash before then would lose the
+            // work since the last save. Said once until a save succeeds again.
+            if (!this.progressSaveFailing) {
+                this.progressSaveFailing = true;
+                const text = `Progress could not be saved mid-turn (${redactSecrets(String(err?.message ?? err)).slice(0, 200)}); if the process stops before the turn ends, work since the last save is lost.`;
+                if (this.observer?.onNotice)
+                    this.observer.onNotice(text);
+                else
+                    console.warn(pc.yellow(text));
+            }
+        }
         try {
             this.progressListener?.();
         }
@@ -1219,6 +1239,7 @@ export class AutonomousAgent {
         this.compactions = 0;
         this.archivedTotal = 0;
         this.archive = [];
+        this.archiveForReading = [];
         this.messages = [
             {
                 role: "system",
@@ -1436,6 +1457,13 @@ export class AutonomousAgent {
         const budget = Math.max(8000, Math.floor((this.config.contextLimit || 65536) * 4 * 0.25));
         return [messages[0], { role: "system", content: renderPinnedLedger(ledger, !inContext, budget) }, ...messages.slice(1)];
     }
+    /**
+     * Whether a user-role message is Nexus's own note (continuation, recovery, step and empty-reply notes are sent in
+     * the user role, prefixed `[Nexus …]`), not something the operator asked for.
+     */
+    harnessNote(text) {
+        return /^\[Nexus[ :]/.test(text);
+    }
     /** User messages the pinned ledger already carries (the objective and steering); compaction does not repeat them. */
     pinnedUserText(text) {
         if (!this.objective)
@@ -1639,7 +1667,8 @@ export class AutonomousAgent {
                         addDurableNote(note);
                 }
             }
-            if (message.role === "user" && contentText && !this.pinnedUserText(contentText)) {
+            // Earlier requests are the operator's: Nexus's own notes are not tasks (CTX-06).
+            if (message.role === "user" && contentText && !this.pinnedUserText(contentText) && !this.harnessNote(contentText)) {
                 if (!priorTasks.includes(contentText))
                     priorTasks.push(contentText);
             }
@@ -2061,7 +2090,7 @@ export class AutonomousAgent {
             const key = callKeys.get(message.tool_call_id);
             const text = normalizeMessageContent(message.content).text.join("");
             // What read_findings and read_objective return is already in this memory, in full.
-            if (!key || !wanted.has(key) || key.startsWith("read_findings ") || key.startsWith("read_objective ") || pending.some((item) => item.key === key) || !text || text.startsWith("Error executing "))
+            if (!key || !wanted.has(key) || key.startsWith("read_findings ") || key.startsWith("read_objective ") || key.startsWith("read_archive ") || pending.some((item) => item.key === key) || !text || text.startsWith("Error executing "))
                 return;
             const partial = isTruncatedObservation(message);
             const output = withoutStepNotices(text);
@@ -2070,7 +2099,8 @@ export class AutonomousAgent {
         if (!pending.length)
             return false;
         let recorded = false;
-        const lastUser = [...source].reverse().find((message) => message.role === "user");
+        // The request the findings serve is the operator's latest, not a note Nexus added (CTX-06).
+        const lastUser = [...source].reverse().find((message) => message.role === "user" && !this.harnessNote(normalizeMessageContent(message.content ?? "").text.join("")));
         const request = normalizeMessageContent(lastUser?.content ?? "").text.join("").slice(0, 8_000);
         const contextLimit = this.config.contextLimit || 65536;
         const inputBudget = contextLimit - this.getContextReserves().completion - countTokens(FINDINGS_INSTRUCTIONS) - countTokens(request) - 1_000;
@@ -2307,6 +2337,13 @@ export class AutonomousAgent {
         this.compactions++;
         this.archivedTotal += replaced.length;
         this.archive.push(...replaced);
+        this.archiveForReading.push(...replaced);
+        if (this.archiveForReading.length > ARCHIVE_FOR_READING)
+            this.archiveForReading.splice(0, this.archiveForReading.length - ARCHIVE_FOR_READING);
+    }
+    /** A resumed conversation's archived originals (from the session's archive file), so read_archive still finds them. */
+    restoreArchive(messages) {
+        this.archiveForReading = messages.slice(-ARCHIVE_FOR_READING);
     }
     getActivePlan() {
         return this.activePlan;
@@ -2829,6 +2866,10 @@ Always explain your reasoning before or alongside your tool calls.`;
             if (!this.objective)
                 return { success: false, output: "", error: "No operator objective is being tracked in this conversation." };
             const result = readObjective(this.objective, args ?? {});
+            return result.ok ? { success: true, output: result.text } : { success: false, output: "", error: result.text };
+        });
+        this.spine.registerHandler("read_archive", async (args) => {
+            const result = readArchive(this.archiveForReading, args ?? {});
             return result.ok ? { success: true, output: result.text } : { success: false, output: "", error: result.text };
         });
         this.spine.registerHandler("read_findings", async (args) => {

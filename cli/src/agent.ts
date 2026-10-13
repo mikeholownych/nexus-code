@@ -27,7 +27,7 @@ import {
   hashContent,
 } from "./core/candidate.js";
 import { parseModelResponse } from "./parser.js";
-import { TerminalUI } from "./ui.js";
+import { TerminalUI, redactSecrets } from "./ui.js";
 import { getGitInfo, getProjectRules } from "./git.js";
 import { SkillManager } from "./skills.js";
 import { McpClientManager } from "./mcp.js";
@@ -103,6 +103,8 @@ import {
 import {
   ELIDED_FINDINGS_PREFIX,
   READ_FINDINGS_CAPABILITY,
+  READ_ARCHIVE_CAPABILITY,
+  readArchive,
   condenseFinding,
   elidedFindingsNote,
   findingId,
@@ -239,6 +241,8 @@ const REMOVAL_PREFIXES = [REMOVED_OBSERVATION, REMOVED_UNSEEN, REMOVED_PARTIAL, 
 // removals stand for output that is not in the context and can never be re-read into it, so nothing later rests on it.
 const MEMORY_NOTES_BUDGET_CHARS = 16_000;
 const NOTES_OMITTED = "[Older command, file and query notes omitted to bound this memory.]";
+/** Archived originals kept searchable with read_archive (oldest dropped first). */
+const ARCHIVE_FOR_READING = 5_000;
 const REMOVALS_OMITTED = "[Nexus: older notes on output that left your context were omitted to bound this memory; that output is not in your context.]";
 const OMITTED_REMOVALS_KEY = "(output whose removal notes were omitted to bound this memory)";
 
@@ -789,6 +793,10 @@ export class AutonomousAgent {
   private readonly epoch = `${process.pid}-${randomUUID().slice(0, 8)}`;
   private archivedTotal = 0;
   private archive: ChatMessage[] = [];
+  /** A mid-turn progress save failed and no save has succeeded since (the notice is given once). */
+  private progressSaveFailing = false;
+  /** Every original compaction replaced in this conversation (bounded), searchable with read_archive. */
+  private archiveForReading: ChatMessage[] = [];
 
   constructor(
     config: HarnessConfig,
@@ -956,6 +964,7 @@ export class AutonomousAgent {
       this.capabilityRegistry.register(READ_OBJECTIVE_CAPABILITY);
     }
     this.capabilityRegistry.register(READ_FINDINGS_CAPABILITY);
+    this.capabilityRegistry.register(READ_ARCHIVE_CAPABILITY);
     this.setupSpineHandlers();
     this.stateManager = new DurableStateManager({ workspacePaths: [this.primaryWorkspacePathIdentity] });
     if (typeof (this.client as any)?.setTaskId === "function") this.client.setTaskId(this.currentTaskId);
@@ -1298,6 +1307,7 @@ export class AutonomousAgent {
       ...HARNESS_TOOLS,
       ...(this.depth === 0 ? [REQUIREMENTS_CAPABILITY.toolDefinition as ToolDefinition, READ_OBJECTIVE_CAPABILITY.toolDefinition as ToolDefinition] : []),
       READ_FINDINGS_CAPABILITY.toolDefinition as ToolDefinition,
+      READ_ARCHIVE_CAPABILITY.toolDefinition as ToolDefinition,
       ...this.mcpManager.getToolDefinitions(),
       ...this.pluginManager.getCustomToolDefinitions(),
     ];
@@ -1399,7 +1409,17 @@ export class AutonomousAgent {
         ...(progress.messages ? { messages: this.messages, findings: this.getFindings(), objective: this.objective ?? null, unverifiedChangesPending: this.hasPendingModifications } : {}),
         ...(progress.unverifiedChangesPending !== undefined ? { unverifiedChangesPending: progress.unverifiedChangesPending } : {}),
       });
-    } catch {}
+      this.progressSaveFailing = false;
+    } catch (err: any) {
+      // Tolerated (the turn-end checkpoint writes the same state), but not silent: a crash before then would lose the
+      // work since the last save. Said once until a save succeeds again.
+      if (!this.progressSaveFailing) {
+        this.progressSaveFailing = true;
+        const text = `Progress could not be saved mid-turn (${redactSecrets(String(err?.message ?? err)).slice(0, 200)}); if the process stops before the turn ends, work since the last save is lost.`;
+        if (this.observer?.onNotice) this.observer.onNotice(text);
+        else console.warn(pc.yellow(text));
+      }
+    }
     try {
       this.progressListener?.();
     } catch {}
@@ -1448,6 +1468,7 @@ export class AutonomousAgent {
     this.compactions = 0;
     this.archivedTotal = 0;
     this.archive = [];
+    this.archiveForReading = [];
     this.messages = [
       {
         role: "system",
@@ -1699,6 +1720,14 @@ export class AutonomousAgent {
     return [messages[0], { role: "system", content: renderPinnedLedger(ledger, !inContext, budget) }, ...messages.slice(1)];
   }
 
+  /**
+   * Whether a user-role message is Nexus's own note (continuation, recovery, step and empty-reply notes are sent in
+   * the user role, prefixed `[Nexus …]`), not something the operator asked for.
+   */
+  private harnessNote(text: string): boolean {
+    return /^\[Nexus[ :]/.test(text);
+  }
+
   /** User messages the pinned ledger already carries (the objective and steering); compaction does not repeat them. */
   private pinnedUserText(text: string): boolean {
     if (!this.objective) return false;
@@ -1877,7 +1906,8 @@ export class AutonomousAgent {
           for (const note of recordedFindings(contentText)) addDurableNote(note);
         }
       }
-      if (message.role === "user" && contentText && !this.pinnedUserText(contentText)) {
+      // Earlier requests are the operator's: Nexus's own notes are not tasks (CTX-06).
+      if (message.role === "user" && contentText && !this.pinnedUserText(contentText) && !this.harnessNote(contentText)) {
         if (!priorTasks.includes(contentText)) priorTasks.push(contentText);
       }
       if (message.role === "assistant" && message.tool_calls) {
@@ -2250,7 +2280,7 @@ export class AutonomousAgent {
       const key = callKeys.get(message.tool_call_id);
       const text = normalizeMessageContent(message.content).text.join("");
       // What read_findings and read_objective return is already in this memory, in full.
-      if (!key || !wanted.has(key) || key.startsWith("read_findings ") || key.startsWith("read_objective ") || pending.some((item) => item.key === key) || !text || text.startsWith("Error executing ")) return;
+      if (!key || !wanted.has(key) || key.startsWith("read_findings ") || key.startsWith("read_objective ") || key.startsWith("read_archive ") || pending.some((item) => item.key === key) || !text || text.startsWith("Error executing ")) return;
       const partial = isTruncatedObservation(message);
       const output = withoutStepNotices(text);
       pending.push({ key, text: output, partial, digest: partial ? undefined : outputDigest(output) });
@@ -2258,7 +2288,8 @@ export class AutonomousAgent {
     if (!pending.length) return false;
     let recorded = false;
 
-    const lastUser = [...source].reverse().find((message) => message.role === "user");
+    // The request the findings serve is the operator's latest, not a note Nexus added (CTX-06).
+    const lastUser = [...source].reverse().find((message) => message.role === "user" && !this.harnessNote(normalizeMessageContent(message.content ?? "").text.join("")));
     const request = normalizeMessageContent(lastUser?.content ?? "").text.join("").slice(0, 8_000);
     const contextLimit = this.config.contextLimit || 65536;
     const inputBudget = contextLimit - this.getContextReserves().completion - countTokens(FINDINGS_INSTRUCTIONS) - countTokens(request) - 1_000;
@@ -2480,6 +2511,13 @@ export class AutonomousAgent {
     this.compactions++;
     this.archivedTotal += replaced.length;
     this.archive.push(...replaced);
+    this.archiveForReading.push(...replaced);
+    if (this.archiveForReading.length > ARCHIVE_FOR_READING) this.archiveForReading.splice(0, this.archiveForReading.length - ARCHIVE_FOR_READING);
+  }
+
+  /** A resumed conversation's archived originals (from the session's archive file), so read_archive still finds them. */
+  public restoreArchive(messages: ChatMessage[]): void {
+    this.archiveForReading = messages.slice(-ARCHIVE_FOR_READING);
   }
 
   public getActivePlan(): Array<{ name: string; status: string; detail?: string }> {
@@ -3043,6 +3081,11 @@ Always explain your reasoning before or alongside your tool calls.`;
     this.spine.registerHandler("read_objective", async (args) => {
       if (!this.objective) return { success: false, output: "", error: "No operator objective is being tracked in this conversation." };
       const result = readObjective(this.objective, args ?? {});
+      return result.ok ? { success: true, output: result.text } : { success: false, output: "", error: result.text };
+    });
+
+    this.spine.registerHandler("read_archive", async (args) => {
+      const result = readArchive(this.archiveForReading, args ?? {});
       return result.ok ? { success: true, output: result.text } : { success: false, output: "", error: result.text };
     });
 

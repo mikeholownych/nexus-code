@@ -102,9 +102,13 @@ describe("continuation and resume", () => {
           interruption: null, inferenceFailure: null, steps: { used: 3, max: 30, limitReached: false }, unverifiedChangesPending: false, finishedAt: "2026-10-12T00:00:01.000Z",
         },
       } as any, identity);
+      // What compaction replaced in that session, archived beside it.
+      new SessionManager(path.join(home, ".nexus", "sessions"), () => identity).appendArchivedHistory("session_20261012_000000_test", [
+        { role: "tool", content: "archived detail marker kappa-31", tool_call_id: "old" } as any,
+      ]);
       if (previousHome === undefined) delete process.env.HOME;
       else process.env.HOME = previousHome;
-      await rig(() => ({ kind: "text", content: "ok" }), async ({ events }) => {
+      await rig(() => ({ kind: "text", content: "ok" }), async ({ events, server }) => {
         const history = await waitForEvent(events, (e) => e.type === "history");
         assert.equal(history.session, "session_20261012_000000_test");
         assert.equal(history.messages[0].text, "Explain the plan", "the appended runtime context is not the operator's text");
@@ -122,6 +126,8 @@ describe("continuation and resume", () => {
         assert.equal(history.total, 4, "total counts the conversation's messages, not tools or the outcome");
         const notice = events.find((e) => e.type === "notice");
         assert.ok(events.indexOf(history) < events.indexOf(notice), "the conversation comes before the resume notice");
+        const { readArchive } = await import("../src/core/findings.js");
+        assert.match(readArchive((server as any).app.getAgent().archiveForReading, { query: "kappa-31" }).text, /kappa-31/, "the archive is searchable after resume");
       }, { resume: "latest", home, repo });
     } finally {
       fs.rmSync(home, { recursive: true, force: true });

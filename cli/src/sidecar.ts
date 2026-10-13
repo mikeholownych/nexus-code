@@ -704,6 +704,8 @@ export class SidecarServer {
     if (session.workspace && fs.existsSync(session.workspace)) this.setWorkspace(session.workspace);
     this.sessionId = session.id;
     this.app.getAgent().restoreSession(session.messages, session.unverifiedChangesPending, session.objective, session.findings);
+    // What compaction replaced stays searchable after a resume (read_archive).
+    this.app.getAgent().restoreArchive(this.app.getSessionManager().readArchivedHistory(session.id).messages);
     if (Array.isArray(session.activePlan)) this.app.getAgent().setActivePlan(session.activePlan);
     this.lastTurn = null;
     this.emitHistory(session.id, session.messages, session.lastTurn);

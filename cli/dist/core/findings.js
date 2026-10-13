@@ -21,10 +21,14 @@ function headerAndBody(note) {
 /** Whether a findings note is shown condensed or only indexed (not in full). */
 export function isCondensedFinding(note) {
     const body = headerAndBody(note)[1];
-    return body.startsWith(CONDENSED_MARK) || body.startsWith(INDEXED_MARK) || body.endsWith(LEGACY_SHORTENED);
+    return body.startsWith(CONDENSED_MARK) || isIndexedBody(body) || body.endsWith(LEGACY_SHORTENED);
+}
+/** An indexed body: the marker, optionally after the finding's first claim. */
+function isIndexedBody(body) {
+    return body.startsWith(INDEXED_MARK) || (body.startsWith("First claim: ") && body.includes(`\n${INDEXED_MARK}`));
 }
 export function isIndexedFinding(note) {
-    return headerAndBody(note)[1].startsWith(INDEXED_MARK);
+    return isIndexedBody(headerAndBody(note)[1]);
 }
 /** The separate statements of a finding: its lines, and the sentences of long lines, without list markers. */
 export function claimsOf(body) {
@@ -116,14 +120,19 @@ export function condenseFinding(note) {
         lines.push(`Claims not shown mention: ${mentionsOf(hidden.join("\n")) || "(no paths or symbols)"}`);
     return `${shortHeader(header)}\n${lines.join("\n")}`;
 }
-/** A finding reduced to what it mentions, with how to get its full text. */
+/** Characters of a finding's first claim its indexed form keeps (CTX-07: what it says, not only what it names). */
+const INDEXED_CLAIM_CHARS = 240;
+/** A finding reduced to its first claim and what it mentions, with how to get its full text. */
 export function indexFinding(note) {
     const [header, body] = headerAndBody(note);
     if (isIndexedFinding(note))
         return note;
     const text = body.startsWith(CONDENSED_MARK) ? body.slice(body.indexOf("\n") + 1) : body;
-    const claims = claimsOf(text);
-    return `${shortHeader(header)}\n${INDEXED_MARK}${claims.length} claim${claims.length === 1 ? "" : "s"} not shown; ${recovery(note)}. It mentions: ${mentionsOf(text) || "(no paths or symbols)"}]`;
+    const claims = claimsOf(text).map((claim) => claim.replace(/^- /, ""));
+    const first = claims.length ? claimStart(claims[0], INDEXED_CLAIM_CHARS) : "";
+    const rest = claims.length - (first ? 1 : 0);
+    const head = first ? `First claim: ${first}\n` : "";
+    return `${shortHeader(header)}\n${head}${INDEXED_MARK}${rest} more claim${rest === 1 ? "" : "s"} not shown; ${recovery(note)}. It mentions: ${mentionsOf(text) || "(no paths or symbols)"}]`;
 }
 function idRanges(ids) {
     const numbers = ids.map((id) => Number(id.slice(1))).sort((a, b) => a - b);
@@ -182,10 +191,76 @@ export const READ_FINDINGS_CAPABILITY = {
         },
     },
 };
+export const READ_ARCHIVE_CAPABILITY = {
+    id: "orchestrate_read_archive",
+    modelToolName: "read_archive",
+    category: "orchestration",
+    mutating: false,
+    sideEffectContract: "Search the messages context compaction replaced in this conversation (no workspace change)",
+    backend: "ts_native",
+    toolDefinition: {
+        type: "function",
+        function: {
+            name: "read_archive",
+            description: "Search the earlier conversation that left your context when it was compacted (tool outputs, replies, requests). Returns the matching passages verbatim. Use it when a detail you need is no longer in your memory or findings.",
+            parameters: {
+                type: "object",
+                properties: {
+                    query: { type: "string", description: "Case-insensitive text to find" },
+                },
+                required: ["query"],
+            },
+        },
+    },
+};
+const READ_ARCHIVE_CHARS = 12_000;
+const ARCHIVE_PASSAGE_CHARS = 1_200;
+/** What read_archive returns for `args` from the archived (compacted-away) messages, oldest first. */
+export function readArchive(archive, args) {
+    const query = typeof args.query === "string" ? args.query.trim() : "";
+    if (!query)
+        return { ok: false, text: "read_archive needs a query." };
+    if (!archive.length)
+        return { ok: true, text: "Nothing has been compacted out of this conversation: everything is still in your context." };
+    const needle = query.toLowerCase();
+    const passages = [];
+    let total = 0;
+    archive.forEach((message, index) => {
+        const raw = typeof message.content === "string" ? message.content : Array.isArray(message.content) ? message.content.map((p) => (typeof p?.text === "string" ? p.text : "")).join("") : "";
+        const calls = (message.tool_calls ?? []).map((call) => `${call.function.name} ${call.function.arguments ?? ""}`).join("\n");
+        const text = calls ? `${raw}\n${calls}`.trim() : raw;
+        const at = text.toLowerCase().indexOf(needle);
+        if (at < 0)
+            return;
+        total++;
+        const start = Math.max(0, at - ARCHIVE_PASSAGE_CHARS / 2);
+        const passage = text.slice(start, start + ARCHIVE_PASSAGE_CHARS);
+        const who = message.role === "tool" ? `tool ${message.name ?? ""}`.trim() : message.role;
+        passages.push(`[#${index + 1} ${who}]${start > 0 ? " …" : ""}${passage}${start + ARCHIVE_PASSAGE_CHARS < text.length ? "…" : ""}`);
+    });
+    if (!total)
+        return { ok: true, text: `No archived message contains "${query}" (${archive.length} archived messages searched). That is not evidence it never existed outside this conversation.` };
+    let text = "";
+    let shown = 0;
+    for (const passage of passages) {
+        if (text && text.length + passage.length > READ_ARCHIVE_CHARS)
+            break;
+        text += `${text ? "\n\n" : ""}${passage}`;
+        shown++;
+    }
+    const more = total - shown;
+    return { ok: true, text: `${total} archived message${total === 1 ? "" : "s"} contain "${query}"${more ? `; showing the first ${shown} (narrow the query to see the rest)` : ""}:\n\n${text}` };
+}
 /** What read_findings returns for `args` from `store` (full findings, oldest first). */
 export function readFindings(store, args) {
-    if (!store.length)
+    if (!store.length) {
+        // An id the memory names but the store does not have was lost (e.g. a save failed before a restart): say so,
+        // rather than suggesting it was never recorded.
+        if (typeof args.id === "string" && /^F\d+$/.test(args.id.trim())) {
+            return { ok: false, text: `${args.id.trim()} is named in your memory but its full text is not kept in this session (it was lost, for example when a save failed before a restart). Do not rely on it: re-establish the fact from the source if you need it.` };
+        }
         return { ok: true, text: "No findings have been recorded in this conversation." };
+    }
     const fit = (blocks, total, what) => {
         let text = "";
         let shown = 0;
@@ -239,11 +314,31 @@ function parseJson(text) {
     }
 }
 /**
- * Lines of output limiters in a shell command: `| head -20`, `| head -n 20`, `| tail -5`, `| head` (10). `| tail -n +5`
- * prints everything from a line on, so it is not one.
+ * Lines of output limiters in a shell command: `| head -20`, `| head -n 20`, `| tail -5`, `| head` (10); `grep -m N` /
+ * `--max-count`; `sed -n 'A,Bp'`, `sed -n 'Np'`, `sed Nq`; `awk 'NR<=N'` (also `NR<N`, `NR==N`, `NR>=A && NR<=B`).
+ * `| tail -n +5` prints everything from a line on, so it is not one.
  */
 function outputLimits(command) {
     const limits = [];
+    for (const match of command.matchAll(/\b(?:e|f)?grep\b[^|;&\n]*?(?:\s-m\s*(\d+)|\s--max-count[= ](\d+)|\s-[a-zA-Z]*m(\d+))/g)) {
+        limits.push({ text: match[0].trim(), lines: Number(match[1] ?? match[2] ?? match[3]) });
+    }
+    for (const match of command.matchAll(/\bsed\s+(?:-[a-zA-Z]*n[a-zA-Z]*\s+)['"]?(\d+)(?:,(\d+))?p['"]?/g)) {
+        const first = Number(match[1]);
+        const last = match[2] === undefined ? first : Number(match[2]);
+        limits.push({ text: match[0].trim(), lines: Math.max(1, last - first + 1) });
+    }
+    for (const match of command.matchAll(/\bsed\s+['"]?(\d+)q['"]?/g)) {
+        limits.push({ text: match[0].trim(), lines: Number(match[1]) });
+    }
+    for (const match of command.matchAll(/\bawk\s+['"]([^'"]*\bNR\s*(?:<=|<|==)\s*\d+[^'"]*)['"]/g)) {
+        const program = match[1];
+        const upper = /\bNR\s*(<=|<|==)\s*(\d+)/.exec(program);
+        const lower = /\bNR\s*(>=|>)\s*(\d+)/.exec(program);
+        const last = upper[1] === "<" ? Number(upper[2]) - 1 : Number(upper[2]);
+        const first = upper[1] === "==" ? last : lower ? (lower[1] === ">" ? Number(lower[2]) + 1 : Number(lower[2])) : 1;
+        limits.push({ text: match[0].trim(), lines: Math.max(1, last - first + 1) });
+    }
     for (const match of command.matchAll(/\|\s*(head|tail)\b([^|;&\n)]*)/g)) {
         const options = match[2];
         if (/(^|\s)-c\b|--bytes/.test(options))
