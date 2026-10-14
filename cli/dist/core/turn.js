@@ -102,9 +102,15 @@ export function summarizeTurn(t) {
     if (exec === "BLOCKED" && t.capacity) {
         const c = t.capacity;
         const fate = c.pendingMessageRetained ? "your message and the conversation so far are kept" : "your message was not added to the conversation";
+        if (c.unmeasured) {
+            return {
+                heading: "TURN BLOCKED - REQUEST NOT MEASURED",
+                line: `execution=BLOCKED outcome=NOT_ESTABLISHED (CONTEXT_CAPACITY_EXCEEDED: ${c.unmeasured}). No request was sent. Strict token counting is on (--strict-token-count / NEXUS_STRICT_TOKEN_COUNT=1); turn it off to proceed on the labelled estimate.`,
+            };
+        }
         return {
             heading: "TURN BLOCKED - CONTEXT FULL",
-            line: `execution=BLOCKED outcome=NOT_ESTABLISHED (CONTEXT_CAPACITY_EXCEEDED: ${c.estimatedPromptTokens} prompt + ${c.completionReserveTokens} completion + ${c.toolResponseReserveTokens} tool reserve > ${c.contextLimit} limit). ` +
+            line: `execution=BLOCKED outcome=NOT_ESTABLISHED (CONTEXT_CAPACITY_EXCEEDED: ${c.estimatedPromptTokens} prompt${c.promptCountSource ? ` (${c.promptCountSource})` : ""} + ${c.completionReserveTokens} completion + ${c.toolResponseReserveTokens} tool reserve > ${c.contextLimit} limit). ` +
                 `${c.modelCalled ? "No further request was sent" : "No request was sent"}; ${fate}. ` +
                 `Raise --context-limit, run /clear, or ask for something narrower; /compact may not help if one retained result is itself too large.`,
         };

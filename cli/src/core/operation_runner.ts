@@ -527,7 +527,11 @@ export class AgentWorkUnitExecutor implements WorkUnitExecutor {
     const authorizedDisclosureOrigins = def
       ? [...(base.authorizedDisclosureOrigins ?? []), origin(resource.endpoint)]
       : base.authorizedDisclosureOrigins;
-    const contextLimit = Math.min(base.contextLimit ?? 65_536, resource.contextLength ?? Number.POSITIVE_INFINITY);
+    // The operator's limit, capped by the resource's advertised capacity; with neither, the agent discovers the
+    // connection's own limits (a client default must not stand in for an operator setting or advertised capacity).
+    const contextLimit = base.contextLimit !== undefined
+      ? Math.min(base.contextLimit, resource.contextLength ?? Number.POSITIVE_INFINITY)
+      : resource.contextLength;
     return {
       ...base,
       endpoint: resource.endpoint,

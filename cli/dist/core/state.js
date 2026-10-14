@@ -12,6 +12,8 @@ import { randomUUID } from "node:crypto";
 import { CandidateTracker, } from "./candidate.js";
 import { redactTaskStateForPersistence } from "./persistence_protection.js";
 import { WorkspacePath } from "./workspace_path.js";
+import { writeFileDurably, appendLinesDurably, readArchiveLines } from "./durable_file.js";
+import { protectArchivedMessages } from "./persistence_protection.js";
 export const CURRENT_STATE_SCHEMA_VERSION = 1;
 // -------------------------------------------------------------
 // Typed Exceptions (Fail-Closed)
@@ -88,6 +90,20 @@ export class DurableStateManager {
         const cleanId = taskId.replace(/\.json$/, "");
         return path.join(this.baseDir, `${cleanId}.json`);
     }
+    /** Archive of the originals compaction replaced in this task's conversation (redacted JSON lines beside the state). */
+    archivePath(taskId) {
+        if (!/^[A-Za-z0-9._-]{1,160}$/.test(taskId))
+            throw new Error("Task identity is not a safe persistence name");
+        return path.join(this.baseDir, `${taskId}.history.jsonl`);
+    }
+    /** Appends one compaction's originals, durably, before any record names that compaction as committed. */
+    appendArchive(taskId, compactionId, messages) {
+        const at = new Date().toISOString();
+        appendLinesDurably(this.archivePath(taskId), protectArchivedMessages(messages).map((message) => JSON.stringify({ archivedAt: at, compactionId, message })));
+    }
+    readArchive(taskId, committed) {
+        return readArchiveLines(this.archivePath(taskId), committed);
+    }
     hasTaskState(taskId) {
         return fs.existsSync(this.getStateFilePath(taskId));
     }
@@ -143,24 +159,12 @@ export class DurableStateManager {
             throw new TaskStateWriteError("unknown", `Sensitive-data protection or ${protectionPhase} failed${conflict}`);
         }
         const targetPath = this.getStateFilePath(safeTaskId);
-        const tempPath = `${targetPath}.${randomUUID()}.tmp`;
         try {
-            if (!fs.existsSync(this.baseDir)) {
-                fs.mkdirSync(this.baseDir, { recursive: true });
-            }
-            // Write to temp file with synchronous flush
-            fs.writeFileSync(tempPath, serialized, { encoding: "utf-8", flag: "w" });
-            // Atomic rename over target file
-            fs.renameSync(tempPath, targetPath);
+            // Temp file, fsync, atomic rename, directory fsync: the previous or the new complete state, durably.
+            writeFileDurably(targetPath, serialized);
         }
         catch (err) {
-            try {
-                if (fs.existsSync(tempPath)) {
-                    fs.unlinkSync(tempPath);
-                }
-            }
-            catch { }
-            throw new TaskStateWriteError(safeTaskId, "filesystem persistence failed");
+            throw new TaskStateWriteError(safeTaskId, `filesystem persistence failed (${String(err?.code ?? err?.message ?? err).slice(0, 80)})`);
         }
     }
     /**

@@ -546,7 +546,9 @@ describe("A-2 cancellation", () => {
     await withTurn(() => ({ kind: "text", content: "slow answer", delayMs: 3000 }), {}, async (_gw, _repo, agent) => {
       const ac = new AbortController();
       const turn = quiet(() => agent.runTurn("x", undefined, { signal: ac.signal }));
-      setTimeout(() => ac.abort(), 200);
+      // Abort once the request is in flight (turn start-up time varies with load; the signal is what is under test).
+      await waitFor(() => agent.getTurnLifecycle()?.phase === "inference");
+      ac.abort();
       const t0 = Date.now();
       const r = await turn;
       assert.ok(Date.now() - t0 < 2000);

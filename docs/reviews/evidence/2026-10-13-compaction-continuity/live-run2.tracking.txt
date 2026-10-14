@@ -1,0 +1,14 @@
+task task-9991140f status failed
+history {'complete': False, 'compactions': 9, 'archivedMessages': 61, 'committedCompactions': 9}
+cumulativeSteps 1 turns 1 stepsWithoutProgress 0 lowYield 0
+compactions 9 [(2, 'auto', 16555, 13053, None, True), (3, 'auto', 15516, 13232, None, True), (4, 'auto', 17175, 13248, None, True), (5, 'auto', 14262, 13164, None, True), (5, 'auto', 13891, 12919, None, True), (6, 'auto', 17711, 13246, None, True), (8, 'auto', 18649, 13270, None, True), (10, 'auto', 17782, 13135, None, True), (11, 'auto', 17512, 12786, None, True)]
+repetitions>1 [('read_file {"path":"inventory/store.py"}', 6, 5, 'success'), ('read_file {"path":"inventory/report.py"}', 6, 5, 'success'), ('read_file {"path":"inventory/models.py"}', 5, 4, 'success'), ('read_file {"path":"tests/test_store.py"}', 4, 3, 'success'), ('outline_file {"path":"inventory/store.py"}', 3, 2, 'success'), ('outline_file {"path":"inventory/report.py"}', 3, 2, 'success')]
+progress [(1, 'progress', 'new information observed'), (2, 'progress', 'new information observed'), (4, 'progress', 'new information observed'), (8, 'progress', 'new information observed')]
+stagnation [(5, 'context_thrash', 'read_file {"path":"inventory/store.py"} re-read 2 times after compaction removed its output; the context window does not hold the working set'), (5, 'context_thrash', 'read_file {"path":"inventory/report.py"} re-read 2 times after compaction removed its output; the context window does not hold the working set'), (5, 'context_thrash', 'read_file {"path":"tests/test_store.py"} re-read 2 times after compaction removed its output; the context window does not hold the working set'), (7, 'context_thrash', 'read_file {"path":"inventory/models.py"} re-read 2 times after compaction removed its output; the context window does not hold the working set'), (8, 'context_thrash', 'outline_file {"path":"inventory/store.py"} re-read 2 times after compaction removed its output; the context window does not hold the working set'), (8, 'context_thrash', 'outline_file {"path":"inventory/report.py"} re-read 2 times after compaction removed its output; the context window does not hold the working set')]
+failed []
+interventions []
+requirements [('R1', 'open'), ('R2', 'open'), ('R3', 'open'), ('R4', 'open'), ('R5', 'open')]
+turn BLOCKED NOT_ESTABLISHED CONTEXT_CAPACITY_EXCEEDED 13343+8192+3072>24576
+continuation {"segments": 1, "segmentSteps": 30, "stepsWithoutProgress": 2, "cumulativeSteps": 11}
+tokenAccounting {"contextLimit": 24576, "contextSource": "operator", "outputAllowance": 8192, "outputSource": "advertised", "toolHeadroomPolicy": 3072, "discovery": "supported", "tokenCounting": "supported", "limitsVersion": "a3c2fcbc2f2b977c", "workers": ["b0-live-llama-worker1"], "lastRequest": {"step": 11, "promptTokens": 13343, "source": "exact_sampled_worker", "clientEstimate": 20278, "countedWorker": "b0-live-llama-worker1"}}
+persistence None

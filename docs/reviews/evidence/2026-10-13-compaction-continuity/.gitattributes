@@ -1,0 +1,2 @@
+# Captured evidence is kept byte-for-byte (diffs and logs carry trailing whitespace).
+* -whitespace

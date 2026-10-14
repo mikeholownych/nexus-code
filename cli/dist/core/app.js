@@ -4,6 +4,7 @@
  * Implements the single authoritative Nexus application model governing
  * CLI, interactive REPL, and TUI presentations without parallel state machines.
  */
+import { withDurableSync } from "./durable_file.js";
 import { EventEmitter } from "node:events";
 import { AutonomousAgent } from "../agent.js";
 import { SessionManager } from "../session.js";
@@ -149,14 +150,14 @@ export class ApplicationCore extends EventEmitter {
         // Capture durable task state snapshot
         let durableState;
         try {
-            durableState = this.agent.checkpointDurableState("Task execution finished", finalTurn);
+            durableState = withDurableSync(() => this.agent.checkpointDurableState("Task execution finished", finalTurn));
         }
         catch {
             durableState = this.getTaskState();
         }
         // Persist session envelope synchronously
         const messages = this.agent.getMessages();
-        this.sessionManager.saveSession({
+        withDurableSync(() => this.sessionManager.saveSession({
             id: taskId,
             taskId,
             sessionId: taskId,
@@ -176,7 +177,10 @@ export class ApplicationCore extends EventEmitter {
             validationReceipts: durableState.validationReceipts,
             worktreeBinding: durableState.worktreeBinding,
             findings: durableState.findings,
-        }, this.agent.getWorkspacePathIdentity());
+            objective: this.agent.getObjective() ?? null,
+            // Compactions this record commits; their originals are archived beside the task state (`<task>.history.jsonl`).
+            history: this.agent.getHistoryCompleteness(),
+        }, this.agent.getWorkspacePathIdentity()));
         // Extract last assistant output
         let outputText = "";
         for (let i = messages.length - 1; i >= 0; i--) {

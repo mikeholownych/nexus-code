@@ -95,7 +95,7 @@ describe("continuation beyond the per-segment step limit", () => {
       const turn = await agent.runTurn("Inspect base.txt.");
       assert.equal(turn.execution, "LIMIT_REACHED");
       assert.equal(turn.reason, "STAGNATION_DETECTED");
-      assert.match(turn.detail ?? "", /repeated read_file with an unchanged result after 2 recovery notes/);
+      assert.match(turn.detail ?? "", /repeated read_file \d+ times with an unchanged result on an unchanged workspace after 2 recovery notes/);
       assert.ok(gw.requests.length <= 10, `bounded: ${gw.requests.length} requests`);
       const notes = userMessages(gw.requests[gw.requests.length - 1]).filter((m) => m.startsWith("[Nexus recovery"));
       assert.equal(notes.length, 2, "two bounded recovery notes before stopping");
@@ -292,7 +292,9 @@ describe("acceptance requirements stay authoritative over the plan", () => {
       assert.match(systemText(verbatim), /s1 \[applied at step \d+\] Also keep the old CSV format working\./);
       assert.ok(agent.getHistoryCompleteness().compactions > 0);
       assert.equal(agent.getHistoryCompleteness().complete, false);
-      assert.ok(agent.drainArchivedHistory().length > 0, "replaced originals are archived");
+      const archived = (agent as any).stateManager.readArchive(agent.getTaskId(), new Set(agent.getHistoryCompleteness().committedCompactions));
+      assert.ok(archived.messages.length > 0, "replaced originals are archived durably beside the task state");
+      assert.deepEqual(archived.missingCompactions, [], "every committed compaction has its originals");
     } finally {
       console.log = logs;
       agent.shutdown();

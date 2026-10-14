@@ -56,3 +56,9 @@ The core engine is implemented in Rust 2024 edition and compiled into an optimiz
 2. **Dangerous Command Filter**: Shell commands are analyzed for destructive signatures (`rm -rf /`, `mkfs`, raw device writes, fork bombs) and prevented before child execution.
 3. **Secret Redaction**: Terminal outputs and audit logs are filtered through regular expression scrubbers that mask Bearer tokens, private keys, passwords, and API credentials.
 4. **Audit Trail**: Every tool invocation is permanently recorded in `~/.nexus/audit.log`.
+
+## Compaction and continuity
+
+Long-task continuity (no step ceiling, state-aware repetition, objective-scoped execution tracking), the durable
+compaction commit, queued operator `/compact`, and optional provider capabilities with labelled token accounting are
+described in `docs/COMPACTION_AND_CONTINUITY.md`.

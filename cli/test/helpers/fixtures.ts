@@ -15,7 +15,23 @@ export type Reply =
 export interface Gateway {
   url: string;
   requests: unknown[];
+  /** Bodies of /tokenize requests (only with `options.tokenize`). */
+  tokenizeRequests: any[];
+  /** Number of GET /models requests served. */
+  modelRequests: number;
+  /** Authorization headers seen, per path kind. */
+  authSeen: Array<{ path: string; authorization?: string }>;
   close(): Promise<void>;
+}
+
+/** Optional gateway capabilities (homelab-ai contract shape): catalog entries, request counting, admission headers. */
+export interface GatewayOptions {
+  /** `data` entries for GET /models (default: [{ id: "m" }]). Called per request, so tests can change capacity. */
+  models?: () => any[];
+  /** Answer to POST /tokenize; absent: 404. */
+  tokenize?: (body: any, n: number) => { status: number; body: unknown; delayMs?: number };
+  /** Response headers for the n-th chat request (e.g. X-AIHost-* admission headers). */
+  headers?: (n: number, body: any) => Record<string, string>;
 }
 
 function sse(obj: unknown): string {
@@ -36,13 +52,41 @@ function streamBody(r: Extract<Reply, { kind: "tools" | "text" }>): string {
 }
 
 /** Deterministic OpenAI-compatible gateway. `script(n, body)` decides the reply to the n-th chat request (1-based). */
-export async function startGateway(script: (n: number, body?: any) => Reply): Promise<Gateway> {
+export async function startGateway(script: (n: number, body?: any) => Reply, options: GatewayOptions = {}): Promise<Gateway> {
   const requests: unknown[] = [];
+  const tokenizeRequests: any[] = [];
+  const authSeen: Array<{ path: string; authorization?: string }> = [];
+  let modelRequests = 0;
   const sockets = new Set<Socket>();
   const server = http.createServer((req, res) => {
+    authSeen.push({ path: req.url ?? "", authorization: req.headers.authorization });
     if (req.url?.endsWith("/models")) {
+      modelRequests++;
       res.setHeader("content-type", "application/json");
-      res.end(JSON.stringify({ data: [{ id: "m" }] }));
+      res.end(JSON.stringify({ data: options.models ? options.models() : [{ id: "m" }] }));
+      return;
+    }
+    if (req.url?.endsWith("/tokenize")) {
+      let raw = "";
+      req.on("data", (c) => (raw += c));
+      req.on("end", () => {
+        let body: any = {};
+        try { body = JSON.parse(raw); } catch {}
+        tokenizeRequests.push(body);
+        if (!options.tokenize) {
+          res.statusCode = 404;
+          res.end(JSON.stringify({ status: "not_found", message: "no tokenize" }));
+          return;
+        }
+        const answer = options.tokenize(body, tokenizeRequests.length);
+        const send = () => {
+          if (res.writableEnded || res.destroyed) return;
+          res.statusCode = answer.status;
+          res.setHeader("content-type", "application/json");
+          res.end(typeof answer.body === "string" ? answer.body : JSON.stringify(answer.body));
+        };
+        if (answer.delayMs) setTimeout(send, answer.delayMs); else send();
+      });
       return;
     }
     let raw = "";
@@ -51,6 +95,8 @@ export async function startGateway(script: (n: number, body?: any) => Reply): Pr
       let body: any = {};
       try { body = JSON.parse(raw); } catch {}
       requests.push(body);
+      const extraHeaders = options.headers ? options.headers(requests.length, body) : {};
+      for (const [k, v] of Object.entries(extraHeaders)) res.setHeader(k, v);
       const r = script(requests.length, body);
       const respond = () => {
         if (res.writableEnded || res.destroyed) return;
@@ -91,6 +137,11 @@ export async function startGateway(script: (n: number, body?: any) => Reply): Pr
   return {
     url: `http://127.0.0.1:${port}/v1`,
     requests,
+    tokenizeRequests,
+    get modelRequests() {
+      return modelRequests;
+    },
+    authSeen,
     close: async () => {
       for (const s of sockets) s.destroy();
       await new Promise<void>((resolve) => server.close(() => resolve()));

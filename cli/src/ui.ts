@@ -30,7 +30,7 @@ export class TerminalUI {
   }
 
   stepHeader(step: number, maxSteps: number): void {
-    if (process.env.NEXUS_DEBUG === "1") console.log(pc.dim(`\nwork step ${step}/${maxSteps}`));
+    if (process.env.NEXUS_DEBUG === "1") console.log(pc.dim(`\nwork step ${step}${Number.isFinite(maxSteps) ? `/${maxSteps}` : ""}`));
   }
 
   startSpinner(text: string): void {

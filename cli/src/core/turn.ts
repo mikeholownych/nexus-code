@@ -46,6 +46,8 @@ export type TurnReason =
   | "OPERATOR_INTERRUPT"
   | "REPOSITORY_STATE_CHANGED"
   | "CONTEXT_CAPACITY_EXCEEDED"
+  /** A compaction (or other state the next action depends on) could not be written durably; the turn stopped. */
+  | "PERSISTENCE_FAILED"
   | "UNHANDLED_ERROR";
 
 /** What made the model/agent loop stop issuing actions. Not itself evidence of success. */
@@ -212,6 +214,10 @@ export interface InterruptionRecord {
  * says whether the operator's submission is part of the conversation history after the refusal.
  */
 export interface CapacityRecord {
+  /** How the refused prompt was counted (provider_capabilities.ts CountSource); absent on records from earlier versions. */
+  promptCountSource?: string;
+  /** Strict counting refused a request it could not measure: why. */
+  unmeasured?: string;
   estimatedPromptTokens: number;
   completionReserveTokens: number;
   toolResponseReserveTokens: number;
@@ -243,7 +249,48 @@ export interface TurnResult {
   unverifiedChangesPending: boolean;
   finishedAt: string;
   /** Automatic continuation: segments run and why the turn stopped (absent for single-segment turns). */
-  continuation?: { segments: number; segmentSteps: number; stopReason?: string; stepsWithoutProgress: number };
+  /**
+   * Context sizing and request counting: the limits in effect and where each came from (advertised, operator, client
+   * default), the tool-output headroom policy, capability availability, and how the last request was counted (source:
+   * exact_admitted, exact_sampled_worker, gateway_conservative, client_estimate), including worker differences.
+   */
+  tokenAccounting?: {
+    contextLimit: number;
+    contextSource: string;
+    outputAllowance: number;
+    outputSource: string;
+    toolHeadroomPolicy: number;
+    discovery: string;
+    tokenCounting: string;
+    limitsVersion?: string;
+    workers?: string[];
+    lastRequest?: {
+      step: number;
+      promptTokens: number;
+      source: string;
+      clientEstimate: number;
+      countedWorker?: string;
+      uncertainty?: string;
+      admittedTokens?: number;
+      admittedSource?: string;
+      admittedWorker?: string;
+      workerDiffers?: boolean;
+    };
+  };
+  /** Durable writes that failed during the turn (absent when every write succeeded). Never hidden behind a success. */
+  persistence?: { durable: false; failures: string[] };
+  continuation?: {
+    segments: number;
+    segmentSteps: number;
+    stopReason?: string;
+    stepsWithoutProgress: number;
+    /** Steps run on this objective across all its turns (observability; never a limit). */
+    cumulativeSteps?: number;
+    /** Demonstrated loops: the same action and result on an unchanged workspace, at least REPEAT_THRESHOLD times. */
+    repeated?: Array<{ action: string; count: number; firstStep: number; lastStep: number }>;
+    /** Why repetition could not be judged against workspace state this turn, when it could not. */
+    stateUncertainty?: string;
+  };
   /**
    * Tool outputs that left the context during the turn and were not read again, when the turn still ended VERIFIED or
    * REGRESSION_FREE: the verifier's result stands, but the work may rest on observations the model no longer had.
@@ -348,9 +395,15 @@ export function summarizeTurn(t: TurnResult): { heading: string; line: string } 
   if (exec === "BLOCKED" && t.capacity) {
     const c = t.capacity;
     const fate = c.pendingMessageRetained ? "your message and the conversation so far are kept" : "your message was not added to the conversation";
+    if (c.unmeasured) {
+      return {
+        heading: "TURN BLOCKED - REQUEST NOT MEASURED",
+        line: `execution=BLOCKED outcome=NOT_ESTABLISHED (CONTEXT_CAPACITY_EXCEEDED: ${c.unmeasured}). No request was sent. Strict token counting is on (--strict-token-count / NEXUS_STRICT_TOKEN_COUNT=1); turn it off to proceed on the labelled estimate.`,
+      };
+    }
     return {
       heading: "TURN BLOCKED - CONTEXT FULL",
-      line: `execution=BLOCKED outcome=NOT_ESTABLISHED (CONTEXT_CAPACITY_EXCEEDED: ${c.estimatedPromptTokens} prompt + ${c.completionReserveTokens} completion + ${c.toolResponseReserveTokens} tool reserve > ${c.contextLimit} limit). ` +
+      line: `execution=BLOCKED outcome=NOT_ESTABLISHED (CONTEXT_CAPACITY_EXCEEDED: ${c.estimatedPromptTokens} prompt${c.promptCountSource ? ` (${c.promptCountSource})` : ""} + ${c.completionReserveTokens} completion + ${c.toolResponseReserveTokens} tool reserve > ${c.contextLimit} limit). ` +
         `${c.modelCalled ? "No further request was sent" : "No request was sent"}; ${fate}. ` +
         `Raise --context-limit, run /clear, or ask for something narrower; /compact may not help if one retained result is itself too large.`,
     };

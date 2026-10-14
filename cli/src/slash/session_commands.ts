@@ -1,4 +1,5 @@
 import { UsageLedger } from "../usage.js";
+import type { AutonomousAgent } from "../agent.js";
 import { APPLIANCE, buildCatalog } from "../model_catalog.js";
 import { selectModel } from "../provider_connect.js";
 import { providerDefinition } from "../providers.js";
@@ -80,6 +81,19 @@ async function requirements({ host, args }: SlashContext): Promise<SlashOutcome>
   return reply("requirements", `${note}${rows.map(([id, value]) => `${id.padEnd(4)} ${value}`).join("\n")}`);
 }
 
+/** Context sizing and counting: limits with their sources, capability state, the last request's count and source. */
+function sizingRows(agent: AutonomousAgent): Array<[string, string]> {
+  const caps = agent.getProviderCapabilities();
+  const last = agent.getLastRequestCount();
+  const tracking = agent.getObjective()?.execution;
+  const rows: Array<[string, string]> = [];
+  rows.push(["context", caps ? `${caps.contextLimit} (${caps.contextSource}) · output ${caps.outputAllowance} (${caps.outputSource})` : "not yet discovered (next request reads the provider's limits, if it advertises them)"]);
+  if (caps) rows.push(["provider", `limits discovery ${caps.discovery}${caps.advertised?.limitsVersion ? ` · limits_version ${caps.advertised.limitsVersion}` : ""} · request counting ${caps.tokenCounting}`]);
+  if (last) rows.push(["last req", `${last.promptTokens} tokens (${last.source}${last.workerId ? ` on ${last.workerId}` : ""}); client estimate ${last.estimate}${last.admitted?.promptTokens !== undefined ? `; admitted ${last.admitted.promptTokens} (${last.admitted.source}${last.admitted.workerId ? ` on ${last.admitted.workerId}` : ""})` : ""}`]);
+  if (tracking) rows.push(["progress", `${tracking.cumulativeSteps} steps on this objective · ${tracking.stepsWithoutProgress} since last progress · ${tracking.compactions.filter((c) => c.committed).length} compaction(s)`]);
+  return rows;
+}
+
 function status({ host }: SlashContext): SlashOutcome {
   const config = host.app.getConfig();
   const git = getGitInfo(config.workspace);
@@ -92,6 +106,7 @@ function status({ host }: SlashContext): SlashOutcome {
     ["shell", config.shell],
     ["messages", String(host.app.getAgent().getHistoryCount())],
     ["session", host.sessionId()],
+    ...sizingRows(host.app.getAgent()),
   ];
   return reply("status", rows.map(([label, value]) => `${label.padEnd(10)}${value}`).join("\n"));
 }
@@ -101,8 +116,10 @@ function clear({ host }: SlashContext): SlashOutcome {
   return reply("clear", "Conversation context reset.");
 }
 
-async function compact({ host, args }: SlashContext): Promise<SlashOutcome> {
-  return reply("compact", await host.app.getAgent().compactConversation(args.includes("--llm")));
+async function compact({ host, args, signal }: SlashContext): Promise<SlashOutcome> {
+  // Run only while no turn is active (a host queues /compact during a turn: AutonomousAgent.requestCompaction).
+  const result = await host.app.getAgent().compactNow(args.split(/\s+/).includes("--llm"), signal);
+  return reply("compact", result.message, result.ok);
 }
 
 function mode({ host, args }: SlashContext): SlashOutcome {

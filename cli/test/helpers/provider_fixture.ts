@@ -78,7 +78,8 @@ export async function startGateway(script: (n: number, body: any) => Reply, opts
   const server = http.createServer((req, res) => {
     gw.authorizations.push(req.headers.authorization);
     if (req.url?.endsWith("/models")) {
-      gw.probes++;
+      // Capability discovery also reads /models; only availability probes count as probes.
+      if (req.headers["x-nexus-purpose"] !== "capabilities") gw.probes++;
       res.setHeader("content-type", "application/json");
       res.end(JSON.stringify({ data: [{ id: "m" }] }));
       return;

@@ -11,6 +11,7 @@ import {
 } from "./core/state.js";
 import { WorkspacePath } from "./core/workspace_path.js";
 import { protectArchivedMessages } from "./core/persistence_protection.js";
+import { appendLinesDurably, readArchiveLines, type ArchiveRead } from "./core/durable_file.js";
 
 // Re-export core state primitives
 export * from "./core/state.js";
@@ -172,31 +173,24 @@ export class SessionManager {
     return path.join(this.sessionsDir, `${sessionId}.diffs`, `${name}.diff`);
   }
 
-  public appendArchivedHistory(sessionId: string, messages: ChatMessage[]): void {
+  /**
+   * Appends the originals one compaction replaced, durably (fsync), tagged with the compaction's id. Written before any
+   * record names the compaction as committed (see core/durable_file.ts).
+   */
+  public appendArchivedHistory(sessionId: string, messages: ChatMessage[], compactionId?: string): void {
     if (!messages.length) return;
-    const lines = protectArchivedMessages(messages).map((message) => JSON.stringify({ archivedAt: new Date().toISOString(), message }));
-    fs.appendFileSync(this.archivedHistoryPath(sessionId), `${lines.join("\n")}\n`, { encoding: "utf8", mode: 0o600 });
+    const at = new Date().toISOString();
+    const lines = protectArchivedMessages(messages).map((message) => JSON.stringify({ archivedAt: at, ...(compactionId ? { compactionId } : {}), message }));
+    appendLinesDurably(this.archivedHistoryPath(sessionId), lines);
   }
 
-  /** The archived originals, oldest first; empty when there is no archive. Unreadable lines are counted, not hidden. */
-  public readArchivedHistory(sessionId: string): { messages: ChatMessage[]; unreadableLines: number } {
-    let raw = "";
-    try {
-      raw = fs.readFileSync(this.archivedHistoryPath(sessionId), "utf8");
-    } catch {
-      return { messages: [], unreadableLines: 0 };
-    }
-    const messages: ChatMessage[] = [];
-    let unreadableLines = 0;
-    for (const line of raw.split("\n")) {
-      if (!line.trim()) continue;
-      try {
-        messages.push(JSON.parse(line).message);
-      } catch {
-        unreadableLines++;
-      }
-    }
-    return { messages, unreadableLines };
+  /**
+   * The archived originals, oldest first; empty when there is no archive. Unreadable lines are counted, not hidden.
+   * With `committed` (the compaction ids the session record names), lines of compactions the record never committed are
+   * set aside and counted, and committed compactions with no line are listed as missing.
+   */
+  public readArchivedHistory(sessionId: string, committed?: ReadonlySet<string>): ArchiveRead<ChatMessage> {
+    return readArchiveLines<ChatMessage>(this.archivedHistoryPath(sessionId), committed);
   }
 
   public getLatestSession(): SessionData | null {

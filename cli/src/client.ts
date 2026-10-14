@@ -2,6 +2,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
 import { randomUUID } from "node:crypto";
+import { parseAdmissionHeaders, parseAdvertisement, parseTokenizeResponse, type AdmissionReport, type Advertisement, type RequestCount } from "./core/provider_capabilities.js";
 import { ChatMessage, ToolDefinition, HarnessConfig, ToolCall } from "./types.js";
 import { InformationFlowBoundary, DestinationTrustBoundary } from "./core/egress.js";
 import pc from "picocolors";
@@ -241,6 +242,14 @@ const MAX_PROVIDER_ERROR_CHARS = 2_000;
  * about whether the provider ran the request. Another endpoint is tried immediately only when the request is
  * proven not executed and the condition is temporary; anything else is the agent loop's recovery decision.
  */
+/** Request counting did not produce a count; `kind` says whether to expect it later (see countRequestTokens). */
+export class TokenCountError extends Error {
+  constructor(public readonly kind: "unsupported" | "unavailable" | "malformed" | "denied" | "aborted", message: string) {
+    super(message);
+    this.name = "TokenCountError";
+  }
+}
+
 export class InferenceError extends Error {
   readonly kind: InferenceFailureKind;
   readonly origin: InferenceFailureOrigin;
@@ -379,7 +388,10 @@ export class LocalLlmClient {
   private readonly cloudRoutedOrigins: string[];
   private readonly workspace?: string;
   private readonly role: string;
-  private readonly maxOutputTokens: number;
+  /** Output allowance sent as max_tokens on local endpoints; resized from provider capabilities (setOutputAllowance). */
+  private maxOutputTokens: number;
+  /** What the gateway reported about the most recent admitted inference request (response headers), if anything. */
+  private lastAdmission?: AdmissionReport;
   private readonly reasoningEffort?: string;
   private readonly thinkingBudget?: number;
   /** Usage the provider reported for the most recent completed request on this client (provider connections only). */
@@ -879,6 +891,107 @@ export class LocalLlmClient {
     });
   }
 
+  /** Sets the output allowance (max_tokens on local endpoints) from the connection's capabilities. */
+  public setOutputAllowance(tokens: number): void {
+    if (Number.isFinite(tokens) && tokens > 0) this.maxOutputTokens = Math.floor(tokens);
+  }
+
+  public getOutputAllowance(): number {
+    return this.maxOutputTokens;
+  }
+
+  /** The gateway's report on the most recent admitted inference request (headers), when it sent one. */
+  public getLastAdmission(): AdmissionReport | undefined {
+    return this.lastAdmission;
+  }
+
+  /**
+   * This connection's `/models` entry for the selected model, read from the active endpoint only (never a fallback or
+   * another provider: capability discovery is scoped to the connection in use). Not content-bearing.
+   * `unsupported`: the provider has no catalog or does not list the model; `unavailable`: it could not be read now.
+   */
+  async discoverAdvertisement(signal?: AbortSignal): Promise<{ state: "supported" | "unsupported" | "unavailable"; advertised?: Advertisement; detail?: string }> {
+    const ep = this.endpoint;
+    if (this.conn.protocol !== "openai-chat") return { state: "unsupported", detail: `${this.conn.protocol} connection` };
+    const url = `${ep}/models`;
+    try {
+      await this.prepareCredential(ep);
+      const res = await fetch(url, {
+        // Marked so providers (and their logs) can tell a capability read from an availability probe.
+        headers: { ...this.authorization(url), "X-Nexus-Purpose": "capabilities" },
+        signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(10_000)]) : AbortSignal.timeout(10_000),
+        ...this.fetchPolicy(),
+      });
+      if (res.status === 404) return { state: "unsupported", detail: "no /models catalog" };
+      if (!res.ok) return { state: "unavailable", detail: `HTTP ${res.status}` };
+      const data = (await res.json()) as { data?: Array<Record<string, any>> };
+      const entry = Array.isArray(data?.data) ? data.data.find((e) => e?.id === this.model) : undefined;
+      if (!entry) return { state: "unsupported", detail: `model ${this.model} not listed` };
+      const advertised = parseAdvertisement(entry);
+      if (!advertised || (advertised.contextLength === undefined && advertised.maxCompletionTokens === undefined)) {
+        return { state: "unsupported", advertised, detail: "catalog lists no limits" };
+      }
+      return { state: "supported", advertised };
+    } catch (err: any) {
+      if (signal?.aborted) throw abortedError(randomUUID());
+      return { state: "unavailable", detail: redactSecrets(String(err?.message ?? err)).slice(0, 160) };
+    }
+  }
+
+  /**
+   * Counts the prompt tokens of the request inference would send now, through the connection's `/v1/tokenize`
+   * (advertised by the homelab-ai gateway contract). The body is `outboundChatBody` — the actual outbound messages,
+   * tools, tool_choice and settings, after the same egress quarantine and sanitization — sent to the active endpoint
+   * only, with the same credential scoping, disclosure checks and cancellation as inference. No failover: a counting
+   * failure belongs to this connection and capability, and never moves task content elsewhere.
+   * Throws TokenCountError: `unsupported` (no such endpoint or model), `unavailable` (temporary), `malformed`,
+   * `denied` (credential or disclosure), `aborted`.
+   */
+  async countRequestTokens(messages: ChatMessage[], tools: ToolDefinition[], requestId: string, signal?: AbortSignal): Promise<RequestCount> {
+    if (this.conn.providerId || this.conn.protocol !== "openai-chat") throw new TokenCountError("unsupported", "provider connections have no request-counting endpoint");
+    const ep = this.endpoint;
+    const denial = this.disclosureDenial(ep, requestId);
+    if (denial) throw new TokenCountError("denied", denial.message);
+    if (signal?.aborted) throw new TokenCountError("aborted", "cancelled");
+    const url = `${ep}/tokenize`;
+    let body: any;
+    try {
+      await this.prepareCredential(ep, requestId);
+      this.preflight(ep, requestId, JSON.stringify(messages).length + JSON.stringify(tools).length);
+      body = this.outboundChatBody(ep, messages, tools);
+    } catch (err: any) {
+      throw new TokenCountError("denied", redactSecrets(String(err?.message ?? err)).slice(0, 200));
+    }
+    let res: Response;
+    try {
+      res = await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", ...this.authorization(url), "X-Request-ID": requestId, ...this.routingHeaders() },
+        body: JSON.stringify(body),
+        signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(30_000)]) : AbortSignal.timeout(30_000),
+        ...this.fetchPolicy(),
+      });
+    } catch (err: any) {
+      if (signal?.aborted) throw new TokenCountError("aborted", "cancelled");
+      throw new TokenCountError("unavailable", redactSecrets(String(err?.message ?? err)).slice(0, 160));
+    }
+    const text = await res.text().catch(() => "");
+    if (res.status === 401 || res.status === 403) throw new TokenCountError("denied", `HTTP ${res.status}`);
+    // The gateway answers 404 both for an unknown model and when every worker of the alias is blocked.
+    if (res.status === 404) throw new TokenCountError(/blocked|capacity/i.test(text) ? "unavailable" : "unsupported", `HTTP 404 ${text.slice(0, 120)}`);
+    if (res.status === 405 || res.status === 501) throw new TokenCountError("unsupported", `HTTP ${res.status}`);
+    if (!res.ok) throw new TokenCountError("unavailable", `HTTP ${res.status}`);
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(text);
+    } catch {
+      throw new TokenCountError("malformed", "response is not JSON");
+    }
+    const count = parseTokenizeResponse(parsed);
+    if ("malformed" in count) throw new TokenCountError("malformed", count.malformed);
+    return count;
+  }
+
   /**
    * Side-effect-free reachability check (GET /models) used while waiting out a provider failure. Any answer other
    * than 408/429/5xx shows the server is serving again; the first endpoint that answers becomes active.
@@ -1066,6 +1179,77 @@ export class LocalLlmClient {
     );
   }
 
+  /**
+   * The chat request body exactly as it leaves for `currentEp` (openai-chat protocol): egress quarantine and history
+   * sanitization applied to messages and tools, model, temperature, tools and tool_choice, the output allowance
+   * (max_tokens on local endpoints) and streaming options. Inference and request counting both send this body, so a
+   * count is of the request that is actually sent. Throws when the information-flow boundary denies the egress.
+   */
+  private outboundChatBody(currentEp: string, messages: ChatMessage[], tools: ToolDefinition[]): any {
+    // 1. Egress Interception & Quarantine (DISC-001..003, CTX-006, FAIL-003)
+    const egressEvaluation = this.boundary.evaluateEgress(
+      messages,
+      currentEp,
+      {
+        taskId: this.taskId,
+        sessionId: this.sessionId,
+        sourceBoundary: "HOST_LOCAL",
+      }
+    );
+
+    if (!egressEvaluation.allowed) {
+      throw new Error(
+        egressEvaluation.reason || `Egress to endpoint '${currentEp}' denied by InformationFlowBoundary [FAIL-003].`
+      );
+    }
+
+    const outboundMessages: ChatMessage[] = this.sanitizeHistory(egressEvaluation.sanitizedPayload || messages);
+
+    let outboundTools = tools;
+    if (tools.length > 0) {
+      const toolsEgress = this.boundary.evaluateEgress(
+        tools,
+        currentEp,
+        {
+          taskId: this.taskId,
+          sessionId: this.sessionId,
+          sourceBoundary: "HOST_LOCAL",
+        }
+      );
+      if (!toolsEgress.allowed) {
+        throw new Error(
+          toolsEgress.reason || `Egress of tools to endpoint '${currentEp}' denied by InformationFlowBoundary [FAIL-003].`
+        );
+      }
+      outboundTools = toolsEgress.sanitizedPayload || tools;
+    }
+
+    const payload: any = {
+      model: this.model,
+      messages: outboundMessages.map((m) => ({
+        role: m.role,
+        content: m.content ?? null,
+        ...(m.tool_calls ? { tool_calls: m.tool_calls } : {}),
+        ...(m.tool_call_id ? { tool_call_id: m.tool_call_id } : {}),
+        ...(m.name ? { name: m.name } : {}),
+      })),
+      temperature: this.temperature,
+      stream: true,
+    };
+
+    if (outboundTools.length > 0) {
+      payload.tools = outboundTools;
+      payload.tool_choice = "auto";
+    }
+    // Local endpoints: cap a reply at the completion reserve the context budget already assumes, so a runaway
+    // generation cannot run for minutes. (Cloud providers differ on the parameter name and are left to their limits.)
+    if (!this.conn.providerId) payload.max_tokens = this.maxOutputTokens;
+    if (this.conn.usage === "openrouter") payload.usage = { include: true };
+    if (this.conn.usage === "openrouter" || this.conn.usage === "stream-options") payload.stream_options = { include_usage: true };
+    this.omitUnsupported(payload);
+    return payload;
+  }
+
   private async chatCompletionStreamOnce(
     messages: ChatMessage[],
     tools: ToolDefinition[],
@@ -1080,67 +1264,7 @@ export class LocalLlmClient {
       await this.prepareCredential(currentEp, requestId);
       this.preflight(currentEp, requestId, JSON.stringify(messages).length + JSON.stringify(tools).length);
 
-      // 1. Egress Interception & Quarantine (DISC-001..003, CTX-006, FAIL-003)
-      const egressEvaluation = this.boundary.evaluateEgress(
-        messages,
-        currentEp,
-        {
-          taskId: this.taskId,
-          sessionId: this.sessionId,
-          sourceBoundary: "HOST_LOCAL",
-        }
-      );
-
-      if (!egressEvaluation.allowed) {
-        throw new Error(
-          egressEvaluation.reason || `Egress to endpoint '${currentEp}' denied by InformationFlowBoundary [FAIL-003].`
-        );
-      }
-
-      const outboundMessages: ChatMessage[] = this.sanitizeHistory(egressEvaluation.sanitizedPayload || messages);
-
-      let outboundTools = tools;
-      if (tools.length > 0) {
-        const toolsEgress = this.boundary.evaluateEgress(
-          tools,
-          currentEp,
-          {
-            taskId: this.taskId,
-            sessionId: this.sessionId,
-            sourceBoundary: "HOST_LOCAL",
-          }
-        );
-        if (!toolsEgress.allowed) {
-          throw new Error(
-            toolsEgress.reason || `Egress of tools to endpoint '${currentEp}' denied by InformationFlowBoundary [FAIL-003].`
-          );
-        }
-        outboundTools = toolsEgress.sanitizedPayload || tools;
-      }
-
-      const payload: any = {
-        model: this.model,
-        messages: outboundMessages.map((m) => ({
-          role: m.role,
-          content: m.content ?? null,
-          ...(m.tool_calls ? { tool_calls: m.tool_calls } : {}),
-          ...(m.tool_call_id ? { tool_call_id: m.tool_call_id } : {}),
-          ...(m.name ? { name: m.name } : {}),
-        })),
-        temperature: this.temperature,
-        stream: true,
-      };
-
-      if (outboundTools.length > 0) {
-        payload.tools = outboundTools;
-        payload.tool_choice = "auto";
-      }
-      // Local endpoints: cap a reply at the completion reserve the context budget already assumes, so a runaway
-      // generation cannot run for minutes. (Cloud providers differ on the parameter name and are left to their limits.)
-      if (!this.conn.providerId) payload.max_tokens = this.maxOutputTokens;
-      if (this.conn.usage === "openrouter") payload.usage = { include: true };
-      if (this.conn.usage === "openrouter" || this.conn.usage === "stream-options") payload.stream_options = { include_usage: true };
-      this.omitUnsupported(payload);
+      const payload = this.outboundChatBody(currentEp, messages, tools);
 
       let res: Response;
       try {
@@ -1172,6 +1296,7 @@ export class LocalLlmClient {
         throw this.httpError(res.status, errText, requestId, res.headers);
       }
 
+      this.lastAdmission = parseAdmissionHeaders((name) => res.headers.get(name));
       let fullContent = "";
       let finishReason: string | undefined;
       let sawDone = false;

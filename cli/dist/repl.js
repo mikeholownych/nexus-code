@@ -5,6 +5,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import { execSync } from "node:child_process";
 import pc from "picocolors";
+import { withDurableSync } from "./core/durable_file.js";
 import { ApplicationCore } from "./core/app.js";
 import { LocalLlmClient } from "./client.js";
 import { getGitInfo, scaffoldProjectRules, generateConventionalCommit, commitChanges } from "./git.js";
@@ -77,6 +78,8 @@ export class InteractiveRepl {
             this.checkpointManager = this.app.getCheckpointManager();
         }
         this.autoApprove = autoApprove;
+        // Compaction archives the originals beside the current session before the session names it as committed.
+        this.agent.setArchiveSink((compactionId, messages) => this.sessionManager.appendArchivedHistory(this.currentSessionId, messages, compactionId));
         this.historyFile = path.join(os.homedir(), ".nexus_history");
         this.loadHistory();
         if (resumeSessionId) {
@@ -90,8 +93,9 @@ export class InteractiveRepl {
                     this.agent.setWorkspace(sess.workspace);
                     this.checkpointManager = new CheckpointManager(sess.workspace);
                 }
-                this.agent.restoreSession(sess.messages, sess.unverifiedChangesPending, sess.objective, sess.findings);
-                this.agent.restoreArchive(this.sessionManager.readArchivedHistory(sess.id).messages);
+                const archiveNotice = this.agent.restoreConversation(sess, (committed) => this.sessionManager.readArchivedHistory(sess.id, committed));
+                if (archiveNotice)
+                    console.log(pc.yellow(archiveNotice));
                 console.log(pc.green(`✔ Restored previous session ${pc.bold(sess.id)} (${sess.messages.length} messages)`));
             }
             else {
@@ -116,8 +120,8 @@ export class InteractiveRepl {
         }
         finally {
             this.agent.setProgressListener(undefined);
-            // Persist even if the turn threw, so the transcript of work done so far is not lost.
-            this.saveCurrentSession(label, this.agent.getLastTurnResult());
+            // Persist even if the turn threw, so the transcript of work done so far is not lost (synced: the turn ended).
+            withDurableSync(() => this.saveCurrentSession(label, this.agent.getLastTurnResult()));
         }
         return result;
     }
@@ -141,13 +145,6 @@ export class InteractiveRepl {
             history: this.agent.getHistoryCompleteness(),
             ...(turn ? { status: lifecycleStatusForTurn(turn), lastTurn: turn } : {}),
         }, this.agent.getWorkspacePathIdentity());
-        const archived = this.agent.drainArchivedHistory();
-        if (archived.length) {
-            try {
-                this.sessionManager.appendArchivedHistory(this.currentSessionId, archived);
-            }
-            catch { }
-        }
     }
     loadHistory() {
         if (fs.existsSync(this.historyFile)) {
@@ -589,8 +586,15 @@ export class InteractiveRepl {
                         continue;
                     }
                     else if (cmd === "compact") {
-                        const report = await this.agent.compactConversation(arg.includes("--llm"));
-                        console.log(pc.green(`✔ ${report}\n`));
+                        // The session record is part of the commit: the archive, the task state and this session.
+                        this.agent.setProgressListener(() => this.saveCurrentSession());
+                        try {
+                            const result = await this.agent.compactNow(arg.includes("--llm"));
+                            console.log(result.ok ? pc.green(`✔ ${result.message}\n`) : pc.red(`✖ ${result.message}\n`));
+                        }
+                        finally {
+                            this.agent.setProgressListener(undefined);
+                        }
                         continue;
                     }
                     else if (cmd === "doctor") {
@@ -841,8 +845,9 @@ export class InteractiveRepl {
                                 this.config.workspace = sess.workspace;
                                 this.agent.setWorkspace(sess.workspace);
                             }
-                            this.agent.restoreSession(sess.messages, sess.unverifiedChangesPending, sess.objective, sess.findings);
-                            this.agent.restoreArchive(this.sessionManager.readArchivedHistory(sess.id).messages);
+                            const archiveNotice = this.agent.restoreConversation(sess, (committed) => this.sessionManager.readArchivedHistory(sess.id, committed));
+                            if (archiveNotice)
+                                console.log(pc.yellow(archiveNotice));
                             console.log(pc.green(`✔ Resumed session ${pc.bold(sess.id)} (${sess.messages.length} messages loaded).\n`));
                         }
                         continue;

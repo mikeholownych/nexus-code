@@ -108,6 +108,7 @@ export function buildConfig(options: any): HarnessConfig {
   if (provider && options.fallback) warnOnce(`--fallback is ignored for provider '${provider}': a provider connection is pinned to its own endpoint.`);
   const fallbackEndpoints = options.fallback && !provider ? options.fallback.split(",").map((s: string) => s.trim()) : undefined;
   const contextLimit = options.contextLimit ? parseInt(options.contextLimit, 10) : undefined;
+  const strictTokenCount = Boolean(options.strictTokenCount) || process.env.NEXUS_STRICT_TOKEN_COUNT === "1";
   const worktree = Boolean(options.worktree);
   const authoritativeVerifierCommand = options.authoritativeVerifier;
   const recordFlight = Boolean(options.recordFlight || options.flight);
@@ -159,6 +160,7 @@ export function buildConfig(options: any): HarnessConfig {
     sandbox,
     fallbackEndpoints,
     contextLimit,
+    ...(strictTokenCount ? { strictTokenCount } : {}),
     worktree,
     authoritativeVerifierCommand,
     verifierTimeoutSecs,
@@ -180,7 +182,9 @@ export function buildConfig(options: any): HarnessConfig {
 
 /**
  * Continuation budgets: flags, then NEXUS_MAX_TOTAL_STEPS / NEXUS_MAX_TURN_MINUTES / NEXUS_STAGNATION_STEPS, then
- * defaults. `--no-continuation` (or NEXUS_CONTINUATION=0) restores the single-segment turn that ends at --max-steps.
+ * defaults. There is no default step or time ceiling: progressing work continues until it completes, is cancelled,
+ * stagnates or fails. A step or time limit exists only when the operator sets one. `--no-continuation` (or
+ * NEXUS_CONTINUATION=0) is the operator's explicit choice of the single-segment turn that ends at --max-steps.
  */
 export function continuationBudget(options: any): ContinuationBudget | undefined {
   if (options.continuation === false || process.env.NEXUS_CONTINUATION === "0") return undefined;
@@ -193,9 +197,10 @@ export function continuationBudget(options: any): ContinuationBudget | undefined
     }
     return fallback;
   };
+  const steps = positive(options.maxTotalSteps, process.env.NEXUS_MAX_TOTAL_STEPS, DEFAULT_CONTINUATION.maxTotalSteps);
   return {
     ...DEFAULT_CONTINUATION,
-    maxTotalSteps: Math.floor(positive(options.maxTotalSteps, process.env.NEXUS_MAX_TOTAL_STEPS, DEFAULT_CONTINUATION.maxTotalSteps)),
+    maxTotalSteps: Number.isFinite(steps) ? Math.floor(steps) : steps,
     maxTurnMinutes: positive(options.maxTurnMinutes, process.env.NEXUS_MAX_TURN_MINUTES, DEFAULT_CONTINUATION.maxTurnMinutes),
     stagnationSteps: Math.floor(positive(options.stagnationSteps, process.env.NEXUS_STAGNATION_STEPS, DEFAULT_CONTINUATION.stagnationSteps)),
   };

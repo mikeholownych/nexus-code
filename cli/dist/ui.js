@@ -29,7 +29,7 @@ export class TerminalUI {
     }
     stepHeader(step, maxSteps) {
         if (process.env.NEXUS_DEBUG === "1")
-            console.log(pc.dim(`\nwork step ${step}/${maxSteps}`));
+            console.log(pc.dim(`\nwork step ${step}${Number.isFinite(maxSteps) ? `/${maxSteps}` : ""}`));
     }
     startSpinner(text) {
         this.spinner = ora({

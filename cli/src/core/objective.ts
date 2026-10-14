@@ -12,6 +12,7 @@ import { createHash } from "node:crypto";
 import type { VerificationStatus } from "./turn.js";
 import type { CanonicalCapability } from "./capabilities.js";
 import { isFilteredVerifierCommand } from "../tester.js";
+import { createTracking, ExecutionTracker, normalizeTracking, type ExecutionTracking } from "./execution_tracking.js";
 
 export const LEDGER_VERSION = 1;
 export const PINNED_LEDGER_PREFIX = "[Objective Ledger - pinned by Nexus; never summarised]";
@@ -135,6 +136,17 @@ export interface ObjectiveLedger {
   outcome?: ObjectiveOutcome;
   /** Short follow-up messages the operator sent as new turns while this objective was unresolved. */
   amendments: Array<{ at: string; text: string }>;
+  /**
+   * Objective-scoped execution tracking (core/execution_tracking.ts): cumulative steps, progress, repetition,
+   * failed approaches, interventions and compactions. Absent in ledgers written before it existed; `trackingOf` fills it.
+   */
+  execution?: ExecutionTracking;
+}
+
+/** The ledger's execution tracking, created (or completed, for a ledger restored from an earlier version) on first use. */
+export function trackingOf(ledger: ObjectiveLedger): ExecutionTracker {
+  ledger.execution = normalizeTracking(ledger.execution);
+  return new ExecutionTracker(ledger.execution);
 }
 
 const now = () => new Date().toISOString();
@@ -189,6 +201,7 @@ export function createLedger(objective: string, at = now()): ObjectiveLedger {
     verification: [],
     continuation: { segments: 1, totalSteps: 0, lastProgressStep: 0 },
     amendments: [],
+    execution: createTracking(),
   };
 }
 
@@ -220,13 +233,24 @@ export function amendObjective(ledger: ObjectiveLedger, prompt: string, at = now
  * carries its own numbered requirements, or is long, is a new objective; a short message ("continue", "also check
  * the README") while requirements remain open amends the current one. A resolved objective is always replaced.
  */
-export function isNewObjective(ledger: ObjectiveLedger | undefined, _prompt: string): boolean {
+export function isNewObjective(ledger: ObjectiveLedger | undefined, prompt: string): boolean {
   if (!ledger || ledger.outcome?.status === "completed") return true;
-  // A single request without listed requirements does not chain: each message is its own objective.
-  if (gatingRequirements(ledger).length === 0) return true;
+  // A single request without listed requirements does not chain, except where the operator explicitly continues it
+  // ("continue", "keep going", "try again"): that is the same objective, and keeps its execution history.
+  if (gatingRequirements(ledger).length === 0) return !isContinuationPrompt(prompt);
   // A structured objective not yet completed is never replaced implicitly, whatever the follow-up looks like (a
   // detailed correction is still a correction). The operator replaces it explicitly: `/requirements clear` or `/clear`.
   return false;
+}
+
+/**
+ * A follow-up that only asks the work to go on ("continue", "keep going", "resume", "try again", optionally with a
+ * short qualifier such as "continue please" or "go on from where you stopped"). Anything that states new work is not.
+ */
+export function isContinuationPrompt(prompt: string): boolean {
+  const text = prompt.trim().toLowerCase().replace(/[.!…]+$/, "");
+  if (!text || text.length > 80 || text.includes("\n")) return false;
+  return /^(?:please\s+)?(?:continue|keep going|keep at it|go on|go ahead|carry on|resume|proceed|try again|retry|next|finish(?: it| the task| the job)?|ok(?:ay)?,?\s+continue)\b(?:[\s,]+(?:please|then|now|on|with (?:it|the task|the work)|where you (?:left off|stopped)|from where you (?:left off|stopped)))*$/.test(text);
 }
 
 /** Requirements that gate completion: seeded from a structured objective (two or more), or added explicitly. */
@@ -549,6 +573,19 @@ export function renderPinnedLedger(ledger: ObjectiveLedger, includeObjective: bo
   const c = ledger.continuation;
   if (c.segments > 1 || c.totalSteps > 0) {
     out.push(`Continuation: segment ${c.segments} of this turn; ${c.totalSteps} steps so far on this objective. Keep working toward the open requirements; no operator "continue" is needed.`);
+  }
+  if (ledger.execution) {
+    const tracker = new ExecutionTracker(ledger.execution);
+    const loops = tracker.loops().slice(0, 3);
+    if (loops.length) {
+      out.push("Repeated without progress on an unchanged workspace (do not repeat these; change approach):");
+      for (const r of loops) out.push(`- ${r.action} ×${r.count} (steps ${r.firstStep}-${r.lastStep}) -> ${r.outcome.slice(0, 160)}`);
+    }
+    const failed = ledger.execution.failedApproaches.slice(-4);
+    if (failed.length) {
+      out.push("Failed approaches on this objective (most recent):");
+      for (const f of failed) out.push(`- step ${f.step}: ${f.detail.slice(0, 200)}`);
+    }
   }
   if (ledger.nextAction) out.push(`Next action (your last statement): ${ledger.nextAction}`);
   return out.join("\n");

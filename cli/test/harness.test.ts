@@ -302,6 +302,7 @@ error[E0308]: mismatched types
     let callCount = 0;
     const requestIds: string[] = [];
     const mockServer = http.createServer((req, res) => {
+      if (req.headers["x-nexus-purpose"] === "capabilities") { res.setHeader("content-type", "application/json"); res.end('{"data":[]}'); return; } // capability discovery: no catalog
       if (req.url === "/v1/chat/completions" && req.method === "POST") {
         let body = "";
         req.on("data", (chunk) => { body += chunk; });
@@ -473,6 +474,7 @@ error[E0308]: mismatched types
     let requests = 0;
     let responseMode: "success" | "failure" | "incomplete" | "dirty-success" | "malformed" | "ignored" = "success";
     const server = http.createServer((req, res) => {
+      if (req.headers["x-nexus-purpose"] === "capabilities") { res.setHeader("content-type", "application/json"); res.end('{"data":[]}'); return; } // capability discovery: no catalog
       if (req.url !== "/v1/chat/completions") { res.writeHead(404).end(); return; }
       requests++;
       let body = "";
@@ -630,6 +632,7 @@ error[E0308]: mismatched types
     execSync("git add . && git commit -qm baseline", { cwd: repo, stdio: "ignore" });
     let requests = 0;
     const server = http.createServer((req, res) => {
+      if (req.headers["x-nexus-purpose"] === "capabilities") { res.setHeader("content-type", "application/json"); res.end('{"data":[]}'); return; } // capability discovery: no catalog
       requests++;
       let body = "";
       req.on("data", (chunk) => { body += chunk; });
@@ -683,6 +686,7 @@ error[E0308]: mismatched types
     }
     let requests = 0;
     const server = http.createServer((req, res) => {
+      if (req.headers["x-nexus-purpose"] === "capabilities") { res.setHeader("content-type", "application/json"); res.end('{"data":[]}'); return; } // capability discovery: no catalog
       requests++;
       let body = "";
       req.on("data", (chunk) => { body += chunk; });
@@ -725,6 +729,7 @@ error[E0308]: mismatched types
 
     let requests = 0;
     const server = http.createServer((req, res) => {
+      if (req.headers["x-nexus-purpose"] === "capabilities") { res.setHeader("content-type", "application/json"); res.end('{"data":[]}'); return; } // capability discovery: no catalog
       requests++;
       let body = "";
       req.on("data", (chunk) => { body += chunk; });
@@ -773,6 +778,7 @@ error[E0308]: mismatched types
     let streamRequests = 0;
     let childRequests = 0;
     const server = http.createServer((req, res) => {
+      if (req.headers["x-nexus-purpose"] === "capabilities") { res.setHeader("content-type", "application/json"); res.end('{"data":[]}'); return; } // capability discovery: no catalog
       let body = "";
       req.on("data", (chunk) => { body += chunk; });
       req.on("end", () => {
@@ -823,7 +829,7 @@ error[E0308]: mismatched types
     const repo = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-subagent-no-authority-"));
     execSync("git init -q", { cwd: repo, stdio: "ignore" });
     let requests = 0;
-    const server = http.createServer((req, res) => { requests++; res.writeHead(500).end(); });
+    const server = http.createServer((req, res) => { if (req.headers["x-nexus-purpose"] === "capabilities") { res.end('{"data":[]}'); return; } requests++; res.writeHead(500).end(); });
     let agent: AutonomousAgent | undefined;
     try {
       const port = await new Promise<number>((resolve) => server.listen(0, "127.0.0.1", () => resolve((server.address() as any).port)));
@@ -847,6 +853,7 @@ error[E0308]: mismatched types
     let childRequests = 0;
     let childDeniedWrite = false;
     const server = http.createServer((req, res) => {
+      if (req.headers["x-nexus-purpose"] === "capabilities") { res.setHeader("content-type", "application/json"); res.end('{"data":[]}'); return; } // capability discovery: no catalog
       let body = "";
       req.on("data", (chunk) => { body += chunk; });
       req.on("end", () => {
@@ -898,6 +905,7 @@ error[E0308]: mismatched types
     execSync("git init -q && git config user.name 'Nexus Test' && git config user.email 'nexus@example.invalid' && git add . && git commit -qm baseline", { cwd: repo, stdio: "ignore" });
     let requests = 0;
     const server = http.createServer((req, res) => {
+      if (req.headers["x-nexus-purpose"] === "capabilities") { res.setHeader("content-type", "application/json"); res.end('{"data":[]}'); return; } // capability discovery: no catalog
       req.resume();
       req.on("end", () => {
         requests++;
@@ -943,6 +951,7 @@ error[E0308]: mismatched types
       execSync("git init -q && git config user.name 'Nexus Test' && git config user.email 'nexus@example.invalid' && git add . && git commit -qm baseline", { cwd: repo, stdio: "ignore" });
       let requests = 0;
       const server = http.createServer((req, res) => {
+        if (req.headers["x-nexus-purpose"] === "capabilities") { res.setHeader("content-type", "application/json"); res.end('{"data":[]}'); return; } // capability discovery: no catalog
         req.resume();
         req.on("end", () => {
           requests++;
@@ -1262,6 +1271,7 @@ error[E0308]: mismatched types
     let parentRequests = 0;
     let childRequests = 0;
     const server = http.createServer((req, res) => {
+      if (req.headers["x-nexus-purpose"] === "capabilities") { res.setHeader("content-type", "application/json"); res.end('{"data":[]}'); return; } // capability discovery: no catalog
       let body = "";
       req.on("data", (chunk) => { body += chunk; });
       req.on("end", () => {
@@ -2160,6 +2170,7 @@ error[E0308]: mismatched types
   test("LocalLlmClient executes automatic failover when primary endpoint fails", async () => {
     // 1. Primary server that always returns 503 Service Unavailable
     const primaryServer = http.createServer((req, res) => {
+      if (req.headers["x-nexus-purpose"] === "capabilities") { res.setHeader("content-type", "application/json"); res.end('{"data":[]}'); return; } // capability discovery: no catalog
       res.writeHead(503, { "Content-Type": "application/json" });
       res.end(JSON.stringify({ error: "GPU VRAM Out of Memory" }));
     });
@@ -2168,6 +2179,7 @@ error[E0308]: mismatched types
 
     // 2. Backup server that succeeds
     const backupServer = http.createServer((req, res) => {
+      if (req.headers["x-nexus-purpose"] === "capabilities") { res.setHeader("content-type", "application/json"); res.end('{"data":[]}'); return; } // capability discovery: no catalog
       if (req.url?.includes("/chat/completions")) {
         res.writeHead(200, { "Content-Type": "application/json" });
         res.end(

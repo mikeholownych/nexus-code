@@ -587,10 +587,6 @@ export const BASELINE_CAPABILITIES: CanonicalCapability[] = [
             "prompt": {
               "type": "string",
               "description": "The specific objective or question for the subagent to solve."
-            },
-            "max_steps": {
-              "type": "number",
-              "description": "Maximum steps for the subagent to take (default: 8)."
             }
           },
           "required": [

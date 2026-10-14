@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 import { Command } from "commander";
 import { CheckpointManager } from "./checkpoint.js";
 import { autoDetectModel, buildConfig, loadEnvironment } from "./config.js";
+import { withDurableSync } from "./core/durable_file.js";
 import { ApplicationCore } from "./core/app.js";
 import { redactForPersistence } from "./core/persistence_protection.js";
 import { failedTurnFromError, lifecycleStatusForTurn, summarizeTurn } from "./core/turn.js";
@@ -49,6 +50,10 @@ export class SidecarServer {
     steerSeen = new Set();
     /** Steering that arrived as a turn was finishing: it starts a follow-up turn once that turn ends. */
     followUps = [];
+    /** /compact requests made while a command (not an agent turn) ran: run as their own job when it finishes. */
+    pendingCompactions = [];
+    /** Title of the session record (the latest turn's prompt), kept by saves made outside a turn. */
+    sessionTitle;
     constructor(options) {
         this.app = options.app;
         this.write = options.write;
@@ -57,6 +62,10 @@ export class SidecarServer {
         this.resume = options.resume;
         this.checkpointManager = this.app.getCheckpointManager();
         this.sessionId = this.app.getSessionManager().generateSessionId();
+        // Compaction archives the originals beside the current session before the session names it as committed.
+        this.app.getAgent().setArchiveSink((compactionId, messages) => this.app.getSessionManager().appendArchivedHistory(this.sessionId, messages, compactionId));
+        // Outside a turn (an operator /compact), a commit still writes this session's record.
+        this.app.getAgent().setProgressListener(() => this.saveSession(this.sessionTitle));
         this.history = loadPromptHistory(options.historyFile ?? path.join(os.homedir(), ".nexus_history"));
     }
     start() {
@@ -248,6 +257,7 @@ export class SidecarServer {
         for (const f of this.followUps)
             this.steerAck(f.id, "cancelled", "Cancelled with the turn before it could start; your message is back in the composer.", f.text);
         this.followUps = [];
+        this.dropPendingCompactions("cancelled with the running work");
         const spec = this.activeSpec;
         if (this.activeTurn && spec && !spec.cancellable) {
             const name = spec.name === "!" ? "!" : `/${spec.name}`;
@@ -263,6 +273,38 @@ export class SidecarServer {
         const message = this.shutdownPromise ? "The sidecar is shutting down." : "A turn or command is running; cancel it or wait for its result.";
         this.emit({ type: "error", id, code: "BUSY", message });
         return true;
+    }
+    /**
+     * /compact while a turn or command runs. During an agent turn the agent holds it until the turn's next step boundary
+     * (after the in-flight inference and its tool batch, approvals included, have settled) or the turn's end. While another
+     * command runs, it waits here and runs as its own job afterwards. Each request is acknowledged now (notice) and gets
+     * its outcome later (slash.result for its id). A duplicate shares the queued request's outcome; at most one request
+     * per kind (default, --llm) waits; cancellation and shutdown end waiting requests with that outcome.
+     */
+    queueCompaction(id, llm) {
+        const queued = this.app.getAgent().requestCompaction(id, llm);
+        if (queued.status !== "no_active_turn") {
+            this.emit({ type: "notice", text: queued.message });
+            return;
+        }
+        const existing = this.pendingCompactions.find((p) => p.llm === llm);
+        if (existing) {
+            existing.ids.push(id);
+            this.emit({ type: "notice", text: `A /compact${llm ? " --llm" : ""} is already waiting; this request shares its outcome.` });
+            return;
+        }
+        this.pendingCompactions.push({ ids: [id], llm });
+        this.emit({ type: "notice", text: `/compact${llm ? " --llm" : ""} queued: it runs when the current command finishes.` });
+    }
+    compactionResult(ids, ok, message) {
+        for (const id of ids)
+            this.emit({ type: "slash.result", id, command: "compact", success: ok, output: capText(redactSecrets(stripEscapes(message)), MAX_SLASH_OUTPUT) });
+    }
+    /** Ends waiting /compact requests that will not run. */
+    dropPendingCompactions(reason) {
+        for (const p of this.pendingCompactions)
+            this.compactionResult(p.ids, false, `/compact was not run: ${reason}.`);
+        this.pendingCompactions = [];
     }
     /** Runs one turn or command as the session's only activity. Busy is reported before `body` starts. */
     runJob(id, spec, body) {
@@ -280,6 +322,21 @@ export class SidecarServer {
             this.activeTurn = undefined;
             this.turnAbort = undefined;
             this.activeSpec = undefined;
+            // Queued /compact runs before anything else starts, without an idle state in between.
+            if (this.pendingCompactions.length && !this.shutdownPromise) {
+                const pending = this.pendingCompactions;
+                this.pendingCompactions = [];
+                settle();
+                this.runJob(pending[0].ids[0], findSlash("compact"), async (signal) => {
+                    for (const p of pending) {
+                        const result = await this.app.getAgent().compactNow(p.llm, signal);
+                        this.compactionResult(p.ids, result.ok, result.message);
+                    }
+                });
+                return;
+            }
+            if (this.pendingCompactions.length)
+                this.dropPendingCompactions("the sidecar is shutting down");
             // Deferred steering starts its turn without an idle state in between, so nothing can slip into the gap.
             if (this.followUps.length && !this.shutdownPromise) {
                 settle();
@@ -361,6 +418,7 @@ export class SidecarServer {
                 this.emit({ type: "notice", text });
             },
             onNotice: (text) => this.emit({ type: "notice", text: redactSecrets(text) }),
+            onCompaction: ({ id, ok, message }) => this.compactionResult([id], ok, message),
             onSteering: ({ id, status, step, text, reason }) => {
                 if (status === "applied")
                     this.steerAck(id, "applied", `Applied at step ${step}.`);
@@ -373,7 +431,13 @@ export class SidecarServer {
     budget() {
         const config = this.app.getConfig();
         const continuation = config.continuation;
-        return continuation ? { max_steps: continuation.maxTotalSteps, max_minutes: continuation.maxTurnMinutes } : { max_steps: config.maxSteps };
+        // Only limits the operator set are shown as limits; an unbounded budget sends none (the client shows "step N").
+        if (!continuation)
+            return { max_steps: config.maxSteps };
+        return {
+            ...(Number.isFinite(continuation.maxTotalSteps) ? { max_steps: continuation.maxTotalSteps } : {}),
+            ...(Number.isFinite(continuation.maxTurnMinutes) ? { max_minutes: continuation.maxTurnMinutes } : {}),
+        };
     }
     confirmFor(turnId, signal) {
         return this.mode === "review"
@@ -401,6 +465,7 @@ export class SidecarServer {
             }
         }
         agent.setObserver(this.observerFor(turnId));
+        this.sessionTitle = label;
         // Work done so far, and changes still awaiting verification, survive the process ending mid-turn.
         agent.setProgressListener(() => this.saveSession(label));
         let turn;
@@ -412,10 +477,10 @@ export class SidecarServer {
         }
         finally {
             agent.setObserver(undefined);
-            agent.setProgressListener(undefined);
+            agent.setProgressListener(() => this.saveSession(this.sessionTitle));
         }
         try {
-            this.saveSession(label, turn);
+            withDurableSync(() => this.saveSession(label, turn));
         }
         catch (err) {
             this.emit({ type: "notice", text: `The session could not be saved: ${redactSecrets(errorText(err))}` });
@@ -475,6 +540,11 @@ export class SidecarServer {
         pending.settle(approved);
     }
     slash(id, command, args) {
+        // /compact while work runs is queued, never refused or run concurrently: see queueCompaction.
+        if (command.trim().replace(/^\//, "").toLowerCase() === "compact" && this.activeTurn && !this.shutdownPromise) {
+            this.queueCompaction(id, args.split(/\s+/).includes("--llm"));
+            return;
+        }
         // Read-only diagnostics run beside a turn: they touch no conversation or workspace state the turn uses.
         if (this.activeTurn && !this.shutdownPromise && busySafe(command, args)) {
             void this.busySafeSlash(id, command, args);
@@ -635,10 +705,8 @@ export class SidecarServer {
         const config = this.app.getConfig();
         const now = new Date().toISOString();
         const manager = this.app.getSessionManager();
-        // Messages compaction replaced are archived beside the session, so the record can say how complete it is.
-        const archived = agent.drainArchivedHistory();
-        if (archived.length)
-            manager.appendArchivedHistory(this.sessionId, archived);
+        // Originals compaction replaced are archived beside the session by the agent's archive sink before this record
+        // (which names the committed compactions in `history`) is written.
         const receipt = this.app.getActiveValidationReceipt();
         const lastTurn = turn ?? agent.getLastTurnResult();
         manager.saveSession({
@@ -672,9 +740,10 @@ export class SidecarServer {
         if (session.workspace && fs.existsSync(session.workspace))
             this.setWorkspace(session.workspace);
         this.sessionId = session.id;
-        this.app.getAgent().restoreSession(session.messages, session.unverifiedChangesPending, session.objective, session.findings);
-        // What compaction replaced stays searchable after a resume (read_archive).
-        this.app.getAgent().restoreArchive(this.app.getSessionManager().readArchivedHistory(session.id).messages);
+        // What compaction replaced stays searchable after a resume (read_archive): only compactions this record committed.
+        const archiveNotice = this.app.getAgent().restoreConversation(session, (committed) => this.app.getSessionManager().readArchivedHistory(session.id, committed));
+        if (archiveNotice)
+            this.emit({ type: "notice", text: archiveNotice });
         if (Array.isArray(session.activePlan))
             this.app.getAgent().setActivePlan(session.activePlan);
         this.lastTurn = null;
@@ -810,8 +879,9 @@ async function main(argv) {
         .option("-m, --model <name>", "Model name")
         .option("-w, --workspace <path>", "Workspace directory")
         .option("-s, --max-steps <number>", "Steps per segment (continuation checkpoints there instead of stopping)")
-        .option("--max-total-steps <number>", "Continuation: total steps a turn may run across segments (default 300)")
-        .option("--max-turn-minutes <number>", "Continuation: wall-clock budget of one turn in minutes (default 120)")
+        .option("--max-total-steps <number>", "Continuation: an explicit total-step limit for one turn (default: none; progressing work continues)")
+        .option("--strict-token-count", "Refuse a request the connection could not count on a worker (default: proceed on the labelled estimate)")
+        .option("--max-turn-minutes <number>", "Continuation: an explicit wall-clock limit for one turn in minutes (default: none)")
         .option("--stagnation-steps <number>", "Continuation: stop after this many steps without progress (default 12)")
         .option("--no-continuation", "End a turn at --max-steps instead of continuing while it makes progress")
         .option("-t, --temperature <number>", "Model temperature")

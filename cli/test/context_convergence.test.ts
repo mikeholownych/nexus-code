@@ -1625,10 +1625,14 @@ describe("G: recorded findings under memory pressure stay distinct, sourced and 
     try {
       const a: any = agent;
       const original = { role: "tool", name: "read_file", tool_call_id: "c9", content: "the unique marker zeta-417" };
-      a.archiveReplaced([a.messages[0], original], [a.messages[0]]);
+      const sunk: Array<{ id: string; messages: any[] }> = [];
+      agent.setArchiveSink((id, messages) => sunk.push({ id, messages }));
+      a.commitCompaction([a.messages[0], original], [a.messages[0]], { trigger: "manual", step: 0, beforeTokens: 10, afterTokens: 5, pressureOnly: false });
       assert.ok(agent.getEffectiveTools().some((t) => t.function.name === "read_archive"));
-      assert.equal(agent.drainArchivedHistory().length, 1, "the host still archives it");
-      assert.match(String((a.archiveForReading as any[]).map((m) => m.content)), /zeta-417/, "draining for the host does not drop it from reading");
+      assert.equal(sunk.length, 1, "the host's archive receives the originals before the compaction is committed");
+      assert.equal(sunk[0].messages.length, 1);
+      assert.deepEqual(agent.getHistoryCompleteness().committedCompactions, [sunk[0].id], "records name the committed compaction");
+      assert.match(String((a.archiveForReading as any[]).map((m) => m.content)), /zeta-417/, "archiving for the host does not drop it from reading");
       agent.restoreArchive([{ role: "assistant", content: "restored marker omega-9" } as any]);
       assert.match(String((a.archiveForReading as any[]).map((m) => m.content)), /omega-9/);
     } finally {

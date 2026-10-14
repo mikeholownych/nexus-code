@@ -1,0 +1,6 @@
+base_commit a58f860f9d1cffb5d3386a27e1852ad580b28d78
+tracked_diff_sha256 42c0f47d3f0ef034
+untracked_sha256 af0026f5f7fa732e
+dist_sha256 870e0359a85962c0
+core_bin_sha256 cbea89b952c923a2
+launcher /home/mike/nexus-cc/harness.sh -> node v24.21.0 cli/dist/index.js run

@@ -60,10 +60,10 @@ Press `<TAB>` at any prompt to autocomplete slash commands and directory paths.
 
 ### Live TUI: activity, steering, paste buffers and diffs
 
-- **Activity line.** While the agent works, the line above the composer animates (`⠋ thinking · 0:42 · step 31 of
-  300 · segment 2`) from the clock, not from model output, and names the phase: thinking, the running tool and its
-  subject, waiting for the provider, verifying, compacting. The step budget is always shown; the time limit appears
-  (`12 min left`) in its last quarter or last 15 minutes. It stops on completion, cancellation, failure or
+- **Activity line.** While the agent works, the line above the composer animates (`⠋ thinking · 0:42 · step 31 ·
+  segment 2`) from the clock, not from model output, and names the phase: thinking, the running tool and its
+  subject, waiting for the provider, verifying, compacting. A step limit is shown (`step 31 of 40`) only when you set
+  one; a time limit you set appears (`12 min left`) in its last quarter or last 15 minutes. It stops on completion, cancellation, failure or
   disconnection; an approval request replaces it with the approval hint. Lines too long for the window end in `…`.
 - **Transcript.** Replies are rendered Markdown: headings, emphasis, inline code, lists with hanging indents, block
   quotes, fenced code in a gutter block with syntax colours (long lines wrap onto rows marked `↪`), and tables
@@ -159,12 +159,19 @@ Press `<TAB>` at any prompt to autocomplete slash commands and directory paths.
   colour; `NEXUS_COLOR=truecolor|256|16|none` overrides. The `+`/`−` markers and labels carry the meaning at every
   depth.
 
-### Long tasks: continuation instead of a 30-step stop
+### Long tasks: no step ceiling
 
-`--max-steps` (default 30) is now a segment: at each segment boundary the turn checkpoints and continues on its own
-while it makes progress. It stops with a stated reason on `--max-total-steps` (300), `--max-turn-minutes` (120),
-`--stagnation-steps` without progress (12), a repeated identical action after two recovery notes, cancellation, or
-the model finishing. `--no-continuation` restores the old single-segment turn. The operator's objective and its
+`--max-steps` (default 30) is a segment: at each segment boundary the turn writes a durable checkpoint and continues
+on its own. Progressing work has no step or time ceiling: a turn stops on completion, cancellation, demonstrated lack
+of progress (`--stagnation-steps`, default 12 consecutive steps without progress, or a repeated action on an unchanged
+workspace after two recovery notes), an actionable failure, or a limit **you** set (`--max-total-steps`,
+`--max-turn-minutes`). Progress is judged against workspace content, not tool-call equality: plan edits, identical
+rewrites and timestamp-only output changes do not count, and a retry after a real change is legitimate. Polls and
+transient failures are spaced with backoff instead of being treated as loops. `--no-continuation` restores the
+single-segment turn. Tracking (cumulative steps, loops, failed approaches, compactions) belongs to the objective and
+survives compaction, follow-ups ("continue") and `/resume`. See `docs/COMPACTION_AND_CONTINUITY.md`.
+
+The operator's objective and its
 numbered requirements are pinned for the model on every request (never summarised away); the agent records
 requirement progress with evidence, and a turn that stops with requirements open ends `REQUIREMENTS_INCOMPLETE`
 with the remaining items, failed check and next action (see `/receipt`). Only the operator can reduce scope: a
@@ -181,6 +188,17 @@ any older one that does not fit is named with its size so the agent reads it wit
 failure is not re-run while nothing it depends on has changed (same workspace files, no mutating command since, same
 dependency/environment markers, same process).
 
+### Compaction and context sizing
+
+`/compact [--llm]` during work is queued (acknowledged at once) and runs once the current inference and its tool
+batch — approvals included — have settled, before the next request; its outcome is reported for its request. Every
+compaction archives the originals first, then writes the task state and the session; a write failure is reported
+and never shown as success. The context window and output allowance come from the provider when it advertises them
+(the homelab-ai gateway; vLLM `max_model_len`), else from `--context-limit` or labelled defaults; `/status` shows
+both with their source and how the last request was counted (`exact_admitted`, `exact_sampled_worker`,
+`gateway_conservative`, `client_estimate`). `--strict-token-count` refuses requests that could not be counted on a
+worker. See `docs/COMPACTION_AND_CONTINUITY.md`.
+
 ### Direct Shell Execution (`!`)
 Run raw bash/zsh commands instantly inside the active workspace without invoking the LLM:
 ```text
@@ -194,7 +212,7 @@ nexus (engineering/b0) my-app ❯ !npm test
 | Command | Description |
 | :--- | :--- |
 | `/help` | Display cheatsheet of all available commands |
-| `/status` | View active model, endpoint, shell, and git badge |
+| `/status` | View active model, endpoint, shell, git badge, context sizing with sources, last request count, objective progress |
 | `/plan [add\|done\|start\|clear]` | Formulate and manage multi-phase milestone execution plan |
 | `/tui` | REPL only: open the session dashboard (not offered in the live TUI, where it had no purpose) |
 | `/doctor [--deep] [--fix [--yes]]` | Diagnose this session's configuration, endpoint, engine, shell and state (see `docs/DOCTOR_TROUBLESHOOTING.md`) |
@@ -210,7 +228,7 @@ nexus (engineering/b0) my-app ❯ !npm test
 | `/git` | Show uncommitted files and git status |
 | `/commit [msg]` | Generate or execute Conventional Commit from staged changes |
 | `/audit [count]` | Inspect visual tool execution audit trail (recent N entries) |
-| `/compact [--llm]` | Distill earlier conversation into structured memory to preserve context |
+| `/compact [--llm]` | Distill earlier conversation into structured memory; queued while work runs, committed durably (archive, task state, session) |
 | `/mode [auto\|review]` | Toggle autonomous execution vs human approval before edits |
 | `/sessions` | List saved past sessions |
 | `/save [name]` | Save current conversation session to `~/.nexus/sessions/` |

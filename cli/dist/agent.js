@@ -2,13 +2,15 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
 import { randomUUID } from "node:crypto";
-import { exec } from "node:child_process";
+import { exec, execFileSync } from "node:child_process";
+import { DEFAULT_CONTINUATION } from "./types.js";
 import { LocalLlmClient } from "./client.js";
 import { HARNESS_TOOLS, RustCoreBridge, forbiddenDeletion, registerBridgeCapabilities } from "./tools.js";
 import { createDefaultRegistry, changesWorkspace, } from "./core/capabilities.js";
 import { ExecutionSpine, extractTargetResources, } from "./core/spine.js";
 import { AuthorityAdmissionEngine } from "./core/authority.js";
-import { CandidateTracker, hashContent, } from "./core/candidate.js";
+import { CandidateTracker, computeCandidateIdentitySync, hashContent, } from "./core/candidate.js";
+import { ExecutionTracker, REPEAT_THRESHOLD, actionKind, backoffMs, combineState, ledgerStateIdentity, } from "./core/execution_tracking.js";
 import { parseModelResponse } from "./parser.js";
 import { TerminalUI, redactSecrets } from "./ui.js";
 import { getGitInfo, getProjectRules } from "./git.js";
@@ -27,7 +29,7 @@ import { ENABLE_TOOLS_CAPABILITY, TOOL_GROUPS, groupsTriggeredBy, toolGroupOf } 
 import { judgeWithoutCopy, prepareBaselineTestsCopy, snapshotTests } from "./core/independent_check.js";
 /** Tools that edit files directly: the first one of an unverified change triggers the pre-change verifier run. */
 const FILE_EDIT_TOOLS = new Set(["write_file", "edit_file", "patch_file", "delete_file"]);
-import { credentialOriginOf, InferenceError } from "./client.js";
+import { credentialOriginOf, InferenceError, TokenCountError } from "./client.js";
 import { assertTurnResultInvariants, deepFreezeTurn, summarizeTurn, lifecycleStatusForTurn, turnSucceeded, } from "./core/turn.js";
 import { createHash } from "node:crypto";
 import { HybridSearchEngine } from "./embeddings.js";
@@ -37,27 +39,51 @@ import { KnowledgeGraph } from "./knowledge.js";
 import { DurableStateManager, } from "./core/state.js";
 import { InformationFlowBoundary } from "./core/egress.js";
 import { WorkspacePath } from "./core/workspace_path.js";
+import { withDurableSync } from "./core/durable_file.js";
+import { advertisementChanged, describeCapabilities, resolveLimits, toolHeadroomPolicy, } from "./core/provider_capabilities.js";
 import { ProviderRecoveryController, RecoveryCancelled, realRecoveryClock, recoveryPolicyFromEnv, } from "./core/provider_recovery.js";
-import { READ_OBJECTIVE_CAPABILITY, REQUIREMENTS_CAPABILITY, STEERING_PREFIX, amendObjective, applyRequirementUpdates, invalidateVerified, readObjective, requirementDone, blockedRequirements, createLedger, failedCheckFrom, gatingRequirements, isNewObjective, ledgerNeedsPinning, openRequirements, priorAttempt, queueSteering, recordAttempt, renderPinnedLedger, } from "./core/objective.js";
+import { READ_OBJECTIVE_CAPABILITY, REQUIREMENTS_CAPABILITY, STEERING_PREFIX, amendObjective, applyRequirementUpdates, invalidateVerified, readObjective, requirementDone, blockedRequirements, createLedger, failedCheckFrom, gatingRequirements, isNewObjective, ledgerNeedsPinning, openRequirements, priorAttempt, queueSteering, recordAttempt, renderPinnedLedger, trackingOf, } from "./core/objective.js";
 import { ELIDED_FINDINGS_PREFIX, READ_FINDINGS_CAPABILITY, READ_ARCHIVE_CAPABILITY, readArchive, condenseFinding, elidedFindingsNote, findingId, incompleteOutputNotice, indexFinding, isCondensedFinding, readFindings, } from "./core/findings.js";
 import { describeChange, editTarget, snapshot } from "./file_diff.js";
 import pc from "picocolors";
 import { untrustedWorkspaceExtensions } from "./workspace_trust.js";
 /** Default deadline for the completion verifier (seconds); override with HarnessConfig.verifierTimeoutSecs / NEXUS_VERIFIER_TIMEOUT_SECS. */
 export const DEFAULT_VERIFIER_TIMEOUT_SECS = 300;
+/** A compaction that could not be committed (applied: true when it took effect in memory but a record failed). */
+export class CompactionCommitError extends Error {
+    outcome;
+    applied;
+    constructor(outcome, applied) {
+        super(outcome.message);
+        this.outcome = outcome;
+        this.applied = applied;
+        this.name = "CompactionCommitError";
+    }
+}
+/** Advertised capabilities are re-read at most this often unless something forces it (model, capacity, worker change). */
+const CAPABILITY_TTL_MS = 5 * 60_000;
+/** After request counting fails temporarily, requests rest on estimates for this long before counting is tried again. */
+const TOKEN_COUNT_COOLDOWN_MS = 60_000;
+/** Consecutive low-yield pressure compactions after which compaction waits until a request would not fit. */
+const LOW_YIELD_COMPACTIONS_BEFORE_HOLD = 2;
+/** `count`: how the prompt was counted, and (strict counting) why the request could not be measured. */
 export class ContextBudgetError extends Error {
     estimatedTokens;
     completionReserveTokens;
     toolResponseReserveTokens;
     contextLimit;
-    constructor(estimatedTokens, completionReserveTokens, toolResponseReserveTokens, contextLimit) {
-        super(`Context budget exceeded: ${estimatedTokens} estimated prompt tokens plus ` +
-            `${completionReserveTokens} completion and ${toolResponseReserveTokens} tool-response ` +
-            `reserve tokens exceeds the ${contextLimit} token limit after safe compaction.`);
+    count;
+    constructor(estimatedTokens, completionReserveTokens, toolResponseReserveTokens, contextLimit, count = { source: "client_estimate" }) {
+        super(count.unmeasured
+            ? `Request refused before sending: ${count.unmeasured}.`
+            : `Context budget exceeded: ${estimatedTokens} prompt tokens (${count.source}) plus ` +
+                `${completionReserveTokens} output allowance and ${toolResponseReserveTokens} tool-output headroom ` +
+                `exceeds the ${contextLimit} token limit after safe compaction.`);
         this.estimatedTokens = estimatedTokens;
         this.completionReserveTokens = completionReserveTokens;
         this.toolResponseReserveTokens = toolResponseReserveTokens;
         this.contextLimit = contextLimit;
+        this.count = count;
         this.name = "ContextBudgetError";
     }
 }
@@ -481,19 +507,19 @@ export function foldVoluminousOutput(output, maxLines = 60, maxChars = 4000) {
  * Inputs a verifier depends on that git ignores, so the workspace candidate identity does not cover them: the PATH,
  * dependency install markers, and environment files. Size and mtime only; contents are never read or stored.
  */
+const EXTERNAL_INPUT_MARKERS = [
+    "node_modules/.package-lock.json",
+    "cli/node_modules/.package-lock.json",
+    ".venv/pyvenv.cfg",
+    "venv/pyvenv.cfg",
+    "target/.rustc_info.json",
+    "core/target/.rustc_info.json",
+    ".env",
+    "cli/.env",
+];
 function externalInputsFingerprint(workspace) {
-    const markers = [
-        "node_modules/.package-lock.json",
-        "cli/node_modules/.package-lock.json",
-        ".venv/pyvenv.cfg",
-        "venv/pyvenv.cfg",
-        "target/.rustc_info.json",
-        "core/target/.rustc_info.json",
-        ".env",
-        "cli/.env",
-    ];
     const parts = [process.env.PATH ?? ""];
-    for (const marker of markers) {
+    for (const marker of EXTERNAL_INPUT_MARKERS) {
         try {
             const stat = fs.statSync(path.join(workspace, marker));
             parts.push(`${marker}:${stat.size}:${stat.mtimeMs}`);
@@ -504,6 +530,52 @@ function externalInputsFingerprint(workspace) {
     }
     return createHash("sha256").update(parts.join("\n")).digest("hex").slice(0, 16);
 }
+/**
+ * Content identity of the inputs git ignores that commands commonly depend on (installed dependencies, environment
+ * files): a digest of each file's content, so reinstalling the same dependencies or touching `.env` without changing it
+ * leaves the identity unchanged. Files above 16 MiB are identified by size only, and say so. Contents are never stored.
+ */
+function externalInputsContentIdentity(workspace) {
+    const parts = [`PATH=${process.env.PATH ?? ""}`];
+    for (const marker of EXTERNAL_INPUT_MARKERS) {
+        const file = path.join(workspace, marker);
+        try {
+            const stat = fs.statSync(file);
+            parts.push(stat.size > 16 * 1024 * 1024 ? `${marker}:size-only:${stat.size}` : `${marker}:${createHash("sha256").update(fs.readFileSync(file)).digest("hex")}`);
+        }
+        catch {
+            parts.push(`${marker}:-`);
+        }
+    }
+    return createHash("sha256").update(parts.join("\n")).digest("hex").slice(0, 16);
+}
+/** The git index (staged entries and their blob ids): staging a change is a state change even when files are unchanged. */
+function gitIndexIdentity(workspace) {
+    const out = execFileSync("git", ["diff", "--cached", "--raw", "--no-renames", "--abbrev=40", "-z"], {
+        cwd: workspace,
+        encoding: "utf-8",
+        stdio: ["ignore", "pipe", "ignore"],
+        maxBuffer: 64 * 1024 * 1024,
+    });
+    return createHash("sha256").update(out).digest("hex").slice(0, 16);
+}
+/** What an archive read means for a resumed conversation; undefined when the archive is whole. */
+function describeArchiveRead(read) {
+    const notes = [];
+    if (read.uncommittedLines)
+        notes.push(`${read.uncommittedLines} archived message(s) from a compaction that was interrupted before it was committed were set aside; their originals are in the resumed conversation itself`);
+    if (read.unreadableLines)
+        notes.push(`${read.unreadableLines} archive line(s) could not be read (an interrupted write); they are not used`);
+    if (read.missingCompactions.length)
+        notes.push(`the archive lacks the originals of compaction(s) ${read.missingCompactions.slice(0, 5).join(", ")}: read_archive cannot return them`);
+    return notes.length ? `Compaction archive: ${notes.join("; ")}.` : undefined;
+}
+/** "step 7" under no step limit, "step 7 of 40" under one the operator set. */
+function stepPosition(step, max) {
+    return Number.isFinite(max) ? `step ${step} of ${max}` : `step ${step}`;
+}
+/** A workspace state identity that took longer than this disables further ones for the turn (reported, not hidden). */
+const STATE_IDENTITY_BUDGET_MS = 1_500;
 function triggerNotification(title, message) {
     try {
         process.stdout.write("\x07");
@@ -634,16 +706,57 @@ export class AutonomousAgent {
     currentTaskId = "task-" + randomUUID().slice(0, 8);
     /** The operator's objective and acceptance requirements (core/objective.ts); undefined before the first turn. */
     objective;
-    /** Context compactions since the conversation started, and the originals they replaced (drained by the host). */
+    /** Context compactions committed since the conversation started (their originals are in the archive). */
     compactions = 0;
     /** Mutating tool calls so far (edits, writes, shell commands): a verifier failure is reused only while this is unchanged. */
     mutationSeq = 0;
+    /** Set when a workspace state identity proved too costly this turn; see workspaceStateIdentity. */
+    stateIdentityDisabled = false;
+    stateIdentityUncertainty;
+    /** Provider capabilities in effect for the main connection (provider_capabilities.ts); undefined until discovered. */
+    capabilities;
+    capabilitiesKey = "";
+    capabilitiesCheckedAt = 0;
+    tokenCountingState = "unknown";
+    tokenCountingDetail;
+    tokenCountingCooldownUntil = 0;
+    lastRequestCount;
+    /** Why capabilities must be re-read before the next request (a capacity rejection or a changed admission), if so. */
+    capabilitiesStale;
+    /** Measured/estimated ratio of the last counted request: admission estimates are scaled by it (0.5..4). */
+    estimateScale = 1;
+    /** Waits before re-running an unchanged poll or a transient failure (replaceable in tests). */
+    backoffSleep = (ms, signal) => new Promise((resolve) => {
+        if (signal?.aborted)
+            return resolve();
+        const timer = setTimeout(done, ms);
+        function done() {
+            signal?.removeEventListener("abort", done);
+            clearTimeout(timer);
+            resolve();
+        }
+        signal?.addEventListener("abort", done, { once: true });
+    });
     /** This agent process; verifier results from another process (a resumed session) are never reused. */
     epoch = `${process.pid}-${randomUUID().slice(0, 8)}`;
     archivedTotal = 0;
-    archive = [];
+    /** Ids of the compactions committed in this conversation; every saved record names them (see commitCompaction). */
+    committedCompactions = [];
+    /** Where compaction archives the originals it replaces: set by the host (the session archive), else beside the task state. */
+    archiveSink;
+    /** Compaction admission prepared for this step, committed once by admitWithFindings. */
+    pendingCompaction;
+    /** Provenance of the newest committed compaction, written with every task-state checkpoint. */
+    compactionProvenance;
+    /** Operator /compact requests held until the running turn's next step boundary (or its end). */
+    compactionQueue = [];
+    /** Durable-write failures during the running turn, reported on its result. */
+    turnPersistenceFailures = [];
     /** A mid-turn progress save failed and no save has succeeded since (the notice is given once). */
     progressSaveFailing = false;
+    sessionSaveFailing = false;
+    /** What a task-state recovery found in the compaction archive, when it was not whole. */
+    recoveryArchiveNotice;
     /** Every original compaction replaced in this conversation (bounded), searchable with read_archive. */
     archiveForReading = [];
     constructor(config, depth = 0, inheritedWorktreeScope) {
@@ -877,6 +990,7 @@ export class AutonomousAgent {
             messages: this.messages,
             unverifiedChangesPending: this.hasPendingModifications,
             durableNotes: notes ? [notes] : undefined,
+            ...(this.compactionProvenance ? { compactionProvenance: this.compactionProvenance } : {}),
             providerRecovery: this.activeProviderRecovery,
             objective: this.objective ?? null,
             findings: this.getFindings(),
@@ -925,6 +1039,11 @@ export class AutonomousAgent {
         this.messages = state.messages || [];
         this.restoreFindings(state.findings);
         this.objective = state.objective ?? undefined;
+        this.restoreHistory(state.history);
+        const committed = Array.isArray(state.history?.committedCompactions) ? new Set(state.history.committedCompactions) : undefined;
+        const archived = this.stateManager.readArchive(state.taskId, committed);
+        this.restoreArchive(archived.messages);
+        this.recoveryArchiveNotice = describeArchiveRead(archived);
         const unsettled = this.settleUnrecordedToolCalls();
         // Resumed work is the same unit: what compaction removed before the restart is still not in context.
         this.carriedRemovedObservations = unreacquiredRemovals(this.messages);
@@ -1256,6 +1375,7 @@ export class AutonomousAgent {
             if (!this.progressSaveFailing) {
                 this.progressSaveFailing = true;
                 const text = `Progress could not be saved mid-turn (${redactSecrets(String(err?.message ?? err)).slice(0, 200)}); if the process stops before the turn ends, work since the last save is lost.`;
+                this.turnPersistenceFailures.push(text);
                 if (this.observer?.onNotice)
                     this.observer.onNotice(text);
                 else
@@ -1264,8 +1384,20 @@ export class AutonomousAgent {
         }
         try {
             this.progressListener?.();
+            this.sessionSaveFailing = false;
         }
-        catch { }
+        catch (err) {
+            // The host's session record (what /resume reads) failed: reported once until a save succeeds again.
+            if (!this.sessionSaveFailing) {
+                this.sessionSaveFailing = true;
+                const text = `The session record could not be saved mid-turn (${redactSecrets(String(err?.message ?? err)).slice(0, 200)}); a resume would start from its last saved state.`;
+                this.turnPersistenceFailures.push(text);
+                if (this.observer?.onNotice)
+                    this.observer.onNotice(text);
+                else
+                    console.warn(pc.yellow(text));
+            }
+        }
     }
     /**
      * Gives every tool call in a recovered conversation a result: a call whose result was never recorded gets a note
@@ -1310,7 +1442,8 @@ export class AutonomousAgent {
         this.objective = undefined;
         this.compactions = 0;
         this.archivedTotal = 0;
-        this.archive = [];
+        this.committedCompactions = [];
+        this.compactionProvenance = undefined;
         this.archiveForReading = [];
         this.messages = [
             {
@@ -1448,15 +1581,35 @@ export class AutonomousAgent {
         this.objective = undefined;
         return previous;
     }
-    /** How complete `getMessages()` is as a history of this conversation. */
+    /**
+     * How complete `getMessages()` is as a history of this conversation, and which compactions this record commits: a
+     * reader takes from the archive only the originals of those compactions (core/durable_file.ts).
+     */
     getHistoryCompleteness() {
-        return { complete: this.compactions === 0, compactions: this.compactions, archivedMessages: this.archivedTotal };
+        return { complete: this.compactions === 0, compactions: this.compactions, archivedMessages: this.archivedTotal, committedCompactions: [...this.committedCompactions] };
     }
-    /** Originals replaced by context compaction since the last call; the host archives them beside the session. */
-    drainArchivedHistory() {
-        const drained = this.archive;
-        this.archive = [];
-        return drained;
+    /**
+     * Resumes a saved conversation: messages, objective (with its execution tracking), findings, the compaction record,
+     * and the archived originals of the compactions that record committed. Returns what the operator should know about
+     * the archive (interrupted compactions set aside, torn lines, missing originals), or undefined when it is whole.
+     */
+    restoreConversation(session, readArchive) {
+        this.restoreSession(session.messages, session.unverifiedChangesPending, session.objective, session.findings);
+        this.restoreHistory(session.history);
+        const committed = Array.isArray(session.history?.committedCompactions) ? new Set(session.history.committedCompactions) : undefined;
+        const read = readArchive(committed);
+        this.restoreArchive(read.messages);
+        return describeArchiveRead(read);
+    }
+    /** Restores the compaction record of a resumed conversation (its saved `history`), so completeness stays truthful. */
+    restoreHistory(history) {
+        this.compactions = typeof history?.compactions === "number" ? history.compactions : 0;
+        this.archivedTotal = typeof history?.archivedMessages === "number" ? history.archivedMessages : 0;
+        this.committedCompactions = Array.isArray(history?.committedCompactions) ? history.committedCompactions.filter((id) => typeof id === "string") : [];
+    }
+    /** Where compaction archives replaced originals before committing (the host's session archive). */
+    setArchiveSink(sink) {
+        this.archiveSink = sink;
     }
     /**
      * Operator steering for the running turn. Queued now, applied once at the next step boundary (never mid-tool), and
@@ -1526,7 +1679,7 @@ export class AutonomousAgent {
         if (!ledgerNeedsPinning(ledger, inContext))
             return messages;
         // A quarter of the context window (≈4 characters per token) for the objective when it must be carried in full.
-        const budget = Math.max(8000, Math.floor((this.config.contextLimit || 65536) * 4 * 0.25));
+        const budget = Math.max(8000, Math.floor(this.contextLimit() * 4 * 0.25));
         return [messages[0], { role: "system", content: renderPinnedLedger(ledger, !inContext, budget) }, ...messages.slice(1)];
     }
     /**
@@ -1551,6 +1704,40 @@ export class AutonomousAgent {
         catch {
             return undefined;
         }
+    }
+    /**
+     * The state an action's repetition is judged against (core/execution_tracking.ts): workspace content identity, git
+     * index, content of ignored dependency/environment inputs, PATH. "unknown" when it cannot be established, or when
+     * establishing it proved too costly earlier in this turn; the reason is kept in `stateIdentityUncertainty`.
+     */
+    workspaceStateIdentity() {
+        if (this.stateIdentityDisabled)
+            return "unknown";
+        const started = Date.now();
+        try {
+            const workspace = this.config.workspace;
+            const candidate = computeCandidateIdentitySync(workspace).candidateId;
+            let index = "no-git";
+            try {
+                index = gitIndexIdentity(workspace);
+            }
+            catch { }
+            const id = combineState([candidate, index, externalInputsContentIdentity(workspace)]);
+            const took = Date.now() - started;
+            if (took > STATE_IDENTITY_BUDGET_MS) {
+                this.stateIdentityDisabled = true;
+                this.stateIdentityUncertainty = `establishing the workspace state took ${took} ms; for the rest of this turn repeated actions are judged without it (state reported as unknown)`;
+            }
+            return id;
+        }
+        catch (err) {
+            this.stateIdentityUncertainty = `the workspace state could not be established (${String(err?.message ?? err).slice(0, 160)})`;
+            return "unknown";
+        }
+    }
+    /** What the acceptance ledger asserts now (not the plan): a new value is ledger progress. */
+    ledgerProgressIdentity() {
+        return ledgerStateIdentity(this.objective?.requirements ?? [], this.verificationEvidence ?? null);
     }
     /** The newest recorded PASSED verifier attempt that still describes the current workspace, if any. */
     currentPassingAttempt() {
@@ -1577,14 +1764,233 @@ export class AutonomousAgent {
         catch { }
     }
     getContextBudget() {
-        const limit = this.config.contextLimit || 65536;
+        const limit = this.contextLimit();
         return calculateContextBudget(this.messages, this.getEffectiveTools(), limit);
     }
+    /**
+     * What admission keeps free beside the prompt: the output allowance (advertised by the provider, set by the operator,
+     * or the client default, see provider_capabilities.ts) and the tool-output headroom, a scheduling policy for the next
+     * tool results (min(4096, context/8) unless configured). Neither is a measurement.
+     */
     getContextReserves() {
-        const limit = this.config.contextLimit || 65536;
-        const completion = this.config.completionReserveTokens ?? Math.min(8192, Math.floor(limit / 4));
-        const toolResponse = this.config.toolResponseReserveTokens ?? Math.min(4096, Math.floor(limit / 8));
+        const limits = this.effectiveLimits();
+        const completion = limits.outputAllowance;
+        const toolResponse = toolHeadroomPolicy(limits.contextLimit, this.config.toolResponseReserveTokens);
         return { completion, toolResponse, total: completion + toolResponse };
+    }
+    /**
+     * The limits in effect, resolved on every read from the last advertisement and the operator's current settings
+     * (resolveLimits): a changed `--context-limit` or allowance takes effect at once, without waiting for a refresh.
+     */
+    effectiveLimits() {
+        const limits = resolveLimits(this.capabilities?.advertised, this.config.contextLimit, this.config.completionReserveTokens);
+        if (this.capabilities)
+            Object.assign(this.capabilities, limits);
+        return limits;
+    }
+    /**
+     * The client estimate of a request, scaled by the last measured/estimated ratio when the connection counts requests
+     * (estimateScale): admission's compaction ladder then aims at what the provider will actually count.
+     */
+    scaledBudget(messages, contextLimit) {
+        const budget = calculateContextBudget(this.requestMessages(messages), this.getEffectiveTools(), contextLimit);
+        return this.estimateScale === 1 ? budget : { ...budget, totalActiveTokens: Math.ceil(budget.totalActiveTokens * this.estimateScale) };
+    }
+    /** The context window in effect: advertised capacity, the operator's setting, or the client default (in that order of authority, see resolveLimits). */
+    contextLimit() {
+        return this.effectiveLimits().contextLimit;
+    }
+    /** Sizing and counting evidence for receipts: what the limits were, where they came from, how the last request was counted. */
+    tokenAccounting() {
+        const caps = this.capabilities;
+        const reserves = this.getContextReserves();
+        const last = this.lastRequestCount;
+        return {
+            contextLimit: this.contextLimit(),
+            contextSource: caps?.contextSource ?? (this.config.contextLimit ? "operator" : "client_default"),
+            outputAllowance: reserves.completion,
+            outputSource: caps?.outputSource ?? (this.config.completionReserveTokens ? "operator" : "client_default"),
+            toolHeadroomPolicy: reserves.toolResponse,
+            discovery: caps?.discovery ?? "unknown",
+            tokenCounting: caps?.tokenCounting ?? "unknown",
+            ...(caps?.advertised?.limitsVersion ? { limitsVersion: caps.advertised.limitsVersion } : {}),
+            ...(caps?.advertised?.workers?.length ? { workers: caps.advertised.workers } : {}),
+            ...(last
+                ? {
+                    lastRequest: {
+                        step: last.step,
+                        promptTokens: last.promptTokens,
+                        source: last.source,
+                        clientEstimate: last.estimate,
+                        ...(last.workerId ? { countedWorker: last.workerId } : {}),
+                        ...(last.detail ? { uncertainty: last.detail } : {}),
+                        ...(last.admitted?.promptTokens !== undefined ? { admittedTokens: last.admitted.promptTokens, admittedSource: last.admitted.source } : {}),
+                        ...(last.admitted?.workerId ? { admittedWorker: last.admitted.workerId } : {}),
+                        ...(last.workerDiffers ? { workerDiffers: true } : {}),
+                    },
+                }
+                : {}),
+        };
+    }
+    getProviderCapabilities() {
+        return this.capabilities;
+    }
+    /**
+     * What the gateway reported about the request it admitted (response headers): its own count (`exact_admitted`), the
+     * worker and pool it routed to, and the limits in force there. A different worker than the counted one, or a capacity
+     * other than the one in effect, is recorded and makes the next step re-read the provider's capabilities.
+     */
+    noteAdmission(client, step) {
+        const admitted = typeof client.getLastAdmission === "function" ? client.getLastAdmission() : undefined;
+        if (!admitted)
+            return;
+        const counted = this.lastRequestCount?.step === step ? this.lastRequestCount : undefined;
+        const workerDiffers = Boolean(counted?.workerId && admitted.workerId && counted.workerId !== admitted.workerId);
+        if (counted) {
+            counted.admitted = admitted;
+            counted.workerDiffers = workerDiffers;
+        }
+        const advertisedContext = this.capabilities?.advertised?.contextLength;
+        if (admitted.contextLimit && admitted.contextLimit !== (typeof advertisedContext === "number" ? advertisedContext : this.contextLimit())) {
+            this.capabilitiesStale = `admitted on ${admitted.workerId ?? "a worker"} with context ${admitted.contextLimit} (advertised: ${advertisedContext ?? "none"})`;
+        }
+        if (!process.stdout.isTTY || process.env.NEXUS_DEBUG === "1") {
+            console.log(`[token_count] step=${step} admitted source=${admitted.source ?? "none"} prompt_tokens=${admitted.promptTokens ?? "?"} worker=${admitted.workerId ?? "?"} pool=${admitted.pool ?? "?"} limits_version=${admitted.limitsVersion ?? "?"} context_limit=${admitted.contextLimit ?? "?"}${counted ? ` counted_source=${counted.source} counted_tokens=${counted.promptTokens} counted_worker=${counted.workerId ?? "?"}` : ""}${workerDiffers ? " worker_differs=true" : ""}${admitted.clamped ? " clamped=true" : ""}`);
+        }
+    }
+    getLastRequestCount() {
+        return this.lastRequestCount;
+    }
+    /**
+     * Discovers (or refreshes) what the connection `client` advertises: context capacity, output allowance, limits
+     * version, serving workers and request counting. Network only when nothing is known for this endpoint and model,
+     * when `force` (model or routing changed, capacity rejected, a different worker or capacity was observed), or after
+     * CAPABILITY_TTL_MS. Failure is scoped to this capability: the connection keeps the operator's or default limits,
+     * labelled as such. Never consults another endpoint or provider.
+     */
+    async refreshCapabilities(client, reason, force = false, signal) {
+        if (this.depth > 0 && this.capabilities)
+            return;
+        // Clients without discovery (test doubles, minimal connections) keep the configured or default limits.
+        if (typeof client.discoverAdvertisement !== "function" || typeof client.getModel !== "function")
+            return;
+        const key = `${client.getActiveEndpoint?.() ?? ""}|${client.getModel()}`;
+        const current = this.capabilities;
+        const fresh = current && this.capabilitiesKey === key && Date.now() - this.capabilitiesCheckedAt < CAPABILITY_TTL_MS;
+        if (fresh && !force)
+            return;
+        let found;
+        try {
+            found = await client.discoverAdvertisement(signal);
+        }
+        catch {
+            return; // cancelled: keep what is known
+        }
+        this.capabilitiesCheckedAt = Date.now();
+        // A temporarily unreadable catalog keeps the last valid advertisement for the same connection.
+        const advertised = found.state === "unavailable" && this.capabilitiesKey === key ? current?.advertised : found.advertised;
+        const limits = resolveLimits(found.state === "supported" || advertised ? advertised : undefined, this.config.contextLimit, this.config.completionReserveTokens);
+        const tokenCounting = !advertised?.tokenize ? "unsupported" : this.tokenCountingState === "unavailable" && Date.now() < this.tokenCountingCooldownUntil ? "unavailable" : "supported";
+        const next = {
+            model: client.getModel(),
+            observedAt: new Date().toISOString(),
+            discovery: found.state === "unavailable" && advertised ? "supported" : found.state,
+            ...(found.detail ? { discoveryDetail: found.state === "unavailable" && advertised ? `refresh failed (${found.detail}); last advertisement kept` : found.detail } : {}),
+            ...(advertised ? { advertised } : {}),
+            tokenCounting,
+            ...(tokenCounting === "unavailable" && this.tokenCountingDetail ? { tokenCountingDetail: this.tokenCountingDetail } : {}),
+            ...limits,
+        };
+        const changed = !current || this.capabilitiesKey !== key || advertisementChanged(current.advertised, next.advertised) || current.contextLimit !== next.contextLimit || current.outputAllowance !== next.outputAllowance;
+        this.capabilities = next;
+        this.capabilitiesKey = key;
+        client.setOutputAllowance?.(next.outputAllowance);
+        if (changed) {
+            const line = `[provider_capabilities] reason=${reason} model=${next.model} ${describeCapabilities(next)}`;
+            if (!process.stdout.isTTY || process.env.NEXUS_DEBUG === "1")
+                console.log(line);
+            if (current && this.capabilitiesKey === key && this.activeTurn) {
+                const text = `Provider limits changed (${reason}): ${describeCapabilities(next)}.`;
+                if (this.observer?.onNotice)
+                    this.observer.onNotice(text);
+            }
+        }
+    }
+    /**
+     * Measures the admitted request through the connection's request counting, when it advertises one; otherwise the
+     * request rests on the client estimate, which is said. A measured count that would not fit re-runs admission with
+     * the estimates calibrated to the measurement (at most twice), then refuses. Strict counting (operator opt-in) refuses
+     * a request that could not be measured on a worker; normally an unmeasured request proceeds on the estimate.
+     */
+    async measureAdmission(client, step, requestId, signal) {
+        const strict = Boolean(this.config.strictTokenCount);
+        for (let round = 0;; round++) {
+            const limit = this.contextLimit();
+            const reserves = this.getContextReserves();
+            const messages = this.requestMessages(this.messages);
+            const tools = this.getEffectiveTools();
+            const estimate = calculateContextBudget(messages, tools, limit).totalActiveTokens;
+            const caps = this.capabilities;
+            let count;
+            let unmeasured;
+            if (!caps?.advertised?.tokenize) {
+                unmeasured = caps?.discovery === "unavailable" ? `capability discovery unavailable (${caps.discoveryDetail ?? "no detail"})` : "the connection advertises no request counting";
+            }
+            else if (this.tokenCountingState === "unavailable" && Date.now() < this.tokenCountingCooldownUntil) {
+                unmeasured = `request counting unavailable (${this.tokenCountingDetail ?? "no detail"})`;
+            }
+            else if (this.tokenCountingState === "unsupported") {
+                unmeasured = `request counting unsupported (${this.tokenCountingDetail ?? "no detail"})`;
+            }
+            else {
+                try {
+                    count = await client.countRequestTokens(messages, tools, requestId, signal);
+                    this.tokenCountingState = "supported";
+                    this.tokenCountingDetail = undefined;
+                    if (caps)
+                        caps.tokenCounting = "supported";
+                }
+                catch (err) {
+                    if (err instanceof TokenCountError && err.kind === "aborted")
+                        throw new InferenceError("aborted", "operator", "Request counting cancelled by operator", { requestId, failoverEligible: false });
+                    const kind = err instanceof TokenCountError ? err.kind : "unavailable";
+                    this.tokenCountingState = kind === "unsupported" ? "unsupported" : "unavailable";
+                    this.tokenCountingDetail = `${kind}: ${String(err?.message ?? err).slice(0, 160)}`;
+                    this.tokenCountingCooldownUntil = Date.now() + TOKEN_COUNT_COOLDOWN_MS;
+                    if (caps) {
+                        caps.tokenCounting = this.tokenCountingState;
+                        caps.tokenCountingDetail = this.tokenCountingDetail;
+                    }
+                    unmeasured = `request counting ${this.tokenCountingDetail}`;
+                }
+            }
+            const source = count?.source ?? "client_estimate";
+            const tokens = count?.promptTokens ?? estimate;
+            this.lastRequestCount = { promptTokens: tokens, source, estimate, step, ...(count?.workerId ? { workerId: count.workerId } : {}), ...(count?.limitsVersion ? { limitsVersion: count.limitsVersion } : {}), ...(count?.contextLength ? { contextLength: count.contextLength } : {}), ...(unmeasured ? { detail: unmeasured } : {}) };
+            if (!process.stdout.isTTY || process.env.NEXUS_DEBUG === "1") {
+                console.log(`[token_count] step=${step} request_id=${requestId} source=${source} prompt_tokens=${tokens} client_estimate=${estimate} context_limit=${limit} (${caps?.contextSource ?? "client_default"}) output_allowance=${reserves.completion} (${caps?.outputSource ?? "client_default"}) tool_headroom_policy=${reserves.toolResponse}${count?.workerId ? ` worker=${count.workerId}` : ""}${count?.limitsVersion ? ` limits_version=${count.limitsVersion}` : ""}${unmeasured ? ` unmeasured="${unmeasured}"` : ""}`);
+            }
+            if (strict && source !== "exact_sampled_worker" && source !== "exact_admitted") {
+                throw new ContextBudgetError(tokens, reserves.completion, reserves.toolResponse, limit, { source, unmeasured: `strict counting: ${unmeasured ?? `only a ${source} count is available`}` });
+            }
+            if (!count)
+                return;
+            // The counted worker reports a different capacity than the provider advertised: refresh before relying on either.
+            // (Compared with the advertised capacity, not the limit in effect, which an operator may have set lower.)
+            const advertisedContext = caps?.advertised?.contextLength;
+            if (count.contextLength && typeof advertisedContext === "number" && count.contextLength !== advertisedContext && round === 0) {
+                await this.refreshCapabilities(client, `counted worker ${count.workerId ?? "?"} reports context ${count.contextLength}`, true, signal);
+                continue;
+            }
+            if (estimate > 0)
+                this.estimateScale = Math.min(4, Math.max(0.5, count.promptTokens / estimate));
+            if (isContextAdmissible(count.promptTokens, limit, reserves.completion, reserves.toolResponse))
+                return;
+            if (round >= 2)
+                throw new ContextBudgetError(count.promptTokens, reserves.completion, reserves.toolResponse, limit, { source });
+            // Measured over budget: admit again with estimates calibrated to the measurement (compacting further).
+            await this.admitWithFindings(client, step, requestId, signal);
+        }
     }
     /**
      * @param unseen tool results in `messages` the model has not been shown yet (default: those after the last
@@ -2113,11 +2519,11 @@ export class AutonomousAgent {
     }
     /** Characters recorded findings may take in the durable record: FINDINGS_BUDGET_CHARS in a 64k-token window, less in a smaller one. */
     findingsBudgetChars() {
-        return Math.floor(FINDINGS_BUDGET_CHARS * Math.min(1, (this.config.contextLimit || 65536) / 65536));
+        return Math.floor(FINDINGS_BUDGET_CHARS * Math.min(1, this.contextLimit() / 65536));
     }
     /** Characters the memory's other notes may take: MEMORY_NOTES_BUDGET_CHARS in a 64k-token window, less in a smaller one. */
     memoryNotesBudgetChars() {
-        return Math.floor(MEMORY_NOTES_BUDGET_CHARS * Math.min(1, (this.config.contextLimit || 65536) / 65536));
+        return Math.floor(MEMORY_NOTES_BUDGET_CHARS * Math.min(1, this.contextLimit() / 65536));
     }
     /**
      * Admits the next request (see `admitContext`). When that compaction removed tool output the model had already been
@@ -2126,19 +2532,39 @@ export class AutonomousAgent {
      */
     async admitWithFindings(client, step, requestId, signal) {
         const original = this.messages;
-        const removed = this.admitContext(step, requestId);
-        if (!removed.length || !(await this.recordFindings(client, step, original, removed, signal)))
-            return;
-        const admitted = this.messages;
-        this.messages = original;
+        this.pendingCompaction = undefined;
         try {
-            this.admitContext(step, requestId);
+            const removed = this.admitContext(step, requestId);
+            if (removed.length && (await this.recordFindings(client, step, original, removed, signal))) {
+                const admitted = this.messages;
+                const prepared = this.pendingCompaction;
+                this.messages = original;
+                try {
+                    this.admitContext(step, requestId);
+                }
+                catch (err) {
+                    if (!(err instanceof ContextBudgetError))
+                        throw err;
+                    this.messages = admitted;
+                    this.pendingCompaction = prepared;
+                }
+            }
         }
         catch (err) {
-            if (!(err instanceof ContextBudgetError))
-                throw err;
-            this.messages = admitted;
+            // Refused: nothing was committed, and the conversation is the one before admission.
+            this.messages = original;
+            this.pendingCompaction = undefined;
+            throw err;
         }
+        // Read through a function: the assignments above do not narrow what admitContext set.
+        const pending = (() => this.pendingCompaction)();
+        this.pendingCompaction = undefined;
+        if (!pending || this.messages === original)
+            return;
+        // The compacted conversation becomes the conversation only once committed (archive first, then records).
+        const compacted = this.messages;
+        this.messages = original;
+        this.commitCompaction(original, compacted, { trigger: "auto", step, beforeTokens: pending.beforeTokens, afterTokens: pending.afterTokens, pressureOnly: pending.pressureOnly });
     }
     /**
      * Asks the model (one inference per batch, no tools) what the shown, unrecorded observations among `removed`
@@ -2174,7 +2600,7 @@ export class AutonomousAgent {
         // The request the findings serve is the operator's latest, not a note Nexus added (CTX-06).
         const lastUser = [...source].reverse().find((message) => message.role === "user" && !this.harnessNote(normalizeMessageContent(message.content ?? "").text.join("")));
         const request = normalizeMessageContent(lastUser?.content ?? "").text.join("").slice(0, 8_000);
-        const contextLimit = this.config.contextLimit || 65536;
+        const contextLimit = this.contextLimit();
         const inputBudget = contextLimit - this.getContextReserves().completion - countTokens(FINDINGS_INSTRUCTIONS) - countTokens(request) - 1_000;
         if (inputBudget <= 0)
             return false;
@@ -2282,7 +2708,8 @@ export class AutonomousAgent {
         const incomplete = incompleteOutputNotice(call.function.name, args, content);
         const result = this.rerunNotedContent(call, incomplete ? `${incomplete}\n${content}` : content, step, maxSteps);
         const remaining = maxSteps - step;
-        const closing = remaining < Math.max(3, Math.ceil(maxSteps / 5));
+        // The closing note exists only under a step limit the operator set: progressing work has no default ceiling.
+        const closing = Number.isFinite(maxSteps) && remaining < Math.max(3, Math.ceil(maxSteps / 5));
         if ((!closing && !this.findingsOutgrown) || this.stepNoticeStep === step || remaining <= 0)
             return result;
         this.stepNoticeStep = step;
@@ -2290,7 +2717,7 @@ export class AutonomousAgent {
             return `[Nexus: this is step ${step} of ${maxSteps}; ${remaining === 1 ? "1 step remains" : `${remaining} steps remain`} after it. Finish now, leaving room for validation: consolidate what the output you inspected established into your work product (if your task produces none, state in the task_completed summary what remains unestablished), check it against every requirement of the task and that every file path it cites exists, then call task_completed to submit it (the operator's verifier, when configured, checks it), keeping steps in hand to correct what validation reports and submit again. Investigate further only where a requirement still lacks evidence; do not state what the evidence does not support.${this.findingsCondensed ? " Some of your recorded findings are shown in your memory only condensed or not at all: before you submit, check with read_findings any claim that something is absent, never happens or is not used, and any claim those findings bear on." : ""} Work left unfinished at the step limit is reported as not established.]\n${result}`;
         }
         const { reduced, total } = this.findingsShown;
-        return `[Nexus: your recorded findings have outgrown your memory; ${reduced} of ${total} are no longer shown in it in full, more give way with each finding you record, and reading them back with read_findings takes steps. Write what you have established into your work product now (the file or change your task produces; if it produces none, state it in the task_completed summary), before investigating further, then continue with what remains. This is step ${step} of ${maxSteps}.]\n${result}`;
+        return `[Nexus: your recorded findings have outgrown your memory; ${reduced} of ${total} are no longer shown in it in full, more give way with each finding you record, and reading them back with read_findings takes steps. Write what you have established into your work product now (the file or change your task produces; if it produces none, state it in the task_completed summary), before investigating further, then continue with what remains. This is ${stepPosition(step, maxSteps)}.]\n${result}`;
     }
     rerunNotedContent(call, content, step, maxSteps) {
         const key = observationKey(call.function.name, call.function.arguments);
@@ -2304,17 +2731,23 @@ export class AutonomousAgent {
         // Findings from a partial or now-different output do not cover this one: record findings again when it is removed.
         if (!same)
             this.distilledObservations.delete(key);
-        return `[Nexus: you ran this same call before; findings from its output were recorded at step ${recorded.step}${recorded.id ? ` (${recorded.id})` : ""} and are in your memory. ${comparison} This is step ${step} of ${maxSteps}. If those findings already cover what you need, use them and move on to the next part of your task.]\n${content}`;
+        return `[Nexus: you ran this same call before; findings from its output were recorded at step ${recorded.step}${recorded.id ? ` (${recorded.id})` : ""} and are in your memory. ${comparison} This is ${stepPosition(step, maxSteps)}. If those findings already cover what you need, use them and move on to the next part of your task.]\n${content}`;
     }
     /** Returns the observations the accepted compaction removed (none when no compaction was needed). */
     admitContext(step, requestId) {
-        const contextLimit = this.config.contextLimit || 65536;
+        const contextLimit = this.contextLimit();
         const reserves = this.getContextReserves();
         const original = this.messages;
-        let budget = calculateContextBudget(this.requestMessages(original), this.getEffectiveTools(), contextLimit);
+        let budget = this.scaledBudget(original, contextLimit);
+        const initialTokens = budget.totalActiveTokens;
+        const initiallyAdmissible = isContextAdmissible(initialTokens, contextLimit, reserves.completion, reserves.toolResponse);
         let compacted = false;
         let compactionAttempts = 0;
         const maxCompactionAttempts = 5;
+        // Anti-thrashing across steps: after consecutive pressure compactions that each freed little (see
+        // ExecutionTracker.compaction), compact only when the request would not fit, not on pressure alone.
+        const lowYieldRun = this.depth === 0 && this.objective?.execution ? this.objective.execution.lowYieldCompactions : 0;
+        const pressureCompactionAllowed = lowYieldRun < LOW_YIELD_COMPACTIONS_BEFORE_HOLD;
         const removedNow = [];
         // Anti-thrashing: only re-compact when the previous ladder pass actually shrank the
         // context. Once a pass yields no token reduction, a stronger pass would also be a no-op.
@@ -2326,7 +2759,7 @@ export class AutonomousAgent {
         while (lastPassShrank && compactionAttempts < maxCompactionAttempts &&
             (compactionAttempts === 0
                 ? (!isContextAdmissible(budget.totalActiveTokens, contextLimit, reserves.completion, reserves.toolResponse) ||
-                    isContextPressureHigh(this.requestMessages(original), this.getEffectiveTools(), contextLimit, 80, reserves.completion, reserves.toolResponse, 1000))
+                    (pressureCompactionAllowed && isContextPressureHigh(this.requestMessages(original), this.getEffectiveTools(), contextLimit, 80, reserves.completion, reserves.toolResponse, 1000)))
                 : !isContextAdmissible(budget.totalActiveTokens, contextLimit, reserves.completion, reserves.toolResponse))) {
             compacted = true;
             if (compactionAttempts === 0)
@@ -2339,7 +2772,7 @@ export class AutonomousAgent {
             const recentTurnsList = compactionAttempts >= 2 ? [1, 0] : [2, 1, 0];
             const detailBudgetList = compactionAttempts >= 2 ? [3000, 1200, 400, 0] : [6000, 3000, 1200, 400, 0];
             const accept = (candidate, truncatedUnseen = false) => {
-                const candidateBudget = calculateContextBudget(this.requestMessages(candidate.messages), this.getEffectiveTools(), contextLimit);
+                const candidateBudget = this.scaledBudget(candidate.messages, contextLimit);
                 if (!isContextAdmissible(candidateBudget.totalActiveTokens, contextLimit, reserves.completion, reserves.toolResponse))
                     return false;
                 this.messages = candidate.messages;
@@ -2360,7 +2793,7 @@ export class AutonomousAgent {
                     const tokensPerChar = unseenText.length ? Math.max(countTokens(unseenText) / unseenText.length, 0.05) : 1;
                     for (const detailBudgetChars of detailBudgetList) {
                         const floor = this.compactionCandidate(original, 1, detailBudgetChars, 0);
-                        const room = contextLimit - reserves.completion - reserves.toolResponse - calculateContextBudget(this.requestMessages(floor.messages), this.getEffectiveTools(), contextLimit).totalActiveTokens;
+                        const room = contextLimit - reserves.completion - reserves.toolResponse - this.scaledBudget(floor.messages, contextLimit).totalActiveTokens;
                         if (room <= 0)
                             continue;
                         for (let chars = Math.floor(room / tokensPerChar), tries = 0; tries < 4 && !accepted; chars = Math.floor(chars * 0.75), tries++) {
@@ -2382,7 +2815,7 @@ export class AutonomousAgent {
                     break;
             }
             if (!accepted) {
-                budget = calculateContextBudget(this.requestMessages(this.messages), this.getEffectiveTools(), contextLimit);
+                budget = this.scaledBudget(this.messages, contextLimit);
                 if (!process.stdout.isTTY || process.env.NEXUS_DEBUG === "1")
                     console.log(`[context_admission] step=${step} request_id=${requestId} state=compaction_insufficient attempts=${compactionAttempts} estimated_tokens=${budget.totalActiveTokens} completion_reserve=${reserves.completion} tool_response_reserve=${reserves.toolResponse} limit=${contextLimit}`);
                 lastPassShrank = false;
@@ -2390,9 +2823,11 @@ export class AutonomousAgent {
             }
             lastPassShrank = budget.totalActiveTokens < passBudgetBefore - 1;
         }
-        // Step 0 is the /compact --llm summary request, whose prompt is a copy of messages archived by compactConversation.
-        if (this.messages !== original && step > 0)
-            this.archiveReplaced(original, this.messages);
+        // Step 0 is the /compact --llm summary request, whose prompt is a copy of messages compactConversation archives.
+        // The compaction is not committed here: admitWithFindings commits it once (archive, then records) before inference.
+        if (this.messages !== original && step > 0) {
+            this.pendingCompaction = { original, beforeTokens: initialTokens, afterTokens: budget.totalActiveTokens, pressureOnly: initiallyAdmissible };
+        }
         if (!isContextAdmissible(budget.totalActiveTokens, contextLimit, reserves.completion, reserves.toolResponse)) {
             if (!process.stdout.isTTY || process.env.NEXUS_DEBUG === "1")
                 console.log(`[context_admission] step=${step} request_id=${requestId} state=blocked estimated_tokens=${budget.totalActiveTokens} completion_reserve=${reserves.completion} tool_response_reserve=${reserves.toolResponse} limit=${contextLimit} compacted=${compacted} messages=${this.messages.length}`);
@@ -2402,16 +2837,119 @@ export class AutonomousAgent {
             console.log(`[context_admission] step=${step} request_id=${requestId} state=admitted estimated_tokens=${budget.totalActiveTokens} completion_reserve=${reserves.completion} tool_response_reserve=${reserves.toolResponse} limit=${contextLimit} compacted=${compacted} messages=${this.messages.length}`);
         return Array.from(new Set(removedNow));
     }
-    /** Records that compaction replaced messages: the originals (not derived summaries) are kept for the host to archive. */
-    archiveReplaced(before, after) {
-        const kept = new Set(after);
-        const replaced = before.filter((message, index) => index > 0 && !kept.has(message) && message.role !== "system");
+    /**
+     * Makes `compacted` the conversation, durably and observably. The commit order is what makes it recoverable:
+     *   1. the originals compaction replaced are appended to the archive (fsync), tagged with this compaction's id;
+     *   2. the conversation switches to `compacted`, and the id is added to the committed list;
+     *   3. the task state is written (temp, fsync, rename), then the host's session record (`progressListener`).
+     * Every record names the compactions it commits, and its readers take from the archive only those (durable_file.ts).
+     * Process death before 1 completes leaves every record pre-compaction and at most a torn archive line; between 1 and
+     * 3, the archive holds lines no record commits (set aside on read) while the records hold the originals in their
+     * messages; after 3, everything agrees. Nothing is replayed: compaction rewrites context, it never re-runs actions,
+     * and it is only committed at a boundary where every tool call has its recorded result.
+     *
+     * A failure to archive leaves the conversation uncompacted. A failure to write a record leaves the compaction applied
+     * in memory (its originals are archived) but not durable in that record. Both throw CompactionCommitError naming
+     * exactly what was and was not written; nothing is reported as durable unless every write succeeded.
+     * In-turn subagents are not durable units (their parent is): their compactions are applied in memory only.
+     */
+    commitCompaction(original, compacted, meta) {
+        const kept = new Set(compacted);
+        const replaced = original.filter((message, index) => index > 0 && !kept.has(message) && message.role !== "system");
+        const id = `c${this.compactions + 1}-${randomUUID().slice(0, 8)}`;
+        const tracker = this.depth === 0 && this.objective ? trackingOf(this.objective) : undefined;
+        const window = this.contextLimit();
+        const records = {};
+        const durableUnit = this.depth === 0;
+        const outcome = (durable, message) => ({
+            id, trigger: meta.trigger, durable, archived: replaced.length, beforeTokens: meta.beforeTokens, afterTokens: meta.afterTokens, records, message,
+        });
+        if (!replaced.length) {
+            // Nothing earlier could be removed: no compaction (no id, no archive lines). Under pressure alone, that is
+            // still thrash evidence: the same attempt would recur every step without reducing anything.
+            if (tracker && meta.pressureOnly) {
+                tracker.data.lowYieldCompactions++;
+                if (tracker.data.lowYieldCompactions === LOW_YIELD_COMPACTIONS_BEFORE_HOLD) {
+                    tracker.stagnation(tracker.data.cumulativeSteps, "compaction_thrash", "pressure compaction found nothing to remove; further compaction waits until a request would not fit");
+                }
+            }
+            return outcome(true, "Nothing earlier could be condensed; the conversation is unchanged.");
+        }
+        const unsettled = this.unsettledToolCalls(original);
+        if (unsettled.length) {
+            throw new CompactionCommitError(outcome(false, `Not compacted: ${unsettled.length} tool call(s) have no recorded result yet; compaction waits for the tool batch to settle.`), false);
+        }
+        if (durableUnit) {
+            try {
+                if (this.archiveSink)
+                    this.archiveSink(id, replaced);
+                else
+                    this.stateManager.appendArchive(this.currentTaskId, id, replaced);
+                records.archive = "written";
+            }
+            catch (err) {
+                records.archive = `failed: ${redactSecrets(String(err?.message ?? err)).slice(0, 200)}`;
+                tracker?.compaction({ id, step: tracker.data.cumulativeSteps, trigger: meta.trigger, beforeTokens: meta.beforeTokens, afterTokens: meta.beforeTokens, archivedMessages: 0, committed: false, detail: records.archive }, window, meta.pressureOnly);
+                throw new CompactionCommitError(outcome(false, `Not compacted: the originals could not be archived (${records.archive}); the conversation is unchanged.`), false);
+            }
+        }
+        this.messages = compacted;
         this.compactions++;
         this.archivedTotal += replaced.length;
-        this.archive.push(...replaced);
+        this.committedCompactions.push(id);
         this.archiveForReading.push(...replaced);
         if (this.archiveForReading.length > ARCHIVE_FOR_READING)
             this.archiveForReading.splice(0, this.archiveForReading.length - ARCHIVE_FOR_READING);
+        this.compactionProvenance = {
+            recordId: id,
+            predecessorIds: this.committedCompactions.slice(-17, -1),
+            supersededPlanStateIds: [],
+            ...(meta.summary ? { summaryContent: meta.summary } : {}),
+        };
+        const event = tracker?.compaction({ id, step: tracker.data.cumulativeSteps, trigger: meta.trigger, beforeTokens: meta.beforeTokens, afterTokens: meta.afterTokens, archivedMessages: replaced.length, committed: true }, window, meta.pressureOnly);
+        if (event?.lowYield && tracker && tracker.data.lowYieldCompactions >= LOW_YIELD_COMPACTIONS_BEFORE_HOLD) {
+            tracker.stagnation(tracker.data.cumulativeSteps, "compaction_thrash", `${tracker.data.lowYieldCompactions} consecutive pressure compactions each freed under 5% of the window; further compaction waits until a request would not fit`);
+        }
+        if (!durableUnit)
+            return outcome(false, `Compacted in memory (in-turn subagent): ${replaced.length} message(s) replaced.`);
+        // The records a restart reads are synced to stable storage here: the next action depends on them.
+        withDurableSync(() => {
+            try {
+                this.checkpointDurableState(`compaction ${id} committed`);
+                records.taskState = "written";
+            }
+            catch (err) {
+                records.taskState = `failed: ${redactSecrets(String(err?.message ?? err)).slice(0, 200)}`;
+            }
+            if (this.progressListener) {
+                try {
+                    this.progressListener();
+                    records.session = "written";
+                }
+                catch (err) {
+                    records.session = `failed: ${redactSecrets(String(err?.message ?? err)).slice(0, 200)}`;
+                }
+            }
+        });
+        const failed = Object.entries(records).filter(([, v]) => v.startsWith("failed"));
+        if (failed.length) {
+            const text = `Compaction ${id} is applied but not durable: ${failed.map(([k, v]) => `${k} ${v}`).join("; ")}. The archive holds the ${replaced.length} replaced message(s); a restart resumes from the last record that was written.`;
+            this.turnPersistenceFailures.push(text);
+            throw new CompactionCommitError(outcome(false, text), true);
+        }
+        this.progressSaveFailing = false;
+        return outcome(true, `Compacted (${id}): ${replaced.length} message(s) archived, ~${meta.beforeTokens} -> ~${meta.afterTokens} estimated tokens; archive, task state${this.progressListener ? " and session" : ""} written.`);
+    }
+    /** Tool calls of the last assistant message that have no recorded result in `messages`. */
+    unsettledToolCalls(messages) {
+        for (let i = messages.length - 1; i >= 0; i--) {
+            const m = messages[i];
+            if (m.role !== "assistant" || !m.tool_calls?.length)
+                continue;
+            const results = new Set(messages.slice(i + 1).filter((r) => r.role === "tool").map((r) => r.tool_call_id));
+            return m.tool_calls.filter((call) => !results.has(call.id)).map((call) => call.id);
+        }
+        return [];
     }
     /** A resumed conversation's archived originals (from the session's archive file), so read_archive still finds them. */
     restoreArchive(messages) {
@@ -2423,16 +2961,30 @@ export class AutonomousAgent {
     setActivePlan(phases) {
         this.activePlan = phases;
     }
-    async compactConversation(useLlm = false) {
+    /**
+     * Operator compaction (`/compact`, `/compact --llm`). Run directly only while no turn is active; during a turn the
+     * host queues it with `requestCompaction`, and the turn runs it at its next step boundary. Committed like automatic
+     * compaction (commitCompaction): the reply says what was written, and a failure is never reported as success.
+     */
+    async compactConversation(useLlm = false, signal) {
+        const outcome = await this.compactNow(useLlm, signal, 0);
+        if (!outcome.ok)
+            throw new Error(outcome.message);
+        return outcome.message;
+    }
+    /** As compactConversation, returning the outcome instead of throwing (used by the queue and the hosts). */
+    async compactNow(useLlm, signal, step = 0) {
         if (this.messages.length <= 2) {
-            return "Conversation is already compact.";
+            return { ok: true, durable: true, message: "Conversation is already compact." };
         }
         const original = this.messages;
         const compacted = this.compactedMessages(original, 1, 6000);
         const retainedMessages = new Set(compacted);
         const discarded = original.filter((message, index) => index > 0 && !retainedMessages.has(message));
-        const prunedCount = discarded.length;
+        if (!discarded.length)
+            return { ok: true, durable: true, message: "Conversation is already compact: nothing earlier can be condensed." };
         let summaryText = String(compacted.find((message) => message.role === "system" && message !== original[0])?.content || "");
+        let llmNote = "";
         if (useLlm) {
             try {
                 const llmPrompt = [
@@ -2443,7 +2995,6 @@ export class AutonomousAgent {
                     ...discarded.slice(-8),
                 ];
                 const requestId = randomUUID();
-                const originalMessages = this.messages;
                 let admittedPrompt = llmPrompt;
                 try {
                     this.messages = llmPrompt;
@@ -2451,36 +3002,90 @@ export class AutonomousAgent {
                     admittedPrompt = this.messages;
                 }
                 finally {
-                    this.messages = originalMessages;
+                    this.messages = original;
+                    this.pendingCompaction = undefined;
                 }
-                const res = await this.client.chatCompletion(admittedPrompt, [], requestId, undefined, "compaction");
+                const res = await this.client.chatCompletion(admittedPrompt, [], requestId, signal, "compaction");
                 if (typeof res.content === "string" && res.content.trim()) {
                     summaryText += `\nExecutive Summary:\n${res.content.trim()}\n`;
                 }
+                else {
+                    llmNote = " The model returned no summary; the deterministic summary was used.";
+                }
             }
-            catch {
-                // Fallback to deterministic extraction
+            catch (err) {
+                this.messages = original;
+                if (signal?.aborted)
+                    return { ok: false, durable: false, message: "Compaction cancelled before it was committed; the conversation is unchanged." };
+                llmNote = ` The model summary failed (${redactSecrets(String(err?.message ?? err)).slice(0, 160)}); the deterministic summary was used.`;
             }
         }
+        if (this.messages !== original)
+            return { ok: false, durable: false, message: "The conversation changed while the summary was prepared; not compacted." };
         const summaryIndex = compacted.findIndex((message) => message.role === "system" && message !== original[0]);
         if (summaryIndex >= 0)
             compacted[summaryIndex] = { role: "system", content: summaryText.trim() };
-        this.archiveReplaced(original, compacted);
-        this.messages = compacted;
-        if (this.stateManager && this.currentTaskId) {
+        const limit = this.contextLimit();
+        const beforeTokens = calculateContextBudget(this.requestMessages(original), this.getEffectiveTools(), limit).totalActiveTokens;
+        const afterTokens = calculateContextBudget(this.requestMessages(compacted), this.getEffectiveTools(), limit).totalActiveTokens;
+        try {
+            const outcome = this.commitCompaction(original, compacted, { trigger: useLlm ? "manual_llm" : "manual", step, beforeTokens, afterTokens, pressureOnly: false, summary: summaryText.trim() });
+            return { ok: true, durable: outcome.durable, message: `Compacted context: distilled ${discarded.length} messages, ${this.messages.length} active messages in memory. ${outcome.message}${llmNote}`, outcome };
+        }
+        catch (err) {
+            if (!(err instanceof CompactionCommitError))
+                throw err;
+            return { ok: false, durable: false, message: err.outcome.message + llmNote, outcome: err.outcome };
+        }
+    }
+    /**
+     * An operator /compact while a turn runs: queued and run at the turn's next step boundary — after the in-flight
+     * inference and its whole tool batch (approvals included) have settled, before the next inference or tool dispatch —
+     * or at the turn's end if it ends first. A second identical request joins the queued one (one run, both told).
+     * At most one request per kind (default, --llm) is held. A cancelled turn cancels the queue.
+     */
+    requestCompaction(id, llm) {
+        const turn = this.activeTurn;
+        if (!turn || turn.cancelRequestedAt)
+            return { status: "no_active_turn", message: "No turn is running." };
+        const existing = this.compactionQueue.find((q) => q.llm === llm);
+        if (existing) {
+            if (!existing.ids.includes(id))
+                existing.ids.push(id);
+            return { status: "duplicate", message: `A /compact${llm ? " --llm" : ""} is already queued; this request shares its outcome.` };
+        }
+        this.compactionQueue.push({ ids: [id], llm, at: new Date().toISOString() });
+        return {
+            status: "queued",
+            message: `/compact${llm ? " --llm" : ""} queued: it runs once the current inference and tool calls have settled, before the next request${turn.closing ? " (the turn is finishing: at its end)" : ""}.`,
+        };
+    }
+    /** Runs (or, when `cancelReason` is given, cancels) the queued operator compactions, reporting each outcome. */
+    async drainCompactionQueue(step, signal, cancelReason) {
+        while (this.compactionQueue.length) {
+            const request = this.compactionQueue.shift();
+            if (cancelReason) {
+                this.reportCompaction(request.ids, { ok: false, durable: false, message: `/compact was not run: ${cancelReason}.` }, "cancelled");
+                continue;
+            }
+            this.activity("compacting");
+            const result = await this.compactNow(request.llm, signal, step);
+            this.reportCompaction(request.ids, result, result.ok ? "completed" : "failed");
+            if (result.outcome && !result.outcome.durable && result.outcome.records.archive === "written") {
+                // Applied but not durable: the turn cannot continue on state a restart would not recover.
+                throw new CompactionCommitError(result.outcome, true);
+            }
+        }
+    }
+    reportCompaction(ids, result, status) {
+        for (const id of ids) {
             try {
-                const state = this.checkpointDurableState("compacted conversation");
-                state.compactionProvenance = {
-                    recordId: randomUUID(),
-                    predecessorIds: [],
-                    supersededPlanStateIds: [],
-                    summaryContent: summaryText.trim(),
-                };
-                this.stateManager.saveTaskState(state);
+                this.observer?.onCompaction?.({ id, status, ok: result.ok, durable: result.durable, message: result.message });
             }
             catch { }
         }
-        return `Compacted context: distilled ${prunedCount} messages, ${this.messages.length} active messages in memory.`;
+        if (!this.observer?.onCompaction)
+            console.log(pc.dim(`[compact] ${status}: ${result.message}`));
     }
     buildSystemPrompt() {
         const projectRules = getProjectRules(this.config.workspace);
@@ -2744,13 +3349,13 @@ The pinned Objective Ledger lists the operator's requirements; your plan never r
                 };
             }
             const subPrompt = args.prompt || "Investigate the task";
-            const subMaxSteps = args.max_steps ? Math.min(args.max_steps, 15) : 8;
+            // No step allowance: a helper stops on its report, on demonstrated lack of progress, or with the parent's turn
+            // (cancellation). A `max_steps` argument from the model is not an operator limit and is ignored.
             const inheritedWorktreeScope = this.activeWorktree
                 ? { workspace: this.activeWorktree.worktreePath, requireSandbox: true }
                 : undefined;
             const subagentConfig = {
                 ...this.config,
-                maxSteps: subMaxSteps,
                 taskClass: "subagent",
                 plannerTaskClass: "subagent",
                 ...(inheritedWorktreeScope
@@ -2764,7 +3369,7 @@ The pinned Objective Ledger lists the operator's requirements; your plan never r
             let subagent;
             try {
                 subagent = new AutonomousAgent(subagentConfig, this.depth + 1, inheritedWorktreeScope);
-                const subResult = await subagent.runSubagent(subPrompt, this.activeTurn?.onConfirm);
+                const subResult = await subagent.runSubagent(subPrompt, this.activeTurn?.onConfirm, this.activeTurn?.controller.signal);
                 if (subagent.turnMutations > 0 || subagent.turnCarriedChanges) {
                     this.turnMutations += subagent.turnMutations;
                     this.mutationSeq += subagent.mutationSeq;
@@ -3361,6 +3966,7 @@ The pinned Objective Ledger lists the operator's requirements; your plan never r
                 options.signal.addEventListener("abort", () => this.requestCancel("external signal"), { once: true });
         }
         this.completionSummary = undefined;
+        this.turnPersistenceFailures = [];
         this.turnMutations = 0;
         this.turnConfiguredVerifier = "NOT_RUN";
         this.turnCarriedChanges = this.hasPendingModifications;
@@ -3377,8 +3983,10 @@ The pinned Objective Ledger lists the operator's requirements; your plan never r
         this.carriedRemovedObservations = new Set();
         // The objective this turn works toward: a new one, or a short follow-up on the one still unresolved.
         const priorLedger = this.objective ? structuredClone(this.objective) : undefined;
+        let continuingObjective = false;
         if (typeof taskPrompt === "string" && this.depth === 0) {
             let ledger = this.objective;
+            continuingObjective = Boolean(ledger && !isNewObjective(ledger, taskPrompt));
             if (!ledger || isNewObjective(ledger, taskPrompt)) {
                 const carried = ledger?.steering.filter((s) => s.status === "queued") ?? [];
                 ledger = createLedger(taskPrompt);
@@ -3432,6 +4040,7 @@ The pinned Objective Ledger lists the operator's requirements; your plan never r
             let inferenceFailure = null;
             let interruption = null;
             let undispatched = 0;
+            let persistenceFailure;
             const providerRecoveries = [];
             const markInterrupted = (phase, extra = {}) => {
                 interruption = {
@@ -3447,111 +4056,191 @@ The pinned Objective Ledger lists the operator's requirements; your plan never r
                 name: call.function.name,
                 content: "Cancelled by operator before execution. No action was taken.",
             });
-            // Continuation: `maxSteps` is a segment. With a continuation budget the turn keeps going across segments while it
-            // makes progress, and stops only on a budget, stagnation, the model finishing, cancellation or a failure — each
-            // with its own reason. Without one, the first segment boundary ends the turn (LIMIT_REACHED, legacy).
+            // Continuation: `maxSteps` is a segment, a durable checkpoint. With a continuation budget (the default) the turn
+            // keeps going across segments while it makes progress, and stops on completion, cancellation, demonstrated lack of
+            // progress, an actionable failure, or a step/time limit the operator set explicitly — each with its own reason.
+            // There is no default step or time ceiling. Without a budget (`--no-continuation`, the operator's explicit choice),
+            // the first segment boundary ends the turn (LIMIT_REACHED, legacy).
             const budget = this.config.continuation;
             const segmentSteps = Math.max(1, this.config.maxSteps);
             const maxTotalSteps = budget ? Math.max(budget.maxTotalSteps, segmentSteps) : segmentSteps;
-            const turnDeadline = budget ? Date.now() + budget.maxTurnMinutes * 60_000 : Number.POSITIVE_INFINITY;
+            const turnDeadline = budget && Number.isFinite(budget.maxTurnMinutes) ? Date.now() + budget.maxTurnMinutes * 60_000 : Number.POSITIVE_INFINITY;
             let segment = 1;
             let stopReason;
             let stopDetail;
-            let stepsWithoutProgress = 0;
             let completionNudges = 0;
             let recoveries = 0;
-            // Tool results seen in this turn (name + arguments + result): a new one is progress, a repeat is not.
-            const seenObservations = new Set();
-            const repeatedActions = new Map();
-            const progressSignature = () => JSON.stringify([
-                this.turnMutations,
-                this.activePlan,
-                this.objective?.requirements.map((r) => [r.status, r.evidence.length]),
-                this.objective?.nextAction,
-                this.verificationEvidence?.status,
-                this.verificationEvidence?.candidateId,
-            ]);
-            while (modelStop === "NONE" && !interruption && !inferenceFailure) {
+            // Objective-scoped tracking (persisted in the ledger): survives compaction, follow-up turns and restart.
+            const tracker = this.objective && this.depth === 0 ? trackingOf(this.objective) : ExecutionTracker.fresh();
+            this.stateIdentityDisabled = false;
+            this.stateIdentityUncertainty = undefined;
+            tracker.beginTurn();
+            if (continuingObjective)
+                tracker.operatorInput(tracker.data.cumulativeSteps, `operator follow-up: ${promptText.slice(0, 160)}`);
+            let stateNow = this.workspaceStateIdentity();
+            tracker.noteState(stateNow);
+            tracker.noteLedgerState(this.ledgerProgressIdentity());
+            const noticedPolls = new Set();
+            const noticedThrash = new Set();
+            let stateUnknownNoted = false;
+            while (modelStop === "NONE" && !interruption && !inferenceFailure && !persistenceFailure) {
                 if (stopReason)
                     break;
                 if (currentStep > maxTotalSteps) {
                     stopReason = budget ? "STEP_BUDGET_EXHAUSTED" : "STEP_LIMIT_REACHED";
+                    stopDetail = budget ? `operator step limit ${maxTotalSteps}` : `--no-continuation: ${segmentSteps} steps`;
                     break;
                 }
                 if (Date.now() > turnDeadline) {
                     stopReason = "TIME_BUDGET_EXHAUSTED";
-                    stopDetail = `${budget.maxTurnMinutes} min wall-clock budget`;
+                    stopDetail = `operator time limit ${budget.maxTurnMinutes} min`;
                     break;
                 }
-                if (budget && stepsWithoutProgress >= budget.stagnationSteps) {
+                if (budget && tracker.data.stepsWithoutProgress >= budget.stagnationSteps) {
                     stopReason = "STAGNATION_DETECTED";
-                    stopDetail = `${stepsWithoutProgress} consecutive steps without progress`;
+                    const loops = tracker.loops().slice(0, 2).map((r) => `${r.action} ×${r.count}`).join("; ");
+                    const thrash = tracker.reacquisitions().filter((r) => (r.reacquired ?? 0) >= 2).slice(0, 2).map((r) => `${r.action} re-read ×${r.reacquired} after compaction`).join("; ");
+                    stopDetail = `${tracker.data.stepsWithoutProgress} consecutive steps without progress${loops ? ` (repeated: ${loops})` : ""}${thrash ? ` (context thrash: ${thrash})` : ""}${this.stateIdentityUncertainty ? `; ${this.stateIdentityUncertainty}` : ""}`;
+                    tracker.stagnation(tracker.data.cumulativeSteps, "no_progress", stopDetail);
                     break;
                 }
                 if (signal.aborted) {
                     markInterrupted("between_steps");
                     break;
                 }
+                // Operator /compact queued during the previous step runs here: its inference and tool batch have settled.
+                if (this.compactionQueue.length) {
+                    try {
+                        await this.drainCompactionQueue(currentStep, signal);
+                    }
+                    catch (err) {
+                        if (!(err instanceof CompactionCommitError))
+                            throw err;
+                        persistenceFailure = err.outcome.message;
+                        break;
+                    }
+                }
                 if (budget && currentStep > 1 && (currentStep - 1) % segmentSteps === 0) {
                     segment++;
                     if (this.objective)
                         this.objective.continuation.segments = segment;
-                    try {
-                        this.checkpointDurableState(`continuation: segment ${segment} begins at step ${currentStep}`);
-                    }
-                    catch { }
-                    this.persistProgress({ messages: true });
+                    withDurableSync(() => {
+                        try {
+                            this.checkpointDurableState(`continuation: segment ${segment} begins at step ${currentStep}`);
+                        }
+                        catch { }
+                        this.persistProgress({ messages: true });
+                    });
                     console.warn(pc.dim(`↻ Continuing automatically: segment ${segment} begins at step ${currentStep}; the work is still progressing.`));
                 }
-                const signatureBefore = progressSignature();
-                let stepProgress = this.applyQueuedSteering(currentStep) > 0;
-                if (stepProgress)
+                const cumulativeStep = tracker.beginStep();
+                if (this.objective && this.depth === 0)
+                    this.objective.continuation.totalSteps = tracker.data.cumulativeSteps;
+                const stepStateBefore = stateNow;
+                const verdicts = [];
+                let operatorInputApplied = this.applyQueuedSteering(currentStep) > 0;
+                if (operatorInputApplied) {
                     completionNudges = 0;
+                    tracker.operatorInput(cumulativeStep, "operator steering applied");
+                }
                 let pendingRecoveryNote;
-                const observe = (call, receipt) => {
+                // The state each call ran on: the step's starting state until a call that may change the workspace has run.
+                let callInputState = stepStateBefore;
+                let stateMayHaveChanged = false;
+                const inputStateFor = () => {
+                    if (stateMayHaveChanged) {
+                        callInputState = this.workspaceStateIdentity();
+                        stateMayHaveChanged = false;
+                    }
+                    return callInputState;
+                };
+                /** Waits before re-running an unchanged poll or a transient failure on an unchanged state (see backoffMs). */
+                const backoffBefore = async (call) => {
+                    const prior = tracker.priorRun(call.function.name, call.function.arguments, inputStateFor());
+                    if (!prior || !(prior.outcomeClass === "transient_failure" || (prior.actionKind === "external" && prior.outcomeClass === "success")))
+                        return;
+                    const wait = backoffMs(prior.count);
+                    if (!wait)
+                        return;
+                    tracker.intervention(cumulativeStep, "backoff", `waited ${wait} ms before re-running ${prior.action} (${prior.outcomeClass === "transient_failure" ? "transient failure" : "unchanged result"} ×${prior.count} on an unchanged workspace)`);
+                    await this.backoffSleep(wait, signal);
+                };
+                const observe = (call, receipt, reacquire = false) => {
                     const name = call.function.name;
-                    const argsText = typeof call.function.arguments === "string" ? call.function.arguments : JSON.stringify(call.function.arguments ?? {});
-                    const resultHash = createHash("sha256").update(`${receipt.success}\u0000${receipt.output ?? ""}\u0000${receipt.error ?? ""}`).digest("hex").slice(0, 16);
-                    const key = `${name}\u0000${argsText}\u0000${resultHash}`;
-                    if (receipt.success && name !== "task_completed" && !seenObservations.has(key))
-                        stepProgress = true;
-                    seenObservations.add(key);
+                    const inputState = inputStateFor();
+                    const verdict = tracker.observe(cumulativeStep, {
+                        name,
+                        args: call.function.arguments,
+                        success: receipt.success,
+                        text: receipt.success ? receipt.output ?? "" : `${receipt.error ?? ""}\n${receipt.output ?? ""}`,
+                        stateBefore: inputState,
+                        reacquire,
+                    });
+                    verdicts.push(verdict);
+                    if (verdict.thrash && !noticedThrash.has(verdict.key)) {
+                        // Not task repetition: compaction keeps removing what the work needs (context thrash), reported as such.
+                        noticedThrash.add(verdict.key);
+                        tracker.stagnation(cumulativeStep, "context_thrash", `${verdict.record.action} re-read ${verdict.record.reacquired} times after compaction removed its output; the context window does not hold the working set`);
+                        pendingRecoveryNote =
+                            `[Nexus] The output of ${name} has left your context ${verdict.record.reacquired} times through compaction and you re-read it each time. ` +
+                                `Before reading it again, write the facts you need from it into your work product or state them in a short message (with file and symbol references); they stay in context.`;
+                    }
+                    if (actionKind(name) !== "observe_workspace" && actionKind(name) !== "bookkeeping")
+                        stateMayHaveChanged = true;
+                    if (verdict.stateUnknown && verdict.record.count >= REPEAT_THRESHOLD && !stateUnknownNoted) {
+                        stateUnknownNoted = true;
+                        tracker.stagnation(cumulativeStep, "repetition_state_unknown", `${verdict.record.action} ×${verdict.record.count}: ${this.stateIdentityUncertainty ?? "workspace state unknown"}`);
+                    }
                     if (!budget)
                         return;
-                    const count = (repeatedActions.get(key) ?? 0) + 1;
-                    repeatedActions.set(key, count);
-                    if (count < 3)
+                    if (verdict.poll) {
+                        if (verdict.record.count >= REPEAT_THRESHOLD && !noticedPolls.has(verdict.key)) {
+                            noticedPolls.add(verdict.key);
+                            pendingRecoveryNote =
+                                `[Nexus] ${name} returned the same result ${verdict.record.count} times on an unchanged workspace` +
+                                    `${verdict.record.outcomeClass === "transient_failure" ? " (a transient failure)" : ""}. Nexus spaces further re-runs (up to ${Math.round(backoffMs(verdict.record.count + 1) / 1000)} s apart). ` +
+                                    `If you are waiting for something outside the workspace, re-check sparingly; otherwise use the result you have or change approach.`;
+                        }
                         return;
-                    repeatedActions.set(key, 0);
+                    }
+                    if (!verdict.loop)
+                        return;
+                    const count = verdict.record.count;
+                    tracker.stagnation(cumulativeStep, "repetition", `${verdict.record.action} ×${count} with the same result on an unchanged workspace -> ${verdict.record.outcome.slice(0, 160)}`);
                     if (recoveries < budget.maxRecoveries) {
                         recoveries++;
+                        tracker.intervention(cumulativeStep, "recovery_note", `${verdict.record.action} ×${count}`);
                         try {
                             this.observer?.onContinuation?.({ kind: "recovery", n: recoveries, max: budget.maxRecoveries, detail: name });
                         }
                         catch { }
                         pendingRecoveryNote =
-                            `[Nexus recovery ${recoveries}/${budget.maxRecoveries}] You have called ${name} with the same arguments ${count} times and received the same result each time. ` +
+                            `[Nexus recovery ${recoveries}/${budget.maxRecoveries}] You have called ${name} with the same arguments ${count} times on an unchanged workspace and received the same result each time. ` +
                                 `Repeating it will not change the outcome. Use the result you already have or change approach; if the remaining work is blocked, ` +
                                 `record that with update_requirements (status "blocked" with the reason) and stop with a final message.`;
                     }
                     else {
                         stopReason = "STAGNATION_DETECTED";
-                        stopDetail = `repeated ${name} with an unchanged result after ${budget.maxRecoveries} recovery notes`;
+                        stopDetail = `repeated ${name} ${count} times with an unchanged result on an unchanged workspace after ${budget.maxRecoveries} recovery notes`;
+                        tracker.stagnation(cumulativeStep, "repetition_stop", stopDetail);
                     }
                 };
                 const endStep = () => {
                     if (pendingRecoveryNote) {
                         this.messages.push({ role: "user", content: pendingRecoveryNote });
-                        this.persistProgress({ messages: true });
                     }
-                    if (stepProgress || progressSignature() !== signatureBefore) {
-                        stepsWithoutProgress = 0;
-                        if (this.objective)
-                            this.objective.continuation.lastProgressStep = currentStep;
-                    }
-                    else {
-                        stepsWithoutProgress++;
-                    }
+                    const stateAfter = this.workspaceStateIdentity();
+                    const evaluation = tracker.evaluateStep(cumulativeStep, {
+                        stateBefore: stepStateBefore,
+                        stateAfter,
+                        verdicts,
+                        ledgerState: this.ledgerProgressIdentity(),
+                        operatorInput: operatorInputApplied,
+                    });
+                    stateNow = stateAfter;
+                    if (evaluation.progressed && this.objective)
+                        this.objective.continuation.lastProgressStep = currentStep;
+                    this.persistProgress({ messages: true });
                     currentStep++;
                 };
                 turn.step = currentStep;
@@ -3561,10 +4250,23 @@ The pinned Objective Ledger lists the operator's requirements; your plan never r
                 }
                 const requestId = randomUUID();
                 const { client: activeClient } = this.selectCognitiveClient(currentStep, this.messages);
+                // Provider limits for this step's connection (cached; re-read on change or after the TTL). Optional capability.
+                await this.refreshCapabilities(activeClient, this.capabilitiesStale ?? "step", Boolean(this.capabilitiesStale), signal);
+                this.capabilitiesStale = undefined;
                 try {
                     await this.admitWithFindings(activeClient, currentStep, requestId, signal);
+                    await this.measureAdmission(activeClient, currentStep, requestId, signal);
                 }
                 catch (err) {
+                    if (err instanceof InferenceError && err.kind === "aborted") {
+                        markInterrupted("inference");
+                        break;
+                    }
+                    if (err instanceof CompactionCommitError) {
+                        // No inference or tool dispatch follows a compaction that is not durable (or not applied).
+                        persistenceFailure = err.outcome.message;
+                        break;
+                    }
                     if (!(err instanceof ContextBudgetError))
                         throw err;
                     // Fail-closed admission refused the request before any inference call. A refusal is a bounded
@@ -3581,6 +4283,8 @@ The pinned Objective Ledger lists the operator's requirements; your plan never r
                         this.persistProgress({ messages: true });
                     }
                     capacityBlock = {
+                        promptCountSource: err.count.source,
+                        ...(err.count.unmeasured ? { unmeasured: err.count.unmeasured } : {}),
                         estimatedPromptTokens: err.estimatedTokens,
                         completionReserveTokens: err.completionReserveTokens,
                         toolResponseReserveTokens: err.toolResponseReserveTokens,
@@ -3663,6 +4367,8 @@ The pinned Objective Ledger lists the operator's requirements; your plan never r
                     inferenceFailure = err instanceof InferenceError
                         ? err.toFailure()
                         : { kind: "protocol_error", origin: "client", message: err?.message || String(err), requestId };
+                    if (inferenceFailure?.condition === "CAPACITY_REJECTED")
+                        this.capabilitiesStale = "the provider rejected a request for capacity";
                     break;
                 }
                 finally {
@@ -3672,10 +4378,11 @@ The pinned Objective Ledger lists the operator's requirements; your plan never r
                     this.activeProviderRecovery = null;
                 }
                 stepsUsed = currentStep;
+                this.noteAdmission(activeClient, currentStep);
                 // Parse the response using hybrid parser
                 const parsed = parseModelResponse(assistantMessage, this.getEffectiveTools().map((t) => t.function.name));
                 // Update cumulative token usage
-                const promptEst = calculateContextBudget(this.requestMessages(this.messages), this.getEffectiveTools(), this.config.contextLimit || 65536).totalActiveTokens;
+                const promptEst = calculateContextBudget(this.requestMessages(this.messages), this.getEffectiveTools(), this.contextLimit()).totalActiveTokens;
                 const compContent = typeof assistantMessage.content === "string"
                     ? assistantMessage.content
                     : Array.isArray(assistantMessage.content)
@@ -3721,7 +4428,6 @@ The pinned Objective Ledger lists the operator's requirements; your plan never r
                 if (parsed.toolCalls.length === 0) {
                     // Steering that arrived while the model was answering is applied next step instead of being dropped.
                     if (this.hasQueuedSteering()) {
-                        stepProgress = true;
                         endStep();
                         continue;
                     }
@@ -3733,7 +4439,7 @@ The pinned Objective Ledger lists the operator's requirements; your plan never r
                         if (currentStep < maxTotalSteps) {
                             this.messages.push({
                                 role: "user",
-                                content: `[Nexus: your reply was empty: no text and no tool call. It does not finish the task. This is step ${currentStep} of ${maxTotalSteps}. Continue the task where you left off; call task_completed when it is done.]`,
+                                content: `[Nexus: your reply was empty: no text and no tool call. It does not finish the task. This is ${stepPosition(currentStep, maxTotalSteps)}. Continue the task where you left off; call task_completed when it is done.]`,
                             });
                         }
                         this.persistProgress({ messages: true });
@@ -3768,6 +4474,7 @@ The pinned Objective Ledger lists the operator's requirements; your plan never r
                     this.ui.startSpinner(`Executing ${parsed.toolCalls.length} read operations in parallel...`);
                     turn.phase = "tool";
                     turn.currentTool = `${parsed.toolCalls.length} parallel reads`;
+                    const reacquiring = new Set(parsed.toolCalls.filter((call) => this.turnRemovedObservations.has(observationKey(call.function.name, call.function.arguments))));
                     const parallelResults = await Promise.all(parsed.toolCalls.map(async (call) => {
                         const { receipt } = await this.dispatchToolCall(call, currentStep, "agent");
                         return { call, toolName: call.function.name, receipt };
@@ -3775,7 +4482,7 @@ The pinned Objective Ledger lists the operator's requirements; your plan never r
                     this.ui.stopSpinner(true);
                     turn.currentTool = undefined;
                     for (const item of parallelResults) {
-                        observe(item.call, item.receipt);
+                        observe(item.call, item.receipt, reacquiring.has(item.call));
                         let content = item.receipt.success
                             ? item.receipt.output
                             : `Error executing ${item.toolName}: ${item.receipt.error || "Unknown error"}`;
@@ -3818,11 +4525,13 @@ The pinned Objective Ledger lists the operator's requirements; your plan never r
                     catch {
                         rawArgs = {};
                     }
+                    await backoffBefore(call);
+                    const reacquire = this.turnRemovedObservations.has(observationKey(toolName, call.function.arguments));
                     turn.phase = "tool";
                     turn.currentTool = toolName;
                     const { receipt, shouldExit } = await this.dispatchToolCall(call, currentStep, "agent", onConfirm);
                     turn.currentTool = undefined;
-                    observe(call, receipt);
+                    observe(call, receipt, reacquire);
                     let finalContent = receipt.success
                         ? receipt.output
                         : `Error executing ${toolName}: ${receipt.error || "Unknown error"}`;
@@ -3862,16 +4571,28 @@ The pinned Objective Ledger lists the operator's requirements; your plan never r
                 endStep();
             }
             turn.closing = true;
+            // Queued /compact: run now that the last step has settled, or cancelled with the turn.
+            if (this.compactionQueue.length) {
+                try {
+                    await this.drainCompactionQueue(currentStep, undefined, interruption ? "the turn was cancelled" : persistenceFailure ? "the turn stopped on a persistence failure" : undefined);
+                }
+                catch (err) {
+                    if (!(err instanceof CompactionCommitError))
+                        throw err;
+                    persistenceFailure ??= err.outcome.message;
+                }
+            }
             if (this.hasQueuedSteering()) {
-                this.cancelQueuedSteering(interruption ? "the turn was cancelled before it could be applied" : `the turn ended (${stopReason ?? inferenceFailure?.kind ?? (capacityBlock ? "context capacity" : "stopped")}) before it could be applied`);
+                this.cancelQueuedSteering(interruption ? "the turn was cancelled before it could be applied" : `the turn ended (${stopReason ?? inferenceFailure?.kind ?? (capacityBlock ? "context capacity" : persistenceFailure ? "persistence failure" : "stopped")}) before it could be applied`);
             }
             triggerNotification("Nexus Code", "Turn finished.");
             try {
                 this.knowledge.autoExtract(promptText, "");
             }
             catch { }
-            const limitReached = !interruption && !inferenceFailure && !capacityBlock && modelStop === "NONE" && stopReason !== undefined;
-            const result = this.buildTurnResult({
+            const limitReached = !interruption && !inferenceFailure && !capacityBlock && !persistenceFailure && modelStop === "NONE" && stopReason !== undefined;
+            const resultInput = {
+                persistenceFailure,
                 modelStop,
                 finalOutputComplete,
                 inferenceFailure,
@@ -3883,16 +4604,39 @@ The pinned Objective Ledger lists the operator's requirements; your plan never r
                 maxSteps: maxTotalSteps,
                 stopReason,
                 stopDetail,
-                ...(budget ? { continuation: { segments: segment, segmentSteps, ...(stopReason ? { stopReason } : {}), stepsWithoutProgress } } : {}),
-            });
+                ...(budget
+                    ? {
+                        continuation: {
+                            segments: segment,
+                            segmentSteps,
+                            ...(stopReason ? { stopReason } : {}),
+                            stepsWithoutProgress: tracker.data.stepsWithoutProgress,
+                            cumulativeSteps: tracker.data.cumulativeSteps,
+                            ...(tracker.loops().length ? { repeated: tracker.loops().slice(0, 5).map((r) => ({ action: r.action, count: r.count, firstStep: r.firstStep, lastStep: r.lastStep })) } : {}),
+                            ...(this.stateIdentityUncertainty ? { stateUncertainty: this.stateIdentityUncertainty } : {}),
+                        },
+                    }
+                    : {}),
+            };
+            let result = this.buildTurnResult(resultInput);
             if (this.objective) {
-                this.objective.continuation.totalSteps += stepsUsed;
-                this.objective.continuation.stopReason = stopReason;
+                if (this.depth === 0)
+                    this.objective.continuation.totalSteps = tracker.data.cumulativeSteps;
+                this.objective.continuation.stopReason = stopReason ?? (persistenceFailure ? "PERSISTENCE_FAILED" : undefined);
                 this.objective.outcome = { ...this.objectiveOutcome(result), at: result.finishedAt };
                 try {
-                    this.checkpointDurableState(undefined, result);
+                    withDurableSync(() => this.checkpointDurableState(undefined, result));
                 }
-                catch { }
+                catch (err) {
+                    // The result says so: a turn whose final state was not saved is never reported as durably recorded.
+                    this.turnPersistenceFailures.push(`The turn's final task state could not be saved: ${redactSecrets(String(err?.message ?? err)).slice(0, 200)}`);
+                    result = this.buildTurnResult(resultInput);
+                    const text = this.turnPersistenceFailures[this.turnPersistenceFailures.length - 1];
+                    if (this.observer?.onNotice)
+                        this.observer.onNotice(text);
+                    else
+                        console.warn(pc.yellow(text));
+                }
             }
             this.lastTurnResult = result;
             if (this.flightRecorder) {
@@ -3946,10 +4690,17 @@ The pinned Objective Ledger lists the operator's requirements; your plan never r
             finishedAt: new Date().toISOString(),
             ...(input.continuation ? { continuation: input.continuation } : {}),
             ...(objective ? { objective } : {}),
+            ...(this.turnPersistenceFailures.length ? { persistence: { durable: false, failures: [...new Set(this.turnPersistenceFailures)].slice(0, 8) } } : {}),
+            ...(this.depth === 0 ? { tokenAccounting: this.tokenAccounting() } : {}),
         };
         if (input.interruption) {
             return deepFreezeTurn(assertTurnResultInvariants({
                 ...base, execution: "INTERRUPTED", outcome: "NOT_ESTABLISHED", reason: "OPERATOR_INTERRUPT", finalOutputComplete: false,
+            }));
+        }
+        if (input.persistenceFailure) {
+            return deepFreezeTurn(assertTurnResultInvariants({
+                ...base, execution: "FAILED", outcome: "NOT_ESTABLISHED", reason: "PERSISTENCE_FAILED", detail: input.persistenceFailure.slice(0, 300), finalOutputComplete: false,
             }));
         }
         if (input.inferenceFailure) {
@@ -4173,12 +4924,14 @@ The pinned Objective Ledger lists the operator's requirements; your plan never r
         return turnResult;
     }
     /**
-     * In-turn delegation for the spawn_subagent tool: a bounded, non-durable helper loop whose result is part of the
-     * parent's turn (the parent is the durable unit). Completed only when the subagent called task_completed or
-     * delivered a final report; inference failure and step exhaustion are reported as not completed. Durable
-     * autonomous work (/team, nexus operation) does not use this path: it runs as scheduled work units.
+     * In-turn delegation for the spawn_subagent tool: a non-durable helper loop whose result is part of the parent's turn
+     * (the parent is the durable unit). It has no step allowance: it runs while it progresses (core/execution_tracking.ts)
+     * and stops on its report, on the same repetition and stagnation rules as a turn, or when the parent's turn is
+     * cancelled. Completed only when the subagent called task_completed or delivered a final report; inference failure,
+     * stagnation and cancellation are reported as not completed. Durable autonomous work (/team, nexus operation) does
+     * not use this path: it runs as scheduled work units.
      */
-    async runSubagent(prompt, onConfirm) {
+    async runSubagent(prompt, onConfirm, signal) {
         if (this.config.worktree && !this.activeWorktree && !this.inheritedWorktreeScope) {
             throw new Error("Cannot run a worktree-enabled subagent without an established worktree authority.");
         }
@@ -4191,26 +4944,42 @@ The pinned Objective Ledger lists the operator's requirements; your plan never r
             role: "user",
             content: `[Subagent Objective]: ${prompt}\n\nPlease inspect, execute tools as needed, and produce a concise, comprehensive report answering the objective. Call task_completed when done.`,
         });
+        const stagnationSteps = this.config.continuation?.stagnationSteps ?? DEFAULT_CONTINUATION.stagnationSteps;
+        const maxRecoveries = this.config.continuation?.maxRecoveries ?? DEFAULT_CONTINUATION.maxRecoveries;
+        const tracker = ExecutionTracker.fresh();
+        tracker.beginTurn();
+        let state = this.workspaceStateIdentity();
+        tracker.noteState(state);
+        let recoveries = 0;
         let currentStep = 1;
         let finalSummary = "";
-        while (currentStep <= this.config.maxSteps) {
+        for (;;) {
+            if (signal?.aborted)
+                return { completed: false, summary: finalSummary, reason: "cancelled with the parent turn" };
+            if (tracker.data.stepsWithoutProgress >= stagnationSteps) {
+                const loops = tracker.loops().slice(0, 2).map((r) => `${r.action} ×${r.count}`).join("; ");
+                return { completed: false, summary: finalSummary, reason: `no progress for ${tracker.data.stepsWithoutProgress} consecutive steps${loops ? ` (repeated: ${loops})` : ""}` };
+            }
+            const cumulativeStep = tracker.beginStep();
             let assistantMessage;
             const requestId = randomUUID();
             const { client: activeClient } = this.selectCognitiveClient(currentStep, this.messages);
             try {
-                await this.admitWithFindings(activeClient, currentStep, requestId);
+                await this.admitWithFindings(activeClient, currentStep, requestId, signal);
                 const policy = this.recoveryPolicy ?? recoveryPolicyFromEnv();
                 const lengthGuard = { step: currentStep, cutAfterMs: 0 };
                 assistantMessage = await new ProviderRecoveryController(policy, this.recoveryClock, currentStep).run(requestId, {
-                    submit: (s) => this.submitGuardingLength(lengthGuard, this.messages, (request) => activeClient.chatCompletion(request, [...HARNESS_TOOLS, READ_FINDINGS_CAPABILITY.toolDefinition], s.requestId)),
+                    submit: (s) => this.submitGuardingLength(lengthGuard, this.messages, (request) => activeClient.chatCompletion(request, [...HARNESS_TOOLS, READ_FINDINGS_CAPABILITY.toolDefinition], s.requestId, signal)),
                     probe: (probeSignal, opts) => typeof activeClient.probeAvailability === "function"
                         ? activeClient.probeAvailability(probeSignal, { timeoutMs: policy.probeTimeoutMs, ...opts })
                         : Promise.resolve({ available: true, condition: "AVAILABLE" }),
                     classify: (err) => (err instanceof InferenceError ? err.toFailure() : null),
                     newRequestId: () => randomUUID(),
-                });
+                }, signal);
             }
             catch (err) {
+                if (signal?.aborted)
+                    return { completed: false, summary: finalSummary, reason: "cancelled with the parent turn" };
                 const what = err instanceof ContextBudgetError ? "context admission refused the request" : "inference failed";
                 return { completed: false, summary: finalSummary, reason: `${what}: ${err?.message ?? err}` };
             }
@@ -4226,8 +4995,15 @@ The pinned Objective Ledger lists the operator's requirements; your plan never r
                     return this.subagentResult("FINAL_TEXT", report, currentStep);
                 return { completed: false, summary: "", reason: "the subagent stopped without a report" };
             }
+            const verdicts = [];
+            let note;
+            let inputState = state;
             for (const call of parsed.toolCalls) {
                 const toolName = call.function.name;
+                if (signal?.aborted) {
+                    this.messages.push({ role: "tool", tool_call_id: call.id, name: toolName, content: "Cancelled by operator before execution. No action was taken." });
+                    continue;
+                }
                 const { receipt, shouldExit } = await this.dispatchToolCall(call, currentStep, "subagent", onConfirm);
                 if (shouldExit) {
                     let args = {};
@@ -4240,19 +5016,40 @@ The pinned Objective Ledger lists the operator's requirements; your plan never r
                     catch { }
                     return this.subagentResult("TASK_COMPLETED_TOOL", String(args.summary), currentStep);
                 }
+                const verdict = tracker.observe(cumulativeStep, {
+                    name: toolName,
+                    args: call.function.arguments,
+                    success: receipt.success,
+                    text: receipt.success ? receipt.output ?? "" : `${receipt.error ?? ""}\n${receipt.output ?? ""}`,
+                    stateBefore: inputState,
+                });
+                verdicts.push(verdict);
+                if (actionKind(toolName) !== "observe_workspace" && actionKind(toolName) !== "bookkeeping")
+                    inputState = this.workspaceStateIdentity();
+                if (verdict.loop) {
+                    if (recoveries >= maxRecoveries) {
+                        return { completed: false, summary: finalSummary, reason: `repeated ${toolName} ${verdict.record.count} times with an unchanged result on an unchanged workspace` };
+                    }
+                    recoveries++;
+                    note = `[Nexus recovery ${recoveries}/${maxRecoveries}] You have called ${toolName} with the same arguments ${verdict.record.count} times on an unchanged workspace and received the same result each time. Use the result you have or change approach; if you cannot proceed, report what you found.`;
+                }
                 this.messages.push({
                     role: "tool",
                     tool_call_id: call.id,
                     name: toolName,
                     content: receipt.success
-                        ? this.toolResultContent(call, receipt.output, currentStep, this.config.maxSteps)
+                        ? this.toolResultContent(call, receipt.output, currentStep, Number.POSITIVE_INFINITY)
                         : `Error executing ${toolName}: ${receipt.error || "Unknown error"}`,
                 });
             }
+            if (note)
+                this.messages.push({ role: "user", content: note });
+            const after = this.workspaceStateIdentity();
+            tracker.evaluateStep(cumulativeStep, { stateBefore: state, stateAfter: after, verdicts });
+            state = after;
             finalSummary = parsed.thoughtText || finalSummary;
             currentStep++;
         }
-        return { completed: false, summary: finalSummary, reason: `step limit ${this.config.maxSteps} reached without task_completed` };
     }
     /** A subagent that stopped is complete only by the turn predicate (`turnSucceeded`), never by having a report. */
     subagentResult(modelStop, summary, stepsUsed) {
