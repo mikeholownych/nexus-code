@@ -21,11 +21,11 @@ The current binary release target is **Linux x86-64 on glibc 2.35 or newer**, bu
 Create and inspect a candidate locally:
 
 ```sh
-bash scripts/package-linux.sh v0.1.0-alpha.1 ./release
-bash scripts/smoke-package.sh ./release/nexus-linux-x86_64-v0.1.0-alpha.1.tar.gz
+bash scripts/package-linux.sh v0.1.0-alpha.2 ./release
+bash scripts/smoke-package.sh ./release/nexus-linux-x86_64-v0.1.0-alpha.2.tar.gz
 ```
 
-CI validates pull requests and `main`. A SemVer tag matching `package.json` triggers the controlled GitHub Release workflow; prerelease tags are marked prereleases. Releases contain the versioned archive and `SHA256SUMS`. The current published candidate is [`v0.1.0-alpha.1`](https://github.com/mikeholownych/nexus-code/releases/tag/v0.1.0-alpha.1).
+CI validates pull requests and `main`. A SemVer tag matching `package.json` triggers the controlled GitHub Release workflow; prerelease tags are marked prereleases. Releases contain the versioned archive and `SHA256SUMS`. The current published candidate is [`v0.1.0-alpha.2`](https://github.com/mikeholownych/nexus-code/releases/tag/v0.1.0-alpha.2).
 
 The installer uses these stable URLs:
 

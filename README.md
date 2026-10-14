@@ -12,10 +12,10 @@ The contest submission is the agent-collaboration service. Nexus Code is the sep
 ## Install Nexus Code
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/mikeholownych/nexus-code/main/install.sh | NEXUS_VERSION=v0.1.0-alpha.1 sh
+curl -fsSL https://raw.githubusercontent.com/mikeholownych/nexus-code/main/install.sh | NEXUS_VERSION=v0.1.0-alpha.2 sh
 ```
 
-This downloads and installs the published `v0.1.0-alpha.1` Linux x86-64 package under your home directory, verifies its SHA-256 checksum, and requires Node.js 20+. This is an early prerelease; see [release status and platform requirements](docs/DEVELOPMENT.md).
+This downloads and installs the published `v0.1.0-alpha.2` Linux x86-64 package under your home directory, verifies its SHA-256 checksum, and requires Node.js 20+. This is an early prerelease; see [release status and platform requirements](docs/DEVELOPMENT.md).
 
 ## Build and contribute
 
