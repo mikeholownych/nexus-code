@@ -55,7 +55,7 @@ import { judgeWithoutCopy, prepareBaselineTestsCopy, snapshotTests, type ChangeB
 
 /** Tools that edit files directly: the first one of an unverified change triggers the pre-change verifier run. */
 const FILE_EDIT_TOOLS = new Set(["write_file", "edit_file", "patch_file", "delete_file"]);
-import { credentialOriginOf, InferenceError, TokenCountError } from "./client.js";
+import { credentialOriginOf, InferenceError, type TruncatedCall, TokenCountError } from "./client.js";
 import {
   TurnResult,
   VerificationEvidence,
@@ -434,6 +434,22 @@ const STEP_NOTICE = /^\[Nexus: (your recorded findings have outgrown your memory
 const CUT_NOTICE = /^\[Nexus: your response at step \d+ was cut off[^\]]*\]\n/;
 /** A response that failed after running this long was most likely ended by the provider's limit on how long one may take. */
 const LONG_RESPONSE_MS = 120_000;
+
+/**
+ * Told to the model after its reply hit the output limit (finish_reason=length): nothing from the reply ran or was
+ * kept, what it was writing, how large one reply can be, and how to produce the content in parts instead.
+ */
+function truncatedReplyNotice(calls: TruncatedCall[], allowance: number | undefined, position: string): string {
+  const limit = allowance ? `the ${allowance}-token output limit (roughly ${Math.round((allowance * 3) / 1024)} KB of text)` : "the output limit";
+  const what = calls.length
+    ? `while writing ${calls.map((c) => `a ${c.name} call${c.path ? ` for \`${c.path}\`` : ""}`).join(" and ")}`
+    : "before it finished";
+  const parts = calls.length
+    ? " Write a long file in parts: write_file with its first part, then add each further part with edit_file in later steps, replacing the file's last few lines (enough that they occur nowhere earlier in it) with those lines followed by the next part. Keep each part well under that size."
+    : " Keep each reply well under that size.";
+  const dropped = calls.length ? "Nothing from that reply ran and no file was written" : "None of that reply was kept";
+  return `[Nexus: your previous reply was cut off at ${limit} ${what}. ${dropped}; it is not in this conversation.${parts} Do not resend the same reply in one piece: it would be cut off again, and a second cut-off reply in a row ends the turn. This is ${position}. Continue the task.]`;
+}
 
 function cutResponseNotice(step: number, seconds: number): string {
   return `[Nexus: your response at step ${step} was cut off after ${seconds} s, before it was complete, most likely because the provider ends a response that takes too long; none of it was used. Respond with less at once. Write a long file in parts: write_file with its first part, then add each further part with edit_file in later steps, replacing the file's last few lines (enough that they occur nowhere earlier in it) with those lines followed by the next part. End each part where every bracket it opens is closed. Keep every response short enough to finish well within ${seconds} s.]`;
@@ -4332,6 +4348,8 @@ The pinned Objective Ledger lists the operator's requirements; your plan never r
       let modelStop: ModelStop = "NONE";
       let finalOutputComplete = false;
       let previousReplyEmpty = false;
+      // The previous step's reply was cut off at the output limit; a second one in a row ends the turn.
+      let previousReplyTruncated = false;
       let inferenceFailure: InferenceFailure | null = null;
       let interruption: InterruptionRecord | null = null;
       let undispatched = 0;
@@ -4649,6 +4667,20 @@ The pinned Objective Ledger lists the operator's requirements; your plan never r
             markInterrupted("inference");
             break;
           }
+          // A reply cut off at the output limit: none of it runs. Once in a row the model is told why and asked for the
+          // content in parts, and the turn goes on at the next step; the step counts as no progress.
+          if (err instanceof InferenceError && err.kind === "output_truncated" && !previousReplyTruncated && currentStep < maxTotalSteps) {
+            previousReplyTruncated = true;
+            const allowance = activeClient.getOutputAllowance?.();
+            const target = err.truncatedCalls.map((c) => `${c.name}${c.path ? ` ${c.path}` : ""} (${c.argumentChars} chars)`).join(", ") || "text";
+            this.ui.stopSpinner(false, `Reply cut off at the output limit${allowance ? ` (${allowance} tokens)` : ""}; nothing from it ran`);
+            console.warn(pc.dim(`↻ Asking the model to write it in parts: ${target}.`));
+            tracker.intervention(cumulativeStep, "output_truncated", `reply cut off at the output limit (request ${err.requestId ?? requestId}): ${target}; nothing ran`);
+            this.messages.push({ role: "user", content: truncatedReplyNotice(err.truncatedCalls, allowance, stepPosition(currentStep, maxTotalSteps)) });
+            stepsUsed = currentStep;
+            endStep();
+            continue;
+          }
           this.ui.stopSpinner(false, `Inference error: ${err.message}`);
           console.error(`\nFatal error communicating with LLM server: ${err.message}`);
           inferenceFailure = err instanceof InferenceError
@@ -4662,6 +4694,7 @@ The pinned Objective Ledger lists the operator's requirements; your plan never r
           this.activeProviderRecovery = null;
         }
         stepsUsed = currentStep;
+        previousReplyTruncated = false;
         this.noteAdmission(activeClient, currentStep);
 
         // Parse the response using hybrid parser
@@ -5285,6 +5318,7 @@ The pinned Objective Ledger lists the operator's requirements; your plan never r
     let recoveries = 0;
     let currentStep = 1;
     let finalSummary = "";
+    let previousReplyTruncated = false;
 
     for (;;) {
       if (signal?.aborted) return { completed: false, summary: finalSummary, reason: "cancelled with the parent turn" };
@@ -5312,10 +5346,19 @@ The pinned Objective Ledger lists the operator's requirements; your plan never r
         }, signal);
       } catch (err: any) {
         if (signal?.aborted) return { completed: false, summary: finalSummary, reason: "cancelled with the parent turn" };
+        if (err instanceof InferenceError && err.kind === "output_truncated" && !previousReplyTruncated) {
+          previousReplyTruncated = true;
+          tracker.intervention(cumulativeStep, "output_truncated", `reply cut off at the output limit: ${err.truncatedCalls.map((c) => c.name).join(", ") || "text"}; nothing ran`);
+          this.messages.push({ role: "user", content: truncatedReplyNotice(err.truncatedCalls, activeClient.getOutputAllowance?.(), `subagent step ${currentStep}`) });
+          tracker.evaluateStep(cumulativeStep, { stateBefore: state, stateAfter: state, verdicts: [] });
+          currentStep++;
+          continue;
+        }
         const what = err instanceof ContextBudgetError ? "context admission refused the request" : "inference failed";
         return { completed: false, summary: finalSummary, reason: `${what}: ${err?.message ?? err}` };
       }
 
+      previousReplyTruncated = false;
       const parsed = parseModelResponse(assistantMessage, this.getEffectiveTools().map((t) => t.function.name));
       this.messages.push({
         role: "assistant",

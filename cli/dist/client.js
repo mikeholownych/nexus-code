@@ -213,6 +213,21 @@ export class TokenCountError extends Error {
         this.name = "TokenCountError";
     }
 }
+/** What each cut-off tool call was: the name, and the target path when the partial arguments already hold it whole. */
+export function truncatedCalls(calls) {
+    return calls.map((call) => {
+        const args = typeof call.function.arguments === "string" ? call.function.arguments : JSON.stringify(call.function.arguments ?? "");
+        const match = /"path"\s*:\s*"((?:[^"\\]|\\.)*)"/.exec(args);
+        let path;
+        if (match) {
+            try {
+                path = JSON.parse(`"${match[1]}"`);
+            }
+            catch { }
+        }
+        return { name: call.function.name, ...(path ? { path } : {}), argumentChars: args.length };
+    });
+}
 export class InferenceError extends Error {
     kind;
     origin;
@@ -224,6 +239,8 @@ export class InferenceError extends Error {
     condition;
     execution;
     hints;
+    /** output_truncated only: the tool calls the reply was writing when it was cut off (never run). */
+    truncatedCalls;
     constructor(kind, origin, message, opts = {}) {
         super(message);
         this.name = "InferenceError";
@@ -236,6 +253,7 @@ export class InferenceError extends Error {
         this.condition = opts.condition ?? DEFAULT_CLASSIFICATION[kind].condition;
         this.execution = opts.execution ?? DEFAULT_CLASSIFICATION[kind].execution;
         this.hints = opts.hints ?? {};
+        this.truncatedCalls = opts.truncatedCalls ?? [];
         this.failoverEligible = opts.failoverEligible ?? (this.execution === "NOT_EXECUTED" && TEMPORARY_CONDITIONS.has(this.condition));
     }
     toFailure() {
@@ -1056,7 +1074,7 @@ export class LocalLlmClient {
             if (choice.finish_reason === "length") {
                 throw new InferenceError("output_truncated", "client", choice.message.tool_calls?.length
                     ? "Model output was truncated (finish_reason=length) inside a tool call; refusing to run partial arguments."
-                    : "Model output was truncated (finish_reason=length); refusing to treat it as a complete answer.", { requestId, partialText: typeof choice.message.content === "string" ? choice.message.content : "", failoverEligible: false });
+                    : "Model output was truncated (finish_reason=length); refusing to treat it as a complete answer.", { requestId, partialText: typeof choice.message.content === "string" ? choice.message.content : "", failoverEligible: false, truncatedCalls: truncatedCalls(choice.message.tool_calls ?? []) });
             }
             return choice.message;
         });
@@ -1302,7 +1320,7 @@ export class LocalLlmClient {
             if (finishReason === "length") {
                 throw new InferenceError("output_truncated", "client", assembledToolCalls.length > 0
                     ? "Model output was truncated (finish_reason=length) inside a tool call; refusing to run partial arguments."
-                    : "Model output was truncated (finish_reason=length); refusing to treat it as a complete answer.", { requestId, partialText: fullContent, failoverEligible: false });
+                    : "Model output was truncated (finish_reason=length); refusing to treat it as a complete answer.", { requestId, partialText: fullContent, failoverEligible: false, truncatedCalls: truncatedCalls(assembledToolCalls) });
             }
             // The stream completed with nothing in it; the non-streaming re-request is a new operation with its own
             // X-Request-ID so the provider's records never show two executions under one request ID.
@@ -1451,7 +1469,7 @@ export class LocalLlmClient {
             if (result.finish === "length") {
                 throw new InferenceError("output_truncated", "client", result.message.tool_calls?.length
                     ? "Model output was truncated (max output tokens) inside a tool call; refusing to run partial arguments."
-                    : "Model output was truncated (max output tokens); refusing to treat it as a complete answer.", { requestId, partialText: result.text, failoverEligible: false });
+                    : "Model output was truncated (max output tokens); refusing to treat it as a complete answer.", { requestId, partialText: result.text, failoverEligible: false, truncatedCalls: truncatedCalls(result.message.tool_calls ?? []) });
             }
             return result.message;
         });

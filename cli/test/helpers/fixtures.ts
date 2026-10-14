@@ -7,9 +7,10 @@ import path from "node:path";
 import { execSync } from "node:child_process";
 
 export type Reply =
-  | { kind: "tools"; calls: Array<{ name: string; args: unknown; id?: string }>; content?: string; delayMs?: number }
-  /** `chunks`: stream the text in these pieces, `gapMs` apart (the default sends it in one delta). */
-  | { kind: "text"; content: string; delayMs?: number; chunks?: string[]; gapMs?: number }
+  /** `truncated`: the reply hits the output limit (finish_reason=length) partway through its tool calls' arguments. */
+  | { kind: "tools"; calls: Array<{ name: string; args: unknown; id?: string }>; content?: string; delayMs?: number; truncated?: boolean }
+  /** `chunks`: stream the text in these pieces, `gapMs` apart (the default sends it in one delta). `truncated`: finish_reason=length. */
+  | { kind: "text"; content: string; delayMs?: number; chunks?: string[]; gapMs?: number; truncated?: boolean }
   | { kind: "http"; status: number; body?: string; delayMs?: number };
 
 export interface Gateway {
@@ -38,16 +39,26 @@ function sse(obj: unknown): string {
   return `data: ${JSON.stringify(obj)}\n\n`;
 }
 
+/** A tool call's arguments as sent: whole, or cut off partway like a reply that hit the output limit. */
+function wireArguments(args: unknown, truncated?: boolean): string {
+  const json = JSON.stringify(args);
+  return truncated ? json.slice(0, Math.max(1, Math.floor(json.length / 2))) : json;
+}
+
+function finishReason(r: Extract<Reply, { kind: "tools" | "text" }>): string {
+  return r.truncated ? "length" : r.kind === "tools" ? "tool_calls" : "stop";
+}
+
 function streamBody(r: Extract<Reply, { kind: "tools" | "text" }>): string {
   let out = "";
   if (r.kind === "text") out += sse({ choices: [{ index: 0, delta: { content: r.content } }] });
   else {
     if (r.content) out += sse({ choices: [{ index: 0, delta: { content: r.content } }] });
     r.calls.forEach((c, i) => {
-      out += sse({ choices: [{ index: 0, delta: { tool_calls: [{ index: i, id: c.id ?? `call_${i}_${Math.random().toString(36).slice(2, 7)}`, type: "function", function: { name: c.name, arguments: JSON.stringify(c.args) } }] } }] });
+      out += sse({ choices: [{ index: 0, delta: { tool_calls: [{ index: i, id: c.id ?? `call_${i}_${Math.random().toString(36).slice(2, 7)}`, type: "function", function: { name: c.name, arguments: wireArguments(c.args, r.truncated) } }] } }] });
     });
   }
-  out += sse({ choices: [{ index: 0, delta: {}, finish_reason: r.kind === "tools" ? "tool_calls" : "stop" }] });
+  out += sse({ choices: [{ index: 0, delta: {}, finish_reason: finishReason(r) }] });
   return out + "data: [DONE]\n\n";
 }
 
@@ -124,8 +135,8 @@ export async function startGateway(script: (n: number, body?: any) => Reply, opt
           res.setHeader("content-type", "application/json");
           const message = r.kind === "text"
             ? { role: "assistant", content: r.content }
-            : { role: "assistant", content: r.content ?? null, tool_calls: r.calls.map((c, i) => ({ id: c.id ?? `call_${i}`, type: "function", function: { name: c.name, arguments: JSON.stringify(c.args) } })) };
-          res.end(JSON.stringify({ choices: [{ index: 0, message, finish_reason: "stop" }] }));
+            : { role: "assistant", content: r.content ?? null, tool_calls: r.calls.map((c, i) => ({ id: c.id ?? `call_${i}`, type: "function", function: { name: c.name, arguments: wireArguments(c.args, r.truncated) } })) };
+          res.end(JSON.stringify({ choices: [{ index: 0, message, finish_reason: r.truncated ? "length" : "stop" }] }));
         }
       };
       if (r.delayMs) setTimeout(respond, r.delayMs); else respond();

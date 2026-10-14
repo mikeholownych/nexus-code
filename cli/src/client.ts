@@ -250,6 +250,28 @@ export class TokenCountError extends Error {
   }
 }
 
+/** A tool call whose arguments were cut off by the output limit: its name, the target path when it parses, how much was written. */
+export interface TruncatedCall {
+  name: string;
+  path?: string;
+  argumentChars: number;
+}
+
+/** What each cut-off tool call was: the name, and the target path when the partial arguments already hold it whole. */
+export function truncatedCalls(calls: Array<{ function: { name: string; arguments: unknown } }>): TruncatedCall[] {
+  return calls.map((call) => {
+    const args = typeof call.function.arguments === "string" ? call.function.arguments : JSON.stringify(call.function.arguments ?? "");
+    const match = /"path"\s*:\s*"((?:[^"\\]|\\.)*)"/.exec(args);
+    let path: string | undefined;
+    if (match) {
+      try {
+        path = JSON.parse(`"${match[1]}"`);
+      } catch {}
+    }
+    return { name: call.function.name, ...(path ? { path } : {}), argumentChars: args.length };
+  });
+}
+
 export class InferenceError extends Error {
   readonly kind: InferenceFailureKind;
   readonly origin: InferenceFailureOrigin;
@@ -261,6 +283,8 @@ export class InferenceError extends Error {
   readonly condition: ProviderCondition;
   readonly execution: ExecutionStatus;
   readonly hints: ProviderHints;
+  /** output_truncated only: the tool calls the reply was writing when it was cut off (never run). */
+  readonly truncatedCalls: TruncatedCall[];
 
   constructor(
     kind: InferenceFailureKind,
@@ -275,6 +299,7 @@ export class InferenceError extends Error {
       condition?: ProviderCondition;
       execution?: ExecutionStatus;
       hints?: ProviderHints;
+      truncatedCalls?: TruncatedCall[];
     } = {},
   ) {
     super(message);
@@ -288,6 +313,7 @@ export class InferenceError extends Error {
     this.condition = opts.condition ?? DEFAULT_CLASSIFICATION[kind].condition;
     this.execution = opts.execution ?? DEFAULT_CLASSIFICATION[kind].execution;
     this.hints = opts.hints ?? {};
+    this.truncatedCalls = opts.truncatedCalls ?? [];
     this.failoverEligible = opts.failoverEligible ?? (this.execution === "NOT_EXECUTED" && TEMPORARY_CONDITIONS.has(this.condition));
   }
 
@@ -1155,7 +1181,7 @@ export class LocalLlmClient {
           choice.message.tool_calls?.length
             ? "Model output was truncated (finish_reason=length) inside a tool call; refusing to run partial arguments."
             : "Model output was truncated (finish_reason=length); refusing to treat it as a complete answer.",
-          { requestId, partialText: typeof choice.message.content === "string" ? choice.message.content : "", failoverEligible: false },
+          { requestId, partialText: typeof choice.message.content === "string" ? choice.message.content : "", failoverEligible: false, truncatedCalls: truncatedCalls(choice.message.tool_calls ?? []) },
         );
       }
       return choice.message;
@@ -1437,7 +1463,7 @@ export class LocalLlmClient {
           assembledToolCalls.length > 0
             ? "Model output was truncated (finish_reason=length) inside a tool call; refusing to run partial arguments."
             : "Model output was truncated (finish_reason=length); refusing to treat it as a complete answer.",
-          { requestId, partialText: fullContent, failoverEligible: false },
+          { requestId, partialText: fullContent, failoverEligible: false, truncatedCalls: truncatedCalls(assembledToolCalls) },
         );
       }
 
@@ -1591,7 +1617,7 @@ export class LocalLlmClient {
           result.message.tool_calls?.length
             ? "Model output was truncated (max output tokens) inside a tool call; refusing to run partial arguments."
             : "Model output was truncated (max output tokens); refusing to treat it as a complete answer.",
-          { requestId, partialText: result.text, failoverEligible: false },
+          { requestId, partialText: result.text, failoverEligible: false, truncatedCalls: truncatedCalls(result.message.tool_calls ?? []) },
         );
       }
       return result.message;

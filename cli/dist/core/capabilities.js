@@ -182,7 +182,7 @@ export const BASELINE_CAPABILITIES = [
             "type": "function",
             "function": {
                 "name": "write_file",
-                "description": "Create a new file or completely overwrite an existing file with the provided content.",
+                "description": "Create a new file or completely overwrite an existing file with the provided content. One reply can hold only a limited amount of output: write a long file (more than a few hundred lines) in parts, a first part here and the rest with edit_file, or as several smaller files.",
                 "parameters": {
                     "type": "object",
                     "properties": {

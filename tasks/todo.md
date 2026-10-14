@@ -44,3 +44,17 @@ Gateway reference (read-only): `/home/mike/Projects/aihost` fb1a2cd, deployed re
   orphaning the live tracker) plus a wasted second count per step. All fixed with regression tests.
 - Not done: commit/merge (operator's decision), live standalone run against a non-gateway server, live capacity /
   worker-change observation, `graphify update` (no graph in the worktree; the main checkout was not touched).
+
+# Output-truncation recovery (2026-10-14)
+
+Branch `fix/output-truncation-recovery` from main 1c3afbd. Trigger: live session `session_20261014_074807_hmo7` ended
+`FAILED / INFERENCE_FAILED (output_truncated/client)` at step 54 when one reply used the whole 8192-token output
+allowance inside a tool call (about 173 s of generation); output_truncated was always fatal to the turn.
+
+- [x] 1. Truncated reply → bounded retry: nothing from it runs; a Nexus note names the tool/path, the allowance, and asks
+      for the content in parts; the turn continues at the next step (new request id)
+- [x] 2. Bound: a second consecutive truncation ends the turn exactly as before; the truncated step counts as no progress
+- [x] 3. Prevention: write_file/edit_file descriptions say a reply's output is limited and long content goes in parts
+- [x] 4. Tests: truncated tool call → chunked write completes; two in a row → fails as before; truncated prose never
+      accepted as final; no tool from a truncated reply runs
+- [ ] Full `make test` on a snapshot; docs (USER_MANUAL / COMPACTION_AND_CONTINUITY) updated

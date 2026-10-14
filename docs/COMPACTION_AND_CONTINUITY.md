@@ -22,6 +22,7 @@ checkpoint and continues by itself. A turn ends for one of these reasons only:
 | no progress for `--stagnation-steps` consecutive steps (default 12) | `STAGNATION_DETECTED` |
 | the same action gives the same result on an unchanged workspace after two recovery notes | `STAGNATION_DETECTED` |
 | inference fails and provider recovery cannot wait it out | `INFERENCE_FAILED` |
+| the model's reply is cut off at the output limit twice in a row (see below) | `INFERENCE_FAILED` (`output_truncated/client`) |
 | a compaction (or another record the next action depends on) cannot be written | `PERSISTENCE_FAILED` |
 | **you** set `--max-total-steps N` or `--max-turn-minutes M` | `STEP_BUDGET_EXHAUSTED` / `TIME_BUDGET_EXHAUSTED` |
 
@@ -34,6 +35,23 @@ The model is never told that "steps are running out" unless you set a step limit
 
 Delegated helpers (`spawn_subagent`) have no step allowance either. A helper stops when it delivers its report, when
 it shows no progress, or when its parent turn is cancelled.
+
+### A reply cut off at the output limit
+
+One reply can hold at most the output allowance (`max_tokens`: the provider's advertised `max_completion_tokens`,
+8192 on the homelab-ai gateway). A reply that reaches it ends with `finish_reason=length`, usually because the model
+tried to write a whole large file in one `write_file` call. Nexus never runs anything from such a reply and never
+accepts it as a final answer. The first time this happens, the step is spent with no progress, and the model is told:
+
+- which call was cut off, with its target path when the cut-off text already holds it;
+- the size of the limit;
+- that nothing ran;
+- to write the content in parts (`write_file` with a first part, then `edit_file`).
+
+The turn then continues. A second cut-off reply in a row ends the turn as `INFERENCE_FAILED`
+(`output_truncated/client`), so a model that keeps producing the same oversized reply cannot loop. It also ends the
+turn when an operator step limit leaves no step for the retry. The tracking record logs each case as an `output_truncated` intervention. Delegated
+helpers recover the same way. The `write_file` tool description also tells the model to write long files in parts.
 
 ### What counts as progress
 
