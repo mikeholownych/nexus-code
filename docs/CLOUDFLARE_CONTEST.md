@@ -35,6 +35,7 @@ The published tree includes `demo/` and `experiments/cloudflare-artifacts-vertic
    ```sh
    git clone https://github.com/mikeholownych/nexus-code.git
    cd nexus-code
+   npm ci --prefix cli
    npm ci --prefix demo
    npm ci --prefix experiments/cloudflare-artifacts-vertical-slice
    ```
