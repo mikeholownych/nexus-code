@@ -1,6 +1,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { execSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { extractCompilerDiagnostics } from "./diagnostics.js";
 /**
  * Auto-detect project test command (Candidate #47)
@@ -118,6 +119,106 @@ export function discoverVerifier(workspace) {
     if (unittest)
         return unittest;
     return null;
+}
+/**
+ * Resolves the verifier command, its justifying evidence, and its script body (e.g. from
+ * package.json scripts.test or Makefile test: recipe), plus a digest for approval caching.
+ */
+export function describeVerifier(workspace, commandOverride) {
+    const root = path.resolve(workspace);
+    const has = (p) => fs.existsSync(path.join(root, p));
+    let command = commandOverride?.trim();
+    let evidence = "configured";
+    let script;
+    if (!command) {
+        const discovered = discoverVerifier(workspace);
+        if (!discovered)
+            return null;
+        command = discovered.command;
+        evidence = discovered.evidence;
+    }
+    // Look up script body based on command and workspace files
+    if (command === "npm test" || command.startsWith("npm test") || command.startsWith("npm --prefix")) {
+        let pkgRel = "package.json";
+        if (command.includes("--prefix")) {
+            const match = command.match(/--prefix\s+([^\s]+)/);
+            if (match)
+                pkgRel = path.join(match[1], "package.json");
+        }
+        try {
+            const pkg = JSON.parse(fs.readFileSync(path.join(root, pkgRel), "utf-8"));
+            script = pkg?.scripts?.test;
+            if (evidence === "configured")
+                evidence = `${pkgRel}:scripts.test`;
+        }
+        catch { }
+    }
+    else if (command === "make test" || command.startsWith("make test")) {
+        try {
+            const content = fs.readFileSync(path.join(root, "Makefile"), "utf-8");
+            const match = content.match(/^test:[^\n]*\n((?:\t[^\n]*\n?)+)/m);
+            if (match) {
+                script = match[1].trim();
+                if (evidence === "configured")
+                    evidence = "Makefile:test";
+            }
+        }
+        catch { }
+    }
+    else if (command === "cargo test" || command.startsWith("cargo test")) {
+        try {
+            let cargoRel = "Cargo.toml";
+            if (command.includes("--manifest-path")) {
+                const match = command.match(/--manifest-path\s+([^\s]+)/);
+                if (match)
+                    cargoRel = match[1];
+            }
+            if (fs.existsSync(path.join(root, cargoRel))) {
+                script = fs.readFileSync(path.join(root, cargoRel), "utf-8");
+                if (evidence === "configured")
+                    evidence = cargoRel;
+            }
+        }
+        catch { }
+    }
+    else if (command === "pytest" || command.startsWith("pytest")) {
+        for (const p of ["pytest.ini", "pyproject.toml", "setup.cfg"]) {
+            if (has(p)) {
+                try {
+                    script = fs.readFileSync(path.join(root, p), "utf-8");
+                    if (evidence === "configured")
+                        evidence = p;
+                    break;
+                }
+                catch { }
+            }
+        }
+    }
+    if (script === undefined) {
+        // If command runs a local script file (e.g. node script.js or ./test.sh), try reading it
+        const parts = command.split(/\s+/);
+        for (const part of parts.slice(1)) {
+            if (!part.startsWith("-") && has(part)) {
+                try {
+                    const stat = fs.statSync(path.join(root, part));
+                    if (stat.isFile() && stat.size < 50_000) {
+                        script = fs.readFileSync(path.join(root, part), "utf-8");
+                        break;
+                    }
+                }
+                catch { }
+            }
+        }
+        if (script === undefined)
+            script = command;
+    }
+    const digest = createHash("sha256").update(`${command}\n${script}`).digest("hex");
+    return {
+        command,
+        evidence,
+        script,
+        digest,
+    };
 }
 /**
  * Execute automated test suite with diagnostic error parsing (Candidate #47)

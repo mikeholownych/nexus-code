@@ -2,7 +2,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { execFileSync } from "node:child_process";
 import { AutonomousAgent } from "./agent.js";
-import { runTestSuite } from "./tester.js";
+import { runTestSuiteWithExecutor } from "./tester.js";
 import pc from "picocolors";
 import { CandidateTracker, hashContent, } from "./core/candidate.js";
 /**
@@ -124,7 +124,8 @@ export class BenchmarkEvaluator {
                 catch { }
             }
             // 5. Run test suite to verify resolution in candidate workspace
-            const testRes = runTestSuite(evalWorkspace);
+            const bridge = agent.getBridge();
+            const testRes = await runTestSuiteWithExecutor(evalWorkspace, (command) => bridge.executeTool("run_command", { command, timeout_secs: 120 }));
             testsPassed = testRes.success || testRes.command === "none";
             testOutput = testRes.rawOutput || "";
             if (testsPassed && candidateId) {

@@ -65,6 +65,12 @@ export function approvalReview(tool, args, workspace) {
         }
         case "run_command":
             return { kind: "command", command: redactSecrets(String(args.command ?? "")) };
+        case "verifier": {
+            const command = redactSecrets(String(args.command ?? ""));
+            const script = args.script !== undefined ? capped(String(args.script)).text : undefined;
+            const detail = args.detail !== undefined ? redactSecrets(String(args.detail)) : undefined;
+            return { kind: "verifier", command, script, detail };
+        }
         default: {
             const text = capped(JSON.stringify(args, null, 2));
             return { kind: "args", text: text.text, truncated: text.truncated };
