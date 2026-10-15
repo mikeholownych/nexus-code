@@ -24,6 +24,7 @@ import {
   type ProviderClassification,
 } from "./core/provider_recovery.js";
 import { redactSecrets } from "./ui.js";
+import { classifyLocality, setLocalityAuthorityResolver } from "./core/egress.js";
 import { connectionFor, disclosureClass, operatorSettingKeyForAuth, type ResolvedConnection } from "./providers.js";
 import { ProviderStreamError, readSse, type NativeRequestInput, type NativeResult } from "./protocols/common.js";
 import { anthropicStreamParser, buildAnthropicRequest, parseAnthropicResponse } from "./protocols/anthropic.js";
@@ -99,6 +100,8 @@ function authoritySetting(key: string): string | undefined {
 export function operatorSetting(key: string): string | undefined {
   return authoritySetting(key);
 }
+
+setLocalityAuthorityResolver(operatorSetting);
 
 /** Origins that stored credentials belong to, and the operator-environment key with its own origin. */
 function storedCredentialHomes(): { gateway?: string; listed: Set<string>; envKey?: string; envKeyOrigin?: string } {
@@ -555,7 +558,8 @@ export class LocalLlmClient {
     const origin = originOf(url) ?? url;
     if (!announcedDestinations.has(origin)) {
       announcedDestinations.add(origin);
-      console.error(pc.dim(`[nexus] Cloud inference: ${this.conn.label} (${origin}), model ${this.model || "(unset)"}. Task content — prompts, tool results and file excerpts — is sent to this provider.`));
+      const locality = classifyLocality(url);
+      console.error(pc.dim(`[nexus] Cloud inference: ${this.conn.label} (${origin}, locality: ${locality.reason}), model ${this.model || "(unset)"}. Task content — prompts, tool results and file excerpts — is sent to this provider.`));
     }
   }
 
