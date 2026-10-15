@@ -1,0 +1,6 @@
+[   0.52s] SAW idle
+[   0.52s] SEND b'talk slowly\r'
+[   3.72s] TYPE 'also mention cats\r' gap=0.05
+[   6.23s] SEND Ctrl-C with queued steer
+[   6.90s] SAW idle
+[   6.90s] SCREEN idle (100x30)

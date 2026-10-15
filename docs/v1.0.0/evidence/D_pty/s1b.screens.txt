@@ -1,0 +1,32 @@
+
+===== startup-default-endpoint @ 5.01s (100x30) =====
+ NEXUS   ws  ⎇ main  model m  session_20261014_094217_cggo  auto
+
+
+
+
+
+
+
+
+
+
+
+
+                                              N E X U S
+
+                 Understand the work. Inspect the evidence. Keep the decision yours.
+
+
+
+
+
+
+
+
+
+
+
+
+ enter send · shift+enter newline · ? help ─────────────────────────────────────────────────────────
+› ask Nexus · / for commands · ? for keys
