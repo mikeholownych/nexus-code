@@ -29,6 +29,7 @@ import { defaultSessionsDir } from "./session.js";
 import { defaultTaskStateDir } from "./core/state.js";
 import { coreCargoManifest, resolveCoreBinary } from "./tools.js";
 import { isProjectEnvKey } from "./config.js";
+import { classifyLocality } from "./core/egress.js";
 import { redactSecrets } from "./ui.js";
 import { SafePathError, ancestryProblem, chmodVerified, identityOf, mkdirVerified, readVerified, unlinkVerified, writeExclusiveVerified, type Identity } from "./safe_fs.js";
 import type { HarnessConfig } from "./types.js";
@@ -427,7 +428,22 @@ const endpointChecks: Check = async (ctx, signal) => {
   }
   const where = `${config.endpoint}${config.provider ? ` (provider ${config.provider})` : ""}`;
   const out: Array<Omit<DoctorFinding, "durationMs">> = [];
-  out.push(f("endpoint.configured", "endpoint", config.endpoint ? "pass" : "fail", config.endpoint ? "An inference endpoint is configured." : "No inference endpoint is configured.", [where, `credential ${config.apiKey && config.apiKey !== "local" ? "present (bound to its own origin; not shown)" : "none configured; stored gateway credentials are attached per origin by the client"}`]));
+  const locality = classifyLocality(config.endpoint);
+  const localityEvidence = `locality ${locality.boundary} (${locality.reason})`;
+  const localityHelp =
+    locality.boundary === "EXTERNAL_PUBLIC" && locality.reason === "hostname_external" && !config.provider
+      ? "If this is a local LAN host, add it to NEXUS_LOCAL_ORIGINS in ~/.config/nexus/config.env."
+      : undefined;
+  out.push(
+    f(
+      "endpoint.configured",
+      "endpoint",
+      config.endpoint ? "pass" : "fail",
+      config.endpoint ? "An inference endpoint is configured." : "No inference endpoint is configured.",
+      [where, localityEvidence, `credential ${config.apiKey && config.apiKey !== "local" ? "present (bound to its own origin; not shown)" : "none configured; stored gateway credentials are attached per origin by the client"}`],
+      localityHelp
+    )
+  );
   const ev = await (ctx.endpoint ??= gatherEndpoint(ctx, signal));
   if (!ev.reachable) {
     out.push(f("endpoint.reachable", "endpoint", "fail", "The endpoint did not answer.", [where, ev.detail ?? "no HTTP response"], config.provider ? `Check network access to ${config.endpoint}.` : "Start the local model server (LM Studio / vLLM) or point LOCAL_LLM_ENDPOINT / -e at a running one."));
