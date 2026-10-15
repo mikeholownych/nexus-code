@@ -4196,8 +4196,9 @@ The pinned Objective Ledger lists the operator's requirements; your plan never r
 
   /**
    * Operator stop request. This is an authority event: once recorded, no new inference request or tool
-   * dispatch is admitted for the active turn. An already-executing tool call cannot be force-stopped
-   * (the Rust RPC daemon has no cancel verb); it is awaited and reported as outstanding until it settles.
+   * dispatch is admitted for the active turn. A command already running is ended by the runner (its whole process
+   * group, through the bridge's turn signal) and awaited until it settles; background processes earlier commands of
+   * this session left running are ended too (REQ-AGT-109).
    * Returns false when no turn is active or cancellation was already requested.
    */
   public requestCancel(reason: string = "operator"): boolean {
@@ -4206,6 +4207,7 @@ The pinned Objective Ledger lists the operator's requirements; your plan never r
     turn.cancelRequestedAt = new Date().toISOString();
     if (turn.phase === "tool") turn.toolInFlightAtCancel = turn.currentTool;
     turn.controller.abort(new Error(`turn cancelled: ${reason}`));
+    void this.bridge.endBackground().catch(() => 0);
     logAudit({
       workspace: this.config.workspace,
       tool: "turn_cancel",
@@ -4293,6 +4295,7 @@ The pinned Objective Ledger lists the operator's requirements; your plan never r
     const turn: NonNullable<AutonomousAgent["activeTurn"]> = { controller: new AbortController(), phase: "idle", step: 0, onConfirm };
     this.activeTurn = turn;
     const signal = turn.controller.signal;
+    this.bridge.setTurnSignal(signal);
     if (options?.signal) {
       if (options.signal.aborted) this.requestCancel("external signal");
       else options.signal.addEventListener("abort", () => this.requestCancel("external signal"), { once: true });
@@ -5015,6 +5018,7 @@ The pinned Objective Ledger lists the operator's requirements; your plan never r
       return result;
     } finally {
       this.activeTurn = undefined;
+      this.bridge.setTurnSignal(undefined);
     }
   }
 
@@ -5327,6 +5331,8 @@ The pinned Objective Ledger lists the operator's requirements; your plan never r
       throw new Error("Subagent workspace no longer matches its inherited worktree authority.");
     }
     this.runningAsSubagent = true;
+    // A subagent is used for one run: its commands are tied to the parent turn's cancellation for its lifetime.
+    this.bridge.setTurnSignal(signal);
     this.resetConversation();
     this.messages.push({
       role: "user",

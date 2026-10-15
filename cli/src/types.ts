@@ -101,6 +101,8 @@ export interface ExecutionResult {
   error?: string;
   /** The operation's deadline expired before an answer was received (bridge-level; the runner reports its own via `timed_out`). */
   timedOut?: boolean;
+  /** The operator's cancel ended the operation (the runner ended the command's process group). */
+  cancelled?: boolean;
 }
 
 /**

@@ -128,6 +128,9 @@ export function rpcDeadlines(toolName: string, args: Record<string, any>): { run
   return { bridgeMs: args.timeout_secs ? (args.timeout_secs + RPC_GRACE_SECS) * 1000 : RPC_DEFAULT_TIMEOUT_MS };
 }
 
+/** How long a cancelled RPC waits for the runner to confirm the command ended (its grace period is 2 s). */
+const RPC_CANCEL_CONFIRM_MS = 5_000;
+
 export class RustCoreBridge {
   private static activeBridges: Set<RustCoreBridge> = new Set();
   private workspace: string;
@@ -317,7 +320,44 @@ export class RustCoreBridge {
     RustCoreBridge.activeBridges.clear();
   }
 
-  private async executeViaRpc(toolName: string, args: Record<string, any>): Promise<ExecutionResult | null> {
+  /**
+   * The abort signal of the turn now running. Every RPC sent while it is set is tied to it: when the turn is cancelled,
+   * the runner is told to end that request's command (its whole process group) instead of leaving it running.
+   */
+  private turnSignal?: AbortSignal;
+
+  public setTurnSignal(signal: AbortSignal | undefined): void {
+    this.turnSignal = signal;
+  }
+
+  /** Asks the runner to end the request's command; best effort (the daemon may already be gone). */
+  private sendCancel(requestId: number): void {
+    const daemon = this.rpcProcess;
+    if (!daemon?.stdin || daemon.stdin.destroyed) return;
+    try {
+      daemon.stdin.write(JSON.stringify({ id: this.nextRequestId++, method: "cancel", params: { request_id: requestId } }) + "\n");
+    } catch {}
+  }
+
+  /**
+   * Ends background processes that finished commands left running (`server &`), for a cancelled turn. Returns how many
+   * process groups were ended, or 0 when the runner is not running.
+   */
+  public async endBackground(): Promise<number> {
+    if (!this.rpcProcess) return 0;
+    const result = await this.executeViaRpc("end_background", {}, { ignoreTurnSignal: true });
+    try {
+      return Number(JSON.parse(result?.output ?? "{}").ended ?? 0);
+    } catch {
+      return 0;
+    }
+  }
+
+  private async executeViaRpc(toolName: string, args: Record<string, any>, options: { ignoreTurnSignal?: boolean } = {}): Promise<ExecutionResult | null> {
+    const signal = options.ignoreTurnSignal ? undefined : this.turnSignal;
+    if (signal?.aborted) {
+      return { success: false, output: "", error: `'${toolName}' was not started: the turn was cancelled`, cancelled: true };
+    }
     const daemon = this.ensureRpcDaemon();
     if (!daemon || !daemon.stdin || daemon.stdin.destroyed) {
       return null;
@@ -333,15 +373,39 @@ export class RustCoreBridge {
       params,
     });
 
-    return new Promise<ExecutionResult>((resolve) => {
+    return new Promise<ExecutionResult>((outerResolve) => {
+      let cancelTimer: NodeJS.Timeout | undefined;
+      const onAbort = () => {
+        if (!this.pendingRequests.has(id)) return;
+        // The runner ends the command's process group and answers with cancelled: true within its grace period; if it
+        // does not answer, the call is reported cancelled anyway rather than left waiting.
+        this.sendCancel(id);
+        cancelTimer = setTimeout(() => {
+          if (this.pendingRequests.has(id)) {
+            const pending = this.pendingRequests.get(id)!;
+            clearTimeout(pending.timeoutTimer);
+            this.pendingRequests.delete(id);
+            resolve({ success: false, output: "", error: `'${toolName}' was cancelled; the command runner did not confirm within ${RPC_CANCEL_CONFIRM_MS / 1000}s`, cancelled: true });
+          }
+        }, RPC_CANCEL_CONFIRM_MS);
+      };
+      const resolve = (result: ExecutionResult) => {
+        signal?.removeEventListener("abort", onAbort);
+        if (cancelTimer) clearTimeout(cancelTimer);
+        outerResolve(signal?.aborted && toolName === "run_command" ? { ...result, cancelled: true } : result);
+      };
+      signal?.addEventListener("abort", onAbort, { once: true });
+
       const timeoutMs = deadlines.bridgeMs;
       const timeoutTimer = setTimeout(() => {
         if (this.pendingRequests.has(id)) {
           this.pendingRequests.delete(id);
+          // The bridge stops waiting; the runner is told to end the command too, so nothing keeps running unowned.
+          this.sendCancel(id);
           resolve({
             success: false,
             output: "",
-            error: `RPC request for '${toolName}' timed out after ${timeoutMs / 1000}s without an answer from the command runner (result unknown)`,
+            error: `RPC request for '${toolName}' timed out after ${timeoutMs / 1000}s without an answer from the command runner (result unknown); the command was told to stop`,
             timedOut: true,
           });
         }
