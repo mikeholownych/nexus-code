@@ -13,6 +13,8 @@ pub struct RunCommandArgs {
     pub shell: String,
     #[serde(default)]
     pub pty: bool,
+    #[serde(default)]
+    pub argv: Option<Vec<String>>,
 }
 
 fn default_timeout() -> u64 {
@@ -200,46 +202,196 @@ mod registry {
 #[cfg(unix)]
 pub use registry::{cancel as cancel_command, end_all as end_all_commands, end_lingering as end_background_commands};
 
+fn tokenize_and_split_subcommands(cmd: &str) -> Vec<Vec<String>> {
+    let tokens = match shell_words::split(cmd) {
+        Ok(toks) => toks,
+        Err(_) => cmd.split_whitespace().map(|s| s.to_string()).collect(),
+    };
+
+    let mut subcommands = Vec::new();
+    let mut current = Vec::new();
+
+    for token in tokens {
+        if token == ";" || token == "&&" || token == "||" || token == "|" || token == "&" {
+            if !current.is_empty() {
+                subcommands.push(std::mem::take(&mut current));
+            }
+        } else if token.contains(';') || token.contains('&') || token.contains('|') {
+            let mut buf = String::new();
+            for ch in token.chars() {
+                if ch == ';' || ch == '&' || ch == '|' {
+                    if !buf.is_empty() {
+                        current.push(std::mem::take(&mut buf));
+                    }
+                    if !current.is_empty() {
+                        subcommands.push(std::mem::take(&mut current));
+                    }
+                } else {
+                    buf.push(ch);
+                }
+            }
+            if !buf.is_empty() {
+                current.push(buf);
+            }
+        } else {
+            current.push(token);
+        }
+    }
+    if !current.is_empty() {
+        subcommands.push(current);
+    }
+    subcommands
+}
+
 pub fn is_dangerous_command(cmd: &str) -> Option<&'static str> {
-    let normalized = cmd.trim().to_lowercase();
-
-    // Check destructive rm patterns
-    if normalized.contains("rm ") && (
-        normalized.contains("-rf /") || 
-        normalized.contains("-fr /") || 
-        normalized.contains("-rf /*") || 
-        normalized.contains("-fr /*") ||
-        normalized.contains("-rf ~") ||
-        normalized.contains("-rf $home") ||
-        normalized.contains("-rf .") ||
-        normalized.contains("-fr .")
-    ) {
-        return Some("Destructive recursive deletion of root, home, or current directory (rm -rf)");
-    }
-
-    // Format / filesystem destroyers
-    if normalized.starts_with("mkfs") || normalized.contains(" mkfs") {
-        return Some("Filesystem destruction command (mkfs)");
-    }
-
-    // Raw disk writes
-    if normalized.contains("dd if=") && (
-        normalized.contains("of=/dev/sd") || 
-        normalized.contains("of=/dev/nvme") || 
-        normalized.contains("of=/dev/vd") || 
-        (!normalized.contains("of=/dev/null") && !normalized.contains("of=/dev/zero") && normalized.contains("of=/dev/"))
-    ) {
-        return Some("Raw disk block overwrite (dd of=/dev/...)");
-    }
+    let normalized = cmd.trim();
 
     // Fork bombs
-    if normalized.contains(":(){ :|:& };:") || normalized.contains(":(){:|:&};:") {
+    if normalized.contains(":(){ :|:& };:")
+        || normalized.contains(":(){:|:&};:")
+        || (normalized.contains(":(){") && normalized.contains(":|:"))
+    {
         return Some("Fork bomb denial-of-service");
     }
 
-    // Destructive root permissions
-    if (normalized.contains("chmod -r 777 /") || (normalized.contains("chown -r") && normalized.contains(" /"))) && !normalized.contains(" ./") {
-        return Some("Recursive root permission alteration");
+    // Raw disk device redirection
+    if normalized.contains("> /dev/sd")
+        || normalized.contains(">/dev/sd")
+        || normalized.contains("> /dev/nvme")
+        || normalized.contains(">/dev/nvme")
+        || normalized.contains("> /dev/vd")
+        || normalized.contains(">/dev/vd")
+    {
+        return Some("Raw disk device redirection");
+    }
+
+    let subcommands = tokenize_and_split_subcommands(cmd);
+    for sub in &subcommands {
+        if sub.is_empty() {
+            continue;
+        }
+
+        let mut idx = 0;
+        while idx < sub.len() {
+            let word = sub[idx].as_str();
+            if word == "sudo" || word == "doas" || word == "nohup" {
+                idx += 1;
+                while idx < sub.len() && sub[idx].starts_with('-') {
+                    if (sub[idx] == "-u" || sub[idx] == "-g") && idx + 1 < sub.len() {
+                        idx += 2;
+                    } else {
+                        idx += 1;
+                    }
+                }
+            } else if word == "env" {
+                idx += 1;
+                while idx < sub.len() && (sub[idx].starts_with('-') || sub[idx].contains('=')) {
+                    idx += 1;
+                }
+            } else {
+                break;
+            }
+        }
+        if idx >= sub.len() {
+            continue;
+        }
+
+        let exe_full = &sub[idx];
+        let exe = exe_full.rsplit('/').next().unwrap_or(exe_full.as_str());
+        let args = &sub[idx + 1..];
+
+        // System shutdown or reboot commands
+        if exe == "shutdown" || exe == "reboot" || exe == "poweroff" || exe == "halt" {
+            return Some("System shutdown or reboot command");
+        }
+        if exe == "init" && args.iter().any(|a| a == "0" || a == "6") {
+            return Some("System shutdown or reboot command (init 0/6)");
+        }
+
+        // Filesystem destruction command (mkfs)
+        if exe == "mkfs" || exe.starts_with("mkfs.") {
+            return Some("Filesystem destruction command (mkfs)");
+        }
+
+        // Raw disk block overwrite (dd of=/dev/...)
+        if exe == "dd" {
+            let has_dangerous_of = args.iter().any(|a| {
+                if let Some(target) = a.strip_prefix("of=") {
+                    let t = target.trim_matches('"').trim_matches('\'');
+                    t.starts_with("/dev/sd")
+                        || t.starts_with("/dev/nvme")
+                        || t.starts_with("/dev/vd")
+                        || (t.starts_with("/dev/")
+                            && t != "/dev/null"
+                            && t != "/dev/zero"
+                            && t != "/dev/urandom"
+                            && t != "/dev/random")
+                } else {
+                    false
+                }
+            });
+            if has_dangerous_of {
+                return Some("Raw disk block overwrite (dd of=/dev/...)");
+            }
+        }
+
+        // Destructive root permissions or ownership
+        if exe == "chmod" || exe == "chown" {
+            let is_recursive = args.iter().any(|a| {
+                if a.starts_with('-') && !a.starts_with("--") {
+                    a.contains('R') || a.contains('r')
+                } else {
+                    a == "--recursive"
+                }
+            });
+            if is_recursive {
+                let targets_root = args.iter().any(|a| a == "/" || a == "/*");
+                if targets_root {
+                    if exe == "chmod" {
+                        if args.iter().any(|a| a == "777" || a == "0777") {
+                            return Some("Recursive root permission alteration");
+                        }
+                    } else {
+                        return Some("Recursive root permission alteration");
+                    }
+                }
+            }
+        }
+
+        // Destructive rm
+        if exe_full == "rm" {
+            let has_rf = args.iter().any(|a| a == "-rf" || a == "-fr");
+            let has_dash_dash = args.iter().any(|a| a == "--");
+            if has_rf && !has_dash_dash {
+                for a in args {
+                    if a.starts_with('-') {
+                        continue;
+                    }
+                    let t = a.trim();
+                    if t == "/"
+                        || t == "/*"
+                        || t == "."
+                        || t == ".."
+                        || t == "~"
+                        || t.eq_ignore_ascii_case("$home")
+                        || t.eq_ignore_ascii_case("${home}")
+                    {
+                        return Some("Destructive recursive deletion of root, home, or current directory (rm -rf)");
+                    }
+                }
+            }
+        }
+
+        // Shell wrapper inspection: bash -c "..."
+        if (exe == "bash" || exe == "sh" || exe == "zsh") && args.len() >= 2 {
+            for (i, a) in args.iter().enumerate() {
+                if a == "-c" && i + 1 < args.len() {
+                    if let Some(r) = is_dangerous_command(&args[i + 1]) {
+                        return Some(r);
+                    }
+                }
+            }
+        }
     }
 
     None
@@ -253,7 +405,7 @@ pub fn run_command(args: RunCommandArgs, base_dir: &Path) -> Result<RunCommandRe
 /// engine's shutdown can end it.
 pub fn run_command_tracked(args: RunCommandArgs, base_dir: &Path, key: Option<&str>) -> Result<RunCommandResult, String> {
     if let Some(reason) = is_dangerous_command(&args.command) {
-        return Err(format!("Security Violation: Dangerous command blocked by safety guard ({reason}): '{}'", args.command));
+        return Err(format!("Destructive-command tripwire: Command blocked by safety guard ({reason}): '{}'", args.command));
     }
 
     let base_canon = base_dir.canonicalize().map_err(|e| format!("Invalid workspace directory: {e}"))?;
@@ -285,21 +437,41 @@ pub fn run_command_tracked(args: RunCommandArgs, base_dir: &Path, key: Option<&s
     };
 
     if args.pty {
-        return run_command_pty(&args.command, &working_dir, args.timeout_secs, &shell_name, key);
+        return run_command_pty(&args.command, &working_dir, args.timeout_secs, &shell_name, args.argv.as_deref(), key);
     }
 
     let start = Instant::now();
 
-    // Cross-platform shell process execution (Candidate #50)
-    let mut cmd = Command::new(&shell_name);
-    #[cfg(windows)]
-    if shell_name.contains("powershell") {
-        cmd.args(["-NoProfile", "-Command", &args.command]);
+    // Cross-platform process execution: direct argv if provided, else via shell (REQ-SEC-108)
+    let mut cmd = if let Some(ref argv) = args.argv {
+        if let Some((exe, rest)) = argv.split_first() {
+            let mut c = Command::new(exe);
+            c.args(rest);
+            c
+        } else {
+            let mut c = Command::new(&shell_name);
+            #[cfg(windows)]
+            if shell_name.contains("powershell") {
+                c.args(["-NoProfile", "-Command", &args.command]);
+            } else {
+                c.args(["/C", &args.command]);
+            }
+            #[cfg(not(windows))]
+            c.args(["-c", &args.command]);
+            c
+        }
     } else {
-        cmd.args(["/C", &args.command]);
-    }
-    #[cfg(not(windows))]
-    cmd.args(["-c", &args.command]);
+        let mut c = Command::new(&shell_name);
+        #[cfg(windows)]
+        if shell_name.contains("powershell") {
+            c.args(["-NoProfile", "-Command", &args.command]);
+        } else {
+            c.args(["/C", &args.command]);
+        }
+        #[cfg(not(windows))]
+        c.args(["-c", &args.command]);
+        c
+    };
 
     cmd.current_dir(&working_dir)
         .stdin(Stdio::null())
@@ -428,6 +600,7 @@ pub fn run_command_pty(
     working_dir: &Path,
     timeout_secs: u64,
     shell_name: &str,
+    argv: Option<&[String]>,
     key: Option<&str>,
 ) -> Result<RunCommandResult, String> {
     use portable_pty::{native_pty_system, PtySize, CommandBuilder};
@@ -441,15 +614,35 @@ pub fn run_command_pty(
         pixel_height: 0,
     }).map_err(|e| format!("Failed to allocate PTY: {e}"))?;
 
-    let mut cmd = CommandBuilder::new(shell_name);
-    #[cfg(windows)]
-    if shell_name.contains("powershell") {
-        cmd.args(["-NoProfile", "-Command", command_str]);
+    let mut cmd = if let Some(argv) = argv {
+        if let Some((exe, rest)) = argv.split_first() {
+            let mut c = CommandBuilder::new(exe);
+            c.args(rest);
+            c
+        } else {
+            let mut c = CommandBuilder::new(shell_name);
+            #[cfg(windows)]
+            if shell_name.contains("powershell") {
+                c.args(["-NoProfile", "-Command", command_str]);
+            } else {
+                c.args(["/C", command_str]);
+            }
+            #[cfg(not(windows))]
+            c.args(["-c", command_str]);
+            c
+        }
     } else {
-        cmd.args(["/C", command_str]);
-    }
-    #[cfg(not(windows))]
-    cmd.args(["-c", command_str]);
+        let mut c = CommandBuilder::new(shell_name);
+        #[cfg(windows)]
+        if shell_name.contains("powershell") {
+            c.args(["-NoProfile", "-Command", command_str]);
+        } else {
+            c.args(["/C", command_str]);
+        }
+        #[cfg(not(windows))]
+        c.args(["-c", command_str]);
+        c
+    };
 
     cmd.cwd(working_dir);
 
@@ -541,7 +734,7 @@ mod tests {
         let dir = std::env::temp_dir();
         let started = Instant::now();
         let result = run_command(
-            RunCommandArgs { command: "echo before; sleep 3 & echo after".into(), cwd: None, timeout_secs: 30, shell: default_shell(), pty: false },
+            RunCommandArgs { command: "echo before; sleep 3 & echo after".into(), cwd: None, timeout_secs: 30, shell: default_shell(), pty: false, argv: None },
             &dir,
         )
         .unwrap();
@@ -553,20 +746,40 @@ mod tests {
 
     #[test]
     fn test_dangerous_command_detection() {
+        // Destructive commands that must trigger the tripwire
         assert!(is_dangerous_command("rm -rf /").is_some());
         assert!(is_dangerous_command("sudo rm -rf /*").is_some());
         assert!(is_dangerous_command("rm -rf ~").is_some());
+        assert!(is_dangerous_command("rm -rf $HOME").is_some());
+        assert!(is_dangerous_command("rm -rf .").is_some());
+        assert!(is_dangerous_command("rm -rf ..").is_some());
         assert!(is_dangerous_command("mkfs.ext4 /dev/sda1").is_some());
         assert!(is_dangerous_command("dd if=/dev/zero of=/dev/sda bs=1M").is_some());
         assert!(is_dangerous_command(":(){ :|:& };:").is_some());
         assert!(is_dangerous_command("chmod -R 777 /").is_some());
+        assert!(is_dangerous_command("shutdown -h now").is_some());
+        assert!(is_dangerous_command("reboot").is_some());
 
-        // Safe commands
+        // Safe commands that must not be blocked
         assert!(is_dangerous_command("cargo test").is_none());
         assert!(is_dangerous_command("ls -la /").is_none());
         assert!(is_dangerous_command("git status").is_none());
         assert!(is_dangerous_command("cat /etc/hosts").is_none());
         assert!(is_dangerous_command("npm run build").is_none());
+
+        // False positives that must pass (ACC-SAFE-07 / SEC-02)
+        assert!(is_dangerous_command("rm -rf ./build").is_none());
+        assert!(is_dangerous_command("rm -rf ./x").is_none());
+        assert!(is_dangerous_command("rm -rf /tmp/x").is_none());
+        assert!(is_dangerous_command("grep -rn reboot src").is_none());
+        assert!(is_dangerous_command("grep reboot").is_none());
+        assert!(is_dangerous_command("echo shutdown").is_none());
+        assert!(is_dangerous_command("chown -R me /srv").is_none());
+
+        // Documented non-goals (bypasses asserted as not blocked by design per SPEC-01 §5.5)
+        assert!(is_dangerous_command("find / -delete").is_none());
+        assert!(is_dangerous_command("/bin/rm -rf /").is_none());
+        assert!(is_dangerous_command("python3 -c 'import shutil; shutil.rmtree(\"/\")'").is_none());
     }
 
     #[test]
@@ -578,10 +791,27 @@ mod tests {
             timeout_secs: 5,
             shell: default_shell(),
             pty: true,
+            argv: None,
         }, &cwd).unwrap();
 
         assert_eq!(res.exit_code, Some(0));
         assert!(res.stdout.contains("PTY terminal test"));
+    }
+
+    #[test]
+    fn test_run_command_direct_argv() {
+        let cwd = std::env::current_dir().unwrap();
+        let res = run_command(RunCommandArgs {
+            command: "fallback command".into(),
+            cwd: None,
+            timeout_secs: 5,
+            shell: default_shell(),
+            pty: false,
+            argv: Some(vec!["echo".into(), "direct argv output /tmp/a b/'q".into()]),
+        }, &cwd).unwrap();
+
+        assert_eq!(res.exit_code, Some(0));
+        assert!(res.stdout.contains("direct argv output /tmp/a b/'q"));
     }
 
     #[test]
@@ -602,6 +832,7 @@ mod tests {
             timeout_secs: 5,
             shell: default_shell(),
             pty: false,
+            argv: None,
         }, &workspace);
         assert!(res_none.is_ok());
 
@@ -612,6 +843,7 @@ mod tests {
             timeout_secs: 5,
             shell: default_shell(),
             pty: false,
+            argv: None,
         }, &workspace);
         assert!(res_sub.is_ok());
 
@@ -622,6 +854,7 @@ mod tests {
             timeout_secs: 5,
             shell: default_shell(),
             pty: false,
+            argv: None,
         }, &workspace);
         assert!(res_ext.is_err());
         assert!(res_ext.unwrap_err().contains("cwd escapes workspace jail"));
@@ -633,6 +866,7 @@ mod tests {
             timeout_secs: 5,
             shell: default_shell(),
             pty: false,
+            argv: None,
         }, &workspace);
         assert!(res_traversal.is_err());
         assert!(res_traversal.unwrap_err().contains("cwd escapes workspace jail"));
@@ -648,6 +882,7 @@ mod tests {
                 timeout_secs: 5,
                 shell: default_shell(),
                 pty: false,
+                argv: None,
             }, &workspace);
             assert!(res_sym.is_err());
             assert!(res_sym.unwrap_err().contains("cwd escapes workspace jail"));
@@ -685,6 +920,7 @@ mod tests {
             timeout_secs: 30,
             shell: default_shell(),
             pty: false,
+            argv: None,
         }, &cwd).unwrap();
         assert!(res.stdout.len() < MAX_OUTPUT_CHARS + 200, "{}", res.stdout.len());
         assert!(res.stdout.contains(&format!("[TRUNCATED {} BYTES]", 5_000_000 - MAX_OUTPUT_CHARS)));
@@ -704,6 +940,7 @@ mod tests {
                 timeout_secs: 120,
                 shell: default_shell(),
                 pty: false,
+                argv: None,
             }, &cwd, Some("cancel-test"))
         });
         let started = Instant::now();
@@ -732,6 +969,7 @@ mod tests {
             timeout_secs: 30,
             shell: default_shell(),
             pty: false,
+            argv: None,
         }, &cwd, Some("background-test")).unwrap();
         assert!(res.stdout.contains("started"));
         assert_eq!(count_exact(marker), 1, "the background process outlives the call by design");
@@ -767,6 +1005,7 @@ mod tests {
             timeout_secs: 1,
             shell: default_shell(),
             pty: false,
+            argv: None,
         }, &cwd).unwrap();
         let elapsed = started.elapsed();
 
@@ -788,6 +1027,7 @@ mod tests {
             timeout_secs: 5,
             shell: default_shell(),
             pty: false,
+            argv: None,
         }, &cwd).unwrap();
         assert!(!res.timed_out);
         assert_eq!(res.exit_code, Some(3));
