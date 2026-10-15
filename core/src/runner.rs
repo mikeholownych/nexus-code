@@ -35,31 +35,170 @@ pub struct RunCommandResult {
     pub stderr: String,
     pub duration_ms: u128,
     pub timed_out: bool,
+    /// The operator's cancel (or the engine's shutdown) ended the command.
+    #[serde(default)]
+    pub cancelled: bool,
 }
 
 const MAX_OUTPUT_CHARS: usize = 32_000;
 
-fn truncate_output(s: &str) -> String {
-    if s.len() > MAX_OUTPUT_CHARS {
-        let half = MAX_OUTPUT_CHARS / 2;
-        let mut head_idx = half;
-        while !s.is_char_boundary(head_idx) && head_idx > 0 {
-            head_idx -= 1;
+/// Output kept per stream: the first and last halves of MAX_OUTPUT_CHARS bytes plus a count of everything. Memory stays
+/// bounded however much a command prints (400 MB of output used to be buffered whole before truncation).
+struct BoundedCapture {
+    head: Vec<u8>,
+    tail: std::collections::VecDeque<u8>,
+    total: u64,
+}
+
+impl BoundedCapture {
+    const HALF: usize = MAX_OUTPUT_CHARS / 2;
+
+    fn new() -> Self {
+        Self { head: Vec::new(), tail: std::collections::VecDeque::new(), total: 0 }
+    }
+
+    fn push(&mut self, bytes: &[u8]) {
+        self.total += bytes.len() as u64;
+        let mut rest = bytes;
+        if self.head.len() < Self::HALF {
+            let take = rest.len().min(Self::HALF - self.head.len());
+            self.head.extend_from_slice(&rest[..take]);
+            rest = &rest[take..];
         }
-        let mut tail_idx = s.len().saturating_sub(half);
-        while !s.is_char_boundary(tail_idx) && tail_idx < s.len() {
-            tail_idx += 1;
+        if rest.len() >= Self::HALF {
+            self.tail.clear();
+            self.tail.extend(&rest[rest.len() - Self::HALF..]);
+        } else {
+            let overflow = (self.tail.len() + rest.len()).saturating_sub(Self::HALF);
+            self.tail.drain(..overflow);
+            self.tail.extend(rest);
         }
-        format!(
-            "{}\n\n... [TRUNCATED {} BYTES] ...\n\n{}",
-            &s[..head_idx],
-            s.len() - (head_idx + (s.len() - tail_idx)),
-            &s[tail_idx..]
-        )
-    } else {
-        s.to_string()
+    }
+
+    /// The captured text: whole when it fit, otherwise head and tail around a count of the bytes left out.
+    fn render(&self) -> String {
+        let (tail, _) = self.tail.as_slices();
+        let mut tail_bytes = tail.to_vec();
+        tail_bytes.extend_from_slice(self.tail.as_slices().1);
+        let kept = (self.head.len() + tail_bytes.len()) as u64;
+        let head = String::from_utf8_lossy(&self.head);
+        let tail = String::from_utf8_lossy(&tail_bytes);
+        if kept >= self.total {
+            format!("{head}{tail}")
+        } else {
+            format!("{head}\n\n... [TRUNCATED {} BYTES] ...\n\n{tail}", self.total - kept)
+        }
     }
 }
+
+/// Process groups of commands started over RPC, so a cancel request or the engine's shutdown can end them (and
+/// everything they started) instead of leaving them running: REQ-AGT-109 / REQ-SEC-106.
+#[cfg(unix)]
+mod registry {
+    use std::collections::{HashMap, HashSet};
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::{Arc, Mutex, OnceLock};
+    use std::time::{Duration, Instant};
+
+    struct Running {
+        pgid: libc::pid_t,
+        cancelled: Arc<AtomicBool>,
+    }
+
+    #[derive(Default)]
+    struct State {
+        running: HashMap<String, Running>,
+        /// Groups still alive after their command returned (a `server &` the command started).
+        lingering: HashSet<libc::pid_t>,
+    }
+
+    fn state() -> &'static Mutex<State> {
+        static STATE: OnceLock<Mutex<State>> = OnceLock::new();
+        STATE.get_or_init(|| Mutex::new(State::default()))
+    }
+
+    fn alive(pgid: libc::pid_t) -> bool {
+        unsafe { libc::killpg(pgid, 0) == 0 }
+    }
+
+    /// TERM, a grace period for the group to exit, then KILL for whatever is left.
+    pub fn end_groups(pgids: &[libc::pid_t], grace: Duration) {
+        for &pgid in pgids {
+            unsafe { libc::killpg(pgid, libc::SIGTERM) };
+        }
+        let start = Instant::now();
+        while start.elapsed() < grace && pgids.iter().any(|&p| alive(p)) {
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        for &pgid in pgids {
+            if alive(pgid) {
+                unsafe { libc::killpg(pgid, libc::SIGKILL) };
+            }
+        }
+    }
+
+    pub fn start(key: &str, pgid: libc::pid_t) -> Arc<AtomicBool> {
+        let cancelled = Arc::new(AtomicBool::new(false));
+        let mut st = state().lock().unwrap();
+        st.lingering.retain(|&p| alive(p));
+        st.running.insert(key.to_string(), Running { pgid, cancelled: Arc::clone(&cancelled) });
+        cancelled
+    }
+
+    pub fn finish(key: &str) {
+        let mut st = state().lock().unwrap();
+        if let Some(run) = st.running.remove(key) {
+            if alive(run.pgid) {
+                st.lingering.insert(run.pgid);
+            }
+        }
+    }
+
+    /// Ends the command started by request `key`. Returns whether such a command was running.
+    pub fn cancel(key: &str, grace: Duration) -> bool {
+        let pgid = {
+            let st = state().lock().unwrap();
+            match st.running.get(key) {
+                Some(run) => {
+                    run.cancelled.store(true, Ordering::SeqCst);
+                    run.pgid
+                }
+                None => return false,
+            }
+        };
+        end_groups(&[pgid], grace);
+        true
+    }
+
+    /// Ends background processes that finished commands left running. Returns how many groups were ended.
+    pub fn end_lingering(grace: Duration) -> usize {
+        let pgids: Vec<libc::pid_t> = {
+            let mut st = state().lock().unwrap();
+            st.lingering.retain(|&p| alive(p));
+            st.lingering.drain().collect()
+        };
+        end_groups(&pgids, grace);
+        pgids.len()
+    }
+
+    /// Ends every running command and every lingering background group (engine shutdown).
+    pub fn end_all(grace: Duration) -> usize {
+        let pgids: Vec<libc::pid_t> = {
+            let mut st = state().lock().unwrap();
+            for run in st.running.values() {
+                run.cancelled.store(true, Ordering::SeqCst);
+            }
+            let mut all: Vec<libc::pid_t> = st.running.values().map(|r| r.pgid).collect();
+            all.extend(st.lingering.drain());
+            all
+        };
+        end_groups(&pgids, grace);
+        pgids.len()
+    }
+}
+
+#[cfg(unix)]
+pub use registry::{cancel as cancel_command, end_all as end_all_commands, end_lingering as end_background_commands};
 
 pub fn is_dangerous_command(cmd: &str) -> Option<&'static str> {
     let normalized = cmd.trim().to_lowercase();
@@ -107,6 +246,12 @@ pub fn is_dangerous_command(cmd: &str) -> Option<&'static str> {
 }
 
 pub fn run_command(args: RunCommandArgs, base_dir: &Path) -> Result<RunCommandResult, String> {
+    run_command_tracked(args, base_dir, None)
+}
+
+/// Runs a command; with `key` (the RPC request id) its process group is registered so `cancel_command(key)` and the
+/// engine's shutdown can end it.
+pub fn run_command_tracked(args: RunCommandArgs, base_dir: &Path, key: Option<&str>) -> Result<RunCommandResult, String> {
     if let Some(reason) = is_dangerous_command(&args.command) {
         return Err(format!("Security Violation: Dangerous command blocked by safety guard ({reason}): '{}'", args.command));
     }
@@ -140,7 +285,7 @@ pub fn run_command(args: RunCommandArgs, base_dir: &Path) -> Result<RunCommandRe
     };
 
     if args.pty {
-        return run_command_pty(&args.command, &working_dir, args.timeout_secs, &shell_name);
+        return run_command_pty(&args.command, &working_dir, args.timeout_secs, &shell_name, key);
     }
 
     let start = Instant::now();
@@ -175,7 +320,7 @@ pub fn run_command(args: RunCommandArgs, base_dir: &Path) -> Result<RunCommandRe
 
     // Readers append to shared buffers, so output already read is kept even if a pipe stays open past the drain.
     let reader = |pipe: Box<dyn std::io::Read + Send>| {
-        let collected = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let collected = std::sync::Arc::new(std::sync::Mutex::new(BoundedCapture::new()));
         let sink = std::sync::Arc::clone(&collected);
         let (done_tx, done_rx) = std::sync::mpsc::channel::<()>();
         std::thread::spawn(move || {
@@ -184,7 +329,7 @@ pub fn run_command(args: RunCommandArgs, base_dir: &Path) -> Result<RunCommandRe
             loop {
                 match pipe.read(&mut chunk) {
                     Ok(0) | Err(_) => break,
-                    Ok(n) => sink.lock().unwrap().extend_from_slice(&chunk[..n]),
+                    Ok(n) => sink.lock().unwrap().push(&chunk[..n]),
                 }
             }
             let _ = done_tx.send(());
@@ -193,6 +338,9 @@ pub fn run_command(args: RunCommandArgs, base_dir: &Path) -> Result<RunCommandRe
     };
     let (stdout_buf, stdout_done) = reader(Box::new(stdout));
     let (stderr_buf, stderr_done) = reader(Box::new(stderr));
+
+    #[cfg(unix)]
+    let cancelled = key.map(|k| registry::start(k, child.id() as libc::pid_t));
 
     let timeout = Duration::from_secs(args.timeout_secs);
     let poll_interval = Duration::from_millis(50);
@@ -221,21 +369,30 @@ pub fn run_command(args: RunCommandArgs, base_dir: &Path) -> Result<RunCommandRe
     let drain_deadline = Instant::now() + drain;
     let _ = stdout_done.recv_timeout(drain_deadline.saturating_duration_since(Instant::now()));
     let _ = stderr_done.recv_timeout(drain_deadline.saturating_duration_since(Instant::now()));
-    let stdout_bytes = std::mem::take(&mut *stdout_buf.lock().unwrap());
-    let stderr_bytes = std::mem::take(&mut *stderr_buf.lock().unwrap());
+    let stdout_text = stdout_buf.lock().unwrap().render();
+    let stderr_text = stderr_buf.lock().unwrap().render();
     let duration_ms = start.elapsed().as_millis();
 
-    let raw_stdout = String::from_utf8_lossy(&stdout_bytes).to_string();
-    let raw_stderr = String::from_utf8_lossy(&stderr_bytes).to_string();
+    #[cfg(unix)]
+    let was_cancelled = match (key, cancelled) {
+        (Some(k), Some(flag)) => {
+            registry::finish(k);
+            flag.load(std::sync::atomic::Ordering::SeqCst)
+        }
+        _ => false,
+    };
+    #[cfg(not(unix))]
+    let was_cancelled = false;
 
     Ok(RunCommandResult {
         command: args.command,
         shell: shell_name,
         exit_code: exit_status.and_then(|s| s.code()),
-        stdout: truncate_output(&raw_stdout),
-        stderr: truncate_output(&raw_stderr),
+        stdout: stdout_text,
+        stderr: stderr_text,
         duration_ms,
         timed_out,
+        cancelled: was_cancelled,
     })
 }
 
@@ -271,6 +428,7 @@ pub fn run_command_pty(
     working_dir: &Path,
     timeout_secs: u64,
     shell_name: &str,
+    key: Option<&str>,
 ) -> Result<RunCommandResult, String> {
     use portable_pty::{native_pty_system, PtySize, CommandBuilder};
     let start = Instant::now();
@@ -303,10 +461,25 @@ pub fn run_command_pty(
         .map_err(|e| format!("Failed to clone PTY master reader: {e}"))?;
 
     let output_handle = std::thread::spawn(move || {
-        let mut buf = Vec::new();
-        let _ = std::io::Read::read_to_end(&mut reader, &mut buf);
-        buf
+        let mut capture = BoundedCapture::new();
+        let mut chunk = [0u8; 8192];
+        loop {
+            match std::io::Read::read(&mut reader, &mut chunk) {
+                Ok(0) | Err(_) => break,
+                Ok(n) => capture.push(&chunk[..n]),
+            }
+        }
+        capture
     });
+
+    // The PTY child leads its own session, so its pid is its process group: a timeout or cancel ends the group.
+    #[cfg(unix)]
+    let pty_pgid = child.process_id().map(|p| p as libc::pid_t);
+    #[cfg(unix)]
+    let cancelled = match (key, pty_pgid) {
+        (Some(k), Some(pgid)) => Some(registry::start(k, pgid)),
+        _ => None,
+    };
 
     let timeout = Duration::from_secs(timeout_secs);
     let poll_interval = Duration::from_millis(50);
@@ -317,6 +490,10 @@ pub fn run_command_pty(
             Ok(Some(status)) => break Some(status),
             Ok(None) => {
                 if start.elapsed() > timeout {
+                    #[cfg(unix)]
+                    if let Some(pgid) = pty_pgid {
+                        registry::end_groups(&[pgid], Duration::from_millis(500));
+                    }
                     let _ = child.kill();
                     timed_out = true;
                     let _ = child.wait();
@@ -329,17 +506,28 @@ pub fn run_command_pty(
     };
 
     drop(pair.master);
-    let raw_out = output_handle.join().unwrap_or_default();
-    let text = String::from_utf8_lossy(&raw_out).to_string();
+    let text = output_handle.join().map(|c| c.render()).unwrap_or_default();
+
+    #[cfg(unix)]
+    let was_cancelled = match (key, cancelled) {
+        (Some(k), Some(flag)) => {
+            registry::finish(k);
+            flag.load(std::sync::atomic::Ordering::SeqCst)
+        }
+        _ => false,
+    };
+    #[cfg(not(unix))]
+    let was_cancelled = false;
 
     Ok(RunCommandResult {
         command: command_str.to_string(),
         shell: shell_name.to_string(),
         exit_code: exit_status.and_then(|s| if s.success() { Some(0) } else { Some(1) }),
-        stdout: truncate_output(&text),
+        stdout: text,
         stderr: String::new(),
         duration_ms: start.elapsed().as_millis(),
         timed_out,
+        cancelled: was_cancelled,
     })
 }
 
@@ -466,6 +654,97 @@ mod tests {
         }
 
         let _ = std::fs::remove_dir_all(&temp_base);
+    }
+
+    #[test]
+    fn bounded_capture_keeps_head_tail_and_an_exact_count() {
+        let mut cap = BoundedCapture::new();
+        let data: Vec<u8> = (0..100_000u32).map(|i| b'a' + (i % 26) as u8).collect();
+        for chunk in data.chunks(777) {
+            cap.push(chunk);
+        }
+        let half = MAX_OUTPUT_CHARS / 2;
+        let out = cap.render();
+        assert!(out.starts_with(std::str::from_utf8(&data[..half]).unwrap()));
+        assert!(out.ends_with(std::str::from_utf8(&data[data.len() - half..]).unwrap()));
+        assert!(out.contains(&format!("[TRUNCATED {} BYTES]", data.len() - 2 * half)), "{}", &out[half..half + 80]);
+
+        let mut small = BoundedCapture::new();
+        small.push(b"hello ");
+        small.push(b"world");
+        assert_eq!(small.render(), "hello world");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn large_output_is_bounded_and_counted() {
+        let cwd = std::env::current_dir().unwrap();
+        let res = run_command(RunCommandArgs {
+            command: "head -c 5000000 /dev/zero | tr '\\0' a".to_string(),
+            cwd: None,
+            timeout_secs: 30,
+            shell: default_shell(),
+            pty: false,
+        }, &cwd).unwrap();
+        assert!(res.stdout.len() < MAX_OUTPUT_CHARS + 200, "{}", res.stdout.len());
+        assert!(res.stdout.contains(&format!("[TRUNCATED {} BYTES]", 5_000_000 - MAX_OUTPUT_CHARS)));
+    }
+
+    /// REQ-AGT-109: cancelling a request ends its whole process group (background children included), promptly.
+    #[cfg(unix)]
+    #[test]
+    fn cancel_ends_the_command_group() {
+        let cwd = std::env::current_dir().unwrap();
+        let marker = "sleep 30.123";
+        let handle = std::thread::spawn({
+            let cwd = cwd.clone();
+            move || run_command_tracked(RunCommandArgs {
+                command: format!("({marker} &); {marker}"),
+                cwd: None,
+                timeout_secs: 120,
+                shell: default_shell(),
+                pty: false,
+            }, &cwd, Some("cancel-test"))
+        });
+        let started = Instant::now();
+        while count_exact(marker) < 2 && started.elapsed() < Duration::from_secs(5) {
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        assert!(cancel_command("cancel-test", Duration::from_secs(2)));
+        let res = handle.join().unwrap().unwrap();
+        assert!(res.cancelled, "the result says the command was cancelled");
+        assert!(!res.timed_out);
+        assert!(started.elapsed() < Duration::from_secs(8));
+        std::thread::sleep(Duration::from_millis(200));
+        assert_eq!(count_exact(marker), 0, "processes survived the cancel");
+        assert!(!cancel_command("cancel-test", Duration::from_secs(1)), "nothing left to cancel");
+    }
+
+    /// REQ-SEC-106: background processes a finished command left running are ended on request and at shutdown.
+    #[cfg(unix)]
+    #[test]
+    fn background_processes_left_by_a_command_are_ended() {
+        let cwd = std::env::current_dir().unwrap();
+        let marker = "sleep 30.456";
+        let res = run_command_tracked(RunCommandArgs {
+            command: format!("{marker} & echo started"),
+            cwd: None,
+            timeout_secs: 30,
+            shell: default_shell(),
+            pty: false,
+        }, &cwd, Some("background-test")).unwrap();
+        assert!(res.stdout.contains("started"));
+        assert_eq!(count_exact(marker), 1, "the background process outlives the call by design");
+        assert!(end_background_commands(Duration::from_secs(2)) >= 1);
+        std::thread::sleep(Duration::from_millis(200));
+        assert_eq!(count_exact(marker), 0, "background process survived");
+    }
+
+    /// Processes whose whole command line is exactly `command` (not the shells that started them).
+    #[cfg(unix)]
+    fn count_exact(command: &str) -> usize {
+        let out = Command::new("pgrep").args(["-x", "-f", &regex::escape(command)]).output().unwrap();
+        String::from_utf8_lossy(&out.stdout).lines().count()
     }
 
     #[cfg(unix)]
