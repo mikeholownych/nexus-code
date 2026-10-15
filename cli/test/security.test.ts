@@ -128,3 +128,86 @@ describe("ACC-TRUST-09: protected paths matching covers .env* and canonical, cas
     });
   });
 });
+
+describe("ACC-SAFE-07 & REQ-SEC-108: Destructive-command tripwire tokenization and documented bypasses", () => {
+  test("Destructive commands are blocked by tripwire with Destructive-command tripwire prefix", async () => {
+    await withWorkspace(async (ws) => {
+      const sm = new SecurityManager(ws);
+
+      // Destructive commands that must trigger tripwire
+      const blockedCases = [
+        "rm -rf /",
+        "rm -rf /*",
+        "rm -rf ~",
+        "rm -rf $HOME",
+        "rm -rf .",
+        "rm -rf ..",
+        "shutdown",
+        "shutdown -h now",
+        "reboot",
+        ":(){ :|:& };:",
+        "mkfs.ext4 /dev/sda1",
+        "dd if=/dev/zero of=/dev/sda bs=1M",
+        "> /dev/sda",
+        "chmod -R 777 /",
+        "chown -R root /",
+      ];
+
+      for (const cmd of blockedCases) {
+        const check = sm.isCommandBlocked(cmd);
+        assert.equal(check.blocked, true, `expected '${cmd}' to be blocked`);
+        assert.ok(
+          check.reason?.startsWith("Destructive-command tripwire"),
+          `expected reason to start with Destructive-command tripwire, got: ${check.reason}`
+        );
+      }
+    });
+  });
+
+  test("False positives are fixed and pass through tripwire (ACC-SAFE-07 / SEC-02)", async () => {
+    await withWorkspace(async (ws) => {
+      const sm = new SecurityManager(ws);
+
+      // Known false positives that must pass through
+      const falsePositives = [
+        "rm -rf ./build",
+        "rm -rf ./x",
+        "rm -rf /tmp/x",
+        "grep reboot",
+        "grep -rn reboot src",
+        "echo shutdown",
+        "chown -R me /srv",
+        "git status",
+        "cargo test",
+        "cat /etc/hosts",
+        "npm run build",
+      ];
+
+      for (const cmd of falsePositives) {
+        const check = sm.isCommandBlocked(cmd);
+        assert.equal(check.blocked, false, `expected false positive '${cmd}' to not be blocked`);
+      }
+    });
+  });
+
+  test("Documented non-goals (bypasses asserted as not blocked by design per SPEC-01 §5.5 / ACC-SAFE-07)", async () => {
+    await withWorkspace(async (ws) => {
+      const sm = new SecurityManager(ws);
+
+      // Bypasses from C §4 R3 that pass through the tripwire by design
+      // (Safety boundary is approval/sandbox, not the tripwire)
+      const bypasses = [
+        "find / -delete",
+        "/bin/rm -rf /",
+        'python3 -c "import shutil; shutil.rmtree(\'/\')"',
+        "rm -r -f /",
+        "rm -rf -- /",
+      ];
+
+      for (const cmd of bypasses) {
+        const check = sm.isCommandBlocked(cmd);
+        assert.equal(check.blocked, false, `expected bypass '${cmd}' to pass by design (non-goal)`);
+      }
+    });
+  });
+});

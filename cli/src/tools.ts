@@ -924,7 +924,7 @@ export class RustCoreBridge {
       if (toolName === "run_command") {
         const cmd = (args.command || "").trim();
         // The same check as the authority engine: one allowlist, with argument-level escapes (find -exec, rg --pre…).
-        if (!isSafeReadOnlyCommand(cmd)) {
+        if (!isSafeReadOnlyCommand(cmd, undefined, this.workspace)) {
           return {
             success: false,
             output: "",
@@ -994,7 +994,7 @@ export class RustCoreBridge {
       }
       if (toolName === "run_command") {
         const cmd = (args.command || "").trim();
-        if (!isSafeReadOnlyCommand(cmd)) {
+        if (!isSafeReadOnlyCommand(cmd, undefined, this.workspace)) {
           return {
             success: true,
             output: `[DRY-RUN SIMULATION] Command '${cmd}' simulated without execution to protect disk state.`,
@@ -1220,6 +1220,9 @@ export class RustCoreBridge {
           };
         }
         args.command = sandboxed.command;
+        if (sandboxed.argv) {
+          args.argv = sandboxed.argv;
+        }
       }
     }
 
