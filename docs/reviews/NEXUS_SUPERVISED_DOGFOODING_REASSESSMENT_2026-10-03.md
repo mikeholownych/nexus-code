@@ -1,5 +1,7 @@
 # Nexus Supervised-Dogfooding Reassessment — 2026-10-03
 
+> **Historical record.** This document is kept for provenance. Current requirements and status: [docs/v1.0.0/REQUIREMENTS.md](../v1.0.0/REQUIREMENTS.md). Statuses here may have been superseded or contradicted since it was written.
+
 Question: *Can an operator now sit down at Nexus and do sustained, supervised real engineering without losing trust in what it
 reports or losing control of the session?*
 

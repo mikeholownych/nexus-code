@@ -57,6 +57,7 @@ jobs:
       - run: cargo build --locked --release --manifest-path core/Cargo.toml --bin harness-core --bin nexus-tui
       - run: npm --prefix cli test
       - run: bash scripts/security_gates.sh
+      - run: node scripts/check_requirements.mjs
       - id: release-version
         run: echo "version=$(node -p 'require("./package.json").version')" >> "$GITHUB_OUTPUT"
       - run: bash scripts/package-linux.sh "v${{ steps.release-version.outputs.version }}" "$RUNNER_TEMP/dist"

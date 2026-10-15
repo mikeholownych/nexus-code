@@ -1,5 +1,7 @@
 # Nexus maturity fixes — requirement → implementation → test matrix
 
+> **Historical record.** This document is kept for provenance. Current requirements and status: [docs/v1.0.0/REQUIREMENTS.md](../v1.0.0/REQUIREMENTS.md). Statuses here may have been superseded or contradicted since it was written.
+
 - Original scope (verbatim, never edited): `NEXUS_MATURITY_FIXES_2026-10-11_REQUEST.md`
 - Recovered doctor request (verbatim): `NEXUS_DOCTOR_RECOVERED_REQUEST.md`
 - Checkout: `/home/mike/nexus-code` (verified), base `57c070d`; nothing committed. Pre-existing dirty work preserved

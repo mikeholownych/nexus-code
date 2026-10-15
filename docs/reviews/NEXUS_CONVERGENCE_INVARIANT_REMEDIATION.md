@@ -1,5 +1,7 @@
 # Nexus convergence invariant remediation: I1, I6, G
 
+> **Historical record.** This document is kept for provenance. Current requirements and status: [docs/v1.0.0/REQUIREMENTS.md](../v1.0.0/REQUIREMENTS.md). Statuses here may have been superseded or contradicted since it was written.
+
 Date: 2026-10-08. Starting disposition: `NEXUS_CONVERGENCE_BASELINE_INTEGRATION_BLOCKED_INVARIANT_VIOLATIONS_I1_I6`.
 
 **Disposition: `NEXUS_CONVERGENCE_INVARIANTS_REMEDIATED_WITH_LIMITATIONS`**

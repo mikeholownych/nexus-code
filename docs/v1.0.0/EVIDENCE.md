@@ -105,7 +105,7 @@ The probe and repro scripts contain absolute paths into the audit scratchpad. Re
 
 ## 8. Artifact hashes
 
-The `SHA256SUMS` file in this directory covers every file under `docs/v1.0.0/` (except itself). Generated at the end of the audit:
+`SHA256SUMS` in this directory covers the audit-time evidence under `evidence/`. That evidence is immutable. The other documents in this package (ledger, specs, plans) are living documents, updated as implementation proceeds, and are tracked by git instead.
 
 ```
 cd docs/v1.0.0 && sha256sum -c SHA256SUMS
