@@ -1035,7 +1035,7 @@ export class AutonomousAgent {
     this.hybridSearch = new HybridSearchEngine(ws, this.client);
     this.synthesizer = new SynthesizerEngine(ws, (command) => this.bridge.executeTool("run_command", { command, timeout_secs: 120 }));
     this.browser = new BrowserDriver(ws);
-    this.knowledge = new KnowledgeGraph(ws);
+    this.knowledge = new KnowledgeGraph(ws, { readOnly: config.readOnly });
     this.bridge = new RustCoreBridge(
       ws,
       config.shell,
@@ -1047,7 +1047,7 @@ export class AutonomousAgent {
     );
     this.securityManager = new SecurityManager(ws);
     this.ui = new TerminalUI();
-    this.skillManager = new SkillManager(ws);
+    this.skillManager = new SkillManager(ws, { readOnly: config.readOnly });
     this.mcpManager = new McpClientManager(ws, { readOnly: config.readOnly });
     this.pluginManager = new PluginManager(ws, { readOnly: config.readOnly });
     this.worktreeManager = new WorktreeManager(ws);
@@ -1806,7 +1806,8 @@ export class AutonomousAgent {
     this.hybridSearch = new HybridSearchEngine(newWorkspace, this.client);
     this.synthesizer = new SynthesizerEngine(newWorkspace, (command) => this.bridge.executeTool("run_command", { command, timeout_secs: 120 }));
     this.browser = new BrowserDriver(newWorkspace);
-    this.knowledge = new KnowledgeGraph(newWorkspace);
+    this.knowledge = new KnowledgeGraph(newWorkspace, { readOnly: this.config.readOnly });
+    this.skillManager.setWorkspace(newWorkspace, { readOnly: this.config.readOnly });
     this.extensibilityInitialized = false;
     this.setupSpineHandlers();
     this.resetConversation();
@@ -3809,6 +3810,14 @@ The pinned Objective Ledger lists the operator's requirements; your plan never r
       const skillName = args.name;
       const skill = this.skillManager.getSkill(skillName);
       if (!skill) {
+        const untrusted = this.skillManager.getUntrustedSkill(skillName);
+        if (untrusted) {
+          return {
+            success: false,
+            output: "",
+            error: `Error: Skill '${skillName}' is in an untrusted workspace and cannot be activated. Run 'nexus trust .' to trust this workspace.`,
+          };
+        }
         const avail = this.skillManager.listSkills().map((s) => s.name).join(", ");
         return {
           success: false,
@@ -3819,7 +3828,7 @@ The pinned Objective Ledger lists the operator's requirements; your plan never r
       console.log(pc.green(`✔ Activated skill: ${pc.bold(skill.name)}`));
       return {
         success: true,
-        output: `[Activated Skill: ${skill.name}]\n\n${skill.content}`,
+        output: `[Activated Skill: ${skill.name}] [source: ${skill.path}] [trust: ${skill.trusted ? "trusted" : "untrusted"}]\n\n${skill.content}`,
       };
     });
 

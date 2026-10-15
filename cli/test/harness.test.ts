@@ -155,7 +155,7 @@ describe("Nexus Code Test Suite", () => {
     );
 
     try {
-      const sm = new SkillManager(tmpDir);
+      const sm = new SkillManager(tmpDir, { trusted: true });
       const skills = sm.listSkills();
       assert.ok(skills.some((s) => s.name === "sample-skill"));
 
@@ -2380,7 +2380,7 @@ error[E0308]: mismatched types
     const skillsDir = path.join(tmpDir, "skills", "dynamic-skill");
     fs.mkdirSync(skillsDir, { recursive: true });
 
-    const sm = new SkillManager(tmpDir);
+    const sm = new SkillManager(tmpDir, { trusted: true });
     assert.strictEqual(sm.getSkill("dynamic-skill"), null);
 
     try {
@@ -3518,7 +3518,7 @@ export class CacheService {
   test("KnowledgeGraph persists project idioms across sessions, filters queries, and exports prompt section", () => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-kg-test-"));
     try {
-      const kg = new KnowledgeGraph(tempDir);
+      const kg = new KnowledgeGraph(tempDir, { trusted: true });
       assert.strictEqual(kg.list().length, 0);
 
       // 1. Add knowledge entries
@@ -3545,7 +3545,7 @@ export class CacheService {
       assert.ok(promptSec.includes("Always use pnpm"));
 
       // 4. Verify persistence across new instance
-      const kg2 = new KnowledgeGraph(tempDir);
+      const kg2 = new KnowledgeGraph(tempDir, { trusted: true });
       assert.strictEqual(kg2.list().length, 3);
       assert.strictEqual(kg2.get("test-framework")?.key, "test-framework");
 
