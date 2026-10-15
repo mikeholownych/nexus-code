@@ -14,10 +14,17 @@ nexus
 harness repl
 ```
 
-To launch with human approval required before changes are written:
-```bash
-nexus --approve
-```
+### Execution Postures & Approval Modes
+
+Nexus Code resolves execution posture per workspace trust (DEC-01 option C):
+- **Untrusted workspaces:** Default to `review` posture, requiring human confirmation before executing shell commands, file modifications, network requests, or verifier test runs.
+- **Trusted workspaces:** Default to `auto` posture, permitting autonomous execution.
+
+Flags and commands:
+- **Trust your workspace:** Run `nexus trust .` to mark the current repository trusted and enable default `auto` execution.
+- **Review mode (human-in-the-loop):** Run `nexus --approve` (or `nexus --mode review`) to require explicit approval for all actions regardless of workspace trust.
+- **Autonomous mode (scripts and CI):** Pass `nexus --yes` (or `nexus --mode auto`, or set `NEXUS_APPROVAL_MODE=auto`) to run autonomously without interactive approval prompts.
+- **Read-only mode:** Run `nexus --read-only` to explore and analyze code without permitting any modifications or non-read commands.
 
 To resume your latest session:
 ```bash
@@ -287,10 +294,10 @@ Nexus Code provides high-performance tools executed via compiled native 64-bit R
 
 - **Workspace Symlink Boundary Confinement**: Native Rust canonicalization verifies that neither relative paths nor symlinks can escape the workspace jail directory.
 - **Configurable Security Policy (`.nexus-security.json`)**: Declare repository-specific blocked shell commands, protected files (`.git`, `.env*`, keys), and allowed outbound network domains. Protected-path checks cover case-insensitive variants, `.env*` prefixes, and canonical targets across all file read/write/edit tools; for `run_command` path protection is advisory because shell commands execute in the host shell environment.
-- **Dry-Run & Read-Only Modes**:
+- **Dry-Run & Read-Only Modes (REQ-SEC-104)**:
   - `--dry-run`: Intercepts file writes and mutating commands to simulate changes without touching disk.
-  - `--read-only`: Rejects all file modifications and non-read shell commands with an immediate error.
-- **Lightweight Container Sandboxing (`--sandbox`)**: Restricts filesystem mutation strictly to the target workspace using Linux Bubblewrap (`bwrap`) or Docker isolation.
+  - `--read-only`: Rejects all file modifications and non-read shell commands with an immediate error. Under container sandboxing (`bwrap`), `--tmpfs $HOME` is mounted to completely mask SSH keys (`~/.ssh`), credentials, and dotfiles from `run_command`. Without `bwrap`, strict path confinement rejects paths referencing `~`, `$HOME`, environment variables (`$`), absolute paths outside the workspace, or escaping `..` sequences.
+- **Lightweight Container Sandboxing & Direct Argv Spawning (`--sandbox`, REQ-SEC-109)**: Restricts filesystem mutation strictly to the target workspace using Linux Bubblewrap (`bwrap`) or Docker isolation. Sandbox commands are constructed as direct `argv` argument arrays and executed without passing through a host shell (`sh -c` / `bash -c`), preventing shell escaping vulnerabilities with paths containing spaces or quotes.
 - **In-Process Plugin Execution & Middleware Auditing**: Custom plugin handlers and middleware execute in-process with full user authority. Plugins are loaded only from documented directories: `~/.config/nexus/plugins/`, `~/.nexus/plugins/`, and trusted workspace directories (`.nexus/plugins/`, `plugins/`). The undocumented foreign directory `~/.config/opencode/plugins` has been removed (REQ-SEC-115), and the legacy worker-thread sandbox claim has been retired (`executeSandboxed` deleted, REQ-SEC-117). Any middleware rewriting of tool I/O (`preToolExecution` or `postToolExecution`) is cryptographically audited with before-and-after SHA-256 digests in both `~/.nexus/audit.log` (`kind: "middleware_rewrite"`) and the flight log (EXT-004, REQ-SEC-116).
 - **Workspace Trust & Context Provenance (REQ-SEC-113, CTX-001)**: An opened workspace is data until explicitly trusted by the operator. Workspace trust covers:
   - Workspace `.mcp.json` / `mcp.json` server definitions.
@@ -312,7 +319,11 @@ Nexus Code provides high-performance tools executed via compiled native 64-bit R
 - **BPE Token Accounting & Context Gauge**: Real-time token breakdown across system instructions, tools schema, user messages, assistant thinking, and tool output payloads with visual ANSI progress gauge.
 - **Structured Context Compaction**: `/compact` distills discarded messages into structured memory (files touched, commands run, architectural decisions) instead of discarding context blindly.
 - **Dynamic Few-Shot Injection**: Context-aware injection of valid tool exemplars (edits, test repair, batch reads) tailored to the active task, eliminating tool hallucination in local models (Qwen 2.5, DeepSeek Coder).
-- **Dangerous Command Guard**: Blocks destructive commands (`rm -rf /`, `mkfs`, raw device writes, fork bombs) from executing.
+- **Destructive Command Convenience Tripwire (REQ-SEC-108)**: Shell-words tokenization in TypeScript and Rust blocks obviously destructive commands (`rm -rf /`, `mkfs`, raw block device writes, fork bombs) without false positives on legitimate project commands (`rm -rf ./build`, `rm -rf /tmp/x`, `grep reboot`, `echo shutdown`, `chown -R me /srv`). This denylist is a **convenience tripwire** to catch obvious mistakes, **not a security boundary**. Known bypasses (such as `find / -delete`, `/bin/rm -rf /`, `rm -r -f /`, Python scripts) are documented non-goals that pass by design; the sandbox (`--sandbox`) and approval posture (`review`) form the security boundary.
+- **Verifier Execution Gating (REQ-SEC-119)**: Automated test runs and verifiers (`run_tests`, `/test`, completion oracle) are classified as `exec` capabilities subject to the approval policy. In untrusted workspaces, the first verifier execution prompts for approval, displaying the exact test command and resolved script body from `package.json`, `Makefile`, or `Cargo.toml`.
+- **Approval Input Safety & Surface Integrity (REQ-SEC-103, TUI-09, TUI-10)**:
+  - In `InteractiveRepl`: Prompts display `[y/N/d/a]`. Lone Enter safely defaults to No (`N`). A 400ms grace period discards typed-ahead input and pastes. Selecting `a` (approve all) requires explicit typing of `all` to confirm.
+  - In the Ratatui TUI: The approval modal lays out `Approve` (left) · `All later` (center) · `Deny` (right). Left arrow (`←`) selects `Approve` and Right arrow (`→`) selects `Deny`. On narrow terminals (<60 columns), short-form hints fit within 38 columns without clipping.
 - **SSRF Network Protection (`safeFetch`, REQ-SEC-112)**: Outbound HTTP scraping via `fetch_web` enforces rigorous SSRF protections:
   - Resolves hostnames and rejects non-public addresses (loopback `127.0.0.0/8` / `::1`, RFC-1918 private subnets, CGNAT `100.64.0.0/10`, link-local `169.254.0.0/16` / `fe80::/10`, IPv6 ULA `fc00::/7`, and IPv4-mapped loopback/private addresses).
   - Pins the resolved public IP address to the connection to prevent DNS-rebinding attacks.

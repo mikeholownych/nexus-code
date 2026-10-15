@@ -609,9 +609,9 @@ exit 0"#
             unreachable!("pump_until waited for the approval modal");
         };
         // The `y` pressed before the panel was drawn went into it: its letters are not answers. After the display grace
-        // and a pause, → chooses Approve and Enter, once the choice has been on screen a moment, takes it.
+        // and a pause, ← chooses Approve and Enter, once the choice has been on screen a moment, takes it.
         let past_grace = approval.opened + APPROVAL_GRACE + crate::live_state::APPROVAL_QUIET;
-        assert_eq!(app.state.on_key_at(KeyEvent::new(KeyCode::Right, KeyModifiers::NONE), past_grace), None);
+        assert_eq!(app.state.on_key_at(KeyEvent::new(KeyCode::Left, KeyModifiers::NONE), past_grace), None);
         // Letters are off on this panel, so approving takes Enter twice.
         assert_eq!(app.state.on_key_at(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE), past_grace + crate::live_state::APPROVAL_TYPING_RECENT), None);
         let approve = app

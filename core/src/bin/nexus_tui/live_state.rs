@@ -1330,7 +1330,7 @@ impl LiveState {
             // ←/→ choose between Approve and Deny only: approving every later action is never one arrow away.
             KeyCode::Left | KeyCode::Right if bare => {
                 if settled {
-                    approval.focus = Some(if key.code == KeyCode::Left { Verdict::Denied } else { Verdict::Approved });
+                    approval.focus = Some(if key.code == KeyCode::Left { Verdict::Approved } else { Verdict::Denied });
                     approval.focus_at = Some(now);
                 } else {
                     approval.focus = None;
@@ -3068,8 +3068,8 @@ mod tests {
         assert!(matches!(&state.overlay, Some(Overlay::Approval(a)) if a.focus.is_none() && !a.letters));
         // Arrows choose only Approve or Deny: "approve all later actions" is never reachable from a typed-into panel.
         let later = opened_at(&mut state) + APPROVAL_GRACE + APPROVAL_QUIET * 3;
-        assert_eq!(state.on_key_at(key(KeyCode::Right), later), None);
-        assert_eq!(state.on_key_at(key(KeyCode::Right), later), None);
+        assert_eq!(state.on_key_at(key(KeyCode::Left), later), None);
+        assert_eq!(state.on_key_at(key(KeyCode::Left), later), None);
         assert!(matches!(&state.overlay, Some(Overlay::Approval(a)) if a.focus == Some(Verdict::Approved)));
         // On a panel whose letters are off, approving takes Enter twice.
         assert_eq!(state.on_key_at(key(KeyCode::Enter), later + APPROVAL_TYPING_RECENT), None);
@@ -3126,10 +3126,10 @@ mod tests {
         let opened = opened_at(&mut state);
         assert_eq!(state.on_key_at(key(KeyCode::Char('x')), opened + Duration::from_millis(100)), None);
         assert_eq!(state.composer, "", "keys go to the modal, not the composer");
-        // A key typed into the panel disarms its letters: `y` is text now; → then Enter decides.
+        // A key typed into the panel disarms its letters: `y` is text now; ← then Enter decides.
         assert_eq!(state.on_key_at(key(KeyCode::Char('y')), opened + Duration::from_secs(3)), None);
         let later = opened + Duration::from_secs(5);
-        assert_eq!(state.on_key_at(key(KeyCode::Right), later), None);
+        assert_eq!(state.on_key_at(key(KeyCode::Left), later), None);
         // On a panel whose letters are off, approving takes Enter twice.
         assert_eq!(state.on_key_at(key(KeyCode::Enter), later + APPROVAL_TYPING_RECENT), None);
         assert_eq!(
