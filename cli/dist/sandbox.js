@@ -2,6 +2,12 @@ import { execSync } from "node:child_process";
 import * as path from "node:path";
 import * as fs from "node:fs";
 import * as os from "node:os";
+export function quoteForShell(arg) {
+    if (/^[a-zA-Z0-9_\.\-\/=]+$/.test(arg)) {
+        return arg;
+    }
+    return "'" + arg.replace(/'/g, "'\\''") + "'";
+}
 /**
  * Check if bubblewrap (bwrap) sandbox utility is installed
  */
@@ -111,6 +117,7 @@ export function wrapSandboxedCommand(cmd, workspace, options = {}) {
         // - Read-write bind exclusively for the workspace
         // - Unshare PID namespace
         // - Isolate /tmp
+        const userHome = process.env.HOME || os.homedir();
         const bwrapArgs = [
             "bwrap",
             "--ro-bind", "/", "/",
@@ -121,23 +128,22 @@ export function wrapSandboxedCommand(cmd, workspace, options = {}) {
             "--dev", "/dev",
             "--proc", "/proc",
             "--tmpfs", "/tmp",
-            options.readOnlyHost
-                ? "--ro-bind"
-                : "--bind", absWorkspace, absWorkspace,
-            "--chdir", absWorkspace,
-            "--unshare-pid",
         ];
+        if (options.readOnlyHost && userHome) {
+            bwrapArgs.push("--tmpfs", userHome);
+        }
+        bwrapArgs.push(options.readOnlyHost ? "--ro-bind" : "--bind", absWorkspace, absWorkspace, "--chdir", absWorkspace, "--unshare-pid");
         if (options.network === false) {
             bwrapArgs.push("--unshare-net");
         }
         if (options.customBwrapArgs && options.customBwrapArgs.length > 0) {
             bwrapArgs.push(...options.customBwrapArgs);
         }
-        // Format final execution
-        const safeEscaped = cmd.replace(/'/g, "'\\''");
-        bwrapArgs.push(shell, "-c", `'${safeEscaped}'`);
+        // Format final execution - for argv array, raw strings are used without extra quotes
+        bwrapArgs.push(shell, "-c", cmd);
         return {
-            command: bwrapArgs.join(" "),
+            command: bwrapArgs.map(quoteForShell).join(" "),
+            argv: [...bwrapArgs],
             sandboxed: true,
             engine: "bwrap",
         };
