@@ -291,8 +291,20 @@ Nexus Code provides high-performance tools executed via compiled native 64-bit R
   - `--dry-run`: Intercepts file writes and mutating commands to simulate changes without touching disk.
   - `--read-only`: Rejects all file modifications and non-read shell commands with an immediate error.
 - **Lightweight Container Sandboxing (`--sandbox`)**: Restricts filesystem mutation strictly to the target workspace using Linux Bubblewrap (`bwrap`) or Docker isolation.
-- **In-Process Plugin Execution & Middleware Auditing**: Custom plugin handlers and middleware execute in-process with full user authority. Any middleware rewriting of tool I/O is cryptographically audited with before-and-after SHA-256 digests in both the audit log and flight log (EXT-004).
-- **Workspace Trust**: A workspace's own `.mcp.json` / `mcp.json` servers and `.nexus/plugins/` / `plugins/` modules run code from the workspace, so they are loaded only after you trust it: `nexus trust [path]` (undo with `nexus trust --remove`, list with `nexus trust --list`; recorded in `~/.config/nexus/trusted_workspaces.json`, which the agent's file tools cannot write). Untrusted, they are not loaded and Nexus says so (a notice at start, `nexus doctor`, `nexus mcp`, `nexus plugins`); in `--read-only` mode they are never loaded. Servers and plugins in your home configuration (`~/.config/nexus/`, `~/.nexus/`) are always loaded.
+- **In-Process Plugin Execution & Middleware Auditing**: Custom plugin handlers and middleware execute in-process with full user authority. Plugins are loaded only from documented directories: `~/.config/nexus/plugins/`, `~/.nexus/plugins/`, and trusted workspace directories (`.nexus/plugins/`, `plugins/`). The undocumented foreign directory `~/.config/opencode/plugins` has been removed (REQ-SEC-115), and the legacy worker-thread sandbox claim has been retired (`executeSandboxed` deleted, REQ-SEC-117). Any middleware rewriting of tool I/O (`preToolExecution` or `postToolExecution`) is cryptographically audited with before-and-after SHA-256 digests in both `~/.nexus/audit.log` (`kind: "middleware_rewrite"`) and the flight log (EXT-004, REQ-SEC-116).
+- **Workspace Trust & Context Provenance (REQ-SEC-113, CTX-001)**: An opened workspace is data until explicitly trusted by the operator. Workspace trust covers:
+  - Workspace `.mcp.json` / `mcp.json` server definitions.
+  - Workspace plugins (`.nexus/plugins/`, `plugins/`).
+  - Workspace skills (`skills/`, `.nexus/skills/`, `.claude/skills/`).
+  - Workspace knowledge graph (`.nexus/knowledge.json`).
+  Trust is managed via `nexus trust [path]` (undo with `nexus trust --remove`, list with `nexus trust --list`; stored in `~/.config/nexus/trusted_workspaces.json`, which the agent's file tools cannot write). In an untrusted workspace:
+  - Workspace MCP servers and plugins are not loaded.
+  - Workspace skills are not loaded into context; `/skills` lists them as "untrusted (not loaded)". Attempting to use `/skill <name>` or the `activate_skill` tool on an untrusted skill is refused with: `Skill '<name>' belongs to an untrusted workspace. Run 'nexus trust .' to trust this workspace.`.
+  - Workspace knowledge is ignored and not loaded into context.
+  - Injected prompt blocks from skills and knowledge are explicitly annotated with source path and trust state (`[source: <path>] [trust: <state>]`).
+  - In `--read-only` mode, untrusted components are never loaded, no writes occur, and `.nexus/` is never created.
+  Servers, plugins, and skills in your home configuration (`~/.config/nexus/`, `~/.nexus/`) are always trusted and loaded.
+- **Knowledge Graph Hygiene & Auto-Extraction Gating (REQ-SEC-114)**: The `KnowledgeGraph` has a lazy constructor that performs no filesystem creation until a write is explicitly requested. In `--read-only` mode, all mutations are blocked. Implicit standing instruction creation via automatic prompt mining (`autoExtract`) is disabled by default per DEC-15. It can only be enabled explicitly via `NEXUS_KNOWLEDGE_AUTOEXTRACT=1`, which prints a notification whenever a new rule is recorded into `<workspace>/.nexus/knowledge.json`.
 - **MCP Server Environment**: MCP servers start with basic process, locale, proxy (`HTTPS_PROXY`, `NO_PROXY`, …) and CA-trust (`SSL_CERT_FILE`, `NODE_EXTRA_CA_CERTS`, …) variables only — not Nexus's own credentials. Give a server the token it needs in its `env` block in `mcp.json`.
 - **Build Identity**: `nexus --version` and `nexus doctor` show the commit the running build was made from, its branch, and whether the source had uncommitted changes (`1.2.1 (cc177be91d15-dirty, feat/tui-surface)`), recorded at `make build`.
 - **Pseudo-Terminal (PTY) Allocation**: Commands requiring TTY capabilities run inside allocated virtual pseudo-terminals via `portable-pty`.
@@ -301,7 +313,13 @@ Nexus Code provides high-performance tools executed via compiled native 64-bit R
 - **Structured Context Compaction**: `/compact` distills discarded messages into structured memory (files touched, commands run, architectural decisions) instead of discarding context blindly.
 - **Dynamic Few-Shot Injection**: Context-aware injection of valid tool exemplars (edits, test repair, batch reads) tailored to the active task, eliminating tool hallucination in local models (Qwen 2.5, DeepSeek Coder).
 - **Dangerous Command Guard**: Blocks destructive commands (`rm -rf /`, `mkfs`, raw device writes, fork bombs) from executing.
-- **SSRF Network Protection**: Blocks outbound access to loopback (`127.0.0.1`), cloud metadata (`169.254.169.254`), and private RFC-1918 subnets in `fetch_web`.
+- **SSRF Network Protection (`safeFetch`, REQ-SEC-112)**: Outbound HTTP scraping via `fetch_web` enforces rigorous SSRF protections:
+  - Resolves hostnames and rejects non-public addresses (loopback `127.0.0.0/8` / `::1`, RFC-1918 private subnets, CGNAT `100.64.0.0/10`, link-local `169.254.0.0/16` / `fe80::/10`, IPv6 ULA `fc00::/7`, and IPv4-mapped loopback/private addresses).
+  - Pins the resolved public IP address to the connection to prevent DNS-rebinding attacks.
+  - Handles HTTP redirects manually (maximum 5 hops), re-validating the resolved IP on every redirect hop.
+  - Streams the response body with a strict 5 MB cap (RSS < 100 MB) to prevent denial-of-service memory exhaustion.
+  - Requests are gated by the SPEC-01 egress policy.
+- **Web Search Honesty & Disclosure (REQ-PRV-108)**: `search_web` queries technical search providers and returns `success: false` and empty results when no search hits are found (no fabricated or placeholder results). Its search destination is disclosed on first use and routed through the egress disclosure gate.
 - **Non-Blocking Pipe Execution**: Drains stdout and stderr concurrently to prevent 64KB Linux buffer saturation deadlocks during intensive builds.
 - **Secret Redaction**: Redacts Bearer tokens, private keys, and passwords before printing or logging.
 - **Audit Logging**: Every tool execution is recorded with timestamps, parameters, duration, and status in `~/.nexus/audit.log`. Visual inspection available via `/audit` and `nexus audit`.
