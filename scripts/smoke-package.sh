@@ -9,11 +9,14 @@ VERSION=$(cat "$TMP/nexus/VERSION")
 "$NEXUS" --version | grep -F "${VERSION#v}" >/dev/null
 "$NEXUS" --help >/dev/null
 set +e
-"$NEXUS" doctor --json > "$TMP/doctor.json"
+mkdir -p "$TMP/doctor-home"
+HOME="$TMP/doctor-home" "$NEXUS" doctor --json > "$TMP/doctor.json"
 DOCTOR_STATUS=$?
 set -e
 [ "$DOCTOR_STATUS" -le 2 ] || { cat "$TMP/doctor.json" >&2; echo "packaged doctor failed to run" >&2; exit 1; }
 node -e 'const d=require(process.argv[1]); if (d.schemaVersion !== 2) process.exit(1)' "$TMP/doctor.json"
+# One version everywhere (REQ-REL-103): a fresh install's engine check passes, never a version warning.
+node -e 'const d=require(process.argv[1]); const e=d.findings.find((f)=>f.id==="engine.binary"); if (!e || e.status!=="pass") { console.error(JSON.stringify(e)); process.exit(1) }' "$TMP/doctor.json"
 test -x "$TMP/nexus/lib/core/harness-core"
 test -x "$TMP/nexus/lib/core/nexus-tui"
 node --input-type=module - "$TMP/nexus/lib/cli/dist/tools.js" "$TMP/nexus/lib/core/harness-core" <<'EOF'
