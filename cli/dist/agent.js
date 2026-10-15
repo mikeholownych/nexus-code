@@ -7,6 +7,8 @@ import { DEFAULT_CONTINUATION } from "./types.js";
 import { LocalLlmClient } from "./client.js";
 import { HARNESS_TOOLS, RustCoreBridge, forbiddenDeletion, registerBridgeCapabilities } from "./tools.js";
 import { createDefaultRegistry, changesWorkspace, } from "./core/capabilities.js";
+import { defaultApprovalPolicy } from "./core/approval_policy.js";
+import { isWorkspaceTrusted } from "./workspace_trust.js";
 import { ExecutionSpine, extractTargetResources, } from "./core/spine.js";
 import { AuthorityAdmissionEngine } from "./core/authority.js";
 import { CandidateTracker, computeCandidateIdentitySync, hashContent, } from "./core/candidate.js";
@@ -470,6 +472,20 @@ function normalizeMessageContent(content) {
     }
     return { text, preserveOriginal };
 }
+/**
+ * The destination an egress call is approved for: the URL's origin, or the tool family when the call names no URL
+ * (a search, or acting on the page the browser already has open). Review mode asks once per destination per session.
+ */
+function egressOriginOf(toolName, args) {
+    const url = typeof args.url === "string" ? args.url : undefined;
+    if (url) {
+        try {
+            return new URL(url).origin;
+        }
+        catch { }
+    }
+    return toolName.startsWith("browser_") ? "browser:current-page" : `tool:${toolName}`;
+}
 const READ_ONLY_TOOLS = new Set([
     "read_file",
     "batch_read",
@@ -692,6 +708,9 @@ export class AutonomousAgent {
     completionSummary;
     observer;
     toolDispatchSeq = 0;
+    /** Egress destinations the operator approved this session (cleared on reset and restore: approvals never persist). */
+    approvedEgressOrigins = new Set();
+    approvalPolicy = defaultApprovalPolicy;
     verifiedWorktreeCompletion = false;
     worktreeRunTurnAuthorized = false;
     managedWorktreeWorkspaceSwitch = false;
@@ -816,16 +835,17 @@ export class AutonomousAgent {
         this.hybridSearch = new HybridSearchEngine(ws, this.client);
         this.synthesizer = new SynthesizerEngine(ws, (command) => this.bridge.executeTool("run_command", { command, timeout_secs: 120 }));
         this.browser = new BrowserDriver(ws);
-        this.knowledge = new KnowledgeGraph(ws);
+        this.knowledge = new KnowledgeGraph(ws, { readOnly: config.readOnly });
         this.bridge = new RustCoreBridge(ws, config.shell, config.coreBinaryPath, config.dryRun, config.readOnly, inheritedWorktreeScope ? (config.sandbox || "auto") : config.sandbox, Boolean(inheritedWorktreeScope?.requireSandbox));
         this.securityManager = new SecurityManager(ws);
         this.ui = new TerminalUI();
-        this.skillManager = new SkillManager(ws);
+        this.skillManager = new SkillManager(ws, { readOnly: config.readOnly });
         this.mcpManager = new McpClientManager(ws, { readOnly: config.readOnly });
         this.pluginManager = new PluginManager(ws, { readOnly: config.readOnly });
         this.worktreeManager = new WorktreeManager(ws);
         if (config.recordFlight) {
             this.flightRecorder = new FlightRecorder(ws);
+            this.pluginManager.setFlightRecorder(this.flightRecorder);
         }
         this.candidateTracker = new CandidateTracker();
         this.capabilityRegistry = createDefaultRegistry();
@@ -943,6 +963,32 @@ export class AutonomousAgent {
     }
     getTaskId() {
         return this.currentTaskId;
+    }
+    setApprovalPolicy(policy) {
+        this.approvalPolicy = policy;
+    }
+    getApprovalPolicy() {
+        return this.approvalPolicy;
+    }
+    clearApprovedEgressOrigins() {
+        this.approvedEgressOrigins.clear();
+    }
+    setApprovalMode(mode) {
+        this.config.approvalMode = mode;
+        if (mode !== "auto") {
+            this.config.fullAccess = false;
+        }
+        this.clearApprovedEgressOrigins();
+    }
+    getApprovalMode() {
+        if (this.config.approvalMode)
+            return this.config.approvalMode;
+        if (this.config.readOnly)
+            return "read-only";
+        if (this.config.fullAccess)
+            return "auto";
+        const trusted = isWorkspaceTrusted(this.config.workspace, Boolean(this.config.readOnly));
+        return trusted ? "auto" : "review";
     }
     initTaskState() {
         if (!this.stateManager)
@@ -1147,6 +1193,7 @@ export class AutonomousAgent {
     }
     enableFlightRecorder(flightId) {
         this.flightRecorder = new FlightRecorder(this.config.workspace, flightId);
+        this.pluginManager.setFlightRecorder(this.flightRecorder);
         return this.flightRecorder;
     }
     getWorktreeManager() {
@@ -1283,6 +1330,7 @@ export class AutonomousAgent {
         this.findingsCondensed = recorded.some((state) => state.reduced);
     }
     restoreSession(msgs, unverifiedChangesPending, objective, findings) {
+        this.approvedEgressOrigins.clear();
         this.messages = [...msgs];
         this.restoreFindings(findings);
         this.objective = objective ?? undefined;
@@ -1450,6 +1498,7 @@ export class AutonomousAgent {
         return toolName === "spawn_subagent" || !capability || changesWorkspace(capability);
     }
     resetConversation() {
+        this.approvedEgressOrigins.clear();
         this.changeBaseline = undefined;
         this.enabledToolGroups = new Set();
         this.stepNoticeStep = 0;
@@ -1512,7 +1561,8 @@ export class AutonomousAgent {
         this.hybridSearch = new HybridSearchEngine(newWorkspace, this.client);
         this.synthesizer = new SynthesizerEngine(newWorkspace, (command) => this.bridge.executeTool("run_command", { command, timeout_secs: 120 }));
         this.browser = new BrowserDriver(newWorkspace);
-        this.knowledge = new KnowledgeGraph(newWorkspace);
+        this.knowledge = new KnowledgeGraph(newWorkspace, { readOnly: this.config.readOnly });
+        this.skillManager.setWorkspace(newWorkspace, { readOnly: this.config.readOnly });
         this.extensibilityInitialized = false;
         this.setupSpineHandlers();
         this.resetConversation();
@@ -3109,7 +3159,8 @@ export class AutonomousAgent {
         const knowledgeSection = this.knowledge ? `\n${this.knowledge.exportPromptSection()}` : "";
         // Invariant prompt prefix optimization for local AI:
         // Fixed canonical few-shots ensure byte-exact prefix caching across turns (vLLM / llama.cpp / Ollama)
-        const fewShotSection = `\n${selectRelevantFewShots(this.config.workspace)}\n`;
+        const nativeTools = this.client?.supportsNativeTools?.() ?? true;
+        const fewShotSection = `\n${selectRelevantFewShots(this.config.workspace, 2, { nativeTools })}\n`;
         const tddSection = this.config.tdd
             ? `\n### Test-Driven Development (RED-GREEN-REFACTOR) Protocol Enforced:
 1. PHASE 1 (RED): Before modifying any production code, author a reproduction test that asserts the desired behavior and verify that it FAILS.
@@ -3555,6 +3606,14 @@ The pinned Objective Ledger lists the operator's requirements; your plan never r
             const skillName = args.name;
             const skill = this.skillManager.getSkill(skillName);
             if (!skill) {
+                const untrusted = this.skillManager.getUntrustedSkill(skillName);
+                if (untrusted) {
+                    return {
+                        success: false,
+                        output: "",
+                        error: `Error: Skill '${skillName}' is in an untrusted workspace and cannot be activated. Run 'nexus trust .' to trust this workspace.`,
+                    };
+                }
                 const avail = this.skillManager.listSkills().map((s) => s.name).join(", ");
                 return {
                     success: false,
@@ -3565,7 +3624,7 @@ The pinned Objective Ledger lists the operator's requirements; your plan never r
             console.log(pc.green(`✔ Activated skill: ${pc.bold(skill.name)}`));
             return {
                 success: true,
-                output: `[Activated Skill: ${skill.name}]\n\n${skill.content}`,
+                output: `[Activated Skill: ${skill.name}] [source: ${skill.path}] [trust: ${skill.trusted ? "trusted" : "untrusted"}]\n\n${skill.content}`,
             };
         });
         this.spine.registerHandler("read_objective", async (args) => {
@@ -3698,10 +3757,77 @@ The pinned Objective Ledger lists the operator's requirements; your plan never r
         const subject = String(args.path ?? args.file_path ?? args.command ?? args.url ?? args.query ?? "").replace(/\s+/g, " ").slice(0, 120);
         this.activity("tool", { tool: toolName, ...(subject ? { subject } : {}) });
         const cap = this.capabilityRegistry.getByToolName(toolName);
-        const isMutating = cap ? cap.mutating : !READ_ONLY_TOOLS.has(toolName);
-        if (onConfirm && isMutating) {
+        // Tools outside the registry (MCP servers, plugins) are treated as running code: review mode asks before them.
+        const effect = cap ? cap.effect : READ_ONLY_TOOLS.has(toolName) ? "read_workspace" : "exec";
+        const egressOrigin = effect === "egress" ? egressOriginOf(toolName, args) : undefined;
+        const isTrusted = isWorkspaceTrusted(this.config.workspace, Boolean(this.config.readOnly));
+        const mode = this.config.approvalMode ?? (this.config.readOnly ? "read-only" : (this.config.fullAccess ? "auto" : (isTrusted ? "auto" : "review")));
+        const policyContext = {
+            mode,
+            trusted: isTrusted,
+            sandbox: this.config.sandbox,
+            approvedEgressOrigins: this.approvedEgressOrigins,
+            egressOrigin,
+            fullAccess: Boolean(this.config.fullAccess),
+        };
+        const askOperator = this.approvalPolicy.requiresDecision(effect, policyContext);
+        if (toolName === "activate_skill") {
+            const skillName = args?.name;
+            if (skillName && this.skillManager.getUntrustedSkill(skillName)) {
+                const cancelMsg = `Error: Skill '${skillName}' is in an untrusted workspace and cannot be activated. Run 'nexus trust .' to trust this workspace.`;
+                const receipt = {
+                    invocationId: call.id,
+                    taskId: this.activeWorktree?.taskId || this.currentTaskId,
+                    actor,
+                    executionDomain: actor === "subagent" ? "subagent" : "agent_orchestration",
+                    capabilityId: this.capabilityRegistry.getByToolName(toolName)?.id || "activate_skill",
+                    toolName,
+                    targetResources: extractTargetResources(toolName, args),
+                    success: false,
+                    output: "",
+                    error: cancelMsg,
+                    durationMs: 0,
+                    candidateMutated: false,
+                    status: "DENIED",
+                    denialReason: "UNTRUSTED_WORKSPACE_SKILL",
+                    timestamp: new Date().toISOString(),
+                    simulated: Boolean(this.config.dryRun),
+                };
+                this.observer?.onToolEnd?.({ dispatch, callId: call.id, tool: toolName, success: false, output: "", error: cancelMsg });
+                return { receipt, shouldExit: false };
+            }
+        }
+        if (askOperator) {
+            if (!onConfirm) {
+                const cancelMsg = `Error: Tool '${toolName}' requires operator approval (${effect}), but no operator is present (headless execution). Run with --yes or --mode auto, or 'nexus trust .' to trust this workspace.`;
+                const receipt = {
+                    invocationId: call.id,
+                    taskId: this.activeWorktree?.taskId || this.currentTaskId,
+                    actor,
+                    executionDomain: actor === "subagent" ? "subagent" : "agent_orchestration",
+                    capabilityId: this.capabilityRegistry.getByToolName(toolName)?.id || "unknown",
+                    toolName,
+                    targetResources: extractTargetResources(toolName, args),
+                    success: false,
+                    output: "",
+                    error: cancelMsg,
+                    durationMs: 0,
+                    candidateMutated: false,
+                    status: "DENIED",
+                    denialReason: "DECISION_REQUIRED_NO_OPERATOR",
+                    timestamp: new Date().toISOString(),
+                    simulated: Boolean(this.config.dryRun),
+                };
+                if (this.flightRecorder) {
+                    this.flightRecorder.recordToolResult(currentStep, call.id, toolName, false, cancelMsg, 0, "DECISION_REQUIRED_NO_OPERATOR");
+                }
+                this.observer?.onToolEnd?.({ dispatch, callId: call.id, tool: toolName, success: false, output: "", error: cancelMsg });
+                return { receipt, shouldExit: false };
+            }
             this.activity("approval", { tool: toolName, ...(subject ? { subject } : {}) });
             const approved = await onConfirm(toolName, args);
+            if (approved && egressOrigin)
+                this.approvedEgressOrigins.add(egressOrigin);
             if (approved)
                 this.activity("tool", { tool: toolName, ...(subject ? { subject } : {}) });
             if (!approved) {
@@ -3881,8 +4007,9 @@ The pinned Objective Ledger lists the operator's requirements; your plan never r
     }
     /**
      * Operator stop request. This is an authority event: once recorded, no new inference request or tool
-     * dispatch is admitted for the active turn. An already-executing tool call cannot be force-stopped
-     * (the Rust RPC daemon has no cancel verb); it is awaited and reported as outstanding until it settles.
+     * dispatch is admitted for the active turn. A command already running is ended by the runner (its whole process
+     * group, through the bridge's turn signal) and awaited until it settles; background processes earlier commands of
+     * this session left running are ended too (REQ-AGT-109).
      * Returns false when no turn is active or cancellation was already requested.
      */
     requestCancel(reason = "operator") {
@@ -3893,6 +4020,7 @@ The pinned Objective Ledger lists the operator's requirements; your plan never r
         if (turn.phase === "tool")
             turn.toolInFlightAtCancel = turn.currentTool;
         turn.controller.abort(new Error(`turn cancelled: ${reason}`));
+        void this.bridge.endBackground().catch(() => 0);
         logAudit({
             workspace: this.config.workspace,
             tool: "turn_cancel",
@@ -3974,6 +4102,7 @@ The pinned Objective Ledger lists the operator's requirements; your plan never r
         const turn = { controller: new AbortController(), phase: "idle", step: 0, onConfirm };
         this.activeTurn = turn;
         const signal = turn.controller.signal;
+        this.bridge.setTurnSignal(signal);
         if (options?.signal) {
             if (options.signal.aborted)
                 this.requestCancel("external signal");
@@ -4412,7 +4541,8 @@ The pinned Objective Ledger lists the operator's requirements; your plan never r
                 previousReplyTruncated = false;
                 this.noteAdmission(activeClient, currentStep);
                 // Parse the response using hybrid parser
-                const parsed = parseModelResponse(assistantMessage, this.getEffectiveTools().map((t) => t.function.name));
+                const nativeTools = activeClient?.supportsNativeTools?.() ?? true;
+                const parsed = parseModelResponse(assistantMessage, { nativeTools });
                 // Update cumulative token usage
                 const promptEst = calculateContextBudget(this.requestMessages(this.messages), this.getEffectiveTools(), this.contextLimit()).totalActiveTokens;
                 const compContent = typeof assistantMessage.content === "string"
@@ -4458,6 +4588,19 @@ The pinned Objective Ledger lists the operator's requirements; your plan never r
                     this.persistProgress({ messages: true });
                 // No tool calls: the model stopped acting. That is a fact about the model, not evidence of success.
                 if (parsed.toolCalls.length === 0) {
+                    // If a malformed or unknown tool call was dropped, give the model a notice and continue turn (ACC-VER-02)
+                    if (parsed.notices && parsed.notices.length > 0) {
+                        for (const notice of parsed.notices) {
+                            this.ui.stopSpinner(false, `[notice] ${notice}`);
+                            this.messages.push({
+                                role: "user",
+                                content: `[Nexus: ${notice}]`,
+                            });
+                        }
+                        this.persistProgress({ messages: true });
+                        endStep();
+                        continue;
+                    }
                     // Steering that arrived while the model was answering is applied next step instead of being dropped.
                     if (this.hasQueuedSteering()) {
                         endStep();
@@ -4679,6 +4822,7 @@ The pinned Objective Ledger lists the operator's requirements; your plan never r
         }
         finally {
             this.activeTurn = undefined;
+            this.bridge.setTurnSignal(undefined);
         }
     }
     /**
@@ -4971,6 +5115,8 @@ The pinned Objective Ledger lists the operator's requirements; your plan never r
             throw new Error("Subagent workspace no longer matches its inherited worktree authority.");
         }
         this.runningAsSubagent = true;
+        // A subagent is used for one run: its commands are tied to the parent turn's cancellation for its lifetime.
+        this.bridge.setTurnSignal(signal);
         this.resetConversation();
         this.messages.push({
             role: "user",
@@ -5025,7 +5171,8 @@ The pinned Objective Ledger lists the operator's requirements; your plan never r
                 return { completed: false, summary: finalSummary, reason: `${what}: ${err?.message ?? err}` };
             }
             previousReplyTruncated = false;
-            const parsed = parseModelResponse(assistantMessage, this.getEffectiveTools().map((t) => t.function.name));
+            const nativeTools = activeClient?.supportsNativeTools?.() ?? true;
+            const parsed = parseModelResponse(assistantMessage, { nativeTools });
             this.messages.push({
                 role: "assistant",
                 content: assistantMessage.content || "",

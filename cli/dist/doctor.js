@@ -23,11 +23,13 @@ import { LocalLlmClient, credentialStorageHome } from "./client.js";
 import { credentialsPath } from "./credentials.js";
 import { mcpConfigFiles } from "./mcp.js";
 import { pluginDirs } from "./plugins.js";
-import { untrustedWorkspaceExtensions, WORKSPACE_MCP_FILES } from "./workspace_trust.js";
+import { untrustedWorkspaceExtensions, WORKSPACE_MCP_FILES, isWorkspaceTrusted } from "./workspace_trust.js";
 import { getBuildIdentity } from "./build_identity.js";
 import { defaultSessionsDir } from "./session.js";
 import { defaultTaskStateDir } from "./core/state.js";
 import { coreCargoManifest, resolveCoreBinary } from "./tools.js";
+import { isProjectEnvKey } from "./config.js";
+import { classifyLocality } from "./core/egress.js";
 import { redactSecrets } from "./ui.js";
 import { SafePathError, ancestryProblem, chmodVerified, identityOf, mkdirVerified, readVerified, unlinkVerified, writeExclusiveVerified } from "./safe_fs.js";
 export const DOCTOR_SCHEMA_VERSION = 2;
@@ -293,6 +295,24 @@ const configCheck = async (ctx) => {
     }
     return f("config.valid", "config", "pass", "The configuration builds with the same rules a session uses.", evidence);
 };
+/** REQ-SEC-110: settings a workspace .env tried to set that Nexus ignores (they belong to the operator). */
+const projectEnvCheck = async (ctx) => {
+    const workspace = ctx.config?.workspace ?? process.cwd();
+    const file = path.join(workspace, ".env");
+    if (!fs.existsSync(file))
+        return f("config.project_env_ignored", "config", "skip", "The workspace has no .env.", [file]);
+    let keys;
+    try {
+        keys = Object.keys(parseDotenv(fs.readFileSync(file)));
+    }
+    catch (err) {
+        return f("config.project_env_ignored", "config", "warn", "The workspace .env could not be read.", [file, String(err?.message ?? err)]);
+    }
+    const ignored = keys.filter((key) => !isProjectEnvKey(key));
+    if (!ignored.length)
+        return f("config.project_env_ignored", "config", "pass", "The workspace .env sets only per-project settings.", [file]);
+    return f("config.project_env_ignored", "config", "warn", `The workspace .env sets ${ignored.length} operator-only setting(s) that Nexus ignores: ${ignored.join(", ")}.`, [file], "Move settings you meant for Nexus to ~/.config/nexus/config.env (or your shell environment); a repository cannot change TLS, proxies, credentials, timeouts, the shell or trust.");
+};
 async function gatherEndpoint(ctx, signal) {
     const config = ctx.config;
     if (!config?.endpoint)
@@ -326,7 +346,12 @@ const endpointChecks = async (ctx, signal) => {
     }
     const where = `${config.endpoint}${config.provider ? ` (provider ${config.provider})` : ""}`;
     const out = [];
-    out.push(f("endpoint.configured", "endpoint", config.endpoint ? "pass" : "fail", config.endpoint ? "An inference endpoint is configured." : "No inference endpoint is configured.", [where, `credential ${config.apiKey && config.apiKey !== "local" ? "present (bound to its own origin; not shown)" : "none configured; stored gateway credentials are attached per origin by the client"}`]));
+    const locality = classifyLocality(config.endpoint);
+    const localityEvidence = `locality ${locality.boundary} (${locality.reason})`;
+    const localityHelp = locality.boundary === "EXTERNAL_PUBLIC" && locality.reason === "hostname_external" && !config.provider
+        ? "If this is a local LAN host, add it to NEXUS_LOCAL_ORIGINS in ~/.config/nexus/config.env."
+        : undefined;
+    out.push(f("endpoint.configured", "endpoint", config.endpoint ? "pass" : "fail", config.endpoint ? "An inference endpoint is configured." : "No inference endpoint is configured.", [where, localityEvidence, `credential ${config.apiKey && config.apiKey !== "local" ? "present (bound to its own origin; not shown)" : "none configured; stored gateway credentials are attached per origin by the client"}`], localityHelp));
     const ev = await (ctx.endpoint ??= gatherEndpoint(ctx, signal));
     if (!ev.reachable) {
         out.push(f("endpoint.reachable", "endpoint", "fail", "The endpoint did not answer.", [where, ev.detail ?? "no HTTP response"], config.provider ? `Check network access to ${config.endpoint}.` : "Start the local model server (LM Studio / vLLM) or point LOCAL_LLM_ENDPOINT / -e at a running one."));
@@ -681,6 +706,7 @@ const CHECKS = [
     ["runtime", runtimeCheck],
     ["launcher", launcherCheck],
     ["config", configCheck],
+    ["project_env_ignored", projectEnvCheck],
     ["endpoint", endpointChecks],
     ["inference", inferenceCheck],
     ["shell", shellCheck],
@@ -742,11 +768,23 @@ export async function runDoctor(optionsOrConfig = {}, legacyError) {
     const summary = { pass: 0, warn: 0, fail: 0, skip: 0 };
     for (const finding of findings)
         summary[finding.status]++;
+    const config = options.config;
+    let posture;
+    if (config) {
+        const trusted = isWorkspaceTrusted(config.workspace, Boolean(config.readOnly));
+        const sandboxStatus = config.sandbox ? (typeof config.sandbox === "string" ? config.sandbox : "on") : "off";
+        posture = {
+            mode: config.approvalMode ?? (trusted ? "auto" : "review"),
+            sandbox: sandboxStatus,
+            trusted,
+        };
+    }
     const report = {
         schemaVersion: DOCTOR_SCHEMA_VERSION,
         tool: "nexus doctor",
         nexusVersion: nexusVersion(),
         buildIdentity: getBuildIdentity(),
+        posture,
         context: options.context ?? "cli",
         deep: ctx.deep,
         generatedAt: new Date().toISOString(),
@@ -936,6 +974,11 @@ export function renderDoctorText(report) {
     const out = [];
     const s = report.summary;
     out.push(`Nexus doctor ${report.nexusVersion} — ${report.context === "session" ? "active session configuration" : "fresh CLI configuration"}${report.deep ? " (deep)" : ""}`);
+    if (report.posture) {
+        const p = report.posture;
+        const trustStr = p.trusted ? "trusted" : "untrusted (nexus trust .)";
+        out.push(`mode: ${p.mode} · sandbox: ${p.sandbox} · workspace: ${trustStr}`);
+    }
     out.push(`${s.pass} pass · ${s.warn} warn · ${s.fail} fail · ${s.skip} skipped · ${report.durationMs} ms${report.cancelled ? " · CANCELLED (incomplete)" : ""}`);
     out.push("");
     const order = ["fail", "warn", "pass", "skip"];

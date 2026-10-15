@@ -2,14 +2,14 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
 import { pathToFileURL } from "node:url";
-import { Worker } from "node:worker_threads";
+import { createHash } from "node:crypto";
 import { isWorkspaceTrusted, WORKSPACE_PLUGIN_DIRS } from "./workspace_trust.js";
-/** Directories Nexus loads plugin modules (`*.js`, `*.mjs`) from at turn start. */
+import { recordMiddlewareAudit } from "./core/persistence_protection.js";
+/** Directories Nexus loads plugin modules (`*.js`, `*.mjs`) from at turn start (REQ-SEC-115). */
 export function pluginDirs(workspace, isWorkspaceTrusted = false) {
     const dirs = [
         path.join(os.homedir(), ".nexus", "plugins"),
         path.join(os.homedir(), ".config", "nexus", "plugins"),
-        path.join(os.homedir(), ".config", "opencode", "plugins"),
     ];
     if (isWorkspaceTrusted)
         dirs.unshift(...WORKSPACE_PLUGIN_DIRS.map((dir) => path.join(workspace, dir)));
@@ -19,6 +19,7 @@ export class PluginManager {
     workspace;
     readOnly;
     trusted;
+    flightRecorder;
     plugins = new Map();
     customToolsMap = new Map();
     customToolDefs = [];
@@ -26,6 +27,10 @@ export class PluginManager {
         this.workspace = path.resolve(workspace);
         this.readOnly = Boolean(options?.readOnly);
         this.trusted = options?.trusted !== undefined ? options.trusted : isWorkspaceTrusted(this.workspace, this.readOnly);
+        this.flightRecorder = options?.flightRecorder;
+    }
+    setFlightRecorder(flightRecorder) {
+        this.flightRecorder = flightRecorder;
     }
     async loadPlugins() {
         this.plugins.clear();
@@ -98,40 +103,81 @@ export class PluginManager {
     }
     /**
      * Execute tool through the pre-tool and post-tool middleware pipeline (Candidate #41)
+     * Audits any middleware rewriting of tool I/O with before/after SHA-256 digests (REQ-SEC-116, EXT-004).
      */
     async executeToolPipeline(toolName, initialArgs, coreExecutor) {
         const preMiddlewares = [];
         const postMiddlewares = [];
-        for (const plugin of this.plugins.values()) {
+        for (const [pluginKey, plugin] of this.plugins.entries()) {
+            const pluginName = plugin.name || pluginKey;
             if (plugin.preToolExecution) {
-                preMiddlewares.push(plugin.preToolExecution);
+                preMiddlewares.push({ pluginName, hook: plugin.preToolExecution });
             }
             if (plugin.postToolExecution) {
-                postMiddlewares.push(plugin.postToolExecution);
+                postMiddlewares.push({ pluginName, hook: plugin.postToolExecution });
             }
         }
         const dispatch = async (idx, currentArgs) => {
             if (idx < preMiddlewares.length) {
-                const mw = preMiddlewares[idx];
-                return mw({ toolName, args: currentArgs, workspace: this.workspace }, async (nextArgs) => dispatch(idx + 1, nextArgs || currentArgs));
+                const { pluginName, hook } = preMiddlewares[idx];
+                const beforeArgs = currentArgs;
+                const beforeDigest = sha256(JSON.stringify(beforeArgs ?? {}));
+                return hook({ toolName, args: currentArgs, workspace: this.workspace }, async (nextArgs) => {
+                    const effectiveNextArgs = nextArgs || currentArgs;
+                    const afterDigest = sha256(JSON.stringify(effectiveNextArgs ?? {}));
+                    if (beforeDigest !== afterDigest) {
+                        this.recordMiddlewareRewrite({
+                            kind: "middleware_rewrite",
+                            plugin: pluginName,
+                            tool: toolName,
+                            phase: "pre",
+                            before_digest: beforeDigest,
+                            after_digest: afterDigest,
+                        });
+                    }
+                    return dispatch(idx + 1, effectiveNextArgs);
+                });
             }
             return coreExecutor(currentArgs);
         };
         let result = await dispatch(0, initialArgs);
-        for (const postMw of postMiddlewares) {
+        for (const { pluginName, hook } of postMiddlewares) {
             try {
-                result = await postMw({
+                const beforeResult = result;
+                const beforeDigest = sha256(JSON.stringify(beforeResult ?? {}));
+                const newResult = await hook({
                     toolName,
                     args: initialArgs,
                     result,
                     workspace: this.workspace,
                 });
+                const afterDigest = sha256(JSON.stringify(newResult ?? {}));
+                if (beforeDigest !== afterDigest) {
+                    this.recordMiddlewareRewrite({
+                        kind: "middleware_rewrite",
+                        plugin: pluginName,
+                        tool: toolName,
+                        phase: "post",
+                        before_digest: beforeDigest,
+                        after_digest: afterDigest,
+                    });
+                }
+                result = newResult;
             }
             catch {
                 // If post-middleware fails, keep existing result
             }
         }
         return result;
+    }
+    recordMiddlewareRewrite(record) {
+        recordMiddlewareAudit({
+            ...record,
+            workspace: this.workspace,
+        });
+        if (this.flightRecorder) {
+            this.flightRecorder.recordMiddlewareRewrite(undefined, record);
+        }
     }
     async notifyTurnStart(prompt, workspace) {
         for (const p of this.plugins.values()) {
@@ -184,93 +230,7 @@ export class PluginManager {
         }
         return list;
     }
-    /**
-     * Check if worker thread isolation is supported
-     */
-    isWorkerSandboxingSupported() {
-        return typeof Worker !== "undefined";
-    }
-    /**
-     * Execute untrusted or custom plugin code inside an isolated Worker thread (Candidate #38)
-     */
-    async executeSandboxed(handlerCode, args, options = {}) {
-        const timeoutMs = options.timeoutMs || 5000;
-        const memoryLimitMb = options.memoryLimitMb || 128;
-        const workerScript = `
-      const { parentPort, workerData } = require('node:worker_threads');
-      (async () => {
-        try {
-          const fn = eval('(' + workerData.code + ')');
-          const result = await fn(workerData.args);
-          parentPort.postMessage({ success: true, result });
-        } catch (err) {
-          parentPort.postMessage({ success: false, error: err.message || String(err) });
-        }
-      })();
-    `;
-        return new Promise((resolve) => {
-            let isSettled = false;
-            let worker = null;
-            let timer = null;
-            const cleanup = () => {
-                if (timer)
-                    clearTimeout(timer);
-                if (worker) {
-                    worker.terminate().catch(() => { });
-                    worker = null;
-                }
-            };
-            try {
-                worker = new Worker(workerScript, {
-                    eval: true,
-                    workerData: { code: handlerCode, args },
-                    resourceLimits: {
-                        maxOldGenerationSizeMb: memoryLimitMb,
-                    },
-                });
-                timer = setTimeout(() => {
-                    if (!isSettled) {
-                        isSettled = true;
-                        cleanup();
-                        resolve({
-                            success: false,
-                            output: "",
-                            error: `Plugin execution timed out after ${timeoutMs}ms in sandboxed worker thread.`,
-                        });
-                    }
-                }, timeoutMs);
-                worker.on("message", (msg) => {
-                    if (!isSettled) {
-                        isSettled = true;
-                        cleanup();
-                        if (msg.success) {
-                            const out = typeof msg.result === "string" ? msg.result : JSON.stringify(msg.result, null, 2);
-                            resolve({ success: true, output: out });
-                        }
-                        else {
-                            resolve({ success: false, output: "", error: msg.error });
-                        }
-                    }
-                });
-                worker.on("error", (err) => {
-                    if (!isSettled) {
-                        isSettled = true;
-                        cleanup();
-                        resolve({ success: false, output: "", error: `Worker error: ${err.message}` });
-                    }
-                });
-                worker.on("exit", (code) => {
-                    if (!isSettled && code !== 0) {
-                        isSettled = true;
-                        cleanup();
-                        resolve({ success: false, output: "", error: `Worker thread exited with code ${code}` });
-                    }
-                });
-            }
-            catch (err) {
-                cleanup();
-                resolve({ success: false, output: "", error: `Failed to spawn worker thread: ${err.message}` });
-            }
-        });
-    }
+}
+function sha256(content) {
+    return createHash("sha256").update(content).digest("hex");
 }

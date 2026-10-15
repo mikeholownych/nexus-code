@@ -318,56 +318,170 @@ function extractBalancedJsonObjects(text, known = isKnownToolName) {
     }
     return results;
 }
+function extractReasoning(message, rawContent) {
+    const reasoningParts = [];
+    const msgObj = message;
+    if (typeof msgObj.reasoning_content === "string" && msgObj.reasoning_content.trim()) {
+        reasoningParts.push(msgObj.reasoning_content.trim());
+    }
+    else if (typeof msgObj.reasoning === "string" && msgObj.reasoning.trim()) {
+        reasoningParts.push(msgObj.reasoning.trim());
+    }
+    let text = rawContent;
+    // 1. Paired tags: <think>...</think>, <thought>...</thought>, <reasoning>...</reasoning>
+    const pairedRegex = /<(think|thought|reasoning)>([\s\S]*?)<\/\1>/gi;
+    let match;
+    while ((match = pairedRegex.exec(text)) !== null) {
+        if (match[2].trim()) {
+            reasoningParts.push(match[2].trim());
+        }
+    }
+    text = text.replace(pairedRegex, "");
+    // 2. Lone closing tag: </think>, </thought>, </reasoning>
+    // "Text before a lone </think> ... is reasoning and is never parsed for tool calls" (REQ-AGT-113)
+    const loneCloseMatch = /<\/(?:think|thought|reasoning)>/i.exec(text);
+    if (loneCloseMatch) {
+        const beforeClose = text.slice(0, loneCloseMatch.index).trim();
+        if (beforeClose) {
+            reasoningParts.push(beforeClose);
+        }
+        text = text.slice(loneCloseMatch.index + loneCloseMatch[0].length);
+    }
+    // 3. Unclosed opening tag: <think>, <thought>, <reasoning>
+    // "text after an unclosed <think> is reasoning and is never parsed for tool calls" (REQ-AGT-113)
+    const unclosedOpenMatch = /<(?:think|thought|reasoning)>/i.exec(text);
+    if (unclosedOpenMatch) {
+        const afterOpen = text.slice(unclosedOpenMatch.index + unclosedOpenMatch[0].length).trim();
+        if (afterOpen) {
+            reasoningParts.push(afterOpen);
+        }
+        text = text.slice(0, unclosedOpenMatch.index);
+    }
+    const thoughtText = text.trim();
+    const reasoningText = reasoningParts.length > 0 ? reasoningParts.join("\n\n") : undefined;
+    return { thoughtText, reasoningText };
+}
+function extractSoleFencedCall(text) {
+    const trimmed = text.trim();
+    const match = /^```(?:json)?\s*([\s\S]*?)\s*```$/i.exec(trimmed);
+    if (!match)
+        return null;
+    if (match[1].includes("```"))
+        return null;
+    return { raw: trimmed, content: match[1].trim() };
+}
 /**
- * Robust model response parser optimized for local LLM output patterns.
- * Isolates DeepSeek R1 reasoning (<think> tags), handles standard tool_calls,
- * XML <tool_call> tags, Markdown json codeblocks, and embedded JSON objects with self-healing JSON repair.
+ * Parses an assistant message into reply text, reasoning and tool calls.
+ * Implements REQ-AGT-112, REQ-AGT-113, and REQ-AGT-117 (PLAN-11).
+ * When nativeTools is enabled (or native tool_calls are present), only native tool_calls are parsed.
+ * On text connections, only <tool_call> tags or a reply that consists solely of one fenced JSON call are parsed.
+ * Prose JSON is never parsed.
  */
-/**
- * Parses an assistant message into reply text, reasoning and tool calls. Tool calls written as text (JSON blocks,
- * `<tool_call>` tags) are accepted only for tools offered on that request (`offered`, when given) or known built-ins.
- */
-export function parseModelResponse(message, offered) {
+export function parseModelResponse(message, optionsOrOffered) {
+    let offered;
+    let nativeTools;
+    if (optionsOrOffered) {
+        if (typeof optionsOrOffered[Symbol.iterator] === "function" && !optionsOrOffered.offered) {
+            offered = optionsOrOffered;
+        }
+        else {
+            const opts = optionsOrOffered;
+            offered = opts.offered;
+            nativeTools = opts.nativeTools;
+        }
+    }
     const offeredNames = offered ? new Set(offered) : null;
     const known = (name) => (offeredNames ? offeredNames.has(name) : isKnownToolName(name));
     const toolCalls = [];
-    let thoughtText = typeof message.content === "string"
+    const notices = [];
+    const rawContent = typeof message.content === "string"
         ? message.content
         : Array.isArray(message.content)
             ? JSON.stringify(message.content)
             : "";
-    let reasoningText = undefined;
-    // 1. Extract DeepSeek R1 / thinking tags: <think>...</think> and <thought>...</thought>
-    const thinkRegex = /<(?:think|thought)>([\s\S]*?)<\/(?:think|thought)>/gi;
-    const thinkMatches = [];
-    let match;
-    while ((match = thinkRegex.exec(thoughtText)) !== null) {
-        if (match[1].trim()) {
-            thinkMatches.push(match[1].trim());
+    let { thoughtText, reasoningText } = extractReasoning(message, rawContent);
+    const isNative = nativeTools !== undefined
+        ? nativeTools
+        : Boolean(message.tool_calls && Array.isArray(message.tool_calls) && message.tool_calls.length > 0);
+    // Native connection: execute only native tool_calls
+    if (isNative) {
+        if (message.tool_calls && Array.isArray(message.tool_calls) && message.tool_calls.length > 0) {
+            for (const tc of message.tool_calls) {
+                if (!tc ||
+                    typeof tc !== "object" ||
+                    !tc.function ||
+                    typeof tc.function !== "object" ||
+                    typeof tc.function.name !== "string" ||
+                    !tc.function.name.trim()) {
+                    notices.push("Malformed native tool call dropped: missing function object or name.");
+                    continue;
+                }
+                const name = tc.function.name.trim();
+                if (offeredNames && !offeredNames.has(name)) {
+                    notices.push(`Tool "${name}" is not offered on this request and was not executed.`);
+                    continue;
+                }
+                toolCalls.push({
+                    id: tc.id || `call_${Math.random().toString(36).substring(2, 9)}`,
+                    type: "function",
+                    function: {
+                        name,
+                        arguments: normalizeToolArgs(tc.function.arguments),
+                    },
+                });
+            }
         }
+        return {
+            thoughtText,
+            reasoningText,
+            toolCalls,
+            ...(notices.length > 0 ? { notices } : {}),
+        };
     }
-    if (thinkMatches.length > 0) {
-        reasoningText = thinkMatches.join("\n\n");
-        thoughtText = thoughtText.replace(thinkRegex, "").trim();
-    }
-    // 2. If standard OpenAI function calling tool_calls are present:
+    // Text-only connection:
+    // 1. If native tool_calls are present on message, validate and accept them
     if (message.tool_calls && Array.isArray(message.tool_calls) && message.tool_calls.length > 0) {
         for (const tc of message.tool_calls) {
+            if (!tc ||
+                typeof tc !== "object" ||
+                !tc.function ||
+                typeof tc.function !== "object" ||
+                typeof tc.function.name !== "string" ||
+                !tc.function.name.trim()) {
+                notices.push("Malformed native tool call dropped: missing function object or name.");
+                continue;
+            }
+            const name = tc.function.name.trim();
+            if (!known(name)) {
+                notices.push(`Tool "${name}" is not offered on this request and was not executed.`);
+                continue;
+            }
             toolCalls.push({
                 id: tc.id || `call_${Math.random().toString(36).substring(2, 9)}`,
                 type: "function",
                 function: {
-                    name: tc.function.name,
+                    name,
                     arguments: normalizeToolArgs(tc.function.arguments),
                 },
             });
         }
-        return { thoughtText, reasoningText, toolCalls };
+        if (toolCalls.length > 0) {
+            return {
+                thoughtText,
+                reasoningText,
+                toolCalls,
+                ...(notices.length > 0 ? { notices } : {}),
+            };
+        }
     }
     if (!thoughtText && !reasoningText) {
-        return { thoughtText: "", toolCalls: [] };
+        return {
+            thoughtText: "",
+            toolCalls: [],
+            ...(notices.length > 0 ? { notices } : {}),
+        };
     }
-    // 3. Try XML style fallback: <tool_call> ... </tool_call>
+    // 2. Try XML style: <tool_call> ... </tool_call>
     const xmlRegex = /<tool_call>([\s\S]*?)<\/tool_call>/gi;
     let xmlMatch;
     while ((xmlMatch = xmlRegex.exec(thoughtText)) !== null) {
@@ -376,36 +490,8 @@ export function parseModelResponse(message, offered) {
             const parsed = repairJson(raw);
             const name = parsed.name || parsed.tool || parsed.function;
             const args = parsed.arguments || parsed.parameters || parsed.args || {};
-            if (name && typeof name === "string" && known(name)) {
-                toolCalls.push({
-                    id: `call_${Math.random().toString(36).substring(2, 9)}`,
-                    type: "function",
-                    function: {
-                        name,
-                        arguments: normalizeToolArgs(args),
-                    },
-                });
-            }
-        }
-        catch {
-            // Ignore invalid JSON inside tool_call tag
-        }
-    }
-    if (toolCalls.length > 0) {
-        thoughtText = thoughtText.replace(xmlRegex, "").trim();
-        return { thoughtText, reasoningText, toolCalls };
-    }
-    // 4. Try Markdown code blocks: ```json { "name": "...", "arguments": { ... } } ```
-    const codeBlockRegex = /```(?:json)?\s*([\s\S]*?)```/gi;
-    let blockMatch;
-    while ((blockMatch = codeBlockRegex.exec(thoughtText)) !== null) {
-        const raw = blockMatch[1].trim();
-        try {
-            const parsed = repairJson(raw);
-            if (typeof parsed === "object" && parsed !== null) {
-                const name = parsed.name || parsed.tool || parsed.action;
-                const args = parsed.arguments || parsed.parameters || parsed.args || parsed.input;
-                if (name && typeof name === "string" && known(name)) {
+            if (name && typeof name === "string") {
+                if (known(name)) {
                     toolCalls.push({
                         id: `call_${Math.random().toString(36).substring(2, 9)}`,
                         type: "function",
@@ -415,37 +501,126 @@ export function parseModelResponse(message, offered) {
                         },
                     });
                 }
+                else {
+                    notices.push(`Tool "${name}" is not offered on this request and was not executed.`);
+                }
             }
         }
         catch {
-            // Not a valid tool call code block
+            // Ignore invalid JSON inside tool_call tag
         }
     }
     if (toolCalls.length > 0) {
-        thoughtText = thoughtText.replace(codeBlockRegex, "").trim();
-        return { thoughtText, reasoningText, toolCalls };
+        thoughtText = thoughtText.replace(xmlRegex, "").trim();
+        return {
+            thoughtText,
+            reasoningText,
+            toolCalls,
+            ...(notices.length > 0 ? { notices } : {}),
+        };
     }
-    // 5. Try embedded balanced JSON objects in text (e.g. model generates explanation + raw JSON without markdown)
-    const balancedObjects = extractBalancedJsonObjects(thoughtText, known);
-    if (balancedObjects.length > 0) {
-        for (const item of balancedObjects) {
-            const name = item.parsed.name || item.parsed.tool || item.parsed.action;
-            const args = item.parsed.arguments || item.parsed.parameters || item.parsed.args || item.parsed.input;
-            if (name && typeof name === "string" && known(name)) {
-                toolCalls.push({
-                    id: `call_${Math.random().toString(36).substring(2, 9)}`,
-                    type: "function",
-                    function: {
-                        name,
-                        arguments: normalizeToolArgs(args),
-                    },
-                });
-                thoughtText = thoughtText.replace(item.raw, "").trim();
+    // 3. Try sole fenced JSON tool call:
+    // "a reply that consists solely of one fenced JSON tool call" (REQ-AGT-112)
+    const soleFenced = extractSoleFencedCall(thoughtText);
+    if (soleFenced) {
+        try {
+            const parsed = repairJson(soleFenced.content);
+            if (typeof parsed === "object" && parsed !== null) {
+                const name = parsed.name || parsed.tool || parsed.action;
+                const args = parsed.arguments || parsed.parameters || parsed.args || parsed.input;
+                if (name && typeof name === "string") {
+                    if (known(name)) {
+                        toolCalls.push({
+                            id: `call_${Math.random().toString(36).substring(2, 9)}`,
+                            type: "function",
+                            function: {
+                                name,
+                                arguments: normalizeToolArgs(args),
+                            },
+                        });
+                        thoughtText = "";
+                        return {
+                            thoughtText,
+                            reasoningText,
+                            toolCalls,
+                            ...(notices.length > 0 ? { notices } : {}),
+                        };
+                    }
+                    else {
+                        notices.push(`Tool "${name}" is not offered on this request and was not executed.`);
+                    }
+                }
             }
         }
-        if (toolCalls.length > 0) {
-            return { thoughtText, reasoningText, toolCalls };
+        catch {
+            // Not valid JSON in code block
         }
     }
-    return { thoughtText, reasoningText, toolCalls };
+    // 4. One-RC escape hatch: NEXUS_TEXT_TOOL_PARSING=legacy
+    if (process.env.NEXUS_TEXT_TOOL_PARSING === "legacy") {
+        const codeBlockRegex = /```(?:json)?\s*([\s\S]*?)```/gi;
+        let blockMatch;
+        while ((blockMatch = codeBlockRegex.exec(thoughtText)) !== null) {
+            const raw = blockMatch[1].trim();
+            try {
+                const parsed = repairJson(raw);
+                if (typeof parsed === "object" && parsed !== null) {
+                    const name = parsed.name || parsed.tool || parsed.action;
+                    const args = parsed.arguments || parsed.parameters || parsed.args || parsed.input;
+                    if (name && typeof name === "string" && known(name)) {
+                        toolCalls.push({
+                            id: `call_${Math.random().toString(36).substring(2, 9)}`,
+                            type: "function",
+                            function: {
+                                name,
+                                arguments: normalizeToolArgs(args),
+                            },
+                        });
+                    }
+                }
+            }
+            catch { }
+        }
+        if (toolCalls.length > 0) {
+            thoughtText = thoughtText.replace(codeBlockRegex, "").trim();
+            return {
+                thoughtText,
+                reasoningText,
+                toolCalls,
+                ...(notices.length > 0 ? { notices } : {}),
+            };
+        }
+        const balancedObjects = extractBalancedJsonObjects(thoughtText, known);
+        if (balancedObjects.length > 0) {
+            for (const item of balancedObjects) {
+                const name = item.parsed.name || item.parsed.tool || item.parsed.action;
+                const args = item.parsed.arguments || item.parsed.parameters || item.parsed.args || item.parsed.input;
+                if (name && typeof name === "string" && known(name)) {
+                    toolCalls.push({
+                        id: `call_${Math.random().toString(36).substring(2, 9)}`,
+                        type: "function",
+                        function: {
+                            name,
+                            arguments: normalizeToolArgs(args),
+                        },
+                    });
+                    thoughtText = thoughtText.replace(item.raw, "").trim();
+                }
+            }
+            if (toolCalls.length > 0) {
+                return {
+                    thoughtText,
+                    reasoningText,
+                    toolCalls,
+                    ...(notices.length > 0 ? { notices } : {}),
+                };
+            }
+        }
+    }
+    return {
+        thoughtText,
+        reasoningText,
+        toolCalls,
+        ...(notices.length > 0 ? { notices } : {}),
+    };
 }

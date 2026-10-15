@@ -174,6 +174,7 @@ export const READ_FINDINGS_CAPABILITY = {
     modelToolName: "read_findings",
     category: "orchestration",
     mutating: false,
+    effect: "internal",
     sideEffectContract: "Read findings recorded in this conversation (no workspace change)",
     backend: "ts_native",
     toolDefinition: {
@@ -196,6 +197,7 @@ export const READ_ARCHIVE_CAPABILITY = {
     modelToolName: "read_archive",
     category: "orchestration",
     mutating: false,
+    effect: "internal",
     sideEffectContract: "Search the messages context compaction replaced in this conversation (no workspace change)",
     backend: "ts_native",
     toolDefinition: {

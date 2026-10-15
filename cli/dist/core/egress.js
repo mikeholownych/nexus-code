@@ -1,4 +1,5 @@
 import { randomBytes } from "node:crypto";
+import * as net from "node:net";
 import { URL } from "node:url";
 /**
  * Numeric trust rank ordering (Higher number = Higher trust).
@@ -9,46 +10,236 @@ const TRUST_RANKS = {
     EXTERNAL_BOUNDED: 2,
     EXTERNAL_PUBLIC: 1,
 };
+let operatorSettingResolver;
 /**
- * Classify endpoint or URL into an authoritative DestinationTrustBoundary (DEST-001).
+ * Register a resolver for operator-only configuration settings (avoiding circular imports).
  */
-export function classifyDestination(endpointOrUrl, policy) {
+export function setLocalityAuthorityResolver(resolver) {
+    operatorSettingResolver = resolver;
+}
+/**
+ * Parses a comma-separated list of local origins/hostnames/URLs/wildcards.
+ */
+export function parseLocalOrigins(raw) {
+    if (!raw)
+        return [];
+    if (typeof raw === "string") {
+        return raw
+            .split(",")
+            .map((s) => s.trim().toLowerCase())
+            .filter(Boolean);
+    }
+    return raw.map((r) => r.trim().toLowerCase()).filter(Boolean);
+}
+/**
+ * Matches host or origin against the operator-provided local origins.
+ */
+export function matchesLocalOrigins(host, origin, origins) {
+    const hostLower = host.toLowerCase();
+    const originLower = origin.toLowerCase();
+    for (const o of origins) {
+        const oLower = o.toLowerCase();
+        if (oLower === "*" || oLower === hostLower || oLower === originLower) {
+            return true;
+        }
+        if (oLower.includes("://")) {
+            try {
+                const u = new URL(oLower);
+                if (u.origin.toLowerCase() === originLower)
+                    return true;
+                if (!u.port && u.hostname.toLowerCase() === hostLower)
+                    return true;
+                if (u.port && u.host.toLowerCase() === hostLower)
+                    return true;
+            }
+            catch { }
+        }
+        if (oLower.startsWith("*.")) {
+            const suffix = oLower.slice(2);
+            if (hostLower.endsWith("." + suffix) || hostLower === suffix)
+                return true;
+        }
+    }
+    return false;
+}
+/**
+ * Parses and expands a standard IPv6 string into a 128-bit BigInt value.
+ */
+function parseIPv6(ip) {
+    const zoneIndex = ip.indexOf("%");
+    const cleanIp = (zoneIndex >= 0 ? ip.slice(0, zoneIndex) : ip).toLowerCase();
+    let v4Suffix = null;
+    let baseIp = cleanIp;
+    const lastColon = cleanIp.lastIndexOf(":");
+    if (lastColon >= 0) {
+        const after = cleanIp.slice(lastColon + 1);
+        if (after.includes(".")) {
+            v4Suffix = after;
+            baseIp = cleanIp.slice(0, lastColon);
+        }
+    }
+    let groups;
+    if (baseIp.includes("::")) {
+        const halves = baseIp.split("::");
+        if (halves.length !== 2)
+            return null;
+        const left = halves[0] ? halves[0].split(":") : [];
+        const right = halves[1] ? halves[1].split(":") : [];
+        const needed = (v4Suffix ? 6 : 8) - (left.length + right.length);
+        if (needed < 0)
+            return null;
+        groups = [...left, ...Array(needed).fill("0"), ...right];
+    }
+    else {
+        groups = baseIp.split(":");
+    }
+    if (v4Suffix) {
+        if (groups.length !== 6)
+            return null;
+        const v4Parts = v4Suffix.split(".").map((x) => parseInt(x, 10));
+        if (v4Parts.length !== 4 || v4Parts.some((n) => isNaN(n) || n < 0 || n > 255))
+            return null;
+        const g6 = ((v4Parts[0] << 8) | v4Parts[1]).toString(16);
+        const g7 = ((v4Parts[2] << 8) | v4Parts[3]).toString(16);
+        groups.push(g6, g7);
+    }
+    if (groups.length !== 8)
+        return null;
+    let value = 0n;
+    for (const g of groups) {
+        const num = parseInt(g, 16);
+        if (isNaN(num) || num < 0 || num > 0xffff)
+            return null;
+        value = (value << 16n) | BigInt(num);
+    }
+    return value;
+}
+/**
+ * Classifies an endpoint or URL with CIDR-based locality and explicit reason codes (REQ-SEC-111).
+ */
+export function classifyLocality(endpointOrUrl, policy, options) {
     if (!endpointOrUrl || endpointOrUrl === "local" || endpointOrUrl === "host" || endpointOrUrl === "in-memory") {
-        return "HOST_LOCAL";
+        return { boundary: "HOST_LOCAL", reason: "loopback_ip" };
     }
     const trimmed = endpointOrUrl.trim();
     if (trimmed.startsWith("/") || trimmed.startsWith("./") || trimmed.startsWith("file:") || trimmed.startsWith("unix:")) {
-        return "HOST_LOCAL";
+        return { boundary: "HOST_LOCAL", reason: "loopback_ip" };
     }
     let parsed;
     try {
         parsed = new URL(trimmed.startsWith("http://") || trimmed.startsWith("https://") ? trimmed : `http://${trimmed}`);
     }
     catch {
-        return "EXTERNAL_PUBLIC";
+        return { boundary: "EXTERNAL_PUBLIC", reason: "hostname_external" };
     }
-    const host = parsed.hostname.toLowerCase();
-    // Localhost loopback
-    if (host === "localhost" || host === "127.0.0.1" || host === "::1" || host === "[::1]") {
-        return "LOCAL_APPLIANCE";
+    let host = parsed.hostname.toLowerCase();
+    if (host.startsWith("[") && host.endsWith("]")) {
+        host = host.slice(1, -1);
     }
-    // Private RFC 1918 addresses & .local mDNS
-    if (host.endsWith(".local") ||
-        host.startsWith("10.") ||
-        host.startsWith("192.168.") ||
-        /^172\.(1[6-9]|2[0-9]|3[0-1])\./.test(host)) {
-        return "LOCAL_APPLIANCE";
+    // 1. Loopback hostname
+    if (host === "localhost") {
+        return { boundary: "LOCAL_APPLIANCE", reason: "loopback_ip" };
     }
-    // Enterprise bounded domains from policy
+    // 2. IPv4 literals and CIDRs
+    if (net.isIP(host) === 4) {
+        const parts = host.split(".").map((x) => parseInt(x, 10));
+        if (parts.length === 4 && parts.every((n) => !isNaN(n) && n >= 0 && n <= 255)) {
+            const [a, b] = parts;
+            // Loopback 127/8
+            if (a === 127) {
+                return { boundary: "LOCAL_APPLIANCE", reason: "loopback_ip" };
+            }
+            // RFC1918 private: 10/8, 172.16/12, 192.168/16, or link-local 169.254/16
+            if (a === 10 ||
+                (a === 172 && b >= 16 && b <= 31) ||
+                (a === 192 && b === 168) ||
+                (a === 169 && b === 254)) {
+                return { boundary: "LOCAL_APPLIANCE", reason: "private_ip" };
+            }
+            // CGNAT 100.64/10
+            if (a === 100 && b >= 64 && b <= 127) {
+                return { boundary: "LOCAL_APPLIANCE", reason: "cgnat_ip" };
+            }
+            return { boundary: "EXTERNAL_PUBLIC", reason: "hostname_external" };
+        }
+    }
+    // 3. IPv6 literals and CIDRs
+    if (net.isIP(host) === 6) {
+        const v6 = parseIPv6(host);
+        if (v6 !== null) {
+            // Loopback ::1
+            if (v6 === 1n) {
+                return { boundary: "LOCAL_APPLIANCE", reason: "loopback_ip" };
+            }
+            // IPv4-mapped: ::ffff:a.b.c.d (top 80 bits zero, next 16 bits 0xffff)
+            if ((v6 >> 32n) === 0xffffn) {
+                const lower = Number(v6 & 0xffffffffn);
+                const a = (lower >>> 24) & 0xff;
+                const b = (lower >>> 16) & 0xff;
+                if (a === 127) {
+                    return { boundary: "LOCAL_APPLIANCE", reason: "loopback_ip" };
+                }
+                if (a === 10 ||
+                    (a === 172 && b >= 16 && b <= 31) ||
+                    (a === 192 && b === 168) ||
+                    (a === 169 && b === 254)) {
+                    return { boundary: "LOCAL_APPLIANCE", reason: "private_ip" };
+                }
+                if (a === 100 && b >= 64 && b <= 127) {
+                    return { boundary: "LOCAL_APPLIANCE", reason: "cgnat_ip" };
+                }
+                return { boundary: "EXTERNAL_PUBLIC", reason: "hostname_external" };
+            }
+            // IPv6 ULA: fc00::/7 (first 7 bits 1111 110 -> 0x7e)
+            if ((v6 >> 121n) === 0x7en) {
+                return { boundary: "LOCAL_APPLIANCE", reason: "ula_ip" };
+            }
+            // IPv6 link-local: fe80::/10 (first 10 bits 1111 1110 10 -> 0x3fa)
+            if ((v6 >> 118n) === 0x3fan) {
+                return { boundary: "LOCAL_APPLIANCE", reason: "private_ip" };
+            }
+            return { boundary: "EXTERNAL_PUBLIC", reason: "hostname_external" };
+        }
+    }
+    // 4. Operator-configured endpoint match
+    const opEndpoint = options?.operatorEndpoint ??
+        operatorSettingResolver?.("LOCAL_LLM_ENDPOINT") ??
+        process.env.LOCAL_LLM_ENDPOINT;
+    if (opEndpoint) {
+        try {
+            const opUrl = new URL(opEndpoint.startsWith("http://") || opEndpoint.startsWith("https://")
+                ? opEndpoint
+                : `http://${opEndpoint}`);
+            if (opUrl.hostname.toLowerCase() === host) {
+                return { boundary: "LOCAL_APPLIANCE", reason: "operator_endpoint" };
+            }
+        }
+        catch { }
+    }
+    // 5. Operator-only local origins (NEXUS_LOCAL_ORIGINS)
+    const rawOrigins = options?.localOrigins ??
+        parseLocalOrigins(operatorSettingResolver?.("NEXUS_LOCAL_ORIGINS") ??
+            process.env.NEXUS_LOCAL_ORIGINS);
+    if (matchesLocalOrigins(host, parsed.origin, rawOrigins)) {
+        return { boundary: "LOCAL_APPLIANCE", reason: "operator_local_origin" };
+    }
+    // 6. Enterprise bounded domains from policy
     if (policy?.boundedDomains && policy.boundedDomains.length > 0) {
         for (const bd of policy.boundedDomains) {
             const bdl = bd.toLowerCase();
             if (host === bdl || host.endsWith("." + bdl)) {
-                return "EXTERNAL_BOUNDED";
+                return { boundary: "EXTERNAL_BOUNDED", reason: "hostname_external" };
             }
         }
     }
-    return "EXTERNAL_PUBLIC";
+    // 7. Non-local hostname
+    return { boundary: "EXTERNAL_PUBLIC", reason: "hostname_external" };
+}
+/**
+ * Classify endpoint or URL into an authoritative DestinationTrustBoundary (DEST-001, REQ-SEC-111).
+ */
+export function classifyDestination(endpointOrUrl, policy, options) {
+    return classifyLocality(endpointOrUrl, policy, options).boundary;
 }
 /**
  * Returns true if moving from source to dest constitutes an egress transition (DEST-002).

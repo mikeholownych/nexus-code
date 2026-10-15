@@ -7,6 +7,7 @@ import { InformationFlowBoundary } from "./core/egress.js";
 import pc from "picocolors";
 import { classifyHttpFailure, classifyTransportFailure, providerHints, TEMPORARY_CONDITIONS, } from "./core/provider_recovery.js";
 import { redactSecrets } from "./ui.js";
+import { classifyLocality, setLocalityAuthorityResolver } from "./core/egress.js";
 import { connectionFor, disclosureClass, operatorSettingKeyForAuth } from "./providers.js";
 import { ProviderStreamError, readSse } from "./protocols/common.js";
 import { anthropicStreamParser, buildAnthropicRequest, parseAnthropicResponse } from "./protocols/anthropic.js";
@@ -76,6 +77,7 @@ function authoritySetting(key) {
 export function operatorSetting(key) {
     return authoritySetting(key);
 }
+setLocalityAuthorityResolver(operatorSetting);
 /** Origins that stored credentials belong to, and the operator-environment key with its own origin. */
 function storedCredentialHomes() {
     const file = readConfigEnv();
@@ -430,6 +432,13 @@ export class LocalLlmClient {
     getLastUsage() {
         return this.lastUsageReport;
     }
+    /** Whether the connection supports native tool calling (Responses, Anthropic, or OpenAI-compatible accepting tools). */
+    supportsNativeTools() {
+        if (this.conn.protocol === "openai-responses" || this.conn.protocol === "anthropic-messages") {
+            return true;
+        }
+        return !this.unsupportedParams.has("tools");
+    }
     /** "cloud" when `url` (default: the active endpoint) receives content outside the operator's machines/network. */
     disclosureOf(url = this.endpoint) {
         return disclosureClass(url, this.conn.providerId, this.cloudRoutedOrigins);
@@ -474,7 +483,8 @@ export class LocalLlmClient {
         const origin = originOf(url) ?? url;
         if (!announcedDestinations.has(origin)) {
             announcedDestinations.add(origin);
-            console.error(pc.dim(`[nexus] Cloud inference: ${this.conn.label} (${origin}), model ${this.model || "(unset)"}. Task content — prompts, tool results and file excerpts — is sent to this provider.`));
+            const locality = classifyLocality(url);
+            console.error(pc.dim(`[nexus] Cloud inference: ${this.conn.label} (${origin}, locality: ${locality.reason}), model ${this.model || "(unset)"}. Task content — prompts, tool results and file excerpts — is sent to this provider.`));
         }
     }
     /** `compatible` connections may run without a key only when the operator declares it (NEXUS_COMPATIBLE_AUTH=none). */

@@ -48,6 +48,7 @@ export const ENABLE_TOOLS_CAPABILITY = {
     modelToolName: "enable_tools",
     category: "orchestration",
     mutating: false,
+    effect: "internal",
     sideEffectContract: "Offer more tools to the model for the rest of the conversation (no workspace change)",
     backend: "ts_native",
     toolDefinition: {

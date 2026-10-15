@@ -80,6 +80,8 @@ program
     .option("--coder-model <name>", "High-throughput model for surgical code implementation (Qwen 2.5 Coder)")
     .option("--coder-endpoint <url>", "Dedicated inference endpoint for coder model")
     .option("--approve", "Require human approval before destructive actions (edits, shell commands)")
+    .option("-y, --yes", "Run non-interactively without approval prompts (forces auto mode)")
+    .option("--mode <mode>", "Execution mode: auto, review, or read-only (default: auto for trusted workspaces, review for untrusted)")
     .option("--provider <id>", "Cloud inference provider: openrouter, openai, anthropic, compatible (default: appliance endpoint)")
     .option("--base-url <url>", "Override the provider's base URL (operator-only; required for 'compatible')")
     .option("--planner-provider <id>", "Cloud provider for the planner model (requires --planner-model)")
@@ -103,7 +105,7 @@ program
     if (config.provider || config.plannerProvider || config.coderProvider)
         console.error(pc.dim(describeTarget(config)));
     const app = new ApplicationCore(config);
-    const repl = new InteractiveRepl(app, !options.approve, resumeId);
+    const repl = new InteractiveRepl(app, config.approvalMode, resumeId);
     await repl.start();
 });
 program
@@ -125,6 +127,9 @@ program
     .option("--context-limit <tokens>", "Context window limit in tokens; below the provider's advertised capacity it is kept, above it the advertised capacity applies (default: advertised capacity, else 65536)")
     .option("--dry-run", "Simulate file modifications without writing changes to disk")
     .option("--read-only", "Reject all mutating tool executions and commands")
+    .option("-y, --yes", "Run non-interactively without approval prompts (forces auto mode)")
+    .option("--approve", "Require human approval before destructive actions (forces review mode)")
+    .option("--mode <mode>", "Execution mode: auto, review, or read-only (default: auto for trusted workspaces, review for untrusted)")
     .option("--sandbox [mode]", "Isolate command execution using bubblewrap (bwrap) or Docker (default: auto)")
     .option("--worktree", "Isolate execution inside an ephemeral git worktree under .nexus/worktrees/<task-id>")
     .option("--authoritative-verifier <command>", "Trusted command that must pass before any task completion; its success may authorize automatic worktree merge")
@@ -414,7 +419,7 @@ program
     await pm.loadPlugins();
     const plugins = pm.listPlugins();
     if (plugins.length === 0) {
-        console.log(pc.yellow("\nNo active plugins found in ~/.nexus/plugins/ or ~/.config/opencode/plugins/\n"));
+        console.log(pc.yellow("\nNo active plugins found in ~/.nexus/plugins/ or ~/.config/nexus/plugins/\n"));
         return;
     }
     console.log(pc.bold(pc.cyan("\n=== Loaded Custom Plugins ===\n")));

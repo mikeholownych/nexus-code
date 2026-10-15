@@ -146,6 +146,9 @@ export class FlightRecorder {
             tokenStats,
         });
     }
+    recordMiddlewareRewrite(step, payload) {
+        return this.appendEvent("middleware_rewrite", step, payload);
+    }
 }
 /**
  * Replay player for deterministic flight logs.

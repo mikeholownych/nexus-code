@@ -1,37 +1,58 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
+import { isWorkspaceTrusted } from "./workspace_trust.js";
 export class SkillManager {
     workspace;
+    readOnly;
+    explicitTrusted;
     skills = new Map();
-    constructor(workspace) {
+    untrustedSkills = new Map();
+    constructor(workspace, options = {}) {
         this.workspace = path.resolve(workspace);
+        this.readOnly = Boolean(options.readOnly);
+        this.explicitTrusted = options.trusted;
         this.refresh();
     }
-    setWorkspace(workspace) {
+    setWorkspace(workspace, options = {}) {
         this.workspace = path.resolve(workspace);
+        if (options.readOnly !== undefined)
+            this.readOnly = options.readOnly;
+        if (options.trusted !== undefined)
+            this.explicitTrusted = options.trusted;
         this.refresh();
     }
     refresh() {
         this.skills.clear();
-        const searchDirs = [
-            // Project workspace locations
-            path.join(this.workspace, ".nexus", "skills"),
-            path.join(this.workspace, ".claude", "skills"),
-            path.join(this.workspace, "skills"),
-            // User home locations
+        this.untrustedSkills.clear();
+        const isTrusted = this.explicitTrusted !== undefined
+            ? this.explicitTrusted
+            : isWorkspaceTrusted(this.workspace, this.readOnly);
+        // User home locations (always loaded & trusted)
+        const homeDirs = [
             path.join(os.homedir(), ".nexus", "skills"),
             path.join(os.homedir(), ".config", "nexus", "skills"),
             path.join(os.homedir(), ".config", "opencode", "skills"),
             path.join(os.homedir(), ".claude", "skills"),
         ];
-        for (const dir of searchDirs) {
+        for (const dir of homeDirs) {
             if (fs.existsSync(dir)) {
-                this.scanDir(dir);
+                this.scanDir(dir, { isWorkspace: false, trusted: true });
+            }
+        }
+        // Project workspace locations (gated by workspace trust)
+        const workspaceDirs = [
+            path.join(this.workspace, ".nexus", "skills"),
+            path.join(this.workspace, ".claude", "skills"),
+            path.join(this.workspace, "skills"),
+        ];
+        for (const dir of workspaceDirs) {
+            if (fs.existsSync(dir)) {
+                this.scanDir(dir, { isWorkspace: true, trusted: isTrusted });
             }
         }
     }
-    scanDir(baseDir) {
+    scanDir(baseDir, context) {
         try {
             const entries = fs.readdirSync(baseDir, { withFileTypes: true });
             for (const entry of entries) {
@@ -40,20 +61,20 @@ export class SkillManager {
                     // Check for SKILL.md inside directory
                     const skillFile = path.join(fullPath, "SKILL.md");
                     if (fs.existsSync(skillFile)) {
-                        this.loadSkillFile(skillFile, entry.name);
+                        this.loadSkillFile(skillFile, entry.name, context);
                     }
                     else {
                         // Also check single-level subdirectories
-                        this.scanDir(fullPath);
+                        this.scanDir(fullPath, context);
                     }
                 }
                 else if (entry.isFile() && entry.name === "SKILL.md") {
                     const parentDirName = path.basename(baseDir);
-                    this.loadSkillFile(fullPath, parentDirName);
+                    this.loadSkillFile(fullPath, parentDirName, context);
                 }
                 else if (entry.isFile() && entry.name.endsWith(".skill.md")) {
                     const skillName = entry.name.replace(/\.skill\.md$/, "");
-                    this.loadSkillFile(fullPath, skillName);
+                    this.loadSkillFile(fullPath, skillName, context);
                 }
             }
         }
@@ -61,19 +82,29 @@ export class SkillManager {
             // Ignore permission or read errors
         }
     }
-    loadSkillFile(filePath, fallbackName) {
+    loadSkillFile(filePath, fallbackName, context) {
         try {
             const content = fs.readFileSync(filePath, "utf-8");
             const { metadata, body } = this.parseFrontmatter(content);
             const name = metadata.name || fallbackName;
             const description = metadata.description || "Specialized skill instructions";
-            if (!this.skills.has(name)) {
-                this.skills.set(name, {
-                    name,
-                    description,
-                    path: filePath,
-                    content: body.trim(),
-                });
+            const skillItem = {
+                name,
+                description,
+                path: filePath,
+                content: body.trim(),
+                trusted: context.trusted,
+                isWorkspaceSkill: context.isWorkspace,
+            };
+            if (context.trusted) {
+                if (!this.skills.has(name)) {
+                    this.skills.set(name, skillItem);
+                }
+            }
+            else {
+                if (!this.untrustedSkills.has(name)) {
+                    this.untrustedSkills.set(name, skillItem);
+                }
             }
         }
         catch {
@@ -108,8 +139,14 @@ export class SkillManager {
     listSkills() {
         return Array.from(this.skills.values());
     }
+    listUntrustedSkills() {
+        return Array.from(this.untrustedSkills.values());
+    }
     getSkill(name) {
         return this.skills.get(name) || null;
+    }
+    getUntrustedSkill(name) {
+        return this.untrustedSkills.get(name) || null;
     }
     getPromptSection() {
         const skills = this.listSkills();
@@ -119,7 +156,7 @@ export class SkillManager {
         let out = "### Specialized Agent Skills Available:\n";
         out += "You have access to specialized skills. If a user task matches a skill's description, call the `activate_skill` tool with the skill's name to load its specialized workflows and guidelines into context.\n\n";
         for (const s of skills) {
-            out += `- **${s.name}**: ${s.description}\n`;
+            out += `- **${s.name}** [source: ${s.path}] [trust: ${s.trusted ? "trusted" : "untrusted"}]: ${s.description}\n`;
         }
         return out;
     }

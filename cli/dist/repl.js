@@ -8,6 +8,7 @@ import pc from "picocolors";
 import { withDurableSync } from "./core/durable_file.js";
 import { ApplicationCore } from "./core/app.js";
 import { LocalLlmClient } from "./client.js";
+import { isWorkspaceTrusted } from "./workspace_trust.js";
 import { getGitInfo, scaffoldProjectRules, generateConventionalCommit, commitChanges } from "./git.js";
 import { appendProtectedHistoryLine, redactForPersistence, writeProtectedTextFile, } from "./core/persistence_protection.js";
 import { CheckpointManager } from "./checkpoint.js";
@@ -52,7 +53,7 @@ export class InteractiveRepl {
     config;
     rl = null;
     knownModels = [];
-    autoApprove = true;
+    approvalMode = "auto";
     historyFile;
     history = [];
     sessionManager;
@@ -62,7 +63,7 @@ export class InteractiveRepl {
     exitResolve;
     /** Cancels a running /team operation (Ctrl-C). */
     teamAbort;
-    constructor(appOrConfig, autoApprove = true, resumeSessionId) {
+    constructor(appOrConfig, modeOrAutoApprove, resumeSessionId) {
         if ("getAgent" in appOrConfig && typeof appOrConfig.getAgent === "function") {
             this.app = appOrConfig;
             this.config = this.app.getConfig();
@@ -77,7 +78,16 @@ export class InteractiveRepl {
             this.sessionManager = this.app.getSessionManager();
             this.checkpointManager = this.app.getCheckpointManager();
         }
-        this.autoApprove = autoApprove;
+        if (typeof modeOrAutoApprove === "string") {
+            this.approvalMode = modeOrAutoApprove;
+        }
+        else if (typeof modeOrAutoApprove === "boolean") {
+            this.approvalMode = modeOrAutoApprove ? "auto" : "review";
+        }
+        else {
+            this.approvalMode = this.config.approvalMode || (isWorkspaceTrusted(this.config.workspace, Boolean(this.config.readOnly)) ? "auto" : "review");
+        }
+        this.agent.setApprovalMode(this.approvalMode);
         // Compaction archives the originals beside the current session before the session names it as committed.
         this.agent.setArchiveSink((compactionId, messages) => this.sessionManager.appendArchivedHistory(this.currentSessionId, messages, compactionId));
         this.historyFile = path.join(os.homedir(), ".nexus_history");
@@ -108,6 +118,13 @@ export class InteractiveRepl {
     }
     getApp() {
         return this.app;
+    }
+    getApprovalMode() {
+        return this.approvalMode;
+    }
+    setApprovalMode(mode) {
+        this.approvalMode = mode;
+        this.agent.setApprovalMode(mode);
     }
     /** Runs one agent turn with the operator's stop authority wired to it, then records the structured result. */
     async runInteractiveTurn(prompt, titlePrompt) {
@@ -201,8 +218,12 @@ export class InteractiveRepl {
         const gitBadge = gitInfo.isRepo
             ? pc.cyan(` [git: ${pc.bold(gitInfo.formattedBadge)}]`)
             : "";
+        const trusted = isWorkspaceTrusted(this.config.workspace, Boolean(this.config.readOnly));
+        const sandboxStatus = this.config.sandbox ? (typeof this.config.sandbox === "string" ? this.config.sandbox : "on") : "off";
+        const trustStatus = trusted ? "trusted" : "untrusted (nexus trust .)";
+        console.log(pc.dim(`mode: ${this.approvalMode} · sandbox: ${sandboxStatus} · workspace: ${trustStatus}`));
         console.log(`${pc.bold(pc.cyan("WORKSPACE"))}  ${pc.white(wsName)}${gitBadge}  ${pc.dim(this.config.workspace)}`);
-        console.log(`${pc.bold(pc.cyan("MODEL"))}      ${pc.green(this.config.model)}  ${pc.dim(`· ${this.autoApprove ? "autonomous" : "review mode"}`)}`);
+        console.log(`${pc.bold(pc.cyan("MODEL"))}      ${pc.green(this.config.model)}  ${pc.dim(`· ${this.approvalMode === "auto" ? "autonomous" : this.approvalMode === "read-only" ? "read-only" : "review mode"}`)}`);
         if (verbose)
             console.log(`${pc.bold(pc.cyan("RUNTIME"))}   ${this.config.endpoint}  ·  ${this.config.shell}  ·  ${this.agent.getHistoryCount()} messages`);
         console.log(`${pc.dim(`session ${this.currentSessionId} · ${this.agent.getHistoryCount()} messages · ${this.config.shell}`)}\n`);
@@ -265,7 +286,7 @@ export class InteractiveRepl {
         }
     }
     async confirmAction(toolName, args) {
-        if (this.autoApprove)
+        if (this.approvalMode === "auto")
             return true;
         if (!this.rl)
             return true;
@@ -340,7 +361,8 @@ export class InteractiveRepl {
                 return false;
             const trimmed = answer.trim().toLowerCase();
             if (trimmed === "a" || trimmed === "always") {
-                this.autoApprove = true;
+                this.approvalMode = "auto";
+                this.agent.setApprovalMode("auto");
                 console.log(pc.green("  Switched to auto-approve for remainder of session."));
                 return true;
             }
@@ -618,15 +640,22 @@ export class InteractiveRepl {
                     }
                     else if (cmd === "mode") {
                         if (arg === "auto" || arg === "autonomous") {
-                            this.autoApprove = true;
+                            this.approvalMode = "auto";
+                            this.agent.setApprovalMode("auto");
                             console.log(pc.green("✔ Mode switched to: auto (autonomous tool execution)\n"));
                         }
                         else if (arg === "review" || arg === "ask") {
-                            this.autoApprove = false;
+                            this.approvalMode = "review";
+                            this.agent.setApprovalMode("review");
                             console.log(pc.yellow("✔ Mode switched to: review (requires user confirmation before changes)\n"));
                         }
+                        else if (arg === "read-only" || arg === "readonly") {
+                            this.approvalMode = "read-only";
+                            this.agent.setApprovalMode("read-only");
+                            console.log(pc.yellow("✔ Mode switched to: read-only (rejects mutating tool executions)\n"));
+                        }
                         else {
-                            console.log(`Current mode: ${this.autoApprove ? pc.green("auto") : pc.yellow("review")}. Use: /mode auto or /mode review\n`);
+                            console.log(`Current mode: ${this.approvalMode === "auto" ? pc.green("auto") : pc.yellow(this.approvalMode)}. Use: /mode auto, /mode review, or /mode read-only\n`);
                         }
                         continue;
                     }
@@ -1119,7 +1148,7 @@ export class InteractiveRepl {
                         await this.agent.initExtensibility();
                         const plugins = this.agent.getPluginManager().listPlugins();
                         if (plugins.length === 0) {
-                            console.log(pc.yellow("No active plugins found in ~/.nexus/plugins/ or ~/.config/opencode/plugins/\n"));
+                            console.log(pc.yellow("No active plugins found in ~/.nexus/plugins/ or ~/.config/nexus/plugins/\n"));
                         }
                         else {
                             console.log(pc.bold(pc.white("\nLoaded Custom Plugins:")));

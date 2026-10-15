@@ -9,16 +9,16 @@ export const FEW_SHOT_EXEMPLARS = [
         triggerKeywords: ["edit", "modify", "replace", "fix", "update", "refactor", "bug"],
         exemplarText: `Example: Modifying a specific function using edit_file
 Model:
-\`\`\`json
+<tool_call>
 {
-  "tool": "edit_file",
+  "name": "edit_file",
   "arguments": {
     "path": "src/utils.ts",
     "target_content": "export function add(a: number, b: number): number {\\n  return a - b;\\n}",
     "replacement_content": "export function add(a: number, b: number): number {\\n  return a + b;\\n}"
   }
 }
-\`\`\``,
+</tool_call>`,
     },
     {
         category: "test_repair",
@@ -26,26 +26,26 @@ Model:
         triggerKeywords: ["test", "failing", "error", "compile", "cargo test", "npm test", "diagnostic"],
         exemplarText: `Example: Running test suite and diagnosing output
 Model:
-\`\`\`json
+<tool_call>
 {
-  "tool": "run_command",
+  "name": "run_command",
   "arguments": {
     "command": "npm test"
   }
 }
-\`\`\`
+</tool_call>
 Tool Result: "FAIL test/calc.test.ts: Expected 4 but got -2 at calc.ts:5:10"
 Model:
-\`\`\`json
+<tool_call>
 {
-  "tool": "edit_file",
+  "name": "edit_file",
   "arguments": {
     "path": "src/calc.ts",
     "target_content": "return a - b;",
     "replacement_content": "return a + b;"
   }
 }
-\`\`\``,
+</tool_call>`,
     },
     {
         category: "batch_exploration",
@@ -53,14 +53,14 @@ Model:
         triggerKeywords: ["explore", "read", "inspect", "investigate", "files", "batch", "understand"],
         exemplarText: `Example: Concurrently reading multiple files
 Model:
-\`\`\`json
+<tool_call>
 {
-  "tool": "batch_read",
+  "name": "batch_read",
   "arguments": {
     "paths": ["src/index.ts", "src/types.ts", "package.json"]
   }
 }
-\`\`\``,
+</tool_call>`,
     },
     {
         category: "planning",
@@ -68,9 +68,9 @@ Model:
         triggerKeywords: ["plan", "feature", "large", "multi-step", "phases", "architecture", "migrate"],
         exemplarText: `Example: Setting up structured milestone phases
 Model:
-\`\`\`json
+<tool_call>
 {
-  "tool": "update_plan",
+  "name": "update_plan",
   "arguments": {
     "phases": [
       { "name": "Explore existing types & contracts", "status": "completed" },
@@ -79,13 +79,17 @@ Model:
     ]
   }
 }
-\`\`\``,
+</tool_call>`,
     },
 ];
 /**
- * Select the 1-2 most relevant few-shot exemplars matching the task prompt or active conversation context
+ * Select the 1-2 most relevant few-shot exemplars matching the task prompt or active conversation context.
+ * For native connections (nativeTools = true), returns empty string as native models do not use text-call few-shots.
  */
-export function selectRelevantFewShots(contextPrompt, maxExemplars = 2) {
+export function selectRelevantFewShots(contextPrompt, maxExemplars = 2, options) {
+    if (options?.nativeTools) {
+        return "";
+    }
     const lower = contextPrompt.toLowerCase();
     const scored = FEW_SHOT_EXEMPLARS.map((ex) => {
         let score = 0;

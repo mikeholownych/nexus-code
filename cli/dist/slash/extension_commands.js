@@ -58,10 +58,24 @@ function knowledge({ host, args }) {
         : reply("knowledge", "No knowledge entries. Add one with /knowledge set <key> <rule>.");
 }
 function skills({ host }) {
-    const list = host.app.getAgent().getSkillManager().listSkills();
-    if (!list.length)
+    const manager = host.app.getAgent().getSkillManager();
+    const list = manager.listSkills();
+    const untrustedList = manager.listUntrustedSkills();
+    if (!list.length && !untrustedList.length) {
         return reply("skills", "No skills found. Add one under ~/.nexus/skills/<name>/SKILL.md or .nexus/skills/, or run /skill init <name>.");
-    return reply("skills", [...list.flatMap((s) => [`• ${s.name} (${s.path})`, `    ${s.description}`]), "", "Show one with /skill <name>."].join("\n"));
+    }
+    const lines = [];
+    for (const s of list) {
+        lines.push(`• ${s.name} (${s.path})`);
+        lines.push(`    ${s.description}`);
+    }
+    for (const s of untrustedList) {
+        lines.push(`• ${s.name} (${s.path}) [untrusted (not loaded)]`);
+        lines.push(`    ${s.description} — run 'nexus trust .' to enable workspace skills`);
+    }
+    lines.push("");
+    lines.push("Show one with /skill <name>.");
+    return reply("skills", lines.join("\n"));
 }
 function skill({ host, args }) {
     const manager = host.app.getAgent().getSkillManager();
@@ -75,7 +89,14 @@ function skill({ host, args }) {
         return reply("skill", `Scaffolded ${name} at ${manager.scaffoldSkill(name).skillPath}`);
     }
     const found = manager.getSkill(text);
-    return found ? reply("skill", `${found.name} · ${found.path}\n\n${found.content}`) : reply("skill", `Skill ${text} not found. /skills lists the available ones.`, false);
+    if (found) {
+        return reply("skill", `${found.name} · ${found.path}\n\n${found.content}`);
+    }
+    const untrusted = manager.getUntrustedSkill(text);
+    if (untrusted) {
+        return reply("skill", `Skill ${text} is in an untrusted workspace [untrusted (not loaded)]. Run 'nexus trust .' to trust this workspace.`, false);
+    }
+    return reply("skill", `Skill ${text} not found. /skills lists the available ones.`, false);
 }
 async function mcpAdd(manager, words) {
     const usage = "Usage: /mcp add <name> stdio <command...>  or  /mcp add <name> sse|websocket <url>";
@@ -156,7 +177,7 @@ async function plugins({ host }) {
     await agent.initExtensibility();
     const list = agent.getPluginManager().listPlugins();
     if (!list.length)
-        return reply("plugins", "No plugins loaded from ~/.nexus/plugins/ or ~/.config/opencode/plugins/.");
+        return reply("plugins", "No plugins loaded from ~/.nexus/plugins/ or ~/.config/nexus/plugins/.");
     return reply("plugins", list.map((p) => `• ${p.name}: ${p.description} (custom tools: ${p.customToolCount})`).join("\n"));
 }
 async function browse({ host, args }) {

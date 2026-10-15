@@ -7,34 +7,114 @@ import { credentialOriginOf, credentialStorageHome, environmentCredential, Local
 import { baseUrlSetting, originOf, parseOriginList, PROVIDERS, providerDefinition } from "./providers.js";
 import { providerApiKey } from "./credentials.js";
 import { DEFAULT_CONTINUATION } from "./types.js";
+import { isWorkspaceTrusted } from "./workspace_trust.js";
 const installEnv = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../.env");
 const DEFAULT_ENDPOINT = "http://localhost:1234/v1";
 let credentialAuthorityRecorded = false;
+let shellEnvironment = {};
+let userConfigFile = {};
 /** Loads env files in precedence order; CLI flags are applied afterwards by buildConfig. */
 export function loadEnvironment() {
     // The operator's own environment and home, before any file has written to process.env.
     const operatorEnvironment = credentialAuthorityRecorded ? undefined : { ...process.env };
+    if (!credentialAuthorityRecorded && operatorEnvironment) {
+        shellEnvironment = { ...operatorEnvironment };
+    }
     const operatorHome = credentialAuthorityRecorded ? credentialStorageHome() : os.homedir();
     // 1. Installation directory defaults
     loadDotenv({ path: installEnv });
     // 2. Global user config (~/.config/nexus/config.env)
     const globalConfig = path.join(operatorHome, ".config/nexus/config.env");
-    let userConfig = {};
+    userConfigFile = {};
     if (fs.existsSync(globalConfig)) {
         loadDotenv({ path: globalConfig, override: true });
-        userConfig = parseDotenv(fs.readFileSync(globalConfig));
+        userConfigFile = parseDotenv(fs.readFileSync(globalConfig));
     }
     // Credential bindings are decided by the operator environment and config.env only (see setCredentialAuthority).
     if (operatorEnvironment) {
-        setCredentialAuthority({ ...operatorEnvironment, ...userConfig }, operatorHome);
+        setCredentialAuthority({ ...operatorEnvironment, ...userConfigFile }, operatorHome);
         credentialAuthorityRecorded = true;
     }
     // 3. Current working directory overrides (skipped when cwd is the install directory: that file is the
-    //    shipped default already applied in step 1 and must not outrank the user's global config)
+    //    shipped default already applied in step 1 and must not outrank the user's global config). A project .env
+    //    belongs to the repository, not the operator: only per-project settings in PROJECT_ENV_KEYS are applied; the
+    //    rest (TLS and proxy settings, credentials, HOME, the shell, timeouts, fallbacks, trust) is ignored and reported.
     const cwdEnv = path.resolve(process.cwd(), ".env");
-    if (cwdEnv !== installEnv) {
-        loadDotenv({ path: cwdEnv, override: true });
+    projectEnvSettings = {};
+    projectEnvIgnored = [];
+    if (cwdEnv !== installEnv && fs.existsSync(cwdEnv)) {
+        let project = {};
+        try {
+            project = parseDotenv(fs.readFileSync(cwdEnv));
+        }
+        catch { }
+        for (const [key, value] of Object.entries(project)) {
+            if (isProjectEnvKey(key))
+                projectEnvSettings[key] = value;
+            else
+                projectEnvIgnored.push(key);
+        }
+        if (projectEnvIgnored.length) {
+            warnOnce(`ignored in ${cwdEnv}: ${projectEnvIgnored.join(", ")} (a project .env may set only per-project settings; put operator settings in ~/.config/nexus/config.env)`);
+        }
     }
+}
+/**
+ * Settings a repository's .env may choose for itself: which endpoint, model and endpoint key to use (a cloud destination
+ * still needs the operator's authorization, and the key is bound to that endpoint's origin), task classes, budgets and
+ * reasoning effort. Everything else is operator authority, including cloud provider keys and selection.
+ */
+const PROJECT_ENV_KEYS = new Set([
+    "LOCAL_LLM_ENDPOINT",
+    "LOCAL_LLM_MODEL",
+    // The project's own key for the project's own endpoint: credential binding sends it only to that origin.
+    "LOCAL_LLM_API_KEY",
+    "LOCAL_LLM_TASK_CLASS",
+    "PLANNER_LLM_ENDPOINT",
+    "PLANNER_LLM_MODEL",
+    "PLANNER_TASK_CLASS",
+    "CODER_LLM_ENDPOINT",
+    "CODER_LLM_MODEL",
+    "NEXUS_TASK_CLASS",
+    "NEXUS_CONTINUATION",
+    "NEXUS_MAX_TOTAL_STEPS",
+    "NEXUS_MAX_TURN_MINUTES",
+    "NEXUS_STAGNATION_STEPS",
+    "NEXUS_VERIFIER_TIMEOUT_SECS",
+    "NEXUS_REASONING_EFFORT",
+    "NEXUS_STRICT_TOKEN_COUNT",
+    "NEXUS_CONTEXT_LIMIT",
+]);
+export function isProjectEnvKey(key) {
+    return PROJECT_ENV_KEYS.has(key) || /^NEXUS_PROJECT_[A-Z0-9_]+$/.test(key);
+}
+let projectEnvSettings = {};
+let projectEnvIgnored = [];
+/**
+ * Resolves an effective configuration setting across layers:
+ * 1. Operator shell environment (highest non-flag authority)
+ * 2. Allowlisted project .env setting (per-project overrides of global config.env and defaults; never touches process.env)
+ * 3. Global user config (~/.config/nexus/config.env)
+ * 4. Base process environment / install defaults
+ */
+export function effectiveSetting(key) {
+    const shellVal = shellEnvironment[key]?.trim();
+    if (shellVal)
+        return shellVal;
+    if (isProjectEnvKey(key) && projectEnvSettings[key] !== undefined) {
+        return projectEnvSettings[key];
+    }
+    const configVal = userConfigFile[key]?.trim();
+    if (configVal)
+        return configVal;
+    return (process.env[key]?.trim() || undefined);
+}
+export function projectSetting(key) {
+    return projectEnvSettings[key];
+}
+/** Keys the working directory's .env set but loadEnvironment ignored (operator-only settings). */
+export function ignoredProjectEnvKeys() {
+    return projectEnvIgnored;
 }
 const warned = new Set();
 function warnOnce(message) {
@@ -76,42 +156,74 @@ export function providerKey(id) {
 }
 /** True when the operator (not a project .env) chose this setting's current value. */
 function operatorChose(key) {
-    const own = operatorSetting(key);
-    return own !== undefined && own === process.env[key]?.trim();
+    return operatorSetting(key) !== undefined;
 }
 export function buildConfig(options) {
     // `appliance: true` resolves the appliance connection regardless of any provider selection (the model picker's
     // appliance entry).
     const provider = options.appliance ? undefined : selectProvider(options.provider, "NEXUS_PROVIDER");
-    const endpoint = provider ? providerBaseUrl(provider, options.baseUrl) : options.endpoint || process.env.LOCAL_LLM_ENDPOINT || DEFAULT_ENDPOINT;
+    const endpoint = provider ? providerBaseUrl(provider, options.baseUrl) : options.endpoint || effectiveSetting("LOCAL_LLM_ENDPOINT") || DEFAULT_ENDPOINT;
     // A cloud model is named explicitly; the appliance's LOCAL_LLM_MODEL never selects a billable cloud model.
-    const model = provider ? options.model || operatorSetting("NEXUS_MODEL") || "" : options.model || process.env.LOCAL_LLM_MODEL || "local-model";
+    const model = provider ? options.model || operatorSetting("NEXUS_MODEL") || "" : options.model || effectiveSetting("LOCAL_LLM_MODEL") || "local-model";
     // Stored gateway credentials are not baked in here: the client attaches them only to the gateway they belong to.
+    const operatorKey = operatorSetting("LOCAL_LLM_API_KEY");
+    const projectApiKey = effectiveSetting("LOCAL_LLM_API_KEY");
     const envCredential = options.apiKey || provider ? undefined : environmentCredential(options.endpoint || DEFAULT_ENDPOINT);
-    const apiKey = options.apiKey || (provider ? providerKey(provider) : envCredential?.apiKey) || "local";
-    const credentialOrigin = apiKey === "local" ? undefined : options.apiKey || provider ? credentialOriginOf(endpoint) : envCredential?.origin;
+    const apiKey = options.apiKey || (provider ? providerKey(provider) : operatorKey || projectApiKey || envCredential?.apiKey) || "local";
+    const credentialOrigin = apiKey === "local" ? undefined : options.apiKey || provider ? credentialOriginOf(endpoint) : (operatorKey ? envCredential?.origin : (projectApiKey ? credentialOriginOf(endpoint) : envCredential?.origin));
     const workspace = options.workspace ? path.resolve(options.workspace) : process.cwd();
     const maxSteps = options.maxSteps ? parseInt(options.maxSteps, 10) : 30;
     const continuation = continuationBudget(options);
     const temperature = options.temperature ? parseFloat(options.temperature) : 0.2;
-    const shell = options.shell || process.env.LOCAL_HARNESS_SHELL || "bash";
+    const shell = options.shell || operatorSetting("LOCAL_HARNESS_SHELL") || process.env.LOCAL_HARNESS_SHELL || "bash";
     const dryRun = Boolean(options.dryRun);
     const readOnly = Boolean(options.readOnly);
+    const yes = Boolean(options.yes);
+    const approve = Boolean(options.approve);
+    const modeOption = options.mode ? String(options.mode).toLowerCase() : undefined;
+    const envMode = (operatorSetting("NEXUS_APPROVAL_MODE") || process.env.NEXUS_APPROVAL_MODE)?.trim().toLowerCase();
+    let approvalMode;
+    let fullAccess = Boolean(options.fullAccess);
+    if (readOnly) {
+        approvalMode = "read-only";
+    }
+    else if (yes) {
+        approvalMode = "auto";
+        fullAccess = true;
+    }
+    else if (approve) {
+        approvalMode = "review";
+    }
+    else if (modeOption === "auto" || modeOption === "review" || modeOption === "read-only") {
+        approvalMode = modeOption;
+        if (approvalMode === "auto" && options.yes)
+            fullAccess = true;
+    }
+    else if (envMode === "auto" || envMode === "review" || envMode === "read-only") {
+        approvalMode = envMode;
+        if (approvalMode === "auto")
+            fullAccess = true;
+    }
+    else {
+        // Default resolution per DEC-01 C: trusted -> auto, else review
+        const trusted = isWorkspaceTrusted(workspace, readOnly);
+        approvalMode = trusted ? "auto" : "review";
+    }
     const sandbox = options.sandbox ? (typeof options.sandbox === "string" ? options.sandbox : true) : undefined;
     if (provider && options.fallback)
         warnOnce(`--fallback is ignored for provider '${provider}': a provider connection is pinned to its own endpoint.`);
     const fallbackEndpoints = options.fallback && !provider ? options.fallback.split(",").map((s) => s.trim()) : undefined;
-    const contextLimit = options.contextLimit ? parseInt(options.contextLimit, 10) : undefined;
-    const strictTokenCount = Boolean(options.strictTokenCount) || process.env.NEXUS_STRICT_TOKEN_COUNT === "1";
+    const contextLimit = options.contextLimit ? parseInt(options.contextLimit, 10) : (effectiveSetting("NEXUS_CONTEXT_LIMIT") ? parseInt(effectiveSetting("NEXUS_CONTEXT_LIMIT"), 10) : undefined);
+    const strictTokenCount = Boolean(options.strictTokenCount) || effectiveSetting("NEXUS_STRICT_TOKEN_COUNT") === "1";
     const worktree = Boolean(options.worktree);
     const authoritativeVerifierCommand = options.authoritativeVerifier;
     const recordFlight = Boolean(options.recordFlight || options.flight);
     const plannerProvider = selectProvider(options.plannerProvider, "PLANNER_LLM_PROVIDER");
     const coderProvider = selectProvider(options.coderProvider, "CODER_LLM_PROVIDER");
-    const plannerModel = options.plannerModel || process.env.PLANNER_LLM_MODEL;
-    const plannerEndpoint = plannerProvider ? providerBaseUrl(plannerProvider) : options.plannerEndpoint || process.env.PLANNER_LLM_ENDPOINT;
-    const coderModel = options.coderModel || process.env.CODER_LLM_MODEL;
-    const coderEndpoint = coderProvider ? providerBaseUrl(coderProvider) : options.coderEndpoint || process.env.CODER_LLM_ENDPOINT;
+    const plannerModel = options.plannerModel || effectiveSetting("PLANNER_LLM_MODEL");
+    const plannerEndpoint = plannerProvider ? providerBaseUrl(plannerProvider) : options.plannerEndpoint || effectiveSetting("PLANNER_LLM_ENDPOINT");
+    const coderModel = options.coderModel || effectiveSetting("CODER_LLM_MODEL");
+    const coderEndpoint = coderProvider ? providerBaseUrl(coderProvider) : options.coderEndpoint || effectiveSetting("CODER_LLM_ENDPOINT");
     if (plannerProvider && !plannerModel)
         throw new Error(`Planner provider '${plannerProvider}' needs an explicit model: pass --planner-model or set PLANNER_LLM_MODEL.`);
     if (coderProvider && !coderModel)
@@ -134,14 +246,14 @@ export function buildConfig(options) {
     if (coderProvider || options.coderEndpoint || operatorChose("CODER_LLM_ENDPOINT"))
         authorize(coderEndpoint);
     const cloudRoutedOrigins = parseOriginList(operatorSetting("NEXUS_CLOUD_ROUTED_ORIGINS"));
-    const reasoningEffort = process.env.NEXUS_REASONING_EFFORT?.trim() || undefined;
+    const reasoningEffort = effectiveSetting("NEXUS_REASONING_EFFORT")?.trim() || undefined;
     const thinkingRaw = Number(process.env.NEXUS_ANTHROPIC_THINKING_BUDGET);
     const anthropicThinkingBudget = Number.isFinite(thinkingRaw) && thinkingRaw >= 1024 ? Math.floor(thinkingRaw) : undefined;
     const tdd = Boolean(options.tdd);
-    const verifierTimeoutRaw = Number(process.env.NEXUS_VERIFIER_TIMEOUT_SECS);
+    const verifierTimeoutRaw = Number(effectiveSetting("NEXUS_VERIFIER_TIMEOUT_SECS"));
     const verifierTimeoutSecs = Number.isFinite(verifierTimeoutRaw) && verifierTimeoutRaw > 0 ? verifierTimeoutRaw : undefined;
-    const taskClass = process.env.NEXUS_TASK_CLASS || undefined;
-    const plannerTaskClass = process.env.PLANNER_TASK_CLASS || undefined;
+    const taskClass = effectiveSetting("NEXUS_TASK_CLASS") || effectiveSetting("LOCAL_LLM_TASK_CLASS") || undefined;
+    const plannerTaskClass = effectiveSetting("PLANNER_TASK_CLASS") || undefined;
     return {
         taskClass,
         plannerTaskClass,
@@ -156,6 +268,9 @@ export function buildConfig(options) {
         shell,
         dryRun,
         readOnly,
+        approvalMode,
+        yes,
+        fullAccess,
         sandbox,
         fallbackEndpoints,
         contextLimit,
@@ -185,7 +300,7 @@ export function buildConfig(options) {
  * NEXUS_CONTINUATION=0) is the operator's explicit choice of the single-segment turn that ends at --max-steps.
  */
 export function continuationBudget(options) {
-    if (options.continuation === false || process.env.NEXUS_CONTINUATION === "0")
+    if (options.continuation === false || effectiveSetting("NEXUS_CONTINUATION") === "0")
         return undefined;
     const positive = (flag, env, fallback) => {
         for (const raw of [flag, env]) {
@@ -198,12 +313,12 @@ export function continuationBudget(options) {
         }
         return fallback;
     };
-    const steps = positive(options.maxTotalSteps, process.env.NEXUS_MAX_TOTAL_STEPS, DEFAULT_CONTINUATION.maxTotalSteps);
+    const steps = positive(options.maxTotalSteps, effectiveSetting("NEXUS_MAX_TOTAL_STEPS"), DEFAULT_CONTINUATION.maxTotalSteps);
     return {
         ...DEFAULT_CONTINUATION,
         maxTotalSteps: Number.isFinite(steps) ? Math.floor(steps) : steps,
-        maxTurnMinutes: positive(options.maxTurnMinutes, process.env.NEXUS_MAX_TURN_MINUTES, DEFAULT_CONTINUATION.maxTurnMinutes),
-        stagnationSteps: Math.floor(positive(options.stagnationSteps, process.env.NEXUS_STAGNATION_STEPS, DEFAULT_CONTINUATION.stagnationSteps)),
+        maxTurnMinutes: positive(options.maxTurnMinutes, effectiveSetting("NEXUS_MAX_TURN_MINUTES"), DEFAULT_CONTINUATION.maxTurnMinutes),
+        stagnationSteps: Math.floor(positive(options.stagnationSteps, effectiveSetting("NEXUS_STAGNATION_STEPS"), DEFAULT_CONTINUATION.stagnationSteps)),
     };
 }
 /** Replaces the "local-model" placeholder with the first model the gateway lists; unchanged if the gateway is unreachable. */

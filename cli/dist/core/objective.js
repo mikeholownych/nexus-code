@@ -481,6 +481,7 @@ export const REQUIREMENTS_CAPABILITY = {
     "modelToolName": "update_requirements",
     "category": "orchestration",
     "mutating": false,
+    "effect": "internal",
     "sideEffectContract": "Record progress against the operator's acceptance requirements (no workspace change)",
     "backend": "ts_native",
     "toolDefinition": {
@@ -520,6 +521,7 @@ export const READ_OBJECTIVE_CAPABILITY = {
     modelToolName: "read_objective",
     category: "orchestration",
     mutating: false,
+    effect: "internal",
     sideEffectContract: "Read the operator's objective verbatim (no workspace change)",
     backend: "ts_native",
     toolDefinition: {
