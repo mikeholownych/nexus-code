@@ -7,6 +7,20 @@ import { ToolDefinition, ExecutionResult } from "../types.js";
 
 export type CapabilityBackend = "rust_rpc" | "ts_native" | "extension";
 
+/**
+ * What a capability can affect (SPEC-01 §5.1). Review mode asks the operator before `write_workspace`, `exec` and
+ * `egress`; `context_inject` is gated by workspace trust instead; `read_workspace`, `delegate` (the child's own calls are
+ * gated) and `internal` (Nexus's own bookkeeping, no effect outside the conversation) never ask.
+ */
+export type EffectClass = "read_workspace" | "write_workspace" | "exec" | "egress" | "delegate" | "context_inject" | "internal";
+
+export const EFFECT_CLASSES: readonly EffectClass[] = ["read_workspace", "write_workspace", "exec", "egress", "delegate", "context_inject", "internal"];
+
+/** Whether review mode asks the operator before a capability of this class runs. */
+export function needsOperatorDecision(effect: EffectClass): boolean {
+  return effect === "write_workspace" || effect === "exec" || effect === "egress";
+}
+
 export interface CanonicalCapability {
   /** Canonical capability identifier (e.g., 'fs_read', 'proc_exec') */
   id: string;
@@ -26,8 +40,10 @@ export interface CanonicalCapability {
     | "orchestration"
     | "extension"
     | string;
-  /** Whether the capability performs side effects (read-only mode refuses it; review mode asks before it runs) */
+  /** Whether the capability performs side effects (read-only mode refuses it) */
   mutating: boolean;
+  /** What the capability can affect; decides whether review mode asks before it runs */
+  effect: EffectClass;
   /**
    * Whether a successful call changes the workspace content (makes a verifier result stale, counts as a change to
    * verify). Defaults to `mutating`; false for side effects outside the workspace, such as running tests.
@@ -65,6 +81,9 @@ export class CapabilityRegistry {
   public register(capability: CanonicalCapability): void {
     if (!capability || !capability.id || !capability.modelToolName) {
       throw new Error("Invalid capability: id and modelToolName are required.");
+    }
+    if (!EFFECT_CLASSES.includes(capability.effect)) {
+      throw new Error(`Invalid capability '${capability.modelToolName}': effect must be one of ${EFFECT_CLASSES.join(", ")}.`);
     }
     if (this.capabilitiesByToolName.has(capability.modelToolName)) {
       throw new Error(`Duplicate capability registration: model tool '${capability.modelToolName}' is already registered.`);
@@ -204,6 +223,7 @@ export const BASELINE_CAPABILITIES: CanonicalCapability[] = [
     "modelToolName": "read_file",
     "category": "fs",
     "mutating": false,
+    "effect": "read_workspace",
     "sideEffectContract": "Read file contents with line numbers from workspace",
     "backend": "rust_rpc",
     "toolDefinition": {
@@ -239,6 +259,7 @@ export const BASELINE_CAPABILITIES: CanonicalCapability[] = [
     "modelToolName": "write_file",
     "category": "fs",
     "mutating": true,
+    "effect": "write_workspace",
     "sideEffectContract": "Create a new file or completely overwrite an existing file",
     "backend": "rust_rpc",
     "toolDefinition": {
@@ -275,6 +296,7 @@ export const BASELINE_CAPABILITIES: CanonicalCapability[] = [
     "modelToolName": "edit_file",
     "category": "fs",
     "mutating": true,
+    "effect": "write_workspace",
     "sideEffectContract": "Perform search-and-replace snippet edit on a file",
     "backend": "rust_rpc",
     "toolDefinition": {
@@ -316,6 +338,7 @@ export const BASELINE_CAPABILITIES: CanonicalCapability[] = [
     "modelToolName": "list_dir",
     "category": "fs",
     "mutating": false,
+    "effect": "read_workspace",
     "sideEffectContract": "List files and directories in the workspace",
     "backend": "rust_rpc",
     "toolDefinition": {
@@ -344,6 +367,7 @@ export const BASELINE_CAPABILITIES: CanonicalCapability[] = [
     "modelToolName": "search_code",
     "category": "code_search",
     "mutating": false,
+    "effect": "read_workspace",
     "sideEffectContract": "Search code files using regex patterns via ripgrep",
     "backend": "rust_rpc",
     "toolDefinition": {
@@ -383,6 +407,7 @@ export const BASELINE_CAPABILITIES: CanonicalCapability[] = [
     "modelToolName": "run_command",
     "category": "proc",
     "mutating": true,
+    "effect": "exec",
     "sideEffectContract": "Execute shell command within workspace environment",
     "backend": "rust_rpc",
     "toolDefinition": {
@@ -422,6 +447,7 @@ export const BASELINE_CAPABILITIES: CanonicalCapability[] = [
     "modelToolName": "find_files",
     "category": "fs",
     "mutating": false,
+    "effect": "read_workspace",
     "sideEffectContract": "Find files matching glob pattern in workspace",
     "backend": "rust_rpc",
     "toolDefinition": {
@@ -453,6 +479,7 @@ export const BASELINE_CAPABILITIES: CanonicalCapability[] = [
     "modelToolName": "search_symbols",
     "category": "code_search",
     "mutating": false,
+    "effect": "read_workspace",
     "sideEffectContract": "Search code symbols across workspace files",
     "backend": "rust_rpc",
     "toolDefinition": {
@@ -481,6 +508,7 @@ export const BASELINE_CAPABILITIES: CanonicalCapability[] = [
     "modelToolName": "delete_file",
     "category": "fs",
     "mutating": true,
+    "effect": "write_workspace",
     "sideEffectContract": "Delete a file, or a directory with recursive: true, from the workspace",
     "backend": "rust_rpc",
     "toolDefinition": {
@@ -512,6 +540,7 @@ export const BASELINE_CAPABILITIES: CanonicalCapability[] = [
     "modelToolName": "fetch_web",
     "category": "net",
     "mutating": false,
+    "effect": "egress",
     "sideEffectContract": "Fetch and extract text content from remote HTTP/HTTPS URL",
     "backend": "ts_native",
     "toolDefinition": {
@@ -543,6 +572,7 @@ export const BASELINE_CAPABILITIES: CanonicalCapability[] = [
     "modelToolName": "task_completed",
     "category": "orchestration",
     "mutating": false,
+    "effect": "internal",
     "sideEffectContract": "Conclude task execution with final summary and verification check",
     "backend": "ts_native",
     "toolDefinition": {
@@ -574,6 +604,7 @@ export const BASELINE_CAPABILITIES: CanonicalCapability[] = [
     "modelToolName": "spawn_subagent",
     "category": "orchestration",
     "mutating": false,
+    "effect": "delegate",
     "sideEffectContract": "Spawn isolated child agent to investigate or execute subtask",
     "backend": "ts_native",
     "toolDefinition": {
@@ -601,6 +632,7 @@ export const BASELINE_CAPABILITIES: CanonicalCapability[] = [
     "modelToolName": "file_info",
     "category": "fs",
     "mutating": false,
+    "effect": "read_workspace",
     "sideEffectContract": "Retrieve file size, modification time, line count and permissions",
     "backend": "rust_rpc",
     "toolDefinition": {
@@ -628,6 +660,7 @@ export const BASELINE_CAPABILITIES: CanonicalCapability[] = [
     "modelToolName": "batch_read",
     "category": "fs",
     "mutating": false,
+    "effect": "read_workspace",
     "sideEffectContract": "Read contents of multiple files in a single invocation",
     "backend": "rust_rpc",
     "toolDefinition": {
@@ -662,6 +695,7 @@ export const BASELINE_CAPABILITIES: CanonicalCapability[] = [
     "modelToolName": "file_tree",
     "category": "fs",
     "mutating": false,
+    "effect": "read_workspace",
     "sideEffectContract": "Generate visual directory tree of workspace files",
     "backend": "rust_rpc",
     "toolDefinition": {
@@ -690,6 +724,7 @@ export const BASELINE_CAPABILITIES: CanonicalCapability[] = [
     "modelToolName": "patch_file",
     "category": "fs",
     "mutating": true,
+    "effect": "write_workspace",
     "sideEffectContract": "Apply unified diff patch to a file in workspace",
     "backend": "rust_rpc",
     "toolDefinition": {
@@ -722,6 +757,7 @@ export const BASELINE_CAPABILITIES: CanonicalCapability[] = [
     "modelToolName": "update_plan",
     "category": "orchestration",
     "mutating": true,
+    "effect": "internal",
     "sideEffectContract": "Update task phases and execution roadmap",
     "backend": "ts_native",
     "toolDefinition": {
@@ -770,6 +806,7 @@ export const BASELINE_CAPABILITIES: CanonicalCapability[] = [
     "modelToolName": "activate_skill",
     "category": "skill",
     "mutating": false,
+    "effect": "context_inject",
     "sideEffectContract": "Load specialized instructions and guidelines from skill repository",
     "backend": "ts_native",
     "toolDefinition": {
@@ -797,6 +834,7 @@ export const BASELINE_CAPABILITIES: CanonicalCapability[] = [
     "modelToolName": "run_tests",
     "category": "proc",
     "mutating": true,
+    "effect": "exec",
     "changesWorkspace": false,
     "sideEffectContract": "Discover and execute workspace test suite",
     "backend": "ts_native",
@@ -822,6 +860,7 @@ export const BASELINE_CAPABILITIES: CanonicalCapability[] = [
     "modelToolName": "search_web",
     "category": "net",
     "mutating": false,
+    "effect": "egress",
     "sideEffectContract": "Query external search provider for web results",
     "backend": "ts_native",
     "toolDefinition": {
@@ -853,6 +892,7 @@ export const BASELINE_CAPABILITIES: CanonicalCapability[] = [
     "modelToolName": "lsp_hover",
     "category": "lsp",
     "mutating": false,
+    "effect": "exec",
     "sideEffectContract": "Query LSP server for hover type/doc information",
     "backend": "ts_native",
     "toolDefinition": {
@@ -890,6 +930,7 @@ export const BASELINE_CAPABILITIES: CanonicalCapability[] = [
     "modelToolName": "lsp_definition",
     "category": "lsp",
     "mutating": false,
+    "effect": "exec",
     "sideEffectContract": "Query LSP server for symbol definition location",
     "backend": "ts_native",
     "toolDefinition": {
@@ -927,6 +968,7 @@ export const BASELINE_CAPABILITIES: CanonicalCapability[] = [
     "modelToolName": "lsp_diagnostics",
     "category": "lsp",
     "mutating": false,
+    "effect": "exec",
     "sideEffectContract": "Query LSP server for workspace compilation diagnostics",
     "backend": "ts_native",
     "toolDefinition": {
@@ -954,6 +996,7 @@ export const BASELINE_CAPABILITIES: CanonicalCapability[] = [
     "modelToolName": "git_status",
     "category": "vcs",
     "mutating": false,
+    "effect": "read_workspace",
     "sideEffectContract": "Query git repository working tree status and branch",
     "backend": "rust_rpc",
     "toolDefinition": {
@@ -973,6 +1016,7 @@ export const BASELINE_CAPABILITIES: CanonicalCapability[] = [
     "modelToolName": "git_diff",
     "category": "vcs",
     "mutating": false,
+    "effect": "read_workspace",
     "sideEffectContract": "Query git unified diff of working tree or staged changes",
     "backend": "rust_rpc",
     "toolDefinition": {
@@ -1001,6 +1045,7 @@ export const BASELINE_CAPABILITIES: CanonicalCapability[] = [
     "modelToolName": "git_log",
     "category": "vcs",
     "mutating": false,
+    "effect": "read_workspace",
     "sideEffectContract": "Query git commit history log",
     "backend": "rust_rpc",
     "toolDefinition": {
@@ -1025,6 +1070,7 @@ export const BASELINE_CAPABILITIES: CanonicalCapability[] = [
     "modelToolName": "cst_symbols",
     "category": "code_search",
     "mutating": false,
+    "effect": "read_workspace",
     "sideEffectContract": "Scan AST/CST concrete syntax tree symbols",
     "backend": "rust_rpc",
     "toolDefinition": {
@@ -1056,6 +1102,7 @@ export const BASELINE_CAPABILITIES: CanonicalCapability[] = [
     "modelToolName": "outline_file",
     "category": "code_search",
     "mutating": false,
+    "effect": "read_workspace",
     "sideEffectContract": "Generate structured outline of functions/classes in a file",
     "backend": "rust_rpc",
     "toolDefinition": {
@@ -1083,6 +1130,7 @@ export const BASELINE_CAPABILITIES: CanonicalCapability[] = [
     "modelToolName": "trigram_search",
     "category": "code_search",
     "mutating": false,
+    "effect": "read_workspace",
     "sideEffectContract": "Search code using trigram inverted index",
     "backend": "rust_rpc",
     "toolDefinition": {
@@ -1118,6 +1166,7 @@ export const BASELINE_CAPABILITIES: CanonicalCapability[] = [
     "modelToolName": "hybrid_search",
     "category": "code_search",
     "mutating": false,
+    "effect": "read_workspace",
     "sideEffectContract": "Perform hybrid BM25 lexical and vector semantic search",
     "backend": "ts_native",
     "toolDefinition": {
@@ -1162,6 +1211,7 @@ export const BASELINE_CAPABILITIES: CanonicalCapability[] = [
     "modelToolName": "browser_navigate",
     "category": "browser",
     "mutating": false,
+    "effect": "egress",
     "sideEffectContract": "Navigate simulated browser to URL",
     "backend": "ts_native",
     "toolDefinition": {
@@ -1189,6 +1239,7 @@ export const BASELINE_CAPABILITIES: CanonicalCapability[] = [
     "modelToolName": "browser_screenshot",
     "category": "browser",
     "mutating": false,
+    "effect": "egress",
     "sideEffectContract": "Capture simulated browser viewport screenshot",
     "backend": "ts_native",
     "toolDefinition": {
@@ -1213,6 +1264,7 @@ export const BASELINE_CAPABILITIES: CanonicalCapability[] = [
     "modelToolName": "browser_click",
     "category": "browser",
     "mutating": false,
+    "effect": "egress",
     "sideEffectContract": "Simulate mouse click on DOM selector element",
     "backend": "ts_native",
     "toolDefinition": {
@@ -1240,6 +1292,7 @@ export const BASELINE_CAPABILITIES: CanonicalCapability[] = [
     "modelToolName": "browser_type",
     "category": "browser",
     "mutating": true,
+    "effect": "egress",
     "changesWorkspace": false,
     "sideEffectContract": "Simulate keyboard text typing into DOM selector element",
     "backend": "ts_native",
@@ -1273,6 +1326,7 @@ export const BASELINE_CAPABILITIES: CanonicalCapability[] = [
     "modelToolName": "browser_console_logs",
     "category": "browser",
     "mutating": false,
+    "effect": "egress",
     "sideEffectContract": "Retrieve captured simulated browser console log messages",
     "backend": "ts_native",
     "toolDefinition": {
@@ -1297,6 +1351,7 @@ export const BASELINE_CAPABILITIES: CanonicalCapability[] = [
     "modelToolName": "manage_knowledge",
     "category": "knowledge",
     "mutating": true,
+    "effect": "write_workspace",
     "sideEffectContract": "Store, retrieve, query or delete persistent knowledge entries",
     "backend": "ts_native",
     "toolDefinition": {
