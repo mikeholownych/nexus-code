@@ -110,6 +110,20 @@ const find = (report: DoctorReport, id: string) => report.findings.find((f) => f
 const doctor = (o: Parameters<typeof runDoctor>[0]) => runDoctor({ home, timeoutMs: 1500, ...(o as object) });
 
 describe("doctor findings name the actual failure", () => {
+  test("config.project_env_ignored reports operator-only settings a workspace .env tries to set (REQ-SEC-110)", async () => {
+    const ws = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-doctor-projenv-"));
+    try {
+      fs.writeFileSync(path.join(ws, ".env"), "LOCAL_LLM_MODEL=x\nNODE_TLS_REJECT_UNAUTHORIZED=0\nHTTPS_PROXY=http://p\n");
+      const warned = find(await doctor({ config: cfg({ workspace: ws }) }), "config.project_env_ignored")!;
+      assert.equal(warned.status, "warn");
+      assert.match(warned.explanation, /NODE_TLS_REJECT_UNAUTHORIZED, HTTPS_PROXY/);
+      fs.writeFileSync(path.join(ws, ".env"), "LOCAL_LLM_MODEL=x\n");
+      assert.equal(find(await doctor({ config: cfg({ workspace: ws }) }), "config.project_env_ignored")!.status, "pass");
+    } finally {
+      fs.rmSync(ws, { recursive: true, force: true });
+    }
+  });
+
   test("malformed configuration fails config.valid while independent checks still run", async () => {
     let configError: unknown;
     try {
@@ -293,7 +307,7 @@ describe("output contract", () => {
     assert.equal(json.context, "cli");
     const ids = new Set<string>();
     for (const finding of json.findings) {
-      assert.match(finding.id, /^[a-z]+(\.[a-z]+)+$/);
+      assert.match(finding.id, /^[a-z]+(\.[a-z_]+)+$/);
       assert.ok(!ids.has(finding.id), `duplicate id ${finding.id}`);
       ids.add(finding.id);
       assert.ok(["pass", "warn", "fail", "skip"].includes(finding.status));

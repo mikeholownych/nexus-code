@@ -416,7 +416,7 @@ export function parseModelResponse(
           continue;
         }
         const name = tc.function.name.trim();
-        if (!known(name)) {
+        if (offeredNames && !offeredNames.has(name)) {
           notices.push(`Tool "${name}" is not offered on this request and was not executed.`);
           continue;
         }

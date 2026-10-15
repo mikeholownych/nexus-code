@@ -4727,10 +4727,7 @@ The pinned Objective Ledger lists the operator's requirements; your plan never r
 
         // Parse the response using hybrid parser
         const nativeTools = activeClient?.supportsNativeTools?.() ?? true;
-        const parsed = parseModelResponse(assistantMessage, {
-          offered: this.getEffectiveTools().map((t) => t.function.name),
-          nativeTools,
-        });
+        const parsed = parseModelResponse(assistantMessage, { nativeTools });
 
         // Update cumulative token usage
         const promptEst = calculateContextBudget(
@@ -5409,10 +5406,7 @@ The pinned Objective Ledger lists the operator's requirements; your plan never r
 
       previousReplyTruncated = false;
       const nativeTools = activeClient?.supportsNativeTools?.() ?? true;
-      const parsed = parseModelResponse(assistantMessage, {
-        offered: this.getEffectiveTools().map((t) => t.function.name),
-        nativeTools,
-      });
+      const parsed = parseModelResponse(assistantMessage, { nativeTools });
       this.messages.push({
         role: "assistant",
         content: assistantMessage.content || "",
