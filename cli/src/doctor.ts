@@ -28,6 +28,7 @@ import { BuildIdentity, getBuildIdentity } from "./build_identity.js";
 import { defaultSessionsDir } from "./session.js";
 import { defaultTaskStateDir } from "./core/state.js";
 import { coreCargoManifest, resolveCoreBinary } from "./tools.js";
+import { isProjectEnvKey } from "./config.js";
 import { redactSecrets } from "./ui.js";
 import { SafePathError, ancestryProblem, chmodVerified, identityOf, mkdirVerified, readVerified, unlinkVerified, writeExclusiveVerified, type Identity } from "./safe_fs.js";
 import type { HarnessConfig } from "./types.js";
@@ -357,6 +358,29 @@ const configCheck: Check = async (ctx) => {
     return f("config.valid", "config", "fail", `Provider ${ctx.config.provider} is selected but no model is named.`, evidence, "Pass -m <model> or set NEXUS_MODEL in ~/.config/nexus/config.env (or pick one with /model).");
   }
   return f("config.valid", "config", "pass", "The configuration builds with the same rules a session uses.", evidence);
+};
+
+/** REQ-SEC-110: settings a workspace .env tried to set that Nexus ignores (they belong to the operator). */
+const projectEnvCheck: Check = async (ctx) => {
+  const workspace = ctx.config?.workspace ?? process.cwd();
+  const file = path.join(workspace, ".env");
+  if (!fs.existsSync(file)) return f("config.project_env_ignored", "config", "skip", "The workspace has no .env.", [file]);
+  let keys: string[];
+  try {
+    keys = Object.keys(parseDotenv(fs.readFileSync(file)));
+  } catch (err) {
+    return f("config.project_env_ignored", "config", "warn", "The workspace .env could not be read.", [file, String((err as Error)?.message ?? err)]);
+  }
+  const ignored = keys.filter((key) => !isProjectEnvKey(key));
+  if (!ignored.length) return f("config.project_env_ignored", "config", "pass", "The workspace .env sets only per-project settings.", [file]);
+  return f(
+    "config.project_env_ignored",
+    "config",
+    "warn",
+    `The workspace .env sets ${ignored.length} operator-only setting(s) that Nexus ignores: ${ignored.join(", ")}.`,
+    [file],
+    "Move settings you meant for Nexus to ~/.config/nexus/config.env (or your shell environment); a repository cannot change TLS, proxies, credentials, timeouts, the shell or trust.",
+  );
 };
 
 interface EndpointEvidence {
@@ -730,6 +754,7 @@ const CHECKS: Array<[string, Check]> = [
   ["runtime", runtimeCheck],
   ["launcher", launcherCheck],
   ["config", configCheck],
+  ["project_env_ignored", projectEnvCheck],
   ["endpoint", endpointChecks],
   ["inference", inferenceCheck],
   ["shell", shellCheck],
