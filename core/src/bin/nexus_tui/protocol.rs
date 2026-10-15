@@ -125,6 +125,14 @@ pub enum Review {
     },
     #[serde(rename = "command")]
     Shell { command: String },
+    #[serde(rename = "verifier")]
+    Verifier {
+        command: String,
+        #[serde(default)]
+        script: Option<String>,
+        #[serde(default)]
+        detail: Option<String>,
+    },
     #[serde(rename = "args")]
     Args { text: String, truncated: bool },
     /// A review kind this client does not know; the modal still asks, without a preview.
@@ -866,6 +874,14 @@ mod tests {
             review(r#"{"kind":"command","command":"npm test"}"#),
             Some(Review::Shell {
                 command: "npm test".into()
+            })
+        );
+        assert_eq!(
+            review(r#"{"kind":"verifier","command":"npm test","script":"jest","detail":"package.json:scripts.test"}"#),
+            Some(Review::Verifier {
+                command: "npm test".into(),
+                script: Some("jest".into()),
+                detail: Some("package.json:scripts.test".into()),
             })
         );
         assert_eq!(

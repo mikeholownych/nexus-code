@@ -21,7 +21,8 @@ import {
 import { CheckpointManager } from "./checkpoint.js";
 import { renderTokenGauge } from "./tokens.js";
 import { scanAndOnboardWorkspace } from "./onboard.js";
-import { runTestSuite } from "./tester.js";
+import { PolicyContext } from "./core/approval_policy.js";
+import { runTestSuiteWithExecutor, detectTestCommand, describeVerifier } from "./tester.js";
 import { copyToClipboard, readFromClipboard } from "./clipboard.js";
 import { encodeImageFile, formatVisionContent } from "./image.js";
 import { ThemeManager } from "./theme.js";
@@ -368,6 +369,14 @@ export class InteractiveRepl {
       console.log(`  Action: Delete ${pc.red(args.path)}`);
     } else if (toolName === "run_command") {
       console.log(`  Command: ${pc.bold(pc.magenta(args.command))}`);
+    } else if (toolName === "verifier") {
+      console.log(`  Verifier: ${pc.bold(pc.magenta(args.command))}${args.detail ? pc.dim(` (${args.detail})`) : ""}`);
+      if (args.script && args.script !== args.command) {
+        console.log(pc.bold(pc.dim("  Script:")));
+        for (const line of args.script.split("\n").slice(0, 10)) {
+          console.log(pc.dim(`    ${line}`));
+        }
+      }
     }
 
     while (true) {
@@ -398,6 +407,10 @@ export class InteractiveRepl {
         } else if (toolName === "patch_file") {
           console.log(pc.bold(pc.cyan(`\n--- Patch Preview: ${args.path} ---`)));
           console.log(args.patch);
+          console.log();
+        } else if (toolName === "verifier" && args.script) {
+          console.log(pc.bold(pc.cyan(`\n--- Verifier Script Preview: ${args.detail || args.command} ---`)));
+          console.log(args.script);
           console.log();
         } else {
           console.log(pc.dim("  No detailed diff available for this action.\n"));
@@ -1382,8 +1395,39 @@ export class InteractiveRepl {
             continue;
           } else if (cmd === "test") {
             const filterPattern = arg.trim() || undefined;
+            const commandOverride = filterPattern ? detectTestCommand(this.config.workspace, filterPattern) : undefined;
+            const desc = describeVerifier(this.config.workspace, commandOverride);
+            const testCmd = desc?.command || commandOverride || detectTestCommand(this.config.workspace);
+
+            // Verifier gating under review mode / untrusted workspace
+            const isTrusted = isWorkspaceTrusted(this.config.workspace, Boolean(this.config.readOnly));
+            const mode = this.config.approvalMode ?? (this.config.readOnly ? "read-only" : (this.config.fullAccess ? "auto" : (isTrusted ? "auto" : "review")));
+            const policyContext: PolicyContext = {
+              mode,
+              trusted: isTrusted,
+              sandbox: this.config.sandbox,
+              fullAccess: Boolean(this.config.fullAccess),
+            };
+            if (this.agent.getApprovalPolicy().requiresDecision("exec", policyContext)) {
+              const approved = await this.confirmAction("verifier", {
+                command: testCmd,
+                script: desc?.script,
+                detail: desc?.evidence,
+                digest: desc?.digest,
+              });
+              if (!approved) {
+                console.log(pc.yellow("  Test run aborted by user.\n"));
+                continue;
+              }
+            }
+
             console.log(pc.dim(`🧪 Running automated test suite${filterPattern ? ` matching "${filterPattern}"` : ""}...`));
-            const res = runTestSuite(this.config.workspace, filterPattern);
+            const bridge = this.agent.getBridge();
+            const res = await runTestSuiteWithExecutor(
+              this.config.workspace,
+              (command) => bridge.executeTool("run_command", { command, timeout_secs: 120 }),
+              commandOverride,
+            );
             console.log(pc.dim(`  Command: ${res.command}`));
             if (res.success) {
               console.log(pc.green(`✔ Test suite PASSED!\n`));
