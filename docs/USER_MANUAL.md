@@ -229,7 +229,7 @@ nexus (engineering/b0) my-app ❯ !npm test
 | `/commit [msg]` | Generate or execute Conventional Commit from staged changes |
 | `/audit [count]` | Inspect visual tool execution audit trail (recent N entries) |
 | `/compact [--llm]` | Distill earlier conversation into structured memory; queued while work runs, committed durably (archive, task state, session) |
-| `/mode [auto\|review]` | Toggle autonomous execution vs human approval before edits |
+| `/mode [auto\|review]` | Toggle autonomous execution vs human approval. Review mode asks before file changes, commands (including MCP and plugin tools) and network access; network access is asked once per destination per session |
 | `/sessions` | List saved past sessions |
 | `/save [name]` | Save current conversation session to `~/.nexus/sessions/` |
 | `/resume [id]` | Resume an existing session |

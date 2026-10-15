@@ -12,6 +12,8 @@ import {
   createDefaultRegistry,
   defaultRegistry,
   changesWorkspace,
+  needsOperatorDecision,
+  type EffectClass,
 } from "./core/capabilities.js";
 import {
   ExecutionSpine,
@@ -640,6 +642,20 @@ function normalizeMessageContent(content: ChatMessage["content"]): NormalizedMes
   return { text, preserveOriginal };
 }
 
+/**
+ * The destination an egress call is approved for: the URL's origin, or the tool family when the call names no URL
+ * (a search, or acting on the page the browser already has open). Review mode asks once per destination per session.
+ */
+function egressOriginOf(toolName: string, args: Record<string, any>): string {
+  const url = typeof args.url === "string" ? args.url : undefined;
+  if (url) {
+    try {
+      return new URL(url).origin;
+    } catch {}
+  }
+  return toolName.startsWith("browser_") ? "browser:current-page" : `tool:${toolName}`;
+}
+
 const READ_ONLY_TOOLS = new Set([
   "read_file",
   "batch_read",
@@ -889,6 +905,8 @@ export class AutonomousAgent {
   private completionSummary?: { summary: string; notes?: string };
   private observer?: AgentObserver;
   private toolDispatchSeq = 0;
+  /** Egress destinations the operator approved this session (cleared on reset and restore: approvals never persist). */
+  private approvedEgressOrigins = new Set<string>();
   private verifiedWorktreeCompletion: boolean = false;
   private worktreeRunTurnAuthorized: boolean = false;
   private managedWorktreeWorkspaceSwitch: boolean = false;
@@ -1547,6 +1565,7 @@ export class AutonomousAgent {
   }
 
   public restoreSession(msgs: ChatMessage[], unverifiedChangesPending?: boolean, objective?: ObjectiveLedger | null, findings?: readonly string[] | null): void {
+    this.approvedEgressOrigins.clear();
     this.messages = [...msgs];
     this.restoreFindings(findings);
     this.objective = objective ?? undefined;
@@ -1708,6 +1727,7 @@ export class AutonomousAgent {
   }
 
   public resetConversation(): void {
+    this.approvedEgressOrigins.clear();
     this.changeBaseline = undefined;
     this.enabledToolGroups = new Set();
     this.stepNoticeStep = 0;
@@ -3942,11 +3962,15 @@ The pinned Objective Ledger lists the operator's requirements; your plan never r
     this.activity("tool", { tool: toolName, ...(subject ? { subject } : {}) });
 
     const cap = this.capabilityRegistry.getByToolName(toolName);
-    const isMutating = cap ? cap.mutating : !READ_ONLY_TOOLS.has(toolName);
+    // Tools outside the registry (MCP servers, plugins) are treated as running code: review mode asks before them.
+    const effect: EffectClass = cap ? cap.effect : READ_ONLY_TOOLS.has(toolName) ? "read_workspace" : "exec";
+    const egressOrigin = effect === "egress" ? egressOriginOf(toolName, args) : undefined;
+    const askOperator = needsOperatorDecision(effect) && !(egressOrigin && this.approvedEgressOrigins.has(egressOrigin));
 
-    if (onConfirm && isMutating) {
+    if (onConfirm && askOperator) {
       this.activity("approval", { tool: toolName, ...(subject ? { subject } : {}) });
       const approved = await onConfirm(toolName, args);
+      if (approved && egressOrigin) this.approvedEgressOrigins.add(egressOrigin);
       if (approved) this.activity("tool", { tool: toolName, ...(subject ? { subject } : {}) });
       if (!approved) {
         console.log(`⚠️ Tool execution cancelled by user.`);
