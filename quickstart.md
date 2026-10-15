@@ -52,7 +52,19 @@ nexus doctor
 nexus
 ```
 
-Enter a small task, review requested actions, and inspect the reported turn outcome. Use `nexus --help` and `/help` for implemented commands. To require human approval for edits and shell commands, start with `nexus repl --approve`.
+Enter a small task, review requested actions, and inspect the reported turn outcome. Use `nexus --help` and `/help` for implemented commands.
+
+### Trust your own repository
+
+By default, an untrusted workspace opens in `review` posture, asking for your explicit confirmation before executing shell commands, file modifications, network egress, or test suites.
+
+If this is your own repository and you want autonomous execution, trust it:
+
+```sh
+nexus trust .
+```
+
+Once trusted, Nexus runs in `auto` posture. To force review mode regardless of trust, pass `--approve`. To run autonomously in CI or scripts without trusting the workspace permanently, pass `--yes` (or `--mode auto`, or set `NEXUS_APPROVAL_MODE=auto`).
 
 Nexus reports `VERIFIED` only when its selected verifier passes. `UNVERIFIED`, `BLOCKED`, and `LIMIT_REACHED` are distinct outcomes; a completed model response alone does not mean the work is correct.
 
