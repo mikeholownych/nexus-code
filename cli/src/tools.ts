@@ -866,8 +866,24 @@ export class RustCoreBridge {
       }
     }
 
-    if (["write_file", "edit_file", "patch_file", "delete_file", "read_file", "list_dir", "file_tree", "outline_file", "cst_symbols"].includes(toolName)) {
-      const targetPath = args.path || "";
+    const PATH_CHECKED_TOOLS = [
+      "write_file",
+      "edit_file",
+      "patch_file",
+      "delete_file",
+      "read_file",
+      "file_info",
+      "count_lines",
+      "list_dir",
+      "file_tree",
+      "outline_file",
+      "cst_symbols",
+      "lsp_hover",
+      "lsp_definition",
+      "lsp_diagnostics",
+    ];
+    if (PATH_CHECKED_TOOLS.includes(toolName)) {
+      const targetPath = args.path || args.target_file || args.file_path || "";
       const check = this.securityManager.isPathProtected(targetPath);
       if (check.protected) {
         return {
@@ -1172,7 +1188,10 @@ export class RustCoreBridge {
       }
     }
 
-    // Default the shell and wrap with sandbox if enabled
+    // Default the shell and wrap with sandbox if enabled.
+    // Note: Path protection checks are enforced on all file read/write/edit tools (REQ-SEC-118).
+    // For run_command, path protection is advisory because shell commands (e.g. cat, grep)
+    // execute through the host shell environment.
     if (toolName === "run_command") {
       if (!args.shell) {
         args.shell = this.defaultShell;

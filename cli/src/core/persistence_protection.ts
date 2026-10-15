@@ -1,4 +1,6 @@
 import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
 import { createHash, randomUUID } from "node:crypto";
 import { InformationFlowBoundary } from "./egress.js";
 import { WorkspacePath } from "./workspace_path.js";
@@ -146,3 +148,35 @@ export function writeProtectedTextFile(filePath: string, content: string): void 
     throw new Error("Protected persistence write failed");
   }
 }
+
+export interface MiddlewareAuditRecord {
+  kind: "middleware_rewrite";
+  plugin: string;
+  tool: string;
+  phase: "pre" | "post";
+  before_digest: string;
+  after_digest: string;
+  timestamp?: string;
+  workspace?: string;
+}
+
+/**
+ * Record a middleware I/O rewrite audit record to ~/.nexus/audit.log (REQ-SEC-116, EXT-004).
+ */
+export function recordMiddlewareAudit(record: MiddlewareAuditRecord): void {
+  try {
+    const auditDir = path.join(os.homedir(), ".nexus");
+    if (!fs.existsSync(auditDir)) {
+      fs.mkdirSync(auditDir, { recursive: true });
+    }
+    const auditPath = path.join(auditDir, "audit.log");
+    const entry = {
+      timestamp: record.timestamp || new Date().toISOString(),
+      ...record,
+    };
+    fs.appendFileSync(auditPath, JSON.stringify(entry) + "\n", "utf8");
+  } catch {
+    // Ignore audit log write errors in restricted environments
+  }
+}
+

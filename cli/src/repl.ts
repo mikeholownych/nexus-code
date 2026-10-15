@@ -1085,7 +1085,7 @@ export class InteractiveRepl {
             await this.agent.initExtensibility();
             const plugins = this.agent.getPluginManager().listPlugins();
             if (plugins.length === 0) {
-              console.log(pc.yellow("No active plugins found in ~/.nexus/plugins/ or ~/.config/opencode/plugins/\n"));
+              console.log(pc.yellow("No active plugins found in ~/.nexus/plugins/ or ~/.config/nexus/plugins/\n"));
             } else {
               console.log(pc.bold(pc.white("\nLoaded Custom Plugins:")));
               for (const p of plugins) {

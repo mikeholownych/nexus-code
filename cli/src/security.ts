@@ -26,9 +26,9 @@ const DEFAULT_PROTECTED_PATHS = [
   ".git",
   // The operator's list of trusted workspaces: the agent must not trust a workspace for itself.
   "trusted_workspaces.json",
-  ".env",
-  "id_rsa",
-  "id_ed25519",
+  ".env*",
+  "id_rsa*",
+  "id_ed25519*",
 ];
 
 export class SecurityManager {
@@ -88,22 +88,86 @@ export class SecurityManager {
     return { blocked: false };
   }
 
+  /**
+   * Check whether a path matches any protected pattern (REQ-SEC-118, ACC-TRUST-09).
+   * Matches `.env*` and case-insensitive variants, and inspects the canonical target.
+   * Path protection is enforced on all file read/write/edit tools; for `run_command` it is advisory.
+   */
   public isPathProtected(targetPath: string): { protected: boolean; reason?: string } {
-    const clean = targetPath.replace(/\\/g, "/");
-    for (const pattern of this.policy.protectedPaths || []) {
-      if (
-        clean === pattern ||
-        clean.startsWith(pattern + "/") ||
-        clean.includes("/" + pattern) ||
-        clean.endsWith("/" + pattern) ||
-        clean.endsWith(pattern)
-      ) {
-        return {
-          protected: true,
-          reason: `Security Policy Violation: Path '${targetPath}' is protected under security policy`,
-        };
-      }
+    if (!targetPath || typeof targetPath !== "string") {
+      return { protected: false };
     }
+
+    const checkCandidate = (cand: string): { protected: boolean; reason?: string } => {
+      const clean = cand.replace(/\\/g, "/");
+      const segments = clean.split("/").filter(Boolean);
+      const base = path.posix.basename(clean).toLowerCase();
+
+      for (const pattern of this.policy.protectedPaths || []) {
+        const patLower = pattern.toLowerCase();
+        if (patLower === ".env*" || patLower === ".env") {
+          if (segments.some((seg) => seg.toLowerCase().startsWith(".env"))) {
+            return {
+              protected: true,
+              reason: `Security Policy Violation: Path '${targetPath}' matches protected pattern '${pattern}'`,
+            };
+          }
+        } else if (patLower.endsWith("*")) {
+          const prefix = patLower.slice(0, -1);
+          if (segments.some((seg) => seg.toLowerCase().startsWith(prefix))) {
+            return {
+              protected: true,
+              reason: `Security Policy Violation: Path '${targetPath}' matches protected pattern '${pattern}'`,
+            };
+          }
+        } else {
+          if (
+            segments.some((seg) => seg.toLowerCase() === patLower) ||
+            base === patLower ||
+            clean.toLowerCase() === patLower ||
+            clean.toLowerCase().endsWith("/" + patLower)
+          ) {
+            return {
+              protected: true,
+              reason: `Security Policy Violation: Path '${targetPath}' is protected under security policy`,
+            };
+          }
+        }
+      }
+      return { protected: false };
+    };
+
+    // 1. Raw given path
+    const rawCheck = checkCandidate(targetPath);
+    if (rawCheck.protected) return rawCheck;
+
+    // 2. Absolute path in workspace
+    const absPath = path.isAbsolute(targetPath) ? targetPath : path.resolve(this.workspace, targetPath);
+    const absCheck = checkCandidate(absPath);
+    if (absCheck.protected) return absCheck;
+
+    // 3. Canonical target (resolves symlinks)
+    try {
+      if (fs.existsSync(absPath)) {
+        const real = fs.realpathSync(absPath);
+        const realCheck = checkCandidate(real);
+        if (realCheck.protected) {
+          return {
+            protected: true,
+            reason: `Security Policy Violation: Path '${targetPath}' resolves to protected target '${real}'`,
+          };
+        }
+      } else {
+        const dir = path.dirname(absPath);
+        if (fs.existsSync(dir)) {
+          const realDir = fs.realpathSync(dir);
+          const canonicalTarget = path.join(realDir, path.basename(absPath));
+          const canonCheck = checkCandidate(canonicalTarget);
+          if (canonCheck.protected) return canonCheck;
+        }
+      }
+    } catch {}
+
     return { protected: false };
   }
 
