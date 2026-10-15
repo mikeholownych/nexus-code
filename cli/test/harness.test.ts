@@ -2818,24 +2818,35 @@ error[E0308]: mismatched types
     }
   });
 
-  test("PluginManager isolates custom plugins in worker threads with timeout boundary (Candidate #38)", async () => {
+  test("PluginManager executes custom plugins in-process without false sandbox (REQ-SEC-117)", async () => {
     const { PluginManager } = await import("../src/plugins.js");
-    const pm = new PluginManager(process.cwd());
+    const pm = new PluginManager(process.cwd()) as any;
 
-    assert.strictEqual(pm.isWorkerSandboxingSupported(), true);
+    // False worker sandboxing methods have been removed (REQ-SEC-117)
+    assert.strictEqual(pm.isWorkerSandboxingSupported, undefined);
+    assert.strictEqual(pm.executeSandboxed, undefined);
 
-    // 1. Successful sandboxed execution
-    const validFn = "async (args) => { return { computed: args.x * 2, status: 'sandboxed_ok' }; }";
-    const res1 = await pm.executeSandboxed(validFn, { x: 21 }, { timeoutMs: 2000 });
-    assert.strictEqual(res1.success, true);
-    assert.ok(res1.output.includes("42"));
-    assert.ok(res1.output.includes("sandboxed_ok"));
-
-    // 2. Timeout protection for infinite loop
-    const infiniteFn = "async () => { while(true) {} }";
-    const res2 = await pm.executeSandboxed(infiniteFn, {}, { timeoutMs: 200 });
-    assert.strictEqual(res2.success, false);
-    assert.ok(res2.error?.includes("timed out"));
+    // Custom tools execute in-process
+    pm.registerPlugin({
+      name: "in-process-plugin",
+      customTools: [
+        {
+          definition: {
+            type: "function",
+            function: {
+              name: "custom_double",
+              description: "doubles a number",
+              parameters: { type: "object", properties: { x: { type: "number" } } },
+            },
+          },
+          handler: async (args: any) => ({ success: true, output: JSON.stringify({ computed: args.x * 2 }) }),
+        },
+      ],
+    });
+    assert.strictEqual(pm.isCustomTool("custom_double"), true);
+    const res = await pm.executeCustomTool("custom_double", { x: 21 });
+    assert.strictEqual(res.success, true);
+    assert.ok(res.output.includes("42"));
   });
 
   test("TerminalDashboard renders split-screen layout and metrics snapshot (Candidate #19)", async () => {

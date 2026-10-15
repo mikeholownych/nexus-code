@@ -12,6 +12,7 @@ export type FlightEventType =
   | "tool_result"
   | "durable_state"
   | "file_diff"
+  | "middleware_rewrite"
   | "turn_end"
   | "session_end";
 
@@ -205,6 +206,20 @@ export class FlightRecorder {
       durationMs,
       tokenStats,
     });
+  }
+
+  public recordMiddlewareRewrite(
+    step: number | undefined,
+    payload: {
+      kind: "middleware_rewrite";
+      plugin: string;
+      tool: string;
+      phase: "pre" | "post";
+      before_digest: string;
+      after_digest: string;
+    }
+  ): FlightEvent {
+    return this.appendEvent("middleware_rewrite", step, payload);
   }
 }
 

@@ -172,7 +172,7 @@ async function plugins({ host }: SlashContext): Promise<SlashOutcome> {
   const agent = host.app.getAgent();
   await agent.initExtensibility();
   const list = agent.getPluginManager().listPlugins();
-  if (!list.length) return reply("plugins", "No plugins loaded from ~/.nexus/plugins/ or ~/.config/opencode/plugins/.");
+  if (!list.length) return reply("plugins", "No plugins loaded from ~/.nexus/plugins/ or ~/.config/nexus/plugins/.");
   return reply("plugins", list.map((p) => `• ${p.name}: ${p.description} (custom tools: ${p.customToolCount})`).join("\n"));
 }
 

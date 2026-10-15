@@ -1053,6 +1053,7 @@ export class AutonomousAgent {
     this.worktreeManager = new WorktreeManager(ws);
     if (config.recordFlight) {
       this.flightRecorder = new FlightRecorder(ws);
+      this.pluginManager.setFlightRecorder(this.flightRecorder);
     }
     this.candidateTracker = new CandidateTracker();
     this.capabilityRegistry = createDefaultRegistry();
@@ -1396,6 +1397,7 @@ export class AutonomousAgent {
 
   public enableFlightRecorder(flightId?: string): FlightRecorder {
     this.flightRecorder = new FlightRecorder(this.config.workspace, flightId);
+    this.pluginManager.setFlightRecorder(this.flightRecorder);
     return this.flightRecorder;
   }
 

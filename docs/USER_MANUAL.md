@@ -286,12 +286,12 @@ Nexus Code provides high-performance tools executed via compiled native 64-bit R
 ## 4. Safety, Compliance & Resilience
 
 - **Workspace Symlink Boundary Confinement**: Native Rust canonicalization verifies that neither relative paths nor symlinks can escape the workspace jail directory.
-- **Configurable Security Policy (`.nexus-security.json`)**: Declare repository-specific blocked shell commands, protected files (`.git`, `.env`, keys), and allowed outbound network domains.
+- **Configurable Security Policy (`.nexus-security.json`)**: Declare repository-specific blocked shell commands, protected files (`.git`, `.env*`, keys), and allowed outbound network domains. Protected-path checks cover case-insensitive variants, `.env*` prefixes, and canonical targets across all file read/write/edit tools; for `run_command` path protection is advisory because shell commands execute in the host shell environment.
 - **Dry-Run & Read-Only Modes**:
   - `--dry-run`: Intercepts file writes and mutating commands to simulate changes without touching disk.
   - `--read-only`: Rejects all file modifications and non-read shell commands with an immediate error.
 - **Lightweight Container Sandboxing (`--sandbox`)**: Restricts filesystem mutation strictly to the target workspace using Linux Bubblewrap (`bwrap`) or Docker isolation.
-- **Worker Thread Plugin Sandboxing**: Untrusted or custom plugin handlers execute in isolated Node.js `worker_threads` with strict timeout boundaries and memory caps.
+- **In-Process Plugin Execution & Middleware Auditing**: Custom plugin handlers and middleware execute in-process with full user authority. Any middleware rewriting of tool I/O is cryptographically audited with before-and-after SHA-256 digests in both the audit log and flight log (EXT-004).
 - **Workspace Trust**: A workspace's own `.mcp.json` / `mcp.json` servers and `.nexus/plugins/` / `plugins/` modules run code from the workspace, so they are loaded only after you trust it: `nexus trust [path]` (undo with `nexus trust --remove`, list with `nexus trust --list`; recorded in `~/.config/nexus/trusted_workspaces.json`, which the agent's file tools cannot write). Untrusted, they are not loaded and Nexus says so (a notice at start, `nexus doctor`, `nexus mcp`, `nexus plugins`); in `--read-only` mode they are never loaded. Servers and plugins in your home configuration (`~/.config/nexus/`, `~/.nexus/`) are always loaded.
 - **MCP Server Environment**: MCP servers start with basic process, locale, proxy (`HTTPS_PROXY`, `NO_PROXY`, …) and CA-trust (`SSL_CERT_FILE`, `NODE_EXTRA_CA_CERTS`, …) variables only — not Nexus's own credentials. Give a server the token it needs in its `env` block in `mcp.json`.
 - **Build Identity**: `nexus --version` and `nexus doctor` show the commit the running build was made from, its branch, and whether the source had uncommitted changes (`1.2.1 (cc177be91d15-dirty, feat/tui-surface)`), recorded at `make build`.

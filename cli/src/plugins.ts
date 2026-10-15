@@ -2,15 +2,12 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
 import { pathToFileURL } from "node:url";
-import { Worker } from "node:worker_threads";
+import { createHash } from "node:crypto";
 import { ToolDefinition, ExecutionResult } from "./types.js";
 import { isWorkspaceTrusted, WORKSPACE_PLUGIN_DIRS } from "./workspace_trust.js";
+import { recordMiddlewareAudit } from "./core/persistence_protection.js";
+import type { FlightRecorder } from "./flight.js";
 import pc from "picocolors";
-
-export interface SandboxedExecutionOptions {
-  timeoutMs?: number;
-  memoryLimitMb?: number;
-}
 
 export interface ToolMiddlewareContext {
   toolName: string;
@@ -43,12 +40,11 @@ export interface PluginHooks {
   }>;
 }
 
-/** Directories Nexus loads plugin modules (`*.js`, `*.mjs`) from at turn start. */
+/** Directories Nexus loads plugin modules (`*.js`, `*.mjs`) from at turn start (REQ-SEC-115). */
 export function pluginDirs(workspace: string, isWorkspaceTrusted = false): string[] {
   const dirs = [
     path.join(os.homedir(), ".nexus", "plugins"),
     path.join(os.homedir(), ".config", "nexus", "plugins"),
-    path.join(os.homedir(), ".config", "opencode", "plugins"),
   ];
   if (isWorkspaceTrusted) dirs.unshift(...WORKSPACE_PLUGIN_DIRS.map((dir) => path.join(workspace, dir)));
   return dirs;
@@ -58,14 +54,20 @@ export class PluginManager {
   private workspace: string;
   private readOnly: boolean;
   private trusted: boolean;
+  private flightRecorder?: FlightRecorder;
   private plugins: Map<string, PluginHooks> = new Map();
   private customToolsMap: Map<string, (args: Record<string, any>) => Promise<ExecutionResult>> = new Map();
   private customToolDefs: ToolDefinition[] = [];
 
-  constructor(workspace: string, options?: { readOnly?: boolean; trusted?: boolean }) {
+  constructor(workspace: string, options?: { readOnly?: boolean; trusted?: boolean; flightRecorder?: FlightRecorder }) {
     this.workspace = path.resolve(workspace);
     this.readOnly = Boolean(options?.readOnly);
     this.trusted = options?.trusted !== undefined ? options.trusted : isWorkspaceTrusted(this.workspace, this.readOnly);
+    this.flightRecorder = options?.flightRecorder;
+  }
+
+  public setFlightRecorder(flightRecorder: FlightRecorder): void {
+    this.flightRecorder = flightRecorder;
   }
 
   public async loadPlugins(): Promise<void> {
@@ -146,30 +148,49 @@ export class PluginManager {
 
   /**
    * Execute tool through the pre-tool and post-tool middleware pipeline (Candidate #41)
+   * Audits any middleware rewriting of tool I/O with before/after SHA-256 digests (REQ-SEC-116, EXT-004).
    */
   public async executeToolPipeline(
     toolName: string,
     initialArgs: Record<string, any>,
     coreExecutor: (args: Record<string, any>) => Promise<ExecutionResult>
   ): Promise<ExecutionResult> {
-    const preMiddlewares: Array<NonNullable<PluginHooks["preToolExecution"]>> = [];
-    const postMiddlewares: Array<NonNullable<PluginHooks["postToolExecution"]>> = [];
+    const preMiddlewares: Array<{ pluginName: string; hook: NonNullable<PluginHooks["preToolExecution"]> }> = [];
+    const postMiddlewares: Array<{ pluginName: string; hook: NonNullable<PluginHooks["postToolExecution"]> }> = [];
 
-    for (const plugin of this.plugins.values()) {
+    for (const [pluginKey, plugin] of this.plugins.entries()) {
+      const pluginName = plugin.name || pluginKey;
       if (plugin.preToolExecution) {
-        preMiddlewares.push(plugin.preToolExecution);
+        preMiddlewares.push({ pluginName, hook: plugin.preToolExecution });
       }
       if (plugin.postToolExecution) {
-        postMiddlewares.push(plugin.postToolExecution);
+        postMiddlewares.push({ pluginName, hook: plugin.postToolExecution });
       }
     }
 
     const dispatch = async (idx: number, currentArgs: Record<string, any>): Promise<ExecutionResult> => {
       if (idx < preMiddlewares.length) {
-        const mw = preMiddlewares[idx];
-        return mw(
+        const { pluginName, hook } = preMiddlewares[idx];
+        const beforeArgs = currentArgs;
+        const beforeDigest = sha256(JSON.stringify(beforeArgs ?? {}));
+
+        return hook(
           { toolName, args: currentArgs, workspace: this.workspace },
-          async (nextArgs) => dispatch(idx + 1, nextArgs || currentArgs)
+          async (nextArgs) => {
+            const effectiveNextArgs = nextArgs || currentArgs;
+            const afterDigest = sha256(JSON.stringify(effectiveNextArgs ?? {}));
+            if (beforeDigest !== afterDigest) {
+              this.recordMiddlewareRewrite({
+                kind: "middleware_rewrite",
+                plugin: pluginName,
+                tool: toolName,
+                phase: "pre",
+                before_digest: beforeDigest,
+                after_digest: afterDigest,
+              });
+            }
+            return dispatch(idx + 1, effectiveNextArgs);
+          }
         );
       }
       return coreExecutor(currentArgs);
@@ -177,20 +198,51 @@ export class PluginManager {
 
     let result = await dispatch(0, initialArgs);
 
-    for (const postMw of postMiddlewares) {
+    for (const { pluginName, hook } of postMiddlewares) {
       try {
-        result = await postMw({
+        const beforeResult = result;
+        const beforeDigest = sha256(JSON.stringify(beforeResult ?? {}));
+        const newResult = await hook({
           toolName,
           args: initialArgs,
           result,
           workspace: this.workspace,
         });
+        const afterDigest = sha256(JSON.stringify(newResult ?? {}));
+        if (beforeDigest !== afterDigest) {
+          this.recordMiddlewareRewrite({
+            kind: "middleware_rewrite",
+            plugin: pluginName,
+            tool: toolName,
+            phase: "post",
+            before_digest: beforeDigest,
+            after_digest: afterDigest,
+          });
+        }
+        result = newResult;
       } catch {
         // If post-middleware fails, keep existing result
       }
     }
 
     return result;
+  }
+
+  private recordMiddlewareRewrite(record: {
+    kind: "middleware_rewrite";
+    plugin: string;
+    tool: string;
+    phase: "pre" | "post";
+    before_digest: string;
+    after_digest: string;
+  }): void {
+    recordMiddlewareAudit({
+      ...record,
+      workspace: this.workspace,
+    });
+    if (this.flightRecorder) {
+      this.flightRecorder.recordMiddlewareRewrite(undefined, record);
+    }
   }
 
   public async notifyTurnStart(prompt: string, workspace: string): Promise<void> {
@@ -244,104 +296,8 @@ export class PluginManager {
     }
     return list;
   }
+}
 
-  /**
-   * Check if worker thread isolation is supported
-   */
-  public isWorkerSandboxingSupported(): boolean {
-    return typeof Worker !== "undefined";
-  }
-
-  /**
-   * Execute untrusted or custom plugin code inside an isolated Worker thread (Candidate #38)
-   */
-  public async executeSandboxed(
-    handlerCode: string,
-    args: Record<string, any>,
-    options: SandboxedExecutionOptions = {}
-  ): Promise<ExecutionResult> {
-    const timeoutMs = options.timeoutMs || 5000;
-    const memoryLimitMb = options.memoryLimitMb || 128;
-
-    const workerScript = `
-      const { parentPort, workerData } = require('node:worker_threads');
-      (async () => {
-        try {
-          const fn = eval('(' + workerData.code + ')');
-          const result = await fn(workerData.args);
-          parentPort.postMessage({ success: true, result });
-        } catch (err) {
-          parentPort.postMessage({ success: false, error: err.message || String(err) });
-        }
-      })();
-    `;
-
-    return new Promise((resolve) => {
-      let isSettled = false;
-      let worker: Worker | null = null;
-      let timer: NodeJS.Timeout | null = null;
-
-      const cleanup = () => {
-        if (timer) clearTimeout(timer);
-        if (worker) {
-          worker.terminate().catch(() => {});
-          worker = null;
-        }
-      };
-
-      try {
-        worker = new Worker(workerScript, {
-          eval: true,
-          workerData: { code: handlerCode, args },
-          resourceLimits: {
-            maxOldGenerationSizeMb: memoryLimitMb,
-          },
-        });
-
-        timer = setTimeout(() => {
-          if (!isSettled) {
-            isSettled = true;
-            cleanup();
-            resolve({
-              success: false,
-              output: "",
-              error: `Plugin execution timed out after ${timeoutMs}ms in sandboxed worker thread.`,
-            });
-          }
-        }, timeoutMs);
-
-        worker.on("message", (msg) => {
-          if (!isSettled) {
-            isSettled = true;
-            cleanup();
-            if (msg.success) {
-              const out = typeof msg.result === "string" ? msg.result : JSON.stringify(msg.result, null, 2);
-              resolve({ success: true, output: out });
-            } else {
-              resolve({ success: false, output: "", error: msg.error });
-            }
-          }
-        });
-
-        worker.on("error", (err) => {
-          if (!isSettled) {
-            isSettled = true;
-            cleanup();
-            resolve({ success: false, output: "", error: `Worker error: ${err.message}` });
-          }
-        });
-
-        worker.on("exit", (code) => {
-          if (!isSettled && code !== 0) {
-            isSettled = true;
-            cleanup();
-            resolve({ success: false, output: "", error: `Worker thread exited with code ${code}` });
-          }
-        });
-      } catch (err: any) {
-        cleanup();
-        resolve({ success: false, output: "", error: `Failed to spawn worker thread: ${err.message}` });
-      }
-    });
-  }
+function sha256(content: string): string {
+  return createHash("sha256").update(content).digest("hex");
 }

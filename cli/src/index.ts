@@ -429,7 +429,7 @@ program
     await pm.loadPlugins();
     const plugins = pm.listPlugins();
     if (plugins.length === 0) {
-      console.log(pc.yellow("\nNo active plugins found in ~/.nexus/plugins/ or ~/.config/opencode/plugins/\n"));
+      console.log(pc.yellow("\nNo active plugins found in ~/.nexus/plugins/ or ~/.config/nexus/plugins/\n"));
       return;
     }
     console.log(pc.bold(pc.cyan("\n=== Loaded Custom Plugins ===\n")));
