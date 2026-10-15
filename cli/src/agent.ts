@@ -3323,7 +3323,8 @@ export class AutonomousAgent {
 
     // Invariant prompt prefix optimization for local AI:
     // Fixed canonical few-shots ensure byte-exact prefix caching across turns (vLLM / llama.cpp / Ollama)
-    const fewShotSection = `\n${selectRelevantFewShots(this.config.workspace)}\n`;
+    const nativeTools = this.client?.supportsNativeTools?.() ?? true;
+    const fewShotSection = `\n${selectRelevantFewShots(this.config.workspace, 2, { nativeTools })}\n`;
     const tddSection = this.config.tdd
       ? `\n### Test-Driven Development (RED-GREEN-REFACTOR) Protocol Enforced:
 1. PHASE 1 (RED): Before modifying any production code, author a reproduction test that asserts the desired behavior and verify that it FAILS.
@@ -4725,7 +4726,11 @@ The pinned Objective Ledger lists the operator's requirements; your plan never r
         this.noteAdmission(activeClient, currentStep);
 
         // Parse the response using hybrid parser
-        const parsed = parseModelResponse(assistantMessage, this.getEffectiveTools().map((t) => t.function.name));
+        const nativeTools = activeClient?.supportsNativeTools?.() ?? true;
+        const parsed = parseModelResponse(assistantMessage, {
+          offered: this.getEffectiveTools().map((t) => t.function.name),
+          nativeTools,
+        });
 
         // Update cumulative token usage
         const promptEst = calculateContextBudget(
@@ -4779,6 +4784,20 @@ The pinned Objective Ledger lists the operator's requirements; your plan never r
 
         // No tool calls: the model stopped acting. That is a fact about the model, not evidence of success.
         if (parsed.toolCalls.length === 0) {
+          // If a malformed or unknown tool call was dropped, give the model a notice and continue turn (ACC-VER-02)
+          if (parsed.notices && parsed.notices.length > 0) {
+            for (const notice of parsed.notices) {
+              this.ui.stopSpinner(false, `[notice] ${notice}`);
+              this.messages.push({
+                role: "user",
+                content: `[Nexus: ${notice}]`,
+              });
+            }
+            this.persistProgress({ messages: true });
+            endStep();
+            continue;
+          }
+
           // Steering that arrived while the model was answering is applied next step instead of being dropped.
           if (this.hasQueuedSteering()) {
             endStep();
@@ -5389,7 +5408,11 @@ The pinned Objective Ledger lists the operator's requirements; your plan never r
       }
 
       previousReplyTruncated = false;
-      const parsed = parseModelResponse(assistantMessage, this.getEffectiveTools().map((t) => t.function.name));
+      const nativeTools = activeClient?.supportsNativeTools?.() ?? true;
+      const parsed = parseModelResponse(assistantMessage, {
+        offered: this.getEffectiveTools().map((t) => t.function.name),
+        nativeTools,
+      });
       this.messages.push({
         role: "assistant",
         content: assistantMessage.content || "",
