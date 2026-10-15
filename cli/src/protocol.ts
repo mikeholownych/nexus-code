@@ -50,11 +50,16 @@ export type SidecarEvent =
       workspace: string;
       workspace_name: string;
       model: string;
-      mode: "auto" | "review";
+      mode: "auto" | "review" | "read-only";
       git: { branch: string; dirty: number } | null;
       busy: boolean;
       /** The id the session is saved under (shown so it can be resumed or referred to). */
       session?: string;
+      posture?: {
+        mode: "auto" | "review" | "read-only";
+        sandbox: string;
+        trusted: boolean;
+      };
     }
   | { type: "assistant.delta"; turn_id: string; text: string }
   /** What the running turn is doing; sent on every phase change, independent of model output. */

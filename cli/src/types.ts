@@ -58,6 +58,8 @@ export interface HarnessConfig {
   coreBinaryPath?: string;   // Path to compiled harness-core executable
   dryRun?: boolean;          // Dry-run simulation mode without persisting file modifications
   readOnly?: boolean;        // Reject all mutating tool executions and commands
+  approvalMode?: "auto" | "review" | "read-only"; // Execution posture: auto, review, or read-only (DEC-01 option C)
+  yes?: boolean;             // Run non-interactively without confirmation prompts (forces auto mode)
   fullAccess?: boolean;      // Broad full-access mode executing without confirmation prompts (AUTH-007, AUTH-008)
   taskClass?: string;        // Routing hint sent to the gateway as X-Task-Class (e.g. "review", "architecture")
   plannerTaskClass?: string; // Same, for the planner client
@@ -133,3 +135,5 @@ export const DEFAULT_CONTINUATION: ContinuationBudget = {
   maxRecoveries: 2,
   maxCompletionNudges: 2,
 };
+
+export type ApprovalMode = "auto" | "review" | "read-only";

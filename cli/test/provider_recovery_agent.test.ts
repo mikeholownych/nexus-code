@@ -36,6 +36,7 @@ async function withAgent<T>(
   const agent = new AutonomousAgent({
     endpoint: gws[0].url, fallbackEndpoints: gws.slice(1).map((g) => g.url),
     model: "m", maxSteps: 6, temperature: 0, workspace: repo, shell: "bash",
+    approvalMode: "auto", fullAccess: true,
   } as any);
   const a = agent as any;
   a.recoveryClock = clock;

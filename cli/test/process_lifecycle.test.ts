@@ -47,7 +47,7 @@ describe("cancelling a turn ends the command it started", { skip: resolveCoreBin
       : { kind: "text", content: "stopped" });
     const repo = makeRepo();
     const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-process-state-"));
-    const agent = new AutonomousAgent({ endpoint: gw.url, model: "m", maxSteps: 4, temperature: 0, workspace: repo, shell: "bash" } as any);
+    const agent = new AutonomousAgent({ endpoint: gw.url, model: "m", maxSteps: 4, temperature: 0, workspace: repo, shell: "bash", approvalMode: "auto", fullAccess: true } as any);
     (agent as any).stateManager = new DurableStateManager({ baseDir: stateDir, workspacePaths: [(agent as any).primaryWorkspacePathIdentity] });
     try {
       const turn = agent.runTurn("run it");
@@ -77,7 +77,7 @@ describe("cancelling a turn ends the command it started", { skip: resolveCoreBin
         : { kind: "text", content: "done" });
     const repo = makeRepo();
     const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-process-state-"));
-    const agent = new AutonomousAgent({ endpoint: gw.url, model: "m", maxSteps: 6, temperature: 0, workspace: repo, shell: "bash" } as any);
+    const agent = new AutonomousAgent({ endpoint: gw.url, model: "m", maxSteps: 6, temperature: 0, workspace: repo, shell: "bash", approvalMode: "auto", fullAccess: true } as any);
     (agent as any).stateManager = new DurableStateManager({ baseDir: stateDir, workspacePaths: [(agent as any).primaryWorkspacePathIdentity] });
     try {
       const turn = agent.runTurn("start a server then wait");
@@ -104,7 +104,7 @@ describe("cancelling a turn ends the command it started", { skip: resolveCoreBin
       : { kind: "text", content: "never" });
     const repo = makeRepo();
     const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-process-state-"));
-    const agent = new AutonomousAgent({ endpoint: gw.url, model: "m", maxSteps: 4, temperature: 0, workspace: repo, shell: "bash" } as any);
+    const agent = new AutonomousAgent({ endpoint: gw.url, model: "m", maxSteps: 4, temperature: 0, workspace: repo, shell: "bash", approvalMode: "auto", fullAccess: true } as any);
     (agent as any).stateManager = new DurableStateManager({ baseDir: stateDir, workspacePaths: [(agent as any).primaryWorkspacePathIdentity] });
     try {
       const turn = agent.runTurn("run it");

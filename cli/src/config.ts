@@ -6,7 +6,8 @@ import { config as loadDotenv, parse as parseDotenv } from "dotenv";
 import { credentialOriginOf, credentialStorageHome, environmentCredential, LocalLlmClient, operatorSetting, setCredentialAuthority } from "./client.js";
 import { baseUrlSetting, originOf, parseOriginList, PROVIDERS, providerDefinition } from "./providers.js";
 import { providerApiKey } from "./credentials.js";
-import { ContinuationBudget, DEFAULT_CONTINUATION, HarnessConfig } from "./types.js";
+import { ContinuationBudget, DEFAULT_CONTINUATION, HarnessConfig, ApprovalMode } from "./types.js";
+import { isWorkspaceTrusted } from "./workspace_trust.js";
 
 const installEnv = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../.env");
 const DEFAULT_ENDPOINT = "http://localhost:1234/v1";
@@ -185,6 +186,33 @@ export function buildConfig(options: any): HarnessConfig {
   const shell = options.shell || operatorSetting("LOCAL_HARNESS_SHELL") || process.env.LOCAL_HARNESS_SHELL || "bash";
   const dryRun = Boolean(options.dryRun);
   const readOnly = Boolean(options.readOnly);
+  const yes = Boolean(options.yes);
+  const approve = Boolean(options.approve);
+  const modeOption = options.mode ? String(options.mode).toLowerCase() : undefined;
+  const envMode = (operatorSetting("NEXUS_APPROVAL_MODE") || process.env.NEXUS_APPROVAL_MODE)?.trim().toLowerCase();
+
+  let approvalMode: ApprovalMode;
+  let fullAccess = Boolean(options.fullAccess);
+
+  if (readOnly) {
+    approvalMode = "read-only";
+  } else if (yes) {
+    approvalMode = "auto";
+    fullAccess = true;
+  } else if (approve) {
+    approvalMode = "review";
+  } else if (modeOption === "auto" || modeOption === "review" || modeOption === "read-only") {
+    approvalMode = modeOption as ApprovalMode;
+    if (approvalMode === "auto" && options.yes) fullAccess = true;
+  } else if (envMode === "auto" || envMode === "review" || envMode === "read-only") {
+    approvalMode = envMode as ApprovalMode;
+    if (approvalMode === "auto") fullAccess = true;
+  } else {
+    // Default resolution per DEC-01 C: trusted -> auto, else review
+    const trusted = isWorkspaceTrusted(workspace, readOnly);
+    approvalMode = trusted ? "auto" : "review";
+  }
+
   const sandbox = options.sandbox ? (typeof options.sandbox === "string" ? options.sandbox : true) : undefined;
   if (provider && options.fallback) warnOnce(`--fallback is ignored for provider '${provider}': a provider connection is pinned to its own endpoint.`);
   const fallbackEndpoints = options.fallback && !provider ? options.fallback.split(",").map((s: string) => s.trim()) : undefined;
@@ -238,6 +266,9 @@ export function buildConfig(options: any): HarnessConfig {
     shell,
     dryRun,
     readOnly,
+    approvalMode,
+    yes,
+    fullAccess,
     sandbox,
     fallbackEndpoints,
     contextLimit,

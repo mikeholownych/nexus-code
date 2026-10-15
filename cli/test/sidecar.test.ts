@@ -30,7 +30,7 @@ async function withSidecar(
   const home = makeHome();
   const previousHome = process.env.HOME;
   process.env.HOME = home;
-  const app = new ApplicationCore({ endpoint: gw.url, model: "m", maxSteps: 6, temperature: 0, workspace: repo, shell: "bash" } as any);
+  const app = new ApplicationCore({ endpoint: gw.url, model: "m", maxSteps: 6, temperature: 0, workspace: repo, shell: "bash", approvalMode: mode, fullAccess: mode === "auto" } as any);
   const events: any[] = [];
   const server = new SidecarServer({ app, mode, write: (line) => events.push(JSON.parse(line)), onShutdown, ...setup?.(app) });
   server.start();

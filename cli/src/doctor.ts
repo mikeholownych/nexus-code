@@ -23,7 +23,7 @@ import { LocalLlmClient, credentialStorageHome } from "./client.js";
 import { credentialsPath } from "./credentials.js";
 import { mcpConfigFiles } from "./mcp.js";
 import { pluginDirs } from "./plugins.js";
-import { untrustedWorkspaceExtensions, WORKSPACE_MCP_FILES } from "./workspace_trust.js";
+import { untrustedWorkspaceExtensions, WORKSPACE_MCP_FILES, isWorkspaceTrusted } from "./workspace_trust.js";
 import { BuildIdentity, getBuildIdentity } from "./build_identity.js";
 import { defaultSessionsDir } from "./session.js";
 import { defaultTaskStateDir } from "./core/state.js";
@@ -68,6 +68,11 @@ export interface DoctorReport {
   tool: "nexus doctor";
   nexusVersion: string;
   buildIdentity?: BuildIdentity;
+  posture?: {
+    mode: "auto" | "review" | "read-only";
+    sandbox: string;
+    trusted: boolean;
+  };
   /** `cli`: a fresh configuration built from flags and environment. `session`: the running session's configuration. */
   context: "cli" | "session";
   deep: boolean;
@@ -831,11 +836,23 @@ export async function runDoctor(optionsOrConfig: DoctorOptions | HarnessConfig |
   const findings = results.flat();
   const summary: Record<DoctorStatus, number> = { pass: 0, warn: 0, fail: 0, skip: 0 };
   for (const finding of findings) summary[finding.status]++;
+  const config = options.config;
+  let posture: { mode: "auto" | "review" | "read-only"; sandbox: string; trusted: boolean } | undefined;
+  if (config) {
+    const trusted = isWorkspaceTrusted(config.workspace, Boolean(config.readOnly));
+    const sandboxStatus = config.sandbox ? (typeof config.sandbox === "string" ? config.sandbox : "on") : "off";
+    posture = {
+      mode: config.approvalMode ?? (trusted ? "auto" : "review"),
+      sandbox: sandboxStatus,
+      trusted,
+    };
+  }
   const report: DoctorReport = {
     schemaVersion: DOCTOR_SCHEMA_VERSION,
     tool: "nexus doctor",
     nexusVersion: nexusVersion(),
     buildIdentity: getBuildIdentity(),
+    posture,
     context: options.context ?? "cli",
     deep: ctx.deep,
     generatedAt: new Date().toISOString(),
@@ -1037,6 +1054,11 @@ export function renderDoctorText(report: DoctorReport): string {
   const out: string[] = [];
   const s = report.summary;
   out.push(`Nexus doctor ${report.nexusVersion} — ${report.context === "session" ? "active session configuration" : "fresh CLI configuration"}${report.deep ? " (deep)" : ""}`);
+  if (report.posture) {
+    const p = report.posture;
+    const trustStr = p.trusted ? "trusted" : "untrusted (nexus trust .)";
+    out.push(`mode: ${p.mode} · sandbox: ${p.sandbox} · workspace: ${trustStr}`);
+  }
   out.push(`${s.pass} pass · ${s.warn} warn · ${s.fail} fail · ${s.skip} skipped · ${report.durationMs} ms${report.cancelled ? " · CANCELLED (incomplete)" : ""}`);
   out.push("");
   const order: DoctorStatus[] = ["fail", "warn", "pass", "skip"];

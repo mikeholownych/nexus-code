@@ -139,7 +139,7 @@ async function muted<T>(fn: () => Promise<T>, admissions?: string[]): Promise<T>
 }
 
 const cfg = (gw: Gw, workspace: string, o: Partial<HarnessConfig> = {}): HarnessConfig =>
-  ({ endpoint: gw.url, model: "m", maxSteps: 6, temperature: 0, workspace, shell: "bash", ...o });
+  ({ endpoint: gw.url, model: "m", maxSteps: 6, temperature: 0, workspace, shell: "bash", approvalMode: "auto", fullAccess: true, ...o });
 
 async function directTurn(config: HarnessConfig, prompt: string): Promise<{ turn: TurnResult; agent: AutonomousAgent }> {
   const agent = quiet(new AutonomousAgent(config));

@@ -25,6 +25,8 @@ const cfg = (endpoint: string, workspace: string, o: Partial<HarnessConfig> = {}
   temperature: 0,
   workspace,
   shell: "bash",
+  approvalMode: "auto",
+  fullAccess: true,
   continuation: { ...DEFAULT_CONTINUATION, maxCompletionNudges: 0 },
   ...o,
 });

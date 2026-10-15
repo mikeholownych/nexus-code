@@ -11,6 +11,10 @@ import { execSync } from "node:child_process";
 import { AutonomousAgent } from "../src/agent.js";
 import { DurableStateManager } from "../src/core/state.js";
 import { CapabilityRegistry, EFFECT_CLASSES, needsOperatorDecision, type EffectClass } from "../src/core/capabilities.js";
+import { ApprovalPolicy } from "../src/core/approval_policy.js";
+import { runDoctor, renderDoctorText } from "../src/doctor.js";
+import { ApplicationCore } from "../src/core/app.js";
+import { SidecarServer } from "../src/sidecar.js";
 import { startGateway } from "./helpers/provider_fixture.js";
 
 const EXPECTED: Record<string, EffectClass> = {
@@ -127,6 +131,146 @@ describe("review-mode gate in the agent loop", () => {
       await gw.close();
       fs.rmSync(repo, { recursive: true, force: true });
       fs.rmSync(stateDir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("ApprovalPolicy DEC-01 option C decision matrix", () => {
+  const policy = new ApprovalPolicy();
+
+  test("read_workspace and delegate never require operator decision", () => {
+    for (const mode of ["auto", "review", "read-only"] as const) {
+      for (const trusted of [true, false]) {
+        assert.equal(policy.requiresDecision("read_workspace", { mode, trusted }), false);
+        assert.equal(policy.requiresDecision("delegate", { mode, trusted }), false);
+        assert.equal(policy.requiresDecision("internal", { mode, trusted }), false);
+      }
+    }
+  });
+
+  test("write_workspace requires decision in review mode, not in auto or read-only", () => {
+    assert.equal(policy.requiresDecision("write_workspace", { mode: "review", trusted: true }), true);
+    assert.equal(policy.requiresDecision("write_workspace", { mode: "review", trusted: false }), true);
+    assert.equal(policy.requiresDecision("write_workspace", { mode: "auto", trusted: true }), false);
+    assert.equal(policy.requiresDecision("write_workspace", { mode: "auto", trusted: false }), false);
+    assert.equal(policy.requiresDecision("write_workspace", { mode: "read-only", trusted: true }), false);
+    assert.equal(policy.requiresDecision("write_workspace", { mode: "auto", trusted: false, fullAccess: true }), false);
+  });
+
+  test("exec requires decision in review mode and in auto mode when untrusted", () => {
+    // Review mode: always asks
+    assert.equal(policy.requiresDecision("exec", { mode: "review", trusted: true }), true);
+    assert.equal(policy.requiresDecision("exec", { mode: "review", trusted: false }), true);
+    // Auto mode: asks only when untrusted
+    assert.equal(policy.requiresDecision("exec", { mode: "auto", trusted: false }), true);
+    assert.equal(policy.requiresDecision("exec", { mode: "auto", trusted: true }), false);
+    // fullAccess (--yes): never asks
+    assert.equal(policy.requiresDecision("exec", { mode: "auto", trusted: false, fullAccess: true }), false);
+    assert.equal(policy.requiresDecision("exec", { mode: "review", trusted: false, fullAccess: true }), false);
+  });
+
+  test("egress asks once per origin, then allows for that origin", () => {
+    const approved = new Set<string>(["https://example.com"]);
+    // Unapproved origin asks in review and auto mode
+    assert.equal(policy.requiresDecision("egress", { mode: "review", trusted: true, egressOrigin: "https://other.com", approvedEgressOrigins: approved }), true);
+    assert.equal(policy.requiresDecision("egress", { mode: "auto", trusted: true, egressOrigin: "https://other.com", approvedEgressOrigins: approved }), true);
+    // Approved origin does not ask
+    assert.equal(policy.requiresDecision("egress", { mode: "review", trusted: true, egressOrigin: "https://example.com", approvedEgressOrigins: approved }), false);
+    assert.equal(policy.requiresDecision("egress", { mode: "auto", trusted: true, egressOrigin: "https://example.com", approvedEgressOrigins: approved }), false);
+  });
+
+  test("context_inject asks when source is untrusted or workspace is untrusted", () => {
+    assert.equal(policy.requiresDecision("context_inject", { mode: "review", trusted: false }), true);
+    assert.equal(policy.requiresDecision("context_inject", { mode: "auto", trusted: false }), true);
+    assert.equal(policy.requiresDecision("context_inject", { mode: "auto", trusted: true, isUntrustedSource: true }), true);
+    assert.equal(policy.requiresDecision("context_inject", { mode: "auto", trusted: true, isUntrustedSource: false }), false);
+  });
+});
+
+describe("headless execution (no onConfirm handler)", () => {
+  test("fails closed with DECISION_REQUIRED_NO_OPERATOR when tool requires decision", async () => {
+    const replies = [
+      { kind: "tools" as const, calls: [{ name: "write_file", args: { path: "test.txt", content: "hello" } }] },
+      { kind: "text" as const, content: "finished" },
+    ];
+    const gw = await startGateway((n) => replies[Math.min(n, replies.length) - 1]);
+    const repo = makeRepo();
+    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-headless-state-"));
+    const agent = agentFor(gw.url, repo, stateDir);
+    agent.setApprovalMode("review"); // review mode gates write_workspace
+    try {
+      // Call runTurn WITHOUT an onConfirm handler
+      await agent.runTurn("write a file");
+      const toolResults = gw.requests.at(-1)!.body.messages.filter((m: any) => m.role === "tool");
+      assert.ok(toolResults.length > 0, "tool result returned to model");
+      assert.match(toolResults[0].content, /Tool 'write_file' requires operator approval \(write_workspace\), but no operator is present/);
+      assert.match(toolResults[0].content, /--yes/);
+
+      const call = { id: "c1", type: "function", function: { name: "write_file", arguments: '{"path":"a.txt","content":"b"}' } };
+      const dispatchRes = await (agent as any).dispatchToolCall(call, 1, "agent");
+      assert.equal(dispatchRes.receipt.status, "DENIED");
+      assert.equal(dispatchRes.receipt.denialReason, "DECISION_REQUIRED_NO_OPERATOR");
+    } finally {
+      agent.shutdown();
+      await gw.close();
+      fs.rmSync(repo, { recursive: true, force: true });
+      fs.rmSync(stateDir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("posture reporting in doctor and sidecar", () => {
+  test("doctor reports posture in json and formatted text", async () => {
+    const ws = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-posture-doc-"));
+    try {
+      const report = await runDoctor({
+        config: {
+          workspace: ws,
+          model: "test-model",
+          endpoint: "http://127.0.0.1:9",
+          shell: "bash",
+          approvalMode: "review",
+          readOnly: false,
+        } as any,
+      });
+      assert.ok(report.posture, "doctor report contains posture");
+      assert.equal(report.posture.mode, "review");
+      assert.equal(report.posture.trusted, false);
+      const text = renderDoctorText(report);
+      assert.ok(text.includes("mode: review"), `doctor text contains posture: ${text}`);
+      assert.ok(text.includes("workspace: untrusted"), `doctor text contains trust: ${text}`);
+    } finally {
+      fs.rmSync(ws, { recursive: true, force: true });
+    }
+  });
+
+  test("sidecar emits posture in session.state", async () => {
+    const ws = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-sidecar-posture-"));
+    try {
+      const app = new ApplicationCore({
+        workspace: ws,
+        model: "m",
+        endpoint: "http://127.0.0.1:9",
+        shell: "bash",
+        approvalMode: "review",
+      } as any);
+      const events: any[] = [];
+      const server = new SidecarServer({
+        app,
+        mode: "review",
+        write: (line) => {
+          events.push(JSON.parse(line));
+        },
+      });
+      server.start();
+      const stateEvt = events.find((e) => e.type === "session.state");
+      assert.ok(stateEvt, "session.state event emitted");
+      assert.ok(stateEvt.posture, "session.state contains posture");
+      assert.equal(stateEvt.posture.mode, "review");
+      assert.equal(stateEvt.posture.trusted, false);
+      assert.equal(stateEvt.posture.sandbox, "off");
+    } finally {
+      fs.rmSync(ws, { recursive: true, force: true });
     }
   });
 });

@@ -13,6 +13,13 @@ pub struct GitInfo {
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq)]
+pub struct PostureInfo {
+    pub mode: String,
+    pub sandbox: String,
+    pub trusted: bool,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq)]
 pub struct ModelSummary {
     pub summary: String,
     #[serde(default)]
@@ -159,6 +166,8 @@ pub enum Event {
         /// The id the session is saved under (absent from older sidecars).
         #[serde(default)]
         session: Option<String>,
+        #[serde(default)]
+        posture: Option<PostureInfo>,
     },
     #[serde(rename = "assistant.delta")]
     AssistantDelta { turn_id: String, text: String },
@@ -482,6 +491,25 @@ mod tests {
                 }),
                 busy: false,
                 session: None,
+                posture: None,
+            })
+        );
+        assert_eq!(
+            parse_event(
+                r#"{"v":1,"type":"session.state","workspace":"/w/app","workspace_name":"app","model":"m","mode":"review","git":null,"busy":false,"posture":{"mode":"review","sandbox":"off","trusted":false}}"#
+            ),
+            Ok(Event::SessionState {
+                workspace_name: "app".into(),
+                model: "m".into(),
+                mode: "review".into(),
+                git: None,
+                busy: false,
+                session: None,
+                posture: Some(PostureInfo {
+                    mode: "review".into(),
+                    sandbox: "off".into(),
+                    trusted: false,
+                }),
             })
         );
         assert!(matches!(

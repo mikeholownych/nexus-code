@@ -205,6 +205,7 @@ pub struct Session {
     pub busy: bool,
     /// The saved session's id, when the sidecar reports it.
     pub session_id: Option<String>,
+    pub posture: Option<crate::protocol::PostureInfo>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -728,7 +729,7 @@ impl LiveState {
                 None,
                 Vec::new(),
             ),
-            Event::SessionState { workspace_name, model, mode, git, busy, session } => {
+            Event::SessionState { workspace_name, model, mode, git, busy, session, posture } => {
                 self.session = Session {
                     session_id: session,
                     workspace_name,
@@ -737,6 +738,7 @@ impl LiveState {
                     branch: git.as_ref().map(|git| git.branch.clone()),
                     dirty: git.map_or(0, |git| git.dirty),
                     busy,
+                    posture,
                 };
                 self.cancel_requested &= busy;
                 self.link = Link::Ready;
@@ -2553,6 +2555,7 @@ mod tests {
                 dirty: 0,
                 busy: false,
                 session_id: None,
+                posture: None,
             }
         );
     }
