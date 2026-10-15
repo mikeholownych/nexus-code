@@ -53,7 +53,7 @@ import { selectRelevantFewShots } from "./fewshots.js";
 import { FlightRecorder } from "./flight.js";
 import { WorktreeManager } from "./worktree.js";
 import { isSandboxAvailable } from "./sandbox.js";
-import { runTestSuiteWithExecutor, discoverVerifier, hasExecutedTests, isVerifierDeliverableBound, isFilteredVerifierCommand } from "./tester.js";
+import { runTestSuiteWithExecutor, discoverVerifier, describeVerifier, hasExecutedTests, isVerifierDeliverableBound, isFilteredVerifierCommand } from "./tester.js";
 import { ENABLE_TOOLS_CAPABILITY, TOOL_GROUPS, groupsTriggeredBy, toolGroupOf } from "./core/tool_groups.js";
 import { judgeWithoutCopy, prepareBaselineTestsCopy, snapshotTests, type ChangeBaseline, type Independence } from "./core/independent_check.js";
 
@@ -909,6 +909,8 @@ export class AutonomousAgent {
   private toolDispatchSeq = 0;
   /** Egress destinations the operator approved this session (cleared on reset and restore: approvals never persist). */
   private approvedEgressOrigins = new Set<string>();
+  /** Verifier commands the operator approved this session (cleared on reset and restore). */
+  private approvedVerifiers = new Set<string>();
   private approvalPolicy: ApprovalPolicy = defaultApprovalPolicy;
   private verifiedWorktreeCompletion: boolean = false;
   private worktreeRunTurnAuthorized: boolean = false;
@@ -1191,12 +1193,17 @@ export class AutonomousAgent {
     this.approvedEgressOrigins.clear();
   }
 
+  public clearApprovedVerifiers(): void {
+    this.approvedVerifiers.clear();
+  }
+
   public setApprovalMode(mode: ApprovalMode): void {
     this.config.approvalMode = mode;
     if (mode !== "auto") {
       this.config.fullAccess = false;
     }
     this.clearApprovedEgressOrigins();
+    this.clearApprovedVerifiers();
   }
 
   public getApprovalMode(): ApprovalMode {
@@ -1599,6 +1606,7 @@ export class AutonomousAgent {
 
   public restoreSession(msgs: ChatMessage[], unverifiedChangesPending?: boolean, objective?: ObjectiveLedger | null, findings?: readonly string[] | null): void {
     this.approvedEgressOrigins.clear();
+    this.approvedVerifiers.clear();
     this.messages = [...msgs];
     this.restoreFindings(findings);
     this.objective = objective ?? undefined;
@@ -1646,15 +1654,63 @@ export class AutonomousAgent {
    * Durable progress within a turn. A failed write is tolerated here: the turn-end checkpoint writes the same state,
    * and an operation whose result never reached the durable conversation is detected on recovery.
    */
+  private async ensureVerifierApproved(command: string, confirmHandler?: ConfirmHandler): Promise<boolean> {
+    const isTrusted = isWorkspaceTrusted(this.config.workspace, Boolean(this.config.readOnly));
+    const mode = this.config.approvalMode ?? (this.config.readOnly ? "read-only" : (this.config.fullAccess ? "auto" : (isTrusted ? "auto" : "review")));
+    const policyContext: PolicyContext = {
+      mode,
+      trusted: isTrusted,
+      sandbox: this.config.sandbox,
+      approvedEgressOrigins: this.approvedEgressOrigins,
+      fullAccess: Boolean(this.config.fullAccess),
+    };
+
+    if (!this.approvalPolicy.requiresDecision("exec", policyContext)) {
+      return true;
+    }
+
+    const desc = describeVerifier(this.config.workspace, command);
+    const verifierCmd = desc?.command || command;
+    const digest = desc?.digest || createHash("sha256").update(verifierCmd).digest("hex");
+    const cacheKey = `${this.config.workspace}:${verifierCmd}:${digest}`;
+
+    if (this.approvedVerifiers.has(cacheKey)) {
+      return true;
+    }
+
+    const onConfirm = confirmHandler ?? this.activeTurn?.onConfirm;
+    if (!onConfirm) {
+      return false;
+    }
+
+    const approved = await onConfirm("verifier", {
+      command: verifierCmd,
+      script: desc?.script,
+      detail: desc?.evidence,
+      digest,
+    });
+
+    if (approved) {
+      this.approvedVerifiers.add(cacheKey);
+      return true;
+    }
+    return false;
+  }
+
   /**
    * Before the first file edit of an unverified change: the discovered verifier's result and the test files as they
    * are, so a later pass can be judged fail-before / pass-after. Skipped when the operator configured a verifier (their
    * check decides), in dry-run and read-only modes, and when no verifier is discovered.
    */
-  private async captureChangeBaseline(): Promise<void> {
+  private async captureChangeBaseline(confirmHandler?: ConfirmHandler): Promise<void> {
     if (this.changeBaseline !== undefined || this.config.dryRun || this.config.readOnly || this.config.authoritativeVerifierCommand?.trim()) return;
     const command = discoverVerifier(this.config.workspace)?.command;
     if (!command) {
+      this.changeBaseline = null;
+      return;
+    }
+    const approved = await this.ensureVerifierApproved(command, confirmHandler);
+    if (!approved) {
       this.changeBaseline = null;
       return;
     }
@@ -1670,9 +1726,11 @@ export class AutonomousAgent {
   }
 
   /** Whether a passing, covering run of the discovered `command` is independent evidence of the change. */
-  private async judgeIndependence(command: string, deadlineSecs: number): Promise<Independence> {
+  private async judgeIndependence(command: string, deadlineSecs: number, confirmHandler?: ConfirmHandler): Promise<Independence> {
     const judged = judgeWithoutCopy(this.config.workspace, command, this.changeBaseline);
     if (judged !== "needs-copy") return judged;
+    const approved = await this.ensureVerifierApproved(command, confirmHandler);
+    if (!approved) return { independent: false, detail: "verifier execution was not approved" };
     // Nexus edited test files: run the tests as they were before the change against the changed code.
     const dir = prepareBaselineTestsCopy(this.config.workspace, this.changeBaseline!.tests!);
     if (!dir) return { independent: false, detail: "the workspace is too large to rerun the pre-change tests without Nexus's own test edits" };
@@ -1761,6 +1819,7 @@ export class AutonomousAgent {
 
   public resetConversation(): void {
     this.approvedEgressOrigins.clear();
+    this.approvedVerifiers.clear();
     this.changeBaseline = undefined;
     this.enabledToolGroups = new Set();
     this.stepNoticeStep = 0;
@@ -3481,6 +3540,29 @@ The pinned Objective Ledger lists the operator's requirements; your plan never r
                   `and end with a final message stating what remains and the next action.`,
               };
             }
+            // Gate verifier execution through approval policy
+            const onConfirm = this.activeTurn?.onConfirm;
+            const approved = await this.ensureVerifierApproved(verifierCommand, onConfirm);
+            if (!approved) {
+              const isTrusted = isWorkspaceTrusted(this.config.workspace, Boolean(this.config.readOnly));
+              const mode = this.config.approvalMode ?? (this.config.readOnly ? "read-only" : (this.config.fullAccess ? "auto" : (isTrusted ? "auto" : "review")));
+              const policyContext: PolicyContext = {
+                mode,
+                trusted: isTrusted,
+                sandbox: this.config.sandbox,
+                approvedEgressOrigins: this.approvedEgressOrigins,
+                fullAccess: Boolean(this.config.fullAccess),
+              };
+              const error = (!onConfirm && this.approvalPolicy.requiresDecision("exec", policyContext))
+                ? `Error: Verifier '${verifierCommand}' requires operator approval (exec), but no operator is present (headless execution). Run with --yes or --mode auto, or 'nexus trust .' to trust this workspace.`
+                : `Verification Oracle: verifier execution was not approved by operator (${verifierCommand}).`;
+              return {
+                success: false,
+                output: "",
+                error,
+              };
+            }
+
             // The oracle owns the verifier's deadline (never an incidental bridge default); the runner enforces it.
             const deadlineSecs = this.config.verifierTimeoutSecs ?? DEFAULT_VERIFIER_TIMEOUT_SECS;
             this.activity("verifying", { tool: verifierCommand });
@@ -3499,7 +3581,7 @@ The pinned Objective Ledger lists the operator's requirements; your plan never r
             );
             // A discovered verifier's pass makes the change VERIFIED only on independent evidence (fail-before /
             // pass-after on tests the change did not write); the operator's configured verifier is their own check.
-            const independence = source === "discovered" && testRes.success && isDeliverableBound ? await this.judgeIndependence(verifierCommand, deadlineSecs) : undefined;
+            const independence = source === "discovered" && testRes.success && isDeliverableBound ? await this.judgeIndependence(verifierCommand, deadlineSecs, onConfirm) : undefined;
             const evidence: VerificationEvidence = {
               status: testRes.success ? "PASSED" : testRes.timedOut ? "TIMED_OUT" : "FAILED",
               command: verifierCommand,
@@ -4171,7 +4253,7 @@ The pinned Objective Ledger lists the operator's requirements; your plan never r
       } catch {}
     }
 
-    if (FILE_EDIT_TOOLS.has(toolName) && this.depth === 0) await this.captureChangeBaseline();
+    if (FILE_EDIT_TOOLS.has(toolName) && this.depth === 0) await this.captureChangeBaseline(onConfirm);
     // A tool of a group not offered yet still runs (the model may know it from earlier); offer its group from now on.
     const calledGroup = toolGroupOf(toolName);
     if (calledGroup) this.enabledToolGroups.add(calledGroup);

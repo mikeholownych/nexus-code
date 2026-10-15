@@ -5,7 +5,7 @@ import * as path from "node:path";
 import { copyToClipboard, readFromClipboard } from "../clipboard.js";
 import { commitChanges, generateConventionalCommit, getGitInfo } from "../git.js";
 import { HunkStager } from "../stager.js";
-import { runTestSuite } from "../tester.js";
+import { runTestSuiteWithExecutor, detectTestCommand } from "../tester.js";
 import { NOT_A_REPO, SlashContext, SlashHandler, SlashOutcome, errorText, reply } from "./catalog.js";
 
 function git(cwd: string, args: string[]): string {
@@ -156,8 +156,16 @@ function audit(ctx: SlashContext): SlashOutcome {
   return reply("audit", rows.join("\n") || "No audit records yet.");
 }
 
-function test(ctx: SlashContext): SlashOutcome {
-  const result = runTestSuite(workspace(ctx), ctx.args.trim() || undefined);
+async function test(ctx: SlashContext): Promise<SlashOutcome> {
+  const ws = workspace(ctx);
+  const filter = ctx.args.trim() || undefined;
+  const bridge = ctx.host.app.getAgent().getBridge();
+  const commandOverride = filter ? detectTestCommand(ws, filter) : undefined;
+  const result = await runTestSuiteWithExecutor(
+    ws,
+    (command) => bridge.executeTool("run_command", { command, timeout_secs: 120 }),
+    commandOverride,
+  );
   const lines = [`$ ${result.command}`, result.success ? "Test suite passed." : "Test suite failed."];
   if (!result.success && result.failures.length) lines.push("", "Failing tests:", ...result.failures.slice(0, 10).map((f) => `  • ${f}`));
   if (!result.success && result.diagnostics.length) {

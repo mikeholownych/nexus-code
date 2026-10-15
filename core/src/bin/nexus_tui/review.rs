@@ -82,6 +82,28 @@ pub fn review_lines(review: &Review) -> Vec<ReviewLine> {
             }));
             false
         }
+        Review::Verifier {
+            command,
+            script,
+            detail,
+        } => {
+            if let Some(detail) = detail {
+                lines.push(line(LineKind::Meta, format!("verifier: {detail}")));
+            }
+            lines.extend(command.lines().enumerate().map(|(index, row)| {
+                line(
+                    LineKind::Command,
+                    format!("{} {row}", if index == 0 { "$" } else { " " }),
+                )
+            }));
+            if let Some(script) = script {
+                if script != command {
+                    lines.push(line(LineKind::Meta, "script:"));
+                    lines.extend(script.lines().map(|row| line(LineKind::Context, format!("  {row}"))));
+                }
+            }
+            false
+        }
         Review::Args { text, truncated } => {
             lines.extend(text.lines().map(|row| line(LineKind::Context, row)));
             *truncated
@@ -301,6 +323,31 @@ mod tests {
                 ReviewLine {
                     kind: LineKind::Command,
                     text: "  --watch".into()
+                },
+            ]
+        );
+        assert_eq!(
+            review_lines(&Review::Verifier {
+                command: "npm test".into(),
+                script: Some("jest --runInBand".into()),
+                detail: Some("package.json:scripts.test".into()),
+            }),
+            vec![
+                ReviewLine {
+                    kind: LineKind::Meta,
+                    text: "verifier: package.json:scripts.test".into()
+                },
+                ReviewLine {
+                    kind: LineKind::Command,
+                    text: "$ npm test".into()
+                },
+                ReviewLine {
+                    kind: LineKind::Meta,
+                    text: "script:".into()
+                },
+                ReviewLine {
+                    kind: LineKind::Context,
+                    text: "  jest --runInBand".into()
                 },
             ]
         );
