@@ -47,6 +47,7 @@ function parsePatchHunks(patch) {
     }
     return { fileHeader: fileHeaderLines.join("\n"), hunks };
 }
+export const REPL_APPROVAL_GRACE_MS = 400;
 export class InteractiveRepl {
     app;
     agent;
@@ -272,10 +273,68 @@ export class InteractiveRepl {
         console.log(`  ${pc.bold(pc.yellow("/commit [msg]"))}       Generate or execute conventional git commit\n`);
     }
     /** Asks the operator during a turn; returns null if the turn is cancelled while waiting (treated as denial). */
-    async askDuringTurn(question) {
+    async askDuringTurn(question, options) {
         const signal = this.agent.getActiveTurnSignal();
         if (signal?.aborted)
             return null;
+        if (!this.rl)
+            return null;
+        // 1. Clear any typed-ahead line buffer before asking
+        const hadTypedAhead = Boolean(this.rl.line && this.rl.line.length > 0);
+        try {
+            this.rl.write("", { ctrl: true, name: "u" });
+        }
+        catch { }
+        this.rl.line = "";
+        this.rl.cursor = 0;
+        if (hadTypedAhead) {
+            console.log(pc.dim("  (typed-ahead input discarded)"));
+        }
+        const graceMs = options?.graceMs ?? 0;
+        const out = this.rl.output || process.stdout;
+        if (graceMs > 0) {
+            out.write(question);
+            let discardedDuringGrace = false;
+            const onData = () => {
+                discardedDuringGrace = true;
+            };
+            const rawInput = this.rl.input || input;
+            rawInput.on("data", onData);
+            await new Promise((resolve) => {
+                const timer = setTimeout(() => {
+                    rawInput.removeListener("data", onData);
+                    resolve();
+                }, graceMs);
+                if (signal) {
+                    const onAbort = () => {
+                        clearTimeout(timer);
+                        rawInput.removeListener("data", onData);
+                        resolve();
+                    };
+                    signal.addEventListener("abort", onAbort, { once: true });
+                }
+            });
+            if (signal?.aborted)
+                return null;
+            if (discardedDuringGrace || Boolean(this.rl.line && this.rl.line.length > 0)) {
+                try {
+                    this.rl.write("", { ctrl: true, name: "u" });
+                }
+                catch { }
+                this.rl.line = "";
+                this.rl.cursor = 0;
+                console.log(pc.dim("\n  (keystrokes during grace window discarded)"));
+                out.write(question);
+            }
+            try {
+                return signal ? await this.rl.question("", { signal }) : await this.rl.question("");
+            }
+            catch (err) {
+                if (signal?.aborted || err?.name === "AbortError")
+                    return null;
+                throw err;
+            }
+        }
         try {
             return signal ? await this.rl.question(question, { signal }) : await this.rl.question(question);
         }
@@ -296,10 +355,10 @@ export class InteractiveRepl {
             const { fileHeader, hunks } = parsePatchHunks(args.patch);
             console.log(`  Target: ${pc.cyan(args.path)} (${hunks.length} hunks)`);
             if (hunks.length > 1) {
-                const reviewMode = await this.askDuringTurn(pc.bold(pc.white(`  Review ${hunks.length} hunks individually? [y/N]: `)));
+                const reviewMode = await this.askDuringTurn(pc.bold(pc.white(`  Review ${hunks.length} hunks individually? [y/N]: `)), { graceMs: REPL_APPROVAL_GRACE_MS });
                 if (reviewMode === null)
                     return false;
-                if (reviewMode.trim().toLowerCase() === "y") {
+                if (reviewMode.trim().toLowerCase() === "y" || reviewMode.trim().toLowerCase() === "yes") {
                     const acceptedHunks = [];
                     for (let i = 0; i < hunks.length; i++) {
                         const h = hunks[i];
@@ -312,7 +371,7 @@ export class InteractiveRepl {
                             else
                                 console.log(pc.gray(`    ${hl}`));
                         }
-                        const hunkAns = await this.askDuringTurn(pc.bold(pc.white(`  Accept hunk [y]es, [n]o, [a]ccept all remaining, [q]uit? [Y/n/a/q]: `)));
+                        const hunkAns = await this.askDuringTurn(pc.bold(pc.white(`  Accept hunk [y]es, [n]o, [a]ccept all remaining, [q]uit? [y/N/a/q]: `)), { graceMs: REPL_APPROVAL_GRACE_MS });
                         if (hunkAns === null)
                             return false;
                         const trimmedHunk = hunkAns.trim().toLowerCase();
@@ -320,11 +379,11 @@ export class InteractiveRepl {
                             console.log(pc.dim("  Patch review aborted by user."));
                             return false;
                         }
-                        if (trimmedHunk === "a") {
+                        if (trimmedHunk === "a" || trimmedHunk === "all") {
                             acceptedHunks.push(...hunks.slice(i));
                             break;
                         }
-                        if (trimmedHunk === "" || trimmedHunk === "y") {
+                        if (trimmedHunk === "y" || trimmedHunk === "yes") {
                             acceptedHunks.push(h);
                         }
                     }
@@ -365,15 +424,22 @@ export class InteractiveRepl {
             }
         }
         while (true) {
-            const answer = await this.askDuringTurn(pc.bold(pc.white(`  Approve [y]es, [n]o, [d]iff preview, [a]lways allow session? [Y/n/d/a]: `)));
+            const answer = await this.askDuringTurn(pc.bold(pc.white(`  Approve [y]es, [n]o, [d]iff preview, [a]lways allow session? [y/N/d/a]: `)), { graceMs: REPL_APPROVAL_GRACE_MS });
             if (answer === null)
                 return false;
             const trimmed = answer.trim().toLowerCase();
             if (trimmed === "a" || trimmed === "always") {
-                this.approvalMode = "auto";
-                this.agent.setApprovalMode("auto");
-                console.log(pc.green("  Switched to auto-approve for remainder of session."));
-                return true;
+                const confirmAll = await this.askDuringTurn(pc.bold(pc.yellow(`  Type 'all' to confirm auto-approving all actions for this session: `)), { graceMs: REPL_APPROVAL_GRACE_MS });
+                if (confirmAll?.trim().toLowerCase() === "all") {
+                    this.approvalMode = "auto";
+                    this.agent.setApprovalMode("auto");
+                    console.log(pc.green("  Switched to auto-approve for remainder of session.\n"));
+                    return true;
+                }
+                else {
+                    console.log(pc.dim("  Auto-approve cancelled.\n"));
+                    continue;
+                }
             }
             if (trimmed === "d" || trimmed === "diff") {
                 if (toolName === "edit_file") {
@@ -404,7 +470,7 @@ export class InteractiveRepl {
                 }
                 continue;
             }
-            return trimmed === "" || trimmed === "y" || trimmed === "yes";
+            return trimmed === "y" || trimmed === "yes";
         }
     }
     async start() {
