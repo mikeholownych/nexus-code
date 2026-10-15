@@ -148,18 +148,20 @@ export function parseLocalOrigins(raw?: string | readonly string[]): string[] {
 /**
  * Matches host or origin against the operator-provided local origins.
  */
-function matchesLocalOrigins(host: string, origin: string, origins: readonly string[]): boolean {
+export function matchesLocalOrigins(host: string, origin: string, origins: readonly string[]): boolean {
   const hostLower = host.toLowerCase();
   const originLower = origin.toLowerCase();
   for (const o of origins) {
     const oLower = o.toLowerCase();
-    if (oLower === hostLower || oLower === originLower) {
+    if (oLower === "*" || oLower === hostLower || oLower === originLower) {
       return true;
     }
     if (oLower.includes("://")) {
       try {
         const u = new URL(oLower);
-        if (u.hostname.toLowerCase() === hostLower) return true;
+        if (u.origin.toLowerCase() === originLower) return true;
+        if (!u.port && u.hostname.toLowerCase() === hostLower) return true;
+        if (u.port && u.host.toLowerCase() === hostLower) return true;
       } catch {}
     }
     if (oLower.startsWith("*.")) {
