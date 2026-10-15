@@ -96,10 +96,10 @@ describe("Nexus Code Test Suite", () => {
   });
 
   test("parseModelResponse handles DeepSeek R1 <think> tags, embedded JSON, and unwraps arguments", () => {
-    // 1. DeepSeek R1 <think> tag isolation
+    // 1. DeepSeek R1 <think> tag isolation with <tool_call>
     const deepseekMsg = {
       role: "assistant" as const,
-      content: "<think>\nAnalyzing the user request.\nWe should read the package.json to check dependencies.\n</think>\nI will now read the file.\n```json\n{\n  \"name\": \"read_file\",\n  \"arguments\": {\n    \"input\": {\n      \"path\": \"package.json\",\n    }\n  }\n}\n```",
+      content: "<think>\nAnalyzing the user request.\nWe should read the package.json to check dependencies.\n</think>\nI will now read the file.\n<tool_call>\n{\n  \"name\": \"read_file\",\n  \"arguments\": {\n    \"input\": {\n      \"path\": \"package.json\"\n    }\n  }\n}\n</tool_call>",
     };
     const parsed1 = parseModelResponse(deepseekMsg);
     assert.ok(parsed1.reasoningText?.includes("Analyzing the user request"));
@@ -110,16 +110,23 @@ describe("Nexus Code Test Suite", () => {
     // Verified unwrapped from "input"
     assert.strictEqual(args1.path, "package.json");
 
-    // 2. Embedded raw JSON without markdown or XML tags
+    // 2. Embedded raw JSON without markdown or XML tags is rejected by default (REQ-AGT-112, VER-02)
     const embeddedMsg = {
       role: "assistant" as const,
       content: "Sure, let me check that directory:\n{\"name\": \"list_dir\", \"arguments\": {\"path\": \"cli/src\",}}\nHope this helps!",
     };
     const parsed2 = parseModelResponse(embeddedMsg);
-    assert.strictEqual(parsed2.toolCalls.length, 1);
-    assert.strictEqual(parsed2.toolCalls[0].function.name, "list_dir");
-    const args2 = JSON.parse(parsed2.toolCalls[0].function.arguments);
-    assert.strictEqual(args2.path, "cli/src");
+    assert.strictEqual(parsed2.toolCalls.length, 0, "prose JSON is never parsed (REQ-AGT-112)");
+
+    // 3. One-RC escape hatch: NEXUS_TEXT_TOOL_PARSING=legacy
+    process.env.NEXUS_TEXT_TOOL_PARSING = "legacy";
+    try {
+      const parsedLegacy = parseModelResponse(embeddedMsg);
+      assert.strictEqual(parsedLegacy.toolCalls.length, 1);
+      assert.strictEqual(parsedLegacy.toolCalls[0].function.name, "list_dir");
+    } finally {
+      delete process.env.NEXUS_TEXT_TOOL_PARSING;
+    }
   });
 
   test("CheckpointManager creates and records snapshots", () => {

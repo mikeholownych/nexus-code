@@ -500,6 +500,14 @@ export class LocalLlmClient {
     return this.lastUsageReport;
   }
 
+  /** Whether the connection supports native tool calling (Responses, Anthropic, or OpenAI-compatible accepting tools). */
+  public supportsNativeTools(): boolean {
+    if (this.conn.protocol === "openai-responses" || this.conn.protocol === "anthropic-messages") {
+      return true;
+    }
+    return !this.unsupportedParams.has("tools");
+  }
+
   /** "cloud" when `url` (default: the active endpoint) receives content outside the operator's machines/network. */
   public disclosureOf(url: string = this.endpoint): "local" | "cloud" {
     return disclosureClass(url, this.conn.providerId, this.cloudRoutedOrigins);
