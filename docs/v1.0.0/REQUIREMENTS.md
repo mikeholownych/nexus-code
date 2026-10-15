@@ -118,7 +118,7 @@ Every row has status **open** at `db1ca55` unless stated otherwise. In the "Evid
 |---|---|---|---|---|---|---|---|---|---|---|
 | REQ-SEC-101 | Audit; DEC-01 | Without opt-in, no model-initiated exec or egress happens without a decision. Untrusted workspace → review; trusted → auto. | safety | `config.ts`, `sidecar.ts:935`, `repl.ts:69`, `index.ts:93,115` | SRC (SEC-01) | implemented | ACC-SAFE-01 | **B** | SEC-01, TUI-07 | SPEC-01 / PLAN-01 |
 | REQ-SEC-102 | Audit; TOP_TIER B1 | Every capability has an effect class. Review gates every class except read. The gate is enforced at dispatch from the registry. | safety | `core/capabilities.ts`, `agent.ts:3945` | SRC (HIST-05) | implemented | ACC-SAFE-02 | **B** | HIST-05, SEC-03 | SPEC-01 / PLAN-01 |
-| REQ-SEC-103 | Audit | No approval is decided by Enter alone, typed-ahead input, paste, or input inside the grace window, on any surface. | safety | `repl.ts:270-276,353,385` | RT (TUI-02/03) | partial (TUI ok, REPL fails) | ACC-SAFE-03, ACC-SAFE-08 | **B** | TUI-02, TUI-03 | SPEC-01 / PLAN-01 |
+| REQ-SEC-103 | Audit | No approval is decided by Enter alone, typed-ahead input, paste, or input inside the grace window, on any surface. | safety | `repl.ts:291-355,444-495`, `tui_approval_input_e2e.test.ts`, `repl_approval_e2e.test.ts` | PTY (ACC-SAFE-03, ACC-SAFE-08) | tested | ACC-SAFE-03, ACC-SAFE-08 | **B** | TUI-02, TUI-03 | SPEC-01 / PLAN-01 |
 | REQ-SEC-119 | Audit | Nexus-initiated verifier runs are `exec` class: trust or one-time approval showing the script body; routed through the runner. | safety | `agent.ts:1654,3544,4255`; `tester.ts:145`; `verifier_gating.test.ts` | SRC (VER-01, VER-14) | tested | ACC-SAFE-09, ACC-SAFE-10 | **B** | VER-01, VER-14 | SPEC-01 / PLAN-01 |
 | REQ-SEC-104 | Audit | `--read-only` cannot read outside the workspace through commands. HOME is masked. | safety | `sandbox.ts`, `core/authority.ts:44-136` | RT (SEC-04) | open | ACC-SAFE-04 | RR | SEC-04 | SPEC-01 / PLAN-01 |
 | REQ-TUI-102 | Audit | The startup banner states mode, sandbox and trust. Doctor reports the posture. | safety / UX | `sidecar.ts`, `live_view.rs`, `repl.ts`, `doctor.ts` | SRC (TUI-07) | implemented | ACC-SAFE-06 | RR | TUI-07 | SPEC-01 / PLAN-01 |
@@ -270,7 +270,7 @@ Counts are from the tables above.
 
 | Group | Rows | Breakdown |
 |---|---|---|
-| New v1 rows (§3) | 92 | **31 B**, 58 RR, 3 P. 80 open, 11 partial (REQ-SEC-103, REQ-SEC-118, REQ-PRV-101, REQ-PRV-103, REQ-PRV-105, REQ-PRV-111, REQ-PER-101, REQ-PER-106, REQ-OPS-101, REQ-QUAL-108, REQ-QUAL-110), 1 implemented (REQ-OPS-103). |
+| New v1 rows (§3) | 92 | **31 B**, 58 RR, 3 P. 80 open, 10 partial (REQ-SEC-118, REQ-PRV-101, REQ-PRV-103, REQ-PRV-105, REQ-PRV-111, REQ-PER-101, REQ-PER-106, REQ-OPS-101, REQ-QUAL-108, REQ-QUAL-110), 1 implemented (REQ-OPS-103), 2 tested (REQ-SEC-103, REQ-SEC-119). |
 | Carried rows (§2.1) | 29 | 14 tested and unchanged (Keep). 1 visually-accepted (REQ-TUI-001). The rest are partial, or have open items mapped to §3. |
 | Contest rows (§4) | 7 | Separate product. |
 
