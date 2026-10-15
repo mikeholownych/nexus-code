@@ -44,7 +44,7 @@
    - a test reference (`file::case`) or an acceptance ID;
    - the last-verified commit.
 
-   The Issue #12 matrices and the `PHASE*`/`WP*` documents are marked **HISTORICAL** with a pointer to the ledger.
+   The Issue #12 matrices and the `PHASE*`/`WP*`/`CRED003`/`PERS002` documents are marked **HISTORICAL** by the index `docs/HISTORICAL.md`. They are not edited, because many are pinned by SHA-256 in later documents. Older `docs/reviews/*` carry an in-file banner, since nothing pins them.
 2. **REQ-OPS-102.** A CI script (`scripts/check_requirements.mjs`) parses the ledger. It fails if any BLOCKER or RELEASE-REQUIRED row lacks a test or acceptance reference, or references a test name that does not exist in the suite.
 3. **REQ-OPS-103.** Issue #12's open blockers (CTX-001, CTX-002, EXT-004) and the quietly superseded items (UI-006/007, DEDUP-003, "no remote", SUBP-004/005 deferrals) each have a written disposition in the ledger (implemented, waived with rationale, or superseded), per DEC-04.
 4. **REQ-DX-105.** User-facing docs (README, quickstart, USER_MANUAL, CLIENT_GUIDE, ARCHITECTURE, CLOUD_PROVIDERS, MCP_GUIDE, SKILLS_AND_PLUGINS, DOCTOR_TROUBLESHOOTING):
@@ -86,7 +86,7 @@
 |---|---|
 | ACC-GOV-01 | `node scripts/check_requirements.mjs` passes in CI and fails on a fixture row whose test name is missing. |
 | ACC-GOV-02 | Every BLOCKER row in REQUIREMENTS.md links a SPEC, a PLAN and an ACC ID. This is checked by the same script. |
-| ACC-GOV-03 | Every Issue #12 matrix document starts with a HISTORICAL banner pointing at the ledger. |
+| ACC-GOV-03 | `docs/HISTORICAL.md` lists every Issue #12, PHASE, WP, CRED003 and PERS002 document, and points at the ledger. Every `docs/reviews/*.md` older than 2026-10-14 starts with the historical banner. The hash-pinned documents are byte-unchanged. |
 | ACC-GOV-04 | The doc checklist (§3.2) is signed off in the RC acceptance record. `grep -rnE "t5820\|engineering/b0\|A770\|18010\|parity with" README.md quickstart.md docs/*.md` returns nothing. |
 | ACC-GOV-05 | The `v1.0.0` GitHub milestone exists, and its issue count matches the open plan task groups. |
 | ACC-GOV-06 | An independent acceptance report for continuity and truncation recovery is filed in `docs/reviews/`. |

@@ -1,5 +1,7 @@
 # TUI multiline objective qualification (2026-10-04)
 
+> **Historical record.** This document is kept for provenance. Current requirements and status: [docs/v1.0.0/REQUIREMENTS.md](../v1.0.0/REQUIREMENTS.md). Statuses here may have been superseded or contradicted since it was written.
+
 Acceptance addendum to Phase 3A (Task 9A), requested by the defect reconciliation review (`NEXUS_DEFECT_RECONCILIATION_PHASE3_2026-10-04.md`, main commit `0024449`). No product code changed.
 
 ## What the test proves

@@ -1,6 +1,6 @@
 # Nexus Code User Manual
 
-Welcome to **Nexus Code**, a local-first, autonomous, and interactive AI coding harness engineered for direct parity with OpenAI Codex and Anthropic Claude Code. Nexus Code connects to local inference servers (vLLM, LM Studio) and executes inside a native Linux shell environment.
+Welcome to **Nexus Code**, a local-first, autonomous and interactive AI coding harness. Nexus Code connects to local inference servers (vLLM, LM Studio) and executes inside a native Linux shell environment.
 
 ---
 
@@ -45,7 +45,7 @@ To expose Nexus Code's native Rust tools to external LLM clients (Claude Desktop
 ```bash
 nexus serve-mcp --workspace /path/to/project
 ```
-See [MCP_GUIDE.md](file:///home/mike/nexus-code/docs/MCP_GUIDE.md) for full configuration details.
+See [MCP_GUIDE.md](MCP_GUIDE.md) for full configuration details.
 
 ---
 

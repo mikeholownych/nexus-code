@@ -1,5 +1,7 @@
 # Nexus application maturity review
 
+> **Historical record.** This document is kept for provenance. Current requirements and status: [docs/v1.0.0/REQUIREMENTS.md](../v1.0.0/REQUIREMENTS.md). Statuses here may have been superseded or contradicted since it was written.
+
 **Review date:** 2026-10-12  
 **Scope:** Read-only assessment of the current checkout, focused on remaining gaps to dependable application maturity. This is a prioritized review, not a claim of production certification.  
 **Method:** Inspected README and architecture material, existing maturity/provider/acceptance review artifacts, and current source for security gates, SBOM generation, durable state, and export. No code or configuration was changed and no tests were run as part of this review.

@@ -1,5 +1,7 @@
 # Nexus maturity fixes — original requested scope (verbatim, 2026-10-11)
 
+> **Historical record.** This document is kept for provenance. Current requirements and status: [docs/v1.0.0/REQUIREMENTS.md](../v1.0.0/REQUIREMENTS.md). Statuses here may have been superseded or contradicted since it was written.
+
 This file preserves the operator's request exactly as given. It is the acceptance baseline for
 `NEXUS_MATURITY_FIXES_2026-10-11.md` (the requirement-to-implementation-and-test matrix). Implementation notes,
 status and evidence live in the matrix, never here.

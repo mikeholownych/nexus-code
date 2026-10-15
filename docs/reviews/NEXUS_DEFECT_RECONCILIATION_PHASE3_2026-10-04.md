@@ -1,5 +1,7 @@
 # Defect reconciliation: context-validation findings vs. TUI Phase 3 (2026-10-04)
 
+> **Historical record.** This document is kept for provenance. Current requirements and status: [docs/v1.0.0/REQUIREMENTS.md](../v1.0.0/REQUIREMENTS.md). Statuses here may have been superseded or contradicted since it was written.
+
 Independent, read-only review. No product code, tests, branches or the Phase 3 worktree (`~/nexus-code-tui-interaction`, branch `feat/tui-interaction-core`, HEAD `1690eb6`,
 uncommitted edits in `cli/src/{protocol,sidecar}.ts`, `cli/test/sidecar.test.ts`, new `approval_review.*`) were modified; I only read them. `cli/.env` was not read.
 Evidence tags: OBSERVED (read in source), REPRODUCED (triggered in this investigation), HYPOTHESIS, UNKNOWN. Phase 3 work in progress is evidence of intent, not of behaviour.
