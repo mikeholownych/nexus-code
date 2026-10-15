@@ -1028,7 +1028,15 @@ fn render_status(frame: &mut Frame, area: Rect, state: &LiveState) {
                 segments.push((5, vec![Span::styled(format!("  {id}"), muted)]));
             }
             // The mode is kept at every width: whether changes need approval is never hidden.
-            if session.mode == "review" {
+            if let Some(posture) = &session.posture {
+                let mode_color = if posture.mode == "review" { Color::Yellow } else { Color::White };
+                segments.push((1, vec![Span::styled(format!("  mode: {}", posture.mode), Style::default().fg(mode_color))]));
+                let trust_str = if posture.trusted { "trusted" } else { "untrusted" };
+                segments.push((4, vec![
+                    Span::styled(format!(" · sandbox: {}", posture.sandbox), muted),
+                    Span::styled(format!(" · workspace: {trust_str}"), muted),
+                ]));
+            } else if session.mode == "review" {
                 segments.push((1, vec![Span::styled("  review mode", Style::default().fg(Color::Yellow))]));
             } else {
                 segments.push((1, vec![Span::styled(format!("  {}", session.mode), muted)]));
@@ -4091,6 +4099,17 @@ mod surface_tests {
         }
         let (rows, _) = screen(&mut state, 100, 12);
         assert!(rows[0].contains("model engineering/b0") && rows[0].contains("⎇ feature/a-long-branch-name"), "{}", rows[0]);
+    }
+
+    #[test]
+    fn the_status_bar_renders_posture_when_provided() {
+        let mut state = state(true);
+        feed(&mut state, &[r#"{"v":1,"type":"session.state","workspace":"/w/app","workspace_name":"app","model":"engineering/b0","mode":"review","git":null,"busy":true,"posture":{"mode":"review","sandbox":"off","trusted":false}}"#]);
+        let (rows, _) = screen(&mut state, 100, 12);
+        let status = &rows[0];
+        assert!(status.contains("mode: review"), "status missing mode: review: {status}");
+        assert!(status.contains("sandbox: off"), "status missing sandbox: {status}");
+        assert!(status.contains("workspace: untrusted"), "status missing untrusted: {status}");
     }
 
     #[test]

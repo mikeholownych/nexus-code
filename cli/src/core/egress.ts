@@ -138,11 +138,13 @@ export function setLocalityAuthorityResolver(resolver: (key: string) => string |
  */
 export function parseLocalOrigins(raw?: string | readonly string[]): string[] {
   if (!raw) return [];
-  if (Array.isArray(raw)) return raw.map((r) => r.trim().toLowerCase()).filter(Boolean);
-  return raw
-    .split(",")
-    .map((s) => s.trim().toLowerCase())
-    .filter(Boolean);
+  if (typeof raw === "string") {
+    return raw
+      .split(",")
+      .map((s: string) => s.trim().toLowerCase())
+      .filter(Boolean);
+  }
+  return raw.map((r: string) => r.trim().toLowerCase()).filter(Boolean);
 }
 
 /**

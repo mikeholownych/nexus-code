@@ -125,7 +125,7 @@ function makeRepo(files: Record<string, string> = {}): string {
 
 function newAgent(gw: Gateway, repo: string, extra: Record<string, unknown> = {}): AutonomousAgent {
   return new AutonomousAgent({
-    endpoint: gw.url, model: "m", maxSteps: 6, temperature: 0, workspace: repo, shell: "bash", ...extra,
+    endpoint: gw.url, model: "m", maxSteps: 6, temperature: 0, workspace: repo, shell: "bash", approvalMode: "auto", fullAccess: true, ...extra,
   } as any);
 }
 
@@ -580,7 +580,7 @@ describe("A-2 cancellation", () => {
 
 function runCli(gw: Gateway, repo: string, home: string, prompt: string, extraArgs: string[] = []): Promise<{ code: number | null; json: any; stdout: string }> {
   return new Promise((resolve) => {
-    const child = spawn(process.execPath, ["--import", "tsx", srcIndex, "run", "-w", repo, "-e", gw.url, "-m", "m", "-j", "-s", "5", ...extraArgs, prompt], {
+    const child = spawn(process.execPath, ["--import", "tsx", srcIndex, "run", "-w", repo, "-e", gw.url, "-m", "m", "-j", "-s", "5", "--yes", ...extraArgs, prompt], {
       cwd: cliRoot, env: { ...process.env, HOME: home },
     });
     let stdout = "";
@@ -631,7 +631,7 @@ const hasScript = spawnSync("script", ["--version"], { encoding: "utf-8" }).stat
 
 describe("interactive REPL (pty)", { skip: hasScript ? false : "util-linux `script` not available" }, () => {
   async function session(gw: Gateway, repo: string, home: string) {
-    const cmd = `${JSON.stringify(process.execPath)} --import tsx ${JSON.stringify(srcIndex)} repl -w ${JSON.stringify(repo)} -e ${JSON.stringify(gw.url)} -m m`;
+    const cmd = `${JSON.stringify(process.execPath)} --import tsx ${JSON.stringify(srcIndex)} repl --mode auto -w ${JSON.stringify(repo)} -e ${JSON.stringify(gw.url)} -m m`;
     const child = spawn("script", ["-qfec", cmd, "/dev/null"], { cwd: cliRoot, env: { ...process.env, HOME: home, TERM: "xterm", COLUMNS: "120", LINES: "40" } });
     let out = "";
     child.stdout.on("data", (d) => (out += d.toString()));

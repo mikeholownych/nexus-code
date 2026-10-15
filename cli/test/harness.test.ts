@@ -525,6 +525,7 @@ error[E0308]: mismatched types
       const createAgent = () => new AutonomousAgent({
         endpoint: `http://127.0.0.1:${port}/v1`, model: "test", maxSteps: 3, temperature: 0,
         workspace: repo, shell: "bash", worktree: true, authoritativeVerifierCommand: "make test",
+        approvalMode: "auto", fullAccess: true,
       });
       const blocked = createAgent();
       const originalCreate = blocked.getWorktreeManager().createWorktree.bind(blocked.getWorktreeManager());
@@ -654,7 +655,7 @@ error[E0308]: mismatched types
     let agent: AutonomousAgent | undefined;
     try {
       const port = await new Promise<number>((resolve) => server.listen(0, "127.0.0.1", () => resolve((server.address() as any).port)));
-      agent = new AutonomousAgent({ endpoint: `http://127.0.0.1:${port}/v1`, model: "test", maxSteps: 1, temperature: 0, workspace: repo, shell: "bash", worktree: true });
+      agent = new AutonomousAgent({ endpoint: `http://127.0.0.1:${port}/v1`, model: "test", maxSteps: 1, temperature: 0, workspace: repo, shell: "bash", worktree: true, approvalMode: "auto", fullAccess: true });
       await agent.runTurn("write from an interactive turn");
       const active = agent.getActiveWorktree();
       const failures: string[] = [];
@@ -709,7 +710,7 @@ error[E0308]: mismatched types
     let agent: AutonomousAgent | undefined;
     try {
       const port = await new Promise<number>((resolve) => server.listen(0, "127.0.0.1", () => resolve((server.address() as any).port)));
-      agent = new AutonomousAgent({ endpoint: `http://127.0.0.1:${port}/v1`, model: "test", maxSteps: 2, temperature: 0, workspace: repos[0], shell: "bash", worktree: true, authoritativeVerifierCommand: "make test" });
+      agent = new AutonomousAgent({ endpoint: `http://127.0.0.1:${port}/v1`, model: "test", maxSteps: 2, temperature: 0, workspace: repos[0], shell: "bash", worktree: true, authoritativeVerifierCommand: "make test", approvalMode: "auto", fullAccess: true });
       agent.setWorkspace(repos[1]);
       await agent.run("write in the selected workspace");
       assert.strictEqual(requests, 1);
@@ -752,7 +753,7 @@ error[E0308]: mismatched types
     let agent: AutonomousAgent | undefined;
     try {
       const port = await new Promise<number>((resolve) => server.listen(0, "127.0.0.1", () => resolve((server.address() as any).port)));
-      agent = new AutonomousAgent({ endpoint: `http://127.0.0.1:${port}/v1`, model: "test", maxSteps: 2, temperature: 0, workspace: repo, shell: "bash", worktree: true });
+      agent = new AutonomousAgent({ endpoint: `http://127.0.0.1:${port}/v1`, model: "test", maxSteps: 2, temperature: 0, workspace: repo, shell: "bash", worktree: true, approvalMode: "auto", fullAccess: true });
       await agent.run("do not merge an unverified change");
       const active = agent.getActiveWorktree();
       assert.ok(active, "missing verification retains the speculative worktree");
@@ -814,7 +815,7 @@ error[E0308]: mismatched types
     let agent: AutonomousAgent | undefined;
     try {
       const port = await new Promise<number>((resolve) => server.listen(0, "127.0.0.1", () => resolve((server.address() as any).port)));
-      agent = new AutonomousAgent({ endpoint: `http://127.0.0.1:${port}/v1`, model: "test", maxSteps: 3, temperature: 0, workspace: repo, shell: "bash", worktree: true });
+      agent = new AutonomousAgent({ endpoint: `http://127.0.0.1:${port}/v1`, model: "test", maxSteps: 3, temperature: 0, workspace: repo, shell: "bash", worktree: true, approvalMode: "auto", fullAccess: true });
       await agent.run("exercise child mutation boundary");
       const active = agent.getActiveWorktree();
       assert.ok(active, "unverified parent worktree remains recoverable");
@@ -927,7 +928,7 @@ error[E0308]: mismatched types
     let agent: AutonomousAgent | undefined;
     try {
       const port = await new Promise<number>((resolve) => server.listen(0, "127.0.0.1", () => resolve((server.address() as any).port)));
-      agent = new AutonomousAgent({ endpoint: `http://127.0.0.1:${port}/v1`, model: "test", maxSteps: 2, temperature: 0, workspace: repo, shell: "bash", worktree: true });
+      agent = new AutonomousAgent({ endpoint: `http://127.0.0.1:${port}/v1`, model: "test", maxSteps: 2, temperature: 0, workspace: repo, shell: "bash", worktree: true, approvalMode: "auto", fullAccess: true });
       await agent.run("complete after discovered-only verifier");
       const active = agent.getActiveWorktree();
       assert.ok(active, "discovery success alone cannot discard the worktree via merge");
@@ -973,7 +974,7 @@ error[E0308]: mismatched types
       let agent: AutonomousAgent | undefined;
       try {
         const port = await new Promise<number>((resolve) => server.listen(0, "127.0.0.1", () => resolve((server.address() as any).port)));
-        agent = new AutonomousAgent({ endpoint: `http://127.0.0.1:${port}/v1`, model: "test", maxSteps: 2, temperature: 0, workspace: repo, shell: "bash", worktree: true, authoritativeVerifierCommand: scenario.command } as any);
+        agent = new AutonomousAgent({ endpoint: `http://127.0.0.1:${port}/v1`, model: "test", maxSteps: 2, temperature: 0, workspace: repo, shell: "bash", worktree: true, authoritativeVerifierCommand: scenario.command, approvalMode: "auto", fullAccess: true } as any);
         if (scenario.throws) {
           const originalSetWorkspace = agent.setWorkspace.bind(agent);
           (agent as any).setWorkspace = (workspace: string) => {

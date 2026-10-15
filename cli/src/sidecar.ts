@@ -16,7 +16,8 @@ import { redactSecrets } from "./ui.js";
 import { approvalReview } from "./approval_review.js";
 import { EvidenceLedger, LastTurn, MAX_DIFF_DETAIL, MAX_EVIDENCE, ReceiptSection, receiptSections, redactedJson, safeDiffText } from "./evidence.js";
 import { countDiffLines, previewDiff, visibleControls } from "./file_diff.js";
-import type { ChatMessage } from "./types.js";
+import type { ChatMessage, ApprovalMode } from "./types.js";
+import { isWorkspaceTrusted } from "./workspace_trust.js";
 import { STEERING_PREFIX } from "./core/objective.js";
 
 /** Messages of a resumed conversation sent to the client, and the characters kept of each. */
@@ -50,7 +51,7 @@ export interface SidecarOptions {
   app: ApplicationCore;
   /** Receives complete protocol lines (each ends with "\n"). */
   write: (line: string) => void;
-  mode: "auto" | "review";
+  mode?: ApprovalMode;
   onShutdown?: () => void;
   /** Session to continue: an id, or "latest". */
   resume?: string;
@@ -63,7 +64,7 @@ export class SidecarServer {
   private readonly app: ApplicationCore;
   private readonly write: (line: string) => void;
   private readonly onShutdown: () => void;
-  private mode: "auto" | "review";
+  private mode: ApprovalMode;
   private alwaysApprove = false;
   private activeTurn?: Promise<void>;
   private turnAbort?: AbortController;
@@ -92,7 +93,9 @@ export class SidecarServer {
   constructor(options: SidecarOptions) {
     this.app = options.app;
     this.write = options.write;
-    this.mode = options.mode;
+    const config = this.app.getConfig();
+    this.mode = options.mode ?? config.approvalMode ?? (isWorkspaceTrusted(config.workspace, Boolean(config.readOnly)) ? "auto" : "review");
+    this.app.getAgent().setApprovalMode(this.mode);
     this.onShutdown = options.onShutdown ?? (() => {});
     this.resume = options.resume;
     this.checkpointManager = this.app.getCheckpointManager();
@@ -475,9 +478,10 @@ export class SidecarServer {
   }
 
   private confirmFor(turnId: string, signal: AbortSignal) {
-    return this.mode === "review"
-      ? (tool: string, args: Record<string, any>) => this.requestApproval(turnId, signal, tool, args)
-      : undefined;
+    return (tool: string, args: Record<string, any>) => {
+      if (this.alwaysApprove) return Promise.resolve(true);
+      return this.requestApproval(turnId, signal, tool, args);
+    };
   }
 
   /** One agent turn: checkpoint, run, save the session, report the result. */
@@ -567,6 +571,7 @@ export class SidecarServer {
     if (approved && always) {
       this.alwaysApprove = true;
       this.mode = "auto";
+      this.app.getAgent().setApprovalMode("auto");
       this.emitSessionState();
     }
     pending.settle(approved);
@@ -634,8 +639,10 @@ export class SidecarServer {
       app: this.app,
       mode: () => this.mode,
       setMode: (mode) => {
-        this.mode = mode;
-        if (mode === "review") this.alwaysApprove = false;
+        this.mode = mode as ApprovalMode;
+        this.app.getAgent().setApprovalMode(this.mode);
+        if (this.mode !== "auto") this.alwaysApprove = false;
+        this.emitSessionState();
       },
       sessionId: () => this.sessionId,
       setSessionId: (sessionId) => {
@@ -833,6 +840,8 @@ export class SidecarServer {
   private emitSessionState(): void {
     const config = this.app.getConfig();
     const git = getGitInfo(config.workspace);
+    const trusted = isWorkspaceTrusted(config.workspace, Boolean(config.readOnly));
+    const sandboxStatus = config.sandbox ? (typeof config.sandbox === "string" ? config.sandbox : "on") : "off";
     this.emit({
       type: "session.state",
       workspace: config.workspace,
@@ -842,6 +851,11 @@ export class SidecarServer {
       git: git.isRepo ? { branch: git.branch, dirty: git.dirtyCount } : null,
       busy: Boolean(this.activeTurn),
       session: this.sessionId,
+      posture: {
+        mode: this.mode,
+        sandbox: sandboxStatus,
+        trusted,
+      },
     });
   }
 
@@ -925,6 +939,8 @@ async function main(argv: string[]): Promise<void> {
     .option("--coder-model <name>", "Model for code implementation")
     .option("--coder-endpoint <url>", "Inference endpoint for the coder model")
     .option("--approve", "Require operator approval before edits and shell commands")
+    .option("-y, --yes", "Run non-interactively without approval prompts (forces auto mode)")
+    .option("--mode <mode>", "Execution mode: auto, review, or read-only (default: auto for trusted workspaces, review for untrusted)")
     .option("-r, --resume [id]", "Resume a saved session (the latest when no id is given)")
     .parse(argv);
   const options = program.opts();
@@ -932,7 +948,7 @@ async function main(argv: string[]): Promise<void> {
   const app = new ApplicationCore(config);
   const server = new SidecarServer({
     app,
-    mode: options.approve ? "review" : "auto",
+    mode: config.approvalMode,
     resume: typeof options.resume === "string" ? options.resume : options.resume ? "latest" : undefined,
     write: (line) => {
       protocolWrite(line);

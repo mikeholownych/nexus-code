@@ -146,7 +146,7 @@ async function muted<T>(fn: () => Promise<T>): Promise<T> {
 }
 
 const cfg = (gw: Gw, workspace: string, o: Partial<HarnessConfig> = {}): HarnessConfig =>
-  ({ endpoint: gw.url, model: "m", maxSteps: 6, temperature: 0, workspace, shell: "bash", ...o });
+  ({ endpoint: gw.url, model: "m", maxSteps: 6, temperature: 0, workspace, shell: "bash", approvalMode: "auto", fullAccess: true, ...o });
 
 /** A durable operation driven in-process with the real agent executor; decisions are applied as the CLI does. */
 function operationRig(config: HarnessConfig, gw: Gw) {
@@ -669,7 +669,7 @@ function edit(file: string, fn: (state: any) => any): void {
 
 /** The real CLI in a child process with its own process group (killed as a whole, like a crash). */
 function cliProcess(args: string[], o: { cwd: string; home: string }) {
-  const env: Record<string, string | undefined> = { ...process.env, HOME: o.home };
+  const env: Record<string, string | undefined> = { ...process.env, HOME: o.home, NEXUS_APPROVAL_MODE: "auto" };
   for (const k of ENV_KEYS) if (k !== "HOME") delete env[k];
   const child = spawn(process.execPath, ["--import", tsxLoader, srcIndex, ...args], { cwd: o.cwd, env, stdio: ["ignore", "pipe", "pipe"], detached: true });
   let out = "";

@@ -15,6 +15,8 @@ import {
   needsOperatorDecision,
   type EffectClass,
 } from "./core/capabilities.js";
+import { ApprovalPolicy, defaultApprovalPolicy, PolicyContext, ApprovalMode } from "./core/approval_policy.js";
+import { isWorkspaceTrusted } from "./workspace_trust.js";
 import {
   ExecutionSpine,
   ExecutionReceipt,
@@ -907,6 +909,7 @@ export class AutonomousAgent {
   private toolDispatchSeq = 0;
   /** Egress destinations the operator approved this session (cleared on reset and restore: approvals never persist). */
   private approvedEgressOrigins = new Set<string>();
+  private approvalPolicy: ApprovalPolicy = defaultApprovalPolicy;
   private verifiedWorktreeCompletion: boolean = false;
   private worktreeRunTurnAuthorized: boolean = false;
   private managedWorktreeWorkspaceSwitch: boolean = false;
@@ -1174,6 +1177,34 @@ export class AutonomousAgent {
 
   public getTaskId(): string {
     return this.currentTaskId;
+  }
+
+  public setApprovalPolicy(policy: ApprovalPolicy): void {
+    this.approvalPolicy = policy;
+  }
+
+  public getApprovalPolicy(): ApprovalPolicy {
+    return this.approvalPolicy;
+  }
+
+  public clearApprovedEgressOrigins(): void {
+    this.approvedEgressOrigins.clear();
+  }
+
+  public setApprovalMode(mode: ApprovalMode): void {
+    this.config.approvalMode = mode;
+    if (mode !== "auto") {
+      this.config.fullAccess = false;
+    }
+    this.clearApprovedEgressOrigins();
+  }
+
+  public getApprovalMode(): ApprovalMode {
+    if (this.config.approvalMode) return this.config.approvalMode;
+    if (this.config.readOnly) return "read-only";
+    if (this.config.fullAccess) return "auto";
+    const trusted = isWorkspaceTrusted(this.config.workspace, Boolean(this.config.readOnly));
+    return trusted ? "auto" : "review";
   }
 
   private initTaskState(): void {
@@ -3977,9 +4008,82 @@ The pinned Objective Ledger lists the operator's requirements; your plan never r
     // Tools outside the registry (MCP servers, plugins) are treated as running code: review mode asks before them.
     const effect: EffectClass = cap ? cap.effect : READ_ONLY_TOOLS.has(toolName) ? "read_workspace" : "exec";
     const egressOrigin = effect === "egress" ? egressOriginOf(toolName, args) : undefined;
-    const askOperator = needsOperatorDecision(effect) && !(egressOrigin && this.approvedEgressOrigins.has(egressOrigin));
+    const isTrusted = isWorkspaceTrusted(this.config.workspace, Boolean(this.config.readOnly));
+    const mode = this.config.approvalMode ?? (this.config.readOnly ? "read-only" : (this.config.fullAccess ? "auto" : (isTrusted ? "auto" : "review")));
+    const policyContext: PolicyContext = {
+      mode,
+      trusted: isTrusted,
+      sandbox: this.config.sandbox,
+      approvedEgressOrigins: this.approvedEgressOrigins,
+      egressOrigin,
+      fullAccess: Boolean(this.config.fullAccess),
+    };
+    const askOperator = this.approvalPolicy.requiresDecision(effect, policyContext);
 
-    if (onConfirm && askOperator) {
+    if (toolName === "activate_skill") {
+      const skillName = args?.name;
+      if (skillName && this.skillManager.getUntrustedSkill(skillName)) {
+        const cancelMsg = `Error: Skill '${skillName}' is in an untrusted workspace and cannot be activated. Run 'nexus trust .' to trust this workspace.`;
+        const receipt: ExecutionReceipt = {
+          invocationId: call.id,
+          taskId: this.activeWorktree?.taskId || this.currentTaskId,
+          actor,
+          executionDomain: actor === "subagent" ? "subagent" : "agent_orchestration",
+          capabilityId: this.capabilityRegistry.getByToolName(toolName)?.id || "activate_skill",
+          toolName,
+          targetResources: extractTargetResources(toolName, args),
+          success: false,
+          output: "",
+          error: cancelMsg,
+          durationMs: 0,
+          candidateMutated: false,
+          status: "DENIED",
+          denialReason: "UNTRUSTED_WORKSPACE_SKILL",
+          timestamp: new Date().toISOString(),
+          simulated: Boolean(this.config.dryRun),
+        };
+        this.observer?.onToolEnd?.({ dispatch, callId: call.id, tool: toolName, success: false, output: "", error: cancelMsg });
+        return { receipt, shouldExit: false };
+      }
+    }
+
+    if (askOperator) {
+      if (!onConfirm) {
+        const cancelMsg = `Error: Tool '${toolName}' requires operator approval (${effect}), but no operator is present (headless execution). Run with --yes or --mode auto, or 'nexus trust .' to trust this workspace.`;
+        const receipt: ExecutionReceipt = {
+          invocationId: call.id,
+          taskId: this.activeWorktree?.taskId || this.currentTaskId,
+          actor,
+          executionDomain: actor === "subagent" ? "subagent" : "agent_orchestration",
+          capabilityId:
+            this.capabilityRegistry.getByToolName(toolName)?.id || "unknown",
+          toolName,
+          targetResources: extractTargetResources(toolName, args),
+          success: false,
+          output: "",
+          error: cancelMsg,
+          durationMs: 0,
+          candidateMutated: false,
+          status: "DENIED",
+          denialReason: "DECISION_REQUIRED_NO_OPERATOR",
+          timestamp: new Date().toISOString(),
+          simulated: Boolean(this.config.dryRun),
+        };
+        if (this.flightRecorder) {
+          this.flightRecorder.recordToolResult(
+            currentStep,
+            call.id,
+            toolName,
+            false,
+            cancelMsg,
+            0,
+            "DECISION_REQUIRED_NO_OPERATOR"
+          );
+        }
+        this.observer?.onToolEnd?.({ dispatch, callId: call.id, tool: toolName, success: false, output: "", error: cancelMsg });
+        return { receipt, shouldExit: false };
+      }
+
       this.activity("approval", { tool: toolName, ...(subject ? { subject } : {}) });
       const approved = await onConfirm(toolName, args);
       if (approved && egressOrigin) this.approvedEgressOrigins.add(egressOrigin);

@@ -6,6 +6,7 @@ import type { ConfirmHandler } from "../agent.js";
 import type { CheckpointManager } from "../checkpoint.js";
 import type { ApplicationCore } from "../core/app.js";
 import type { ReceiptSection } from "../evidence.js";
+import type { ApprovalMode } from "../types.js";
 
 export interface SlashSpec {
   name: string;
@@ -19,8 +20,8 @@ export interface SlashSpec {
 /** What the sidecar lets a command read and change. */
 export interface SlashHost {
   readonly app: ApplicationCore;
-  mode(): "auto" | "review";
-  setMode(mode: "auto" | "review"): void;
+  mode(): ApprovalMode;
+  setMode(mode: ApprovalMode): void;
   sessionId(): string;
   setSessionId(id: string): void;
   checkpoints(): CheckpointManager;

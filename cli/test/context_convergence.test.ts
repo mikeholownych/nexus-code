@@ -135,7 +135,7 @@ async function muted<T>(fn: () => Promise<T>, admissions?: string[]): Promise<T>
 }
 
 const cfg = (gw: Gw, workspace: string, o: Partial<HarnessConfig> = {}): HarnessConfig =>
-  ({ endpoint: gw.url, model: "m", maxSteps: 8, temperature: 0, workspace, shell: "bash", contextLimit: 40_000, ...o });
+  ({ endpoint: gw.url, model: "m", maxSteps: 8, temperature: 0, workspace, shell: "bash", contextLimit: 40_000, approvalMode: "auto", fullAccess: true, ...o });
 
 const OBJECTIVE = "Review a.txt, b.txt, c.txt and d.txt. Write review.md listing the marker word of each file, then call task_completed.";
 

@@ -9,7 +9,8 @@ import { AutonomousAgent } from "./agent.js";
 import { withDurableSync } from "./core/durable_file.js";
 import { ApplicationCore } from "./core/app.js";
 import { LocalLlmClient } from "./client.js";
-import { HarnessConfig } from "./types.js";
+import { HarnessConfig, ApprovalMode } from "./types.js";
+import { isWorkspaceTrusted } from "./workspace_trust.js";
 import { getGitInfo, scaffoldProjectRules, generateConventionalCommit, commitChanges } from "./git.js";
 import { SessionManager, SessionData } from "./session.js";
 import {
@@ -66,7 +67,7 @@ export class InteractiveRepl {
   private config: HarnessConfig;
   private rl: readline.Interface | null = null;
   private knownModels: string[] = [];
-  private autoApprove: boolean = true;
+  private approvalMode: ApprovalMode = "auto";
   private historyFile: string;
   private history: string[] = [];
   private sessionManager: SessionManager;
@@ -77,7 +78,7 @@ export class InteractiveRepl {
   /** Cancels a running /team operation (Ctrl-C). */
   private teamAbort?: AbortController;
 
-  constructor(appOrConfig: ApplicationCore | HarnessConfig, autoApprove: boolean = true, resumeSessionId?: string) {
+  constructor(appOrConfig: ApplicationCore | HarnessConfig, modeOrAutoApprove?: ApprovalMode | boolean, resumeSessionId?: string) {
     if ("getAgent" in appOrConfig && typeof (appOrConfig as any).getAgent === "function") {
       this.app = appOrConfig as ApplicationCore;
       this.config = this.app.getConfig();
@@ -91,7 +92,14 @@ export class InteractiveRepl {
       this.sessionManager = this.app.getSessionManager();
       this.checkpointManager = this.app.getCheckpointManager();
     }
-    this.autoApprove = autoApprove;
+    if (typeof modeOrAutoApprove === "string") {
+      this.approvalMode = modeOrAutoApprove;
+    } else if (typeof modeOrAutoApprove === "boolean") {
+      this.approvalMode = modeOrAutoApprove ? "auto" : "review";
+    } else {
+      this.approvalMode = this.config.approvalMode || (isWorkspaceTrusted(this.config.workspace, Boolean(this.config.readOnly)) ? "auto" : "review");
+    }
+    this.agent.setApprovalMode(this.approvalMode);
     // Compaction archives the originals beside the current session before the session names it as committed.
     this.agent.setArchiveSink((compactionId, messages) => this.sessionManager.appendArchivedHistory(this.currentSessionId, messages, compactionId));
     this.historyFile = path.join(os.homedir(), ".nexus_history");
@@ -121,6 +129,15 @@ export class InteractiveRepl {
 
   public getApp(): ApplicationCore {
     return this.app;
+  }
+
+  public getApprovalMode(): ApprovalMode {
+    return this.approvalMode;
+  }
+
+  public setApprovalMode(mode: ApprovalMode): void {
+    this.approvalMode = mode;
+    this.agent.setApprovalMode(mode);
   }
 
   /** Runs one agent turn with the operator's stop authority wired to it, then records the structured result. */
@@ -215,8 +232,13 @@ export class InteractiveRepl {
       ? pc.cyan(` [git: ${pc.bold(gitInfo.formattedBadge)}]`)
       : "";
 
+    const trusted = isWorkspaceTrusted(this.config.workspace, Boolean(this.config.readOnly));
+    const sandboxStatus = this.config.sandbox ? (typeof this.config.sandbox === "string" ? this.config.sandbox : "on") : "off";
+    const trustStatus = trusted ? "trusted" : "untrusted (nexus trust .)";
+    console.log(pc.dim(`mode: ${this.approvalMode} · sandbox: ${sandboxStatus} · workspace: ${trustStatus}`));
+
     console.log(`${pc.bold(pc.cyan("WORKSPACE"))}  ${pc.white(wsName)}${gitBadge}  ${pc.dim(this.config.workspace)}`);
-    console.log(`${pc.bold(pc.cyan("MODEL"))}      ${pc.green(this.config.model)}  ${pc.dim(`· ${this.autoApprove ? "autonomous" : "review mode"}`)}`);
+    console.log(`${pc.bold(pc.cyan("MODEL"))}      ${pc.green(this.config.model)}  ${pc.dim(`· ${this.approvalMode === "auto" ? "autonomous" : this.approvalMode === "read-only" ? "read-only" : "review mode"}`)}`);
     if (verbose) console.log(`${pc.bold(pc.cyan("RUNTIME"))}   ${this.config.endpoint}  ·  ${this.config.shell}  ·  ${this.agent.getHistoryCount()} messages`);
     console.log(`${pc.dim(`session ${this.currentSessionId} · ${this.agent.getHistoryCount()} messages · ${this.config.shell}`)}\n`);
   }
@@ -278,7 +300,7 @@ export class InteractiveRepl {
   }
 
   private async confirmAction(toolName: string, args: Record<string, any>): Promise<boolean> {
-    if (this.autoApprove) return true;
+    if (this.approvalMode === "auto") return true;
     if (!this.rl) return true;
 
     console.log(pc.bold(pc.yellow(`\n⚠️  Action Approval Required:`)));
@@ -356,7 +378,8 @@ export class InteractiveRepl {
       if (answer === null) return false;
       const trimmed = answer.trim().toLowerCase();
       if (trimmed === "a" || trimmed === "always") {
-        this.autoApprove = true;
+        this.approvalMode = "auto";
+        this.agent.setApprovalMode("auto");
         console.log(pc.green("  Switched to auto-approve for remainder of session."));
         return true;
       }
@@ -639,13 +662,19 @@ export class InteractiveRepl {
             continue;
           } else if (cmd === "mode") {
             if (arg === "auto" || arg === "autonomous") {
-              this.autoApprove = true;
+              this.approvalMode = "auto";
+              this.agent.setApprovalMode("auto");
               console.log(pc.green("✔ Mode switched to: auto (autonomous tool execution)\n"));
             } else if (arg === "review" || arg === "ask") {
-              this.autoApprove = false;
+              this.approvalMode = "review";
+              this.agent.setApprovalMode("review");
               console.log(pc.yellow("✔ Mode switched to: review (requires user confirmation before changes)\n"));
+            } else if (arg === "read-only" || arg === "readonly") {
+              this.approvalMode = "read-only";
+              this.agent.setApprovalMode("read-only");
+              console.log(pc.yellow("✔ Mode switched to: read-only (rejects mutating tool executions)\n"));
             } else {
-              console.log(`Current mode: ${this.autoApprove ? pc.green("auto") : pc.yellow("review")}. Use: /mode auto or /mode review\n`);
+              console.log(`Current mode: ${this.approvalMode === "auto" ? pc.green("auto") : pc.yellow(this.approvalMode)}. Use: /mode auto, /mode review, or /mode read-only\n`);
             }
             continue;
           } else if (cmd === "diff") {

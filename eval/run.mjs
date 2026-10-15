@@ -115,7 +115,7 @@ function agentCommand(task, ws, home, budget) {
   const agent = config.agent ?? "nexus";
   if (agent === "nexus") {
     env.LOCAL_LLM_ENDPOINT = ep;
-    return { cmd: process.execPath, argv: [path.join(ROOT, "cli/dist/index.js"), "run", "--json", "-w", ws, "-e", ep, "-m", config.model, "-s", "30", "--max-total-steps", String(budget.steps), "--max-turn-minutes", String(budget.minutes), ...(config.args ?? []), task.objective], env };
+    return { cmd: process.execPath, argv: [path.join(ROOT, "cli/dist/index.js"), "run", "--yes", "--json", "-w", ws, "-e", ep, "-m", config.model, "-s", "30", "--max-total-steps", String(budget.steps), "--max-turn-minutes", String(budget.minutes), ...(config.args ?? []), task.objective], env };
   }
   if (agent === "aider") {
     return { cmd: "aider", argv: ["--model", `openai/${config.model}`, "--openai-api-base", ep, "--yes-always", "--no-auto-commits", "--no-dirty-commits", "--no-gitignore", "--no-show-model-warnings", "--no-check-update", "--analytics-disable", "--no-pretty", "--no-fancy-input", ...(config.args ?? []), "--message", task.objective], env };
