@@ -607,7 +607,14 @@ function stepPosition(step, max) {
 }
 /** A workspace state identity that took longer than this disables further ones for the turn (reported, not hidden). */
 const STATE_IDENTITY_BUDGET_MS = 1_500;
-function triggerNotification(title, message) {
+function triggerNotification(title, message, surface) {
+    // Desktop notification and BEL happen only when stdout is an interactive TTY and the surface is the REPL or TUI (REQ-AGT-109a).
+    if (!process.stdout.isTTY) {
+        return;
+    }
+    if (surface !== "repl" && surface !== "tui") {
+        return;
+    }
     try {
         process.stdout.write("\x07");
         exec(`notify-send "${title.replace(/"/g, '\\"')}" "${message.replace(/"/g, '\\"')}"`, () => { });
@@ -795,9 +802,12 @@ export class AutonomousAgent {
     recoveryArchiveNotice;
     /** Every original compaction replaced in this conversation (bounded), searchable with read_archive. */
     archiveForReading = [];
+    /** Execution surface: 'repl', 'tui', or 'headless' (REQ-AGT-109a). */
+    surface;
     constructor(config, depth = 0, inheritedWorktreeScope) {
         canonicalDurableProvenance.set(this, new WeakMap());
         this.config = config;
+        this.surface = config.surface || "headless";
         this.primaryWorkspacePathIdentity = WorkspacePath.fromSelectedWorkspace(path.resolve(config.workspace || process.cwd()));
         this.workspacePathIdentity = this.primaryWorkspacePathIdentity;
         this.depth = depth;
@@ -1158,6 +1168,12 @@ export class AutonomousAgent {
     }
     getCapabilityRegistry() {
         return this.capabilityRegistry;
+    }
+    setSurface(surface) {
+        this.surface = surface;
+    }
+    getSurface() {
+        return this.surface;
     }
     async initExtensibility() {
         if (this.extensibilityInitialized)
@@ -4834,7 +4850,7 @@ The pinned Objective Ledger lists the operator's requirements; your plan never r
             if (this.hasQueuedSteering()) {
                 this.cancelQueuedSteering(interruption ? "the turn was cancelled before it could be applied" : `the turn ended (${stopReason ?? inferenceFailure?.kind ?? (capacityBlock ? "context capacity" : persistenceFailure ? "persistence failure" : "stopped")}) before it could be applied`);
             }
-            triggerNotification("Nexus Code", "Turn finished.");
+            triggerNotification("Nexus Code", "Turn finished.", this.surface);
             try {
                 this.knowledge.autoExtract(promptText, "");
             }
