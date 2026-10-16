@@ -87,8 +87,9 @@ function sizingRows(agent: AutonomousAgent): Array<[string, string]> {
   const last = agent.getLastRequestCount();
   const tracking = agent.getObjective()?.execution;
   const rows: Array<[string, string]> = [];
-  rows.push(["context", caps ? `${caps.contextLimit} (${caps.contextSource}) · output ${caps.outputAllowance} (${caps.outputSource})` : "not yet discovered (next request reads the provider's limits, if it advertises them)"]);
-  if (caps) rows.push(["provider", `limits discovery ${caps.discovery}${caps.advertised?.limitsVersion ? ` · limits_version ${caps.advertised.limitsVersion}` : ""} · request counting ${caps.tokenCounting}`]);
+  const via = caps?.advertised?.via ? ` via ${caps.advertised.via}` : "";
+  rows.push(["context", caps ? `${caps.contextLimit} (${caps.contextSource}${via}) · output ${caps.outputAllowance} (${caps.outputSource})` : "not yet discovered (next request reads the provider's limits, if it advertises them)"]);
+  if (caps) rows.push(["provider", `limits discovery ${caps.discovery}${caps.advertised?.serverKind ? ` · server_kind ${caps.advertised.serverKind}` : ""}${caps.advertised?.limitsVersion ? ` · limits_version ${caps.advertised.limitsVersion}` : ""} · request counting ${caps.tokenCounting}`]);
   if (last) rows.push(["last req", `${last.promptTokens} tokens (${last.source}${last.workerId ? ` on ${last.workerId}` : ""}); client estimate ${last.estimate}${last.admitted?.promptTokens !== undefined ? `; admitted ${last.admitted.promptTokens} (${last.admitted.source}${last.admitted.workerId ? ` on ${last.admitted.workerId}` : ""})` : ""}`]);
   if (tracking) rows.push(["progress", `${tracking.cumulativeSteps} steps on this objective · ${tracking.stepsWithoutProgress} since last progress · ${tracking.compactions.filter((c) => c.committed).length} compaction(s)`]);
   return rows;

@@ -80,6 +80,10 @@ export function providerHints(headers: HeaderSource, body?: string, now: number 
 // ---------------------------------------------------------------- classification
 
 const CAPACITY_CODES = new Set(["context_length_exceeded", "string_above_max_length"]);
+/** Error types servers use for a request larger than the loaded context (llama.cpp server: exceed_context_size_error). */
+const CAPACITY_TYPES = new Set(["exceed_context_size_error"]);
+/** Context-overflow wording of vLLM, llama.cpp, LM Studio and Ollama error messages. */
+const CAPACITY_MESSAGE = /context length|context window|maximum context|context size|exceeds the available context|too many tokens|prompt too long/i;
 /** Cloud billing/quota exhaustion (OpenAI insufficient_quota, Anthropic billing_error). Waiting does not fix these. */
 const QUOTA_CODES = new Set(["insufficient_quota", "billing_error", "payment_required"]);
 const NOT_EXECUTED_CODES = new Set(["pre_generation", "gateway_restarting", "pool_unavailable", "adapter_unavailable", "quota_exceeded"]);
@@ -90,7 +94,9 @@ const NOT_EXECUTED_CODES = new Set(["pre_generation", "gateway_restarting", "poo
  */
 export function classifyHttpFailure(status: number, hints: ProviderHints = {}, body = ""): ProviderClassification {
   const code = hints.errorCode;
-  if (code && CAPACITY_CODES.has(code)) return { condition: "CAPACITY_REJECTED", execution: "NOT_EXECUTED" };
+  if ((code && CAPACITY_CODES.has(code)) || (hints.errorType && CAPACITY_TYPES.has(hints.errorType))) {
+    return { condition: "CAPACITY_REJECTED", execution: "NOT_EXECUTED" };
+  }
   if (status === 402 || (code && QUOTA_CODES.has(code)) || (hints.errorType && QUOTA_CODES.has(hints.errorType))) {
     return { condition: "QUOTA_EXHAUSTED", execution: "NOT_EXECUTED" };
   }
@@ -103,7 +109,7 @@ export function classifyHttpFailure(status: number, hints: ProviderHints = {}, b
   if (status === 408) return { condition: "TEMPORARILY_UNAVAILABLE", execution: "NOT_EXECUTED" };
   // 529: Anthropic's "overloaded" answer, given instead of executing the request.
   if (status === 529) return { condition: "OVERLOADED", execution: "NOT_EXECUTED" };
-  if (status === 413 || (status === 400 && /context length|context window|maximum context|too many tokens/i.test(body))) {
+  if (status === 413 || ((status === 400 || status === 422 || status === 500) && CAPACITY_MESSAGE.test(body))) {
     return { condition: "CAPACITY_REJECTED", execution: "NOT_EXECUTED" };
   }
   if (status >= 400 && status < 500) return { condition: "REQUEST_REJECTED", execution: "NOT_EXECUTED" };
