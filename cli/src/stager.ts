@@ -57,6 +57,19 @@ export function parseDiffHunks(diffText: string): DiffFile[] {
 
     if (currentFile && (line.startsWith("index ") || line.startsWith("--- ") || line.startsWith("+++ ") || line.startsWith("new file ") || line.startsWith("deleted file "))) {
       currentFile.headers.push(line);
+      // The ---/+++ headers carry the whole path to end of line (spaces included); prefer them over the
+      // space-split `diff --git` line. Quoted paths (git core.quotePath) are unquoted; /dev/null keeps the other side.
+      const header = /^(---|\+\+\+) (.*?)\t?$/.exec(line);
+      if (header) {
+        let p = header[2];
+        if (p.startsWith("\"") && p.endsWith("\"")) {
+          try { p = JSON.parse(p); } catch {}
+        }
+        if (p !== "/dev/null") {
+          if (header[1] === "---") currentFile.oldPath = p.replace(/^a\//, "");
+          else currentFile.newPath = p.replace(/^b\//, "");
+        }
+      }
       continue;
     }
 

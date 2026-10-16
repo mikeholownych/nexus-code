@@ -922,7 +922,7 @@ program
 
 program
   .command("eval <dataset>")
-  .description("Evaluate SWE-bench / benchmark dataset against Nexus Code harness")
+  .description("[experimental] Evaluate SWE-bench / benchmark dataset against Nexus Code harness")
   .option("-e, --endpoint <url>", "Local LLM endpoint (default: $LOCAL_LLM_ENDPOINT)")
   .option("-m, --model <name>", "Model name identifier (default: active model in LM Studio/vLLM)")
   .option("-w, --workspace <path>", "Workspace directory (default: current directory)")

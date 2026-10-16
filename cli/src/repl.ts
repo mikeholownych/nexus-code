@@ -269,7 +269,7 @@ export class InteractiveRepl {
     console.log(`  ${pc.bold(pc.yellow("/diff"))}               Show colored git diff of uncommitted changes`);
     console.log(`  ${pc.bold(pc.yellow("/stage [reset]"))}       Inspect and stage individual diff hunks`);
     console.log(`  ${pc.bold(pc.yellow("/worktree [status|merge|discard]"))} Manage isolated ephemeral git worktrees`);
-    console.log(`  ${pc.bold(pc.yellow("/tdd <issue>"))}         Execute strict RED-GREEN-REFACTOR TDD cycle`);
+    console.log(`  ${pc.bold(pc.yellow("/tdd <issue>"))}         [experimental] Execute strict RED-GREEN-REFACTOR TDD cycle`);
     console.log(`  ${pc.bold(pc.yellow("/knowledge [set|del]"))} Manage persistent project knowledge graph`);
     console.log(`  ${pc.bold(pc.yellow("/browse <url>"))}        Verify URL in headless browser driver`);
     console.log(`  ${pc.bold(pc.yellow("/git"))}                Show current git status and modified files`);

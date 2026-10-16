@@ -122,7 +122,7 @@ export const SLASH_COMMANDS: SlashSpec[] = [
   { name: "plugins", usage: "/plugins", summary: "Loaded plugins" },
   { name: "browse", usage: "/browse <url>", summary: "Open a URL in the headless browser" },
   { name: "image", usage: "/image <path> [prompt]", summary: "Send an image to the vision model", cancellable: true },
-  { name: "tdd", usage: "/tdd <issue>", summary: "Run a RED → GREEN → REFACTOR cycle", cancellable: true },
+  { name: "tdd", usage: "/tdd <issue>", summary: "[experimental] Run a RED → GREEN → REFACTOR cycle", cancellable: true },
   { name: "team", usage: "/team <role|full> [--independent-review] <objective>", summary: "[experimental] Run a role or the full team as a durable operation (researcher, architect, implementer, tester, reviewer)" },
   { name: "theme", usage: "/theme [name]", summary: "Show or save the colour theme" },
   { name: "recover", usage: "/recover [task-id]", summary: "Recover durable task state" },

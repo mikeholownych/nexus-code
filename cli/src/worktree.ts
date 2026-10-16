@@ -86,7 +86,7 @@ export class WorktreeManager {
   /**
    * Spawns an isolated ephemeral worktree with a dedicated speculative branch.
    */
-  public createWorktree(taskId: string = `task-${randomUUID().slice(0, 8)}`): WorktreeCreateResult {
+  public createWorktree(taskId: string = `task-${randomUUID().slice(0, 8)}`, startPoint: string = "HEAD"): WorktreeCreateResult {
     if (!this.isGitRepo()) {
       throw new Error(`Cannot create worktree: ${this.workspace} is not a valid git repository.`);
     }
@@ -104,8 +104,8 @@ export class WorktreeManager {
     }
 
     try {
-      // Add worktree branching from current HEAD
-      execFileSync("git", ["worktree", "add", "-b", branch, worktreePath, "HEAD"], {
+      // Add worktree branching from startPoint (default HEAD)
+      execFileSync("git", ["worktree", "add", "-b", branch, worktreePath, startPoint || "HEAD"], {
         cwd: this.gitRoot,
         encoding: "utf-8",
         stdio: ["ignore", "pipe", "pipe"],
