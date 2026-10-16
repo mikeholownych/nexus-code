@@ -3,11 +3,26 @@ import pc from "picocolors";
 
 const CJK_KANA_HANGUL_RE = /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}]/u;
 const ALL_DIGITS_RE = /^\s*\p{N}+\s*$/u;
+const HEX_RUN_RE = /^[0-9a-fA-F]{16,}$/;
+
+/**
+ * Encoded-data runs (base64, hex). Real BPE vocabularies have few merges for them: measured on the pinned calibration
+ * worker (cli/test/fixtures/token_calibration.json), random base64 is ~1.34 chars/token and hex ~1.14. REQ-AGT-118
+ * sets len/3 as the floor; these divisors stay above it.
+ */
+function encodedRunTokens(run: string): number | undefined {
+  if (run.length < 16 || ALL_DIGITS_RE.test(run)) return undefined;
+  if (HEX_RUN_RE.test(run) && /\d/.test(run)) return Math.ceil(run.length / 1.1);
+  const hasDigit = /\d/.test(run);
+  const mixedCase = /[a-z]/.test(run) && /[A-Z]/.test(run);
+  if ((hasDigit || /[+/=]/.test(run) || run.length >= 32) && mixedCase) return Math.max(Math.ceil(run.length / 3), Math.ceil(run.length / 1.4));
+  return undefined;
+}
 
 // Conservative BPE subword regex (REQ-AGT-118):
 // - >= 1 token per CJK, Hangul or kana character
 // - 1 token per digit
-// - len/3 for base64-like and long unbroken runs
+// - at least len/3 for base64-like and long unbroken runs
 const BPE_REGEX = /[A-Za-z0-9+/=_-]{16,}|'s|'t|'re|'ve|'m|'ll|'d| ?[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}]| ?\p{L}+| ?\p{N}| ?[^\s\p{L}\p{N}]+|\s+(?!\S)|\s+/gu;
 
 /**
@@ -25,6 +40,11 @@ export function countTokens(text: string | null | undefined): number {
       count += m.trim().length;
       continue;
     }
+    const encoded = encodedRunTokens(m);
+    if (encoded !== undefined) {
+      count += encoded;
+      continue;
+    }
     const trimmed = m.trimStart();
     if (trimmed.length > 0 && !/\s/.test(trimmed) && !CJK_KANA_HANGUL_RE.test(trimmed)) {
       const codePoints = Array.from(trimmed);
@@ -34,7 +54,7 @@ export function countTokens(text: string | null | undefined): number {
       }
     }
     if (m.length > 8) {
-      // Long unbroken strings/hashes/base64 split into ~3 chars per token (REQ-AGT-118)
+      // Long unbroken words/identifiers: ~3 chars per token (REQ-AGT-118 floor)
       count += Math.ceil(m.length / 3);
     } else {
       count += 1;
