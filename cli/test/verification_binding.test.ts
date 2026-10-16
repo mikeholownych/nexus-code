@@ -123,16 +123,35 @@ test("ACC-VER-03: path-token deliverable binding rejects basename coincidences a
   }
 });
 
-test("ACC-VER-05: discoverVerifier returns null for Makefile with only pytest: or empty workspace", () => {
+test("ACC-VER-05: discoverVerifier and run_tests return no verifier for Makefile with only pytest: or empty workspace", async () => {
+  const { RustCoreBridge } = await import("../src/tools.js");
   const d = fs.mkdtempSync(path.join(os.tmpdir(), "a2discover-"));
   try {
     // 1. Makefile with only pytest: target
     fs.writeFileSync(path.join(d, "Makefile"), "pytest:\n\tpytest\n");
     assert.equal(discoverVerifier(d), null, "Makefile without test: target should discover no verifier");
 
+    const bridge1 = new RustCoreBridge(d);
+    try {
+      const res1 = await bridge1.executeTool("run_tests", {});
+      assert.equal(res1.success, false);
+      assert.match(res1.output, /no verifier/i);
+    } finally {
+      bridge1.shutdown();
+    }
+
     // 2. Empty directory
     fs.rmSync(path.join(d, "Makefile"));
     assert.equal(discoverVerifier(d), null, "empty directory should discover no verifier");
+
+    const bridge2 = new RustCoreBridge(d);
+    try {
+      const res2 = await bridge2.executeTool("run_tests", {});
+      assert.equal(res2.success, false);
+      assert.match(res2.output, /no verifier/i);
+    } finally {
+      bridge2.shutdown();
+    }
 
     // 3. package.json with test script
     fs.writeFileSync(path.join(d, "package.json"), JSON.stringify({ scripts: { test: "jest" } }));

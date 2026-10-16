@@ -16,68 +16,30 @@ export interface TestRunResult {
 
 export type TestCommandExecutor = (command: string) => Promise<{ success: boolean; output: string; error?: string; timedOut?: boolean }>;
 
-/**
- * Auto-detect project test command (Candidate #47)
- */
-export function detectTestCommand(workspace: string, filterPattern?: string): string {
-  const root = path.resolve(workspace);
+export const DEFAULT_VERIFIER_TIMEOUT_SECS = 300;
 
-  if (filterPattern) {
-    // The filter is interpolated into a shell command: letters, digits and `_ : . / -` with single spaces only (no
-    // newline, quote or shell metacharacter), and it may not start with `-` (it would become a runner flag).
-    const trimmed = filterPattern.trim();
-    if (!/^[A-Za-z0-9_:./ -]+$/.test(trimmed) || trimmed.startsWith("-")) {
-      throw new Error(`Invalid test filter pattern '${filterPattern}': contains unsafe characters.`);
-    }
-    filterPattern = trimmed;
+export function verifierTimeoutSecs(configured?: number): number {
+  if (typeof configured === "number" && Number.isFinite(configured) && configured > 0) {
+    return Math.floor(configured);
   }
-
-  // 1. Makefile with test target
-  const makefile = path.join(root, "Makefile");
-  if (fs.existsSync(makefile)) {
-    try {
-      const content = fs.readFileSync(makefile, "utf-8");
-      if (content.includes("test:")) {
-        return filterPattern ? `make test FILTER="${filterPattern}"` : "make test";
-      }
-    } catch {}
+  const envVal = Number(process.env.NEXUS_VERIFIER_TIMEOUT_SECS);
+  if (Number.isFinite(envVal) && envVal > 0) {
+    return Math.floor(envVal);
   }
-
-  // 2. Cargo.toml (Rust)
-  if (fs.existsSync(path.join(root, "Cargo.toml"))) {
-    return filterPattern ? `cargo test -- ${filterPattern}` : "cargo test";
-  }
-  if (fs.existsSync(path.join(root, "core", "Cargo.toml"))) {
-    return filterPattern
-      ? `cargo test --manifest-path core/Cargo.toml -- ${filterPattern}`
-      : "cargo test --manifest-path core/Cargo.toml";
-  }
-
-  // 3. package.json (Node / TS)
-  if (fs.existsSync(path.join(root, "package.json"))) {
-    return filterPattern ? `npm test -- -t "${filterPattern}"` : "npm test";
-  }
-  if (fs.existsSync(path.join(root, "cli", "package.json"))) {
-    return filterPattern ? `npm --prefix cli test -- -t "${filterPattern}"` : "npm --prefix cli test";
-  }
-
-  // 4. Python
-  if (fs.existsSync(path.join(root, "pyproject.toml")) || fs.existsSync(path.join(root, "setup.py"))) {
-    return filterPattern ? `pytest -k "${filterPattern}"` : "pytest";
-  }
-
-  // 5. Go
-  if (fs.existsSync(path.join(root, "go.mod"))) {
-    return filterPattern ? `go test ./... -run "${filterPattern}"` : "go test ./...";
-  }
-
-  // 6. Python test files without project configuration: the standard library's runner
-  const unittest = unittestLayout(root);
-  if (unittest) return filterPattern ? `${unittest.command} -k "${filterPattern}"` : unittest.command;
-
-  return "npm test";
+  return DEFAULT_VERIFIER_TIMEOUT_SECS;
 }
 
+function validateFilterPattern(filterPattern?: string): string | undefined {
+  if (!filterPattern) return undefined;
+  // The filter is interpolated into a shell command: letters, digits and `_ : . / -` with single spaces only (no
+  // newline, quote or shell metacharacter), and it may not start with `-` (it would become a runner flag).
+  const trimmed = filterPattern.trim();
+  if (!trimmed) return undefined;
+  if (!/^[A-Za-z0-9_:./ -]+$/.test(trimmed) || trimmed.startsWith("-")) {
+    throw new Error(`Invalid test filter pattern '${filterPattern}': contains unsafe characters.`);
+  }
+  return trimmed;
+}
 
 /**
  * Python tests with no project configuration (no pyproject.toml / setup.py): `test_*.py` files in `tests/` or at the
@@ -104,20 +66,38 @@ export interface DiscoveredVerifier {
 }
 
 /**
- * Select a verifier only when repository files justify one. Unlike detectTestCommand there is no
- * `npm test` fallback: a workspace with no applicable verifier has none (returns null).
+ * Select a verifier only when repository files justify one. There is no `npm test` fallback:
+ * a workspace with no applicable verifier has none (returns null).
  */
-export function discoverVerifier(workspace: string): DiscoveredVerifier | null {
+export function discoverVerifier(workspace: string, filterPattern?: string): DiscoveredVerifier | null {
   const root = path.resolve(workspace);
+  const filter = validateFilterPattern(filterPattern);
   const has = (p: string) => fs.existsSync(path.join(root, p));
 
   if (has("Makefile")) {
     try {
-      if (/^test:/m.test(fs.readFileSync(path.join(root, "Makefile"), "utf-8"))) return { command: "make test", evidence: "Makefile:test" };
+      if (/^test:/m.test(fs.readFileSync(path.join(root, "Makefile"), "utf-8"))) {
+        return {
+          command: filter ? `make test FILTER="${filter}"` : "make test",
+          evidence: "Makefile:test",
+        };
+      }
     } catch {}
   }
-  if (has("Cargo.toml")) return { command: "cargo test", evidence: "Cargo.toml" };
-  if (has("core/Cargo.toml")) return { command: "cargo test --manifest-path core/Cargo.toml", evidence: "core/Cargo.toml" };
+  if (has("Cargo.toml")) {
+    return {
+      command: filter ? `cargo test -- ${filter}` : "cargo test",
+      evidence: "Cargo.toml",
+    };
+  }
+  if (has("core/Cargo.toml")) {
+    return {
+      command: filter
+        ? `cargo test --manifest-path core/Cargo.toml -- ${filter}`
+        : "cargo test --manifest-path core/Cargo.toml",
+      evidence: "core/Cargo.toml",
+    };
+  }
 
   const npmTest = (pkgRel: string): boolean => {
     try {
@@ -128,13 +108,38 @@ export function discoverVerifier(workspace: string): DiscoveredVerifier | null {
       return false;
     }
   };
-  if (has("package.json") && npmTest("package.json")) return { command: "npm test", evidence: "package.json:scripts.test" };
-  if (has("cli/package.json") && npmTest("cli/package.json")) return { command: "npm --prefix cli test", evidence: "cli/package.json:scripts.test" };
+  if (has("package.json") && npmTest("package.json")) {
+    return {
+      command: filter ? `npm test -- -t "${filter}"` : "npm test",
+      evidence: "package.json:scripts.test",
+    };
+  }
+  if (has("cli/package.json") && npmTest("cli/package.json")) {
+    return {
+      command: filter ? `npm --prefix cli test -- -t "${filter}"` : "npm --prefix cli test",
+      evidence: "cli/package.json:scripts.test",
+    };
+  }
 
-  if (has("pyproject.toml") || has("setup.py")) return { command: "pytest", evidence: has("pyproject.toml") ? "pyproject.toml" : "setup.py" };
-  if (has("go.mod")) return { command: "go test ./...", evidence: "go.mod" };
+  if (has("pyproject.toml") || has("setup.py")) {
+    return {
+      command: filter ? `pytest -k "${filter}"` : "pytest",
+      evidence: has("pyproject.toml") ? "pyproject.toml" : "setup.py",
+    };
+  }
+  if (has("go.mod")) {
+    return {
+      command: filter ? `go test ./... -run "${filter}"` : "go test ./...",
+      evidence: "go.mod",
+    };
+  }
   const unittest = unittestLayout(root);
-  if (unittest) return unittest;
+  if (unittest) {
+    return {
+      command: filter ? `${unittest.command} -k "${filter}"` : unittest.command,
+      evidence: unittest.evidence,
+    };
+  }
   return null;
 }
 
@@ -239,7 +244,11 @@ export function describeVerifier(workspace: string, commandOverride?: string): V
  */
 export function runTestSuite(workspace: string, filterPattern?: string): TestRunResult {
   const root = path.resolve(workspace);
-  const command = detectTestCommand(root, filterPattern);
+  const discovered = discoverVerifier(root, filterPattern);
+  if (!discovered) {
+    return summarizeTestRun("none", false, "no verifier: no verification command is configured or discovered in this workspace.");
+  }
+  const command = discovered.command;
 
   let rawOutput = "";
   let success = false;
@@ -249,7 +258,7 @@ export function runTestSuite(workspace: string, filterPattern?: string): TestRun
       cwd: root,
       encoding: "utf-8",
       stdio: ["pipe", "pipe", "pipe"],
-      timeout: 120000,
+      timeout: verifierTimeoutSecs() * 1000,
     });
     success = true;
   } catch (err: any) {
@@ -266,8 +275,8 @@ export async function runTestSuiteWithExecutor(
   execute: TestCommandExecutor,
   commandOverride?: string,
 ): Promise<TestRunResult> {
-  const command = commandOverride?.trim() || detectTestCommand(workspace);
-  if (command === "none") return summarizeTestRun(command, false, "No verification command is configured.");
+  const command = commandOverride?.trim() || discoverVerifier(workspace)?.command || "none";
+  if (command === "none") return summarizeTestRun("none", false, "no verifier: no verification command is configured or discovered in this workspace.");
   try {
     const result = await execute(command);
     let commandSucceeded = false;

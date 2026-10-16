@@ -23,7 +23,7 @@ import { CheckpointManager } from "./checkpoint.js";
 import { renderTokenGauge } from "./tokens.js";
 import { scanAndOnboardWorkspace } from "./onboard.js";
 import { PolicyContext } from "./core/approval_policy.js";
-import { runTestSuiteWithExecutor, detectTestCommand, describeVerifier } from "./tester.js";
+import { runTestSuiteWithExecutor, discoverVerifier, describeVerifier, verifierTimeoutSecs } from "./tester.js";
 import { copyToClipboard, readFromClipboard } from "./clipboard.js";
 import { encodeImageFile, formatVisionContent } from "./image.js";
 import { ThemeManager } from "./theme.js";
@@ -1489,9 +1489,14 @@ export class InteractiveRepl {
             continue;
           } else if (cmd === "test") {
             const filterPattern = arg.trim() || undefined;
-            const commandOverride = filterPattern ? detectTestCommand(this.config.workspace, filterPattern) : undefined;
+            const discovered = discoverVerifier(this.config.workspace, filterPattern);
+            if (!discovered) {
+              console.log(pc.yellow("  no verifier: no verification command is configured or discovered in this workspace.\n"));
+              continue;
+            }
+            const commandOverride = discovered.command;
             const desc = describeVerifier(this.config.workspace, commandOverride);
-            const testCmd = desc?.command || commandOverride || detectTestCommand(this.config.workspace);
+            const testCmd = desc?.command || commandOverride;
 
             // Verifier gating under review mode / untrusted workspace
             const isTrusted = isWorkspaceTrusted(this.config.workspace, Boolean(this.config.readOnly));
@@ -1517,9 +1522,10 @@ export class InteractiveRepl {
 
             console.log(pc.dim(`🧪 Running automated test suite${filterPattern ? ` matching "${filterPattern}"` : ""}...`));
             const bridge = this.agent.getBridge();
+            const timeoutSecs = verifierTimeoutSecs(this.config.verifierTimeoutSecs);
             const res = await runTestSuiteWithExecutor(
               this.config.workspace,
-              (command) => bridge.executeTool("run_command", { command, timeout_secs: 120 }),
+              (command) => bridge.executeTool("run_command", { command, timeout_secs: timeoutSecs }),
               commandOverride,
             );
             console.log(pc.dim(`  Command: ${res.command}`));

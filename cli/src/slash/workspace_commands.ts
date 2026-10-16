@@ -5,7 +5,7 @@ import * as path from "node:path";
 import { copyToClipboard, readFromClipboard } from "../clipboard.js";
 import { commitChanges, generateConventionalCommit, getGitInfo } from "../git.js";
 import { HunkStager } from "../stager.js";
-import { runTestSuiteWithExecutor, detectTestCommand } from "../tester.js";
+import { runTestSuiteWithExecutor, discoverVerifier, verifierTimeoutSecs } from "../tester.js";
 import { NOT_A_REPO, SlashContext, SlashHandler, SlashOutcome, errorText, reply } from "./catalog.js";
 
 function git(cwd: string, args: string[]): string {
@@ -159,12 +159,16 @@ function audit(ctx: SlashContext): SlashOutcome {
 async function test(ctx: SlashContext): Promise<SlashOutcome> {
   const ws = workspace(ctx);
   const filter = ctx.args.trim() || undefined;
+  const discovered = discoverVerifier(ws, filter);
+  if (!discovered) {
+    return reply("test", "no verifier: no verification command is configured or discovered in this workspace.", false);
+  }
   const bridge = ctx.host.app.getAgent().getBridge();
-  const commandOverride = filter ? detectTestCommand(ws, filter) : undefined;
+  const timeoutSecs = verifierTimeoutSecs(ctx.host.app.getConfig().verifierTimeoutSecs);
   const result = await runTestSuiteWithExecutor(
     ws,
-    (command) => bridge.executeTool("run_command", { command, timeout_secs: 120 }),
-    commandOverride,
+    (command) => bridge.executeTool("run_command", { command, timeout_secs: timeoutSecs }),
+    discovered.command,
   );
   const lines = [`$ ${result.command}`, result.success ? "Test suite passed." : "Test suite failed."];
   if (!result.success && result.failures.length) lines.push("", "Failing tests:", ...result.failures.slice(0, 10).map((f) => `  • ${f}`));
