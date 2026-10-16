@@ -57,7 +57,15 @@ chmod 0755 "$PKG/bin/nexus" "$PKG/lib/core/harness-core" "$PKG/lib/core/nexus-tu
 (cd "$PKG" && find . -type f ! -name MANIFEST.sha256 | LC_ALL=C sort | xargs sha256sum > MANIFEST.sha256)
 ARCHIVE="nexus-linux-x86_64-$VERSION.tar.gz"
 SOURCE_DATE_EPOCH=$(git -C "$ROOT" log -1 --format=%ct)
+export SOURCE_DATE_EPOCH
 tar --sort=name --format=pax --mtime="@$SOURCE_DATE_EPOCH" --owner=0 --group=0 --numeric-owner \
   --pax-option=delete=atime,delete=ctime -C "$WORK" -cf - nexus | gzip -n > "$OUT/$ARCHIVE"
 (cd "$OUT" && sha256sum "$ARCHIVE" > SHA256SUMS)
+
+# Generate lockfile-derived merged CycloneDX SBOM (REQ-REL-108, ACC-SUP-02)
+"$ROOT/scripts/generate_sbom.sh" "$OUT/sbom.cdx.json"
+
+# Publish install.sh as release asset (REQ-REL-109)
+cp "$ROOT/install.sh" "$OUT/install.sh"
+
 printf 'Built %s\n' "$OUT/$ARCHIVE"

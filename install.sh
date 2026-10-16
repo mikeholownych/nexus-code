@@ -69,6 +69,14 @@ curl -fsSL --show-error --retry 2 "$URL/SHA256SUMS" -o "$TMP/SHA256SUMS" || fail
 grep -F "  $ARCHIVE" "$TMP/SHA256SUMS" > "$TMP/expected.sha256" || fail "checksum entry for $ARCHIVE is missing."
 (cd "$TMP" && sha256sum --check --status expected.sha256) || fail "SHA-256 verification failed; no installation was changed."
 
+if [ "${NEXUS_VERIFY_ATTESTATION:-auto}" != "0" ] && command -v gh >/dev/null 2>&1; then
+  if gh attestation verify "$TMP/$ARCHIVE" -R "$REPO" >/dev/null 2>&1; then
+    printf 'nexus installer: verified build provenance attestation for %s\n' "$ARCHIVE"
+  elif [ "${NEXUS_VERIFY_ATTESTATION:-auto}" = "1" ]; then
+    fail "provenance attestation verification failed for $ARCHIVE."
+  fi
+fi
+
 VERSION_DIR="$PREFIX/lib/nexus/$VERSION"
 BIN_DIR="$PREFIX/bin"
 LINK="$BIN_DIR/nexus"
