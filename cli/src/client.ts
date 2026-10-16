@@ -2,7 +2,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
 import { randomUUID } from "node:crypto";
-import { parseAdmissionHeaders, parseAdvertisement, parseServerContext, parseTokenizeResponse, type AdmissionReport, type Advertisement, type RequestCount } from "./core/provider_capabilities.js";
+import { parseAdmissionHeaders, parseAdvertisement, parseServerContext, parseTokenizeResponse, serverKindOf, type AdmissionReport, type Advertisement, type RequestCount, type ServerKind } from "./core/provider_capabilities.js";
 import { ChatMessage, ToolDefinition, HarnessConfig, ToolCall } from "./types.js";
 import { InformationFlowBoundary, DestinationTrustBoundary } from "./core/egress.js";
 import pc from "picocolors";
@@ -238,17 +238,7 @@ export function unsupportedParameter(message: string): string | undefined {
 /** Cloud destinations announced in this process (the disclosure notice is shown once per origin). */
 const announcedDestinations = new Set<string>();
 /** Provider error bodies are bounded and redacted before they reach messages, logs or the UI. */
-/**
- * Which local server a `/models` entry comes from, by the owner each one reports: llama.cpp server "llamacpp" (with a
- * `meta` block), LM Studio "organization_owner", Ollama "library" or "ollama". Undefined for anything else.
- */
-function serverKindOf(entry: Record<string, any>): "llamacpp" | "lmstudio" | "ollama" | undefined {
-  const owner = typeof entry.owned_by === "string" ? entry.owned_by.toLowerCase() : "";
-  if (owner === "llamacpp" || (entry.meta && typeof entry.meta === "object" && "n_ctx_train" in entry.meta)) return "llamacpp";
-  if (owner === "organization_owner") return "lmstudio";
-  if (owner === "library" || owner === "ollama") return "ollama";
-  return undefined;
-}
+
 
 const MAX_PROVIDER_ERROR_CHARS = 2_000;
 
@@ -992,6 +982,8 @@ export class LocalLlmClient {
     }
   }
 
+  private static serverContextCache = new Map<string, Advertisement>();
+
   /**
    * The loaded context of a local server that lists no limits in its catalog, from that server's own endpoint (llama.cpp
    * `/props`, LM Studio `/api/v0/models`, Ollama `/api/show`) on the endpoint's origin with the same credential and a 2 s
@@ -1000,7 +992,10 @@ export class LocalLlmClient {
    */
   private async discoverServerContext(entry: Record<string, any>, signal?: AbortSignal): Promise<Advertisement | undefined> {
     const kind = serverKindOf(entry);
-    if (!kind) return undefined;
+    if (kind !== "llamacpp" && kind !== "lmstudio" && kind !== "ollama") return undefined;
+    const cacheKey = `${this.endpoint}::${this.model}`;
+    const cached = LocalLlmClient.serverContextCache.get(cacheKey);
+    if (cached) return cached;
     const root = this.endpoint.replace(/\/v1\/?$/, "");
     const probes: Array<{ kind: "llamacpp" | "lmstudio" | "ollama"; url: string; init?: RequestInit }> = [
       { kind: "llamacpp" as const, url: `${root}/props` },
@@ -1017,7 +1012,10 @@ export class LocalLlmClient {
         });
         if (!res.ok) continue;
         const found = parseServerContext(probe.kind, await res.json(), this.model);
-        if (found) return found;
+        if (found) {
+          LocalLlmClient.serverContextCache.set(cacheKey, found);
+          return found;
+        }
       } catch {
         if (signal?.aborted) throw abortedError(randomUUID());
       }

@@ -4735,6 +4735,7 @@ The pinned Objective Ledger lists the operator's requirements; your plan never r
       let previousReplyEmpty = false;
       // The previous step's reply was cut off at the output limit; a second one in a row ends the turn.
       let previousReplyTruncated = false;
+      let capacityRetryAttempted = false;
       let inferenceFailure: InferenceFailure | null = null;
       let interruption: InterruptionRecord | null = null;
       let undispatched = 0;
@@ -5071,7 +5072,42 @@ The pinned Objective Ledger lists the operator's requirements; your plan never r
           inferenceFailure = err instanceof InferenceError
             ? err.toFailure()
             : { kind: "protocol_error", origin: "client", message: err?.message || String(err), requestId };
-          if (inferenceFailure?.condition === "CAPACITY_REJECTED") this.capabilitiesStale = "the provider rejected a request for capacity";
+          if (inferenceFailure?.condition === "CAPACITY_REJECTED") {
+            this.capabilitiesStale = "the provider rejected a request for capacity";
+            if (!capacityRetryAttempted) {
+              capacityRetryAttempted = true;
+              const original = this.messages;
+              const candidate = this.compactionCandidate(original, 1, 1200);
+              const accepted = (candidate.messages.length < original.length || this.scaledBudget(candidate.messages, this.contextLimit()).totalActiveTokens < this.scaledBudget(original, this.contextLimit()).totalActiveTokens)
+                ? candidate
+                : this.compactionCandidate(original, 0, 0);
+              for (const key of accepted.removedObservations) this.turnRemovedObservations.add(key);
+              try {
+                this.commitCompaction(original, accepted.messages, {
+                  trigger: "auto",
+                  step: currentStep,
+                  beforeTokens: this.scaledBudget(original, this.contextLimit()).totalActiveTokens,
+                  afterTokens: this.scaledBudget(accepted.messages, this.contextLimit()).totalActiveTokens,
+                  pressureOnly: false,
+                });
+              } catch {
+                this.messages = accepted.messages;
+              }
+              this.ui.stopSpinner(false, "Provider rejected request for capacity; compacted context and retrying once at reduced budget...");
+              tracker.intervention(cumulativeStep, "capacity_rejected_retry", "provider rejected request for capacity; retrying after compaction");
+              inferenceFailure = null;
+              stepsUsed = currentStep;
+              endStep();
+              continue;
+            }
+            const discovered = this.providerCapabilities?.advertised?.contextLength ?? this.contextLimit();
+            const actionableMsg = `The inference server rejected the request for context capacity (CAPACITY_REJECTED). Set --context-limit ${discovered} (or NEXUS_CONTEXT_LIMIT) to match the server's window.`;
+            console.error(pc.red(`\n${actionableMsg}`));
+            inferenceFailure = {
+              ...inferenceFailure,
+              message: actionableMsg,
+            };
+          }
           break;
         } finally {
           if (recovery.record) providerRecoveries.push(recovery.record);

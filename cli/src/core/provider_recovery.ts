@@ -82,8 +82,8 @@ export function providerHints(headers: HeaderSource, body?: string, now: number 
 const CAPACITY_CODES = new Set(["context_length_exceeded", "string_above_max_length"]);
 /** Error types servers use for a request larger than the loaded context (llama.cpp server: exceed_context_size_error). */
 const CAPACITY_TYPES = new Set(["exceed_context_size_error"]);
-/** Context-overflow wording of vLLM, llama.cpp and LM Studio error messages. */
-const CAPACITY_MESSAGE = /context length|context window|maximum context|context size|exceeds the available context|too many tokens/i;
+/** Context-overflow wording of vLLM, llama.cpp, LM Studio and Ollama error messages. */
+const CAPACITY_MESSAGE = /context length|context window|maximum context|context size|exceeds the available context|too many tokens|prompt too long/i;
 /** Cloud billing/quota exhaustion (OpenAI insufficient_quota, Anthropic billing_error). Waiting does not fix these. */
 const QUOTA_CODES = new Set(["insufficient_quota", "billing_error", "payment_required"]);
 const NOT_EXECUTED_CODES = new Set(["pre_generation", "gateway_restarting", "pool_unavailable", "adapter_unavailable", "quota_exceeded"]);
@@ -109,7 +109,7 @@ export function classifyHttpFailure(status: number, hints: ProviderHints = {}, b
   if (status === 408) return { condition: "TEMPORARILY_UNAVAILABLE", execution: "NOT_EXECUTED" };
   // 529: Anthropic's "overloaded" answer, given instead of executing the request.
   if (status === 529) return { condition: "OVERLOADED", execution: "NOT_EXECUTED" };
-  if (status === 413 || (status === 400 && CAPACITY_MESSAGE.test(body))) {
+  if (status === 413 || ((status === 400 || status === 422 || status === 500) && CAPACITY_MESSAGE.test(body))) {
     return { condition: "CAPACITY_REJECTED", execution: "NOT_EXECUTED" };
   }
   if (status >= 400 && status < 500) return { condition: "REQUEST_REJECTED", execution: "NOT_EXECUTED" };

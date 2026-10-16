@@ -9,7 +9,7 @@ import { test, describe } from "node:test";
 import assert from "node:assert/strict";
 import http from "node:http";
 import { LocalLlmClient } from "../src/client.js";
-import { parseServerContext } from "../src/core/provider_capabilities.js";
+import { parseServerContext, serverKindOfAdvertisement } from "../src/core/provider_capabilities.js";
 import { classifyHttpFailure, providerHints } from "../src/core/provider_recovery.js";
 
 describe("server context shapes", () => {
@@ -58,7 +58,24 @@ describe("discovery against a local server", () => {
       const found = await new LocalLlmClient({ endpoint: srv.url, model: "m", workspace: "/tmp", maxSteps: 1 } as any).discoverAdvertisement();
       assert.equal(found.state, "supported");
       assert.equal(found.advertised?.via, "llamacpp");
+      assert.equal(serverKindOfAdvertisement(found.advertised), "llamacpp");
       assert.equal(found.advertised?.contextLength, 4096);
+    } finally {
+      await srv.close();
+    }
+  });
+  test("an LM Studio server's /api/v0/models context is discovered", async () => {
+    const srv = await server({
+      "GET /v1/models": () => ({ data: [{ id: "m", object: "model", owned_by: "organization_owner" }] }),
+      "GET /api/v0/models": () => ({ data: [{ id: "m", loaded_context_length: 4096, max_context_length: 32768 }] }),
+    });
+    try {
+      const found = await new LocalLlmClient({ endpoint: srv.url, model: "m", workspace: "/tmp", maxSteps: 1 } as any).discoverAdvertisement();
+      assert.equal(found.state, "supported");
+      assert.equal(found.advertised?.via, "lmstudio");
+      assert.equal(serverKindOfAdvertisement(found.advertised), "lmstudio");
+      assert.equal(found.advertised?.contextLength, 4096);
+      assert.deepEqual(srv.seen.slice(1), ["GET /api/v0/models"]);
     } finally {
       await srv.close();
     }
@@ -71,8 +88,43 @@ describe("discovery against a local server", () => {
     try {
       const found = await new LocalLlmClient({ endpoint: srv.url, model: "m", workspace: "/tmp", maxSteps: 1 } as any).discoverAdvertisement();
       assert.equal(found.advertised?.via, "ollama");
+      assert.equal(serverKindOfAdvertisement(found.advertised), "ollama");
       assert.equal(found.advertised?.contextLength, 32768);
       assert.deepEqual(srv.seen.slice(1), ["POST /api/show"], "only the recognised server's endpoint is asked");
+    } finally {
+      await srv.close();
+    }
+  });
+  test("a vLLM server advertises max_model_len directly in /v1/models", async () => {
+    const srv = await server({
+      "GET /v1/models": () => ({ data: [{ id: "m", object: "model", max_model_len: 16384 }] }),
+    });
+    try {
+      const found = await new LocalLlmClient({ endpoint: srv.url, model: "m", workspace: "/tmp", maxSteps: 1 } as any).discoverAdvertisement();
+      assert.equal(found.state, "supported");
+      assert.equal(found.advertised?.via, "vllm");
+      assert.equal(serverKindOfAdvertisement(found.advertised), "vllm");
+      assert.equal(found.advertised?.contextLength, 16384);
+      assert.deepEqual(srv.seen, ["GET /v1/models"]);
+    } finally {
+      await srv.close();
+    }
+  });
+  test("subsequent context discovery reuses cached advertisement without hitting probe endpoint again", async () => {
+    const srv = await server({
+      "GET /v1/models": () => ({ data: [{ id: "m", object: "model", owned_by: "llamacpp", meta: { n_ctx_train: 131072 } }] }),
+      "GET /props": () => ({ default_generation_settings: { n_ctx: 8192 } }),
+    });
+    try {
+      const client = new LocalLlmClient({ endpoint: srv.url, model: "m", workspace: "/tmp", maxSteps: 1 } as any);
+      const first = await client.discoverAdvertisement();
+      assert.equal(first.advertised?.contextLength, 8192);
+      const propsCallsBefore = srv.seen.filter((s) => s.startsWith("GET /props")).length;
+      assert.equal(propsCallsBefore, 1);
+      const second = await client.discoverAdvertisement();
+      assert.equal(second.advertised?.contextLength, 8192);
+      const propsCallsAfter = srv.seen.filter((s) => s.startsWith("GET /props")).length;
+      assert.equal(propsCallsAfter, 1, "no second probe made to /props due to caching");
     } finally {
       await srv.close();
     }
@@ -90,15 +142,28 @@ describe("discovery against a local server", () => {
   });
 });
 
-describe("context-overflow classification", () => {
+describe("context-overflow classification (ACC-INF-02 table)", () => {
   const classify = (status: number, body: string) => classifyHttpFailure(status, providerHints(new Headers(), body), body).condition;
-  test("llama.cpp's exceed_context_size_error is a capacity rejection", () => {
+
+  test("llama.cpp exceed_context_size_error is a capacity rejection", () => {
     const body = JSON.stringify({ error: { code: 400, message: "the request exceeds the available context size, try increasing it", type: "exceed_context_size_error", n_prompt_tokens: 9000, n_ctx: 8192 } });
     assert.equal(classify(400, body), "CAPACITY_REJECTED");
   });
-  test("vLLM's maximum context length message is a capacity rejection", () => {
+  test("vLLM maximum context length message is a capacity rejection", () => {
     const body = JSON.stringify({ object: "error", message: "This model's maximum context length is 8192 tokens. However, you requested 9000 tokens", type: "BadRequestError", code: 400 });
     assert.equal(classify(400, body), "CAPACITY_REJECTED");
+  });
+  test("LM Studio context window exceeded body is a capacity rejection", () => {
+    const body = JSON.stringify({ error: "Context window exceeded", message: "The model's context window is 4096 tokens, but 5000 were submitted" });
+    assert.equal(classify(400, body), "CAPACITY_REJECTED");
+  });
+  test("Ollama prompt too long body is a capacity rejection", () => {
+    const body = JSON.stringify({ error: "prompt too long for context window" });
+    assert.equal(classify(400, body), "CAPACITY_REJECTED");
+    assert.equal(classify(500, body), "CAPACITY_REJECTED");
+  });
+  test("HTTP 413 Payload Too Large is a capacity rejection regardless of body", () => {
+    assert.equal(classify(413, "request entity too large"), "CAPACITY_REJECTED");
   });
   test("an ordinary bad request is still a rejection, not capacity", () => {
     assert.equal(classify(400, JSON.stringify({ error: { message: "invalid tool schema", type: "invalid_request_error" } })), "REQUEST_REJECTED");

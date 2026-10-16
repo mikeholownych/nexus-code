@@ -33,12 +33,15 @@ export function toolHeadroomPolicy(context: number, configured?: number): number
   return configured ?? Math.min(4096, Math.floor(context / 8));
 }
 
+export type ServerKind = "gateway" | "vllm" | "llamacpp" | "lmstudio" | "ollama" | "unknown";
+
 export interface Advertisement {
   /**
    * Who advertised: the homelab-ai gateway contract, a vLLM-style catalog, a server's own endpoint for its loaded
    * context (llama.cpp `/props`, LM Studio `/api/v0/models`, Ollama `/api/show`), or an OpenAI-style catalog with no limits.
    */
   via: "aihost_gateway" | "vllm" | "llamacpp" | "lmstudio" | "ollama" | "catalog";
+  serverKind?: ServerKind;
   /** null: the provider says the capacity is currently unknown (e.g. no serving worker observed). */
   contextLength?: number | null;
   maxCompletionTokens?: number;
@@ -64,6 +67,32 @@ export interface ProviderCapabilities {
 }
 
 const positiveInt = (v: unknown): number | undefined => (typeof v === "number" && Number.isFinite(v) && v > 0 ? Math.floor(v) : undefined);
+
+/**
+ * Which server kind an entry represents: gateway (limits_version), vLLM (context_length/max_model_len),
+ * llama.cpp (owned_by llamacpp or n_ctx_train meta), LM Studio (organization_owner), Ollama (library or ollama), or unknown.
+ */
+export function serverKindOf(entry: Record<string, any> | undefined): ServerKind {
+  if (!entry || typeof entry !== "object") return "unknown";
+  if (typeof entry.limits_version === "string" && entry.limits_version.length > 0) return "gateway";
+  const owner = typeof entry.owned_by === "string" ? entry.owned_by.toLowerCase() : "";
+  if (owner === "llamacpp" || (entry.meta && typeof entry.meta === "object" && "n_ctx_train" in entry.meta)) return "llamacpp";
+  if (owner === "organization_owner") return "lmstudio";
+  if (owner === "library" || owner === "ollama") return "ollama";
+  const contextLength = entry.context_length === null ? null : (positiveInt(entry.context_length) ?? positiveInt(entry.max_model_len));
+  if (contextLength !== undefined) return "vllm";
+  return "unknown";
+}
+
+export function serverKindOfAdvertisement(ad: Advertisement | undefined): ServerKind {
+  if (!ad) return "unknown";
+  if (ad.via === "aihost_gateway") return "gateway";
+  if (ad.via === "vllm") return "vllm";
+  if (ad.via === "llamacpp") return "llamacpp";
+  if (ad.via === "lmstudio") return "lmstudio";
+  if (ad.via === "ollama") return "ollama";
+  return "unknown";
+}
 
 /** Reads one `/models` entry. Unknown shapes yield a catalog advertisement with no limits (never an error). */
 export function parseAdvertisement(entry: Record<string, any> | undefined): Advertisement | undefined {

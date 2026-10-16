@@ -402,6 +402,7 @@ interface EndpointEvidence {
   detail?: string;
   models?: string[];
   modelError?: string;
+  advertised?: import("./core/provider_capabilities.js").Advertisement;
 }
 
 async function gatherEndpoint(ctx: CheckContext, signal: AbortSignal): Promise<EndpointEvidence> {
@@ -431,6 +432,10 @@ async function gatherEndpoint(ctx: CheckContext, signal: AbortSignal): Promise<E
       if (timer) clearTimeout(timer);
       if (onAbort) signal.removeEventListener("abort", onAbort);
     }
+    try {
+      const adv = await client.discoverAdvertisement(signal);
+      if (adv?.advertised) evidence.advertised = adv.advertised;
+    } catch {}
   }
   return evidence;
 }
@@ -480,6 +485,18 @@ const endpointChecks: Check = async (ctx, signal) => {
     return out;
   }
   out.push(f("endpoint.authenticated", "endpoint", "pass", "The endpoint accepted the request with the credential Nexus would send.", [where]));
+  if (ev.advertised) {
+    const via = ev.advertised.via ? ` via ${ev.advertised.via}` : "";
+    out.push(
+      f(
+        "endpoint.context_sizing",
+        "endpoint",
+        "pass",
+        `Context capacity: ${ev.advertised.contextLength ?? "default"} tokens${via}.`,
+        [`source ${ev.advertised.via}${ev.advertised.serverKind ? `; server_kind ${ev.advertised.serverKind}` : ""}`],
+      ),
+    );
+  }
   if (ev.modelError || !ev.models) {
     out.push(f("model.available", "endpoint", "warn", "The model list could not be read.", [ev.modelError ?? "no list"]));
   } else if (!config.model || config.model === "local-model") {
