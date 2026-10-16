@@ -29,6 +29,7 @@ export NEXUS_HOME
 exec node "$NEXUS_HOME/lib/cli/dist/index.js" "$@"
 EOF
 chmod 0755 "$PKG/bin/nexus" "$PKG/lib/core/harness-core" "$PKG/lib/core/nexus-tui"
+(cd "$PKG" && find . -type f ! -name MANIFEST.sha256 | LC_ALL=C sort | xargs sha256sum > MANIFEST.sha256)
 ARCHIVE="nexus-linux-x86_64-$VERSION.tar.gz"
 SOURCE_DATE_EPOCH=$(git -C "$ROOT" log -1 --format=%ct)
 tar --sort=name --format=pax --mtime="@$SOURCE_DATE_EPOCH" --owner=0 --group=0 --numeric-owner \

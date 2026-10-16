@@ -27,11 +27,43 @@ run_installer() {
 run_installer
 "$TMP/prefix/bin/nexus" --version | grep -F "${VERSION#v}" >/dev/null
 run_installer
+
+# ACC-PKG-05: bad tag v1.2.3/../x is rejected before network
+if NEXUS_VERSION="v1.2.3/../x" sh "$INSTALLER" > "$TMP/bad-tag.out" 2>&1; then
+  echo "bad tag unexpectedly accepted" >&2
+  exit 1
+fi
+grep -F "version must be a release tag" "$TMP/bad-tag.out" >/dev/null
+
+# ACC-PKG-05: deleting a dist file then reinstalling repairs it
+DELETED="$TMP/prefix/lib/nexus/$VERSION/lib/cli/dist/index.js"
+if [ -f "$DELETED" ]; then
+  rm "$DELETED"
+  [ ! -f "$DELETED" ]
+  run_installer
+  [ -f "$DELETED" ] || { echo "manifest repair failed to restore deleted file" >&2; exit 1; }
+fi
+
+# ACC-PKG-05: NEXUS_FORCE=1 forces re-extraction even when intact
+printf 'extraneous-file\n' > "$TMP/prefix/lib/nexus/$VERSION/extra.txt"
+NEXUS_FORCE=1 run_installer
+[ ! -f "$TMP/prefix/lib/nexus/$VERSION/extra.txt" ] || { echo "NEXUS_FORCE=1 failed to clean reinstall" >&2; exit 1; }
+
+# ACC-PKG-05: no-version with only prereleases prints the latest-prerelease hint
+mkdir -p "$TMP/release/api"
+printf '[{"tag_name":"v0.1.0-alpha.2","prerelease":true}]\n' > "$TMP/release/api/rel"
+if NEXUS_RELEASES_API="http://127.0.0.1:$PORT/api/rel" NEXUS_PREFIX="$TMP/prefix" NEXUS_RELEASE_BASE_URL="http://127.0.0.1:$PORT" sh "$INSTALLER" > "$TMP/no-stable.out" 2>&1; then
+  echo "installer unexpectedly succeeded when latest stable is 404" >&2
+  exit 1
+fi
+grep -F "no stable release yet; latest prerelease is v0.1.0-alpha.2 — rerun with NEXUS_VERSION=v0.1.0-alpha.2" "$TMP/no-stable.out" >/dev/null
+
 # Distinct from the version under test, whatever it is, so the upgrade path is always exercised.
 UPGRADE_VERSION="$VERSION-upgrade-smoke"
 mkdir -p "$TMP/release/download/$UPGRADE_VERSION" "$TMP/upgrade-unpack"
 tar -xzf "$ARCHIVE" -C "$TMP/upgrade-unpack"
 printf '%s\n' "$UPGRADE_VERSION" > "$TMP/upgrade-unpack/nexus/VERSION"
+(cd "$TMP/upgrade-unpack/nexus" && find . -type f ! -name MANIFEST.sha256 | LC_ALL=C sort | xargs sha256sum > MANIFEST.sha256)
 UPGRADE_ARCHIVE="nexus-linux-x86_64-$UPGRADE_VERSION.tar.gz"
 tar -C "$TMP/upgrade-unpack" -czf "$TMP/release/download/$UPGRADE_VERSION/$UPGRADE_ARCHIVE" nexus
 (cd "$TMP/release/download/$UPGRADE_VERSION" && sha256sum "$UPGRADE_ARCHIVE" > SHA256SUMS)
