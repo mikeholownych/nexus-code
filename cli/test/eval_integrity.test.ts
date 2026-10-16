@@ -91,3 +91,104 @@ test("contaminated runs leave the pass rate, crashes are counted, and reruns are
   assert.equal(pooled.tokensPerCorrect, 2000);
   assert.deepEqual(score.replacements, [{ config: "c", task: "d", run: 1, was: "error: workspace setup failed", now: "UNVERIFIED" }]);
 });
+
+// ---------------------------------------------------------------- run validity (REQ-QUAL-101/102/106)
+
+test("task validation: pinned repos, one source, hidden command; qualification also needs class and difficulty", async () => {
+  const { validateTask } = await import(path.join(ROOT, "eval/validate.mjs"));
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "t2-x-"));
+  const id = path.basename(dir);
+  const good = { id, tier: "T2", objective: "fix it", repo: { url: "https://example.invalid/r.git", commit: "a".repeat(40) }, hidden: { command: "npm test" } };
+  assert.deepEqual(validateTask(good, dir), []);
+  assert.match(validateTask({ ...good, repo: { url: good.repo.url, commit: "main" } }, dir).join(), /pinned/);
+  assert.match(validateTask({ ...good, fixture: "repo" }, dir).join(), /exactly one of fixture or repo/);
+  assert.match(validateTask({ ...good, hidden: {} }, dir).join(), /hidden.command/);
+  assert.equal(validateTask(good, dir, { qualification: true }).length, 2);
+  assert.deepEqual(validateTask({ ...good, class: "bugfix", difficulty: "medium" }, dir, { qualification: true }), []);
+});
+
+test("a qualification run is refused without a model fingerprint (weights, server build, sampling)", async () => {
+  const { modelFingerprint } = await import(path.join(ROOT, "eval/validate.mjs"));
+  const entry = { id: "m", owned_by: "llamacpp", meta: { n_ctx_train: 32768 } };
+  assert.equal(modelFingerprint({ model: "m" }, entry).missing.length, 0, "a development run needs no fingerprint");
+  const missing = modelFingerprint({ model: "m", qualification: true }, entry).missing;
+  assert.equal(missing.length, 3);
+  const ok = modelFingerprint({ model: "m", qualification: true, fingerprint: { weightsSha256: "b".repeat(64), serverBuild: "llama.cpp b6000" }, sampling: { temperature: 0, seed: 1 } }, entry);
+  assert.deepEqual(ok.missing, []);
+  assert.equal(ok.fingerprint.ownedBy, "llamacpp");
+  assert.equal(ok.fingerprint.contextLength, 32768);
+  assert.equal(modelFingerprint({ model: "m", qualification: true, fingerprint: ok.fingerprint, sampling: { temperature: 0 } }, null).missing[0], "the endpoint does not list model m");
+});
+
+test("hidden tests must be unreadable to the agent's own user", async () => {
+  const { hiddenTestIsolationProblem, asUser } = await import(path.join(ROOT, "eval/validate.mjs"));
+  const tasks = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-eval-tasks-"));
+  fs.chmodSync(tasks, 0o755);
+  assert.equal(hiddenTestIsolationProblem({}, tasks), null, "development runs may run as the operator");
+  assert.match(hiddenTestIsolationProblem({ qualification: true }, tasks), /need runAs/);
+  assert.match(hiddenTestIsolationProblem({ runAs: "nexus-eval" }, tasks), /readable by other users/);
+  fs.chmodSync(tasks, 0o700);
+  assert.equal(hiddenTestIsolationProblem({ runAs: "nexus-eval" }, tasks), null);
+  assert.match(hiddenTestIsolationProblem({ runAs: "bad user;" }, tasks), /not a valid user name/);
+  const wrapped = asUser("nexus-eval", "node", ["index.js", "run"], { HOME: "/tmp/h", PATH: "/usr/bin" });
+  assert.equal(wrapped.cmd, "sudo");
+  assert.deepEqual(wrapped.argv, ["-n", "-u", "nexus-eval", "--", "env", "-i", "HOME=/tmp/h", "PATH=/usr/bin", "node", "index.js", "run"]);
+});
+
+test("run.mjs refuses to start on an invalid task", () => {
+  const tasks = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-eval-bad-"));
+  fs.mkdirSync(path.join(tasks, "broken"));
+  fs.writeFileSync(path.join(tasks, "broken", "task.json"), JSON.stringify({ id: "broken", tier: "T9", objective: "" }));
+  const config = path.join(tasks, "config.json");
+  fs.writeFileSync(config, JSON.stringify({ name: "c", agent: "nexus", endpoint: "http://127.0.0.1:9/v1", model: "m", proxy: false }));
+  const out = spawnSync(process.execPath, [path.join(ROOT, "eval/run.mjs"), "--config", config, "--tasks", tasks, "--out", path.join(tasks, "out")], { encoding: "utf8" });
+  assert.equal(out.status, 2, out.stdout + out.stderr);
+  assert.match(out.stderr, /not starting/);
+  assert.match(out.stderr, /broken: tier must be one of/);
+  assert.ok(!fs.existsSync(path.join(tasks, "out", "results.jsonl")), "no run was recorded");
+});
+
+// ---------------------------------------------------------------- T4 fault injection (REQ-QUAL-105)
+
+test("the model proxy injects each scheduled fault into the chat request it names, and records it", async () => {
+  const { startModelProxy, isInfrastructureFailure } = await import(proxyModule);
+  const sse = (o: unknown) => `data: ${JSON.stringify(o)}\n\n`;
+  const upstream = http.createServer((req, res) => {
+    req.resume();
+    res.writeHead(200, { "content-type": "text/event-stream" });
+    res.end(
+      sse({ choices: [{ index: 0, delta: { tool_calls: [{ index: 0, id: "c", type: "function", function: { name: "read_file", arguments: "" } }] } }] }) +
+      sse({ choices: [{ index: 0, delta: { tool_calls: [{ index: 0, function: { arguments: '{"path":"a"}' } }] } }] }) +
+      sse({ choices: [{ index: 0, delta: {}, finish_reason: "tool_calls" }] }) + "data: [DONE]\n\n",
+    );
+  });
+  await new Promise<void>((r) => upstream.listen(0, "127.0.0.1", () => r()));
+  const port = (upstream.address() as any).port;
+  const kinds = ["refuse", "overloaded", "stream_cut", "truncate", "context_overflow", "malformed_tool_json"];
+  const proxy = await startModelProxy({ upstream: `http://127.0.0.1:${port}/v1`, faults: kinds.map((kind, i) => ({ kind, atRequest: i + 1 })) });
+  const chat = () => fetch(`${proxy.url}/chat/completions`, { method: "POST", body: "{}" });
+  try {
+    await assert.rejects(chat(), "refuse: the connection is dropped");
+    const overloaded = await chat();
+    assert.equal(overloaded.status, 503);
+    assert.equal(overloaded.headers.get("retry-after"), "1");
+    await overloaded.text();
+    const cut = await chat().then((r) => r.text()).catch(() => "");
+    assert.ok(!cut.includes("finish_reason"), "stream_cut: nothing after the first tool-call fragment arrives");
+    const truncated = await (await chat()).text();
+    assert.match(truncated, /"finish_reason":"length"/);
+    assert.doesNotMatch(truncated, /"finish_reason":"tool_calls"/);
+    const overflow = await chat();
+    assert.equal(overflow.status, 400);
+    assert.equal((await overflow.json()).error.type, "exceed_context_size_error");
+    assert.match(await (await chat()).text(), /\\"broken/, "malformed_tool_json: the first arguments fragment is corrupted");
+    assert.match(await (await chat()).text(), /"finish_reason":"tool_calls"/, "requests without a scheduled fault pass unchanged");
+    const stats = proxy.stats();
+    assert.deepEqual(stats.faultsInjected.map((f: any) => f.kind), kinds);
+    assert.equal(isInfrastructureFailure({ model: { ...stats, answered: 0, upstreamFailures: 3 } }), false, "injected faults are never infrastructure reruns");
+  } finally {
+    await proxy.close();
+    upstream.close();
+  }
+  await assert.rejects(startModelProxy({ upstream: "http://127.0.0.1:9/v1", faults: [{ kind: "nope", atRequest: 1 }] }), /invalid fault/);
+});

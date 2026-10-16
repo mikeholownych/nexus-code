@@ -10,6 +10,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { startModelProxy } from "./model_proxy.mjs";
+import { asUser, fetchModelEntry, hiddenTestIsolationProblem, modelFingerprint, validateTask } from "./validate.mjs";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const args = parseArgs(process.argv.slice(2));
@@ -29,12 +30,37 @@ const resultsFile = path.join(args.out, "results.jsonl");
 
 const identity = harnessIdentity();
 const tasks = fs.readdirSync(tasksDir).filter((d) => fs.existsSync(path.join(tasksDir, d, "task.json")) && (!only || only.has(d))).sort();
-fs.writeFileSync(path.join(args.out, "manifest.json"), JSON.stringify({ createdAt: new Date().toISOString(), harness: identity, config: redactConfig(config), runs, tasks, host: os.hostname(), node: process.version }, null, 2) + "\n");
-
-// Run-major order (every task once, then again): a pass cut short still has the same number of runs per task.
 const apiKey = readApiKey(config.apiKey);
 const caFile = config.caFile ? expandHome(config.caFile) : null;
 const caBundle = caFile ? writeCaBundle(caFile) : null;
+
+// A run is valid only with well-formed tasks, hidden tests the agent cannot read, and (for qualification) a model
+// identified beyond its alias. Any problem stops the run before an agent starts (eval/validate.mjs).
+const problems = tasks.flatMap((id) => {
+  const dir = path.join(tasksDir, id);
+  return validateTask(JSON.parse(fs.readFileSync(path.join(dir, "task.json"), "utf8")), dir, { qualification: config.qualification === true }).map((p) => `${id}: ${p}`);
+});
+const isolation = hiddenTestIsolationProblem(config, tasksDir);
+if (isolation) problems.push(isolation);
+let fingerprint = null;
+if (!problems.length) {
+  const probe = config.proxy === false ? null : await startModelProxy({ upstream: config.endpoint, caFile });
+  try {
+    const entry = await fetchModelEntry(probe?.url ?? config.endpoint, config.model, apiKey);
+    const fp = modelFingerprint(config, entry);
+    fingerprint = fp.fingerprint;
+    problems.push(...fp.missing.map((m) => `model fingerprint: ${m}`));
+  } finally {
+    await probe?.close();
+  }
+}
+if (problems.length) {
+  console.error(`eval/run.mjs: not starting; ${problems.length} problem(s):\n${problems.map((p) => `  - ${p}`).join("\n")}`);
+  process.exit(2);
+}
+fs.writeFileSync(path.join(args.out, "manifest.json"), JSON.stringify({ createdAt: new Date().toISOString(), harness: identity, config: redactConfig(config), fingerprint, runs, tasks, host: os.hostname(), node: process.version }, null, 2) + "\n");
+
+// Run-major order (every task once, then again): a pass cut short still has the same number of runs per task.
 for (let run = 1; run <= runs; run++) {
   for (const id of tasks) {
     if (pairs && !pairs.some(([t, r]) => t === id && Number(r) === run)) continue;
@@ -54,7 +80,12 @@ async function runOnce(task, run) {
     const sourceBefore = treeDigest(task.dir);
     // Every agent reaches the model through a per-run forwarder, so whether the model was reachable is observed by the
     // harness, the same way for every agent (eval/infra.mjs). `config.proxy: false` connects agents directly.
-    const proxy = config.proxy === false ? null : await startModelProxy({ upstream: config.endpoint, caFile });
+    // T4: a task (or the config) may schedule faults for the proxy to inject; they are recorded with the run.
+    const faults = task.faults ?? config.faults ?? [];
+    if (faults.length && config.proxy === false) throw new Error("fault injection needs the model proxy (proxy: false is set)");
+    // A standalone profile (DEC-16) shows agents a plain server; the proxy then holds the real key, agents get none.
+    if (config.serverProfile && config.proxy === false) throw new Error("serverProfile needs the model proxy (proxy: false is set)");
+    const proxy = config.proxy === false ? null : await startModelProxy({ upstream: config.endpoint, caFile, faults, profile: config.serverProfile, authToken: config.serverProfile ? apiKey ?? undefined : undefined });
     const started = Date.now();
     let agent;
     try {
@@ -118,7 +149,8 @@ function prepareWorkspace(task, ws) {
  * (no operator plugins, extensions or memory), the same endpoint and model, and the key through its environment.
  */
 function agentCommand(task, ws, home, budget, ep) {
-  const keyEnv = apiKey ? { LOCAL_LLM_API_KEY: apiKey, OPENAI_API_KEY: apiKey, GW_KEY: apiKey } : {};
+  const agentKey = config.serverProfile ? "local" : apiKey;
+  const keyEnv = agentKey ? { LOCAL_LLM_API_KEY: agentKey, OPENAI_API_KEY: agentKey, GW_KEY: agentKey } : {};
   const caEnv = caBundle ? { NODE_EXTRA_CA_CERTS: caFile, SSL_CERT_FILE: caBundle, REQUESTS_CA_BUNDLE: caBundle } : {};
   // PWD too: some agents take the project from $PWD rather than the process's working directory.
   const env = { ...process.env, ...(config.env ?? {}), ...keyEnv, ...caEnv, HOME: home, PWD: ws, XDG_CONFIG_HOME: path.join(home, ".config"), XDG_DATA_HOME: path.join(home, ".local/share"), XDG_STATE_HOME: path.join(home, ".local/state") };
@@ -156,7 +188,12 @@ function agentCommand(task, ws, home, budget, ep) {
 
 function runAgent(task, ws, home, endpoint) {
   const budget = { steps: task.steps ?? config.steps ?? 300, minutes: task.minutes ?? config.minutes ?? 120 };
-  const { cmd, argv, env } = agentCommand(task, ws, home, budget, endpoint);
+  let { cmd, argv, env } = agentCommand(task, ws, home, budget, endpoint);
+  if (config.runAs) {
+    // The agent's own user: it can use its workspace and home, but not the operator's tasks directory (hidden tests).
+    spawnSync("chmod", ["-R", "a+rwX", ws, home]);
+    ({ cmd, argv } = asUser(config.runAs, cmd, argv, { ...env, PATH: env.PATH }));
+  }
   return new Promise((resolve) => {
     const child = spawn(cmd, argv, { cwd: ws, env, stdio: ["ignore", "pipe", "pipe"], detached: true });
     let stdout = "";

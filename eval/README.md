@@ -47,6 +47,54 @@ recorded per run.
 - **Pooled metrics.** Pooled rows report crash rate, regressions, tokens per correct result and wall seconds per
   correct result. The cost of failed runs counts towards these.
 
+## Fault injection (T4)
+
+A task or config may list `faults: [{ kind, atRequest }]`. The run's model proxy then injects that fault into the Nth
+chat request (counted from 1):
+
+| kind | Fault |
+|---|---|
+| `refuse` | The connection drops without an answer |
+| `overloaded` | 503 with `Retry-After: 1` |
+| `stream_cut` | The stream is cut after its first tool-call fragment |
+| `truncate` | `finish_reason` becomes `length` |
+| `context_overflow` | llama.cpp's HTTP 400 `exceed_context_size_error` |
+| `malformed_tool_json` | The first tool call's arguments are no longer valid JSON |
+
+What was injected is recorded in `model.faultsInjected`. Such runs are never treated as infrastructure reruns.
+`score.mjs` reports, per fault kind:
+
+- runs;
+- **truthful** (the run ended with its own result, did not hang past its budget, and never claimed VERIFIED while the
+  hidden tests failed);
+- **recovered** (the hidden tests pass);
+- hung past budget.
+
+The remaining T4 classes come from task fixtures (a hanging test command, a full disk) and from the SIGTERM-then-resume
+runner case. `make test` includes a T4 smoke test with two injected faults (`cli/test/eval_harness.test.ts`).
+
+## Qualification runs
+
+A config with `"qualification": true` is the v1.0.0 evidence run (docs/v1.0.0/ACCEPTANCE.md §6). `run.mjs` refuses to start
+one, before any agent runs, unless every item below holds:
+
+- **Tasks are well formed** (`eval/validate.mjs`): one source (fixture, or a repo pinned to a full commit id), a hidden
+  command, and `class` (bugfix · feature · refactor · debug) and `difficulty` (easy · medium · hard). Development runs check
+  everything except class and difficulty.
+- **The model is identified, not just named.** `fingerprint: { weightsSha256, serverBuild }` and
+  `sampling: { temperature, seed }` are set in the config, and the endpoint lists the model. The fingerprint (with the
+  listed owner and context) is written to `manifest.json`.
+- **Hidden tests are out of the agent's reach.** `runAs` names a separate user the agents run as (through
+  `sudo -n -u <user>`), and the tasks directory grants nothing to other users. Owner setup, once:
+  1. `sudo useradd --system --create-home nexus-eval`
+  2. A sudoers rule letting the operator run commands as that user without a password, for example
+     `mike ALL=(nexus-eval) NOPASSWD: /usr/bin/env`. This grants only the unprivileged user's rights.
+  3. `chmod o-rwx eval/tasks` (and the held-out task store).
+  4. A Nexus install, Node and the peer agents that `nexus-eval` can read and execute.
+
+  Workspaces and per-run homes are made writable for that user. Development runs may omit `runAs`; their contamination
+  check still applies.
+
 ## Pre-registered thresholds (from the assessment, fixed before any live run)
 
 - false VERIFIED = 0 across all runs;
