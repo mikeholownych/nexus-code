@@ -1281,9 +1281,8 @@ export class AutonomousAgent {
         currentOperation: null,
         unverifiedChangesPending: this.hasPendingModifications,
       });
-    } catch {
-      this.initialStatePersistenceFailure =
-        "Initial durable task state was not persisted; restart recovery is unavailable until a later successful checkpoint.";
+    } catch (err: any) {
+      this.reportPersistenceFailure("init", err);
     }
   }
 
@@ -1798,7 +1797,9 @@ export class AutonomousAgent {
       if (this.durable) {
         try {
           this.checkpointDurableState("baseline captured");
-        } catch {}
+        } catch (err: any) {
+          this.reportPersistenceFailure("baseline", err);
+        }
       }
     } catch {
       this.changeBaseline = null;
@@ -1873,6 +1874,28 @@ export class AutonomousAgent {
         else console.warn(pc.yellow(text));
       }
     }
+  }
+
+  /**
+   * Routes all durable-write failures (op start/end, baseline, plan, requirements, recovery)
+   * through one path (AGT-14). Warns and records the failure in `turnPersistenceFailures`.
+   */
+  public reportPersistenceFailure(kind: string, err: unknown): void {
+    const message = redactSecrets(err instanceof Error ? err.message : String(err)).slice(0, 200);
+    let text: string;
+    if (kind === "operation_start" || kind === "operation_end") {
+      text = `Tool operation record (${kind}) could not be written durably (${message}); crash recovery degraded.`;
+    } else if (kind === "init") {
+      text = `Initial durable task state was not persisted (${message}); restart recovery is unavailable until a later successful checkpoint.`;
+      this.initialStatePersistenceFailure = text;
+    } else {
+      text = `Durable checkpoint (${kind}) could not be saved (${message}); if the process stops, state since last save may be lost.`;
+    }
+    this.turnPersistenceFailures.push(text);
+    try {
+      if (this.observer?.onNotice) this.observer.onNotice(text);
+      else console.warn(pc.yellow(text));
+    } catch {}
   }
 
   /**
@@ -3788,7 +3811,9 @@ The pinned Objective Ledger lists the operator's requirements; your plan never r
                   candidateIdentity,
                   receipt: this.activeValidationReceipt,
                 });
-              } catch {}
+              } catch (err: any) {
+                this.reportPersistenceFailure("candidate_receipt", err);
+              }
             }
           } catch {
             this.verifiedWorktreeCompletion = false;
@@ -4090,7 +4115,9 @@ The pinned Objective Ledger lists the operator's requirements; your plan never r
       if (result.changed) {
         try {
           this.checkpointDurableState("requirements updated");
-        } catch {}
+        } catch (err: any) {
+          this.reportPersistenceFailure("requirements", err);
+        }
       }
       const states = gatingRequirements(this.objective).map((r) => `${r.id}:${r.status}`);
       return {
@@ -4117,7 +4144,9 @@ The pinned Objective Ledger lists the operator's requirements; your plan never r
               });
             }
           }
-        } catch {}
+        } catch (err: any) {
+          this.reportPersistenceFailure("plan", err);
+        }
       }
       return {
         success: true,
@@ -4359,7 +4388,9 @@ The pinned Objective Ledger lists the operator's requirements; your plan never r
           targetResources: args.path ? [args.path] : (args.target_file ? [args.target_file] : undefined),
           argsSummary: JSON.stringify(args).slice(0, 200),
         });
-      } catch {}
+      } catch (err: any) {
+        this.reportPersistenceFailure("operation_start", err);
+      }
     }
 
     if (FILE_EDIT_TOOLS.has(toolName) && this.durable) await this.captureChangeBaseline(onConfirm);
@@ -4385,7 +4416,9 @@ The pinned Objective Ledger lists the operator's requirements; your plan never r
           success: receipt.success,
           error: receipt.error,
         }, operationSeq);
-      } catch {}
+      } catch (err: any) {
+        this.reportPersistenceFailure("operation_end", err);
+      }
     }
 
     await this.pluginManager.notifyToolResult(toolName, {
@@ -4574,7 +4607,9 @@ The pinned Objective Ledger lists the operator's requirements; your plan never r
     if (record.state === "WAITING" || record.state === "RESUMED") {
       try {
         this.checkpointDurableState(`provider recovery ${record.state.toLowerCase()}`);
-      } catch {}
+      } catch (err: any) {
+        this.reportPersistenceFailure("provider_recovery", err);
+      }
     }
     try {
       this.observer?.onProviderRecovery?.({ record, discardedPartialOutput });
@@ -4610,7 +4645,7 @@ The pinned Objective Ledger lists the operator's requirements; your plan never r
       else options.signal.addEventListener("abort", () => this.requestCancel("external signal"), { once: true });
     }
     this.completionSummary = undefined;
-    this.turnPersistenceFailures = [];
+    this.turnPersistenceFailures = this.initialStatePersistenceFailure ? [this.initialStatePersistenceFailure] : [];
     this.turnMutations = 0;
     this.turnConfiguredVerifier = "NOT_RUN";
     this.turnCarriedChanges = this.hasPendingModifications;
@@ -4650,6 +4685,15 @@ The pinned Objective Ledger lists the operator's requirements; your plan never r
       this.objective = ledger;
     }
 
+    let currentStep = 1;
+    let stepsUsed = 0;
+    const providerRecoveries: ProviderRecoveryRecord[] = [];
+    const budget = this.config.continuation;
+    const segmentSteps = Math.max(1, this.config.maxSteps);
+    const maxTotalSteps = budget ? Math.max(budget.maxTotalSteps, segmentSteps) : segmentSteps;
+    let segment = 1;
+    const tracker = this.objective && this.durable ? trackingOf(this.objective) : ExecutionTracker.fresh();
+
     try {
       if (this.flightRecorder) {
         if (!this.flightRecorder.isSessionActive()) {
@@ -4685,8 +4729,6 @@ The pinned Objective Ledger lists the operator's requirements; your plan never r
       this.persistProgress({ messages: true });
       const pendingMessageChars = typeof effectiveUserContent === "string" ? effectiveUserContent.length : JSON.stringify(effectiveUserContent).length;
 
-      let currentStep = 1;
-      let stepsUsed = 0;
       let capacityBlock: CapacityRecord | null = null;
       let modelStop: ModelStop = "NONE";
       let finalOutputComplete = false;
@@ -4697,7 +4739,6 @@ The pinned Objective Ledger lists the operator's requirements; your plan never r
       let interruption: InterruptionRecord | null = null;
       let undispatched = 0;
       let persistenceFailure: string | undefined;
-      const providerRecoveries: ProviderRecoveryRecord[] = [];
 
       const markInterrupted = (phase: InterruptionRecord["phase"], extra: Partial<InterruptionRecord> = {}) => {
         interruption = {
@@ -4719,17 +4760,11 @@ The pinned Objective Ledger lists the operator's requirements; your plan never r
       // progress, an actionable failure, or a step/time limit the operator set explicitly — each with its own reason.
       // There is no default step or time ceiling. Without a budget (`--no-continuation`, the operator's explicit choice),
       // the first segment boundary ends the turn (LIMIT_REACHED, legacy).
-      const budget = this.config.continuation;
-      const segmentSteps = Math.max(1, this.config.maxSteps);
-      const maxTotalSteps = budget ? Math.max(budget.maxTotalSteps, segmentSteps) : segmentSteps;
       const turnDeadline = budget && Number.isFinite(budget.maxTurnMinutes) ? Date.now() + budget.maxTurnMinutes * 60_000 : Number.POSITIVE_INFINITY;
-      let segment = 1;
       let stopReason: TurnReason | undefined;
       let stopDetail: string | undefined;
       let completionNudges = 0;
       let recoveries = 0;
-      // Objective-scoped tracking (persisted in the ledger): survives compaction, follow-up turns and restart.
-      const tracker = this.objective && this.durable ? trackingOf(this.objective) : ExecutionTracker.fresh();
       this.stateIdentityDisabled = false;
       this.stateIdentityUncertainty = undefined;
       tracker.beginTurn();
@@ -4786,7 +4821,9 @@ The pinned Objective Ledger lists the operator's requirements; your plan never r
           withDurableSync(() => {
             try {
               this.checkpointDurableState(`continuation: segment ${segment} begins at step ${currentStep}`);
-            } catch {}
+            } catch (err: any) {
+              this.reportPersistenceFailure("continuation", err);
+            }
             this.persistProgress({ messages: true });
           });
           console.warn(pc.dim(`↻ Continuing automatically: segment ${segment} begins at step ${currentStep}; the work is still progressing.`));
@@ -5334,12 +5371,15 @@ The pinned Objective Ledger lists the operator's requirements; your plan never r
         try {
           withDurableSync(() => this.checkpointDurableState(undefined, result));
         } catch (err: any) {
-          // The result says so: a turn whose final state was not saved is never reported as durably recorded.
-          this.turnPersistenceFailures.push(`The turn's final task state could not be saved: ${redactSecrets(String(err?.message ?? err)).slice(0, 200)}`);
+          this.reportPersistenceFailure("final_checkpoint", err);
           result = this.buildTurnResult(resultInput);
-          const text = this.turnPersistenceFailures[this.turnPersistenceFailures.length - 1];
-          if (this.observer?.onNotice) this.observer.onNotice(text);
-          else console.warn(pc.yellow(text));
+        }
+      } else if (this.durable) {
+        try {
+          withDurableSync(() => this.checkpointDurableState(undefined, result));
+        } catch (err: any) {
+          this.reportPersistenceFailure("final_checkpoint", err);
+          result = this.buildTurnResult(resultInput);
         }
       }
       this.lastTurnResult = result;
@@ -5347,6 +5387,69 @@ The pinned Objective Ledger lists the operator's requirements; your plan never r
         this.flightRecorder.recordSessionEnd(
           `${summarizeTurn(result).heading}: ${summarizeTurn(result).line}`,
           result.execution === "COMPLETED" && (result.outcome === "VERIFIED" || result.outcome === "NOT_REQUIRED"),
+          this.totalTokens
+        );
+      }
+      this.ui.turnSummary(result, this.completionSummary);
+      return result;
+    } catch (err: any) {
+      turn.closing = true;
+      if (this.compactionQueue.length) {
+        try {
+          await this.drainCompactionQueue(currentStep, undefined, "the turn failed unexpectedly");
+        } catch {}
+      }
+      if (this.hasQueuedSteering()) {
+        this.cancelQueuedSteering(
+          `the turn failed unexpectedly (${redactSecrets(String(err?.message ?? err)).slice(0, 200)}) before it could be applied`
+        );
+      }
+      const unhandledMessage = redactSecrets(err instanceof Error ? err.message : String(err));
+      const resultInput = {
+        unhandledError: unhandledMessage,
+        modelStop: "NONE" as const,
+        finalOutputComplete: false,
+        inferenceFailure: null,
+        interruption: null,
+        limitReached: false,
+        stepsUsed: stepsUsed || Math.min(currentStep, maxTotalSteps),
+        providerRecoveries,
+        maxSteps: maxTotalSteps,
+        stopReason: "UNHANDLED_ERROR" as const,
+        stopDetail: unhandledMessage.slice(0, 300),
+        ...(budget
+          ? {
+              continuation: {
+                segments: segment,
+                segmentSteps,
+                stopReason: "UNHANDLED_ERROR",
+                stepsWithoutProgress: tracker.data.stepsWithoutProgress,
+                cumulativeSteps: tracker.data.cumulativeSteps,
+                ...(tracker.loops().length ? { repeated: tracker.loops().slice(0, 5).map((r) => ({ action: r.action, count: r.count, firstStep: r.firstStep, lastStep: r.lastStep })) } : {}),
+                ...(this.stateIdentityUncertainty ? { stateUncertainty: this.stateIdentityUncertainty } : {}),
+              },
+            }
+          : {}),
+      };
+      let result = this.buildTurnResult(resultInput);
+      if (this.objective) {
+        if (this.durable) this.objective.continuation.totalSteps = tracker.data.cumulativeSteps;
+        this.objective.continuation.stopReason = "UNHANDLED_ERROR";
+        this.objective.outcome = { ...this.objectiveOutcome(result), at: result.finishedAt };
+      }
+      if (this.durable) {
+        try {
+          withDurableSync(() => this.checkpointDurableState(undefined, result));
+        } catch (saveErr: any) {
+          this.reportPersistenceFailure("final_checkpoint", saveErr);
+          result = this.buildTurnResult(resultInput);
+        }
+      }
+      this.lastTurnResult = result;
+      if (this.flightRecorder) {
+        this.flightRecorder.recordSessionEnd(
+          `${summarizeTurn(result).heading}: ${summarizeTurn(result).line}`,
+          false,
           this.totalTokens
         );
       }
@@ -5384,6 +5487,7 @@ The pinned Objective Ledger lists the operator's requirements; your plan never r
     stopReason?: TurnReason;
     stopDetail?: string;
     continuation?: TurnResult["continuation"];
+    unhandledError?: string;
   }): TurnResult {
     const evidence = this.verificationEvidence ?? null;
     const recoveries = input.providerRecoveries ?? [];
@@ -5423,6 +5527,11 @@ The pinned Objective Ledger lists the operator's requirements; your plan never r
     if (input.interruption) {
       return deepFreezeTurn(assertTurnResultInvariants({
         ...base, execution: "INTERRUPTED", outcome: "NOT_ESTABLISHED", reason: "OPERATOR_INTERRUPT", finalOutputComplete: false,
+      }));
+    }
+    if (input.unhandledError) {
+      return deepFreezeTurn(assertTurnResultInvariants({
+        ...base, execution: "FAILED", outcome: "NOT_ESTABLISHED", reason: "UNHANDLED_ERROR", detail: input.unhandledError.slice(0, 300), finalOutputComplete: false,
       }));
     }
     if (input.persistenceFailure) {

@@ -80,7 +80,7 @@ Independent acceptance is recorded separately in the "Indep." column: **Y** = an
 | REQ-REL-005 | SCAN-001..005 | Dependency and secret gates; zero High/Critical in a release. | `scripts/security_gates.sh` | RT (CI, real cargo audit) | partial | P (WP11) | Toy fallback (REL-07); no SAST | ACC-SUP-04 | RR (via REQ-REL-110) | SPEC-07 |
 | REQ-DX-001 | DOCTOR_TROUBLESHOOTING | Doctor runs with no config, model or session. Versioned JSON. Distinct exit codes. Narrow, confirmed, backed-up, idempotent repairs. Redaction. | `doctor.ts` | RT (E §4) | tested | N | DX-01..05 | ACC-PKG-06..09 | K + RR | SPEC-06 |
 | REQ-DX-002 | TOP_TIER B8 | `--version` shows version and commit. | `build_identity.ts` | RT | tested | N | — | ACC-PKG-03 | K | — |
-| REQ-OPS-001 | TOP_TIER R2; EVID-004 | Persistence failure is visible. Compaction-commit failure stops the turn. | `agent.ts` (PERSISTENCE_FAILED) | TEST | partial | N | AGT-14: swallowed op/plan writes | ACC-CONT-06 | RR (via REQ-AGT-106) | SPEC-04 |
+| REQ-OPS-001 | TOP_TIER R2; EVID-004 | Persistence failure is visible. Compaction-commit failure stops the turn. | `agent.ts` (PERSISTENCE_FAILED) | TEST (ACC-CONT-06; test:cli/test/durable_continuity.test.ts) | tested | N | — | ACC-CONT-06 | RR (via REQ-AGT-106) | SPEC-04 |
 
 ### 2.2 Historical items that are superseded, contradicted or descoped (written dispositions; REQ-OPS-103)
 
@@ -157,7 +157,7 @@ Every row has status **open** at `db1ca55` unless stated otherwise. In the "Evid
 | REQ-AGT-103 | Audit | Work units persist tracking and the change baseline across resume. | convergence | `execution_tracking.ts` | SRC (AGT-02c/d; test:cli/test/durable_continuity.test.ts) | tested | ACC-CONT-04 | RR | AGT-02 | SPEC-04 / PLAN-04 |
 | REQ-AGT-104 | Audit | Accounting includes subagent and findings inference. | cost honesty | `agent.ts:5298-5431` | RT (AGT-03; test:cli/test/durable_continuity.test.ts) | tested | ACC-CONT-05 | RR | AGT-03 | SPEC-04 / PLAN-04 |
 | REQ-AGT-105 | Audit | In-turn subagents write no durable records. | hygiene | `agent.ts:1148` | RT (AGT-04; test:cli/test/durable_continuity.test.ts) | tested | ACC-CONT-05 | RR | AGT-04 | SPEC-04 / PLAN-04 |
-| REQ-AGT-106 | EVID-004 (carried) | An escaping exception gives a truthful UNHANDLED_ERROR result with the real obligation. Durable-write failures are reported. | honesty / failure | `agent.ts:4254-4995`; `turn.ts:444-460` | SRC (AGT-08, AGT-14) | open | ACC-CONT-06 | RR | AGT-08, AGT-14, VER-11 | SPEC-04 / PLAN-04 |
+| REQ-AGT-106 | EVID-004 (carried) | An escaping exception gives a truthful UNHANDLED_ERROR result with the real obligation. Durable-write failures are reported. | honesty / failure | `agent.ts:4254-4995`; `turn.ts:444-460` | TEST (ACC-CONT-06; test:cli/test/durable_continuity.test.ts) | tested | ACC-CONT-06 | RR | AGT-08, AGT-14, VER-11 | SPEC-04 / PLAN-04 |
 | REQ-AGT-107 | Audit | Implementer and tester units cannot be COMPLETE with no change. | honesty | `operation_runner.ts:651-663` | SRC (AGT-11; test:cli/test/team_convergence.test.ts) | tested | ACC-CONT-07 | RR | AGT-11, AGT-12 | SPEC-04 / PLAN-04 |
 | REQ-AGT-108 | Audit | No false stagnation when state identity is unknown. | workflow | `execution_tracking.ts` | INF (AGT-09) | open | ACC-CONT-09 | RR | AGT-09 | SPEC-04 / PLAN-04 |
 | REQ-AGT-110 | HIST-09 | Independent acceptance of continuity, compaction and truncation recovery. | qualification | — | DOC ("pending") | open | ACC-CONT-10, ACC-GOV-06 | RR | HIST-09 | SPEC-04 / PLAN-09 |
