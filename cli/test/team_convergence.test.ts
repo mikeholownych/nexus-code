@@ -807,4 +807,89 @@ describe("BLOCKED decision application", () => {
       assert.equal(out.operation.units[0].runs, 2);
     });
   });
+
+  test("36. ACC-CONT-07: implementer replying in prose only gives BLOCKED(no_change) with three options", async () => {
+    const gw = await startGateway(() => ({ kind: "text", text: "I looked at the code but did not make any edits." }));
+    await withTeam([gw], async (env) => {
+      const out = await env.team([resource("primary", gw)], { id: "team-prose" }).run("implementer", "write a feature");
+      assert.equal(out.operation.status, "BLOCKED");
+      const persisted = env.store.load("team-prose");
+      assert.equal(persisted.status, "BLOCKED");
+      const u = persisted.units[0];
+      assert.equal(u.status, "BLOCKED");
+      assert.ok(u.blocked?.reason.startsWith("no_change"));
+      const d = u.blocked!.decision;
+      assert.equal(d.cause, "EXECUTION_FAILED");
+      assert.deepEqual(d.options.map((o) => [o.id, o.label, o.action.kind]), [
+        ["1", "retry", "retry"],
+        ["2", "accept as no-op", "accept_no_change"],
+        ["3", "stop the operation", "cancel_operation"],
+      ]);
+
+      // Applying option 2 (accept as no-op) marks unit COMPLETE and completes operation
+      applyOperatorDecision(env.store, "team-prose", d.id, "2", "operator confirms no code change needed", { now: env.clock.now });
+      const resumed = env.store.load("team-prose");
+      const unitAfter = resumed.units[0];
+      assert.equal(unitAfter.status, "COMPLETE");
+      assert.equal(unitAfter.result?.outcome, "NOT_REQUIRED");
+      assert.equal(unitAfter.result?.summary, "accepted as no-op by operator");
+
+      const driveOut = await new TeamOrchestrator(env.config, { store: env.store, executor: env.executor(), clock: env.clock }).drive(resumed);
+      assert.equal(driveOut.operation.status, "COMPLETE");
+    });
+  });
+
+  test("37. REQ-AGT-107: implementer and tester get read_objective and update_requirements, unit ledgers have unitId", async () => {
+    let capturedAgent: AutonomousAgent | undefined;
+    const gw = await startGateway((n, body) => byUnit(n, body));
+    await withTeam([gw], async (env) => {
+      const exec = new AgentWorkUnitExecutor({
+        baseConfig: env.config,
+        createAgent: (c, depth, opts) => {
+          const agent = new AutonomousAgent(c, depth, undefined, opts);
+          capturedAgent = agent;
+          (agent as any).recoveryClock = env.clock;
+          (agent as any).stateManager = new DurableStateManager({ baseDir: env.stateDir, workspacePaths: [(agent as any).primaryWorkspacePathIdentity] });
+          return agent;
+        },
+      });
+      const orch = new TeamOrchestrator(env.config, { store: env.store, executor: exec, clock: env.clock, resources: [resource("primary", gw)], id: "team-roles" });
+      const out = await orch.run("implementer", "implement unit ledger test");
+      assert.equal(out.operation.status, "COMPLETE");
+      assert.ok(capturedAgent);
+      assert.equal(capturedAgent.role, "implementer");
+      assert.equal(capturedAgent.unitId, "implement");
+      assert.ok((capturedAgent as any).capabilityRegistry.hasTool("read_objective"));
+      assert.ok((capturedAgent as any).capabilityRegistry.hasTool("update_requirements"));
+      assert.equal(capturedAgent.getObjective()?.unitId, "implement");
+    });
+  });
+
+  test("38. AGT-12: 10,000-transition stop offers resume or cancel typed options, unblocks on resume", async () => {
+    const gw = await startGateway((n, body) => byUnit(n, body));
+    await withTeam([gw], async (env) => {
+      const op = newOperation("op-bound", "task", teamUnits("researcher", "task"), [resource("primary", gw)], env.clock.now());
+      env.store.save(op);
+      const runner = new OperationRunner(op, {
+        executor: env.executor(),
+        clock: env.clock,
+        persist: (s) => env.store.save(s),
+        maxIterations: 0,
+      });
+      const res = await runner.run();
+      assert.equal(res.status, "BLOCKED");
+      const persisted = env.store.load("op-bound");
+      const d = persisted.blocked?.decisions?.find((x) => x.id === "operation#not-converging");
+      assert.ok(d);
+      assert.deepEqual(d.options.map((o) => [o.id, o.label, o.action.kind]), [
+        ["1", "resume the operation", "keep_waiting"],
+        ["2", "stop the operation", "cancel_operation"],
+      ]);
+      // Resolving with option 1 unblocks the operation
+      applyOperatorDecision(env.store, "op-bound", d.id, "1", "continue", { now: env.clock.now });
+      const resumed = env.store.load("op-bound");
+      assert.equal(resumed.status, "RUNNING");
+      assert.equal(resumed.blocked, undefined);
+    });
+  });
 });

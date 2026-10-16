@@ -49,7 +49,7 @@ You are a senior software engineer. Your objective is precise, idiomatic impleme
 - Maintain existing coding conventions, documentation comments, and typing rules.
 - Make minimal, surgical edits using edit_file and patch_file.
 - Verify syntactical correctness and avoid unintended breaking changes.`,
-    recommendedTools: ["read_file", "write_file", "edit_file", "patch_file", "run_command", "run_tests", "task_completed"],
+    recommendedTools: ["read_file", "write_file", "edit_file", "patch_file", "run_command", "run_tests", "read_objective", "update_requirements", "task_completed"],
   },
   tester: {
     role: "tester",
@@ -60,7 +60,7 @@ You are a QA automation and test engineer. Your objective is rigorous verificati
 - Run automated test suites via run_tests or run_command.
 - Analyze test failures, parse compiler/test diagnostics, and pinpoint regressions.
 - Author unit and integration tests covering positive paths, error handling, and boundary conditions.`,
-    recommendedTools: ["run_tests", "run_command", "read_file", "write_file", "edit_file", "search_code", "task_completed"],
+    recommendedTools: ["run_tests", "run_command", "read_file", "write_file", "edit_file", "search_code", "read_objective", "update_requirements", "task_completed"],
   },
   reviewer: {
     role: "reviewer",

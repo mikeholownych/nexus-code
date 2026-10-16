@@ -66,7 +66,8 @@ export type DecisionAction =
   | { kind: "revise" }
   /** Drop an advisory unit (required units cannot be dropped: the objective would be unmet). */
   | { kind: "drop" }
-  | { kind: "cancel_operation" };
+  | { kind: "cancel_operation" }
+  | { kind: "accept_no_change" };
 
 export interface DecisionOption {
   id: string;
@@ -195,6 +196,7 @@ export interface DurableOperationState {
   blocked?: { since: string; decisions: EscalationDecision[] };
   events: OperationEvent[];
   policy: OperationPolicy;
+  decisions?: AppliedDecision[];
 }
 
 /** An option before it is numbered into a decision. */
@@ -533,7 +535,31 @@ export class ConvergenceScheduler {
     }
     const u = this.state.units.find((x) => x.status === "BLOCKED" && x.blocked?.decision.id === decisionId);
     if (!u) {
-      const pending = this.state.units.filter((x) => x.status === "BLOCKED" && x.blocked).map((x) => x.blocked!.decision.id);
+      const opDecision = this.state.blocked?.decisions?.find((d) => d.id === decisionId);
+      if (opDecision) {
+        const option = opDecision.options.find((o) => o.id === optionId);
+        if (!option) {
+          throw new DecisionRejected(`Option '${optionId}' was not offered for ${decisionId} (offered: ${opDecision.options.map((o) => `${o.id}=${o.label}`).join("; ")}).`);
+        }
+        const action = option.action;
+        const text = note?.trim();
+        const applied: AppliedDecision = { decisionId, optionId, label: option.label, action, ...(text ? { note: text } : {}), at: new Date(this.now()).toISOString() };
+        (this.state.decisions ??= []).push(applied);
+        this.emit("DECISION_APPLIED", `Operation: operator chose "${option.label}"${text ? ` (${text})` : ""}.`, {
+          detail: { decisionId, optionId, action },
+        });
+        if (action.kind === "cancel_operation") {
+          this.cancel();
+        } else {
+          this.state.status = "RUNNING";
+          delete this.state.blocked;
+        }
+        return applied;
+      }
+      const pending = [
+        ...this.state.units.filter((x) => x.status === "BLOCKED" && x.blocked).map((x) => x.blocked!.decision.id),
+        ...(this.state.blocked?.decisions?.map((d) => d.id) ?? []),
+      ];
       throw new DecisionRejected(`No pending decision '${decisionId}' (pending: ${pending.join(", ") || "none"}).`);
     }
     const decision = u.blocked!.decision;
@@ -582,10 +608,19 @@ export class ConvergenceScheduler {
       case "drop":
         u.dropped = true;
         break;
+      case "accept_no_change":
+        u.status = "COMPLETE";
+        u.result = {
+          summary: "accepted as no-op by operator",
+          completedAt: new Date(this.now()).toISOString(),
+          resourceId: u.assignment?.resourceId ?? "unknown",
+          outcome: "NOT_REQUIRED",
+        };
+        break;
       case "cancel_operation":
         break;
     }
-    if (action.kind !== "drop" && action.kind !== "cancel_operation") {
+    if (action.kind !== "drop" && action.kind !== "cancel_operation" && action.kind !== "accept_no_change") {
       u.pendingDecision = { label: option.label, ...(text ? { note: text } : {}), ...(action.kind === "retry" && action.restart ? { restart: true } : {}) };
     }
     this.emit("DECISION_APPLIED", `${u.title}: operator chose "${option.label}"${text ? ` (${text})` : ""}.`, {
@@ -595,8 +630,11 @@ export class ConvergenceScheduler {
     if (action.kind === "cancel_operation") {
       this.cancel();
     } else if (this.state.status === "BLOCKED") {
-      this.state.status = "RUNNING";
-      delete this.state.blocked;
+      const hasOtherBlocked = this.state.units.some((x) => x.status === "BLOCKED");
+      if (!hasOtherBlocked) {
+        this.state.status = "RUNNING";
+        delete this.state.blocked;
+      }
     }
     return applied;
   }
