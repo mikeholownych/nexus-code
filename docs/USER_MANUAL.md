@@ -6,12 +6,16 @@ Welcome to **Nexus Code**, a local-first, autonomous and interactive AI coding h
 
 ## 1. Quick Start
 
-### Starting the Interactive REPL / TUI
+### Starting the Interactive Environment (TUI & REPL)
 To launch the interactive coding environment in the current workspace:
 ```bash
 nexus
-# or
-harness repl
+```
+- **TTY default:** Running `nexus` with no arguments in a terminal launches the live Ratatui TUI (`nexus-tui`).
+- **Non-TTY / Headless fallback:** Running `nexus` without a TTY (in pipes or scripts) falls back to the interactive REPL.
+- **Explicit REPL:** Pass `nexus repl` (or `nexus --repl`) to explicitly launch the command-line REPL.
+```bash
+nexus repl
 ```
 
 ### Execution Postures & Approval Modes
@@ -38,6 +42,7 @@ To run a one-off objective and exit automatically when verified:
 ```bash
 nexus run "Refactor the authentication handler to support JWT rotation and add unit tests"
 ```
+Free-text task execution requires the explicit `nexus run "<prompt>"` subcommand. Passing unknown subcommand names or free text without `run` is treated as a command error (REQ-REL-104 / DEC-14).
 
 ### Viewing Tool Audit Logs
 To inspect recent tool executions, filter errors, or track latency:
