@@ -279,6 +279,83 @@ describe("V2: unverified changes survive retries, step limits, restarts and resu
     });
   });
 
+  test("ACC-CONT-01: run --resume <id> continues the recovered conversation, objective and task id", async () => {
+    await withHome(async () => {
+      const gw = await gateway((b) => ({ text: lastUser(b).includes("PINEAPPLE") ? "noted" : "reply" }));
+      const repo = makeRepo();
+      const config = cfg(gw, repo);
+      try {
+        const first = new ApplicationCore(config);
+        quiet(first.getAgent());
+        const r1 = await muted(() => first.runTask("Remember the codeword PINEAPPLE."));
+        first.shutdown();
+
+        const second = new ApplicationCore(config);
+        quiet(second.getAgent());
+        const r2 = await muted(() => second.runTask("What was the codeword?", { resumeTaskId: r1.taskId }));
+        second.shutdown();
+
+        // Gateway fixture: the second request of run --resume <id> contains the first turn's messages
+        const lastReq = gw.requests[gw.requests.length - 1];
+        const carries = JSON.stringify(lastReq.messages).includes("PINEAPPLE");
+        assert.ok(carries, "resumed request must contain prior turn's messages");
+        // Result taskId equals the recovered id
+        assert.equal(r2.taskId, r1.taskId, "resumed taskId must equal recovered id");
+      } finally {
+        await gw.close();
+        fs.rmSync(repo, { recursive: true, force: true });
+      }
+    });
+  });
+
+  test("ACC-CONT-02: run --resume (no id) resumes latest task, or fails with code 2 and guidance", async () => {
+    await withHome(async (home) => {
+      const gw = await gateway((b) => ({ text: "done" }));
+      const repo = makeRepo();
+      const config = cfg(gw, repo);
+      try {
+        // When no task exists in the workspace, runTask with "latest" rejects with guidance
+        const freshApp = new ApplicationCore(config);
+        quiet(freshApp.getAgent());
+        await assert.rejects(
+          () => freshApp.runTask("continue", { resumeTaskId: "latest" }),
+          (err: any) => {
+            assert.match(err.message, /no task to resume in .*?; see 'nexus status'/);
+            return true;
+          }
+        );
+        freshApp.shutdown();
+        const tasksDir = path.join(home, ".nexus", "tasks");
+        if (fs.existsSync(tasksDir)) fs.rmSync(tasksDir, { recursive: true, force: true });
+
+        // CLI run --resume in an empty workspace exits 2 with guidance
+        const cliResEmpty = await cli(["run", "--resume", "--endpoint", gw.url, "--model", "m"], { cwd: repo, home });
+        assert.equal(cliResEmpty.code, 2, `expected exit code 2, got ${cliResEmpty.code}: ${cliResEmpty.err}`);
+        assert.match(cliResEmpty.err, /no task to resume in .*?; see 'nexus status'/);
+
+        // Run a task first
+        const first = new ApplicationCore(config);
+        quiet(first.getAgent());
+        const r1 = await muted(() => first.runTask("First task"));
+        first.shutdown();
+
+        // runTask with "latest" resolves and resumes the latest task in workspace
+        const resumed = new ApplicationCore(config);
+        quiet(resumed.getAgent());
+        const r2 = await muted(() => resumed.runTask("continue", { resumeTaskId: "latest" }));
+        resumed.shutdown();
+        assert.equal(r2.taskId, r1.taskId);
+
+        // CLI run --resume without id resolves and resumes the latest task
+        const cliRes = await cli(["run", "--resume", "--endpoint", gw.url, "--model", "m", "--yes"], { cwd: repo, home });
+        assert.equal(cliRes.code, 0, `expected exit code 0, got ${cliRes.code}: ${cliRes.err}\n${cliRes.out}`);
+      } finally {
+        await gw.close();
+        fs.rmSync(repo, { recursive: true, force: true });
+      }
+    });
+  });
+
   test("interactive /resume (sidecar): a resumed session keeps its outstanding verification obligation", async () => {
     await withHome(async () => {
       const gw = await gateway((b) => (lastUser(b).startsWith("Write impl.txt") ? (toolResults(b) === 0 ? write() : { text: "I wrote impl.txt." }) : done("nothing left")));
@@ -477,7 +554,7 @@ describe("R1: task state and sessions without a recorded obligation (written by 
       };
       const sessions = () => {
         const dir = path.join(home, ".nexus", "sessions");
-        return fs.readdirSync(dir).filter((f) => f.endsWith(".json")).map((f) => path.join(dir, f));
+        return fs.readdirSync(dir).filter((f) => f.endsWith(".json") && f !== "index.json").map((f) => path.join(dir, f));
       };
       try {
         assert.equal(await turn(undefined, "Read a.txt."), "NOT_REQUIRED");

@@ -20,6 +20,7 @@ import { BenchmarkEvaluator } from "./evaluator.js";
 import { SynthesizerEngine } from "./synthesizer.js";
 import { BrowserDriver } from "./browser.js";
 import { KnowledgeGraph } from "./knowledge.js";
+import { TaskStateNotFoundError } from "./core/state.js";
 import { buildConfig as buildConfigOrThrow, loadEnvironment } from "./config.js";
 import { describeTarget, registerProviderCommands } from "./provider_cli.js";
 import { UsageLedger } from "./usage.js";
@@ -282,7 +283,7 @@ program
 program
   .command("run")
   .description("Run an autonomous coding task")
-  .argument("<prompt...>", "The coding instructions / task prompt")
+  .argument("[prompt...]", "The coding instructions / task prompt")
   .option("-e, --endpoint <url>", "Local LLM endpoint (default: http://localhost:1234/v1 or $LOCAL_LLM_ENDPOINT)")
   .option("-m, --model <name>", "Model name identifier (default: active model in LM Studio/vLLM)")
   .option("-w, --workspace <path>", "Workspace directory to inspect and modify (default: current directory)")
@@ -318,7 +319,7 @@ program
   .option("-r, --resume [id]", "Resume previous session or task state")
   .action(async (promptParts: string[], _options: any, cmd: Command) => {
     const options = cmd.optsWithGlobals();
-    const prompt = promptParts.join(" ");
+    let prompt = promptParts.join(" ").trim();
     const config = buildConfig(options);
     config.surface = "headless";
     const isJson = Boolean(options.json);
@@ -341,7 +342,34 @@ program
 
     if (!isJson && (config.provider || config.plannerProvider || config.coderProvider)) console.error(pc.dim(describeTarget(config)));
     const app = new ApplicationCore(config);
-    const resumeTaskId = typeof options.resume === "string" ? options.resume : options.resume ? "latest" : undefined;
+
+    let resumeTaskId: string | undefined;
+    if (options.resume !== undefined && options.resume !== false) {
+      if (typeof options.resume === "string" && options.resume !== "latest") {
+        resumeTaskId = options.resume;
+      } else {
+        const targetWorkspace = config.workspace || process.cwd();
+        const tasks = app
+          .getStateManager()
+          .listTasks({ workspace: targetWorkspace })
+          .filter((t) => t.taskId !== app.getTaskId());
+        if (tasks.length === 0) {
+          console.error(`no task to resume in ${targetWorkspace}; see 'nexus status'`);
+          app.shutdown();
+          exitAfterFlush(2);
+          return;
+        }
+        resumeTaskId = tasks[0].taskId;
+      }
+      if (!prompt) {
+        prompt = "continue";
+      }
+    } else if (!prompt) {
+      console.error("error: missing required argument 'prompt'");
+      app.shutdown();
+      exitAfterFlush(1);
+      return;
+    }
 
     // Operator stop authority: first SIGINT cancels the active turn; a second one terminates immediately.
     const abort = new AbortController();
@@ -391,8 +419,9 @@ program
       } else {
         console.error(pc.red(`\nTask failed: ${err.message}`));
       }
+      const exitCode = (err instanceof TaskStateNotFoundError || err?.name === "TaskStateNotFoundError") ? 2 : 1;
       app.shutdown();
-      exitAfterFlush(1);
+      exitAfterFlush(exitCode);
     }
   });
 

@@ -777,9 +777,9 @@ export class DurableStateManager {
   }
 
   /**
-   * Lists all persisted tasks.
+   * Lists all persisted tasks, optionally filtered by workspace.
    */
-  public listTasks(): Array<{
+  public listTasks(options?: { workspace?: string }): Array<{
     taskId: string;
     sessionId: string;
     title: string;
@@ -825,7 +825,26 @@ export class DurableStateManager {
       }
     }
 
-    results.sort((a, b) => b.mtime - a.mtime);
+    results.sort((a, b) => {
+      const timeA = new Date(a.updatedAt).getTime();
+      const timeB = new Date(b.updatedAt).getTime();
+      if (!Number.isNaN(timeA) && !Number.isNaN(timeB) && timeA !== timeB) {
+        return timeB - timeA;
+      }
+      return b.mtime - a.mtime;
+    });
+
+    if (options?.workspace) {
+      const targetWorkspace = path.resolve(options.workspace);
+      return results.filter((t) => {
+        try {
+          return path.resolve(t.workspacePath) === targetWorkspace;
+        } catch {
+          return t.workspacePath === options.workspace;
+        }
+      });
+    }
+
     return results;
   }
 

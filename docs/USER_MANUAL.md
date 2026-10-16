@@ -93,7 +93,8 @@ Press `<TAB>` at any prompt to autocomplete slash commands and directory paths.
   changed file is a test, the run names a changed file, a test imports a changed module, or the change has inline
   tests the run executes (Rust `#[cfg(test)]` under `cargo test`, Go `_test.go` files under `go test`). A passing run
   that shows none of that only shows nothing else broke: the outcome is `tests passed, change not covered`
-  (`REGRESSION_FREE`, exit code 2), and requirements cannot be marked `verified` on it. When Nexus found the test
+  (`REGRESSION_FREE`, exit code 2), and requirements cannot be marked `verified` on it. When resuming (`nexus run --resume`),
+  if no prior task exists in the workspace (or a specified task ID cannot be found), the command exits with exit code 2. When Nexus found the test
   command itself, a covering pass is VERIFIED only if it is also **independent of Nexus**: before its first edit Nexus
   runs the tests once, and the tests as they were then (Nexus's own new or edited tests set aside) must have failed
   before the change and pass after it. Tests Nexus wrote in the same change cannot catch its own misreading of what you
