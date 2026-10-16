@@ -4675,7 +4675,7 @@ The pinned Objective Ledger lists the operator's requirements; your plan never r
           ledger.unitId = this.unitId;
         }
         const isHarnessResume = /^\[(?:Nexus|Work unit resumed)/.test(taskPrompt);
-        if (!isHarnessResume && !isContinuationPrompt(taskPrompt)) {
+        if (!isHarnessResume) {
           // The unfinished objective is kept; numbered items in the follow-up are added as further requirements.
           amendObjective(ledger, taskPrompt);
         }
@@ -5100,7 +5100,7 @@ The pinned Objective Ledger lists the operator's requirements; your plan never r
               endStep();
               continue;
             }
-            const discovered = this.providerCapabilities?.advertised?.contextLength ?? this.contextLimit();
+            const discovered = this.getProviderCapabilities()?.advertised?.contextLength ?? this.contextLimit();
             const actionableMsg = `The inference server rejected the request for context capacity (CAPACITY_REJECTED). Set --context-limit ${discovered} (or NEXUS_CONTEXT_LIMIT) to match the server's window.`;
             console.error(pc.red(`\n${actionableMsg}`));
             inferenceFailure = {

@@ -162,7 +162,7 @@ export const DEFAULT_RECOVERY_POLICY: RecoveryPolicy = {
   jitterRatio: 0.5,
   minDelayMs: 500,
   probeTimeoutMs: 5_000,
-  maxUnknownReplays: 2,
+  maxUnknownReplays: 1,
   maxIterations: 1_000,
 };
 

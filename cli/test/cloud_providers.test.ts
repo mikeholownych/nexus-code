@@ -632,7 +632,8 @@ describe("spending limits and accounting", () => {
       UsageLedger.global().limits = { maxRequests: 0.5 };
       await new LocalLlmClient(cfg(undefined, m.url, { apiKey: "local" })).chatCompletion(msgs, []);
       assert.equal(m.seen.length, 1);
-      assert.equal(UsageLedger.global().all().length, 0, "appliance requests keep their existing records only");
+      assert.equal(UsageLedger.global().cloudTotals().requests, 0, "appliance requests do not count toward cloud limits");
+      assert.equal(UsageLedger.global().all()[0]?.origin_class, "local");
     } finally { await m.close(); }
   });
 });
