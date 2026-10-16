@@ -127,6 +127,11 @@ fn execute_request(tool_name: &str, params: Value, base_dir: &Path, key: Option<
             let ended = runner::end_background_commands(CANCEL_GRACE);
             Ok(serde_json::json!({ "ended": ended }))
         }
+        // Lists active background services.
+        "list_services" => {
+            let services = runner::list_services();
+            serde_json::to_value(services).map_err(|e| e.to_string())
+        }
         "file_info" => {
             let args: file_ops::FileInfoArgs = serde_json::from_value(params)
                 .map_err(|e| format!("Invalid file_info arguments: {e}"))?;

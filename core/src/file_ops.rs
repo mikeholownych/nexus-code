@@ -7,11 +7,17 @@ use std::path::Path;
 #[cfg(unix)]
 use std::os::unix::io::AsRawFd;
 
+pub const MAX_READ_BYTES: usize = 8 * 1024 * 1024; // 8 MB limit per REQ-SEC-107
+
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ReadFileArgs {
     pub path: String,
     pub start_line: Option<usize>,
     pub end_line: Option<usize>,
+    #[serde(default)]
+    pub offset: Option<usize>,
+    #[serde(default)]
+    pub length: Option<usize>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -212,15 +218,53 @@ pub fn read_file(args: ReadFileArgs, base_dir: &Path) -> Result<ReadFileResult, 
         return Err(format!("Target is a directory, not a file: {}", args.path));
     }
 
-    let file = File::open(&target).map_err(|e| format!("Failed to open file: {e}"))?;
+    let mut file = File::open(&target).map_err(|e| format!("Failed to open file: {e}"))?;
     verify_descriptor_confinement(&file, &base_canon)?;
+
+    let file_meta = file.metadata().map_err(|e| format!("Failed to get metadata: {e}"))?;
+    let file_size = file_meta.len() as usize;
+
+    if file_size > MAX_READ_BYTES && args.offset.is_none() && args.length.is_none() {
+        return Err(format!(
+            "File size ({} bytes) exceeds 8 MB limit ({} bytes). Use 'offset' and 'length' arguments to page through the file.",
+            file_size, MAX_READ_BYTES
+        ));
+    }
 
     if is_binary_file_descriptor(&file).unwrap_or(false) {
         return Err(format!("File is binary, cannot display as text: {}", args.path));
     }
 
-    let file_meta = file.metadata().map_err(|e| format!("Failed to get metadata: {e}"))?;
-    let file_size = file_meta.len() as usize;
+    if args.offset.is_some() || args.length.is_some() {
+        let offset = args.offset.unwrap_or(0);
+        if offset > file_size {
+            return Err(format!("offset ({offset}) exceeds file size ({file_size})"));
+        }
+        let requested_len = args.length.unwrap_or(MAX_READ_BYTES).min(MAX_READ_BYTES);
+        let actual_len = requested_len.min(file_size.saturating_sub(offset));
+
+        file.seek(SeekFrom::Start(offset as u64))
+            .map_err(|e| format!("Failed to seek file: {e}"))?;
+        let mut buf = vec![0u8; actual_len];
+        file.read_exact(&mut buf)
+            .map_err(|e| format!("Failed to read file slice: {e}"))?;
+
+        let text = String::from_utf8_lossy(&buf);
+        let lines: Vec<&str> = text.lines().collect();
+        let total = lines.len();
+        let mut numbered_content = String::new();
+        for (idx, line) in lines.iter().enumerate() {
+            let line_num = idx + 1;
+            numbered_content.push_str(&format!("{line_num:>5} | {line}\n"));
+        }
+        return Ok(ReadFileResult {
+            path: args.path,
+            total_lines: total,
+            start_line: if total > 0 { 1 } else { 0 },
+            end_line: total,
+            content: numbered_content,
+        });
+    }
 
     let (total, start, end, numbered_content) = if file_size > 0 {
         // High-performance Memory-Mapped I/O (Candidate #07)
@@ -892,6 +936,10 @@ pub fn file_info(args: FileInfoArgs, base_dir: &Path) -> Result<FileInfoResult, 
 pub struct BatchReadArgs {
     pub paths: Vec<String>,
     pub max_lines_per_file: Option<usize>,
+    #[serde(default)]
+    pub offset: Option<usize>,
+    #[serde(default)]
+    pub length: Option<usize>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -939,7 +987,7 @@ pub fn batch_read(args: BatchReadArgs, base_dir: &Path) -> Result<BatchReadResul
                 }
 
                 match File::open(&target) {
-                    Ok(file) => {
+                    Ok(mut file) => {
                         if let Err(e) = verify_descriptor_confinement(&file, &base_canon) {
                             results.push(BatchReadFileEntry {
                                 path: path_str.clone(),
@@ -950,6 +998,34 @@ pub fn batch_read(args: BatchReadArgs, base_dir: &Path) -> Result<BatchReadResul
                             });
                             continue;
                         }
+                        let file_size = match file.metadata() {
+                            Ok(m) => m.len() as usize,
+                            Err(e) => {
+                                results.push(BatchReadFileEntry {
+                                    path: path_str.clone(),
+                                    success: false,
+                                    total_lines: 0,
+                                    content: String::new(),
+                                    error: Some(format!("Failed to get metadata: {e}")),
+                                });
+                                continue;
+                            }
+                        };
+
+                        if file_size > MAX_READ_BYTES && args.offset.is_none() && args.length.is_none() {
+                            results.push(BatchReadFileEntry {
+                                path: path_str.clone(),
+                                success: false,
+                                total_lines: 0,
+                                content: String::new(),
+                                error: Some(format!(
+                                    "File size ({} bytes) exceeds 8 MB limit ({} bytes). Use 'offset' and 'length' arguments to page through the file.",
+                                    file_size, MAX_READ_BYTES
+                                )),
+                            });
+                            continue;
+                        }
+
                         if is_binary_file_descriptor(&file).unwrap_or(false) {
                             results.push(BatchReadFileEntry {
                                 path: path_str.clone(),
@@ -957,6 +1033,59 @@ pub fn batch_read(args: BatchReadArgs, base_dir: &Path) -> Result<BatchReadResul
                                 total_lines: 0,
                                 content: String::new(),
                                 error: Some("File is binary".into()),
+                            });
+                            continue;
+                        }
+
+                        if args.offset.is_some() || args.length.is_some() {
+                            let offset = args.offset.unwrap_or(0);
+                            if offset > file_size {
+                                results.push(BatchReadFileEntry {
+                                    path: path_str.clone(),
+                                    success: false,
+                                    total_lines: 0,
+                                    content: String::new(),
+                                    error: Some(format!("offset ({offset}) exceeds file size ({file_size})")),
+                                });
+                                continue;
+                            }
+                            let requested_len = args.length.unwrap_or(MAX_READ_BYTES).min(MAX_READ_BYTES);
+                            let actual_len = requested_len.min(file_size.saturating_sub(offset));
+                            if let Err(e) = file.seek(SeekFrom::Start(offset as u64)) {
+                                results.push(BatchReadFileEntry {
+                                    path: path_str.clone(),
+                                    success: false,
+                                    total_lines: 0,
+                                    content: String::new(),
+                                    error: Some(format!("Failed to seek file: {e}")),
+                                });
+                                continue;
+                            }
+                            let mut buf = vec![0u8; actual_len];
+                            if let Err(e) = file.read_exact(&mut buf) {
+                                results.push(BatchReadFileEntry {
+                                    path: path_str.clone(),
+                                    success: false,
+                                    total_lines: 0,
+                                    content: String::new(),
+                                    error: Some(format!("Failed to read file slice: {e}")),
+                                });
+                                continue;
+                            }
+                            let text = String::from_utf8_lossy(&buf);
+                            let lines: Vec<&str> = text.lines().collect();
+                            let total = lines.len();
+                            let slice = &lines[..total.min(max_lines)];
+                            let mut numbered = String::new();
+                            for (idx, line) in slice.iter().enumerate() {
+                                numbered.push_str(&format!("{:>5} | {}\n", idx + 1, line));
+                            }
+                            results.push(BatchReadFileEntry {
+                                path: path_str.clone(),
+                                success: true,
+                                total_lines: total,
+                                content: numbered,
+                                error: None,
                             });
                             continue;
                         }
@@ -1218,6 +1347,8 @@ mod tests {
         let batch = batch_read(BatchReadArgs {
             paths: vec!["file1.txt".into(), "nonexistent.txt".into()],
             max_lines_per_file: Some(10),
+            offset: None,
+            length: None,
         }, &dir).unwrap();
 
         assert_eq!(batch.total_files, 2);
@@ -1351,6 +1482,8 @@ mod tests {
             path: "sym_link.txt".into(),
             start_line: None,
             end_line: None,
+            offset: None,
+            length: None,
         }, &workspace);
         assert!(read_res.is_err());
 
@@ -1424,6 +1557,8 @@ mod tests {
                 path: "racy_link.txt".into(),
                 start_line: None,
                 end_line: None,
+                offset: None,
+                length: None,
             }, &workspace) {
                 Ok(res) => {
                     read_successes += 1;
@@ -1688,6 +1823,79 @@ mod tests {
 
         let patch_after = fs::read(&crlf_file).unwrap();
         assert_eq!(patch_after, b"LINE1\r\nLINE2\r\nline3\r\n");
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_read_file_and_batch_read_8mb_cap_and_paging() {
+        let dir = std::env::temp_dir().join(format!("test_cap_{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+
+        let big_path = dir.join("big.txt");
+        let mut f = File::create(&big_path).unwrap();
+        // Create 9 MB sparse file with valid text in first 2KB so it is not treated as binary
+        f.set_len(9 * 1024 * 1024).unwrap();
+        f.seek(SeekFrom::Start(0)).unwrap();
+        let head_bytes = vec![b'x'; 2048];
+        f.write_all(&head_bytes).unwrap();
+        f.seek(SeekFrom::Start(0)).unwrap();
+        f.write_all(b"head content\n").unwrap();
+        f.seek(SeekFrom::Start(1024 * 1024)).unwrap();
+        f.write_all(b"middle content at 1MB\n").unwrap();
+        f.sync_all().unwrap();
+
+        // 1. read_file without offset/length on >8MB file returns error with paging hint
+        let err = read_file(ReadFileArgs {
+            path: "big.txt".into(),
+            start_line: None,
+            end_line: None,
+            offset: None,
+            length: None,
+        }, &dir).unwrap_err();
+        assert!(err.contains("exceeds 8 MB limit") && err.contains("offset") && err.contains("length"), "unexpected err: {err}");
+
+        // 2. read_file with offset and length succeeds
+        let res_head = read_file(ReadFileArgs {
+            path: "big.txt".into(),
+            start_line: None,
+            end_line: None,
+            offset: Some(0),
+            length: Some(256),
+        }, &dir).unwrap();
+        assert!(res_head.content.contains("head content"));
+
+        let res_mid = read_file(ReadFileArgs {
+            path: "big.txt".into(),
+            start_line: None,
+            end_line: None,
+            offset: Some(1024 * 1024),
+            length: Some(256),
+        }, &dir).unwrap();
+        assert!(res_mid.content.contains("middle content at 1MB"));
+
+        // 3. batch_read without offset/length reports error entry with paging hint
+        let batch_err = batch_read(BatchReadArgs {
+            paths: vec!["big.txt".into()],
+            max_lines_per_file: Some(10),
+            offset: None,
+            length: None,
+        }, &dir).unwrap();
+        assert_eq!(batch_err.total_files, 1);
+        assert!(!batch_err.files[0].success);
+        let b_err_msg = batch_err.files[0].error.as_ref().unwrap();
+        assert!(b_err_msg.contains("exceeds 8 MB limit") && b_err_msg.contains("offset") && b_err_msg.contains("length"));
+
+        // 4. batch_read with offset and length succeeds
+        let batch_ok = batch_read(BatchReadArgs {
+            paths: vec!["big.txt".into()],
+            max_lines_per_file: Some(10),
+            offset: Some(1024 * 1024),
+            length: Some(256),
+        }, &dir).unwrap();
+        assert_eq!(batch_ok.total_files, 1);
+        assert!(batch_ok.files[0].success);
+        assert!(batch_ok.files[0].content.contains("middle content at 1MB"));
 
         let _ = fs::remove_dir_all(&dir);
     }

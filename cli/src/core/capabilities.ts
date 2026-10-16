@@ -230,7 +230,7 @@ export const BASELINE_CAPABILITIES: CanonicalCapability[] = [
       "type": "function",
       "function": {
         "name": "read_file",
-        "description": "Read the contents of a file with line numbers. Use start_line and end_line for specific ranges.",
+        "description": "Read the contents of a file with line numbers. Use start_line and end_line for specific ranges, or offset and length to page through large files (>8 MB limit).",
         "parameters": {
           "type": "object",
           "properties": {
@@ -245,6 +245,14 @@ export const BASELINE_CAPABILITIES: CanonicalCapability[] = [
             "end_line": {
               "type": "number",
               "description": "1-indexed ending line number (optional)."
+            },
+            "offset": {
+              "type": "number",
+              "description": "Byte offset from the start of the file to begin reading (optional; required if file exceeds 8 MB)."
+            },
+            "length": {
+              "type": "number",
+              "description": "Maximum number of bytes to read (optional; maximum 8 MB)."
             }
           },
           "required": [
@@ -428,11 +436,19 @@ export const BASELINE_CAPABILITIES: CanonicalCapability[] = [
             },
             "timeout_secs": {
               "type": "number",
-              "description": "Execution timeout in seconds (default: 60)."
+              "description": "Execution timeout in seconds (default: 60; clamped to NEXUS_MAX_TOOL_TIMEOUT_SECS, default 1800)."
             },
             "shell": {
               "type": "string",
               "description": "Linux shell to use: 'bash', 'zsh', or 'sh' (default: 'bash')."
+            },
+            "background": {
+              "type": "boolean",
+              "description": "Run command in background as a managed service without blocking the turn."
+            },
+            "service_name": {
+              "type": "string",
+              "description": "Unique name for the background service (required if background is true)."
             }
           },
           "required": [
@@ -681,6 +697,14 @@ export const BASELINE_CAPABILITIES: CanonicalCapability[] = [
             "max_lines_per_file": {
               "type": "number",
               "description": "Maximum number of lines to read per file (default: 500)."
+            },
+            "offset": {
+              "type": "number",
+              "description": "Byte offset to begin reading each file (optional; required if file exceeds 8 MB)."
+            },
+            "length": {
+              "type": "number",
+              "description": "Maximum number of bytes to read per file (optional; maximum 8 MB)."
             }
           },
           "required": [

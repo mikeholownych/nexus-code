@@ -475,13 +475,23 @@ export const RUN_COMMAND_DEFAULT_TIMEOUT_SECS = 60;
 export const RPC_GRACE_SECS = 5;
 const RPC_DEFAULT_TIMEOUT_MS = 35_000;
 
+/** Maximum allowed tool timeout in seconds per REQ-SEC-107 (default 1800). */
+export function maxToolTimeoutSecs(): number {
+  const env = process.env.NEXUS_MAX_TOOL_TIMEOUT_SECS;
+  if (!env) return 1800;
+  const parsed = parseInt(env, 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : 1800;
+}
+
 /**
  * Deadline ownership for one RPC. For `run_command` the runner owns the command deadline (`runnerSecs`) and the bridge's
  * outer timer is strictly longer; for other tools only the bridge timer applies.
  */
 export function rpcDeadlines(toolName: string, args: Record<string, any>): { runnerSecs?: number; bridgeMs: number } {
   if (toolName === "run_command") {
-    const runnerSecs = typeof args.timeout_secs === "number" && args.timeout_secs > 0 ? args.timeout_secs : RUN_COMMAND_DEFAULT_TIMEOUT_SECS;
+    const rawSecs = typeof args.timeout_secs === "number" && args.timeout_secs > 0 ? args.timeout_secs : RUN_COMMAND_DEFAULT_TIMEOUT_SECS;
+    const maxSecs = maxToolTimeoutSecs();
+    const runnerSecs = Math.min(rawSecs, maxSecs);
     return { runnerSecs, bridgeMs: (runnerSecs + RPC_GRACE_SECS) * 1000 };
   }
   return { bridgeMs: args.timeout_secs ? (args.timeout_secs + RPC_GRACE_SECS) * 1000 : RPC_DEFAULT_TIMEOUT_MS };
@@ -1192,7 +1202,13 @@ export class RustCoreBridge {
     // Note: Path protection checks are enforced on all file read/write/edit tools (REQ-SEC-118).
     // For run_command, path protection is advisory because shell commands (e.g. cat, grep)
     // execute through the host shell environment.
+    let clampedNotice = "";
     if (toolName === "run_command") {
+      const maxSecs = maxToolTimeoutSecs();
+      if (typeof args.timeout_secs === "number" && args.timeout_secs > maxSecs) {
+        clampedNotice = `[Notice: timeout_secs clamped from ${args.timeout_secs} to ${maxSecs} (NEXUS_MAX_TOOL_TIMEOUT_SECS)]\n`;
+        args.timeout_secs = maxSecs;
+      }
       if (!args.shell) {
         args.shell = this.defaultShell;
       }
@@ -1226,18 +1242,43 @@ export class RustCoreBridge {
       }
     }
 
+    const applyNotice = (res: ExecutionResult): ExecutionResult => {
+      if (clampedNotice && !res.output?.includes("[Notice: timeout_secs clamped")) {
+        return {
+          ...res,
+          output: clampedNotice + (res.output || ""),
+        };
+      }
+      return res;
+    };
+
     // Attempt persistent JSON-RPC execution
     try {
       const rpcResult = await this.executeViaRpc(toolName, args);
       if (rpcResult !== null) {
-        return rpcResult;
+        return applyNotice(rpcResult);
       }
     } catch {
       // Fall through to fallback
     }
 
     // Fallback: spawnSync invocation
-    return this.executeViaSpawnSync(toolName, args);
+    return applyNotice(this.executeViaSpawnSync(toolName, args));
+  }
+
+  public async listServices(): Promise<Array<{ name: string; pgid: number; command: string }>> {
+    try {
+      const res = await this.executeViaRpc("list_services", {}, { ignoreTurnSignal: true });
+      if (res && res.output) {
+        const parsed = JSON.parse(res.output);
+        if (Array.isArray(parsed)) {
+          return parsed;
+        }
+      }
+    } catch {
+      // Return empty if RPC is not running or failed
+    }
+    return [];
   }
 
   public registerWithCapabilities(registry: CapabilityRegistry): void {
