@@ -198,9 +198,11 @@ a user systemd unit or `@reboot` cron entry. That hook is not installed by Nexus
 ## 10. Remaining duplication and limitations
 
 - `runSubagent` remains a second, in-turn agent loop for `spawn_subagent`. It now has provider recovery, context
-  admission and a truthful result, but it is non-streaming, non-durable and has no cancellation signal of its own
-  (it ends with the parent turn). Folding it into `runTurn` would change the parent/child request authority tests;
-  left as follow-up.
+  admission with `measureAdmission` (closing the strict token counting gap per REQ-AGT-111 / AGT-05), matched
+  offered and accepted tool sets via `getEffectiveTools()`, token accounting merged into parent stats, and a truthful result.
+  Remaining divergences from `runTurn` deferred to post-v1 include: non-streaming responses, in-turn subagents are non-durable
+  (no task state records on disk per REQ-AGT-105), no empty-reply retry, no backoff for poll loops, no operator steering queue,
+  and no cancellation signal separate from the parent turn. Folding it into a single shared step function remains post-v1.
 - The legacy REPL and the slash router each wire `/team` to `TeamOrchestrator` (display only; same operation).
 - Roles run sequentially; the scheduler would allow parallel units but no concurrency was added.
 - Open (I3): an exhausted 502/504 or ENOTFOUND blocks the unit instead of parking it, and a context-capacity

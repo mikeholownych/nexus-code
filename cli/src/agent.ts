@@ -1260,7 +1260,7 @@ export class AutonomousAgent {
   }
 
   private initTaskState(): void {
-    if (!this.stateManager) return;
+    if (!this.durable || !this.stateManager) return;
     try {
       this.stateManager.saveTaskState({
         schemaVersion: 1,
@@ -1360,6 +1360,7 @@ export class AutonomousAgent {
       } catch {}
     }
 
+    if (!this.durable) return state;
     this.stateManager.saveTaskState(state);
     return state;
   }
@@ -1826,6 +1827,7 @@ export class AutonomousAgent {
   }
 
   private persistProgress(progress: { messages?: boolean; unverifiedChangesPending?: boolean }): void {
+    if (!this.durable) return;
     try {
       if (this.stateManager && !this.stateManager.hasTaskState(this.currentTaskId)) this.checkpointDurableState();
       else this.stateManager?.recordProgress(this.currentTaskId, {
@@ -3065,9 +3067,13 @@ export class AutonomousAgent {
       try {
         const res = await client.chatCompletion(prompt, [], randomUUID(), signal);
         text = typeof res.content === "string" ? res.content.trim() : "";
-        this.totalTokens.prompt += calculateContextBudget(prompt, [], contextLimit).totalActiveTokens;
-        this.totalTokens.completion += countTokens(text);
+        const reported = client.getProviderId?.() ? client.getLastUsage?.() : undefined;
+        this.totalTokens.prompt += reported?.inputTokens ?? calculateContextBudget(prompt, [], contextLimit).totalActiveTokens;
+        this.totalTokens.completion += reported?.outputTokens ?? countTokens(text);
         this.totalTokens.total = this.totalTokens.prompt + this.totalTokens.completion;
+        this.totalTokens.requests++;
+        if (reported?.inputTokens !== undefined) this.totalTokens.reportedRequests++;
+        else this.totalTokens.estimatedRequests++;
       } catch {
         text = "";
       }
@@ -3775,7 +3781,7 @@ The pinned Objective Ledger lists the operator's requirements; your plan never r
               materialDependencies: [],
             });
             this.verifiedWorktreeCompletion = true;
-            if (this.stateManager && this.currentTaskId) {
+            if (this.durable && this.stateManager && this.currentTaskId) {
               try {
                 this.stateManager.recordCandidateAndReceipt(this.currentTaskId, {
                   candidateId: candidateIdentity.candidateId,
@@ -3841,14 +3847,6 @@ The pinned Objective Ledger lists the operator's requirements; your plan never r
           { durable: false }
         );
         const subResult = await subagent.runSubagent(subPrompt, this.activeTurn?.onConfirm, this.activeTurn?.controller.signal);
-        if (subagent.turnMutations > 0 || subagent.turnCarriedChanges) {
-          this.turnMutations += subagent.turnMutations;
-          this.mutationSeq += subagent.mutationSeq;
-          this.hasPendingModifications = true;
-          if (this.objective) {
-            invalidateVerified(this.objective, `subagent changed workspace`);
-          }
-        }
         this.ui.stopSpinner(subResult.completed);
         if (!subResult.completed) {
           return { success: false, output: subResult.summary, error: `Subagent did not complete: ${subResult.reason}` };
@@ -3866,14 +3864,28 @@ The pinned Objective Ledger lists the operator's requirements; your plan never r
           error: `Subagent failed with error: ${subErr.message}`,
         };
       } finally {
-        // The child's workspace changes are this turn's changes: the parent's own completion must verify them.
-        const childMutations = subagent?.turnMutations ?? 0;
-        if (childMutations > 0) {
-          this.setUnverifiedChanges(true);
-          this.verificationEvidence = undefined;
-          this.turnMutations += childMutations;
+        if (subagent) {
+          const subStats = subagent.getTokenStats();
+          this.totalTokens.prompt += subStats.prompt;
+          this.totalTokens.completion += subStats.completion;
+          this.totalTokens.total += subStats.total;
+          this.totalTokens.requests += subStats.requests;
+          this.totalTokens.reportedRequests += subStats.reportedRequests;
+          this.totalTokens.estimatedRequests += subStats.estimatedRequests;
+
+          // The child's workspace changes are this turn's changes: the parent's own completion must verify them.
+          const childMutations = subagent.turnMutations;
+          if (childMutations > 0 || subagent.turnCarriedChanges) {
+            this.mutationSeq += subagent.mutationSeq;
+            this.turnMutations += childMutations;
+            this.verificationEvidence = undefined;
+            if (this.objective) {
+              invalidateVerified(this.objective, `subagent changed workspace`);
+            }
+            this.setUnverifiedChanges(true);
+          }
+          subagent.shutdown();
         }
-        subagent?.shutdown();
       }
     });
 
@@ -4092,7 +4104,7 @@ The pinned Objective Ledger lists the operator's requirements; your plan never r
       const phases = Array.isArray(args.phases) ? args.phases : [];
       this.activePlan = phases;
       this.ui.renderPlan(this.activePlan);
-      if (this.stateManager && this.currentTaskId) {
+      if (this.durable && this.stateManager && this.currentTaskId) {
         try {
           this.checkpointDurableState();
           for (let i = 0; i < phases.length; i++) {
@@ -4338,7 +4350,7 @@ The pinned Objective Ledger lists the operator's requirements; your plan never r
     // operation's change only and never includes edits already in the working tree.
     const diffTarget = this.observer?.onFileChange && !this.config.dryRun ? editTarget(toolName, args, this.config.workspace) : undefined;
     const before = diffTarget ? snapshot(diffTarget) : undefined;
-    if (this.stateManager && effectiveTaskId) {
+    if (this.durable && this.stateManager && effectiveTaskId) {
       try {
         this.stateManager.recordOperationStart(effectiveTaskId, {
           invocationId: call.id,
@@ -4367,7 +4379,7 @@ The pinned Objective Ledger lists the operator's requirements; your plan never r
       context
     );
 
-    if (this.stateManager && effectiveTaskId) {
+    if (this.durable && this.stateManager && effectiveTaskId) {
       try {
         this.stateManager.recordOperationEnd(effectiveTaskId, call.id, {
           success: receipt.success,
@@ -5706,11 +5718,12 @@ The pinned Objective Ledger lists the operator's requirements; your plan never r
       const { client: activeClient } = this.selectCognitiveClient(currentStep, this.messages);
       try {
         await this.admitWithFindings(activeClient, currentStep, requestId, signal);
+        await this.measureAdmission(activeClient, currentStep, requestId, signal);
         const policy = this.recoveryPolicy ?? recoveryPolicyFromEnv();
         const lengthGuard = { step: currentStep, cutAfterMs: 0 };
         assistantMessage = await new ProviderRecoveryController(policy, this.recoveryClock, currentStep).run(requestId, {
           submit: (s) => this.submitGuardingLength(lengthGuard, this.messages, (request) =>
-            activeClient.chatCompletion(request, [...HARNESS_TOOLS, READ_FINDINGS_CAPABILITY.toolDefinition as ToolDefinition], s.requestId, signal)),
+            activeClient.chatCompletion(request, this.getEffectiveTools(), s.requestId, signal)),
           probe: (probeSignal, opts) =>
             typeof activeClient.probeAvailability === "function"
               ? activeClient.probeAvailability(probeSignal, { timeoutMs: policy.probeTimeoutMs, ...opts })
@@ -5733,6 +5746,26 @@ The pinned Objective Ledger lists the operator's requirements; your plan never r
       }
 
       previousReplyTruncated = false;
+      const promptEst = calculateContextBudget(
+        this.requestMessages(this.messages),
+        this.getEffectiveTools(),
+        this.contextLimit(),
+      ).totalActiveTokens;
+      const compContent = typeof assistantMessage.content === "string"
+        ? assistantMessage.content
+        : Array.isArray(assistantMessage.content)
+        ? JSON.stringify(assistantMessage.content)
+        : "";
+      const compEst =
+        countTokens(compContent) +
+        countTokens(JSON.stringify(assistantMessage.tool_calls || []));
+      const reported = activeClient.getProviderId?.() ? activeClient.getLastUsage?.() : undefined;
+      this.totalTokens.prompt += reported?.inputTokens ?? promptEst;
+      this.totalTokens.completion += reported?.outputTokens ?? compEst;
+      this.totalTokens.total = this.totalTokens.prompt + this.totalTokens.completion;
+      this.totalTokens.requests++;
+      if (reported?.inputTokens !== undefined) this.totalTokens.reportedRequests++;
+      else this.totalTokens.estimatedRequests++;
       const nativeTools = activeClient?.supportsNativeTools?.() ?? true;
       const parsed = parseModelResponse(assistantMessage, { nativeTools });
       this.messages.push({
