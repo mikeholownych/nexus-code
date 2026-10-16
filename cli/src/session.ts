@@ -57,6 +57,9 @@ export interface SessionIndexData {
 
 /** Where interactive sessions are saved unless a directory is given. */
 export function defaultSessionsDir(): string {
+  if (process.env.NEXUS_STATE_DIR) {
+    return path.join(process.env.NEXUS_STATE_DIR, "sessions");
+  }
   return path.join(os.homedir(), ".nexus", "sessions");
 }
 

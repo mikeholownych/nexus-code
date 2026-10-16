@@ -285,6 +285,9 @@ export interface DurableStateManagerOptions {
 
 /** Where durable task state is written unless a directory is given. */
 export function defaultTaskStateDir(): string {
+  if (process.env.NEXUS_STATE_DIR) {
+    return path.join(process.env.NEXUS_STATE_DIR, "tasks");
+  }
   return path.join(os.homedir(), ".nexus", "tasks");
 }
 
