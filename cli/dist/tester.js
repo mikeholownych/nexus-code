@@ -313,6 +313,8 @@ export function isFilteredVerifierCommand(command) {
         return true;
     if (/\S\.py::\S/.test(command))
         return true;
+    if (/(?:^|\s)--(?:$|\s+[^-]\S*)/.test(command))
+        return true;
     const cargo = command.match(/\bcargo\s+test\b(.*)$/);
     if (cargo) {
         const tokens = cargo[1].trim().split(/\s+/).filter(Boolean);
@@ -491,8 +493,6 @@ export function extractPathTokens(workspace, text) {
         if (!part)
             continue;
         const norm = part.replace(/\\/g, "/");
-        if (!norm.includes("/"))
-            continue;
         const cleaned = norm.replace(/^\.\//, "");
         tokens.add(cleaned);
         if (path.isAbsolute(part)) {
@@ -500,7 +500,7 @@ export function extractPathTokens(workspace, text) {
                 const resolved = path.resolve(part);
                 if (resolved.startsWith(root)) {
                     const rel = path.relative(root, resolved).replace(/\\/g, "/");
-                    if (rel && rel.includes("/")) {
+                    if (rel) {
                         tokens.add(rel);
                     }
                 }
@@ -532,7 +532,10 @@ export function isVerifierDeliverableBound(workspace, changedFiles, verifierComm
     const changedTestFiles = changedFiles.filter((file) => TEST_PATH.test(rel(file)));
     const changedNonTestFiles = changedFiles.filter((file) => !TEST_PATH.test(rel(file)));
     const testFileExecuted = (testFileRel) => {
-        return tokens.has(testFileRel) || (testFileRel.includes("/") && verifierCommand.includes(testFileRel));
+        // An unfiltered verifier run that executed tests ran the repository test suite
+        if (!isFiltered)
+            return true;
+        return tokens.has(testFileRel) || verifierCommand.includes(testFileRel);
     };
     // If only test files changed, at least one changed test file must have executed
     if (changedTestFiles.length > 0 && changedNonTestFiles.length === 0) {
@@ -541,7 +544,13 @@ export function isVerifierDeliverableBound(workspace, changedFiles, verifierComm
     // Check if non-test files are directly named by path tokens in command or output
     for (const file of changedNonTestFiles) {
         const r = rel(file);
-        if (r.includes("/") && (tokens.has(r) || verifierCommand.includes(r))) {
+        // Documentation files (.md) do not bind on coincidental output mentions (VER-04)
+        if (r.endsWith(".md") || r.endsWith(".markdown")) {
+            if (verifierCommand.includes(r))
+                return true;
+            continue;
+        }
+        if (tokens.has(r) || verifierCommand.includes(r)) {
             return true;
         }
     }

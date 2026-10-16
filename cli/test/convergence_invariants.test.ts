@@ -179,7 +179,7 @@ const COVERING = 'test -s impl.txt && echo "✔ impl.txt has content" && echo "�
 const BEHAVIOURS: Record<string, { script: (r: Req) => Reply; verifier?: string; files?: Record<string, string>; succeeds: boolean; outcome: string; reason?: string }> = {
   verified: { script: (r) => [write(), done()][toolResults(r.body)] ?? { text: "done" }, verifier: COVERING, succeeds: true, outcome: "VERIFIED" },
   // A discovered suite (not the operator's configured check) that passes without running a test of the change.
-  "discovered suite passing without testing the change (REGRESSION_FREE)": { script: (r) => [write(), done()][toolResults(r.body)] ?? { text: "done" }, files: { Makefile: "test:\n\t@true\n" }, succeeds: false, outcome: "REGRESSION_FREE", reason: "REGRESSION_FREE" },
+  "discovered suite passing without testing the change (REGRESSION_FREE)": { script: (r) => [write(), done()][toolResults(r.body)] ?? { text: "done" }, files: { Makefile: "test:\n\t@echo 'ℹ tests 1\\nℹ pass 1'\n" }, succeeds: false, outcome: "REGRESSION_FREE", reason: "REGRESSION_FREE" },
   "read-only (NOT_REQUIRED)": { script: (r) => [read("notes.txt"), done("42")][toolResults(r.body)] ?? { text: "done" }, succeeds: true, outcome: "NOT_REQUIRED" },
   "edited, stopped in plain text (VERIFICATION_NOT_RUN)": { script: (r) => (toolResults(r.body) === 0 ? write() : { text: "I wrote impl.txt. Done." }), verifier: "false", succeeds: false, outcome: "UNVERIFIED", reason: "VERIFICATION_NOT_RUN" },
   "failing validator": { script: (r) => [write(), done()][toolResults(r.body)] ?? { text: "done" }, verifier: "false", succeeds: false, outcome: "NOT_ESTABLISHED", reason: "VERIFIER_FAILED" },

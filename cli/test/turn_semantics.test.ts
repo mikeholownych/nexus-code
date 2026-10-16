@@ -243,7 +243,7 @@ describe("A-3 verifier-backed completion", () => {
   });
 
   test("the same trajectory with a passing suite that runs no test of the change is REGRESSION_FREE, not VERIFIED", async () => {
-    await withTurn(falseVerifierScript, { Makefile: "test:\n\t@true\n" }, async (_gw, _repo, agent) => {
+    await withTurn(falseVerifierScript, { Makefile: "test:\n\t@echo 'ℹ tests 1\\nℹ pass 1'\n" }, async (_gw, _repo, agent) => {
       const r = await quiet(() => agent.runTurn("implement"));
       assert.equal(r.execution, "COMPLETED");
       assert.equal(r.outcome, "REGRESSION_FREE");
@@ -254,7 +254,7 @@ describe("A-3 verifier-backed completion", () => {
 
   test("an operator-configured verifier follows the same evidence rule: a run showing no test of the change is REGRESSION_FREE", async () => {
     await withTurn(falseVerifierScript, {}, async (_gw, _repo, agent) => {
-      (agent as any).config.authoritativeVerifierCommand = "true";
+      (agent as any).config.authoritativeVerifierCommand = "echo 'ℹ tests 1\\nℹ pass 1'";
       const r = await quiet(() => agent.runTurn("implement"));
       assert.equal(r.outcome, "REGRESSION_FREE");
       assert.equal(r.verification?.source, "configured");
@@ -602,7 +602,7 @@ describe("process exit contract (harness run)", () => {
     { name: "step limit", script: () => ({ kind: "tools", calls: [{ name: "list_dir", args: { path: "." } }] }), files: {}, code: 1, outcome: "NOT_ESTABLISHED", execution: "LIMIT_REACHED", success: false },
     { name: "read-only prose answer", script: (n) => n === 1 ? { kind: "tools", calls: [{ name: "list_dir", args: { path: "." } }] } : { kind: "text", content: "one file" }, files: {}, code: 0, outcome: "NOT_REQUIRED", execution: "COMPLETED", success: true },
     { name: "verified completion", script: (n) => n === 1 ? { kind: "tools", calls: [{ name: "write_file", args: { path: "a.txt", content: "1" } }] } : n === 2 ? { kind: "tools", calls: [{ name: "task_completed", args: { summary: "ok" } }] } : { kind: "text", content: "x" }, files: { Makefile: 'test:\n\t@test -s a.txt && echo "✔ a.txt has content" && echo "ℹ tests 1"\n' }, code: 0, outcome: "VERIFIED", execution: "COMPLETED", success: true },
-    { name: "suite passing without testing the change", script: (n) => n === 1 ? { kind: "tools", calls: [{ name: "write_file", args: { path: "a.txt", content: "1" } }] } : n === 2 ? { kind: "tools", calls: [{ name: "task_completed", args: { summary: "ok" } }] } : { kind: "text", content: "x" }, files: { Makefile: "test:\n\t@true\n" }, code: 2, outcome: "REGRESSION_FREE", execution: "COMPLETED", success: false },
+    { name: "suite passing without testing the change", script: (n) => n === 1 ? { kind: "tools", calls: [{ name: "write_file", args: { path: "a.txt", content: "1" } }] } : n === 2 ? { kind: "tools", calls: [{ name: "task_completed", args: { summary: "ok" } }] } : { kind: "text", content: "x" }, files: { Makefile: "test:\n\t@echo 'ℹ tests 1\\nℹ pass 1'\n" }, code: 2, outcome: "REGRESSION_FREE", execution: "COMPLETED", success: false },
     { name: "completed without applicable verifier", script: (n) => n === 1 ? { kind: "tools", calls: [{ name: "write_file", args: { path: "a.txt", content: "1" } }] } : n === 2 ? { kind: "tools", calls: [{ name: "task_completed", args: { summary: "ok" } }] } : { kind: "text", content: "x" }, files: {}, code: 2, outcome: "UNVERIFIED", execution: "COMPLETED", success: false },
   ];
   for (const c of cases) {
