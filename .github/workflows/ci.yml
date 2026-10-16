@@ -53,6 +53,7 @@ jobs:
           cache: npm
           cache-dependency-path: cli/package-lock.json
       - run: node scripts/sync-version.mjs --check
+      - run: node scripts/check_requirements.mjs
       - run: npm ci --prefix cli
       - run: npm --prefix cli run build
       - run: git diff --exit-code -- cli/dist

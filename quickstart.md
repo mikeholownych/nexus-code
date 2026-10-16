@@ -19,7 +19,7 @@ export PATH="$HOME/.local/bin:$PATH"
 The command above pins the current published prerelease. To follow the latest stable release after one is published, omit `NEXUS_VERSION`. To install another specific version, including a prerelease, set the desired tag:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/mikeholownych/nexus-code/main/install.sh | NEXUS_VERSION=v0.1.0-alpha.2 sh
+curl -fsSL https://raw.githubusercontent.com/mikeholownych/nexus-code/main/install.sh | NEXUS_VERSION=v0.1.0-alpha.1 sh
 ```
 
 For inspect-before-running, download [install.sh](https://raw.githubusercontent.com/mikeholownych/nexus-code/main/install.sh), read it, then run `sh install.sh`.

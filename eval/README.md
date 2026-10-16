@@ -67,10 +67,10 @@ recorded per run.
 | Runner, scorer, manifest, per-run logs | done |
 | T1 self-test (`selftest-add`, scripted model, in `make test` via `cli/test/eval_harness.test.ts`) | done |
 | Nexus adapter | done |
-| Peer adapters (OpenCode, Goose, Aider, Codex) | not started |
-| T2/T3 task set (pilot 12, external repos, hidden tests) | not started |
-| T3 fact-sheet scorer (absence claims) and steering checks | not started |
-| T4 fault injector | not started |
+| Peer adapters (OpenCode, Goose, Aider) | done (Codex CLI excluded: the gateway does not serve `/v1/responses`) |
+| T2 task set (pilot fixture tasks `t2-*`) | done |
+| T3 task set (fact-sheet scorer / steering checks) | not started |
+| T4 fault injector | in progress |
 | Live runs | blocked on inference hours, cloud budget and peer installs (operator decision) |
 
 ## Pilot 2026-10-13 (4 h appliance window)
