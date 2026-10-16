@@ -47,6 +47,7 @@ fi
 | Builds | Each worktree builds into its own `core/target`, and `cli/dist` is per worktree. To share the Rust build cache, set `CARGO_TARGET_DIR` per worktree, never to one shared directory. |
 | Ports | Mock servers bind `127.0.0.1:0` (an ephemeral port) and publish the chosen port to a file. Fixed ports are forbidden. |
 | Processes | Kill only PIDs you started, taken from `$!` or `ps -eo pid,args \| grep -v grep`. **Never `pkill -f` or `killall`.** Long background jobs are stopped through the agent's own task controls. |
+| Full test suites | The PTY and provider tests are timing-sensitive. Take the claim `SUITE` before running a full suite (`make test`, or `npm test` over all files). While anyone holds `SUITE`, nobody runs other suites or targeted test files on the same machine. Concurrent load caused a false failure on 2026-10-15: `cloud_providers` saw an extra provider request after a load-induced timeout. Release the claim when the run ends. |
 | Inference | There is one inference host (DEC-16). Any run that uses the gateway takes the claim `GATEWAY` first. That includes eval runs, live checks and stripped-proxy runs. One gateway run at a time, which keeps eval timings valid and prevents overload. Small cloud checks (E5) take `CLOUD` to avoid duplicate spend. |
 | Credentials | Agents never read or copy `~/.config/nexus/credentials.json`, `config.env` values, or gateway tokens. The stripped proxy reads the token file itself. |
 
