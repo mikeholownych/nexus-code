@@ -213,7 +213,7 @@ function chatUsage(u: any): UsageReport | undefined {
 }
 
 /** What the provider reported about the request in progress (for its receipt). */
-interface PendingRequest { usage?: UsageReport; providerRequestId?: string; effectiveModel?: string; endpoint?: string }
+interface PendingRequest { usage?: UsageReport; providerRequestId?: string; effectiveModel?: string; endpoint?: string; executions?: number }
 
 /** Model ids from a `/models` answer: OpenAI-style `data[].id`, or the ChatGPT backend's listed `models[].slug`. */
 function modelIds(body: any): string[] {
@@ -238,9 +238,78 @@ export function unsupportedParameter(message: string): string | undefined {
 /** Cloud destinations announced in this process (the disclosure notice is shown once per origin). */
 const announcedDestinations = new Set<string>();
 /** Provider error bodies are bounded and redacted before they reach messages, logs or the UI. */
-
-
 const MAX_PROVIDER_ERROR_CHARS = 2_000;
+/** Limit for requests that carry no task content (model lists, catalogs, embeddings): a silent server never hangs them. */
+const METADATA_TIMEOUT_MS = 15_000;
+
+/** Provider or endpoint error text as shown and stored: secrets redacted, at most MAX_PROVIDER_ERROR_CHARS (REQ-PRV-103). */
+export function boundedProviderText(text: string): string {
+  const clean = redactSecrets(text);
+  return clean.length > MAX_PROVIDER_ERROR_CHARS ? `${clean.slice(0, MAX_PROVIDER_ERROR_CHARS)}… [${clean.length - MAX_PROVIDER_ERROR_CHARS} more characters]` : clean;
+}
+
+const metadataSignal = (signal?: AbortSignal): AbortSignal =>
+  signal ? AbortSignal.any([signal, AbortSignal.timeout(METADATA_TIMEOUT_MS)]) : AbortSignal.timeout(METADATA_TIMEOUT_MS);
+
+/**
+ * Watchdog for inference requests (first-byte, idle between chunks, and optional total timeout).
+ * Reset on each streamed chunk (REQ-PRV-104).
+ */
+export class StreamWatchdog {
+  private readonly ac = new AbortController();
+  private timer?: NodeJS.Timeout;
+  private totalTimer?: NodeJS.Timeout;
+  private readonly callerAbortListener?: () => void;
+
+  constructor(
+    private readonly firstByteMs: number,
+    private readonly idleMs: number,
+    private readonly totalMs: number,
+    private readonly callerSignal?: AbortSignal,
+  ) {
+    if (this.callerSignal) {
+      if (this.callerSignal.aborted) {
+        this.ac.abort(this.callerSignal.reason);
+      } else {
+        this.callerAbortListener = () => this.ac.abort(this.callerSignal!.reason);
+        this.callerSignal.addEventListener("abort", this.callerAbortListener, { once: true });
+      }
+    }
+    if (this.totalMs > 0) {
+      this.totalTimer = setTimeout(() => {
+        this.ac.abort(new DOMException(`Total inference timeout of ${this.totalMs / 1000}s exceeded`, "TimeoutError"));
+      }, this.totalMs);
+      this.totalTimer.unref?.();
+    }
+    this.arm(this.firstByteMs, "First-byte");
+  }
+
+  get signal(): AbortSignal {
+    return this.ac.signal;
+  }
+
+  private arm(ms: number, phase: string): void {
+    clearTimeout(this.timer);
+    if (ms > 0) {
+      this.timer = setTimeout(() => {
+        this.ac.abort(new DOMException(`${phase} inference timeout of ${ms / 1000}s exceeded`, "TimeoutError"));
+      }, ms);
+      this.timer.unref?.();
+    }
+  }
+
+  onChunk(): void {
+    this.arm(this.idleMs, "Idle");
+  }
+
+  done(): void {
+    clearTimeout(this.timer);
+    clearTimeout(this.totalTimer);
+    if (this.callerSignal && this.callerAbortListener) {
+      this.callerSignal.removeEventListener("abort", this.callerAbortListener);
+    }
+  }
+}
 
 /**
  * Typed inference failure. `condition` is what the failure says about the provider; `execution` is what is known
@@ -570,35 +639,30 @@ export class LocalLlmClient {
     return this.conn.providerId === "compatible" && authoritySetting("NEXUS_COMPATIBLE_AUTH") === "none";
   }
 
-  /** Records a receipt for a provider-connection request (appliance requests keep their existing records only). */
+  /** Records a receipt for an inference request (local endpoint or provider connection). */
   private async withReceipt<T>(requestId: string, purpose: string | undefined, run: () => Promise<T>): Promise<T> {
-    if (!this.conn.providerId) {
-      // No receipt, but usage the local server reported (with cached-token counts) replaces the local estimate.
-      this.pending = undefined;
-      this.lastUsageReport = undefined;
-      const result = await run();
-      // Set by run(); read through a function so the narrowing from the assignment above does not apply.
-      this.lastUsageReport = ((): PendingRequest | undefined => this.pending)()?.usage;
-      return result;
-    }
     this.pending = undefined;
     this.reservations = [];
     const pending = (): PendingRequest | undefined => this.pending;
     const base = () => {
       const p = pending();
+      const ep = p?.endpoint ?? this.endpoint;
+      const disclosure = this.disclosureOf(ep);
       return {
-      at: new Date().toISOString(),
-      requestId,
-      role: purpose ?? this.role,
-      providerId: this.conn.providerId!,
-      selectedModel: this.model,
-      ...(p?.effectiveModel ? { effectiveModel: p.effectiveModel } : {}),
-      endpointOrigin: originOf(p?.endpoint ?? this.endpoint) ?? "",
-      protocol: this.conn.protocol,
-      disclosure: this.disclosureOf(p?.endpoint ?? this.endpoint),
-      ...(p?.providerRequestId ? { providerRequestId: p.providerRequestId } : {}),
-      ...(p?.usage ? { usage: p.usage } : {}),
-      costConfidence: p?.usage?.costUsd !== undefined ? ("provider-reported" as const) : ("unknown" as const),
+        at: new Date().toISOString(),
+        requestId,
+        role: purpose ?? this.role,
+        providerId: this.conn.providerId ?? "local",
+        selectedModel: this.model,
+        ...(p?.effectiveModel ? { effectiveModel: p.effectiveModel } : {}),
+        endpointOrigin: originOf(ep) ?? "",
+        protocol: this.conn.protocol,
+        disclosure,
+        origin_class: (disclosure === "cloud" ? "cloud" : "local") as "local" | "cloud",
+        ...(p?.executions ? { executions: p.executions } : {}),
+        ...(p?.providerRequestId ? { providerRequestId: p.providerRequestId } : {}),
+        ...(p?.usage ? { usage: p.usage } : {}),
+        costConfidence: p?.usage?.costUsd !== undefined ? ("provider-reported" as const) : ("unknown" as const),
       };
     };
     const releaseAll = () => {
@@ -755,9 +819,19 @@ export class LocalLlmClient {
     return {};
   }
 
-  private requestTimeoutMs(): number {
-    const raw = Number(process.env.LOCAL_LLM_TIMEOUT_MS);
-    return Number.isFinite(raw) && raw > 0 ? raw : 900_000;
+  private createWatchdog(operatorSignal?: AbortSignal, currentEp?: string): StreamWatchdog {
+    const disclosure = this.disclosureOf(currentEp ?? this.endpoint);
+    const parseNum = (k: string) => {
+      const raw = process.env[k];
+      if (raw === undefined || raw === "") return undefined;
+      const v = Number(raw);
+      return Number.isFinite(v) && v >= 0 ? v : undefined;
+    };
+    const firstByteMs = parseNum("LOCAL_LLM_FIRST_BYTE_TIMEOUT_MS") ?? 120_000;
+    const idleMs = parseNum("LOCAL_LLM_IDLE_TIMEOUT_MS") ?? 120_000;
+    const defaultTotal = disclosure === "cloud" ? 900_000 : 0;
+    const totalMs = parseNum("LOCAL_LLM_TIMEOUT_MS") ?? defaultTotal;
+    return new StreamWatchdog(firstByteMs, idleMs, totalMs, operatorSignal);
   }
 
   public setTaskId(taskId?: string): void {
@@ -903,18 +977,22 @@ export class LocalLlmClient {
       const url = `${currentEp}/models${query}`;
       const res = await fetch(url, {
         headers: this.authorization(url),
+        signal: metadataSignal(),
         ...this.fetchPolicy(),
       });
 
       if (res.status === 401 && this.reloadAuthToken(url)) {
         const retryRes = await fetch(url, {
           headers: this.authorization(url),
+          signal: metadataSignal(),
+          ...this.fetchPolicy(),
         });
         if (retryRes.ok) return modelIds(await retryRes.json());
       }
 
       if (!res.ok) {
-        throw new Error(`Server returned HTTP ${res.status}: ${res.statusText}`);
+        const text = await res.text().catch(() => "");
+        throw new Error(`Server returned HTTP ${res.status}: ${boundedProviderText(text || res.statusText)}`);
       }
 
       return modelIds(await res.json());
@@ -924,8 +1002,11 @@ export class LocalLlmClient {
   /** Raw `/models` entries. Providers that publish capability metadata let the scheduler qualify resources. */
   async listModelCatalog(signal?: AbortSignal): Promise<Array<Record<string, any>>> {
     return this.executeWithFailover("listModelCatalog", async (currentEp) => {
-      const res = await fetch(`${currentEp}/models`, { headers: this.authorization(currentEp), signal, ...this.fetchPolicy() });
-      if (!res.ok) throw new Error(`Server returned HTTP ${res.status}: ${res.statusText}`);
+      const res = await fetch(`${currentEp}/models`, { headers: this.authorization(currentEp), signal: metadataSignal(signal), ...this.fetchPolicy() });
+      if (!res.ok) {
+        const text = await res.text().catch(() => "");
+        throw new Error(`Server returned HTTP ${res.status}: ${boundedProviderText(text || res.statusText)}`);
+      }
       const data = (await res.json()) as { data?: Array<Record<string, any>> };
       return Array.isArray(data.data) ? data.data : [];
     });
@@ -1045,7 +1126,7 @@ export class LocalLlmClient {
       this.preflight(ep, requestId, JSON.stringify(messages).length + JSON.stringify(tools).length);
       body = this.outboundChatBody(ep, messages, tools);
     } catch (err: any) {
-      throw new TokenCountError("denied", redactSecrets(String(err?.message ?? err)).slice(0, 200));
+      throw new TokenCountError("denied", boundedProviderText(String(err?.message ?? err)).slice(0, 200));
     }
     let res: Response;
     try {
@@ -1053,19 +1134,19 @@ export class LocalLlmClient {
         method: "POST",
         headers: { "Content-Type": "application/json", ...this.authorization(url), "X-Request-ID": requestId, ...this.routingHeaders() },
         body: JSON.stringify(body),
-        signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(30_000)]) : AbortSignal.timeout(30_000),
+        signal: metadataSignal(signal),
         ...this.fetchPolicy(),
       });
     } catch (err: any) {
       if (signal?.aborted) throw new TokenCountError("aborted", "cancelled");
-      throw new TokenCountError("unavailable", redactSecrets(String(err?.message ?? err)).slice(0, 160));
+      throw new TokenCountError("unavailable", boundedProviderText(String(err?.message ?? err)).slice(0, 160));
     }
     const text = await res.text().catch(() => "");
     if (res.status === 401 || res.status === 403) throw new TokenCountError("denied", `HTTP ${res.status}`);
     // The gateway answers 404 both for an unknown model and when every worker of the alias is blocked.
-    if (res.status === 404) throw new TokenCountError(/blocked|capacity/i.test(text) ? "unavailable" : "unsupported", `HTTP 404 ${text.slice(0, 120)}`);
+    if (res.status === 404) throw new TokenCountError(/blocked|capacity/i.test(text) ? "unavailable" : "unsupported", `HTTP 404 ${boundedProviderText(text).slice(0, 120)}`);
     if (res.status === 405 || res.status === 501) throw new TokenCountError("unsupported", `HTTP ${res.status}`);
-    if (!res.ok) throw new TokenCountError("unavailable", `HTTP ${res.status}`);
+    if (!res.ok) throw new TokenCountError("unavailable", `HTTP ${res.status} ${boundedProviderText(text).slice(0, 120)}`);
     let parsed: unknown;
     try {
       parsed = JSON.parse(text);
@@ -1185,6 +1266,8 @@ export class LocalLlmClient {
         })),
         temperature: this.temperature,
       };
+      // The same output allowance as a streamed request (PRV-09: the empty-stream re-request used to be uncapped).
+      if (!this.conn.providerId) payload.max_tokens = this.maxOutputTokens;
 
       if (outboundTools.length > 0) {
         payload.tools = outboundTools;
@@ -1193,6 +1276,7 @@ export class LocalLlmClient {
       if (this.conn.usage === "openrouter") payload.usage = { include: true };
       this.omitUnsupported(payload);
 
+      const watchdog = this.createWatchdog(signal, currentEp);
       let res: Response;
       let data: ChatCompletionResponse;
       try {
@@ -1206,25 +1290,35 @@ export class LocalLlmClient {
             ...this.routingHeaders(),
           },
           body: JSON.stringify(payload),
-          signal: this.combinedSignal(signal),
+          signal: watchdog.signal,
           ...this.fetchPolicy(),
         });
 
         if (res.status === 401 && this.reloadAuthToken(url)) {
+          watchdog.done();
           return this.chatCompletion(messages, tools, requestId, signal);
         }
 
         if (!res.ok) {
+          watchdog.done();
           const errText = await res.text();
           throw this.httpError(res.status, errText, requestId, res.headers);
         }
         data = (await res.json()) as ChatCompletionResponse;
       } catch (err: any) {
+        watchdog.done();
         throw classifyTransportError(err, signal, requestId, "connect");
+      } finally {
+        watchdog.done();
       }
-      if (this.conn.providerId) {
-        this.pending = { usage: chatUsage(data.usage), providerRequestId: data.id, effectiveModel: (data as any).model, endpoint: currentEp };
-      }
+      const executions = this.pending?.executions;
+      this.pending = {
+        usage: chatUsage(data.usage),
+        providerRequestId: data.id,
+        effectiveModel: (data as any).model,
+        endpoint: currentEp,
+        ...(executions !== undefined ? { executions } : {}),
+      };
       if (!data.choices || data.choices.length === 0) {
         throw new InferenceError("protocol_error", "provider", "Model returned empty choices array", { requestId, failoverEligible: false });
       }
@@ -1351,6 +1445,7 @@ export class LocalLlmClient {
 
       const payload = this.outboundChatBody(currentEp, messages, tools);
 
+      const watchdog = this.createWatchdog(signal, currentEp);
       let res: Response;
       try {
         res = await fetch(url, {
@@ -1363,20 +1458,23 @@ export class LocalLlmClient {
             ...this.routingHeaders(),
           },
           body: JSON.stringify(payload),
-          signal: this.combinedSignal(signal),
+          signal: watchdog.signal,
           ...this.fetchPolicy(),
         });
       } catch (err: any) {
+        watchdog.done();
         // No resend here: a rejected fetch does not prove the gateway never admitted the request, and a
         // second attempt would replace this error with its own. Recovery belongs to the agent loop.
         throw classifyTransportError(err, signal, requestId, "connect");
       }
 
       if (res.status === 401 && this.reloadAuthToken(url)) {
+        watchdog.done();
         return this.chatCompletionStream(messages, tools, onToken, requestId, signal);
       }
 
       if (!res.ok || !res.body) {
+        watchdog.done();
         const errText = await res.text().catch(() => res.statusText);
         throw this.httpError(res.status, errText, requestId, res.headers);
       }
@@ -1385,7 +1483,7 @@ export class LocalLlmClient {
       let fullContent = "";
       let finishReason: string | undefined;
       let sawDone = false;
-      this.pending = { endpoint: currentEp };
+      this.pending = { endpoint: currentEp, executions: this.pending?.executions };
       const toolCallsMap: Map<number, { id: string; name: string; args: string }> = new Map();
 
       const reader = res.body.getReader();
@@ -1462,7 +1560,10 @@ export class LocalLlmClient {
             const current = toolCallsMap.get(idx) || { id: "", name: "", args: "" };
 
             if (tc.id) current.id = tc.id;
-            if (tc.function?.name) current.name += tc.function.name;
+            // The name arrives once in spec streams. Some servers repeat it in later deltas, or send it cumulatively;
+            // only a genuinely new fragment is appended (PRV-04: a repeated name became "read_fileread_file").
+            const fragment = tc.function?.name;
+            if (fragment && fragment !== current.name) current.name = fragment.startsWith(current.name) ? fragment : current.name + fragment;
             if (tc.function?.arguments) current.args += tc.function.arguments;
 
             toolCallsMap.set(idx, current);
@@ -1474,6 +1575,7 @@ export class LocalLlmClient {
         while (true) {
           const { done, value } = await reader.read();
           if (done) break;
+          watchdog.onChunk();
 
           buffer += decoder.decode(value, { stream: true });
           const lines = buffer.split("\n");
@@ -1487,6 +1589,8 @@ export class LocalLlmClient {
         // A transport error after the terminal event cannot change the (already complete) response.
         const postCompletionTransportError = (finishReason || sawDone) && !(streamErr instanceof InferenceError) && classified.kind !== "aborted";
         if (!postCompletionTransportError) throw classified;
+      } finally {
+        watchdog.done();
       }
 
       if (this.conn.providerId && finishReason === "error") {
@@ -1529,9 +1633,13 @@ export class LocalLlmClient {
       // The stream completed with nothing in it; the non-streaming re-request is a new operation with its own
       // X-Request-ID so the provider's records never show two executions under one request ID.
       if (!fullContent && assembledToolCalls.length === 0) {
-        // Provider connections stay under this request's single receipt.
-        if (this.conn.providerId) return this.chatCompletionOnce(messages, tools, randomUUID(), signal);
-        return this.chatCompletion(messages, tools, randomUUID(), signal);
+        if (this.pending) this.pending.executions = 2;
+        else this.pending = { endpoint: currentEp, executions: 2 };
+        console.error(pc.dim(`[nexus] Empty stream from ${this.conn.label}; re-requesting non-streaming completion (executions: 2).`));
+        const res = await this.chatCompletionOnce(messages, tools, randomUUID(), signal);
+        if (this.pending) this.pending.executions = 2;
+        else this.pending = { endpoint: currentEp, executions: 2 };
+        return res;
       }
 
       return {
@@ -1613,19 +1721,22 @@ export class LocalLlmClient {
       }
       const url = `${currentEp}${req.path}`;
       this.pending = { endpoint: currentEp };
+      const watchdog = this.createWatchdog(signal, currentEp);
       let res: Response;
       try {
         res = await fetch(url, {
           method: "POST",
           headers: { "Content-Type": "application/json", ...this.authorization(url), ...this.providerHeaders(outbound.messages), "X-Request-ID": requestId },
           body: JSON.stringify(req.body),
-          signal: this.combinedSignal(signal),
+          signal: watchdog.signal,
           ...this.fetchPolicy(),
         });
       } catch (err: any) {
+        watchdog.done();
         throw classifyTransportError(err, signal, requestId, "connect");
       }
       if (!res.ok || (stream && !res.body)) {
+        watchdog.done();
         const errText = await res.text().catch(() => res.statusText);
         throw this.httpError(res.status, errText, requestId, res.headers);
       }
@@ -1638,6 +1749,8 @@ export class LocalLlmClient {
         } catch (err: any) {
           if (err?.name === "SyntaxError") throw new InferenceError("malformed_event", "provider", "Provider returned a non-JSON response body.", { requestId, failoverEligible: false });
           throw classifyTransportError(err, signal, requestId, "stream");
+        } finally {
+          watchdog.done();
         }
         try {
           result = anthropic ? parseAnthropicResponse(data, owner) : parseResponsesResponse(data, owner, keepReasoning);
@@ -1647,22 +1760,28 @@ export class LocalLlmClient {
       } else {
         const parser = anthropic ? anthropicStreamParser(owner, onToken) : responsesStreamParser(owner, keepReasoning, onToken);
         try {
-          await readSse(res.body!, (name, raw) => {
-            let data: any;
-            try {
-              data = JSON.parse(raw);
-            } catch {
-              throw new ProviderStreamError(`Malformed stream event: ${raw.slice(0, 120)}`, undefined, parser.text(), true);
-            }
-            parser.event(name, data);
-          });
+          await readSse(
+            res.body!,
+            (name, raw) => {
+              let data: any;
+              try {
+                data = JSON.parse(raw);
+              } catch {
+                throw new ProviderStreamError(`Malformed stream event: ${raw.slice(0, 120)}`, undefined, parser.text(), true);
+              }
+              parser.event(name, data);
+            },
+            () => watchdog.onChunk(),
+          );
         } catch (err: any) {
           if (err instanceof ProviderStreamError) throw this.fromStreamError(err, requestId);
           throw classifyTransportError(err, signal, requestId, "stream", parser.text());
+        } finally {
+          watchdog.done();
         }
         result = parser.result();
       }
-      this.pending = { endpoint: currentEp, usage: result.usage, providerRequestId: result.providerRequestId, effectiveModel: result.effectiveModel };
+      this.pending = { endpoint: currentEp, usage: result.usage, providerRequestId: result.providerRequestId, effectiveModel: result.effectiveModel, executions: this.pending?.executions };
       if (result.finish === "incomplete") {
         throw new InferenceError("stream_incomplete", "transport", "Inference stream ended before the provider's terminal event; response is incomplete and no tool call from it runs.", {
           requestId,
@@ -1684,15 +1803,14 @@ export class LocalLlmClient {
   }
 
   private combinedSignal(operatorSignal?: AbortSignal): AbortSignal {
-    const timeout = AbortSignal.timeout(this.requestTimeoutMs());
-    return operatorSignal ? AbortSignal.any([timeout, operatorSignal]) : timeout;
+    return this.createWatchdog(operatorSignal).signal;
   }
 
   /** HTTP 5xx/429/408 are provider-side; other 4xx are request faults (client origin). */
   private httpError(status: number, body: string, requestId: string, headers?: Headers): InferenceError {
     const providerSide = status >= 500 || status === 429 || status === 408;
     const hints = providerHints(headers, body);
-    const shown = this.conn.providerId ? redactSecrets(body).slice(0, MAX_PROVIDER_ERROR_CHARS) : body;
+    const shown = boundedProviderText(body);
     return new InferenceError("http_error", providerSide ? "provider" : "client", `Inference error (HTTP ${status}): ${shown}`, {
       httpStatus: status,
       requestId,
@@ -1705,11 +1823,15 @@ export class LocalLlmClient {
     return this.model;
   }
 
+  /** Set when the endpoint answered that it has no embeddings: later calls fail at once instead of per chunk. */
+  private embeddingsUnsupported?: string;
+
   async generateEmbedding(text: string, model?: string): Promise<number[]> {
     // Bulk repository indexing is not a disclosure any provider selection authorizes; search stays lexical instead.
     if (this.conn.providerId && this.disclosureOf() === "cloud") {
       throw new Error(`Embeddings are not sent to cloud provider '${this.conn.providerId}'.`);
     }
+    if (this.embeddingsUnsupported) throw new Error(this.embeddingsUnsupported);
     return this.executeWithFailover("generateEmbedding", async (currentEp) => {
       const url = `${currentEp}/embeddings`;
 
@@ -1742,10 +1864,14 @@ export class LocalLlmClient {
           model: model || this.model,
           input: outboundText,
         }),
+        signal: metadataSignal(),
+        ...this.fetchPolicy(),
       });
 
       if (!res.ok) {
-        throw new Error(`Embedding request failed (${res.status}): ${await res.text()}`);
+        const message = `Embedding request failed (${res.status}): ${boundedProviderText(await res.text())}`;
+        if (res.status === 404 || res.status === 501) this.embeddingsUnsupported = `${message} (embeddings are off for this session)`;
+        throw new Error(message);
       }
 
       const data: any = await res.json();

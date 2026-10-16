@@ -31,6 +31,8 @@ export interface InferenceReceipt {
   endpointOrigin: string;
   protocol: string;
   disclosure: "local" | "cloud";
+  origin_class?: "local" | "cloud" | string;
+  executions?: number;
   outcome: "completed" | "failed" | "aborted";
   failureKind?: string;
   providerRequestId?: string;
@@ -108,6 +110,7 @@ export class UsageLedger {
 
   record(receipt: InferenceReceipt, workspace?: string): void {
     this.reserved.delete(receipt.requestId);
+    if (process.env.NEXUS_RECEIPTS === "0") return;
     this.receipts.push(receipt);
     if (!workspace) return;
     try {

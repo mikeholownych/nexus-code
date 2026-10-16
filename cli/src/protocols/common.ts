@@ -63,6 +63,7 @@ export interface StreamParser {
 export async function readSse(
   body: ReadableStream<Uint8Array>,
   onEvent: (name: string | undefined, data: string) => void,
+  onChunk?: () => void,
 ): Promise<void> {
   const reader = body.getReader();
   const decoder = new TextDecoder("utf-8");
@@ -92,6 +93,7 @@ export async function readSse(
     while (true) {
       const { done, value } = await reader.read();
       if (done) break;
+      onChunk?.();
       buffer += decoder.decode(value, { stream: true });
       const lines = buffer.split("\n");
       buffer = lines.pop() ?? "";
