@@ -183,10 +183,10 @@ Every row has status **open** at `db1ca55` unless stated otherwise. In the "Evid
 
 | ID | Source | Requirement | Rationale | Location | Evidence | Status | Acceptance | Class | Finding | Spec / Plan |
 |---|---|---|---|---|---|---|---|---|---|---|
-| REQ-REL-101 | UI-004 (carried) | The packaged `nexus` opens the live TUI on a TTY. One launcher grammar. | primary workflow | `index.ts:747`; `package-linux.sh:24-30`; `live.rs:126-131` | RT (REL-01, TUI-04) | open | ACC-PKG-01 | **B** | REL-01, TUI-04, DX-05 | SPEC-06 / PLAN-06 |
+| REQ-REL-101 | UI-004 (carried) | The packaged `nexus` opens the live TUI on a TTY. One launcher grammar. | primary workflow | `index.ts:747`; `package-linux.sh:24-30`; `live.rs:126-131` | TEST (ACC-PKG-01; test:cli/test/harness_entry.test.ts) | tested | ACC-PKG-01 | **B** | REL-01, TUI-04, DX-05 | SPEC-06 / PLAN-06 |
 | REQ-REL-102 | USER_MANUAL promise | Every documented command parses on the package. | public promise | `index.ts`; docs | RT (REL-02, TUI-05) | open | ACC-PKG-02 | **B** | REL-02, TUI-05, HIST-06 | SPEC-06 / PLAN-06 |
 | REQ-REL-103 | Audit | A single version across tag, package.json files, Cargo and the core handshake. | compatibility / supportability | `core/Cargo.toml:3`; `release.yml` | RT (REL-04) | open | ACC-PKG-03 | **B** | REL-04 | SPEC-06 / PLAN-06 |
-| REQ-REL-104 | Audit; DEC-14 | An unknown subcommand is an error. Free text needs `run`. | safety (accidental agent run) | `harness.sh:39-42` | SRC (REL-03) | open | ACC-PKG-04 | RR | REL-03 | SPEC-06 / PLAN-06 |
+| REQ-REL-104 | Audit; DEC-14 | An unknown subcommand is an error. Free text needs `run`. | safety (accidental agent run) | `harness.sh:39-42` | TEST (ACC-PKG-04; test:cli/test/harness_entry.test.ts) | tested | ACC-PKG-04 | RR | REL-03 | SPEC-06 / PLAN-06 |
 | REQ-REL-105 | Audit | Installer: strict tag check, clear no-stable message, repair on reinstall, quiet output. | onboarding | `install.sh` | RT (REL-08, REL-10, REL-11, REL-12) | open | ACC-PKG-05 | RR | REL-08, REL-10, REL-11, REL-12 | SPEC-06 / PLAN-06 |
 | REQ-REL-106 | Audit | `nexus self uninstall`/`prune`. | convenience | — | — | open | — | P (docs RR, already met) | REL-10 | SPEC-06 |
 | REQ-DX-101 | Audit | Doctor stderr is clean, and its remedies match the install type. | supportability | `doctor.ts` | RT (DX-01, DX-02) | open | ACC-PKG-06, ACC-PKG-07 | RR | DX-01, DX-02 | SPEC-06 / PLAN-06 |
