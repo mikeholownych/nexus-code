@@ -38,21 +38,43 @@ jobs:
           NEXUS_CF_NAMESPACE: nexus-contest-ci
           NEXUS_CF_REPOSITORY: fixture
 
-  linux-x86_64:
+  test-matrix:
     runs-on: ubuntu-22.04
+    strategy:
+      fail-fast: false
+      matrix:
+        node: [20, 22, 24]
     steps:
       - uses: actions/checkout@v4
-      - run: sudo apt-get update
-      - run: sudo apt-get install --yes make bubblewrap
-      - uses: dtolnay/rust-toolchain@stable
+      - run: sudo apt-get update && sudo apt-get install --yes make bubblewrap
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: ${{ matrix.node }}
           cache: npm
           cache-dependency-path: cli/package-lock.json
       - run: node scripts/sync-version.mjs --check
       - run: npm ci --prefix cli
       - run: npm --prefix cli run build
+      - run: git diff --exit-code -- cli/dist
+      - run: cargo test --locked --manifest-path core/Cargo.toml
+      - run: npm --prefix cli test
+
+  linux-x86_64:
+    needs: [test-matrix]
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - run: sudo apt-get update && sudo apt-get install --yes make bubblewrap
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: cli/package-lock.json
+      - run: cargo install cargo-audit --locked --version 0.21.1
+      - run: node scripts/sync-version.mjs --check
+      - run: npm ci --prefix cli
+      - run: npm --prefix cli run build
+      - run: git diff --exit-code -- cli/dist
       - run: cargo test --locked --manifest-path core/Cargo.toml
       - run: cargo build --locked --release --manifest-path core/Cargo.toml --bin harness-core --bin nexus-tui
       - run: npm --prefix cli test

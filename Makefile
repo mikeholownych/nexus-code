@@ -34,14 +34,14 @@ sbom:
 	bash scripts/generate_sbom.sh
 
 verify-reproducibility:
-	@echo "[*] Verifying reproducible build of TypeScript CLI..."
-	@rm -rf /tmp/nexus-repro-1 /tmp/nexus-repro-2
-	@npm --prefix cli run build
-	@mkdir -p /tmp/nexus-repro-1 && cp -r cli/dist/* /tmp/nexus-repro-1/
-	@npm --prefix cli run build
-	@mkdir -p /tmp/nexus-repro-2 && cp -r cli/dist/* /tmp/nexus-repro-2/
-	@diff -r /tmp/nexus-repro-1 /tmp/nexus-repro-2
-	@rm -rf /tmp/nexus-repro-1 /tmp/nexus-repro-2
+	@echo "[*] Verifying reproducible package build..."
+	@TMP1=$$(mktemp -d) && TMP2=$$(mktemp -d) && \
+	VERSION=$$(node -p 'require("./package.json").version') && \
+	bash scripts/package-linux.sh "v$$VERSION" "$$TMP1" && \
+	bash scripts/package-linux.sh "v$$VERSION" "$$TMP2" && \
+	cmp "$$TMP1/nexus-linux-x86_64-v$$VERSION.tar.gz" "$$TMP2/nexus-linux-x86_64-v$$VERSION.tar.gz" && \
+	cmp "$$TMP1/SHA256SUMS" "$$TMP2/SHA256SUMS" && \
+	rm -rf "$$TMP1" "$$TMP2"
 	@echo "[+] Reproducible build verification succeeded (byte-identical artifacts)."
 
 test:

@@ -10,6 +10,7 @@ core/target/
 # Generated caches (graphify knowledge graph, Python bytecode)
 graphify-out/
 __pycache__/
+*.pyc
 # Evidence files that quote test-fixture secrets (the superseded pre-commit diff; the raw log of the failing baseline
 # secret scan): kept on disk and inside the evidence bundle, not tracked, so the repository secret scan stays clean
 docs/reviews/evidence/nexus_maturity_2026-10-11_verification/implementation.patch
