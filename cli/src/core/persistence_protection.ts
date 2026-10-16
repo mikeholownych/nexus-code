@@ -4,6 +4,7 @@ import * as path from "node:path";
 import { createHash, randomUUID } from "node:crypto";
 import { InformationFlowBoundary } from "./egress.js";
 import { WorkspacePath } from "./workspace_path.js";
+import { ensurePrivateDir, writePrivateFile, appendPrivateFile } from "./durable_file.js";
 
 export class SensitivePersistenceError extends Error {
   constructor(destination: string) {
@@ -132,19 +133,14 @@ export function assertNoSensitivePersistenceContent(value: unknown, destination:
 
 export function appendProtectedHistoryLine(filePath: string, line: string): void {
   const safeLine = redactForPersistence(line);
-  fs.appendFileSync(filePath, `${safeLine}\n`, "utf8");
+  appendPrivateFile(filePath, `${safeLine}\n`);
 }
 
 export function writeProtectedTextFile(filePath: string, content: string): void {
   const safeContent = redactForPersistence(content);
-  const tempPath = `${filePath}.${randomUUID()}.tmp`;
   try {
-    fs.writeFileSync(tempPath, safeContent, { encoding: "utf8", flag: "wx" });
-    fs.renameSync(tempPath, filePath);
+    writePrivateFile(filePath, safeContent, { durable: true });
   } catch {
-    try {
-      if (fs.existsSync(tempPath)) fs.unlinkSync(tempPath);
-    } catch {}
     throw new Error("Protected persistence write failed");
   }
 }
@@ -166,15 +162,13 @@ export interface MiddlewareAuditRecord {
 export function recordMiddlewareAudit(record: MiddlewareAuditRecord): void {
   try {
     const auditDir = path.join(os.homedir(), ".nexus");
-    if (!fs.existsSync(auditDir)) {
-      fs.mkdirSync(auditDir, { recursive: true });
-    }
+    ensurePrivateDir(auditDir);
     const auditPath = path.join(auditDir, "audit.log");
     const entry = {
       timestamp: record.timestamp || new Date().toISOString(),
       ...record,
     };
-    fs.appendFileSync(auditPath, JSON.stringify(entry) + "\n", "utf8");
+    appendPrivateFile(auditPath, JSON.stringify(entry) + "\n");
   } catch {
     // Ignore audit log write errors in restricted environments
   }

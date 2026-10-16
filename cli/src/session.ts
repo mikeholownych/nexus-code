@@ -11,7 +11,7 @@ import {
 } from "./core/state.js";
 import { WorkspacePath } from "./core/workspace_path.js";
 import { protectArchivedMessages } from "./core/persistence_protection.js";
-import { appendLinesDurably, readArchiveLines, type ArchiveRead } from "./core/durable_file.js";
+import { appendLinesDurably, readArchiveLines, type ArchiveRead, ensurePrivateDir } from "./core/durable_file.js";
 
 // Re-export core state primitives
 export * from "./core/state.js";
@@ -38,9 +38,7 @@ export class SessionManager {
   constructor(customDir?: string, selectedWorkspace?: () => WorkspacePath) {
     this.sessionsDir = customDir || defaultSessionsDir();
     this.selectedWorkspace = selectedWorkspace;
-    if (!fs.existsSync(this.sessionsDir)) {
-      fs.mkdirSync(this.sessionsDir, { recursive: true });
-    }
+    ensurePrivateDir(this.sessionsDir);
     this.stateManager = new DurableStateManager({ baseDir: this.sessionsDir });
   }
 

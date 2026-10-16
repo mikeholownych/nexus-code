@@ -3,6 +3,7 @@ import ora, { Ora } from "ora";
 import { TurnResult, summarizeTurn } from "./core/turn.js";
 import { highlightDiff, highlightCode } from "./syntax.js";
 import { InformationFlowBoundary } from "./core/egress.js";
+import { isNexusDirPermissive } from "./core/durable_file.js";
 
 export function redactSecrets(text: string): string {
   if (!text) return text;
@@ -27,6 +28,9 @@ export class TerminalUI {
   banner(): void {
     console.log(`\n${pc.bold(pc.black(pc.bgCyan(" NEXUS ")))} ${pc.dim("local engineering agent")}`);
     console.log(pc.dim("Understand the work. Inspect the evidence. Keep the decision yours.\n"));
+    if (isNexusDirPermissive()) {
+      console.log(pc.yellow("your Nexus state is readable by other users; run `nexus doctor --fix`\n"));
+    }
   }
 
   stepHeader(step: number, maxSteps: number): void {

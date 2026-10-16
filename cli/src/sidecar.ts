@@ -7,7 +7,8 @@ import { Command } from "commander";
 import type { AgentObserver } from "./agent.js";
 import { CheckpointManager } from "./checkpoint.js";
 import { autoDetectModel, buildConfig, loadEnvironment } from "./config.js";
-import { withDurableSync } from "./core/durable_file.js";
+import { withDurableSync, writePrivateFile } from "./core/durable_file.js";
+import { isNexusDirPermissive } from "./doctor.js";
 import { ApplicationCore } from "./core/app.js";
 import { redactForPersistence } from "./core/persistence_protection.js";
 import { TurnResult, failedTurnFromError, lifecycleStatusForTurn, summarizeTurn } from "./core/turn.js";
@@ -117,6 +118,9 @@ export class SidecarServer {
     }
     this.emitSessionState();
     if (resumed) this.emit({ type: "notice", text: resumed.message });
+    if (isNexusDirPermissive()) {
+      this.emit({ type: "notice", text: "your Nexus state is readable by other users; run `nexus doctor --fix`" });
+    }
   }
 
   /** Resolves once no turn is running. */
@@ -668,8 +672,7 @@ export class SidecarServer {
     try {
       const name = `${evidence}-${callId}`.replace(/[^A-Za-z0-9._-]/g, "_").slice(0, 160);
       const file = this.app.getSessionManager().operationDiffPath(this.sessionId, name);
-      fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
-      fs.writeFileSync(file, diff.endsWith("\n") ? diff : `${diff}\n`, { encoding: "utf8", mode: 0o600 });
+      writePrivateFile(file, diff.endsWith("\n") ? diff : `${diff}\n`);
       this.diffFiles.set(evidence, file);
       return file;
     } catch {

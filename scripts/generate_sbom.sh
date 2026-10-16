@@ -61,6 +61,10 @@ with open(out_path, "r+", encoding="utf-8") as f:
     data["metadata"]["timestamp"] = datetime.datetime.fromtimestamp(epoch, datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     namespace = uuid.UUID("6ba7b810-9dad-11d1-80b4-00c04fd430c8")
     data["serialNumber"] = f"urn:uuid:{uuid.uuid5(namespace, str(epoch))}"
+    if "component" not in data["metadata"]:
+        data["metadata"]["component"] = {"type": "application", "name": "nexus-code"}
+    else:
+        data["metadata"]["component"]["name"] = "nexus-code"
     f.seek(0)
     json.dump(data, f, indent=2)
     f.truncate()
@@ -69,3 +73,10 @@ EOF
 # 5. Validate the merged CycloneDX SBOM
 cyclonedx validate --input-file "$OUT_FILE" --fail-on-errors
 echo "Generated and validated CycloneDX SBOM: $OUT_FILE"
+
+# 6. Generate SHA-256 checksum and backwards-compatible sbom.json
+(cd "$(dirname "$OUT_FILE")" && sha256sum "$(basename "$OUT_FILE")" > "$(basename "$OUT_FILE").sha256")
+if [[ "$(basename "$OUT_FILE")" == "sbom.cdx.json" ]]; then
+  cp "$OUT_FILE" "$(dirname "$OUT_FILE")/sbom.json"
+  (cd "$(dirname "$OUT_FILE")" && sha256sum "sbom.json" > "sbom.json.sha256")
+fi

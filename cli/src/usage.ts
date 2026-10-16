@@ -8,6 +8,7 @@
  */
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { ensurePrivateDir, appendPrivateFile } from "./core/durable_file.js";
 
 export interface UsageReport {
   inputTokens?: number;
@@ -111,8 +112,8 @@ export class UsageLedger {
     if (!workspace) return;
     try {
       const dir = path.join(workspace, ".nexus");
-      fs.mkdirSync(dir, { recursive: true });
-      fs.appendFileSync(path.join(dir, "inference_receipts.jsonl"), JSON.stringify(receipt) + "\n", { mode: 0o600 });
+      ensurePrivateDir(dir);
+      appendPrivateFile(path.join(dir, "inference_receipts.jsonl"), JSON.stringify(receipt) + "\n");
     } catch {
       // Receipts are diagnostics; an unwritable workspace must not fail the inference that already happened.
     }

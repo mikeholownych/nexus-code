@@ -11,6 +11,7 @@ import { ApplicationCore } from "./core/app.js";
 import { LocalLlmClient } from "./client.js";
 import { HarnessConfig, ApprovalMode } from "./types.js";
 import { isWorkspaceTrusted } from "./workspace_trust.js";
+import { isNexusDirPermissive } from "./doctor.js";
 import { getGitInfo, scaffoldProjectRules, generateConventionalCommit, commitChanges } from "./git.js";
 import { SessionManager, SessionData } from "./session.js";
 import {
@@ -227,6 +228,9 @@ export class InteractiveRepl {
     console.log(`\n${pc.bold(pc.black(pc.bgCyan(" NEXUS ")))} ${pc.dim("local engineering agent")}`);
     console.log(pc.dim("Describe the outcome you want. Nexus will show meaningful activity and keep full evidence in the session."));
     console.log(pc.dim("Type /help for commands · /tui for the session view\n"));
+    if (isNexusDirPermissive()) {
+      console.log(pc.yellow("your Nexus state is readable by other users; run `nexus doctor --fix`\n"));
+    }
     this.printStatus();
   }
 

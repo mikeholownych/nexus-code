@@ -23,7 +23,7 @@ import { WorktreeManager } from "../worktree.js";
 import { redactForPersistence, redactTaskStateForPersistence } from "./persistence_protection.js";
 import type { ObjectiveLedger } from "./objective.js";
 import { WorkspacePath } from "./workspace_path.js";
-import { writeFileDurably, appendLinesDurably, readArchiveLines, type ArchiveRead } from "./durable_file.js";
+import { writeFileDurably, appendLinesDurably, readArchiveLines, type ArchiveRead, ensurePrivateDir } from "./durable_file.js";
 import { protectArchivedMessages } from "./persistence_protection.js";
 
 export const CURRENT_STATE_SCHEMA_VERSION = 1;
@@ -286,9 +286,7 @@ export class DurableStateManager {
   constructor(options: DurableStateManagerOptions = {}) {
     this.baseDir = options.baseDir || defaultTaskStateDir();
     this.workspacePaths = options.workspacePaths || [];
-    if (!fs.existsSync(this.baseDir)) {
-      fs.mkdirSync(this.baseDir, { recursive: true });
-    }
+    ensurePrivateDir(this.baseDir);
   }
 
   public getBaseDir(): string {

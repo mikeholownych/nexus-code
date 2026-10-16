@@ -2,6 +2,7 @@ import * as http from "node:http";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { InformationFlowBoundary } from "./core/egress.js";
+import { ensurePrivateDir, writePrivateFile } from "./core/durable_file.js";
 import pc from "picocolors";
 
 export interface ConsoleLogMessage {
@@ -254,9 +255,7 @@ export class BrowserDriver {
    */
   public async screenshot(outputPath?: string): Promise<ScreenshotResult> {
     const outDir = path.join(this.workspace, ".nexus", "screenshots");
-    if (!fs.existsSync(outDir)) {
-      fs.mkdirSync(outDir, { recursive: true });
-    }
+    ensurePrivateDir(outDir);
 
     const filename = outputPath || path.join(outDir, `screenshot-${Date.now()}.png`);
     const resolvedPath = path.isAbsolute(filename) ? path.normalize(filename) : path.resolve(this.workspace, filename);
@@ -274,7 +273,7 @@ export class BrowserDriver {
     );
 
     try {
-      fs.writeFileSync(resolvedPath, dummyPngBuffer);
+      writePrivateFile(resolvedPath, dummyPngBuffer);
     } catch {}
 
     return {

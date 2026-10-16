@@ -8,6 +8,7 @@ import {
   redactForPersistence,
   SensitivePersistenceError,
 } from "./core/persistence_protection.js";
+import { ensurePrivateDir, writePrivateFile } from "./core/durable_file.js";
 
 export interface CheckpointInfo {
   id: string;
@@ -27,9 +28,7 @@ export class CheckpointManager {
     this.workspace = path.resolve(workspace);
     const hash = crypto.createHash("sha256").update(this.workspace).digest("hex").slice(0, 12);
     this.checkpointDir = path.join(os.homedir(), ".nexus", "checkpoints", hash);
-    if (!fs.existsSync(this.checkpointDir)) {
-      fs.mkdirSync(this.checkpointDir, { recursive: true });
-    }
+    ensurePrivateDir(this.checkpointDir);
     this.checkGit();
   }
 
@@ -43,9 +42,7 @@ export class CheckpointManager {
   }
 
   private copyDirFiltered(src: string, dest: string): void {
-    if (!fs.existsSync(dest)) {
-      fs.mkdirSync(dest, { recursive: true });
-    }
+    ensurePrivateDir(dest);
     const ignored = new Set(["node_modules", ".git", "target", "dist", ".nexus", ".next", ".cache"]);
     const entries = fs.readdirSync(src, { withFileTypes: true });
     for (const entry of entries) {
@@ -58,7 +55,7 @@ export class CheckpointManager {
       } else if (entry.isFile()) {
         const content = fs.readFileSync(srcPath);
         assertNoSensitivePersistenceContent(content.toString("utf8"), "checkpoint");
-        fs.writeFileSync(destPath, content);
+        writePrivateFile(destPath, content);
       }
     }
   }
@@ -180,7 +177,7 @@ export class CheckpointManager {
     };
 
     const targetFile = path.join(this.checkpointDir, `${id}.json`);
-    fs.writeFileSync(targetFile, JSON.stringify(checkpoint, null, 2), "utf-8");
+    writePrivateFile(targetFile, JSON.stringify(checkpoint, null, 2), { durable: true });
     return checkpoint;
   }
 

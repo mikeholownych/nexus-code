@@ -2,6 +2,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { randomUUID } from "node:crypto";
 import { redactForPersistence, writeProtectedTextFile } from "./core/persistence_protection.js";
+import { ensurePrivateDir } from "./core/durable_file.js";
 import { isWorkspaceTrusted } from "./workspace_trust.js";
 import pc from "picocolors";
 
@@ -106,9 +107,7 @@ export class KnowledgeGraph {
 
     try {
       const nexusDir = path.dirname(this.dbPath);
-      if (!fs.existsSync(nexusDir)) {
-        fs.mkdirSync(nexusDir, { recursive: true });
-      }
+      ensurePrivateDir(nexusDir);
       const protectedData = redactForPersistence(data);
       writeProtectedTextFile(this.dbPath, JSON.stringify(protectedData, null, 2));
     } catch {
