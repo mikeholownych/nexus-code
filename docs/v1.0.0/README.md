@@ -2,13 +2,14 @@
 
 This package is the evidence-based path from `v0.1.0-alpha.2` (audited at `db1ca55`, 2026-10-14) to v1.0.0.
 
-**Verdict: v1.0.0 readiness is BLOCKED.** There are 31 blocker requirements, none of them met. Task-quality, standalone and real-terminal qualification are **unverified**: no qualifying evidence exists yet. The contest entry was submitted, is frozen, and is tracked separately.
+**Verdict: v1.0.0 readiness is BLOCKED.** Candidate source revision `6151a231e9179c109cfbe8cff87e0a4148587b6a` passed an isolated `make build` and full `make test` run on 2026-10-16 (Rust 281/281; CLI 1087/1087; zero skipped). This is source-suite evidence, not RC qualification. Held-out task quality, T3/T4 qualification, standalone/provider qualification, the manual terminal matrix, package/install matrix on the RC, and independent RC acceptance remain incomplete. See [the current readiness reconciliation](READINESS.md) for exact open requirements and gates. The contest entry remains frozen and separate.
 
 ## How to read it
 
 | If you want to… | Read |
 |---|---|
 | Understand what Nexus is today, what was examined, and what is wrong | [AUDIT.md](AUDIT.md) |
+| See current release readiness and remaining actions | [READINESS.md](READINESS.md) |
 | See every requirement (historical and new), its status, blocker class, and how it is accepted | [REQUIREMENTS.md](REQUIREMENTS.md) |
 | Know the order of work, the effort, and the critical path | [ROADMAP.md](ROADMAP.md) |
 | Implement a workstream | Its spec in [specs/](specs/), then its plan in [plans/](plans/) |
