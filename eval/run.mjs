@@ -55,6 +55,10 @@ if (!problems.length) {
     const fp = modelFingerprint(config, entry);
     fingerprint = fp.fingerprint;
     problems.push(...fp.missing.map((m) => `model fingerprint: ${m}`));
+    if (config.qualification === true && (config.agent ?? "nexus") === "nexus") {
+      const limitsProblem = nexusLimitsProblem(config, entry);
+      if (limitsProblem) problems.push(limitsProblem);
+    }
   } finally {
     await probe?.close();
   }
@@ -156,6 +160,28 @@ function prepareWorkspace(task, ws) {
  */
 function effectiveBudget(task, config) {
   return { steps: task.steps ?? config.steps ?? 300, minutes: task.minutes ?? config.minutes ?? 120 };
+}
+
+function nexusLimitsProblem(config, entry) {
+  const limits = config.limits;
+  if (!limits || !Number.isInteger(limits.context) || limits.context <= 0 || !Number.isInteger(limits.output) || limits.output <= 0) {
+    return "qualification requires explicit positive limits.context and limits.output for matched peer settings";
+  }
+  const advertisedContext = positiveInt(entry?.context_length) ?? positiveInt(entry?.max_model_len) ?? positiveInt(entry?.meta?.n_ctx_train);
+  if (advertisedContext && limits.context > advertisedContext) {
+    return `configured context limit ${limits.context} exceeds the installed Nexus provider limit ${advertisedContext}`;
+  }
+  const context = advertisedContext ? Math.min(advertisedContext, limits.context) : limits.context;
+  const advertisedOutput = positiveInt(entry?.max_completion_tokens);
+  const actualOutput = Math.max(1, Math.min(advertisedOutput ?? Math.min(8192, Math.floor(context / 4)), Math.floor(context / 2)));
+  if (limits.output !== actualOutput) {
+    return `Nexus output allowance ${actualOutput} differs from matched peer limit ${limits.output}`;
+  }
+  return null;
+}
+
+function positiveInt(value) {
+  return typeof value === "number" && Number.isFinite(value) && value > 0 ? Math.floor(value) : undefined;
 }
 
 async function resolveAgentIdentity(config) {

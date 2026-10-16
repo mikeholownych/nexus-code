@@ -204,12 +204,59 @@ test("qualification refuses a Nexus executable whose installed version differs f
     runs: 1,
   }));
   try {
-    const run = await runNode([path.join(ROOT, "eval/run.mjs"), "--config", config, "--out", path.join(out, "results"), "--tasks", tasks]);
+    const run = await runNode([path.join(ROOT, "eval/run.mjs"), "--config", config, "--out", path.join(out, "results"), "--tasks", tasks, "--only", "no-task-selected"]);
     assert.equal(run.status, 2, `${run.stdout}\n${run.stderr}`);
     assert.match(run.stderr, /installed Nexus version 0\.1\.0-alpha\.2 does not match expected RC 1\.0\.0-rc\.1/);
     assert.match(run.stderr, /qualification adapters require sampling\.temperature=0/);
     assert.equal(fs.existsSync(path.join(out, "results", "manifest.json")), false, "a mismatched install cannot write qualification evidence");
   } finally {
+    fs.rmSync(out, { recursive: true, force: true });
+  }
+});
+
+test("qualification refuses peer output limits that differ from the installed Nexus limit", async () => {
+  const gw = await startGateway(() => ({ kind: "text", content: "not used" }), { models: () => [{ id: "m", context_length: 65536, max_completion_tokens: 8192, limits_version: "lv1" }] });
+  const out = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-eval-rc-limits-"));
+  const tasks = path.join(out, "tasks");
+  const task = path.join(tasks, "qual-fixture");
+  fs.mkdirSync(path.join(task, "fixture"), { recursive: true, mode: 0o700 });
+  fs.chmodSync(tasks, 0o700);
+  fs.writeFileSync(path.join(task, "task.json"), JSON.stringify({
+    id: "qual-fixture",
+    tier: "T2",
+    objective: "Inspect the fixture",
+    fixture: "fixture",
+    hidden: { command: "true" },
+    class: "bugfix",
+    difficulty: "easy",
+  }));
+  const installed = path.join(out, "nexus");
+  fs.writeFileSync(installed, "#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then printf '%s\\n' '1.0.0-rc.1 (abc123, release)'; else touch '" + path.join(out, "agent-started") + "'; fi\n");
+  fs.chmodSync(installed, 0o755);
+  const config = path.join(out, "config.json");
+  fs.writeFileSync(config, JSON.stringify({
+    name: "nexus@rc",
+    agent: "nexus",
+    qualification: true,
+    expectedAgentVersion: "1.0.0-rc.1",
+    nexusExecutable: installed,
+    nexusPackageSha256: "b".repeat(64),
+    endpoint: gw.url,
+    model: "m",
+    limits: { context: 65536, output: 4096 },
+    fingerprint: { weightsSha256: "a".repeat(64), serverBuild: "fixture server" },
+    sampling: { temperature: 0 },
+    runAs: "nexus-eval",
+    runs: 5,
+  }));
+  try {
+    const run = await runNode([path.join(ROOT, "eval/run.mjs"), "--config", config, "--out", path.join(out, "results"), "--tasks", tasks, "--only", "no-task-selected"]);
+    assert.equal(run.status, 2, `${run.stdout}\n${run.stderr}`);
+    assert.match(run.stderr, /Nexus output allowance 8192 differs from matched peer limit 4096/);
+    assert.equal(fs.existsSync(path.join(out, "agent-started")), false, "mismatched conditions stop before the agent starts");
+    assert.equal(fs.existsSync(path.join(out, "results", "manifest.json")), false);
+  } finally {
+    await gw.close();
     fs.rmSync(out, { recursive: true, force: true });
   }
 });
@@ -220,7 +267,7 @@ function writePeerResults(root: string, agent: string, overrides: Record<string,
   const fingerprint = { alias: "engineering/deep", listed: true, ownedBy: "fixture", contextLength: 65536, weightsSha256: "a".repeat(64), serverBuild: "llama.cpp b123", sampling: { temperature: 0, seed: 17 } };
   fs.writeFileSync(path.join(dir, "manifest.json"), JSON.stringify({
     ...overrides,
-    config: { name: `${agent}@engineering/deep`, agent, model: "engineering/deep", qualification: true, limits: { context: 65536, output: 8192 }, ...(agent === "nexus" ? { nexusPackageSha256: "d".repeat(64) } : {}) },
+    config: { name: `${agent}@engineering/deep`, agent, model: "engineering/deep", qualification: true, limits: { context: 65536, output: 8192 }, sampling: { temperature: 0, seed: 17 }, ...(agent === "nexus" ? { nexusPackageSha256: "d".repeat(64) } : {}), ...(overrides.config as object ?? {}) },
     fingerprint: { ...fingerprint, ...(overrides.fingerprint as object ?? {}) },
     agentVersion: { agent, version: `${agent} 1.2.3`, executablePath: `/usr/bin/${agent}`, executableSha256: "c".repeat(64), ...(agent === "nexus" ? { packageSha256: "d".repeat(64) } : {}) },
     runs: 5,
@@ -264,6 +311,7 @@ test("--pairs rejects a peer run with a different model fingerprint or effective
     for (const mismatch of [
       { dir: "budget", goose: { record: { budget: { steps: 41, minutes: 15 } } }, message: /peer conditions do not match.*task-1 run 1/i },
       { dir: "fingerprint", goose: { fingerprint: { weightsSha256: "b".repeat(64) } }, message: /model fingerprint differs for goose/i },
+      { dir: "limits", goose: { config: { limits: { context: 65536, output: 4096 } } }, message: /context\/output limits differ for goose/i },
     ]) {
       const root = path.join(out, mismatch.dir);
       const files = [

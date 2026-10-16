@@ -174,9 +174,11 @@ function validateMatchedPeers(paths) {
     if (manifest.config.qualification !== true) failPairs(`${agent} manifest is not marked as a qualification run`);
     if (!manifest.fingerprint?.weightsSha256 || !manifest.fingerprint?.serverBuild || !manifest.fingerprint?.sampling) failPairs(`${agent} manifest is missing its model fingerprint or sampling settings`);
     if (manifest.fingerprint.sampling.temperature !== 0) failPairs(`${agent} qualification must use the matched temperature=0 setting`);
+    if (!manifest.config.sampling || !same(manifest.config.sampling, manifest.fingerprint.sampling)) failPairs(`${agent} config sampling does not match its recorded model fingerprint`);
     if (!manifest.agentVersion?.version) failPairs(`${agent} manifest is missing its executable version`);
     if (!manifest.agentVersion.executablePath || !/^[0-9a-f]{64}$/.test(manifest.agentVersion.executableSha256 ?? "")) failPairs(`${agent} manifest is missing its executable path or SHA-256`);
     if (agent === "nexus" && (!/^[0-9a-f]{64}$/.test(manifest.agentVersion.packageSha256 ?? "") || manifest.agentVersion.packageSha256 !== manifest.config.nexusPackageSha256)) failPairs("Nexus manifest is missing the matching installed-RC package SHA-256");
+    if (!Number.isInteger(manifest.config.limits?.context) || manifest.config.limits.context <= 0 || !Number.isInteger(manifest.config.limits?.output) || manifest.config.limits.output <= 0) failPairs(`${agent} manifest is missing positive context/output limits`);
     if (manifest.runs !== 5) failPairs(`${agent} manifest must specify exactly 5 runs, got ${manifest.runs ?? "missing"}`);
     if (!same(manifest.fingerprint, reference.fingerprint)) failPairs(`model fingerprint differs for ${agent}`);
     if (!same(manifest.config.limits ?? null, reference.config.limits ?? null)) failPairs(`context/output limits differ for ${agent}`);
