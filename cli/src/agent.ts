@@ -149,7 +149,7 @@ import {
 } from "./core/findings.js";
 import { FileChange, describeChange, editTarget, snapshot } from "./file_diff.js";
 import type { TurnReason } from "./core/turn.js";
-import type { AgentRole } from "./core/roles.js";
+import { isReadOnlyRole, ROLE_PROFILES, type AgentRole } from "./core/roles.js";
 import pc from "picocolors";
 import { untrustedWorkspaceExtensions } from "./workspace_trust.js";
 
@@ -1046,8 +1046,13 @@ export class AutonomousAgent {
       unitIdOption = options.unitId;
     }
     this.durable = durableOption !== undefined ? durableOption : depth === 0;
-    this.role = roleOption;
+    this.role = roleOption ?? config.role;
     this.unitId = unitIdOption;
+
+    if (this.role && isReadOnlyRole(this.role)) {
+      this.config.readOnly = true;
+      this.config.approvalMode = "read-only";
+    }
 
     this.inheritedWorktreeScope = inheritedWorktreeScope;
     if (inheritedWorktreeScope && path.resolve(config.workspace) !== path.resolve(inheritedWorktreeScope.workspace)) {
@@ -1626,7 +1631,7 @@ export class AutonomousAgent {
       return !group || this.enabledToolGroups.has(group);
     });
     const allEnabled = Object.keys(TOOL_GROUPS).every((group) => this.enabledToolGroups.has(group));
-    return [
+    let tools = [
       ...offered,
       ...(allEnabled ? [] : [ENABLE_TOOLS_CAPABILITY.toolDefinition as ToolDefinition]),
       // Only with an objective ledger: without one update_requirements returns nothing and read_objective has nothing to
@@ -1638,6 +1643,12 @@ export class AutonomousAgent {
       ...this.mcpManager.getToolDefinitions(),
       ...this.pluginManager.getCustomToolDefinitions(),
     ];
+    if (this.role && isReadOnlyRole(this.role)) {
+      const allowed = new Set(ROLE_PROFILES[this.role]?.recommendedTools || []);
+      allowed.add("task_completed");
+      tools = tools.filter((t) => allowed.has(t.function.name));
+    }
+    return tools;
   }
 
   public getMessages(): ChatMessage[] {
@@ -3556,6 +3567,7 @@ export class AutonomousAgent {
 2. PHASE 2 (GREEN): Make surgical edits to production files until the reproduction test PASSES.
 3. PHASE 3 (REFACTOR): Run the complete test suite to ensure zero regressions before completing the task.\n`
       : "";
+    const roleSection = this.role && ROLE_PROFILES[this.role] ? `\n${ROLE_PROFILES[this.role].systemPromptAddendum}\n` : "";
 
     // The test command Nexus will verify with, so the model runs that rather than guessing (a wrong guess costs a step).
     const verifierCommand = this.config.authoritativeVerifierCommand?.trim() || discoverVerifier(this.config.workspace)?.command;
@@ -3573,7 +3585,7 @@ You solve coding problems, build features, fix bugs, and refactor codebases by i
 6. SELF-CORRECTION: If a command or tool returns an error, analyze the error message, identify the root cause, and fix it.
 7. AUTONOMOUS COMPLETION: Keep executing tools until the entire task is thoroughly resolved. When everything is verified and done, invoke \`task_completed\` with a short summary of what changed and how it was checked.
 8. BOUNDED CONTEXT: Your context window is limited, and earlier tool output is compacted out of the conversation as you work; your own messages are what carry forward. After inspecting large output you will rely on later, state its key findings in a line or two (with file and symbol references) before moving on; do not restate small files or narrate routine steps. Re-read earlier output only when you need a specific detail you did not record or it may have changed.
-${fewShotSection}${tddSection}
+${fewShotSection}${tddSection}${roleSection}
 Always explain your reasoning before or alongside your tool calls.
 
 ### Shell Environment:

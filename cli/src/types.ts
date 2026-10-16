@@ -86,6 +86,7 @@ export interface HarnessConfig {
   coderEndpoint?: string;    // Dedicated endpoint for coder model
   coderApiKey?: string;      // API key for coder model
   tdd?: boolean;             // Enforce strict RED-GREEN-REFACTOR protocol
+  role?: "researcher" | "architect" | "implementer" | "tester" | "reviewer"; // Specialized agent role
   provider?: string;         // Cloud provider id (see providers.ts); undefined = the appliance/endpoint path
   plannerProvider?: string;  // Provider for the planner role; undefined inherits the rules in agent.ts
   coderProvider?: string;    // Provider for the coder role

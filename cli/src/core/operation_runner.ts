@@ -15,7 +15,7 @@ import { realRecoveryClock, type RecoveryClock } from "./provider_recovery.js";
 import { ConvergenceScheduler, unitBaseTask, type Decision, type DurableOperationState, type OperationEvent, type UnitRunResult, type WorkUnit } from "./operation.js";
 import { redactForPersistence } from "./persistence_protection.js";
 import { REQUIREMENTS_CAPABILITY, READ_OBJECTIVE_CAPABILITY } from "./objective.js";
-import { ROLE_PROFILES, type AgentRole } from "./roles.js";
+import { ROLE_PROFILES, isReadOnlyRole, type AgentRole } from "./roles.js";
 import {
   applyProviderCatalog,
   credentialFingerprint,
@@ -555,6 +555,7 @@ export class AgentWorkUnitExecutor implements WorkUnitExecutor {
       coderApiKey: undefined,
       plannerProvider: undefined,
       coderProvider: undefined,
+      ...(unit?.role && isReadOnlyRole(unit.role) ? { readOnly: true, approvalMode: "read-only" as const } : {}),
     };
   }
 
