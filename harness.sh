@@ -13,4 +13,10 @@ NODE_EXEC="${NODE_EXEC:-node}"
 
 unset NEXUS_HOME
 export NEXUS_ROOT="$SCRIPT_DIR"
+
+if [[ ! -f "$SCRIPT_DIR/cli/dist/index.js" ]]; then
+  echo "Error: cli/dist/index.js not found. Run 'make build' or 'npm --prefix cli run build' first." >&2
+  exit 1
+fi
+
 exec "$NODE_EXEC" "$SCRIPT_DIR/cli/dist/index.js" "$@"
