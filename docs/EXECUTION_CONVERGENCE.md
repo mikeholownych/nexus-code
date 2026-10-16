@@ -3,7 +3,7 @@
 Branch `fix/inference-transport-cause`, baseline 9f103ee. Code references are to `cli/src`.
 
 ```
-user workflow/command (/team, nexus operation)
+user workflow/command (/team [experimental], nexus operation [experimental])
   -> orchestration strategy (TeamOrchestrator: roles -> work units)
   -> durable work units + dependencies (DurableOperationState, OperationStore)
   -> convergence scheduler (ConvergenceScheduler decides; OperationRunner owns time, execution, persistence)
@@ -115,7 +115,7 @@ role-specific `runSubagent` prompt plumbing are removed.
 | review (only with `--independent-review`, or `/team reviewer`) | reviewer | implement | `review`, `independentOf: [implement]` |
 
 `/team <role>` is a one-unit operation. Each unit is an `AgentWorkUnitExecutor` turn (streaming `runTurn` with
-provider recovery, context admission and a durable task conversation) capped at 15 steps; dependency summaries are
+provider recovery, context admission and a durable task conversation) run in 15-step segments (with durable checkpoints at segment boundaries; under default continuation units run until completion, stagnation or cancellation, while `--no-continuation` bounds the turn at 15 steps); dependency summaries are
 passed to dependents as context. The operation is persisted under `~/.nexus/tasks/team-xxxxxxxx.json`, so
 `nexus operation status|resume|decide` work on team operations. `/team` waits in-process up to 60 s; a longer wait
 returns `NOT COMPLETE (WAITING)` with the resume command. Ctrl-C in the legacy REPL aborts the operation

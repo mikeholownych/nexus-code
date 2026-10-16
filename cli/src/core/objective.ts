@@ -484,7 +484,8 @@ export function priorAttempt(
 }
 
 export function recordAttempt(ledger: ObjectiveLedger, attempt: Omit<VerificationAttempt, "n" | "at">, at = now()): VerificationAttempt {
-  const record: VerificationAttempt = { n: ledger.verification.length + 1, at, ...attempt };
+  const lastN = ledger.verification.length > 0 ? (ledger.verification[ledger.verification.length - 1]?.n ?? 0) : 0;
+  const record: VerificationAttempt = { n: lastN + 1, at, ...attempt };
   ledger.verification.push(record);
   if (ledger.verification.length > 50) ledger.verification = ledger.verification.slice(-50);
   return record;
