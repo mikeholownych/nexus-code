@@ -122,6 +122,10 @@ export function classifyHttpFailure(status: number, hints: ProviderHints = {}, b
 const CONNECT_NEVER_COMPLETED = new Set(["ECONNREFUSED", "EHOSTUNREACH", "ENETUNREACH", "EAI_AGAIN", "UND_ERR_CONNECT_TIMEOUT"]);
 const TLS_VERIFICATION = /^(CERT_|UNABLE_TO_|DEPTH_ZERO_SELF_SIGNED_CERT|SELF_SIGNED_CERT_IN_CHAIN|ERR_TLS_CERT_ALTNAME_INVALID|ERR_SSL_)/;
 
+export function isTlsVerificationError(chain: TransportCause[]): boolean {
+  return chain.some((c) => Boolean(c.code && TLS_VERIFICATION.test(c.code)));
+}
+
 /**
  * A fetch/read rejection. Only failures that prove the request never left (connect refused/unreachable, a
  * socket that wrote 0 bytes) are NOT_EXECUTED. Resets and timeouts after connecting are UNKNOWN: the gateway
@@ -129,7 +133,7 @@ const TLS_VERIFICATION = /^(CERT_|UNABLE_TO_|DEPTH_ZERO_SELF_SIGNED_CERT|SELF_SI
  */
 export function classifyTransportFailure(chain: TransportCause[], phase: "connect" | "stream", timedOut: boolean): ProviderClassification {
   if (phase === "stream" || timedOut) return { condition: "TEMPORARILY_UNAVAILABLE", execution: "UNKNOWN" };
-  if (chain.some((c) => c.code && TLS_VERIFICATION.test(c.code))) return { condition: "PERMANENT_FAILURE", execution: "NOT_EXECUTED" };
+  if (isTlsVerificationError(chain)) return { condition: "PERMANENT_FAILURE", execution: "NOT_EXECUTED" };
   if (chain.some((c) => c.code === "ENOTFOUND")) return { condition: "PERMANENT_FAILURE", execution: "NOT_EXECUTED" };
   if (chain.some((c) => c.code && CONNECT_NEVER_COMPLETED.has(c.code))) return { condition: "TEMPORARILY_UNAVAILABLE", execution: "NOT_EXECUTED" };
   if (chain.some((c) => c.bytesWritten === 0)) return { condition: "TEMPORARILY_UNAVAILABLE", execution: "NOT_EXECUTED" };
@@ -141,6 +145,8 @@ export function classifyTransportFailure(chain: TransportCause[], phase: "connec
 export interface RecoveryPolicy {
   /** Overall bound on waiting for one inference step, from its first failure. 0 disables recovery. */
   deadlineMs: number;
+  /** Bound when the endpoint has never succeeded in this session (default 120 s; REQ-TUI-105). */
+  firstContactDeadlineMs?: number;
   baseDelayMs: number;
   maxDelayMs: number;
   /** Fraction of each backoff delay that is randomised (0 = fixed, 1 = full jitter). */
@@ -155,6 +161,7 @@ export interface RecoveryPolicy {
 
 export const DEFAULT_RECOVERY_POLICY: RecoveryPolicy = {
   deadlineMs: 20 * 60_000,
+  firstContactDeadlineMs: 2 * 60_000,
   baseDelayMs: 1_000,
   // Probing is a cheap model-list request, so the wait between probes stays short: with a 60 s cap a run resumed up to
   // a minute after the provider came back (eval pilot 2026-10-13). An advertised Retry-After still wins.
@@ -175,6 +182,7 @@ export function recoveryPolicyFromEnv(env: NodeJS.ProcessEnv = process.env): Rec
   };
   const p = { ...DEFAULT_RECOVERY_POLICY };
   p.deadlineMs = num("LOCAL_LLM_RECOVERY_DEADLINE_MS", p.deadlineMs);
+  p.firstContactDeadlineMs = num("NEXUS_FIRST_CONTACT_DEADLINE_MS", p.firstContactDeadlineMs ?? 120_000);
   p.baseDelayMs = num("LOCAL_LLM_RECOVERY_BASE_DELAY_MS", p.baseDelayMs, 1);
   p.maxDelayMs = Math.max(num("LOCAL_LLM_RECOVERY_MAX_DELAY_MS", p.maxDelayMs, 1), p.baseDelayMs);
   p.minDelayMs = Math.min(num("LOCAL_LLM_RECOVERY_MIN_DELAY_MS", p.minDelayMs, 1), p.maxDelayMs);
@@ -271,6 +279,24 @@ export interface RecoveryHooks<T> {
   shouldYield?(failure: InferenceFailure, plannedDelayMs: number): boolean;
 }
 
+export interface RecoveryControllerOptions {
+  /** False when the endpoint has never succeeded in this session; bounds waiting to `firstContactDeadlineMs` (REQ-TUI-105). */
+  everSucceeded?: boolean;
+  endpoint?: string;
+}
+
+/** Startup probe diagnosis (REQ-TUI-105): names the endpoint URL, cause, and fix when unreachable or rejected. */
+export function startupEndpointWarning(endpoint: string, probe: ProbeResult): string | undefined {
+  if (!probe.available) {
+    const cause = probe.detail ? ` (${probe.detail})` : "";
+    return `Endpoint ${endpoint} is unreachable${cause}. Run \`nexus doctor\`, check LOCAL_LLM_ENDPOINT in ~/.config/nexus/config.env, or use /connect.`;
+  }
+  if (probe.httpStatus === 401 || probe.httpStatus === 403) {
+    return `Endpoint ${endpoint} rejected credentials (HTTP ${probe.httpStatus}). Run \`nexus doctor\`, check ~/.config/nexus/config.env, or use /connect.`;
+  }
+  return undefined;
+}
+
 /**
  * Keeps one inference step alive across temporary provider failures.
  *
@@ -282,12 +308,19 @@ export interface RecoveryHooks<T> {
  */
 export class ProviderRecoveryController {
   record: ProviderRecoveryRecord | null = null;
+  private readonly effectiveDeadlineMs: number;
 
   constructor(
     private readonly policy: RecoveryPolicy,
     private readonly clock: RecoveryClock,
     private readonly step: number,
-  ) {}
+    private readonly options: RecoveryControllerOptions = {},
+  ) {
+    this.effectiveDeadlineMs =
+      options.everSucceeded === false
+        ? Math.min(policy.deadlineMs, policy.firstContactDeadlineMs ?? 120_000)
+        : policy.deadlineMs;
+  }
 
   async run<T>(initialRequestId: string, hooks: RecoveryHooks<T>, signal?: AbortSignal): Promise<T> {
     let submission: Submission = { requestId: initialRequestId, attempt: 1 };
@@ -332,7 +365,7 @@ export class ProviderRecoveryController {
           throw err;
         };
         if (!TEMPORARY_CONDITIONS.has(condition)) stop("NOT_RECOVERABLE", `${condition} is not a temporary provider condition`);
-        if (this.policy.deadlineMs <= 0) stop("NOT_RECOVERABLE", "provider recovery is disabled (deadline 0)");
+        if (this.effectiveDeadlineMs <= 0) stop("NOT_RECOVERABLE", "provider recovery is disabled (deadline 0)");
         if (iteration >= this.policy.maxIterations) stop("EXHAUSTED", `iteration bound ${this.policy.maxIterations} reached`);
         if (execution === "UNKNOWN") {
           if (unknownReplays >= this.policy.maxUnknownReplays) {
@@ -353,8 +386,16 @@ export class ProviderRecoveryController {
           if (execution === "NOT_EXECUTED" && hooks.shouldYield?.(failure, delay)) {
             stop("YIELDED", `${condition} (not executed); handed to the scheduler instead of waiting ${Math.round(delay / 1000)}s in place`);
           }
-          if (elapsed + delay > this.policy.deadlineMs) {
-            stop("EXHAUSTED", `provider did not recover within ${Math.round(this.policy.deadlineMs / 1000)}s (next wait ${Math.round(delay / 1000)}s would exceed it)`);
+          if (elapsed + delay > this.effectiveDeadlineMs) {
+            const where = this.options.endpoint ? ` (${this.options.endpoint})` : "";
+            const guidance =
+              this.options.everSucceeded === false
+                ? ` — run \`nexus doctor\`, check LOCAL_LLM_ENDPOINT in ~/.config/nexus/config.env, or use /connect`
+                : "";
+            stop(
+              "EXHAUSTED",
+              `provider${where} did not recover within ${Math.round(this.effectiveDeadlineMs / 1000)}s (next wait ${Math.round(delay / 1000)}s would exceed it)${guidance}`,
+            );
           }
           this.transition("WAITING", { nextAttemptAt: new Date(this.clock.now() + delay).toISOString() }, hooks);
           try {
@@ -402,7 +443,9 @@ export class ProviderRecoveryController {
       probes: 0,
       waitedMs: 0,
       unknownReplays: 0,
-      policy: { deadlineMs: this.policy.deadlineMs, maxDelayMs: this.policy.maxDelayMs, maxUnknownReplays: this.policy.maxUnknownReplays },
+      ...(this.options.endpoint ? { endpoint: this.options.endpoint } : {}),
+      ...(this.options.everSucceeded !== undefined ? { everSucceeded: this.options.everSucceeded } : {}),
+      policy: { deadlineMs: this.effectiveDeadlineMs, maxDelayMs: this.policy.maxDelayMs, maxUnknownReplays: this.policy.maxUnknownReplays },
     };
   }
 

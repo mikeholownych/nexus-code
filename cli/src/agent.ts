@@ -107,6 +107,7 @@ import {
   RecoveryPolicy,
   realRecoveryClock,
   recoveryPolicyFromEnv,
+  startupEndpointWarning,
 } from "./core/provider_recovery.js";
 import {
   ObjectiveLedger,
@@ -4576,6 +4577,23 @@ The pinned Objective Ledger lists the operator's requirements; your plan never r
     return this.activeProviderRecovery;
   }
 
+  /**
+   * 3 s startup reachability check (`GET /models`, REQ-TUI-105). Returns an actionable warning naming the endpoint,
+   * cause and fix (`nexus doctor`, `~/.config/nexus/config.env`, `/connect`) when unreachable or rejected; undefined when ok.
+   */
+  public async probeStartupEndpoint(signal?: AbortSignal): Promise<string | undefined> {
+    if (typeof this.client.probeAvailability !== "function") return undefined;
+    try {
+      const probe = await this.client.probeAvailability(signal, { timeoutMs: 3_000 });
+      if (probe.available && probe.httpStatus !== undefined && probe.httpStatus >= 200 && probe.httpStatus < 300) {
+        this.client.markSucceeded?.(this.client.endpoint);
+      }
+      return startupEndpointWarning(this.client.endpoint, probe);
+    } catch {
+      return undefined;
+    }
+  }
+
   public setProviderRecoveryHooks(hooks: Pick<RecoveryHooks<unknown>, "onFailure" | "shouldYield"> | undefined): void {
     this.providerRecoveryHooks = hooks;
   }
@@ -4994,7 +5012,10 @@ The pinned Objective Ledger lists the operator's requirements; your plan never r
         // Temporary provider failures are waited out here, at the inference boundary: history and tool state
         // are untouched while waiting, and a submission's output is used only once it is complete.
         const policy = this.recoveryPolicy ?? recoveryPolicyFromEnv();
-        const recovery = new ProviderRecoveryController(policy, this.recoveryClock, currentStep);
+        const recovery = new ProviderRecoveryController(policy, this.recoveryClock, currentStep, {
+          everSucceeded: typeof activeClient.hasEverSucceeded === "function" ? activeClient.hasEverSucceeded() : true,
+          endpoint: activeClient.endpoint,
+        });
         const lengthGuard = { step: currentStep, cutAfterMs: 0 };
         try {
           assistantMessage = await recovery.run(requestId, {
@@ -5576,10 +5597,14 @@ The pinned Objective Ledger lists the operator's requirements; your plan never r
       }));
     }
     if (input.inferenceFailure) {
+      const exhaustedDetail =
+        lastRecovery?.state === "EXHAUSTED"
+          ? `; provider recovery exhausted after ${lastRecovery.submissions.length} submissions, ${Math.round(lastRecovery.waitedMs / 1000)}s waiting` +
+            (lastRecovery.everSucceeded === false ? " — run `nexus doctor`, check LOCAL_LLM_ENDPOINT in ~/.config/nexus/config.env, or use /connect" : "")
+          : "";
       return deepFreezeTurn(assertTurnResultInvariants({
         ...base, execution: "FAILED", outcome: "NOT_ESTABLISHED", reason: "INFERENCE_FAILED",
-        detail: `${input.inferenceFailure.kind}/${input.inferenceFailure.origin}${input.inferenceFailure.httpStatus ? ` HTTP ${input.inferenceFailure.httpStatus}` : ""}` +
-          (lastRecovery?.state === "EXHAUSTED" ? `; provider recovery exhausted after ${lastRecovery.submissions.length} submissions, ${Math.round(lastRecovery.waitedMs / 1000)}s waiting` : ""),
+        detail: `${input.inferenceFailure.kind}/${input.inferenceFailure.origin}${input.inferenceFailure.httpStatus ? ` HTTP ${input.inferenceFailure.httpStatus}` : ""}${exhaustedDetail}`,
         finalOutputComplete: false,
       }));
     }
@@ -5866,7 +5891,10 @@ The pinned Objective Ledger lists the operator's requirements; your plan never r
         await this.measureAdmission(activeClient, currentStep, requestId, signal);
         const policy = this.recoveryPolicy ?? recoveryPolicyFromEnv();
         const lengthGuard = { step: currentStep, cutAfterMs: 0 };
-        assistantMessage = await new ProviderRecoveryController(policy, this.recoveryClock, currentStep).run(requestId, {
+        assistantMessage = await new ProviderRecoveryController(policy, this.recoveryClock, currentStep, {
+          everSucceeded: typeof activeClient.hasEverSucceeded === "function" ? activeClient.hasEverSucceeded() : true,
+          endpoint: activeClient.endpoint,
+        }).run(requestId, {
           submit: (s) => this.submitGuardingLength(lengthGuard, this.messages, (request) =>
             activeClient.chatCompletion(request, this.getEffectiveTools(), s.requestId, signal)),
           probe: (probeSignal, opts) =>
