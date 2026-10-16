@@ -42,6 +42,8 @@ verify-reproducibility:
 	cmp "$$TMP1/nexus-linux-x86_64-v$$VERSION.tar.gz" "$$TMP2/nexus-linux-x86_64-v$$VERSION.tar.gz" && \
 	cmp "$$TMP1/SHA256SUMS" "$$TMP2/SHA256SUMS" && \
 	cmp "$$TMP1/THIRD_PARTY_NOTICES.txt" "$$TMP2/THIRD_PARTY_NOTICES.txt" && \
+	cmp "$$TMP1/sbom.cdx.json" "$$TMP2/sbom.cdx.json" && \
+	cmp "$$TMP1/install.sh" "$$TMP2/install.sh" && \
 	rm -rf "$$TMP1" "$$TMP2"
 	@echo "[+] Reproducible build verification succeeded (byte-identical artifacts)."
 

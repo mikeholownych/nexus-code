@@ -70,13 +70,17 @@ jobs:
           node-version: 20
           cache: npm
           cache-dependency-path: cli/package-lock.json
-      - name: Install cargo tools (audit, deny, about)
+      - name: Install cargo tools (audit, deny, about, cyclonedx)
         run: |
           cargo install cargo-audit --locked --version 0.22.2
           curl -fsSL https://github.com/EmbarkStudios/cargo-deny/releases/download/0.20.2/cargo-deny-0.20.2-x86_64-unknown-linux-musl.tar.gz | tar -xz -C "$RUNNER_TEMP"
           mv "$RUNNER_TEMP/cargo-deny-0.20.2-x86_64-unknown-linux-musl/cargo-deny" "$CARGO_HOME/bin/"
           curl -fsSL https://github.com/EmbarkStudios/cargo-about/releases/download/0.9.2/cargo-about-0.9.2-x86_64-unknown-linux-musl.tar.gz | tar -xz -C "$RUNNER_TEMP"
           mv "$RUNNER_TEMP/cargo-about-0.9.2-x86_64-unknown-linux-musl/cargo-about" "$CARGO_HOME/bin/"
+          curl -fsSL https://github.com/CycloneDX/cyclonedx-rust-cargo/releases/download/cargo-cyclonedx-0.5.9/cargo-cyclonedx-x86_64-unknown-linux-musl.tar.xz | tar -xJ -C "$RUNNER_TEMP"
+          mv "$RUNNER_TEMP/cargo-cyclonedx-x86_64-unknown-linux-musl/cargo-cyclonedx" "$CARGO_HOME/bin/"
+          curl -fsSL https://github.com/CycloneDX/cyclonedx-cli/releases/download/v0.33.1/cyclonedx-linux-x64 -o "$CARGO_HOME/bin/cyclonedx"
+          chmod +x "$CARGO_HOME/bin/cyclonedx"
       - run: cargo deny --manifest-path core/Cargo.toml --config deny.toml check licenses advisories
       - run: node scripts/sync-version.mjs --check
       - run: npm ci --prefix cli
@@ -94,6 +98,9 @@ jobs:
       - run: cmp "$RUNNER_TEMP/dist/nexus-linux-x86_64-v${{ steps.release-version.outputs.version }}.tar.gz" "$RUNNER_TEMP/repro-check/nexus-linux-x86_64-v${{ steps.release-version.outputs.version }}.tar.gz"
       - run: cmp "$RUNNER_TEMP/dist/SHA256SUMS" "$RUNNER_TEMP/repro-check/SHA256SUMS"
       - run: cmp "$RUNNER_TEMP/dist/THIRD_PARTY_NOTICES.txt" "$RUNNER_TEMP/repro-check/THIRD_PARTY_NOTICES.txt"
+      - run: cyclonedx validate --input-file "$RUNNER_TEMP/dist/sbom.cdx.json" --fail-on-errors
+      - run: cmp "$RUNNER_TEMP/dist/sbom.cdx.json" "$RUNNER_TEMP/repro-check/sbom.cdx.json"
+      - run: cmp "$RUNNER_TEMP/dist/install.sh" "$RUNNER_TEMP/repro-check/install.sh"
       - run: bash scripts/smoke-package.sh "$RUNNER_TEMP/dist/nexus-linux-x86_64-v${{ steps.release-version.outputs.version }}.tar.gz"
       - run: bash scripts/installer-smoke.sh "$GITHUB_WORKSPACE/install.sh" "$RUNNER_TEMP/dist/nexus-linux-x86_64-v${{ steps.release-version.outputs.version }}.tar.gz"
       - uses: actions/upload-artifact@v4

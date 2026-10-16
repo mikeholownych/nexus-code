@@ -1,139 +1,71 @@
 #!/usr/bin/env bash
-# Nexus Code Software Bill of Materials (SBOM) Generator (REL-001..REL-004)
-# Generates a standard CycloneDX-compatible JSON SBOM and SHA-256 checksum manifest.
+# Nexus Code Software Bill of Materials (SBOM) Generator (REQ-REL-108, ACC-SUP-02)
+# Generates a merged, lockfile-derived CycloneDX 1.5 JSON SBOM for Rust and Node production dependencies.
 
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
-OUT_DIR="${ROOT_DIR}/dist"
+OUT_FILE="${1:-${ROOT_DIR}/dist/sbom.cdx.json}"
 
-mkdir -p "${OUT_DIR}"
-
-GIT_COMMIT="$(git -C "${ROOT_DIR}" rev-parse HEAD 2>/dev/null || echo "UNKNOWN_COMMIT")"
-GIT_BRANCH="$(git -C "${ROOT_DIR}" rev-parse --abbrev-ref HEAD 2>/dev/null || echo "UNKNOWN_BRANCH")"
-TIMESTAMP="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
-SERIAL_UUID="$(cat /proc/sys/kernel/random/uuid 2>/dev/null || echo "urn:uuid:00000000-0000-0000-0000-000000000000")"
-
-echo "[*] Generating Software Bill of Materials (SBOM)..."
-
-python3 - <<EOF
-import json
-import os
-import hashlib
-from datetime import datetime
-
-root_dir = "${ROOT_DIR}"
-out_dir = "${OUT_DIR}"
-git_commit = "${GIT_COMMIT}"
-timestamp = "${TIMESTAMP}"
-serial_number = "urn:uuid:${SERIAL_UUID}"
-
-# 1. Parse Node dependencies from cli/package.json
-cli_pkg_path = os.path.join(root_dir, "cli", "package.json")
-with open(cli_pkg_path, "r", encoding="utf-8") as f:
-    cli_pkg = json.load(f)
-
-components = []
-
-# Primary CLI component
-components.append({
-    "type": "application",
-    "name": cli_pkg.get("name", "local-code-harness"),
-    "version": cli_pkg.get("version", "0.0.0"),
-    "description": cli_pkg.get("description", ""),
-    "licenses": [{"license": {"id": cli_pkg.get("license", "MIT")}}],
-    "purl": f"pkg:npm/{cli_pkg.get('name')}@{cli_pkg.get('version')}"
-})
-
-for dep_name, dep_ver in cli_pkg.get("dependencies", {}).items():
-    clean_ver = dep_ver.lstrip("^~")
-    components.append({
-        "type": "library",
-        "name": dep_name,
-        "version": clean_ver,
-        "scope": "required",
-        "purl": f"pkg:npm/{dep_name}@{clean_ver}"
-    })
-
-# 2. Parse Rust dependencies from core/Cargo.toml
-cargo_path = os.path.join(root_dir, "core", "Cargo.toml")
-with open(cargo_path, "r", encoding="utf-8") as f:
-    cargo_lines = f.readlines()
-
-in_deps = False
-for line in cargo_lines:
-    line = line.strip()
-    if line.startswith("[dependencies]"):
-        in_deps = True
-        continue
-    elif line.startswith("[") and in_deps:
-        in_deps = False
-        continue
-
-    if in_deps and "=" in line and not line.startswith("#"):
-        parts = line.split("=", 1)
-        crate_name = parts[0].strip()
-        ver_part = parts[1].strip()
-        # Parse simple version string or table
-        if ver_part.startswith('"'):
-            crate_ver = ver_part.strip('"')
-        elif "version" in ver_part:
-            import re
-            m = re.search(r'version\s*=\s*"([^"]+)"', ver_part)
-            crate_ver = m.group(1) if m else "unknown"
-        else:
-            crate_ver = "unknown"
-
-        components.append({
-            "type": "library",
-            "name": crate_name,
-            "version": crate_ver,
-            "scope": "required",
-            "purl": f"pkg:cargo/{crate_name}@{crate_ver}"
-        })
-
-sbom = {
-    "bomFormat": "CycloneDX",
-    "specVersion": "1.5",
-    "serialNumber": serial_number,
-    "version": 1,
-    "metadata": {
-        "timestamp": timestamp,
-        "tools": [
-            {
-                "vendor": "Nexus",
-                "name": "nexus-sbom-generator",
-                "version": cli_pkg.get("version", "0.0.0")
-            }
-        ],
-        "component": {
-            "type": "application",
-            "name": "nexus-code",
-            "version": cli_pkg.get("version", "0.0.0"),
-            "properties": [
-                {"name": "git:commit", "value": git_commit},
-                {"name": "architecture", "value": "x86_64-linux"}
-            ]
-        }
-    },
-    "components": components
+mkdir -p "$(dirname "$OUT_FILE")"
+WORK=$(mktemp -d)
+cleanup() {
+  rm -rf "$WORK"
+  rm -f "${ROOT_DIR}/core/harness-core.cdx.json"
 }
+trap cleanup EXIT
 
-sbom_path = os.path.join(out_dir, "sbom.json")
-with open(sbom_path, "w", encoding="utf-8") as f:
-    json.dump(sbom, f, indent=2)
+# 1. Generate Rust production SBOM from Cargo.lock using cargo-cyclonedx
+(cd "${ROOT_DIR}/core" && cargo cyclonedx --format json --spec-version 1.5)
+mv "${ROOT_DIR}/core/harness-core.cdx.json" "$WORK/cargo.cdx.json"
 
-# Compute SHA-256
-with open(sbom_path, "rb") as f:
-    digest = hashlib.sha256(f.read()).hexdigest()
+# 2. Generate Node production SBOM from cli/package-lock.json using cyclonedx-npm
+npx --yes @cyclonedx/cyclonedx-npm \
+  --package-lock-only \
+  --omit dev \
+  --spec-version 1.5 \
+  --output-format JSON \
+  --output-file "$WORK/npm.cdx.json" \
+  "${ROOT_DIR}/cli/package.json"
 
-checksum_path = os.path.join(out_dir, "sbom.json.sha256")
-with open(checksum_path, "w", encoding="utf-8") as f:
-    f.write(f"{digest}  sbom.json\n")
+# 3. Merge Cargo and npm SBOMs using cyclonedx-cli
+cyclonedx merge \
+  --input-files "$WORK/cargo.cdx.json" "$WORK/npm.cdx.json" \
+  --output-file "$OUT_FILE" \
+  --output-version v1_5
 
-print(f"[+] SBOM successfully written to {sbom_path} (Components: {len(components)})")
-print(f"[+] SHA-256: {digest}")
+# 4. Normalize metadata for reproducible builds if SOURCE_DATE_EPOCH or git commit is available
+python3 - <<EOF
+import json, uuid, datetime, os
+
+out_path = "$OUT_FILE"
+root_dir = "$ROOT_DIR"
+
+epoch_str = os.environ.get("SOURCE_DATE_EPOCH")
+if not epoch_str:
+    try:
+        import subprocess
+        epoch_str = subprocess.check_output(
+            ["git", "-C", root_dir, "log", "-1", "--format=%ct"],
+            text=True
+        ).strip()
+    except Exception:
+        epoch_str = "1700000000"
+
+epoch = int(epoch_str)
+with open(out_path, "r+", encoding="utf-8") as f:
+    data = json.load(f)
+    if "metadata" not in data:
+        data["metadata"] = {}
+    data["metadata"]["timestamp"] = datetime.datetime.fromtimestamp(epoch, datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    namespace = uuid.UUID("6ba7b810-9dad-11d1-80b4-00c04fd430c8")
+    data["serialNumber"] = f"urn:uuid:{uuid.uuid5(namespace, str(epoch))}"
+    f.seek(0)
+    json.dump(data, f, indent=2)
+    f.truncate()
 EOF
 
-echo "[+] Software Bill of Materials (SBOM) generation complete."
+# 5. Validate the merged CycloneDX SBOM
+cyclonedx validate --input-file "$OUT_FILE" --fail-on-errors
+echo "Generated and validated CycloneDX SBOM: $OUT_FILE"
