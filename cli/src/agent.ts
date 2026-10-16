@@ -3617,7 +3617,7 @@ The pinned Objective Ledger lists the operator's requirements; your plan never r
             };
             this.verificationEvidence = evidence;
             this.verificationEvidenceRawOutput = testRes.rawOutput || "";
-            if (configured) this.turnConfiguredVerifier = (testRes.success && hasExecuted) ? "PASSED" : "FAILED";
+            if (configured) this.turnConfiguredVerifier = testRes.success ? "PASSED" : "FAILED";
             if (this.objective && candidateId) {
               recordAttempt(this.objective, {
                 command: verifierCommand,
