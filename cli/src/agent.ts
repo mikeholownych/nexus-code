@@ -56,6 +56,7 @@ import { isSandboxAvailable } from "./sandbox.js";
 import { runTestSuiteWithExecutor, discoverVerifier, describeVerifier, hasExecutedTests, isVerifierDeliverableBound, isFilteredVerifierCommand } from "./tester.js";
 import { ENABLE_TOOLS_CAPABILITY, TOOL_GROUPS, groupsTriggeredBy, toolGroupOf } from "./core/tool_groups.js";
 import { judgeWithoutCopy, prepareBaselineTestsCopy, snapshotTests, type ChangeBaseline, type Independence } from "./core/independent_check.js";
+import { ensurePrivateDir, appendPrivateFile } from "./core/durable_file.js";
 
 /** Tools that edit files directly: the first one of an unverified change triggers the pre-change verifier run. */
 const FILE_EDIT_TOOLS = new Set(["write_file", "edit_file", "patch_file", "delete_file"]);
@@ -814,9 +815,7 @@ function logAudit(entry: {
 }) {
   try {
     const auditDir = path.join(os.homedir(), ".nexus");
-    if (!fs.existsSync(auditDir)) {
-      fs.mkdirSync(auditDir, { recursive: true });
-    }
+    ensurePrivateDir(auditDir);
     const auditPath = path.join(auditDir, "audit.log");
     const record = InformationFlowBoundary.getGlobalInstance().redactForTelemetry({
       timestamp: new Date().toISOString(),
@@ -827,7 +826,7 @@ function logAudit(entry: {
       duration_ms: entry.durationMs,
       error: entry.error,
     });
-    fs.appendFileSync(auditPath, JSON.stringify(record) + "\n");
+    appendPrivateFile(auditPath, JSON.stringify(record) + "\n");
   } catch {
     // Ignore audit log write errors
   }

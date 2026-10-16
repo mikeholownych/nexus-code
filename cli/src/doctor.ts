@@ -32,6 +32,8 @@ import { isProjectEnvKey } from "./config.js";
 import { classifyLocality } from "./core/egress.js";
 import { redactSecrets } from "./ui.js";
 import { SafePathError, ancestryProblem, chmodVerified, identityOf, mkdirVerified, readVerified, unlinkVerified, writeExclusiveVerified, type Identity } from "./safe_fs.js";
+import { isNexusDirPermissive } from "./core/durable_file.js";
+export { isNexusDirPermissive };
 import type { HarnessConfig } from "./types.js";
 
 export const DOCTOR_SCHEMA_VERSION = 2;
@@ -680,6 +682,78 @@ const stateDirCheck: Check = async (ctx) => {
   return out;
 };
 
+const statePermissionsCheck: Check = async (ctx) => {
+  const nexusDir = path.join(ctx.home, ".nexus");
+  const historyFile = path.join(ctx.home, ".nexus_history");
+  const out: Array<Omit<DoctorFinding, "durationMs">> = [];
+
+  if (fs.existsSync(nexusDir)) {
+    const unsafe = ancestryProblem(ctx.home, nexusDir);
+    const mode = modeOf(nexusDir);
+    if (mode !== undefined && (mode & 0o077) !== 0) {
+      if (unsafe) {
+        out.push(f("state.permissions", "state", "warn", `The ~/.nexus directory is readable by other users (mode ${mode.toString(8)}), and its path is not safe to change automatically (${unsafe}).`, [nexusDir], "Review the path and restrict the real directory yourself (doctor never changes permissions through a link)."));
+      } else {
+        out.push(f("state.permissions", "state", "warn", `The ~/.nexus directory is readable by other users (mode ${mode.toString(8)}).`, [nexusDir], undefined, { id: "state.permissions", description: `chmod ${nexusDir} from ${mode.toString(8)} to 700`, expect: identityOf(nexusDir) }));
+      }
+    }
+
+    const scanDir = (dir: string, depth = 0) => {
+      if (depth > 6) return;
+      let entries: fs.Dirent[];
+      try {
+        entries = fs.readdirSync(dir, { withFileTypes: true });
+      } catch {
+        return;
+      }
+      for (const entry of entries) {
+        const full = path.join(dir, entry.name);
+        const itemUnsafe = ancestryProblem(ctx.home, full);
+        if (entry.isDirectory()) {
+          if (entry.isSymbolicLink()) continue;
+          const dirMode = modeOf(full);
+          if (dirMode !== undefined && (dirMode & 0o077) !== 0) {
+            if (itemUnsafe) {
+              out.push(f("state.permissions", "state", "warn", `The ${path.relative(ctx.home, full)} directory is readable by other users (mode ${dirMode.toString(8)}), and its path is not safe to change automatically (${itemUnsafe}).`, [full], "Review the path and restrict the real directory yourself."));
+            } else {
+              out.push(f("state.permissions", "state", "warn", `The ${path.relative(ctx.home, full)} directory is readable by other users (mode ${dirMode.toString(8)}).`, [full], undefined, { id: "state.permissions", description: `chmod ${full} from ${dirMode.toString(8)} to 700`, expect: identityOf(full) }));
+            }
+          }
+          scanDir(full, depth + 1);
+        } else if (entry.isFile()) {
+          if (entry.isSymbolicLink()) continue;
+          const fileMode = modeOf(full);
+          if (fileMode !== undefined && ((fileMode & 0o077) !== 0 || (fileMode & 0o111) !== 0)) {
+            if (itemUnsafe) {
+              out.push(f("state.permissions", "state", "warn", `The ${path.relative(ctx.home, full)} file is readable by other users (mode ${fileMode.toString(8)}), and its path is not safe to change automatically (${itemUnsafe}).`, [full], "Review the path and restrict the real file yourself."));
+            } else {
+              out.push(f("state.permissions", "state", "warn", `The ${path.relative(ctx.home, full)} file is readable by other users (mode ${fileMode.toString(8)}).`, [full], undefined, { id: "state.permissions", description: `chmod ${full} from ${fileMode.toString(8)} to 600`, expect: identityOf(full) }));
+            }
+          }
+        }
+      }
+    };
+    scanDir(nexusDir);
+  }
+
+  if (fs.existsSync(historyFile)) {
+    const histUnsafe = ancestryProblem(ctx.home, historyFile);
+    const histMode = modeOf(historyFile);
+    if (histMode !== undefined && ((histMode & 0o077) !== 0 || (histMode & 0o111) !== 0)) {
+      if (histUnsafe) {
+        out.push(f("state.permissions", "state", "warn", `The ~/.nexus_history file is readable by other users (mode ${histMode.toString(8)}), and its path is not safe to change automatically (${histUnsafe}).`, [historyFile], "Review the path and restrict the real file yourself."));
+      } else {
+        out.push(f("state.permissions", "state", "warn", `The ~/.nexus_history file is readable by other users (mode ${histMode.toString(8)}).`, [historyFile], undefined, { id: "state.permissions", description: `chmod ${historyFile} from ${histMode.toString(8)} to 600`, expect: identityOf(historyFile) }));
+      }
+    }
+  }
+
+  if (out.length === 0) {
+    return f("state.permissions", "state", "pass", "Nexus state directories and files are private (0700/0600).", [nexusDir]);
+  }
+  return out;
+};
+
 const stateIntegrityCheck: Check = async (ctx) => {
   const dirs = [path.join(ctx.home, ".nexus", "sessions"), path.join(ctx.home, ".nexus", "tasks")];
   let checked = 0;
@@ -837,6 +911,7 @@ const CHECKS: Array<[string, Check]> = [
   ["engine", engineCheck],
   ["workspace", workspaceCheck],
   ["state", stateDirCheck],
+  ["permissions", statePermissionsCheck],
   ["integrity", stateIntegrityCheck],
   ["credentials", credentialStoreCheck],
   ["config_env", configEnvCheck],
@@ -933,7 +1008,7 @@ export async function runDoctor(optionsOrConfig: DoctorOptions | HarnessConfig |
 }
 
 function isDoctorOptions(value: unknown): value is DoctorOptions {
-  return Boolean(value && typeof value === "object" && ("config" in (value as any) || "configError" in (value as any) || "context" in (value as any) || "deep" in (value as any)));
+  return Boolean(value && typeof value === "object" && ("config" in (value as any) || "configError" in (value as any) || "context" in (value as any) || "deep" in (value as any) || "home" in (value as any) || "timeoutMs" in (value as any)));
 }
 
 /** Exact secret values the report must never contain, whatever their shape. */
@@ -961,10 +1036,13 @@ interface PlannedRepair {
 
 function planRepairs(report: DoctorReport): PlannedRepair[] {
   const plans: PlannedRepair[] = [];
+  const seenTargets = new Set<string>();
   for (const finding of report.findings) {
     if (!finding.repair) continue;
     const target = finding.evidence[0];
     if (!target) continue;
+    if (seenTargets.has(target)) continue;
+    seenTargets.add(target);
     if (finding.repair.id === "state.create") {
       plans.push({
         id: "state.create",
@@ -978,7 +1056,14 @@ function planRepairs(report: DoctorReport): PlannedRepair[] {
         },
       });
     } else if (finding.repair.id === "state.permissions" || finding.repair.id === "credentials.permissions" || finding.repair.id === "config.permissions") {
-      const wanted = finding.repair.id === "state.permissions" ? 0o700 : 0o600;
+      let isDir = false;
+      try {
+        isDir = fs.lstatSync(target).isDirectory();
+      } catch {
+        isDir = finding.repair.id === "state.permissions";
+      }
+      const wanted = isDir ? 0o700 : 0o600;
+      const kind: "dir" | "file" = isDir ? "dir" : "file";
       // The object as diagnosed, not as it is now: a change made in between must make the repair stand down.
       const diagnosed: Identity | undefined = finding.repair.expect;
       plans.push({
@@ -989,7 +1074,7 @@ function planRepairs(report: DoctorReport): PlannedRepair[] {
         previousMode: diagnosed?.mode,
         apply: (home) => {
           if (!diagnosed) throw new SafePathError(`${target} was not found when the repair was planned`);
-          chmodVerified(home, target, wanted, diagnosed, wanted === 0o700 ? "dir" : "file");
+          chmodVerified(home, target, wanted, diagnosed, kind);
         },
       });
     }
@@ -1071,12 +1156,13 @@ export async function runRepairs(report: DoctorReport, options: RepairOptions): 
   }
   const verified = await runDoctor({ ...options, signal: options.signal });
   for (const repair of repairs) {
-    const after = verified.findings.find((finding) => finding.id === repair.findingId && finding.evidence[0] === plans.find((p) => p.id === repair.id && p.findingId === repair.findingId)?.target)
-      ?? verified.findings.find((finding) => finding.id === repair.findingId);
-    repair.verified = after?.status;
-    if (repair.status === "applied" && after && after.status !== "pass") {
+    const plan = plans.find((p) => p.id === repair.id && p.description === repair.description);
+    const stillFailing = verified.findings.find((finding) => finding.id === repair.findingId && finding.evidence[0] === plan?.target && finding.status !== "pass");
+    const after = stillFailing ?? verified.findings.find((finding) => finding.id === repair.findingId);
+    repair.verified = after?.status ?? "pass";
+    if (repair.status === "applied" && stillFailing) {
       repair.status = "unresolved";
-      repair.detail += ` The check still reports ${after.status}: ${after.explanation}`;
+      repair.detail += ` The check still reports ${stillFailing.status}: ${stillFailing.explanation}`;
     }
   }
   return { ...verified, repairs };
