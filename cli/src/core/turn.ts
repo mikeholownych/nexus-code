@@ -28,6 +28,7 @@ export type OperatorAcceptance = "NOT_REQUESTED" | "ACCEPTED" | "NOT_ACCEPTED";
 
 export type TurnReason =
   | "NO_APPLICABLE_VERIFIER"
+  | "NO_TESTS_EXECUTED"
   | "VERIFICATION_NOT_RUN"
   | "REGRESSION_FREE"
   | "CONTEXT_EVIDENCE_NOT_RETAINED"
@@ -182,6 +183,7 @@ export interface VerificationEvidence {
   command?: string;
   source?: "configured" | "discovered";
   exitSuccess?: boolean;
+  hasExecutedTests?: boolean;
   isDeliverableBound?: boolean;
   /**
    * A discovered verifier's pass is independent evidence of the change: tests that existed before it, unmodified,
