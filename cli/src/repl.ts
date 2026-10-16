@@ -510,6 +510,10 @@ export class InteractiveRepl {
 
   async start(): Promise<void> {
     this.printWelcome();
+    const startupWarning = await this.agent.probeStartupEndpoint();
+    if (startupWarning) {
+      console.log(pc.yellow(`⚠️  ${startupWarning}\n`));
+    }
 
     this.rl = readline.createInterface({
       input,

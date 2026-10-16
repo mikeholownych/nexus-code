@@ -172,6 +172,8 @@ export interface ProviderRecoveryRecord {
   probes: number;
   waitedMs: number;
   unknownReplays: number;
+  endpoint?: string;
+  everSucceeded?: boolean;
   policy: { deadlineMs: number; maxDelayMs: number; maxUnknownReplays: number };
 }
 

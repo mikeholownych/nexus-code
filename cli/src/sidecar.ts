@@ -90,6 +90,7 @@ export class SidecarServer {
   private pendingCompactions: Array<{ ids: string[]; llm: boolean }> = [];
   /** Title of the session record (the latest turn's prompt), kept by saves made outside a turn. */
   private sessionTitle?: string;
+  private readonly startupProbeAbort = new AbortController();
 
   constructor(options: SidecarOptions) {
     this.app = options.app;
@@ -121,6 +122,11 @@ export class SidecarServer {
     if (isNexusDirPermissive()) {
       this.emit({ type: "notice", text: "your Nexus state is readable by other users; run `nexus doctor --fix`" });
     }
+    void this.app.getAgent().probeStartupEndpoint(this.startupProbeAbort.signal).then((warning) => {
+      if (warning && !this.shutdownPromise) {
+        this.emit({ type: "notice", text: redactSecrets(warning) });
+      }
+    }).catch(() => {});
   }
 
   /** Resolves once no turn is running. */
@@ -837,6 +843,7 @@ export class SidecarServer {
     for (const signIn of this.signIns.values()) signIn.cancel();
     this.signIns.clear();
     this.shutdownPromise ??= (async () => {
+      this.startupProbeAbort.abort();
       this.turnAbort?.abort(new Error("sidecar shutdown"));
       await this.idle();
       this.app.shutdown();

@@ -18,6 +18,7 @@ import type {
 import {
   classifyHttpFailure,
   classifyTransportFailure,
+  isTlsVerificationError,
   providerHints,
   TEMPORARY_CONDITIONS,
   type ProbeResult,
@@ -466,7 +467,10 @@ function classifyTransportError(err: any, operatorSignal: AbortSignal | undefine
   if (timedOut) {
     return new InferenceError("timeout", "transport", `Inference request timed out: ${err.message}${formatCause(transportCause)}`, { requestId, partialText, transportCause, ...classification });
   }
-  const msg = `${err?.message || String(err)}${formatCause(transportCause)}`;
+  const tlsHint = isTlsVerificationError(transportCause)
+    ? " — for a private or self-signed CA, set NODE_EXTRA_CA_CERTS=/path/to/ca.pem in ~/.config/nexus/config.env"
+    : "";
+  const msg = `${err?.message || String(err)}${formatCause(transportCause)}${tlsHint}`;
   return phase === "stream"
     ? new InferenceError("stream_interrupted", "transport", `Inference stream interrupted before completion: ${msg}`, { requestId, partialText, transportCause, ...classification })
     : new InferenceError("network_error", "transport", `Inference request failed: ${msg}`, { requestId, transportCause, ...classification });
@@ -475,6 +479,8 @@ function classifyTransportError(err: any, operatorSignal: AbortSignal | undefine
 export class LocalLlmClient {
   private endpoints: string[] = [];
   private activeEndpointIndex: number = 0;
+  /** Endpoints that have answered HTTP 2xx at least once in this session (REQ-TUI-105). */
+  private readonly everSucceededEndpoints = new Set<string>();
   /** Explicitly configured key and the origin it belongs to (config.credentialOrigin, else the primary endpoint). */
   private explicitKey?: string;
   private explicitOrigin?: string;
@@ -686,6 +692,7 @@ export class LocalLlmClient {
     try {
       const result = await run();
       releaseAll();
+      this.markSucceeded(pending()?.endpoint ?? this.endpoint);
       this.lastUsageReport = pending()?.usage;
       UsageLedger.global().record({ ...base(), outcome: "completed", usageConfidence: pending()?.usage ? "provider" : "uncertain" }, this.workspace);
       return result;
@@ -701,6 +708,15 @@ export class LocalLlmClient {
       }, notSent ? undefined : this.workspace);
       throw err;
     }
+  }
+
+  /** True once `ep` has completed a request or healthy probe in this session (REQ-TUI-105). */
+  public hasEverSucceeded(ep: string = this.endpoint): boolean {
+    return this.everSucceededEndpoints.has(ep);
+  }
+
+  public markSucceeded(ep: string = this.endpoint): void {
+    this.everSucceededEndpoints.add(ep);
   }
 
   /** Hint the gateway's route table (sent as X-Task-Class); undefined sends none. */

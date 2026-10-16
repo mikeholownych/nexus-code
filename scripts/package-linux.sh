@@ -51,6 +51,16 @@ cat > "$PKG/bin/nexus" <<'EOF'
 set -eu
 NEXUS_HOME=$(CDPATH= cd -- "$(dirname -- "$(readlink -f -- "$0")")/.." && pwd)
 export NEXUS_HOME
+if [ -z "${NODE_EXTRA_CA_CERTS:-}" ] && [ -n "${HOME:-}" ] && [ -f "$HOME/.config/nexus/config.env" ]; then
+  _ca=$(sed -n 's/^[[:space:]]*NODE_EXTRA_CA_CERTS[[:space:]]*=[[:space:]]*//p' "$HOME/.config/nexus/config.env" | tail -n 1 | sed "s/^['\"]//;s/['\"]$//")
+  if [ -n "$_ca" ]; then
+    case "$_ca" in
+      "~/"*) _ca="$HOME/${_ca#\~/}" ;;
+    esac
+    export NODE_EXTRA_CA_CERTS="$_ca"
+  fi
+  unset _ca
+fi
 exec node "$NEXUS_HOME/lib/cli/dist/index.js" "$@"
 EOF
 chmod 0755 "$PKG/bin/nexus" "$PKG/lib/core/harness-core" "$PKG/lib/core/nexus-tui"

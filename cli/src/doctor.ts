@@ -13,6 +13,7 @@
  * read-only policy, serialised by a lock, backed up (previous modes recorded), checked again just before each change,
  * and verified afterwards by re-running the affected checks.
  */
+import { X509Certificate } from "node:crypto";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -485,26 +486,17 @@ const endpointChecks: Check = async (ctx, signal) => {
     return out;
   }
   out.push(f("endpoint.authenticated", "endpoint", "pass", "The endpoint accepted the request with the credential Nexus would send.", [where]));
-  if (ev.advertised) {
-    const via = ev.advertised.via ? ` via ${ev.advertised.via}` : "";
-    out.push(
-      f(
-        "endpoint.context_sizing",
-        "endpoint",
-        "pass",
-        `Context capacity: ${ev.advertised.contextLength ?? "default"} tokens${via}.`,
-        [`source ${ev.advertised.via}${ev.advertised.serverKind ? `; server_kind ${ev.advertised.serverKind}` : ""}`],
-      ),
-    );
-  }
+  const contextEvidence = ev.advertised
+    ? [`context ${ev.advertised.contextLength ?? "default"} via ${ev.advertised.via}${ev.advertised.serverKind ? ` (${ev.advertised.serverKind})` : ""}`]
+    : [];
   if (ev.modelError || !ev.models) {
-    out.push(f("model.available", "endpoint", "warn", "The model list could not be read.", [ev.modelError ?? "no list"]));
+    out.push(f("model.available", "endpoint", "warn", "The model list could not be read.", [ev.modelError ?? "no list", ...contextEvidence]));
   } else if (!config.model || config.model === "local-model") {
-    out.push(f("model.available", "endpoint", ev.models.length ? "pass" : "warn", ev.models.length ? `No model is named; a session would use the first listed model (${ev.models[0]}).` : "The endpoint lists no models.", [`${ev.models.length} listed`], ev.models.length ? undefined : "Load a model on the server."));
+    out.push(f("model.available", "endpoint", ev.models.length ? "pass" : "warn", ev.models.length ? `No model is named; a session would use the first listed model (${ev.models[0]}).` : "The endpoint lists no models.", [`${ev.models.length} listed`, ...contextEvidence], ev.models.length ? undefined : "Load a model on the server."));
   } else if (ev.models.includes(config.model)) {
-    out.push(f("model.available", "endpoint", "pass", `The configured model ${config.model} is listed by the endpoint.`, [`${ev.models.length} models listed`]));
+    out.push(f("model.available", "endpoint", "pass", `The configured model ${config.model} is listed by the endpoint.`, [`${ev.models.length} models listed`, ...contextEvidence]));
   } else {
-    out.push(f("model.available", "endpoint", "fail", `The configured model ${config.model} is not in the endpoint's model list.`, [`listed: ${ev.models.slice(0, 8).join(", ")}${ev.models.length > 8 ? ", …" : ""}`], "Choose a listed model (-m, LOCAL_LLM_MODEL, NEXUS_MODEL or /model)."));
+    out.push(f("model.available", "endpoint", "fail", `The configured model ${config.model} is not in the endpoint's model list.`, [`listed: ${ev.models.slice(0, 8).join(", ")}${ev.models.length > 8 ? ", …" : ""}`, ...contextEvidence], "Choose a listed model (-m, LOCAL_LLM_MODEL, NEXUS_MODEL or /model)."));
   }
   return out;
 };
@@ -842,6 +834,45 @@ const configEnvCheck: Check = async (ctx) => {
   return f("config.env", "config", "pass", "The configuration file is private to this user.", [file, `mode ${mode.toString(8)}`]);
 };
 
+const customCaCheck: Check = async (ctx) => {
+  let raw: string | undefined;
+  const configFile = path.join(ctx.home, ".config/nexus/config.env");
+  if (fs.existsSync(configFile)) {
+    try {
+      raw = parseDotenv(fs.readFileSync(configFile)).NODE_EXTRA_CA_CERTS?.trim();
+    } catch {}
+  }
+  if (!raw && ctx.home === credentialStorageHome()) {
+    raw = process.env.NODE_EXTRA_CA_CERTS?.trim();
+  }
+  if (!raw) {
+    return f("config.custom_ca", "config", "skip", "No custom CA certificate bundle (NODE_EXTRA_CA_CERTS) is configured (optional).");
+  }
+  const resolved = raw.startsWith("~/") ? path.join(ctx.home, raw.slice(2)) : path.resolve(ctx.home, raw);
+  if (!fs.existsSync(resolved)) {
+    return f("config.custom_ca", "config", "fail", `The configured custom CA bundle (${resolved}) does not exist.`, [resolved], "Set NODE_EXTRA_CA_CERTS in ~/.config/nexus/config.env to a readable PEM certificate file.");
+  }
+  let content: string;
+  try {
+    if (!fs.statSync(resolved).isFile()) {
+      return f("config.custom_ca", "config", "fail", `The configured custom CA bundle (${resolved}) is not a regular file.`, [resolved], "Set NODE_EXTRA_CA_CERTS in ~/.config/nexus/config.env to a PEM certificate file.");
+    }
+    content = fs.readFileSync(resolved, "utf8");
+  } catch (err: any) {
+    return f("config.custom_ca", "config", "fail", `The configured custom CA bundle (${resolved}) could not be read.`, [resolved, err?.code ?? String(err)], "Check permissions on the certificate file.");
+  }
+  const blocks = content.match(/-----BEGIN CERTIFICATE-----[\s\S]*?-----END CERTIFICATE-----/g) ?? [];
+  if (!blocks.length) {
+    return f("config.custom_ca", "config", "fail", `The custom CA bundle (${resolved}) contains no PEM certificate blocks.`, [resolved], "Point NODE_EXTRA_CA_CERTS at a PEM-encoded X.509 certificate file.");
+  }
+  try {
+    for (const block of blocks) new X509Certificate(block);
+  } catch (err: any) {
+    return f("config.custom_ca", "config", "fail", `The custom CA bundle (${resolved}) could not be parsed as X.509 PEM.`, [resolved, String(err?.message ?? err)], "Replace the file named by NODE_EXTRA_CA_CERTS with a valid PEM certificate.");
+  }
+  return f("config.custom_ca", "config", "pass", `The custom CA bundle (${resolved}) exists and contains ${blocks.length} valid X.509 certificate(s).`, [resolved]);
+};
+
 const mcpCheck: Check = async (ctx) => {
   const workspace = ctx.config?.workspace ?? process.cwd();
   const out: Array<Omit<DoctorFinding, "durationMs">> = [];
@@ -932,6 +963,7 @@ const CHECKS: Array<[string, Check]> = [
   ["integrity", stateIntegrityCheck],
   ["credentials", credentialStoreCheck],
   ["config_env", configEnvCheck],
+  ["custom_ca", customCaCheck],
   ["mcp", mcpCheck],
   ["plugins", pluginCheck],
 ];
