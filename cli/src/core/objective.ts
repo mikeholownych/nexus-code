@@ -123,6 +123,8 @@ export interface ContinuationState {
 
 export interface ObjectiveLedger {
   version: number;
+  /** Work unit id when this ledger is scoped to a work unit in an operation or team (REQ-AGT-102/103). */
+  unitId?: string;
   objective: string;
   objectiveSha256: string;
   startedAt: string;
@@ -183,9 +185,10 @@ function firstLine(text: string): string {
   return text.split("\n").map((line) => line.trim()).find(Boolean) ?? text.trim();
 }
 
-export function createLedger(objective: string, at = now()): ObjectiveLedger {
+export function createLedger(objective: string, at = now(), unitId?: string): ObjectiveLedger {
   return {
     version: LEDGER_VERSION,
+    ...(unitId ? { unitId } : {}),
     objective,
     objectiveSha256: sha256(objective),
     startedAt: at,

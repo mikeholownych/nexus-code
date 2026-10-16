@@ -148,6 +148,7 @@ import {
 } from "./core/findings.js";
 import { FileChange, describeChange, editTarget, snapshot } from "./file_diff.js";
 import type { TurnReason } from "./core/turn.js";
+import type { AgentRole } from "./core/roles.js";
 import pc from "picocolors";
 import { untrustedWorkspaceExtensions } from "./workspace_trust.js";
 
@@ -1006,12 +1007,14 @@ export class AutonomousAgent {
   /** Execution surface: 'repl', 'tui', or 'headless' (REQ-AGT-109a). */
   private surface: string;
   public readonly durable: boolean;
+  public readonly role?: AgentRole;
+  public readonly unitId?: string;
 
   constructor(
     config: HarnessConfig,
     depth: number = 0,
-    inheritedWorktreeScopeOrOptions?: { workspace: string; requireSandbox: true } | { durable?: boolean },
-    options?: { durable?: boolean },
+    inheritedWorktreeScopeOrOptions?: { workspace: string; requireSandbox: true } | { durable?: boolean; role?: AgentRole; unitId?: string },
+    options?: { durable?: boolean; role?: AgentRole; unitId?: string },
   ) {
     canonicalDurableProvenance.set(this, new WeakMap());
     this.config = config;
@@ -1022,18 +1025,28 @@ export class AutonomousAgent {
 
     let inheritedWorktreeScope: { workspace: string; requireSandbox: true } | undefined;
     let durableOption: boolean | undefined;
+    let roleOption: AgentRole | undefined;
+    let unitIdOption: string | undefined;
 
     if (inheritedWorktreeScopeOrOptions) {
       if ("workspace" in inheritedWorktreeScopeOrOptions) {
         inheritedWorktreeScope = inheritedWorktreeScopeOrOptions;
         durableOption = options?.durable;
+        roleOption = options?.role;
+        unitIdOption = options?.unitId;
       } else {
         durableOption = (inheritedWorktreeScopeOrOptions as { durable?: boolean }).durable;
+        roleOption = (inheritedWorktreeScopeOrOptions as { role?: AgentRole }).role;
+        unitIdOption = (inheritedWorktreeScopeOrOptions as { unitId?: string }).unitId;
       }
-    } else if (options?.durable !== undefined) {
+    } else if (options) {
       durableOption = options.durable;
+      roleOption = options.role;
+      unitIdOption = options.unitId;
     }
     this.durable = durableOption !== undefined ? durableOption : depth === 0;
+    this.role = roleOption;
+    this.unitId = unitIdOption;
 
     this.inheritedWorktreeScope = inheritedWorktreeScope;
     if (inheritedWorktreeScope && path.resolve(config.workspace) !== path.resolve(inheritedWorktreeScope.workspace)) {
@@ -1187,7 +1200,7 @@ export class AutonomousAgent {
         },
       },
     });
-    if (depth === 0) {
+    if (depth === 0 || this.role === "implementer" || this.role === "tester") {
       this.capabilityRegistry.register(REQUIREMENTS_CAPABILITY);
       this.capabilityRegistry.register(READ_OBJECTIVE_CAPABILITY);
     }
@@ -1616,8 +1629,8 @@ export class AutonomousAgent {
       ...(allEnabled ? [] : [ENABLE_TOOLS_CAPABILITY.toolDefinition as ToolDefinition]),
       // Only with an objective ledger: without one update_requirements returns nothing and read_objective has nothing to
       // read, but offered anyway the model spent a step on each (eval debug-logs trace).
-      ...(this.depth === 0 && this.objective ? [READ_OBJECTIVE_CAPABILITY.toolDefinition as ToolDefinition] : []),
-      ...(this.depth === 0 && this.objective?.requirements.length ? [REQUIREMENTS_CAPABILITY.toolDefinition as ToolDefinition] : []),
+      ...((this.depth === 0 || this.role === "implementer" || this.role === "tester") && this.objective ? [READ_OBJECTIVE_CAPABILITY.toolDefinition as ToolDefinition] : []),
+      ...((this.depth === 0 || this.role === "implementer" || this.role === "tester") && this.objective?.requirements.length ? [REQUIREMENTS_CAPABILITY.toolDefinition as ToolDefinition] : []),
       READ_FINDINGS_CAPABILITY.toolDefinition as ToolDefinition,
       READ_ARCHIVE_CAPABILITY.toolDefinition as ToolDefinition,
       ...this.mcpManager.getToolDefinitions(),
@@ -3553,7 +3566,7 @@ The pinned Objective Ledger lists the operator's requirements; your plan never r
       }
 
       // The operator's acceptance requirements gate completion; a coarse completed plan does not.
-      if (this.objective && this.depth === 0) {
+      if (this.objective && (this.depth === 0 || this.role === "implementer" || this.role === "tester")) {
         const open = openRequirements(this.objective);
         const blocked = blockedRequirements(this.objective);
         if (open.length || blocked.length) {
@@ -4608,9 +4621,12 @@ The pinned Objective Ledger lists the operator's requirements; your plan never r
       continuingObjective = Boolean(ledger && (isResume || !isNewObjective(ledger, taskPrompt)));
       if (!ledger || (!isResume && isNewObjective(ledger, taskPrompt))) {
         const carried = ledger?.steering.filter((s) => s.status === "queued") ?? [];
-        ledger = createLedger(taskPrompt);
+        ledger = createLedger(taskPrompt, undefined, this.unitId);
         ledger.steering.push(...carried);
       } else {
+        if (this.unitId && !ledger.unitId) {
+          ledger.unitId = this.unitId;
+        }
         const isHarnessResume = /^\[(?:Nexus|Work unit resumed)/.test(taskPrompt);
         if (!isHarnessResume && !isContinuationPrompt(taskPrompt)) {
           // The unfinished objective is kept; numbered items in the follow-up are added as further requirements.
@@ -5360,7 +5376,7 @@ The pinned Objective Ledger lists the operator's requirements; your plan never r
     const evidence = this.verificationEvidence ?? null;
     const recoveries = input.providerRecoveries ?? [];
     const lastRecovery = recoveries[recoveries.length - 1];
-    const ledger = this.depth === 0 ? this.objective : undefined;
+    const ledger = (this.depth === 0 || this.role === "implementer" || this.role === "tester") ? this.objective : undefined;
     const open = ledger ? openRequirements(ledger) : [];
     const blocked = ledger ? blockedRequirements(ledger) : [];
     const gating = ledger ? gatingRequirements(ledger) : [];
