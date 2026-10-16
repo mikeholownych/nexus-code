@@ -4,6 +4,7 @@ import { randomUUID } from "node:crypto";
 import { execFileSync } from "node:child_process";
 import { InformationFlowBoundary } from "./core/egress.js";
 import { ensurePrivateDir, appendPrivateFile } from "./core/durable_file.js";
+import { ensureGitExclude } from "./core/git_exclude.js";
 
 export type FlightEventType =
   | "session_start"
@@ -54,6 +55,7 @@ export class FlightRecorder {
   constructor(workspace: string, flightId?: string) {
     this.workspace = path.resolve(workspace);
     this.flightId = flightId || `flight-${new Date().toISOString().replace(/[:.]/g, "-")}-${randomUUID().slice(0, 6)}`;
+    ensureGitExclude(this.workspace);
     const flightsDir = path.join(this.workspace, ".nexus", "flights");
     ensurePrivateDir(flightsDir);
     this.flightLogPath = path.join(flightsDir, `${this.flightId}.flightlog`);
