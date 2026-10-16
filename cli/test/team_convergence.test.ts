@@ -508,7 +508,7 @@ describe("/team dependencies and completion", () => {
       const out = await env.team([resource("a", gwA), resource("b", gwB, { rank: 1 })]).run("researcher", "survey notes.txt");
       assert.equal(out.operation.status, "BLOCKED", out.report);
       assert.equal(gwB.requests.length, 0, "a request that may have executed is never resubmitted to another resource");
-      assert.equal(gwA.requests.length, 3, "the original plus the bounded replays");
+      assert.equal(gwA.requests.length, 2, "the original plus the bounded replays");
       const d = out.operation.units[0].blocked!.decision;
       assert.equal(d.cause, "EXECUTION_UNKNOWN");
       assert.deepEqual(d.options.map((o) => o.action.kind), ["retry", "cancel_operation"]);

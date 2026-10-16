@@ -182,7 +182,13 @@ export class WorktreeManager {
         encoding: "utf-8",
         stdio: ["ignore", "pipe", "ignore"],
       }).trim();
-      if (status.length > 0) return true;
+      const statusLines = status
+        ? status
+            .split("\n")
+            .map((l) => l.trim())
+            .filter((l) => l.length > 0 && !l.startsWith("!! .nexus/") && l !== "!! .nexus")
+        : [];
+      if (statusLines.length > 0) return true;
       const ahead = execFileSync("git", ["rev-list", "--count", `HEAD..nexus/${taskId}`], {
         cwd: this.gitRoot,
         encoding: "utf-8",
@@ -204,7 +210,10 @@ export class WorktreeManager {
         cwd: worktreePath,
         encoding: "utf-8",
         stdio: ["ignore", "pipe", "ignore"],
-      }).split("\n").some((line) => line.startsWith("!! "));
+      })
+        .split("\n")
+        .map((l) => l.trim())
+        .some((line) => line.startsWith("!! ") && !line.startsWith("!! .nexus/") && line !== "!! .nexus");
     } catch {
       return true;
     }

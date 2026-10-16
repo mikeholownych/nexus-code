@@ -1901,6 +1901,8 @@ export class AutonomousAgent {
     } else if (kind === "init") {
       text = `Initial durable task state was not persisted (${message}); restart recovery is unavailable until a later successful checkpoint.`;
       this.initialStatePersistenceFailure = text;
+    } else if (kind === "final_checkpoint") {
+      text = `The turn's final task state could not be saved: ${message}`;
     } else {
       text = `Durable checkpoint (${kind}) could not be saved (${message}); if the process stops, state since last save may be lost.`;
     }
