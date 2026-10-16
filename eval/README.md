@@ -47,6 +47,32 @@ recorded per run.
 - **Pooled metrics.** Pooled rows report crash rate, regressions, tokens per correct result and wall seconds per
   correct result. The cost of failed runs counts towards these.
 
+## Fault injection (T4)
+
+A task or config may list `faults: [{ kind, atRequest }]`. The run's model proxy then injects that fault into the Nth
+chat request (counted from 1):
+
+| kind | Fault |
+|---|---|
+| `refuse` | The connection drops without an answer |
+| `overloaded` | 503 with `Retry-After: 1` |
+| `stream_cut` | The stream is cut after its first tool-call fragment |
+| `truncate` | `finish_reason` becomes `length` |
+| `context_overflow` | llama.cpp's HTTP 400 `exceed_context_size_error` |
+| `malformed_tool_json` | The first tool call's arguments are no longer valid JSON |
+
+What was injected is recorded in `model.faultsInjected`. Such runs are never treated as infrastructure reruns.
+`score.mjs` reports, per fault kind:
+
+- runs;
+- **truthful** (the run ended with its own result, did not hang past its budget, and never claimed VERIFIED while the
+  hidden tests failed);
+- **recovered** (the hidden tests pass);
+- hung past budget.
+
+The remaining T4 classes come from task fixtures (a hanging test command, a full disk) and from the SIGTERM-then-resume
+runner case. `make test` includes a T4 smoke test with two injected faults (`cli/test/eval_harness.test.ts`).
+
 ## Qualification runs
 
 A config with `"qualification": true` is the v1.0.0 evidence run (docs/v1.0.0/ACCEPTANCE.md §6). `run.mjs` refuses to start

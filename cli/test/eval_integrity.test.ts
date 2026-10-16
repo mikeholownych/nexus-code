@@ -147,3 +147,48 @@ test("run.mjs refuses to start on an invalid task", () => {
   assert.match(out.stderr, /broken: tier must be one of/);
   assert.ok(!fs.existsSync(path.join(tasks, "out", "results.jsonl")), "no run was recorded");
 });
+
+// ---------------------------------------------------------------- T4 fault injection (REQ-QUAL-105)
+
+test("the model proxy injects each scheduled fault into the chat request it names, and records it", async () => {
+  const { startModelProxy, isInfrastructureFailure } = await import(proxyModule);
+  const sse = (o: unknown) => `data: ${JSON.stringify(o)}\n\n`;
+  const upstream = http.createServer((req, res) => {
+    req.resume();
+    res.writeHead(200, { "content-type": "text/event-stream" });
+    res.end(
+      sse({ choices: [{ index: 0, delta: { tool_calls: [{ index: 0, id: "c", type: "function", function: { name: "read_file", arguments: "" } }] } }] }) +
+      sse({ choices: [{ index: 0, delta: { tool_calls: [{ index: 0, function: { arguments: '{"path":"a"}' } }] } }] }) +
+      sse({ choices: [{ index: 0, delta: {}, finish_reason: "tool_calls" }] }) + "data: [DONE]\n\n",
+    );
+  });
+  await new Promise<void>((r) => upstream.listen(0, "127.0.0.1", () => r()));
+  const port = (upstream.address() as any).port;
+  const kinds = ["refuse", "overloaded", "stream_cut", "truncate", "context_overflow", "malformed_tool_json"];
+  const proxy = await startModelProxy({ upstream: `http://127.0.0.1:${port}/v1`, faults: kinds.map((kind, i) => ({ kind, atRequest: i + 1 })) });
+  const chat = () => fetch(`${proxy.url}/chat/completions`, { method: "POST", body: "{}" });
+  try {
+    await assert.rejects(chat(), "refuse: the connection is dropped");
+    const overloaded = await chat();
+    assert.equal(overloaded.status, 503);
+    assert.equal(overloaded.headers.get("retry-after"), "1");
+    await overloaded.text();
+    const cut = await chat().then((r) => r.text()).catch(() => "");
+    assert.ok(!cut.includes("finish_reason"), "stream_cut: nothing after the first tool-call fragment arrives");
+    const truncated = await (await chat()).text();
+    assert.match(truncated, /"finish_reason":"length"/);
+    assert.doesNotMatch(truncated, /"finish_reason":"tool_calls"/);
+    const overflow = await chat();
+    assert.equal(overflow.status, 400);
+    assert.equal((await overflow.json()).error.type, "exceed_context_size_error");
+    assert.match(await (await chat()).text(), /\\"broken/, "malformed_tool_json: the first arguments fragment is corrupted");
+    assert.match(await (await chat()).text(), /"finish_reason":"tool_calls"/, "requests without a scheduled fault pass unchanged");
+    const stats = proxy.stats();
+    assert.deepEqual(stats.faultsInjected.map((f: any) => f.kind), kinds);
+    assert.equal(isInfrastructureFailure({ model: { ...stats, answered: 0, upstreamFailures: 3 } }), false, "injected faults are never infrastructure reruns");
+  } finally {
+    await proxy.close();
+    upstream.close();
+  }
+  await assert.rejects(startModelProxy({ upstream: "http://127.0.0.1:9/v1", faults: [{ kind: "nope", atRequest: 1 }] }), /invalid fault/);
+});

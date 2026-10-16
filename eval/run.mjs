@@ -80,7 +80,10 @@ async function runOnce(task, run) {
     const sourceBefore = treeDigest(task.dir);
     // Every agent reaches the model through a per-run forwarder, so whether the model was reachable is observed by the
     // harness, the same way for every agent (eval/infra.mjs). `config.proxy: false` connects agents directly.
-    const proxy = config.proxy === false ? null : await startModelProxy({ upstream: config.endpoint, caFile });
+    // T4: a task (or the config) may schedule faults for the proxy to inject; they are recorded with the run.
+    const faults = task.faults ?? config.faults ?? [];
+    if (faults.length && config.proxy === false) throw new Error("fault injection needs the model proxy (proxy: false is set)");
+    const proxy = config.proxy === false ? null : await startModelProxy({ upstream: config.endpoint, caFile, faults });
     const started = Date.now();
     let agent;
     try {

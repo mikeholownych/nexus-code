@@ -26,6 +26,10 @@ export function validateTask(task, dir, { qualification = false } = {}) {
   for (const key of ["steps", "minutes"]) {
     if (task[key] !== undefined) need(Number.isInteger(task[key]) && task[key] > 0, `${key} must be a positive integer`);
   }
+  if (task.faults !== undefined) {
+    const kinds = ["refuse", "overloaded", "stream_cut", "truncate", "context_overflow", "malformed_tool_json"];
+    need(Array.isArray(task.faults) && task.faults.every((f) => kinds.includes(f?.kind) && Number.isInteger(f?.atRequest) && f.atRequest >= 1), `faults must be [{ kind: ${kinds.join("|")}, atRequest: n >= 1 }]`);
+  }
   if (task.class !== undefined || qualification) need(CLASSES.includes(task.class), `class must be one of ${CLASSES.join(", ")}`);
   if (task.difficulty !== undefined || qualification) need(DIFFICULTIES.includes(task.difficulty), `difficulty must be one of ${DIFFICULTIES.join(", ")}`);
   return problems;
