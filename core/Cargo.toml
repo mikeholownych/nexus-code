@@ -3,6 +3,7 @@ name = "harness-core"
 version = "0.1.0-alpha.2"
 edition = "2024"
 rust-version = "1.85.0"
+license = "Apache-2.0"
 
 [[bin]]
 name = "harness-core"

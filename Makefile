@@ -41,6 +41,7 @@ verify-reproducibility:
 	bash scripts/package-linux.sh "v$$VERSION" "$$TMP2" && \
 	cmp "$$TMP1/nexus-linux-x86_64-v$$VERSION.tar.gz" "$$TMP2/nexus-linux-x86_64-v$$VERSION.tar.gz" && \
 	cmp "$$TMP1/SHA256SUMS" "$$TMP2/SHA256SUMS" && \
+	cmp "$$TMP1/THIRD_PARTY_NOTICES.txt" "$$TMP2/THIRD_PARTY_NOTICES.txt" && \
 	rm -rf "$$TMP1" "$$TMP2"
 	@echo "[+] Reproducible build verification succeeded (byte-identical artifacts)."
 
