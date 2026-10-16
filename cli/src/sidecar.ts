@@ -515,7 +515,7 @@ export class SidecarServer {
     try {
       turn = await agent.runTurn(prompt, this.confirmFor(turnId, signal), { signal });
     } catch (err) {
-      turn = failedTurnFromError(err, this.app.getConfig().maxSteps);
+      turn = failedTurnFromError(err, this.app.getConfig().maxSteps, agent.hasUnverifiedChanges());
     } finally {
       agent.setObserver(undefined);
       agent.setProgressListener(() => this.saveSession(this.sessionTitle));

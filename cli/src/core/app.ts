@@ -243,7 +243,7 @@ export class ApplicationCore extends EventEmitter {
       }
     }
 
-    const finalTurn: TurnResult = turn ?? failedTurnFromError(taskError, this.config.maxSteps);
+    const finalTurn: TurnResult = turn ?? failedTurnFromError(taskError, this.config.maxSteps, this.agent.hasUnverifiedChanges());
 
     // Capture durable task state snapshot
     let durableState: DurableTaskState;

@@ -613,6 +613,95 @@ describe("V2: unverified changes survive retries, step limits, restarts and resu
     });
   });
 
+  test("ACC-CONT-06: throwing admitContext after a write yields UNHANDLED_ERROR with pending=true and cancelled steering notice", async () => {
+    await withHome(async (home) => {
+      let stepCount = 0;
+      const gw = await gateway((b) => {
+        stepCount++;
+        if (stepCount === 1) {
+          return { tools: [{ name: "write_file", args: { path: "hello.txt", content: "world\n" } }] };
+        }
+        return { text: "done" };
+      });
+      const repo = makeRepo();
+      const config = cfg(gw, repo);
+      let agent: AutonomousAgent | undefined;
+      try {
+        agent = quiet(new AutonomousAgent(config));
+        const cancelledSteering: any[] = [];
+        agent.setObserver({
+          onSteering: (evt) => {
+            if (evt.status === "cancelled") {
+              cancelledSteering.push(evt);
+            }
+          },
+        });
+
+        // Inject throwing admitContext after the write, queueing steering so it is cancelled on turn abort
+        const origAdmit = (agent as any).admitContext;
+        let wrote = false;
+        (agent as any).admitContext = function (step: number, requestId: string) {
+          if (agent!.hasUnverifiedChanges()) {
+            wrote = true;
+            agent!.queueSteering("st-1", "steer after write");
+            throw new Error("injected fault in admitContext after write");
+          }
+          return origAdmit.call(this, step, requestId);
+        };
+
+        const r = await muted(() => agent!.runTurn("Write hello.txt and finish"));
+
+        assert.ok(wrote, "admitContext threw after write");
+        assert.equal(r.execution, "FAILED");
+        assert.equal(r.reason, "UNHANDLED_ERROR");
+        assert.equal(r.unverifiedChangesPending, true); // pending=true
+        assert.equal(agent.hasUnverifiedChanges(), true);
+        assert.ok(cancelledSteering.length > 0, "onSteering received a cancelled notice");
+        assert.equal(cancelledSteering[0].id, "st-1");
+        assert.equal(cancelledSteering[0].status, "cancelled");
+      } finally {
+        agent?.shutdown();
+        await gw.close();
+        fs.rmSync(repo, { recursive: true, force: true });
+      }
+    });
+  });
+
+  test("AGT-14 / REQ-AGT-106: durable-write failures (operation start/end and checkpoints) are reported through reportPersistenceFailure", async () => {
+    await withHome(async (home) => {
+      const gw = await gateway((b) => {
+        return toolResults(b) === 0 ? write("task12.txt") : done();
+      });
+      const repo = makeRepo();
+      const config = cfg(gw, repo);
+      let agent: AutonomousAgent | undefined;
+      try {
+        agent = quiet(new AutonomousAgent(config));
+        const notices: string[] = [];
+        agent.setObserver({
+          onNotice: (n) => notices.push(n),
+        });
+
+        // Fault-inject stateManager.recordOperationStart to throw
+        const sm = agent.getStateManager();
+        sm.recordOperationStart = function (...args: any[]) {
+          throw new Error("disk full on operation start");
+        };
+
+        const r = await muted(() => agent!.runTurn("Write task12.txt"));
+
+        // Operation start failure was reported, degraded crash recovery
+        assert.ok(notices.some((n) => n.includes("crash recovery degraded") && n.includes("operation_start")), "notice emitted for operation_start failure");
+        assert.ok(r.persistence?.failures.some((f) => f.includes("crash recovery degraded")), "result.persistence.failures includes degraded note");
+        assert.equal(r.persistence?.durable, false, "persistence.durable is false when durable writes fail");
+      } finally {
+        agent?.shutdown();
+        await gw.close();
+        fs.rmSync(repo, { recursive: true, force: true });
+      }
+    });
+  });
+
   test("interactive /resume (sidecar): a resumed session keeps its outstanding verification obligation", async () => {
     await withHome(async () => {
       const gw = await gateway((b) => (lastUser(b).startsWith("Write impl.txt") ? (toolResults(b) === 0 ? write() : { text: "I wrote impl.txt." }) : done("nothing left")));

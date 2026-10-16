@@ -443,7 +443,7 @@ export function summarizeTurn(t: TurnResult): { heading: string; line: string } 
 }
 
 /** Result for a turn that ended by an exception outside the model/tool protocol (never a success). */
-export function failedTurnFromError(err: unknown, maxSteps: number): TurnResult {
+export function failedTurnFromError(err: unknown, maxSteps: number, unverifiedChangesPending = false, stepsUsed = 0): TurnResult {
   const message = err instanceof Error ? err.message : String(err);
   return deepFreezeTurn(assertTurnResultInvariants({
     execution: "FAILED",
@@ -456,8 +456,8 @@ export function failedTurnFromError(err: unknown, maxSteps: number): TurnResult 
     verification: null,
     interruption: null,
     inferenceFailure: null,
-    steps: { used: 0, max: maxSteps, limitReached: false },
-    unverifiedChangesPending: false,
+    steps: { used: stepsUsed, max: maxSteps, limitReached: false },
+    unverifiedChangesPending,
     finishedAt: new Date().toISOString(),
   }));
 }
