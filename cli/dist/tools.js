@@ -10,7 +10,10 @@ import { SecurityManager } from "./security.js";
 import { InformationFlowBoundary, matchesLocalOrigins, parseLocalOrigins } from "./core/egress.js";
 import { HARNESS_TOOLS, defaultRegistry } from "./core/capabilities.js";
 import { isSafeReadOnlyCommand } from "./core/authority.js";
+import { getBuildIdentity } from "./build_identity.js";
 export { HARNESS_TOOLS, defaultRegistry };
+/** JSON-RPC protocol version spoken between the CLI and harness-core (REQ-REL-103). */
+export const CORE_PROTOCOL_VERSION = 1;
 /** Rust engine binaries the bridge looks for, in order (release before debug). */
 export function coreBinaryCandidates() {
     const packagedCoreDir = process.env.NEXUS_HOME ? path.join(process.env.NEXUS_HOME, "lib", "core") : undefined;
@@ -473,6 +476,8 @@ export class RustCoreBridge {
     sandbox = false;
     requireSandbox = false;
     securityManager;
+    handshakePromise = null;
+    handshakeError = null;
     constructor(workspace, defaultShell = "bash", customBinaryPath, dryRun = false, readOnly = false, sandbox = false, requireSandbox = false) {
         this.workspace = path.resolve(workspace);
         this.defaultShell = defaultShell;
@@ -572,6 +577,7 @@ export class RustCoreBridge {
         }
         this.pendingRequests.clear();
         this.rpcBuffer = "";
+        this.handshakePromise = null;
     }
     handleRpcStdout(data) {
         this.rpcBuffer += data;
@@ -613,7 +619,62 @@ export class RustCoreBridge {
     }
     shutdown() {
         this.cleanupRpc();
+        this.handshakePromise = null;
+        this.handshakeError = null;
         RustCoreBridge.activeBridges.delete(this);
+    }
+    /**
+     * Reset handshake cache (used after restart or in tests).
+     */
+    resetHandshake() {
+        this.handshakePromise = null;
+        this.handshakeError = null;
+    }
+    /**
+     * REQ-REL-103: Verifies that the running harness-core engine matches the CLI's expected protocol
+     * version and release version via the `hello` JSON-RPC method.
+     */
+    async ensureHandshake() {
+        if (this.handshakeError) {
+            throw this.handshakeError;
+        }
+        if (this.handshakePromise) {
+            return this.handshakePromise;
+        }
+        this.handshakePromise = (async () => {
+            try {
+                const result = await this.executeViaRpc("hello", {}, { ignoreTurnSignal: true });
+                if (!result) {
+                    throw new Error("Failed to communicate with core engine during startup handshake.");
+                }
+                if (!result.success) {
+                    throw new Error(`Core engine handshake failed: ${result.error || "Unknown error"}`);
+                }
+                let data;
+                try {
+                    data = JSON.parse(result.output);
+                }
+                catch {
+                    throw new Error(`Invalid JSON in core engine hello handshake response: ${result.output}`);
+                }
+                const coreProtocol = data.protocol;
+                const coreVersion = data.version;
+                const expectedVersion = getBuildIdentity().version;
+                if (coreProtocol !== CORE_PROTOCOL_VERSION) {
+                    throw new Error(`Engine protocol mismatch: core engine reports protocol ${coreProtocol}, but CLI expects ${CORE_PROTOCOL_VERSION}. Run 'make build' to update.`);
+                }
+                if (expectedVersion !== "unknown" && coreVersion !== expectedVersion) {
+                    throw new Error(`Engine version mismatch: core engine reports version ${coreVersion}, but CLI is ${expectedVersion}. Run 'make build' to update.`);
+                }
+                return { version: coreVersion, protocol: coreProtocol };
+            }
+            catch (err) {
+                this.handshakeError = err;
+                this.cleanupRpc();
+                throw err;
+            }
+        })();
+        return this.handshakePromise;
     }
     static shutdownAllGlobal() {
         for (const b of RustCoreBridge.activeBridges) {
@@ -662,6 +723,14 @@ export class RustCoreBridge {
         const daemon = this.ensureRpcDaemon();
         if (!daemon || !daemon.stdin || daemon.stdin.destroyed) {
             return null;
+        }
+        if (toolName !== "hello") {
+            try {
+                await this.ensureHandshake();
+            }
+            catch (err) {
+                return { success: false, output: "", error: err.message };
+            }
         }
         const id = this.nextRequestId++;
         const deadlines = rpcDeadlines(toolName, args);

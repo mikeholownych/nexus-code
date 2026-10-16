@@ -290,7 +290,8 @@ program
     .option("--coder-provider <id>", "Cloud provider for the coder model (requires --coder-model)")
     .option("-j, --json", "Output machine-readable JSON structured result (UI-002, UI-003)")
     .option("-r, --resume [id]", "Resume previous session or task state")
-    .action(async (promptParts, options) => {
+    .action(async (promptParts, _options, cmd) => {
+    const options = cmd.optsWithGlobals();
     const prompt = promptParts.join(" ");
     const config = buildConfig(options);
     config.surface = "headless";
@@ -376,7 +377,8 @@ program
     .option("-k, --api-key <key>", "API key / token (default: $LOCAL_LLM_API_KEY)")
     .option("--provider <id>", "Cloud inference provider (openrouter, openai, anthropic, compatible)")
     .option("--base-url <url>", "Override the provider's base URL")
-    .action(async (options) => {
+    .action(async (_options, cmd) => {
+    const options = cmd.optsWithGlobals();
     const config = buildConfig(options);
     const client = new LocalLlmClient(config);
     console.log(pc.cyan(`\nQuerying models from ${config.endpoint}...`));
@@ -398,7 +400,8 @@ program
     console.log();
 });
 /** Shared by `doctor` and its compatibility alias `check`. */
-async function doctorCommand(options) {
+async function doctorCommand(_options, cmd) {
+    const options = cmd?.optsWithGlobals ? cmd.optsWithGlobals() : _options;
     const controller = new AbortController();
     const onInterrupt = () => controller.abort();
     process.once("SIGINT", onInterrupt);
