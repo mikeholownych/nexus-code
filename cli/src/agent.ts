@@ -5478,7 +5478,7 @@ The pinned Objective Ledger lists the operator's requirements; your plan never r
     };
   }
 
-  async run(taskPrompt: string | any[], onConfirm?: ConfirmHandler, options?: { signal?: AbortSignal }): Promise<TurnResult> {
+  async run(taskPrompt: string | any[], onConfirm?: ConfirmHandler, options?: { signal?: AbortSignal; resume?: boolean }): Promise<TurnResult> {
     this.ui.banner();
     console.log(`🎯 Task: ${typeof taskPrompt === "string" ? taskPrompt : "[Multi-modal task input]"}\n`);
     console.log(`📁 Workspace: ${this.config.workspace}`);
@@ -5515,7 +5515,9 @@ The pinned Objective Ledger lists the operator's requirements; your plan never r
       });
     }
 
-    this.resetConversation();
+    if (!options?.resume) {
+      this.resetConversation();
+    }
     this.worktreeRunTurnAuthorized = true;
     let turnResult: TurnResult | undefined;
     try {
