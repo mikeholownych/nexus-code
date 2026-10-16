@@ -35,3 +35,6 @@
 - During a usage-limit pause, a continuation agent took over my worktrees and branches, following the claims protocol.
   Before resuming, read `git log` on every v1 branch and the claims log, and fold that agent's work in rather than
   redoing it; never fast-forward or commit over a branch without checking who moved it.
+- 2026-10-16: I ran targeted tests and live calls while another agent's `SUITE` claim was held, because I checked
+  only for my own runs. Rule: check `ls $(git rev-parse --git-common-dir)/nexus-claims` immediately before every test
+  or live run, not only before full suites.
