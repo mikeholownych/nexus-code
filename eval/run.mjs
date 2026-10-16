@@ -83,7 +83,9 @@ async function runOnce(task, run) {
     // T4: a task (or the config) may schedule faults for the proxy to inject; they are recorded with the run.
     const faults = task.faults ?? config.faults ?? [];
     if (faults.length && config.proxy === false) throw new Error("fault injection needs the model proxy (proxy: false is set)");
-    const proxy = config.proxy === false ? null : await startModelProxy({ upstream: config.endpoint, caFile, faults });
+    // A standalone profile (DEC-16) shows agents a plain server; the proxy then holds the real key, agents get none.
+    if (config.serverProfile && config.proxy === false) throw new Error("serverProfile needs the model proxy (proxy: false is set)");
+    const proxy = config.proxy === false ? null : await startModelProxy({ upstream: config.endpoint, caFile, faults, profile: config.serverProfile, authToken: config.serverProfile ? apiKey ?? undefined : undefined });
     const started = Date.now();
     let agent;
     try {
@@ -147,7 +149,8 @@ function prepareWorkspace(task, ws) {
  * (no operator plugins, extensions or memory), the same endpoint and model, and the key through its environment.
  */
 function agentCommand(task, ws, home, budget, ep) {
-  const keyEnv = apiKey ? { LOCAL_LLM_API_KEY: apiKey, OPENAI_API_KEY: apiKey, GW_KEY: apiKey } : {};
+  const agentKey = config.serverProfile ? "local" : apiKey;
+  const keyEnv = agentKey ? { LOCAL_LLM_API_KEY: agentKey, OPENAI_API_KEY: agentKey, GW_KEY: agentKey } : {};
   const caEnv = caBundle ? { NODE_EXTRA_CA_CERTS: caFile, SSL_CERT_FILE: caBundle, REQUESTS_CA_BUNDLE: caBundle } : {};
   // PWD too: some agents take the project from $PWD rather than the process's working directory.
   const env = { ...process.env, ...(config.env ?? {}), ...keyEnv, ...caEnv, HOME: home, PWD: ws, XDG_CONFIG_HOME: path.join(home, ".config"), XDG_DATA_HOME: path.join(home, ".local/share"), XDG_STATE_HOME: path.join(home, ".local/state") };
