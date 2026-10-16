@@ -2477,12 +2477,17 @@ export class AutonomousAgent {
       const caps = this.capabilities;
       let count: RequestCount | undefined;
       let unmeasured: string | undefined;
-      if (!caps?.advertised?.tokenize) {
+      const canTokenize = Boolean(
+        caps?.advertised?.tokenize ||
+        caps?.advertised?.via === "llamacpp" ||
+        caps?.advertised?.via === "vllm"
+      );
+      if (!canTokenize) {
         unmeasured = caps?.discovery === "unavailable" ? `capability discovery unavailable (${caps.discoveryDetail ?? "no detail"})` : "the connection advertises no request counting";
       } else if (this.tokenCountingState === "unavailable" && Date.now() < this.tokenCountingCooldownUntil) {
         unmeasured = `request counting unavailable (${this.tokenCountingDetail ?? "no detail"})`;
       } else if (this.tokenCountingState === "unsupported") {
-        unmeasured = `request counting unsupported (${this.tokenCountingDetail ?? "no detail"})`;
+        unmeasured = !caps?.advertised?.tokenize ? "the connection advertises no request counting" : `request counting unsupported (${this.tokenCountingDetail ?? "no detail"})`;
       } else {
         try {
           count = await client.countRequestTokens(messages, tools, requestId, signal);
@@ -2497,9 +2502,13 @@ export class AutonomousAgent {
           this.tokenCountingCooldownUntil = Date.now() + TOKEN_COUNT_COOLDOWN_MS;
           if (caps) {
             caps.tokenCounting = this.tokenCountingState;
-            caps.tokenCountingDetail = this.tokenCountingDetail;
+            if (caps.advertised?.tokenize || kind !== "unsupported") {
+              caps.tokenCountingDetail = this.tokenCountingDetail;
+            }
           }
-          unmeasured = `request counting ${this.tokenCountingDetail}`;
+          unmeasured = !caps?.advertised?.tokenize && kind === "unsupported"
+            ? "the connection advertises no request counting"
+            : `request counting ${this.tokenCountingDetail}`;
         }
       }
       const source: CountSource = count?.source ?? "client_estimate";

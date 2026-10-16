@@ -1,23 +1,41 @@
 import { ChatMessage, ToolDefinition } from "./types.js";
 import pc from "picocolors";
 
-// Standard BPE subword regex matching cl100k/o200k & Llama tokenizers
-const BPE_REGEX = /'s|'t|'re|'ve|'m|'ll|'d| ?\p{L}+| ?\p{N}+| ?[^\s\p{L}\p{N}]+|\s+(?!\S)|\s+/gu;
+const CJK_KANA_HANGUL_RE = /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}]/u;
+const ALL_DIGITS_RE = /^\s*\p{N}+\s*$/u;
+
+// Conservative BPE subword regex (REQ-AGT-118):
+// - >= 1 token per CJK, Hangul or kana character
+// - 1 token per digit
+// - len/3 for base64-like and long unbroken runs
+const BPE_REGEX = /[A-Za-z0-9+/=_-]{16,}|'s|'t|'re|'ve|'m|'ll|'d| ?[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}]| ?\p{L}+| ?\p{N}| ?[^\s\p{L}\p{N}]+|\s+(?!\S)|\s+/gu;
 
 /**
- * Fast, accurate BPE token counter estimation for local and remote LLMs
+ * Fast, conservative BPE token counter estimation for local and remote LLMs
  */
 export function countTokens(text: string | null | undefined): number {
   if (!text) return 0;
   const matches = text.match(BPE_REGEX);
   if (!matches) {
-    return Math.ceil(text.length / 4);
+    return Math.ceil(text.length / 3);
   }
   let count = 0;
   for (const m of matches) {
+    if (ALL_DIGITS_RE.test(m)) {
+      count += m.trim().length;
+      continue;
+    }
+    const trimmed = m.trimStart();
+    if (trimmed.length > 0 && !/\s/.test(trimmed) && !CJK_KANA_HANGUL_RE.test(trimmed)) {
+      const codePoints = Array.from(trimmed);
+      if (codePoints.some((cp) => (cp.codePointAt(0) ?? 0) > 0xffff)) {
+        count += codePoints.length;
+        continue;
+      }
+    }
     if (m.length > 8) {
-      // Long unbroken strings/hashes/base64 split into multiple subwords
-      count += Math.ceil(m.length / 4);
+      // Long unbroken strings/hashes/base64 split into ~3 chars per token (REQ-AGT-118)
+      count += Math.ceil(m.length / 3);
     } else {
       count += 1;
     }
