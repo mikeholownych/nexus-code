@@ -34,8 +34,11 @@ export function toolHeadroomPolicy(context: number, configured?: number): number
 }
 
 export interface Advertisement {
-  /** Who advertised: the homelab-ai gateway contract, a vLLM-style catalog, or an OpenAI-style catalog with no limits. */
-  via: "aihost_gateway" | "vllm" | "catalog";
+  /**
+   * Who advertised: the homelab-ai gateway contract, a vLLM-style catalog, a server's own endpoint for its loaded
+   * context (llama.cpp `/props`, LM Studio `/api/v0/models`, Ollama `/api/show`), or an OpenAI-style catalog with no limits.
+   */
+  via: "aihost_gateway" | "vllm" | "llamacpp" | "lmstudio" | "ollama" | "catalog";
   /** null: the provider says the capacity is currently unknown (e.g. no serving worker observed). */
   contextLength?: number | null;
   maxCompletionTokens?: number;
@@ -82,6 +85,29 @@ export function parseAdvertisement(entry: Record<string, any> | undefined): Adve
     ...(workers?.length ? { workers } : {}),
     tokenize: gateway,
   };
+}
+
+/**
+ * The context a local server says it has loaded, from its own endpoint (REQ-PRV-101): llama.cpp `GET /props`
+ * (default_generation_settings.n_ctx: the runtime window, not the model's training size), LM Studio `GET /api/v0/models`
+ * (loaded_context_length, else max_context_length), Ollama `POST /api/show` (the num_ctx parameter, else the model's
+ * <arch>.context_length). Returns undefined for any other shape.
+ */
+export function parseServerContext(kind: "llamacpp" | "lmstudio" | "ollama", body: unknown, model: string): Advertisement | undefined {
+  if (!body || typeof body !== "object") return undefined;
+  const b = body as Record<string, any>;
+  let contextLength: number | undefined;
+  if (kind === "llamacpp") {
+    contextLength = positiveInt(b.default_generation_settings?.n_ctx) ?? positiveInt(b.n_ctx);
+  } else if (kind === "lmstudio") {
+    const entry = Array.isArray(b.data) ? b.data.find((e: any) => e?.id === model) : undefined;
+    contextLength = positiveInt(entry?.loaded_context_length) ?? positiveInt(entry?.max_context_length);
+  } else {
+    const fromParameters = typeof b.parameters === "string" ? /(?:^|\n)\s*num_ctx\s+(\d+)/.exec(b.parameters)?.[1] : undefined;
+    const info = b.model_info && typeof b.model_info === "object" ? Object.entries(b.model_info).find(([k]) => k.endsWith(".context_length"))?.[1] : undefined;
+    contextLength = positiveInt(fromParameters ? Number(fromParameters) : undefined) ?? positiveInt(info);
+  }
+  return contextLength ? { via: kind, contextLength, tokenize: false } : undefined;
 }
 
 /**

@@ -2,7 +2,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
 import { randomUUID } from "node:crypto";
-import { parseAdmissionHeaders, parseAdvertisement, parseTokenizeResponse, type AdmissionReport, type Advertisement, type RequestCount } from "./core/provider_capabilities.js";
+import { parseAdmissionHeaders, parseAdvertisement, parseServerContext, parseTokenizeResponse, type AdmissionReport, type Advertisement, type RequestCount } from "./core/provider_capabilities.js";
 import { ChatMessage, ToolDefinition, HarnessConfig, ToolCall } from "./types.js";
 import { InformationFlowBoundary, DestinationTrustBoundary } from "./core/egress.js";
 import pc from "picocolors";
@@ -967,6 +967,10 @@ export class LocalLlmClient {
       if (!entry) return { state: "unsupported", detail: `model ${this.model} not listed` };
       const advertised = parseAdvertisement(entry);
       if (!advertised || (advertised.contextLength === undefined && advertised.maxCompletionTokens === undefined)) {
+        // An OpenAI-style catalog without limits (llama.cpp, LM Studio, Ollama): ask the server itself what it loaded.
+        // Only for a plain endpoint: cloud provider connections have no such endpoints.
+        const local = this.conn.providerId ? undefined : await this.discoverServerContext(signal);
+        if (local) return { state: "supported", advertised: local };
         return { state: "unsupported", advertised, detail: "catalog lists no limits" };
       }
       return { state: "supported", advertised };
@@ -974,6 +978,36 @@ export class LocalLlmClient {
       if (signal?.aborted) throw abortedError(randomUUID());
       return { state: "unavailable", detail: redactSecrets(String(err?.message ?? err)).slice(0, 160) };
     }
+  }
+
+  /**
+   * The loaded context of a local server that lists no limits in its catalog: llama.cpp `/props`, LM Studio
+   * `/api/v0/models`, Ollama `/api/show`, tried in that order on the endpoint's own origin with the same credential and
+   * a 2 s limit each. Not content-bearing. Undefined when none answers with a context size.
+   */
+  private async discoverServerContext(signal?: AbortSignal): Promise<Advertisement | undefined> {
+    const root = this.endpoint.replace(/\/v1\/?$/, "");
+    const probes: Array<{ kind: "llamacpp" | "lmstudio" | "ollama"; url: string; init?: RequestInit }> = [
+      { kind: "llamacpp", url: `${root}/props` },
+      { kind: "lmstudio", url: `${root}/api/v0/models` },
+      { kind: "ollama", url: `${root}/api/show`, init: { method: "POST", body: JSON.stringify({ model: this.model }), headers: { "content-type": "application/json" } } },
+    ];
+    for (const probe of probes) {
+      try {
+        const res = await fetch(probe.url, {
+          ...probe.init,
+          headers: { ...(probe.init?.headers as Record<string, string> | undefined), ...this.authorization(probe.url), "X-Nexus-Purpose": "capabilities" },
+          signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(2_000)]) : AbortSignal.timeout(2_000),
+          ...this.fetchPolicy(),
+        });
+        if (!res.ok) continue;
+        const found = parseServerContext(probe.kind, await res.json(), this.model);
+        if (found) return found;
+      } catch {
+        if (signal?.aborted) throw abortedError(randomUUID());
+      }
+    }
+    return undefined;
   }
 
   /**
