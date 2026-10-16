@@ -532,6 +532,87 @@ describe("V2: unverified changes survive retries, step limits, restarts and resu
     });
   });
 
+  test("ACC-CONT-05: subagent token accounting and no durable task files (REQ-AGT-104, REQ-AGT-105)", async () => {
+    await withHome(async (home) => {
+      const gw = await gateway((b) => {
+        const sub = JSON.stringify(b.messages).includes("[Subagent Objective]");
+        if (sub) {
+          return toolResults(b) === 0
+            ? { tools: [{ name: "read_file", args: { path: "notes.txt" } }] }
+            : { text: "Subagent report: notes says orig" };
+        }
+        return toolResults(b) === 0
+          ? { tools: [{ name: "spawn_subagent", args: { prompt: "read notes.txt" } }] }
+          : { text: "Parent done." };
+      });
+      const repo = makeRepo();
+      const config = cfg(gw, repo);
+      const tasksDir = path.join(home, ".nexus", "tasks");
+      try {
+        const agent = quiet(new AutonomousAgent(config));
+        const r = await muted(() => agent.runTurn("Use a subagent to read notes.txt"));
+
+        // Assert REQ-AGT-105: exactly 1 task file on disk (for the parent agent), none for the in-turn subagent
+        const taskFiles = fs.existsSync(tasksDir) ? fs.readdirSync(tasksDir).filter((f) => f.endsWith(".json")) : [];
+        assert.equal(taskFiles.length, 1, `only parent task file should exist in ${tasksDir}, found: ${taskFiles.join(", ")}`);
+        assert.equal(taskFiles[0], `${agent.getTaskId()}.json`);
+
+        // Assert REQ-AGT-104: parent tokenStats includes subagent requests and tokens
+        const subReqs = gw.requests.filter((b) => JSON.stringify(b.messages).includes("[Subagent Objective]")).length;
+        assert.ok(subReqs >= 2, `expected at least 2 subagent requests, got ${subReqs}`);
+        const stats = agent.getTokenStats();
+        assert.ok(stats.requests >= gw.requests.length, `stats.requests (${stats.requests}) should account for all gateway requests (${gw.requests.length})`);
+        assert.ok(stats.prompt > 0, "stats.prompt should be > 0");
+        assert.ok(stats.completion > 0, "stats.completion should be > 0");
+        assert.equal(stats.total, stats.prompt + stats.completion);
+
+        agent.shutdown();
+      } finally {
+        await gw.close();
+        fs.rmSync(repo, { recursive: true, force: true });
+      }
+    });
+  });
+
+  test("AGT-06: subagent obligation write increments turnMutations once and persists immediately", async () => {
+    await withHome(async (home) => {
+      const gw = await gateway((b) => {
+        const sub = JSON.stringify(b.messages).includes("[Subagent Objective]");
+        if (sub) {
+          return toolResults(b) === 0
+            ? { tools: [{ name: "write_file", args: { path: "sub_file.txt", content: "hello" } }] }
+            : { text: "Subagent report: created sub_file.txt" };
+        }
+        return toolResults(b) === 0
+          ? { tools: [{ name: "spawn_subagent", args: { prompt: "create sub_file.txt" } }] }
+          : { text: "Parent finished without verification." };
+      });
+      const repo = makeRepo();
+      const config = cfg(gw, repo);
+      try {
+        const agent = quiet(new AutonomousAgent(config));
+        const r = await muted(() => agent.runTurn("Spawn subagent to create sub_file.txt"));
+
+        // Mutating subagent leaves parent turn UNVERIFIED
+        assert.equal(r.unverifiedChangesPending, true);
+        assert.equal(r.outcome, "UNVERIFIED");
+
+        // Assert turnMutations is counted once (child wrote 1 file, so parent turnMutations === 1)
+        assert.equal(agent.turnMutations, 1, `expected 1 turnMutation, got ${agent.turnMutations}`);
+
+        // Assert durable task state on disk recorded unverifiedChangesPending === true
+        const manager = new DurableStateManager({ workspacePaths: [WorkspacePath.fromSelectedWorkspace(repo)] });
+        const saved = manager.loadTaskState(agent.getTaskId());
+        assert.equal(saved.unverifiedChangesPending, true);
+
+        agent.shutdown();
+      } finally {
+        await gw.close();
+        fs.rmSync(repo, { recursive: true, force: true });
+      }
+    });
+  });
+
   test("interactive /resume (sidecar): a resumed session keeps its outstanding verification obligation", async () => {
     await withHome(async () => {
       const gw = await gateway((b) => (lastUser(b).startsWith("Write impl.txt") ? (toolResults(b) === 0 ? write() : { text: "I wrote impl.txt." }) : done("nothing left")));
