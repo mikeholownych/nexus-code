@@ -189,10 +189,10 @@ Every row has status **open** at `db1ca55` unless stated otherwise. In the "Evid
 | REQ-REL-104 | Audit; DEC-14 | An unknown subcommand is an error. Free text needs `run`. | safety (accidental agent run) | `harness.sh:39-42` | TEST (ACC-PKG-04; test:cli/test/harness_entry.test.ts) | tested | ACC-PKG-04 | RR | REL-03 | SPEC-06 / PLAN-06 |
 | REQ-REL-105 | Audit | Installer: strict tag check, clear no-stable message, repair on reinstall, quiet output. | onboarding | `install.sh` | RT (REL-08, REL-10, REL-11, REL-12) | open | ACC-PKG-05 | RR | REL-08, REL-10, REL-11, REL-12 | SPEC-06 / PLAN-06 |
 | REQ-REL-106 | Audit | `nexus self uninstall`/`prune`. | convenience | — | — | open | — | P (docs RR, already met) | REL-10 | SPEC-06 |
-| REQ-DX-101 | Audit | Doctor stderr is clean, and its remedies match the install type. | supportability | `doctor.ts` | RT (DX-01, DX-02) | open | ACC-PKG-06, ACC-PKG-07 | RR | DX-01, DX-02 | SPEC-06 / PLAN-06 |
-| REQ-DX-102 | quickstart chmod advice | Doctor checks `config.env` permissions and offers a repair. | safety | `doctor.ts` | RT (DX-04) | open | ACC-PKG-08 | RR | DX-04 | SPEC-06 / PLAN-06 |
-| REQ-DX-103 | Audit | Doctor never redacts paths wholesale. | supportability | `doctor.ts:103-110` | RT (DX-03) | open | ACC-PKG-09 | RR | DX-03 | SPEC-06 / PLAN-06 |
-| REQ-DX-104 | Audit | `tui.launch` checks real launchability. | honesty | `doctor.ts:517-529` | RT (DX-05) | open | ACC-PKG-01 | RR | DX-05 | SPEC-06 / PLAN-06 |
+| REQ-DX-101 | Audit | Doctor stderr is clean, and its remedies match the install type. | supportability | `doctor.ts` | TEST (ACC-PKG-06, ACC-PKG-07; test:cli/test/doctor.test.ts) | tested | ACC-PKG-06, ACC-PKG-07 | RR | DX-01, DX-02 | SPEC-06 / PLAN-06 |
+| REQ-DX-102 | quickstart chmod advice | Doctor checks `config.env` permissions and offers a repair. | safety | `doctor.ts` | TEST (ACC-PKG-08; test:cli/test/doctor.test.ts) | tested | ACC-PKG-08 | RR | DX-04 | SPEC-06 / PLAN-06 |
+| REQ-DX-103 | Audit | Doctor never redacts paths wholesale. | supportability | `doctor.ts:103-110` | TEST (ACC-PKG-09; test:cli/test/doctor.test.ts) | tested | ACC-PKG-09 | RR | DX-03 | SPEC-06 / PLAN-06 |
+| REQ-DX-104 | Audit | `tui.launch` checks real launchability. | honesty | `doctor.ts:517-529` | TEST (ACC-PKG-01; test:cli/test/doctor.test.ts) | tested | ACC-PKG-01 | RR | DX-05 | SPEC-06 / PLAN-06 |
 | REQ-REL-107 | License obligations | Third-party notices for all redistributed dependencies. | legal / compliance | `package-linux.sh` | RT (REL-05) | open | ACC-SUP-01 | **B** | REL-05 | SPEC-07 / PLAN-07 |
 | REQ-REL-108 | REL-003 (carried) | Lockfile-derived, validated SBOM. | supply chain | `generate_sbom.sh` | SRC (REL-06) | open | ACC-SUP-02 | RR | REL-06, HIST-07 | SPEC-07 / PLAN-07 |
 | REQ-REL-109 | TOP_TIER D4 | Provenance attestation; tag-pinned installer asset. | supply chain | `release.yml` | SRC (REL-09) | open | ACC-SUP-03 | RR | REL-09 | SPEC-07 / PLAN-07 |
