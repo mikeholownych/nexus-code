@@ -209,9 +209,9 @@ Every row has status **open** at `db1ca55` unless stated otherwise. In the "Evid
 | REQ-PER-101 | PERS-002 (carried) | `~/.nexus` is 0700 and files are 0600. Doctor repairs both. | privacy on multi-user hosts | `checkpoint.ts`, `flight.ts`, `session.ts`, etc. | MEAS (PER-01) | tested | ACC-PER-01 | RR | PER-01 | SPEC-08 / PLAN-08 |
 | REQ-PER-102 | Audit; DEC-11 | Retention and GC; audit log rotation; indexed session listing. | resource / failure | new `retention.ts` | MEAS (PER-02: 916 MB) | tested | ACC-PER-02, ACC-PER-06 | RR | PER-02 | SPEC-08 / PLAN-08 |
 | REQ-PER-103 | Audit | The test suite never writes to the real HOME. | hygiene; prerequisite | `state.ts:278-288`; test setup | MEAS (PER-03: 52,660 records) | open | ACC-PER-03 | RR (M0 prerequisite) | PER-03 | SPEC-08 / PLAN-08 |
-| REQ-PER-104 | TOP_TIER P2–P6 | Corrupt and future-schema state is reported and quarantined. Resume ids are unambiguous. | failure | `session.ts:113-239` | SRC (PER-05) | open | ACC-PER-04 | RR | PER-05 | SPEC-08 / PLAN-08 |
+| REQ-PER-104 | TOP_TIER P2–P6 | Corrupt and future-schema state is reported and quarantined. Resume ids are unambiguous. | failure | `session.ts:113-239` | TEST (ACC-PER-04; test:cli/test/state_migration.test.ts, cli/test/state.test.ts) | tested | ACC-PER-04 | RR | PER-05 | SPEC-08 / PLAN-08 |
 | REQ-PER-105 | Audit | Telemetry is never committable by default. | privacy | `flight.ts:55-59` | SRC (PER-06) | open | ACC-PER-05 | RR | PER-06 | SPEC-08 / PLAN-08 |
-| REQ-PER-106 | MATURITY_REVIEW (migration policy) | Documented schema and migration policy with tests. | compatibility | docs, `state.ts` | SRC | partial (fail-closed exists) | ACC-PER-07 | RR | — | SPEC-08 / PLAN-08 |
+| REQ-PER-106 | MATURITY_REVIEW (migration policy) | Documented schema and migration policy with tests. | compatibility | docs, `state.ts` | TEST (ACC-PER-07; test:cli/test/state_migration.test.ts, docs/STATE_COMPATIBILITY.md) | tested | ACC-PER-07 | RR | — | SPEC-08 / PLAN-08 |
 | REQ-PER-107 | Audit | Rust atomic write fsyncs the parent directory. | durability | `file_ops.rs:156-182` | SRC (PER-04) | open | — | P | PER-04 | SPEC-08 / PLAN-08 |
 
 ### 3.6 Governance and documentation
