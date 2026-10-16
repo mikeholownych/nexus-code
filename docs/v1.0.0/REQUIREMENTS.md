@@ -206,7 +206,7 @@ Every row has status **open** at `db1ca55` unless stated otherwise. In the "Evid
 
 | ID | Source | Requirement | Rationale | Location | Evidence | Status | Acceptance | Class | Finding | Spec / Plan |
 |---|---|---|---|---|---|---|---|---|---|---|
-| REQ-PER-101 | PERS-002 (carried) | `~/.nexus` is 0700 and files are 0600. Doctor repairs both. | privacy on multi-user hosts | `checkpoint.ts`, `flight.ts`, `session.ts`, etc. | MEAS (PER-01) | partial | ACC-PER-01 | RR | PER-01 | SPEC-08 / PLAN-08 |
+| REQ-PER-101 | PERS-002 (carried) | `~/.nexus` is 0700 and files are 0600. Doctor repairs both. | privacy on multi-user hosts | `checkpoint.ts`, `flight.ts`, `session.ts`, etc. | MEAS (PER-01) | tested | ACC-PER-01 | RR | PER-01 | SPEC-08 / PLAN-08 |
 | REQ-PER-102 | Audit; DEC-11 | Retention and GC; audit log rotation; indexed session listing. | resource / failure | new `retention.ts` | MEAS (PER-02: 916 MB) | open | ACC-PER-02, ACC-PER-06 | RR | PER-02 | SPEC-08 / PLAN-08 |
 | REQ-PER-103 | Audit | The test suite never writes to the real HOME. | hygiene; prerequisite | `state.ts:278-288`; test setup | MEAS (PER-03: 52,660 records) | open | ACC-PER-03 | RR (M0 prerequisite) | PER-03 | SPEC-08 / PLAN-08 |
 | REQ-PER-104 | TOP_TIER P2–P6 | Corrupt and future-schema state is reported and quarantined. Resume ids are unambiguous. | failure | `session.ts:113-239` | SRC (PER-05) | open | ACC-PER-04 | RR | PER-05 | SPEC-08 / PLAN-08 |
@@ -270,7 +270,7 @@ Counts are from the tables above.
 
 | Group | Rows | Breakdown |
 |---|---|---|
-| New v1 rows (§3) | 92 | **31 B**, 58 RR, 3 P. 80 open, 10 partial (REQ-SEC-118, REQ-PRV-101, REQ-PRV-103, REQ-PRV-105, REQ-PRV-111, REQ-PER-101, REQ-PER-106, REQ-OPS-101, REQ-QUAL-108, REQ-QUAL-110), 1 implemented (REQ-OPS-103), 2 tested (REQ-SEC-103, REQ-SEC-119). |
+| New v1 rows (§3) | 92 | **31 B**, 58 RR, 3 P. 80 open, 9 partial (REQ-SEC-118, REQ-PRV-101, REQ-PRV-103, REQ-PRV-105, REQ-PRV-111, REQ-PER-106, REQ-OPS-101, REQ-QUAL-108, REQ-QUAL-110), 1 implemented (REQ-OPS-103), 3 tested (REQ-SEC-103, REQ-SEC-119, REQ-PER-101). |
 | Carried rows (§2.1) | 29 | 14 tested and unchanged (Keep). 1 visually-accepted (REQ-TUI-001). The rest are partial, or have open items mapped to §3. |
 | Contest rows (§4) | 7 | Separate product. |
 
