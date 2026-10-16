@@ -7,6 +7,8 @@ import {
   ValidationReceipt,
   CandidateIdentity,
 } from "./core/candidate.js";
+import { ensureGitExclude } from "./core/git_exclude.js";
+export { ensureGitExclude };
 
 export interface WorktreeInfo {
   taskId: string;
@@ -74,20 +76,7 @@ export class WorktreeManager {
 
   private ensureGitExclude(): void {
     if (!this.isGitRepo()) return;
-    try {
-      const gitDir = path.join(this.gitRoot, ".git");
-      if (fs.existsSync(gitDir) && fs.statSync(gitDir).isDirectory()) {
-        const excludePath = path.join(gitDir, "info", "exclude");
-        if (fs.existsSync(excludePath)) {
-          const content = fs.readFileSync(excludePath, "utf-8");
-          if (!content.includes(".nexus/worktrees")) {
-            fs.appendFileSync(excludePath, "\n.nexus/worktrees/\n.nexus/flights/\n");
-          }
-        }
-      }
-    } catch {
-      // Ignore git exclude configuration errors
-    }
+    ensureGitExclude(this.workspace);
   }
 
   public getWorktreesBaseDir(): string {

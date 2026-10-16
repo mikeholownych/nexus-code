@@ -185,7 +185,14 @@ pub fn write_file_atomically(target: &Path, content: &[u8], base_canon: &Path) -
         if let Some(meta) = &existing {
             fs::set_permissions(&temp_path, meta.permissions()).map_err(|e| format!("Failed to set permissions: {e}"))?;
         }
-        fs::rename(&temp_path, &effective_target).map_err(|e| format!("Security Violation: Failed to commit write: {e}"))
+        fs::rename(&temp_path, &effective_target).map_err(|e| format!("Security Violation: Failed to commit write: {e}"))?;
+        // Fsync parent directory after rename (REQ-PER-107, Task 10)
+        if let Some(parent) = effective_target.parent() {
+            if let Ok(dir) = std::fs::File::open(parent) {
+                let _ = dir.sync_all();
+            }
+        }
+        Ok(())
     })();
     if written.is_err() {
         let _ = fs::remove_file(&temp_path);
