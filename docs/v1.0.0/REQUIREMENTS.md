@@ -147,8 +147,8 @@ Every row has status **open** at `db1ca55` unless stated otherwise. In the "Evid
 
 | ID | Source | Requirement | Rationale | Location | Evidence | Status | Acceptance | Class | Finding | Spec / Plan |
 |---|---|---|---|---|---|---|---|---|---|---|
-| REQ-AGT-114 | quickstart promise | Deliverable binding uses path tokens, not basename substrings. | outcome honesty (false VERIFIED) | `tester.ts:356-360` | RT (VER-04) | open | ACC-VER-03 | **B** | VER-04 | SPEC-11 / PLAN-11 |
-| REQ-AGT-115 | Audit | A zero-executed-tests pass is UNVERIFIED (NO_TESTS_EXECUTED) and keeps the obligation. | honesty | `tester.ts:263-282`; `agent.ts:3520` | RT (VER-05) | open | ACC-VER-04 | RR | VER-05 | SPEC-11 / PLAN-11 |
+| REQ-AGT-114 | quickstart promise | Deliverable binding uses path tokens, not basename substrings. | outcome honesty (false VERIFIED) | `tester.ts:488-570` | TEST (ACC-VER-03; test:cli/test/verification_binding.test.ts, test:cli/test/repro_false_verified.test.ts) | tested | ACC-VER-03 | **B** | VER-04 | SPEC-11 / PLAN-11 |
+| REQ-AGT-115 | Audit | A zero-executed-tests pass is UNVERIFIED (NO_TESTS_EXECUTED) and keeps the obligation. | honesty | `tester.ts:356-430`; `agent.ts:3516-3675,5360-5410` | TEST (ACC-VER-04; test:cli/test/verification_binding.test.ts) | tested | ACC-VER-04 | RR | VER-05 | SPEC-11 / PLAN-11 |
 | REQ-AGT-116 | Audit | One verifier selector. `run_tests` uses the verifier deadline. | consistency | `tester.ts:21-138`; `tools.ts:589` | RT (VER-06) | open | ACC-VER-05 | RR | VER-06 | SPEC-11 / PLAN-11 |
 | REQ-AGT-118 | Audit | Conservative token estimation; `/tokenize` used when available. | failure (context overflow) | `tokens.ts` | MEAS + INF (VER-09) | open | ACC-VER-07 | RR | VER-09 | SPEC-11 / PLAN-11 |
 | REQ-AGT-119 | DEC-07 | Experimental surfaces are labelled. `nexus eval` never mutates the operator checkout. Reviewer and researcher roles are read-only. | honesty / safety | `index.ts`, `evaluator.ts:128`, `roles.ts` | SRC (VER-07/08/13) | open | ACC-VER-08 | RR | VER-07, VER-08, VER-13 | SPEC-11 / PLAN-11 |

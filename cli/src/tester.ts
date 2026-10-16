@@ -355,26 +355,83 @@ export function isFilteredVerifierCommand(command: string): boolean {
 
 /**
  * Whether a test run's output shows that at least one test executed. Runners that report counts are read (node:test,
- * cargo, pytest, unittest, jest/vitest, go); output with no recognisable report — including no output — is not evidence.
+ * cargo, pytest, unittest, jest/vitest, mocha, go); output with no recognisable report — including no output — is not evidence.
+ * Skipped tests are subtracted; a run where all tests were skipped returns false.
  */
 export function hasExecutedTests(rawOutput: string): boolean {
   if (!rawOutput) return false;
-  const count = (re: RegExp) => [...rawOutput.matchAll(re)].reduce((sum, m) => sum + Number(m[1]), 0);
-  const node = [...rawOutput.matchAll(/ℹ\s+tests\s+(\d+)/g)];
-  if (node.length) return count(/ℹ\s+tests\s+(\d+)/g) > 0;
+
+  // 1. node:test
+  const nodeTests = [...rawOutput.matchAll(/ℹ\s+tests\s+(\d+)/g)];
+  if (nodeTests.length) {
+    const totalTests = nodeTests.reduce((sum, m) => sum + Number(m[1]), 0);
+    const pass = [...rawOutput.matchAll(/ℹ\s+pass\s+(\d+)/g)].reduce((sum, m) => sum + Number(m[1]), 0);
+    const fail = [...rawOutput.matchAll(/ℹ\s+fail\s+(\d+)/g)].reduce((sum, m) => sum + Number(m[1]), 0);
+    const hasPassOrFail = /ℹ\s+(?:pass|fail)\s+\d+/.test(rawOutput);
+    if (hasPassOrFail) return pass + fail > 0;
+    const skipped = [...rawOutput.matchAll(/ℹ\s+skipped\s+(\d+)/g)].reduce((sum, m) => sum + Number(m[1]), 0);
+    const todo = [...rawOutput.matchAll(/ℹ\s+todo\s+(\d+)/g)].reduce((sum, m) => sum + Number(m[1]), 0);
+    return totalTests - skipped - todo > 0;
+  }
+
+  // 2. Cargo (Rust)
   const cargo = [...rawOutput.matchAll(/test result: \w+\. (\d+) passed; (\d+) failed/g)];
   if (cargo.length) return cargo.some((m) => Number(m[1]) + Number(m[2]) > 0);
-  const jest = rawOutput.match(/Tests:\s+(?:.*?(\d+) passed)?.*?(\d+) total/);
-  if (jest) return Number(jest[2]) > 0;
-  const pytest = rawOutput.match(/=+ .*?(\d+) passed/);
-  if (pytest) return Number(pytest[1]) > 0;
-  // unittest: "Ran 3 tests in 0.001s" (it also prints "Ran 0 tests" when discovery finds nothing)
-  const unittest = [...rawOutput.matchAll(/^Ran (\d+) tests? in /gm)];
-  if (unittest.length) return unittest.some((m) => Number(m[1]) > 0);
+
+  // 3. Jest
+  const jest = rawOutput.match(/Tests:\s+(?:(\d+)\s+failed,?\s*)?(?:(\d+)\s+passed,?\s*)?(?:(\d+)\s+skipped,?\s*)?(\d+)\s+total/);
+  if (jest) {
+    const failed = Number(jest[1] || 0);
+    const passed = Number(jest[2] || 0);
+    return passed + failed > 0;
+  }
+
+  // 4. Vitest
+  const vitestPassed = rawOutput.match(/\bTests\s+.*?(\d+)\s+passed/);
+  const vitestFailed = rawOutput.match(/\bTests\s+.*?(\d+)\s+failed/);
+  if (vitestPassed || vitestFailed) {
+    const passed = Number(vitestPassed ? vitestPassed[1] : 0);
+    const failed = Number(vitestFailed ? vitestFailed[1] : 0);
+    return passed + failed > 0;
+  }
+  if (/\bTests\s+\d+\s+skipped\b/.test(rawOutput) && !/\bTests\s+\d+\s+passed\b/.test(rawOutput)) {
+    return false;
+  }
+
+  // 5. Pytest
   if (/collected 0 items|no tests ran/i.test(rawOutput)) return false;
-  // go test: an `ok <package>` line that ran tests (not `[no tests to run]`), or verbose `--- PASS` lines.
-  if ([...rawOutput.matchAll(/^ok\s+\S+.*$/gm)].some((m) => !m[0].includes("[no tests to run]"))) return true;
-  if (/^--- PASS: /m.test(rawOutput)) return true;
+  const pytestPassed = rawOutput.match(/=+\s+.*?(\d+)\s+passed/);
+  const pytestFailed = rawOutput.match(/=+\s+.*?(\d+)\s+failed/);
+  if (pytestPassed || pytestFailed) {
+    const passed = Number(pytestPassed ? pytestPassed[1] : 0);
+    const failed = Number(pytestFailed ? pytestFailed[1] : 0);
+    return passed + failed > 0;
+  }
+  if (/=+\s+\d+\s+skipped.*?=+/i.test(rawOutput)) return false;
+
+  // 6. Python unittest: "Ran 3 tests in 0.001s" (it also prints "Ran 0 tests" when discovery finds nothing)
+  const unittest = [...rawOutput.matchAll(/^Ran (\d+) tests? in /gm)];
+  if (unittest.length) {
+    const totalRan = unittest.reduce((sum, m) => sum + Number(m[1]), 0);
+    const skippedMatch = rawOutput.match(/OK\s*\((?:.*?,\s*)?skipped=(\d+)\)/);
+    const skipped = skippedMatch ? Number(skippedMatch[1]) : 0;
+    return totalRan - skipped > 0;
+  }
+
+  // 7. Mocha
+  const mochaPass = rawOutput.match(/^\s*(\d+)\s+passing\b/m);
+  const mochaFail = rawOutput.match(/^\s*(\d+)\s+failing\b/m);
+  if (mochaPass || mochaFail) {
+    const passed = Number(mochaPass ? mochaPass[1] : 0);
+    const failed = Number(mochaFail ? mochaFail[1] : 0);
+    return passed + failed > 0;
+  }
+
+  // 8. Go test: anchored regex ^ok\s+\S+\s+(\d+\.\d+s|\(cached\))
+  const goOkLines = [...rawOutput.matchAll(/^ok\s+\S+\s+(\d+\.\d+s|\(cached\))/gm)];
+  if (goOkLines.some((m) => !m.input.slice(m.index).split("\n")[0].includes("[no tests to run]"))) return true;
+  if (/^--- (?:PASS|FAIL): /m.test(rawOutput)) return true;
+
   return false;
 }
 
@@ -431,10 +488,50 @@ function importsName(content: string, name: string): boolean {
 }
 
 /**
+ * Extract workspace-relative path tokens from command and output.
+ * Tokens are split on whitespace, quotes, parentheses, brackets, and commas.
+ * Line/column suffixes (e.g., `:12:3`) are stripped.
+ * Only tokens containing a path separator ('/' or '\\') are treated as paths,
+ * preventing coincidental matches on bare basenames like "README.md".
+ */
+export function extractPathTokens(workspace: string, text: string): Set<string> {
+  const root = path.resolve(workspace);
+  const tokens = new Set<string>();
+  if (!text) return tokens;
+
+  const parts = text.split(/[\s'"()`,]+/);
+  for (let part of parts) {
+    if (!part) continue;
+    part = part.replace(/[.,;:]+$/, "");
+    part = part.replace(/:\d+(?::\d+)?$/, "");
+    if (!part) continue;
+
+    const norm = part.replace(/\\/g, "/");
+    if (!norm.includes("/")) continue;
+
+    const cleaned = norm.replace(/^\.\//, "");
+    tokens.add(cleaned);
+
+    if (path.isAbsolute(part)) {
+      try {
+        const resolved = path.resolve(part);
+        if (resolved.startsWith(root)) {
+          const rel = path.relative(root, resolved).replace(/\\/g, "/");
+          if (rel && rel.includes("/")) {
+            tokens.add(rel);
+          }
+        }
+      } catch {}
+    }
+  }
+  return tokens;
+}
+
+/**
  * Whether a passing verifier run is evidence about the changed files (VERIFIED) rather than only a regression check
  * (REGRESSION_FREE). It must show that tests executed, and then one of:
- * - a changed file is a test file (the change brings its own test);
- * - the command or the run's output names a changed file;
+ * - deliverable binding uses boundary-delimited workspace-relative path tokens (basename-only matches do not bind);
+ * - a changed test file binds only when that file's tests were executed;
  * - the change has inline tests the run executes (a Rust file with `#[cfg(test)]` under `cargo test`; a Go package
  *   with `_test.go` files under `go test`);
  * - a workspace test file imports a changed module (by import specifier, not by substring).
@@ -449,13 +546,31 @@ export function isVerifierDeliverableBound(
   if (!hasExecutedTests(testOutput)) return false;
   if (!changedFiles || changedFiles.length === 0) return true;
   const root = path.resolve(workspace);
-  const rel = (file: string) => path.relative(root, path.resolve(root, file));
-  if (changedFiles.some((file) => TEST_PATH.test(rel(file)))) return true;
-  for (const file of changedFiles) {
-    const r = rel(file);
-    const base = path.basename(file);
-    if (verifierCommand.includes(r) || testOutput.includes(r) || (base.includes(".") && (verifierCommand.includes(base) || testOutput.includes(base)))) return true;
+  const rel = (file: string) => path.relative(root, path.resolve(root, file)).replace(/\\/g, "/");
+
+  const tokens = extractPathTokens(root, `${verifierCommand}\n${testOutput}`);
+  const isFiltered = isFilteredVerifierCommand(verifierCommand);
+
+  const changedTestFiles = changedFiles.filter((file) => TEST_PATH.test(rel(file)));
+  const changedNonTestFiles = changedFiles.filter((file) => !TEST_PATH.test(rel(file)));
+
+  const testFileExecuted = (testFileRel: string) => {
+    return tokens.has(testFileRel) || (testFileRel.includes("/") && verifierCommand.includes(testFileRel));
+  };
+
+  // If only test files changed, at least one changed test file must have executed
+  if (changedTestFiles.length > 0 && changedNonTestFiles.length === 0) {
+    return changedTestFiles.some((file) => testFileExecuted(rel(file)));
   }
+
+  // Check if non-test files are directly named by path tokens in command or output
+  for (const file of changedNonTestFiles) {
+    const r = rel(file);
+    if (r.includes("/") && (tokens.has(r) || verifierCommand.includes(r))) {
+      return true;
+    }
+  }
+
   const read = (file: string) => {
     try {
       const stat = fs.statSync(file);
@@ -464,7 +579,9 @@ export function isVerifierDeliverableBound(
       return "";
     }
   };
-  for (const file of changedFiles) {
+
+  // Check inline tests
+  for (const file of changedNonTestFiles) {
     const full = path.resolve(root, file);
     if (/\bcargo\s+test\b/.test(verifierCommand) && full.endsWith(".rs") && /#\[cfg\(test\)\]/.test(read(full))) return true;
     if (/\bgo\s+test\b/.test(verifierCommand) && full.endsWith(".go")) {
@@ -473,10 +590,28 @@ export function isVerifierDeliverableBound(
       } catch {}
     }
   }
+
+  // Check if workspace test files import the changed modules
   const tests = workspaceTestFiles(root);
   for (const test of tests) {
+    const testRel = rel(test);
+    if (isFiltered && !testFileExecuted(testRel)) {
+      continue;
+    }
     const content = read(test);
-    if (content && changedFiles.some((file) => importsModule(content, path.resolve(root, file)))) return true;
+    if (content && changedNonTestFiles.some((file) => importsModule(content, path.resolve(root, file)))) return true;
   }
+
+  // If test files were also changed and executed, check if any of them imports any changed non-test file
+  for (const testFile of changedTestFiles) {
+    const testRel = rel(testFile);
+    if (testFileExecuted(testRel)) {
+      const content = read(path.resolve(root, testFile));
+      if (content && changedNonTestFiles.some((file) => importsModule(content, path.resolve(root, file)))) {
+        return true;
+      }
+    }
+  }
+
   return false;
 }
