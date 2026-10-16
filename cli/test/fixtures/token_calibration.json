@@ -1,76 +1,26 @@
 {
   "tokenizer": {
-    "id": "llama.cpp-b0-live-llama-worker1+cl100k_base",
+    "id": "llama.cpp worker b0-live-llama-worker1 via gateway /v1/tokenize (alias engineering/b0)",
     "limitsVersion": "a3c2fcbc2f2b977c",
     "capturedAt": "2026-10-16T16:48:59Z",
-    "templateOverheadTokens": 10
+    "method": "POST /v1/tokenize with one user message; referenceTokens = prompt_tokens minus templateOverheadTokens (prompt_tokens for an empty message)",
+    "templateOverheadTokens": 10,
+    "note": "All referenceTokens values below were measured on this worker. None are taken from another tokenizer."
   },
   "corpora": [
-    {
-      "name": "english prose (200 words)",
-      "kind": "prose",
-      "repeat": ["The quick brown fox jumps over the lazy dog. ", 22],
-      "referenceTokens": 220
-    },
-    {
-      "name": "CJK one 400-char run",
-      "kind": "cjk",
-      "repeat": ["测", 400],
-      "referenceTokens": 400
-    },
-    {
-      "name": "CJK 16-char classical x 25",
-      "kind": "cjk",
-      "repeat": ["天地玄黄宇宙洪荒日月盈昃辰宿列张", 25],
-      "referenceTokens": 325
-    },
-    {
-      "name": "CJK 7-char runs x 50 (cl100k_base reference)",
-      "kind": "cjk",
-      "repeat": ["这是一个测试句。", 50],
-      "referenceTokens": 350
-    },
-    {
-      "name": "Kana 200 chars",
-      "kind": "kana",
-      "repeat": ["あいうえおかきくけこ", 20],
-      "referenceTokens": 160
-    },
-    {
-      "name": "Hangul 200 chars (cl100k_base reference)",
-      "kind": "hangul",
-      "repeat": ["안녕하세요반갑습니다", 20],
-      "referenceTokens": 200
-    },
-    {
-      "name": "digits 1000",
-      "kind": "digits",
-      "repeat": ["1234567890", 100],
-      "referenceTokens": 1000
-    },
-    {
-      "name": "minified JSON",
-      "kind": "json",
-      "generator": "minified_json_50",
-      "referenceTokens": 732
-    },
-    {
-      "name": "base64 4KB",
-      "kind": "base64",
-      "generator": "base64_3072_7",
-      "referenceTokens": 2049
-    },
-    {
-      "name": "whitespace-indented code",
-      "kind": "code",
-      "repeat": ["    if (x) {\n        return y;\n    }\n", 50],
-      "referenceTokens": 748
-    },
-    {
-      "name": "emoji 100",
-      "kind": "emoji",
-      "repeat": ["😀", 100],
-      "referenceTokens": 100
-    }
+    { "name": "english prose (200 words)", "kind": "prose", "repeat": ["The quick brown fox jumps over the lazy dog. ", 22], "referenceTokens": 220 },
+    { "name": "CJK one 400-char run", "kind": "cjk", "repeat": ["测", 400], "referenceTokens": 400 },
+    { "name": "CJK 16-char classical x 25", "kind": "cjk", "repeat": ["天地玄黄宇宙洪荒日月盈昃辰宿列张", 25], "referenceTokens": 325 },
+    { "name": "CJK 7-char sentences x 50", "kind": "cjk", "repeat": ["这是一个测试句。", 50], "referenceTokens": 200, "conflict": "REQ-AGT-118 requires >= 1 token per CJK char (400 here); this tokenizer merges common words (200). Over-estimate is 2.0x, outside the ACC-VER-07 1.5x band." },
+    { "name": "Kana 200 chars", "kind": "kana", "repeat": ["あいうえおかきくけこ", 20], "referenceTokens": 160 },
+    { "name": "Hangul 200 chars", "kind": "hangul", "repeat": ["안녕하세요반갑습니다", 20], "referenceTokens": 120, "conflict": "REQ-AGT-118 requires >= 1 token per Hangul char (200 here); this tokenizer gives 120. Over-estimate is 1.67x, outside the ACC-VER-07 1.5x band." },
+    { "name": "digits 1000", "kind": "digits", "repeat": ["1234567890", 100], "referenceTokens": 1000 },
+    { "name": "minified JSON", "kind": "json", "generator": "minified_json_50", "referenceTokens": 732 },
+    { "name": "base64 4KB", "kind": "base64", "generator": "base64_3072_7", "referenceTokens": 2049 },
+    { "name": "base64 random 3072B (LCG seed 12345)", "kind": "base64", "generator": "base64_lcg_3072", "referenceTokens": 3062, "capturedAt": "2026-10-16T16:59:23Z" },
+    { "name": "base64 of text", "kind": "base64", "generator": "base64_text_120", "referenceTokens": 3000, "capturedAt": "2026-10-16T16:59:23Z" },
+    { "name": "hex sha256 x20", "kind": "hex", "generator": "hex_sha256_20", "referenceTokens": 1120, "capturedAt": "2026-10-16T16:59:23Z" },
+    { "name": "whitespace-indented code", "kind": "code", "repeat": ["    if (x) {\n        return y;\n    }\n", 50], "referenceTokens": 748 },
+    { "name": "emoji 100", "kind": "emoji", "repeat": ["😀", 100], "referenceTokens": 100 }
   ]
 }
