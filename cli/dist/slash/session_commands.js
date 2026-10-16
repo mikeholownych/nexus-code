@@ -97,9 +97,19 @@ function sizingRows(agent) {
         rows.push(["progress", `${tracking.cumulativeSteps} steps on this objective · ${tracking.stepsWithoutProgress} since last progress · ${tracking.compactions.filter((c) => c.committed).length} compaction(s)`]);
     return rows;
 }
-function status({ host }) {
+async function status({ host }) {
     const config = host.app.getConfig();
     const git = getGitInfo(config.workspace);
+    let servicesStr = "none";
+    try {
+        const services = await host.app.getAgent().getBridge().listServices();
+        if (services && services.length > 0) {
+            servicesStr = services.map((s) => `${s.name} (pgid ${s.pgid})`).join(", ");
+        }
+    }
+    catch {
+        servicesStr = "none";
+    }
     const rows = [
         ["workspace", config.workspace],
         ["git", git.isRepo ? git.formattedBadge : "not a repository"],
@@ -109,6 +119,7 @@ function status({ host }) {
         ["shell", config.shell],
         ["messages", String(host.app.getAgent().getHistoryCount())],
         ["session", host.sessionId()],
+        ["services", servicesStr],
         ...sizingRows(host.app.getAgent()),
     ];
     return reply("status", rows.map(([label, value]) => `${label.padEnd(10)}${value}`).join("\n"));
