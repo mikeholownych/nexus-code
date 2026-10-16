@@ -15,6 +15,32 @@ pub struct RunCommandArgs {
     pub pty: bool,
     #[serde(default)]
     pub argv: Option<Vec<String>>,
+    #[serde(default)]
+    pub background: bool,
+    #[serde(default)]
+    pub service_name: Option<String>,
+}
+
+impl Default for RunCommandArgs {
+    fn default() -> Self {
+        Self {
+            command: String::new(),
+            cwd: None,
+            timeout_secs: default_timeout(),
+            shell: default_shell(),
+            pty: false,
+            argv: None,
+            background: false,
+            service_name: None,
+        }
+    }
+}
+
+pub fn max_tool_timeout_secs() -> u64 {
+    std::env::var("NEXUS_MAX_TOOL_TIMEOUT_SECS")
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+        .unwrap_or(1800)
 }
 
 fn default_timeout() -> u64 {
@@ -102,6 +128,13 @@ mod registry {
     use std::sync::{Arc, Mutex, OnceLock};
     use std::time::{Duration, Instant};
 
+    #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+    pub struct ServiceInfo {
+        pub name: String,
+        pub pgid: libc::pid_t,
+        pub command: String,
+    }
+
     struct Running {
         pgid: libc::pid_t,
         cancelled: Arc<AtomicBool>,
@@ -112,6 +145,8 @@ mod registry {
         running: HashMap<String, Running>,
         /// Groups still alive after their command returned (a `server &` the command started).
         lingering: HashSet<libc::pid_t>,
+        /// Registered long-lived background services that survive turn cancellation.
+        services: HashMap<String, ServiceInfo>,
     }
 
     fn state() -> &'static Mutex<State> {
@@ -151,9 +186,33 @@ mod registry {
         let mut st = state().lock().unwrap();
         if let Some(run) = st.running.remove(key) {
             if alive(run.pgid) {
-                st.lingering.insert(run.pgid);
+                if !st.services.values().any(|s| s.pgid == run.pgid) {
+                    st.lingering.insert(run.pgid);
+                }
             }
         }
+    }
+
+    pub fn register_service(name: &str, pgid: libc::pid_t, command: &str) {
+        let mut st = state().lock().unwrap();
+        if let Some(old) = st.services.remove(name) {
+            if alive(old.pgid) && old.pgid != pgid {
+                end_groups(&[old.pgid], Duration::from_millis(500));
+            }
+        }
+        st.services.insert(name.to_string(), ServiceInfo {
+            name: name.to_string(),
+            pgid,
+            command: command.to_string(),
+        });
+    }
+
+    pub fn list_services() -> Vec<ServiceInfo> {
+        let mut st = state().lock().unwrap();
+        st.services.retain(|_, s| alive(s.pgid));
+        let mut list: Vec<ServiceInfo> = st.services.values().cloned().collect();
+        list.sort_by(|a, b| a.name.cmp(&b.name));
+        list
     }
 
     /// Ends the command started by request `key`. Returns whether such a command was running.
@@ -183,7 +242,7 @@ mod registry {
         pgids.len()
     }
 
-    /// Ends every running command and every lingering background group (engine shutdown).
+    /// Ends every running command, lingering background group, and registered service (engine shutdown).
     pub fn end_all(grace: Duration) -> usize {
         let pgids: Vec<libc::pid_t> = {
             let mut st = state().lock().unwrap();
@@ -192,6 +251,11 @@ mod registry {
             }
             let mut all: Vec<libc::pid_t> = st.running.values().map(|r| r.pgid).collect();
             all.extend(st.lingering.drain());
+            for svc in st.services.drain().map(|(_, s)| s.pgid) {
+                if !all.contains(&svc) {
+                    all.push(svc);
+                }
+            }
             all
         };
         end_groups(&pgids, grace);
@@ -200,7 +264,30 @@ mod registry {
 }
 
 #[cfg(unix)]
-pub use registry::{cancel as cancel_command, end_all as end_all_commands, end_lingering as end_background_commands};
+#[allow(unused_imports)]
+pub use registry::{cancel as cancel_command, end_all as end_all_commands, end_lingering as end_background_commands, list_services, register_service, ServiceInfo};
+
+#[cfg(not(unix))]
+#[allow(unused_imports)]
+pub use registry_stub::{list_services, register_service, ServiceInfo};
+
+#[cfg(not(unix))]
+mod registry_stub {
+    use serde::{Deserialize, Serialize};
+
+    #[derive(Clone, Debug, Serialize, Deserialize)]
+    pub struct ServiceInfo {
+        pub name: String,
+        pub pgid: u32,
+        pub command: String,
+    }
+
+    pub fn list_services() -> Vec<ServiceInfo> {
+        Vec::new()
+    }
+
+    pub fn register_service(_name: &str, _pgid: u32, _command: &str) {}
+}
 
 fn tokenize_and_split_subcommands(cmd: &str) -> Vec<Vec<String>> {
     let tokens = match shell_words::split(cmd) {
@@ -397,6 +484,7 @@ pub fn is_dangerous_command(cmd: &str) -> Option<&'static str> {
     None
 }
 
+#[allow(dead_code)]
 pub fn run_command(args: RunCommandArgs, base_dir: &Path) -> Result<RunCommandResult, String> {
     run_command_tracked(args, base_dir, None)
 }
@@ -436,8 +524,20 @@ pub fn run_command_tracked(args: RunCommandArgs, base_dir: &Path, key: Option<&s
         args.shell.trim().to_string()
     };
 
+    let max_timeout = max_tool_timeout_secs();
+    let (effective_timeout, clamped) = if args.timeout_secs > max_timeout {
+        (max_timeout, true)
+    } else {
+        (args.timeout_secs, false)
+    };
+    let clamp_notice = if clamped {
+        Some(format!("[Notice: timeout_secs clamped from {} to {} (NEXUS_MAX_TOOL_TIMEOUT_SECS)]\n", args.timeout_secs, effective_timeout))
+    } else {
+        None
+    };
+
     if args.pty {
-        return run_command_pty(&args.command, &working_dir, args.timeout_secs, &shell_name, args.argv.as_deref(), key);
+        return run_command_pty(&args.command, &working_dir, effective_timeout, &shell_name, args.argv.as_deref(), key);
     }
 
     let start = Instant::now();
@@ -512,9 +612,85 @@ pub fn run_command_tracked(args: RunCommandArgs, base_dir: &Path, key: Option<&s
     let (stderr_buf, stderr_done) = reader(Box::new(stderr));
 
     #[cfg(unix)]
-    let cancelled = key.map(|k| registry::start(k, child.id() as libc::pid_t));
+    let pgid = child.id() as libc::pid_t;
 
-    let timeout = Duration::from_secs(args.timeout_secs);
+    #[cfg(unix)]
+    if args.background {
+        if let Some(ref sname) = args.service_name {
+            registry::register_service(sname, pgid, &args.command);
+        }
+    }
+
+    #[cfg(unix)]
+    let cancelled = key.map(|k| registry::start(k, pgid));
+
+    if args.background {
+        let startup_grace = Duration::from_millis(150);
+        let poll_step = Duration::from_millis(20);
+        let start_wait = Instant::now();
+        let mut early_exit = None;
+        while start_wait.elapsed() < startup_grace {
+            match child.try_wait() {
+                Ok(Some(status)) => {
+                    early_exit = Some(status);
+                    break;
+                }
+                Ok(None) => std::thread::sleep(poll_step),
+                Err(e) => return Err(format!("Error checking background process: {e}")),
+            }
+        }
+
+        #[cfg(unix)]
+        if let Some(k) = key {
+            registry::finish(k);
+        }
+
+        if let Some(status) = early_exit {
+            let _ = stdout_done.recv_timeout(Duration::from_millis(100));
+            let _ = stderr_done.recv_timeout(Duration::from_millis(100));
+            let mut out = stdout_buf.lock().unwrap().render();
+            let err = stderr_buf.lock().unwrap().render();
+            if let Some(ref notice) = clamp_notice {
+                out = format!("{notice}{out}");
+            }
+            let code = status.code().unwrap_or(0);
+            if code == 0 && args.service_name.is_some() {
+                let sname = args.service_name.as_deref().unwrap();
+                #[cfg(unix)]
+                {
+                    out = format!("Background service '{sname}' registered (pgid {pgid})\n{out}");
+                }
+            }
+            return Ok(RunCommandResult {
+                command: args.command,
+                shell: shell_name,
+                exit_code: Some(code),
+                stdout: out,
+                stderr: err,
+                duration_ms: start.elapsed().as_millis(),
+                timed_out: false,
+                cancelled: false,
+            });
+        }
+
+        let sname = args.service_name.as_deref().unwrap_or("unnamed");
+        let mut out = format!("Background service '{sname}' started (pgid {pgid})\n");
+        if let Some(ref notice) = clamp_notice {
+            out = format!("{notice}{out}");
+        }
+        return Ok(RunCommandResult {
+            command: args.command,
+            shell: shell_name,
+            exit_code: Some(0),
+            stdout: out,
+            stderr: String::new(),
+            duration_ms: start.elapsed().as_millis(),
+            timed_out: false,
+            cancelled: false,
+        });
+    }
+
+    let timeout = Duration::from_secs(effective_timeout);
     let poll_interval = Duration::from_millis(50);
     let mut timed_out = false;
 
@@ -541,7 +717,10 @@ pub fn run_command_tracked(args: RunCommandArgs, base_dir: &Path, key: Option<&s
     let drain_deadline = Instant::now() + drain;
     let _ = stdout_done.recv_timeout(drain_deadline.saturating_duration_since(Instant::now()));
     let _ = stderr_done.recv_timeout(drain_deadline.saturating_duration_since(Instant::now()));
-    let stdout_text = stdout_buf.lock().unwrap().render();
+    let mut stdout_text = stdout_buf.lock().unwrap().render();
+    if let Some(ref notice) = clamp_notice {
+        stdout_text = format!("{notice}{stdout_text}");
+    }
     let stderr_text = stderr_buf.lock().unwrap().render();
     let duration_ms = start.elapsed().as_millis();
 
@@ -674,7 +853,14 @@ pub fn run_command_pty(
         _ => None,
     };
 
-    let timeout = Duration::from_secs(timeout_secs);
+    let max_timeout = max_tool_timeout_secs();
+    let (effective_timeout, clamped) = if timeout_secs > max_timeout {
+        (max_timeout, true)
+    } else {
+        (timeout_secs, false)
+    };
+
+    let timeout = Duration::from_secs(effective_timeout);
     let poll_interval = Duration::from_millis(50);
     let mut timed_out = false;
 
@@ -699,7 +885,10 @@ pub fn run_command_pty(
     };
 
     drop(pair.master);
-    let text = output_handle.join().map(|c| c.render()).unwrap_or_default();
+    let mut text = output_handle.join().map(|c| c.render()).unwrap_or_default();
+    if clamped {
+        text = format!("[Notice: timeout_secs clamped from {} to {} (NEXUS_MAX_TOOL_TIMEOUT_SECS)]\n{}", timeout_secs, effective_timeout, text);
+    }
 
     #[cfg(unix)]
     let was_cancelled = match (key, cancelled) {
@@ -728,13 +917,16 @@ pub fn run_command_pty(
 mod tests {
     use super::*;
 
+    static TEST_MUTEX: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
     #[test]
     #[cfg(unix)]
     fn output_is_kept_when_a_background_process_holds_the_pipe() {
+        let _guard = TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
         let dir = std::env::temp_dir();
         let started = Instant::now();
         let result = run_command(
-            RunCommandArgs { command: "echo before; sleep 3 & echo after".into(), cwd: None, timeout_secs: 30, shell: default_shell(), pty: false, argv: None },
+            RunCommandArgs { command: "echo before; sleep 3 & echo after".into(), cwd: None, timeout_secs: 30, shell: default_shell(), pty: false, argv: None, ..Default::default() },
             &dir,
         )
         .unwrap();
@@ -792,6 +984,7 @@ mod tests {
             shell: default_shell(),
             pty: true,
             argv: None,
+            ..Default::default()
         }, &cwd).unwrap();
 
         assert_eq!(res.exit_code, Some(0));
@@ -808,6 +1001,7 @@ mod tests {
             shell: default_shell(),
             pty: false,
             argv: Some(vec!["echo".into(), "direct argv output /tmp/a b/'q".into()]),
+            ..Default::default()
         }, &cwd).unwrap();
 
         assert_eq!(res.exit_code, Some(0));
@@ -833,6 +1027,7 @@ mod tests {
             shell: default_shell(),
             pty: false,
             argv: None,
+            ..Default::default()
         }, &workspace);
         assert!(res_none.is_ok());
 
@@ -844,6 +1039,7 @@ mod tests {
             shell: default_shell(),
             pty: false,
             argv: None,
+            ..Default::default()
         }, &workspace);
         assert!(res_sub.is_ok());
 
@@ -855,6 +1051,7 @@ mod tests {
             shell: default_shell(),
             pty: false,
             argv: None,
+            ..Default::default()
         }, &workspace);
         assert!(res_ext.is_err());
         assert!(res_ext.unwrap_err().contains("cwd escapes workspace jail"));
@@ -867,6 +1064,7 @@ mod tests {
             shell: default_shell(),
             pty: false,
             argv: None,
+            ..Default::default()
         }, &workspace);
         assert!(res_traversal.is_err());
         assert!(res_traversal.unwrap_err().contains("cwd escapes workspace jail"));
@@ -883,6 +1081,7 @@ mod tests {
                 shell: default_shell(),
                 pty: false,
                 argv: None,
+                ..Default::default()
             }, &workspace);
             assert!(res_sym.is_err());
             assert!(res_sym.unwrap_err().contains("cwd escapes workspace jail"));
@@ -921,6 +1120,7 @@ mod tests {
             shell: default_shell(),
             pty: false,
             argv: None,
+            ..Default::default()
         }, &cwd).unwrap();
         assert!(res.stdout.len() < MAX_OUTPUT_CHARS + 200, "{}", res.stdout.len());
         assert!(res.stdout.contains(&format!("[TRUNCATED {} BYTES]", 5_000_000 - MAX_OUTPUT_CHARS)));
@@ -930,6 +1130,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn cancel_ends_the_command_group() {
+        let _guard = TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
         let cwd = std::env::current_dir().unwrap();
         let marker = "sleep 30.123";
         let handle = std::thread::spawn({
@@ -941,6 +1142,7 @@ mod tests {
                 shell: default_shell(),
                 pty: false,
                 argv: None,
+                ..Default::default()
             }, &cwd, Some("cancel-test"))
         });
         let started = Instant::now();
@@ -961,6 +1163,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn background_processes_left_by_a_command_are_ended() {
+        let _guard = TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
         let cwd = std::env::current_dir().unwrap();
         let marker = "sleep 30.456";
         let res = run_command_tracked(RunCommandArgs {
@@ -970,6 +1173,7 @@ mod tests {
             shell: default_shell(),
             pty: false,
             argv: None,
+            ..Default::default()
         }, &cwd, Some("background-test")).unwrap();
         assert!(res.stdout.contains("started"));
         assert_eq!(count_exact(marker), 1, "the background process outlives the call by design");
@@ -1006,6 +1210,7 @@ mod tests {
             shell: default_shell(),
             pty: false,
             argv: None,
+            ..Default::default()
         }, &cwd).unwrap();
         let elapsed = started.elapsed();
 
@@ -1028,10 +1233,60 @@ mod tests {
             shell: default_shell(),
             pty: false,
             argv: None,
+            ..Default::default()
         }, &cwd).unwrap();
         assert!(!res.timed_out);
         assert_eq!(res.exit_code, Some(3));
         assert!(res.stdout.contains("failing"));
+    }
+
+    #[test]
+    fn test_timeout_clamp_and_notice() {
+        let _guard = TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+        unsafe { std::env::set_var("NEXUS_MAX_TOOL_TIMEOUT_SECS", "5") };
+        let cwd = std::env::current_dir().unwrap();
+        let res = run_command(RunCommandArgs {
+            command: "echo clamped test".to_string(),
+            cwd: None,
+            timeout_secs: 3600,
+            ..Default::default()
+        }, &cwd).unwrap();
+        unsafe { std::env::remove_var("NEXUS_MAX_TOOL_TIMEOUT_SECS") };
+
+        assert!(res.stdout.contains("[Notice: timeout_secs clamped from 3600 to 5 (NEXUS_MAX_TOOL_TIMEOUT_SECS)]"), "stdout was: {}", res.stdout);
+        assert!(res.stdout.contains("clamped test"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_background_service_registration_and_lifecycle() {
+        let _guard = TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+        let cwd = std::env::current_dir().unwrap();
+        let marker = "sleep 33.777";
+        let res = run_command_tracked(RunCommandArgs {
+            command: format!("{marker}"),
+            cwd: None,
+            background: true,
+            service_name: Some("my_service".into()),
+            ..Default::default()
+        }, &cwd, Some("svc_req_1")).unwrap();
+
+        assert!(res.stdout.contains("Background service 'my_service' started") || res.stdout.contains("Background service 'my_service' registered"));
+        assert_eq!(count_exact(marker), 1, "service is running");
+
+        // Service is listed in list_services()
+        let services = list_services();
+        assert!(services.iter().any(|s| s.name == "my_service"), "services: {:?}", services);
+
+        // Turn cancellation (end_background_commands) does NOT kill registered services
+        assert_eq!(end_background_commands(Duration::from_millis(500)), 0);
+        assert_eq!(count_exact(marker), 1, "registered service survived turn cancel");
+
+        // Shutdown sweep (end_all_commands) DOES kill registered services
+        assert!(end_all_commands(Duration::from_millis(500)) >= 1);
+        std::thread::sleep(Duration::from_millis(200));
+        assert_eq!(count_exact(marker), 0, "registered service was killed on shutdown");
+        assert_eq!(list_services().len(), 0);
     }
 }
 

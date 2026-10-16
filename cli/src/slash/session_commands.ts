@@ -94,9 +94,19 @@ function sizingRows(agent: AutonomousAgent): Array<[string, string]> {
   return rows;
 }
 
-function status({ host }: SlashContext): SlashOutcome {
+async function status({ host }: SlashContext): Promise<SlashOutcome> {
   const config = host.app.getConfig();
   const git = getGitInfo(config.workspace);
+  let servicesStr = "none";
+  try {
+    const services = await host.app.getAgent().getBridge().listServices();
+    if (services && services.length > 0) {
+      servicesStr = services.map((s) => `${s.name} (pgid ${s.pgid})`).join(", ");
+    }
+  } catch {
+    servicesStr = "none";
+  }
+
   const rows: Array<[string, string]> = [
     ["workspace", config.workspace],
     ["git", git.isRepo ? git.formattedBadge : "not a repository"],
@@ -106,6 +116,7 @@ function status({ host }: SlashContext): SlashOutcome {
     ["shell", config.shell],
     ["messages", String(host.app.getAgent().getHistoryCount())],
     ["session", host.sessionId()],
+    ["services", servicesStr],
     ...sizingRows(host.app.getAgent()),
   ];
   return reply("status", rows.map(([label, value]) => `${label.padEnd(10)}${value}`).join("\n"));
