@@ -304,7 +304,8 @@ program
   .option("--coder-provider <id>", "Cloud provider for the coder model (requires --coder-model)")
   .option("-j, --json", "Output machine-readable JSON structured result (UI-002, UI-003)")
   .option("-r, --resume [id]", "Resume previous session or task state")
-  .action(async (promptParts: string[], options: any) => {
+  .action(async (promptParts: string[], _options: any, cmd: Command) => {
+    const options = cmd.optsWithGlobals();
     const prompt = promptParts.join(" ");
     const config = buildConfig(options);
     config.surface = "headless";
@@ -390,7 +391,8 @@ program
   .option("-k, --api-key <key>", "API key / token (default: $LOCAL_LLM_API_KEY)")
   .option("--provider <id>", "Cloud inference provider (openrouter, openai, anthropic, compatible)")
   .option("--base-url <url>", "Override the provider's base URL")
-  .action(async (options: any) => {
+  .action(async (_options: any, cmd: Command) => {
+    const options = cmd.optsWithGlobals();
     const config = buildConfig(options);
     const client = new LocalLlmClient(config);
     console.log(pc.cyan(`\nQuerying models from ${config.endpoint}...`));
@@ -411,7 +413,8 @@ program
   });
 
 /** Shared by `doctor` and its compatibility alias `check`. */
-async function doctorCommand(options: any): Promise<void> {
+async function doctorCommand(_options: any, cmd?: Command): Promise<void> {
+  const options = cmd?.optsWithGlobals ? cmd.optsWithGlobals() : _options;
   const controller = new AbortController();
   const onInterrupt = () => controller.abort();
   process.once("SIGINT", onInterrupt);

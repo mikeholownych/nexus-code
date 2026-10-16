@@ -11,7 +11,11 @@ import { SecurityManager } from "./security.js";
 import { InformationFlowBoundary, matchesLocalOrigins, parseLocalOrigins } from "./core/egress.js";
 import { CapabilityRegistry, HARNESS_TOOLS, defaultRegistry } from "./core/capabilities.js";
 import { isSafeReadOnlyCommand } from "./core/authority.js";
+import { getBuildIdentity } from "./build_identity.js";
 export { HARNESS_TOOLS, defaultRegistry };
+
+/** JSON-RPC protocol version spoken between the CLI and harness-core (REQ-REL-103). */
+export const CORE_PROTOCOL_VERSION = 1;
 
 /** Rust engine binaries the bridge looks for, in order (release before debug). */
 export function coreBinaryCandidates(): string[] {
@@ -518,6 +522,8 @@ export class RustCoreBridge {
   private sandbox: boolean | string = false;
   private requireSandbox: boolean = false;
   private securityManager: SecurityManager;
+  private handshakePromise: Promise<{ version: string; protocol: number }> | null = null;
+  private handshakeError: Error | null = null;
 
   constructor(
     workspace: string,
@@ -636,6 +642,7 @@ export class RustCoreBridge {
     }
     this.pendingRequests.clear();
     this.rpcBuffer = "";
+    this.handshakePromise = null;
   }
 
   private handleRpcStdout(data: string): void {
@@ -679,7 +686,69 @@ export class RustCoreBridge {
 
   public shutdown(): void {
     this.cleanupRpc();
+    this.handshakePromise = null;
+    this.handshakeError = null;
     RustCoreBridge.activeBridges.delete(this);
+  }
+
+  /**
+   * Reset handshake cache (used after restart or in tests).
+   */
+  public resetHandshake(): void {
+    this.handshakePromise = null;
+    this.handshakeError = null;
+  }
+
+  /**
+   * REQ-REL-103: Verifies that the running harness-core engine matches the CLI's expected protocol
+   * version and release version via the `hello` JSON-RPC method.
+   */
+  public async ensureHandshake(): Promise<{ version: string; protocol: number }> {
+    if (this.handshakeError) {
+      throw this.handshakeError;
+    }
+    if (this.handshakePromise) {
+      return this.handshakePromise;
+    }
+
+    this.handshakePromise = (async () => {
+      try {
+        const result = await this.executeViaRpc("hello", {}, { ignoreTurnSignal: true });
+        if (!result) {
+          throw new Error("Failed to communicate with core engine during startup handshake.");
+        }
+        if (!result.success) {
+          throw new Error(`Core engine handshake failed: ${result.error || "Unknown error"}`);
+        }
+        let data: any;
+        try {
+          data = JSON.parse(result.output);
+        } catch {
+          throw new Error(`Invalid JSON in core engine hello handshake response: ${result.output}`);
+        }
+        const coreProtocol = data.protocol;
+        const coreVersion = data.version;
+        const expectedVersion = getBuildIdentity().version;
+
+        if (coreProtocol !== CORE_PROTOCOL_VERSION) {
+          throw new Error(
+            `Engine protocol mismatch: core engine reports protocol ${coreProtocol}, but CLI expects ${CORE_PROTOCOL_VERSION}. Run 'make build' to update.`
+          );
+        }
+        if (expectedVersion !== "unknown" && coreVersion !== expectedVersion) {
+          throw new Error(
+            `Engine version mismatch: core engine reports version ${coreVersion}, but CLI is ${expectedVersion}. Run 'make build' to update.`
+          );
+        }
+        return { version: coreVersion, protocol: coreProtocol };
+      } catch (err: any) {
+        this.handshakeError = err;
+        this.cleanupRpc();
+        throw err;
+      }
+    })();
+
+    return this.handshakePromise;
   }
 
   public static shutdownAllGlobal(): void {
@@ -730,6 +799,14 @@ export class RustCoreBridge {
     const daemon = this.ensureRpcDaemon();
     if (!daemon || !daemon.stdin || daemon.stdin.destroyed) {
       return null;
+    }
+
+    if (toolName !== "hello") {
+      try {
+        await this.ensureHandshake();
+      } catch (err: any) {
+        return { success: false, output: "", error: err.message };
+      }
     }
 
     const id = this.nextRequestId++;

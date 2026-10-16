@@ -89,6 +89,28 @@ fn cancel_request_ends_the_named_command() {
     let _ = engine.wait();
 }
 
+/// REQ-REL-103: `hello` RPC returns core version and protocol version.
+#[test]
+fn hello_rpc_returns_version_and_protocol() {
+    let mut engine = Command::new(env!("CARGO_BIN_EXE_harness-core"))
+        .args(["--workspace", ".", "rpc"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut stdin = engine.stdin.take().unwrap();
+    let mut out = BufReader::new(engine.stdout.take().unwrap());
+    writeln!(stdin, r#"{{"id":100,"method":"hello","params":{{}}}}"#).unwrap();
+    let mut response = String::new();
+    out.read_line(&mut response).unwrap();
+    let v: serde_json::Value = serde_json::from_str(&response).unwrap();
+    assert_eq!(v["id"], 100);
+    assert_eq!(v["result"]["version"], env!("CARGO_PKG_VERSION"));
+    assert_eq!(v["result"]["protocol"], 1);
+    drop(stdin);
+    let _ = engine.wait();
+}
+
 unsafe extern "C" {
     #[link_name = "kill"]
     fn libc_kill(pid: i32, sig: i32) -> i32;
