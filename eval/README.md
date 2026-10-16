@@ -47,6 +47,28 @@ recorded per run.
 - **Pooled metrics.** Pooled rows report crash rate, regressions, tokens per correct result and wall seconds per
   correct result. The cost of failed runs counts towards these.
 
+## Qualification runs
+
+A config with `"qualification": true` is the v1.0.0 evidence run (docs/v1.0.0/ACCEPTANCE.md §6). `run.mjs` refuses to start
+one, before any agent runs, unless every item below holds:
+
+- **Tasks are well formed** (`eval/validate.mjs`): one source (fixture, or a repo pinned to a full commit id), a hidden
+  command, and `class` (bugfix · feature · refactor · debug) and `difficulty` (easy · medium · hard). Development runs check
+  everything except class and difficulty.
+- **The model is identified, not just named.** `fingerprint: { weightsSha256, serverBuild }` and
+  `sampling: { temperature, seed }` are set in the config, and the endpoint lists the model. The fingerprint (with the
+  listed owner and context) is written to `manifest.json`.
+- **Hidden tests are out of the agent's reach.** `runAs` names a separate user the agents run as (through
+  `sudo -n -u <user>`), and the tasks directory grants nothing to other users. Owner setup, once:
+  1. `sudo useradd --system --create-home nexus-eval`
+  2. A sudoers rule letting the operator run commands as that user without a password, for example
+     `mike ALL=(nexus-eval) NOPASSWD: /usr/bin/env`. This grants only the unprivileged user's rights.
+  3. `chmod o-rwx eval/tasks` (and the held-out task store).
+  4. A Nexus install, Node and the peer agents that `nexus-eval` can read and execute.
+
+  Workspaces and per-run homes are made writable for that user. Development runs may omit `runAs`; their contamination
+  check still applies.
+
 ## Pre-registered thresholds (from the assessment, fixed before any live run)
 
 - false VERIFIED = 0 across all runs;

@@ -10,6 +10,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { startModelProxy } from "./model_proxy.mjs";
+import { asUser, fetchModelEntry, hiddenTestIsolationProblem, modelFingerprint, validateTask } from "./validate.mjs";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const args = parseArgs(process.argv.slice(2));
@@ -29,12 +30,37 @@ const resultsFile = path.join(args.out, "results.jsonl");
 
 const identity = harnessIdentity();
 const tasks = fs.readdirSync(tasksDir).filter((d) => fs.existsSync(path.join(tasksDir, d, "task.json")) && (!only || only.has(d))).sort();
-fs.writeFileSync(path.join(args.out, "manifest.json"), JSON.stringify({ createdAt: new Date().toISOString(), harness: identity, config: redactConfig(config), runs, tasks, host: os.hostname(), node: process.version }, null, 2) + "\n");
-
-// Run-major order (every task once, then again): a pass cut short still has the same number of runs per task.
 const apiKey = readApiKey(config.apiKey);
 const caFile = config.caFile ? expandHome(config.caFile) : null;
 const caBundle = caFile ? writeCaBundle(caFile) : null;
+
+// A run is valid only with well-formed tasks, hidden tests the agent cannot read, and (for qualification) a model
+// identified beyond its alias. Any problem stops the run before an agent starts (eval/validate.mjs).
+const problems = tasks.flatMap((id) => {
+  const dir = path.join(tasksDir, id);
+  return validateTask(JSON.parse(fs.readFileSync(path.join(dir, "task.json"), "utf8")), dir, { qualification: config.qualification === true }).map((p) => `${id}: ${p}`);
+});
+const isolation = hiddenTestIsolationProblem(config, tasksDir);
+if (isolation) problems.push(isolation);
+let fingerprint = null;
+if (!problems.length) {
+  const probe = config.proxy === false ? null : await startModelProxy({ upstream: config.endpoint, caFile });
+  try {
+    const entry = await fetchModelEntry(probe?.url ?? config.endpoint, config.model, apiKey);
+    const fp = modelFingerprint(config, entry);
+    fingerprint = fp.fingerprint;
+    problems.push(...fp.missing.map((m) => `model fingerprint: ${m}`));
+  } finally {
+    await probe?.close();
+  }
+}
+if (problems.length) {
+  console.error(`eval/run.mjs: not starting; ${problems.length} problem(s):\n${problems.map((p) => `  - ${p}`).join("\n")}`);
+  process.exit(2);
+}
+fs.writeFileSync(path.join(args.out, "manifest.json"), JSON.stringify({ createdAt: new Date().toISOString(), harness: identity, config: redactConfig(config), fingerprint, runs, tasks, host: os.hostname(), node: process.version }, null, 2) + "\n");
+
+// Run-major order (every task once, then again): a pass cut short still has the same number of runs per task.
 for (let run = 1; run <= runs; run++) {
   for (const id of tasks) {
     if (pairs && !pairs.some(([t, r]) => t === id && Number(r) === run)) continue;
@@ -156,7 +182,12 @@ function agentCommand(task, ws, home, budget, ep) {
 
 function runAgent(task, ws, home, endpoint) {
   const budget = { steps: task.steps ?? config.steps ?? 300, minutes: task.minutes ?? config.minutes ?? 120 };
-  const { cmd, argv, env } = agentCommand(task, ws, home, budget, endpoint);
+  let { cmd, argv, env } = agentCommand(task, ws, home, budget, endpoint);
+  if (config.runAs) {
+    // The agent's own user: it can use its workspace and home, but not the operator's tasks directory (hidden tests).
+    spawnSync("chmod", ["-R", "a+rwX", ws, home]);
+    ({ cmd, argv } = asUser(config.runAs, cmd, argv, { ...env, PATH: env.PATH }));
+  }
   return new Promise((resolve) => {
     const child = spawn(cmd, argv, { cwd: ws, env, stdio: ["ignore", "pipe", "pipe"], detached: true });
     let stdout = "";

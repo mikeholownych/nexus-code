@@ -91,3 +91,59 @@ test("contaminated runs leave the pass rate, crashes are counted, and reruns are
   assert.equal(pooled.tokensPerCorrect, 2000);
   assert.deepEqual(score.replacements, [{ config: "c", task: "d", run: 1, was: "error: workspace setup failed", now: "UNVERIFIED" }]);
 });
+
+// ---------------------------------------------------------------- run validity (REQ-QUAL-101/102/106)
+
+test("task validation: pinned repos, one source, hidden command; qualification also needs class and difficulty", async () => {
+  const { validateTask } = await import(path.join(ROOT, "eval/validate.mjs"));
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "t2-x-"));
+  const id = path.basename(dir);
+  const good = { id, tier: "T2", objective: "fix it", repo: { url: "https://example.invalid/r.git", commit: "a".repeat(40) }, hidden: { command: "npm test" } };
+  assert.deepEqual(validateTask(good, dir), []);
+  assert.match(validateTask({ ...good, repo: { url: good.repo.url, commit: "main" } }, dir).join(), /pinned/);
+  assert.match(validateTask({ ...good, fixture: "repo" }, dir).join(), /exactly one of fixture or repo/);
+  assert.match(validateTask({ ...good, hidden: {} }, dir).join(), /hidden.command/);
+  assert.equal(validateTask(good, dir, { qualification: true }).length, 2);
+  assert.deepEqual(validateTask({ ...good, class: "bugfix", difficulty: "medium" }, dir, { qualification: true }), []);
+});
+
+test("a qualification run is refused without a model fingerprint (weights, server build, sampling)", async () => {
+  const { modelFingerprint } = await import(path.join(ROOT, "eval/validate.mjs"));
+  const entry = { id: "m", owned_by: "llamacpp", meta: { n_ctx_train: 32768 } };
+  assert.equal(modelFingerprint({ model: "m" }, entry).missing.length, 0, "a development run needs no fingerprint");
+  const missing = modelFingerprint({ model: "m", qualification: true }, entry).missing;
+  assert.equal(missing.length, 3);
+  const ok = modelFingerprint({ model: "m", qualification: true, fingerprint: { weightsSha256: "b".repeat(64), serverBuild: "llama.cpp b6000" }, sampling: { temperature: 0, seed: 1 } }, entry);
+  assert.deepEqual(ok.missing, []);
+  assert.equal(ok.fingerprint.ownedBy, "llamacpp");
+  assert.equal(ok.fingerprint.contextLength, 32768);
+  assert.equal(modelFingerprint({ model: "m", qualification: true, fingerprint: ok.fingerprint, sampling: { temperature: 0 } }, null).missing[0], "the endpoint does not list model m");
+});
+
+test("hidden tests must be unreadable to the agent's own user", async () => {
+  const { hiddenTestIsolationProblem, asUser } = await import(path.join(ROOT, "eval/validate.mjs"));
+  const tasks = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-eval-tasks-"));
+  fs.chmodSync(tasks, 0o755);
+  assert.equal(hiddenTestIsolationProblem({}, tasks), null, "development runs may run as the operator");
+  assert.match(hiddenTestIsolationProblem({ qualification: true }, tasks), /need runAs/);
+  assert.match(hiddenTestIsolationProblem({ runAs: "nexus-eval" }, tasks), /readable by other users/);
+  fs.chmodSync(tasks, 0o700);
+  assert.equal(hiddenTestIsolationProblem({ runAs: "nexus-eval" }, tasks), null);
+  assert.match(hiddenTestIsolationProblem({ runAs: "bad user;" }, tasks), /not a valid user name/);
+  const wrapped = asUser("nexus-eval", "node", ["index.js", "run"], { HOME: "/tmp/h", PATH: "/usr/bin" });
+  assert.equal(wrapped.cmd, "sudo");
+  assert.deepEqual(wrapped.argv, ["-n", "-u", "nexus-eval", "--", "env", "-i", "HOME=/tmp/h", "PATH=/usr/bin", "node", "index.js", "run"]);
+});
+
+test("run.mjs refuses to start on an invalid task", () => {
+  const tasks = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-eval-bad-"));
+  fs.mkdirSync(path.join(tasks, "broken"));
+  fs.writeFileSync(path.join(tasks, "broken", "task.json"), JSON.stringify({ id: "broken", tier: "T9", objective: "" }));
+  const config = path.join(tasks, "config.json");
+  fs.writeFileSync(config, JSON.stringify({ name: "c", agent: "nexus", endpoint: "http://127.0.0.1:9/v1", model: "m", proxy: false }));
+  const out = spawnSync(process.execPath, [path.join(ROOT, "eval/run.mjs"), "--config", config, "--tasks", tasks, "--out", path.join(tasks, "out")], { encoding: "utf8" });
+  assert.equal(out.status, 2, out.stdout + out.stderr);
+  assert.match(out.stderr, /not starting/);
+  assert.match(out.stderr, /broken: tier must be one of/);
+  assert.ok(!fs.existsSync(path.join(tasks, "out", "results.jsonl")), "no run was recorded");
+});
