@@ -74,7 +74,7 @@ fn spawn_stop_watchdog() {
 }
 
 pub const LIVE_USAGE: &str =
-    "usage: nexus-tui --live [--sidecar PATH] [--node BIN] [-- SIDECAR_ARGS...]";
+    "usage: nexus-tui --live [--check] [--sidecar PATH] [--node BIN] [-- SIDECAR_ARGS...]";
 
 /// Runs `nexus-tui --live ARGS...`. A launch error is written to `stderr` as plain text. Returns the exit status.
 pub fn main(args: Vec<String>, stderr: &mut dyn Write) -> i32 {
@@ -88,20 +88,24 @@ pub fn main(args: Vec<String>, stderr: &mut dyn Write) -> i32 {
 }
 
 fn launch(args: Vec<String>) -> Result<(), Box<dyn Error>> {
+    let check = args.iter().any(|a| a == "--check");
     let spec = resolve_spec(
         args,
         env::var("NEXUS_SIDECAR").ok(),
         env::var("NEXUS_NODE").ok(),
         env::current_exe().ok(),
     )?;
+    if check {
+        return Ok(());
+    }
     if !io::stdin().is_terminal() || !io::stdout().is_terminal() {
         return Err("interactive Nexus TUI requires a terminal".into());
     }
     run_live(spec)
 }
 
-/// Resolves the sidecar command line. Precedence: flags, then `NEXUS_SIDECAR` / `NEXUS_NODE`, then the
-/// `cli/dist/sidecar.js` of the checkout whose `core/target/<profile>/` holds this binary.
+/// Resolves the sidecar command line. Precedence: flags, then `NEXUS_SIDECAR` / `NEXUS_NODE`, then
+/// `$NEXUS_HOME/lib/cli/dist/sidecar.js`, then the `cli/dist/sidecar.js` of the checkout layout.
 pub fn resolve_spec(
     args: Vec<String>,
     env_sidecar: Option<String>,
@@ -114,6 +118,7 @@ pub fn resolve_spec(
     let mut args = args.into_iter();
     while let Some(arg) = args.next() {
         match arg.as_str() {
+            "--check" => {}
             "--sidecar" => sidecar = Some(PathBuf::from(args.next().ok_or(LIVE_USAGE)?)),
             "--node" => node = args.next().ok_or(LIVE_USAGE)?,
             "--" => {
@@ -123,21 +128,56 @@ pub fn resolve_spec(
             other => return Err(format!("unknown option {other}\n{LIVE_USAGE}")),
         }
     }
-    let sidecar = sidecar
-        .or_else(|| {
-            exe.and_then(|exe| {
-                exe.ancestors()
-                    .nth(4)
-                    .map(|root| root.join("cli/dist/sidecar.js"))
-            })
-        })
-        .ok_or("cannot locate cli/dist/sidecar.js; pass --sidecar PATH")?;
-    if !sidecar.is_file() {
-        return Err(format!(
-            "sidecar not found at {}; run `make build` or pass --sidecar PATH",
-            sidecar.display()
-        ));
-    }
+    let sidecar = if let Some(explicit) = sidecar {
+        if !explicit.is_file() {
+            return Err(format!(
+                "sidecar not found at {}; run `make build` or pass --sidecar PATH",
+                explicit.display()
+            ));
+        }
+        explicit
+    } else {
+        let mut tried = Vec::new();
+        let mut found = None;
+        if let Ok(nexus_home) = env::var("NEXUS_HOME") {
+            let p = PathBuf::from(nexus_home).join("lib/cli/dist/sidecar.js");
+            if p.is_file() {
+                found = Some(p);
+            } else {
+                tried.push(p);
+            }
+        }
+        if found.is_none() {
+            if let Some(ref exe) = exe {
+                if let Some(root) = exe.ancestors().nth(4) {
+                    let p = root.join("cli/dist/sidecar.js");
+                    if p.is_file() {
+                        found = Some(p);
+                    } else {
+                        tried.push(p);
+                    }
+                }
+            }
+        }
+        match found {
+            Some(p) => p,
+            None => {
+                if tried.len() > 1 {
+                    return Err(format!(
+                        "sidecar not found; tried: {}; run `make build` or pass --sidecar PATH",
+                        tried.iter().map(|p| p.display().to_string()).collect::<Vec<_>>().join(", ")
+                    ));
+                } else if let Some(single) = tried.first() {
+                    return Err(format!(
+                        "sidecar not found at {}; run `make build` or pass --sidecar PATH",
+                        single.display()
+                    ));
+                } else {
+                    return Err("cannot locate cli/dist/sidecar.js; pass --sidecar PATH".to_string());
+                }
+            }
+        }
+    };
     let mut spec_args = vec![sidecar.display().to_string()];
     spec_args.extend(passthrough);
     Ok(SidecarSpec {
@@ -851,6 +891,32 @@ case "$shutdown" in *'"type":"shutdown"'*) exit 0;; *) exit 8;; esac"#
                 .unwrap_err()
                 .contains("usage")
         );
+
+        // Test NEXUS_HOME resolution
+        let pkg_root = root.join("packaged");
+        let pkg_sidecar = pkg_root.join("lib/cli/dist/sidecar.js");
+        std::fs::create_dir_all(pkg_sidecar.parent().unwrap()).unwrap();
+        std::fs::write(&pkg_sidecar, "").unwrap();
+        unsafe { std::env::set_var("NEXUS_HOME", &pkg_root) };
+        let from_pkg = resolve_spec(vec![], None, None, None).unwrap();
+        assert_eq!(
+            from_pkg,
+            SidecarSpec {
+                program: "node".into(),
+                args: vec![pkg_sidecar.display().to_string()]
+            }
+        );
+        // --check option
+        let check_spec = resolve_spec(vec!["--check".into()], None, None, None).unwrap();
+        assert_eq!(check_spec.args, vec![pkg_sidecar.display().to_string()]);
+        // Missing sidecar with NEXUS_HOME set and invalid exe lists tried paths
+        let bogus_home = root.join("bogus_pkg");
+        unsafe { std::env::set_var("NEXUS_HOME", &bogus_home) };
+        let bogus_exe = root.join("bogus/core/target/release/nexus-tui");
+        let err = resolve_spec(vec![], None, None, Some(bogus_exe)).unwrap_err();
+        assert!(err.contains("tried:"));
+        unsafe { std::env::remove_var("NEXUS_HOME") };
+
         std::fs::remove_dir_all(&root).unwrap();
     }
 
