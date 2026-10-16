@@ -21,6 +21,31 @@ npm ci --omit=dev --prefix "$PKG/lib/cli"
 cp "$ROOT/core/target/release/harness-core" "$ROOT/core/target/release/nexus-tui" "$PKG/lib/core/"
 cp "$ROOT/LICENSE" "$PKG/LICENSE"
 printf '%s\n' "$VERSION" > "$PKG/VERSION"
+
+cargo about generate -m "$ROOT/core/Cargo.toml" -c "$ROOT/about.toml" "$ROOT/about.hbs" > "$WORK/notices-rust.txt"
+npx --yes license-checker-rseidelsohn --production --plainVertical --start "$PKG/lib/cli" > "$WORK/notices-npm.txt"
+cat > "$PKG/THIRD_PARTY_NOTICES.txt" <<'EOF'
+================================================================================
+Nexus Code Third-Party Software Notices and Licenses
+================================================================================
+
+This package contains third-party software components licensed under open-source
+licenses. The following sections provide notices and license texts for all
+runtime and statically-linked dependencies included in this distribution.
+
+================================================================================
+Section 1: Rust Components (harness-core & nexus-tui)
+================================================================================
+EOF
+cat "$WORK/notices-rust.txt" >> "$PKG/THIRD_PARTY_NOTICES.txt"
+cat >> "$PKG/THIRD_PARTY_NOTICES.txt" <<'EOF'
+
+================================================================================
+Section 2: Node.js / npm Components (CLI Runtime)
+================================================================================
+EOF
+cat "$WORK/notices-npm.txt" >> "$PKG/THIRD_PARTY_NOTICES.txt"
+cp "$PKG/THIRD_PARTY_NOTICES.txt" "$OUT/THIRD_PARTY_NOTICES.txt"
 cat > "$PKG/bin/nexus" <<'EOF'
 #!/bin/sh
 set -eu

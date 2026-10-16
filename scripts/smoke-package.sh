@@ -48,6 +48,10 @@ grep -E "(nexus|❯)" "$TMP/null.out" >/dev/null || { cat "$TMP/null.out" >&2; e
 # ACC-PKG-02: doc-command extraction test passes against the package
 node "$(dirname "$0")/doc_commands.mjs" "$NEXUS"
 
+# ACC-SUP-01: archive contains THIRD_PARTY_NOTICES.txt covering full dependency closure
+test -s "$TMP/nexus/THIRD_PARTY_NOTICES.txt"
+node "$(dirname "$0")/check_notices.mjs" "$TMP/nexus/THIRD_PARTY_NOTICES.txt"
+
 test -x "$TMP/nexus/lib/core/harness-core"
 test -x "$TMP/nexus/lib/core/nexus-tui"
 node --input-type=module - "$TMP/nexus/lib/cli/dist/tools.js" "$TMP/nexus/lib/core/harness-core" <<'EOF'
