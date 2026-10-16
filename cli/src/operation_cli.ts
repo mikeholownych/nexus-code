@@ -94,7 +94,7 @@ async function drive(op: DurableOperationState, config: HarnessConfig, store: Op
 }
 
 export function registerOperationCommands(program: Command): void {
-  const op = program.command("operation").description("Convergence-scheduled multi-unit operations (reroute, park, wait, resume)");
+  const op = program.command("operation").description("[experimental] Convergence-scheduled multi-unit operations (reroute, park, wait, resume)");
   const common = (c: Command) =>
     c
       .option("-e, --endpoint <url>", "Default endpoint (for resources not listed in the spec)")
