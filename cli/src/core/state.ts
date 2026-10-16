@@ -171,6 +171,14 @@ export interface DurableTaskState {
     compactions: number;
     archivedMessages: number;
   };
+
+  // Pre-change test baseline for independent verifier judgements (REQ-AGT-103)
+  changeBaseline?: {
+    command: string;
+    failed: boolean;
+    tests: Record<string, string> | null;
+    at: string;
+  } | null;
 }
 
 // -------------------------------------------------------------
@@ -552,7 +560,13 @@ export class DurableStateManager {
    */
   public recordProgress(
     taskId: string,
-    progress: { messages?: ChatMessage[]; findings?: string[]; objective?: ObjectiveLedger | null; unverifiedChangesPending?: boolean }
+    progress: {
+      messages?: ChatMessage[];
+      findings?: string[];
+      objective?: ObjectiveLedger | null;
+      unverifiedChangesPending?: boolean;
+      changeBaseline?: { command: string; failed: boolean; tests: Record<string, string> | null; at: string } | null;
+    }
   ): DurableTaskState {
     const state = this.loadTaskState(taskId);
     if (progress.messages) {
@@ -562,6 +576,7 @@ export class DurableStateManager {
     if (progress.findings) state.findings = progress.findings;
     if (progress.objective !== undefined) state.objective = progress.objective;
     if (progress.unverifiedChangesPending !== undefined) state.unverifiedChangesPending = progress.unverifiedChangesPending;
+    if (progress.changeBaseline !== undefined) state.changeBaseline = progress.changeBaseline;
     this.saveTaskState(state);
     return state;
   }
