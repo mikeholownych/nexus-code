@@ -167,7 +167,22 @@ Environment: E4 (gateway direct), serial runs, with matched model fingerprint, b
 
 - 40 sealed tasks. The manifest is committed before RC1, and authorship is recorded (agent-authored, DEC-05).
 - 5 runs × {Nexus RC, Goose, OpenCode}.
-- `node eval/run.mjs --config eval/configs/v1-t2.json` and then `node eval/score.mjs --pairs`.
+- Before execution, freeze three qualification configs at `eval/configs/v1-t2-nexus.json`, `eval/configs/v1-t2-goose.json`, and `eval/configs/v1-t2-opencode.json`. Each must set `qualification: true`, identify the same model fingerprint and sampling settings, and record equal context/output and task budgets; the Nexus config must identify the installed RC and its package digest. Do not derive these files from the pilot configs by silently inheriting or changing settings.
+- Set `T2_TASKS` to the custodian-approved, sealed task directory and `T2_OUT` to a new, empty, run-specific output directory. Do not use the disclosed `eval/tasks` development set as held-out evidence. Preserve all three outputs and their manifests; never reuse an output directory for a retry.
+- Run each config serially, with identical task selection and five runs per task:
+
+  ```bash
+  set -euo pipefail
+  : "${T2_TASKS:?set the sealed task directory}"
+  : "${T2_OUT:?set a new unique output directory}"
+  test ! -e "$T2_OUT"
+  node eval/run.mjs --config eval/configs/v1-t2-nexus.json --tasks "$T2_TASKS" --out "$T2_OUT/nexus" --runs 5
+  node eval/run.mjs --config eval/configs/v1-t2-goose.json --tasks "$T2_TASKS" --out "$T2_OUT/goose" --runs 5
+  node eval/run.mjs --config eval/configs/v1-t2-opencode.json --tasks "$T2_TASKS" --out "$T2_OUT/opencode" --runs 5
+  node eval/score.mjs --pairs "$T2_OUT/nexus/results.jsonl" "$T2_OUT/goose/results.jsonl" "$T2_OUT/opencode/results.jsonl"
+  ```
+
+  Record the resolved `T2_TASKS`, unique `T2_OUT`, config digests, installed RC identity, model fingerprint, and exact commands in the frozen run record before starting. A failed or interrupted invocation remains evidence; any permitted infrastructure rerun uses the accepted rerun procedure and is retained separately. Do not score until all required runs and manifests exist. The scorer accepts exactly the Nexus, Goose and OpenCode result files.
 
 ### 6.2 T4 fault injection (ACC-QUAL-T4)
 
