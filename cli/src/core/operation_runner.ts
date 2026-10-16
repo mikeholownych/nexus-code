@@ -14,6 +14,7 @@ import type { ChatMessage, HarnessConfig } from "../types.js";
 import { realRecoveryClock, type RecoveryClock } from "./provider_recovery.js";
 import { ConvergenceScheduler, unitBaseTask, type Decision, type DurableOperationState, type OperationEvent, type UnitRunResult, type WorkUnit } from "./operation.js";
 import { redactForPersistence } from "./persistence_protection.js";
+import { REQUIREMENTS_CAPABILITY, READ_OBJECTIVE_CAPABILITY } from "./objective.js";
 import { ROLE_PROFILES } from "./roles.js";
 import {
   applyProviderCatalog,
@@ -480,7 +481,7 @@ export function resourcesFromConfig(config: HarnessConfig): ResourceDescriptor[]
 export interface AgentExecutorOptions {
   baseConfig: HarnessConfig;
   /** Builds the unit's agent (tests inject state directories and clocks). */
-  createAgent?: (config: HarnessConfig) => AutonomousAgent;
+  createAgent?: (config: HarnessConfig, depth?: number, options?: { durable?: boolean }) => AutonomousAgent;
   /** Read provider `/v1/models` metadata on wake and at start. */
   discoverCatalog?: boolean;
 }
@@ -556,13 +557,16 @@ export class AgentWorkUnitExecutor implements WorkUnitExecutor {
 
   async run(unit: WorkUnit, resource: ResourceDescriptor, ctx: UnitRunContext): Promise<UnitRunResult> {
     const config = this.configFor(resource, unit);
-    const agent = this.opts.createAgent ? this.opts.createAgent(config) : new AutonomousAgent(config, 1);
+    const agent = this.opts.createAgent
+      ? this.opts.createAgent(config, 1, { durable: true })
+      : new AutonomousAgent(config, 1, undefined, { durable: true });
+    (agent as any).durable = true;
     let lastCondition: ResourceConditionRecord | null = null;
     try {
       let prompt: string;
+      let unusable: string | undefined;
       if (unit.agentTaskId) {
         let recovered: TaskRecoveryResult | undefined;
-        let unusable: string | undefined;
         try {
           recovered = await agent.recoverFromTaskState(unit.agentTaskId);
         } catch (err: any) {
@@ -619,6 +623,11 @@ export class AgentWorkUnitExecutor implements WorkUnitExecutor {
         prompt = this.initialPrompt(unit, ctx);
       }
       ctx.bindAgentTask(agent.getTaskId());
+      if (agent.durable && !unit.agentTaskId) {
+        try {
+          agent.checkpointDurableState("work unit start");
+        } catch {}
+      }
       agent.setProviderRecoveryHooks({
         onFailure: (f) => {
           const c = ctx.observeFailure(f);
@@ -626,7 +635,8 @@ export class AgentWorkUnitExecutor implements WorkUnitExecutor {
         },
         shouldYield: (f, delay) => ctx.shouldYield(f, delay),
       });
-      const turn = await agent.runTurn(prompt, undefined, { signal: ctx.signal });
+      const isResume = Boolean(unit.agentTaskId && !unusable && !ctx.operatorDecision?.restart);
+      const turn = await agent.runTurn(prompt, undefined, { signal: ctx.signal, resume: isResume });
       try {
         agent.checkpointDurableState(`work unit ${unit.id}`, turn);
       } catch {}

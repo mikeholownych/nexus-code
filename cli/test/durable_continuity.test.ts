@@ -26,7 +26,7 @@ import type { ResourceDescriptor } from "../src/core/resources.js";
 import { DurableStateManager } from "../src/core/state.js";
 import { WorkspacePath } from "../src/core/workspace_path.js";
 import { SidecarServer } from "../src/sidecar.js";
-import type { HarnessConfig } from "../src/types.js";
+import { type HarnessConfig, DEFAULT_CONTINUATION } from "../src/types.js";
 
 const cliRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const srcIndex = path.join(cliRoot, "src/index.ts");
@@ -156,7 +156,7 @@ function operationRig(config: HarnessConfig, gw: Gw) {
   const executor = new AgentWorkUnitExecutor({
     baseConfig: config,
     createAgent: (c) => {
-      const agent = quiet(new AutonomousAgent(c, 1));
+      const agent = quiet(new AutonomousAgent(c, 1, undefined, { durable: true }));
       const a = agent as any;
       a.stateManager = new DurableStateManager({ baseDir: stateDir, workspacePaths: [a.primaryWorkspacePathIdentity] });
       return agent;
@@ -352,6 +352,182 @@ describe("V2: unverified changes survive retries, step limits, restarts and resu
       } finally {
         await gw.close();
         fs.rmSync(repo, { recursive: true, force: true });
+      }
+    });
+  });
+
+  test("ACC-CONT-03: work unit compaction writes archive lines and read_archive returns originals after resume", async () => {
+    await withHome(async () => {
+      const gw = await gateway((b) => {
+        if (toolResults(b) === 0) return write("impl.txt");
+        if (toolResults(b) === 1) return read("impl.txt");
+        return done("done with unit");
+      });
+      const repo = makeRepo();
+      const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-cont-acc03-"));
+      const config = cfg(gw, repo, { contextLimit: 6000, completionReserveTokens: 500, toolResponseReserveTokens: 500 });
+      const store = new OperationStore(config.workspace, stateDir);
+      let capturedAgent: AutonomousAgent | undefined;
+      const executor = new AgentWorkUnitExecutor({
+        baseConfig: config,
+        createAgent: (c) => {
+          const agent = quiet(new AutonomousAgent(c, 1, undefined, { durable: true }));
+          const a = agent as any;
+          a.stateManager = new DurableStateManager({ baseDir: stateDir, workspacePaths: [a.primaryWorkspacePathIdentity] });
+          capturedAgent = agent;
+          return agent;
+        },
+      });
+      const id = "op-acc-03";
+      try {
+        await muted(() =>
+          driveOperation(newOperation(id, "continuity", [{ id: "u1", prompt: "Perform work unit and compact." }], [{ id: "primary", provider: gw.origin, endpoint: gw.url, model: "m", capabilities: ["tools"], rank: 0 }], Date.now()), { store, executor })
+        );
+        assert.ok(capturedAgent, "agent was created");
+        const taskId = capturedAgent.getTaskId();
+        const historyPath = path.join(stateDir, `${taskId}.history.jsonl`);
+
+        // Trigger compaction on the durable work unit
+        const compactOutcome = await capturedAgent.compactNow(false);
+        assert.equal(compactOutcome.ok, true, `compaction should succeed: ${compactOutcome.message}`);
+        assert.ok(compactOutcome.outcome?.durable, "compaction outcome must be durable for work units");
+
+        // Assert <task>.history.jsonl contains the compaction id
+        assert.ok(fs.existsSync(historyPath), `history file ${historyPath} must exist`);
+        const historyContent = fs.readFileSync(historyPath, "utf-8");
+        assert.ok(historyContent.includes(compactOutcome.outcome!.id), "history file must contain compaction id");
+
+        // Now simulate resume: construct a fresh agent and recover state
+        const resumedAgent = quiet(new AutonomousAgent(config, 1, undefined, { durable: true }));
+        const ra = resumedAgent as any;
+        ra.stateManager = new DurableStateManager({ baseDir: stateDir, workspacePaths: [ra.primaryWorkspacePathIdentity] });
+        await resumedAgent.recoverFromTaskState(taskId);
+
+        // read_archive on resumed agent returns the original replaced messages
+        const readResult = await (resumedAgent as any).spine.execute(
+          { invocationId: "call_archive", taskId, actor: "agent", executionDomain: "agent_orchestration", toolName: "read_archive", args: { query: "impl.txt" } },
+          { activeTurnSignal: undefined, observer: undefined, metadata: {} }
+        );
+        assert.equal(readResult.success, true);
+        assert.ok(readResult.output.length > 0, "read_archive must return archived originals");
+      } finally {
+        await gw.close();
+        fs.rmSync(repo, { recursive: true, force: true });
+        fs.rmSync(stateDir, { recursive: true, force: true });
+      }
+    });
+  });
+
+  test("ACC-CONT-04: resume a unit after two identical loops; a third repetition triggers recovery note", async () => {
+    await withHome(async () => {
+      const gw = await gateway((b) => {
+        // Repeat read_file("notes.txt") on unchanged workspace
+        if (allText(b).includes("[Nexus recovery")) {
+          return done("recovered from loop");
+        }
+        return read("notes.txt");
+      });
+      const repo = makeRepo();
+      const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-cont-acc04-"));
+      // Turn 1 runs exactly 2 steps then stops on budget
+      const config = cfg(gw, repo, {
+        maxSteps: 2,
+        continuation: {
+          ...DEFAULT_CONTINUATION,
+          maxTotalSteps: 2,
+        },
+      });
+      const store = new OperationStore(config.workspace, stateDir);
+      let taskId = "";
+      const executor = new AgentWorkUnitExecutor({
+        baseConfig: config,
+        createAgent: (c) => {
+          const agent = quiet(new AutonomousAgent(c, 1, undefined, { durable: true }));
+          const a = agent as any;
+          a.stateManager = new DurableStateManager({ baseDir: stateDir, workspacePaths: [a.primaryWorkspacePathIdentity] });
+          return agent;
+        },
+      });
+      const id = "op-acc-04";
+      try {
+        // Run first turn: unit performs 2 repetitions of read_file("notes.txt")
+        let op = await muted(() =>
+          driveOperation(newOperation(id, "continuity", [{ id: "u1", prompt: "Read notes.txt" }], [{ id: "primary", provider: gw.origin, endpoint: gw.url, model: "m", capabilities: ["tools"], rank: 0 }], Date.now()), { store, executor })
+        );
+        taskId = op.units[0].agentTaskId!;
+        assert.ok(taskId, "unit must have bound agentTaskId");
+
+        // Verify task state saved execution tracking with repetitions count = 2
+        const savedState = new DurableStateManager({ baseDir: stateDir, workspacePaths: [WorkspacePath.fromSelectedWorkspace(repo)] }).loadTaskState(taskId);
+        assert.ok(savedState.objective?.execution, "task state must have execution tracking");
+        const rep = savedState.objective.execution.repetitions.find((r) => r.action.includes("read_file"));
+        assert.ok(rep, "must have recorded read_file repetition");
+        assert.equal(rep.count, 2, "repetition count before resume must be 2");
+
+        // Now resume the unit in a second turn
+        // On the 3rd repetition (step 1 of resumed turn), tracker must see count = 3 and emit [Nexus recovery 1/3]
+        const more = decisionOf(op, "u1").options.find((o) => o.label === "continue with more steps")!;
+        applyOperatorDecision(store, id, decisionOf(op, "u1").id, more.id);
+        op = await muted(() =>
+          driveOperation(store.load(id), { store, executor })
+        );
+
+        // Check gateway requests: verify recovery note was received by the model
+        const recoveryReq = gw.requests.find((r) => allText(r).includes("[Nexus recovery") && allText(r).includes("3 times"));
+        assert.ok(recoveryReq, "model must receive recovery note stating action was called 3 times");
+      } finally {
+        await gw.close();
+        fs.rmSync(repo, { recursive: true, force: true });
+        fs.rmSync(stateDir, { recursive: true, force: true });
+      }
+    });
+  });
+
+  test("REQ-AGT-103: change baseline is persisted in durable task state and restored on resume", async () => {
+    await withHome(async () => {
+      const gw = await gateway((b) => done());
+      const repo = makeRepo({ "test.js": "throw new Error('fail');\n" });
+      const config = cfg(gw, repo);
+      const identity = WorkspacePath.fromSelectedWorkspace(repo);
+      const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-cont-baseline-"));
+      try {
+        const agent1 = quiet(new AutonomousAgent(config, 1, undefined, { durable: true }));
+        const a1 = agent1 as any;
+        a1.stateManager = new DurableStateManager({ baseDir: stateDir, workspacePaths: [identity] });
+        // Set a change baseline
+        const mockBaseline = {
+          command: "npm test",
+          failed: true,
+          tests: new Map([["test.js", "throw new Error('fail');\n"]]),
+          at: new Date().toISOString(),
+        };
+        a1.changeBaseline = mockBaseline;
+        a1.checkpointDurableState("test baseline checkpoint");
+
+        // Load saved state directly from disk to verify serialization
+        const manager = new DurableStateManager({ baseDir: stateDir, workspacePaths: [identity] });
+        const saved = manager.loadTaskState(agent1.getTaskId());
+        assert.ok(saved.changeBaseline, "saved state must contain changeBaseline");
+        assert.equal(saved.changeBaseline.command, "npm test");
+        assert.equal(saved.changeBaseline.failed, true);
+        assert.deepEqual(saved.changeBaseline.tests, { "test.js": "throw new Error('fail');\n" });
+
+        // Recover in a fresh agent instance
+        const agent2 = quiet(new AutonomousAgent(config, 1, undefined, { durable: true }));
+        const a2 = agent2 as any;
+        a2.stateManager = manager;
+        await agent2.recoverFromTaskState(agent1.getTaskId());
+
+        // Assert restored changeBaseline matches
+        assert.ok(a2.changeBaseline, "recovered agent must have changeBaseline");
+        assert.equal(a2.changeBaseline.command, "npm test");
+        assert.equal(a2.changeBaseline.failed, true);
+        assert.ok(a2.changeBaseline.tests instanceof Map, "tests must be restored as a Map");
+        assert.equal(a2.changeBaseline.tests.get("test.js"), "throw new Error('fail');\n");
+      } finally {
+        await gw.close();
+        fs.rmSync(repo, { recursive: true, force: true });
+        fs.rmSync(stateDir, { recursive: true, force: true });
       }
     });
   });

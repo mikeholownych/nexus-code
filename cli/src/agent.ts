@@ -123,6 +123,7 @@ import {
   createLedger,
   failedCheckFrom,
   gatingRequirements,
+  isContinuationPrompt,
   isNewObjective,
   ledgerNeedsPinning,
   openRequirements,
@@ -777,7 +778,9 @@ function describeArchiveRead(read: ArchiveRead<ChatMessage>): string | undefined
   const notes: string[] = [];
   if (read.uncommittedLines) notes.push(`${read.uncommittedLines} archived message(s) from a compaction that was interrupted before it was committed were set aside; their originals are in the resumed conversation itself`);
   if (read.unreadableLines) notes.push(`${read.unreadableLines} archive line(s) could not be read (an interrupted write); they are not used`);
-  if (read.missingCompactions.length) notes.push(`the archive lacks the originals of compaction(s) ${read.missingCompactions.slice(0, 5).join(", ")}: read_archive cannot return them`);
+  if (read.missingCompactions.length) {
+    notes.push(`this unit was compacted by an earlier version; originals before ${read.missingCompactions[0]} are not recoverable`);
+  }
   return notes.length ? `Compaction archive: ${notes.join("; ")}.` : undefined;
 }
 
@@ -1002,11 +1005,13 @@ export class AutonomousAgent {
   private archiveForReading: ChatMessage[] = [];
   /** Execution surface: 'repl', 'tui', or 'headless' (REQ-AGT-109a). */
   private surface: string;
+  public readonly durable: boolean;
 
   constructor(
     config: HarnessConfig,
     depth: number = 0,
-    inheritedWorktreeScope?: { workspace: string; requireSandbox: true },
+    inheritedWorktreeScopeOrOptions?: { workspace: string; requireSandbox: true } | { durable?: boolean },
+    options?: { durable?: boolean },
   ) {
     canonicalDurableProvenance.set(this, new WeakMap());
     this.config = config;
@@ -1014,6 +1019,22 @@ export class AutonomousAgent {
     this.primaryWorkspacePathIdentity = WorkspacePath.fromSelectedWorkspace(path.resolve(config.workspace || process.cwd()));
     this.workspacePathIdentity = this.primaryWorkspacePathIdentity;
     this.depth = depth;
+
+    let inheritedWorktreeScope: { workspace: string; requireSandbox: true } | undefined;
+    let durableOption: boolean | undefined;
+
+    if (inheritedWorktreeScopeOrOptions) {
+      if ("workspace" in inheritedWorktreeScopeOrOptions) {
+        inheritedWorktreeScope = inheritedWorktreeScopeOrOptions;
+        durableOption = options?.durable;
+      } else {
+        durableOption = (inheritedWorktreeScopeOrOptions as { durable?: boolean }).durable;
+      }
+    } else if (options?.durable !== undefined) {
+      durableOption = options.durable;
+    }
+    this.durable = durableOption !== undefined ? durableOption : depth === 0;
+
     this.inheritedWorktreeScope = inheritedWorktreeScope;
     if (inheritedWorktreeScope && path.resolve(config.workspace) !== path.resolve(inheritedWorktreeScope.workspace)) {
       throw new Error("Subagent workspace does not match its inherited worktree authority.");
@@ -1178,7 +1199,9 @@ export class AutonomousAgent {
     if (typeof (this.client as any)?.setTaskId === "function") this.client.setTaskId(this.currentTaskId);
     if (typeof (this.plannerClient as any)?.setTaskId === "function") this.plannerClient.setTaskId(this.currentTaskId);
     if (typeof (this.coderClient as any)?.setTaskId === "function") this.coderClient.setTaskId(this.currentTaskId);
-    this.initTaskState();
+    if (this.durable) {
+      this.initTaskState();
+    }
     this.resetConversation();
   }
 
@@ -1289,6 +1312,14 @@ export class AutonomousAgent {
       objective: this.objective ?? null,
       findings: this.getFindings(),
       history: this.getHistoryCompleteness(),
+      changeBaseline: this.changeBaseline
+        ? {
+            command: this.changeBaseline.command,
+            failed: this.changeBaseline.failed,
+            tests: this.changeBaseline.tests ? Object.fromEntries(this.changeBaseline.tests) : null,
+            at: this.changeBaseline.at,
+          }
+        : (this.changeBaseline === null ? null : undefined),
       tokenStats: { ...this.totalTokens },
       cognitiveRouting: {
         activeTier: this.activeTier,
@@ -1309,6 +1340,9 @@ export class AutonomousAgent {
         state.createdAt = existing.createdAt;
         if (!state.validationReceipts.length && existing.validationReceipts) {
           state.validationReceipts = existing.validationReceipts;
+        }
+        if (state.changeBaseline === undefined && existing.changeBaseline !== undefined) {
+          state.changeBaseline = existing.changeBaseline;
         }
       } catch {}
     }
@@ -1339,6 +1373,16 @@ export class AutonomousAgent {
     this.messages = state.messages || [];
     this.restoreFindings(state.findings);
     this.objective = state.objective ?? undefined;
+    if (state.changeBaseline) {
+      this.changeBaseline = {
+        command: state.changeBaseline.command,
+        failed: state.changeBaseline.failed,
+        tests: state.changeBaseline.tests ? new Map(Object.entries(state.changeBaseline.tests)) : null,
+        at: state.changeBaseline.at,
+      };
+    } else if (state.changeBaseline === null) {
+      this.changeBaseline = null;
+    }
     this.restoreHistory(state.history);
     const committed = Array.isArray((state.history as any)?.committedCompactions) ? new Set<string>((state.history as any).committedCompactions) : undefined;
     const archived = this.stateManager.readArchive(state.taskId, committed);
@@ -1737,6 +1781,11 @@ export class AutonomousAgent {
       const deadlineSecs = this.config.verifierTimeoutSecs ?? DEFAULT_VERIFIER_TIMEOUT_SECS;
       const run = await runTestSuiteWithExecutor(this.config.workspace, (c) => this.bridge.executeTool("run_command", { command: c, timeout_secs: deadlineSecs }), command);
       this.changeBaseline = { command, failed: !run.success, tests, at: new Date().toISOString() };
+      if (this.durable) {
+        try {
+          this.checkpointDurableState("baseline captured");
+        } catch {}
+      }
     } catch {
       this.changeBaseline = null;
     }
@@ -1768,7 +1817,20 @@ export class AutonomousAgent {
       if (this.stateManager && !this.stateManager.hasTaskState(this.currentTaskId)) this.checkpointDurableState();
       else this.stateManager?.recordProgress(this.currentTaskId, {
         // The ledger travels with the conversation: steering applied as a message is also a ledger record.
-        ...(progress.messages ? { messages: this.messages, findings: this.getFindings(), objective: this.objective ?? null, unverifiedChangesPending: this.hasPendingModifications } : {}),
+        ...(progress.messages ? {
+          messages: this.messages,
+          findings: this.getFindings(),
+          objective: this.objective ?? null,
+          unverifiedChangesPending: this.hasPendingModifications,
+          changeBaseline: this.changeBaseline
+            ? {
+                command: this.changeBaseline.command,
+                failed: this.changeBaseline.failed,
+                tests: this.changeBaseline.tests ? Object.fromEntries(this.changeBaseline.tests) : null,
+                at: this.changeBaseline.at,
+              }
+            : (this.changeBaseline === null ? null : undefined),
+        } : {}),
         ...(progress.unverifiedChangesPending !== undefined ? { unverifiedChangesPending: progress.unverifiedChangesPending } : {}),
       });
       this.progressSaveFailing = false;
@@ -2009,7 +2071,7 @@ export class AutonomousAgent {
   /** What `prompt` would do to the tracked objective if submitted now (for the host's notice before the turn). */
   public objectiveDecision(prompt: string): { kind: "new" | "amend"; unresolved: number } {
     const ledger = this.objective;
-    if (this.depth > 0 || !ledger || isNewObjective(ledger, prompt)) return { kind: "new", unresolved: 0 };
+    if (!this.durable || !ledger || isNewObjective(ledger, prompt)) return { kind: "new", unresolved: 0 };
     return { kind: "amend", unresolved: gatingRequirements(ledger).filter((r) => !requirementDone(r)).length };
   }
 
@@ -2116,7 +2178,7 @@ export class AutonomousAgent {
    */
   private requestMessages(messages: ChatMessage[] = this.messages): ChatMessage[] {
     const ledger = this.objective;
-    if (!ledger || this.depth > 0 || messages.length === 0) return messages;
+    if (!ledger || !this.durable || messages.length === 0) return messages;
     const inContext = this.objectiveInContext(messages);
     if (!ledgerNeedsPinning(ledger, inContext)) return messages;
     // A quarter of the context window (≈4 characters per token) for the objective when it must be carried in full.
@@ -3096,7 +3158,7 @@ export class AutonomousAgent {
     const maxCompactionAttempts = 5;
     // Anti-thrashing across steps: after consecutive pressure compactions that each freed little (see
     // ExecutionTracker.compaction), compact only when the request would not fit, not on pressure alone.
-    const lowYieldRun = this.depth === 0 && this.objective?.execution ? this.objective.execution.lowYieldCompactions : 0;
+    const lowYieldRun = this.durable && this.objective?.execution ? this.objective.execution.lowYieldCompactions : 0;
     const pressureCompactionAllowed = lowYieldRun < LOW_YIELD_COMPACTIONS_BEFORE_HOLD;
     const removedNow: string[] = [];
     // Anti-thrashing: only re-compact when the previous ladder pass actually shrank the
@@ -3205,10 +3267,10 @@ export class AutonomousAgent {
     const kept = new Set(compacted);
     const replaced = original.filter((message, index) => index > 0 && !kept.has(message) && message.role !== "system");
     const id = `c${this.compactions + 1}-${randomUUID().slice(0, 8)}`;
-    const tracker = this.depth === 0 && this.objective ? trackingOf(this.objective) : undefined;
+    const tracker = this.durable && this.objective ? trackingOf(this.objective) : undefined;
     const window = this.contextLimit();
     const records: CompactionOutcome["records"] = {};
-    const durableUnit = this.depth === 0;
+    const durableUnit = this.durable;
     const outcome = (durable: boolean, message: string): CompactionOutcome => ({
       id, trigger: meta.trigger, durable, archived: replaced.length, beforeTokens: meta.beforeTokens, afterTokens: meta.afterTokens, records, message,
     });
@@ -3762,7 +3824,8 @@ The pinned Objective Ledger lists the operator's requirements; your plan never r
         subagent = new AutonomousAgent(
           subagentConfig,
           this.depth + 1,
-          inheritedWorktreeScope
+          inheritedWorktreeScope,
+          { durable: false }
         );
         const subResult = await subagent.runSubagent(subPrompt, this.activeTurn?.onConfirm, this.activeTurn?.controller.signal);
         if (subagent.turnMutations > 0 || subagent.turnCarriedChanges) {
@@ -4274,7 +4337,7 @@ The pinned Objective Ledger lists the operator's requirements; your plan never r
       } catch {}
     }
 
-    if (FILE_EDIT_TOOLS.has(toolName) && this.depth === 0) await this.captureChangeBaseline(onConfirm);
+    if (FILE_EDIT_TOOLS.has(toolName) && this.durable) await this.captureChangeBaseline(onConfirm);
     // A tool of a group not offered yet still runs (the model may know it from earlier); offer its group from now on.
     const calledGroup = toolGroupOf(toolName);
     if (calledGroup) this.enabledToolGroups.add(calledGroup);
@@ -4306,7 +4369,7 @@ The pinned Objective Ledger lists the operator's requirements; your plan never r
       error: receipt.error,
     });
     // A run_tests result is a verifier attempt on the current workspace (what a requirement's `verified` rests on).
-    if (toolName === "run_tests" && this.objective && this.depth === 0) {
+    if (toolName === "run_tests" && this.objective && this.durable) {
       try {
         const parsed = JSON.parse(receipt.output || "{}");
         const state = this.verifierState();
@@ -4498,7 +4561,7 @@ The pinned Objective Ledger lists the operator's requirements; your plan never r
     return this.activeTurn?.controller.signal;
   }
 
-  async runTurn(taskPrompt: string | any[], onConfirm?: ConfirmHandler, options?: { signal?: AbortSignal }): Promise<TurnResult> {
+  async runTurn(taskPrompt: string | any[], onConfirm?: ConfirmHandler, options?: { signal?: AbortSignal; resume?: boolean }): Promise<TurnResult> {
     // The REPL calls runTurn directly. Route worktree-enabled turns through the
     // same establishment and resolution boundary as one-shot `run` tasks.
     if (this.config.worktree && this.activeWorktree && !this.worktreeRunTurnAuthorized) {
@@ -4539,16 +4602,20 @@ The pinned Objective Ledger lists the operator's requirements; your plan never r
     // The objective this turn works toward: a new one, or a short follow-up on the one still unresolved.
     const priorLedger = this.objective ? structuredClone(this.objective) : undefined;
     let continuingObjective = false;
-    if (typeof taskPrompt === "string" && this.depth === 0) {
+    const isResume = Boolean(options?.resume);
+    if (typeof taskPrompt === "string" && this.durable) {
       let ledger = this.objective;
-      continuingObjective = Boolean(ledger && !isNewObjective(ledger, taskPrompt));
-      if (!ledger || isNewObjective(ledger, taskPrompt)) {
+      continuingObjective = Boolean(ledger && (isResume || !isNewObjective(ledger, taskPrompt)));
+      if (!ledger || (!isResume && isNewObjective(ledger, taskPrompt))) {
         const carried = ledger?.steering.filter((s) => s.status === "queued") ?? [];
         ledger = createLedger(taskPrompt);
         ledger.steering.push(...carried);
       } else {
-        // The unfinished objective is kept; numbered items in the follow-up are added as further requirements.
-        amendObjective(ledger, taskPrompt);
+        const isHarnessResume = /^\[(?:Nexus|Work unit resumed)/.test(taskPrompt);
+        if (!isHarnessResume && !isContinuationPrompt(taskPrompt)) {
+          // The unfinished objective is kept; numbered items in the follow-up are added as further requirements.
+          amendObjective(ledger, taskPrompt);
+        }
       }
       ledger.outcome = undefined;
       ledger.continuation = { ...ledger.continuation, segments: 1, lastProgressStep: 0, stopReason: undefined };
@@ -4634,11 +4701,16 @@ The pinned Objective Ledger lists the operator's requirements; your plan never r
       let completionNudges = 0;
       let recoveries = 0;
       // Objective-scoped tracking (persisted in the ledger): survives compaction, follow-up turns and restart.
-      const tracker = this.objective && this.depth === 0 ? trackingOf(this.objective) : ExecutionTracker.fresh();
+      const tracker = this.objective && this.durable ? trackingOf(this.objective) : ExecutionTracker.fresh();
       this.stateIdentityDisabled = false;
       this.stateIdentityUncertainty = undefined;
       tracker.beginTurn();
-      if (continuingObjective) tracker.operatorInput(tracker.data.cumulativeSteps, `operator follow-up: ${promptText.slice(0, 160)}`);
+      if (continuingObjective) {
+        const isHarnessResume = typeof taskPrompt === "string" && /^\[(?:Nexus|Work unit resumed)/.test(taskPrompt);
+        if (!isHarnessResume && !options?.resume) {
+          tracker.operatorInput(tracker.data.cumulativeSteps, `operator follow-up: ${promptText.slice(0, 160)}`);
+        }
+      }
       let stateNow = this.workspaceStateIdentity();
       tracker.noteState(stateNow);
       tracker.noteLedgerState(this.ledgerProgressIdentity());
@@ -4692,7 +4764,7 @@ The pinned Objective Ledger lists the operator's requirements; your plan never r
           console.warn(pc.dim(`↻ Continuing automatically: segment ${segment} begins at step ${currentStep}; the work is still progressing.`));
         }
         const cumulativeStep = tracker.beginStep();
-        if (this.objective && this.depth === 0) this.objective.continuation.totalSteps = tracker.data.cumulativeSteps;
+        if (this.objective && this.durable) this.objective.continuation.totalSteps = tracker.data.cumulativeSteps;
         const stepStateBefore = stateNow;
         const verdicts: ObservationVerdict[] = [];
         let operatorInputApplied = this.applyQueuedSteering(currentStep) > 0;
@@ -5228,7 +5300,7 @@ The pinned Objective Ledger lists the operator's requirements; your plan never r
       };
       let result = this.buildTurnResult(resultInput);
       if (this.objective) {
-        if (this.depth === 0) this.objective.continuation.totalSteps = tracker.data.cumulativeSteps;
+        if (this.durable) this.objective.continuation.totalSteps = tracker.data.cumulativeSteps;
         this.objective.continuation.stopReason = stopReason ?? (persistenceFailure ? "PERSISTENCE_FAILED" : undefined);
         this.objective.outcome = { ...this.objectiveOutcome(result), at: result.finishedAt };
         try {
@@ -5317,7 +5389,7 @@ The pinned Objective Ledger lists the operator's requirements; your plan never r
       ...(input.continuation ? { continuation: input.continuation } : {}),
       ...(objective ? { objective } : {}),
       ...(this.turnPersistenceFailures.length ? { persistence: { durable: false as const, failures: [...new Set(this.turnPersistenceFailures)].slice(0, 8) } } : {}),
-      ...(this.depth === 0 ? { tokenAccounting: this.tokenAccounting() } : {}),
+      ...(this.durable ? { tokenAccounting: this.tokenAccounting() } : {}),
     };
 
     if (input.interruption) {
