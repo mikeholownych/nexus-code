@@ -1340,6 +1340,13 @@ export class LocalLlmClient {
       }
 
       const choice = data.choices[0] as { message: ChatMessage; finish_reason?: string };
+      if (choice.message?.tool_calls && Array.isArray(choice.message.tool_calls)) {
+        for (const tc of choice.message.tool_calls) {
+          if (tc.function && typeof tc.function.arguments === "object" && tc.function.arguments !== null) {
+            tc.function.arguments = JSON.stringify(tc.function.arguments);
+          }
+        }
+      }
       if (this.conn.providerId && choice.finish_reason === "error") {
         throw new InferenceError("provider_error_frame", "provider", "Provider ended the response with finish_reason=error.", { requestId, partialText: typeof choice.message?.content === "string" ? choice.message.content : "" });
       }
@@ -1497,6 +1504,7 @@ export class LocalLlmClient {
 
       this.lastAdmission = parseAdmissionHeaders((name) => res.headers.get(name));
       let fullContent = "";
+      let reasoningContent = "";
       let finishReason: string | undefined;
       let sawDone = false;
       this.pending = { endpoint: currentEp, executions: this.pending?.executions };
@@ -1558,6 +1566,10 @@ export class LocalLlmClient {
             onToken(delta.content);
           }
         }
+        const reasoningDelta = delta.reasoning_content ?? delta.reasoning;
+        if (typeof reasoningDelta === "string") {
+          reasoningContent += reasoningDelta;
+        }
 
         // 2. Tool call chunks
         if (delta.tool_calls && Array.isArray(delta.tool_calls)) {
@@ -1579,8 +1591,18 @@ export class LocalLlmClient {
             // The name arrives once in spec streams. Some servers repeat it in later deltas, or send it cumulatively;
             // only a genuinely new fragment is appended (PRV-04: a repeated name became "read_fileread_file").
             const fragment = tc.function?.name;
-            if (fragment && fragment !== current.name) current.name = fragment.startsWith(current.name) ? fragment : current.name + fragment;
-            if (tc.function?.arguments) current.args += tc.function.arguments;
+            if (fragment) {
+              if (!current.name) current.name = fragment;
+              else if (fragment !== current.name) current.name = fragment.startsWith(current.name) ? fragment : current.name + fragment;
+            }
+            const rawArgs = tc.function?.arguments;
+            if (rawArgs !== undefined && rawArgs !== null) {
+              if (typeof rawArgs === "object") {
+                current.args = JSON.stringify(rawArgs);
+              } else {
+                current.args += String(rawArgs);
+              }
+            }
 
             toolCallsMap.set(idx, current);
           }
@@ -1648,7 +1670,7 @@ export class LocalLlmClient {
 
       // The stream completed with nothing in it; the non-streaming re-request is a new operation with its own
       // X-Request-ID so the provider's records never show two executions under one request ID.
-      if (!fullContent && assembledToolCalls.length === 0) {
+      if (!fullContent && !reasoningContent && assembledToolCalls.length === 0) {
         if (this.pending) this.pending.executions = 2;
         else this.pending = { endpoint: currentEp, executions: 2 };
         console.error(pc.dim(`[nexus] Empty stream from ${this.conn.label}; re-requesting non-streaming completion (executions: 2).`));
@@ -1662,6 +1684,7 @@ export class LocalLlmClient {
         role: "assistant",
         content: fullContent || null,
         ...(assembledToolCalls.length > 0 ? { tool_calls: assembledToolCalls } : {}),
+        ...(reasoningContent ? { reasoning_content: reasoningContent } : {}),
       };
     });
   }
