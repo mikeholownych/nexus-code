@@ -16,9 +16,9 @@ import { startGateway, Reply } from "./helpers/fixtures.js";
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 
 /** Async: the scripted gateway answers from this process, so the runner must not block its event loop. */
-function runNode(argv: string[]): Promise<{ status: number | null; stdout: string; stderr: string }> {
+function runNode(argv: string[], env: NodeJS.ProcessEnv = process.env): Promise<{ status: number | null; stdout: string; stderr: string }> {
   return new Promise((resolve) => {
-    const child = spawn(process.execPath, argv, { stdio: ["ignore", "pipe", "pipe"] });
+    const child = spawn(process.execPath, argv, { stdio: ["ignore", "pipe", "pipe"], env });
     let stdout = "";
     let stderr = "";
     child.stdout.on("data", (c) => (stdout += c));
@@ -91,4 +91,239 @@ test("T4 smoke: a reply cut at the output limit is never run as a tool call, and
   assert.equal(r.falseVerified, false);
   assert.ok(r.turn, "the run produced its own result (no crash)");
   assert.equal(score.faults[0].truthful, 1);
+});
+
+test("peer run records the executable version and effective budget", { timeout: 300_000 }, async () => {
+  const gw = await startGateway(() => ({ kind: "text", content: "not used by the fake peer" }));
+  const out = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-eval-peer-out-"));
+  const bin = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-eval-peer-bin-"));
+  const config = path.join(out, "config.json");
+  const fakeOpenCode = path.join(bin, "opencode");
+  fs.writeFileSync(fakeOpenCode, `#!/usr/bin/env node
+if (process.argv.includes("--version")) { console.log("OpenCode 9.8.7"); process.exit(0); }
+const cfg = JSON.parse(require("node:fs").readFileSync(require("node:path").join(process.env.HOME, ".config/opencode/opencode.json"), "utf8"));
+require("node:fs").writeFileSync(process.env.NEXUS_EVAL_OBSERVED, JSON.stringify({ agent: cfg.agent["nexus-eval"], model: cfg.provider.gw.models.m }));
+require("node:fs").writeFileSync(require("node:path").join(process.cwd(), "math.js"), "exports.add = (a, b) => a + b;\\n");
+console.log(JSON.stringify({ turn: { execution: "COMPLETED", outcome: "NOT_REQUIRED", steps: { used: 1 } } }));
+`);
+  fs.chmodSync(fakeOpenCode, 0o755);
+  const observed = path.join(out, "observed.json");
+  fs.writeFileSync(config, JSON.stringify({ name: "opencode@mock", agent: "opencode", endpoint: gw.url, model: "m", runs: 1, steps: 20, minutes: 5, sampling: { temperature: 0, seed: 17 }, env: { NEXUS_EVAL_OBSERVED: observed } }));
+  try {
+    const env = { ...process.env, PATH: `${bin}${path.delimiter}${process.env.PATH ?? ""}` };
+    const run = await runNode([path.join(ROOT, "eval/run.mjs"), "--config", config, "--out", out, "--only", "selftest-add"], env);
+    assert.equal(run.status, 0, `${run.stdout}\n${run.stderr}`);
+    const manifest = JSON.parse(fs.readFileSync(path.join(out, "manifest.json"), "utf8"));
+    const record = JSON.parse(fs.readFileSync(path.join(out, "results.jsonl"), "utf8").trim());
+    assert.equal(manifest.agentVersion.agent, "opencode");
+    assert.equal(manifest.agentVersion.version, "OpenCode 9.8.7");
+    assert.equal(manifest.agentVersion.executablePath, fs.realpathSync(fakeOpenCode));
+    assert.match(manifest.agentVersion.executableSha256, /^[0-9a-f]{64}$/);
+    assert.deepEqual(record.agentVersion, manifest.agentVersion);
+    assert.deepEqual(record.budget, { steps: 20, minutes: 5 });
+    assert.equal(record.hiddenPass, true);
+    const observedConfig = JSON.parse(fs.readFileSync(observed, "utf8"));
+    assert.equal(observedConfig.agent.steps, 20);
+    assert.deepEqual(observedConfig.model.options, { temperature: 0, seed: 17 });
+  } finally {
+    await gw.close();
+    fs.rmSync(out, { recursive: true, force: true });
+    fs.rmSync(bin, { recursive: true, force: true });
+  }
+});
+
+test("Goose adapter applies the matched turn, context, output, and temperature budgets", { timeout: 300_000 }, async () => {
+  const gw = await startGateway(() => ({ kind: "text", content: "not used by the fake peer" }));
+  const out = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-eval-goose-out-"));
+  const bin = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-eval-goose-bin-"));
+  const config = path.join(out, "config.json");
+  const fakeGoose = path.join(bin, "goose");
+  fs.writeFileSync(fakeGoose, `#!/usr/bin/env node
+if (process.argv.includes("--version")) { console.log("Goose 1.27.2"); process.exit(0); }
+require("node:fs").writeFileSync(process.env.NEXUS_EVAL_OBSERVED, JSON.stringify({ args: process.argv.slice(2), context: process.env.GOOSE_CONTEXT_LIMIT, output: process.env.GOOSE_MAX_TOKENS, turns: process.env.GOOSE_MAX_TURNS, temperature: process.env.GOOSE_TEMPERATURE }));
+require("node:fs").writeFileSync(require("node:path").join(process.cwd(), "math.js"), "exports.add = (a, b) => a + b;\\n");
+console.log(JSON.stringify({ turn: { execution: "COMPLETED", outcome: "NOT_REQUIRED", steps: { used: 1 } } }));
+`);
+  fs.chmodSync(fakeGoose, 0o755);
+  const observed = path.join(out, "observed.json");
+  fs.writeFileSync(config, JSON.stringify({ name: "goose@mock", agent: "goose", endpoint: gw.url, model: "m", runs: 1, steps: 20, minutes: 5, limits: { context: 65536, output: 8192 }, sampling: { temperature: 0 }, env: { NEXUS_EVAL_OBSERVED: observed } }));
+  try {
+    const env = { ...process.env, PATH: `${bin}${path.delimiter}${process.env.PATH ?? ""}` };
+    const run = await runNode([path.join(ROOT, "eval/run.mjs"), "--config", config, "--out", out, "--only", "selftest-add"], env);
+    assert.equal(run.status, 0, `${run.stdout}\n${run.stderr}`);
+    const manifest = JSON.parse(fs.readFileSync(path.join(out, "manifest.json"), "utf8"));
+    const record = JSON.parse(fs.readFileSync(path.join(out, "results.jsonl"), "utf8").trim());
+    const captured = JSON.parse(fs.readFileSync(observed, "utf8"));
+    assert.equal(manifest.agentVersion.agent, "goose");
+    assert.equal(manifest.agentVersion.version, "Goose 1.27.2");
+    assert.equal(manifest.agentVersion.executablePath, fs.realpathSync(fakeGoose));
+    assert.match(manifest.agentVersion.executableSha256, /^[0-9a-f]{64}$/);
+    assert.deepEqual(record.agentVersion, manifest.agentVersion);
+    assert.deepEqual(record.budget, { steps: 20, minutes: 5 });
+    assert.ok(captured.args.includes("--max-turns") && captured.args.includes("20"));
+    assert.deepEqual([captured.context, captured.output, captured.turns, captured.temperature], ["65536", "8192", "20", "0"]);
+    assert.equal(record.hiddenPass, true);
+  } finally {
+    await gw.close();
+    fs.rmSync(out, { recursive: true, force: true });
+    fs.rmSync(bin, { recursive: true, force: true });
+  }
+});
+
+test("qualification refuses a Nexus executable whose installed version differs from the expected RC", async () => {
+  const out = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-eval-rc-version-"));
+  const tasks = path.join(out, "tasks");
+  const task = path.join(tasks, "qual-fixture");
+  fs.mkdirSync(path.join(task, "fixture"), { recursive: true, mode: 0o700 });
+  fs.chmodSync(tasks, 0o700);
+  fs.writeFileSync(path.join(task, "task.json"), JSON.stringify({
+    id: "qual-fixture",
+    tier: "T2",
+    objective: "Inspect the fixture",
+    fixture: "fixture",
+    hidden: { command: "true" },
+    class: "bugfix",
+    difficulty: "easy",
+  }));
+  const installed = path.join(out, "nexus");
+  fs.writeFileSync(installed, "#!/bin/sh\nprintf '%s\\n' '0.1.0-alpha.2 (legacy, main)'\n");
+  fs.chmodSync(installed, 0o755);
+  const config = path.join(out, "config.json");
+  fs.writeFileSync(config, JSON.stringify({
+    name: "nexus@rc",
+    agent: "nexus",
+    qualification: true,
+    expectedAgentVersion: "1.0.0-rc.1",
+    nexusExecutable: installed,
+    nexusPackageSha256: "b".repeat(64),
+    endpoint: "http://127.0.0.1:1/v1",
+    model: "m",
+    fingerprint: { weightsSha256: "a".repeat(64), serverBuild: "fixture server" },
+    sampling: { temperature: 0.2, seed: 1 },
+    runAs: "nexus-eval",
+    runs: 1,
+  }));
+  try {
+    const run = await runNode([path.join(ROOT, "eval/run.mjs"), "--config", config, "--out", path.join(out, "results"), "--tasks", tasks, "--only", "no-task-selected"]);
+    assert.equal(run.status, 2, `${run.stdout}\n${run.stderr}`);
+    assert.match(run.stderr, /installed Nexus version 0\.1\.0-alpha\.2 does not match expected RC 1\.0\.0-rc\.1/);
+    assert.match(run.stderr, /qualification adapters require sampling\.temperature=0/);
+    assert.equal(fs.existsSync(path.join(out, "results", "manifest.json")), false, "a mismatched install cannot write qualification evidence");
+  } finally {
+    fs.rmSync(out, { recursive: true, force: true });
+  }
+});
+
+test("qualification refuses peer output limits that differ from the installed Nexus limit", async () => {
+  const gw = await startGateway(() => ({ kind: "text", content: "not used" }), { models: () => [{ id: "m", context_length: 65536, max_completion_tokens: 8192, limits_version: "lv1" }] });
+  const out = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-eval-rc-limits-"));
+  const tasks = path.join(out, "tasks");
+  const task = path.join(tasks, "qual-fixture");
+  fs.mkdirSync(path.join(task, "fixture"), { recursive: true, mode: 0o700 });
+  fs.chmodSync(tasks, 0o700);
+  fs.writeFileSync(path.join(task, "task.json"), JSON.stringify({
+    id: "qual-fixture",
+    tier: "T2",
+    objective: "Inspect the fixture",
+    fixture: "fixture",
+    hidden: { command: "true" },
+    class: "bugfix",
+    difficulty: "easy",
+  }));
+  const installed = path.join(out, "nexus");
+  fs.writeFileSync(installed, "#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then printf '%s\\n' '1.0.0-rc.1 (abc123, release)'; else touch '" + path.join(out, "agent-started") + "'; fi\n");
+  fs.chmodSync(installed, 0o755);
+  const config = path.join(out, "config.json");
+  fs.writeFileSync(config, JSON.stringify({
+    name: "nexus@rc",
+    agent: "nexus",
+    qualification: true,
+    expectedAgentVersion: "1.0.0-rc.1",
+    nexusExecutable: installed,
+    nexusPackageSha256: "b".repeat(64),
+    endpoint: gw.url,
+    model: "m",
+    limits: { context: 65536, output: 4096 },
+    fingerprint: { weightsSha256: "a".repeat(64), serverBuild: "fixture server" },
+    sampling: { temperature: 0 },
+    runAs: "nexus-eval",
+    runs: 5,
+  }));
+  try {
+    const run = await runNode([path.join(ROOT, "eval/run.mjs"), "--config", config, "--out", path.join(out, "results"), "--tasks", tasks, "--only", "no-task-selected"]);
+    assert.equal(run.status, 2, `${run.stdout}\n${run.stderr}`);
+    assert.match(run.stderr, /Nexus output allowance 8192 differs from matched peer limit 4096/);
+    assert.equal(fs.existsSync(path.join(out, "agent-started")), false, "mismatched conditions stop before the agent starts");
+    assert.equal(fs.existsSync(path.join(out, "results", "manifest.json")), false);
+  } finally {
+    await gw.close();
+    fs.rmSync(out, { recursive: true, force: true });
+  }
+});
+
+function writePeerResults(root: string, agent: string, overrides: Record<string, unknown> = {}): string {
+  const dir = path.join(root, agent);
+  fs.mkdirSync(dir, { recursive: true });
+  const fingerprint = { alias: "engineering/deep", listed: true, ownedBy: "fixture", contextLength: 65536, weightsSha256: "a".repeat(64), serverBuild: "llama.cpp b123", sampling: { temperature: 0, seed: 17 } };
+  fs.writeFileSync(path.join(dir, "manifest.json"), JSON.stringify({
+    ...overrides,
+    config: { name: `${agent}@engineering/deep`, agent, model: "engineering/deep", qualification: true, limits: { context: 65536, output: 8192 }, sampling: { temperature: 0, seed: 17 }, ...(agent === "nexus" ? { nexusPackageSha256: "d".repeat(64) } : {}), ...(overrides.config as object ?? {}) },
+    fingerprint: { ...fingerprint, ...(overrides.fingerprint as object ?? {}) },
+    agentVersion: { agent, version: `${agent} 1.2.3`, executablePath: `/usr/bin/${agent}`, executableSha256: "c".repeat(64), ...(agent === "nexus" ? { packageSha256: "d".repeat(64) } : {}) },
+    runs: 5,
+  }));
+  const results = path.join(dir, "results.jsonl");
+  fs.writeFileSync(results, Array.from({ length: 5 }, (_, index) => JSON.stringify({
+    config: `${agent}@engineering/deep`,
+    agent,
+    agentVersion: { agent, version: `${agent} 1.2.3` },
+    task: "task-1",
+    run: index + 1,
+    budget: { steps: 40, minutes: 15 },
+    hiddenPass: true,
+    claimedComplete: true,
+    falseVerified: false,
+    regressionPass: true,
+    wallMs: 1000,
+    ...overrides.record,
+  })).join("\n") + "\n");
+  return results;
+}
+
+test("--pairs reports only model-, limit-, and budget-matched Nexus, Goose, and OpenCode runs", () => {
+  const out = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-eval-pairs-"));
+  try {
+    const files = ["nexus", "goose", "opencode"].map((agent) => writePeerResults(out, agent));
+    const scored = spawnSync(process.execPath, [path.join(ROOT, "eval/score.mjs"), "--pairs", ...files, "--json"], { encoding: "utf8" });
+    assert.equal(scored.status, 0, scored.stderr);
+    const result = JSON.parse(scored.stdout);
+    assert.equal(result.peerComparison.matchedRuns, 5);
+    assert.deepEqual(result.peerComparison.agents, ["goose", "nexus", "opencode"]);
+    assert.equal(result.peerComparison.versions.opencode, "opencode 1.2.3");
+  } finally {
+    fs.rmSync(out, { recursive: true, force: true });
+  }
+});
+
+test("--pairs rejects a peer run with a different model fingerprint or effective budget", () => {
+  const out = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-eval-pair-mismatch-"));
+  try {
+    for (const mismatch of [
+      { dir: "budget", goose: { record: { budget: { steps: 41, minutes: 15 } } }, message: /peer conditions do not match.*task-1 run 1/i },
+      { dir: "fingerprint", goose: { fingerprint: { weightsSha256: "b".repeat(64) } }, message: /model fingerprint differs for goose/i },
+      { dir: "limits", goose: { config: { limits: { context: 65536, output: 4096 } } }, message: /context\/output limits differ for goose/i },
+    ]) {
+      const root = path.join(out, mismatch.dir);
+      const files = [
+        writePeerResults(root, "nexus"),
+        writePeerResults(root, "goose", mismatch.goose),
+        writePeerResults(root, "opencode"),
+      ];
+      const scored = spawnSync(process.execPath, [path.join(ROOT, "eval/score.mjs"), "--pairs", ...files, "--json"], { encoding: "utf8" });
+      assert.equal(scored.status, 2, scored.stdout);
+      assert.match(scored.stderr, mismatch.message);
+    }
+  } finally {
+    fs.rmSync(out, { recursive: true, force: true });
+  }
 });

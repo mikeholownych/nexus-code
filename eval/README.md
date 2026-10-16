@@ -6,12 +6,27 @@ separately (never combined), per task and configuration, with 95 % Wilson interv
 ```bash
 node eval/run.mjs --config eval/configs/gateway-engineering-deep.json --out eval/out/<label> [--only id,id] [--runs N]
 node eval/score.mjs eval/out/<label>/results.jsonl          # markdown table; --json for machine output
+node eval/score.mjs --pairs "$NEXUS_RESULTS" "$GOOSE_RESULTS" "$OPENCODE_RESULTS"
 ```
 
 Each run: a fresh workspace (the task's `fixture`, or its `repo.url` at `repo.commit`, cached in `eval/.cache`), a fresh
 `HOME`, the agent with the task's budgets and a wall-clock timeout, then the task's **hidden** tests (copied in only
 after the agent has stopped) and its `regression` command. `manifest.json` records the harness build (commit, dirty),
-the configuration (secrets in `env` masked), host and Node version; per-run logs go to `logs/<task>-<run>/`.
+configuration (secrets in `env` masked), model fingerprint, executable version, configured budget, host and Node
+version. Each result records the executable version and effective step/minute budget; per-run logs go to
+`logs/<task>-<run>/`.
+
+Qualification runs require `nexusExecutable` to name the absolute path of the installed RC,
+`expectedAgentVersion` to pin its version, and `nexusPackageSha256` to record the expected release-asset digest from checksum verification. The runner checks `nexus --version` and refuses the checkout
+`cli/dist/index.js` or a version mismatch before starting an agent. Peer versions are read using each adapter's
+`--version` command in a throwaway HOME; executable paths and SHA-256 hashes are archived alongside the RC package
+digest. `score.mjs --pairs` takes exactly the Nexus,
+Goose and OpenCode result files and refuses mismatched model fingerprints, sampling declarations, context/output
+limits, run pairs, executable identities, or effective step/minute budgets. It reports peer hidden-test results
+separately; scores are never combined. The Nexus adapter passes the recorded temperature and step/minute limits;
+OpenCode receives a primary evaluation agent with the recorded step limit, temperature and seed; Goose receives the
+matching `--max-turns`, context/output limits and temperature settings. Qualification mode currently requires
+`sampling.temperature` to be `0` across all three adapters; seed metadata remains recorded when configured.
 
 ## Task format (`eval/tasks/<id>/task.json`)
 
@@ -115,7 +130,7 @@ one, before any agent runs, unless every item below holds:
 | Runner, scorer, manifest, per-run logs | done |
 | T1 self-test (`selftest-add`, scripted model, in `make test` via `cli/test/eval_harness.test.ts`) | done |
 | Nexus adapter | done |
-| Peer adapters (OpenCode, Goose, Aider) | done (Codex CLI excluded: the gateway does not serve `/v1/responses`) |
+| Peer adapters and matched comparison (OpenCode, Goose, Aider; paired scoring requires Nexus, Goose, OpenCode) | adapter versions and effective budgets recorded; `--pairs` verifies the fixed model, limits, sampling, and 5× task/run pairing (Codex CLI excluded: gateway does not serve `/v1/responses`) |
 | T2 task set (pilot fixture tasks `t2-*`) | done |
 | T3 task set (fact-sheet scorer / steering checks) | not started |
 | T4 fault injector | in progress |
