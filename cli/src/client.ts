@@ -1166,7 +1166,9 @@ export class LocalLlmClient {
     const denial = this.disclosureDenial(ep, requestId);
     if (denial) throw new TokenCountError("denied", denial.message);
     if (signal?.aborted) throw new TokenCountError("aborted", "cancelled");
-    const url = `${ep}/tokenize`;
+    const kind = LocalLlmClient.serverKindCache.get(ep);
+    const root = ep.replace(/\/v1\/?$/, "");
+    const urls = (kind === "llamacpp" || kind === "vllm") && root !== ep ? [`${ep}/tokenize`, `${root}/tokenize`] : [`${ep}/tokenize`];
     let body: any;
     try {
       await this.prepareCredential(ep, requestId);
@@ -1175,20 +1177,32 @@ export class LocalLlmClient {
     } catch (err: any) {
       throw new TokenCountError("denied", boundedProviderText(String(err?.message ?? err)).slice(0, 200));
     }
-    let res: Response;
-    try {
-      res = await fetch(url, {
-        method: "POST",
-        headers: { "Content-Type": "application/json", ...this.authorization(url), "X-Request-ID": requestId, ...this.routingHeaders() },
-        body: JSON.stringify(body),
-        signal: metadataSignal(signal),
-        ...this.fetchPolicy(),
-      });
-    } catch (err: any) {
-      if (signal?.aborted) throw new TokenCountError("aborted", "cancelled");
-      throw new TokenCountError("unavailable", boundedProviderText(String(err?.message ?? err)).slice(0, 160));
+    let res: Response | undefined;
+    let text = "";
+    for (let i = 0; i < urls.length; i++) {
+      const url = urls[i];
+      const reqBody = kind === "llamacpp" && url === `${root}/tokenize`
+        ? { content: JSON.stringify({ messages: body.messages, ...(body.tools ? { tools: body.tools } : {}) }), ...body }
+        : body;
+      try {
+        res = await fetch(url, {
+          method: "POST",
+          headers: { "Content-Type": "application/json", ...this.authorization(url), "X-Request-ID": requestId, ...this.routingHeaders() },
+          body: JSON.stringify(reqBody),
+          signal: metadataSignal(signal),
+          ...this.fetchPolicy(),
+        });
+      } catch (err: any) {
+        if (signal?.aborted) throw new TokenCountError("aborted", "cancelled");
+        throw new TokenCountError("unavailable", boundedProviderText(String(err?.message ?? err)).slice(0, 160));
+      }
+      text = await res.text().catch(() => "");
+      if ((res.status === 404 || res.status === 405) && i + 1 < urls.length && !/blocked|capacity/i.test(text)) {
+        continue;
+      }
+      break;
     }
-    const text = await res.text().catch(() => "");
+    if (!res) throw new TokenCountError("unsupported", "no tokenize endpoint");
     if (res.status === 401 || res.status === 403) throw new TokenCountError("denied", `HTTP ${res.status}`);
     // The gateway answers 404 both for an unknown model and when every worker of the alias is blocked.
     if (res.status === 404) throw new TokenCountError(/blocked|capacity/i.test(text) ? "unavailable" : "unsupported", `HTTP 404 ${boundedProviderText(text).slice(0, 120)}`);

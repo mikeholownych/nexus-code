@@ -211,6 +211,22 @@ export interface RequestCount {
 export function parseTokenizeResponse(body: unknown): RequestCount | { malformed: string } {
   if (!body || typeof body !== "object") return { malformed: "not a JSON object" };
   const b = body as Record<string, any>;
+  if (b.prompt_tokens === undefined) {
+    const vllmCount = positiveInt(b.count) ?? (b.count === 0 ? 0 : undefined);
+    if (vllmCount !== undefined) {
+      return {
+        promptTokens: vllmCount,
+        source: "exact_sampled_worker",
+        ...(positiveInt(b.max_model_len) ? { contextLength: positiveInt(b.max_model_len) } : {}),
+      };
+    }
+    if (Array.isArray(b.tokens) && b.tokens.every((t: unknown) => typeof t === "number")) {
+      return {
+        promptTokens: b.tokens.length,
+        source: "exact_sampled_worker",
+      };
+    }
+  }
   const tokens = positiveInt(b.prompt_tokens) ?? (b.prompt_tokens === 0 ? 0 : undefined);
   if (tokens === undefined) return { malformed: "no numeric prompt_tokens" };
   const source = b.source === "exact" ? "exact_sampled_worker" : b.source === "estimated_conservative" ? "gateway_conservative" : undefined;

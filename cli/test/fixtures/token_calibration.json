@@ -1,0 +1,76 @@
+{
+  "tokenizer": {
+    "id": "llama.cpp-b0-live-llama-worker1+cl100k_base",
+    "limitsVersion": "a3c2fcbc2f2b977c",
+    "capturedAt": "2026-10-16T16:48:59Z",
+    "templateOverheadTokens": 10
+  },
+  "corpora": [
+    {
+      "name": "english prose (200 words)",
+      "kind": "prose",
+      "repeat": ["The quick brown fox jumps over the lazy dog. ", 22],
+      "referenceTokens": 220
+    },
+    {
+      "name": "CJK one 400-char run",
+      "kind": "cjk",
+      "repeat": ["测", 400],
+      "referenceTokens": 400
+    },
+    {
+      "name": "CJK 16-char classical x 25",
+      "kind": "cjk",
+      "repeat": ["天地玄黄宇宙洪荒日月盈昃辰宿列张", 25],
+      "referenceTokens": 325
+    },
+    {
+      "name": "CJK 7-char runs x 50 (cl100k_base reference)",
+      "kind": "cjk",
+      "repeat": ["这是一个测试句。", 50],
+      "referenceTokens": 350
+    },
+    {
+      "name": "Kana 200 chars",
+      "kind": "kana",
+      "repeat": ["あいうえおかきくけこ", 20],
+      "referenceTokens": 160
+    },
+    {
+      "name": "Hangul 200 chars (cl100k_base reference)",
+      "kind": "hangul",
+      "repeat": ["안녕하세요반갑습니다", 20],
+      "referenceTokens": 200
+    },
+    {
+      "name": "digits 1000",
+      "kind": "digits",
+      "repeat": ["1234567890", 100],
+      "referenceTokens": 1000
+    },
+    {
+      "name": "minified JSON",
+      "kind": "json",
+      "generator": "minified_json_50",
+      "referenceTokens": 732
+    },
+    {
+      "name": "base64 4KB",
+      "kind": "base64",
+      "generator": "base64_3072_7",
+      "referenceTokens": 2049
+    },
+    {
+      "name": "whitespace-indented code",
+      "kind": "code",
+      "repeat": ["    if (x) {\n        return y;\n    }\n", 50],
+      "referenceTokens": 748
+    },
+    {
+      "name": "emoji 100",
+      "kind": "emoji",
+      "repeat": ["😀", 100],
+      "referenceTokens": 100
+    }
+  ]
+}
