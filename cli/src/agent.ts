@@ -40,7 +40,7 @@ import {
   ledgerStateIdentity,
   type ObservationVerdict,
 } from "./core/execution_tracking.js";
-import { parseModelResponse } from "./parser.js";
+import { parseModelResponse, repairJsonWithClass, isWriteOrExecTool } from "./parser.js";
 import { TerminalUI, redactSecrets } from "./ui.js";
 import { getGitInfo, getProjectRules } from "./git.js";
 import { SkillManager } from "./skills.js";
@@ -53,7 +53,7 @@ import { selectRelevantFewShots } from "./fewshots.js";
 import { FlightRecorder } from "./flight.js";
 import { WorktreeManager } from "./worktree.js";
 import { isSandboxAvailable } from "./sandbox.js";
-import { runTestSuiteWithExecutor, discoverVerifier, describeVerifier, hasExecutedTests, isVerifierDeliverableBound, isFilteredVerifierCommand } from "./tester.js";
+import { runTestSuiteWithExecutor, discoverVerifier, describeVerifier, hasExecutedTests, isVerifierDeliverableBound, isFilteredVerifierCommand, verifierTimeoutSecs } from "./tester.js";
 import { ENABLE_TOOLS_CAPABILITY, TOOL_GROUPS, groupsTriggeredBy, toolGroupOf } from "./core/tool_groups.js";
 import { judgeWithoutCopy, prepareBaselineTestsCopy, snapshotTests, type ChangeBaseline, type Independence } from "./core/independent_check.js";
 import { ensurePrivateDir, appendPrivateFile } from "./core/durable_file.js";
@@ -1082,7 +1082,7 @@ export class AutonomousAgent {
       this.coderClient = this.client;
     }
     this.hybridSearch = new HybridSearchEngine(ws, this.client);
-    this.synthesizer = new SynthesizerEngine(ws, (command) => this.bridge.executeTool("run_command", { command, timeout_secs: 120 }));
+    this.synthesizer = new SynthesizerEngine(ws, (command) => this.bridge.executeTool("run_command", { command, timeout_secs: verifierTimeoutSecs(config.verifierTimeoutSecs) }));
     this.browser = new BrowserDriver(ws);
     this.knowledge = new KnowledgeGraph(ws, { readOnly: config.readOnly });
     this.bridge = new RustCoreBridge(
@@ -1094,6 +1094,7 @@ export class AutonomousAgent {
       inheritedWorktreeScope ? (config.sandbox || "auto") : config.sandbox,
       Boolean(inheritedWorktreeScope?.requireSandbox),
     );
+    this.bridge.setVerifierTimeoutSecs(config.verifierTimeoutSecs);
     this.securityManager = new SecurityManager(ws);
     this.ui = new TerminalUI();
     this.skillManager = new SkillManager(ws, { readOnly: config.readOnly });
@@ -4169,6 +4170,7 @@ The pinned Objective Ledger lists the operator's requirements; your plan never r
   ): Promise<{ receipt: ExecutionReceipt; shouldExit: boolean }> {
     const toolName = call.function.name;
     let args: Record<string, any> = {};
+    let structurallyRepaired = (call as any).repaired === "structural";
 
     try {
       args =
@@ -4176,7 +4178,40 @@ The pinned Objective Ledger lists the operator's requirements; your plan never r
           ? JSON.parse(call.function.arguments)
           : call.function.arguments;
     } catch {
-      args = toolName === "task_completed" ? {} : { raw: call.function.arguments };
+      if (typeof call.function.arguments === "string") {
+        try {
+          const { value, repaired } = repairJsonWithClass(call.function.arguments);
+          if (repaired === "structural") structurallyRepaired = true;
+          args = value && typeof value === "object" ? value : { raw: call.function.arguments };
+        } catch {
+          structurallyRepaired = true;
+          args = toolName === "task_completed" ? {} : { raw: call.function.arguments };
+        }
+      } else {
+        args = toolName === "task_completed" ? {} : { raw: call.function.arguments };
+      }
+    }
+    if (structurallyRepaired && isWriteOrExecTool(toolName)) {
+      return {
+        receipt: {
+          invocationId: call.id,
+          taskId: this.activeWorktree?.taskId || this.currentTaskId,
+          actor,
+          executionDomain: actor === "subagent" ? "subagent" : "agent_orchestration",
+          capabilityId: this.capabilityRegistry.getByToolName(toolName)?.id || toolName,
+          toolName,
+          targetResources: [],
+          success: false,
+          output: "",
+          error: `Tool call "${toolName}" rejected: arguments required structural JSON repair (truncated or unclosed string/bracket). Re-issue the call with complete valid JSON arguments.`,
+          durationMs: 0,
+          candidateMutated: false,
+          status: "DENIED",
+          timestamp: new Date().toISOString(),
+          simulated: Boolean(this.config.dryRun),
+        },
+        shouldExit: false,
+      };
     }
 
     try {
@@ -4432,7 +4467,7 @@ The pinned Objective Ledger lists the operator's requirements; your plan never r
       try {
         const parsed = JSON.parse(receipt.output || "{}");
         const state = this.verifierState();
-        if (state && typeof parsed.command === "string") {
+        if (state && typeof parsed.command === "string" && parsed.command !== "none" && !parsed.noVerifier) {
           const rawOutput = typeof parsed.report === "string" ? parsed.report : (receipt.output || "");
           const hasExecuted = hasExecutedTests(rawOutput);
           const isDeliverableBound = hasExecuted && isVerifierDeliverableBound(

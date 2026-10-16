@@ -521,6 +521,7 @@ export class RustCoreBridge {
   private readOnly: boolean = false;
   private sandbox: boolean | string = false;
   private requireSandbox: boolean = false;
+  private verifierTimeoutSecs?: number;
   private securityManager: SecurityManager;
   private handshakePromise: Promise<{ version: string; protocol: number }> | null = null;
   private handshakeError: Error | null = null;
@@ -565,6 +566,10 @@ export class RustCoreBridge {
 
   public setSandbox(sandbox: boolean | string): void {
     this.sandbox = sandbox;
+  }
+
+  public setVerifierTimeoutSecs(secs?: number): void {
+    this.verifierTimeoutSecs = secs;
   }
 
   private resolveBinary(): void {
@@ -1112,12 +1117,28 @@ export class RustCoreBridge {
     }
 
     if (toolName === "run_tests") {
-      const { detectTestCommand, runTestSuiteWithExecutor } = await import("./tester.js");
-      const command = detectTestCommand(this.workspace, args.filter);
+      const { discoverVerifier, runTestSuiteWithExecutor, verifierTimeoutSecs } = await import("./tester.js");
+      const discovered = discoverVerifier(this.workspace, args.filter);
+      if (!discovered) {
+        return {
+          success: false,
+          output: JSON.stringify({
+            command: "none",
+            passed: false,
+            noVerifier: true,
+            failures: [],
+            diagnostics: [],
+            report: "no verifier: no verification command is configured or discovered in this workspace.",
+            summary: "no verifier: no verification command is configured or discovered in this workspace.",
+          }),
+          error: "no verifier: no verification command is configured or discovered in this workspace.",
+        };
+      }
+      const timeoutSecs = verifierTimeoutSecs(this.verifierTimeoutSecs);
       const res = await runTestSuiteWithExecutor(
         this.workspace,
-        (testCommand) => this.executeTool("run_command", { command: testCommand, timeout_secs: 120 }),
-        command,
+        (testCommand) => this.executeTool("run_command", { command: testCommand, timeout_secs: timeoutSecs }),
+        discovered.command,
       );
       return {
         success: res.success,

@@ -1,8 +1,18 @@
 import { ToolCall, ChatMessage } from "./types.js";
 import { HARNESS_TOOLS } from "./tools.js";
+import { defaultRegistry } from "./core/capabilities.js";
 
 const KNOWN_TOOLS = new Set<string>(HARNESS_TOOLS.map((t) => t.function.name));
 ["update_requirements", "task_completed", "manage_knowledge", "update_plan", "spawn_subagent"].forEach((t) => KNOWN_TOOLS.add(t));
+
+export type JsonRepairClass = "none" | "trailing" | "structural";
+
+export function isWriteOrExecTool(name: string): boolean {
+  const cap = defaultRegistry.getByToolName(name);
+  if (cap) return cap.effect === "write_workspace" || cap.effect === "exec";
+  if (name.startsWith("mcp__") || name.startsWith("custom__")) return true;
+  return ["write_file", "edit_file", "patch_file", "delete_file", "run_command", "run_tests", "git_commit", "git_stage", "checkpoint_restore"].includes(name);
+}
 
 export function isKnownToolName(name: string): boolean {
   if (typeof name !== "string") return false;
@@ -132,8 +142,8 @@ function mapOutsideStrings(str: string, fix: (segment: string) => string): strin
   return out + (inString ? segment : fix(segment));
 }
 
-export function repairJson<T = any>(raw: string): T {
-  if (typeof raw !== "string") return raw as unknown as T;
+export function repairJsonWithClass<T = any>(raw: string): { value: T; repaired: JsonRepairClass } {
+  if (typeof raw !== "string") return { value: raw as unknown as T, repaired: "none" };
   let str = raw.trim();
 
   // Strip wrapping markdown code blocks if present
@@ -144,7 +154,7 @@ export function repairJson<T = any>(raw: string): T {
 
   // Fast path: try standard JSON.parse first
   try {
-    return JSON.parse(str);
+    return { value: JSON.parse(str), repaired: "none" };
   } catch {
     // Proceed to heuristic repairs
   }
@@ -152,7 +162,7 @@ export function repairJson<T = any>(raw: string): T {
   // 1. Escape unescaped newlines/tabs inside string literals
   const controlsEscaped = escapeControlCharsInStrings(str);
   try {
-    return JSON.parse(controlsEscaped);
+    return { value: JSON.parse(controlsEscaped), repaired: "trailing" };
   } catch {
     // Continue
   }
@@ -160,7 +170,7 @@ export function repairJson<T = any>(raw: string): T {
   // 2. Replace Python literals outside string values
   let cleaned = replaceUnquotedPythonLiterals(controlsEscaped);
   try {
-    return JSON.parse(cleaned);
+    return { value: JSON.parse(cleaned), repaired: "trailing" };
   } catch {
     // Continue
   }
@@ -168,7 +178,7 @@ export function repairJson<T = any>(raw: string): T {
   // 3. Remove trailing commas before closing braces/brackets
   cleaned = mapOutsideStrings(cleaned, (part) => part.replace(/,\s*([}\]])/g, "$1"));
   try {
-    return JSON.parse(cleaned);
+    return { value: JSON.parse(cleaned), repaired: "trailing" };
   } catch {
     // Continue
   }
@@ -176,7 +186,7 @@ export function repairJson<T = any>(raw: string): T {
   // 4. Fix unquoted keys: { key: "value" } -> { "key": "value" }
   cleaned = mapOutsideStrings(cleaned, (part) => part.replace(/([{,]\s*)([a-zA-Z_][a-zA-Z0-9_-]*)\s*:/g, '$1"$2":'));
   try {
-    return JSON.parse(cleaned);
+    return { value: JSON.parse(cleaned), repaired: "trailing" };
   } catch {
     // Continue to quote repairs
   }
@@ -188,7 +198,7 @@ export function repairJson<T = any>(raw: string): T {
   });
 
   try {
-    return JSON.parse(singleQuoteCleaned);
+    return { value: JSON.parse(singleQuoteCleaned), repaired: "trailing" };
   } catch {
     // Continue to bracket repair
   }
@@ -217,26 +227,40 @@ export function repairJson<T = any>(raw: string): T {
   while (openBrackets > 0) { balanced += "]"; openBrackets--; }
   while (openBraces > 0) { balanced += "}"; openBraces--; }
   try {
-    return JSON.parse(balanced);
+    return { value: JSON.parse(balanced), repaired: "structural" };
   } catch {
-    return JSON.parse(str);
+    return { value: JSON.parse(str), repaired: "none" };
   }
 }
 
-/**
- * Normalizes tool arguments, unwrapping nested wrapper payloads (input, parameters, args)
- * and repairing malformed JSON strings.
- */
-function normalizeToolArgs(args: any): string {
+export function repairJson<T = any>(raw: string): T {
+  const { value, repaired } = repairJsonWithClass<T>(raw);
+  if (value && typeof value === "object") {
+    try {
+      Object.defineProperty(value, "repaired", { value: repaired, enumerable: false, configurable: true });
+    } catch {}
+  }
+  return value;
+}
+
+function mergeRepairClass(a: JsonRepairClass, b: JsonRepairClass): JsonRepairClass {
+  if (a === "structural" || b === "structural") return "structural";
+  if (a === "trailing" || b === "trailing") return "trailing";
+  return "none";
+}
+
+function normalizeToolArgsWithClass(args: any): { args: string; repaired: JsonRepairClass } {
   if (typeof args === "string") {
     try {
-      const parsed = repairJson(args);
-      return normalizeToolArgs(parsed);
+      const { value: parsed, repaired } = repairJsonWithClass(args);
+      const inner = normalizeToolArgsWithClass(parsed);
+      return { args: inner.args, repaired: mergeRepairClass(repaired, inner.repaired) };
     } catch {
-      return args;
+      return { args, repaired: "structural" };
     }
   }
   if (typeof args === "object" && args !== null) {
+    const outerRepaired: JsonRepairClass = (args as any).repaired ?? "none";
     if (args.input && typeof args.input === "object" && !Array.isArray(args.input) && Object.keys(args).length === 1) {
       args = args.input;
     } else if (args.parameters && typeof args.parameters === "object" && !Array.isArray(args.parameters) && Object.keys(args).length === 1) {
@@ -244,9 +268,17 @@ function normalizeToolArgs(args: any): string {
     } else if (args.args && typeof args.args === "object" && !Array.isArray(args.args) && Object.keys(args).length === 1) {
       args = args.args;
     }
-    return JSON.stringify(args);
+    return { args: JSON.stringify(args), repaired: outerRepaired };
   }
-  return JSON.stringify(args || {});
+  return { args: JSON.stringify(args || {}), repaired: "none" };
+}
+
+/**
+ * Normalizes tool arguments, unwrapping nested wrapper payloads (input, parameters, args)
+ * and repairing malformed JSON strings.
+ */
+function normalizeToolArgs(args: any): string {
+  return normalizeToolArgsWithClass(args).args;
 }
 
 /**
@@ -420,12 +452,19 @@ export function parseModelResponse(
           notices.push(`Tool "${name}" is not offered on this request and was not executed.`);
           continue;
         }
+        const normalized = normalizeToolArgsWithClass(tc.function.arguments);
+        if (normalized.repaired === "structural" && isWriteOrExecTool(name)) {
+          notices.push(
+            `Tool call "${name}" rejected: arguments required structural JSON repair (truncated or unclosed string/bracket). Re-issue the call with complete valid JSON arguments.`
+          );
+          continue;
+        }
         toolCalls.push({
           id: tc.id || `call_${Math.random().toString(36).substring(2, 9)}`,
           type: "function",
           function: {
             name,
-            arguments: normalizeToolArgs(tc.function.arguments),
+            arguments: normalized.args,
           },
         });
       }
@@ -458,16 +497,23 @@ export function parseModelResponse(
         notices.push(`Tool "${name}" is not offered on this request and was not executed.`);
         continue;
       }
+      const normalized = normalizeToolArgsWithClass(tc.function.arguments);
+      if (normalized.repaired === "structural" && isWriteOrExecTool(name)) {
+        notices.push(
+          `Tool call "${name}" rejected: arguments required structural JSON repair (truncated or unclosed string/bracket). Re-issue the call with complete valid JSON arguments.`
+        );
+        continue;
+      }
       toolCalls.push({
         id: tc.id || `call_${Math.random().toString(36).substring(2, 9)}`,
         type: "function",
         function: {
           name,
-          arguments: normalizeToolArgs(tc.function.arguments),
+          arguments: normalized.args,
         },
       });
     }
-    if (toolCalls.length > 0) {
+    if (toolCalls.length > 0 || notices.length > 0) {
       return {
         thoughtText,
         reasoningText,
@@ -488,22 +534,32 @@ export function parseModelResponse(
   // 2. Try XML style: <tool_call> ... </tool_call>
   const xmlRegex = /<tool_call>([\s\S]*?)<\/tool_call>/gi;
   let xmlMatch: RegExpExecArray | null;
+  let hadXmlMatch = false;
   while ((xmlMatch = xmlRegex.exec(thoughtText)) !== null) {
+    hadXmlMatch = true;
     const raw = xmlMatch[1].trim();
     try {
-      const parsed = repairJson(raw);
+      const { value: parsed, repaired: outerRepaired } = repairJsonWithClass(raw);
       const name = parsed.name || parsed.tool || parsed.function;
       const args = parsed.arguments || parsed.parameters || parsed.args || {};
       if (name && typeof name === "string") {
         if (known(name)) {
-          toolCalls.push({
-            id: `call_${Math.random().toString(36).substring(2, 9)}`,
-            type: "function",
-            function: {
-              name,
-              arguments: normalizeToolArgs(args),
-            },
-          });
+          const normalized = normalizeToolArgsWithClass(args);
+          const repaired = mergeRepairClass(outerRepaired, normalized.repaired);
+          if (repaired === "structural" && isWriteOrExecTool(name)) {
+            notices.push(
+              `Tool call "${name}" rejected: arguments required structural JSON repair (truncated or unclosed string/bracket). Re-issue the call with complete valid JSON arguments.`
+            );
+          } else {
+            toolCalls.push({
+              id: `call_${Math.random().toString(36).substring(2, 9)}`,
+              type: "function",
+              function: {
+                name,
+                arguments: normalized.args,
+              },
+            });
+          }
         } else {
           notices.push(`Tool "${name}" is not offered on this request and was not executed.`);
         }
@@ -513,7 +569,7 @@ export function parseModelResponse(
     }
   }
 
-  if (toolCalls.length > 0) {
+  if (toolCalls.length > 0 || (hadXmlMatch && notices.length > 0)) {
     thoughtText = thoughtText.replace(xmlRegex, "").trim();
     return {
       thoughtText,
@@ -528,18 +584,32 @@ export function parseModelResponse(
   const soleFenced = extractSoleFencedCall(thoughtText);
   if (soleFenced) {
     try {
-      const parsed = repairJson(soleFenced.content);
+      const { value: parsed, repaired: outerRepaired } = repairJsonWithClass(soleFenced.content);
       if (typeof parsed === "object" && parsed !== null) {
         const name = parsed.name || parsed.tool || parsed.action;
         const args = parsed.arguments || parsed.parameters || parsed.args || parsed.input;
         if (name && typeof name === "string") {
           if (known(name)) {
+            const normalized = normalizeToolArgsWithClass(args);
+            const repaired = mergeRepairClass(outerRepaired, normalized.repaired);
+            if (repaired === "structural" && isWriteOrExecTool(name)) {
+              notices.push(
+                `Tool call "${name}" rejected: arguments required structural JSON repair (truncated or unclosed string/bracket). Re-issue the call with complete valid JSON arguments.`
+              );
+              thoughtText = "";
+              return {
+                thoughtText,
+                reasoningText,
+                toolCalls,
+                ...(notices.length > 0 ? { notices } : {}),
+              };
+            }
             toolCalls.push({
               id: `call_${Math.random().toString(36).substring(2, 9)}`,
               type: "function",
               function: {
                 name,
-                arguments: normalizeToolArgs(args),
+                arguments: normalized.args,
               },
             });
             thoughtText = "";

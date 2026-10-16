@@ -175,3 +175,36 @@ test("reasoning stripping supports <reasoning> and reasoning_content fields", ()
   assert.equal(parsed2.thoughtText, "response text");
 });
 
+test("ACC-VER-06: truncated tool arguments requiring structural JSON repair are rejected for write_file and exec tools with a notice (P7, P8, P10)", () => {
+  const offered = ["run_command", "write_file", "read_file", "task_completed"];
+
+  // P7: truncated args inside closed <tool_call>
+  const p7 = {
+    role: "assistant" as const,
+    content: '<tool_call>{"name":"write_file","arguments":{"path":"a.py","content":"def f():\n    return 1\ndef g</tool_call>',
+  };
+  const r7 = parseModelResponse(p7, { nativeTools: false, offered });
+  assert.deepEqual(r7.toolCalls, [], "P7 truncated write_file must be rejected");
+  assert.ok(r7.notices && r7.notices.length > 0, "P7 must produce a rejection notice");
+  assert.match(r7.notices[0], /structural JSON repair/i);
+
+  // P8: truncated native tool_call arguments for write_file
+  const p8 = {
+    role: "assistant" as const,
+    content: "",
+    tool_calls: [{ id: "a", type: "function" as const, function: { name: "write_file", arguments: '{"path":"a.py","content":"abc' } }],
+  };
+  const r8 = parseModelResponse(p8, { nativeTools: true, offered });
+  assert.deepEqual(r8.toolCalls, [], "P8 truncated native write_file must be rejected");
+  assert.ok(r8.notices && r8.notices.length > 0, "P8 must produce a rejection notice");
+  assert.match(r8.notices[0], /structural JSON repair/i);
+
+  // P10: trailing comma + raw newline inside string is 'trailing' repair, NOT 'structural', so write_file succeeds
+  const p10 = {
+    role: "assistant" as const,
+    content: '<tool_call>{"name":"write_file","arguments":{"path":"a.py","content":"x = None\nprint(True)", }}</tool_call>',
+  };
+  const r10 = parseModelResponse(p10, { nativeTools: false, offered });
+  assert.equal(r10.toolCalls.length, 1, "P10 trailing-comma repair is accepted");
+  assert.equal(JSON.parse(r10.toolCalls[0].function.arguments).content, "x = None\nprint(True)");
+});

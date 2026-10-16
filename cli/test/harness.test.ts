@@ -19,7 +19,7 @@ import { countTokens, calculateContextBudget, isContextAdmissible, renderTokenGa
 import { selectRelevantFewShots } from "../src/fewshots.js";
 import { LocalLlmClient } from "../src/client.js";
 import { scanAndOnboardWorkspace } from "../src/onboard.js";
-import { detectTestCommand, runTestSuite } from "../src/tester.js";
+import { discoverVerifier, runTestSuite } from "../src/tester.js";
 import { highlightLine, highlightDiff, highlightCode, highlightMarkdownCodeBlocks } from "../src/syntax.js";
 import { copyToClipboard, readFromClipboard } from "../src/clipboard.js";
 import { executeWebSearch } from "../src/search_web.js";
@@ -732,8 +732,8 @@ error[E0308]: mismatched types
     execSync('git config user.name "Nexus Test" && git config user.email "nexus@example.invalid"', { cwd: repo, stdio: "ignore" });
     fs.writeFileSync(path.join(repo, "base.txt"), "base\n");
     execSync("git add . && git commit -qm baseline", { cwd: repo, stdio: "ignore" });
-    const { detectTestCommand } = await import("../src/tester.js");
-    assert.notStrictEqual(detectTestCommand(repo), "none", "the current detector uses a failing npm test fallback rather than reporting none");
+    const { discoverVerifier } = await import("../src/tester.js");
+    assert.strictEqual(discoverVerifier(repo), null, "discoverVerifier returns null when no verification command is available");
 
     let requests = 0;
     const server = http.createServer((req, res) => {
@@ -2347,14 +2347,14 @@ error[E0308]: mismatched types
     }
   });
 
-  test("detectTestCommand recognizes framework and supports test filters", () => {
+  test("discoverVerifier recognizes framework and supports test filters", () => {
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "nexus_tester_test_"));
     try {
       fs.writeFileSync(path.join(tmpDir, "Cargo.toml"), '[package]\nname = "demo"\n');
-      const cmd = detectTestCommand(tmpDir);
+      const cmd = discoverVerifier(tmpDir)?.command;
       assert.strictEqual(cmd, "cargo test");
 
-      const filtered = detectTestCommand(tmpDir, "unit_test_auth");
+      const filtered = discoverVerifier(tmpDir, "unit_test_auth")?.command;
       assert.strictEqual(filtered, "cargo test -- unit_test_auth");
     } finally {
       fs.rmSync(tmpDir, { recursive: true, force: true });
