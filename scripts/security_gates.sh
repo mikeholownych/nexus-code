@@ -138,7 +138,18 @@ if ! git diff --check; then
   echo "[-] FAIL [SCAN-001]: Git diff check failed (whitespace or conflict markers)." >&2
   exit 1
 fi
-echo "[+] [Gate 3] Git diff hygiene clean."
+# -----------------------------------------------------------------------------
+# Gate 4: Documentation Truthfulness & Forbidden Identifiers (ACC-GOV-04)
+# -----------------------------------------------------------------------------
+echo "[*] [Gate 4] Scanning documentation for forbidden homelab/parity identifiers (ACC-GOV-04)..."
+cd "${ROOT_DIR}"
+FORBIDDEN_MATCHES=$(grep -rnE "t5820|engineering/b0|A770|18010|parity with" README.md quickstart.md docs/*.md 2>/dev/null || true)
+if [[ -n "${FORBIDDEN_MATCHES}" ]]; then
+  echo "[-] FAIL [ACC-GOV-04]: Forbidden identifier or unsupported parity claim found in docs:" >&2
+  echo "${FORBIDDEN_MATCHES}" >&2
+  exit 1
+fi
+echo "[+] [Gate 4] Documentation clean of forbidden identifiers (ACC-GOV-04)."
 
 echo "========================================================"
 echo "  ALL SECURITY LIFECYCLE GATES PASSED CLEANLY (INC-12)  "

@@ -168,7 +168,7 @@ rather than guessed). These are budgets, not a guarantee of the provider's invoi
 - The ChatGPT Codex backend and Copilot request formats follow crush's implementation and are verified against mocks
   only; they can change without notice.
 - No cross-provider model-fallback chain; recovery stays on the selected target.
-- No model catalog cache or embedded per-model context/pricing metadata: set `--context-limit` for large windows.
+- Model catalog lists are cached per provider in `~/.cache/nexus/models` and used as fallback when offline; no embedded per-model pricing metadata: set `--context-limit` for large windows.
 - Provider-hosted tools (web search, code execution) are not enabled; all tools run through Nexus authorization.
 - Opaque reasoning state is replayed only to the exact provider+model that produced it and only if unaltered;
   persistence redaction can alter it, in which case it is dropped (not forwarded) after a restore.

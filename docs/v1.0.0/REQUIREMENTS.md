@@ -218,10 +218,10 @@ Every row has status **open** at `db1ca55` unless stated otherwise. In the "Evid
 
 | ID | Source | Requirement | Rationale | Location | Evidence | Status | Acceptance | Class | Finding | Spec / Plan |
 |---|---|---|---|---|---|---|---|---|---|---|
-| REQ-OPS-101 | HIST-02 | This ledger is authoritative. The historical matrices carry banners. | governance | this file; docs banners | DOC | partial (ledger exists; banners pending) | ACC-GOV-02, ACC-GOV-03 | **B** | HIST-02 | SPEC-09 / PLAN-09 |
-| REQ-OPS-102 | HIST-02 | A CI checker binds rows to tests and acceptance IDs. | governance | `scripts/check_requirements.mjs` | — | open | ACC-GOV-01 | RR | HIST-02 | SPEC-09 / PLAN-09 |
-| REQ-OPS-103 | HIST-01, HIST-11 | Written dispositions for the Issue #12 open blockers and superseded items. | governance | §2.2 | DOC (this file) | implemented (§2.2) | ACC-GOV-02 | **B** | HIST-01, HIST-11 | SPEC-09 / PLAN-09 |
-| REQ-DX-105 | Audit | User docs make no claim contradicted by source, contain no homelab IDs, and make no parity claims. | honesty | docs | SRC (HIST-03, HIST-06, DOC-01, PRV-17, AGT-07) | open | ACC-GOV-04 | RR | as listed | SPEC-09 / PLAN-09 |
+| REQ-OPS-101 | HIST-02 | This ledger is authoritative. The historical matrices carry banners. | governance | this file; docs banners | DOC (docs/HISTORICAL.md; reviews banners) | tested | ACC-GOV-02, ACC-GOV-03 | **B** | HIST-02 | SPEC-09 / PLAN-09 |
+| REQ-OPS-102 | HIST-02 | A CI checker binds rows to tests and acceptance IDs. | governance | `scripts/check_requirements.mjs` | test:cli/test/check_requirements.test.ts::"the ledger checker passes the repository ledger in report mode" | tested | ACC-GOV-01 | RR | HIST-02 | SPEC-09 / PLAN-09 |
+| REQ-OPS-103 | HIST-01, HIST-11 | Written dispositions for the Issue #12 open blockers and superseded items. | governance | §2.2 | DOC (§2.2); test:cli/test/check_requirements.test.ts::"the ledger checker rejects a blocker without spec, plan or acceptance" | tested | ACC-GOV-02 | **B** | HIST-01, HIST-11 | SPEC-09 / PLAN-09 |
+| REQ-DX-105 | Audit | User docs make no claim contradicted by source, contain no homelab IDs, and make no parity claims. | honesty | docs | ACC-GOV-04 (scripts/security_gates.sh) | tested | ACC-GOV-04 | RR | as listed | SPEC-09 / PLAN-09 |
 | REQ-DX-106 | HIST-10 | Open v1 work is tracked as GitHub issues under a milestone. | process | GitHub | RT (0 issues) | open | ACC-GOV-05 | RR | HIST-10 | SPEC-09 / PLAN-09 |
 
 ### 3.7 Qualification

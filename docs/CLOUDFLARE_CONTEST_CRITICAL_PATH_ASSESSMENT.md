@@ -1,5 +1,7 @@
 # Cloudflare Contest Critical Path Assessment
 
+> **Historical record.** This document is kept for provenance. Current requirements and status: [docs/v1.0.0/REQUIREMENTS.md](v1.0.0/REQUIREMENTS.md). Statuses here may have been superseded or contradicted since it was written.
+
 **Assessment date:** 2026-10-02  
 **Repository:** `/home/mike/nexus-code`, branch `main`  
 **Starting accepted implementation:** `a2d3051adaf08af925d1ee6b2407f6a6b153b8cf`  
