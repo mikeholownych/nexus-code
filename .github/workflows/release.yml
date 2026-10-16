@@ -45,6 +45,7 @@ jobs:
           git merge-base --is-ancestor "$GITHUB_SHA" origin/main
           test "${GITHUB_REF_NAME#v}" = "$(node -p 'require("./package.json").version')"
           node scripts/sync-version.mjs --check --tag "$GITHUB_REF_NAME"
+          test -f "docs/releases/${GITHUB_REF_NAME}.md" || { echo "Missing docs/releases/${GITHUB_REF_NAME}.md" >&2; exit 1; }
       - run: npm ci --prefix cli
       - run: npm --prefix cli run build
       - run: cargo test --locked --manifest-path core/Cargo.toml
@@ -70,5 +71,5 @@ jobs:
       - uses: softprops/action-gh-release@v2
         with:
           files: ${{ runner.temp }}/dist/*
-          generate_release_notes: true
+          body_path: docs/releases/${{ github.ref_name }}.md
           prerelease: ${{ contains(github.ref_name, '-') }}
