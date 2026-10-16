@@ -27,3 +27,11 @@
   attribute.
 - A full test run reads `src/` live (tsx): editing sources while it runs contaminates results. Run long suites on a
   snapshot copy of the tree, and keep editing the worktree.
+
+## 2026-10-15/16 — v1 implementation with a second agent
+- Running targeted test files while a full suite ran on the same machine produced a false failure (an extra provider
+  request after a load-induced timeout). Rule: one test run at a time per machine; take the `SUITE` claim
+  (docs/v1.0.0/CONCURRENCY.md) and leave other runs until it is released.
+- During a usage-limit pause, a continuation agent took over my worktrees and branches, following the claims protocol.
+  Before resuming, read `git log` on every v1 branch and the claims log, and fold that agent's work in rather than
+  redoing it; never fast-forward or commit over a branch without checking who moved it.
