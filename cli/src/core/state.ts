@@ -206,16 +206,22 @@ export class TaskStateWriteError extends TaskStateError {
 }
 
 export class CorruptStateError extends TaskStateError {
-  constructor(taskId: string, reason: string) {
-    super(`Corrupt task state for task ID '${taskId}': ${reason}`);
+  public readonly quarantinedPath?: string;
+  constructor(taskId: string, reason: string, quarantinedPath?: string) {
+    super(`Corrupt state for task ID '${taskId}': ${reason}${quarantinedPath ? ` (quarantined to ${quarantinedPath})` : ""}`);
     this.name = "CorruptStateError";
+    this.quarantinedPath = quarantinedPath;
   }
 }
 
 export class UnsupportedSchemaVersionError extends TaskStateError {
+  public readonly version: number;
+  public readonly maxSupported: number;
   constructor(version: number, maxSupported: number = CURRENT_STATE_SCHEMA_VERSION) {
-    super(`Unsupported state schema version '${version}'. Highest supported version is '${maxSupported}'.`);
+    super(`State was created by a newer Nexus (schema ${version}); upgrade to load this state. (Highest supported version is ${maxSupported})`);
     this.name = "UnsupportedSchemaVersionError";
+    this.version = version;
+    this.maxSupported = maxSupported;
   }
 }
 
@@ -415,11 +421,13 @@ export class DurableStateManager {
     try {
       parsed = JSON.parse(content);
     } catch (err: any) {
-      throw new CorruptStateError(taskId, `JSON parse error: ${err.message}`);
+      const quarantined = this.quarantineFile(filePath);
+      throw new CorruptStateError(taskId, `JSON parse error: ${err.message}`, quarantined);
     }
 
     if (!parsed || typeof parsed !== "object") {
-      throw new CorruptStateError(taskId, "State file does not contain a JSON object");
+      const quarantined = this.quarantineFile(filePath);
+      throw new CorruptStateError(taskId, "State file does not contain a JSON object", quarantined);
     }
 
     // Schema version check (fails closed on unsupported future versions)
@@ -428,8 +436,8 @@ export class DurableStateManager {
       throw new UnsupportedSchemaVersionError(version, CURRENT_STATE_SCHEMA_VERSION);
     }
 
-    // Migrate legacy session file if necessary
-    const state: DurableTaskState = this.migrateIfLegacy(parsed, taskId);
+    // Migrate legacy session file if necessary with pre-migration backup
+    const state: DurableTaskState = this.migrateIfLegacy(parsed, taskId, filePath);
 
     // Verify task identity binding
     if (state.taskId && taskId && state.taskId !== taskId && state.sessionId !== taskId) {
@@ -819,11 +827,40 @@ export class DurableStateManager {
   }
 
   /**
-   * Safely migrates legacy session files (schemaVersion 0 or undefined) into the complete DurableTaskState envelope.
+   * Quarantines a corrupt state file by renaming it to .corrupt-<timestamp> (REQ-PER-104).
+   * Corrupt state is never deleted.
    */
-  private migrateIfLegacy(raw: any, fallbackId: string): DurableTaskState {
+  public quarantineFile(filePath: string): string {
+    const timestamp = Date.now();
+    const quarantinePath = `${filePath}.corrupt-${timestamp}`;
+    try {
+      if (fs.existsSync(filePath)) {
+        fs.renameSync(filePath, quarantinePath);
+      }
+      return quarantinePath;
+    } catch {
+      return filePath;
+    }
+  }
+
+  /**
+   * Safely migrates legacy session files (schemaVersion 0 or undefined) into the complete DurableTaskState envelope.
+   * Forward-only migration with a pre-migration backup copy (REQ-PER-106).
+   */
+  private migrateIfLegacy(raw: any, fallbackId: string, filePath?: string): DurableTaskState {
     if (raw.schemaVersion && raw.schemaVersion >= CURRENT_STATE_SCHEMA_VERSION && raw.taskId) {
       return raw as DurableTaskState;
+    }
+
+    // Forward-only migration with a backup of the pre-migration file (REQ-PER-106)
+    if (filePath && fs.existsSync(filePath)) {
+      try {
+        const backupPath = `${filePath}.pre-migration-v${raw.schemaVersion ?? 0}`;
+        if (!fs.existsSync(backupPath)) {
+          fs.copyFileSync(filePath, backupPath);
+          try { fs.chmodSync(backupPath, 0o600); } catch {}
+        }
+      } catch {}
     }
 
     const taskId = raw.taskId || raw.id || fallbackId;

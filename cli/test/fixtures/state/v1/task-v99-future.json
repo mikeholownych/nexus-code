@@ -1,0 +1,15 @@
+{
+  "schemaVersion": 99,
+  "taskId": "task-v99-future",
+  "sessionId": "task-v99-future",
+  "id": "task-v99-future",
+  "title": "Future Version Task",
+  "workspacePath": "/tmp/nexus-test-workspace",
+  "createdAt": "2030-01-01T00:00:00.000Z",
+  "updatedAt": "2030-01-01T00:01:00.000Z",
+  "status": "in_progress",
+  "activePlan": [],
+  "milestones": [],
+  "validationReceipts": [],
+  "messages": []
+}

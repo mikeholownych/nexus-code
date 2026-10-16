@@ -8,6 +8,8 @@ import {
   TaskRecoveryOptions,
   TaskRecoveryResult,
   CURRENT_STATE_SCHEMA_VERSION,
+  CorruptStateError,
+  UnsupportedSchemaVersionError,
 } from "./core/state.js";
 import { WorkspacePath } from "./core/workspace_path.js";
 import { protectArchivedMessages } from "./core/persistence_protection.js";
@@ -15,6 +17,17 @@ import { appendLinesDurably, readArchiveLines, type ArchiveRead, ensurePrivateDi
 
 // Re-export core state primitives
 export * from "./core/state.js";
+
+export class AmbiguousSessionResumeError extends Error {
+  public readonly prefix: string;
+  public readonly candidates: string[];
+  constructor(prefix: string, candidates: string[]) {
+    super(`Ambiguous session ID prefix '${prefix}'. Matches: ${candidates.join(", ")}`);
+    this.name = "AmbiguousSessionResumeError";
+    this.prefix = prefix;
+    this.candidates = candidates;
+  }
+}
 
 /**
  * Upgraded SessionData envelope conforming to DurableTaskState (PERS-001..PERS-004).
@@ -130,28 +143,92 @@ export class SessionManager {
   }
 
   /**
+   * Resolves a session ID by exact match or unique prefix (REQ-PER-104).
+   * Throws AmbiguousSessionResumeError if a prefix matches multiple sessions.
+   * Returns null if no matching session is found.
+   */
+  public resolveResumeId(prefix: string): string | null {
+    const cleanId = prefix.replace(/\.json$/, "");
+    if (!cleanId) return null;
+
+    // 1. Exact match check against session file on disk
+    const exactFilePath = path.join(this.sessionsDir, `${cleanId}.json`);
+    if (fs.existsSync(exactFilePath)) {
+      return cleanId;
+    }
+
+    if (!fs.existsSync(this.sessionsDir)) return null;
+
+    // 2. Gather candidates for prefix matching
+    const candidates = new Set<string>();
+    const files = fs.readdirSync(this.sessionsDir);
+    for (const file of files) {
+      if (!file.endsWith(".json") || file === "index.json" || file.startsWith(".corrupt-")) continue;
+      const id = file.replace(/\.json$/, "");
+      if (id === cleanId) {
+        return id;
+      }
+      if (id.startsWith(cleanId)) {
+        candidates.add(id);
+      }
+    }
+
+    // Also check index entries in case IDs differ
+    const indexPath = this.getIndexPath();
+    if (fs.existsSync(indexPath)) {
+      try {
+        const raw = JSON.parse(fs.readFileSync(indexPath, "utf-8"));
+        if (raw && typeof raw.sessions === "object") {
+          for (const key of Object.keys(raw.sessions)) {
+            const entry = raw.sessions[key];
+            const sid = entry?.id || entry?.cleanId || key;
+            if (sid === cleanId || key === cleanId) {
+              return sid;
+            }
+            if (sid.startsWith(cleanId)) {
+              candidates.add(sid);
+            }
+          }
+        }
+      } catch {}
+    }
+
+    const candidateList = Array.from(candidates).sort();
+    if (candidateList.length === 1) {
+      return candidateList[0];
+    }
+    if (candidateList.length > 1) {
+      throw new AmbiguousSessionResumeError(cleanId, candidateList);
+    }
+    return null;
+  }
+
+  /**
    * Loads session with strict integrity and schema validation, migrating legacy session files if needed.
    */
   public loadSession(sessionId: string): SessionData | null {
-    let cleanId = sessionId.replace(/\.json$/, "");
-    let targetId = cleanId;
-
-    if (!this.stateManager.hasTaskState(cleanId)) {
-      // Find matching session if partial ID was supplied
-      const all = this.listSessions();
-      const match = all.find((s) => s.id.startsWith(cleanId) || s.id.includes(cleanId));
-      if (match) {
-        targetId = match.id;
-      } else {
-        return null;
-      }
+    const cleanId = sessionId.replace(/\.json$/, "");
+    const targetId = this.resolveResumeId(cleanId);
+    if (!targetId) {
+      return null;
     }
 
     try {
       const workspacePath = this.workspacePathFromSessionFile(targetId);
-      const state = this.stateManager.loadTaskState(targetId, undefined, [workspacePath]);
+      const state = this.stateManager.loadTaskState(
+        targetId,
+        undefined,
+        workspacePath ? [workspacePath] : undefined
+      );
       return state as SessionData;
-    } catch {
+    } catch (err: any) {
+      if (
+        err instanceof CorruptStateError ||
+        err instanceof UnsupportedSchemaVersionError ||
+        err instanceof AmbiguousSessionResumeError
+      ) {
+        throw err;
+      }
       return null;
     }
   }
@@ -163,24 +240,26 @@ export class SessionManager {
     sessionId: string,
     options?: TaskRecoveryOptions
   ): TaskRecoveryResult | null {
-    let cleanId = sessionId.replace(/\.json$/, "");
-    if (!this.stateManager.hasTaskState(cleanId)) {
-      const all = this.listSessions();
-      const match = all.find((s) => s.id.startsWith(cleanId) || s.id.includes(cleanId));
-      if (match) {
-        cleanId = match.id;
-      } else {
-        return null;
-      }
+    const cleanId = sessionId.replace(/\.json$/, "");
+    const targetId = this.resolveResumeId(cleanId);
+    if (!targetId) {
+      return null;
     }
 
     try {
-      const workspacePath = this.workspacePathFromSessionFile(cleanId);
-      return this.stateManager.recoverTaskState(cleanId, {
+      const workspacePath = this.workspacePathFromSessionFile(targetId);
+      return this.stateManager.recoverTaskState(targetId, {
         ...options,
-        workspacePaths: [workspacePath],
+        workspacePaths: workspacePath ? [workspacePath] : undefined,
       });
-    } catch {
+    } catch (err: any) {
+      if (
+        err instanceof CorruptStateError ||
+        err instanceof UnsupportedSchemaVersionError ||
+        err instanceof AmbiguousSessionResumeError
+      ) {
+        throw err;
+      }
       return null;
     }
   }
@@ -388,13 +467,19 @@ export class SessionManager {
       .map(({ mtime, cleanId, ...rest }) => rest);
   }
 
-  private workspacePathFromSessionFile(taskId: string): WorkspacePath {
+  private workspacePathFromSessionFile(taskId: string): WorkspacePath | undefined {
     const selected = this.currentSelectedWorkspace();
-    if (!selected) throw new Error("Session recovery requires an independently selected workspace");
+    if (!selected) return undefined;
     selected.assertCurrent();
     this.stateManager.setWorkspacePaths([selected]);
     const filePath = this.stateManager.getStateFilePath(taskId);
-    const raw = JSON.parse(fs.readFileSync(filePath, "utf8"));
+    if (!fs.existsSync(filePath)) return selected;
+    let raw: any;
+    try {
+      raw = JSON.parse(fs.readFileSync(filePath, "utf8"));
+    } catch {
+      return selected;
+    }
     const value = raw?.workspacePath || raw?.workspace;
     if (typeof value !== "string") throw new Error("Session record has no workspace identity");
     if (!selected.matches(value) || (raw?.workspacePath && raw.workspacePath !== selected.value) ||
