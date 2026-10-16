@@ -241,6 +241,17 @@ const announcedDestinations = new Set<string>();
 
 
 const MAX_PROVIDER_ERROR_CHARS = 2_000;
+/** Limit for requests that carry no task content (model lists, catalogs, embeddings): a silent server never hangs them. */
+const METADATA_TIMEOUT_MS = 15_000;
+
+/** Provider or endpoint error text as shown and stored: secrets redacted, at most MAX_PROVIDER_ERROR_CHARS (REQ-PRV-103). */
+export function boundedProviderText(text: string): string {
+  const clean = redactSecrets(text);
+  return clean.length > MAX_PROVIDER_ERROR_CHARS ? `${clean.slice(0, MAX_PROVIDER_ERROR_CHARS)}… [${clean.length - MAX_PROVIDER_ERROR_CHARS} more characters]` : clean;
+}
+
+const metadataSignal = (signal?: AbortSignal): AbortSignal =>
+  signal ? AbortSignal.any([signal, AbortSignal.timeout(METADATA_TIMEOUT_MS)]) : AbortSignal.timeout(METADATA_TIMEOUT_MS);
 
 /**
  * Typed inference failure. `condition` is what the failure says about the provider; `execution` is what is known
@@ -903,12 +914,15 @@ export class LocalLlmClient {
       const url = `${currentEp}/models${query}`;
       const res = await fetch(url, {
         headers: this.authorization(url),
+        signal: metadataSignal(),
         ...this.fetchPolicy(),
       });
 
       if (res.status === 401 && this.reloadAuthToken(url)) {
         const retryRes = await fetch(url, {
           headers: this.authorization(url),
+          signal: metadataSignal(),
+          ...this.fetchPolicy(),
         });
         if (retryRes.ok) return modelIds(await retryRes.json());
       }
@@ -924,7 +938,7 @@ export class LocalLlmClient {
   /** Raw `/models` entries. Providers that publish capability metadata let the scheduler qualify resources. */
   async listModelCatalog(signal?: AbortSignal): Promise<Array<Record<string, any>>> {
     return this.executeWithFailover("listModelCatalog", async (currentEp) => {
-      const res = await fetch(`${currentEp}/models`, { headers: this.authorization(currentEp), signal, ...this.fetchPolicy() });
+      const res = await fetch(`${currentEp}/models`, { headers: this.authorization(currentEp), signal: metadataSignal(signal), ...this.fetchPolicy() });
       if (!res.ok) throw new Error(`Server returned HTTP ${res.status}: ${res.statusText}`);
       const data = (await res.json()) as { data?: Array<Record<string, any>> };
       return Array.isArray(data.data) ? data.data : [];
@@ -1185,6 +1199,8 @@ export class LocalLlmClient {
         })),
         temperature: this.temperature,
       };
+      // The same output allowance as a streamed request (PRV-09: the empty-stream re-request used to be uncapped).
+      if (!this.conn.providerId) payload.max_tokens = this.maxOutputTokens;
 
       if (outboundTools.length > 0) {
         payload.tools = outboundTools;
@@ -1462,7 +1478,10 @@ export class LocalLlmClient {
             const current = toolCallsMap.get(idx) || { id: "", name: "", args: "" };
 
             if (tc.id) current.id = tc.id;
-            if (tc.function?.name) current.name += tc.function.name;
+            // The name arrives once in spec streams. Some servers repeat it in later deltas, or send it cumulatively;
+            // only a genuinely new fragment is appended (PRV-04: a repeated name became "read_fileread_file").
+            const fragment = tc.function?.name;
+            if (fragment && fragment !== current.name) current.name = fragment.startsWith(current.name) ? fragment : current.name + fragment;
             if (tc.function?.arguments) current.args += tc.function.arguments;
 
             toolCallsMap.set(idx, current);
@@ -1692,7 +1711,7 @@ export class LocalLlmClient {
   private httpError(status: number, body: string, requestId: string, headers?: Headers): InferenceError {
     const providerSide = status >= 500 || status === 429 || status === 408;
     const hints = providerHints(headers, body);
-    const shown = this.conn.providerId ? redactSecrets(body).slice(0, MAX_PROVIDER_ERROR_CHARS) : body;
+    const shown = boundedProviderText(body);
     return new InferenceError("http_error", providerSide ? "provider" : "client", `Inference error (HTTP ${status}): ${shown}`, {
       httpStatus: status,
       requestId,
@@ -1705,11 +1724,15 @@ export class LocalLlmClient {
     return this.model;
   }
 
+  /** Set when the endpoint answered that it has no embeddings: later calls fail at once instead of per chunk. */
+  private embeddingsUnsupported?: string;
+
   async generateEmbedding(text: string, model?: string): Promise<number[]> {
     // Bulk repository indexing is not a disclosure any provider selection authorizes; search stays lexical instead.
     if (this.conn.providerId && this.disclosureOf() === "cloud") {
       throw new Error(`Embeddings are not sent to cloud provider '${this.conn.providerId}'.`);
     }
+    if (this.embeddingsUnsupported) throw new Error(this.embeddingsUnsupported);
     return this.executeWithFailover("generateEmbedding", async (currentEp) => {
       const url = `${currentEp}/embeddings`;
 
@@ -1742,10 +1765,14 @@ export class LocalLlmClient {
           model: model || this.model,
           input: outboundText,
         }),
+        signal: metadataSignal(),
+        ...this.fetchPolicy(),
       });
 
       if (!res.ok) {
-        throw new Error(`Embedding request failed (${res.status}): ${await res.text()}`);
+        const message = `Embedding request failed (${res.status}): ${boundedProviderText(await res.text())}`;
+        if (res.status === 404 || res.status === 501) this.embeddingsUnsupported = `${message} (embeddings are off for this session)`;
+        throw new Error(message);
       }
 
       const data: any = await res.json();
