@@ -197,9 +197,9 @@ Every row has status **open** at `db1ca55` unless stated otherwise. In the "Evid
 | REQ-REL-108 | REL-003 (carried) | Lockfile-derived, validated SBOM. | supply chain | `generate_sbom.sh` | SRC (REL-06) | open | ACC-SUP-02 | RR | REL-06, HIST-07 | SPEC-07 / PLAN-07 |
 | REQ-REL-109 | TOP_TIER D4 | Provenance attestation; tag-pinned installer asset. | supply chain | `release.yml` | SRC (REL-09) | open | ACC-SUP-03 | RR | REL-09 | SPEC-07 / PLAN-07 |
 | REQ-REL-110 | SCAN-003 (carried) | The vulnerability gate fails closed. | security gate honesty | `security_gates.sh` | SRC (REL-07) | open | ACC-SUP-04 | RR | REL-07 | SPEC-07 / PLAN-07 |
-| REQ-REL-111 | Audit | CI matrix for Node 20/22/24, pinned toolchain and MSRV, engines field, dist freshness (untracked). | compatibility | `ci.yml` | SRC (REL-13, MNT-01) | open | ACC-SUP-05 | RR | REL-13, MNT-01 | SPEC-07 / PLAN-07 |
+| REQ-REL-111 | Audit | CI matrix for Node 20/22/24, pinned toolchain and MSRV, engines field, dist freshness (untracked). | compatibility | `ci.yml` | SRC (REL-13, MNT-01) | partial | ACC-SUP-05 | RR | REL-13, MNT-01 | SPEC-07 / PLAN-07 |
 | REQ-REL-112 | REL-004 (carried) | SECURITY.md, CHANGELOG.md, release body taken from release notes. | supportability | root, `release.yml` | SRC (HIST-07, MNT-05) | open | ACC-SUP-06 | RR | HIST-07, MNT-05 | SPEC-07 / PLAN-07 |
-| REQ-REL-113 | Audit | Remove dead CI and tracked bytecode. | maintainability | `.gitlab-ci.yml`, `*.pyc` | SRC (MNT-02, EVL-007) | open | ACC-SUP-07 | RR | MNT-02, EVL-007 | SPEC-07 / PLAN-07 |
+| REQ-REL-113 | Audit | Remove dead CI and tracked bytecode. | maintainability | `.gitlab-ci.yml`, `*.pyc` | TEST (ACC-SUP-07) | tested | ACC-SUP-07 | RR | MNT-02, EVL-007 | SPEC-07 / PLAN-07 |
 | REQ-REL-114 | REL-001 (carried) | Cross-runner reproducibility, demonstrated once for the RC. | supply chain | `repro.yml` | UNV | open | ACC-SUP-08 | RR | E §6 | SPEC-07 / PLAN-07 |
 
 ### 3.5 Persistence
