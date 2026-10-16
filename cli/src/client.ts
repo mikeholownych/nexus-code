@@ -61,9 +61,18 @@ function readConfigEnv(): Record<string, string> {
   return out;
 }
 
+/**
+ * The stored gateway token: the file named by the operator's NEXUS_GATEWAY_TOKEN_FILE (environment or config.env, never
+ * a project .env), else the legacy location ~/.config/opencode/t5820-client-token kept for existing installations. It
+ * is sent only to the origin config.env names (see credentialOriginOf).
+ */
 function readGatewayTokenFile(): string | undefined {
+  const configured = operatorSetting("NEXUS_GATEWAY_TOKEN_FILE");
+  const file = configured
+    ? path.resolve(credentialStorageHome(), configured.replace(/^~(?=\/)/, credentialStorageHome()))
+    : path.join(credentialStorageHome(), ".config/opencode/t5820-client-token");
   try {
-    return fs.readFileSync(path.join(credentialStorageHome(), ".config/opencode/t5820-client-token"), "utf-8").trim() || undefined;
+    return fs.readFileSync(file, "utf-8").trim() || undefined;
   } catch {
     return undefined;
   }
@@ -238,6 +247,11 @@ export function unsupportedParameter(message: string): string | undefined {
 /** Cloud destinations announced in this process (the disclosure notice is shown once per origin). */
 const announcedDestinations = new Set<string>();
 /** Provider error bodies are bounded and redacted before they reach messages, logs or the UI. */
+/** An information-flow denial: nothing was sent, and no other endpoint may be tried with the same content (PRV-12). */
+function egressDenied(message: string): InferenceError {
+  return new InferenceError("policy_denied", "client", message, { failoverEligible: false });
+}
+
 const MAX_PROVIDER_ERROR_CHARS = 2_000;
 /** Limit for requests that carry no task content (model lists, catalogs, embeddings): a silent server never hangs them. */
 const METADATA_TIMEOUT_MS = 15_000;
@@ -871,6 +885,8 @@ export class LocalLlmClient {
   }
 
   public addFallbackEndpoint(endpoint: string): void {
+    // A provider connection is pinned to its own endpoint: task content never fails over elsewhere (PRV-13).
+    if (this.conn.providerId) return;
     let ep = endpoint.trim().replace(/\/+$/, "");
     if (!ep.endsWith("/v1")) {
       ep = `${ep}/v1`;
@@ -1229,7 +1245,7 @@ export class LocalLlmClient {
       );
 
       if (!egressEvaluation.allowed) {
-        throw new Error(
+        throw egressDenied(
           egressEvaluation.reason || `Egress to endpoint '${currentEp}' denied by InformationFlowBoundary [FAIL-003].`
         );
       }
@@ -1248,7 +1264,7 @@ export class LocalLlmClient {
           }
         );
         if (!toolsEgress.allowed) {
-          throw new Error(
+          throw egressDenied(
             toolsEgress.reason || `Egress of tools to endpoint '${currentEp}' denied by InformationFlowBoundary [FAIL-003].`
           );
         }
@@ -1324,6 +1340,13 @@ export class LocalLlmClient {
       }
 
       const choice = data.choices[0] as { message: ChatMessage; finish_reason?: string };
+      if (choice.message?.tool_calls && Array.isArray(choice.message.tool_calls)) {
+        for (const tc of choice.message.tool_calls) {
+          if (tc.function && typeof tc.function.arguments === "object" && tc.function.arguments !== null) {
+            tc.function.arguments = JSON.stringify(tc.function.arguments);
+          }
+        }
+      }
       if (this.conn.providerId && choice.finish_reason === "error") {
         throw new InferenceError("provider_error_frame", "provider", "Provider ended the response with finish_reason=error.", { requestId, partialText: typeof choice.message?.content === "string" ? choice.message.content : "" });
       }
@@ -1377,7 +1400,7 @@ export class LocalLlmClient {
     );
 
     if (!egressEvaluation.allowed) {
-      throw new Error(
+      throw egressDenied(
         egressEvaluation.reason || `Egress to endpoint '${currentEp}' denied by InformationFlowBoundary [FAIL-003].`
       );
     }
@@ -1396,7 +1419,7 @@ export class LocalLlmClient {
         }
       );
       if (!toolsEgress.allowed) {
-        throw new Error(
+        throw egressDenied(
           toolsEgress.reason || `Egress of tools to endpoint '${currentEp}' denied by InformationFlowBoundary [FAIL-003].`
         );
       }
@@ -1481,6 +1504,7 @@ export class LocalLlmClient {
 
       this.lastAdmission = parseAdmissionHeaders((name) => res.headers.get(name));
       let fullContent = "";
+      let reasoningContent = "";
       let finishReason: string | undefined;
       let sawDone = false;
       this.pending = { endpoint: currentEp, executions: this.pending?.executions };
@@ -1542,6 +1566,10 @@ export class LocalLlmClient {
             onToken(delta.content);
           }
         }
+        const reasoningDelta = delta.reasoning_content ?? delta.reasoning;
+        if (typeof reasoningDelta === "string") {
+          reasoningContent += reasoningDelta;
+        }
 
         // 2. Tool call chunks
         if (delta.tool_calls && Array.isArray(delta.tool_calls)) {
@@ -1563,8 +1591,18 @@ export class LocalLlmClient {
             // The name arrives once in spec streams. Some servers repeat it in later deltas, or send it cumulatively;
             // only a genuinely new fragment is appended (PRV-04: a repeated name became "read_fileread_file").
             const fragment = tc.function?.name;
-            if (fragment && fragment !== current.name) current.name = fragment.startsWith(current.name) ? fragment : current.name + fragment;
-            if (tc.function?.arguments) current.args += tc.function.arguments;
+            if (fragment) {
+              if (!current.name) current.name = fragment;
+              else if (fragment !== current.name) current.name = fragment.startsWith(current.name) ? fragment : current.name + fragment;
+            }
+            const rawArgs = tc.function?.arguments;
+            if (rawArgs !== undefined && rawArgs !== null) {
+              if (typeof rawArgs === "object") {
+                current.args = JSON.stringify(rawArgs);
+              } else {
+                current.args += String(rawArgs);
+              }
+            }
 
             toolCallsMap.set(idx, current);
           }
@@ -1632,7 +1670,7 @@ export class LocalLlmClient {
 
       // The stream completed with nothing in it; the non-streaming re-request is a new operation with its own
       // X-Request-ID so the provider's records never show two executions under one request ID.
-      if (!fullContent && assembledToolCalls.length === 0) {
+      if (!fullContent && !reasoningContent && assembledToolCalls.length === 0) {
         if (this.pending) this.pending.executions = 2;
         else this.pending = { endpoint: currentEp, executions: 2 };
         console.error(pc.dim(`[nexus] Empty stream from ${this.conn.label}; re-requesting non-streaming completion (executions: 2).`));
@@ -1646,6 +1684,7 @@ export class LocalLlmClient {
         role: "assistant",
         content: fullContent || null,
         ...(assembledToolCalls.length > 0 ? { tool_calls: assembledToolCalls } : {}),
+        ...(reasoningContent ? { reasoning_content: reasoningContent } : {}),
       };
     });
   }
@@ -1654,11 +1693,11 @@ export class LocalLlmClient {
   private egress(messages: ChatMessage[], tools: ToolDefinition[], currentEp: string): { messages: ChatMessage[]; tools: ToolDefinition[] } {
     const ctx = { taskId: this.taskId, sessionId: this.sessionId, sourceBoundary: "HOST_LOCAL" as const };
     const m = this.boundary.evaluateEgress(messages, currentEp, ctx);
-    if (!m.allowed) throw new Error(m.reason || `Egress to endpoint '${currentEp}' denied by InformationFlowBoundary [FAIL-003].`);
+    if (!m.allowed) throw egressDenied(m.reason || `Egress to endpoint '${currentEp}' denied by InformationFlowBoundary [FAIL-003].`);
     let outTools = tools;
     if (tools.length > 0) {
       const t = this.boundary.evaluateEgress(tools, currentEp, ctx);
-      if (!t.allowed) throw new Error(t.reason || `Egress of tools to endpoint '${currentEp}' denied by InformationFlowBoundary [FAIL-003].`);
+      if (!t.allowed) throw egressDenied(t.reason || `Egress of tools to endpoint '${currentEp}' denied by InformationFlowBoundary [FAIL-003].`);
       outTools = t.sanitizedPayload || tools;
     }
     return { messages: this.sanitizeHistory(m.sanitizedPayload || messages), tools: outTools };
@@ -1847,7 +1886,7 @@ export class LocalLlmClient {
       );
 
       if (!egressEvaluation.allowed) {
-        throw new Error(
+        throw egressDenied(
           egressEvaluation.reason || `Egress to endpoint '${currentEp}' denied by InformationFlowBoundary [FAIL-003].`
         );
       }
