@@ -12,7 +12,7 @@ npm --prefix cli test
 bash scripts/security_gates.sh
 ```
 
-`make test` runs the Rust and TypeScript suites and the repository security gates. The Cloudflare service has separate setup and tests; see [the contest entry](CLOUDFLARE_CONTEST.md).
+`make build` compiles the Rust binaries and builds `cli/dist` (`npm --prefix cli run build`). `make test` runs the Rust and TypeScript suites and the repository security gates. The Cloudflare service has separate setup and tests; see [the contest entry](CLOUDFLARE_CONTEST.md).
 
 ## Release package
 
