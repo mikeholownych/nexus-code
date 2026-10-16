@@ -945,6 +945,7 @@ async function main(argv: string[]): Promise<void> {
     .parse(argv);
   const options = program.opts();
   const config = await autoDetectModel(buildConfig(options));
+  config.surface = "tui";
   const app = new ApplicationCore(config);
   const server = new SidecarServer({
     app,

@@ -166,6 +166,18 @@ Press `<TAB>` at any prompt to autocomplete slash commands and directory paths.
   colour; `NEXUS_COLOR=truecolor|256|16|none` overrides. The `+`/`−` markers and labels carry the meaning at every
   depth.
 
+### Cancellation & Process Ownership
+
+- **Cancelling in the TUI:** While a turn is running, pressing `Esc` or `Ctrl-C` sets `cancel_requested`. The footer immediately acknowledges the request:
+  ```
+  ⠋ cancelling — waiting for <tool> (<n>s) · ctrl-c again to quit
+  ```
+  Within one frame, the cancellation signal reaches the command runner and inference engine.
+- **Process Group Termination (REQ-AGT-109, REQ-SEC-106):** Cancellation terminates the entire process group (`killpg`) of in-flight commands: `SIGTERM` is sent immediately, followed by `SIGKILL` after a 2-second grace period. The turn reaches an idle state within 5 seconds.
+- **Repeated Cancel Input:** While cancelling, a second `Esc` has no effect. A second `Ctrl-C` force-quits the TUI and sidecar, initiating an automatic shutdown sweep that terminates all child processes.
+- **Background Services:** Commands launched with `run_command { background: true, service_name }` (such as background dev servers) are registered as managed services. They survive turn cancellation and are listed in `/status`. On client exit or application shutdown, all registered background services are cleaned up. Background processes spawned without registration (`cmd &`) are terminated on turn cancellation.
+- **Notification Gating (REQ-AGT-109a):** Turn completion notifications (desktop `notify-send` and terminal `BEL` `\x07`) are gated to interactive TTY environments running on the REPL or TUI surface. Headless runs (`nexus run --json`) emit no BEL characters and spawn no notifications.
+
 ### Long tasks: no step ceiling
 
 `--max-steps` (default 30) is a segment: at each segment boundary the turn writes a durable checkpoint and continues

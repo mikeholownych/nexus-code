@@ -102,6 +102,8 @@ export class InteractiveRepl {
     } else {
       this.approvalMode = this.config.approvalMode || (isWorkspaceTrusted(this.config.workspace, Boolean(this.config.readOnly)) ? "auto" : "review");
     }
+    this.config.surface = "repl";
+    this.agent.setSurface("repl");
     this.agent.setApprovalMode(this.approvalMode);
     // Compaction archives the originals beside the current session before the session names it as committed.
     this.agent.setArchiveSink((compactionId, messages) => this.sessionManager.appendArchivedHistory(this.currentSessionId, messages, compactionId));
