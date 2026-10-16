@@ -9,6 +9,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { startModelProxy } from "./model_proxy.mjs";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const args = parseArgs(process.argv.slice(2));
@@ -51,9 +52,18 @@ async function runOnce(task, run) {
   try {
     prepareWorkspace(task, ws);
     const sourceBefore = treeDigest(task.dir);
+    // Every agent reaches the model through a per-run forwarder, so whether the model was reachable is observed by the
+    // harness, the same way for every agent (eval/infra.mjs). `config.proxy: false` connects agents directly.
+    const proxy = config.proxy === false ? null : await startModelProxy({ upstream: config.endpoint, caFile });
     const started = Date.now();
-    const agent = await runAgent(task, ws, home);
+    let agent;
+    try {
+      agent = await runAgent(task, ws, home, proxy?.url ?? config.endpoint);
+    } finally {
+      await proxy?.close();
+    }
     const wallMs = Date.now() - started;
+    const model = proxy ? proxy.stats() : null;
     // Agents run as the operator's user, so the task sources (hidden tests included) are readable; a run that changed
     // them or names their path is marked contaminated rather than silently scored.
     const contaminated = treeDigest(task.dir) !== sourceBefore || `${agent.stdout}${agent.stderr}`.includes(tasksDir);
@@ -77,6 +87,7 @@ async function runOnce(task, run) {
       falseVerified: turn?.outcome === "VERIFIED" && !hidden.pass,
       contaminated,
       tokens: agent.json?.tokenStats ?? null,
+      model,
       logs: saveLogs(task, run, agent, hidden, regression),
     };
   } catch (err) {
@@ -106,8 +117,7 @@ function prepareWorkspace(task, ws) {
  * The command line and environment for one agent run. Each agent gets a fresh HOME holding only its gateway settings
  * (no operator plugins, extensions or memory), the same endpoint and model, and the key through its environment.
  */
-function agentCommand(task, ws, home, budget) {
-  const ep = config.endpoint;
+function agentCommand(task, ws, home, budget, ep) {
   const keyEnv = apiKey ? { LOCAL_LLM_API_KEY: apiKey, OPENAI_API_KEY: apiKey, GW_KEY: apiKey } : {};
   const caEnv = caBundle ? { NODE_EXTRA_CA_CERTS: caFile, SSL_CERT_FILE: caBundle, REQUESTS_CA_BUNDLE: caBundle } : {};
   // PWD too: some agents take the project from $PWD rather than the process's working directory.
@@ -144,9 +154,9 @@ function agentCommand(task, ws, home, budget) {
   throw new Error(`agent ${agent} has no adapter`);
 }
 
-function runAgent(task, ws, home) {
+function runAgent(task, ws, home, endpoint) {
   const budget = { steps: task.steps ?? config.steps ?? 300, minutes: task.minutes ?? config.minutes ?? 120 };
-  const { cmd, argv, env } = agentCommand(task, ws, home, budget);
+  const { cmd, argv, env } = agentCommand(task, ws, home, budget, endpoint);
   return new Promise((resolve) => {
     const child = spawn(cmd, argv, { cwd: ws, env, stdio: ["ignore", "pipe", "pipe"], detached: true });
     let stdout = "";

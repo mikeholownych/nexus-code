@@ -31,6 +31,22 @@ completion claimed · artifact correct (hidden tests) · false VERIFIED (VERIFIE
 introduced · timed out / harness errors · wall time, steps, tokens (median). Context qualifier (`contextNotRetained`) is
 recorded per run.
 
+## Scoring integrity
+
+- **Model proxy.** Every agent reaches the model through a per-run forwarder (`eval/model_proxy.mjs`) that `run.mjs`
+  starts. Each record carries `model: { requests, answered, upstreamFailures, firstRequestAt, firstAnswerAt }`. Set
+  `"proxy": false` in a config to connect agents directly; such runs are then scored only by the legacy rule below.
+- **Infrastructure reruns** (`eval/infra.mjs`). A run is rerun only when the model never answered *and* the endpoint
+  was observed failing, or when the harness itself errored. The rule is the same for every agent. A run in which the
+  model answered is always scored: a crash is a failure (and counts towards the crash rate), not a rerun. Records from
+  before the proxy fall back to each agent's own connection-failure message, and the script says how many it judged
+  that way.
+- **Contamination.** Contaminated runs (the task directory changed, or its path appeared in the agent's output) are
+  left out of pooled pass rates and counted separately.
+- **Reruns are listed.** `score.mjs` lists every replaced run with what it showed and what the rerun showed.
+- **Pooled metrics.** Pooled rows report crash rate, regressions, tokens per correct result and wall seconds per
+  correct result. The cost of failed runs counts towards these.
+
 ## Pre-registered thresholds (from the assessment, fixed before any live run)
 
 - false VERIFIED = 0 across all runs;
