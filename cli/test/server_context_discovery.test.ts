@@ -51,7 +51,7 @@ async function server(routes: Record<string, (req: http.IncomingMessage) => unkn
 describe("discovery against a local server", () => {
   test("a llama.cpp server's /props context is discovered when its catalog lists no limits", async () => {
     const srv = await server({
-      "GET /v1/models": () => ({ data: [{ id: "m", object: "model" }] }),
+      "GET /v1/models": () => ({ data: [{ id: "m", object: "model", owned_by: "llamacpp", meta: { n_ctx_train: 131072 } }] }),
       "GET /props": () => ({ default_generation_settings: { n_ctx: 4096 } }),
     });
     try {
@@ -63,26 +63,27 @@ describe("discovery against a local server", () => {
       await srv.close();
     }
   });
-  test("an Ollama server is found after the earlier probes 404", async () => {
+  test("an Ollama server is recognised from its catalog and asked only through its own endpoint", async () => {
     const srv = await server({
-      "GET /v1/models": () => ({ data: [{ id: "m", object: "model" }] }),
+      "GET /v1/models": () => ({ data: [{ id: "m", object: "model", owned_by: "library" }] }),
       "POST /api/show": () => ({ model_info: { "qwen2.context_length": 32768 } }),
     });
     try {
       const found = await new LocalLlmClient({ endpoint: srv.url, model: "m", workspace: "/tmp", maxSteps: 1 } as any).discoverAdvertisement();
       assert.equal(found.advertised?.via, "ollama");
       assert.equal(found.advertised?.contextLength, 32768);
-      assert.deepEqual(srv.seen.slice(1), ["GET /props", "GET /api/v0/models", "POST /api/show"]);
+      assert.deepEqual(srv.seen.slice(1), ["POST /api/show"], "only the recognised server's endpoint is asked");
     } finally {
       await srv.close();
     }
   });
-  test("a server with none of these endpoints stays on labelled defaults", async () => {
+  test("an unrecognised server is not probed and stays on labelled defaults", async () => {
     const srv = await server({ "GET /v1/models": () => ({ data: [{ id: "m", object: "model" }] }) });
     try {
       const found = await new LocalLlmClient({ endpoint: srv.url, model: "m", workspace: "/tmp", maxSteps: 1 } as any).discoverAdvertisement();
       assert.equal(found.state, "unsupported");
       assert.equal(found.detail, "catalog lists no limits");
+      assert.deepEqual(srv.seen, ["GET /v1/models"], "no guessed endpoints were requested");
     } finally {
       await srv.close();
     }

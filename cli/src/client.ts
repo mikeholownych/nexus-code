@@ -238,6 +238,18 @@ export function unsupportedParameter(message: string): string | undefined {
 /** Cloud destinations announced in this process (the disclosure notice is shown once per origin). */
 const announcedDestinations = new Set<string>();
 /** Provider error bodies are bounded and redacted before they reach messages, logs or the UI. */
+/**
+ * Which local server a `/models` entry comes from, by the owner each one reports: llama.cpp server "llamacpp" (with a
+ * `meta` block), LM Studio "organization_owner", Ollama "library" or "ollama". Undefined for anything else.
+ */
+function serverKindOf(entry: Record<string, any>): "llamacpp" | "lmstudio" | "ollama" | undefined {
+  const owner = typeof entry.owned_by === "string" ? entry.owned_by.toLowerCase() : "";
+  if (owner === "llamacpp" || (entry.meta && typeof entry.meta === "object" && "n_ctx_train" in entry.meta)) return "llamacpp";
+  if (owner === "organization_owner") return "lmstudio";
+  if (owner === "library" || owner === "ollama") return "ollama";
+  return undefined;
+}
+
 const MAX_PROVIDER_ERROR_CHARS = 2_000;
 
 /**
@@ -969,7 +981,7 @@ export class LocalLlmClient {
       if (!advertised || (advertised.contextLength === undefined && advertised.maxCompletionTokens === undefined)) {
         // An OpenAI-style catalog without limits (llama.cpp, LM Studio, Ollama): ask the server itself what it loaded.
         // Only for a plain endpoint: cloud provider connections have no such endpoints.
-        const local = this.conn.providerId ? undefined : await this.discoverServerContext(signal);
+        const local = this.conn.providerId ? undefined : await this.discoverServerContext(entry, signal);
         if (local) return { state: "supported", advertised: local };
         return { state: "unsupported", advertised, detail: "catalog lists no limits" };
       }
@@ -981,17 +993,20 @@ export class LocalLlmClient {
   }
 
   /**
-   * The loaded context of a local server that lists no limits in its catalog: llama.cpp `/props`, LM Studio
-   * `/api/v0/models`, Ollama `/api/show`, tried in that order on the endpoint's own origin with the same credential and
-   * a 2 s limit each. Not content-bearing. Undefined when none answers with a context size.
+   * The loaded context of a local server that lists no limits in its catalog, from that server's own endpoint (llama.cpp
+   * `/props`, LM Studio `/api/v0/models`, Ollama `/api/show`) on the endpoint's origin with the same credential and a 2 s
+   * limit. The server is recognised from its catalog entry first, so an unrecognised server is never probed. Not
+   * content-bearing. Undefined when the server is not recognised or does not answer with a context size.
    */
-  private async discoverServerContext(signal?: AbortSignal): Promise<Advertisement | undefined> {
+  private async discoverServerContext(entry: Record<string, any>, signal?: AbortSignal): Promise<Advertisement | undefined> {
+    const kind = serverKindOf(entry);
+    if (!kind) return undefined;
     const root = this.endpoint.replace(/\/v1\/?$/, "");
     const probes: Array<{ kind: "llamacpp" | "lmstudio" | "ollama"; url: string; init?: RequestInit }> = [
-      { kind: "llamacpp", url: `${root}/props` },
-      { kind: "lmstudio", url: `${root}/api/v0/models` },
-      { kind: "ollama", url: `${root}/api/show`, init: { method: "POST", body: JSON.stringify({ model: this.model }), headers: { "content-type": "application/json" } } },
-    ];
+      { kind: "llamacpp" as const, url: `${root}/props` },
+      { kind: "lmstudio" as const, url: `${root}/api/v0/models` },
+      { kind: "ollama" as const, url: `${root}/api/show`, init: { method: "POST", body: JSON.stringify({ model: this.model }), headers: { "content-type": "application/json" } } },
+    ].filter((p) => p.kind === kind);
     for (const probe of probes) {
       try {
         const res = await fetch(probe.url, {
