@@ -108,6 +108,9 @@ export interface DurableTaskState {
   updatedAt: string;
   status: TaskLifecycleStatus;
 
+  // Retention: pinned sessions are never pruned by GC (REQ-PER-102, DEC-11)
+  pinned?: boolean;
+
   // Authoritative task milestones (PERS-001)
   activePlan: DurablePlanPhase[];
   milestones: DurableMilestoneRecord[];

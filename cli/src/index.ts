@@ -118,7 +118,18 @@ function spawnTui(tuiBin: string, sidecarScript: string): void {
   process.exit(result.status ?? (result.signal ? 1 : 0));
 }
 
+function triggerBackgroundGc(): void {
+  void import("./core/retention.js").then(({ maybeRunDailyGc }) => {
+    maybeRunDailyGc().then((res) => {
+      if (res.status === "needs_acknowledgement" && res.notice) {
+        console.error(pc.yellow(`\n[Notice] ${res.notice}\n`));
+      }
+    }).catch(() => {});
+  }).catch(() => {});
+}
+
 async function startRepl(options: any): Promise<void> {
+  triggerBackgroundGc();
   if (process.env.NEXUS_TEST_RECORD_REPL) {
     const log = process.env.NEXUS_TEST_RECORD_REPL;
     const parts = ["repl"];
@@ -148,6 +159,7 @@ async function startRepl(options: any): Promise<void> {
 }
 
 async function runDefault(options: any): Promise<void> {
+  triggerBackgroundGc();
   if (options.repl) {
     await startRepl(options);
     return;
@@ -513,6 +525,67 @@ program
       console.log(`  Workspace: ${pc.dim(s.workspace)} | Messages: ${s.messageCount}\n`);
     }
     console.log(pc.dim("Resume any session with: harness repl --resume <session_id>\n"));
+  });
+
+program
+  .command("gc")
+  .description("Clean up old sessions, tasks, checkpoints, and flights according to retention policy (REQ-PER-102, DEC-11)")
+  .option("--dry-run", "Report what would be deleted without deleting")
+  .option("--only-test-pollution", "Only delete records from temporary test runs (/tmp/nexus-app-test-*)")
+  .option("--max-age-days <days>", "Retention age limit in days (default: 90)", (val) => parseInt(val, 10))
+  .option("--max-size-mb <mb>", "Retention size limit in megabytes (default: 2048)", (val) => parseInt(val, 10))
+  .option("--ack", "Acknowledge and enable automatic daily background GC")
+  .option("--json", "Output results as machine-readable JSON")
+  .action(async (options: any) => {
+    const { runRetentionGc, acknowledgeDailyGc } = await import("./core/retention.js");
+    if (options.ack) {
+      acknowledgeDailyGc();
+      if (options.json) {
+        console.log(JSON.stringify({ acknowledged: true }));
+      } else {
+        console.log(pc.green("Automatic daily background GC acknowledged and enabled."));
+      }
+      return;
+    }
+
+    const maxSizeBytes = options.maxSizeMb !== undefined ? options.maxSizeMb * 1024 * 1024 : undefined;
+    const result = runRetentionGc({
+      dryRun: Boolean(options.dryRun),
+      onlyTestPollution: Boolean(options.onlyTestPollution),
+      maxAgeDays: options.maxAgeDays,
+      maxSizeBytes,
+    });
+
+    if (options.json) {
+      console.log(JSON.stringify(result, null, 2));
+      return;
+    }
+
+    const mbScanned = (result.scannedBytes / (1024 * 1024)).toFixed(1);
+    const mbDeleted = (result.deletedBytes / (1024 * 1024)).toFixed(1);
+
+    if (result.dryRun) {
+      console.log(pc.bold(pc.cyan("\n=== Nexus State Garbage Collection (Dry Run) ===\n")));
+      console.log(`Scanned: ${result.scannedCount} items (${mbScanned} MB)`);
+      console.log(`Reclaimable: ${pc.yellow(result.deletedCount.toString())} items (${pc.yellow(mbDeleted)} MB)\n`);
+      for (const [kind, stats] of Object.entries(result.byKind)) {
+        if (stats.count > 0) {
+          const mb = (stats.bytes / (1024 * 1024)).toFixed(1);
+          console.log(`  • ${kind}s: ${stats.count} items (${mb} MB)`);
+        }
+      }
+      console.log(pc.dim("\nRun 'nexus gc' without --dry-run to apply this cleanup.\n"));
+    } else {
+      console.log(pc.bold(pc.green("\n=== Nexus State Garbage Collection Complete ===\n")));
+      console.log(`Reclaimed: ${pc.bold(pc.green(result.deletedCount.toString()))} items (${mbDeleted} MB) in ${result.durationMs} ms`);
+      for (const [kind, stats] of Object.entries(result.byKind)) {
+        if (stats.count > 0) {
+          const mb = (stats.bytes / (1024 * 1024)).toFixed(1);
+          console.log(`  • ${kind}s: ${stats.count} items (${mb} MB)`);
+        }
+      }
+      console.log();
+    }
   });
 
 program

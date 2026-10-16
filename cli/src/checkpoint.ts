@@ -14,6 +14,7 @@ export interface CheckpointInfo {
   id: string;
   name: string;
   timestamp: string;
+  workspace?: string;
   gitRef?: string;
   snapshotDir?: string;
   files?: Array<{ path: string; content: string }>;
@@ -146,6 +147,10 @@ export class CheckpointManager {
         } else {
           // Working tree was clean; record HEAD
           const headCommit = execSync("git rev-parse HEAD", { cwd: this.workspace, encoding: "utf-8" }).trim();
+          execSync(`git update-ref refs/nexus/checkpoints/${id} ${headCommit}`, {
+            cwd: this.workspace,
+            stdio: "ignore",
+          });
           gitRef = headCommit;
         }
       } catch (error) {
@@ -172,6 +177,7 @@ export class CheckpointManager {
       id,
       name: desc,
       timestamp,
+      workspace: this.workspace,
       gitRef,
       snapshotDir,
     };
@@ -179,6 +185,14 @@ export class CheckpointManager {
     const targetFile = path.join(this.checkpointDir, `${id}.json`);
     writePrivateFile(targetFile, JSON.stringify(checkpoint, null, 2), { durable: true });
     return checkpoint;
+  }
+
+  public getCheckpointDir(): string {
+    return this.checkpointDir;
+  }
+
+  public getWorkspace(): string {
+    return this.workspace;
   }
 
   public listCheckpoints(): CheckpointInfo[] {
