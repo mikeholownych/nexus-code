@@ -197,6 +197,11 @@ async function runDefault(options: any): Promise<void> {
 
 const program = new Command();
 
+// Options given before a subcommand belong to the top-level launch (`nexus --provider X` opens the TUI with it);
+// options after a subcommand belong to that subcommand. Without this, the top-level --provider/-m swallowed the
+// subcommand's own (`nexus providers verify --provider openrouter` reported --provider missing).
+program.enablePositionalOptions();
+
 program
   .name("nexus")
   .description("Nexus Code - Custom Autonomous Coding Harness for Local AI (LM Studio / vLLM)")
