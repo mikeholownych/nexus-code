@@ -27,9 +27,8 @@ async function withStoredCredential<T>(gatewayUrl: string, fn: () => Promise<T>)
   for (const k of keys) delete process.env[k];
   process.env.HOME = home;
   fs.mkdirSync(path.join(home, ".config/nexus"), { recursive: true });
-  fs.mkdirSync(path.join(home, ".config/opencode"), { recursive: true });
   fs.writeFileSync(path.join(home, ".config/nexus/config.env"), `LOCAL_LLM_ENDPOINT=${gatewayUrl}\nLOCAL_LLM_MODEL=engineering/lead\n`);
-  fs.writeFileSync(path.join(home, ".config/opencode/t5820-client-token"), `${TOKEN}\n`, { mode: 0o600 });
+  fs.writeFileSync(path.join(home, ".config/nexus/gateway-token"), `${TOKEN}\n`, { mode: 0o600 });
   try {
     return await fn();
   } finally {

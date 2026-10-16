@@ -591,7 +591,7 @@ function installHome(home: string, gatewayUrl: string, o: { configKey?: boolean 
   fs.mkdirSync(path.join(home, ".config/nexus"), { recursive: true });
   fs.mkdirSync(path.join(home, ".config/opencode"), { recursive: true });
   fs.writeFileSync(path.join(home, ".config/nexus/config.env"), `LOCAL_LLM_ENDPOINT=${gatewayUrl}\nLOCAL_LLM_MODEL=m\n${o.configKey ? `LOCAL_LLM_API_KEY=${CONFIG_KEY}\n` : ""}`);
-  if (!o.configKey) fs.writeFileSync(path.join(home, ".config/opencode/t5820-client-token"), `${TOKEN}\n`, { mode: 0o600 });
+  if (!o.configKey) fs.writeFileSync(path.join(home, ".config/nexus/gateway-token"), `${TOKEN}\n`, { mode: 0o600 });
 }
 
 const outputs: string[] = [];
@@ -644,7 +644,7 @@ async function withProviders<T>(fn: (p: { home: string; aihost: Gw; foreign: Gw;
 
 /** Every file the runs left under HOME except the credential stores themselves. */
 function durableFiles(root: string): string[] {
-  const stores = new Set([path.join(root, ".config/nexus/config.env"), path.join(root, ".config/opencode/t5820-client-token")]);
+  const stores = new Set([path.join(root, ".config/nexus/config.env"), path.join(root, ".config/nexus/gateway-token")]);
   const out: string[] = [];
   const walk = (d: string) => {
     for (const e of fs.readdirSync(d, { withFileTypes: true })) {
@@ -775,7 +775,7 @@ describe("I6: only the operator environment and config.env decide where a stored
     fs.writeFileSync(path.join(evil, ".config/nexus/config.env"), `LOCAL_LLM_ENDPOINT=${foreign.url}\n`);
     if (o.linkToken) {
       fs.mkdirSync(path.join(evil, ".config/opencode"), { recursive: true });
-      fs.symlinkSync(o.linkToken, path.join(evil, ".config/opencode/t5820-client-token"));
+      fs.symlinkSync(o.linkToken, path.join(evil, ".config/nexus/gateway-token"));
     }
     fs.writeFileSync(path.join(project, ".env"), `HOME=${evil}\n${o.env ?? ""}`);
     return project;
@@ -807,7 +807,7 @@ describe("I6: only the operator environment and config.env decide where a stored
   test("a re-homed token file that links to the operator's token reaches no foreign endpoint (i6i), even one the project selects", async () => {
     await withProviders(async ({ home, aihost, foreign, dir }) => {
       installHome(home, aihost.url);
-      const linkToken = path.join(home, ".config/opencode/t5820-client-token");
+      const linkToken = path.join(home, ".config/nexus/gateway-token");
       const project = rehomingProject(dir, foreign, { linkToken });
       await cli(["run", "-w", ".", "-e", foreign.url, "-m", "m", "-s", "1", "say hi"], { cwd: project, home });
       await cli(["models", "-e", foreign.url], { cwd: project, home });
@@ -821,7 +821,7 @@ describe("I6: only the operator environment and config.env decide where a stored
   test("positive control: under the same re-homing .env, the operator's gateway still receives the stored token", async () => {
     await withProviders(async ({ home, aihost, foreign, dir }) => {
       installHome(home, aihost.url);
-      const project = rehomingProject(dir, foreign, { linkToken: path.join(home, ".config/opencode/t5820-client-token") });
+      const project = rehomingProject(dir, foreign, { linkToken: path.join(home, ".config/nexus/gateway-token") });
       await cli(["models", "-e", aihost.url], { cwd: project, home });
       assert.ok(carries(aihost, TOKEN), `aihost saw: ${aihost.authorizations.join(", ")}`);
     });

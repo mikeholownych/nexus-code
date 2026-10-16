@@ -613,9 +613,8 @@ const FOREIGN_KEY = "k-FOREIGN-secret-0002";
 async function withStoredCredential<T>(gatewayUrl: string, fn: (home: string) => Promise<T>): Promise<T> {
   return withHome(async (home) => {
     fs.mkdirSync(path.join(home, ".config/nexus"), { recursive: true });
-    fs.mkdirSync(path.join(home, ".config/opencode"), { recursive: true });
     fs.writeFileSync(path.join(home, ".config/nexus/config.env"), `LOCAL_LLM_ENDPOINT=${gatewayUrl}\nLOCAL_LLM_MODEL=engineering/lead\n`);
-    fs.writeFileSync(path.join(home, ".config/opencode/t5820-client-token"), `${AIHOST_TOKEN}\n`, { mode: 0o600 });
+    fs.writeFileSync(path.join(home, ".config/nexus/gateway-token"), `${AIHOST_TOKEN}\n`, { mode: 0o600 });
     return fn(home);
   });
 }
