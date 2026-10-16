@@ -1777,6 +1777,11 @@ fn composer_hint(state: &LiveState) -> Cow<'static, str> {
         }
         (_, true) if state.cancel_requested() => {
             let elapsed = state.now.saturating_duration_since(state.turn_started.unwrap_or(state.now));
+            let cancel_elapsed = state.now.saturating_duration_since(state.cancel_started().unwrap_or(state.now));
+            let secs = cancel_elapsed.as_secs();
+            if let Some(tool) = state.running_tool() {
+                return Cow::Owned(format!(" {} cancelling — waiting for {tool} ({secs}s) · ctrl-c again to quit ", spinner_frame(elapsed)));
+            }
             return Cow::Owned(format!(" {} cancelling… ctrl-c again to quit ", spinner_frame(elapsed)));
         }
         (_, true) if !state.composer.is_empty() => {
@@ -2025,6 +2030,21 @@ mod tests {
                 .is_some()
         );
         assert_shows(&draw(&state, 40, 12), &["cancelling… ctrl-c again to quit"]);
+    }
+
+    #[test]
+    fn cancel_during_running_tool_shows_waiting_for_tool_in_hint() {
+        let mut state = ready();
+        feed(&mut state, &[
+            BUSY,
+            r#"{"v":1,"type":"tool.start","turn_id":"t1","call_id":"c1","tool":"run_command","subject":"sleep 30"}"#,
+        ]);
+        assert!(
+            state
+                .on_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE))
+                .is_some()
+        );
+        assert_shows(&draw(&state, 100, 12), &["cancelling — waiting for run_command (0s)"]);
     }
 
     #[test]

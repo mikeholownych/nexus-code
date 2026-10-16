@@ -113,6 +113,7 @@ program
     }
     const resumeId = typeof options.resume === "string" ? options.resume : options.resume ? "latest" : undefined;
     if (config.provider || config.plannerProvider || config.coderProvider) console.error(pc.dim(describeTarget(config)));
+    config.surface = "repl";
     const app = new ApplicationCore(config);
     const repl = new InteractiveRepl(app, config.approvalMode, resumeId);
     await repl.start();
@@ -158,6 +159,7 @@ program
   .action(async (promptParts: string[], options: any) => {
     const prompt = promptParts.join(" ");
     const config = buildConfig(options);
+    config.surface = "headless";
     const isJson = Boolean(options.json);
 
     // Auto-detect loaded model if model is 'local-model'

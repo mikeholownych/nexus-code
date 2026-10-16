@@ -788,7 +788,14 @@ function stepPosition(step: number, max: number): string {
 /** A workspace state identity that took longer than this disables further ones for the turn (reported, not hidden). */
 const STATE_IDENTITY_BUDGET_MS = 1_500;
 
-function triggerNotification(title: string, message: string) {
+function triggerNotification(title: string, message: string, surface?: string) {
+  // Desktop notification and BEL happen only when stdout is an interactive TTY and the surface is the REPL or TUI (REQ-AGT-109a).
+  if (!process.stdout.isTTY) {
+    return;
+  }
+  if (surface !== "repl" && surface !== "tui") {
+    return;
+  }
   try {
     process.stdout.write("\x07");
     exec(`notify-send "${title.replace(/"/g, '\\"')}" "${message.replace(/"/g, '\\"')}"`, () => {});
@@ -994,6 +1001,8 @@ export class AutonomousAgent {
   public recoveryArchiveNotice?: string;
   /** Every original compaction replaced in this conversation (bounded), searchable with read_archive. */
   private archiveForReading: ChatMessage[] = [];
+  /** Execution surface: 'repl', 'tui', or 'headless' (REQ-AGT-109a). */
+  private surface: string;
 
   constructor(
     config: HarnessConfig,
@@ -1002,6 +1011,7 @@ export class AutonomousAgent {
   ) {
     canonicalDurableProvenance.set(this, new WeakMap());
     this.config = config;
+    this.surface = config.surface || "headless";
     this.primaryWorkspacePathIdentity = WorkspacePath.fromSelectedWorkspace(path.resolve(config.workspace || process.cwd()));
     this.workspacePathIdentity = this.primaryWorkspacePathIdentity;
     this.depth = depth;
@@ -1391,6 +1401,14 @@ export class AutonomousAgent {
 
   public getCapabilityRegistry(): CapabilityRegistry {
     return this.capabilityRegistry;
+  }
+
+  public setSurface(surface: string): void {
+    this.surface = surface;
+  }
+
+  public getSurface(): string {
+    return this.surface;
   }
 
   public async initExtensibility(): Promise<void> {
@@ -5169,7 +5187,7 @@ The pinned Objective Ledger lists the operator's requirements; your plan never r
         );
       }
 
-      triggerNotification("Nexus Code", "Turn finished.");
+      triggerNotification("Nexus Code", "Turn finished.", this.surface);
 
       try {
         this.knowledge.autoExtract(promptText, "");

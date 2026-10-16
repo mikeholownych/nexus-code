@@ -420,8 +420,10 @@ pub struct LiveState {
     turn_seq: u64,
     /// Id of the submitted prompt the sidecar has not yet answered with a `turn.result`.
     pending: Option<String>,
-    /// Ctrl-C already asked the running turn to stop; another Ctrl-C quits.
+    /// Ctrl-C or Esc already asked the running turn to stop; another Ctrl-C quits.
     cancel_requested: bool,
+    /// When cancel was requested.
+    cancel_started: Option<Instant>,
     pub focus: Focus,
     pub overlay: Option<Overlay>,
     /// Transcript rows hidden below the viewport; 0 follows the newest line.
@@ -483,6 +485,7 @@ impl LiveState {
             turn_seq: 0,
             pending: None,
             cancel_requested: false,
+            cancel_started: None,
             focus: Focus::Composer,
             overlay: None,
             scroll_back: 0,
@@ -680,6 +683,24 @@ impl LiveState {
         self.cancel_requested
     }
 
+    pub fn cancel_started(&self) -> Option<Instant> {
+        self.cancel_started
+    }
+
+    pub fn running_tool(&self) -> Option<&str> {
+        for entry in self.transcript.iter().rev() {
+            if let Entry::Tool { tool, status: ToolStatus::Running, .. } = entry {
+                return Some(tool.as_str());
+            }
+        }
+        if let Some(activity) = &self.activity {
+            if let Some(tool) = &activity.tool {
+                return Some(tool.as_str());
+            }
+        }
+        None
+    }
+
     /// No session yet: the link is starting, or `hello` arrived but the first `session.state` has not.
     pub fn connecting(&self) -> bool {
         match self.link {
@@ -741,6 +762,9 @@ impl LiveState {
                     posture,
                 };
                 self.cancel_requested &= busy;
+                if !self.cancel_requested {
+                    self.cancel_started = None;
+                }
                 self.link = Link::Ready;
                 if busy && self.turn_started.is_none() {
                     self.turn_started = Some(Instant::now());
@@ -892,6 +916,7 @@ impl LiveState {
             Event::TurnResult { heading, line, turn, model_summary } => {
                 self.pending = None;
                 self.cancel_requested = false;
+                self.cancel_started = None;
                 self.activity = None;
                 self.interrupt_running_tools();
                 self.close_approval();
@@ -934,6 +959,7 @@ impl LiveState {
                     self.pending = None;
                     self.session.busy = false;
                     self.cancel_requested = false;
+                    self.cancel_started = None;
                 }
                 self.transcript.push(Entry::Notice(format!("{code}: {message}")));
             }
@@ -1088,6 +1114,7 @@ impl LiveState {
         self.interrupt_running_tools();
         self.session.busy = false;
         self.cancel_requested = false;
+        self.cancel_started = None;
         self.activity = None;
         self.turn_started = None;
         // Steering the sidecar never acknowledged as applied goes back to the operator instead of vanishing.
@@ -1137,6 +1164,7 @@ impl LiveState {
         self.link = Link::Connecting;
         self.session.busy = false;
         self.cancel_requested = false;
+        self.cancel_started = None;
         self.transcript.push(Entry::Notice(
             "Started a new agent sidecar. It does not remember the conversation above.".to_string(),
         ));
@@ -1565,7 +1593,15 @@ impl LiveState {
                 }
                 None
             }
-            KeyCode::Esc if self.session.busy => Some(Action::Send(Command::Cancel)),
+            KeyCode::Esc if self.session.busy => {
+                if self.cancel_requested {
+                    None
+                } else {
+                    self.cancel_requested = true;
+                    self.cancel_started = Some(self.now);
+                    Some(Action::Send(Command::Cancel))
+                }
+            }
             KeyCode::Esc => None,
             _ if self.focus == Focus::Transcript => self.on_transcript_key(key),
             KeyCode::Char('?') if !ctrl && self.composer.is_empty() => {
@@ -1603,6 +1639,7 @@ impl LiveState {
             Some(Action::Quit)
         } else if self.session.busy {
             self.cancel_requested = true;
+            self.cancel_started = Some(self.now);
             Some(Action::Send(Command::Cancel))
         } else if !self.composer.is_empty() {
             self.composer.clear();
@@ -2666,7 +2703,7 @@ mod tests {
         assert_eq!(state.on_key(ctrl('c')), Some(Action::Send(Command::Cancel)));
         assert_eq!(
             state.on_key(key(KeyCode::Esc)),
-            Some(Action::Send(Command::Cancel))
+            None
         );
         state.session.busy = false;
         assert_eq!(state.on_key(key(KeyCode::Esc)), None);
@@ -2688,11 +2725,10 @@ mod tests {
             state.on_key(key(KeyCode::Esc)),
             Some(Action::Send(Command::Cancel))
         );
-        assert_eq!(state.on_key(ctrl('c')), Some(Action::Send(Command::Cancel)));
         assert!(state.cancel_requested());
         assert_eq!(
             state.on_key(key(KeyCode::Esc)),
-            Some(Action::Send(Command::Cancel))
+            None
         );
         assert_eq!(state.on_key(ctrl('c')), Some(Action::Quit));
     }
