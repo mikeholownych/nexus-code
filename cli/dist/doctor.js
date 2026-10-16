@@ -42,11 +42,16 @@ const CLI_ROOT = PACKAGED_HOME ? path.join(PACKAGED_HOME, "lib/cli") : path.join
 const CORE_ROOT = PACKAGED_HOME ? path.join(PACKAGED_HOME, "lib/core") : path.join(INSTALL_ROOT, "core");
 const DEFAULT_TIMEOUT_MS = 4000;
 /** Credentials, authorization headers and URL secrets, in any field. */
-export function redactDiagnostic(value) {
-    return redactSecrets(value
+export function redactDiagnostic(value, options) {
+    const scrubbed = value
         .replace(/(authorization\s*[:=]\s*(?:bearer|basic)?\s*)[^\s,;"']+/gi, "$1[REDACTED]")
         .replace(/((?:api[_-]?key|access[_-]?token|token|password|passwd|secret|key)=)[^&\s"']+/gi, "$1[REDACTED]")
-        .replace(/(https?:\/\/)[^/@\s:]+:[^/@\s]+@/gi, "$1[REDACTED]@"));
+        .replace(/(https?:\/\/)[^/@\s:]+:[^/@\s]+@/gi, "$1[REDACTED]@");
+    const isPath = options?.kind === "path" || (options?.kind !== "text" && path.isAbsolute(scrubbed));
+    if (isPath) {
+        return scrubbed;
+    }
+    return redactSecrets(scrubbed);
 }
 /** Redacts every string in a value, plus any exact secret value given (a key never printed even when unpatterned). */
 function redactDeep(value, secrets) {
@@ -242,11 +247,11 @@ const installCheck = async () => {
     const dist = path.join(CLI_ROOT, "dist/index.js");
     const evidence = [
         `version ${build.version}`,
-        build.commit === "unknown" ? "build identity unknown (built before build-info was recorded; run `make build`)" : `built from ${build.commit}${build.dirty ? " with uncommitted changes" : ""}${build.branch ? ` on ${build.branch}` : ""}`,
+        build.commit === "unknown" ? (PACKAGED_HOME ? "build identity unknown" : "build identity unknown (built before build-info was recorded; run `make build`)") : `built from ${build.commit}${build.dirty ? " with uncommitted changes" : ""}${build.branch ? ` on ${build.branch}` : ""}`,
         `install root ${INSTALL_ROOT}`,
     ];
     if (!fs.existsSync(dist))
-        return f("install.build", "install", "fail", "The CLI build (cli/dist) is missing.", evidence, `Run \`make build\` in ${INSTALL_ROOT}.`);
+        return f("install.build", "install", "fail", "The CLI build (cli/dist) is missing.", evidence, PACKAGED_HOME ? "Re-run the installer to restore missing files." : `Run \`make build\` in ${INSTALL_ROOT}.`);
     const built = fs.statSync(dist).mtimeMs;
     const source = PACKAGED_HOME ? 0 : newestMtime(path.join(CLI_ROOT, "src"), ".ts");
     if (source > built) {
@@ -261,7 +266,7 @@ const runtimeCheck = async () => {
 const launcherCheck = async () => {
     const launcher = resolveExecutable("nexus");
     if (!launcher)
-        return f("runtime.launcher", "runtime", "skip", "No `nexus` launcher is on PATH (optional: Nexus can run as `node cli/dist/index.js`).", [], `Optionally link ${path.join(INSTALL_ROOT, "harness.sh")} into a PATH directory as \`nexus\`.`);
+        return f("runtime.launcher", "runtime", "skip", "No `nexus` launcher is on PATH (optional: Nexus can run as `node cli/dist/index.js`).", [], PACKAGED_HOME ? "Add ~/.local/bin to PATH or re-run the installer." : `Optionally link ${path.join(INSTALL_ROOT, "harness.sh")} into a PATH directory as \`nexus\`.`);
     let real = launcher;
     try {
         real = fs.realpathSync(launcher);
@@ -275,11 +280,11 @@ const launcherCheck = async () => {
     }
     catch { }
     if (!ours)
-        return f("runtime.launcher", "runtime", "warn", "The `nexus` on PATH is not this installation's launcher.", evidence, PACKAGED_HOME ? "Use the nexus launcher installed by the package." : `Point it at ${path.join(INSTALL_ROOT, "harness.sh")}, or run this installation directly.`);
+        return f("runtime.launcher", "runtime", "warn", "The `nexus` on PATH is not this installation's launcher.", evidence, PACKAGED_HOME ? "Use the nexus launcher installed by the package (add ~/.local/bin to PATH)." : `Point it at ${path.join(INSTALL_ROOT, "harness.sh")}, or run this installation directly.`);
     if (PACKAGED_HOME)
         return f("runtime.launcher", "runtime", "pass", "The `nexus` launcher on PATH is this packaged installation.", evidence);
     if (!routesDoctor)
-        return f("runtime.launcher", "runtime", "fail", "The `nexus` launcher does not route `doctor`; `nexus doctor` would start an agent task instead.", evidence, "Update harness.sh from this checkout.");
+        return f("runtime.launcher", "runtime", "fail", "The `nexus` launcher does not route `doctor`; `nexus doctor` would start an agent task instead.", evidence, PACKAGED_HOME ? "Re-run the installer to restore the nexus launcher." : "Update harness.sh from this checkout.");
     return f("runtime.launcher", "runtime", "pass", "The `nexus` launcher on PATH is this installation and routes `doctor`.", evidence);
 };
 const configCheck = async (ctx) => {
@@ -321,20 +326,29 @@ async function gatherEndpoint(ctx, signal) {
     const probe = await client.probeAvailability(signal, { timeoutMs: ctx.timeoutMs });
     const evidence = { configured: true, endpoint: config.endpoint, reachable: probe.httpStatus !== undefined, httpStatus: probe.httpStatus, detail: probe.detail };
     if (probe.httpStatus !== undefined && probe.httpStatus >= 200 && probe.httpStatus < 300) {
+        let timer;
+        let onAbort;
         try {
             evidence.models = await Promise.race([
                 client.listModels(),
                 new Promise((_, reject) => {
-                    const timer = setTimeout(() => reject(new Error(`model list did not answer within ${ctx.timeoutMs} ms`)), ctx.timeoutMs);
-                    signal.addEventListener("abort", () => {
+                    timer = setTimeout(() => reject(new Error(`model list did not answer within ${ctx.timeoutMs} ms`)), ctx.timeoutMs);
+                    onAbort = () => {
                         clearTimeout(timer);
                         reject(new Error("cancelled"));
-                    }, { once: true });
+                    };
+                    signal.addEventListener("abort", onAbort, { once: true });
                 }),
             ]);
         }
         catch (err) {
             evidence.modelError = err?.message ?? String(err);
+        }
+        finally {
+            if (timer)
+                clearTimeout(timer);
+            if (onAbort)
+                signal.removeEventListener("abort", onAbort);
         }
     }
     return evidence;
@@ -426,25 +440,25 @@ const engineCheck = async (ctx, signal) => {
     if (!binary) {
         const cargo = resolveExecutable("cargo");
         out.push(cargo
-            ? f("engine.binary", "engine", "warn", "The Rust engine is not built; tools will run through a slow `cargo run` fallback.", [coreCargoManifest(), cargo], "Run `make build-core`.")
-            : f("engine.binary", "engine", "fail", "The Rust engine is not built and cargo is unavailable, so no tool can run.", [coreCargoManifest()], "Install Rust and run `make build-core`."));
+            ? f("engine.binary", "engine", "warn", "The Rust engine is not built; tools will run through a slow `cargo run` fallback.", [coreCargoManifest(), cargo], PACKAGED_HOME ? "Re-run the installer." : "Run `make build-core`.")
+            : f("engine.binary", "engine", "fail", "The Rust engine is not built and cargo is unavailable, so no tool can run.", [coreCargoManifest()], PACKAGED_HOME ? "Re-run the installer." : "Install Rust and run `make build-core`."));
         return out;
     }
     const version = await run(binary, ["--version"], { timeoutMs: ctx.timeoutMs, signal });
     const reported = version.stdout.trim().split(/\s+/).pop() ?? "";
     const evidence = [binary, version.stdout.trim() || version.error || version.stderr.trim()];
     if (version.code !== 0) {
-        out.push(f("engine.binary", "engine", "fail", "The Rust engine binary does not run.", evidence, "Rebuild it with `make build-core`."));
+        out.push(f("engine.binary", "engine", "fail", "The Rust engine binary does not run.", evidence, PACKAGED_HOME ? "Re-run the installer." : "Rebuild it with `make build-core`."));
         return out;
     }
     const builtAt = fs.statSync(binary).mtimeMs;
     // The engine is built from core/src/*.rs; core/src/bin holds the TUI, checked separately.
     const sourceAt = PACKAGED_HOME ? 0 : newestMtime(path.join(path.dirname(coreCargoManifest()), "src"), ".rs", 2000, false);
     if (reported !== nexusVersion()) {
-        out.push(f("engine.binary", "engine", "warn", `The engine reports version ${reported}, the CLI ${nexusVersion()}.`, evidence, "Rebuild with `make build`."));
+        out.push(f("engine.binary", "engine", "warn", `The engine reports version ${reported}, the CLI ${nexusVersion()}.`, evidence, PACKAGED_HOME ? "Re-run the installer." : "Rebuild with `make build`."));
     }
     else if (sourceAt > builtAt) {
-        out.push(f("engine.binary", "engine", "warn", "The engine binary is older than its source; it may not include recent fixes.", [...evidence, `built ${new Date(builtAt).toISOString()}`, `newest source ${new Date(sourceAt).toISOString()}`], "Rebuild with `make build-core`."));
+        out.push(f("engine.binary", "engine", "warn", "The engine binary is older than its source; it may not include recent fixes.", [...evidence, `built ${new Date(builtAt).toISOString()}`, `newest source ${new Date(sourceAt).toISOString()}`], PACKAGED_HOME ? "Re-run the installer." : "Rebuild with `make build-core`."));
     }
     else {
         out.push(f("engine.binary", "engine", "pass", "The Rust engine binary runs and matches the CLI version.", evidence));
@@ -461,24 +475,33 @@ const engineCheck = async (ctx, signal) => {
         catch { }
         out.push(ok
             ? f("engine.tool", "engine", "pass", "The engine executed a read-only tool (list_dir) in the workspace.", [workspace])
-            : f("engine.tool", "engine", "fail", "The engine could not execute a read-only tool in the workspace.", [workspace, call.timedOut ? "timed out" : (call.stderr || call.error || call.stdout).trim().slice(0, 300)], "Check workspace permissions and rebuild the engine."));
+            : f("engine.tool", "engine", "fail", "The engine could not execute a read-only tool in the workspace.", [workspace, call.timedOut ? "timed out" : (call.stderr || call.error || call.stdout).trim().slice(0, 300)], PACKAGED_HOME ? "Check workspace permissions and re-run the installer." : "Check workspace permissions and rebuild the engine."));
     }
     return out;
 };
-/** The live TUI and its sidecar: present and built from current source (a stale build hides recent fixes). */
-const tuiCheck = async () => {
+/** The live TUI and its sidecar: launchable and built from current source. */
+const tuiCheck = async (ctx, signal) => {
     const core = path.dirname(coreCargoManifest());
-    const tui = PACKAGED_HOME ? path.join(CORE_ROOT, "nexus-tui") : path.join(core, "target/release/nexus-tui");
+    const candidates = [
+        ...(PACKAGED_HOME ? [path.join(CORE_ROOT, "nexus-tui")] : []),
+        path.join(core, "target/release/nexus-tui"),
+        path.join(core, "target/debug/nexus-tui"),
+    ];
+    const tui = candidates.find((c) => fs.existsSync(c));
     const sidecar = path.join(CLI_ROOT, "dist/sidecar.js");
-    if (!fs.existsSync(tui) || !fs.existsSync(sidecar)) {
-        return f("tui.build", "install", "warn", "The live TUI is not built; `nexus` without arguments falls back to the readline REPL.", [fs.existsSync(tui) ? sidecar : tui], "Run `make build`.");
+    if (!tui || !fs.existsSync(sidecar)) {
+        return f("tui.launch", "install", "warn", "The live TUI is not built; `nexus` without arguments falls back to the readline REPL.", [!tui ? "nexus-tui binary missing" : "cli/dist/sidecar.js missing"], PACKAGED_HOME ? "Re-run the installer." : "Run `make build`.");
+    }
+    const checkResult = await run(tui, ["--live", "--check"], { timeoutMs: ctx.timeoutMs, signal });
+    if (checkResult.code !== 0) {
+        return f("tui.launch", "install", "warn", "The live TUI cannot launch; `nexus` without arguments falls back to the readline REPL.", [tui, checkResult.stderr.trim() || checkResult.stdout.trim() || "sidecar resolution failed"], PACKAGED_HOME ? "Re-run the installer." : "Run `make build`.");
     }
     const sourceAt = PACKAGED_HOME ? 0 : newestMtime(path.join(core, "src/bin"), ".rs");
     const builtAt = fs.statSync(tui).mtimeMs;
     if (sourceAt > builtAt) {
-        return f("tui.build", "install", "warn", "The live TUI binary is older than its source.", [tui, `built ${new Date(builtAt).toISOString()}`, `newest source ${new Date(sourceAt).toISOString()}`], "Run `make build-core`.");
+        return f("tui.launch", "install", "warn", "The live TUI binary is older than its source.", [tui, `built ${new Date(builtAt).toISOString()}`, `newest source ${new Date(sourceAt).toISOString()}`], "Run `make build-core`.");
     }
-    return f("tui.build", "install", "pass", "The live TUI and its sidecar are built from current source.", [tui, sidecar]);
+    return f("tui.launch", "install", "pass", "The live TUI is launchable and its sidecar resolves.", [tui, sidecar]);
 };
 const workspaceCheck = async (ctx) => {
     const workspace = ctx.config?.workspace ?? (ctx.flags.workspace ? path.resolve(ctx.flags.workspace) : process.cwd());
@@ -617,6 +640,21 @@ const credentialStoreCheck = async (ctx) => {
     }
     return f("credentials.store", "state", "pass", "The credential store is private to this user.", [file, `mode ${mode.toString(8)}`]);
 };
+const configEnvCheck = async (ctx) => {
+    const file = path.join(ctx.home, ".config/nexus/config.env");
+    if (!fs.existsSync(file)) {
+        return f("config.env", "config", "pass", "No ~/.config/nexus/config.env file present (optional configuration).", [file]);
+    }
+    const mode = modeOf(file) ?? 0;
+    if (mode & 0o077) {
+        const unsafe = ancestryProblem(ctx.home, file);
+        if (unsafe) {
+            return f("config.env", "config", "warn", `The configuration file is readable by other users (mode ${mode.toString(8)}), and its path is not safe to change automatically (${unsafe}).`, [file], "Review the path and restrict the real file yourself (doctor never changes permissions through a link).");
+        }
+        return f("config.env", "config", "warn", `The configuration file is readable by other users (mode ${mode.toString(8)}).`, [file], undefined, { id: "config.permissions", description: `chmod ${file} from ${mode.toString(8)} to 600`, expect: identityOf(file) });
+    }
+    return f("config.env", "config", "pass", "The configuration file is private to this user.", [file, `mode ${mode.toString(8)}`]);
+};
 const mcpCheck = async (ctx) => {
     const workspace = ctx.config?.workspace ?? process.cwd();
     const out = [];
@@ -715,6 +753,7 @@ const CHECKS = [
     ["state", stateDirCheck],
     ["integrity", stateIntegrityCheck],
     ["credentials", credentialStoreCheck],
+    ["config_env", configEnvCheck],
     ["mcp", mcpCheck],
     ["plugins", pluginCheck],
 ];
@@ -725,12 +764,21 @@ async function runCheck(name, check, ctx, parent) {
     const controller = new AbortController();
     const onAbort = () => controller.abort();
     parent.addEventListener("abort", onAbort, { once: true });
+    let onParentCancel;
     let timer;
     try {
         const result = await Promise.race([
             check(ctx, controller.signal),
             new Promise((resolve) => (timer = setTimeout(() => resolve("timeout"), limit))),
-            new Promise((resolve) => (parent.aborted ? resolve("cancelled") : parent.addEventListener("abort", () => resolve("cancelled"), { once: true }))),
+            new Promise((resolve) => {
+                if (parent.aborted) {
+                    resolve("cancelled");
+                }
+                else {
+                    onParentCancel = () => resolve("cancelled");
+                    parent.addEventListener("abort", onParentCancel, { once: true });
+                }
+            }),
         ]);
         if (result === "timeout" || result === "cancelled") {
             controller.abort();
@@ -744,6 +792,9 @@ async function runCheck(name, check, ctx, parent) {
     finally {
         clearTimeout(timer);
         parent.removeEventListener("abort", onAbort);
+        if (onParentCancel) {
+            parent.removeEventListener("abort", onParentCancel);
+        }
     }
 }
 export async function runDoctor(optionsOrConfig = {}, legacyError) {
@@ -826,7 +877,7 @@ function planRepairs(report) {
                 },
             });
         }
-        else if (finding.repair.id === "state.permissions" || finding.repair.id === "credentials.permissions") {
+        else if (finding.repair.id === "state.permissions" || finding.repair.id === "credentials.permissions" || finding.repair.id === "config.permissions") {
             const wanted = finding.repair.id === "state.permissions" ? 0o700 : 0o600;
             // The object as diagnosed, not as it is now: a change made in between must make the repair stand down.
             const diagnosed = finding.repair.expect;
