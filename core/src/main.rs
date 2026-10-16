@@ -60,6 +60,12 @@ fn execute_tool(tool_name: &str, params: Value, base_dir: &Path) -> Result<Value
 /// `key` identifies the RPC request, so a later `cancel` can end the command it started.
 fn execute_request(tool_name: &str, params: Value, base_dir: &Path, key: Option<String>) -> Result<Value, String> {
     match tool_name {
+        "hello" => {
+            Ok(serde_json::json!({
+                "version": env!("CARGO_PKG_VERSION"),
+                "protocol": 1,
+            }))
+        }
         "read_file" => {
             let args: file_ops::ReadFileArgs = serde_json::from_value(params)
                 .map_err(|e| format!("Invalid read_file arguments: {e}"))?;
