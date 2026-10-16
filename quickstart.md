@@ -41,7 +41,7 @@ EOF
 chmod 600 "$HOME/.config/nexus/config.env"
 ```
 
-Use your endpoint's actual model ID. Do not put real credentials in a project `.env`, shell history, or this example. For a cloud provider and credential handling, see [Cloud providers](docs/CLOUD_PROVIDERS.md).
+Use your endpoint's actual model ID. Nexus automatically discovers the loaded context window from LM Studio (`/api/v0/models`), llama.cpp (`/props`), vLLM (`/v1/models`), and Ollama (`/api/show`), or you can override it with `--context-limit` (`NEXUS_CONTEXT_LIMIT`). For HTTPS servers using a private certificate authority, set `NODE_EXTRA_CA_CERTS=/path/to/ca.pem` in `~/.config/nexus/config.env`. Do not put real credentials in a project `.env`, shell history, or this example. See [Local servers](docs/LOCAL_SERVERS.md) for per-server setup and [Cloud providers](docs/CLOUD_PROVIDERS.md) for cloud provider and credential handling.
 
 ## First run
 

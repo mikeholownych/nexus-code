@@ -64,14 +64,13 @@ function readConfigEnv(): Record<string, string> {
 
 /**
  * The stored gateway token: the file named by the operator's NEXUS_GATEWAY_TOKEN_FILE (environment or config.env, never
- * a project .env), else the legacy location ~/.config/opencode/t5820-client-token kept for existing installations. It
- * is sent only to the origin config.env names (see credentialOriginOf).
+ * a project .env), else ~/.config/nexus/gateway-token. It is sent only to the origin config.env names (see credentialOriginOf).
  */
 function readGatewayTokenFile(): string | undefined {
   const configured = operatorSetting("NEXUS_GATEWAY_TOKEN_FILE");
   const file = configured
     ? path.resolve(credentialStorageHome(), configured.replace(/^~(?=\/)/, credentialStorageHome()))
-    : path.join(credentialStorageHome(), ".config/opencode/t5820-client-token");
+    : path.join(credentialStorageHome(), ".config/nexus/gateway-token");
   try {
     return fs.readFileSync(file, "utf-8").trim() || undefined;
   } catch {
@@ -751,6 +750,16 @@ export class LocalLlmClient {
 
   private routingHeaders(): Record<string, string> {
     if (!this.conn.sendTaskClass) return {};
+    const kind = LocalLlmClient.serverKindCache.get(this.endpoint);
+    if (
+      kind &&
+      kind !== "gateway" &&
+      kind !== "unknown" &&
+      !operatorSetting("NEXUS_TASK_CLASS") &&
+      !operatorSetting("LOCAL_LLM_TASK_CLASS")
+    ) {
+      return {};
+    }
     return this.taskClass && /^[A-Za-z0-9_.-]{1,64}$/.test(this.taskClass) ? { "X-Task-Class": this.taskClass } : {};
   }
 
@@ -1081,11 +1090,16 @@ export class LocalLlmClient {
       const entry = Array.isArray(data?.data) ? data.data.find((e) => e?.id === this.model) : undefined;
       if (!entry) return { state: "unsupported", detail: `model ${this.model} not listed` };
       const advertised = parseAdvertisement(entry);
+      const entryKind = advertised?.serverKind ?? serverKindOf(entry);
+      LocalLlmClient.serverKindCache.set(ep, entryKind);
       if (!advertised || (advertised.contextLength === undefined && advertised.maxCompletionTokens === undefined)) {
         // An OpenAI-style catalog without limits (llama.cpp, LM Studio, Ollama): ask the server itself what it loaded.
         // Only for a plain endpoint: cloud provider connections have no such endpoints.
         const local = this.conn.providerId ? undefined : await this.discoverServerContext(entry, signal);
-        if (local) return { state: "supported", advertised: local };
+        if (local) {
+          if (local.serverKind) LocalLlmClient.serverKindCache.set(ep, local.serverKind);
+          return { state: "supported", advertised: local };
+        }
         return { state: "unsupported", advertised, detail: "catalog lists no limits" };
       }
       return { state: "supported", advertised };
@@ -1096,6 +1110,7 @@ export class LocalLlmClient {
   }
 
   private static serverContextCache = new Map<string, Advertisement>();
+  private static serverKindCache = new Map<string, ServerKind>();
 
   /**
    * The loaded context of a local server that lists no limits in its catalog, from that server's own endpoint (llama.cpp

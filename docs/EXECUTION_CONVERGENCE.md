@@ -146,7 +146,7 @@ work cannot silently become required.
 
 ## 7. Credential boundary
 
-Root cause (9f103ee): `readLatestAuthToken()` read the stored gateway token (`~/.config/opencode/t5820-client-token`)
+Root cause (9f103ee): `readLatestAuthToken()` read the stored gateway token (`NEXUS_GATEWAY_TOKEN_FILE` / `~/.config/nexus/gateway-token`)
 and `LocalLlmClient` attached it to *any* endpoint configured without an explicit key, including failover endpoints
 and the 401 reload path; `buildConfig` baked it into `config.apiKey`; planner/coder configs then reused
 `config.apiKey` for their own endpoints.

@@ -218,18 +218,20 @@ dependency/environment markers, same process).
 `/compact [--llm]` during work is queued (acknowledged at once) and runs once the current inference and its tool
 batch — approvals included — have settled, before the next request; its outcome is reported for its request. Every
 compaction archives the originals first, then writes the task state and the session; a write failure is reported
-and never shown as success. The context window and output allowance come from the provider when it advertises them
-(the homelab-ai gateway; vLLM `max_model_len`), else from `--context-limit` or labelled defaults; `/status` shows
-both with their source and how the last request was counted (`exact_admitted`, `exact_sampled_worker`,
-`gateway_conservative`, `client_estimate`). `--strict-token-count` refuses requests that could not be counted on a
-worker. See `docs/COMPACTION_AND_CONTINUITY.md`.
+and never shown as success. The context window and output allowance are discovered from the active endpoint: vLLM (`/v1/models` `max_model_len`),
+llama.cpp (`/props` `n_ctx`), LM Studio (`/api/v0/models` `loaded_context_length`), Ollama (`/api/show` `num_ctx` or
+`model_info.*.context_length`), or gateway capability advertisements, else from `--context-limit` (`NEXUS_CONTEXT_LIMIT`)
+or the labelled 65536 default (`client_default`). `/status` and `nexus doctor` show both with their source (`provider_advertised`,
+`server_probe (<kind>)`, `operator_override`, or `client_default`) and how the last request was counted (`exact_admitted`,
+`exact_sampled_worker`, `gateway_conservative`, `client_estimate`). `--strict-token-count` refuses requests that could not
+be counted on a worker. See `docs/LOCAL_SERVERS.md` and `docs/COMPACTION_AND_CONTINUITY.md`.
 
 ### Direct Shell Execution (`!`)
 Run raw bash/zsh commands instantly inside the active workspace without invoking the LLM:
 ```text
-nexus (engineering/b0) my-app ❯ !git status
-nexus (engineering/b0) my-app ❯ !cargo check
-nexus (engineering/b0) my-app ❯ !npm test
+nexus (qwen2.5-coder) my-app ❯ !git status
+nexus (qwen2.5-coder) my-app ❯ !cargo check
+nexus (qwen2.5-coder) my-app ❯ !npm test
 ```
 
 ### Slash Commands Cheatsheet

@@ -25,7 +25,7 @@ and use their own credentials. Nothing in this document changes how the applianc
   - **Sign in with GitHub (unofficial)** — the VS Code Copilot device-code sign-in, for Copilot subscriptions.
   After connecting, the picker reopens on that provider's models. **ctrl+d** removes Nexus's saved credential.
 - Without the live view: `/model` lists everything as text, `/model <provider> <model>` switches
-  (`/model appliance engineering/b0` returns to the appliance), `nexus connect <provider> [--method <id>]` (key typed
+  (`/model appliance qwen2.5-coder` returns to the appliance), `nexus connect <provider> [--method <id>]` (key typed
   hidden or piped on stdin) and `nexus disconnect <provider>`.
 
 **Unofficial sign-ins** reuse another vendor's OAuth client identity (Codex CLI, VS Code Copilot), as opencode and
