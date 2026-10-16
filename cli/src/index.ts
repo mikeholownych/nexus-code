@@ -486,7 +486,7 @@ function doctorOptions(command: Command): Command {
 Exit codes: 0 healthy · 1 warnings only · 2 at least one failure · 3 the doctor itself could not run.
 Statuses: pass, warn (works, but degraded or at risk), fail (prevents normal operation), skip (not applicable or not run).
 Supported repairs (--fix): create missing ~/.nexus state directories (0700); restrict group/world-writable state
-directories to 0700; restrict a group/world-readable credential store to 0600. Previous modes are recorded under
+directories to 0700; restrict a group/world-readable credential store or config.env to 0600. Previous modes are recorded under
 ~/.nexus/doctor-backups. Nothing else is ever changed: no configuration reset, session deletion, credential rotation,
 dependency installation, TLS change or service restart.`,
     )
