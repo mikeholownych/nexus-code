@@ -156,14 +156,60 @@ export interface MiddlewareAuditRecord {
   workspace?: string;
 }
 
+export const DEFAULT_AUDIT_MAX_BYTES = 10 * 1024 * 1024; // 10 MB (REQ-PER-102, DEC-11)
+export const DEFAULT_AUDIT_MAX_FILES = 5;
+
+export function getAuditMaxBytes(): number {
+  const envVal = process.env.NEXUS_AUDIT_MAX_BYTES;
+  if (envVal) {
+    const parsed = parseInt(envVal, 10);
+    if (!isNaN(parsed) && parsed > 0) return parsed;
+  }
+  return DEFAULT_AUDIT_MAX_BYTES;
+}
+
 /**
- * Record a middleware I/O rewrite audit record to ~/.nexus/audit.log (REQ-SEC-116, EXT-004).
+ * Rotate audit.log when it exceeds maxBytes, keeping maxFiles backups (REQ-PER-102, ACC-PER-06).
+ * Backups are audit.log.1 through audit.log.5, with permissions 0600.
+ */
+export function rotateAuditLogIfNeeded(
+  auditPath: string,
+  maxBytes: number = getAuditMaxBytes(),
+  maxFiles: number = DEFAULT_AUDIT_MAX_FILES
+): boolean {
+  try {
+    if (!fs.existsSync(auditPath)) return false;
+    const stat = fs.statSync(auditPath);
+    if (stat.size < maxBytes) return false;
+
+    for (let i = maxFiles; i >= 1; i--) {
+      const src = i === 1 ? auditPath : `${auditPath}.${i - 1}`;
+      const dest = `${auditPath}.${i}`;
+      if (fs.existsSync(src)) {
+        if (i === maxFiles && fs.existsSync(dest)) {
+          try { fs.unlinkSync(dest); } catch {}
+        }
+        try {
+          fs.renameSync(src, dest);
+          try { fs.chmodSync(dest, 0o600); } catch {}
+        } catch {}
+      }
+    }
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Record a middleware I/O rewrite audit record to ~/.nexus/audit.log (REQ-SEC-116, EXT-004, REQ-PER-102).
  */
 export function recordMiddlewareAudit(record: MiddlewareAuditRecord): void {
   try {
     const auditDir = path.join(os.homedir(), ".nexus");
     ensurePrivateDir(auditDir);
     const auditPath = path.join(auditDir, "audit.log");
+    rotateAuditLogIfNeeded(auditPath);
     const entry = {
       timestamp: record.timestamp || new Date().toISOString(),
       ...record,

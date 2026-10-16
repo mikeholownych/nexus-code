@@ -11,7 +11,7 @@ import {
 } from "./core/state.js";
 import { WorkspacePath } from "./core/workspace_path.js";
 import { protectArchivedMessages } from "./core/persistence_protection.js";
-import { appendLinesDurably, readArchiveLines, type ArchiveRead, ensurePrivateDir } from "./core/durable_file.js";
+import { appendLinesDurably, readArchiveLines, type ArchiveRead, ensurePrivateDir, writePrivateFile } from "./core/durable_file.js";
 
 // Re-export core state primitives
 export * from "./core/state.js";
@@ -23,6 +23,23 @@ export interface SessionData extends DurableTaskState {
   id: string;
   workspace: string;
   model: string;
+}
+
+export interface SessionIndexEntry {
+  id: string;
+  cleanId: string;
+  title: string;
+  updatedAt: string;
+  workspace: string;
+  messageCount: number;
+  mtime: number;
+  pinned?: boolean;
+}
+
+export interface SessionIndexData {
+  version: 1;
+  updatedAt: string;
+  sessions: Record<string, SessionIndexEntry>;
 }
 
 /** Where interactive sessions are saved unless a directory is given. */
@@ -87,6 +104,7 @@ export class SessionManager {
       validationReceipts: session.validationReceipts || [],
       currentOperation: session.currentOperation || null,
       messages: session.messages || [],
+      ...(session.pinned !== undefined ? { pinned: session.pinned } : {}),
       ...(session.unverifiedChangesPending !== undefined ? { unverifiedChangesPending: session.unverifiedChangesPending } : {}),
       durableNotes: session.durableNotes,
       compactionProvenance: session.compactionProvenance,
@@ -99,6 +117,16 @@ export class SessionManager {
     };
 
     this.stateManager.saveTaskState(fullState, selectedWorkspace ? [selectedWorkspace] : []);
+    this.updateIndexEntry({
+      id: sessionId,
+      cleanId: taskId.replace(/\.json$/, ""),
+      title: fullState.title || "Active Session",
+      updatedAt: fullState.updatedAt || new Date().toISOString(),
+      workspace,
+      messageCount: Array.isArray(fullState.messages) ? fullState.messages.length : 0,
+      mtime: Date.now(),
+      pinned: Boolean(fullState.pinned),
+    });
   }
 
   /**
@@ -197,47 +225,167 @@ export class SessionManager {
     return this.loadSession(list[0].id);
   }
 
+  public getSessionsDir(): string {
+    return this.sessionsDir;
+  }
+
+  public getIndexPath(): string {
+    return path.join(this.sessionsDir, "index.json");
+  }
+
+  private updateIndexEntry(entry: {
+    id: string;
+    cleanId: string;
+    title: string;
+    updatedAt: string;
+    workspace: string;
+    messageCount: number;
+    mtime: number;
+    pinned?: boolean;
+  }): void {
+    try {
+      const indexPath = this.getIndexPath();
+      let index: SessionIndexData | null = null;
+      if (fs.existsSync(indexPath)) {
+        try {
+          const raw = JSON.parse(fs.readFileSync(indexPath, "utf-8"));
+          if (raw && raw.version === 1 && typeof raw.sessions === "object") {
+            index = raw as SessionIndexData;
+          }
+        } catch {}
+      }
+      if (!index) {
+        index = { version: 1, updatedAt: new Date().toISOString(), sessions: {} };
+      }
+      index.sessions[entry.cleanId] = entry;
+      index.updatedAt = new Date().toISOString();
+      writePrivateFile(indexPath, JSON.stringify(index, null, 2));
+    } catch {
+      // index update failure should not break session save
+    }
+  }
+
+  public rebuildIndex(): SessionIndexData {
+    const indexPath = this.getIndexPath();
+    const index: SessionIndexData = {
+      version: 1,
+      updatedAt: new Date().toISOString(),
+      sessions: {},
+    };
+
+    if (!fs.existsSync(this.sessionsDir)) return index;
+
+    const files = fs.readdirSync(this.sessionsDir);
+    for (const file of files) {
+      if (!file.endsWith(".json") || file === "index.json" || file.startsWith(".corrupt-")) continue;
+      const cleanId = file.replace(/\.json$/, "");
+      const fullPath = path.join(this.sessionsDir, file);
+      try {
+        const stat = fs.statSync(fullPath);
+        const content = fs.readFileSync(fullPath, "utf-8");
+        const data = JSON.parse(content);
+        index.sessions[cleanId] = {
+          id: data.sessionId || data.taskId || data.id || cleanId,
+          cleanId,
+          title: data.title || "Untitled Session",
+          updatedAt: data.updatedAt || stat.mtime.toISOString(),
+          workspace: data.workspacePath || data.workspace || "~",
+          messageCount: Array.isArray(data.messages) ? data.messages.length : 0,
+          mtime: stat.mtimeMs,
+          pinned: Boolean(data.pinned),
+        };
+      } catch {
+        // ignore corrupted files in index
+      }
+    }
+
+    try {
+      writePrivateFile(indexPath, JSON.stringify(index, null, 2));
+    } catch {}
+
+    return index;
+  }
+
   public listSessions(): Array<{
     id: string;
     title: string;
     updatedAt: string;
     workspace: string;
     messageCount: number;
+    pinned?: boolean;
   }> {
     if (!fs.existsSync(this.sessionsDir)) return [];
 
-    const files = fs.readdirSync(this.sessionsDir).filter((f) => f.endsWith(".json"));
-    const results: Array<{
-      id: string;
-      title: string;
-      updatedAt: string;
-      workspace: string;
-      messageCount: number;
-      mtime: number;
-    }> = [];
+    const indexPath = this.getIndexPath();
+    let index: SessionIndexData | null = null;
 
-    for (const file of files) {
+    if (fs.existsSync(indexPath)) {
       try {
-        const fullPath = path.join(this.sessionsDir, file);
-        const stat = fs.statSync(fullPath);
-        const content = fs.readFileSync(fullPath, "utf-8");
-        const data = JSON.parse(content);
-        const cleanId = file.replace(/\.json$/, "");
-        results.push({
-          id: data.sessionId || data.taskId || data.id || cleanId,
-          title: data.title || "Untitled Session",
-          updatedAt: data.updatedAt || stat.mtime.toISOString(),
-          workspace: data.workspacePath || data.workspace || "~",
-          messageCount: Array.isArray(data.messages) ? data.messages.length : 0,
-          mtime: stat.mtimeMs,
-        });
+        const raw = JSON.parse(fs.readFileSync(indexPath, "utf-8"));
+        if (raw && raw.version === 1 && typeof raw.sessions === "object") {
+          index = raw as SessionIndexData;
+        }
       } catch {
-        // ignore corrupted files in listing
+        index = null; // Rebuild on miss/corrupt
       }
     }
 
-    results.sort((a, b) => b.mtime - a.mtime);
-    return results.map(({ mtime, ...rest }) => rest);
+    const files = fs.readdirSync(this.sessionsDir);
+    const sessionFiles = new Set<string>();
+    for (const f of files) {
+      if (f.endsWith(".json") && f !== "index.json" && !f.startsWith(".corrupt-")) {
+        sessionFiles.add(f);
+      }
+    }
+
+    if (!index) {
+      index = this.rebuildIndex();
+    } else {
+      let dirty = false;
+      // Remove deleted
+      for (const key of Object.keys(index.sessions)) {
+        if (!sessionFiles.has(`${key}.json`)) {
+          delete index.sessions[key];
+          dirty = true;
+        }
+      }
+      // Check for new or updated files
+      for (const file of sessionFiles) {
+        const cleanId = file.replace(/\.json$/, "");
+        const existing = index.sessions[cleanId];
+        const fullPath = path.join(this.sessionsDir, file);
+        try {
+          const stat = fs.statSync(fullPath);
+          if (!existing || stat.mtimeMs > existing.mtime) {
+            const content = fs.readFileSync(fullPath, "utf-8");
+            const data = JSON.parse(content);
+            index.sessions[cleanId] = {
+              id: data.sessionId || data.taskId || data.id || cleanId,
+              cleanId,
+              title: data.title || "Untitled Session",
+              updatedAt: data.updatedAt || stat.mtime.toISOString(),
+              workspace: data.workspacePath || data.workspace || "~",
+              messageCount: Array.isArray(data.messages) ? data.messages.length : 0,
+              mtime: stat.mtimeMs,
+              pinned: Boolean(data.pinned),
+            };
+            dirty = true;
+          }
+        } catch {}
+      }
+
+      if (dirty) {
+        try {
+          index.updatedAt = new Date().toISOString();
+          writePrivateFile(indexPath, JSON.stringify(index, null, 2));
+        } catch {}
+      }
+    }
+
+    const sessionList: SessionIndexEntry[] = Object.values(index.sessions);
+    return sessionList
+      .sort((a, b) => b.mtime - a.mtime)
+      .map(({ mtime, cleanId, ...rest }) => rest);
   }
 
   private workspacePathFromSessionFile(taskId: string): WorkspacePath {
