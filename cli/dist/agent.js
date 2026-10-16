@@ -3300,6 +3300,7 @@ The pinned Objective Ledger lists the operator's requirements; your plan never r
                 ? this.worktreeManager.hasChanges(this.activeWorktree.taskId)
                 : false;
             let verifierSucceeded = false;
+            let hasExecuted = false;
             let noApplicableVerifier = false;
             // An operator-configured verifier gates every completion, not only one that follows changes.
             if ((this.hasPendingModifications || worktreeHasChanges || this.configuredVerifierGatesCompletion()) &&
@@ -3369,7 +3370,8 @@ The pinned Objective Ledger lists the operator's requirements; your plan never r
                         const testRes = await runTestSuiteWithExecutor(this.config.workspace, (command) => this.bridge.executeTool("run_command", { command, timeout_secs: deadlineSecs }), verifierCommand);
                         // Configured or discovered, a verifier is evidence about the change only when its run shows tests that
                         // executed and cover the changed files.
-                        const isDeliverableBound = isVerifierDeliverableBound(this.config.workspace, Array.from(this.modifiedFiles), verifierCommand, testRes.rawOutput || "");
+                        hasExecuted = hasExecutedTests(testRes.rawOutput || "");
+                        const isDeliverableBound = hasExecuted && isVerifierDeliverableBound(this.config.workspace, Array.from(this.modifiedFiles), verifierCommand, testRes.rawOutput || "");
                         // A discovered verifier's pass makes the change VERIFIED only on independent evidence (fail-before /
                         // pass-after on tests the change did not write); the operator's configured verifier is their own check.
                         const independence = source === "discovered" && testRes.success && isDeliverableBound ? await this.judgeIndependence(verifierCommand, deadlineSecs, onConfirm) : undefined;
@@ -3378,6 +3380,7 @@ The pinned Objective Ledger lists the operator's requirements; your plan never r
                             command: verifierCommand,
                             source,
                             exitSuccess: testRes.success,
+                            hasExecutedTests: hasExecuted,
                             isDeliverableBound,
                             ...(independence ? { independent: independence.independent, independenceDetail: independence.detail } : {}),
                             ...(testRes.timedOut ? { deadlineSecs } : {}),
@@ -3388,7 +3391,7 @@ The pinned Objective Ledger lists the operator's requirements; your plan never r
                         this.verificationEvidence = evidence;
                         this.verificationEvidenceRawOutput = testRes.rawOutput || "";
                         if (configured)
-                            this.turnConfiguredVerifier = testRes.success ? "PASSED" : "FAILED";
+                            this.turnConfiguredVerifier = (testRes.success && hasExecuted) ? "PASSED" : "FAILED";
                         if (this.objective && candidateId) {
                             recordAttempt(this.objective, {
                                 command: verifierCommand,
@@ -3436,10 +3439,11 @@ The pinned Objective Ledger lists the operator's requirements; your plan never r
                 }
             }
             // The obligation is discharged only by a passing run of the selected verifier (never by command text).
-            if (!noApplicableVerifier)
+            // Zero executed tests does not discharge the obligation.
+            if (!noApplicableVerifier && hasExecuted)
                 this.setUnverifiedChanges(false);
             // Files a passing run covered are verified; ones it did not cover stay for a later run to cover.
-            if (verifierSucceeded && this.verificationEvidence?.isDeliverableBound) {
+            if (verifierSucceeded && hasExecuted && this.verificationEvidence?.isDeliverableBound) {
                 this.modifiedFiles.clear();
                 this.changeBaseline = undefined;
             }
@@ -4024,7 +4028,9 @@ The pinned Objective Ledger lists the operator's requirements; your plan never r
                 const parsed = JSON.parse(receipt.output || "{}");
                 const state = this.verifierState();
                 if (state && typeof parsed.command === "string") {
-                    const isDeliverableBound = isVerifierDeliverableBound(this.config.workspace, Array.from(this.modifiedFiles), parsed.command, receipt.output || "");
+                    const rawOutput = typeof parsed.report === "string" ? parsed.report : (receipt.output || "");
+                    const hasExecuted = hasExecutedTests(rawOutput);
+                    const isDeliverableBound = hasExecuted && isVerifierDeliverableBound(this.config.workspace, Array.from(this.modifiedFiles), parsed.command, rawOutput);
                     const filtered = Boolean(args.filter) || isFilteredVerifierCommand(parsed.command);
                     // Without the copy run (task_completed does that): independent only when unmodified pre-change tests that
                     // failed before now pass. A configured verifier is the operator's check.
@@ -4038,8 +4044,8 @@ The pinned Objective Ledger lists the operator's requirements; your plan never r
                         isDeliverableBound,
                         ...(judged ? { independent: judged !== "needs-copy" && judged.independent } : {}),
                         filtered,
-                        status: parsed.passed === true && receipt.success ? "PASSED" : "FAILED",
-                        ...(parsed.passed === true ? {} : { failedCheck: failedCheckFrom(`${receipt.output}\n${receipt.error ?? ""}`) }),
+                        status: parsed.passed === true && receipt.success && hasExecuted ? "PASSED" : "FAILED",
+                        ...(parsed.passed === true ? {} : { failedCheck: failedCheckFrom(`${rawOutput}\n${receipt.error ?? ""}`) }),
                     });
                 }
             }
@@ -5000,6 +5006,15 @@ The pinned Objective Ledger lists the operator's requirements; your plan never r
             .slice(0, 300);
         // Execution COMPLETED: derive the engineering outcome strictly from verifier evidence.
         if (this.hasPendingModifications) {
+            if (evidence?.status === "PASSED" && evidence?.hasExecutedTests === false) {
+                return deepFreezeTurn(assertTurnResultInvariants({
+                    ...base,
+                    execution: "COMPLETED",
+                    outcome: "UNVERIFIED",
+                    reason: "NO_TESTS_EXECUTED",
+                    detail: "Passing test run executed zero tests.",
+                }));
+            }
             if (evidence?.status === "FAILED") {
                 return deepFreezeTurn(assertTurnResultInvariants({ ...base, execution: "COMPLETED", outcome: "NOT_ESTABLISHED", reason: "VERIFIER_FAILED", detail: evidence.command }));
             }
@@ -5021,6 +5036,15 @@ The pinned Objective Ledger lists the operator's requirements; your plan never r
         }
         if (this.turnMutations > 0 || this.turnCarriedChanges) {
             if (evidence?.status === "PASSED") {
+                if (evidence.hasExecutedTests === false) {
+                    return deepFreezeTurn(assertTurnResultInvariants({
+                        ...base,
+                        execution: "COMPLETED",
+                        outcome: "UNVERIFIED",
+                        reason: "NO_TESTS_EXECUTED",
+                        detail: "Passing test run executed zero tests.",
+                    }));
+                }
                 // The verifier passed on the change; it does not show the change's content rests on what the model saw. Output
                 // that left context during the turn and was not read again is counted on the result (CTX-03).
                 const contextQualifier = this.turnRemovedObservations.size ? { contextNotRetained: this.turnRemovedObservations.size } : {};
