@@ -776,7 +776,12 @@ export class SidecarServer {
 
   private resumeSession(id?: string): { ok: boolean; message: string } {
     const manager = this.app.getSessionManager();
-    const session = !id || id === "latest" ? manager.getLatestSession() : manager.loadSession(id);
+    let session;
+    try {
+      session = !id || id === "latest" ? manager.getLatestSession() : manager.loadSession(id);
+    } catch (err: any) {
+      return { ok: false, message: err.message };
+    }
     if (!session) return { ok: false, message: `Session not found: ${id || "latest"}` };
     if (!Array.isArray(session.messages)) return { ok: false, message: `Session ${session.id} is unreadable: it has no message list.` };
     if (session.workspace && fs.existsSync(session.workspace)) this.setWorkspace(session.workspace);

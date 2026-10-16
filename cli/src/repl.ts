@@ -112,20 +112,26 @@ export class InteractiveRepl {
     this.loadHistory();
 
     if (resumeSessionId) {
-      const sess = resumeSessionId === "latest"
-        ? this.sessionManager.getLatestSession()
-        : this.sessionManager.loadSession(resumeSessionId);
-      if (sess) {
-        this.currentSessionId = sess.id;
-        if (sess.workspace && fs.existsSync(sess.workspace)) {
-          this.config.workspace = sess.workspace;
-          this.agent.setWorkspace(sess.workspace);
-          this.checkpointManager = new CheckpointManager(sess.workspace);
+      try {
+        const sess = resumeSessionId === "latest"
+          ? this.sessionManager.getLatestSession()
+          : this.sessionManager.loadSession(resumeSessionId);
+        if (sess) {
+          this.currentSessionId = sess.id;
+          if (sess.workspace && fs.existsSync(sess.workspace)) {
+            this.config.workspace = sess.workspace;
+            this.agent.setWorkspace(sess.workspace);
+            this.checkpointManager = new CheckpointManager(sess.workspace);
+          }
+          const archiveNotice = this.agent.restoreConversation(sess, (committed) => this.sessionManager.readArchivedHistory(sess.id, committed));
+          if (archiveNotice) console.log(pc.yellow(archiveNotice));
+          console.log(pc.green(`✔ Restored previous session ${pc.bold(sess.id)} (${sess.messages.length} messages)`));
+        } else {
+          console.log(pc.red(`Session not found: ${resumeSessionId}\n`));
+          this.currentSessionId = this.sessionManager.generateSessionId();
         }
-        const archiveNotice = this.agent.restoreConversation(sess, (committed) => this.sessionManager.readArchivedHistory(sess.id, committed));
-        if (archiveNotice) console.log(pc.yellow(archiveNotice));
-        console.log(pc.green(`✔ Restored previous session ${pc.bold(sess.id)} (${sess.messages.length} messages)`));
-      } else {
+      } catch (err: any) {
+        console.log(pc.red(`Failed to restore session ${resumeSessionId}: ${err.message}\n`));
         this.currentSessionId = this.sessionManager.generateSessionId();
       }
     } else {
@@ -945,18 +951,22 @@ export class InteractiveRepl {
             console.log(pc.green(`✔ Session saved to ~/.nexus/sessions/${this.currentSessionId}.json\n`));
             continue;
           } else if (cmd === "resume") {
-            const sess = arg ? this.sessionManager.loadSession(arg) : this.sessionManager.getLatestSession();
-            if (!sess) {
-              console.log(pc.red(`Session not found: ${arg || "latest"}\n`));
-            } else {
-              this.currentSessionId = sess.id;
-              if (sess.workspace && fs.existsSync(sess.workspace)) {
-                this.config.workspace = sess.workspace;
-                this.agent.setWorkspace(sess.workspace);
+            try {
+              const sess = arg ? this.sessionManager.loadSession(arg) : this.sessionManager.getLatestSession();
+              if (!sess) {
+                console.log(pc.red(`Session not found: ${arg || "latest"}\n`));
+              } else {
+                this.currentSessionId = sess.id;
+                if (sess.workspace && fs.existsSync(sess.workspace)) {
+                  this.config.workspace = sess.workspace;
+                  this.agent.setWorkspace(sess.workspace);
+                }
+                const archiveNotice = this.agent.restoreConversation(sess, (committed) => this.sessionManager.readArchivedHistory(sess.id, committed));
+                if (archiveNotice) console.log(pc.yellow(archiveNotice));
+                console.log(pc.green(`✔ Resumed session ${pc.bold(sess.id)} (${sess.messages.length} messages loaded).\n`));
               }
-              const archiveNotice = this.agent.restoreConversation(sess, (committed) => this.sessionManager.readArchivedHistory(sess.id, committed));
-              if (archiveNotice) console.log(pc.yellow(archiveNotice));
-              console.log(pc.green(`✔ Resumed session ${pc.bold(sess.id)} (${sess.messages.length} messages loaded).\n`));
+            } catch (err: any) {
+              console.log(pc.red(`Failed to resume session: ${err.message}\n`));
             }
             continue;
           } else if (cmd === "tokens" || cmd === "cost") {
