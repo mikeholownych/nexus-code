@@ -52,7 +52,7 @@ nexus doctor
 nexus
 ```
 
-Enter a small task, review requested actions, and inspect the reported turn outcome. Use `nexus --help` and `/help` for implemented commands.
+Enter a small task, review requested actions, and inspect the reported turn outcome. On a terminal, running `nexus` with no arguments opens the live TUI; in non-interactive environments or with `nexus repl`, it opens the interactive REPL. For non-interactive tasks, run `nexus run "<task>"`. Use `nexus --help` and `/help` for implemented commands.
 
 ### Trust your own repository
 

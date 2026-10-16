@@ -7,7 +7,7 @@ For binary installation and first run, start with the [quickstart](../quickstart
 Use `nexus --help` for the installed CLI and `/help` inside an interactive session. Common commands include:
 
 ```sh
-nexus                         # interactive session in the current workspace
+nexus                         # interactive session in current workspace (TUI on TTY; REPL on non-TTY)
 nexus repl --approve          # ask before edits and shell commands
 nexus run "Explain this project" --read-only
 nexus doctor --deep           # diagnostics; deep mode sends one small inference request
@@ -15,7 +15,7 @@ nexus sessions                # list saved sessions
 nexus providers               # provider and credential status, values withheld
 ```
 
-The interactive slash commands include `/help`, `/status`, `/doctor`, `/mode`, `/compact`, `/clear`, `/resume`, `/sessions`, `/save`, `/export [md|json]`, `/checkpoints`, `/undo`, `/git`, and `/exit`. Availability and usage are listed by `/help` in the running client. `nexus run` supports JSON results with `--json`; its execution, verification outcome, and acceptance are separate. `VERIFIED` means the selected verifier ran and passed; a model saying it is done is not verification.
+On a terminal, running `nexus` with no arguments opens the live TUI; in non-interactive pipes or via `nexus repl`, it opens the interactive REPL. Non-interactive tasks require the explicit `run` subcommand (`nexus run "<task>"`). Unknown subcommands exit non-zero with an error (REQ-REL-104). The interactive slash commands include `/help`, `/status`, `/doctor`, `/mode`, `/compact`, `/clear`, `/resume`, `/sessions`, `/save`, `/export [md|json]`, `/checkpoints`, `/undo`, `/git`, and `/exit`. Availability and usage are listed by `/help` in the running client. `nexus run` supports JSON results with `--json`; its execution, verification outcome, and acceptance are separate. `VERIFIED` means the selected verifier ran and passed; a model saying it is done is not verification.
 
 ## Providers and local inference
 
