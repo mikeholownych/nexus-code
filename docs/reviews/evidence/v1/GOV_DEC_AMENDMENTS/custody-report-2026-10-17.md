@@ -78,3 +78,11 @@ Reference patch **and** validation log present for **25 / 25** complete tasks (`
 5. Freeze: after the manifest is committed and verified, no case swap, threshold change, or payload disclosure to the implementation/tuning agent. Any later disclosure for debugging is recorded and the exposed tasks are retired from fresh held-out use.
 
 No payloads, hidden test bodies, or validators are reproduced in this report.
+
+## 5. Disposition executed (2026-10-17, owner-directed)
+
+- **Reassignment executed.** The stale `HELDOUT_AUTHORING` claim (holder `claude-lead (delegated to an isolated author subagent)`, no live process, no pid) was recorded as STALE in the claim log and retired; a new isolated author (`author-v2`, fresh session, contract-only inputs) took the claim at `2026-10-17T18:09:40Z` for store **`/home/mike/nexus-heldout-v2`**.
+- **Prior corpus reclassified.** `~/nexus-heldout/STATUS-2026-10-17.md` marks the entire 28-dir corpus (and its manifests) **development/pilot material (T2 and T3)** — it is **not** independently held-out qualification evidence. No new tasks are added there.
+- **Defect C2 fixed for new authoring.** Store v2 documents both schemes in `CONTRACT.md` and ships `bin/hidden_digest.mjs`: `task_sha256` = sha256 of raw `task.json` bytes; `hidden_sha256` = sha256 of the sorted `"<path>  <sha256(file)>\n"` lines over the hidden dir — re-derivable by any custodian.
+- **v2 batch 1 authored + custodian-verified.** `ho2-py-bugfix-01` (more-itertools @ `1ea82a7`) and `ho2-go-refactor-01` (google/uuid @ `6e10cd1`): schema OK for both; **all four manifest hashes re-derived exactly** by the custodian; reference patches + validation logs present. Live `bin/validate.py` runs are **deferred** (SUITE held) — recorded in each validation log; custodian to run 2 rounds per task when SUITE frees.
+- **Remaining for v2 toward freeze:** author to the 40/≥20-external/≥6-per-class target; custodian-run live validation per task; commit the sealed manifest to the repository before RC1; then freeze.

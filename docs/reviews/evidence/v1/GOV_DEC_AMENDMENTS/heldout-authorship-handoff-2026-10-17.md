@@ -36,4 +36,10 @@ Per the owner directive, the held-out authorship is to be **reassigned to a sepa
 
 ## 5. Status
 
-Open — awaiting the authoring session's next safe boundary. No claim was broken and no running agent was interrupted as part of this request.
+**Executed 2026-10-17** (owner directive; no waiver granted):
+
+- 18:0xZ — STALE recorded in the claim log (prior holder had no live process and no pid); claim retired per CONCURRENCY §2.
+- 18:09:40Z — `HELDOUT_AUTHORING` taken by the **new isolated author** (`author-v2`, fresh session, contract-only inputs) for store `/home/mike/nexus-heldout-v2`.
+- Prior corpus reclassified **development/pilot** (`~/nexus-heldout/STATUS-2026-10-17.md`); excluded from held-out qualification evidence (T2 and T3).
+- Store v2 fixes custody defect C2: documented `task_sha256`/`hidden_sha256` schemes + `bin/hidden_digest.mjs` (`CONTRACT.md`).
+- Batch 1 authored (`ho2-py-bugfix-01`, `ho2-go-refactor-01`); custodian re-derived all four manifest hashes exactly; live validation deferred to a SUITE window. See `custody-report-2026-10-17.md` §5.
