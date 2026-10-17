@@ -1,7 +1,7 @@
 /**
  * Convergence scheduling end to end: real AutonomousAgent turns against local OpenAI-compatible gateways.
- * A: reroute. B: park, continue independent work, resume the parked unit from its history. C: true wait, wake,
- * resume, validate, complete. D: process restart while waiting. Fake clocks; nothing sleeps for real.
+ * A: reroute. B: park, continue independent work, resume the parked unit from its history. C: true wait before
+ * task execution, then implement and validate after wake. D: process restart while waiting. Fake clocks throughout.
  */
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
@@ -12,18 +12,21 @@ import { execSync } from "node:child_process";
 import { AutonomousAgent } from "../src/agent.js";
 import { newOperation, type DurableOperationState, type WorkUnitSpec } from "../src/core/operation.js";
 import { AgentWorkUnitExecutor, OperationRunner, OperationStore } from "../src/core/operation_runner.js";
-import type { ResourceDescriptor } from "../src/core/resources.js";
+import { ResourceRegistry, type ResourceDescriptor } from "../src/core/resources.js";
 import { DurableStateManager } from "../src/core/state.js";
+import type { InferenceFailure } from "../src/core/turn.js";
 import type { HarnessConfig } from "../src/types.js";
 import { fakeClock, startGateway, type FakeClock, type Gateway, type Reply } from "./helpers/provider_fixture.js";
 
 const complete = (summary: string): Reply => ({ kind: "tools", calls: [{ name: "task_completed", args: { summary } }] });
 const limited = (secs: number): Reply => ({ kind: "http", status: 429, headers: { "retry-after": String(secs) }, body: '{"error":{"message":"rate limited","type":"rate_limit_exceeded"}}' });
+const userText = (body: any): string => (body.messages ?? []).filter((m: any) => m.role === "user").map((m: any) => String(m.content)).join("\n");
+const unitOf = (body: any): string | undefined => userText(body).match(/Work unit '(\w+)'/)?.[1];
 
 interface Env {
   repo: string;
   stateDir: string;
-  executor(): AgentWorkUnitExecutor;
+  executor(config?: Partial<HarnessConfig>): AgentWorkUnitExecutor;
   store(): OperationStore;
 }
 
@@ -36,9 +39,9 @@ async function withEnv<T>(gws: Gateway[], fn: (env: Env) => Promise<T>): Promise
   const env: Env = {
     repo,
     stateDir,
-    executor: () =>
+    executor: (config: Partial<HarnessConfig> = {}) =>
       new AgentWorkUnitExecutor({
-        baseConfig: base,
+        baseConfig: { ...base, ...config },
         createAgent: (config) => {
           const agent = new AutonomousAgent(config, 1);
           const a = agent as any;
@@ -66,8 +69,6 @@ function run(env: Env, state: DurableOperationState, clock: FakeClock = fakeCloc
   const store = env.store();
   return { runner: new OperationRunner(state, { executor: env.executor(), clock, persist: (s) => store.save(s) }), clock, store };
 }
-
-const userText = (body: any): string => body.messages.filter((m: any) => m.role === "user").map((m: any) => String(m.content)).join("\n");
 
 describe("convergence scheduling with real agent turns", () => {
   test("A. reroute: the preferred reviewer is rate-limited, an equivalent qualified reviewer completes the work", async () => {
@@ -122,23 +123,74 @@ describe("convergence scheduling with real agent turns", () => {
     });
   });
 
-  test("C. true wait: nothing else can run, the operation waits durably, wakes, resumes, validates and completes", async () => {
-    const gw = await startGateway((n, body) => (n === 1 ? limited(90) : complete(/Work unit 'validate'/.test(userText(body)) ? "validated" : "implemented")));
+  test("C. true wait: the operation waits before task execution, then implements and validates after wake", async () => {
+    const counts = new Map<string, number>();
+    const gw = await startGateway((_n, body) => {
+      const unit = unitOf(body);
+      const count = (counts.get(unit ?? "") ?? 0) + 1;
+      counts.set(unit ?? "", count);
+      if (unit === "impl" && count === 1) return {
+        kind: "tools",
+        calls: [{ name: "edit_file", args: {
+          path: "math.mjs",
+          old_content: "export const add = (a, b) => a - b;\n",
+          new_content: "export const add = (a, b) => a + b;\n",
+        } }],
+      };
+      if (unit === "validate" && count === 1) return { kind: "tools", calls: [{ name: "run_tests", args: {} }] };
+      return complete(unit === "validate" ? "ran the regression test after wake" : "fixed addition after wake");
+    });
     await withEnv([gw], async (env) => {
+      fs.writeFileSync(path.join(env.repo, "package.json"), JSON.stringify({ private: true, type: "module" }));
+      fs.writeFileSync(path.join(env.repo, "Makefile"), ".PHONY: test\ntest:\n\tenv -u NODE_TEST_CONTEXT node --test test/math.test.mjs\n");
+      fs.writeFileSync(path.join(env.repo, "math.mjs"), "export const add = (a, b) => a - b;\n");
+      fs.mkdirSync(path.join(env.repo, "test"), { recursive: true });
+      fs.writeFileSync(path.join(env.repo, "test/math.test.mjs"), 'import test from "node:test";\nimport assert from "node:assert/strict";\nimport { add } from "../math.mjs";\ntest("addition", () => assert.equal(add(2, 3), 5));\n');
+      execSync("git add package.json Makefile math.mjs test/math.test.mjs && git commit -qm 'seed wait-resume implementation fixture'", { cwd: env.repo, stdio: "ignore" });
       const state = newOperation("op-c", "implement and validate", [
-        { id: "impl", title: "Implement", prompt: "Implement" },
-        { id: "validate", title: "Validate", prompt: "Validate", dependsOn: ["impl"] },
+        { id: "impl", title: "Implement", role: "implementer", prompt: "Fix add(a, b) to return the sum." },
+        { id: "validate", title: "Validate", role: "tester", prompt: "Run the regression test for add(a, b).", dependsOn: ["impl"] },
       ], [resource("only", gw)], 0);
+      // This known resource backoff predates execution: the operation waits without persisting
+      // an agent conversation, then starts fresh work after the resource becomes eligible.
+      const clock = fakeClock();
+      const rateLimit: InferenceFailure = {
+        kind: "http_error", origin: "provider", message: "HTTP 429", httpStatus: 429,
+        condition: "RATE_LIMITED", execution: "NOT_EXECUTED", hints: { retryAfterMs: 90_000 },
+      };
+      const registry = new ResourceRegistry(state.resources, state.conditions, clock);
+      assert.ok(registry.observeFailure(state.resources[0]!, rateLimit));
+      state.conditions = registry.snapshot();
       const store = env.store();
       const statuses: string[] = [];
-      const clock = fakeClock();
-      const runner = new OperationRunner(state, { executor: env.executor(), clock, persist: (s) => { store.save(s); statuses.push(store.load("op-c").status); } });
+      let waitedBeforeInference = false;
+      const runner = new OperationRunner(state, {
+        executor: env.executor({
+          approvalMode: "auto",
+          fullAccess: true,
+          authoritativeVerifierCommand: "make test",
+          trustedDeliverableFiles: ["math.mjs"],
+        }),
+        clock,
+        persist: (s) => {
+          store.save(s);
+          statuses.push(store.load("op-c").status);
+          if (s.status === "WAITING") {
+            assert.equal(gw.requests.length, 0, "the durable wait is recorded before any agent inference");
+            waitedBeforeInference = true;
+          }
+        },
+      });
       const out = await runner.run();
       assert.equal(out.status, "COMPLETE");
       assert.ok(statuses.includes("WAITING"));
+      assert.equal(waitedBeforeInference, true);
       assert.equal(clock.sleeps.length, 1);
-      assert.equal(gw.requests.length, 3);
-      assert.deepEqual(out.units.map((u) => u.result?.summary), ["implemented", "validated"]);
+      assert.equal(gw.requests.length, 4);
+      assert.deepEqual(out.units.map((u) => u.result?.outcome), ["VERIFIED", "VERIFIED"]);
+      assert.equal(fs.readFileSync(path.join(env.repo, "math.mjs"), "utf8"), "export const add = (a, b) => a + b;\n");
+      assert.equal(counts.get("impl"), 2);
+      assert.equal(counts.get("validate"), 2);
       const types = out.events.map((e) => e.type);
       assert.ok(types.indexOf("OPERATION_WAITING") < types.indexOf("OPERATION_RESUMED"));
     });
