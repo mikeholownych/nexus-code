@@ -70,6 +70,8 @@ With a configured verifier, "bound" means VERIFIED (`agent.ts:5124-5146`). The r
    - len/3 for base64-like runs.
 
    `/tokenize` is used on llama.cpp and vLLM when it is available. A calibration test runs against a pinned tokenizer fixture.
+
+   **Precedence (DEC-17, 2026-10-17).** The ≥ 1 token per character floor above is a safety requirement and takes precedence over the ACC-VER-07 × 1.5 calibration band for scripts whose tokenizer merges characters into multi-character tokens. For a merging tokenizer the floor forces a deliberate over-estimate (never an under-estimate); ACC-VER-07 records that over-estimate as an accepted, bounded bias rather than a failure. This resolves the conflict between REQ-AGT-118 and ACC-VER-07 without relaxing the floor.
 8. **REQ-AGT-119.** Experimental surfaces (DEC-07: `nexus eval`, `/tdd`, team roles) are labelled experimental in help and docs and excluded from qualification claims. `nexus eval` runs in a worktree and never touches the operator's checkout. Team reviewer and researcher roles run with a read-only tool set.
 9. **RELEASE-REQUIRED polish.** VER-12 (clipboard args), VER-15 (image cap 20 MB, no SVG), VER-16 (hunk path parse).
 
@@ -93,7 +95,7 @@ With a configured verifier, "bound" means VERIFIED (`agent.ts:5124-5146`). The r
 | ACC-VER-04 | All-skipped node:test and jest runs, and the "ok all good" spoof, are not counted as executed. A zero-tests pass gives UNVERIFIED/NO_TESTS_EXECUTED with `pending=true`. mocha and vitest outputs parse. |
 | ACC-VER-05 | An empty repo gives `run_tests` → "no verifier". A Makefile with only `pytest:` gives no `make test`. |
 | ACC-VER-06 | P7 and P8 (truncated args) are rejected for `write_file`, with a notice. |
-| ACC-VER-07 | Token estimator calibration: within 1.5× of a pinned tokenizer's count (fixture JSON of reference counts) for the CJK, digit, base64, emoji and prose corpora. |
+| ACC-VER-07 | Token estimator calibration: within 1.5× of a pinned tokenizer's count (fixture JSON of reference counts) for the digit, base64, emoji, prose, kana and non-merging CJK corpora. Corner case (DEC-17): where REQ-AGT-118's ≥ 1 token/character floor dominates a merging tokenizer, the estimator must not under-count, and the fixture records the floor-driven over-estimate — CJK common-word composition measured at 2.00× and Hangul syllable composition at 1.67× on the pinned worker — as an admission-safety bias (the ≤ 1.5× accuracy target remains in force for every corpus the floor does not dominate), not an accuracy pass. No corpus is exempt from the band except those the floor dominates; a corpus that lands between the floor and the band must be examined and recorded, not silently excluded. |
 | ACC-VER-08 | `nexus eval --help` and `/tdd` help say "experimental". `nexus eval` leaves the operator workspace HEAD unchanged. A reviewer unit's `write_file` is refused. |
 | ACC-VER-09 | False-VERIFIED regression set: `docs/reviews/evidence/qualification_2026-10-12/repro/repro_false_verified.test.ts` plus the new VER-04 cases all pass at the RC. |
 

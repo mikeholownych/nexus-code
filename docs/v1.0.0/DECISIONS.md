@@ -22,6 +22,7 @@ Some decisions cannot be carried out by an implementer alone. They need an exter
 | [DEC-14](#dec-14-free-text-on-the-command-line) | Free text on the command line | Explicit `nexus run` required | No |
 | [DEC-15](#dec-15-knowledge-auto-extraction) | Knowledge auto-extraction | Off by default, opt-in | No |
 | [DEC-16](#dec-16-standalone-qualification-under-a-gateway-only-environment) | Standalone qualification with no direct worker access | Stripping proxy over the gateway for live runs, plus server-kind conformance fixtures | No |
+| [DEC-17](#dec-17-token-estimator-floor-versus-the-calibration-band) | Token-estimator floor vs the ACC-VER-07 calibration band | The REQ-AGT-118 ≥ 1 token/char floor takes precedence for merging scripts; the resulting over-estimate is an accepted, bounded bias | No |
 
 ---
 
@@ -81,8 +82,10 @@ Some decisions cannot be carried out by an implementer alone. They need an exter
 - 40 held-out T2 tasks, at least 20 from external repositories at pinned commits, across JS/TS, Python, Rust and Go, with at least 6 per class (bugfix, feature, refactor, debug).
 - 5 runs per task and configuration.
 - Peers: Goose and OpenCode, on the same model and budgets.
-- 8 T4 fault classes × 5 runs.
+- 9 T4 fault classes × 5 runs.
 - 8 T3 long tasks × 5 runs.
+
+**Amendment 2026-10-17 (governance).** The T4 protocol enumerates **nine** distinct fault scenarios (SPEC-10 §2.5, ACCEPTANCE §6.2): refused connection, 5xx/overloaded, stream cut mid-tool-call, output-limit truncation, hanging test command, disk full, context overflow at 32k, malformed tool-call JSON, and SIGTERM-then-resume. The summary count previously read "8" while listing all nine; the union of the distinct scenarios is retained as **nine** classes × 5 runs. No scenario is dropped or merged. Corrected here, in SPEC-10 §2.5 and in the REQUIREMENTS ledger (REQ-QUAL-105).
 
 **Thresholds, all must hold:**
 
@@ -204,6 +207,27 @@ Some decisions cannot be carried out by an implementer alone. They need an exter
 **Tradeoff:** live evidence for server kinds other than llama.cpp is limited to emulated shapes. This is stated plainly rather than over-claimed.
 
 **Affected:** REQ-PRV-106, REQ-QUAL-107; SPEC-05; SPEC-10; PLAN-05 task 7; PLAN-10; ACCEPTANCE §4.2. Owner action X3 (separate host) is withdrawn.
+
+## DEC-17: Token-estimator floor versus the calibration band
+
+**Question.** REQ-AGT-118 (SPEC-11 §2.7) requires the token estimator to be conservative for non-Latin scripts: **≥ 1 token per CJK, Hangul or kana character**. ACC-VER-07 requires the estimator to be **within 1.5× of a pinned tokenizer's count** for the CJK, digit, base64, emoji and prose corpora. For a tokenizer that merges common characters into multi-character tokens these two are mutually unsatisfiable.
+
+**Evidence (pinned worker `b0-live-llama-worker1`, limits_version `a3c2fcbc2f2b977c`; fixture `cli/test/fixtures/token_calibration.json`).**
+
+| Corpus | Characters | Estimator (floor) | Tokenizer reference | Ratio |
+|---|---|---|---|---|
+| CJK common-word sentences × 50 | 400 | 400 | 200 | **2.00×** |
+| Hangul syllables × 200 | 200 | 200 | 120 | **1.67×** |
+
+The floor forces 400 and 200 tokens; the band caps at 1.5 × 200 = 300 and 1.5 × 120 = 180. No estimator can satisfy both. This is a genuine, arithmetic inconsistency, not a measurement defect: the reference counts were re-measured on the pinned worker and the estimator was reproduced exactly.
+
+**Decision (chosen).** REQ-AGT-118's `≥ 1 token/char` floor is an **admission-safety** requirement, not an accuracy requirement: it guarantees the estimator never *under-admits* tokens for a non-Latin context, because an under-estimate silently overflows the context window (the failure class REQ-AGT-118 exists to prevent). ACC-VER-07's `≤ 1.5×` band is an **accuracy** target. The two are distinct properties, and where a merging tokenizer makes them collide the admission-safety floor takes precedence. ACC-VER-07 is therefore scoped to the corpora the floor does not dominate; for a merging tokenizer the floor-driven over-estimate is admitted as a **bounded admission-safety bias**. The `≤ 1.5×` accuracy threshold itself is **unchanged**.
+
+This amendment is **narrow by design**. It applies only to corpora where the measured estimator is floor-bound — currently exactly the two below — and it **does not silently exempt any other corpus**: any corpus whose estimator lands between the floor and the band must be examined and recorded (`tokens.test.ts` pins the floor-bound set to these two names, so a third cannot appear without failing the test). The original accuracy failures are **preserved** — in the table above, in the fixture's `floorBound` entries, and in the ledger's prior `9/11`-corpora wording — as recorded, failed accuracy evidence. They are not deleted or rewritten into passes.
+
+**Rejected alternatives.** (A) Lower the floor to satisfy the band — rejected: reintroduces under-estimation and the context-overflow class REQ-AGT-118 exists to prevent. (B) Drop the CJK/Hangul corpora from the fixture — rejected: removes the evidence. (C) Change the pinned tokenizer — out of scope; the fixture pins the qualification worker.
+
+**Affected:** REQ-AGT-118; SPEC-11 §2.7 and ACC-VER-07; REQUIREMENTS ledger row REQ-AGT-118; `cli/test/fixtures/token_calibration.json` and `cli/test/tokens.test.ts`. No change to `cli/src/tokens.ts` behaviour.
 
 ## Owner and external actions required (not performed by the audit)
 

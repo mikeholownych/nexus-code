@@ -18,6 +18,9 @@ interface CalibrationEntry {
   repeat?: [string, number];
   generator?: string;
   referenceTokens: number;
+  floorBound?: boolean;
+  floorTokens?: number;
+  note?: string;
 }
 
 interface CalibrationFixture {
@@ -60,11 +63,11 @@ function materializeCorpus(entry: CalibrationEntry): string {
 }
 
 describe("ACC-VER-07 & REQ-AGT-118: Conservative token estimator and calibration", () => {
-  test("ACC-VER-07: countTokens is within 1.5x of pinned tokenizer reference counts across all corpora", () => {
+  test("ACC-VER-07: countTokens is within 1.5x of pinned tokenizer reference counts (floor-bound corpora excepted per DEC-17)", () => {
     const fixture = JSON.parse(fs.readFileSync(fixturePath, "utf8")) as CalibrationFixture;
     assert.ok(fixture.corpora.length >= 8, "calibration fixture must contain all required corpora");
 
-    const conflicts: string[] = [];
+    const floorBound: string[] = [];
     for (const entry of fixture.corpora) {
       const text = materializeCorpus(entry);
       const estimated = countTokens(text);
@@ -72,16 +75,19 @@ describe("ACC-VER-07 & REQ-AGT-118: Conservative token estimator and calibration
       // Conservative: never under-estimate by more than 20% (A2 §6, R-VER-10).
       assert.ok(estimated >= ref * 0.8, `${entry.name}: estimated=${estimated} under-estimates reference=${ref}`);
       const ratio = estimated >= ref ? estimated / ref : ref / estimated;
-      if ((entry as any).conflict) {
-        // REQ-AGT-118's >= 1 token/char floor forces an over-estimate here; recorded, not hidden.
-        assert.ok(estimated >= ref, `${entry.name}: a recorded conflict must remain an over-estimate`);
-        conflicts.push(`${entry.name} ratio=${ratio.toFixed(2)}`);
+      if (entry.floorBound) {
+        // DEC-17: REQ-AGT-118's >= 1 token/character floor dominates a merging tokenizer here.
+        // The over-estimate is an accepted, bounded safety bias: it must never under-count, and the
+        // floor (one token per CJK/Hangul char) must be applied exactly. Preserved as evidence, not hidden.
+        assert.ok(estimated >= ref, `${entry.name}: a floor-bound corpus must remain an over-estimate`);
+        assert.equal(estimated, entry.floorTokens, `${entry.name}: the >= 1 token/char floor must be applied exactly`);
+        floorBound.push(`${entry.name} ratio=${ratio.toFixed(2)}`);
         continue;
       }
       assert.ok(ratio <= 1.5, `${entry.name}: estimated=${estimated} vs reference=${ref} (ratio=${ratio.toFixed(3)} exceeds 1.5x)`);
     }
-    // The open contract conflict is exactly these corpora; a new one must be looked at, not silently added.
-    assert.deepEqual(conflicts.map((c) => c.split(" ratio=")[0]).sort(), ["CJK 7-char sentences x 50", "Hangul 200 chars"]);
+    // Only the two merging-script corpora may sit above the band (DEC-17); a new one must be examined and recorded, not silently added.
+    assert.deepEqual(floorBound.map((c) => c.split(" ratio=")[0]).sort(), ["CJK 7-char sentences x 50", "Hangul 200 chars"]);
   });
 
   test("REQ-AGT-118: conservative script and symbol rules (>= 1 per CJK/Hangul/kana, 1 per digit, len/3 for base64)", () => {
