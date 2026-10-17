@@ -7,6 +7,13 @@
 
 This checkpoint reconciles the candidate ledger and acceptance procedure against recorded source and test evidence. It is not a release approval. The historical `v1_release_readiness_report.md` cited in the task was not present in the inspected repository or worktrees; this file records evidence within the existing v1 documentation package.
 
+## Node 20 full-suite follow-up (2026-10-17 07:13 UTC)
+
+- A complete `npm --prefix cli test` run on exact PR #10 commit `bb8e673637231aa38ab04b6f07a4498a88bdc132`, using Node 20.20.2/npm 10.8.2 and an isolated home, completed with **1,097 passed, 7 failed, 0 skipped**. The preserved log is `/tmp/nexus-p10g-node20-full-bb8e673.log`. The failures include a packaged-doctor evidence disclosure of an external launcher target and valid Node 20 TAP summaries being misread as zero executed tests. This is an actual source-suite failure and supersedes any implication that the full cross-version test set had not yet been exercised locally.
+- A four-file follow-up in the PR #10 worktree now avoids exposing external launcher paths in packaged doctor evidence and recognizes Node 20 TAP summaries while rejecting zero-test, all-skipped, and cancelled-only summaries. The cancelled-only edge case was found during independent review and fixed before acceptance; the reviewer accepted the corrected parser/test diff. Build succeeded, the focused four-file selection passed **47/47**, staged `git diff --check` passed, and staged Gitleaks found zero findings.
+- One full-suite attempt on the pre-correction working tree was intentionally interrupted after review found the cancelled-only edge case. It is classified as interrupted, not passed or failed. A full Node 20 rerun on the corrected tree is in progress; no result is claimed until its exit code and final TAP summary are captured. The prior 1,097/7 result remains historical evidence and is not erased.
+- PR #10 runs `39010709839` and PR #9 run `39010821988` were still queued when checked. No updated remote CI result, cross-version pass, integration acceptance, or release qualification is claimed here.
+
 ## Release validation update (2026-10-17 06:40 UTC)
 
 - A focused Node 20.20.2 run of `npm --prefix cli test -- test/security_gates.test.ts` against PR #10's pre-fix snapshot reproduced an SBOM test failure: nested `npx` exited with `ENOENT` for the absent `cli/lib` directory after inheriting npm's `npm_config_local_prefix` and `npm_config_prefix`. A prior supplemental command labeled Node 20 was invalid because `node` resolved to Node 24; it is not counted as Node 20 evidence.
