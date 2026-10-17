@@ -178,10 +178,10 @@ function validateMatchedPeers(paths) {
     if (!manifest.agentVersion?.version) failPairs(`${agent} manifest is missing its executable version`);
     if (!manifest.agentVersion.executablePath || !/^[0-9a-f]{64}$/.test(manifest.agentVersion.executableSha256 ?? "")) failPairs(`${agent} manifest is missing its executable path or SHA-256`);
     if (agent === "nexus" && (!/^[0-9a-f]{64}$/.test(manifest.agentVersion.packageSha256 ?? "") || manifest.agentVersion.packageSha256 !== manifest.config.nexusPackageSha256)) failPairs("Nexus manifest is missing the matching installed-RC package SHA-256");
-    if (!Number.isInteger(manifest.config.limits?.context) || manifest.config.limits.context <= 0 || !Number.isInteger(manifest.config.limits?.output) || manifest.config.limits.output <= 0) failPairs(`${agent} manifest is missing positive context/output limits`);
+    if (!Number.isInteger(manifest.config.limits?.context) || manifest.config.limits.context <= 0 || !Number.isInteger(manifest.config.limits?.output) || manifest.config.limits.output <= 0 || !Number.isSafeInteger(manifest.config.limits?.requests) || manifest.config.limits.requests <= 0 || !Number.isSafeInteger(manifest.config.limits?.totalOutput) || manifest.config.limits.totalOutput < manifest.config.limits.output) failPairs(`${agent} manifest is missing positive matched context/output/request/aggregate-output limits`);
     if (manifest.runs !== 5) failPairs(`${agent} manifest must specify exactly 5 runs, got ${manifest.runs ?? "missing"}`);
     if (!same(manifest.fingerprint, reference.fingerprint)) failPairs(`model fingerprint differs for ${agent}`);
-    if (!same(manifest.config.limits ?? null, reference.config.limits ?? null)) failPairs(`context/output limits differ for ${agent}`);
+    if (!same(manifest.config.limits ?? null, reference.config.limits ?? null)) failPairs(`context/output/request/aggregate-output limits differ for ${agent}`);
     if (!same(manifest.config.sampling ?? null, reference.config.sampling ?? null)) failPairs(`sampling settings differ for ${agent}`);
     if (records.some((r) => r.agent !== agent || r.agentVersion?.version !== manifest.agentVersion.version)) failPairs(`${agent} results do not match the manifest executable identity`);
   }

@@ -6,6 +6,7 @@
 import http from "node:http";
 import https from "node:https";
 import fs from "node:fs";
+import { timingSafeEqual } from "node:crypto";
 
 const UPSTREAM_DOWN = new Set([502, 503, 504]);
 
@@ -44,8 +45,6 @@ function overflowBody(profile, ctx) {
   return { error: { message: "This request exceeds the model's maximum context length.", type: "invalid_request_error", code: "context_length_exceeded" } };
 }
 
-const isChat = (req) => req.method === "POST" && /\/(chat\/completions|responses|messages)$/.test((req.url ?? "").split("?")[0]);
-
 /** Rewrites an SSE body as it passes, chunk by chunk; `edit` returns the text to forward (or null to cut the stream). */
 function rewriteStream(upstreamRes, res, edit) {
   let pending = "";
@@ -74,15 +73,25 @@ function rewriteStream(upstreamRes, res, edit) {
  * Starts a forwarder on 127.0.0.1 for `upstream` (e.g. https://gateway:8443/v1). `faults`: [{ kind, atRequest }] where
  * atRequest counts chat requests from 1. Returns its base URL (same path as the upstream), live counters, and close().
  */
-export async function startModelProxy({ upstream, caFile, faults = [], profile, authToken }) {
+export async function startModelProxy({ upstream, caFile, faults = [], profile, authToken, clientToken, socketPath, maxRequests = 1_000, maxConcurrentRequests = 1, maxRequestBytes = 1_000_000, maxCompletionTokens, maxTotalCompletionTokens }) {
   if (profile !== undefined && !PROFILES.includes(profile)) throw new Error(`unknown profile ${profile}; one of ${PROFILES.join(", ")}`);
+  if (!Number.isSafeInteger(maxRequests) || maxRequests < 1 || !Number.isSafeInteger(maxConcurrentRequests) || maxConcurrentRequests < 1 || !Number.isSafeInteger(maxRequestBytes) || maxRequestBytes < 1) throw new Error("invalid evaluation proxy request limits");
+  if (maxCompletionTokens !== undefined && (!Number.isSafeInteger(maxCompletionTokens) || maxCompletionTokens < 1)) throw new Error("invalid per-request completion-token limit");
+  if (maxTotalCompletionTokens !== undefined && (!Number.isSafeInteger(maxTotalCompletionTokens) || maxTotalCompletionTokens < 1)) throw new Error("invalid aggregate completion-token limit");
   for (const f of faults) {
     if (!FAULT_KINDS.includes(f.kind) || !Number.isInteger(f.atRequest) || f.atRequest < 1) throw new Error(`invalid fault ${JSON.stringify(f)}`);
   }
   const target = new URL(upstream);
+  const basePath = target.pathname.replace(/\/$/, "");
+  const allowedRoutes = new Map([
+    ["GET /models", "catalog"],
+    ["POST /chat/completions", "inference"],
+    ["POST /responses", "inference"],
+    ["POST /messages", "inference"],
+  ]);
   const client = target.protocol === "https:" ? https : http;
   const ca = caFile ? fs.readFileSync(caFile) : undefined;
-  const stats = { requests: 0, chatRequests: 0, answered: 0, upstreamFailures: 0, faultsInjected: [], firstRequestAt: null, firstAnswerAt: null };
+  const stats = { requests: 0, chatRequests: 0, activeInferenceRequests: 0, cancelledRequests: 0, requestedCompletionTokens: 0, answered: 0, upstreamFailures: 0, faultsInjected: [], firstRequestAt: null, firstAnswerAt: null };
 
   /** The upstream /models entries (for an emulated profile's context answers). */
   const upstreamModels = () => new Promise((resolve) => {
@@ -100,7 +109,44 @@ export async function startModelProxy({ upstream, caFile, faults = [], profile, 
 
   const server = http.createServer(async (req, res) => {
     stats.requests++;
+    if (clientToken) {
+      const supplied = /^Bearer (.+)$/.exec(String(req.headers.authorization ?? ""))?.[1] ?? "";
+      const expected = Buffer.from(clientToken);
+      const actual = Buffer.from(supplied);
+      if (actual.length !== expected.length || !timingSafeEqual(actual, expected)) {
+        req.resume();
+        return void sendJson(res, 401, { error: { type: "authentication_error", message: "evaluation proxy authentication failed" } });
+      }
+    }
     const urlPath = (req.url ?? "").split("?")[0];
+    const relativePath = urlPath.startsWith(`${basePath}/`) ? urlPath.slice(basePath.length) : null;
+    const routeKind = relativePath === null ? null : allowedRoutes.get(`${req.method} ${relativePath}`);
+    const localProfileRoute = Boolean(profile && ((profile === "llamacpp" && req.method === "GET" && urlPath === "/props") || (profile === "ollama" && req.method === "POST" && urlPath === "/api/show") || urlPath.endsWith("/tokenize")));
+    if (!routeKind && !localProfileRoute) {
+      req.resume();
+      return void sendJson(res, 404, { error: { type: "not_found", message: "evaluation proxy route is not permitted" } });
+    }
+    if (stats.requests > maxRequests) {
+      req.resume();
+      return void sendJson(res, 429, { error: { type: "request_limit", message: "evaluation proxy request limit exceeded" } });
+    }
+    let releaseInferenceSlot = () => {};
+    if (routeKind === "inference") {
+      if (stats.activeInferenceRequests >= maxConcurrentRequests) {
+        req.resume();
+        return void sendJson(res, 429, { error: { type: "concurrency_limit", message: "evaluation proxy concurrent inference limit exceeded" } });
+      }
+      stats.activeInferenceRequests++;
+      let slotReleased = false;
+      releaseInferenceSlot = () => {
+        if (slotReleased) return;
+        slotReleased = true;
+        stats.activeInferenceRequests--;
+      };
+      req.once("aborted", releaseInferenceSlot);
+      res.once("finish", releaseInferenceSlot);
+      res.once("close", releaseInferenceSlot);
+    }
     if (profile) {
       // The server's own endpoints for its loaded context, answered here with the gateway's real numbers.
       if (profile === "llamacpp" && req.method === "GET" && urlPath === "/props") {
@@ -117,8 +163,42 @@ export async function startModelProxy({ upstream, caFile, faults = [], profile, 
         return void sendJson(res, 404, { error: { message: "not found" } });
       }
     }
+    const requestChunks = [];
+    let requestBytes = 0;
+    try {
+      for await (const chunk of req) {
+        requestBytes += chunk.length;
+        if (requestBytes > maxRequestBytes) {
+          sendJson(res, 413, { error: { type: "request_too_large", message: "evaluation proxy request body limit exceeded" } });
+          req.destroy();
+          return;
+        }
+        requestChunks.push(chunk);
+      }
+    } catch {
+      return;
+    }
+    const requestBody = Buffer.concat(requestChunks);
+    let requestedTokens = 0;
+    if (routeKind === "inference" && (maxCompletionTokens !== undefined || maxTotalCompletionTokens !== undefined)) {
+      let payload;
+      try { payload = JSON.parse(requestBody.toString("utf8")); }
+      catch { return void sendJson(res, 400, { error: { type: "invalid_request", message: "evaluation proxy requires a valid JSON inference request" } }); }
+      const suppliedLimits = [payload.max_tokens, payload.max_completion_tokens].filter((value) => value !== undefined);
+      if (!suppliedLimits.length || suppliedLimits.some((value) => !Number.isSafeInteger(value) || value < 1) || new Set(suppliedLimits).size !== 1) {
+        return void sendJson(res, 400, { error: { type: "invalid_request", message: "evaluation proxy requires one unambiguous positive completion-token limit" } });
+      }
+      requestedTokens = suppliedLimits[0];
+      if (maxCompletionTokens !== undefined && requestedTokens > maxCompletionTokens) {
+        return void sendJson(res, 400, { error: { type: "completion_limit", message: "evaluation proxy per-request completion-token limit exceeded" } });
+      }
+      if (maxTotalCompletionTokens !== undefined && stats.requestedCompletionTokens + requestedTokens > maxTotalCompletionTokens) {
+        return void sendJson(res, 400, { error: { type: "aggregate_completion_limit", message: "evaluation proxy aggregate requested completion-token limit exceeded" } });
+      }
+      stats.requestedCompletionTokens += requestedTokens;
+    }
     stats.firstRequestAt ??= new Date().toISOString();
-    const chatIndex = isChat(req) ? ++stats.chatRequests : 0;
+    const chatIndex = routeKind === "inference" ? ++stats.chatRequests : 0;
     const fault = chatIndex ? faults.find((f) => f.atRequest === chatIndex) : undefined;
     if (fault) stats.faultsInjected.push({ kind: fault.kind, atRequest: chatIndex });
 
@@ -137,6 +217,15 @@ export async function startModelProxy({ upstream, caFile, faults = [], profile, 
       return void res.end(JSON.stringify({ error: { code: 400, message: "the request exceeds the available context size, try increasing it", type: "exceed_context_size_error" } }));
     }
 
+    const upstreamHeaders = { host: target.host, connection: "close" };
+    for (const header of ["accept", "accept-encoding", "content-type", "user-agent"]) {
+      const value = req.headers[header];
+      if (typeof value === "string") upstreamHeaders[header] = value;
+    }
+    if (requestBody.length > 0) upstreamHeaders["content-length"] = String(requestBody.length);
+    if (authToken) upstreamHeaders.authorization = `Bearer ${authToken}`;
+    let upstreamResponse;
+    let cancelled = false;
     const out = client.request(
       {
         protocol: target.protocol,
@@ -145,10 +234,11 @@ export async function startModelProxy({ upstream, caFile, faults = [], profile, 
         method: req.method,
         // The agent was given the proxy's URL with the upstream's path, so the request path is already the upstream's.
         path: req.url,
-        headers: { ...req.headers, host: target.host, ...(authToken ? { authorization: `Bearer ${authToken}` } : {}) },
+        headers: upstreamHeaders,
         ca,
       },
       (upstreamRes) => {
+        upstreamResponse = upstreamRes;
         if (UPSTREAM_DOWN.has(upstreamRes.statusCode ?? 0)) stats.upstreamFailures++;
         else {
           stats.answered++;
@@ -202,20 +292,42 @@ export async function startModelProxy({ upstream, caFile, faults = [], profile, 
         });
       },
     );
+    const cancelUpstream = () => {
+      if (cancelled || res.writableFinished) return;
+      cancelled = true;
+      stats.cancelledRequests++;
+      upstreamResponse?.destroy();
+      out.destroy();
+    };
+    req.once("aborted", cancelUpstream);
+    res.once("close", cancelUpstream);
     out.on("error", (err) => {
+      if (cancelled) return;
       stats.upstreamFailures++;
+      if (res.destroyed || res.writableEnded) return;
       if (!res.headersSent) res.writeHead(502, { "content-type": "application/json" });
       res.end(JSON.stringify({ error: { message: `model proxy: upstream unreachable (${err.code ?? err.message})` } }));
     });
-    req.pipe(out);
+    out.end(requestBody);
   });
-  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
-  const port = server.address().port;
-  const url = `http://127.0.0.1:${port}${target.pathname.replace(/\/$/, "")}`;
+  await new Promise((resolve, reject) => {
+    server.once("error", reject);
+    if (socketPath) server.listen(socketPath, resolve);
+    else server.listen(0, "127.0.0.1", resolve);
+  });
+  const address = socketPath ? null : server.address();
+  const url = address ? `http://127.0.0.1:${address.port}${target.pathname.replace(/\/$/, "")}` : null;
   return {
     url,
+    socketPath: socketPath ?? null,
     stats: () => ({ ...stats, faultsInjected: [...stats.faultsInjected] }),
-    close: () => new Promise((resolve) => { server.closeAllConnections?.(); server.close(() => resolve()); }),
+    close: () => new Promise((resolve) => {
+      server.closeAllConnections?.();
+      server.close(() => {
+        if (socketPath) fs.rmSync(socketPath, { force: true });
+        resolve();
+      });
+    }),
   };
 }
 

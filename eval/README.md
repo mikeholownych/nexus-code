@@ -9,20 +9,28 @@ node eval/score.mjs eval/out/<label>/results.jsonl          # markdown table; --
 node eval/score.mjs --pairs "$NEXUS_RESULTS" "$GOOSE_RESULTS" "$OPENCODE_RESULTS"
 ```
 
-Each run: a fresh workspace (the task's `fixture`, or its `repo.url` at `repo.commit`, cached in `eval/.cache`), a fresh
-`HOME`, the agent with the task's budgets and a wall-clock timeout, then the task's **hidden** tests (copied in only
-after the agent has stopped) and its `regression` command. `manifest.json` records the harness build (commit, dirty),
-configuration (secrets in `env` masked), model fingerprint, executable version, configured budget, host and Node
-version. Each result records the executable version and effective step/minute budget; per-run logs go to
-`logs/<task>-<run>/`.
+Each run uses a frozen copy of the task tree, a fresh workspace and `HOME`, and a unique output directory. The agent
+receives only its workspace, isolated home, selected read-only runtime files, and a run-scoped token for a local proxy;
+the real gateway credential stays in the harness process. The candidate runs in Bubblewrap user, PID and network
+namespaces, with nested user namespaces disabled. Hidden tests are copied into the workspace only after the agent exits.
+Task setup, hidden tests and regression commands use a separate Bubblewrap boundary with a cleared environment, no
+network, a disposable home and bounded captured output/wall time. Absolute paths, traversal, symlinks and unsupported
+fixture entries are rejected. `manifest.json` records the harness source-file hashes, model fingerprint, corpus/task
+hashes when qualification is configured, executable version, budgets, host and Node version. Each result records the
+executable version and effective step/minute budget; per-run logs go to `logs/<task>-<run>/`. The runner refuses an
+existing output directory so a retry cannot append to or replace prior evidence.
 
 Qualification runs require `nexusExecutable` to name the absolute path of the installed RC,
 `expectedAgentVersion` to pin its version, and `nexusPackageSha256` to record the expected release-asset digest from checksum verification. The runner checks `nexus --version` and refuses the checkout
 `cli/dist/index.js` or a version mismatch before starting an agent. Peer versions are read using each adapter's
-`--version` command in a throwaway HOME; executable paths and SHA-256 hashes are archived alongside the RC package
+`--version` command inside the same Bubblewrap filesystem/network boundary, with a cleared environment and bounded
+output/time; executable paths and SHA-256 hashes are archived alongside the RC package
 digest. `score.mjs --pairs` takes exactly the Nexus,
 Goose and OpenCode result files and refuses mismatched model fingerprints, sampling declarations, context/output
-limits, run pairs, executable identities, or effective step/minute budgets. It reports peer hidden-test results
+limits, explicit per-task request and aggregate requested-output ceilings, run pairs, executable identities, or
+effective step/minute budgets. The proxy permits only model-catalog and inference routes, strips client-supplied
+authorization and control-plane headers, and enforces configured request/body/output ceilings. These are requested
+completion-token ceilings, not exact usage accounting. It reports peer hidden-test results
 separately; scores are never combined. The Nexus adapter passes the recorded temperature and step/minute limits;
 OpenCode receives a primary evaluation agent with the recorded step limit, temperature and seed; Goose receives the
 matching `--max-turns`, context/output limits and temperature settings. Qualification mode currently requires
@@ -99,16 +107,43 @@ one, before any agent runs, unless every item below holds:
 - **The model is identified, not just named.** `fingerprint: { weightsSha256, serverBuild }` and
   `sampling: { temperature, seed }` are set in the config, and the endpoint lists the model. The fingerprint (with the
   listed owner and context) is written to `manifest.json`.
-- **Hidden tests are out of the agent's reach.** `runAs` names a separate user the agents run as (through
-  `sudo -n -u <user>`), and the tasks directory grants nothing to other users. Owner setup, once:
+- **Hidden tests are out of the agent's reach.** `runAs` names a separate evaluator user. Candidate execution occurs
+  inside the Bubblewrap mount namespace and does not bind the task store or validator sources; its `HOME`, `/tmp`,
+  `/run`, and network namespace are isolated. Runtime files are explicit read-only binds. The harness grants the
+  evaluator UID ACL access only to the disposable workspace, home and per-run proxy directory. Before qualification,
+  verify the account and these existing operating-system permissions through the approved local setup procedure:
   1. `sudo useradd --system --create-home nexus-eval`
-  2. A sudoers rule letting the operator run commands as that user without a password, for example
-     `mike ALL=(nexus-eval) NOPASSWD: /usr/bin/env`. This grants only the unprivileged user's rights.
-  3. `chmod o-rwx eval/tasks` (and the held-out task store).
+  2. A narrowly constrained sudoers rule permitting only the required Bubblewrap invocation as `nexus-eval`; do not
+     grant arbitrary `env` command execution.
+  3. Keep task stores unreadable to the evaluator account; the runner does not mount them into the candidate namespace.
   4. A Nexus install, Node and the peer agents that `nexus-eval` can read and execute.
 
-  Workspaces and per-run homes are made writable for that user. Development runs may omit `runAs`; their contamination
-  check still applies.
+  Development runs may omit `runAs`; Bubblewrap isolation still applies. Qualification is refused without a separate
+  evaluator account, `setfacl`, explicit `sandboxRuntimeRoots`, and read-only `sandboxRuntimePaths` contained by those
+  roots. Protected roots such as `/etc`, `/dev`, `/proc`, `/sys`, `/run`, `/var`, `/tmp`, and sensitive user-cache paths
+  are rejected. No setup procedure is applied by the runner.
+
+- **Corpus binding is integrity evidence, not approval authentication.** The qualification config pins the exact
+  corpus-manifest SHA-256; the manifest binds each task's JSON and full task-tree digest; the run manifest repeats those
+  hashes. This detects stale or modified content. The manifest's `custody.status` and `custodian` strings are claims,
+  not signatures. Independent custody acceptance, pre-RC commit timing, and configuration freeze must be verified and
+  archived by the acceptance reviewer before any qualification run. The current candidate task package has not been
+  independently accepted.
+
+### Isolation limits
+
+Bubblewrap plus the current runner enforces separate mount/user/PID/network namespaces, a cleared task-command
+environment, a bounded wall clock, bounded captured output, per-run process-group teardown, and read-only runtime
+binds. These controls do **not** currently establish kernel-enforced aggregate CPU, memory, process-count, or writable
+disk quotas for the workspace and temporary filesystems. Qualification preflight now fails closed on that known gap;
+it does not claim that request/token ceilings substitute for kernel resource controls. Do not represent the sandbox as
+resource-exhaustion-proof or run M5 until an approved, measured resource-control contract is implemented and validated.
+Appliance-specific Bubblewrap enforcement is a separate, unverified condition.
+
+The evaluator proxy allows one in-flight inference request at a time and destroys the upstream HTTP request/response
+when the candidate-side request is cancelled or its connection closes. This bounds proxy concurrency and propagates
+transport cancellation, but it does not prove that a remote provider or model runtime stopped generation after the
+connection closed; that behavior requires runtime-specific evidence. The total request limit remains a separate cap.
 
 ## Pre-registered thresholds (from the assessment, fixed before any live run)
 
