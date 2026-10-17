@@ -24,6 +24,11 @@ jobs:
           cache-dependency-path: cli/package-lock.json
       - name: Install cargo tools
         run: |
+          CARGO_HOME="${CARGO_HOME:-$HOME/.cargo}"
+          export CARGO_HOME
+          mkdir -p "$CARGO_HOME/bin"
+          echo "$CARGO_HOME/bin" >> "$GITHUB_PATH"
+          export PATH="$CARGO_HOME/bin:$PATH"
           cargo install cargo-audit --locked --version 0.22.2
           curl -fsSL https://github.com/EmbarkStudios/cargo-deny/releases/download/0.20.2/cargo-deny-0.20.2-x86_64-unknown-linux-musl.tar.gz | tar -xz -C "$RUNNER_TEMP"
           mv "$RUNNER_TEMP/cargo-deny-0.20.2-x86_64-unknown-linux-musl/cargo-deny" "$CARGO_HOME/bin/"
@@ -53,6 +58,11 @@ jobs:
           cache-dependency-path: cli/package-lock.json
       - name: Install cargo tools
         run: |
+          CARGO_HOME="${CARGO_HOME:-$HOME/.cargo}"
+          export CARGO_HOME
+          mkdir -p "$CARGO_HOME/bin"
+          echo "$CARGO_HOME/bin" >> "$GITHUB_PATH"
+          export PATH="$CARGO_HOME/bin:$PATH"
           cargo install cargo-audit --locked --version 0.22.2
           curl -fsSL https://github.com/EmbarkStudios/cargo-deny/releases/download/0.20.2/cargo-deny-0.20.2-x86_64-unknown-linux-musl.tar.gz | tar -xz -C "$RUNNER_TEMP"
           mv "$RUNNER_TEMP/cargo-deny-0.20.2-x86_64-unknown-linux-musl/cargo-deny" "$CARGO_HOME/bin/"
