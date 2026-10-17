@@ -21,7 +21,14 @@ trap cleanup EXIT
 mv "${ROOT_DIR}/core/harness-core.cdx.json" "$WORK/cargo.cdx.json"
 
 # 2. Generate Node production SBOM from cli/package-lock.json using cyclonedx-npm
-npx --yes @cyclonedx/cyclonedx-npm \
+# `npm --prefix cli test` exports these values. If they reach npm exec, npm's
+# Arborist treats cli/lib as part of the local prefix tree and fails when it is
+# absent, even though the package-lock-only SBOM can otherwise be generated.
+env -u npm_config_local_prefix \
+  -u npm_config_prefix \
+  -u NPM_CONFIG_LOCAL_PREFIX \
+  -u NPM_CONFIG_PREFIX \
+  npx --yes @cyclonedx/cyclonedx-npm \
   --package-lock-only \
   --omit dev \
   --spec-version 1.5 \
