@@ -25,6 +25,7 @@ jobs:
             experiments/cloudflare-artifacts-vertical-slice/package-lock.json
       - run: npm ci --prefix demo
       - run: npm ci --prefix cli
+      - run: npm run build --prefix cli
       - run: npm test --prefix demo
       - run: npm ci --prefix experiments/cloudflare-artifacts-vertical-slice
       - run: npm run typecheck --prefix experiments/cloudflare-artifacts-vertical-slice
