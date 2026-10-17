@@ -21,7 +21,7 @@ jobs:
         with:
           fetch-depth: 0
       - run: sudo apt-get update
-      - run: sudo apt-get install --yes make bubblewrap build-essential meson ninja-build pkg-config libcap-dev
+      - run: sudo apt-get install --yes make bubblewrap build-essential meson ninja-build pkg-config libcap-dev npm
       - run: bash scripts/ensure-ci-bubblewrap.sh
       - uses: dtolnay/rust-toolchain@stable
       - name: Install cargo tools (audit, deny, about, cyclonedx)
@@ -50,6 +50,7 @@ jobs:
           node_runtime="$(readlink -f "$(command -v node)")"
           sudo install -o root -g root -m 0755 "$node_runtime" /usr/bin/node
           test "$(/usr/bin/node --version)" = "$(node --version)"
+          env PATH=/usr/bin:/bin /usr/bin/npm --version
       - name: Require a version-matched tag on main
         run: |
           git fetch origin main --no-tags

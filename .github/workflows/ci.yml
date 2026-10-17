@@ -47,7 +47,7 @@ jobs:
         node: [20, 22, 24]
     steps:
       - uses: actions/checkout@v4
-      - run: sudo apt-get update && sudo apt-get install --yes make bubblewrap build-essential meson ninja-build pkg-config libcap-dev
+      - run: sudo apt-get update && sudo apt-get install --yes make bubblewrap build-essential meson ninja-build pkg-config libcap-dev npm
       - run: bash scripts/ensure-ci-bubblewrap.sh
       - uses: actions/setup-node@v4
         with:
@@ -59,6 +59,7 @@ jobs:
           node_runtime="$(readlink -f "$(command -v node)")"
           sudo install -o root -g root -m 0755 "$node_runtime" /usr/bin/node
           test "$(/usr/bin/node --version)" = "$(node --version)"
+          env PATH=/usr/bin:/bin /usr/bin/npm --version
       - run: node scripts/sync-version.mjs --check
       - run: node scripts/check_requirements.mjs
       - run: npm ci --prefix cli
@@ -87,7 +88,7 @@ jobs:
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
-      - run: sudo apt-get update && sudo apt-get install --yes make bubblewrap build-essential meson ninja-build pkg-config libcap-dev
+      - run: sudo apt-get update && sudo apt-get install --yes make bubblewrap build-essential meson ninja-build pkg-config libcap-dev npm
       - run: bash scripts/ensure-ci-bubblewrap.sh
       - uses: actions/setup-node@v4
         with:
@@ -99,6 +100,7 @@ jobs:
           node_runtime="$(readlink -f "$(command -v node)")"
           sudo install -o root -g root -m 0755 "$node_runtime" /usr/bin/node
           test "$(/usr/bin/node --version)" = "$(node --version)"
+          env PATH=/usr/bin:/bin /usr/bin/npm --version
       - name: Install cargo tools (audit, deny, about, cyclonedx)
         run: |
           CARGO_HOME="${CARGO_HOME:-$HOME/.cargo}"
