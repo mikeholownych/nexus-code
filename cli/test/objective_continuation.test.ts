@@ -456,19 +456,35 @@ describe("the objective survives detailed follow-ups and stays complete in conte
 
 describe("verified means a recorded passing verifier run on the current workspace", () => {
   test("verified without a current pass is refused; after a passing run_tests it binds that run; a later change demotes it", { timeout: 60_000 }, async () => {
-    const repo = makeRepo({ Makefile: 'test:\n\t@echo "✔ importer works" && echo "ℹ tests 1"\n' });
+    const repo = makeRepo({
+      "importer.mjs": 'export function imported() { return false; }\n',
+      "test/importer.test.mjs": [
+        'import { test } from "node:test";',
+        'import assert from "node:assert/strict";',
+        'import { imported } from "../importer.mjs";',
+        'test("importer works", () => assert.equal(imported(), true));',
+        "",
+      ].join("\n"),
+      Makefile: ".PHONY: test\ntest:\n\t@env -u NODE_TEST_CONTEXT node --test test/importer.test.mjs\n",
+    });
     const script = (n: number): Reply =>
       n === 1
         ? { kind: "tools", calls: [{ name: "update_requirements", args: { requirements: [{ id: "R1", status: "verified", evidence: ["I checked it"] }] } }] }
         : n === 2
-          ? { kind: "tools", calls: [{ name: "run_tests", args: {} }] }
+          ? { kind: "tools", calls: [{ name: "write_file", args: { path: "importer.mjs", content: "export function imported() { return true; }\n", overwrite: true } }] }
           : n === 3
-            ? { kind: "tools", calls: [{ name: "update_requirements", args: { requirements: [{ id: "R1", status: "verified", evidence: ["importer.ts"] }] } }] }
+            ? { kind: "tools", calls: [{ name: "run_tests", args: {} }] }
             : n === 4
+              ? { kind: "tools", calls: [{ name: "update_requirements", args: { requirements: [{ id: "R1", status: "verified", evidence: ["importer.mjs"] }] } }] }
+            : n === 5
               ? write("later-change.txt")
               : text("stopping");
     const gw = await startGateway(script);
-    const agent = quiet(new AutonomousAgent(cfg(gw.url, repo, { continuation: { ...DEFAULT_CONTINUATION, maxCompletionNudges: 0 } })));
+    const agent = quiet(new AutonomousAgent(cfg(gw.url, repo, {
+      authoritativeVerifierCommand: "make test",
+      trustedDeliverableFiles: ["importer.mjs"],
+      continuation: { ...DEFAULT_CONTINUATION, maxCompletionNudges: 0 },
+    })));
     try {
       await agent.runTurn(OBJECTIVE);
       const refusal = (gw.requests[1] as any).messages.filter((m: any) => m.role === "tool" && m.name === "update_requirements").at(-1);
