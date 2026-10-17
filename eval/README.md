@@ -3,6 +3,9 @@
 `run.mjs` runs tasks against one agent configuration and appends a JSON line per run; `score.mjs` reports the scores
 separately (never combined), per task and configuration, with 95 % Wilson intervals.
 
+`docs/v1.0.0/READINESS.md` is a historical checkpoint at source revision `6151a23`; use this file and the current
+runner source for evaluator behavior added after that revision. Neither document represents completed M5 qualification.
+
 ```bash
 node eval/run.mjs --config eval/configs/gateway-engineering-deep.json --out eval/out/<label> [--only id,id] [--runs N]
 node eval/score.mjs eval/out/<label>/results.jsonl          # markdown table; --json for machine output
@@ -169,7 +172,7 @@ connection closed; that behavior requires runtime-specific evidence. The total r
 | T2 task set (pilot fixture tasks `t2-*`) | done |
 | T3 task set (fact-sheet scorer / steering checks) | not started |
 | T4 fault injector | in progress |
-| Live runs | blocked on inference hours, cloud budget and peer installs (operator decision) |
+| Qualification runs | blocked on independent corpus custody, enforced aggregate sandbox resource limits, completed T3/T4 workloads, exact-RC/provider evidence, and the required operational approvals; the earlier pilot's inference-hour, cloud-budget, and peer-install decisions also remain separate prerequisites |
 
 ## Pilot 2026-10-13 (4 h appliance window)
 
