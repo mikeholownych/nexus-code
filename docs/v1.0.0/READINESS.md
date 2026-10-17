@@ -7,6 +7,13 @@
 
 This checkpoint reconciles the candidate ledger and acceptance procedure against recorded source and test evidence. It is not a release approval. The historical `v1_release_readiness_report.md` cited in the task was not present in the inspected repository or worktrees; this file records evidence within the existing v1 documentation package.
 
+## Release validation update (2026-10-17 06:40 UTC)
+
+- A focused Node 20.20.2 run of `npm --prefix cli test -- test/security_gates.test.ts` against PR #10's pre-fix snapshot reproduced an SBOM test failure: nested `npx` exited with `ENOENT` for the absent `cli/lib` directory after inheriting npm's `npm_config_local_prefix` and `npm_config_prefix`. A prior supplemental command labeled Node 20 was invalid because `node` resolved to Node 24; it is not counted as Node 20 evidence.
+- PR #10 commit `bb8e673637231aa38ab04b6f07a4498a88bdc132` clears the lowercase and uppercase prefix variables only for the nested CycloneDX `npx` call and adds a regression that injects the lowercase values set by `npm --prefix cli`. The focused security-gate suite then passed 10/10 under Node 20.20.2/npm 10.8.2 and 10/10 under Node 24.11.1/npm 11.19.0. `bash -n`, `git diff --check`, and staged Gitleaks also passed. Independent review accepted the scoped fix and confirmed Linux CI compatibility.
+- The corrected PR #10 revision triggered run `39010709839`; its contest-contract and Node 20/22/24 checks are pending at this update. Prior runs on `aa2cd62` do not validate `bb8e673`. PR #9's current run `39006853703` also remains pending in its Node matrix. No cross-version CI pass is claimed.
+- The Node-prefix issue was a release-test defect, not evidence that the SBOM artifact was emitted incorrectly; the failing check did not complete its required generator command. The fix remains unintegrated and is not part of any release candidate.
+
 ## Review update (2026-10-17 03:10 UTC)
 
 This section supersedes the earlier T2 package status below. The earlier package attempts and their failures remain historical evidence and are not erased.
