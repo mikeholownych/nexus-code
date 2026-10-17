@@ -23,6 +23,8 @@ function encodedRunTokens(run: string): number | undefined {
 // - >= 1 token per CJK, Hangul or kana character
 // - 1 token per digit
 // - at least len/3 for base64-like and long unbroken runs
+// DEC-17: the >= 1/char floor deliberately over-estimates merging scripts (CJK 2.0x, Hangul 1.67x vs the
+// pinned tokenizer) and takes precedence over ACC-VER-07's 1.5x band; never under-estimate (context overflow).
 const BPE_REGEX = /[A-Za-z0-9+/=_-]{16,}|'s|'t|'re|'ve|'m|'ll|'d| ?[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}]| ?\p{L}+| ?\p{N}| ?[^\s\p{L}\p{N}]+|\s+(?!\S)|\s+/gu;
 
 /**
