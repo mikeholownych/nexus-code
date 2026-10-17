@@ -71,7 +71,7 @@ function run(env: Env, state: DurableOperationState, clock: FakeClock = fakeCloc
 }
 
 describe("convergence scheduling with real agent turns", () => {
-  test("A. reroute: the preferred reviewer is rate-limited, an equivalent qualified reviewer completes the work", async () => {
+  test("A. reroute: recovered work preserves routing evidence but cannot complete unverified", async () => {
     const gwA = await startGateway(() => limited(120));
     const gwB = await startGateway(() => complete("review done on b"));
     await withEnv([gwA, gwB], async (env) => {
@@ -79,7 +79,7 @@ describe("convergence scheduling with real agent turns", () => {
         [resource("rev-a", gwA, { capabilities: ["tools", "review"] }), resource("rev-b", gwB, { capabilities: ["tools", "review"], rank: 1 }), resource("cheap", gwB, { model: "cheap" })], 0);
       const { runner, clock } = run(env, state);
       const out = await runner.run();
-      assert.equal(out.status, "COMPLETE");
+      assert.equal(out.status, "BLOCKED", "a recovered task cannot complete on an unauthenticated verifier baseline");
       assert.equal(gwA.requests.length, 1, "one request to the rate-limited reviewer, then none");
       assert.equal(gwB.requests.length, 1);
       assert.equal(gwB.requests[0].body.model, "rev-b", "the qualified alternate, not the cheap model");
@@ -87,12 +87,14 @@ describe("convergence scheduling with real agent turns", () => {
       const u = out.units[0];
       assert.deepEqual(u.reroutes.map((r) => [r.from, r.to]), [["rev-a", "rev-b"]]);
       assert.match(u.reroutes[0].reason, /rate limited \(HTTP 429\)/);
-      assert.equal(u.result!.summary, "review done on b");
+      assert.equal(u.status, "BLOCKED");
+      assert.match(u.blocked?.reason ?? "", /COMPLETED\/UNVERIFIED \(NO_APPLICABLE_VERIFIER\)/);
+      assert.equal(u.result, undefined, "the model's report is not promoted to an established operation result");
       assert.equal(clock.sleeps.length, 0, "no waiting when a qualified alternate exists");
     });
   });
 
-  test("B. park and continue: the deep review parks mid-unit, independent work completes, review resumes from its history", async () => {
+  test("B. park and continue: independent work completes while recovered review remains unverified", async () => {
     const gwDeep = await startGateway((n) => (n === 1 ? { kind: "tools", calls: [{ name: "read_file", args: { path: "notes.txt" } }] } : n === 2 ? limited(60) : complete("deep review: answer verified as 42")));
     const gwLead = await startGateway((n, body) => complete(`${userText(body).match(/Work unit '(\w+)'/)?.[1]} done`));
     await withEnv([gwDeep, gwLead], async (env) => {
@@ -105,7 +107,7 @@ describe("convergence scheduling with real agent turns", () => {
       const state = newOperation("op-b", "ship the change", units, [resource("deep", gwDeep, { capabilities: ["tools", "reasoning"], rank: 1 }), resource("lead", gwLead)], 0);
       const { runner, clock } = run(env, state);
       const out = await runner.run();
-      assert.equal(out.status, "COMPLETE");
+      assert.equal(out.status, "BLOCKED", "the recovered review remains pending despite successful continuation");
       const types = out.events.map((e) => e.type);
       const parkedEvent = out.events.find((e) => e.type === "WORK_PARKED")!;
       assert.match(parkedEvent.message, /Deep review parked: deep rate limited \(HTTP 429\); eligible again \d\d:\d\d UTC\. Continuing 2 independent tasks\./);
@@ -118,7 +120,11 @@ describe("convergence scheduling with real agent turns", () => {
       assert.equal(resumed.filter((m: any) => m.role === "tool" && /the answer is 42/.test(String(m.content))).length, 1);
       assert.match(userText(gwDeep.requests[2].body), /Work unit resumed on deep/);
       const final = gwLead.requests.find((r) => /Work unit 'final'/.test(userText(r.body)))!;
-      assert.match(userText(final.body), /Deep review: deep review: answer verified as 42/, "acceptance sees the parked unit's result");
+      assert.equal(final, undefined, "acceptance cannot run on a recovered unverified dependency");
+      assert.equal(out.units.find((u) => u.id === "review")?.status, "BLOCKED");
+      assert.match(out.units.find((u) => u.id === "review")?.blocked?.reason ?? "", /COMPLETED\/UNVERIFIED \(NO_APPLICABLE_VERIFIER\)/);
+      assert.ok(["docs", "tests"].every((id) => out.units.find((u) => u.id === id)?.status === "COMPLETE"), "independent work still finishes");
+      assert.equal(out.units.find((u) => u.id === "final")?.status, "WAITING_ON_DEPENDENCY");
       assert.equal(gwLead.requests.filter((r) => /Work unit 'review'/.test(userText(r.body))).length, 0, "the unqualified model never got the review");
     });
   });
@@ -196,7 +202,7 @@ describe("convergence scheduling with real agent turns", () => {
     });
   });
 
-  test("D. restart during WAITING: a new process reconstructs the wait and resumes the unit from durable state", async () => {
+  test("D. restart during WAITING: state resumes with history, but the unauthenticated result remains blocked", async () => {
     const gw = await startGateway((n) => (n === 1 ? { kind: "tools", calls: [{ name: "read_file", args: { path: "notes.txt" } }] } : n === 2 ? limited(300) : complete("finished after restart")));
     await withEnv([gw], async (env) => {
       const t0 = fakeClock().now();
@@ -217,12 +223,15 @@ describe("convergence scheduling with real agent turns", () => {
       const later: FakeClock = { ...c2, now: () => c2.now() + 100_000 };
       const { runner } = run(env, loaded, later);
       const out = await runner.run();
-      assert.equal(out.status, "COMPLETE");
+      assert.equal(out.status, "BLOCKED");
       assert.equal(c2.sleeps.length, 1);
       assert.ok(c2.sleeps[0] >= 199_000 && c2.sleeps[0] <= 201_000, `remaining wait ${c2.sleeps[0]}`);
       assert.equal(gw.requests.length, 3);
       assert.equal(gw.requests[2].body.messages.filter((m: any) => m.role === "tool" && /the answer is 42/.test(String(m.content))).length, 1, "history recovered from disk");
-      assert.equal(env.store().load("op-d").status, "COMPLETE");
+      assert.equal(out.units[0]?.status, "BLOCKED");
+      assert.match(out.units[0]?.blocked?.reason ?? "", /COMPLETED\/UNVERIFIED \(NO_APPLICABLE_VERIFIER\)/);
+      assert.equal(out.units[0]?.result, undefined);
+      assert.equal(env.store().load("op-d").status, "BLOCKED");
     });
   });
 
