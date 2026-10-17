@@ -31,3 +31,17 @@
 ## Binding rule
 
 These results qualify **snapshot `8cf3e82` only**. `168d574` and later docs-only commits are covered by the empty product-code delta above plus CI; any future change to `cli/`, `core/`, `eval/`, `scripts/`, or the Makefile invalidates the binding and requires fresh runs on the new revision.
+
+## Result 3 — full suite, built run (v4, `/tmp` snapshot): exit 2 — 1098/1103, 5 failures attributed to the sandbox-mount environment
+
+`make build` **exit 0** (2m18s; `build-info.json`: commit `8cf3e820668a`, commitTime `2026-10-17T18:38:11+00:00`, `dirty:false`, branch null — detached worktree) → `make test` exit 2: **1103 tests / 1098 pass / 5 fail / 0 cancelled** (`full2.log`). The 5 failures all throw from `eval/isolate.mjs:149` (`mountProblem` in the bubblewrap sandbox setup): A1 deliverable verification, standalone server-profile discovery, both T4 smokes, task-path traversal. The identical suite passes **1149/1149** (plus Rust 281/281, evaluator rerun 21/21) on this machine from codex's `/home/mike/nexus-wt/p10g-oracle` worktree (claim-log release line 20:38:32Z). Working hypothesis: the harness sandbox's runtime-mount check rejects snapshots located under `/tmp/opencode`; product code is not implicated (my diff touches `cli/src/tokens.ts` comments + `cli/test/tokens*` only).
+
+**Attribution run queued (v5):** `make build` + `make test` on the same commit in a `/home/mike/nexus-wt/gov-8cf3e82` snapshot, same claim protocol. A green v5 is the valid full-suite result for this revision; if v5 reproduces the 5 failures, they are real on this revision and belong to the PLAN-10/eval owners (boundary request).
+
+## Protocol incident (diagnostic, resolved)
+
+Watcher v3 aborted fail-closed immediately after taking the claim (20:38:51Z) and left its own dead-pid claim in place: its `owns_claim` pid pattern was corrupted by a quoted heredoc (`\$` escaped the dollar → the pattern never matched). The stale claim was logged and released by the owner-of-record at 20:51:47Z; v4/v5 use a `printf`-built fixed-string pattern. codex's 20:44:48Z "REQUEST SUITE release … codex will wait" was honoured. No suites overlapped at any point.
+
+## Corpus progress (custodian-verified)
+
+Batches 1–4: **16/40 tasks**; **16/16 manifest hash pairs re-derive exactly**; `check_schema.mjs` OK × 16; perfectly balanced 4×4 languages × classes; all external repos at pinned commits. Live `bin/validate.py` runs deferred to a bounded window after the attribution run. Coordination comments posted on PRs #10 and #9 (ACCEPTANCE/READINESS edits + continuity M1/M3/N1–N3 bundling).
