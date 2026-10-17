@@ -79,7 +79,7 @@ describe("convergence scheduling with real agent turns", () => {
         [resource("rev-a", gwA, { capabilities: ["tools", "review"] }), resource("rev-b", gwB, { capabilities: ["tools", "review"], rank: 1 }), resource("cheap", gwB, { model: "cheap" })], 0);
       const { runner, clock } = run(env, state);
       const out = await runner.run();
-      assert.equal(out.status, "BLOCKED", "a recovered task cannot complete on an unauthenticated verifier baseline");
+      assert.equal(out.status, "BLOCKED", "recovered evidence cannot establish an operation result");
       assert.equal(gwA.requests.length, 1, "one request to the rate-limited reviewer, then none");
       assert.equal(gwB.requests.length, 1);
       assert.equal(gwB.requests[0].body.model, "rev-b", "the qualified alternate, not the cheap model");
