@@ -61,7 +61,7 @@ Standalone live inference evidence is absent (HIST-08; SPEC-05). Real-terminal c
    - bounded-failure truthfulness;
    - operator interventions (= 0 in `run` mode);
    - tokens and wall time per correct task.
-5. **REQ-QUAL-105. T4 fault injection.** At least 8 fault classes × 5 runs:
+5. **REQ-QUAL-105. T4 fault injection.** 9 fault classes × 5 runs (DEC-05 amendment, 2026-10-17: the union of the distinct scenarios below):
    1. gateway refuses connections mid-turn;
    2. 5xx/overloaded;
    3. stream cut mid-tool-call;
