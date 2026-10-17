@@ -26,9 +26,15 @@
 
 ## Verification
 
-- `HOME=<tmp> node scripts/check_requirements.mjs` → **exit 0**; `requirements: 121 rows; tested 106, partial 6, implemented 2, open 7`. **This establishes ledger integrity only.** REQ-AGT-118 remains `partial`: the changed test has not been executed (SUITE held), and the DEC-17 amendment has not been independently reviewed. A ledger pass is **not** behavioural acceptance.
-- Estimator arithmetic independently reproduced (above).
-- **No silent exemptions:** `tokens.test.ts` pins the floor-bound set to exactly `["CJK 7-char sentences x 50", "Hangul 200 chars"]` (`assert.deepEqual`), asserts `estimated === floorTokens` exactly (400/200), keeps `ratio <= 1.5` for every other corpus, and keeps the never-under-estimate guard (`estimated >= ref * 0.8`). A third floor-bound corpus can only appear by failing this test.
+- `HOME=<tmp> node scripts/check_requirements.mjs` → **exit 0**; `requirements: 121 rows; tested 106, partial 6, implemented 2, open 7`. **This establishes ledger integrity only.** REQ-AGT-118 remains `partial`: the changed test has not been executed (SUITE held), and the DEC-17 amendment review is approve-with-issues (below). A ledger pass is **not** behavioural acceptance.
+- **Independent review (separate agent, not the author):** `independent-review-dec17.md` — verdict **approve-with-issues**. Arithmetic independently reproduced (est 400/200; 2.00×/1.67×; caps 300/180). Issues found and their disposition:
+  - *(major)* `READINESS.md` still described both decisions as unresolved → added to the codex handoff (`handoff-codex-t4-acceptance-2026-10-17.md`) + claim-log boundary request. OPEN — codex-owned.
+  - *(minor)* ledger "none under-estimated" was false → corrected: **4** corpora under-estimate within the 0.8× guard (worst 601/748 = 1.245×). Fixed on-branch.
+  - *(minor)* DEC-17 wrongly claimed the prior ledger wording survived in place → now cites git history at `e1759ca`. Fixed on-branch.
+  - *(minor)* "the two below" → "the two in the table above". Fixed on-branch.
+  - *(minor, pre-existing)* the test pinned only `corpora.length >= 8`, so accuracy corpora could be silently deleted → the test now pins all **14** corpus names explicitly. Fixed on-branch.
+- Estimator arithmetic reproduced by the author **and** the independent reviewer with faithful standalone ports (incl. `encodedRunTokens`): all 14 corpora recomputed — only the two floor-bound corpora exceed 1.5× (max non-floor 1.428×, base64 4KB); `estimated === floorTokens` exact (400/200); no guard failures.
+- **No silent exemptions:** `tokens.test.ts` pins the floor-bound set to exactly `["CJK 7-char sentences x 50", "Hangul 200 chars"]` (`assert.deepEqual`), asserts `estimated === floorTokens` exactly, keeps `ratio <= 1.5` for every other corpus, keeps the never-under-estimate guard (`estimated >= ref * 0.8`), and now pins the full 14-corpus set against deletion.
 - **Test execution deferred:** the `SUITE` claim is held by `codex` (pid 532551, since 2026-10-17T17:24:09Z), so no suite or targeted test was run on this machine. RE-RUN when `SUITE` is free:
   - the focused tokenizer test (`cli/test/tokens.test.ts`) — expect ACC-VER-07/REQ-AGT-118 green;
   - the full suite (`make test`) on a snapshot of this commit;
@@ -37,9 +43,10 @@
 
 ## Not in this slice (handed off)
 
-- `docs/v1.0.0/ACCEPTANCE.md` §6.2 line 189 (`8` → `9`) — file under codex claim; see `handoff-codex-t4-acceptance-2026-10-17.md`.
+- `docs/v1.0.0/ACCEPTANCE.md` §6.2 line 189 (`8` → `9`) **and** `docs/v1.0.0/READINESS.md` lines 17/39/49 — both files under codex claims; see `handoff-codex-t4-acceptance-2026-10-17.md` (independent review flagged the READINESS gap; tracked as boundary requests in the claim log and PR #11).
 - Held-out corpus custody / freeze — see `custody-report-2026-10-17.md`.
 - Held-out authorship reassignment — see `heldout-authorship-handoff-2026-10-17.md`.
+- Independent continuity/compaction review (owner-directed, revision `e1759ca`) — see `../INDEP-REVIEW-CONTINUITY/review-prep.md`.
 
 ## Evidence limits
 

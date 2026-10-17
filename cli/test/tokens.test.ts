@@ -66,6 +66,27 @@ describe("ACC-VER-07 & REQ-AGT-118: Conservative token estimator and calibration
   test("ACC-VER-07: countTokens is within 1.5x of pinned tokenizer reference counts (floor-bound corpora excepted per DEC-17)", () => {
     const fixture = JSON.parse(fs.readFileSync(fixturePath, "utf8")) as CalibrationFixture;
     assert.ok(fixture.corpora.length >= 8, "calibration fixture must contain all required corpora");
+    // The pinned corpora are the calibration evidence: none may be silently deleted, and any new corpus
+    // must run through the band/floor logic below (DEC-17: examined and recorded, not exempted by default).
+    const pinnedCorpora = [
+      "english prose (200 words)",
+      "CJK one 400-char run",
+      "CJK 16-char classical x 25",
+      "CJK 7-char sentences x 50",
+      "Kana 200 chars",
+      "Hangul 200 chars",
+      "digits 1000",
+      "minified JSON",
+      "base64 4KB",
+      "base64 random 3072B (LCG seed 12345)",
+      "base64 of text",
+      "hex sha256 x20",
+      "whitespace-indented code",
+      "emoji 100",
+    ];
+    for (const name of pinnedCorpora) {
+      assert.ok(fixture.corpora.some((c) => c.name === name), `calibration fixture must still contain corpus "${name}"`);
+    }
 
     const floorBound: string[] = [];
     for (const entry of fixture.corpora) {
