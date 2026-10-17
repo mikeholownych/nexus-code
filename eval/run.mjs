@@ -12,6 +12,7 @@ import { fileURLToPath } from "node:url";
 import { startModelProxy } from "./model_proxy.mjs";
 import { asUser, corpusManifestProblem, corpusTaskRows, fetchModelEntry, hiddenTestIsolationProblem, modelFingerprint, nexusContextLimitArgs, nexusLimitsProblem, qualificationBudgetProblem, taskTreeDigest, validateTask } from "./validate.mjs";
 import { agentSandboxArgv, assertNoSymlinks, confinedPath, grantRunAsAccess, isolatedProcessArgv, runIsolated, runIsolatedProcess, sandboxAvailable } from "./isolate.mjs";
+import { runBlackBoxOracle } from "./oracle.mjs";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const args = parseArgs(process.argv.slice(2));
@@ -482,6 +483,22 @@ function runAgent(task, ws, home, budget, agentIdentity, proxyDirectory, localTo
 }
 
 function runCheck(task, ws, check, hidden) {
+  if (hidden && check.protocol === "blackbox-v1") {
+    return runBlackBoxOracle(task, ws, check).then((result) => ({
+      ...result,
+      status: result.pass ? 0 : 1,
+      output: JSON.stringify({
+        cases: result.cases,
+        failedCases: result.failedCases,
+        timeoutCases: result.timeoutCases,
+        outputLimitCases: result.outputLimitCases,
+        executionFailureCases: result.executionFailureCases,
+        invalidOutputCases: result.invalidOutputCases,
+        mismatchCases: result.mismatchCases,
+        outcome: result.outcome,
+      }),
+    }));
+  }
   if (hidden && check.dir) {
     const source = confinedPath(task.dir, check.dir);
     assertNoSymlinks(source);
