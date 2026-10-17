@@ -347,8 +347,10 @@ const launcherCheck: Check = async () => {
   try {
     real = fs.realpathSync(launcher);
   } catch {}
-  const evidence = [`${launcher} -> ${real}`];
   const ours = real === (PACKAGED_HOME ? path.join(PACKAGED_HOME, "bin/nexus") : path.join(INSTALL_ROOT, "harness.sh"));
+  const evidence = PACKAGED_HOME
+    ? [ours ? "The nexus launcher resolves to this packaged installation." : "The nexus launcher resolves outside this packaged installation."]
+    : [`${launcher} -> ${real}`];
   let routesDoctor = false;
   try {
     routesDoctor = /\[\[ "\$1" == "doctor" \]\]/.test(fs.readFileSync(real, "utf8"));

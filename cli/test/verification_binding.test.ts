@@ -23,6 +23,26 @@ test("ACC-VER-04: multi-runner hasExecutedTests recognizes real runs and rejects
   );
   assert.equal(hasExecutedTests("ℹ tests 1\nℹ pass 1"), true, "node:test 1 pass should be true");
   assert.equal(hasExecutedTests("ℹ tests 1"), true, "node:test 1 test without pass line should be true");
+  assert.equal(
+    hasExecutedTests("# tests 2\n# suites 1\n# pass 2\n# fail 0\n# cancelled 0\n# skipped 0\n# todo 0\n# duration_ms 12.3"),
+    true,
+    "Node 20 node:test TAP summary should count executed tests"
+  );
+  assert.equal(
+    hasExecutedTests("# tests 3\n# suites 1\n# pass 0\n# fail 0\n# cancelled 0\n# skipped 3\n# todo 0\n# duration_ms 2.1"),
+    false,
+    "Node 20 node:test TAP summary with only skipped tests should be false"
+  );
+  assert.equal(
+    hasExecutedTests("# tests 2\n# suites 1\n# pass 0\n# fail 0\n# cancelled 2\n# skipped 0\n# todo 0\n# duration_ms 2.1"),
+    false,
+    "Node 20 node:test TAP summary with only cancelled tests should be false"
+  );
+  assert.equal(
+    hasExecutedTests("# tests 0\n# suites 0\n# pass 0\n# fail 0\n# cancelled 0\n# skipped 0\n# todo 0\n# duration_ms 1.0"),
+    false,
+    "Node 20 node:test TAP summary with zero tests should be false"
+  );
 
   // jest
   assert.equal(
