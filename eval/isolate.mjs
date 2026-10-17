@@ -143,7 +143,7 @@ export function agentSandboxArgv({ cwd, home, proxyDirectory, readOnlyPaths = []
 }
 
 /** Run a fixed executable probe without exposing the host filesystem, environment, or network. */
-export function isolatedProcessArgv({ cwd, command, argv = [], readOnlyPaths = [], allowedRoots = [], allowedFiles = [], timeoutMs = 5000 }) {
+export function isolatedProcessArgv({ cwd, command, argv = [], readOnlyPaths = [], allowedRoots = [], allowedFiles = [], timeoutMs = 5000, workspaceReadOnly = false }) {
   if (!sandboxAvailable()) throw new Error("Bubblewrap is unavailable; refusing executable probe");
   const mountProblem = runtimeMountProblem(readOnlyPaths, allowedRoots, allowedFiles);
   if (mountProblem) throw new Error(mountProblem);
@@ -155,7 +155,7 @@ export function isolatedProcessArgv({ cwd, command, argv = [], readOnlyPaths = [
   for (const source of ["/etc/ld.so.cache", "/etc/passwd", "/etc/group", "/etc/nsswitch.conf", "/etc/localtime"]) {
     try { if (fs.statSync(source).isFile()) args.push("--ro-bind", source, source); } catch {}
   }
-  args.push("--bind", workspace, "/workspace", "--tmpfs", "/home", "--dir", "/home/eval", "--tmpfs", "/run", "--symlink", "usr/bin", "/bin");
+  args.push(workspaceReadOnly ? "--ro-bind" : "--bind", workspace, "/workspace", "--tmpfs", "/home", "--dir", "/home/eval", "--tmpfs", "/run", "--symlink", "usr/bin", "/bin");
   const madeDirs = new Set(["/", "/usr", "/usr/bin", "/usr/lib", "/usr/lib64", "/usr/share", "/lib", "/lib64", "/bin", "/etc", "/workspace", "/home", "/home/eval", "/run"]);
   const addParents = (target) => {
     let current = "";
@@ -176,8 +176,8 @@ export function isolatedProcessArgv({ cwd, command, argv = [], readOnlyPaths = [
   return { cmd: BWRAP, argv: args, timeoutMs };
 }
 
-export function runIsolatedProcess(spec, { outputLimit = 16_384 } = {}) {
-  const child = spawn(spec.cmd, spec.argv, { cwd: "/", env: {}, detached: true, stdio: ["ignore", "pipe", "pipe"] });
+export function runIsolatedProcess(spec, { outputLimit = 16_384, input = "" } = {}) {
+  const child = spawn(spec.cmd, spec.argv, { cwd: "/", env: {}, detached: true, stdio: ["pipe", "pipe", "pipe"] });
   return new Promise((resolve) => {
     let stdout = "";
     let stderr = "";
@@ -194,6 +194,8 @@ export function runIsolatedProcess(spec, { outputLimit = 16_384 } = {}) {
     };
     child.stdout.on("data", (chunk) => collect("stdout", chunk));
     child.stderr.on("data", (chunk) => collect("stderr", chunk));
+    child.stdin.on("error", () => {}); // A timed-out or rejecting child may close stdin before the bounded input is sent.
+    child.stdin.end(input);
     const timer = setTimeout(() => { timedOut = true; killGroup("SIGTERM"); setTimeout(() => killGroup("SIGKILL"), 250).unref(); }, spec.timeoutMs);
     child.on("error", (error) => {
       if (settled) return;
