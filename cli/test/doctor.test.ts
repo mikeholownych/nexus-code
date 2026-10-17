@@ -676,12 +676,19 @@ describe("SPEC-06 PR-6d requirements (ACC-PKG-06..09, REQ-DX-101..104)", () => {
 
   test("ACC-PKG-07 (REQ-DX-101): packaged doctor remedies contain no make or harness.sh", async () => {
     const pkgHome = tmp("nexus-pkg-remedies-");
+    const externalBin = path.join(pkgHome, "external-bin");
+    const externalCheckout = path.join(pkgHome, "external-checkout");
+    fs.mkdirSync(externalBin, { recursive: true });
+    fs.mkdirSync(externalCheckout, { recursive: true });
+    const externalLauncher = path.join(externalCheckout, "harness.sh");
+    fs.writeFileSync(externalLauncher, "#!/usr/bin/env bash\nexit 0\n", { mode: 0o755 });
+    fs.symlinkSync(externalLauncher, path.join(externalBin, "nexus"));
     const m = await mock({ models: ["m"] });
     try {
       const res = await new Promise<{ code: number | null; out: string; err: string }>((resolve) => {
         const cliEntry = path.join(ROOT, "cli/dist/index.js");
         const child = spawn(process.execPath, [cliEntry, "doctor", "--json", "-e", m.url, "-m", "m", "-w", workspace, "--timeout", "2000"], {
-          env: { ...process.env, HOME: home, NEXUS_HOME: pkgHome },
+          env: { ...process.env, HOME: home, NEXUS_HOME: pkgHome, PATH: `${externalBin}${path.delimiter}${process.env.PATH ?? ""}` },
         });
         let out = "";
         let err = "";

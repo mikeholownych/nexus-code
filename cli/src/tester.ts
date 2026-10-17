@@ -384,6 +384,16 @@ export function hasExecutedTests(rawOutput: string): boolean {
     return totalTests - skipped - todo > 0;
   }
 
+  // Node 20's default node:test reporter uses TAP summary lines; Node 22+ may emit the spec summary above.
+  const nodeTap = rawOutput.match(
+    /(?:^|\n)# tests (\d+)\r?\n# suites \d+\r?\n# pass (\d+)\r?\n# fail (\d+)\r?\n# cancelled (\d+)\r?\n# skipped (\d+)\r?\n# todo (\d+)(?:\r?\n# duration_ms [\d.]+)?(?=\r?\n|$)/
+  );
+  if (nodeTap) {
+    const passed = Number(nodeTap[2]);
+    const failed = Number(nodeTap[3]);
+    return passed + failed > 0;
+  }
+
   // 2. Cargo (Rust)
   const cargo = [...rawOutput.matchAll(/test result: \w+\. (\d+) passed; (\d+) failed/g)];
   if (cargo.length) return cargo.some((m) => Number(m[1]) + Number(m[2]) > 0);
