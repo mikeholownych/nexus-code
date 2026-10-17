@@ -1,0 +1,21 @@
+{
+  "schema": "nexus-v1-release-snapshot-v1",
+  "observed_at_utc": "2026-10-16T22:32:24Z",
+  "repository": "mikeholownych/nexus-code",
+  "purpose": "Sanitized read-only snapshot for ACC-GOV-05 readiness reconciliation",
+  "queries": [
+    {
+      "command": "gh api repos/mikeholownych/nexus-code/milestones?state=all --jq '[.[] | {title,state,open_issues,closed_issues}]'",
+      "result": []
+    },
+    {
+      "command": "gh api repos/mikeholownych/nexus-code/issues?state=all&per_page=100 --jq '[.[] | select(has(\"pull_request\")|not) | {number,title,state,milestone: .milestone.title}]'",
+      "result": []
+    }
+  ],
+  "limitations": [
+    "Only metadata selected by the commands is retained.",
+    "This is a point-in-time snapshot and does not satisfy the requirement to create and reconcile the v1.0.0 milestone and its issue set.",
+    "No credentials, response bodies beyond selected metadata, or private issue data are included."
+  ]
+}
