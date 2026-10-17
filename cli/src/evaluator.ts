@@ -1,9 +1,11 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { execFileSync } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { AutonomousAgent } from "./agent.js";
 import { HarnessConfig } from "./types.js";
-import { runTestSuite } from "./tester.js";
+import { runTestSuiteWithExecutor } from "./tester.js";
+import { WorktreeManager, WorktreeCreateResult } from "./worktree.js";
 import pc from "picocolors";
 import {
   CandidateTracker,
@@ -108,10 +110,29 @@ export class BenchmarkEvaluator {
     baseConfig: HarnessConfig,
   ): Promise<EvaluationResult> {
     const t0 = Date.now();
+    const worktreeManager = new WorktreeManager(this.workspace);
+    const isGit = worktreeManager.isGitRepo();
+    let wt: WorktreeCreateResult | undefined;
+    const taskId = `eval-${(instance.instance_id || "instance").replace(/[^a-zA-Z0-9_.-]/g, "_")}-${randomUUID().slice(0, 6)}`;
+
+    if (isGit) {
+      try {
+        wt = worktreeManager.createWorktree(taskId, instance.base_commit || "HEAD");
+      } catch {
+        if (instance.base_commit) {
+          try {
+            wt = worktreeManager.createWorktree(taskId, "HEAD");
+          } catch {}
+        }
+      }
+    }
+
+    const evalWorkspace = wt ? wt.worktreePath : this.workspace;
+
     const config: HarnessConfig = {
       ...baseConfig,
-      workspace: this.workspace,
-      worktree: true, // Always sandbox in ephemeral worktree to prevent workspace pollution
+      workspace: evalWorkspace,
+      worktree: false, // Sandboxed directly in the eval worktree; never mutate operator workspace
       recordFlight: true,
     };
 
@@ -122,26 +143,13 @@ export class BenchmarkEvaluator {
       console.log(`Repository: ${pc.bold(instance.repo)} | Base Commit: ${pc.dim(instance.base_commit || "HEAD")}`);
       console.log(`Problem: ${pc.white(instance.problem_statement.slice(0, 100).replace(/\n/g, " "))}...`);
 
-      // 1. If base commit specified and git repository is active, ensure clean base
-      if (instance.base_commit) {
-        try {
-          execFileSync("git", ["checkout", instance.base_commit], {
-            cwd: this.workspace,
-            stdio: ["ignore", "ignore", "ignore"],
-          });
-        } catch {}
-      }
-
-      // 2. Run agent on problem statement
+      // 1. Run agent on problem statement
       await agent.run(instance.problem_statement);
 
-      // 3. Inspect candidate identity and patch diff directly from evaluated candidate workspace
+      // 2. Inspect candidate identity and patch diff directly from evaluated candidate workspace
       let patchDiff = "";
       let candidateId = "";
       let validationReceipt: ValidationReceipt | undefined;
-
-      const activeWt = agent.getActiveWorktree();
-      const evalWorkspace = activeWt ? activeWt.worktreePath : this.workspace;
 
       const candidateTracker = agent.candidateTracker || new CandidateTracker();
       try {
@@ -151,14 +159,15 @@ export class BenchmarkEvaluator {
         candidateId = "UNRESOLVED_CANDIDATE";
       }
 
+      const diffBase = instance.base_commit || "HEAD";
       try {
-        patchDiff = execFileSync("git", ["diff", "HEAD~1..HEAD"], {
+        patchDiff = execFileSync("git", ["diff", `${diffBase}..HEAD`], {
           cwd: evalWorkspace,
           encoding: "utf-8",
           stdio: ["ignore", "pipe", "ignore"],
         });
         if (!patchDiff.trim()) {
-          patchDiff = execFileSync("git", ["diff"], {
+          patchDiff = execFileSync("git", ["diff", diffBase], {
             cwd: evalWorkspace,
             encoding: "utf-8",
             stdio: ["ignore", "pipe", "ignore"],
@@ -186,7 +195,11 @@ export class BenchmarkEvaluator {
       }
 
       // 5. Run test suite to verify resolution in candidate workspace
-      const testRes = runTestSuite(evalWorkspace);
+      const bridge = agent.getBridge();
+      const testRes = await runTestSuiteWithExecutor(
+        evalWorkspace,
+        (command) => bridge.executeTool("run_command", { command, timeout_secs: 120 }),
+      );
       testsPassed = testRes.success || testRes.command === "none";
       testOutput = testRes.rawOutput || "";
 
@@ -243,6 +256,11 @@ export class BenchmarkEvaluator {
       };
     } finally {
       agent.shutdown();
+      if (wt) {
+        try {
+          worktreeManager.discardWorktree(wt.taskId);
+        } catch {}
+      }
     }
   }
 

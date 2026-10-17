@@ -23,7 +23,7 @@ import { WorktreeManager } from "../worktree.js";
 import { redactForPersistence, redactTaskStateForPersistence } from "./persistence_protection.js";
 import type { ObjectiveLedger } from "./objective.js";
 import { WorkspacePath } from "./workspace_path.js";
-import { writeFileDurably, appendLinesDurably, readArchiveLines, type ArchiveRead } from "./durable_file.js";
+import { writeFileDurably, appendLinesDurably, readArchiveLines, type ArchiveRead, ensurePrivateDir } from "./durable_file.js";
 import { protectArchivedMessages } from "./persistence_protection.js";
 
 export const CURRENT_STATE_SCHEMA_VERSION = 1;
@@ -108,6 +108,9 @@ export interface DurableTaskState {
   updatedAt: string;
   status: TaskLifecycleStatus;
 
+  // Retention: pinned sessions are never pruned by GC (REQ-PER-102, DEC-11)
+  pinned?: boolean;
+
   // Authoritative task milestones (PERS-001)
   activePlan: DurablePlanPhase[];
   milestones: DurableMilestoneRecord[];
@@ -168,6 +171,14 @@ export interface DurableTaskState {
     compactions: number;
     archivedMessages: number;
   };
+
+  // Pre-change test baseline for independent verifier judgements (REQ-AGT-103)
+  changeBaseline?: {
+    command: string;
+    failed: boolean;
+    tests: Record<string, string> | null;
+    at: string;
+  } | null;
 }
 
 // -------------------------------------------------------------
@@ -203,16 +214,22 @@ export class TaskStateWriteError extends TaskStateError {
 }
 
 export class CorruptStateError extends TaskStateError {
-  constructor(taskId: string, reason: string) {
-    super(`Corrupt task state for task ID '${taskId}': ${reason}`);
+  public readonly quarantinedPath?: string;
+  constructor(taskId: string, reason: string, quarantinedPath?: string) {
+    super(`Corrupt state for task ID '${taskId}': ${reason}${quarantinedPath ? ` (quarantined to ${quarantinedPath})` : ""}`);
     this.name = "CorruptStateError";
+    this.quarantinedPath = quarantinedPath;
   }
 }
 
 export class UnsupportedSchemaVersionError extends TaskStateError {
+  public readonly version: number;
+  public readonly maxSupported: number;
   constructor(version: number, maxSupported: number = CURRENT_STATE_SCHEMA_VERSION) {
-    super(`Unsupported state schema version '${version}'. Highest supported version is '${maxSupported}'.`);
+    super(`State was created by a newer Nexus (schema ${version}); upgrade to load this state. (Highest supported version is ${maxSupported})`);
     this.name = "UnsupportedSchemaVersionError";
+    this.version = version;
+    this.maxSupported = maxSupported;
   }
 }
 
@@ -276,6 +293,9 @@ export interface DurableStateManagerOptions {
 
 /** Where durable task state is written unless a directory is given. */
 export function defaultTaskStateDir(): string {
+  if (process.env.NEXUS_STATE_DIR) {
+    return path.join(process.env.NEXUS_STATE_DIR, "tasks");
+  }
   return path.join(os.homedir(), ".nexus", "tasks");
 }
 
@@ -286,9 +306,7 @@ export class DurableStateManager {
   constructor(options: DurableStateManagerOptions = {}) {
     this.baseDir = options.baseDir || defaultTaskStateDir();
     this.workspacePaths = options.workspacePaths || [];
-    if (!fs.existsSync(this.baseDir)) {
-      fs.mkdirSync(this.baseDir, { recursive: true });
-    }
+    ensurePrivateDir(this.baseDir);
   }
 
   public getBaseDir(): string {
@@ -414,11 +432,13 @@ export class DurableStateManager {
     try {
       parsed = JSON.parse(content);
     } catch (err: any) {
-      throw new CorruptStateError(taskId, `JSON parse error: ${err.message}`);
+      const quarantined = this.quarantineFile(filePath);
+      throw new CorruptStateError(taskId, `JSON parse error: ${err.message}`, quarantined);
     }
 
     if (!parsed || typeof parsed !== "object") {
-      throw new CorruptStateError(taskId, "State file does not contain a JSON object");
+      const quarantined = this.quarantineFile(filePath);
+      throw new CorruptStateError(taskId, "State file does not contain a JSON object", quarantined);
     }
 
     // Schema version check (fails closed on unsupported future versions)
@@ -427,8 +447,8 @@ export class DurableStateManager {
       throw new UnsupportedSchemaVersionError(version, CURRENT_STATE_SCHEMA_VERSION);
     }
 
-    // Migrate legacy session file if necessary
-    const state: DurableTaskState = this.migrateIfLegacy(parsed, taskId);
+    // Migrate legacy session file if necessary with pre-migration backup
+    const state: DurableTaskState = this.migrateIfLegacy(parsed, taskId, filePath);
 
     // Verify task identity binding
     if (state.taskId && taskId && state.taskId !== taskId && state.sessionId !== taskId) {
@@ -540,7 +560,13 @@ export class DurableStateManager {
    */
   public recordProgress(
     taskId: string,
-    progress: { messages?: ChatMessage[]; findings?: string[]; objective?: ObjectiveLedger | null; unverifiedChangesPending?: boolean }
+    progress: {
+      messages?: ChatMessage[];
+      findings?: string[];
+      objective?: ObjectiveLedger | null;
+      unverifiedChangesPending?: boolean;
+      changeBaseline?: { command: string; failed: boolean; tests: Record<string, string> | null; at: string } | null;
+    }
   ): DurableTaskState {
     const state = this.loadTaskState(taskId);
     if (progress.messages) {
@@ -550,6 +576,7 @@ export class DurableStateManager {
     if (progress.findings) state.findings = progress.findings;
     if (progress.objective !== undefined) state.objective = progress.objective;
     if (progress.unverifiedChangesPending !== undefined) state.unverifiedChangesPending = progress.unverifiedChangesPending;
+    if (progress.changeBaseline !== undefined) state.changeBaseline = progress.changeBaseline;
     this.saveTaskState(state);
     return state;
   }
@@ -765,9 +792,9 @@ export class DurableStateManager {
   }
 
   /**
-   * Lists all persisted tasks.
+   * Lists all persisted tasks, optionally filtered by workspace.
    */
-  public listTasks(): Array<{
+  public listTasks(options?: { workspace?: string }): Array<{
     taskId: string;
     sessionId: string;
     title: string;
@@ -813,16 +840,64 @@ export class DurableStateManager {
       }
     }
 
-    results.sort((a, b) => b.mtime - a.mtime);
+    results.sort((a, b) => {
+      const timeA = new Date(a.updatedAt).getTime();
+      const timeB = new Date(b.updatedAt).getTime();
+      if (!Number.isNaN(timeA) && !Number.isNaN(timeB) && timeA !== timeB) {
+        return timeB - timeA;
+      }
+      return b.mtime - a.mtime;
+    });
+
+    if (options?.workspace) {
+      const targetWorkspace = path.resolve(options.workspace);
+      return results.filter((t) => {
+        try {
+          return path.resolve(t.workspacePath) === targetWorkspace;
+        } catch {
+          return t.workspacePath === options.workspace;
+        }
+      });
+    }
+
     return results;
   }
 
   /**
-   * Safely migrates legacy session files (schemaVersion 0 or undefined) into the complete DurableTaskState envelope.
+   * Quarantines a corrupt state file by renaming it to .corrupt-<timestamp> (REQ-PER-104).
+   * Corrupt state is never deleted.
    */
-  private migrateIfLegacy(raw: any, fallbackId: string): DurableTaskState {
+  public quarantineFile(filePath: string): string {
+    const timestamp = Date.now();
+    const quarantinePath = `${filePath}.corrupt-${timestamp}`;
+    try {
+      if (fs.existsSync(filePath)) {
+        fs.renameSync(filePath, quarantinePath);
+      }
+      return quarantinePath;
+    } catch {
+      return filePath;
+    }
+  }
+
+  /**
+   * Safely migrates legacy session files (schemaVersion 0 or undefined) into the complete DurableTaskState envelope.
+   * Forward-only migration with a pre-migration backup copy (REQ-PER-106).
+   */
+  private migrateIfLegacy(raw: any, fallbackId: string, filePath?: string): DurableTaskState {
     if (raw.schemaVersion && raw.schemaVersion >= CURRENT_STATE_SCHEMA_VERSION && raw.taskId) {
       return raw as DurableTaskState;
+    }
+
+    // Forward-only migration with a backup of the pre-migration file (REQ-PER-106)
+    if (filePath && fs.existsSync(filePath)) {
+      try {
+        const backupPath = `${filePath}.pre-migration-v${raw.schemaVersion ?? 0}`;
+        if (!fs.existsSync(backupPath)) {
+          fs.copyFileSync(filePath, backupPath);
+          try { fs.chmodSync(backupPath, 0o600); } catch {}
+        }
+      } catch {}
     }
 
     const taskId = raw.taskId || raw.id || fallbackId;

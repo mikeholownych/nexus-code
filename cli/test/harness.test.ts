@@ -19,7 +19,7 @@ import { countTokens, calculateContextBudget, isContextAdmissible, renderTokenGa
 import { selectRelevantFewShots } from "../src/fewshots.js";
 import { LocalLlmClient } from "../src/client.js";
 import { scanAndOnboardWorkspace } from "../src/onboard.js";
-import { detectTestCommand, runTestSuite } from "../src/tester.js";
+import { discoverVerifier, runTestSuite } from "../src/tester.js";
 import { highlightLine, highlightDiff, highlightCode, highlightMarkdownCodeBlocks } from "../src/syntax.js";
 import { copyToClipboard, readFromClipboard } from "../src/clipboard.js";
 import { executeWebSearch } from "../src/search_web.js";
@@ -96,10 +96,10 @@ describe("Nexus Code Test Suite", () => {
   });
 
   test("parseModelResponse handles DeepSeek R1 <think> tags, embedded JSON, and unwraps arguments", () => {
-    // 1. DeepSeek R1 <think> tag isolation
+    // 1. DeepSeek R1 <think> tag isolation with <tool_call>
     const deepseekMsg = {
       role: "assistant" as const,
-      content: "<think>\nAnalyzing the user request.\nWe should read the package.json to check dependencies.\n</think>\nI will now read the file.\n```json\n{\n  \"name\": \"read_file\",\n  \"arguments\": {\n    \"input\": {\n      \"path\": \"package.json\",\n    }\n  }\n}\n```",
+      content: "<think>\nAnalyzing the user request.\nWe should read the package.json to check dependencies.\n</think>\nI will now read the file.\n<tool_call>\n{\n  \"name\": \"read_file\",\n  \"arguments\": {\n    \"input\": {\n      \"path\": \"package.json\"\n    }\n  }\n}\n</tool_call>",
     };
     const parsed1 = parseModelResponse(deepseekMsg);
     assert.ok(parsed1.reasoningText?.includes("Analyzing the user request"));
@@ -110,16 +110,23 @@ describe("Nexus Code Test Suite", () => {
     // Verified unwrapped from "input"
     assert.strictEqual(args1.path, "package.json");
 
-    // 2. Embedded raw JSON without markdown or XML tags
+    // 2. Embedded raw JSON without markdown or XML tags is rejected by default (REQ-AGT-112, VER-02)
     const embeddedMsg = {
       role: "assistant" as const,
       content: "Sure, let me check that directory:\n{\"name\": \"list_dir\", \"arguments\": {\"path\": \"cli/src\",}}\nHope this helps!",
     };
     const parsed2 = parseModelResponse(embeddedMsg);
-    assert.strictEqual(parsed2.toolCalls.length, 1);
-    assert.strictEqual(parsed2.toolCalls[0].function.name, "list_dir");
-    const args2 = JSON.parse(parsed2.toolCalls[0].function.arguments);
-    assert.strictEqual(args2.path, "cli/src");
+    assert.strictEqual(parsed2.toolCalls.length, 0, "prose JSON is never parsed (REQ-AGT-112)");
+
+    // 3. One-RC escape hatch: NEXUS_TEXT_TOOL_PARSING=legacy
+    process.env.NEXUS_TEXT_TOOL_PARSING = "legacy";
+    try {
+      const parsedLegacy = parseModelResponse(embeddedMsg);
+      assert.strictEqual(parsedLegacy.toolCalls.length, 1);
+      assert.strictEqual(parsedLegacy.toolCalls[0].function.name, "list_dir");
+    } finally {
+      delete process.env.NEXUS_TEXT_TOOL_PARSING;
+    }
   });
 
   test("CheckpointManager creates and records snapshots", () => {
@@ -148,7 +155,7 @@ describe("Nexus Code Test Suite", () => {
     );
 
     try {
-      const sm = new SkillManager(tmpDir);
+      const sm = new SkillManager(tmpDir, { trusted: true });
       const skills = sm.listSkills();
       assert.ok(skills.some((s) => s.name === "sample-skill"));
 
@@ -518,6 +525,7 @@ error[E0308]: mismatched types
       const createAgent = () => new AutonomousAgent({
         endpoint: `http://127.0.0.1:${port}/v1`, model: "test", maxSteps: 3, temperature: 0,
         workspace: repo, shell: "bash", worktree: true, authoritativeVerifierCommand: "make test",
+        approvalMode: "auto", fullAccess: true,
       });
       const blocked = createAgent();
       const originalCreate = blocked.getWorktreeManager().createWorktree.bind(blocked.getWorktreeManager());
@@ -647,7 +655,7 @@ error[E0308]: mismatched types
     let agent: AutonomousAgent | undefined;
     try {
       const port = await new Promise<number>((resolve) => server.listen(0, "127.0.0.1", () => resolve((server.address() as any).port)));
-      agent = new AutonomousAgent({ endpoint: `http://127.0.0.1:${port}/v1`, model: "test", maxSteps: 1, temperature: 0, workspace: repo, shell: "bash", worktree: true });
+      agent = new AutonomousAgent({ endpoint: `http://127.0.0.1:${port}/v1`, model: "test", maxSteps: 1, temperature: 0, workspace: repo, shell: "bash", worktree: true, approvalMode: "auto", fullAccess: true });
       await agent.runTurn("write from an interactive turn");
       const active = agent.getActiveWorktree();
       const failures: string[] = [];
@@ -702,7 +710,7 @@ error[E0308]: mismatched types
     let agent: AutonomousAgent | undefined;
     try {
       const port = await new Promise<number>((resolve) => server.listen(0, "127.0.0.1", () => resolve((server.address() as any).port)));
-      agent = new AutonomousAgent({ endpoint: `http://127.0.0.1:${port}/v1`, model: "test", maxSteps: 2, temperature: 0, workspace: repos[0], shell: "bash", worktree: true, authoritativeVerifierCommand: "make test" });
+      agent = new AutonomousAgent({ endpoint: `http://127.0.0.1:${port}/v1`, model: "test", maxSteps: 2, temperature: 0, workspace: repos[0], shell: "bash", worktree: true, authoritativeVerifierCommand: "make test", approvalMode: "auto", fullAccess: true });
       agent.setWorkspace(repos[1]);
       await agent.run("write in the selected workspace");
       assert.strictEqual(requests, 1);
@@ -724,8 +732,8 @@ error[E0308]: mismatched types
     execSync('git config user.name "Nexus Test" && git config user.email "nexus@example.invalid"', { cwd: repo, stdio: "ignore" });
     fs.writeFileSync(path.join(repo, "base.txt"), "base\n");
     execSync("git add . && git commit -qm baseline", { cwd: repo, stdio: "ignore" });
-    const { detectTestCommand } = await import("../src/tester.js");
-    assert.notStrictEqual(detectTestCommand(repo), "none", "the current detector uses a failing npm test fallback rather than reporting none");
+    const { discoverVerifier } = await import("../src/tester.js");
+    assert.strictEqual(discoverVerifier(repo), null, "discoverVerifier returns null when no verification command is available");
 
     let requests = 0;
     const server = http.createServer((req, res) => {
@@ -745,7 +753,7 @@ error[E0308]: mismatched types
     let agent: AutonomousAgent | undefined;
     try {
       const port = await new Promise<number>((resolve) => server.listen(0, "127.0.0.1", () => resolve((server.address() as any).port)));
-      agent = new AutonomousAgent({ endpoint: `http://127.0.0.1:${port}/v1`, model: "test", maxSteps: 2, temperature: 0, workspace: repo, shell: "bash", worktree: true });
+      agent = new AutonomousAgent({ endpoint: `http://127.0.0.1:${port}/v1`, model: "test", maxSteps: 2, temperature: 0, workspace: repo, shell: "bash", worktree: true, approvalMode: "auto", fullAccess: true });
       await agent.run("do not merge an unverified change");
       const active = agent.getActiveWorktree();
       assert.ok(active, "missing verification retains the speculative worktree");
@@ -807,7 +815,7 @@ error[E0308]: mismatched types
     let agent: AutonomousAgent | undefined;
     try {
       const port = await new Promise<number>((resolve) => server.listen(0, "127.0.0.1", () => resolve((server.address() as any).port)));
-      agent = new AutonomousAgent({ endpoint: `http://127.0.0.1:${port}/v1`, model: "test", maxSteps: 3, temperature: 0, workspace: repo, shell: "bash", worktree: true });
+      agent = new AutonomousAgent({ endpoint: `http://127.0.0.1:${port}/v1`, model: "test", maxSteps: 3, temperature: 0, workspace: repo, shell: "bash", worktree: true, approvalMode: "auto", fullAccess: true });
       await agent.run("exercise child mutation boundary");
       const active = agent.getActiveWorktree();
       assert.ok(active, "unverified parent worktree remains recoverable");
@@ -920,7 +928,7 @@ error[E0308]: mismatched types
     let agent: AutonomousAgent | undefined;
     try {
       const port = await new Promise<number>((resolve) => server.listen(0, "127.0.0.1", () => resolve((server.address() as any).port)));
-      agent = new AutonomousAgent({ endpoint: `http://127.0.0.1:${port}/v1`, model: "test", maxSteps: 2, temperature: 0, workspace: repo, shell: "bash", worktree: true });
+      agent = new AutonomousAgent({ endpoint: `http://127.0.0.1:${port}/v1`, model: "test", maxSteps: 2, temperature: 0, workspace: repo, shell: "bash", worktree: true, approvalMode: "auto", fullAccess: true });
       await agent.run("complete after discovered-only verifier");
       const active = agent.getActiveWorktree();
       assert.ok(active, "discovery success alone cannot discard the worktree via merge");
@@ -966,7 +974,7 @@ error[E0308]: mismatched types
       let agent: AutonomousAgent | undefined;
       try {
         const port = await new Promise<number>((resolve) => server.listen(0, "127.0.0.1", () => resolve((server.address() as any).port)));
-        agent = new AutonomousAgent({ endpoint: `http://127.0.0.1:${port}/v1`, model: "test", maxSteps: 2, temperature: 0, workspace: repo, shell: "bash", worktree: true, authoritativeVerifierCommand: scenario.command } as any);
+        agent = new AutonomousAgent({ endpoint: `http://127.0.0.1:${port}/v1`, model: "test", maxSteps: 2, temperature: 0, workspace: repo, shell: "bash", worktree: true, authoritativeVerifierCommand: scenario.command, approvalMode: "auto", fullAccess: true } as any);
         if (scenario.throws) {
           const originalSetWorkspace = agent.setWorkspace.bind(agent);
           (agent as any).setWorkspace = (workspace: string) => {
@@ -2339,14 +2347,14 @@ error[E0308]: mismatched types
     }
   });
 
-  test("detectTestCommand recognizes framework and supports test filters", () => {
+  test("discoverVerifier recognizes framework and supports test filters", () => {
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "nexus_tester_test_"));
     try {
       fs.writeFileSync(path.join(tmpDir, "Cargo.toml"), '[package]\nname = "demo"\n');
-      const cmd = detectTestCommand(tmpDir);
+      const cmd = discoverVerifier(tmpDir)?.command;
       assert.strictEqual(cmd, "cargo test");
 
-      const filtered = detectTestCommand(tmpDir, "unit_test_auth");
+      const filtered = discoverVerifier(tmpDir, "unit_test_auth")?.command;
       assert.strictEqual(filtered, "cargo test -- unit_test_auth");
     } finally {
       fs.rmSync(tmpDir, { recursive: true, force: true });
@@ -2373,7 +2381,7 @@ error[E0308]: mismatched types
     const skillsDir = path.join(tmpDir, "skills", "dynamic-skill");
     fs.mkdirSync(skillsDir, { recursive: true });
 
-    const sm = new SkillManager(tmpDir);
+    const sm = new SkillManager(tmpDir, { trusted: true });
     assert.strictEqual(sm.getSkill("dynamic-skill"), null);
 
     try {
@@ -2811,24 +2819,35 @@ error[E0308]: mismatched types
     }
   });
 
-  test("PluginManager isolates custom plugins in worker threads with timeout boundary (Candidate #38)", async () => {
+  test("PluginManager executes custom plugins in-process without false sandbox (REQ-SEC-117)", async () => {
     const { PluginManager } = await import("../src/plugins.js");
-    const pm = new PluginManager(process.cwd());
+    const pm = new PluginManager(process.cwd()) as any;
 
-    assert.strictEqual(pm.isWorkerSandboxingSupported(), true);
+    // False worker sandboxing methods have been removed (REQ-SEC-117)
+    assert.strictEqual(pm.isWorkerSandboxingSupported, undefined);
+    assert.strictEqual(pm.executeSandboxed, undefined);
 
-    // 1. Successful sandboxed execution
-    const validFn = "async (args) => { return { computed: args.x * 2, status: 'sandboxed_ok' }; }";
-    const res1 = await pm.executeSandboxed(validFn, { x: 21 }, { timeoutMs: 2000 });
-    assert.strictEqual(res1.success, true);
-    assert.ok(res1.output.includes("42"));
-    assert.ok(res1.output.includes("sandboxed_ok"));
-
-    // 2. Timeout protection for infinite loop
-    const infiniteFn = "async () => { while(true) {} }";
-    const res2 = await pm.executeSandboxed(infiniteFn, {}, { timeoutMs: 200 });
-    assert.strictEqual(res2.success, false);
-    assert.ok(res2.error?.includes("timed out"));
+    // Custom tools execute in-process
+    pm.registerPlugin({
+      name: "in-process-plugin",
+      customTools: [
+        {
+          definition: {
+            type: "function",
+            function: {
+              name: "custom_double",
+              description: "doubles a number",
+              parameters: { type: "object", properties: { x: { type: "number" } } },
+            },
+          },
+          handler: async (args: any) => ({ success: true, output: JSON.stringify({ computed: args.x * 2 }) }),
+        },
+      ],
+    });
+    assert.strictEqual(pm.isCustomTool("custom_double"), true);
+    const res = await pm.executeCustomTool("custom_double", { x: 21 });
+    assert.strictEqual(res.success, true);
+    assert.ok(res.output.includes("42"));
   });
 
   test("TerminalDashboard renders split-screen layout and metrics snapshot (Candidate #19)", async () => {
@@ -3511,7 +3530,7 @@ export class CacheService {
   test("KnowledgeGraph persists project idioms across sessions, filters queries, and exports prompt section", () => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-kg-test-"));
     try {
-      const kg = new KnowledgeGraph(tempDir);
+      const kg = new KnowledgeGraph(tempDir, { trusted: true });
       assert.strictEqual(kg.list().length, 0);
 
       // 1. Add knowledge entries
@@ -3538,7 +3557,7 @@ export class CacheService {
       assert.ok(promptSec.includes("Always use pnpm"));
 
       // 4. Verify persistence across new instance
-      const kg2 = new KnowledgeGraph(tempDir);
+      const kg2 = new KnowledgeGraph(tempDir, { trusted: true });
       assert.strictEqual(kg2.list().length, 3);
       assert.strictEqual(kg2.get("test-framework")?.key, "test-framework");
 

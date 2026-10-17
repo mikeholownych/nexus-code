@@ -31,7 +31,7 @@ async function withSidecar(script: (n: number) => Reply, fn: (rig: Rig) => Promi
   const home = makeHome();
   const previousHome = process.env.HOME;
   process.env.HOME = home;
-  const app = new ApplicationCore({ endpoint: gw.url, model: "m", maxSteps: 30, temperature: 0, workspace: repo, shell: "bash", continuation: { ...DEFAULT_CONTINUATION }, ...o } as HarnessConfig);
+  const app = new ApplicationCore({ endpoint: gw.url, model: "m", maxSteps: 30, temperature: 0, workspace: repo, shell: "bash", continuation: { ...DEFAULT_CONTINUATION }, approvalMode: "auto", fullAccess: true, ...o } as HarnessConfig);
   const events: any[] = [];
   const server = new SidecarServer({ app, mode: "auto", write: (line) => events.push(JSON.parse(line)), historyFile: path.join(home, "history") });
   server.start();

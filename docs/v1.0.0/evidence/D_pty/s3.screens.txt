@@ -1,0 +1,52 @@
+
+===== panel-letters @ 5.78s (80x24) =====
+ NEXUS   ws  ⎇ main  model m  session_20261014_124420_uiip  review mode
+╭ Approval needed ─────────────────────────────────────────────────────────────╮
+│Write hello.txt                                                               │
+│Proposed: create hello.txt · +1 −0                                            │
+│                                                                              │
+│ ▎ @@ −0,0 +1,1 @@                                                            │
+│ ▎   1 + hi there                                                             │
+│                                                                              │
+│ y Approve   a Approve all later actions   n Deny                             │
+│y or n, or ←→ then enter · ↑↓ scroll the change                               │
+╰──────────────────────────────────────────────────────────────────────────────╯
+
+
+
+
+
+
+
+
+
+
+
+ approval needed · y approve · n deny (after a pause) ──────────────────────────
+›
+
+===== after-turn @ 11.19s (80x24) =====
+ NEXUS   ws  ⎇ main ●1 changed  model m  review mode
+› create hello.txt
+  ✓ approved Write hello.txt
+
+  ✓ Created hello.txt  +1 −0
+    ▎   1 + hi there
+
+Wrote hello.txt. 完成 ✅ — naïve café 🎉
+
+! Done · not verified  Files changed, and no test command was found for this
+  workspace.
+  → next: check the changes yourself (/diff), or run /test <command> · v receipt
+
+
+
+
+
+
+
+
+
+
+ enter send · shift+enter newline · ? help ─────────────────────────────────────
+› ask Nexus · / for commands · ? for keys

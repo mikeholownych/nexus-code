@@ -9,7 +9,9 @@ import { AutonomousAgent } from "./agent.js";
 import { withDurableSync } from "./core/durable_file.js";
 import { ApplicationCore } from "./core/app.js";
 import { LocalLlmClient } from "./client.js";
-import { HarnessConfig } from "./types.js";
+import { HarnessConfig, ApprovalMode } from "./types.js";
+import { isWorkspaceTrusted } from "./workspace_trust.js";
+import { isNexusDirPermissive } from "./doctor.js";
 import { getGitInfo, scaffoldProjectRules, generateConventionalCommit, commitChanges } from "./git.js";
 import { SessionManager, SessionData } from "./session.js";
 import {
@@ -20,7 +22,8 @@ import {
 import { CheckpointManager } from "./checkpoint.js";
 import { renderTokenGauge } from "./tokens.js";
 import { scanAndOnboardWorkspace } from "./onboard.js";
-import { runTestSuite } from "./tester.js";
+import { PolicyContext } from "./core/approval_policy.js";
+import { runTestSuiteWithExecutor, discoverVerifier, describeVerifier, verifierTimeoutSecs } from "./tester.js";
 import { copyToClipboard, readFromClipboard } from "./clipboard.js";
 import { encodeImageFile, formatVisionContent } from "./image.js";
 import { ThemeManager } from "./theme.js";
@@ -60,13 +63,15 @@ function parsePatchHunks(patch: string): { fileHeader: string; hunks: PatchHunk[
   return { fileHeader: fileHeaderLines.join("\n"), hunks };
 }
 
+export const REPL_APPROVAL_GRACE_MS = 400;
+
 export class InteractiveRepl {
   private app: ApplicationCore;
   private agent: AutonomousAgent;
   private config: HarnessConfig;
   private rl: readline.Interface | null = null;
   private knownModels: string[] = [];
-  private autoApprove: boolean = true;
+  private approvalMode: ApprovalMode = "auto";
   private historyFile: string;
   private history: string[] = [];
   private sessionManager: SessionManager;
@@ -77,7 +82,7 @@ export class InteractiveRepl {
   /** Cancels a running /team operation (Ctrl-C). */
   private teamAbort?: AbortController;
 
-  constructor(appOrConfig: ApplicationCore | HarnessConfig, autoApprove: boolean = true, resumeSessionId?: string) {
+  constructor(appOrConfig: ApplicationCore | HarnessConfig, modeOrAutoApprove?: ApprovalMode | boolean, resumeSessionId?: string) {
     if ("getAgent" in appOrConfig && typeof (appOrConfig as any).getAgent === "function") {
       this.app = appOrConfig as ApplicationCore;
       this.config = this.app.getConfig();
@@ -91,27 +96,42 @@ export class InteractiveRepl {
       this.sessionManager = this.app.getSessionManager();
       this.checkpointManager = this.app.getCheckpointManager();
     }
-    this.autoApprove = autoApprove;
+    if (typeof modeOrAutoApprove === "string") {
+      this.approvalMode = modeOrAutoApprove;
+    } else if (typeof modeOrAutoApprove === "boolean") {
+      this.approvalMode = modeOrAutoApprove ? "auto" : "review";
+    } else {
+      this.approvalMode = this.config.approvalMode || (isWorkspaceTrusted(this.config.workspace, Boolean(this.config.readOnly)) ? "auto" : "review");
+    }
+    this.config.surface = "repl";
+    this.agent.setSurface("repl");
+    this.agent.setApprovalMode(this.approvalMode);
     // Compaction archives the originals beside the current session before the session names it as committed.
     this.agent.setArchiveSink((compactionId, messages) => this.sessionManager.appendArchivedHistory(this.currentSessionId, messages, compactionId));
     this.historyFile = path.join(os.homedir(), ".nexus_history");
     this.loadHistory();
 
     if (resumeSessionId) {
-      const sess = resumeSessionId === "latest"
-        ? this.sessionManager.getLatestSession()
-        : this.sessionManager.loadSession(resumeSessionId);
-      if (sess) {
-        this.currentSessionId = sess.id;
-        if (sess.workspace && fs.existsSync(sess.workspace)) {
-          this.config.workspace = sess.workspace;
-          this.agent.setWorkspace(sess.workspace);
-          this.checkpointManager = new CheckpointManager(sess.workspace);
+      try {
+        const sess = resumeSessionId === "latest"
+          ? this.sessionManager.getLatestSession()
+          : this.sessionManager.loadSession(resumeSessionId);
+        if (sess) {
+          this.currentSessionId = sess.id;
+          if (sess.workspace && fs.existsSync(sess.workspace)) {
+            this.config.workspace = sess.workspace;
+            this.agent.setWorkspace(sess.workspace);
+            this.checkpointManager = new CheckpointManager(sess.workspace);
+          }
+          const archiveNotice = this.agent.restoreConversation(sess, (committed) => this.sessionManager.readArchivedHistory(sess.id, committed));
+          if (archiveNotice) console.log(pc.yellow(archiveNotice));
+          console.log(pc.green(`✔ Restored previous session ${pc.bold(sess.id)} (${sess.messages.length} messages)`));
+        } else {
+          console.log(pc.red(`Session not found: ${resumeSessionId}\n`));
+          this.currentSessionId = this.sessionManager.generateSessionId();
         }
-        const archiveNotice = this.agent.restoreConversation(sess, (committed) => this.sessionManager.readArchivedHistory(sess.id, committed));
-        if (archiveNotice) console.log(pc.yellow(archiveNotice));
-        console.log(pc.green(`✔ Restored previous session ${pc.bold(sess.id)} (${sess.messages.length} messages)`));
-      } else {
+      } catch (err: any) {
+        console.log(pc.red(`Failed to restore session ${resumeSessionId}: ${err.message}\n`));
         this.currentSessionId = this.sessionManager.generateSessionId();
       }
     } else {
@@ -121,6 +141,15 @@ export class InteractiveRepl {
 
   public getApp(): ApplicationCore {
     return this.app;
+  }
+
+  public getApprovalMode(): ApprovalMode {
+    return this.approvalMode;
+  }
+
+  public setApprovalMode(mode: ApprovalMode): void {
+    this.approvalMode = mode;
+    this.agent.setApprovalMode(mode);
   }
 
   /** Runs one agent turn with the operator's stop authority wired to it, then records the structured result. */
@@ -205,6 +234,9 @@ export class InteractiveRepl {
     console.log(`\n${pc.bold(pc.black(pc.bgCyan(" NEXUS ")))} ${pc.dim("local engineering agent")}`);
     console.log(pc.dim("Describe the outcome you want. Nexus will show meaningful activity and keep full evidence in the session."));
     console.log(pc.dim("Type /help for commands · /tui for the session view\n"));
+    if (isNexusDirPermissive()) {
+      console.log(pc.yellow("your Nexus state is readable by other users; run `nexus doctor --fix`\n"));
+    }
     this.printStatus();
   }
 
@@ -215,8 +247,13 @@ export class InteractiveRepl {
       ? pc.cyan(` [git: ${pc.bold(gitInfo.formattedBadge)}]`)
       : "";
 
+    const trusted = isWorkspaceTrusted(this.config.workspace, Boolean(this.config.readOnly));
+    const sandboxStatus = this.config.sandbox ? (typeof this.config.sandbox === "string" ? this.config.sandbox : "on") : "off";
+    const trustStatus = trusted ? "trusted" : "untrusted (nexus trust .)";
+    console.log(pc.dim(`mode: ${this.approvalMode} · sandbox: ${sandboxStatus} · workspace: ${trustStatus}`));
+
     console.log(`${pc.bold(pc.cyan("WORKSPACE"))}  ${pc.white(wsName)}${gitBadge}  ${pc.dim(this.config.workspace)}`);
-    console.log(`${pc.bold(pc.cyan("MODEL"))}      ${pc.green(this.config.model)}  ${pc.dim(`· ${this.autoApprove ? "autonomous" : "review mode"}`)}`);
+    console.log(`${pc.bold(pc.cyan("MODEL"))}      ${pc.green(this.config.model)}  ${pc.dim(`· ${this.approvalMode === "auto" ? "autonomous" : this.approvalMode === "read-only" ? "read-only" : "review mode"}`)}`);
     if (verbose) console.log(`${pc.bold(pc.cyan("RUNTIME"))}   ${this.config.endpoint}  ·  ${this.config.shell}  ·  ${this.agent.getHistoryCount()} messages`);
     console.log(`${pc.dim(`session ${this.currentSessionId} · ${this.agent.getHistoryCount()} messages · ${this.config.shell}`)}\n`);
   }
@@ -232,7 +269,7 @@ export class InteractiveRepl {
     console.log(`  ${pc.bold(pc.yellow("/diff"))}               Show colored git diff of uncommitted changes`);
     console.log(`  ${pc.bold(pc.yellow("/stage [reset]"))}       Inspect and stage individual diff hunks`);
     console.log(`  ${pc.bold(pc.yellow("/worktree [status|merge|discard]"))} Manage isolated ephemeral git worktrees`);
-    console.log(`  ${pc.bold(pc.yellow("/tdd <issue>"))}         Execute strict RED-GREEN-REFACTOR TDD cycle`);
+    console.log(`  ${pc.bold(pc.yellow("/tdd <issue>"))}         [experimental] Execute strict RED-GREEN-REFACTOR TDD cycle`);
     console.log(`  ${pc.bold(pc.yellow("/knowledge [set|del]"))} Manage persistent project knowledge graph`);
     console.log(`  ${pc.bold(pc.yellow("/browse <url>"))}        Verify URL in headless browser driver`);
     console.log(`  ${pc.bold(pc.yellow("/git"))}                Show current git status and modified files`);
@@ -266,11 +303,71 @@ export class InteractiveRepl {
   }
 
   /** Asks the operator during a turn; returns null if the turn is cancelled while waiting (treated as denial). */
-  private async askDuringTurn(question: string): Promise<string | null> {
+  private async askDuringTurn(question: string, options?: { graceMs?: number }): Promise<string | null> {
     const signal = this.agent.getActiveTurnSignal();
     if (signal?.aborted) return null;
+    if (!this.rl) return null;
+
+    // 1. Clear any typed-ahead line buffer before asking
+    const hadTypedAhead = Boolean((this.rl as any).line && (this.rl as any).line.length > 0);
     try {
-      return signal ? await this.rl!.question(question, { signal }) : await this.rl!.question(question);
+      this.rl.write("", { ctrl: true, name: "u" });
+    } catch {}
+    (this.rl as any).line = "";
+    (this.rl as any).cursor = 0;
+    if (hadTypedAhead) {
+      console.log(pc.dim("  (typed-ahead input discarded)"));
+    }
+
+    const graceMs = options?.graceMs ?? 0;
+    const out: NodeJS.WritableStream = (this.rl as any).output || process.stdout;
+    if (graceMs > 0) {
+      out.write(question);
+      let discardedDuringGrace = false;
+      const onData = () => {
+        discardedDuringGrace = true;
+      };
+
+      const rawInput: NodeJS.ReadableStream = (this.rl as any).input || input;
+      rawInput.on("data", onData);
+
+      await new Promise<void>((resolve) => {
+        const timer = setTimeout(() => {
+          rawInput.removeListener("data", onData);
+          resolve();
+        }, graceMs);
+        if (signal) {
+          const onAbort = () => {
+            clearTimeout(timer);
+            rawInput.removeListener("data", onData);
+            resolve();
+          };
+          signal.addEventListener("abort", onAbort, { once: true });
+        }
+      });
+
+      if (signal?.aborted) return null;
+
+      if (discardedDuringGrace || Boolean((this.rl as any).line && (this.rl as any).line.length > 0)) {
+        try {
+          this.rl.write("", { ctrl: true, name: "u" });
+        } catch {}
+        (this.rl as any).line = "";
+        (this.rl as any).cursor = 0;
+        console.log(pc.dim("\n  (keystrokes during grace window discarded)"));
+        out.write(question);
+      }
+
+      try {
+        return signal ? await this.rl.question("", { signal }) : await this.rl.question("");
+      } catch (err: any) {
+        if (signal?.aborted || err?.name === "AbortError") return null;
+        throw err;
+      }
+    }
+
+    try {
+      return signal ? await this.rl.question(question, { signal }) : await this.rl.question(question);
     } catch (err: any) {
       if (signal?.aborted || err?.name === "AbortError") return null;
       throw err;
@@ -278,7 +375,7 @@ export class InteractiveRepl {
   }
 
   private async confirmAction(toolName: string, args: Record<string, any>): Promise<boolean> {
-    if (this.autoApprove) return true;
+    if (this.approvalMode === "auto") return true;
     if (!this.rl) return true;
 
     console.log(pc.bold(pc.yellow(`\n⚠️  Action Approval Required:`)));
@@ -290,10 +387,11 @@ export class InteractiveRepl {
 
       if (hunks.length > 1) {
         const reviewMode = await this.askDuringTurn(
-          pc.bold(pc.white(`  Review ${hunks.length} hunks individually? [y/N]: `))
+          pc.bold(pc.white(`  Review ${hunks.length} hunks individually? [y/N]: `)),
+          { graceMs: REPL_APPROVAL_GRACE_MS }
         );
         if (reviewMode === null) return false;
-        if (reviewMode.trim().toLowerCase() === "y") {
+        if (reviewMode.trim().toLowerCase() === "y" || reviewMode.trim().toLowerCase() === "yes") {
           const acceptedHunks: PatchHunk[] = [];
           for (let i = 0; i < hunks.length; i++) {
             const h = hunks[i];
@@ -304,7 +402,8 @@ export class InteractiveRepl {
               else console.log(pc.gray(`    ${hl}`));
             }
             const hunkAns = await this.askDuringTurn(
-              pc.bold(pc.white(`  Accept hunk [y]es, [n]o, [a]ccept all remaining, [q]uit? [Y/n/a/q]: `))
+              pc.bold(pc.white(`  Accept hunk [y]es, [n]o, [a]ccept all remaining, [q]uit? [y/N/a/q]: `)),
+              { graceMs: REPL_APPROVAL_GRACE_MS }
             );
             if (hunkAns === null) return false;
             const trimmedHunk = hunkAns.trim().toLowerCase();
@@ -312,11 +411,11 @@ export class InteractiveRepl {
               console.log(pc.dim("  Patch review aborted by user."));
               return false;
             }
-            if (trimmedHunk === "a") {
+            if (trimmedHunk === "a" || trimmedHunk === "all") {
               acceptedHunks.push(...hunks.slice(i));
               break;
             }
-            if (trimmedHunk === "" || trimmedHunk === "y") {
+            if (trimmedHunk === "y" || trimmedHunk === "yes") {
               acceptedHunks.push(h);
             }
           }
@@ -346,19 +445,38 @@ export class InteractiveRepl {
       console.log(`  Action: Delete ${pc.red(args.path)}`);
     } else if (toolName === "run_command") {
       console.log(`  Command: ${pc.bold(pc.magenta(args.command))}`);
+    } else if (toolName === "verifier") {
+      console.log(`  Verifier: ${pc.bold(pc.magenta(args.command))}${args.detail ? pc.dim(` (${args.detail})`) : ""}`);
+      if (args.script && args.script !== args.command) {
+        console.log(pc.bold(pc.dim("  Script:")));
+        for (const line of args.script.split("\n").slice(0, 10)) {
+          console.log(pc.dim(`    ${line}`));
+        }
+      }
     }
 
     while (true) {
       const answer = await this.askDuringTurn(
-        pc.bold(pc.white(`  Approve [y]es, [n]o, [d]iff preview, [a]lways allow session? [Y/n/d/a]: `))
+        pc.bold(pc.white(`  Approve [y]es, [n]o, [d]iff preview, [a]lways allow session? [y/N/d/a]: `)),
+        { graceMs: REPL_APPROVAL_GRACE_MS }
       );
 
       if (answer === null) return false;
       const trimmed = answer.trim().toLowerCase();
       if (trimmed === "a" || trimmed === "always") {
-        this.autoApprove = true;
-        console.log(pc.green("  Switched to auto-approve for remainder of session."));
-        return true;
+        const confirmAll = await this.askDuringTurn(
+          pc.bold(pc.yellow(`  Type 'all' to confirm auto-approving all actions for this session: `)),
+          { graceMs: REPL_APPROVAL_GRACE_MS }
+        );
+        if (confirmAll?.trim().toLowerCase() === "all") {
+          this.approvalMode = "auto";
+          this.agent.setApprovalMode("auto");
+          console.log(pc.green("  Switched to auto-approve for remainder of session.\n"));
+          return true;
+        } else {
+          console.log(pc.dim("  Auto-approve cancelled.\n"));
+          continue;
+        }
       }
       if (trimmed === "d" || trimmed === "diff") {
         if (toolName === "edit_file") {
@@ -376,18 +494,26 @@ export class InteractiveRepl {
           console.log(pc.bold(pc.cyan(`\n--- Patch Preview: ${args.path} ---`)));
           console.log(args.patch);
           console.log();
+        } else if (toolName === "verifier" && args.script) {
+          console.log(pc.bold(pc.cyan(`\n--- Verifier Script Preview: ${args.detail || args.command} ---`)));
+          console.log(args.script);
+          console.log();
         } else {
           console.log(pc.dim("  No detailed diff available for this action.\n"));
         }
         continue;
       }
 
-      return trimmed === "" || trimmed === "y" || trimmed === "yes";
+      return trimmed === "y" || trimmed === "yes";
     }
   }
 
   async start(): Promise<void> {
     this.printWelcome();
+    const startupWarning = await this.agent.probeStartupEndpoint();
+    if (startupWarning) {
+      console.log(pc.yellow(`⚠️  ${startupWarning}\n`));
+    }
 
     this.rl = readline.createInterface({
       input,
@@ -639,13 +765,19 @@ export class InteractiveRepl {
             continue;
           } else if (cmd === "mode") {
             if (arg === "auto" || arg === "autonomous") {
-              this.autoApprove = true;
+              this.approvalMode = "auto";
+              this.agent.setApprovalMode("auto");
               console.log(pc.green("✔ Mode switched to: auto (autonomous tool execution)\n"));
             } else if (arg === "review" || arg === "ask") {
-              this.autoApprove = false;
+              this.approvalMode = "review";
+              this.agent.setApprovalMode("review");
               console.log(pc.yellow("✔ Mode switched to: review (requires user confirmation before changes)\n"));
+            } else if (arg === "read-only" || arg === "readonly") {
+              this.approvalMode = "read-only";
+              this.agent.setApprovalMode("read-only");
+              console.log(pc.yellow("✔ Mode switched to: read-only (rejects mutating tool executions)\n"));
             } else {
-              console.log(`Current mode: ${this.autoApprove ? pc.green("auto") : pc.yellow("review")}. Use: /mode auto or /mode review\n`);
+              console.log(`Current mode: ${this.approvalMode === "auto" ? pc.green("auto") : pc.yellow(this.approvalMode)}. Use: /mode auto, /mode review, or /mode read-only\n`);
             }
             continue;
           } else if (cmd === "diff") {
@@ -823,18 +955,22 @@ export class InteractiveRepl {
             console.log(pc.green(`✔ Session saved to ~/.nexus/sessions/${this.currentSessionId}.json\n`));
             continue;
           } else if (cmd === "resume") {
-            const sess = arg ? this.sessionManager.loadSession(arg) : this.sessionManager.getLatestSession();
-            if (!sess) {
-              console.log(pc.red(`Session not found: ${arg || "latest"}\n`));
-            } else {
-              this.currentSessionId = sess.id;
-              if (sess.workspace && fs.existsSync(sess.workspace)) {
-                this.config.workspace = sess.workspace;
-                this.agent.setWorkspace(sess.workspace);
+            try {
+              const sess = arg ? this.sessionManager.loadSession(arg) : this.sessionManager.getLatestSession();
+              if (!sess) {
+                console.log(pc.red(`Session not found: ${arg || "latest"}\n`));
+              } else {
+                this.currentSessionId = sess.id;
+                if (sess.workspace && fs.existsSync(sess.workspace)) {
+                  this.config.workspace = sess.workspace;
+                  this.agent.setWorkspace(sess.workspace);
+                }
+                const archiveNotice = this.agent.restoreConversation(sess, (committed) => this.sessionManager.readArchivedHistory(sess.id, committed));
+                if (archiveNotice) console.log(pc.yellow(archiveNotice));
+                console.log(pc.green(`✔ Resumed session ${pc.bold(sess.id)} (${sess.messages.length} messages loaded).\n`));
               }
-              const archiveNotice = this.agent.restoreConversation(sess, (committed) => this.sessionManager.readArchivedHistory(sess.id, committed));
-              if (archiveNotice) console.log(pc.yellow(archiveNotice));
-              console.log(pc.green(`✔ Resumed session ${pc.bold(sess.id)} (${sess.messages.length} messages loaded).\n`));
+            } catch (err: any) {
+              console.log(pc.red(`Failed to resume session: ${err.message}\n`));
             }
             continue;
           } else if (cmd === "tokens" || cmd === "cost") {
@@ -1085,7 +1221,7 @@ export class InteractiveRepl {
             await this.agent.initExtensibility();
             const plugins = this.agent.getPluginManager().listPlugins();
             if (plugins.length === 0) {
-              console.log(pc.yellow("No active plugins found in ~/.nexus/plugins/ or ~/.config/opencode/plugins/\n"));
+              console.log(pc.yellow("No active plugins found in ~/.nexus/plugins/ or ~/.config/nexus/plugins/\n"));
             } else {
               console.log(pc.bold(pc.white("\nLoaded Custom Plugins:")));
               for (const p of plugins) {
@@ -1353,8 +1489,45 @@ export class InteractiveRepl {
             continue;
           } else if (cmd === "test") {
             const filterPattern = arg.trim() || undefined;
+            const discovered = discoverVerifier(this.config.workspace, filterPattern);
+            if (!discovered) {
+              console.log(pc.yellow("  no verifier: no verification command is configured or discovered in this workspace.\n"));
+              continue;
+            }
+            const commandOverride = discovered.command;
+            const desc = describeVerifier(this.config.workspace, commandOverride);
+            const testCmd = desc?.command || commandOverride;
+
+            // Verifier gating under review mode / untrusted workspace
+            const isTrusted = isWorkspaceTrusted(this.config.workspace, Boolean(this.config.readOnly));
+            const mode = this.config.approvalMode ?? (this.config.readOnly ? "read-only" : (this.config.fullAccess ? "auto" : (isTrusted ? "auto" : "review")));
+            const policyContext: PolicyContext = {
+              mode,
+              trusted: isTrusted,
+              sandbox: this.config.sandbox,
+              fullAccess: Boolean(this.config.fullAccess),
+            };
+            if (this.agent.getApprovalPolicy().requiresDecision("exec", policyContext)) {
+              const approved = await this.confirmAction("verifier", {
+                command: testCmd,
+                script: desc?.script,
+                detail: desc?.evidence,
+                digest: desc?.digest,
+              });
+              if (!approved) {
+                console.log(pc.yellow("  Test run aborted by user.\n"));
+                continue;
+              }
+            }
+
             console.log(pc.dim(`🧪 Running automated test suite${filterPattern ? ` matching "${filterPattern}"` : ""}...`));
-            const res = runTestSuite(this.config.workspace, filterPattern);
+            const bridge = this.agent.getBridge();
+            const timeoutSecs = verifierTimeoutSecs(this.config.verifierTimeoutSecs);
+            const res = await runTestSuiteWithExecutor(
+              this.config.workspace,
+              (command) => bridge.executeTool("run_command", { command, timeout_secs: timeoutSecs }),
+              commandOverride,
+            );
             console.log(pc.dim(`  Command: ${res.command}`));
             if (res.success) {
               console.log(pc.green(`✔ Test suite PASSED!\n`));

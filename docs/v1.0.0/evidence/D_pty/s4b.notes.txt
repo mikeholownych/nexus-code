@@ -1,0 +1,7 @@
+[   1.31s] SAW idle
+[   1.31s] SEND b'run it\r'
+[   3.08s] SAW tool-running
+[   4.58s] SCREEN tool-running (100x30)
+[   4.59s] SEND Esc during tool
+[  24.11s] SAW idle-after-esc
+[  24.11s] SCREEN after-esc-tool (100x30)

@@ -1,0 +1,44 @@
+{
+  "schemaVersion": 1,
+  "taskId": "task-v1-valid",
+  "sessionId": "task-v1-valid",
+  "id": "task-v1-valid",
+  "title": "Valid V1 Task",
+  "workspacePath": "/tmp/nexus-test-workspace",
+  "workspace": "/tmp/nexus-test-workspace",
+  "createdAt": "2026-10-15T10:00:00.000Z",
+  "updatedAt": "2026-10-15T10:05:00.000Z",
+  "status": "completed",
+  "activePlan": [
+    {
+      "name": "Phase 1: Verification",
+      "status": "completed",
+      "detail": "Verified baseline"
+    }
+  ],
+  "milestones": [
+    {
+      "milestoneId": "m-v1-1",
+      "name": "Phase 1: Verification",
+      "reachedAt": "2026-10-15T10:04:00.000Z",
+      "phaseIndex": 0,
+      "evidenceSummary": "Verified baseline tests"
+    }
+  ],
+  "validationReceipts": [],
+  "messages": [
+    {
+      "role": "user",
+      "content": "Perform verification"
+    },
+    {
+      "role": "assistant",
+      "content": "Verification completed successfully."
+    }
+  ],
+  "tokenStats": {
+    "prompt": 120,
+    "completion": 45,
+    "total": 165
+  }
+}

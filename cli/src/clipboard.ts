@@ -1,4 +1,4 @@
-import { execSync } from "node:child_process";
+import { execFileSync, execSync } from "node:child_process";
 
 export interface ClipboardResult {
   success: boolean;
@@ -18,9 +18,9 @@ export function copyToClipboard(text: string): ClipboardResult {
     { cmd: "pbcopy", args: [] },
   ];
 
-  for (const { cmd } of commands) {
+  for (const { cmd, args } of commands) {
     try {
-      execSync(cmd, {
+      execFileSync(cmd, args, {
         input: text,
         stdio: ["pipe", "ignore", "ignore"],
         timeout: 3000,

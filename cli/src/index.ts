@@ -2,7 +2,7 @@
 import { Command } from "commander";
 import * as path from "node:path";
 import * as fs from "node:fs";
-import { execSync } from "node:child_process";
+import { execSync, spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { AutonomousAgent } from "./agent.js";
 import { ApplicationCore } from "./core/app.js";
@@ -20,6 +20,7 @@ import { BenchmarkEvaluator } from "./evaluator.js";
 import { SynthesizerEngine } from "./synthesizer.js";
 import { BrowserDriver } from "./browser.js";
 import { KnowledgeGraph } from "./knowledge.js";
+import { TaskStateNotFoundError } from "./core/state.js";
 import { buildConfig as buildConfigOrThrow, loadEnvironment } from "./config.js";
 import { describeTarget, registerProviderCommands } from "./provider_cli.js";
 import { UsageLedger } from "./usage.js";
@@ -57,12 +58,193 @@ function exitAfterFlush(code: number): void {
 
 import { getBuildIdentity } from "./build_identity.js";
 
+function isExecutable(filePath: string): boolean {
+  try {
+    fs.accessSync(filePath, fs.constants.X_OK);
+    return fs.statSync(filePath).isFile();
+  } catch {
+    return false;
+  }
+}
+
+function resolveTuiBinary(): string | undefined {
+  if (process.env.NEXUS_TUI_BIN && isExecutable(process.env.NEXUS_TUI_BIN)) {
+    return process.env.NEXUS_TUI_BIN;
+  }
+  if (process.env.NEXUS_HOME) {
+    const packaged = path.join(process.env.NEXUS_HOME, "lib", "core", "nexus-tui");
+    if (isExecutable(packaged)) return packaged;
+  }
+  const root = process.env.NEXUS_ROOT || path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
+  const releaseTui = path.join(root, "core", "target", "release", "nexus-tui");
+  if (isExecutable(releaseTui)) return releaseTui;
+  const debugTui = path.join(root, "core", "target", "debug", "nexus-tui");
+  if (isExecutable(debugTui)) return debugTui;
+  return undefined;
+}
+
+function resolveSidecarScript(): string | undefined {
+  if (process.env.NEXUS_SIDECAR && fs.existsSync(process.env.NEXUS_SIDECAR)) {
+    return process.env.NEXUS_SIDECAR;
+  }
+  if (process.env.NEXUS_HOME) {
+    const packaged = path.join(process.env.NEXUS_HOME, "lib", "cli", "dist", "sidecar.js");
+    if (fs.existsSync(packaged)) return packaged;
+  }
+  const root = process.env.NEXUS_ROOT;
+  if (root) {
+    const rootSidecar = path.join(root, "cli", "dist", "sidecar.js");
+    if (fs.existsSync(rootSidecar)) return rootSidecar;
+  }
+  const currentDir = path.dirname(fileURLToPath(import.meta.url));
+  const direct = path.join(currentDir, "sidecar.js");
+  if (fs.existsSync(direct)) return direct;
+  const repoRoot = path.resolve(currentDir, "..", "..");
+  const checkout = path.join(repoRoot, "cli", "dist", "sidecar.js");
+  if (fs.existsSync(checkout)) return checkout;
+  return undefined;
+}
+
+function spawnTui(tuiBin: string, sidecarScript: string): void {
+  const passthrough = process.argv.slice(2).filter((arg) => arg !== "--live" && arg !== "--repl");
+  const result = spawnSync(
+    tuiBin,
+    ["--live", "--sidecar", sidecarScript, "--node", process.execPath, "--", ...passthrough],
+    { stdio: "inherit" }
+  );
+  if (result.error) {
+    console.error(`Failed to launch nexus-tui: ${result.error.message}`);
+    process.exit(1);
+  }
+  process.exit(result.status ?? (result.signal ? 1 : 0));
+}
+
+function triggerBackgroundGc(): void {
+  void import("./core/retention.js").then(({ maybeRunDailyGc }) => {
+    maybeRunDailyGc().then((res) => {
+      if (res.status === "needs_acknowledgement" && res.notice) {
+        console.error(pc.yellow(`\n[Notice] ${res.notice}\n`));
+      }
+    }).catch(() => {});
+  }).catch(() => {});
+}
+
+async function startRepl(options: any): Promise<void> {
+  triggerBackgroundGc();
+  if (process.env.NEXUS_TEST_RECORD_REPL) {
+    const log = process.env.NEXUS_TEST_RECORD_REPL;
+    const parts = ["repl"];
+    if (options.model) parts.push("-m", options.model);
+    if (options.resume) parts.push("-r", typeof options.resume === "string" ? options.resume : "");
+    fs.appendFileSync(log, parts.join(" ").trim() + "\n");
+    return;
+  }
+  const config = buildConfig(options);
+  if (config.model === "local-model") {
+    try {
+      const client = new LocalLlmClient(config);
+      const models = await client.listModels();
+      if (models.length > 0) {
+        config.model = models[0];
+      }
+    } catch {
+      // Fallback
+    }
+  }
+  const resumeId = typeof options.resume === "string" ? options.resume : options.resume ? "latest" : undefined;
+  if (config.provider || config.plannerProvider || config.coderProvider) console.error(pc.dim(describeTarget(config)));
+  config.surface = "repl";
+  const app = new ApplicationCore(config);
+  const repl = new InteractiveRepl(app, config.approvalMode, resumeId);
+  await repl.start();
+}
+
+async function runDefault(options: any): Promise<void> {
+  triggerBackgroundGc();
+  if (options.repl) {
+    await startRepl(options);
+    return;
+  }
+
+  const tuiBin = resolveTuiBinary();
+  const sidecarScript = resolveSidecarScript();
+
+  if (options.live) {
+    if (!tuiBin) {
+      console.error("nexus-tui is not built. Run 'make build' first.");
+      process.exit(1);
+    }
+    if (!sidecarScript) {
+      console.error("nexus sidecar is not built. Run 'npm run build' in cli first.");
+      process.exit(1);
+    }
+    spawnTui(tuiBin, sidecarScript);
+    return;
+  }
+
+  const isInteractiveTty = Boolean(process.stdin.isTTY && process.stdout.isTTY);
+  if (isInteractiveTty && tuiBin && sidecarScript) {
+    spawnTui(tuiBin, sidecarScript);
+    return;
+  }
+
+  if (isInteractiveTty && !tuiBin) {
+    console.error("nexus: the live TUI is not built (run 'make build'); starting the REPL.");
+  }
+
+  await startRepl(options);
+}
+
 const program = new Command();
 
+// Options given before a subcommand belong to the top-level launch (`nexus --provider X` opens the TUI with it);
+// options after a subcommand belong to that subcommand. Without this, the top-level --provider/-m swallowed the
+// subcommand's own (`nexus providers verify --provider openrouter` reported --provider missing).
+program.enablePositionalOptions();
+
 program
-  .name("harness")
+  .name("nexus")
   .description("Nexus Code - Custom Autonomous Coding Harness for Local AI (LM Studio / vLLM)")
-  .version(getBuildIdentity().string);
+  .version(getBuildIdentity().string)
+  .option("--repl", "Start interactive coding session (REPL)")
+  .option("--live", "Start live TUI")
+  .option("-r, --resume [id]", "Resume previous session (defaults to latest if id omitted)")
+  .option("--approve", "Require human approval before destructive actions (edits, shell commands)")
+  .option("-y, --yes", "Run non-interactively without approval prompts (forces auto mode)")
+  .option("--mode <mode>", "Execution mode: auto, review, or read-only (default: auto for trusted workspaces, review for untrusted)")
+  .option("--read-only", "Reject all mutating tool executions and commands")
+  .option("-e, --endpoint <url>", "Local LLM endpoint (default: $LOCAL_LLM_ENDPOINT)")
+  .option("-m, --model <name>", "Model name identifier (default: active model in vLLM)")
+  .option("-w, --workspace <path>", "Workspace directory (default: current directory)")
+  .option("-s, --max-steps <number>", "Steps per segment; continuation checkpoints there instead of stopping (default: 30)")
+  .option("--max-total-steps <number>", "Continuation: an explicit total-step limit for one turn (default: none; progressing work continues)")
+  .option("--strict-token-count", "Refuse a request the connection could not count on a worker (default: proceed on the labelled estimate)")
+  .option("--max-turn-minutes <number>", "Continuation: an explicit wall-clock limit for one turn in minutes (default: none)")
+  .option("--stagnation-steps <number>", "Continuation: stop after this many steps without progress (default 12)")
+  .option("--no-continuation", "End a turn at --max-steps instead of continuing while it makes progress")
+  .option("-t, --temperature <number>", "Model temperature (default: 0.2)")
+  .option("--shell <type>", "Linux shell to use: bash, zsh, or sh (default: bash)", "bash")
+  .option("--fallback <urls>", "Comma-separated fallback LLM endpoints if primary is unavailable")
+  .option("--context-limit <tokens>", "Context window limit in tokens; below the provider's advertised capacity it is kept, above it the advertised capacity applies (default: advertised capacity, else 65536)")
+  .option("--dry-run", "Simulate file modifications without writing changes to disk")
+  .option("--sandbox [mode]", "Isolate command execution using bubblewrap (bwrap) or Docker (default: auto)")
+  .option("--worktree", "Isolate execution inside an ephemeral git worktree under .nexus/worktrees/<task-id>")
+  .option("--authoritative-verifier <command>", "Trusted command that must pass before any task completion; its success may authorize automatic worktree merge")
+  .option("--record-flight", "Record execution into an append-only deterministic .flightlog")
+  .option("--planner-model <name>", "Deep reasoning model for architecture planning (o3, R1, Sonnet)")
+  .option("--planner-endpoint <url>", "Dedicated inference endpoint for planner model")
+  .option("--coder-model <name>", "High-throughput model for surgical code implementation (Qwen 2.5 Coder)")
+  .option("--coder-endpoint <url>", "Dedicated inference endpoint for coder model")
+  .option("--provider <id>", "Cloud inference provider: openrouter, openai, anthropic, compatible (default: appliance endpoint)")
+  .option("--base-url <url>", "Override the provider's base URL (operator-only; required for 'compatible')")
+  .option("--planner-provider <id>", "Cloud provider for the planner model (requires --planner-model)")
+  .option("--coder-provider <id>", "Cloud provider for the coder model (requires --coder-model)")
+  .action(async (options: any, cmd: Command) => {
+    if (cmd.args && cmd.args.length > 0) {
+      program.error(`error: unknown command '${cmd.args[0]}'`);
+    }
+    await runDefault(options);
+  });
 
 program
   .command("repl")
@@ -91,35 +273,22 @@ program
   .option("--coder-model <name>", "High-throughput model for surgical code implementation (Qwen 2.5 Coder)")
   .option("--coder-endpoint <url>", "Dedicated inference endpoint for coder model")
   .option("--approve", "Require human approval before destructive actions (edits, shell commands)")
+  .option("-y, --yes", "Run non-interactively without approval prompts (forces auto mode)")
+  .option("--mode <mode>", "Execution mode: auto, review, or read-only (default: auto for trusted workspaces, review for untrusted)")
   .option("--provider <id>", "Cloud inference provider: openrouter, openai, anthropic, compatible (default: appliance endpoint)")
   .option("--base-url <url>", "Override the provider's base URL (operator-only; required for 'compatible')")
   .option("--planner-provider <id>", "Cloud provider for the planner model (requires --planner-model)")
   .option("--coder-provider <id>", "Cloud provider for the coder model (requires --coder-model)")
   .option("-r, --resume [id]", "Resume previous session (defaults to latest if id omitted)")
-  .action(async (options: any) => {
-    const config = buildConfig(options);
-    if (config.model === "local-model") {
-      try {
-        const client = new LocalLlmClient(config);
-        const models = await client.listModels();
-        if (models.length > 0) {
-          config.model = models[0];
-        }
-      } catch {
-        // Fallback
-      }
-    }
-    const resumeId = typeof options.resume === "string" ? options.resume : options.resume ? "latest" : undefined;
-    if (config.provider || config.plannerProvider || config.coderProvider) console.error(pc.dim(describeTarget(config)));
-    const app = new ApplicationCore(config);
-    const repl = new InteractiveRepl(app, !options.approve, resumeId);
-    await repl.start();
+  .action(async (_options: any, cmd: Command) => {
+    const options = cmd.optsWithGlobals();
+    await startRepl(options);
   });
 
 program
   .command("run")
   .description("Run an autonomous coding task")
-  .argument("<prompt...>", "The coding instructions / task prompt")
+  .argument("[prompt...]", "The coding instructions / task prompt")
   .option("-e, --endpoint <url>", "Local LLM endpoint (default: http://localhost:1234/v1 or $LOCAL_LLM_ENDPOINT)")
   .option("-m, --model <name>", "Model name identifier (default: active model in LM Studio/vLLM)")
   .option("-w, --workspace <path>", "Workspace directory to inspect and modify (default: current directory)")
@@ -135,6 +304,9 @@ program
   .option("--context-limit <tokens>", "Context window limit in tokens; below the provider's advertised capacity it is kept, above it the advertised capacity applies (default: advertised capacity, else 65536)")
   .option("--dry-run", "Simulate file modifications without writing changes to disk")
   .option("--read-only", "Reject all mutating tool executions and commands")
+  .option("-y, --yes", "Run non-interactively without approval prompts (forces auto mode)")
+  .option("--approve", "Require human approval before destructive actions (forces review mode)")
+  .option("--mode <mode>", "Execution mode: auto, review, or read-only (default: auto for trusted workspaces, review for untrusted)")
   .option("--sandbox [mode]", "Isolate command execution using bubblewrap (bwrap) or Docker (default: auto)")
   .option("--worktree", "Isolate execution inside an ephemeral git worktree under .nexus/worktrees/<task-id>")
   .option("--authoritative-verifier <command>", "Trusted command that must pass before any task completion; its success may authorize automatic worktree merge")
@@ -150,9 +322,11 @@ program
   .option("--coder-provider <id>", "Cloud provider for the coder model (requires --coder-model)")
   .option("-j, --json", "Output machine-readable JSON structured result (UI-002, UI-003)")
   .option("-r, --resume [id]", "Resume previous session or task state")
-  .action(async (promptParts: string[], options: any) => {
-    const prompt = promptParts.join(" ");
+  .action(async (promptParts: string[], _options: any, cmd: Command) => {
+    const options = cmd.optsWithGlobals();
+    let prompt = promptParts.join(" ").trim();
     const config = buildConfig(options);
+    config.surface = "headless";
     const isJson = Boolean(options.json);
 
     // Auto-detect loaded model if model is 'local-model'
@@ -173,7 +347,34 @@ program
 
     if (!isJson && (config.provider || config.plannerProvider || config.coderProvider)) console.error(pc.dim(describeTarget(config)));
     const app = new ApplicationCore(config);
-    const resumeTaskId = typeof options.resume === "string" ? options.resume : options.resume ? "latest" : undefined;
+
+    let resumeTaskId: string | undefined;
+    if (options.resume !== undefined && options.resume !== false) {
+      if (typeof options.resume === "string" && options.resume !== "latest") {
+        resumeTaskId = options.resume;
+      } else {
+        const targetWorkspace = config.workspace || process.cwd();
+        const tasks = app
+          .getStateManager()
+          .listTasks({ workspace: targetWorkspace })
+          .filter((t) => t.taskId !== app.getTaskId());
+        if (tasks.length === 0) {
+          console.error(`no task to resume in ${targetWorkspace}; see 'nexus status'`);
+          app.shutdown();
+          exitAfterFlush(2);
+          return;
+        }
+        resumeTaskId = tasks[0].taskId;
+      }
+      if (!prompt) {
+        prompt = "continue";
+      }
+    } else if (!prompt) {
+      console.error("error: missing required argument 'prompt'");
+      app.shutdown();
+      exitAfterFlush(1);
+      return;
+    }
 
     // Operator stop authority: first SIGINT cancels the active turn; a second one terminates immediately.
     const abort = new AbortController();
@@ -223,8 +424,9 @@ program
       } else {
         console.error(pc.red(`\nTask failed: ${err.message}`));
       }
+      const exitCode = (err instanceof TaskStateNotFoundError || err?.name === "TaskStateNotFoundError") ? 2 : 1;
       app.shutdown();
-      exitAfterFlush(1);
+      exitAfterFlush(exitCode);
     }
   });
 
@@ -235,7 +437,8 @@ program
   .option("-k, --api-key <key>", "API key / token (default: $LOCAL_LLM_API_KEY)")
   .option("--provider <id>", "Cloud inference provider (openrouter, openai, anthropic, compatible)")
   .option("--base-url <url>", "Override the provider's base URL")
-  .action(async (options: any) => {
+  .action(async (_options: any, cmd: Command) => {
+    const options = cmd.optsWithGlobals();
     const config = buildConfig(options);
     const client = new LocalLlmClient(config);
     console.log(pc.cyan(`\nQuerying models from ${config.endpoint}...`));
@@ -256,7 +459,8 @@ program
   });
 
 /** Shared by `doctor` and its compatibility alias `check`. */
-async function doctorCommand(options: any): Promise<void> {
+async function doctorCommand(_options: any, cmd?: Command): Promise<void> {
+  const options = cmd?.optsWithGlobals ? cmd.optsWithGlobals() : _options;
   const controller = new AbortController();
   const onInterrupt = () => controller.abort();
   process.once("SIGINT", onInterrupt);
@@ -328,7 +532,7 @@ function doctorOptions(command: Command): Command {
 Exit codes: 0 healthy · 1 warnings only · 2 at least one failure · 3 the doctor itself could not run.
 Statuses: pass, warn (works, but degraded or at risk), fail (prevents normal operation), skip (not applicable or not run).
 Supported repairs (--fix): create missing ~/.nexus state directories (0700); restrict group/world-writable state
-directories to 0700; restrict a group/world-readable credential store to 0600. Previous modes are recorded under
+directories to 0700; restrict a group/world-readable credential store or config.env to 0600. Previous modes are recorded under
 ~/.nexus/doctor-backups. Nothing else is ever changed: no configuration reset, session deletion, credential rotation,
 dependency installation, TLS change or service restart.`,
     )
@@ -355,6 +559,67 @@ program
       console.log(`  Workspace: ${pc.dim(s.workspace)} | Messages: ${s.messageCount}\n`);
     }
     console.log(pc.dim("Resume any session with: harness repl --resume <session_id>\n"));
+  });
+
+program
+  .command("gc")
+  .description("Clean up old sessions, tasks, checkpoints, and flights according to retention policy (REQ-PER-102, DEC-11)")
+  .option("--dry-run", "Report what would be deleted without deleting")
+  .option("--only-test-pollution", "Only delete records from temporary test runs (/tmp/nexus-app-test-*)")
+  .option("--max-age-days <days>", "Retention age limit in days (default: 90)", (val) => parseInt(val, 10))
+  .option("--max-size-mb <mb>", "Retention size limit in megabytes (default: 2048)", (val) => parseInt(val, 10))
+  .option("--ack", "Acknowledge and enable automatic daily background GC")
+  .option("--json", "Output results as machine-readable JSON")
+  .action(async (options: any) => {
+    const { runRetentionGc, acknowledgeDailyGc } = await import("./core/retention.js");
+    if (options.ack) {
+      acknowledgeDailyGc();
+      if (options.json) {
+        console.log(JSON.stringify({ acknowledged: true }));
+      } else {
+        console.log(pc.green("Automatic daily background GC acknowledged and enabled."));
+      }
+      return;
+    }
+
+    const maxSizeBytes = options.maxSizeMb !== undefined ? options.maxSizeMb * 1024 * 1024 : undefined;
+    const result = runRetentionGc({
+      dryRun: Boolean(options.dryRun),
+      onlyTestPollution: Boolean(options.onlyTestPollution),
+      maxAgeDays: options.maxAgeDays,
+      maxSizeBytes,
+    });
+
+    if (options.json) {
+      console.log(JSON.stringify(result, null, 2));
+      return;
+    }
+
+    const mbScanned = (result.scannedBytes / (1024 * 1024)).toFixed(1);
+    const mbDeleted = (result.deletedBytes / (1024 * 1024)).toFixed(1);
+
+    if (result.dryRun) {
+      console.log(pc.bold(pc.cyan("\n=== Nexus State Garbage Collection (Dry Run) ===\n")));
+      console.log(`Scanned: ${result.scannedCount} items (${mbScanned} MB)`);
+      console.log(`Reclaimable: ${pc.yellow(result.deletedCount.toString())} items (${pc.yellow(mbDeleted)} MB)\n`);
+      for (const [kind, stats] of Object.entries(result.byKind)) {
+        if (stats.count > 0) {
+          const mb = (stats.bytes / (1024 * 1024)).toFixed(1);
+          console.log(`  • ${kind}s: ${stats.count} items (${mb} MB)`);
+        }
+      }
+      console.log(pc.dim("\nRun 'nexus gc' without --dry-run to apply this cleanup.\n"));
+    } else {
+      console.log(pc.bold(pc.green("\n=== Nexus State Garbage Collection Complete ===\n")));
+      console.log(`Reclaimed: ${pc.bold(pc.green(result.deletedCount.toString()))} items (${mbDeleted} MB) in ${result.durationMs} ms`);
+      for (const [kind, stats] of Object.entries(result.byKind)) {
+        if (stats.count > 0) {
+          const mb = (stats.bytes / (1024 * 1024)).toFixed(1);
+          console.log(`  • ${kind}s: ${stats.count} items (${mb} MB)`);
+        }
+      }
+      console.log();
+    }
   });
 
 program
@@ -429,7 +694,7 @@ program
     await pm.loadPlugins();
     const plugins = pm.listPlugins();
     if (plugins.length === 0) {
-      console.log(pc.yellow("\nNo active plugins found in ~/.nexus/plugins/ or ~/.config/opencode/plugins/\n"));
+      console.log(pc.yellow("\nNo active plugins found in ~/.nexus/plugins/ or ~/.config/nexus/plugins/\n"));
       return;
     }
     console.log(pc.bold(pc.cyan("\n=== Loaded Custom Plugins ===\n")));
@@ -662,7 +927,7 @@ program
 
 program
   .command("eval <dataset>")
-  .description("Evaluate SWE-bench / benchmark dataset against Nexus Code harness")
+  .description("[experimental] Evaluate SWE-bench / benchmark dataset against Nexus Code harness")
   .option("-e, --endpoint <url>", "Local LLM endpoint (default: $LOCAL_LLM_ENDPOINT)")
   .option("-m, --model <name>", "Model name identifier (default: active model in LM Studio/vLLM)")
   .option("-w, --workspace <path>", "Workspace directory (default: current directory)")
@@ -744,9 +1009,6 @@ program
     await driver.close();
   });
 
-if (process.argv.length <= 2) {
-  process.argv.push("repl");
-}
 
 registerOperationCommands(program);
 registerProviderCommands(program);

@@ -58,6 +58,8 @@ export interface HarnessConfig {
   coreBinaryPath?: string;   // Path to compiled harness-core executable
   dryRun?: boolean;          // Dry-run simulation mode without persisting file modifications
   readOnly?: boolean;        // Reject all mutating tool executions and commands
+  approvalMode?: "auto" | "review" | "read-only"; // Execution posture: auto, review, or read-only (DEC-01 option C)
+  yes?: boolean;             // Run non-interactively without confirmation prompts (forces auto mode)
   fullAccess?: boolean;      // Broad full-access mode executing without confirmation prompts (AUTH-007, AUTH-008)
   taskClass?: string;        // Routing hint sent to the gateway as X-Task-Class (e.g. "review", "architecture")
   plannerTaskClass?: string; // Same, for the planner client
@@ -84,6 +86,7 @@ export interface HarnessConfig {
   coderEndpoint?: string;    // Dedicated endpoint for coder model
   coderApiKey?: string;      // API key for coder model
   tdd?: boolean;             // Enforce strict RED-GREEN-REFACTOR protocol
+  role?: "researcher" | "architect" | "implementer" | "tester" | "reviewer"; // Specialized agent role
   provider?: string;         // Cloud provider id (see providers.ts); undefined = the appliance/endpoint path
   plannerProvider?: string;  // Provider for the planner role; undefined inherits the rules in agent.ts
   coderProvider?: string;    // Provider for the coder role
@@ -91,6 +94,8 @@ export interface HarnessConfig {
   authorizedDisclosureOrigins?: string[];
   /** Origins that look local but forward to a cloud service (treated as cloud disclosure). */
   cloudRoutedOrigins?: string[];
+  /** Execution surface: 'repl', 'tui', or 'headless' (REQ-AGT-109a). */
+  surface?: "repl" | "tui" | "headless" | string;
   reasoningEffort?: string;  // OpenAI Responses reasoning effort; enables owner-scoped reasoning replay
   anthropicThinkingBudget?: number; // Anthropic extended-thinking budget tokens; enables signed thinking replay
 }
@@ -101,6 +106,8 @@ export interface ExecutionResult {
   error?: string;
   /** The operation's deadline expired before an answer was received (bridge-level; the runner reports its own via `timed_out`). */
   timedOut?: boolean;
+  /** The operator's cancel ended the operation (the runner ended the command's process group). */
+  cancelled?: boolean;
 }
 
 /**
@@ -131,3 +138,5 @@ export const DEFAULT_CONTINUATION: ContinuationBudget = {
   maxRecoveries: 2,
   maxCompletionNudges: 2,
 };
+
+export type ApprovalMode = "auto" | "review" | "read-only";

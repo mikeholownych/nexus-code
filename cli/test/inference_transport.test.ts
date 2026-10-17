@@ -299,12 +299,35 @@ describe("inference transport: TLS with a private trust root", { skip: !haveOpen
     base = `https://127.0.0.1:${(server.address() as AddressInfo).port}`;
   });
 
-  test("certificate from an untrusted root is rejected as network_error naming the TLS verification code", async () => {
-    await assert.rejects(() => client(base).chatCompletionStream(msgs, [], () => {}), (e: any) => {
-      assert.equal(e.kind, "network_error");
-      assert.ok(e.transportCause.some((c: any) => /CERT|SIGNATURE|ISSUER/.test(c.code ?? "")), JSON.stringify(e.transportCause));
-      return true;
-    });
+  test("ACC-INF-09: certificate from an untrusted root is rejected as PERMANENT_FAILURE with NODE_EXTRA_CA_CERTS hint and is not retried", async () => {
+    const { ProviderRecoveryController, DEFAULT_RECOVERY_POLICY } = await import("../src/core/provider_recovery.js");
+    const { fakeClock } = await import("./helpers/provider_fixture.js");
+    const clock = fakeClock();
+    let attempts = 0;
+    const controller = new ProviderRecoveryController(DEFAULT_RECOVERY_POLICY, clock, 1);
+    await assert.rejects(
+      () =>
+        controller.run("rid-tls", {
+          submit: async () => {
+            attempts++;
+            return client(base).chatCompletionStream(msgs, [], () => {});
+          },
+          probe: async () => ({ available: true, condition: "AVAILABLE" }),
+          classify: (e: any) => (typeof e?.toFailure === "function" ? e.toFailure() : null),
+          newRequestId: () => "rid-tls-2",
+        }),
+      (e: any) => {
+        assert.equal(e.kind, "network_error");
+        assert.equal(e.condition, "PERMANENT_FAILURE");
+        assert.equal(e.execution, "NOT_EXECUTED");
+        assert.match(e.message, /NODE_EXTRA_CA_CERTS/);
+        assert.match(e.message, /config\.env/);
+        assert.ok(e.transportCause.some((c: any) => /CERT|SIGNATURE|ISSUER/.test(c.code ?? "")), JSON.stringify(e.transportCause));
+        return true;
+      },
+    );
+    assert.equal(attempts, 1, "TLS verification failure must not be retried");
+    assert.equal(controller.record?.state, "NOT_RECOVERABLE");
   });
 
   test("the same server succeeds when the root is trusted through NODE_EXTRA_CA_CERTS (how Nexus is deployed)", async () => {
@@ -323,6 +346,31 @@ process.stdout.write(String(m.content));`;
     const status = await new Promise<number | null>((r) => child.on("exit", r));
     assert.equal(status, 0, stderr);
     assert.equal(stdout, "over tls");
+  });
+
+  test("ACC-INF-09: doctor validates NODE_EXTRA_CA_CERTS in ~/.config/nexus/config.env", async () => {
+    const { runDoctor } = await import("../src/doctor.js");
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-ca-home-"));
+    try {
+      const cfgDir = path.join(home, ".config/nexus");
+      fs.mkdirSync(cfgDir, { recursive: true, mode: 0o700 });
+      fs.writeFileSync(path.join(cfgDir, "config.env"), `NODE_EXTRA_CA_CERTS=${path.join(dir, "ca.crt")}\n`, { mode: 0o600 });
+      const reportOk = await runDoctor({ home });
+      const findingOk = reportOk.findings.find((f) => f.id === "config.custom_ca");
+      assert.ok(findingOk, "config.custom_ca finding must be present");
+      assert.equal(findingOk.status, "pass", findingOk.explanation);
+
+      // Invalid PEM content fails validation
+      const badPem = path.join(dir, "bad.crt");
+      fs.writeFileSync(badPem, "not a pem certificate\n");
+      fs.writeFileSync(path.join(cfgDir, "config.env"), `NODE_EXTRA_CA_CERTS=${badPem}\n`, { mode: 0o600 });
+      const reportBad = await runDoctor({ home });
+      const findingBad = reportBad.findings.find((f) => f.id === "config.custom_ca");
+      assert.ok(findingBad);
+      assert.equal(findingBad.status, "fail");
+    } finally {
+      fs.rmSync(home, { recursive: true, force: true });
+    }
   });
 
   test("teardown", async () => {

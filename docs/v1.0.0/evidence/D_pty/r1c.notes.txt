@@ -1,0 +1,5 @@
+[   0.86s] SAW prompt
+[   0.86s] SEND b'create hello.txt\r'
+[   2.75s] SAW approval-prompt
+[   2.75s] SEND bracketed paste 'notes:\n\nmore\n'
+[   8.96s] SCREEN after-paste (100x30)

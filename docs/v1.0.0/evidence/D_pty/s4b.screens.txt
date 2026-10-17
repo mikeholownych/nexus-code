@@ -1,0 +1,64 @@
+
+===== tool-running @ 4.59s (100x30) =====
+ NEXUS   ws  ⎇ main  model m  session_20261014_124534_415j  auto
+› run it
+  • Run sleep 20; echo finished
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+ ⠹ Run sleep 20; echo finished · 0:03 · step 1 · esc cancels ───────────────────────────────────────
+› type to steer the running turn · esc cancels it
+
+===== after-esc-tool @ 24.13s (100x30) =====
+ NEXUS   ws  ⎇ main  model m  session_20261014_124534_415j  auto
+› run it
+  ✓ Run sleep 20; echo finished · exit 0 · 1 line · 20.0s
+    ▎ finished
+
+◌ Cancelled  You stopped the turn during tool settling.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+ enter send · shift+enter newline · ? help ─────────────────────────────────────────────────────────
+› ask Nexus · / for commands · ? for keys

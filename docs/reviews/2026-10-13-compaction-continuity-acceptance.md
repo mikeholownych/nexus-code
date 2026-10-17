@@ -1,5 +1,7 @@
 # Compaction and task continuity: acceptance ledger (2026-10-13)
 
+> **Historical record.** This document is kept for provenance. Current requirements and status: [docs/v1.0.0/REQUIREMENTS.md](../v1.0.0/REQUIREMENTS.md). Statuses here may have been superseded or contradicted since it was written.
+
 Implementation self-assessment by the implementing agent. Independent acceptance is pending.
 
 ## Identity

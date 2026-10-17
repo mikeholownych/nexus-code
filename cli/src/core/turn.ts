@@ -28,6 +28,7 @@ export type OperatorAcceptance = "NOT_REQUESTED" | "ACCEPTED" | "NOT_ACCEPTED";
 
 export type TurnReason =
   | "NO_APPLICABLE_VERIFIER"
+  | "NO_TESTS_EXECUTED"
   | "VERIFICATION_NOT_RUN"
   | "REGRESSION_FREE"
   | "CONTEXT_EVIDENCE_NOT_RETAINED"
@@ -171,6 +172,8 @@ export interface ProviderRecoveryRecord {
   probes: number;
   waitedMs: number;
   unknownReplays: number;
+  endpoint?: string;
+  everSucceeded?: boolean;
   policy: { deadlineMs: number; maxDelayMs: number; maxUnknownReplays: number };
 }
 
@@ -182,6 +185,7 @@ export interface VerificationEvidence {
   command?: string;
   source?: "configured" | "discovered";
   exitSuccess?: boolean;
+  hasExecutedTests?: boolean;
   isDeliverableBound?: boolean;
   /**
    * A discovered verifier's pass is independent evidence of the change: tests that existed before it, unmodified,
@@ -441,7 +445,7 @@ export function summarizeTurn(t: TurnResult): { heading: string; line: string } 
 }
 
 /** Result for a turn that ended by an exception outside the model/tool protocol (never a success). */
-export function failedTurnFromError(err: unknown, maxSteps: number): TurnResult {
+export function failedTurnFromError(err: unknown, maxSteps: number, unverifiedChangesPending = false, stepsUsed = 0): TurnResult {
   const message = err instanceof Error ? err.message : String(err);
   return deepFreezeTurn(assertTurnResultInvariants({
     execution: "FAILED",
@@ -454,8 +458,8 @@ export function failedTurnFromError(err: unknown, maxSteps: number): TurnResult 
     verification: null,
     interruption: null,
     inferenceFailure: null,
-    steps: { used: 0, max: maxSteps, limitReached: false },
-    unverifiedChangesPending: false,
+    steps: { used: stepsUsed, max: maxSteps, limitReached: false },
+    unverifiedChangesPending,
     finishedAt: new Date().toISOString(),
   }));
 }

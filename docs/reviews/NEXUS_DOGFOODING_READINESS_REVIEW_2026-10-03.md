@@ -1,5 +1,7 @@
 # Nexus Dogfooding Readiness Review — 2026-10-03
 
+> **Historical record.** This document is kept for provenance. Current requirements and status: [docs/v1.0.0/REQUIREMENTS.md](../v1.0.0/REQUIREMENTS.md). Statuses here may have been superseded or contradicted since it was written.
+
 Independent assessment of Nexus as the client/orchestration/product layer for sustained local-inference engineering work.
 Assessment only: no product code, tests, dependencies, remotes or inference-host configuration were changed.
 

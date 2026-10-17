@@ -125,7 +125,7 @@ function makeRepo(files: Record<string, string> = {}): string {
 
 function newAgent(gw: Gateway, repo: string, extra: Record<string, unknown> = {}): AutonomousAgent {
   return new AutonomousAgent({
-    endpoint: gw.url, model: "m", maxSteps: 6, temperature: 0, workspace: repo, shell: "bash", ...extra,
+    endpoint: gw.url, model: "m", maxSteps: 6, temperature: 0, workspace: repo, shell: "bash", approvalMode: "auto", fullAccess: true, ...extra,
   } as any);
 }
 
@@ -243,7 +243,7 @@ describe("A-3 verifier-backed completion", () => {
   });
 
   test("the same trajectory with a passing suite that runs no test of the change is REGRESSION_FREE, not VERIFIED", async () => {
-    await withTurn(falseVerifierScript, { Makefile: "test:\n\t@true\n" }, async (_gw, _repo, agent) => {
+    await withTurn(falseVerifierScript, { Makefile: "test:\n\t@echo 'ℹ tests 1\\nℹ pass 1'\n" }, async (_gw, _repo, agent) => {
       const r = await quiet(() => agent.runTurn("implement"));
       assert.equal(r.execution, "COMPLETED");
       assert.equal(r.outcome, "REGRESSION_FREE");
@@ -254,7 +254,7 @@ describe("A-3 verifier-backed completion", () => {
 
   test("an operator-configured verifier follows the same evidence rule: a run showing no test of the change is REGRESSION_FREE", async () => {
     await withTurn(falseVerifierScript, {}, async (_gw, _repo, agent) => {
-      (agent as any).config.authoritativeVerifierCommand = "true";
+      (agent as any).config.authoritativeVerifierCommand = "echo 'ℹ tests 1\\nℹ pass 1'";
       const r = await quiet(() => agent.runTurn("implement"));
       assert.equal(r.outcome, "REGRESSION_FREE");
       assert.equal(r.verification?.source, "configured");
@@ -580,7 +580,7 @@ describe("A-2 cancellation", () => {
 
 function runCli(gw: Gateway, repo: string, home: string, prompt: string, extraArgs: string[] = []): Promise<{ code: number | null; json: any; stdout: string }> {
   return new Promise((resolve) => {
-    const child = spawn(process.execPath, ["--import", "tsx", srcIndex, "run", "-w", repo, "-e", gw.url, "-m", "m", "-j", "-s", "5", ...extraArgs, prompt], {
+    const child = spawn(process.execPath, ["--import", "tsx", srcIndex, "run", "-w", repo, "-e", gw.url, "-m", "m", "-j", "-s", "5", "--yes", ...extraArgs, prompt], {
       cwd: cliRoot, env: { ...process.env, HOME: home },
     });
     let stdout = "";
@@ -602,7 +602,7 @@ describe("process exit contract (harness run)", () => {
     { name: "step limit", script: () => ({ kind: "tools", calls: [{ name: "list_dir", args: { path: "." } }] }), files: {}, code: 1, outcome: "NOT_ESTABLISHED", execution: "LIMIT_REACHED", success: false },
     { name: "read-only prose answer", script: (n) => n === 1 ? { kind: "tools", calls: [{ name: "list_dir", args: { path: "." } }] } : { kind: "text", content: "one file" }, files: {}, code: 0, outcome: "NOT_REQUIRED", execution: "COMPLETED", success: true },
     { name: "verified completion", script: (n) => n === 1 ? { kind: "tools", calls: [{ name: "write_file", args: { path: "a.txt", content: "1" } }] } : n === 2 ? { kind: "tools", calls: [{ name: "task_completed", args: { summary: "ok" } }] } : { kind: "text", content: "x" }, files: { Makefile: 'test:\n\t@test -s a.txt && echo "✔ a.txt has content" && echo "ℹ tests 1"\n' }, code: 0, outcome: "VERIFIED", execution: "COMPLETED", success: true },
-    { name: "suite passing without testing the change", script: (n) => n === 1 ? { kind: "tools", calls: [{ name: "write_file", args: { path: "a.txt", content: "1" } }] } : n === 2 ? { kind: "tools", calls: [{ name: "task_completed", args: { summary: "ok" } }] } : { kind: "text", content: "x" }, files: { Makefile: "test:\n\t@true\n" }, code: 2, outcome: "REGRESSION_FREE", execution: "COMPLETED", success: false },
+    { name: "suite passing without testing the change", script: (n) => n === 1 ? { kind: "tools", calls: [{ name: "write_file", args: { path: "a.txt", content: "1" } }] } : n === 2 ? { kind: "tools", calls: [{ name: "task_completed", args: { summary: "ok" } }] } : { kind: "text", content: "x" }, files: { Makefile: "test:\n\t@echo 'ℹ tests 1\\nℹ pass 1'\n" }, code: 2, outcome: "REGRESSION_FREE", execution: "COMPLETED", success: false },
     { name: "completed without applicable verifier", script: (n) => n === 1 ? { kind: "tools", calls: [{ name: "write_file", args: { path: "a.txt", content: "1" } }] } : n === 2 ? { kind: "tools", calls: [{ name: "task_completed", args: { summary: "ok" } }] } : { kind: "text", content: "x" }, files: {}, code: 2, outcome: "UNVERIFIED", execution: "COMPLETED", success: false },
   ];
   for (const c of cases) {
@@ -631,7 +631,7 @@ const hasScript = spawnSync("script", ["--version"], { encoding: "utf-8" }).stat
 
 describe("interactive REPL (pty)", { skip: hasScript ? false : "util-linux `script` not available" }, () => {
   async function session(gw: Gateway, repo: string, home: string) {
-    const cmd = `${JSON.stringify(process.execPath)} --import tsx ${JSON.stringify(srcIndex)} repl -w ${JSON.stringify(repo)} -e ${JSON.stringify(gw.url)} -m m`;
+    const cmd = `${JSON.stringify(process.execPath)} --import tsx ${JSON.stringify(srcIndex)} repl --mode auto -w ${JSON.stringify(repo)} -e ${JSON.stringify(gw.url)} -m m`;
     const child = spawn("script", ["-qfec", cmd, "/dev/null"], { cwd: cliRoot, env: { ...process.env, HOME: home, TERM: "xterm", COLUMNS: "120", LINES: "40" } });
     let out = "";
     child.stdout.on("data", (d) => (out += d.toString()));

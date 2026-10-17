@@ -164,7 +164,11 @@ export async function startGateway(script: (n: number, body?: any) => Reply, opt
 export function makeRepo(files: Record<string, string> = {}): string {
   const repo = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-sidecar-"));
   fs.writeFileSync(path.join(repo, "base.txt"), "base\n");
-  for (const [name, content] of Object.entries(files)) fs.writeFileSync(path.join(repo, name), content);
+  for (const [name, content] of Object.entries(files)) {
+    const full = path.join(repo, name);
+    fs.mkdirSync(path.dirname(full), { recursive: true });
+    fs.writeFileSync(full, content);
+  }
   execSync("git init -q && git config user.name t && git config user.email t@t.invalid && git add . && git commit -qm base", { cwd: repo, stdio: "ignore" });
   return repo;
 }

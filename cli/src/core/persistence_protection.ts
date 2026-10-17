@@ -1,7 +1,10 @@
 import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
 import { createHash, randomUUID } from "node:crypto";
 import { InformationFlowBoundary } from "./egress.js";
 import { WorkspacePath } from "./workspace_path.js";
+import { ensurePrivateDir, writePrivateFile, appendPrivateFile } from "./durable_file.js";
 
 export class SensitivePersistenceError extends Error {
   constructor(destination: string) {
@@ -130,19 +133,90 @@ export function assertNoSensitivePersistenceContent(value: unknown, destination:
 
 export function appendProtectedHistoryLine(filePath: string, line: string): void {
   const safeLine = redactForPersistence(line);
-  fs.appendFileSync(filePath, `${safeLine}\n`, "utf8");
+  appendPrivateFile(filePath, `${safeLine}\n`);
 }
 
 export function writeProtectedTextFile(filePath: string, content: string): void {
   const safeContent = redactForPersistence(content);
-  const tempPath = `${filePath}.${randomUUID()}.tmp`;
   try {
-    fs.writeFileSync(tempPath, safeContent, { encoding: "utf8", flag: "wx" });
-    fs.renameSync(tempPath, filePath);
+    writePrivateFile(filePath, safeContent, { durable: true });
   } catch {
-    try {
-      if (fs.existsSync(tempPath)) fs.unlinkSync(tempPath);
-    } catch {}
     throw new Error("Protected persistence write failed");
   }
 }
+
+export interface MiddlewareAuditRecord {
+  kind: "middleware_rewrite";
+  plugin: string;
+  tool: string;
+  phase: "pre" | "post";
+  before_digest: string;
+  after_digest: string;
+  timestamp?: string;
+  workspace?: string;
+}
+
+export const DEFAULT_AUDIT_MAX_BYTES = 10 * 1024 * 1024; // 10 MB (REQ-PER-102, DEC-11)
+export const DEFAULT_AUDIT_MAX_FILES = 5;
+
+export function getAuditMaxBytes(): number {
+  const envVal = process.env.NEXUS_AUDIT_MAX_BYTES;
+  if (envVal) {
+    const parsed = parseInt(envVal, 10);
+    if (!isNaN(parsed) && parsed > 0) return parsed;
+  }
+  return DEFAULT_AUDIT_MAX_BYTES;
+}
+
+/**
+ * Rotate audit.log when it exceeds maxBytes, keeping maxFiles backups (REQ-PER-102, ACC-PER-06).
+ * Backups are audit.log.1 through audit.log.5, with permissions 0600.
+ */
+export function rotateAuditLogIfNeeded(
+  auditPath: string,
+  maxBytes: number = getAuditMaxBytes(),
+  maxFiles: number = DEFAULT_AUDIT_MAX_FILES
+): boolean {
+  try {
+    if (!fs.existsSync(auditPath)) return false;
+    const stat = fs.statSync(auditPath);
+    if (stat.size < maxBytes) return false;
+
+    for (let i = maxFiles; i >= 1; i--) {
+      const src = i === 1 ? auditPath : `${auditPath}.${i - 1}`;
+      const dest = `${auditPath}.${i}`;
+      if (fs.existsSync(src)) {
+        if (i === maxFiles && fs.existsSync(dest)) {
+          try { fs.unlinkSync(dest); } catch {}
+        }
+        try {
+          fs.renameSync(src, dest);
+          try { fs.chmodSync(dest, 0o600); } catch {}
+        } catch {}
+      }
+    }
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Record a middleware I/O rewrite audit record to ~/.nexus/audit.log (REQ-SEC-116, EXT-004, REQ-PER-102).
+ */
+export function recordMiddlewareAudit(record: MiddlewareAuditRecord): void {
+  try {
+    const auditDir = path.join(os.homedir(), ".nexus");
+    ensurePrivateDir(auditDir);
+    const auditPath = path.join(auditDir, "audit.log");
+    rotateAuditLogIfNeeded(auditPath);
+    const entry = {
+      timestamp: record.timestamp || new Date().toISOString(),
+      ...record,
+    };
+    appendPrivateFile(auditPath, JSON.stringify(entry) + "\n");
+  } catch {
+    // Ignore audit log write errors in restricted environments
+  }
+}
+

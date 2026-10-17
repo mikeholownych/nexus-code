@@ -1,8 +1,18 @@
 import { ToolCall, ChatMessage } from "./types.js";
 import { HARNESS_TOOLS } from "./tools.js";
+import { defaultRegistry } from "./core/capabilities.js";
 
 const KNOWN_TOOLS = new Set<string>(HARNESS_TOOLS.map((t) => t.function.name));
 ["update_requirements", "task_completed", "manage_knowledge", "update_plan", "spawn_subagent"].forEach((t) => KNOWN_TOOLS.add(t));
+
+export type JsonRepairClass = "none" | "trailing" | "structural";
+
+export function isWriteOrExecTool(name: string): boolean {
+  const cap = defaultRegistry.getByToolName(name);
+  if (cap) return cap.effect === "write_workspace" || cap.effect === "exec";
+  if (name.startsWith("mcp__") || name.startsWith("custom__")) return true;
+  return ["write_file", "edit_file", "patch_file", "delete_file", "run_command", "run_tests", "git_commit", "git_stage", "checkpoint_restore"].includes(name);
+}
 
 export function isKnownToolName(name: string): boolean {
   if (typeof name !== "string") return false;
@@ -13,7 +23,14 @@ export interface ParsedModelOutput {
   thoughtText: string;
   reasoningText?: string;
   toolCalls: ToolCall[];
+  notices?: string[];
 }
+
+export interface ParseModelResponseOptions {
+  offered?: Iterable<string>;
+  nativeTools?: boolean;
+}
+
 
 function escapeControlCharsInStrings(str: string): string {
   let inString = false;
@@ -125,8 +142,8 @@ function mapOutsideStrings(str: string, fix: (segment: string) => string): strin
   return out + (inString ? segment : fix(segment));
 }
 
-export function repairJson<T = any>(raw: string): T {
-  if (typeof raw !== "string") return raw as unknown as T;
+export function repairJsonWithClass<T = any>(raw: string): { value: T; repaired: JsonRepairClass } {
+  if (typeof raw !== "string") return { value: raw as unknown as T, repaired: "none" };
   let str = raw.trim();
 
   // Strip wrapping markdown code blocks if present
@@ -137,7 +154,7 @@ export function repairJson<T = any>(raw: string): T {
 
   // Fast path: try standard JSON.parse first
   try {
-    return JSON.parse(str);
+    return { value: JSON.parse(str), repaired: "none" };
   } catch {
     // Proceed to heuristic repairs
   }
@@ -145,7 +162,7 @@ export function repairJson<T = any>(raw: string): T {
   // 1. Escape unescaped newlines/tabs inside string literals
   const controlsEscaped = escapeControlCharsInStrings(str);
   try {
-    return JSON.parse(controlsEscaped);
+    return { value: JSON.parse(controlsEscaped), repaired: "trailing" };
   } catch {
     // Continue
   }
@@ -153,7 +170,7 @@ export function repairJson<T = any>(raw: string): T {
   // 2. Replace Python literals outside string values
   let cleaned = replaceUnquotedPythonLiterals(controlsEscaped);
   try {
-    return JSON.parse(cleaned);
+    return { value: JSON.parse(cleaned), repaired: "trailing" };
   } catch {
     // Continue
   }
@@ -161,7 +178,7 @@ export function repairJson<T = any>(raw: string): T {
   // 3. Remove trailing commas before closing braces/brackets
   cleaned = mapOutsideStrings(cleaned, (part) => part.replace(/,\s*([}\]])/g, "$1"));
   try {
-    return JSON.parse(cleaned);
+    return { value: JSON.parse(cleaned), repaired: "trailing" };
   } catch {
     // Continue
   }
@@ -169,7 +186,7 @@ export function repairJson<T = any>(raw: string): T {
   // 4. Fix unquoted keys: { key: "value" } -> { "key": "value" }
   cleaned = mapOutsideStrings(cleaned, (part) => part.replace(/([{,]\s*)([a-zA-Z_][a-zA-Z0-9_-]*)\s*:/g, '$1"$2":'));
   try {
-    return JSON.parse(cleaned);
+    return { value: JSON.parse(cleaned), repaired: "trailing" };
   } catch {
     // Continue to quote repairs
   }
@@ -181,7 +198,7 @@ export function repairJson<T = any>(raw: string): T {
   });
 
   try {
-    return JSON.parse(singleQuoteCleaned);
+    return { value: JSON.parse(singleQuoteCleaned), repaired: "trailing" };
   } catch {
     // Continue to bracket repair
   }
@@ -210,26 +227,40 @@ export function repairJson<T = any>(raw: string): T {
   while (openBrackets > 0) { balanced += "]"; openBrackets--; }
   while (openBraces > 0) { balanced += "}"; openBraces--; }
   try {
-    return JSON.parse(balanced);
+    return { value: JSON.parse(balanced), repaired: "structural" };
   } catch {
-    return JSON.parse(str);
+    return { value: JSON.parse(str), repaired: "none" };
   }
 }
 
-/**
- * Normalizes tool arguments, unwrapping nested wrapper payloads (input, parameters, args)
- * and repairing malformed JSON strings.
- */
-function normalizeToolArgs(args: any): string {
+export function repairJson<T = any>(raw: string): T {
+  const { value, repaired } = repairJsonWithClass<T>(raw);
+  if (value && typeof value === "object") {
+    try {
+      Object.defineProperty(value, "repaired", { value: repaired, enumerable: false, configurable: true });
+    } catch {}
+  }
+  return value;
+}
+
+function mergeRepairClass(a: JsonRepairClass, b: JsonRepairClass): JsonRepairClass {
+  if (a === "structural" || b === "structural") return "structural";
+  if (a === "trailing" || b === "trailing") return "trailing";
+  return "none";
+}
+
+function normalizeToolArgsWithClass(args: any): { args: string; repaired: JsonRepairClass } {
   if (typeof args === "string") {
     try {
-      const parsed = repairJson(args);
-      return normalizeToolArgs(parsed);
+      const { value: parsed, repaired } = repairJsonWithClass(args);
+      const inner = normalizeToolArgsWithClass(parsed);
+      return { args: inner.args, repaired: mergeRepairClass(repaired, inner.repaired) };
     } catch {
-      return args;
+      return { args, repaired: "structural" };
     }
   }
   if (typeof args === "object" && args !== null) {
+    const outerRepaired: JsonRepairClass = (args as any).repaired ?? "none";
     if (args.input && typeof args.input === "object" && !Array.isArray(args.input) && Object.keys(args).length === 1) {
       args = args.input;
     } else if (args.parameters && typeof args.parameters === "object" && !Array.isArray(args.parameters) && Object.keys(args).length === 1) {
@@ -237,9 +268,17 @@ function normalizeToolArgs(args: any): string {
     } else if (args.args && typeof args.args === "object" && !Array.isArray(args.args) && Object.keys(args).length === 1) {
       args = args.args;
     }
-    return JSON.stringify(args);
+    return { args: JSON.stringify(args), repaired: outerRepaired };
   }
-  return JSON.stringify(args || {});
+  return { args: JSON.stringify(args || {}), repaired: "none" };
+}
+
+/**
+ * Normalizes tool arguments, unwrapping nested wrapper payloads (input, parameters, args)
+ * and repairing malformed JSON strings.
+ */
+function normalizeToolArgs(args: any): string {
+  return normalizeToolArgsWithClass(args).args;
 }
 
 /**
@@ -295,100 +334,341 @@ function extractBalancedJsonObjects(text: string, known: (name: string) => boole
   return results;
 }
 
+function extractReasoning(message: ChatMessage, rawContent: string): { thoughtText: string; reasoningText?: string } {
+  const reasoningParts: string[] = [];
+
+  const msgObj = message as Record<string, any>;
+  if (typeof msgObj.reasoning_content === "string" && msgObj.reasoning_content.trim()) {
+    reasoningParts.push(msgObj.reasoning_content.trim());
+  } else if (typeof msgObj.reasoning === "string" && msgObj.reasoning.trim()) {
+    reasoningParts.push(msgObj.reasoning.trim());
+  }
+
+  let text = rawContent;
+
+  // 1. Paired tags: <think>...</think>, <thought>...</thought>, <reasoning>...</reasoning>
+  const pairedRegex = /<(think|thought|reasoning)>([\s\S]*?)<\/\1>/gi;
+  let match: RegExpExecArray | null;
+  while ((match = pairedRegex.exec(text)) !== null) {
+    if (match[2].trim()) {
+      reasoningParts.push(match[2].trim());
+    }
+  }
+  text = text.replace(pairedRegex, "");
+
+  // 2. Lone closing tag: </think>, </thought>, </reasoning>
+  // "Text before a lone </think> ... is reasoning and is never parsed for tool calls" (REQ-AGT-113)
+  const loneCloseMatch = /<\/(?:think|thought|reasoning)>/i.exec(text);
+  if (loneCloseMatch) {
+    const beforeClose = text.slice(0, loneCloseMatch.index).trim();
+    if (beforeClose) {
+      reasoningParts.push(beforeClose);
+    }
+    text = text.slice(loneCloseMatch.index + loneCloseMatch[0].length);
+  }
+
+  // 3. Unclosed opening tag: <think>, <thought>, <reasoning>
+  // "text after an unclosed <think> is reasoning and is never parsed for tool calls" (REQ-AGT-113)
+  const unclosedOpenMatch = /<(?:think|thought|reasoning)>/i.exec(text);
+  if (unclosedOpenMatch) {
+    const afterOpen = text.slice(unclosedOpenMatch.index + unclosedOpenMatch[0].length).trim();
+    if (afterOpen) {
+      reasoningParts.push(afterOpen);
+    }
+    text = text.slice(0, unclosedOpenMatch.index);
+  }
+
+  const thoughtText = text.trim();
+  const reasoningText = reasoningParts.length > 0 ? reasoningParts.join("\n\n") : undefined;
+  return { thoughtText, reasoningText };
+}
+
+function extractSoleFencedCall(text: string): { raw: string; content: string } | null {
+  const trimmed = text.trim();
+  const match = /^```(?:json)?\s*([\s\S]*?)\s*```$/i.exec(trimmed);
+  if (!match) return null;
+  if (match[1].includes("```")) return null;
+  return { raw: trimmed, content: match[1].trim() };
+}
+
 /**
- * Robust model response parser optimized for local LLM output patterns.
- * Isolates DeepSeek R1 reasoning (<think> tags), handles standard tool_calls,
- * XML <tool_call> tags, Markdown json codeblocks, and embedded JSON objects with self-healing JSON repair.
+ * Parses an assistant message into reply text, reasoning and tool calls.
+ * Implements REQ-AGT-112, REQ-AGT-113, and REQ-AGT-117 (PLAN-11).
+ * When nativeTools is enabled (or native tool_calls are present), only native tool_calls are parsed.
+ * On text connections, only <tool_call> tags or a reply that consists solely of one fenced JSON call are parsed.
+ * Prose JSON is never parsed.
  */
-/**
- * Parses an assistant message into reply text, reasoning and tool calls. Tool calls written as text (JSON blocks,
- * `<tool_call>` tags) are accepted only for tools offered on that request (`offered`, when given) or known built-ins.
- */
-export function parseModelResponse(message: ChatMessage, offered?: Iterable<string>): ParsedModelOutput {
+export function parseModelResponse(
+  message: ChatMessage,
+  optionsOrOffered?: Iterable<string> | ParseModelResponseOptions
+): ParsedModelOutput {
+  let offered: Iterable<string> | undefined;
+  let nativeTools: boolean | undefined;
+
+  if (optionsOrOffered) {
+    if (typeof (optionsOrOffered as any)[Symbol.iterator] === "function" && !(optionsOrOffered as any).offered) {
+      offered = optionsOrOffered as Iterable<string>;
+    } else {
+      const opts = optionsOrOffered as ParseModelResponseOptions;
+      offered = opts.offered;
+      nativeTools = opts.nativeTools;
+    }
+  }
+
   const offeredNames = offered ? new Set(offered) : null;
   const known = (name: string): boolean => (offeredNames ? offeredNames.has(name) : isKnownToolName(name));
   const toolCalls: ToolCall[] = [];
-  let thoughtText = typeof message.content === "string"
+  const notices: string[] = [];
+
+  const rawContent = typeof message.content === "string"
     ? message.content
     : Array.isArray(message.content)
       ? JSON.stringify(message.content)
       : "";
 
-  let reasoningText: string | undefined = undefined;
+  let { thoughtText, reasoningText } = extractReasoning(message, rawContent);
 
-  // 1. Extract DeepSeek R1 / thinking tags: <think>...</think> and <thought>...</thought>
-  const thinkRegex = /<(?:think|thought)>([\s\S]*?)<\/(?:think|thought)>/gi;
-  const thinkMatches: string[] = [];
-  let match: RegExpExecArray | null;
-  while ((match = thinkRegex.exec(thoughtText)) !== null) {
-    if (match[1].trim()) {
-      thinkMatches.push(match[1].trim());
+  const isNative = nativeTools !== undefined
+    ? nativeTools
+    : Boolean(message.tool_calls && Array.isArray(message.tool_calls) && message.tool_calls.length > 0);
+
+  // Native connection: execute only native tool_calls
+  if (isNative) {
+    if (message.tool_calls && Array.isArray(message.tool_calls) && message.tool_calls.length > 0) {
+      for (const tc of message.tool_calls) {
+        if (
+          !tc ||
+          typeof tc !== "object" ||
+          !tc.function ||
+          typeof tc.function !== "object" ||
+          typeof tc.function.name !== "string" ||
+          !tc.function.name.trim()
+        ) {
+          notices.push("Malformed native tool call dropped: missing function object or name.");
+          continue;
+        }
+        const name = tc.function.name.trim();
+        if (offeredNames && !offeredNames.has(name)) {
+          notices.push(`Tool "${name}" is not offered on this request and was not executed.`);
+          continue;
+        }
+        const normalized = normalizeToolArgsWithClass(tc.function.arguments);
+        if (normalized.repaired === "structural" && isWriteOrExecTool(name)) {
+          notices.push(
+            `Tool call "${name}" rejected: arguments required structural JSON repair (truncated or unclosed string/bracket). Re-issue the call with complete valid JSON arguments.`
+          );
+          continue;
+        }
+        toolCalls.push({
+          id: tc.id || `call_${Math.random().toString(36).substring(2, 9)}`,
+          type: "function",
+          function: {
+            name,
+            arguments: normalized.args,
+          },
+        });
+      }
     }
+    return {
+      thoughtText,
+      reasoningText,
+      toolCalls,
+      ...(notices.length > 0 ? { notices } : {}),
+    };
   }
 
-  if (thinkMatches.length > 0) {
-    reasoningText = thinkMatches.join("\n\n");
-    thoughtText = thoughtText.replace(thinkRegex, "").trim();
-  }
-
-  // 2. If standard OpenAI function calling tool_calls are present:
+  // Text-only connection:
+  // 1. If native tool_calls are present on message, validate and accept them
   if (message.tool_calls && Array.isArray(message.tool_calls) && message.tool_calls.length > 0) {
     for (const tc of message.tool_calls) {
+      if (
+        !tc ||
+        typeof tc !== "object" ||
+        !tc.function ||
+        typeof tc.function !== "object" ||
+        typeof tc.function.name !== "string" ||
+        !tc.function.name.trim()
+      ) {
+        notices.push("Malformed native tool call dropped: missing function object or name.");
+        continue;
+      }
+      const name = tc.function.name.trim();
+      if (!known(name)) {
+        notices.push(`Tool "${name}" is not offered on this request and was not executed.`);
+        continue;
+      }
+      const normalized = normalizeToolArgsWithClass(tc.function.arguments);
+      if (normalized.repaired === "structural" && isWriteOrExecTool(name)) {
+        notices.push(
+          `Tool call "${name}" rejected: arguments required structural JSON repair (truncated or unclosed string/bracket). Re-issue the call with complete valid JSON arguments.`
+        );
+        continue;
+      }
       toolCalls.push({
         id: tc.id || `call_${Math.random().toString(36).substring(2, 9)}`,
         type: "function",
         function: {
-          name: tc.function.name,
-          arguments: normalizeToolArgs(tc.function.arguments),
+          name,
+          arguments: normalized.args,
         },
       });
     }
-    return { thoughtText, reasoningText, toolCalls };
+    if (toolCalls.length > 0 || notices.length > 0) {
+      return {
+        thoughtText,
+        reasoningText,
+        toolCalls,
+        ...(notices.length > 0 ? { notices } : {}),
+      };
+    }
   }
 
   if (!thoughtText && !reasoningText) {
-    return { thoughtText: "", toolCalls: [] };
+    return {
+      thoughtText: "",
+      toolCalls: [],
+      ...(notices.length > 0 ? { notices } : {}),
+    };
   }
 
-  // 3. Try XML style fallback: <tool_call> ... </tool_call>
+  // 2. Try XML style: <tool_call> ... </tool_call>
   const xmlRegex = /<tool_call>([\s\S]*?)<\/tool_call>/gi;
   let xmlMatch: RegExpExecArray | null;
+  let hadXmlMatch = false;
   while ((xmlMatch = xmlRegex.exec(thoughtText)) !== null) {
+    hadXmlMatch = true;
     const raw = xmlMatch[1].trim();
     try {
-      const parsed = repairJson(raw);
+      const { value: parsed, repaired: outerRepaired } = repairJsonWithClass(raw);
       const name = parsed.name || parsed.tool || parsed.function;
       const args = parsed.arguments || parsed.parameters || parsed.args || {};
-      if (name && typeof name === "string" && known(name)) {
-        toolCalls.push({
-          id: `call_${Math.random().toString(36).substring(2, 9)}`,
-          type: "function",
-          function: {
-            name,
-            arguments: normalizeToolArgs(args),
-          },
-        });
+      if (name && typeof name === "string") {
+        if (known(name)) {
+          const normalized = normalizeToolArgsWithClass(args);
+          const repaired = mergeRepairClass(outerRepaired, normalized.repaired);
+          if (repaired === "structural" && isWriteOrExecTool(name)) {
+            notices.push(
+              `Tool call "${name}" rejected: arguments required structural JSON repair (truncated or unclosed string/bracket). Re-issue the call with complete valid JSON arguments.`
+            );
+          } else {
+            toolCalls.push({
+              id: `call_${Math.random().toString(36).substring(2, 9)}`,
+              type: "function",
+              function: {
+                name,
+                arguments: normalized.args,
+              },
+            });
+          }
+        } else {
+          notices.push(`Tool "${name}" is not offered on this request and was not executed.`);
+        }
       }
     } catch {
       // Ignore invalid JSON inside tool_call tag
     }
   }
 
-  if (toolCalls.length > 0) {
+  if (toolCalls.length > 0 || (hadXmlMatch && notices.length > 0)) {
     thoughtText = thoughtText.replace(xmlRegex, "").trim();
-    return { thoughtText, reasoningText, toolCalls };
+    return {
+      thoughtText,
+      reasoningText,
+      toolCalls,
+      ...(notices.length > 0 ? { notices } : {}),
+    };
   }
 
-  // 4. Try Markdown code blocks: ```json { "name": "...", "arguments": { ... } } ```
-  const codeBlockRegex = /```(?:json)?\s*([\s\S]*?)```/gi;
-  let blockMatch: RegExpExecArray | null;
-  while ((blockMatch = codeBlockRegex.exec(thoughtText)) !== null) {
-    const raw = blockMatch[1].trim();
+  // 3. Try sole fenced JSON tool call:
+  // "a reply that consists solely of one fenced JSON tool call" (REQ-AGT-112)
+  const soleFenced = extractSoleFencedCall(thoughtText);
+  if (soleFenced) {
     try {
-      const parsed = repairJson(raw);
+      const { value: parsed, repaired: outerRepaired } = repairJsonWithClass(soleFenced.content);
       if (typeof parsed === "object" && parsed !== null) {
         const name = parsed.name || parsed.tool || parsed.action;
         const args = parsed.arguments || parsed.parameters || parsed.args || parsed.input;
+        if (name && typeof name === "string") {
+          if (known(name)) {
+            const normalized = normalizeToolArgsWithClass(args);
+            const repaired = mergeRepairClass(outerRepaired, normalized.repaired);
+            if (repaired === "structural" && isWriteOrExecTool(name)) {
+              notices.push(
+                `Tool call "${name}" rejected: arguments required structural JSON repair (truncated or unclosed string/bracket). Re-issue the call with complete valid JSON arguments.`
+              );
+              thoughtText = "";
+              return {
+                thoughtText,
+                reasoningText,
+                toolCalls,
+                ...(notices.length > 0 ? { notices } : {}),
+              };
+            }
+            toolCalls.push({
+              id: `call_${Math.random().toString(36).substring(2, 9)}`,
+              type: "function",
+              function: {
+                name,
+                arguments: normalized.args,
+              },
+            });
+            thoughtText = "";
+            return {
+              thoughtText,
+              reasoningText,
+              toolCalls,
+              ...(notices.length > 0 ? { notices } : {}),
+            };
+          } else {
+            notices.push(`Tool "${name}" is not offered on this request and was not executed.`);
+          }
+        }
+      }
+    } catch {
+      // Not valid JSON in code block
+    }
+  }
+
+  // 4. One-RC escape hatch: NEXUS_TEXT_TOOL_PARSING=legacy
+  if (process.env.NEXUS_TEXT_TOOL_PARSING === "legacy") {
+    const codeBlockRegex = /```(?:json)?\s*([\s\S]*?)```/gi;
+    let blockMatch: RegExpExecArray | null;
+    while ((blockMatch = codeBlockRegex.exec(thoughtText)) !== null) {
+      const raw = blockMatch[1].trim();
+      try {
+        const parsed = repairJson(raw);
+        if (typeof parsed === "object" && parsed !== null) {
+          const name = parsed.name || parsed.tool || parsed.action;
+          const args = parsed.arguments || parsed.parameters || parsed.args || parsed.input;
+          if (name && typeof name === "string" && known(name)) {
+            toolCalls.push({
+              id: `call_${Math.random().toString(36).substring(2, 9)}`,
+              type: "function",
+              function: {
+                name,
+                arguments: normalizeToolArgs(args),
+              },
+            });
+          }
+        }
+      } catch {}
+    }
+
+    if (toolCalls.length > 0) {
+      thoughtText = thoughtText.replace(codeBlockRegex, "").trim();
+      return {
+        thoughtText,
+        reasoningText,
+        toolCalls,
+        ...(notices.length > 0 ? { notices } : {}),
+      };
+    }
+
+    const balancedObjects = extractBalancedJsonObjects(thoughtText, known);
+    if (balancedObjects.length > 0) {
+      for (const item of balancedObjects) {
+        const name = item.parsed.name || item.parsed.tool || item.parsed.action;
+        const args = item.parsed.arguments || item.parsed.parameters || item.parsed.args || item.parsed.input;
         if (name && typeof name === "string" && known(name)) {
           toolCalls.push({
             id: `call_${Math.random().toString(36).substring(2, 9)}`,
@@ -398,40 +678,24 @@ export function parseModelResponse(message: ChatMessage, offered?: Iterable<stri
               arguments: normalizeToolArgs(args),
             },
           });
+          thoughtText = thoughtText.replace(item.raw, "").trim();
         }
       }
-    } catch {
-      // Not a valid tool call code block
-    }
-  }
-
-  if (toolCalls.length > 0) {
-    thoughtText = thoughtText.replace(codeBlockRegex, "").trim();
-    return { thoughtText, reasoningText, toolCalls };
-  }
-
-  // 5. Try embedded balanced JSON objects in text (e.g. model generates explanation + raw JSON without markdown)
-  const balancedObjects = extractBalancedJsonObjects(thoughtText, known);
-  if (balancedObjects.length > 0) {
-    for (const item of balancedObjects) {
-      const name = item.parsed.name || item.parsed.tool || item.parsed.action;
-      const args = item.parsed.arguments || item.parsed.parameters || item.parsed.args || item.parsed.input;
-      if (name && typeof name === "string" && known(name)) {
-        toolCalls.push({
-          id: `call_${Math.random().toString(36).substring(2, 9)}`,
-          type: "function",
-          function: {
-            name,
-            arguments: normalizeToolArgs(args),
-          },
-        });
-        thoughtText = thoughtText.replace(item.raw, "").trim();
+      if (toolCalls.length > 0) {
+        return {
+          thoughtText,
+          reasoningText,
+          toolCalls,
+          ...(notices.length > 0 ? { notices } : {}),
+        };
       }
     }
-    if (toolCalls.length > 0) {
-      return { thoughtText, reasoningText, toolCalls };
-    }
   }
 
-  return { thoughtText, reasoningText, toolCalls };
+  return {
+    thoughtText,
+    reasoningText,
+    toolCalls,
+    ...(notices.length > 0 ? { notices } : {}),
+  };
 }

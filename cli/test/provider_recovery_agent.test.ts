@@ -36,6 +36,7 @@ async function withAgent<T>(
   const agent = new AutonomousAgent({
     endpoint: gws[0].url, fallbackEndpoints: gws.slice(1).map((g) => g.url),
     model: "m", maxSteps: 6, temperature: 0, workspace: repo, shell: "bash",
+    approvalMode: "auto", fullAccess: true,
   } as any);
   const a = agent as any;
   a.recoveryClock = clock;
@@ -329,5 +330,55 @@ describe("operator surfaces", () => {
   test("projected turns redact recovery submission messages", () => {
     const turn = { providerRecovery: [record], inferenceFailure: null, verification: null, interruption: null } as unknown as TurnResult;
     assert.doesNotMatch(JSON.stringify(projectTurn(turn)), /sk-secret-token/);
+  });
+});
+
+describe("capacity rejection handling (ACC-INF-02)", () => {
+  test("ACC-INF-02: capacity rejection triggers one compaction and retry that succeeds", async () => {
+    const gw = await startGateway((n) => {
+      if (n === 1) {
+        return {
+          kind: "http",
+          status: 400,
+          body: JSON.stringify({
+            error: {
+              code: 400,
+              message: "the request exceeds the available context size, try increasing it",
+              type: "exceed_context_size_error",
+              n_prompt_tokens: 9000,
+              n_ctx: 8192,
+            },
+          }),
+        };
+      }
+      return { kind: "text", content: "completed after compact" };
+    });
+    await withAgent([gw], fakeClock(), async (agent) => {
+      const r = await agent.runTurn("solve problem");
+      assert.equal(r.execution, "COMPLETED");
+      assert.equal(r.modelStop, "FINAL_TEXT");
+      assert.ok(gw.requests.length >= 2, "compact-and-retry attempted the request a second time");
+    });
+  });
+
+  test("ACC-INF-02: second capacity rejection ends turn with actionable message naming --context-limit", async () => {
+    const gw = await startGateway(() => ({
+      kind: "http",
+      status: 400,
+      body: JSON.stringify({
+        object: "error",
+        message: "This model's maximum context length is 8192 tokens. However, you requested 9000 tokens",
+        type: "BadRequestError",
+        code: 400,
+      }),
+    }));
+    await withAgent([gw], fakeClock(), async (agent) => {
+      const r = await agent.runTurn("solve problem");
+      assert.equal(r.execution, "FAILED");
+      assert.equal(r.reason, "INFERENCE_FAILED");
+      assert.match(r.inferenceFailure?.message || "", /Set --context-limit \d+/);
+      assert.match(r.inferenceFailure?.message || "", /CAPACITY_REJECTED/);
+      assert.equal(gw.requests.length, 2, "attempted once, compacted, attempted second time, then stopped");
+    });
   });
 });

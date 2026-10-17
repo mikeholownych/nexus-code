@@ -1,6 +1,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { execSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { extractCompilerDiagnostics, Diagnostic } from "./diagnostics.js";
 
 export interface TestRunResult {
@@ -15,68 +16,30 @@ export interface TestRunResult {
 
 export type TestCommandExecutor = (command: string) => Promise<{ success: boolean; output: string; error?: string; timedOut?: boolean }>;
 
-/**
- * Auto-detect project test command (Candidate #47)
- */
-export function detectTestCommand(workspace: string, filterPattern?: string): string {
-  const root = path.resolve(workspace);
+export const DEFAULT_VERIFIER_TIMEOUT_SECS = 300;
 
-  if (filterPattern) {
-    // The filter is interpolated into a shell command: letters, digits and `_ : . / -` with single spaces only (no
-    // newline, quote or shell metacharacter), and it may not start with `-` (it would become a runner flag).
-    const trimmed = filterPattern.trim();
-    if (!/^[A-Za-z0-9_:./ -]+$/.test(trimmed) || trimmed.startsWith("-")) {
-      throw new Error(`Invalid test filter pattern '${filterPattern}': contains unsafe characters.`);
-    }
-    filterPattern = trimmed;
+export function verifierTimeoutSecs(configured?: number): number {
+  if (typeof configured === "number" && Number.isFinite(configured) && configured > 0) {
+    return Math.floor(configured);
   }
-
-  // 1. Makefile with test target
-  const makefile = path.join(root, "Makefile");
-  if (fs.existsSync(makefile)) {
-    try {
-      const content = fs.readFileSync(makefile, "utf-8");
-      if (content.includes("test:")) {
-        return filterPattern ? `make test FILTER="${filterPattern}"` : "make test";
-      }
-    } catch {}
+  const envVal = Number(process.env.NEXUS_VERIFIER_TIMEOUT_SECS);
+  if (Number.isFinite(envVal) && envVal > 0) {
+    return Math.floor(envVal);
   }
-
-  // 2. Cargo.toml (Rust)
-  if (fs.existsSync(path.join(root, "Cargo.toml"))) {
-    return filterPattern ? `cargo test -- ${filterPattern}` : "cargo test";
-  }
-  if (fs.existsSync(path.join(root, "core", "Cargo.toml"))) {
-    return filterPattern
-      ? `cargo test --manifest-path core/Cargo.toml -- ${filterPattern}`
-      : "cargo test --manifest-path core/Cargo.toml";
-  }
-
-  // 3. package.json (Node / TS)
-  if (fs.existsSync(path.join(root, "package.json"))) {
-    return filterPattern ? `npm test -- -t "${filterPattern}"` : "npm test";
-  }
-  if (fs.existsSync(path.join(root, "cli", "package.json"))) {
-    return filterPattern ? `npm --prefix cli test -- -t "${filterPattern}"` : "npm --prefix cli test";
-  }
-
-  // 4. Python
-  if (fs.existsSync(path.join(root, "pyproject.toml")) || fs.existsSync(path.join(root, "setup.py"))) {
-    return filterPattern ? `pytest -k "${filterPattern}"` : "pytest";
-  }
-
-  // 5. Go
-  if (fs.existsSync(path.join(root, "go.mod"))) {
-    return filterPattern ? `go test ./... -run "${filterPattern}"` : "go test ./...";
-  }
-
-  // 6. Python test files without project configuration: the standard library's runner
-  const unittest = unittestLayout(root);
-  if (unittest) return filterPattern ? `${unittest.command} -k "${filterPattern}"` : unittest.command;
-
-  return "npm test";
+  return DEFAULT_VERIFIER_TIMEOUT_SECS;
 }
 
+function validateFilterPattern(filterPattern?: string): string | undefined {
+  if (!filterPattern) return undefined;
+  // The filter is interpolated into a shell command: letters, digits and `_ : . / -` with single spaces only (no
+  // newline, quote or shell metacharacter), and it may not start with `-` (it would become a runner flag).
+  const trimmed = filterPattern.trim();
+  if (!trimmed) return undefined;
+  if (!/^[A-Za-z0-9_:./ -]+$/.test(trimmed) || trimmed.startsWith("-")) {
+    throw new Error(`Invalid test filter pattern '${filterPattern}': contains unsafe characters.`);
+  }
+  return trimmed;
+}
 
 /**
  * Python tests with no project configuration (no pyproject.toml / setup.py): `test_*.py` files in `tests/` or at the
@@ -103,20 +66,38 @@ export interface DiscoveredVerifier {
 }
 
 /**
- * Select a verifier only when repository files justify one. Unlike detectTestCommand there is no
- * `npm test` fallback: a workspace with no applicable verifier has none (returns null).
+ * Select a verifier only when repository files justify one. There is no `npm test` fallback:
+ * a workspace with no applicable verifier has none (returns null).
  */
-export function discoverVerifier(workspace: string): DiscoveredVerifier | null {
+export function discoverVerifier(workspace: string, filterPattern?: string): DiscoveredVerifier | null {
   const root = path.resolve(workspace);
+  const filter = validateFilterPattern(filterPattern);
   const has = (p: string) => fs.existsSync(path.join(root, p));
 
   if (has("Makefile")) {
     try {
-      if (/^test:/m.test(fs.readFileSync(path.join(root, "Makefile"), "utf-8"))) return { command: "make test", evidence: "Makefile:test" };
+      if (/^test:/m.test(fs.readFileSync(path.join(root, "Makefile"), "utf-8"))) {
+        return {
+          command: filter ? `make test FILTER="${filter}"` : "make test",
+          evidence: "Makefile:test",
+        };
+      }
     } catch {}
   }
-  if (has("Cargo.toml")) return { command: "cargo test", evidence: "Cargo.toml" };
-  if (has("core/Cargo.toml")) return { command: "cargo test --manifest-path core/Cargo.toml", evidence: "core/Cargo.toml" };
+  if (has("Cargo.toml")) {
+    return {
+      command: filter ? `cargo test -- ${filter}` : "cargo test",
+      evidence: "Cargo.toml",
+    };
+  }
+  if (has("core/Cargo.toml")) {
+    return {
+      command: filter
+        ? `cargo test --manifest-path core/Cargo.toml -- ${filter}`
+        : "cargo test --manifest-path core/Cargo.toml",
+      evidence: "core/Cargo.toml",
+    };
+  }
 
   const npmTest = (pkgRel: string): boolean => {
     try {
@@ -127,14 +108,135 @@ export function discoverVerifier(workspace: string): DiscoveredVerifier | null {
       return false;
     }
   };
-  if (has("package.json") && npmTest("package.json")) return { command: "npm test", evidence: "package.json:scripts.test" };
-  if (has("cli/package.json") && npmTest("cli/package.json")) return { command: "npm --prefix cli test", evidence: "cli/package.json:scripts.test" };
+  if (has("package.json") && npmTest("package.json")) {
+    return {
+      command: filter ? `npm test -- -t "${filter}"` : "npm test",
+      evidence: "package.json:scripts.test",
+    };
+  }
+  if (has("cli/package.json") && npmTest("cli/package.json")) {
+    return {
+      command: filter ? `npm --prefix cli test -- -t "${filter}"` : "npm --prefix cli test",
+      evidence: "cli/package.json:scripts.test",
+    };
+  }
 
-  if (has("pyproject.toml") || has("setup.py")) return { command: "pytest", evidence: has("pyproject.toml") ? "pyproject.toml" : "setup.py" };
-  if (has("go.mod")) return { command: "go test ./...", evidence: "go.mod" };
+  if (has("pyproject.toml") || has("setup.py")) {
+    return {
+      command: filter ? `pytest -k "${filter}"` : "pytest",
+      evidence: has("pyproject.toml") ? "pyproject.toml" : "setup.py",
+    };
+  }
+  if (has("go.mod")) {
+    return {
+      command: filter ? `go test ./... -run "${filter}"` : "go test ./...",
+      evidence: "go.mod",
+    };
+  }
   const unittest = unittestLayout(root);
-  if (unittest) return unittest;
+  if (unittest) {
+    return {
+      command: filter ? `${unittest.command} -k "${filter}"` : unittest.command,
+      evidence: unittest.evidence,
+    };
+  }
   return null;
+}
+
+export interface VerifierDescription {
+  command: string;
+  evidence: string;
+  script?: string;
+  digest: string;
+}
+
+/**
+ * Resolves the verifier command, its justifying evidence, and its script body (e.g. from
+ * package.json scripts.test or Makefile test: recipe), plus a digest for approval caching.
+ */
+export function describeVerifier(workspace: string, commandOverride?: string): VerifierDescription | null {
+  const root = path.resolve(workspace);
+  const has = (p: string) => fs.existsSync(path.join(root, p));
+  let command = commandOverride?.trim();
+  let evidence = "configured";
+  let script: string | undefined;
+
+  if (!command) {
+    const discovered = discoverVerifier(workspace);
+    if (!discovered) return null;
+    command = discovered.command;
+    evidence = discovered.evidence;
+  }
+
+  // Look up script body based on command and workspace files
+  if (command === "npm test" || command.startsWith("npm test") || command.startsWith("npm --prefix")) {
+    let pkgRel = "package.json";
+    if (command.includes("--prefix")) {
+      const match = command.match(/--prefix\s+([^\s]+)/);
+      if (match) pkgRel = path.join(match[1], "package.json");
+    }
+    try {
+      const pkg = JSON.parse(fs.readFileSync(path.join(root, pkgRel), "utf-8"));
+      script = pkg?.scripts?.test;
+      if (evidence === "configured") evidence = `${pkgRel}:scripts.test`;
+    } catch {}
+  } else if (command === "make test" || command.startsWith("make test")) {
+    try {
+      const content = fs.readFileSync(path.join(root, "Makefile"), "utf-8");
+      const match = content.match(/^test:[^\n]*\n((?:\t[^\n]*\n?)+)/m);
+      if (match) {
+        script = match[1].trim();
+        if (evidence === "configured") evidence = "Makefile:test";
+      }
+    } catch {}
+  } else if (command === "cargo test" || command.startsWith("cargo test")) {
+    try {
+      let cargoRel = "Cargo.toml";
+      if (command.includes("--manifest-path")) {
+        const match = command.match(/--manifest-path\s+([^\s]+)/);
+        if (match) cargoRel = match[1];
+      }
+      if (fs.existsSync(path.join(root, cargoRel))) {
+        script = fs.readFileSync(path.join(root, cargoRel), "utf-8");
+        if (evidence === "configured") evidence = cargoRel;
+      }
+    } catch {}
+  } else if (command === "pytest" || command.startsWith("pytest")) {
+    for (const p of ["pytest.ini", "pyproject.toml", "setup.cfg"]) {
+      if (has(p)) {
+        try {
+          script = fs.readFileSync(path.join(root, p), "utf-8");
+          if (evidence === "configured") evidence = p;
+          break;
+        } catch {}
+      }
+    }
+  }
+
+  if (script === undefined) {
+    // If command runs a local script file (e.g. node script.js or ./test.sh), try reading it
+    const parts = command.split(/\s+/);
+    for (const part of parts.slice(1)) {
+      if (!part.startsWith("-") && has(part)) {
+        try {
+          const stat = fs.statSync(path.join(root, part));
+          if (stat.isFile() && stat.size < 50_000) {
+            script = fs.readFileSync(path.join(root, part), "utf-8");
+            break;
+          }
+        } catch {}
+      }
+    }
+    if (script === undefined) script = command;
+  }
+
+  const digest = createHash("sha256").update(`${command}\n${script}`).digest("hex");
+  return {
+    command,
+    evidence,
+    script,
+    digest,
+  };
 }
 
 /**
@@ -142,7 +244,11 @@ export function discoverVerifier(workspace: string): DiscoveredVerifier | null {
  */
 export function runTestSuite(workspace: string, filterPattern?: string): TestRunResult {
   const root = path.resolve(workspace);
-  const command = detectTestCommand(root, filterPattern);
+  const discovered = discoverVerifier(root, filterPattern);
+  if (!discovered) {
+    return summarizeTestRun("none", false, "no verifier: no verification command is configured or discovered in this workspace.");
+  }
+  const command = discovered.command;
 
   let rawOutput = "";
   let success = false;
@@ -152,7 +258,7 @@ export function runTestSuite(workspace: string, filterPattern?: string): TestRun
       cwd: root,
       encoding: "utf-8",
       stdio: ["pipe", "pipe", "pipe"],
-      timeout: 120000,
+      timeout: verifierTimeoutSecs() * 1000,
     });
     success = true;
   } catch (err: any) {
@@ -169,8 +275,8 @@ export async function runTestSuiteWithExecutor(
   execute: TestCommandExecutor,
   commandOverride?: string,
 ): Promise<TestRunResult> {
-  const command = commandOverride?.trim() || detectTestCommand(workspace);
-  if (command === "none") return summarizeTestRun(command, false, "No verification command is configured.");
+  const command = commandOverride?.trim() || discoverVerifier(workspace)?.command || "none";
+  if (command === "none") return summarizeTestRun("none", false, "no verifier: no verification command is configured or discovered in this workspace.");
   try {
     const result = await execute(command);
     let commandSucceeded = false;
@@ -235,6 +341,7 @@ export function isFilteredVerifierCommand(command: string): boolean {
   if (/(?:^|\s)(?:--test-name-pattern|--testNamePattern|-run|--run)(?:\s|=)\S/.test(command)) return true;
   if (/(?:^|\s)FILTER=\S/.test(command)) return true;
   if (/\S\.py::\S/.test(command)) return true;
+  if (/(?:^|\s)--(?:$|\s+[^-]\S*)/.test(command)) return true;
   const cargo = command.match(/\bcargo\s+test\b(.*)$/);
   if (cargo) {
     const tokens = cargo[1].trim().split(/\s+/).filter(Boolean);
@@ -258,26 +365,83 @@ export function isFilteredVerifierCommand(command: string): boolean {
 
 /**
  * Whether a test run's output shows that at least one test executed. Runners that report counts are read (node:test,
- * cargo, pytest, unittest, jest/vitest, go); output with no recognisable report — including no output — is not evidence.
+ * cargo, pytest, unittest, jest/vitest, mocha, go); output with no recognisable report — including no output — is not evidence.
+ * Skipped tests are subtracted; a run where all tests were skipped returns false.
  */
 export function hasExecutedTests(rawOutput: string): boolean {
   if (!rawOutput) return false;
-  const count = (re: RegExp) => [...rawOutput.matchAll(re)].reduce((sum, m) => sum + Number(m[1]), 0);
-  const node = [...rawOutput.matchAll(/ℹ\s+tests\s+(\d+)/g)];
-  if (node.length) return count(/ℹ\s+tests\s+(\d+)/g) > 0;
+
+  // 1. node:test
+  const nodeTests = [...rawOutput.matchAll(/ℹ\s+tests\s+(\d+)/g)];
+  if (nodeTests.length) {
+    const totalTests = nodeTests.reduce((sum, m) => sum + Number(m[1]), 0);
+    const pass = [...rawOutput.matchAll(/ℹ\s+pass\s+(\d+)/g)].reduce((sum, m) => sum + Number(m[1]), 0);
+    const fail = [...rawOutput.matchAll(/ℹ\s+fail\s+(\d+)/g)].reduce((sum, m) => sum + Number(m[1]), 0);
+    const hasPassOrFail = /ℹ\s+(?:pass|fail)\s+\d+/.test(rawOutput);
+    if (hasPassOrFail) return pass + fail > 0;
+    const skipped = [...rawOutput.matchAll(/ℹ\s+skipped\s+(\d+)/g)].reduce((sum, m) => sum + Number(m[1]), 0);
+    const todo = [...rawOutput.matchAll(/ℹ\s+todo\s+(\d+)/g)].reduce((sum, m) => sum + Number(m[1]), 0);
+    return totalTests - skipped - todo > 0;
+  }
+
+  // 2. Cargo (Rust)
   const cargo = [...rawOutput.matchAll(/test result: \w+\. (\d+) passed; (\d+) failed/g)];
   if (cargo.length) return cargo.some((m) => Number(m[1]) + Number(m[2]) > 0);
-  const jest = rawOutput.match(/Tests:\s+(?:.*?(\d+) passed)?.*?(\d+) total/);
-  if (jest) return Number(jest[2]) > 0;
-  const pytest = rawOutput.match(/=+ .*?(\d+) passed/);
-  if (pytest) return Number(pytest[1]) > 0;
-  // unittest: "Ran 3 tests in 0.001s" (it also prints "Ran 0 tests" when discovery finds nothing)
-  const unittest = [...rawOutput.matchAll(/^Ran (\d+) tests? in /gm)];
-  if (unittest.length) return unittest.some((m) => Number(m[1]) > 0);
+
+  // 3. Jest
+  const jest = rawOutput.match(/Tests:\s+(?:(\d+)\s+failed,?\s*)?(?:(\d+)\s+passed,?\s*)?(?:(\d+)\s+skipped,?\s*)?(\d+)\s+total/);
+  if (jest) {
+    const failed = Number(jest[1] || 0);
+    const passed = Number(jest[2] || 0);
+    return passed + failed > 0;
+  }
+
+  // 4. Vitest
+  const vitestPassed = rawOutput.match(/\bTests\s+.*?(\d+)\s+passed/);
+  const vitestFailed = rawOutput.match(/\bTests\s+.*?(\d+)\s+failed/);
+  if (vitestPassed || vitestFailed) {
+    const passed = Number(vitestPassed ? vitestPassed[1] : 0);
+    const failed = Number(vitestFailed ? vitestFailed[1] : 0);
+    return passed + failed > 0;
+  }
+  if (/\bTests\s+\d+\s+skipped\b/.test(rawOutput) && !/\bTests\s+\d+\s+passed\b/.test(rawOutput)) {
+    return false;
+  }
+
+  // 5. Pytest
   if (/collected 0 items|no tests ran/i.test(rawOutput)) return false;
-  // go test: an `ok <package>` line that ran tests (not `[no tests to run]`), or verbose `--- PASS` lines.
-  if ([...rawOutput.matchAll(/^ok\s+\S+.*$/gm)].some((m) => !m[0].includes("[no tests to run]"))) return true;
-  if (/^--- PASS: /m.test(rawOutput)) return true;
+  const pytestPassed = rawOutput.match(/=+\s+.*?(\d+)\s+passed/);
+  const pytestFailed = rawOutput.match(/=+\s+.*?(\d+)\s+failed/);
+  if (pytestPassed || pytestFailed) {
+    const passed = Number(pytestPassed ? pytestPassed[1] : 0);
+    const failed = Number(pytestFailed ? pytestFailed[1] : 0);
+    return passed + failed > 0;
+  }
+  if (/=+\s+\d+\s+skipped.*?=+/i.test(rawOutput)) return false;
+
+  // 6. Python unittest: "Ran 3 tests in 0.001s" (it also prints "Ran 0 tests" when discovery finds nothing)
+  const unittest = [...rawOutput.matchAll(/^Ran (\d+) tests? in /gm)];
+  if (unittest.length) {
+    const totalRan = unittest.reduce((sum, m) => sum + Number(m[1]), 0);
+    const skippedMatch = rawOutput.match(/OK\s*\((?:.*?,\s*)?skipped=(\d+)\)/);
+    const skipped = skippedMatch ? Number(skippedMatch[1]) : 0;
+    return totalRan - skipped > 0;
+  }
+
+  // 7. Mocha
+  const mochaPass = rawOutput.match(/^\s*(\d+)\s+passing\b/m);
+  const mochaFail = rawOutput.match(/^\s*(\d+)\s+failing\b/m);
+  if (mochaPass || mochaFail) {
+    const passed = Number(mochaPass ? mochaPass[1] : 0);
+    const failed = Number(mochaFail ? mochaFail[1] : 0);
+    return passed + failed > 0;
+  }
+
+  // 8. Go test: anchored regex ^ok\s+\S+\s+(\d+\.\d+s|\(cached\))
+  const goOkLines = [...rawOutput.matchAll(/^ok\s+\S+\s+(\d+\.\d+s|\(cached\))/gm)];
+  if (goOkLines.some((m) => !m.input.slice(m.index).split("\n")[0].includes("[no tests to run]"))) return true;
+  if (/^--- (?:PASS|FAIL): /m.test(rawOutput)) return true;
+
   return false;
 }
 
@@ -334,10 +498,48 @@ function importsName(content: string, name: string): boolean {
 }
 
 /**
+ * Extract workspace-relative path tokens from command and output.
+ * Tokens are split on whitespace, quotes, parentheses, brackets, and commas.
+ * Line/column suffixes (e.g., `:12:3`) are stripped.
+ * Only tokens containing a path separator ('/' or '\\') are treated as paths,
+ * preventing coincidental matches on bare basenames like "README.md".
+ */
+export function extractPathTokens(workspace: string, text: string): Set<string> {
+  const root = path.resolve(workspace);
+  const tokens = new Set<string>();
+  if (!text) return tokens;
+
+  const parts = text.split(/[\s'"()`,]+/);
+  for (let part of parts) {
+    if (!part) continue;
+    part = part.replace(/[.,;:]+$/, "");
+    part = part.replace(/:\d+(?::\d+)?$/, "");
+    if (!part) continue;
+
+    const norm = part.replace(/\\/g, "/");
+    const cleaned = norm.replace(/^\.\//, "");
+    tokens.add(cleaned);
+
+    if (path.isAbsolute(part)) {
+      try {
+        const resolved = path.resolve(part);
+        if (resolved.startsWith(root)) {
+          const rel = path.relative(root, resolved).replace(/\\/g, "/");
+          if (rel) {
+            tokens.add(rel);
+          }
+        }
+      } catch {}
+    }
+  }
+  return tokens;
+}
+
+/**
  * Whether a passing verifier run is evidence about the changed files (VERIFIED) rather than only a regression check
  * (REGRESSION_FREE). It must show that tests executed, and then one of:
- * - a changed file is a test file (the change brings its own test);
- * - the command or the run's output names a changed file;
+ * - deliverable binding uses boundary-delimited workspace-relative path tokens (basename-only matches do not bind);
+ * - a changed test file binds only when that file's tests were executed;
  * - the change has inline tests the run executes (a Rust file with `#[cfg(test)]` under `cargo test`; a Go package
  *   with `_test.go` files under `go test`);
  * - a workspace test file imports a changed module (by import specifier, not by substring).
@@ -352,13 +554,38 @@ export function isVerifierDeliverableBound(
   if (!hasExecutedTests(testOutput)) return false;
   if (!changedFiles || changedFiles.length === 0) return true;
   const root = path.resolve(workspace);
-  const rel = (file: string) => path.relative(root, path.resolve(root, file));
-  if (changedFiles.some((file) => TEST_PATH.test(rel(file)))) return true;
-  for (const file of changedFiles) {
-    const r = rel(file);
-    const base = path.basename(file);
-    if (verifierCommand.includes(r) || testOutput.includes(r) || (base.includes(".") && (verifierCommand.includes(base) || testOutput.includes(base)))) return true;
+  const rel = (file: string) => path.relative(root, path.resolve(root, file)).replace(/\\/g, "/");
+
+  const tokens = extractPathTokens(root, `${verifierCommand}\n${testOutput}`);
+  const isFiltered = isFilteredVerifierCommand(verifierCommand);
+
+  const changedTestFiles = changedFiles.filter((file) => TEST_PATH.test(rel(file)));
+  const changedNonTestFiles = changedFiles.filter((file) => !TEST_PATH.test(rel(file)));
+
+  const testFileExecuted = (testFileRel: string) => {
+    // An unfiltered verifier run that executed tests ran the repository test suite
+    if (!isFiltered) return true;
+    return tokens.has(testFileRel) || verifierCommand.includes(testFileRel);
+  };
+
+  // If only test files changed, at least one changed test file must have executed
+  if (changedTestFiles.length > 0 && changedNonTestFiles.length === 0) {
+    return changedTestFiles.some((file) => testFileExecuted(rel(file)));
   }
+
+  // Check if non-test files are directly named by path tokens in command or output
+  for (const file of changedNonTestFiles) {
+    const r = rel(file);
+    // Documentation files (.md) do not bind on coincidental output mentions (VER-04)
+    if (r.endsWith(".md") || r.endsWith(".markdown")) {
+      if (verifierCommand.includes(r)) return true;
+      continue;
+    }
+    if (tokens.has(r) || verifierCommand.includes(r)) {
+      return true;
+    }
+  }
+
   const read = (file: string) => {
     try {
       const stat = fs.statSync(file);
@@ -367,7 +594,9 @@ export function isVerifierDeliverableBound(
       return "";
     }
   };
-  for (const file of changedFiles) {
+
+  // Check inline tests
+  for (const file of changedNonTestFiles) {
     const full = path.resolve(root, file);
     if (/\bcargo\s+test\b/.test(verifierCommand) && full.endsWith(".rs") && /#\[cfg\(test\)\]/.test(read(full))) return true;
     if (/\bgo\s+test\b/.test(verifierCommand) && full.endsWith(".go")) {
@@ -376,10 +605,28 @@ export function isVerifierDeliverableBound(
       } catch {}
     }
   }
+
+  // Check if workspace test files import the changed modules
   const tests = workspaceTestFiles(root);
   for (const test of tests) {
+    const testRel = rel(test);
+    if (isFiltered && !testFileExecuted(testRel)) {
+      continue;
+    }
     const content = read(test);
-    if (content && changedFiles.some((file) => importsModule(content, path.resolve(root, file)))) return true;
+    if (content && changedNonTestFiles.some((file) => importsModule(content, path.resolve(root, file)))) return true;
   }
+
+  // If test files were also changed and executed, check if any of them imports any changed non-test file
+  for (const testFile of changedTestFiles) {
+    const testRel = rel(testFile);
+    if (testFileExecuted(testRel)) {
+      const content = read(path.resolve(root, testFile));
+      if (content && changedNonTestFiles.some((file) => importsModule(content, path.resolve(root, file)))) {
+        return true;
+      }
+    }
+  }
+
   return false;
 }

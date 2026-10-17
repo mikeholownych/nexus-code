@@ -242,9 +242,8 @@ describe("connections: endpoint paths, credentials and disclosure gate", () => {
     const m = await mock((_s, res) => json(res, 200, {}));
     const home = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-cloud-home-"));
     fs.mkdirSync(path.join(home, ".config/nexus"), { recursive: true });
-    fs.mkdirSync(path.join(home, ".config/opencode"), { recursive: true });
     fs.writeFileSync(path.join(home, ".config/nexus/config.env"), `LOCAL_LLM_ENDPOINT=${m.url}/v1\n`);
-    fs.writeFileSync(path.join(home, ".config/opencode/t5820-client-token"), "tok-APPLIANCE-secret\n");
+    fs.writeFileSync(path.join(home, ".config/nexus/gateway-token"), "tok-APPLIANCE-secret\n");
     try {
       operator({ LOCAL_LLM_CREDENTIAL_ORIGINS: m.origin }, {}, home);
       const e = await rejects(new LocalLlmClient(cfg("openrouter", `${m.url}/v1`, { apiKey: undefined })).chatCompletion(msgs, []));
@@ -632,7 +631,8 @@ describe("spending limits and accounting", () => {
       UsageLedger.global().limits = { maxRequests: 0.5 };
       await new LocalLlmClient(cfg(undefined, m.url, { apiKey: "local" })).chatCompletion(msgs, []);
       assert.equal(m.seen.length, 1);
-      assert.equal(UsageLedger.global().all().length, 0, "appliance requests keep their existing records only");
+      assert.equal(UsageLedger.global().cloudTotals().requests, 0, "appliance requests do not count toward cloud limits");
+      assert.equal(UsageLedger.global().all()[0]?.origin_class, "local");
     } finally { await m.close(); }
   });
 });

@@ -6,6 +6,7 @@ import type { ConfirmHandler } from "../agent.js";
 import type { CheckpointManager } from "../checkpoint.js";
 import type { ApplicationCore } from "../core/app.js";
 import type { ReceiptSection } from "../evidence.js";
+import type { ApprovalMode } from "../types.js";
 
 export interface SlashSpec {
   name: string;
@@ -19,8 +20,8 @@ export interface SlashSpec {
 /** What the sidecar lets a command read and change. */
 export interface SlashHost {
   readonly app: ApplicationCore;
-  mode(): "auto" | "review";
-  setMode(mode: "auto" | "review"): void;
+  mode(): ApprovalMode;
+  setMode(mode: ApprovalMode): void;
   sessionId(): string;
   setSessionId(id: string): void;
   checkpoints(): CheckpointManager;
@@ -121,8 +122,8 @@ export const SLASH_COMMANDS: SlashSpec[] = [
   { name: "plugins", usage: "/plugins", summary: "Loaded plugins" },
   { name: "browse", usage: "/browse <url>", summary: "Open a URL in the headless browser" },
   { name: "image", usage: "/image <path> [prompt]", summary: "Send an image to the vision model", cancellable: true },
-  { name: "tdd", usage: "/tdd <issue>", summary: "Run a RED → GREEN → REFACTOR cycle", cancellable: true },
-  { name: "team", usage: "/team <role|full> [--independent-review] <objective>", summary: "Run a role or the full team as a durable operation (researcher, architect, implementer, tester, reviewer)" },
+  { name: "tdd", usage: "/tdd <issue>", summary: "[experimental] Run a RED → GREEN → REFACTOR cycle", cancellable: true },
+  { name: "team", usage: "/team <role|full> [--independent-review] <objective>", summary: "[experimental] Run a role or the full team as a durable operation (researcher, architect, implementer, tester, reviewer)" },
   { name: "theme", usage: "/theme [name]", summary: "Show or save the colour theme" },
   { name: "recover", usage: "/recover [task-id]", summary: "Recover durable task state" },
   { name: "exit", usage: "/exit", summary: "Quit Nexus", aliases: ["quit", "q"] },

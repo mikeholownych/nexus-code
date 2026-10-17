@@ -1,5 +1,7 @@
 # Nexus cloud inference providers — current-source assessment (Gate 0)
 
+> **Historical record.** This document is kept for provenance. Current requirements and status: [docs/v1.0.0/REQUIREMENTS.md](../v1.0.0/REQUIREMENTS.md). Statuses here may have been superseded or contradicted since it was written.
+
 Date: 2026-10-11. Plan: `docs/NEXUS-CLOUD-PROVIDERS-PLAN.md`.
 Base commit: `486d38f` on `main`; work branch `feat/cloud-providers` created in place. The working tree held
 unrelated uncommitted work (docs/cloudflare, docs/ISSUE12_*, experiments/cloudflare-artifacts-vertical-slice,

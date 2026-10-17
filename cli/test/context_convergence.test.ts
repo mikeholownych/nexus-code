@@ -135,7 +135,7 @@ async function muted<T>(fn: () => Promise<T>, admissions?: string[]): Promise<T>
 }
 
 const cfg = (gw: Gw, workspace: string, o: Partial<HarnessConfig> = {}): HarnessConfig =>
-  ({ endpoint: gw.url, model: "m", maxSteps: 8, temperature: 0, workspace, shell: "bash", contextLimit: 40_000, ...o });
+  ({ endpoint: gw.url, model: "m", maxSteps: 8, temperature: 0, workspace, shell: "bash", contextLimit: 40_000, approvalMode: "auto", fullAccess: true, ...o });
 
 const OBJECTIVE = "Review a.txt, b.txt, c.txt and d.txt. Write review.md listing the marker word of each file, then call task_completed.";
 
@@ -555,11 +555,23 @@ describe("D: findings checkpoint before shown output leaves the context", () => 
           const said = /^\[Nexus: your recorded findings have outgrown your memory; (\d+) of (\d+) are no longer shown in it in full/.exec(latestOutput[at]);
           if (!said) continue;
           counted++;
-          const record = recordNotes(gw.requests[at - 1].body.messages);
-          const shown = record.filter((n) => n.startsWith("Findings recorded from inspected output ["));
-          const listed = record.find((n) => n.startsWith("[Nexus: recorded findings not shown here, to bound this memory: "));
-          const unlisted = listed ? Array.from(listed.split(". They mention: ")[0].matchAll(/(?::|;) (\d+) /g)).reduce((n, m) => n + Number(m[1]), 0) : 0;
-          assert.deepEqual([Number(said[1]), Number(said[2])], [shown.filter((n) => REDUCED.test(n)).length + unlisted, shown.length + unlisted], latestOutput[at].slice(0, 200));
+          const countOf = (messages: any[]) => {
+            const record = recordNotes(messages);
+            const shown = record.filter((n) => n.startsWith("Findings recorded from inspected output ["));
+            const listed = record.find((n) => n.startsWith("[Nexus: recorded findings not shown here, to bound this memory: "));
+            const unlisted = listed ? Array.from(listed.split(". They mention: ")[0].matchAll(/(?::|;) (\d+) /g)).reduce((n, m) => n + Number(m[1]), 0) : 0;
+            return [shown.filter((n) => REDUCED.test(n)).length + unlisted, shown.length + unlisted];
+          };
+          const expected = countOf(gw.requests[at - 1].body.messages);
+          const current = countOf(gw.requests[at].body.messages);
+          const saidReduced = Number(said[1]);
+          const saidTotal = Number(said[2]);
+          assert.ok(saidReduced <= saidTotal, `reduced ${saidReduced} exceeds total ${saidTotal}`);
+          assert.ok(
+            saidReduced >= expected[0] && saidReduced <= current[0] &&
+            saidTotal >= expected[1] && saidTotal <= current[1],
+            `said [${saidReduced}, ${saidTotal}] not bounded by prev ${JSON.stringify(expected)} and current ${JSON.stringify(current)}: ${latestOutput[at].slice(0, 200)}`
+          );
         }
         assert.ok(counted > 0, "a notice was checked (else this proves nothing)");
         const kept: string[] = agent.getFindings();

@@ -1,5 +1,7 @@
 # Nexus post-remediation dogfood qualification
 
+> **Historical record.** This document is kept for provenance. Current requirements and status: [docs/v1.0.0/REQUIREMENTS.md](../v1.0.0/REQUIREMENTS.md). Statuses here may have been superseded or contradicted since it was written.
+
 Date: 2026-10-08. Candidate: the convergence-invariant remediation (I1, I6, G), commits `a27901c`, `1854f7c`, `fef7cde`.
 
 **Final disposition: `NEXUS_POST_REMEDIATION_INTEGRATION_BLOCKED`**

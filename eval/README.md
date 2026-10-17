@@ -3,15 +3,41 @@
 `run.mjs` runs tasks against one agent configuration and appends a JSON line per run; `score.mjs` reports the scores
 separately (never combined), per task and configuration, with 95 % Wilson intervals.
 
+`docs/v1.0.0/READINESS.md` is a historical checkpoint at source revision `6151a23`; use this file and the current
+runner source for evaluator behavior added after that revision. Neither document represents completed M5 qualification.
+
 ```bash
 node eval/run.mjs --config eval/configs/gateway-engineering-deep.json --out eval/out/<label> [--only id,id] [--runs N]
 node eval/score.mjs eval/out/<label>/results.jsonl          # markdown table; --json for machine output
+node eval/score.mjs --pairs "$NEXUS_RESULTS" "$GOOSE_RESULTS" "$OPENCODE_RESULTS"
 ```
 
-Each run: a fresh workspace (the task's `fixture`, or its `repo.url` at `repo.commit`, cached in `eval/.cache`), a fresh
-`HOME`, the agent with the task's budgets and a wall-clock timeout, then the task's **hidden** tests (copied in only
-after the agent has stopped) and its `regression` command. `manifest.json` records the harness build (commit, dirty),
-the configuration (secrets in `env` masked), host and Node version; per-run logs go to `logs/<task>-<run>/`.
+Each run uses a frozen copy of the task tree, a fresh workspace and `HOME`, and a unique output directory. The agent
+receives only its workspace, isolated home, selected read-only runtime files, and a run-scoped token for a local proxy;
+the real gateway credential stays in the harness process. The candidate runs in Bubblewrap user, PID and network
+namespaces, with nested user namespaces disabled. Hidden tests are copied into the workspace only after the agent exits.
+Task setup, hidden tests and regression commands use a separate Bubblewrap boundary with a cleared environment, no
+network, a disposable home and bounded captured output/wall time. Absolute paths, traversal, symlinks and unsupported
+fixture entries are rejected. `manifest.json` records the harness source-file hashes, model fingerprint, corpus/task
+hashes when qualification is configured, executable version, budgets, host and Node version. Each result records the
+executable version and effective step/minute budget; per-run logs go to `logs/<task>-<run>/`. The runner refuses an
+existing output directory so a retry cannot append to or replace prior evidence.
+
+Qualification runs require `nexusExecutable` to name the absolute path of the installed RC,
+`expectedAgentVersion` to pin its version, and `nexusPackageSha256` to record the expected release-asset digest from checksum verification. The runner checks `nexus --version` and refuses the checkout
+`cli/dist/index.js` or a version mismatch before starting an agent. Peer versions are read using each adapter's
+`--version` command inside the same Bubblewrap filesystem/network boundary, with a cleared environment and bounded
+output/time; executable paths and SHA-256 hashes are archived alongside the RC package
+digest. `score.mjs --pairs` takes exactly the Nexus,
+Goose and OpenCode result files and refuses mismatched model fingerprints, sampling declarations, context/output
+limits, explicit per-task request and aggregate requested-output ceilings, run pairs, executable identities, or
+effective step/minute budgets. The proxy permits only model-catalog and inference routes, strips client-supplied
+authorization and control-plane headers, and enforces configured request/body/output ceilings. These are requested
+completion-token ceilings, not exact usage accounting. It reports peer hidden-test results
+separately; scores are never combined. The Nexus adapter passes the recorded temperature and step/minute limits;
+OpenCode receives a primary evaluation agent with the recorded step limit, temperature and seed; Goose receives the
+matching `--max-turns`, context/output limits and temperature settings. Qualification mode currently requires
+`sampling.temperature` to be `0` across all three adapters; seed metadata remains recorded when configured.
 
 ## Task format (`eval/tasks/<id>/task.json`)
 
@@ -30,6 +56,97 @@ the configuration (secrets in `env` masked), host and Node version; per-run logs
 completion claimed · artifact correct (hidden tests) · false VERIFIED (VERIFIED while hidden tests fail) · regressions
 introduced · timed out / harness errors · wall time, steps, tokens (median). Context qualifier (`contextNotRetained`) is
 recorded per run.
+
+## Scoring integrity
+
+- **Model proxy.** Every agent reaches the model through a per-run forwarder (`eval/model_proxy.mjs`) that `run.mjs`
+  starts. Each record carries `model: { requests, answered, upstreamFailures, firstRequestAt, firstAnswerAt }`. Set
+  `"proxy": false` in a config to connect agents directly; such runs are then scored only by the legacy rule below.
+- **Infrastructure reruns** (`eval/infra.mjs`). A run is rerun only when the model never answered *and* the endpoint
+  was observed failing, or when the harness itself errored. The rule is the same for every agent. A run in which the
+  model answered is always scored: a crash is a failure (and counts towards the crash rate), not a rerun. Records from
+  before the proxy fall back to each agent's own connection-failure message, and the script says how many it judged
+  that way.
+- **Contamination.** Contaminated runs (the task directory changed, or its path appeared in the agent's output) are
+  left out of pooled pass rates and counted separately.
+- **Reruns are listed.** `score.mjs` lists every replaced run with what it showed and what the rerun showed.
+- **Pooled metrics.** Pooled rows report crash rate, regressions, tokens per correct result and wall seconds per
+  correct result. The cost of failed runs counts towards these.
+
+## Fault injection (T4)
+
+A task or config may list `faults: [{ kind, atRequest }]`. The run's model proxy then injects that fault into the Nth
+chat request (counted from 1):
+
+| kind | Fault |
+|---|---|
+| `refuse` | The connection drops without an answer |
+| `overloaded` | 503 with `Retry-After: 1` |
+| `stream_cut` | The stream is cut after its first tool-call fragment |
+| `truncate` | `finish_reason` becomes `length` |
+| `context_overflow` | llama.cpp's HTTP 400 `exceed_context_size_error` |
+| `malformed_tool_json` | The first tool call's arguments are no longer valid JSON |
+
+What was injected is recorded in `model.faultsInjected`. Such runs are never treated as infrastructure reruns.
+`score.mjs` reports, per fault kind:
+
+- runs;
+- **truthful** (the run ended with its own result, did not hang past its budget, and never claimed VERIFIED while the
+  hidden tests failed);
+- **recovered** (the hidden tests pass);
+- hung past budget.
+
+The remaining T4 classes come from task fixtures (a hanging test command, a full disk) and from the SIGTERM-then-resume
+runner case. `make test` includes a T4 smoke test with two injected faults (`cli/test/eval_harness.test.ts`).
+
+## Qualification runs
+
+A config with `"qualification": true` is the v1.0.0 evidence run (docs/v1.0.0/ACCEPTANCE.md §6). `run.mjs` refuses to start
+one, before any agent runs, unless every item below holds:
+
+- **Tasks are well formed** (`eval/validate.mjs`): one source (fixture, or a repo pinned to a full commit id), a hidden
+  command, and `class` (bugfix · feature · refactor · debug) and `difficulty` (easy · medium · hard). Development runs check
+  everything except class and difficulty.
+- **The model is identified, not just named.** `fingerprint: { weightsSha256, serverBuild }` and
+  `sampling: { temperature, seed }` are set in the config, and the endpoint lists the model. The fingerprint (with the
+  listed owner and context) is written to `manifest.json`.
+- **Hidden tests are out of the agent's reach.** `runAs` names a separate evaluator user. Candidate execution occurs
+  inside the Bubblewrap mount namespace and does not bind the task store or validator sources; its `HOME`, `/tmp`,
+  `/run`, and network namespace are isolated. Runtime files are explicit read-only binds. The harness grants the
+  evaluator UID ACL access only to the disposable workspace, home and per-run proxy directory. Before qualification,
+  verify the account and these existing operating-system permissions through the approved local setup procedure:
+  1. `sudo useradd --system --create-home nexus-eval`
+  2. A narrowly constrained sudoers rule permitting only the required Bubblewrap invocation as `nexus-eval`; do not
+     grant arbitrary `env` command execution.
+  3. Keep task stores unreadable to the evaluator account; the runner does not mount them into the candidate namespace.
+  4. A Nexus install, Node and the peer agents that `nexus-eval` can read and execute.
+
+  Development runs may omit `runAs`; Bubblewrap isolation still applies. Qualification is refused without a separate
+  evaluator account, `setfacl`, explicit `sandboxRuntimeRoots`, and read-only `sandboxRuntimePaths` contained by those
+  roots. Protected roots such as `/etc`, `/dev`, `/proc`, `/sys`, `/run`, `/var`, `/tmp`, and sensitive user-cache paths
+  are rejected. No setup procedure is applied by the runner.
+
+- **Corpus binding is integrity evidence, not approval authentication.** The qualification config pins the exact
+  corpus-manifest SHA-256; the manifest binds each task's JSON and full task-tree digest; the run manifest repeats those
+  hashes. This detects stale or modified content. The manifest's `custody.status` and `custodian` strings are claims,
+  not signatures. Independent custody acceptance, pre-RC commit timing, and configuration freeze must be verified and
+  archived by the acceptance reviewer before any qualification run. The current candidate task package has not been
+  independently accepted.
+
+### Isolation limits
+
+Bubblewrap plus the current runner enforces separate mount/user/PID/network namespaces, a cleared task-command
+environment, a bounded wall clock, bounded captured output, per-run process-group teardown, and read-only runtime
+binds. These controls do **not** currently establish kernel-enforced aggregate CPU, memory, process-count, or writable
+disk quotas for the workspace and temporary filesystems. Qualification preflight now fails closed on that known gap;
+it does not claim that request/token ceilings substitute for kernel resource controls. Do not represent the sandbox as
+resource-exhaustion-proof or run M5 until an approved, measured resource-control contract is implemented and validated.
+Appliance-specific Bubblewrap enforcement is a separate, unverified condition.
+
+The evaluator proxy allows one in-flight inference request at a time and destroys the upstream HTTP request/response
+when the candidate-side request is cancelled or its connection closes. This bounds proxy concurrency and propagates
+transport cancellation, but it does not prove that a remote provider or model runtime stopped generation after the
+connection closed; that behavior requires runtime-specific evidence. The total request limit remains a separate cap.
 
 ## Pre-registered thresholds (from the assessment, fixed before any live run)
 
@@ -51,11 +168,11 @@ recorded per run.
 | Runner, scorer, manifest, per-run logs | done |
 | T1 self-test (`selftest-add`, scripted model, in `make test` via `cli/test/eval_harness.test.ts`) | done |
 | Nexus adapter | done |
-| Peer adapters (OpenCode, Goose, Aider, Codex) | not started |
-| T2/T3 task set (pilot 12, external repos, hidden tests) | not started |
-| T3 fact-sheet scorer (absence claims) and steering checks | not started |
-| T4 fault injector | not started |
-| Live runs | blocked on inference hours, cloud budget and peer installs (operator decision) |
+| Peer adapters and matched comparison (OpenCode, Goose, Aider; paired scoring requires Nexus, Goose, OpenCode) | adapter versions and effective budgets recorded; `--pairs` verifies the fixed model, limits, sampling, and 5× task/run pairing (Codex CLI excluded: gateway does not serve `/v1/responses`) |
+| T2 task set (pilot fixture tasks `t2-*`) | done |
+| T3 task set (fact-sheet scorer / steering checks) | not started |
+| T4 fault injector | in progress |
+| Qualification runs | blocked on independent corpus custody, enforced aggregate sandbox resource limits, completed T3/T4 workloads, exact-RC/provider evidence, and the required operational approvals; the earlier pilot's inference-hour, cloud-budget, and peer-install decisions also remain separate prerequisites |
 
 ## Pilot 2026-10-13 (4 h appliance window)
 

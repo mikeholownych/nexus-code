@@ -31,6 +31,8 @@ const cfg = (endpoint: string, workspace: string, o: Partial<HarnessConfig> = {}
   temperature: 0,
   workspace,
   shell: "bash",
+  approvalMode: "auto",
+  fullAccess: true,
   ...o,
 });
 const write = (name: string, content = `${name}\n`): Reply => ({ kind: "tools", calls: [{ name: "write_file", args: { path: name, content } }] });

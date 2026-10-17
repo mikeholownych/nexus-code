@@ -171,10 +171,24 @@ export class ApplicationCore extends EventEmitter {
    */
   public async runTask(prompt: string, options: RunTaskOptions = {}): Promise<TaskExecutionResult> {
     const startTime = Date.now();
-    const taskId = this.agent.getTaskId();
+    let taskId = this.agent.getTaskId();
 
     if (options.resumeTaskId) {
-      await this.recoverTask(options.resumeTaskId);
+      let targetTaskId = options.resumeTaskId;
+      if (targetTaskId === "latest") {
+        const targetWorkspace = this.config.workspace || process.cwd();
+        const tasks = this.stateManager
+          .listTasks({ workspace: targetWorkspace })
+          .filter((t) => t.taskId !== taskId);
+        if (tasks.length === 0) {
+          throw new Error(`no task to resume in ${targetWorkspace}; see 'nexus status'`);
+        }
+        targetTaskId = tasks[0].taskId;
+      }
+      const recovered = await this.recoverTask(targetTaskId);
+      if (recovered?.state?.taskId) {
+        taskId = recovered.state.taskId;
+      }
     }
 
     this.emit("task:start", {
@@ -214,7 +228,10 @@ export class ApplicationCore extends EventEmitter {
     let taskError: Error | undefined;
     let turn: TurnResult | undefined;
     try {
-      turn = await this.agent.run(prompt, options.onConfirm, { signal: options.signal });
+      turn = await this.agent.run(prompt, options.onConfirm, {
+        signal: options.signal,
+        resume: Boolean(options.resumeTaskId),
+      });
     } catch (err: any) {
       taskError = err;
     } finally {
@@ -226,7 +243,7 @@ export class ApplicationCore extends EventEmitter {
       }
     }
 
-    const finalTurn: TurnResult = turn ?? failedTurnFromError(taskError, this.config.maxSteps);
+    const finalTurn: TurnResult = turn ?? failedTurnFromError(taskError, this.config.maxSteps, this.agent.hasUnverifiedChanges());
 
     // Capture durable task state snapshot
     let durableState: DurableTaskState;
