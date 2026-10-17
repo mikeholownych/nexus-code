@@ -365,17 +365,35 @@ test("task paths reject traversal, symlink escapes, and unstable task trees", as
   const { taskTreeDigest } = await import(path.join(ROOT, "eval/validate.mjs"));
   const { confinedPath, runtimeMountProblem } = await import(path.join(ROOT, "eval/isolate.mjs"));
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "eval-path-root-"));
-  const outside = fs.mkdtempSync(path.join(os.tmpdir(), "eval-path-outside-"));
-  fs.mkdirSync(path.join(root, "fixture"));
-  fs.writeFileSync(path.join(outside, "canary"), "protected");
-  fs.symlinkSync(outside, path.join(root, "escape"));
-  assert.throws(() => confinedPath(root, "../outside"), /unsafe task path/);
-  assert.throws(() => confinedPath(root, "escape/canary"), /symlink/);
-  assert.throws(() => taskTreeDigest(root), /symlink/);
-  assert.match(runtimeMountProblem(["/dev/null"], [ROOT]) ?? "", /protected candidate runtime path/);
-  assert.match(runtimeMountProblem([path.join(ROOT, "cli/package.json")], [path.join(ROOT, "eval")]) ?? "", /outside its explicit allowlist/);
-  assert.match(runtimeMountProblem([], [path.join(os.homedir(), ".cache")]) ?? "", /sensitive candidate runtime root/);
-  assert.equal(fs.readFileSync(path.join(outside, "canary"), "utf8"), "protected");
+  let outside: string | undefined;
+  let allowedRoot: string | undefined;
+  let otherRuntimeRoot: string | undefined;
+  try {
+    outside = fs.mkdtempSync(path.join(os.tmpdir(), "eval-path-outside-"));
+    // Runtime allowlist roots must be outside protected roots such as /tmp.
+    // The checkout may itself live under /tmp in CI, so use private temporary
+    // roots under a safe home directory for these path-policy assertions.
+    const runtimeTestBase = os.userInfo().homedir === "/root" ? "/home" : os.userInfo().homedir;
+    allowedRoot = fs.mkdtempSync(path.join(runtimeTestBase, "nexus-eval-allowlist-"));
+    otherRuntimeRoot = fs.mkdtempSync(path.join(runtimeTestBase, "nexus-eval-outside-allowlist-"));
+    fs.chmodSync(allowedRoot, 0o700);
+    fs.chmodSync(otherRuntimeRoot, 0o700);
+    fs.mkdirSync(path.join(root, "fixture"));
+    fs.writeFileSync(path.join(outside, "canary"), "protected");
+    fs.writeFileSync(path.join(otherRuntimeRoot, "package.json"), "{}");
+    fs.symlinkSync(outside, path.join(root, "escape"));
+    assert.throws(() => confinedPath(root, "../outside"), /unsafe task path/);
+    assert.throws(() => confinedPath(root, "escape/canary"), /symlink/);
+    assert.throws(() => taskTreeDigest(root), /symlink/);
+    assert.match(runtimeMountProblem(["/dev/null"], [allowedRoot]) ?? "", /protected candidate runtime path/);
+    assert.match(runtimeMountProblem([path.join(otherRuntimeRoot, "package.json")], [allowedRoot]) ?? "", /outside its explicit allowlist/);
+    assert.match(runtimeMountProblem([], [path.join(os.homedir(), ".cache")]) ?? "", /sensitive candidate runtime root/);
+    assert.equal(fs.readFileSync(path.join(outside, "canary"), "utf8"), "protected");
+  } finally {
+    for (const directory of [root, outside, allowedRoot, otherRuntimeRoot]) {
+      if (directory) fs.rmSync(directory, { recursive: true, force: true });
+    }
+  }
 });
 
 test("task-tree digests frame paths, entry types, executable mode, and content lengths", async () => {
@@ -445,13 +463,15 @@ test("candidate namespace reaches only its authenticated run proxy and cannot re
     seen.push(String(req.headers.authorization ?? ""));
     res.end(JSON.stringify({ data: [{ id: "synthetic-model" }] }));
   });
-  await new Promise<void>((resolve) => upstream.listen(0, "127.0.0.1", resolve));
-  const proxy = await startModelProxy({ upstream: `http://127.0.0.1:${(upstream.address() as any).port}/v1`, authToken: "UPSTREAM_AUTH_CANARY", clientToken: "RUN_LOCAL_TOKEN", socketPath: path.join(proxyDirectory, "proxy.sock") });
-  const sandbox = agentSandboxArgv({ cwd: workspace, home, proxyDirectory, readOnlyPaths: ["/usr/bin/node"], supervisorPath: path.join(ROOT, "eval/agent_sandbox.mjs") });
-  const script = `const fs=require('fs'),cp=require('child_process');fetch('http://127.0.0.1:40127/v1/models',{headers:{authorization:'Bearer '+process.env.OPENAI_API_KEY},signal:AbortSignal.timeout(2000)}).then(async r=>{let value='';try{value=fs.readFileSync(${JSON.stringify(canary)},'utf8')}catch{};try{fs.writeFileSync('/tmp/host-write-canary','changed')}catch{};const nested=cp.spawnSync('/usr/bin/unshare',['-Ur','true']);console.log(JSON.stringify({status:r.status,token:process.env.OPENAI_API_KEY,upstreamVisible:process.env.UPSTREAM_AUTH_CANARY??null,canary:value,nestedUserns:nested.status}))}).catch(e=>{console.error(e.message);process.exit(1)})`;
-  process.env.UPSTREAM_AUTH_CANARY = "UPSTREAM_AUTH_CANARY";
-  const child = await runSandbox(sandbox.cmd, sandbox.argv, JSON.stringify({ command: "/usr/bin/node", argv: ["-e", script], env: { PATH: "/usr/bin:/bin", OPENAI_API_KEY: "RUN_LOCAL_TOKEN" } }));
+  let proxy: Awaited<ReturnType<typeof startModelProxy>> | undefined;
   try {
+    await new Promise<void>((resolve) => upstream.listen(0, "127.0.0.1", resolve));
+    proxy = await startModelProxy({ upstream: `http://127.0.0.1:${(upstream.address() as any).port}/v1`, authToken: "UPSTREAM_AUTH_CANARY", clientToken: "RUN_LOCAL_TOKEN", socketPath: path.join(proxyDirectory, "proxy.sock") });
+    const nodeRuntime = process.execPath;
+    const sandbox = agentSandboxArgv({ cwd: workspace, home, proxyDirectory, readOnlyPaths: [nodeRuntime], runtimeExecutablePaths: [nodeRuntime], supervisorPath: path.join(ROOT, "eval/agent_sandbox.mjs") });
+    const script = `const fs=require('fs'),cp=require('child_process');fetch('http://127.0.0.1:40127/v1/models',{headers:{authorization:'Bearer '+process.env.OPENAI_API_KEY},signal:AbortSignal.timeout(2000)}).then(async r=>{let value='';try{value=fs.readFileSync(${JSON.stringify(canary)},'utf8')}catch{};try{fs.writeFileSync('/tmp/host-write-canary','changed')}catch{};const nested=cp.spawnSync('/usr/bin/unshare',['-Ur','true']);console.log(JSON.stringify({status:r.status,token:process.env.OPENAI_API_KEY,upstreamVisible:process.env.UPSTREAM_AUTH_CANARY??null,canary:value,nestedUserns:nested.status}))}).catch(e=>{console.error(e.message);process.exit(1)})`;
+    process.env.UPSTREAM_AUTH_CANARY = "UPSTREAM_AUTH_CANARY";
+    const child = await runSandbox(sandbox.cmd, sandbox.argv, JSON.stringify({ command: nodeRuntime, argv: ["-e", script], env: { PATH: "/usr/bin:/bin", OPENAI_API_KEY: "RUN_LOCAL_TOKEN" } }));
     assert.equal(child.status, 0, `${child.error ?? ""}\n${child.stderr}\n${child.stdout}\nproxy=${JSON.stringify(proxy.stats())}\nupstream=${JSON.stringify(seen)}`);
     const output = JSON.parse(child.stdout.trim());
     assert.equal(output.status, 200);
@@ -464,8 +484,8 @@ test("candidate namespace reaches only its authenticated run proxy and cannot re
     assert.doesNotMatch(`${child.stdout}${child.stderr}`, /HOST_PRIVATE_CANARY|UPSTREAM_AUTH_CANARY/);
   } finally {
     delete process.env.UPSTREAM_AUTH_CANARY;
-    await proxy.close();
-    upstream.close();
+    if (proxy) await proxy.close();
+    if (upstream.listening) await new Promise<void>((resolve) => upstream.close(() => resolve()));
   }
 });
 

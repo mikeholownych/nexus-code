@@ -187,6 +187,8 @@ export interface VerificationEvidence {
   exitSuccess?: boolean;
   hasExecutedTests?: boolean;
   isDeliverableBound?: boolean;
+  /** True when the selected test command includes a filter and therefore cannot stand for the full suite. */
+  filtered?: boolean;
   /**
    * A discovered verifier's pass is independent evidence of the change: tests that existed before it, unmodified,
    * failed before and pass after. False (with independenceDetail) when only the agent's own tests, or tests that also

@@ -591,7 +591,7 @@ export class AgentWorkUnitExecutor implements WorkUnitExecutor {
         }
         // Only a record that tracks obligations can show that nothing happened; without one, earlier work is unknown.
         const notStarted =
-          !unusable && recovered?.state.unverifiedChangesPending !== undefined && conversationNotStarted(agent.getMessages());
+          !unusable && recovered?.obligationRecordPresent === true && conversationNotStarted(agent.getMessages());
         if (!notStarted) unusable ??= resumeHistoryProblem(agent.getMessages(), unit);
         const decision = ctx.operatorDecision
           ? `The operator decided: ${ctx.operatorDecision.label}${ctx.operatorDecision.note ? ` — ${ctx.operatorDecision.note}` : ""}.\n`
@@ -609,12 +609,15 @@ export class AgentWorkUnitExecutor implements WorkUnitExecutor {
           }
           // Without a recorded obligation (state unloadable, or written before obligations were recorded) earlier
           // changes are unknown, so they count as unverified.
-          agent.restartConversation(!recovered || recovered.state.unverifiedChangesPending === undefined);
+          agent.restartConversation(!recovered || !recovered.obligationRecordPresent);
           prompt =
             `${this.initialPrompt(unit, ctx)}\n\n${decision}` +
-            `Note: an earlier attempt at this unit ran, but its record was lost (${unusable}). Workspace changes it may have made are unknown and unverified; check the workspace before relying on it.`;
+            `Note: earlier task history was unusable (${unusable}). Prior workspace changes may be unknown and remain unverified; inspect the workspace before relying on them.`;
         } else if (notStarted) {
-          prompt = `${this.initialPrompt(unit, ctx)}${decision ? `\n\n${decision}` : ""}`;
+          const restartNotice = ctx.operatorDecision?.restart
+            ? "\n\nNote: this unit was explicitly restarted after recovery. Earlier workspace history may be incomplete, and any prior changes remain unverified; inspect the workspace before relying on them."
+            : "";
+          prompt = `${this.initialPrompt(unit, ctx)}${decision ? `\n\n${decision}` : ""}${restartNotice}`;
         } else {
           const op = recovered?.state.currentOperation;
           const stopped = op?.status === "interrupted"
@@ -642,11 +645,22 @@ export class AgentWorkUnitExecutor implements WorkUnitExecutor {
         shouldYield: (f, delay) => ctx.shouldYield(f, delay),
       });
       const isResume = Boolean(unit.agentTaskId && !unusable && !ctx.operatorDecision?.restart);
+      const priorVerificationAttempts = agent.getObjective()?.verification.length ?? 0;
       const turn = await agent.runTurn(prompt, undefined, { signal: ctx.signal, resume: isResume });
+      const configuredVerifier = config.authoritativeVerifierCommand?.trim();
+      const testerVerifiedThisTurn = unit.role === "tester" &&
+        (agent.getObjective()?.verification.slice(priorVerificationAttempts).some((attempt) => {
+          if (attempt.status !== "PASSED" || attempt.isDeliverableBound !== true || attempt.filtered === true) return false;
+          // An operator-configured verifier is authoritative. A discovered verifier needs
+          // independent fail-before/pass-after evidence; a passing generic suite is not enough.
+          return configuredVerifier
+            ? attempt.command === configuredVerifier && attempt.independent !== false
+            : attempt.independent === true;
+        }) ?? false);
       try {
         agent.checkpointDurableState(`work unit ${unit.id}`, turn);
       } catch {}
-      return this.classify(unit, resource, turn, agent.getCompletionSummary()?.summary, lastCondition, ctx);
+      return this.classify(unit, resource, turn, agent.getCompletionSummary()?.summary, lastCondition, ctx, testerVerifiedThisTurn);
     } finally {
       agent.setProviderRecoveryHooks(undefined);
       agent.shutdown();
@@ -671,11 +685,14 @@ export class AgentWorkUnitExecutor implements WorkUnitExecutor {
     summary: string | undefined,
     condition: ResourceConditionRecord | null,
     ctx: UnitRunContext,
+    testerVerifiedThisTurn = false,
   ): UnitRunResult {
     if (turn.execution === "INTERRUPTED") return { kind: "cancelled" };
     if (turnSucceeded(turn)) {
       if (
-        (turn.modelStop === "FINAL_TEXT" || (turn.outcome === "NOT_REQUIRED" && turn.modelStop !== "TASK_COMPLETED_TOOL")) &&
+        (turn.modelStop === "FINAL_TEXT" ||
+          (turn.outcome === "NOT_REQUIRED" && !(unit.role === "tester" && testerVerifiedThisTurn)) ||
+          (unit.role === "tester" && turn.outcome === "VERIFIED" && !testerVerifiedThisTurn)) &&
         (unit.role === "implementer" || unit.role === "tester")
       ) {
         return {
@@ -690,7 +707,11 @@ export class AgentWorkUnitExecutor implements WorkUnitExecutor {
         };
       }
       ctx.observeSuccess();
-      return { kind: "completed", summary: summary ?? turn.detail ?? "completed", outcome: turn.outcome };
+      return {
+        kind: "completed",
+        summary: summary ?? turn.detail ?? "completed",
+        outcome: unit.role === "tester" && turn.outcome === "NOT_REQUIRED" && testerVerifiedThisTurn ? "VERIFIED" : turn.outcome,
+      };
     }
     const f = turn.inferenceFailure;
     if (f) {

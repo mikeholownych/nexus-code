@@ -118,7 +118,11 @@ async function startGateway(script: (n: number, body: any) => Reply): Promise<Ga
 function makeRepo(files: Record<string, string> = {}): string {
   const repo = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-turn-"));
   fs.writeFileSync(path.join(repo, "base.txt"), "base\n");
-  for (const [name, content] of Object.entries(files)) fs.writeFileSync(path.join(repo, name), content);
+  for (const [name, content] of Object.entries(files)) {
+    const fullPath = path.join(repo, name);
+    fs.mkdirSync(path.dirname(fullPath), { recursive: true });
+    fs.writeFileSync(fullPath, content);
+  }
   execSync("git init -q && git config user.name t && git config user.email t@t.invalid && git add . && git commit -qm base", { cwd: repo, stdio: "ignore" });
   return repo;
 }
@@ -218,13 +222,16 @@ describe("A-1 outcome truth: structured TurnResult", () => {
 
 describe("A-3 verifier-backed completion", () => {
   const falseVerifierScript = (n: number): Reply =>
-    n === 1 ? { kind: "tools", calls: [{ name: "write_file", args: { path: "x.txt", content: "BROKEN" } }] }
+    n === 1 ? { kind: "tools", calls: [{ name: "edit_file", args: { path: "x.mjs", old_content: 'export const value = "BEFORE";', new_content: 'export const value = "BROKEN";' } }] }
     : n === 2 ? { kind: "tools", calls: [{ name: "run_command", args: { command: "echo checking tests" } }] }
     : n === 3 ? { kind: "tools", calls: [{ name: "task_completed", args: { summary: "all tests pass" } }] }
     : { kind: "text", content: "done" };
 
   /** A verifier that checks the changed file and reports the test it ran: evidence about the deliverable. */
-  const covering = (file: string) => `test:\n\t@test -s ${file} && echo "✔ ${file} has content" && echo "ℹ tests 1"\n`;
+  const covering = (_file: string) => `.PHONY: test\ntest:\n\tenv -u NODE_TEST_CONTEXT node --test test/impl.test.mjs\n`;
+  const importsDeliverable = (expected: string) => ({
+    "test/impl.test.mjs": `import test from "node:test";\nimport assert from "node:assert/strict";\nimport { value } from "../x.mjs";\ntest("declared deliverable", () => assert.equal(value, ${JSON.stringify(expected)}));\n`,
+  });
 
   test("a command whose TEXT resembles validation does not clear the obligation (failing verifier still runs)", async () => {
     await withTurn(falseVerifierScript, { Makefile: "test:\n\t@false\n" }, async (gw, _repo, agent) => {
@@ -253,7 +260,7 @@ describe("A-3 verifier-backed completion", () => {
   });
 
   test("an operator-configured verifier follows the same evidence rule: a run showing no test of the change is REGRESSION_FREE", async () => {
-    await withTurn(falseVerifierScript, {}, async (_gw, _repo, agent) => {
+    await withTurn(falseVerifierScript, { "x.mjs": 'export const value = "BEFORE";\n' }, async (_gw, _repo, agent) => {
       (agent as any).config.authoritativeVerifierCommand = "echo 'ℹ tests 1\\nℹ pass 1'";
       const r = await quiet(() => agent.runTurn("implement"));
       assert.equal(r.outcome, "REGRESSION_FREE");
@@ -262,7 +269,7 @@ describe("A-3 verifier-backed completion", () => {
   });
 
   test("the same trajectory with a passing verifier is VERIFIED only through the verifier run", async () => {
-    await withTurn(falseVerifierScript, { Makefile: covering("x.txt") }, async (_gw, _repo, agent) => {
+    await withTurn(falseVerifierScript, { Makefile: covering("x.mjs"), "x.mjs": 'export const value = "BEFORE";\n', ...importsDeliverable("BROKEN") }, async (_gw, _repo, agent) => {
       const r = await quiet(() => agent.runTurn("implement"));
       assert.equal(r.execution, "COMPLETED");
       assert.equal(r.outcome, "VERIFIED");
@@ -273,14 +280,14 @@ describe("A-3 verifier-backed completion", () => {
       assert.match(r.verification?.outputSha256 ?? "", /^[0-9a-f]{64}$/);
       assert.equal(r.unverifiedChangesPending, false);
       assert.equal(exitCodeForTurn(r), 0);
-    });
+    }, { trustedDeliverableFiles: ["x.mjs"] });
   });
 
   test("a mutation after a passing verification invalidates it", async () => {
     await withTurn((n) =>
-      n === 1 ? { kind: "tools", calls: [{ name: "write_file", args: { path: "a.txt", content: "1" } }] }
+      n === 1 ? { kind: "tools", calls: [{ name: "edit_file", args: { path: "x.mjs", old_content: 'export const value = "BEFORE";', new_content: 'export const value = "BROKEN";' } }] }
       : n === 2 ? { kind: "tools", calls: [{ name: "task_completed", args: { summary: "first" } }] }
-      : { kind: "text", content: "x" }, { Makefile: covering("a.txt") }, async (_gw, repo, agent) => {
+      : { kind: "text", content: "x" }, { Makefile: covering("x.mjs"), "x.mjs": 'export const value = "BEFORE";\n', ...importsDeliverable("BROKEN") }, async (_gw, repo, agent) => {
       const r1 = await quiet(() => agent.runTurn("one"));
       assert.equal(r1.outcome, "VERIFIED");
       // Direct mutation through the agent's spine path: next turn edits a file and stops without re-verifying.
@@ -289,7 +296,7 @@ describe("A-3 verifier-backed completion", () => {
       const r2 = await quiet(() => agent.runTurn("two"));
       assert.equal(r2.outcome, "UNVERIFIED");
       assert.equal(r2.unverifiedChangesPending, true);
-    });
+    }, { trustedDeliverableFiles: ["x.mjs"] });
   });
 
   test("running the tests is not a change: a test-only turn stays NOT_REQUIRED", async () => {
@@ -578,30 +585,31 @@ describe("A-2 cancellation", () => {
 // Process-level contract: `harness run` exit codes and interactive REPL Ctrl-C behaviour.
 // ---------------------------------------------------------------------------------------------------------------
 
-function runCli(gw: Gateway, repo: string, home: string, prompt: string, extraArgs: string[] = []): Promise<{ code: number | null; json: any; stdout: string }> {
+function runCli(gw: Gateway, repo: string, home: string, prompt: string, extraArgs: string[] = [], globalArgs: string[] = []): Promise<{ code: number | null; json: any; stdout: string; stderr: string }> {
   return new Promise((resolve) => {
-    const child = spawn(process.execPath, ["--import", "tsx", srcIndex, "run", "-w", repo, "-e", gw.url, "-m", "m", "-j", "-s", "5", "--yes", ...extraArgs, prompt], {
+    const child = spawn(process.execPath, ["--import", "tsx", srcIndex, ...globalArgs, "run", "-w", repo, "-e", gw.url, "-m", "m", "-j", "-s", "5", "--yes", ...extraArgs, prompt], {
       cwd: cliRoot, env: { ...process.env, HOME: home },
     });
     let stdout = "";
+    let stderr = "";
     child.stdout.on("data", (d) => (stdout += d.toString()));
-    child.stderr.on("data", () => {});
+    child.stderr.on("data", (d) => (stderr += d.toString()));
     const killer = setTimeout(() => child.kill("SIGKILL"), 60000);
     child.on("close", (code) => {
       clearTimeout(killer);
       let json: any;
       try { json = JSON.parse(stdout); } catch { json = undefined; }
-      resolve({ code, json, stdout });
+      resolve({ code, json, stdout, stderr });
     });
   });
 }
 
 describe("process exit contract (harness run)", () => {
-  const cases: Array<{ name: string; script: (n: number) => Reply; files: Record<string, string>; code: number; outcome: string; execution: string; success: boolean }> = [
+  const cases: Array<{ name: string; script: (n: number) => Reply; files: Record<string, string>; code: number; outcome: string; execution: string; success: boolean; deliverables?: string[] }> = [
     { name: "HTTP 500", script: () => ({ kind: "http", status: 500 }), files: {}, code: 1, outcome: "NOT_ESTABLISHED", execution: "FAILED", success: false },
     { name: "step limit", script: () => ({ kind: "tools", calls: [{ name: "list_dir", args: { path: "." } }] }), files: {}, code: 1, outcome: "NOT_ESTABLISHED", execution: "LIMIT_REACHED", success: false },
     { name: "read-only prose answer", script: (n) => n === 1 ? { kind: "tools", calls: [{ name: "list_dir", args: { path: "." } }] } : { kind: "text", content: "one file" }, files: {}, code: 0, outcome: "NOT_REQUIRED", execution: "COMPLETED", success: true },
-    { name: "verified completion", script: (n) => n === 1 ? { kind: "tools", calls: [{ name: "write_file", args: { path: "a.txt", content: "1" } }] } : n === 2 ? { kind: "tools", calls: [{ name: "task_completed", args: { summary: "ok" } }] } : { kind: "text", content: "x" }, files: { Makefile: 'test:\n\t@test -s a.txt && echo "✔ a.txt has content" && echo "ℹ tests 1"\n' }, code: 0, outcome: "VERIFIED", execution: "COMPLETED", success: true },
+    { name: "verified completion", script: (n) => n === 1 ? { kind: "tools", calls: [{ name: "edit_file", args: { path: "a.mjs", old_content: 'export const value = "BEFORE";', new_content: 'export const value = "1";' } }] } : n === 2 ? { kind: "tools", calls: [{ name: "task_completed", args: { summary: "ok" } }] } : { kind: "text", content: "x" }, files: { Makefile: '.PHONY: test\ntest:\n\tenv -u NODE_TEST_CONTEXT node --test test/impl.test.mjs\n', "a.mjs": 'export const value = "BEFORE";\n', "test/impl.test.mjs": 'import test from "node:test";\nimport assert from "node:assert/strict";\nimport { value } from "../a.mjs";\ntest("declared deliverable", () => assert.equal(value, "1"));\n' }, deliverables: ["a.mjs"], code: 0, outcome: "VERIFIED", execution: "COMPLETED", success: true },
     { name: "suite passing without testing the change", script: (n) => n === 1 ? { kind: "tools", calls: [{ name: "write_file", args: { path: "a.txt", content: "1" } }] } : n === 2 ? { kind: "tools", calls: [{ name: "task_completed", args: { summary: "ok" } }] } : { kind: "text", content: "x" }, files: { Makefile: "test:\n\t@echo 'ℹ tests 1\\nℹ pass 1'\n" }, code: 2, outcome: "REGRESSION_FREE", execution: "COMPLETED", success: false },
     { name: "completed without applicable verifier", script: (n) => n === 1 ? { kind: "tools", calls: [{ name: "write_file", args: { path: "a.txt", content: "1" } }] } : n === 2 ? { kind: "tools", calls: [{ name: "task_completed", args: { summary: "ok" } }] } : { kind: "text", content: "x" }, files: {}, code: 2, outcome: "UNVERIFIED", execution: "COMPLETED", success: false },
   ];
@@ -611,9 +619,10 @@ describe("process exit contract (harness run)", () => {
       const repo = makeRepo(c.files);
       const home = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-home-"));
       try {
-        const r = await runCli(gw, repo, home, "do the task");
+        const extraArgs = c.deliverables?.flatMap((file) => ["--deliverable-file", file]) ?? [];
+        const r = await runCli(gw, repo, home, "do the task", extraArgs);
         assert.ok(r.json, `JSON output expected, got: ${r.stdout.slice(0, 300)}`);
-        assert.equal(r.code, c.code);
+        assert.equal(r.code, c.code, `stdout: ${r.stdout}\nstderr: ${r.stderr}`);
         assert.equal(r.json.exitCode, c.code);
         assert.equal(r.json.turn.execution, c.execution);
         assert.equal(r.json.turn.outcome, c.outcome);
@@ -625,6 +634,29 @@ describe("process exit contract (harness run)", () => {
       }
     });
   }
+
+  test("a global deliverable declaration before the command is retained by the run action", async () => {
+    const gw = await startGateway((n) => n === 1
+      ? { kind: "tools", calls: [{ name: "edit_file", args: { path: "a.mjs", old_content: 'export const value = "BEFORE";', new_content: 'export const value = "1";' } }] }
+      : { kind: "tools", calls: [{ name: "task_completed", args: { summary: "done" } }] });
+    const repo = makeRepo({
+      Makefile: `.PHONY: test\ntest:\n\tenv -u NODE_TEST_CONTEXT node --test test/impl.test.mjs\n`,
+      "a.mjs": 'export const value = "BEFORE";\n',
+      "test/impl.test.mjs": 'import test from "node:test";\nimport assert from "node:assert/strict";\nimport { value } from "../a.mjs";\ntest("declared deliverable", () => assert.equal(value, "1"));\n',
+    });
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-home-"));
+    try {
+      const r = await runCli(gw, repo, home, "do the task", [], ["--deliverable-file", "a.mjs"]);
+      assert.ok(r.json, `JSON output expected, got: ${r.stdout.slice(0, 300)}\n${r.stderr}`);
+      assert.equal(r.code, 0, `stdout: ${r.stdout}\nstderr: ${r.stderr}`);
+      assert.equal(r.json.turn.outcome, "VERIFIED");
+      assert.equal(gw.requests.length, 2, "the task and completion request both use the configured gateway");
+    } finally {
+      await gw.close();
+      fs.rmSync(repo, { recursive: true, force: true });
+      fs.rmSync(home, { recursive: true, force: true });
+    }
+  });
 });
 
 const hasScript = spawnSync("script", ["--version"], { encoding: "utf-8" }).status === 0;

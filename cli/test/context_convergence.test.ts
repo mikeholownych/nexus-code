@@ -96,10 +96,15 @@ const visible = (body: any, file: string): boolean => allText(body).includes(`MA
 
 const GATEWAY_KEYS = ["HOME", "LOCAL_LLM_ENDPOINT", "LOCAL_LLM_API_KEY", "LOCAL_LLM_CREDENTIAL_ORIGINS", "LOCAL_LLM_FALLBACK_ENDPOINTS"];
 
-async function isolated<T>(fn: (repo: string) => Promise<T>): Promise<T> {
+async function isolated<T>(fn: (repo: string) => Promise<T>, files: Record<string, string> = {}): Promise<T> {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-cc-home-"));
   const repo = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-cc-"));
   for (const file of Object.keys(MARKERS)) fs.writeFileSync(path.join(repo, file), bigFile(file));
+  for (const [file, content] of Object.entries(files)) {
+    const fullPath = path.join(repo, file);
+    fs.mkdirSync(path.dirname(fullPath), { recursive: true });
+    fs.writeFileSync(fullPath, content);
+  }
   execSync("git init -q && git config user.name t && git config user.email t@t.invalid && git add . && git commit -qm base", { cwd: repo, stdio: "ignore" });
   const saved = Object.fromEntries(GATEWAY_KEYS.map((k) => [k, process.env[k]]));
   for (const k of GATEWAY_KEYS) delete process.env[k];
@@ -168,7 +173,8 @@ describe("A+B: compaction keeps the investigation moving instead of re-reading",
     await isolated(async (repo) => {
       const gw = await gateway(reviewer());
       const admissions: string[] = [];
-      const agent = quiet(new AutonomousAgent(cfg(gw, repo, { authoritativeVerifierCommand: "grep -q 'a.txt=copper-falcon, b.txt=silent-orchard, c.txt=amber-lattice, d.txt=north-quarry' review.md && echo '✔ review.md lists every value' && echo 'ℹ tests 1'" })));
+      const verifier = "node test/review.test.mjs && echo 'ℹ tests 1'";
+      const agent = quiet(new AutonomousAgent(cfg(gw, repo, { authoritativeVerifierCommand: verifier, trustedDeliverableFiles: ["review.md"] })));
       try {
         const turn = await muted(() => agent.runTurn(OBJECTIVE), admissions);
         const reads = (file: string) => gw.issued.filter((c) => c.name === "read_file" && (c.args as { path: string }).path === file).length;
@@ -179,8 +185,10 @@ describe("A+B: compaction keeps the investigation moving instead of re-reading",
         // B: each file of the batch is read once; compaction alone never causes a re-read.
         assert.deepEqual(BATCH.map(reads), [1, 1, 1], trail);
         assert.equal(reads("d.txt"), 1, trail);
-        // C (forward progress): the review is written from evidence and verified.
-        assert.equal(turn.outcome, "VERIFIED", `${turn.outcome} ${turn.reason ?? ""} ${turn.detail ?? ""}\n${trail}`);
+        // The content is correct, but this Markdown file is not imported by a pre-change test.
+        // The verifier can establish regression evidence, not VERIFIED under REQ-AGT-114.
+        assert.equal(turn.outcome, "REGRESSION_FREE", `${turn.outcome} ${turn.reason ?? ""} ${turn.detail ?? ""}\n${trail}`);
+        assert.equal(turn.reason, "REGRESSION_FREE");
         assert.equal(fs.readFileSync(path.join(repo, "review.md"), "utf-8").trim(), "a.txt=copper-falcon, b.txt=silent-orchard, c.txt=amber-lattice, d.txt=north-quarry");
         // A: every request carries the objective; the findings outlive the batch's output; nothing restarted.
         for (const q of gw.requests) assert.ok(allText(q.body).includes(OBJECTIVE), `req ${q.n} lost the objective`);
@@ -202,26 +210,29 @@ describe("A+B: compaction keeps the investigation moving instead of re-reading",
         agent.shutdown();
         await gw.close();
       }
-    });
+    }, { "test/review.test.mjs": 'import test from "node:test";\nimport assert from "node:assert/strict";\nimport { readFileSync } from "node:fs";\ntest("review content", () => assert.equal(readFileSync("review.md", "utf8").trim(), "a.txt=copper-falcon, b.txt=silent-orchard, c.txt=amber-lattice, d.txt=north-quarry"));\n' });
   });
 
-  test("CTX-03: a change that passes its verifier while resting on output it never fully saw is VERIFIED with a context qualifier", async () => {
+  test("CTX-03: truncated source output is marked, while a Markdown verifier remains regression-only", async () => {
     await isolated(async (repo) => {
       const write = (content: string): Call => ({ name: "write_file", args: { path: "review.md", content } });
       const gw = await gateway((r) =>
         r.n === 1 ? { tools: BATCH.map(read) } : r.n === 2 ? { tools: [write("markers reviewed for a.txt, b.txt, c.txt\n")] } : { tools: [done("review.md written")] });
-      const verifier = "test -s review.md && echo '✔ review.md written' && echo 'ℹ tests 1'";
-      const agent = quiet(new AutonomousAgent(cfg(gw, repo, { authoritativeVerifierCommand: verifier })));
+      const verifier = "node test/review.test.mjs && echo 'ℹ tests 1'";
+      const agent = quiet(new AutonomousAgent(cfg(gw, repo, { authoritativeVerifierCommand: verifier, trustedDeliverableFiles: ["review.md"] })));
       try {
         const turn = await muted(() => agent.runTurn("Read a.txt, b.txt and c.txt and write review.md, then call task_completed."));
-        assert.equal(turn.outcome, "VERIFIED", `${turn.outcome} ${turn.reason ?? ""}`);
-        assert.ok((turn.contextNotRetained ?? 0) >= 1, `the result says some output it rests on left context: ${turn.contextNotRetained}`);
-        assert.match(summarizeTurn(turn).line, /tool outputs? it may rest on left context and (was|were) not read again/);
+        assert.equal(turn.outcome, "REGRESSION_FREE", `${turn.outcome} ${turn.reason ?? ""}`);
+        assert.equal(turn.reason, "REGRESSION_FREE");
+        const shown = gw.requests[1].body.messages.filter((m: any) => m.role === "tool");
+        assert.equal(shown.length, 3);
+        for (const message of shown) assert.match(message.content, /\[Nexus: output truncated to fit the context window;/);
+        assert.equal(turn.contextNotRetained ?? 0, 0, "no removed observation is claimed when truncated output remained visible");
       } finally {
         agent.shutdown();
         await gw.close();
       }
-    });
+    }, { "test/review.test.mjs": 'import test from "node:test";\nimport assert from "node:assert/strict";\nimport { existsSync } from "node:fs";\ntest("review exists", () => assert.equal(existsSync("review.md"), true));\n' });
   });
 
   test("B: a result shown only truncated is not fully observed, so a read-only answer on it is not established", async () => {
@@ -311,7 +322,7 @@ describe("C: compaction between a mutation and completion", () => {
         assert.ok(admissions.some((l) => l.includes("state=auto_compacted")), admissions.join("\n"));
         assert.notEqual(turn.outcome, "NOT_REQUIRED");
         assert.equal(turn.outcome, "UNVERIFIED");
-        assert.equal(turn.reason, "NO_APPLICABLE_VERIFIER");
+        assert.equal(turn.reason, "CONTEXT_EVIDENCE_NOT_RETAINED");
         assert.equal(turnSucceeded(turn), false);
         assert.equal(agent.hasUnverifiedChanges(), true);
         // Within the turn (the objective, which offers read_objective, exists from its first request).
@@ -1122,23 +1133,24 @@ describe("E: an operator-configured verifier gates every completion", () => {
   const write = (file: string, content: string): Call => ({ name: "write_file", args: { path: file, content } });
   const TASK = "Write out.md containing the word ready, then call task_completed.";
 
-  test("a completion with no changes is refused with the verifier's output; the model continues and finishes verified", async () => {
+  test("a completion with no changes is refused; a later Markdown write remains regression-only", async () => {
     await isolated(async (repo) => {
       const gw = await gateway((r) => (r.n === 1 ? { tools: [done("nothing to change")] } : r.n === 2 ? { tools: [write("out.md", "ready\n")] } : { tools: [done("wrote out.md")] }));
-      const agent = quiet(new AutonomousAgent(cfg(gw, repo, { authoritativeVerifierCommand: "grep -q ready out.md && { echo VERIFIER-OK out.md; echo 'ℹ tests 1'; } || { echo VERIFIER-SAYS-out.md-missing; exit 1; }" })));
+      const verifier = "node test/output.test.mjs && echo 'ℹ tests 1'";
+      const agent = quiet(new AutonomousAgent(cfg(gw, repo, { authoritativeVerifierCommand: verifier, trustedDeliverableFiles: ["out.md"] })));
       try {
         const turn = await muted(() => agent.runTurn(TASK));
         const refusal = gw.requests[1].body.messages.filter((m: any) => m.role === "tool").at(-1);
         assert.match(String(refusal?.content), /Verification Oracle: The selected verifier did not pass/);
-        assert.match(String(refusal?.content), /VERIFIER-SAYS-out\.md-missing/);
+        assert.match(String(refusal?.content), /out\.md/);
         assert.equal(turn.execution, "COMPLETED");
-        assert.equal(turn.outcome, "VERIFIED", `${turn.outcome} ${turn.reason ?? ""}`);
+        assert.equal(turn.outcome, "REGRESSION_FREE", `${turn.outcome} ${turn.reason ?? ""}`);
         assert.equal(gw.requests.length, 3);
       } finally {
         agent.shutdown();
         await gw.close();
       }
-    });
+    }, { "test/output.test.mjs": 'import test from "node:test";\nimport assert from "node:assert/strict";\nimport { readFileSync } from "node:fs";\ntest("out.md deliverable", () => assert.match(readFileSync("out.md", "utf8"), /ready/));\n' });
   });
 
   test("a refused completion followed by a plain answer is not established", async () => {
@@ -1267,16 +1279,16 @@ describe("E: an operator-configured verifier gates every completion", () => {
 describe("F: an empty reply is not an answer", () => {
   const write = (file: string, content: string): Call => ({ name: "write_file", args: { path: file, content } });
   const TASK = "Write out.md containing the word ready, then call task_completed.";
-  const VERIFIER = "grep -q ready out.md && echo '✔ out.md is ready' && echo 'ℹ tests 1'";
+  const VERIFIER = "node test/output.test.mjs && echo 'ℹ tests 1'";
 
   // An empty stream is already re-requested once without streaming; an empty reply is one whose re-request is empty too.
-  test("a reply with no text and no tool call does not end the task: the model is told so and continues to a verified finish", async () => {
+  test("a reply with no text and no tool call does not end the task; the Markdown result is regression-only", async () => {
     await isolated(async (repo) => {
       const gw = await gateway((r) => (r.n <= 2 ? { text: "" } : r.n === 3 ? { tools: [write("out.md", "ready\n")] } : { tools: [done("wrote out.md")] }));
-      const agent = quiet(new AutonomousAgent(cfg(gw, repo, { authoritativeVerifierCommand: VERIFIER })));
+      const agent = quiet(new AutonomousAgent(cfg(gw, repo, { authoritativeVerifierCommand: VERIFIER, trustedDeliverableFiles: ["out.md"] })));
       try {
         const turn = await muted(() => agent.runTurn(TASK));
-        assert.equal(turn.outcome, "VERIFIED", `${turn.outcome} ${turn.reason ?? ""}`);
+        assert.equal(turn.outcome, "REGRESSION_FREE", `${turn.outcome} ${turn.reason ?? ""}`);
         assert.equal(gw.requests.length, 4);
         assert.ok(gw.requests[0].body.stream && !gw.requests[1].body.stream);
         const notice = gw.requests[2].body.messages.at(-1);
@@ -1286,7 +1298,7 @@ describe("F: an empty reply is not an answer", () => {
         agent.shutdown();
         await gw.close();
       }
-    });
+    }, { "test/output.test.mjs": 'import test from "node:test";\nimport assert from "node:assert/strict";\nimport { readFileSync } from "node:fs";\ntest("out.md deliverable", () => assert.match(readFileSync("out.md", "utf8"), /ready/));\n' });
   });
 
   test("a second empty reply in a row ends the turn without a complete answer; at the step limit an empty reply is the limit", async () => {

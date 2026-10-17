@@ -6,7 +6,7 @@ import { isDeepStrictEqual } from "node:util";
 import { confinedPath } from "./isolate.mjs";
 import { isolatedProcessArgv, runIsolatedProcess } from "./isolate.mjs";
 
-const RUNTIMES = Object.freeze({ node: "/usr/bin/node", python3: "/usr/bin/python3" });
+const RUNTIMES = Object.freeze({ node: process.execPath, python3: "/usr/bin/python3" });
 const MAX_ORACLE_BYTES = 1_048_576;
 const MAX_CASES = 256;
 const MAX_CASE_BYTES = 16_384;
@@ -101,6 +101,8 @@ export async function runBlackBoxOracle(task, workspace, check) {
       cwd: workspace,
       command,
       argv: [`/workspace/${check.argv[0]}`],
+      readOnlyPaths: [command],
+      allowedFiles: [command],
       workspaceReadOnly: true,
       timeoutMs: Math.min(check.timeoutMs, remainingMs),
     });

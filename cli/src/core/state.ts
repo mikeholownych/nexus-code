@@ -177,6 +177,8 @@ export interface DurableTaskState {
     command: string;
     failed: boolean;
     tests: Record<string, string> | null;
+    verifier?: Record<string, string> | null;
+    trustedDeliverables?: string[];
     at: string;
   } | null;
 }
@@ -267,6 +269,8 @@ export interface TaskRecoveryOptions {
 export interface TaskRecoveryResult {
   success: boolean;
   state: DurableTaskState;
+  /** Whether the pre-recovery record contained an obligation field; descriptive only, never a trust signal. */
+  obligationRecordPresent: boolean;
   interrupted: boolean;
   interruptedOperation?: InFlightOperationRecord;
   worktreeStatus: "consistent" | "missing" | "detached" | "none";
@@ -565,7 +569,7 @@ export class DurableStateManager {
       findings?: string[];
       objective?: ObjectiveLedger | null;
       unverifiedChangesPending?: boolean;
-      changeBaseline?: { command: string; failed: boolean; tests: Record<string, string> | null; at: string } | null;
+      changeBaseline?: { command: string; failed: boolean; tests: Record<string, string> | null; verifier?: Record<string, string> | null; trustedDeliverables?: string[]; at: string } | null;
     }
   ): DurableTaskState {
     const state = this.loadTaskState(taskId);
@@ -678,6 +682,9 @@ export class DurableStateManager {
       options.expectedWorkspace,
       recoveryWorkspacePaths,
     );
+    // Keep the original schema fact separate from the mutable state object. Recovery callers may
+    // conservatively persist an obligation before deciding whether the old conversation was usable.
+    const obligationRecordPresent = state.unverifiedChangesPending !== undefined;
     const diagnostics: string[] = [];
 
     let interrupted = false;
@@ -775,6 +782,7 @@ export class DurableStateManager {
     return {
       success: true,
       state,
+      obligationRecordPresent,
       interrupted,
       interruptedOperation: interruptedOp,
       worktreeStatus,

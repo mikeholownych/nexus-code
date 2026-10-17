@@ -108,6 +108,10 @@ export function agentSandboxArgv({ cwd, home, proxyDirectory, readOnlyPaths = []
   if (!sandboxAvailable()) throw new Error("Bubblewrap is unavailable; refusing candidate execution");
   const mountProblem = runtimeMountProblem(readOnlyPaths, allowedRuntimeRoots, runtimeExecutablePaths);
   if (mountProblem) throw new Error(mountProblem);
+  const nodeRuntime = fs.realpathSync(process.execPath);
+  if (!fs.statSync(nodeRuntime).isFile() || (fs.statSync(nodeRuntime).mode & 0o111) === 0) {
+    throw new Error("trusted evaluator Node.js runtime is unavailable");
+  }
   const workspace = fs.realpathSync(cwd);
   const args = ["--unshare-user", "--unshare-pid", "--unshare-net", "--disable-userns", "--die-with-parent", "--new-session", "--proc", "/proc", "--dev", "/dev", "--tmpfs", "/tmp"];
   for (const source of SYSTEM_BINARIES) {
@@ -136,9 +140,10 @@ export function agentSandboxArgv({ cwd, home, proxyDirectory, readOnlyPaths = []
     args.push("--ro-bind", resolved, resolved);
   }
   addTargetParents("/runner/agent_sandbox.mjs");
+  args.push("--ro-bind", nodeRuntime, "/runner/node");
   args.push("--ro-bind", fs.realpathSync(supervisorPath), "/runner/agent_sandbox.mjs");
   args.push("--chdir", "/workspace", "--clearenv", "--setenv", "PATH", "/usr/bin:/bin", "--setenv", "HOME", "/home/eval", "--setenv", "CI", "1", "--");
-  args.push("/usr/bin/node", "/runner/agent_sandbox.mjs");
+  args.push("/runner/node", "/runner/agent_sandbox.mjs");
   return { cmd: BWRAP, argv: args };
 }
 
@@ -171,8 +176,12 @@ export function isolatedProcessArgv({ cwd, command, argv = [], readOnlyPaths = [
     addParents(resolved);
     args.push("--ro-bind", resolved, resolved);
   }
+  const resolvedCommand = fs.realpathSync(command);
+  if (!SYSTEM_BINARIES.some((root) => resolvedCommand === root || resolvedCommand.startsWith(`${root}${path.sep}`)) && !readOnlyPaths.some((item) => fs.realpathSync(item) === resolvedCommand)) {
+    throw new Error("isolated executable must be included in the explicit read-only runtime paths");
+  }
   args.push("--chdir", "/workspace", "--clearenv", "--setenv", "PATH", "/usr/bin:/bin", "--setenv", "HOME", "/home/eval", "--setenv", "LANG", "C.UTF-8", "--");
-  args.push(fs.realpathSync(command), ...argv);
+  args.push(resolvedCommand, ...argv);
   return { cmd: BWRAP, argv: args, timeoutMs };
 }
 
