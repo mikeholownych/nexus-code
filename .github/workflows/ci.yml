@@ -47,7 +47,8 @@ jobs:
         node: [20, 22, 24]
     steps:
       - uses: actions/checkout@v4
-      - run: sudo apt-get update && sudo apt-get install --yes make bubblewrap
+      - run: sudo apt-get update && sudo apt-get install --yes make bubblewrap build-essential meson ninja-build pkg-config libcap-dev
+      - run: bash scripts/ensure-ci-bubblewrap.sh
       - uses: actions/setup-node@v4
         with:
           node-version: ${{ matrix.node }}
@@ -59,6 +60,16 @@ jobs:
       - run: npm --prefix cli run build
       - run: git diff --exit-code -- cli/dist
       - run: cargo test --locked --manifest-path core/Cargo.toml
+      - run: cargo build --locked --release --manifest-path core/Cargo.toml --bin harness-core --bin nexus-tui
+      - name: Install pinned security and SBOM test tools
+        run: |
+          cargo install cargo-audit --locked --version 0.22.2
+          curl -fsSL https://github.com/EmbarkStudios/cargo-deny/releases/download/0.20.2/cargo-deny-0.20.2-x86_64-unknown-linux-musl.tar.gz | tar -xz -C "$RUNNER_TEMP"
+          mv "$RUNNER_TEMP/cargo-deny-0.20.2-x86_64-unknown-linux-musl/cargo-deny" "$CARGO_HOME/bin/"
+          curl -fsSL https://github.com/CycloneDX/cyclonedx-rust-cargo/releases/download/cargo-cyclonedx-0.5.9/cargo-cyclonedx-x86_64-unknown-linux-musl.tar.xz | tar -xJ -C "$RUNNER_TEMP"
+          mv "$RUNNER_TEMP/cargo-cyclonedx-x86_64-unknown-linux-musl/cargo-cyclonedx" "$CARGO_HOME/bin/"
+          curl -fsSL https://github.com/CycloneDX/cyclonedx-cli/releases/download/v0.33.1/cyclonedx-linux-x64 -o "$CARGO_HOME/bin/cyclonedx"
+          chmod +x "$CARGO_HOME/bin/cyclonedx"
       - run: npm --prefix cli test
 
   linux-x86_64:
@@ -66,7 +77,8 @@ jobs:
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
-      - run: sudo apt-get update && sudo apt-get install --yes make bubblewrap
+      - run: sudo apt-get update && sudo apt-get install --yes make bubblewrap build-essential meson ninja-build pkg-config libcap-dev
+      - run: bash scripts/ensure-ci-bubblewrap.sh
       - uses: actions/setup-node@v4
         with:
           node-version: 20

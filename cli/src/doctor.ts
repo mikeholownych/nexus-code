@@ -14,6 +14,7 @@
  * and verified afterwards by re-running the affected checks.
  */
 import { X509Certificate } from "node:crypto";
+import { setMaxListeners } from "node:events";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -1016,7 +1017,18 @@ export async function runDoctor(optionsOrConfig: DoctorOptions | HarnessConfig |
   if (options.timeoutMs !== undefined && !(Number.isFinite(options.timeoutMs) && options.timeoutMs > 0)) {
     throw new Error(`--timeout must be a positive number of milliseconds (got ${String(options.timeoutMs)})`);
   }
-  const signal = options.signal ?? new AbortController().signal;
+  // Checks are deliberately started together. Each `runCheck` owns two one-shot
+  // listeners on its parent signal (abort propagation and Promise.race cancellation),
+  // so their known bounded fan-out exceeds Node 20's default EventTarget warning
+  // threshold. Use a private signal and set its limit to that explicit fan-out;
+  // never change the caller's signal or the process-wide listener default.
+  const checksController = new AbortController();
+  const signal = checksController.signal;
+  const callerSignal = options.signal;
+  const forwardAbort = () => checksController.abort(callerSignal?.reason);
+  if (callerSignal?.aborted) forwardAbort();
+  else callerSignal?.addEventListener("abort", forwardAbort, { once: true });
+  setMaxListeners(CHECKS.length * 2, signal);
   const ctx: CheckContext = {
     config: options.config,
     configError: options.configError,
@@ -1025,7 +1037,12 @@ export async function runDoctor(optionsOrConfig: DoctorOptions | HarnessConfig |
     home: options.home ?? credentialStorageHome(),
     timeoutMs: options.timeoutMs ?? DEFAULT_TIMEOUT_MS,
   };
-  const results = await Promise.all(CHECKS.map(([name, check]) => runCheck(name, check, ctx, signal)));
+  let results: DoctorFinding[][];
+  try {
+    results = await Promise.all(CHECKS.map(([name, check]) => runCheck(name, check, ctx, signal)));
+  } finally {
+    callerSignal?.removeEventListener("abort", forwardAbort);
+  }
   const findings = results.flat();
   const summary: Record<DoctorStatus, number> = { pass: 0, warn: 0, fail: 0, skip: 0 };
   for (const finding of findings) summary[finding.status]++;

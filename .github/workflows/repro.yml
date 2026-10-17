@@ -16,7 +16,7 @@ jobs:
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
-      - run: sudo apt-get update && sudo apt-get install --yes make bubblewrap
+      - run: sudo apt-get update && sudo apt-get install --yes make
       - uses: actions/setup-node@v4
         with:
           node-version: 20
@@ -45,7 +45,7 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
-      - run: sudo apt-get update && sudo apt-get install --yes make bubblewrap
+      - run: sudo apt-get update && sudo apt-get install --yes make
       - uses: actions/setup-node@v4
         with:
           node-version: 20

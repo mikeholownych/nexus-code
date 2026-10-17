@@ -530,20 +530,32 @@ describe("A-2 cancellation", () => {
     });
   });
 
-  test("cancel while a tool is executing: tool is awaited (settling), no further step is admitted", async () => {
+  test("cancel kills an in-flight command and prevents its queued tool call from dispatching", async () => {
     await withTurn((n) => n === 1
-      ? { kind: "tools", calls: [{ name: "run_command", args: { command: "sleep 1; touch settled.txt" } }, { name: "write_file", args: { path: "never.txt", content: "no" } }] }
+      ? { kind: "tools", calls: [{ name: "run_command", args: { command: "printf '%s\\n' \"$$\" > command.pid; touch started.txt; sleep 30; touch finished.txt" } }, { name: "write_file", args: { path: "never.txt", content: "no" } }] }
       : { kind: "text", content: "should not be requested" }, {}, async (gw, repo, agent) => {
       const turn = quiet(() => agent.runTurn("slow tool"));
-      await waitFor(() => agent.getTurnLifecycle()?.phase === "tool");
+      await waitFor(() => fs.existsSync(path.join(repo, "started.txt")));
+      const commandPid = Number(fs.readFileSync(path.join(repo, "command.pid"), "utf8").trim());
+      assert.ok(Number.isInteger(commandPid) && commandPid > 0);
+      const cancelledAt = Date.now();
       assert.equal(agent.requestCancel("test"), true);
       const r = await turn;
+      assert.ok(Date.now() - cancelledAt < 5000, "the cancelled command must settle within the accepted process-group bound");
       assert.equal(r.execution, "INTERRUPTED");
       assert.equal(r.interruption?.phase, "tool_settling");
       assert.equal(r.interruption?.outstandingTool, "run_command");
       assert.equal(r.interruption?.outstandingToolSettled, true);
       assert.equal(r.interruption?.undispatchedToolCalls, 1);
-      assert.equal(fs.existsSync(path.join(repo, "settled.txt")), true, "in-flight command was allowed to settle");
+      assert.equal(fs.existsSync(path.join(repo, "finished.txt")), false, "the cancelled command must not continue to its post-sleep mutation");
+      await waitFor(() => {
+        try {
+          process.kill(commandPid, 0);
+          return false;
+        } catch (error: any) {
+          return error?.code === "ESRCH";
+        }
+      });
       assert.equal(fs.existsSync(path.join(repo, "never.txt")), false, "queued tool call was never dispatched");
       assert.equal(gw.requests.length, 1);
     });
