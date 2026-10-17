@@ -15,10 +15,17 @@ node eval/score.mjs --pairs "$NEXUS_RESULTS" "$GOOSE_RESULTS" "$OPENCODE_RESULTS
 Each run uses a frozen copy of the task tree, a fresh workspace and `HOME`, and a unique output directory. The agent
 receives only its workspace, isolated home, selected read-only runtime files, and a run-scoped token for a local proxy;
 the real gateway credential stays in the harness process. The candidate runs in Bubblewrap user, PID and network
-namespaces, with nested user namespaces disabled. Hidden tests are copied into the workspace only after the agent exits.
-Task setup, hidden tests and regression commands use a separate Bubblewrap boundary with a cleared environment, no
-network, a disposable home and bounded captured output/wall time. Absolute paths, traversal, symlinks and unsupported
-fixture entries are rejected. `manifest.json` records the harness source-file hashes, model fingerprint, corpus/task
+namespaces, with nested user namespaces disabled. Legacy development tasks may still use `hidden: { dir, into, command }`;
+those commands execute against the candidate workspace after the agent exits and are **not safe for qualification**, because
+validator code can inspect or modify files in that workspace. Qualification requires `hidden: { protocol: "blackbox-v1",
+casesFile, runtime, argv, timeoutMs, totalTimeoutMs, maxOutputBytes }`. Its private JSON cases contain only `input` and
+`expected`; the host evaluator keeps expected values in its process and launches the candidate runtime separately for each
+input using a fresh top-level Bubblewrap boundary. The candidate receives one input on stdin and returns one JSON value on
+stdout. Its workspace is read-only; private oracle files are not mounted. Candidate output and diagnostics are discarded,
+and result logs contain only case counts and failed indexes. Supported runtimes are explicitly allowlisted (`node`,
+`python3`); the only argument is a validated relative candidate entrypoint (no runtime flags, eval expressions, or extra
+arguments), and per-case/aggregate time and output bounds are enforced. Oracle files must be outside the copied fixture.
+Absolute paths, traversal, symlinks and unsupported fixture entries are rejected. `manifest.json` records the harness source-file hashes, model fingerprint, corpus/task
 hashes when qualification is configured, executable version, budgets, host and Node version. Each result records the
 executable version and effective step/minute budget; per-run logs go to `logs/<task>-<run>/`. The runner refuses an
 existing output directory so a retry cannot append to or replace prior evidence.
@@ -137,7 +144,8 @@ one, before any agent runs, unless every item below holds:
 
 Bubblewrap plus the current runner enforces separate mount/user/PID/network namespaces, a cleared task-command
 environment, a bounded wall clock, bounded captured output, per-run process-group teardown, and read-only runtime
-binds. These controls do **not** currently establish kernel-enforced aggregate CPU, memory, process-count, or writable
+binds. Black-box qualification keeps oracle expectations outside candidate namespaces; legacy commands do not provide that
+property and remain development-only. These controls do **not** currently establish kernel-enforced aggregate CPU, memory, process-count, or writable
 disk quotas for the workspace and temporary filesystems. Qualification preflight now fails closed on that known gap;
 it does not claim that request/token ceilings substitute for kernel resource controls. Do not represent the sandbox as
 resource-exhaustion-proof or run M5 until an approved, measured resource-control contract is implemented and validated.
