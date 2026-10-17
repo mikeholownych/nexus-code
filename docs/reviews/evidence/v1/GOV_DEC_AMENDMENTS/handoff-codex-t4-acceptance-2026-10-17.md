@@ -39,6 +39,8 @@ This aligns ACCEPTANCE §6.2 with the DEC-05 amendment (2026-10-17) and with SPE
 - **Line 39 (`REQ-AGT-118` row):** replace the "conflicts with … keep both criteria and the requirement open" text with: conflict **resolved by DEC-17** (admission-safety floor takes precedence; `≤ 1.5×` accuracy band scoped to corpora the floor does not dominate; failed measurements preserved). Status stays **`partial`**: changed-test execution and independent review of the amendment are still pending. The "do not call `ACC-VER-07` passed" instruction remains correct and in force.
 - **Line 49 (`REQ-QUAL-105` row):** the documented conflict ("DEC-05 says eight classes, ACCEPTANCE §6.2 lists nine") is **resolved — nine classes retained** (DEC-05 amendment, 2026-10-17; SIGTERM/resume is the ninth class). What remains is unchanged: the ACCEPTANCE §6.2 one-line edit (above) and the frozen 9 × 5 execution evidence.
 
+- **Line 33 (`REQ-AGT-004` row):** the ledger's stale claim "the durable-work-unit path does not yet apply the behavior" was corrected in REQUIREMENTS.md on this branch (AGT-02a applied to work units by PR-4b; crash-boundary evidence remains depth-0 — see `../INDEP-REVIEW-CONTINUITY/findings-verification.md` M2 and `dispositions.md`). Mirror the same correction in the READINESS row.
+
 ## Also for the custodian (not a code change)
 
 REQ-QUAL-101 requires the held-out corpus manifest to be committed to the repository (`eval/heldout-manifest.json`, per CONCURRENCY §8 / PLAN-10) **before RC1**. It currently exists only in `~/nexus-heldout/` and is not yet reproducible in the hidden-test half. Coordinate with the custodian before treating any corpus as held-out evidence. See `custody-report-2026-10-17.md`.
