@@ -10,7 +10,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { startModelProxy } from "./model_proxy.mjs";
-import { asUser, corpusManifestProblem, corpusTaskRows, fetchModelEntry, hiddenTestIsolationProblem, modelFingerprint, nexusLimitsProblem, qualificationBudgetProblem, taskTreeDigest, validateTask } from "./validate.mjs";
+import { asUser, corpusManifestProblem, corpusTaskRows, fetchModelEntry, hiddenTestIsolationProblem, modelFingerprint, nexusContextLimitArgs, nexusLimitsProblem, qualificationBudgetProblem, taskTreeDigest, validateTask } from "./validate.mjs";
 import { agentSandboxArgv, assertNoSymlinks, confinedPath, grantRunAsAccess, isolatedProcessArgv, runIsolated, runIsolatedProcess, sandboxAvailable } from "./isolate.mjs";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -390,7 +390,7 @@ function agentCommand(task, ws, home, budget, agentIdentity, localToken) {
   const agent = config.agent ?? "nexus";
   if (agent === "nexus") {
     env.LOCAL_LLM_ENDPOINT = ep;
-    const contextArgs = limits.context ? ["--context-limit", String(limits.context)] : [];
+    const contextArgs = nexusContextLimitArgs(config, limits.context);
     return { cmd: agentIdentity.command, argv: [...agentIdentity.argsPrefix, "run", "--yes", "--json", "-w", "/workspace", "-e", ep, "-m", config.model, "-t", String(sampling.temperature), "-s", "30", "--max-total-steps", String(budget.steps), "--max-turn-minutes", String(budget.minutes), ...contextArgs, ...(config.args ?? []), task.objective], env };
   }
   if (agent === "aider") {

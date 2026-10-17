@@ -97,6 +97,13 @@ export function nexusLimitsProblem(config, entry) {
   return null;
 }
 
+/** Select an explicit operator override or let standalone server profiles discover their own context limit. */
+export function nexusContextLimitArgs(config, defaultContext) {
+  if (config.serverProfile && config.limits?.context === undefined) return [];
+  const context = config.limits?.context ?? defaultContext;
+  return Number.isSafeInteger(context) && context > 0 ? ["--context-limit", String(context)] : [];
+}
+
 export function qualificationBudgetProblem(config) {
   const limits = config.limits;
   for (const key of ["output", "requests", "totalOutput"]) {

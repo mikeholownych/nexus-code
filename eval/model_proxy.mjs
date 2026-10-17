@@ -91,7 +91,7 @@ export async function startModelProxy({ upstream, caFile, faults = [], profile, 
   ]);
   const client = target.protocol === "https:" ? https : http;
   const ca = caFile ? fs.readFileSync(caFile) : undefined;
-  const stats = { requests: 0, chatRequests: 0, activeInferenceRequests: 0, cancelledRequests: 0, requestedCompletionTokens: 0, answered: 0, upstreamFailures: 0, faultsInjected: [], firstRequestAt: null, firstAnswerAt: null };
+  const stats = { requests: 0, chatRequests: 0, activeInferenceRequests: 0, cancelledRequests: 0, profileContextLookups: 0, requestedCompletionTokens: 0, answered: 0, upstreamFailures: 0, faultsInjected: [], firstRequestAt: null, firstAnswerAt: null };
 
   /** The upstream /models entries (for an emulated profile's context answers). */
   const upstreamModels = () => new Promise((resolve) => {
@@ -151,10 +151,12 @@ export async function startModelProxy({ upstream, caFile, faults = [], profile, 
       // The server's own endpoints for its loaded context, answered here with the gateway's real numbers.
       if (profile === "llamacpp" && req.method === "GET" && urlPath === "/props") {
         req.resume();
+        stats.profileContextLookups++;
         return void sendJson(res, 200, { default_generation_settings: { n_ctx: await firstContext() } });
       }
       if (profile === "ollama" && req.method === "POST" && urlPath === "/api/show") {
         req.resume();
+        stats.profileContextLookups++;
         const ctx = await firstContext();
         return void sendJson(res, 200, { parameters: `num_ctx ${ctx}`, model_info: { "general.context_length": ctx } });
       }

@@ -96,6 +96,19 @@ test("a correct deliverable passes the hidden test; a wrong one fails it and is 
 });
 
 // REQ-QUAL-110: T4 smoke in `make test` — faults injected by the harness's model proxy end truthfully.
+test("standalone profile context discovery is not overridden by the harness default", async () => {
+  const { nexusContextLimitArgs } = await import(path.join(ROOT, "eval/validate.mjs"));
+  assert.deepEqual(nexusContextLimitArgs({ serverProfile: "llamacpp" }, 65536), []);
+  assert.deepEqual(nexusContextLimitArgs({ serverProfile: "llamacpp", limits: { context: 8192 } }, 65536), ["--context-limit", "8192"]);
+  assert.deepEqual(nexusContextLimitArgs({}, 65536), ["--context-limit", "65536"]);
+});
+
+test("a standalone server-profile run discovers context instead of forcing the harness default", { timeout: 300_000 }, async () => {
+  const result = await evaluate("exports.add = (a, b) => a + b;\n", { serverProfile: "llamacpp" });
+  assert.equal(result.records[0].hiddenPass, true);
+  assert.ok(result.records[0].model.profileContextLookups > 0, "llama.cpp context comes from the profile endpoint");
+});
+
 test("T4 smoke: an overloaded endpoint is waited out and the task still completes; the fault is recorded", { timeout: 300_000 }, async () => {
   const { records, score } = await evaluate("exports.add = (a, b) => a + b;\n", { faults: [{ kind: "overloaded", atRequest: 1 }] });
   const r = records[0];
