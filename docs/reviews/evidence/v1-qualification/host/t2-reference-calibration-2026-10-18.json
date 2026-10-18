@@ -1,0 +1,59 @@
+{
+  "calibratedAt": "2026-10-18T12:54:26.880Z",
+  "host": "mike-dev",
+  "profile": {
+    "cpuPercent": 800,
+    "memoryBytes": 17179869184,
+    "tasks": 4096,
+    "storageBytes": 21474836480,
+    "workspaceRoot": "/srv/nexus-qual/ws"
+  },
+  "tasksTotal": 40,
+  "tasksPassed": 40,
+  "tasksFailed": 0,
+  "maxMemoryPeakBytes": 1265086464,
+  "maxMemoryPeakMiB": 1206.5,
+  "maxPidsPeak": 163,
+  "maxWorkspaceBytes": 235941936,
+  "maxWorkspaceMiB": 225,
+  "maxPhaseWallMs": 119157,
+  "totalCpuUsageSec": 1182.9,
+  "totalCpuThrottledSec": 0,
+  "oomKills": 0,
+  "pidsMaxEvents": 0,
+  "uncleanPhases": 0,
+  "byLanguage": {
+    "go": {
+      "tasks": 10,
+      "passed": 10,
+      "maxMemoryPeakBytes": 382705664,
+      "maxPidsPeak": 50,
+      "maxWorkspaceBytes": 992032,
+      "maxPhaseWallMs": 7252
+    },
+    "javascript": {
+      "tasks": 10,
+      "passed": 10,
+      "maxMemoryPeakBytes": 1265086464,
+      "maxPidsPeak": 19,
+      "maxWorkspaceBytes": 15919596,
+      "maxPhaseWallMs": 119157
+    },
+    "python": {
+      "tasks": 10,
+      "passed": 10,
+      "maxMemoryPeakBytes": 259919872,
+      "maxPidsPeak": 101,
+      "maxWorkspaceBytes": 8388194,
+      "maxPhaseWallMs": 70883
+    },
+    "rust": {
+      "tasks": 10,
+      "passed": 10,
+      "maxMemoryPeakBytes": 456048640,
+      "maxPidsPeak": 163,
+      "maxWorkspaceBytes": 235941936,
+      "maxPhaseWallMs": 17279
+    }
+  }
+}
