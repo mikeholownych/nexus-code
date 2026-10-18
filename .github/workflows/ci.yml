@@ -47,7 +47,7 @@ jobs:
         node: [20, 22, 24]
     steps:
       - uses: actions/checkout@v4
-      - run: sudo apt-get update && sudo apt-get install --yes make bubblewrap build-essential meson ninja-build pkg-config libcap-dev npm
+      - run: sudo apt-get update && sudo apt-get install --yes make bubblewrap build-essential meson ninja-build pkg-config libcap-dev
       - run: bash scripts/ensure-ci-bubblewrap.sh
       - uses: actions/setup-node@v4
         with:
@@ -57,9 +57,18 @@ jobs:
       - name: Install selected Node runtime for isolated evaluation commands
         run: |
           node_runtime="$(readlink -f "$(command -v node)")"
+          npm_cli="$(readlink -f "$(command -v npm)")"
+          npm_root="$(dirname "$(dirname "$npm_cli")")"
+          case "$npm_root" in */lib/node_modules/npm) ;; *) echo "Unexpected setup-node npm package path" >&2; exit 1 ;; esac
+          test -f "$npm_root/package.json"
           sudo install -o root -g root -m 0755 "$node_runtime" /usr/bin/node
+          sudo install -d -o root -g root -m 0755 /usr/lib/nexus-ci/npm
+          sudo cp -a "$npm_root/." /usr/lib/nexus-ci/npm/
+          sudo chown -hR root:root /usr/lib/nexus-ci/npm
+          sudo chmod 0755 /usr/lib/nexus-ci/npm/bin/npm-cli.js
+          sudo ln -sfn /usr/lib/nexus-ci/npm/bin/npm-cli.js /usr/bin/npm
           test "$(/usr/bin/node --version)" = "$(node --version)"
-          env PATH=/usr/bin:/bin /usr/bin/npm --version
+          test "$(env PATH=/usr/bin:/bin /usr/bin/npm --version)" = "$(npm --version)"
       - run: node scripts/sync-version.mjs --check
       - run: node scripts/check_requirements.mjs
       - run: npm ci --prefix cli
@@ -88,7 +97,7 @@ jobs:
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
-      - run: sudo apt-get update && sudo apt-get install --yes make bubblewrap build-essential meson ninja-build pkg-config libcap-dev npm
+      - run: sudo apt-get update && sudo apt-get install --yes make bubblewrap build-essential meson ninja-build pkg-config libcap-dev
       - run: bash scripts/ensure-ci-bubblewrap.sh
       - uses: actions/setup-node@v4
         with:
@@ -98,9 +107,18 @@ jobs:
       - name: Install selected Node runtime for isolated evaluation commands
         run: |
           node_runtime="$(readlink -f "$(command -v node)")"
+          npm_cli="$(readlink -f "$(command -v npm)")"
+          npm_root="$(dirname "$(dirname "$npm_cli")")"
+          case "$npm_root" in */lib/node_modules/npm) ;; *) echo "Unexpected setup-node npm package path" >&2; exit 1 ;; esac
+          test -f "$npm_root/package.json"
           sudo install -o root -g root -m 0755 "$node_runtime" /usr/bin/node
+          sudo install -d -o root -g root -m 0755 /usr/lib/nexus-ci/npm
+          sudo cp -a "$npm_root/." /usr/lib/nexus-ci/npm/
+          sudo chown -hR root:root /usr/lib/nexus-ci/npm
+          sudo chmod 0755 /usr/lib/nexus-ci/npm/bin/npm-cli.js
+          sudo ln -sfn /usr/lib/nexus-ci/npm/bin/npm-cli.js /usr/bin/npm
           test "$(/usr/bin/node --version)" = "$(node --version)"
-          env PATH=/usr/bin:/bin /usr/bin/npm --version
+          test "$(env PATH=/usr/bin:/bin /usr/bin/npm --version)" = "$(npm --version)"
       - name: Install cargo tools (audit, deny, about, cyclonedx)
         run: |
           CARGO_HOME="${CARGO_HOME:-$HOME/.cargo}"
