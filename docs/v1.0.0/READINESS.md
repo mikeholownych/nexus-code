@@ -1,11 +1,15 @@
 # v1.0.0 release readiness checkpoint
 
-**Updated:** 2026-10-18 17:16 UTC
+**Updated:** 2026-10-18 17:25 UTC
 **Current integration candidate:** `6a16cb60635c9182f13be1635d5f44eddebdcde0` (`v1/integration`)
 **Separate historical candidate branch:** `6151a231e9179c109cfbe8cff87e0a4148587b6a` (`v1/candidate-1`)
-**Disposition:** `BLOCKED` for final release; post-merge CI is still running on `6a16cb6`, requirements enforcement fails on that exact revision, and PR #33 has an independent evaluator-confidentiality finding that prohibits held-out qualification. No RC has been constructed or independently accepted. Publication authorization is granted but gated on acceptance; nothing has been tagged or published.
+**Disposition:** `BLOCKED` for final release; post-merge CI passed on `6a16cb6`, requirements enforcement fails on that exact revision, and PR #33 has an independent evaluator-confidentiality finding that prohibits held-out qualification. No v1.0.0 RC has been constructed or independently accepted, and no v1.0.0 stable release has been tagged or published. Publication authorization is granted but gated on acceptance.
 
 This checkpoint reconciles the candidate ledger and acceptance procedure against recorded source and test evidence. It is not a release approval. Historical inspection sections below are preserved as audit evidence and do not represent current branch state where superseded by the 2026-10-18 update.
+
+## Publication status correction (2026-10-18 17:25 UTC)
+
+The 17:16 checkpoint's phrase “nothing has been tagged or published” was too broad. GitHub lists the existing pre-releases `v0.1.0-alpha.1` and `v0.1.0-alpha.2`, with corresponding tags `7e46bb0da88d06552a66ef703f53a05d1de1f37d` and `c3dcafac93b5f52d913b4dfb6eb292bbcede4566`. Post-merge CI run `39146982849` and CodeQL passed on exact integration `6a16cb60635c9182f13be1635d5f44eddebdcde0`. No v1.0.0 release candidate or stable v1.0.0 publication exists. The superseded 17:16 text below is retained verbatim as historical evidence; this correction is authoritative for current release status.
 
 ## Current state update (2026-10-18 17:16 UTC, `6a16cb6`)
 
