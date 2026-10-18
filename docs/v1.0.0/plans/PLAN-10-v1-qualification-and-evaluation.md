@@ -31,7 +31,7 @@ Implements [SPEC-10](../specs/SPEC-10-v1-qualification-and-evaluation.md). Harne
 | 8 | Author tasks (owner action X2). Development set: the existing 6 plus routing engx T01–T12. Held-out set: 40 T2 tasks, of which at least 20 are external, at least 6 per class, across 4 languages. Plus 8 T3 tasks. The sha256 manifest is committed before RC freeze. Calibrate on the development set only. | external store; `eval/heldout-manifest.json` | 7 |
 | 9 | Peer adapters: confirm Goose and OpenCode on the same model and budgets, and record peer versions. | `run.mjs:120-143` | 4 |
 | 10 | Mark `nexus eval` experimental (help and docs). Fix its operator-workspace checkout: run in a worktree (VER-07a). | `index.ts:663-688`; `evaluator.ts:128` | — |
-| 11 | M5 runs: T2 held-out (5×), T3 (5×), T4 (8×5), standalone subset (PLAN-05), provider verify (DEC-06). Archive everything under `docs/reviews/evidence/v1-qualification/<rc>/`. | runbook in ACCEPTANCE §4–§6 | all, RC build |
+| 11 | M5 runs: T2 held-out (5×), T3 (5×), T4 (9×5), standalone subset (PLAN-05), provider verify (DEC-06). Archive everything under `docs/reviews/evidence/v1-qualification/<rc>/`. | runbook in ACCEPTANCE §4–§6 | all, RC build |
 | 13 | `eval/standalone/plain_proxy.mjs`: a forward proxy to the gateway. It injects the gateway token server-side. It strips `/v1/models` to `{id,object,owned_by}`, returns 404 for `/v1/tokenize`, and drops `X-AIHost-*` and admission headers. The `--emulate {llamacpp,vllm,ollama}` profiles add that server's `/models`, `/props`, `/api/show` and overflow-error shapes, derived from the real gateway limits. Unit-tested against a mock gateway. | new `eval/standalone/` | — |
 | 12 | Terminal matrix (manual): {xterm, kitty, tmux, VS Code, GNOME Terminal} × 3 sizes. Checklist per ACCEPTANCE §5.3. Archive screenshots. | ACCEPTANCE §5.3 | RC build |
 
@@ -59,7 +59,7 @@ Task 8 is data work. Tasks 11 and 12 are operations work.
 |---|---|---|
 | Harness fixes | 4–6 engineer-days | — |
 | Task authoring | 40 T2 tasks at 1–2 hours each, plus 8 T3 tasks at 3–4 hours each: roughly 10–14 days of author time | Author availability (X2) |
-| Run wall time | (40×5 + 8×5 + 40) runs per agent × 3 agents ≈ 840 runs. At a median 6 min/run serial on one inference host, about 84 hours, roughly 4 days of continuous inference. T3 runs are longer. | Inference-host availability and thermal behaviour (see the `experiments/thermal-soak` history). This is the critical-path risk for M5. |
+| Run wall time | (40×5 + 8×5 + 45) runs per agent × 3 agents ≈ 855 runs. At a median 6 min/run serial on one inference host, about 85.5 hours, roughly 4 days of continuous inference. T3 runs are longer. | Inference-host availability and thermal behaviour (see the `experiments/thermal-soak` history). This is the critical-path risk for M5. |
 
 ## Definition of done
 
