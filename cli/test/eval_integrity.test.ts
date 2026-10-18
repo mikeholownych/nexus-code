@@ -285,6 +285,7 @@ test("black-box oracle keeps canary expectations outside the candidate process a
     timedOut: false,
     overflow: false,
     outcome: "matched",
+    resources: null,
   });
   assert.deepEqual(fs.readFileSync(candidate), candidateBefore, "candidate workspace is read-only during oracle execution");
   assert.equal(JSON.stringify(result).includes(canary), false, "oracle evidence never serializes hidden expectations or candidate output");
@@ -358,7 +359,83 @@ test("hidden tests must be unreadable to the agent's own user", async () => {
 
 test("qualification remains fail-closed without enforced aggregate resource controls", async () => {
   const { qualificationResourceIsolationProblem } = await import(path.join(ROOT, "eval/validate.mjs"));
+  const shm = fs.statfsSync("/dev/shm");
+  const ok = { cpuPercent: 100, memoryBytes: 256 * 1024 * 1024, tasks: 64, storageBytes: shm.blocks * shm.bsize, workspaceRoot: "/dev/shm" };
   assert.match(qualificationResourceIsolationProblem(), /enforced CPU, memory, process-count, and workspace-storage limits/);
+  assert.match(qualificationResourceIsolationProblem({ resources: { ...ok, workspaceRoot: ROOT } }) ?? "", /tmpfs/);
+  assert.match(qualificationResourceIsolationProblem({ resources: { ...ok, memoryBytes: 1024 } }) ?? "", /memoryBytes/);
+  assert.match(qualificationResourceIsolationProblem({ resources: { ...ok, tasks: 0 } }) ?? "", /tasks/);
+  assert.match(qualificationResourceIsolationProblem({ resources: { ...ok, cpuPercent: 1.5 } }) ?? "", /cpuPercent/);
+  assert.match(qualificationResourceIsolationProblem({ resources: { ...ok, memoryBytes: 256 * 1024 * 1024 + 1 } }) ?? "", /multiple of 4096/);
+  assert.match(qualificationResourceIsolationProblem({ resources: { ...ok, storageBytes: ok.storageBytes - 4096 } }) ?? "", /dedicated tmpfs with size<=storageBytes/);
+  assert.match(qualificationResourceIsolationProblem({ resources: { ...ok, storageBytes: undefined } }) ?? "", /storageBytes/);
+  assert.equal(qualificationResourceIsolationProblem({ resources: ok }), null, "this host must prove the contract (scripts/ensure-ci-user-cgroups.sh)");
+});
+
+test("resource contract: candidate memory, processes, storage and CPU are kernel-bounded and every process is reaped", async () => {
+  const { runIsolated, sandboxAvailable } = await import(path.join(ROOT, "eval/isolate.mjs"));
+  const { spawnContained } = await import(path.join(ROOT, "eval/resources.mjs"));
+  assert.equal(sandboxAvailable(), true, "this security test requires the real Bubblewrap executable");
+  const memoryBytes = 128 * 1024 * 1024;
+  const shm = fs.statfsSync("/dev/shm");
+  const resources = { cpuPercent: 20, memoryBytes, tasks: 16, storageBytes: shm.blocks * shm.bsize, workspaceRoot: "/dev/shm" };
+  const ws = fs.mkdtempSync(path.join(resources.workspaceRoot, "eval-resources-"));
+  const run = (command: string, timeoutSec = 30) => runIsolated(command, { cwd: ws, home: true, timeoutSec, resources });
+  try {
+    const memory = await run("tail /dev/zero");
+    assert.notEqual(memory.status, 0);
+    assert.ok(memory.resources.oomKills >= 1, JSON.stringify(memory.resources));
+    assert.equal(memory.resources.limits["memory.oom.group"], "1");
+    assert.equal(memory.resources.limits["memory.max"], String(memoryBytes));
+    assert.equal(memory.resources.limits["memory.swap.max"], "0");
+    assert.equal(memory.containmentProblem, null);
+
+    const forks = await run("for i in $(seq 64); do sleep 30 & done; wait", 10);
+    assert.ok(forks.resources.pidsMaxEvents >= 1, JSON.stringify(forks.resources));
+    assert.ok(forks.resources.pidsPeak <= 16);
+    assert.equal(forks.resources.cleaned, true);
+
+    // Workspace and sandbox /tmp writes are tmpfs pages charged to the payload cgroup.
+    for (const target of ["/workspace/fill", "/tmp/fill"]) {
+      const disk = await run(`dd if=/dev/zero of=${target} bs=1M count=512 status=none`);
+      assert.ok(disk.resources.oomKills >= 1, `${target}: ${JSON.stringify(disk.resources)}`);
+    }
+    assert.ok(fs.statSync(path.join(ws, "fill")).size < memoryBytes);
+
+    const cpu = await run("timeout 2 sh -c 'while :; do :; done' & timeout 2 sh -c 'while :; do :; done' & wait");
+    assert.equal(cpu.resources.limits["cpu.max"], "20000 100000");
+    assert.ok(cpu.resources.cpuUsageUsec < 1_000_000, `two busy loops for 2 s at 20% used ${cpu.resources.cpuUsageUsec} us`);
+    assert.ok(cpu.resources.cpuThrottledUsec > 0);
+
+    // The wall-clock kill goes through the cgroup, so the supervisor still proves cleanup.
+    const slow = await run("sleep 60", 1);
+    assert.equal(slow.timedOut, true);
+    assert.equal(slow.resources.cleaned, true);
+    assert.equal(slow.containmentProblem, null);
+
+    // A stop requested at once (before the payload can have joined its leaf) still ends the payload.
+    const early = await new Promise<any>((resolve) => {
+      const started = Date.now();
+      const { child, containment } = spawnContained({ cmd: "/bin/sleep", argv: ["60"] }, resources, { cwd: "/", stdio: ["ignore", "ignore", "ignore"], detached: true });
+      containment!.kill();
+      child.on("close", async () => resolve({ ms: Date.now() - started, final: await containment!.final }));
+    });
+    assert.ok(early.ms < 15_000, `early stop took ${early.ms} ms`);
+    assert.notEqual(early.final?.exitCode, 0);
+
+    // A process that leaves the session and process group is still found in, and removed from, the cgroup.
+    const pidFile = path.join(ws, "daemon.pid");
+    const escaped = await new Promise<any>((resolve) => {
+      const { child, containment } = spawnContained({ cmd: "/bin/sh", argv: ["-c", `setsid sh -c 'echo $$ > ${pidFile}; exec sleep 300' </dev/null >/dev/null 2>&1 & sleep 0.3`] }, resources, { cwd: "/", stdio: ["ignore", "ignore", "ignore"], detached: true });
+      child.on("close", async () => resolve(await containment!.final));
+    });
+    assert.ok(escaped.survivorsAfterExit >= 1, JSON.stringify(escaped));
+    assert.equal(escaped.cleaned, true);
+    const daemon = Number(fs.readFileSync(pidFile, "utf8"));
+    assert.throws(() => process.kill(daemon, 0), /ESRCH/);
+  } finally {
+    fs.rmSync(ws, { recursive: true, force: true });
+  }
 });
 
 test("repository workspaces carry no history beyond the pinned baseline commit", async () => {

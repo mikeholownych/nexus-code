@@ -6,6 +6,7 @@ import path from "node:path";
 import { createHash } from "node:crypto";
 import { assertNoSymlinks, confinedPath, runtimeMountProblem, sandboxAvailable } from "./isolate.mjs";
 import { blackBoxOracleProblem } from "./oracle.mjs";
+import { resourceProbeProblem } from "./resources.mjs";
 
 export const TIERS = ["T1", "T2", "T3", "T4"];
 export const CLASSES = ["bugfix", "feature", "refactor", "debug"];
@@ -159,12 +160,16 @@ export function hiddenTestIsolationProblem(config, tasksDir) {
   }
   const mountProblem = runtimeMountProblem(config.sandboxRuntimePaths, config.sandboxRuntimeRoots);
   if (mountProblem) return mountProblem;
-  if (config.qualification) return qualificationResourceIsolationProblem();
+  if (config.qualification) return qualificationResourceIsolationProblem(config);
   return null;
 }
 
-export function qualificationResourceIsolationProblem() {
-  return "qualification is blocked until the candidate and validators inherit enforced CPU, memory, process-count, and workspace-storage limits";
+/** Qualification needs the kernel-enforced resource contract (eval/resources.mjs), proved on this host before any run. */
+export function qualificationResourceIsolationProblem(config = {}) {
+  if (config.resources === undefined) {
+    return "qualification is blocked until the candidate and validators inherit enforced CPU, memory, process-count, and workspace-storage limits (set resources)";
+  }
+  return resourceProbeProblem(config.resources);
 }
 
 /** A deterministic digest of task content. Symlinks are rejected instead of followed. */

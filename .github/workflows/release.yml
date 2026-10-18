@@ -23,6 +23,7 @@ jobs:
       - run: sudo apt-get update
       - run: sudo apt-get install --yes make bubblewrap build-essential meson ninja-build pkg-config libcap-dev
       - run: bash scripts/ensure-ci-bubblewrap.sh
+      - run: bash scripts/ensure-ci-user-cgroups.sh
       - uses: dtolnay/rust-toolchain@stable
       - name: Install cargo tools (audit, deny, about, cyclonedx)
         run: |
