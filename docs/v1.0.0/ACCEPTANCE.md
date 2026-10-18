@@ -25,9 +25,9 @@ The release sequence has five distinct stages. Passing an earlier stage is a pre
 2. **RC artifact construction.** After the required owner authorization, create the version-matched RC tag on that exact source commit and use the repository release workflow to build and publish the RC artifacts. Record the workflow run, tag commit, artifact digests, and provenance. The workflow-produced artifacts are the candidates for qualification; a local build or a different commit is not interchangeable. RC artifact publication is not product qualification or final release acceptance.
 3. **RC artifact gates.** Before installed-RC product qualification, run every G0–G4 check whose acceptance method requires the RC archive, RC attestation/release, or workflow-produced artifact. This includes ACC-SUP-01/02/03/06/08. ACC-PKG checks that explicitly require an installed package run against this RC as specified by their test method. Record the RC tag commit, workflow run, artifact digests, and each check result. A source-level analogue does not replace an artifact-bound check.
 4. **Installed-RC qualification.** Install the workflow-produced RC package using the documented procedure and run the applicable product, provider, task-quality, terminal, installation, and independent-acceptance gates in §§4–8. Bind each result to both the RC source commit and installed package digest. If a source change or rebuilt artifact changes either identity, rerun every affected gate against the new candidate and retain prior results as historical evidence.
-5. **Stable release.** After G6 passes and publication authorization is recorded, build and publish v1.0.0 through the approved workflow. Verify the stable artifact identity and rerun stable-release provenance, package, installation, and publication checks as required by G6.
+5. **Stable promotion and publication.** After exact-RC acceptance and G6 pass, create the stable tag and build a draft v1.0.0 release from the accepted RC source commit. Keep its assets unpublished while verifying the stable artifact identity, provenance, package contents, installation, and publication metadata. Compare the stable package contents with the accepted RC; if packaged behavior or content differs beyond version-specific metadata, rerun affected installed-RC qualification gates and obtain independent acceptance for the stable artifact. Publish the draft only after these checks pass and the signed acceptance disposition is recorded. Record the published digests and provenance.
 
-The final G6 decision in §10 applies to promotion to the stable v1.0.0 release. It requires the applicable gates to pass for the accepted RC and the release authorization listed there. It does not waive source CI, artifact identity, installed-RC qualification, or any threshold. Build the stable package from the accepted RC source commit through the approved workflow, then record its distinct stable artifact digests and rerun stable-release provenance, package, installation, and publication checks. Compare the stable package contents with the accepted RC; if any packaged behavior or content differs beyond version-specific metadata, rerun the affected installed-RC qualification gates and obtain independent acceptance for the resulting stable artifact before declaring release acceptance.
+The final G6 decision in §10 applies to promoting the accepted RC to a stable draft candidate. It requires the applicable gates to pass for the accepted RC and authorizes creation of the stable tag and draft artifacts; it does not waive source CI, artifact identity, installed-RC qualification, or any threshold. Public publication is a separate post-build gate in stage 5 above. The release workflow must keep stable assets in draft state until stable artifact checks pass. The current tag-triggered workflow publishes immediately and therefore cannot be used for stable publication until it supports this draft-then-publish sequence.
 
 ## 1. Rules
 
@@ -287,7 +287,7 @@ The submission is completed and frozen until judging ends (DEC-13). After judgin
 
 ## 10. Release decision (G6)
 
-The stable v1.0.0 release may be tagged only when every item below holds. RC tags are candidate construction inputs governed by §1.1; an RC tag or its successful build does not satisfy this release decision.
+G6 passes only when every item below holds. It authorizes the stable tag and creation of an unpublished draft candidate from the accepted RC source commit; it does not authorize making stable assets publicly available. RC tags are candidate construction inputs governed by §1.1; an RC tag or its successful build does not satisfy this release decision.
 
 - [ ] G0–G4 automated gates pass on the final RC commit (§3).
 - [ ] RC artifact gates pass on the workflow-produced RC, including ACC-SUP-01/02/03/06/08; record the exact source commit, workflow run, and artifact digest.
@@ -302,6 +302,7 @@ The stable v1.0.0 release may be tagged only when every item below holds. RC tag
 - [ ] Docs checklist (SPEC-09 §3.2) is signed off.
 - [ ] Release notes state the standalone scope (DEC-16), the provider tiers (DEC-06), the experimental surfaces (DEC-03, DEC-07) and the known limitations.
 - [ ] Owner approval to publish (X7).
-- [ ] Stable artifacts are built from the accepted RC source commit; stable digests and release checks are recorded. Any package-content change beyond version-specific metadata has its affected qualification gates rerun and independently accepted.
+
+After G6, complete the stable artifact checks in §1.1 stage 5 before publishing the draft. A failure keeps publication blocked and requires remediation plus the applicable requalification; do not mark the campaign released until published artifacts are independently verified.
 
 **Outcome recording.** The release decision record goes in `docs/releases/v1.0.0.md`, with links to every evidence directory.
