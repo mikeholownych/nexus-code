@@ -36,8 +36,10 @@ await check("evaluator account exists, is separate and cannot log in", () => {
   return `uid=${entry[2]} shell=${entry[6]}`;
 });
 
-await check("sudo allows only Bubblewrap as the evaluator", () => {
-  must(run("/usr/bin/sudo", ["-n", "-u", ACCOUNT, "--", "/usr/bin/bwrap", "--version"]).status === 0, "bwrap as evaluator is refused");
+await check("sudo allows only Bubblewrap as the evaluator, in exactly the form the harness uses", () => {
+  // The production invocation: eval/validate.mjs asUser, not a hand-written command.
+  const harness = asUser(ACCOUNT, "/usr/bin/bwrap", ["--version"]);
+  must(run(harness.cmd, harness.argv).status === 0, `the harness's own sudo invocation is refused: ${harness.cmd} ${harness.argv.join(" ")}`);
   for (const forbidden of [["/usr/bin/id"], ["/usr/bin/env", "id"], ["/bin/sh", "-c", "id"]]) {
     must(run("/usr/bin/sudo", ["-n", "-u", ACCOUNT, "--", ...forbidden]).status !== 0, `sudo also allows ${forbidden.join(" ")}`);
   }
@@ -92,19 +94,12 @@ await check("evaluator processes stay in the limited cgroup, and every one is re
 await check("the evaluator cannot reach operator files or the held-out store", () => {
   // Paths are checked to exist operator-side first, so a missing path cannot pass the check vacuously.
   const heldout = path.resolve(process.argv[process.argv.indexOf("--heldout") + 1] ?? "");
-  must(process.argv.includes("--heldout") && fs.statSync(heldout).isDirectory(), "pass --heldout <sealed task store> (an existing directory)");
+  must(process.argv.includes("--heldout") && run("/usr/bin/sudo", ["-n", "/usr/bin/test", "-d", heldout]).status === 0, "pass --heldout <sealed task store> (an existing directory)");
   const home = os.homedir();
   must(fs.statSync(home).isDirectory(), "operator home is missing");
   // One real file inside the store, chosen operator-side and never printed, must be unreadable even by exact path.
-  const findFile = (dir) => {
-    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
-      const item = path.join(dir, entry.name);
-      if (entry.isFile()) return item;
-      if (entry.isDirectory()) { const found = findFile(item); if (found) return found; }
-    }
-    return null;
-  };
-  const storeFile = findFile(heldout);
+  // The custodian's store is root-owned (0700), so root picks the file; its name is used, never printed or read.
+  const storeFile = run("/usr/bin/sudo", ["-n", "/usr/bin/find", heldout, "-type", "f", "-print", "-quit"]).stdout.trim() || null;
   must(storeFile, "the held-out store contains no file to probe");
   const probe = `test ! -x "$1" || { echo "can traverse the operator home"; exit 1; }; ls "$2" >/dev/null 2>&1 && { echo "can list the held-out store"; exit 1; }; ls "$1" >/dev/null 2>&1 && { echo "can list the operator home"; exit 1; }; cat "$3" >/dev/null 2>&1 && { echo "can read a held-out file by path"; exit 1; }; exit 0`;
   const result = run("/usr/bin/sudo", ["-n", "-u", ACCOUNT, "--", "/usr/bin/bwrap", "--ro-bind", "/", "/", "--proc", "/proc", "--dev", "/dev", "--unshare-net", "--", "/bin/sh", "-c", probe, "sh", home, heldout, storeFile]);
