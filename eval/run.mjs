@@ -15,6 +15,8 @@ import { agentSandboxArgv, assertNoSymlinks, confinedPath, grantRunAsAccess, iso
 import { runBlackBoxOracle } from "./oracle.mjs";
 import { stageRepoWorkspace } from "./workspace.mjs";
 import { containmentProblem, resourceProbeProblem, spawnContained } from "./resources.mjs";
+import { StringDecoder } from "node:string_decoder";
+import { countCompactions, createT3Driver, scoreT3Run, steeringBaseline, steeringPrecondition, t3Snapshot } from "./t3.mjs";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const args = parseArgs(process.argv.slice(2));
@@ -161,9 +163,10 @@ async function runOnce(task, run) {
   const ws = fs.mkdtempSync(path.join(scratch, `nexus-eval-${task.id}-`));
   const home = fs.mkdtempSync(path.join(scratch, "nexus-eval-home-"));
   const budget = effectiveBudget(task, config);
-  const base = { task: task.id, tier: task.tier, config: config.name, agent: config.agent ?? "nexus", agentVersion: agentIdentity.record, budget, run, harness: identity.string, model: config.model, startedAt: new Date().toISOString() };
+  const base = { task: task.id, tier: task.tier, ...(task.tier === "T3" ? { t3SteeringItems: task.steering.length } : {}), config: config.name, agent: config.agent ?? "nexus", agentVersion: agentIdentity.record, budget, run, harness: identity.string, model: config.model, startedAt: new Date().toISOString() };
   try {
     await prepareWorkspace(task, ws);
+    const t3Baseline = task.tier === "T3" ? steeringBaseline(task, ws) : null;
     const sourceBefore = treeDigest(task.dir);
     // Every agent reaches the model through a per-run forwarder, so whether the model was reachable is observed by the
     // harness, the same way for every agent (eval/infra.mjs). `config.proxy: false` connects agents directly.
@@ -200,6 +203,8 @@ async function runOnce(task, run) {
     if (agent.containmentProblem) throw new Error(`candidate containment failed: ${agent.containmentProblem}`);
     const model = proxy ? proxy.stats() : null;
     const contaminated = treeDigest(task.dir) !== sourceBefore || `${agent.stdout}${agent.stderr}`.includes(tasksDir);
+    // T3 judges the workspace as it was when the objective's work ended (snapshot taken before the probe turn).
+    const t3 = agent.t3Driver ? scoreT3Run({ task, baseline: t3Baseline, driver: agent.t3Driver, preconditions: agent.t3Preconditions, compactions: countCompactions(home) }) : null;
     const hidden = await runCheck(task, ws, task.hidden, true);
     const regression = task.regression ? await runCheck(task, ws, task.regression, false) : null;
     for (const [phase, check] of [["hidden", hidden], ["regression", regression]]) {
@@ -224,6 +229,7 @@ async function runOnce(task, run) {
       falseVerified: turn?.outcome === "VERIFIED" && !hidden.pass,
       contaminated,
       tokens: agent.json?.tokenStats ?? null,
+      ...(t3 ? { t3 } : {}),
       model,
       resources: config.resources ? { agent: agent.resources, hidden: hidden.resources ?? null, regression: regression?.resources ?? null } : null,
       logs: saveLogs(task, run, agent, hidden, regression),
@@ -407,6 +413,22 @@ function agentCommand(task, ws, home, budget, agentIdentity, localToken) {
   if (agent === "nexus") {
     env.LOCAL_LLM_ENDPOINT = ep;
     const contextArgs = nexusContextLimitArgs(config, limits.context);
+    if (task.tier === "T3") {
+      // T3 drives the sidecar, the operator channel that carries steering, with the same model, budgets and limits.
+      const checkout = agentIdentity.argsPrefix[0] === path.join(ROOT, "cli/dist/index.js");
+      // An installed package is <package>/bin/nexus with the sidecar at <package>/lib/cli/dist/sidecar.js.
+      const packageDir = checkout ? null : path.dirname(path.dirname(fs.realpathSync(agentIdentity.command)));
+      const sidecar = checkout ? path.join(ROOT, "cli/dist/sidecar.js") : path.join(packageDir, "lib/cli/dist/sidecar.js");
+      if (!fs.existsSync(sidecar)) throw new Error(`T3 needs the Nexus sidecar at ${sidecar}`);
+      if (packageDir) {
+        // The launcher is bypassed, so the package itself must be mounted: it has to sit under sandboxRuntimeRoots.
+        const roots = (config.sandboxRuntimeRoots ?? []).map((root) => fs.realpathSync(root));
+        if (!roots.some((root) => packageDir === root || packageDir.startsWith(`${root}${path.sep}`))) throw new Error(`T3 runs the sidecar from ${packageDir}, which must be under sandboxRuntimeRoots`);
+        env.NEXUS_HOME = packageDir;
+      }
+      const sidecarArgs = [sidecar, "--yes", "-w", "/workspace", "-e", ep, "-m", config.model, "-t", String(sampling.temperature), "-s", "30", "--max-total-steps", String(budget.steps), "--max-turn-minutes", String(budget.minutes), ...contextArgs, ...(config.args ?? [])];
+      return checkout ? { cmd: process.execPath, argv: sidecarArgs, env, protocol: true } : { cmd: "/usr/bin/env", argv: ["node", ...sidecarArgs], env, protocol: true };
+    }
     return { cmd: agentIdentity.command, argv: [...agentIdentity.argsPrefix, "run", "--yes", "--json", "-w", "/workspace", "-e", ep, "-m", config.model, "-t", String(sampling.temperature), "-s", "30", "--max-total-steps", String(budget.steps), "--max-turn-minutes", String(budget.minutes), ...contextArgs, ...(config.args ?? []), task.objective], env };
   }
   if (agent === "aider") {
@@ -438,7 +460,7 @@ function agentCommand(task, ws, home, budget, agentIdentity, localToken) {
 }
 
 function runAgent(task, ws, home, budget, agentIdentity, proxyDirectory, localToken) {
-  const { cmd, argv, env } = agentCommand(task, ws, home, budget, agentIdentity, localToken);
+  const { cmd, argv, env, protocol } = agentCommand(task, ws, home, budget, agentIdentity, localToken);
   if (config.qualification === true && !config.runAs) throw new Error("qualification candidate execution requires the dedicated evaluator account");
   if (config.runAs) grantRunAsAccess(config.runAs, [ws, home, proxyDirectory]);
   const runtimePaths = [fs.realpathSync(cmd), ...agentIdentity.argsPrefix.filter((item) => path.isAbsolute(item)), ...(config.sandboxRuntimePaths ?? [])];
@@ -457,7 +479,18 @@ function runAgent(task, ws, home, budget, agentIdentity, proxyDirectory, localTo
   const wrapped = config.runAs ? asUser(config.runAs, sandbox.cmd, sandbox.argv, {}) : sandbox;
   return new Promise((resolve) => {
     const { child, containment } = spawnContained(wrapped, config.resources ?? null, { cwd: "/", env: {}, stdio: ["pipe", "pipe", "pipe"], detached: true });
-    child.stdin.end(JSON.stringify({ command: cmd, argv, env }));
+    // T3: the payload is the first line and the sidecar protocol follows on the same stdin (eval/agent_sandbox.mjs).
+    const preconditions = {};
+    const runConstraint = (command) => runIsolated(command, { cwd: ws, home: true, timeoutSec: 300, resources: config.resources ?? null }).then((r) => ({ pass: r.status === 0 && !r.timedOut && !r.overflow }));
+    const driver = protocol ? createT3Driver(task, (line) => { if (!child.stdin.destroyed) child.stdin.write(line); }, {
+      onSteer: (item) => { preconditions[item.id] = steeringPrecondition(item, ws); },
+      beforeProbe: () => t3Snapshot(task, ws, runConstraint),
+    }) : null;
+    child.stdin.on("error", () => {});
+    if (driver) {
+      child.stdin.write(`${JSON.stringify({ command: cmd, argv, env, protocol: true })}\n`);
+      driver.done.then(() => setTimeout(() => child.stdin.end(), 2000).unref());
+    } else child.stdin.end(JSON.stringify({ command: cmd, argv, env }));
     let stdout = "";
     let stderr = "";
     let timedOut = false;
@@ -465,7 +498,8 @@ function runAgent(task, ws, home, budget, agentIdentity, proxyDirectory, localTo
     let outputBytes = 0;
     const collect = (target, chunk) => {
       outputBytes += chunk.length;
-      if (outputBytes > 2_000_000) {
+      // A T3 protocol session over 60+ steps is verbose; its cap is larger but still bounded.
+      if (outputBytes > (driver ? 50_000_000 : 2_000_000)) {
         outputExceeded = true;
         killGroup("SIGKILL");
         return;
@@ -477,6 +511,16 @@ function runAgent(task, ws, home, budget, agentIdentity, proxyDirectory, localTo
     child.stderr.removeAllListeners("data");
     child.stdout.on("data", (c) => collect("stdout", c));
     child.stderr.on("data", (c) => collect("stderr", c));
+    if (driver) {
+      // Registered after the collectors above (which reset the stream's listeners): every protocol line reaches the driver.
+      let pending = "";
+      const decoder = new StringDecoder("utf8"); // a chunk can end inside a multibyte character
+      child.stdout.on("data", (chunk) => {
+        pending += decoder.write(chunk);
+        let newline;
+        while ((newline = pending.indexOf("\n")) >= 0) { driver.handleLine(pending.slice(0, newline)); pending = pending.slice(newline + 1); }
+      });
+    }
     // The whole process group: agents start helpers (servers, shells) that must not outlive the run.
     // Under the resource contract the cgroup is emptied instead, so the supervisor survives to report cleanup.
     const killGroup = (sig) => {
@@ -495,7 +539,8 @@ function runAgent(task, ws, home, budget, agentIdentity, proxyDirectory, localTo
       clearTimeout(timer);
       killGroup("SIGKILL");
       const final = containment ? await containment.final : undefined;
-      resolve({ code, timedOut, outputExceeded, stdout, stderr, json: lastJson(stdout), ...(containment ? { resources: final, containmentProblem: containmentProblem(final) } : {}) });
+      const json = driver ? { turn: driver.state.objectiveTurns.at(-1) ?? null } : lastJson(stdout);
+      resolve({ code, timedOut, outputExceeded, stdout, stderr, json, ...(driver ? { t3Driver: driver.state, t3Preconditions: preconditions } : {}), ...(containment ? { resources: final, containmentProblem: containmentProblem(final) } : {}) });
     });
   });
 }
@@ -556,7 +601,7 @@ function harnessIdentity() {
   const git = (...a) => spawnSync("git", a, { cwd: ROOT, encoding: "utf8" }).stdout.trim();
   const commit = git("rev-parse", "HEAD");
   const dirty = Boolean(git("status", "--porcelain", "--untracked-files=all", "--", ".", ":(exclude)cli/dist"));
-  const sourceFiles = ["eval/run.mjs", "eval/validate.mjs", "eval/isolate.mjs", "eval/agent_sandbox.mjs", "eval/model_proxy.mjs", "eval/score.mjs", "eval/infra.mjs", "eval/workspace.mjs", "eval/resources.mjs", "eval/cgroup_supervisor.mjs"];
+  const sourceFiles = ["eval/run.mjs", "eval/validate.mjs", "eval/isolate.mjs", "eval/agent_sandbox.mjs", "eval/model_proxy.mjs", "eval/score.mjs", "eval/infra.mjs", "eval/workspace.mjs", "eval/resources.mjs", "eval/cgroup_supervisor.mjs", "eval/t3.mjs"];
   const sourceDigests = sourceFiles.map((file) => ({ file, sha256: createHash("sha256").update(fs.readFileSync(path.join(ROOT, file))).digest("hex") }));
   const sourceSha256 = createHash("sha256").update(JSON.stringify(sourceDigests)).digest("hex");
   return { commit, dirty, sourceDigests, sourceSha256, string: `${commit.slice(0, 12)}${dirty ? "-dirty" : ""}` };

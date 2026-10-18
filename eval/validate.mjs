@@ -6,6 +6,7 @@ import path from "node:path";
 import { createHash } from "node:crypto";
 import { assertNoSymlinks, confinedPath, runtimeMountProblem, sandboxAvailable } from "./isolate.mjs";
 import { blackBoxOracleProblem } from "./oracle.mjs";
+import { t3TaskProblems } from "./t3.mjs";
 import { resourceProbeProblem } from "./resources.mjs";
 
 export const TIERS = ["T1", "T2", "T3", "T4"];
@@ -19,6 +20,7 @@ export function validateTask(task, dir, { qualification = false } = {}) {
   need(typeof task.id === "string" && task.id === path.basename(dir), `id must equal its directory name (${path.basename(dir)})`);
   need(TIERS.includes(task.tier), `tier must be one of ${TIERS.join(", ")}`);
   need(typeof task.objective === "string" && task.objective.trim().length > 0, "objective is required");
+  problems.push(...t3TaskProblems(task));
   need(Boolean(task.fixture) !== Boolean(task.repo), "exactly one of fixture or repo is required");
   if (task.fixture) {
     try { confinedPath(dir, task.fixture); }
