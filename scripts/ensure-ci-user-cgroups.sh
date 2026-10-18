@@ -24,16 +24,27 @@ if ! has_contract; then
   sudo systemctl daemon-reload
   # A manager that is already running keeps its old delegation and must restart; otherwise lingering starts it
   # (asynchronously) with the drop-in in place. Restarting while it is still starting fails, so wait for it either way.
-  if systemctl is-active --quiet "user@$uid.service"; then
-    sudo systemctl restart "user@$uid.service"
-  else
-    sudo loginctl enable-linger "$(id -un)"
-  fi
-  for _ in $(seq 100); do
-    systemctl is-active --quiet "user@$uid.service" && [[ -S "$runtime/bus" ]] && break
-    sleep 0.2
+  sudo loginctl enable-linger "$(id -un)"
+  # Restarting a manager that is still starting fails, so stop it, start it again with the drop-in, and retry a few
+  # times. The contract proof below is the gate either way.
+  for attempt in 1 2 3 4 5; do
+    sudo systemctl stop "user@$uid.service" || true
+    if sudo systemctl start "user@$uid.service"; then
+      for _ in $(seq 100); do
+        systemctl is-active --quiet "user@$uid.service" && [[ -S "$runtime/bus" ]] && break
+        sleep 0.2
+      done
+      has_contract && break
+    fi
+    echo "user@$uid.service start attempt $attempt did not provide the contract; retrying" >&2
+    sleep "$attempt"
   done
-  has_contract || { echo "systemd user scopes with cpu, memory and pids delegation are unavailable" >&2; exit 1; }
+  if ! has_contract; then
+    echo "systemd user scopes with cpu, memory and pids delegation are unavailable" >&2
+    sudo systemctl status "user@$uid.service" --no-pager >&2 || true
+    sudo journalctl -u "user@$uid.service" -n 80 --no-pager >&2 || true
+    exit 1
+  fi
 fi
 
 if [[ -n "${GITHUB_ENV:-}" ]]; then
