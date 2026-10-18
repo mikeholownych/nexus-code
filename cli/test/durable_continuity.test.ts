@@ -100,6 +100,45 @@ test("AgentWorkUnitExecutor default construction persists a durable depth-1 impl
   });
 });
 
+test("AgentWorkUnitExecutor applies durable identity when a custom factory omits constructor options", async () => {
+  await withHome(async (home) => {
+    const gw = await gateway(() => done("custom-factory unit complete"));
+    const repo = makeRepo();
+    const stateDir = path.join(home, ".nexus", "tasks");
+    const priorStateDir = process.env.NEXUS_STATE_DIR;
+    process.env.NEXUS_STATE_DIR = path.join(home, ".nexus");
+    const config = cfg(gw, repo, { maxSteps: 1 });
+    const store = new OperationStore(repo, path.join(home, ".nexus", "operations"));
+    const unit: WorkUnitSpec = { id: "u-custom-factory", role: "implementer", prompt: "Complete this one-step work unit." };
+    const resource: ResourceDescriptor = { id: "primary", provider: gw.origin, endpoint: gw.url, model: "m", capabilities: ["tools"], rank: 0 };
+    let constructed: AutonomousAgent | undefined;
+    try {
+      const executor = new AgentWorkUnitExecutor({
+        baseConfig: config,
+        createAgent: (c, depth) => {
+          // Deliberately model a legacy custom factory that ignores the executor's durability options.
+          constructed = quiet(new AutonomousAgent(c, depth));
+          return constructed;
+        },
+      });
+      const op = await muted(() => driveOperation(newOperation("op-custom-factory", "custom factory", [unit], [resource], Date.now()), { store, executor }));
+      const savedUnit = unitOf(op, unit.id);
+      assert.ok(savedUnit.agentTaskId, "the executor bound the work-unit task id");
+      assert.ok(fs.existsSync(path.join(stateDir, `${savedUnit.agentTaskId}.json`)), "the custom-factory agent persisted durable task state");
+      assert.ok(constructed, "the custom factory constructed an agent");
+      assert.equal(constructed!.durable, true, "the executor applies the durability fallback");
+      assert.equal((constructed as any).depth, 1, "work-unit agents are depth 1");
+      assert.equal(constructed!.role, unit.role, "the executor applies the work-unit role fallback");
+      assert.equal(constructed!.unitId, unit.id, "the executor applies the work-unit identity fallback");
+    } finally {
+      if (priorStateDir === undefined) delete process.env.NEXUS_STATE_DIR;
+      else process.env.NEXUS_STATE_DIR = priorStateDir;
+      await gw.close();
+      fs.rmSync(repo, { recursive: true, force: true });
+    }
+  });
+});
+
 test("ACC-CONT-03: pressure compaction of a work unit survives SIGKILL and restores archived markers", async () => {
   await withHome(async (home) => {
     const work = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-cont-pressure-crash-"));
