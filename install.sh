@@ -137,7 +137,7 @@ const fs = require("node:fs");
 const [file, version, archive] = process.argv.slice(2);
 const data = JSON.parse(fs.readFileSync(file, "utf8"));
 const asset = data.platforms?.["linux-x86_64"];
-const compatible = data.product === "nexus-code" &&
+const compatible = data.schemaVersion === 1 && data.product === "nexus-code" &&
   data.version === version.replace(/^v/, "") &&
   typeof data.revision === "string" && /^[a-f0-9]{7,64}$/i.test(data.revision) &&
   typeof data.builtAt === "string" && !Number.isNaN(Date.parse(data.builtAt)) &&

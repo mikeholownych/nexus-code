@@ -66,6 +66,38 @@ if NEXUS_VERSION="v1.2.3/../x" sh "$INSTALLER" > "$TMP/bad-tag.out" 2>&1; then
 fi
 grep -F "version must be a release tag" "$TMP/bad-tag.out" >/dev/null
 
+# ACC-UPG-07: unsupported compatibility metadata schemas fail before installation.
+SCHEMA_VERSION="$VERSION-unsupported-schema"
+mkdir -p "$TMP/release/download/$SCHEMA_VERSION" "$TMP/schema-unpack"
+tar -xzf "$ARCHIVE" -C "$TMP/schema-unpack"
+printf '%s\n' "$SCHEMA_VERSION" > "$TMP/schema-unpack/nexus/VERSION"
+node - "$TMP/schema-unpack/nexus" "$SCHEMA_VERSION" <<'NODE'
+const fs = require("node:fs");
+const path = require("node:path");
+const [root, tag] = process.argv.slice(2);
+const version = tag.replace(/^v/, "");
+const pkgPath = path.join(root, "lib/cli/package.json");
+const pkg = JSON.parse(fs.readFileSync(pkgPath, "utf8"));
+pkg.version = version;
+fs.writeFileSync(pkgPath, `${JSON.stringify(pkg, null, 2)}\n`);
+const file = path.join(root, "compatibility.json");
+const metadata = JSON.parse(fs.readFileSync(file, "utf8"));
+metadata.version = version;
+for (const component of Object.keys(metadata.components)) metadata.components[component] = version;
+metadata.platforms["linux-x86_64"].archive = `nexus-linux-x86_64-${tag}.tar.gz`;
+metadata.schemaVersion = 2;
+fs.writeFileSync(file, `${JSON.stringify(metadata, null, 2)}\n`);
+NODE
+(cd "$TMP/schema-unpack/nexus" && find . -type f ! -name MANIFEST.sha256 | LC_ALL=C sort | xargs sha256sum > MANIFEST.sha256)
+SCHEMA_ARCHIVE="nexus-linux-x86_64-$SCHEMA_VERSION.tar.gz"
+tar -C "$TMP/schema-unpack" -czf "$TMP/release/download/$SCHEMA_VERSION/$SCHEMA_ARCHIVE" nexus
+(cd "$TMP/release/download/$SCHEMA_VERSION" && sha256sum "$SCHEMA_ARCHIVE" > SHA256SUMS)
+if NEXUS_VERSION="$SCHEMA_VERSION" NEXUS_PREFIX="$TMP/prefix" NEXUS_RELEASE_BASE_URL="http://127.0.0.1:$PORT" sh "$INSTALLER" > "$TMP/unsupported-schema.out" 2>&1; then
+  echo "installer accepted unsupported compatibility metadata schema" >&2
+  exit 1
+fi
+grep -F "release compatibility metadata is invalid or mismatched" "$TMP/unsupported-schema.out" >/dev/null
+
 # ACC-PKG-05: deleting a dist file then reinstalling repairs it
 DELETED="$TMP/prefix/lib/nexus/$VERSION/lib/cli/dist/index.js"
 if [ -f "$DELETED" ]; then
@@ -94,6 +126,22 @@ UPGRADE_VERSION="$VERSION-upgrade-smoke"
 mkdir -p "$TMP/release/download/$UPGRADE_VERSION" "$TMP/upgrade-unpack"
 tar -xzf "$ARCHIVE" -C "$TMP/upgrade-unpack"
 printf '%s\n' "$UPGRADE_VERSION" > "$TMP/upgrade-unpack/nexus/VERSION"
+node - "$TMP/upgrade-unpack/nexus" "$UPGRADE_VERSION" <<'NODE'
+const fs = require("node:fs");
+const path = require("node:path");
+const [root, tag] = process.argv.slice(2);
+const version = tag.replace(/^v/, "");
+const packagePath = path.join(root, "lib/cli/package.json");
+const pkg = JSON.parse(fs.readFileSync(packagePath, "utf8"));
+pkg.version = version;
+fs.writeFileSync(packagePath, `${JSON.stringify(pkg, null, 2)}\n`);
+const metadataPath = path.join(root, "compatibility.json");
+const metadata = JSON.parse(fs.readFileSync(metadataPath, "utf8"));
+metadata.version = version;
+for (const component of Object.keys(metadata.components)) metadata.components[component] = version;
+metadata.platforms["linux-x86_64"].archive = `nexus-linux-x86_64-${tag}.tar.gz`;
+fs.writeFileSync(metadataPath, `${JSON.stringify(metadata, null, 2)}\n`);
+NODE
 (cd "$TMP/upgrade-unpack/nexus" && find . -type f ! -name MANIFEST.sha256 | LC_ALL=C sort | xargs sha256sum > MANIFEST.sha256)
 UPGRADE_ARCHIVE="nexus-linux-x86_64-$UPGRADE_VERSION.tar.gz"
 tar -C "$TMP/upgrade-unpack" -czf "$TMP/release/download/$UPGRADE_VERSION/$UPGRADE_ARCHIVE" nexus

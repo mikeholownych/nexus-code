@@ -25,8 +25,8 @@ try {
   if (!/^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/.test(content.version)) {
     throw new Error("Version is not valid SemVer");
   }
-  if (!Number.isSafeInteger(content.schemaVersion) || content.schemaVersion < 1) {
-    throw new Error("Missing or invalid schemaVersion");
+  if (content.schemaVersion !== 1) {
+    throw new Error("Unsupported schemaVersion; expected 1");
   }
   if (typeof content.revision !== "string" || !/^[a-f0-9]{7,64}$/i.test(content.revision)) {
     throw new Error("Missing or invalid source revision");

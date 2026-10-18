@@ -103,8 +103,8 @@ export function validateCompatibilityMetadata(data: any): { valid: boolean; erro
   if (typeof data.version !== "string" || !parseSemver(data.version)) {
     errors.push("Missing or invalid SemVer 'version'");
   }
-  if (!Number.isSafeInteger(data.schemaVersion) || data.schemaVersion < 1) {
-    errors.push("Missing or invalid 'schemaVersion'");
+  if (data.schemaVersion !== COMPATIBILITY_SCHEMA_VERSION) {
+    errors.push(`Unsupported 'schemaVersion' ${data.schemaVersion}; expected ${COMPATIBILITY_SCHEMA_VERSION}`);
   }
   if (typeof data.revision !== "string" || !data.revision.trim()) errors.push("Missing or invalid 'revision'");
   if (typeof data.builtAt !== "string" || Number.isNaN(Date.parse(data.builtAt))) errors.push("Missing or invalid 'builtAt'");

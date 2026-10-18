@@ -415,6 +415,7 @@ describe("Machine-Readable Compatibility & Downgrade State Rejection (REQ-REL-11
     assert.equal(check.valid, true);
     assert.equal(check.errors.length, 0);
     assert.equal(meta.compatibility.stateSchemaVersion, 1);
+    assert.equal(validateCompatibilityMetadata({ ...meta, schemaVersion: 2 }).valid, false, "future metadata schemas fail closed");
   });
 
   it("rejects malformed compatibility metadata", () => {
