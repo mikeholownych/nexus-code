@@ -188,10 +188,25 @@ export async function t3Snapshot(task, ws, runCommand) {
   return { facts, constraints };
 }
 
-/** Whether a steering item could be violated when it was sent: file-absent needs the file to exist then. */
-export function steeringPrecondition(item, ws) {
+/**
+ * Command constraints are checked on the staged workspace before the agent starts (never in the live workspace while
+ * it works): one that already passes then is satisfiable by doing nothing. Resolves to { [id]: failsAtBaseline }.
+ */
+export async function commandBaseline(task, runCommand) {
+  const result = {};
+  for (const item of task.steering) {
+    if (item.constraint.kind === "command") result[item.id] = !(await runCommand(item.constraint.command)).pass;
+  }
+  return result;
+}
+
+/**
+ * Whether a steering item could be violated when it was sent: a file-absent/file-unchanged path must exist then; a
+ * command constraint must have failed on the baseline (commandBaseline).
+ */
+export function steeringPrecondition(item, ws, commandFailsAtBaseline) {
   if (item.constraint.kind === "file-absent" || item.constraint.kind === "file-unchanged") return fs.existsSync(path.join(ws, item.constraint.path));
-  return true;
+  return commandFailsAtBaseline?.[item.id] === true;
 }
 
 /** Digests of the paths file-unchanged constraints protect, taken before the agent runs. */

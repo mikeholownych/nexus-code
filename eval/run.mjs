@@ -16,7 +16,7 @@ import { runBlackBoxOracle } from "./oracle.mjs";
 import { stageRepoWorkspace } from "./workspace.mjs";
 import { containmentProblem, resourceProbeProblem, spawnContained } from "./resources.mjs";
 import { StringDecoder } from "node:string_decoder";
-import { countCompactions, createT3Driver, scoreT3Run, steeringBaseline, steeringPrecondition, t3Snapshot } from "./t3.mjs";
+import { commandBaseline, countCompactions, createT3Driver, scoreT3Run, steeringBaseline, steeringPrecondition, t3Snapshot } from "./t3.mjs";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const args = parseArgs(process.argv.slice(2));
@@ -167,6 +167,8 @@ async function runOnce(task, run) {
   try {
     await prepareWorkspace(task, ws);
     const t3Baseline = task.tier === "T3" ? steeringBaseline(task, ws) : null;
+    // On the per-run task copy, so the steering hook in runAgent can read it.
+    task.t3CommandBaseline = task.tier === "T3" ? await commandBaseline(task, (command) => runIsolated(command, { cwd: ws, home: true, timeoutSec: 300, resources: config.resources ?? null }).then((r) => ({ pass: r.status === 0 && !r.timedOut && !r.overflow }))) : null;
     const sourceBefore = treeDigest(task.dir);
     // Every agent reaches the model through a per-run forwarder, so whether the model was reachable is observed by the
     // harness, the same way for every agent (eval/infra.mjs). `config.proxy: false` connects agents directly.
@@ -422,7 +424,7 @@ function agentCommand(task, ws, home, budget, agentIdentity, localToken) {
       if (!fs.existsSync(sidecar)) throw new Error(`T3 needs the Nexus sidecar at ${sidecar}`);
       if (packageDir) {
         // The launcher is bypassed, so the package itself must be mounted: it has to sit under sandboxRuntimeRoots.
-        const roots = (config.sandboxRuntimeRoots ?? []).map((root) => fs.realpathSync(root));
+        const roots = (config.sandboxRuntimeRoots ?? []).flatMap((root) => { try { return [fs.realpathSync(root)]; } catch { return []; } });
         if (!roots.some((root) => packageDir === root || packageDir.startsWith(`${root}${path.sep}`))) throw new Error(`T3 runs the sidecar from ${packageDir}, which must be under sandboxRuntimeRoots`);
         env.NEXUS_HOME = packageDir;
       }
@@ -483,7 +485,7 @@ function runAgent(task, ws, home, budget, agentIdentity, proxyDirectory, localTo
     const preconditions = {};
     const runConstraint = (command) => runIsolated(command, { cwd: ws, home: true, timeoutSec: 300, resources: config.resources ?? null }).then((r) => ({ pass: r.status === 0 && !r.timedOut && !r.overflow }));
     const driver = protocol ? createT3Driver(task, (line) => { if (!child.stdin.destroyed) child.stdin.write(line); }, {
-      onSteer: (item) => { preconditions[item.id] = steeringPrecondition(item, ws); },
+      onSteer: (item) => { preconditions[item.id] = steeringPrecondition(item, ws, task.t3CommandBaseline); },
       beforeProbe: () => t3Snapshot(task, ws, runConstraint),
     }) : null;
     child.stdin.on("error", () => {});
