@@ -1,0 +1,87 @@
+TAP version 13
+# Subtest: coherent 1.0.0 metadata passes updater and publisher validation
+ok 1 - coherent 1.0.0 metadata passes updater and publisher validation
+  ---
+  duration_ms: 127.606401
+  ...
+# Subtest: coherent 1.0.0-rc.1 metadata passes updater and publisher validation
+ok 2 - coherent 1.0.0-rc.1 metadata passes updater and publisher validation
+  ---
+  duration_ms: 99.855849
+  ...
+# Subtest: coherent 1.0.0+build.1 metadata passes updater and publisher validation
+ok 3 - coherent 1.0.0+build.1 metadata passes updater and publisher validation
+  ---
+  duration_ms: 119.496399
+  ...
+# Subtest: reject mixed cli=9.9.9 throughout validation
+ok 4 - reject mixed cli=9.9.9 throughout validation
+  ---
+  duration_ms: 115.405132
+  ...
+# Subtest: reject mixed cli=1.0.0-rc.1 throughout validation
+ok 5 - reject mixed cli=1.0.0-rc.1 throughout validation
+  ---
+  duration_ms: 105.807495
+  ...
+# Subtest: reject mixed cli=1.0.0+other throughout validation
+ok 6 - reject mixed cli=1.0.0+other throughout validation
+  ---
+  duration_ms: 89.1121
+  ...
+# Subtest: reject mixed core=9.9.9 throughout validation
+ok 7 - reject mixed core=9.9.9 throughout validation
+  ---
+  duration_ms: 114.729225
+  ...
+# Subtest: reject mixed core=1.0.0-rc.1 throughout validation
+ok 8 - reject mixed core=1.0.0-rc.1 throughout validation
+  ---
+  duration_ms: 100.39196
+  ...
+# Subtest: reject mixed core=1.0.0+other throughout validation
+ok 9 - reject mixed core=1.0.0+other throughout validation
+  ---
+  duration_ms: 108.604909
+  ...
+# Subtest: reject mixed tui=9.9.9 throughout validation
+ok 10 - reject mixed tui=9.9.9 throughout validation
+  ---
+  duration_ms: 95.345542
+  ...
+# Subtest: reject mixed tui=1.0.0-rc.1 throughout validation
+ok 11 - reject mixed tui=1.0.0-rc.1 throughout validation
+  ---
+  duration_ms: 96.059733
+  ...
+# Subtest: reject mixed tui=1.0.0+other throughout validation
+ok 12 - reject mixed tui=1.0.0+other throughout validation
+  ---
+  duration_ms: 92.466677
+  ...
+# Subtest: reject mixed harness=9.9.9 throughout validation
+ok 13 - reject mixed harness=9.9.9 throughout validation
+  ---
+  duration_ms: 86.81458
+  ...
+# Subtest: reject mixed harness=1.0.0-rc.1 throughout validation
+ok 14 - reject mixed harness=1.0.0-rc.1 throughout validation
+  ---
+  duration_ms: 91.550413
+  ...
+# Subtest: reject mixed harness=1.0.0+other throughout validation
+ok 15 - reject mixed harness=1.0.0+other throughout validation
+  ---
+  duration_ms: 102.482921
+  ...
+1..15
+# tests 15
+# suites 0
+# pass 15
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 2353.080051
+
+exit=0

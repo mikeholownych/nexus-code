@@ -1,5 +1,5 @@
 {
-  "status": "proposed",
+  "status": "frozen",
   "host": "mike-dev",
   "cpuPercent": 800,
   "memoryBytes": 17179869184,
