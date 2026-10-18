@@ -8,6 +8,7 @@ import { execSync } from "node:child_process";
 import { routeSlash } from "../src/slash/router.js";
 import { findSlash, slashCatalog, SlashHost } from "../src/slash/catalog.js";
 import { computeSha256, PublishedRelease } from "../src/upgrade.js";
+import { generateCompatibilityMetadata } from "../src/compatibility.js";
 
 describe("TUI /upgrade slash command and deliberate confirmation interaction", () => {
   let server: http.Server;
@@ -45,6 +46,7 @@ describe("TUI /upgrade slash command and deliberate confirmation interaction", (
     const pkgStage = path.join(tmpRoot, "stage", "nexus");
     fs.mkdirSync(path.join(pkgStage, "bin"), { recursive: true });
     fs.mkdirSync(path.join(pkgStage, "lib", "core"), { recursive: true });
+    fs.mkdirSync(path.join(pkgStage, "lib", "cli", "dist"), { recursive: true });
     fs.writeFileSync(path.join(pkgStage, "VERSION"), "v1.0.0\n");
     const newBin = path.join(pkgStage, "bin", "nexus");
     fs.writeFileSync(newBin, "#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then echo \"nexus v1.0.0\"; exit 0; fi\n");
@@ -55,6 +57,13 @@ describe("TUI /upgrade slash command and deliberate confirmation interaction", (
     fs.writeFileSync(mockCore2, "#!/bin/sh\nexit 0\n");
     fs.chmodSync(mockCore1, 0o755);
     fs.chmodSync(mockCore2, 0o755);
+    fs.writeFileSync(path.join(pkgStage, "lib", "core", "harness-core"), '#!/bin/sh\nif [ "$1" = "--version" ]; then echo "harness-core 1.0.0"; exit 0; fi\nexit 0\n');
+    fs.writeFileSync(path.join(pkgStage, "lib", "core", "nexus-tui"), '#!/bin/sh\nif [ "$1" = "--version" ]; then echo "nexus-tui 1.0.0"; exit 0; fi\necho "NEXUS"\nexit 0\n');
+    fs.chmodSync(path.join(pkgStage, "lib", "core", "harness-core"), 0o755);
+    fs.chmodSync(path.join(pkgStage, "lib", "core", "nexus-tui"), 0o755);
+    fs.writeFileSync(path.join(pkgStage, "lib", "cli", "package.json"), JSON.stringify({ name:"nexus-code", version:"1.0.0" }));
+    fs.writeFileSync(path.join(pkgStage, "lib", "cli", "dist", "index.js"), "// dist entry\n");
+    fs.writeFileSync(path.join(pkgStage,"compatibility.json"),JSON.stringify(generateCompatibilityMetadata("v1.0.0","fixture-digest")));
 
     execSync(`tar -C "${path.join(tmpRoot, "stage")}" -czf "${path.join(archiveDir, archiveName)}" nexus`);
     const archiveSum = computeSha256(path.join(archiveDir, archiveName));
@@ -150,12 +159,18 @@ describe("TUI /upgrade slash command and deliberate confirmation interaction", (
     const verDir = path.join(prefix, "lib", "nexus", oldVersion);
     const binDir = path.join(prefix, "bin");
     fs.mkdirSync(path.join(verDir, "bin"), { recursive: true });
+    fs.mkdirSync(path.join(verDir, "lib", "cli", "dist"), { recursive:true });
+    fs.mkdirSync(path.join(verDir, "lib", "core"), { recursive:true });
     fs.mkdirSync(binDir, { recursive: true });
     fs.writeFileSync(path.join(verDir, "VERSION"), `${oldVersion}\n`);
 
     const oldBin = path.join(verDir, "bin", "nexus");
     fs.writeFileSync(oldBin, `#!/bin/sh\necho "nexus ${oldVersion}"\n`);
     fs.chmodSync(oldBin, 0o755);
+    fs.writeFileSync(path.join(verDir,"lib/cli/package.json"), JSON.stringify({ name:"nexus-code", version:"0.1.0-alpha.2" }));
+    fs.writeFileSync(path.join(verDir,"lib/cli/dist/index.js"), "// dist entry\n");
+    fs.writeFileSync(path.join(verDir,"lib/core/harness-core"), '#!/bin/sh\nif [ "$1" = "--version" ]; then echo "harness-core 0.1.0-alpha.2"; exit 0; fi\nexit 0\n', {mode:0o755});
+    fs.writeFileSync(path.join(verDir,"lib/core/nexus-tui"), '#!/bin/sh\nif [ "$1" = "--version" ]; then echo "nexus-tui 0.1.0-alpha.2"; exit 0; fi\necho "NEXUS"\nexit 0\n', {mode:0o755});
     fs.symlinkSync(oldBin, path.join(binDir, "nexus"));
 
     const prevHome = process.env.NEXUS_HOME;
@@ -194,7 +209,7 @@ describe("TUI /upgrade slash command and deliberate confirmation interaction", (
 
       assert.equal(outcome.kind, "reply");
       if (outcome.kind === "reply") {
-        assert.equal(outcome.success, true);
+        assert.equal(outcome.success, true, outcome.output);
         assert.match(outcome.output, /Nexus successfully upgraded to v1\.0\.0/);
         assert.match(outcome.output, /Restart Nexus to activate the new version/);
       }

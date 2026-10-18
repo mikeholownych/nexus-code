@@ -21,6 +21,7 @@ describe("Public Release Upgrade Acceptance (REQ-REL-116, ACC-UPG-07..14)", () =
   let fakeHome: string;
   let mockServer: http.Server;
   let mockPort: number;
+  let pkgV1: Buffer;
   let compatibilityV1: Buffer;
   let sumsV1: string;
   let origReleasesApi: string | undefined;
@@ -54,26 +55,33 @@ describe("Public Release Upgrade Acceptance (REQ-REL-116, ACC-UPG-07..14)", () =
     };
   }
 
-  function createPackageArchive(version: string, configSchema = 1, stateSchema = 1): Buffer {
+  function createPackageArchive(version: string, configSchema = 1, stateSchema = 1, customNexusScript?: string): Buffer {
+    const normalizedVersion = version.replace(/^v/, "");
     const entries: Array<{ name: string; content?: string; mode?: string }> = [
       { name: "nexus/", mode: "0000755\0" },
       { name: "nexus/VERSION", content: `${version}\n`, mode: "0000644\0" },
       { name: "nexus/bin/", mode: "0000755\0" },
       {
         name: "nexus/bin/nexus",
-        content: `#!/bin/sh\nif [ "$1" = "--version" ]; then echo "nexus ${version}"; exit 0; fi\necho "running ${version}"\nexit 0\n`,
+        content:
+          customNexusScript ??
+          `#!/bin/sh\nif [ "$1" = "--version" ]; then echo "nexus ${version}"; exit 0; fi\necho "running ${version}"\nexit 0\n`,
         mode: "0000755\0",
       },
       { name: "nexus/lib/", mode: "0000755\0" },
+      { name: "nexus/lib/cli/", mode: "0000755\0" },
+      { name: "nexus/lib/cli/package.json", content: JSON.stringify({ name:"nexus-code", version:normalizedVersion }), mode:"0000644\0" },
+      { name: "nexus/lib/cli/dist/", mode:"0000755\0" },
+      { name: "nexus/lib/cli/dist/index.js", content:"// dist entry\n", mode:"0000644\0" },
       { name: "nexus/lib/core/", mode: "0000755\0" },
       {
         name: "nexus/lib/core/harness-core",
-        content: "#!/bin/sh\nexit 0\n",
+        content: `#!/bin/sh\nif [ "$1" = "--version" ]; then echo "harness-core ${normalizedVersion}"; exit 0; fi\nexit 0\n`,
         mode: "0000755\0",
       },
       {
         name: "nexus/lib/core/nexus-tui",
-        content: "#!/bin/sh\nexit 0\n",
+        content: `#!/bin/sh\nif [ "$1" = "--version" ]; then echo "nexus-tui ${normalizedVersion}"; exit 0; fi\necho "NEXUS"\nexit 0\n`,
         mode: "0000755\0",
       },
       {
@@ -116,6 +124,21 @@ describe("Public Release Upgrade Acceptance (REQ-REL-116, ACC-UPG-07..14)", () =
     return zlib.gzipSync(Buffer.concat(blocks));
   }
 
+  function setupInstalledVersion(prefix: string, version: string): string {
+    const normalizedVersion = version.replace(/^v/, "");
+    const root = path.join(prefix, "lib", "nexus", version);
+    fs.mkdirSync(path.join(root, "bin"), { recursive:true });
+    fs.mkdirSync(path.join(root, "lib", "cli", "dist"), { recursive:true });
+    fs.mkdirSync(path.join(root, "lib", "core"), { recursive:true });
+    fs.writeFileSync(path.join(root,"VERSION"), `${version}\n`);
+    fs.writeFileSync(path.join(root,"bin/nexus"), `#!/bin/sh\nif [ "$1" = "--version" ]; then echo "nexus ${version}"; exit 0; fi\nexit 0\n`, { mode:0o755 });
+    fs.writeFileSync(path.join(root,"lib/cli/package.json"), JSON.stringify({ name:"nexus-code", version:normalizedVersion }));
+    fs.writeFileSync(path.join(root,"lib/cli/dist/index.js"), "// dist entry\n");
+    fs.writeFileSync(path.join(root,"lib/core/harness-core"), `#!/bin/sh\nif [ "$1" = "--version" ]; then echo "harness-core ${normalizedVersion}"; exit 0; fi\nexit 0\n`, { mode:0o755 });
+    fs.writeFileSync(path.join(root,"lib/core/nexus-tui"), `#!/bin/sh\nif [ "$1" = "--version" ]; then echo "nexus-tui ${normalizedVersion}"; exit 0; fi\necho "NEXUS"\nexit 0\n`, { mode:0o755 });
+    return root;
+  }
+
   beforeEach(async () => {
     tmpPrefix = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-upgrade-prefix-"));
     fakeHome = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-upgrade-home-"));
@@ -127,7 +150,7 @@ describe("Public Release Upgrade Acceptance (REQ-REL-116, ACC-UPG-07..14)", () =
     process.env.HOME = fakeHome;
 
     // Build release packages
-    const pkgV1 = createPackageArchive("v1.0.0", 1, 1);
+    pkgV1 = createPackageArchive("v1.0.0", 1, 1);
     const hashV1 = crypto.createHash("sha256").update(pkgV1).digest("hex");
     compatibilityV1 = Buffer.from(JSON.stringify(createCompatibilityMetadata("v1.0.0", 1, 1, hashV1), null, 2) + "\n");
     sumsV1 = `${hashV1}  nexus-linux-x86_64-v1.0.0.tar.gz\n${crypto.createHash("sha256").update(compatibilityV1).digest("hex")}  compatibility.json\n`;
@@ -220,18 +243,10 @@ describe("Public Release Upgrade Acceptance (REQ-REL-116, ACC-UPG-07..14)", () =
   it("upgrades from previous release v0.1.0-alpha.2 to v1.0.0 preserving state, configuration and permissions", async () => {
     // 1. Establish installed v0.1.0-alpha.2 layout
     const oldVersion = "v0.1.0-alpha.2";
-    const vOldDir = path.join(tmpPrefix, "lib", "nexus", oldVersion);
+    const vOldDir = setupInstalledVersion(tmpPrefix, oldVersion);
     const binDir = path.join(tmpPrefix, "bin");
-    fs.mkdirSync(path.join(vOldDir, "bin"), { recursive: true });
     fs.mkdirSync(binDir, { recursive: true });
-
-    fs.writeFileSync(path.join(vOldDir, "VERSION"), `${oldVersion}\n`);
     const oldBin = path.join(vOldDir, "bin", "nexus");
-    fs.writeFileSync(
-      oldBin,
-      `#!/bin/sh\nif [ "$1" = "--version" ]; then echo "nexus ${oldVersion}"; exit 0; fi\nexit 0\n`,
-      { mode: 0o755 }
-    );
 
     const binNexus = path.join(binDir, "nexus");
     fs.symlinkSync(oldBin, binNexus);
@@ -300,14 +315,10 @@ describe("Public Release Upgrade Acceptance (REQ-REL-116, ACC-UPG-07..14)", () =
 
   it("refuses downgrade when target release has incompatible state schema version", async () => {
     // Current installation at v1.0.0
-    const v1Dir = path.join(tmpPrefix, "lib", "nexus", "v1.0.0");
+    const v1Dir = setupInstalledVersion(tmpPrefix, "v1.0.0");
     const binDir = path.join(tmpPrefix, "bin");
-    fs.mkdirSync(path.join(v1Dir, "bin"), { recursive: true });
     fs.mkdirSync(binDir, { recursive: true });
-
-    fs.writeFileSync(path.join(v1Dir, "VERSION"), "v1.0.0\n");
     const v1Bin = path.join(v1Dir, "bin", "nexus");
-    fs.writeFileSync(v1Bin, "#!/bin/sh\nexit 0\n", { mode: 0o755 });
     const binNexus = path.join(binDir, "nexus");
     fs.symlinkSync(v1Bin, binNexus);
 
@@ -335,12 +346,10 @@ describe("Public Release Upgrade Acceptance (REQ-REL-116, ACC-UPG-07..14)", () =
     compatibilityV1 = Buffer.from(`${JSON.stringify(altered, null, 2)}\n`);
     sumsV1 = `${archiveDigest}  nexus-linux-x86_64-v1.0.0.tar.gz\n${crypto.createHash("sha256").update(compatibilityV1).digest("hex")}  compatibility.json\n`;
 
-    const oldVersion = "v0.1.0-alpha.2";
-    const oldVersionDir = path.join(tmpPrefix, "lib", "nexus", oldVersion);
+    const oldVersion = "v0.9.0";
+    const oldVersionDir = setupInstalledVersion(tmpPrefix, oldVersion);
     const binDir = path.join(tmpPrefix, "bin");
-    fs.mkdirSync(path.join(oldVersionDir, "bin"), { recursive: true });
     fs.mkdirSync(binDir, { recursive: true });
-    fs.writeFileSync(path.join(oldVersionDir, "VERSION"), `${oldVersion}\n`);
     const oldBin = path.join(oldVersionDir, "bin", "nexus");
     fs.writeFileSync(oldBin, `#!/bin/sh\necho "nexus ${oldVersion}"\n`, { mode: 0o755 });
     const activeLink = path.join(binDir, "nexus");
@@ -357,12 +366,9 @@ describe("Public Release Upgrade Acceptance (REQ-REL-116, ACC-UPG-07..14)", () =
   });
 
   it("handles TUI deliberate approval flow for upgrades", async () => {
-    const vOldDir = path.join(tmpPrefix, "lib", "nexus", "v0.1.0");
+    const vOldDir = setupInstalledVersion(tmpPrefix, "v0.1.0");
     const binDir = path.join(tmpPrefix, "bin");
-    fs.mkdirSync(path.join(vOldDir, "bin"), { recursive: true });
     fs.mkdirSync(binDir, { recursive: true });
-    fs.writeFileSync(path.join(vOldDir, "VERSION"), "v0.1.0\n");
-    fs.writeFileSync(path.join(vOldDir, "bin", "nexus"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
     fs.symlinkSync(path.join(vOldDir, "bin", "nexus"), path.join(binDir, "nexus"));
 
     const installed = detectInstallation({ nexusHome: vOldDir, envPrefix: tmpPrefix });
@@ -390,5 +396,89 @@ describe("Public Release Upgrade Acceptance (REQ-REL-116, ACC-UPG-07..14)", () =
     assert.equal(approved, true);
     assert.equal(approvalPayload.tool, "nexus_upgrade");
     assert.equal(approvalPayload.targetVersion, "v1.0.0");
+  });
+
+  it("rolls back launcher symlink to previous working version when post-switch self-test fails", async () => {
+    // Target package has a script that succeeds in staging but fails after symlink swap
+    const failingScript = `#!/bin/sh
+case "$0" in
+  *"/unpack/"*|*.tmp-upgrade-*)
+    if [ "$1" = "--version" ]; then echo "nexus v1.0.0"; exit 0; fi
+    exit 0
+    ;;
+  *)
+    echo "simulated post-switch failure" >&2
+    exit 42
+    ;;
+esac
+`;
+    pkgV1 = createPackageArchive("v1.0.0", 1, 1, failingScript);
+    const hash = crypto.createHash("sha256").update(pkgV1).digest("hex");
+    compatibilityV1 = Buffer.from(JSON.stringify(createCompatibilityMetadata("v1.0.0", 1, 1, hash), null, 2) + "\n");
+    sumsV1 = `${hash}  nexus-linux-x86_64-v1.0.0.tar.gz\n${crypto.createHash("sha256").update(compatibilityV1).digest("hex")}  compatibility.json\n`;
+
+    // Existing installation at v0.1.0-alpha.2
+    const oldVersion = "v0.9.0";
+    const oldVersionDir = setupInstalledVersion(tmpPrefix, oldVersion);
+    const binDir = path.join(tmpPrefix, "bin");
+    fs.mkdirSync(binDir, { recursive: true });
+    const oldBin = path.join(oldVersionDir, "bin", "nexus");
+    const activeLink = path.join(binDir, "nexus");
+    fs.symlinkSync(oldBin, activeLink);
+
+    const installed = detectInstallation({ nexusHome: oldVersionDir, envPrefix: tmpPrefix });
+    const target = await resolveTargetRelease(undefined, { timeoutMs: 5000 });
+    const comparison = compareInstallationWithRelease(installed, target);
+
+    // performUpgrade must reject due to post-switch self-test failure
+    await assert.rejects(
+      performUpgrade(comparison, { prefix: tmpPrefix, timeoutMs: 5000 }),
+      /Installed binary failed self-test/
+    );
+
+    // Launcher symlink MUST be restored to previous working version (oldBin)
+    assert.equal(fs.realpathSync(activeLink), fs.realpathSync(oldBin));
+
+    // Journal must record rolled_back state
+    const journal = readJournal(tmpPrefix);
+    assert.ok(journal);
+    assert.equal(journal.state, "rolled_back");
+  });
+
+  it("does not delete or corrupt working installation during same-version reinstall when package fails self-test", async () => {
+    // Current installation at v1.0.0
+    const v1Dir = setupInstalledVersion(tmpPrefix, "v1.0.0");
+    const binDir = path.join(tmpPrefix, "bin");
+    fs.mkdirSync(binDir, { recursive: true });
+    const v1Bin = path.join(v1Dir, "bin", "nexus");
+    const activeLink = path.join(binDir, "nexus");
+    fs.symlinkSync(v1Bin, activeLink);
+
+    // Add a critical file inside v1Dir to assert it is NOT destroyed
+    const canaryPath = path.join(v1Dir, "important-state.txt");
+    fs.writeFileSync(canaryPath, "critical installation payload\n");
+
+    // Make incoming v1.0.0 package fail staging self-test
+    const brokenScript = `#!/bin/sh\necho "fatal broken binary" >&2\nexit 1\n`;
+    pkgV1 = createPackageArchive("v1.0.0", 1, 1, brokenScript);
+    const hash = crypto.createHash("sha256").update(pkgV1).digest("hex");
+    compatibilityV1 = Buffer.from(JSON.stringify(createCompatibilityMetadata("v1.0.0", 1, 1, hash), null, 2) + "\n");
+    sumsV1 = `${hash}  nexus-linux-x86_64-v1.0.0.tar.gz\n${crypto.createHash("sha256").update(compatibilityV1).digest("hex")}  compatibility.json\n`;
+
+    const installed = detectInstallation({ nexusHome: v1Dir, envPrefix: tmpPrefix });
+    const target = await resolveTargetRelease(undefined, { timeoutMs: 5000 });
+    const comparison = compareInstallationWithRelease(installed, target);
+
+    // Reinstall attempt must reject
+    await assert.rejects(
+      performUpgrade(comparison, { prefix: tmpPrefix, force: true, timeoutMs: 5000 }),
+      /Unpacked binary failed staging self-test/
+    );
+
+    // Working installation must remain intact and NOT deleted
+    assert.ok(fs.existsSync(v1Dir));
+    assert.ok(fs.existsSync(canaryPath));
+    assert.equal(fs.readFileSync(canaryPath, "utf8"), "critical installation payload\n");
+    assert.equal(fs.realpathSync(activeLink), fs.realpathSync(v1Bin));
   });
 });

@@ -1,0 +1,22 @@
+[
+  {
+    "productVersion": "0.1.0-alpha.1",
+    "binarySha256": "60e4266f43e944bcb64ac5258b96f1516b80874a3f5033322aa577c9794209f6",
+    "command": "harness-core --version",
+    "status": 0,
+    "stdout": "harness-core 1.2.1",
+    "stderr": "",
+    "host": "mike-dev",
+    "observedAt": "2026-10-18T17:51:26.994620+00:00"
+  },
+  {
+    "productVersion": "0.1.0-alpha.2",
+    "binarySha256": "60e4266f43e944bcb64ac5258b96f1516b80874a3f5033322aa577c9794209f6",
+    "command": "harness-core --version",
+    "status": 0,
+    "stdout": "harness-core 1.2.1",
+    "stderr": "",
+    "host": "mike-dev",
+    "observedAt": "2026-10-18T17:51:27.224698+00:00"
+  }
+]

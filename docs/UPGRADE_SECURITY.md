@@ -62,11 +62,11 @@ The self-upgrade mechanism enables operators to update their active Nexus instal
 - Self-upgrade refuses to overwrite package-manager installations, directing the user to their package manager.
 
 ### 3.5 Pre-Migration Backups, Atomic Symlinks & Rollback (ACC-UPG-09, ACC-UPG-11)
-- Before modifying files, `createPreMigrationBackup` backs up `~/.config/nexus/config.env` (mode 0600) and session indices to `~/.config/nexus/backups/` and `~/.nexus/backups/`.
+- Before modifying files, `createPreMigrationBackup` backs up `~/.config/nexus/config.env` (mode 0600) and complete durable state/configuration snapshots (excluding backup directories) to `~/.config/nexus/backups/` and `~/.nexus/backups/`.
 - Replacement occurs via atomic symlink swap:
   - `ln -s $PREFIX/lib/nexus/$VERSION/bin/nexus $PREFIX/bin/.nexus-link.$PID && mv -f ... $PREFIX/bin/nexus`
 - `--rollback-binary` safely rolls back the launcher symlink to the previous installed version in `$PREFIX/lib/nexus`.
-- `--restore-backup <path>` safely restores configuration from backup.
+- `--restore-backup <path>` accepts a canonical plain `config.env.bak.*` file for configuration-only restoration, or a private `~/.nexus/backups/state-backup-*` directory containing `backup.json`, `state/`, and optional `config/` for complete snapshot restoration. It rejects arbitrary files, tar archives, and redirected paths.
 
 ### 3.6 Transaction Journal & Crash Recovery (ACC-UPG-11)
 - The updater logs state progression to `$PREFIX/lib/nexus/.upgrade-journal.json`:
@@ -103,3 +103,16 @@ To establish supply-chain security independent of GitHub hosting infrastructure,
    - Release workflow signs `SHA256SUMS` with a dedicated release offline key:
      `minisign -S -s /secret/nexus-release.key -m SHA256SUMS`
    - The CLI embeds the Nexus Code public key (`RWR...`) to verify `SHA256SUMS.minisig` before accepting any archive checksum.
+
+
+### Post-review transaction recovery
+
+Replacement package backups are recorded before renaming as `$PREFIX/lib/nexus/.rollback-<transaction-id>`, outside disposable staging. Same-version repairs retain the real previous package for explicit binary rollback. Journal writes and rename boundaries are flushed before reporting completion. Recovery validates the complete source runtime and only records `rolled_back` after restoring and verifying the installation/link. Failure retains staging and package artifacts under `recovery_required` and returns a nonzero operational error; it never reports successful rollback after a failed restore. A previously verified target may be finalized only after another complete runtime check.
+
+Package health probes use an isolated temporary home, bounded output/time, and process-group cleanup. New packages must report the exact product version from launcher, core, and TUI; the core help path and TUI snapshot render must also work. Historical alpha.1/alpha.2 exceptions are restricted to exact publicly checksummed component hashes: their core reports its historical 1.2.1 identity and their TUI predates `--version`. This exception is not permission for arbitrary component mismatch.
+
+Packaged CLI/TUI startup checks pending journals before normal execution. Explicit help/version, `upgrade --check`, and supervised health probes are read-only and do not recover. Active upgrade locks prevent concurrent recovery. Qualification from a real prior public release and manual terminal acceptance remain separate release gates; synthetic fault tests do not establish them.
+
+### Concurrent stale-lock reclamation
+
+When a recovery or upgrade observes a stale lock (dead holder PID), exactly one process may unlink and replace it. Serialization uses a permanent kernel-owned guard file `$PREFIX/lib/nexus/.upgrade.lock.guard` (never unlinked or replaced; accepted only as a regular file owned by the running user with no group/other permission bits): the reclaimer holds an advisory `flock` on the file's open file description for the whole reclaim section, acquired through `/usr/bin/flock` (util-linux; Linux runtime prerequisite) with exit status 75 distinguishing contention. The kernel drops the lock when the last referring descriptor closes, so a reclaimer killed by SIGKILL or power loss releases automatically instead of wedging later upgrades. If the flock utility or filesystem is unavailable, acquisition fails closed with a manual-intervention error rather than proceeding unserialized.

@@ -1,0 +1,190 @@
+TAP version 13
+# Subtest: coherent 1.0.0 metadata passes updater and publisher validation
+ok 1 - coherent 1.0.0 metadata passes updater and publisher validation
+  ---
+  duration_ms: 31.880532
+  ...
+# Subtest: coherent 1.0.0-rc.1 metadata passes updater and publisher validation
+ok 2 - coherent 1.0.0-rc.1 metadata passes updater and publisher validation
+  ---
+  duration_ms: 40.604451
+  ...
+# Subtest: coherent 1.0.0+build.1 metadata passes updater and publisher validation
+ok 3 - coherent 1.0.0+build.1 metadata passes updater and publisher validation
+  ---
+  duration_ms: 34.920891
+  ...
+# Subtest: reject mixed cli=9.9.9 throughout validation
+ok 4 - reject mixed cli=9.9.9 throughout validation
+  ---
+  duration_ms: 35.868201
+  ...
+# Subtest: reject mixed cli=1.0.0-rc.1 throughout validation
+ok 5 - reject mixed cli=1.0.0-rc.1 throughout validation
+  ---
+  duration_ms: 33.996195
+  ...
+# Subtest: reject mixed cli=1.0.0+other throughout validation
+ok 6 - reject mixed cli=1.0.0+other throughout validation
+  ---
+  duration_ms: 32.721674
+  ...
+# Subtest: reject mixed core=9.9.9 throughout validation
+ok 7 - reject mixed core=9.9.9 throughout validation
+  ---
+  duration_ms: 32.253472
+  ...
+# Subtest: reject mixed core=1.0.0-rc.1 throughout validation
+ok 8 - reject mixed core=1.0.0-rc.1 throughout validation
+  ---
+  duration_ms: 31.333379
+  ...
+# Subtest: reject mixed core=1.0.0+other throughout validation
+ok 9 - reject mixed core=1.0.0+other throughout validation
+  ---
+  duration_ms: 30.238975
+  ...
+# Subtest: reject mixed tui=9.9.9 throughout validation
+ok 10 - reject mixed tui=9.9.9 throughout validation
+  ---
+  duration_ms: 31.797084
+  ...
+# Subtest: reject mixed tui=1.0.0-rc.1 throughout validation
+ok 11 - reject mixed tui=1.0.0-rc.1 throughout validation
+  ---
+  duration_ms: 33.211327
+  ...
+# Subtest: reject mixed tui=1.0.0+other throughout validation
+ok 12 - reject mixed tui=1.0.0+other throughout validation
+  ---
+  duration_ms: 46.327285
+  ...
+# Subtest: reject mixed harness=9.9.9 throughout validation
+ok 13 - reject mixed harness=9.9.9 throughout validation
+  ---
+  duration_ms: 44.817165
+  ...
+# Subtest: reject mixed harness=1.0.0-rc.1 throughout validation
+ok 14 - reject mixed harness=1.0.0-rc.1 throughout validation
+  ---
+  duration_ms: 40.973869
+  ...
+# Subtest: reject mixed harness=1.0.0+other throughout validation
+ok 15 - reject mixed harness=1.0.0+other throughout validation
+  ---
+  duration_ms: 38.889662
+  ...
+# Subtest: explicit published legacy target 0.1.0-alpha.1 stays eligible within original bounds
+ok 16 - explicit published legacy target 0.1.0-alpha.1 stays eligible within original bounds
+  ---
+  duration_ms: 0.90361
+  ...
+# Subtest: explicit published legacy target v0.1.0-alpha.1 stays eligible within original bounds
+ok 17 - explicit published legacy target v0.1.0-alpha.1 stays eligible within original bounds
+  ---
+  duration_ms: 0.812149
+  ...
+# Subtest: explicit published legacy target 0.1.0-alpha.2 stays eligible within original bounds
+ok 18 - explicit published legacy target 0.1.0-alpha.2 stays eligible within original bounds
+  ---
+  duration_ms: 0.108674
+  ...
+# Subtest: explicit published legacy target v0.1.0-alpha.2 stays eligible within original bounds
+ok 19 - explicit published legacy target v0.1.0-alpha.2 stays eligible within original bounds
+  ---
+  duration_ms: 0.092562
+  ...
+# Subtest: missing metadata fails closed for target undefined
+ok 20 - missing metadata fails closed for target undefined
+  ---
+  duration_ms: 0.121082
+  ...
+# Subtest: missing metadata fails closed for target 1.0.0
+ok 21 - missing metadata fails closed for target 1.0.0
+  ---
+  duration_ms: 0.101869
+  ...
+# Subtest: missing metadata fails closed for target v1.0.0-rc.1
+ok 22 - missing metadata fails closed for target v1.0.0-rc.1
+  ---
+  duration_ms: 0.135291
+  ...
+# Subtest: missing metadata fails closed for target 0.1.0-alpha.3
+ok 23 - missing metadata fails closed for target 0.1.0-alpha.3
+  ---
+  duration_ms: 0.080455
+  ...
+# Subtest: missing metadata fails closed for target 0.1.0-alpha.2+other
+ok 24 - missing metadata fails closed for target 0.1.0-alpha.2+other
+  ---
+  duration_ms: 0.168914
+  ...
+# Subtest: missing metadata fails closed for target 
+ok 25 - missing metadata fails closed for target 
+  ---
+  duration_ms: 0.098867
+  ...
+# Subtest: missing metadata fails closed for target not-a-version
+ok 26 - missing metadata fails closed for target not-a-version
+  ---
+  duration_ms: 0.135992
+  ...
+# Subtest: legacy target cannot bypass state schema 0
+ok 27 - legacy target cannot bypass state schema 0
+  ---
+  duration_ms: 0.127286
+  ...
+# Subtest: legacy target cannot bypass config schema 0
+ok 28 - legacy target cannot bypass config schema 0
+  ---
+  duration_ms: 0.102469
+  ...
+# Subtest: legacy target cannot bypass state schema 2
+ok 29 - legacy target cannot bypass state schema 2
+  ---
+  duration_ms: 0.121682
+  ...
+# Subtest: legacy target cannot bypass config schema 2
+ok 30 - legacy target cannot bypass config schema 2
+  ---
+  duration_ms: 0.196933
+  ...
+# Subtest: legacy target cannot bypass state schema 99
+ok 31 - legacy target cannot bypass state schema 99
+  ---
+  duration_ms: 0.078053
+  ...
+# Subtest: legacy target cannot bypass config schema 99
+ok 32 - legacy target cannot bypass config schema 99
+  ---
+  duration_ms: 0.072449
+  ...
+# Subtest: legacy target cannot bypass state schema NaN
+ok 33 - legacy target cannot bypass state schema NaN
+  ---
+  duration_ms: 0.17782
+  ...
+# Subtest: legacy target cannot bypass config schema NaN
+ok 34 - legacy target cannot bypass config schema NaN
+  ---
+  duration_ms: 0.096165
+  ...
+# Subtest: legacy release cannot claim an unpublished platform
+ok 35 - legacy release cannot claim an unpublished platform
+  ---
+  duration_ms: 0.139294
+  ...
+# Subtest: modern release remains eligible with validated compatibility metadata
+ok 36 - modern release remains eligible with validated compatibility metadata
+  ---
+  duration_ms: 0.926226
+  ...
+1..36
+# tests 36
+# suites 0
+# pass 36
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 1095.197997
