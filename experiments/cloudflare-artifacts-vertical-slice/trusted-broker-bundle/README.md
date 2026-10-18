@@ -31,8 +31,7 @@ accepted release-signing fingerprint is
 The `cf` package is pinned to `1.0.0-beta.10`; npm registry metadata provides
 tarball SRI `sha512-pv3zg8Y0sjgNuyKpDNsEBszTvSgRDzHccvHybJ6u4BjvesMZpS2T2twnOGvDo0PSnie/bCbA+hgzKWaDuIKtBw==`.
 `package-lock.json` pins all 65 lock entries, including resolved registry URLs
-and integrity values. The pinned Node distribution's npm runs `npm ci --ignore-scripts`; `npm audit signatures` is required to succeed. The lock
-currently resolves 34 installed packages. No development dependencies are
+and integrity values. The pinned Node distribution's npm runs `npm ci --ignore-scripts`; `npm audit signatures` is required to succeed. The installed platform-specific closure is recorded in the regenerated manifest. No development dependencies are
 installed. The package startup check runs `cf --version` under the pinned Node
 runtime without credentials.
 
@@ -90,8 +89,8 @@ before use. The launcher contains no Cloudflare business logic.
 
 Node is a dynamically linked official binary. The manifest therefore pins the
 observed system ELF dependencies and their resolved paths, ownership, modes,
-and digests, plus their parent directories. The generated manifest has 2,553
-installation objects: 230 directories, 2,318 regular files, and 5 symlinks,
+and digests, plus their parent directories. The regenerated manifest has 2,570
+installation objects: 236 directories, 2,329 regular files, and 5 symlinks,
 plus 7 system runtime libraries. This is host-specific to Linux x86_64,
 glibc, UID/GID 1000 and the observed system libraries. Any mismatch fails
 installation/qualification; it is not silently adapted.
@@ -267,3 +266,9 @@ signature-audit output, removes the temporary workspace, and reports the
 private diagnostic path. It does not use shell tracing or capture the caller's
 environment. Successful installation removes the temporary diagnostic
 directory.
+
+## Post-contest security maintenance (2026-10-18)
+
+The source manifests override the transitive `sharp` dependency to `0.35.5`, including libvips bundle `1.3.4` and librsvg `2.63.2`, to address GHSA-wq5f-xc86-pv6w. The `cf` runtime remains pinned to `1.0.0-beta.10`; no Cloudflare CLI feature upgrade is included. Both affected lockfile trees are patched.
+
+The installation manifest was regenerated on mike-dev using the pinned, signature-verified Node archive, npm registry signature verification, and a credential-free CLI version check. Bundle hashes and candidate-manifest constants were refreshed. This is source maintenance, not deployment or live-broker qualification. The existing prior-install allowlist and rollback history remain unchanged; an installed host outside that allowlist requires a separately reviewed migration before applying this recipe. The submitted revision is retained in Git history.
