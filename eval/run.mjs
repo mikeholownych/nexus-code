@@ -93,6 +93,7 @@ if (config.resources !== undefined && config.qualification !== true) {
   const resourceProblem = resourceProbeProblem(config.resources);
   if (resourceProblem) problems.push(resourceProblem);
 }
+if (config.resources !== undefined && args.keep) problems.push("--keep would accumulate run workspaces on the size-capped resources.workspaceRoot");
 if (config.qualification === true) {
   const corpusProblem = corpusManifestProblem(config, tasksDir, tasks, corpusTaskRows(taskSnapshots, tasks));
   if (corpusProblem) problems.push(corpusProblem);

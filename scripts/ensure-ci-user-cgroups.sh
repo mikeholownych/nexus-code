@@ -19,7 +19,7 @@ has_contract() {
 
 if ! has_contract; then
   sudo mkdir -p /etc/systemd/system/user@.service.d
-  printf '[Service]\nDelegate=cpu cpuset io memory pids\n' | sudo tee /etc/systemd/system/user@.service.d/delegate.conf >/dev/null
+  printf '[Service]\nDelegate=cpu memory pids\n' | sudo tee /etc/systemd/system/user@.service.d/delegate.conf >/dev/null
   sudo systemctl daemon-reload
   sudo loginctl enable-linger "$(id -un)"
   sudo systemctl restart "user@$uid.service"

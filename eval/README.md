@@ -157,24 +157,32 @@ unverified condition.
 
 ### Resource contract
 
-A config's `resources` object — `{ "cpuPercent", "memoryBytes", "tasks", "workspaceRoot" }` — applies to every
+A config's `resources` object — `{ "cpuPercent", "memoryBytes", "tasks", "storageBytes", "workspaceRoot" }` — applies to every
 task-controlled execution: setup commands, the candidate agent, legacy hidden and regression commands, every black-box
 oracle case and the agent version probe. Qualification refuses to start without it.
 
 - Each execution runs under `eval/cgroup_supervisor.mjs` as the only process of its own delegated transient
   `systemd-run --user --scope`. The supervisor writes cgroup v2 `cpu.max` (`cpuPercent`% of one CPU), `memory.max`
-  (`memoryBytes`), `memory.swap.max` (0) and `pids.max` (`tasks`) on a `payload` leaf, reads them back, and refuses to
+  (`memoryBytes`), `memory.swap.max` (0), `memory.oom.group` (1) and `pids.max` (`tasks`) on a `payload` leaf, reads them back, and refuses to
   run on any mismatch. The command joins that leaf before `exec`, so nothing task-controlled runs outside the limits.
   The limits are aggregate over the whole process tree, whatever its uid (`runAs`), session or process group.
-- `workspaceRoot` must be a tmpfs (for example `/dev/shm`). Workspaces and homes are created there, and the sandbox's
-  `/tmp` is a tmpfs as well. tmpfs pages are charged to the writer's memory cgroup and cannot be swapped, so the bytes a
-  phase writes are bounded by `memoryBytes` together with its memory use. A phase that reaches the bound is OOM-killed,
-  and this is recorded. The bound applies per phase: the agent's writes stay charged after it exits, and the checks that
-  follow get their own limit.
+- `workspaceRoot` must be a dedicated tmpfs mount whose total size is at most `storageBytes`. Create it during evaluator
+  setup, for example `mount -t tmpfs -o size=<storageBytes>,mode=0700 tmpfs <dir>`. A shared tmpfs such as `/dev/shm`
+  passes only if `storageBytes` is set to its whole size. Workspaces and homes are created there. The filesystem size
+  hard-caps everything a run keeps across all its phases, and writes beyond it fail with `ENOSPC`. Runs are serial and
+  each workspace is removed afterwards; `--keep` is refused under the contract.
+- Within that cap, tmpfs pages, including the sandbox's own `/tmp`, are charged to the writing phase's memory cgroup and
+  cannot be swapped. A phase therefore also cannot hold more than `memoryBytes` of memory and new writes together. When
+  it reaches that bound the whole phase is OOM-killed (`memory.oom.group`), and this is recorded. When a phase's cgroup
+  is removed, the kernel moves its charges to the unlimited parent cgroup. Later phases get their own `memoryBytes`,
+  which is why the filesystem cap, not the memory limit, is the cross-phase storage bound. An OOM in a hidden or
+  regression check is the candidate's outcome, a failed check, not an infrastructure error.
 - CPU is bounded in rate by `cpu.max` and in total by the phase's wall-clock timeout.
 - After the command exits or times out, the supervisor records the remaining processes, empties the cgroup with
-  `cgroup.kill` (which reaches daemonized processes and other uids), and waits for `populated 0`. Timeouts stop the
-  cgroup rather than signalling the supervisor, so it can still report.
+  `cgroup.kill` (which reaches daemonized processes and other uids), and waits for `populated 0`. A timeout or output
+  overflow empties the payload leaf, repeatedly until the supervisor exits, so a stop that arrives before the command
+  has joined the leaf is not lost. It also sends the supervisor `SIGTERM` so that it can still report. If the supervisor
+  does not exit within 10 s it is killed, and the run fails for lack of a report.
 - Each run record carries `resources.{agent,hidden,regression}`: the applied limits, `memoryPeakBytes`, `oomKills`,
   `memoryMaxEvents`, `pidsPeak`, `pidsMaxEvents`, `cpuUsageUsec`, `cpuThrottledUsec`, `survivorsAfterExit` and
   `cleaned`. A missing report, a failed limit read-back or `cleaned: false` makes the run an error. It is never scored

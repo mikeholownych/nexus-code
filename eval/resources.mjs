@@ -1,8 +1,8 @@
 // Kernel-enforced resource contract for task-controlled executions (eval/README.md, "Resource contract").
 // Each execution runs in its own delegated transient systemd --user scope under eval/cgroup_supervisor.mjs, which
 // applies cgroup v2 cpu.max, memory.max (swap 0) and pids.max to a payload leaf, verifies them, and kills the whole
-// cgroup afterwards. Workspaces and homes live on a tmpfs, so every byte the candidate writes there (and in the
-// sandbox's /tmp) is charged to that memory cgroup: aggregate writable storage is bounded by memory.max.
+// cgroup afterwards. Workspaces and homes live on a dedicated size-capped tmpfs (storageBytes): that cap bounds
+// everything a run keeps on disk across phases, and each phase's writes are additionally charged to its memory.max.
 import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
@@ -14,16 +14,19 @@ const TMPFS_MAGIC = 0x01021994;
 
 /** Null when `resources` is a complete, sane contract; otherwise why it is not. */
 export function resourceConfigProblem(resources) {
-  if (!resources || typeof resources !== "object") return "resources must set cpuPercent, memoryBytes, tasks and workspaceRoot";
-  const { cpuPercent, memoryBytes, tasks, workspaceRoot } = resources;
+  if (!resources || typeof resources !== "object") return "resources must set cpuPercent, memoryBytes, tasks, storageBytes and workspaceRoot";
+  const { cpuPercent, memoryBytes, tasks, storageBytes, workspaceRoot } = resources;
   if (!Number.isInteger(cpuPercent) || cpuPercent < 10 || cpuPercent > 100 * 1024) return "resources.cpuPercent must be an integer from 10 to 102400";
-  if (!Number.isInteger(memoryBytes) || memoryBytes < 64 * 1024 * 1024) return "resources.memoryBytes must be an integer of at least 64 MiB";
+  if (!Number.isInteger(memoryBytes) || memoryBytes < 64 * 1024 * 1024 || memoryBytes % 4096 !== 0) return "resources.memoryBytes must be a multiple of 4096 of at least 64 MiB";
   if (!Number.isInteger(tasks) || tasks < 8 || tasks > 1 << 20) return "resources.tasks must be an integer from 8 to 1048576";
+  if (!Number.isInteger(storageBytes) || storageBytes < 64 * 1024 * 1024) return "resources.storageBytes must be an integer of at least 64 MiB";
   if (typeof workspaceRoot !== "string" || !path.isAbsolute(workspaceRoot)) return "resources.workspaceRoot must be an absolute path";
   let stat;
   try { stat = fs.statfsSync(workspaceRoot); }
   catch { return "resources.workspaceRoot is unavailable"; }
   if (stat.type !== TMPFS_MAGIC) return "resources.workspaceRoot must be on a tmpfs so candidate writes are charged to the run's memory limit";
+  // A shared tmpfs such as /dev/shm is sized to half of RAM; only a dedicated mount with size<=storageBytes caps a run.
+  if (stat.blocks * stat.bsize > storageBytes) return `resources.workspaceRoot tmpfs is ${stat.blocks * stat.bsize} bytes; mount a dedicated tmpfs with size<=storageBytes (${storageBytes})`;
   return null;
 }
 
@@ -74,14 +77,20 @@ export function spawnContained(spec, resources, { stdio, ...options }) {
     child.stdio[3].on("close", () => resolve(parseReports(text).final));
     child.on("error", () => resolve(null));
   });
+  let repeat = null;
   let fallback = null;
+  const killPayload = () => { if (cgroup) { try { fs.writeFileSync(path.join(cgroup, "cgroup.kill"), "1"); } catch {} } };
   const kill = () => {
-    // A supervisor that does not exit after the kill loses its report; the run then fails on containmentProblem.
-    fallback ??= setTimeout(() => { try { process.kill(-child.pid, "SIGKILL"); } catch {} }, 10_000).unref();
-    if (cgroup) { try { fs.writeFileSync(path.join(cgroup, "cgroup.kill"), "1"); return; } catch {} }
-    try { process.kill(-child.pid, "SIGTERM"); } catch {}
+    if (repeat) return;
+    // The payload may not have joined its leaf yet, or may fork after a kill: keep emptying the leaf until the
+    // supervisor exits. The supervisor also stops on SIGTERM. One that does not exit loses its report, so the run fails
+    // on containmentProblem; the fallback then kills the supervisor while the repeat keeps emptying the payload leaf.
+    killPayload();
+    try { process.kill(child.pid, "SIGTERM"); } catch {}
+    repeat = setInterval(killPayload, 50);
+    fallback = setTimeout(() => { try { process.kill(-child.pid, "SIGKILL"); } catch {} }, 10_000);
   };
-  child.on("exit", () => { if (fallback) clearTimeout(fallback); });
+  child.on("close", () => { clearInterval(repeat); clearTimeout(fallback); killPayload(); });
   return { child, containment: { final, kill } };
 }
 

@@ -28,7 +28,8 @@ const scope = path.join("/sys/fs/cgroup", own);
 const supervisor = path.join(scope, "supervisor");
 const payload = path.join(scope, "payload");
 const { cpuPercent, memoryBytes, tasks } = spec.limits;
-const wanted = { "memory.max": String(memoryBytes), "memory.swap.max": "0", "pids.max": String(tasks), "cpu.max": `${cpuPercent * 1000} 100000` };
+// memory.oom.group: an OOM ends the whole phase, never just one of its processes.
+const wanted = { "memory.max": String(memoryBytes), "memory.swap.max": "0", "memory.oom.group": "1", "pids.max": String(tasks), "cpu.max": `${cpuPercent * 1000} 100000` };
 try {
   fs.mkdirSync(supervisor);
   fs.mkdirSync(payload);
@@ -44,12 +45,15 @@ if (mismatch) fail(`kernel did not apply ${mismatch}: wanted ${wanted[mismatch]}
 report({ cgroup: payload });
 
 let finished = false;
+let stopRequested = false;
 // The shell joins the payload cgroup before exec, so nothing task-controlled ever runs outside the limits.
 const child = spawn("/bin/sh", ["-c", 'echo $$ > "$1" && shift && exec "$@"', "sh", path.join(payload, "cgroup.procs"), spec.cmd, ...spec.argv], {
   env: { PATH: "/usr/bin:/bin" },
   stdio: "inherit",
 });
-const stop = () => { try { fs.writeFileSync(path.join(payload, "cgroup.kill"), "1"); } catch {} };
+const killPayload = () => { try { fs.writeFileSync(path.join(payload, "cgroup.kill"), "1"); } catch {} };
+// A stop can arrive before the shell has joined the leaf; keep emptying it until the child is gone.
+const stop = () => { if (stopRequested) return; stopRequested = true; killPayload(); setInterval(killPayload, 50).unref(); };
 for (const signal of ["SIGTERM", "SIGINT", "SIGHUP"]) process.on(signal, stop);
 child.on("error", (error) => finish(null, null, error.message));
 child.on("exit", (code, signal) => finish(code, signal, null));
@@ -72,11 +76,11 @@ function finish(code, signal, spawnError) {
     cpuThrottledUsec: cpu.throttled_usec ?? null,
     survivorsAfterExit: procs.length,
   };
-  stop();
+  killPayload();
   const deadline = Date.now() + 5000;
   const poll = () => {
     if (/^populated 0$/m.test(read(path.join(payload, "cgroup.events")) ?? "")) {
-      report({ ...stats, cleaned: true, exitCode: code, signal, spawnError });
+      report({ ...stats, cleaned: true, stopped: stopRequested, exitCode: code, signal, spawnError });
       process.exit(code ?? (signal ? 128 + (os.constants.signals[signal] ?? 0) : 125));
     }
     if (Date.now() > deadline) {
