@@ -81,7 +81,7 @@ Standalone live inference evidence is absent (HIST-08; SPEC-05). Real-terminal c
    - `nexus eval` is labelled experimental and excluded from claims (DEC-07).
 7. **REQ-QUAL-107. Standalone and provider matrix.** The live standalone set (a T2 subset of ≥ 10 tasks plus a T4 subset) is run through the gateway-stripping proxy in its plain profile and its emulated-server profiles (DEC-16). `providers verify` is run live for each provider listed as supported (DEC-06). Receipts are archived.
 8. **REQ-QUAL-108. Terminal matrix.** PTY scripted runs in CI (existing `tui_*_e2e`, plus the new ACC-SAFE and ACC-PROC scripts). A manual matrix covers {xterm, kitty, tmux, VS Code terminal, GNOME Terminal} × {80x24, 40x14, 200x60}, checking: approval safety, paste, resize, cancel, narrow hints and NO_COLOR. Screenshots are archived.
-9. **REQ-QUAL-109 (RELEASE-REQUIRED).** T3 long tasks: at least 8 tasks × 5 runs, each over 60 steps and with at least 2 compactions. Gates: false-absence = 0 and steering honoured ≥ 95% (eval/README thresholds).
+9. **REQ-QUAL-109 (RELEASE-REQUIRED).** T3 long tasks: at least 8 tasks × 5 runs, each over 60 steps and with at least 2 compactions. Gates: false-absence = 0, false-presence = 0 (DEC-05 amendment, 2026-10-18), and steering honoured ≥ 95% (eval/README thresholds).
 10. **REQ-QUAL-110 (RELEASE-REQUIRED).** A T4 smoke (scripted model, 2 fault cases) and the T1 self-test run in `make test`.
 
 ## 3. Design
