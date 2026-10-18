@@ -1573,9 +1573,12 @@ mod tests {
                         external_leak_count += 1;
                     }
                 }
-                Err(err) => {
+                Err(_) => {
                     read_rejections += 1;
-                    assert!(err.contains("Security Violation") || err.contains("File does not exist") || err.contains("Failed to open"));
+                    // The attacker can unlink the entry between any two path operations, so
+                    // race-dependent I/O errors are expected. The security properties are
+                    // asserted below: no external bytes are returned and no external file is
+                    // changed.
                 }
             }
         }
@@ -1594,9 +1597,10 @@ mod tests {
                 Ok(_) => {
                     write_successes += 1;
                 }
-                Err(err) => {
+                Err(_) => {
                     write_rejections += 1;
-                    assert!(err.contains("Security Violation") || err.contains("File does not exist") || err.contains("Failed to open"));
+                    // A concurrent unlink can produce platform-specific I/O errors. The
+                    // external-file integrity assertion below is the relevant safety check.
                 }
             }
         }
