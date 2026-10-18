@@ -59,7 +59,31 @@ nexus serve-mcp --workspace /path/to/project
 ```
 See [MCP_GUIDE.md](MCP_GUIDE.md) for full configuration details.
 
+### Upgrading Nexus Code (`nexus upgrade` & `/upgrade`)
+To check whether an update is available without making changes:
+```bash
+nexus upgrade --check
+```
+Exit codes for `--check`:
+- `0`: Up to date (already on latest or requested version).
+- `1`: Update available.
+- `2`: Operational error (network, rate limit, release not found).
+
+To perform an in-place upgrade to the latest published stable release:
+```bash
+nexus upgrade
+```
+Prompts for confirmation unless `--yes` is passed. In non-interactive environments (scripts or CI), `--yes` is mandatory to perform modifications.
+
+To target an explicit release (including prereleases):
+```bash
+nexus upgrade --version v1.0.0
+```
+
+Inside the interactive live TUI, run `/upgrade` or `/upgrade --check`. The TUI displays the installed vs target version, destination, and requires deliberate modal confirmation before modifying any files. Running TUI sessions continue uninterrupted on their loaded code and notify when a restart is required.
+
 ---
+
 
 ## 2. Interactive REPL / TUI Features
 
@@ -243,6 +267,8 @@ nexus (qwen2.5-coder) my-app ❯ !npm test
 | `/plan [add\|done\|start\|clear]` | Formulate and manage multi-phase milestone execution plan |
 | `/tui` | REPL only: open the session dashboard (not offered in the live TUI, where it had no purpose) |
 | `/doctor [--deep] [--fix [--yes]]` | Diagnose this session's configuration, endpoint, engine, shell and state (see `docs/DOCTOR_TROUBLESHOOTING.md`) |
+| `/upgrade [--check\|--version <v>\|--yes]` | Check for updates or safely upgrade to the latest stable or pinned release with deliberate approval |
+
 | `/theme [name]` | View or switch terminal color theme (Catppuccin, Nord, Dracula, etc.) |
 | `/team <role\|full> <task>` | Orchestrate multi-agent team (Researcher, Architect, Implementer, Tester) |
 | `/image <path> [prompt]` | Ingest multi-modal image / screenshot into vision model context |
