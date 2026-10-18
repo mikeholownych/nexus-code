@@ -395,6 +395,14 @@ test("repository workspaces carry no history beyond the pinned baseline commit",
     git(base, "clone", "-q", "--shared", cache, leaky);
     git(leaky, "checkout", "-q", baseline);
     assert.match(workspaceHistoryProblem(leaky, baseline) ?? "", /alternates/);
+    assert.equal(spawnSync("git", ["cat-file", "-e", `${child}^{commit}`], { cwd: leaky, env }).status, 0, "control must expose the child");
+    // A full (non-shared) clone has no alternates but still exposes the child; detection must not rely on alternates.
+    const copied = path.join(base, "copied");
+    git(base, "clone", "-q", "--no-local", cache, copied);
+    git(copied, "checkout", "-q", baseline);
+    git(copied, "remote", "remove", "origin");
+    assert.equal(spawnSync("git", ["cat-file", "-e", `${child}^{commit}`], { cwd: copied, env }).status, 0, "control must expose the child");
+    assert.match(workspaceHistoryProblem(copied, baseline) ?? "", /not ancestors/);
 
     const ws = path.join(base, "ws");
     stageRepoWorkspace(cache, baseline, ws);
