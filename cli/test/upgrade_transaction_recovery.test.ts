@@ -5,7 +5,7 @@ import * as path from "node:path";
 import * as os from "node:os";
 import { spawnSync, spawn } from "node:child_process";
 import { verifyInstalledRuntime } from "../src/upgrade_health.js";
-import { writeJournal, readJournal, recoverUpgrade, createPreMigrationBackup, restoreConfigBackup, UpgradeJournalEntry } from "../src/upgrade_journal.js";
+import { writeJournal, readJournal, recoverUpgrade, createPreMigrationBackup, restoreConfigBackup, UpgradeJournalEntry, RecoveryOutcome } from "../src/upgrade_journal.js";
 import * as http from "node:http";
 import * as crypto from "node:crypto";
 import { generateCompatibilityMetadata } from "../src/compatibility.js";
@@ -60,6 +60,25 @@ describe("durable same-version transaction recovery",()=>{
     assert.equal(fs.readFileSync(path.join(entry.sourceInstallDir,"marker"),"utf8"),"original");
     assert.ok(fs.existsSync(entry.stagingDir!));
     assert.ok(fs.existsSync(entry.displacedTargetDir!));
+  });
+  it("admits only one recovery when two contenders both observe the same stale lock",async()=>{
+    writeJournal(prefix,entry);
+    const libRoot=path.join(prefix,"lib/nexus"), barrier=path.join(prefix,"barrier");
+    fs.mkdirSync(barrier);fs.writeFileSync(path.join(libRoot,".upgrade.lock"),JSON.stringify({pid:999999,token:"dead"}),{mode:0o600});
+    const cwd=path.resolve(import.meta.dirname || path.dirname(new URL(import.meta.url).pathname),"..");
+    const children=[1,2].map(id=>{
+      const code=`import * as fs from 'node:fs'; import * as path from 'node:path'; import { recoverUpgrade } from './src/upgrade_journal.ts'; const b=${JSON.stringify(barrier)}; const p=${JSON.stringify(prefix)}; const id=${id}; const result=recoverUpgrade(p,{onStaleLockObserved(){fs.writeFileSync(path.join(b,'ready-'+id),'ready'); const end=Date.now()+5000; while(Date.now()<end && (!fs.existsSync(path.join(b,'ready-1')) || !fs.existsSync(path.join(b,'ready-2')))) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)),0,0,10); if(!fs.existsSync(path.join(b,'ready-1')) || !fs.existsSync(path.join(b,'ready-2'))) throw new Error('barrier timed out'); Atomics.wait(new Int32Array(new SharedArrayBuffer(4)),0,0,150); }}); console.log(JSON.stringify(result));`;
+      const child=spawn(process.execPath,["--import","tsx","--input-type=module","-e",code],{cwd,env:{...process.env,HOME:prefix},stdio:["ignore","pipe","pipe"]});
+      let out="",err="";child.stdout.on("data",d=>out+=d);child.stderr.on("data",d=>err+=d);
+      return new Promise<RecoveryOutcome>((resolve,reject)=>{child.on("error",reject);child.on("exit",code=>{if(code!==0)return reject(new Error(err));try{resolve(JSON.parse(out.trim()));}catch(e){reject(new Error(`${err}${out}`));}});});
+    });
+    const results=await Promise.all(children);
+    assert.equal(results.filter(r=>r.recovered && r.action==="rolled_back").length,1,JSON.stringify(results));
+    assert.equal(results.filter(r=>!r.recovered && r.action==="upgrade_in_progress").length,1,JSON.stringify(results));
+    assert.equal(fs.existsSync(path.join(libRoot,".upgrade.lock")),false);
+    assert.equal(fs.readFileSync(path.join(entry.sourceInstallDir,"marker"),"utf8"),"original");
+    assert.equal(verifyInstalledRuntime(entry.sourceInstallDir,"v1.0.0").healthy,true);
+    assert.equal(readJournal(prefix)?.state,"rolled_back");
   });
   it("does not touch the lock for a completed journal in a read-only package directory",()=>{
     entry.state="complete";writeJournal(prefix,entry);

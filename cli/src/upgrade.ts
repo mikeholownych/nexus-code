@@ -930,29 +930,45 @@ export async function performUpgrade(
   // 1. Concurrency lock
   const lockFile = path.join(libNexus, ".upgrade.lock");
   let lockFd: number | null = null;
+  let lockIno: number | undefined;
+  const lockToken = `${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  const writeOwnedLock = () => {
+    lockFd = fs.openSync(lockFile, "wx", 0o600);
+    fs.writeFileSync(lockFd, JSON.stringify({ pid:process.pid, token:lockToken }));
+    fs.fsyncSync(lockFd);
+    lockIno = fs.fstatSync(lockFd).ino;
+  };
   try {
-    lockFd = fs.openSync(lockFile, "wx");
-    fs.writeFileSync(lockFd, JSON.stringify({ pid: process.pid, time: new Date().toISOString() }));
+    writeOwnedLock();
   } catch (err: any) {
     if (err.code === "EEXIST") {
       try {
         if (!fs.lstatSync(lockFile).isFile() || fs.realpathSync(lockFile) !== path.resolve(lockFile)) throw new Error("Upgrade lock path is redirected");
         const existing = JSON.parse(fs.readFileSync(lockFile, "utf8"));
         if (!Number.isSafeInteger(existing.pid) || existing.pid < 1) throw new Error("Upgrade lock owner is invalid");
-        if (typeof existing.pid === "number") {
-          try {
-            process.kill(existing.pid, 0);
-            throw new Error(`Another upgrade process (PID ${existing.pid}) is currently running.`);
-          } catch (probeErr: any) {
-            if (probeErr.code === "ESRCH") {
-              fs.unlinkSync(lockFile);
-              lockFd = fs.openSync(lockFile, "wx");
-              fs.writeFileSync(lockFd, JSON.stringify({ pid: process.pid, time: new Date().toISOString() }));
-            } else {
-              throw probeErr;
-            }
-          }
+        const staleStat = fs.lstatSync(lockFile), staleIno = staleStat.ino;
+        try { process.kill(existing.pid, 0); throw new Error(`Another upgrade process (PID ${existing.pid}) is currently running.`); }
+        catch (probeErr: any) {
+          if (probeErr.code === "EPERM") throw new Error(`Another upgrade process (PID ${existing.pid}) is currently running.`);
+          if (probeErr.code !== "ESRCH") throw probeErr;
         }
+        const reclaimDir = `${lockFile}.reclaim`;
+        try { fs.mkdirSync(reclaimDir, { mode:0o700 }); }
+        catch (gateErr: any) {
+          if (gateErr.code !== "EEXIST") throw gateErr;
+          const until = Date.now() + 200;
+          while (Date.now() < until && fs.existsSync(reclaimDir)) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10);
+          throw new Error("Another upgrade is in progress; stale lock is being reclaimed.");
+        }
+        try {
+          const current = fs.lstatSync(lockFile, { throwIfNoEntry:false });
+          if (current && current.ino !== staleIno) throw new Error("Another upgrade is in progress; lock was replaced.");
+          if (current) {
+            if (JSON.parse(fs.readFileSync(lockFile, "utf8")).pid !== existing.pid) throw new Error("Another upgrade is in progress; lock owner changed.");
+            fs.unlinkSync(lockFile);
+          }
+          writeOwnedLock();
+        } finally { try { fs.rmdirSync(reclaimDir); } catch {} }
       } catch (inner: any) {
         throw new Error(`Another upgrade is in progress (lockfile present at ${lockFile}): ${inner.message || inner}`);
       }
@@ -971,7 +987,10 @@ export async function performUpgrade(
     }
     if (lockFd !== null) {
       try { fs.closeSync(lockFd); } catch {}
-      try { fs.unlinkSync(lockFile); } catch {}
+      try {
+        const current = fs.lstatSync(lockFile, { throwIfNoEntry:false });
+        if (current?.ino === lockIno && JSON.parse(fs.readFileSync(lockFile, "utf8")).token === lockToken) fs.unlinkSync(lockFile);
+      } catch {}
     }
   };
   try {

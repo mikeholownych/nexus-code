@@ -251,37 +251,66 @@ export interface RecoveryOutcome {
 /**
  * Idempotent crash recovery: inspects journal and restores working installation or finalizes transition.
  */
-export function recoverUpgrade(prefix: string, options: { forceRollback?: boolean; timeoutMs?: number; lockHeld?: boolean } = {}): RecoveryOutcome {
+export function recoverUpgrade(prefix: string, options: { forceRollback?: boolean; timeoutMs?: number; lockHeld?: boolean; onStaleLockObserved?: () => void } = {}): RecoveryOutcome {
   const journalPath = getJournalPath(prefix);
   const journal = readJournal(prefix);
   if (!journal && !fs.existsSync(journalPath)) return { recovered:false, action:"none", details:"No interrupted upgrade found in journal." };
   if (journal && ["idle", "complete", "rolled_back"].includes(journal.state) && !options.forceRollback) return { recovered:false, action:"none", details:"No interrupted upgrade found in journal." };
   const lock = path.join(prefix, "lib", "nexus", ".upgrade.lock");
-  let owned = false;
+  let owned = false, ownedIno: number | undefined;
+  const token = `${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  const inProgress: RecoveryOutcome = { recovered:false, action:"upgrade_in_progress", details:"An upgrade transaction is currently in progress." };
+  const acquire = () => {
+    const fd = fs.openSync(lock, "wx", 0o600);
+    try { fs.writeFileSync(fd, JSON.stringify({ pid:process.pid, token })); fs.fsyncSync(fd); ownedIno = fs.fstatSync(fd).ino; }
+    finally { fs.closeSync(fd); }
+    owned = true;
+  };
   try {
     if (fs.existsSync(lock)) {
       if (!isRealFile(lock)) throw new Error("Upgrade lock is redirected");
+      const staleStat = fs.lstatSync(lock), staleIno = staleStat.ino;
       const holder = JSON.parse(fs.readFileSync(lock, "utf8"));
       if (!Number.isSafeInteger(holder.pid) || holder.pid < 1) throw new Error("Upgrade lock is invalid");
-      if (holder.pid === process.pid && !options.lockHeld) return { recovered:false, action:"upgrade_in_progress", details:"An upgrade transaction is currently in progress." };
+      if (holder.pid === process.pid && !options.lockHeld) return inProgress;
       if (holder.pid !== process.pid) {
-        try { process.kill(holder.pid, 0); return { recovered:false, action:"upgrade_in_progress", details:"An upgrade transaction is currently in progress." }; }
-        catch (error:any) { if (error.code !== "ESRCH") throw error; }
-        const tmpLock = `${lock}.tmp.${process.pid}.${Date.now()}`;
-        fs.writeFileSync(tmpLock, JSON.stringify({ pid:process.pid }), { mode:0o600, flag:"wx" });
-        fs.renameSync(tmpLock, lock);
-        const takeover = JSON.parse(fs.readFileSync(lock, "utf8"));
-        if (takeover.pid !== process.pid) throw new Error("Upgrade lock takeover was lost to another process");
-        owned = true;
+        try { process.kill(holder.pid, 0); return inProgress; }
+        catch (error:any) { if (error.code === "EPERM") return inProgress; if (error.code !== "ESRCH") throw error; }
+        options.onStaleLockObserved?.();
+        const reclaimDir = `${lock}.reclaim`;
+        try { fs.mkdirSync(reclaimDir, { mode:0o700 }); }
+        catch (error:any) {
+          if (error.code !== "EEXIST") throw error;
+          const until = Date.now() + 200;
+          while (Date.now() < until && fs.existsSync(reclaimDir)) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10);
+          const current = fs.lstatSync(lock, { throwIfNoEntry:false });
+          if (!current || current.ino !== staleIno) return inProgress;
+          const nowHolder = JSON.parse(fs.readFileSync(lock, "utf8"));
+          try { process.kill(nowHolder.pid, 0); return inProgress; } catch (probe:any) { if (probe.code !== "ESRCH") throw probe; }
+          return inProgress;
+        }
+        try {
+          const currentStat = fs.lstatSync(lock, { throwIfNoEntry:false });
+          if (currentStat && currentStat.ino !== staleIno) return inProgress;
+          if (currentStat) {
+            if (JSON.parse(fs.readFileSync(lock, "utf8")).pid !== holder.pid) return inProgress;
+            fs.unlinkSync(lock);
+          }
+          acquire();
+        } finally { try { fs.rmdirSync(reclaimDir); } catch {} }
       }
     }
     if (!owned && !fs.existsSync(lock) && fs.existsSync(path.dirname(lock))) {
-      const fd = fs.openSync(lock, "wx", 0o600);
-      fs.writeFileSync(fd, JSON.stringify({ pid:process.pid })); fs.closeSync(fd); owned = true;
+      try { acquire(); } catch (error:any) { if (error.code === "EEXIST") return inProgress; throw error; }
     }
     return recoverUpgradeLocked(prefix, options);
   } catch (error:any) { return { recovered:false, action:"manual_intervention", details:error.message }; }
-  finally { if (owned) try { fs.unlinkSync(lock); } catch {} }
+  finally {
+    if (owned) try {
+      const current = fs.lstatSync(lock, { throwIfNoEntry:false });
+      if (current?.ino === ownedIno && JSON.parse(fs.readFileSync(lock, "utf8")).token === token) fs.unlinkSync(lock);
+    } catch {}
+  }
 }
 function recoverUpgradeLocked(prefix: string, options: { forceRollback?: boolean; timeoutMs?: number; lockHeld?: boolean } = {}): RecoveryOutcome {
   const journalPath = getJournalPath(prefix);
