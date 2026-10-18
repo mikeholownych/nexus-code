@@ -131,6 +131,7 @@ export function validateCompatibilityMetadata(data: any): { valid: boolean; erro
   } else {
     for (const name of ["cli", "core", "tui", "harness"] as const) {
       if (typeof data.components[name] !== "string" || !parseSemver(data.components[name])) errors.push(`Missing or invalid SemVer 'components.${name}'`);
+      else if (data.components[name] !== data.version) errors.push(`Component '${name}' version must match release version '${data.version}'`);
     }
   }
   if (!data.platforms || typeof data.platforms !== "object" || Object.keys(data.platforms).length === 0) {
