@@ -68,6 +68,8 @@ Every ACC ID below is defined in the linked spec. The plan for each spec names t
 | Persistence | ACC-PER-01 to ACC-PER-07 | SPEC-08 |
 | Governance | ACC-GOV-01 to ACC-GOV-06 | SPEC-09 |
 | Verification | ACC-VER-01 to ACC-VER-09 | SPEC-11 |
+| Upgrade | ACC-UPG-01 to ACC-UPG-06 | SPEC-12 |
+
 
 ### 3.1 Acceptance IDs defined in this file
 

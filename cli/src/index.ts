@@ -1023,6 +1023,31 @@ program
   });
 
 
+program
+  .command("upgrade")
+  .description("Compare installed version with a published release and safely upgrade")
+  .option("--check", "Check for updates without modifying the installation")
+  .option("-v, --version <version>", "Target an exact published version or tag")
+  .option("-y, --yes", "Confirm upgrade without interactive prompt (required when noninteractive)")
+  .option("--allow-downgrade", "Allow downgrading to an older version")
+  .option("-f, --force", "Force reinstallation even if already at target version")
+  .option("--prefix <path>", "Target installation prefix (defaults to canonical installation prefix)")
+  .option("--json", "Emit structured JSON output")
+  .option("--timeout <ms>", "Network timeout in milliseconds (default: 15000)")
+  .addHelpText(
+    "after",
+    `
+Exit codes:
+  0: Success (or already up to date when checking)
+  1: Update available (with --check), or upgrade cancelled/declined
+  2: Operational error (network, release not found, checksum mismatch, permission, unsupported provenance)
+`
+  )
+  .action(async (options: any) => {
+    const { upgradeCommand } = await import("./upgrade.js");
+    await upgradeCommand(options);
+  });
+
 registerOperationCommands(program);
 registerProviderCommands(program);
 
