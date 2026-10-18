@@ -182,6 +182,15 @@ describe("Tar Archive Structural Safety Engine (REQ-REL-116, ACC-UPG-08)", () =>
     return zlib.gzipSync(Buffer.concat(blocks));
   }
 
+  function paxRecord(key: string, value: string): string {
+    const body = `${key}=${value}\n`;
+    let length = Buffer.byteLength(body) + 3;
+    while (length !== Buffer.byteLength(String(length)) + 1 + Buffer.byteLength(body)) {
+      length = Buffer.byteLength(String(length)) + 1 + Buffer.byteLength(body);
+    }
+    return `${length} ${body}`;
+  }
+
   it("verifies path safety checks: rejects traversal and absolute paths", () => {
     assert.equal(isPathSafe("nexus/bin/nexus").safe, true);
     assert.equal(isPathSafe("nexus/lib/core/harness-core").safe, true);
@@ -242,20 +251,31 @@ describe("Tar Archive Structural Safety Engine (REQ-REL-116, ACC-UPG-08)", () =>
     assert.ok(result.errors.some((error) => error.includes("PAX metadata exceeds safety limit")));
   });
 
-  it("applies global PAX link overrides to every later entry before validation", async () => {
+  it("keeps global PAX link overrides active across later entries", async () => {
     const archive = path.join(tmpRoot, "global-pax.tar.gz");
-    const body = "linkpath=../../../../escape\n";
-    let length = Buffer.byteLength(body) + 3;
-    while (length !== Buffer.byteLength(String(length)) + 1 + Buffer.byteLength(body)) {
-      length = Buffer.byteLength(String(length)) + 1 + Buffer.byteLength(body);
-    }
     fs.writeFileSync(archive, createTestTar([
-      { name: "GlobalHead", typeflag: "g", content: `${length} ${body}` },
-      { name: "nexus/bin/evil-link", typeflag: "2", linkname: "safe" },
+      { name: "GlobalHead", typeflag: "g", content: paxRecord("linkpath", "../../safe") },
+      // The same global target resolves inside nexus for this deep link.
+      { name: "nexus/a/b/deep-link", typeflag: "2", linkname: "raw-safe" },
+      // It escapes nexus for this shallow link and must still be applied.
+      { name: "nexus/shallow-link", typeflag: "2", linkname: "raw-safe" },
     ]));
     const result = await validateTarArchive(archive);
     assert.equal(result.valid, false);
     assert.ok(result.errors.some((error) => error.includes("escapes")));
+  });
+
+  it("rejects local and global PAX size overrides that diverge from extraction accounting", async () => {
+    for (const typeflag of ["x", "g"]) {
+      const archive = path.join(tmpRoot, `pax-size-override-${typeflag}.tar.gz`);
+      fs.writeFileSync(archive, createTestTar([
+        { name: "PaxHeader", typeflag, content: paxRecord("size", "0") },
+        { name: "nexus/VERSION", content: "1.0.0\n" },
+      ]));
+      const result = await validateTarArchive(archive);
+      assert.equal(result.valid, false);
+      assert.ok(result.errors.some((error) => error.includes("unsupported extraction-affecting key 'size'")));
+    }
   });
 
   it("rejects malicious tar archive with escaping symlink", async () => {

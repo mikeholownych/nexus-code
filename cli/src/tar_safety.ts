@@ -326,6 +326,7 @@ export async function validateTarArchive(
 function parsePax(paxData: Buffer): Record<string, string> {
   const result: Record<string, string> = {};
   const decoder = new TextDecoder("utf-8", { fatal: true });
+  const safeMetadata = new Set(["uid", "gid", "uname", "gname", "mtime", "atime", "ctime", "comment"]);
   let offset = 0;
   while (offset < paxData.byteLength) {
     const space = paxData.indexOf(0x20, offset);
@@ -342,6 +343,7 @@ function parsePax(paxData: Buffer): Record<string, string> {
     if (equals <= 0) throw new Error("record key/value is invalid");
     const key = decoder.decode(record.subarray(0, equals));
     if (key === "path" || key === "linkpath") result[key] = decoder.decode(record.subarray(equals + 1));
+    else if (!safeMetadata.has(key)) throw new Error(`unsupported extraction-affecting key '${key}'`);
     offset = recordEnd;
   }
   return result;
