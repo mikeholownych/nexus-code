@@ -63,6 +63,35 @@ test("stable promotion accepts only RC + synchronized version change", () => {
     git("commit", "-qam", "root version only, components not synchronized");
     assert.match(check(rc, "HEAD").stderr, /differs from RC \+ sync-version 9\.9\.9/);
 
+    git("reset", "-q", "--hard", rc);
+    setVersion("9.9.9");
+    fs.writeFileSync(path.join(repo, "added.txt"), "new\n");
+    git("add", "added.txt");
+    git("commit", "-qam", "version plus a new file");
+    assert.match(check(rc, "HEAD").stderr, /in: added\.txt/);
+
+    git("reset", "-q", "--hard", rc);
+    setVersion("9.9.9");
+    fs.chmodSync(path.join(repo, "README.md"), 0o755);
+    git("commit", "-qam", "version plus a mode change");
+    assert.match(check(rc, "HEAD").stderr, /in: README\.md/);
+
+    git("reset", "-q", "--hard", rc);
+    setVersion("9.9.9");
+    const synced = JSON.parse(fs.readFileSync(path.join(repo, "package.json"), "utf8"));
+    fs.writeFileSync(path.join(repo, "package.json"), JSON.stringify(synced) + "\n");
+    git("commit", "-qam", "version plus reformatted package.json");
+    assert.match(check(rc, "HEAD").stderr, /text changes more than its version string/);
+
+    // release.yml runs the RC's copy of the checker from outside the checkout.
+    git("reset", "-q", "--hard", rc);
+    setVersion("9.9.9");
+    git("commit", "-qam", "release: v9.9.9");
+    const outside = path.join(base, "check-version-only-diff.mjs");
+    fs.copyFileSync(path.join(repo, "scripts/check-version-only-diff.mjs"), outside);
+    const copied = spawnSync(process.execPath, [outside, rc, "HEAD"], { cwd: repo, env, encoding: "utf8" });
+    assert.equal(copied.status, 0, copied.stderr);
+
     assert.match(check(rc, rc).stderr, /not a single commit directly on RC/);
     assert.equal(git("worktree", "list").split("\n").length, 1, "the checker removes its temporary worktree");
   } finally {

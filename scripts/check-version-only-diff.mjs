@@ -13,15 +13,21 @@ const fail = (message) => { throw new Error(message); };
 process.on("uncaughtException", (error) => { console.error(`check-version-only-diff: ${error.message}`); process.exit(1); });
 if (!rcRef || !stableRef) fail("usage: check-version-only-diff.mjs <rc-ref> <stable-ref>");
 const git = (...argv) => execFileSync("git", argv, { encoding: "utf8" }).trim();
+// The checker may run from a copy outside the repository (release.yml uses the RC's own copy); sync-version comes
+// from the RC worktree either way.
 const rc = git("rev-parse", `${rcRef}^{commit}`);
 const stable = git("rev-parse", `${stableRef}^{commit}`);
 if (git("rev-list", "--parents", "-n", "1", stable).split(" ").slice(1).join(" ") !== rc) fail(`stable ${stable} is not a single commit directly on RC ${rc}`);
 
-const rcPackage = JSON.parse(git("show", `${rc}:package.json`));
+const rcPackageText = execFileSync("git", ["show", `${rc}:package.json`], { encoding: "utf8" });
+const rcPackage = JSON.parse(rcPackageText);
 const stablePackageText = execFileSync("git", ["show", `${stable}:package.json`], { encoding: "utf8" });
 const stablePackage = JSON.parse(stablePackageText);
 if (!/^\d+\.\d+\.\d+$/.test(stablePackage.version)) fail(`stable version '${stablePackage.version}' is not a stable SemVer`);
 if (!isDeepStrictEqual({ ...rcPackage, version: null }, { ...stablePackage, version: null })) fail("root package.json changes more than its version");
+// Text, not just parsed value: no reordering, whitespace or duplicate keys beyond the one version string.
+const versionField = (version) => new RegExp(`("version"\\s*:\\s*)"${version.replace(/[.+]/g, "\\$&")}"`);
+if (rcPackageText.replace(versionField(rcPackage.version), `$1"${stablePackage.version}"`) !== stablePackageText) fail("root package.json text changes more than its version string");
 
 const work = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-version-diff-"));
 try {
