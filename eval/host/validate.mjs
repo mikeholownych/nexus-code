@@ -95,8 +95,19 @@ await check("the evaluator cannot reach operator files or the held-out store", (
   must(process.argv.includes("--heldout") && fs.statSync(heldout).isDirectory(), "pass --heldout <sealed task store> (an existing directory)");
   const home = os.homedir();
   must(fs.statSync(home).isDirectory(), "operator home is missing");
-  const probe = `test ! -x "$1" || { echo "can traverse $1"; exit 1; }; ls "$2" >/dev/null 2>&1 && { echo "can list $2"; exit 1; }; ls "$1" >/dev/null 2>&1 && { echo "can list $1"; exit 1; }; exit 0`;
-  const result = run("/usr/bin/sudo", ["-n", "-u", ACCOUNT, "--", "/usr/bin/bwrap", "--ro-bind", "/", "/", "--proc", "/proc", "--dev", "/dev", "--unshare-net", "--", "/bin/sh", "-c", probe, "sh", home, heldout]);
+  // One real file inside the store, chosen operator-side and never printed, must be unreadable even by exact path.
+  const findFile = (dir) => {
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      const item = path.join(dir, entry.name);
+      if (entry.isFile()) return item;
+      if (entry.isDirectory()) { const found = findFile(item); if (found) return found; }
+    }
+    return null;
+  };
+  const storeFile = findFile(heldout);
+  must(storeFile, "the held-out store contains no file to probe");
+  const probe = `test ! -x "$1" || { echo "can traverse the operator home"; exit 1; }; ls "$2" >/dev/null 2>&1 && { echo "can list the held-out store"; exit 1; }; ls "$1" >/dev/null 2>&1 && { echo "can list the operator home"; exit 1; }; cat "$3" >/dev/null 2>&1 && { echo "can read a held-out file by path"; exit 1; }; exit 0`;
+  const result = run("/usr/bin/sudo", ["-n", "-u", ACCOUNT, "--", "/usr/bin/bwrap", "--ro-bind", "/", "/", "--proc", "/proc", "--dev", "/dev", "--unshare-net", "--", "/bin/sh", "-c", probe, "sh", home, heldout, storeFile]);
   must(result.status === 0, `evaluator isolation failed: ${result.stdout.trim() || result.stderr.trim()}`);
   return `home and ${heldout} unreachable`;
 });
