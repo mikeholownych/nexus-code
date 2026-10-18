@@ -264,9 +264,22 @@ export function stageHiddenFiles(source, ws, relativeTarget, { readOnlyHidden = 
     if (path.posix.isAbsolute(relTargetFile) || segments.some((segment) => !segment || segment === "..")) {
       throw new Error(`invalid hidden test target path: ${relTargetFile}`);
     }
-    fs.mkdirSync(path.dirname(path.join(ws, relTargetFile)), { recursive: true });
+    let cur = fs.realpathSync(ws);
+    const dirParts = path.posix.dirname(relTargetFile).split("/").filter((part) => part && part !== ".");
+    for (const part of dirParts) {
+      cur = path.join(cur, part);
+      const st = fs.lstatSync(cur, { throwIfNoEntry: false });
+      if (st) {
+        if (st.isSymbolicLink() || !st.isDirectory()) throw new Error(`unsafe hidden test parent directory: ${relTargetFile}`);
+      } else {
+        fs.mkdirSync(cur);
+      }
+    }
+    const leafPath = path.join(cur, path.posix.basename(relTargetFile));
+    const leafStat = fs.lstatSync(leafPath, { throwIfNoEntry: false });
+    if (leafStat?.isSymbolicLink() && !readOnlyHidden) throw new Error(`unsafe hidden test destination: ${relTargetFile}`);
+    if (leafStat && readOnlyHidden) fs.rmSync(leafPath, { recursive: true, force: true });
     const destFile = confinedPath(ws, relTargetFile, { allowMissingLeaf: true });
-    if (readOnlyHidden) fs.rmSync(destFile, { recursive: true, force: true });
     fs.mkdirSync(path.dirname(destFile), { recursive: true });
     fs.cpSync(path.join(source, relFile), destFile, { verbatimSymlinks: true });
     if (readOnlyHidden) readOnlySubpaths.push(relTargetFile);
@@ -275,7 +288,9 @@ export function stageHiddenFiles(source, ws, relativeTarget, { readOnlyHidden = 
 }
 
 export function hiddenOutputHasTests(output) {
-  return !/\[no test files\]|testing: warning: no tests to run|collected 0 items|no tests ran|Ran 0 tests|0 passed;\s*0 failed/i.test(output);
+  const hasPositive = /^ok\s+\S+/m.test(output) || /\b[1-9]\d*\s+passed\b/i.test(output) || /^Ran\s+[1-9]\d*\s+tests?\b/m.test(output);
+  const hasZeroMarker = /\[no test files\]|testing: warning: no tests to run|collected 0 items|no tests ran|Ran 0 tests\b|\b0 passed;\s*0 failed\b/i.test(output);
+  return hasPositive || !hasZeroMarker;
 }
 
 /** Execute a task-controlled shell command in a no-network, clear-environment namespace. */

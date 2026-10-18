@@ -52,9 +52,19 @@ test("hidden test staging preserves workspace files and mounts only copied hidde
     assert.equal(fs.readFileSync(path.join(ws, "test/existing.js"), "utf8"), "keep test\n");
     assert.equal(fs.readFileSync(path.join(ws, "private.test.js"), "utf8"), "hidden\n");
     assert.equal(fs.readFileSync(path.join(ws, "test/private.test.js"), "utf8"), "hidden\n");
+    const outsideDir = path.join(root, "outside");
+    fs.mkdirSync(outsideDir);
+    fs.symlinkSync(outsideDir, path.join(ws, "sym"));
+    assert.throws(() => stageHiddenFiles(source, ws, "sym/newparent", { readOnlyHidden: true }), /unsafe hidden test parent directory/);
+    assert.equal(fs.existsSync(path.join(outsideDir, "newparent")), false);
     assert.equal(hiddenOutputHasTests("Ran 0 tests"), false);
     assert.equal(hiddenOutputHasTests("[no test files]"), false);
     assert.equal(hiddenOutputHasTests("Ran 1 test"), true);
+    assert.equal(hiddenOutputHasTests("?   example/cmd [no test files]\nok  example/pkg 0.01s"), true);
+    assert.equal(hiddenOutputHasTests("test result: ok. 5 passed; 0 failed\ntest result: ok. 0 passed; 0 failed"), true);
+    assert.equal(hiddenOutputHasTests("?   example/cmd [no test files]"), false);
+    assert.equal(hiddenOutputHasTests("test result: ok. 0 passed; 0 failed"), false);
+    assert.equal(hiddenOutputHasTests("Ran 0 tests"), false);
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
