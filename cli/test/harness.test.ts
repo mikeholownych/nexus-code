@@ -22,6 +22,7 @@ import { scanAndOnboardWorkspace } from "../src/onboard.js";
 import { discoverVerifier, runTestSuite } from "../src/tester.js";
 import { highlightLine, highlightDiff, highlightCode, highlightMarkdownCodeBlocks } from "../src/syntax.js";
 import { copyToClipboard, readFromClipboard } from "../src/clipboard.js";
+import { executeWebSearch } from "../src/search_web.js";
 import { RustCoreBridge } from "../src/tools.js";
 import { wrapSandboxedCommand, isBwrapAvailable } from "../src/sandbox.js";
 import { PluginManager } from "../src/plugins.js";
@@ -2472,6 +2473,10 @@ error[E0308]: mismatched types
   });
 
   test("RustCoreBridge dispatches search_web tool execution through configured provider (Candidate #45)", async () => {
+    const emptyRes = await executeWebSearch("");
+    assert.strictEqual(emptyRes.success, false);
+    assert.strictEqual(emptyRes.results.length, 0);
+
     const previousSearxngUrl = process.env.SEARXNG_URL;
     const previousSearxUrl = process.env.SEARX_URL;
     const previousDisableSearch = process.env.NEXUS_DISABLE_WEB_SEARCH;
