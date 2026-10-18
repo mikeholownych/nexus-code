@@ -89,6 +89,7 @@ export function spawnContained(spec, resources, { stdio, ...options }) {
     try { process.kill(child.pid, "SIGTERM"); } catch {}
     repeat = setInterval(killPayload, 50);
     fallback = setTimeout(() => { try { process.kill(-child.pid, "SIGKILL"); } catch {} }, 10_000);
+    setTimeout(() => clearInterval(repeat), 30_000).unref();
   };
   child.on("close", () => { clearInterval(repeat); clearTimeout(fallback); killPayload(); });
   return { child, containment: { final, kill } };
