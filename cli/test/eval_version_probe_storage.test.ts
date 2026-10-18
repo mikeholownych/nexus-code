@@ -5,7 +5,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import http from "node:http";
-import { spawn } from "node:child_process";
+import { spawn, execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
@@ -13,17 +13,23 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..")
 test("the production version-probe workspace uses the configured capped filesystem", { timeout: 60_000 }, async () => {
   const workspaceRoot = process.env.NEXUS_EVAL_TEST_WORKSPACE_ROOT;
   assert.ok(workspaceRoot, "requires the dedicated capped workspace fixture configured by CI");
+  const runAs = process.env.NEXUS_EVAL_TEST_RUN_AS ?? "nobody";
+  const evaluatorUid = Number(execFileSync("/usr/bin/id", ["-u", runAs], { encoding: "utf8" }).trim());
+  assert.notEqual(evaluatorUid, process.getuid(), "version probe must actually switch to a separate evaluator uid");
   const cap = fs.statfsSync(workspaceRoot);
   const expectedDevice = fs.statSync(workspaceRoot).dev;
   const temp = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-version-storage-test-"));
+  fs.chmodSync(temp, 0o755); // Public synthetic executable must be traversable by the separate evaluator.
   const home = path.join(temp, "home");
   const tools = path.join(temp, "tools");
   const tasks = path.join(temp, "tasks");
   for (const dir of [home, tools, tasks]) fs.mkdirSync(dir, { mode: 0o700 });
+  fs.chmodSync(tools, 0o755);
   const before = new Set(fs.readdirSync(workspaceRoot));
   const agent = path.join(tools, "goose");
   fs.writeFileSync(agent, `#!/usr/bin/node
 const fs=require('node:fs');
+if(process.getuid()!==${evaluatorUid}){console.error('version probe did not switch evaluator uid');process.exit(94);}
 if(process.argv[2]!== '--version')process.exit(91);
 if(fs.statSync(process.cwd()).dev!==${expectedDevice}){console.error('version probe escaped capped filesystem');process.exit(92);}
 const cap=fs.statfsSync(process.cwd());
@@ -41,7 +47,7 @@ console.log('goose-storage-probe 1.0.0');
   const config = path.join(temp, "config.json");
   const out = path.join(temp, "out");
   fs.writeFileSync(config, JSON.stringify({
-    name: "bounded-version-probe", agent: "goose", expectedAgentVersion: "1.0.0",
+    name: "bounded-version-probe", agent: "goose", expectedAgentVersion: "1.0.0", runAs,
     endpoint: `http://127.0.0.1:${address.port}/v1`, model: "storage-probe-model", proxy: false,
     env: { PATH: `${tools}${path.delimiter}${process.env.PATH ?? ""}` },
     sandboxRuntimePaths: [agent], sandboxRuntimeRoots: [],

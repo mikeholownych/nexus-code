@@ -374,6 +374,7 @@ async function resolveAgentIdentity(config) {
   const probeWorkspace = fs.mkdtempSync(path.join(config.resources?.workspaceRoot ?? os.tmpdir(), "nexus-eval-version-workspace-"));
   let probe;
   try {
+    if (config.runAs) grantRunAsAccess(config.runAs, [probeWorkspace]);
     const runtimePaths = [candidatePath, ...argsPrefix.filter((item) => path.isAbsolute(item)).map((item) => fs.realpathSync(item))];
     const isCheckoutNexus = agent === "nexus" && argsPrefix[0] === path.join(ROOT, "cli/dist/index.js");
     if (isCheckoutNexus) {
