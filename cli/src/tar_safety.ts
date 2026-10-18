@@ -22,6 +22,7 @@ export const MAX_ARCHIVE_ENTRIES = 50_000;
 // PAX records are attacker-controlled metadata. Keep one record bounded even
 // when it does not contribute to the declared file payload total.
 export const MAX_PAX_HEADER_BYTES = 64 * 1024;
+export const MAX_TOTAL_PAX_BYTES = 1024 * 1024;
 
 export interface TarEntryInfo {
   name: string;
@@ -123,7 +124,7 @@ export async function validateTarArchive(
   let paxBytes = 0;
   // Headers, padding and terminators also consume memory/CPU. Bound the full
   // decompressed stream independently from the sum of regular-file payloads.
-  const maxStreamBytes = maxBytes + maxEntries * 1024 + 2048;
+  const maxStreamBytes = maxBytes + maxEntries * 1024 + MAX_TOTAL_PAX_BYTES + 2048;
 
   return new Promise<TarValidationResult>((resolve) => {
     let gunzip: zlib.Gunzip;
@@ -232,6 +233,10 @@ export async function validateTarArchive(
           fail(`Archive entry size exceeds safety limit (${maxStreamBytes} bytes)`);
           return;
         }
+        if ((typeflag === "x" || typeflag === "g") && size > MAX_PAX_HEADER_BYTES) {
+          fail(`PAX metadata exceeds safety limit (${MAX_PAX_HEADER_BYTES} bytes per header)`);
+          return;
+        }
 
         if (buffer.length < 512 + paddedSize) {
           // Incomplete block, wait for more data
@@ -244,8 +249,8 @@ export async function validateTarArchive(
         // Handle PAX extended header block ('x' or 'g')
         if (typeflag === "x" || typeflag === "g") {
           paxBytes += size;
-          if (size > MAX_PAX_HEADER_BYTES || paxBytes > maxStreamBytes || content.length !== size) {
-            fail(`PAX metadata exceeds safety limit (${MAX_PAX_HEADER_BYTES} bytes per header)`);
+          if (paxBytes > MAX_TOTAL_PAX_BYTES || content.length !== size) {
+            fail(`PAX metadata exceeds total safety limit (${MAX_TOTAL_PAX_BYTES} bytes)`);
             return;
           }
           try {
@@ -335,7 +340,8 @@ function parsePax(paxData: Buffer): Record<string, string> {
     const record = paxData.subarray(space + 1, recordEnd - 1);
     const equals = record.indexOf(0x3d);
     if (equals <= 0) throw new Error("record key/value is invalid");
-    result[decoder.decode(record.subarray(0, equals))] = decoder.decode(record.subarray(equals + 1));
+    const key = decoder.decode(record.subarray(0, equals));
+    if (key === "path" || key === "linkpath") result[key] = decoder.decode(record.subarray(equals + 1));
     offset = recordEnd;
   }
   return result;

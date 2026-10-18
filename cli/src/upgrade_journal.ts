@@ -90,12 +90,12 @@ function isValidJournal(value: any, prefix: string): value is UpgradeJournalEntr
         !/^\.tmp-upgrade-[A-Za-z0-9._-]{1,128}$/.test(path.basename(value.stagingDir))) return false;
   }
   if (value.configBackupPath !== undefined) {
-    const backups = path.join(path.dirname(root), ".config", "nexus", "backups");
+    const backups = path.join(process.env.HOME || "", ".config", "nexus", "backups");
     if (typeof value.configBackupPath !== "string" || path.dirname(path.resolve(value.configBackupPath)) !== backups ||
         !/^config\.env\.bak\.[A-Za-z0-9T_.-]+$/.test(path.basename(value.configBackupPath))) return false;
   }
   if (value.stateBackupDir !== undefined) {
-    const backups = path.join(path.dirname(root), ".nexus", "backups");
+    const backups = path.join(process.env.HOME || "", ".nexus", "backups");
     if (typeof value.stateBackupDir !== "string" || path.dirname(path.resolve(value.stateBackupDir)) !== backups ||
         !/^state-backup-[A-Za-z0-9T_.-]+$/.test(path.basename(value.stateBackupDir))) return false;
   }
@@ -241,8 +241,8 @@ export function recoverUpgrade(prefix: string): RecoveryOutcome {
   if (state === "switching" || state === "switched" || state === "verified") {
     // Check if target installation is intact and executable
     const targetExecutable = path.join(targetInstallDir, "bin", "nexus");
-    let targetHealthy = false;
-    if (fs.existsSync(targetExecutable)) {
+    let targetHealthy = isRealFile(targetExecutable);
+    if (targetHealthy) {
       try {
         const testRes = spawnSync(targetExecutable, ["--version"]);
         if (testRes.status === 0) {
@@ -265,7 +265,7 @@ export function recoverUpgrade(prefix: string): RecoveryOutcome {
     } else {
       // Revert symlink to source installation
       const sourceExecutable = path.join(sourceInstallDir, "bin", "nexus");
-      if (fs.existsSync(sourceExecutable)) {
+      if (isRealFile(sourceExecutable)) {
         atomicSymlinkSwap(sourceExecutable, binPath);
         journal.state = "rolled_back";
         journal.updatedAt = new Date().toISOString();
@@ -301,6 +301,16 @@ function isRealDirectory(directory: string): boolean {
     const absolute = path.resolve(directory);
     const stat = fs.lstatSync(absolute);
     return stat.isDirectory() && !stat.isSymbolicLink() && fs.realpathSync(absolute) === absolute;
+  } catch {
+    return false;
+  }
+}
+
+function isRealFile(filePath: string): boolean {
+  try {
+    const absolute = path.resolve(filePath);
+    const stat = fs.lstatSync(absolute);
+    return stat.isFile() && !stat.isSymbolicLink() && fs.realpathSync(absolute) === absolute;
   } catch {
     return false;
   }
