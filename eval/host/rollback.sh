@@ -14,6 +14,7 @@ unit="$(systemd-escape -p --suffix=mount "$workspace_root")"
 
 if pgrep -u "$ACCOUNT" >/dev/null 2>&1; then echo "processes still run as $ACCOUNT; stop the evaluation first" >&2; exit 1; fi
 systemctl disable --now "$unit" 2>/dev/null || true
+if findmnt --mountpoint "$workspace_root" >/dev/null; then echo "$workspace_root is still mounted (busy?); nothing removed" >&2; exit 1; fi
 rm -f "/etc/systemd/system/$unit"
 systemctl daemon-reload
 rmdir "$workspace_root" 2>/dev/null || true

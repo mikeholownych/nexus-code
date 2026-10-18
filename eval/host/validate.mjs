@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // Infrastructure-only validation of a provisioned qualification host (eval/host/README.md). Run as the operator:
-//   node eval/host/validate.mjs [--json out.json]
+//   node eval/host/validate.mjs --heldout <sealed task store> [--json out.json]
 // Uses no task corpus and no inference. Every check must pass; the report lists each result.
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
@@ -53,7 +53,7 @@ await check("workspace root is the dedicated, operator-owned, size-capped tmpfs"
   must(live[0] === "tmpfs", `${resources.workspaceRoot} is not a tmpfs mount point (${live.join(" ") || "not mounted"})`);
   must(Number(live[1]) === resources.storageBytes, `tmpfs size ${live[1]} differs from storageBytes ${resources.storageBytes}`);
   const stat = fs.statSync(resources.workspaceRoot);
-  must(stat.uid === process.getuid() && (stat.mode & 0o777) === 0o700, `owner/mode is ${stat.uid}/${(stat.mode & 0o777).toString(8)}`);
+  must(stat.uid === process.getuid() && (stat.mode & 0o777) === 0o711, `owner/mode is ${stat.uid}/${(stat.mode & 0o777).toString(8)}, not operator/711`);
   const problem = resourceConfigProblem(resources);
   must(problem === null, problem);
   return `tmpfs ${live[1]} bytes`;
@@ -68,26 +68,37 @@ await check("evaluator processes stay in the limited cgroup, and every one is re
   const dir = fs.mkdtempSync(path.join(resources.workspaceRoot, "validate-"));
   try {
     grantRunAsAccess(ACCOUNT, [dir]);
-    const spec = isolatedArgv({ cwd: dir, home: false, command: "id -u > /workspace/uid; cat /proc/self/cgroup > /workspace/cgroup; setsid sh -c 'sleep 300' </dev/null >/dev/null 2>&1 & sleep 0.3", timeoutSec: 30 });
-    const wrapped = asUser(ACCOUNT, spec.cmd, spec.argv, {});
-    const final = await new Promise((resolve) => {
-      const { child, containment } = spawnContained(wrapped, resources, { cwd: "/", env: {}, stdio: ["ignore", "ignore", "pipe"], detached: true });
+    const contained = (spec) => new Promise((resolve) => {
+      const { child, containment } = spawnContained(asUser(ACCOUNT, spec.cmd, spec.argv), resources, { cwd: "/", env: {}, stdio: ["ignore", "ignore", "pipe"], detached: true });
       child.on("close", async () => resolve(await containment.final));
     });
-    must(final?.cleaned === true, `containment report: ${JSON.stringify(final)}`);
+    // The harness's own sandbox, as the evaluator: right uid, inside the payload leaf.
+    const sandboxed = await contained(isolatedArgv({ cwd: dir, home: false, command: "id -u > /workspace/uid; cat /proc/self/cgroup > /workspace/cgroup", timeoutSec: 30 }));
+    must(sandboxed?.cleaned === true, `containment report: ${JSON.stringify(sandboxed)}`);
     must(Number(fs.readFileSync(path.join(dir, "uid"), "utf8")) === Number(account()[2]), "payload did not run as the evaluator");
-    must(/\/payload$/m.test(fs.readFileSync(path.join(dir, "cgroup"), "utf8").trim()), "evaluator process left the payload cgroup");
+    must(/\/payload$/.test(fs.readFileSync(path.join(dir, "cgroup"), "utf8").trim()), "evaluator process is not in the payload cgroup");
+    // Without a PID namespace nothing but the cgroup can reap a daemon: the operator-side supervisor must find the
+    // evaluator-owned survivor and kill it across uids.
+    const daemon = await contained({ cmd: "/usr/bin/bwrap", argv: ["--ro-bind", "/", "/", "--dev", "/dev", "--proc", "/proc", "--unshare-net", "--", "/bin/sh", "-c", "setsid sh -c 'exec sleep 300' </dev/null >/dev/null 2>&1 & sleep 0.5"] });
+    must(daemon?.survivorsAfterExit >= 1, `the evaluator daemon was not left for the cgroup to reap: ${JSON.stringify(daemon)}`);
+    must(daemon.cleaned === true, `evaluator daemon not reaped: ${JSON.stringify(daemon)}`);
     must(run("pgrep", ["-u", ACCOUNT]).status !== 0, "evaluator processes survived the run");
-    return `limits ${JSON.stringify(final.limits)}`;
+    return `limits ${JSON.stringify(sandboxed.limits)}; reaped ${daemon.survivorsAfterExit} evaluator survivor(s)`;
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
 
-await check("the evaluator cannot read operator files or the held-out store", () => {
-  const probe = `for p in "${os.homedir()}" "${os.homedir()}/.config/nexus" "${os.homedir()}/.ssh"; do test -r "$p" && { echo "$p"; exit 1; }; done; exit 0`;
-  const result = run("/usr/bin/sudo", ["-n", "-u", ACCOUNT, "--", "/usr/bin/bwrap", "--ro-bind", "/", "/", "--proc", "/proc", "--dev", "/dev", "--unshare-net", "--", "/bin/sh", "-c", probe]);
-  must(result.status === 0, `evaluator can read ${result.stdout.trim() || result.stderr.trim()}`);
+await check("the evaluator cannot reach operator files or the held-out store", () => {
+  // Paths are checked to exist operator-side first, so a missing path cannot pass the check vacuously.
+  const heldout = path.resolve(process.argv[process.argv.indexOf("--heldout") + 1] ?? "");
+  must(process.argv.includes("--heldout") && fs.statSync(heldout).isDirectory(), "pass --heldout <sealed task store> (an existing directory)");
+  const home = os.homedir();
+  must(fs.statSync(home).isDirectory(), "operator home is missing");
+  const probe = `test ! -x "$1" || { echo "can traverse $1"; exit 1; }; ls "$2" >/dev/null 2>&1 && { echo "can list $2"; exit 1; }; ls "$1" >/dev/null 2>&1 && { echo "can list $1"; exit 1; }; exit 0`;
+  const result = run("/usr/bin/sudo", ["-n", "-u", ACCOUNT, "--", "/usr/bin/bwrap", "--ro-bind", "/", "/", "--proc", "/proc", "--dev", "/dev", "--unshare-net", "--", "/bin/sh", "-c", probe, "sh", home, heldout]);
+  must(result.status === 0, `evaluator isolation failed: ${result.stdout.trim() || result.stderr.trim()}`);
+  return `home and ${heldout} unreachable`;
 });
 
 await check("qualification preflight fails closed without the controls", () => {

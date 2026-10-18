@@ -19,13 +19,17 @@ readonly STATE=/var/lib/nexus-qual-host.provisioned
 id -u "$OPERATOR" >/dev/null 2>&1 || { echo "operator $OPERATOR does not exist" >&2; exit 2; }
 [[ "$OPERATOR" != "$ACCOUNT" && "$OPERATOR" != root ]] || { echo "operator must be a separate, non-root account" >&2; exit 2; }
 
+command -v jq >/dev/null || { echo "jq is required to read $PROFILE" >&2; exit 2; }
 workspace_root=$(jq -er .workspaceRoot "$PROFILE")
 storage_bytes=$(jq -er .storageBytes "$PROFILE")
 [[ "$workspace_root" == /srv/* && "$storage_bytes" =~ ^[0-9]+$ ]] || { echo "unexpected profile values" >&2; exit 2; }
 unit="$(systemd-escape -p --suffix=mount "$workspace_root")"
 
 # 1. setfacl, which the harness uses to grant the evaluator uid access to each disposable run directory.
-command -v setfacl >/dev/null || DEBIAN_FRONTEND=noninteractive apt-get install --yes --no-install-recommends acl
+if ! command -v setfacl >/dev/null; then
+  apt-get update -qq
+  DEBIAN_FRONTEND=noninteractive apt-get install --yes --no-install-recommends acl
+fi
 
 # 2. The evaluator account: a system user with no login shell and a private home it never needs for runs.
 if ! id -u "$ACCOUNT" >/dev/null 2>&1; then
@@ -39,9 +43,12 @@ printf '# Managed by nexus-code eval/host/provision.sh\n%s ALL=(%s) NOPASSWD: /u
 visudo -cqf "$tmp"
 install -o root -g root -m 0440 "$tmp" "$SUDOERS"
 rm -f "$tmp"
-visudo -cq
+# The whole configuration must still parse; never leave a drop-in that breaks sudo.
+visudo -cq || { rm -f "$SUDOERS"; echo "sudoers no longer parses with $SUDOERS; removed it" >&2; exit 1; }
 
-# 4. The size-capped tmpfs workspace root, owned by the operator; per-run directories inside it get evaluator ACLs.
+# 4. The size-capped tmpfs workspace root, owned by the operator. Mode 0711 lets the evaluator traverse to the per-run
+#    directories the harness creates (0700, random names, evaluator ACL) without listing the root; it persists across
+#    remounts, unlike an ACL on the tmpfs root.
 op_uid=$(id -u "$OPERATOR"); op_gid=$(id -g "$OPERATOR")
 mkdir -p "$workspace_root"
 cat > "/etc/systemd/system/$unit" <<EOF
@@ -53,7 +60,7 @@ Description=Nexus qualification workspace root (size-capped tmpfs)
 What=tmpfs
 Where=$workspace_root
 Type=tmpfs
-Options=size=$storage_bytes,mode=0700,uid=$op_uid,gid=$op_gid,nosuid,nodev
+Options=size=$storage_bytes,mode=0711,uid=$op_uid,gid=$op_gid,nosuid,nodev
 
 [Install]
 WantedBy=local-fs.target
@@ -62,8 +69,8 @@ systemctl daemon-reload
 systemctl enable "$unit" >/dev/null
 # start, never restart: remounting a tmpfs would discard any run in progress.
 systemctl start "$unit"
-live=$(findmnt -n -b -o FSTYPE,SIZE --mountpoint "$workspace_root" | tr -s " ")
-[[ "$live" == "tmpfs $storage_bytes" ]] || { echo "mounted $workspace_root is '$live', not 'tmpfs $storage_bytes'; run rollback.sh, then provision again" >&2; exit 1; }
+live="$(findmnt -n -b -o FSTYPE,SIZE --mountpoint "$workspace_root" | tr -s " ") $(stat -c '%u %a' "$workspace_root")"
+[[ "$live" == "tmpfs $storage_bytes $op_uid 711" ]] || { echo "mounted $workspace_root is '$live', not 'tmpfs $storage_bytes $op_uid 711'; run rollback.sh, then provision again" >&2; exit 1; }
 
 # 5. Root-owned, world-readable home for the installed RC and peer agents (sandboxRuntimeRoots); filled per RC.
 install -d -o root -g root -m 0755 "$RUNTIME"

@@ -13,7 +13,7 @@ services. The changes are limited to the following:
 | Install `acl` | apt package | `setfacl` grants the evaluator uid access to each disposable run directory (`grantRunAsAccess`). |
 | System account `nexus-eval` | `/etc/passwd`, `/var/lib/nexus-eval` (0700), shell `nologin` | The candidate and validators run as a uid that cannot read the operator's files or the held-out store. |
 | One sudoers rule | `/etc/sudoers.d/90-nexus-eval`: `<operator> ALL=(nexus-eval) NOPASSWD: /usr/bin/bwrap` | The harness's only privilege. No `env`, no shell, no other command. |
-| Size-capped tmpfs | `srv-nexus\x2dqual-ws.mount` at `/srv/nexus-qual/ws`, `size=storageBytes,mode=0700,uid=<operator>,nosuid,nodev` | The resource contract's `workspaceRoot`: the hard cap on what a run keeps, across all phases. |
+| Size-capped tmpfs | `srv-nexus\x2dqual-ws.mount` at `/srv/nexus-qual/ws`, `size=storageBytes,mode=0711,uid=<operator>,nosuid,nodev` | The resource contract's `workspaceRoot`: the hard cap on what a run keeps, across all phases. |
 | Runtime directory | `/opt/nexus-qual` (root, 0755) | `sandboxRuntimeRoots` for the installed RC and the peer agents. It is filled per RC. |
 
 - `provision.sh` applies these changes and is idempotent. It never remounts an active tmpfs.
@@ -22,7 +22,7 @@ services. The changes are limited to the following:
 
 ```sh
 sudo OPERATOR=mike bash eval/host/provision.sh
-node eval/host/validate.mjs --json docs/reviews/evidence/v1-qualification/host/validate-$(date -u +%Y%m%dT%H%MZ).json
+node eval/host/validate.mjs --heldout <sealed task store> --json docs/reviews/evidence/v1-qualification/host/validate-$(date -u +%Y%m%dT%H%MZ).json
 # undo: sudo bash eval/host/rollback.sh
 ```
 
@@ -54,14 +54,17 @@ run's cgroup. `validate.mjs` checks this.
   plus a multi-GiB target directory on tmpfs both count. The measurement below records this repository's own
   `core` crate under the contract as a lower-bound reference.
 - **Storage.** The worst-case RAM is a full tmpfs plus a phase at its memory limit: 20 + 16 = 36 GiB. Together with
-  about 7 GiB of other host use, that stays below the 46 GiB of physical memory, so qualification cannot push the
-  box into swap.
+  about 7 GiB of other host use (`free` on 2026-10-18 09:40Z: 7 GiB used, 39 GiB available), that stays below the
+  46 GiB of physical memory. The margin is only about 3 GiB, so the other host load is re-measured and recorded in
+  the run record before each qualification window. If that load grows, the box can reach swap.
 
 ### Freezing
 
 1. **Calibration (custodian, before freeze).** The custodian validates every sealed task's reference solution under
    this profile and reports only aggregates: pass count; maximum `memoryPeakBytes`, `pidsPeak` and workspace bytes
-   across phases; and any OOM, pids or ENOSPC event. If a reference fails because of a limit, the limit is raised, the
+   across phases; any OOM, pids or ENOSPC event; and the longest phase wall time under the 8-CPU throttle, compared
+   with the task's budget. Agents rebuild repeatedly, unlike a single reference build, so the storage headroom is
+   checked against a reference build repeated three times in one workspace. If a reference fails because of a limit, the limit is raised, the
    change is recorded, and calibration is repeated. No candidate result is involved.
 2. **Freeze.** Set `"status": "frozen"`, commit, and record the profile's SHA-256 in the frozen run record
    (ACCEPTANCE §6.1) before the first qualification run.
