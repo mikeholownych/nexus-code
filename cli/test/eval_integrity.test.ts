@@ -359,26 +359,72 @@ test("hidden tests must be unreadable to the agent's own user", async () => {
 
 test("qualification remains fail-closed without enforced aggregate resource controls", async () => {
   const { qualificationResourceIsolationProblem } = await import(path.join(ROOT, "eval/validate.mjs"));
-  const shm = fs.statfsSync("/dev/shm");
-  const ok = { cpuPercent: 100, memoryBytes: 256 * 1024 * 1024, tasks: 64, storageBytes: shm.blocks * shm.bsize, workspaceRoot: "/dev/shm" };
+  const { dedicatedTmpfsMountProblem } = await import(path.join(ROOT, "eval/resources.mjs"));
+  const workspaceRoot = process.env.NEXUS_EVAL_TEST_WORKSPACE_ROOT ?? "/dev/shm";
+  const tmpfs = fs.statfsSync(workspaceRoot);
+  const ok = { cpuPercent: 100, memoryBytes: 256 * 1024 * 1024, tasks: 64, storageBytes: tmpfs.blocks * tmpfs.bsize, workspaceRoot };
+  const shared = fs.statfsSync("/dev/shm");
+  assert.match(qualificationResourceIsolationProblem({ resources: { ...ok, workspaceRoot: "/dev/shm", storageBytes: shared.blocks * shared.bsize } }) ?? "", /dedicated tmpfs|exact mount point/);
   assert.match(qualificationResourceIsolationProblem(), /enforced CPU, memory, process-count, and workspace-storage limits/);
   assert.match(qualificationResourceIsolationProblem({ resources: { ...ok, workspaceRoot: ROOT } }) ?? "", /tmpfs/);
+  const nested = fs.mkdtempSync(path.join(workspaceRoot, "nested-"));
+  try {
+    assert.match(qualificationResourceIsolationProblem({ resources: { ...ok, workspaceRoot: nested } }) ?? "", /exact mount point/);
+  } finally {
+    fs.rmdirSync(nested);
+  }
   assert.match(qualificationResourceIsolationProblem({ resources: { ...ok, memoryBytes: 1024 } }) ?? "", /memoryBytes/);
   assert.match(qualificationResourceIsolationProblem({ resources: { ...ok, tasks: 0 } }) ?? "", /tasks/);
   assert.match(qualificationResourceIsolationProblem({ resources: { ...ok, cpuPercent: 1.5 } }) ?? "", /cpuPercent/);
   assert.match(qualificationResourceIsolationProblem({ resources: { ...ok, memoryBytes: 256 * 1024 * 1024 + 1 } }) ?? "", /multiple of 4096/);
-  assert.match(qualificationResourceIsolationProblem({ resources: { ...ok, storageBytes: ok.storageBytes - 4096 } }) ?? "", /dedicated tmpfs with size<=storageBytes/);
+  assert.match(qualificationResourceIsolationProblem({ resources: { ...ok, storageBytes: ok.storageBytes - 4096 } }) ?? "", /tmpfs with size<=storageBytes/);
   assert.match(qualificationResourceIsolationProblem({ resources: { ...ok, storageBytes: undefined } }) ?? "", /storageBytes/);
-  assert.equal(qualificationResourceIsolationProblem({ resources: ok }), null, "this host must prove the contract (scripts/ensure-ci-user-cgroups.sh)");
+  const isolation = qualificationResourceIsolationProblem({ resources: ok });
+  if (process.env.NEXUS_EVAL_TEST_WORKSPACE_ROOT) assert.equal(isolation, null, "the dedicated test tmpfs and kernel resource contract must pass preflight");
+  else assert.match(isolation ?? "", /dedicated tmpfs|exact mount point/, "a shared /dev/shm must fail qualification preflight");
+  if (process.env.NEXUS_EVAL_TEST_WORKSPACE_ROOT) {
+    fs.chmodSync(workspaceRoot, 0o755);
+    try {
+      assert.match(qualificationResourceIsolationProblem({ resources: ok }) ?? "", /non-readable\/non-writable by group or other/);
+    } finally {
+      fs.chmodSync(workspaceRoot, 0o700);
+    }
+    assert.equal(qualificationResourceIsolationProblem({ resources: ok }), null, "restored dedicated mount root must pass preflight");
+    fs.chmodSync(workspaceRoot, 0o731);
+    try {
+      assert.match(qualificationResourceIsolationProblem({ resources: ok }) ?? "", /non-readable\/non-writable by group or other/);
+    } finally {
+      fs.chmodSync(workspaceRoot, 0o700);
+    }
+    fs.chmodSync(workspaceRoot, 0o711);
+    try {
+      assert.equal(qualificationResourceIsolationProblem({ resources: ok }), null, "execute-only traversal for the isolated evaluator account is compatible with the private root");
+    } finally {
+      fs.chmodSync(workspaceRoot, 0o700);
+    }
+  }
+  const syntheticRoot = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-mount-mode-"));
+  try {
+    fs.chmodSync(syntheticRoot, 0o711);
+    const syntheticMount = `101 1 0:88 / ${syntheticRoot} rw,relatime - tmpfs tmpfs rw,size=131072k,mode=711,uid=${process.getuid()}`;
+    assert.match(dedicatedTmpfsMountProblem(syntheticRoot, `${syntheticMount}\n${syntheticMount.replace("101 ", "102 ")}`) ?? "", /stacked or duplicate/);
+    assert.equal(dedicatedTmpfsMountProblem(syntheticRoot, syntheticMount), null, "execute-only traversal is permitted for the isolated evaluator account");
+    assert.match(dedicatedTmpfsMountProblem(syntheticRoot, syntheticMount.replace("mode=711", "mode=755")) ?? "", /non-readable\/non-writable by group or other/);
+    assert.match(dedicatedTmpfsMountProblem(syntheticRoot, syntheticMount.replace("mode=711", "mode=721")) ?? "", /non-readable\/non-writable by group or other/);
+  } finally {
+    fs.chmodSync(syntheticRoot, 0o700);
+    fs.rmdirSync(syntheticRoot);
+  }
 });
 
 test("resource contract: candidate memory, processes, storage and CPU are kernel-bounded and every process is reaped", async () => {
   const { runIsolated, sandboxAvailable } = await import(path.join(ROOT, "eval/isolate.mjs"));
   const { spawnContained } = await import(path.join(ROOT, "eval/resources.mjs"));
   assert.equal(sandboxAvailable(), true, "this security test requires the real Bubblewrap executable");
-  const memoryBytes = 128 * 1024 * 1024;
-  const shm = fs.statfsSync("/dev/shm");
-  const resources = { cpuPercent: 20, memoryBytes, tasks: 16, storageBytes: shm.blocks * shm.bsize, workspaceRoot: "/dev/shm" };
+  const memoryBytes = 256 * 1024 * 1024;
+  const workspaceRoot = process.env.NEXUS_EVAL_TEST_WORKSPACE_ROOT ?? "/dev/shm";
+  const tmpfs = fs.statfsSync(workspaceRoot);
+  const resources = { cpuPercent: 20, memoryBytes, tasks: 16, storageBytes: tmpfs.blocks * tmpfs.bsize, workspaceRoot };
   const ws = fs.mkdtempSync(path.join(resources.workspaceRoot, "eval-resources-"));
   const run = (command: string, timeoutSec = 30) => runIsolated(command, { cwd: ws, home: true, timeoutSec, resources });
   try {
@@ -395,12 +441,18 @@ test("resource contract: candidate memory, processes, storage and CPU are kernel
     assert.ok(forks.resources.pidsPeak <= 16);
     assert.equal(forks.resources.cleaned, true);
 
-    // Workspace and sandbox /tmp writes are tmpfs pages charged to the payload cgroup.
-    for (const target of ["/workspace/fill", "/tmp/fill"]) {
-      const disk = await run(`dd if=/dev/zero of=${target} bs=1M count=512 status=none`);
-      assert.ok(disk.resources.oomKills >= 1, `${target}: ${JSON.stringify(disk.resources)}`);
-    }
-    assert.ok(fs.statSync(path.join(ws, "fill")).size < memoryBytes);
+    // The dedicated workspace mount caps storage before the larger memory limit; sandbox /tmp is separately charged
+    // to the task cgroup and must hit memory.max. Neither failure may leave a task process behind.
+    const workspaceDisk = await run("dd if=/dev/zero of=/workspace/fill bs=1M count=512 status=none");
+    assert.notEqual(workspaceDisk.status, 0, JSON.stringify(workspaceDisk));
+    assert.equal(workspaceDisk.resources.oomKills, 0, JSON.stringify(workspaceDisk.resources));
+    assert.equal(workspaceDisk.resources.cleaned, true);
+    assert.ok((fs.existsSync(path.join(ws, "fill")) ? fs.statSync(path.join(ws, "fill")).size : 0) <= resources.storageBytes);
+
+    const sandboxDisk = await run("dd if=/dev/zero of=/tmp/fill bs=1M count=512 status=none");
+    assert.notEqual(sandboxDisk.status, 0, JSON.stringify(sandboxDisk));
+    assert.ok(sandboxDisk.resources.oomKills >= 1, JSON.stringify(sandboxDisk.resources));
+    assert.equal(sandboxDisk.resources.cleaned, true);
 
     const cpu = await run("timeout 2 sh -c 'while :; do :; done' & timeout 2 sh -c 'while :; do :; done' & wait");
     assert.equal(cpu.resources.limits["cpu.max"], "20000 100000");
@@ -424,21 +476,22 @@ test("resource contract: candidate memory, processes, storage and CPU are kernel
     assert.notEqual(early.final?.exitCode, 0);
 
     // A process that leaves the session and process group is still found in, and removed from, the cgroup.
-    const pidFile = path.join(ws, "daemon.pid");
+    const readyMarker = path.join(ws, "escaped-process-ready");
+    const escapedMarker = path.join(ws, "escaped-process-survived");
     const escaped = await new Promise<any>((resolve) => {
-      const { child, containment } = spawnContained({ cmd: "/bin/sh", argv: ["-c", `setsid sh -c 'echo $$ > ${pidFile}; exec sleep 300' </dev/null >/dev/null 2>&1 & sleep 0.3`] }, resources, { cwd: "/", stdio: ["ignore", "ignore", "ignore"], detached: true });
+      const { child, containment } = spawnContained({ cmd: "/bin/sh", argv: ["-c", `setsid sh -c 'touch ${readyMarker}; sleep 2; touch ${escapedMarker}' </dev/null >/dev/null 2>&1 & while [ ! -e '${readyMarker}' ]; do sleep 0.01; done`] }, resources, { cwd: "/", stdio: ["ignore", "ignore", "ignore"], detached: true });
       child.on("close", async () => resolve(await containment!.final));
     });
     assert.ok(escaped.survivorsAfterExit >= 1, JSON.stringify(escaped));
     assert.equal(escaped.cleaned, true);
-    const daemon = Number(fs.readFileSync(pidFile, "utf8"));
-    assert.throws(() => process.kill(daemon, 0), /ESRCH/);
+    await new Promise((resolve) => setTimeout(resolve, 2200));
+    assert.equal(fs.existsSync(escapedMarker), false, "a session-escaped task process survived cgroup cleanup");
   } finally {
     fs.rmSync(ws, { recursive: true, force: true });
   }
 });
 
-test("repository workspaces carry no history beyond the pinned baseline commit", async () => {
+test("repository workspaces carry no history beyond the pinned baseline commit", { timeout: 15_000 }, async () => {
   const { stageRepoWorkspace, workspaceHistoryProblem } = await import(path.join(ROOT, "eval/workspace.mjs"));
   const base = fs.mkdtempSync(path.join(os.tmpdir(), "eval-ws-history-"));
   const env = { PATH: "/usr/bin:/bin", HOME: base, GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: "/dev/null" };
@@ -456,7 +509,7 @@ test("repository workspaces carry no history beyond the pinned baseline commit",
     git(upstream, "add", "-A");
     git(upstream, "commit", "-qm", "baseline");
     const baseline = git(upstream, "rev-parse", "HEAD");
-    fs.writeFileSync(path.join(upstream, "lib.txt"), "fixed\n");
+    fs.writeFileSync(path.join(upstream, "lib.txt"), "REFERENCE_SOLUTION_CANARY_72d9\n");
     git(upstream, "commit", "-qam", "reference fix");
     const child = git(upstream, "rev-parse", "HEAD");
     git(upstream, "tag", "v-fix");
@@ -497,6 +550,40 @@ test("repository workspaces carry no history beyond the pinned baseline commit",
     assert.equal(git(ws, "tag", "--list"), "");
     assert.equal(fs.existsSync(path.join(ws, ".git/FETCH_HEAD")), false);
     assert.throws(() => stageRepoWorkspace(cache, "main", path.join(base, "ws-ref")), /full pinned commit/);
+
+    // Exercise the production workspace stager and candidate sandbox together. The future solution remains in the
+    // trusted cache and a second synthetic canary stands in for external custody material; task code sees neither.
+    const privateStore = path.join(base, "private-store");
+    fs.mkdirSync(privateStore);
+    const externalCanary = path.join(privateStore, "validator.txt");
+    fs.writeFileSync(externalCanary, "EXTERNAL_VALIDATOR_CANARY_0e42");
+    const { agentSandboxArgv } = await import(path.join(ROOT, "eval/isolate.mjs"));
+    const home = path.join(base, "candidate-home");
+    const proxyDirectory = path.join(base, "proxy");
+    fs.mkdirSync(home);
+    fs.mkdirSync(proxyDirectory);
+    const nodeRuntime = process.execPath;
+    const sandbox = agentSandboxArgv({
+      cwd: ws,
+      home,
+      proxyDirectory,
+      readOnlyPaths: [nodeRuntime],
+      runtimeExecutablePaths: [nodeRuntime],
+      supervisorPath: path.join(ROOT, "eval/agent_sandbox.mjs"),
+    });
+    const candidateProbe = `const fs=require('node:fs'),cp=require('node:child_process');const run=(args)=>cp.spawnSync('git',args,{cwd:'/workspace',encoding:'utf8',env:{PATH:'/usr/bin:/bin',HOME:'/home/eval',GIT_CONFIG_NOSYSTEM:'1',GIT_CONFIG_GLOBAL:'/dev/null'}});const head=run(['rev-parse','HEAD']),baselineObject=run(['cat-file','-e',${JSON.stringify(`${baseline}^{commit}`)}]),object=run(['cat-file','-e',${JSON.stringify(`${child}^{commit}`)}]),source=fs.readFileSync('/workspace/lib.txt','utf8');let external='';for(const p of [${JSON.stringify(externalCanary)},${JSON.stringify(path.join(cache, ".git/objects"))},'/home/mike/nexus-heldout-v2']){try{const s=fs.statSync(p);external+=s.isDirectory()?'directory ':fs.readFileSync(p,'utf8')}catch{external+='unavailable '}};const refs=run(['rev-list','--all','--reflog','--objects']);console.log(JSON.stringify({head:head.stdout.trim(),headStatus:head.status,baselineObjectStatus:baselineObject.status,objectStatus:object.status,objectOutput:object.stdout+object.stderr,source,external,refs:refs.stdout+refs.stderr,workspace:fs.realpathSync('/workspace')}))`;
+    const task = await runSandbox(sandbox.cmd, sandbox.argv, JSON.stringify({ command: nodeRuntime, argv: ["-e", candidateProbe], env: { PATH: "/usr/bin:/bin" } }));
+    assert.equal(task.status, 0, `${task.error ?? ""}\n${task.stderr}\n${task.stdout}`);
+    const observed = JSON.parse(task.stdout.trim());
+    assert.equal(observed.headStatus, 0);
+    assert.equal(observed.head, baseline, "candidate did not see the pinned baseline repository");
+    assert.equal(observed.baselineObjectStatus, 0, "candidate could not read the pinned baseline object");
+    assert.equal(observed.source, "buggy\n", "candidate did not see the baseline task input");
+    assert.notEqual(observed.objectStatus, 0, "candidate could retrieve the future reference-solution object");
+    assert.match(observed.objectOutput, /not a valid object name|could not get object info|bad object/i, "future-object lookup failed for a reason other than absence");
+    assert.equal(observed.external, "unavailable unavailable unavailable ", "candidate could access an external cache, validator, or custodian path");
+    assert.doesNotMatch(observed.refs, new RegExp(child));
+    assert.doesNotMatch(`${task.stdout}${task.stderr}`, /REFERENCE_SOLUTION_CANARY_72d9|EXTERNAL_VALIDATOR_CANARY_0e42/);
   } finally {
     fs.rmSync(base, { recursive: true, force: true });
   }

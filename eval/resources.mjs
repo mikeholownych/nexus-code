@@ -25,8 +25,53 @@ export function resourceConfigProblem(resources) {
   try { stat = fs.statfsSync(workspaceRoot); }
   catch { return "resources.workspaceRoot is unavailable"; }
   if (stat.type !== TMPFS_MAGIC) return "resources.workspaceRoot must be on a tmpfs so candidate writes are charged to the run's memory limit";
-  // A shared tmpfs such as /dev/shm is sized to half of RAM; only a dedicated mount with size<=storageBytes caps a run.
+  const mountProblem = dedicatedTmpfsMountProblem(workspaceRoot);
+  if (mountProblem) return mountProblem;
   if (stat.blocks * stat.bsize > storageBytes) return `resources.workspaceRoot tmpfs is ${stat.blocks * stat.bsize} bytes; mount a dedicated tmpfs with size<=storageBytes (${storageBytes})`;
+  return null;
+}
+
+/** A subdirectory of a shared tmpfs (including /dev/shm) does not enforce a per-run storage cap. */
+export function dedicatedTmpfsMountProblem(workspaceRoot, mountInfoText = null) {
+  let lines;
+  try { lines = (mountInfoText ?? fs.readFileSync("/proc/self/mountinfo", "utf8")).split("\n"); }
+  catch { return "resources.workspaceRoot mount table is unavailable; refusing unverified workspace storage limits"; }
+  const decode = (value) => value.replace(/\\([0-7]{3})/g, (_match, octal) => String.fromCharCode(Number.parseInt(octal, 8)));
+  const expected = path.resolve(workspaceRoot);
+  const matching = lines.filter((entry) => {
+    const fields = entry.split(" ");
+    return fields.length > 6 && decode(fields[4]) === expected;
+  });
+  if (matching.length > 1) return "resources.workspaceRoot has stacked or duplicate mount records; refusing ambiguous workspace storage boundary";
+  const line = matching[0];
+  if (!line) return "resources.workspaceRoot must be the exact mount point of a dedicated tmpfs, not a subdirectory";
+  const fields = line.split(" ");
+  const separator = fields.indexOf("-");
+  if (separator < 0 || fields[separator + 1] !== "tmpfs" || decode(fields[3]) !== "/") {
+    return "resources.workspaceRoot must be its own tmpfs mount, not a shared or bind-mounted filesystem";
+  }
+  // A bind mount of a tmpfs root retains the same major:minor and root fields. Reject aliases of
+  // this mount so an apparently dedicated path cannot expose a tmpfs shared at another path.
+  const device = fields[2];
+  const aliases = lines.filter((entry) => {
+    const other = entry.split(" ");
+    return other.length > 6 && other[2] === device && decode(other[4]) !== expected;
+  });
+  if (aliases.length > 0) return "resources.workspaceRoot tmpfs is also mounted elsewhere; bind/shared mounts are not allowed";
+  const options = `${fields[5]},${fields[separator + 3] ?? ""}`.split(",");
+  const mode = options.find((option) => option.startsWith("mode="))?.slice(5);
+  const uid = options.find((option) => option.startsWith("uid="))?.slice(4);
+  const mountMode = mode ? Number.parseInt(mode, 8) : null;
+  if (mountMode === null || (mountMode & 0o700) !== 0o700 || (mountMode & 0o066) !== 0 || uid !== String(process.getuid())) {
+    return "dedicated tmpfs must be owner-accessible, non-readable/non-writable by group or other, and owned by the evaluator harness uid";
+  }
+  let rootStat;
+  try { rootStat = fs.statSync(expected); }
+  catch { return "resources.workspaceRoot mount root cannot be inspected; refusing unverified workspace permissions"; }
+  const rootMode = rootStat.mode & 0o777;
+  if (rootStat.uid !== process.getuid() || (rootMode & 0o700) !== 0o700 || (rootMode & 0o066) !== 0) {
+    return "dedicated tmpfs effective mount root must be owner-accessible, non-readable/non-writable by group or other, and owned by the evaluator harness uid";
+  }
   return null;
 }
 

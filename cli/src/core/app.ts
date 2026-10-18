@@ -83,7 +83,7 @@ export class ApplicationCore extends EventEmitter {
   constructor(config: HarnessConfig, agent?: AutonomousAgent) {
     super();
     this.config = { ...config };
-    this.agent = agent || new AutonomousAgent(this.config);
+    this.agent = agent || new AutonomousAgent(this.config, 0, undefined, { durable: true });
     this.stateManager = this.agent.getStateManager();
     this.sessionManager = new SessionManager(undefined, () => this.agent.getWorkspacePathIdentity());
     this.checkpointManager = new CheckpointManager(this.config.workspace || process.cwd());
