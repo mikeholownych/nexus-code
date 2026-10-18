@@ -1,5 +1,7 @@
 # Live TUI surface maturity — acceptance matrix (2026-10-12)
 
+> **Historical record.** This document is kept for provenance. Current requirements and status: [docs/v1.0.0/REQUIREMENTS.md](../v1.0.0/REQUIREMENTS.md). Statuses here may have been superseded or contradicted since it was written.
+
 Request: bring the rest of the live TUI (transcript, composer, activity/status, tools, commands, navigation, panels,
 approvals, errors, recovery) to the standard of the diff presentation, validated through the real TUI and sidecar.
 

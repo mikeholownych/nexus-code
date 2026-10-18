@@ -542,16 +542,49 @@ fn render_approval(frame: &mut Frame, area: Rect, approval: &Approval, depth: th
     buttons.extend(button("Deny", Verdict::Denied, "n"));
     let mut footer = markdown::wrap(buttons, width, Vec::new(), Vec::new());
     let hint = match approval.focus {
-        _ if settling => vec![Span::styled("a moment — the previous request was just answered", muted)],
-        Some(Verdict::Approved) if approval.confirm_at.is_some() => vec![Span::styled("enter", key), Span::styled(" again approves this action · ", muted), Span::styled("esc", key), Span::styled(" denies · other keys cancel", muted)],
-        Some(Verdict::Approved) if !approval.letters => vec![Span::styled("pause, ", muted), Span::styled("enter", key), Span::styled(", then ", muted), Span::styled("enter", key), Span::styled(" again approves  ", muted), Span::styled("←", key), Span::styled(" deny  ", muted), Span::styled("esc", key), Span::styled(" denies", muted)],
-        Some(Verdict::ApprovedForSession) if approval.confirm_at.is_some() => vec![Span::styled("enter", key), Span::styled(" again approves this and every later action · ", muted), Span::styled("esc", key), Span::styled(" denies · other keys cancel", muted)],
-        Some(Verdict::ApprovedForSession) => vec![Span::styled("enter", key), Span::styled(", then ", muted), Span::styled("enter", key), Span::styled(" again, approves this and every later action", muted)],
-        Some(_) if !approval.letters => vec![Span::styled("pause, then ", muted), Span::styled("enter", key), Span::styled(" takes it  ", muted), Span::styled("←→", key), Span::styled(" approve/deny  ", muted), Span::styled("esc", key), Span::styled(" denies", muted)],
-        Some(_) => vec![Span::styled("enter", key), Span::styled(" takes it  ", muted), Span::styled("←→", key), Span::styled(" approve/deny  ", muted), Span::styled("↑↓", key), Span::styled(" scroll", muted)],
+        _ if settling => vec![Span::styled(if narrow { "a moment — settling..." } else { "a moment — the previous request was just answered" }, muted)],
+        Some(Verdict::Approved) if approval.confirm_at.is_some() => if narrow {
+            vec![Span::styled("enter", key), Span::styled(" again approves · ", muted), Span::styled("esc", key), Span::styled(" denies", muted)]
+        } else {
+            vec![Span::styled("enter", key), Span::styled(" again approves this action · ", muted), Span::styled("esc", key), Span::styled(" denies · other keys cancel", muted)]
+        },
+        Some(Verdict::Approved) if !approval.letters => if narrow {
+            vec![Span::styled("enter", key), Span::styled(" twice approves · ", muted), Span::styled("→", key), Span::styled(" deny", muted)]
+        } else {
+            vec![Span::styled("pause, ", muted), Span::styled("enter", key), Span::styled(", then ", muted), Span::styled("enter", key), Span::styled(" again approves  ", muted), Span::styled("→", key), Span::styled(" deny  ", muted), Span::styled("esc", key), Span::styled(" denies", muted)]
+        },
+        Some(Verdict::Approved) => if narrow {
+            vec![Span::styled("enter", key), Span::styled(" approves · ", muted), Span::styled("→", key), Span::styled(" deny", muted)]
+        } else {
+            vec![Span::styled("enter", key), Span::styled(" approves  ", muted), Span::styled("→", key), Span::styled(" deny  ", muted), Span::styled("↑↓", key), Span::styled(" scroll", muted)]
+        },
+        Some(Verdict::ApprovedForSession) if approval.confirm_at.is_some() => if narrow {
+            vec![Span::styled("enter", key), Span::styled(" approves all · ", muted), Span::styled("esc", key), Span::styled(" denies", muted)]
+        } else {
+            vec![Span::styled("enter", key), Span::styled(" again approves this and every later action · ", muted), Span::styled("esc", key), Span::styled(" denies · other keys cancel", muted)]
+        },
+        Some(Verdict::ApprovedForSession) => if narrow {
+            vec![Span::styled("enter", key), Span::styled(" twice approves all later", muted)]
+        } else {
+            vec![Span::styled("enter", key), Span::styled(", then ", muted), Span::styled("enter", key), Span::styled(" again, approves this and every later action", muted)]
+        },
+        Some(Verdict::Denied) if !approval.letters => if narrow {
+            vec![Span::styled("enter", key), Span::styled(" denies · ", muted), Span::styled("←", key), Span::styled(" approve", muted)]
+        } else {
+            vec![Span::styled("pause, then ", muted), Span::styled("enter", key), Span::styled(" denies  ", muted), Span::styled("←", key), Span::styled(" approve  ", muted), Span::styled("esc", key), Span::styled(" denies", muted)]
+        },
+        Some(Verdict::Denied) => if narrow {
+            vec![Span::styled("enter", key), Span::styled(" denies · ", muted), Span::styled("←", key), Span::styled(" approve", muted)]
+        } else {
+            vec![Span::styled("enter", key), Span::styled(" denies  ", muted), Span::styled("←", key), Span::styled(" approve  ", muted), Span::styled("↑↓", key), Span::styled(" scroll", muted)]
+        },
         None if approval.letters => vec![Span::styled("y", key), Span::styled(" or ", muted), Span::styled("n", key), Span::styled(", or ", muted), Span::styled("←→", key), Span::styled(" then ", muted), Span::styled("enter", key), Span::styled(if narrow { "" } else { " · ↑↓ scroll the change" }, muted)],
         // The operator was typing: letters are not answers for this panel.
-        None => vec![Span::styled("typing ignored · ", muted), Span::styled("←→", key), Span::styled(" approve/deny, pause, ", muted), Span::styled("enter", key), Span::styled(" · ", muted), Span::styled("esc", key), Span::styled(" denies", muted)],
+        None => if narrow {
+            vec![Span::styled("←→", key), Span::styled(" choose, ", muted), Span::styled("enter", key), Span::styled(" · ", muted), Span::styled("esc", key), Span::styled(" denies", muted)]
+        } else {
+            vec![Span::styled("typing ignored · ", muted), Span::styled("←→", key), Span::styled(" approve/deny, pause, ", muted), Span::styled("enter", key), Span::styled(" · ", muted), Span::styled("esc", key), Span::styled(" denies", muted)]
+        },
     };
     let lines: Vec<Line> = match &approval.patch {
         Some(patch) => {
@@ -1028,7 +1061,15 @@ fn render_status(frame: &mut Frame, area: Rect, state: &LiveState) {
                 segments.push((5, vec![Span::styled(format!("  {id}"), muted)]));
             }
             // The mode is kept at every width: whether changes need approval is never hidden.
-            if session.mode == "review" {
+            if let Some(posture) = &session.posture {
+                let mode_color = if posture.mode == "review" { Color::Yellow } else { Color::White };
+                segments.push((1, vec![Span::styled(format!("  mode: {}", posture.mode), Style::default().fg(mode_color))]));
+                let trust_str = if posture.trusted { "trusted" } else { "untrusted" };
+                segments.push((4, vec![
+                    Span::styled(format!(" · sandbox: {}", posture.sandbox), muted),
+                    Span::styled(format!(" · workspace: {trust_str}"), muted),
+                ]));
+            } else if session.mode == "review" {
                 segments.push((1, vec![Span::styled("  review mode", Style::default().fg(Color::Yellow))]));
             } else {
                 segments.push((1, vec![Span::styled(format!("  {}", session.mode), muted)]));
@@ -1736,6 +1777,11 @@ fn composer_hint(state: &LiveState) -> Cow<'static, str> {
         }
         (_, true) if state.cancel_requested() => {
             let elapsed = state.now.saturating_duration_since(state.turn_started.unwrap_or(state.now));
+            let cancel_elapsed = state.now.saturating_duration_since(state.cancel_started().unwrap_or(state.now));
+            let secs = cancel_elapsed.as_secs();
+            if let Some(tool) = state.running_tool() {
+                return Cow::Owned(format!(" {} cancelling — waiting for {tool} ({secs}s) · ctrl-c again to quit ", spinner_frame(elapsed)));
+            }
             return Cow::Owned(format!(" {} cancelling… ctrl-c again to quit ", spinner_frame(elapsed)));
         }
         (_, true) if !state.composer.is_empty() => {
@@ -1984,6 +2030,21 @@ mod tests {
                 .is_some()
         );
         assert_shows(&draw(&state, 40, 12), &["cancelling… ctrl-c again to quit"]);
+    }
+
+    #[test]
+    fn cancel_during_running_tool_shows_waiting_for_tool_in_hint() {
+        let mut state = ready();
+        feed(&mut state, &[
+            BUSY,
+            r#"{"v":1,"type":"tool.start","turn_id":"t1","call_id":"c1","tool":"run_command","subject":"sleep 30"}"#,
+        ]);
+        assert!(
+            state
+                .on_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE))
+                .is_some()
+        );
+        assert_shows(&draw(&state, 100, 12), &["cancelling — waiting for run_command (0s)"]);
     }
 
     #[test]
@@ -3655,7 +3716,11 @@ mod surface_tests {
         let later = later + std::time::Duration::from_secs(5);
         assert_eq!(state.on_key_at(KeyEvent::new(KeyCode::Left, KeyModifiers::NONE), later), None);
         let (rows, _) = screen(&mut state, 100, 20);
-        assert!(rows.join("\n").contains("▸Deny"), "the Enter without a choice was typing: no hotkeys shown now: {rows:#?}");
+        assert!(rows.join("\n").contains("▸Approve"), "Left arrow focuses Approve: {rows:#?}");
+        let later = later + std::time::Duration::from_secs(5);
+        assert_eq!(state.on_key_at(KeyEvent::new(KeyCode::Right, KeyModifiers::NONE), later), None);
+        let (rows, _) = screen(&mut state, 100, 20);
+        assert!(rows.join("\n").contains("▸Deny"), "Right arrow focuses Deny: {rows:#?}");
         assert_eq!(state.on_key_at(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE), later + crate::live_state::APPROVAL_TYPING_RECENT), Some(Action::Send(Command::Deny { id: "a1".into() })));
     }
 
@@ -3759,11 +3824,11 @@ mod surface_tests {
         assert_eq!(state.on_key_at(KeyEvent::new(KeyCode::Left, KeyModifiers::NONE), ms(5000)), None);
         assert_eq!(state.on_key_at(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE), ms(5450)), None, "too soon on a typed-into panel");
         // (That early Enter was typing: the next choice waits for the quiet period again.)
-        assert_eq!(state.on_key_at(KeyEvent::new(KeyCode::Left, KeyModifiers::NONE), ms(6200)), None);
+        assert_eq!(state.on_key_at(KeyEvent::new(KeyCode::Right, KeyModifiers::NONE), ms(6200)), None);
         assert_eq!(
             state.on_key_at(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE), ms(8300)),
             Some(Action::Send(Command::Deny { id: "a1".into() })),
-            "← selects Deny; Enter after a 2 s look takes it"
+            "→ selects Deny; Enter after a 2 s look takes it"
         );
         // Tab is completion in the composer, not a choice.
         feed(&mut state, &[WRITE_APPROVAL]);
@@ -3842,14 +3907,14 @@ mod surface_tests {
         let t0 = Instant::now();
         let ms = |n: u64| t0 + std::time::Duration::from_millis(n);
         let k = |code: KeyCode| KeyEvent::new(code, KeyModifiers::NONE);
-        // A draft disarms letters; → then Enter 400 ms later is too soon there; 2 s later it takes Approve once.
+        // A draft disarms letters; ← then Enter 400 ms later is too soon there; 2 s later it takes Approve once.
         let mut composing = state(true);
         composing.composer = "draft".into();
         feed(&mut composing, &[WRITE_APPROVAL]);
         composing.note_approval_shown(ms(0));
-        assert_eq!(composing.on_key_at(k(KeyCode::Right), ms(3000)), None);
+        assert_eq!(composing.on_key_at(k(KeyCode::Left), ms(3000)), None);
         assert_eq!(composing.on_key_at(k(KeyCode::Enter), ms(3400)), None, "400 ms is not enough on a typed-into panel");
-        assert_eq!(composing.on_key_at(k(KeyCode::Right), ms(4100)), None);
+        assert_eq!(composing.on_key_at(k(KeyCode::Left), ms(4100)), None);
         assert_eq!(composing.on_key_at(k(KeyCode::Enter), ms(6100)), None, "the first Enter asks again where letters are off");
         assert_eq!(composing.on_key_at(k(KeyCode::Enter), ms(6600)), Some(Action::Send(Command::Approve { id: "a1".into(), always: false })));
         // Emptying the composer with Delete just before the panel appears is typing too.
@@ -3927,8 +3992,8 @@ mod surface_tests {
         screen(state, 30, 8);
         state.note_approval_shown(ms(5_000));
         assert_eq!(state.on_key_at(KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE), ms(8_000)), None, "typed into once: letters stay off");
-        // Scrolling the change keeps the choice: → ↓ then Enter takes Approve.
-        assert_eq!(state.on_key_at(KeyEvent::new(KeyCode::Right, KeyModifiers::NONE), ms(9_000)), None);
+        // Scrolling the change keeps the choice: ← ↓ then Enter takes Approve.
+        assert_eq!(state.on_key_at(KeyEvent::new(KeyCode::Left, KeyModifiers::NONE), ms(9_000)), None);
         assert_eq!(state.on_key_at(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE), ms(9_100)), None);
         assert_eq!(state.on_key_at(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE), ms(11_100)), None);
         assert_eq!(
@@ -3971,9 +4036,9 @@ mod surface_tests {
         let all = rows.join("\n");
         assert!(all.contains("+ { \"cache\": true }") || all.contains("+ {"), "the change is visible at 40x10:\n{all}");
         assert!(rows.iter().all(|r| unicode_width::UnicodeWidthStr::width(r.as_str()) <= 40));
-        // The `y` pressed while nothing was shown counted as typing: a deliberate → then Enter decides.
+        // The `y` pressed while nothing was shown counted as typing: a deliberate ← then Enter decides.
         let later = Instant::now() + std::time::Duration::from_secs(10);
-        assert_eq!(state.on_key_at(KeyEvent::new(KeyCode::Right, KeyModifiers::NONE), later), None);
+        assert_eq!(state.on_key_at(KeyEvent::new(KeyCode::Left, KeyModifiers::NONE), later), None);
         assert_eq!(state.on_key_at(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE), later + crate::live_state::APPROVAL_TYPING_RECENT), None);
         assert_eq!(
             state.on_key_at(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE), later + crate::live_state::APPROVAL_TYPING_RECENT + crate::live_state::APPROVAL_CHOICE_SHOWN),
@@ -4094,6 +4159,17 @@ mod surface_tests {
     }
 
     #[test]
+    fn the_status_bar_renders_posture_when_provided() {
+        let mut state = state(true);
+        feed(&mut state, &[r#"{"v":1,"type":"session.state","workspace":"/w/app","workspace_name":"app","model":"engineering/b0","mode":"review","git":null,"busy":true,"posture":{"mode":"review","sandbox":"off","trusted":false}}"#]);
+        let (rows, _) = screen(&mut state, 100, 12);
+        let status = &rows[0];
+        assert!(status.contains("mode: review"), "status missing mode: review: {status}");
+        assert!(status.contains("sandbox: off"), "status missing sandbox: {status}");
+        assert!(status.contains("workspace: untrusted"), "status missing untrusted: {status}");
+    }
+
+    #[test]
     fn completion_shows_the_position_and_cuts_long_descriptions_with_an_ellipsis() {
         let mut state = state(false);
         feed(&mut state, &[r#"{"v":1,"type":"hello","protocol":1,"pid":1,"commands":[{"name":"receipt","usage":"/receipt","summary":"Turn outcome"},{"name":"requirements","usage":"/requirements [accept <id>...|clear]","summary":"The objective's acceptance requirements; accept a scope reduction, or clear the objective to start a new one"}]}"#, IDLE]);
@@ -4116,5 +4192,62 @@ mod surface_tests {
             next: Some("check the changes yourself (/diff), or run /test <command>".into()),
             items: vec![],
         });
+    }
+
+    #[test]
+    fn approval_panel_arrow_spatial_alignment_and_narrow_terminal_hints() {
+        let mut st = state(true);
+        feed(&mut st, &[WRITE_APPROVAL]);
+        let t0 = Instant::now();
+        let ms = |n: u64| t0 + std::time::Duration::from_millis(n);
+        st.note_approval_shown(ms(0));
+
+        // 1. Initial appearance at 40x14: letters are active, narrow short-form hint shown.
+        let (rows, _) = screen(&mut st, 40, 14);
+        let all = rows.join("\n");
+        assert!(rows.iter().all(|r| unicode_width::UnicodeWidthStr::width(r.as_str()) <= 40));
+        assert!(all.contains("y or n, or ←→ then enter"), "initial narrow hint: {all}");
+        assert!(all.contains("Approve") && all.contains("All later") && all.contains("Deny"), "buttons visible: {all}");
+
+        // 2. Spatial alignment: Left arrow focuses the leftmost button (Approve).
+        assert_eq!(st.on_key_at(KeyEvent::new(KeyCode::Left, KeyModifiers::NONE), ms(3000)), None);
+        let (rows, _) = screen(&mut st, 40, 14);
+        let all = rows.join("\n");
+        assert!(rows.iter().all(|r| unicode_width::UnicodeWidthStr::width(r.as_str()) <= 40));
+        assert!(all.contains("▸y Approve") || all.contains("▸ y Approve") || all.contains("▸Approve"), "Left arrow selects Approve: {all}");
+        assert!(all.contains("enter approves · → deny"), "narrow Approve hint points right to Deny: {all}");
+
+        // 3. Spatial alignment: Right arrow focuses the rightmost button (Deny).
+        assert_eq!(st.on_key_at(KeyEvent::new(KeyCode::Right, KeyModifiers::NONE), ms(4000)), None);
+        let (rows, _) = screen(&mut st, 40, 14);
+        let all = rows.join("\n");
+        assert!(rows.iter().all(|r| unicode_width::UnicodeWidthStr::width(r.as_str()) <= 40));
+        assert!(all.contains("▸n Deny") || all.contains("▸ n Deny") || all.contains("▸Deny"), "Right arrow selects Deny: {all}");
+        assert!(all.contains("enter denies · ← approve"), "narrow Deny hint points left to Approve: {all}");
+
+        // 4. 'a' focuses the middle button (All later).
+        assert_eq!(st.on_key_at(KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE), ms(5000)), None);
+        let (rows, _) = screen(&mut st, 40, 14);
+        let all = rows.join("\n");
+        assert!(rows.iter().all(|r| unicode_width::UnicodeWidthStr::width(r.as_str()) <= 40));
+        assert!(all.contains("▸a All later") || all.contains("▸ a All later") || all.contains("▸All later"), "a selects All later: {all}");
+        assert!(all.contains("enter twice approves all later"), "narrow All later hint: {all}");
+
+        // 5. Operator was typing: letters disabled, typing ignored hint is compact under 40 columns.
+        let mut typing_state = state(true);
+        typing_state.composer = "some draft".into();
+        feed(&mut typing_state, &[WRITE_APPROVAL]);
+        typing_state.note_approval_shown(ms(10_000));
+        let (rows, _) = screen(&mut typing_state, 40, 14);
+        let all = rows.join("\n");
+        assert!(rows.iter().all(|r| unicode_width::UnicodeWidthStr::width(r.as_str()) <= 40));
+        assert!(all.contains("←→ choose, enter · esc denies"), "narrow typing-disabled hint: {all}");
+
+        // Left arrow on typed-into panel focuses Approve and requires twice enter
+        assert_eq!(typing_state.on_key_at(KeyEvent::new(KeyCode::Left, KeyModifiers::NONE), ms(13_000)), None);
+        let (rows, _) = screen(&mut typing_state, 40, 14);
+        let all = rows.join("\n");
+        assert!(rows.iter().all(|r| unicode_width::UnicodeWidthStr::width(r.as_str()) <= 40));
+        assert!(all.contains("enter twice approves · → deny"), "narrow Approve hint on typed-into panel: {all}");
     }
 }

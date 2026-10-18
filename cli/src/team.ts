@@ -23,7 +23,7 @@ export type TeamTarget = AgentRole | "full";
 
 const UNIT_ID: Record<AgentRole, string> = { researcher: "research", architect: "design", implementer: "implement", tester: "verify", reviewer: "review" };
 
-/** Role turns keep the step bound the team has always used. */
+/** Role turns segment at 15 steps (durable checkpoint boundary; continues until completion, stagnation or cancel unless --no-continuation is set). */
 const ROLE_MAX_STEPS = 15;
 
 /**

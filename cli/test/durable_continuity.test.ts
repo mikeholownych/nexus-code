@@ -26,11 +26,176 @@ import type { ResourceDescriptor } from "../src/core/resources.js";
 import { DurableStateManager } from "../src/core/state.js";
 import { WorkspacePath } from "../src/core/workspace_path.js";
 import { SidecarServer } from "../src/sidecar.js";
-import type { HarnessConfig } from "../src/types.js";
+import { type HarnessConfig, DEFAULT_CONTINUATION } from "../src/types.js";
 
 const cliRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const srcIndex = path.join(cliRoot, "src/index.ts");
 const tsxLoader = import.meta.resolve("tsx");
+
+function sourceFiles(dir: string): string[] {
+  return fs.readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
+    const file = path.join(dir, entry.name);
+    return entry.isDirectory() ? sourceFiles(file) : file.endsWith(".ts") ? [file] : [];
+  });
+}
+
+test("all source AutonomousAgent construction sites declare durability explicitly", () => {
+  const violations: string[] = [];
+  for (const file of sourceFiles(path.join(cliRoot, "src"))) {
+    const source = fs.readFileSync(file, "utf8");
+    let at = 0;
+    while ((at = source.indexOf("new AutonomousAgent(", at)) >= 0) {
+      const start = at + "new AutonomousAgent(".length;
+      let depth = 1;
+      let end = start;
+      for (; end < source.length && depth > 0; end++) {
+        if (source[end] === "(") depth++;
+        else if (source[end] === ")") depth--;
+      }
+      const args = source.slice(start, end - 1);
+      if (!/\{[^{}]*\bdurable\s*:\s*(?:true|false)\b[^{}]*\}\s*$/s.test(args)) {
+        violations.push(`${path.relative(cliRoot, file)}:${source.slice(0, at).split("\n").length}`);
+      }
+      at = end;
+    }
+  }
+  assert.deepEqual(violations, []);
+});
+
+test("AgentWorkUnitExecutor default construction persists a durable depth-1 implementer with its unit identity", async () => {
+  await withHome(async (home) => {
+    const gw = await gateway(() => done("one-step unit complete"));
+    const repo = makeRepo();
+    const stateDir = path.join(home, ".nexus", "tasks");
+    const priorStateDir = process.env.NEXUS_STATE_DIR;
+    process.env.NEXUS_STATE_DIR = path.join(home, ".nexus");
+    const config = cfg(gw, repo, { maxSteps: 1 });
+    const store = new OperationStore(repo, path.join(home, ".nexus", "operations"));
+    const unit: WorkUnitSpec = { id: "u-default", role: "implementer", prompt: "Complete this one-step work unit." };
+    const resource: ResourceDescriptor = { id: "primary", provider: gw.origin, endpoint: gw.url, model: "m", capabilities: ["tools"], rank: 0 };
+    let constructed: AutonomousAgent | undefined;
+    const originalRunTurn = AutonomousAgent.prototype.runTurn;
+    AutonomousAgent.prototype.runTurn = function (...args: Parameters<AutonomousAgent["runTurn"]>) {
+      constructed = this;
+      return originalRunTurn.apply(this, args);
+    };
+    try {
+      const executor = new AgentWorkUnitExecutor({ baseConfig: config });
+      const op = await muted(() => driveOperation(newOperation("op-default-construction", "default construction", [unit], [resource], Date.now()), { store, executor }));
+      const savedUnit = unitOf(op, unit.id);
+      assert.ok(savedUnit.agentTaskId, "the executor bound the work-unit task id");
+      assert.ok(fs.existsSync(path.join(stateDir, `${savedUnit.agentTaskId}.json`)), "durable task state was persisted under ~/.nexus/tasks");
+      assert.ok(constructed, "the default executor constructed an agent");
+      assert.equal(constructed!.durable, true);
+      assert.equal((constructed as any).depth, 1, "work-unit agents are depth 1");
+      assert.equal(constructed!.role, unit.role);
+      assert.equal(constructed!.unitId, unit.id);
+    } finally {
+      AutonomousAgent.prototype.runTurn = originalRunTurn;
+      if (priorStateDir === undefined) delete process.env.NEXUS_STATE_DIR;
+      else process.env.NEXUS_STATE_DIR = priorStateDir;
+      await gw.close();
+      fs.rmSync(repo, { recursive: true, force: true });
+    }
+  });
+});
+
+test("AgentWorkUnitExecutor applies durable identity when a custom factory omits constructor options", async () => {
+  await withHome(async (home) => {
+    const gw = await gateway(() => done("custom-factory unit complete"));
+    const repo = makeRepo();
+    const stateDir = path.join(home, ".nexus", "tasks");
+    const priorStateDir = process.env.NEXUS_STATE_DIR;
+    process.env.NEXUS_STATE_DIR = path.join(home, ".nexus");
+    const config = cfg(gw, repo, { maxSteps: 1 });
+    const store = new OperationStore(repo, path.join(home, ".nexus", "operations"));
+    const unit: WorkUnitSpec = { id: "u-custom-factory", role: "implementer", prompt: "Complete this one-step work unit." };
+    const resource: ResourceDescriptor = { id: "primary", provider: gw.origin, endpoint: gw.url, model: "m", capabilities: ["tools"], rank: 0 };
+    let constructed: AutonomousAgent | undefined;
+    try {
+      const executor = new AgentWorkUnitExecutor({
+        baseConfig: config,
+        createAgent: (c, depth) => {
+          // Deliberately model a legacy custom factory that ignores the executor's durability options.
+          constructed = quiet(new AutonomousAgent(c, depth));
+          return constructed;
+        },
+      });
+      const op = await muted(() => driveOperation(newOperation("op-custom-factory", "custom factory", [unit], [resource], Date.now()), { store, executor }));
+      const savedUnit = unitOf(op, unit.id);
+      assert.ok(savedUnit.agentTaskId, "the executor bound the work-unit task id");
+      assert.ok(fs.existsSync(path.join(stateDir, `${savedUnit.agentTaskId}.json`)), "the custom-factory agent persisted durable task state");
+      assert.ok(constructed, "the custom factory constructed an agent");
+      assert.equal(constructed!.durable, true, "the executor applies the durability fallback");
+      assert.equal((constructed as any).depth, 1, "work-unit agents are depth 1");
+      assert.equal(constructed!.role, unit.role, "the executor applies the work-unit role fallback");
+      assert.equal(constructed!.unitId, unit.id, "the executor applies the work-unit identity fallback");
+    } finally {
+      if (priorStateDir === undefined) delete process.env.NEXUS_STATE_DIR;
+      else process.env.NEXUS_STATE_DIR = priorStateDir;
+      await gw.close();
+      fs.rmSync(repo, { recursive: true, force: true });
+    }
+  });
+});
+
+test("ACC-CONT-03: pressure compaction of a work unit survives SIGKILL and restores archived markers", async () => {
+  await withHome(async (home) => {
+    const work = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-cont-pressure-crash-"));
+    const helper = path.join(cliRoot, "test/helpers/compaction_crash_child.ts");
+    const child = spawn(process.execPath, ["--import", tsxLoader, helper, work, "work_unit_pressure"], {
+      cwd: cliRoot,
+      env: { ...process.env, HOME: home },
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    let stdout = "";
+    let stderr = "";
+    child.stdout.on("data", (chunk) => { stdout += chunk.toString(); });
+    child.stderr.on("data", (chunk) => { stderr += chunk.toString(); });
+    let pressureRepo: string | undefined;
+    const exit = await new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolve) => {
+      child.on("close", (code, signal) => resolve({ code, signal }));
+    });
+    try {
+      assert.ok(exit.signal === "SIGKILL" || exit.code === 137, `child must die from SIGKILL; got ${JSON.stringify(exit)}\n${stdout}\n${stderr}`);
+      const info = JSON.parse(fs.readFileSync(path.join(work, "info.json"), "utf8")) as { taskId: string; compactionId: string; stateDir: string; repo: string; markers: string[] };
+      pressureRepo = info.repo;
+      assert.ok(info.markers.includes("MARKER-PRESSURE-ALPHA"), "the archived marker list includes the first pressure-read file");
+      const historyPath = path.join(info.stateDir, `${info.taskId}.history.jsonl`);
+      assert.ok(fs.existsSync(historyPath), `history file ${historyPath} exists`);
+      assert.ok(fs.readFileSync(historyPath, "utf8").includes(info.compactionId), "history includes the pressure compaction id");
+
+      const resumedAgent = quiet(new AutonomousAgent({
+        endpoint: "http://127.0.0.1:1",
+        model: "m",
+        maxSteps: 2,
+        temperature: 0,
+        workspace: info.repo,
+        shell: "bash",
+        approvalMode: "auto",
+        fullAccess: true,
+        contextLimit: 18_000,
+        completionReserveTokens: 500,
+        toolResponseReserveTokens: 500,
+      }, 1, undefined, { durable: true, role: "implementer", unitId: "pressure-unit" }));
+      const resumedState = resumedAgent as any;
+      resumedState.stateManager = new DurableStateManager({ baseDir: info.stateDir, workspacePaths: [resumedState.primaryWorkspacePathIdentity] });
+      await resumedAgent.recoverFromTaskState(info.taskId);
+      for (const marker of info.markers) {
+        const result = await (resumedAgent as any).spine.execute(
+          { invocationId: `archive_${marker}`, taskId: info.taskId, actor: "agent", executionDomain: "agent_orchestration", toolName: "read_archive", args: { query: marker } },
+          { activeTurnSignal: undefined, observer: undefined, metadata: {} },
+        );
+        assert.equal(result.success, true, `read_archive succeeds for ${marker}`);
+        assert.ok(result.output.includes(marker), `archived originals contain ${marker}`);
+      }
+    } finally {
+      if (child.exitCode === null && child.signalCode === null) child.kill();
+      fs.rmSync(work, { recursive: true, force: true });
+      if (pressureRepo) fs.rmSync(pressureRepo, { recursive: true, force: true });
+    }
+  });
+});
 
 // ---------------------------------------------------------------- scripted gateway
 
@@ -146,7 +311,7 @@ async function muted<T>(fn: () => Promise<T>): Promise<T> {
 }
 
 const cfg = (gw: Gw, workspace: string, o: Partial<HarnessConfig> = {}): HarnessConfig =>
-  ({ endpoint: gw.url, model: "m", maxSteps: 6, temperature: 0, workspace, shell: "bash", ...o });
+  ({ endpoint: gw.url, model: "m", maxSteps: 6, temperature: 0, workspace, shell: "bash", approvalMode: "auto", fullAccess: true, ...o });
 
 /** A durable operation driven in-process with the real agent executor; decisions are applied as the CLI does. */
 function operationRig(config: HarnessConfig, gw: Gw) {
@@ -155,8 +320,8 @@ function operationRig(config: HarnessConfig, gw: Gw) {
   const store = new OperationStore(config.workspace, stateDir);
   const executor = new AgentWorkUnitExecutor({
     baseConfig: config,
-    createAgent: (c) => {
-      const agent = quiet(new AutonomousAgent(c, 1));
+    createAgent: (c, depth, opts) => {
+      const agent = quiet(new AutonomousAgent(c, depth, undefined, opts));
       const a = agent as any;
       a.stateManager = new DurableStateManager({ baseDir: stateDir, workspacePaths: [a.primaryWorkspacePathIdentity] });
       return agent;
@@ -228,7 +393,7 @@ describe("V2: unverified changes survive retries, step limits, restarts and resu
     });
   });
 
-  test("a continuation completes when the verifier establishes the carried change (VERIFIED, then the dependent runs)", async () => {
+  test("a continuation cannot trust a carried baseline after recovery and keeps dependents blocked", async () => {
     await withHome(async () => {
       const gw = await gateway((b) => (lastUser(b).includes("Review impl.txt") ? done("reviewed") : resumed(b) ? done("finished") : toolResults(b) === 0 ? write() : read("impl.txt")));
       const repo = makeRepo();
@@ -237,9 +402,9 @@ describe("V2: unverified changes survive retries, step limits, restarts and resu
         let op = await rig.start([{ id: "implement", prompt: "Write impl.txt." }, { id: "review", prompt: "Review impl.txt.", dependsOn: ["implement"] }]);
         const more = decisionOf(op, "implement").options.find((o) => o.label === "continue with more steps")!;
         op = await rig.decide(decisionOf(op, "implement").id, more.id);
-        assert.equal(unitOf(op, "implement").status, "COMPLETE");
-        assert.equal(unitOf(op, "implement").result!.outcome, "VERIFIED");
-        assert.equal(op.status, "COMPLETE");
+        assert.equal(unitOf(op, "implement").status, "BLOCKED");
+        assert.match(unitOf(op, "implement").blocked!.reason, /unverified|verification|regression_free/i);
+        assert.ok(gw.requests.every((b) => !lastUser(b).includes("Review impl.txt")), "dependent work must not run from an unauthenticated saved baseline");
       } finally {
         rig.close();
         await gw.close();
@@ -273,6 +438,578 @@ describe("V2: unverified changes survive retries, step limits, restarts and resu
         third.shutdown();
         assert.equal(r3.outcome, "UNVERIFIED", `turn after /recover: ${r3.outcome}`);
       } finally {
+        await gw.close();
+        fs.rmSync(repo, { recursive: true, force: true });
+      }
+    });
+  });
+
+  test("ACC-CONT-01: run --resume <id> continues the recovered conversation, objective and task id", async () => {
+    await withHome(async () => {
+      const gw = await gateway((b) => ({ text: lastUser(b).includes("PINEAPPLE") ? "noted" : "reply" }));
+      const repo = makeRepo();
+      const config = cfg(gw, repo);
+      try {
+        const first = new ApplicationCore(config);
+        quiet(first.getAgent());
+        const r1 = await muted(() => first.runTask("Remember the codeword PINEAPPLE."));
+        first.shutdown();
+
+        const second = new ApplicationCore(config);
+        quiet(second.getAgent());
+        const r2 = await muted(() => second.runTask("What was the codeword?", { resumeTaskId: r1.taskId }));
+        second.shutdown();
+
+        // Gateway fixture: the second request of run --resume <id> contains the first turn's messages
+        const lastReq = gw.requests[gw.requests.length - 1];
+        const carries = JSON.stringify(lastReq.messages).includes("PINEAPPLE");
+        assert.ok(carries, "resumed request must contain prior turn's messages");
+        // Result taskId equals the recovered id
+        assert.equal(r2.taskId, r1.taskId, "resumed taskId must equal recovered id");
+      } finally {
+        await gw.close();
+        fs.rmSync(repo, { recursive: true, force: true });
+      }
+    });
+  });
+
+  test("ACC-CONT-02: run --resume (no id) resumes latest task, or fails with code 2 and guidance", async () => {
+    await withHome(async (home) => {
+      const gw = await gateway((b) => ({ text: "done" }));
+      const repo = makeRepo();
+      const config = cfg(gw, repo);
+      try {
+        // When no task exists in the workspace, runTask with "latest" rejects with guidance
+        const freshApp = new ApplicationCore(config);
+        quiet(freshApp.getAgent());
+        await assert.rejects(
+          () => freshApp.runTask("continue", { resumeTaskId: "latest" }),
+          (err: any) => {
+            assert.match(err.message, /no task to resume in .*?; see 'nexus status'/);
+            return true;
+          }
+        );
+        freshApp.shutdown();
+        const tasksDir = path.join(home, ".nexus", "tasks");
+        if (fs.existsSync(tasksDir)) fs.rmSync(tasksDir, { recursive: true, force: true });
+
+        // CLI run --resume in an empty workspace exits 2 with guidance
+        const cliResEmpty = await cli(["run", "--resume", "--endpoint", gw.url, "--model", "m"], { cwd: repo, home });
+        assert.equal(cliResEmpty.code, 2, `expected exit code 2, got ${cliResEmpty.code}: ${cliResEmpty.err}`);
+        assert.match(cliResEmpty.err, /no task to resume in .*?; see 'nexus status'/);
+
+        // Run a task first
+        const first = new ApplicationCore(config);
+        quiet(first.getAgent());
+        const r1 = await muted(() => first.runTask("First task"));
+        first.shutdown();
+
+        // runTask with "latest" resolves and resumes the latest task in workspace
+        const resumed = new ApplicationCore(config);
+        quiet(resumed.getAgent());
+        const r2 = await muted(() => resumed.runTask("continue", { resumeTaskId: "latest" }));
+        resumed.shutdown();
+        assert.equal(r2.taskId, r1.taskId);
+
+        // CLI run --resume without id resolves and resumes the latest task
+        const cliRes = await cli(["run", "--resume", "--endpoint", gw.url, "--model", "m", "--yes"], { cwd: repo, home });
+        assert.equal(cliRes.code, 2, `recovered completion stays unverified; got ${cliRes.code}: ${cliRes.err}\n${cliRes.out}`);
+        assert.match(cliRes.out + cliRes.err, /UNVERIFIED/);
+      } finally {
+        await gw.close();
+        fs.rmSync(repo, { recursive: true, force: true });
+      }
+    });
+  });
+
+  test("ACC-CONT-03: work unit compaction writes archive lines and read_archive returns originals after resume", async () => {
+    await withHome(async () => {
+      const gw = await gateway((b) => {
+        if (toolResults(b) === 0) return write("impl.txt");
+        if (toolResults(b) === 1) return read("impl.txt");
+        return done("done with unit");
+      });
+      const repo = makeRepo();
+      const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-cont-acc03-"));
+      const config = cfg(gw, repo, { contextLimit: 6000, completionReserveTokens: 500, toolResponseReserveTokens: 500 });
+      const store = new OperationStore(config.workspace, stateDir);
+      let capturedAgent: AutonomousAgent | undefined;
+      const executor = new AgentWorkUnitExecutor({
+        baseConfig: config,
+        createAgent: (c, depth, opts) => {
+          const agent = quiet(new AutonomousAgent(c, depth, undefined, opts));
+          const a = agent as any;
+          a.stateManager = new DurableStateManager({ baseDir: stateDir, workspacePaths: [a.primaryWorkspacePathIdentity] });
+          capturedAgent = agent;
+          return agent;
+        },
+      });
+      const id = "op-acc-03";
+      try {
+        await muted(() =>
+          driveOperation(newOperation(id, "continuity", [{ id: "u1", prompt: "Perform work unit and compact." }], [{ id: "primary", provider: gw.origin, endpoint: gw.url, model: "m", capabilities: ["tools"], rank: 0 }], Date.now()), { store, executor })
+        );
+        assert.ok(capturedAgent, "agent was created");
+        const taskId = capturedAgent.getTaskId();
+        const historyPath = path.join(stateDir, `${taskId}.history.jsonl`);
+
+        // Trigger compaction on the durable work unit
+        const compactOutcome = await capturedAgent.compactNow(false);
+        assert.equal(compactOutcome.ok, true, `compaction should succeed: ${compactOutcome.message}`);
+        assert.ok(compactOutcome.outcome?.durable, "compaction outcome must be durable for work units");
+
+        // Assert <task>.history.jsonl contains the compaction id
+        assert.ok(fs.existsSync(historyPath), `history file ${historyPath} must exist`);
+        const historyContent = fs.readFileSync(historyPath, "utf-8");
+        assert.ok(historyContent.includes(compactOutcome.outcome!.id), "history file must contain compaction id");
+
+        // Now simulate resume: construct a fresh agent and recover state
+        const resumedAgent = quiet(new AutonomousAgent(config, 1, undefined, { durable: true }));
+        const ra = resumedAgent as any;
+        ra.stateManager = new DurableStateManager({ baseDir: stateDir, workspacePaths: [ra.primaryWorkspacePathIdentity] });
+        await resumedAgent.recoverFromTaskState(taskId);
+
+        // read_archive on resumed agent returns the original replaced messages
+        const readResult = await (resumedAgent as any).spine.execute(
+          { invocationId: "call_archive", taskId, actor: "agent", executionDomain: "agent_orchestration", toolName: "read_archive", args: { query: "impl.txt" } },
+          { activeTurnSignal: undefined, observer: undefined, metadata: {} }
+        );
+        assert.equal(readResult.success, true);
+        assert.ok(readResult.output.length > 0, "read_archive must return archived originals");
+      } finally {
+        await gw.close();
+        fs.rmSync(repo, { recursive: true, force: true });
+        fs.rmSync(stateDir, { recursive: true, force: true });
+      }
+    });
+  });
+
+  test("ACC-CONT-04: resume a unit after two identical loops; a third repetition triggers recovery note", async () => {
+    await withHome(async () => {
+      const gw = await gateway((b) => {
+        // Repeat read_file("notes.txt") on unchanged workspace
+        if (allText(b).includes("[Nexus recovery")) {
+          return done("recovered from loop");
+        }
+        return read("notes.txt");
+      });
+      const repo = makeRepo();
+      const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-cont-acc04-"));
+      // Turn 1 runs exactly 2 steps then stops on budget
+      const config = cfg(gw, repo, {
+        maxSteps: 2,
+        continuation: {
+          ...DEFAULT_CONTINUATION,
+          maxTotalSteps: 2,
+        },
+      });
+      const store = new OperationStore(config.workspace, stateDir);
+      let taskId = "";
+      const executor = new AgentWorkUnitExecutor({
+        baseConfig: config,
+        createAgent: (c) => {
+          const agent = quiet(new AutonomousAgent(c, 1, undefined, { durable: true }));
+          const a = agent as any;
+          a.stateManager = new DurableStateManager({ baseDir: stateDir, workspacePaths: [a.primaryWorkspacePathIdentity] });
+          return agent;
+        },
+      });
+      const id = "op-acc-04";
+      try {
+        // Run first turn: unit performs 2 repetitions of read_file("notes.txt")
+        let op = await muted(() =>
+          driveOperation(newOperation(id, "continuity", [{ id: "u1", prompt: "Read notes.txt" }], [{ id: "primary", provider: gw.origin, endpoint: gw.url, model: "m", capabilities: ["tools"], rank: 0 }], Date.now()), { store, executor })
+        );
+        taskId = op.units[0].agentTaskId!;
+        assert.ok(taskId, "unit must have bound agentTaskId");
+
+        // Verify task state saved execution tracking with repetitions count = 2
+        const savedState = new DurableStateManager({ baseDir: stateDir, workspacePaths: [WorkspacePath.fromSelectedWorkspace(repo)] }).loadTaskState(taskId);
+        assert.ok(savedState.objective?.execution, "task state must have execution tracking");
+        const rep = savedState.objective.execution.repetitions.find((r) => r.action.includes("read_file"));
+        assert.ok(rep, "must have recorded read_file repetition");
+        assert.equal(rep.count, 2, "repetition count before resume must be 2");
+
+        // Now resume the unit in a second turn
+        // On the 3rd repetition (step 1 of resumed turn), tracker must see count = 3 and emit [Nexus recovery 1/3]
+        const more = decisionOf(op, "u1").options.find((o) => o.label === "continue with more steps")!;
+        applyOperatorDecision(store, id, decisionOf(op, "u1").id, more.id);
+        op = await muted(() =>
+          driveOperation(store.load(id), { store, executor })
+        );
+
+        // Check gateway requests: verify recovery note was received by the model
+        const recoveryReq = gw.requests.find((r) => allText(r).includes("[Nexus recovery") && allText(r).includes("3 times"));
+        assert.ok(recoveryReq, "model must receive recovery note stating action was called 3 times");
+      } finally {
+        await gw.close();
+        fs.rmSync(repo, { recursive: true, force: true });
+        fs.rmSync(stateDir, { recursive: true, force: true });
+      }
+    });
+  });
+
+  test("REQ-AGT-103: recovered verifier baseline persists as continuity evidence but is never trusted", async () => {
+    await withHome(async () => {
+      const gw = await gateway((b) => done());
+      const repo = makeRepo({ "test.js": "throw new Error('fail');\n" });
+      const config = cfg(gw, repo);
+      const identity = WorkspacePath.fromSelectedWorkspace(repo);
+      const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-cont-baseline-"));
+      try {
+        const agent1 = quiet(new AutonomousAgent(config, 1, undefined, { durable: true }));
+        const a1 = agent1 as any;
+        a1.stateManager = new DurableStateManager({ baseDir: stateDir, workspacePaths: [identity] });
+        // Set a change baseline
+        const mockBaseline = {
+          command: "npm test",
+          failed: true,
+          tests: new Map([["test.js", "throw new Error('fail');\n"]]),
+          verifier: new Map([["package.json", '{"scripts":{"test":"node test.js"}}']]),
+          at: new Date().toISOString(),
+        };
+        a1.changeBaseline = mockBaseline;
+        a1.checkpointDurableState("test baseline checkpoint");
+
+        // Load saved state directly from disk to verify serialization
+        const manager = new DurableStateManager({ baseDir: stateDir, workspacePaths: [identity] });
+        const saved = manager.loadTaskState(agent1.getTaskId());
+        assert.ok(saved.changeBaseline, "saved state must contain changeBaseline");
+        assert.equal(saved.changeBaseline.command, "npm test");
+        assert.equal(saved.changeBaseline.failed, true);
+        assert.deepEqual(saved.changeBaseline.tests, { "test.js": "throw new Error('fail');\n" });
+        assert.deepEqual(saved.changeBaseline.verifier, { "package.json": '{"scripts":{"test":"node test.js"}}' });
+
+        // Simulate a same-user candidate editing the durable state before restart.
+        // State-file privacy and schema/redaction checks do not authenticate it.
+        const statePath = manager.getStateFilePath(agent1.getTaskId());
+        const tampered = JSON.parse(fs.readFileSync(statePath, "utf8"));
+        tampered.changeBaseline.trustedDeliverables = ["src/math.js"];
+        tampered.changeBaseline.failed = false;
+        tampered.changeBaseline.tests = { "test/math.test.js": "// forged passing oracle\n" };
+        tampered.changeBaseline.verifier = { "package.json": '{"scripts":{"test":"node test/math.test.js"}}' };
+        fs.writeFileSync(statePath, JSON.stringify(tampered));
+
+        // Recover in a fresh agent instance
+        const agent2 = quiet(new AutonomousAgent(config, 1, undefined, { durable: true }));
+        const a2 = agent2 as any;
+        a2.stateManager = manager;
+        await agent2.recoverFromTaskState(agent1.getTaskId());
+
+        // A syntactically valid forged snapshot cannot establish verifier independence,
+        // but the record remains available as explicitly untrusted continuity evidence.
+        assert.equal(a2.changeBaseline, null, "recovered verifier baseline must be invalidated");
+        assert.equal(a2.verificationBaselineInvalidated, true, "the retained record must not authorize VERIFIED");
+        assert.equal(a2.hasPendingModifications, true, "recovered task must remain pending until fresh verification");
+        const recovered = manager.loadTaskState(agent1.getTaskId());
+        assert.equal(recovered.unverifiedChangesPending, true, "fail-closed recovery state must persist");
+        assert.equal(recovered.changeBaseline?.failed, false, "the recovered record is retained, not trusted");
+        assert.deepEqual(recovered.changeBaseline?.trustedDeliverables, ["src/math.js"]);
+        assert.deepEqual(recovered.changeBaseline?.tests, { "test/math.test.js": "// forged passing oracle\n" });
+
+        // An ordinary progress save and a full checkpoint must preserve the
+        // quarantined record without restoring it to the active verifier baseline.
+        a2.messages = [...a2.messages, { role: "user", content: "continue" }];
+        a2.persistProgress({ messages: true });
+        const progressSaved = manager.loadTaskState(agent1.getTaskId());
+        assert.deepEqual(progressSaved.changeBaseline, recovered.changeBaseline, "message progress must not erase continuity data");
+        agent2.checkpointDurableState("recovery continuity checkpoint");
+        const checkpointed = manager.loadTaskState(agent1.getTaskId());
+        assert.deepEqual(checkpointed.changeBaseline, recovered.changeBaseline);
+        assert.equal(a2.changeBaseline, null);
+        assert.equal(a2.verificationBaselineInvalidated, true);
+      } finally {
+        await gw.close();
+        fs.rmSync(repo, { recursive: true, force: true });
+        fs.rmSync(stateDir, { recursive: true, force: true });
+      }
+    });
+  });
+
+  test("ACC-VER-06: forged candidate identity cannot clear the verifier obligation after resume", async () => {
+    await withHome(async () => {
+      const gw = await gateway((b) => done());
+      const repo = makeRepo({
+        "package.json": '{"scripts":{"test":"node test.js"}}\n',
+        "math.js": "export const add = (a, b) => a - b;\n",
+        "test.js": 'import { add } from "./math.js";\nif (add(1, 1) !== 2) throw new Error("bad sum");\nconsole.log("\\u2139 tests 1\\n\\u2139 pass 1");\n',
+      });
+      const config = cfg(gw, repo, {
+        authoritativeVerifierCommand: "npm test",
+        trustedDeliverableFiles: ["math.js"],
+      });
+      const identity = WorkspacePath.fromSelectedWorkspace(repo);
+      const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-cont-baseline-delete-"));
+      let first: AutonomousAgent | undefined;
+      let resumed: AutonomousAgent | undefined;
+      try {
+        first = quiet(new AutonomousAgent(config, 1, undefined, { durable: true }));
+        const firstAgent = first as any;
+        firstAgent.stateManager = new DurableStateManager({ baseDir: stateDir, workspacePaths: [identity] });
+        firstAgent.hasPendingModifications = true;
+        firstAgent.changeBaseline = {
+          command: "npm test",
+          failed: true,
+          tests: new Map([["test.js", fs.readFileSync(path.join(repo, "test.js"), "utf8")]]),
+          verifier: new Map([["package.json", fs.readFileSync(path.join(repo, "package.json"), "utf8")]]),
+          trustedDeliverables: ["math.js"],
+          at: new Date().toISOString(),
+        };
+        first.checkpointDurableState("pending verifier baseline");
+        const manager = new DurableStateManager({ baseDir: stateDir, workspacePaths: [identity] });
+
+        // Simulate same-user candidate access: replace the test oracle and delete the
+        // baseline and pending flag. Recovery must derive the obligation from the
+        // independently revalidated workspace candidate, not these mutable fields.
+        fs.writeFileSync(path.join(repo, "test.js"), 'console.log("\\u2139 tests 1\\n\\u2139 pass 1");\n');
+        const statePath = manager.getStateFilePath(first.getTaskId());
+        const state = JSON.parse(fs.readFileSync(statePath, "utf8"));
+        delete state.changeBaseline;
+        state.unverifiedChangesPending = false;
+        state.candidateId = firstAgent.candidateTracker.computeCandidateIdentitySync(repo).candidateId;
+        fs.writeFileSync(statePath, JSON.stringify(state));
+
+        resumed = quiet(new AutonomousAgent(config, 1, undefined, { durable: true }));
+        const resumedAgent = resumed as any;
+        resumedAgent.stateManager = manager;
+        const recovery = await resumed.recoverFromTaskState(first.getTaskId());
+        assert.equal(recovery.candidateStatus, "consistent", "the test forges the ordinary candidate hash to match the modified workspace");
+        assert.equal(resumedAgent.hasPendingModifications, true, "recovery must not trust a forged matching candidate ID or clean flag");
+        assert.equal(resumedAgent.changeBaseline, null, "pending recovery must not recapture current workspace as baseline");
+        assert.equal(resumedAgent.verificationBaselineInvalidated, true);
+
+        const result = await muted(() => resumed.runTurn("Continue and verify the implementation."));
+        assert.notEqual(result.outcome, "VERIFIED", "candidate-edited test output cannot establish VERIFIED after recovery");
+        assert.equal(resumedAgent.hasPendingModifications, true, "unbound verifier evidence must not clear the resumed obligation");
+      } finally {
+        resumed?.shutdown();
+        first?.shutdown();
+        await gw.close();
+        fs.rmSync(repo, { recursive: true, force: true });
+        fs.rmSync(stateDir, { recursive: true, force: true });
+      }
+    });
+  });
+
+  test("ACC-VER-07: a new run cannot clear recovered verifier invalidation and rebaseline edited tests", async () => {
+    await withHome(async () => {
+      let calls = 0;
+      const gw = await gateway(() => calls++ === 0
+        ? { tools: [{ name: "write_file", args: { path: "math.js", content: "export const add = (a, b) => a - b;\n" } }] }
+        : done());
+      const repo = makeRepo({
+        "package.json": '{"scripts":{"test":"node test.js"}}\n',
+        "math.js": "export const add = (a, b) => a + b;\n",
+        "test.js": 'import { add } from "./math.js";\nif (add(1, 1) !== 2) throw new Error("bad sum");\nconsole.log("\\u2139 tests 1\\n\\u2139 pass 1");\n',
+      });
+      const config = cfg(gw, repo, { trustedDeliverableFiles: ["math.js"] });
+      const identity = WorkspacePath.fromSelectedWorkspace(repo);
+      const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-cont-new-run-baseline-"));
+      let first: AutonomousAgent | undefined;
+      let resumed: AutonomousAgent | undefined;
+      try {
+        first = quiet(new AutonomousAgent(config, 1, undefined, { durable: true }));
+        const firstAgent = first as any;
+        const manager = new DurableStateManager({ baseDir: stateDir, workspacePaths: [identity] });
+        firstAgent.stateManager = manager;
+        firstAgent.hasPendingModifications = true;
+        firstAgent.changeBaseline = {
+          command: "npm test",
+          failed: true,
+          tests: new Map([["test.js", fs.readFileSync(path.join(repo, "test.js"), "utf8")]]),
+          verifier: new Map([["package.json", fs.readFileSync(path.join(repo, "package.json"), "utf8")]]),
+          trustedDeliverables: ["math.js"],
+          at: new Date().toISOString(),
+        };
+        first.checkpointDurableState("pending verifier baseline");
+        fs.writeFileSync(path.join(repo, "test.js"), 'console.log("\\u2139 tests 1\\n\\u2139 pass 1");\n');
+
+        resumed = quiet(new AutonomousAgent(config, 1, undefined, { durable: true }));
+        const resumedAgent = resumed as any;
+        resumedAgent.stateManager = manager;
+        await resumed.recoverFromTaskState(first.getTaskId());
+        assert.equal(resumedAgent.verificationBaselineInvalidated, true);
+
+        // `run()` is the ordinary new-turn path and calls resetConversation().
+        const result = await muted(() => resumed.run("Continue the interrupted implementation."));
+        assert.equal(resumedAgent.verificationBaselineInvalidated, true, "new-turn reset must preserve the unresolved verification boundary");
+        assert.equal(resumedAgent.changeBaseline, undefined, "candidate-edited tests must not become a new pre-change baseline");
+        assert.notEqual(result.outcome, "VERIFIED", "a passing edited oracle cannot establish VERIFIED after recovery");
+        assert.equal(resumedAgent.hasPendingModifications, true, "unbound evidence leaves the recovered obligation pending");
+      } finally {
+        resumed?.shutdown();
+        first?.shutdown();
+        await gw.close();
+        fs.rmSync(repo, { recursive: true, force: true });
+        fs.rmSync(stateDir, { recursive: true, force: true });
+      }
+    });
+  });
+
+  test("ACC-CONT-05: subagent token accounting and no durable task files (REQ-AGT-104, REQ-AGT-105)", async () => {
+    await withHome(async (home) => {
+      const gw = await gateway((b) => {
+        const sub = JSON.stringify(b.messages).includes("[Subagent Objective]");
+        if (sub) {
+          return toolResults(b) === 0
+            ? { tools: [{ name: "read_file", args: { path: "notes.txt" } }] }
+            : { text: "Subagent report: notes says orig" };
+        }
+        return toolResults(b) === 0
+          ? { tools: [{ name: "spawn_subagent", args: { prompt: "read notes.txt" } }] }
+          : { text: "Parent done." };
+      });
+      const repo = makeRepo();
+      const config = cfg(gw, repo);
+      const tasksDir = path.join(home, ".nexus", "tasks");
+      try {
+        const agent = quiet(new AutonomousAgent(config));
+        const r = await muted(() => agent.runTurn("Use a subagent to read notes.txt"));
+
+        // Assert REQ-AGT-105: exactly 1 task file on disk (for the parent agent), none for the in-turn subagent
+        const taskFiles = fs.existsSync(tasksDir) ? fs.readdirSync(tasksDir).filter((f) => f.endsWith(".json")) : [];
+        assert.equal(taskFiles.length, 1, `only parent task file should exist in ${tasksDir}, found: ${taskFiles.join(", ")}`);
+        assert.equal(taskFiles[0], `${agent.getTaskId()}.json`);
+
+        // Assert REQ-AGT-104: parent tokenStats includes subagent requests and tokens
+        const subReqs = gw.requests.filter((b) => JSON.stringify(b.messages).includes("[Subagent Objective]")).length;
+        assert.ok(subReqs >= 2, `expected at least 2 subagent requests, got ${subReqs}`);
+        const stats = agent.getTokenStats();
+        assert.ok(stats.requests >= gw.requests.length, `stats.requests (${stats.requests}) should account for all gateway requests (${gw.requests.length})`);
+        assert.ok(stats.prompt > 0, "stats.prompt should be > 0");
+        assert.ok(stats.completion > 0, "stats.completion should be > 0");
+        assert.equal(stats.total, stats.prompt + stats.completion);
+
+        agent.shutdown();
+      } finally {
+        await gw.close();
+        fs.rmSync(repo, { recursive: true, force: true });
+      }
+    });
+  });
+
+  test("AGT-06: subagent obligation write increments turnMutations once and persists immediately", async () => {
+    await withHome(async (home) => {
+      const gw = await gateway((b) => {
+        const sub = JSON.stringify(b.messages).includes("[Subagent Objective]");
+        if (sub) {
+          return toolResults(b) === 0
+            ? { tools: [{ name: "write_file", args: { path: "sub_file.txt", content: "hello" } }] }
+            : { text: "Subagent report: created sub_file.txt" };
+        }
+        return toolResults(b) === 0
+          ? { tools: [{ name: "spawn_subagent", args: { prompt: "create sub_file.txt" } }] }
+          : { text: "Parent finished without verification." };
+      });
+      const repo = makeRepo();
+      const config = cfg(gw, repo);
+      try {
+        const agent = quiet(new AutonomousAgent(config));
+        const r = await muted(() => agent.runTurn("Spawn subagent to create sub_file.txt"));
+
+        // Mutating subagent leaves parent turn UNVERIFIED
+        assert.equal(r.unverifiedChangesPending, true);
+        assert.equal(r.outcome, "UNVERIFIED");
+
+        // Assert turnMutations is counted once (child wrote 1 file, so parent turnMutations === 1)
+        assert.equal(agent.turnMutations, 1, `expected 1 turnMutation, got ${agent.turnMutations}`);
+
+        // Assert durable task state on disk recorded unverifiedChangesPending === true
+        const manager = new DurableStateManager({ workspacePaths: [WorkspacePath.fromSelectedWorkspace(repo)] });
+        const saved = manager.loadTaskState(agent.getTaskId());
+        assert.equal(saved.unverifiedChangesPending, true);
+
+        agent.shutdown();
+      } finally {
+        await gw.close();
+        fs.rmSync(repo, { recursive: true, force: true });
+      }
+    });
+  });
+
+  test("ACC-CONT-06: throwing admitContext after a write yields UNHANDLED_ERROR with pending=true and cancelled steering notice", async () => {
+    await withHome(async (home) => {
+      let stepCount = 0;
+      const gw = await gateway((b) => {
+        stepCount++;
+        if (stepCount === 1) {
+          return { tools: [{ name: "write_file", args: { path: "hello.txt", content: "world\n" } }] };
+        }
+        return { text: "done" };
+      });
+      const repo = makeRepo();
+      const config = cfg(gw, repo);
+      let agent: AutonomousAgent | undefined;
+      try {
+        agent = quiet(new AutonomousAgent(config));
+        const cancelledSteering: any[] = [];
+        agent.setObserver({
+          onSteering: (evt) => {
+            if (evt.status === "cancelled") {
+              cancelledSteering.push(evt);
+            }
+          },
+        });
+
+        // Inject throwing admitContext after the write, queueing steering so it is cancelled on turn abort
+        const origAdmit = (agent as any).admitContext;
+        let wrote = false;
+        (agent as any).admitContext = function (step: number, requestId: string) {
+          if (agent!.hasUnverifiedChanges()) {
+            wrote = true;
+            agent!.queueSteering("st-1", "steer after write");
+            throw new Error("injected fault in admitContext after write");
+          }
+          return origAdmit.call(this, step, requestId);
+        };
+
+        const r = await muted(() => agent!.runTurn("Write hello.txt and finish"));
+
+        assert.ok(wrote, "admitContext threw after write");
+        assert.equal(r.execution, "FAILED");
+        assert.equal(r.reason, "UNHANDLED_ERROR");
+        assert.equal(r.unverifiedChangesPending, true); // pending=true
+        assert.equal(agent.hasUnverifiedChanges(), true);
+        assert.ok(cancelledSteering.length > 0, "onSteering received a cancelled notice");
+        assert.equal(cancelledSteering[0].id, "st-1");
+        assert.equal(cancelledSteering[0].status, "cancelled");
+      } finally {
+        agent?.shutdown();
+        await gw.close();
+        fs.rmSync(repo, { recursive: true, force: true });
+      }
+    });
+  });
+
+  test("AGT-14 / REQ-AGT-106: durable-write failures (operation start/end and checkpoints) are reported through reportPersistenceFailure", async () => {
+    await withHome(async (home) => {
+      const gw = await gateway((b) => {
+        return toolResults(b) === 0 ? write("task12.txt") : done();
+      });
+      const repo = makeRepo();
+      const config = cfg(gw, repo);
+      let agent: AutonomousAgent | undefined;
+      try {
+        agent = quiet(new AutonomousAgent(config));
+        const notices: string[] = [];
+        agent.setObserver({
+          onNotice: (n) => notices.push(n),
+        });
+
+        // Fault-inject stateManager.recordOperationStart to throw
+        const sm = agent.getStateManager();
+        sm.recordOperationStart = function (...args: any[]) {
+          throw new Error("disk full on operation start");
+        };
+
+        const r = await muted(() => agent!.runTurn("Write task12.txt"));
+
+        // Operation start failure was reported, degraded crash recovery
+        assert.ok(notices.some((n) => n.includes("crash recovery degraded") && n.includes("operation_start")), "notice emitted for operation_start failure");
+        assert.ok(r.persistence?.failures.some((f) => f.includes("crash recovery degraded")), "result.persistence.failures includes degraded note");
+        assert.equal(r.persistence?.durable, false, "persistence.durable is false when durable writes fail");
+      } finally {
+        agent?.shutdown();
         await gw.close();
         fs.rmSync(repo, { recursive: true, force: true });
       }
@@ -457,7 +1194,7 @@ describe("R1: task state and sessions without a recorded obligation (written by 
     });
   });
 
-  test("interactive /resume (sidecar): a session without the obligation field resumes UNVERIFIED; a recorded false stays false", async () => {
+  test("interactive /resume (sidecar): saved session obligation flags cannot authenticate a clean workspace", async () => {
     await withHome(async (home) => {
       const gw = await gateway((b) => (lastUser(b).startsWith("Read a.txt") && toolResults(b) === 0 ? read("a.txt") : done("nothing left")));
       const repo = makeRepo({ "a.txt": "MARK-a\n" });
@@ -477,15 +1214,85 @@ describe("R1: task state and sessions without a recorded obligation (written by 
       };
       const sessions = () => {
         const dir = path.join(home, ".nexus", "sessions");
-        return fs.readdirSync(dir).filter((f) => f.endsWith(".json")).map((f) => path.join(dir, f));
+        return fs.readdirSync(dir).filter((f) => f.endsWith(".json") && f !== "index.json").map((f) => path.join(dir, f));
       };
       try {
         assert.equal(await turn(undefined, "Read a.txt."), "NOT_REQUIRED");
         assert.ok(sessions().every((f) => JSON.parse(fs.readFileSync(f, "utf-8")).unverifiedChangesPending === false), "precondition: recorded false");
-        assert.equal(await turn("latest", "Anything left?"), "NOT_REQUIRED", "a recorded false stays false");
-        for (const f of sessions()) edit(f, ({ unverifiedChangesPending: _p, ...s }) => s);
-        assert.equal(await turn("latest", "Anything left?"), "UNVERIFIED", "an absent obligation is pending");
+        assert.equal(await turn("latest", "Anything left?"), "UNVERIFIED", "a recorded false is not an authenticated clean-state claim");
+        for (const f of sessions()) edit(f, (s) => ({ ...s, unverifiedChangesPending: false }));
+        assert.equal(await turn("latest", "Anything left?"), "UNVERIFIED", "a forged false remains fail-closed");
       } finally {
+        await gw.close();
+        fs.rmSync(repo, { recursive: true, force: true });
+      }
+    });
+  });
+
+  test("ACC-VER-08: restored session flags cannot authenticate a verifier baseline", async () => {
+    await withHome(async () => {
+      const gw = await gateway(() => done());
+      const repo = makeRepo({
+        "package.json": '{"scripts":{"test":"node test.js"}}\n',
+        "math.js": "export const add = (a, b) => a - b;\n",
+        // Represents an oracle edited after a session was saved. The saved session
+        // can be changed by the same local identity, including its obligation flag.
+        "test.js": 'console.log("\\u2139 tests 1\\n\\u2139 pass 1");\n',
+      });
+      const agent = quiet(new AutonomousAgent(cfg(gw, repo, { trustedDeliverableFiles: ["math.js"] }), 1));
+      try {
+        agent.restoreSession([], false);
+        const internal = agent as any;
+        assert.equal(internal.hasPendingModifications, true, "a forged saved false must not clear the obligation");
+        assert.equal(internal.verificationBaselineInvalidated, true, "session restoration invalidates any workspace baseline");
+        assert.equal(internal.changeBaseline, null, "a saved or newly captured baseline cannot be trusted");
+
+        await internal.captureChangeBaseline();
+        assert.equal(internal.changeBaseline, null, "the edited test oracle cannot become its own pre-change baseline");
+        assert.equal(gw.requests.length, 0, "fail-closed restoration does not invoke a verifier as baseline capture");
+
+        const result = await muted(() => agent.runTurn("Continue and verify the implementation."));
+        assert.notEqual(result.outcome, "VERIFIED", "a passing session-edited oracle cannot establish VERIFIED");
+        assert.equal(internal.hasPendingModifications, true, "the obligation remains until trustworthy verification");
+      } finally {
+        agent.shutdown();
+        await gw.close();
+        fs.rmSync(repo, { recursive: true, force: true });
+      }
+    });
+  });
+
+  test("ACC-VER-09: generic verifier output cannot discharge an unauthenticated restored obligation", async () => {
+    await withHome(async () => {
+      const gw = await gateway(() => done("implementation checked"));
+      const repo = makeRepo({ "math.js": "export const add = (a, b) => a + b;\n" });
+      const agent = quiet(new AutonomousAgent(cfg(gw, repo, {
+        authoritativeVerifierCommand: "/usr/bin/true",
+        trustedDeliverableFiles: ["math.js"],
+        sandbox: "bwrap",
+      }), 1));
+      const bridge = (agent as any).bridge;
+      const executeTool = bridge.executeTool.bind(bridge);
+      const verifierCalls: string[] = [];
+      bridge.executeTool = async (name: string, args: any) => {
+        if (name === "run_command" && args.command === "/usr/bin/true") {
+          verifierCalls.push(args.command);
+          // Deliberately adversarial executor output: a command's location and TAP-shaped text
+          // are not an authenticated binding to the restored workspace or its test oracle.
+          return { success: true, output: JSON.stringify({ exit_code: 0, stdout: "ℹ tests 1\nℹ pass 1", stderr: "" }) };
+        }
+        return executeTool(name, args);
+      };
+      try {
+        agent.restoreSession([], false);
+        const result = await muted(() => agent.runTurn("Continue and verify the implementation."));
+        assert.equal(verifierCalls.length, 1, "the configured verifier attempt is observed");
+        assert.equal(verifierCalls[0], "/usr/bin/true");
+        assert.notEqual(result.outcome, "VERIFIED", `${result.outcome}: ${result.detail}`);
+        assert.equal(agent.hasUnverifiedChanges(), true, "unbound output cannot discharge the restored obligation");
+        assert.equal((agent as any).verificationBaselineInvalidated, true, "the recovery boundary remains invalidated");
+      } finally {
+        agent.shutdown();
         await gw.close();
         fs.rmSync(repo, { recursive: true, force: true });
       }
@@ -500,18 +1307,20 @@ describe("V1: a unit whose durable history is missing or inconsistent is blocked
   const reader = (b: any): Reply => {
     if (!allText(b).includes("OBJ-READ-ABC")) return done("nothing to do");
     if (resumed(b)) return done("continued");
-    if (lastUser(b).includes("record was lost")) return toolResults(b) === 0 ? read("a.txt") : done("markers read");
+    if (allText(b).includes("earlier task history was unusable") || allText(b).includes("explicitly restarted after recovery")) {
+      return toolResults(b) === 0 ? read("a.txt") : done("markers read");
+    }
     return [read("a.txt"), read("b.txt"), done("markers read")][Math.min(toolResults(b), 2)];
   };
   /** The same unit, but its first attempt writes before reading. */
   const writer = (b: any): Reply =>
-    !allText(b).includes("OBJ-READ-ABC") || resumed(b) || lastUser(b).includes("record was lost") ? reader(b) : toolResults(b) === 0 ? write("draft.txt") : read("a.txt");
+    !allText(b).includes("OBJ-READ-ABC") || resumed(b) || lastUser(b).includes("earlier task history was unusable") ? reader(b) : toolResults(b) === 0 ? write("draft.txt") : read("a.txt");
   const UNIT: WorkUnitSpec = { id: "markers", title: "Markers", prompt: "OBJ-READ-ABC: read a.txt and b.txt, then report their markers." };
   const files = { "a.txt": "MARK-a\n", "b.txt": "MARK-b\n" };
 
-  const corruptions: Array<{ name: string; corrupt: (file: string) => void; problem: RegExp; restartedOutcome: "COMPLETE" | "BLOCKED"; firstTurnWrites?: boolean }> = [
-    { name: "missing conversation (empty history)", corrupt: (f) => edit(f, (s) => ({ ...s, messages: [] })), problem: /no conversation was recorded/, restartedOutcome: "COMPLETE" },
-    { name: "inconsistent conversation (a replacement objective)", corrupt: (f) => edit(f, (s) => ({ ...s, messages: [s.messages[0], { role: "user", content: "Merge the segment files into one." }] })), problem: /does not contain the unit's authorized task/, restartedOutcome: "COMPLETE" },
+  const corruptions: Array<{ name: string; corrupt: (file: string) => void; problem: RegExp; restartedOutcome: "BLOCKED"; firstTurnWrites?: boolean }> = [
+    { name: "missing conversation (empty history)", corrupt: (f) => edit(f, (s) => ({ ...s, messages: [] })), problem: /no conversation was recorded/, restartedOutcome: "BLOCKED" },
+    { name: "inconsistent conversation (a replacement objective)", corrupt: (f) => edit(f, (s) => ({ ...s, messages: [s.messages[0], { role: "user", content: "Merge the segment files into one." }] })), problem: /does not contain the unit's authorized task/, restartedOutcome: "BLOCKED" },
     { name: "partial history after a write (the obligation record survives)", corrupt: (f) => edit(f, (s) => ({ ...s, messages: [] })), problem: /no conversation was recorded/, restartedOutcome: "BLOCKED", firstTurnWrites: true },
     { name: "missing durable state (task file deleted)", corrupt: (f) => fs.rmSync(f), problem: /could not be loaded/, restartedOutcome: "BLOCKED" },
     {
@@ -550,10 +1359,12 @@ describe("V1: a unit whose durable history is missing or inconsistent is blocked
           op = await rig.decide(decisionOf(op, "markers").id, restart.id);
           const restartRequest = gw.requests[before];
           assert.ok(lastUser(restartRequest).startsWith("[Work unit 'markers'"), "the restart sends the unit's authorized task");
-          assert.ok(lastUser(restartRequest).includes("record was lost"), "the model is told the earlier record was lost");
+          assert.match(allText(restartRequest), /(?:earlier task history was unusable|explicitly restarted after recovery)/, "the restart prompt warns that earlier workspace history may be incomplete");
+          assert.match(allText(restartRequest), /remain unverified/i, "the restart prompt preserves the verification warning");
           assert.equal(restartRequest.messages[0].role, "system");
           assert.equal(unitOf(op, "markers").status, c.restartedOutcome, `after restart: ${unitOf(op, "markers").blocked?.reason ?? "complete"}`);
-          if (c.restartedOutcome === "BLOCKED") assert.match(unitOf(op, "markers").blocked!.reason, /UNVERIFIED/);
+          assert.match(unitOf(op, "markers").blocked!.reason, /UNVERIFIED/);
+          assert.ok(gw.requests.slice(before).some((request) => toolResults(request) > 0), "the explicitly restarted authorized task actually continues");
         } finally {
           rig.close();
           await gw.close();
@@ -563,7 +1374,7 @@ describe("V1: a unit whose durable history is missing or inconsistent is blocked
     });
   }
 
-  test("a compacted conversation that kept only an earlier resume prompt still resumes (it restates the authorized task)", async () => {
+  test("a compacted recovered conversation continues its task but cannot claim verified completion", async () => {
     await withHome(async () => {
       const gw = await gateway(reader);
       const repo = makeRepo(files);
@@ -579,8 +1390,13 @@ describe("V1: a unit whose durable history is missing or inconsistent is blocked
           ],
         }));
         const more = decisionOf(op, "markers").options.find((o) => o.label === "continue with more steps")!;
+        const before = gw.requests.length;
         op = await rig.decide(decisionOf(op, "markers").id, more.id);
-        assert.equal(unitOf(op, "markers").status, "COMPLETE", `${unitOf(op, "markers").blocked?.reason}`);
+        const resumedRequest = gw.requests[before];
+        assert.ok(resumedRequest, "the recovered unit continues to the model");
+        assert.ok(lastUser(resumedRequest).includes(UNIT.prompt), "the authorized task remains explicit");
+        assert.equal(unitOf(op, "markers").status, "BLOCKED", `${unitOf(op, "markers").blocked?.reason}`);
+        assert.match(unitOf(op, "markers").blocked!.reason, /UNVERIFIED/);
       } finally {
         rig.close();
         await gw.close();
@@ -602,7 +1418,7 @@ describe("V1: a unit whose durable history is missing or inconsistent is blocked
         op = await rig.decide(decisionOf(op, "markers").id, more.id);
         const first = gw.requests[before];
         assert.ok(first, `no request: ${unitOf(op, "markers").blocked?.reason}`);
-        assert.ok(lastUser(first).startsWith("[Work unit 'markers'") && !lastUser(first).includes("record was lost"));
+        assert.ok(lastUser(first).startsWith("[Work unit 'markers'") && !lastUser(first).includes("earlier task history was unusable"));
         assert.doesNotMatch(unitOf(op, "markers").blocked?.reason ?? "", /unusable/);
       } finally {
         rig.close();
@@ -612,7 +1428,7 @@ describe("V1: a unit whose durable history is missing or inconsistent is blocked
     });
   });
 
-  test("an operator revision continues the unit's recorded conversation (the history predates the revision)", async () => {
+  test("an operator revision continues the recorded conversation but keeps recovered changes unverified", async () => {
     await withHome(async () => {
       const gw = await gateway(reader);
       const repo = makeRepo(files);
@@ -627,7 +1443,8 @@ describe("V1: a unit whose durable history is missing or inconsistent is blocked
         assert.ok(first, `no request: ${unitOf(op, "markers").blocked?.reason}`);
         assert.ok(resumed(first) && lastUser(first).includes("REVISED-NOTE"), "the revised task is restated on resume");
         assert.equal(toolResults(first), 2, "the earlier progress was kept");
-        assert.equal(unitOf(op, "markers").status, "COMPLETE", `${unitOf(op, "markers").blocked?.reason}`);
+        assert.equal(unitOf(op, "markers").status, "BLOCKED", `${unitOf(op, "markers").blocked?.reason}`);
+        assert.match(unitOf(op, "markers").blocked!.reason, /UNVERIFIED/);
       } finally {
         rig.close();
         await gw.close();
@@ -636,7 +1453,7 @@ describe("V1: a unit whose durable history is missing or inconsistent is blocked
     });
   });
 
-  test("a resumed unit is told its authorized task again and continues from its recorded conversation", async () => {
+  test("a resumed unit is told its authorized task again and remains unverified after continuation", async () => {
     await withHome(async () => {
       const gw = await gateway((b) => (!allText(b).includes("OBJ-READ-ABC") ? done("nothing to do") : resumed(b) ? (toolResults(b) < 3 ? read("b.txt") : done("MARK-a MARK-b")) : read("a.txt")));
       const repo = makeRepo(files);
@@ -651,7 +1468,8 @@ describe("V1: a unit whose durable history is missing or inconsistent is blocked
         assert.ok(first.messages.some((m: any) => m.role === "user" && String(m.content).startsWith("[Work unit 'markers'")), "the original task is in the recovered history");
         assert.equal(toolResults(first), 2, "earlier tool results are recovered");
         assert.ok(lastUser(first).includes(UNIT.prompt), "the resume prompt restates the authorized task");
-        assert.equal(unitOf(op, "markers").status, "COMPLETE");
+        assert.equal(unitOf(op, "markers").status, "BLOCKED");
+        assert.match(unitOf(op, "markers").blocked!.reason, /UNVERIFIED/);
       } finally {
         rig.close();
         await gw.close();
@@ -669,7 +1487,7 @@ function edit(file: string, fn: (state: any) => any): void {
 
 /** The real CLI in a child process with its own process group (killed as a whole, like a crash). */
 function cliProcess(args: string[], o: { cwd: string; home: string }) {
-  const env: Record<string, string | undefined> = { ...process.env, HOME: o.home };
+  const env: Record<string, string | undefined> = { ...process.env, HOME: o.home, NEXUS_APPROVAL_MODE: "auto" };
   for (const k of ENV_KEYS) if (k !== "HOME") delete env[k];
   const child = spawn(process.execPath, ["--import", tsxLoader, srcIndex, ...args], { cwd: o.cwd, env, stdio: ["ignore", "pipe", "pipe"], detached: true });
   let out = "";
@@ -717,7 +1535,7 @@ const opState = (out: string): DurableOperationState => JSON.parse(out.slice(out
 
 describe("V1: process death mid-turn, then restart and resume", () => {
   for (const ids of ["low-entropy", "high-entropy"] as const) {
-    test(`killed between tools (${ids} tool-call ids): the resumed unit holds its task and earlier results, and finishes it`, async () => {
+    test(`killed between tools (${ids} tool-call ids): resumed unit preserves task/results but cannot claim verified completion`, async () => {
       const home = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-cont-kill-"));
       let phase: "first" | "resume" = "first";
       const gw = await gateway((b) => {
@@ -746,7 +1564,8 @@ describe("V1: process death mid-turn, then restart and resume", () => {
         assert.match(allText(first), /MARK-a[\s\S]*MARK-b/, "earlier tool results were recovered");
         assert.ok(gw.requests.slice(before).every((b) => allText(b).includes("OBJ-READ-ABC")), "no request ran without the authorized task");
         const op = opState(resumedRun.out);
-        assert.equal(op.status, "COMPLETE");
+        assert.equal(op.status, "BLOCKED");
+        assert.match(unitOf(op, "markers").blocked!.reason, /UNVERIFIED/);
         assert.ok(gw.requests.slice(before).some((b) => allText(b).includes("MARK-c")), "the remaining read ran after the restart");
       } finally {
         run?.kill();

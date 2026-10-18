@@ -1,5 +1,7 @@
 # Parallel defect investigation: D3, D4, D1, D2 (2026-10-04)
 
+> **Historical record.** This document is kept for provenance. Current requirements and status: [docs/v1.0.0/REQUIREMENTS.md](../v1.0.0/REQUIREMENTS.md). Statuses here may have been superseded or contradicted since it was written.
+
 Investigation and remediation design only. No product, runtime, test, or Phase 3 file was modified. Method: all executions ran against a `git archive` snapshot of `main@0024449`
 extracted to `/tmp/inv` (so concurrent edits on main or in Phase 3 cannot affect or be affected by them). `cli/.env` was not read. Probes: `docs/reviews/evidence/parallel-defect-investigation-2026-10-04/`.
 Authority: `docs/reviews/NEXUS_DEFECT_RECONCILIATION_PHASE3_2026-10-04.md` (0024449).

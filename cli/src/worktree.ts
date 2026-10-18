@@ -7,6 +7,8 @@ import {
   ValidationReceipt,
   CandidateIdentity,
 } from "./core/candidate.js";
+import { ensureGitExclude } from "./core/git_exclude.js";
+export { ensureGitExclude };
 
 export interface WorktreeInfo {
   taskId: string;
@@ -74,20 +76,7 @@ export class WorktreeManager {
 
   private ensureGitExclude(): void {
     if (!this.isGitRepo()) return;
-    try {
-      const gitDir = path.join(this.gitRoot, ".git");
-      if (fs.existsSync(gitDir) && fs.statSync(gitDir).isDirectory()) {
-        const excludePath = path.join(gitDir, "info", "exclude");
-        if (fs.existsSync(excludePath)) {
-          const content = fs.readFileSync(excludePath, "utf-8");
-          if (!content.includes(".nexus/worktrees")) {
-            fs.appendFileSync(excludePath, "\n.nexus/worktrees/\n.nexus/flights/\n");
-          }
-        }
-      }
-    } catch {
-      // Ignore git exclude configuration errors
-    }
+    ensureGitExclude(this.workspace);
   }
 
   public getWorktreesBaseDir(): string {
@@ -97,7 +86,7 @@ export class WorktreeManager {
   /**
    * Spawns an isolated ephemeral worktree with a dedicated speculative branch.
    */
-  public createWorktree(taskId: string = `task-${randomUUID().slice(0, 8)}`): WorktreeCreateResult {
+  public createWorktree(taskId: string = `task-${randomUUID().slice(0, 8)}`, startPoint: string = "HEAD"): WorktreeCreateResult {
     if (!this.isGitRepo()) {
       throw new Error(`Cannot create worktree: ${this.workspace} is not a valid git repository.`);
     }
@@ -115,8 +104,8 @@ export class WorktreeManager {
     }
 
     try {
-      // Add worktree branching from current HEAD
-      execFileSync("git", ["worktree", "add", "-b", branch, worktreePath, "HEAD"], {
+      // Add worktree branching from startPoint (default HEAD)
+      execFileSync("git", ["worktree", "add", "-b", branch, worktreePath, startPoint || "HEAD"], {
         cwd: this.gitRoot,
         encoding: "utf-8",
         stdio: ["ignore", "pipe", "pipe"],
@@ -193,7 +182,13 @@ export class WorktreeManager {
         encoding: "utf-8",
         stdio: ["ignore", "pipe", "ignore"],
       }).trim();
-      if (status.length > 0) return true;
+      const statusLines = status
+        ? status
+            .split("\n")
+            .map((l) => l.trim())
+            .filter((l) => l.length > 0 && !l.startsWith("!! .nexus/") && l !== "!! .nexus")
+        : [];
+      if (statusLines.length > 0) return true;
       const ahead = execFileSync("git", ["rev-list", "--count", `HEAD..nexus/${taskId}`], {
         cwd: this.gitRoot,
         encoding: "utf-8",
@@ -215,7 +210,10 @@ export class WorktreeManager {
         cwd: worktreePath,
         encoding: "utf-8",
         stdio: ["ignore", "pipe", "ignore"],
-      }).split("\n").some((line) => line.startsWith("!! "));
+      })
+        .split("\n")
+        .map((l) => l.trim())
+        .some((line) => line.startsWith("!! ") && !line.startsWith("!! .nexus/") && line !== "!! .nexus");
     } catch {
       return true;
     }

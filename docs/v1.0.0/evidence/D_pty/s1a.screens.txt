@@ -1,0 +1,128 @@
+
+===== startup-unreachable @ 4.01s (100x30) =====
+ NEXUS   ws  ⎇ main  model m  session_20261014_094143_jgs7  auto
+
+
+
+
+
+
+
+
+
+
+
+
+                                              N E X U S
+
+                 Understand the work. Inspect the evidence. Keep the decision yours.
+
+
+
+
+
+
+
+
+
+
+
+
+ enter send · shift+enter newline · ? help ─────────────────────────────────────────────────────────
+› ask Nexus · / for commands · ? for keys
+
+===== after-prompt-unreachable @ 12.52s (100x30) =====
+ NEXUS   ws  ⎇ main  model m  session_20261014_094143_jgs7  auto
+› say hello
+  · Inference provider temporarily unavailable (network_error); waiting 1s before checking again.
+Work is preserved.
+  · Inference provider temporarily unavailable (network_error); waiting 1s before checking again.
+Work is preserved.
+  · Inference provider temporarily unavailable (network_error); waiting 3s before checking again.
+Work is preserved.
+  · Inference provider temporarily unavailable (network_error); waiting 5s before checking again.
+Work is preserved.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+ ⠋ waiting for the inference provider 0:07 · 0:08 · step 1 · esc cancels ───────────────────────────
+› type to steer the running turn · esc cancels it
+
+===== after-prompt-unreachable-28s @ 32.52s (100x30) =====
+ NEXUS   ws  ⎇ main  model m  session_20261014_094143_jgs7  auto
+› say hello
+  · Inference provider temporarily unavailable (network_error); waiting 1s before checking again.
+Work is preserved.
+  · Inference provider temporarily unavailable (network_error); waiting 1s before checking again.
+Work is preserved.
+  · Inference provider temporarily unavailable (network_error); waiting 3s before checking again.
+Work is preserved.
+  · Inference provider temporarily unavailable (network_error); waiting 5s before checking again.
+Work is preserved.
+  · Inference provider temporarily unavailable (network_error); waiting 9s before checking again.
+Work is preserved.
+  · Inference provider temporarily unavailable (network_error); waiting 8s before checking again.
+Work is preserved.
+  · Inference provider temporarily unavailable (network_error); waiting 8s before checking again.
+Work is preserved.
+
+
+
+
+
+
+
+
+
+
+
+
+ ⠋ waiting for the inference provider 0:27 · 0:28 · step 1 · esc cancels ───────────────────────────
+› type to steer the running turn · esc cancels it
+
+===== after-ctrl-c @ 34.05s (100x30) =====
+ NEXUS   ws  ⎇ main  model m  session_20261014_094143_jgs7  auto
+› say hello
+  · Inference provider temporarily unavailable (network_error); waiting 1s before checking again.
+Work is preserved.
+  · Inference provider temporarily unavailable (network_error); waiting 1s before checking again.
+Work is preserved.
+  · Inference provider temporarily unavailable (network_error); waiting 3s before checking again.
+Work is preserved.
+  · Inference provider temporarily unavailable (network_error); waiting 5s before checking again.
+Work is preserved.
+  · Inference provider temporarily unavailable (network_error); waiting 9s before checking again.
+Work is preserved.
+  · Inference provider temporarily unavailable (network_error); waiting 8s before checking again.
+Work is preserved.
+  · Inference provider temporarily unavailable (network_error); waiting 8s before checking again.
+Work is preserved.
+  · Provider recovery cancelled: operator cancelled while waiting for the provider
+
+◌ Cancelled  You stopped the turn during provider wait.
+
+
+
+
+
+
+
+
+
+ shutting down the agent… ──────────────────────────────────────────────────────────────────────────
+›

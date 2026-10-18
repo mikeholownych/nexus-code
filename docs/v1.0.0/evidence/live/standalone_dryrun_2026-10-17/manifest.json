@@ -1,0 +1,49 @@
+{
+  "createdAt": "2026-10-17T00:07:48.808Z",
+  "harness": {
+    "commit": "a2abdf7cf2aa",
+    "dirty": false,
+    "string": "a2abdf7cf2aa"
+  },
+  "config": {
+    "name": "nexus@standalone-llamacpp/engineering/b0",
+    "agent": "nexus",
+    "endpoint": "https://10.0.8.5:8443/v1",
+    "model": "engineering/b0",
+    "apiKey": {
+      "file": "~/.config/nexus/config.env",
+      "var": "LOCAL_LLM_API_KEY"
+    },
+    "caFile": "~/.config/nexus/t5820-gateway-ca.crt",
+    "serverProfile": "llamacpp",
+    "runs": 1,
+    "steps": 60,
+    "minutes": 20,
+    "env": {}
+  },
+  "fingerprint": {
+    "alias": "engineering/b0",
+    "listed": true,
+    "ownedBy": "aihost-orchestrator",
+    "contextLength": 65536,
+    "weightsSha256": null,
+    "serverBuild": null,
+    "sampling": null
+  },
+  "agentVersion": {
+    "agent": "nexus",
+    "version": "0.1.0-alpha.2 (a2abdf7cf2aa, v1/fix-positional-options)",
+    "executablePath": "/tmp/claude-1000/-home-mike-nexus-code/b79a4439-e6ad-4986-aa16-4a81f838ac71/scratchpad/snaps/fixpo/cli/dist/index.js",
+    "executableSha256": "06bb6aa3c31bcc974126049f693053470626021df205d8800e096a6801fcead5"
+  },
+  "budget": {
+    "steps": 60,
+    "minutes": 20
+  },
+  "runs": 1,
+  "tasks": [
+    "t2-bugfix-csv"
+  ],
+  "host": "mike-dev",
+  "node": "v24.21.0"
+}

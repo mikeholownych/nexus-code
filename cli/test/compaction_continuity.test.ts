@@ -42,6 +42,8 @@ const cfg = (endpoint: string, workspace: string, o: Partial<HarnessConfig> = {}
   workspace,
   shell: "bash",
   continuation: { ...DEFAULT_CONTINUATION },
+  approvalMode: "auto",
+  fullAccess: true,
   ...o,
 });
 const write = (name: string, content = `${name}\n`): Reply => ({ kind: "tools", calls: [{ name: "write_file", args: { path: name, content } }] });
@@ -342,7 +344,7 @@ describe("C. operator /compact is queued during active work", () => {
   test("during a tool batch and during an approval: never run until the batch has settled", { timeout: 60_000 }, async () => {
     const repo = makeRepo();
     const gw = await startGateway((n) => (n === 1 ? run("sleep 1; echo slept") : n === 2 ? write("approved.txt") : n === 3 ? write("w3.txt") : text("done")));
-    const agent = quiet(new AutonomousAgent(cfg(gw.url, repo)));
+    const agent = quiet(new AutonomousAgent(cfg(gw.url, repo, { approvalMode: "review", fullAccess: false })));
     const events: string[] = [];
     let releaseApproval!: () => void;
     const approval = new Promise<void>((r) => (releaseApproval = r));

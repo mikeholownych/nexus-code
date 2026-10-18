@@ -5,7 +5,7 @@
  */
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { credentialStorageHome, LocalLlmClient } from "./client.js";
+import { credentialStorageHome, LocalLlmClient, operatorSetting } from "./client.js";
 import { buildConfig, providerBaseUrl, providerKey } from "./config.js";
 import { resolveCredential } from "./credentials.js";
 import { originOf, PROVIDERS, providerDefinition, type ConnectMethod } from "./providers.js";
@@ -132,7 +132,10 @@ export function connectionOf(providerId: string): { connected: boolean; source?:
     try { providerBaseUrl("compatible"); } catch { return { connected: false }; }
   }
   const found = resolveCredential(providerId, def.credentialEnv);
-  return found ? { connected: true, source: found.source, external: found.kind === "external" } : { connected: false };
+  if (found) return { connected: true, source: found.source, external: found.kind === "external" };
+  // A key-less compatible server (plain vLLM, llama.cpp) the operator declared with NEXUS_COMPATIBLE_AUTH=none (PRV-14).
+  if (providerId === "compatible" && operatorSetting("NEXUS_COMPATIBLE_AUTH") === "none") return { connected: true, source: "declared key-less (NEXUS_COMPATIBLE_AUTH=none)" };
+  return { connected: false };
 }
 
 export async function buildCatalog(config: HarnessConfig, opts: { timeoutMs?: number } = {}): Promise<Catalog> {

@@ -31,6 +31,8 @@ const cfg = (endpoint: string, workspace: string, o: Partial<HarnessConfig> = {}
   temperature: 0,
   workspace,
   shell: "bash",
+  approvalMode: "auto",
+  fullAccess: true,
   ...o,
 });
 const write = (name: string, content = `${name}\n`): Reply => ({ kind: "tools", calls: [{ name: "write_file", args: { path: name, content } }] });
@@ -139,6 +141,85 @@ describe("continuation beyond the per-segment step limit", () => {
       agent.shutdown();
       await gw.close();
       fs.rmSync(repo, { recursive: true, force: true });
+    }
+  });
+
+  test("an in-process conversation reset preserves trusted verifier state, while changing workspace invalidates it", () => {
+    const repo = makeRepo();
+    const otherWorkspace = makeRepo();
+    const agent = quiet(new AutonomousAgent(cfg("http://127.0.0.1:9/v1", repo)));
+    const baseline = { command: "npm test", failed: true, tests: new Map([['test/a.test.js', "test('a')"]]), verifier: { files: new Map() }, trustedDeliverables: ["src/a.js"], at: new Date().toISOString() };
+    try {
+      (agent as any).hasPendingModifications = true;
+      (agent as any).changeBaseline = baseline;
+      (agent as any).verificationBaselineInvalidated = false;
+      agent.resetConversation();
+      assert.equal((agent as any).changeBaseline, baseline, "same-process conversation reset retains the pre-change snapshot");
+      assert.equal((agent as any).verificationBaselineInvalidated, false);
+      assert.equal(agent.hasUnverifiedChanges(), true);
+
+      agent.setWorkspace(otherWorkspace);
+      assert.notEqual((agent as any).changeBaseline, baseline, "switching workspace cannot reuse the prior baseline");
+      assert.equal((agent as any).verificationBaselineInvalidated, true);
+      assert.equal(agent.hasUnverifiedChanges(), true, "the pending obligation remains fail-closed");
+    } finally {
+      agent.shutdown();
+      fs.rmSync(repo, { recursive: true, force: true });
+      fs.rmSync(otherWorkspace, { recursive: true, force: true });
+    }
+  });
+
+  test("replacing a workspace at the same lexical path invalidates its verifier baseline", () => {
+    const parent = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-workspace-replacement-"));
+    const repo = path.join(parent, "repo");
+    const movedRepo = path.join(parent, "repo-original");
+    fs.mkdirSync(repo);
+    const agent = quiet(new AutonomousAgent(cfg("http://127.0.0.1:9/v1", repo)));
+    const baseline = { command: "npm test", failed: true, tests: new Map([["test/a.test.js", "test('a')"]]), verifier: { files: new Map() }, trustedDeliverables: ["src/a.js"], at: new Date().toISOString() };
+    try {
+      (agent as any).hasPendingModifications = true;
+      (agent as any).changeBaseline = baseline;
+      (agent as any).verificationBaselineInvalidated = false;
+
+      fs.renameSync(repo, movedRepo);
+      fs.mkdirSync(repo);
+      agent.setWorkspace(repo);
+
+      assert.notEqual((agent as any).changeBaseline, baseline, "a different directory at the same configured path cannot reuse the old baseline");
+      assert.equal((agent as any).verificationBaselineInvalidated, true);
+      assert.equal(agent.hasUnverifiedChanges(), true, "the pending obligation remains fail-closed");
+      assert.doesNotThrow(() => (agent as any).primaryWorkspacePathIdentity.assertCurrent(), "explicit reselection rebinds persistence to the replacement directory");
+    } finally {
+      agent.shutdown();
+      fs.rmSync(parent, { recursive: true, force: true });
+    }
+  });
+
+  test("an ordinary run rejects a trusted baseline after same-path workspace replacement", async () => {
+    const parent = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-run-workspace-replacement-"));
+    const repo = path.join(parent, "repo");
+    const movedRepo = path.join(parent, "repo-original");
+    fs.mkdirSync(repo);
+    const gw = await startGateway(() => ({ kind: "tools", calls: [{ name: "task_completed", args: { summary: "done" } }] }));
+    const agent = quiet(new AutonomousAgent(cfg(gw.url, repo), 0, { durable: false }));
+    const baseline = { command: "npm test", failed: true, tests: new Map([["test/a.test.js", "test('a')"]]), verifier: { files: new Map() }, trustedDeliverables: ["src/a.js"], at: new Date().toISOString() };
+    try {
+      (agent as any).hasPendingModifications = true;
+      (agent as any).changeBaseline = baseline;
+      (agent as any).verificationBaselineInvalidated = false;
+      fs.renameSync(repo, movedRepo);
+      fs.mkdirSync(repo);
+
+      const result = await agent.run("continue pending work");
+
+      assert.notEqual((agent as any).changeBaseline, baseline, "run reset must not carry the prior directory's snapshot");
+      assert.equal((agent as any).verificationBaselineInvalidated, true);
+      assert.equal(agent.hasUnverifiedChanges(), true);
+      assert.notEqual(result.outcome, "VERIFIED", "replacement workspace cannot inherit a trusted verifier result");
+    } finally {
+      agent.shutdown();
+      await gw.close();
+      fs.rmSync(parent, { recursive: true, force: true });
     }
   });
 
@@ -454,19 +535,35 @@ describe("the objective survives detailed follow-ups and stays complete in conte
 
 describe("verified means a recorded passing verifier run on the current workspace", () => {
   test("verified without a current pass is refused; after a passing run_tests it binds that run; a later change demotes it", { timeout: 60_000 }, async () => {
-    const repo = makeRepo({ Makefile: 'test:\n\t@echo "✔ importer works" && echo "ℹ tests 1"\n' });
+    const repo = makeRepo({
+      "importer.mjs": 'export function imported() { return false; }\n',
+      "test/importer.test.mjs": [
+        'import { test } from "node:test";',
+        'import assert from "node:assert/strict";',
+        'import { imported } from "../importer.mjs";',
+        'test("importer works", () => assert.equal(imported(), true));',
+        "",
+      ].join("\n"),
+      Makefile: ".PHONY: test\ntest:\n\t@env -u NODE_TEST_CONTEXT node --test test/importer.test.mjs\n",
+    });
     const script = (n: number): Reply =>
       n === 1
         ? { kind: "tools", calls: [{ name: "update_requirements", args: { requirements: [{ id: "R1", status: "verified", evidence: ["I checked it"] }] } }] }
         : n === 2
-          ? { kind: "tools", calls: [{ name: "run_tests", args: {} }] }
+          ? { kind: "tools", calls: [{ name: "write_file", args: { path: "importer.mjs", content: "export function imported() { return true; }\n", overwrite: true } }] }
           : n === 3
-            ? { kind: "tools", calls: [{ name: "update_requirements", args: { requirements: [{ id: "R1", status: "verified", evidence: ["importer.ts"] }] } }] }
+            ? { kind: "tools", calls: [{ name: "run_tests", args: {} }] }
             : n === 4
+              ? { kind: "tools", calls: [{ name: "update_requirements", args: { requirements: [{ id: "R1", status: "verified", evidence: ["importer.mjs"] }] } }] }
+            : n === 5
               ? write("later-change.txt")
               : text("stopping");
     const gw = await startGateway(script);
-    const agent = quiet(new AutonomousAgent(cfg(gw.url, repo, { continuation: { ...DEFAULT_CONTINUATION, maxCompletionNudges: 0 } })));
+    const agent = quiet(new AutonomousAgent(cfg(gw.url, repo, {
+      authoritativeVerifierCommand: "make test",
+      trustedDeliverableFiles: ["importer.mjs"],
+      continuation: { ...DEFAULT_CONTINUATION, maxCompletionNudges: 0 },
+    })));
     try {
       await agent.runTurn(OBJECTIVE);
       const refusal = (gw.requests[1] as any).messages.filter((m: any) => m.role === "tool" && m.name === "update_requirements").at(-1);
@@ -498,7 +595,7 @@ describe("verified means a recorded passing verifier run on the current workspac
 });
 
 describe("verifier attempts are remembered against their inputs", () => {
-  test("an unchanged failing verifier is not rerun; a change reruns it; the gate stays closed until it passes", { timeout: 60_000 }, async () => {
+  test("an unchanged failing verifier is not rerun; a change reruns it, but no declared scope stays regression-only", { timeout: 60_000 }, async () => {
     const counter = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "nexus-verifier-runs-")), "runs.log");
     const repo = makeRepo({ Makefile: `test:\n\techo run >> ${counter}\n\ttest -f fixed.txt || (echo "FAIL fixed.txt missing"; exit 1)\n\t@echo "ℹ tests 1"\n` });
     const gw = await startGateway((n) =>
@@ -527,7 +624,8 @@ describe("verifier attempts are remembered against their inputs", () => {
       const skipped = (gw.requests[3] as any).messages.filter((m: any) => m.role === "tool" && m.name === "task_completed").at(-1);
       assert.match(skipped.content, /already failed on these exact workspace inputs/);
       assert.match(skipped.content, /Failed check: FAIL fixed\.txt missing/);
-      assert.equal(turn.outcome, "VERIFIED");
+      assert.equal(turn.outcome, "REGRESSION_FREE", "a passing verifier without an operator-declared deliverable binding is not VERIFIED");
+      assert.equal(agent.hasUnverifiedChanges(), true, "passing tests do not clear the undeclared deliverable obligation");
     } finally {
       agent.shutdown();
       await gw.close();
@@ -588,7 +686,7 @@ describe("a reused verifier failure never blocks a legitimate rerun", () => {
 
   test("a git-ignored dependency installed outside Nexus changes the external fingerprint, so the verifier reruns", { timeout: 60_000 }, async () => {
     const counter = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "nexus-runs-")), "runs");
-    const repo = makeRepo({ ".gitignore": "node_modules/\n", ...failingMake(counter, "node_modules/dep") });
+    const repo = makeRepo({ ".gitignore": "node_modules/\n", ...failingMake(counter, "fixed.txt") });
     const gw = await startGateway((n) => {
       if (n === 3) {
         fs.mkdirSync(path.join(repo, "node_modules/dep"), { recursive: true });
@@ -601,7 +699,9 @@ describe("a reused verifier failure never blocks a legitimate rerun", () => {
       await agent.runTurn("Make the build pass.");
       const attempts = agent.getObjective()!.verification;
       assert.equal(attempts[0].inputs, attempts[1].inputs, "git-ignored files are not part of the workspace identity");
-      assert.deepEqual(attempts.map((a) => a.status), ["FAILED", "PASSED"]);
+      assert.notEqual(attempts[0].external, attempts[1].external, "the ignored dependency install changes external verifier inputs");
+      assert.deepEqual(attempts.map((a) => a.status), ["FAILED", "FAILED"], "the verifier reruns and records its still-failing result");
+      assert.equal(runs(counter), 3, "baseline, first attempt, and rerun after the dependency marker changed");
     } finally {
       agent.shutdown();
       await gw.close();
@@ -630,7 +730,7 @@ describe("a reused verifier failure never blocks a legitimate rerun", () => {
     }
   });
 
-  test("a failure recorded by another process (a resumed session) is not reused", { timeout: 60_000 }, async () => {
+  test("a failure recorded by another process is not reused as trusted verification after session recovery", { timeout: 60_000 }, async () => {
     const counter = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "nexus-runs-")), "runs");
     const repo = makeRepo(failingMake(counter, "never.txt"));
     const allDone: Reply = {
@@ -652,13 +752,14 @@ describe("a reused verifier failure never blocks a legitimate rerun", () => {
     const second = quiet(new AutonomousAgent(cfg(gw2.url, repo, { continuation: { ...DEFAULT_CONTINUATION, maxCompletionNudges: 0 } })));
     try {
       second.restoreSession(messages!, true, ledger);
-      await second.runTurn("continue");
+      const resumed = await second.runTurn("continue");
       const attempts = second.getObjective()!.verification;
-      assert.deepEqual(attempts.map((a) => a.status), ["FAILED", "FAILED"], "same objective, so both attempts are in its ledger");
-      assert.equal(attempts[0].inputs, attempts[1].inputs, "the workspace did not change between the processes");
-      assert.notEqual(attempts[0].epoch, attempts[1].epoch);
-      // The first process's run before its edit and its attempt, then the resumed process's own attempt.
-      assert.equal(runs(counter), 3, "the resumed process ran the verifier itself");
+      assert.deepEqual(attempts.map((a) => a.status), ["FAILED"], "the earlier failure remains evidence, but an unauthenticated recovery cannot add a trusted attempt");
+      assert.notEqual(resumed.outcome, "VERIFIED", "restoring mutable session state cannot restore verification authority");
+      assert.equal(second.hasUnverifiedChanges(), true, "recovered work stays pending until an operator-reviewed baseline is established");
+      // The first process's baseline run and its own attempt; the resumed process must not run a generic verifier on an
+      // unauthenticated workspace and promote its result.
+      assert.equal(runs(counter), 2, "recovery blocked the untrusted verifier run");
     } finally {
       second.shutdown();
       await gw.close();

@@ -3,7 +3,7 @@
 Branch `fix/inference-transport-cause`, baseline 9f103ee. Code references are to `cli/src`.
 
 ```
-user workflow/command (/team, nexus operation)
+user workflow/command (/team [experimental], nexus operation [experimental])
   -> orchestration strategy (TeamOrchestrator: roles -> work units)
   -> durable work units + dependencies (DurableOperationState, OperationStore)
   -> convergence scheduler (ConvergenceScheduler decides; OperationRunner owns time, execution, persistence)
@@ -115,7 +115,7 @@ role-specific `runSubagent` prompt plumbing are removed.
 | review (only with `--independent-review`, or `/team reviewer`) | reviewer | implement | `review`, `independentOf: [implement]` |
 
 `/team <role>` is a one-unit operation. Each unit is an `AgentWorkUnitExecutor` turn (streaming `runTurn` with
-provider recovery, context admission and a durable task conversation) capped at 15 steps; dependency summaries are
+provider recovery, context admission and a durable task conversation) run in 15-step segments (with durable checkpoints at segment boundaries; under default continuation units run until completion, stagnation or cancellation, while `--no-continuation` bounds the turn at 15 steps); dependency summaries are
 passed to dependents as context. The operation is persisted under `~/.nexus/tasks/team-xxxxxxxx.json`, so
 `nexus operation status|resume|decide` work on team operations. `/team` waits in-process up to 60 s; a longer wait
 returns `NOT COMPLETE (WAITING)` with the resume command. Ctrl-C in the legacy REPL aborts the operation
@@ -146,7 +146,7 @@ work cannot silently become required.
 
 ## 7. Credential boundary
 
-Root cause (9f103ee): `readLatestAuthToken()` read the stored gateway token (`~/.config/opencode/t5820-client-token`)
+Root cause (9f103ee): `readLatestAuthToken()` read the stored gateway token (`NEXUS_GATEWAY_TOKEN_FILE` / `~/.config/nexus/gateway-token`)
 and `LocalLlmClient` attached it to *any* endpoint configured without an explicit key, including failover endpoints
 and the 401 reload path; `buildConfig` baked it into `config.apiKey`; planner/coder configs then reused
 `config.apiKey` for their own endpoints.
@@ -198,9 +198,11 @@ a user systemd unit or `@reboot` cron entry. That hook is not installed by Nexus
 ## 10. Remaining duplication and limitations
 
 - `runSubagent` remains a second, in-turn agent loop for `spawn_subagent`. It now has provider recovery, context
-  admission and a truthful result, but it is non-streaming, non-durable and has no cancellation signal of its own
-  (it ends with the parent turn). Folding it into `runTurn` would change the parent/child request authority tests;
-  left as follow-up.
+  admission with `measureAdmission` (closing the strict token counting gap per REQ-AGT-111 / AGT-05), matched
+  offered and accepted tool sets via `getEffectiveTools()`, token accounting merged into parent stats, and a truthful result.
+  Remaining divergences from `runTurn` deferred to post-v1 include: non-streaming responses, in-turn subagents are non-durable
+  (no task state records on disk per REQ-AGT-105), no empty-reply retry, no backoff for poll loops, no operator steering queue,
+  and no cancellation signal separate from the parent turn. Folding it into a single shared step function remains post-v1.
 - The legacy REPL and the slash router each wire `/team` to `TeamOrchestrator` (display only; same operation).
 - Roles run sequentially; the scheduler would allow parallel units but no concurrency was added.
 - Open (I3): an exhausted 502/504 or ENOTFOUND blocks the unit instead of parking it, and a context-capacity

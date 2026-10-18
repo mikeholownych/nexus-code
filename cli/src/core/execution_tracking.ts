@@ -239,7 +239,7 @@ const WORKSPACE_OBSERVERS = new Set([
   "task_completed",
 ]);
 const BOOKKEEPING = new Set(["update_plan", "update_requirements", "enable_tools"]);
-const MUTATORS = new Set(["write_file", "edit_file", "patch_file", "delete_file", "move_file", "create_dir", "apply_patch", "multi_edit"]);
+const MUTATORS = new Set(["write_file", "edit_file", "patch_file", "delete_file", "move_file", "create_dir", "apply_patch", "multi_edit", "write_workspace"]);
 
 export function actionKind(name: string): ActionKind {
   if (BOOKKEEPING.has(name)) return "bookkeeping";
@@ -411,6 +411,14 @@ export class ExecutionTracker {
       reasons.push("acceptance ledger changed");
     }
     if (input.operatorInput) reasons.push("operator input applied");
+    if (stateUnknown) {
+      const distinctMutation = input.verdicts.some((v) => {
+        if (v.record.actionKind !== "mutate" || v.record.outcomeClass !== "success") return false;
+        if (v.record.count > 1) return false;
+        return !this.data.repetitions.some((r) => r !== v.record && r.actionId === v.record.actionId);
+      });
+      if (distinctMutation) reasons.push("distinct workspace mutation on unknown state");
+    }
     const progressed = reasons.length > 0;
     if (progressed) {
       this.data.stepsWithoutProgress = 0;

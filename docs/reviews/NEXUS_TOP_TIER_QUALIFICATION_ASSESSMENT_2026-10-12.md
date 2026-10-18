@@ -1,5 +1,7 @@
 # Nexus Code: top-tier qualification assessment (2026-10-12)
 
+> **Historical record.** This document is kept for provenance. Current requirements and status: [docs/v1.0.0/REQUIREMENTS.md](../v1.0.0/REQUIREMENTS.md). Statuses here may have been superseded or contradicted since it was written.
+
 Read-only, evidence-based assessment of the gaps between Nexus Code and a top-tier coding harness. No implementation,
 branch, build of the installed runtime, service or configuration was changed. All reproductions ran in isolated
 `git archive` extracts with temporary `HOME` directories and a deterministic mock gateway (no live inference).

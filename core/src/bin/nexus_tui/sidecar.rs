@@ -513,9 +513,15 @@ echo '{"v":1,"type":"hello","protocol":1,"pid":7}'"#),
             eprintln!("skipping: node or cli/dist/sidecar.js unavailable (run make build)");
             return;
         }
+        // A throwaway HOME: the sidecar creates task state under ~/.nexus, which must never be the operator's.
+        let home = std::env::temp_dir().join(format!("nexus-sidecar-test-{}", std::process::id()));
+        std::fs::create_dir_all(&home).unwrap();
         let spec = SidecarSpec {
-            program: "node".into(),
+            program: "env".into(),
             args: vec![
+                format!("HOME={}", home.display()),
+                format!("XDG_CONFIG_HOME={}", home.join(".config").display()),
+                "node".into(),
                 script.display().to_string(),
                 "-w".into(),
                 repo.display().to_string(),
@@ -540,5 +546,7 @@ echo '{"v":1,"type":"hello","protocol":1,"pid":7}'"#),
             other => panic!("expected session.state, got {other:?}"),
         }
         assert_eq!(sidecar.shutdown(Duration::from_secs(10)), Some(0));
+        assert!(home.join(".nexus").exists(), "the sidecar's state went to the throwaway HOME");
+        let _ = std::fs::remove_dir_all(&home);
     }
 }

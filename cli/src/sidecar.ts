@@ -7,7 +7,8 @@ import { Command } from "commander";
 import type { AgentObserver } from "./agent.js";
 import { CheckpointManager } from "./checkpoint.js";
 import { autoDetectModel, buildConfig, loadEnvironment } from "./config.js";
-import { withDurableSync } from "./core/durable_file.js";
+import { withDurableSync, writePrivateFile } from "./core/durable_file.js";
+import { isNexusDirPermissive } from "./doctor.js";
 import { ApplicationCore } from "./core/app.js";
 import { redactForPersistence } from "./core/persistence_protection.js";
 import { TurnResult, failedTurnFromError, lifecycleStatusForTurn, summarizeTurn } from "./core/turn.js";
@@ -16,7 +17,8 @@ import { redactSecrets } from "./ui.js";
 import { approvalReview } from "./approval_review.js";
 import { EvidenceLedger, LastTurn, MAX_DIFF_DETAIL, MAX_EVIDENCE, ReceiptSection, receiptSections, redactedJson, safeDiffText } from "./evidence.js";
 import { countDiffLines, previewDiff, visibleControls } from "./file_diff.js";
-import type { ChatMessage } from "./types.js";
+import type { ChatMessage, ApprovalMode } from "./types.js";
+import { isWorkspaceTrusted } from "./workspace_trust.js";
 import { STEERING_PREFIX } from "./core/objective.js";
 
 /** Messages of a resumed conversation sent to the client, and the characters kept of each. */
@@ -50,7 +52,7 @@ export interface SidecarOptions {
   app: ApplicationCore;
   /** Receives complete protocol lines (each ends with "\n"). */
   write: (line: string) => void;
-  mode: "auto" | "review";
+  mode?: ApprovalMode;
   onShutdown?: () => void;
   /** Session to continue: an id, or "latest". */
   resume?: string;
@@ -63,7 +65,7 @@ export class SidecarServer {
   private readonly app: ApplicationCore;
   private readonly write: (line: string) => void;
   private readonly onShutdown: () => void;
-  private mode: "auto" | "review";
+  private mode: ApprovalMode;
   private alwaysApprove = false;
   private activeTurn?: Promise<void>;
   private turnAbort?: AbortController;
@@ -88,11 +90,14 @@ export class SidecarServer {
   private pendingCompactions: Array<{ ids: string[]; llm: boolean }> = [];
   /** Title of the session record (the latest turn's prompt), kept by saves made outside a turn. */
   private sessionTitle?: string;
+  private readonly startupProbeAbort = new AbortController();
 
   constructor(options: SidecarOptions) {
     this.app = options.app;
     this.write = options.write;
-    this.mode = options.mode;
+    const config = this.app.getConfig();
+    this.mode = options.mode ?? config.approvalMode ?? (isWorkspaceTrusted(config.workspace, Boolean(config.readOnly)) ? "auto" : "review");
+    this.app.getAgent().setApprovalMode(this.mode);
     this.onShutdown = options.onShutdown ?? (() => {});
     this.resume = options.resume;
     this.checkpointManager = this.app.getCheckpointManager();
@@ -114,6 +119,14 @@ export class SidecarServer {
     }
     this.emitSessionState();
     if (resumed) this.emit({ type: "notice", text: resumed.message });
+    if (isNexusDirPermissive()) {
+      this.emit({ type: "notice", text: "your Nexus state is readable by other users; run `nexus doctor --fix`" });
+    }
+    void this.app.getAgent().probeStartupEndpoint(this.startupProbeAbort.signal).then((warning) => {
+      if (warning && !this.shutdownPromise) {
+        this.emit({ type: "notice", text: redactSecrets(warning) });
+      }
+    }).catch(() => {});
   }
 
   /** Resolves once no turn is running. */
@@ -475,9 +488,10 @@ export class SidecarServer {
   }
 
   private confirmFor(turnId: string, signal: AbortSignal) {
-    return this.mode === "review"
-      ? (tool: string, args: Record<string, any>) => this.requestApproval(turnId, signal, tool, args)
-      : undefined;
+    return (tool: string, args: Record<string, any>) => {
+      if (this.alwaysApprove) return Promise.resolve(true);
+      return this.requestApproval(turnId, signal, tool, args);
+    };
   }
 
   /** One agent turn: checkpoint, run, save the session, report the result. */
@@ -507,7 +521,7 @@ export class SidecarServer {
     try {
       turn = await agent.runTurn(prompt, this.confirmFor(turnId, signal), { signal });
     } catch (err) {
-      turn = failedTurnFromError(err, this.app.getConfig().maxSteps);
+      turn = failedTurnFromError(err, this.app.getConfig().maxSteps, agent.hasUnverifiedChanges());
     } finally {
       agent.setObserver(undefined);
       agent.setProgressListener(() => this.saveSession(this.sessionTitle));
@@ -567,6 +581,7 @@ export class SidecarServer {
     if (approved && always) {
       this.alwaysApprove = true;
       this.mode = "auto";
+      this.app.getAgent().setApprovalMode("auto");
       this.emitSessionState();
     }
     pending.settle(approved);
@@ -634,8 +649,10 @@ export class SidecarServer {
       app: this.app,
       mode: () => this.mode,
       setMode: (mode) => {
-        this.mode = mode;
-        if (mode === "review") this.alwaysApprove = false;
+        this.mode = mode as ApprovalMode;
+        this.app.getAgent().setApprovalMode(this.mode);
+        if (this.mode !== "auto") this.alwaysApprove = false;
+        this.emitSessionState();
       },
       sessionId: () => this.sessionId,
       setSessionId: (sessionId) => {
@@ -647,6 +664,7 @@ export class SidecarServer {
       resumeSession: (sessionId) => this.resumeSession(sessionId),
       history: () => this.history,
       confirm: (signal) => this.confirmFor(id, signal),
+      requestApproval: (tool, args, signal) => this.requestApproval(id, signal, tool, args),
       receipt: () => this.receipt(),
     };
   }
@@ -661,8 +679,7 @@ export class SidecarServer {
     try {
       const name = `${evidence}-${callId}`.replace(/[^A-Za-z0-9._-]/g, "_").slice(0, 160);
       const file = this.app.getSessionManager().operationDiffPath(this.sessionId, name);
-      fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
-      fs.writeFileSync(file, diff.endsWith("\n") ? diff : `${diff}\n`, { encoding: "utf8", mode: 0o600 });
+      writePrivateFile(file, diff.endsWith("\n") ? diff : `${diff}\n`);
       this.diffFiles.set(evidence, file);
       return file;
     } catch {
@@ -766,7 +783,12 @@ export class SidecarServer {
 
   private resumeSession(id?: string): { ok: boolean; message: string } {
     const manager = this.app.getSessionManager();
-    const session = !id || id === "latest" ? manager.getLatestSession() : manager.loadSession(id);
+    let session;
+    try {
+      session = !id || id === "latest" ? manager.getLatestSession() : manager.loadSession(id);
+    } catch (err: any) {
+      return { ok: false, message: err.message };
+    }
     if (!session) return { ok: false, message: `Session not found: ${id || "latest"}` };
     if (!Array.isArray(session.messages)) return { ok: false, message: `Session ${session.id} is unreadable: it has no message list.` };
     if (session.workspace && fs.existsSync(session.workspace)) this.setWorkspace(session.workspace);
@@ -822,6 +844,7 @@ export class SidecarServer {
     for (const signIn of this.signIns.values()) signIn.cancel();
     this.signIns.clear();
     this.shutdownPromise ??= (async () => {
+      this.startupProbeAbort.abort();
       this.turnAbort?.abort(new Error("sidecar shutdown"));
       await this.idle();
       this.app.shutdown();
@@ -833,6 +856,8 @@ export class SidecarServer {
   private emitSessionState(): void {
     const config = this.app.getConfig();
     const git = getGitInfo(config.workspace);
+    const trusted = isWorkspaceTrusted(config.workspace, Boolean(config.readOnly));
+    const sandboxStatus = config.sandbox ? (typeof config.sandbox === "string" ? config.sandbox : "on") : "off";
     this.emit({
       type: "session.state",
       workspace: config.workspace,
@@ -842,6 +867,11 @@ export class SidecarServer {
       git: git.isRepo ? { branch: git.branch, dirty: git.dirtyCount } : null,
       busy: Boolean(this.activeTurn),
       session: this.sessionId,
+      posture: {
+        mode: this.mode,
+        sandbox: sandboxStatus,
+        trusted,
+      },
     });
   }
 
@@ -919,20 +949,24 @@ async function main(argv: string[]): Promise<void> {
     .option("--sandbox [mode]", "Isolate command execution using bubblewrap or Docker")
     .option("--worktree", "Isolate execution inside an ephemeral git worktree")
     .option("--authoritative-verifier <command>", "Trusted command that must pass before any task completion; its success may authorize automatic worktree merge")
+    .option("--deliverable-file <path>", "Operator-declared workspace-relative product file used for VERIFIED binding (repeatable)", (value: string, previous: string[] = []) => [...previous, value], [])
     .option("--record-flight", "Record execution into an append-only .flightlog")
     .option("--planner-model <name>", "Deep reasoning model for planning")
     .option("--planner-endpoint <url>", "Inference endpoint for the planner model")
     .option("--coder-model <name>", "Model for code implementation")
     .option("--coder-endpoint <url>", "Inference endpoint for the coder model")
     .option("--approve", "Require operator approval before edits and shell commands")
+    .option("-y, --yes", "Run non-interactively without approval prompts (forces auto mode)")
+    .option("--mode <mode>", "Execution mode: auto, review, or read-only (default: auto for trusted workspaces, review for untrusted)")
     .option("-r, --resume [id]", "Resume a saved session (the latest when no id is given)")
     .parse(argv);
   const options = program.opts();
   const config = await autoDetectModel(buildConfig(options));
+  config.surface = "tui";
   const app = new ApplicationCore(config);
   const server = new SidecarServer({
     app,
-    mode: options.approve ? "review" : "auto",
+    mode: config.approvalMode,
     resume: typeof options.resume === "string" ? options.resume : options.resume ? "latest" : undefined,
     write: (line) => {
       protocolWrite(line);

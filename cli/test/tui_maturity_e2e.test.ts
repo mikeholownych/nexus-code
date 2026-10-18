@@ -50,7 +50,7 @@ ptyTest("the active TUI end to end through a pseudo-terminal", { timeout: 240_00
     tui: TUI,
     recorder: RECORDER,
     node: process.execPath,
-    sidecar_args: ["-w", repo, "-e", gw.url, "-m", "m"],
+    sidecar_args: ["-w", repo, "-e", gw.url, "-m", "m", "--mode", "auto"],
     cast: path.join(EVIDENCE, "nexus_maturity_tui_2026-10-11.cast"),
     transcript: path.join(EVIDENCE, "nexus_maturity_tui_2026-10-11.txt"),
     env: {

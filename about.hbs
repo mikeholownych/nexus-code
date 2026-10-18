@@ -1,0 +1,19 @@
+Third-Party Rust Software Notices and Licenses
+==============================================
+
+This binary contains third-party software components licensed under the
+following terms:
+
+{{#each licenses}}
+--------------------------------------------------------------------------------
+{{{name}}}
+--------------------------------------------------------------------------------
+
+Used by:
+{{#each used_by}}
+  - {{{crate.name}}} {{{crate.version}}}
+{{/each}}
+
+{{{text}}}
+
+{{/each}}

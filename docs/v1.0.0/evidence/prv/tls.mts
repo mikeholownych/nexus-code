@@ -1,0 +1,14 @@
+import * as https from "node:https"; import * as fs from "node:fs";
+const SNAP = "/tmp/claude-1000/-home-mike-nexus-code/b79a4439-e6ad-4986-aa16-4a81f838ac71/scratchpad/snap/cli/src";
+const D = "/tmp/claude-1000/-home-mike-nexus-code/b79a4439-e6ad-4986-aa16-4a81f838ac71/scratchpad/prv";
+const s = https.createServer({ key: fs.readFileSync(`${D}/k.pem`), cert: fs.readFileSync(`${D}/c.pem`) }, (q, r) => { console.log("server saw auth header:", q.headers["authorization"] ? "present" : "none"); r.end('{"data":[]}'); });
+await new Promise<void>(r => s.listen(0, "127.0.0.1", () => r()));
+const url = `https://127.0.0.1:${(s.address() as any).port}/v1/models`;
+const tryFetch = async (label: string) => { try { const r = await fetch(url, { headers: { Authorization: "Bearer sk-test" } }); console.log(label, "-> HTTP", r.status, "(TLS NOT verified)"); } catch (e: any) { console.log(label, "-> rejected:", e.cause?.code ?? e.message); } };
+await tryFetch("before loadEnvironment");
+process.chdir(`${D}/proj`);
+const { loadEnvironment } = await import(`${SNAP}/config.ts`);
+loadEnvironment();
+console.log("NODE_TLS_REJECT_UNAUTHORIZED now:", process.env.NODE_TLS_REJECT_UNAUTHORIZED);
+await tryFetch("after loading project .env");
+s.close(); process.exit(0);

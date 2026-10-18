@@ -38,6 +38,8 @@ const cfg = (endpoint: string, workspace: string, o: Partial<HarnessConfig> = {}
   workspace,
   shell: "bash",
   continuation: { ...DEFAULT_CONTINUATION },
+  approvalMode: "auto",
+  fullAccess: true,
   ...o,
 });
 const MARKER = "CUT-OFF-REPLY-MARKER";

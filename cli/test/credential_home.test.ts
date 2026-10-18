@@ -17,9 +17,8 @@ const FOREIGN = "http://127.0.0.1:18562/v1";
 
 function installHome(home: string, endpoint: string, token?: string | { link: string }): string {
   fs.mkdirSync(path.join(home, ".config/nexus"), { recursive: true });
-  fs.mkdirSync(path.join(home, ".config/opencode"), { recursive: true });
   fs.writeFileSync(path.join(home, ".config/nexus/config.env"), `LOCAL_LLM_ENDPOINT=${endpoint}\n`);
-  const tokenFile = path.join(home, ".config/opencode/t5820-client-token");
+  const tokenFile = path.join(home, ".config/nexus/gateway-token");
   if (typeof token === "string") fs.writeFileSync(tokenFile, `${token}\n`, { mode: 0o600 });
   else if (token) fs.symlinkSync(token.link, tokenFile);
   return tokenFile;

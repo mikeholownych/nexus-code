@@ -6,29 +6,83 @@ on:
 
 permissions:
   contents: write
+  id-token: write
+  attestations: write
 
 jobs:
   package:
     runs-on: ubuntu-22.04
     permissions:
       contents: write
+      id-token: write
+      attestations: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           fetch-depth: 0
       - run: sudo apt-get update
-      - run: sudo apt-get install --yes make bubblewrap
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: actions/setup-node@v4
+      - run: sudo apt-get install --yes make bubblewrap build-essential meson ninja-build pkg-config libcap-dev
+      - run: bash scripts/ensure-ci-bubblewrap.sh
+      - run: bash scripts/ensure-ci-user-cgroups.sh
+      - name: Mount a dedicated capped tmpfs for evaluator resource fixtures
+        run: |
+          root=/mnt/nexus-eval-release
+          sudo install -d -o "$USER" -g "$USER" -m 0700 "$root"
+          sudo mount -t tmpfs -o size=128m,mode=0700,uid="$(id -u)",gid="$(id -g)" nexus-eval-release "$root"
+          echo "NEXUS_EVAL_TEST_WORKSPACE_ROOT=$root" >> "$GITHUB_ENV"
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+      - name: Install cargo tools (audit, deny, about, cyclonedx)
+        run: |
+          CARGO_HOME="${CARGO_HOME:-$HOME/.cargo}"
+          export CARGO_HOME
+          mkdir -p "$CARGO_HOME/bin"
+          echo "$CARGO_HOME/bin" >> "$GITHUB_PATH"
+          export PATH="$CARGO_HOME/bin:$PATH"
+          cargo install cargo-audit --locked --version 0.22.2
+          curl -fsSL https://github.com/EmbarkStudios/cargo-deny/releases/download/0.20.2/cargo-deny-0.20.2-x86_64-unknown-linux-musl.tar.gz | tar -xz -C "$RUNNER_TEMP"
+          mv "$RUNNER_TEMP/cargo-deny-0.20.2-x86_64-unknown-linux-musl/cargo-deny" "$CARGO_HOME/bin/"
+          curl -fsSL https://github.com/EmbarkStudios/cargo-about/releases/download/0.9.2/cargo-about-0.9.2-x86_64-unknown-linux-musl.tar.gz | tar -xz -C "$RUNNER_TEMP"
+          mv "$RUNNER_TEMP/cargo-about-0.9.2-x86_64-unknown-linux-musl/cargo-about" "$CARGO_HOME/bin/"
+          curl -fsSL https://github.com/CycloneDX/cyclonedx-rust-cargo/releases/download/cargo-cyclonedx-0.5.9/cargo-cyclonedx-x86_64-unknown-linux-musl.tar.xz | tar -xJ -C "$RUNNER_TEMP"
+          mv "$RUNNER_TEMP/cargo-cyclonedx-x86_64-unknown-linux-musl/cargo-cyclonedx" "$CARGO_HOME/bin/"
+          curl -fsSL https://github.com/CycloneDX/cyclonedx-cli/releases/download/v0.33.1/cyclonedx-linux-x64 -o "$CARGO_HOME/bin/cyclonedx"
+          chmod +x "$CARGO_HOME/bin/cyclonedx"
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 20
           cache: npm
           cache-dependency-path: cli/package-lock.json
+      - name: Install selected Node runtime for isolated evaluation commands
+        run: |
+          node_runtime="$(readlink -f "$(command -v node)")"
+          npm_cli="$(readlink -f "$(command -v npm)")"
+          npm_root="$(dirname "$(dirname "$npm_cli")")"
+          case "$npm_root" in */lib/node_modules/npm) ;; *) echo "Unexpected setup-node npm package path" >&2; exit 1 ;; esac
+          test -f "$npm_root/package.json"
+          sudo install -o root -g root -m 0755 "$node_runtime" /usr/bin/node
+          sudo install -d -o root -g root -m 0755 /usr/lib/nexus-ci/npm
+          sudo cp -a "$npm_root/." /usr/lib/nexus-ci/npm/
+          sudo chown -hR root:root /usr/lib/nexus-ci/npm
+          sudo chmod 0755 /usr/lib/nexus-ci/npm/bin/npm-cli.js
+          sudo ln -sfn /usr/lib/nexus-ci/npm/bin/npm-cli.js /usr/bin/npm
+          test "$(/usr/bin/node --version)" = "$(node --version)"
+          test "$(env PATH=/usr/bin:/bin /usr/bin/npm --version)" = "$(npm --version)"
       - name: Require a version-matched tag on main
         run: |
           git fetch origin main --no-tags
           git merge-base --is-ancestor "$GITHUB_SHA" origin/main
           test "${GITHUB_REF_NAME#v}" = "$(node -p 'require("./package.json").version')"
+          node scripts/sync-version.mjs --check --tag "$GITHUB_REF_NAME"
+          test -f "docs/releases/${GITHUB_REF_NAME}.md" || { echo "Missing docs/releases/${GITHUB_REF_NAME}.md" >&2; exit 1; }
+      - name: Require a stable tag to be a version-only commit on its RC
+        if: ${{ !contains(github.ref_name, '-') }}
+        # The checkout has full history and tags (fetch-depth: 0). The checker runs from the RC's own copy so a stable
+        # commit cannot replace it; branch and tag protection remain the control over the workflow file itself.
+        run: |
+          rc="$(git tag --points-at "$GITHUB_SHA^" | grep -E "^${GITHUB_REF_NAME//./\\.}-rc\.[0-9]+$" | sort -V | tail -n 1 || true)"
+          test -n "$rc" || { echo "the parent of $GITHUB_REF_NAME is not a ${GITHUB_REF_NAME}-rc.N tag" >&2; exit 1; }
+          git show "$rc:scripts/check-version-only-diff.mjs" > "$RUNNER_TEMP/check-version-only-diff.mjs"
+          node "$RUNNER_TEMP/check-version-only-diff.mjs" "$rc" "$GITHUB_SHA"
       - run: npm ci --prefix cli
       - run: npm --prefix cli run build
       - run: cargo test --locked --manifest-path core/Cargo.toml
@@ -39,10 +93,24 @@ jobs:
       - run: bash scripts/package-linux.sh "$GITHUB_REF_NAME" "$RUNNER_TEMP/repro-check"
       - run: cmp "$RUNNER_TEMP/dist/nexus-linux-x86_64-$GITHUB_REF_NAME.tar.gz" "$RUNNER_TEMP/repro-check/nexus-linux-x86_64-$GITHUB_REF_NAME.tar.gz"
       - run: cmp "$RUNNER_TEMP/dist/SHA256SUMS" "$RUNNER_TEMP/repro-check/SHA256SUMS"
+      - run: cmp "$RUNNER_TEMP/dist/THIRD_PARTY_NOTICES.txt" "$RUNNER_TEMP/repro-check/THIRD_PARTY_NOTICES.txt"
+      - run: cyclonedx validate --input-file "$RUNNER_TEMP/dist/sbom.cdx.json" --fail-on-errors
+      - run: cmp "$RUNNER_TEMP/dist/sbom.cdx.json" "$RUNNER_TEMP/repro-check/sbom.cdx.json"
+      - run: cmp "$RUNNER_TEMP/dist/install.sh" "$RUNNER_TEMP/repro-check/install.sh"
       - run: bash scripts/smoke-package.sh "$RUNNER_TEMP/dist/nexus-linux-x86_64-$GITHUB_REF_NAME.tar.gz"
       - run: bash scripts/installer-smoke.sh "$GITHUB_WORKSPACE/install.sh" "$RUNNER_TEMP/dist/nexus-linux-x86_64-$GITHUB_REF_NAME.tar.gz"
-      - uses: softprops/action-gh-release@v2
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@92c65d2898f1f53cfdc910b962cecff86e7f8fcc # v1
+        with:
+          subject-path: |
+            ${{ runner.temp }}/dist/nexus-linux-x86_64-${{ github.ref_name }}.tar.gz
+            ${{ runner.temp }}/dist/SHA256SUMS
+      # RC tags (vX.Y.Z-rc.N) publish a prerelease: the workflow-produced RC is the qualification candidate
+      # (ACCEPTANCE §1.1 stage 2). Stable tags only build an unpublished draft (stage 5); it is published by hand with
+      # `gh release edit <tag> --draft=false` after the stable artifact checks and the signed acceptance disposition.
+      - uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
         with:
           files: ${{ runner.temp }}/dist/*
-          generate_release_notes: true
+          body_path: docs/releases/${{ github.ref_name }}.md
           prerelease: ${{ contains(github.ref_name, '-') }}
+          draft: ${{ !contains(github.ref_name, '-') }}

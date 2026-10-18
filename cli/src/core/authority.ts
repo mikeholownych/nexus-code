@@ -53,7 +53,8 @@ export const DEFAULT_SAFE_READONLY_COMMAND_REGEX =
  */
 export function isSafeReadOnlyCommand(
   command: string,
-  customRegex?: RegExp
+  customRegex?: RegExp,
+  workspace?: string
 ): boolean {
   if (!command || typeof command !== "string") return false;
   const trimmed = command.trim();
@@ -66,12 +67,13 @@ export function isSafeReadOnlyCommand(
   // >      - output redirection (truncate or append)
   // <      - input redirection or process substitution
   // $      - variable / command / arithmetic substitution ($(cmd), $VAR, $((expr)))
+  // ~      - home directory expansion (~/...)
   // `      - backtick command substitution (`cmd`)
   // \n, \r - newline command separators
   // (, )   - subshell execution / grouping
   // {, }   - command block grouping
   // \      - escape character
-  if (/[><&;|`$\n\r(){}\\]/.test(trimmed)) {
+  if (/[><&;|`$~\n\r(){}\\]/.test(trimmed)) {
     return false;
   }
 
@@ -79,6 +81,27 @@ export function isSafeReadOnlyCommand(
   const regex = customRegex || DEFAULT_SAFE_READONLY_COMMAND_REGEX;
   if (!regex.test(trimmed)) {
     return false;
+  }
+
+  // 2b. Path confinement: reject arguments with absolute paths escaping workspace or escaping traversal (..):
+  const rawTokens = trimmed.split(/\s+/);
+  const resolvedWs = workspace ? path.resolve(workspace) : undefined;
+  for (let i = 1; i < rawTokens.length; i++) {
+    const raw = rawTokens[i];
+    // Strip leading/trailing quotes if present
+    const t = raw.replace(/^['"]|['"]$/g, "");
+    const candidatePath = t.includes("=") && t.startsWith("-") ? t.split("=")[1] : t;
+    if (candidatePath.startsWith("/")) {
+      if (!resolvedWs || !path.resolve(candidatePath).startsWith(resolvedWs)) {
+        return false;
+      }
+    }
+    if (candidatePath.includes("..")) {
+      const target = resolvedWs ? path.resolve(resolvedWs, candidatePath) : path.resolve(candidatePath);
+      if (!resolvedWs || !target.startsWith(resolvedWs)) {
+        return false;
+      }
+    }
   }
 
   // 3. Inspect command-specific argument escapes for allowed executables:

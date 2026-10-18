@@ -99,7 +99,11 @@ const done = (summary = "done"): Reply => ({ tools: [{ name: "task_completed", a
 function makeRepo(files: Record<string, string> = {}): string {
   const repo = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-inv-"));
   fs.writeFileSync(path.join(repo, "notes.txt"), "the answer is 42\n");
-  for (const [name, content] of Object.entries(files)) fs.writeFileSync(path.join(repo, name), content);
+  for (const [name, content] of Object.entries(files)) {
+    const fullPath = path.join(repo, name);
+    fs.mkdirSync(path.dirname(fullPath), { recursive: true });
+    fs.writeFileSync(fullPath, content);
+  }
   execSync("git init -q && git config user.name t && git config user.email t@t.invalid && git add . && git commit -qm base", { cwd: repo, stdio: "ignore" });
   return repo;
 }
@@ -139,7 +143,7 @@ async function muted<T>(fn: () => Promise<T>, admissions?: string[]): Promise<T>
 }
 
 const cfg = (gw: Gw, workspace: string, o: Partial<HarnessConfig> = {}): HarnessConfig =>
-  ({ endpoint: gw.url, model: "m", maxSteps: 6, temperature: 0, workspace, shell: "bash", ...o });
+  ({ endpoint: gw.url, model: "m", maxSteps: 6, temperature: 0, workspace, shell: "bash", approvalMode: "auto", fullAccess: true, ...o });
 
 async function directTurn(config: HarnessConfig, prompt: string): Promise<{ turn: TurnResult; agent: AutonomousAgent }> {
   const agent = quiet(new AutonomousAgent(config));
@@ -175,11 +179,16 @@ async function operation(config: HarnessConfig, gw: Gw, units: WorkUnitSpec[]) {
 /** Model behaviours keyed by how many tool results the request already carries (one fresh conversation each). */
 /** A verifier that checks the deliverable (impl.txt) and reports the test it ran. */
 const COVERING = 'test -s impl.txt && echo "✔ impl.txt has content" && echo "ℹ tests 1"';
+const VERIFIED_FIXTURE_FILES = {
+  "test/impl.test.mjs": 'import test from "node:test";\nimport assert from "node:assert/strict";\nimport { value } from "../impl.mjs";\ntest("implementation deliverable", () => assert.equal(value, "updated"));\n',
+};
+const VERIFIED_FIXTURE_VERIFIER = "node --test test/impl.test.mjs && echo 'ℹ tests 1'";
+const writeImplementation = (): Reply => ({ tools: [{ name: "write_file", args: { path: "impl.mjs", content: 'export const value = "updated";\n' } }] });
 
-const BEHAVIOURS: Record<string, { script: (r: Req) => Reply; verifier?: string; files?: Record<string, string>; succeeds: boolean; outcome: string; reason?: string }> = {
-  verified: { script: (r) => [write(), done()][toolResults(r.body)] ?? { text: "done" }, verifier: COVERING, succeeds: true, outcome: "VERIFIED" },
+const BEHAVIOURS: Record<string, { script: (r: Req) => Reply; verifier?: string; files?: Record<string, string>; deliverables?: string[]; succeeds: boolean; outcome: string; reason?: string }> = {
+  verified: { script: (r) => [writeImplementation(), done()][toolResults(r.body)] ?? { text: "done" }, verifier: VERIFIED_FIXTURE_VERIFIER, files: VERIFIED_FIXTURE_FILES, deliverables: ["impl.mjs"], succeeds: true, outcome: "VERIFIED" },
   // A discovered suite (not the operator's configured check) that passes without running a test of the change.
-  "discovered suite passing without testing the change (REGRESSION_FREE)": { script: (r) => [write(), done()][toolResults(r.body)] ?? { text: "done" }, files: { Makefile: "test:\n\t@true\n" }, succeeds: false, outcome: "REGRESSION_FREE", reason: "REGRESSION_FREE" },
+  "discovered suite passing without testing the change (REGRESSION_FREE)": { script: (r) => [write(), done()][toolResults(r.body)] ?? { text: "done" }, files: { Makefile: "test:\n\t@echo 'ℹ tests 1\\nℹ pass 1'\n" }, succeeds: false, outcome: "REGRESSION_FREE", reason: "REGRESSION_FREE" },
   "read-only (NOT_REQUIRED)": { script: (r) => [read("notes.txt"), done("42")][toolResults(r.body)] ?? { text: "done" }, succeeds: true, outcome: "NOT_REQUIRED" },
   "edited, stopped in plain text (VERIFICATION_NOT_RUN)": { script: (r) => (toolResults(r.body) === 0 ? write() : { text: "I wrote impl.txt. Done." }), verifier: "false", succeeds: false, outcome: "UNVERIFIED", reason: "VERIFICATION_NOT_RUN" },
   "failing validator": { script: (r) => [write(), done()][toolResults(r.body)] ?? { text: "done" }, verifier: "false", succeeds: false, outcome: "NOT_ESTABLISHED", reason: "VERIFIER_FAILED" },
@@ -193,10 +202,17 @@ describe("I1: one completion predicate for every execution path", () => {
         const gw = await gateway(b.script);
         const repo = makeRepo(b.files);
         try {
-          const config = cfg(gw, repo, b.verifier ? { authoritativeVerifierCommand: b.verifier } : {});
+          const config = cfg(gw, repo, b.verifier ? {
+            authoritativeVerifierCommand: b.verifier,
+            ...(b.deliverables ? { trustedDeliverableFiles: b.deliverables } : {}),
+          } : {});
           const { turn, agent } = await directTurn(config, "Write impl.txt, then call task_completed.");
           agent.shutdown();
           assert.equal(turn.outcome, b.outcome);
+          if (b.outcome === "VERIFIED") {
+            assert.equal(turn.verification?.hasExecutedTests, true, "the operator-configured verifier ran the frozen baseline test");
+            assert.equal(turn.verification?.isDeliverableBound, true, "the baseline test imported the exact declared product path");
+          }
           if (b.reason) assert.equal(turn.reason, b.reason);
           assert.equal(turnSucceeded(turn), b.succeeds);
           assert.equal(exitCodeForTurn(turn) === 0, b.succeeds);
@@ -295,10 +311,10 @@ describe("I1: spawn_subagent cannot manufacture success", () => {
 
   test("a child report over unverified changes is not completion", async () => {
     await withHome(async () => {
-      const gw = await gateway(delegating((r) => (toolResults(r.body) === 0 ? write() : { text: "I wrote impl.txt." })));
-      const repo = makeRepo();
+      const gw = await gateway(delegating((r) => (toolResults(r.body) === 0 ? writeImplementation() : { text: "I wrote impl.mjs." })));
+      const repo = makeRepo(VERIFIED_FIXTURE_FILES);
       try {
-        const { turn, agent } = await directTurn(cfg(gw, repo, { authoritativeVerifierCommand: COVERING }), "delegate the change");
+        const { turn, agent } = await directTurn(cfg(gw, repo, { authoritativeVerifierCommand: VERIFIED_FIXTURE_VERIFIER, trustedDeliverableFiles: ["impl.mjs"] }), "delegate the change");
         try {
           assert.match(delegationResult(agent), /Subagent did not complete: .*outcome=UNVERIFIED \(VERIFICATION_NOT_RUN\)/);
           assert.equal(turn.outcome, "VERIFIED", "the parent verified the child's change itself before completing");
@@ -314,14 +330,14 @@ describe("I1: spawn_subagent cannot manufacture success", () => {
 
   test("a child's change is the parent's change: the parent cannot finish as NOT_REQUIRED", async () => {
     await withHome(async () => {
-      const gw = await gateway(delegating((r) => [write(), done("sub verified")][toolResults(r.body)] ?? { text: "x" }));
-      const repo = makeRepo();
+      const gw = await gateway(delegating((r) => [writeImplementation(), done("sub verified")][toolResults(r.body)] ?? { text: "x" }));
+      const repo = makeRepo(VERIFIED_FIXTURE_FILES);
       try {
-        const { turn, agent } = await directTurn(cfg(gw, repo, { authoritativeVerifierCommand: COVERING }), "delegate the change");
+        const { turn, agent } = await directTurn(cfg(gw, repo, { authoritativeVerifierCommand: VERIFIED_FIXTURE_VERIFIER, trustedDeliverableFiles: ["impl.mjs"] }), "delegate the change");
         try {
           assert.doesNotMatch(delegationResult(agent), /^Error/, "a verified child completes");
           assert.equal(turn.outcome, "VERIFIED");
-          assert.ok(turn.verification?.command === COVERING, "verified by the parent's own verifier run");
+          assert.ok(turn.verification?.command === VERIFIED_FIXTURE_VERIFIER, "verified by the parent's own verifier run");
         } finally {
           agent.shutdown();
         }
@@ -453,8 +469,9 @@ describe("G: compaction never lets a recalled result satisfy completion", () => 
           await second.recoverFromTaskState(taskId);
           const t2 = await muted(() => second.runTurn("[Work unit resumed] Continue the unit and call task_completed."));
           assert.ok(reread.length >= 1, "the recovered record announced removed output and the model re-read it");
-          assert.equal(t2.outcome, "NOT_REQUIRED", `${t2.outcome} ${t2.reason ?? ""} ${t2.detail ?? ""} (re-read: ${reread.join(", ")})`);
-          assert.equal(turnSucceeded(t2), true);
+          assert.equal(t2.outcome, "UNVERIFIED", `${t2.outcome} ${t2.reason ?? ""} ${t2.detail ?? ""} (re-read: ${reread.join(", ")})`);
+          assert.equal(t2.reason, "NO_APPLICABLE_VERIFIER");
+          assert.equal(turnSucceeded(t2), false, "re-reading content cannot authenticate a recovered verification baseline");
           assert.equal(String(gw.requests.at(-1)!.body && visibleMarkers(gw.requests.at(-1)!.body).join(", ")), MARKERS.join(", "), "every marker is genuinely in context again");
         } finally {
           second.shutdown();
@@ -591,7 +608,7 @@ function installHome(home: string, gatewayUrl: string, o: { configKey?: boolean 
   fs.mkdirSync(path.join(home, ".config/nexus"), { recursive: true });
   fs.mkdirSync(path.join(home, ".config/opencode"), { recursive: true });
   fs.writeFileSync(path.join(home, ".config/nexus/config.env"), `LOCAL_LLM_ENDPOINT=${gatewayUrl}\nLOCAL_LLM_MODEL=m\n${o.configKey ? `LOCAL_LLM_API_KEY=${CONFIG_KEY}\n` : ""}`);
-  if (!o.configKey) fs.writeFileSync(path.join(home, ".config/opencode/t5820-client-token"), `${TOKEN}\n`, { mode: 0o600 });
+  if (!o.configKey) fs.writeFileSync(path.join(home, ".config/nexus/gateway-token"), `${TOKEN}\n`, { mode: 0o600 });
 }
 
 const outputs: string[] = [];
@@ -644,7 +661,7 @@ async function withProviders<T>(fn: (p: { home: string; aihost: Gw; foreign: Gw;
 
 /** Every file the runs left under HOME except the credential stores themselves. */
 function durableFiles(root: string): string[] {
-  const stores = new Set([path.join(root, ".config/nexus/config.env"), path.join(root, ".config/opencode/t5820-client-token")]);
+  const stores = new Set([path.join(root, ".config/nexus/config.env"), path.join(root, ".config/nexus/gateway-token")]);
   const out: string[] = [];
   const walk = (d: string) => {
     for (const e of fs.readdirSync(d, { withFileTypes: true })) {
@@ -775,7 +792,7 @@ describe("I6: only the operator environment and config.env decide where a stored
     fs.writeFileSync(path.join(evil, ".config/nexus/config.env"), `LOCAL_LLM_ENDPOINT=${foreign.url}\n`);
     if (o.linkToken) {
       fs.mkdirSync(path.join(evil, ".config/opencode"), { recursive: true });
-      fs.symlinkSync(o.linkToken, path.join(evil, ".config/opencode/t5820-client-token"));
+      fs.symlinkSync(o.linkToken, path.join(evil, ".config/nexus/gateway-token"));
     }
     fs.writeFileSync(path.join(project, ".env"), `HOME=${evil}\n${o.env ?? ""}`);
     return project;
@@ -807,7 +824,7 @@ describe("I6: only the operator environment and config.env decide where a stored
   test("a re-homed token file that links to the operator's token reaches no foreign endpoint (i6i), even one the project selects", async () => {
     await withProviders(async ({ home, aihost, foreign, dir }) => {
       installHome(home, aihost.url);
-      const linkToken = path.join(home, ".config/opencode/t5820-client-token");
+      const linkToken = path.join(home, ".config/nexus/gateway-token");
       const project = rehomingProject(dir, foreign, { linkToken });
       await cli(["run", "-w", ".", "-e", foreign.url, "-m", "m", "-s", "1", "say hi"], { cwd: project, home });
       await cli(["models", "-e", foreign.url], { cwd: project, home });
@@ -821,7 +838,7 @@ describe("I6: only the operator environment and config.env decide where a stored
   test("positive control: under the same re-homing .env, the operator's gateway still receives the stored token", async () => {
     await withProviders(async ({ home, aihost, foreign, dir }) => {
       installHome(home, aihost.url);
-      const project = rehomingProject(dir, foreign, { linkToken: path.join(home, ".config/opencode/t5820-client-token") });
+      const project = rehomingProject(dir, foreign, { linkToken: path.join(home, ".config/nexus/gateway-token") });
       await cli(["models", "-e", aihost.url], { cwd: project, home });
       assert.ok(carries(aihost, TOKEN), `aihost saw: ${aihost.authorizations.join(", ")}`);
     });

@@ -118,13 +118,16 @@ ptyTest("diff output in the real TUI: every edit kind, resizing, review, workspa
   fs.writeFileSync(path.join(repo, "src/app.ts"), APP.replace("export const LIMIT_12 = 120;", `export const LIMIT_12 = 120;\n${OPERATOR_LINE}`));
   const gw = await startGateway(script(repo));
   const home = makeHome();
+  const trustDir = path.join(home, ".config", "nexus");
+  fs.mkdirSync(trustDir, { recursive: true });
+  fs.writeFileSync(path.join(trustDir, "trusted_workspaces.json"), JSON.stringify({ trustedPaths: [fs.realpathSync(repo)] }, null, 2));
   const logs = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-tui-diff-"));
   fs.mkdirSync(EVIDENCE, { recursive: true });
   const plan = {
     tui: TUI,
     recorder: RECORDER,
     node: process.execPath,
-    sidecar_args: ["-w", repo, "-e", gw.url, "-m", "m"],
+    sidecar_args: ["-w", repo, "-e", gw.url, "-m", "m", "--mode", "auto"],
     cast: path.join(EVIDENCE, "tui_diff.cast"),
     screens: path.join(EVIDENCE, "tui_diff_screens.json"),
     env: {

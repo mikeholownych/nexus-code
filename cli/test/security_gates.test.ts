@@ -124,35 +124,18 @@ ${bodies[report]}
     assert.ok(!res.stderr.includes("EALLOWSCRIPTS"), res.stderr);
   });
 
-  test("SCAN-002: Rust dependency vulnerability detection on fixture fails closed", () => {
-    const auditScript = path.join(scriptsDir, "audit_rust_deps.py");
-    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-vuln-cargo-"));
-    try {
-      const lockContent = `version = 3
-
-[[package]]
-name = "smallvec"
-version = "0.6.13"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-`;
-      const lockPath = path.join(tmpDir, "Cargo.lock");
-      fs.writeFileSync(lockPath, lockContent);
-
-      assert.throws(
-        () => {
-          execFileSync("python3", [auditScript, lockPath], {
-            cwd: rootDir,
-            stdio: "pipe",
-          });
-        },
-        (err: any) => {
-          const stderr = err.stderr ? err.stderr.toString() : "";
-          return stderr.includes("vulnerability/vulnerabilities detected") && stderr.includes("smallvec@0.6.13");
-        }
-      );
-    } finally {
-      fs.rmSync(tmpDir, { recursive: true, force: true });
-    }
+  test("ACC-SUP-04: PATH without cargo-audit or cargo-deny makes security_gates.sh exit non-zero", () => {
+    // Strip any directory containing cargo-audit or cargo-deny from PATH
+    const cleanPath = (process.env.PATH || "")
+      .split(":")
+      .filter((dir) => !fs.existsSync(path.join(dir, "cargo-audit")) && !fs.existsSync(path.join(dir, "cargo-deny")))
+      .join(":");
+    const res = runGate(stubNpm("clean"), { PATH: cleanPath, SIMULATE_RUST_SCANNER_UNAVAILABLE: "0" });
+    assert.notEqual(res.status, 0);
+    assert.ok(
+      res.stderr.includes("Rust vulnerability scanner unavailable"),
+      `Expected scanner unavailable message, got: ${res.stderr}`
+    );
   });
 
   test("SCAN-003 & TEST-003: Secret scanning detects synthetic credentials in workspace", () => {
@@ -191,6 +174,11 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
     execFileSync("bash", [scriptPath], {
       cwd: rootDir,
       encoding: "utf-8",
+      env: {
+        ...process.env,
+        npm_config_local_prefix: path.join(rootDir, "cli"),
+        npm_config_prefix: path.join(rootDir, "cli"),
+      },
     });
 
     const sbomPath = path.join(rootDir, "dist", "sbom.json");

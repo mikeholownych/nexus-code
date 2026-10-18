@@ -110,6 +110,20 @@ const find = (report: DoctorReport, id: string) => report.findings.find((f) => f
 const doctor = (o: Parameters<typeof runDoctor>[0]) => runDoctor({ home, timeoutMs: 1500, ...(o as object) });
 
 describe("doctor findings name the actual failure", () => {
+  test("config.project_env_ignored reports operator-only settings a workspace .env tries to set (REQ-SEC-110)", async () => {
+    const ws = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-doctor-projenv-"));
+    try {
+      fs.writeFileSync(path.join(ws, ".env"), "LOCAL_LLM_MODEL=x\nNODE_TLS_REJECT_UNAUTHORIZED=0\nHTTPS_PROXY=http://p\n");
+      const warned = find(await doctor({ config: cfg({ workspace: ws }) }), "config.project_env_ignored")!;
+      assert.equal(warned.status, "warn");
+      assert.match(warned.explanation, /NODE_TLS_REJECT_UNAUTHORIZED, HTTPS_PROXY/);
+      fs.writeFileSync(path.join(ws, ".env"), "LOCAL_LLM_MODEL=x\n");
+      assert.equal(find(await doctor({ config: cfg({ workspace: ws }) }), "config.project_env_ignored")!.status, "pass");
+    } finally {
+      fs.rmSync(ws, { recursive: true, force: true });
+    }
+  });
+
   test("malformed configuration fails config.valid while independent checks still run", async () => {
     let configError: unknown;
     try {
@@ -293,7 +307,7 @@ describe("output contract", () => {
     assert.equal(json.context, "cli");
     const ids = new Set<string>();
     for (const finding of json.findings) {
-      assert.match(finding.id, /^[a-z]+(\.[a-z]+)+$/);
+      assert.match(finding.id, /^[a-z]+(\.[a-z_]+)+$/);
       assert.ok(!ids.has(finding.id), `duplicate id ${finding.id}`);
       ids.add(finding.id);
       assert.ok(["pass", "warn", "fail", "skip"].includes(finding.status));
@@ -639,3 +653,111 @@ describe("entry points share one engine", () => {
     assert.match(renderDoctorText(report), /active session configuration/);
   });
 });
+
+describe("SPEC-06 PR-6d requirements (ACC-PKG-06..09, REQ-DX-101..104)", () => {
+  test("ACC-PKG-06 (REQ-DX-101): doctor stderr is empty on a healthy run (no MaxListenersExceededWarning)", async () => {
+    const m = await mock({ models: ["m"] });
+    try {
+      const res = await new Promise<{ code: number | null; out: string; err: string }>((resolve) => {
+        const child = spawn("bash", [LAUNCHER, "doctor", "-e", m.url, "-m", "m", "-w", workspace, "--timeout", "2000"], {
+          env: { ...process.env, HOME: home, LOCAL_LLM_API_KEY: SECRET },
+        });
+        let out = "";
+        let err = "";
+        child.stdout.on("data", (c) => (out += c));
+        child.stderr.on("data", (c) => (err += c));
+        child.on("close", (code) => resolve({ code, out, err }));
+      });
+      assert.equal(res.err.trim(), "", `expected empty stderr, got: ${res.err}`);
+    } finally {
+      await m.close();
+    }
+  });
+
+  test("ACC-PKG-07 (REQ-DX-101): packaged doctor remedies contain no make or harness.sh", async () => {
+    const pkgHome = tmp("nexus-pkg-remedies-");
+    const externalBin = path.join(pkgHome, "external-bin");
+    const externalCheckout = path.join(pkgHome, "external-checkout");
+    fs.mkdirSync(externalBin, { recursive: true });
+    fs.mkdirSync(externalCheckout, { recursive: true });
+    const externalLauncher = path.join(externalCheckout, "harness.sh");
+    fs.writeFileSync(externalLauncher, "#!/usr/bin/env bash\nexit 0\n", { mode: 0o755 });
+    fs.symlinkSync(externalLauncher, path.join(externalBin, "nexus"));
+    const m = await mock({ models: ["m"] });
+    try {
+      const res = await new Promise<{ code: number | null; out: string; err: string }>((resolve) => {
+        const cliEntry = path.join(ROOT, "cli/dist/index.js");
+        const child = spawn(process.execPath, [cliEntry, "doctor", "--json", "-e", m.url, "-m", "m", "-w", workspace, "--timeout", "2000"], {
+          env: { ...process.env, HOME: home, NEXUS_HOME: pkgHome, PATH: `${externalBin}${path.delimiter}${process.env.PATH ?? ""}` },
+        });
+        let out = "";
+        let err = "";
+        child.stdout.on("data", (c) => (out += c));
+        child.stderr.on("data", (c) => (err += c));
+        child.on("close", (code) => resolve({ code, out, err }));
+      });
+      const report = JSON.parse(res.out);
+      const jsonStr = JSON.stringify(report);
+      assert.ok(!jsonStr.includes("make build"), "packaged report must not suggest `make build`");
+      assert.ok(!jsonStr.includes("make build-core"), "packaged report must not suggest `make build-core`");
+      assert.ok(!jsonStr.includes("harness.sh"), "packaged report must not suggest `harness.sh`");
+    } finally {
+      await m.close();
+    }
+  });
+
+  test("ACC-PKG-08 (REQ-DX-102): config.env at 0644 gives a warning and repair; --fix --yes sets 0600", async () => {
+    const h = tmp("nexus-doctor-config-env-");
+    const configDir = path.join(h, ".config", "nexus");
+    fs.mkdirSync(configDir, { recursive: true });
+    const configEnv = path.join(configDir, "config.env");
+    fs.writeFileSync(configEnv, "LOCAL_LLM_MODEL=test-model\n", { mode: 0o644 });
+    fs.chmodSync(configEnv, 0o644);
+
+    const report1 = await runDoctor({ home: h, config: cfg() });
+    const finding1 = report1.findings.find((f) => f.id === "config.env");
+    assert.ok(finding1, "finding config.env must be present");
+    assert.equal(finding1.status, "warn");
+    assert.match(finding1.explanation, /readable by other users/);
+    assert.ok(finding1.repair, "finding must propose a repair");
+    assert.equal(finding1.repair.id, "config.permissions");
+
+    const repaired = await runRepairs(report1, { home: h, config: cfg(), confirm: async () => true });
+    const repairRes = repaired.repairs?.find((r) => r.id === "config.permissions");
+    assert.ok(repairRes, "repair result must be present");
+    assert.equal(repairRes.status, "applied");
+
+    const modeAfter = fs.statSync(configEnv).mode & 0o777;
+    assert.equal(modeAfter, 0o600, "config.env mode must be tightened to 0600");
+
+    const report2 = await runDoctor({ home: h, config: cfg() });
+    const finding2 = report2.findings.find((f) => f.id === "config.env");
+    assert.ok(finding2);
+    assert.equal(finding2.status, "pass");
+    assert.equal(finding2.repair, undefined, "no repair needed after fix");
+  });
+
+  test("ACC-PKG-09 (REQ-DX-103): workspace path with a UUID segment appears unredacted in doctor output", async () => {
+    const uuidWs = path.join(os.tmpdir(), "nexus-workspace-f1a2b3c4-d5e6-7890-abcd-ef0123456789");
+    fs.mkdirSync(uuidWs, { recursive: true });
+    try {
+      const report = await runDoctor({ home, config: cfg({ workspace: uuidWs }) });
+      const finding = report.findings.find((f) => f.id === "workspace.access");
+      assert.ok(finding);
+      assert.equal(finding.status, "pass");
+      assert.ok(finding.evidence.includes(uuidWs), `evidence must contain unredacted path, got: ${finding.evidence.join(" ")}`);
+      assert.ok(!finding.evidence.join(" ").includes("[REDACTED:HIGH_ENTROPY_STRING]"));
+    } finally {
+      fs.rmSync(uuidWs, { recursive: true, force: true });
+    }
+  });
+
+  test("REQ-DX-104: tui.launch verifies launchability via nexus-tui --live --check", async () => {
+    const report = await runDoctor({ home, config: cfg() });
+    const finding = report.findings.find((f) => f.id === "tui.launch");
+    assert.ok(finding, "tui.launch finding must be present");
+    assert.equal(finding.status, "pass");
+    assert.match(finding.explanation, /launchable and its sidecar resolves/);
+  });
+});
+

@@ -17,6 +17,7 @@ import { AddressInfo } from "node:net";
 import {
   InformationFlowBoundary,
   classifyDestination,
+  classifyLocality,
   isEgressTransition,
   calculateShannonEntropy,
   DestinationTrustBoundary,
@@ -153,7 +154,9 @@ MIIEowIBAAKCAQEA0Z3vV4k8t...fake...pem...body...content...
       assert.strictEqual(classifyDestination("http://127.0.0.1:11434"), "LOCAL_APPLIANCE");
       assert.strictEqual(classifyDestination("http://192.168.1.50:8080"), "LOCAL_APPLIANCE");
       assert.strictEqual(classifyDestination("http://10.0.0.15:5000"), "LOCAL_APPLIANCE");
-      assert.strictEqual(classifyDestination("http://vllm.local:8000"), "LOCAL_APPLIANCE");
+      // .local hostnames are external unless in NEXUS_LOCAL_ORIGINS (REQ-SEC-111, PRV-02)
+      assert.strictEqual(classifyDestination("http://vllm.local:8000"), "EXTERNAL_PUBLIC");
+      assert.strictEqual(classifyDestination("http://vllm.local:8000", undefined, { localOrigins: ["vllm.local"] }), "LOCAL_APPLIANCE");
 
       // EXTERNAL_BOUNDED
       const policy = { boundedDomains: ["internal-corp.net", "partner-api.com"] };
@@ -177,6 +180,68 @@ MIIEowIBAAKCAQEA0Z3vV4k8t...fake...pem...body...content...
       assert.strictEqual(isEgressTransition("HOST_LOCAL", "HOST_LOCAL"), false);
       // Upward transition is not egress
       assert.strictEqual(isEgressTransition("EXTERNAL_PUBLIC", "HOST_LOCAL"), false);
+    });
+
+    // ACC-TRUST-02 (REQ-SEC-111): CIDR-based locality classification table
+    test("ACC-TRUST-02: CIDR classification table, reason codes, and operator origins", () => {
+      // 10.attacker.example and 192.168.evil.com -> external
+      const att1 = classifyLocality("http://10.attacker.example/v1");
+      assert.strictEqual(att1.boundary, "EXTERNAL_PUBLIC");
+      assert.strictEqual(att1.reason, "hostname_external");
+
+      const att2 = classifyLocality("http://192.168.evil.com/v1");
+      assert.strictEqual(att2.boundary, "EXTERNAL_PUBLIC");
+      assert.strictEqual(att2.reason, "hostname_external");
+
+      // 10.0.0.5 -> local (private_ip)
+      const priv1 = classifyLocality("http://10.0.0.5:8000");
+      assert.strictEqual(priv1.boundary, "LOCAL_APPLIANCE");
+      assert.strictEqual(priv1.reason, "private_ip");
+
+      // 192.168.1.2 -> local (private_ip)
+      const priv2 = classifyLocality("http://192.168.1.2:8000");
+      assert.strictEqual(priv2.boundary, "LOCAL_APPLIANCE");
+      assert.strictEqual(priv2.reason, "private_ip");
+
+      // 127.0.0.2 -> local (loopback_ip)
+      const loop = classifyLocality("http://127.0.0.2:8000");
+      assert.strictEqual(loop.boundary, "LOCAL_APPLIANCE");
+      assert.strictEqual(loop.reason, "loopback_ip");
+
+      // 100.101.102.103 -> local (cgnat_ip)
+      const cgnat = classifyLocality("http://100.101.102.103:8000");
+      assert.strictEqual(cgnat.boundary, "LOCAL_APPLIANCE");
+      assert.strictEqual(cgnat.reason, "cgnat_ip");
+
+      // [fd00::1] -> local (ula_ip)
+      const ula = classifyLocality("http://[fd00::1]:8000");
+      assert.strictEqual(ula.boundary, "LOCAL_APPLIANCE");
+      assert.strictEqual(ula.reason, "ula_ip");
+
+      // gpubox -> external unless in NEXUS_LOCAL_ORIGINS
+      const gpuDef = classifyLocality("http://gpubox:8000");
+      assert.strictEqual(gpuDef.boundary, "EXTERNAL_PUBLIC");
+      assert.strictEqual(gpuDef.reason, "hostname_external");
+
+      const gpuLocal = classifyLocality("http://gpubox:8000", undefined, { localOrigins: ["gpubox"] });
+      assert.strictEqual(gpuLocal.boundary, "LOCAL_APPLIANCE");
+      assert.strictEqual(gpuLocal.reason, "operator_local_origin");
+
+      // operator-configured endpoint match
+      const opEndpoint = classifyLocality("http://my-lan-server:8000/v1", undefined, {
+        operatorEndpoint: "http://my-lan-server:8000/v1",
+      });
+      assert.strictEqual(opEndpoint.boundary, "LOCAL_APPLIANCE");
+      assert.strictEqual(opEndpoint.reason, "operator_endpoint");
+
+      // IPv4-mapped IPv6 literals unwrapped
+      const v4mapLoop = classifyLocality("http://[::ffff:127.0.0.1]:8000");
+      assert.strictEqual(v4mapLoop.boundary, "LOCAL_APPLIANCE");
+      assert.strictEqual(v4mapLoop.reason, "loopback_ip");
+
+      const v4mapPriv = classifyLocality("http://[::ffff:10.0.0.1]:8000");
+      assert.strictEqual(v4mapPriv.boundary, "LOCAL_APPLIANCE");
+      assert.strictEqual(v4mapPriv.reason, "private_ip");
     });
   });
 

@@ -1,0 +1,545 @@
+{
+  "sealed_at": "2026-10-18T03:05:52.513Z",
+  "store": "/home/mike/nexus-heldout-v2",
+  "tier": "T2",
+  "task_count": 40,
+  "external_repo_tasks": 40,
+  "by_class": {
+    "bugfix": 10,
+    "debug": 10,
+    "feature": 10,
+    "refactor": 10
+  },
+  "by_language": {
+    "go": 10,
+    "javascript": 10,
+    "python": 10,
+    "rust": 10
+  },
+  "hash_scheme": {
+    "task_sha256": "sha256 of raw tasks/<id>/task.json bytes",
+    "hidden_sha256": "sha256 of sorted '<path>  <sha256(file)>\\n' lines over tasks/<id>/<hidden.dir> (bin/hidden_digest.mjs)"
+  },
+  "tasks": [
+    {
+      "id": "ho2-go-bugfix-02",
+      "class": "bugfix",
+      "language": "go",
+      "difficulty": "easy",
+      "repo": {
+        "url": "https://github.com/hashicorp/go-version.git",
+        "commit": "1f6705b50d3f7137a753c1f61b2e292bef70c0c2"
+      },
+      "task_sha256": "5972189a560c809cc2d87060563842ce0fa591e4f07320d294d831a59638c233",
+      "hidden_sha256": "8b88607e573deb1810a52b92c4529f27fa752eb80698dadb265dbe138309cf2b",
+      "batch": 2
+    },
+    {
+      "id": "ho2-go-bugfix-03",
+      "class": "bugfix",
+      "language": "go",
+      "difficulty": "medium",
+      "repo": {
+        "url": "https://github.com/iancoleman/strcase.git",
+        "commit": "a61ebb85b34d7b831590cd8fa7faafadc161a652"
+      },
+      "task_sha256": "61d1e5b86ae76e300901f0fe90757d83d19fc496c9d6a256e2d2c4373eea5dd0",
+      "hidden_sha256": "c06d38cfc5e8967de3b85a6509714500968ee1bb4413419f1dc62327875956cb",
+      "batch": 6
+    },
+    {
+      "id": "ho2-go-debug-02",
+      "class": "debug",
+      "language": "go",
+      "difficulty": "medium",
+      "repo": {
+        "url": "https://github.com/blang/semver.git",
+        "commit": "d3feafb656afb1654476e8e0ddb1c1655c14cf5b"
+      },
+      "task_sha256": "7c520d568dbe143b5ced6c54ad870fc32f9f4c8c600bc57ed0f2b9fd2449ca33",
+      "hidden_sha256": "dee6bcbeb1832cf35608f0705b374b4cd97e26a5eb36c196438e8f9b7679e49d",
+      "batch": 4
+    },
+    {
+      "id": "ho2-go-debug-03",
+      "class": "debug",
+      "language": "go",
+      "difficulty": "easy",
+      "repo": {
+        "url": "https://github.com/joho/godotenv.git",
+        "commit": "a2be92d182fc04da33b365bf47c17fe0f4808aea"
+      },
+      "task_sha256": "0a83edafe191799f782a0ceddc05a4dce8d3f692f92d47c48ed3542295efc8dd",
+      "hidden_sha256": "0802bf65cf8f97d6c50aa8fe45645ed8ed8b889839be748b0f55c1e7ab5e84bd",
+      "batch": 7
+    },
+    {
+      "id": "ho2-go-feature-01",
+      "class": "feature",
+      "language": "go",
+      "difficulty": "easy",
+      "repo": {
+        "url": "https://github.com/dustin/go-humanize.git",
+        "commit": "0a173b2bf17e0d69adb87075a5d4be6ed1778569"
+      },
+      "task_sha256": "e82fb7bf6e1efddf45effe69c722cff70ecae71d09ede20d74eb90bba578b55f",
+      "hidden_sha256": "4a8e85367f36e04450e4cafd1624cec84a65016e21bfc7edcd88185872627839",
+      "batch": 3
+    },
+    {
+      "id": "ho2-go-feature-02",
+      "class": "feature",
+      "language": "go",
+      "difficulty": "easy",
+      "repo": {
+        "url": "https://github.com/huandu/xstrings.git",
+        "commit": "55ae428c2ac4f74d7430952ef528631e656ac92c"
+      },
+      "task_sha256": "c43bdb7fbd1582ee5069bbd92985b2802c3a247e177abc113f9034ef77c1db05",
+      "hidden_sha256": "839dd988b99a62373c1d6a38f4e09b257f1e58ab492e88a45460647f89dbf9d7",
+      "batch": 5
+    },
+    {
+      "id": "ho2-go-feature-03",
+      "class": "feature",
+      "language": "go",
+      "difficulty": "medium",
+      "repo": {
+        "url": "https://github.com/oklog/ulid.git",
+        "commit": "cf33434e236636f43738dd01476c26a2d7cae198"
+      },
+      "task_sha256": "5b5524c367bc1fa7dc66b62699f59ec8356634d8b3a20d986cc1b2c301ea042d",
+      "hidden_sha256": "b589fe75f07cef56b9f125e4981aaef207249c08b47d915b68d3a6b75228cee4",
+      "batch": 8
+    },
+    {
+      "id": "ho2-go-refactor-01",
+      "class": "refactor",
+      "language": "go",
+      "difficulty": "medium",
+      "repo": {
+        "url": "https://github.com/google/uuid.git",
+        "commit": "6e10cd1027e225e3ad7bfcc13c896abd165b02ef"
+      },
+      "task_sha256": "d113a4c8e032f3f5e46fe458bfc35aa8e72f4272c9fd67bad31d06e689161382",
+      "hidden_sha256": "3909bf884c999920c0f8f08b04af994b1151b59ce55cf0d90b912c43081f95e3",
+      "batch": 1
+    },
+    {
+      "id": "ho2-go-refactor-02",
+      "class": "refactor",
+      "language": "go",
+      "difficulty": "medium",
+      "repo": {
+        "url": "https://github.com/google/go-cmp.git",
+        "commit": "47b0945204f5ee05a89cc15d92eec97315340c50"
+      },
+      "task_sha256": "75521a80349a358b9c9fa93de4b388348a694f91d20ce9e3610802da13d51b4e",
+      "hidden_sha256": "d3342d0ee7c901d742b79f069da582fc0e50c58dd42bda85553820278f4d65fd",
+      "batch": 5
+    },
+    {
+      "id": "ho2-go-refactor-03",
+      "class": "refactor",
+      "language": "go",
+      "difficulty": "medium",
+      "repo": {
+        "url": "https://github.com/mitchellh/mapstructure.git",
+        "commit": "ab69d8d93410fce4361f4912bb1ff88110a81311"
+      },
+      "task_sha256": "e49d1d828e8d265a15065912eabe7eede4891512e7a47981b22f29cf6ffa97dc",
+      "hidden_sha256": "11b6b0e945dbb230889f8d3cdbc17666457efbd78197f49092afa1a6b714665e",
+      "batch": 8
+    },
+    {
+      "id": "ho2-js-bugfix-02",
+      "class": "bugfix",
+      "language": "javascript",
+      "difficulty": "medium",
+      "repo": {
+        "url": "https://github.com/farzher/fuzzysort.git",
+        "commit": "a30b3b3dd135d7037412d9807b85e41544833b51"
+      },
+      "task_sha256": "34ddc5283dd7a4d2067540a35892a06d3bae7c3fd1d443a1e5cde5f94d694ac4",
+      "hidden_sha256": "b436f4d2209f335815978c678146299865323fad072b449c6fe07f98191127d6",
+      "batch": 3
+    },
+    {
+      "id": "ho2-js-bugfix-03",
+      "class": "bugfix",
+      "language": "javascript",
+      "difficulty": "medium",
+      "repo": {
+        "url": "https://github.com/MikeMcl/big.js.git",
+        "commit": "4fd0396d99ed346f2c86a835c657caa9e54123f9"
+      },
+      "task_sha256": "17edb4174086a257d4fa1ba976eb0b154d467c849a761788ec9345b2c5f41098",
+      "hidden_sha256": "b5d1c1d712c4296c4646ac1abb2d73872027e7972fc4395fdd46769d7203055a",
+      "batch": 6
+    },
+    {
+      "id": "ho2-js-bugfix-04",
+      "class": "bugfix",
+      "language": "javascript",
+      "difficulty": "easy",
+      "repo": {
+        "url": "https://github.com/MikeMcl/big.js.git",
+        "commit": "9c6c959c92dc9044a0f98c31f60322fd91243468"
+      },
+      "task_sha256": "48f42643ef57f444b6fb7021dbc8ab3d9c011194bbfc5436cd4c76c06e477c53",
+      "hidden_sha256": "0de08294ae3a1608a51d550e443fe8aaacb8b87b299905bf4dabe196a01b7190",
+      "batch": 9
+    },
+    {
+      "id": "ho2-js-debug-01",
+      "class": "debug",
+      "language": "javascript",
+      "difficulty": "medium",
+      "repo": {
+        "url": "https://github.com/MikeMcl/big.js.git",
+        "commit": "f2d55d8b10b95a21ea6be9ebc4f55d3bd2cb6940"
+      },
+      "task_sha256": "0d0f7c0c3d57e4868a735aeea81c90ae0210906f7146114e8c8a8fba47f77a97",
+      "hidden_sha256": "587d3c71a672000268ae0a9b94fba8934ad24f518560855a57cc0c2bd8c447ff",
+      "batch": 2
+    },
+    {
+      "id": "ho2-js-debug-02",
+      "class": "debug",
+      "language": "javascript",
+      "difficulty": "medium",
+      "repo": {
+        "url": "https://github.com/Marak/colors.js.git",
+        "commit": "a8ce90c51c929aa7759cca33bccb859027385709"
+      },
+      "task_sha256": "666dfad1f7e8e4224f9b1403b5bd48ec9919575c0c258af0f0ff882db3f481b1",
+      "hidden_sha256": "df0c5dce38f01118aa5d0a7885be361a2024108efee1518a38976b68825b9043",
+      "batch": 5
+    },
+    {
+      "id": "ho2-js-debug-03",
+      "class": "debug",
+      "language": "javascript",
+      "difficulty": "hard",
+      "repo": {
+        "url": "https://github.com/hughsk/flat.git",
+        "commit": "3b3cd0a3649433f8169e0ca6946108594fee29e8"
+      },
+      "task_sha256": "a69818dcae4d70628a23e6b0da7c6fdbd51489be6579297dae85ee6d684c889b",
+      "hidden_sha256": "c91aee4d345a5e22a43d92ec8642a962a707c7b32064df4c312a861cd9214839",
+      "batch": 8
+    },
+    {
+      "id": "ho2-js-feature-01",
+      "class": "feature",
+      "language": "javascript",
+      "difficulty": "easy",
+      "repo": {
+        "url": "https://github.com/MikeMcl/bignumber.js.git",
+        "commit": "aa2cfdb5d51c69adbc2b1a800035fc0b6ab5b1bb"
+      },
+      "task_sha256": "1a4d74e2309e236318c759de75fa064982f2e46201f59356704b01e75b139528",
+      "hidden_sha256": "bcb2f570e48faf78d7d0a20f44959a49bf8b19a1e9187deb6505e12689eb12cd",
+      "batch": 3
+    },
+    {
+      "id": "ho2-js-feature-02",
+      "class": "feature",
+      "language": "javascript",
+      "difficulty": "easy",
+      "repo": {
+        "url": "https://github.com/MikeMcl/decimal.js.git",
+        "commit": "ac0711318fff9c0eb92621b2336b6c5a083bb337"
+      },
+      "task_sha256": "f200a0d5dfacb98e1a2330180cde818c0bcb735d80a79acb0ba5c734f5aa918f",
+      "hidden_sha256": "ade660f4c75e2441afd51d8427385023948473902ba42b8b8407f82b8c1f0a71",
+      "batch": 6
+    },
+    {
+      "id": "ho2-js-refactor-02",
+      "class": "refactor",
+      "language": "javascript",
+      "difficulty": "medium",
+      "repo": {
+        "url": "https://github.com/MikeMcl/decimal.js.git",
+        "commit": "148be72e6fc62162e6c55ce9af87bac95bf9b6f1"
+      },
+      "task_sha256": "c34d75e2e36c9d5182e4e8b13adb64052fddee761669d4fe08d7ea0490d69686",
+      "hidden_sha256": "da3dfd36ddb7058772fce183aecb30316acb3342d9806206a059ac2a760c67f1",
+      "batch": 4
+    },
+    {
+      "id": "ho2-js-refactor-03",
+      "class": "refactor",
+      "language": "javascript",
+      "difficulty": "hard",
+      "repo": {
+        "url": "https://github.com/MikeMcl/bignumber.js.git",
+        "commit": "a7bc1f175c1e40db1abe8cebd52b60fc5381f487"
+      },
+      "task_sha256": "c24a474b48d77b49db85253c5955653a4c685dbf52b19e28689fcc04c39910b9",
+      "hidden_sha256": "7fa23739cebb116c8965281d3aa264ecaab12a0fa1ab4b659b299f6f330c7f8b",
+      "batch": 7
+    },
+    {
+      "id": "ho2-py-bugfix-01",
+      "class": "bugfix",
+      "language": "python",
+      "difficulty": "medium",
+      "repo": {
+        "url": "https://github.com/more-itertools/more-itertools.git",
+        "commit": "1ea82a711c69f590054987b5cb194157f8ce8ac4"
+      },
+      "task_sha256": "3f8df9a1da1117758e66fca9c805c0cf4272c7b46fa1e77b864b5db2bc0620d5",
+      "hidden_sha256": "9c316447f6fbc9c66bdbce4519b30916319d461a375586c6542107f9ad5782d8",
+      "batch": 1
+    },
+    {
+      "id": "ho2-py-bugfix-02",
+      "class": "bugfix",
+      "language": "python",
+      "difficulty": "hard",
+      "repo": {
+        "url": "https://github.com/GrahamDumpleton/wrapt.git",
+        "commit": "24bd8368beb5c790a7bd2b2d42232fad86a93bcd"
+      },
+      "task_sha256": "391d3ceb47d92d797bdf3e962e345bd7b8343829c8404bb0a56ea21a1d4bef08",
+      "hidden_sha256": "e1735f0dd1d0fd777b70b4af3366cdf5a8c080f515039a8b3d2a584b27a49726",
+      "batch": 5
+    },
+    {
+      "id": "ho2-py-bugfix-03",
+      "class": "bugfix",
+      "language": "python",
+      "difficulty": "medium",
+      "repo": {
+        "url": "https://github.com/python-semver/python-semver.git",
+        "commit": "1d515915d50b31f23fd1fb0f572ef608453e80e3"
+      },
+      "task_sha256": "4641e9a239731be8160c45e5acf12276251bd070388ac3d6adcc36d0fed3d948",
+      "hidden_sha256": "a0e202d5dbf372792a0e049e72e0b9e4955697e5b52747aaf3ec98a81047e174",
+      "batch": 9
+    },
+    {
+      "id": "ho2-py-debug-01",
+      "class": "debug",
+      "language": "python",
+      "difficulty": "medium",
+      "repo": {
+        "url": "https://github.com/tkem/cachetools.git",
+        "commit": "16e88894ef7d79b25a68f5a3b5411ed881342725"
+      },
+      "task_sha256": "2da89a4c89902c3bb068bb836903575e30a562f137f7498a6bb553c9efc9912a",
+      "hidden_sha256": "f5e7d80fff490dbef4399ae7a61d287eedab87de5bce560bc47c18405fbb7983",
+      "batch": 3
+    },
+    {
+      "id": "ho2-py-debug-02",
+      "class": "debug",
+      "language": "python",
+      "difficulty": "hard",
+      "repo": {
+        "url": "https://github.com/lepture/mistune.git",
+        "commit": "a1b50bc12e066e5707ff797f821829bfcdab03b5"
+      },
+      "task_sha256": "cb11176fd70f9348b9c40fdba9c2139844980558c45aa14b1f4a86ca9afeea05",
+      "hidden_sha256": "f29135d36e4804702ffa5ff53a33303f3da6da43e11c9bef6031f58f8377cdf3",
+      "batch": 6
+    },
+    {
+      "id": "ho2-py-debug-03",
+      "class": "debug",
+      "language": "python",
+      "difficulty": "hard",
+      "repo": {
+        "url": "https://github.com/tkem/cachetools.git",
+        "commit": "978d34d40cdbf3b4cbfce104f3166032cc4ea028"
+      },
+      "task_sha256": "db235459459aaeaee220c3179cf8518f48989c5962f9c2e9c1cc73fb789e60de",
+      "hidden_sha256": "120bb37817017b3160269273e7608913d002b6f1ae7a46c47c83b92262d553e1",
+      "batch": 9
+    },
+    {
+      "id": "ho2-py-feature-01",
+      "class": "feature",
+      "language": "python",
+      "difficulty": "easy",
+      "repo": {
+        "url": "https://github.com/more-itertools/more-itertools.git",
+        "commit": "0c48044a70bae53fed919526bb1229d459a3e496"
+      },
+      "task_sha256": "a28ad145ce0a2f21a5ddc5e42da8d2938eef472d6eebccdfae5f3b76800c234a",
+      "hidden_sha256": "8470f7fea51acb961435ce7dfa70b61ff6813e115d9660908ff4fa8aae0592b7",
+      "batch": 2
+    },
+    {
+      "id": "ho2-py-feature-02",
+      "class": "feature",
+      "language": "python",
+      "difficulty": "easy",
+      "repo": {
+        "url": "https://github.com/python-semver/python-semver.git",
+        "commit": "d06388727caa4999cf224b94251128ceaf86b051"
+      },
+      "task_sha256": "effa275b6efa72679d3abc9dc90c567f2431fad1b906672bd9715cb499a1c8bb",
+      "hidden_sha256": "04005b00a2febe21704b8ec2d5edbdec9547fa1383f9a0836332c8ca00c51490",
+      "batch": 7
+    },
+    {
+      "id": "ho2-py-refactor-02",
+      "class": "refactor",
+      "language": "python",
+      "difficulty": "medium",
+      "repo": {
+        "url": "https://github.com/tkem/cachetools.git",
+        "commit": "716f7bb0d150d63e600d87fd5c8d8084d7c1052c"
+      },
+      "task_sha256": "ce7f02c07472375e0b048ed2986e4017c395700ac5f86cbc3c1796aab1d432d9",
+      "hidden_sha256": "d86242111e8ecf26f179b63d329e9ea9ffc2299bf8154a681465a4f000472f8b",
+      "batch": 4
+    },
+    {
+      "id": "ho2-py-refactor-03",
+      "class": "refactor",
+      "language": "python",
+      "difficulty": "hard",
+      "repo": {
+        "url": "https://github.com/pallets/click.git",
+        "commit": "445428e3ebdc44b274e4908848269f75df8718e8"
+      },
+      "task_sha256": "274059d220ce0240eebeadb5594980af496de960557414b0372e16d347203754",
+      "hidden_sha256": "c81a8b63ea6605d1acddc1d49f5af73291bba3f42bf249ab70c8430f10c405b0",
+      "batch": 8
+    },
+    {
+      "id": "ho2-rs-bugfix-01",
+      "class": "bugfix",
+      "language": "rust",
+      "difficulty": "medium",
+      "repo": {
+        "url": "https://github.com/unicode-rs/unicode-width.git",
+        "commit": "a3d4ee6c2989367e8d54ac70c83ee76ba0a71079"
+      },
+      "task_sha256": "4d9452df117ecfa1556b3e99154a0be3ccbddce9209e271723621ef758f73b2c",
+      "hidden_sha256": "a20097972f02f7aac2e57747898ff035f00750738561acf8345adb673eb5e1e6",
+      "batch": 2
+    },
+    {
+      "id": "ho2-rs-bugfix-02",
+      "class": "bugfix",
+      "language": "rust",
+      "difficulty": "medium",
+      "repo": {
+        "url": "https://github.com/kornelski/xml-rs.git",
+        "commit": "617a11ee4632dbbe6355b3afc119ced0e206dd69"
+      },
+      "task_sha256": "ddb883b688b3ec54dec2e6acbfb16ce90e6859b2a71ecd1354f6b37cf58f14ef",
+      "hidden_sha256": "161bff5b82b8626fa700095f74facbff60929014416bc954fbcfe97411ce5b4c",
+      "batch": 5
+    },
+    {
+      "id": "ho2-rs-debug-01",
+      "class": "debug",
+      "language": "rust",
+      "difficulty": "hard",
+      "repo": {
+        "url": "https://github.com/rapidfuzz/strsim-rs.git",
+        "commit": "15e1a033417864ec28b49e68040d177645957866"
+      },
+      "task_sha256": "7b2ed5301d331307380994effdfcbe915622415347c2b840ec8ee3250c20c4ff",
+      "hidden_sha256": "258472e4ad78022ae31137c3b57a5843de5b783de737c7be8be7e599dbb5509e",
+      "batch": 4
+    },
+    {
+      "id": "ho2-rs-debug-02",
+      "class": "debug",
+      "language": "rust",
+      "difficulty": "medium",
+      "repo": {
+        "url": "https://github.com/rust-lang/rustc-demangle.git",
+        "commit": "af38dc6b06b5665c79a4778268e4faf5decd19df"
+      },
+      "task_sha256": "8001362f06e235d800566da60547345e9a9cf101574492dddc6281152277433d",
+      "hidden_sha256": "25ee3dd432d6dfa5657072cb433091eefd742ff8f28346899057290fb4190bc3",
+      "batch": 7
+    },
+    {
+      "id": "ho2-rs-feature-01",
+      "class": "feature",
+      "language": "rust",
+      "difficulty": "easy",
+      "repo": {
+        "url": "https://github.com/KokaKiwi/rust-hex.git",
+        "commit": "19fd37137686c30058bd9d11d21590e726ffdf31"
+      },
+      "task_sha256": "83317f4dc50374533c004fe4dc78d3f7c00c6b70349d924896f2bfea26ddbfd2",
+      "hidden_sha256": "fb3b4a8349c122dd49cdcd6314705acf292adcf3ecab84f391701085e2e20c22",
+      "batch": 4
+    },
+    {
+      "id": "ho2-rs-feature-02",
+      "class": "feature",
+      "language": "rust",
+      "difficulty": "medium",
+      "repo": {
+        "url": "https://github.com/unicode-rs/unicode-width.git",
+        "commit": "afab363383557c39942706c9441a5670e321b4a0"
+      },
+      "task_sha256": "ec543088aeafedd42dc3f1399bf9634b3efc4a613bdc5b2f94c53dd6d558e29a",
+      "hidden_sha256": "0ada6a63ed7102914852c94422c5cad0e0b473a4ec1747f7b7d68b78252855f1",
+      "batch": 7
+    },
+    {
+      "id": "ho2-rs-feature-03",
+      "class": "feature",
+      "language": "rust",
+      "difficulty": "medium",
+      "repo": {
+        "url": "https://github.com/rapidfuzz/strsim-rs.git",
+        "commit": "f89f245766413dd541b0009b577b2f533a767c2e"
+      },
+      "task_sha256": "7926eb1fe31a26e171355cdca8cb66acb8e277a37d9815fe0b37e44f865323bb",
+      "hidden_sha256": "039a0b712019e86b2440be6311f3dd993c30a267bd41237a9f4d3505ffde8d68",
+      "batch": 9
+    },
+    {
+      "id": "ho2-rs-refactor-01",
+      "class": "refactor",
+      "language": "rust",
+      "difficulty": "medium",
+      "repo": {
+        "url": "https://github.com/rapidfuzz/strsim-rs.git",
+        "commit": "cd2e7b3bddceb17bcac0fe319f6fd325107be7ce"
+      },
+      "task_sha256": "cdb855173f04a6e851abe968e379a5a018e5847a2d75ff922d86c1b2f1d4416f",
+      "hidden_sha256": "8152ee1bd05bd6a0a41136dbcb17d298d84336016bfaad2f57b6b7b3f7f739aa",
+      "batch": 3
+    },
+    {
+      "id": "ho2-rs-refactor-02",
+      "class": "refactor",
+      "language": "rust",
+      "difficulty": "medium",
+      "repo": {
+        "url": "https://github.com/kornelski/xml-rs.git",
+        "commit": "73c24eac0639a1e085269cf6c7b81b41cf1b9ad3"
+      },
+      "task_sha256": "c7b276c625b99d30b5d57cee569760ffab92e0e8b9fe8db0df86802fdbf91023",
+      "hidden_sha256": "104761a50dd0768e87779b504635ebed3d540faa9a2a46468310d4a6d9b8ef92",
+      "batch": 6
+    },
+    {
+      "id": "ho2-rs-refactor-03",
+      "class": "refactor",
+      "language": "rust",
+      "difficulty": "easy",
+      "repo": {
+        "url": "https://github.com/KokaKiwi/rust-hex.git",
+        "commit": "b376468610eced4353204cffbe487ca6276e0797"
+      },
+      "task_sha256": "6b6f21e2f6995c52a336827cb93186d47c204910e83d745718c002986b279cd2",
+      "hidden_sha256": "5a422bb4ead6b1d75def589702d70ab8838b59e0de4a64c00120169d5f80ca05",
+      "batch": 8
+    }
+  ]
+}

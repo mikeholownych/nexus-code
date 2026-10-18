@@ -1,23 +1,34 @@
 # Nexus Code User Manual
 
-Welcome to **Nexus Code**, a local-first, autonomous, and interactive AI coding harness engineered for direct parity with OpenAI Codex and Anthropic Claude Code. Nexus Code connects to local inference servers (vLLM, LM Studio) and executes inside a native Linux shell environment.
+Welcome to **Nexus Code**, a local-first, autonomous and interactive AI coding harness. Nexus Code connects to local inference servers (vLLM, LM Studio) and executes inside a native Linux shell environment.
 
 ---
 
 ## 1. Quick Start
 
-### Starting the Interactive REPL / TUI
+### Starting the Interactive Environment (TUI & REPL)
 To launch the interactive coding environment in the current workspace:
 ```bash
 nexus
-# or
-harness repl
+```
+- **TTY default:** Running `nexus` with no arguments in a terminal launches the live Ratatui TUI (`nexus-tui`).
+- **Non-TTY / Headless fallback:** Running `nexus` without a TTY (in pipes or scripts) falls back to the interactive REPL.
+- **Explicit REPL:** Pass `nexus repl` (or `nexus --repl`) to explicitly launch the command-line REPL.
+```bash
+nexus repl
 ```
 
-To launch with human approval required before changes are written:
-```bash
-nexus --approve
-```
+### Execution Postures & Approval Modes
+
+Nexus Code resolves execution posture per workspace trust (DEC-01 option C):
+- **Untrusted workspaces:** Default to `review` posture, requiring human confirmation before executing shell commands, file modifications, network requests, or verifier test runs.
+- **Trusted workspaces:** Default to `auto` posture, permitting autonomous execution.
+
+Flags and commands:
+- **Trust your workspace:** Run `nexus trust .` to mark the current repository trusted and enable default `auto` execution.
+- **Review mode (human-in-the-loop):** Run `nexus --approve` (or `nexus --mode review`) to require explicit approval for all actions regardless of workspace trust.
+- **Autonomous mode (scripts and CI):** Pass `nexus --yes` (or `nexus --mode auto`, or set `NEXUS_APPROVAL_MODE=auto`) to run autonomously without interactive approval prompts.
+- **Read-only mode:** Run `nexus --read-only` to explore and analyze code without permitting any modifications or non-read commands.
 
 To resume your latest session:
 ```bash
@@ -31,6 +42,7 @@ To run a one-off objective and exit automatically when verified:
 ```bash
 nexus run "Refactor the authentication handler to support JWT rotation and add unit tests"
 ```
+Free-text task execution requires the explicit `nexus run "<prompt>"` subcommand. Passing unknown subcommand names or free text without `run` is treated as a command error (REQ-REL-104 / DEC-14).
 
 ### Viewing Tool Audit Logs
 To inspect recent tool executions, filter errors, or track latency:
@@ -45,9 +57,33 @@ To expose Nexus Code's native Rust tools to external LLM clients (Claude Desktop
 ```bash
 nexus serve-mcp --workspace /path/to/project
 ```
-See [MCP_GUIDE.md](file:///home/mike/nexus-code/docs/MCP_GUIDE.md) for full configuration details.
+See [MCP_GUIDE.md](MCP_GUIDE.md) for full configuration details.
+
+### Upgrading Nexus Code (`nexus upgrade` & `/upgrade`)
+To check whether an update is available without making changes:
+```bash
+nexus upgrade --check
+```
+Exit codes for `--check`:
+- `0`: Up to date (already on latest or requested version).
+- `1`: Update available.
+- `2`: Operational error (network, rate limit, release not found).
+
+To perform an in-place upgrade to the latest published stable release:
+```bash
+nexus upgrade
+```
+Prompts for confirmation unless `--yes` is passed. In non-interactive environments (scripts or CI), `--yes` is mandatory to perform modifications.
+
+To target an explicit release (including prereleases):
+```bash
+nexus upgrade --version v1.0.0
+```
+
+Inside the interactive live TUI, run `/upgrade` or `/upgrade --check`. The TUI displays the installed vs target version, destination, and requires deliberate modal confirmation before modifying any files. Running TUI sessions continue uninterrupted on their loaded code and notify when a restart is required.
 
 ---
+
 
 ## 2. Interactive REPL / TUI Features
 
@@ -81,7 +117,8 @@ Press `<TAB>` at any prompt to autocomplete slash commands and directory paths.
   changed file is a test, the run names a changed file, a test imports a changed module, or the change has inline
   tests the run executes (Rust `#[cfg(test)]` under `cargo test`, Go `_test.go` files under `go test`). A passing run
   that shows none of that only shows nothing else broke: the outcome is `tests passed, change not covered`
-  (`REGRESSION_FREE`, exit code 2), and requirements cannot be marked `verified` on it. When Nexus found the test
+  (`REGRESSION_FREE`, exit code 2), and requirements cannot be marked `verified` on it. When resuming (`nexus run --resume`),
+  if no prior task exists in the workspace (or a specified task ID cannot be found), the command exits with exit code 2. When Nexus found the test
   command itself, a covering pass is VERIFIED only if it is also **independent of Nexus**: before its first edit Nexus
   runs the tests once, and the tests as they were then (Nexus's own new or edited tests set aside) must have failed
   before the change and pass after it. Tests Nexus wrote in the same change cannot catch its own misreading of what you
@@ -159,6 +196,18 @@ Press `<TAB>` at any prompt to autocomplete slash commands and directory paths.
   colour; `NEXUS_COLOR=truecolor|256|16|none` overrides. The `+`/`−` markers and labels carry the meaning at every
   depth.
 
+### Cancellation & Process Ownership
+
+- **Cancelling in the TUI:** While a turn is running, pressing `Esc` or `Ctrl-C` sets `cancel_requested`. The footer immediately acknowledges the request:
+  ```
+  ⠋ cancelling — waiting for <tool> (<n>s) · ctrl-c again to quit
+  ```
+  Within one frame, the cancellation signal reaches the command runner and inference engine.
+- **Process Group Termination (REQ-AGT-109, REQ-SEC-106):** Cancellation terminates the entire process group (`killpg`) of in-flight commands: `SIGTERM` is sent immediately, followed by `SIGKILL` after a 2-second grace period. The turn reaches an idle state within 5 seconds.
+- **Repeated Cancel Input:** While cancelling, a second `Esc` has no effect. A second `Ctrl-C` force-quits the TUI and sidecar, initiating an automatic shutdown sweep that terminates all child processes.
+- **Background Services:** Commands launched with `run_command { background: true, service_name }` (such as background dev servers) are registered as managed services. They survive turn cancellation and are listed in `/status`. On client exit or application shutdown, all registered background services are cleaned up. Background processes spawned without registration (`cmd &`) are terminated on turn cancellation.
+- **Notification Gating (REQ-AGT-109a):** Turn completion notifications (desktop `notify-send` and terminal `BEL` `\x07`) are gated to interactive TTY environments running on the REPL or TUI surface. Headless runs (`nexus run --json`) emit no BEL characters and spawn no notifications.
+
 ### Long tasks: no step ceiling
 
 `--max-steps` (default 30) is a segment: at each segment boundary the turn writes a durable checkpoint and continues
@@ -193,18 +242,20 @@ dependency/environment markers, same process).
 `/compact [--llm]` during work is queued (acknowledged at once) and runs once the current inference and its tool
 batch — approvals included — have settled, before the next request; its outcome is reported for its request. Every
 compaction archives the originals first, then writes the task state and the session; a write failure is reported
-and never shown as success. The context window and output allowance come from the provider when it advertises them
-(the homelab-ai gateway; vLLM `max_model_len`), else from `--context-limit` or labelled defaults; `/status` shows
-both with their source and how the last request was counted (`exact_admitted`, `exact_sampled_worker`,
-`gateway_conservative`, `client_estimate`). `--strict-token-count` refuses requests that could not be counted on a
-worker. See `docs/COMPACTION_AND_CONTINUITY.md`.
+and never shown as success. The context window and output allowance are discovered from the active endpoint: vLLM (`/v1/models` `max_model_len`),
+llama.cpp (`/props` `n_ctx`), LM Studio (`/api/v0/models` `loaded_context_length`), Ollama (`/api/show` `num_ctx` or
+`model_info.*.context_length`), or gateway capability advertisements, else from `--context-limit` (`NEXUS_CONTEXT_LIMIT`)
+or the labelled 65536 default (`client_default`). `/status` and `nexus doctor` show both with their source (`provider_advertised`,
+`server_probe (<kind>)`, `operator_override`, or `client_default`) and how the last request was counted (`exact_admitted`,
+`exact_sampled_worker`, `gateway_conservative`, `client_estimate`). `--strict-token-count` refuses requests that could not
+be counted on a worker. See `docs/LOCAL_SERVERS.md` and `docs/COMPACTION_AND_CONTINUITY.md`.
 
 ### Direct Shell Execution (`!`)
 Run raw bash/zsh commands instantly inside the active workspace without invoking the LLM:
 ```text
-nexus (engineering/b0) my-app ❯ !git status
-nexus (engineering/b0) my-app ❯ !cargo check
-nexus (engineering/b0) my-app ❯ !npm test
+nexus (qwen2.5-coder) my-app ❯ !git status
+nexus (qwen2.5-coder) my-app ❯ !cargo check
+nexus (qwen2.5-coder) my-app ❯ !npm test
 ```
 
 ### Slash Commands Cheatsheet
@@ -216,6 +267,8 @@ nexus (engineering/b0) my-app ❯ !npm test
 | `/plan [add\|done\|start\|clear]` | Formulate and manage multi-phase milestone execution plan |
 | `/tui` | REPL only: open the session dashboard (not offered in the live TUI, where it had no purpose) |
 | `/doctor [--deep] [--fix [--yes]]` | Diagnose this session's configuration, endpoint, engine, shell and state (see `docs/DOCTOR_TROUBLESHOOTING.md`) |
+| `/upgrade [--check\|--version <v>\|--yes]` | Check for updates or safely upgrade to the latest stable or pinned release with deliberate approval |
+
 | `/theme [name]` | View or switch terminal color theme (Catppuccin, Nord, Dracula, etc.) |
 | `/team <role\|full> <task>` | Orchestrate multi-agent team (Researcher, Architect, Implementer, Tester) |
 | `/image <path> [prompt]` | Ingest multi-modal image / screenshot into vision model context |
@@ -229,7 +282,7 @@ nexus (engineering/b0) my-app ❯ !npm test
 | `/commit [msg]` | Generate or execute Conventional Commit from staged changes |
 | `/audit [count]` | Inspect visual tool execution audit trail (recent N entries) |
 | `/compact [--llm]` | Distill earlier conversation into structured memory; queued while work runs, committed durably (archive, task state, session) |
-| `/mode [auto\|review]` | Toggle autonomous execution vs human approval before edits |
+| `/mode [auto\|review]` | Toggle autonomous execution vs human approval. Review mode asks before file changes, commands (including MCP and plugin tools) and network access; network access is asked once per destination per session |
 | `/sessions` | List saved past sessions |
 | `/save [name]` | Save current conversation session to `~/.nexus/sessions/` |
 | `/resume [id]` | Resume an existing session |
@@ -286,13 +339,25 @@ Nexus Code provides high-performance tools executed via compiled native 64-bit R
 ## 4. Safety, Compliance & Resilience
 
 - **Workspace Symlink Boundary Confinement**: Native Rust canonicalization verifies that neither relative paths nor symlinks can escape the workspace jail directory.
-- **Configurable Security Policy (`.nexus-security.json`)**: Declare repository-specific blocked shell commands, protected files (`.git`, `.env`, keys), and allowed outbound network domains.
-- **Dry-Run & Read-Only Modes**:
+- **Configurable Security Policy (`.nexus-security.json`)**: Declare repository-specific blocked shell commands, protected files (`.git`, `.env*`, keys), and allowed outbound network domains. Protected-path checks cover case-insensitive variants, `.env*` prefixes, and canonical targets across all file read/write/edit tools; for `run_command` path protection is advisory because shell commands execute in the host shell environment.
+- **Dry-Run & Read-Only Modes (REQ-SEC-104)**:
   - `--dry-run`: Intercepts file writes and mutating commands to simulate changes without touching disk.
-  - `--read-only`: Rejects all file modifications and non-read shell commands with an immediate error.
-- **Lightweight Container Sandboxing (`--sandbox`)**: Restricts filesystem mutation strictly to the target workspace using Linux Bubblewrap (`bwrap`) or Docker isolation.
-- **Worker Thread Plugin Sandboxing**: Untrusted or custom plugin handlers execute in isolated Node.js `worker_threads` with strict timeout boundaries and memory caps.
-- **Workspace Trust**: A workspace's own `.mcp.json` / `mcp.json` servers and `.nexus/plugins/` / `plugins/` modules run code from the workspace, so they are loaded only after you trust it: `nexus trust [path]` (undo with `nexus trust --remove`, list with `nexus trust --list`; recorded in `~/.config/nexus/trusted_workspaces.json`, which the agent's file tools cannot write). Untrusted, they are not loaded and Nexus says so (a notice at start, `nexus doctor`, `nexus mcp`, `nexus plugins`); in `--read-only` mode they are never loaded. Servers and plugins in your home configuration (`~/.config/nexus/`, `~/.nexus/`) are always loaded.
+  - `--read-only`: Rejects all file modifications and non-read shell commands with an immediate error. Under container sandboxing (`bwrap`), `--tmpfs $HOME` is mounted to completely mask SSH keys (`~/.ssh`), credentials, and dotfiles from `run_command`. Without `bwrap`, strict path confinement rejects paths referencing `~`, `$HOME`, environment variables (`$`), absolute paths outside the workspace, or escaping `..` sequences.
+- **Lightweight Container Sandboxing & Direct Argv Spawning (`--sandbox`, REQ-SEC-109)**: Restricts filesystem mutation strictly to the target workspace using Linux Bubblewrap (`bwrap`) or Docker isolation. Sandbox commands are constructed as direct `argv` argument arrays and executed without passing through a host shell (`sh -c` / `bash -c`), preventing shell escaping vulnerabilities with paths containing spaces or quotes.
+- **In-Process Plugin Execution & Middleware Auditing**: Custom plugin handlers and middleware execute in-process with full user authority. Plugins are loaded only from documented directories: `~/.config/nexus/plugins/`, `~/.nexus/plugins/`, and trusted workspace directories (`.nexus/plugins/`, `plugins/`). The undocumented foreign directory `~/.config/opencode/plugins` has been removed (REQ-SEC-115), and the legacy worker-thread sandbox claim has been retired (`executeSandboxed` deleted, REQ-SEC-117). Any middleware rewriting of tool I/O (`preToolExecution` or `postToolExecution`) is cryptographically audited with before-and-after SHA-256 digests in both `~/.nexus/audit.log` (`kind: "middleware_rewrite"`) and the flight log (EXT-004, REQ-SEC-116).
+- **Workspace Trust & Context Provenance (REQ-SEC-113, CTX-001)**: An opened workspace is data until explicitly trusted by the operator. Workspace trust covers:
+  - Workspace `.mcp.json` / `mcp.json` server definitions.
+  - Workspace plugins (`.nexus/plugins/`, `plugins/`).
+  - Workspace skills (`skills/`, `.nexus/skills/`, `.claude/skills/`).
+  - Workspace knowledge graph (`.nexus/knowledge.json`).
+  Trust is managed via `nexus trust [path]` (undo with `nexus trust --remove`, list with `nexus trust --list`; stored in `~/.config/nexus/trusted_workspaces.json`, which the agent's file tools cannot write). In an untrusted workspace:
+  - Workspace MCP servers and plugins are not loaded.
+  - Workspace skills are not loaded into context; `/skills` lists them as "untrusted (not loaded)". Attempting to use `/skill <name>` or the `activate_skill` tool on an untrusted skill is refused with: `Skill '<name>' belongs to an untrusted workspace. Run 'nexus trust .' to trust this workspace.`.
+  - Workspace knowledge is ignored and not loaded into context.
+  - Injected prompt blocks from skills and knowledge are explicitly annotated with source path and trust state (`[source: <path>] [trust: <state>]`).
+  - In `--read-only` mode, untrusted components are never loaded, no writes occur, and `.nexus/` is never created.
+  Servers, plugins, and skills in your home configuration (`~/.config/nexus/`, `~/.nexus/`) are always trusted and loaded.
+- **Knowledge Graph Hygiene & Auto-Extraction Gating (REQ-SEC-114)**: The `KnowledgeGraph` has a lazy constructor that performs no filesystem creation until a write is explicitly requested. In `--read-only` mode, all mutations are blocked. Implicit standing instruction creation via automatic prompt mining (`autoExtract`) is disabled by default per DEC-15. It can only be enabled explicitly via `NEXUS_KNOWLEDGE_AUTOEXTRACT=1`, which prints a notification whenever a new rule is recorded into `<workspace>/.nexus/knowledge.json`.
 - **MCP Server Environment**: MCP servers start with basic process, locale, proxy (`HTTPS_PROXY`, `NO_PROXY`, …) and CA-trust (`SSL_CERT_FILE`, `NODE_EXTRA_CA_CERTS`, …) variables only — not Nexus's own credentials. Give a server the token it needs in its `env` block in `mcp.json`.
 - **Build Identity**: `nexus --version` and `nexus doctor` show the commit the running build was made from, its branch, and whether the source had uncommitted changes (`1.2.1 (cc177be91d15-dirty, feat/tui-surface)`), recorded at `make build`.
 - **Pseudo-Terminal (PTY) Allocation**: Commands requiring TTY capabilities run inside allocated virtual pseudo-terminals via `portable-pty`.
@@ -300,8 +365,18 @@ Nexus Code provides high-performance tools executed via compiled native 64-bit R
 - **BPE Token Accounting & Context Gauge**: Real-time token breakdown across system instructions, tools schema, user messages, assistant thinking, and tool output payloads with visual ANSI progress gauge.
 - **Structured Context Compaction**: `/compact` distills discarded messages into structured memory (files touched, commands run, architectural decisions) instead of discarding context blindly.
 - **Dynamic Few-Shot Injection**: Context-aware injection of valid tool exemplars (edits, test repair, batch reads) tailored to the active task, eliminating tool hallucination in local models (Qwen 2.5, DeepSeek Coder).
-- **Dangerous Command Guard**: Blocks destructive commands (`rm -rf /`, `mkfs`, raw device writes, fork bombs) from executing.
-- **SSRF Network Protection**: Blocks outbound access to loopback (`127.0.0.1`), cloud metadata (`169.254.169.254`), and private RFC-1918 subnets in `fetch_web`.
+- **Destructive Command Convenience Tripwire (REQ-SEC-108)**: Shell-words tokenization in TypeScript and Rust blocks obviously destructive commands (`rm -rf /`, `mkfs`, raw block device writes, fork bombs) without false positives on legitimate project commands (`rm -rf ./build`, `rm -rf /tmp/x`, `grep reboot`, `echo shutdown`, `chown -R me /srv`). This denylist is a **convenience tripwire** to catch obvious mistakes, **not a security boundary**. Known bypasses (such as `find / -delete`, `/bin/rm -rf /`, `rm -r -f /`, Python scripts) are documented non-goals that pass by design; the sandbox (`--sandbox`) and approval posture (`review`) form the security boundary.
+- **Verifier Execution Gating (REQ-SEC-119)**: Automated test runs and verifiers (`run_tests`, `/test`, completion oracle) are classified as `exec` capabilities subject to the approval policy. In untrusted workspaces, the first verifier execution prompts for approval, displaying the exact test command and resolved script body from `package.json`, `Makefile`, or `Cargo.toml`.
+- **Approval Input Safety & Surface Integrity (REQ-SEC-103, TUI-09, TUI-10)**:
+  - In `InteractiveRepl`: Prompts display `[y/N/d/a]`. Lone Enter safely defaults to No (`N`). A 400ms grace period discards typed-ahead input and pastes. Selecting `a` (approve all) requires explicit typing of `all` to confirm.
+  - In the Ratatui TUI: The approval modal lays out `Approve` (left) · `All later` (center) · `Deny` (right). Left arrow (`←`) selects `Approve` and Right arrow (`→`) selects `Deny`. On narrow terminals (<60 columns), short-form hints fit within 38 columns without clipping.
+- **SSRF Network Protection (`safeFetch`, REQ-SEC-112)**: Outbound HTTP scraping via `fetch_web` enforces rigorous SSRF protections:
+  - Resolves hostnames and rejects non-public addresses (loopback `127.0.0.0/8` / `::1`, RFC-1918 private subnets, CGNAT `100.64.0.0/10`, link-local `169.254.0.0/16` / `fe80::/10`, IPv6 ULA `fc00::/7`, and IPv4-mapped loopback/private addresses).
+  - Pins the resolved public IP address to the connection to prevent DNS-rebinding attacks.
+  - Handles HTTP redirects manually (maximum 5 hops), re-validating the resolved IP on every redirect hop.
+  - Streams the response body with a strict 5 MB cap (RSS < 100 MB) to prevent denial-of-service memory exhaustion.
+  - Requests are gated by the SPEC-01 egress policy.
+- **Web Search Honesty & Disclosure (REQ-PRV-108)**: `search_web` queries technical search providers and returns `success: false` and empty results when no search hits are found (no fabricated or placeholder results). Its search destination is disclosed on first use and routed through the egress disclosure gate.
 - **Non-Blocking Pipe Execution**: Drains stdout and stderr concurrently to prevent 64KB Linux buffer saturation deadlocks during intensive builds.
 - **Secret Redaction**: Redacts Bearer tokens, private keys, and passwords before printing or logging.
 - **Audit Logging**: Every tool execution is recorded with timestamps, parameters, duration, and status in `~/.nexus/audit.log`. Visual inspection available via `/audit` and `nexus audit`.

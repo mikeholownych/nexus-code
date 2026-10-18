@@ -116,6 +116,7 @@ describe("WP-01: CapabilityRegistry & Canonical Capability Model (INC-01)", () =
       modelToolName: "read_file", // already registered!
       category: "fs",
       mutating: false,
+      effect: "read_workspace",
       sideEffectContract: "Duplicate read",
       backend: "ts_native",
       toolDefinition: {

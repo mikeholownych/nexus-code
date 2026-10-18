@@ -50,11 +50,16 @@ export type SidecarEvent =
       workspace: string;
       workspace_name: string;
       model: string;
-      mode: "auto" | "review";
+      mode: "auto" | "review" | "read-only";
       git: { branch: string; dirty: number } | null;
       busy: boolean;
       /** The id the session is saved under (shown so it can be resumed or referred to). */
       session?: string;
+      posture?: {
+        mode: "auto" | "review" | "read-only";
+        sandbox: string;
+        trusted: boolean;
+      };
     }
   | { type: "assistant.delta"; turn_id: string; text: string }
   /** What the running turn is doing; sent on every phase change, independent of model output. */
@@ -308,10 +313,11 @@ export function providerRecoveryNotice(record: ProviderRecoveryRecord, discarded
   const last = record.submissions[record.submissions.length - 1];
   const condition = record.condition.toLowerCase().replace(/_/g, " ");
   const discarded = discardedPartialOutput ? " The partial response was discarded." : "";
+  const where = record.endpoint ? ` at ${record.endpoint}` : "";
   switch (record.state) {
     case "WAITING": {
       const secs = record.nextAttemptAt ? Math.max(0, Math.round((Date.parse(record.nextAttemptAt) - Date.parse(record.updatedAt)) / 1000)) : 0;
-      return `Inference provider ${condition} (${last?.httpStatus ? `HTTP ${last.httpStatus}` : last?.kind ?? "failure"}); waiting ${secs}s before checking again. Work is preserved.${discarded}`;
+      return `Inference provider${where} ${condition} (${last?.httpStatus ? `HTTP ${last.httpStatus}` : last?.kind ?? "failure"}); waiting ${secs}s before checking again. Work is preserved.${discarded}`;
     }
     case "RESUMED":
       return `Inference provider recovered after ${Math.round(record.waitedMs / 1000)}s; step ${record.step} resumed.`;

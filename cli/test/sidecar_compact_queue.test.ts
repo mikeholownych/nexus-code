@@ -16,7 +16,7 @@ async function rig(script: (n: number) => Reply, fn: (r: { events: any[]; send: 
   const home = makeHome();
   const previousHome = process.env.HOME;
   process.env.HOME = home;
-  const app = new ApplicationCore({ endpoint: gw.url, model: "m", maxSteps: 30, temperature: 0, workspace: repo, shell: "bash", continuation: { ...DEFAULT_CONTINUATION } } as any);
+  const app = new ApplicationCore({ endpoint: gw.url, model: "m", maxSteps: 30, temperature: 0, workspace: repo, shell: "bash", continuation: { ...DEFAULT_CONTINUATION }, approvalMode: "auto", fullAccess: true } as any);
   const events: any[] = [];
   const server = new SidecarServer({ app, mode: "auto", write: (line) => events.push(JSON.parse(line)) });
   server.start();

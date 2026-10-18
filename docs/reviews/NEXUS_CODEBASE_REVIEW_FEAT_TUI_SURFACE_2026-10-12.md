@@ -1,5 +1,7 @@
 # Codebase review — `feat/tui-surface`
 
+> **Historical record.** This document is kept for provenance. Current requirements and status: [docs/v1.0.0/REQUIREMENTS.md](../v1.0.0/REQUIREMENTS.md). Statuses here may have been superseded or contradicted since it was written.
+
 **Review date:** 2026-10-12  
 **Review mode:** Read-only code review; no source/configuration changes.  
 **Checkout:** `feat/tui-surface`, HEAD `dda2e62` (`fix(tui): approvals are never decided by typing, with pauses or slowly (re-acceptance P1)`).  

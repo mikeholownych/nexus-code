@@ -8,11 +8,13 @@ import {
   redactForPersistence,
   SensitivePersistenceError,
 } from "./core/persistence_protection.js";
+import { ensurePrivateDir, writePrivateFile } from "./core/durable_file.js";
 
 export interface CheckpointInfo {
   id: string;
   name: string;
   timestamp: string;
+  workspace?: string;
   gitRef?: string;
   snapshotDir?: string;
   files?: Array<{ path: string; content: string }>;
@@ -27,9 +29,7 @@ export class CheckpointManager {
     this.workspace = path.resolve(workspace);
     const hash = crypto.createHash("sha256").update(this.workspace).digest("hex").slice(0, 12);
     this.checkpointDir = path.join(os.homedir(), ".nexus", "checkpoints", hash);
-    if (!fs.existsSync(this.checkpointDir)) {
-      fs.mkdirSync(this.checkpointDir, { recursive: true });
-    }
+    ensurePrivateDir(this.checkpointDir);
     this.checkGit();
   }
 
@@ -43,9 +43,7 @@ export class CheckpointManager {
   }
 
   private copyDirFiltered(src: string, dest: string): void {
-    if (!fs.existsSync(dest)) {
-      fs.mkdirSync(dest, { recursive: true });
-    }
+    ensurePrivateDir(dest);
     const ignored = new Set(["node_modules", ".git", "target", "dist", ".nexus", ".next", ".cache"]);
     const entries = fs.readdirSync(src, { withFileTypes: true });
     for (const entry of entries) {
@@ -58,7 +56,7 @@ export class CheckpointManager {
       } else if (entry.isFile()) {
         const content = fs.readFileSync(srcPath);
         assertNoSensitivePersistenceContent(content.toString("utf8"), "checkpoint");
-        fs.writeFileSync(destPath, content);
+        writePrivateFile(destPath, content);
       }
     }
   }
@@ -149,6 +147,10 @@ export class CheckpointManager {
         } else {
           // Working tree was clean; record HEAD
           const headCommit = execSync("git rev-parse HEAD", { cwd: this.workspace, encoding: "utf-8" }).trim();
+          execSync(`git update-ref refs/nexus/checkpoints/${id} ${headCommit}`, {
+            cwd: this.workspace,
+            stdio: "ignore",
+          });
           gitRef = headCommit;
         }
       } catch (error) {
@@ -175,13 +177,22 @@ export class CheckpointManager {
       id,
       name: desc,
       timestamp,
+      workspace: this.workspace,
       gitRef,
       snapshotDir,
     };
 
     const targetFile = path.join(this.checkpointDir, `${id}.json`);
-    fs.writeFileSync(targetFile, JSON.stringify(checkpoint, null, 2), "utf-8");
+    writePrivateFile(targetFile, JSON.stringify(checkpoint, null, 2), { durable: true });
     return checkpoint;
+  }
+
+  public getCheckpointDir(): string {
+    return this.checkpointDir;
+  }
+
+  public getWorkspace(): string {
+    return this.workspace;
   }
 
   public listCheckpoints(): CheckpointInfo[] {

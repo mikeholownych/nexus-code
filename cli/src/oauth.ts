@@ -14,6 +14,7 @@ import * as http from "node:http";
 import { createHash, randomBytes } from "node:crypto";
 import type { AddressInfo } from "node:net";
 import { chatgptAccountId, jwtExpiry, type StoredCredential } from "./credentials.js";
+import { boundedProviderText } from "./client.js";
 
 export const CHATGPT_CLIENT_ID = "app_EMoamEEZ73f0CkXaXp7hrann";
 export const COPILOT_CLIENT_ID = "Iv1.b507a08c87ecfe98";
@@ -91,7 +92,7 @@ async function postForm(url: string, form: Record<string, string>, headers: Reco
   const text = (await res.text()).slice(0, MAX_BODY);
   let body: any;
   try { body = JSON.parse(text); } catch { body = undefined; }
-  if (!res.ok) throw new Error(`HTTP ${res.status} from ${new URL(url).host}: ${(body?.error_description ?? body?.error ?? text).toString().slice(0, 200)}`);
+  if (!res.ok) throw new Error(`HTTP ${res.status} from ${new URL(url).host}: ${boundedProviderText(String(body?.error_description ?? body?.error ?? text))}`);
   return body ?? {};
 }
 
@@ -150,7 +151,7 @@ async function openrouterFlow(ep: OAuthEndpoints, signal: AbortSignal): Promise<
       redirect: "error",
     });
     const body: any = await res.json().catch(() => ({}));
-    if (!res.ok || typeof body.key !== "string") throw new Error(`OpenRouter key exchange failed (HTTP ${res.status}).`);
+    if (!res.ok || typeof body.key !== "string") throw new Error(`OpenRouter key exchange failed (HTTP ${res.status}): ${boundedProviderText(JSON.stringify(body))}`);
     return { type: "api", key: body.key, label: "OpenRouter sign-in", savedAt: savedAt() };
   })();
   return { prompt: { url, instructions: "Approve Nexus in the browser; OpenRouter then issues an API key for it." }, result, cancel: lb.close };
@@ -191,7 +192,7 @@ async function chatgptFlow(ep: OAuthEndpoints, signal: AbortSignal): Promise<Aut
     const p = await lb.params;
     if (p.get("state") !== state) throw new Error("ChatGPT sign-in returned a mismatched state; aborted.");
     const code = p.get("code");
-    if (!code) throw new Error(`ChatGPT sign-in failed: ${p.get("error_description") ?? p.get("error") ?? "no code"}`);
+    if (!code) throw new Error(`ChatGPT sign-in failed: ${boundedProviderText(p.get("error_description") ?? p.get("error") ?? "no code")}`);
     const body = await postForm(`${ep.chatgptIssuer}/oauth/token`, {
       grant_type: "authorization_code",
       code,
@@ -215,7 +216,7 @@ export async function copilotToken(githubToken: string, ep: OAuthEndpoints = end
   });
   if (res.status === 401 || res.status === 403) throw new Error("This GitHub account has no Copilot access (or the token was revoked).");
   const body: any = await res.json().catch(() => ({}));
-  if (!res.ok || typeof body.token !== "string") throw new Error(`Copilot token exchange failed (HTTP ${res.status}).`);
+  if (!res.ok || typeof body.token !== "string") throw new Error(`Copilot token exchange failed (HTTP ${res.status}): ${boundedProviderText(JSON.stringify(body))}`);
   return {
     type: "oauth",
     access: body.token,
@@ -247,7 +248,7 @@ async function copilotFlow(ep: OAuthEndpoints, signal: AbortSignal): Promise<Aut
       if (r.access_token) return copilotToken(r.access_token, ep, both);
       if (r.error === "authorization_pending") continue;
       if (r.error === "slow_down") { interval += 5_000; continue; }
-      throw new Error(`GitHub sign-in failed: ${r.error_description ?? r.error ?? "unknown error"}`);
+      throw new Error(`GitHub sign-in failed: ${boundedProviderText(String(r.error_description ?? r.error ?? "unknown error"))}`);
     }
     throw new Error("GitHub sign-in timed out.");
   })();
