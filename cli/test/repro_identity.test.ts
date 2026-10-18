@@ -15,11 +15,12 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..")
 const SCRIPT = path.join(ROOT, "scripts/repro-identity.mjs");
 const COMMIT = "a".repeat(40);
 
-function identity(label: string, overrides: { commit?: string; lock?: string; archive?: string } = {}) {
+function identity(label: string, overrides: { commit?: string; lock?: string; archive?: string; workflowRef?: string; image?: string | null } = {}) {
   return {
     source: { version: "v1.0.0-rc.1", commit: overrides.commit ?? COMMIT, tree: "b".repeat(40), tagObject: "c".repeat(40), lockfiles: { "cli/package-lock.json": "1", "core/Cargo.lock": overrides.lock ?? "2", "rust-toolchain.toml": "3" } },
     toolchain: { node: "v20", npm: "10", rustc: "rustc 1.95.0", cargo: "cargo 1.95.0" },
-    runner: { label, image: null, imageVersion: null },
+    runner: { label, image: overrides.image === undefined ? label.replace("-", "").replace(".04", "") : overrides.image, imageVersion: "20261012.1" },
+    workflow: { ref: overrides.workflowRef ?? "refs/tags/v1.0.0-rc.1", sha: overrides.commit ?? COMMIT, runId: "42", runAttempt: "1" },
     artifacts: { "nexus-linux-x86_64-v1.0.0-rc.1.tar.gz": overrides.archive ?? "d" },
   };
 }
@@ -42,7 +43,10 @@ test("repro compare accepts only identical source, lockfiles and artifacts from 
       ["other commit", write("c.json", identity("ubuntu-24.04", { commit: "e".repeat(40) })), /not v1\.0\.0-rc\.1@/],
       ["lockfile drift", write("l.json", identity("ubuntu-24.04", { lock: "9" })), /different source or lockfiles/],
       ["artifact drift", write("x.json", identity("ubuntu-24.04", { archive: "f" })), /artifact digests differ/],
-      ["same builder twice", a, /not distinct/],
+      ["same builder twice", a, /must be exactly/],
+      ["unexpected builder", write("u.json", identity("ubuntu-20.04")), /must be exactly/],
+      ["missing runner image", write("i.json", identity("ubuntu-24.04", { image: null })), /runner image/],
+      ["workflow from a branch", write("w.json", identity("ubuntu-24.04", { workflowRef: "refs/heads/patched" })), /ran the workflow from refs\/heads\/patched/],
     ];
     for (const [name, other, message] of cases) {
       const result = compare(a, other);

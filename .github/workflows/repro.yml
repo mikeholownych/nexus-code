@@ -29,6 +29,9 @@ jobs:
         run: |
           [[ "$VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-rc\.[0-9]+)?$ ]] || { echo "version must be vX.Y.Z or vX.Y.Z-rc.N" >&2; exit 1; }
           [[ "$COMMIT" =~ ^[0-9a-f]{40}$ ]] || { echo "commit must be a full 40-hex SHA" >&2; exit 1; }
+          # The workflow definition must be the RC's own: dispatch it on the tag, not a branch.
+          test "$GITHUB_REF" = "refs/tags/$VERSION" || { echo "dispatch this workflow on refs/tags/$VERSION (got $GITHUB_REF)" >&2; exit 1; }
+          test "$GITHUB_WORKFLOW_SHA" = "$COMMIT" || { echo "workflow file is from $GITHUB_WORKFLOW_SHA, not $COMMIT" >&2; exit 1; }
       - uses: actions/checkout@v4
         with:
           ref: refs/tags/${{ inputs.version }}
