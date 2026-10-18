@@ -57,7 +57,7 @@
     }
   },
   "revision": {
-    "commit": "a6b048eb584bfd6eaf40d6df741f30a358b86008",
+    "commit": "06e38de830afc4e9081e84670d3968af6ec29554",
     "dirty": false,
     "profileSha256": "4e8d42a218a68fa2fd3fd0de4d9788b205fa41b9ab71935cc2b6cf73f5d63543",
     "manifestSha256": "50895b84a604fbfd45ed82e29cbef4ba795d7fffbe6611af23bfbc9851f3e89b",
@@ -88,15 +88,15 @@
       },
       {
         "file": "eval/isolate.mjs",
-        "sha256": "22982e943bae6ce9a665f654239a6d497dadd94d04af5c7c3b1ce220c1e42796"
+        "sha256": "8e48e2622550fc8eb530d4dd7b4a4ef13a5111352824747aef51bb68ea33c54b"
       },
       {
         "file": "eval/validate.mjs",
-        "sha256": "9346009281dbf8c9e7baed3e3c103feaccae785ec0e2a13004698183f595e180"
+        "sha256": "fb066731fc72e7ee21ceaa87f210c2e69cf4e45a048f13d3e07df109113a7566"
       },
       {
         "file": "eval/run.mjs",
-        "sha256": "41ef354a13b41520355d52dec5ff72b3df5754f7198d99dcaf23117cfdc65c74"
+        "sha256": "07681f90663a0ff11303bb75351f2989d48d5ae332acd10068a77486d56ad0c7"
       },
       {
         "file": "eval/hardened_check.mjs",
@@ -119,5 +119,78 @@
         "sha256": "5386a21d1b86c0701647457a0b7b61db6ab4eab27ec9e49ecf3d969c1cfb96af"
       }
     ]
+  },
+  "sourceEquivalenceAssessment": {
+    "assessedAt": "2026-10-18T17:44:22.047Z",
+    "currentCommit": "b0ee5829a4db1750a6fb2b7d3c184d442611b7dc",
+    "observedAtCommit": "06e38de830afc4e9081e84670d3968af6ec29554",
+    "dirty": false,
+    "profileSha256": "4e8d42a218a68fa2fd3fd0de4d9788b205fa41b9ab71935cc2b6cf73f5d63543",
+    "manifestSha256": "50895b84a604fbfd45ed82e29cbef4ba795d7fffbe6611af23bfbc9851f3e89b",
+    "currentSourceDigests": [
+      {
+        "file": "eval/host/validate.mjs",
+        "sha256": "2031a2ad95e7ae02ae78758935050d4b854475115360203a307de61b3e24c82e"
+      },
+      {
+        "file": "eval/host/provision.sh",
+        "sha256": "1db27fdcb9a70e013a41f47d431ceb788184a5489a9f10490c9e507aa5e12e62"
+      },
+      {
+        "file": "eval/host/rollback.sh",
+        "sha256": "e8cdd1797456fc11543a0c18a51a9dbdd6cca559b6296478a62ad748e0a74c10"
+      },
+      {
+        "file": "eval/host/resource-profile.json",
+        "sha256": "4e8d42a218a68fa2fd3fd0de4d9788b205fa41b9ab71935cc2b6cf73f5d63543"
+      },
+      {
+        "file": "eval/resources.mjs",
+        "sha256": "7a1e276938a88ed5b9858a1e1b5aa174f96c75fdf1ad393cb29e5c383858f2b6"
+      },
+      {
+        "file": "eval/cgroup_supervisor.mjs",
+        "sha256": "222646943526480db44bc4359416f4b69ac389c5d50a8bc49e3a00a233a1a8ca"
+      },
+      {
+        "file": "eval/isolate.mjs",
+        "sha256": "22982e943bae6ce9a665f654239a6d497dadd94d04af5c7c3b1ce220c1e42796"
+      },
+      {
+        "file": "eval/validate.mjs",
+        "sha256": "5fc8822fdce4981fa2389c1a3002629147ea3fc8935e19fe7d3c6ce097018d5d"
+      },
+      {
+        "file": "eval/run.mjs",
+        "sha256": "ab7d85638f2b2dedc85fc1a7ada75d6d1c764305bdabbf8dca6ef61bb09aeca4"
+      },
+      {
+        "file": "eval/hardened_check.mjs",
+        "sha256": "8c14d6a5cc702969693193d54ccb93c3549d1fdb75ef1dd47d3e3a0db6d32119"
+      },
+      {
+        "file": "eval/hide_oracle.cjs",
+        "sha256": "f6c15333acf82e75df55af60c021a3ee3347b115c7b72051bc68da64d0fdd537"
+      },
+      {
+        "file": "eval/hide_oracle.py",
+        "sha256": "0b4a0e24f254091c1efe2985c95670549460c0325f487910a6aac591fb33d37e"
+      },
+      {
+        "file": "eval/unlink_then_exec.sh",
+        "sha256": "65129082580d5942b11df3f491c4e567dd2ccb00632885e1bcebacc80eef5870"
+      },
+      {
+        "file": "eval/workspace.mjs",
+        "sha256": "5386a21d1b86c0701647457a0b7b61db6ab4eab27ec9e49ecf3d969c1cfb96af"
+      }
+    ],
+    "changedFilesSinceObservation": [
+      "eval/isolate.mjs",
+      "eval/validate.mjs",
+      "eval/run.mjs",
+      "eval/host/validate.mjs"
+    ],
+    "rationale": "Original observational provenance in report.revision (commit 06e38deb54f0b1fdde307f8c3a324e2d3eb2d739) is preserved unchanged without retroactive relabeling. The delta between 06e38de and b0ee5829a4db1750a6fb2b7d3c184d442611b7dc adds shared host-mount-source enumeration (candidateSandboxHostMountSources) and corpus-overlap preflight checks (runtimeCorpusOverlapProblem), requires blackbox-v1 in qualification preflight, preserves default in-repo eval/tasks development runs, and adds a preflight assertion in eval/host/validate.mjs check 8. None of these preflight additions alter the provisioned host account (uid 985), sudoers policy, dedicated tmpfs mount (/srv/nexus-qual/ws), cgroup v2 resource limits, or per-task setup/reference resource envelopes."
   }
 }
