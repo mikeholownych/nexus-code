@@ -1,0 +1,5 @@
+# Component version coherence
+
+Base: 6a16cb60635c9182f13be1635d5f44eddebdcde0. Implements the existing SPEC-12 ACC-UPG-07 synchronized component contract. All four component version identities must equal the product version, including prerelease and build metadata. Apply the same rule to updater metadata validation and the publisher-side validator. This rejects internally consistent detached/embedded metadata that describes a mixed runtime.
+
+Focused validation: 15/15 tests passed on mike-dev with atomic SUITE ownership and throwaway HOME/XDG state. Tests cover coherent stable/prerelease/build versions and each component mismatching by version, prerelease, or build; they exercise updater eligibility, archive binding and the standalone publisher validator. Existing read-only tsx executable from p10g-validation supplied the runner; no dependency files were changed. Full integration checks and independent review remain required. This does not close transaction recovery, legacy fallback, installed-RC qualification, or release acceptance.
