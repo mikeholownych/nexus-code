@@ -62,12 +62,12 @@ No bypass actors are defined. To repair a mistaken tag, the owner disables the r
 
 ```sh
 R=repos/mikeholownych/nexus-code
+# first: the required contexts must equal the check names of the latest green integration run (no output = equal)
+diff <(gh api "$R/commits/$(git rev-parse origin/v1/integration)/check-runs" -q '[.check_runs[].name] | sort | .[]') \
+     <(jq -r '[.rules[] | select(.type == "required_status_checks") | .parameters.required_status_checks[].context] | sort | .[]' \
+         docs/releases/rulesets/protected-branches.json)
 gh api -X POST "$R/rulesets" --input docs/releases/rulesets/protected-branches.json
 gh api -X POST "$R/rulesets" --input docs/releases/rulesets/release-tags.json
-# before applying: the required contexts must equal the check names of the latest green integration run
-gh api "$R/commits/$(git rev-parse origin/v1/integration)/check-runs" -q '[.check_runs[].name] | sort'
-jq -r '[.rules[] | select(.type == "required_status_checks") | .parameters.required_status_checks[].context] | sort' \
-  docs/releases/rulesets/protected-branches.json
 # verify
 gh api "$R/rules/branches/main" -q '[.[].type]'           # deletion, non_fast_forward, pull_request, required_status_checks
 gh api "$R/rules/branches/v1/integration" -q '[.[].type]'
