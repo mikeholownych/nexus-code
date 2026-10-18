@@ -5,7 +5,8 @@ import * as path from "node:path";
 import * as os from "node:os";
 import * as http from "node:http";
 import * as zlib from "node:zlib";
-import { execSync } from "node:child_process";
+import { execSync, spawnSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
 import {
   validateDownloadUrl,
   downloadFile,
@@ -416,6 +417,21 @@ describe("Machine-Readable Compatibility & Downgrade State Rejection (REQ-REL-11
     assert.equal(check.errors.length, 0);
     assert.equal(meta.compatibility.stateSchemaVersion, 1);
     assert.equal(validateCompatibilityMetadata({ ...meta, schemaVersion: 2 }).valid, false, "future metadata schemas fail closed");
+  });
+
+  it("package validator rejects unsupported compatibility schemas", () => {
+    const metadata = generateCompatibilityMetadata("1.0.0", "abcdef1234567890");
+    metadata.schemaVersion = 2;
+    const fixture = path.join(os.tmpdir(), `nexus-compatibility-schema-${process.pid}.json`);
+    fs.writeFileSync(fixture, `${JSON.stringify(metadata)}\n`);
+    try {
+      const validator = fileURLToPath(new URL("../../scripts/validate_compatibility.mjs", import.meta.url));
+      const result = spawnSync(process.execPath, [validator, fixture], { encoding: "utf8" });
+      assert.equal(result.status, 1, result.stderr);
+      assert.match(result.stderr, /Unsupported schemaVersion; expected 1/);
+    } finally {
+      fs.rmSync(fixture, { force: true });
+    }
   });
 
   it("rejects malformed compatibility metadata", () => {
