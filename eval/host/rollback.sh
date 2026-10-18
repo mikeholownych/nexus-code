@@ -27,10 +27,11 @@ workspace_parent="$(dirname "$workspace_root")"
 unit="$(systemd-escape -p --suffix=mount "$workspace_root")"
 unit_file="/etc/systemd/system/$unit"
 has() { grep -qxF "$1" "$LEDGER"; }   # confirmed entries only
+sha() { sha256sum < "$1" | awk '{print $1}'; }
 # A file is removed only if it is a regular marked file whose content still matches the recorded digest.
 ours_file() {
   [[ -f "$1" && ! -L "$1" ]] && head -n 1 "$1" | grep -qxF "$MARKER" || return 1
-  has "file $1 sha256=$(sha256sum "$1" | cut -d' ' -f1)"
+  has "file $1 sha256=$(sha "$1")"
 }
 
 if id -u "$ACCOUNT" >/dev/null 2>&1 && pgrep -u "$ACCOUNT" >/dev/null 2>&1; then echo "processes still run as $ACCOUNT; stop the evaluation first" >&2; exit 1; fi

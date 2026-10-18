@@ -49,7 +49,7 @@ exec 9>"$LEDGER_DIR/lock"
 flock -n 9 || { echo "another provision or rollback is running" >&2; exit 1; }
 touch "$LEDGER"; chmod 0600 "$LEDGER"
 has() { grep -qxF "$1" "$LEDGER"; }
-sha() { sha256sum "$1" | cut -d' ' -f1; }
+sha() { sha256sum < "$1" | awk '{print $1}'; }
 pending() { has "pending $1" || printf 'pending %s\n' "$1" >> "$LEDGER"; }
 # Rewrite the ledger without line $1 (atomic, root-only).
 drop() { local tmp; tmp="$(mktemp "$LEDGER_DIR/.ledger.XXXXXX")"; grep -vxF "$1" "$LEDGER" > "$tmp" || true; chmod 0600 "$tmp"; mv "$tmp" "$LEDGER"; }
@@ -102,7 +102,7 @@ if ours_file "$LEGACY_SUDOERS"; then legacy_sha=$(sha "$LEGACY_SUDOERS"); rm -f 
 # 1. setfacl, which the harness uses to grant the evaluator uid access to each disposable run directory.
 if ! command -v setfacl >/dev/null; then
   apt-get update -qq
-  DEBIAN_FRONTEND=noninteractive apt-get install --yes --no-install-recommends acl
+  NEEDRESTART_SUSPEND=1 DEBIAN_FRONTEND=noninteractive apt-get install --yes --no-install-recommends acl
   confirm "package acl"
 fi
 

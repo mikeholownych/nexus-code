@@ -57,22 +57,22 @@
     }
   },
   "revision": {
-    "commit": "c3993c734ca3065e06dee17fd5ae58e9d038102d",
-    "dirty": false,
+    "commit": "7968bc7852afe83ca8e71e84cacf0bfba1ddc7e7",
+    "dirty": true,
     "profileSha256": "4e8d42a218a68fa2fd3fd0de4d9788b205fa41b9ab71935cc2b6cf73f5d63543",
     "manifestSha256": "50895b84a604fbfd45ed82e29cbef4ba795d7fffbe6611af23bfbc9851f3e89b",
     "sourceDigests": [
       {
         "file": "eval/host/validate.mjs",
-        "sha256": "0eb786dd5304fc72c009c2fb5e3f0ce005b6be4961b8cfe0b4b65168ed6b14a8"
+        "sha256": "b597319069d7189e81b4e3561d2d0a71fdfe5337f131b3be5d61bc17b3263b09"
       },
       {
         "file": "eval/host/provision.sh",
-        "sha256": "46da49b7baea9dc45c3d55c2542eb210552de0b75c4fc1dee74a68337da25d58"
+        "sha256": "1db27fdcb9a70e013a41f47d431ceb788184a5489a9f10490c9e507aa5e12e62"
       },
       {
         "file": "eval/host/rollback.sh",
-        "sha256": "b833bb9c48bf476ac58d3831c7f144cc4984f2dd26b8fb07c07485ca53af06b4"
+        "sha256": "e8cdd1797456fc11543a0c18a51a9dbdd6cca559b6296478a62ad748e0a74c10"
       },
       {
         "file": "eval/host/resource-profile.json",
@@ -88,11 +88,35 @@
       },
       {
         "file": "eval/isolate.mjs",
-        "sha256": "b5e9d069b57b3598dd7e67b58494306c5f61cc6ee899ea6a5d7613cf5fe4bccb"
+        "sha256": "0e535792e0f50b42ca17ad35bafcef954b701a2a4eb8b58b0d05ed0c1423b8fc"
       },
       {
         "file": "eval/validate.mjs",
-        "sha256": "0ab4a2f049b47c8d579e18509434c9f5e34f580cd21180696c1ac028950841c2"
+        "sha256": "fb066731fc72e7ee21ceaa87f210c2e69cf4e45a048f13d3e07df109113a7566"
+      },
+      {
+        "file": "eval/run.mjs",
+        "sha256": "07681f90663a0ff11303bb75351f2989d48d5ae332acd10068a77486d56ad0c7"
+      },
+      {
+        "file": "eval/hardened_check.mjs",
+        "sha256": "8c14d6a5cc702969693193d54ccb93c3549d1fdb75ef1dd47d3e3a0db6d32119"
+      },
+      {
+        "file": "eval/hide_oracle.cjs",
+        "sha256": "f6c15333acf82e75df55af60c021a3ee3347b115c7b72051bc68da64d0fdd537"
+      },
+      {
+        "file": "eval/hide_oracle.py",
+        "sha256": "0b4a0e24f254091c1efe2985c95670549460c0325f487910a6aac591fb33d37e"
+      },
+      {
+        "file": "eval/unlink_then_exec.sh",
+        "sha256": "65129082580d5942b11df3f491c4e567dd2ccb00632885e1bcebacc80eef5870"
+      },
+      {
+        "file": "eval/workspace.mjs",
+        "sha256": "5386a21d1b86c0701647457a0b7b61db6ab4eab27ec9e49ecf3d969c1cfb96af"
       }
     ]
   }

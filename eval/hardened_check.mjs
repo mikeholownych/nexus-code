@@ -95,7 +95,7 @@ export function testConfigChange(relative, before, after) {
   if (relative.endsWith(".rs") || relative.endsWith(".go")) {
     const existing = new Set((before ?? "").split("\n"));
     const added = (after ?? "").split("\n").filter((line) => !existing.has(line));
-    if (relative.endsWith(".rs") && added.some((line) => /\binclude_(?:str|bytes)!\s*\(|\binclude!\s*\(|#\s*\[\s*path\s*=/.test(line))) {
+    if (relative.endsWith(".rs") && added.some((line) => /\b(?:include_str|include_bytes|include)\s*!|#\s*\[\s*path\b/.test(line))) {
       return `${relative} adds compile-time file inclusion`;
     }
     if (relative.endsWith(".go") && added.some((line) => /^\s*\/\/go:embed\b/.test(line))) {

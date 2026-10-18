@@ -320,3 +320,8 @@ export function asUser(user, cmd, argv) {
   if (!path.isAbsolute(cmd)) throw new Error("evaluator-account commands must be absolute paths");
   return { cmd: "/usr/bin/sudo", argv: ["-n", "-u", user, "--", cmd, ...argv] };
 }
+
+/** Run a process spec as `user` while retaining its timeout and other execution metadata. */
+export function asUserSpec(user, spec) {
+  return { ...spec, ...asUser(user, spec.cmd, spec.argv) };
+}

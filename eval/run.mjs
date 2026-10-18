@@ -10,8 +10,8 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { startModelProxy } from "./model_proxy.mjs";
-import { asUser, corpusManifestProblem, corpusTaskRows, fetchModelEntry, hiddenTestIsolationProblem, modelFingerprint, nexusContextLimitArgs, nexusLimitsProblem, qualificationBudgetProblem, taskTreeDigest, validateTask } from "./validate.mjs";
-import { agentSandboxArgv, assertNoSymlinks, confinedPath, grantRunAsAccess, hiddenOutputHasTests, isolatedProcessArgv, runIsolated, runIsolatedProcess, sandboxAvailable, stageHiddenFiles } from "./isolate.mjs";
+import { asUserSpec, corpusManifestProblem, corpusTaskRows, fetchModelEntry, hiddenTestIsolationProblem, modelFingerprint, nexusContextLimitArgs, nexusLimitsProblem, qualificationBudgetProblem, taskTreeDigest, validateTask } from "./validate.mjs";
+import { agentSandboxArgv, assertNoSymlinks, confinedPath, grantRunAsAccess, hiddenOutputHasTests, isolatedProcessArgv, normalizeRunAsPermissions, runIsolated, runIsolatedProcess, sandboxAvailable, stageHiddenFiles } from "./isolate.mjs";
 import { runBlackBoxOracle } from "./oracle.mjs";
 import { stageRepoWorkspace } from "./workspace.mjs";
 import { applyAgentChanges, cloneWorkspace } from "./hardened_check.mjs";
@@ -213,13 +213,18 @@ async function runOnce(task, run) {
     });
     const started = Date.now();
     let agent;
+    let agentEndedAt;
     try {
       agent = await runAgent(task, ws, home, budget, agentIdentity, proxyDir, localToken);
+      agentEndedAt = Date.now();
+      if (config.runAs) {
+        for (const dir of [ws, home]) await normalizeRunAsPermissions(config.runAs, dir, asUserSpec);
+      }
     } finally {
       await proxy?.close();
       fs.rmSync(proxyDir, { recursive: true, force: true });
     }
-    const wallMs = Date.now() - started;
+    const wallMs = agentEndedAt - started;
     if (agent.containmentProblem) throw new Error(`candidate containment failed: ${agent.containmentProblem}`);
     const model = proxy ? proxy.stats() : null;
     const contaminated = treeDigest(task.dir) !== sourceBefore || `${agent.stdout}${agent.stderr}`.includes(tasksDir);
@@ -376,7 +381,7 @@ async function resolveAgentIdentity(config) {
       allowedFiles: [candidatePath, ...argsPrefix.filter((item) => path.isAbsolute(item))],
       timeoutMs: 5000,
     });
-    const wrapped = config.runAs ? asUser(config.runAs, spec.cmd, spec.argv) : spec;
+    const wrapped = config.runAs ? asUserSpec(config.runAs, spec) : spec;
     probe = await runIsolatedProcess(wrapped, { outputLimit: 4096, resources: config.resources ?? null });
   } finally {
     fs.rmSync(probeWorkspace, { recursive: true, force: true });
@@ -516,7 +521,7 @@ function runAgent(task, ws, home, budget, agentIdentity, proxyDirectory, localTo
   const sandboxRuntimePaths = [...new Set(runtimePaths)];
   const allowedRuntimeRoots = [...new Set([...(config.sandboxRuntimeRoots ?? []), ...((config.agent ?? "nexus") === "nexus" && agentIdentity.argsPrefix[0] === path.join(ROOT, "cli/dist/index.js") ? [ROOT] : [])])];
   const sandbox = agentSandboxArgv({ cwd: ws, home, proxyDirectory, readOnlyPaths: sandboxRuntimePaths, allowedRuntimeRoots, runtimeExecutablePaths: [cmd, ...agentIdentity.argsPrefix], supervisorPath: path.join(ROOT, "eval/agent_sandbox.mjs") });
-  const wrapped = config.runAs ? asUser(config.runAs, sandbox.cmd, sandbox.argv) : sandbox;
+  const wrapped = config.runAs ? asUserSpec(config.runAs, sandbox) : sandbox;
   return new Promise((resolve) => {
     const { child, containment } = spawnContained(wrapped, config.resources ?? null, { cwd: "/", env: {}, stdio: ["pipe", "pipe", "pipe"], detached: true });
     // T3: the payload is the first line and the sidecar protocol follows on the same stdin (eval/agent_sandbox.mjs).

@@ -22,6 +22,31 @@ const git = (cwd: string, ...argv: string[]) => {
   return r.stdout.trim();
 };
 
+test("runAsAclArgs scopes evaluator and operator permissions with directory defaults", async () => {
+  const { runAsAclArgs } = await import(path.join(ROOT, "eval/isolate.mjs"));
+  assert.deepEqual(runAsAclArgs("nexus-eval", 1000, "/workspace", true), {
+    access: ["-R", "-m", "u:nexus-eval:rwX,u:1000:rwX", "/workspace"],
+    defaults: ["-m", "d:u:nexus-eval:rwx,d:u:1000:rwx,d:m::rwx", "/workspace"],
+  });
+  assert.deepEqual(runAsAclArgs("nexus-eval", 1000, "/workspace/file", false), {
+    access: ["-R", "-m", "u:nexus-eval:rwX,u:1000:rwX", "/workspace/file"],
+    defaults: null,
+  });
+});
+
+test("asUserSpec preserves timeout metadata and isolated processes reject missing timeouts", async () => {
+  const { asUserSpec } = await import(path.join(ROOT, "eval/validate.mjs"));
+  const { runIsolatedProcess } = await import(path.join(ROOT, "eval/isolate.mjs"));
+  const spec = { cmd: "/usr/bin/bwrap", argv: ["--version"], timeoutMs: 1200, marker: "preserved" };
+  assert.deepEqual(asUserSpec("nexus-eval", spec), {
+    ...spec,
+    cmd: "/usr/bin/sudo",
+    argv: ["-n", "-u", "nexus-eval", "--", "/usr/bin/bwrap", "--version"],
+  });
+  assert.throws(() => runIsolatedProcess({ cmd: "/usr/bin/true", argv: [] }), /isolated process spec has no timeoutMs/);
+  assert.throws(() => runIsolatedProcess({ cmd: "/usr/bin/true", argv: [], timeoutMs: 0 }), /isolated process spec has no timeoutMs/);
+});
+
 test("test infrastructure is recognised across Python, Go, JS/TS and Rust layouts", async () => {
   const { isTestInfraPath } = await hardened();
   for (const p of ["conftest.py", "pkg/conftest.py", "pytest.ini", "tox.ini", "setup.cfg", "sitecustomize.py", "x.pth", "tests/test_a.py", "src/test_a.py", "a_test.py",
@@ -87,6 +112,7 @@ assert module.SECRET == "PY_ORACLE_CANARY_881"
 assert open(path).read() == ""
 assert "sitecustomize" not in sys.modules
 assert ${JSON.stringify(runner)} not in sys.path
+assert ${JSON.stringify(runner)} not in __import__("os").environ.get("PYTHONPATH", "").split(__import__("os").pathsep)
 assert all("PY_ORACLE_CANARY_881" not in repr(getattr(obj, "_saved", None)) for obj in sys.modules.values())
 `;
     const result = spawnSync("python3", ["-c", script], {
@@ -98,6 +124,44 @@ assert all("PY_ORACLE_CANARY_881" not in repr(getattr(obj, "_saved", None)) for 
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
+});
+
+test("pytest candidate imports cannot inspect hidden Python sources", { timeout: 30_000 }, async () => {
+  const { runIsolated } = await import(path.join(ROOT, "eval/isolate.mjs"));
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "pytest-oracle-e2e-"));
+  const ws = path.join(root, "ws");
+  fs.mkdirSync(path.join(ws, "tests"), { recursive: true });
+  try {
+    fs.writeFileSync(path.join(ws, "app.py"), `import gc, importlib.machinery, pathlib, sys
+paths = [pathlib.Path("/workspace/tests/__init__.py"), pathlib.Path("/workspace/tests/test_hidden.py"), pathlib.Path("/workspace/tests/unused_hidden.py")]
+assert importlib.machinery.SourceFileLoader.get_data.__closure__ is None
+assert "sitecustomize" not in sys.modules
+assert all(p.read_text() == "" for p in paths)
+gc.collect()
+needles = ("PYTEST_HIDDEN_COMMENT_CANARY_116", "PYTEST_UNUSED_COMMENT_CANARY_227")
+assert not any(isinstance(obj, (bytes, bytearray, str)) and any(needle in (obj.decode(errors="ignore") if isinstance(obj, (bytes, bytearray)) else obj) for needle in needles) for obj in gc.get_objects())
+`);
+    const hiddenSource = `# PYTEST_HIDDEN_COMMENT_CANARY_116\nimport unittest\nimport app\nclass HiddenTest(unittest.TestCase):\n    def test_candidate_import_is_safe(self):\n        self.assertTrue(True)\ndef test_candidate_import_is_safe():\n    assert True\n`;
+    const unusedSource = `# PYTEST_UNUSED_COMMENT_CANARY_227\nSECRET = "not imported"\n`;
+    const hiddenPaths = ["tests/__init__.py", "tests/test_hidden.py", "tests/unused_hidden.py"];
+    fs.writeFileSync(path.join(ws, hiddenPaths[0]), "\n");
+    fs.writeFileSync(path.join(ws, hiddenPaths[1]), hiddenSource);
+    fs.writeFileSync(path.join(ws, hiddenPaths[2]), unusedSource);
+    const unittestResult = await runIsolated("python3 -m unittest tests/test_hidden.py", { cwd: ws, hiddenSubpaths: hiddenPaths });
+    assert.equal(unittestResult.status, 0, `${unittestResult.stderr}\n${unittestResult.stdout}`);
+    assert.match(`${unittestResult.stdout}${unittestResult.stderr}`, /Ran 1 test\b/);
+    const pytestModule = fs.existsSync("/usr/local/lib/python3.12/dist-packages/pytest");
+    const rustPytest = fs.existsSync("/opt/nexus-qual/rust/bin/pytest");
+    if (pytestModule || rustPytest) {
+      fs.writeFileSync(path.join(ws, hiddenPaths[0]), "\n");
+      fs.writeFileSync(path.join(ws, hiddenPaths[1]), hiddenSource);
+      fs.writeFileSync(path.join(ws, hiddenPaths[2]), unusedSource);
+      const pytestCommand = pytestModule ? "python3 -m pytest -q tests/test_hidden.py" : "pytest -q tests/test_hidden.py";
+      const pytestResult = await runIsolated(pytestCommand, { cwd: ws, hiddenSubpaths: hiddenPaths });
+      assert.equal(pytestResult.status, 0, `${pytestResult.stderr}\n${pytestResult.stdout}`);
+      assert.match(pytestResult.stdout, /\b[12] passed\b/);
+    }
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
 
 test("Rust and Go compile-time file inclusion directives refuse hardened checks", async () => {
@@ -360,6 +424,7 @@ test("Rust and Go compile-time file inclusion directives refuse hardened checks"
   const go = "package app\n";
   for (const [source, addition] of [
     ["src/lib.rs", 'const SECRET: &str = include_str!("tests/hidden.rs");'],
+    ["src/lib.rs", 'const SECRET: &str = include_str ! ("tests/hidden.rs");'],
     ["src/lib.rs", 'const SECRET: &[u8] = include_bytes!("tests/hidden.rs");'],
     ["src/lib.rs", 'include!("tests/hidden.rs");'],
     ["src/lib.rs", '#[path = "../tests/hidden.rs"] mod hidden;'],
@@ -385,6 +450,60 @@ test("Rust and Go compile-time file inclusion directives refuse hardened checks"
   } finally {
     fs.rmSync(base, { recursive: true, force: true });
   }
+});
+
+test("Go and Rust hidden sources are absent during build audits and test execution", { timeout: 120_000 }, async () => {
+  const { runIsolated } = await import(path.join(ROOT, "eval/isolate.mjs"));
+  const { testConfigChange } = await hardened();
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "compiled-oracle-e2e-"));
+  try {
+    const go = path.join(root, "go");
+    fs.mkdirSync(go);
+    fs.writeFileSync(path.join(go, "go.mod"), "module example.invalid/oracle\n\ngo 1.22\n");
+    fs.writeFileSync(path.join(go, "main.go"), "package oracle\n");
+    fs.writeFileSync(path.join(go, "visible_test.go"), `package oracle
+import ("os"; "strings"; "testing")
+func TestOracleIsGone(t *testing.T) {
+ if _, err := os.Stat("/workspace/hidden_test.go"); !os.IsNotExist(err) { t.Fatalf("hidden source remains: %v", err) }
+ if _, err := os.Stat("/workspace/hidden.txt"); !os.IsNotExist(err) { t.Fatalf("hidden payload remains: %v", err) }
+ entries, _ := os.ReadDir("/tmp"); for _, e := range entries { if strings.Contains(e.Name(), "nexus-hidden") { t.Fatal(e.Name()) } }
+ for _, e := range os.Environ() { if strings.HasPrefix(e, "NEXUS_HIDDEN_") { t.Fatal(e) } }
+}
+`);
+    fs.writeFileSync(path.join(go, "hidden_test.go"), "package oracle\n// GO_HIDDEN_ORACLE_CANARY_112\n");
+    fs.writeFileSync(path.join(go, "hidden.txt"), "GO_EMBED_ORACLE_CANARY_334\n");
+    const goResult = await runIsolated("go test .", { cwd: go, hiddenSubpaths: ["hidden_test.go", "hidden.txt"] });
+    assert.equal(goResult.status, 0, `${goResult.stderr}\n${goResult.stdout}`);
+    assert.equal(fs.readFileSync(path.join(go, "hidden_test.go"), "utf8"), "package oracle\n// GO_HIDDEN_ORACLE_CANARY_112\n", "host source is restored after execution");
+    assert.match(testConfigChange("main.go", "package oracle\n", "package oracle\n//go:embed hidden.txt\nvar secret string\n") ?? "", /go:embed/);
+    fs.writeFileSync(path.join(go, "main.go"), "package oracle\nimport \"embed\"\n//go:embed hidden.txt\nvar secret embed.FS\n");
+    const goEmbed = await runIsolated("go test .", { cwd: go, hiddenSubpaths: ["hidden_test.go", "hidden.txt"] });
+    assert.notEqual(goEmbed.status, 0, "Phase 1 go build rejects a missing embedded oracle source");
+    assert.match(`${goEmbed.stdout}${goEmbed.stderr}`, /hidden\.txt/);
+    assert.equal(fs.readFileSync(path.join(go, "hidden.txt"), "utf8"), "GO_EMBED_ORACLE_CANARY_334\n", "failed preflight restores host-only oracle data");
+
+    const rust = path.join(root, "rust");
+    fs.mkdirSync(path.join(rust, "src"), { recursive: true });
+    fs.mkdirSync(path.join(rust, "tests"), { recursive: true });
+    fs.writeFileSync(path.join(rust, "Cargo.toml"), '[package]\nname = "oracle_fixture"\nversion = "0.1.0"\nedition = "2021"\n');
+    fs.writeFileSync(path.join(rust, "src/lib.rs"), "pub fn value() -> usize { 1 }\n");
+    fs.writeFileSync(path.join(rust, "tests/visible.rs"), `use std::{fs, env};
+#[test] fn oracle_is_gone() {
+ assert!(!std::path::Path::new("/workspace/tests/hidden.rs").exists());
+ assert!(!fs::read_dir("/tmp").unwrap().any(|e| e.unwrap().file_name().to_string_lossy().contains("nexus-hidden")));
+ assert!(!env::vars().any(|(k, _)| k.starts_with("NEXUS_HIDDEN_")));
+}
+`);
+    fs.writeFileSync(path.join(rust, "tests/hidden.rs"), "// RUST_HIDDEN_ORACLE_CANARY_223\n");
+    const rustResult = await runIsolated("cargo test --test visible --offline && cargo test --test visible --offline", { cwd: rust, hiddenSubpaths: ["tests/hidden.rs"] });
+    assert.equal(rustResult.status, 0, `${rustResult.stderr}\n${rustResult.stdout}`);
+    fs.writeFileSync(path.join(rust, "src/lib.rs"), 'pub const SECRET: &str = include_str ! ("../tests/hidden.rs");\n');
+    const rustEmbed = await runIsolated("cargo test --test visible --offline", { cwd: rust, hiddenSubpaths: ["tests/hidden.rs"] });
+    assert.notEqual(rustEmbed.status, 0, "Phase 1 cargo check rejects a missing embedded oracle source");
+    assert.match(`${rustEmbed.stdout}${rustEmbed.stderr}`, /hidden\.rs/);
+    assert.equal(fs.readFileSync(path.join(rust, "tests/hidden.rs"), "utf8"), "// RUST_HIDDEN_ORACLE_CANARY_223\n", "failed preflight restores host-only oracle data");
+    assert.match(testConfigChange("src/lib.rs", "pub fn value() -> usize { 1 }\n", 'pub const SECRET: &str = include_str ! ("../tests/hidden.rs");\n') ?? "", /compile-time file inclusion/);
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
 
 test("manifest guards fail closed on TOML headers they do not recognise, go.mod blocks and new manifests", async () => {

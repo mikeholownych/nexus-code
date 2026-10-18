@@ -520,12 +520,34 @@ test("repository workspaces carry no history beyond the pinned baseline commit",
     git(upstream, "commit", "-qam", "reference fix");
     const child = git(upstream, "rev-parse", "HEAD");
     git(upstream, "tag", "v-fix");
+    const danglingBlobResult = spawnSync("git", ["hash-object", "-w", "--stdin"], { cwd: upstream, env, input: "DANGLING_BLOB_CANARY_999", encoding: "utf8" });
+    assert.equal(danglingBlobResult.status, 0, danglingBlobResult.stderr);
+    const danglingBlob = danglingBlobResult.stdout.trim();
+    const baselineTree = git(upstream, "rev-parse", `${baseline}^{tree}`);
+    const danglingCommitEnv = { ...env, GIT_AUTHOR_DATE: "2000-01-01T00:00:00Z", GIT_COMMITTER_DATE: "2000-01-01T00:00:00Z" };
+    const danglingCommitResult = spawnSync("git", ["-c", "user.name=t", "-c", "user.email=t@example.invalid", "commit-tree", baselineTree, "-p", baseline, "-m", "DANGLING_COMMIT_CANARY_999"], { cwd: upstream, env: danglingCommitEnv, encoding: "utf8" });
+    assert.equal(danglingCommitResult.status, 0, danglingCommitResult.stderr);
+    const danglingCommit = danglingCommitResult.stdout.trim();
+    git(upstream, "update-ref", "--create-reflog", "HEAD", danglingCommit);
+    git(upstream, "update-ref", "HEAD", child);
+    const danglingReflog = fs.readFileSync(path.join(upstream, ".git/logs/HEAD"), "utf8");
+    assert.match(danglingReflog, new RegExp(danglingCommit), "the upstream fixture has a HEAD reflog pointing at the dangling commit");
     git(upstream, "checkout", "-qb", "later");
     fs.writeFileSync(path.join(upstream, "later.txt"), "later\n");
     git(upstream, "add", "-A");
     git(upstream, "commit", "-qm", "later work");
     const cache = path.join(base, "cache");
     git(base, "clone", "-q", "--no-checkout", upstream, cache);
+    const cacheBlobResult = spawnSync("git", ["hash-object", "-w", "--stdin"], { cwd: cache, env, input: "DANGLING_BLOB_CANARY_999", encoding: "utf8" });
+    assert.equal(cacheBlobResult.status, 0, cacheBlobResult.stderr);
+    assert.equal(cacheBlobResult.stdout.trim(), danglingBlob, "the cache contains the dangling blob object");
+    const cacheCommitResult = spawnSync("git", ["-c", "user.name=t", "-c", "user.email=t@example.invalid", "commit-tree", baselineTree, "-p", baseline, "-m", "DANGLING_COMMIT_CANARY_999"], { cwd: cache, env: danglingCommitEnv, encoding: "utf8" });
+    assert.equal(cacheCommitResult.status, 0, cacheCommitResult.stderr);
+    assert.equal(cacheCommitResult.stdout.trim(), danglingCommit, "the cache contains the dangling commit object");
+    const cacheHead = git(cache, "rev-parse", "HEAD");
+    git(cache, "update-ref", "--create-reflog", "HEAD", danglingCommit);
+    git(cache, "update-ref", "HEAD", cacheHead);
+    assert.match(fs.readFileSync(path.join(cache, ".git/logs/HEAD"), "utf8"), new RegExp(danglingCommit), "the cache HEAD reflog points at the dangling commit");
 
     // Control: the former `clone --shared` + checkout layout exposes the child and is detected.
     const leaky = path.join(base, "leaky");
@@ -556,6 +578,16 @@ test("repository workspaces carry no history beyond the pinned baseline commit",
     assert.equal(git(ws, "remote"), "");
     assert.equal(git(ws, "tag", "--list"), "");
     assert.equal(fs.existsSync(path.join(ws, ".git/FETCH_HEAD")), false);
+    const allObjects = spawnSync("git", ["cat-file", "--batch-check=%(objectname)", "--batch-all-objects"], { cwd: ws, env, encoding: "utf8" });
+    assert.equal(allObjects.status, 0, allObjects.stderr);
+    assert.doesNotMatch(allObjects.stdout, new RegExp(danglingBlob));
+    assert.doesNotMatch(allObjects.stdout, new RegExp(danglingCommit));
+    assert.notEqual(spawnSync("git", ["cat-file", "-p", danglingBlob], { cwd: ws, env, encoding: "utf8" }).status, 0);
+    assert.notEqual(spawnSync("git", ["cat-file", "-p", danglingCommit], { cwd: ws, env, encoding: "utf8" }).status, 0);
+    const planted = spawnSync("git", ["hash-object", "-w", "--stdin"], { cwd: ws, env, input: "PLANTED_DANGLING_CANARY", encoding: "utf8" });
+    assert.equal(planted.status, 0, planted.stderr);
+    assert.match(workspaceHistoryProblem(ws, baseline) ?? "", /unreachable object/);
+    fs.rmSync(path.join(ws, ".git", "objects", planted.stdout.trim().slice(0, 2), planted.stdout.trim().slice(2)));
     assert.throws(() => stageRepoWorkspace(cache, "main", path.join(base, "ws-ref")), /full pinned commit/);
 
     // Exercise the production workspace stager and candidate sandbox together. The future solution remains in the
@@ -591,6 +623,16 @@ test("repository workspaces carry no history beyond the pinned baseline commit",
     assert.equal(observed.external, "unavailable unavailable unavailable ", "candidate could access an external cache, validator, or custodian path");
     assert.doesNotMatch(observed.refs, new RegExp(child));
     assert.doesNotMatch(`${task.stdout}${task.stderr}`, /REFERENCE_SOLUTION_CANARY_72d9|EXTERNAL_VALIDATOR_CANARY_0e42/);
+    const objectProbe = `const cp=require('node:child_process'),fs=require('node:fs'),path=require('node:path');const run=(args)=>cp.spawnSync('git',args,{cwd:'/workspace',encoding:'utf8',env:{PATH:'/usr/bin:/bin',HOME:'/home/eval',GIT_CONFIG_NOSYSTEM:'1',GIT_CONFIG_GLOBAL:'/dev/null'}});let disk='';const walk=(d)=>{for(const e of fs.readdirSync(d,{withFileTypes:true})){const p=path.join(d,e.name);if(e.isDirectory())walk(p);else try{disk+=fs.readFileSync(p).toString('utf8')}catch{}}};walk('/workspace/.git');console.log(JSON.stringify({fsck:run(['fsck','--unreachable']),all:run(['cat-file','--batch-check=%(objectname)','--batch-all-objects']),blob:run(['cat-file','-p',${JSON.stringify(danglingBlob)}]),commit:run(['cat-file','-p',${JSON.stringify(danglingCommit)}]),disk}))`;
+    const objectTask = await runSandbox(sandbox.cmd, sandbox.argv, JSON.stringify({ command: nodeRuntime, argv: ["-e", objectProbe], env: { PATH: "/usr/bin:/bin" } }));
+    assert.equal(objectTask.status, 0, `${objectTask.error ?? ""}\n${objectTask.stderr}`);
+    const objectObserved = JSON.parse(objectTask.stdout.trim());
+    assert.equal(objectObserved.fsck.status, 0);
+    assert.doesNotMatch(objectObserved.fsck.stdout, /unreachable/);
+    assert.doesNotMatch(objectObserved.all.stdout, new RegExp(`${danglingBlob}|${danglingCommit}`));
+    assert.notEqual(objectObserved.blob.status, 0);
+    assert.notEqual(objectObserved.commit.status, 0);
+    assert.doesNotMatch(`${objectObserved.disk}${objectObserved.fsck.stderr}${objectObserved.blob.stderr}${objectObserved.commit.stderr}`, /DANGLING_(?:BLOB|COMMIT)_CANARY_999/);
   } finally {
     fs.rmSync(base, { recursive: true, force: true });
   }

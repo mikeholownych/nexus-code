@@ -8,9 +8,9 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { isolatedArgv, grantRunAsAccess, sandboxAvailable } from "../isolate.mjs";
+import { isolatedArgv, grantRunAsAccess, normalizeRunAsPermissions, sandboxAvailable } from "../isolate.mjs";
 import { resourceConfigProblem, resourceProbeProblem, spawnContained } from "../resources.mjs";
-import { asUser } from "../validate.mjs";
+import { asUser, asUserSpec } from "../validate.mjs";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 const ACCOUNT = "nexus-eval";
@@ -76,10 +76,12 @@ await check("evaluator processes stay in the limited cgroup, and every one is re
       child.on("close", async () => resolve(await containment.final));
     });
     // The harness's own sandbox, as the evaluator: right uid, inside the payload leaf.
-    const sandboxed = await contained(isolatedArgv({ cwd: dir, home: false, command: "id -u > /workspace/uid; cat /proc/self/cgroup > /workspace/cgroup", timeoutSec: 30 }));
+    const sandboxed = await contained(isolatedArgv({ cwd: dir, home: false, command: "id -u > /workspace/uid; cat /proc/self/cgroup > /workspace/cgroup; mkdir -p /workspace/private; echo secret > /workspace/private/f; chmod 600 /workspace/private/f; chmod 700 /workspace/private", timeoutSec: 30 }));
     must(sandboxed?.cleaned === true, `containment report: ${JSON.stringify(sandboxed)}`);
     must(Number(fs.readFileSync(path.join(dir, "uid"), "utf8")) === Number(account()[2]), "payload did not run as the evaluator");
     must(/\/payload$/.test(fs.readFileSync(path.join(dir, "cgroup"), "utf8").trim()), "evaluator process is not in the payload cgroup");
+    await normalizeRunAsPermissions(ACCOUNT, dir, asUserSpec);
+    must(fs.readFileSync(path.join(dir, "private", "f"), "utf8") === "secret\n", "operator cannot read an evaluator-created 0600 file");
     // Without a PID namespace nothing but the cgroup can reap a daemon: the operator-side supervisor must find the
     // evaluator-owned survivor and kill it across uids.
     const daemon = await contained({ cmd: "/usr/bin/bwrap", argv: ["--ro-bind", "/", "/", "--dev", "/dev", "--proc", "/proc", "--unshare-net", "--", "/bin/sh", "-c", "setsid sh -c 'exec sleep 300' </dev/null >/dev/null 2>&1 & sleep 0.5"] });

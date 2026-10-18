@@ -8,13 +8,31 @@ import { fileURLToPath } from "node:url";
 import { containmentProblem, spawnContained } from "./resources.mjs";
 
 const BWRAP = "/usr/bin/bwrap";
-const SYSTEM_BINARIES = ["/usr/bin", "/usr/lib", "/usr/lib64", "/usr/share", "/lib", "/lib64"];
+const SYSTEM_BINARIES = ["/usr/bin", "/usr/lib", "/usr/lib64", "/usr/libexec", "/usr/share", "/lib", "/lib64", "/usr/local/lib"];
 const FORBIDDEN_RUNTIME_ROOTS = ["/etc", "/root", "/proc", "/sys", "/run", "/var", "/dev", "/tmp", "/mnt", "/media", "/srv"];
 const SENSITIVE_HOME_PARTS = [".ssh", ".config", ".aws", ".azure", ".gnupg", ".kube", ".nexus", ".cache"];
 let sandboxPreflight;
+let hostToolchains;
 
 function shellQuote(value) {
   return `'${value.replaceAll("'", `'\\''`)}'`;
+}
+
+function resolveHostToolchains() {
+  if (hostToolchains) return hostToolchains;
+  const availableDirectory = (candidate) => {
+    try { return fs.statSync(candidate).isDirectory() ? candidate : null; }
+    catch { return null; }
+  };
+  const fromCommand = (command, argv) => {
+    const result = spawnSync(command, argv, { encoding: "utf8", timeout: 5000 });
+    return result.status === 0 ? availableDirectory(result.stdout.trim()) : null;
+  };
+  hostToolchains = {
+    goRoot: availableDirectory("/usr/local/go") ?? fromCommand("go", ["env", "GOROOT"]),
+    rustRoot: availableDirectory("/opt/nexus-qual/rust") ?? fromCommand("rustc", ["--print", "sysroot"]),
+  };
+  return hostToolchains;
 }
 
 export function sandboxAvailable() {
@@ -23,7 +41,12 @@ export function sandboxAvailable() {
     if (!fs.statSync(BWRAP).isFile() || (fs.statSync(BWRAP).mode & 0o111) === 0) return (sandboxPreflight = false);
     const args = ["--unshare-user", "--unshare-pid", "--unshare-net", "--disable-userns", "--die-with-parent", "--proc", "/proc", "--dev", "/dev"];
     for (const source of SYSTEM_BINARIES) {
-      try { if (fs.statSync(source).isDirectory()) args.push("--ro-bind", source, source); } catch {}
+      try {
+        if (fs.statSync(source).isDirectory()) {
+          if (source === "/usr/local/lib") args.push("--dir", "/usr/local");
+          args.push("--ro-bind", source, source);
+        }
+      } catch {}
     }
     args.push("--clearenv", "--", "/usr/bin/unshare", "-Ur", "true");
     const result = spawnSync(BWRAP, args, { encoding: "utf8", timeout: 5000, env: {} });
@@ -44,16 +67,32 @@ export function isolatedArgv({ cwd, home, command, timeoutSec = 300, readOnlySub
     "--unshare-user", "--unshare-pid", "--unshare-net", "--disable-userns", "--die-with-parent",
     "--new-session", "--proc", "/proc", "--dev", "/dev", "--tmpfs", "/tmp",
   ];
+  let localPrefixCreated = false;
   for (const source of SYSTEM_BINARIES) {
     try {
-      if (fs.statSync(source).isDirectory()) args.push("--ro-bind", source, source);
+      if (fs.statSync(source).isDirectory()) {
+        if (source === "/usr/local/lib") {
+          args.push("--dir", "/usr/local");
+          localPrefixCreated = true;
+        }
+        args.push("--ro-bind", source, source);
+      }
     } catch {}
+  }
+  const { goRoot, rustRoot } = resolveHostToolchains();
+  if (goRoot) {
+    if (!localPrefixCreated) args.push("--dir", "/usr/local");
+    args.push("--ro-bind", goRoot, "/usr/local/go");
+  }
+  if (rustRoot) {
+    args.push("--dir", "/opt", "--dir", "/opt/nexus-qual", "--ro-bind", rustRoot, "/opt/nexus-qual/rust");
   }
   for (const source of ["/etc/ld.so.cache", "/etc/passwd", "/etc/group", "/etc/nsswitch.conf", "/etc/localtime"]) {
     try {
       if (fs.statSync(source).isFile()) args.push("--ro-bind", source, source);
     } catch {}
   }
+  try { if (fs.statSync("/etc/alternatives").isDirectory()) args.push("--ro-bind", "/etc/alternatives", "/etc/alternatives"); } catch {}
   args.push("--bind", workspace, "/workspace", "--dir", "/home", "--dir", "/run");
   if (hiddenSubpaths.length) {
     const helperDir = path.dirname(fileURLToPath(import.meta.url));
@@ -67,48 +106,25 @@ export function isolatedArgv({ cwd, home, command, timeoutSec = 300, readOnlySub
     args.push("--ro-bind", source, path.posix.join("/workspace", path.relative(workspace, source).split(path.sep).join("/")));
   }
   args.push("--symlink", "usr/bin", "/bin");
-  args.push("--chdir", "/workspace", "--clearenv", "--setenv", "PATH", "/usr/bin:/bin");
+  args.push("--chdir", "/workspace", "--clearenv", "--setenv", "PATH", "/opt/nexus-qual/rust/bin:/usr/local/go/bin:/usr/bin:/bin");
   args.push("--setenv", "HOME", home ? "/home/eval" : "/tmp");
   args.push("--setenv", "CI", "1", "--setenv", "LANG", "C.UTF-8");
   if (hiddenSubpaths.length) {
     args.push("--setenv", "NEXUS_HIDDEN_FILES", JSON.stringify(hiddenGuestPaths));
     args.push("--setenv", "NODE_OPTIONS", "--require /runner/hide_oracle.cjs");
     args.push("--setenv", "PYTHONPATH", "/runner");
-    args.push("--setenv", "NEXUS_HIDDEN_FILES_LIST", "/tmp/.nexus-hidden-files.list");
-    const compileSourceAudit = (compileCommand) => `stash=/tmp/.nexus-hidden-stash
-mkdir -p "$stash"
-while IFS= read -r f; do
-  [ -n "$f" ] || continue
-  rel="\${f#/workspace/}"
-  mkdir -p "$stash/$(dirname "$rel")"
-  cp -p -- "$f" "$stash/$rel"
-  rm -f -- "$f"
-done < /tmp/.nexus-hidden-files.list
-restore_hidden_sources() {
-  while IFS= read -r f; do
-    [ -n "$f" ] || continue
-    rel="\${f#/workspace/}"
-    mkdir -p "$(dirname "$f")"
-    cp -p -- "$stash/$rel" "$f"
-  done < /tmp/.nexus-hidden-files.list
-}
-${compileCommand} || { result=$?; restore_hidden_sources; rm -rf "$stash"; exit "$result"; }
-restore_hidden_sources
-rm -rf "$stash"`;
     if (/\bgo\s+test\b/.test(command)) {
-      const testCommand = command.replace(/\bgo\s+test\b/g, "go test -exec /runner/unlink_then_exec.sh");
-      executionCommand = `${compileSourceAudit("go build ./...")}\n${testCommand}`;
+      executionCommand = command.replace(/\bgo\s+test\b/g, "go test -exec /runner/unlink_then_exec.sh");
     } else if (/\bcargo\s+test\b/.test(command)) {
       args.push("--setenv", "CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUNNER", "/runner/unlink_then_exec.sh");
-      const testCommand = command.includes("&&") ? `cargo test --tests --no-run >/dev/null 2>&1 || true; ${command}` : command;
-      executionCommand = `${compileSourceAudit("cargo check --lib")}\n${testCommand}`;
+      executionCommand = command;
     } else if (/^(python(?:\d+(?:\.\d+)?)?)\s+(\S+\.py)\s*$/.test(command.trim())) {
       const [, python, script] = command.trim().match(/^(python(?:\d+(?:\.\d+)?)?)\s+(\S+\.py)\s*$/);
       executionCommand = `${python} -c 'import runpy,sys; runpy.run_path(sys.argv[1], run_name="__main__")' ${shellQuote(script)}`;
     }
-    const listArgs = hiddenGuestPaths.map(shellQuote).join(" ");
-    executionCommand = `printf '%s\\n' ${listArgs} > /tmp/.nexus-hidden-files.list\n${executionCommand}`;
     executionCommand = executionCommand.replace(/\bPYTHONPATH=/g, "PYTHONPATH=/runner:");
+    executionCommand = executionCommand.replace(/\bpytest\b/g, "pytest --assert=plain --noconftest");
+    args.push("--setenv", "PYTHONDONTWRITEBYTECODE", "1");
   }
   if (home) args.push("--tmpfs", "/home/eval");
   args.push("--", "/usr/bin/bash", "-c", executionCommand);
@@ -175,15 +191,21 @@ export function agentSandboxArgv({ cwd, home, proxyDirectory, readOnlyPaths = []
   const workspace = fs.realpathSync(cwd);
   const args = ["--unshare-user", "--unshare-pid", "--unshare-net", "--disable-userns", "--die-with-parent", "--new-session", "--proc", "/proc", "--dev", "/dev", "--tmpfs", "/tmp"];
   for (const source of SYSTEM_BINARIES) {
-    try { if (fs.statSync(source).isDirectory()) args.push("--ro-bind", source, source); } catch {}
+    try {
+      if (fs.statSync(source).isDirectory()) {
+        if (source === "/usr/local/lib") args.push("--dir", "/usr/local");
+        args.push("--ro-bind", source, source);
+      }
+    } catch {}
   }
   for (const source of ["/etc/ld.so.cache", "/etc/passwd", "/etc/group", "/etc/nsswitch.conf", "/etc/localtime"]) {
     try { if (fs.statSync(source).isFile()) args.push("--ro-bind", source, source); } catch {}
   }
+  try { if (fs.statSync("/etc/alternatives").isDirectory()) args.push("--ro-bind", "/etc/alternatives", "/etc/alternatives"); } catch {}
   const isolatedHome = fs.realpathSync(home);
   args.push("--symlink", "usr/bin", "/bin", "--bind", workspace, "/workspace", "--tmpfs", "/home", "--dir", "/home/eval", "--bind", isolatedHome, "/home/eval", "--tmpfs", "/run");
   args.push("--dir", "/run/eval-proxy", "--ro-bind", proxyDirectory, "/run/eval-proxy");
-  const madeDirs = new Set(["/", "/usr", "/usr/bin", "/usr/lib", "/usr/lib64", "/usr/share", "/lib", "/lib64", "/bin", "/etc", "/workspace", "/home", "/run", "/run/eval-proxy"]);
+  const madeDirs = new Set(["/", "/usr", "/usr/bin", "/usr/lib", "/usr/lib64", "/usr/libexec", "/usr/share", "/usr/local", "/usr/local/lib", "/lib", "/lib64", "/bin", "/etc", "/workspace", "/home", "/run", "/run/eval-proxy"]);
   const addTargetParents = (target) => {
     const parts = target.split(path.sep).filter(Boolean);
     let current = "";
@@ -215,13 +237,19 @@ export function isolatedProcessArgv({ cwd, command, argv = [], readOnlyPaths = [
   const workspace = fs.realpathSync(cwd);
   const args = ["--unshare-user", "--unshare-pid", "--unshare-net", "--disable-userns", "--die-with-parent", "--new-session", "--proc", "/proc", "--dev", "/dev", "--tmpfs", "/tmp"];
   for (const source of SYSTEM_BINARIES) {
-    try { if (fs.statSync(source).isDirectory()) args.push("--ro-bind", source, source); } catch {}
+    try {
+      if (fs.statSync(source).isDirectory()) {
+        if (source === "/usr/local/lib") args.push("--dir", "/usr/local");
+        args.push("--ro-bind", source, source);
+      }
+    } catch {}
   }
   for (const source of ["/etc/ld.so.cache", "/etc/passwd", "/etc/group", "/etc/nsswitch.conf", "/etc/localtime"]) {
     try { if (fs.statSync(source).isFile()) args.push("--ro-bind", source, source); } catch {}
   }
+  try { if (fs.statSync("/etc/alternatives").isDirectory()) args.push("--ro-bind", "/etc/alternatives", "/etc/alternatives"); } catch {}
   args.push(workspaceReadOnly ? "--ro-bind" : "--bind", workspace, "/workspace", "--tmpfs", "/home", "--dir", "/home/eval", "--tmpfs", "/run", "--symlink", "usr/bin", "/bin");
-  const madeDirs = new Set(["/", "/usr", "/usr/bin", "/usr/lib", "/usr/lib64", "/usr/share", "/lib", "/lib64", "/bin", "/etc", "/workspace", "/home", "/home/eval", "/run"]);
+  const madeDirs = new Set(["/", "/usr", "/usr/bin", "/usr/lib", "/usr/lib64", "/usr/libexec", "/usr/share", "/usr/local", "/usr/local/lib", "/lib", "/lib64", "/bin", "/etc", "/workspace", "/home", "/home/eval", "/run"]);
   const addParents = (target) => {
     let current = "";
     for (const part of target.split(path.sep).filter(Boolean).slice(0, -1)) {
@@ -246,6 +274,7 @@ export function isolatedProcessArgv({ cwd, command, argv = [], readOnlyPaths = [
 }
 
 export function runIsolatedProcess(spec, { outputLimit = 16_384, input = "", resources = null } = {}) {
+  if (!Number.isFinite(spec.timeoutMs) || spec.timeoutMs <= 0) throw new Error("isolated process spec has no timeoutMs");
   const { child, containment } = spawnContained(spec, resources, { cwd: "/", env: {}, detached: true, stdio: ["pipe", "pipe", "pipe"] });
   return new Promise((resolve) => {
     let stdout = "";
@@ -283,7 +312,15 @@ export function runIsolatedProcess(spec, { outputLimit = 16_384, input = "", res
   });
 }
 
-/** Grant only the dedicated evaluator uid access to disposable paths; never make them world-writable. */
+/** Build ACL arguments for the evaluator and operator on one disposable path. */
+export function runAsAclArgs(user, operatorUid, resolved, directory) {
+  return {
+    access: ["-R", "-m", `u:${user}:rwX,u:${operatorUid}:rwX`, resolved],
+    defaults: directory ? ["-m", `d:u:${user}:rwx,d:u:${operatorUid}:rwx,d:m::rwx`, resolved] : null,
+  };
+}
+
+/** Grant the evaluator and harness operator access to disposable paths; never make them world-writable. */
 export function grantRunAsAccess(user, targets) {
   if (!/^[a-z_][a-z0-9_-]{0,31}$/.test(user)) throw new Error("invalid evaluator account");
   const setfacl = "/usr/bin/setfacl";
@@ -291,13 +328,22 @@ export function grantRunAsAccess(user, targets) {
   if (!fs.existsSync(setfacl)) throw new Error("setfacl is unavailable; refusing unsafe workspace permission changes");
   for (const target of targets) {
     const resolved = fs.realpathSync(target);
-    const result = spawnSync(setfacl, ["-R", "-m", `u:${user}:rwX,u:${opUid}:rwX`, resolved], { encoding: "utf8", timeout: 5000, env: { PATH: "/usr/bin:/bin" } });
+    const { access, defaults } = runAsAclArgs(user, opUid, resolved, fs.statSync(resolved).isDirectory());
+    const result = spawnSync(setfacl, access, { encoding: "utf8", timeout: 5000, env: { PATH: "/usr/bin:/bin" } });
     if (result.status !== 0) throw new Error(`could not grant scoped evaluator access to disposable path (${result.status ?? "signal"})`);
-    if (fs.statSync(resolved).isDirectory()) {
-      const defaults = spawnSync(setfacl, ["-m", `d:u:${user}:rwx,d:u:${opUid}:rwx,d:m::rwx`, resolved], { encoding: "utf8", timeout: 5000, env: { PATH: "/usr/bin:/bin" } });
-      if (defaults.status !== 0) throw new Error(`could not set scoped evaluator default ACL (${defaults.status ?? "signal"})`);
+    if (defaults) {
+      const defaultResult = spawnSync(setfacl, defaults, { encoding: "utf8", timeout: 5000, env: { PATH: "/usr/bin:/bin" } });
+      if (defaultResult.status !== 0) throw new Error(`could not set scoped evaluator default ACL (${defaultResult.status ?? "signal"})`);
     }
   }
+}
+
+/** Make evaluator-owned workspace files readable to the operator through the scoped ACL mask. */
+export async function normalizeRunAsPermissions(user, dir, wrapSpec) {
+  const spec = isolatedProcessArgv({ cwd: dir, command: "/usr/bin/chmod", argv: ["-R", "u+rwX,g+rwX,o-rwx", "/workspace"], timeoutMs: 60_000 });
+  const result = await runIsolatedProcess(wrapSpec(user, spec), { outputLimit: 1_000_000 });
+  if (result.timedOut || result.error) throw new Error(`could not normalise evaluator file permissions (${result.error ?? "timeout"})`);
+  return result;
 }
 
 export function stageHiddenFiles(source, ws, relativeTarget, { readOnlyHidden = false } = {}) {
@@ -352,7 +398,79 @@ export function hiddenOutputHasTests(output) {
 }
 
 /** Execute a task-controlled shell command in a no-network, clear-environment namespace. */
-export function runIsolated(command, { cwd, home = false, timeoutSec = 300, outputLimit = 1_000_000, resources = null, readOnlySubpaths = [], hiddenSubpaths = [] } = {}) {
+export async function runIsolated(command, options = {}) {
+  const { cwd, hiddenSubpaths = [] } = options;
+  if (hiddenSubpaths.length && /\b(?:go|cargo)\s+test\b/.test(command)) {
+    const workspace = fs.realpathSync(cwd);
+    const saved = new Map();
+    const restore = () => {
+      for (const [relative, contents] of saved) {
+        const parts = relative.split(/[\\/]/);
+        if (path.isAbsolute(relative) || parts.some((part) => !part || part === "." || part === "..")) throw new Error(`unsafe hidden source path during restore: ${relative}`);
+        let parent = workspace;
+        for (const part of parts.slice(0, -1)) {
+          parent = path.join(parent, part);
+          const stat = fs.lstatSync(parent, { throwIfNoEntry: false });
+          if (stat?.isSymbolicLink() || (stat && !stat.isDirectory())) throw new Error(`unsafe hidden source parent during restore: ${relative}`);
+          if (!stat) fs.mkdirSync(parent);
+        }
+        const destination = confinedPath(workspace, relative, { allowMissingLeaf: true });
+        const leafStat = fs.lstatSync(destination, { throwIfNoEntry: false });
+        if (leafStat?.isSymbolicLink() || (leafStat && !leafStat.isFile())) throw new Error(`unsafe hidden source destination during restore: ${relative}`);
+        fs.writeFileSync(destination, contents);
+      }
+    };
+    try {
+      for (const relative of hiddenSubpaths) {
+        const source = confinedPath(workspace, relative);
+        saved.set(relative, fs.readFileSync(source));
+        fs.unlinkSync(source);
+      }
+      const rust = /\bcargo\s+test\b/.test(command);
+      if (rust) {
+        const pending = [workspace];
+        while (pending.length) {
+          const dir = pending.pop();
+          for (const ent of fs.readdirSync(dir, { withFileTypes: true })) {
+            if (ent.isSymbolicLink() || ent.name === ".git") continue;
+            const full = path.join(dir, ent.name);
+            if (ent.isDirectory()) pending.push(full);
+            else if (ent.name === "build.rs") throw new Error("Rust hidden checks refuse build.rs while hiding oracle sources");
+            else if (ent.name === "Cargo.toml" && /\bproc-macro\s*=\s*true\b/.test(fs.readFileSync(full, "utf8"))) throw new Error("Rust hidden checks refuse proc-macro crates while hiding oracle sources");
+          }
+        }
+      }
+      const subcommands = command.split(/\s*&&\s*/);
+      for (const subcommand of subcommands) {
+        const isGo = /\bgo\s+test\b/.test(subcommand);
+        const isCargo = /\bcargo\s+test\b/.test(subcommand);
+        if (!isGo && !isCargo) continue;
+        const preflight = isGo ? "go build ./..." : cargoPreflight(subcommand);
+        const preflightResult = await runIsolatedRaw(preflight, { ...options, hiddenSubpaths: [] });
+        if (preflightResult.status !== 0) return preflightResult;
+      }
+      let result = { status: 0, stdout: "", stderr: "", timedOut: false, overflow: false };
+      for (const subcommand of subcommands) {
+        restore();
+        result = await runIsolatedRaw(subcommand, { ...options, hiddenSubpaths });
+        if (result.status !== 0) return result;
+      }
+      return result;
+    } finally {
+      restore();
+    }
+  }
+  return runIsolatedRaw(command, options);
+}
+
+function cargoPreflight(command) {
+  const flags = [];
+  const matches = command.matchAll(/--(?:features\s+(?:"[^"]*"|'[^']*'|\S+)|all-features|no-default-features|offline)\b/g);
+  for (const match of matches) flags.push(match[0]);
+  return `cargo check --lib --bins ${flags.join(" ")}`.trim();
+}
+
+function runIsolatedRaw(command, { cwd, home = false, timeoutSec = 300, outputLimit = 1_000_000, resources = null, readOnlySubpaths = [], hiddenSubpaths = [] } = {}) {
   const spec = isolatedArgv({ cwd, home, command, timeoutSec, readOnlySubpaths, hiddenSubpaths });
   return new Promise((resolve) => {
     const { child, containment } = spawnContained(spec, resources, { cwd: "/", env: {}, detached: true, stdio: ["ignore", "pipe", "pipe"] });
