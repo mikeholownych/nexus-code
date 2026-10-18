@@ -32,6 +32,8 @@ import {
   recoverUpgrade,
   getJournalPath,
   syncDirectory,
+  acquireReclaimGate,
+  releaseReclaimGate,
 } from "./upgrade_journal.js";
 
 export const CANONICAL_REPO = "mikeholownych/nexus-code";
@@ -953,12 +955,14 @@ export async function performUpgrade(
           if (probeErr.code !== "ESRCH") throw probeErr;
         }
         const reclaimDir = `${lockFile}.reclaim`;
-        try { fs.mkdirSync(reclaimDir, { mode:0o700 }); }
-        catch (gateErr: any) {
-          if (gateErr.code !== "EEXIST") throw gateErr;
+        if (!acquireReclaimGate(reclaimDir)) {
+          // A live reclaimer holds the gate: give it a moment, then re-check
+          // whether it took over the lock before giving up.
           const until = Date.now() + 200;
           while (Date.now() < until && fs.existsSync(reclaimDir)) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10);
-          throw new Error("Another upgrade is in progress; stale lock is being reclaimed.");
+          const current = fs.lstatSync(lockFile, { throwIfNoEntry:false });
+          if (!current || current.ino !== staleIno) throw new Error("Another upgrade is in progress; lock was replaced.");
+          if (!acquireReclaimGate(reclaimDir)) throw new Error(`Another upgrade is in progress; stale lock reclaim gate is held at ${reclaimDir}.`);
         }
         try {
           const current = fs.lstatSync(lockFile, { throwIfNoEntry:false });
@@ -968,7 +972,7 @@ export async function performUpgrade(
             fs.unlinkSync(lockFile);
           }
           writeOwnedLock();
-        } finally { try { fs.rmdirSync(reclaimDir); } catch {} }
+        } finally { releaseReclaimGate(reclaimDir); }
       } catch (inner: any) {
         throw new Error(`Another upgrade is in progress (lockfile present at ${lockFile}): ${inner.message || inner}`);
       }

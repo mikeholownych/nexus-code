@@ -248,6 +248,56 @@ export interface RecoveryOutcome {
   details: string;
 }
 
+/** A reclaim gate older than this bound is removed even without an owner record. */
+const RECLAIM_GATE_MAX_AGE_MS = 30_000;
+
+/**
+ * Serializes stale-lock reclamation between concurrent processes. The gate is a
+ * directory that records its owner, so a reclaimer that crashes between mkdir
+ * and cleanup cannot wedge every later upgrade: waiters take the gate over when
+ * its owner is dead or it exceeds the age bound. Returns true when this process
+ * owns the gate and must later call releaseReclaimGate.
+ */
+export function acquireReclaimGate(reclaimDir: string): boolean {
+  if (tryCreateReclaimGate(reclaimDir)) return true;
+  if (!isReclaimGateAbandoned(reclaimDir)) return false;
+  try { fs.rmSync(reclaimDir, { recursive: true, force: true }); }
+  catch { return false; }
+  return tryCreateReclaimGate(reclaimDir);
+}
+
+export function releaseReclaimGate(reclaimDir: string): void {
+  try { fs.rmSync(reclaimDir, { recursive: true, force: true }); } catch {}
+}
+
+function tryCreateReclaimGate(reclaimDir: string): boolean {
+  try { fs.mkdirSync(reclaimDir, { mode: 0o700 }); }
+  catch (error: any) { if (error.code === "EEXIST") return false; throw error; }
+  // Best effort: a gate whose owner record is missing still excludes via the age bound.
+  try {
+    fs.writeFileSync(path.join(reclaimDir, "owner"), JSON.stringify({ pid: process.pid }), { mode: 0o600 });
+  } catch {}
+  return true;
+}
+
+function isReclaimGateAbandoned(reclaimDir: string): boolean {
+  let gateStat: fs.Stats;
+  try { gateStat = fs.lstatSync(reclaimDir); } catch { return false; }
+  if (!gateStat.isDirectory()) return false;
+  try {
+    const owner = JSON.parse(fs.readFileSync(path.join(reclaimDir, "owner"), "utf8"));
+    if (Number.isSafeInteger(owner.pid) && owner.pid >= 1) {
+      try { process.kill(owner.pid, 0); return false; }
+      catch (error: any) {
+        if (error.code === "EPERM") return false;
+        if (error.code !== "ESRCH") throw error;
+      }
+      return true;
+    }
+  } catch {}
+  return Date.now() - gateStat.mtimeMs > RECLAIM_GATE_MAX_AGE_MS;
+}
+
 /**
  * Idempotent crash recovery: inspects journal and restores working installation or finalizes transition.
  */
@@ -278,16 +328,14 @@ export function recoverUpgrade(prefix: string, options: { forceRollback?: boolea
         catch (error:any) { if (error.code === "EPERM") return inProgress; if (error.code !== "ESRCH") throw error; }
         options.onStaleLockObserved?.();
         const reclaimDir = `${lock}.reclaim`;
-        try { fs.mkdirSync(reclaimDir, { mode:0o700 }); }
-        catch (error:any) {
-          if (error.code !== "EEXIST") throw error;
+        if (!acquireReclaimGate(reclaimDir)) {
+          // A live reclaimer holds the gate: give it a moment, then re-check
+          // whether it took over the lock before reporting an in-progress upgrade.
           const until = Date.now() + 200;
           while (Date.now() < until && fs.existsSync(reclaimDir)) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10);
           const current = fs.lstatSync(lock, { throwIfNoEntry:false });
           if (!current || current.ino !== staleIno) return inProgress;
-          const nowHolder = JSON.parse(fs.readFileSync(lock, "utf8"));
-          try { process.kill(nowHolder.pid, 0); return inProgress; } catch (probe:any) { if (probe.code !== "ESRCH") throw probe; }
-          return inProgress;
+          if (!acquireReclaimGate(reclaimDir)) return { recovered:false, action:"upgrade_in_progress", details:`An upgrade transaction is currently in progress (reclaim gate: ${reclaimDir}).` };
         }
         try {
           const currentStat = fs.lstatSync(lock, { throwIfNoEntry:false });
@@ -297,7 +345,7 @@ export function recoverUpgrade(prefix: string, options: { forceRollback?: boolea
             fs.unlinkSync(lock);
           }
           acquire();
-        } finally { try { fs.rmdirSync(reclaimDir); } catch {} }
+        } finally { releaseReclaimGate(reclaimDir); }
       }
     }
     if (!owned && !fs.existsSync(lock) && fs.existsSync(path.dirname(lock))) {

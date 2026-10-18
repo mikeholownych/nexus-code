@@ -80,6 +80,48 @@ describe("durable same-version transaction recovery",()=>{
     assert.equal(verifyInstalledRuntime(entry.sourceInstallDir,"v1.0.0").healthy,true);
     assert.equal(readJournal(prefix)?.state,"rolled_back");
   });
+  it("removes a reclaim gate whose owner is dead and recovers the interrupted upgrade",()=>{
+    writeJournal(prefix,entry);
+    const libRoot=path.join(prefix,"lib/nexus");
+    fs.writeFileSync(path.join(libRoot,".upgrade.lock"),JSON.stringify({pid:999999,token:"dead"}),{mode:0o600});
+    const gate=path.join(libRoot,".upgrade.lock.reclaim");
+    fs.mkdirSync(gate,{mode:0o700});
+    fs.writeFileSync(path.join(gate,"owner"),JSON.stringify({pid:999998,token:"crashed-reclaimer"}),{mode:0o600});
+    const result=recoverUpgrade(prefix);
+    assert.equal(result.recovered,true,result.details);
+    assert.equal(result.action,"rolled_back");
+    assert.equal(fs.existsSync(gate),false);
+    assert.equal(fs.existsSync(path.join(libRoot,".upgrade.lock")),false);
+    assert.equal(readJournal(prefix)?.state,"rolled_back");
+  });
+  it("removes an ownerless reclaim gate once it exceeds the age bound",()=>{
+    writeJournal(prefix,entry);
+    const libRoot=path.join(prefix,"lib/nexus");
+    fs.writeFileSync(path.join(libRoot,".upgrade.lock"),JSON.stringify({pid:999999,token:"dead"}),{mode:0o600});
+    const gate=path.join(libRoot,".upgrade.lock.reclaim");
+    fs.mkdirSync(gate,{mode:0o700});
+    const aged=new Date(Date.now()-60000);
+    fs.utimesSync(gate,aged,aged);
+    const result=recoverUpgrade(prefix);
+    assert.equal(result.recovered,true,result.details);
+    assert.equal(fs.existsSync(gate),false);
+    assert.equal(fs.existsSync(path.join(libRoot,".upgrade.lock")),false);
+    assert.equal(readJournal(prefix)?.state,"rolled_back");
+  });
+  it("reports the gate path and stays back while a live reclaimer holds the gate",()=>{
+    writeJournal(prefix,entry);
+    const libRoot=path.join(prefix,"lib/nexus");
+    fs.writeFileSync(path.join(libRoot,".upgrade.lock"),JSON.stringify({pid:999999,token:"dead"}),{mode:0o600});
+    const gate=path.join(libRoot,".upgrade.lock.reclaim");
+    fs.mkdirSync(gate,{mode:0o700});
+    fs.writeFileSync(path.join(gate,"owner"),JSON.stringify({pid:process.pid,token:"live-reclaimer"}),{mode:0o600});
+    const result=recoverUpgrade(prefix);
+    assert.equal(result.action,"upgrade_in_progress");
+    assert.ok(result.details.includes(".upgrade.lock.reclaim"),result.details);
+    assert.equal(fs.existsSync(gate),true);
+    assert.equal(fs.existsSync(path.join(libRoot,".upgrade.lock")),true);
+    assert.equal(readJournal(prefix)?.state,"switching");
+  });
   it("does not touch the lock for a completed journal in a read-only package directory",()=>{
     entry.state="complete";writeJournal(prefix,entry);
     const libRoot=path.join(prefix,"lib/nexus");
