@@ -121,6 +121,7 @@ test("ACC-CONT-03: pressure compaction of a work unit survives SIGKILL and resto
       assert.ok(exit.signal === "SIGKILL" || exit.code === 137, `child must die from SIGKILL; got ${JSON.stringify(exit)}\n${stdout}\n${stderr}`);
       const info = JSON.parse(fs.readFileSync(path.join(work, "info.json"), "utf8")) as { taskId: string; compactionId: string; stateDir: string; repo: string; markers: string[] };
       pressureRepo = info.repo;
+      assert.ok(info.markers.includes("MARKER-PRESSURE-ALPHA"), "the archived marker list includes the first pressure-read file");
       const historyPath = path.join(info.stateDir, `${info.taskId}.history.jsonl`);
       assert.ok(fs.existsSync(historyPath), `history file ${historyPath} exists`);
       assert.ok(fs.readFileSync(historyPath, "utf8").includes(info.compactionId), "history includes the pressure compaction id");

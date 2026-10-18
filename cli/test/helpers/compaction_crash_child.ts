@@ -61,11 +61,14 @@ if (point === "work_unit_pressure") {
         const taskId = agent.getTaskId();
         const historyPath = path.join(stateDir, `${taskId}.history.jsonl`);
         if (!fs.existsSync(historyPath)) return;
-        const lines = fs.readFileSync(historyPath, "utf8").trim().split("\n").filter(Boolean);
+        const historyText = fs.readFileSync(historyPath, "utf8");
+        const archivedMarkers = pressureMarkers.filter((marker) => historyText.includes(marker));
+        if (!archivedMarkers.includes("MARKER-PRESSURE-ALPHA")) return;
+        const lines = historyText.trim().split("\n").filter(Boolean);
         if (!lines.length) return;
         const compactionId = JSON.parse(lines[lines.length - 1]).compactionId;
         if (!compactionId) return;
-        fs.writeFileSync(path.join(work, "info.json"), JSON.stringify({ taskId, compactionId, stateDir, repo: pressureRepo, markers: pressureMarkers }));
+        fs.writeFileSync(path.join(work, "info.json"), JSON.stringify({ taskId, compactionId, stateDir, repo: pressureRepo, markers: archivedMarkers }));
         process.kill(process.pid, "SIGKILL");
       });
       return agent;
