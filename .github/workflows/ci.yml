@@ -47,14 +47,14 @@ jobs:
         node: [20, 22, 24]
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-      - run: sudo apt-get update && sudo apt-get install --yes make bubblewrap build-essential meson ninja-build pkg-config libcap-dev
+      - run: sudo apt-get update && sudo apt-get install --yes acl make bubblewrap build-essential meson ninja-build pkg-config libcap-dev
       - run: bash scripts/ensure-ci-bubblewrap.sh
       - run: bash scripts/ensure-ci-user-cgroups.sh
       - name: Mount a dedicated capped tmpfs for evaluator resource fixtures
         run: |
           root=/mnt/nexus-eval-ci
-          sudo install -d -o "$USER" -g "$USER" -m 0700 "$root"
-          sudo mount -t tmpfs -o size=128m,mode=0700,uid="$(id -u)",gid="$(id -g)" nexus-eval-ci "$root"
+          sudo install -d -o "$USER" -g "$USER" -m 0711 "$root"
+          sudo mount -t tmpfs -o size=128m,mode=0711,uid="$(id -u)",gid="$(id -g)" nexus-eval-ci "$root"
           echo "NEXUS_EVAL_TEST_WORKSPACE_ROOT=$root" >> "$GITHUB_ENV"
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
@@ -104,14 +104,14 @@ jobs:
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-      - run: sudo apt-get update && sudo apt-get install --yes make bubblewrap build-essential meson ninja-build pkg-config libcap-dev
+      - run: sudo apt-get update && sudo apt-get install --yes acl make bubblewrap build-essential meson ninja-build pkg-config libcap-dev
       - run: bash scripts/ensure-ci-bubblewrap.sh
       - run: bash scripts/ensure-ci-user-cgroups.sh
       - name: Mount a dedicated capped tmpfs for evaluator resource fixtures
         run: |
           root=/mnt/nexus-eval-ci
-          sudo install -d -o "$USER" -g "$USER" -m 0700 "$root"
-          sudo mount -t tmpfs -o size=128m,mode=0700,uid="$(id -u)",gid="$(id -g)" nexus-eval-ci "$root"
+          sudo install -d -o "$USER" -g "$USER" -m 0711 "$root"
+          sudo mount -t tmpfs -o size=128m,mode=0711,uid="$(id -u)",gid="$(id -g)" nexus-eval-ci "$root"
           echo "NEXUS_EVAL_TEST_WORKSPACE_ROOT=$root" >> "$GITHUB_ENV"
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
