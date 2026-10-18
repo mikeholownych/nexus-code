@@ -11,11 +11,24 @@ Observed through the GitHub API:
 - Active branch ruleset 25340146 protects main and v1/integration: PRs, five named CI checks, no force push or deletion, merge commits only, zero required GitHub approvals, no bypass actors.
 - Active tag ruleset 25340148 prevents updates/deletion of v* tags; it does not restrict creation to a designated publisher.
 
-The account is an administrator, but the connected GitHub App cannot access classic branch protection (403), and exposes no repository-settings write tool. Local GitHub CLI authentication is invalid. Browser setup was also unavailable in this session. These are access limits, not a requirement for new user approval.
+Initial discovery used a GitHub App without settings-write access, an expired Linux GitHub CLI login, and an unavailable browser session. After the owner reconnected OAuth, the Windows GitHub CLI authenticated successfully as the repository administrator. The administrative settings below were then applied and verified; no additional approval was required.
+
+## Administrative verification after OAuth reconnection
+
+Applied and read back on 2026-10-18:
+- Repository description and six topics configured; issues and discussions enabled.
+- Ten triage labels verified by name, color, and description; unrelated labels preserved.
+- Private vulnerability reporting enabled.
+- Dependabot alerts enabled; security updates enabled and not paused.
+- Secret scanning and push protection enabled.
+- Workflow default token remains read-only; Actions cannot approve pull requests.
+- Existing branch and immutable-tag rulesets remain active and unchanged.
+
+Mandatory SHA policy remains off while the default branch still contains mutable references. This PR's pins must reach main before enabling it. Release-environment restrictions and release-asset immutability are not claimed applied; they require a coordinated lifecycle check with the publisher. Required CI and review of this PR remain pending independently of the applied settings. CodeQL and Dependabot configuration checks on the original PR head passed; that is not full product qualification.
 
 ## Administration handoff
 
-After the PR is reviewed and integrated, an authenticated administrator can preview and apply the concrete settings:
+The following administration helper was applied from the reviewed local configuration after OAuth reconnection; it can preview or reconcile these settings again:
 
 ```sh
 python3 scripts/configure-github-community.py
