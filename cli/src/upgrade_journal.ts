@@ -277,26 +277,25 @@ function validateGuardIdentity(guardPath: string, fd: number): void {
 }
 
 function openGuardFile(guardPath: string): number {
+  // Fail closed on platforms without no-follow/non-blocking open support.
+  if (fs.constants.O_NOFOLLOW === undefined || fs.constants.O_NONBLOCK === undefined) {
+    throw new Error("Reclaim guard requires O_NOFOLLOW/O_NONBLOCK open support");
+  }
   let fd: number;
-  try { fd = fs.openSync(guardPath, "ax+", 0o600); }
-  catch (error: any) {
+  try {
+    // O_CREAT|O_EXCL never follows a symlink, so creation is race-free.
+    fd = fs.openSync(guardPath, fs.constants.O_RDWR | fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_NONBLOCK, 0o600);
+  } catch (error: any) {
     if (error.code !== "EEXIST") throw error;
-    // Pre-open identity: the path itself must already be a regular file, so
-    // symlinks, FIFOs, and devices are rejected before the following open.
-    const before = fs.lstatSync(guardPath);
-    if (!before.isFile()) throw new Error("Reclaim guard path is redirected");
-    fd = fs.openSync(guardPath, "r+");
-    // Post-open identity: what was opened must still be that same inode/device,
-    // owned by this user, without group/other permission bits.
     try {
-      const opened = fs.fstatSync(fd);
-      if (opened.ino !== before.ino || opened.dev !== before.dev) throw new Error("Reclaim guard path is redirected");
-      validateGuardIdentity(guardPath, fd);
-    } catch (error) {
-      fs.closeSync(fd);
-      throw error;
+      // The kernel refuses to follow a symlinked path under O_NOFOLLOW (ELOOP)
+      // and O_NONBLOCK prevents any special file from blocking the open, so no
+      // check-to-open race exists; identity is then verified on the descriptor.
+      fd = fs.openSync(guardPath, fs.constants.O_RDWR | fs.constants.O_NONBLOCK | fs.constants.O_NOFOLLOW);
+    } catch (openError: any) {
+      if (openError.code === "ELOOP") throw new Error("Reclaim guard path is redirected");
+      throw openError;
     }
-    return fd;
   }
   try { validateGuardIdentity(guardPath, fd); }
   catch (error) {
