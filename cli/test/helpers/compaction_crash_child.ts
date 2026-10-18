@@ -13,8 +13,69 @@ import { AutonomousAgent } from "../../src/agent.js";
 import { DEFAULT_CONTINUATION } from "../../src/types.js";
 import { SessionManager } from "../../src/session.js";
 import { startGateway, makeRepo, Reply } from "./fixtures.js";
+import { AgentWorkUnitExecutor, driveOperation, OperationStore } from "../../src/core/operation_runner.js";
+import { newOperation } from "../../src/core/operation.js";
+import { DurableStateManager } from "../../src/core/state.js";
+import type { HarnessConfig } from "../../src/types.js";
+import type { ResourceDescriptor } from "../../src/core/resources.js";
 
 const [work, point] = process.argv.slice(2);
+
+if (point === "work_unit_pressure") {
+  const pressureMarkers = ["MARKER-PRESSURE-ALPHA", "MARKER-PRESSURE-BRAVO", "MARKER-PRESSURE-CHARLIE", "MARKER-PRESSURE-DELTA", "MARKER-PRESSURE-ECHO", "MARKER-PRESSURE-FOXTROT"];
+  const pressureFiller = "lorem ipsum dolor sit amet ".repeat(900);
+  const pressureRepo = makeRepo(Object.fromEntries(pressureMarkers.map((marker, i) => [`m${i}.txt`, `${marker}\n${pressureFiller}\n`])));
+  const stateDir = path.join(work, "op-state");
+  fs.mkdirSync(stateDir, { recursive: true });
+  let toolStep = 0;
+  const pressureGateway = await startGateway((_n, body) => {
+    if (!body?.tools) return { kind: "text", content: "Recorded marker findings." };
+    toolStep++;
+    if (toolStep <= 6) return { kind: "tools", calls: [{ name: "read_file", args: { path: `m${toolStep - 1}.txt` } }] };
+    if (toolStep === 7) return { kind: "tools", calls: [{ name: "write_file", args: { path: "out.txt", content: "pressure compaction completed" } }] };
+    return { kind: "tools", calls: [{ name: "task_completed", args: { summary: "Read all marker files and wrote out.txt." } }] };
+  });
+  const config: HarnessConfig = {
+    endpoint: pressureGateway.url,
+    model: "m",
+    maxSteps: 20,
+    temperature: 0,
+    workspace: pressureRepo,
+    shell: "bash",
+    approvalMode: "auto" as const,
+    fullAccess: true,
+    contextLimit: 18_000,
+    completionReserveTokens: 500,
+    toolResponseReserveTokens: 500,
+  };
+  const resource: ResourceDescriptor = { id: "primary", provider: new URL(pressureGateway.url).origin, endpoint: pressureGateway.url, model: "m", capabilities: ["tools"], rank: 0 };
+  const store = new OperationStore(pressureRepo, stateDir);
+  const executor = new AgentWorkUnitExecutor({
+    baseConfig: config,
+    createAgent: (agentConfig, depth, opts) => {
+      const agent = new AutonomousAgent(agentConfig, depth, undefined, opts);
+      const a = agent as any;
+      a.stateManager = new DurableStateManager({ baseDir: stateDir, workspacePaths: [a.primaryWorkspacePathIdentity] });
+      a.ui = new Proxy({}, { get: () => () => {} });
+      agent.setProgressListener(() => {
+        const taskId = agent.getTaskId();
+        const historyPath = path.join(stateDir, `${taskId}.history.jsonl`);
+        if (!fs.existsSync(historyPath)) return;
+        const lines = fs.readFileSync(historyPath, "utf8").trim().split("\n").filter(Boolean);
+        if (!lines.length) return;
+        const compactionId = JSON.parse(lines[lines.length - 1]).compactionId;
+        if (!compactionId) return;
+        fs.writeFileSync(path.join(work, "info.json"), JSON.stringify({ taskId, compactionId, stateDir, repo: pressureRepo, markers: pressureMarkers }));
+        process.kill(process.pid, "SIGKILL");
+      });
+      return agent;
+    },
+  });
+  const op = newOperation("pressure-compaction", "pressure compaction recovery", [{ id: "pressure-unit", role: "implementer", prompt: "Read m0.txt through m5.txt, then write out.txt." }], [resource], Date.now());
+  await driveOperation(op, { store, executor });
+  process.exit(3);
+}
+
 const markers = ["MARKER-ALPHA-417", "MARKER-BRAVO-822", "MARKER-CHARLIE-139"];
 // Large enough outputs that an operator compaction condenses the earlier ones.
 const filler = "lorem ipsum dolor sit amet ".repeat(400);

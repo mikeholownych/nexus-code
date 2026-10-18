@@ -62,6 +62,101 @@ test("all source AutonomousAgent construction sites declare durability explicitl
   assert.deepEqual(violations, []);
 });
 
+test("AgentWorkUnitExecutor default construction persists a durable depth-1 implementer with its unit identity", async () => {
+  await withHome(async (home) => {
+    const gw = await gateway(() => done("one-step unit complete"));
+    const repo = makeRepo();
+    const stateDir = path.join(home, ".nexus", "tasks");
+    const priorStateDir = process.env.NEXUS_STATE_DIR;
+    process.env.NEXUS_STATE_DIR = path.join(home, ".nexus");
+    const config = cfg(gw, repo, { maxSteps: 1 });
+    const store = new OperationStore(repo, path.join(home, ".nexus", "operations"));
+    const unit: WorkUnitSpec = { id: "u-default", role: "implementer", prompt: "Complete this one-step work unit." };
+    const resource: ResourceDescriptor = { id: "primary", provider: gw.origin, endpoint: gw.url, model: "m", capabilities: ["tools"], rank: 0 };
+    let constructed: AutonomousAgent | undefined;
+    const originalRunTurn = AutonomousAgent.prototype.runTurn;
+    AutonomousAgent.prototype.runTurn = function (...args: Parameters<AutonomousAgent["runTurn"]>) {
+      constructed = this;
+      return originalRunTurn.apply(this, args);
+    };
+    try {
+      const executor = new AgentWorkUnitExecutor({ baseConfig: config });
+      const op = await muted(() => driveOperation(newOperation("op-default-construction", "default construction", [unit], [resource], Date.now()), { store, executor }));
+      const savedUnit = unitOf(op, unit.id);
+      assert.ok(savedUnit.agentTaskId, "the executor bound the work-unit task id");
+      assert.ok(fs.existsSync(path.join(stateDir, `${savedUnit.agentTaskId}.json`)), "durable task state was persisted under ~/.nexus/tasks");
+      assert.ok(constructed, "the default executor constructed an agent");
+      assert.equal(constructed!.durable, true);
+      assert.equal((constructed as any).depth, 1, "work-unit agents are depth 1");
+      assert.equal(constructed!.role, unit.role);
+      assert.equal(constructed!.unitId, unit.id);
+    } finally {
+      AutonomousAgent.prototype.runTurn = originalRunTurn;
+      if (priorStateDir === undefined) delete process.env.NEXUS_STATE_DIR;
+      else process.env.NEXUS_STATE_DIR = priorStateDir;
+      await gw.close();
+      fs.rmSync(repo, { recursive: true, force: true });
+    }
+  });
+});
+
+test("ACC-CONT-03: pressure compaction of a work unit survives SIGKILL and restores archived markers", async () => {
+  await withHome(async (home) => {
+    const work = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-cont-pressure-crash-"));
+    const helper = path.join(cliRoot, "test/helpers/compaction_crash_child.ts");
+    const child = spawn(process.execPath, ["--import", tsxLoader, helper, work, "work_unit_pressure"], {
+      cwd: cliRoot,
+      env: { ...process.env, HOME: home },
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    let stdout = "";
+    let stderr = "";
+    child.stdout.on("data", (chunk) => { stdout += chunk.toString(); });
+    child.stderr.on("data", (chunk) => { stderr += chunk.toString(); });
+    let pressureRepo: string | undefined;
+    const exit = await new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolve) => {
+      child.on("close", (code, signal) => resolve({ code, signal }));
+    });
+    try {
+      assert.ok(exit.signal === "SIGKILL" || exit.code === 137, `child must die from SIGKILL; got ${JSON.stringify(exit)}\n${stdout}\n${stderr}`);
+      const info = JSON.parse(fs.readFileSync(path.join(work, "info.json"), "utf8")) as { taskId: string; compactionId: string; stateDir: string; repo: string; markers: string[] };
+      pressureRepo = info.repo;
+      const historyPath = path.join(info.stateDir, `${info.taskId}.history.jsonl`);
+      assert.ok(fs.existsSync(historyPath), `history file ${historyPath} exists`);
+      assert.ok(fs.readFileSync(historyPath, "utf8").includes(info.compactionId), "history includes the pressure compaction id");
+
+      const resumedAgent = quiet(new AutonomousAgent({
+        endpoint: "http://127.0.0.1:1",
+        model: "m",
+        maxSteps: 2,
+        temperature: 0,
+        workspace: info.repo,
+        shell: "bash",
+        approvalMode: "auto",
+        fullAccess: true,
+        contextLimit: 18_000,
+        completionReserveTokens: 500,
+        toolResponseReserveTokens: 500,
+      }, 1, undefined, { durable: true, role: "implementer", unitId: "pressure-unit" }));
+      const resumedState = resumedAgent as any;
+      resumedState.stateManager = new DurableStateManager({ baseDir: info.stateDir, workspacePaths: [resumedState.primaryWorkspacePathIdentity] });
+      await resumedAgent.recoverFromTaskState(info.taskId);
+      for (const marker of info.markers) {
+        const result = await (resumedAgent as any).spine.execute(
+          { invocationId: `archive_${marker}`, taskId: info.taskId, actor: "agent", executionDomain: "agent_orchestration", toolName: "read_archive", args: { query: marker } },
+          { activeTurnSignal: undefined, observer: undefined, metadata: {} },
+        );
+        assert.equal(result.success, true, `read_archive succeeds for ${marker}`);
+        assert.ok(result.output.includes(marker), `archived originals contain ${marker}`);
+      }
+    } finally {
+      if (child.exitCode === null && child.signalCode === null) child.kill();
+      fs.rmSync(work, { recursive: true, force: true });
+      if (pressureRepo) fs.rmSync(pressureRepo, { recursive: true, force: true });
+    }
+  });
+});
+
 // ---------------------------------------------------------------- scripted gateway
 
 type Reply = { tools: Array<{ name: string; args: unknown }> } | { text: string } | { hold: true };
