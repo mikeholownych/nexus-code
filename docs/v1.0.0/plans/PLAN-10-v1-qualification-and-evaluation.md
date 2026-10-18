@@ -59,7 +59,9 @@ Task 8 is data work. Tasks 11 and 12 are operations work.
 |---|---|---|
 | Harness fixes | 4–6 engineer-days | — |
 | Task authoring | 40 T2 tasks at 1–2 hours each, plus 8 T3 tasks at 3–4 hours each: roughly 10–14 days of author time | Author availability (X2) |
-| Run wall time | (40×5 + 8×5 + 45) runs per agent × 3 agents ≈ 855 runs. At a median 6 min/run serial on one inference host, about 85.5 hours, roughly 4 days of continuous inference. T3 runs are longer. | Inference-host availability and thermal behaviour (see the `experiments/thermal-soak` history). This is the critical-path risk for M5. |
+| Run wall time (historical estimate; see below) | (40×5 + 8×5 + 40) runs per agent × 3 agents ≈ 840 runs. At a median 6 min/run serial on one inference host, about 84 hours, roughly 4 days of continuous inference. T3 runs are longer. | Inference-host availability and thermal behaviour (see the `experiments/thermal-soak` history). This is the critical-path risk for M5. |
+
+The original run-wall-time estimate above predates the nine-class T4 correction and applies three agents uniformly. It is retained as historical planning evidence, not a current run count or schedule. Before qualification, derive the schedule from the frozen workload and agent matrix in ACCEPTANCE §6: T2 specifies three agents; T4 specifies the Nexus RC only.
 
 ## Definition of done
 
