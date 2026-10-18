@@ -3,7 +3,9 @@
 import http from "node:http";
 import { spawn } from "node:child_process";
 
-const payload = JSON.parse(await readStdin());
+// The launch payload is the first stdin line. With payload.protocol the rest of stdin is the agent's stdin (the T3
+// sidecar protocol); otherwise the agent gets no stdin.
+const payload = JSON.parse(await readPayloadLine());
 const port = 40127; // private to this network namespace; no host listener uses this port
 const server = http.createServer((req, res) => {
   const upstream = http.request({ socketPath: "/run/eval-proxy/proxy.sock", agent: new http.Agent({ keepAlive: false }), method: req.method, path: req.url, headers: { ...req.headers, host: "eval-proxy", connection: "close" } }, (response) => {
@@ -28,7 +30,12 @@ for (const [key, value] of Object.entries(env)) {
   if (typeof value === "string") env[key] = value.replaceAll("{{EVAL_ENDPOINT}}", endpoint);
 }
 const argv = payload.argv.map((value) => value.replaceAll("{{EVAL_ENDPOINT}}", endpoint));
-const agent = spawn(payload.command, argv, { cwd: "/workspace", env, stdio: ["ignore", "inherit", "inherit"] });
+const agent = spawn(payload.command, argv, { cwd: "/workspace", env, stdio: [payload.protocol ? "pipe" : "ignore", "inherit", "inherit"] });
+if (payload.protocol) {
+  agent.stdin.on("error", () => {});
+  process.stdin.pipe(agent.stdin);
+  process.stdin.resume();
+}
 let stopping = false;
 const stop = (signal) => {
   if (stopping) return;
@@ -45,15 +52,25 @@ agent.on("close", (code, signal) => {
   closeBridge(code ?? (signal ? 128 : 1));
 });
 
-function readStdin() {
+/** Reads stdin up to the first newline (or its end); anything after the newline is put back for the agent. */
+function readPayloadLine() {
   return new Promise((resolve, reject) => {
     let body = "";
-    process.stdin.setEncoding("utf8");
-    process.stdin.on("data", (chunk) => {
-      body += chunk;
-      if (body.length > 1_000_000) reject(new Error("sandbox launch payload too large"));
-    });
-    process.stdin.on("end", () => resolve(body));
+    const onData = (chunk) => {
+      body += chunk.toString("utf8");
+      if (body.length > 1_000_000) { cleanup(); reject(new Error("sandbox launch payload too large")); return; }
+      const newline = body.indexOf("\n");
+      if (newline < 0) return;
+      cleanup();
+      process.stdin.pause();
+      const rest = body.slice(newline + 1);
+      if (rest) process.stdin.unshift(Buffer.from(rest, "utf8"));
+      resolve(body.slice(0, newline));
+    };
+    const onEnd = () => { cleanup(); resolve(body); };
+    const cleanup = () => { process.stdin.off("data", onData); process.stdin.off("end", onEnd); process.stdin.off("error", reject); };
+    process.stdin.on("data", onData);
+    process.stdin.on("end", onEnd);
     process.stdin.on("error", reject);
   });
 }
