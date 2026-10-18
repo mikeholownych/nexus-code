@@ -133,6 +133,12 @@ one, before any agent runs, unless every item below holds:
   roots. Protected roots such as `/etc`, `/dev`, `/proc`, `/sys`, `/run`, `/var`, `/tmp`, and sensitive user-cache paths
   are rejected. No setup procedure is applied by the runner.
 
+- **Repository workspaces carry no history beyond the pinned commit.** `eval/workspace.mjs` stages a repo task as a
+  fresh `git init` that fetches only the pinned commit and its ancestors from the local cache (`--no-tags`, no
+  FETCH_HEAD), then checks out that commit detached. There is no `--shared` clone, alternates link, remote, tag or
+  descendant object, so the upstream fix that follows a held-out baseline is not reachable from the workspace. Staging
+  verifies this and refuses the run otherwise.
+
 - **Corpus binding is integrity evidence, not approval authentication.** The qualification config pins the exact
   corpus-manifest SHA-256; the manifest binds each task's JSON and full task-tree digest; the run manifest repeats those
   hashes. This detects stale or modified content. The manifest's `custody.status` and `custodian` strings are claims,
