@@ -15,7 +15,19 @@ Three separate questions are judged and recorded separately:
 | **Product qualification** | Did the RC meet these gates on real workflows? |
 | **Independent acceptance** | Did a reviewer other than the implementer agree? |
 
-A gate passes only on archived evidence for the exact RC commit. A green test suite alone never qualifies the product.
+A gate passes only on archived evidence bound to the source commit or installed RC artifact that the gate evaluates. Source-level evidence names the exact source commit; installed-RC evidence names both that commit and the installed package digest. A green test suite alone never qualifies the product.
+
+## 1.1 Release-candidate lifecycle and evidence identity
+
+The release sequence has five distinct stages. Passing an earlier stage is a prerequisite for the next stage, not a substitute for it. Every G0–G4 acceptance ID remains mandatory; the stage determines which exact input and evidence it evaluates, not whether the check applies.
+
+1. **Pre-RC source gates.** Before creating an RC tag, run required source CI and every G0–G4 check whose acceptance method evaluates source, a source-built test binary, or an environment without requiring a published RC. Record the full commit ID and check results. Source checks do not establish behavior of the installed package.
+2. **RC artifact construction.** After the required owner authorization, create the version-matched RC tag on that exact source commit and use the repository release workflow to build and publish the RC artifacts. Record the workflow run, tag commit, artifact digests, and provenance. The workflow-produced artifacts are the candidates for qualification; a local build or a different commit is not interchangeable. RC artifact publication is not product qualification or final release acceptance.
+3. **RC artifact gates.** Before installed-RC product qualification, run every G0–G4 check whose acceptance method requires the RC archive, RC attestation/release, or workflow-produced artifact. This includes ACC-SUP-01/02/03/06/08. ACC-PKG checks that explicitly require an installed package run against this RC as specified by their test method. Record the RC tag commit, workflow run, artifact digests, and each check result. A source-level analogue does not replace an artifact-bound check.
+4. **Installed-RC qualification.** Install the workflow-produced RC package using the documented procedure and run the applicable product, provider, task-quality, terminal, installation, and independent-acceptance gates in §§4–8. Bind each result to both the RC source commit and installed package digest. If a source change or rebuilt artifact changes either identity, rerun every affected gate against the new candidate and retain prior results as historical evidence.
+5. **Stable promotion and publication.** After exact-RC acceptance and G6 pass, create a stable-version commit directly on the accepted RC commit, changing only the synchronized version metadata required for v1.0.0. Record both commits and the version-only diff. Run required source CI and all applicable source G0–G4 checks on this exact stable-version commit before tagging. If any other source changes, restart RC construction and qualification. Then create the `v1.0.0` tag on that checked commit and build a draft release. Keep its assets unpublished while verifying the stable artifact identity, provenance, package contents, installation, and publication metadata. Compare the stable package contents with the accepted RC; if packaged behavior or content differs beyond version-specific metadata, rerun affected installed-RC qualification gates and obtain independent acceptance for the stable artifact. Publish the draft only after these checks pass and the signed acceptance disposition is recorded. Record the published digests and provenance.
+
+The final G6 decision in §10 applies to promoting the accepted RC toward a stable release. It requires the applicable gates to pass for the accepted RC and authorizes the version-only stable commit and its source checks, followed by the stable tag and draft build; it does not waive source CI, artifact identity, installed-RC qualification, or any threshold. Public publication is a separate post-build gate in stage 5 above. The release workflow must keep stable assets in draft state until stable artifact checks pass. The current tag-triggered workflow publishes immediately and therefore cannot be used for stable publication until it supports this draft-then-publish sequence.
 
 ## 1. Rules
 
@@ -42,7 +54,7 @@ A gate passes only on archived evidence for the exact RC commit. A green test su
 
 ## 3. Gate checklist (G0–G4: automated acceptance IDs)
 
-Every ACC ID below is defined in the linked spec. The plan for each spec names the test that implements it. Each must pass in E1 on the RC commit.
+Every ACC ID below is defined in the linked spec. The plan for each spec names the test that implements it. Run each check at the lifecycle stage dictated by its acceptance method in §1.1: source-applicable checks before the RC tag; checks requiring the RC archive, attestation, release, or installed package after RC construction; environment-specific checks in their declared environment. Bind every result to the exact source commit and, when artifact-dependent, the RC package digest. A source test or local build does not replace an artifact-bound check, and no G0–G4 ID is complete until all of its applicable checks pass.
 
 | Gate | Acceptance IDs | Spec |
 |---|---|---|
@@ -52,7 +64,7 @@ Every ACC ID below is defined in the linked spec. The plan for each spec names t
 | Continuity | ACC-CONT-01 to ACC-CONT-09 (ACC-CONT-10 is in §8) | SPEC-04 |
 | Inference | ACC-INF-01 to ACC-INF-09 (ACC-INF-10 is in §4) | SPEC-05 |
 | Packaging | ACC-PKG-01 to ACC-PKG-09 | SPEC-06 |
-| Supply chain | ACC-SUP-01 to ACC-SUP-08 | SPEC-07 |
+| Supply chain | ACC-SUP-01 to ACC-SUP-08 (artifact-bound ACC-SUP-01/02/03/06/08 after RC construction) | SPEC-07 |
 | Persistence | ACC-PER-01 to ACC-PER-07 | SPEC-08 |
 | Governance | ACC-GOV-01 to ACC-GOV-06 | SPEC-09 |
 | Verification | ACC-VER-01 to ACC-VER-09 | SPEC-11 |
@@ -186,7 +198,7 @@ Environment: E4 (gateway direct), serial runs, with matched model fingerprint, b
 
 ### 6.2 T4 fault injection (ACC-QUAL-T4)
 
-8 fault classes × 5 runs on the Nexus RC, via `eval/faults/proxy.mjs` and the fixture hooks:
+9 fault classes × 5 runs on the Nexus RC, via `eval/faults/proxy.mjs` and the fixture hooks (DEC-05 amendment, 2026-10-17: the union of the distinct scenarios below):
 
 1. refused connection mid-turn
 2. 5xx / overloaded
@@ -275,9 +287,10 @@ The submission is completed and frozen until judging ends (DEC-13). After judgin
 
 ## 10. Release decision (G6)
 
-v1.0.0 may be tagged only when every item below holds.
+G6 passes only when every item below holds. It authorizes a version-only stable commit from the accepted RC source, followed by its source checks, stable tag, and unpublished draft candidate; it does not authorize making stable assets publicly available. RC tags are candidate construction inputs governed by §1.1; an RC tag or its successful build does not satisfy this release decision.
 
 - [ ] G0–G4 automated gates pass on the final RC commit (§3).
+- [ ] RC artifact gates pass on the workflow-produced RC, including ACC-SUP-01/02/03/06/08; record the exact source commit, workflow run, and artifact digest.
 - [ ] §4 standalone and provider matrix: all rows PASS.
 - [ ] §5 terminal acceptance: CI, scripted and manual gates PASS.
 - [ ] §6 thresholds: all hold.
@@ -289,5 +302,7 @@ v1.0.0 may be tagged only when every item below holds.
 - [ ] Docs checklist (SPEC-09 §3.2) is signed off.
 - [ ] Release notes state the standalone scope (DEC-16), the provider tiers (DEC-06), the experimental surfaces (DEC-03, DEC-07) and the known limitations.
 - [ ] Owner approval to publish (X7).
+
+After G6, complete source checks on the exact stable-version commit before tagging, then complete the stable artifact checks in §1.1 stage 5 before publishing the draft. A failure keeps publication blocked and requires remediation plus the applicable requalification; do not mark the campaign released until published artifacts are independently verified.
 
 **Outcome recording.** The release decision record goes in `docs/releases/v1.0.0.md`, with links to every evidence directory.

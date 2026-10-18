@@ -948,6 +948,7 @@ async function main(argv: string[]): Promise<void> {
     .option("--sandbox [mode]", "Isolate command execution using bubblewrap or Docker")
     .option("--worktree", "Isolate execution inside an ephemeral git worktree")
     .option("--authoritative-verifier <command>", "Trusted command that must pass before any task completion; its success may authorize automatic worktree merge")
+    .option("--deliverable-file <path>", "Operator-declared workspace-relative product file used for VERIFIED binding (repeatable)", (value: string, previous: string[] = []) => [...previous, value], [])
     .option("--record-flight", "Record execution into an append-only .flightlog")
     .option("--planner-model <name>", "Deep reasoning model for planning")
     .option("--planner-endpoint <url>", "Inference endpoint for the planner model")

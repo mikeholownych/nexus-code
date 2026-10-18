@@ -1,7 +1,7 @@
 /**
  * Convergence scheduling end to end: real AutonomousAgent turns against local OpenAI-compatible gateways.
- * A: reroute. B: park, continue independent work, resume the parked unit from its history. C: true wait, wake,
- * resume, validate, complete. D: process restart while waiting. Fake clocks; nothing sleeps for real.
+ * A: reroute. B: park, continue independent work, resume the parked unit from its history. C: true wait before
+ * task execution, then implement and validate after wake. D: process restart while waiting. Fake clocks throughout.
  */
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
@@ -12,18 +12,21 @@ import { execSync } from "node:child_process";
 import { AutonomousAgent } from "../src/agent.js";
 import { newOperation, type DurableOperationState, type WorkUnitSpec } from "../src/core/operation.js";
 import { AgentWorkUnitExecutor, OperationRunner, OperationStore } from "../src/core/operation_runner.js";
-import type { ResourceDescriptor } from "../src/core/resources.js";
+import { ResourceRegistry, type ResourceDescriptor } from "../src/core/resources.js";
 import { DurableStateManager } from "../src/core/state.js";
+import type { InferenceFailure } from "../src/core/turn.js";
 import type { HarnessConfig } from "../src/types.js";
 import { fakeClock, startGateway, type FakeClock, type Gateway, type Reply } from "./helpers/provider_fixture.js";
 
 const complete = (summary: string): Reply => ({ kind: "tools", calls: [{ name: "task_completed", args: { summary } }] });
 const limited = (secs: number): Reply => ({ kind: "http", status: 429, headers: { "retry-after": String(secs) }, body: '{"error":{"message":"rate limited","type":"rate_limit_exceeded"}}' });
+const userText = (body: any): string => (body.messages ?? []).filter((m: any) => m.role === "user").map((m: any) => String(m.content)).join("\n");
+const unitOf = (body: any): string | undefined => userText(body).match(/Work unit '(\w+)'/)?.[1];
 
 interface Env {
   repo: string;
   stateDir: string;
-  executor(): AgentWorkUnitExecutor;
+  executor(config?: Partial<HarnessConfig>): AgentWorkUnitExecutor;
   store(): OperationStore;
 }
 
@@ -36,9 +39,9 @@ async function withEnv<T>(gws: Gateway[], fn: (env: Env) => Promise<T>): Promise
   const env: Env = {
     repo,
     stateDir,
-    executor: () =>
+    executor: (config: Partial<HarnessConfig> = {}) =>
       new AgentWorkUnitExecutor({
-        baseConfig: base,
+        baseConfig: { ...base, ...config },
         createAgent: (config) => {
           const agent = new AutonomousAgent(config, 1);
           const a = agent as any;
@@ -67,10 +70,8 @@ function run(env: Env, state: DurableOperationState, clock: FakeClock = fakeCloc
   return { runner: new OperationRunner(state, { executor: env.executor(), clock, persist: (s) => store.save(s) }), clock, store };
 }
 
-const userText = (body: any): string => body.messages.filter((m: any) => m.role === "user").map((m: any) => String(m.content)).join("\n");
-
 describe("convergence scheduling with real agent turns", () => {
-  test("A. reroute: the preferred reviewer is rate-limited, an equivalent qualified reviewer completes the work", async () => {
+  test("A. reroute: recovered work preserves routing evidence but cannot complete unverified", async () => {
     const gwA = await startGateway(() => limited(120));
     const gwB = await startGateway(() => complete("review done on b"));
     await withEnv([gwA, gwB], async (env) => {
@@ -78,7 +79,7 @@ describe("convergence scheduling with real agent turns", () => {
         [resource("rev-a", gwA, { capabilities: ["tools", "review"] }), resource("rev-b", gwB, { capabilities: ["tools", "review"], rank: 1 }), resource("cheap", gwB, { model: "cheap" })], 0);
       const { runner, clock } = run(env, state);
       const out = await runner.run();
-      assert.equal(out.status, "COMPLETE");
+      assert.equal(out.status, "BLOCKED", "recovered evidence cannot establish an operation result");
       assert.equal(gwA.requests.length, 1, "one request to the rate-limited reviewer, then none");
       assert.equal(gwB.requests.length, 1);
       assert.equal(gwB.requests[0].body.model, "rev-b", "the qualified alternate, not the cheap model");
@@ -86,12 +87,14 @@ describe("convergence scheduling with real agent turns", () => {
       const u = out.units[0];
       assert.deepEqual(u.reroutes.map((r) => [r.from, r.to]), [["rev-a", "rev-b"]]);
       assert.match(u.reroutes[0].reason, /rate limited \(HTTP 429\)/);
-      assert.equal(u.result!.summary, "review done on b");
+      assert.equal(u.status, "BLOCKED");
+      assert.match(u.blocked?.reason ?? "", /COMPLETED\/UNVERIFIED \(NO_APPLICABLE_VERIFIER\)/);
+      assert.equal(u.result, undefined, "the model's report is not promoted to an established operation result");
       assert.equal(clock.sleeps.length, 0, "no waiting when a qualified alternate exists");
     });
   });
 
-  test("B. park and continue: the deep review parks mid-unit, independent work completes, review resumes from its history", async () => {
+  test("B. park and continue: independent work completes while recovered review remains unverified", async () => {
     const gwDeep = await startGateway((n) => (n === 1 ? { kind: "tools", calls: [{ name: "read_file", args: { path: "notes.txt" } }] } : n === 2 ? limited(60) : complete("deep review: answer verified as 42")));
     const gwLead = await startGateway((n, body) => complete(`${userText(body).match(/Work unit '(\w+)'/)?.[1]} done`));
     await withEnv([gwDeep, gwLead], async (env) => {
@@ -104,7 +107,7 @@ describe("convergence scheduling with real agent turns", () => {
       const state = newOperation("op-b", "ship the change", units, [resource("deep", gwDeep, { capabilities: ["tools", "reasoning"], rank: 1 }), resource("lead", gwLead)], 0);
       const { runner, clock } = run(env, state);
       const out = await runner.run();
-      assert.equal(out.status, "COMPLETE");
+      assert.equal(out.status, "BLOCKED", "the recovered review remains pending despite successful continuation");
       const types = out.events.map((e) => e.type);
       const parkedEvent = out.events.find((e) => e.type === "WORK_PARKED")!;
       assert.match(parkedEvent.message, /Deep review parked: deep rate limited \(HTTP 429\); eligible again \d\d:\d\d UTC\. Continuing 2 independent tasks\./);
@@ -117,34 +120,89 @@ describe("convergence scheduling with real agent turns", () => {
       assert.equal(resumed.filter((m: any) => m.role === "tool" && /the answer is 42/.test(String(m.content))).length, 1);
       assert.match(userText(gwDeep.requests[2].body), /Work unit resumed on deep/);
       const final = gwLead.requests.find((r) => /Work unit 'final'/.test(userText(r.body)))!;
-      assert.match(userText(final.body), /Deep review: deep review: answer verified as 42/, "acceptance sees the parked unit's result");
+      assert.equal(final, undefined, "acceptance cannot run on a recovered unverified dependency");
+      assert.equal(out.units.find((u) => u.id === "review")?.status, "BLOCKED");
+      assert.match(out.units.find((u) => u.id === "review")?.blocked?.reason ?? "", /COMPLETED\/UNVERIFIED \(NO_APPLICABLE_VERIFIER\)/);
+      assert.ok(["docs", "tests"].every((id) => out.units.find((u) => u.id === id)?.status === "COMPLETE"), "independent work still finishes");
+      assert.equal(out.units.find((u) => u.id === "final")?.status, "WAITING_ON_DEPENDENCY");
       assert.equal(gwLead.requests.filter((r) => /Work unit 'review'/.test(userText(r.body))).length, 0, "the unqualified model never got the review");
     });
   });
 
-  test("C. true wait: nothing else can run, the operation waits durably, wakes, resumes, validates and completes", async () => {
-    const gw = await startGateway((n, body) => (n === 1 ? limited(90) : complete(/Work unit 'validate'/.test(userText(body)) ? "validated" : "implemented")));
+  test("C. true wait: the operation waits before task execution, then implements and validates after wake", async () => {
+    const counts = new Map<string, number>();
+    const gw = await startGateway((_n, body) => {
+      const unit = unitOf(body);
+      const count = (counts.get(unit ?? "") ?? 0) + 1;
+      counts.set(unit ?? "", count);
+      if (unit === "impl" && count === 1) return {
+        kind: "tools",
+        calls: [{ name: "edit_file", args: {
+          path: "math.mjs",
+          old_content: "export const add = (a, b) => a - b;\n",
+          new_content: "export const add = (a, b) => a + b;\n",
+        } }],
+      };
+      if (unit === "validate" && count === 1) return { kind: "tools", calls: [{ name: "run_tests", args: {} }] };
+      return complete(unit === "validate" ? "ran the regression test after wake" : "fixed addition after wake");
+    });
     await withEnv([gw], async (env) => {
+      fs.writeFileSync(path.join(env.repo, "package.json"), JSON.stringify({ private: true, type: "module" }));
+      fs.writeFileSync(path.join(env.repo, "Makefile"), ".PHONY: test\ntest:\n\tenv -u NODE_TEST_CONTEXT node --test test/math.test.mjs\n");
+      fs.writeFileSync(path.join(env.repo, "math.mjs"), "export const add = (a, b) => a - b;\n");
+      fs.mkdirSync(path.join(env.repo, "test"), { recursive: true });
+      fs.writeFileSync(path.join(env.repo, "test/math.test.mjs"), 'import test from "node:test";\nimport assert from "node:assert/strict";\nimport { add } from "../math.mjs";\ntest("addition", () => assert.equal(add(2, 3), 5));\n');
+      execSync("git add package.json Makefile math.mjs test/math.test.mjs && git commit -qm 'seed wait-resume implementation fixture'", { cwd: env.repo, stdio: "ignore" });
       const state = newOperation("op-c", "implement and validate", [
-        { id: "impl", title: "Implement", prompt: "Implement" },
-        { id: "validate", title: "Validate", prompt: "Validate", dependsOn: ["impl"] },
+        { id: "impl", title: "Implement", role: "implementer", prompt: "Fix add(a, b) to return the sum." },
+        { id: "validate", title: "Validate", role: "tester", prompt: "Run the regression test for add(a, b).", dependsOn: ["impl"] },
       ], [resource("only", gw)], 0);
+      // This known resource backoff predates execution: the operation waits without persisting
+      // an agent conversation, then starts fresh work after the resource becomes eligible.
+      const clock = fakeClock();
+      const rateLimit: InferenceFailure = {
+        kind: "http_error", origin: "provider", message: "HTTP 429", httpStatus: 429,
+        condition: "RATE_LIMITED", execution: "NOT_EXECUTED", hints: { retryAfterMs: 90_000 },
+      };
+      const registry = new ResourceRegistry(state.resources, state.conditions, clock);
+      assert.ok(registry.observeFailure(state.resources[0]!, rateLimit));
+      state.conditions = registry.snapshot();
       const store = env.store();
       const statuses: string[] = [];
-      const clock = fakeClock();
-      const runner = new OperationRunner(state, { executor: env.executor(), clock, persist: (s) => { store.save(s); statuses.push(store.load("op-c").status); } });
+      let waitedBeforeInference = false;
+      const runner = new OperationRunner(state, {
+        executor: env.executor({
+          approvalMode: "auto",
+          fullAccess: true,
+          authoritativeVerifierCommand: "make test",
+          trustedDeliverableFiles: ["math.mjs"],
+        }),
+        clock,
+        persist: (s) => {
+          store.save(s);
+          statuses.push(store.load("op-c").status);
+          if (s.status === "WAITING") {
+            assert.equal(gw.requests.length, 0, "the durable wait is recorded before any agent inference");
+            waitedBeforeInference = true;
+          }
+        },
+      });
       const out = await runner.run();
       assert.equal(out.status, "COMPLETE");
       assert.ok(statuses.includes("WAITING"));
+      assert.equal(waitedBeforeInference, true);
       assert.equal(clock.sleeps.length, 1);
-      assert.equal(gw.requests.length, 3);
-      assert.deepEqual(out.units.map((u) => u.result?.summary), ["implemented", "validated"]);
+      assert.equal(gw.requests.length, 4);
+      assert.deepEqual(out.units.map((u) => u.result?.outcome), ["VERIFIED", "VERIFIED"]);
+      assert.equal(fs.readFileSync(path.join(env.repo, "math.mjs"), "utf8"), "export const add = (a, b) => a + b;\n");
+      assert.equal(counts.get("impl"), 2);
+      assert.equal(counts.get("validate"), 2);
       const types = out.events.map((e) => e.type);
       assert.ok(types.indexOf("OPERATION_WAITING") < types.indexOf("OPERATION_RESUMED"));
     });
   });
 
-  test("D. restart during WAITING: a new process reconstructs the wait and resumes the unit from durable state", async () => {
+  test("D. restart during WAITING: state resumes with history, but the unauthenticated result remains blocked", async () => {
     const gw = await startGateway((n) => (n === 1 ? { kind: "tools", calls: [{ name: "read_file", args: { path: "notes.txt" } }] } : n === 2 ? limited(300) : complete("finished after restart")));
     await withEnv([gw], async (env) => {
       const t0 = fakeClock().now();
@@ -165,12 +223,15 @@ describe("convergence scheduling with real agent turns", () => {
       const later: FakeClock = { ...c2, now: () => c2.now() + 100_000 };
       const { runner } = run(env, loaded, later);
       const out = await runner.run();
-      assert.equal(out.status, "COMPLETE");
+      assert.equal(out.status, "BLOCKED");
       assert.equal(c2.sleeps.length, 1);
       assert.ok(c2.sleeps[0] >= 199_000 && c2.sleeps[0] <= 201_000, `remaining wait ${c2.sleeps[0]}`);
       assert.equal(gw.requests.length, 3);
       assert.equal(gw.requests[2].body.messages.filter((m: any) => m.role === "tool" && /the answer is 42/.test(String(m.content))).length, 1, "history recovered from disk");
-      assert.equal(env.store().load("op-d").status, "COMPLETE");
+      assert.equal(out.units[0]?.status, "BLOCKED");
+      assert.match(out.units[0]?.blocked?.reason ?? "", /COMPLETED\/UNVERIFIED \(NO_APPLICABLE_VERIFIER\)/);
+      assert.equal(out.units[0]?.result, undefined);
+      assert.equal(env.store().load("op-d").status, "BLOCKED");
     });
   });
 

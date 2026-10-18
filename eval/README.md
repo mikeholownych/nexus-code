@@ -15,10 +15,17 @@ node eval/score.mjs --pairs "$NEXUS_RESULTS" "$GOOSE_RESULTS" "$OPENCODE_RESULTS
 Each run uses a frozen copy of the task tree, a fresh workspace and `HOME`, and a unique output directory. The agent
 receives only its workspace, isolated home, selected read-only runtime files, and a run-scoped token for a local proxy;
 the real gateway credential stays in the harness process. The candidate runs in Bubblewrap user, PID and network
-namespaces, with nested user namespaces disabled. Hidden tests are copied into the workspace only after the agent exits.
-Task setup, hidden tests and regression commands use a separate Bubblewrap boundary with a cleared environment, no
-network, a disposable home and bounded captured output/wall time. Absolute paths, traversal, symlinks and unsupported
-fixture entries are rejected. `manifest.json` records the harness source-file hashes, model fingerprint, corpus/task
+namespaces, with nested user namespaces disabled. Legacy development tasks may still use `hidden: { dir, into, command }`;
+those commands execute against the candidate workspace after the agent exits and are **not safe for qualification**, because
+validator code can inspect or modify files in that workspace. Qualification requires `hidden: { protocol: "blackbox-v1",
+casesFile, runtime, argv, timeoutMs, totalTimeoutMs, maxOutputBytes }`. Its private JSON cases contain only `input` and
+`expected`; the host evaluator keeps expected values in its process and launches the candidate runtime separately for each
+input using a fresh top-level Bubblewrap boundary. The candidate receives one input on stdin and returns one JSON value on
+stdout. Its workspace is read-only; private oracle files are not mounted. Candidate output and diagnostics are discarded,
+and result logs contain only case counts and failed indexes. Supported runtimes are explicitly allowlisted (`node`,
+`python3`); the only argument is a validated relative candidate entrypoint (no runtime flags, eval expressions, or extra
+arguments), and per-case/aggregate time and output bounds are enforced. Oracle files must be outside the copied fixture.
+Absolute paths, traversal, symlinks and unsupported fixture entries are rejected. `manifest.json` records the harness source-file hashes, model fingerprint, corpus/task
 hashes when qualification is configured, executable version, budgets, host and Node version. Each result records the
 executable version and effective step/minute budget; per-run logs go to `logs/<task>-<run>/`. The runner refuses an
 existing output directory so a retry cannot append to or replace prior evidence.
@@ -126,6 +133,12 @@ one, before any agent runs, unless every item below holds:
   roots. Protected roots such as `/etc`, `/dev`, `/proc`, `/sys`, `/run`, `/var`, `/tmp`, and sensitive user-cache paths
   are rejected. No setup procedure is applied by the runner.
 
+- **Repository workspaces carry no history beyond the pinned commit.** `eval/workspace.mjs` stages a repo task as a
+  fresh `git init` that fetches only the pinned commit and its ancestors from the local cache (`--no-tags`, no
+  FETCH_HEAD), then checks out that commit detached. There is no `--shared` clone, alternates link, remote, tag or
+  descendant object, so the upstream fix that follows a held-out baseline is not reachable from the workspace. Staging
+  verifies this and refuses the run otherwise.
+
 - **Corpus binding is integrity evidence, not approval authentication.** The qualification config pins the exact
   corpus-manifest SHA-256; the manifest binds each task's JSON and full task-tree digest; the run manifest repeats those
   hashes. This detects stale or modified content. The manifest's `custody.status` and `custodian` strings are claims,
@@ -137,11 +150,50 @@ one, before any agent runs, unless every item below holds:
 
 Bubblewrap plus the current runner enforces separate mount/user/PID/network namespaces, a cleared task-command
 environment, a bounded wall clock, bounded captured output, per-run process-group teardown, and read-only runtime
-binds. These controls do **not** currently establish kernel-enforced aggregate CPU, memory, process-count, or writable
-disk quotas for the workspace and temporary filesystems. Qualification preflight now fails closed on that known gap;
-it does not claim that request/token ceilings substitute for kernel resource controls. Do not represent the sandbox as
-resource-exhaustion-proof or run M5 until an approved, measured resource-control contract is implemented and validated.
-Appliance-specific Bubblewrap enforcement is a separate, unverified condition.
+binds. Black-box qualification keeps oracle expectations outside candidate namespaces; legacy commands do not provide that
+property and remain development-only. Aggregate CPU, memory, process-count and writable-storage limits come from the
+resource contract below, not from request/token ceilings. Appliance-specific Bubblewrap enforcement is a separate,
+unverified condition.
+
+### Resource contract
+
+A config's `resources` object — `{ "cpuPercent", "memoryBytes", "tasks", "storageBytes", "workspaceRoot" }` — applies to every
+task-controlled execution: setup commands, the candidate agent, legacy hidden and regression commands, every black-box
+oracle case and the agent version probe. Qualification refuses to start without it.
+
+- Each execution runs under `eval/cgroup_supervisor.mjs` as the only process of its own delegated transient
+  `systemd-run --user --scope`. The supervisor writes cgroup v2 `cpu.max` (`cpuPercent`% of one CPU), `memory.max`
+  (`memoryBytes`), `memory.swap.max` (0), `memory.oom.group` (1) and `pids.max` (`tasks`) on a `payload` leaf, reads them back, and refuses to
+  run on any mismatch. The command joins that leaf before `exec`, so nothing task-controlled runs outside the limits.
+  The limits are aggregate over the whole process tree, whatever its uid (`runAs`), session or process group.
+- `workspaceRoot` must be a dedicated tmpfs mount whose total size is at most `storageBytes`. Create it during evaluator
+  setup, for example `mount -t tmpfs -o size=<storageBytes>,mode=0700 tmpfs <dir>`. A shared tmpfs such as `/dev/shm`
+  passes only if `storageBytes` is set to its whole size. Workspaces and homes are created there. The filesystem size
+  hard-caps everything a run keeps across all its phases, and writes beyond it fail with `ENOSPC`. Runs are serial and
+  each workspace is removed afterwards; `--keep` is refused under the contract.
+- Within that cap, tmpfs pages, including the sandbox's own `/tmp`, are charged to the writing phase's memory cgroup and
+  cannot be swapped. A phase therefore also cannot hold more than `memoryBytes` of memory and new writes together. When
+  it reaches that bound the whole phase is OOM-killed (`memory.oom.group`), and this is recorded. When a phase's cgroup
+  is removed, the kernel moves its charges to the unlimited parent cgroup. Later phases get their own `memoryBytes`,
+  which is why the filesystem cap, not the memory limit, is the cross-phase storage bound. An OOM in a hidden or
+  regression check is the candidate's outcome, a failed check, not an infrastructure error.
+- CPU is bounded in rate by `cpu.max` and in total by the phase's wall-clock timeout.
+- After the command exits or times out, the supervisor records the remaining processes, empties the cgroup with
+  `cgroup.kill` (which reaches daemonized processes and other uids), and waits for `populated 0`. A timeout or output
+  overflow empties the payload leaf, repeatedly until the supervisor exits, so a stop that arrives before the command
+  has joined the leaf is not lost. It also sends the supervisor `SIGTERM` so that it can still report. If the supervisor
+  does not exit within 10 s it is killed, and the run fails for lack of a report.
+- Each run record carries `resources.{agent,hidden,regression}`: the applied limits, `memoryPeakBytes`, `oomKills`,
+  `memoryMaxEvents`, `pidsPeak`, `pidsMaxEvents`, `cpuUsageUsec`, `cpuThrottledUsec`, `survivorsAfterExit` and
+  `cleaned`. A missing report, a failed limit read-back or `cleaned: false` makes the run an error. It is never scored
+  as a pass or fail.
+- Preflight runs a contained probe and refuses qualification unless this host applies and cleans up the contract. CI
+  provisions delegation with `scripts/ensure-ci-user-cgroups.sh`, and the fixture tests in
+  `cli/test/eval_integrity.test.ts` show OOM, process-cap, tmpfs-storage, CPU-throttle, timeout and escaped-daemon
+  behaviour, using infrastructure fixtures only.
+
+The frozen qualification config sets the limit values. They must be recorded before the first scored run and must not
+be tuned against held-out results.
 
 The evaluator proxy allows one in-flight inference request at a time and destroys the upstream HTTP request/response
 when the candidate-side request is cancelled or its connection closes. This bounds proxy concurrency and propagates

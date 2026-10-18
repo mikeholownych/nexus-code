@@ -166,6 +166,49 @@ function operatorChose(key: string): boolean {
   return operatorSetting(key) !== undefined;
 }
 
+/** Operator-declared workspace-relative task outputs; project files cannot populate this authority. */
+function normalizeTrustedDeliverableFiles(workspace: string, value: unknown): string[] {
+  if (value === undefined) return [];
+  const entries = Array.isArray(value) ? value : [value];
+  if (Array.isArray(value) && entries.length === 0) return [];
+  if (entries.some((entry) => typeof entry !== "string" || !entry.trim())) {
+    throw new Error("--deliverable-file requires one or more non-empty workspace-relative file paths.");
+  }
+  const root = path.resolve(workspace);
+  const rootReal = fs.realpathSync(root);
+  const normalized = entries.map((entry) => {
+    const raw = (entry as string).trim();
+    if (path.isAbsolute(raw) || raw.includes("\\") || raw.includes("\0") || /[*?{}]/.test(raw)) {
+      throw new Error(`Invalid --deliverable-file '${raw}': use a literal workspace-relative path.`);
+    }
+    const candidate = path.posix.normalize(raw);
+    const resolved = path.resolve(root, candidate);
+    if (candidate !== raw || candidate === "." || candidate.startsWith("../") || resolved === root || !resolved.startsWith(`${root}${path.sep}`)) {
+      throw new Error(`Invalid --deliverable-file '${raw}': path must stay inside the workspace and be normalized.`);
+    }
+    if (/(^|\/)(?:test|tests|__tests__)(\/|$)|(?:^|\/)test[^/]*\.[^/]+$/i.test(candidate)) {
+      throw new Error(`Invalid --deliverable-file '${raw}': test and oracle files cannot be declared as product deliverables.`);
+    }
+    let cursor = root;
+    for (const part of candidate.split("/")) {
+      cursor = path.join(cursor, part);
+      try {
+        const stat = fs.lstatSync(cursor);
+        const real = fs.realpathSync(cursor);
+        const relative = path.relative(rootReal, real);
+        if (stat.isSymbolicLink() || relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
+          throw new Error(`Invalid --deliverable-file '${raw}': symlinked or external paths are not permitted.`);
+        }
+      } catch (error: any) {
+        if (error?.code === "ENOENT") break;
+        throw error;
+      }
+    }
+    return candidate;
+  });
+  return [...new Set(normalized)].sort();
+}
+
 export function buildConfig(options: any): HarnessConfig {
   // `appliance: true` resolves the appliance connection regardless of any provider selection (the model picker's
   // appliance entry).
@@ -220,6 +263,7 @@ export function buildConfig(options: any): HarnessConfig {
   const strictTokenCount = Boolean(options.strictTokenCount) || effectiveSetting("NEXUS_STRICT_TOKEN_COUNT") === "1";
   const worktree = Boolean(options.worktree);
   const authoritativeVerifierCommand = options.authoritativeVerifier;
+  const trustedDeliverableFiles = normalizeTrustedDeliverableFiles(workspace, options.deliverableFile);
   const recordFlight = Boolean(options.recordFlight || options.flight);
   const plannerProvider = selectProvider(options.plannerProvider, "PLANNER_LLM_PROVIDER");
   const coderProvider = selectProvider(options.coderProvider, "CODER_LLM_PROVIDER");
@@ -275,6 +319,7 @@ export function buildConfig(options: any): HarnessConfig {
     ...(strictTokenCount ? { strictTokenCount } : {}),
     worktree,
     authoritativeVerifierCommand,
+    trustedDeliverableFiles,
     verifierTimeoutSecs,
     recordFlight,
     plannerModel,

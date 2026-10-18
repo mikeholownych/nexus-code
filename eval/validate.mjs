@@ -5,6 +5,8 @@ import fs from "node:fs";
 import path from "node:path";
 import { createHash } from "node:crypto";
 import { assertNoSymlinks, confinedPath, runtimeMountProblem, sandboxAvailable } from "./isolate.mjs";
+import { blackBoxOracleProblem } from "./oracle.mjs";
+import { resourceProbeProblem } from "./resources.mjs";
 
 export const TIERS = ["T1", "T2", "T3", "T4"];
 export const CLASSES = ["bugfix", "feature", "refactor", "debug"];
@@ -30,7 +32,14 @@ export function validateTask(task, dir, { qualification = false } = {}) {
     } catch { need(false, "repo.url must be a valid HTTPS URL without embedded credentials"); }
     need(/^[0-9a-f]{40}$/.test(task.repo.commit ?? ""), "repo.commit must be a full 40-character commit id (pinned)");
   }
-  need(task.hidden && typeof task.hidden.command === "string" && task.hidden.command.length > 0, "hidden.command is required");
+  const hiddenCommand = typeof task.hidden?.command === "string" && task.hidden.command.length > 0;
+  const hiddenOracle = task.hidden?.protocol === "blackbox-v1";
+  need(hiddenCommand || hiddenOracle, "hidden.command or hidden blackbox-v1 oracle is required");
+  if (hiddenOracle) {
+    const oracleProblem = blackBoxOracleProblem(task.hidden, dir, task.fixture ?? null);
+    need(!oracleProblem, oracleProblem ?? "hidden black-box oracle is invalid");
+  }
+  if (qualification) need(hiddenOracle && !hiddenCommand, "qualification requires hidden.protocol blackbox-v1; legacy hidden commands can inspect or alter candidate files");
   if (task.hidden?.dir) {
     try { confinedPath(dir, task.hidden.dir); }
     catch (error) { need(false, error.message); }
@@ -151,12 +160,16 @@ export function hiddenTestIsolationProblem(config, tasksDir) {
   }
   const mountProblem = runtimeMountProblem(config.sandboxRuntimePaths, config.sandboxRuntimeRoots);
   if (mountProblem) return mountProblem;
-  if (config.qualification) return qualificationResourceIsolationProblem();
+  if (config.qualification) return qualificationResourceIsolationProblem(config);
   return null;
 }
 
-export function qualificationResourceIsolationProblem() {
-  return "qualification is blocked until the candidate and validators inherit enforced CPU, memory, process-count, and workspace-storage limits";
+/** Qualification needs the kernel-enforced resource contract (eval/resources.mjs), proved on this host before any run. */
+export function qualificationResourceIsolationProblem(config = {}) {
+  if (config.resources === undefined) {
+    return "qualification is blocked until the candidate and validators inherit enforced CPU, memory, process-count, and workspace-storage limits (set resources)";
+  }
+  return resourceProbeProblem(config.resources);
 }
 
 /** A deterministic digest of task content. Symlinks are rejected instead of followed. */

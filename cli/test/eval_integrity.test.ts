@@ -232,17 +232,95 @@ test("contaminated runs leave the pass rate, crashes are counted, and reruns are
 
 // ---------------------------------------------------------------- run validity (REQ-QUAL-101/102/106)
 
-test("task validation: pinned repos, one source, hidden command; qualification also needs class and difficulty", async () => {
+test("task validation: pinned repos, one source, and black-box hidden oracle for qualification", async () => {
   const { validateTask } = await import(path.join(ROOT, "eval/validate.mjs"));
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "t2-x-"));
   const id = path.basename(dir);
   const good = { id, tier: "T2", objective: "fix it", repo: { url: "https://example.invalid/r.git", commit: "a".repeat(40) }, hidden: { command: "npm test" } };
+  fs.mkdirSync(path.join(dir, "candidate"));
   assert.deepEqual(validateTask(good, dir), []);
   assert.match(validateTask({ ...good, repo: { url: good.repo.url, commit: "main" } }, dir).join(), /pinned/);
   assert.match(validateTask({ ...good, fixture: "repo" }, dir).join(), /exactly one of fixture or repo/);
   assert.match(validateTask({ ...good, hidden: {} }, dir).join(), /hidden.command/);
-  assert.equal(validateTask(good, dir, { qualification: true }).length, 2);
-  assert.deepEqual(validateTask({ ...good, class: "bugfix", difficulty: "medium" }, dir, { qualification: true }), []);
+  assert.match(validateTask(good, dir, { qualification: true }).join(), /blackbox-v1/);
+  const cases = path.join(dir, "private-cases.json");
+  fs.writeFileSync(cases, JSON.stringify([{ input: { x: 1 }, expected: { x: 1 } }]));
+  fs.symlinkSync(cases, path.join(dir, "private-cases-link.json"));
+  const oracle = { protocol: "blackbox-v1", casesFile: "private-cases.json", runtime: "node", argv: ["candidate/solution.mjs"], timeoutMs: 1000, totalTimeoutMs: 2000, maxOutputBytes: 4096 };
+  const qualifiedTask = { ...good, fixture: "candidate", repo: undefined, class: "bugfix", difficulty: "medium", hidden: oracle };
+  assert.deepEqual(validateTask(qualifiedTask, dir, { qualification: true }), []);
+  assert.match(validateTask({ ...good, class: "bugfix", difficulty: "medium", hidden: { ...oracle, runtime: "bash" } }, dir, { qualification: true }).join(), /runtime is not allowlisted/);
+  for (const runtime of ["constructor", "toString", "__proto__"]) {
+    assert.match(validateTask({ ...qualifiedTask, hidden: { ...oracle, runtime } }, dir, { qualification: true }).join(), /runtime is not allowlisted/);
+  }
+  assert.match(validateTask({ ...good, class: "bugfix", difficulty: "medium", hidden: { ...oracle, casesFile: "../private-cases.json" } }, dir, { qualification: true }).join(), /casesFile is unsafe/);
+  assert.match(validateTask({ ...qualifiedTask, hidden: { ...oracle, casesFile: "private-cases-link.json" } }, dir, { qualification: true }).join(), /casesFile is unsafe/);
+  fs.writeFileSync(path.join(dir, "candidate", "private-cases.json"), fs.readFileSync(cases));
+  assert.match(validateTask({ ...qualifiedTask, hidden: { ...oracle, casesFile: "candidate/private-cases.json" } }, dir, { qualification: true }).join(), /outside the candidate fixture/);
+  assert.match(validateTask({ ...qualifiedTask, hidden: { ...oracle, argv: ["--eval"] } }, dir, { qualification: true }).join(), /normalized relative candidate entrypoint/);
+});
+
+test("black-box oracle keeps canary expectations outside the candidate process and returns sanitized evidence", { timeout: 15_000 }, async () => {
+  const { runBlackBoxOracle } = await import(path.join(ROOT, "eval/oracle.mjs"));
+  const taskDir = fs.mkdtempSync(path.join(os.tmpdir(), "eval-private-task-"));
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "eval-oracle-candidate-"));
+  const privateFile = path.join(taskDir, "private-cases.json");
+  const canary = "ORACLE_EXPECTATION_CANARY_8f3c";
+  const diagnosticCanary = "SYNTHETIC_DIAGNOSTIC_CANARY_a219";
+  fs.writeFileSync(privateFile, JSON.stringify([{ input: { value: "public-input" }, expected: { value: "public-input", oracle: null } }]));
+  const candidate = path.join(workspace, "solution.mjs");
+  fs.writeFileSync(candidate, `import fs from 'node:fs';\nlet value;try{value=fs.readFileSync(${JSON.stringify(privateFile)},'utf8')}catch{};\ntry{fs.writeFileSync('/workspace/solution.mjs','tampered')}catch{};\nconst input=JSON.parse(fs.readFileSync(0,'utf8'));\nconsole.error(${JSON.stringify(diagnosticCanary)});\nconsole.log(JSON.stringify({value:input.value,oracle:value??null}));\n`);
+  const candidateBefore = fs.readFileSync(candidate);
+  const check = { protocol: "blackbox-v1", casesFile: "private-cases.json", runtime: "node", argv: ["solution.mjs"], timeoutMs: 3000, totalTimeoutMs: 5000, maxOutputBytes: 4096 };
+  const result = await runBlackBoxOracle({ dir: taskDir }, workspace, check);
+  assert.deepEqual(result, {
+    pass: true,
+    cases: 1,
+    failedCases: [],
+    timeoutCases: [],
+    outputLimitCases: [],
+    executionFailureCases: [],
+    invalidOutputCases: [],
+    mismatchCases: [],
+    timedOut: false,
+    overflow: false,
+    outcome: "matched",
+    resources: null,
+  });
+  assert.deepEqual(fs.readFileSync(candidate), candidateBefore, "candidate workspace is read-only during oracle execution");
+  assert.equal(JSON.stringify(result).includes(canary), false, "oracle evidence never serializes hidden expectations or candidate output");
+  assert.equal(JSON.stringify(result).includes(diagnosticCanary), false, "candidate diagnostics are not persisted in oracle evidence");
+  assert.equal(fs.readFileSync(privateFile, "utf8").includes(canary), false);
+
+  fs.writeFileSync(privateFile, JSON.stringify([{ input: { value: "public-input" }, expected: { value: "different", oracle: canary } }]));
+  const failed = await runBlackBoxOracle({ dir: taskDir }, workspace, check);
+  assert.equal(failed.pass, false);
+  assert.deepEqual(failed.failedCases, [0]);
+  assert.deepEqual(failed.mismatchCases, [0]);
+  assert.equal(JSON.stringify(failed).includes(canary), false, "failure summaries do not leak hidden values");
+
+  fs.writeFileSync(candidate, "console.log('x'.repeat(10000));\n");
+  const overflow = await runBlackBoxOracle({ dir: taskDir }, workspace, { ...check, maxOutputBytes: 64 });
+  assert.equal(overflow.pass, false);
+  assert.deepEqual(overflow.outputLimitCases, [0]);
+  assert.equal(overflow.overflow, true);
+  assert.equal(JSON.stringify(overflow).includes("xxxx"), false, "output-overflow evidence discards candidate output");
+
+  fs.writeFileSync(candidate, "while (true) {}\n");
+  const timed = await runBlackBoxOracle({ dir: taskDir }, workspace, { ...check, timeoutMs: 100, totalTimeoutMs: 500 });
+  assert.equal(timed.pass, false);
+  assert.deepEqual(timed.timeoutCases, [0]);
+  assert.equal(timed.timedOut, true);
+  assert.equal(JSON.stringify(timed).includes(canary), false);
+
+  const fixtureTask = fs.mkdtempSync(path.join(os.tmpdir(), "eval-oracle-fixture-task-"));
+  const fixtureWorkspace = fs.mkdtempSync(path.join(os.tmpdir(), "eval-oracle-fixture-ws-"));
+  fs.mkdirSync(path.join(fixtureTask, "fixture"));
+  fs.writeFileSync(path.join(fixtureTask, "fixture", "private.json"), JSON.stringify([{ input: {}, expected: canary }]));
+  await assert.rejects(
+    runBlackBoxOracle({ dir: fixtureTask, fixture: "fixture" }, fixtureWorkspace, { ...check, casesFile: "fixture/private.json" }),
+    /outside the candidate fixture/,
+  );
 });
 
 test("a qualification run is refused without a model fingerprint (weights, server build, sampling)", async () => {
@@ -281,24 +359,182 @@ test("hidden tests must be unreadable to the agent's own user", async () => {
 
 test("qualification remains fail-closed without enforced aggregate resource controls", async () => {
   const { qualificationResourceIsolationProblem } = await import(path.join(ROOT, "eval/validate.mjs"));
+  const shm = fs.statfsSync("/dev/shm");
+  const ok = { cpuPercent: 100, memoryBytes: 256 * 1024 * 1024, tasks: 64, storageBytes: shm.blocks * shm.bsize, workspaceRoot: "/dev/shm" };
   assert.match(qualificationResourceIsolationProblem(), /enforced CPU, memory, process-count, and workspace-storage limits/);
+  assert.match(qualificationResourceIsolationProblem({ resources: { ...ok, workspaceRoot: ROOT } }) ?? "", /tmpfs/);
+  assert.match(qualificationResourceIsolationProblem({ resources: { ...ok, memoryBytes: 1024 } }) ?? "", /memoryBytes/);
+  assert.match(qualificationResourceIsolationProblem({ resources: { ...ok, tasks: 0 } }) ?? "", /tasks/);
+  assert.match(qualificationResourceIsolationProblem({ resources: { ...ok, cpuPercent: 1.5 } }) ?? "", /cpuPercent/);
+  assert.match(qualificationResourceIsolationProblem({ resources: { ...ok, memoryBytes: 256 * 1024 * 1024 + 1 } }) ?? "", /multiple of 4096/);
+  assert.match(qualificationResourceIsolationProblem({ resources: { ...ok, storageBytes: ok.storageBytes - 4096 } }) ?? "", /dedicated tmpfs with size<=storageBytes/);
+  assert.match(qualificationResourceIsolationProblem({ resources: { ...ok, storageBytes: undefined } }) ?? "", /storageBytes/);
+  assert.equal(qualificationResourceIsolationProblem({ resources: ok }), null, "this host must prove the contract (scripts/ensure-ci-user-cgroups.sh)");
+});
+
+test("resource contract: candidate memory, processes, storage and CPU are kernel-bounded and every process is reaped", async () => {
+  const { runIsolated, sandboxAvailable } = await import(path.join(ROOT, "eval/isolate.mjs"));
+  const { spawnContained } = await import(path.join(ROOT, "eval/resources.mjs"));
+  assert.equal(sandboxAvailable(), true, "this security test requires the real Bubblewrap executable");
+  const memoryBytes = 128 * 1024 * 1024;
+  const shm = fs.statfsSync("/dev/shm");
+  const resources = { cpuPercent: 20, memoryBytes, tasks: 16, storageBytes: shm.blocks * shm.bsize, workspaceRoot: "/dev/shm" };
+  const ws = fs.mkdtempSync(path.join(resources.workspaceRoot, "eval-resources-"));
+  const run = (command: string, timeoutSec = 30) => runIsolated(command, { cwd: ws, home: true, timeoutSec, resources });
+  try {
+    const memory = await run("tail /dev/zero");
+    assert.notEqual(memory.status, 0);
+    assert.ok(memory.resources.oomKills >= 1, JSON.stringify(memory.resources));
+    assert.equal(memory.resources.limits["memory.oom.group"], "1");
+    assert.equal(memory.resources.limits["memory.max"], String(memoryBytes));
+    assert.equal(memory.resources.limits["memory.swap.max"], "0");
+    assert.equal(memory.containmentProblem, null);
+
+    const forks = await run("for i in $(seq 64); do sleep 30 & done; wait", 10);
+    assert.ok(forks.resources.pidsMaxEvents >= 1, JSON.stringify(forks.resources));
+    assert.ok(forks.resources.pidsPeak <= 16);
+    assert.equal(forks.resources.cleaned, true);
+
+    // Workspace and sandbox /tmp writes are tmpfs pages charged to the payload cgroup.
+    for (const target of ["/workspace/fill", "/tmp/fill"]) {
+      const disk = await run(`dd if=/dev/zero of=${target} bs=1M count=512 status=none`);
+      assert.ok(disk.resources.oomKills >= 1, `${target}: ${JSON.stringify(disk.resources)}`);
+    }
+    assert.ok(fs.statSync(path.join(ws, "fill")).size < memoryBytes);
+
+    const cpu = await run("timeout 2 sh -c 'while :; do :; done' & timeout 2 sh -c 'while :; do :; done' & wait");
+    assert.equal(cpu.resources.limits["cpu.max"], "20000 100000");
+    assert.ok(cpu.resources.cpuUsageUsec < 1_000_000, `two busy loops for 2 s at 20% used ${cpu.resources.cpuUsageUsec} us`);
+    assert.ok(cpu.resources.cpuThrottledUsec > 0);
+
+    // The wall-clock kill goes through the cgroup, so the supervisor still proves cleanup.
+    const slow = await run("sleep 60", 1);
+    assert.equal(slow.timedOut, true);
+    assert.equal(slow.resources.cleaned, true);
+    assert.equal(slow.containmentProblem, null);
+
+    // A stop requested at once (before the payload can have joined its leaf) still ends the payload.
+    const early = await new Promise<any>((resolve) => {
+      const started = Date.now();
+      const { child, containment } = spawnContained({ cmd: "/bin/sleep", argv: ["60"] }, resources, { cwd: "/", stdio: ["ignore", "ignore", "ignore"], detached: true });
+      containment!.kill();
+      child.on("close", async () => resolve({ ms: Date.now() - started, final: await containment!.final }));
+    });
+    assert.ok(early.ms < 15_000, `early stop took ${early.ms} ms`);
+    assert.notEqual(early.final?.exitCode, 0);
+
+    // A process that leaves the session and process group is still found in, and removed from, the cgroup.
+    const pidFile = path.join(ws, "daemon.pid");
+    const escaped = await new Promise<any>((resolve) => {
+      const { child, containment } = spawnContained({ cmd: "/bin/sh", argv: ["-c", `setsid sh -c 'echo $$ > ${pidFile}; exec sleep 300' </dev/null >/dev/null 2>&1 & sleep 0.3`] }, resources, { cwd: "/", stdio: ["ignore", "ignore", "ignore"], detached: true });
+      child.on("close", async () => resolve(await containment!.final));
+    });
+    assert.ok(escaped.survivorsAfterExit >= 1, JSON.stringify(escaped));
+    assert.equal(escaped.cleaned, true);
+    const daemon = Number(fs.readFileSync(pidFile, "utf8"));
+    assert.throws(() => process.kill(daemon, 0), /ESRCH/);
+  } finally {
+    fs.rmSync(ws, { recursive: true, force: true });
+  }
+});
+
+test("repository workspaces carry no history beyond the pinned baseline commit", async () => {
+  const { stageRepoWorkspace, workspaceHistoryProblem } = await import(path.join(ROOT, "eval/workspace.mjs"));
+  const base = fs.mkdtempSync(path.join(os.tmpdir(), "eval-ws-history-"));
+  const env = { PATH: "/usr/bin:/bin", HOME: base, GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: "/dev/null" };
+  const git = (cwd: string, ...argv: string[]) => {
+    const r = spawnSync("git", ["-c", "user.name=t", "-c", "user.email=t@example.invalid", "-c", "init.defaultBranch=main", ...argv], { cwd, env, encoding: "utf8" });
+    assert.equal(r.status, 0, r.stderr);
+    return r.stdout.trim();
+  };
+  try {
+    // Upstream: baseline, then the "reference fix" child, a tag on the child and a side branch beyond it.
+    const upstream = path.join(base, "upstream");
+    fs.mkdirSync(upstream);
+    git(upstream, "init", "-q");
+    fs.writeFileSync(path.join(upstream, "lib.txt"), "buggy\n");
+    git(upstream, "add", "-A");
+    git(upstream, "commit", "-qm", "baseline");
+    const baseline = git(upstream, "rev-parse", "HEAD");
+    fs.writeFileSync(path.join(upstream, "lib.txt"), "fixed\n");
+    git(upstream, "commit", "-qam", "reference fix");
+    const child = git(upstream, "rev-parse", "HEAD");
+    git(upstream, "tag", "v-fix");
+    git(upstream, "checkout", "-qb", "later");
+    fs.writeFileSync(path.join(upstream, "later.txt"), "later\n");
+    git(upstream, "add", "-A");
+    git(upstream, "commit", "-qm", "later work");
+    const cache = path.join(base, "cache");
+    git(base, "clone", "-q", "--no-checkout", upstream, cache);
+
+    // Control: the former `clone --shared` + checkout layout exposes the child and is detected.
+    const leaky = path.join(base, "leaky");
+    git(base, "clone", "-q", "--shared", cache, leaky);
+    git(leaky, "checkout", "-q", baseline);
+    assert.match(workspaceHistoryProblem(leaky, baseline) ?? "", /alternates/);
+    assert.equal(spawnSync("git", ["cat-file", "-e", `${child}^{commit}`], { cwd: leaky, env }).status, 0, "control must expose the child");
+    // A full (non-shared) clone has no alternates but still exposes the child; detection must not rely on alternates.
+    const copied = path.join(base, "copied");
+    git(base, "clone", "-q", "--no-local", cache, copied);
+    git(copied, "checkout", "-q", baseline);
+    git(copied, "remote", "remove", "origin");
+    assert.equal(spawnSync("git", ["cat-file", "-e", `${child}^{commit}`], { cwd: copied, env }).status, 0, "control must expose the child");
+    assert.match(workspaceHistoryProblem(copied, baseline) ?? "", /not ancestors/);
+
+    const ws = path.join(base, "ws");
+    stageRepoWorkspace(cache, baseline, ws);
+    assert.equal(workspaceHistoryProblem(ws, baseline), null);
+    assert.equal(git(ws, "rev-parse", "HEAD"), baseline);
+    assert.equal(fs.readFileSync(path.join(ws, "lib.txt"), "utf8"), "buggy\n");
+    // (a) nothing reachable that is not an ancestor of the baseline
+    assert.equal(git(ws, "rev-list", "--all", "--reflog", `^${baseline}`), "");
+    // (b) no alternates link to the cache
+    assert.equal(fs.existsSync(path.join(ws, ".git/objects/info/alternates")), false);
+    // (c) the reference-fix commit object is absent
+    assert.notEqual(spawnSync("git", ["cat-file", "-e", `${child}^{commit}`], { cwd: ws, env }).status, 0);
+    // (d) no remotes, tags or FETCH_HEAD naming the cache
+    assert.equal(git(ws, "remote"), "");
+    assert.equal(git(ws, "tag", "--list"), "");
+    assert.equal(fs.existsSync(path.join(ws, ".git/FETCH_HEAD")), false);
+    assert.throws(() => stageRepoWorkspace(cache, "main", path.join(base, "ws-ref")), /full pinned commit/);
+  } finally {
+    fs.rmSync(base, { recursive: true, force: true });
+  }
 });
 
 test("task paths reject traversal, symlink escapes, and unstable task trees", async () => {
   const { taskTreeDigest } = await import(path.join(ROOT, "eval/validate.mjs"));
   const { confinedPath, runtimeMountProblem } = await import(path.join(ROOT, "eval/isolate.mjs"));
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "eval-path-root-"));
-  const outside = fs.mkdtempSync(path.join(os.tmpdir(), "eval-path-outside-"));
-  fs.mkdirSync(path.join(root, "fixture"));
-  fs.writeFileSync(path.join(outside, "canary"), "protected");
-  fs.symlinkSync(outside, path.join(root, "escape"));
-  assert.throws(() => confinedPath(root, "../outside"), /unsafe task path/);
-  assert.throws(() => confinedPath(root, "escape/canary"), /symlink/);
-  assert.throws(() => taskTreeDigest(root), /symlink/);
-  assert.match(runtimeMountProblem(["/dev/null"], [ROOT]) ?? "", /protected candidate runtime path/);
-  assert.match(runtimeMountProblem([path.join(ROOT, "cli/package.json")], [path.join(ROOT, "eval")]) ?? "", /outside its explicit allowlist/);
-  assert.match(runtimeMountProblem([], [path.join(os.homedir(), ".cache")]) ?? "", /sensitive candidate runtime root/);
-  assert.equal(fs.readFileSync(path.join(outside, "canary"), "utf8"), "protected");
+  let outside: string | undefined;
+  let allowedRoot: string | undefined;
+  let otherRuntimeRoot: string | undefined;
+  try {
+    outside = fs.mkdtempSync(path.join(os.tmpdir(), "eval-path-outside-"));
+    // Runtime allowlist roots must be outside protected roots such as /tmp.
+    // The checkout may itself live under /tmp in CI, so use private temporary
+    // roots under a safe home directory for these path-policy assertions.
+    const runtimeTestBase = os.userInfo().homedir === "/root" ? "/home" : os.userInfo().homedir;
+    allowedRoot = fs.mkdtempSync(path.join(runtimeTestBase, "nexus-eval-allowlist-"));
+    otherRuntimeRoot = fs.mkdtempSync(path.join(runtimeTestBase, "nexus-eval-outside-allowlist-"));
+    fs.chmodSync(allowedRoot, 0o700);
+    fs.chmodSync(otherRuntimeRoot, 0o700);
+    fs.mkdirSync(path.join(root, "fixture"));
+    fs.writeFileSync(path.join(outside, "canary"), "protected");
+    fs.writeFileSync(path.join(otherRuntimeRoot, "package.json"), "{}");
+    fs.symlinkSync(outside, path.join(root, "escape"));
+    assert.throws(() => confinedPath(root, "../outside"), /unsafe task path/);
+    assert.throws(() => confinedPath(root, "escape/canary"), /symlink/);
+    assert.throws(() => taskTreeDigest(root), /symlink/);
+    assert.match(runtimeMountProblem(["/dev/null"], [allowedRoot]) ?? "", /protected candidate runtime path/);
+    assert.match(runtimeMountProblem([path.join(otherRuntimeRoot, "package.json")], [allowedRoot]) ?? "", /outside its explicit allowlist/);
+    assert.match(runtimeMountProblem([], [path.join(os.homedir(), ".cache")]) ?? "", /sensitive candidate runtime root/);
+    assert.equal(fs.readFileSync(path.join(outside, "canary"), "utf8"), "protected");
+  } finally {
+    for (const directory of [root, outside, allowedRoot, otherRuntimeRoot]) {
+      if (directory) fs.rmSync(directory, { recursive: true, force: true });
+    }
+  }
 });
 
 test("task-tree digests frame paths, entry types, executable mode, and content lengths", async () => {
@@ -368,13 +604,15 @@ test("candidate namespace reaches only its authenticated run proxy and cannot re
     seen.push(String(req.headers.authorization ?? ""));
     res.end(JSON.stringify({ data: [{ id: "synthetic-model" }] }));
   });
-  await new Promise<void>((resolve) => upstream.listen(0, "127.0.0.1", resolve));
-  const proxy = await startModelProxy({ upstream: `http://127.0.0.1:${(upstream.address() as any).port}/v1`, authToken: "UPSTREAM_AUTH_CANARY", clientToken: "RUN_LOCAL_TOKEN", socketPath: path.join(proxyDirectory, "proxy.sock") });
-  const sandbox = agentSandboxArgv({ cwd: workspace, home, proxyDirectory, readOnlyPaths: ["/usr/bin/node"], supervisorPath: path.join(ROOT, "eval/agent_sandbox.mjs") });
-  const script = `const fs=require('fs'),cp=require('child_process');fetch('http://127.0.0.1:40127/v1/models',{headers:{authorization:'Bearer '+process.env.OPENAI_API_KEY},signal:AbortSignal.timeout(2000)}).then(async r=>{let value='';try{value=fs.readFileSync(${JSON.stringify(canary)},'utf8')}catch{};try{fs.writeFileSync('/tmp/host-write-canary','changed')}catch{};const nested=cp.spawnSync('/usr/bin/unshare',['-Ur','true']);console.log(JSON.stringify({status:r.status,token:process.env.OPENAI_API_KEY,upstreamVisible:process.env.UPSTREAM_AUTH_CANARY??null,canary:value,nestedUserns:nested.status}))}).catch(e=>{console.error(e.message);process.exit(1)})`;
-  process.env.UPSTREAM_AUTH_CANARY = "UPSTREAM_AUTH_CANARY";
-  const child = await runSandbox(sandbox.cmd, sandbox.argv, JSON.stringify({ command: "/usr/bin/node", argv: ["-e", script], env: { PATH: "/usr/bin:/bin", OPENAI_API_KEY: "RUN_LOCAL_TOKEN" } }));
+  let proxy: Awaited<ReturnType<typeof startModelProxy>> | undefined;
   try {
+    await new Promise<void>((resolve) => upstream.listen(0, "127.0.0.1", resolve));
+    proxy = await startModelProxy({ upstream: `http://127.0.0.1:${(upstream.address() as any).port}/v1`, authToken: "UPSTREAM_AUTH_CANARY", clientToken: "RUN_LOCAL_TOKEN", socketPath: path.join(proxyDirectory, "proxy.sock") });
+    const nodeRuntime = process.execPath;
+    const sandbox = agentSandboxArgv({ cwd: workspace, home, proxyDirectory, readOnlyPaths: [nodeRuntime], runtimeExecutablePaths: [nodeRuntime], supervisorPath: path.join(ROOT, "eval/agent_sandbox.mjs") });
+    const script = `const fs=require('fs'),cp=require('child_process');fetch('http://127.0.0.1:40127/v1/models',{headers:{authorization:'Bearer '+process.env.OPENAI_API_KEY},signal:AbortSignal.timeout(2000)}).then(async r=>{let value='';try{value=fs.readFileSync(${JSON.stringify(canary)},'utf8')}catch{};try{fs.writeFileSync('/tmp/host-write-canary','changed')}catch{};const nested=cp.spawnSync('/usr/bin/unshare',['-Ur','true']);console.log(JSON.stringify({status:r.status,token:process.env.OPENAI_API_KEY,upstreamVisible:process.env.UPSTREAM_AUTH_CANARY??null,canary:value,nestedUserns:nested.status}))}).catch(e=>{console.error(e.message);process.exit(1)})`;
+    process.env.UPSTREAM_AUTH_CANARY = "UPSTREAM_AUTH_CANARY";
+    const child = await runSandbox(sandbox.cmd, sandbox.argv, JSON.stringify({ command: nodeRuntime, argv: ["-e", script], env: { PATH: "/usr/bin:/bin", OPENAI_API_KEY: "RUN_LOCAL_TOKEN" } }));
     assert.equal(child.status, 0, `${child.error ?? ""}\n${child.stderr}\n${child.stdout}\nproxy=${JSON.stringify(proxy.stats())}\nupstream=${JSON.stringify(seen)}`);
     const output = JSON.parse(child.stdout.trim());
     assert.equal(output.status, 200);
@@ -387,8 +625,8 @@ test("candidate namespace reaches only its authenticated run proxy and cannot re
     assert.doesNotMatch(`${child.stdout}${child.stderr}`, /HOST_PRIVATE_CANARY|UPSTREAM_AUTH_CANARY/);
   } finally {
     delete process.env.UPSTREAM_AUTH_CANARY;
-    await proxy.close();
-    upstream.close();
+    if (proxy) await proxy.close();
+    if (upstream.listening) await new Promise<void>((resolve) => upstream.close(() => resolve()));
   }
 });
 

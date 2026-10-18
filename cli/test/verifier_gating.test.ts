@@ -205,7 +205,7 @@ describe("ACC-SAFE-09: Verifier Gating", () => {
     }
   });
 
-  test("headless execution on untrusted workspace denies task_completed verifier with descriptive error", async () => {
+  test("headless execution refuses verifier output without a matching pre-change baseline", async () => {
     const savedHome = process.env.HOME;
     const tempHome = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-vg-home-"));
     process.env.HOME = tempHome;
@@ -240,9 +240,59 @@ describe("ACC-SAFE-09: Verifier Gating", () => {
       assert.ok(toolRes, "tool response should exist");
       assert.match(
         String(toolRes.content),
-        /requires operator approval \(exec\), but no operator is present/,
-        "headless execution without operator should fail with descriptive error",
+        /no matching pre-change baseline\. Its current output cannot establish verification/,
+        "headless execution must reject a verifier result without a trusted pre-change baseline",
       );
+    } finally {
+      agent.shutdown();
+      await gw.close();
+      fs.rmSync(ws, { recursive: true, force: true });
+      fs.rmSync(tempHome, { recursive: true, force: true });
+      process.env.HOME = savedHome;
+    }
+  });
+
+  test("headless execution on untrusted workspace denies verifier execution without an operator", async () => {
+    const savedHome = process.env.HOME;
+    const tempHome = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-vg-home-"));
+    process.env.HOME = tempHome;
+
+    const { ws, sentinelPath } = setupRepo("headless-approval");
+    const replies = [
+      {
+        kind: "tools" as const,
+        calls: [{ name: "task_completed", args: { summary: "Attempting completion without approval" } }],
+      },
+      { kind: "text" as const, content: "Done." },
+    ];
+    const gw = await startGateway((n) => replies[Math.min(n, replies.length) - 1]);
+    const agent = new AutonomousAgent({
+      endpoint: gw.url,
+      model: "m",
+      workspace: ws,
+      shell: "bash",
+      approvalMode: "review",
+      authoritativeVerifierCommand: "npm test",
+    } as any);
+
+    try {
+      // Capture a pre-change binding so the request reaches the independent approval gate.
+      await (agent as any).captureChangeBaseline();
+      fs.writeFileSync(path.join(ws, "file.txt"), "modified\n");
+      (agent as any).hasPendingModifications = true;
+
+      // Headless execution has no onConfirm handler and must not execute the verifier.
+      await agent.runTurn("finish task");
+
+      const lastReq = gw.requests.at(-1);
+      const toolRes = lastReq?.body?.messages?.find((m: any) => m.role === "tool");
+      assert.ok(toolRes, "tool response should exist");
+      assert.match(
+        String(toolRes.content),
+        /requires operator approval \(exec\), but no operator is present/,
+        "headless execution without an operator must deny verifier execution",
+      );
+      assert.equal(fs.existsSync(sentinelPath), false, "the verifier must not execute without operator approval");
     } finally {
       agent.shutdown();
       await gw.close();

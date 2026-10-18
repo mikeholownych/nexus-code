@@ -228,7 +228,7 @@ describe("V2: unverified changes survive retries, step limits, restarts and resu
     });
   });
 
-  test("a continuation completes when the verifier establishes the carried change (VERIFIED, then the dependent runs)", async () => {
+  test("a continuation cannot trust a carried baseline after recovery and keeps dependents blocked", async () => {
     await withHome(async () => {
       const gw = await gateway((b) => (lastUser(b).includes("Review impl.txt") ? done("reviewed") : resumed(b) ? done("finished") : toolResults(b) === 0 ? write() : read("impl.txt")));
       const repo = makeRepo();
@@ -237,9 +237,9 @@ describe("V2: unverified changes survive retries, step limits, restarts and resu
         let op = await rig.start([{ id: "implement", prompt: "Write impl.txt." }, { id: "review", prompt: "Review impl.txt.", dependsOn: ["implement"] }]);
         const more = decisionOf(op, "implement").options.find((o) => o.label === "continue with more steps")!;
         op = await rig.decide(decisionOf(op, "implement").id, more.id);
-        assert.equal(unitOf(op, "implement").status, "COMPLETE");
-        assert.equal(unitOf(op, "implement").result!.outcome, "VERIFIED");
-        assert.equal(op.status, "COMPLETE");
+        assert.equal(unitOf(op, "implement").status, "BLOCKED");
+        assert.match(unitOf(op, "implement").blocked!.reason, /unverified|verification|regression_free/i);
+        assert.ok(gw.requests.every((b) => !lastUser(b).includes("Review impl.txt")), "dependent work must not run from an unauthenticated saved baseline");
       } finally {
         rig.close();
         await gw.close();
@@ -348,7 +348,8 @@ describe("V2: unverified changes survive retries, step limits, restarts and resu
 
         // CLI run --resume without id resolves and resumes the latest task
         const cliRes = await cli(["run", "--resume", "--endpoint", gw.url, "--model", "m", "--yes"], { cwd: repo, home });
-        assert.equal(cliRes.code, 0, `expected exit code 0, got ${cliRes.code}: ${cliRes.err}\n${cliRes.out}`);
+        assert.equal(cliRes.code, 2, `recovered completion stays unverified; got ${cliRes.code}: ${cliRes.err}\n${cliRes.out}`);
+        assert.match(cliRes.out + cliRes.err, /UNVERIFIED/);
       } finally {
         await gw.close();
         fs.rmSync(repo, { recursive: true, force: true });
@@ -483,7 +484,7 @@ describe("V2: unverified changes survive retries, step limits, restarts and resu
     });
   });
 
-  test("REQ-AGT-103: change baseline is persisted in durable task state and restored on resume", async () => {
+  test("REQ-AGT-103: recovered verifier baseline persists as continuity evidence but is never trusted", async () => {
     await withHome(async () => {
       const gw = await gateway((b) => done());
       const repo = makeRepo({ "test.js": "throw new Error('fail');\n" });
@@ -499,6 +500,7 @@ describe("V2: unverified changes survive retries, step limits, restarts and resu
           command: "npm test",
           failed: true,
           tests: new Map([["test.js", "throw new Error('fail');\n"]]),
+          verifier: new Map([["package.json", '{"scripts":{"test":"node test.js"}}']]),
           at: new Date().toISOString(),
         };
         a1.changeBaseline = mockBaseline;
@@ -511,6 +513,17 @@ describe("V2: unverified changes survive retries, step limits, restarts and resu
         assert.equal(saved.changeBaseline.command, "npm test");
         assert.equal(saved.changeBaseline.failed, true);
         assert.deepEqual(saved.changeBaseline.tests, { "test.js": "throw new Error('fail');\n" });
+        assert.deepEqual(saved.changeBaseline.verifier, { "package.json": '{"scripts":{"test":"node test.js"}}' });
+
+        // Simulate a same-user candidate editing the durable state before restart.
+        // State-file privacy and schema/redaction checks do not authenticate it.
+        const statePath = manager.getStateFilePath(agent1.getTaskId());
+        const tampered = JSON.parse(fs.readFileSync(statePath, "utf8"));
+        tampered.changeBaseline.trustedDeliverables = ["src/math.js"];
+        tampered.changeBaseline.failed = false;
+        tampered.changeBaseline.tests = { "test/math.test.js": "// forged passing oracle\n" };
+        tampered.changeBaseline.verifier = { "package.json": '{"scripts":{"test":"node test/math.test.js"}}' };
+        fs.writeFileSync(statePath, JSON.stringify(tampered));
 
         // Recover in a fresh agent instance
         const agent2 = quiet(new AutonomousAgent(config, 1, undefined, { durable: true }));
@@ -518,13 +531,149 @@ describe("V2: unverified changes survive retries, step limits, restarts and resu
         a2.stateManager = manager;
         await agent2.recoverFromTaskState(agent1.getTaskId());
 
-        // Assert restored changeBaseline matches
-        assert.ok(a2.changeBaseline, "recovered agent must have changeBaseline");
-        assert.equal(a2.changeBaseline.command, "npm test");
-        assert.equal(a2.changeBaseline.failed, true);
-        assert.ok(a2.changeBaseline.tests instanceof Map, "tests must be restored as a Map");
-        assert.equal(a2.changeBaseline.tests.get("test.js"), "throw new Error('fail');\n");
+        // A syntactically valid forged snapshot cannot establish verifier independence,
+        // but the record remains available as explicitly untrusted continuity evidence.
+        assert.equal(a2.changeBaseline, null, "recovered verifier baseline must be invalidated");
+        assert.equal(a2.verificationBaselineInvalidated, true, "the retained record must not authorize VERIFIED");
+        assert.equal(a2.hasPendingModifications, true, "recovered task must remain pending until fresh verification");
+        const recovered = manager.loadTaskState(agent1.getTaskId());
+        assert.equal(recovered.unverifiedChangesPending, true, "fail-closed recovery state must persist");
+        assert.equal(recovered.changeBaseline?.failed, false, "the recovered record is retained, not trusted");
+        assert.deepEqual(recovered.changeBaseline?.trustedDeliverables, ["src/math.js"]);
+        assert.deepEqual(recovered.changeBaseline?.tests, { "test/math.test.js": "// forged passing oracle\n" });
+
+        // An ordinary progress save and a full checkpoint must preserve the
+        // quarantined record without restoring it to the active verifier baseline.
+        a2.messages = [...a2.messages, { role: "user", content: "continue" }];
+        a2.persistProgress({ messages: true });
+        const progressSaved = manager.loadTaskState(agent1.getTaskId());
+        assert.deepEqual(progressSaved.changeBaseline, recovered.changeBaseline, "message progress must not erase continuity data");
+        agent2.checkpointDurableState("recovery continuity checkpoint");
+        const checkpointed = manager.loadTaskState(agent1.getTaskId());
+        assert.deepEqual(checkpointed.changeBaseline, recovered.changeBaseline);
+        assert.equal(a2.changeBaseline, null);
+        assert.equal(a2.verificationBaselineInvalidated, true);
       } finally {
+        await gw.close();
+        fs.rmSync(repo, { recursive: true, force: true });
+        fs.rmSync(stateDir, { recursive: true, force: true });
+      }
+    });
+  });
+
+  test("ACC-VER-06: forged candidate identity cannot clear the verifier obligation after resume", async () => {
+    await withHome(async () => {
+      const gw = await gateway((b) => done());
+      const repo = makeRepo({
+        "package.json": '{"scripts":{"test":"node test.js"}}\n',
+        "math.js": "export const add = (a, b) => a - b;\n",
+        "test.js": 'import { add } from "./math.js";\nif (add(1, 1) !== 2) throw new Error("bad sum");\nconsole.log("\\u2139 tests 1\\n\\u2139 pass 1");\n',
+      });
+      const config = cfg(gw, repo, {
+        authoritativeVerifierCommand: "npm test",
+        trustedDeliverableFiles: ["math.js"],
+      });
+      const identity = WorkspacePath.fromSelectedWorkspace(repo);
+      const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-cont-baseline-delete-"));
+      let first: AutonomousAgent | undefined;
+      let resumed: AutonomousAgent | undefined;
+      try {
+        first = quiet(new AutonomousAgent(config, 1, undefined, { durable: true }));
+        const firstAgent = first as any;
+        firstAgent.stateManager = new DurableStateManager({ baseDir: stateDir, workspacePaths: [identity] });
+        firstAgent.hasPendingModifications = true;
+        firstAgent.changeBaseline = {
+          command: "npm test",
+          failed: true,
+          tests: new Map([["test.js", fs.readFileSync(path.join(repo, "test.js"), "utf8")]]),
+          verifier: new Map([["package.json", fs.readFileSync(path.join(repo, "package.json"), "utf8")]]),
+          trustedDeliverables: ["math.js"],
+          at: new Date().toISOString(),
+        };
+        first.checkpointDurableState("pending verifier baseline");
+        const manager = new DurableStateManager({ baseDir: stateDir, workspacePaths: [identity] });
+
+        // Simulate same-user candidate access: replace the test oracle and delete the
+        // baseline and pending flag. Recovery must derive the obligation from the
+        // independently revalidated workspace candidate, not these mutable fields.
+        fs.writeFileSync(path.join(repo, "test.js"), 'console.log("\\u2139 tests 1\\n\\u2139 pass 1");\n');
+        const statePath = manager.getStateFilePath(first.getTaskId());
+        const state = JSON.parse(fs.readFileSync(statePath, "utf8"));
+        delete state.changeBaseline;
+        state.unverifiedChangesPending = false;
+        state.candidateId = firstAgent.candidateTracker.computeCandidateIdentitySync(repo).candidateId;
+        fs.writeFileSync(statePath, JSON.stringify(state));
+
+        resumed = quiet(new AutonomousAgent(config, 1, undefined, { durable: true }));
+        const resumedAgent = resumed as any;
+        resumedAgent.stateManager = manager;
+        const recovery = await resumed.recoverFromTaskState(first.getTaskId());
+        assert.equal(recovery.candidateStatus, "consistent", "the test forges the ordinary candidate hash to match the modified workspace");
+        assert.equal(resumedAgent.hasPendingModifications, true, "recovery must not trust a forged matching candidate ID or clean flag");
+        assert.equal(resumedAgent.changeBaseline, null, "pending recovery must not recapture current workspace as baseline");
+        assert.equal(resumedAgent.verificationBaselineInvalidated, true);
+
+        const result = await muted(() => resumed.runTurn("Continue and verify the implementation."));
+        assert.notEqual(result.outcome, "VERIFIED", "candidate-edited test output cannot establish VERIFIED after recovery");
+        assert.equal(resumedAgent.hasPendingModifications, true, "unbound verifier evidence must not clear the resumed obligation");
+      } finally {
+        resumed?.shutdown();
+        first?.shutdown();
+        await gw.close();
+        fs.rmSync(repo, { recursive: true, force: true });
+        fs.rmSync(stateDir, { recursive: true, force: true });
+      }
+    });
+  });
+
+  test("ACC-VER-07: a new run cannot clear recovered verifier invalidation and rebaseline edited tests", async () => {
+    await withHome(async () => {
+      let calls = 0;
+      const gw = await gateway(() => calls++ === 0
+        ? { tools: [{ name: "write_file", args: { path: "math.js", content: "export const add = (a, b) => a - b;\n" } }] }
+        : done());
+      const repo = makeRepo({
+        "package.json": '{"scripts":{"test":"node test.js"}}\n',
+        "math.js": "export const add = (a, b) => a + b;\n",
+        "test.js": 'import { add } from "./math.js";\nif (add(1, 1) !== 2) throw new Error("bad sum");\nconsole.log("\\u2139 tests 1\\n\\u2139 pass 1");\n',
+      });
+      const config = cfg(gw, repo, { trustedDeliverableFiles: ["math.js"] });
+      const identity = WorkspacePath.fromSelectedWorkspace(repo);
+      const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-cont-new-run-baseline-"));
+      let first: AutonomousAgent | undefined;
+      let resumed: AutonomousAgent | undefined;
+      try {
+        first = quiet(new AutonomousAgent(config, 1, undefined, { durable: true }));
+        const firstAgent = first as any;
+        const manager = new DurableStateManager({ baseDir: stateDir, workspacePaths: [identity] });
+        firstAgent.stateManager = manager;
+        firstAgent.hasPendingModifications = true;
+        firstAgent.changeBaseline = {
+          command: "npm test",
+          failed: true,
+          tests: new Map([["test.js", fs.readFileSync(path.join(repo, "test.js"), "utf8")]]),
+          verifier: new Map([["package.json", fs.readFileSync(path.join(repo, "package.json"), "utf8")]]),
+          trustedDeliverables: ["math.js"],
+          at: new Date().toISOString(),
+        };
+        first.checkpointDurableState("pending verifier baseline");
+        fs.writeFileSync(path.join(repo, "test.js"), 'console.log("\\u2139 tests 1\\n\\u2139 pass 1");\n');
+
+        resumed = quiet(new AutonomousAgent(config, 1, undefined, { durable: true }));
+        const resumedAgent = resumed as any;
+        resumedAgent.stateManager = manager;
+        await resumed.recoverFromTaskState(first.getTaskId());
+        assert.equal(resumedAgent.verificationBaselineInvalidated, true);
+
+        // `run()` is the ordinary new-turn path and calls resetConversation().
+        const result = await muted(() => resumed.run("Continue the interrupted implementation."));
+        assert.equal(resumedAgent.verificationBaselineInvalidated, true, "new-turn reset must preserve the unresolved verification boundary");
+        assert.equal(resumedAgent.changeBaseline, undefined, "candidate-edited tests must not become a new pre-change baseline");
+        assert.notEqual(result.outcome, "VERIFIED", "a passing edited oracle cannot establish VERIFIED after recovery");
+        assert.equal(resumedAgent.hasPendingModifications, true, "unbound evidence leaves the recovered obligation pending");
+      } finally {
+        resumed?.shutdown();
+        first?.shutdown();
         await gw.close();
         fs.rmSync(repo, { recursive: true, force: true });
         fs.rmSync(stateDir, { recursive: true, force: true });
@@ -880,7 +1029,7 @@ describe("R1: task state and sessions without a recorded obligation (written by 
     });
   });
 
-  test("interactive /resume (sidecar): a session without the obligation field resumes UNVERIFIED; a recorded false stays false", async () => {
+  test("interactive /resume (sidecar): saved session obligation flags cannot authenticate a clean workspace", async () => {
     await withHome(async (home) => {
       const gw = await gateway((b) => (lastUser(b).startsWith("Read a.txt") && toolResults(b) === 0 ? read("a.txt") : done("nothing left")));
       const repo = makeRepo({ "a.txt": "MARK-a\n" });
@@ -905,10 +1054,80 @@ describe("R1: task state and sessions without a recorded obligation (written by 
       try {
         assert.equal(await turn(undefined, "Read a.txt."), "NOT_REQUIRED");
         assert.ok(sessions().every((f) => JSON.parse(fs.readFileSync(f, "utf-8")).unverifiedChangesPending === false), "precondition: recorded false");
-        assert.equal(await turn("latest", "Anything left?"), "NOT_REQUIRED", "a recorded false stays false");
-        for (const f of sessions()) edit(f, ({ unverifiedChangesPending: _p, ...s }) => s);
-        assert.equal(await turn("latest", "Anything left?"), "UNVERIFIED", "an absent obligation is pending");
+        assert.equal(await turn("latest", "Anything left?"), "UNVERIFIED", "a recorded false is not an authenticated clean-state claim");
+        for (const f of sessions()) edit(f, (s) => ({ ...s, unverifiedChangesPending: false }));
+        assert.equal(await turn("latest", "Anything left?"), "UNVERIFIED", "a forged false remains fail-closed");
       } finally {
+        await gw.close();
+        fs.rmSync(repo, { recursive: true, force: true });
+      }
+    });
+  });
+
+  test("ACC-VER-08: restored session flags cannot authenticate a verifier baseline", async () => {
+    await withHome(async () => {
+      const gw = await gateway(() => done());
+      const repo = makeRepo({
+        "package.json": '{"scripts":{"test":"node test.js"}}\n',
+        "math.js": "export const add = (a, b) => a - b;\n",
+        // Represents an oracle edited after a session was saved. The saved session
+        // can be changed by the same local identity, including its obligation flag.
+        "test.js": 'console.log("\\u2139 tests 1\\n\\u2139 pass 1");\n',
+      });
+      const agent = quiet(new AutonomousAgent(cfg(gw, repo, { trustedDeliverableFiles: ["math.js"] }), 1));
+      try {
+        agent.restoreSession([], false);
+        const internal = agent as any;
+        assert.equal(internal.hasPendingModifications, true, "a forged saved false must not clear the obligation");
+        assert.equal(internal.verificationBaselineInvalidated, true, "session restoration invalidates any workspace baseline");
+        assert.equal(internal.changeBaseline, null, "a saved or newly captured baseline cannot be trusted");
+
+        await internal.captureChangeBaseline();
+        assert.equal(internal.changeBaseline, null, "the edited test oracle cannot become its own pre-change baseline");
+        assert.equal(gw.requests.length, 0, "fail-closed restoration does not invoke a verifier as baseline capture");
+
+        const result = await muted(() => agent.runTurn("Continue and verify the implementation."));
+        assert.notEqual(result.outcome, "VERIFIED", "a passing session-edited oracle cannot establish VERIFIED");
+        assert.equal(internal.hasPendingModifications, true, "the obligation remains until trustworthy verification");
+      } finally {
+        agent.shutdown();
+        await gw.close();
+        fs.rmSync(repo, { recursive: true, force: true });
+      }
+    });
+  });
+
+  test("ACC-VER-09: generic verifier output cannot discharge an unauthenticated restored obligation", async () => {
+    await withHome(async () => {
+      const gw = await gateway(() => done("implementation checked"));
+      const repo = makeRepo({ "math.js": "export const add = (a, b) => a + b;\n" });
+      const agent = quiet(new AutonomousAgent(cfg(gw, repo, {
+        authoritativeVerifierCommand: "/usr/bin/true",
+        trustedDeliverableFiles: ["math.js"],
+        sandbox: "bwrap",
+      }), 1));
+      const bridge = (agent as any).bridge;
+      const executeTool = bridge.executeTool.bind(bridge);
+      const verifierCalls: string[] = [];
+      bridge.executeTool = async (name: string, args: any) => {
+        if (name === "run_command" && args.command === "/usr/bin/true") {
+          verifierCalls.push(args.command);
+          // Deliberately adversarial executor output: a command's location and TAP-shaped text
+          // are not an authenticated binding to the restored workspace or its test oracle.
+          return { success: true, output: JSON.stringify({ exit_code: 0, stdout: "ℹ tests 1\nℹ pass 1", stderr: "" }) };
+        }
+        return executeTool(name, args);
+      };
+      try {
+        agent.restoreSession([], false);
+        const result = await muted(() => agent.runTurn("Continue and verify the implementation."));
+        assert.equal(verifierCalls.length, 1, "the configured verifier attempt is observed");
+        assert.equal(verifierCalls[0], "/usr/bin/true");
+        assert.notEqual(result.outcome, "VERIFIED", `${result.outcome}: ${result.detail}`);
+        assert.equal(agent.hasUnverifiedChanges(), true, "unbound output cannot discharge the restored obligation");
+        assert.equal((agent as any).verificationBaselineInvalidated, true, "the recovery boundary remains invalidated");
+      } finally {
+        agent.shutdown();
         await gw.close();
         fs.rmSync(repo, { recursive: true, force: true });
       }
@@ -923,18 +1142,20 @@ describe("V1: a unit whose durable history is missing or inconsistent is blocked
   const reader = (b: any): Reply => {
     if (!allText(b).includes("OBJ-READ-ABC")) return done("nothing to do");
     if (resumed(b)) return done("continued");
-    if (lastUser(b).includes("record was lost")) return toolResults(b) === 0 ? read("a.txt") : done("markers read");
+    if (allText(b).includes("earlier task history was unusable") || allText(b).includes("explicitly restarted after recovery")) {
+      return toolResults(b) === 0 ? read("a.txt") : done("markers read");
+    }
     return [read("a.txt"), read("b.txt"), done("markers read")][Math.min(toolResults(b), 2)];
   };
   /** The same unit, but its first attempt writes before reading. */
   const writer = (b: any): Reply =>
-    !allText(b).includes("OBJ-READ-ABC") || resumed(b) || lastUser(b).includes("record was lost") ? reader(b) : toolResults(b) === 0 ? write("draft.txt") : read("a.txt");
+    !allText(b).includes("OBJ-READ-ABC") || resumed(b) || lastUser(b).includes("earlier task history was unusable") ? reader(b) : toolResults(b) === 0 ? write("draft.txt") : read("a.txt");
   const UNIT: WorkUnitSpec = { id: "markers", title: "Markers", prompt: "OBJ-READ-ABC: read a.txt and b.txt, then report their markers." };
   const files = { "a.txt": "MARK-a\n", "b.txt": "MARK-b\n" };
 
-  const corruptions: Array<{ name: string; corrupt: (file: string) => void; problem: RegExp; restartedOutcome: "COMPLETE" | "BLOCKED"; firstTurnWrites?: boolean }> = [
-    { name: "missing conversation (empty history)", corrupt: (f) => edit(f, (s) => ({ ...s, messages: [] })), problem: /no conversation was recorded/, restartedOutcome: "COMPLETE" },
-    { name: "inconsistent conversation (a replacement objective)", corrupt: (f) => edit(f, (s) => ({ ...s, messages: [s.messages[0], { role: "user", content: "Merge the segment files into one." }] })), problem: /does not contain the unit's authorized task/, restartedOutcome: "COMPLETE" },
+  const corruptions: Array<{ name: string; corrupt: (file: string) => void; problem: RegExp; restartedOutcome: "BLOCKED"; firstTurnWrites?: boolean }> = [
+    { name: "missing conversation (empty history)", corrupt: (f) => edit(f, (s) => ({ ...s, messages: [] })), problem: /no conversation was recorded/, restartedOutcome: "BLOCKED" },
+    { name: "inconsistent conversation (a replacement objective)", corrupt: (f) => edit(f, (s) => ({ ...s, messages: [s.messages[0], { role: "user", content: "Merge the segment files into one." }] })), problem: /does not contain the unit's authorized task/, restartedOutcome: "BLOCKED" },
     { name: "partial history after a write (the obligation record survives)", corrupt: (f) => edit(f, (s) => ({ ...s, messages: [] })), problem: /no conversation was recorded/, restartedOutcome: "BLOCKED", firstTurnWrites: true },
     { name: "missing durable state (task file deleted)", corrupt: (f) => fs.rmSync(f), problem: /could not be loaded/, restartedOutcome: "BLOCKED" },
     {
@@ -973,10 +1194,12 @@ describe("V1: a unit whose durable history is missing or inconsistent is blocked
           op = await rig.decide(decisionOf(op, "markers").id, restart.id);
           const restartRequest = gw.requests[before];
           assert.ok(lastUser(restartRequest).startsWith("[Work unit 'markers'"), "the restart sends the unit's authorized task");
-          assert.ok(lastUser(restartRequest).includes("record was lost"), "the model is told the earlier record was lost");
+          assert.match(allText(restartRequest), /(?:earlier task history was unusable|explicitly restarted after recovery)/, "the restart prompt warns that earlier workspace history may be incomplete");
+          assert.match(allText(restartRequest), /remain unverified/i, "the restart prompt preserves the verification warning");
           assert.equal(restartRequest.messages[0].role, "system");
           assert.equal(unitOf(op, "markers").status, c.restartedOutcome, `after restart: ${unitOf(op, "markers").blocked?.reason ?? "complete"}`);
-          if (c.restartedOutcome === "BLOCKED") assert.match(unitOf(op, "markers").blocked!.reason, /UNVERIFIED/);
+          assert.match(unitOf(op, "markers").blocked!.reason, /UNVERIFIED/);
+          assert.ok(gw.requests.slice(before).some((request) => toolResults(request) > 0), "the explicitly restarted authorized task actually continues");
         } finally {
           rig.close();
           await gw.close();
@@ -986,7 +1209,7 @@ describe("V1: a unit whose durable history is missing or inconsistent is blocked
     });
   }
 
-  test("a compacted conversation that kept only an earlier resume prompt still resumes (it restates the authorized task)", async () => {
+  test("a compacted recovered conversation continues its task but cannot claim verified completion", async () => {
     await withHome(async () => {
       const gw = await gateway(reader);
       const repo = makeRepo(files);
@@ -1002,8 +1225,13 @@ describe("V1: a unit whose durable history is missing or inconsistent is blocked
           ],
         }));
         const more = decisionOf(op, "markers").options.find((o) => o.label === "continue with more steps")!;
+        const before = gw.requests.length;
         op = await rig.decide(decisionOf(op, "markers").id, more.id);
-        assert.equal(unitOf(op, "markers").status, "COMPLETE", `${unitOf(op, "markers").blocked?.reason}`);
+        const resumedRequest = gw.requests[before];
+        assert.ok(resumedRequest, "the recovered unit continues to the model");
+        assert.ok(lastUser(resumedRequest).includes(UNIT.prompt), "the authorized task remains explicit");
+        assert.equal(unitOf(op, "markers").status, "BLOCKED", `${unitOf(op, "markers").blocked?.reason}`);
+        assert.match(unitOf(op, "markers").blocked!.reason, /UNVERIFIED/);
       } finally {
         rig.close();
         await gw.close();
@@ -1025,7 +1253,7 @@ describe("V1: a unit whose durable history is missing or inconsistent is blocked
         op = await rig.decide(decisionOf(op, "markers").id, more.id);
         const first = gw.requests[before];
         assert.ok(first, `no request: ${unitOf(op, "markers").blocked?.reason}`);
-        assert.ok(lastUser(first).startsWith("[Work unit 'markers'") && !lastUser(first).includes("record was lost"));
+        assert.ok(lastUser(first).startsWith("[Work unit 'markers'") && !lastUser(first).includes("earlier task history was unusable"));
         assert.doesNotMatch(unitOf(op, "markers").blocked?.reason ?? "", /unusable/);
       } finally {
         rig.close();
@@ -1035,7 +1263,7 @@ describe("V1: a unit whose durable history is missing or inconsistent is blocked
     });
   });
 
-  test("an operator revision continues the unit's recorded conversation (the history predates the revision)", async () => {
+  test("an operator revision continues the recorded conversation but keeps recovered changes unverified", async () => {
     await withHome(async () => {
       const gw = await gateway(reader);
       const repo = makeRepo(files);
@@ -1050,7 +1278,8 @@ describe("V1: a unit whose durable history is missing or inconsistent is blocked
         assert.ok(first, `no request: ${unitOf(op, "markers").blocked?.reason}`);
         assert.ok(resumed(first) && lastUser(first).includes("REVISED-NOTE"), "the revised task is restated on resume");
         assert.equal(toolResults(first), 2, "the earlier progress was kept");
-        assert.equal(unitOf(op, "markers").status, "COMPLETE", `${unitOf(op, "markers").blocked?.reason}`);
+        assert.equal(unitOf(op, "markers").status, "BLOCKED", `${unitOf(op, "markers").blocked?.reason}`);
+        assert.match(unitOf(op, "markers").blocked!.reason, /UNVERIFIED/);
       } finally {
         rig.close();
         await gw.close();
@@ -1059,7 +1288,7 @@ describe("V1: a unit whose durable history is missing or inconsistent is blocked
     });
   });
 
-  test("a resumed unit is told its authorized task again and continues from its recorded conversation", async () => {
+  test("a resumed unit is told its authorized task again and remains unverified after continuation", async () => {
     await withHome(async () => {
       const gw = await gateway((b) => (!allText(b).includes("OBJ-READ-ABC") ? done("nothing to do") : resumed(b) ? (toolResults(b) < 3 ? read("b.txt") : done("MARK-a MARK-b")) : read("a.txt")));
       const repo = makeRepo(files);
@@ -1074,7 +1303,8 @@ describe("V1: a unit whose durable history is missing or inconsistent is blocked
         assert.ok(first.messages.some((m: any) => m.role === "user" && String(m.content).startsWith("[Work unit 'markers'")), "the original task is in the recovered history");
         assert.equal(toolResults(first), 2, "earlier tool results are recovered");
         assert.ok(lastUser(first).includes(UNIT.prompt), "the resume prompt restates the authorized task");
-        assert.equal(unitOf(op, "markers").status, "COMPLETE");
+        assert.equal(unitOf(op, "markers").status, "BLOCKED");
+        assert.match(unitOf(op, "markers").blocked!.reason, /UNVERIFIED/);
       } finally {
         rig.close();
         await gw.close();
@@ -1140,7 +1370,7 @@ const opState = (out: string): DurableOperationState => JSON.parse(out.slice(out
 
 describe("V1: process death mid-turn, then restart and resume", () => {
   for (const ids of ["low-entropy", "high-entropy"] as const) {
-    test(`killed between tools (${ids} tool-call ids): the resumed unit holds its task and earlier results, and finishes it`, async () => {
+    test(`killed between tools (${ids} tool-call ids): resumed unit preserves task/results but cannot claim verified completion`, async () => {
       const home = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-cont-kill-"));
       let phase: "first" | "resume" = "first";
       const gw = await gateway((b) => {
@@ -1169,7 +1399,8 @@ describe("V1: process death mid-turn, then restart and resume", () => {
         assert.match(allText(first), /MARK-a[\s\S]*MARK-b/, "earlier tool results were recovered");
         assert.ok(gw.requests.slice(before).every((b) => allText(b).includes("OBJ-READ-ABC")), "no request ran without the authorized task");
         const op = opState(resumedRun.out);
-        assert.equal(op.status, "COMPLETE");
+        assert.equal(op.status, "BLOCKED");
+        assert.match(unitOf(op, "markers").blocked!.reason, /UNVERIFIED/);
         assert.ok(gw.requests.slice(before).some((b) => allText(b).includes("MARK-c")), "the remaining read ran after the restart");
       } finally {
         run?.kill();

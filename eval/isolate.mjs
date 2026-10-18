@@ -4,6 +4,7 @@ import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
+import { containmentProblem, spawnContained } from "./resources.mjs";
 
 const BWRAP = "/usr/bin/bwrap";
 const SYSTEM_BINARIES = ["/usr/bin", "/usr/lib", "/usr/lib64", "/usr/share", "/lib", "/lib64"];
@@ -108,6 +109,10 @@ export function agentSandboxArgv({ cwd, home, proxyDirectory, readOnlyPaths = []
   if (!sandboxAvailable()) throw new Error("Bubblewrap is unavailable; refusing candidate execution");
   const mountProblem = runtimeMountProblem(readOnlyPaths, allowedRuntimeRoots, runtimeExecutablePaths);
   if (mountProblem) throw new Error(mountProblem);
+  const nodeRuntime = fs.realpathSync(process.execPath);
+  if (!fs.statSync(nodeRuntime).isFile() || (fs.statSync(nodeRuntime).mode & 0o111) === 0) {
+    throw new Error("trusted evaluator Node.js runtime is unavailable");
+  }
   const workspace = fs.realpathSync(cwd);
   const args = ["--unshare-user", "--unshare-pid", "--unshare-net", "--disable-userns", "--die-with-parent", "--new-session", "--proc", "/proc", "--dev", "/dev", "--tmpfs", "/tmp"];
   for (const source of SYSTEM_BINARIES) {
@@ -136,14 +141,15 @@ export function agentSandboxArgv({ cwd, home, proxyDirectory, readOnlyPaths = []
     args.push("--ro-bind", resolved, resolved);
   }
   addTargetParents("/runner/agent_sandbox.mjs");
+  args.push("--ro-bind", nodeRuntime, "/runner/node");
   args.push("--ro-bind", fs.realpathSync(supervisorPath), "/runner/agent_sandbox.mjs");
   args.push("--chdir", "/workspace", "--clearenv", "--setenv", "PATH", "/usr/bin:/bin", "--setenv", "HOME", "/home/eval", "--setenv", "CI", "1", "--");
-  args.push("/usr/bin/node", "/runner/agent_sandbox.mjs");
+  args.push("/runner/node", "/runner/agent_sandbox.mjs");
   return { cmd: BWRAP, argv: args };
 }
 
 /** Run a fixed executable probe without exposing the host filesystem, environment, or network. */
-export function isolatedProcessArgv({ cwd, command, argv = [], readOnlyPaths = [], allowedRoots = [], allowedFiles = [], timeoutMs = 5000 }) {
+export function isolatedProcessArgv({ cwd, command, argv = [], readOnlyPaths = [], allowedRoots = [], allowedFiles = [], timeoutMs = 5000, workspaceReadOnly = false }) {
   if (!sandboxAvailable()) throw new Error("Bubblewrap is unavailable; refusing executable probe");
   const mountProblem = runtimeMountProblem(readOnlyPaths, allowedRoots, allowedFiles);
   if (mountProblem) throw new Error(mountProblem);
@@ -155,7 +161,7 @@ export function isolatedProcessArgv({ cwd, command, argv = [], readOnlyPaths = [
   for (const source of ["/etc/ld.so.cache", "/etc/passwd", "/etc/group", "/etc/nsswitch.conf", "/etc/localtime"]) {
     try { if (fs.statSync(source).isFile()) args.push("--ro-bind", source, source); } catch {}
   }
-  args.push("--bind", workspace, "/workspace", "--tmpfs", "/home", "--dir", "/home/eval", "--tmpfs", "/run", "--symlink", "usr/bin", "/bin");
+  args.push(workspaceReadOnly ? "--ro-bind" : "--bind", workspace, "/workspace", "--tmpfs", "/home", "--dir", "/home/eval", "--tmpfs", "/run", "--symlink", "usr/bin", "/bin");
   const madeDirs = new Set(["/", "/usr", "/usr/bin", "/usr/lib", "/usr/lib64", "/usr/share", "/lib", "/lib64", "/bin", "/etc", "/workspace", "/home", "/home/eval", "/run"]);
   const addParents = (target) => {
     let current = "";
@@ -171,13 +177,17 @@ export function isolatedProcessArgv({ cwd, command, argv = [], readOnlyPaths = [
     addParents(resolved);
     args.push("--ro-bind", resolved, resolved);
   }
+  const resolvedCommand = fs.realpathSync(command);
+  if (!SYSTEM_BINARIES.some((root) => resolvedCommand === root || resolvedCommand.startsWith(`${root}${path.sep}`)) && !readOnlyPaths.some((item) => fs.realpathSync(item) === resolvedCommand)) {
+    throw new Error("isolated executable must be included in the explicit read-only runtime paths");
+  }
   args.push("--chdir", "/workspace", "--clearenv", "--setenv", "PATH", "/usr/bin:/bin", "--setenv", "HOME", "/home/eval", "--setenv", "LANG", "C.UTF-8", "--");
-  args.push(fs.realpathSync(command), ...argv);
+  args.push(resolvedCommand, ...argv);
   return { cmd: BWRAP, argv: args, timeoutMs };
 }
 
-export function runIsolatedProcess(spec, { outputLimit = 16_384 } = {}) {
-  const child = spawn(spec.cmd, spec.argv, { cwd: "/", env: {}, detached: true, stdio: ["ignore", "pipe", "pipe"] });
+export function runIsolatedProcess(spec, { outputLimit = 16_384, input = "", resources = null } = {}) {
+  const { child, containment } = spawnContained(spec, resources, { cwd: "/", env: {}, detached: true, stdio: ["pipe", "pipe", "pipe"] });
   return new Promise((resolve) => {
     let stdout = "";
     let stderr = "";
@@ -185,7 +195,8 @@ export function runIsolatedProcess(spec, { outputLimit = 16_384 } = {}) {
     let timedOut = false;
     let overflow = false;
     let settled = false;
-    const killGroup = (signal) => { try { process.kill(-child.pid, signal); } catch {} };
+    // Contained runs are stopped through their cgroup, so the supervisor survives to prove cleanup.
+    const killGroup = (signal) => { if (containment) containment.kill(); else { try { process.kill(-child.pid, signal); } catch {} } };
     const collect = (target, chunk) => {
       bytes += chunk.length;
       if (bytes > outputLimit) { overflow = true; killGroup("SIGKILL"); return; }
@@ -194,6 +205,8 @@ export function runIsolatedProcess(spec, { outputLimit = 16_384 } = {}) {
     };
     child.stdout.on("data", (chunk) => collect("stdout", chunk));
     child.stderr.on("data", (chunk) => collect("stderr", chunk));
+    child.stdin.on("error", () => {}); // A timed-out or rejecting child may close stdin before the bounded input is sent.
+    child.stdin.end(input);
     const timer = setTimeout(() => { timedOut = true; killGroup("SIGTERM"); setTimeout(() => killGroup("SIGKILL"), 250).unref(); }, spec.timeoutMs);
     child.on("error", (error) => {
       if (settled) return;
@@ -201,12 +214,12 @@ export function runIsolatedProcess(spec, { outputLimit = 16_384 } = {}) {
       clearTimeout(timer);
       resolve({ status: null, stdout, stderr, error: error.message, timedOut, overflow });
     });
-    child.on("close", (status, signal) => {
+    child.on("close", async (status, signal) => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
       killGroup("SIGKILL");
-      resolve({ status, signal, stdout, stderr, timedOut, overflow });
+      resolve({ status, signal, stdout, stderr, timedOut, overflow, ...(await containmentResult(containment)) });
     });
   });
 }
@@ -228,10 +241,10 @@ export function grantRunAsAccess(user, targets) {
 }
 
 /** Execute a task-controlled shell command in a no-network, clear-environment namespace. */
-export function runIsolated(command, { cwd, home = false, timeoutSec = 300, outputLimit = 1_000_000 } = {}) {
+export function runIsolated(command, { cwd, home = false, timeoutSec = 300, outputLimit = 1_000_000, resources = null } = {}) {
   const spec = isolatedArgv({ cwd, home, command, timeoutSec });
   return new Promise((resolve) => {
-    const child = spawn(spec.cmd, spec.argv, { cwd: "/", env: {}, detached: true, stdio: ["ignore", "pipe", "pipe"] });
+    const { child, containment } = spawnContained(spec, resources, { cwd: "/", env: {}, detached: true, stdio: ["ignore", "pipe", "pipe"] });
     let stdout = "";
     let stderr = "";
     let bytes = 0;
@@ -239,6 +252,7 @@ export function runIsolated(command, { cwd, home = false, timeoutSec = 300, outp
     let overflow = false;
     let settled = false;
     const killTree = (signal) => {
+      if (containment) { containment.kill(); return; }
       try { process.kill(-child.pid, signal); } catch {}
     };
     const append = (target, chunk) => {
@@ -264,14 +278,21 @@ export function runIsolated(command, { cwd, home = false, timeoutSec = 300, outp
       clearTimeout(timer);
       resolve({ status: null, stdout, stderr, error: error.message, timedOut, overflow });
     });
-    child.on("close", (status, signal) => {
+    child.on("close", async (status, signal) => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
       killTree("SIGKILL");
-      resolve({ status, signal, stdout, stderr, timedOut, overflow });
+      resolve({ status, signal, stdout, stderr, timedOut, overflow, ...(await containmentResult(containment)) });
     });
   });
+}
+
+/** `{ resources, containmentProblem }` for a contained execution; nothing for an uncontained one. */
+async function containmentResult(containment) {
+  if (!containment) return {};
+  const final = await containment.final;
+  return { resources: final, containmentProblem: containmentProblem(final) };
 }
 
 /** Resolve task-controlled paths without permitting traversal or symlink redirection. */

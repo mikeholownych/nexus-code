@@ -99,7 +99,11 @@ const done = (summary = "done"): Reply => ({ tools: [{ name: "task_completed", a
 function makeRepo(files: Record<string, string> = {}): string {
   const repo = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-inv-"));
   fs.writeFileSync(path.join(repo, "notes.txt"), "the answer is 42\n");
-  for (const [name, content] of Object.entries(files)) fs.writeFileSync(path.join(repo, name), content);
+  for (const [name, content] of Object.entries(files)) {
+    const fullPath = path.join(repo, name);
+    fs.mkdirSync(path.dirname(fullPath), { recursive: true });
+    fs.writeFileSync(fullPath, content);
+  }
   execSync("git init -q && git config user.name t && git config user.email t@t.invalid && git add . && git commit -qm base", { cwd: repo, stdio: "ignore" });
   return repo;
 }
@@ -175,9 +179,14 @@ async function operation(config: HarnessConfig, gw: Gw, units: WorkUnitSpec[]) {
 /** Model behaviours keyed by how many tool results the request already carries (one fresh conversation each). */
 /** A verifier that checks the deliverable (impl.txt) and reports the test it ran. */
 const COVERING = 'test -s impl.txt && echo "✔ impl.txt has content" && echo "ℹ tests 1"';
+const VERIFIED_FIXTURE_FILES = {
+  "test/impl.test.mjs": 'import test from "node:test";\nimport assert from "node:assert/strict";\nimport { value } from "../impl.mjs";\ntest("implementation deliverable", () => assert.equal(value, "updated"));\n',
+};
+const VERIFIED_FIXTURE_VERIFIER = "node --test test/impl.test.mjs && echo 'ℹ tests 1'";
+const writeImplementation = (): Reply => ({ tools: [{ name: "write_file", args: { path: "impl.mjs", content: 'export const value = "updated";\n' } }] });
 
-const BEHAVIOURS: Record<string, { script: (r: Req) => Reply; verifier?: string; files?: Record<string, string>; succeeds: boolean; outcome: string; reason?: string }> = {
-  verified: { script: (r) => [write(), done()][toolResults(r.body)] ?? { text: "done" }, verifier: COVERING, succeeds: true, outcome: "VERIFIED" },
+const BEHAVIOURS: Record<string, { script: (r: Req) => Reply; verifier?: string; files?: Record<string, string>; deliverables?: string[]; succeeds: boolean; outcome: string; reason?: string }> = {
+  verified: { script: (r) => [writeImplementation(), done()][toolResults(r.body)] ?? { text: "done" }, verifier: VERIFIED_FIXTURE_VERIFIER, files: VERIFIED_FIXTURE_FILES, deliverables: ["impl.mjs"], succeeds: true, outcome: "VERIFIED" },
   // A discovered suite (not the operator's configured check) that passes without running a test of the change.
   "discovered suite passing without testing the change (REGRESSION_FREE)": { script: (r) => [write(), done()][toolResults(r.body)] ?? { text: "done" }, files: { Makefile: "test:\n\t@echo 'ℹ tests 1\\nℹ pass 1'\n" }, succeeds: false, outcome: "REGRESSION_FREE", reason: "REGRESSION_FREE" },
   "read-only (NOT_REQUIRED)": { script: (r) => [read("notes.txt"), done("42")][toolResults(r.body)] ?? { text: "done" }, succeeds: true, outcome: "NOT_REQUIRED" },
@@ -193,10 +202,17 @@ describe("I1: one completion predicate for every execution path", () => {
         const gw = await gateway(b.script);
         const repo = makeRepo(b.files);
         try {
-          const config = cfg(gw, repo, b.verifier ? { authoritativeVerifierCommand: b.verifier } : {});
+          const config = cfg(gw, repo, b.verifier ? {
+            authoritativeVerifierCommand: b.verifier,
+            ...(b.deliverables ? { trustedDeliverableFiles: b.deliverables } : {}),
+          } : {});
           const { turn, agent } = await directTurn(config, "Write impl.txt, then call task_completed.");
           agent.shutdown();
           assert.equal(turn.outcome, b.outcome);
+          if (b.outcome === "VERIFIED") {
+            assert.equal(turn.verification?.hasExecutedTests, true, "the operator-configured verifier ran the frozen baseline test");
+            assert.equal(turn.verification?.isDeliverableBound, true, "the baseline test imported the exact declared product path");
+          }
           if (b.reason) assert.equal(turn.reason, b.reason);
           assert.equal(turnSucceeded(turn), b.succeeds);
           assert.equal(exitCodeForTurn(turn) === 0, b.succeeds);
@@ -295,10 +311,10 @@ describe("I1: spawn_subagent cannot manufacture success", () => {
 
   test("a child report over unverified changes is not completion", async () => {
     await withHome(async () => {
-      const gw = await gateway(delegating((r) => (toolResults(r.body) === 0 ? write() : { text: "I wrote impl.txt." })));
-      const repo = makeRepo();
+      const gw = await gateway(delegating((r) => (toolResults(r.body) === 0 ? writeImplementation() : { text: "I wrote impl.mjs." })));
+      const repo = makeRepo(VERIFIED_FIXTURE_FILES);
       try {
-        const { turn, agent } = await directTurn(cfg(gw, repo, { authoritativeVerifierCommand: COVERING }), "delegate the change");
+        const { turn, agent } = await directTurn(cfg(gw, repo, { authoritativeVerifierCommand: VERIFIED_FIXTURE_VERIFIER, trustedDeliverableFiles: ["impl.mjs"] }), "delegate the change");
         try {
           assert.match(delegationResult(agent), /Subagent did not complete: .*outcome=UNVERIFIED \(VERIFICATION_NOT_RUN\)/);
           assert.equal(turn.outcome, "VERIFIED", "the parent verified the child's change itself before completing");
@@ -314,14 +330,14 @@ describe("I1: spawn_subagent cannot manufacture success", () => {
 
   test("a child's change is the parent's change: the parent cannot finish as NOT_REQUIRED", async () => {
     await withHome(async () => {
-      const gw = await gateway(delegating((r) => [write(), done("sub verified")][toolResults(r.body)] ?? { text: "x" }));
-      const repo = makeRepo();
+      const gw = await gateway(delegating((r) => [writeImplementation(), done("sub verified")][toolResults(r.body)] ?? { text: "x" }));
+      const repo = makeRepo(VERIFIED_FIXTURE_FILES);
       try {
-        const { turn, agent } = await directTurn(cfg(gw, repo, { authoritativeVerifierCommand: COVERING }), "delegate the change");
+        const { turn, agent } = await directTurn(cfg(gw, repo, { authoritativeVerifierCommand: VERIFIED_FIXTURE_VERIFIER, trustedDeliverableFiles: ["impl.mjs"] }), "delegate the change");
         try {
           assert.doesNotMatch(delegationResult(agent), /^Error/, "a verified child completes");
           assert.equal(turn.outcome, "VERIFIED");
-          assert.ok(turn.verification?.command === COVERING, "verified by the parent's own verifier run");
+          assert.ok(turn.verification?.command === VERIFIED_FIXTURE_VERIFIER, "verified by the parent's own verifier run");
         } finally {
           agent.shutdown();
         }
@@ -453,8 +469,9 @@ describe("G: compaction never lets a recalled result satisfy completion", () => 
           await second.recoverFromTaskState(taskId);
           const t2 = await muted(() => second.runTurn("[Work unit resumed] Continue the unit and call task_completed."));
           assert.ok(reread.length >= 1, "the recovered record announced removed output and the model re-read it");
-          assert.equal(t2.outcome, "NOT_REQUIRED", `${t2.outcome} ${t2.reason ?? ""} ${t2.detail ?? ""} (re-read: ${reread.join(", ")})`);
-          assert.equal(turnSucceeded(t2), true);
+          assert.equal(t2.outcome, "UNVERIFIED", `${t2.outcome} ${t2.reason ?? ""} ${t2.detail ?? ""} (re-read: ${reread.join(", ")})`);
+          assert.equal(t2.reason, "NO_APPLICABLE_VERIFIER");
+          assert.equal(turnSucceeded(t2), false, "re-reading content cannot authenticate a recovered verification baseline");
           assert.equal(String(gw.requests.at(-1)!.body && visibleMarkers(gw.requests.at(-1)!.body).join(", ")), MARKERS.join(", "), "every marker is genuinely in context again");
         } finally {
           second.shutdown();

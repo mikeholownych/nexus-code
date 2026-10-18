@@ -4,19 +4,45 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: 'Version tag to package and compare (e.g. v1.0.0-rc.1)'
+        description: 'RC tag to package and compare (e.g. v1.0.0-rc.1)'
         required: true
         default: 'v1.0.0-rc.1'
+      commit:
+        description: 'Full 40-hex commit the tag must resolve to (immutable source identity)'
+        required: true
 
 permissions:
   contents: read
 
 jobs:
-  build-ubuntu-22:
-    runs-on: ubuntu-22.04
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [ubuntu-22.04, ubuntu-24.04]
+    runs-on: ${{ matrix.runner }}
+    env:
+      VERSION: ${{ inputs.version }}
+      COMMIT: ${{ inputs.commit }}
     steps:
+      - name: Validate requested source identity
+        run: |
+          [[ "$VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-rc\.[0-9]+)?$ ]] || { echo "version must be vX.Y.Z or vX.Y.Z-rc.N" >&2; exit 1; }
+          [[ "$COMMIT" =~ ^[0-9a-f]{40}$ ]] || { echo "commit must be a full 40-hex SHA" >&2; exit 1; }
+          # The workflow definition must be the RC's own: dispatch it on the tag, not a branch.
+          test "$GITHUB_REF" = "refs/tags/$VERSION" || { echo "dispatch this workflow on refs/tags/$VERSION (got $GITHUB_REF)" >&2; exit 1; }
+          test "$GITHUB_WORKFLOW_SHA" = "$COMMIT" || { echo "workflow file is from $GITHUB_WORKFLOW_SHA, not $COMMIT" >&2; exit 1; }
       - uses: actions/checkout@v4
-      - run: sudo apt-get update && sudo apt-get install --yes make bubblewrap
+        with:
+          ref: refs/tags/${{ inputs.version }}
+          persist-credentials: false
+      - name: Require the tag, HEAD and a clean tree to be the requested commit
+        run: |
+          test "$(git rev-parse "refs/tags/$VERSION^{commit}")" = "$COMMIT" || { echo "tag $VERSION does not resolve to $COMMIT" >&2; exit 1; }
+          test "$(git rev-parse HEAD)" = "$COMMIT" || { echo "checked-out HEAD is not $COMMIT" >&2; exit 1; }
+          test -z "$(git status --porcelain --untracked-files=all)" || { echo "checkout is not clean" >&2; exit 1; }
+          node scripts/sync-version.mjs --check --tag "$VERSION"
+      - run: sudo apt-get update && sudo apt-get install --yes make
       - uses: actions/setup-node@v4
         with:
           node-version: 20
@@ -24,6 +50,11 @@ jobs:
           cache-dependency-path: cli/package-lock.json
       - name: Install cargo tools
         run: |
+          CARGO_HOME="${CARGO_HOME:-$HOME/.cargo}"
+          export CARGO_HOME
+          mkdir -p "$CARGO_HOME/bin"
+          echo "$CARGO_HOME/bin" >> "$GITHUB_PATH"
+          export PATH="$CARGO_HOME/bin:$PATH"
           cargo install cargo-audit --locked --version 0.22.2
           curl -fsSL https://github.com/EmbarkStudios/cargo-deny/releases/download/0.20.2/cargo-deny-0.20.2-x86_64-unknown-linux-musl.tar.gz | tar -xz -C "$RUNNER_TEMP"
           mv "$RUNNER_TEMP/cargo-deny-0.20.2-x86_64-unknown-linux-musl/cargo-deny" "$CARGO_HOME/bin/"
@@ -34,61 +65,51 @@ jobs:
           curl -fsSL https://github.com/CycloneDX/cyclonedx-cli/releases/download/v0.33.1/cyclonedx-linux-x64 -o "$CARGO_HOME/bin/cyclonedx"
           chmod +x "$CARGO_HOME/bin/cyclonedx"
       - run: npm ci --prefix cli
-      - run: bash scripts/package-linux.sh "${{ inputs.version }}" "$RUNNER_TEMP/dist"
+      - run: bash scripts/package-linux.sh "$VERSION" "$RUNNER_TEMP/dist"
+      - name: Record source and toolchain identity
+        run: |
+          mkdir -p "$RUNNER_TEMP/identity"
+          node scripts/repro-identity.mjs record "$VERSION" "$RUNNER_TEMP/dist" "$RUNNER_TEMP/identity/source-identity.json" "$RUNNER_LABEL"
+          cat "$RUNNER_TEMP/identity/source-identity.json"
+        env:
+          RUNNER_LABEL: ${{ matrix.runner }}
       - uses: actions/upload-artifact@v4
         with:
-          name: dist-ubuntu-22
+          name: dist-${{ matrix.runner }}
           path: ${{ runner.temp }}/dist/*
           if-no-files-found: error
-
-  build-ubuntu-24:
-    runs-on: ubuntu-24.04
-    steps:
-      - uses: actions/checkout@v4
-      - run: sudo apt-get update && sudo apt-get install --yes make bubblewrap
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 20
-          cache: npm
-          cache-dependency-path: cli/package-lock.json
-      - name: Install cargo tools
-        run: |
-          cargo install cargo-audit --locked --version 0.22.2
-          curl -fsSL https://github.com/EmbarkStudios/cargo-deny/releases/download/0.20.2/cargo-deny-0.20.2-x86_64-unknown-linux-musl.tar.gz | tar -xz -C "$RUNNER_TEMP"
-          mv "$RUNNER_TEMP/cargo-deny-0.20.2-x86_64-unknown-linux-musl/cargo-deny" "$CARGO_HOME/bin/"
-          curl -fsSL https://github.com/EmbarkStudios/cargo-about/releases/download/0.9.2/cargo-about-0.9.2-x86_64-unknown-linux-musl.tar.gz | tar -xz -C "$RUNNER_TEMP"
-          mv "$RUNNER_TEMP/cargo-about-0.9.2-x86_64-unknown-linux-musl/cargo-about" "$CARGO_HOME/bin/"
-          curl -fsSL https://github.com/CycloneDX/cyclonedx-rust-cargo/releases/download/cargo-cyclonedx-0.5.9/cargo-cyclonedx-x86_64-unknown-linux-musl.tar.xz | tar -xJ -C "$RUNNER_TEMP"
-          mv "$RUNNER_TEMP/cargo-cyclonedx-x86_64-unknown-linux-musl/cargo-cyclonedx" "$CARGO_HOME/bin/"
-          curl -fsSL https://github.com/CycloneDX/cyclonedx-cli/releases/download/v0.33.1/cyclonedx-linux-x64 -o "$CARGO_HOME/bin/cyclonedx"
-          chmod +x "$CARGO_HOME/bin/cyclonedx"
-      - run: npm ci --prefix cli
-      - run: bash scripts/package-linux.sh "${{ inputs.version }}" "$RUNNER_TEMP/dist"
       - uses: actions/upload-artifact@v4
         with:
-          name: dist-ubuntu-24
-          path: ${{ runner.temp }}/dist/*
+          name: identity-${{ matrix.runner }}
+          path: ${{ runner.temp }}/identity/source-identity.json
           if-no-files-found: error
 
   compare:
-    needs: [build-ubuntu-22, build-ubuntu-24]
+    needs: build
     runs-on: ubuntu-22.04
+    env:
+      VERSION: ${{ inputs.version }}
+      COMMIT: ${{ inputs.commit }}
     steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.commit }}
+          persist-credentials: false
       - uses: actions/download-artifact@v4
         with:
-          name: dist-ubuntu-22
-          path: /tmp/dist-ubuntu-22
-      - uses: actions/download-artifact@v4
-        with:
-          name: dist-ubuntu-24
-          path: /tmp/dist-ubuntu-24
+          path: /tmp/repro
       - name: Compare cross-runner packages (ACC-SUP-08, REQ-REL-114)
         run: |
-          VERSION="${{ inputs.version }}"
+          A=/tmp/repro/dist-ubuntu-22.04
+          B=/tmp/repro/dist-ubuntu-24.04
           ARCHIVE="nexus-linux-x86_64-$VERSION.tar.gz"
-          cmp "/tmp/dist-ubuntu-22/$ARCHIVE" "/tmp/dist-ubuntu-24/$ARCHIVE"
-          cmp "/tmp/dist-ubuntu-22/SHA256SUMS" "/tmp/dist-ubuntu-24/SHA256SUMS"
-          cmp "/tmp/dist-ubuntu-22/THIRD_PARTY_NOTICES.txt" "/tmp/dist-ubuntu-24/THIRD_PARTY_NOTICES.txt"
-          cmp "/tmp/dist-ubuntu-22/sbom.cdx.json" "/tmp/dist-ubuntu-24/sbom.cdx.json"
-          cmp "/tmp/dist-ubuntu-22/install.sh" "/tmp/dist-ubuntu-24/install.sh"
-          echo "CROSS_RUNNER_REPRO_PASS: All artifacts byte-identical across ubuntu-22.04 and ubuntu-24.04."
+          for f in "$ARCHIVE" SHA256SUMS THIRD_PARTY_NOTICES.txt sbom.cdx.json install.sh; do cmp "$A/$f" "$B/$f"; done
+          diff <(ls "$A") <(ls "$B")
+          node scripts/repro-identity.mjs compare "$VERSION" "$COMMIT" /tmp/repro/repro-evidence.json /tmp/repro/identity-ubuntu-22.04/source-identity.json /tmp/repro/identity-ubuntu-24.04/source-identity.json
+          cat /tmp/repro/repro-evidence.json
+          echo "CROSS_RUNNER_REPRO_PASS: $VERSION@$COMMIT byte-identical across ubuntu-22.04 and ubuntu-24.04."
+      - uses: actions/upload-artifact@v4
+        with:
+          name: repro-evidence
+          path: /tmp/repro/repro-evidence.json
+          if-no-files-found: error

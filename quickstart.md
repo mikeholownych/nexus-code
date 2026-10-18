@@ -66,7 +66,9 @@ nexus trust .
 
 Once trusted, Nexus runs in `auto` posture. To force review mode regardless of trust, pass `--approve`. To run autonomously in CI or scripts without trusting the workspace permanently, pass `--yes` (or `--mode auto`, or set `NEXUS_APPROVAL_MODE=auto`).
 
-Nexus reports `VERIFIED` only when its selected verifier passes. `UNVERIFIED`, `BLOCKED`, and `LIMIT_REACHED` are distinct outcomes; a completed model response alone does not mean the work is correct.
+Nexus reports `VERIFIED` only when its selected verifier passes and the operator has declared the product files for that task before it starts. For example: `nexus run --deliverable-file src/math.ts "Fix the addition defect"`; repeat `--deliverable-file` for each expected product file. The scope must use literal workspace-relative paths and cannot name tests. A passing suite without a declared scope is regression evidence (`REGRESSION_FREE`), not proof that the requested product change was verified. `UNVERIFIED`, `BLOCKED`, and `LIMIT_REACHED` remain distinct outcomes; a completed model response alone does not mean the work is correct.
+
+Resuming a saved session or durable task keeps verification pending because local session and task files do not authenticate their own history. No generic verifier is currently trusted to clear that obligation after recovery: even an external test runner can execute workspace-controlled tests. A resumed task may continue, but it remains `UNVERIFIED`. Before starting a new task to establish a new baseline, the operator must review the workspace state, including ignored and untracked files and verifier/test definitions, and restore or remove any state that is not trusted. A clean Git status alone does not establish that ignored files or external acceptance inputs are trustworthy. A future verifier could replace this manual boundary only after its implementation and acceptance inputs are independently bound outside candidate control. A current-invocation `--authoritative-verifier` alone does not clear recovered obligations.
 
 ## Upgrade and remove
 

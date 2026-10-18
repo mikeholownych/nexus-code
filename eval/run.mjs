@@ -3,7 +3,7 @@
 // Each run gets a fresh workspace (the task's repository at its pinned commit, or its fixture), the agent runs with the
 // task's budgets and a wall-clock timeout, then the task's hidden tests (never present while the agent runs) and its
 // regression command are run in that workspace. Nothing is scored here: eval/score.mjs reads the JSON lines.
-import { spawnSync, spawn } from "node:child_process";
+import { spawnSync } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
@@ -12,6 +12,9 @@ import { fileURLToPath } from "node:url";
 import { startModelProxy } from "./model_proxy.mjs";
 import { asUser, corpusManifestProblem, corpusTaskRows, fetchModelEntry, hiddenTestIsolationProblem, modelFingerprint, nexusContextLimitArgs, nexusLimitsProblem, qualificationBudgetProblem, taskTreeDigest, validateTask } from "./validate.mjs";
 import { agentSandboxArgv, assertNoSymlinks, confinedPath, grantRunAsAccess, isolatedProcessArgv, runIsolated, runIsolatedProcess, sandboxAvailable } from "./isolate.mjs";
+import { runBlackBoxOracle } from "./oracle.mjs";
+import { stageRepoWorkspace } from "./workspace.mjs";
+import { containmentProblem, resourceProbeProblem, spawnContained } from "./resources.mjs";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const args = parseArgs(process.argv.slice(2));
@@ -85,6 +88,12 @@ const problems = taskRecords.flatMap(({ id, dir, task }) => {
 });
 const isolation = hiddenTestIsolationProblem(config, tasksDir);
 if (isolation) problems.push(isolation);
+// Qualification proves the resource contract inside hiddenTestIsolationProblem; a development config may opt in.
+if (config.resources !== undefined && config.qualification !== true) {
+  const resourceProblem = resourceProbeProblem(config.resources);
+  if (resourceProblem) problems.push(resourceProblem);
+}
+if (config.resources !== undefined && args.keep) problems.push("--keep would accumulate run workspaces on the size-capped resources.workspaceRoot");
 if (config.qualification === true) {
   const corpusProblem = corpusManifestProblem(config, tasksDir, tasks, corpusTaskRows(taskSnapshots, tasks));
   if (corpusProblem) problems.push(corpusProblem);
@@ -147,8 +156,10 @@ for (let run = 1; run <= runs; run++) {
 }
 
 async function runOnce(task, run) {
-  const ws = fs.mkdtempSync(path.join(os.tmpdir(), `nexus-eval-${task.id}-`));
-  const home = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-eval-home-"));
+  // Under the resource contract these are on a tmpfs, so candidate writes count against the run's memory limit.
+  const scratch = config.resources?.workspaceRoot ?? os.tmpdir();
+  const ws = fs.mkdtempSync(path.join(scratch, `nexus-eval-${task.id}-`));
+  const home = fs.mkdtempSync(path.join(scratch, "nexus-eval-home-"));
   const budget = effectiveBudget(task, config);
   const base = { task: task.id, tier: task.tier, config: config.name, agent: config.agent ?? "nexus", agentVersion: agentIdentity.record, budget, run, harness: identity.string, model: config.model, startedAt: new Date().toISOString() };
   try {
@@ -186,10 +197,14 @@ async function runOnce(task, run) {
       fs.rmSync(proxyDir, { recursive: true, force: true });
     }
     const wallMs = Date.now() - started;
+    if (agent.containmentProblem) throw new Error(`candidate containment failed: ${agent.containmentProblem}`);
     const model = proxy ? proxy.stats() : null;
     const contaminated = treeDigest(task.dir) !== sourceBefore || `${agent.stdout}${agent.stderr}`.includes(tasksDir);
     const hidden = await runCheck(task, ws, task.hidden, true);
     const regression = task.regression ? await runCheck(task, ws, task.regression, false) : null;
+    for (const [phase, check] of [["hidden", hidden], ["regression", regression]]) {
+      if (check?.containmentProblem) throw new Error(`${phase} check containment failed: ${check.containmentProblem}`);
+    }
     const turn = agent.json?.turn ?? null;
     // Nexus reports a structured outcome; for the other agents a clean exit within the budget is their completion claim.
     const claimedComplete = turn
@@ -210,6 +225,7 @@ async function runOnce(task, run) {
       contaminated,
       tokens: agent.json?.tokenStats ?? null,
       model,
+      resources: config.resources ? { agent: agent.resources, hidden: hidden.resources ?? null, regression: regression?.resources ?? null } : null,
       logs: saveLogs(task, run, agent, hidden, regression),
     };
   } catch (err) {
@@ -235,11 +251,11 @@ async function prepareWorkspace(task, ws) {
     if (!fs.existsSync(cache)) sh("git", ["clone", "-q", "--no-checkout", task.repo.url, cache], ROOT);
     const object = `${task.repo.commit}^{commit}`;
     if (sh("git", ["-C", cache, "cat-file", "-e", object], ROOT, true) !== 0) sh("git", ["-C", cache, "fetch", "-q", "origin", task.repo.commit], ROOT);
-    sh("git", ["clone", "-q", "--shared", cache, ws], ROOT);
-    sh("git", ["-C", ws, "checkout", "-q", task.repo.commit], ROOT);
+    stageRepoWorkspace(cache, task.repo.commit, ws);
   } else throw new Error(`task ${task.id} has neither fixture nor repo`);
   for (const cmd of task.setup ?? []) {
-    const result = await runIsolated(cmd, { cwd: ws, home: true, timeoutSec: task.setupTimeoutSec ?? 300 });
+    const result = await runIsolated(cmd, { cwd: ws, home: true, timeoutSec: task.setupTimeoutSec ?? 300, resources: config.resources ?? null });
+    if (result.containmentProblem) throw new Error(`isolated setup containment failed for ${task.id}: ${result.containmentProblem}`);
     if (result.status !== 0 || result.timedOut || result.overflow) throw new Error(`isolated setup failed for ${task.id}: ${result.timedOut ? "timeout" : result.overflow ? "output limit" : `exit ${result.status}`}`);
   }
 }
@@ -315,14 +331,14 @@ async function resolveAgentIdentity(config) {
       timeoutMs: 5000,
     });
     const wrapped = config.runAs ? asUser(config.runAs, spec.cmd, spec.argv, {}) : spec;
-    probe = await runIsolatedProcess(wrapped, { outputLimit: 4096 });
+    probe = await runIsolatedProcess(wrapped, { outputLimit: 4096, resources: config.resources ?? null });
   } finally {
     fs.rmSync(probeWorkspace, { recursive: true, force: true });
   }
   const output = `${probe?.stdout ?? ""}${probe?.stderr ?? ""}`.trim();
   const version = output.split(/\r?\n/, 1)[0]?.trim().slice(0, 200) || null;
-  if (probe?.error || probe?.status !== 0 || probe?.timedOut || probe?.overflow || !version) {
-    const reason = probe?.error ?? (probe?.timedOut ? "timeout" : probe?.overflow ? "output limit exceeded" : `exit ${probe?.status ?? "unknown"}`);
+  if (probe?.containmentProblem || probe?.error || probe?.status !== 0 || probe?.timedOut || probe?.overflow || !version) {
+    const reason = probe?.containmentProblem ?? probe?.error ?? (probe?.timedOut ? "timeout" : probe?.overflow ? "output limit exceeded" : `exit ${probe?.status ?? "unknown"}`);
     return { record: null, problem: required ? `could not identify ${agent} version (${reason})` : null, command, argsPrefix };
   }
 
@@ -440,7 +456,7 @@ function runAgent(task, ws, home, budget, agentIdentity, proxyDirectory, localTo
   const sandbox = agentSandboxArgv({ cwd: ws, home, proxyDirectory, readOnlyPaths: sandboxRuntimePaths, allowedRuntimeRoots, runtimeExecutablePaths: [cmd, ...agentIdentity.argsPrefix], supervisorPath: path.join(ROOT, "eval/agent_sandbox.mjs") });
   const wrapped = config.runAs ? asUser(config.runAs, sandbox.cmd, sandbox.argv, {}) : sandbox;
   return new Promise((resolve) => {
-    const child = spawn(wrapped.cmd, wrapped.argv, { cwd: "/", env: {}, stdio: ["pipe", "pipe", "pipe"], detached: true });
+    const { child, containment } = spawnContained(wrapped, config.resources ?? null, { cwd: "/", env: {}, stdio: ["pipe", "pipe", "pipe"], detached: true });
     child.stdin.end(JSON.stringify({ command: cmd, argv, env }));
     let stdout = "";
     let stderr = "";
@@ -462,7 +478,9 @@ function runAgent(task, ws, home, budget, agentIdentity, proxyDirectory, localTo
     child.stdout.on("data", (c) => collect("stdout", c));
     child.stderr.on("data", (c) => collect("stderr", c));
     // The whole process group: agents start helpers (servers, shells) that must not outlive the run.
+    // Under the resource contract the cgroup is emptied instead, so the supervisor survives to report cleanup.
     const killGroup = (sig) => {
+      if (containment) return containment.kill();
       try {
         process.kill(-child.pid, sig);
       } catch {}
@@ -473,15 +491,32 @@ function runAgent(task, ws, home, budget, agentIdentity, proxyDirectory, localTo
       setTimeout(() => killGroup("SIGKILL"), 10_000).unref();
     }, (budget.minutes + 5) * 60_000);
     child.on("error", (err) => (stderr += `spawn error: ${err.message}\n`));
-    child.on("close", (code) => {
+    child.on("close", async (code) => {
       clearTimeout(timer);
       killGroup("SIGKILL");
-      resolve({ code, timedOut, outputExceeded, stdout, stderr, json: lastJson(stdout) });
+      const final = containment ? await containment.final : undefined;
+      resolve({ code, timedOut, outputExceeded, stdout, stderr, json: lastJson(stdout), ...(containment ? { resources: final, containmentProblem: containmentProblem(final) } : {}) });
     });
   });
 }
 
 function runCheck(task, ws, check, hidden) {
+  if (hidden && check.protocol === "blackbox-v1") {
+    return runBlackBoxOracle(task, ws, check, { resources: config.resources ?? null }).then((result) => ({
+      ...result,
+      status: result.pass ? 0 : 1,
+      output: JSON.stringify({
+        cases: result.cases,
+        failedCases: result.failedCases,
+        timeoutCases: result.timeoutCases,
+        outputLimitCases: result.outputLimitCases,
+        executionFailureCases: result.executionFailureCases,
+        invalidOutputCases: result.invalidOutputCases,
+        mismatchCases: result.mismatchCases,
+        outcome: result.outcome,
+      }),
+    }));
+  }
   if (hidden && check.dir) {
     const source = confinedPath(task.dir, check.dir);
     assertNoSymlinks(source);
@@ -489,8 +524,8 @@ function runCheck(task, ws, check, hidden) {
     const destination = confinedPath(ws, relativeTarget, { allowMissingLeaf: true });
     fs.cpSync(source, destination, { recursive: true, verbatimSymlinks: true });
   }
-  return runIsolated(check.command, { cwd: ws, home: true, timeoutSec: check.timeoutSec ?? 300, outputLimit: 1_000_000 })
-    .then((r) => ({ pass: r.status === 0 && !r.timedOut && !r.overflow, status: r.status, timedOut: r.timedOut, overflow: r.overflow, output: `${r.stdout}${r.stderr}`.slice(-20_000) }));
+  return runIsolated(check.command, { cwd: ws, home: true, timeoutSec: check.timeoutSec ?? 300, outputLimit: 1_000_000, resources: config.resources ?? null })
+    .then((r) => ({ pass: r.status === 0 && !r.timedOut && !r.overflow, status: r.status, timedOut: r.timedOut, overflow: r.overflow, output: `${r.stdout}${r.stderr}`.slice(-20_000), resources: r.resources ?? null, containmentProblem: r.containmentProblem ?? null }));
 }
 
 function saveLogs(task, run, agent, hidden, regression) {
@@ -521,7 +556,7 @@ function harnessIdentity() {
   const git = (...a) => spawnSync("git", a, { cwd: ROOT, encoding: "utf8" }).stdout.trim();
   const commit = git("rev-parse", "HEAD");
   const dirty = Boolean(git("status", "--porcelain", "--untracked-files=all", "--", ".", ":(exclude)cli/dist"));
-  const sourceFiles = ["eval/run.mjs", "eval/validate.mjs", "eval/isolate.mjs", "eval/agent_sandbox.mjs", "eval/model_proxy.mjs", "eval/score.mjs", "eval/infra.mjs"];
+  const sourceFiles = ["eval/run.mjs", "eval/validate.mjs", "eval/isolate.mjs", "eval/agent_sandbox.mjs", "eval/model_proxy.mjs", "eval/score.mjs", "eval/infra.mjs", "eval/workspace.mjs", "eval/resources.mjs", "eval/cgroup_supervisor.mjs"];
   const sourceDigests = sourceFiles.map((file) => ({ file, sha256: createHash("sha256").update(fs.readFileSync(path.join(ROOT, file))).digest("hex") }));
   const sourceSha256 = createHash("sha256").update(JSON.stringify(sourceDigests)).digest("hex");
   return { commit, dirty, sourceDigests, sourceSha256, string: `${commit.slice(0, 12)}${dirty ? "-dirty" : ""}` };

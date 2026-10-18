@@ -803,11 +803,14 @@ error[E0308]: mismatched types
           return;
         }
         childRequests++;
+        if (childRequests === 3) {
+          res.writeHead(200, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ choices: [{ message: { role: "assistant", content: "The attempted write escaped the authorized worktree, so I stopped and reported the boundary failure." } }] }));
+          return;
+        }
         const call = childRequests === 1
           ? { name: "run_command", args: { command: "printf child > child-worktree.txt" } }
-          : childRequests === 2
-            ? { name: "run_command", args: { command: `printf escaped > ${JSON.stringify(originalWorkspaceWrite)}` } }
-            : { name: "task_completed", args: { summary: "Child finished." } };
+          : { name: "run_command", args: { command: `printf escaped > ${JSON.stringify(originalWorkspaceWrite)}` } };
         res.writeHead(200, { "Content-Type": "application/json" });
         res.end(JSON.stringify({ choices: [{ message: { role: "assistant", tool_calls: [{ id: `child-${childRequests}`, type: "function", function: { name: call.name, arguments: JSON.stringify(call.args) } }] } }] }));
       });
