@@ -75,11 +75,33 @@ export function isolatedArgv({ cwd, home, command, timeoutSec = 300, readOnlySub
     args.push("--setenv", "NODE_OPTIONS", "--require /runner/hide_oracle.cjs");
     args.push("--setenv", "PYTHONPATH", "/runner");
     args.push("--setenv", "NEXUS_HIDDEN_FILES_LIST", "/tmp/.nexus-hidden-files.list");
+    const compileSourceAudit = (compileCommand) => `stash=/tmp/.nexus-hidden-stash
+mkdir -p "$stash"
+while IFS= read -r f; do
+  [ -n "$f" ] || continue
+  rel="\${f#/workspace/}"
+  mkdir -p "$stash/$(dirname "$rel")"
+  cp -p -- "$f" "$stash/$rel"
+  rm -f -- "$f"
+done < /tmp/.nexus-hidden-files.list
+restore_hidden_sources() {
+  while IFS= read -r f; do
+    [ -n "$f" ] || continue
+    rel="\${f#/workspace/}"
+    mkdir -p "$(dirname "$f")"
+    cp -p -- "$stash/$rel" "$f"
+  done < /tmp/.nexus-hidden-files.list
+}
+${compileCommand} || { result=$?; restore_hidden_sources; rm -rf "$stash"; exit "$result"; }
+restore_hidden_sources
+rm -rf "$stash"`;
     if (/\bgo\s+test\b/.test(command)) {
-      executionCommand = command.replace(/\bgo\s+test\b/g, "go test -exec /runner/unlink_then_exec.sh");
+      const testCommand = command.replace(/\bgo\s+test\b/g, "go test -exec /runner/unlink_then_exec.sh");
+      executionCommand = `${compileSourceAudit("go build ./...")}\n${testCommand}`;
     } else if (/\bcargo\s+test\b/.test(command)) {
       args.push("--setenv", "CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUNNER", "/runner/unlink_then_exec.sh");
-      if (command.includes("&&")) executionCommand = `cargo test --tests --no-run >/dev/null 2>&1 || true; ${command}`;
+      const testCommand = command.includes("&&") ? `cargo test --tests --no-run >/dev/null 2>&1 || true; ${command}` : command;
+      executionCommand = `${compileSourceAudit("cargo check --lib")}\n${testCommand}`;
     } else if (/^(python(?:\d+(?:\.\d+)?)?)\s+(\S+\.py)\s*$/.test(command.trim())) {
       const [, python, script] = command.trim().match(/^(python(?:\d+(?:\.\d+)?)?)\s+(\S+\.py)\s*$/);
       executionCommand = `${python} -c 'import runpy,sys; runpy.run_path(sys.argv[1], run_name="__main__")' ${shellQuote(script)}`;

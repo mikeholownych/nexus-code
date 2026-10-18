@@ -1,28 +1,42 @@
 """Load Python oracle sources once from memory and leave their workspace paths empty."""
-import importlib.machinery
-import os
-import pathlib
-
-_saved = {}
-try:
-    for _file in __import__("json").loads(os.environ.get("NEXUS_HIDDEN_FILES", "[]")):
-        _absolute = str(pathlib.Path(_file).resolve())
-        if _absolute.endswith(".py"):
-            with open(_absolute, "rb") as _source:
-                _saved[_absolute] = _source.read()
-            with open(_absolute, "wb") as _source:
-                _source.write(b"")
-finally:
-    os.environ.pop("NEXUS_HIDDEN_FILES", None)
-
-_get_data = importlib.machinery.SourceFileLoader.get_data
 
 
-def _load_hidden_once(loader, path):
-    absolute = str(pathlib.Path(path).resolve())
-    if absolute in _saved:
-        return _saved.pop(absolute)
-    return _get_data(loader, path)
+def _init():
+    import importlib.machinery
+    import json
+    import os
+    import pathlib
+    import sys
+
+    saved = {}
+    try:
+        for file in json.loads(os.environ.get("NEXUS_HIDDEN_FILES", "[]")):
+            absolute = str(pathlib.Path(file).resolve())
+            if absolute.endswith(".py"):
+                with open(absolute, "rb") as source:
+                    saved[absolute] = source.read()
+                with open(absolute, "wb") as source:
+                    source.write(b"")
+    finally:
+        os.environ.pop("NEXUS_HIDDEN_FILES", None)
+
+    original_get_data = importlib.machinery.SourceFileLoader.get_data
+    if saved:
+        def load_hidden_once(loader, path):
+            absolute = str(pathlib.Path(path).resolve())
+            if absolute in saved:
+                contents = saved.pop(absolute)
+                if not saved:
+                    importlib.machinery.SourceFileLoader.get_data = original_get_data
+                return contents
+            return original_get_data(loader, path)
+
+        importlib.machinery.SourceFileLoader.get_data = load_hidden_once
+
+    sys.modules.pop(__name__, None)
+    runner_dir = str(pathlib.Path(__file__).resolve().parent)
+    sys.path[:] = [entry for entry in sys.path if entry not in ("/runner", runner_dir)]
 
 
-importlib.machinery.SourceFileLoader.get_data = _load_hidden_once
+_init()
+del _init

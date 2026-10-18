@@ -72,6 +72,67 @@ test("hidden test staging preserves workspace files and mounts only copied hidde
   }
 });
 
+test("Python oracle preload keeps saved source out of module globals and sys.path", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "python-oracle-preload-"));
+  try {
+    const runner = path.join(root, "runner");
+    const hidden = path.join(root, "test_hidden.py");
+    fs.mkdirSync(runner);
+    fs.copyFileSync(path.join(ROOT, "eval/hide_oracle.py"), path.join(runner, "sitecustomize.py"));
+    fs.writeFileSync(hidden, 'SECRET = "PY_ORACLE_CANARY_881"\n');
+    const script = `import importlib.machinery, pathlib, sys
+path = ${JSON.stringify(hidden)}
+module = importlib.machinery.SourceFileLoader("test_hidden", path).load_module()
+assert module.SECRET == "PY_ORACLE_CANARY_881"
+assert open(path).read() == ""
+assert "sitecustomize" not in sys.modules
+assert ${JSON.stringify(runner)} not in sys.path
+assert all("PY_ORACLE_CANARY_881" not in repr(getattr(obj, "_saved", None)) for obj in sys.modules.values())
+`;
+    const result = spawnSync("python3", ["-c", script], {
+      cwd: root,
+      env: { PATH: "/usr/bin:/bin", HOME: os.tmpdir(), PYTHONPATH: runner, NEXUS_HIDDEN_FILES: JSON.stringify([hidden]) },
+      encoding: "utf8",
+    });
+    assert.equal(result.status, 0, `${result.stderr}\n${result.stdout}`);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("Rust and Go compile-time file inclusion directives refuse hardened checks", async () => {
+  const { applyAgentChanges, testConfigChange } = await hardened();
+  const rust = "pub fn value() -> usize { 1 }\n";
+  const go = "package app\n";
+  for (const addition of [
+    'const SECRET: &str = include_str!("tests/hidden.rs");',
+    'const SECRET: &[u8] = include_bytes!("tests/hidden.rs");',
+    'include!("tests/hidden.rs");',
+    '#[path = "../tests/hidden.rs"] mod hidden;',
+  ]) {
+    assert.match(testConfigChange("src/lib.rs", rust, `${rust}${addition}\n`) ?? "", /adds compile-time file inclusion/);
+  }
+  assert.match(testConfigChange("src/main.go", go, `${go}//go:embed hidden_test.go\nvar hidden string\n`) ?? "", /adds \/\/go:embed directive/);
+
+  const base = fs.mkdtempSync(path.join(os.tmpdir(), "embed-directive-"));
+  try {
+    const agent = path.join(base, "agent");
+    const fresh = path.join(base, "fresh");
+    for (const dir of [agent, fresh]) {
+      fs.mkdirSync(path.join(dir, "src"), { recursive: true });
+      fs.writeFileSync(path.join(dir, "src/lib.rs"), rust);
+      fs.writeFileSync(path.join(dir, "src/main.go"), go);
+    }
+    fs.writeFileSync(path.join(agent, "src/lib.rs"), `${rust}const SECRET: &str = include_str!("tests/hidden.rs");\n`);
+    fs.writeFileSync(path.join(agent, "src/main.go"), `${go}//go:embed hidden_test.go\nvar hidden string\n`);
+    const result = applyAgentChanges(agent, fresh);
+    assert.match(result.configChanges.join(), /src\/lib\.rs adds compile-time file inclusion/);
+    assert.match(result.configChanges.join(), /src\/main\.go adds \/\/go:embed directive/);
+  } finally {
+    fs.rmSync(base, { recursive: true, force: true });
+  }
+});
+
 test("only the agent's source changes reach the fresh check workspace; adversarial workspace state never does", async () => {
   const { applyAgentChanges } = await hardened();
   const base = fs.mkdtempSync(path.join(os.tmpdir(), "hardened-"));
@@ -288,6 +349,39 @@ test("test data, symlinked paths, new Python packages, oversized files and manif
     assert.match(result.configChanges.join(), /pyproject\.toml deleted/, "and it refuses the checks");
     assert.match(testConfigChange("Cargo.toml", "[package]\nname = \"x\"\n", "[package]\nname = \"x\"\nautotests = false\n") ?? "", /\[package\]/);
     assert.match(testConfigChange("Cargo.toml", "[features]\ndefault = [\"a\"]\n", "[features]\ndefault = []\n") ?? "", /\[features\]/);
+  } finally {
+    fs.rmSync(base, { recursive: true, force: true });
+  }
+});
+
+test("Rust and Go compile-time file inclusion directives refuse hardened checks", async () => {
+  const { applyAgentChanges, testConfigChange } = await hardened();
+  const rust = "pub fn value() -> usize { 1 }\n";
+  const go = "package app\n";
+  for (const [source, addition] of [
+    ["src/lib.rs", 'const SECRET: &str = include_str!("tests/hidden.rs");'],
+    ["src/lib.rs", 'const SECRET: &[u8] = include_bytes!("tests/hidden.rs");'],
+    ["src/lib.rs", 'include!("tests/hidden.rs");'],
+    ["src/lib.rs", '#[path = "../tests/hidden.rs"] mod hidden;'],
+  ] as const) {
+    assert.match(testConfigChange(source, rust, `${rust}${addition}\n`) ?? "", /adds compile-time file inclusion/);
+  }
+  assert.match(testConfigChange("src/main.go", go, `${go}//go:embed hidden_test.go\nvar hidden string\n`) ?? "", /adds \/\/go:embed directive/);
+
+  const base = fs.mkdtempSync(path.join(os.tmpdir(), "embed-directive-"));
+  try {
+    const agent = path.join(base, "agent");
+    const fresh = path.join(base, "fresh");
+    for (const dir of [agent, fresh]) {
+      fs.mkdirSync(path.join(dir, "src"), { recursive: true });
+      fs.writeFileSync(path.join(dir, "src/lib.rs"), rust);
+      fs.writeFileSync(path.join(dir, "src/main.go"), go);
+    }
+    fs.writeFileSync(path.join(agent, "src/lib.rs"), `${rust}const SECRET: &str = include_str!("tests/hidden.rs");\n`);
+    fs.writeFileSync(path.join(agent, "src/main.go"), `${go}//go:embed hidden_test.go\nvar hidden string\n`);
+    const result = applyAgentChanges(agent, fresh);
+    assert.match(result.configChanges.join(), /src\/lib\.rs adds compile-time file inclusion/);
+    assert.match(result.configChanges.join(), /src\/main\.go adds \/\/go:embed directive/);
   } finally {
     fs.rmSync(base, { recursive: true, force: true });
   }
