@@ -80,6 +80,22 @@ To target an explicit release (including prereleases):
 nexus upgrade --version v1.0.0
 ```
 
+#### Recovery, Rollback and Backup Restoration
+Nexus maintains a transaction journal (`$PREFIX/lib/nexus/.upgrade-journal.json`) and creates protected pre-migration configuration backups (mode `0600`) before modifications:
+
+- Recover from an interrupted upgrade using the transaction journal:
+  ```bash
+  nexus upgrade --recover
+  ```
+- Revert the launcher symlink to the previous installed version:
+  ```bash
+  nexus upgrade --rollback-binary
+  ```
+- Restore configuration from a pre-migration backup:
+  ```bash
+  nexus upgrade --restore-backup ~/.config/nexus/backups/config.env.bak
+  ```
+
 Inside the interactive live TUI, run `/upgrade` or `/upgrade --check`. The TUI displays the installed vs target version, destination, and requires deliberate modal confirmation before modifying any files. Running TUI sessions continue uninterrupted on their loaded code and notify when a restart is required.
 
 ---

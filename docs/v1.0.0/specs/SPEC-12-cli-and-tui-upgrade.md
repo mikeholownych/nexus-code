@@ -4,10 +4,10 @@
 |---|---|
 | Status | Ready. Scope addition authorized by owner/user before RC freeze. |
 | Release class | **BLOCKER**: in-product safe upgrade mechanism for CLI and TUI; required before RC freeze. |
-| Requirements | REQ-REL-115 |
+| Requirements | REQ-REL-115, REQ-REL-116 |
 | Findings | UPG-01 (no supported in-product upgrade path without manual curl-pipe script execution) |
 | Plan | [PLAN-12](../plans/PLAN-12-cli-and-tui-upgrade.md) |
-| Acceptance | ACC-UPG-01 to ACC-UPG-06 |
+| Acceptance | ACC-UPG-01 to ACC-UPG-14 |
 
 ## 1. Problem
 
@@ -36,6 +36,15 @@ Nexus currently requires operators to re-run the external `install.sh` script vi
    - Preserve configuration, credentials, history, and sessions in `~/.nexus`.
    - Protect running TUI processes: never terminate active sessions unsafely or overwrite loaded components; report when restart is required and verify the upgraded version upon fresh launch without claiming the current process has changed version in-flight.
    - Do not add unsolicited background network polling, telemetry, or auto-update daemons.
+
+2. **REQ-REL-116 (Compatibility, integrity, recovery, and release acceptance).**
+   - Publish and validate machine-readable release compatibility metadata (`compatibility.json`), verifying schema compatibility and applying an explicit fallback policy for legacy public releases.
+   - Restrict downloads to allowed origins and redirects; enforce 250MB download and 1GB extraction limits; inspect tar archives against path traversal, absolute paths, escaping symlinks, FIFOs/devices, and duplicate entries.
+   - Create 0600-permission pre-migration configuration and state backups; refuse state-incompatible downgrades fail-closed; support distinct `--rollback-binary` and `--restore-backup <path>`.
+   - Record durable installation provenance (`.provenance.json`) with mode 0644; recognize and respect external package-manager installations.
+   - Maintain transaction journal (`.upgrade-journal.json`); provide idempotent crash recovery (`--recover` and automatic check on startup).
+   - Post-switch runtime self-test and PATH shadowing detection (`hash -r` advisory).
+   - Establish publisher trust boundary and attestation recommendations in `docs/UPGRADE_SECURITY.md`.
 
 ## 3. Design
 
@@ -109,6 +118,14 @@ The upgrade capability is implemented in `cli/src/upgrade.ts` as a pure, testabl
 | ACC-UPG-04 | Downgrade and pinned version safety | Reject downgrade unless explicitly confirmed or `--allow-downgrade` is provided. Rejects invalid tags and non-existent releases fail-closed. |
 | ACC-UPG-05 | `/upgrade` slash command in TUI | Supports `--check`, `--version`, and install modes. Uses deliberate TUI approval modal (`Overlay::Approval`). Preserves session state and explains restart requirement. |
 | ACC-UPG-06 | Installation provenance and recovery | Refuses destructive overwrite of development checkout with actionable message. Verifies SHA-256 checksums before switching. Atomic symlink swap leaves previous installation intact on error. |
+| ACC-UPG-07 | Release Compatibility Metadata | Verifies `compatibility.json`, component versions, config/state schema compatibility, and legacy fallback policy. |
+| ACC-UPG-08 | Download & Extraction Safety | Enforces allowed release origins/redirects, 250MB download and 1GB extract limits, rejects path traversal `..`, absolute paths, escaping symlinks, FIFOs/devices, and duplicate entries. |
+| ACC-UPG-09 | Migration & Downgrade Protection | Creates 0600-permission pre-migration backups, refuses state-incompatible downgrades fail-closed, supports distinct `--rollback-binary` and `--restore-backup <path>`. |
+| ACC-UPG-10 | Durable Installation Provenance | Writes durable `.provenance.json` with mode 0644, validates managed installation roots, and respects external package-manager ownership. |
+| ACC-UPG-11 | Upgrade Journal & Crash Recovery | Maintains `.upgrade-journal.json`, recovers interrupted upgrades idempotently via `--recover` and automatic check on startup. |
+| ACC-UPG-12 | Executable & Runtime Verification | Executes post-switch self-test, verifies essential binaries, and detects PATH shadowing with advisory warnings. |
+| ACC-UPG-13 | Public-Release Upgrade Acceptance | Tests reproducible end-to-end upgrade from prior public release (`v0.1.0-alpha.2`) with preserved state, doctor, CLI, TUI, and restart verification. |
+| ACC-UPG-14 | Publisher Authenticity Assessment | Evaluates trust boundary, SHA-256 baseline, and documents signing/attestation recommendations in `docs/UPGRADE_SECURITY.md`. |
 
 ## 5. Dependencies and Concurrency
 
