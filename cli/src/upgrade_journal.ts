@@ -224,8 +224,19 @@ export function recoverUpgrade(prefix: string): RecoveryOutcome {
   // If upgrade crashed during downloading, preparing, or staged (before symlink was touched):
   if (state === "preparing" || state === "downloading" || state === "staged" || state === "recovery_required") {
     // Symlink should point to source
-    if (fs.existsSync(sourceInstallDir)) {
-      atomicSymlinkSwap(path.join(sourceInstallDir, "bin", "nexus"), binPath);
+    const sourceExecutable = path.join(sourceInstallDir, "bin", "nexus");
+    if (isRealFile(sourceExecutable)) {
+      atomicSymlinkSwap(sourceExecutable, binPath);
+    } else {
+      journal.state = "recovery_required";
+      journal.error = "Source launcher is missing or is not a regular contained file";
+      journal.updatedAt = new Date().toISOString();
+      writeJournal(prefix, journal);
+      return {
+        recovered: false,
+        action: "none",
+        details: `Manual intervention required: source launcher at ${sourceExecutable} is not a regular contained file.`,
+      };
     }
     journal.state = "rolled_back";
     journal.updatedAt = new Date().toISOString();

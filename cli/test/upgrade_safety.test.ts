@@ -716,6 +716,40 @@ describe("Upgrade Journal, Crash Recovery & PATH Shadowing (REQ-REL-116, ACC-UPG
     assert.equal(fs.realpathSync(binPath), fs.realpathSync(sourceExecutable));
   });
 
+  it("does not repoint the launcher to an external source symlink during early recovery", () => {
+    const libNexus = path.join(tmpPrefix, "lib", "nexus");
+    const sourceDir = path.join(libNexus, "v1.0.0");
+    const binDir = path.join(tmpPrefix, "bin");
+    const outside = path.join(tmpPrefix, "outside-source");
+    const current = path.join(tmpPrefix, "current-launcher");
+    fs.mkdirSync(path.join(sourceDir, "bin"), { recursive: true });
+    fs.mkdirSync(binDir, { recursive: true });
+    fs.writeFileSync(outside, "outside executable", { mode: 0o755 });
+    fs.writeFileSync(current, "current launcher", { mode: 0o755 });
+    const sourceExecutable = path.join(sourceDir, "bin", "nexus");
+    fs.symlinkSync(outside, sourceExecutable);
+    const binPath = path.join(binDir, "nexus");
+    fs.symlinkSync(current, binPath);
+    writeJournal(tmpPrefix, {
+      formatVersion: 1,
+      id: "early-external-source",
+      state: "downloading",
+      sourceVersion: "v1.0.0",
+      sourceInstallDir: sourceDir,
+      sourceSymlinkTarget: sourceExecutable,
+      targetVersion: "v1.1.0",
+      targetInstallDir: path.join(libNexus, "v1.1.0"),
+      prefix: tmpPrefix,
+      binPath,
+      startedAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    });
+    const outcome = recoverUpgrade(tmpPrefix);
+    assert.equal(outcome.recovered, false);
+    assert.match(outcome.details, /source launcher/);
+    assert.equal(fs.readlinkSync(binPath), current);
+  });
+
   it("rolls back when a contained target launcher exits unsuccessfully", () => {
     const libNexus = path.join(tmpPrefix, "lib", "nexus");
     const binDir = path.join(tmpPrefix, "bin");
