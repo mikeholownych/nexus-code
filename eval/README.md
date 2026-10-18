@@ -111,8 +111,8 @@ runner case. `make test` includes a T4 smoke test with two injected faults (`cli
 A config with `"qualification": true` is the v1.0.0 evidence run (docs/v1.0.0/ACCEPTANCE.md §6). `run.mjs` refuses to start
 one, before any agent runs, unless every item below holds:
 
-- **Tasks are well formed** (`eval/validate.mjs`): one source (fixture, or a repo pinned to a full commit id), a hidden
-  command, and `class` (bugfix · feature · refactor · debug) and `difficulty` (easy · medium · hard). Development runs check
+- **Tasks are well formed** (`eval/validate.mjs`): one source (fixture, or a repo pinned to a full commit id), an isolated
+  `blackbox-v1` hidden oracle, and `class` (bugfix · feature · refactor · debug) and `difficulty` (easy · medium · hard). Development runs check
   everything except class and difficulty.
 - **The model is identified, not just named.** `fingerprint: { weightsSha256, serverBuild }` and
   `sampling: { temperature, seed }` are set in the config, and the endpoint lists the model. The fingerprint (with the
@@ -140,9 +140,13 @@ one, before any agent runs, unless every item below holds:
   verifies this and refuses the run otherwise.
 
 - **Corpus binding is integrity evidence, not approval authentication.** The qualification config pins the exact
-  corpus-manifest SHA-256; the manifest binds each task's JSON and full task-tree digest; the run manifest repeats those
-  hashes. This detects stale or modified content. The manifest's `custody.status` and `custodian` strings are claims,
-  not signatures. Independent custody acceptance, pre-RC commit timing, and configuration freeze must be verified and
+  corpus-manifest SHA-256, and the run manifest repeats the selected task hashes. The v1 manifest binds every task's
+  full task tree in row `sha256`. The heldout-v2 manifest binds each task's raw `task.json` and hidden-directory digest for
+  pinned-repository tasks; a local fixture additionally requires a full-tree `sha256` because those two v2 digests do
+  not cover fixture files. The frozen config carries `corpusCustody: { custodian, approvedAt, reportPath, reportSha256 }`
+  and may also name `storeRoot`, `validatorPath`, `referencePath`, and `authorLogPath`; the report path and optional
+  private paths are protected from runtime mounts. These values and the manifest's custody labels are claims, not
+  signatures. Independent custody acceptance, pre-RC commit timing, and configuration freeze must be verified and
   archived by the acceptance reviewer before any qualification run. The current candidate task package has not been
   independently accepted.
 
@@ -150,10 +154,82 @@ one, before any agent runs, unless every item below holds:
 
 Bubblewrap plus the current runner enforces separate mount/user/PID/network namespaces, a cleared task-command
 environment, a bounded wall clock, bounded captured output, per-run process-group teardown, and read-only runtime
-binds. Black-box qualification keeps oracle expectations outside candidate namespaces; legacy commands do not provide that
-property and remain development-only. Aggregate CPU, memory, process-count and writable-storage limits come from the
-resource contract below, not from request/token ceilings. Appliance-specific Bubblewrap enforcement is a separate,
-unverified condition.
+binds. Black-box qualification keeps oracle expectations outside candidate namespaces. Legacy hidden commands share a
+process with candidate code and are rejected during qualification preflight. The hardened legacy path below is only for
+development and pilot scoring; it is not qualification evidence. Aggregate CPU, memory, process-count and
+writable-storage limits come from the resource contract below, not from request/token ceilings. Appliance-specific
+Bubblewrap enforcement is a separate, unverified condition.
+
+### Hardened legacy hidden tests (development and pilot only)
+
+Legacy tasks use `hidden: { dir, command }` (for example `pytest` or `go test` over copied test files) and run candidate
+code in the same process as the oracle. They do not meet the qualification boundary, even when hardened. Qualification
+preflight accepts only the isolated `blackbox-v1` protocol. Any legacy task in a qualification corpus must be replaced
+or converted by the authorized custodian, with custody checks repeated and a new immutable manifest identity recorded.
+Development configs may opt into the hardened diagnostic path with `"hardenedChecks": true`.
+
+1. The agent's workspace is never tested, and nothing runs git or any other program against it after the agent ran.
+   An agent-written `.git/config` or `.gitattributes` would otherwise run commands as the harness user. The baseline
+   tree hash is taken before the agent starts. The harness then stages the task again (the same pinned commit or
+   fixture, the same setup commands) into a fresh workspace, and checks that its tree equals that baseline.
+2. The agent's changes are found by walking both trees and comparing bytes and executable bits
+   (`eval/hardened_check.mjs`). Only an allowlist crosses over:
+   - Only **source files** (`.py`, the `.js`/`.ts` family, `.go`, `.rs`) and the manifests `package.json`,
+     `pyproject.toml`, `Cargo.toml`, `go.mod` and `go.sum` may be added, changed or deleted. Every other file type,
+     including test data, keeps its baseline content.
+   - A new Python file may only join a regular package that already exists, meaning a directory with `__init__.py` in
+     the baseline. It may not take a name that would shadow the test runner or the standard library
+     (`pytest.py`, `json.py`, …). Namespace packages without `__init__.py` cannot gain new modules; that is a
+     fairness cost.
+   - **Always dropped:**
+     - VCS metadata and dependency trees or caches: `.git`, `node_modules`, `.venv`, `site-packages`,
+       `__pycache__`, `vendor`, `target`, `.yarn`, `.cargo`, `.github`;
+     - test files and directories;
+     - test data: `testdata/`, `fixtures/`, `__snapshots__/`, `snapshots/`, `golden/`, mocks, `*.golden`, `*.snap`;
+     - test-runner configuration and setup files;
+     - interpreter and package-manager hooks: `sitecustomize.py`, `.pth`, `.npmrc`, `.yarnrc*`, `.pnpmfile.cjs`,
+       `go.work`, `rust-toolchain*`, `build.rs`;
+     - `Makefile`, `.env*`, `.gitattributes` and `.gitignore`;
+     - symlinks, any path that passes through a symlink in the fresh tree, and files over 2 MiB.
+
+     Dependency trees therefore always come from setup, never from the agent.
+   - **Manifests** may change only plain dependency or metadata entries. Any other change refuses both checks, and so
+     does a deleted manifest or a new one (a new `go.mod` or `package.json` moves module or root boundaries). In TOML,
+     every line starting with `[` is a section boundary, keyed by its exact text. An unrecognised header, a `[[…]]`
+     table, or a header with a comment therefore cannot be folded into an allowed section:
+     - `package.json`: anything but the dependency maps and metadata, or a `file:`/`git:`/path dependency;
+     - `pyproject.toml`: anything outside `[project]`;
+     - `Cargo.toml`: anything outside `[dependencies]`/`[dependencies.<name>]`, or a `path`, `git` or `registry`
+       source. Adding `[dev-dependencies]` or `[build-dependencies]` is refused, which costs legitimate test-only
+       dependency additions;
+     - `go.mod`: anything outside its `require` lines and blocks, including entries inside an existing `replace (…)`.
+3. Anything the agent left at the oracle's path is removed. The hidden command then runs with the hidden directory
+   bind-mounted **read-only**. The regression
+   command runs in a separate byte-identical copy, so candidate code executed by one check cannot prepare the other.
+4. In development/pilot runs, hidden-test output is kept only as a status, byte count and SHA-256, so diagnostic
+   records do not disclose the tests. Each run record carries
+   `hardened: { baseline, applied, discarded, configChanges }`.
+
+This legacy hardening path supports development and pilot scoring only. Candidate source still executes in the same
+runtime as its legacy validator, so it can inspect or alter validator state; file hiding and a fresh workspace do not
+provide independent qualification. `qualification: true` rejects every legacy hidden command before any candidate
+starts. Do not relabel legacy evidence as qualification evidence.
+
+The legacy output checks below are diagnostic safeguards for development scoring, not acceptance evidence. Qualification
+keeps black-box expected values in the evaluator process and runs candidate code in a separate Bubblewrap process.
+- Fairness cost: a real source directory named `vendor/` or `target/` is skipped like a dependency tree, so the
+  agent's changes there are dropped. The `npm:` alias form of a dependency spec is not refused; setup is not re-run
+  after the copy, so it cannot install anything.
+
+The sealed corpus is bound through its own manifest schema (`eval/heldout-manifest.json`, `hash_scheme`). The runner
+recomputes each selected task's `task_sha256` (raw `task.json`) and `hidden_sha256`. The latter is computed over the
+regular files of `hidden.dir`, with `/`-separated relative paths sorted byte-wise, each line `<path>  <sha256>\n`. For
+pinned-repository tasks these bind the task declaration and hidden tests while the repository commit pins the source.
+A task using a local `fixture` must also carry `sha256` for the full task tree; without it, fixture content outside
+`task.json` and `hidden.dir` would be unbound. The selected population must equal the manifest's. The manifest carries
+no custody fields, so the frozen config states `corpusCustody: { custodian, approvedAt, reportPath, reportSha256 }`;
+optional private paths are `storeRoot`, `validatorPath`, `referencePath`, and `authorLogPath`. The acceptance reviewer
+checks the report against its digest and verifies custody claims independently.
 
 ### Resource contract
 

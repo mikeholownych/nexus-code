@@ -30,6 +30,10 @@ export function workspaceHistoryProblem(ws, commit) {
   if (head !== commit) return `HEAD is ${head}, not the pinned commit`;
   const beyond = git(["rev-list", "--all", "--reflog", `^${commit}`], ws).trim();
   if (beyond) return `${beyond.split("\n").length} commit(s) reachable that are not ancestors of the pinned commit`;
+  const reachable = new Set(git(["rev-list", "--objects", commit], ws).split("\n").map((line) => line.split(" ", 1)[0]).filter(Boolean));
+  const objects = git(["cat-file", "--batch-check=%(objectname)", "--batch-all-objects"], ws).split("\n").map((line) => line.trim()).filter(Boolean);
+  const unreachable = objects.filter((object) => !reachable.has(object));
+  if (unreachable.length) return `${unreachable.length} unreachable object(s) in .git/objects: ${unreachable.slice(0, 5).join(", ")}`;
   return null;
 }
 
