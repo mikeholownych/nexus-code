@@ -70,11 +70,13 @@ jobs:
           test -f "docs/releases/${GITHUB_REF_NAME}.md" || { echo "Missing docs/releases/${GITHUB_REF_NAME}.md" >&2; exit 1; }
       - name: Require a stable tag to be a version-only commit on its RC
         if: ${{ !contains(github.ref_name, '-') }}
+        # The checkout has full history and tags (fetch-depth: 0). The checker runs from the RC's own copy so a stable
+        # commit cannot replace it; branch and tag protection remain the control over the workflow file itself.
         run: |
-          git fetch --no-tags --depth=2 origin "$GITHUB_SHA" "+refs/tags/${GITHUB_REF_NAME}-rc.*:refs/tags/${GITHUB_REF_NAME}-rc.*"
-          rc="$(git tag --points-at "$GITHUB_SHA^" "${GITHUB_REF_NAME}-rc.*" | sort -V | tail -n 1)"
+          rc="$(git tag --points-at "$GITHUB_SHA^" | grep -E "^${GITHUB_REF_NAME//./\\.}-rc\.[0-9]+$" | sort -V | tail -n 1 || true)"
           test -n "$rc" || { echo "the parent of $GITHUB_REF_NAME is not a ${GITHUB_REF_NAME}-rc.N tag" >&2; exit 1; }
-          node scripts/check-version-only-diff.mjs "$rc" "$GITHUB_SHA"
+          git show "$rc:scripts/check-version-only-diff.mjs" > "$RUNNER_TEMP/check-version-only-diff.mjs"
+          node "$RUNNER_TEMP/check-version-only-diff.mjs" "$rc" "$GITHUB_SHA"
       - run: npm ci --prefix cli
       - run: npm --prefix cli run build
       - run: cargo test --locked --manifest-path core/Cargo.toml
