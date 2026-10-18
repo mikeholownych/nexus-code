@@ -230,6 +230,16 @@ describe("Tar Archive Structural Safety Engine (REQ-REL-116, ACC-UPG-08)", () =>
     );
   });
 
+  it("rejects oversized PAX metadata before retaining or parsing it", async () => {
+    const archive = path.join(tmpRoot, "oversized-pax.tar.gz");
+    fs.writeFileSync(archive, createTestTar([
+      { name: "PaxHeader", typeflag: "x", content: `65544 path=${"x".repeat(65540)}\n` },
+    ]));
+    const result = await validateTarArchive(archive);
+    assert.equal(result.valid, false);
+    assert.ok(result.errors.some((error) => error.includes("PAX metadata exceeds safety limit")));
+  });
+
   it("rejects malicious tar archive with escaping symlink", async () => {
     const symlinkTar = path.join(tmpRoot, "symlink-escape.tar.gz");
     const tarGz = createTestTar([
@@ -545,6 +555,62 @@ describe("Upgrade Journal, Crash Recovery & PATH Shadowing (REQ-REL-116, ACC-UPG
     assert.equal(outcome.action, "cleaned_up");
     assert.equal(fs.existsSync(stagingDir), false); // cleaned up
     assert.equal(fs.realpathSync(binNexus), fs.realpathSync(v1Bin)); // symlink retained
+  });
+
+  it("fails closed without deleting paths named by a malicious journal", () => {
+    const outside = path.join(tmpPrefix, "outside-canary");
+    fs.mkdirSync(outside);
+    fs.writeFileSync(path.join(outside, "keep.txt"), "must survive");
+    const entry: UpgradeJournalEntry = {
+      formatVersion: 1,
+      id: "hostile-path",
+      state: "downloading",
+      sourceVersion: "v1.0.0",
+      sourceInstallDir: outside,
+      sourceSymlinkTarget: path.join(outside, "bin", "nexus"),
+      targetVersion: "v1.1.0",
+      targetInstallDir: path.join(tmpPrefix, "lib", "nexus", "v1.1.0"),
+      stagingDir: outside,
+      prefix: tmpPrefix,
+      binPath: path.join(tmpPrefix, "bin", "nexus"),
+      startedAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    };
+    writeJournal(tmpPrefix, entry);
+    const outcome = recoverUpgrade(tmpPrefix);
+    assert.equal(outcome.recovered, false);
+    assert.match(outcome.details, /validation/);
+    assert.equal(fs.readFileSync(path.join(outside, "keep.txt"), "utf8"), "must survive");
+  });
+
+  it("rejects a staging path whose apparent parent is redirected by a symlink", () => {
+    const outsideRoot = path.join(tmpPrefix, "external");
+    const outsideLib = path.join(outsideRoot, "nexus");
+    const outsideStage = path.join(outsideLib, ".tmp-upgrade-escape");
+    fs.mkdirSync(outsideStage, { recursive: true });
+    fs.writeFileSync(path.join(outsideStage, "canary"), "must survive");
+    fs.mkdirSync(path.join(tmpPrefix, "lib"), { recursive: true });
+    fs.symlinkSync(outsideLib, path.join(tmpPrefix, "lib", "nexus"));
+    const entry: UpgradeJournalEntry = {
+      formatVersion: 1,
+      id: "symlink-parent",
+      state: "downloading",
+      sourceVersion: "v1.0.0",
+      sourceInstallDir: path.join(tmpPrefix, "lib", "nexus", "v1.0.0"),
+      sourceSymlinkTarget: path.join(tmpPrefix, "lib", "nexus", "v1.0.0", "bin", "nexus"),
+      targetVersion: "v1.1.0",
+      targetInstallDir: path.join(tmpPrefix, "lib", "nexus", "v1.1.0"),
+      stagingDir: path.join(tmpPrefix, "lib", "nexus", ".tmp-upgrade-escape"),
+      prefix: tmpPrefix,
+      binPath: path.join(tmpPrefix, "bin", "nexus"),
+      startedAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    };
+    writeJournal(tmpPrefix, entry);
+    const outcome = recoverUpgrade(tmpPrefix);
+    assert.equal(outcome.recovered, false);
+    assert.match(outcome.details, /real contained directories/);
+    assert.equal(fs.readFileSync(path.join(outsideStage, "canary"), "utf8"), "must survive");
   });
 
   it("recovers a crash during switching by reverting symlink to source installation", () => {
