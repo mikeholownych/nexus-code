@@ -10,7 +10,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { isolatedArgv, grantRunAsAccess, normalizeRunAsPermissions, sandboxAvailable } from "../isolate.mjs";
 import { resourceConfigProblem, resourceProbeProblem, spawnContained } from "../resources.mjs";
-import { asUser, asUserSpec } from "../validate.mjs";
+import { asUser, asUserSpec, hiddenTestIsolationProblem } from "../validate.mjs";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 const ACCOUNT = "nexus-eval";
@@ -115,6 +115,15 @@ await check("qualification preflight fails closed without the controls", () => {
   try {
     const tasks = path.join(scratch, "tasks");
     fs.mkdirSync(tasks);
+    const HELD_OUT = tasks;
+    must(/overlaps protected corpus material/.test(hiddenTestIsolationProblem({
+      qualification: true,
+      runAs: ACCOUNT,
+      sandboxRuntimePaths: ["/usr/bin"],
+      sandboxRuntimeRoots: ["/usr/bin"],
+      corpusCustody: { storeRoot: "/usr/bin/synthetic-corpus-leak" },
+      resources,
+    }, HELD_OUT) ?? ""), "qualification preflight must reject protected corpus paths under unconditional host mounts");
     const base = { name: "failclosed", qualification: true, endpoint: "http://127.0.0.1:9/v1", model: "m", runAs: ACCOUNT, sandboxRuntimePaths: [], sandboxRuntimeRoots: ["/opt/nexus-qual"] };
     const cases = [
       [{ ...base, resources: undefined }, /enforced CPU, memory, process-count, and workspace-storage limits/],
@@ -143,7 +152,8 @@ report.revision = {
   commit: spawnSync("git", ["rev-parse", "HEAD"], { cwd: ROOT, encoding: "utf8" }).stdout.trim(),
   dirty: Boolean(spawnSync("git", ["status", "--porcelain", "--untracked-files=no"], { cwd: ROOT, encoding: "utf8" }).stdout.trim()),
   profileSha256: createHash("sha256").update(fs.readFileSync(path.join(ROOT, "eval/host/resource-profile.json"))).digest("hex"),
-  sourceDigests: ["eval/host/validate.mjs", "eval/host/provision.sh", "eval/host/rollback.sh", "eval/host/resource-profile.json", "eval/resources.mjs", "eval/cgroup_supervisor.mjs", "eval/isolate.mjs", "eval/validate.mjs"].map((file) => ({ file, sha256: createHash("sha256").update(fs.readFileSync(path.join(ROOT, file))).digest("hex") })),
+  manifestSha256: "50895b84a604fbfd45ed82e29cbef4ba795d7fffbe6611af23bfbc9851f3e89b",
+  sourceDigests: ["eval/host/validate.mjs", "eval/host/provision.sh", "eval/host/rollback.sh", "eval/host/resource-profile.json", "eval/resources.mjs", "eval/cgroup_supervisor.mjs", "eval/isolate.mjs", "eval/validate.mjs", "eval/run.mjs", "eval/hardened_check.mjs", "eval/hide_oracle.cjs", "eval/hide_oracle.py", "eval/unlink_then_exec.sh", "eval/workspace.mjs"].map((file) => ({ file, sha256: createHash("sha256").update(fs.readFileSync(path.join(ROOT, file))).digest("hex") })),
 };
 const out = process.argv.indexOf("--json");
 if (out > 0) fs.writeFileSync(process.argv[out + 1], `${JSON.stringify(report, null, 2)}\n`);

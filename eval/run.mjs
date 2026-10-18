@@ -519,7 +519,7 @@ function runAgent(task, ws, home, budget, agentIdentity, proxyDirectory, localTo
     if (fs.existsSync(coreBinary)) runtimePaths.push(coreBinary);
   }
   const sandboxRuntimePaths = [...new Set(runtimePaths)];
-  const allowedRuntimeRoots = [...new Set([...(config.sandboxRuntimeRoots ?? []), ...((config.agent ?? "nexus") === "nexus" && agentIdentity.argsPrefix[0] === path.join(ROOT, "cli/dist/index.js") ? [ROOT] : [])])];
+  const allowedRuntimeRoots = [...new Set([...(config.sandboxRuntimeRoots ?? []), ...((config.agent ?? "nexus") === "nexus" && agentIdentity.argsPrefix[0] === path.join(ROOT, "cli/dist/index.js") ? [path.join(ROOT, "cli"), path.join(ROOT, "core")] : [])])];
   const supervisorPath = path.join(ROOT, "eval/agent_sandbox.mjs");
   const corpusPaths = [
     config.corpusCustody?.storeRoot,
@@ -527,13 +527,14 @@ function runAgent(task, ws, home, budget, agentIdentity, proxyDirectory, localTo
     config.corpusCustody?.referencePath,
     config.corpusCustody?.authorLogPath,
   ].filter((item) => item !== undefined);
-  const protectedCorpusPaths = [tasksDir, path.dirname(tasksDir), ...corpusPaths];
+  const protectedCorpusPaths = [tasksDir, ...(config.qualification === true || path.resolve(path.dirname(tasksDir)) !== path.resolve(path.join(ROOT, "eval")) ? [path.dirname(tasksDir)] : []), ...corpusPaths];
   const corpusOverlap = runtimeCorpusOverlapProblem(sandboxRuntimePaths, allowedRuntimeRoots, tasksDir, corpusPaths, {
     cwd: ws,
     home,
     proxyDirectory,
     nodeRuntime: cmd,
     supervisorPath,
+    qualification: config.qualification === true,
   });
   if (corpusOverlap) throw new Error(corpusOverlap);
   const sandbox = agentSandboxArgv({ cwd: ws, home, proxyDirectory, readOnlyPaths: sandboxRuntimePaths, allowedRuntimeRoots, runtimeExecutablePaths: [cmd, ...agentIdentity.argsPrefix], supervisorPath, protectedCorpusPaths });

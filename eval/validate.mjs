@@ -162,9 +162,12 @@ export function runtimeCorpusOverlapProblem(runtimePaths, runtimeRoots, tasksDir
   }
   const taskPath = resolveCanonicalOrLexical(tasksDir);
   if (!taskPath || !fs.existsSync(tasksDir)) return "qualification task corpus path is unavailable";
-  // Held-out stores keep tasks/, references/, and custody material under one directory. Blocking both the
-  // task tree and its store root prevents a runtime allowlist from naming a sibling reference or validator path.
-  const privatePaths = [tasksDir, path.dirname(tasksDir), ...extraPrivatePaths];
+  // Held-out stores keep tasks/, references/, and custody material under one directory. Keep that parent private
+  // outside the in-repo development eval/tasks tree, where eval/ also contains the trusted sandbox supervisor.
+  const parentDir = resolveCanonicalOrLexical(path.dirname(tasksDir));
+  const evalDir = resolveCanonicalOrLexical(path.join(ROOT, "eval"));
+  const includeParent = mountContext.qualification === true || !overlapVariants(parentDir, evalDir);
+  const privatePaths = [tasksDir, ...(includeParent ? [path.dirname(tasksDir)] : []), ...extraPrivatePaths];
   const protectedPaths = [];
   for (const item of privatePaths) {
     const resolved = resolveCanonicalOrLexical(item);
@@ -236,7 +239,7 @@ export function hiddenTestIsolationProblem(config, tasksDir) {
       config.corpusCustody?.referencePath,
       config.corpusCustody?.authorLogPath,
     ].filter((item) => item !== undefined);
-    const corpusOverlap = runtimeCorpusOverlapProblem(config.sandboxRuntimePaths, config.sandboxRuntimeRoots, tasksDir, corpusPaths, config.mountContext ?? {});
+    const corpusOverlap = runtimeCorpusOverlapProblem(config.sandboxRuntimePaths, config.sandboxRuntimeRoots, tasksDir, corpusPaths, { ...(config.mountContext ?? {}), qualification: Boolean(config.qualification) });
     if (corpusOverlap) return corpusOverlap;
   }
   if (!config.runAs) return config.qualification ? "qualification runs need runAs (the agent's own user) so hidden tests are unreadable to it" : null;

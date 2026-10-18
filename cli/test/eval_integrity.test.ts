@@ -417,6 +417,9 @@ test("qualification runtime mounts cannot overlap the task tree, held-out store,
     assert.match(runtimeCorpusOverlapProblem([path.join(alias, "reference", "solution.patch")], [alias], tasks) ?? "", /overlaps protected corpus material/, "symlink aliases are resolved before comparing paths");
     assert.match(runtimeCorpusOverlapProblem([privateValidator], [privateValidator], tasks, [privateValidator]) ?? "", /overlaps protected corpus material/);
     assert.match(runtimeCorpusOverlapProblem([runtimeRoot], [runtimeRoot], tasks, [path.join(root, "missing-validator")]) ?? "", /private corpus path is unavailable/);
+    assert.equal(runtimeCorpusOverlapProblem([], [], path.join(ROOT, "eval/tasks")), null, "default in-repo development eval/tasks does not collide with eval/agent_sandbox.mjs");
+    assert.equal(runtimeCorpusOverlapProblem([path.join(ROOT, "cli/dist")], [path.join(ROOT, "cli"), path.join(ROOT, "core")], path.join(ROOT, "eval/tasks")), null, "default development Nexus runtime roots do not overlap eval/tasks");
+    assert.match(runtimeCorpusOverlapProblem([], [], path.join(ROOT, "eval/tasks"), [], { qualification: true }) ?? "", /overlaps protected corpus material/, "qualification mode still rejects using in-repo eval/tasks because its parent overlaps eval/agent_sandbox.mjs");
 
     const unconditionalMountPaths = [
       ...hostMounts.systemDirectories.map((source) => path.join(source, "synthetic-corpus-subdir")),
