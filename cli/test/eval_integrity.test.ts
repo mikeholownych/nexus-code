@@ -364,6 +364,36 @@ test("hidden tests must be unreadable to the agent's own user", async () => {
   assert.match(sudoers, /ALL=\(%s\) !ALL\\n%s ALL=\(%s\) NOPASSWD: \/usr\/bin\/bwrap\\n/, "the explicit deny-all precedes the exact bwrap grant");
 });
 
+test("qualification runtime mounts cannot overlap the task tree, held-out store, or private validator paths", async () => {
+  const { runtimeCorpusOverlapProblem } = await import(path.join(ROOT, "eval/validate.mjs"));
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-eval-corpus-overlap-"));
+  try {
+    const store = path.join(root, "heldout-v2");
+    const tasks = path.join(store, "tasks");
+    const references = path.join(store, "reference");
+    const runtimeRoot = path.join(root, "runtime");
+    const privateValidator = path.join(root, "private-validator");
+    fs.mkdirSync(tasks, { recursive: true });
+    fs.mkdirSync(references);
+    fs.mkdirSync(runtimeRoot);
+    fs.mkdirSync(privateValidator);
+    fs.writeFileSync(path.join(tasks, "task.json"), "{}\n");
+    fs.writeFileSync(path.join(references, "solution.patch"), "REFERENCE_SOLUTION_CANARY\n");
+    fs.writeFileSync(path.join(privateValidator, "validate.mjs"), "PRIVATE_VALIDATOR_CANARY\n");
+    const alias = path.join(root, "store-alias");
+    fs.symlinkSync(store, alias, "dir");
+
+    assert.equal(runtimeCorpusOverlapProblem([runtimeRoot], [runtimeRoot], tasks), null, "an unrelated pinned runtime remains usable");
+    assert.match(runtimeCorpusOverlapProblem([path.join(references, "solution.patch")], [store], tasks) ?? "", /overlaps protected corpus material/);
+    assert.match(runtimeCorpusOverlapProblem([runtimeRoot], [store], tasks) ?? "", /overlaps protected corpus material/, "a broad allowlist root cannot contain the corpus store");
+    assert.match(runtimeCorpusOverlapProblem([path.join(alias, "reference", "solution.patch")], [alias], tasks) ?? "", /overlaps protected corpus material/, "symlink aliases are resolved before comparing paths");
+    assert.match(runtimeCorpusOverlapProblem([privateValidator], [privateValidator], tasks, [privateValidator]) ?? "", /overlaps protected corpus material/);
+    assert.match(runtimeCorpusOverlapProblem([runtimeRoot], [runtimeRoot], tasks, [path.join(root, "missing-validator")]) ?? "", /private corpus path is unavailable/);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("qualification remains fail-closed without enforced aggregate resource controls", async () => {
   const { qualificationResourceIsolationProblem } = await import(path.join(ROOT, "eval/validate.mjs"));
   const { dedicatedTmpfsMountProblem } = await import(path.join(ROOT, "eval/resources.mjs"));

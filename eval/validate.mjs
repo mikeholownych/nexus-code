@@ -128,6 +128,42 @@ export function qualificationBudgetProblem(config) {
   return null;
 }
 
+function pathOverlaps(left, right) {
+  return left === right || left.startsWith(`${right}${path.sep}`) || right.startsWith(`${left}${path.sep}`);
+}
+
+/** Refuse candidate runtime mounts that could expose the task tree or its private corpus store. */
+export function runtimeCorpusOverlapProblem(runtimePaths, runtimeRoots, tasksDir, extraPrivatePaths = []) {
+  if (!Array.isArray(runtimePaths) || !Array.isArray(runtimeRoots) || !Array.isArray(extraPrivatePaths)) {
+    return "qualification runtime and corpus paths must be explicit arrays";
+  }
+  let taskPath;
+  try { taskPath = fs.realpathSync(tasksDir); }
+  catch { return "qualification task corpus path is unavailable"; }
+  // Held-out stores keep tasks/, references/, and custody material under one directory. Blocking both the
+  // task tree and its store root prevents a runtime allowlist from naming a sibling reference or validator path.
+  const privatePaths = [taskPath, path.dirname(taskPath), ...extraPrivatePaths];
+  const protectedPaths = [];
+  for (const item of privatePaths) {
+    if (typeof item !== "string" || !path.isAbsolute(item)) return "qualification private corpus paths must be absolute";
+    try { protectedPaths.push(fs.realpathSync(item)); }
+    catch { return `qualification private corpus path is unavailable: ${item}`; }
+  }
+  const candidatePaths = [...runtimePaths, ...runtimeRoots];
+  for (const item of candidatePaths) {
+    if (typeof item !== "string" || !path.isAbsolute(item)) return "qualification runtime paths and roots must be absolute";
+    let resolved;
+    try { resolved = fs.realpathSync(item); }
+    catch { return `qualification runtime path is unavailable: ${item}`; }
+    for (const protectedPath of protectedPaths) {
+      if (pathOverlaps(resolved, protectedPath)) {
+        return `qualification runtime mount overlaps protected corpus material: ${resolved}`;
+      }
+    }
+  }
+  return null;
+}
+
 function positiveInt(value) {
   return typeof value === "number" && Number.isFinite(value) && value > 0 ? Math.floor(value) : undefined;
 }
@@ -161,6 +197,16 @@ export function hiddenTestIsolationProblem(config, tasksDir) {
   }
   if (!Array.isArray(config.sandboxRuntimeRoots) || config.sandboxRuntimeRoots.length === 0) {
     return "qualification requires explicit sandboxRuntimeRoots for the agent runtime allowlist";
+  }
+  if (config.qualification) {
+    const corpusPaths = [
+      config.corpusCustody?.storeRoot,
+      config.corpusCustody?.validatorPath,
+      config.corpusCustody?.referencePath,
+      config.corpusCustody?.authorLogPath,
+    ].filter((item) => item !== undefined);
+    const corpusOverlap = runtimeCorpusOverlapProblem(config.sandboxRuntimePaths, config.sandboxRuntimeRoots, tasksDir, corpusPaths);
+    if (corpusOverlap) return corpusOverlap;
   }
   const mountProblem = runtimeMountProblem(config.sandboxRuntimePaths, config.sandboxRuntimeRoots);
   if (mountProblem) return mountProblem;
