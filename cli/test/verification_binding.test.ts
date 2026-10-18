@@ -23,6 +23,26 @@ test("ACC-VER-04: multi-runner hasExecutedTests recognizes real runs and rejects
   );
   assert.equal(hasExecutedTests("ℹ tests 1\nℹ pass 1"), true, "node:test 1 pass should be true");
   assert.equal(hasExecutedTests("ℹ tests 1"), true, "node:test 1 test without pass line should be true");
+  assert.equal(
+    hasExecutedTests("# tests 2\n# suites 1\n# pass 2\n# fail 0\n# cancelled 0\n# skipped 0\n# todo 0\n# duration_ms 12.3"),
+    true,
+    "Node 20 node:test TAP summary should count executed tests"
+  );
+  assert.equal(
+    hasExecutedTests("# tests 3\n# suites 1\n# pass 0\n# fail 0\n# cancelled 0\n# skipped 3\n# todo 0\n# duration_ms 2.1"),
+    false,
+    "Node 20 node:test TAP summary with only skipped tests should be false"
+  );
+  assert.equal(
+    hasExecutedTests("# tests 2\n# suites 1\n# pass 0\n# fail 0\n# cancelled 2\n# skipped 0\n# todo 0\n# duration_ms 2.1"),
+    false,
+    "Node 20 node:test TAP summary with only cancelled tests should be false"
+  );
+  assert.equal(
+    hasExecutedTests("# tests 0\n# suites 0\n# pass 0\n# fail 0\n# cancelled 0\n# skipped 0\n# todo 0\n# duration_ms 1.0"),
+    false,
+    "Node 20 node:test TAP summary with zero tests should be false"
+  );
 
   // jest
   assert.equal(
@@ -75,11 +95,13 @@ test("ACC-VER-04: multi-runner hasExecutedTests recognizes real runs and rejects
   assert.equal(hasExecutedTests("  0 passing (10ms)"), false, "mocha 0 passing should be false");
 });
 
-test("ACC-VER-03: path-token deliverable binding rejects basename coincidences and requires executed paths", () => {
+test("ACC-VER-03: VERIFIED binding requires operator scope and an executed unchanged import", () => {
   const d = fs.mkdtempSync(path.join(os.tmpdir(), "a2tester-"));
   try {
     fs.mkdirSync(path.join(d, "src"));
     fs.writeFileSync(path.join(d, "src/a.ts"), "export const a = 1;\n");
+    fs.mkdirSync(path.join(d, "test"));
+    fs.writeFileSync(path.join(d, "test/a.test.ts"), 'import { a } from "../src/a.ts"; test("a", () => assert.equal(a, 1));\n');
     const out = "ℹ tests 3\nℹ pass 3\n✔ loads src/data.ts fixtures";
 
     // 1. Coincidental substring: src/a.ts vs src/data.ts
@@ -93,14 +115,37 @@ test("ACC-VER-03: path-token deliverable binding rejects basename coincidences a
 
     // 3. Exact workspace-relative path in output binds
     const boundExact = isVerifierDeliverableBound(d, [path.join(d, "src/a.ts")], "npm test", "ℹ tests 1\nℹ pass 1\nPASS src/a.ts:10:2");
-    assert.equal(boundExact, true, "exact path token with line:col must bind");
+    assert.equal(boundExact, false, "candidate-visible path text cannot declare deliverable scope");
+    const originalTest = fs.readFileSync(path.join(d, "test/a.test.ts"), "utf8");
+    const baselineTests = new Map([["test/a.test.ts", originalTest]]);
+    const boundScopedImport = isVerifierDeliverableBound(d, [path.join(d, "src/a.ts")], "npm test", "ℹ tests 1\nℹ pass 1", new Set(["src/a.ts"]), baselineTests);
+    assert.equal(boundScopedImport, true, "a predeclared product file imported by an executed test binds");
+    fs.mkdirSync(path.join(d, "other"));
+    fs.writeFileSync(path.join(d, "other/a.ts"), "export const a = 0;\n");
+    const wrongSameBasename = new Map([["test/a.test.ts", 'import { a } from "../other/a.ts"; test("a", () => assert.equal(a, 1));\n']]);
+    assert.equal(
+      isVerifierDeliverableBound(d, [path.join(d, "src/a.ts")], "npm test", "ℹ tests 1\nℹ pass 1", new Set(["src/a.ts"]), wrongSameBasename),
+      false,
+      "a same-basename import from another path does not bind",
+    );
 
-    // 4. Empty changedFiles with executed tests binds
+    // 4. An empty change list still needs operator scope and a pre-turn import.
     const boundEmpty = isVerifierDeliverableBound(d, [], "npm test", "ℹ tests 1\nℹ pass 1");
-    assert.equal(boundEmpty, true, "empty changedFiles with executed tests must bind");
+    assert.equal(boundEmpty, false, "a generic passing suite without declared scope is only regression evidence");
+    const boundEmptyScoped = isVerifierDeliverableBound(d, [], "npm test", "ℹ tests 1\nℹ pass 1", new Set(["src/a.ts"]), baselineTests);
+    assert.equal(boundEmptyScoped, true, "a no-change verification unit can bind only the operator-declared product scope");
+    const boundFilteredScoped = isVerifierDeliverableBound(
+      d,
+      [],
+      "npm test -- -t unrelated",
+      "ℹ tests 1\nℹ pass 1",
+      new Set(["src/a.ts"]),
+      baselineTests,
+    );
+    assert.equal(boundFilteredScoped, false, "a filtered pass without evidence the scoped import test ran does not bind");
 
     // 5. Changed test file that did not run does not bind
-    fs.mkdirSync(path.join(d, "test"));
+    fs.mkdirSync(path.join(d, "test"), { recursive: true });
     fs.writeFileSync(path.join(d, "test/foo.test.ts"), "test('foo', () => {});\n");
     const boundNotRun = isVerifierDeliverableBound(
       d,
@@ -110,14 +155,28 @@ test("ACC-VER-03: path-token deliverable binding rejects basename coincidences a
     );
     assert.equal(boundNotRun, false, "changed test file that was not executed must not bind");
 
-    // 6. Changed test file that did run binds
+    // 6. A changed test cannot declare itself as the deliverable.
     const boundRan = isVerifierDeliverableBound(
       d,
       [path.join(d, "test/foo.test.ts")],
       "npm test -- test/foo.test.ts",
       "ℹ tests 1\nℹ pass 1\nPASS test/foo.test.ts"
     );
-    assert.equal(boundRan, true, "changed test file that executed must bind");
+    assert.equal(boundRan, false, "a changed test file cannot establish VERIFIED");
+
+    const outside = fs.mkdtempSync(path.join(os.tmpdir(), "a2tester-outside-"));
+    try {
+      fs.writeFileSync(path.join(outside, "a.ts"), "export const a = 1;\n");
+      fs.symlinkSync(outside, path.join(d, "linked"), "dir");
+      fs.writeFileSync(path.join(d, "test/linked.test.ts"), 'import { a } from "../linked/a.ts"; test("a", () => assert.equal(a, 1));\n');
+      assert.equal(
+        isVerifierDeliverableBound(d, [path.join(d, "linked/a.ts")], "npm test", "ℹ tests 1\nℹ pass 1", new Set(["linked/a.ts"]), new Map([["test/linked.test.ts", fs.readFileSync(path.join(d, "test/linked.test.ts"), "utf8")]])),
+        false,
+        "a deliverable reached through a symlink cannot bind",
+      );
+    } finally {
+      fs.rmSync(outside, { recursive: true, force: true });
+    }
   } finally {
     fs.rmSync(d, { recursive: true, force: true });
   }

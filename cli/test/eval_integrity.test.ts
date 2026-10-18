@@ -232,17 +232,94 @@ test("contaminated runs leave the pass rate, crashes are counted, and reruns are
 
 // ---------------------------------------------------------------- run validity (REQ-QUAL-101/102/106)
 
-test("task validation: pinned repos, one source, hidden command; qualification also needs class and difficulty", async () => {
+test("task validation: pinned repos, one source, and black-box hidden oracle for qualification", async () => {
   const { validateTask } = await import(path.join(ROOT, "eval/validate.mjs"));
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "t2-x-"));
   const id = path.basename(dir);
   const good = { id, tier: "T2", objective: "fix it", repo: { url: "https://example.invalid/r.git", commit: "a".repeat(40) }, hidden: { command: "npm test" } };
+  fs.mkdirSync(path.join(dir, "candidate"));
   assert.deepEqual(validateTask(good, dir), []);
   assert.match(validateTask({ ...good, repo: { url: good.repo.url, commit: "main" } }, dir).join(), /pinned/);
   assert.match(validateTask({ ...good, fixture: "repo" }, dir).join(), /exactly one of fixture or repo/);
   assert.match(validateTask({ ...good, hidden: {} }, dir).join(), /hidden.command/);
-  assert.equal(validateTask(good, dir, { qualification: true }).length, 2);
-  assert.deepEqual(validateTask({ ...good, class: "bugfix", difficulty: "medium" }, dir, { qualification: true }), []);
+  assert.match(validateTask(good, dir, { qualification: true }).join(), /blackbox-v1/);
+  const cases = path.join(dir, "private-cases.json");
+  fs.writeFileSync(cases, JSON.stringify([{ input: { x: 1 }, expected: { x: 1 } }]));
+  fs.symlinkSync(cases, path.join(dir, "private-cases-link.json"));
+  const oracle = { protocol: "blackbox-v1", casesFile: "private-cases.json", runtime: "node", argv: ["candidate/solution.mjs"], timeoutMs: 1000, totalTimeoutMs: 2000, maxOutputBytes: 4096 };
+  const qualifiedTask = { ...good, fixture: "candidate", repo: undefined, class: "bugfix", difficulty: "medium", hidden: oracle };
+  assert.deepEqual(validateTask(qualifiedTask, dir, { qualification: true }), []);
+  assert.match(validateTask({ ...good, class: "bugfix", difficulty: "medium", hidden: { ...oracle, runtime: "bash" } }, dir, { qualification: true }).join(), /runtime is not allowlisted/);
+  for (const runtime of ["constructor", "toString", "__proto__"]) {
+    assert.match(validateTask({ ...qualifiedTask, hidden: { ...oracle, runtime } }, dir, { qualification: true }).join(), /runtime is not allowlisted/);
+  }
+  assert.match(validateTask({ ...good, class: "bugfix", difficulty: "medium", hidden: { ...oracle, casesFile: "../private-cases.json" } }, dir, { qualification: true }).join(), /casesFile is unsafe/);
+  assert.match(validateTask({ ...qualifiedTask, hidden: { ...oracle, casesFile: "private-cases-link.json" } }, dir, { qualification: true }).join(), /casesFile is unsafe/);
+  fs.writeFileSync(path.join(dir, "candidate", "private-cases.json"), fs.readFileSync(cases));
+  assert.match(validateTask({ ...qualifiedTask, hidden: { ...oracle, casesFile: "candidate/private-cases.json" } }, dir, { qualification: true }).join(), /outside the candidate fixture/);
+  assert.match(validateTask({ ...qualifiedTask, hidden: { ...oracle, argv: ["--eval"] } }, dir, { qualification: true }).join(), /normalized relative candidate entrypoint/);
+});
+
+test("black-box oracle keeps canary expectations outside the candidate process and returns sanitized evidence", { timeout: 15_000 }, async () => {
+  const { runBlackBoxOracle } = await import(path.join(ROOT, "eval/oracle.mjs"));
+  const taskDir = fs.mkdtempSync(path.join(os.tmpdir(), "eval-private-task-"));
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "eval-oracle-candidate-"));
+  const privateFile = path.join(taskDir, "private-cases.json");
+  const canary = "ORACLE_EXPECTATION_CANARY_8f3c";
+  const diagnosticCanary = "SYNTHETIC_DIAGNOSTIC_CANARY_a219";
+  fs.writeFileSync(privateFile, JSON.stringify([{ input: { value: "public-input" }, expected: { value: "public-input", oracle: null } }]));
+  const candidate = path.join(workspace, "solution.mjs");
+  fs.writeFileSync(candidate, `import fs from 'node:fs';\nlet value;try{value=fs.readFileSync(${JSON.stringify(privateFile)},'utf8')}catch{};\ntry{fs.writeFileSync('/workspace/solution.mjs','tampered')}catch{};\nconst input=JSON.parse(fs.readFileSync(0,'utf8'));\nconsole.error(${JSON.stringify(diagnosticCanary)});\nconsole.log(JSON.stringify({value:input.value,oracle:value??null}));\n`);
+  const candidateBefore = fs.readFileSync(candidate);
+  const check = { protocol: "blackbox-v1", casesFile: "private-cases.json", runtime: "node", argv: ["solution.mjs"], timeoutMs: 3000, totalTimeoutMs: 5000, maxOutputBytes: 4096 };
+  const result = await runBlackBoxOracle({ dir: taskDir }, workspace, check);
+  assert.deepEqual(result, {
+    pass: true,
+    cases: 1,
+    failedCases: [],
+    timeoutCases: [],
+    outputLimitCases: [],
+    executionFailureCases: [],
+    invalidOutputCases: [],
+    mismatchCases: [],
+    timedOut: false,
+    overflow: false,
+    outcome: "matched",
+  });
+  assert.deepEqual(fs.readFileSync(candidate), candidateBefore, "candidate workspace is read-only during oracle execution");
+  assert.equal(JSON.stringify(result).includes(canary), false, "oracle evidence never serializes hidden expectations or candidate output");
+  assert.equal(JSON.stringify(result).includes(diagnosticCanary), false, "candidate diagnostics are not persisted in oracle evidence");
+  assert.equal(fs.readFileSync(privateFile, "utf8").includes(canary), false);
+
+  fs.writeFileSync(privateFile, JSON.stringify([{ input: { value: "public-input" }, expected: { value: "different", oracle: canary } }]));
+  const failed = await runBlackBoxOracle({ dir: taskDir }, workspace, check);
+  assert.equal(failed.pass, false);
+  assert.deepEqual(failed.failedCases, [0]);
+  assert.deepEqual(failed.mismatchCases, [0]);
+  assert.equal(JSON.stringify(failed).includes(canary), false, "failure summaries do not leak hidden values");
+
+  fs.writeFileSync(candidate, "console.log('x'.repeat(10000));\n");
+  const overflow = await runBlackBoxOracle({ dir: taskDir }, workspace, { ...check, maxOutputBytes: 64 });
+  assert.equal(overflow.pass, false);
+  assert.deepEqual(overflow.outputLimitCases, [0]);
+  assert.equal(overflow.overflow, true);
+  assert.equal(JSON.stringify(overflow).includes("xxxx"), false, "output-overflow evidence discards candidate output");
+
+  fs.writeFileSync(candidate, "while (true) {}\n");
+  const timed = await runBlackBoxOracle({ dir: taskDir }, workspace, { ...check, timeoutMs: 100, totalTimeoutMs: 500 });
+  assert.equal(timed.pass, false);
+  assert.deepEqual(timed.timeoutCases, [0]);
+  assert.equal(timed.timedOut, true);
+  assert.equal(JSON.stringify(timed).includes(canary), false);
+
+  const fixtureTask = fs.mkdtempSync(path.join(os.tmpdir(), "eval-oracle-fixture-task-"));
+  const fixtureWorkspace = fs.mkdtempSync(path.join(os.tmpdir(), "eval-oracle-fixture-ws-"));
+  fs.mkdirSync(path.join(fixtureTask, "fixture"));
+  fs.writeFileSync(path.join(fixtureTask, "fixture", "private.json"), JSON.stringify([{ input: {}, expected: canary }]));
+  await assert.rejects(
+    runBlackBoxOracle({ dir: fixtureTask, fixture: "fixture" }, fixtureWorkspace, { ...check, casesFile: "fixture/private.json" }),
+    /outside the candidate fixture/,
+  );
 });
 
 test("a qualification run is refused without a model fingerprint (weights, server build, sampling)", async () => {
@@ -288,17 +365,35 @@ test("task paths reject traversal, symlink escapes, and unstable task trees", as
   const { taskTreeDigest } = await import(path.join(ROOT, "eval/validate.mjs"));
   const { confinedPath, runtimeMountProblem } = await import(path.join(ROOT, "eval/isolate.mjs"));
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "eval-path-root-"));
-  const outside = fs.mkdtempSync(path.join(os.tmpdir(), "eval-path-outside-"));
-  fs.mkdirSync(path.join(root, "fixture"));
-  fs.writeFileSync(path.join(outside, "canary"), "protected");
-  fs.symlinkSync(outside, path.join(root, "escape"));
-  assert.throws(() => confinedPath(root, "../outside"), /unsafe task path/);
-  assert.throws(() => confinedPath(root, "escape/canary"), /symlink/);
-  assert.throws(() => taskTreeDigest(root), /symlink/);
-  assert.match(runtimeMountProblem(["/dev/null"], [ROOT]) ?? "", /protected candidate runtime path/);
-  assert.match(runtimeMountProblem([path.join(ROOT, "cli/package.json")], [path.join(ROOT, "eval")]) ?? "", /outside its explicit allowlist/);
-  assert.match(runtimeMountProblem([], [path.join(os.homedir(), ".cache")]) ?? "", /sensitive candidate runtime root/);
-  assert.equal(fs.readFileSync(path.join(outside, "canary"), "utf8"), "protected");
+  let outside: string | undefined;
+  let allowedRoot: string | undefined;
+  let otherRuntimeRoot: string | undefined;
+  try {
+    outside = fs.mkdtempSync(path.join(os.tmpdir(), "eval-path-outside-"));
+    // Runtime allowlist roots must be outside protected roots such as /tmp.
+    // The checkout may itself live under /tmp in CI, so use private temporary
+    // roots under a safe home directory for these path-policy assertions.
+    const runtimeTestBase = os.userInfo().homedir === "/root" ? "/home" : os.userInfo().homedir;
+    allowedRoot = fs.mkdtempSync(path.join(runtimeTestBase, "nexus-eval-allowlist-"));
+    otherRuntimeRoot = fs.mkdtempSync(path.join(runtimeTestBase, "nexus-eval-outside-allowlist-"));
+    fs.chmodSync(allowedRoot, 0o700);
+    fs.chmodSync(otherRuntimeRoot, 0o700);
+    fs.mkdirSync(path.join(root, "fixture"));
+    fs.writeFileSync(path.join(outside, "canary"), "protected");
+    fs.writeFileSync(path.join(otherRuntimeRoot, "package.json"), "{}");
+    fs.symlinkSync(outside, path.join(root, "escape"));
+    assert.throws(() => confinedPath(root, "../outside"), /unsafe task path/);
+    assert.throws(() => confinedPath(root, "escape/canary"), /symlink/);
+    assert.throws(() => taskTreeDigest(root), /symlink/);
+    assert.match(runtimeMountProblem(["/dev/null"], [allowedRoot]) ?? "", /protected candidate runtime path/);
+    assert.match(runtimeMountProblem([path.join(otherRuntimeRoot, "package.json")], [allowedRoot]) ?? "", /outside its explicit allowlist/);
+    assert.match(runtimeMountProblem([], [path.join(os.homedir(), ".cache")]) ?? "", /sensitive candidate runtime root/);
+    assert.equal(fs.readFileSync(path.join(outside, "canary"), "utf8"), "protected");
+  } finally {
+    for (const directory of [root, outside, allowedRoot, otherRuntimeRoot]) {
+      if (directory) fs.rmSync(directory, { recursive: true, force: true });
+    }
+  }
 });
 
 test("task-tree digests frame paths, entry types, executable mode, and content lengths", async () => {
@@ -368,13 +463,15 @@ test("candidate namespace reaches only its authenticated run proxy and cannot re
     seen.push(String(req.headers.authorization ?? ""));
     res.end(JSON.stringify({ data: [{ id: "synthetic-model" }] }));
   });
-  await new Promise<void>((resolve) => upstream.listen(0, "127.0.0.1", resolve));
-  const proxy = await startModelProxy({ upstream: `http://127.0.0.1:${(upstream.address() as any).port}/v1`, authToken: "UPSTREAM_AUTH_CANARY", clientToken: "RUN_LOCAL_TOKEN", socketPath: path.join(proxyDirectory, "proxy.sock") });
-  const sandbox = agentSandboxArgv({ cwd: workspace, home, proxyDirectory, readOnlyPaths: ["/usr/bin/node"], supervisorPath: path.join(ROOT, "eval/agent_sandbox.mjs") });
-  const script = `const fs=require('fs'),cp=require('child_process');fetch('http://127.0.0.1:40127/v1/models',{headers:{authorization:'Bearer '+process.env.OPENAI_API_KEY},signal:AbortSignal.timeout(2000)}).then(async r=>{let value='';try{value=fs.readFileSync(${JSON.stringify(canary)},'utf8')}catch{};try{fs.writeFileSync('/tmp/host-write-canary','changed')}catch{};const nested=cp.spawnSync('/usr/bin/unshare',['-Ur','true']);console.log(JSON.stringify({status:r.status,token:process.env.OPENAI_API_KEY,upstreamVisible:process.env.UPSTREAM_AUTH_CANARY??null,canary:value,nestedUserns:nested.status}))}).catch(e=>{console.error(e.message);process.exit(1)})`;
-  process.env.UPSTREAM_AUTH_CANARY = "UPSTREAM_AUTH_CANARY";
-  const child = await runSandbox(sandbox.cmd, sandbox.argv, JSON.stringify({ command: "/usr/bin/node", argv: ["-e", script], env: { PATH: "/usr/bin:/bin", OPENAI_API_KEY: "RUN_LOCAL_TOKEN" } }));
+  let proxy: Awaited<ReturnType<typeof startModelProxy>> | undefined;
   try {
+    await new Promise<void>((resolve) => upstream.listen(0, "127.0.0.1", resolve));
+    proxy = await startModelProxy({ upstream: `http://127.0.0.1:${(upstream.address() as any).port}/v1`, authToken: "UPSTREAM_AUTH_CANARY", clientToken: "RUN_LOCAL_TOKEN", socketPath: path.join(proxyDirectory, "proxy.sock") });
+    const nodeRuntime = process.execPath;
+    const sandbox = agentSandboxArgv({ cwd: workspace, home, proxyDirectory, readOnlyPaths: [nodeRuntime], runtimeExecutablePaths: [nodeRuntime], supervisorPath: path.join(ROOT, "eval/agent_sandbox.mjs") });
+    const script = `const fs=require('fs'),cp=require('child_process');fetch('http://127.0.0.1:40127/v1/models',{headers:{authorization:'Bearer '+process.env.OPENAI_API_KEY},signal:AbortSignal.timeout(2000)}).then(async r=>{let value='';try{value=fs.readFileSync(${JSON.stringify(canary)},'utf8')}catch{};try{fs.writeFileSync('/tmp/host-write-canary','changed')}catch{};const nested=cp.spawnSync('/usr/bin/unshare',['-Ur','true']);console.log(JSON.stringify({status:r.status,token:process.env.OPENAI_API_KEY,upstreamVisible:process.env.UPSTREAM_AUTH_CANARY??null,canary:value,nestedUserns:nested.status}))}).catch(e=>{console.error(e.message);process.exit(1)})`;
+    process.env.UPSTREAM_AUTH_CANARY = "UPSTREAM_AUTH_CANARY";
+    const child = await runSandbox(sandbox.cmd, sandbox.argv, JSON.stringify({ command: nodeRuntime, argv: ["-e", script], env: { PATH: "/usr/bin:/bin", OPENAI_API_KEY: "RUN_LOCAL_TOKEN" } }));
     assert.equal(child.status, 0, `${child.error ?? ""}\n${child.stderr}\n${child.stdout}\nproxy=${JSON.stringify(proxy.stats())}\nupstream=${JSON.stringify(seen)}`);
     const output = JSON.parse(child.stdout.trim());
     assert.equal(output.status, 200);
@@ -387,8 +484,8 @@ test("candidate namespace reaches only its authenticated run proxy and cannot re
     assert.doesNotMatch(`${child.stdout}${child.stderr}`, /HOST_PRIVATE_CANARY|UPSTREAM_AUTH_CANARY/);
   } finally {
     delete process.env.UPSTREAM_AUTH_CANARY;
-    await proxy.close();
-    upstream.close();
+    if (proxy) await proxy.close();
+    if (upstream.listening) await new Promise<void>((resolve) => upstream.close(() => resolve()));
   }
 });
 

@@ -174,6 +174,11 @@ ${bodies[report]}
     execFileSync("bash", [scriptPath], {
       cwd: rootDir,
       encoding: "utf-8",
+      env: {
+        ...process.env,
+        npm_config_local_prefix: path.join(rootDir, "cli"),
+        npm_config_prefix: path.join(rootDir, "cli"),
+      },
     });
 
     const sbomPath = path.join(rootDir, "dist", "sbom.json");

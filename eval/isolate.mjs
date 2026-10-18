@@ -108,6 +108,10 @@ export function agentSandboxArgv({ cwd, home, proxyDirectory, readOnlyPaths = []
   if (!sandboxAvailable()) throw new Error("Bubblewrap is unavailable; refusing candidate execution");
   const mountProblem = runtimeMountProblem(readOnlyPaths, allowedRuntimeRoots, runtimeExecutablePaths);
   if (mountProblem) throw new Error(mountProblem);
+  const nodeRuntime = fs.realpathSync(process.execPath);
+  if (!fs.statSync(nodeRuntime).isFile() || (fs.statSync(nodeRuntime).mode & 0o111) === 0) {
+    throw new Error("trusted evaluator Node.js runtime is unavailable");
+  }
   const workspace = fs.realpathSync(cwd);
   const args = ["--unshare-user", "--unshare-pid", "--unshare-net", "--disable-userns", "--die-with-parent", "--new-session", "--proc", "/proc", "--dev", "/dev", "--tmpfs", "/tmp"];
   for (const source of SYSTEM_BINARIES) {
@@ -136,14 +140,15 @@ export function agentSandboxArgv({ cwd, home, proxyDirectory, readOnlyPaths = []
     args.push("--ro-bind", resolved, resolved);
   }
   addTargetParents("/runner/agent_sandbox.mjs");
+  args.push("--ro-bind", nodeRuntime, "/runner/node");
   args.push("--ro-bind", fs.realpathSync(supervisorPath), "/runner/agent_sandbox.mjs");
   args.push("--chdir", "/workspace", "--clearenv", "--setenv", "PATH", "/usr/bin:/bin", "--setenv", "HOME", "/home/eval", "--setenv", "CI", "1", "--");
-  args.push("/usr/bin/node", "/runner/agent_sandbox.mjs");
+  args.push("/runner/node", "/runner/agent_sandbox.mjs");
   return { cmd: BWRAP, argv: args };
 }
 
 /** Run a fixed executable probe without exposing the host filesystem, environment, or network. */
-export function isolatedProcessArgv({ cwd, command, argv = [], readOnlyPaths = [], allowedRoots = [], allowedFiles = [], timeoutMs = 5000 }) {
+export function isolatedProcessArgv({ cwd, command, argv = [], readOnlyPaths = [], allowedRoots = [], allowedFiles = [], timeoutMs = 5000, workspaceReadOnly = false }) {
   if (!sandboxAvailable()) throw new Error("Bubblewrap is unavailable; refusing executable probe");
   const mountProblem = runtimeMountProblem(readOnlyPaths, allowedRoots, allowedFiles);
   if (mountProblem) throw new Error(mountProblem);
@@ -155,7 +160,7 @@ export function isolatedProcessArgv({ cwd, command, argv = [], readOnlyPaths = [
   for (const source of ["/etc/ld.so.cache", "/etc/passwd", "/etc/group", "/etc/nsswitch.conf", "/etc/localtime"]) {
     try { if (fs.statSync(source).isFile()) args.push("--ro-bind", source, source); } catch {}
   }
-  args.push("--bind", workspace, "/workspace", "--tmpfs", "/home", "--dir", "/home/eval", "--tmpfs", "/run", "--symlink", "usr/bin", "/bin");
+  args.push(workspaceReadOnly ? "--ro-bind" : "--bind", workspace, "/workspace", "--tmpfs", "/home", "--dir", "/home/eval", "--tmpfs", "/run", "--symlink", "usr/bin", "/bin");
   const madeDirs = new Set(["/", "/usr", "/usr/bin", "/usr/lib", "/usr/lib64", "/usr/share", "/lib", "/lib64", "/bin", "/etc", "/workspace", "/home", "/home/eval", "/run"]);
   const addParents = (target) => {
     let current = "";
@@ -171,13 +176,17 @@ export function isolatedProcessArgv({ cwd, command, argv = [], readOnlyPaths = [
     addParents(resolved);
     args.push("--ro-bind", resolved, resolved);
   }
+  const resolvedCommand = fs.realpathSync(command);
+  if (!SYSTEM_BINARIES.some((root) => resolvedCommand === root || resolvedCommand.startsWith(`${root}${path.sep}`)) && !readOnlyPaths.some((item) => fs.realpathSync(item) === resolvedCommand)) {
+    throw new Error("isolated executable must be included in the explicit read-only runtime paths");
+  }
   args.push("--chdir", "/workspace", "--clearenv", "--setenv", "PATH", "/usr/bin:/bin", "--setenv", "HOME", "/home/eval", "--setenv", "LANG", "C.UTF-8", "--");
-  args.push(fs.realpathSync(command), ...argv);
+  args.push(resolvedCommand, ...argv);
   return { cmd: BWRAP, argv: args, timeoutMs };
 }
 
-export function runIsolatedProcess(spec, { outputLimit = 16_384 } = {}) {
-  const child = spawn(spec.cmd, spec.argv, { cwd: "/", env: {}, detached: true, stdio: ["ignore", "pipe", "pipe"] });
+export function runIsolatedProcess(spec, { outputLimit = 16_384, input = "" } = {}) {
+  const child = spawn(spec.cmd, spec.argv, { cwd: "/", env: {}, detached: true, stdio: ["pipe", "pipe", "pipe"] });
   return new Promise((resolve) => {
     let stdout = "";
     let stderr = "";
@@ -194,6 +203,8 @@ export function runIsolatedProcess(spec, { outputLimit = 16_384 } = {}) {
     };
     child.stdout.on("data", (chunk) => collect("stdout", chunk));
     child.stderr.on("data", (chunk) => collect("stderr", chunk));
+    child.stdin.on("error", () => {}); // A timed-out or rejecting child may close stdin before the bounded input is sent.
+    child.stdin.end(input);
     const timer = setTimeout(() => { timedOut = true; killGroup("SIGTERM"); setTimeout(() => killGroup("SIGKILL"), 250).unref(); }, spec.timeoutMs);
     child.on("error", (error) => {
       if (settled) return;

@@ -55,7 +55,7 @@ import { WorktreeManager } from "./worktree.js";
 import { isSandboxAvailable } from "./sandbox.js";
 import { runTestSuiteWithExecutor, discoverVerifier, describeVerifier, hasExecutedTests, isVerifierDeliverableBound, isFilteredVerifierCommand, verifierTimeoutSecs } from "./tester.js";
 import { ENABLE_TOOLS_CAPABILITY, TOOL_GROUPS, groupsTriggeredBy, toolGroupOf } from "./core/tool_groups.js";
-import { judgeWithoutCopy, prepareBaselineTestsCopy, snapshotTests, type ChangeBaseline, type Independence } from "./core/independent_check.js";
+import { judgeWithoutCopy, prepareBaselineTestsCopy, requiresWorkspaceVerifierDefinitionBinding, trustedDeliverablesFromBaseline, testsChangedSince, snapshotTests, snapshotVerifierDefinition, verifierDefinitionChangedSince, type ChangeBaseline, type Independence } from "./core/independent_check.js";
 import { ensurePrivateDir, appendPrivateFile } from "./core/durable_file.js";
 
 /** Tools that edit files directly: the first one of an unverified change triggers the pre-change verifier run. */
@@ -854,6 +854,10 @@ export class AutonomousAgent {
   private hasPendingModifications: boolean = false;
   /** Modified files tracked during the session/task for deliverable verification boundaries. */
   private modifiedFiles: Set<string> = new Set<string>();
+  /** Pending recovered work has no authenticated pre-change verifier snapshot. */
+  private verificationBaselineInvalidated: boolean = false;
+  /** A persisted baseline retained only as untrusted continuity evidence after recovery. */
+  private untrustedRecoveredBaseline?: DurableTaskState["changeBaseline"];
   /** Evidence from the verifier run that covers the current workspace changes. Cleared by any later mutation. */
   private verificationEvidence?: VerificationEvidence;
   private verificationEvidenceRawOutput: string = "";
@@ -1336,9 +1340,13 @@ export class AutonomousAgent {
             command: this.changeBaseline.command,
             failed: this.changeBaseline.failed,
             tests: this.changeBaseline.tests ? Object.fromEntries(this.changeBaseline.tests) : null,
+            verifier: this.changeBaseline.verifier ? Object.fromEntries(this.changeBaseline.verifier) : null,
+            trustedDeliverables: this.changeBaseline.trustedDeliverables,
             at: this.changeBaseline.at,
           }
-        : (this.changeBaseline === null ? null : undefined),
+        : (this.changeBaseline === null
+          ? this.untrustedRecoveredBaseline ?? null
+          : this.untrustedRecoveredBaseline ?? undefined),
       tokenStats: { ...this.totalTokens },
       cognitiveRouting: {
         activeTier: this.activeTier,
@@ -1393,37 +1401,36 @@ export class AutonomousAgent {
     this.messages = state.messages || [];
     this.restoreFindings(state.findings);
     this.objective = state.objective ?? undefined;
-    if (state.changeBaseline) {
-      this.changeBaseline = {
-        command: state.changeBaseline.command,
-        failed: state.changeBaseline.failed,
-        tests: state.changeBaseline.tests ? new Map(Object.entries(state.changeBaseline.tests)) : null,
-        at: state.changeBaseline.at,
-      };
-    } else if (state.changeBaseline === null) {
-      this.changeBaseline = null;
-    }
+    // Durable task state is writable by the same local user who can run candidate
+    // commands. Never trust a saved baseline, nor capture a new one over a
+    // resumed workspace with pending changes: an attacker could delete the field
+    // and make candidate-edited tests look pristine.
+    this.changeBaseline = undefined;
+    this.untrustedRecoveredBaseline = state.changeBaseline ?? undefined;
     this.restoreHistory(state.history);
     const committed = Array.isArray((state.history as any)?.committedCompactions) ? new Set<string>((state.history as any).committedCompactions) : undefined;
     const archived = this.stateManager.readArchive(state.taskId, committed);
     this.restoreArchive(archived.messages);
     this.recoveryArchiveNotice = describeArchiveRead(archived);
-    const unsettled = this.settleUnrecordedToolCalls();
+    this.settleUnrecordedToolCalls();
     // Resumed work is the same unit: what compaction removed before the restart is still not in context.
     this.carriedRemovedObservations = unreacquiredRemovals(this.messages);
-    // Changes made before the restart are still unverified unless a verifier established them. A record without the
-    // obligation (written before it was recorded) cannot show that nothing changed: its writes in an interrupted turn
-    // are in neither its conversation nor its last turn. A tool that may have run without its outcome being recorded
-    // counts as a change unless it is known not to write.
-    const interruptedTool = state.currentOperation?.status === "interrupted" ? state.currentOperation.toolName : undefined;
-    const pending =
-      (state.unverifiedChangesPending ?? true) ||
-      [...unsettled, ...(interruptedTool ? [interruptedTool] : [])].some((tool) => this.mayWrite(tool));
+    // Durable task fields and the ordinary candidate hash are writable by the same local identity as candidate
+    // commands, so none can authenticate a clean verifier baseline across process recovery. Keep the verification
+    // obligation pending after every recovery. A workspace-discovered or generic operator-configured verifier cannot
+    // establish a pre-change state for the possibly modified workspace; resume stays unverified until a trusted
+    // baseline or a task-specific authenticated verifier mechanism is available.
+    const pending = true;
     this.hasPendingModifications = pending;
+    this.verificationBaselineInvalidated = pending;
+    if (pending) this.changeBaseline = null;
     this.verificationEvidence = undefined;
-    // An absent obligation already reads as pending and stays absent: the record remains recognizably one that did not
-    // track obligations (see the executor's restart and not-started checks).
-    if (pending && state.unverifiedChangesPending === false) this.persistProgress({ unverifiedChangesPending: true });
+    // Persist the fail-closed state. The recovery result separately retains whether the original
+    // record tracked obligations so the executor can still diagnose incomplete history accurately.
+    // Keep the original baseline record for REQ-AGT-103 continuity, but keep it
+    // out of the active verifier path. It is mutable disk state and cannot prove
+    // verifier independence after recovery.
+    this.persistProgress({ unverifiedChangesPending: true });
 
     if (state.worktreeBinding && recoveryResult.worktreeStatus === "consistent") {
       this.activeWorktree = {
@@ -1702,10 +1709,19 @@ export class AutonomousAgent {
       // to the model as still pending and applied at the first step of the next turn.
       this.objective.continuation = { ...this.objective.continuation, segments: 1, lastProgressStep: 0 };
     }
-    const unsettled = this.settleUnrecordedToolCalls();
-    const pending = (unverifiedChangesPending ?? true) || unsettled.some((tool) => this.mayWrite(tool));
-    if (pending) this.verificationEvidence = undefined;
-    this.setUnverifiedChanges(this.hasPendingModifications || pending);
+    this.settleUnrecordedToolCalls();
+    // Session files are writable by the same local identity that can run candidate
+    // commands. Their pending flag and any verifier snapshot cannot authenticate
+    // that the workspace remained unchanged since the session was saved. Treat
+    // every restored session as requiring verification and prevent a discovered
+    // verifier from taking a new baseline over the potentially modified workspace.
+    // The argument is retained for compatibility with older session records, but
+    // is deliberately not an authority signal.
+    void unverifiedChangesPending;
+    this.changeBaseline = null;
+    this.verificationBaselineInvalidated = true;
+    this.verificationEvidence = undefined;
+    this.setUnverifiedChanges(true);
   }
 
   /**
@@ -1716,6 +1732,7 @@ export class AutonomousAgent {
     this.resetConversation();
     this.carriedRemovedObservations = new Set();
     if (priorChangesUnknown) {
+      this.verificationBaselineInvalidated = true;
       this.verificationEvidence = undefined;
       this.setUnverifiedChanges(true);
     }
@@ -1785,28 +1802,45 @@ export class AutonomousAgent {
   }
 
   /**
-   * Before the first file edit of an unverified change: the discovered verifier's result and the test files as they
-   * are, so a later pass can be judged fail-before / pass-after. Skipped when the operator configured a verifier (their
-   * check decides), in dry-run and read-only modes, and when no verifier is discovered.
+   * Before the first file edit of an unverified change, capture the verifier definition, operator-declared scope and
+   * test files. A discovered verifier also runs before the edit so independence can be judged fail-before/pass-after;
+   * a configured verifier is an operator check and needs the immutable binding snapshot, but not a pre-change run.
    */
   private async captureChangeBaseline(confirmHandler?: ConfirmHandler): Promise<void> {
-    if (this.changeBaseline !== undefined || this.config.dryRun || this.config.readOnly || this.config.authoritativeVerifierCommand?.trim()) return;
-    const command = discoverVerifier(this.config.workspace)?.command;
+    // A new conversation does not make candidate writes from an interrupted or
+    // resumed task trustworthy. Do not establish a discovered-verifier baseline
+    // from a workspace that still carries an unverified-change obligation.
+    if (this.hasPendingModifications || this.verificationBaselineInvalidated || this.changeBaseline !== undefined || this.config.dryRun || this.config.readOnly) return;
+    const configured = this.config.authoritativeVerifierCommand?.trim();
+    const command = configured || discoverVerifier(this.config.workspace)?.command;
     if (!command) {
-      this.changeBaseline = null;
-      return;
-    }
-    const approved = await this.ensureVerifierApproved(command, confirmHandler);
-    if (!approved) {
       this.changeBaseline = null;
       return;
     }
     try {
       const tests = snapshotTests(this.config.workspace);
+      const trustedDeliverables = [...(this.config.trustedDeliverableFiles ?? [])];
+      const verifier = snapshotVerifierDefinition(this.config.workspace, command, trustedDeliverables);
+      if (configured) {
+        this.changeBaseline = { command, failed: false, tests, verifier, trustedDeliverables, at: new Date().toISOString() };
+        if (this.durable) {
+          try {
+            this.checkpointDurableState("configured verifier baseline captured");
+          } catch (err: any) {
+            this.reportPersistenceFailure("baseline", err);
+          }
+        }
+        return;
+      }
+      const approved = await this.ensureVerifierApproved(command, confirmHandler);
+      if (!approved) {
+        this.changeBaseline = null;
+        return;
+      }
       this.activity("verifying", { tool: `${command} (before the change)` });
       const deadlineSecs = this.config.verifierTimeoutSecs ?? DEFAULT_VERIFIER_TIMEOUT_SECS;
       const run = await runTestSuiteWithExecutor(this.config.workspace, (c) => this.bridge.executeTool("run_command", { command: c, timeout_secs: deadlineSecs }), command);
-      this.changeBaseline = { command, failed: !run.success, tests, at: new Date().toISOString() };
+      this.changeBaseline = { command, failed: !run.success, tests, verifier, trustedDeliverables, at: new Date().toISOString() };
       if (this.durable) {
         try {
           this.checkpointDurableState("baseline captured");
@@ -1826,7 +1860,7 @@ export class AutonomousAgent {
     const approved = await this.ensureVerifierApproved(command, confirmHandler);
     if (!approved) return { independent: false, detail: "verifier execution was not approved" };
     // Nexus edited test files: run the tests as they were before the change against the changed code.
-    const dir = prepareBaselineTestsCopy(this.config.workspace, this.changeBaseline!.tests!);
+    const dir = prepareBaselineTestsCopy(this.config.workspace, this.changeBaseline!.tests!, this.changeBaseline!.verifier!);
     if (!dir) return { independent: false, detail: "the workspace is too large to rerun the pre-change tests without Nexus's own test edits" };
     try {
       this.activity("verifying", { tool: `${command} (tests as they were before the change)` });
@@ -1840,7 +1874,7 @@ export class AutonomousAgent {
     }
   }
 
-  private persistProgress(progress: { messages?: boolean; unverifiedChangesPending?: boolean }): void {
+  private persistProgress(progress: { messages?: boolean; unverifiedChangesPending?: boolean; changeBaseline?: ChangeBaseline | null }): void {
     if (!this.durable) return;
     try {
       if (this.stateManager && !this.stateManager.hasTaskState(this.currentTaskId)) this.checkpointDurableState();
@@ -1856,11 +1890,27 @@ export class AutonomousAgent {
                 command: this.changeBaseline.command,
                 failed: this.changeBaseline.failed,
                 tests: this.changeBaseline.tests ? Object.fromEntries(this.changeBaseline.tests) : null,
+                verifier: this.changeBaseline.verifier ? Object.fromEntries(this.changeBaseline.verifier) : null,
+                trustedDeliverables: this.changeBaseline.trustedDeliverables,
                 at: this.changeBaseline.at,
               }
-            : (this.changeBaseline === null ? null : undefined),
+            : (this.changeBaseline === null
+              ? this.untrustedRecoveredBaseline ?? null
+              : this.untrustedRecoveredBaseline ?? undefined),
         } : {}),
         ...(progress.unverifiedChangesPending !== undefined ? { unverifiedChangesPending: progress.unverifiedChangesPending } : {}),
+        ...(progress.changeBaseline !== undefined ? {
+          changeBaseline: progress.changeBaseline
+            ? {
+                command: progress.changeBaseline.command,
+                failed: progress.changeBaseline.failed,
+                tests: progress.changeBaseline.tests ? Object.fromEntries(progress.changeBaseline.tests) : null,
+                verifier: progress.changeBaseline.verifier ? Object.fromEntries(progress.changeBaseline.verifier) : null,
+                trustedDeliverables: progress.changeBaseline.trustedDeliverables,
+                at: progress.changeBaseline.at,
+              }
+            : null,
+        } : {}),
       });
       this.progressSaveFailing = false;
     } catch (err: any) {
@@ -1952,7 +2002,21 @@ export class AutonomousAgent {
   public resetConversation(): void {
     this.approvedEgressOrigins.clear();
     this.approvedVerifiers.clear();
-    this.changeBaseline = undefined;
+    // A conversation reset in this process is not a durable recovery boundary. Keep
+    // the already captured baseline so a follow-up turn can verify the same pending
+    // workspace changes. Disk/session recovery explicitly clears this authority in
+    // recoverFromTaskState() and restoreSession(). If pending work has no trusted
+    // baseline, keep it fail-closed instead of capturing one retroactively.
+    let workspaceIdentityIsCurrent = true;
+    try {
+      this.workspacePathIdentity.assertCurrent();
+    } catch {
+      workspaceIdentityIsCurrent = false;
+    }
+    if (!workspaceIdentityIsCurrent) this.invalidateVerificationBaseline();
+    const hasTrustedInMemoryBaseline = workspaceIdentityIsCurrent && this.changeBaseline !== undefined && !this.verificationBaselineInvalidated;
+    if (!hasTrustedInMemoryBaseline) this.changeBaseline = undefined;
+    this.verificationBaselineInvalidated = this.verificationBaselineInvalidated || (this.hasPendingModifications && !hasTrustedInMemoryBaseline);
     this.enabledToolGroups = new Set();
     this.stepNoticeStep = 0;
     this.cutResponse = undefined;
@@ -1969,6 +2033,13 @@ export class AutonomousAgent {
       },
     ];
     this.restoreFindings(undefined);
+  }
+
+  /** Invalidate an in-memory baseline when its workspace or command boundary changes. */
+  private invalidateVerificationBaseline(): void {
+    this.changeBaseline = this.hasPendingModifications ? null : undefined;
+    this.verificationBaselineInvalidated = this.hasPendingModifications;
+    if (this.hasPendingModifications) this.verificationEvidence = undefined;
   }
 
   public getHistoryCount(): number {
@@ -2002,9 +2073,28 @@ export class AutonomousAgent {
     if (this.activeWorktree && !this.managedWorktreeWorkspaceSwitch) {
       throw new Error("Cannot switch workspaces while a speculative worktree is unresolved; merge or discard it first.");
     }
+    const selectedWorkspace = WorkspacePath.fromSelectedWorkspace(path.resolve(newWorkspace));
+    let currentWorkspaceIdentityIsValid = true;
+    try {
+      this.workspacePathIdentity.assertCurrent();
+    } catch {
+      currentWorkspaceIdentityIsValid = false;
+    }
+    if (!currentWorkspaceIdentityIsValid || selectedWorkspace.value !== this.workspacePathIdentity.value) {
+      this.invalidateVerificationBaseline();
+    }
+    if (selectedWorkspace.value === this.primaryWorkspacePathIdentity.value) {
+      try {
+        this.primaryWorkspacePathIdentity.assertCurrent();
+      } catch {
+        // Explicitly selecting the replacement rebinds persistence to the live directory,
+        // but the verifier baseline stays invalidated by the identity check above.
+        this.primaryWorkspacePathIdentity = selectedWorkspace;
+      }
+    }
     this.bridge.shutdown();
     this.mcpManager.shutdownAll();
-    this.workspacePathIdentity = WorkspacePath.fromSelectedWorkspace(path.resolve(newWorkspace));
+    this.workspacePathIdentity = selectedWorkspace;
     this.stateManager.setWorkspacePaths(
       this.workspacePathIdentity.value === this.primaryWorkspacePathIdentity.value
         ? [this.primaryWorkspacePathIdentity]
@@ -2038,6 +2128,7 @@ export class AutonomousAgent {
   }
 
   public setShell(newShell: string): void {
+    if (newShell !== this.config.shell) this.invalidateVerificationBaseline();
     this.bridge.shutdown();
     this.config.shell = newShell;
     this.bridge = new RustCoreBridge(
@@ -3644,6 +3735,7 @@ The pinned Objective Ledger lists the operator's requirements; your plan never r
         : false;
       let verifierSucceeded = false;
       let hasExecuted = false;
+      let isDeliverableBound = false;
       let noApplicableVerifier = false;
 
       // An operator-configured verifier gates every completion, not only one that follows changes.
@@ -3669,6 +3761,44 @@ The pinned Objective Ledger lists the operator's requirements; your plan never r
               candidateId = this.candidateTracker.computeCandidateIdentitySync(this.config.workspace).candidateId;
             } catch {}
             const current = candidateId ? { inputs: candidateId, epoch: this.epoch, mutationSeq: this.mutationSeq, external: externalInputsFingerprint(this.config.workspace) } : undefined;
+            const bindsWorkspaceDefinition =
+              source === "discovered" ||
+              requiresWorkspaceVerifierDefinitionBinding(verifierCommand);
+            const matchingBaseline =
+              this.changeBaseline?.command === verifierCommand;
+            const verifierDefinitionChanged =
+              matchingBaseline &&
+              verifierDefinitionChangedSince(
+                this.config.workspace,
+                this.changeBaseline!,
+              );
+            if (
+              bindsWorkspaceDefinition &&
+              (!matchingBaseline || verifierDefinitionChanged)
+            ) {
+              const detail = !matchingBaseline
+              ? "The workspace-resolved verifier has no matching pre-change baseline. Its current output cannot establish verification; start a fresh task from an operator-reviewed trusted workspace baseline."
+                : this.changeBaseline?.verifier
+                  ? "The workspace-resolved verifier definition changed after its baseline. Restore it or start a fresh task from a trusted baseline; its output cannot establish verification."
+                  : "The workspace-resolved verifier definition was not captured before this work. Its current output cannot establish verification; start a fresh task from an operator-reviewed trusted workspace baseline.";
+              this.verificationEvidence = {
+                status: "FAILED",
+                command: verifierCommand,
+                source,
+                exitSuccess: false,
+                hasExecutedTests: false,
+                isDeliverableBound: false,
+                independent: false,
+                independenceDetail: detail,
+                candidateId,
+                at: new Date().toISOString(),
+              };
+              return {
+                success: false,
+                output: "",
+                error: detail,
+              };
+            }
             const prior = this.objective && current ? priorAttempt(this.objective, verifierCommand, current) : undefined;
             if (prior && (prior.status === "FAILED" || prior.status === "TIMED_OUT") && this.objective && current) {
               recordAttempt(this.objective, { command: verifierCommand, ...current, status: "SKIPPED_UNCHANGED_INPUTS", ...(prior.failedCheck ? { failedCheck: prior.failedCheck } : {}) });
@@ -3721,12 +3851,22 @@ The pinned Objective Ledger lists the operator's requirements; your plan never r
             // Configured or discovered, a verifier is evidence about the change only when its run shows tests that
             // executed and cover the changed files.
             hasExecuted = hasExecutedTests(testRes.rawOutput || "");
-            const isDeliverableBound = hasExecuted && isVerifierDeliverableBound(
+            const baselineTests = this.changeBaseline?.tests;
+            const baselineTestsChanged = !baselineTests || testsChangedSince(this.config.workspace, baselineTests);
+            // A generic current-invocation verifier cannot authenticate recovered scope or its
+            // candidate-controlled tests. Only a verifier definition and test snapshot captured
+            // before the current task's edits can bind workspace changes.
+            const configuredTestsStable = source !== "configured" || !baselineTestsChanged;
+            isDeliverableBound = (!this.verificationBaselineInvalidated && hasExecuted && configuredTestsStable && isVerifierDeliverableBound(
               this.config.workspace,
               Array.from(this.modifiedFiles),
               verifierCommand,
-              testRes.rawOutput || ""
-            );
+              testRes.rawOutput || "",
+              this.changeBaseline?.trustedDeliverables?.length
+                ? trustedDeliverablesFromBaseline(this.changeBaseline)
+                : new Set(this.config.trustedDeliverableFiles ?? []),
+              baselineTests ?? undefined,
+            ));
             // A discovered verifier's pass makes the change VERIFIED only on independent evidence (fail-before /
             // pass-after on tests the change did not write); the operator's configured verifier is their own check.
             const independence = source === "discovered" && testRes.success && isDeliverableBound ? await this.judgeIndependence(verifierCommand, deadlineSecs, onConfirm) : undefined;
@@ -3798,7 +3938,12 @@ The pinned Objective Ledger lists the operator's requirements; your plan never r
 
       // The obligation is discharged only by a passing run of the selected verifier (never by command text).
       // Zero executed tests does not discharge the obligation.
-      if (!noApplicableVerifier && hasExecuted) this.setUnverifiedChanges(false);
+      if (!noApplicableVerifier && hasExecuted && verifierSucceeded && isDeliverableBound) {
+        // With the latch set, no generic verifier can authenticate the recovered workspace or its oracle.
+        // A trusted pre-change baseline must be established by a fresh task or a future authenticated verifier.
+        if (this.verificationBaselineInvalidated) this.verificationBaselineInvalidated = false;
+        this.setUnverifiedChanges(false);
+      }
       // Files a passing run covered are verified; ones it did not cover stay for a later run to cover.
       if (verifierSucceeded && hasExecuted && this.verificationEvidence?.isDeliverableBound) {
         this.modifiedFiles.clear();
@@ -4452,7 +4597,11 @@ The pinned Objective Ledger lists the operator's requirements; your plan never r
       }
     }
 
-    if (FILE_EDIT_TOOLS.has(toolName) && this.durable) await this.captureChangeBaseline(onConfirm);
+    // Baseline capture is process-local evidence as well as durable evidence.
+    // Subagents are intentionally non-durable, but their edits still need a
+    // pre-change verifier snapshot so the parent cannot mistake an unbound
+    // passing test run for independent verification.
+    if (FILE_EDIT_TOOLS.has(toolName)) await this.captureChangeBaseline(onConfirm);
     // A tool of a group not offered yet still runs (the model may know it from earlier); offer its group from now on.
     const calledGroup = toolGroupOf(toolName);
     if (calledGroup) this.enabledToolGroups.add(calledGroup);
@@ -4493,11 +4642,14 @@ The pinned Objective Ledger lists the operator's requirements; your plan never r
         if (state && typeof parsed.command === "string" && parsed.command !== "none" && !parsed.noVerifier) {
           const rawOutput = typeof parsed.report === "string" ? parsed.report : (receipt.output || "");
           const hasExecuted = hasExecutedTests(rawOutput);
-          const isDeliverableBound = hasExecuted && isVerifierDeliverableBound(
+          const baselineTests = this.changeBaseline?.tests;
+          const isDeliverableBound = !this.verificationBaselineInvalidated && hasExecuted && isVerifierDeliverableBound(
             this.config.workspace,
             Array.from(this.modifiedFiles),
             parsed.command,
-            rawOutput
+            rawOutput,
+            trustedDeliverablesFromBaseline(this.changeBaseline),
+            baselineTests ?? undefined,
           );
           const filtered = Boolean(args.filter) || isFilteredVerifierCommand(parsed.command);
           // Without the copy run (task_completed does that): independent only when unmodified pre-change tests that
@@ -4707,6 +4859,26 @@ The pinned Objective Ledger lists the operator's requirements; your plan never r
       return await this.run(taskPrompt, onConfirm, options);
     }
     if (this.activeTurn) throw new Error("A turn is already active; wait for it to finish or cancel it.");
+    const authoritativeVerifier = this.config.authoritativeVerifierCommand?.trim();
+    if (authoritativeVerifier && this.changeBaseline === undefined) {
+      // Capture workspace-resolved operator verifier files before plugins or the model can change them.
+      // Existing pending work without an earlier snapshot remains unverified rather than being blessed retroactively.
+      this.changeBaseline = {
+        command: authoritativeVerifier,
+        failed: false,
+        tests: this.hasPendingModifications ? null : snapshotTests(this.config.workspace),
+        verifier: this.hasPendingModifications ? null : snapshotVerifierDefinition(this.config.workspace, authoritativeVerifier, this.config.trustedDeliverableFiles ?? []),
+        trustedDeliverables: [...(this.config.trustedDeliverableFiles ?? [])],
+        at: new Date().toISOString(),
+      };
+      if (this.durable) {
+        try {
+          this.checkpointDurableState("authoritative verifier definition captured");
+        } catch (err: any) {
+          this.reportPersistenceFailure("baseline", err);
+        }
+      }
+    }
     await this.initExtensibility();
     const promptText = typeof taskPrompt === "string" ? taskPrompt : "[Multi-modal Vision Input]";
     for (const group of groupsTriggeredBy(promptText)) this.enabledToolGroups.add(group);
@@ -5577,12 +5749,13 @@ The pinned Objective Ledger lists the operator's requirements; your plan never r
   }
 
   /**
-   * Whether the operator-configured verifier must pass before any completion of this agent. An in-turn subagent's own
-   * changes are verified as before and again by its parent, so its read-only reports are not gated. Work units also run
-   * at depth 1 but have no parent turn to verify them, so they are gated.
+   * Whether the operator-configured verifier must pass before this agent can complete. Team research, architecture,
+   * and review roles produce non-mutating reports, so a workspace verifier cannot establish those reports. Mutating
+   * work units have no parent turn to verify them; their configured verifier remains a completion gate.
    */
   private configuredVerifierGatesCompletion(): boolean {
-    return !this.runningAsSubagent && Boolean(this.config.authoritativeVerifierCommand?.trim());
+    const nonMutatingTeamRole = this.role === "researcher" || this.role === "architect" || this.role === "reviewer";
+    return !this.runningAsSubagent && !nonMutatingTeamRole && Boolean(this.config.authoritativeVerifierCommand?.trim());
   }
 
   /** Single place where a turn's execution/outcome dimensions are derived from evidence held by the agent. */
@@ -5709,8 +5882,36 @@ The pinned Objective Ledger lists the operator's requirements; your plan never r
       if (requirementsIncomplete) {
         return deepFreezeTurn(assertTurnResultInvariants({ ...base, execution: "COMPLETED", outcome: "NOT_ESTABLISHED", reason: "REQUIREMENTS_INCOMPLETE", detail: incompleteDetail() }));
       }
+      // A current task may have a trustworthy pre-change verifier snapshot but no operator-declared
+      // deliverable scope. Its passing tests are regression evidence only; keep the obligation pending.
+      // Recovered work is different: the snapshot itself is unauthenticated, so even that evidence
+      // cannot support REGRESSION_FREE until a trusted baseline exists.
+      if (
+        !this.verificationBaselineInvalidated &&
+        evidence?.status === "PASSED" &&
+        evidence.hasExecutedTests === true &&
+        evidence.isDeliverableBound === false
+      ) {
+        return deepFreezeTurn(assertTurnResultInvariants({
+          ...base,
+          execution: "COMPLETED",
+          outcome: "REGRESSION_FREE",
+          reason: "REGRESSION_FREE",
+          detail: "Passing test run did not cover the modified deliverables.",
+        }));
+      }
       const noVerifier = evidence?.status === "NO_APPLICABLE_VERIFIER" ||
         (!evidence && !this.config.authoritativeVerifierCommand?.trim() && !discoverVerifier(this.config.workspace));
+      if (noVerifier && this.turnRemovedObservations.size > 0) {
+        const lost = Array.from(this.turnRemovedObservations);
+        return deepFreezeTurn(assertTurnResultInvariants({
+          ...base,
+          execution: "COMPLETED",
+          outcome: "UNVERIFIED",
+          reason: "CONTEXT_EVIDENCE_NOT_RETAINED",
+          detail: `${lost.length} tool output(s) removed by context compaction and not re-read: ${lost.slice(0, 3).join("; ")}`.slice(0, 300),
+        }));
+      }
       return deepFreezeTurn(assertTurnResultInvariants({
         ...base, execution: "COMPLETED", outcome: "UNVERIFIED",
         reason: noVerifier ? "NO_APPLICABLE_VERIFIER" : "VERIFICATION_NOT_RUN",

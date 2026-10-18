@@ -26,6 +26,10 @@ import { describeTarget, registerProviderCommands } from "./provider_cli.js";
 import { UsageLedger } from "./usage.js";
 import { DOCTOR_EXIT, DOCTOR_SCHEMA_VERSION, doctorExitCode, redactDiagnostic, renderDoctorJson, renderDoctorText, runDoctor, runRepairs } from "./doctor.js";
 
+function collectDeliverableFile(value: string, previous: string[] = []): string[] {
+  return [...previous, value];
+}
+
 /** Configuration errors (unknown provider, missing model or base URL) end the command with a message, not a trace. */
 function buildConfig(options: any): HarnessConfig {
   try {
@@ -230,6 +234,7 @@ program
   .option("--sandbox [mode]", "Isolate command execution using bubblewrap (bwrap) or Docker (default: auto)")
   .option("--worktree", "Isolate execution inside an ephemeral git worktree under .nexus/worktrees/<task-id>")
   .option("--authoritative-verifier <command>", "Trusted command that must pass before any task completion; its success may authorize automatic worktree merge")
+  .option("--deliverable-file <path>", "Operator-declared workspace-relative product file used for VERIFIED binding (repeatable)", collectDeliverableFile, [])
   .option("--record-flight", "Record execution into an append-only deterministic .flightlog")
   .option("--planner-model <name>", "Deep reasoning model for architecture planning (o3, R1, Sonnet)")
   .option("--planner-endpoint <url>", "Dedicated inference endpoint for planner model")
@@ -267,6 +272,7 @@ program
   .option("--sandbox [mode]", "Isolate command execution using bubblewrap (bwrap) or Docker (default: auto)")
   .option("--worktree", "Isolate execution inside an ephemeral git worktree under .nexus/worktrees/<task-id>")
   .option("--authoritative-verifier <command>", "Trusted command that must pass before any task completion; its success may authorize automatic worktree merge")
+  .option("--deliverable-file <path>", "Operator-declared workspace-relative product file used for VERIFIED binding (repeatable)", collectDeliverableFile, [])
   .option("--record-flight", "Record execution into an append-only deterministic .flightlog")
   .option("--planner-model <name>", "Deep reasoning model for architecture planning (o3, R1, Sonnet)")
   .option("--planner-endpoint <url>", "Dedicated inference endpoint for planner model")
@@ -310,6 +316,7 @@ program
   .option("--sandbox [mode]", "Isolate command execution using bubblewrap (bwrap) or Docker (default: auto)")
   .option("--worktree", "Isolate execution inside an ephemeral git worktree under .nexus/worktrees/<task-id>")
   .option("--authoritative-verifier <command>", "Trusted command that must pass before any task completion; its success may authorize automatic worktree merge")
+  .option("--deliverable-file <path>", "Operator-declared workspace-relative product file used for VERIFIED binding (repeatable)", collectDeliverableFile, [])
   .option("--record-flight", "Record execution into an append-only deterministic .flightlog")
   .option("--planner-model <name>", "Deep reasoning model for architecture planning (o3, R1, Sonnet)")
   .option("--planner-endpoint <url>", "Dedicated inference endpoint for planner model")
@@ -323,7 +330,13 @@ program
   .option("-j, --json", "Output machine-readable JSON structured result (UI-002, UI-003)")
   .option("-r, --resume [id]", "Resume previous session or task state")
   .action(async (promptParts: string[], _options: any, cmd: Command) => {
+    // Preserve inherited CLI values when the command-level duplicate only has
+    // its default; explicitly supplied command options still take precedence.
     const options = cmd.optsWithGlobals();
+    for (const option of cmd.options) {
+      const name = option.attributeName();
+      if (cmd.getOptionValueSource(name) !== "default") options[name] = _options[name];
+    }
     let prompt = promptParts.join(" ").trim();
     const config = buildConfig(options);
     config.surface = "headless";

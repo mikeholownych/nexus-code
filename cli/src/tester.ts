@@ -384,6 +384,16 @@ export function hasExecutedTests(rawOutput: string): boolean {
     return totalTests - skipped - todo > 0;
   }
 
+  // Node 20's default node:test reporter uses TAP summary lines; Node 22+ may emit the spec summary above.
+  const nodeTap = rawOutput.match(
+    /(?:^|\n)# tests (\d+)\r?\n# suites \d+\r?\n# pass (\d+)\r?\n# fail (\d+)\r?\n# cancelled (\d+)\r?\n# skipped (\d+)\r?\n# todo (\d+)(?:\r?\n# duration_ms [\d.]+)?(?=\r?\n|$)/
+  );
+  if (nodeTap) {
+    const passed = Number(nodeTap[2]);
+    const failed = Number(nodeTap[3]);
+    return passed + failed > 0;
+  }
+
   // 2. Cargo (Rust)
   const cargo = [...rawOutput.matchAll(/test result: \w+\. (\d+) passed; (\d+) failed/g)];
   if (cargo.length) return cargo.some((m) => Number(m[1]) + Number(m[2]) > 0);
@@ -475,25 +485,47 @@ export function workspaceTestFiles(root: string): string[] {
   return found;
 }
 
-/** Whether `content` (a test file) imports the module `file`: an import specifier ending in its name, not a substring. */
-function importsModule(content: string, file: string): boolean {
-  const stem = path.basename(file).replace(/\.[^.]+$/, "");
-  if (!stem || stem === "index" || stem === "mod" || stem === "__init__") {
-    // Imported through its directory: match the directory name instead.
-    const dir = path.basename(path.dirname(file));
-    return dir ? importsName(content, dir) : false;
+function isSafeWorkspaceFile(root: string, relative: string): boolean {
+  try {
+    const rootReal = fs.realpathSync(root);
+    let cursor = path.resolve(root, relative);
+    const lexical = path.relative(path.resolve(root), cursor);
+    if (!lexical || lexical === ".." || lexical.startsWith(`..${path.sep}`) || path.isAbsolute(lexical)) return false;
+    const components = path.relative(root, cursor).split(path.sep);
+    cursor = path.resolve(root);
+    for (const component of components) {
+      cursor = path.join(cursor, component);
+      const stat = fs.lstatSync(cursor);
+      if (stat.isSymbolicLink()) return false;
+      const real = fs.realpathSync(cursor);
+      const fromRoot = path.relative(rootReal, real);
+      if (fromRoot === ".." || fromRoot.startsWith(`..${path.sep}`) || path.isAbsolute(fromRoot)) return false;
+    }
+    return fs.lstatSync(cursor).isFile();
+  } catch {
+    return false;
   }
-  return importsName(content, stem);
 }
 
-function importsName(content: string, name: string): boolean {
-  const n = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  // JS/TS: from "…/name(.ext)" / require("…/name") / import("…/name")
-  if (new RegExp(`(?:from|require\\(|import\\()\\s*["'][^"']*(?:^|/)${n}(?:\\.[cm]?[jt]sx?)?["']`).test(content)) return true;
-  // Python: from pkg.name import … / import pkg.name / from . import name
-  if (new RegExp(`^\\s*(?:from\\s+[\\w.]*\\b${n}\\b\\s+import|import\\s+[\\w.]*\\b${n}\\b|from\\s+[\\w.]+\\s+import\\s+.*\\b${n}\\b)`, "m").test(content)) return true;
-  // Rust: use crate::name / use super::name / mod name
-  if (new RegExp(`\\buse\\s+(?:crate|super|self|\\w+)::(?:[\\w:]*::)?${n}\\b|\\bmod\\s+${n}\\b`).test(content)) return true;
+/** Resolve a test's relative JS/TS imports to the exact scoped file (including NodeNext `.js` -> `.ts`). */
+function testReferencesFile(content: string, testFile: string, targetFile: string, root: string): boolean {
+  const target = path.resolve(root, targetFile);
+  const imports = /(?:\bfrom\s*|\bimport\s*\(|\brequire\s*\()\s*["']([^"']+)["']|(?:^|[;\n])\s*import\s*["']([^"']+)["']/gm;
+  const extensions = [".js", ".cjs", ".mjs", ".ts", ".tsx", ".jsx", ".json"];
+  for (const match of content.matchAll(imports)) {
+    const specifier = match[1] ?? match[2];
+    if (!specifier.startsWith(".")) continue;
+    const base = path.resolve(path.dirname(path.resolve(root, testFile)), specifier);
+    const candidates = new Set([base]);
+    if (/\.(?:c|m)?js$/.test(base)) {
+      candidates.add(base.replace(/\.(?:c|m)?js$/, ".ts"));
+      candidates.add(base.replace(/\.(?:c|m)?js$/, ".tsx"));
+    } else if (!path.extname(base)) {
+      for (const extension of extensions) candidates.add(base + extension);
+      for (const extension of extensions) candidates.add(path.join(base, `index${extension}`));
+    }
+    if ([...candidates].some((candidate) => path.resolve(candidate) === target)) return true;
+  }
   return false;
 }
 
@@ -537,30 +569,41 @@ export function extractPathTokens(workspace: string, text: string): Set<string> 
 
 /**
  * Whether a passing verifier run is evidence about the changed files (VERIFIED) rather than only a regression check
- * (REGRESSION_FREE). It must show that tests executed, and then one of:
- * - deliverable binding uses boundary-delimited workspace-relative path tokens (basename-only matches do not bind);
- * - a changed test file binds only when that file's tests were executed;
- * - the change has inline tests the run executes (a Rust file with `#[cfg(test)]` under `cargo test`; a Go package
- *   with `_test.go` files under `go test`);
- * - a workspace test file imports a changed module (by import specifier, not by substring).
- * With no changed files recorded (e.g. changes carried over from a resumed session), executed tests are the evidence.
+ * (REGRESSION_FREE). It must show executed tests import every changed product file
+ * explicitly declared by the operator before the turn. Candidate-controlled test
+ * output, changed tests, inline tests, and runtime-graph membership alone cannot
+ * establish deliverable scope.
+ * Verification-only work still requires an operator-declared scope and pre-turn test snapshot; an empty change list is
+ * not itself a deliverable declaration.
  */
 export function isVerifierDeliverableBound(
   workspace: string,
   changedFiles: string[],
   verifierCommand: string,
-  testOutput: string = ""
+  testOutput: string = "",
+  trustedDeliverables?: ReadonlySet<string>,
+  baselineTests?: ReadonlyMap<string, string>,
 ): boolean {
   if (!hasExecutedTests(testOutput)) return false;
-  if (!changedFiles || changedFiles.length === 0) return true;
   const root = path.resolve(workspace);
   const rel = (file: string) => path.relative(root, path.resolve(root, file)).replace(/\\/g, "/");
 
+  // An empty change list is not an operator scope. This matters for verification-only
+  // work units: a generic passing suite is regression evidence, not proof of a declared
+  // product deliverable. The operator-declared scope and pre-turn test snapshot are both
+  // required even when the current turn made no edits.
+  if (!baselineTests?.size || !trustedDeliverables?.size) return false;
+  const declaredScope = [...trustedDeliverables].map((file) => rel(file));
+  if (declaredScope.some((file) => !file || file.startsWith("../") || path.isAbsolute(file) || !isSafeWorkspaceFile(root, file))) return false;
+  const declaredScopeSet = new Set(declaredScope);
+  const changedNonTestFiles = changedFiles.filter((file) => !TEST_PATH.test(rel(file)));
+  // A runtime graph cannot distinguish product code from dual-use oracle code.
+  // Require a pre-turn operator declaration and reject any changed product path
+  // outside that immutable task scope.
+  const changedTargets = changedNonTestFiles.map((file) => rel(file));
+  if (changedTargets.some((file) => !declaredScopeSet.has(file) || !isSafeWorkspaceFile(root, file))) return false;
   const tokens = extractPathTokens(root, `${verifierCommand}\n${testOutput}`);
   const isFiltered = isFilteredVerifierCommand(verifierCommand);
-
-  const changedTestFiles = changedFiles.filter((file) => TEST_PATH.test(rel(file)));
-  const changedNonTestFiles = changedFiles.filter((file) => !TEST_PATH.test(rel(file)));
 
   const testFileExecuted = (testFileRel: string) => {
     // An unfiltered verifier run that executed tests ran the repository test suite
@@ -568,65 +611,122 @@ export function isVerifierDeliverableBound(
     return tokens.has(testFileRel) || verifierCommand.includes(testFileRel);
   };
 
-  // If only test files changed, at least one changed test file must have executed
-  if (changedTestFiles.length > 0 && changedNonTestFiles.length === 0) {
-    return changedTestFiles.some((file) => testFileExecuted(rel(file)));
-  }
+  // Verifier output is candidate-influenced. Bind every operator-declared product
+  // file to an actually executed, pre-existing test import instead of path text.
+  return declaredScope.every((file) => [...baselineTests].some(([testRel, content]) =>
+    (!isFiltered || testFileExecuted(testRel)) &&
+    Boolean(content) && testReferencesFile(content, testRel, rel(file), root),
+  ));
+}
 
-  // Check if non-test files are directly named by path tokens in command or output
-  for (const file of changedNonTestFiles) {
-    const r = rel(file);
-    // Documentation files (.md) do not bind on coincidental output mentions (VER-04)
-    if (r.endsWith(".md") || r.endsWith(".markdown")) {
-      if (verifierCommand.includes(r)) return true;
-      continue;
-    }
-    if (tokens.has(r) || verifierCommand.includes(r)) {
-      return true;
-    }
-  }
-
-  const read = (file: string) => {
-    try {
-      const stat = fs.statSync(file);
-      return stat.size <= MAX_TEST_BYTES ? fs.readFileSync(file, "utf8") : "";
-    } catch {
-      return "";
+/** Resolve package-declared runtime entry points to the files that actually implement them. */
+export function workspaceRuntimeFiles(root: string): Set<string> {
+  const workspace = path.resolve(root);
+  const manifests: string[] = [];
+  const walk = (directory: string, depth: number) => {
+    if (depth > 5 || manifests.length >= 128) return;
+    let entries: fs.Dirent[];
+    try { entries = fs.readdirSync(directory, { withFileTypes: true }); } catch { return; }
+    for (const entry of entries) {
+      if (entry.name === "node_modules" || entry.name === ".git" || entry.name === "dist" || entry.name === "build") continue;
+      const full = path.join(directory, entry.name);
+      if (entry.isDirectory()) walk(full, depth + 1);
+      else if (entry.name === "package.json") manifests.push(full);
     }
   };
+  walk(workspace, 0);
 
-  // Check inline tests
-  for (const file of changedNonTestFiles) {
-    const full = path.resolve(root, file);
-    if (/\bcargo\s+test\b/.test(verifierCommand) && full.endsWith(".rs") && /#\[cfg\(test\)\]/.test(read(full))) return true;
-    if (/\bgo\s+test\b/.test(verifierCommand) && full.endsWith(".go")) {
+  const product = new Set<string>();
+  const sourceExtensions = [".js", ".cjs", ".mjs", ".ts", ".tsx", ".jsx"];
+  const resolveModule = (base: string): string | null => {
+    const sourceAliases = /\.(?:c|m)?js$/.test(base)
+      ? [base.replace(/\.(?:c|m)?js$/, ".ts"), base.replace(/\.(?:c|m)?js$/, ".tsx")]
+      : [];
+    const candidates = [base, ...sourceAliases, ...sourceExtensions.map((extension) => base + extension), ...sourceExtensions.map((extension) => path.join(base, `index${extension}`))];
+    for (const candidate of candidates) {
+      if (!candidate.startsWith(workspace + path.sep)) continue;
       try {
-        if (fs.readdirSync(path.dirname(full)).some((name) => name.endsWith("_test.go"))) return true;
+        const stat = fs.lstatSync(candidate);
+        const real = fs.realpathSync(candidate);
+        if (!stat.isSymbolicLink() && real.startsWith(workspace + path.sep) && stat.isFile()) return candidate;
       } catch {}
     }
-  }
-
-  // Check if workspace test files import the changed modules
-  const tests = workspaceTestFiles(root);
-  for (const test of tests) {
-    const testRel = rel(test);
-    if (isFiltered && !testFileExecuted(testRel)) {
-      continue;
+    return null;
+  };
+  const mapBuiltEntryToSource = (packageRoot: string, entry: string): string[] => {
+    const candidates = [entry];
+    for (const tsconfigName of ["tsconfig.json", "tsconfig.build.json"]) {
+      try {
+        const config = JSON.parse(fs.readFileSync(path.join(packageRoot, tsconfigName), "utf8"));
+        const options = config.compilerOptions ?? {};
+        const outDir = options.outDir;
+        const rootDir = options.rootDir;
+        if (typeof outDir !== "string" || typeof rootDir !== "string") continue;
+        const out = path.resolve(packageRoot, outDir);
+        const resolvedEntry = path.resolve(packageRoot, entry);
+        if (resolvedEntry !== out && !resolvedEntry.startsWith(out + path.sep)) continue;
+        const relative = path.relative(out, resolvedEntry).replace(/\\/g, "/").replace(/\.(?:c|m)?js$/, "");
+        candidates.unshift(path.join(rootDir, relative + ".ts"), path.join(rootDir, relative + ".tsx"), path.join(rootDir, relative + ".js"));
+      } catch {}
     }
-    const content = read(test);
-    if (content && changedNonTestFiles.some((file) => importsModule(content, path.resolve(root, file)))) return true;
-  }
-
-  // If test files were also changed and executed, check if any of them imports any changed non-test file
-  for (const testFile of changedTestFiles) {
-    const testRel = rel(testFile);
-    if (testFileExecuted(testRel)) {
-      const content = read(path.resolve(root, testFile));
-      if (content && changedNonTestFiles.some((file) => importsModule(content, path.resolve(root, file)))) {
-        return true;
+    return candidates;
+  };
+  const collectEntries = (value: unknown, entries: Set<string>) => {
+    if (typeof value === "string" && value.startsWith(".")) entries.add(value);
+    else if (Array.isArray(value)) value.forEach((item) => collectEntries(item, entries));
+    else if (value && typeof value === "object") Object.values(value).forEach((item) => collectEntries(item, entries));
+  };
+  const pending: string[] = [];
+  for (const manifest of manifests) {
+    let pkg: any;
+    try { pkg = JSON.parse(fs.readFileSync(manifest, "utf8")); } catch { continue; }
+    const packageRoot = path.dirname(manifest);
+    const entries = new Set<string>();
+    for (const key of ["main", "module", "source", "browser", "exports", "bin"]) collectEntries(pkg[key], entries);
+    for (const key of ["start", "serve", "dev"]) {
+      const script = pkg.scripts?.[key];
+      if (typeof script === "string") {
+        for (const match of script.matchAll(/(?:node|tsx|ts-node)\s+([^\s;&|]+)/g)) entries.add(match[1]);
+      }
+    }
+    for (const entry of entries) {
+      if (!entry.startsWith(".")) continue;
+      for (const candidate of mapBuiltEntryToSource(packageRoot, entry)) {
+        const resolved = resolveModule(path.resolve(packageRoot, candidate));
+        if (resolved) pending.push(resolved);
       }
     }
   }
 
-  return false;
+  const visited = new Set<string>();
+  const importPattern = /(?:\bfrom\s*|\bimport\s*\(|\brequire\s*\()\s*["']([^"']+)["']|(?:^|[;\n])\s*import\s*["']([^"']+)["']/gm;
+  while (pending.length && visited.size < 4096) {
+    const file = pending.pop()!;
+    if (visited.has(file)) continue;
+    visited.add(file);
+    product.add(path.relative(workspace, file).replace(/\\/g, "/"));
+    let text: string;
+    try { text = fs.readFileSync(file, "utf8"); } catch { continue; }
+    for (const match of text.matchAll(importPattern)) {
+      const specifier = match[1] ?? match[2];
+      if (!specifier.startsWith(".")) continue;
+      const dependency = resolveModule(path.resolve(path.dirname(file), specifier));
+      if (dependency) pending.push(dependency);
+    }
+  }
+  return product;
+}
+
+/**
+ * A test import binds a changed file only when a pre-existing package runtime
+ * entry point reaches that file. Directory names such as `src/` are not
+ * authority: unreferenced assertion helpers under a source-looking directory
+ * remain test support, while an explicitly exported root module is a product.
+ */
+export function isWorkspaceTestSupportFile(root: string, file: string): boolean {
+  const workspace = path.resolve(root);
+  const absolute = path.resolve(workspace, file);
+  const relative = path.relative(workspace, absolute).replace(/\\/g, "/");
+  if (!relative || relative === ".." || relative.startsWith("../")) return true;
+  return !workspaceRuntimeFiles(workspace).has(relative);
 }
