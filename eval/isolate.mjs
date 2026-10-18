@@ -4,6 +4,7 @@ import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
+import { containmentProblem, spawnContained } from "./resources.mjs";
 
 const BWRAP = "/usr/bin/bwrap";
 const SYSTEM_BINARIES = ["/usr/bin", "/usr/lib", "/usr/lib64", "/usr/share", "/lib", "/lib64"];
@@ -185,8 +186,8 @@ export function isolatedProcessArgv({ cwd, command, argv = [], readOnlyPaths = [
   return { cmd: BWRAP, argv: args, timeoutMs };
 }
 
-export function runIsolatedProcess(spec, { outputLimit = 16_384, input = "" } = {}) {
-  const child = spawn(spec.cmd, spec.argv, { cwd: "/", env: {}, detached: true, stdio: ["pipe", "pipe", "pipe"] });
+export function runIsolatedProcess(spec, { outputLimit = 16_384, input = "", resources = null } = {}) {
+  const { child, containment } = spawnContained(spec, resources, { cwd: "/", env: {}, detached: true, stdio: ["pipe", "pipe", "pipe"] });
   return new Promise((resolve) => {
     let stdout = "";
     let stderr = "";
@@ -194,7 +195,8 @@ export function runIsolatedProcess(spec, { outputLimit = 16_384, input = "" } = 
     let timedOut = false;
     let overflow = false;
     let settled = false;
-    const killGroup = (signal) => { try { process.kill(-child.pid, signal); } catch {} };
+    // Contained runs are stopped through their cgroup, so the supervisor survives to prove cleanup.
+    const killGroup = (signal) => { if (containment) containment.kill(); else { try { process.kill(-child.pid, signal); } catch {} } };
     const collect = (target, chunk) => {
       bytes += chunk.length;
       if (bytes > outputLimit) { overflow = true; killGroup("SIGKILL"); return; }
@@ -212,12 +214,12 @@ export function runIsolatedProcess(spec, { outputLimit = 16_384, input = "" } = 
       clearTimeout(timer);
       resolve({ status: null, stdout, stderr, error: error.message, timedOut, overflow });
     });
-    child.on("close", (status, signal) => {
+    child.on("close", async (status, signal) => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
       killGroup("SIGKILL");
-      resolve({ status, signal, stdout, stderr, timedOut, overflow });
+      resolve({ status, signal, stdout, stderr, timedOut, overflow, ...(await containmentResult(containment)) });
     });
   });
 }
@@ -239,10 +241,10 @@ export function grantRunAsAccess(user, targets) {
 }
 
 /** Execute a task-controlled shell command in a no-network, clear-environment namespace. */
-export function runIsolated(command, { cwd, home = false, timeoutSec = 300, outputLimit = 1_000_000 } = {}) {
+export function runIsolated(command, { cwd, home = false, timeoutSec = 300, outputLimit = 1_000_000, resources = null } = {}) {
   const spec = isolatedArgv({ cwd, home, command, timeoutSec });
   return new Promise((resolve) => {
-    const child = spawn(spec.cmd, spec.argv, { cwd: "/", env: {}, detached: true, stdio: ["ignore", "pipe", "pipe"] });
+    const { child, containment } = spawnContained(spec, resources, { cwd: "/", env: {}, detached: true, stdio: ["ignore", "pipe", "pipe"] });
     let stdout = "";
     let stderr = "";
     let bytes = 0;
@@ -250,6 +252,7 @@ export function runIsolated(command, { cwd, home = false, timeoutSec = 300, outp
     let overflow = false;
     let settled = false;
     const killTree = (signal) => {
+      if (containment) { containment.kill(); return; }
       try { process.kill(-child.pid, signal); } catch {}
     };
     const append = (target, chunk) => {
@@ -275,14 +278,21 @@ export function runIsolated(command, { cwd, home = false, timeoutSec = 300, outp
       clearTimeout(timer);
       resolve({ status: null, stdout, stderr, error: error.message, timedOut, overflow });
     });
-    child.on("close", (status, signal) => {
+    child.on("close", async (status, signal) => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
       killTree("SIGKILL");
-      resolve({ status, signal, stdout, stderr, timedOut, overflow });
+      resolve({ status, signal, stdout, stderr, timedOut, overflow, ...(await containmentResult(containment)) });
     });
   });
+}
+
+/** `{ resources, containmentProblem }` for a contained execution; nothing for an uncontained one. */
+async function containmentResult(containment) {
+  if (!containment) return {};
+  const final = await containment.final;
+  return { resources: final, containmentProblem: containmentProblem(final) };
 }
 
 /** Resolve task-controlled paths without permitting traversal or symlink redirection. */

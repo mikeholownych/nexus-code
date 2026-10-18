@@ -151,11 +151,41 @@ one, before any agent runs, unless every item below holds:
 Bubblewrap plus the current runner enforces separate mount/user/PID/network namespaces, a cleared task-command
 environment, a bounded wall clock, bounded captured output, per-run process-group teardown, and read-only runtime
 binds. Black-box qualification keeps oracle expectations outside candidate namespaces; legacy commands do not provide that
-property and remain development-only. These controls do **not** currently establish kernel-enforced aggregate CPU, memory, process-count, or writable
-disk quotas for the workspace and temporary filesystems. Qualification preflight now fails closed on that known gap;
-it does not claim that request/token ceilings substitute for kernel resource controls. Do not represent the sandbox as
-resource-exhaustion-proof or run M5 until an approved, measured resource-control contract is implemented and validated.
-Appliance-specific Bubblewrap enforcement is a separate, unverified condition.
+property and remain development-only. Aggregate CPU, memory, process-count and writable-storage limits come from the
+resource contract below, not from request/token ceilings. Appliance-specific Bubblewrap enforcement is a separate,
+unverified condition.
+
+### Resource contract
+
+A config's `resources` object — `{ "cpuPercent", "memoryBytes", "tasks", "workspaceRoot" }` — applies to every
+task-controlled execution: setup commands, the candidate agent, legacy hidden and regression commands, every black-box
+oracle case and the agent version probe. Qualification refuses to start without it.
+
+- Each execution runs under `eval/cgroup_supervisor.mjs` as the only process of its own delegated transient
+  `systemd-run --user --scope`. The supervisor writes cgroup v2 `cpu.max` (`cpuPercent`% of one CPU), `memory.max`
+  (`memoryBytes`), `memory.swap.max` (0) and `pids.max` (`tasks`) on a `payload` leaf, reads them back, and refuses to
+  run on any mismatch. The command joins that leaf before `exec`, so nothing task-controlled runs outside the limits.
+  The limits are aggregate over the whole process tree, whatever its uid (`runAs`), session or process group.
+- `workspaceRoot` must be a tmpfs (for example `/dev/shm`). Workspaces and homes are created there, and the sandbox's
+  `/tmp` is a tmpfs as well. tmpfs pages are charged to the writer's memory cgroup and cannot be swapped, so the bytes a
+  phase writes are bounded by `memoryBytes` together with its memory use. A phase that reaches the bound is OOM-killed,
+  and this is recorded. The bound applies per phase: the agent's writes stay charged after it exits, and the checks that
+  follow get their own limit.
+- CPU is bounded in rate by `cpu.max` and in total by the phase's wall-clock timeout.
+- After the command exits or times out, the supervisor records the remaining processes, empties the cgroup with
+  `cgroup.kill` (which reaches daemonized processes and other uids), and waits for `populated 0`. Timeouts stop the
+  cgroup rather than signalling the supervisor, so it can still report.
+- Each run record carries `resources.{agent,hidden,regression}`: the applied limits, `memoryPeakBytes`, `oomKills`,
+  `memoryMaxEvents`, `pidsPeak`, `pidsMaxEvents`, `cpuUsageUsec`, `cpuThrottledUsec`, `survivorsAfterExit` and
+  `cleaned`. A missing report, a failed limit read-back or `cleaned: false` makes the run an error. It is never scored
+  as a pass or fail.
+- Preflight runs a contained probe and refuses qualification unless this host applies and cleans up the contract. CI
+  provisions delegation with `scripts/ensure-ci-user-cgroups.sh`, and the fixture tests in
+  `cli/test/eval_integrity.test.ts` show OOM, process-cap, tmpfs-storage, CPU-throttle, timeout and escaped-daemon
+  behaviour, using infrastructure fixtures only.
+
+The frozen qualification config sets the limit values. They must be recorded before the first scored run and must not
+be tuned against held-out results.
 
 The evaluator proxy allows one in-flight inference request at a time and destroys the upstream HTTP request/response
 when the candidate-side request is cancelled or its connection closes. This bounds proxy concurrency and propagates

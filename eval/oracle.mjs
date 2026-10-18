@@ -62,7 +62,7 @@ export function blackBoxOracleProblem(check, taskDir, candidateFixture = null) {
 }
 
 /** Run candidate code as a black box. Only bounded summaries leave this function; raw output is discarded. */
-export async function runBlackBoxOracle(task, workspace, check) {
+export async function runBlackBoxOracle(task, workspace, check, { resources = null } = {}) {
   const problem = blackBoxOracleProblem(check, task.dir, task.fixture ?? null);
   if (problem) throw new Error(problem);
   const casesPath = confinedPath(task.dir, check.casesFile);
@@ -89,6 +89,7 @@ export async function runBlackBoxOracle(task, workspace, check) {
     }
   }
   const deadline = Date.now() + check.totalTimeoutMs;
+  const containment = { executions: 0, oomKills: 0, pidsMaxEvents: 0, survivorsAfterExit: 0 };
   for (let index = 0; index < cases.length; index++) {
     const remainingMs = deadline - Date.now();
     if (remainingMs < 100) {
@@ -109,7 +110,15 @@ export async function runBlackBoxOracle(task, workspace, check) {
     const result = await runIsolatedProcess(spec, {
       outputLimit: check.maxOutputBytes,
       input: `${JSON.stringify(cases[index].input)}\n`,
+      resources,
     });
+    if (result.containmentProblem) throw new Error(`black-box oracle containment failed: ${result.containmentProblem}`);
+    if (result.resources) {
+      containment.executions++;
+      containment.oomKills += result.resources.oomKills ?? 0;
+      containment.pidsMaxEvents += result.resources.pidsMaxEvents ?? 0;
+      containment.survivorsAfterExit += result.resources.survivorsAfterExit;
+    }
     if (result.timedOut) timeoutCases.push(index);
     if (result.overflow) outputLimitCases.push(index);
     if (result.status !== 0 || result.error) executionFailureCases.push(index);
@@ -137,5 +146,6 @@ export async function runBlackBoxOracle(task, workspace, check) {
     timedOut: timeoutCases.length > 0,
     overflow: outputLimitCases.length > 0,
     outcome: failures.length === 0 ? "matched" : "mismatch_or_execution_failure",
+    resources: resources ? containment : null,
   };
 }
