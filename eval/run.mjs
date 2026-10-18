@@ -13,6 +13,7 @@ import { startModelProxy } from "./model_proxy.mjs";
 import { asUser, corpusManifestProblem, corpusTaskRows, fetchModelEntry, hiddenTestIsolationProblem, modelFingerprint, nexusContextLimitArgs, nexusLimitsProblem, qualificationBudgetProblem, taskTreeDigest, validateTask } from "./validate.mjs";
 import { agentSandboxArgv, assertNoSymlinks, confinedPath, grantRunAsAccess, isolatedProcessArgv, runIsolated, runIsolatedProcess, sandboxAvailable } from "./isolate.mjs";
 import { runBlackBoxOracle } from "./oracle.mjs";
+import { stageRepoWorkspace } from "./workspace.mjs";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const args = parseArgs(process.argv.slice(2));
@@ -236,8 +237,7 @@ async function prepareWorkspace(task, ws) {
     if (!fs.existsSync(cache)) sh("git", ["clone", "-q", "--no-checkout", task.repo.url, cache], ROOT);
     const object = `${task.repo.commit}^{commit}`;
     if (sh("git", ["-C", cache, "cat-file", "-e", object], ROOT, true) !== 0) sh("git", ["-C", cache, "fetch", "-q", "origin", task.repo.commit], ROOT);
-    sh("git", ["clone", "-q", "--shared", cache, ws], ROOT);
-    sh("git", ["-C", ws, "checkout", "-q", task.repo.commit], ROOT);
+    stageRepoWorkspace(cache, task.repo.commit, ws);
   } else throw new Error(`task ${task.id} has neither fixture nor repo`);
   for (const cmd of task.setup ?? []) {
     const result = await runIsolated(cmd, { cwd: ws, home: true, timeoutSec: task.setupTimeoutSec ?? 300 });
@@ -538,7 +538,7 @@ function harnessIdentity() {
   const git = (...a) => spawnSync("git", a, { cwd: ROOT, encoding: "utf8" }).stdout.trim();
   const commit = git("rev-parse", "HEAD");
   const dirty = Boolean(git("status", "--porcelain", "--untracked-files=all", "--", ".", ":(exclude)cli/dist"));
-  const sourceFiles = ["eval/run.mjs", "eval/validate.mjs", "eval/isolate.mjs", "eval/agent_sandbox.mjs", "eval/model_proxy.mjs", "eval/score.mjs", "eval/infra.mjs"];
+  const sourceFiles = ["eval/run.mjs", "eval/validate.mjs", "eval/isolate.mjs", "eval/agent_sandbox.mjs", "eval/model_proxy.mjs", "eval/score.mjs", "eval/infra.mjs", "eval/workspace.mjs"];
   const sourceDigests = sourceFiles.map((file) => ({ file, sha256: createHash("sha256").update(fs.readFileSync(path.join(ROOT, file))).digest("hex") }));
   const sourceSha256 = createHash("sha256").update(JSON.stringify(sourceDigests)).digest("hex");
   return { commit, dirty, sourceDigests, sourceSha256, string: `${commit.slice(0, 12)}${dirty ? "-dirty" : ""}` };

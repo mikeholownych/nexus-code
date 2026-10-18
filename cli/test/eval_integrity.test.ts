@@ -361,6 +361,70 @@ test("qualification remains fail-closed without enforced aggregate resource cont
   assert.match(qualificationResourceIsolationProblem(), /enforced CPU, memory, process-count, and workspace-storage limits/);
 });
 
+test("repository workspaces carry no history beyond the pinned baseline commit", async () => {
+  const { stageRepoWorkspace, workspaceHistoryProblem } = await import(path.join(ROOT, "eval/workspace.mjs"));
+  const base = fs.mkdtempSync(path.join(os.tmpdir(), "eval-ws-history-"));
+  const env = { PATH: "/usr/bin:/bin", HOME: base, GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: "/dev/null" };
+  const git = (cwd: string, ...argv: string[]) => {
+    const r = spawnSync("git", ["-c", "user.name=t", "-c", "user.email=t@example.invalid", "-c", "init.defaultBranch=main", ...argv], { cwd, env, encoding: "utf8" });
+    assert.equal(r.status, 0, r.stderr);
+    return r.stdout.trim();
+  };
+  try {
+    // Upstream: baseline, then the "reference fix" child, a tag on the child and a side branch beyond it.
+    const upstream = path.join(base, "upstream");
+    fs.mkdirSync(upstream);
+    git(upstream, "init", "-q");
+    fs.writeFileSync(path.join(upstream, "lib.txt"), "buggy\n");
+    git(upstream, "add", "-A");
+    git(upstream, "commit", "-qm", "baseline");
+    const baseline = git(upstream, "rev-parse", "HEAD");
+    fs.writeFileSync(path.join(upstream, "lib.txt"), "fixed\n");
+    git(upstream, "commit", "-qam", "reference fix");
+    const child = git(upstream, "rev-parse", "HEAD");
+    git(upstream, "tag", "v-fix");
+    git(upstream, "checkout", "-qb", "later");
+    fs.writeFileSync(path.join(upstream, "later.txt"), "later\n");
+    git(upstream, "add", "-A");
+    git(upstream, "commit", "-qm", "later work");
+    const cache = path.join(base, "cache");
+    git(base, "clone", "-q", "--no-checkout", upstream, cache);
+
+    // Control: the former `clone --shared` + checkout layout exposes the child and is detected.
+    const leaky = path.join(base, "leaky");
+    git(base, "clone", "-q", "--shared", cache, leaky);
+    git(leaky, "checkout", "-q", baseline);
+    assert.match(workspaceHistoryProblem(leaky, baseline) ?? "", /alternates/);
+    assert.equal(spawnSync("git", ["cat-file", "-e", `${child}^{commit}`], { cwd: leaky, env }).status, 0, "control must expose the child");
+    // A full (non-shared) clone has no alternates but still exposes the child; detection must not rely on alternates.
+    const copied = path.join(base, "copied");
+    git(base, "clone", "-q", "--no-local", cache, copied);
+    git(copied, "checkout", "-q", baseline);
+    git(copied, "remote", "remove", "origin");
+    assert.equal(spawnSync("git", ["cat-file", "-e", `${child}^{commit}`], { cwd: copied, env }).status, 0, "control must expose the child");
+    assert.match(workspaceHistoryProblem(copied, baseline) ?? "", /not ancestors/);
+
+    const ws = path.join(base, "ws");
+    stageRepoWorkspace(cache, baseline, ws);
+    assert.equal(workspaceHistoryProblem(ws, baseline), null);
+    assert.equal(git(ws, "rev-parse", "HEAD"), baseline);
+    assert.equal(fs.readFileSync(path.join(ws, "lib.txt"), "utf8"), "buggy\n");
+    // (a) nothing reachable that is not an ancestor of the baseline
+    assert.equal(git(ws, "rev-list", "--all", "--reflog", `^${baseline}`), "");
+    // (b) no alternates link to the cache
+    assert.equal(fs.existsSync(path.join(ws, ".git/objects/info/alternates")), false);
+    // (c) the reference-fix commit object is absent
+    assert.notEqual(spawnSync("git", ["cat-file", "-e", `${child}^{commit}`], { cwd: ws, env }).status, 0);
+    // (d) no remotes, tags or FETCH_HEAD naming the cache
+    assert.equal(git(ws, "remote"), "");
+    assert.equal(git(ws, "tag", "--list"), "");
+    assert.equal(fs.existsSync(path.join(ws, ".git/FETCH_HEAD")), false);
+    assert.throws(() => stageRepoWorkspace(cache, "main", path.join(base, "ws-ref")), /full pinned commit/);
+  } finally {
+    fs.rmSync(base, { recursive: true, force: true });
+  }
+});
+
 test("task paths reject traversal, symlink escapes, and unstable task trees", async () => {
   const { taskTreeDigest } = await import(path.join(ROOT, "eval/validate.mjs"));
   const { confinedPath, runtimeMountProblem } = await import(path.join(ROOT, "eval/isolate.mjs"));
