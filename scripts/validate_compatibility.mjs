@@ -40,6 +40,11 @@ try {
   if (!content.components || ["cli", "core", "tui", "harness"].some((name) => typeof content.components[name] !== "string" || !/^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/.test(content.components[name]))) {
     throw new Error("Missing or invalid component SemVer");
   }
+  for (const name of ["cli", "core", "tui", "harness"]) {
+    if (content.components[name] !== content.version) {
+      throw new Error(`Component '${name}' version must match release version '${content.version}'`);
+    }
+  }
   if (!content.compatibility || typeof content.compatibility.stateSchemaVersion !== "number") {
     throw new Error("Missing compatibility.stateSchemaVersion");
   }
