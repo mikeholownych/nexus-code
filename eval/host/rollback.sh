@@ -1,37 +1,62 @@
 #!/usr/bin/env bash
 # Undo eval/host/provision.sh. Run as root: sudo bash eval/host/rollback.sh [--purge-runtime]
-# Removes only what provision.sh recorded in its ledger as created by it; anything that pre-existed is never touched.
-# /opt/nexus-qual (installed RC and peer agents) is kept unless --purge-runtime is given. A package that provision
-# installed (acl) is left installed. Run outputs elsewhere are kept.
+# Removes only resources that the ledger names AND that still verifiably belong to this procedure: the account only if
+# its uid and home match what was recorded, files only if they carry the procedure's marker, and only the exact paths
+# provision.sh computes. Anything else (pre-existing, re-created by someone else, or a tampered ledger entry) is left.
+# /opt/nexus-qual (installed RC and peer agents) is kept unless --purge-runtime is given. A package provision installed
+# (acl) is left installed. Run outputs elsewhere are kept.
 set -euo pipefail
 
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+readonly HERE
 readonly ACCOUNT=nexus-eval
+readonly ACCOUNT_HOME=/var/lib/nexus-eval
+readonly SUDOERS=/etc/sudoers.d/90-nexus-eval
+readonly RUNTIME=/opt/nexus-qual
 readonly LEDGER_DIR=/var/lib/nexus-qual-host
 readonly LEDGER="$LEDGER_DIR/ledger"
+readonly MARKER="# Managed by nexus-code eval/host/provision.sh"
 [[ $EUID -eq 0 ]] || { echo "run as root" >&2; exit 2; }
 [[ -f "$LEDGER" ]] || { echo "no provisioning ledger at $LEDGER; nothing was created by provision.sh" >&2; exit 1; }
-owned() { grep -qxF "$1" "$LEDGER"; }
-entries() { sed -n "s/^$1 //p" "$LEDGER"; }
+exec 9>"$LEDGER_DIR/lock"
+flock -n 9 || { echo "another provision or rollback is running" >&2; exit 1; }
 
-if owned "account $ACCOUNT" && pgrep -u "$ACCOUNT" >/dev/null 2>&1; then echo "processes still run as $ACCOUNT; stop the evaluation first" >&2; exit 1; fi
+workspace_root=$(jq -er .workspaceRoot "$HERE/resource-profile.json")
+workspace_parent="$(dirname "$workspace_root")"
+unit="$(systemd-escape -p --suffix=mount "$workspace_root")"
+unit_file="/etc/systemd/system/$unit"
+has() { grep -qxF "$1" "$LEDGER" || grep -qxF "pending $1" "$LEDGER"; }
+marked() { head -n 1 "$1" 2>/dev/null | grep -qxF "$MARKER"; }
 
-# The mount must come down before anything else is removed, so an abort leaves the host as provisioned.
-for unit_file in $(entries unit); do
-  unit="$(basename "$unit_file")"
-  where="$(sed -n 's/^Where=//p' "$unit_file" 2>/dev/null || true)"
+if id -u "$ACCOUNT" >/dev/null 2>&1 && pgrep -u "$ACCOUNT" >/dev/null 2>&1; then echo "processes still run as $ACCOUNT; stop the evaluation first" >&2; exit 1; fi
+
+# The mount comes down first, so an abort leaves everything else as provisioned.
+if has "file $unit_file" && marked "$unit_file"; then
   systemctl disable --now "$unit" 2>/dev/null || true
-  if [[ -n "$where" ]] && findmnt --mountpoint "$where" >/dev/null; then echo "$where is still mounted (busy?); nothing removed" >&2; exit 1; fi
-done
-for unit_file in $(entries unit); do rm -f "$unit_file"; done
-systemctl daemon-reload
-for sudoers in $(entries sudoers); do rm -f "$sudoers"; done
-visudo -cq
-if owned "account $ACCOUNT"; then
-  if owned "home /var/lib/nexus-eval"; then userdel --remove "$ACCOUNT"; else userdel "$ACCOUNT"; fi
+  if findmnt --mountpoint "$workspace_root" >/dev/null; then echo "$workspace_root is still mounted (busy?); nothing removed" >&2; exit 1; fi
+  rm -f "$unit_file"
+  systemctl daemon-reload
 fi
-for dir in $(entries dir); do
-  if [[ "$dir" == /opt/nexus-qual ]]; then [[ "${1:-}" == --purge-runtime ]] && rm -rf "$dir"; continue; fi
-  rmdir "$dir" 2>/dev/null || echo "left non-empty $dir" >&2
+if has "file $SUDOERS" && marked "$SUDOERS"; then rm -f "$SUDOERS"; fi
+visudo -cq
+
+# The account only if it is still the one this procedure created (same uid and home as recorded).
+recorded="$(grep -E "^account $ACCOUNT uid=[0-9]+ home=" "$LEDGER" | tail -n 1 || true)"
+if [[ -n "$recorded" ]] && id -u "$ACCOUNT" >/dev/null 2>&1; then
+  if [[ "$recorded" == "account $ACCOUNT uid=$(id -u "$ACCOUNT") home=$ACCOUNT_HOME" && "$(getent passwd "$ACCOUNT" | cut -d: -f6)" == "$ACCOUNT_HOME" ]]; then
+    userdel --remove "$ACCOUNT"
+  else
+    echo "account $ACCOUNT no longer matches the ledger ($recorded); left in place" >&2
+  fi
+fi
+
+# Directories: only the exact paths provision.sh creates, children before parents, and only when empty.
+for dir in "$workspace_root" "$workspace_parent"; do
+  if has "dir $dir" && [[ -d "$dir" && ! -L "$dir" ]]; then rmdir "$dir" 2>/dev/null || echo "left non-empty $dir" >&2; fi
 done
-if [[ "${1:-}" == --purge-runtime || ! -e /opt/nexus-qual ]]; then rm -rf "$LEDGER_DIR"; else grep -xF "dir /opt/nexus-qual" "$LEDGER" > "$LEDGER.keep" || true; mv "$LEDGER.keep" "$LEDGER"; fi
+keep_runtime=false
+if has "dir $RUNTIME" && [[ -d "$RUNTIME" && ! -L "$RUNTIME" ]]; then
+  if [[ "${1:-}" == --purge-runtime ]]; then rm -rf --one-file-system "$RUNTIME"; else keep_runtime=true; fi
+fi
+if $keep_runtime; then printf 'dir %s\n' "$RUNTIME" > "$LEDGER"; else rm -f "$LEDGER" "$LEDGER_DIR/state"; fi
 echo "rolled back qualification host provisioning"
