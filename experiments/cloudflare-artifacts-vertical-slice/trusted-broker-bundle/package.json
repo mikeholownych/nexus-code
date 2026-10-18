@@ -7,5 +7,8 @@
   },
   "dependencies": {
     "cf": "1.0.0-beta.10"
+  },
+  "overrides": {
+    "sharp": "0.35.5"
   }
 }

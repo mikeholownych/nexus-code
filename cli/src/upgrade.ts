@@ -4,13 +4,51 @@ import * as crypto from "node:crypto";
 import { execFileSync, spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { getBuildIdentity } from "./build_identity.js";
+import {
+  isPathSafe,
+  isSymlinkSafe,
+  validateTarArchive,
+  safeExtractTar,
+  MAX_DOWNLOAD_BYTES,
+  MAX_EXTRACT_BYTES,
+} from "./tar_safety.js";
+import {
+  ReleaseCompatibilityMetadata,
+  checkReleaseCompatibility,
+  validateCompatibilityMetadata,
+  COMPATIBILITY_METADATA_FILENAME,
+} from "./compatibility.js";
+import {
+  UpgradeJournalEntry,
+  readJournal,
+  writeJournal,
+  clearJournal,
+  createPreMigrationBackup,
+  restoreConfigBackup,
+  recoverUpgrade,
+  getJournalPath,
+} from "./upgrade_journal.js";
 
 export const CANONICAL_REPO = "mikeholownych/nexus-code";
 export const DEFAULT_RELEASES_API = `https://api.github.com/repos/${CANONICAL_REPO}/releases`;
 export const DEFAULT_RELEASE_BASE_URL = `https://github.com/${CANONICAL_REPO}/releases`;
 
-export type InstallProvenance = "packaged" | "development" | "unsupported";
+export type InstallProvenance = "packaged" | "development" | "package-manager" | "unsupported";
 export type UpgradeAction = "upgrade" | "downgrade" | "reinstall" | "none";
+
+export interface ProvenanceRecord {
+  formatVersion: 1;
+  method: "packaged" | "installer" | "upgrade";
+  product: "nexus-code";
+  version: string;
+  revision?: string;
+  builtAt?: string;
+  prefix: string;
+  installedPath: string;
+  binPath: string;
+  managed: boolean;
+  packageManager?: string;
+}
 
 export interface SemVer {
   raw: string;
@@ -33,6 +71,7 @@ export interface InstalledProductInfo {
   writable: boolean;
   permissionError?: string;
   detail?: string;
+  provenanceRecord?: ProvenanceRecord;
 }
 
 export interface ReleaseAsset {
@@ -175,6 +214,13 @@ function testWritable(dir: string): { writable: boolean; error?: string } {
   }
 }
 
+export function writeProvenance(versionDir: string, record: ProvenanceRecord): void {
+  const provPath = path.join(versionDir, ".provenance.json");
+  const tmpPath = `${provPath}.tmp.${process.pid}.${Date.now()}`;
+  fs.writeFileSync(tmpPath, JSON.stringify(record, null, 2), { mode: 0o644 });
+  fs.renameSync(tmpPath, provPath);
+}
+
 export function detectInstallation(customOptions?: {
   nexusHome?: string;
   hereDir?: string;
@@ -200,6 +246,31 @@ export function detectInstallation(customOptions?: {
     const binLink = path.join(prefix, "bin", "nexus");
     const writeCheck = testWritable(resolvedHome);
     const sem = parseSemver(versionStr);
+
+    const provFile = path.join(resolvedHome, ".provenance.json");
+    let provRecord: ProvenanceRecord | undefined;
+    if (fs.existsSync(provFile)) {
+      try {
+        provRecord = JSON.parse(fs.readFileSync(provFile, "utf8"));
+      } catch {}
+    }
+
+    if (provRecord && !provRecord.managed && provRecord.packageManager) {
+      return {
+        version: versionStr,
+        normalizedVersion: sem ? normalizeTag(versionStr) : versionStr,
+        semver: sem,
+        isPrerelease: Boolean(sem && sem.prerelease.length > 0),
+        provenance: "package-manager",
+        installRoot: resolvedHome,
+        prefix,
+        binLink,
+        writable: false,
+        detail: `Installed via package manager (${provRecord.packageManager}). Use ${provRecord.packageManager} to update.`,
+        provenanceRecord: provRecord,
+      };
+    }
+
     return {
       version: versionStr,
       normalizedVersion: sem ? normalizeTag(versionStr) : versionStr,
@@ -211,7 +282,8 @@ export function detectInstallation(customOptions?: {
       binLink,
       writable: writeCheck.writable,
       permissionError: writeCheck.error,
-      detail: `Packaged installation at ${resolvedHome} (symlink: ${binLink})`,
+      detail: provRecord ? `Packaged installation at ${resolvedHome} (verified provenance)` : `Legacy packaged installation at ${resolvedHome}`,
+      provenanceRecord: provRecord,
     };
   }
 
@@ -250,6 +322,31 @@ export function detectInstallation(customOptions?: {
       const binLink = path.join(prefix, "bin", "nexus");
       const writeCheck = testWritable(versionDir);
       const sem = parseSemver(v);
+
+      const provFile = path.join(versionDir, ".provenance.json");
+      let provRecord: ProvenanceRecord | undefined;
+      if (fs.existsSync(provFile)) {
+        try {
+          provRecord = JSON.parse(fs.readFileSync(provFile, "utf8"));
+        } catch {}
+      }
+
+      if (provRecord && !provRecord.managed && provRecord.packageManager) {
+        return {
+          version: v,
+          normalizedVersion: sem ? normalizeTag(v) : v,
+          semver: sem,
+          isPrerelease: Boolean(sem && sem.prerelease.length > 0),
+          provenance: "package-manager",
+          installRoot: versionDir,
+          prefix,
+          binLink,
+          writable: false,
+          detail: `Installed via package manager (${provRecord.packageManager}). Use ${provRecord.packageManager} to update.`,
+          provenanceRecord: provRecord,
+        };
+      }
+
       return {
         version: v,
         normalizedVersion: sem ? normalizeTag(v) : v,
@@ -261,7 +358,8 @@ export function detectInstallation(customOptions?: {
         binLink,
         writable: writeCheck.writable,
         permissionError: writeCheck.error,
-        detail: `Packaged installation at ${versionDir}`,
+        detail: provRecord ? `Packaged installation at ${versionDir} (verified provenance)` : `Legacy packaged installation at ${versionDir}`,
+        provenanceRecord: provRecord,
       };
     }
   }
@@ -468,6 +566,11 @@ export function compareInstallationWithRelease(
     reasons.push(
       "Nexus is running from a source development checkout. Use `git pull && make build` to update, or install the packaged release via `install.sh`."
     );
+  } else if (installed.provenance === "package-manager") {
+    canUpgrade = false;
+    reasons.push(
+      installed.detail || "Nexus is managed by an external package manager. Use your system package manager to upgrade."
+    );
   } else if (installed.provenance === "unsupported") {
     canUpgrade = false;
     reasons.push(`Cannot determine installation layout for ${installed.version}.`);
@@ -503,48 +606,152 @@ export function compareInstallationWithRelease(
 // Download, Verification, and Atomic Installation
 // -----------------------------------------------------------------------------
 
-async function downloadFile(
+export function validateDownloadUrl(urlString: string): boolean {
+  let parsed: URL;
+  try {
+    parsed = new URL(urlString);
+  } catch {
+    return false;
+  }
+
+  // Reject URLs with embedded credentials (user:pass@...)
+  if (parsed.username || parsed.password) {
+    return false;
+  }
+
+  const hostname = parsed.hostname.toLowerCase();
+
+  // Test / override environments: allow custom release base URL or releases API host
+  const customBase = process.env.NEXUS_RELEASE_BASE_URL || process.env.NEXUS_RELEASES_URL || process.env.NEXUS_RELEASES_API;
+  if (customBase) {
+    try {
+      const customParsed = new URL(customBase);
+      if (hostname === customParsed.hostname.toLowerCase()) {
+        if (parsed.protocol === "https:" || parsed.protocol === "http:") {
+          return true;
+        }
+      }
+    } catch {}
+  }
+
+  // Localhost allowed for local mock testing
+  if (hostname === "127.0.0.1" || hostname === "localhost") {
+    return parsed.protocol === "http:" || parsed.protocol === "https:";
+  }
+
+  // GitHub allowed domains - must be HTTPS
+  if (parsed.protocol !== "https:") {
+    return false;
+  }
+
+  if (hostname === "github.com") {
+    return parsed.pathname.startsWith(`/${CANONICAL_REPO}/releases/download/`);
+  }
+
+  if (hostname === "objects.githubusercontent.com") {
+    return true;
+  }
+
+  return false;
+}
+
+export async function downloadFile(
   url: string,
   destPath: string,
   signal?: AbortSignal,
-  timeoutMs = 60000
+  timeoutMs = 60000,
+  maxHops = 5
 ): Promise<void> {
+  let currentUrl = url;
+  let hops = 0;
+
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(new Error(`Download timed out after ${timeoutMs}ms`)), timeoutMs);
   if (signal) {
     signal.addEventListener("abort", () => controller.abort(signal.reason), { once: true });
   }
-  const headers: Record<string, string> = { "User-Agent": "nexus-upgrade" };
-  const token = process.env.GITHUB_TOKEN || process.env.GH_TOKEN;
-  if (token) headers.Authorization = `Bearer ${token}`;
 
   try {
-    const res = await fetch(url, { headers, signal: controller.signal });
-    if (!res.ok) {
-      throw new Error(`HTTP ${res.status} downloading ${url}`);
-    }
-    const fileStream = fs.createWriteStream(destPath);
-    if (!res.body) {
-      throw new Error(`Empty body downloading ${url}`);
-    }
-    const reader = res.body.getReader();
-    await new Promise<void>((resolve, reject) => {
-      fileStream.on("error", reject);
-      fileStream.on("finish", () => resolve());
-      function pump() {
-        reader.read().then(({ done, value }) => {
-          if (done) {
-            fileStream.end();
-            return;
-          }
-          fileStream.write(Buffer.from(value), (err) => {
-            if (err) reject(err);
-            else pump();
-          });
-        }).catch(reject);
+    while (hops <= maxHops) {
+      if (!validateDownloadUrl(currentUrl)) {
+        throw new Error(`Disallowed download origin or invalid URL: ${currentUrl}`);
       }
-      pump();
-    });
+
+      const headers: Record<string, string> = { "User-Agent": "nexus-upgrade" };
+      const token = process.env.GITHUB_TOKEN || process.env.GH_TOKEN;
+      if (token && (new URL(currentUrl)).hostname === "github.com") {
+        headers.Authorization = `Bearer ${token}`;
+      }
+
+      const res = await fetch(currentUrl, {
+        headers,
+        signal: controller.signal,
+        redirect: "manual",
+      });
+
+      // Handle redirect
+      if (res.status === 301 || res.status === 302 || res.status === 307 || res.status === 308) {
+        const location = res.headers.get("location");
+        if (!location) {
+          throw new Error(`HTTP ${res.status} redirect without Location header from ${currentUrl}`);
+        }
+        currentUrl = new URL(location, currentUrl).toString();
+        hops++;
+        continue;
+      }
+
+      if (!res.ok) {
+        throw new Error(`HTTP ${res.status} downloading ${currentUrl}`);
+      }
+
+      const contentLengthHeader = res.headers.get("content-length");
+      if (contentLengthHeader) {
+        const contentLength = parseInt(contentLengthHeader, 10);
+        if (contentLength > MAX_DOWNLOAD_BYTES) {
+          throw new Error(`Download size (${contentLength} bytes) exceeds maximum allowed limit (${MAX_DOWNLOAD_BYTES} bytes)`);
+        }
+      }
+
+      const fileStream = fs.createWriteStream(destPath);
+      if (!res.body) {
+        throw new Error(`Empty body downloading ${currentUrl}`);
+      }
+
+      let bytesDownloaded = 0;
+      const reader = res.body.getReader();
+
+      try {
+        await new Promise<void>((resolve, reject) => {
+          fileStream.on("error", reject);
+          fileStream.on("finish", () => resolve());
+          function pump() {
+            reader.read().then(({ done, value }) => {
+              if (done) {
+                fileStream.end();
+                return;
+              }
+              bytesDownloaded += value.byteLength;
+              if (bytesDownloaded > MAX_DOWNLOAD_BYTES) {
+                reject(new Error(`Download exceeded maximum limit of ${MAX_DOWNLOAD_BYTES} bytes`));
+                return;
+              }
+              fileStream.write(Buffer.from(value), (err) => {
+                if (err) reject(err);
+                else pump();
+              });
+            }).catch(reject);
+          }
+          pump();
+        });
+      } catch (streamErr) {
+        try { fs.unlinkSync(destPath); } catch {}
+        throw streamErr;
+      }
+
+      return;
+    }
+
+    throw new Error(`Too many redirects (exceeded ${maxHops} hops) while downloading`);
   } finally {
     clearTimeout(timer);
   }
@@ -595,6 +802,95 @@ function verifyManifest(pkgDir: string): boolean {
   return true;
 }
 
+export function detectPathShadowing(binDir: string): { shadowed: boolean; precedingPaths: string[] } {
+  const envPath = process.env.PATH || "";
+  const dirs = envPath.split(path.delimiter).filter(Boolean);
+  const precedingPaths: string[] = [];
+  const normalizedBinDir = path.resolve(binDir);
+
+  for (const dir of dirs) {
+    const resolvedDir = path.resolve(dir);
+    if (resolvedDir === normalizedBinDir) {
+      break;
+    }
+    const candidate = path.join(resolvedDir, "nexus");
+    try {
+      if (fs.existsSync(candidate)) {
+        const stat = fs.statSync(candidate);
+        if ((stat.mode & 0o111) !== 0) {
+          precedingPaths.push(candidate);
+        }
+      }
+    } catch {}
+  }
+
+  return {
+    shadowed: precedingPaths.length > 0,
+    precedingPaths,
+  };
+}
+
+export function rollbackBinary(prefix: string): { success: boolean; revertedTo?: string; error?: string } {
+  const libNexus = path.join(prefix, "lib", "nexus");
+  const binNexus = path.join(prefix, "bin", "nexus");
+  if (!fs.existsSync(libNexus)) {
+    return { success: false, error: `Nexus directory ${libNexus} does not exist.` };
+  }
+
+  let currentTarget = "";
+  try {
+    if (fs.lstatSync(binNexus).isSymbolicLink()) {
+      currentTarget = path.basename(path.dirname(path.dirname(fs.realpathSync(binNexus))));
+    }
+  } catch {}
+
+  const entries = fs.readdirSync(libNexus, { withFileTypes: true });
+  const versions: { dirName: string; semver: SemVer }[] = [];
+
+  for (const ent of entries) {
+    if (!ent.isDirectory() || ent.name.startsWith(".")) continue;
+    if (ent.name === currentTarget) continue;
+    const binCheck = path.join(libNexus, ent.name, "bin", "nexus");
+    if (!fs.existsSync(binCheck)) continue;
+    const sem = parseSemver(ent.name);
+    if (sem) {
+      versions.push({ dirName: ent.name, semver: sem });
+    }
+  }
+
+  if (versions.length === 0) {
+    return { success: false, error: "No alternate installed version found to roll back to." };
+  }
+
+  // Sort descending semver
+  versions.sort((a, b) => compareSemver(b.semver, a.semver));
+  const candidate = versions[0];
+  const candidateBin = path.join(libNexus, candidate.dirName, "bin", "nexus");
+
+  // Verify candidate is executable
+  try {
+    const probe = spawnSync(candidateBin, ["--version"]);
+    if (probe.status !== 0) {
+      return { success: false, error: `Candidate rollback version ${candidate.dirName} failed execution test.` };
+    }
+  } catch (err: any) {
+    return { success: false, error: `Failed to test candidate rollback version: ${err.message}` };
+  }
+
+  // Atomic swap
+  const binDir = path.dirname(binNexus);
+  const tmpLink = path.join(binDir, `.nexus-link-rollback.${process.pid}.${Date.now()}`);
+  try {
+    fs.symlinkSync(candidateBin, tmpLink);
+    fs.renameSync(tmpLink, binNexus);
+  } catch (err: any) {
+    try { fs.unlinkSync(tmpLink); } catch {}
+    return { success: false, error: `Failed to update symlink: ${err.message}` };
+  }
+
+  return { success: true, revertedTo: candidate.dirName };
+}
+
 export async function performUpgrade(
   comparison: UpgradeComparison,
   options?: UpgradeOptions
@@ -603,12 +899,13 @@ export async function performUpgrade(
     throw new Error(`Cannot upgrade: ${comparison.reasons.join(" ")}`);
   }
 
-  const { installed, targetVersion } = comparison;
+  const { installed, targetVersion, action } = comparison;
   const prefix = options?.prefix ?? installed.prefix ?? path.join(process.env.HOME || "", ".local");
   const baseDownloadUrl = getReleaseBaseUrl();
   const archiveName = `nexus-linux-x86_64-${targetVersion}.tar.gz`;
   const archiveUrl = `${baseDownloadUrl}/download/${targetVersion}/${archiveName}`;
   const checksumsUrl = `${baseDownloadUrl}/download/${targetVersion}/SHA256SUMS`;
+  const compatibilityUrl = `${baseDownloadUrl}/download/${targetVersion}/compatibility.json`;
 
   const libNexus = path.join(prefix, "lib", "nexus");
   const binDir = path.join(prefix, "bin");
@@ -618,7 +915,7 @@ export async function performUpgrade(
   fs.mkdirSync(libNexus, { recursive: true });
   fs.mkdirSync(binDir, { recursive: true });
 
-  // Concurrency lock
+  // 1. Concurrency lock
   const lockFile = path.join(libNexus, ".upgrade.lock");
   let lockFd: number | null = null;
   try {
@@ -628,14 +925,12 @@ export async function performUpgrade(
     if (err.code === "EEXIST") {
       try {
         const existing = JSON.parse(fs.readFileSync(lockFile, "utf8"));
-        // Check if process is still alive
         if (typeof existing.pid === "number") {
           try {
             process.kill(existing.pid, 0);
             throw new Error(`Another upgrade process (PID ${existing.pid}) is currently running.`);
           } catch (probeErr: any) {
             if (probeErr.code === "ESRCH") {
-              // Stale lock
               fs.unlinkSync(lockFile);
               lockFd = fs.openSync(lockFile, "wx");
               fs.writeFileSync(lockFd, JSON.stringify({ pid: process.pid, time: new Date().toISOString() }));
@@ -652,8 +947,32 @@ export async function performUpgrade(
     }
   }
 
+  // 2. Pre-migration backup
+  options?.onProgress?.("pre_migration_backup", "Creating pre-migration configuration backup...");
+  const backupResult = createPreMigrationBackup();
+
   const tmpDir = path.join(libNexus, `.tmp-upgrade-${Date.now()}-${process.pid}`);
   fs.mkdirSync(tmpDir, { recursive: true, mode: 0o700 });
+
+  // 3. Initialize transaction journal
+  const journalEntry: UpgradeJournalEntry = {
+    formatVersion: 1,
+    id: `upg-${Date.now()}-${process.pid}`,
+    state: "preparing",
+    sourceVersion: installed.version,
+    sourceInstallDir: installed.installRoot || path.join(libNexus, installed.version),
+    sourceSymlinkTarget: path.join(installed.installRoot || path.join(libNexus, installed.version), "bin", "nexus"),
+    targetVersion,
+    targetInstallDir: versionDir,
+    stagingDir: tmpDir,
+    prefix,
+    binPath: linkPath,
+    startedAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+    configBackupPath: backupResult.configBackupPath,
+    stateBackupDir: backupResult.stateBackupDir,
+  };
+  writeJournal(prefix, journalEntry);
 
   const cleanup = () => {
     try {
@@ -670,9 +989,15 @@ export async function performUpgrade(
   };
 
   try {
+    // 4. Downloading phase
     options?.onProgress?.("downloading", `Fetching ${archiveName}...`);
+    journalEntry.state = "downloading";
+    journalEntry.updatedAt = new Date().toISOString();
+    writeJournal(prefix, journalEntry);
+
     const localArchive = path.join(tmpDir, archiveName);
     const localSums = path.join(tmpDir, "SHA256SUMS");
+    const localCompat = path.join(tmpDir, "compatibility.json");
 
     await downloadFile(archiveUrl, localArchive, options?.signal, options?.timeoutMs);
     options?.onProgress?.("verifying_checksum", "Verifying release checksums...");
@@ -682,6 +1007,17 @@ export async function performUpgrade(
     const verified = verifyChecksum(localArchive, sumsContent, archiveName);
     if (!verified) {
       throw new Error(`SHA-256 verification failed for ${archiveName}; no installation was changed.`);
+    }
+
+    // Attempt to download standalone compatibility.json asset if available
+    let compatMeta: ReleaseCompatibilityMetadata | null = null;
+    try {
+      await downloadFile(compatibilityUrl, localCompat, options?.signal, 5000);
+      if (fs.existsSync(localCompat)) {
+        compatMeta = JSON.parse(fs.readFileSync(localCompat, "utf8"));
+      }
+    } catch {
+      // Release may omit standalone compatibility asset
     }
 
     // Optional attestation check via gh if present
@@ -700,19 +1036,14 @@ export async function performUpgrade(
       }
     }
 
-    // Extract archive
-    options?.onProgress?.("extracting", "Extracting package...");
-    const unpackDir = path.join(tmpDir, "unpack");
-    fs.mkdirSync(unpackDir, { recursive: true });
-    const tarResult = spawnSync("tar", ["-xzf", localArchive, "-C", unpackDir]);
-    if (tarResult.status !== 0) {
-      throw new Error(`Archive extraction failed: ${tarResult.stderr?.toString() || "tar failed"}`);
-    }
+    // 5. Staging phase: Safe tar header validation and extraction
+    options?.onProgress?.("extracting", "Inspecting and safely extracting package...");
+    journalEntry.state = "staged";
+    journalEntry.updatedAt = new Date().toISOString();
+    writeJournal(prefix, journalEntry);
 
-    const packageRoot = path.join(unpackDir, "nexus");
-    if (!fs.existsSync(packageRoot)) {
-      throw new Error("Release archive did not contain top-level 'nexus' directory.");
-    }
+    const unpackDir = path.join(tmpDir, "unpack");
+    const { extractedDir: packageRoot } = await safeExtractTar(localArchive, unpackDir, "nexus");
 
     // Validate package components
     const binNexus = path.join(packageRoot, "bin", "nexus");
@@ -739,7 +1070,32 @@ export async function performUpgrade(
       throw new Error("Release archive failed internal manifest checksum verification.");
     }
 
-    // Verify existing link
+    // Read compatibility metadata from package root if not downloaded
+    if (!compatMeta) {
+      const internalCompat = path.join(packageRoot, COMPATIBILITY_METADATA_FILENAME);
+      if (fs.existsSync(internalCompat)) {
+        try {
+          compatMeta = JSON.parse(fs.readFileSync(internalCompat, "utf8"));
+        } catch {}
+      }
+    }
+
+    // Evaluate compatibility against current state schema
+    const CURRENT_STATE_SCHEMA_VERSION = 1;
+    const compatResult = checkReleaseCompatibility(installed.version, CURRENT_STATE_SCHEMA_VERSION, compatMeta);
+    if (!compatResult.compatible) {
+      if (action === "downgrade" && compatMeta && compatMeta.compatibility.stateSchemaVersion < CURRENT_STATE_SCHEMA_VERSION) {
+        throw new Error(
+          `Downgrade refused: Target version ${targetVersion} uses state schema version ${compatMeta.compatibility.stateSchemaVersion}, which cannot read current state schema version ${CURRENT_STATE_SCHEMA_VERSION}. Explicit downgrade flag cannot bypass state incompatibility.`
+        );
+      }
+      throw new Error(`Compatibility check failed: ${compatResult.reasons.join("; ")}`);
+    }
+    if (compatResult.isLegacy) {
+      options?.onProgress?.("legacy_policy", compatResult.reasons[0]);
+    }
+
+    // Verify existing link safety
     if (fs.existsSync(linkPath) && !fs.lstatSync(linkPath).isSymbolicLink()) {
       throw new Error(`${linkPath} exists and is not a symlink; left it unchanged.`);
     }
@@ -751,12 +1107,28 @@ export async function performUpgrade(
       }
     }
 
-    // Move validated package to version directory
+    // 6. Switching phase: Move package to versionDir and write provenance
     options?.onProgress?.("installing", `Installing into ${versionDir}...`);
+    journalEntry.state = "switching";
+    journalEntry.updatedAt = new Date().toISOString();
+    writeJournal(prefix, journalEntry);
+
     if (fs.existsSync(versionDir)) {
       fs.rmSync(versionDir, { recursive: true, force: true });
     }
     fs.renameSync(packageRoot, versionDir);
+
+    // Record durable provenance
+    writeProvenance(versionDir, {
+      formatVersion: 1,
+      method: "upgrade",
+      product: "nexus-code",
+      version: targetVersion,
+      prefix,
+      installedPath: versionDir,
+      binPath: linkPath,
+      managed: true,
+    });
 
     // Atomic symlink swap
     const nextLink = path.join(binDir, `.nexus-link.${process.pid}`);
@@ -766,12 +1138,33 @@ export async function performUpgrade(
     fs.symlinkSync(path.join(versionDir, "bin", "nexus"), nextLink);
     fs.renameSync(nextLink, linkPath);
 
-    // Post-installation verification
+    journalEntry.state = "switched";
+    journalEntry.updatedAt = new Date().toISOString();
+    writeJournal(prefix, journalEntry);
+
+    // 7. Post-installation verification phase
     options?.onProgress?.("verifying_install", "Verifying installed product...");
     const verifyRun = spawnSync(linkPath, ["--version"], { encoding: "utf8" });
     if (verifyRun.status !== 0) {
       throw new Error(`Installed binary failed self-test: ${verifyRun.stderr || "exit " + verifyRun.status}`);
     }
+
+    journalEntry.state = "verified";
+    journalEntry.updatedAt = new Date().toISOString();
+    writeJournal(prefix, journalEntry);
+
+    // Check for PATH shadowing
+    const shadowing = detectPathShadowing(binDir);
+    let pathWarning: string | undefined;
+    if (shadowing.shadowed) {
+      pathWarning = `Warning: Installed launcher at ${linkPath} is shadowed by '${shadowing.precedingPaths[0]}' earlier in PATH. Run 'hash -r' or adjust PATH order.`;
+      options?.onProgress?.("path_shadow_warning", pathWarning);
+    }
+
+    // 8. Complete journal
+    journalEntry.state = "complete";
+    journalEntry.updatedAt = new Date().toISOString();
+    writeJournal(prefix, journalEntry);
 
     return {
       success: true,
@@ -780,7 +1173,7 @@ export async function performUpgrade(
       installedPath: versionDir,
       binPath: linkPath,
       restartRequired: true,
-      restartNotice: `Nexus has been upgraded to ${targetVersion} in ${versionDir}. The current session continues running on ${installed.version}. Restart Nexus to activate the new version.`,
+      restartNotice: `Nexus has been upgraded to ${targetVersion} in ${versionDir}. The current session continues running on ${installed.version}. Restart Nexus to activate the new version.${pathWarning ? `\n\n${pathWarning}` : ""}`,
       attestationVerified,
     };
   } finally {
@@ -798,6 +1191,99 @@ export async function upgradeCommand(options: any): Promise<void> {
   const isJson = Boolean(options.json);
   const timeoutMs = options.timeout ? Number(options.timeout) : 15000;
   const isCheckOnly = Boolean(options.check);
+  const prefix = options.prefix ?? path.join(process.env.HOME || "", ".local");
+
+  // 1. Rollback binary command
+  if (options.rollbackBinary) {
+    const outcome = rollbackBinary(prefix);
+    if (isJson) {
+      console.log(
+        JSON.stringify(
+          {
+            schemaVersion: 1,
+            tool: "nexus upgrade",
+            status: outcome.success ? "reverted" : "error",
+            ...outcome,
+          },
+          null,
+          2
+        )
+      );
+    } else {
+      if (outcome.success) {
+        console.log(`✔ Executable launcher reverted to ${outcome.revertedTo}.`);
+        console.log(`Note: Run with --restore-backup <path> if state restoration is also required.`);
+      } else {
+        console.error(`Rollback failed: ${outcome.error}`);
+      }
+    }
+    process.exit(outcome.success ? UPGRADE_EXIT.ok : UPGRADE_EXIT.error);
+  }
+
+  // 2. Restore backup command
+  if (options.restoreBackup) {
+    const backupPath = String(options.restoreBackup);
+    const restored = restoreConfigBackup(backupPath);
+    if (isJson) {
+      console.log(
+        JSON.stringify(
+          {
+            schemaVersion: 1,
+            tool: "nexus upgrade",
+            status: restored ? "restored" : "error",
+            backupPath,
+          },
+          null,
+          2
+        )
+      );
+    } else {
+      if (restored) {
+        console.log(`✔ Restored configuration from ${backupPath}.`);
+      } else {
+        console.error(`Restore failed: backup file ${backupPath} not found.`);
+      }
+    }
+    process.exit(restored ? UPGRADE_EXIT.ok : UPGRADE_EXIT.error);
+  }
+
+  // 3. Crash recovery command
+  if (options.recover) {
+    const outcome = recoverUpgrade(prefix);
+    if (isJson) {
+      console.log(
+        JSON.stringify(
+          {
+            schemaVersion: 1,
+            tool: "nexus upgrade",
+            status: outcome.recovered ? "recovered" : "no_action",
+            ...outcome,
+          },
+          null,
+          2
+        )
+      );
+    } else {
+      if (outcome.recovered) {
+        console.log(`✔ Recovery completed (${outcome.action}): ${outcome.details}`);
+      } else {
+        console.log(`Recovery check: ${outcome.details}`);
+      }
+    }
+    process.exit(outcome.recovered || outcome.action === "none" ? UPGRADE_EXIT.ok : UPGRADE_EXIT.error);
+  }
+
+  // 4. Automatic crash recovery check at startup
+  const journal = readJournal(prefix);
+  if (journal && journal.state !== "complete" && journal.state !== "idle" && journal.state !== "rolled_back") {
+    if (!isJson) {
+      console.warn(`[upgrade] Detected interrupted upgrade in state '${journal.state}'. Attempting recovery...`);
+    }
+    const recoveryOutcome = recoverUpgrade(prefix);
+    if (!isJson) {
+      console.warn(`[upgrade] Recovery: ${recoveryOutcome.details}`);
+    }
+  }
 
   try {
     const installed = detectInstallation();
