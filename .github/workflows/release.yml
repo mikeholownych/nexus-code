@@ -17,7 +17,7 @@ jobs:
       id-token: write
       attestations: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           fetch-depth: 0
       - run: sudo apt-get update
@@ -30,7 +30,7 @@ jobs:
           sudo install -d -o "$USER" -g "$USER" -m 0700 "$root"
           sudo mount -t tmpfs -o size=128m,mode=0700,uid="$(id -u)",gid="$(id -g)" nexus-eval-release "$root"
           echo "NEXUS_EVAL_TEST_WORKSPACE_ROOT=$root" >> "$GITHUB_ENV"
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
       - name: Install cargo tools (audit, deny, about, cyclonedx)
         run: |
           CARGO_HOME="${CARGO_HOME:-$HOME/.cargo}"
@@ -47,7 +47,7 @@ jobs:
           mv "$RUNNER_TEMP/cargo-cyclonedx-x86_64-unknown-linux-musl/cargo-cyclonedx" "$CARGO_HOME/bin/"
           curl -fsSL https://github.com/CycloneDX/cyclonedx-cli/releases/download/v0.33.1/cyclonedx-linux-x64 -o "$CARGO_HOME/bin/cyclonedx"
           chmod +x "$CARGO_HOME/bin/cyclonedx"
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 20
           cache: npm
@@ -100,7 +100,7 @@ jobs:
       - run: bash scripts/smoke-package.sh "$RUNNER_TEMP/dist/nexus-linux-x86_64-$GITHUB_REF_NAME.tar.gz"
       - run: bash scripts/installer-smoke.sh "$GITHUB_WORKSPACE/install.sh" "$RUNNER_TEMP/dist/nexus-linux-x86_64-$GITHUB_REF_NAME.tar.gz"
       - name: Attest build provenance
-        uses: actions/attest-build-provenance@v1
+        uses: actions/attest-build-provenance@92c65d2898f1f53cfdc910b962cecff86e7f8fcc # v1
         with:
           subject-path: |
             ${{ runner.temp }}/dist/nexus-linux-x86_64-${{ github.ref_name }}.tar.gz
@@ -108,7 +108,7 @@ jobs:
       # RC tags (vX.Y.Z-rc.N) publish a prerelease: the workflow-produced RC is the qualification candidate
       # (ACCEPTANCE §1.1 stage 2). Stable tags only build an unpublished draft (stage 5); it is published by hand with
       # `gh release edit <tag> --draft=false` after the stable artifact checks and the signed acceptance disposition.
-      - uses: softprops/action-gh-release@v2
+      - uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
         with:
           files: ${{ runner.temp }}/dist/*
           body_path: docs/releases/${{ github.ref_name }}.md

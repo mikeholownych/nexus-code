@@ -22,3 +22,7 @@ This downloads and installs the published `v0.1.0-alpha.2` Linux x86-64 package 
 See [development and release procedures](docs/DEVELOPMENT.md), [client guide](docs/CLIENT_GUIDE.md), [provider setup](docs/CLOUD_PROVIDERS.md), and the [contest entry](docs/CLOUDFLARE_CONTEST.md).
 
 The client sources are in `cli/` and `core/`. The Cloudflare service and fixture are in `experiments/cloudflare-artifacts-vertical-slice/`; demo orchestration is in `demo/`.
+
+## Community and project policies
+
+Read the [contribution guide](CONTRIBUTING.md), [support channels](SUPPORT.md), [security policy](SECURITY.md), [governance](GOVERNANCE.md), and [code of conduct](CODE_OF_CONDUCT.md). Track changes in [releases](https://github.com/mikeholownych/nexus-code/releases); development plans do not establish release readiness.
