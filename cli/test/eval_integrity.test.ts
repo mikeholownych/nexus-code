@@ -385,14 +385,36 @@ test("qualification remains fail-closed without enforced aggregate resource cont
   if (process.env.NEXUS_EVAL_TEST_WORKSPACE_ROOT) {
     fs.chmodSync(workspaceRoot, 0o755);
     try {
-      assert.match(qualificationResourceIsolationProblem({ resources: ok }) ?? "", /effective mount root must be mode 0700/);
+      assert.match(qualificationResourceIsolationProblem({ resources: ok }) ?? "", /non-readable\/non-writable by group or other/);
     } finally {
       fs.chmodSync(workspaceRoot, 0o700);
     }
     assert.equal(qualificationResourceIsolationProblem({ resources: ok }), null, "restored dedicated mount root must pass preflight");
+    fs.chmodSync(workspaceRoot, 0o731);
+    try {
+      assert.match(qualificationResourceIsolationProblem({ resources: ok }) ?? "", /non-readable\/non-writable by group or other/);
+    } finally {
+      fs.chmodSync(workspaceRoot, 0o700);
+    }
+    fs.chmodSync(workspaceRoot, 0o711);
+    try {
+      assert.equal(qualificationResourceIsolationProblem({ resources: ok }), null, "execute-only traversal for the isolated evaluator account is compatible with the private root");
+    } finally {
+      fs.chmodSync(workspaceRoot, 0o700);
+    }
   }
-  const syntheticMount = `101 1 0:88 / ${workspaceRoot} rw,relatime - tmpfs tmpfs rw,size=131072k,mode=700,uid=${process.getuid()}`;
-  assert.match(dedicatedTmpfsMountProblem(workspaceRoot, `${syntheticMount}\n${syntheticMount.replace("101 ", "102 ")}`) ?? "", /stacked or duplicate/);
+  const syntheticRoot = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-mount-mode-"));
+  try {
+    fs.chmodSync(syntheticRoot, 0o711);
+    const syntheticMount = `101 1 0:88 / ${syntheticRoot} rw,relatime - tmpfs tmpfs rw,size=131072k,mode=711,uid=${process.getuid()}`;
+    assert.match(dedicatedTmpfsMountProblem(syntheticRoot, `${syntheticMount}\n${syntheticMount.replace("101 ", "102 ")}`) ?? "", /stacked or duplicate/);
+    assert.equal(dedicatedTmpfsMountProblem(syntheticRoot, syntheticMount), null, "execute-only traversal is permitted for the isolated evaluator account");
+    assert.match(dedicatedTmpfsMountProblem(syntheticRoot, syntheticMount.replace("mode=711", "mode=755")) ?? "", /non-readable\/non-writable by group or other/);
+    assert.match(dedicatedTmpfsMountProblem(syntheticRoot, syntheticMount.replace("mode=711", "mode=721")) ?? "", /non-readable\/non-writable by group or other/);
+  } finally {
+    fs.chmodSync(syntheticRoot, 0o700);
+    fs.rmdirSync(syntheticRoot);
+  }
 });
 
 test("resource contract: candidate memory, processes, storage and CPU are kernel-bounded and every process is reaped", async () => {

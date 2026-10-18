@@ -167,8 +167,9 @@ oracle case and the agent version probe. Qualification refuses to start without 
   run on any mismatch. The command joins that leaf before `exec`, so nothing task-controlled runs outside the limits.
   The limits are aggregate over the whole process tree, whatever its uid (`runAs`), session or process group.
 - `workspaceRoot` must itself be a dedicated tmpfs mount, not a directory on a shared mount or a bind mount. It must be
-  mounted with `mode=0700` and owned by the evaluator harness uid, and its total size must be at most `storageBytes`.
-  For example: `mount -t tmpfs -o size=<storageBytes>,mode=0700,uid=<harness-uid>,gid=<harness-gid> tmpfs <dir>`.
+  owned by the evaluator harness uid, with owner `rwx` and no group/other read or write permission. Group/other execute
+  permission is allowed so a separate evaluator uid can traverse to its per-run ACL-protected directory. For example:
+  `mount -t tmpfs -o size=<storageBytes>,mode=0711,uid=<harness-uid>,gid=<harness-gid> tmpfs <dir>`.
   The preflight checks `/proc/self/mountinfo`, the mount root and options, the effective tmpfs size, and the cgroup
   probe. A shared tmpfs such as `/dev/shm` fails even when `storageBytes` is set to its full size. Workspaces and homes
   are created on this mount. Its filesystem size hard-caps files retained across phases; writes beyond it fail with

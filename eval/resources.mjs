@@ -61,14 +61,16 @@ export function dedicatedTmpfsMountProblem(workspaceRoot, mountInfoText = null) 
   const options = `${fields[5]},${fields[separator + 3] ?? ""}`.split(",");
   const mode = options.find((option) => option.startsWith("mode="))?.slice(5);
   const uid = options.find((option) => option.startsWith("uid="))?.slice(4);
-  if (!mode || Number.parseInt(mode, 8) !== 0o700 || uid !== String(process.getuid())) {
-    return "dedicated tmpfs must be mode 0700 and owned by the evaluator harness uid";
+  const mountMode = mode ? Number.parseInt(mode, 8) : null;
+  if (mountMode === null || (mountMode & 0o700) !== 0o700 || (mountMode & 0o066) !== 0 || uid !== String(process.getuid())) {
+    return "dedicated tmpfs must be owner-accessible, non-readable/non-writable by group or other, and owned by the evaluator harness uid";
   }
   let rootStat;
   try { rootStat = fs.statSync(expected); }
   catch { return "resources.workspaceRoot mount root cannot be inspected; refusing unverified workspace permissions"; }
-  if (rootStat.uid !== process.getuid() || (rootStat.mode & 0o777) !== 0o700) {
-    return "dedicated tmpfs effective mount root must be mode 0700 and owned by the evaluator harness uid";
+  const rootMode = rootStat.mode & 0o777;
+  if (rootStat.uid !== process.getuid() || (rootMode & 0o700) !== 0o700 || (rootMode & 0o066) !== 0) {
+    return "dedicated tmpfs effective mount root must be owner-accessible, non-readable/non-writable by group or other, and owned by the evaluator harness uid";
   }
   return null;
 }
