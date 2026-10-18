@@ -285,6 +285,7 @@ test("black-box oracle keeps canary expectations outside the candidate process a
     timedOut: false,
     overflow: false,
     outcome: "matched",
+    resources: null,
   });
   assert.deepEqual(fs.readFileSync(candidate), candidateBefore, "candidate workspace is read-only during oracle execution");
   assert.equal(JSON.stringify(result).includes(canary), false, "oracle evidence never serializes hidden expectations or candidate output");
