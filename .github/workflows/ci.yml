@@ -56,6 +56,9 @@ jobs:
           sudo install -d -o "$USER" -g "$USER" -m 0711 "$root"
           sudo mount -t tmpfs -o size=128m,mode=0711,uid="$(id -u)",gid="$(id -g)" nexus-eval-ci "$root"
           echo "NEXUS_EVAL_TEST_WORKSPACE_ROOT=$root" >> "$GITHUB_ENV"
+          runtime_root=/opt/nexus-eval-ci-runtime
+          sudo install -d -o "$USER" -g "$USER" -m 0711 "$runtime_root"
+          echo "NEXUS_EVAL_TEST_RUNTIME_ROOT=$runtime_root" >> "$GITHUB_ENV"
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: ${{ matrix.node }}
@@ -113,6 +116,9 @@ jobs:
           sudo install -d -o "$USER" -g "$USER" -m 0711 "$root"
           sudo mount -t tmpfs -o size=128m,mode=0711,uid="$(id -u)",gid="$(id -g)" nexus-eval-ci "$root"
           echo "NEXUS_EVAL_TEST_WORKSPACE_ROOT=$root" >> "$GITHUB_ENV"
+          runtime_root=/opt/nexus-eval-ci-runtime
+          sudo install -d -o "$USER" -g "$USER" -m 0711 "$runtime_root"
+          echo "NEXUS_EVAL_TEST_RUNTIME_ROOT=$runtime_root" >> "$GITHUB_ENV"
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 20
