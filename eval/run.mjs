@@ -14,6 +14,7 @@ import { asUser, corpusManifestProblem, corpusTaskRows, fetchModelEntry, hiddenT
 import { agentSandboxArgv, assertNoSymlinks, confinedPath, grantRunAsAccess, isolatedProcessArgv, runIsolated, runIsolatedProcess, sandboxAvailable } from "./isolate.mjs";
 import { runBlackBoxOracle } from "./oracle.mjs";
 import { stageRepoWorkspace } from "./workspace.mjs";
+import { applyAgentChanges, cloneWorkspace } from "./hardened_check.mjs";
 import { containmentProblem, resourceProbeProblem, spawnContained } from "./resources.mjs";
 import { StringDecoder } from "node:string_decoder";
 import { commandBaseline, countCompactions, createT3Driver, scoreT3Run, steeringBaseline, steeringPrecondition, t3Snapshot } from "./t3.mjs";
@@ -161,11 +162,13 @@ async function runOnce(task, run) {
   // Under the resource contract these are on a tmpfs, so candidate writes count against the run's memory limit.
   const scratch = config.resources?.workspaceRoot ?? os.tmpdir();
   const ws = fs.mkdtempSync(path.join(scratch, `nexus-eval-${task.id}-`));
+  const checkDirs = [];
   const home = fs.mkdtempSync(path.join(scratch, "nexus-eval-home-"));
   const budget = effectiveBudget(task, config);
   const base = { task: task.id, tier: task.tier, ...(task.tier === "T3" ? { t3SteeringItems: task.steering.length } : {}), config: config.name, agent: config.agent ?? "nexus", agentVersion: agentIdentity.record, budget, run, harness: identity.string, model: config.model, startedAt: new Date().toISOString() };
   try {
     await prepareWorkspace(task, ws);
+    const baselineCommit = gitRev(ws, "HEAD");
     const t3Baseline = task.tier === "T3" ? steeringBaseline(task, ws) : null;
     // On the per-run task copy, so the steering hook in runAgent can read it. The commands run on a throwaway copy of
     // the staged workspace, so the agent starts on exactly the staged tree.
@@ -221,8 +224,26 @@ async function runOnce(task, run) {
     const contaminated = treeDigest(task.dir) !== sourceBefore || `${agent.stdout}${agent.stderr}`.includes(tasksDir);
     // T3 judges the workspace as it was when the objective's work ended (snapshot taken before the probe turn).
     const t3 = agent.t3Driver ? scoreT3Run({ task, baseline: t3Baseline, driver: agent.t3Driver, preconditions: agent.t3Preconditions, compactions: countCompactions(home) }) : null;
-    const hidden = await runCheck(task, ws, task.hidden, true);
-    const regression = task.regression ? await runCheck(task, ws, task.regression, false) : null;
+    // Legacy hidden tests share a process with candidate code. In qualification (or with hardenedChecks) they never
+    // run in the agent's workspace: each check gets a fresh staging of the baseline with only the agent's source
+    // changes (eval/hardened_check.mjs). Black-box oracles already keep expectations outside the candidate.
+    const hardened = (config.qualification === true || config.hardenedChecks === true) && task.hidden?.protocol !== "blackbox-v1";
+    let hardening = null;
+    let hiddenWs = ws;
+    let regressionWs = ws;
+    if (hardened) {
+      hiddenWs = fs.mkdtempSync(path.join(scratch, `nexus-eval-check-${task.id}-`));
+      regressionWs = fs.mkdtempSync(path.join(scratch, `nexus-eval-regression-${task.id}-`));
+      checkDirs.push(hiddenWs, regressionWs);
+      await prepareWorkspace(task, hiddenWs);
+      // Fixture tasks commit at staging time, so compare content (the tree), not the commit id.
+      if (gitRev(hiddenWs, "HEAD^{tree}") !== gitRev(ws, `${baselineCommit}^{tree}`)) throw new Error("hardened check workspace staged a different baseline");
+      hardening = { baseline: baselineCommit, ...applyAgentChanges(ws, hiddenWs, baselineCommit) };
+      cloneWorkspace(hiddenWs, regressionWs);
+    }
+    const refused = (check) => ({ pass: false, status: null, timedOut: false, overflow: false, output: `hardened check refused: ${hardening.configChanges.join("; ")}`, refused: true, resources: null, containmentProblem: null, check });
+    const hidden = hardening?.configChanges.length ? refused("hidden") : await runCheck(task, hiddenWs, task.hidden, true, { readOnlyHidden: hardened });
+    const regression = task.regression ? (hardening?.configChanges.length ? refused("regression") : await runCheck(task, regressionWs, task.regression, false)) : null;
     for (const [phase, check] of [["hidden", hidden], ["regression", regression]]) {
       if (check?.containmentProblem) throw new Error(`${phase} check containment failed: ${check.containmentProblem}`);
     }
@@ -245,6 +266,7 @@ async function runOnce(task, run) {
       falseVerified: turn?.outcome === "VERIFIED" && !hidden.pass,
       contaminated,
       tokens: agent.json?.tokenStats ?? null,
+      ...(hardening ? { hardened: { baseline: hardening.baseline, applied: hardening.applied.length, discarded: hardening.discarded, configChanges: hardening.configChanges } } : {}),
       ...(t3 ? { t3 } : {}),
       model,
       resources: config.resources ? { agent: agent.resources, hidden: hidden.resources ?? null, regression: regression?.resources ?? null, ...(t3BaselineResources.length ? { t3Baseline: t3BaselineResources } : {}) } : null,
@@ -254,6 +276,7 @@ async function runOnce(task, run) {
     return { ...base, wallMs: 0, error: String(err?.message ?? err), hiddenPass: false, regressionPass: null, falseVerified: false, claimedComplete: false, claimedVerified: false };
   } finally {
     if (!args.keep) {
+      for (const dir of checkDirs) fs.rmSync(dir, { recursive: true, force: true });
       fs.rmSync(ws, { recursive: true, force: true });
       fs.rmSync(home, { recursive: true, force: true });
     }
@@ -561,7 +584,7 @@ function runAgent(task, ws, home, budget, agentIdentity, proxyDirectory, localTo
   });
 }
 
-function runCheck(task, ws, check, hidden) {
+function runCheck(task, ws, check, hidden, { readOnlyHidden = false } = {}) {
   if (hidden && check.protocol === "blackbox-v1") {
     return runBlackBoxOracle(task, ws, check, { resources: config.resources ?? null }).then((result) => ({
       ...result,
@@ -585,8 +608,16 @@ function runCheck(task, ws, check, hidden) {
     const destination = confinedPath(ws, relativeTarget, { allowMissingLeaf: true });
     fs.cpSync(source, destination, { recursive: true, verbatimSymlinks: true });
   }
-  return runIsolated(check.command, { cwd: ws, home: true, timeoutSec: check.timeoutSec ?? 300, outputLimit: 1_000_000, resources: config.resources ?? null })
-    .then((r) => ({ pass: r.status === 0 && !r.timedOut && !r.overflow, status: r.status, timedOut: r.timedOut, overflow: r.overflow, output: `${r.stdout}${r.stderr}`.slice(-20_000), resources: r.resources ?? null, containmentProblem: r.containmentProblem ?? null }));
+  const readOnlySubpaths = hidden && check.dir && readOnlyHidden ? [check.into ?? check.dir] : [];
+  return runIsolated(check.command, { cwd: ws, home: true, timeoutSec: check.timeoutSec ?? 300, outputLimit: 1_000_000, resources: config.resources ?? null, readOnlySubpaths })
+    .then((r) => {
+      const output = `${r.stdout}${r.stderr}`;
+      // Qualification keeps hidden-test output out of the evidence: it would disclose the sealed tests.
+      const kept = hidden && config.qualification === true
+        ? JSON.stringify({ status: r.status, timedOut: r.timedOut, overflow: r.overflow, bytes: Buffer.byteLength(output), outputSha256: createHash("sha256").update(output).digest("hex") })
+        : output.slice(-20_000);
+      return { pass: r.status === 0 && !r.timedOut && !r.overflow, status: r.status, timedOut: r.timedOut, overflow: r.overflow, output: kept, resources: r.resources ?? null, containmentProblem: r.containmentProblem ?? null };
+    });
 }
 
 function saveLogs(task, run, agent, hidden, regression) {
@@ -597,6 +628,12 @@ function saveLogs(task, run, agent, hidden, regression) {
   fs.writeFileSync(path.join(dir, "hidden.log"), hidden.output);
   if (regression) fs.writeFileSync(path.join(dir, "regression.log"), regression.output);
   return path.relative(args.out, dir);
+}
+
+function gitRev(ws, rev) {
+  const r = spawnSync("git", ["rev-parse", rev], { cwd: ws, encoding: "utf8", env: { PATH: "/usr/bin:/bin", HOME: os.tmpdir(), GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: "/dev/null" } });
+  if (r.status !== 0) throw new Error("staged workspace has no baseline commit");
+  return r.stdout.trim();
 }
 
 function treeDigest(dir) {
@@ -617,7 +654,7 @@ function harnessIdentity() {
   const git = (...a) => spawnSync("git", a, { cwd: ROOT, encoding: "utf8" }).stdout.trim();
   const commit = git("rev-parse", "HEAD");
   const dirty = Boolean(git("status", "--porcelain", "--untracked-files=all", "--", ".", ":(exclude)cli/dist"));
-  const sourceFiles = ["eval/run.mjs", "eval/validate.mjs", "eval/isolate.mjs", "eval/agent_sandbox.mjs", "eval/model_proxy.mjs", "eval/score.mjs", "eval/infra.mjs", "eval/workspace.mjs", "eval/resources.mjs", "eval/cgroup_supervisor.mjs", "eval/t3.mjs"];
+  const sourceFiles = ["eval/run.mjs", "eval/validate.mjs", "eval/isolate.mjs", "eval/agent_sandbox.mjs", "eval/model_proxy.mjs", "eval/score.mjs", "eval/infra.mjs", "eval/workspace.mjs", "eval/resources.mjs", "eval/cgroup_supervisor.mjs", "eval/t3.mjs", "eval/hardened_check.mjs"];
   const sourceDigests = sourceFiles.map((file) => ({ file, sha256: createHash("sha256").update(fs.readFileSync(path.join(ROOT, file))).digest("hex") }));
   const sourceSha256 = createHash("sha256").update(JSON.stringify(sourceDigests)).digest("hex");
   return { commit, dirty, sourceDigests, sourceSha256, string: `${commit.slice(0, 12)}${dirty ? "-dirty" : ""}` };

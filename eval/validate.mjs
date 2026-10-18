@@ -41,7 +41,10 @@ export function validateTask(task, dir, { qualification = false } = {}) {
     const oracleProblem = blackBoxOracleProblem(task.hidden, dir, task.fixture ?? null);
     need(!oracleProblem, oracleProblem ?? "hidden black-box oracle is invalid");
   }
-  if (qualification) need(hiddenOracle && !hiddenCommand, "qualification requires hidden.protocol blackbox-v1; legacy hidden commands can inspect or alter candidate files");
+  // Owner decision 2026-10-18: legacy hidden commands are allowed in qualification because run.mjs always hardens them
+  // there (fresh baseline + the agent's source changes only, test infrastructure discarded, hidden files read-only).
+  if (qualification) need(hiddenOracle !== Boolean(hiddenCommand), "qualification needs exactly one hidden oracle: blackbox-v1 or a hardened legacy command");
+  if (qualification && hiddenCommand) need(typeof task.hidden.dir === "string" && task.hidden.dir.length > 0, "a hardened legacy hidden test must carry its files in hidden.dir");
   if (task.hidden?.dir) {
     try { confinedPath(dir, task.hidden.dir); }
     catch (error) { need(false, error.message); }
@@ -219,6 +222,62 @@ export function corpusTaskRows(tasksDir, ids) {
   });
 }
 
+const HELDOUT_V2_HASH_SCHEME = {
+  task_sha256: "sha256 of raw tasks/<id>/task.json bytes",
+  hidden_sha256: "sha256 of sorted '<path>  <sha256(file)>\\n' lines over tasks/<id>/<hidden.dir> (bin/hidden_digest.mjs)",
+};
+
+/**
+ * The custodian's hidden-directory digest (heldout-v2 hash_scheme): regular files only, paths relative to the hidden
+ * directory with "/" separators, sorted byte-wise by path, each line `<path>  <sha256(bytes)>\n`.
+ */
+export function heldoutHiddenDigest(hiddenDir) {
+  assertNoSymlinks(hiddenDir);
+  const files = [];
+  const walk = (dir) => {
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      const item = path.join(dir, entry.name);
+      if (entry.isDirectory()) walk(item);
+      else if (entry.isFile()) files.push([path.relative(hiddenDir, item).split(path.sep).join("/"), item]);
+    }
+  };
+  walk(hiddenDir);
+  files.sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0));
+  const hash = createHash("sha256");
+  for (const [relative, file] of files) hash.update(`${relative}  ${createHash("sha256").update(fs.readFileSync(file)).digest("hex")}\n`);
+  return hash.digest("hex");
+}
+
+/**
+ * The sealed T2 corpus (eval/heldout-manifest.json) uses the custodian's heldout-v2 schema, which binds each task's
+ * task.json and hidden directory and carries no custody fields: custody is stated in the frozen config (corpusCustody)
+ * and verified by the acceptance reviewer against the committed custody report.
+ */
+function heldoutV2ManifestProblem(config, tasksDir, ids, manifest) {
+  if (JSON.stringify(manifest.hash_scheme) !== JSON.stringify(HELDOUT_V2_HASH_SCHEME)) return "qualification corpus manifest uses an unknown hash scheme";
+  if (!Array.isArray(manifest.tasks) || manifest.tasks.length !== manifest.task_count) return "qualification corpus manifest task list does not match its task_count";
+  const custody = config.corpusCustody;
+  if (typeof custody?.custodian !== "string" || !custody.custodian.trim() || typeof custody?.approvedAt !== "string" || !/^[0-9a-f]{64}$/.test(custody?.reportSha256 ?? "")) {
+    return "a heldout-v2 corpus needs corpusCustody { custodian, approvedAt, reportSha256 } in the frozen config";
+  }
+  const sealed = [...manifest.tasks].map((t) => t.id).sort();
+  if (JSON.stringify(sealed) !== JSON.stringify([...ids].sort())) return "qualification task population differs from the frozen corpus manifest";
+  for (const row of manifest.tasks) {
+    try {
+      const dir = confinedPath(tasksDir, row.id);
+      const taskFile = confinedPath(dir, "task.json");
+      const raw = fs.readFileSync(taskFile);
+      if (createHash("sha256").update(raw).digest("hex") !== row.task_sha256) return `task ${row.id}: task.json differs from the frozen corpus manifest`;
+      const hiddenDir = JSON.parse(raw.toString("utf8")).hidden?.dir;
+      if (typeof hiddenDir !== "string" || !hiddenDir) return `task ${row.id}: sealed task has no hidden.dir`;
+      if (heldoutHiddenDigest(confinedPath(dir, hiddenDir)) !== row.hidden_sha256) return `task ${row.id}: hidden tests differ from the frozen corpus manifest`;
+    } catch (error) {
+      return `qualification task content cannot be safely hashed: ${error.message}`;
+    }
+  }
+  return null;
+}
+
 /** Verify both the committed manifest pin and the exact selected task population/content. */
 export function corpusManifestProblem(config, tasksDir, ids, frozenRows = null) {
   if (!config.corpusManifest || !/^[0-9a-f]{64}$/.test(config.corpusManifestSha256 ?? "")) {
@@ -232,6 +291,7 @@ export function corpusManifestProblem(config, tasksDir, ids, frozenRows = null) 
   let manifest;
   try { manifest = JSON.parse(raw.toString("utf8")); }
   catch { return "qualification corpus manifest is invalid JSON"; }
+  if (manifest.schemaVersion === undefined && manifest.hash_scheme) return heldoutV2ManifestProblem(config, tasksDir, ids, manifest);
   if (manifest.schemaVersion !== 1 || manifest.split !== "heldout" || manifest.custody?.status !== "approved") {
     return "qualification corpus manifest lacks the frozen heldout approval contract";
   }

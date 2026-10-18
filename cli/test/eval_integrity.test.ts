@@ -242,7 +242,10 @@ test("task validation: pinned repos, one source, and black-box hidden oracle for
   assert.match(validateTask({ ...good, repo: { url: good.repo.url, commit: "main" } }, dir).join(), /pinned/);
   assert.match(validateTask({ ...good, fixture: "repo" }, dir).join(), /exactly one of fixture or repo/);
   assert.match(validateTask({ ...good, hidden: {} }, dir).join(), /hidden.command/);
-  assert.match(validateTask(good, dir, { qualification: true }).join(), /blackbox-v1/);
+  // Owner decision 2026-10-18: qualification accepts a legacy hidden command only as a hardened check carrying its files.
+  assert.match(validateTask(good, dir, { qualification: true }).join(), /hardened legacy hidden test must carry its files in hidden.dir/);
+  assert.deepEqual(validateTask({ ...good, class: "bugfix", difficulty: "medium", hidden: { dir: "candidate", command: "npm test" } }, dir, { qualification: true }), []);
+  assert.match(validateTask({ ...good, class: "bugfix", difficulty: "medium", hidden: { protocol: "blackbox-v1", command: "npm test" } }, dir, { qualification: true }).join(), /exactly one hidden oracle/);
   const cases = path.join(dir, "private-cases.json");
   fs.writeFileSync(cases, JSON.stringify([{ input: { x: 1 }, expected: { x: 1 } }]));
   fs.symlinkSync(cases, path.join(dir, "private-cases-link.json"));

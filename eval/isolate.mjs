@@ -29,7 +29,7 @@ export function sandboxAvailable() {
   }
 }
 
-export function isolatedArgv({ cwd, home, command, timeoutSec = 300 }) {
+export function isolatedArgv({ cwd, home, command, timeoutSec = 300, readOnlySubpaths = [] }) {
   if (!sandboxAvailable()) throw new Error("Bubblewrap is unavailable; refusing to execute task-controlled commands");
   const workspace = fs.realpathSync(cwd);
   const args = [
@@ -47,6 +47,11 @@ export function isolatedArgv({ cwd, home, command, timeoutSec = 300 }) {
     } catch {}
   }
   args.push("--bind", workspace, "/workspace", "--dir", "/home", "--dir", "/run");
+  // Workspace subpaths the command may read but not change (hardened hidden tests: the oracle's own files).
+  for (const relative of readOnlySubpaths) {
+    const source = confinedPath(workspace, relative);
+    args.push("--ro-bind", source, path.posix.join("/workspace", path.relative(workspace, source).split(path.sep).join("/")));
+  }
   args.push("--symlink", "usr/bin", "/bin");
   args.push("--chdir", "/workspace", "--clearenv", "--setenv", "PATH", "/usr/bin:/bin");
   args.push("--setenv", "HOME", home ? "/home/eval" : "/tmp");
@@ -241,8 +246,8 @@ export function grantRunAsAccess(user, targets) {
 }
 
 /** Execute a task-controlled shell command in a no-network, clear-environment namespace. */
-export function runIsolated(command, { cwd, home = false, timeoutSec = 300, outputLimit = 1_000_000, resources = null } = {}) {
-  const spec = isolatedArgv({ cwd, home, command, timeoutSec });
+export function runIsolated(command, { cwd, home = false, timeoutSec = 300, outputLimit = 1_000_000, resources = null, readOnlySubpaths = [] } = {}) {
+  const spec = isolatedArgv({ cwd, home, command, timeoutSec, readOnlySubpaths });
   return new Promise((resolve) => {
     const { child, containment } = spawnContained(spec, resources, { cwd: "/", env: {}, detached: true, stdio: ["ignore", "pipe", "pipe"] });
     let stdout = "";

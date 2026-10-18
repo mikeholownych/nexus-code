@@ -150,10 +150,45 @@ one, before any agent runs, unless every item below holds:
 
 Bubblewrap plus the current runner enforces separate mount/user/PID/network namespaces, a cleared task-command
 environment, a bounded wall clock, bounded captured output, per-run process-group teardown, and read-only runtime
-binds. Black-box qualification keeps oracle expectations outside candidate namespaces; legacy commands do not provide that
-property and remain development-only. Aggregate CPU, memory, process-count and writable-storage limits come from the
+binds. Black-box qualification keeps oracle expectations outside candidate namespaces. Legacy hidden commands share a
+process with candidate code; in qualification they run only in the hardened form below. Aggregate CPU, memory, process-count and writable-storage limits come from the
 resource contract below, not from request/token ceilings. Appliance-specific Bubblewrap enforcement is a separate,
 unverified condition.
+
+### Hardened legacy hidden tests
+
+The sealed T2 corpus uses legacy hidden tests (`hidden: { dir, command }`, for example `pytest` or `go test` over copied
+test files). Those run candidate code in the same process as the oracle. Owner decision, 2026-10-18: qualification runs
+them hardened, in the style of SWE-bench. Development configs opt in with `"hardenedChecks": true`.
+
+1. The agent's workspace is never tested. After the agent finishes, the harness stages the task again (the same pinned
+   commit or fixture, the same setup commands) into a fresh workspace. It checks that the fresh tree equals the agent's
+   baseline tree.
+2. Only the agent's **source** changes are copied in: added, modified and deleted paths since the baseline commit
+   (`eval/hardened_check.mjs`).
+   - Test infrastructure is discarded. That covers test files and directories, `conftest.py`, `pytest.ini`, `tox.ini`,
+     `setup.cfg`, `sitecustomize.py`, `.pth`, jest/vitest/mocha/karma/babel config, Go `_test.go` (and therefore
+     `TestMain`), `build.rs`, `.cargo/`, `.github/`, `Makefile` and `.env*`.
+   - Symlinks and special files are also discarded.
+   - A change to test-runner configuration inside a dependency manifest refuses both checks. That means `package.json`
+     test/install scripts and runner keys, `pyproject.toml` `[tool.pytest*]`/coverage/tox/hatch-env sections, and
+     `Cargo.toml` test, bench, build and dev sections. The refusal is recorded.
+3. The hidden command runs in that workspace with the hidden directory bind-mounted **read-only**. The regression
+   command runs in a separate byte-identical copy, so candidate code executed by one check cannot prepare the other.
+4. In qualification, hidden-test output is kept only as a status, byte count and SHA-256, so evidence does not disclose
+   the sealed tests. Each run record carries
+   `hardened: { baseline, applied, discarded, configChanges }`.
+
+What remains, and is accepted: candidate source code still executes inside the hidden test process and could detect
+the test environment. That is the same residual risk as other SWE-bench-style evaluations. Black-box (`blackbox-v1`)
+oracles avoid it and need no hardening.
+
+The sealed corpus is bound through its own manifest schema (`eval/heldout-manifest.json`, `hash_scheme`). The runner
+recomputes each selected task's `task_sha256` (raw `task.json`) and `hidden_sha256`. The latter is computed over the
+regular files of `hidden.dir`, with `/`-separated relative paths sorted byte-wise, each line `<path>  <sha256>\n`. The
+selected population must equal the manifest's. That manifest carries no custody fields, so the frozen config states
+`corpusCustody: { custodian, approvedAt, reportSha256 }`, which the acceptance reviewer checks against the committed
+custody report.
 
 ### Resource contract
 
