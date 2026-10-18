@@ -42,6 +42,7 @@ test("only the agent's source changes reach the fresh check workspace; adversari
     const agent = path.join(base, "agent");
     const fresh = path.join(base, "fresh");
     for (const dir of [agent, fresh]) {
+      write(dir, "src/__init__.py", "\n");
       write(dir, "src/app.py", "def f(): return 1\n");
       write(dir, "src/old.py", "x = 1\n");
       write(dir, "package.json", JSON.stringify({ name: "x", main: "src/index.js", scripts: { test: "node --test" }, dependencies: { a: "1" } }));
@@ -92,8 +93,8 @@ test("manifest changes outside plain dependency and metadata edits refuse the ch
   const cargo = "[package]\nname = \"x\"\n\n[dependencies]\nserde = \"1\"\n";
   assert.equal(testConfigChange("Cargo.toml", cargo, cargo.replace('serde = "1"', 'serde = "1.0.200"')), null);
   assert.match(testConfigChange("Cargo.toml", cargo, `${cargo}\n[patch.crates-io]\nserde = { path = "../s" }\n`) ?? "", /patch\.crates-io/);
-  assert.match(testConfigChange("Cargo.toml", cargo, cargo.replace('serde = "1"', 'serde = { path = "../s" }')) ?? "", /local or git source/);
-  assert.match(testConfigChange("go.mod", "module x\n", "module x\nreplace a => ../a\n") ?? "", /replace/);
+  assert.match(testConfigChange("Cargo.toml", cargo, cargo.replace('serde = "1"', 'serde = { path = "../s" }')) ?? "", /local, git or alternate-registry source/);
+  assert.match(testConfigChange("go.mod", "module x\n", "module x\nreplace a => ../a\n") ?? "", /outside its require directives/);
   assert.equal(testConfigChange("go.mod", "module x\n", "module x\nrequire a v1.2.3\n"), null);
   const py = "[project]\nname = \"x\"\ndependencies = []\n";
   assert.equal(testConfigChange("pyproject.toml", py, py.replace("[]", '["requests"]')), null);
@@ -225,6 +226,41 @@ test("test data, symlinked paths, new Python packages, oversized files and manif
     assert.match(result.configChanges.join(), /pyproject\.toml deleted/, "and it refuses the checks");
     assert.match(testConfigChange("Cargo.toml", "[package]\nname = \"x\"\n", "[package]\nname = \"x\"\nautotests = false\n") ?? "", /\[package\]/);
     assert.match(testConfigChange("Cargo.toml", "[features]\ndefault = [\"a\"]\n", "[features]\ndefault = []\n") ?? "", /\[features\]/);
+  } finally {
+    fs.rmSync(base, { recursive: true, force: true });
+  }
+});
+
+test("manifest guards fail closed on TOML headers they do not recognise, go.mod blocks and new manifests", async () => {
+  const { testConfigChange, applyAgentChanges } = await hardened();
+  const py = "[project]\nname = \"x\"\ndependencies = []\n";
+  assert.match(testConfigChange("pyproject.toml", py, `${py}[tool.pytest.ini_options] # x\naddopts = "--deselect hidden"\n`) ?? "", /tool\.pytest/, "a commented header is not folded into [project]");
+  assert.match(testConfigChange("pyproject.toml", py, `${py}  [tool.pytest.ini_options]\naddopts = "-q"\n`) ?? "", /tool\.pytest/, "an indented header is still a header");
+  const cargo = "[package]\nname = \"x\"\n\n[dependencies]\nserde = \"1\"\n";
+  assert.match(testConfigChange("Cargo.toml", cargo, `${cargo}[[test]]\nname = "hidden_x"\nrequired-features = ["nope"]\n`) ?? "", /\[\[test\]\]/, "an array table is not folded into [dependencies]");
+  assert.match(testConfigChange("Cargo.toml", cargo, `${cargo}[profile.test]\nopt-level = 3\n`) ?? "", /profile\.test/);
+  assert.match(testConfigChange("Cargo.toml", cargo, cargo.replace('serde = "1"', 'serde = { version = "1", registry = "evil" }')) ?? "", /alternate-registry/);
+  assert.equal(testConfigChange("Cargo.toml", cargo, cargo.replace('serde = "1"', 'serde = "1.0.200"')), null);
+  const gomod = "module x\n\ngo 1.22\n\nrequire (\n\tgithub.com/a/b v1.0.0\n)\n\nreplace (\n\tgithub.com/c/d => github.com/c/d v1.2.0\n)\n";
+  assert.equal(testConfigChange("go.mod", gomod, gomod.replace("v1.0.0", "v1.1.0")), null, "require changes are dependency edits");
+  assert.match(testConfigChange("go.mod", gomod, gomod.replace("v1.2.0\n)", "v1.2.0\n\tgithub.com/a/b => ./fake\n)")) ?? "", /outside its require/, "an entry added inside an existing replace block");
+  const base = fs.mkdtempSync(path.join(os.tmpdir(), "hardened-manifest-"));
+  try {
+    const agent = path.join(base, "agent");
+    const fresh = path.join(base, "fresh");
+    for (const dir of [agent, fresh]) {
+      fs.mkdirSync(path.join(dir, "src", "pkg"), { recursive: true });
+      fs.writeFileSync(path.join(dir, "go.mod"), "module x\n\ngo 1.22\n");
+      fs.writeFileSync(path.join(dir, "src", "pkg", "__init__.py"), "\n");
+    }
+    fs.mkdirSync(path.join(agent, "hiddenparent"), { recursive: true });
+    fs.writeFileSync(path.join(agent, "hiddenparent", "go.mod"), "module y\n");
+    fs.writeFileSync(path.join(agent, "src", "packaging.py"), "raise SystemExit(0)\n");
+    fs.writeFileSync(path.join(agent, "src", "pkg", "util.py"), "z = 1\n");
+    const result = applyAgentChanges(agent, fresh);
+    assert.match(result.configChanges.join(), /hiddenparent\/go\.mod added/, "a new nested manifest refuses the checks");
+    assert.equal(fs.existsSync(path.join(fresh, "src", "packaging.py")), false, "src/ is not a package: no new module beside a src layout's importable root");
+    assert.equal(fs.existsSync(path.join(fresh, "src", "pkg", "util.py")), true, "a new module inside an existing package crosses over");
   } finally {
     fs.rmSync(base, { recursive: true, force: true });
   }

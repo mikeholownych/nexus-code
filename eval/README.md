@@ -170,8 +170,10 @@ them hardened, in the style of SWE-bench. Development configs opt in with `"hard
    - Only **source files** (`.py`, the `.js`/`.ts` family, `.go`, `.rs`) and the manifests `package.json`,
      `pyproject.toml`, `Cargo.toml`, `go.mod` and `go.sum` may be added, changed or deleted. Every other file type,
      including test data, keeps its baseline content.
-   - A new Python file may only join a package directory that already exists below the repository root. It may not
-     take a name that would shadow the test runner or the standard library (`pytest.py`, `json.py`, …).
+   - A new Python file may only join a regular package that already exists, meaning a directory with `__init__.py` in
+     the baseline. It may not take a name that would shadow the test runner or the standard library
+     (`pytest.py`, `json.py`, …). Namespace packages without `__init__.py` cannot gain new modules; that is a
+     fairness cost.
    - **Always dropped:**
      - VCS metadata and dependency trees or caches: `.git`, `node_modules`, `.venv`, `site-packages`,
        `__pycache__`, `vendor`, `target`, `.yarn`, `.cargo`, `.github`;
@@ -185,11 +187,15 @@ them hardened, in the style of SWE-bench. Development configs opt in with `"hard
 
      Dependency trees therefore always come from setup, never from the agent.
    - **Manifests** may change only plain dependency or metadata entries. Any other change refuses both checks, and so
-     does a deleted manifest:
+     does a deleted manifest or a new one (a new `go.mod` or `package.json` moves module or root boundaries). In TOML,
+     every line starting with `[` is a section boundary, keyed by its exact text. An unrecognised header, a `[[…]]`
+     table, or a header with a comment therefore cannot be folded into an allowed section:
      - `package.json`: anything but the dependency maps and metadata, or a `file:`/`git:`/path dependency;
      - `pyproject.toml`: anything outside `[project]`;
-     - `Cargo.toml`: anything outside `[dependencies*]`, or a `path`/`git` source;
-     - `go.mod`: `replace`, `exclude` or `toolchain`.
+     - `Cargo.toml`: anything outside `[dependencies]`/`[dependencies.<name>]`, or a `path`, `git` or `registry`
+       source. Adding `[dev-dependencies]` or `[build-dependencies]` is refused, which costs legitimate test-only
+       dependency additions;
+     - `go.mod`: anything outside its `require` lines and blocks, including entries inside an existing `replace (…)`.
 3. Anything the agent left at the oracle's path is removed. The hidden command then runs with the hidden directory
    bind-mounted **read-only**. The regression
    command runs in a separate byte-identical copy, so candidate code executed by one check cannot prepare the other.
@@ -202,7 +208,8 @@ What remains, and is accepted:
   `pytest` or `unittest` at import time, or detect the test environment, and nothing here can see that. This is the
   same residual risk as other SWE-bench-style evaluations.
 - A check passes on its exit status. A source-level trick that makes the runner execute fewer of the oracle's tests is
-  not detected; a per-task expected-test count, set by the custodian, would close this.
+  not detected. A task whose hidden tests run zero tests passes. A per-task expected-test count, set by the custodian,
+  would close this.
 - Black-box (`blackbox-v1`) oracles avoid both and need no hardening.
 - Fairness cost: a real source directory named `vendor/` or `target/` is skipped like a dependency tree, so the
   agent's changes there are dropped. The `npm:` alias form of a dependency spec is not refused; setup is not re-run

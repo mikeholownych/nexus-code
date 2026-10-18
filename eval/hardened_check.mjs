@@ -59,15 +59,29 @@ function shadows(relative) {
   return relative.split("/").some((part) => SHADOWED.has(part.replace(/\.pyi?$/, "")));
 }
 
-function sections(text, header = /^\[([^\]]+)\]\s*$/) {
+/**
+ * TOML split into sections keyed by the exact header line. Every line whose first non-blank character is "[" starts a
+ * section, whatever follows ("[[test]]", "[a] # comment", a bracket line inside a multi-line string): a header this
+ * reader does not recognise can never be folded into an allowed section; at worst it fails closed.
+ */
+function tomlSections(text) {
   const result = new Map();
   let current = "";
   for (const line of (text ?? "").split("\n")) {
-    const match = header.exec(line.trim());
-    if (match) current = match[1].trim();
+    const trimmed = line.trim();
+    if (trimmed.startsWith("[")) current = trimmed;
     result.set(current, `${result.get(current) ?? ""}${line}\n`);
   }
   return result;
+}
+
+/** The first changed TOML section whose exact header is not allowed, or null. */
+function changedTomlSection(before, after, allowed) {
+  const a = tomlSections(before), b = tomlSections(after);
+  for (const key of new Set([...a.keys(), ...b.keys()])) {
+    if (a.get(key) !== b.get(key) && !allowed(key)) return key || "top level";
+  }
+  return null;
 }
 
 /**
@@ -91,26 +105,21 @@ export function testConfigChange(relative, before, after) {
     return null;
   }
   if (base === "pyproject.toml") {
-    const a = sections(before), b = sections(after);
-    for (const name of new Set([...a.keys(), ...b.keys()])) {
-      if (a.get(name) === b.get(name)) continue;
-      if (name !== "project" && name !== "project.optional-dependencies") return `pyproject.toml [${name || "top level"}] changed`;
-    }
-    return null;
+    const key = changedTomlSection(before, after, (k) => k === "[project]" || k === "[project.optional-dependencies]");
+    return key ? `pyproject.toml ${key} changed` : null;
   }
   if (base === "Cargo.toml") {
-    // [package] and [features] can switch test discovery off (autotests, build, a changed default feature set).
-    const a = sections(before), b = sections(after);
-    for (const name of new Set([...a.keys(), ...b.keys()])) {
-      if (a.get(name) === b.get(name)) continue;
-      if (name !== "dependencies" && !/^dependencies\.[\w-]+$/.test(name)) return `Cargo.toml [${name || "top level"}] changed`;
-      if (/\bpath\s*=|\bgit\s*=/.test(b.get(name) ?? "")) return `Cargo.toml [${name}] points at a local or git source`;
-    }
-    return null;
+    // [package] and [features] can switch test discovery off (autotests, build, a changed default feature set); [[test]],
+    // [lib], [profile.*] and [patch] can drop or redirect targets. Only dependency tables may change.
+    const key = changedTomlSection(before, after, (k) => k === "[dependencies]" || /^\[dependencies\.[A-Za-z0-9_-]+\]$/.test(k));
+    if (key) return `Cargo.toml ${key} changed`;
+    const deps = [...tomlSections(after)].filter(([k]) => k === "[dependencies]" || k.startsWith("[dependencies.")).map(([, v]) => v).join("");
+    return /\b(path|git|registry)\s*=/.test(deps) ? "Cargo.toml dependencies point at a local, git or alternate-registry source" : null;
   }
   if (base === "go.mod") {
-    const directives = (text) => (text ?? "").split("\n").filter((line) => /^\s*(replace|exclude|retract|toolchain|godebug)\b/.test(line)).join("\n");
-    return directives(before) === directives(after) ? null : "go.mod replace/exclude/toolchain directives changed";
+    // Everything but the require lines and blocks must stay byte-identical (replace/exclude entries inside blocks too).
+    const rest = (text) => (text ?? "").replace(/^\s*require\s*\([\s\S]*?^\s*\)\s*$/gm, "").replace(/^\s*require\s+\S.*$/gm, "").split("\n").map((l) => l.trimEnd()).filter(Boolean).join("\n");
+    return rest(before) === rest(after) ? null : "go.mod changed outside its require directives";
   }
   return null;
 }
@@ -168,10 +177,12 @@ export function applyAgentChanges(agentWs, freshWs) {
     const target = fresh.files.get(relative);
     if (target && same(source, target)) continue;
     if (!allowed(relative) || fs.statSync(source).size > MAX_CARRIED_BYTES) { discarded.push(relative); continue; }
+    if (!target && MANIFESTS.has(path.basename(relative))) { configChanges.push(`${relative} added`); continue; } // a new manifest moves module or root boundaries
     if (!target && /\.pyi?$/.test(relative)) {
-      // A new Python file may join an existing package below the root, never create a top-level module or package.
+      // A new Python file may join an existing regular package (one with __init__.py in the baseline), never create a
+      // top-level module or package, nor land beside a src/ layout's importable root.
       const dir = path.posix.dirname(relative);
-      if (dir === "." || shadows(relative) || !fs.existsSync(path.join(freshWs, dir))) { discarded.push(relative); continue; }
+      if (dir === "." || shadows(relative) || !fs.existsSync(path.join(freshWs, dir, "__init__.py"))) { discarded.push(relative); continue; }
     }
     const destination = path.join(freshWs, relative);
     const reason = testConfigChange(relative, target ? fs.readFileSync(target, "utf8") : null, fs.readFileSync(source, "utf8"));
