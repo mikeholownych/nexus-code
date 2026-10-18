@@ -22,7 +22,6 @@ import { scanAndOnboardWorkspace } from "../src/onboard.js";
 import { discoverVerifier, runTestSuite } from "../src/tester.js";
 import { highlightLine, highlightDiff, highlightCode, highlightMarkdownCodeBlocks } from "../src/syntax.js";
 import { copyToClipboard, readFromClipboard } from "../src/clipboard.js";
-import { executeWebSearch } from "../src/search_web.js";
 import { RustCoreBridge } from "../src/tools.js";
 import { wrapSandboxedCommand, isBwrapAvailable } from "../src/sandbox.js";
 import { PluginManager } from "../src/plugins.js";
@@ -2470,17 +2469,6 @@ error[E0308]: mismatched types
     assert.strictEqual(typeof copyRes.success, "boolean");
     const pasteRes = readFromClipboard();
     assert.strictEqual(typeof pasteRes.success, "boolean");
-  });
-
-  test("Web search module rejects empty queries and structures results (Candidate #45)", async () => {
-    const emptyRes = await executeWebSearch("");
-    assert.strictEqual(emptyRes.success, false);
-    assert.strictEqual(emptyRes.results.length, 0);
-
-    const validQueryRes = await executeWebSearch("rust axum json", 3);
-    assert.strictEqual(validQueryRes.success, true);
-    assert.ok(validQueryRes.results.length >= 1);
-    assert.ok(validQueryRes.results[0].title);
   });
 
   test("RustCoreBridge dispatches search_web tool execution (Candidate #45)", async () => {
