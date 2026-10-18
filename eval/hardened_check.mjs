@@ -16,7 +16,9 @@ const SKIP_DIRS = new Set([
 
 /** Paths whose content steers test discovery, tool behaviour or module resolution: never carried across. */
 const BLOCKED = [
-  // tests and test configuration
+  // tests, test data and test configuration
+  /(^|\/)(testdata|fixtures?|__snapshots__|snapshots?|golden|__mocks__|mocks?|e2e|testing|testutils?|test_?utils?|test_helpers?)\//,
+  /\.(golden|snap)$/, /(^|\/)setupTests\.[^/]+$/, /\.setup\.[cm]?[jt]sx?$/,
   /(^|\/)tests?\//, /(^|\/)__tests__\//, /(^|\/)spec\//, /(^|\/)test_[^/]*\.py$/, /_test\.py$/, /_test\.go$/, /\.(test|spec)\.[cm]?[jt]sx?$/,
   /(^|\/)conftest\.py$/, /(^|\/)(pytest|tox)\.ini$/, /(^|\/)setup\.(cfg|py)$/, /(^|\/)noxfile\.py$/, /(^|\/)\.coveragerc$/,
   /(^|\/)(jest|vitest|vite|karma|ava|playwright|babel|webpack|rollup|esbuild)\.config\.[^/]+$/, /(^|\/)\.mocharc(\.[^/]+)?$/,
@@ -28,8 +30,12 @@ const BLOCKED = [
   /(^|\/)\.python-version$/, /(^|\/)\.node-version$/, /(^|\/)\.nvmrc$/, /(^|\/)\.tool-versions$/,
 ];
 
-/** New files with these extensions may cross over (T2 languages: JS/TS, Python, Rust, Go). */
+/** Only files with these extensions may be added, changed or deleted (T2 languages: JS/TS, Python, Rust, Go)... */
 const SOURCE_EXTENSIONS = new Set([".js", ".mjs", ".cjs", ".jsx", ".ts", ".mts", ".cts", ".tsx", ".py", ".pyi", ".go", ".rs"]);
+/** ...plus these manifests, whose changes testConfigChange checks section by section (deleting one refuses the checks). */
+const MANIFESTS = new Set(["package.json", "pyproject.toml", "Cargo.toml", "go.mod", "go.sum"]);
+/** Files larger than this are never carried (an agent-made multi-GiB file must not exhaust the harness). */
+const MAX_CARRIED_BYTES = 2 * 1024 * 1024;
 
 /**
  * Python module names a new .py file (or a directory holding one) may not take: on sys.path the workspace root comes
@@ -93,10 +99,11 @@ export function testConfigChange(relative, before, after) {
     return null;
   }
   if (base === "Cargo.toml") {
+    // [package] and [features] can switch test discovery off (autotests, build, a changed default feature set).
     const a = sections(before), b = sections(after);
     for (const name of new Set([...a.keys(), ...b.keys()])) {
       if (a.get(name) === b.get(name)) continue;
-      if (!["package", "features", "dependencies"].includes(name) && !/^dependencies\.[\w-]+$/.test(name)) return `Cargo.toml [${name || "top level"}] changed`;
+      if (name !== "dependencies" && !/^dependencies\.[\w-]+$/.test(name)) return `Cargo.toml [${name || "top level"}] changed`;
       if (/\bpath\s*=|\bgit\s*=/.test(b.get(name) ?? "")) return `Cargo.toml [${name}] points at a local or git source`;
     }
     return null;
@@ -129,33 +136,56 @@ const same = (a, b) => {
   return sa.size === sb.size && (sa.mode & 0o111) === (sb.mode & 0o111) && fs.readFileSync(a).equals(fs.readFileSync(b));
 };
 
+/** True when `relative` can be written under `root` without following a symlink at any existing component. */
+function safeDestination(root, relative) {
+  let current = root;
+  for (const part of relative.split("/")) {
+    current = path.join(current, part);
+    let stat;
+    try { stat = fs.lstatSync(current); } catch { return true; } // the rest does not exist yet
+    if (stat.isSymbolicLink()) return false;
+  }
+  return true;
+}
+
+const carriable = (relative) => SOURCE_EXTENSIONS.has(path.extname(relative)) || MANIFESTS.has(path.basename(relative));
+
 /**
  * Copies the agent's source changes from `agentWs` into `freshWs`, a fresh staging of the same baseline (setup
- * included). Modified and deleted baseline files cross over unless blocked; new files cross over only with a source
- * extension and no shadowing name. Returns what was applied and discarded, and any manifest change that refuses checks.
+ * included). Only source files and the checked manifests may be added, changed or deleted; blocked paths, other file
+ * types, Python files that would shadow modules or sit outside existing package directories, oversized files and any
+ * path through a symlink are discarded. A manifest change outside dependencies, or a deleted manifest, refuses checks.
  */
 export function applyAgentChanges(agentWs, freshWs) {
   const agent = walk(agentWs);
   const fresh = walk(freshWs);
+  const freshLinks = new Set(fresh.links);
   const applied = [];
   const discarded = [...agent.links];
   const configChanges = [];
+  const allowed = (relative) => !isTestInfraPath(relative) && carriable(relative) && !freshLinks.has(relative) && safeDestination(freshWs, relative);
   for (const [relative, source] of agent.files) {
     const target = fresh.files.get(relative);
     if (target && same(source, target)) continue;
-    if (isTestInfraPath(relative)) { discarded.push(relative); continue; }
-    if (!target && (!SOURCE_EXTENSIONS.has(path.extname(relative)) || shadows(relative))) { discarded.push(relative); continue; }
+    if (!allowed(relative) || fs.statSync(source).size > MAX_CARRIED_BYTES) { discarded.push(relative); continue; }
+    if (!target && /\.pyi?$/.test(relative)) {
+      // A new Python file may join an existing package below the root, never create a top-level module or package.
+      const dir = path.posix.dirname(relative);
+      if (dir === "." || shadows(relative) || !fs.existsSync(path.join(freshWs, dir))) { discarded.push(relative); continue; }
+    }
     const destination = path.join(freshWs, relative);
     const reason = testConfigChange(relative, target ? fs.readFileSync(target, "utf8") : null, fs.readFileSync(source, "utf8"));
     if (reason) configChanges.push(reason);
     fs.mkdirSync(path.dirname(destination), { recursive: true });
+    if (!safeDestination(freshWs, relative)) { discarded.push(relative); continue; } // re-check after mkdir
     fs.writeFileSync(destination, fs.readFileSync(source));
     fs.chmodSync(destination, fs.statSync(source).mode & 0o755);
     applied.push(relative);
   }
   for (const [relative, target] of fresh.files) {
     if (agent.files.has(relative) || agent.links.includes(relative)) continue;
-    if (isTestInfraPath(relative)) { discarded.push(relative); continue; }
+    if (MANIFESTS.has(path.basename(relative)) && !isTestInfraPath(relative)) { configChanges.push(`${relative} deleted`); continue; }
+    if (!allowed(relative)) { discarded.push(relative); continue; }
     fs.rmSync(target, { force: true });
     applied.push(relative);
   }

@@ -184,3 +184,48 @@ test("hardened checks: a correct change passes in a fresh workspace; a test-scri
   assert.ok(gamed.hardened.discarded.includes("test/extra.test.js"));
   assert.equal(gamed.falseVerified, false);
 });
+
+test("test data, symlinked paths, new Python packages, oversized files and manifest deletions never weaken the checks", async () => {
+  const { applyAgentChanges, testConfigChange } = await hardened();
+  const base = fs.mkdtempSync(path.join(os.tmpdir(), "hardened-more-"));
+  const write = (root: string, rel: string, content: string | Buffer) => { fs.mkdirSync(path.dirname(path.join(root, rel)), { recursive: true }); fs.writeFileSync(path.join(root, rel), content); };
+  try {
+    const agent = path.join(base, "agent");
+    const fresh = path.join(base, "fresh");
+    const outside = path.join(base, "outside");
+    fs.mkdirSync(outside);
+    for (const dir of [agent, fresh]) {
+      write(dir, "pkg/render.go", "package pkg\n");
+      write(dir, "pkg/testdata/out.golden", "expected\n");
+      write(dir, "web/__snapshots__/a.test.js.snap", "exports[`a`] = `x`;\n");
+      write(dir, "fixtures/input.json", "{}\n");
+      write(dir, "lib/mod/__init__.py", "\n");
+      write(dir, "pyproject.toml", "[project]\nname = \"x\"\n\n[tool.pytest.ini_options]\nfilterwarnings = [\"error\"]\n");
+    }
+    fs.symlinkSync(outside, path.join(fresh, "linked"));
+    write(agent, "pkg/testdata/out.golden", "agent output\n");
+    write(agent, "web/__snapshots__/a.test.js.snap", "exports[`a`] = `y`;\n");
+    write(agent, "fixtures/input.json", "{\"x\":1}\n");
+    write(agent, "linked/escape.py", "print('outside')\n");
+    write(agent, "toplevel.py", "x = 1\n");
+    write(agent, "newpkg/__init__.py", "\n");
+    write(agent, "lib/mod/helper.py", "y = 1\n");
+    write(agent, "lib/mod/huge.py", Buffer.alloc(3 * 1024 * 1024, 0x20));
+    fs.rmSync(path.join(agent, "pyproject.toml"));
+    const result = applyAgentChanges(agent, fresh);
+    assert.equal(fs.readFileSync(path.join(fresh, "pkg/testdata/out.golden"), "utf8"), "expected\n", "golden files are test data");
+    assert.equal(fs.readFileSync(path.join(fresh, "web/__snapshots__/a.test.js.snap"), "utf8"), "exports[`a`] = `x`;\n");
+    assert.equal(fs.readFileSync(path.join(fresh, "fixtures/input.json"), "utf8"), "{}\n");
+    assert.equal(fs.existsSync(path.join(outside, "escape.py")), false, "nothing is written through a symlink in the fresh tree");
+    assert.equal(fs.existsSync(path.join(fresh, "toplevel.py")), false, "no new top-level Python module");
+    assert.equal(fs.existsSync(path.join(fresh, "newpkg/__init__.py")), false, "no new Python package directory");
+    assert.equal(fs.readFileSync(path.join(fresh, "lib/mod/helper.py"), "utf8"), "y = 1\n", "a new module inside an existing package crosses over");
+    assert.equal(fs.existsSync(path.join(fresh, "lib/mod/huge.py")), false, "oversized files are not carried");
+    assert.equal(fs.existsSync(path.join(fresh, "pyproject.toml")), true, "a deleted manifest is not deleted in the checks");
+    assert.match(result.configChanges.join(), /pyproject\.toml deleted/, "and it refuses the checks");
+    assert.match(testConfigChange("Cargo.toml", "[package]\nname = \"x\"\n", "[package]\nname = \"x\"\nautotests = false\n") ?? "", /\[package\]/);
+    assert.match(testConfigChange("Cargo.toml", "[features]\ndefault = [\"a\"]\n", "[features]\ndefault = []\n") ?? "", /\[features\]/);
+  } finally {
+    fs.rmSync(base, { recursive: true, force: true });
+  }
+});

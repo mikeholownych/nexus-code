@@ -167,25 +167,28 @@ them hardened, in the style of SWE-bench. Development configs opt in with `"hard
    fixture, the same setup commands) into a fresh workspace, and checks that its tree equals that baseline.
 2. The agent's changes are found by walking both trees and comparing bytes and executable bits
    (`eval/hardened_check.mjs`). Only an allowlist crosses over:
-   - **Changed and deleted files** that exist in the fresh staging cross over, unless the path is blocked.
-   - **New files** cross over only with a source extension (`.py`, `.js`/`.ts` family, `.go`, `.rs`), and not under a
-     name that would shadow the test runner or the standard library on Python's `sys.path` (`pytest.py`, `_pytest/`,
-     `json.py`, …).
+   - Only **source files** (`.py`, the `.js`/`.ts` family, `.go`, `.rs`) and the manifests `package.json`,
+     `pyproject.toml`, `Cargo.toml`, `go.mod` and `go.sum` may be added, changed or deleted. Every other file type,
+     including test data, keeps its baseline content.
+   - A new Python file may only join a package directory that already exists below the repository root. It may not
+     take a name that would shadow the test runner or the standard library (`pytest.py`, `json.py`, …).
    - **Always dropped:**
      - VCS metadata and dependency trees or caches: `.git`, `node_modules`, `.venv`, `site-packages`,
        `__pycache__`, `vendor`, `target`, `.yarn`, `.cargo`, `.github`;
      - test files and directories;
-     - test-runner configuration: `conftest.py`, pytest/tox/setup files, jest/vitest/mocha/babel/tsconfig;
+     - test data: `testdata/`, `fixtures/`, `__snapshots__/`, `snapshots/`, `golden/`, mocks, `*.golden`, `*.snap`;
+     - test-runner configuration and setup files;
      - interpreter and package-manager hooks: `sitecustomize.py`, `.pth`, `.npmrc`, `.yarnrc*`, `.pnpmfile.cjs`,
        `go.work`, `rust-toolchain*`, `build.rs`;
-     - `Makefile`, `.env*`, `.gitattributes`, `.gitignore`;
-     - symlinks.
+     - `Makefile`, `.env*`, `.gitattributes` and `.gitignore`;
+     - symlinks, any path that passes through a symlink in the fresh tree, and files over 2 MiB.
 
      Dependency trees therefore always come from setup, never from the agent.
-   - **Manifests** may change only plain dependency or metadata entries. Any other change refuses both checks:
+   - **Manifests** may change only plain dependency or metadata entries. Any other change refuses both checks, and so
+     does a deleted manifest:
      - `package.json`: anything but the dependency maps and metadata, or a `file:`/`git:`/path dependency;
      - `pyproject.toml`: anything outside `[project]`;
-     - `Cargo.toml`: anything outside `[package]`, `[features]` and `[dependencies*]`, or a `path`/`git` source;
+     - `Cargo.toml`: anything outside `[dependencies*]`, or a `path`/`git` source;
      - `go.mod`: `replace`, `exclude` or `toolchain`.
 3. Anything the agent left at the oracle's path is removed. The hidden command then runs with the hidden directory
    bind-mounted **read-only**. The regression
@@ -194,9 +197,16 @@ them hardened, in the style of SWE-bench. Development configs opt in with `"hard
    the sealed tests. Each run record carries
    `hardened: { baseline, applied, discarded, configChanges }`.
 
-What remains, and is accepted: candidate source code still executes inside the hidden test process and could detect
-the test environment. That is the same residual risk as other SWE-bench-style evaluations. Black-box (`blackbox-v1`)
-oracles avoid it and need no hardening.
+What remains, and is accepted:
+- Candidate source code still executes inside the hidden test process. Changed source could, for example, monkeypatch
+  `pytest` or `unittest` at import time, or detect the test environment, and nothing here can see that. This is the
+  same residual risk as other SWE-bench-style evaluations.
+- A check passes on its exit status. A source-level trick that makes the runner execute fewer of the oracle's tests is
+  not detected; a per-task expected-test count, set by the custodian, would close this.
+- Black-box (`blackbox-v1`) oracles avoid both and need no hardening.
+- Fairness cost: a real source directory named `vendor/` or `target/` is skipped like a dependency tree, so the
+  agent's changes there are dropped. The `npm:` alias form of a dependency spec is not refused; setup is not re-run
+  after the copy, so it cannot install anything.
 
 The sealed corpus is bound through its own manifest schema (`eval/heldout-manifest.json`, `hash_scheme`). The runner
 recomputes each selected task's `task_sha256` (raw `task.json`) and `hidden_sha256`. The latter is computed over the
