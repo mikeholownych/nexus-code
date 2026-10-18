@@ -52,9 +52,10 @@
   ],
   "pass": true,
   "revision": {
-    "commit": "150c76ea54b1a9433bd04eac4adf904caf5e2d8d",
+    "commit": "c3993c734ca3065e06dee17fd5ae58e9d038102d",
     "dirty": false,
     "profileSha256": "4e8d42a218a68fa2fd3fd0de4d9788b205fa41b9ab71935cc2b6cf73f5d63543",
+    "manifestSha256": "50895b84a604fbfd45ed82e29cbef4ba795d7fffbe6611af23bfbc9851f3e89b",
     "sourceDigests": [
       {
         "file": "eval/host/validate.mjs",
@@ -82,7 +83,7 @@
       },
       {
         "file": "eval/isolate.mjs",
-        "sha256": "80beeba0f97d9a2621c6ae2f7875d48de3eaf29f80e5ccf28d0249038b10de5e"
+        "sha256": "b5e9d069b57b3598dd7e67b58494306c5f61cc6ee899ea6a5d7613cf5fe4bccb"
       },
       {
         "file": "eval/validate.mjs",

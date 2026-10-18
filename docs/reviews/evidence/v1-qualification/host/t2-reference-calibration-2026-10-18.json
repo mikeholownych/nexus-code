@@ -55,5 +55,45 @@
       "maxWorkspaceBytes": 235941936,
       "maxPhaseWallMs": 17279
     }
+  },
+  "revision": {
+    "commit": "c3993c734ca3065e06dee17fd5ae58e9d038102d",
+    "dirty": false,
+    "profileSha256": "4e8d42a218a68fa2fd3fd0de4d9788b205fa41b9ab71935cc2b6cf73f5d63543",
+    "manifestSha256": "50895b84a604fbfd45ed82e29cbef4ba795d7fffbe6611af23bfbc9851f3e89b",
+    "sourceDigests": [
+      {
+        "file": "eval/host/validate.mjs",
+        "sha256": "0eb786dd5304fc72c009c2fb5e3f0ce005b6be4961b8cfe0b4b65168ed6b14a8"
+      },
+      {
+        "file": "eval/host/provision.sh",
+        "sha256": "46da49b7baea9dc45c3d55c2542eb210552de0b75c4fc1dee74a68337da25d58"
+      },
+      {
+        "file": "eval/host/rollback.sh",
+        "sha256": "b833bb9c48bf476ac58d3831c7f144cc4984f2dd26b8fb07c07485ca53af06b4"
+      },
+      {
+        "file": "eval/host/resource-profile.json",
+        "sha256": "4e8d42a218a68fa2fd3fd0de4d9788b205fa41b9ab71935cc2b6cf73f5d63543"
+      },
+      {
+        "file": "eval/resources.mjs",
+        "sha256": "7a1e276938a88ed5b9858a1e1b5aa174f96c75fdf1ad393cb29e5c383858f2b6"
+      },
+      {
+        "file": "eval/cgroup_supervisor.mjs",
+        "sha256": "222646943526480db44bc4359416f4b69ac389c5d50a8bc49e3a00a233a1a8ca"
+      },
+      {
+        "file": "eval/isolate.mjs",
+        "sha256": "b5e9d069b57b3598dd7e67b58494306c5f61cc6ee899ea6a5d7613cf5fe4bccb"
+      },
+      {
+        "file": "eval/validate.mjs",
+        "sha256": "0ab4a2f049b47c8d579e18509434c9f5e34f580cd21180696c1ac028950841c2"
+      }
+    ]
   }
 }
