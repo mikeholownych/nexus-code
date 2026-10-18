@@ -13,17 +13,18 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..")
 test("the production version-probe workspace uses the configured capped filesystem", { timeout: 60_000 }, async () => {
   const workspaceRoot = process.env.NEXUS_EVAL_TEST_WORKSPACE_ROOT;
   assert.ok(workspaceRoot, "requires the dedicated capped workspace fixture configured by CI");
+  const runtimeRoot = process.env.NEXUS_EVAL_TEST_RUNTIME_ROOT;
+  assert.ok(runtimeRoot, "requires the dedicated public runtime fixture configured by CI");
   const runAs = process.env.NEXUS_EVAL_TEST_RUN_AS ?? "nobody";
   const evaluatorUid = Number(execFileSync("/usr/bin/id", ["-u", runAs], { encoding: "utf8" }).trim());
   assert.notEqual(evaluatorUid, process.getuid(), "version probe must actually switch to a separate evaluator uid");
   const cap = fs.statfsSync(workspaceRoot);
   const expectedDevice = fs.statSync(workspaceRoot).dev;
   const temp = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-version-storage-test-"));
-  fs.chmodSync(temp, 0o755); // Public synthetic executable must be traversable by the separate evaluator.
   const home = path.join(temp, "home");
-  const tools = path.join(temp, "tools");
+  const tools = fs.mkdtempSync(path.join(runtimeRoot, "version-agent-"));
   const tasks = path.join(temp, "tasks");
-  for (const dir of [home, tools, tasks]) fs.mkdirSync(dir, { mode: 0o700 });
+  for (const dir of [home, tasks]) fs.mkdirSync(dir, { mode: 0o700 });
   fs.chmodSync(tools, 0o755);
   const before = new Set(fs.readdirSync(workspaceRoot));
   const agent = path.join(tools, "goose");
@@ -50,7 +51,7 @@ console.log('goose-storage-probe 1.0.0');
     name: "bounded-version-probe", agent: "goose", expectedAgentVersion: "1.0.0", runAs,
     endpoint: `http://127.0.0.1:${address.port}/v1`, model: "storage-probe-model", proxy: false,
     env: { PATH: `${tools}${path.delimiter}${process.env.PATH ?? ""}` },
-    sandboxRuntimePaths: [agent], sandboxRuntimeRoots: [],
+    sandboxRuntimePaths: [agent], sandboxRuntimeRoots: [tools],
     resources: { cpuPercent: 100, memoryBytes: 256 * 1024 * 1024, tasks: 64, storageBytes: cap.blocks * cap.bsize, workspaceRoot },
   }));
   try {
@@ -77,5 +78,6 @@ console.log('goose-storage-probe 1.0.0');
   } finally {
     await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
     fs.rmSync(temp, { recursive: true, force: true });
+    fs.rmSync(tools, { recursive: true, force: true });
   }
 });
