@@ -248,3 +248,11 @@ test("a steer counts as violable only if its constraint could fail: path present
     fs.rmSync(ws, { recursive: true, force: true });
   }
 });
+
+test("a command baseline that does not exit cleanly is a harness error, never a granted precondition", async () => {
+  const { commandBaseline } = await t3();
+  const task = { steering: [{ id: "lint", constraint: { kind: "command", command: "npm run lint" } }, { id: "keep", constraint: { kind: "file-unchanged", path: "keep.txt" } }] };
+  assert.deepEqual(await commandBaseline(task, async () => ({ pass: false, error: null })), { lint: true });
+  assert.deepEqual(await commandBaseline(task, async () => ({ pass: true, error: null })), { lint: false });
+  await assert.rejects(commandBaseline(task, async () => ({ pass: false, error: "timed out" })), /did not run cleanly: timed out/);
+});

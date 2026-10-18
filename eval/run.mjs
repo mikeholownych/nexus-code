@@ -167,8 +167,22 @@ async function runOnce(task, run) {
   try {
     await prepareWorkspace(task, ws);
     const t3Baseline = task.tier === "T3" ? steeringBaseline(task, ws) : null;
-    // On the per-run task copy, so the steering hook in runAgent can read it.
-    task.t3CommandBaseline = task.tier === "T3" ? await commandBaseline(task, (command) => runIsolated(command, { cwd: ws, home: true, timeoutSec: 300, resources: config.resources ?? null }).then((r) => ({ pass: r.status === 0 && !r.timedOut && !r.overflow }))) : null;
+    // On the per-run task copy, so the steering hook in runAgent can read it. The commands run on a throwaway copy of
+    // the staged workspace, so the agent starts on exactly the staged tree.
+    const t3BaselineResources = [];
+    if (task.tier === "T3") {
+      const probe = fs.mkdtempSync(path.join(scratch, `nexus-eval-t3-baseline-${task.id}-`));
+      try {
+        fs.cpSync(ws, probe, { recursive: true, verbatimSymlinks: true });
+        task.t3CommandBaseline = await commandBaseline(task, (command) => runIsolated(command, { cwd: probe, home: true, timeoutSec: 300, resources: config.resources ?? null }).then((r) => {
+          if (r.resources) t3BaselineResources.push(r.resources);
+          const error = r.containmentProblem ?? (r.timedOut ? "timed out" : r.overflow ? "output limit" : r.status === null ? "did not exit" : null);
+          return { pass: r.status === 0 && !error, error };
+        }));
+      } finally {
+        fs.rmSync(probe, { recursive: true, force: true });
+      }
+    }
     const sourceBefore = treeDigest(task.dir);
     // Every agent reaches the model through a per-run forwarder, so whether the model was reachable is observed by the
     // harness, the same way for every agent (eval/infra.mjs). `config.proxy: false` connects agents directly.
@@ -233,7 +247,7 @@ async function runOnce(task, run) {
       tokens: agent.json?.tokenStats ?? null,
       ...(t3 ? { t3 } : {}),
       model,
-      resources: config.resources ? { agent: agent.resources, hidden: hidden.resources ?? null, regression: regression?.resources ?? null } : null,
+      resources: config.resources ? { agent: agent.resources, hidden: hidden.resources ?? null, regression: regression?.resources ?? null, ...(t3BaselineResources.length ? { t3Baseline: t3BaselineResources } : {}) } : null,
       logs: saveLogs(task, run, agent, hidden, regression),
     };
   } catch (err) {

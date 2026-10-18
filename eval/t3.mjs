@@ -195,7 +195,12 @@ export async function t3Snapshot(task, ws, runCommand) {
 export async function commandBaseline(task, runCommand) {
   const result = {};
   for (const item of task.steering) {
-    if (item.constraint.kind === "command") result[item.id] = !(await runCommand(item.constraint.command)).pass;
+    if (item.constraint.kind !== "command") continue;
+    const outcome = await runCommand(item.constraint.command);
+    // Only a normal exit says whether the constraint failed: a hang, overflow or containment failure is a harness
+    // error, never a precondition granted by default.
+    if (outcome.error) throw new Error(`T3 baseline for steering ${item.id} did not run cleanly: ${outcome.error}`);
+    result[item.id] = !outcome.pass;
   }
   return result;
 }
