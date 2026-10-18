@@ -3,8 +3,9 @@
 // the agent's reach when the agent runs as its own user.
 import fs from "node:fs";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { createHash } from "node:crypto";
-import { assertNoSymlinks, confinedPath, runtimeMountProblem, sandboxAvailable } from "./isolate.mjs";
+import { assertNoSymlinks, candidateSandboxHostMountSources, confinedPath, runtimeMountProblem, sandboxAvailable } from "./isolate.mjs";
 import { blackBoxOracleProblem } from "./oracle.mjs";
 import { t3TaskProblems } from "./t3.mjs";
 import { resourceProbeProblem } from "./resources.mjs";
@@ -12,6 +13,7 @@ import { resourceProbeProblem } from "./resources.mjs";
 export const TIERS = ["T1", "T2", "T3", "T4"];
 export const CLASSES = ["bugfix", "feature", "refactor", "debug"];
 export const DIFFICULTIES = ["easy", "medium", "hard"];
+const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
 /** Problems with one task.json (empty when valid). `qualification` adds the fields held-out tasks must carry. */
 export function validateTask(task, dir, { qualification = false } = {}) {
@@ -41,7 +43,9 @@ export function validateTask(task, dir, { qualification = false } = {}) {
     const oracleProblem = blackBoxOracleProblem(task.hidden, dir, task.fixture ?? null);
     need(!oracleProblem, oracleProblem ?? "hidden black-box oracle is invalid");
   }
-  if (qualification) need(hiddenOracle && !hiddenCommand, "qualification requires hidden.protocol blackbox-v1; legacy hidden commands can inspect or alter candidate files");
+  // Legacy validators execute candidate modules in the same runtime. File hiding and a fresh workspace cannot prevent
+  // candidate code from inspecting or mutating that runtime, so they are never valid independent qualification.
+  if (qualification) need(hiddenOracle && !hiddenCommand, "qualification requires the isolated blackbox-v1 hidden oracle; in-process legacy validators are not accepted");
   if (task.hidden?.dir) {
     try { confinedPath(dir, task.hidden.dir); }
     catch (error) { need(false, error.message); }
@@ -126,6 +130,88 @@ export function qualificationBudgetProblem(config) {
   return null;
 }
 
+function pathOverlaps(left, right) {
+  return left === right || left.startsWith(`${right}${path.sep}`) || right.startsWith(`${left}${path.sep}`);
+}
+
+function resolveCanonicalOrLexical(source) {
+  if (typeof source !== "string" || !path.isAbsolute(source)) return null;
+  const lexical = path.resolve(source);
+  let current = lexical;
+  const suffix = [];
+  while (true) {
+    try {
+      return { lexical, canonical: path.resolve(fs.realpathSync(current), ...suffix) };
+    } catch {
+      const parent = path.dirname(current);
+      if (parent === current) return { lexical, canonical: lexical };
+      suffix.unshift(path.basename(current));
+      current = parent;
+    }
+  }
+}
+
+function overlapVariants(left, right) {
+  return [left.lexical, left.canonical].some((a) => [right.lexical, right.canonical].some((b) => pathOverlaps(a, b)));
+}
+
+/** Refuse candidate runtime mounts that could expose the task tree or its private corpus store. */
+export function runtimeCorpusOverlapProblem(runtimePaths, runtimeRoots, tasksDir, extraPrivatePaths = [], mountContext = {}) {
+  if (!Array.isArray(runtimePaths) || !Array.isArray(runtimeRoots) || !Array.isArray(extraPrivatePaths)) {
+    return "qualification runtime and corpus paths must be explicit arrays";
+  }
+  const taskPath = resolveCanonicalOrLexical(tasksDir);
+  if (!taskPath || !fs.existsSync(tasksDir)) return "qualification task corpus path is unavailable";
+  // Held-out stores keep tasks/, references/, and custody material under one directory. Keep that parent private
+  // outside the in-repo development eval/tasks tree, where eval/ also contains the trusted sandbox supervisor.
+  const parentDir = resolveCanonicalOrLexical(path.dirname(tasksDir));
+  const evalDir = resolveCanonicalOrLexical(path.join(ROOT, "eval"));
+  const includeParent = mountContext.qualification === true || parentDir.canonical !== evalDir.canonical;
+  const privatePaths = [tasksDir, ...(includeParent ? [path.dirname(tasksDir)] : []), ...extraPrivatePaths];
+  const protectedPaths = [];
+  for (const item of privatePaths) {
+    const resolved = resolveCanonicalOrLexical(item);
+    if (!resolved) return "qualification private corpus paths must be absolute";
+    protectedPaths.push({ source: item, resolved, exists: fs.existsSync(item) });
+  }
+  for (const item of [...runtimePaths, ...runtimeRoots]) {
+    if (typeof item !== "string" || !path.isAbsolute(item)) return "qualification runtime paths and roots must be absolute";
+    if (!fs.existsSync(item)) return `qualification runtime path is unavailable: ${item}`;
+  }
+  const mountSources = candidateSandboxHostMountSources({
+    readOnlyPaths: runtimePaths,
+    supervisorPath: mountContext.supervisorPath ?? path.join(ROOT, "eval/agent_sandbox.mjs"),
+    nodeRuntime: mountContext.nodeRuntime ?? process.execPath,
+    cwd: mountContext.cwd,
+    home: mountContext.home,
+    proxyDirectory: mountContext.proxyDirectory,
+  });
+  const hostSources = [
+    ...mountSources.systemDirectories,
+    ...mountSources.systemFiles,
+    ...mountSources.systemEtcDirectories,
+    ...mountSources.toolchainDirectories,
+    ...Object.values(mountSources.runtimeSources).flatMap((value) => Array.isArray(value) ? value : value === null ? [] : [value]),
+  ];
+  const candidatePaths = [...new Set([...hostSources, ...runtimePaths, ...runtimeRoots])];
+  const candidates = [];
+  for (const item of candidatePaths) {
+    const resolved = resolveCanonicalOrLexical(item);
+    if (!resolved) return "qualification runtime paths and roots must be absolute";
+    candidates.push({ source: item, resolved });
+  }
+  for (const candidate of candidates) {
+    for (const protectedPath of protectedPaths) {
+      if (overlapVariants(candidate.resolved, protectedPath.resolved)) {
+        return `qualification runtime mount overlaps protected corpus material: ${candidate.source}`;
+      }
+    }
+  }
+  const unavailablePrivate = protectedPaths.find((item) => !item.exists);
+  if (unavailablePrivate) return `qualification private corpus path is unavailable: ${unavailablePrivate.source}`;
+  return null;
+}
+
 function positiveInt(value) {
   return typeof value === "number" && Number.isFinite(value) && value > 0 ? Math.floor(value) : undefined;
 }
@@ -147,6 +233,17 @@ export async function fetchModelEntry(baseUrl, model, apiKey) {
 
 /** Qualification requires an evaluator UID, working Bubblewrap namespaces, and explicit safe runtime mount roots. */
 export function hiddenTestIsolationProblem(config, tasksDir) {
+  if (config.qualification && Array.isArray(config.sandboxRuntimePaths) && Array.isArray(config.sandboxRuntimeRoots)) {
+    const corpusPaths = [
+      config.corpusCustody?.reportPath,
+      config.corpusCustody?.storeRoot,
+      config.corpusCustody?.validatorPath,
+      config.corpusCustody?.referencePath,
+      config.corpusCustody?.authorLogPath,
+    ].filter((item) => item !== undefined);
+    const corpusOverlap = runtimeCorpusOverlapProblem(config.sandboxRuntimePaths, config.sandboxRuntimeRoots, tasksDir, corpusPaths, { ...(config.mountContext ?? {}), qualification: Boolean(config.qualification) });
+    if (corpusOverlap) return corpusOverlap;
+  }
   if (!config.runAs) return config.qualification ? "qualification runs need runAs (the agent's own user) so hidden tests are unreadable to it" : null;
   if (!/^[a-z_][a-z0-9_-]{0,31}$/.test(config.runAs)) return `runAs '${config.runAs}' is not a valid user name`;
   if (!sandboxAvailable()) return "Bubblewrap is unavailable; qualification commands must fail closed";
@@ -219,6 +316,71 @@ export function corpusTaskRows(tasksDir, ids) {
   });
 }
 
+const HELDOUT_V2_HASH_SCHEME = {
+  task_sha256: "sha256 of raw tasks/<id>/task.json bytes",
+  hidden_sha256: "sha256 of sorted '<path>  <sha256(file)>\\n' lines over tasks/<id>/<hidden.dir> (bin/hidden_digest.mjs)",
+};
+
+/**
+ * The custodian's hidden-directory digest (heldout-v2 hash_scheme): regular files only, paths relative to the hidden
+ * directory with "/" separators, sorted byte-wise by path, each line `<path>  <sha256(bytes)>\n`.
+ */
+export function heldoutHiddenDigest(hiddenDir) {
+  assertNoSymlinks(hiddenDir);
+  const files = [];
+  const walk = (dir) => {
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      const item = path.join(dir, entry.name);
+      if (entry.isDirectory()) walk(item);
+      else if (entry.isFile()) files.push([path.relative(hiddenDir, item).split(path.sep).join("/"), item]);
+    }
+  };
+  walk(hiddenDir);
+  files.sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0));
+  const hash = createHash("sha256");
+  for (const [relative, file] of files) hash.update(`${relative}  ${createHash("sha256").update(fs.readFileSync(file)).digest("hex")}\n`);
+  return hash.digest("hex");
+}
+
+/**
+ * The sealed T2 corpus (eval/heldout-manifest.json) uses the custodian's heldout-v2 schema, which binds each task's
+ * task.json and hidden directory and carries no custody fields: custody is stated in the frozen config (corpusCustody)
+ * with the committed custody report pinned by digest; the reviewer still verifies the report's content.
+ * Limit: the manifest binds task.json and hidden.dir only, not other files in a task directory.
+ */
+function heldoutV2ManifestProblem(config, tasksDir, ids, manifest) {
+  if (JSON.stringify(manifest.hash_scheme) !== JSON.stringify(HELDOUT_V2_HASH_SCHEME)) return "qualification corpus manifest uses an unknown hash scheme";
+  if (!Array.isArray(manifest.tasks) || manifest.tasks.length < 1 || manifest.tasks.length !== manifest.task_count) return "qualification corpus manifest task list is empty or does not match its task_count";
+  const custody = config.corpusCustody;
+  if (typeof custody?.custodian !== "string" || !custody.custodian.trim() || Number.isNaN(Date.parse(custody?.approvedAt ?? "")) || typeof custody?.reportPath !== "string" || !/^[0-9a-f]{64}$/.test(custody?.reportSha256 ?? "")) {
+    return "a heldout-v2 corpus needs corpusCustody { custodian, approvedAt, reportPath, reportSha256 } in the frozen config";
+  }
+  try {
+    if (createHash("sha256").update(fs.readFileSync(custody.reportPath)).digest("hex") !== custody.reportSha256) return "the custody report differs from corpusCustody.reportSha256";
+  } catch { return "the custody report named by corpusCustody.reportPath is unavailable"; }
+  const sealed = [...manifest.tasks].map((t) => t.id).sort();
+  if (JSON.stringify(sealed) !== JSON.stringify([...ids].sort())) return "qualification task population differs from the frozen corpus manifest";
+  for (const row of manifest.tasks) {
+    try {
+      const dir = confinedPath(tasksDir, row.id);
+      const taskFile = confinedPath(dir, "task.json");
+      const raw = fs.readFileSync(taskFile);
+      if (createHash("sha256").update(raw).digest("hex") !== row.task_sha256) return `task ${row.id}: task.json differs from the frozen corpus manifest`;
+      const task = JSON.parse(raw.toString("utf8"));
+      if (Object.hasOwn(task, "fixture") && !task.repo) {
+        if (typeof row.sha256 !== "string") return `corpusManifest task ${row.id} uses a local fixture without a full-tree sha256 digest in the v2 manifest`;
+        if (taskTreeDigest(dir) !== row.sha256) return `task ${row.id}: local fixture full-tree sha256 differs from the v2 manifest`;
+      }
+      const hiddenDir = task.hidden?.dir;
+      if (typeof hiddenDir !== "string" || !hiddenDir) return `task ${row.id}: sealed task has no hidden.dir`;
+      if (heldoutHiddenDigest(confinedPath(dir, hiddenDir)) !== row.hidden_sha256) return `task ${row.id}: hidden tests differ from the frozen corpus manifest`;
+    } catch (error) {
+      return `qualification task content cannot be safely hashed: ${error.message}`;
+    }
+  }
+  return null;
+}
+
 /** Verify both the committed manifest pin and the exact selected task population/content. */
 export function corpusManifestProblem(config, tasksDir, ids, frozenRows = null) {
   if (!config.corpusManifest || !/^[0-9a-f]{64}$/.test(config.corpusManifestSha256 ?? "")) {
@@ -232,6 +394,7 @@ export function corpusManifestProblem(config, tasksDir, ids, frozenRows = null) 
   let manifest;
   try { manifest = JSON.parse(raw.toString("utf8")); }
   catch { return "qualification corpus manifest is invalid JSON"; }
+  if (manifest.schemaVersion === undefined && manifest.hash_scheme) return heldoutV2ManifestProblem(config, tasksDir, ids, manifest);
   if (manifest.schemaVersion !== 1 || manifest.split !== "heldout" || manifest.custody?.status !== "approved") {
     return "qualification corpus manifest lacks the frozen heldout approval contract";
   }
@@ -255,4 +418,9 @@ export function corpusManifestProblem(config, tasksDir, ids, frozenRows = null) 
 export function asUser(user, cmd, argv) {
   if (!path.isAbsolute(cmd)) throw new Error("evaluator-account commands must be absolute paths");
   return { cmd: "/usr/bin/sudo", argv: ["-n", "-u", user, "--", cmd, ...argv] };
+}
+
+/** Run a process spec as `user` while retaining its timeout and other execution metadata. */
+export function asUserSpec(user, spec) {
+  return { ...spec, ...asUser(user, spec.cmd, spec.argv) };
 }
