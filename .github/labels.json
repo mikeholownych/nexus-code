@@ -1,0 +1,52 @@
+[
+  {
+    "name": "bug",
+    "color": "d73a4a",
+    "description": "Reproducible behavior defect"
+  },
+  {
+    "name": "enhancement",
+    "color": "a2eeef",
+    "description": "Proposed or implemented capability"
+  },
+  {
+    "name": "documentation",
+    "color": "0075ca",
+    "description": "Documentation improvement"
+  },
+  {
+    "name": "security",
+    "color": "b60205",
+    "description": "Public security maintenance; never private vulnerability details"
+  },
+  {
+    "name": "breaking-change",
+    "color": "d93f0b",
+    "description": "Requires compatibility or migration review"
+  },
+  {
+    "name": "dependencies",
+    "color": "0366d6",
+    "description": "Dependency maintenance"
+  },
+  {
+    "name": "good first issue",
+    "color": "7057ff",
+    "description": "Maintainer-scoped starter task"
+  },
+  {
+    "name": "help wanted",
+    "color": "008672",
+    "description": "Maintainer requests contributor help"
+  },
+  {
+    "name": "needs-triage",
+    "color": "fbca04",
+    "description": "Awaiting maintainer classification"
+  },
+  {
+    "name": "release",
+    "color": "5319e7",
+    "description": "Packaging, qualification, or release engineering"
+  }
+]

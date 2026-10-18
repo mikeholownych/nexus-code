@@ -32,7 +32,7 @@ jobs:
           # The workflow definition must be the RC's own: dispatch it on the tag, not a branch.
           test "$GITHUB_REF" = "refs/tags/$VERSION" || { echo "dispatch this workflow on refs/tags/$VERSION (got $GITHUB_REF)" >&2; exit 1; }
           test "$GITHUB_WORKFLOW_SHA" = "$COMMIT" || { echo "workflow file is from $GITHUB_WORKFLOW_SHA, not $COMMIT" >&2; exit 1; }
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           ref: refs/tags/${{ inputs.version }}
           persist-credentials: false
@@ -43,7 +43,7 @@ jobs:
           test -z "$(git status --porcelain --untracked-files=all)" || { echo "checkout is not clean" >&2; exit 1; }
           node scripts/sync-version.mjs --check --tag "$VERSION"
       - run: sudo apt-get update && sudo apt-get install --yes make
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 20
           cache: npm
@@ -73,12 +73,12 @@ jobs:
           cat "$RUNNER_TEMP/identity/source-identity.json"
         env:
           RUNNER_LABEL: ${{ matrix.runner }}
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: dist-${{ matrix.runner }}
           path: ${{ runner.temp }}/dist/*
           if-no-files-found: error
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: identity-${{ matrix.runner }}
           path: ${{ runner.temp }}/identity/source-identity.json
@@ -91,11 +91,11 @@ jobs:
       VERSION: ${{ inputs.version }}
       COMMIT: ${{ inputs.commit }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           ref: ${{ inputs.commit }}
           persist-credentials: false
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           path: /tmp/repro
       - name: Compare cross-runner packages (ACC-SUP-08, REQ-REL-114)
@@ -108,7 +108,7 @@ jobs:
           node scripts/repro-identity.mjs compare "$VERSION" "$COMMIT" /tmp/repro/repro-evidence.json /tmp/repro/identity-ubuntu-22.04/source-identity.json /tmp/repro/identity-ubuntu-24.04/source-identity.json
           cat /tmp/repro/repro-evidence.json
           echo "CROSS_RUNNER_REPRO_PASS: $VERSION@$COMMIT byte-identical across ubuntu-22.04 and ubuntu-24.04."
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: repro-evidence
           path: /tmp/repro/repro-evidence.json

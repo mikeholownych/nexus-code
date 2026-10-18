@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Questions and support
+    url: https://github.com/mikeholownych/nexus-code/discussions
+    about: Ask setup and usage questions in Discussions.
+  - name: Security reporting policy
+    url: https://github.com/mikeholownych/nexus-code/blob/main/SECURITY.md
+    about: Report vulnerabilities privately; never include exploit details in public issues.

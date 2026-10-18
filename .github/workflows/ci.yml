@@ -13,9 +13,9 @@ jobs:
   cloudflare-contest-contract:
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - run: sudo apt-get update && sudo apt-get install --yes nodejs
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 22
           cache: npm
@@ -46,7 +46,7 @@ jobs:
       matrix:
         node: [20, 22, 24]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - run: sudo apt-get update && sudo apt-get install --yes make bubblewrap build-essential meson ninja-build pkg-config libcap-dev
       - run: bash scripts/ensure-ci-bubblewrap.sh
       - run: bash scripts/ensure-ci-user-cgroups.sh
@@ -56,7 +56,7 @@ jobs:
           sudo install -d -o "$USER" -g "$USER" -m 0700 "$root"
           sudo mount -t tmpfs -o size=128m,mode=0700,uid="$(id -u)",gid="$(id -g)" nexus-eval-ci "$root"
           echo "NEXUS_EVAL_TEST_WORKSPACE_ROOT=$root" >> "$GITHUB_ENV"
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: ${{ matrix.node }}
           cache: npm
@@ -103,7 +103,7 @@ jobs:
     needs: [test-matrix]
     runs-on: ubuntu-22.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - run: sudo apt-get update && sudo apt-get install --yes make bubblewrap build-essential meson ninja-build pkg-config libcap-dev
       - run: bash scripts/ensure-ci-bubblewrap.sh
       - run: bash scripts/ensure-ci-user-cgroups.sh
@@ -113,7 +113,7 @@ jobs:
           sudo install -d -o "$USER" -g "$USER" -m 0700 "$root"
           sudo mount -t tmpfs -o size=128m,mode=0700,uid="$(id -u)",gid="$(id -g)" nexus-eval-ci "$root"
           echo "NEXUS_EVAL_TEST_WORKSPACE_ROOT=$root" >> "$GITHUB_ENV"
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 20
           cache: npm
@@ -171,7 +171,7 @@ jobs:
       - run: cmp "$RUNNER_TEMP/dist/install.sh" "$RUNNER_TEMP/repro-check/install.sh"
       - run: bash scripts/smoke-package.sh "$RUNNER_TEMP/dist/nexus-linux-x86_64-v${{ steps.release-version.outputs.version }}.tar.gz"
       - run: bash scripts/installer-smoke.sh "$GITHUB_WORKSPACE/install.sh" "$RUNNER_TEMP/dist/nexus-linux-x86_64-v${{ steps.release-version.outputs.version }}.tar.gz"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: nexus-linux-x86_64
           path: ${{ runner.temp }}/dist/*
