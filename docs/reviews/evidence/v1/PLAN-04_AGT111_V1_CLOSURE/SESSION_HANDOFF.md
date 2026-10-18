@@ -34,3 +34,8 @@
 2. After PR51 O_NOFOLLOW lands: re-review and help integrate
 3. Version-probe ACL follow-up PR if VERSION_PROBE claims transferred
 4. Exact-RC / repro.yml dispatch only after RC tag (publisher)
+
+## Update 22:10Z
+- PR #51 local `39d812a` O_NOFOLLOW reviewed ACCEPT by RubyForest (32/32 recovery tests); awaiting owner push to PR remote (still `8ea75d8` on GitHub).
+- PR #48 closed as superseded.
+- PR #55 CI: CodeQL/contract/js green; Node matrix still in progress on run 39170769440.
