@@ -237,7 +237,7 @@ This amendment is **narrow by design**. It applies only to corpora where the mea
 | # | Action | Why | When |
 |---|---|---|---|
 | X1 | ~~`git tag -d v1.1.0 v1.2.0 v1.2.1`~~ **Done by the owner on 2026-10-14.** Verified: `git tag -l` now lists only `v0.1.0-alpha.1` and `v0.1.0-alpha.2`. | DEC-08 | Done |
-| X2 | ~~Provide an independent task author~~. **Resolved 2026-10-14 (T2) and 2026-10-18 (T3):** agent authorship authorized and completed for both T2 (`eval/heldout-manifest.json`, sha256 `50895b84…`, 40 tasks) and T3 (`eval/heldout-t3-manifest.json`, sha256 `dcbd794e…`, 8 tasks), each sealed under root-owned `0700` custody. | DEC-05 | Done |
+| X2 | ~~Provide an independent task author~~. **Resolved 2026-10-14 (T2) and 2026-10-18 (T3):** agent authorship authorized and completed for both T2 (`eval/heldout-manifest.json`, sha256 `50895b84…`, 40 tasks) and T3 (`eval/heldout-t3-manifest.json`, sha256 `85fb9caf…`, 8 tasks), each sealed under root-owned `0700` custody. | DEC-05 | Done |
 | X3 | ~~Separate standalone host~~. **Withdrawn:** no worker or GPU is available apart from the gateway. Replaced by DEC-16 (stripping proxy plus conformance fixtures). Remaining action: none. Optional: approve a CPU-only llama.cpp container on the dev box for the protocol smoke test. | DEC-16 | — |
 | X4 | **Partly resolved 2026-10-14:** the existing ChatGPT sign-in and OpenRouter connections are authorized for small-spend checks; both were live-verified at db1ca55. Optional: add OpenAI API-key or Anthropic keys if those providers should be listed as supported. | DEC-06 | M5 (optional) |
 | X5 | Independent reviewer for continuity/compaction acceptance and RC acceptance | REQ-AGT-110, ACCEPTANCE §8 | M5/M6 |

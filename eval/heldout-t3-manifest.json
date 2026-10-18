@@ -7,7 +7,7 @@
   "custody": {
     "status": "approved",
     "custodian": "opencode (custodian)",
-    "approvedAt": "2026-10-18T10:42:00Z",
+    "approvedAt": "2026-10-18T11:10:00Z",
     "authors": [
       "author-t3a (codex exec, clean)",
       "author-t3b (codex exec, clean)"
@@ -16,43 +16,43 @@
   "tasks": [
     {
       "id": "t3-js-bugfix-01",
-      "taskSha256": "5ebf57f168aff16b3ef7fe661933791f2e196b2e29616b8dd56ee2f45e2361d8",
-      "treeSha256": "437bebd936bf0a8234ea2f82f04d7927415fee49667abf22d4e5411de55efc8f"
+      "taskSha256": "ab213331087088f14f0669820fb95ba209b314a66e845c74eb9b60f5eeac7619",
+      "treeSha256": "8ce245c51e60b4e52ca1963cd4b0ec9620c235e1395825f151390448d35adfff"
     },
     {
       "id": "t3-js-debug-01",
-      "taskSha256": "331d09532d6622da6be8029363801b0c432263550e686b6b29bfe6efdbc75663",
-      "treeSha256": "36d5d0467031789bce9e672a23ee8c32844e7432d7519581e672f868d551756b"
+      "taskSha256": "1d6c680e51c23535533e9039e3cf35afbc0ff41ae6b5d2cf963c1d951146d1ac",
+      "treeSha256": "4547934c79d8f1fd8aaed203f566bda86ac36574adcb40cfbcadd135887e1425"
     },
     {
       "id": "t3-js-feature-01",
-      "taskSha256": "453b76eb579ed7a7d37cfb86e5b313ec3e9855115ac6f15014a3cf2fecf104d0",
-      "treeSha256": "5684eebb01ac6a4d85b867e4c1cc565c46cdba0308304d86f0e079201c669dca"
+      "taskSha256": "9915e97588ce34a22882e6d1b129d375e834a40c7184a138cfa1ce38fda355c4",
+      "treeSha256": "ddf12fcdf7b4a26768f9e97af8e8de62df00348354cd83ca8dc70a433ebdf899"
     },
     {
       "id": "t3-js-refactor-01",
-      "taskSha256": "66e6d4f11f17fc53c0258ea008f854a8244cfb911ea425926c6446f8121387dc",
-      "treeSha256": "33b537077519c1aec09e7ca4a4b1bdc48a2d90df22292558f4d58551174b2969"
+      "taskSha256": "7d2a72eb18f522f0246a342bd5dc1f5f0d68ce83bacdac85516b180738a8e128",
+      "treeSha256": "ef54c5293a26d873ba5bbd7ad1d0dadb1ec1baca7e77f30ba2b5c440f6bfa02b"
     },
     {
       "id": "t3-py-bugfix-01",
-      "taskSha256": "3ea887fd441a8c2ea60558b284dfb041eb3d2579a39f4702646fb78481fb097c",
-      "treeSha256": "c109ef139bbdf5ee819d441e27a6dd1bd81076e5fe74ae6b023707bc5d67e64b"
+      "taskSha256": "f9462b35266188c1c055195b5c7f80c63c5cf54591807a7dfc1bed62e6875226",
+      "treeSha256": "480ffde21a31e3c1b6648f76d37bd81f3e27f0ec740e06b0a2a22dbb8dc32cc0"
     },
     {
       "id": "t3-py-debug-01",
-      "taskSha256": "81823f62e7f061645ae47885bccf9d682b368fe17911d4305c70c817b8e37ec8",
-      "treeSha256": "aa8cb9539837150495d6a06993483f272c132a48d0ce2b84459d59d969db3bed"
+      "taskSha256": "5a56fad1aea2259e129aee91f6207143480a0382489b41ec88bbcfed148bd50c",
+      "treeSha256": "c6bbedf891c7619a11c2dcbaf0b2e494095c3614e3ebe96871f9026d0c788b29"
     },
     {
       "id": "t3-py-feature-01",
-      "taskSha256": "ca7449e23f4ccfe3e8c05601b2068656a1f98293ed19e8c2bc0b8038d4ba51f7",
-      "treeSha256": "6dfb56d5f04bc853faa3d3af02a11e7d3ccbd854b6d1043bd3478ab68ca444b5"
+      "taskSha256": "d9e6ecb5a948ca5b3688ad77a6886fb8be41d0ab3ebd2325a6c31e17c1305ec3",
+      "treeSha256": "b5427b812ac1eddb062d7fc434de7bd50a87618e68f0e74ea19d8f9e7423acb7"
     },
     {
       "id": "t3-py-refactor-01",
-      "taskSha256": "1e072c774d7d42da5582db3e720a8f2f1946eebcae02af798162314a7d61f3bf",
-      "treeSha256": "9ea28f2d0e15634bd4ee9a74c6f59641f937b105af16f601ae6b213e5d7f5343"
+      "taskSha256": "234bddedcfe9d1248745f9a58ca2ed7d0c973f7c8b14d20ff24a3bf980a2b980",
+      "treeSha256": "0cd76899a7cae6e7c6a76c1245fc795e7edd6034da69843a50a91b3684cca4d1"
     }
   ],
   "metadata": [
@@ -61,64 +61,64 @@
       "class": "bugfix",
       "difficulty": "hard",
       "runtime": "node",
-      "taskSha256": "5ebf57f168aff16b3ef7fe661933791f2e196b2e29616b8dd56ee2f45e2361d8",
-      "treeSha256": "437bebd936bf0a8234ea2f82f04d7927415fee49667abf22d4e5411de55efc8f"
+      "taskSha256": "ab213331087088f14f0669820fb95ba209b314a66e845c74eb9b60f5eeac7619",
+      "treeSha256": "8ce245c51e60b4e52ca1963cd4b0ec9620c235e1395825f151390448d35adfff"
     },
     {
       "id": "t3-js-debug-01",
       "class": "debug",
       "difficulty": "hard",
       "runtime": "node",
-      "taskSha256": "331d09532d6622da6be8029363801b0c432263550e686b6b29bfe6efdbc75663",
-      "treeSha256": "36d5d0467031789bce9e672a23ee8c32844e7432d7519581e672f868d551756b"
+      "taskSha256": "1d6c680e51c23535533e9039e3cf35afbc0ff41ae6b5d2cf963c1d951146d1ac",
+      "treeSha256": "4547934c79d8f1fd8aaed203f566bda86ac36574adcb40cfbcadd135887e1425"
     },
     {
       "id": "t3-js-feature-01",
       "class": "feature",
       "difficulty": "hard",
       "runtime": "node",
-      "taskSha256": "453b76eb579ed7a7d37cfb86e5b313ec3e9855115ac6f15014a3cf2fecf104d0",
-      "treeSha256": "5684eebb01ac6a4d85b867e4c1cc565c46cdba0308304d86f0e079201c669dca"
+      "taskSha256": "9915e97588ce34a22882e6d1b129d375e834a40c7184a138cfa1ce38fda355c4",
+      "treeSha256": "ddf12fcdf7b4a26768f9e97af8e8de62df00348354cd83ca8dc70a433ebdf899"
     },
     {
       "id": "t3-js-refactor-01",
       "class": "refactor",
       "difficulty": "hard",
       "runtime": "node",
-      "taskSha256": "66e6d4f11f17fc53c0258ea008f854a8244cfb911ea425926c6446f8121387dc",
-      "treeSha256": "33b537077519c1aec09e7ca4a4b1bdc48a2d90df22292558f4d58551174b2969"
+      "taskSha256": "7d2a72eb18f522f0246a342bd5dc1f5f0d68ce83bacdac85516b180738a8e128",
+      "treeSha256": "ef54c5293a26d873ba5bbd7ad1d0dadb1ec1baca7e77f30ba2b5c440f6bfa02b"
     },
     {
       "id": "t3-py-bugfix-01",
       "class": "bugfix",
       "difficulty": "hard",
       "runtime": "python3",
-      "taskSha256": "3ea887fd441a8c2ea60558b284dfb041eb3d2579a39f4702646fb78481fb097c",
-      "treeSha256": "c109ef139bbdf5ee819d441e27a6dd1bd81076e5fe74ae6b023707bc5d67e64b"
+      "taskSha256": "f9462b35266188c1c055195b5c7f80c63c5cf54591807a7dfc1bed62e6875226",
+      "treeSha256": "480ffde21a31e3c1b6648f76d37bd81f3e27f0ec740e06b0a2a22dbb8dc32cc0"
     },
     {
       "id": "t3-py-debug-01",
       "class": "debug",
       "difficulty": "hard",
       "runtime": "python3",
-      "taskSha256": "81823f62e7f061645ae47885bccf9d682b368fe17911d4305c70c817b8e37ec8",
-      "treeSha256": "aa8cb9539837150495d6a06993483f272c132a48d0ce2b84459d59d969db3bed"
+      "taskSha256": "5a56fad1aea2259e129aee91f6207143480a0382489b41ec88bbcfed148bd50c",
+      "treeSha256": "c6bbedf891c7619a11c2dcbaf0b2e494095c3614e3ebe96871f9026d0c788b29"
     },
     {
       "id": "t3-py-feature-01",
       "class": "feature",
       "difficulty": "hard",
       "runtime": "python3",
-      "taskSha256": "ca7449e23f4ccfe3e8c05601b2068656a1f98293ed19e8c2bc0b8038d4ba51f7",
-      "treeSha256": "6dfb56d5f04bc853faa3d3af02a11e7d3ccbd854b6d1043bd3478ab68ca444b5"
+      "taskSha256": "d9e6ecb5a948ca5b3688ad77a6886fb8be41d0ab3ebd2325a6c31e17c1305ec3",
+      "treeSha256": "b5427b812ac1eddb062d7fc434de7bd50a87618e68f0e74ea19d8f9e7423acb7"
     },
     {
       "id": "t3-py-refactor-01",
       "class": "refactor",
       "difficulty": "hard",
       "runtime": "python3",
-      "taskSha256": "1e072c774d7d42da5582db3e720a8f2f1946eebcae02af798162314a7d61f3bf",
-      "treeSha256": "9ea28f2d0e15634bd4ee9a74c6f59641f937b105af16f601ae6b213e5d7f5343"
+      "taskSha256": "234bddedcfe9d1248745f9a58ca2ed7d0c973f7c8b14d20ff24a3bf980a2b980",
+      "treeSha256": "0cd76899a7cae6e7c6a76c1245fc795e7edd6034da69843a50a91b3684cca4d1"
     }
   ]
 }

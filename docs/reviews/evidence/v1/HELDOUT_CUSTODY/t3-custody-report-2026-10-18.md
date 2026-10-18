@@ -4,7 +4,7 @@
 |---|---|
 | Date sealed | 2026-10-18T10:42:00Z |
 | Custodian | `opencode` primary session (custodian/integrator role; never authored a task) |
-| Sealed manifest | `eval/heldout-t3-manifest.json` — SHA-256 `dcbd794ed2998423787fdead4957b38b0c4a8a641855d87304d065d01c3fae37` |
+| Sealed manifest | `eval/heldout-t3-manifest.json` — SHA-256 `85fb9cafbe18e846bd64fb13eb4fba0f92df0792bc93d12adaa685e04c9f1383` |
 | Store (private; not in the repository) | `/home/mike/nexus-heldout-t3` (`root:root`, mode `0700`; `tasks/` and `reference/` `root:root`, mode `0500` read-only) |
 | Requirement | `REQ-QUAL-109` (`DEC-05`, `ACCEPTANCE.md` §6.3, `DECISIONS.md` X2): 8 T3 long tasks × 5 runs, `steps ≥ 60`, `≥ 2` compactions, scripted steering (`≥ 95%`), closing fact-sheet probe (`false-absence = 0`, `false-presence = 0`) |
 
@@ -40,4 +40,4 @@ Every task was validated by the custodian across 2 independent rounds (`bin/chec
 4. Post-patch steering constraints hold (`file-unchanged` byte-identical to baseline, `file-absent` removed, `command` exits 0).
 5. Post-patch fact existence matches `expected` for every fact (`0` false absences, `0` false presences).
 
-After sealing (`SEALED-heldout-t3-manifest.json`, SHA-256 `dcbd794ed2998423787fdead4957b38b0c4a8a641855d87304d065d01c3fae37`), `/home/mike/nexus-heldout-t3` was locked to `root:root` mode `0700` with `tasks/` and `reference/` mode `0500` read-only. Verified as uid `mike` (`1000`): `ls /home/mike/nexus-heldout-t3` fails with `Permission denied`.
+After sealing (`SEALED-heldout-t3-manifest.json`, SHA-256 `85fb9cafbe18e846bd64fb13eb4fba0f92df0792bc93d12adaa685e04c9f1383`), `/home/mike/nexus-heldout-t3` was locked to `root:root` mode `0700` with `tasks/` and `reference/` mode `0500` read-only. Verified as uid `mike` (`1000`): `ls /home/mike/nexus-heldout-t3` fails with `Permission denied`.
