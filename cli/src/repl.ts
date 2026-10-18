@@ -528,7 +528,7 @@ export class InteractiveRepl {
           "/checkpoints", "/undo", "/audit", "/export", "/tokens", "/init",
           "/onboard", "/test",
           "/model", "/shell", "/cd", "/history", "/copy", "/paste",
-          "/image", "/theme", "/team",
+          "/image", "/theme", "/team", "/upgrade",
           "/exit", "/quit"
         ];
         const trimmed = line.trim();
@@ -759,6 +759,92 @@ export class InteractiveRepl {
               });
             }
             console.log(renderDoctorText(report) + "\n");
+            continue;
+          } else if (cmd === "upgrade") {
+            const { detectInstallation, resolveTargetRelease, compareInstallationWithRelease, performUpgrade } = await import("./upgrade.js");
+            const tokens = arg.split(/\s+/).filter(Boolean);
+            let isCheck = false;
+            let isForce = false;
+            let isYes = false;
+            let allowDowngrade = false;
+            let pinnedVersion: string | undefined;
+
+            for (let i = 0; i < tokens.length; i++) {
+              const t = tokens[i];
+              if (t === "--check") isCheck = true;
+              else if (t === "--force" || t === "-f") isForce = true;
+              else if (t === "--yes" || t === "-y") isYes = true;
+              else if (t === "--allow-downgrade") allowDowngrade = true;
+              else if (t === "--version" || t === "-v") {
+                pinnedVersion = tokens[++i];
+              } else if (!t.startsWith("-") && !pinnedVersion) {
+                pinnedVersion = t;
+              }
+            }
+
+            const installed = detectInstallation();
+            let targetRelease;
+            try {
+              targetRelease = await resolveTargetRelease(pinnedVersion);
+            } catch (err: any) {
+              console.log(pc.red(`Failed to resolve release: ${err.message || String(err)}\n`));
+              continue;
+            }
+
+            const comparison = compareInstallationWithRelease(installed, targetRelease, { force: isForce });
+
+            if (isCheck) {
+              console.log(`Installed version:  ${installed.version} (${installed.provenance})`);
+              console.log(`Target release:     ${targetRelease.tag_name}${targetRelease.prerelease ? " (prerelease)" : " (stable)"}${targetRelease.published_at ? ` [published ${targetRelease.published_at}]` : ""}`);
+              if (installed.prefix) console.log(`Install prefix:     ${installed.prefix}`);
+              if (comparison.reasons.length > 0) {
+                for (const r of comparison.reasons) console.log(`Note:               ${r}`);
+              }
+              if (comparison.action === "upgrade") {
+                console.log(pc.green(`\nUpdate available: ${installed.version} -> ${comparison.targetVersion}. Run /upgrade to install.\n`));
+              } else if (comparison.action === "downgrade") {
+                console.log(pc.yellow(`\nTarget ${comparison.targetVersion} is older than current ${installed.version}. Run /upgrade --version ${comparison.targetVersion} --allow-downgrade to downgrade.\n`));
+              } else {
+                console.log(pc.green(`\nNexus is already up to date (${installed.version}).\n`));
+              }
+              continue;
+            }
+
+            if (!comparison.canUpgrade) {
+              console.log(pc.red(`Cannot upgrade: ${comparison.reasons.join("\n")}\n`));
+              continue;
+            }
+
+            if (comparison.action === "none" && !isForce) {
+              console.log(pc.green(`Nexus is already up to date (${installed.version}). Use /upgrade --force to reinstall.\n`));
+              continue;
+            }
+
+            if (comparison.action === "downgrade" && !allowDowngrade && !isYes) {
+              console.log(pc.yellow(`Target version ${comparison.targetVersion} is a downgrade from ${installed.version}. Specify --allow-downgrade to proceed.\n`));
+              continue;
+            }
+
+            if (!isYes) {
+              const answer = await this.askDuringTurn(
+                pc.bold(pc.white(`Proceed with ${comparison.action} from ${installed.version} to ${comparison.targetVersion}? [y/N]: `))
+              );
+              if (!answer || (answer.trim().toLowerCase() !== "y" && answer.trim().toLowerCase() !== "yes")) {
+                console.log(pc.dim("Upgrade cancelled.\n"));
+                continue;
+              }
+            }
+
+            try {
+              console.log(pc.dim(`Starting ${comparison.action}...`));
+              const result = await performUpgrade(comparison, { force: isForce, allowDowngrade });
+              console.log(pc.green(`✔ Nexus successfully upgraded to ${result.newVersion}.`));
+              console.log(`Destination: ${result.installedPath}`);
+              console.log(`Launcher:    ${result.binPath}`);
+              console.log(pc.yellow(`\nNotice: ${result.restartNotice}\n`));
+            } catch (err: any) {
+              console.log(pc.red(`Upgrade failed: ${err.message || String(err)}\n`));
+            }
             continue;
           } else if (cmd === "status") {
             this.printStatus(true);

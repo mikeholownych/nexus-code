@@ -201,6 +201,8 @@ Every row has status **open** at `db1ca55` unless stated otherwise. In the "Evid
 | REQ-REL-112 | REL-004 (carried) | SECURITY.md, CHANGELOG.md, release body taken from release notes. | supportability | root, `release.yml` | TEST (ACC-SUP-06; test:SECURITY.md, CHANGELOG.md, release.yml) | tested | ACC-SUP-06 | RR | HIST-07, MNT-05 | SPEC-07 / PLAN-07 |
 | REQ-REL-113 | Audit | Remove dead CI and tracked bytecode. | maintainability | `.gitlab-ci.yml`, `*.pyc` | TEST (ACC-SUP-07) | tested | ACC-SUP-07 | RR | MNT-02, EVL-007 | SPEC-07 / PLAN-07 |
 | REQ-REL-114 | REL-001 (carried) | Cross-runner reproducibility, demonstrated once for the RC. | supply chain | `repro.yml` | UNV | open | ACC-SUP-08 | RR | E §6 | SPEC-07 / PLAN-07 |
+| REQ-REL-115 | Scope addition | CLI (`nexus upgrade`) and TUI (`/upgrade`) compare installed version with releases and safely upgrade to latest stable or pinned version. | user maintenance / lifecycle | `cli/src/upgrade.ts`, `cli/src/slash/session_commands.ts` | TEST (ACC-UPG-01 to ACC-UPG-06; test:cli/test/upgrade.test.ts::"successfully performs an end-to-end upgrade with atomic symlink swap and verification", test:cli/test/upgrade_cli.test.ts::"returns exit code 1 when update is available in --check mode", test:cli/test/upgrade_tui.test.ts::"exercises deliberate approval interaction when executing /upgrade in TUI") | tested | ACC-UPG-01 to ACC-UPG-06 | **B** | REL-14 | SPEC-12 / PLAN-12 |
+
 
 ### 3.5 Persistence
 
