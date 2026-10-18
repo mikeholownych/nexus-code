@@ -74,17 +74,43 @@ def main():
         else:
             api("POST", prefix + "/labels", label)
     after = api("GET", prefix)
-    assert after["description"] == DESCRIPTION
-    assert set(TOPICS).issubset(after.get("topics", []))
-    private = api("GET", prefix + "/private-vulnerability-reporting")
-    if not private.get("enabled"):
-        failures.append("Private vulnerability reporting did not verify enabled")
+    expected = {"description": DESCRIPTION, "has_issues": True, "has_discussions": True}
+    for name, value in expected.items():
+        if after.get(name) != value:
+            failures.append(f"Repository {name} did not verify")
+    if not set(TOPICS).issubset(after.get("topics", [])):
+        failures.append("Repository topics did not verify")
+    security = after.get("security_and_analysis", {})
+    for name in ("secret_scanning", "secret_scanning_push_protection"):
+        if security.get(name, {}).get("status") != "enabled":
+            failures.append(f"{name} did not verify enabled")
+    try:
+        private = api("GET", prefix + "/private-vulnerability-reporting")
+        if not private.get("enabled"):
+            failures.append("Private vulnerability reporting did not verify enabled")
+    except RuntimeError as error:
+        failures.append(str(error))
     # A successful GET is the API's enabled signal for vulnerability alerts.
     try:
         api("GET", prefix + "/vulnerability-alerts")
     except RuntimeError as error:
         failures.append(str(error))
-    print("Metadata verified. Inspect Security settings for feature availability and effective scanning coverage.")
+    try:
+        fixes = api("GET", prefix + "/automated-security-fixes")
+        if not fixes.get("enabled") or fixes.get("paused") is not False:
+            failures.append("Dependabot security updates did not verify enabled and unpaused")
+    except RuntimeError as error:
+        failures.append(str(error))
+    # Read back individual labels; successful mutations alone do not establish effective state.
+    for label in labels:
+        try:
+            actual = api("GET", prefix + "/labels/" + quote(label["name"], safe=""))
+            if any(actual.get(key) != value for key, value in label.items()):
+                failures.append(f"Label {label['name']} did not verify")
+        except RuntimeError as error:
+            failures.append(str(error))
+    if not failures:
+        print("Configured metadata, labels and security settings verified. Effective scanning coverage still needs review.")
     for failure in failures:
         print("UNRESOLVED: " + failure, file=sys.stderr)
     return 1 if failures else 0
