@@ -26,7 +26,38 @@ run_installer() {
 }
 run_installer
 "$TMP/prefix/bin/nexus" --version | grep -F "${VERSION#v}" >/dev/null
+node - "$TMP/prefix/lib/nexus/$VERSION/.provenance.json" "$VERSION" "$TMP/prefix" "$TMP/prefix/lib/nexus/$VERSION" "$TMP/prefix/bin/nexus" "$NAME" "$TMP/release/download/$VERSION/$NAME" <<'NODE'
+const assert = require("node:assert/strict");
+const crypto = require("node:crypto");
+const fs = require("node:fs");
+const [recordPath, version, prefix, installedPath, binPath, archive, archivePath] = process.argv.slice(2);
+const record = JSON.parse(fs.readFileSync(recordPath, "utf8"));
+assert.equal(record.formatVersion, 1);
+assert.equal(record.method, "installer");
+assert.equal(record.product, "nexus-code");
+assert.equal(record.version, version);
+assert.equal(record.prefix, prefix);
+assert.equal(record.installedPath, installedPath);
+assert.equal(record.binPath, binPath);
+assert.equal(record.managed, true);
+assert.equal(record.archive, archive);
+assert.match(record.archiveSha256, /^[a-f0-9]{64}$/);
+assert.equal(record.archiveSha256, crypto.createHash("sha256").update(fs.readFileSync(archivePath)).digest("hex"));
+NODE
+# A same-version install is reused only when its recorded package digest matches the downloaded archive.
+node - "$TMP/prefix/lib/nexus/$VERSION/.provenance.json" <<'NODE'
+const fs = require("node:fs");
+const file = process.argv[2];
+const record = JSON.parse(fs.readFileSync(file, "utf8"));
+record.archiveSha256 = "0".repeat(64);
+fs.writeFileSync(file, `${JSON.stringify(record, null, 2)}\n`);
+NODE
+printf 'stale-package-content\n' > "$TMP/prefix/lib/nexus/$VERSION/stale.txt"
 run_installer
+if [ -e "$TMP/prefix/lib/nexus/$VERSION/stale.txt" ]; then
+  echo "installer reused a version directory with a different archive digest" >&2
+  exit 1
+fi
 
 # ACC-PKG-05: bad tag v1.2.3/../x is rejected before network
 if NEXUS_VERSION="v1.2.3/../x" sh "$INSTALLER" > "$TMP/bad-tag.out" 2>&1; then

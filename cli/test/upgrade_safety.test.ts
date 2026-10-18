@@ -458,6 +458,44 @@ describe("Machine-Readable Compatibility & Downgrade State Rejection (REQ-REL-11
     assert.ok(compatResult.reasons.some((r) => r.includes("cannot read current state schema version")));
   });
 
+  it("enforces minimum supported config and state schema versions", () => {
+    const targetMeta = generateCompatibilityMetadata("1.0.0", "abcdef1234567890");
+    targetMeta.compatibility.minSupportedConfigVersion = 2;
+    targetMeta.compatibility.configSchemaVersion = 2;
+    targetMeta.compatibility.minSupportedStateVersion = 2;
+    targetMeta.compatibility.stateSchemaVersion = 2;
+
+    const result = checkReleaseCompatibility("1.0.0", 1, targetMeta, "linux-x86_64", 1);
+    assert.equal(result.compatible, false);
+    assert.ok(result.reasons.some((reason) => reason.includes("requires config schema version 2")));
+    assert.ok(result.reasons.some((reason) => reason.includes("requires state schema version 2")));
+  });
+
+  it("compares minimum updater versions using full SemVer prerelease ordering", () => {
+    const targetMeta = generateCompatibilityMetadata("1.0.0", "abcdef1234567890");
+    targetMeta.minimumUpdaterVersion = "0.1.0-alpha.2";
+
+    const older = checkReleaseCompatibility("0.1.0-alpha.1", 1, targetMeta);
+    const newerPrerelease = checkReleaseCompatibility("0.1.0-alpha.10", 1, targetMeta);
+    const stable = checkReleaseCompatibility("0.1.0", 1, targetMeta);
+    assert.equal(older.compatible, false);
+    assert.equal(newerPrerelease.compatible, true);
+    assert.equal(stable.compatible, true);
+
+    targetMeta.minimumUpdaterVersion = "0.1.0-alpha.01";
+    assert.equal(validateCompatibilityMetadata(targetMeta).valid, false, "numeric SemVer prerelease identifiers cannot have leading zeroes");
+
+    targetMeta.minimumUpdaterVersion = "not-semver";
+    assert.equal(validateCompatibilityMetadata(targetMeta).valid, false);
+  });
+
+  it("rejects a target config schema older than the current config schema", () => {
+    const targetMeta = generateCompatibilityMetadata("1.0.0", "abcdef1234567890");
+    const result = checkReleaseCompatibility("1.0.0", 1, targetMeta, "linux-x86_64", 2);
+    assert.equal(result.compatible, false);
+    assert.ok(result.reasons.some((reason) => reason.includes("cannot read current config schema version 2")));
+  });
+
   it("applies legacy policy for releases lacking compatibility metadata", () => {
     const compatResult = checkReleaseCompatibility("1.0.0", 1, null);
     assert.equal(compatResult.compatible, true);
