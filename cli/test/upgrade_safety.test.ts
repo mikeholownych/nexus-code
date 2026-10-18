@@ -1,0 +1,642 @@
+import { describe, it, beforeEach, afterEach } from "node:test";
+import assert from "node:assert/strict";
+import * as fs from "node:fs";
+import * as path from "node:path";
+import * as os from "node:os";
+import * as http from "node:http";
+import * as zlib from "node:zlib";
+import { execSync } from "node:child_process";
+import {
+  validateDownloadUrl,
+  downloadFile,
+  detectPathShadowing,
+  rollbackBinary,
+  detectInstallation,
+  writeProvenance,
+  compareInstallationWithRelease,
+  performUpgrade,
+  ProvenanceRecord,
+  InstalledProductInfo,
+  PublishedRelease,
+} from "../src/upgrade.js";
+import {
+  isPathSafe,
+  isSymlinkSafe,
+  validateTarArchive,
+  safeExtractTar,
+  MAX_DOWNLOAD_BYTES,
+  MAX_EXTRACT_BYTES,
+} from "../src/tar_safety.js";
+import {
+  generateCompatibilityMetadata,
+  validateCompatibilityMetadata,
+  checkReleaseCompatibility,
+  ReleaseCompatibilityMetadata,
+} from "../src/compatibility.js";
+import {
+  getJournalPath,
+  readJournal,
+  writeJournal,
+  clearJournal,
+  createPreMigrationBackup,
+  restoreConfigBackup,
+  recoverUpgrade,
+  UpgradeJournalEntry,
+} from "../src/upgrade_journal.js";
+
+describe("Download Origin, Redirect & Bounds Safety (REQ-REL-116, ACC-UPG-08)", () => {
+  it("validates allowed release download origins", () => {
+    // Official GitHub releases
+    assert.equal(
+      validateDownloadUrl("https://github.com/mikeholownych/nexus-code/releases/download/v1.0.0/nexus-linux-x86_64-v1.0.0.tar.gz"),
+      true
+    );
+    // GitHub release CDN redirect host
+    assert.equal(
+      validateDownloadUrl("https://objects.githubusercontent.com/github-production-release-asset-2e65be/12345/nexus.tar.gz"),
+      true
+    );
+    // Localhost allowed for mock test servers
+    assert.equal(validateDownloadUrl("http://127.0.0.1:4567/download/v1.0.0/nexus.tar.gz"), true);
+    assert.equal(validateDownloadUrl("http://localhost:4567/download/v1.0.0/nexus.tar.gz"), true);
+
+    // Disallowed origins
+    assert.equal(validateDownloadUrl("https://evil.com/releases/download/nexus.tar.gz"), false);
+    assert.equal(validateDownloadUrl("https://github.com/attacker/nexus-code/releases/download/nexus.tar.gz"), false);
+    // Reject plain HTTP for remote github.com
+    assert.equal(validateDownloadUrl("http://github.com/mikeholownych/nexus-code/releases/download/v1.0.0/nexus.tar.gz"), false);
+    // Reject embedded credentials
+    assert.equal(validateDownloadUrl("https://user:pass@github.com/mikeholownych/nexus-code/releases/download/v1.0.0/nexus.tar.gz"), false);
+  });
+
+  it("rejects downloads redirecting to disallowed hosts or exceeding hop limits", async () => {
+    const testDir = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-dl-test-"));
+    let server: http.Server | null = null;
+
+    try {
+      // 1. Server redirecting to evil.com
+      const evilPort = await new Promise<number>((resolve) => {
+        server = http.createServer((req, res) => {
+          if (req.url === "/redirect-evil") {
+            res.writeHead(302, { Location: "https://evil-untrusted-site.com/payload.tar.gz" });
+            res.end();
+          } else if (req.url?.startsWith("/loop-")) {
+            const count = parseInt(req.url.replace("/loop-", ""), 10);
+            res.writeHead(302, { Location: `http://127.0.0.1:${evilPort}/loop-${count + 1}` });
+            res.end();
+          } else {
+            res.writeHead(404);
+            res.end();
+          }
+        });
+        server.listen(0, "127.0.0.1", () => {
+          const addr = server!.address() as any;
+          resolve(addr.port);
+        });
+      });
+
+      const dest1 = path.join(testDir, "test1.tar.gz");
+      await assert.rejects(
+        downloadFile(`http://127.0.0.1:${evilPort}/redirect-evil`, dest1, undefined, 5000),
+        /Disallowed download origin or invalid URL/
+      );
+
+      // 2. Too many redirects
+      const dest2 = path.join(testDir, "test2.tar.gz");
+      await assert.rejects(
+        downloadFile(`http://127.0.0.1:${evilPort}/loop-0`, dest2, undefined, 5000, 3),
+        /Too many redirects/
+      );
+    } finally {
+      if (server) {
+        await new Promise<void>((resolve) => server!.close(() => resolve()));
+      }
+      fs.rmSync(testDir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("Tar Archive Structural Safety Engine (REQ-REL-116, ACC-UPG-08)", () => {
+  let tmpRoot: string;
+
+  beforeEach(() => {
+    tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-tar-safety-"));
+  });
+
+  afterEach(() => {
+    fs.rmSync(tmpRoot, { recursive: true, force: true });
+  });
+
+  /**
+   * Helper to write a simple ustar archive with raw entries
+   */
+  function createTestTar(entries: Array<{ name: string; typeflag?: string; linkname?: string; content?: string }>): Buffer {
+    const blocks: Buffer[] = [];
+
+    for (const ent of entries) {
+      const header = Buffer.alloc(512);
+      // name (100)
+      header.write(ent.name, 0, 100, "utf8");
+      // mode (8)
+      header.write("0000755\0", 100, 8, "utf8");
+      // uid (8), gid (8)
+      header.write("0001750\0", 108, 8, "utf8");
+      header.write("0001750\0", 116, 8, "utf8");
+      // size (12)
+      const data = Buffer.from(ent.content || "");
+      const sizeOctal = data.length.toString(8).padStart(11, "0") + "\0";
+      header.write(sizeOctal, 124, 12, "utf8");
+      // mtime (12)
+      header.write("14000000000\0", 136, 12, "utf8");
+      // typeflag (1)
+      const type = ent.typeflag ?? (ent.linkname ? "2" : ent.name.endsWith("/") ? "5" : "0");
+      header.write(type, 156, 1, "utf8");
+      // linkname (100)
+      if (ent.linkname) {
+        header.write(ent.linkname, 157, 100, "utf8");
+      }
+      // magic (6) + version (2)
+      header.write("ustar\0", 257, 6, "utf8");
+      header.write("00", 263, 2, "utf8");
+
+      // Compute checksum
+      header.fill(0x20, 148, 156);
+      let sum = 0;
+      for (let i = 0; i < 512; i++) sum += header[i];
+      const sumOctal = sum.toString(8).padStart(6, "0") + "\0 ";
+      header.write(sumOctal, 148, 8, "utf8");
+
+      blocks.push(header);
+
+      if (data.length > 0) {
+        blocks.push(data);
+        const pad = (512 - (data.length % 512)) % 512;
+        if (pad > 0) {
+          blocks.push(Buffer.alloc(pad));
+        }
+      }
+    }
+
+    // End-of-archive 1024 zero bytes
+    blocks.push(Buffer.alloc(1024));
+    return zlib.gzipSync(Buffer.concat(blocks));
+  }
+
+  it("verifies path safety checks: rejects traversal and absolute paths", () => {
+    assert.equal(isPathSafe("nexus/bin/nexus").safe, true);
+    assert.equal(isPathSafe("nexus/lib/core/harness-core").safe, true);
+
+    // Traversal attempts
+    assert.equal(isPathSafe("nexus/../evil").safe, false);
+    assert.equal(isPathSafe("../escape").safe, false);
+    assert.equal(isPathSafe("nexus/subdir/../../etc/passwd").safe, false);
+
+    // Absolute paths
+    assert.equal(isPathSafe("/etc/passwd").safe, false);
+    assert.equal(isPathSafe("/nexus/bin/nexus").safe, false);
+
+    // Outside expected root
+    assert.equal(isPathSafe("other/bin/nexus").safe, false);
+  });
+
+  it("verifies symlink safety: rejects symlinks escaping package root", () => {
+    // Valid relative symlinks inside nexus/
+    assert.equal(isSymlinkSafe("core/harness", "nexus/bin/harness-link").safe, true);
+    assert.equal(isSymlinkSafe("../lib/core/harness", "nexus/bin/harness").safe, true);
+
+    // Escaping symlinks
+    assert.equal(isSymlinkSafe("../../etc/passwd", "nexus/bin/nexus").safe, false);
+    assert.equal(isSymlinkSafe("/etc/shadow", "nexus/bin/nexus").safe, false);
+    assert.equal(isSymlinkSafe("../../../../../../tmp/foo", "nexus/lib/file").safe, false);
+  });
+
+  it("rejects malicious tar archive with path traversal", async () => {
+    const maliciousTar = path.join(tmpRoot, "traversal.tar.gz");
+    const tarGz = createTestTar([
+      { name: "nexus/", typeflag: "5" },
+      { name: "nexus/bin/nexus", content: "#!/bin/sh\n" },
+      { name: "nexus/../../etc/cron.d/pwn", content: "* * * * * root reboot\n" },
+    ]);
+    fs.writeFileSync(maliciousTar, tarGz);
+
+    const validation = await validateTarArchive(maliciousTar);
+    assert.equal(validation.valid, false);
+    assert.ok(validation.errors.some((e) => e.includes("forbidden") || e.includes("not contained")));
+
+    const dest = path.join(tmpRoot, "unpack-dest");
+    await assert.rejects(
+      safeExtractTar(maliciousTar, dest),
+      /failed structural safety inspection/
+    );
+  });
+
+  it("rejects malicious tar archive with escaping symlink", async () => {
+    const symlinkTar = path.join(tmpRoot, "symlink-escape.tar.gz");
+    const tarGz = createTestTar([
+      { name: "nexus/", typeflag: "5" },
+      { name: "nexus/bin/", typeflag: "5" },
+      { name: "nexus/bin/evil-link", typeflag: "2", linkname: "../../../../../etc/passwd" },
+    ]);
+    fs.writeFileSync(symlinkTar, tarGz);
+
+    const validation = await validateTarArchive(symlinkTar);
+    assert.equal(validation.valid, false);
+    assert.ok(validation.errors.some((e) => e.includes("escapes")));
+  });
+
+  it("rejects archive containing disallowed entry types (FIFOs, devices, hardlinks)", async () => {
+    const fifoTar = path.join(tmpRoot, "fifo.tar.gz");
+    const tarGz = createTestTar([
+      { name: "nexus/", typeflag: "5" },
+      { name: "nexus/dev-pipe", typeflag: "6" }, // FIFO
+    ]);
+    fs.writeFileSync(fifoTar, tarGz);
+
+    const validation = await validateTarArchive(fifoTar);
+    assert.equal(validation.valid, false);
+    assert.ok(validation.errors.some((e) => e.includes("Disallowed archive entry type")));
+  });
+
+  it("rejects archive with duplicate entries", async () => {
+    const dupTar = path.join(tmpRoot, "dup.tar.gz");
+    const tarGz = createTestTar([
+      { name: "nexus/", typeflag: "5" },
+      { name: "nexus/VERSION", content: "1.0.0\n" },
+      { name: "nexus/VERSION", content: "2.0.0\n" },
+    ]);
+    fs.writeFileSync(dupTar, tarGz);
+
+    const validation = await validateTarArchive(dupTar);
+    assert.equal(validation.valid, false);
+    assert.ok(validation.errors.some((e) => e.includes("Duplicate archive entry")));
+  });
+
+  it("safely extracts valid archive and validates containment walk", async () => {
+    const validTar = path.join(tmpRoot, "valid.tar.gz");
+    const tarGz = createTestTar([
+      { name: "nexus/", typeflag: "5" },
+      { name: "nexus/VERSION", content: "1.0.0\n" },
+      { name: "nexus/bin/", typeflag: "5" },
+      { name: "nexus/bin/nexus", content: "#!/bin/sh\necho ok\n" },
+      { name: "nexus/bin/nexus-link", typeflag: "2", linkname: "nexus" },
+      { name: "nexus/lib/", typeflag: "5" },
+      { name: "nexus/lib/core/", typeflag: "5" },
+      { name: "nexus/lib/core/harness-core", content: "#!/bin/sh\nexit 0\n" },
+      { name: "nexus/lib/core/nexus-tui", content: "#!/bin/sh\nexit 0\n" },
+    ]);
+    fs.writeFileSync(validTar, tarGz);
+
+    const dest = path.join(tmpRoot, "unpack-valid");
+    const result = await safeExtractTar(validTar, dest);
+    assert.ok(fs.existsSync(path.join(result.extractedDir, "VERSION")));
+    assert.ok(fs.existsSync(path.join(result.extractedDir, "bin", "nexus")));
+    assert.ok(fs.existsSync(path.join(result.extractedDir, "bin", "nexus-link")));
+    assert.ok(fs.existsSync(path.join(result.extractedDir, "lib", "core", "harness-core")));
+    assert.ok(fs.existsSync(path.join(result.extractedDir, "lib", "core", "nexus-tui")));
+  });
+});
+
+describe("Pre-Migration Backups & Migration/Downgrade Safety (REQ-REL-116, ACC-UPG-09)", () => {
+  let homeDir: string;
+
+  beforeEach(() => {
+    homeDir = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-home-test-"));
+  });
+
+  afterEach(() => {
+    fs.rmSync(homeDir, { recursive: true, force: true });
+  });
+
+  it("creates protected config and state backups with 0600 file and 0700 dir permissions", () => {
+    // Setup existing config.env
+    const configDir = path.join(homeDir, ".config", "nexus");
+    fs.mkdirSync(configDir, { recursive: true, mode: 0o700 });
+    const configEnv = path.join(configDir, "config.env");
+    fs.writeFileSync(configEnv, "SECRET_KEY=supersecret123\nNEXUS_MODEL=test-model\n", { mode: 0o600 });
+
+    // Setup existing session state
+    const stateDir = path.join(homeDir, ".nexus", "sessions");
+    fs.mkdirSync(stateDir, { recursive: true, mode: 0o700 });
+    fs.writeFileSync(path.join(stateDir, "index.json"), JSON.stringify({ sessions: ["s1", "s2"] }), { mode: 0o600 });
+
+    const backup = createPreMigrationBackup(homeDir);
+    assert.ok(backup.configBackupPath);
+    assert.ok(fs.existsSync(backup.configBackupPath));
+
+    // Verify backup file mode is 0600
+    const fileStat = fs.statSync(backup.configBackupPath);
+    assert.equal(fileStat.mode & 0o777, 0o600);
+
+    // Verify backup dir mode is 0700
+    const dirStat = fs.statSync(path.dirname(backup.configBackupPath));
+    assert.equal(dirStat.mode & 0o777, 0o700);
+
+    // Verify content preserved exactly
+    const content = fs.readFileSync(backup.configBackupPath, "utf8");
+    assert.ok(content.includes("SECRET_KEY=supersecret123"));
+
+    // Verify state backup
+    assert.ok(backup.stateBackupDir);
+    const stateIndex = path.join(backup.stateBackupDir, "session-index.json");
+    assert.ok(fs.existsSync(stateIndex));
+    assert.equal(fs.statSync(stateIndex).mode & 0o777, 0o600);
+  });
+
+  it("restores configuration cleanly from backup with strict 0600 permissions", () => {
+    const configDir = path.join(homeDir, ".config", "nexus");
+    fs.mkdirSync(configDir, { recursive: true, mode: 0o700 });
+    const configEnv = path.join(configDir, "config.env");
+    fs.writeFileSync(configEnv, "OLD_CONFIG=yes\n", { mode: 0o600 });
+
+    const backupFile = path.join(homeDir, "custom.bak");
+    fs.writeFileSync(backupFile, "RESTORED_CONFIG=success\n", { mode: 0o600 });
+
+    const restored = restoreConfigBackup(backupFile, homeDir);
+    assert.equal(restored, true);
+
+    const content = fs.readFileSync(configEnv, "utf8");
+    assert.equal(content, "RESTORED_CONFIG=success\n");
+    assert.equal(fs.statSync(configEnv).mode & 0o777, 0o600);
+  });
+});
+
+describe("Machine-Readable Compatibility & Downgrade State Rejection (REQ-REL-116, ACC-UPG-07)", () => {
+  it("validates and generates valid compatibility metadata", () => {
+    const meta = generateCompatibilityMetadata("1.0.0", "abcdef1234567890");
+    const check = validateCompatibilityMetadata(meta);
+    assert.equal(check.valid, true);
+    assert.equal(check.errors.length, 0);
+    assert.equal(meta.compatibility.stateSchemaVersion, 1);
+  });
+
+  it("rejects malformed compatibility metadata", () => {
+    const bad1: any = { product: "wrong-product" };
+    assert.equal(validateCompatibilityMetadata(bad1).valid, false);
+
+    const bad2: any = {
+      product: "nexus-code",
+      version: "1.0.0",
+      compatibility: { stateSchemaVersion: "not-a-number" },
+    };
+    assert.equal(validateCompatibilityMetadata(bad2).valid, false);
+  });
+
+  it("refuses downgrade when target release state schema is older than current state schema", () => {
+    const targetMeta: ReleaseCompatibilityMetadata = {
+      schemaVersion: 1,
+      product: "nexus-code",
+      version: "0.0.9",
+      revision: "rev1",
+      builtAt: new Date().toISOString(),
+      components: { cli: "0.0.9", core: "0.0.9", tui: "0.0.9", harness: "0.0.9" },
+      compatibility: {
+        configSchemaVersion: 1,
+        stateSchemaVersion: 0, // older schema cannot read version 1 state!
+        minSupportedConfigVersion: 1,
+        minSupportedStateVersion: 0,
+      },
+      platforms: {
+        "linux-x86_64": {
+          archive: "nexus-linux-x86_64-v0.0.9.tar.gz",
+          os: "linux",
+          arch: "x86_64",
+        },
+      },
+    };
+
+    const currentStateSchema = 1;
+    const compatResult = checkReleaseCompatibility("1.0.0", currentStateSchema, targetMeta);
+    assert.equal(compatResult.compatible, false);
+    assert.ok(compatResult.reasons.some((r) => r.includes("cannot read current state schema version")));
+  });
+
+  it("applies legacy policy for releases lacking compatibility metadata", () => {
+    const compatResult = checkReleaseCompatibility("1.0.0", 1, null);
+    assert.equal(compatResult.compatible, true);
+    assert.equal(compatResult.isLegacy, true);
+    assert.ok(compatResult.reasons[0].includes("legacy compatibility policy"));
+  });
+});
+
+describe("Durable Provenance & Package-Manager Protection (REQ-REL-116, ACC-UPG-10)", () => {
+  let tmpPrefix: string;
+
+  beforeEach(() => {
+    tmpPrefix = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-prov-test-"));
+  });
+
+  afterEach(() => {
+    fs.rmSync(tmpPrefix, { recursive: true, force: true });
+  });
+
+  it("writes and reads durable installation provenance record", () => {
+    const versionDir = path.join(tmpPrefix, "lib", "nexus", "1.0.0");
+    fs.mkdirSync(path.join(versionDir, "bin"), { recursive: true });
+    fs.writeFileSync(path.join(versionDir, "VERSION"), "1.0.0\n");
+
+    const record: ProvenanceRecord = {
+      formatVersion: 1,
+      method: "upgrade",
+      product: "nexus-code",
+      version: "1.0.0",
+      revision: "abc1234",
+      builtAt: "2026-10-18T12:00:00Z",
+      prefix: tmpPrefix,
+      installedPath: versionDir,
+      binPath: path.join(tmpPrefix, "bin", "nexus"),
+      managed: true,
+    };
+
+    writeProvenance(versionDir, record);
+    const provFile = path.join(versionDir, ".provenance.json");
+    assert.ok(fs.existsSync(provFile));
+    assert.equal(fs.statSync(provFile).mode & 0o777, 0o644);
+
+    const detected = detectInstallation({ nexusHome: versionDir });
+    assert.equal(detected.provenance, "packaged");
+    assert.ok(detected.detail?.includes("verified provenance"));
+  });
+
+  it("detects package-manager installations and blocks self-upgrade", () => {
+    const versionDir = path.join(tmpPrefix, "lib", "nexus", "1.0.0");
+    fs.mkdirSync(path.join(versionDir, "bin"), { recursive: true });
+    fs.writeFileSync(path.join(versionDir, "VERSION"), "1.0.0\n");
+
+    const record: ProvenanceRecord = {
+      formatVersion: 1,
+      method: "packaged",
+      product: "nexus-code",
+      version: "1.0.0",
+      prefix: tmpPrefix,
+      installedPath: versionDir,
+      binPath: path.join(tmpPrefix, "bin", "nexus"),
+      managed: false,
+      packageManager: "apt",
+    };
+    writeProvenance(versionDir, record);
+
+    const detected = detectInstallation({ nexusHome: versionDir });
+    assert.equal(detected.provenance, "package-manager");
+    assert.ok(detected.detail?.includes("Installed via package manager (apt)"));
+
+    const comparison = compareInstallationWithRelease(detected, {
+      tag_name: "v1.1.0",
+      draft: false,
+      prerelease: false,
+      assets: [],
+    });
+
+    assert.equal(comparison.canUpgrade, false);
+    assert.ok(comparison.reasons.some((r) => r.includes("package manager")));
+  });
+});
+
+describe("Upgrade Journal, Crash Recovery & PATH Shadowing (REQ-REL-116, ACC-UPG-11, ACC-UPG-12)", () => {
+  let tmpPrefix: string;
+
+  beforeEach(() => {
+    tmpPrefix = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-journal-test-"));
+  });
+
+  afterEach(() => {
+    fs.rmSync(tmpPrefix, { recursive: true, force: true });
+  });
+
+  it("recovers an interrupted upgrade that crashed during downloading or staging", () => {
+    const libNexus = path.join(tmpPrefix, "lib", "nexus");
+    const binDir = path.join(tmpPrefix, "bin");
+    fs.mkdirSync(libNexus, { recursive: true });
+    fs.mkdirSync(binDir, { recursive: true });
+
+    const v1Dir = path.join(libNexus, "v1.0.0");
+    fs.mkdirSync(path.join(v1Dir, "bin"), { recursive: true });
+    fs.writeFileSync(path.join(v1Dir, "VERSION"), "1.0.0\n");
+    const v1Bin = path.join(v1Dir, "bin", "nexus");
+    fs.writeFileSync(v1Bin, "#!/bin/sh\necho v1.0.0\n", { mode: 0o755 });
+
+    const binNexus = path.join(binDir, "nexus");
+    fs.symlinkSync(v1Bin, binNexus);
+
+    // Simulated abandoned staging dir
+    const stagingDir = path.join(libNexus, ".tmp-upgrade-12345");
+    fs.mkdirSync(stagingDir, { recursive: true });
+    fs.writeFileSync(path.join(stagingDir, "partial.bin"), "corrupt");
+
+    // Write journal indicating crash at "downloading"
+    const entry: UpgradeJournalEntry = {
+      formatVersion: 1,
+      id: "test-crash-1",
+      state: "downloading",
+      sourceVersion: "v1.0.0",
+      sourceInstallDir: v1Dir,
+      sourceSymlinkTarget: v1Bin,
+      targetVersion: "v1.1.0",
+      targetInstallDir: path.join(libNexus, "v1.1.0"),
+      stagingDir,
+      prefix: tmpPrefix,
+      binPath: binNexus,
+      startedAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    };
+    writeJournal(tmpPrefix, entry);
+
+    const outcome = recoverUpgrade(tmpPrefix);
+    assert.equal(outcome.recovered, true);
+    assert.equal(outcome.action, "cleaned_up");
+    assert.equal(fs.existsSync(stagingDir), false); // cleaned up
+    assert.equal(fs.realpathSync(binNexus), fs.realpathSync(v1Bin)); // symlink retained
+  });
+
+  it("recovers a crash during switching by reverting symlink to source installation", () => {
+    const libNexus = path.join(tmpPrefix, "lib", "nexus");
+    const binDir = path.join(tmpPrefix, "bin");
+    fs.mkdirSync(libNexus, { recursive: true });
+    fs.mkdirSync(binDir, { recursive: true });
+
+    const v1Dir = path.join(libNexus, "v1.0.0");
+    fs.mkdirSync(path.join(v1Dir, "bin"), { recursive: true });
+    fs.writeFileSync(path.join(v1Dir, "VERSION"), "1.0.0\n");
+    const v1Bin = path.join(v1Dir, "bin", "nexus");
+    fs.writeFileSync(v1Bin, "#!/bin/sh\necho v1.0.0\n", { mode: 0o755 });
+
+    // Incomplete target directory (e.g. missing executable or failed test)
+    const v2Dir = path.join(libNexus, "v2.0.0");
+    fs.mkdirSync(v2Dir, { recursive: true });
+
+    const binNexus = path.join(binDir, "nexus");
+    // Broken link
+    fs.symlinkSync(path.join(v2Dir, "bin", "nexus"), binNexus);
+
+    const entry: UpgradeJournalEntry = {
+      formatVersion: 1,
+      id: "test-crash-2",
+      state: "switching",
+      sourceVersion: "v1.0.0",
+      sourceInstallDir: v1Dir,
+      sourceSymlinkTarget: v1Bin,
+      targetVersion: "v2.0.0",
+      targetInstallDir: v2Dir,
+      prefix: tmpPrefix,
+      binPath: binNexus,
+      startedAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    };
+    writeJournal(tmpPrefix, entry);
+
+    const outcome = recoverUpgrade(tmpPrefix);
+    assert.equal(outcome.recovered, true);
+    assert.equal(outcome.action, "rolled_back");
+    assert.equal(fs.realpathSync(binNexus), fs.realpathSync(v1Bin));
+  });
+
+  it("reverts launcher symlink to previous release with rollbackBinary", () => {
+    const libNexus = path.join(tmpPrefix, "lib", "nexus");
+    const binDir = path.join(tmpPrefix, "bin");
+    fs.mkdirSync(libNexus, { recursive: true });
+    fs.mkdirSync(binDir, { recursive: true });
+
+    // Older version v1.0.0
+    const v1Dir = path.join(libNexus, "v1.0.0");
+    fs.mkdirSync(path.join(v1Dir, "bin"), { recursive: true });
+    fs.writeFileSync(path.join(v1Dir, "bin", "nexus"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+
+    // Current version v1.1.0
+    const v2Dir = path.join(libNexus, "v1.1.0");
+    fs.mkdirSync(path.join(v2Dir, "bin"), { recursive: true });
+    fs.writeFileSync(path.join(v2Dir, "bin", "nexus"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+
+    const binNexus = path.join(binDir, "nexus");
+    fs.symlinkSync(path.join(v2Dir, "bin", "nexus"), binNexus);
+
+    const res = rollbackBinary(tmpPrefix);
+    assert.equal(res.success, true);
+    assert.equal(res.revertedTo, "v1.0.0");
+    assert.equal(fs.realpathSync(binNexus), fs.realpathSync(path.join(v1Dir, "bin", "nexus")));
+  });
+
+  it("detects PATH shadowing when another nexus executable precedes prefix bin in PATH", () => {
+    const fakeSysBin = path.join(tmpPrefix, "fake-usr-bin");
+    const ourBin = path.join(tmpPrefix, "our-bin");
+    fs.mkdirSync(fakeSysBin, { recursive: true });
+    fs.mkdirSync(ourBin, { recursive: true });
+
+    // Put a shadowing executable in fakeSysBin
+    const shadowBin = path.join(fakeSysBin, "nexus");
+    fs.writeFileSync(shadowBin, "#!/bin/sh\necho old\n", { mode: 0o755 });
+
+    const oldPath = process.env.PATH;
+    try {
+      process.env.PATH = `${fakeSysBin}:${ourBin}:/usr/bin:/bin`;
+      const check = detectPathShadowing(ourBin);
+      assert.equal(check.shadowed, true);
+      assert.equal(check.precedingPaths[0], shadowBin);
+
+      // Now test when ourBin is first:
+      process.env.PATH = `${ourBin}:${fakeSysBin}:/usr/bin:/bin`;
+      const check2 = detectPathShadowing(ourBin);
+      assert.equal(check2.shadowed, false);
+    } finally {
+      process.env.PATH = oldPath;
+    }
+  });
+});

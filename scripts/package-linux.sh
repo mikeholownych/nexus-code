@@ -78,4 +78,41 @@ tar --sort=name --format=pax --mtime="@$SOURCE_DATE_EPOCH" --owner=0 --group=0 -
 # Publish install.sh as release asset (REQ-REL-109)
 cp "$ROOT/install.sh" "$OUT/install.sh"
 
+# Publish machine-readable compatibility metadata (REQ-REL-116, ACC-UPG-07)
+ARCHIVE_SHA=$(sha256sum "$OUT/$ARCHIVE" | awk '{print $1}')
+GIT_COMMIT=$(git -C "$ROOT" rev-parse HEAD 2>/dev/null || echo "unknown")
+BUILD_DATE=$(date -u -d "@$SOURCE_DATE_EPOCH" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u +%Y-%m-%dT%H:%M:%SZ)
+cat > "$OUT/compatibility.json" <<EOF
+{
+  "schemaVersion": 1,
+  "product": "nexus-code",
+  "version": "${VERSION#v}",
+  "revision": "$GIT_COMMIT",
+  "builtAt": "$BUILD_DATE",
+  "minimumUpdaterVersion": "0.1.0-alpha.2",
+  "components": {
+    "cli": "${VERSION#v}",
+    "core": "${VERSION#v}",
+    "tui": "${VERSION#v}",
+    "harness": "${VERSION#v}"
+  },
+  "compatibility": {
+    "configSchemaVersion": 1,
+    "stateSchemaVersion": 1,
+    "minSupportedConfigVersion": 1,
+    "minSupportedStateVersion": 1
+  },
+  "platforms": {
+    "linux-x86_64": {
+      "archive": "$ARCHIVE",
+      "sha256": "$ARCHIVE_SHA",
+      "os": "linux",
+      "arch": "x86_64",
+      "libc": "glibc-2.35"
+    }
+  }
+}
+EOF
+node "$ROOT/scripts/validate_compatibility.mjs" "$OUT/compatibility.json"
+
 printf 'Built %s\n' "$OUT/$ARCHIVE"

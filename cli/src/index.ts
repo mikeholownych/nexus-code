@@ -1034,6 +1034,9 @@ program
   .option("--prefix <path>", "Target installation prefix (defaults to canonical installation prefix)")
   .option("--json", "Emit structured JSON output")
   .option("--timeout <ms>", "Network timeout in milliseconds (default: 15000)")
+  .option("--recover", "Recover from an interrupted or incomplete upgrade using the upgrade journal")
+  .option("--rollback-binary", "Revert executable launcher symlink to previous installed release")
+  .option("--restore-backup <path>", "Restore configuration from a specified backup path")
   .addHelpText(
     "after",
     `

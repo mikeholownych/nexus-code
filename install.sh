@@ -117,6 +117,19 @@ if [ "$NEEDS_EXTRACT" = "1" ]; then
   rm -rf "$VERSION_DIR"
   mv "$PACKAGE" "$VERSION_DIR"
 fi
+cat > "$VERSION_DIR/.provenance.json" <<EOF
+{
+  "formatVersion": 1,
+  "method": "installer_script",
+  "version": "$VERSION",
+  "installedAt": "$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date +%Y-%m-%dT%H:%M:%SZ)",
+  "prefix": "$PREFIX",
+  "installPath": "$VERSION_DIR",
+  "binPath": "$LINK",
+  "archive": "$ARCHIVE"
+}
+EOF
+chmod 0644 "$VERSION_DIR/.provenance.json"
 NEXT="$BIN_DIR/.nexus-link.$$"
 ln -s "$VERSION_DIR/bin/nexus" "$NEXT"
 mv -f "$NEXT" "$LINK"
