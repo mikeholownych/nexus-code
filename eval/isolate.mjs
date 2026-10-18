@@ -4,6 +4,7 @@ import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
+import { fileURLToPath } from "node:url";
 import { containmentProblem, spawnContained } from "./resources.mjs";
 
 const BWRAP = "/usr/bin/bwrap";
@@ -11,6 +12,10 @@ const SYSTEM_BINARIES = ["/usr/bin", "/usr/lib", "/usr/lib64", "/usr/share", "/l
 const FORBIDDEN_RUNTIME_ROOTS = ["/etc", "/root", "/proc", "/sys", "/run", "/var", "/dev", "/tmp", "/mnt", "/media", "/srv"];
 const SENSITIVE_HOME_PARTS = [".ssh", ".config", ".aws", ".azure", ".gnupg", ".kube", ".nexus", ".cache"];
 let sandboxPreflight;
+
+function shellQuote(value) {
+  return `'${value.replaceAll("'", `'\\''`)}'`;
+}
 
 export function sandboxAvailable() {
   if (sandboxPreflight !== undefined) return sandboxPreflight;
@@ -29,9 +34,12 @@ export function sandboxAvailable() {
   }
 }
 
-export function isolatedArgv({ cwd, home, command, timeoutSec = 300, readOnlySubpaths = [] }) {
+export function isolatedArgv({ cwd, home, command, timeoutSec = 300, readOnlySubpaths = [], hiddenSubpaths = [] }) {
   if (!sandboxAvailable()) throw new Error("Bubblewrap is unavailable; refusing to execute task-controlled commands");
   const workspace = fs.realpathSync(cwd);
+  const hiddenSources = hiddenSubpaths.map((relative) => confinedPath(workspace, relative));
+  const hiddenGuestPaths = hiddenSources.map((source) => path.posix.join("/workspace", path.relative(workspace, source).split(path.sep).join("/")));
+  let executionCommand = command;
   const args = [
     "--unshare-user", "--unshare-pid", "--unshare-net", "--disable-userns", "--die-with-parent",
     "--new-session", "--proc", "/proc", "--dev", "/dev", "--tmpfs", "/tmp",
@@ -47,8 +55,13 @@ export function isolatedArgv({ cwd, home, command, timeoutSec = 300, readOnlySub
     } catch {}
   }
   args.push("--bind", workspace, "/workspace", "--dir", "/home", "--dir", "/run");
+  if (hiddenSubpaths.length) {
+    const helperDir = path.dirname(fileURLToPath(import.meta.url));
+    args.push("--dir", "/runner", "--ro-bind", path.join(helperDir, "hide_oracle.cjs"), "/runner/hide_oracle.cjs");
+    args.push("--ro-bind", path.join(helperDir, "hide_oracle.py"), "/runner/sitecustomize.py");
+  }
   // Workspace subpaths the command may read but not change (hardened hidden tests: the oracle's own files).
-  for (const relative of readOnlySubpaths) {
+  for (const relative of hiddenSubpaths.length ? [] : readOnlySubpaths) {
     const source = confinedPath(workspace, relative);
     args.push("--ro-bind", source, path.posix.join("/workspace", path.relative(workspace, source).split(path.sep).join("/")));
   }
@@ -56,8 +69,26 @@ export function isolatedArgv({ cwd, home, command, timeoutSec = 300, readOnlySub
   args.push("--chdir", "/workspace", "--clearenv", "--setenv", "PATH", "/usr/bin:/bin");
   args.push("--setenv", "HOME", home ? "/home/eval" : "/tmp");
   args.push("--setenv", "CI", "1", "--setenv", "LANG", "C.UTF-8");
+  if (hiddenSubpaths.length) {
+    args.push("--setenv", "NEXUS_HIDDEN_FILES", JSON.stringify(hiddenGuestPaths));
+    args.push("--setenv", "NODE_OPTIONS", "--require /runner/hide_oracle.cjs");
+    args.push("--setenv", "PYTHONPATH", "/runner");
+    const removeHidden = `rm -f -- ${hiddenGuestPaths.map(shellQuote).join(" ")}`;
+    if (/^go\s+test\s+\.\/\.\.\.$/.test(command.trim())) {
+      executionCommand = `set -e\ni=0\ndeclare -a dirs=() bins=()\nwhile IFS= read -r dir; do\n  [[ -n "$dir" ]] || continue\n  bin="/tmp/.nexus-hidden-go-$i.test"\n  (cd "$dir" && go test -c -o "$bin" .)\n  dirs+=("$dir"); bins+=("$bin"); i=$((i + 1))\ndone < <(go list -f '{{if or .TestGoFiles .XTestGoFiles}}{{.Dir}}{{end}}' ./...)\n((\${#bins[@]})) || { echo 'no Go test binaries were compiled' >&2; exit 1; }\n${removeHidden}\nfor i in "\${!bins[@]}"; do (cd "\${dirs[$i]}" && "\${bins[$i]}"); done\necho 'hidden: all assertions passed'`;
+    } else if (/^go\s+test\s+(?:-run\s+\S+\s+)?\.$/.test(command.trim())) {
+      executionCommand = `set -e\ngo test -c -o /tmp/.nexus-hidden-go.test .\n${removeHidden}\n/tmp/.nexus-hidden-go.test\necho 'hidden: all assertions passed'`;
+    } else if (/^cargo\s+test(?:\s+--test\s+[A-Za-z0-9_-]+)?$/.test(command.trim())) {
+      executionCommand = `set -e\ncompile_log=/tmp/.nexus-hidden-cargo.log\n${command} --no-run >"$compile_log" 2>&1 || { cat "$compile_log"; exit 1; }\ncat "$compile_log"\nmapfile -t bins < <(sed -n 's/^ *Executable .* (\\(.*\\))$/\\1/p' "$compile_log")\n((\${#bins[@]})) || { echo 'no Cargo test binaries were compiled' >&2; exit 1; }\n${removeHidden}\nstatus=0\nfor bin in "\${bins[@]}"; do "$bin" || status=$?; done\nrm -f "$compile_log"\nif ((status == 0)); then echo 'hidden: all assertions passed'; fi\nexit "$status"`;
+    } else if (/^(python(?:\d+(?:\.\d+)?)?)\s+(\S+\.py)\s*$/.test(command.trim())) {
+      const [, python, script] = command.trim().match(/^(python(?:\d+(?:\.\d+)?)?)\s+(\S+\.py)\s*$/);
+      executionCommand = `${python} -c 'import runpy,sys; runpy.run_path(sys.argv[1], run_name="__main__")' ${shellQuote(script)}`;
+    } else if (!/^node\b/.test(command.trim()) && !/^(?:python(?:\d+(?:\.\d+)?)?|pytest)\b/.test(command.trim())) {
+      executionCommand = `${removeHidden}\n${command}`;
+    }
+  }
   if (home) args.push("--tmpfs", "/home/eval");
-  args.push("--", "/usr/bin/bash", "-c", command);
+  args.push("--", "/usr/bin/bash", "-c", executionCommand);
   return { cmd: BWRAP, argv: args, timeoutMs: timeoutSec * 1000 };
 }
 
@@ -288,14 +319,18 @@ export function stageHiddenFiles(source, ws, relativeTarget, { readOnlyHidden = 
 }
 
 export function hiddenOutputHasTests(output) {
-  const hasPositive = /^ok\s+\S+/m.test(output) || /\b[1-9]\d*\s+passed\b/i.test(output) || /^Ran\s+[1-9]\d*\s+tests?\b/m.test(output);
-  const hasZeroMarker = /\[no test files\]|testing: warning: no tests to run|collected 0 items|no tests ran|Ran 0 tests\b|\b0 passed;\s*0 failed\b/i.test(output);
-  return hasPositive || !hasZeroMarker;
+  if (typeof output !== "string" || !output.trim()) return false;
+  const hasGoOk = /^ok\s+\S+/m.test(output);
+  const hasPassedCount = /\b[1-9]\d*\s+passed\b/i.test(output);
+  const hasPyUnittestOk = /^Ran\s+[1-9]\d*\s+tests?\b[\s\S]*?\bOK\b/m.test(output);
+  const hasNodeTestPass = /(?:ℹ|✔|#)\s*pass\s+[1-9]\d*|^ok\s+[1-9]\d*\s+-/m.test(output);
+  const hasHiddenBanner = /\b(?:all|hidden)\b[^\n]*\b(?:passed|ok|identical)\b/i.test(output);
+  return hasGoOk || hasPassedCount || hasPyUnittestOk || hasNodeTestPass || hasHiddenBanner;
 }
 
 /** Execute a task-controlled shell command in a no-network, clear-environment namespace. */
-export function runIsolated(command, { cwd, home = false, timeoutSec = 300, outputLimit = 1_000_000, resources = null, readOnlySubpaths = [] } = {}) {
-  const spec = isolatedArgv({ cwd, home, command, timeoutSec, readOnlySubpaths });
+export function runIsolated(command, { cwd, home = false, timeoutSec = 300, outputLimit = 1_000_000, resources = null, readOnlySubpaths = [], hiddenSubpaths = [] } = {}) {
+  const spec = isolatedArgv({ cwd, home, command, timeoutSec, readOnlySubpaths, hiddenSubpaths });
   return new Promise((resolve) => {
     const { child, containment } = spawnContained(spec, resources, { cwd: "/", env: {}, detached: true, stdio: ["ignore", "pipe", "pipe"] });
     let stdout = "";

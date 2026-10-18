@@ -59,12 +59,14 @@ test("hidden test staging preserves workspace files and mounts only copied hidde
     assert.equal(fs.existsSync(path.join(outsideDir, "newparent")), false);
     assert.equal(hiddenOutputHasTests("Ran 0 tests"), false);
     assert.equal(hiddenOutputHasTests("[no test files]"), false);
-    assert.equal(hiddenOutputHasTests("Ran 1 test"), true);
+    assert.equal(hiddenOutputHasTests("Ran 1 test\n\nOK"), true);
     assert.equal(hiddenOutputHasTests("?   example/cmd [no test files]\nok  example/pkg 0.01s"), true);
     assert.equal(hiddenOutputHasTests("test result: ok. 5 passed; 0 failed\ntest result: ok. 0 passed; 0 failed"), true);
     assert.equal(hiddenOutputHasTests("?   example/cmd [no test files]"), false);
     assert.equal(hiddenOutputHasTests("test result: ok. 0 passed; 0 failed"), false);
     assert.equal(hiddenOutputHasTests("Ran 0 tests"), false);
+    assert.equal(hiddenOutputHasTests(""), false);
+    assert.equal(hiddenOutputHasTests("hello"), false);
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
@@ -171,7 +173,7 @@ test("a heldout-v2 manifest binds each selected task's task.json and hidden dire
   }
 });
 
-async function hardenedRun(calls: Array<{ name: string; args: object }>) {
+async function hardenedRun(calls: Array<{ name: string; args: object }>, hiddenCommand?: string) {
   const gw = await startGateway((_n: number, body: any) => {
     const tools = (body?.messages ?? []).filter((m: any) => m.role === "tool").length;
     if (tools < calls.length) return { kind: "tools", calls: [calls[tools]] };
@@ -182,9 +184,20 @@ async function hardenedRun(calls: Array<{ name: string; args: object }>) {
   try {
     const config = path.join(root, "config.json");
     fs.writeFileSync(config, JSON.stringify({ name: "nexus@mock", agent: "nexus", endpoint: gw.url, model: "m", runs: 1, steps: 20, minutes: 5, hardenedChecks: true }));
+    let taskArgs: string[] = [];
+    if (hiddenCommand) {
+      const tasks = path.join(root, "tasks");
+      fs.mkdirSync(tasks);
+      fs.cpSync(path.join(ROOT, "eval/tasks/selftest-add"), path.join(tasks, "selftest-add"), { recursive: true });
+      const taskFile = path.join(tasks, "selftest-add/task.json");
+      const task = JSON.parse(fs.readFileSync(taskFile, "utf8"));
+      task.hidden.command = hiddenCommand;
+      fs.writeFileSync(taskFile, JSON.stringify(task));
+      taskArgs = ["--tasks", tasks];
+    }
     const out = path.join(root, "out");
     const run = await new Promise<{ status: number | null; stderr: string }>((resolve) => {
-      const child = spawn(process.execPath, [path.join(ROOT, "eval/run.mjs"), "--config", config, "--out", out, "--only", "selftest-add"], { stdio: ["ignore", "ignore", "pipe"] });
+      const child = spawn(process.execPath, [path.join(ROOT, "eval/run.mjs"), "--config", config, "--out", out, "--only", "selftest-add", ...taskArgs], { stdio: ["ignore", "ignore", "pipe"] });
       let stderr = "";
       child.stderr.on("data", (c) => (stderr += c));
       child.on("close", (status) => resolve({ status, stderr }));
@@ -220,6 +233,19 @@ test("hardened checks: a correct change passes in a fresh workspace; a test-scri
   assert.match(gamed.hardened.configChanges.join(), /package.json "scripts" changed/);
   assert.ok(gamed.hardened.discarded.includes("test/extra.test.js"));
   assert.equal(gamed.falseVerified, false);
+});
+
+test("hardened checks hide oracle source from candidate code and reject empty-output commands", { timeout: 300_000 }, async () => {
+  const attack = `const fs = require("node:fs");
+const oracle = fs.readFileSync("hidden/math.hidden.test.js", "utf8");
+if (oracle.length || oracle.includes("assert.equal(add(2, 3), 5)")) throw new Error("oracle source was visible");
+exports.add = (a, b) => a + b;
+`;
+  const hidden = await hardenedRun([{ name: "write_file", args: { path: "math.js", content: attack } }]);
+  assert.equal(hidden.hiddenPass, true, JSON.stringify(hidden));
+
+  const empty = await hardenedRun([], "true");
+  assert.equal(empty.hiddenPass, false, JSON.stringify(empty));
 });
 
 test("test data, symlinked paths, new Python packages, oversized files and manifest deletions never weaken the checks", async () => {

@@ -602,12 +602,15 @@ function runCheck(task, ws, check, hidden, { readOnlyHidden = false } = {}) {
       }),
     }));
   }
-  const readOnlySubpaths = [];
+  const hiddenSubpaths = [];
   if (hidden && check.dir) {
     const source = confinedPath(task.dir, check.dir);
-    readOnlySubpaths.push(...stageHiddenFiles(source, ws, check.into ?? check.dir, { readOnlyHidden }));
+    hiddenSubpaths.push(...stageHiddenFiles(source, ws, check.into ?? check.dir, { readOnlyHidden }));
   }
-  return runIsolated(check.command, { cwd: ws, home: true, timeoutSec: check.timeoutSec ?? 300, outputLimit: 1_000_000, resources: config.resources ?? null, readOnlySubpaths })
+  const command = hidden && readOnlyHidden && hiddenSubpaths.length && /^node\s+(?!--test\b)(\S+\.c?m?js)\s*$/.test(check.command.trim())
+    ? `${check.command} && echo "hidden: all assertions passed"`
+    : check.command;
+  return runIsolated(command, { cwd: ws, home: true, timeoutSec: check.timeoutSec ?? 300, outputLimit: 1_000_000, resources: config.resources ?? null, hiddenSubpaths: hidden && readOnlyHidden ? hiddenSubpaths : [], readOnlySubpaths: hidden && readOnlyHidden ? [] : hiddenSubpaths })
     .then((r) => {
       const output = `${r.stdout}${r.stderr}`;
       // Qualification keeps hidden-test output out of the evidence: it would disclose the sealed tests.
@@ -653,7 +656,7 @@ function harnessIdentity() {
   const git = (...a) => spawnSync("git", a, { cwd: ROOT, encoding: "utf8" }).stdout.trim();
   const commit = git("rev-parse", "HEAD");
   const dirty = Boolean(git("status", "--porcelain", "--untracked-files=all", "--", ".", ":(exclude)cli/dist"));
-  const sourceFiles = ["eval/run.mjs", "eval/validate.mjs", "eval/isolate.mjs", "eval/agent_sandbox.mjs", "eval/model_proxy.mjs", "eval/score.mjs", "eval/infra.mjs", "eval/workspace.mjs", "eval/resources.mjs", "eval/cgroup_supervisor.mjs", "eval/t3.mjs", "eval/hardened_check.mjs"];
+  const sourceFiles = ["eval/run.mjs", "eval/validate.mjs", "eval/isolate.mjs", "eval/hide_oracle.cjs", "eval/hide_oracle.py", "eval/agent_sandbox.mjs", "eval/model_proxy.mjs", "eval/score.mjs", "eval/infra.mjs", "eval/workspace.mjs", "eval/resources.mjs", "eval/cgroup_supervisor.mjs", "eval/t3.mjs", "eval/hardened_check.mjs"];
   const sourceDigests = sourceFiles.map((file) => ({ file, sha256: createHash("sha256").update(fs.readFileSync(path.join(ROOT, file))).digest("hex") }));
   const sourceSha256 = createHash("sha256").update(JSON.stringify(sourceDigests)).digest("hex");
   return { commit, dirty, sourceDigests, sourceSha256, string: `${commit.slice(0, 12)}${dirty ? "-dirty" : ""}` };
