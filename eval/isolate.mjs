@@ -59,6 +59,7 @@ export function isolatedArgv({ cwd, home, command, timeoutSec = 300, readOnlySub
     const helperDir = path.dirname(fileURLToPath(import.meta.url));
     args.push("--dir", "/runner", "--ro-bind", path.join(helperDir, "hide_oracle.cjs"), "/runner/hide_oracle.cjs");
     args.push("--ro-bind", path.join(helperDir, "hide_oracle.py"), "/runner/sitecustomize.py");
+    args.push("--ro-bind", path.join(helperDir, "unlink_then_exec.sh"), "/runner/unlink_then_exec.sh");
   }
   // Workspace subpaths the command may read but not change (hardened hidden tests: the oracle's own files).
   for (const relative of hiddenSubpaths.length ? [] : readOnlySubpaths) {
@@ -73,19 +74,19 @@ export function isolatedArgv({ cwd, home, command, timeoutSec = 300, readOnlySub
     args.push("--setenv", "NEXUS_HIDDEN_FILES", JSON.stringify(hiddenGuestPaths));
     args.push("--setenv", "NODE_OPTIONS", "--require /runner/hide_oracle.cjs");
     args.push("--setenv", "PYTHONPATH", "/runner");
-    const removeHidden = `rm -f -- ${hiddenGuestPaths.map(shellQuote).join(" ")}`;
-    if (/^go\s+test\s+\.\/\.\.\.$/.test(command.trim())) {
-      executionCommand = `set -e\ni=0\ndeclare -a dirs=() bins=()\nwhile IFS= read -r dir; do\n  [[ -n "$dir" ]] || continue\n  bin="/tmp/.nexus-hidden-go-$i.test"\n  (cd "$dir" && go test -c -o "$bin" .)\n  dirs+=("$dir"); bins+=("$bin"); i=$((i + 1))\ndone < <(go list -f '{{if or .TestGoFiles .XTestGoFiles}}{{.Dir}}{{end}}' ./...)\n((\${#bins[@]})) || { echo 'no Go test binaries were compiled' >&2; exit 1; }\n${removeHidden}\nfor i in "\${!bins[@]}"; do (cd "\${dirs[$i]}" && "\${bins[$i]}"); done\necho 'hidden: all assertions passed'`;
-    } else if (/^go\s+test\s+(?:-run\s+\S+\s+)?\.$/.test(command.trim())) {
-      executionCommand = `set -e\ngo test -c -o /tmp/.nexus-hidden-go.test .\n${removeHidden}\n/tmp/.nexus-hidden-go.test\necho 'hidden: all assertions passed'`;
-    } else if (/^cargo\s+test(?:\s+--test\s+[A-Za-z0-9_-]+)?$/.test(command.trim())) {
-      executionCommand = `set -e\ncompile_log=/tmp/.nexus-hidden-cargo.log\n${command} --no-run >"$compile_log" 2>&1 || { cat "$compile_log"; exit 1; }\ncat "$compile_log"\nmapfile -t bins < <(sed -n 's/^ *Executable .* (\\(.*\\))$/\\1/p' "$compile_log")\n((\${#bins[@]})) || { echo 'no Cargo test binaries were compiled' >&2; exit 1; }\n${removeHidden}\nstatus=0\nfor bin in "\${bins[@]}"; do "$bin" || status=$?; done\nrm -f "$compile_log"\nif ((status == 0)); then echo 'hidden: all assertions passed'; fi\nexit "$status"`;
+    args.push("--setenv", "NEXUS_HIDDEN_FILES_LIST", "/tmp/.nexus-hidden-files.list");
+    if (/\bgo\s+test\b/.test(command)) {
+      executionCommand = command.replace(/\bgo\s+test\b/g, "go test -exec /runner/unlink_then_exec.sh");
+    } else if (/\bcargo\s+test\b/.test(command)) {
+      args.push("--setenv", "CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUNNER", "/runner/unlink_then_exec.sh");
+      if (command.includes("&&")) executionCommand = `cargo test --tests --no-run >/dev/null 2>&1 || true; ${command}`;
     } else if (/^(python(?:\d+(?:\.\d+)?)?)\s+(\S+\.py)\s*$/.test(command.trim())) {
       const [, python, script] = command.trim().match(/^(python(?:\d+(?:\.\d+)?)?)\s+(\S+\.py)\s*$/);
       executionCommand = `${python} -c 'import runpy,sys; runpy.run_path(sys.argv[1], run_name="__main__")' ${shellQuote(script)}`;
-    } else if (!/^node\b/.test(command.trim()) && !/^(?:python(?:\d+(?:\.\d+)?)?|pytest)\b/.test(command.trim())) {
-      executionCommand = `${removeHidden}\n${command}`;
     }
+    const listArgs = hiddenGuestPaths.map(shellQuote).join(" ");
+    executionCommand = `printf '%s\\n' ${listArgs} > /tmp/.nexus-hidden-files.list\n${executionCommand}`;
+    executionCommand = executionCommand.replace(/\bPYTHONPATH=/g, "PYTHONPATH=/runner:");
   }
   if (home) args.push("--tmpfs", "/home/eval");
   args.push("--", "/usr/bin/bash", "-c", executionCommand);
