@@ -121,8 +121,8 @@
     ]
   },
   "sourceEquivalenceAssessment": {
-    "assessedAt": "2026-10-18T17:44:22.047Z",
-    "currentCommit": "b0ee5829a4db1750a6fb2b7d3c184d442611b7dc",
+    "assessedAt": "2026-10-18T18:14:14.303Z",
+    "currentCommit": "b122486a62a68d4ed57580840ca0ae1abe75b5ff",
     "observedAtCommit": "06e38de830afc4e9081e84670d3968af6ec29554",
     "dirty": false,
     "profileSha256": "4e8d42a218a68fa2fd3fd0de4d9788b205fa41b9ab71935cc2b6cf73f5d63543",
@@ -154,15 +154,15 @@
       },
       {
         "file": "eval/isolate.mjs",
-        "sha256": "22982e943bae6ce9a665f654239a6d497dadd94d04af5c7c3b1ce220c1e42796"
+        "sha256": "a81b8cb869e03e601a727bd5d5876e9dae68775951a1115058015c43e9491446"
       },
       {
         "file": "eval/validate.mjs",
-        "sha256": "5fc8822fdce4981fa2389c1a3002629147ea3fc8935e19fe7d3c6ce097018d5d"
+        "sha256": "96e7716f2be905c5f1ca78dff188039218d1d47969a7a3776459d42368906d2c"
       },
       {
         "file": "eval/run.mjs",
-        "sha256": "ab7d85638f2b2dedc85fc1a7ada75d6d1c764305bdabbf8dca6ef61bb09aeca4"
+        "sha256": "5e096dc4af34f0c6e91ba694e022e9e051bdbb5723df4c82240fa1c0739bc3c0"
       },
       {
         "file": "eval/hardened_check.mjs",
@@ -191,6 +191,6 @@
       "eval/run.mjs",
       "eval/host/validate.mjs"
     ],
-    "rationale": "Original observational provenance in report.revision (commit 06e38deb54f0b1fdde307f8c3a324e2d3eb2d739) is preserved unchanged without retroactive relabeling. The delta between 06e38de and b0ee5829a4db1750a6fb2b7d3c184d442611b7dc adds shared host-mount-source enumeration (candidateSandboxHostMountSources) and corpus-overlap preflight checks (runtimeCorpusOverlapProblem), requires blackbox-v1 in qualification preflight, preserves default in-repo eval/tasks development runs, and adds a preflight assertion in eval/host/validate.mjs check 8. None of these preflight additions alter the provisioned host account (uid 985), sudoers policy, dedicated tmpfs mount (/srv/nexus-qual/ws), cgroup v2 resource limits, or per-task setup/reference resource envelopes."
+    "rationale": "Original observational provenance in report.revision (commit 06e38de830afc4e9081e84670d3968af6ec29554) is preserved unchanged without retroactive relabeling; fresh exact-head host validation is recorded separately in validate-exact-head.json. The delta between 06e38de830afc4e9081e84670d3968af6ec29554 and b122486a62a68d4ed57580840ca0ae1abe75b5ff adds shared host-mount-source enumeration (including toolchainDirectories goRoot/rustRoot), corpusCustody.reportPath overlap protection, v2 manifest fixture full-tree sha256 enforcement, and blackbox-v1 qualification preflight. None of these preflight additions alter the provisioned host account (uid 985), sudoers policy, dedicated tmpfs mount (/srv/nexus-qual/ws), cgroup v2 resource limits, or per-task setup/reference resource envelopes."
   }
 }
