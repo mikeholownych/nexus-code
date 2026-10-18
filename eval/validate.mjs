@@ -166,7 +166,7 @@ export function runtimeCorpusOverlapProblem(runtimePaths, runtimeRoots, tasksDir
   // outside the in-repo development eval/tasks tree, where eval/ also contains the trusted sandbox supervisor.
   const parentDir = resolveCanonicalOrLexical(path.dirname(tasksDir));
   const evalDir = resolveCanonicalOrLexical(path.join(ROOT, "eval"));
-  const includeParent = mountContext.qualification === true || !overlapVariants(parentDir, evalDir);
+  const includeParent = mountContext.qualification === true || parentDir.canonical !== evalDir.canonical;
   const privatePaths = [tasksDir, ...(includeParent ? [path.dirname(tasksDir)] : []), ...extraPrivatePaths];
   const protectedPaths = [];
   for (const item of privatePaths) {
@@ -190,6 +190,7 @@ export function runtimeCorpusOverlapProblem(runtimePaths, runtimeRoots, tasksDir
     ...mountSources.systemDirectories,
     ...mountSources.systemFiles,
     ...mountSources.systemEtcDirectories,
+    ...mountSources.toolchainDirectories,
     ...Object.values(mountSources.runtimeSources).flatMap((value) => Array.isArray(value) ? value : value === null ? [] : [value]),
   ];
   const candidatePaths = [...new Set([...hostSources, ...runtimePaths, ...runtimeRoots])];
@@ -234,6 +235,7 @@ export async function fetchModelEntry(baseUrl, model, apiKey) {
 export function hiddenTestIsolationProblem(config, tasksDir) {
   if (config.qualification && Array.isArray(config.sandboxRuntimePaths) && Array.isArray(config.sandboxRuntimeRoots)) {
     const corpusPaths = [
+      config.corpusCustody?.reportPath,
       config.corpusCustody?.storeRoot,
       config.corpusCustody?.validatorPath,
       config.corpusCustody?.referencePath,
@@ -364,7 +366,12 @@ function heldoutV2ManifestProblem(config, tasksDir, ids, manifest) {
       const taskFile = confinedPath(dir, "task.json");
       const raw = fs.readFileSync(taskFile);
       if (createHash("sha256").update(raw).digest("hex") !== row.task_sha256) return `task ${row.id}: task.json differs from the frozen corpus manifest`;
-      const hiddenDir = JSON.parse(raw.toString("utf8")).hidden?.dir;
+      const task = JSON.parse(raw.toString("utf8"));
+      if (Object.hasOwn(task, "fixture") && !task.repo) {
+        if (typeof row.sha256 !== "string") return `corpusManifest task ${row.id} uses a local fixture without a full-tree sha256 digest in the v2 manifest`;
+        if (taskTreeDigest(dir) !== row.sha256) return `task ${row.id}: local fixture full-tree sha256 differs from the v2 manifest`;
+      }
+      const hiddenDir = task.hidden?.dir;
       if (typeof hiddenDir !== "string" || !hiddenDir) return `task ${row.id}: sealed task has no hidden.dir`;
       if (heldoutHiddenDigest(confinedPath(dir, hiddenDir)) !== row.hidden_sha256) return `task ${row.id}: hidden tests differ from the frozen corpus manifest`;
     } catch (error) {

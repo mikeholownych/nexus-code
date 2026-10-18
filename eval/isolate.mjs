@@ -38,7 +38,7 @@ function resolveHostToolchains() {
 }
 
 /** Return the host paths that the candidate sandbox mounts, grouped by the bind logic. */
-export function candidateSandboxHostMountSources({ cwd, home, proxyDirectory, readOnlyPaths = [], nodeRuntime = process.execPath, supervisorPath } = {}) {
+export function candidateSandboxHostMountSources({ cwd, home, proxyDirectory, readOnlyPaths = [], nodeRuntime, supervisorPath } = {}) {
   if (!Array.isArray(readOnlyPaths)) throw new Error("candidate sandbox readOnlyPaths must be an array");
   const existing = (paths, kind) => paths.filter((source) => {
     try {
@@ -51,6 +51,7 @@ export function candidateSandboxHostMountSources({ cwd, home, proxyDirectory, re
     systemDirectories: existing(SYSTEM_BINARIES, "directory"),
     systemFiles: existing(SYSTEM_ETC_FILES, "file"),
     systemEtcDirectories: existing(SYSTEM_ETC_DIRS, "directory"),
+    toolchainDirectories: Object.values(resolveHostToolchains()).filter(Boolean),
     runtimeSources: {
       cwd: optional(cwd),
       home: optional(home),
@@ -90,6 +91,7 @@ function candidateMountOverlapProblem(mountSources, protectedCorpusPaths) {
     ...mountSources.systemDirectories,
     ...mountSources.systemFiles,
     ...mountSources.systemEtcDirectories,
+    ...mountSources.toolchainDirectories,
     ...Object.values(mountSources.runtimeSources).flatMap((value) => Array.isArray(value) ? value : value === null ? [] : [value]),
   ];
   for (const protectedPath of protectedCorpusPaths) {
@@ -127,10 +129,14 @@ export function sandboxAvailable() {
   }
 }
 
-export function isolatedArgv({ cwd, home, command, timeoutSec = 300, readOnlySubpaths = [], hiddenSubpaths = [] }) {
-  if (!sandboxAvailable()) throw new Error("Bubblewrap is unavailable; refusing to execute task-controlled commands");
+export function isolatedArgv({ cwd, home, command, timeoutSec = 300, readOnlySubpaths = [], hiddenSubpaths = [], protectedCorpusPaths = [] }) {
   const workspace = fs.realpathSync(cwd);
   const hiddenSources = hiddenSubpaths.map((relative) => confinedPath(workspace, relative));
+  const readOnlySources = readOnlySubpaths.map((relative) => confinedPath(workspace, relative));
+  const mountSources = candidateSandboxHostMountSources({ cwd: workspace, readOnlyPaths: [...readOnlySources, ...hiddenSources] });
+  const protectedOverlap = candidateMountOverlapProblem(mountSources, protectedCorpusPaths);
+  if (protectedOverlap) throw new Error(protectedOverlap);
+  if (!sandboxAvailable()) throw new Error("Bubblewrap is unavailable; refusing to execute task-controlled commands");
   const hiddenGuestPaths = hiddenSources.map((source) => path.posix.join("/workspace", path.relative(workspace, source).split(path.sep).join("/")));
   let executionCommand = command;
   const args = [
@@ -539,8 +545,8 @@ function cargoPreflight(command) {
   return `cargo check --lib --bins ${flags.join(" ")}`.trim();
 }
 
-function runIsolatedRaw(command, { cwd, home = false, timeoutSec = 300, outputLimit = 1_000_000, resources = null, readOnlySubpaths = [], hiddenSubpaths = [] } = {}) {
-  const spec = isolatedArgv({ cwd, home, command, timeoutSec, readOnlySubpaths, hiddenSubpaths });
+function runIsolatedRaw(command, { cwd, home = false, timeoutSec = 300, outputLimit = 1_000_000, resources = null, readOnlySubpaths = [], hiddenSubpaths = [], protectedCorpusPaths = [] } = {}) {
+  const spec = isolatedArgv({ cwd, home, command, timeoutSec, readOnlySubpaths, hiddenSubpaths, protectedCorpusPaths });
   return new Promise((resolve) => {
     const { child, containment } = spawnContained(spec, resources, { cwd: "/", env: {}, detached: true, stdio: ["ignore", "pipe", "pipe"] });
     let stdout = "";

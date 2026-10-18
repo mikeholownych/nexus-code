@@ -366,7 +366,7 @@ test("hidden tests must be unreadable to the agent's own user", async () => {
 
 test("qualification runtime mounts cannot overlap the task tree, held-out store, or private validator paths", async () => {
   const { hiddenTestIsolationProblem, runtimeCorpusOverlapProblem } = await import(path.join(ROOT, "eval/validate.mjs"));
-  const { agentSandboxArgv, candidateSandboxHostMountSources } = await import(path.join(ROOT, "eval/isolate.mjs"));
+  const { agentSandboxArgv, candidateSandboxHostMountSources, isolatedArgv } = await import(path.join(ROOT, "eval/isolate.mjs"));
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-eval-corpus-overlap-"));
   try {
     const store = path.join(root, "heldout-v2");
@@ -393,6 +393,16 @@ test("qualification runtime mounts cannot overlap the task tree, held-out store,
 
     const mountContext = { cwd: runtimeRoot, home, proxyDirectory, nodeRuntime: process.execPath, supervisorPath };
     const hostMounts = candidateSandboxHostMountSources({ ...mountContext, readOnlyPaths: [readOnlyRuntime] });
+    const hostToolchain = (preferred: string, command: string, argv: string[]) => {
+      try { if (fs.statSync(preferred).isDirectory()) return preferred; } catch {}
+      const result = spawnSync(command, argv, { encoding: "utf8" });
+      const candidate = result.status === 0 ? result.stdout.trim() : "";
+      try { return fs.statSync(candidate).isDirectory() ? candidate : null; } catch { return null; }
+    };
+    const expectedToolchains = [
+      hostToolchain("/usr/local/go", "go", ["env", "GOROOT"]),
+      hostToolchain("/opt/nexus-qual/rust", "rustc", ["--print", "sysroot"]),
+    ].filter((item): item is string => Boolean(item));
     const existingDirectories = ["/usr/bin", "/usr/lib", "/usr/lib64", "/usr/libexec", "/usr/share", "/lib", "/lib64", "/usr/local/lib"]
       .filter((item) => { try { return fs.statSync(item).isDirectory(); } catch { return false; } });
     const existingEtcFiles = ["/etc/ld.so.cache", "/etc/passwd", "/etc/group", "/etc/nsswitch.conf", "/etc/localtime"]
@@ -402,6 +412,7 @@ test("qualification runtime mounts cannot overlap the task tree, held-out store,
     assert.deepEqual(hostMounts.systemDirectories, existingDirectories);
     assert.deepEqual(hostMounts.systemFiles, existingEtcFiles);
     assert.deepEqual(hostMounts.systemEtcDirectories, existingEtcDirectories);
+    assert.deepEqual(hostMounts.toolchainDirectories, expectedToolchains);
     assert.deepEqual(hostMounts.runtimeSources, {
       cwd: fs.realpathSync(runtimeRoot),
       home: fs.realpathSync(home),
@@ -425,6 +436,7 @@ test("qualification runtime mounts cannot overlap the task tree, held-out store,
       ...hostMounts.systemDirectories.map((source) => path.join(source, "synthetic-corpus-subdir")),
       ...hostMounts.systemFiles,
       ...hostMounts.systemEtcDirectories.map((source) => path.join(source, "synthetic-corpus-subdir")),
+      ...hostMounts.toolchainDirectories.map((source) => path.join(source, "synthetic-corpus-subdir")),
     ];
     const runtimeMountPaths = [
       path.join(runtimeRoot, "corpus-leak"),
@@ -453,6 +465,10 @@ test("qualification runtime mounts cannot overlap the task tree, held-out store,
         supervisorPath,
         protectedCorpusPaths: [protectedPath],
       }), /overlaps protected corpus material/);
+      if (unconditionalMountPaths.includes(protectedPath)) {
+        // This check precedes Bubblewrap availability, including on minimal CI hosts.
+        assert.throws(() => isolatedArgv({ cwd: runtimeRoot, command: "true", protectedCorpusPaths: [protectedPath] }), /overlaps protected corpus material/);
+      }
     }
     assert.match(
       runtimeCorpusOverlapProblem([], ["/usr/bin"], tasks, [path.join("/usr/bin", "synthetic-corpus-subdir")]) ?? "",
@@ -469,6 +485,23 @@ test("qualification runtime mounts cannot overlap the task tree, held-out store,
       /overlaps protected corpus material/,
       "hidden-test preflight checks explicit read-only runtime sources",
     );
+    const custodyReportPath = readOnlyRuntime;
+    assert.match(hiddenTestIsolationProblem({
+      qualification: true,
+      runAs: "nexus-eval",
+      sandboxRuntimePaths: [readOnlyRuntime],
+      sandboxRuntimeRoots: [runtimeRoot],
+      corpusCustody: { reportPath: custodyReportPath },
+      mountContext,
+    }, tasks) ?? "", /overlaps protected corpus material/);
+    assert.throws(() => agentSandboxArgv({
+      cwd: runtimeRoot,
+      home,
+      proxyDirectory,
+      readOnlyPaths: [readOnlyRuntime],
+      supervisorPath,
+      protectedCorpusPaths: [custodyReportPath],
+    }), /overlaps protected corpus material/);
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }

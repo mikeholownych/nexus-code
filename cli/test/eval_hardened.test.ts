@@ -273,7 +273,7 @@ test("a heldout-v2 manifest binds each selected task's task.json and hidden dire
     const rows = [];
     for (const id of ["t2-a", "t2-b"]) {
       fs.mkdirSync(path.join(tasks, id, "hidden", "sub"), { recursive: true });
-      const taskJson = JSON.stringify({ id, tier: "T2", hidden: { dir: "hidden", command: "pytest hidden" } });
+      const taskJson = JSON.stringify({ id, tier: "T2", repo: { url: "https://example.invalid/r.git", commit: "a".repeat(40) }, hidden: { dir: "hidden", command: "pytest hidden" } });
       fs.writeFileSync(path.join(tasks, id, "task.json"), taskJson);
       fs.writeFileSync(path.join(tasks, id, "hidden", "test_x.py"), `# ${id}\n`);
       fs.writeFileSync(path.join(tasks, id, "hidden", "sub", "data.txt"), "d\n");
@@ -294,6 +294,22 @@ test("a heldout-v2 manifest binds each selected task's task.json and hidden dire
     assert.match(corpusManifestProblem({ ...config, corpusCustody: { ...config.corpusCustody, reportSha256: "d".repeat(64) } }, tasks, ["t2-a", "t2-b"]) ?? "", /custody report differs/);
     fs.appendFileSync(path.join(tasks, "t2-b", "hidden", "sub", "data.txt"), "tampered\n");
     assert.match(corpusManifestProblem(config, tasks, ["t2-a", "t2-b"]) ?? "", /t2-b: hidden tests differ/);
+
+    const fixtureTask = { id: "t2-a", tier: "T2", fixture: "fixture", hidden: { dir: "hidden", command: "pytest hidden" } };
+    fs.mkdirSync(path.join(tasks, "t2-a", "fixture"));
+    fs.writeFileSync(path.join(tasks, "t2-a", "fixture", "input.txt"), "fixture input\n");
+    const fixtureTaskJson = JSON.stringify(fixtureTask);
+    fs.writeFileSync(path.join(tasks, "t2-a", "task.json"), fixtureTaskJson);
+    const fixtureManifest = {
+      ...manifest,
+      tasks: rows.map((row) => row.id === "t2-a" ? { ...row, task_sha256: createHash("sha256").update(fixtureTaskJson).digest("hex") } : row),
+    };
+    fs.writeFileSync(manifestFile, JSON.stringify(fixtureManifest));
+    const fixtureConfig = {
+      ...config,
+      corpusManifestSha256: createHash("sha256").update(JSON.stringify(fixtureManifest)).digest("hex"),
+    };
+    assert.match(corpusManifestProblem(fixtureConfig, tasks, ["t2-a", "t2-b"]) ?? "", /uses a local fixture without a full-tree sha256/);
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }

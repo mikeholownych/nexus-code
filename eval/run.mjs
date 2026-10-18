@@ -30,6 +30,21 @@ const configBytes = fs.readFileSync(args.config);
 const configSha256 = createHash("sha256").update(configBytes).digest("hex");
 const config = JSON.parse(configBytes.toString("utf8"));
 const tasksDir = path.resolve(args.tasks ?? path.join(ROOT, "eval/tasks"));
+function custodyCorpusPathsForRun() {
+  return [
+    config.corpusCustody?.reportPath,
+    config.corpusCustody?.storeRoot,
+    config.corpusCustody?.validatorPath,
+    config.corpusCustody?.referencePath,
+    config.corpusCustody?.authorLogPath,
+  ].filter(Boolean);
+}
+function protectedCorpusPathsForRun() {
+  const parent = path.dirname(tasksDir);
+  const evalDir = path.join(ROOT, "eval");
+  const includeParent = config.qualification === true || fs.realpathSync(parent) !== fs.realpathSync(evalDir);
+  return [tasksDir, ...(includeParent ? [parent] : []), ...custodyCorpusPathsForRun()];
+}
 const runs = Number(args.runs ?? config.runs ?? 1);
 const only = args.only ? new Set(String(args.only).split(",")) : null;
 // --pairs "task run,task run": rerun exactly these (runs that failed on infrastructure; see eval/infra.mjs).
@@ -178,7 +193,7 @@ async function runOnce(task, run) {
       const probe = fs.mkdtempSync(path.join(scratch, `nexus-eval-t3-baseline-${task.id}-`));
       try {
         fs.cpSync(ws, probe, { recursive: true, verbatimSymlinks: true });
-        task.t3CommandBaseline = await commandBaseline(task, (command) => runIsolated(command, { cwd: probe, home: true, timeoutSec: 300, resources: config.resources ?? null }).then((r) => {
+        task.t3CommandBaseline = await commandBaseline(task, (command) => runIsolated(command, { cwd: probe, home: true, timeoutSec: 300, resources: config.resources ?? null, protectedCorpusPaths: protectedCorpusPathsForRun() }).then((r) => {
           if (r.resources) t3BaselineResources.push(r.resources);
           const error = r.containmentProblem ?? (r.timedOut ? "timed out" : r.overflow ? "output limit" : r.status === null ? "did not exit" : null);
           return { pass: r.status === 0 && !error, error };
@@ -305,7 +320,7 @@ async function prepareWorkspace(task, ws) {
     stageRepoWorkspace(cache, task.repo.commit, ws);
   } else throw new Error(`task ${task.id} has neither fixture nor repo`);
   for (const cmd of task.setup ?? []) {
-    const result = await runIsolated(cmd, { cwd: ws, home: true, timeoutSec: task.setupTimeoutSec ?? 300, resources: config.resources ?? null });
+    const result = await runIsolated(cmd, { cwd: ws, home: true, timeoutSec: task.setupTimeoutSec ?? 300, resources: config.resources ?? null, protectedCorpusPaths: protectedCorpusPathsForRun() });
     if (result.containmentProblem) throw new Error(`isolated setup containment failed for ${task.id}: ${result.containmentProblem}`);
     if (result.status !== 0 || result.timedOut || result.overflow) throw new Error(`isolated setup failed for ${task.id}: ${result.timedOut ? "timeout" : result.overflow ? "output limit" : `exit ${result.status}`}`);
   }
@@ -521,13 +536,8 @@ function runAgent(task, ws, home, budget, agentIdentity, proxyDirectory, localTo
   const sandboxRuntimePaths = [...new Set(runtimePaths)];
   const allowedRuntimeRoots = [...new Set([...(config.sandboxRuntimeRoots ?? []), ...((config.agent ?? "nexus") === "nexus" && agentIdentity.argsPrefix[0] === path.join(ROOT, "cli/dist/index.js") ? [path.join(ROOT, "cli"), path.join(ROOT, "core")] : [])])];
   const supervisorPath = path.join(ROOT, "eval/agent_sandbox.mjs");
-  const corpusPaths = [
-    config.corpusCustody?.storeRoot,
-    config.corpusCustody?.validatorPath,
-    config.corpusCustody?.referencePath,
-    config.corpusCustody?.authorLogPath,
-  ].filter((item) => item !== undefined);
-  const protectedCorpusPaths = [tasksDir, ...(config.qualification === true || path.resolve(path.dirname(tasksDir)) !== path.resolve(path.join(ROOT, "eval")) ? [path.dirname(tasksDir)] : []), ...corpusPaths];
+  const corpusPaths = custodyCorpusPathsForRun();
+  const protectedCorpusPaths = protectedCorpusPathsForRun();
   const corpusOverlap = runtimeCorpusOverlapProblem(sandboxRuntimePaths, allowedRuntimeRoots, tasksDir, corpusPaths, {
     cwd: ws,
     home,
@@ -543,7 +553,7 @@ function runAgent(task, ws, home, budget, agentIdentity, proxyDirectory, localTo
     const { child, containment } = spawnContained(wrapped, config.resources ?? null, { cwd: "/", env: {}, stdio: ["pipe", "pipe", "pipe"], detached: true });
     // T3: the payload is the first line and the sidecar protocol follows on the same stdin (eval/agent_sandbox.mjs).
     const preconditions = {};
-    const runConstraint = (command) => runIsolated(command, { cwd: ws, home: true, timeoutSec: 300, resources: config.resources ?? null }).then((r) => ({ pass: r.status === 0 && !r.timedOut && !r.overflow }));
+    const runConstraint = (command) => runIsolated(command, { cwd: ws, home: true, timeoutSec: 300, resources: config.resources ?? null, protectedCorpusPaths: protectedCorpusPathsForRun() }).then((r) => ({ pass: r.status === 0 && !r.timedOut && !r.overflow }));
     const driver = protocol ? createT3Driver(task, (line) => { if (!child.stdin.destroyed) child.stdin.write(line); }, {
       onSteer: (item) => { preconditions[item.id] = steeringPrecondition(item, ws, task.t3CommandBaseline); },
       beforeProbe: () => t3Snapshot(task, ws, runConstraint),
@@ -633,7 +643,7 @@ function runCheck(task, ws, check, hidden, { readOnlyHidden = false } = {}) {
     hiddenSubpaths.push(...stageHiddenFiles(source, ws, check.into ?? check.dir, { readOnlyHidden }));
   }
   const command = check.command;
-  return runIsolated(command, { cwd: ws, home: true, timeoutSec: check.timeoutSec ?? 300, outputLimit: 1_000_000, resources: config.resources ?? null, hiddenSubpaths: hidden && readOnlyHidden ? hiddenSubpaths : [], readOnlySubpaths: hidden && readOnlyHidden ? [] : hiddenSubpaths })
+  return runIsolated(command, { cwd: ws, home: true, timeoutSec: check.timeoutSec ?? 300, outputLimit: 1_000_000, resources: config.resources ?? null, protectedCorpusPaths: protectedCorpusPathsForRun(), hiddenSubpaths: hidden && readOnlyHidden ? hiddenSubpaths : [], readOnlySubpaths: hidden && readOnlyHidden ? [] : hiddenSubpaths })
     .then((r) => {
       const output = `${r.stdout}${r.stderr}`;
       // Qualification keeps hidden-test output out of the evidence: it would disclose the sealed tests.

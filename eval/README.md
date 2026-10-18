@@ -140,9 +140,13 @@ one, before any agent runs, unless every item below holds:
   verifies this and refuses the run otherwise.
 
 - **Corpus binding is integrity evidence, not approval authentication.** The qualification config pins the exact
-  corpus-manifest SHA-256; the manifest binds each task's JSON and full task-tree digest; the run manifest repeats those
-  hashes. This detects stale or modified content. The manifest's `custody.status` and `custodian` strings are claims,
-  not signatures. Independent custody acceptance, pre-RC commit timing, and configuration freeze must be verified and
+  corpus-manifest SHA-256, and the run manifest repeats the selected task hashes. The v1 manifest binds every task's
+  full task tree in row `sha256`. The heldout-v2 manifest binds each task's raw `task.json` and hidden-directory digest for
+  pinned-repository tasks; a local fixture additionally requires a full-tree `sha256` because those two v2 digests do
+  not cover fixture files. The frozen config carries `corpusCustody: { custodian, approvedAt, reportPath, reportSha256 }`
+  and may also name `storeRoot`, `validatorPath`, `referencePath`, and `authorLogPath`; the report path and optional
+  private paths are protected from runtime mounts. These values and the manifest's custody labels are claims, not
+  signatures. Independent custody acceptance, pre-RC commit timing, and configuration freeze must be verified and
   archived by the acceptance reviewer before any qualification run. The current candidate task package has not been
   independently accepted.
 
@@ -219,10 +223,13 @@ keeps black-box expected values in the evaluator process and runs candidate code
 
 The sealed corpus is bound through its own manifest schema (`eval/heldout-manifest.json`, `hash_scheme`). The runner
 recomputes each selected task's `task_sha256` (raw `task.json`) and `hidden_sha256`. The latter is computed over the
-regular files of `hidden.dir`, with `/`-separated relative paths sorted byte-wise, each line `<path>  <sha256>\n`. The
-selected population must equal the manifest's. That manifest carries no custody fields, so the frozen config states
-`corpusCustody: { custodian, approvedAt, reportSha256 }`, which the acceptance reviewer checks against the committed
-custody report.
+regular files of `hidden.dir`, with `/`-separated relative paths sorted byte-wise, each line `<path>  <sha256>\n`. For
+pinned-repository tasks these bind the task declaration and hidden tests while the repository commit pins the source.
+A task using a local `fixture` must also carry `sha256` for the full task tree; without it, fixture content outside
+`task.json` and `hidden.dir` would be unbound. The selected population must equal the manifest's. The manifest carries
+no custody fields, so the frozen config states `corpusCustody: { custodian, approvedAt, reportPath, reportSha256 }`;
+optional private paths are `storeRoot`, `validatorPath`, `referencePath`, and `authorLogPath`. The acceptance reviewer
+checks the report against its digest and verifies custody claims independently.
 
 ### Resource contract
 
