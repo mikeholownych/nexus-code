@@ -266,7 +266,7 @@ function writePeerResults(root: string, agent: string, overrides: Record<string,
   const fingerprint = { alias: "engineering/deep", listed: true, ownedBy: "fixture", contextLength: 65536, weightsSha256: "a".repeat(64), serverBuild: "llama.cpp b123", sampling: { temperature: 0, seed: 17 } };
   fs.writeFileSync(path.join(dir, "manifest.json"), JSON.stringify({
     ...overrides,
-    config: { name: `${agent}@engineering/deep`, agent, model: "engineering/deep", qualification: true, limits: { context: 65536, output: 8192, requests: 200, totalOutput: 100_000 }, sampling: { temperature: 0, seed: 17 }, ...(agent === "nexus" ? { nexusPackageSha256: "d".repeat(64) } : {}), ...(overrides.config as object ?? {}) },
+    config: { name: `${agent}@engineering/deep`, agent, model: "engineering/deep", qualification: true, limits: { context: 65536, output: 8192, requests: 200, totalOutput: 100_000 }, resources: { cpuPercent: 800, memoryBytes: 17179869184, tasks: 4096, storageBytes: 21474836480, workspaceRoot: "/srv/nexus-qual/ws" }, sampling: { temperature: 0, seed: 17 }, ...(agent === "nexus" ? { nexusPackageSha256: "d".repeat(64) } : {}), ...(overrides.config as object ?? {}) },
     fingerprint: { ...fingerprint, ...(overrides.fingerprint as object ?? {}) },
     agentVersion: { agent, version: `${agent} 1.2.3`, executablePath: `/usr/bin/${agent}`, executableSha256: "c".repeat(64), ...(agent === "nexus" ? { packageSha256: "d".repeat(64) } : {}) },
     runs: 5,
@@ -311,6 +311,7 @@ test("--pairs rejects a peer run with a different model fingerprint or effective
       { dir: "budget", goose: { record: { budget: { steps: 41, minutes: 15 } } }, message: /peer conditions do not match.*task-1 run 1/i },
       { dir: "fingerprint", goose: { fingerprint: { weightsSha256: "b".repeat(64) } }, message: /model fingerprint differs for goose/i },
       { dir: "limits", goose: { config: { limits: { context: 65536, output: 4096, requests: 200, totalOutput: 100_000 } } }, message: /context\/output\/request\/aggregate-output limits differ for goose/i },
+      { dir: "resources", goose: { config: { resources: { cpuPercent: 400, memoryBytes: 17179869184, tasks: 4096, storageBytes: 21474836480, workspaceRoot: "/srv/nexus-qual/ws" } } }, message: /resource limits differ for goose/i },
     ]) {
       const root = path.join(out, mismatch.dir);
       const files = [

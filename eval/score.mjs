@@ -183,6 +183,10 @@ function validateMatchedPeers(paths) {
     if (!same(manifest.fingerprint, reference.fingerprint)) failPairs(`model fingerprint differs for ${agent}`);
     if (!same(manifest.config.limits ?? null, reference.config.limits ?? null)) failPairs(`context/output/request/aggregate-output limits differ for ${agent}`);
     if (!same(manifest.config.sampling ?? null, reference.config.sampling ?? null)) failPairs(`sampling settings differ for ${agent}`);
+    // The kernel resource contract (eval/resources.mjs) is part of the matched conditions: same CPU, memory, process
+    // and storage limits for every agent.
+    if (!manifest.config.resources) failPairs(`${agent} manifest has no resource contract`);
+    if (!same(manifest.config.resources, reference.config.resources)) failPairs(`resource limits differ for ${agent}`);
     if (records.some((r) => r.agent !== agent || r.agentVersion?.version !== manifest.agentVersion.version)) failPairs(`${agent} results do not match the manifest executable identity`);
   }
 
