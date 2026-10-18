@@ -361,7 +361,7 @@ test("hidden tests must be unreadable to the agent's own user", async () => {
   assert.deepEqual(wrapped.argv, ["-n", "-u", "nexus-eval", "--", "/usr/bin/bwrap", "--unshare-all", "--", "/runner/node"]);
   assert.throws(() => asUser("nexus-eval", "bwrap", []), /absolute/);
   const sudoers = fs.readFileSync(path.join(ROOT, "eval/host/provision.sh"), "utf8");
-  assert.match(sudoers, /NOPASSWD: \/usr\/bin\/bwrap\\n/, "the harness's sudo command and the provisioned rule name the same binary");
+  assert.match(sudoers, /ALL=\(%s\) !ALL\\n%s ALL=\(%s\) NOPASSWD: \/usr\/bin\/bwrap\\n/, "the explicit deny-all precedes the exact bwrap grant");
 });
 
 test("qualification remains fail-closed without enforced aggregate resource controls", async () => {

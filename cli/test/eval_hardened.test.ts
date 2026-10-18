@@ -35,6 +35,31 @@ test("test infrastructure is recognised across Python, Go, JS/TS and Rust layout
   }
 });
 
+test("hidden test staging preserves workspace files and mounts only copied hidden files", async () => {
+  const { stageHiddenFiles, hiddenOutputHasTests } = await import(path.join(ROOT, "eval/isolate.mjs"));
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "hidden-stage-"));
+  try {
+    const source = path.join(root, "task/hidden");
+    const ws = path.join(root, "workspace");
+    fs.mkdirSync(source, { recursive: true });
+    fs.mkdirSync(path.join(ws, "test"), { recursive: true });
+    fs.writeFileSync(path.join(source, "private.test.js"), "hidden\n");
+    fs.writeFileSync(path.join(ws, "existing.js"), "keep root\n");
+    fs.writeFileSync(path.join(ws, "test/existing.js"), "keep test\n");
+    assert.deepEqual(stageHiddenFiles(source, ws, ".", { readOnlyHidden: true }), ["private.test.js"]);
+    assert.deepEqual(stageHiddenFiles(source, ws, "test", { readOnlyHidden: true }), ["test/private.test.js"]);
+    assert.equal(fs.readFileSync(path.join(ws, "existing.js"), "utf8"), "keep root\n");
+    assert.equal(fs.readFileSync(path.join(ws, "test/existing.js"), "utf8"), "keep test\n");
+    assert.equal(fs.readFileSync(path.join(ws, "private.test.js"), "utf8"), "hidden\n");
+    assert.equal(fs.readFileSync(path.join(ws, "test/private.test.js"), "utf8"), "hidden\n");
+    assert.equal(hiddenOutputHasTests("Ran 0 tests"), false);
+    assert.equal(hiddenOutputHasTests("[no test files]"), false);
+    assert.equal(hiddenOutputHasTests("Ran 1 test"), true);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("only the agent's source changes reach the fresh check workspace; adversarial workspace state never does", async () => {
   const { applyAgentChanges } = await hardened();
   const base = fs.mkdtempSync(path.join(os.tmpdir(), "hardened-"));

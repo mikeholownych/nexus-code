@@ -11,14 +11,14 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 readonly HERE
 readonly ACCOUNT=nexus-eval
 readonly ACCOUNT_HOME=/var/lib/nexus-eval
-readonly SUDOERS=/etc/sudoers.d/90-nexus-eval
+readonly SUDOERS=/etc/sudoers.d/99-nexus-eval
 readonly RUNTIME=/opt/nexus-qual
 readonly LEDGER_DIR=/var/lib/nexus-qual-host
 readonly LEDGER="$LEDGER_DIR/ledger"
 readonly MARKER="# Managed by nexus-code eval/host/provision.sh"
 readonly RUNTIME_MARKER="$RUNTIME/.nexus-qual-managed"
 [[ $EUID -eq 0 ]] || { echo "run as root" >&2; exit 2; }
-[[ -f "$LEDGER" ]] || { echo "no provisioning ledger at $LEDGER; nothing was created by provision.sh" >&2; exit 1; }
+[[ ! -L "$LEDGER_DIR" && -d "$LEDGER_DIR" && "$(stat -c %u:%g:%a "$LEDGER_DIR")" == "0:0:700" && ! -L "$LEDGER" && -f "$LEDGER" && "$(stat -c %u:%g:%a "$LEDGER")" == "0:0:600" ]] || { echo "unsafe or missing provisioning ledger at $LEDGER" >&2; exit 1; }
 exec 9>"$LEDGER_DIR/lock"
 flock -n 9 || { echo "another provision or rollback is running" >&2; exit 1; }
 

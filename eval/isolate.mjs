@@ -233,16 +233,44 @@ export function runIsolatedProcess(spec, { outputLimit = 16_384, input = "", res
 export function grantRunAsAccess(user, targets) {
   if (!/^[a-z_][a-z0-9_-]{0,31}$/.test(user)) throw new Error("invalid evaluator account");
   const setfacl = "/usr/bin/setfacl";
+  const opUid = process.getuid();
   if (!fs.existsSync(setfacl)) throw new Error("setfacl is unavailable; refusing unsafe workspace permission changes");
   for (const target of targets) {
     const resolved = fs.realpathSync(target);
-    const result = spawnSync(setfacl, ["-R", "-m", `u:${user}:rwX`, resolved], { encoding: "utf8", timeout: 5000, env: { PATH: "/usr/bin:/bin" } });
+    const result = spawnSync(setfacl, ["-R", "-m", `u:${user}:rwX,u:${opUid}:rwX`, resolved], { encoding: "utf8", timeout: 5000, env: { PATH: "/usr/bin:/bin" } });
     if (result.status !== 0) throw new Error(`could not grant scoped evaluator access to disposable path (${result.status ?? "signal"})`);
     if (fs.statSync(resolved).isDirectory()) {
-      const defaults = spawnSync(setfacl, ["-m", `d:u:${user}:rwx`, resolved], { encoding: "utf8", timeout: 5000, env: { PATH: "/usr/bin:/bin" } });
+      const defaults = spawnSync(setfacl, ["-m", `d:u:${user}:rwx,d:u:${opUid}:rwx,d:m::rwx`, resolved], { encoding: "utf8", timeout: 5000, env: { PATH: "/usr/bin:/bin" } });
       if (defaults.status !== 0) throw new Error(`could not set scoped evaluator default ACL (${defaults.status ?? "signal"})`);
     }
   }
+}
+
+export function stageHiddenFiles(source, ws, relativeTarget, { readOnlyHidden = false } = {}) {
+  assertNoSymlinks(source);
+  const relFiles = [];
+  const walk = (dir, prefix = "") => {
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      const rel = prefix ? `${prefix}/${entry.name}` : entry.name;
+      if (entry.isDirectory()) walk(path.join(dir, entry.name), rel);
+      else if (entry.isFile()) relFiles.push(rel);
+    }
+  };
+  walk(source);
+  const readOnlySubpaths = [];
+  for (const relFile of relFiles) {
+    const relTargetFile = (!relativeTarget || relativeTarget === ".") ? relFile : path.posix.join(relativeTarget, relFile);
+    const destFile = confinedPath(ws, relTargetFile, { allowMissingLeaf: true });
+    if (readOnlyHidden) fs.rmSync(destFile, { recursive: true, force: true });
+    fs.mkdirSync(path.dirname(destFile), { recursive: true });
+    fs.cpSync(path.join(source, relFile), destFile, { verbatimSymlinks: true });
+    if (readOnlyHidden) readOnlySubpaths.push(relTargetFile);
+  }
+  return readOnlySubpaths;
+}
+
+export function hiddenOutputHasTests(output) {
+  return !/\[no test files\]|testing: warning: no tests to run|collected 0 items|no tests ran|Ran 0 tests|0 passed;\s*0 failed/i.test(output);
 }
 
 /** Execute a task-controlled shell command in a no-network, clear-environment namespace. */

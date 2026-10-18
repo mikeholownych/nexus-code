@@ -11,7 +11,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { startModelProxy } from "./model_proxy.mjs";
 import { asUser, corpusManifestProblem, corpusTaskRows, fetchModelEntry, hiddenTestIsolationProblem, modelFingerprint, nexusContextLimitArgs, nexusLimitsProblem, qualificationBudgetProblem, taskTreeDigest, validateTask } from "./validate.mjs";
-import { agentSandboxArgv, assertNoSymlinks, confinedPath, grantRunAsAccess, isolatedProcessArgv, runIsolated, runIsolatedProcess, sandboxAvailable } from "./isolate.mjs";
+import { agentSandboxArgv, assertNoSymlinks, confinedPath, grantRunAsAccess, hiddenOutputHasTests, isolatedProcessArgv, runIsolated, runIsolatedProcess, sandboxAvailable, stageHiddenFiles } from "./isolate.mjs";
 import { runBlackBoxOracle } from "./oracle.mjs";
 import { stageRepoWorkspace } from "./workspace.mjs";
 import { applyAgentChanges, cloneWorkspace } from "./hardened_check.mjs";
@@ -602,16 +602,11 @@ function runCheck(task, ws, check, hidden, { readOnlyHidden = false } = {}) {
       }),
     }));
   }
+  const readOnlySubpaths = [];
   if (hidden && check.dir) {
     const source = confinedPath(task.dir, check.dir);
-    assertNoSymlinks(source);
-    const relativeTarget = check.into ?? check.dir;
-    const destination = confinedPath(ws, relativeTarget, { allowMissingLeaf: true });
-    // Hardened: nothing the agent left at the oracle's path survives under the read-only mount.
-    if (readOnlyHidden) fs.rmSync(destination, { recursive: true, force: true });
-    fs.cpSync(source, destination, { recursive: true, verbatimSymlinks: true });
+    readOnlySubpaths.push(...stageHiddenFiles(source, ws, check.into ?? check.dir, { readOnlyHidden }));
   }
-  const readOnlySubpaths = hidden && check.dir && readOnlyHidden ? [check.into ?? check.dir] : [];
   return runIsolated(check.command, { cwd: ws, home: true, timeoutSec: check.timeoutSec ?? 300, outputLimit: 1_000_000, resources: config.resources ?? null, readOnlySubpaths })
     .then((r) => {
       const output = `${r.stdout}${r.stderr}`;
@@ -619,7 +614,8 @@ function runCheck(task, ws, check, hidden, { readOnlyHidden = false } = {}) {
       const kept = hidden && config.qualification === true
         ? JSON.stringify({ status: r.status, timedOut: r.timedOut, overflow: r.overflow, bytes: Buffer.byteLength(output), outputSha256: createHash("sha256").update(output).digest("hex") })
         : output.slice(-20_000);
-      return { pass: r.status === 0 && !r.timedOut && !r.overflow, status: r.status, timedOut: r.timedOut, overflow: r.overflow, output: kept, resources: r.resources ?? null, containmentProblem: r.containmentProblem ?? null };
+      const vacuousHiddenPass = hidden && readOnlyHidden && !hiddenOutputHasTests(output);
+      return { pass: r.status === 0 && !r.timedOut && !r.overflow && !vacuousHiddenPass, status: r.status, timedOut: r.timedOut, overflow: r.overflow, output: kept, resources: r.resources ?? null, containmentProblem: r.containmentProblem ?? null };
     });
 }
 
