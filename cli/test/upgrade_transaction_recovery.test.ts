@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
-import { spawnSync } from "node:child_process";
+import { spawnSync, spawn } from "node:child_process";
 import { verifyInstalledRuntime } from "../src/upgrade_health.js";
 import { writeJournal, readJournal, recoverUpgrade, createPreMigrationBackup, restoreConfigBackup, UpgradeJournalEntry } from "../src/upgrade_journal.js";
 import * as http from "node:http";
@@ -134,13 +134,14 @@ describe("complete private state/config backup restore",()=>{
 });
 
 describe("live transaction exceptions after each destructive boundary",()=>{
- for(const boundary of ["package_preserved","package_moved","provenance_written","launcher_switched","verifying_install"]){
+ for(const boundary of ["package_preserved","package_moved","provenance_written","launcher_switched","verifying_install","installed_wrong_version","kill_after_package_move"]){
   it(`restores the real previous same-version package after ${boundary}`,async()=>{
    const tmp=fs.mkdtempSync(path.join(os.tmpdir(),"nexus-live-transaction-"));
    const previousBase=process.env.NEXUS_RELEASE_BASE_URL, previousAttest=process.env.NEXUS_VERIFY_ATTESTATION;
    const prefix=path.join(tmp,"prefix"), install=path.join(prefix,"lib/nexus/v1.0.0"), packageDir=path.join(tmp,"stage/nexus");
    runtime(install,"v1.0.0","previous-real-package");runtime(packageDir,"v1.0.0","replacement-package");
    fs.mkdirSync(path.join(prefix,"bin"));fs.symlinkSync(path.join(install,"bin/nexus"),path.join(prefix,"bin/nexus"));
+   if (boundary === "installed_wrong_version") fs.writeFileSync(path.join(packageDir,"bin/nexus"), `#!/bin/sh\ncase "$0" in *.tmp-upgrade-*) echo v1.0.0;; *) echo v9.9.9;; esac\n`, { mode:0o755 });
    fs.writeFileSync(path.join(packageDir,"compatibility.json"),JSON.stringify(generateCompatibilityMetadata("v1.0.0","deadbeef")));
    const manifest=["VERSION","bin/nexus","lib/core/harness-core","lib/core/nexus-tui","lib/cli/dist/index.js","compatibility.json"].map(name=>crypto.createHash("sha256").update(fs.readFileSync(path.join(packageDir,name))).digest("hex")+"  "+name).join("\n");
    fs.writeFileSync(path.join(packageDir,"MANIFEST.sha256"),manifest);
@@ -156,7 +157,16 @@ describe("live transaction exceptions after each destructive boundary",()=>{
    try{
     const installed={version:"v1.0.0", normalizedVersion:"v1.0.0",semver:parseSemver("v1.0.0"),isPrerelease:false,provenance:"packaged" as const,installRoot:install,prefix,binLink:path.join(prefix,"bin/nexus"),writable:true};
     const comparison=compareInstallationWithRelease(installed,{tag_name:"v1.0.0",draft:false,prerelease:false,assets:[]},{force:true});
-    await assert.rejects(performUpgrade(comparison,{prefix,onProgress(stage){if(stage===boundary)throw new Error(`fault at ${boundary}`);}}),new RegExp(`fault at ${boundary}`));
+    if (boundary === "kill_after_package_move") {
+      const code = `import { performUpgrade } from './src/upgrade.ts'; await performUpgrade(${JSON.stringify(comparison)}, { prefix:${JSON.stringify(prefix)}, onProgress(stage){ if(stage==='package_moved') process.kill(process.pid,'SIGKILL'); } });`;
+      const child = spawn(process.execPath,["--import","tsx","--input-type=module","-e",code],{ cwd:path.resolve(import.meta.dirname || path.dirname(new URL(import.meta.url).pathname),".."), env:{...process.env}, stdio:"pipe" });
+      let diagnostics=""; child.stderr.on("data",data=>diagnostics+=data);
+      const exit = await new Promise<{code:number|null;signal:NodeJS.Signals|null}>((resolve,reject)=>{child.on("error",reject);child.on("exit",(code,signal)=>resolve({code,signal}));});
+      assert.equal(exit.signal,"SIGKILL",diagnostics);
+      assert.equal(recoverUpgrade(prefix).action,"rolled_back");
+    } else {
+      await assert.rejects(performUpgrade(comparison,{prefix,onProgress(stage){if(stage===boundary)throw new Error(`fault at ${boundary}`);}}), boundary === "installed_wrong_version" ? /Installed binary failed self-test/ : new RegExp(`fault at ${boundary}`));
+    }
     assert.equal(fs.readFileSync(path.join(install,"marker"),"utf8"),"previous-real-package");
     assert.equal(fs.realpathSync(path.join(prefix,"bin/nexus")),path.join(install,"bin/nexus"));
     assert.equal(readJournal(prefix)?.state,"rolled_back");
