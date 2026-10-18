@@ -52,7 +52,7 @@ The final G6 decision in §10 applies to promotion to the stable v1.0.0 release.
 
 ## 3. Gate checklist (G0–G4: automated acceptance IDs)
 
-Every ACC ID below is defined in the linked spec. The plan for each spec names the test that implements it. Each must pass in E1 from source at the exact commit intended for the RC tag, as specified in §1.1. These source gates do not replace the installed-RC qualification in §§4–8.
+Every ACC ID below is defined in the linked spec. The plan for each spec names the test that implements it. Source-applicable checks must pass in E1; environment-specific checks, including ACC-PROC-07 in E3, must pass in their declared environment. All run against the exact source commit intended for the RC tag, as specified in §1.1. These source gates do not replace the installed-RC qualification in §§4–8.
 
 | Gate | Acceptance IDs | Spec |
 |---|---|---|
