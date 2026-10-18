@@ -1,0 +1,11 @@
+# PR51 stale-lock concurrency review
+
+Disposition: REQUEST CHANGES at exact b6648e6223b9bfc4a354ee8c65c152b7dffa35c3. Reviewer codex-api-root did not author this changed lock algorithm; root did contribute the separate bounded compatibility policy and therefore does not claim independent acceptance of the whole upgrade slice.
+
+Fresh deterministic two-process probe ran on local WSL with isolated HOME/XDG state against an immutable archive of the reviewed journal/health modules. Both processes exited0. Both read the same dead holder, then barriers deliberately let A take and verify ownership and enter locked recovery before B overwrote the lock, verified its PID and entered too. A's final cleanup removed B's lock; B observed it absent while still inside recovery. Actual observations are in result.json. No gateway, private corpus, user installation or credentials accessed. No mike-dev test slot consumed.
+
+Scope: an invalid-journal fixture isolates the mutex path. The instrumented file-read barrier throws immediately on entry into the locked recovery body before any package operation. This proves concurrent critical-section entry and foreign-lock removal; it does not claim reproduced package data loss. The same lock algorithm precedes journal content validation for valid interrupted transactions.
+
+To reproduce: at a clean checkout of the exact reviewed commit, copy probe.cts to the checkout root (its module import is relative to cli/src). Create an isolated prefix/lib/nexus with .upgrade-journal.json containing {} and .upgrade.lock containing a confirmed nonexistent PID. Create an empty markers directory. Start two separate tsx processes with arguments A/B, the same prefix, and the same markers path. The barriers are bounded5seconds, require no timing sleeps to force ordering, and stop before package changes. Retain A/B exits and marker JSONs. The actual run's complete isolated source snapshot/harness remains /tmp/nexus-lock-review-b664-76c4ffkq on the review host.
+
+Required fix: hold mutual exclusion for the entire recovery operation, do not overwrite a new live owner, and do not unlink a different owner's lock. Add deterministic two-contender regression coverage and obtain a fresh independent review. Preserve completed-journal read-only startup behavior.

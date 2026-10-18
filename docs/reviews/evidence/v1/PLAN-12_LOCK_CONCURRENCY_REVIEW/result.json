@@ -1,0 +1,25 @@
+{
+  "sourceCommit": "b6648e6223b9bfc4a354ee8c65c152b7dffa35c3",
+  "host": "local WSL",
+  "bothEnteredCriticalRecovery": true,
+  "observations": {
+    "Bresult.json": {
+      "recovered": false,
+      "action": "manual_intervention",
+      "details": "Upgrade journal failed schema or path validation; no recovery action was taken."
+    },
+    "B-observation.json": {
+      "lockMissingWhileBInRecovery": true
+    },
+    "Aresult.json": {
+      "recovered": false,
+      "action": "manual_intervention",
+      "details": "Upgrade journal failed schema or path validation; no recovery action was taken."
+    },
+    "A-unlock-observation.json": {
+      "myPid": 76385,
+      "removedHolder": 76386
+    }
+  },
+  "scope": "Controlled invalid-journal fixture isolates locking: throws at locked recovery entry before package operations; tests exclusion ordering, not data-loss effects."
+}
