@@ -27,7 +27,7 @@ The release sequence has five distinct stages. Passing an earlier stage is a pre
 4. **Installed-RC qualification.** Install the workflow-produced RC package using the documented procedure and run the applicable product, provider, task-quality, terminal, installation, and independent-acceptance gates in §§4–8. Bind each result to both the RC source commit and installed package digest. If a source change or rebuilt artifact changes either identity, rerun every affected gate against the new candidate and retain prior results as historical evidence.
 5. **Stable promotion and publication.** After exact-RC acceptance and G6 pass, create a stable-version commit directly on the accepted RC commit, changing only the synchronized version metadata required for v1.0.0. Record both commits and the version-only diff. Run required source CI and all applicable source G0–G4 checks on this exact stable-version commit before tagging. If any other source changes, restart RC construction and qualification. Then create the `v1.0.0` tag on that checked commit and build a draft release. Keep its assets unpublished while verifying the stable artifact identity, provenance, package contents, installation, and publication metadata. Compare the stable package contents with the accepted RC; if packaged behavior or content differs beyond version-specific metadata, rerun affected installed-RC qualification gates and obtain independent acceptance for the stable artifact. Publish the draft only after these checks pass and the signed acceptance disposition is recorded. Record the published digests and provenance.
 
-The final G6 decision in §10 applies to promoting the accepted RC toward a stable release. It requires the applicable gates to pass for the accepted RC and authorizes the version-only stable commit and its source checks, followed by the stable tag and draft build; it does not waive source CI, artifact identity, installed-RC qualification, or any threshold. Public publication is a separate post-build gate in stage 5 above. The release workflow must keep stable assets in draft state until stable artifact checks pass. The current tag-triggered workflow publishes immediately and therefore cannot be used for stable publication until it supports this draft-then-publish sequence.
+The final G6 decision in §10 applies to promoting the accepted RC toward a stable release. It requires the applicable gates to pass for the accepted RC and authorizes the version-only stable commit and its source checks, followed by the stable tag and draft build; it does not waive source CI, artifact identity, installed-RC qualification, or any threshold. Public publication is a separate post-build gate in stage 5 above. The release workflow must keep stable assets in draft state until stable artifact checks pass. Source verification at integration 6a16cb6 confirms the tag-triggered release workflow now supports published RC prereleases and draft stable releases. The earlier immediate-stable-publication source blocker is resolved; an actual stable draft build, artifact verification, signed acceptance, and deliberate publication are still required and remain unproven until their run evidence is recorded.
 
 ## 1. Rules
 
@@ -68,7 +68,7 @@ Every ACC ID below is defined in the linked spec. The plan for each spec names t
 | Persistence | ACC-PER-01 to ACC-PER-07 | SPEC-08 |
 | Governance | ACC-GOV-01 to ACC-GOV-06 | SPEC-09 |
 | Verification | ACC-VER-01 to ACC-VER-09 | SPEC-11 |
-| Upgrade | ACC-UPG-01 to ACC-UPG-06 | SPEC-12 |
+| Upgrade | ACC-UPG-01 to ACC-UPG-14 | SPEC-12 |
 
 
 ### 3.1 Acceptance IDs defined in this file
@@ -241,10 +241,14 @@ The scorer output `verdict.md` lists each metric with its Wilson 95% interval, a
 | No Node / Node 12 | Same | Clear prerequisite message. HOME untouched. |
 | Upgrade alpha.2 → RC | Same, with the tag | Symlink swapped. Old version retained. User state intact. |
 | Rollback RC → alpha.2 | Same, with the old tag | Works. |
-| Repair | Delete a file in the version dir, then reinstall | Repaired (REQ-REL-105). |
+| Repair | Delete a file in the version dir, then reinstall | Repaired (REQ-REL-105). Same-version reinstall preserves working files if package fails verification. |
 | Uninstall (documented manual) | Commands from the quickstart | Only Nexus-owned paths removed. `~/.config/nexus` and `~/.nexus` retained. |
 | Checksum tamper | installer-smoke | Refused. The existing install is unchanged. |
 | Attestation | `gh attestation verify <tarball> -R mikeholownych/nexus-code` | PASS |
+| Upgrade self-test failure | `nexus upgrade` (broken candidate package) | Refused. Staging verified before switch; if post-switch verification fails, launcher atomically rolls back to previous target and journal records `rolled_back`. |
+| Upgrade crash recovery | `nexus upgrade --recover` | Idempotent recovery. Cleans incomplete staging, restores unverified launcher symlink, verifies functional installation. |
+| Backup restore | `nexus upgrade --restore-backup <state-backup-directory>` | Snapshot of configuration and complete durable state restored from a recognized private backup directory (`backup.json`, `state/`, optional `config/`), with strict 0600 file / 0700 directory modes. A canonical `config.env.bak.*` path restores configuration only. Arbitrary files and tar archives are rejected. |
+| Incompatible downgrade | `nexus upgrade --version <v> --allow-downgrade` (incompatible state schema) | Refused fail-closed with actionable state schema explanation. Existing installation unchanged. |
 
 ## 8. Independent acceptance (REQ-AGT-110, ACC-CONT-10)
 

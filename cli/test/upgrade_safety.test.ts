@@ -45,6 +45,15 @@ import {
   UpgradeJournalEntry,
 } from "../src/upgrade_journal.js";
 
+function completeRuntimeFixture(directory: string, version: string): void {
+  for (const sub of ["bin", "lib/core", "lib/cli/dist"]) fs.mkdirSync(path.join(directory, sub), { recursive:true });
+  fs.writeFileSync(path.join(directory, "VERSION"), version);
+  fs.writeFileSync(path.join(directory, "lib/cli/dist/index.js"), "// fixture CLI payload\n");
+  fs.writeFileSync(path.join(directory, "bin/nexus"), `#!/bin/sh\necho ${version}\n`, { mode:0o755 });
+  fs.writeFileSync(path.join(directory, "lib/core/harness-core"), `#!/bin/sh\necho ${version}\n`, { mode:0o755 });
+  fs.writeFileSync(path.join(directory, "lib/core/nexus-tui"), `#!/bin/sh\nif [ "$1" = --version ]; then echo ${version}; else echo NEXUS; fi\n`, { mode:0o755 });
+}
+
 describe("Download Origin, Redirect & Bounds Safety (REQ-REL-116, ACC-UPG-08)", () => {
   it("validates allowed release download origins", () => {
     // Official GitHub releases
@@ -386,7 +395,7 @@ describe("Pre-Migration Backups & Migration/Downgrade Safety (REQ-REL-116, ACC-U
 
     // Verify state backup
     assert.ok(backup.stateBackupDir);
-    const stateIndex = path.join(backup.stateBackupDir, "session-index.json");
+    const stateIndex = path.join(backup.stateBackupDir, "state", "sessions", "index.json");
     assert.ok(fs.existsSync(stateIndex));
     assert.equal(fs.statSync(stateIndex).mode & 0o777, 0o600);
   });
@@ -397,7 +406,8 @@ describe("Pre-Migration Backups & Migration/Downgrade Safety (REQ-REL-116, ACC-U
     const configEnv = path.join(configDir, "config.env");
     fs.writeFileSync(configEnv, "OLD_CONFIG=yes\n", { mode: 0o600 });
 
-    const backupFile = path.join(homeDir, "custom.bak");
+    const backupFile = path.join(homeDir, ".config", "nexus", "backups", "config.env.bak.fixture");
+    fs.mkdirSync(path.dirname(backupFile), { recursive:true });
     fs.writeFileSync(backupFile, "RESTORED_CONFIG=success\n", { mode: 0o600 });
 
     const restored = restoreConfigBackup(backupFile, homeDir);
@@ -514,7 +524,7 @@ describe("Machine-Readable Compatibility & Downgrade State Rejection (REQ-REL-11
   });
 
   it("applies legacy policy for releases lacking compatibility metadata", () => {
-    const compatResult = checkReleaseCompatibility("1.0.0", 1, null);
+    const compatResult = checkReleaseCompatibility("1.0.0", 1, null, "linux-x86_64", 1, "v0.1.0-alpha.2");
     assert.equal(compatResult.compatible, true);
     assert.equal(compatResult.isLegacy, true);
     assert.ok(compatResult.reasons[0].includes("legacy compatibility policy"));
@@ -641,6 +651,7 @@ describe("Upgrade Journal, Crash Recovery & PATH Shadowing (REQ-REL-116, ACC-UPG
       startedAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
     };
+    completeRuntimeFixture(v1Dir, "v1.0.0");
     writeJournal(tmpPrefix, entry);
 
     const outcome = recoverUpgrade(tmpPrefix);
@@ -702,7 +713,7 @@ describe("Upgrade Journal, Crash Recovery & PATH Shadowing (REQ-REL-116, ACC-UPG
     writeJournal(tmpPrefix, entry);
     const outcome = recoverUpgrade(tmpPrefix);
     assert.equal(outcome.recovered, false);
-    assert.match(outcome.details, /real contained directories/);
+    assert.match(outcome.details, /validation|real contained directories/);
     assert.equal(fs.readFileSync(path.join(outsideStage, "canary"), "utf8"), "must survive");
   });
 
@@ -746,7 +757,7 @@ describe("Upgrade Journal, Crash Recovery & PATH Shadowing (REQ-REL-116, ACC-UPG
     fs.mkdirSync(path.join(targetDir, "bin"), { recursive: true });
     fs.mkdirSync(binDir, { recursive: true });
     const sourceExecutable = path.join(sourceDir, "bin", "nexus");
-    fs.writeFileSync(sourceExecutable, "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+    completeRuntimeFixture(sourceDir, "v1.0.0");
     fs.writeFileSync(outside, `#!/bin/sh\nprintf executed > '${canary}'\nexit 0\n`, { mode: 0o755 });
     fs.symlinkSync(outside, path.join(targetDir, "bin", "nexus"));
     const binPath = path.join(binDir, "nexus");
@@ -815,7 +826,7 @@ describe("Upgrade Journal, Crash Recovery & PATH Shadowing (REQ-REL-116, ACC-UPG
     fs.mkdirSync(binDir, { recursive: true });
     const sourceExecutable = path.join(sourceDir, "bin", "nexus");
     const targetExecutable = path.join(targetDir, "bin", "nexus");
-    fs.writeFileSync(sourceExecutable, "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+    completeRuntimeFixture(sourceDir, "v1.0.0");
     fs.writeFileSync(targetExecutable, "#!/bin/sh\nexit 1\n", { mode: 0o755 });
     const binPath = path.join(binDir, "nexus");
     fs.symlinkSync(targetExecutable, binPath);
@@ -872,6 +883,7 @@ describe("Upgrade Journal, Crash Recovery & PATH Shadowing (REQ-REL-116, ACC-UPG
       startedAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
     };
+    completeRuntimeFixture(v1Dir, "v1.0.0");
     writeJournal(tmpPrefix, entry);
 
     const outcome = recoverUpgrade(tmpPrefix);
@@ -899,6 +911,8 @@ describe("Upgrade Journal, Crash Recovery & PATH Shadowing (REQ-REL-116, ACC-UPG
     const binNexus = path.join(binDir, "nexus");
     fs.symlinkSync(path.join(v2Dir, "bin", "nexus"), binNexus);
 
+    completeRuntimeFixture(v1Dir, "v1.0.0");
+    completeRuntimeFixture(v2Dir, "v1.1.0");
     const res = rollbackBinary(tmpPrefix);
     assert.equal(res.success, true);
     assert.equal(res.revertedTo, "v1.0.0");

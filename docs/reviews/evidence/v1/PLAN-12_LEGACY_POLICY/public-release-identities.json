@@ -1,0 +1,62 @@
+{
+  "0.1.0-alpha.1": {
+    "archiveSha256": "39548ab8b6ba4043e930f8a30d99ce6f9f787f68c8c46b1b10a9a2f1ea7e5ec8",
+    "files": {
+      "nexus/VERSION": {
+        "sha256": "a0a8d4cdb23761666524c8a9ac53717db26242a13572c47eb6c30f2ad7dc6b86",
+        "bytes": 15
+      },
+      "nexus/bin/nexus": {
+        "sha256": "408f0b08ad8596d143b89a6f88d9d206de8f608c9715f5de8cae10a0432bda94",
+        "bytes": 166
+      },
+      "nexus/lib/cli/package.json": {
+        "sha256": "cf9ca81428b5d498688789b3bb4510667a66ed16e6ac26d4b683a850f0a81fa8",
+        "bytes": 869,
+        "version": "0.1.0-alpha.1"
+      },
+      "nexus/lib/core/harness-core": {
+        "sha256": "60e4266f43e944bcb64ac5258b96f1516b80874a3f5033322aa577c9794209f6",
+        "bytes": 6770640
+      },
+      "nexus/lib/core/nexus-tui": {
+        "sha256": "3075bee74abc5c6810cb65add2b5b43f9fa78fe55aecc24f0760af3ef436b327",
+        "bytes": 4935848
+      }
+    },
+    "archiveUrl": "https://github.com/mikeholownych/nexus-code/releases/download/v0.1.0-alpha.1/nexus-linux-x86_64-v0.1.0-alpha.1.tar.gz",
+    "checksumsUrl": "https://github.com/mikeholownych/nexus-code/releases/download/v0.1.0-alpha.1/SHA256SUMS",
+    "inspection": "Fresh download; archive digest matched published SHA256SUMS; metadata/files hashed without executing package",
+    "inspectedAt": "2026-10-18T17:45:36.730689+00:00"
+  },
+  "0.1.0-alpha.2": {
+    "archiveSha256": "56227e58366d21f67bfb46fde4d0e916cadf4c5eed1fdc65d39e01b1d57c60c7",
+    "files": {
+      "nexus/VERSION": {
+        "sha256": "7ef49feb99240842ca472cdfb21889ef1c2e8ace984634e470186ddea9654b83",
+        "bytes": 15
+      },
+      "nexus/bin/nexus": {
+        "sha256": "408f0b08ad8596d143b89a6f88d9d206de8f608c9715f5de8cae10a0432bda94",
+        "bytes": 166
+      },
+      "nexus/lib/cli/package.json": {
+        "sha256": "a137d3dde08eb3e594f69c3949b1bf5b27599b13cecff83e9e84767495ff7232",
+        "bytes": 869,
+        "version": "0.1.0-alpha.2"
+      },
+      "nexus/lib/core/harness-core": {
+        "sha256": "60e4266f43e944bcb64ac5258b96f1516b80874a3f5033322aa577c9794209f6",
+        "bytes": 6770640
+      },
+      "nexus/lib/core/nexus-tui": {
+        "sha256": "3075bee74abc5c6810cb65add2b5b43f9fa78fe55aecc24f0760af3ef436b327",
+        "bytes": 4935848
+      }
+    },
+    "archiveUrl": "https://github.com/mikeholownych/nexus-code/releases/download/v0.1.0-alpha.2/nexus-linux-x86_64-v0.1.0-alpha.2.tar.gz",
+    "checksumsUrl": "https://github.com/mikeholownych/nexus-code/releases/download/v0.1.0-alpha.2/SHA256SUMS",
+    "inspection": "Fresh download; archive digest matched published SHA256SUMS; metadata/files hashed without executing package",
+    "inspectedAt": "2026-10-18T17:45:36.730755+00:00"
+  }
+}
