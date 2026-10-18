@@ -58,24 +58,31 @@ Composition and schema: `bin/check_schema.mjs` OK for all 40 (authors' manifests
 
 No task was selected, dropped, or adjusted based on any qualification outcome. No validator was loosened. Pilot/development material (`/home/mike/nexus-heldout/`) was never an input and is not part of this corpus.
 
-## 5. Open items that gate *use* of this corpus (not the seal)
+## 5. Open items that gate *use* of this corpus (updated 2026-10-18T12:10Z)
 
-1. **Harness oracle exposure (qualification blocker, filed 03:05Z to the `eval/run.mjs` owner).** `prepareWorkspace` stages repo tasks with `git clone --shared <cache>` + checkout, leaving all upstream refs and an alternates pointer in the candidate workspace. Because baselines are parents of upstream fixes, `git log origin/HEAD -p` exposes the solution. Required: fetch only the pinned commit's ancestry into a fresh `git init` workspace, no remotes, no alternates, with negative tests. T2 results obtained before this lands are not qualification evidence.
-2. Qualification resource limits (CPU, memory, process count, workspace storage) remain unimplemented; `eval/run.mjs` preflight is fail-closed (claim log 02:11Z, 02:31Z).
-3. Peer calibration, Node runtime parity and the frozen run record (ACCEPTANCE §6.1) are unchanged by this seal.
+1. **Harness history leak — CLOSED (`96aeef2`, PR #18; canary `6a334fa`, PR #26).** `eval/workspace.mjs` stages external-repo tasks via `git init` + ancestor-only fetch (`--no-tags`, `--no-write-fetch-head`), with no `--shared`, alternates, remotes, tags, or post-baseline commits.
+2. **Kernel resource contract — SOURCE-IMPLEMENTED (`91406bd`, PR #19; dedicated-tmpfs preflight `6a334fa`, PR #26).** Host provisioning (`eval/host/provision.sh`, PR #31) and custodian reference calibration / resource-profile freeze remain required before running T2/T3/T4 qualification.
+3. **Hardened SWE-bench hidden-test execution boundary (`DEC-05` Amendment 2026-10-18b, PR #33).** All 40 T2 tasks in `heldout-v2` are pinned external repositories across Go, Rust, Python, and JavaScript that use native package test runners (`hidden: { dir, into, command }` and `regression: { command }`). Under the owner's 2026-10-18 decision (`DEC-05` Amendment 2026-10-18b; `SPEC-10` §3), the candidate agent runs in a separate Bubblewrap namespace (`--tmpfs /home`, store unmounted and DAC-blocked) before hidden tests are ever copied; after the agent exits, the harness re-stages a fresh baseline checkout without invoking `git` on candidate state, copies only allowlisted source changes (discarding test infrastructure/data and refusing test-runner manifest edits), bind-mounts the copied hidden test files read-only, runs `regression` in a separate workspace copy, and redacts `hidden.log` in qualification mode to `{ status, timedOut, overflow, bytes, outputSha256 }`. **The custodian explicitly accepts this hardened post-agent execution boundary for `heldout-v2`.**
+4. Peer calibration, Node runtime parity and the frozen run record (ACCEPTANCE §6.1) are unchanged by this seal.
 
-## 7. Store access control (added 2026-10-18T03:15Z after independent review of PR #16)
+## 7. Store access control and root-owned DAC boundary (updated 2026-10-18T10:38Z / 12:10Z)
 
-The independent reviewer (codex-lead, claim log 03:09:45Z) found the store root at mode 0775. Tightened and verified by the custodian:
+After initial tightening to `0700` `mike:mike` (03:15Z), the coordinator noted at 10:36Z that implementation agent shells also run as uid `mike` (`1000`). At 10:38Z the custodian transferred ownership of the sealed T2 store, the T2 quarantine, and the sealed T3 store to `root:root` with mode `0700` on store roots and `0500` read-only on `tasks/` and `reference/`:
 
 ```
-drwx------ mike:mike /home/mike/nexus-heldout-v2
-dr-x------ mike:mike /home/mike/nexus-heldout-v2/tasks
-dr-x------ mike:mike /home/mike/nexus-heldout-v2/reference
-drwx------ mike:mike /home/mike/nexus-heldout-v2-quarantine
+drwxr-xr-x 755 root:root /
+drwxr-xr-x 755 root:root /home
+drwxr-x--- 750 mike:mike /home/mike
+drwx------ 700 root:root /home/mike/nexus-heldout-v2
+dr-x------ 500 root:root /home/mike/nexus-heldout-v2/tasks
+dr-x------ 500 root:root /home/mike/nexus-heldout-v2/reference
+drwx------ 700 root:root /home/mike/nexus-heldout-v2-quarantine
+drwx------ 700 root:root /home/mike/nexus-heldout-t3
+dr-x------ 500 root:root /home/mike/nexus-heldout-t3/tasks
+dr-x------ 500 root:root /home/mike/nexus-heldout-t3/reference
 ```
 
-`find` over the store (excluding `work/`) reports no file readable by group or other, and no writable file under `tasks/` or `reference/`. The seal was re-derived after the permission change: `bin/seal.mjs` still reports 40/40 and the sealed manifest's sha256 is unchanged (`50895b84…`). Limits of this proof: the host is a single-user machine; agents run as the same Unix user, so confidentiality against implementing agents rests on the recorded isolation rules and the per-session access audits in §2, not on file permissions. The sealed manifest's hashes let any later leak be detected by comparison.
+Verified as uid `mike` (`1000`): `ls /home/mike/nexus-heldout-v2` and `ls /home/mike/nexus-heldout-t3` fail with `Permission denied`. Verified inside `agentSandboxArgv` (`eval/isolate.mjs`): `/home/mike/nexus-heldout-v2`, `/home/mike/nexus-heldout-v2/tasks`, `/home/mike/nexus-heldout-v2/reference`, and `/home/mike/nexus-heldout-v2-quarantine` all return `ENOENT` (`--tmpfs /home` hides `/home/mike` contents). Re-derived all 40 `task_sha256` and `hidden_sha256` digests against `eval/heldout-manifest.json`: 40/40 match (`50895b84a604fbfd45ed82e29cbef4ba795d7fffbe6611af23bfbc9851f3e89b`). **Custodian disposition: SEALED-MANIFEST CUSTODY ACCEPTED.**
 
 ## 6. Claim-log pointers
 
