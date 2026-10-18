@@ -12,7 +12,7 @@ REQ-AGT-118 requires a conservative floor of at least one token per CJK, Hangul,
 
 The estimator implements the script and encoded-data rules. The fixture retains 14 named corpora and marks exactly two floor-bound cases. The calibration test requires the complete named corpus set, preserves the under-count guard, enforces the 1.5× band for non-floor-bound cases, checks exact floor counts for flagged cases, and pins the exception set to the CJK sentence and Hangul corpora. Separate tests exercise digit/script/base64 behavior and llama.cpp/vLLM tokenize response shapes.
 
-An independent read-only reviewer accepted the DEC-17 amendment and these source-level acceptance assertions. That reviewer did not rerun the test; the execution below was performed separately by the coordinator.
+The source-level review and disposition in this record were performed by `codex-lead`, who did not author the token implementation or DEC-17 amendment. The separate read-only DEC-17 amendment review is recorded in [independent-review-dec17.md](../GOV_DEC_AMENDMENTS/independent-review-dec17.md); it returned **APPROVE-WITH-ISSUES**, with the dispositions recorded in [verification.md](../GOV_DEC_AMENDMENTS/verification.md). The source reviewer did not rerun the test; the execution below was performed separately by the coordinator.
 
 ## Exact-revision test evidence
 
@@ -24,6 +24,6 @@ An independent read-only reviewer accepted the DEC-17 amendment and these source
 
 ## Disposition and limits
 
-**ACCEPT for source-level REQ-AGT-118 / ACC-VER-07 evidence at `2c70d39`.** The recorded accuracy exceptions are preserved; the tests do not claim every corpus is within 1.5×. The exact-revision test run and independent review satisfy the ledger's stated pending evidence conditions. The REQ-AGT-118 row remains `partial` until its current owner reconciles the ledger to this record.
+**ACCEPT for source-level REQ-AGT-118 / ACC-VER-07 evidence at `2c70d39`.** The recorded accuracy exceptions are preserved; the tests do not claim every corpus is within 1.5×. At `2c70d39`, the ledger row was still `partial` pending reconciliation. PR #12 subsequently reconciled the row to `tested` at `d2c4bfc`; see [the post-integration governance record](../GOV_DEC_AMENDMENTS/post-integration-2026-10-18.md). This source-level disposition does not establish installed-RC behavior or final product acceptance.
 
 This is source-level test and review evidence only. It does not establish installed-RC behavior, fresh tokenizer measurement, live provider behavior, or final product qualification.
