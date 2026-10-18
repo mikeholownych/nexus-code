@@ -58,6 +58,7 @@ export function readJournal(prefix: string): UpgradeJournalEntry | null {
   const journalPath = getJournalPath(prefix);
   if (!fs.existsSync(journalPath)) return null;
   try {
+    if (!fs.lstatSync(journalPath).isFile() || fs.realpathSync(journalPath) !== path.resolve(journalPath)) return null;
     const raw = fs.readFileSync(journalPath, "utf8");
     const data = JSON.parse(raw);
     if (isValidJournal(data, prefix)) {
@@ -141,8 +142,10 @@ export function createPreMigrationBackup(homeDir: string = process.env.HOME || "
   // 1. Config backup
   const configEnv = path.join(homeDir, ".config", "nexus", "config.env");
   if (fs.existsSync(configEnv)) {
+    if (!fs.lstatSync(configEnv).isFile() || fs.realpathSync(configEnv) !== path.resolve(configEnv)) throw new Error("Configuration backup source is redirected");
     const backupDir = path.join(homeDir, ".config", "nexus", "backups");
     fs.mkdirSync(backupDir, { recursive: true, mode: 0o700 });
+    if (fs.realpathSync(backupDir) !== path.resolve(backupDir)) throw new Error("Configuration backup directory is redirected");
     const backupFile = path.join(backupDir, `config.env.bak.${timestamp}`);
     fs.copyFileSync(configEnv, backupFile);
     fs.chmodSync(backupFile, 0o600);
@@ -154,6 +157,7 @@ export function createPreMigrationBackup(homeDir: string = process.env.HOME || "
   if (fs.existsSync(stateDir)) {
     const stateBackupsDir = path.join(stateDir, "backups");
     fs.mkdirSync(stateBackupsDir, { recursive: true, mode: 0o700 });
+    if (fs.realpathSync(stateBackupsDir) !== path.resolve(stateBackupsDir)) throw new Error("State backup directory is redirected");
     const backupDest = path.join(stateBackupsDir, `state-backup-${timestamp}`);
     fs.mkdirSync(backupDest, { recursive: true, mode: 0o700 });
 
@@ -194,6 +198,7 @@ export function restoreConfigBackup(backupPath: string, homeDir: string = proces
     // and name. Archives and arbitrary files must never become config.env.
     if (path.dirname(resolved) !== path.join(configRoot, "backups") || !/^config\.env\.bak\.[A-Za-z0-9T_.-]+$/.test(path.basename(resolved)) || !fs.lstatSync(resolved).isFile()) return false;
     fs.mkdirSync(configRoot, { recursive:true, mode:0o700 });
+    if (fs.realpathSync(configRoot) !== path.resolve(configRoot)) return false;
     const target = path.join(configRoot, "config.env");
     if (fs.existsSync(target) && (!fs.lstatSync(target).isFile() || fs.realpathSync(target) !== target)) return false;
     fs.copyFileSync(resolved, target);

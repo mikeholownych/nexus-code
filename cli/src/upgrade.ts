@@ -925,6 +925,7 @@ export async function performUpgrade(
 
   fs.mkdirSync(libNexus, { recursive: true });
   fs.mkdirSync(binDir, { recursive: true });
+  if (fs.realpathSync(libNexus) !== path.resolve(libNexus) || fs.realpathSync(binDir) !== path.resolve(binDir)) throw new Error("Managed installation roots must not be redirected by symlinks.");
 
   // 1. Concurrency lock
   const lockFile = path.join(libNexus, ".upgrade.lock");
@@ -1138,7 +1139,7 @@ export async function performUpgrade(
     if (fs.existsSync(linkPath) && fs.lstatSync(linkPath).isSymbolicLink()) {
       const oldTarget = fs.readlinkSync(linkPath);
       const expectedPrefix = path.join(prefix, "lib", "nexus");
-      if (!path.resolve(binDir, oldTarget).startsWith(expectedPrefix)) {
+      if (!path.resolve(binDir, oldTarget).startsWith(`${expectedPrefix}${path.sep}`)) {
         throw new Error(`${linkPath} points outside the Nexus installation (${oldTarget}); left it unchanged.`);
       }
     }

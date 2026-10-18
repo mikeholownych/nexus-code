@@ -252,7 +252,7 @@ export function checkReleaseCompatibility(
     return {
       compatible: reasons.length === 0,
       isLegacy: knownLegacy,
-      reasons: reasons.length ? reasons : ["Target release lacks compatibility metadata; proceeding under the explicit published-alpha schema-1 Linux compatibility policy. Runtime and archive verification remain required."],
+      reasons: reasons.length ? reasons : ["Target release lacks compatibility metadata; proceeding under the explicit published-alpha legacy compatibility policy (schema-1 Linux). Runtime and archive verification remain required."],
     };
   }
 
@@ -265,6 +265,10 @@ export function checkReleaseCompatibility(
       reasons: [`Malformed compatibility metadata: ${validation.errors.join("; ")}`],
       metadata: targetMetadata,
     };
+  }
+
+  if (targetVersion && targetMetadata.version.replace(/^[vV]/, "") !== targetVersion.replace(/^[vV]/, "")) {
+    reasons.push(`Compatibility metadata version ${targetMetadata.version} does not match target release ${targetVersion}.`);
   }
 
   // 1. Platform support check

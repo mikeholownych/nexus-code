@@ -32,3 +32,9 @@ test("modern release remains eligible with validated compatibility metadata", ()
   const metadata = generateCompatibilityMetadata("1.0.0", "abcdef0123456789");
   assert.equal(checkReleaseCompatibility("1.0.0", 1, metadata, "linux-x86_64", 1, "1.0.0").compatible, true);
 });
+
+test("embedded metadata binds to the requested target even without detached metadata", () => {
+  const result = checkReleaseCompatibility("1.0.0", 1, generateCompatibilityMetadata("1.0.0", "deadbeef"), "linux-x86_64", 1, "v2.0.0");
+  assert.equal(result.compatible, false);
+  assert.ok(result.reasons.some(reason => reason.includes("does not match target release")));
+});
