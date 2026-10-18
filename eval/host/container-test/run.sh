@@ -41,3 +41,25 @@ $P >/tmp/o 2>&1 && grep -q "^account nexus-eval uid=" /var/lib/nexus-qual-host/l
 # 7 stale ledger: account recreated with another uid
 umount /srv/nexus-qual/ws 2>/dev/null; userdel -r nexus-eval; useradd --system --uid 990 -d /var/lib/nexus-eval -s /usr/sbin/nologin nexus-eval
 $R >/tmp/o 2>&1; id nexus-eval >/dev/null 2>&1 && ok "7 rollback left a re-created account (uid changed)" || bad "7 rollback deleted a re-created account"
+# 8 stale pending runtime dir is neither adopted nor purged
+userdel -r nexus-eval 2>/dev/null; rm -rf /var/lib/nexus-qual-host /opt/nexus-qual /srv/nexus-qual /etc/sudoers.d/90-nexus-eval /etc/systemd/system/*.mount
+install -d -m 0700 /var/lib/nexus-qual-host; printf 'pending dir /opt/nexus-qual\n' > /var/lib/nexus-qual-host/ledger; chmod 600 /var/lib/nexus-qual-host/ledger
+mkdir -p /opt/nexus-qual && echo data > /opt/nexus-qual/operator-file
+$P >/tmp/o 2>&1 && bad "8a adopted a stale-pending runtime dir" || ok "8a refused a runtime dir created after an interrupted run"
+$R --purge-runtime >/tmp/o 2>&1; [[ -f /opt/nexus-qual/operator-file ]] && ok "8b purge left the operator's runtime dir" || bad "8b purge deleted the operator's runtime dir"
+rm -rf /opt/nexus-qual /var/lib/nexus-qual-host
+# 9 dangling symlink at the sudoers path
+ln -s /tmp/elsewhere-sudoers /etc/sudoers.d/90-nexus-eval
+$P >/tmp/o 2>&1 && bad "9a wrote through a dangling sudoers symlink" || ok "9a refused a dangling sudoers symlink"
+[[ ! -e /tmp/elsewhere-sudoers ]] && ok "9b nothing written through the link" || bad "9b"
+rm -f /etc/sudoers.d/90-nexus-eval; rm -rf /var/lib/nexus-qual-host
+# 10 a sudoers file edited after provisioning survives rollback
+$P >/tmp/o 2>&1 || { bad "10 provision"; cat /tmp/o; }
+echo "# operator note" >> /etc/sudoers.d/90-nexus-eval
+$R >/tmp/o 2>&1; [[ -f /etc/sudoers.d/90-nexus-eval ]] && ok "10 rollback left a sudoers file whose content changed" || bad "10 rollback deleted an edited sudoers file"
+rm -f /etc/sudoers.d/90-nexus-eval
+# 11 a directory rollback could not remove stays recorded
+userdel -r nexus-eval 2>/dev/null; rm -rf /var/lib/nexus-qual-host /opt/nexus-qual /srv/nexus-qual /etc/systemd/system/*.mount
+$P >/tmp/o 2>&1 || { bad "11 provision"; cat /tmp/o; }
+umount /srv/nexus-qual/ws; touch /srv/nexus-qual/ws/leftover; mount -t tmpfs tmpfs /srv/nexus-qual/ws -o size=1m 2>/dev/null; umount /srv/nexus-qual/ws
+$R >/tmp/o 2>&1; grep -qxF "dir /srv/nexus-qual/ws" /var/lib/nexus-qual-host/ledger 2>/dev/null && ok "11 non-empty directory kept in the ledger" || bad "11 ledger forgot a directory it could not remove"

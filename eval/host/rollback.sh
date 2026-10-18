@@ -16,6 +16,7 @@ readonly RUNTIME=/opt/nexus-qual
 readonly LEDGER_DIR=/var/lib/nexus-qual-host
 readonly LEDGER="$LEDGER_DIR/ledger"
 readonly MARKER="# Managed by nexus-code eval/host/provision.sh"
+readonly RUNTIME_MARKER="$RUNTIME/.nexus-qual-managed"
 [[ $EUID -eq 0 ]] || { echo "run as root" >&2; exit 2; }
 [[ -f "$LEDGER" ]] || { echo "no provisioning ledger at $LEDGER; nothing was created by provision.sh" >&2; exit 1; }
 exec 9>"$LEDGER_DIR/lock"
@@ -25,19 +26,23 @@ workspace_root=$(jq -er .workspaceRoot "$HERE/resource-profile.json")
 workspace_parent="$(dirname "$workspace_root")"
 unit="$(systemd-escape -p --suffix=mount "$workspace_root")"
 unit_file="/etc/systemd/system/$unit"
-has() { grep -qxF "$1" "$LEDGER" || grep -qxF "pending $1" "$LEDGER"; }
-marked() { head -n 1 "$1" 2>/dev/null | grep -qxF "$MARKER"; }
+has() { grep -qxF "$1" "$LEDGER"; }   # confirmed entries only
+# A file is removed only if it is a regular marked file whose content still matches the recorded digest.
+ours_file() {
+  [[ -f "$1" && ! -L "$1" ]] && head -n 1 "$1" | grep -qxF "$MARKER" || return 1
+  has "file $1 sha256=$(sha256sum "$1" | cut -d' ' -f1)"
+}
 
 if id -u "$ACCOUNT" >/dev/null 2>&1 && pgrep -u "$ACCOUNT" >/dev/null 2>&1; then echo "processes still run as $ACCOUNT; stop the evaluation first" >&2; exit 1; fi
 
 # The mount comes down first, so an abort leaves everything else as provisioned.
-if has "file $unit_file" && marked "$unit_file"; then
+if ours_file "$unit_file"; then
   systemctl disable --now "$unit" 2>/dev/null || true
   if findmnt --mountpoint "$workspace_root" >/dev/null; then echo "$workspace_root is still mounted (busy?); nothing removed" >&2; exit 1; fi
   rm -f "$unit_file"
   systemctl daemon-reload
 fi
-if has "file $SUDOERS" && marked "$SUDOERS"; then rm -f "$SUDOERS"; fi
+if ours_file "$SUDOERS"; then rm -f "$SUDOERS"; fi
 visudo -cq
 
 # The account only if it is still the one this procedure created (same uid and home as recorded).
@@ -51,12 +56,13 @@ if [[ -n "$recorded" ]] && id -u "$ACCOUNT" >/dev/null 2>&1; then
 fi
 
 # Directories: only the exact paths provision.sh creates, children before parents, and only when empty.
+kept=()
 for dir in "$workspace_root" "$workspace_parent"; do
-  if has "dir $dir" && [[ -d "$dir" && ! -L "$dir" ]]; then rmdir "$dir" 2>/dev/null || echo "left non-empty $dir" >&2; fi
+  if has "dir $dir" && [[ -d "$dir" && ! -L "$dir" ]]; then rmdir "$dir" 2>/dev/null || { echo "left non-empty $dir" >&2; kept+=("dir $dir"); }; fi
 done
-keep_runtime=false
+# The runtime is purged only if confirmed in the ledger and still carrying the procedure's marker file.
 if has "dir $RUNTIME" && [[ -d "$RUNTIME" && ! -L "$RUNTIME" ]]; then
-  if [[ "${1:-}" == --purge-runtime ]]; then rm -rf --one-file-system "$RUNTIME"; else keep_runtime=true; fi
+  if [[ "${1:-}" == --purge-runtime && -f "$RUNTIME_MARKER" ]]; then rm -rf --one-file-system "$RUNTIME"; else kept+=("dir $RUNTIME"); fi
 fi
-if $keep_runtime; then printf 'dir %s\n' "$RUNTIME" > "$LEDGER"; else rm -f "$LEDGER" "$LEDGER_DIR/state"; fi
+if ((${#kept[@]})); then printf '%s\n' "${kept[@]}" > "$LEDGER"; chmod 0600 "$LEDGER"; else rm -rf "$LEDGER_DIR"; fi
 echo "rolled back qualification host provisioning"

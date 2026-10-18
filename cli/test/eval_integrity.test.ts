@@ -352,9 +352,13 @@ test("hidden tests must be unreadable to the agent's own user", async () => {
   assert.match(hiddenTestIsolationProblem({ qualification: true }, tasks), /need runAs/);
   assert.match(hiddenTestIsolationProblem({ runAs: "nexus-eval" }, tasks), /evaluator account|setfacl/);
   assert.match(hiddenTestIsolationProblem({ runAs: "bad user;" }, tasks), /not a valid user name/);
-  const wrapped = asUser("nexus-eval", "node", ["index.js", "run"], { HOME: "/tmp/h", PATH: "/usr/bin" });
-  assert.equal(wrapped.cmd, "sudo");
-  assert.deepEqual(wrapped.argv, ["-n", "-u", "nexus-eval", "--", "env", "-i", "HOME=/tmp/h", "PATH=/usr/bin", "node", "index.js", "run"]);
+  const wrapped = asUser("nexus-eval", "/usr/bin/bwrap", ["--unshare-all", "--", "/runner/node"]);
+  // Exactly the form the provisioned sudoers rule permits: no env wrapper that would need an any-command rule.
+  assert.equal(wrapped.cmd, "/usr/bin/sudo");
+  assert.deepEqual(wrapped.argv, ["-n", "-u", "nexus-eval", "--", "/usr/bin/bwrap", "--unshare-all", "--", "/runner/node"]);
+  assert.throws(() => asUser("nexus-eval", "bwrap", []), /absolute/);
+  const sudoers = fs.readFileSync(path.join(ROOT, "eval/host/provision.sh"), "utf8");
+  assert.match(sudoers, /NOPASSWD: \/usr\/bin\/bwrap\\n/, "the harness's sudo command and the provisioned rule name the same binary");
 });
 
 test("qualification remains fail-closed without enforced aggregate resource controls", async () => {
