@@ -108,8 +108,13 @@ fi
 
 # 2. The evaluator account: a system user with no login shell and a private home it never needs for runs.
 if ! id -u "$ACCOUNT" >/dev/null 2>&1; then
+  free_uid=""
+  for u in $(seq 985 -1 900); do
+    if ! id -u "$u" >/dev/null 2>&1 && ! pgrep -u "$u" >/dev/null 2>&1; then free_uid="$u"; break; fi
+  done
+  [[ -n "$free_uid" ]] || { echo "no free system uid in 900..985" >&2; exit 1; }
   pending "account $ACCOUNT"
-  useradd --system --home-dir "$ACCOUNT_HOME" --create-home --shell /usr/sbin/nologin "$ACCOUNT"
+  useradd --system --uid "$free_uid" --home-dir "$ACCOUNT_HOME" --create-home --shell /usr/sbin/nologin "$ACCOUNT"
 fi
 if has "pending account $ACCOUNT"; then confirm "$(account_line)"; drop "pending account $ACCOUNT"; fi
 chmod 0700 "$ACCOUNT_HOME"

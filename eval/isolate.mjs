@@ -260,6 +260,11 @@ export function stageHiddenFiles(source, ws, relativeTarget, { readOnlyHidden = 
   const readOnlySubpaths = [];
   for (const relFile of relFiles) {
     const relTargetFile = (!relativeTarget || relativeTarget === ".") ? relFile : path.posix.join(relativeTarget, relFile);
+    const segments = relTargetFile.split("/");
+    if (path.posix.isAbsolute(relTargetFile) || segments.some((segment) => !segment || segment === "..")) {
+      throw new Error(`invalid hidden test target path: ${relTargetFile}`);
+    }
+    fs.mkdirSync(path.dirname(path.join(ws, relTargetFile)), { recursive: true });
     const destFile = confinedPath(ws, relTargetFile, { allowMissingLeaf: true });
     if (readOnlyHidden) fs.rmSync(destFile, { recursive: true, force: true });
     fs.mkdirSync(path.dirname(destFile), { recursive: true });

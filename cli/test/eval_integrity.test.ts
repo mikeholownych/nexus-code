@@ -353,7 +353,7 @@ test("hidden tests must be unreadable to the agent's own user", async () => {
   fs.chmodSync(tasks, 0o755);
   assert.equal(hiddenTestIsolationProblem({}, tasks), null, "development runs may run as the operator");
   assert.match(hiddenTestIsolationProblem({ qualification: true }, tasks), /need runAs/);
-  assert.match(hiddenTestIsolationProblem({ runAs: "nexus-eval" }, tasks), /evaluator account|setfacl/);
+  assert.match(hiddenTestIsolationProblem({ runAs: "nexus-eval" }, tasks), /evaluator account|setfacl|sandboxRuntimePaths/);
   assert.match(hiddenTestIsolationProblem({ runAs: "bad user;" }, tasks), /not a valid user name/);
   const wrapped = asUser("nexus-eval", "/usr/bin/bwrap", ["--unshare-all", "--", "/runner/node"]);
   // Exactly the form the provisioned sudoers rule permits: no env wrapper that would need an any-command rule.
