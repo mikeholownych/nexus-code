@@ -393,8 +393,8 @@ export function hiddenOutputHasTests(output) {
   const hasPassedCount = /\b[1-9]\d*\s+passed\b/i.test(output);
   const hasPyUnittestOk = /^Ran\s+[1-9]\d*\s+tests?\b[\s\S]*?\bOK\b/m.test(output);
   const hasNodeTestPass = /(?:ℹ|✔|#)\s*pass\s+[1-9]\d*|^ok\s+[1-9]\d*\s+-/m.test(output);
-  const hasHiddenBanner = /\b(?:all|hidden)\b[^\n]*\b(?:passed|ok|identical)\b/i.test(output);
-  return hasGoOk || hasPassedCount || hasPyUnittestOk || hasNodeTestPass || hasHiddenBanner;
+  const hasValidatorSummary = /\b(?:all|hidden)\b[^\n]*\b(?:passed|ok|identical)\b/i.test(output);
+  return hasGoOk || hasPassedCount || hasPyUnittestOk || hasNodeTestPass || hasValidatorSummary;
 }
 
 /** Execute a task-controlled shell command in a no-network, clear-environment namespace. */

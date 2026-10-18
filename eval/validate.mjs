@@ -41,10 +41,9 @@ export function validateTask(task, dir, { qualification = false } = {}) {
     const oracleProblem = blackBoxOracleProblem(task.hidden, dir, task.fixture ?? null);
     need(!oracleProblem, oracleProblem ?? "hidden black-box oracle is invalid");
   }
-  // Owner decision 2026-10-18: legacy hidden commands are allowed in qualification because run.mjs always hardens them
-  // there (fresh baseline + the agent's source changes only, test infrastructure discarded, hidden files read-only).
-  if (qualification) need(hiddenOracle !== Boolean(hiddenCommand), "qualification needs exactly one hidden oracle: blackbox-v1 or a hardened legacy command");
-  if (qualification && hiddenCommand) need(typeof task.hidden.dir === "string" && task.hidden.dir.length > 0, "a hardened legacy hidden test must carry its files in hidden.dir");
+  // Legacy validators execute candidate modules in the same runtime. File hiding and a fresh workspace cannot prevent
+  // candidate code from inspecting or mutating that runtime, so they are never valid independent qualification.
+  if (qualification) need(hiddenOracle && !hiddenCommand, "qualification requires the isolated blackbox-v1 hidden oracle; in-process legacy validators are not accepted");
   if (task.hidden?.dir) {
     try { confinedPath(dir, task.hidden.dir); }
     catch (error) { need(false, error.message); }

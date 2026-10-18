@@ -92,6 +92,7 @@ test("hidden test staging preserves workspace files and mounts only copied hidde
     assert.equal(hiddenOutputHasTests("Ran 0 tests"), false);
     assert.equal(hiddenOutputHasTests(""), false);
     assert.equal(hiddenOutputHasTests("hello"), false);
+    assert.equal(hiddenOutputHasTests("hidden: all assertions passed"), true, "a validator-produced summary is used only for development scoring");
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }

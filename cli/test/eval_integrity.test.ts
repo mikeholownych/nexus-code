@@ -242,10 +242,10 @@ test("task validation: pinned repos, one source, and black-box hidden oracle for
   assert.match(validateTask({ ...good, repo: { url: good.repo.url, commit: "main" } }, dir).join(), /pinned/);
   assert.match(validateTask({ ...good, fixture: "repo" }, dir).join(), /exactly one of fixture or repo/);
   assert.match(validateTask({ ...good, hidden: {} }, dir).join(), /hidden.command/);
-  // Owner decision 2026-10-18: qualification accepts a legacy hidden command only as a hardened check carrying its files.
-  assert.match(validateTask(good, dir, { qualification: true }).join(), /hardened legacy hidden test must carry its files in hidden.dir/);
-  assert.deepEqual(validateTask({ ...good, class: "bugfix", difficulty: "medium", hidden: { dir: "candidate", command: "npm test" } }, dir, { qualification: true }), []);
-  assert.match(validateTask({ ...good, class: "bugfix", difficulty: "medium", hidden: { protocol: "blackbox-v1", command: "npm test" } }, dir, { qualification: true }).join(), /exactly one hidden oracle/);
+  // Legacy checks execute candidate modules in the validator process and are therefore not independent qualification.
+  assert.match(validateTask(good, dir, { qualification: true }).join(), /qualification requires the isolated blackbox-v1 hidden oracle/);
+  assert.match(validateTask({ ...good, class: "bugfix", difficulty: "medium", hidden: { dir: "candidate", command: "npm test" } }, dir, { qualification: true }).join(), /in-process legacy validators are not accepted/);
+  assert.match(validateTask({ ...good, class: "bugfix", difficulty: "medium", hidden: { protocol: "blackbox-v1", command: "npm test" } }, dir, { qualification: true }).join(), /unsupported fields/);
   const cases = path.join(dir, "private-cases.json");
   fs.writeFileSync(cases, JSON.stringify([{ input: { x: 1 }, expected: { x: 1 } }]));
   fs.symlinkSync(cases, path.join(dir, "private-cases-link.json"));
@@ -384,7 +384,7 @@ test("qualification remains fail-closed without enforced aggregate resource cont
   assert.match(qualificationResourceIsolationProblem({ resources: { ...ok, tasks: 0 } }) ?? "", /tasks/);
   assert.match(qualificationResourceIsolationProblem({ resources: { ...ok, cpuPercent: 1.5 } }) ?? "", /cpuPercent/);
   assert.match(qualificationResourceIsolationProblem({ resources: { ...ok, memoryBytes: 256 * 1024 * 1024 + 1 } }) ?? "", /multiple of 4096/);
-  assert.match(qualificationResourceIsolationProblem({ resources: { ...ok, storageBytes: ok.storageBytes - 4096 } }) ?? "", /tmpfs with size<=storageBytes/);
+  assert.match(qualificationResourceIsolationProblem({ resources: { ...ok, storageBytes: ok.storageBytes - 4096 } }) ?? "", /tmpfs with size<=storageBytes|owner-accessible/);
   assert.match(qualificationResourceIsolationProblem({ resources: { ...ok, storageBytes: undefined } }) ?? "", /storageBytes/);
   const isolation = qualificationResourceIsolationProblem({ resources: ok });
   if (process.env.NEXUS_EVAL_TEST_WORKSPACE_ROOT) assert.equal(isolation, null, "the dedicated test tmpfs and kernel resource contract must pass preflight");

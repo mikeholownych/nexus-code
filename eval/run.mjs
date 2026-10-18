@@ -607,14 +607,15 @@ function runCheck(task, ws, check, hidden, { readOnlyHidden = false } = {}) {
       }),
     }));
   }
+  if (hidden && config.qualification === true) {
+    throw new Error("qualification refuses in-process legacy hidden validators; use the isolated blackbox-v1 oracle");
+  }
   const hiddenSubpaths = [];
   if (hidden && check.dir) {
     const source = confinedPath(task.dir, check.dir);
     hiddenSubpaths.push(...stageHiddenFiles(source, ws, check.into ?? check.dir, { readOnlyHidden }));
   }
-  const command = hidden && readOnlyHidden && hiddenSubpaths.length && /^node\s+(?!--test\b)(\S+\.c?m?js)\s*$/.test(check.command.trim())
-    ? `${check.command} && echo "hidden: all assertions passed"`
-    : check.command;
+  const command = check.command;
   return runIsolated(command, { cwd: ws, home: true, timeoutSec: check.timeoutSec ?? 300, outputLimit: 1_000_000, resources: config.resources ?? null, hiddenSubpaths: hidden && readOnlyHidden ? hiddenSubpaths : [], readOnlySubpaths: hidden && readOnlyHidden ? [] : hiddenSubpaths })
     .then((r) => {
       const output = `${r.stdout}${r.stderr}`;

@@ -111,8 +111,8 @@ runner case. `make test` includes a T4 smoke test with two injected faults (`cli
 A config with `"qualification": true` is the v1.0.0 evidence run (docs/v1.0.0/ACCEPTANCE.md §6). `run.mjs` refuses to start
 one, before any agent runs, unless every item below holds:
 
-- **Tasks are well formed** (`eval/validate.mjs`): one source (fixture, or a repo pinned to a full commit id), a hidden
-  command, and `class` (bugfix · feature · refactor · debug) and `difficulty` (easy · medium · hard). Development runs check
+- **Tasks are well formed** (`eval/validate.mjs`): one source (fixture, or a repo pinned to a full commit id), an isolated
+  `blackbox-v1` hidden oracle, and `class` (bugfix · feature · refactor · debug) and `difficulty` (easy · medium · hard). Development runs check
   everything except class and difficulty.
 - **The model is identified, not just named.** `fingerprint: { weightsSha256, serverBuild }` and
   `sampling: { temperature, seed }` are set in the config, and the endpoint lists the model. The fingerprint (with the
@@ -203,14 +203,14 @@ them hardened, in the style of SWE-bench. Development configs opt in with `"hard
    the sealed tests. Each run record carries
    `hardened: { baseline, applied, discarded, configChanges }`.
 
-What remains, and is accepted:
-- Candidate source code still executes inside the hidden test process. Changed source could, for example, monkeypatch
-  `pytest` or `unittest` at import time, or detect the test environment, and nothing here can see that. This is the
-  same residual risk as other SWE-bench-style evaluations.
-- A check passes on its exit status. A source-level trick that makes the runner execute fewer of the oracle's tests is
-  not detected. A task whose hidden tests run zero tests passes. A per-task expected-test count, set by the custodian,
-  would close this.
-- Black-box (`blackbox-v1`) oracles avoid both and need no hardening.
+This legacy hardening path supports development and pilot scoring only. Candidate source still executes in the same
+runtime as its legacy validator, so it can inspect or alter validator state; file hiding and a fresh workspace do not
+provide independent qualification. `qualification: true` therefore rejects every legacy hidden command before any
+candidate starts. Only the isolated `blackbox-v1` protocol is accepted for qualification. Convert or replace legacy
+tasks through the authorized custodian workflow before sealing the qualification corpus; do not relabel legacy evidence.
+
+The legacy output checks below are diagnostic safeguards for development scoring, not acceptance evidence. Qualification
+keeps black-box expected values in the evaluator process and runs candidate code in a separate Bubblewrap process.
 - Fairness cost: a real source directory named `vendor/` or `target/` is skipped like a dependency tree, so the
   agent's changes there are dropped. The `npm:` alias form of a dependency spec is not refused; setup is not re-run
   after the copy, so it cannot install anything.
