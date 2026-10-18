@@ -87,6 +87,8 @@ Some decisions cannot be carried out by an implementer alone. They need an exter
 
 **Amendment 2026-10-17 (governance).** The T4 protocol enumerates **nine** distinct fault scenarios (SPEC-10 §2.5, ACCEPTANCE §6.2): refused connection, 5xx/overloaded, stream cut mid-tool-call, output-limit truncation, hanging test command, disk full, context overflow at 32k, malformed tool-call JSON, and SIGTERM-then-resume. The summary count previously read "8" while listing all nine; the union of the distinct scenarios is retained as **nine** classes × 5 runs. No scenario is dropped or merged. Corrected here, in SPEC-10 §2.5 and in the REQUIREMENTS ledger (REQ-QUAL-105).
 
+**Amendment 2026-10-18 (owner decision, T3 false-presence gate).** For the T3 closing fact-sheet probe (REQ-QUAL-109, ACCEPTANCE §6.3), **false-presence = 0** (claiming a missing file is present) is gated in addition to **false-absence = 0** (claiming an existing file is absent), so an agent cannot trivially satisfy false-absence = 0 by answering `present` for every fact. Every T3 task fact sheet is required to contain both `expected: "present"` and `expected: "absent"` facts.
+
 **Thresholds, all must hold:**
 
 | Metric | Threshold |
@@ -99,6 +101,7 @@ Some decisions cannot be carried out by an implementer alone. They need an exter
 | T4 outcome truthfulness | 100% |
 | T4 hangs beyond budget + 5 min | 0 |
 | T3 false-absence | 0 |
+| T3 false-presence | 0 |
 | T3 steering honoured | ≥ 95% |
 | `run`-mode operator interventions | 0 |
 
@@ -234,7 +237,7 @@ This amendment is **narrow by design**. It applies only to corpora where the mea
 | # | Action | Why | When |
 |---|---|---|---|
 | X1 | ~~`git tag -d v1.1.0 v1.2.0 v1.2.1`~~ **Done by the owner on 2026-10-14.** Verified: `git tag -l` now lists only `v0.1.0-alpha.1` and `v0.1.0-alpha.2`. | DEC-08 | Done |
-| X2 | ~~Provide an independent task author~~. **Resolved 2026-10-14:** agent authorship authorized for T2 (DEC-05). Remaining action: approve the T3 task author (agent authorship is assumed to extend to T3 unless the owner objects). | DEC-05 | Before M5 |
+| X2 | ~~Provide an independent task author~~. **Resolved 2026-10-14 (T2) and 2026-10-18 (T3):** agent authorship authorized and completed for both T2 (`eval/heldout-manifest.json`, sha256 `50895b84…`, 40 tasks) and T3 (`eval/heldout-t3-manifest.json`, sha256 `85fb9caf…`, 8 tasks), each sealed under root-owned `0700` custody. | DEC-05 | Done |
 | X3 | ~~Separate standalone host~~. **Withdrawn:** no worker or GPU is available apart from the gateway. Replaced by DEC-16 (stripping proxy plus conformance fixtures). Remaining action: none. Optional: approve a CPU-only llama.cpp container on the dev box for the protocol smoke test. | DEC-16 | — |
 | X4 | **Partly resolved 2026-10-14:** the existing ChatGPT sign-in and OpenRouter connections are authorized for small-spend checks; both were live-verified at db1ca55. Optional: add OpenAI API-key or Anthropic keys if those providers should be listed as supported. | DEC-06 | M5 (optional) |
 | X5 | Independent reviewer for continuity/compaction acceptance and RC acceptance | REQ-AGT-110, ACCEPTANCE §8 | M5/M6 |
