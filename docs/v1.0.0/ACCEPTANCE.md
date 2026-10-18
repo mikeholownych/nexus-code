@@ -68,7 +68,7 @@ Every ACC ID below is defined in the linked spec. The plan for each spec names t
 | Persistence | ACC-PER-01 to ACC-PER-07 | SPEC-08 |
 | Governance | ACC-GOV-01 to ACC-GOV-06 | SPEC-09 |
 | Verification | ACC-VER-01 to ACC-VER-09 | SPEC-11 |
-| Upgrade | ACC-UPG-01 to ACC-UPG-06 | SPEC-12 |
+| Upgrade | ACC-UPG-01 to ACC-UPG-14 | SPEC-12 |
 
 
 ### 3.1 Acceptance IDs defined in this file
@@ -241,10 +241,14 @@ The scorer output `verdict.md` lists each metric with its Wilson 95% interval, a
 | No Node / Node 12 | Same | Clear prerequisite message. HOME untouched. |
 | Upgrade alpha.2 → RC | Same, with the tag | Symlink swapped. Old version retained. User state intact. |
 | Rollback RC → alpha.2 | Same, with the old tag | Works. |
-| Repair | Delete a file in the version dir, then reinstall | Repaired (REQ-REL-105). |
+| Repair | Delete a file in the version dir, then reinstall | Repaired (REQ-REL-105). Same-version reinstall preserves working files if package fails verification. |
 | Uninstall (documented manual) | Commands from the quickstart | Only Nexus-owned paths removed. `~/.config/nexus` and `~/.nexus` retained. |
 | Checksum tamper | installer-smoke | Refused. The existing install is unchanged. |
 | Attestation | `gh attestation verify <tarball> -R mikeholownych/nexus-code` | PASS |
+| Upgrade self-test failure | `nexus upgrade` (broken candidate package) | Refused. Staging verified before switch; if post-switch verification fails, launcher atomically rolls back to previous target and journal records `rolled_back`. |
+| Upgrade crash recovery | `nexus upgrade --recover` | Idempotent recovery. Cleans incomplete staging, restores unverified launcher symlink, verifies functional installation. |
+| Backup restore | `nexus upgrade --restore-backup <tarball>` | Configuration and state restored from verified backup archive with strict 0600 file modes. |
+| Incompatible downgrade | `nexus upgrade --version <v> --allow-downgrade` (incompatible state schema) | Refused fail-closed with actionable state schema explanation. Existing installation unchanged. |
 
 ## 8. Independent acceptance (REQ-AGT-110, ACC-CONT-10)
 

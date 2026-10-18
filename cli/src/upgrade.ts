@@ -1084,6 +1084,13 @@ export async function performUpgrade(
       throw new Error("Release archive failed internal manifest checksum verification.");
     }
 
+    // Pre-switch staging verification: ensure unpacked executable runs --version before touching installation
+    options?.onProgress?.("verifying_staged", "Testing unpacked binary in staging...");
+    const stageVerify = spawnSync(binNexus, ["--version"], { encoding: "utf8" });
+    if (stageVerify.status !== 0) {
+      throw new Error(`Unpacked binary failed staging self-test: ${stageVerify.stderr || "exit " + stageVerify.status}`);
+    }
+
     // The in-archive copy is authenticated by the archive checksum/attestation.
     // Detached metadata may add only the archive digest; all policy fields must
     // match the embedded contract exactly.
@@ -1148,10 +1155,25 @@ export async function performUpgrade(
     journalEntry.updatedAt = new Date().toISOString();
     writeJournal(prefix, journalEntry);
 
+    // If versionDir already exists (e.g. reinstall/repair of current version),
+    // preserve it in a backup directory inside tmpDir instead of deleting it preemptively.
+    const backupDir = path.join(tmpDir, "previous-version-backup");
+    let hasBackupDir = false;
     if (fs.existsSync(versionDir)) {
-      fs.rmSync(versionDir, { recursive: true, force: true });
+      fs.renameSync(versionDir, backupDir);
+      hasBackupDir = true;
     }
-    fs.renameSync(packageRoot, versionDir);
+
+    try {
+      fs.renameSync(packageRoot, versionDir);
+    } catch (renameErr) {
+      if (hasBackupDir && !fs.existsSync(versionDir)) {
+        try {
+          fs.renameSync(backupDir, versionDir);
+        } catch {}
+      }
+      throw renameErr;
+    }
 
     // Record durable provenance
     writeProvenance(versionDir, {
@@ -1169,6 +1191,15 @@ export async function performUpgrade(
       archiveSha256: computeSha256(localArchive),
     });
 
+    // Capture the existing symlink target before swapping
+    let previousSymlinkTarget = journalEntry.sourceSymlinkTarget;
+    if (fs.existsSync(linkPath) && fs.lstatSync(linkPath).isSymbolicLink()) {
+      try {
+        const rawTarget = fs.readlinkSync(linkPath);
+        previousSymlinkTarget = path.resolve(binDir, rawTarget);
+      } catch {}
+    }
+
     // Atomic symlink swap
     const nextLink = path.join(binDir, `.nexus-link.${process.pid}`);
     try {
@@ -1185,7 +1216,32 @@ export async function performUpgrade(
     options?.onProgress?.("verifying_install", "Verifying installed product...");
     const verifyRun = spawnSync(linkPath, ["--version"], { encoding: "utf8" });
     if (verifyRun.status !== 0) {
+      // Post-switch verification failed: immediately rollback linkPath and restore previous versionDir if applicable
+      if (previousSymlinkTarget && fs.existsSync(previousSymlinkTarget)) {
+        const rollbackLink = path.join(binDir, `.nexus-link-rollback.${process.pid}`);
+        try { fs.unlinkSync(rollbackLink); } catch {}
+        try {
+          fs.symlinkSync(previousSymlinkTarget, rollbackLink);
+          fs.renameSync(rollbackLink, linkPath);
+        } catch {}
+      }
+      if (hasBackupDir && fs.existsSync(backupDir)) {
+        try {
+          fs.rmSync(versionDir, { recursive: true, force: true });
+          fs.renameSync(backupDir, versionDir);
+        } catch {}
+      }
+      journalEntry.state = "rolled_back";
+      journalEntry.updatedAt = new Date().toISOString();
+      writeJournal(prefix, journalEntry);
       throw new Error(`Installed binary failed self-test: ${verifyRun.stderr || "exit " + verifyRun.status}`);
+    }
+
+    // Clean up backupDir if verification succeeded
+    if (hasBackupDir && fs.existsSync(backupDir)) {
+      try {
+        fs.rmSync(backupDir, { recursive: true, force: true });
+      } catch {}
     }
 
     journalEntry.state = "verified";
