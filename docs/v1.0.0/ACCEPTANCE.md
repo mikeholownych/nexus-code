@@ -15,7 +15,17 @@ Three separate questions are judged and recorded separately:
 | **Product qualification** | Did the RC meet these gates on real workflows? |
 | **Independent acceptance** | Did a reviewer other than the implementer agree? |
 
-A gate passes only on archived evidence for the exact RC commit. A green test suite alone never qualifies the product.
+A gate passes only on archived evidence bound to the source commit or installed RC artifact that the gate evaluates. Source-level evidence names the exact source commit; installed-RC evidence names both that commit and the installed package digest. A green test suite alone never qualifies the product.
+
+## 1.1 Release-candidate lifecycle and evidence identity
+
+The qualification sequence has three distinct stages. Passing an earlier stage is a prerequisite for the next stage, not a substitute for it.
+
+1. **Source gates.** Before creating an RC tag, run G0–G4 automated gates and the required source CI on the exact commit intended for that tag. Record the full commit ID and check results. These checks evaluate source at that commit; they do not establish behavior of an installed package.
+2. **RC artifact construction.** After the required owner authorization, create the version-matched RC tag on that exact source commit and use the repository release workflow to build and publish the RC artifacts. Record the workflow run, tag commit, artifact digests, and provenance. The workflow-produced artifacts are the candidates for qualification; a local build or a different commit is not interchangeable. RC artifact publication is not product qualification or final release acceptance.
+3. **Installed-RC qualification.** Install the workflow-produced RC package using the documented procedure and run the applicable product, provider, task-quality, terminal, installation, and independent-acceptance gates in §§4–8. Bind each result to both the RC source commit and installed package digest. If a source change or rebuilt artifact changes either identity, rerun every affected gate against the new candidate and retain prior results as historical evidence.
+
+The final G6 decision in §10 applies to promotion to the stable v1.0.0 release. It requires the applicable gates to pass for the accepted RC and the release authorization listed there. It does not waive source CI, artifact identity, installed-RC qualification, or any threshold. The final v1.0.0 tag and artifacts must follow the approved release workflow and satisfy its checks as well.
 
 ## 1. Rules
 
@@ -42,7 +52,7 @@ A gate passes only on archived evidence for the exact RC commit. A green test su
 
 ## 3. Gate checklist (G0–G4: automated acceptance IDs)
 
-Every ACC ID below is defined in the linked spec. The plan for each spec names the test that implements it. Each must pass in E1 on the RC commit.
+Every ACC ID below is defined in the linked spec. The plan for each spec names the test that implements it. Each must pass in E1 from source at the exact commit intended for the RC tag, as specified in §1.1. These source gates do not replace the installed-RC qualification in §§4–8.
 
 | Gate | Acceptance IDs | Spec |
 |---|---|---|
@@ -275,7 +285,7 @@ The submission is completed and frozen until judging ends (DEC-13). After judgin
 
 ## 10. Release decision (G6)
 
-v1.0.0 may be tagged only when every item below holds.
+The stable v1.0.0 release may be tagged only when every item below holds. RC tags are candidate construction inputs governed by §1.1; an RC tag or its successful build does not satisfy this release decision.
 
 - [ ] G0–G4 automated gates pass on the final RC commit (§3).
 - [ ] §4 standalone and provider matrix: all rows PASS.
