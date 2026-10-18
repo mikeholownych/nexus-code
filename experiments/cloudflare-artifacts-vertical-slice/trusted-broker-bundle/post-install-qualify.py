@@ -18,7 +18,7 @@ MANIFEST = ROOT / "share" / "trusted-object-manifest.json"
 LAUNCHER = ROOT / "bin" / "nexus-cf-broker"
 NODE = ROOT / "runtime" / "node"
 CF_VERSION = "1.0.0-beta.10"
-EXPECTED_MANIFEST_SHA256 = "023846d4429ce1f3b30ccf912f1c7bf96a7cb6de42fd247bdf9c897d60c87ec0"
+EXPECTED_MANIFEST_SHA256 = "b55ae32adce161f23176acbe1a8a048dd1165a076c95756823cc90e6d892df5a"
 
 
 def digest(path: pathlib.Path) -> str:
