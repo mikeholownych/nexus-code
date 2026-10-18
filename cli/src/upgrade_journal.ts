@@ -58,11 +58,48 @@ export function readJournal(prefix: string): UpgradeJournalEntry | null {
   try {
     const raw = fs.readFileSync(journalPath, "utf8");
     const data = JSON.parse(raw);
-    if (data && data.formatVersion === 1 && typeof data.state === "string") {
+    if (isValidJournal(data, prefix)) {
       return data as UpgradeJournalEntry;
     }
   } catch {}
   return null;
+}
+
+function isValidJournal(value: any, prefix: string): value is UpgradeJournalEntry {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const states: JournalState[] = ["idle", "preparing", "downloading", "staged", "switching", "switched", "verified", "complete", "recovery_required", "rolled_back"];
+  const root = path.resolve(prefix);
+  const libRoot = path.join(root, "lib", "nexus");
+  const expectedBin = path.join(root, "bin", "nexus");
+  const versionDir = (version: unknown) => typeof version === "string" && /^[v]?[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?$/.test(version)
+    ? path.join(libRoot, version)
+    : "";
+  const sourceDir = versionDir(value.sourceVersion);
+  const targetDir = versionDir(value.targetVersion);
+  const expectedPath = (actual: unknown, expected: string) => typeof actual === "string" && expected !== "" && path.resolve(actual) === expected;
+  const isoDate = (date: unknown) => typeof date === "string" && Number.isFinite(Date.parse(date));
+
+  if (value.formatVersion !== 1 || typeof value.id !== "string" || value.id.length < 1 || value.id.length > 128 ||
+      !states.includes(value.state) || !sourceDir || !targetDir || sourceDir === targetDir ||
+      !expectedPath(value.prefix, root) || !expectedPath(value.sourceInstallDir, sourceDir) ||
+      !expectedPath(value.targetInstallDir, targetDir) || !expectedPath(value.sourceSymlinkTarget, path.join(sourceDir, "bin", "nexus")) ||
+      !expectedPath(value.binPath, expectedBin) || !isoDate(value.startedAt) || !isoDate(value.updatedAt)) return false;
+
+  if (value.stagingDir !== undefined) {
+    if (typeof value.stagingDir !== "string" || path.dirname(path.resolve(value.stagingDir)) !== libRoot ||
+        !/^\.tmp-upgrade-[A-Za-z0-9._-]{1,128}$/.test(path.basename(value.stagingDir))) return false;
+  }
+  if (value.configBackupPath !== undefined) {
+    const backups = path.join(process.env.HOME || "", ".config", "nexus", "backups");
+    if (typeof value.configBackupPath !== "string" || path.dirname(path.resolve(value.configBackupPath)) !== backups ||
+        !/^config\.env\.bak\.[A-Za-z0-9T_.-]+$/.test(path.basename(value.configBackupPath))) return false;
+  }
+  if (value.stateBackupDir !== undefined) {
+    const backups = path.join(process.env.HOME || "", ".nexus", "backups");
+    if (typeof value.stateBackupDir !== "string" || path.dirname(path.resolve(value.stateBackupDir)) !== backups ||
+        !/^state-backup-[A-Za-z0-9T_.-]+$/.test(path.basename(value.stateBackupDir))) return false;
+  }
+  return true;
 }
 
 export function writeJournal(prefix: string, entry: UpgradeJournalEntry): void {
@@ -147,7 +184,11 @@ export interface RecoveryOutcome {
  * Idempotent crash recovery: inspects journal and restores working installation or finalizes transition.
  */
 export function recoverUpgrade(prefix: string): RecoveryOutcome {
+  const journalPath = getJournalPath(prefix);
   const journal = readJournal(prefix);
+  if (!journal && fs.existsSync(journalPath)) {
+    return { recovered: false, action: "none", details: "Upgrade journal failed schema or path validation; no recovery action was taken." };
+  }
   if (!journal || journal.state === "idle" || journal.state === "complete" || journal.state === "rolled_back") {
     return {
       recovered: false,
@@ -158,18 +199,44 @@ export function recoverUpgrade(prefix: string): RecoveryOutcome {
 
   const { state, sourceInstallDir, targetInstallDir, stagingDir, binPath, sourceVersion, targetVersion } = journal;
 
+  const libRoot = path.join(path.resolve(prefix), "lib", "nexus");
+  if (!isRealDirectory(libRoot) || !isRealDirectory(path.dirname(binPath))) {
+    return { recovered: false, action: "none", details: "Upgrade recovery roots are not real contained directories; no recovery action was taken." };
+  }
+  for (const installDir of [sourceInstallDir, targetInstallDir]) {
+    if (fs.existsSync(installDir) && !isRealDirectory(installDir)) {
+      return { recovered: false, action: "none", details: "An installation path is not a real directory; no recovery action was taken." };
+    }
+  }
+
   // Cleanup abandoned staging directory if exists
   if (stagingDir && fs.existsSync(stagingDir)) {
+    if (!isRealDirectory(stagingDir) || path.dirname(path.resolve(stagingDir)) !== libRoot || fs.realpathSync(path.dirname(stagingDir)) !== libRoot) {
+      return { recovered: false, action: "none", details: "Staging path is not a contained real directory; no recovery action was taken." };
+    }
     try {
       fs.rmSync(stagingDir, { recursive: true, force: true });
-    } catch {}
+    } catch (err: any) {
+      return { recovered: false, action: "none", details: `Could not safely remove staging directory: ${err.message}` };
+    }
   }
 
   // If upgrade crashed during downloading, preparing, or staged (before symlink was touched):
   if (state === "preparing" || state === "downloading" || state === "staged" || state === "recovery_required") {
     // Symlink should point to source
-    if (fs.existsSync(sourceInstallDir)) {
-      atomicSymlinkSwap(path.join(sourceInstallDir, "bin", "nexus"), binPath);
+    const sourceExecutable = path.join(sourceInstallDir, "bin", "nexus");
+    if (isRealFile(sourceExecutable)) {
+      atomicSymlinkSwap(sourceExecutable, binPath);
+    } else {
+      journal.state = "recovery_required";
+      journal.error = "Source launcher is missing or is not a regular contained file";
+      journal.updatedAt = new Date().toISOString();
+      writeJournal(prefix, journal);
+      return {
+        recovered: false,
+        action: "none",
+        details: `Manual intervention required: source launcher at ${sourceExecutable} is not a regular contained file.`,
+      };
     }
     journal.state = "rolled_back";
     journal.updatedAt = new Date().toISOString();
@@ -185,14 +252,14 @@ export function recoverUpgrade(prefix: string): RecoveryOutcome {
   if (state === "switching" || state === "switched" || state === "verified") {
     // Check if target installation is intact and executable
     const targetExecutable = path.join(targetInstallDir, "bin", "nexus");
-    let targetHealthy = false;
-    if (fs.existsSync(targetExecutable)) {
+    let targetHealthy = isRealFile(targetExecutable);
+    if (targetHealthy) {
       try {
         const testRes = spawnSync(targetExecutable, ["--version"]);
-        if (testRes.status === 0) {
-          targetHealthy = true;
-        }
-      } catch {}
+        targetHealthy = testRes.status === 0;
+      } catch {
+        targetHealthy = false;
+      }
     }
 
     if (targetHealthy) {
@@ -209,7 +276,7 @@ export function recoverUpgrade(prefix: string): RecoveryOutcome {
     } else {
       // Revert symlink to source installation
       const sourceExecutable = path.join(sourceInstallDir, "bin", "nexus");
-      if (fs.existsSync(sourceExecutable)) {
+      if (isRealFile(sourceExecutable)) {
         atomicSymlinkSwap(sourceExecutable, binPath);
         journal.state = "rolled_back";
         journal.updatedAt = new Date().toISOString();
@@ -238,6 +305,26 @@ export function recoverUpgrade(prefix: string): RecoveryOutcome {
     action: "none",
     details: `Journal state is ${state}; no recovery action required.`,
   };
+}
+
+function isRealDirectory(directory: string): boolean {
+  try {
+    const absolute = path.resolve(directory);
+    const stat = fs.lstatSync(absolute);
+    return stat.isDirectory() && !stat.isSymbolicLink() && fs.realpathSync(absolute) === absolute;
+  } catch {
+    return false;
+  }
+}
+
+function isRealFile(filePath: string): boolean {
+  try {
+    const absolute = path.resolve(filePath);
+    const stat = fs.lstatSync(absolute);
+    return stat.isFile() && !stat.isSymbolicLink() && fs.realpathSync(absolute) === absolute;
+  } catch {
+    return false;
+  }
 }
 
 function atomicSymlinkSwap(targetFile: string, linkPath: string): void {

@@ -130,7 +130,7 @@ describe("Tar Archive Structural Safety Engine (REQ-REL-116, ACC-UPG-08)", () =>
   /**
    * Helper to write a simple ustar archive with raw entries
    */
-  function createTestTar(entries: Array<{ name: string; typeflag?: string; linkname?: string; content?: string }>): Buffer {
+  function createTestTar(entries: Array<{ name: string; typeflag?: string; linkname?: string; content?: string; declaredSize?: number }>): Buffer {
     const blocks: Buffer[] = [];
 
     for (const ent of entries) {
@@ -144,7 +144,7 @@ describe("Tar Archive Structural Safety Engine (REQ-REL-116, ACC-UPG-08)", () =>
       header.write("0001750\0", 116, 8, "utf8");
       // size (12)
       const data = Buffer.from(ent.content || "");
-      const sizeOctal = data.length.toString(8).padStart(11, "0") + "\0";
+      const sizeOctal = (ent.declaredSize ?? data.length).toString(8).padStart(11, "0") + "\0";
       header.write(sizeOctal, 124, 12, "utf8");
       // mtime (12)
       header.write("14000000000\0", 136, 12, "utf8");
@@ -180,6 +180,15 @@ describe("Tar Archive Structural Safety Engine (REQ-REL-116, ACC-UPG-08)", () =>
     // End-of-archive 1024 zero bytes
     blocks.push(Buffer.alloc(1024));
     return zlib.gzipSync(Buffer.concat(blocks));
+  }
+
+  function paxRecord(key: string, value: string): string {
+    const body = `${key}=${value}\n`;
+    let length = Buffer.byteLength(body) + 3;
+    while (length !== Buffer.byteLength(String(length)) + 1 + Buffer.byteLength(body)) {
+      length = Buffer.byteLength(String(length)) + 1 + Buffer.byteLength(body);
+    }
+    return `${length} ${body}`;
   }
 
   it("verifies path safety checks: rejects traversal and absolute paths", () => {
@@ -228,6 +237,45 @@ describe("Tar Archive Structural Safety Engine (REQ-REL-116, ACC-UPG-08)", () =>
       safeExtractTar(maliciousTar, dest),
       /failed structural safety inspection/
     );
+  });
+
+  it("rejects oversized PAX metadata before retaining or parsing it", async () => {
+    const archive = path.join(tmpRoot, "oversized-pax.tar.gz");
+    fs.writeFileSync(archive, createTestTar([
+      // The payload is intentionally absent. The validator must reject its
+      // oversized declaration from the header without waiting for allocation.
+      { name: "PaxHeader", typeflag: "x", declaredSize: 1024 * 1024 * 1024 },
+    ]));
+    const result = await validateTarArchive(archive);
+    assert.equal(result.valid, false);
+    assert.ok(result.errors.some((error) => error.includes("PAX metadata exceeds safety limit")));
+  });
+
+  it("keeps global PAX link overrides active across later entries", async () => {
+    const archive = path.join(tmpRoot, "global-pax.tar.gz");
+    fs.writeFileSync(archive, createTestTar([
+      { name: "GlobalHead", typeflag: "g", content: paxRecord("linkpath", "../../safe") },
+      // The same global target resolves inside nexus for this deep link.
+      { name: "nexus/a/b/deep-link", typeflag: "2", linkname: "raw-safe" },
+      // It escapes nexus for this shallow link and must still be applied.
+      { name: "nexus/shallow-link", typeflag: "2", linkname: "raw-safe" },
+    ]));
+    const result = await validateTarArchive(archive);
+    assert.equal(result.valid, false);
+    assert.ok(result.errors.some((error) => error.includes("escapes")));
+  });
+
+  it("rejects local and global PAX size overrides that diverge from extraction accounting", async () => {
+    for (const typeflag of ["x", "g"]) {
+      const archive = path.join(tmpRoot, `pax-size-override-${typeflag}.tar.gz`);
+      fs.writeFileSync(archive, createTestTar([
+        { name: "PaxHeader", typeflag, content: paxRecord("size", "0") },
+        { name: "nexus/VERSION", content: "1.0.0\n" },
+      ]));
+      const result = await validateTarArchive(archive);
+      assert.equal(result.valid, false);
+      assert.ok(result.errors.some((error) => error.includes("unsupported extraction-affecting key 'size'")));
+    }
   });
 
   it("rejects malicious tar archive with escaping symlink", async () => {
@@ -545,6 +593,194 @@ describe("Upgrade Journal, Crash Recovery & PATH Shadowing (REQ-REL-116, ACC-UPG
     assert.equal(outcome.action, "cleaned_up");
     assert.equal(fs.existsSync(stagingDir), false); // cleaned up
     assert.equal(fs.realpathSync(binNexus), fs.realpathSync(v1Bin)); // symlink retained
+  });
+
+  it("fails closed without deleting paths named by a malicious journal", () => {
+    const outside = path.join(tmpPrefix, "outside-canary");
+    fs.mkdirSync(outside);
+    fs.writeFileSync(path.join(outside, "keep.txt"), "must survive");
+    const entry: UpgradeJournalEntry = {
+      formatVersion: 1,
+      id: "hostile-path",
+      state: "downloading",
+      sourceVersion: "v1.0.0",
+      sourceInstallDir: outside,
+      sourceSymlinkTarget: path.join(outside, "bin", "nexus"),
+      targetVersion: "v1.1.0",
+      targetInstallDir: path.join(tmpPrefix, "lib", "nexus", "v1.1.0"),
+      stagingDir: outside,
+      prefix: tmpPrefix,
+      binPath: path.join(tmpPrefix, "bin", "nexus"),
+      startedAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    };
+    writeJournal(tmpPrefix, entry);
+    const outcome = recoverUpgrade(tmpPrefix);
+    assert.equal(outcome.recovered, false);
+    assert.match(outcome.details, /validation/);
+    assert.equal(fs.readFileSync(path.join(outside, "keep.txt"), "utf8"), "must survive");
+  });
+
+  it("rejects a staging path whose apparent parent is redirected by a symlink", () => {
+    const outsideRoot = path.join(tmpPrefix, "external");
+    const outsideLib = path.join(outsideRoot, "nexus");
+    const outsideStage = path.join(outsideLib, ".tmp-upgrade-escape");
+    fs.mkdirSync(outsideStage, { recursive: true });
+    fs.writeFileSync(path.join(outsideStage, "canary"), "must survive");
+    fs.mkdirSync(path.join(tmpPrefix, "lib"), { recursive: true });
+    fs.symlinkSync(outsideLib, path.join(tmpPrefix, "lib", "nexus"));
+    const entry: UpgradeJournalEntry = {
+      formatVersion: 1,
+      id: "symlink-parent",
+      state: "downloading",
+      sourceVersion: "v1.0.0",
+      sourceInstallDir: path.join(tmpPrefix, "lib", "nexus", "v1.0.0"),
+      sourceSymlinkTarget: path.join(tmpPrefix, "lib", "nexus", "v1.0.0", "bin", "nexus"),
+      targetVersion: "v1.1.0",
+      targetInstallDir: path.join(tmpPrefix, "lib", "nexus", "v1.1.0"),
+      stagingDir: path.join(tmpPrefix, "lib", "nexus", ".tmp-upgrade-escape"),
+      prefix: tmpPrefix,
+      binPath: path.join(tmpPrefix, "bin", "nexus"),
+      startedAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    };
+    writeJournal(tmpPrefix, entry);
+    const outcome = recoverUpgrade(tmpPrefix);
+    assert.equal(outcome.recovered, false);
+    assert.match(outcome.details, /real contained directories/);
+    assert.equal(fs.readFileSync(path.join(outsideStage, "canary"), "utf8"), "must survive");
+  });
+
+  it("accepts backup paths under HOME with a custom installation prefix", () => {
+    const previousHome = process.env.HOME;
+    const home = path.join(tmpPrefix, "custom-home");
+    process.env.HOME = home;
+    try {
+      const entry: UpgradeJournalEntry = {
+        formatVersion: 1,
+        id: "custom-prefix-backups",
+        state: "downloading",
+        sourceVersion: "v1.0.0",
+        sourceInstallDir: path.join(tmpPrefix, "lib", "nexus", "v1.0.0"),
+        sourceSymlinkTarget: path.join(tmpPrefix, "lib", "nexus", "v1.0.0", "bin", "nexus"),
+        targetVersion: "v1.1.0",
+        targetInstallDir: path.join(tmpPrefix, "lib", "nexus", "v1.1.0"),
+        prefix: tmpPrefix,
+        binPath: path.join(tmpPrefix, "bin", "nexus"),
+        startedAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+        configBackupPath: path.join(home, ".config", "nexus", "backups", "config.env.bak.2026-10-18T00-00-00-000Z"),
+        stateBackupDir: path.join(home, ".nexus", "backups", "state-backup-2026-10-18T00-00-00-000Z"),
+      };
+      writeJournal(tmpPrefix, entry);
+      assert.equal(readJournal(tmpPrefix)?.id, entry.id);
+    } finally {
+      if (previousHome === undefined) delete process.env.HOME;
+      else process.env.HOME = previousHome;
+    }
+  });
+
+  it("never executes a target binary redirected outside its version directory", () => {
+    const libNexus = path.join(tmpPrefix, "lib", "nexus");
+    const binDir = path.join(tmpPrefix, "bin");
+    const sourceDir = path.join(libNexus, "v1.0.0");
+    const targetDir = path.join(libNexus, "v1.1.0");
+    const outside = path.join(tmpPrefix, "outside-executable");
+    const canary = path.join(tmpPrefix, "executed-canary");
+    fs.mkdirSync(path.join(sourceDir, "bin"), { recursive: true });
+    fs.mkdirSync(path.join(targetDir, "bin"), { recursive: true });
+    fs.mkdirSync(binDir, { recursive: true });
+    const sourceExecutable = path.join(sourceDir, "bin", "nexus");
+    fs.writeFileSync(sourceExecutable, "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+    fs.writeFileSync(outside, `#!/bin/sh\nprintf executed > '${canary}'\nexit 0\n`, { mode: 0o755 });
+    fs.symlinkSync(outside, path.join(targetDir, "bin", "nexus"));
+    const binPath = path.join(binDir, "nexus");
+    fs.symlinkSync(path.join(targetDir, "bin", "nexus"), binPath);
+    writeJournal(tmpPrefix, {
+      formatVersion: 1,
+      id: "external-target-binary",
+      state: "switched",
+      sourceVersion: "v1.0.0",
+      sourceInstallDir: sourceDir,
+      sourceSymlinkTarget: sourceExecutable,
+      targetVersion: "v1.1.0",
+      targetInstallDir: targetDir,
+      prefix: tmpPrefix,
+      binPath,
+      startedAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    });
+    const outcome = recoverUpgrade(tmpPrefix);
+    assert.equal(outcome.action, "rolled_back");
+    assert.equal(fs.existsSync(canary), false);
+    assert.equal(fs.realpathSync(binPath), fs.realpathSync(sourceExecutable));
+  });
+
+  it("does not repoint the launcher to an external source symlink during early recovery", () => {
+    const libNexus = path.join(tmpPrefix, "lib", "nexus");
+    const sourceDir = path.join(libNexus, "v1.0.0");
+    const binDir = path.join(tmpPrefix, "bin");
+    const outside = path.join(tmpPrefix, "outside-source");
+    const current = path.join(tmpPrefix, "current-launcher");
+    fs.mkdirSync(path.join(sourceDir, "bin"), { recursive: true });
+    fs.mkdirSync(binDir, { recursive: true });
+    fs.writeFileSync(outside, "outside executable", { mode: 0o755 });
+    fs.writeFileSync(current, "current launcher", { mode: 0o755 });
+    const sourceExecutable = path.join(sourceDir, "bin", "nexus");
+    fs.symlinkSync(outside, sourceExecutable);
+    const binPath = path.join(binDir, "nexus");
+    fs.symlinkSync(current, binPath);
+    writeJournal(tmpPrefix, {
+      formatVersion: 1,
+      id: "early-external-source",
+      state: "downloading",
+      sourceVersion: "v1.0.0",
+      sourceInstallDir: sourceDir,
+      sourceSymlinkTarget: sourceExecutable,
+      targetVersion: "v1.1.0",
+      targetInstallDir: path.join(libNexus, "v1.1.0"),
+      prefix: tmpPrefix,
+      binPath,
+      startedAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    });
+    const outcome = recoverUpgrade(tmpPrefix);
+    assert.equal(outcome.recovered, false);
+    assert.match(outcome.details, /source launcher/);
+    assert.equal(fs.readlinkSync(binPath), current);
+  });
+
+  it("rolls back when a contained target launcher exits unsuccessfully", () => {
+    const libNexus = path.join(tmpPrefix, "lib", "nexus");
+    const binDir = path.join(tmpPrefix, "bin");
+    const sourceDir = path.join(libNexus, "v1.0.0");
+    const targetDir = path.join(libNexus, "v1.1.0");
+    fs.mkdirSync(path.join(sourceDir, "bin"), { recursive: true });
+    fs.mkdirSync(path.join(targetDir, "bin"), { recursive: true });
+    fs.mkdirSync(binDir, { recursive: true });
+    const sourceExecutable = path.join(sourceDir, "bin", "nexus");
+    const targetExecutable = path.join(targetDir, "bin", "nexus");
+    fs.writeFileSync(sourceExecutable, "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+    fs.writeFileSync(targetExecutable, "#!/bin/sh\nexit 1\n", { mode: 0o755 });
+    const binPath = path.join(binDir, "nexus");
+    fs.symlinkSync(targetExecutable, binPath);
+    writeJournal(tmpPrefix, {
+      formatVersion: 1,
+      id: "failed-target-launcher",
+      state: "switched",
+      sourceVersion: "v1.0.0",
+      sourceInstallDir: sourceDir,
+      sourceSymlinkTarget: sourceExecutable,
+      targetVersion: "v1.1.0",
+      targetInstallDir: targetDir,
+      prefix: tmpPrefix,
+      binPath,
+      startedAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    });
+    const outcome = recoverUpgrade(tmpPrefix);
+    assert.equal(outcome.action, "rolled_back");
+    assert.equal(fs.realpathSync(binPath), fs.realpathSync(sourceExecutable));
   });
 
   it("recovers a crash during switching by reverting symlink to source installation", () => {

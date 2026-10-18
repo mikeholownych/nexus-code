@@ -19,6 +19,10 @@ import { spawnSync } from "node:child_process";
 export const MAX_DOWNLOAD_BYTES = 250 * 1024 * 1024; // 250 MB
 export const MAX_EXTRACT_BYTES = 1024 * 1024 * 1024;  // 1 GB
 export const MAX_ARCHIVE_ENTRIES = 50_000;
+// PAX records are attacker-controlled metadata. Keep one record bounded even
+// when it does not contribute to the declared file payload total.
+export const MAX_PAX_HEADER_BYTES = 64 * 1024;
+export const MAX_TOTAL_PAX_BYTES = 1024 * 1024;
 
 export interface TarEntryInfo {
   name: string;
@@ -116,6 +120,11 @@ export async function validateTarArchive(
   const seenEntries = new Set<string>();
   let totalBytes = 0;
   let entryCount = 0;
+  let decompressedBytes = 0;
+  let paxBytes = 0;
+  // Headers, padding and terminators also consume memory/CPU. Bound the full
+  // decompressed stream independently from the sum of regular-file payloads.
+  const maxStreamBytes = maxBytes + maxEntries * 1024 + MAX_TOTAL_PAX_BYTES + 2048;
 
   return new Promise<TarValidationResult>((resolve) => {
     let gunzip: zlib.Gunzip;
@@ -134,7 +143,15 @@ export async function validateTarArchive(
     const inputStream = fs.createReadStream(archivePath);
     let buffer = Buffer.alloc(0);
     let paxHeaders: Record<string, string> = {};
+    let globalPaxHeaders: Record<string, string> = {};
     let finished = false;
+    const fail = (message: string) => {
+      if (finished) return;
+      errors.push(message);
+      inputStream.destroy();
+      gunzip.destroy();
+      finalize();
+    };
 
     const finalize = () => {
       if (finished) return;
@@ -157,16 +174,23 @@ export async function validateTarArchive(
     };
 
     inputStream.on("error", (err) => {
+      if (finished) return;
       errors.push(`Read error: ${err.message}`);
       finalize();
     });
 
     gunzip.on("error", (err) => {
+      if (finished) return;
       errors.push(`Decompression error: ${err.message}`);
       finalize();
     });
 
     gunzip.on("data", (chunk: Buffer) => {
+      decompressedBytes += chunk.length;
+      if (decompressedBytes > maxStreamBytes) {
+        fail(`Archive decompressed stream exceeds safety limit (${maxStreamBytes} bytes)`);
+        return;
+      }
       buffer = Buffer.concat([buffer, chunk]);
 
       while (buffer.length >= 512) {
@@ -190,19 +214,20 @@ export async function validateTarArchive(
           name = `${prefix}/${name}`;
         }
 
-        // Apply PAX header overrides if present
-        if (paxHeaders["path"]) {
-          name = paxHeaders["path"];
-          delete paxHeaders["path"];
-        }
-        if (paxHeaders["linkpath"]) {
-          linkname = paxHeaders["linkpath"];
-          delete paxHeaders["linkpath"];
-        }
-
         const size = parseInt(sizeOctal, 8) || 0;
+        if (!Number.isSafeInteger(size) || size < 0) {
+          fail("Archive contains an invalid or unsafe entry size");
+          return;
+        }
         const paddedSize = Math.ceil(size / 512) * 512;
-
+        if (!Number.isSafeInteger(paddedSize) || paddedSize > maxStreamBytes) {
+          fail(`Archive entry size exceeds safety limit (${maxStreamBytes} bytes)`);
+          return;
+        }
+        if ((typeflag === "x" || typeflag === "g") && size > MAX_PAX_HEADER_BYTES) {
+          fail(`PAX metadata exceeds safety limit (${MAX_PAX_HEADER_BYTES} bytes per header)`);
+          return;
+        }
         if (buffer.length < 512 + paddedSize) {
           // Incomplete block, wait for more data
           break;
@@ -213,10 +238,29 @@ export async function validateTarArchive(
 
         // Handle PAX extended header block ('x' or 'g')
         if (typeflag === "x" || typeflag === "g") {
-          const paxStr = content.toString("utf8");
-          paxHeaders = parsePax(paxStr);
+          paxBytes += size;
+          if (paxBytes > MAX_TOTAL_PAX_BYTES || content.length !== size) {
+            fail(`PAX metadata exceeds total safety limit (${MAX_TOTAL_PAX_BYTES} bytes)`);
+            return;
+          }
+          try {
+            const parsed = parsePax(content);
+            if (typeflag === "g") globalPaxHeaders = { ...globalPaxHeaders, ...parsed };
+            else paxHeaders = { ...paxHeaders, ...parsed };
+          } catch (err: any) {
+            fail(`Malformed PAX metadata: ${err.message}`);
+            return;
+          }
           continue;
         }
+
+        // Global PAX defaults persist; local PAX values override them for the
+        // next entry. Validate the effective names used by the tar extractor.
+        if (globalPaxHeaders["path"]) name = globalPaxHeaders["path"];
+        if (globalPaxHeaders["linkpath"]) linkname = globalPaxHeaders["linkpath"];
+        if (paxHeaders["path"]) name = paxHeaders["path"];
+        if (paxHeaders["linkpath"]) linkname = paxHeaders["linkpath"];
+        paxHeaders = {};
 
         // Strip trailing slash for uniform name checks
         const cleanName = name.replace(/\/+$/, "");
@@ -279,15 +323,28 @@ export async function validateTarArchive(
   });
 }
 
-function parsePax(paxData: string): Record<string, string> {
+function parsePax(paxData: Buffer): Record<string, string> {
   const result: Record<string, string> = {};
-  const lines = paxData.split("\n");
-  for (const line of lines) {
-    if (!line) continue;
-    const match = line.match(/^\d+\s+([^=]+)=(.*)$/);
-    if (match) {
-      result[match[1]] = match[2];
+  const decoder = new TextDecoder("utf-8", { fatal: true });
+  const safeMetadata = new Set(["uid", "gid", "uname", "gname", "mtime", "atime", "ctime", "comment"]);
+  let offset = 0;
+  while (offset < paxData.byteLength) {
+    const space = paxData.indexOf(0x20, offset);
+    if (space < 0) throw new Error("record length is missing");
+    const lengthText = paxData.subarray(offset, space).toString("ascii");
+    if (!/^\d+$/.test(lengthText)) throw new Error("record length is invalid");
+    const recordLength = Number(lengthText);
+    const recordEnd = offset + recordLength;
+    if (!Number.isSafeInteger(recordLength) || recordLength <= space - offset + 2 || recordEnd > paxData.byteLength || paxData[recordEnd - 1] !== 0x0a) {
+      throw new Error("record length is invalid");
     }
+    const record = paxData.subarray(space + 1, recordEnd - 1);
+    const equals = record.indexOf(0x3d);
+    if (equals <= 0) throw new Error("record key/value is invalid");
+    const key = decoder.decode(record.subarray(0, equals));
+    if (key === "path" || key === "linkpath") result[key] = decoder.decode(record.subarray(equals + 1));
+    else if (!safeMetadata.has(key)) throw new Error(`unsupported extraction-affecting key '${key}'`);
+    offset = recordEnd;
   }
   return result;
 }
