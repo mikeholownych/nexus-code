@@ -28,6 +28,8 @@ if (mode === "record") {
       tree: run("git", "rev-parse", "HEAD^{tree}"),
       tagObject: run("git", "rev-parse", `refs/tags/${version}`),
       lockfiles: Object.fromEntries(LOCKFILES.map((file) => [file, sha256(file)])),
+      // Non-ignored untracked files could be packaged without being part of the commit; both builders must agree.
+      untracked: run("git", "ls-files", "--others", "--exclude-standard").split("\n").filter(Boolean),
     },
     toolchain: { node: process.version, npm: run("npm", "--version"), rustc: run("rustc", "-V"), cargo: run("cargo", "-V") },
     runner: { label, image: process.env.ImageOS ?? null, imageVersion: process.env.ImageVersion ?? null },
