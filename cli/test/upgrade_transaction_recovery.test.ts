@@ -5,7 +5,7 @@ import * as path from "node:path";
 import * as os from "node:os";
 import { spawnSync, spawn } from "node:child_process";
 import { verifyInstalledRuntime } from "../src/upgrade_health.js";
-import { writeJournal, readJournal, recoverUpgrade, createPreMigrationBackup, restoreConfigBackup, UpgradeJournalEntry, RecoveryOutcome } from "../src/upgrade_journal.js";
+import { writeJournal, readJournal, recoverUpgrade, createPreMigrationBackup, restoreConfigBackup, acquireReclaimGuard, UpgradeJournalEntry, RecoveryOutcome } from "../src/upgrade_journal.js";
 import * as http from "node:http";
 import * as crypto from "node:crypto";
 import { generateCompatibilityMetadata } from "../src/compatibility.js";
@@ -138,6 +138,48 @@ describe("durable same-version transaction recovery",()=>{
       assert.equal(fs.existsSync(guardPath),true);
       assert.equal(readJournal(prefix)?.state,"rolled_back");
     } finally { child.kill("SIGKILL"); }
+  });
+  it("does not leak descriptors across repeated guard contention",async()=>{
+    const libRoot=path.join(prefix,"lib/nexus");
+    const guardPath=path.join(libRoot,".upgrade.lock.guard"), held=path.join(prefix,"guard-held-3");
+    fs.writeFileSync(guardPath,"",{mode:0o600});
+    const cwd=path.resolve(import.meta.dirname || path.dirname(new URL(import.meta.url).pathname),"..");
+    const code=`import * as fs from 'node:fs'; import { spawnSync } from 'node:child_process'; const g=${JSON.stringify(guardPath)}; const m=${JSON.stringify(held)}; const fd=fs.openSync(g,'r+'); const r=spawnSync('/usr/bin/flock',['-n','-E','75','3'],{stdio:['ignore','ignore','ignore',fd]}); if(r.status!==0){process.exit(3);} fs.writeFileSync(m,'held'); setInterval(()=>{},1000);`;
+    const child=spawn(process.execPath,["--import","tsx","--input-type=module","-e",code],{cwd,env:{...process.env,HOME:prefix},stdio:["ignore","ignore","pipe"]});
+    const failTimer=setTimeout(()=>child.kill("SIGKILL"),10000);
+    try {
+      const end=Date.now()+5000;
+      while(Date.now()<end && !fs.existsSync(held)) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)),0,0,25);
+      assert.equal(fs.existsSync(held),true,"guard holder did not start");
+      const count=()=>fs.readdirSync("/proc/self/fd").length;
+      const before=count();
+      for(let i=0;i<10;i++) assert.equal(acquireReclaimGuard(guardPath),null);
+      assert.equal(count(),before,`descriptor count changed ${before} -> ${count()}`);
+    } finally { clearTimeout(failTimer); child.kill("SIGKILL"); await new Promise<void>(r=>child.on("exit",()=>r())); }
+  });
+  it("fails closed when the flock utility is unavailable",()=>{
+    const guardPath=path.join(prefix,"lib/nexus",".upgrade.lock.guard");
+    fs.writeFileSync(guardPath,"",{mode:0o600});
+    assert.throws(()=>acquireReclaimGuard(guardPath,"/nonexistent/nexus-flock-probe"),/unavailable/i);
+  });
+  it("rejects a symlinked reclaim guard",()=>{
+    const guardPath=path.join(prefix,"lib/nexus",".upgrade.lock.guard");
+    const target=path.join(prefix,"guard-target");
+    fs.writeFileSync(target,"",{mode:0o600});
+    fs.symlinkSync(target,guardPath);
+    assert.throws(()=>acquireReclaimGuard(guardPath),/redirected|regular file/);
+  });
+  it("rejects a FIFO reclaim guard",()=>{
+    const guardPath=path.join(prefix,"lib/nexus",".upgrade.lock.guard");
+    const made=spawnSync("mkfifo",[guardPath]);
+    assert.equal(made.error,undefined,String(made.error));
+    assert.throws(()=>acquireReclaimGuard(guardPath),/redirected|regular file/);
+  });
+  it("rejects a reclaim guard with unsafe permissions",()=>{
+    const guardPath=path.join(prefix,"lib/nexus",".upgrade.lock.guard");
+    fs.writeFileSync(guardPath,"",{mode:0o600});
+    fs.chmodSync(guardPath,0o644);
+    assert.throws(()=>acquireReclaimGuard(guardPath),/unsafe permissions/);
   });
   it("does not touch the lock for a completed journal in a read-only package directory",()=>{
     entry.state="complete";writeJournal(prefix,entry);

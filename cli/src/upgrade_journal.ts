@@ -266,18 +266,42 @@ export interface ReclaimGuard {
 const FLOCK_UTILITY = "/usr/bin/flock";
 const FLOCK_CONTENTION_EXIT = 75;
 
+/** Rejects a guard we do not solely own: wrong type, foreign owner, or permissive mode. */
+function validateGuardIdentity(guardPath: string, fd: number): void {
+  const self = fs.fstatSync(fd);
+  if (!self.isFile()) throw new Error("Reclaim guard is not a regular file");
+  if (typeof process.getuid === "function" && self.uid !== process.getuid()) throw new Error("Reclaim guard is not owned by the running user");
+  if ((self.mode & 0o077) !== 0) throw new Error(`Reclaim guard has unsafe permissions (${(self.mode & 0o777).toString(8)})`);
+  const current = fs.lstatSync(guardPath, { throwIfNoEntry:false });
+  if (!current?.isFile() || current.ino !== self.ino || current.dev !== self.dev) throw new Error("Reclaim guard path is redirected");
+}
+
 function openGuardFile(guardPath: string): number {
   let fd: number;
   try { fd = fs.openSync(guardPath, "ax+", 0o600); }
   catch (error: any) {
     if (error.code !== "EEXIST") throw error;
+    // Pre-open identity: the path itself must already be a regular file, so
+    // symlinks, FIFOs, and devices are rejected before the following open.
+    const before = fs.lstatSync(guardPath);
+    if (!before.isFile()) throw new Error("Reclaim guard path is redirected");
     fd = fs.openSync(guardPath, "r+");
+    // Post-open identity: what was opened must still be that same inode/device,
+    // owned by this user, without group/other permission bits.
+    try {
+      const opened = fs.fstatSync(fd);
+      if (opened.ino !== before.ino || opened.dev !== before.dev) throw new Error("Reclaim guard path is redirected");
+      validateGuardIdentity(guardPath, fd);
+    } catch (error) {
+      fs.closeSync(fd);
+      throw error;
+    }
+    return fd;
   }
-  const self = fs.fstatSync(fd);
-  const current = fs.lstatSync(guardPath, { throwIfNoEntry:false });
-  if (!self.isFile() || !current?.isFile() || self.ino !== current.ino) {
+  try { validateGuardIdentity(guardPath, fd); }
+  catch (error) {
     fs.closeSync(fd);
-    throw new Error("Reclaim guard path is redirected");
+    throw error;
   }
   return fd;
 }
@@ -286,16 +310,23 @@ function openGuardFile(guardPath: string): number {
  * Acquires the reclaim guard. Returns null on contention (another live
  * reclaimer holds the kernel lock) and throws on any unsupported or failed
  * prerequisite so callers fail closed instead of proceeding unserialized.
+ * The utility path is injectable so tests can demonstrate fail-closed
+ * behavior without modifying the real system utility.
  */
-export function acquireReclaimGuard(guardPath: string): ReclaimGuard | null {
+export function acquireReclaimGuard(guardPath: string, flockUtility: string = FLOCK_UTILITY): ReclaimGuard | null {
   const fd = openGuardFile(guardPath);
   try {
     // The utility exits immediately; the lock persists on the shared open file
     // description while this process keeps the descriptor open.
-    const probe = spawnSync(FLOCK_UTILITY, ["-n", "-E", String(FLOCK_CONTENTION_EXIT), "3"], { stdio:["ignore","ignore","ignore", fd], timeout: 2000 });
-    if (probe.error) throw new Error(`Reclaim guard utility ${FLOCK_UTILITY} is unavailable: ${probe.error.message}`);
+    const probe = spawnSync(flockUtility, ["-n", "-E", String(FLOCK_CONTENTION_EXIT), "3"], { stdio:["ignore","ignore","ignore", fd], timeout: 2000 });
+    if (probe.error) throw new Error(`Reclaim guard utility ${flockUtility} is unavailable: ${probe.error.message}`);
     if (probe.status === 0) return { path: guardPath, fd };
-    if (probe.status === FLOCK_CONTENTION_EXIT) return null;
+    if (probe.status === FLOCK_CONTENTION_EXIT) {
+      // Contention is not ownership: close the descriptor so repeated busy
+      // recovery calls cannot leak it in a long-lived process.
+      fs.closeSync(fd);
+      return null;
+    }
     throw new Error(`Reclaim guard acquisition failed (exit ${probe.status})`);
   } catch (error) {
     try { fs.closeSync(fd); } catch {}
