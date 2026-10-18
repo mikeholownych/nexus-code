@@ -10,7 +10,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { startModelProxy } from "./model_proxy.mjs";
-import { asUserSpec, corpusManifestProblem, corpusTaskRows, fetchModelEntry, hiddenTestIsolationProblem, modelFingerprint, nexusContextLimitArgs, nexusLimitsProblem, qualificationBudgetProblem, taskTreeDigest, validateTask } from "./validate.mjs";
+import { asUserSpec, corpusManifestProblem, corpusTaskRows, fetchModelEntry, hiddenTestIsolationProblem, modelFingerprint, nexusContextLimitArgs, nexusLimitsProblem, qualificationBudgetProblem, runtimeCorpusOverlapProblem, taskTreeDigest, validateTask } from "./validate.mjs";
 import { agentSandboxArgv, assertNoSymlinks, confinedPath, grantRunAsAccess, hiddenOutputHasTests, isolatedProcessArgv, normalizeRunAsPermissions, runIsolated, runIsolatedProcess, sandboxAvailable, stageHiddenFiles } from "./isolate.mjs";
 import { runBlackBoxOracle } from "./oracle.mjs";
 import { stageRepoWorkspace } from "./workspace.mjs";
@@ -520,7 +520,23 @@ function runAgent(task, ws, home, budget, agentIdentity, proxyDirectory, localTo
   }
   const sandboxRuntimePaths = [...new Set(runtimePaths)];
   const allowedRuntimeRoots = [...new Set([...(config.sandboxRuntimeRoots ?? []), ...((config.agent ?? "nexus") === "nexus" && agentIdentity.argsPrefix[0] === path.join(ROOT, "cli/dist/index.js") ? [ROOT] : [])])];
-  const sandbox = agentSandboxArgv({ cwd: ws, home, proxyDirectory, readOnlyPaths: sandboxRuntimePaths, allowedRuntimeRoots, runtimeExecutablePaths: [cmd, ...agentIdentity.argsPrefix], supervisorPath: path.join(ROOT, "eval/agent_sandbox.mjs") });
+  const supervisorPath = path.join(ROOT, "eval/agent_sandbox.mjs");
+  const corpusPaths = [
+    config.corpusCustody?.storeRoot,
+    config.corpusCustody?.validatorPath,
+    config.corpusCustody?.referencePath,
+    config.corpusCustody?.authorLogPath,
+  ].filter((item) => item !== undefined);
+  const protectedCorpusPaths = [tasksDir, path.dirname(tasksDir), ...corpusPaths];
+  const corpusOverlap = runtimeCorpusOverlapProblem(sandboxRuntimePaths, allowedRuntimeRoots, tasksDir, corpusPaths, {
+    cwd: ws,
+    home,
+    proxyDirectory,
+    nodeRuntime: cmd,
+    supervisorPath,
+  });
+  if (corpusOverlap) throw new Error(corpusOverlap);
+  const sandbox = agentSandboxArgv({ cwd: ws, home, proxyDirectory, readOnlyPaths: sandboxRuntimePaths, allowedRuntimeRoots, runtimeExecutablePaths: [cmd, ...agentIdentity.argsPrefix], supervisorPath, protectedCorpusPaths });
   const wrapped = config.runAs ? asUserSpec(config.runAs, sandbox) : sandbox;
   return new Promise((resolve) => {
     const { child, containment } = spawnContained(wrapped, config.resources ?? null, { cwd: "/", env: {}, stdio: ["pipe", "pipe", "pipe"], detached: true });

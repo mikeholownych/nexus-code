@@ -3,8 +3,9 @@
 // the agent's reach when the agent runs as its own user.
 import fs from "node:fs";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { createHash } from "node:crypto";
-import { assertNoSymlinks, confinedPath, runtimeMountProblem, sandboxAvailable } from "./isolate.mjs";
+import { assertNoSymlinks, candidateSandboxHostMountSources, confinedPath, runtimeMountProblem, sandboxAvailable } from "./isolate.mjs";
 import { blackBoxOracleProblem } from "./oracle.mjs";
 import { t3TaskProblems } from "./t3.mjs";
 import { resourceProbeProblem } from "./resources.mjs";
@@ -12,6 +13,7 @@ import { resourceProbeProblem } from "./resources.mjs";
 export const TIERS = ["T1", "T2", "T3", "T4"];
 export const CLASSES = ["bugfix", "feature", "refactor", "debug"];
 export const DIFFICULTIES = ["easy", "medium", "hard"];
+const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
 /** Problems with one task.json (empty when valid). `qualification` adds the fields held-out tasks must carry. */
 export function validateTask(task, dir, { qualification = false } = {}) {
@@ -132,35 +134,77 @@ function pathOverlaps(left, right) {
   return left === right || left.startsWith(`${right}${path.sep}`) || right.startsWith(`${left}${path.sep}`);
 }
 
+function resolveCanonicalOrLexical(source) {
+  if (typeof source !== "string" || !path.isAbsolute(source)) return null;
+  const lexical = path.resolve(source);
+  let current = lexical;
+  const suffix = [];
+  while (true) {
+    try {
+      return { lexical, canonical: path.resolve(fs.realpathSync(current), ...suffix) };
+    } catch {
+      const parent = path.dirname(current);
+      if (parent === current) return { lexical, canonical: lexical };
+      suffix.unshift(path.basename(current));
+      current = parent;
+    }
+  }
+}
+
+function overlapVariants(left, right) {
+  return [left.lexical, left.canonical].some((a) => [right.lexical, right.canonical].some((b) => pathOverlaps(a, b)));
+}
+
 /** Refuse candidate runtime mounts that could expose the task tree or its private corpus store. */
-export function runtimeCorpusOverlapProblem(runtimePaths, runtimeRoots, tasksDir, extraPrivatePaths = []) {
+export function runtimeCorpusOverlapProblem(runtimePaths, runtimeRoots, tasksDir, extraPrivatePaths = [], mountContext = {}) {
   if (!Array.isArray(runtimePaths) || !Array.isArray(runtimeRoots) || !Array.isArray(extraPrivatePaths)) {
     return "qualification runtime and corpus paths must be explicit arrays";
   }
-  let taskPath;
-  try { taskPath = fs.realpathSync(tasksDir); }
-  catch { return "qualification task corpus path is unavailable"; }
+  const taskPath = resolveCanonicalOrLexical(tasksDir);
+  if (!taskPath || !fs.existsSync(tasksDir)) return "qualification task corpus path is unavailable";
   // Held-out stores keep tasks/, references/, and custody material under one directory. Blocking both the
   // task tree and its store root prevents a runtime allowlist from naming a sibling reference or validator path.
-  const privatePaths = [taskPath, path.dirname(taskPath), ...extraPrivatePaths];
+  const privatePaths = [tasksDir, path.dirname(tasksDir), ...extraPrivatePaths];
   const protectedPaths = [];
   for (const item of privatePaths) {
-    if (typeof item !== "string" || !path.isAbsolute(item)) return "qualification private corpus paths must be absolute";
-    try { protectedPaths.push(fs.realpathSync(item)); }
-    catch { return `qualification private corpus path is unavailable: ${item}`; }
+    const resolved = resolveCanonicalOrLexical(item);
+    if (!resolved) return "qualification private corpus paths must be absolute";
+    protectedPaths.push({ source: item, resolved, exists: fs.existsSync(item) });
   }
-  const candidatePaths = [...runtimePaths, ...runtimeRoots];
-  for (const item of candidatePaths) {
+  for (const item of [...runtimePaths, ...runtimeRoots]) {
     if (typeof item !== "string" || !path.isAbsolute(item)) return "qualification runtime paths and roots must be absolute";
-    let resolved;
-    try { resolved = fs.realpathSync(item); }
-    catch { return `qualification runtime path is unavailable: ${item}`; }
+    if (!fs.existsSync(item)) return `qualification runtime path is unavailable: ${item}`;
+  }
+  const mountSources = candidateSandboxHostMountSources({
+    readOnlyPaths: runtimePaths,
+    supervisorPath: mountContext.supervisorPath ?? path.join(ROOT, "eval/agent_sandbox.mjs"),
+    nodeRuntime: mountContext.nodeRuntime ?? process.execPath,
+    cwd: mountContext.cwd,
+    home: mountContext.home,
+    proxyDirectory: mountContext.proxyDirectory,
+  });
+  const hostSources = [
+    ...mountSources.systemDirectories,
+    ...mountSources.systemFiles,
+    ...mountSources.systemEtcDirectories,
+    ...Object.values(mountSources.runtimeSources).flatMap((value) => Array.isArray(value) ? value : value === null ? [] : [value]),
+  ];
+  const candidatePaths = [...new Set([...hostSources, ...runtimePaths, ...runtimeRoots])];
+  const candidates = [];
+  for (const item of candidatePaths) {
+    const resolved = resolveCanonicalOrLexical(item);
+    if (!resolved) return "qualification runtime paths and roots must be absolute";
+    candidates.push({ source: item, resolved });
+  }
+  for (const candidate of candidates) {
     for (const protectedPath of protectedPaths) {
-      if (pathOverlaps(resolved, protectedPath)) {
-        return `qualification runtime mount overlaps protected corpus material: ${resolved}`;
+      if (overlapVariants(candidate.resolved, protectedPath.resolved)) {
+        return `qualification runtime mount overlaps protected corpus material: ${candidate.source}`;
       }
     }
   }
+  const unavailablePrivate = protectedPaths.find((item) => !item.exists);
+  if (unavailablePrivate) return `qualification private corpus path is unavailable: ${unavailablePrivate.source}`;
   return null;
 }
 
@@ -185,6 +229,16 @@ export async function fetchModelEntry(baseUrl, model, apiKey) {
 
 /** Qualification requires an evaluator UID, working Bubblewrap namespaces, and explicit safe runtime mount roots. */
 export function hiddenTestIsolationProblem(config, tasksDir) {
+  if (config.qualification && Array.isArray(config.sandboxRuntimePaths) && Array.isArray(config.sandboxRuntimeRoots)) {
+    const corpusPaths = [
+      config.corpusCustody?.storeRoot,
+      config.corpusCustody?.validatorPath,
+      config.corpusCustody?.referencePath,
+      config.corpusCustody?.authorLogPath,
+    ].filter((item) => item !== undefined);
+    const corpusOverlap = runtimeCorpusOverlapProblem(config.sandboxRuntimePaths, config.sandboxRuntimeRoots, tasksDir, corpusPaths, config.mountContext ?? {});
+    if (corpusOverlap) return corpusOverlap;
+  }
   if (!config.runAs) return config.qualification ? "qualification runs need runAs (the agent's own user) so hidden tests are unreadable to it" : null;
   if (!/^[a-z_][a-z0-9_-]{0,31}$/.test(config.runAs)) return `runAs '${config.runAs}' is not a valid user name`;
   if (!sandboxAvailable()) return "Bubblewrap is unavailable; qualification commands must fail closed";
@@ -197,16 +251,6 @@ export function hiddenTestIsolationProblem(config, tasksDir) {
   }
   if (!Array.isArray(config.sandboxRuntimeRoots) || config.sandboxRuntimeRoots.length === 0) {
     return "qualification requires explicit sandboxRuntimeRoots for the agent runtime allowlist";
-  }
-  if (config.qualification) {
-    const corpusPaths = [
-      config.corpusCustody?.storeRoot,
-      config.corpusCustody?.validatorPath,
-      config.corpusCustody?.referencePath,
-      config.corpusCustody?.authorLogPath,
-    ].filter((item) => item !== undefined);
-    const corpusOverlap = runtimeCorpusOverlapProblem(config.sandboxRuntimePaths, config.sandboxRuntimeRoots, tasksDir, corpusPaths);
-    if (corpusOverlap) return corpusOverlap;
   }
   const mountProblem = runtimeMountProblem(config.sandboxRuntimePaths, config.sandboxRuntimeRoots);
   if (mountProblem) return mountProblem;

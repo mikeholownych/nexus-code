@@ -9,6 +9,8 @@ import { containmentProblem, spawnContained } from "./resources.mjs";
 
 const BWRAP = "/usr/bin/bwrap";
 const SYSTEM_BINARIES = ["/usr/bin", "/usr/lib", "/usr/lib64", "/usr/libexec", "/usr/share", "/lib", "/lib64", "/usr/local/lib"];
+const SYSTEM_ETC_FILES = ["/etc/ld.so.cache", "/etc/passwd", "/etc/group", "/etc/nsswitch.conf", "/etc/localtime"];
+const SYSTEM_ETC_DIRS = ["/etc/alternatives"];
 const FORBIDDEN_RUNTIME_ROOTS = ["/etc", "/root", "/proc", "/sys", "/run", "/var", "/dev", "/tmp", "/mnt", "/media", "/srv"];
 const SENSITIVE_HOME_PARTS = [".ssh", ".config", ".aws", ".azure", ".gnupg", ".kube", ".nexus", ".cache"];
 let sandboxPreflight;
@@ -33,6 +35,74 @@ function resolveHostToolchains() {
     rustRoot: availableDirectory("/opt/nexus-qual/rust") ?? fromCommand("rustc", ["--print", "sysroot"]),
   };
   return hostToolchains;
+}
+
+/** Return the host paths that the candidate sandbox mounts, grouped by the bind logic. */
+export function candidateSandboxHostMountSources({ cwd, home, proxyDirectory, readOnlyPaths = [], nodeRuntime = process.execPath, supervisorPath } = {}) {
+  if (!Array.isArray(readOnlyPaths)) throw new Error("candidate sandbox readOnlyPaths must be an array");
+  const existing = (paths, kind) => paths.filter((source) => {
+    try {
+      const stat = fs.statSync(source);
+      return kind === "directory" ? stat.isDirectory() : stat.isFile();
+    } catch { return false; }
+  });
+  const optional = (source, resolve = true) => source === undefined ? null : resolve ? fs.realpathSync(source) : source;
+  return {
+    systemDirectories: existing(SYSTEM_BINARIES, "directory"),
+    systemFiles: existing(SYSTEM_ETC_FILES, "file"),
+    systemEtcDirectories: existing(SYSTEM_ETC_DIRS, "directory"),
+    runtimeSources: {
+      cwd: optional(cwd),
+      home: optional(home),
+      proxyDirectory: optional(proxyDirectory),
+      nodeRuntime: optional(nodeRuntime),
+      supervisorPath: optional(supervisorPath),
+      readOnlyPaths: readOnlyPaths.map((source) => fs.realpathSync(source)),
+    },
+  };
+}
+
+function pathOverlaps(left, right) {
+  return left === right || left.startsWith(`${right}${path.sep}`) || right.startsWith(`${left}${path.sep}`);
+}
+
+function pathVariants(source) {
+  if (typeof source !== "string" || !path.isAbsolute(source)) return [];
+  const lexical = path.resolve(source);
+  let current = lexical;
+  const suffix = [];
+  while (true) {
+    try {
+      const canonical = path.resolve(fs.realpathSync(current), ...suffix);
+      return [...new Set([lexical, canonical])];
+    } catch {
+      const parent = path.dirname(current);
+      if (parent === current) return [lexical];
+      suffix.unshift(path.basename(current));
+      current = parent;
+    }
+  }
+}
+
+function candidateMountOverlapProblem(mountSources, protectedCorpusPaths) {
+  if (!Array.isArray(protectedCorpusPaths)) return "candidate sandbox protectedCorpusPaths must be an array";
+  const sources = [
+    ...mountSources.systemDirectories,
+    ...mountSources.systemFiles,
+    ...mountSources.systemEtcDirectories,
+    ...Object.values(mountSources.runtimeSources).flatMap((value) => Array.isArray(value) ? value : value === null ? [] : [value]),
+  ];
+  for (const protectedPath of protectedCorpusPaths) {
+    const protectedVariants = pathVariants(protectedPath);
+    if (!protectedVariants.length) return "candidate sandbox protected corpus paths must be absolute";
+    for (const source of sources) {
+      const sourceVariants = pathVariants(source);
+      if (sourceVariants.some((left) => protectedVariants.some((right) => pathOverlaps(left, right)))) {
+        return `candidate sandbox host mount overlaps protected corpus material: ${source}`;
+      }
+    }
+  }
+  return null;
 }
 
 export function sandboxAvailable() {
@@ -180,31 +250,31 @@ function protectedRuntimeRootProblem(root) {
   return null;
 }
 
-export function agentSandboxArgv({ cwd, home, proxyDirectory, readOnlyPaths = [], allowedRuntimeRoots = [], runtimeExecutablePaths = [], supervisorPath }) {
+export function agentSandboxArgv({ cwd, home, proxyDirectory, readOnlyPaths = [], allowedRuntimeRoots = [], runtimeExecutablePaths = [], supervisorPath, protectedCorpusPaths = [] }) {
+  const mountSources = candidateSandboxHostMountSources({ cwd, home, proxyDirectory, readOnlyPaths, nodeRuntime: process.execPath, supervisorPath });
+  const protectedOverlap = candidateMountOverlapProblem(mountSources, protectedCorpusPaths);
+  if (protectedOverlap) throw new Error(protectedOverlap);
   if (!sandboxAvailable()) throw new Error("Bubblewrap is unavailable; refusing candidate execution");
   const mountProblem = runtimeMountProblem(readOnlyPaths, allowedRuntimeRoots, runtimeExecutablePaths);
   if (mountProblem) throw new Error(mountProblem);
-  const nodeRuntime = fs.realpathSync(process.execPath);
+  if (!mountSources.runtimeSources.cwd || !mountSources.runtimeSources.home || !mountSources.runtimeSources.proxyDirectory || !mountSources.runtimeSources.supervisorPath) {
+    throw new Error("candidate sandbox cwd, home, proxyDirectory, and supervisorPath are required mount sources");
+  }
+  const nodeRuntime = mountSources.runtimeSources.nodeRuntime;
   if (!fs.statSync(nodeRuntime).isFile() || (fs.statSync(nodeRuntime).mode & 0o111) === 0) {
     throw new Error("trusted evaluator Node.js runtime is unavailable");
   }
-  const workspace = fs.realpathSync(cwd);
+  const workspace = mountSources.runtimeSources.cwd;
   const args = ["--unshare-user", "--unshare-pid", "--unshare-net", "--disable-userns", "--die-with-parent", "--new-session", "--proc", "/proc", "--dev", "/dev", "--tmpfs", "/tmp"];
-  for (const source of SYSTEM_BINARIES) {
-    try {
-      if (fs.statSync(source).isDirectory()) {
-        if (source === "/usr/local/lib") args.push("--dir", "/usr/local");
-        args.push("--ro-bind", source, source);
-      }
-    } catch {}
+  for (const source of mountSources.systemDirectories) {
+    if (source === "/usr/local/lib") args.push("--dir", "/usr/local");
+    args.push("--ro-bind", source, source);
   }
-  for (const source of ["/etc/ld.so.cache", "/etc/passwd", "/etc/group", "/etc/nsswitch.conf", "/etc/localtime"]) {
-    try { if (fs.statSync(source).isFile()) args.push("--ro-bind", source, source); } catch {}
-  }
-  try { if (fs.statSync("/etc/alternatives").isDirectory()) args.push("--ro-bind", "/etc/alternatives", "/etc/alternatives"); } catch {}
-  const isolatedHome = fs.realpathSync(home);
+  for (const source of mountSources.systemFiles) args.push("--ro-bind", source, source);
+  for (const source of mountSources.systemEtcDirectories) args.push("--ro-bind", source, source);
+  const isolatedHome = mountSources.runtimeSources.home;
   args.push("--symlink", "usr/bin", "/bin", "--bind", workspace, "/workspace", "--tmpfs", "/home", "--dir", "/home/eval", "--bind", isolatedHome, "/home/eval", "--tmpfs", "/run");
-  args.push("--dir", "/run/eval-proxy", "--ro-bind", proxyDirectory, "/run/eval-proxy");
+  args.push("--dir", "/run/eval-proxy", "--ro-bind", mountSources.runtimeSources.proxyDirectory, "/run/eval-proxy");
   const madeDirs = new Set(["/", "/usr", "/usr/bin", "/usr/lib", "/usr/lib64", "/usr/libexec", "/usr/share", "/usr/local", "/usr/local/lib", "/lib", "/lib64", "/bin", "/etc", "/workspace", "/home", "/run", "/run/eval-proxy"]);
   const addTargetParents = (target) => {
     const parts = target.split(path.sep).filter(Boolean);
@@ -214,8 +284,7 @@ export function agentSandboxArgv({ cwd, home, proxyDirectory, readOnlyPaths = []
       if (!madeDirs.has(current)) { args.push("--dir", current); madeDirs.add(current); }
     }
   };
-  for (const item of readOnlyPaths) {
-    const resolved = fs.realpathSync(item);
+  for (const resolved of mountSources.runtimeSources.readOnlyPaths) {
     if (SYSTEM_BINARIES.some((root) => resolved === root || resolved.startsWith(`${root}${path.sep}`))) continue;
     if (fs.statSync(resolved).isDirectory()) assertNoSymlinks(resolved);
     addTargetParents(resolved);
@@ -223,7 +292,7 @@ export function agentSandboxArgv({ cwd, home, proxyDirectory, readOnlyPaths = []
   }
   addTargetParents("/runner/agent_sandbox.mjs");
   args.push("--ro-bind", nodeRuntime, "/runner/node");
-  args.push("--ro-bind", fs.realpathSync(supervisorPath), "/runner/agent_sandbox.mjs");
+  args.push("--ro-bind", mountSources.runtimeSources.supervisorPath, "/runner/agent_sandbox.mjs");
   args.push("--chdir", "/workspace", "--clearenv", "--setenv", "PATH", "/usr/bin:/bin", "--setenv", "HOME", "/home/eval", "--setenv", "CI", "1", "--");
   args.push("/runner/node", "/runner/agent_sandbox.mjs");
   return { cmd: BWRAP, argv: args };
