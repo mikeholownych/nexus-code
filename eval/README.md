@@ -161,19 +161,34 @@ The sealed T2 corpus uses legacy hidden tests (`hidden: { dir, command }`, for e
 test files). Those run candidate code in the same process as the oracle. Owner decision, 2026-10-18: qualification runs
 them hardened, in the style of SWE-bench. Development configs opt in with `"hardenedChecks": true`.
 
-1. The agent's workspace is never tested. After the agent finishes, the harness stages the task again (the same pinned
-   commit or fixture, the same setup commands) into a fresh workspace. It checks that the fresh tree equals the agent's
-   baseline tree.
-2. Only the agent's **source** changes are copied in: added, modified and deleted paths since the baseline commit
-   (`eval/hardened_check.mjs`).
-   - Test infrastructure is discarded. That covers test files and directories, `conftest.py`, `pytest.ini`, `tox.ini`,
-     `setup.cfg`, `sitecustomize.py`, `.pth`, jest/vitest/mocha/karma/babel config, Go `_test.go` (and therefore
-     `TestMain`), `build.rs`, `.cargo/`, `.github/`, `Makefile` and `.env*`.
-   - Symlinks and special files are also discarded.
-   - A change to test-runner configuration inside a dependency manifest refuses both checks. That means `package.json`
-     test/install scripts and runner keys, `pyproject.toml` `[tool.pytest*]`/coverage/tox/hatch-env sections, and
-     `Cargo.toml` test, bench, build and dev sections. The refusal is recorded.
-3. The hidden command runs in that workspace with the hidden directory bind-mounted **read-only**. The regression
+1. The agent's workspace is never tested, and nothing runs git or any other program against it after the agent ran.
+   An agent-written `.git/config` or `.gitattributes` would otherwise run commands as the harness user. The baseline
+   tree hash is taken before the agent starts. The harness then stages the task again (the same pinned commit or
+   fixture, the same setup commands) into a fresh workspace, and checks that its tree equals that baseline.
+2. The agent's changes are found by walking both trees and comparing bytes and executable bits
+   (`eval/hardened_check.mjs`). Only an allowlist crosses over:
+   - **Changed and deleted files** that exist in the fresh staging cross over, unless the path is blocked.
+   - **New files** cross over only with a source extension (`.py`, `.js`/`.ts` family, `.go`, `.rs`), and not under a
+     name that would shadow the test runner or the standard library on Python's `sys.path` (`pytest.py`, `_pytest/`,
+     `json.py`, …).
+   - **Always dropped:**
+     - VCS metadata and dependency trees or caches: `.git`, `node_modules`, `.venv`, `site-packages`,
+       `__pycache__`, `vendor`, `target`, `.yarn`, `.cargo`, `.github`;
+     - test files and directories;
+     - test-runner configuration: `conftest.py`, pytest/tox/setup files, jest/vitest/mocha/babel/tsconfig;
+     - interpreter and package-manager hooks: `sitecustomize.py`, `.pth`, `.npmrc`, `.yarnrc*`, `.pnpmfile.cjs`,
+       `go.work`, `rust-toolchain*`, `build.rs`;
+     - `Makefile`, `.env*`, `.gitattributes`, `.gitignore`;
+     - symlinks.
+
+     Dependency trees therefore always come from setup, never from the agent.
+   - **Manifests** may change only plain dependency or metadata entries. Any other change refuses both checks:
+     - `package.json`: anything but the dependency maps and metadata, or a `file:`/`git:`/path dependency;
+     - `pyproject.toml`: anything outside `[project]`;
+     - `Cargo.toml`: anything outside `[package]`, `[features]` and `[dependencies*]`, or a `path`/`git` source;
+     - `go.mod`: `replace`, `exclude` or `toolchain`.
+3. Anything the agent left at the oracle's path is removed. The hidden command then runs with the hidden directory
+   bind-mounted **read-only**. The regression
    command runs in a separate byte-identical copy, so candidate code executed by one check cannot prepare the other.
 4. In qualification, hidden-test output is kept only as a status, byte count and SHA-256, so evidence does not disclose
    the sealed tests. Each run record carries

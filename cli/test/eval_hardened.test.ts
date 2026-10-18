@@ -25,7 +25,8 @@ const git = (cwd: string, ...argv: string[]) => {
 test("test infrastructure is recognised across Python, Go, JS/TS and Rust layouts", async () => {
   const { isTestInfraPath } = await hardened();
   for (const p of ["conftest.py", "pkg/conftest.py", "pytest.ini", "tox.ini", "setup.cfg", "sitecustomize.py", "x.pth", "tests/test_a.py", "src/test_a.py", "a_test.py",
-    "pkg/x_test.go", "src/x.test.ts", "web/a.spec.jsx", "__tests__/a.js", "jest.config.js", "vitest.config.mts", ".mocharc.json", "build.rs", ".cargo/config.toml", ".github/workflows/ci.yml", "Makefile", ".env.local"]) {
+    "pkg/x_test.go", "src/x.test.ts", "web/a.spec.jsx", "__tests__/a.js", "jest.config.js", "vitest.config.mts", ".mocharc.json", "build.rs", ".cargo/config.toml", ".github/workflows/ci.yml", "Makefile", ".env.local",
+    ".npmrc", ".yarnrc.yml", ".pnpmfile.cjs", "go.work", "rust-toolchain.toml", "tsconfig.json", ".coveragerc", ".gitattributes", "node_modules/x/i.js", ".venv/lib/x.py", "a/__pycache__/m.pyc"]) {
     assert.equal(isTestInfraPath(p), true, p);
   }
   for (const p of ["src/app.py", "pkg/server.go", "src/index.ts", "src/lib.rs", "README.md", "package.json", "pyproject.toml", "Cargo.toml", "contest.py"]) {
@@ -33,51 +34,70 @@ test("test infrastructure is recognised across Python, Go, JS/TS and Rust layout
   }
 });
 
-test("dependency manifests keep source changes but refuse test-runner configuration changes", async () => {
-  const { testConfigChange } = await hardened();
-  const pkg = (o: object) => JSON.stringify({ name: "x", dependencies: { a: "1" }, scripts: { build: "tsc", test: "node --test" }, ...o });
-  assert.equal(testConfigChange("package.json", pkg({}), pkg({ dependencies: { a: "2" } })), null, "a dependency bump is a source change");
-  assert.match(testConfigChange("package.json", pkg({}), pkg({ scripts: { build: "tsc", test: "exit 0" } })) ?? "", /script "test"/);
-  assert.match(testConfigChange("package.json", pkg({}), pkg({ jest: { testMatch: [] } })) ?? "", /"jest"/);
-  assert.match(testConfigChange("package.json", pkg({}), "{") ?? "", /no longer parses/);
-  const toml = (pytest: string) => `[project]\nname = "x"\n\n[tool.pytest.ini_options]\n${pytest}\n`;
-  assert.equal(testConfigChange("pyproject.toml", toml("addopts = '-q'"), toml("addopts = '-q'").replace('name = "x"', 'name = "y"')), null);
-  assert.match(testConfigChange("pyproject.toml", toml("addopts = '-q'"), toml("addopts = '-p no:cacheprovider --co'")) ?? "", /pyproject/);
-  assert.match(testConfigChange("Cargo.toml", "[package]\nname=\"x\"\n", "[package]\nname=\"x\"\n\n[dev-dependencies]\nfake=\"1\"\n") ?? "", /Cargo.toml/);
-});
-
-test("only the agent's source changes reach the fresh check workspace", async () => {
+test("only the agent's source changes reach the fresh check workspace; adversarial workspace state never does", async () => {
   const { applyAgentChanges } = await hardened();
   const base = fs.mkdtempSync(path.join(os.tmpdir(), "hardened-"));
+  const write = (root: string, rel: string, content: string) => { fs.mkdirSync(path.dirname(path.join(root, rel)), { recursive: true }); fs.writeFileSync(path.join(root, rel), content); };
   try {
     const agent = path.join(base, "agent");
     const fresh = path.join(base, "fresh");
     for (const dir of [agent, fresh]) {
-      fs.mkdirSync(path.join(dir, "src"), { recursive: true });
-      fs.writeFileSync(path.join(dir, "src/app.py"), "def f(): return 1\n");
-      fs.writeFileSync(path.join(dir, "src/old.py"), "x = 1\n");
-      fs.writeFileSync(path.join(dir, "package.json"), JSON.stringify({ scripts: { test: "node --test" } }));
+      write(dir, "src/app.py", "def f(): return 1\n");
+      write(dir, "src/old.py", "x = 1\n");
+      write(dir, "package.json", JSON.stringify({ name: "x", main: "src/index.js", scripts: { test: "node --test" }, dependencies: { a: "1" } }));
+      write(dir, "Cargo.toml", "[package]\nname = \"x\"\n\n[dependencies]\nserde = \"1\"\n");
+      write(dir, "go.mod", "module x\n\ngo 1.22\n");
+      write(dir, "node_modules/jest/index.js", "real\n");
     }
-    git(agent, "init", "-q"); git(agent, "add", "-A"); git(agent, "commit", "-qm", "baseline");
-    const baseline = git(agent, "rev-parse", "HEAD");
-    fs.writeFileSync(path.join(agent, "src/app.py"), "def f(): return 2\n");
+    // Legitimate source work.
+    write(agent, "src/app.py", "def f(): return 2\n");
     fs.rmSync(path.join(agent, "src/old.py"));
-    fs.writeFileSync(path.join(agent, "src/new.py"), "y = 2\n");
-    fs.writeFileSync(path.join(agent, "conftest.py"), "import pytest\n");
-    fs.mkdirSync(path.join(agent, "tests"));
-    fs.writeFileSync(path.join(agent, "tests/test_mine.py"), "def test(): pass\n");
-    fs.writeFileSync(path.join(agent, "package.json"), JSON.stringify({ scripts: { test: "exit 0" } }));
-    const result = applyAgentChanges(agent, fresh, baseline);
+    write(agent, "src/new.py", "y = 2\n");
+    // Adversarial state: git hooks/config/filters, ignore edits, planted deps, tool config, shadowing, test files.
+    write(agent, ".git/config", "[core]\n\tfsmonitor = touch /tmp/pwned\n");
+    write(agent, ".gitattributes", "* filter=x\n");
+    write(agent, ".gitignore", "\n");
+    write(agent, "node_modules/jest/index.js", "process.exit(0)\n");
+    write(agent, ".npmrc", "script-shell=./x.sh\n");
+    write(agent, "x.sh", "exit 0\n");
+    write(agent, "pytest.py", "raise SystemExit(0)\n");
+    write(agent, "_pytest/__init__.py", "\n");
+    write(agent, "conftest.py", "import pytest\n");
+    write(agent, "tests/test_mine.py", "def test(): pass\n");
+    write(agent, "notes.txt", "scratch\n");
+    write(agent, "src/math.js", "module.exports = 1;\n"); // a JS file named like a Python stdlib module is ordinary source
+    const result = applyAgentChanges(agent, fresh);
     assert.equal(fs.readFileSync(path.join(fresh, "src/app.py"), "utf8"), "def f(): return 2\n");
     assert.equal(fs.existsSync(path.join(fresh, "src/old.py")), false, "deletions are applied");
-    assert.equal(fs.readFileSync(path.join(fresh, "src/new.py"), "utf8"), "y = 2\n");
-    assert.equal(fs.existsSync(path.join(fresh, "conftest.py")), false, "conftest.py never reaches the checks");
-    assert.equal(fs.existsSync(path.join(fresh, "tests/test_mine.py")), false);
-    assert.deepEqual(result.discarded.sort(), ["conftest.py", "tests/test_mine.py"]);
-    assert.match(result.configChanges.join(), /script "test" changed/);
+    assert.equal(fs.readFileSync(path.join(fresh, "src/new.py"), "utf8"), "y = 2\n", "new source files cross over");
+    assert.equal(fs.existsSync(path.join(fresh, "src/math.js")), true, "shadowing rules are Python-only");
+    for (const blocked of [".git/config", ".gitattributes", ".npmrc", "x.sh", "pytest.py", "_pytest/__init__.py", "conftest.py", "tests/test_mine.py", "notes.txt"]) {
+      assert.equal(fs.existsSync(path.join(fresh, blocked)), false, `${blocked} never reaches the checks`);
+    }
+    assert.equal(fs.readFileSync(path.join(fresh, "node_modules/jest/index.js"), "utf8"), "real\n", "dependency trees come from setup, not the agent");
+    assert.equal(fs.existsSync("/tmp/pwned"), false, "no git command ran against the agent's workspace");
+    assert.deepEqual(result.configChanges, []);
   } finally {
     fs.rmSync(base, { recursive: true, force: true });
   }
+});
+
+test("manifest changes outside plain dependency and metadata edits refuse the checks", async () => {
+  const { testConfigChange } = await hardened();
+  const pkg = (o: object) => JSON.stringify({ name: "x", main: "src/index.js", scripts: { test: "node --test" }, dependencies: { a: "1" }, ...o });
+  assert.equal(testConfigChange("package.json", pkg({}), pkg({ dependencies: { a: "2" } })), null);
+  assert.match(testConfigChange("package.json", pkg({}), pkg({ main: "test/index.js" })) ?? "", /"main"/);
+  assert.match(testConfigChange("package.json", pkg({}), pkg({ exports: { ".": "./t.js" } })) ?? "", /"exports"/);
+  assert.match(testConfigChange("package.json", pkg({}), pkg({ dependencies: { a: "file:../evil" } })) ?? "", /local or remote source/);
+  const cargo = "[package]\nname = \"x\"\n\n[dependencies]\nserde = \"1\"\n";
+  assert.equal(testConfigChange("Cargo.toml", cargo, cargo.replace('serde = "1"', 'serde = "1.0.200"')), null);
+  assert.match(testConfigChange("Cargo.toml", cargo, `${cargo}\n[patch.crates-io]\nserde = { path = "../s" }\n`) ?? "", /patch\.crates-io/);
+  assert.match(testConfigChange("Cargo.toml", cargo, cargo.replace('serde = "1"', 'serde = { path = "../s" }')) ?? "", /local or git source/);
+  assert.match(testConfigChange("go.mod", "module x\n", "module x\nreplace a => ../a\n") ?? "", /replace/);
+  assert.equal(testConfigChange("go.mod", "module x\n", "module x\nrequire a v1.2.3\n"), null);
+  const py = "[project]\nname = \"x\"\ndependencies = []\n";
+  assert.equal(testConfigChange("pyproject.toml", py, py.replace("[]", '["requests"]')), null);
+  assert.match(testConfigChange("pyproject.toml", py, `${py}\n[tool.pytest.ini_options]\naddopts = "--co"\n`) ?? "", /tool\.pytest/);
 });
 
 test("a heldout-v2 manifest binds each selected task's task.json and hidden directory", async () => {
@@ -101,10 +121,12 @@ test("a heldout-v2 manifest binds each selected task's task.json and hidden dire
     } };
     const manifestFile = path.join(root, "manifest.json");
     fs.writeFileSync(manifestFile, JSON.stringify(manifest));
-    const config = { corpusManifest: manifestFile, corpusManifestSha256: createHash("sha256").update(JSON.stringify(manifest)).digest("hex"), corpusCustody: { custodian: "synthetic", approvedAt: "2026-01-01T00:00:00Z", reportSha256: "c".repeat(64) } };
+    const config = { corpusManifest: manifestFile, corpusManifestSha256: createHash("sha256").update(JSON.stringify(manifest)).digest("hex"), corpusCustody: { custodian: "synthetic", approvedAt: "2026-01-01T00:00:00Z", reportPath: path.join(root, "custody.md"), reportSha256: createHash("sha256").update("custody report\n").digest("hex") } };
+    fs.writeFileSync(path.join(root, "custody.md"), "custody report\n");
     assert.equal(corpusManifestProblem(config, tasks, ["t2-a", "t2-b"]), null);
     assert.match(corpusManifestProblem({ ...config, corpusCustody: undefined }, tasks, ["t2-a", "t2-b"]) ?? "", /corpusCustody/);
     assert.match(corpusManifestProblem(config, tasks, ["t2-a"]) ?? "", /population differs/);
+    assert.match(corpusManifestProblem({ ...config, corpusCustody: { ...config.corpusCustody, reportSha256: "d".repeat(64) } }, tasks, ["t2-a", "t2-b"]) ?? "", /custody report differs/);
     fs.appendFileSync(path.join(tasks, "t2-b", "hidden", "sub", "data.txt"), "tampered\n");
     assert.match(corpusManifestProblem(config, tasks, ["t2-a", "t2-b"]) ?? "", /t2-b: hidden tests differ/);
   } finally {
@@ -158,7 +180,7 @@ test("hardened checks: a correct change passes in a fresh workspace; a test-scri
   ]);
   assert.equal(gamed.hiddenPass, false);
   assert.equal(gamed.regressionPass, false, `a rewritten test script never reaches the regression check: ${JSON.stringify(gamed.hardened)}\n${String(gamed.agentLog).split("\n").filter((l: string) => /package\.json|Tool Error|refus|denied|blocked/i.test(l)).slice(0, 12).join("\n")}`);
-  assert.match(gamed.hardened.configChanges.join(), /script "test" changed/);
+  assert.match(gamed.hardened.configChanges.join(), /package.json "scripts" changed/);
   assert.ok(gamed.hardened.discarded.includes("test/extra.test.js"));
   assert.equal(gamed.falseVerified, false);
 });

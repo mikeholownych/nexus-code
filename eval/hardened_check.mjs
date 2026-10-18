@@ -1,103 +1,165 @@
-// Hardened legacy hidden tests (owner decision 2026-10-18; eval/README.md "Hardened checks"). Legacy hidden tests run
-// candidate code in the same process as the oracle, so the agent's workspace is never tested directly: a fresh copy of
-// the staged baseline receives only the agent's source changes, with test infrastructure discarded, and the hidden and
-// regression commands run in separate copies of that, the hidden directory mounted read-only.
-import { spawnSync } from "node:child_process";
+// Hardened legacy hidden tests (owner decision 2026-10-18; eval/README.md "Hardened legacy hidden tests"). Legacy hidden
+// tests run candidate code in the same process as the oracle, so the agent's workspace is never tested directly: the
+// task is staged again (same pin or fixture, same setup) and only the agent's source changes are copied in.
+//
+// The agent's workspace is untrusted data. Nothing here runs git (or any program) against it: an agent-written
+// .git/config or .gitattributes could otherwise run commands as the harness user. Changes are found by walking both
+// trees and comparing bytes and modes; only an allowlist of source files crosses over.
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 
-/** Paths whose content steers test discovery or execution: the agent's changes to them are discarded. */
-const TEST_INFRA = [
-  /(^|\/)conftest\.py$/, /(^|\/)(pytest|tox)\.ini$/, /(^|\/)setup\.cfg$/, /(^|\/)noxfile\.py$/,
-  /(^|\/)(sitecustomize|usercustomize)\.py$/, /\.pth$/,
-  /(^|\/)tests?\//, /(^|\/)__tests__\//, /(^|\/)spec\//,
-  /(^|\/)test_[^/]*\.py$/, /_test\.py$/, /_test\.go$/, /\.(test|spec)\.[cm]?[jt]sx?$/,
-  /(^|\/)(jest|vitest|vite|karma|ava|playwright)\.config\.[^/]+$/, /(^|\/)\.mocharc(\.[^/]+)?$/, /(^|\/)\.nycrc(\.[^/]+)?$/,
-  /(^|\/)babel\.config\.[^/]+$/, /(^|\/)\.babelrc(\.[^/]+)?$/,
-  /(^|\/)build\.rs$/, /(^|\/)\.cargo\//, /(^|\/)\.github\//, /(^|\/)Makefile$/, /(^|\/)\.env[^/]*$/,
+/** Directories never carried across: VCS metadata, dependency trees, build outputs and caches. */
+const SKIP_DIRS = new Set([
+  ".git", ".hg", ".svn", "node_modules", ".venv", "venv", "site-packages", "__pycache__", ".tox", ".nox",
+  ".pytest_cache", ".mypy_cache", ".ruff_cache", "vendor", "target", ".yarn", ".pnpm-store", ".cargo", ".github",
+]);
+
+/** Paths whose content steers test discovery, tool behaviour or module resolution: never carried across. */
+const BLOCKED = [
+  // tests and test configuration
+  /(^|\/)tests?\//, /(^|\/)__tests__\//, /(^|\/)spec\//, /(^|\/)test_[^/]*\.py$/, /_test\.py$/, /_test\.go$/, /\.(test|spec)\.[cm]?[jt]sx?$/,
+  /(^|\/)conftest\.py$/, /(^|\/)(pytest|tox)\.ini$/, /(^|\/)setup\.(cfg|py)$/, /(^|\/)noxfile\.py$/, /(^|\/)\.coveragerc$/,
+  /(^|\/)(jest|vitest|vite|karma|ava|playwright|babel|webpack|rollup|esbuild)\.config\.[^/]+$/, /(^|\/)\.mocharc(\.[^/]+)?$/,
+  /(^|\/)\.nycrc(\.[^/]+)?$/, /(^|\/)\.babelrc(\.[^/]+)?$/, /(^|\/)tsconfig[^/]*\.json$/, /(^|\/)jsconfig[^/]*\.json$/,
+  // interpreter and package-manager hooks
+  /(^|\/)(sitecustomize|usercustomize)\.py$/, /\.pth$/, /(^|\/)\.npmrc$/, /(^|\/)\.yarnrc[^/]*$/, /(^|\/)\.pnpmfile\.c?js$/,
+  /(^|\/)\.pnp\.[^/]+$/, /(^|\/)bunfig\.toml$/, /(^|\/)go\.work(\.sum)?$/, /(^|\/)rust-toolchain[^/]*$/, /(^|\/)build\.rs$/,
+  /(^|\/)\.cargo\//, /(^|\/)Makefile$/, /(^|\/)\.env[^/]*$/, /(^|\/)\.gitattributes$/, /(^|\/)\.gitignore$/, /(^|\/)\.gitmodules$/,
+  /(^|\/)\.python-version$/, /(^|\/)\.node-version$/, /(^|\/)\.nvmrc$/, /(^|\/)\.tool-versions$/,
 ];
 
+/** New files with these extensions may cross over (T2 languages: JS/TS, Python, Rust, Go). */
+const SOURCE_EXTENSIONS = new Set([".js", ".mjs", ".cjs", ".jsx", ".ts", ".mts", ".cts", ".tsx", ".py", ".pyi", ".go", ".rs"]);
+
+/**
+ * Python module names a new .py file (or a directory holding one) may not take: on sys.path the workspace root comes
+ * before the standard library and the test runner. JS bare imports resolve through node_modules and Go/Rust do not
+ * resolve modules by file name, so the rule is Python-only.
+ */
+const SHADOWED = new Set([
+  "pytest", "_pytest", "pluggy", "py", "unittest", "doctest", "sitecustomize", "usercustomize", "conftest", "site",
+  "os", "sys", "io", "re", "json", "typing", "types", "collections", "functools", "itertools", "importlib", "inspect",
+  "builtins", "abc", "asyncio", "subprocess", "pathlib", "random", "time", "math", "string", "copy", "warnings",
+  "logging", "contextlib", "dataclasses", "enum", "tempfile", "shutil", "signal", "threading", "traceback", "mock",
+]);
+
 export function isTestInfraPath(relative) {
-  return TEST_INFRA.some((pattern) => pattern.test(relative));
+  if (relative.split("/").some((part) => SKIP_DIRS.has(part))) return true;
+  return BLOCKED.some((pattern) => pattern.test(relative));
 }
 
-/** Manifests that also carry dependencies: a change is kept unless it touches their test-runner configuration. */
+function shadows(relative) {
+  if (!/\.pyi?$/.test(relative)) return false;
+  return relative.split("/").some((part) => SHADOWED.has(part.replace(/\.pyi?$/, "")));
+}
+
+function sections(text, header = /^\[([^\]]+)\]\s*$/) {
+  const result = new Map();
+  let current = "";
+  for (const line of (text ?? "").split("\n")) {
+    const match = header.exec(line.trim());
+    if (match) current = match[1].trim();
+    result.set(current, `${result.get(current) ?? ""}${line}\n`);
+  }
+  return result;
+}
+
+/**
+ * Dependency manifests: a change is kept only where it is a plain dependency or package-metadata change; anything
+ * else (test-runner configuration, build hooks, path or source redirects) refuses the checks.
+ */
 export function testConfigChange(relative, before, after) {
   const base = path.basename(relative);
   if (base === "package.json") {
     const parse = (text) => { try { return JSON.parse(text ?? "{}"); } catch { return null; } };
-    const a = parse(before), b = parse(after);
+    const a = parse(before) ?? {};
+    const b = parse(after);
     if (!b) return "package.json no longer parses";
-    const keys = ["jest", "mocha", "ava", "vitest", "c8", "nyc", "babel"];
-    for (const key of keys) if (JSON.stringify(a?.[key]) !== JSON.stringify(b[key])) return `package.json "${key}" changed`;
-    for (const [name, value] of Object.entries({ ...(a?.scripts ?? {}), ...(b.scripts ?? {}) })) {
-      if (/test|pretest|posttest|prepare|preinstall|postinstall|install/.test(name) && a?.scripts?.[name] !== b.scripts?.[name]) return `package.json script "${name}" changed`;
-      void value;
+    const allowed = new Set(["dependencies", "devDependencies", "peerDependencies", "optionalDependencies", "version", "description", "keywords", "author", "license"]);
+    for (const key of new Set([...Object.keys(a), ...Object.keys(b)])) {
+      if (!allowed.has(key) && JSON.stringify(a[key]) !== JSON.stringify(b[key])) return `package.json "${key}" changed`;
+    }
+    for (const key of ["dependencies", "devDependencies", "peerDependencies", "optionalDependencies"]) {
+      for (const spec of Object.values(b[key] ?? {})) if (/^(file|link|portal|workspace|git|github|https?):|^\.{0,2}\//.test(String(spec))) return `package.json ${key} points at a local or remote source`;
     }
     return null;
   }
   if (base === "pyproject.toml") {
-    const sections = (text) => (text ?? "").split(/^(?=\[)/m).filter((s) => /^\[tool\.(pytest|coverage|tox|hatch\.envs)/.test(s)).join("");
-    return sections(before) === sections(after) ? null : "pyproject.toml test-runner sections changed";
+    const a = sections(before), b = sections(after);
+    for (const name of new Set([...a.keys(), ...b.keys()])) {
+      if (a.get(name) === b.get(name)) continue;
+      if (name !== "project" && name !== "project.optional-dependencies") return `pyproject.toml [${name || "top level"}] changed`;
+    }
+    return null;
   }
   if (base === "Cargo.toml") {
-    const sections = (text) => (text ?? "").split(/^(?=\[)/m).filter((s) => /^\[(\[test\]|\[bench\]|profile\.test|build-dependencies|dev-dependencies|lib\])/.test(s) || /^build\s*=/m.test(s)).join("");
-    return sections(before) === sections(after) ? null : "Cargo.toml test, build or dev sections changed";
+    const a = sections(before), b = sections(after);
+    for (const name of new Set([...a.keys(), ...b.keys()])) {
+      if (a.get(name) === b.get(name)) continue;
+      if (!["package", "features", "dependencies"].includes(name) && !/^dependencies\.[\w-]+$/.test(name)) return `Cargo.toml [${name || "top level"}] changed`;
+      if (/\bpath\s*=|\bgit\s*=/.test(b.get(name) ?? "")) return `Cargo.toml [${name}] points at a local or git source`;
+    }
+    return null;
+  }
+  if (base === "go.mod") {
+    const directives = (text) => (text ?? "").split("\n").filter((line) => /^\s*(replace|exclude|retract|toolchain|godebug)\b/.test(line)).join("\n");
+    return directives(before) === directives(after) ? null : "go.mod replace/exclude/toolchain directives changed";
   }
   return null;
 }
 
-function git(ws, argv) {
-  const result = spawnSync("git", ["-c", "core.quotePath=false", ...argv], {
-    cwd: ws, encoding: "utf8", maxBuffer: 64 * 1024 * 1024,
-    env: { PATH: "/usr/bin:/bin", HOME: os.tmpdir(), GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: "/dev/null", GIT_TERMINAL_PROMPT: "0", GIT_ALLOW_PROTOCOL: "none" },
-  });
-  if (result.status !== 0) throw new Error(`git ${argv[0]} failed (${result.status ?? "signal"}): ${(result.stderr || "").slice(-1000)}`);
-  return result.stdout;
+/** Regular files under `root` (relative "/" paths → absolute), skipping SKIP_DIRS; symlinks are reported separately. */
+function walk(root) {
+  const files = new Map();
+  const links = [];
+  const visit = (dir, prefix) => {
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      const relative = prefix ? `${prefix}/${entry.name}` : entry.name;
+      if (entry.isDirectory()) { if (!SKIP_DIRS.has(entry.name)) visit(path.join(dir, entry.name), relative); }
+      else if (entry.isFile()) files.set(relative, path.join(dir, entry.name));
+      else links.push(relative);
+    }
+  };
+  visit(root, "");
+  return { files, links };
 }
 
-/** The agent's changes against the staged baseline commit: [{ path, status: "A"|"M"|"D"|"T" }]. */
-export function agentChanges(ws, baseline) {
-  git(ws, ["add", "-A"]);
-  const out = git(ws, ["diff", "--cached", "--no-renames", "--name-status", "-z", baseline]);
-  const fields = out.split("\0").filter(Boolean);
-  const changes = [];
-  for (let i = 0; i < fields.length; i += 2) changes.push({ status: fields[i][0], path: fields[i + 1] });
-  return changes;
-}
+const same = (a, b) => {
+  const sa = fs.statSync(a), sb = fs.statSync(b);
+  return sa.size === sb.size && (sa.mode & 0o111) === (sb.mode & 0o111) && fs.readFileSync(a).equals(fs.readFileSync(b));
+};
 
 /**
- * Copies the agent's non-test-infrastructure changes from `agentWs` into `freshWs` (a fresh staging of the same
- * baseline). Returns what was applied, what was discarded, and any test-configuration change that fails the checks.
+ * Copies the agent's source changes from `agentWs` into `freshWs`, a fresh staging of the same baseline (setup
+ * included). Modified and deleted baseline files cross over unless blocked; new files cross over only with a source
+ * extension and no shadowing name. Returns what was applied and discarded, and any manifest change that refuses checks.
  */
-export function applyAgentChanges(agentWs, freshWs, baseline) {
+export function applyAgentChanges(agentWs, freshWs) {
+  const agent = walk(agentWs);
+  const fresh = walk(freshWs);
   const applied = [];
-  const discarded = [];
+  const discarded = [...agent.links];
   const configChanges = [];
-  for (const change of agentChanges(agentWs, baseline)) {
-    const relative = change.path;
-    if (relative.split("/").some((part) => part === ".." || part === ".git") || path.isAbsolute(relative)) { discarded.push(relative); continue; }
+  for (const [relative, source] of agent.files) {
+    const target = fresh.files.get(relative);
+    if (target && same(source, target)) continue;
     if (isTestInfraPath(relative)) { discarded.push(relative); continue; }
-    const target = path.join(freshWs, relative);
-    if (change.status === "D") {
-      fs.rmSync(target, { force: true });
-      applied.push(relative);
-      continue;
-    }
-    const source = path.join(agentWs, relative);
-    const stat = fs.lstatSync(source);
-    if (!stat.isFile()) { discarded.push(relative); continue; } // symlinks and special files are never carried over
-    const before = fs.existsSync(target) ? fs.readFileSync(target, "utf8") : null;
-    const after = fs.readFileSync(source);
-    const reason = testConfigChange(relative, before, after.toString("utf8"));
+    if (!target && (!SOURCE_EXTENSIONS.has(path.extname(relative)) || shadows(relative))) { discarded.push(relative); continue; }
+    const destination = path.join(freshWs, relative);
+    const reason = testConfigChange(relative, target ? fs.readFileSync(target, "utf8") : null, fs.readFileSync(source, "utf8"));
     if (reason) configChanges.push(reason);
-    fs.mkdirSync(path.dirname(target), { recursive: true });
-    fs.writeFileSync(target, after);
-    fs.chmodSync(target, stat.mode & 0o755);
+    fs.mkdirSync(path.dirname(destination), { recursive: true });
+    fs.writeFileSync(destination, fs.readFileSync(source));
+    fs.chmodSync(destination, fs.statSync(source).mode & 0o755);
     applied.push(relative);
   }
-  return { applied, discarded, configChanges };
+  for (const [relative, target] of fresh.files) {
+    if (agent.files.has(relative) || agent.links.includes(relative)) continue;
+    if (isTestInfraPath(relative)) { discarded.push(relative); continue; }
+    fs.rmSync(target, { force: true });
+    applied.push(relative);
+  }
+  return { applied, discarded: discarded.sort(), configChanges };
 }
 
 /** A byte-identical copy of a prepared workspace (tmpfs-local, so cheap), for a second, independent check. */

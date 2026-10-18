@@ -168,7 +168,8 @@ async function runOnce(task, run) {
   const base = { task: task.id, tier: task.tier, ...(task.tier === "T3" ? { t3SteeringItems: task.steering.length } : {}), config: config.name, agent: config.agent ?? "nexus", agentVersion: agentIdentity.record, budget, run, harness: identity.string, model: config.model, startedAt: new Date().toISOString() };
   try {
     await prepareWorkspace(task, ws);
-    const baselineCommit = gitRev(ws, "HEAD");
+    // Taken now, while .git is the harness's own: after the agent runs, nothing executes git against its workspace.
+    const baselineTree = gitRev(ws, "HEAD^{tree}");
     const t3Baseline = task.tier === "T3" ? steeringBaseline(task, ws) : null;
     // On the per-run task copy, so the steering hook in runAgent can read it. The commands run on a throwaway copy of
     // the staged workspace, so the agent starts on exactly the staged tree.
@@ -237,8 +238,8 @@ async function runOnce(task, run) {
       checkDirs.push(hiddenWs, regressionWs);
       await prepareWorkspace(task, hiddenWs);
       // Fixture tasks commit at staging time, so compare content (the tree), not the commit id.
-      if (gitRev(hiddenWs, "HEAD^{tree}") !== gitRev(ws, `${baselineCommit}^{tree}`)) throw new Error("hardened check workspace staged a different baseline");
-      hardening = { baseline: baselineCommit, ...applyAgentChanges(ws, hiddenWs, baselineCommit) };
+      if (gitRev(hiddenWs, "HEAD^{tree}") !== baselineTree) throw new Error("hardened check workspace staged a different baseline");
+      hardening = { baseline: baselineTree, ...applyAgentChanges(ws, hiddenWs) };
       cloneWorkspace(hiddenWs, regressionWs);
     }
     const refused = (check) => ({ pass: false, status: null, timedOut: false, overflow: false, output: `hardened check refused: ${hardening.configChanges.join("; ")}`, refused: true, resources: null, containmentProblem: null, check });
@@ -606,6 +607,8 @@ function runCheck(task, ws, check, hidden, { readOnlyHidden = false } = {}) {
     assertNoSymlinks(source);
     const relativeTarget = check.into ?? check.dir;
     const destination = confinedPath(ws, relativeTarget, { allowMissingLeaf: true });
+    // Hardened: nothing the agent left at the oracle's path survives under the read-only mount.
+    if (readOnlyHidden) fs.rmSync(destination, { recursive: true, force: true });
     fs.cpSync(source, destination, { recursive: true, verbatimSymlinks: true });
   }
   const readOnlySubpaths = hidden && check.dir && readOnlyHidden ? [check.into ?? check.dir] : [];

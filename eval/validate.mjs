@@ -251,15 +251,19 @@ export function heldoutHiddenDigest(hiddenDir) {
 /**
  * The sealed T2 corpus (eval/heldout-manifest.json) uses the custodian's heldout-v2 schema, which binds each task's
  * task.json and hidden directory and carries no custody fields: custody is stated in the frozen config (corpusCustody)
- * and verified by the acceptance reviewer against the committed custody report.
+ * with the committed custody report pinned by digest; the reviewer still verifies the report's content.
+ * Limit: the manifest binds task.json and hidden.dir only, not other files in a task directory.
  */
 function heldoutV2ManifestProblem(config, tasksDir, ids, manifest) {
   if (JSON.stringify(manifest.hash_scheme) !== JSON.stringify(HELDOUT_V2_HASH_SCHEME)) return "qualification corpus manifest uses an unknown hash scheme";
-  if (!Array.isArray(manifest.tasks) || manifest.tasks.length !== manifest.task_count) return "qualification corpus manifest task list does not match its task_count";
+  if (!Array.isArray(manifest.tasks) || manifest.tasks.length < 1 || manifest.tasks.length !== manifest.task_count) return "qualification corpus manifest task list is empty or does not match its task_count";
   const custody = config.corpusCustody;
-  if (typeof custody?.custodian !== "string" || !custody.custodian.trim() || typeof custody?.approvedAt !== "string" || !/^[0-9a-f]{64}$/.test(custody?.reportSha256 ?? "")) {
-    return "a heldout-v2 corpus needs corpusCustody { custodian, approvedAt, reportSha256 } in the frozen config";
+  if (typeof custody?.custodian !== "string" || !custody.custodian.trim() || Number.isNaN(Date.parse(custody?.approvedAt ?? "")) || typeof custody?.reportPath !== "string" || !/^[0-9a-f]{64}$/.test(custody?.reportSha256 ?? "")) {
+    return "a heldout-v2 corpus needs corpusCustody { custodian, approvedAt, reportPath, reportSha256 } in the frozen config";
   }
+  try {
+    if (createHash("sha256").update(fs.readFileSync(custody.reportPath)).digest("hex") !== custody.reportSha256) return "the custody report differs from corpusCustody.reportSha256";
+  } catch { return "the custody report named by corpusCustody.reportPath is unavailable"; }
   const sealed = [...manifest.tasks].map((t) => t.id).sort();
   if (JSON.stringify(sealed) !== JSON.stringify([...ids].sort())) return "qualification task population differs from the frozen corpus manifest";
   for (const row of manifest.tasks) {
