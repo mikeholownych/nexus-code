@@ -514,7 +514,7 @@ describe("Machine-Readable Compatibility & Downgrade State Rejection (REQ-REL-11
   });
 
   it("applies legacy policy for releases lacking compatibility metadata", () => {
-    const compatResult = checkReleaseCompatibility("1.0.0", 1, null);
+    const compatResult = checkReleaseCompatibility("1.0.0", 1, null, "linux-x86_64", 1, "v0.1.0-alpha.2");
     assert.equal(compatResult.compatible, true);
     assert.equal(compatResult.isLegacy, true);
     assert.ok(compatResult.reasons[0].includes("legacy compatibility policy"));

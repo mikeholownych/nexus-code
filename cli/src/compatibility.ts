@@ -236,15 +236,23 @@ export function checkReleaseCompatibility(
   currentStateSchemaVersion: number,
   targetMetadata?: ReleaseCompatibilityMetadata | null,
   platformKey: string = "linux-x86_64",
-  currentConfigSchemaVersion: number = CURRENT_CONFIG_SCHEMA_VERSION
+  currentConfigSchemaVersion: number = CURRENT_CONFIG_SCHEMA_VERSION,
+  targetVersion?: string
 ): CompatibilityCheckResult {
   if (!targetMetadata) {
     // Legacy policy: older releases prior to compatibility metadata introduction
-    // are allowed with legacy advisory, assuming schema version 1.
+    // require an explicit published release identity and their original schema/platform bounds.
+    const legacyVersion = targetVersion?.replace(/^[vV]/, "");
+    const knownLegacy = legacyVersion === "0.1.0-alpha.1" || legacyVersion === "0.1.0-alpha.2";
+    const reasons: string[] = [];
+    if (!knownLegacy) reasons.push(`Compatibility metadata is required for target release '${targetVersion ?? "unspecified"}'; only published alpha.1 and alpha.2 have a legacy policy.`);
+    if (platformKey !== "linux-x86_64") reasons.push(`Legacy releases do not support platform '${platformKey}'.`);
+    if (currentStateSchemaVersion !== 1) reasons.push(`Legacy releases require state schema version 1; current version is ${currentStateSchemaVersion}.`);
+    if (currentConfigSchemaVersion !== 1) reasons.push(`Legacy releases require config schema version 1; current version is ${currentConfigSchemaVersion}.`);
     return {
-      compatible: true,
-      isLegacy: true,
-      reasons: ["Target release lacks compatibility metadata; proceeding under legacy compatibility policy."],
+      compatible: reasons.length === 0,
+      isLegacy: knownLegacy,
+      reasons: reasons.length ? reasons : ["Target release lacks compatibility metadata; proceeding under the explicit published-alpha schema-1 Linux compatibility policy. Runtime and archive verification remain required."],
     };
   }
 
