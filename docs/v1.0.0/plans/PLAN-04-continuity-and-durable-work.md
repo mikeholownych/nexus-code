@@ -27,7 +27,7 @@ This plan implements [SPEC-04](../specs/SPEC-04-continuity-and-durable-work.md) 
 | 3 | Give work units an objective ledger keyed by unit id; offer `update_requirements`/`read_objective` to implementer and tester roles. | `agent.ts`, `objective.ts`, `team.ts` | 2 |
 | 4 | Persist execution tracking and the change baseline for durable units, and restore them on resume. | `execution_tracking.ts` (`fresh()` call sites), `objective.ts trackingOf` | 2 |
 | 5 | Subagent stats merge; `recordFindings` counts requests; no task record when not durable. | `agent.ts:1869,2863,5298-5431` | 2 |
-| 6 | Call `measureAdmission` in the subagent loop and make the offered tool set equal the accepted set. Document the remaining divergences. | `agent.ts:5298-5431` | 5 |
+| 6 | Call `measureAdmission` in the subagent loop and make the offered tool set equal the accepted set. Document the remaining divergences. **Done at source** (`runSubagent` + `EXECUTION_CONVERGENCE.md` §10); regression: `cli/test/agt111_subagent_parity.test.ts`. Ledger row update blocked on REQUIREMENTS file claim at authoring. | `agent.ts` `runSubagent` | 5 |
 | 7 | Fix the obligation write to call `setUnverifiedChanges` once and count once. | `agent.ts:3610-3641` | — |
 | 8 | Wrap `runTurn` and build an `UNHANDLED_ERROR` result in-agent; final checkpoint; cancel the steering and compaction queues with notices. | `agent.ts:4254-4995`; `turn.ts:444-460`; `app.ts:229` | — |
 | 9 | Stagnation rule for unknown state identity (distinct successful writes count as progress), plus the inverse test. | `execution_tracking.ts evaluateStep` | — |

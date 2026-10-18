@@ -1,0 +1,16 @@
+{
+  "sourceCommit": "b590be268b37790bfe4568694a9378f2016749b0",
+  "host": "local WSL",
+  "node": "20.18.1",
+  "typescriptNoEmitExit": 0,
+  "tests": 107,
+  "passed": 107,
+  "failed": 0,
+  "isolatedHome": true,
+  "officialAlpha2ArchiveSha256": "56227e58366d21f67bfb46fde4d0e916cadf4c5eed1fdc65d39e01b1d57c60c7",
+  "observedCoreVersion": "harness-core 1.2.1",
+  "boundedRuntimeHealth": {
+    "healthy": true
+  },
+  "recordedAt": "2026-10-18T17:52:46.006598+00:00"
+}
