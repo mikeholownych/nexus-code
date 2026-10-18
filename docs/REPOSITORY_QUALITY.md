@@ -33,9 +33,11 @@ The following administration helper was applied from the reviewed local configur
 ```sh
 python3 scripts/configure-github-community.py
 python3 scripts/configure-github-community.py --apply
+# Offline effective-state verification regressions (no GitHub mutations):
+python3 scripts/test-configure-github-community.py
 ```
 
-The script adds metadata/topics/labels and enables private vulnerability reporting, dependency alerts/security updates, secret scanning and push protection where available. It preserves existing unrelated topics/labels, protections, visibility, collaborators, and release state. It reports unavailable operations as unresolved rather than claiming success. Existing matching label descriptions/colors are standardized. Do not put tokens in shell arguments or tracked files.
+The script adds metadata/topics/labels and enables private vulnerability reporting, dependency alerts/security updates, secret scanning and push protection where available. It preserves existing unrelated topics/labels, protections, visibility, collaborators, and release state. It reads back metadata, topics, each configured label, private reporting, Dependabot alerts/security updates, and secret-scanning settings. Missing, paused, or mismatched settings produce an unresolved result and nonzero exit status. Effective scanning coverage still needs review. Existing matching label descriptions/colors are standardized. Do not put tokens in shell arguments or tracked files.
 
 The script requires GitHub CLI authentication with the relevant administration/security permissions. A repository role alone does not give an App every API permission. Before applying, inspect the current settings and record changes; use the normal settings UI to restore prior metadata or selectively disable a feature if rollback is necessary. Disabling security features is not routine cleanup.
 
