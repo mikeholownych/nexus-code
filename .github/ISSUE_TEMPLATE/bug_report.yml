@@ -1,0 +1,44 @@
+name: Bug report
+description: Report a reproducible Nexus Code defect.
+body:
+  - type: markdown
+    attributes:
+      value: Do not include secrets, private code, or unredacted logs. For vulnerabilities, use the security policy.
+  - type: input
+    id: version
+    attributes:
+      label: Nexus version and installation method
+      placeholder: Version output, release tag or source commit, and installer/package/source method
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: OS, architecture, Node.js version, terminal, provider/model if relevant. No credentials.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Minimal reproduction
+      description: Steps and sanitized inputs needed to reproduce the problem.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior and sanitized evidence
+    validations:
+      required: true
+  - type: textarea
+    id: workaround
+    attributes:
+      label: Workaround or regression information
+      description: Last known working version, if known.

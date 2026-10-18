@@ -1,0 +1,7 @@
+# Routing only: required approvals are configured separately in repository rules.
+* @mikeholownych
+/.github/ @mikeholownych
+/install.sh @mikeholownych
+/scripts/ @mikeholownych
+/SECURITY.md @mikeholownych
+/docs/releases/ @mikeholownych

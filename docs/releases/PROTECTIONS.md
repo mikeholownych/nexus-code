@@ -1,13 +1,15 @@
 # Repository protections for the v1 release
 
-This is a proposal. As of 2026-10-18 the repository has no rulesets, no branch protection and no tag protection.
-Applying these rules is an administrative settings change, and the repository owner makes it.
+The branch and release-tag rulesets below were observed active through the GitHub API on 2026-10-18.
+Administrative changes require a connection with the relevant settings permissions.
 
-## Current state (read-only inspection, 2026-10-18)
+## Recorded settings and observations
+
+Rulesets were freshly verified on 2026-10-18. Collaborator, default-token, Actions-policy, and environment rows below are earlier recorded observations, not freshly verified by this change.
 
 | Setting | Value |
 |---|---|
-| Rulesets / branch protection / tag protection | none |
+| Rulesets | Active `v1-protected-branches` (25340146) and `v1-immutable-release-tags` (25340148) |
 | Collaborators | `mikeholownych` (admin) only; every agent pushes as this account |
 | Default workflow token | `read`; workflows request extra permissions themselves (`release.yml`: `contents`, `id-token`, `attestations` write) |
 | Actions | all actions allowed; SHA pinning not required |
@@ -54,7 +56,7 @@ No bypass actors are defined. To repair a mistaken tag, the owner disables the r
 ## Not covered by rulesets (owner settings, optional)
 
 - **Actions SHA pinning** (`sha_pinning_required`). This would break the current workflows, which pin actions by tag,
-  until every `uses:` is pinned to a full SHA. It is recommended as a follow-up, not a v1 prerequisite.
+  until every `uses:` is pinned to a full SHA. This PR pins workflow action references; verify the merged default branch before enabling the setting. It is not automatically a new v1 prerequisite.
 - **Release immutability.** This is a repository setting, not a ruleset. If enabled before publication, a published
   release's assets cannot be replaced.
 
