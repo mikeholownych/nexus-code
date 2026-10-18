@@ -370,7 +370,8 @@ async function resolveAgentIdentity(config) {
   try { candidatePath = fs.realpathSync(command); }
   catch (error) { return { record: null, problem: required ? `could not identify ${agent} executable (${error.message})` : null, command, argsPrefix }; }
   argsPrefix = argsPrefix.map((item) => path.isAbsolute(item) ? fs.realpathSync(item) : item);
-  const probeWorkspace = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-eval-version-workspace-"));
+  // Version probes execute candidate-controlled code and must share the enforced writable-storage cap.
+  const probeWorkspace = fs.mkdtempSync(path.join(config.resources?.workspaceRoot ?? os.tmpdir(), "nexus-eval-version-workspace-"));
   let probe;
   try {
     const runtimePaths = [candidatePath, ...argsPrefix.filter((item) => path.isAbsolute(item)).map((item) => fs.realpathSync(item))];
