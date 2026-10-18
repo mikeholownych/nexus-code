@@ -198,7 +198,7 @@ Environment: E4 (gateway direct), serial runs, with matched model fingerprint, b
 
 ### 6.2 T4 fault injection (ACC-QUAL-T4)
 
-8 fault classes × 5 runs on the Nexus RC, via `eval/faults/proxy.mjs` and the fixture hooks:
+9 fault classes × 5 runs on the Nexus RC, via `eval/faults/proxy.mjs` and the fixture hooks (DEC-05 amendment, 2026-10-17: the union of the distinct scenarios below):
 
 1. refused connection mid-turn
 2. 5xx / overloaded
