@@ -1,0 +1,1 @@
+tmpfs  /srv/nexus-qual/ws tmpfs  21474836480 rw,nosuid,nodev,relatime,size=20971520k,mode=711,uid=1000,gid=1000,inode64

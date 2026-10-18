@@ -187,6 +187,7 @@ export function isolatedProcessArgv({ cwd, command, argv = [], readOnlyPaths = [
 }
 
 export function runIsolatedProcess(spec, { outputLimit = 16_384, input = "", resources = null } = {}) {
+  if (!Number.isFinite(spec.timeoutMs) || spec.timeoutMs <= 0) throw new Error("isolated process spec has no timeoutMs");
   const { child, containment } = spawnContained(spec, resources, { cwd: "/", env: {}, detached: true, stdio: ["pipe", "pipe", "pipe"] });
   return new Promise((resolve) => {
     let stdout = "";
@@ -224,20 +225,43 @@ export function runIsolatedProcess(spec, { outputLimit = 16_384, input = "", res
   });
 }
 
-/** Grant only the dedicated evaluator uid access to disposable paths; never make them world-writable. */
+/** setfacl arguments granting the evaluator, and the harness operator (by uid), access to one disposable path. */
+export function runAsAclArgs(user, operatorUid, resolved, directory) {
+  const access = ["-R", "-m", `u:${user}:rwX,u:${operatorUid}:rwX`, resolved];
+  // Defaults so that files the evaluator creates stay readable by the harness that must inspect them afterwards.
+  const defaults = directory ? ["-m", `d:u:${user}:rwx,d:u:${operatorUid}:rwx`, resolved] : null;
+  return { access, defaults };
+}
+
+/** Grant only the dedicated evaluator uid (and the harness's own uid) access to disposable paths; never world-writable. */
 export function grantRunAsAccess(user, targets) {
   if (!/^[a-z_][a-z0-9_-]{0,31}$/.test(user)) throw new Error("invalid evaluator account");
   const setfacl = "/usr/bin/setfacl";
   if (!fs.existsSync(setfacl)) throw new Error("setfacl is unavailable; refusing unsafe workspace permission changes");
   for (const target of targets) {
     const resolved = fs.realpathSync(target);
-    const result = spawnSync(setfacl, ["-R", "-m", `u:${user}:rwX`, resolved], { encoding: "utf8", timeout: 5000, env: { PATH: "/usr/bin:/bin" } });
+    const { access, defaults: defaultArgs } = runAsAclArgs(user, process.getuid(), resolved, fs.statSync(resolved).isDirectory());
+    const result = spawnSync(setfacl, access, { encoding: "utf8", timeout: 5000, env: { PATH: "/usr/bin:/bin" } });
     if (result.status !== 0) throw new Error(`could not grant scoped evaluator access to disposable path (${result.status ?? "signal"})`);
-    if (fs.statSync(resolved).isDirectory()) {
-      const defaults = spawnSync(setfacl, ["-m", `d:u:${user}:rwx`, resolved], { encoding: "utf8", timeout: 5000, env: { PATH: "/usr/bin:/bin" } });
+    if (defaultArgs) {
+      const defaults = spawnSync(setfacl, defaultArgs, { encoding: "utf8", timeout: 5000, env: { PATH: "/usr/bin:/bin" } });
       if (defaults.status !== 0) throw new Error(`could not set scoped evaluator default ACL (${defaults.status ?? "signal"})`);
     }
   }
+}
+
+/**
+ * After an evaluator run, make the evaluator's own files readable by the harness: a file created with an explicit
+ * restrictive mode (0600) gets an ACL mask that defeats the operator's named entry. `chmod` runs as the evaluator
+ * inside a no-network sandbox that sees only `dir`; files it does not own are left alone (and are already readable).
+ */
+export async function normalizeRunAsPermissions(user, dir, wrapSpec) {
+  // With ACLs the group bits are the mask: g+rwX keeps the named operator and evaluator entries effective (so the harness
+  // can read and later delete the tree); "other" gets nothing.
+  const spec = isolatedProcessArgv({ cwd: dir, command: "/usr/bin/chmod", argv: ["-R", "u+rwX,g+rwX,o-rwx", "/workspace"], timeoutMs: 60_000 });
+  const result = await runIsolatedProcess(wrapSpec(user, spec), { outputLimit: 1_000_000 });
+  if (result.timedOut || result.error) throw new Error(`could not normalise evaluator file permissions (${result.error ?? "timeout"})`);
+  return result;
 }
 
 /** Execute a task-controlled shell command in a no-network, clear-environment namespace. */

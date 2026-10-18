@@ -7,9 +7,9 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { isolatedArgv, grantRunAsAccess, sandboxAvailable } from "../isolate.mjs";
+import { isolatedArgv, grantRunAsAccess, normalizeRunAsPermissions, sandboxAvailable } from "../isolate.mjs";
 import { resourceConfigProblem, resourceProbeProblem, spawnContained } from "../resources.mjs";
-import { asUser } from "../validate.mjs";
+import { asUser, asUserSpec } from "../validate.mjs";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 const ACCOUNT = "nexus-eval";
@@ -75,8 +75,11 @@ await check("evaluator processes stay in the limited cgroup, and every one is re
       child.on("close", async () => resolve(await containment.final));
     });
     // The harness's own sandbox, as the evaluator: right uid, inside the payload leaf.
-    const sandboxed = await contained(isolatedArgv({ cwd: dir, home: false, command: "id -u > /workspace/uid; cat /proc/self/cgroup > /workspace/cgroup", timeoutSec: 30 }));
+    // The evaluator also leaves a file it made private (0600): after normalisation the harness must still read it.
+    const sandboxed = await contained(isolatedArgv({ cwd: dir, home: false, command: "id -u > /workspace/uid; cat /proc/self/cgroup > /workspace/cgroup; mkdir -p /workspace/private; echo secret > /workspace/private/f; chmod 600 /workspace/private/f; chmod 700 /workspace/private", timeoutSec: 30 }));
     must(sandboxed?.cleaned === true, `containment report: ${JSON.stringify(sandboxed)}`);
+    await normalizeRunAsPermissions(ACCOUNT, dir, asUserSpec);
+    must(fs.readFileSync(path.join(dir, "private", "f"), "utf8") === "secret\n", "the harness cannot read a private file the evaluator created");
     must(Number(fs.readFileSync(path.join(dir, "uid"), "utf8")) === Number(account()[2]), "payload did not run as the evaluator");
     must(/\/payload$/.test(fs.readFileSync(path.join(dir, "cgroup"), "utf8").trim()), "evaluator process is not in the payload cgroup");
     // Without a PID namespace nothing but the cgroup can reap a daemon: the operator-side supervisor must find the

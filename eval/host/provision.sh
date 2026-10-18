@@ -91,7 +91,8 @@ if ((${#problems[@]})); then printf 'refusing to provision (no changes made):\n'
 # 1. setfacl, which the harness uses to grant the evaluator uid access to each disposable run directory.
 if ! command -v setfacl >/dev/null; then
   apt-get update -qq
-  DEBIAN_FRONTEND=noninteractive apt-get install --yes --no-install-recommends acl
+  # NEEDRESTART_SUSPEND: the package install must not restart any unrelated service on this host.
+  DEBIAN_FRONTEND=noninteractive NEEDRESTART_SUSPEND=1 apt-get install --yes --no-install-recommends acl
   confirm "package acl"
 fi
 

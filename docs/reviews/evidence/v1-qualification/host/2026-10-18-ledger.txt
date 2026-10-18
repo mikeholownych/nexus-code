@@ -1,0 +1,7 @@
+package acl
+dir /srv/nexus-qual
+dir /srv/nexus-qual/ws
+dir /opt/nexus-qual
+account nexus-eval uid=985 home=/var/lib/nexus-eval
+file /etc/sudoers.d/99-nexus-eval sha256=0f908bbdda1d502878c4e66c89b7eca0cf89a791545f9d9c6c1042f14dc41e82
+file /etc/systemd/system/srv-nexus\x2dqual-ws.mount sha256=\a4b76ba1ad1e39571b0a0f5422f1af1e7cb400ad0ea7e39b7e13c751303960d6

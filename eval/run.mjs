@@ -10,8 +10,8 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { startModelProxy } from "./model_proxy.mjs";
-import { asUser, corpusManifestProblem, corpusTaskRows, fetchModelEntry, hiddenTestIsolationProblem, modelFingerprint, nexusContextLimitArgs, nexusLimitsProblem, qualificationBudgetProblem, taskTreeDigest, validateTask } from "./validate.mjs";
-import { agentSandboxArgv, assertNoSymlinks, confinedPath, grantRunAsAccess, isolatedProcessArgv, runIsolated, runIsolatedProcess, sandboxAvailable } from "./isolate.mjs";
+import { asUser, asUserSpec, corpusManifestProblem, corpusTaskRows, fetchModelEntry, hiddenTestIsolationProblem, modelFingerprint, nexusContextLimitArgs, nexusLimitsProblem, qualificationBudgetProblem, taskTreeDigest, validateTask } from "./validate.mjs";
+import { agentSandboxArgv, assertNoSymlinks, confinedPath, grantRunAsAccess, normalizeRunAsPermissions, isolatedProcessArgv, runIsolated, runIsolatedProcess, sandboxAvailable } from "./isolate.mjs";
 import { runBlackBoxOracle } from "./oracle.mjs";
 import { stageRepoWorkspace } from "./workspace.mjs";
 import { containmentProblem, resourceProbeProblem, spawnContained } from "./resources.mjs";
@@ -211,6 +211,8 @@ async function runOnce(task, run) {
     let agent;
     try {
       agent = await runAgent(task, ws, home, budget, agentIdentity, proxyDir, localToken);
+      // The evaluator may have created files only it can read; the harness must read the workspace and HOME next.
+      if (config.runAs) for (const dir of [ws, home]) await normalizeRunAsPermissions(config.runAs, dir, asUserSpec);
     } finally {
       await proxy?.close();
       fs.rmSync(proxyDir, { recursive: true, force: true });
@@ -352,7 +354,7 @@ async function resolveAgentIdentity(config) {
       allowedFiles: [candidatePath, ...argsPrefix.filter((item) => path.isAbsolute(item))],
       timeoutMs: 5000,
     });
-    const wrapped = config.runAs ? asUser(config.runAs, spec.cmd, spec.argv) : spec;
+    const wrapped = config.runAs ? asUserSpec(config.runAs, spec) : spec;
     probe = await runIsolatedProcess(wrapped, { outputLimit: 4096, resources: config.resources ?? null });
   } finally {
     fs.rmSync(probeWorkspace, { recursive: true, force: true });
