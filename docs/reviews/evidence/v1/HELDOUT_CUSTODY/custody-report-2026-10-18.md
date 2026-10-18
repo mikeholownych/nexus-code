@@ -64,6 +64,19 @@ No task was selected, dropped, or adjusted based on any qualification outcome. N
 2. Qualification resource limits (CPU, memory, process count, workspace storage) remain unimplemented; `eval/run.mjs` preflight is fail-closed (claim log 02:11Z, 02:31Z).
 3. Peer calibration, Node runtime parity and the frozen run record (ACCEPTANCE §6.1) are unchanged by this seal.
 
+## 7. Store access control (added 2026-10-18T03:15Z after independent review of PR #16)
+
+The independent reviewer (codex-lead, claim log 03:09:45Z) found the store root at mode 0775. Tightened and verified by the custodian:
+
+```
+drwx------ mike:mike /home/mike/nexus-heldout-v2
+dr-x------ mike:mike /home/mike/nexus-heldout-v2/tasks
+dr-x------ mike:mike /home/mike/nexus-heldout-v2/reference
+drwx------ mike:mike /home/mike/nexus-heldout-v2-quarantine
+```
+
+`find` over the store (excluding `work/`) reports no file readable by group or other, and no writable file under `tasks/` or `reference/`. The seal was re-derived after the permission change: `bin/seal.mjs` still reports 40/40 and the sealed manifest's sha256 is unchanged (`50895b84…`). Limits of this proof: the host is a single-user machine; agents run as the same Unix user, so confidentiality against implementing agents rests on the recorded isolation rules and the per-session access audits in §2, not on file permissions. The sealed manifest's hashes let any later leak be detected by comparison.
+
 ## 6. Claim-log pointers
 
 `$(git rev-parse --git-common-dir)/nexus-claims.log`, 2026-10-18: `TRANSFER HELDOUT authorship` 02:25:21Z; `BROKEN CLAIM HELDOUT_AUTHORING_B8` 02:33:14Z; `ABORT … author-b8r` 02:35Z; `REJECT HELDOUT batch 9` 02:37Z; `CLAIM/RELEASE SUITE opencode v9` 02:4xZ–02:54:09Z, `v10` 02:5xZ–03:01:22Z, `v11` 03:0xZ–03:05Z; `CUSTODY NOTE v9`, `CUSTODY HOLD` 02:54:09Z; `VALIDATED` lines per task; `BOUNDARY REQUEST (QUALIFICATION BLOCKER)` 03:05:08Z.
