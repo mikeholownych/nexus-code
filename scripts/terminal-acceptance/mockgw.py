@@ -2,7 +2,7 @@
 """Deterministic OpenAI-compatible mock for the manual terminal matrix (ACCEPTANCE §5.3).
 
 Adapted from docs/v1.0.0/evidence/D_pty/mockgw.py. The behaviour follows the keyword in the operator's latest prompt,
-so one session covers every check:
+so one session covers every check (the prompt's first word selects it):
   approve -> two write_file calls (approval panels), then a short reply
   stream  -> a long slow stream (resize while it streams)
   sleep   -> run_command "sleep 30" (press Esc while it runs)
@@ -24,29 +24,42 @@ def sse(o):
     return ("data: " + json.dumps(o) + "\n\n").encode()
 
 
+KEYWORDS = ("approve", "stream", "sleep")
+
+
+def text_of(content):
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):  # OpenAI content parts
+        return " ".join(p.get("text", "") for p in content if isinstance(p, dict))
+    return ""
+
+
 def latest_turn(body):
-    """The operator's latest prompt and how many tool results followed it."""
-    messages = body.get("messages", [])
+    """The operator's latest scenario prompt (first word is a keyword) and how many tool results followed it.
+    Other user messages, such as reminders the client injects, neither start nor reset a scenario."""
     prompt, tools = "", 0
-    for m in messages:
-        if m.get("role") == "user" and isinstance(m.get("content"), str):
-            prompt, tools = m["content"], 0
+    for m in body.get("messages", []):
+        if m.get("role") == "user":
+            words = text_of(m.get("content")).strip().lower().split()
+            if words and words[0] in KEYWORDS:
+                prompt, tools = words[0], 0
         elif m.get("role") == "tool":
             tools += 1
-    return prompt.lower(), tools
+    return prompt, tools
 
 
 def plan(body):
     prompt, tools = latest_turn(body)
-    if "approve" in prompt:
+    if prompt == "approve":
         if tools == 0:
             return ("tools", [("write_file", {"path": "first.txt", "content": "first\n"})], 800)
         if tools == 1:
             return ("tools", [("write_file", {"path": "second.txt", "content": "second\n"})], 300)
         return ("text", "Wrote first.txt and second.txt.", 0)
-    if "stream" in prompt:
+    if prompt == "stream":
         return ("stream", [f"Streaming line {i:03d} for the resize check. " for i in range(240)], 120)
-    if "sleep" in prompt:
+    if prompt == "sleep":
         if tools == 0:
             return ("tools", [("run_command", {"command": "sleep 30; echo slept"})], 0)
         return ("text", "The command finished.", 0)

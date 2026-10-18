@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 # One cell of the manual real-terminal matrix (ACCEPTANCE §5.3), run by a human INSIDE the terminal under test, sized
-# to the cell. It checks the installed RC identity and the size, launches the TUI against a deterministic local mock
-# from an isolated HOME, and captures the evidence that can be measured:
+# to the cell. It verifies the installed RC package and the terminal, launches the TUI against a deterministic local
+# mock from an isolated HOME and a whitelisted environment, and captures what can be measured:
 #   - terminal state (stty) before and after each exit;
-#   - processes started from the cell's HOME that survive an exit (check 5);
-#   - the mock's request log.
-# The human records PASS/FAIL per check and the screenshot paths. Usage:
+#   - processes from the cell (by HOME or workspace cwd) that survive an exit, with a planted positive control;
+#   - the mock's request log, which proves which scenarios ran.
+# The human records PASS/FAIL per check and two screenshots. Every attempt is kept. Usage:
 #   scripts/terminal-acceptance/run-cell.sh --rc v1.0.0-rc.N --terminal <xterm|kitty|tmux-gnome|vscode|gnome> \
 #     --size <80x24|40x14|200x60> --out <evidence dir>
 set -euo pipefail
@@ -22,32 +22,49 @@ while [[ $# -gt 0 ]]; do
     *) echo "unknown argument $1" >&2; exit 2 ;;
   esac
 done
-[[ "$rc" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-rc\.[0-9]+)?$ ]] || { echo "--rc must be vX.Y.Z[-rc.N]" >&2; exit 2; }
+[[ "$rc" =~ ^v[0-9]+\.[0-9]+\.[0-9]+-rc\.[0-9]+$ ]] || { echo "--rc must be an RC tag, vX.Y.Z-rc.N" >&2; exit 2; }
 [[ "$terminal" =~ ^(xterm|kitty|tmux-gnome|vscode|gnome)$ ]] || { echo "--terminal must be xterm|kitty|tmux-gnome|vscode|gnome" >&2; exit 2; }
 [[ "$size" =~ ^(80x24|40x14|200x60)$ ]] || { echo "--size must be 80x24|40x14|200x60" >&2; exit 2; }
 [[ -n "$out" ]] || { echo "--out is required" >&2; exit 2; }
 [[ -t 0 && -t 1 ]] || { echo "run this interactively in the terminal under test" >&2; exit 2; }
 
-cell="$terminal-$size"
-record="$out/cell-$cell.json"
-[[ ! -e "$record" ]] || { echo "$record exists; a cell is recorded once (keep failed attempts under a new --out)" >&2; exit 2; }
-mkdir -p "$out"
-
-# Identity: the installed RC on PATH, never a checkout build.
+# Identity: the installed RC package (VERSION and its own MANIFEST.sha256), never a checkout build.
 nexus_bin="$(command -v nexus)" || { echo "nexus is not on PATH; install the RC with the documented one-line command" >&2; exit 2; }
 nexus_real="$(readlink -f "$nexus_bin")"
+package="$(dirname "$(dirname "$nexus_real")")"
+[[ "$(cat "$package/VERSION" 2>/dev/null)" == "$rc" ]] || { echo "nexus resolves to $nexus_real, which is not an installed $rc package" >&2; exit 2; }
+(cd "$package" && sha256sum --check --status MANIFEST.sha256) || { echo "installed package at $package fails its MANIFEST.sha256" >&2; exit 2; }
+manifest_sha="$(sha256sum "$package/MANIFEST.sha256" | cut -d' ' -f1)"
 version_line="$(nexus --version 2>&1 | head -n 1)"
-[[ "$version_line" == *"${rc#v}"* ]] || { echo "installed nexus reports '$version_line', not $rc" >&2; exit 2; }
-case "$nexus_real" in "$HOME"/nexus-code/*|*/nexus-wt/*) echo "nexus resolves to a checkout ($nexus_real); install the RC" >&2; exit 2 ;; esac
+[[ "$(grep -oE '[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?' <<< "$version_line" | head -n 1)" == "${rc#v}" ]] || { echo "nexus reports '$version_line', not exactly ${rc#v}" >&2; exit 2; }
 
-# Size: the terminal must already be the cell's size.
+# Terminal: the cell's size, and environment consistent with the claimed terminal.
 want_cols="${size%x*}" want_rows="${size#*x}"
 read -r rows cols < <(stty size)
 [[ "$cols" == "$want_cols" && "$rows" == "$want_rows" ]] || { echo "terminal is ${cols}x${rows}; resize it to $size first" >&2; exit 2; }
-if [[ "$terminal" == tmux-gnome ]]; then
-  [[ -n "${TMUX:-}" ]] || { echo "run inside tmux (inside GNOME Terminal)" >&2; exit 2; }
-  tmux_version="$(tmux -V)"; [[ "$tmux_version" =~ ^tmux\ 3\. ]] || { echo "need tmux 3.x, have $tmux_version" >&2; exit 2; }
+tmux_version=""
+case "$terminal" in
+  xterm) [[ -n "${XTERM_VERSION:-}" && -z "${TMUX:-}" ]] || { echo "XTERM_VERSION unset or inside tmux: not xterm" >&2; exit 2; } ;;
+  kitty) [[ -n "${KITTY_WINDOW_ID:-}" && -z "${TMUX:-}" ]] || { echo "KITTY_WINDOW_ID unset or inside tmux: not kitty" >&2; exit 2; } ;;
+  vscode) [[ "${TERM_PROGRAM:-}" == vscode ]] || { echo "TERM_PROGRAM is not vscode" >&2; exit 2; } ;;
+  gnome) [[ -n "${VTE_VERSION:-}" && -z "${TMUX:-}" && -z "${KITTY_WINDOW_ID:-}" ]] || { echo "VTE_VERSION unset or inside tmux/kitty: not GNOME Terminal" >&2; exit 2; } ;;
+  tmux-gnome)
+    [[ -n "${TMUX:-}" && -n "${VTE_VERSION:-}" ]] || { echo "run inside tmux inside GNOME Terminal" >&2; exit 2; }
+    tmux_version="$(tmux -V)"; [[ "$tmux_version" =~ ^tmux\ 3\. ]] || { echo "need tmux 3.x, have $tmux_version" >&2; exit 2; } ;;
+esac
+kitty_protocol=""
+if [[ "$terminal" == kitty ]]; then
+  read -r -p "Is the kitty keyboard protocol enabled for this window? (yes/no) " kitty_protocol
+  [[ "$kitty_protocol" == yes ]] || { echo "enable the kitty keyboard protocol first" >&2; exit 2; }
 fi
+
+# Attempts are numbered in one directory and never overwritten; the gate counts every attempt.
+cell="$terminal-$size"
+mkdir -p "$out"
+attempt=1
+while [[ -e "$out/cell-$cell.attempt-$attempt.json" || -e "$out/cell-$cell.attempt-$attempt.partial" ]]; do attempt=$((attempt + 1)); done
+stem="$out/cell-$cell.attempt-$attempt"
+: > "$stem.partial"
 
 # Isolated HOME and workspace; nothing touches the operator's ~/.nexus or ~/.config/nexus.
 cell_home="$(mktemp -d "${TMPDIR:-/tmp}/nexus-terminal-$cell.XXXXXX")"
@@ -58,41 +75,58 @@ printf 'terminal matrix workspace\n' > "$ws/README.md"
 mock_log="$cell_home/mock.log"
 python3 "$HERE/mockgw.py" "$cell_home/port" "$mock_log" &
 mock_pid=$!
-trap 'kill "$mock_pid" 2>/dev/null || true' EXIT
+canary_pid=""
+cleanup() { kill "$mock_pid" ${canary_pid:+"$canary_pid"} 2>/dev/null || true; rm -rf "$cell_home"; }
+trap cleanup EXIT
 for _ in $(seq 50); do [[ -s "$cell_home/port" ]] && break; sleep 0.1; done
 port="$(cat "$cell_home/port")"
 printf 'LOCAL_LLM_ENDPOINT=http://127.0.0.1:%s/v1\nLOCAL_LLM_MODEL=terminal-matrix\n' "$port" > "$cell_home/.config/nexus/config.env"
-cell_env=(HOME="$cell_home" XDG_CONFIG_HOME="$cell_home/.config" XDG_DATA_HOME="$cell_home/.local/share" XDG_STATE_HOME="$cell_home/.local/state")
 
-# Processes still running from this cell's HOME (excluding the mock), read from /proc environments.
-survivors() {
-  local n=0 pid
+# The TUI sees only a whitelisted environment, so operator gateway or API settings cannot redirect it.
+launch_env=(env -i PATH="$PATH" HOME="$cell_home" XDG_CONFIG_HOME="$cell_home/.config" XDG_DATA_HOME="$cell_home/.local/share"
+  XDG_STATE_HOME="$cell_home/.local/state" XDG_CACHE_HOME="$cell_home/.cache" LANG="${LANG:-C.UTF-8}")
+for var in TERM COLORTERM TERM_PROGRAM TERM_PROGRAM_VERSION VTE_VERSION KITTY_WINDOW_ID TMUX TMUX_PANE XTERM_VERSION DISPLAY WAYLAND_DISPLAY; do
+  [[ -n "${!var:-}" ]] && launch_env+=("$var=${!var}")
+done
+
+# Processes from this cell: HOME is the cell's HOME, or the working directory is inside the cell workspace.
+cell_processes() {
+  local pid
   for pid in $(pgrep -u "$(id -u)"); do
-    [[ "$pid" == "$mock_pid" || "$pid" == "$$" ]] && continue
-    tr '\0' '\n' < "/proc/$pid/environ" 2>/dev/null | grep -qx "HOME=$cell_home" && { n=$((n + 1)); ps -o pid=,args= -p "$pid" >&2; }
+    [[ "$pid" == "$mock_pid" || "$pid" == "$$" || "$pid" == "$BASHPID" ]] && continue
+    if tr '\0' '\n' < "/proc/$pid/environ" 2>/dev/null | grep -qx "HOME=$cell_home" || [[ "$(readlink "/proc/$pid/cwd" 2>/dev/null)" == "$ws"* ]]; then
+      echo "$pid"
+    fi
   done
-  echo "$n"
 }
+# Positive control: the scan must find a planted process before it is trusted to report zero.
+(cd "$ws" && exec env HOME="$cell_home" sleep 600) &
+canary_pid=$!
+sleep 0.3
+cell_processes | grep -qx "$canary_pid" || { echo "survivor scan cannot see a planted cell process; refusing to measure" >&2; exit 1; }
+kill "$canary_pid"; wait "$canary_pid" 2>/dev/null || true; canary_pid=""
 
 launch() {
   local label="$1"; shift
-  local before after
+  local before after status=0 survivors
   before="$(stty -g)"
-  (cd "$ws" && env "${cell_env[@]}" "$@" nexus) || true
+  (cd "$ws" && "${launch_env[@]}" "$@" nexus) || status=$?
   after="$(stty -g)"
-  sleep 1
-  printf '%s\t%s\t%s\t%s\n' "$label" "$before" "$after" "$(survivors)" >> "$cell_home/exits.tsv"
+  sleep 2
+  survivors="$(cell_processes | wc -l)"
+  [[ "$survivors" == 0 ]] || cell_processes | xargs -r ps -o pid=,args= -p >&2
+  printf '%s\t%s\t%s\t%s\t%s\n' "$label" "$status" "$([[ "$before" == "$after" ]] && echo true || echo false)" "$survivors" "$(date -u +%FT%TZ)" >> "$cell_home/exits.tsv"
 }
 
 cat <<EOF
 
-=== Cell $cell ($rc at $nexus_real) ===
-In the TUI that opens next:
+=== Cell $cell, attempt $attempt ($rc, package $package) ===
+In the TUI that opens next (the first word of each prompt selects the mock scenario):
   1  It launches and shows the TUI.
-  2  Prompt "approve". While each approval panel is open, type continuously, paste 3 lines, then approve with a
-     deliberate key. Screenshot the approval panel.
+  2  Prompt "approve". While each of the two approval panels is open, type continuously, paste 3 lines, then
+     approve with a deliberate key. Screenshot an approval panel.
   3  Enter a multiline prompt with Shift+Enter (or Alt+Enter).
-  4  Prompt "stream" and resize the window while it streams; restore the size $size afterwards.
+  4  Prompt "stream" and resize the window while it streams; restore $size afterwards.
   5  Prompt "sleep" and press Esc while "sleep 30" runs.
   6  Quit with Ctrl-C twice. Screenshot the terminal after exit.
 Press Enter to launch.
@@ -107,6 +141,7 @@ EOF
 read -r _
 launch no_color NO_COLOR=1
 
+# Answers are saved before anything else can fail, so a typo in a screenshot path does not lose them.
 : > "$cell_home/checks.tsv"
 for check in 1 2 3 4 5 6 7; do
   while true; do
@@ -116,44 +151,62 @@ for check in 1 2 3 4 5 6 7; do
   read -r -p "check $check note (optional): " note
   printf '%s\t%s\t%s\n' "$check" "$answer" "${note//$'\t'/ }" >> "$cell_home/checks.tsv"
 done
-read -r -p "approval-panel screenshot path: " shot_approval
-read -r -p "post-exit screenshot path: " shot_exit
+cp "$cell_home/checks.tsv" "$stem.answers.tsv"
+cp "$cell_home/exits.tsv" "$stem.exits.tsv"
+cp "$mock_log" "$stem.mock.log"
 read -r -p "operator name: " operator
-for shot in "$shot_approval" "$shot_exit"; do [[ -f "$shot" ]] || { echo "screenshot $shot not found; record not written" >&2; exit 1; }; done
-approval_copy="$out/cell-$cell-approval.${shot_approval##*.}"
-exit_copy="$out/cell-$cell-post-exit.${shot_exit##*.}"
+while true; do
+  read -r -p "approval-panel screenshot path: " shot_approval
+  read -r -p "post-exit screenshot path: " shot_exit
+  if [[ -f "$shot_approval" && -f "$shot_exit" ]] && ! cmp -s "$shot_approval" "$shot_exit"; then break; fi
+  echo "both screenshots must exist and differ; try again"
+done
+approval_copy="$stem.approval.${shot_approval##*.}"
+exit_copy="$stem.post-exit.${shot_exit##*.}"
 cp "$shot_approval" "$approval_copy"
 cp "$shot_exit" "$exit_copy"
-cp "$mock_log" "$out/cell-$cell-mock.log"
 
 # Values reach Python only through the environment, never through generated source.
-CELL="$cell" TERMINAL_NAME="$terminal" CELL_SIZE="$size" RC="$rc" NEXUS_VERSION_LINE="$version_line" NEXUS_PATH="$nexus_real" \
-TMUX_VERSION="${tmux_version:-}" OPERATOR_NAME="$operator" EXITS="$cell_home/exits.tsv" CHECKS="$cell_home/checks.tsv" \
-APPROVAL_SHOT="$approval_copy" EXIT_SHOT="$exit_copy" MOCK_LOG="$out/cell-$cell-mock.log" \
-python3 - "$record" <<'PY'
-import hashlib, json, os, sys
+CELL="$cell" ATTEMPT="$attempt" TERMINAL_NAME="$terminal" CELL_SIZE="$size" RC="$rc" NEXUS_VERSION_LINE="$version_line" \
+NEXUS_PATH="$nexus_real" PACKAGE_DIR="$package" MANIFEST_SHA="$manifest_sha" TMUX_VERSION="$tmux_version" \
+KITTY_PROTOCOL="$kitty_protocol" OPERATOR_NAME="$operator" STEM="$stem" APPROVAL_SHOT="$approval_copy" EXIT_SHOT="$exit_copy" \
+python3 - <<'PY'
+import hashlib, json, os
 e = os.environ
+stem = e["STEM"]
 sha = lambda p: hashlib.sha256(open(p, "rb").read()).hexdigest()
 exits = []
-for line in open(e["EXITS"]):
-    label, before, after, survivors = line.rstrip("\n").split("\t")
-    exits.append({"launch": label, "sttyRestored": before == after, "survivors": int(survivors)})
+for line in open(f"{stem}.exits.tsv"):
+    label, status, restored, survivors, at = line.rstrip("\n").split("\t")
+    exits.append({"launch": label, "exitStatus": int(status), "sttyRestored": restored == "true", "survivors": int(survivors), "at": at})
 checks = {}
-for line in open(e["CHECKS"]):
+for line in open(f"{stem}.answers.tsv"):
     check, result, note = (line.rstrip("\n").split("\t") + [""])[:3]
     checks[check] = {"result": result, "note": note}
+# Scenario proof from the mock log: which prompts and tool rounds actually reached the gateway.
+scenarios = {"approveToolRounds": set(), "stream": 0, "sleepTool": 0}
+for line in open(f"{stem}.mock.log"):
+    entry = json.loads(line)
+    prompt, tools = entry["turn"]
+    if prompt == "approve" and entry["kind"] == "tools": scenarios["approveToolRounds"].add(tools)
+    if prompt == "stream" and entry["kind"] == "stream": scenarios["stream"] += 1
+    if prompt == "sleep" and entry["kind"] == "tools": scenarios["sleepTool"] += 1
+scenarios["approveToolRounds"] = sorted(scenarios["approveToolRounds"])
 record = {
-    "acceptance": "ACCEPTANCE §5.3", "cell": e["CELL"], "terminal": e["TERMINAL_NAME"], "size": e["CELL_SIZE"],
-    "rc": e["RC"], "nexusVersion": e["NEXUS_VERSION_LINE"], "nexusPath": e["NEXUS_PATH"], "nexusSha256": sha(e["NEXUS_PATH"]),
-    "env": {k: e.get(k) for k in ["TERM", "TERM_PROGRAM", "TERM_PROGRAM_VERSION", "COLORTERM", "VTE_VERSION", "KITTY_WINDOW_ID", "TMUX"]},
-    "tmux": e["TMUX_VERSION"] or None,
-    "measured": exits,
-    "checks": checks,
-    "screenshots": {"approval": sha(e["APPROVAL_SHOT"]), "postExit": sha(e["EXIT_SHOT"])},
-    "mockLogSha256": sha(e["MOCK_LOG"]),
+    "acceptance": "ACCEPTANCE §5.3", "cell": e["CELL"], "attempt": int(e["ATTEMPT"]), "terminal": e["TERMINAL_NAME"], "size": e["CELL_SIZE"],
+    "rc": e["RC"], "nexusVersion": e["NEXUS_VERSION_LINE"], "nexusPath": e["NEXUS_PATH"], "packageDir": e["PACKAGE_DIR"],
+    "packageManifestSha256": e["MANIFEST_SHA"],
+    "env": {k: e.get(k) for k in ["TERM", "TERM_PROGRAM", "TERM_PROGRAM_VERSION", "COLORTERM", "VTE_VERSION", "KITTY_WINDOW_ID", "TMUX", "XTERM_VERSION"]},
+    "tmux": e["TMUX_VERSION"] or None, "kittyKeyboardProtocol": e["KITTY_PROTOCOL"] or None,
+    "measured": exits, "scenarios": scenarios, "checks": checks,
+    "files": {name: {"path": os.path.basename(path), "sha256": sha(path)} for name, path in
+              [("approvalScreenshot", e["APPROVAL_SHOT"]), ("postExitScreenshot", e["EXIT_SHOT"]), ("mockLog", f"{stem}.mock.log"),
+               ("answers", f"{stem}.answers.tsv"), ("exits", f"{stem}.exits.tsv")]},
     "operator": e["OPERATOR_NAME"],
 }
-json.dump(record, open(sys.argv[1], "w"), indent=2)
+with open(f"{stem}.json", "x") as f:
+    json.dump(record, f, indent=2)
 PY
-echo "recorded $record"
-rm -rf "$cell_home"
+sha256sum "$stem.json" > "$stem.json.sha256"
+rm -f "$stem.partial"
+echo "recorded $stem.json"
