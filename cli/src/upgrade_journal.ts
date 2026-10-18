@@ -10,7 +10,7 @@
 
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { execFileSync, spawnSync } from "node:child_process";
+import { verifyInstalledRuntime } from "./upgrade_health.js";
 
 export type JournalState =
   | "idle"
@@ -34,6 +34,8 @@ export interface UpgradeJournalEntry {
   targetVersion: string;
   targetInstallDir: string;
   stagingDir?: string;
+  replacementBackupDir?: string;
+  displacedTargetDir?: string;
   prefix: string;
   binPath: string;
   startedAt: string;
@@ -80,11 +82,16 @@ function isValidJournal(value: any, prefix: string): value is UpgradeJournalEntr
   const isoDate = (date: unknown) => typeof date === "string" && Number.isFinite(Date.parse(date));
 
   if (value.formatVersion !== 1 || typeof value.id !== "string" || value.id.length < 1 || value.id.length > 128 ||
-      !states.includes(value.state) || !sourceDir || !targetDir || sourceDir === targetDir ||
+      !states.includes(value.state) || !sourceDir || !targetDir ||
       !expectedPath(value.prefix, root) || !expectedPath(value.sourceInstallDir, sourceDir) ||
       !expectedPath(value.targetInstallDir, targetDir) || !expectedPath(value.sourceSymlinkTarget, path.join(sourceDir, "bin", "nexus")) ||
       !expectedPath(value.binPath, expectedBin) || !isoDate(value.startedAt) || !isoDate(value.updatedAt)) return false;
 
+  if (!/^[A-Za-z0-9._-]+$/.test(value.id)) return false;
+  for (const [field, name] of [["replacementBackupDir", `.rollback-${value.id}`], ["displacedTargetDir", `.failed-${value.id}`]]) {
+    if (value[field] !== undefined && !expectedPath(value[field], path.join(libRoot, name))) return false;
+  }
+  if (sourceDir === targetDir && !value.replacementBackupDir) return false;
   if (value.stagingDir !== undefined) {
     if (typeof value.stagingDir !== "string" || path.dirname(path.resolve(value.stagingDir)) !== libRoot ||
         !/^\.tmp-upgrade-[A-Za-z0-9._-]{1,128}$/.test(path.basename(value.stagingDir))) return false;
@@ -108,7 +115,10 @@ export function writeJournal(prefix: string, entry: UpgradeJournalEntry): void {
   fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
   const tmp = `${journalPath}.tmp.${process.pid}.${Date.now()}`;
   fs.writeFileSync(tmp, JSON.stringify(entry, null, 2), { mode: 0o600 });
+  const fd = fs.openSync(tmp, "r");
+  try { fs.fsyncSync(fd); } finally { fs.closeSync(fd); }
   fs.renameSync(tmp, journalPath);
+  syncDirectory(dir);
 }
 
 export function clearJournal(prefix: string): void {
@@ -147,13 +157,12 @@ export function createPreMigrationBackup(homeDir: string = process.env.HOME || "
     const backupDest = path.join(stateBackupsDir, `state-backup-${timestamp}`);
     fs.mkdirSync(backupDest, { recursive: true, mode: 0o700 });
 
-    // Copy session index if present
-    const sessionIndex = path.join(stateDir, "sessions", "index.json");
-    if (fs.existsSync(sessionIndex)) {
-      const destIndex = path.join(backupDest, "session-index.json");
-      fs.copyFileSync(sessionIndex, destIndex);
-      fs.chmodSync(destIndex, 0o600);
-    }
+    // Snapshot all durable state, not just its index. Backup directories are
+    // excluded to avoid recursion; symbolic links are refused rather than read.
+    copyPrivateTree(stateDir, path.join(backupDest, "state"), new Set(["backups"]));
+    const configDir = path.join(homeDir, ".config", "nexus");
+    if (fs.existsSync(configDir)) copyPrivateTree(configDir, path.join(backupDest, "config"), new Set(["backups"]));
+    fs.writeFileSync(path.join(backupDest, "backup.json"), JSON.stringify({ formatVersion:1, kind:"nexus-state-config", createdAt:new Date().toISOString() }), { mode:0o600 });
 
     result.stateBackupDir = backupDest;
   }
@@ -165,146 +174,160 @@ export function createPreMigrationBackup(homeDir: string = process.env.HOME || "
  * Restores configuration from a previous backup file.
  */
 export function restoreConfigBackup(backupPath: string, homeDir: string = process.env.HOME || ""): boolean {
-  if (!fs.existsSync(backupPath)) return false;
-  const configDir = path.join(homeDir, ".config", "nexus");
-  fs.mkdirSync(configDir, { recursive: true, mode: 0o700 });
-  const target = path.join(configDir, "config.env");
-  fs.copyFileSync(backupPath, target);
-  fs.chmodSync(target, 0o600);
-  return true;
+  try {
+    const resolved = path.resolve(backupPath);
+    if (fs.realpathSync(resolved) !== resolved) return false;
+    const configRoot = path.join(homeDir, ".config", "nexus");
+    if (fs.lstatSync(resolved).isDirectory()) {
+      if (path.dirname(resolved) !== path.join(homeDir, ".nexus", "backups") || !/^state-backup-[A-Za-z0-9T_.-]+$/.test(path.basename(resolved))) return false;
+      const metadata = JSON.parse(fs.readFileSync(path.join(resolved, "backup.json"), "utf8"));
+      if (metadata.formatVersion !== 1 || metadata.kind !== "nexus-state-config") return false;
+      // Validate the entire source tree before touching live configuration/state.
+      validatePrivateTree(resolved);
+      const state = path.join(resolved, "state");
+      const config = path.join(resolved, "config");
+      if (fs.existsSync(state)) restorePrivateTree(state, path.join(homeDir, ".nexus"), new Set(["backups"]));
+      if (fs.existsSync(config)) restorePrivateTree(config, configRoot, new Set(["backups"]));
+      return true;
+    }
+    // Legacy plain config backups are recognized by their canonical location
+    // and name. Archives and arbitrary files must never become config.env.
+    if (path.dirname(resolved) !== path.join(configRoot, "backups") || !/^config\.env\.bak\.[A-Za-z0-9T_.-]+$/.test(path.basename(resolved)) || !fs.lstatSync(resolved).isFile()) return false;
+    fs.mkdirSync(configRoot, { recursive:true, mode:0o700 });
+    const target = path.join(configRoot, "config.env");
+    if (fs.existsSync(target) && (!fs.lstatSync(target).isFile() || fs.realpathSync(target) !== target)) return false;
+    fs.copyFileSync(resolved, target);
+    fs.chmodSync(target, 0o600);
+    return true;
+  } catch { return false; }
+}
+function validatePrivateTree(source: string): void {
+  if (fs.realpathSync(source) !== path.resolve(source)) throw new Error("Backup path is redirected");
+  const stat = fs.lstatSync(source);
+  if (stat.isSymbolicLink() || (!stat.isDirectory() && !stat.isFile())) throw new Error("Backup contains unsupported files");
+  if (stat.isDirectory()) for (const name of fs.readdirSync(source)) validatePrivateTree(path.join(source, name));
+}
+function copyPrivateTree(source: string, destination: string, excluded = new Set<string>()): void {
+  validatePrivateTreeExcept(source, excluded);
+  fs.mkdirSync(destination, { recursive:true, mode:0o700 });
+  if (fs.realpathSync(destination) !== path.resolve(destination)) throw new Error("Backup destination is redirected");
+  fs.chmodSync(destination, 0o700);
+  for (const entry of fs.readdirSync(source, { withFileTypes:true })) {
+    if (excluded.has(entry.name)) continue;
+    const from = path.join(source, entry.name), to = path.join(destination, entry.name);
+    if (entry.isDirectory()) copyPrivateTree(from, to);
+    else {
+      try { if (fs.lstatSync(to).isSymbolicLink()) throw new Error("Restore destination is redirected"); } catch (error:any) { if (error.code !== "ENOENT") throw error; }
+      fs.copyFileSync(from, to); fs.chmodSync(to, 0o600);
+    }
+  }
+}
+function restorePrivateTree(source: string, destination: string, preserved = new Set<string>()): void {
+  if (fs.existsSync(destination)) validatePrivateTreeExcept(destination, preserved);
+  copyPrivateTree(source, destination);
+  for (const name of fs.readdirSync(destination)) {
+    if (preserved.has(name)) continue;
+    const from = path.join(source, name), to = path.join(destination, name);
+    if (!fs.existsSync(from)) fs.rmSync(to, { recursive:true, force:true });
+    else if (fs.lstatSync(from).isDirectory()) restorePrivateTree(from, to);
+  }
+}
+function validatePrivateTreeExcept(source: string, excluded: Set<string>): void {
+  if (fs.realpathSync(source) !== path.resolve(source) || !fs.lstatSync(source).isDirectory()) throw new Error("State root is redirected");
+  for (const entry of fs.readdirSync(source)) if (!excluded.has(entry)) validatePrivateTree(path.join(source, entry));
 }
 
 export interface RecoveryOutcome {
   recovered: boolean;
-  action: "rolled_back" | "finalized" | "none" | "cleaned_up";
+  action: "rolled_back" | "finalized" | "none" | "cleaned_up" | "manual_intervention";
   details: string;
 }
 
 /**
  * Idempotent crash recovery: inspects journal and restores working installation or finalizes transition.
  */
-export function recoverUpgrade(prefix: string): RecoveryOutcome {
-  const journalPath = getJournalPath(prefix);
-  const journal = readJournal(prefix);
-  if (!journal && fs.existsSync(journalPath)) {
-    return { recovered: false, action: "none", details: "Upgrade journal failed schema or path validation; no recovery action was taken." };
-  }
-  if (!journal || journal.state === "idle" || journal.state === "complete" || journal.state === "rolled_back") {
-    return {
-      recovered: false,
-      action: "none",
-      details: "No interrupted upgrade found in journal.",
-    };
-  }
-
-  const { state, sourceInstallDir, targetInstallDir, stagingDir, binPath, sourceVersion, targetVersion } = journal;
-
-  const libRoot = path.join(path.resolve(prefix), "lib", "nexus");
-  if (!isRealDirectory(libRoot) || !isRealDirectory(path.dirname(binPath))) {
-    return { recovered: false, action: "none", details: "Upgrade recovery roots are not real contained directories; no recovery action was taken." };
-  }
-  for (const installDir of [sourceInstallDir, targetInstallDir]) {
-    if (fs.existsSync(installDir) && !isRealDirectory(installDir)) {
-      return { recovered: false, action: "none", details: "An installation path is not a real directory; no recovery action was taken." };
-    }
-  }
-
-  // Cleanup abandoned staging directory if exists
-  if (stagingDir && fs.existsSync(stagingDir)) {
-    if (!isRealDirectory(stagingDir) || path.dirname(path.resolve(stagingDir)) !== libRoot || fs.realpathSync(path.dirname(stagingDir)) !== libRoot) {
-      return { recovered: false, action: "none", details: "Staging path is not a contained real directory; no recovery action was taken." };
-    }
-    try {
-      fs.rmSync(stagingDir, { recursive: true, force: true });
-    } catch (err: any) {
-      return { recovered: false, action: "none", details: `Could not safely remove staging directory: ${err.message}` };
-    }
-  }
-
-  // If upgrade crashed during downloading, preparing, or staged (before symlink was touched):
-  if (state === "preparing" || state === "downloading" || state === "staged" || state === "recovery_required") {
-    // Symlink should point to source
-    const sourceExecutable = path.join(sourceInstallDir, "bin", "nexus");
-    if (isRealFile(sourceExecutable)) {
-      atomicSymlinkSwap(sourceExecutable, binPath);
-    } else {
-      journal.state = "recovery_required";
-      journal.error = "Source launcher is missing or is not a regular contained file";
-      journal.updatedAt = new Date().toISOString();
-      writeJournal(prefix, journal);
-      return {
-        recovered: false,
-        action: "none",
-        details: `Manual intervention required: source launcher at ${sourceExecutable} is not a regular contained file.`,
-      };
-    }
-    journal.state = "rolled_back";
-    journal.updatedAt = new Date().toISOString();
-    writeJournal(prefix, journal);
-    return {
-      recovered: true,
-      action: "cleaned_up",
-      details: `Cleaned up incomplete upgrade to ${targetVersion}; active installation remains ${sourceVersion}.`,
-    };
-  }
-
-  // If upgrade crashed during switching or switched:
-  if (state === "switching" || state === "switched" || state === "verified") {
-    // Check if target installation is intact and executable
-    const targetExecutable = path.join(targetInstallDir, "bin", "nexus");
-    let targetHealthy = isRealFile(targetExecutable);
-    if (targetHealthy) {
-      try {
-        const testRes = spawnSync(targetExecutable, ["--version"]);
-        targetHealthy = testRes.status === 0;
-      } catch {
-        targetHealthy = false;
+export function recoverUpgrade(prefix: string, options: { forceRollback?: boolean; timeoutMs?: number } = {}): RecoveryOutcome {
+  const lock = path.join(prefix, "lib", "nexus", ".upgrade.lock");
+  let owned = false;
+  try {
+    if (fs.existsSync(lock)) {
+      if (!isRealFile(lock)) throw new Error("Upgrade lock is redirected");
+      const holder = JSON.parse(fs.readFileSync(lock, "utf8"));
+      if (!Number.isSafeInteger(holder.pid) || holder.pid < 1) throw new Error("Upgrade lock is invalid");
+      if (holder.pid !== process.pid) {
+        try { process.kill(holder.pid, 0); throw new Error("An upgrade transaction is still active"); }
+        catch (error:any) { if (error.code !== "ESRCH") throw error; }
+        fs.unlinkSync(lock);
       }
     }
-
-    if (targetHealthy) {
-      // Finalize transition
-      atomicSymlinkSwap(targetExecutable, binPath);
+    if (!fs.existsSync(lock) && fs.existsSync(path.dirname(lock))) {
+      const fd = fs.openSync(lock, "wx", 0o600);
+      fs.writeFileSync(fd, JSON.stringify({ pid:process.pid })); fs.closeSync(fd); owned = true;
+    }
+    return recoverUpgradeLocked(prefix, options);
+  } catch (error:any) { return { recovered:false, action:"manual_intervention", details:error.message }; }
+  finally { if (owned) try { fs.unlinkSync(lock); } catch {} }
+}
+function recoverUpgradeLocked(prefix: string, options: { forceRollback?: boolean; timeoutMs?: number } = {}): RecoveryOutcome {
+  const journalPath = getJournalPath(prefix);
+  const journal = readJournal(prefix);
+  const failed = (details: string): RecoveryOutcome => ({ recovered:false, action:"manual_intervention", details });
+  if (!journal && fs.existsSync(journalPath)) return failed("Upgrade journal failed schema or path validation; no recovery action was taken.");
+  if (!journal || (["idle", "complete", "rolled_back"].includes(journal.state) && !options.forceRollback)) return { recovered:false, action:"none", details:"No interrupted upgrade found in journal." };
+  const libRoot = path.join(path.resolve(prefix), "lib", "nexus");
+  if (!isRealDirectory(libRoot) || !isRealDirectory(path.dirname(journal.binPath))) return failed("Upgrade recovery roots are not real contained directories; no recovery action was taken.");
+  for (const directory of [journal.sourceInstallDir, journal.targetInstallDir, journal.replacementBackupDir, journal.displacedTargetDir, journal.stagingDir]) {
+    if (directory && fs.existsSync(directory) && !isRealDirectory(directory)) return failed("A recovery path is not a contained real directory; no recovery action was taken.");
+    // lstat also detects dangling symlinks, which existsSync deliberately ignores.
+    if (directory) { try { if (fs.lstatSync(directory).isSymbolicLink()) return failed("A recovery path is a symlink; no recovery action was taken."); } catch (error: any) { if (error.code !== "ENOENT") return failed(error.message); } }
+  }
+  try {
+    if (!options.forceRollback && journal.state === "verified" && verifyInstalledRuntime(journal.targetInstallDir, journal.targetVersion, options.timeoutMs).healthy) {
+      atomicSymlinkSwap(path.join(journal.targetInstallDir, "bin", "nexus"), journal.binPath);
       journal.state = "complete";
       journal.updatedAt = new Date().toISOString();
       writeJournal(prefix, journal);
-      return {
-        recovered: true,
-        action: "finalized",
-        details: `Validated intact target installation at ${targetInstallDir}; finalized upgrade to ${targetVersion}.`,
-      };
-    } else {
-      // Revert symlink to source installation
-      const sourceExecutable = path.join(sourceInstallDir, "bin", "nexus");
-      if (isRealFile(sourceExecutable)) {
-        atomicSymlinkSwap(sourceExecutable, binPath);
-        journal.state = "rolled_back";
-        journal.updatedAt = new Date().toISOString();
-        writeJournal(prefix, journal);
-        return {
-          recovered: true,
-          action: "rolled_back",
-          details: `Target installation at ${targetInstallDir} was incomplete; safely reverted link to ${sourceVersion}.`,
-        };
-      } else {
-        journal.state = "recovery_required";
-        journal.error = "Both source and target installations are unverified";
-        journal.updatedAt = new Date().toISOString();
-        writeJournal(prefix, journal);
-        return {
-          recovered: false,
-          action: "none",
-          details: `Manual intervention required: source ${sourceInstallDir} and target ${targetInstallDir} unreadable.`,
-        };
-      }
+      return { recovered:true, action:"finalized", details:`Finalized verified release ${journal.targetVersion}.` };
     }
+    // The old package is kept outside disposable staging. The journal records its
+    // identity BEFORE the first rename, covering crashes on either side of it.
+    const early = ["preparing", "downloading", "staged"].includes(journal.state);
+    const sameVersion = journal.sourceInstallDir === journal.targetInstallDir;
+    const saved = journal.replacementBackupDir;
+    if (saved && fs.existsSync(saved)) {
+      if (!verifyInstalledRuntime(saved, sameVersion ? journal.sourceVersion : journal.targetVersion, options.timeoutMs).healthy && sameVersion) throw new Error("Preserved source package failed runtime validation; retained for manual intervention");
+      if (fs.existsSync(journal.targetInstallDir)) {
+        if (!journal.displacedTargetDir || fs.existsSync(journal.displacedTargetDir)) throw new Error("Cannot displace failed target safely; all packages retained");
+        fs.renameSync(journal.targetInstallDir, journal.displacedTargetDir);
+        syncDirectory(libRoot);
+      }
+      fs.renameSync(saved, journal.targetInstallDir);
+      syncDirectory(libRoot);
+    }
+    const health = verifyInstalledRuntime(journal.sourceInstallDir, journal.sourceVersion, options.timeoutMs);
+    if (!health.healthy) throw new Error(`source launcher/runtime is unverified: ${health.error}`);
+    atomicSymlinkSwap(journal.sourceSymlinkTarget, journal.binPath);
+    journal.state = "rolled_back";
+    journal.updatedAt = new Date().toISOString();
+    delete journal.error;
+    writeJournal(prefix, journal);
+    // Never delete staging before successful source restoration. Failed packages
+    // and the original backup remain available if any step above fails.
+    if (journal.stagingDir && fs.existsSync(journal.stagingDir)) fs.rmSync(journal.stagingDir, { recursive:true, force:true });
+    return { recovered:true, action:early ? "cleaned_up" : "rolled_back", details:`Restored verified source release ${journal.sourceVersion}.` };
+  } catch (error: any) {
+    journal.state = "recovery_required";
+    journal.error = `Manual intervention required: ${error.message}`;
+    journal.updatedAt = new Date().toISOString();
+    try { writeJournal(prefix, journal); } catch {}
+    return failed(journal.error);
   }
+}
 
-  return {
-    recovered: false,
-    action: "none",
-    details: `Journal state is ${state}; no recovery action required.`,
-  };
+/** Flush rename boundaries as well as the journal before reporting success. */
+export function syncDirectory(directory: string): void {
+  const fd = fs.openSync(directory, "r");
+  try { fs.fsyncSync(fd); } finally { fs.closeSync(fd); }
 }
 
 function isRealDirectory(directory: string): boolean {
@@ -334,6 +357,7 @@ function atomicSymlinkSwap(targetFile: string, linkPath: string): void {
   try {
     fs.symlinkSync(targetFile, tmpLink);
     fs.renameSync(tmpLink, linkPath);
+    syncDirectory(binDir);
   } catch (err: any) {
     try {
       fs.unlinkSync(tmpLink);

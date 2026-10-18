@@ -20,6 +20,7 @@ import {
   validateCompatibilityAssetBinding,
   COMPATIBILITY_METADATA_FILENAME,
 } from "./compatibility.js";
+import { verifyInstalledRuntime } from "./upgrade_health.js";
 import { CURRENT_STATE_SCHEMA_VERSION } from "./core/state.js";
 import {
   UpgradeJournalEntry,
@@ -30,6 +31,7 @@ import {
   restoreConfigBackup,
   recoverUpgrade,
   getJournalPath,
+  syncDirectory,
 } from "./upgrade_journal.js";
 
 export const CANONICAL_REPO = "mikeholownych/nexus-code";
@@ -209,10 +211,10 @@ export function isValidTag(tag: string): boolean {
 
 function testWritable(dir: string): { writable: boolean; error?: string } {
   try {
-    fs.mkdirSync(dir, { recursive: true });
-    const probe = path.join(dir, `.probe-${process.pid}-${Date.now()}`);
-    fs.writeFileSync(probe, "ok");
-    fs.unlinkSync(probe);
+    // Diagnosis and --check must never create directories or probe files.
+    let existing = path.resolve(dir);
+    while (!fs.existsSync(existing) && path.dirname(existing) !== existing) existing = path.dirname(existing);
+    fs.accessSync(existing, fs.constants.W_OK);
     return { writable: true };
   } catch (err: any) {
     return { writable: false, error: err?.message ?? String(err) };
@@ -223,7 +225,10 @@ export function writeProvenance(versionDir: string, record: ProvenanceRecord): v
   const provPath = path.join(versionDir, ".provenance.json");
   const tmpPath = `${provPath}.tmp.${process.pid}.${Date.now()}`;
   fs.writeFileSync(tmpPath, JSON.stringify(record, null, 2), { mode: 0o644 });
+  const fd = fs.openSync(tmpPath, "r");
+  try { fs.fsyncSync(fd); } finally { fs.closeSync(fd); }
   fs.renameSync(tmpPath, provPath);
+  syncDirectory(versionDir);
 }
 
 export function detectInstallation(customOptions?: {
@@ -836,6 +841,13 @@ export function detectPathShadowing(binDir: string): { shadowed: boolean; preced
 }
 
 export function rollbackBinary(prefix: string): { success: boolean; revertedTo?: string; error?: string } {
+  const recorded = readJournal(prefix);
+  if (fs.existsSync(getJournalPath(prefix))) {
+    if (!recorded) return { success:false, error:"Invalid upgrade journal; no rollback was attempted." };
+    if (recorded.state !== "complete") return { success:false, error:"Resolve the pending upgrade with --recover before binary rollback." };
+    const outcome = recoverUpgrade(prefix, { forceRollback:true });
+    return outcome.recovered ? { success:true, revertedTo:recorded.sourceVersion } : { success:false, error:outcome.details };
+  }
   const libNexus = path.join(prefix, "lib", "nexus");
   const binNexus = path.join(prefix, "bin", "nexus");
   if (!fs.existsSync(libNexus)) {
@@ -872,15 +884,9 @@ export function rollbackBinary(prefix: string): { success: boolean; revertedTo?:
   const candidate = versions[0];
   const candidateBin = path.join(libNexus, candidate.dirName, "bin", "nexus");
 
-  // Verify candidate is executable
-  try {
-    const probe = spawnSync(candidateBin, ["--version"]);
-    if (probe.status !== 0) {
-      return { success: false, error: `Candidate rollback version ${candidate.dirName} failed execution test.` };
-    }
-  } catch (err: any) {
-    return { success: false, error: `Failed to test candidate rollback version: ${err.message}` };
-  }
+  // A rollback candidate must be the complete, exact reported release.
+  const health = verifyInstalledRuntime(path.dirname(path.dirname(candidateBin)), candidate.dirName);
+  if (!health.healthy) return { success:false, error:`Candidate rollback version failed runtime validation: ${health.error}` };
 
   // Atomic swap
   const binDir = path.dirname(binNexus);
@@ -905,7 +911,7 @@ export async function performUpgrade(
   }
 
   const { installed, targetVersion, action } = comparison;
-  const prefix = options?.prefix ?? installed.prefix ?? path.join(process.env.HOME || "", ".local");
+  const prefix = path.resolve(options?.prefix ?? installed.prefix ?? path.join(process.env.HOME || "", ".local"));
   const baseDownloadUrl = getReleaseBaseUrl();
   const archiveName = `nexus-linux-x86_64-${targetVersion}.tar.gz`;
   const archiveUrl = `${baseDownloadUrl}/download/${targetVersion}/${archiveName}`;
@@ -952,48 +958,37 @@ export async function performUpgrade(
     }
   }
 
-  // 2. Pre-migration backup
-  options?.onProgress?.("pre_migration_backup", "Creating pre-migration configuration backup...");
-  const backupResult = createPreMigrationBackup();
-
-  const tmpDir = path.join(libNexus, `.tmp-upgrade-${Date.now()}-${process.pid}`);
-  fs.mkdirSync(tmpDir, { recursive: true, mode: 0o700 });
-
-  // 3. Initialize transaction journal
-  const journalEntry: UpgradeJournalEntry = {
-    formatVersion: 1,
-    id: `upg-${Date.now()}-${process.pid}`,
-    state: "preparing",
-    sourceVersion: installed.version,
-    sourceInstallDir: installed.installRoot || path.join(libNexus, installed.version),
-    sourceSymlinkTarget: path.join(installed.installRoot || path.join(libNexus, installed.version), "bin", "nexus"),
-    targetVersion,
-    targetInstallDir: versionDir,
-    stagingDir: tmpDir,
-    prefix,
-    binPath: linkPath,
-    startedAt: new Date().toISOString(),
-    updatedAt: new Date().toISOString(),
-    configBackupPath: backupResult.configBackupPath,
-    stateBackupDir: backupResult.stateBackupDir,
-  };
-  writeJournal(prefix, journalEntry);
-
+  const transactionId = `upg-${Date.now()}-${process.pid}`;
+  const tmpDir = path.join(libNexus, `.tmp-upgrade-${transactionId}`);
+  let journalEntry: UpgradeJournalEntry | undefined;
   const cleanup = () => {
-    try {
-      fs.rmSync(tmpDir, { recursive: true, force: true });
-    } catch {}
+    // A failed recovery keeps every artifact, including staging, for the operator.
+    if (!journalEntry || ["complete", "rolled_back"].includes(journalEntry.state)) {
+      try { fs.rmSync(tmpDir, { recursive:true, force:true }); } catch {}
+    }
     if (lockFd !== null) {
-      try {
-        fs.closeSync(lockFd);
-      } catch {}
-      try {
-        fs.unlinkSync(lockFile);
-      } catch {}
+      try { fs.closeSync(lockFd); } catch {}
+      try { fs.unlinkSync(lockFile); } catch {}
     }
   };
-
   try {
+    const pending = readJournal(prefix);
+    if (fs.existsSync(getJournalPath(prefix)) && (!pending || !["idle", "complete", "rolled_back"].includes(pending.state))) throw new Error("Pending or invalid upgrade journal; run nexus upgrade --recover before starting another transaction.");
+    options?.onProgress?.("pre_migration_backup", "Creating pre-migration configuration and state backup...");
+    const backupResult = createPreMigrationBackup();
+    fs.mkdirSync(tmpDir, { mode:0o700 });
+    journalEntry = {
+      formatVersion:1, id:transactionId, state:"preparing",
+      sourceVersion:installed.version, sourceInstallDir:installed.installRoot || path.join(libNexus, installed.version),
+      sourceSymlinkTarget:path.join(installed.installRoot || path.join(libNexus, installed.version), "bin", "nexus"),
+      targetVersion, targetInstallDir:versionDir, stagingDir:tmpDir,
+      replacementBackupDir:path.join(libNexus, `.rollback-${transactionId}`),
+      displacedTargetDir:path.join(libNexus, `.failed-${transactionId}`),
+      prefix, binPath:linkPath, startedAt:new Date().toISOString(), updatedAt:new Date().toISOString(),
+      configBackupPath:backupResult.configBackupPath, stateBackupDir:backupResult.stateBackupDir,
+    };
+    writeJournal(prefix, journalEntry);
+    if (!readJournal(prefix)) throw new Error("Installation identity does not match the managed prefix; no package was changed.");
     // 4. Downloading phase
     options?.onProgress?.("downloading", `Fetching ${archiveName}...`);
     journalEntry.state = "downloading";
@@ -1086,10 +1081,8 @@ export async function performUpgrade(
 
     // Pre-switch staging verification: ensure unpacked executable runs --version before touching installation
     options?.onProgress?.("verifying_staged", "Testing unpacked binary in staging...");
-    const stageVerify = spawnSync(binNexus, ["--version"], { encoding: "utf8" });
-    if (stageVerify.status !== 0) {
-      throw new Error(`Unpacked binary failed staging self-test: ${stageVerify.stderr || "exit " + stageVerify.status}`);
-    }
+    const stageVerify = verifyInstalledRuntime(packageRoot, targetVersion, options?.timeoutMs);
+    if (!stageVerify.healthy) throw new Error(`Unpacked binary failed staging self-test: ${stageVerify.error}`);
 
     // The in-archive copy is authenticated by the archive checksum/attestation.
     // Detached metadata may add only the archive digest; all policy fields must
@@ -1123,7 +1116,8 @@ export async function performUpgrade(
       CURRENT_STATE_SCHEMA_VERSION,
       compatMeta,
       "linux-x86_64",
-      CURRENT_CONFIG_SCHEMA_VERSION
+      CURRENT_CONFIG_SCHEMA_VERSION,
+      targetVersion
     );
     if (!compatResult.compatible) {
       if (action === "downgrade" && compatMeta && compatMeta.compatibility.stateSchemaVersion < CURRENT_STATE_SCHEMA_VERSION) {
@@ -1155,25 +1149,17 @@ export async function performUpgrade(
     journalEntry.updatedAt = new Date().toISOString();
     writeJournal(prefix, journalEntry);
 
-    // If versionDir already exists (e.g. reinstall/repair of current version),
-    // preserve it in a backup directory inside tmpDir instead of deleting it preemptively.
-    const backupDir = path.join(tmpDir, "previous-version-backup");
-    let hasBackupDir = false;
+    // Durable identity is already journaled. Never place the sole working
+    // package in staging: cleanup or a killed process must not erase rollback.
+    const backupDir = journalEntry.replacementBackupDir!;
     if (fs.existsSync(versionDir)) {
       fs.renameSync(versionDir, backupDir);
-      hasBackupDir = true;
+      syncDirectory(libNexus);
+      options?.onProgress?.("package_preserved", "Previous package preserved for rollback.");
     }
-
-    try {
-      fs.renameSync(packageRoot, versionDir);
-    } catch (renameErr) {
-      if (hasBackupDir && !fs.existsSync(versionDir)) {
-        try {
-          fs.renameSync(backupDir, versionDir);
-        } catch {}
-      }
-      throw renameErr;
-    }
+    fs.renameSync(packageRoot, versionDir);
+    syncDirectory(libNexus);
+    options?.onProgress?.("package_moved", "Staged package moved into place.");
 
     // Record durable provenance
     writeProvenance(versionDir, {
@@ -1191,14 +1177,7 @@ export async function performUpgrade(
       archiveSha256: computeSha256(localArchive),
     });
 
-    // Capture the existing symlink target before swapping
-    let previousSymlinkTarget = journalEntry.sourceSymlinkTarget;
-    if (fs.existsSync(linkPath) && fs.lstatSync(linkPath).isSymbolicLink()) {
-      try {
-        const rawTarget = fs.readlinkSync(linkPath);
-        previousSymlinkTarget = path.resolve(binDir, rawTarget);
-      } catch {}
-    }
+    options?.onProgress?.("provenance_written", "Installation provenance recorded.");
 
     // Atomic symlink swap
     const nextLink = path.join(binDir, `.nexus-link.${process.pid}`);
@@ -1207,6 +1186,8 @@ export async function performUpgrade(
     } catch {}
     fs.symlinkSync(path.join(versionDir, "bin", "nexus"), nextLink);
     fs.renameSync(nextLink, linkPath);
+    syncDirectory(binDir);
+    options?.onProgress?.("launcher_switched", "Launcher switched; runtime verification pending.");
 
     journalEntry.state = "switched";
     journalEntry.updatedAt = new Date().toISOString();
@@ -1214,36 +1195,10 @@ export async function performUpgrade(
 
     // 7. Post-installation verification phase
     options?.onProgress?.("verifying_install", "Verifying installed product...");
-    const verifyRun = spawnSync(linkPath, ["--version"], { encoding: "utf8" });
-    if (verifyRun.status !== 0) {
-      // Post-switch verification failed: immediately rollback linkPath and restore previous versionDir if applicable
-      if (previousSymlinkTarget && fs.existsSync(previousSymlinkTarget)) {
-        const rollbackLink = path.join(binDir, `.nexus-link-rollback.${process.pid}`);
-        try { fs.unlinkSync(rollbackLink); } catch {}
-        try {
-          fs.symlinkSync(previousSymlinkTarget, rollbackLink);
-          fs.renameSync(rollbackLink, linkPath);
-        } catch {}
-      }
-      if (hasBackupDir && fs.existsSync(backupDir)) {
-        try {
-          fs.rmSync(versionDir, { recursive: true, force: true });
-          fs.renameSync(backupDir, versionDir);
-        } catch {}
-      }
-      journalEntry.state = "rolled_back";
-      journalEntry.updatedAt = new Date().toISOString();
-      writeJournal(prefix, journalEntry);
-      throw new Error(`Installed binary failed self-test: ${verifyRun.stderr || "exit " + verifyRun.status}`);
-    }
+    const verifyRun = verifyInstalledRuntime(versionDir, targetVersion, options?.timeoutMs);
+    if (!verifyRun.healthy) throw new Error(`Installed binary failed self-test: ${verifyRun.error}`);
 
-    // Clean up backupDir if verification succeeded
-    if (hasBackupDir && fs.existsSync(backupDir)) {
-      try {
-        fs.rmSync(backupDir, { recursive: true, force: true });
-      } catch {}
-    }
-
+    // Retain the old same-version package after success for --rollback-binary.
     journalEntry.state = "verified";
     journalEntry.updatedAt = new Date().toISOString();
     writeJournal(prefix, journalEntry);
@@ -1271,6 +1226,16 @@ export async function performUpgrade(
       restartNotice: `Nexus has been upgraded to ${targetVersion} in ${versionDir}. The current session continues running on ${installed.version}. Restart Nexus to activate the new version.${pathWarning ? `\n\n${pathWarning}` : ""}`,
       attestationVerified,
     };
+  } catch (error: any) {
+    if (journalEntry) {
+      const outcome = recoverUpgrade(prefix, { forceRollback:true, timeoutMs:options?.timeoutMs });
+      // Read back the durable outcome rather than claiming rollback after a
+      // failed rename, journal write, probe, or symlink update.
+      const durable = readJournal(prefix);
+      if (durable) journalEntry = durable;
+      if (!outcome.recovered) throw new Error(`${error.message}; ${outcome.details}`);
+    }
+    throw error;
   } finally {
     cleanup();
   }
@@ -1287,6 +1252,11 @@ export async function upgradeCommand(options: any): Promise<void> {
   const timeoutMs = options.timeout ? Number(options.timeout) : 15000;
   const isCheckOnly = Boolean(options.check);
   const prefix = options.prefix ?? path.join(process.env.HOME || "", ".local");
+
+  if (isCheckOnly && (options.rollbackBinary || options.restoreBackup || options.recover)) {
+    console.error("--check cannot be combined with modifying recovery operations.");
+    process.exit(UPGRADE_EXIT.error);
+  }
 
   // 1. Rollback binary command
   if (options.rollbackBinary) {
@@ -1334,7 +1304,7 @@ export async function upgradeCommand(options: any): Promise<void> {
       );
     } else {
       if (restored) {
-        console.log(`✔ Restored configuration from ${backupPath}.`);
+        console.log(`✔ Restored configuration/state backup from ${backupPath}.`);
       } else {
         console.error(`Restore failed: backup file ${backupPath} not found.`);
       }
@@ -1343,6 +1313,10 @@ export async function upgradeCommand(options: any): Promise<void> {
   }
 
   // 3. Crash recovery command
+  if (options.recover && isCheckOnly) {
+    console.error("--check cannot be combined with recovery or restore operations.");
+    process.exit(UPGRADE_EXIT.error);
+  }
   if (options.recover) {
     const outcome = recoverUpgrade(prefix);
     if (isJson) {
@@ -1351,7 +1325,7 @@ export async function upgradeCommand(options: any): Promise<void> {
           {
             schemaVersion: 1,
             tool: "nexus upgrade",
-            status: outcome.recovered ? "recovered" : "no_action",
+            status: outcome.recovered ? "recovered" : outcome.action === "none" ? "no_action" : "error",
             ...outcome,
           },
           null,
@@ -1370,13 +1344,17 @@ export async function upgradeCommand(options: any): Promise<void> {
 
   // 4. Automatic crash recovery check at startup
   const journal = readJournal(prefix);
-  if (journal && journal.state !== "complete" && journal.state !== "idle" && journal.state !== "rolled_back") {
+  if (!isCheckOnly && journal && journal.state !== "complete" && journal.state !== "idle" && journal.state !== "rolled_back") {
     if (!isJson) {
       console.warn(`[upgrade] Detected interrupted upgrade in state '${journal.state}'. Attempting recovery...`);
     }
     const recoveryOutcome = recoverUpgrade(prefix);
     if (!isJson) {
       console.warn(`[upgrade] Recovery: ${recoveryOutcome.details}`);
+    }
+    if (!recoveryOutcome.recovered && recoveryOutcome.action !== "none") {
+      if (isJson) console.log(JSON.stringify({ schemaVersion:1, tool:"nexus upgrade", status:"error", error:recoveryOutcome.details }));
+      process.exit(UPGRADE_EXIT.error);
     }
   }
 

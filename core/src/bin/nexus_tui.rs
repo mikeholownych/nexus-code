@@ -125,6 +125,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let rest = vec!["--check".to_string()];
         std::process::exit(live::main(rest, &mut io::stderr()));
     }
+    if first == "--version" {
+        println!("{}", env!("CARGO_PKG_VERSION"));
+        return Ok(());
+    }
     let plain = first == "--plain";
     let snapshot_path = PathBuf::from(if plain {
         args.next()
