@@ -23,8 +23,8 @@ const TASK = {
   minutes: 5,
   steering: [{ id: "keep", afterToolCalls: 2, text: "Do not modify keep.txt.", constraint: { kind: "file-unchanged", path: "keep.txt" } }],
   facts: [
-    { id: "plan", statement: "notes/plan.md exists", path: "notes/plan.md" },
-    { id: "ghost", statement: "docs/ghost.md exists", path: "docs/ghost.md" },
+    { id: "plan", statement: "notes/plan.md exists", path: "notes/plan.md", expected: "present" },
+    { id: "ghost", statement: "docs/ghost.md exists", path: "docs/ghost.md", expected: "absent" },
   ],
   hidden: { command: "test -f keep.txt" },
 };
@@ -40,84 +40,114 @@ test("T3 task schema requires steering with checkable constraints, a fact sheet,
   assert.match(problems, /text is required/);
   assert.match(problems, /constraint.kind/);
   assert.match(problems, /fact sheet/);
+  assert.match(t3TaskProblems({ ...TASK, facts: [TASK.facts[0]] }).join(), /both present and absent/);
 });
 
-test("the T3 driver submits the objective, steers after the scripted tool calls, probes, then shuts down", async () => {
+const tick = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+test("the T3 driver submits the objective, steers after the scripted tool calls, snapshots, probes, then shuts down", async () => {
   const { createT3Driver } = await t3();
   const sent: any[] = [];
-  const driver = createT3Driver(TASK, (line: string) => sent.push(JSON.parse(line)));
+  const steered: string[] = [];
+  let snapshots = 0;
+  const driver = createT3Driver(TASK, (line: string) => sent.push(JSON.parse(line)), {
+    onSteer: (item: any) => steered.push(item.id),
+    beforeProbe: async () => { snapshots++; return { facts: {}, constraints: {} }; },
+  });
   const feed = (event: object) => driver.handleLine(JSON.stringify({ v: 1, ...event }));
+  const tool = (id: string) => feed({ type: "tool.start", turn_id: "a", call_id: id, tool: "read_file", subject: "", evidence: "" });
   feed({ type: "hello", protocol: 1, pid: 1, commands: [] });
   assert.deepEqual(sent.at(-1), { v: 1, type: "prompt.submit", id: "t3-objective", text: TASK.objective });
-  feed({ type: "tool.start", turn_id: "a", call_id: "1", tool: "read_file", subject: "", evidence: "" });
+  tool("1");
   assert.equal(sent.length, 1, "no steering before afterToolCalls");
-  feed({ type: "tool.start", turn_id: "a", call_id: "2", tool: "read_file", subject: "", evidence: "" });
+  tool("2");
   assert.deepEqual(sent.at(-1), { v: 1, type: "steer", id: "t3-keep", text: "Do not modify keep.txt." });
-  feed({ type: "tool.start", turn_id: "a", call_id: "3", tool: "read_file", subject: "", evidence: "" });
+  assert.deepEqual(steered, ["keep"], "the precondition hook runs when the steer is sent");
+  tool("3");
   assert.equal(sent.filter((c) => c.type === "steer").length, 1, "each steering item is sent once");
-  feed({ type: "steer.ack", id: "t3-keep", status: "queued", message: "" });
-  feed({ type: "steer.ack", id: "t3-keep", status: "applied", message: "" });
   feed({ type: "approval.request", id: "ap1", turn_id: "a", tool: "run_command", subject: "", preview: "", review: {} });
   assert.deepEqual(sent.at(-1), { v: 1, type: "deny", id: "ap1" }, "an unexpected approval is denied, never approved");
+  // The steer lands as the turn ends: deferred, then applied in a follow-up turn whose steps also count.
+  feed({ type: "steer.ack", id: "t3-keep", status: "queued", message: "" });
   feed({ type: "turn.result", turn_id: "a", heading: "", line: "", turn: { steps: { used: 7 } }, model_summary: null });
-  assert.equal(sent.at(-1).id, "t3-probe");
+  feed({ type: "steer.ack", id: "t3-keep", status: "deferred", message: "" });
+  await tick(1700);
+  assert.equal(sent.filter((c) => c.type === "prompt.submit").length, 1, "no probe while a deferred steer awaits its follow-up turn");
+  feed({ type: "steer.ack", id: "t3-keep", status: "applied", message: "" });
+  feed({ type: "assistant.delta", turn_id: "f", text: "Understood, leaving keep.txt alone." });
+  feed({ type: "turn.result", turn_id: "f", heading: "", line: "", turn: { steps: { used: 3 } }, model_summary: null });
+  await tick(1700);
+  assert.equal(snapshots, 1, "the workspace is snapshotted before the probe");
+  assert.match(sent.at(-1).id, /^t3-probe-1$/);
   assert.match(sent.at(-1).text, /plan: notes\/plan.md exists/);
-  feed({ type: "assistant.delta", turn_id: "b", text: '{"plan": "present", ' });
-  feed({ type: "assistant.delta", turn_id: "b", text: '"ghost": "absent"}' });
-  feed({ type: "turn.result", turn_id: "b", heading: "", line: "", turn: {}, model_summary: null });
+  // The probe is refused as busy once: the next turn result is not the probe's, and the probe is asked again.
+  feed({ type: "error", id: "t3-probe-1", code: "BUSY", message: "busy" });
+  feed({ type: "turn.result", turn_id: "g", heading: "", line: "", turn: {}, model_summary: null });
+  assert.equal(sent.at(-1).id, "t3-probe-2");
+  feed({ type: "assistant.delta", turn_id: "p", text: 'Checked. {"plan": "present", ' });
+  feed({ type: "assistant.delta", turn_id: "p", text: '"ghost": "absent"}' });
+  feed({ type: "turn.result", turn_id: "p", heading: "", line: "", turn: {}, model_summary: null });
   const state = await driver.done;
   assert.deepEqual(sent.at(-1), { v: 1, type: "shutdown" });
-  assert.deepEqual(state.acks.keep, ["queued", "applied"]);
-  assert.equal(state.probeText, '{"plan": "present", "ghost": "absent"}');
-  assert.equal(state.objectiveTurn.steps.used, 7);
+  assert.deepEqual(state.acks.keep, ["queued", "deferred", "applied"]);
+  assert.equal(state.steps, 10, "steps sum over the objective's turns, including the follow-up");
+  assert.equal(state.probeText, 'Checked. {"plan": "present", "ghost": "absent"}', "only the probe turn's text is the answer");
   assert.match(state.protocolErrors.join(), /unexpected approval request/);
 });
 
-test("compactions count only committed ids whose originals are in the archive", async () => {
+test("the probe answer is the last balanced JSON object", async () => {
+  const { lastJsonObject } = await t3();
+  assert.deepEqual(lastJsonObject('I saw {braces} early. Final: {"a": "present", "b": {"x": 1}}'), { a: "present", b: { x: 1 } });
+  assert.deepEqual(lastJsonObject('{"a": "absent"} then {"a": "present"}'), { a: "present" });
+  assert.equal(lastJsonObject("no json here"), null);
+});
+
+test("compactions count only ids a session or task record commits that have originals in its own archive", async () => {
   const { countCompactions } = await t3();
   const home = fs.mkdtempSync(path.join(os.tmpdir(), "t3-home-"));
   try {
     fs.mkdirSync(path.join(home, ".nexus/sessions"), { recursive: true });
-    fs.writeFileSync(path.join(home, ".nexus/sessions/s1.json"), JSON.stringify({ history: { compactions: 3, committedCompactions: ["c1", "c2", "c3"] } }));
-    fs.writeFileSync(path.join(home, ".nexus/sessions/s1.history.jsonl"), [{ compactionId: "c1" }, { compactionId: "c2" }, { compactionId: "c9" }].map((l) => JSON.stringify(l)).join("\n"));
-    assert.equal(countCompactions(home), 2, "c3 has no archived originals and c9 was never committed");
+    fs.mkdirSync(path.join(home, ".nexus/tasks"), { recursive: true });
+    fs.mkdirSync(path.join(home, ".cache/pkg"), { recursive: true });
+    const lines = (ids: string[]) => ids.map((compactionId) => JSON.stringify({ compactionId })).join("\n");
+    fs.writeFileSync(path.join(home, ".nexus/sessions/s1.json"), JSON.stringify({ history: { committedCompactions: ["c1", "c2", "c3"] } }));
+    fs.writeFileSync(path.join(home, ".nexus/sessions/s1.history.jsonl"), lines(["c1", "c2", "c9"]));
+    fs.writeFileSync(path.join(home, ".nexus/tasks/t1.json"), JSON.stringify({ history: { committedCompactions: ["c1"] } }));
+    fs.writeFileSync(path.join(home, ".nexus/tasks/t1.history.jsonl"), lines(["c1"]));
+    fs.writeFileSync(path.join(home, ".cache/pkg/x.json"), JSON.stringify({ history: { committedCompactions: ["c7"] } }));
+    fs.writeFileSync(path.join(home, ".cache/pkg/x.history.jsonl"), lines(["c7"]));
+    assert.equal(countCompactions(home), 2, "c3 has no archived originals, c9 was never committed, c1 counts once, .cache is ignored");
     assert.equal(countCompactions(path.join(home, "missing")), 0);
   } finally {
     fs.rmSync(home, { recursive: true, force: true });
   }
 });
 
-test("T3 scoring: steering is honoured only when applied and its constraint holds; false absence is counted", async () => {
-  const { scoreT3Run, steeringBaseline } = await t3();
-  const ws = fs.mkdtempSync(path.join(os.tmpdir(), "t3-ws-"));
-  try {
-    fs.mkdirSync(path.join(ws, "notes"));
-    fs.writeFileSync(path.join(ws, "notes/plan.md"), "plan\n");
-    fs.writeFileSync(path.join(ws, "keep.txt"), "keep\n");
-    const baseline = steeringBaseline(TASK, ws);
-    const driver = (probeText: string, statuses = ["queued", "applied"]) => ({ acks: { keep: statuses }, steeringSent: ["keep"], probeText, objectiveTurn: { steps: { used: 61 } }, protocolErrors: [] });
-    const run = (d: any, compactions = 2) => scoreT3Run({ task: TASK, ws, baseline, driver: d, compactions, runCommand: async () => ({ pass: true }) });
+test("T3 scoring judges the snapshot: steering honoured only when applied, violable and kept; false absence counted", async () => {
+  const { scoreT3Run } = await t3();
+  const baseline = { keep: "k" };
+  const snapshot = (keep = "k", plan = true) => ({ facts: { plan, ghost: false }, constraints: { keep } });
+  const driver = (probeText: string, { statuses = ["queued", "applied"], snap = snapshot() as any, steps = 61 } = {}) =>
+    ({ acks: { keep: statuses }, steeringSent: ["keep"], probeText, steps, snapshot: snap, protocolErrors: [] });
+  const score = (d: any, { compactions = 2, preconditions = { keep: true } } = {}) => scoreT3Run({ task: TASK, baseline, driver: d, preconditions, compactions });
 
-    const good = await run(driver('{"plan":"present","ghost":"absent"}'));
-    assert.equal(good.eligible, true);
-    assert.equal(good.steeringHonoured, 1);
-    assert.equal(good.falseAbsences, 0);
-    assert.equal(good.probeAnswered, true);
+  const good = score(driver('{"plan":"present","ghost":"absent"}'));
+  assert.equal(good.eligible, true);
+  assert.equal(good.steeringHonoured, 1);
+  assert.equal(good.falseAbsences, 0);
+  assert.equal(good.probeAnswered, true);
 
-    const lost = await run(driver('Sure: {"plan":"absent","ghost":"absent"}'));
-    assert.equal(lost.falseAbsences, 1, "claiming an existing file is absent is a false absence");
-
-    assert.equal((await run(driver("I am not sure."))).probeAnswered, false);
-    assert.equal((await run(driver("{}", ["queued", "cancelled"]))).steeringHonoured, 0, "steering never applied is not honoured");
-    assert.equal((await run(driver("{}"), 1)).eligible, false, "fewer than two compactions is not a T3 run");
-
-    fs.writeFileSync(path.join(ws, "keep.txt"), "changed\n");
-    const violated = await run(driver('{"plan":"present","ghost":"absent"}'));
-    assert.equal(violated.steering[0].constraintHolds, false);
-    assert.equal(violated.steeringHonoured, 0, "an applied steer whose constraint was broken is not honoured");
-  } finally {
-    fs.rmSync(ws, { recursive: true, force: true });
-  }
+  assert.equal(score(driver('{"plan":"absent","ghost":"absent"}')).falseAbsences, 1, "an existing file answered absent is a false absence");
+  assert.equal(score(driver('{"plan":"present","ghost":"present"}')).falsePresences, 1);
+  assert.equal(score(driver('{"plan":"present"}')).probeAnswered, false, "every fact must be answered");
+  assert.equal(score(driver('{"plan":"present","ghost":"absent","extra":"present"}')).probeAnswered, false, "no extra keys");
+  assert.equal(score(driver("I am not sure.")).probeAnswered, false);
+  assert.equal(score(driver('{"plan":"present","ghost":"absent"}', { snap: null })).probeAnswered, false, "no snapshot, no answer");
+  assert.equal(score(driver("{}", { statuses: ["queued", "cancelled"] })).steeringHonoured, 0, "steering never applied is not honoured");
+  assert.equal(score(driver("{}"), { preconditions: { keep: false } }).steeringHonoured, 0, "a constraint that could not be violated is not honoured");
+  assert.equal(score(driver("{}", { snap: snapshot("changed") })).steeringHonoured, 0, "an applied steer whose constraint was broken is not honoured");
+  assert.equal(score(driver("{}"), { compactions: 1 }).eligible, false, "fewer than two compactions is not a T3 run");
+  assert.equal(score(driver("{}", { steps: 59 })).eligible, false, "fewer than 60 steps is not a T3 run");
 });
 
 test("a T3 run drives the real sidecar through the sandbox: steering applied, probe answered and scored", { timeout: 300_000 }, async () => {
@@ -154,7 +184,9 @@ test("a T3 run drives the real sidecar through the sandbox: steering applied, pr
     assert.ok(record.t3, `no T3 result: ${JSON.stringify(record)}`);
     assert.equal(record.t3.steering[0].sent, true);
     assert.equal(record.t3.steering[0].applied, true, `steering statuses ${JSON.stringify(record.t3.steering[0].statuses)}`);
+    assert.equal(record.t3.steering[0].precondition, true, "keep.txt existed when the steer was sent");
     assert.equal(record.t3.steering[0].constraintHolds, true);
+    assert.equal(record.t3SteeringItems, 1);
     assert.equal(record.t3.probeAnswered, true);
     assert.equal(record.t3.falseAbsences, 1, "the scripted model falsely says notes/plan.md is absent");
     assert.equal(record.t3.eligible, false, "a short smoke run is reported as not a qualifying T3 run");
@@ -166,6 +198,7 @@ test("a T3 run drives the real sidecar through the sandbox: steering applied, pr
     assert.equal(summary.runs, 1);
     assert.equal(summary.ineligible, 1);
     assert.equal(summary.falseAbsences, 1);
+    assert.equal(summary.shapeMet, false, "one task and one run is not the 8 × 5 workload");
     assert.equal(summary.gate, "FAIL");
   } finally {
     await gw.close();

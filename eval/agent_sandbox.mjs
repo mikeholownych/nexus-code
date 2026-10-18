@@ -2,6 +2,7 @@
 // The candidate sees only the run-scoped local token; the upstream gateway credential stays in run.mjs.
 import http from "node:http";
 import { spawn } from "node:child_process";
+import { StringDecoder } from "node:string_decoder";
 
 // The launch payload is the first stdin line. With payload.protocol the rest of stdin is the agent's stdin (the T3
 // sidecar protocol); otherwise the agent gets no stdin.
@@ -56,8 +57,9 @@ agent.on("close", (code, signal) => {
 function readPayloadLine() {
   return new Promise((resolve, reject) => {
     let body = "";
+    const decoder = new StringDecoder("utf8");
     const onData = (chunk) => {
-      body += chunk.toString("utf8");
+      body += decoder.write(chunk);
       if (body.length > 1_000_000) { cleanup(); reject(new Error("sandbox launch payload too large")); return; }
       const newline = body.indexOf("\n");
       if (newline < 0) return;

@@ -120,21 +120,28 @@ const faultRows = [...new Set(records.flatMap((r) => (r.model?.faultsInjected ??
 
 // T3 (REQ-QUAL-109): every T3 run counts. A run with no T3 result, too few steps or fewer than two compactions is
 // ineligible and fails the workload rather than leaving it; DEC-05 thresholds are false-absence 0, steering >= 95%.
+const T3_TASKS = 8;
+const T3_RUNS_PER_TASK = 5;
 const t3Runs = records.filter((r) => r.tier === "T3");
 const t3 = t3Runs.length ? (() => {
-  const items = t3Runs.flatMap((r) => r.t3?.steering ?? []);
-  const expectedItems = t3Runs.reduce((n, r) => n + (r.t3 ? r.t3.steering.length : 0), 0);
-  const honoured = items.filter((s) => s.honoured).length;
+  const honoured = t3Runs.flatMap((r) => r.t3?.steering ?? []).filter((s) => s.honoured).length;
+  // The denominator is what each task declared, so a run without a T3 result still counts its steering as unmet.
+  const expectedItems = t3Runs.reduce((n, r) => n + (r.t3SteeringItems ?? r.t3?.steering?.length ?? 0), 0);
+  const perTask = new Map();
+  for (const r of t3Runs) perTask.set(r.task, (perTask.get(r.task) ?? 0) + 1);
   const summary = {
     runs: t3Runs.length,
+    tasks: perTask.size,
+    shapeMet: perTask.size >= T3_TASKS && [...perTask.values()].every((n) => n >= T3_RUNS_PER_TASK),
     ineligible: t3Runs.filter((r) => !r.t3?.eligible).length,
     falseAbsences: t3Runs.reduce((n, r) => n + (r.t3?.falseAbsences ?? 0), 0),
+    falsePresences: t3Runs.reduce((n, r) => n + (r.t3?.falsePresences ?? 0), 0),
     probeUnanswered: t3Runs.filter((r) => r.t3 && !r.t3.probeAnswered).length,
     steeringItems: expectedItems,
     steeringHonoured: honoured,
     steeringRate: expectedItems ? honoured / expectedItems : 0,
   };
-  summary.gate = summary.ineligible === 0 && summary.falseAbsences === 0 && summary.probeUnanswered === 0 && summary.steeringRate >= 0.95 ? "PASS" : "FAIL";
+  summary.gate = summary.shapeMet && summary.ineligible === 0 && summary.falseAbsences === 0 && summary.probeUnanswered === 0 && summary.steeringRate >= 0.95 ? "PASS" : "FAIL";
   return summary;
 })() : null;
 
@@ -150,7 +157,7 @@ if (process.argv.includes("--json")) {
     for (const f of faultRows) console.log(`| ${f.kind} | ${f.n} | ${f.truthful} (${pct(f.truthfulRate)}) | ${f.recovered} | ${f.hungPastBudget} |`);
   }
   if (t3) {
-    console.log(`\nT3 · runs ${t3.runs} · ineligible (steps < 60 or compactions < 2, or no result) ${t3.ineligible} · false absences ${t3.falseAbsences} · probe unanswered ${t3.probeUnanswered} · steering honoured ${t3.steeringHonoured}/${t3.steeringItems} (${pct(t3.steeringRate)}) · gate ${t3.gate}`);
+    console.log(`\nT3 · ${t3.tasks} task(s), ${t3.runs} run(s)${t3.shapeMet ? "" : ` (needs ${T3_TASKS} tasks × ${T3_RUNS_PER_TASK} runs)`} · ineligible (steps < 60 or compactions < 2, or no result) ${t3.ineligible} · false absences ${t3.falseAbsences} · false presences ${t3.falsePresences} (reported, not gated) · probe unanswered ${t3.probeUnanswered} · steering honoured ${t3.steeringHonoured}/${t3.steeringItems} (${pct(t3.steeringRate)}) · gate ${t3.gate}`);
   }
   if (replacements.length) {
     console.log("\nReplaced by rerun:");

@@ -15,7 +15,8 @@ import { agentSandboxArgv, assertNoSymlinks, confinedPath, grantRunAsAccess, iso
 import { runBlackBoxOracle } from "./oracle.mjs";
 import { stageRepoWorkspace } from "./workspace.mjs";
 import { containmentProblem, resourceProbeProblem, spawnContained } from "./resources.mjs";
-import { countCompactions, createT3Driver, scoreT3Run, steeringBaseline } from "./t3.mjs";
+import { StringDecoder } from "node:string_decoder";
+import { countCompactions, createT3Driver, scoreT3Run, steeringBaseline, steeringPrecondition, t3Snapshot } from "./t3.mjs";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const args = parseArgs(process.argv.slice(2));
@@ -162,7 +163,7 @@ async function runOnce(task, run) {
   const ws = fs.mkdtempSync(path.join(scratch, `nexus-eval-${task.id}-`));
   const home = fs.mkdtempSync(path.join(scratch, "nexus-eval-home-"));
   const budget = effectiveBudget(task, config);
-  const base = { task: task.id, tier: task.tier, config: config.name, agent: config.agent ?? "nexus", agentVersion: agentIdentity.record, budget, run, harness: identity.string, model: config.model, startedAt: new Date().toISOString() };
+  const base = { task: task.id, tier: task.tier, ...(task.tier === "T3" ? { t3SteeringItems: task.steering.length } : {}), config: config.name, agent: config.agent ?? "nexus", agentVersion: agentIdentity.record, budget, run, harness: identity.string, model: config.model, startedAt: new Date().toISOString() };
   try {
     await prepareWorkspace(task, ws);
     const t3Baseline = task.tier === "T3" ? steeringBaseline(task, ws) : null;
@@ -202,11 +203,8 @@ async function runOnce(task, run) {
     if (agent.containmentProblem) throw new Error(`candidate containment failed: ${agent.containmentProblem}`);
     const model = proxy ? proxy.stats() : null;
     const contaminated = treeDigest(task.dir) !== sourceBefore || `${agent.stdout}${agent.stderr}`.includes(tasksDir);
-    // T3 is scored before the hidden tests touch the workspace: steering constraints judge the agent's final state.
-    const t3 = agent.t3Driver ? await scoreT3Run({
-      task, ws, baseline: t3Baseline, driver: agent.t3Driver, compactions: countCompactions(home),
-      runCommand: (command) => runIsolated(command, { cwd: ws, home: true, timeoutSec: 300, resources: config.resources ?? null }).then((r) => ({ pass: r.status === 0 && !r.timedOut && !r.overflow })),
-    }) : null;
+    // T3 judges the workspace as it was when the objective's work ended (snapshot taken before the probe turn).
+    const t3 = agent.t3Driver ? scoreT3Run({ task, baseline: t3Baseline, driver: agent.t3Driver, preconditions: agent.t3Preconditions, compactions: countCompactions(home) }) : null;
     const hidden = await runCheck(task, ws, task.hidden, true);
     const regression = task.regression ? await runCheck(task, ws, task.regression, false) : null;
     for (const [phase, check] of [["hidden", hidden], ["regression", regression]]) {
@@ -422,7 +420,12 @@ function agentCommand(task, ws, home, budget, agentIdentity, localToken) {
       const packageDir = checkout ? null : path.dirname(path.dirname(fs.realpathSync(agentIdentity.command)));
       const sidecar = checkout ? path.join(ROOT, "cli/dist/sidecar.js") : path.join(packageDir, "lib/cli/dist/sidecar.js");
       if (!fs.existsSync(sidecar)) throw new Error(`T3 needs the Nexus sidecar at ${sidecar}`);
-      if (packageDir) env.NEXUS_HOME = packageDir;
+      if (packageDir) {
+        // The launcher is bypassed, so the package itself must be mounted: it has to sit under sandboxRuntimeRoots.
+        const roots = (config.sandboxRuntimeRoots ?? []).map((root) => fs.realpathSync(root));
+        if (!roots.some((root) => packageDir === root || packageDir.startsWith(`${root}${path.sep}`))) throw new Error(`T3 runs the sidecar from ${packageDir}, which must be under sandboxRuntimeRoots`);
+        env.NEXUS_HOME = packageDir;
+      }
       const sidecarArgs = [sidecar, "--yes", "-w", "/workspace", "-e", ep, "-m", config.model, "-t", String(sampling.temperature), "-s", "30", "--max-total-steps", String(budget.steps), "--max-turn-minutes", String(budget.minutes), ...contextArgs, ...(config.args ?? [])];
       return checkout ? { cmd: process.execPath, argv: sidecarArgs, env, protocol: true } : { cmd: "/usr/bin/env", argv: ["node", ...sidecarArgs], env, protocol: true };
     }
@@ -477,7 +480,12 @@ function runAgent(task, ws, home, budget, agentIdentity, proxyDirectory, localTo
   return new Promise((resolve) => {
     const { child, containment } = spawnContained(wrapped, config.resources ?? null, { cwd: "/", env: {}, stdio: ["pipe", "pipe", "pipe"], detached: true });
     // T3: the payload is the first line and the sidecar protocol follows on the same stdin (eval/agent_sandbox.mjs).
-    const driver = protocol ? createT3Driver(task, (line) => { if (!child.stdin.destroyed) child.stdin.write(line); }) : null;
+    const preconditions = {};
+    const runConstraint = (command) => runIsolated(command, { cwd: ws, home: true, timeoutSec: 300, resources: config.resources ?? null }).then((r) => ({ pass: r.status === 0 && !r.timedOut && !r.overflow }));
+    const driver = protocol ? createT3Driver(task, (line) => { if (!child.stdin.destroyed) child.stdin.write(line); }, {
+      onSteer: (item) => { preconditions[item.id] = steeringPrecondition(item, ws); },
+      beforeProbe: () => t3Snapshot(task, ws, runConstraint),
+    }) : null;
     child.stdin.on("error", () => {});
     if (driver) {
       child.stdin.write(`${JSON.stringify({ command: cmd, argv, env, protocol: true })}\n`);
@@ -506,8 +514,9 @@ function runAgent(task, ws, home, budget, agentIdentity, proxyDirectory, localTo
     if (driver) {
       // Registered after the collectors above (which reset the stream's listeners): every protocol line reaches the driver.
       let pending = "";
+      const decoder = new StringDecoder("utf8"); // a chunk can end inside a multibyte character
       child.stdout.on("data", (chunk) => {
-        pending += chunk.toString("utf8");
+        pending += decoder.write(chunk);
         let newline;
         while ((newline = pending.indexOf("\n")) >= 0) { driver.handleLine(pending.slice(0, newline)); pending = pending.slice(newline + 1); }
       });
@@ -530,8 +539,8 @@ function runAgent(task, ws, home, budget, agentIdentity, proxyDirectory, localTo
       clearTimeout(timer);
       killGroup("SIGKILL");
       const final = containment ? await containment.final : undefined;
-      const json = driver ? { turn: driver.state.objectiveTurn } : lastJson(stdout);
-      resolve({ code, timedOut, outputExceeded, stdout, stderr, json, ...(driver ? { t3Driver: driver.state } : {}), ...(containment ? { resources: final, containmentProblem: containmentProblem(final) } : {}) });
+      const json = driver ? { turn: driver.state.objectiveTurns.at(-1) ?? null } : lastJson(stdout);
+      resolve({ code, timedOut, outputExceeded, stdout, stderr, json, ...(driver ? { t3Driver: driver.state, t3Preconditions: preconditions } : {}), ...(containment ? { resources: final, containmentProblem: containmentProblem(final) } : {}) });
     });
   });
 }
