@@ -136,7 +136,7 @@ export class BenchmarkEvaluator {
       recordFlight: true,
     };
 
-    const agent = new AutonomousAgent(config);
+    const agent = new AutonomousAgent(config, 0, undefined, { durable: true });
 
     try {
       console.log(pc.bold(pc.cyan(`\n🧪 Evaluating SWE-bench Instance: ${instance.instance_id}`)));
