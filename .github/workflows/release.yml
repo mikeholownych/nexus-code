@@ -68,6 +68,13 @@ jobs:
           test "${GITHUB_REF_NAME#v}" = "$(node -p 'require("./package.json").version')"
           node scripts/sync-version.mjs --check --tag "$GITHUB_REF_NAME"
           test -f "docs/releases/${GITHUB_REF_NAME}.md" || { echo "Missing docs/releases/${GITHUB_REF_NAME}.md" >&2; exit 1; }
+      - name: Require a stable tag to be a version-only commit on its RC
+        if: ${{ !contains(github.ref_name, '-') }}
+        run: |
+          git fetch --no-tags --depth=2 origin "$GITHUB_SHA" "+refs/tags/${GITHUB_REF_NAME}-rc.*:refs/tags/${GITHUB_REF_NAME}-rc.*"
+          rc="$(git tag --points-at "$GITHUB_SHA^" "${GITHUB_REF_NAME}-rc.*" | sort -V | tail -n 1)"
+          test -n "$rc" || { echo "the parent of $GITHUB_REF_NAME is not a ${GITHUB_REF_NAME}-rc.N tag" >&2; exit 1; }
+          node scripts/check-version-only-diff.mjs "$rc" "$GITHUB_SHA"
       - run: npm ci --prefix cli
       - run: npm --prefix cli run build
       - run: cargo test --locked --manifest-path core/Cargo.toml
@@ -90,8 +97,12 @@ jobs:
           subject-path: |
             ${{ runner.temp }}/dist/nexus-linux-x86_64-${{ github.ref_name }}.tar.gz
             ${{ runner.temp }}/dist/SHA256SUMS
+      # RC tags (vX.Y.Z-rc.N) publish a prerelease: the workflow-produced RC is the qualification candidate
+      # (ACCEPTANCE §1.1 stage 2). Stable tags only build an unpublished draft (stage 5); it is published by hand with
+      # `gh release edit <tag> --draft=false` after the stable artifact checks and the signed acceptance disposition.
       - uses: softprops/action-gh-release@v2
         with:
           files: ${{ runner.temp }}/dist/*
           body_path: docs/releases/${{ github.ref_name }}.md
           prerelease: ${{ contains(github.ref_name, '-') }}
+          draft: ${{ !contains(github.ref_name, '-') }}
