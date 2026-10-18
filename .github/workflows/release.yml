@@ -24,6 +24,12 @@ jobs:
       - run: sudo apt-get install --yes make bubblewrap build-essential meson ninja-build pkg-config libcap-dev
       - run: bash scripts/ensure-ci-bubblewrap.sh
       - run: bash scripts/ensure-ci-user-cgroups.sh
+      - name: Mount a dedicated capped tmpfs for evaluator resource fixtures
+        run: |
+          root=/mnt/nexus-eval-release
+          sudo install -d -o "$USER" -g "$USER" -m 0700 "$root"
+          sudo mount -t tmpfs -o size=128m,mode=0700,uid="$(id -u)",gid="$(id -g)" nexus-eval-release "$root"
+          echo "NEXUS_EVAL_TEST_WORKSPACE_ROOT=$root" >> "$GITHUB_ENV"
       - uses: dtolnay/rust-toolchain@stable
       - name: Install cargo tools (audit, deny, about, cyclonedx)
         run: |

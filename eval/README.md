@@ -166,11 +166,14 @@ oracle case and the agent version probe. Qualification refuses to start without 
   (`memoryBytes`), `memory.swap.max` (0), `memory.oom.group` (1) and `pids.max` (`tasks`) on a `payload` leaf, reads them back, and refuses to
   run on any mismatch. The command joins that leaf before `exec`, so nothing task-controlled runs outside the limits.
   The limits are aggregate over the whole process tree, whatever its uid (`runAs`), session or process group.
-- `workspaceRoot` must be a dedicated tmpfs mount whose total size is at most `storageBytes`. Create it during evaluator
-  setup, for example `mount -t tmpfs -o size=<storageBytes>,mode=0700 tmpfs <dir>`. A shared tmpfs such as `/dev/shm`
-  passes only if `storageBytes` is set to its whole size. Workspaces and homes are created there. The filesystem size
-  hard-caps everything a run keeps across all its phases, and writes beyond it fail with `ENOSPC`. Runs are serial and
-  each workspace is removed afterwards; `--keep` is refused under the contract.
+- `workspaceRoot` must itself be a dedicated tmpfs mount, not a directory on a shared mount or a bind mount. It must be
+  owned by the evaluator harness uid, with owner `rwx` and no group/other read or write permission. Group/other execute
+  permission is allowed so a separate evaluator uid can traverse to its per-run ACL-protected directory. For example:
+  `mount -t tmpfs -o size=<storageBytes>,mode=0711,uid=<harness-uid>,gid=<harness-gid> tmpfs <dir>`.
+  The preflight checks `/proc/self/mountinfo`, the mount root and options, the effective tmpfs size, and the cgroup
+  probe. A shared tmpfs such as `/dev/shm` fails even when `storageBytes` is set to its full size. Workspaces and homes
+  are created on this mount. Its filesystem size hard-caps files retained across phases; writes beyond it fail with
+  `ENOSPC`. Runs are serial and each workspace is removed afterwards; `--keep` is refused under the contract.
 - Within that cap, tmpfs pages, including the sandbox's own `/tmp`, are charged to the writing phase's memory cgroup and
   cannot be swapped. A phase therefore also cannot hold more than `memoryBytes` of memory and new writes together. When
   it reaches that bound the whole phase is OOM-killed (`memory.oom.group`), and this is recorded. When a phase's cgroup
@@ -178,6 +181,10 @@ oracle case and the agent version probe. Qualification refuses to start without 
   which is why the filesystem cap, not the memory limit, is the cross-phase storage bound. An OOM in a hidden or
   regression check is the candidate's outcome, a failed check, not an infrastructure error.
 - CPU is bounded in rate by `cpu.max` and in total by the phase's wall-clock timeout.
+- This contract is supported only on Linux with cgroup v2 CPU, memory and pids controllers, a delegated systemd user
+  manager, Bubblewrap and the dedicated tmpfs described above. Missing controllers, mount metadata, user-manager
+  delegation or any read-back mismatch fail preflight. Other operating systems and container hosts that cannot expose
+  these controls are unsupported for qualification; they must not fall back to process-only or best-effort limits.
 - After the command exits or times out, the supervisor records the remaining processes, empties the cgroup with
   `cgroup.kill` (which reaches daemonized processes and other uids), and waits for `populated 0`. A timeout or output
   overflow empties the payload leaf, repeatedly until the supervisor exits, so a stop that arrives before the command
