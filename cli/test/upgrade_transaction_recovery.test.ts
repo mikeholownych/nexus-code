@@ -61,6 +61,22 @@ describe("durable same-version transaction recovery",()=>{
     assert.ok(fs.existsSync(entry.stagingDir!));
     assert.ok(fs.existsSync(entry.displacedTargetDir!));
   });
+  it("does not touch the lock for a completed journal in a read-only package directory",()=>{
+    entry.state="complete";writeJournal(prefix,entry);
+    const libRoot=path.join(prefix,"lib/nexus");
+    fs.chmodSync(libRoot,0o555);
+    try {
+      assert.deepEqual(recoverUpgrade(prefix),{recovered:false,action:"none",details:"No interrupted upgrade found in journal."});
+      assert.equal(fs.existsSync(path.join(libRoot,".upgrade.lock")),false);
+      const result=spawnSync(process.execPath,["--import","tsx","src/index.ts","models","--help"],{
+        cwd:path.resolve(import.meta.dirname || path.dirname(new URL(import.meta.url).pathname),".."),encoding:"utf8",timeout:10000,
+        env:{...process.env,HOME:prefix,XDG_CONFIG_HOME:path.join(prefix,".config"),NEXUS_HOME:entry.sourceInstallDir},
+      });
+      assert.equal(result.error,undefined,String(result.error));
+      assert.notEqual(result.status,2,result.stderr+result.stdout);
+      assert.equal(fs.existsSync(path.join(libRoot,".upgrade.lock")),false);
+    } finally { fs.chmodSync(libRoot,0o755); }
+  });
   it("does not finalize a launcher that reports the wrong release",()=>{
     fs.renameSync(entry.sourceInstallDir,entry.replacementBackupDir!);runtime(entry.targetInstallDir,"v1.0.0","replacement");
     fs.writeFileSync(path.join(entry.targetInstallDir,"bin/nexus"),"#!/bin/sh\necho v9.9.9\n",{mode:0o755});

@@ -1082,11 +1082,6 @@ export async function performUpgrade(
       throw new Error("Release archive failed internal manifest checksum verification.");
     }
 
-    // Pre-switch staging verification: ensure unpacked executable runs --version before touching installation
-    options?.onProgress?.("verifying_staged", "Testing unpacked binary in staging...");
-    const stageVerify = verifyInstalledRuntime(packageRoot, targetVersion, options?.timeoutMs);
-    if (!stageVerify.healthy) throw new Error(`Unpacked binary failed staging self-test: ${stageVerify.error}`);
-
     // The in-archive copy is authenticated by the archive checksum/attestation.
     // Detached metadata may add only the archive digest; all policy fields must
     // match the embedded contract exactly.
@@ -1133,6 +1128,11 @@ export async function performUpgrade(
     if (compatResult.isLegacy) {
       options?.onProgress?.("legacy_policy", compatResult.reasons[0]);
     }
+
+    // Pre-switch staging verification runs only after compatibility policy and metadata binding pass.
+    options?.onProgress?.("verifying_staged", "Testing unpacked binary in staging...");
+    const stageVerify = verifyInstalledRuntime(packageRoot, targetVersion, options?.timeoutMs);
+    if (!stageVerify.healthy) throw new Error(`Unpacked binary failed staging self-test: ${stageVerify.error}`);
 
     // Verify existing link safety
     if (fs.existsSync(linkPath) && !fs.lstatSync(linkPath).isSymbolicLink()) {

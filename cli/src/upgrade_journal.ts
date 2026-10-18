@@ -244,7 +244,7 @@ function validatePrivateTreeExcept(source: string, excluded: Set<string>): void 
 
 export interface RecoveryOutcome {
   recovered: boolean;
-  action: "rolled_back" | "finalized" | "none" | "cleaned_up" | "manual_intervention";
+  action: "rolled_back" | "finalized" | "none" | "cleaned_up" | "manual_intervention" | "upgrade_in_progress";
   details: string;
 }
 
@@ -252,6 +252,10 @@ export interface RecoveryOutcome {
  * Idempotent crash recovery: inspects journal and restores working installation or finalizes transition.
  */
 export function recoverUpgrade(prefix: string, options: { forceRollback?: boolean; timeoutMs?: number; lockHeld?: boolean } = {}): RecoveryOutcome {
+  const journalPath = getJournalPath(prefix);
+  const journal = readJournal(prefix);
+  if (!journal && !fs.existsSync(journalPath)) return { recovered:false, action:"none", details:"No interrupted upgrade found in journal." };
+  if (journal && ["idle", "complete", "rolled_back"].includes(journal.state) && !options.forceRollback) return { recovered:false, action:"none", details:"No interrupted upgrade found in journal." };
   const lock = path.join(prefix, "lib", "nexus", ".upgrade.lock");
   let owned = false;
   try {
@@ -259,14 +263,19 @@ export function recoverUpgrade(prefix: string, options: { forceRollback?: boolea
       if (!isRealFile(lock)) throw new Error("Upgrade lock is redirected");
       const holder = JSON.parse(fs.readFileSync(lock, "utf8"));
       if (!Number.isSafeInteger(holder.pid) || holder.pid < 1) throw new Error("Upgrade lock is invalid");
-      if (holder.pid === process.pid && !options.lockHeld) throw new Error("An upgrade transaction is still active in this process");
+      if (holder.pid === process.pid && !options.lockHeld) return { recovered:false, action:"upgrade_in_progress", details:"An upgrade transaction is currently in progress." };
       if (holder.pid !== process.pid) {
-        try { process.kill(holder.pid, 0); throw new Error("An upgrade transaction is still active"); }
+        try { process.kill(holder.pid, 0); return { recovered:false, action:"upgrade_in_progress", details:"An upgrade transaction is currently in progress." }; }
         catch (error:any) { if (error.code !== "ESRCH") throw error; }
-        fs.unlinkSync(lock);
+        const tmpLock = `${lock}.tmp.${process.pid}.${Date.now()}`;
+        fs.writeFileSync(tmpLock, JSON.stringify({ pid:process.pid }), { mode:0o600, flag:"wx" });
+        fs.renameSync(tmpLock, lock);
+        const takeover = JSON.parse(fs.readFileSync(lock, "utf8"));
+        if (takeover.pid !== process.pid) throw new Error("Upgrade lock takeover was lost to another process");
+        owned = true;
       }
     }
-    if (!fs.existsSync(lock) && fs.existsSync(path.dirname(lock))) {
+    if (!owned && !fs.existsSync(lock) && fs.existsSync(path.dirname(lock))) {
       const fd = fs.openSync(lock, "wx", 0o600);
       fs.writeFileSync(fd, JSON.stringify({ pid:process.pid })); fs.closeSync(fd); owned = true;
     }
