@@ -23,7 +23,7 @@ const script = (n: number): Reply =>
   n <= 3 ? { kind: "tools", calls: [{ name: "read_file", args: { path: `m${n - 1}.txt` } }] } : n <= 9 ? { kind: "tools", calls: [{ name: "write_file", args: { path: `out${n}.txt`, content: `${filler}\n` } }] } : { kind: "text", content: "done" };
 
 const gw = await startGateway(script);
-const agent = new AutonomousAgent({ endpoint: gw.url, model: "m", maxSteps: 30, temperature: 0, workspace: repo, shell: "bash", continuation: { ...DEFAULT_CONTINUATION } });
+const agent = new AutonomousAgent({ endpoint: gw.url, model: "m", maxSteps: 30, temperature: 0, workspace: repo, shell: "bash", continuation: { ...DEFAULT_CONTINUATION } }, 0, undefined, { durable: true });
 (agent as any).ui = new Proxy({}, { get: () => () => {} });
 const sessions = new SessionManager(path.join(work, "sessions"), () => agent.getWorkspacePathIdentity());
 const sessionId = sessions.generateSessionId();

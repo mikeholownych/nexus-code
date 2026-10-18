@@ -564,9 +564,6 @@ export class AgentWorkUnitExecutor implements WorkUnitExecutor {
     const agent = this.opts.createAgent
       ? this.opts.createAgent(config, 1, { durable: true, role: unit.role, unitId: unit.id })
       : new AutonomousAgent(config, 1, undefined, { durable: true, role: unit.role, unitId: unit.id });
-    (agent as any).durable = true;
-    if (unit.role) (agent as any).role = unit.role;
-    if (unit.id) (agent as any).unitId = unit.id;
     let lastCondition: ResourceConditionRecord | null = null;
     try {
       let prompt: string;

@@ -54,10 +54,13 @@ Work units (`/team`, `nexus operation`) run as `new AutonomousAgent(config, 1)` 
 | AGT-09 | Once state identity is "unknown" (more than 1.5 s on a large repo, `agent.ts:2026-2047`), ≥12 consecutive successful writes count as no progress, which gives a false STAGNATION_DETECTED (INFERENCE). |
 | AGT-11 | Implementer/tester units become COMPLETE with NOT_REQUIRED, which means no change was made (`operation_runner.ts:651-663`). |
 | AGT-12 | The 10,000-transition safety bound leaves a decision with `options: []`. |
-| AGT-13 | Attempt numbering repeats after 50. |
+| AGT-13 | Attempt numbering repeats after 50; resolved by the monotonic `recordAttempt` counter (see §3.2). |
 | AGT-14 | Durable-write failures for op start/end, plan and recovery checkpoints are swallowed. |
 | AGT-15 | Every tool call rewrites the whole task JSON three times or more, with redaction and fsync (unmeasured). |
+
 | HIST-09 | The compaction/continuity and truncation-recovery changes shipped in alpha.2 with "independent acceptance pending". |
+
+**AGT-13 resolution.** Verification attempt numbering is monotonic: `cli/src/core/objective.ts` `recordAttempt` assigns `n = lastN + 1` before retaining only the latest 50 entries. This is covered by `cli/test/execution_tracking.test.ts` (“AGT-13: recordAttempt counter is monotonic beyond 50 attempts”).
 
 ## 2. Requirements
 
@@ -89,6 +92,7 @@ Work units (`/team`, `nexus operation`) run as `new AutonomousAgent(config, 1)` 
   - Depth 0 defaults to `durable: true`.
 - Replace each `depth === 0` gate in the list above with `this.durable`, except gates that really are about the interactive operator: steering and the onConfirm UI. Classify each of the roughly 12 call sites in the plan (PLAN-04 task 2), with a one-line rationale per site.
 - Work units get an objective ledger keyed by the unit id. `update_requirements` and `read_objective` are offered to units with role ∈ {implementer, tester}.
+- **AGT-13 resolved:** `cli/src/core/objective.ts` `recordAttempt` assigns `n = lastN + 1` before slicing the retained attempts to 50. Regression coverage is `cli/test/execution_tracking.test.ts`: “AGT-13: recordAttempt counter is monotonic beyond 50 attempts”.
 
 ### 3.3 Accounting and records
 

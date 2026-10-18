@@ -32,6 +32,36 @@ const cliRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..")
 const srcIndex = path.join(cliRoot, "src/index.ts");
 const tsxLoader = import.meta.resolve("tsx");
 
+function sourceFiles(dir: string): string[] {
+  return fs.readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
+    const file = path.join(dir, entry.name);
+    return entry.isDirectory() ? sourceFiles(file) : file.endsWith(".ts") ? [file] : [];
+  });
+}
+
+test("all source AutonomousAgent construction sites declare durability explicitly", () => {
+  const violations: string[] = [];
+  for (const file of sourceFiles(path.join(cliRoot, "src"))) {
+    const source = fs.readFileSync(file, "utf8");
+    let at = 0;
+    while ((at = source.indexOf("new AutonomousAgent(", at)) >= 0) {
+      const start = at + "new AutonomousAgent(".length;
+      let depth = 1;
+      let end = start;
+      for (; end < source.length && depth > 0; end++) {
+        if (source[end] === "(") depth++;
+        else if (source[end] === ")") depth--;
+      }
+      const args = source.slice(start, end - 1);
+      if (!/\{[^{}]*\bdurable\s*:\s*(?:true|false)\b[^{}]*\}\s*$/s.test(args)) {
+        violations.push(`${path.relative(cliRoot, file)}:${source.slice(0, at).split("\n").length}`);
+      }
+      at = end;
+    }
+  }
+  assert.deepEqual(violations, []);
+});
+
 // ---------------------------------------------------------------- scripted gateway
 
 type Reply = { tools: Array<{ name: string; args: unknown }> } | { text: string } | { hold: true };
@@ -155,8 +185,8 @@ function operationRig(config: HarnessConfig, gw: Gw) {
   const store = new OperationStore(config.workspace, stateDir);
   const executor = new AgentWorkUnitExecutor({
     baseConfig: config,
-    createAgent: (c) => {
-      const agent = quiet(new AutonomousAgent(c, 1, undefined, { durable: true }));
+    createAgent: (c, depth, opts) => {
+      const agent = quiet(new AutonomousAgent(c, depth, undefined, opts));
       const a = agent as any;
       a.stateManager = new DurableStateManager({ baseDir: stateDir, workspacePaths: [a.primaryWorkspacePathIdentity] });
       return agent;
@@ -371,8 +401,8 @@ describe("V2: unverified changes survive retries, step limits, restarts and resu
       let capturedAgent: AutonomousAgent | undefined;
       const executor = new AgentWorkUnitExecutor({
         baseConfig: config,
-        createAgent: (c) => {
-          const agent = quiet(new AutonomousAgent(c, 1, undefined, { durable: true }));
+        createAgent: (c, depth, opts) => {
+          const agent = quiet(new AutonomousAgent(c, depth, undefined, opts));
           const a = agent as any;
           a.stateManager = new DurableStateManager({ baseDir: stateDir, workspacePaths: [a.primaryWorkspacePathIdentity] });
           capturedAgent = agent;
