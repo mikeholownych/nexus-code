@@ -54,11 +54,18 @@ attempt and use a new evidence directory.
 ## Gate
 
 ```sh
-node scripts/terminal-acceptance/summarize.mjs "$OUT" [--dispositions dispositions.json]
+# MANIFEST_SHA: sha256 of MANIFEST.sha256 inside the RC archive, e.g.
+#   tar -xzOf nexus-linux-x86_64-<rc>.tar.gz --wildcards '*/MANIFEST.sha256' | sha256sum
+node scripts/terminal-acceptance/summarize.mjs "$OUT" --rc <rc> --manifest-sha256 "$MANIFEST_SHA" [--dispositions dispositions.json]
 ```
 
 The summarizer prints the 15-cell table and writes `matrix-summary.json`. **PASS** requires all of the following:
 - every cell is present (a missing cell is NOT RUN);
-- every cell names the same RC and binary;
+- every attempt names the given RC, and its installed package manifest equals the archive's;
 - checks 2, 5 and 6 have no FAIL;
-- every other FAIL has an entry `"<cell>:<check>": "<fix or documented known limitation>"` in the dispositions file.
+- every other FAIL has an entry `"<cell>:<check>": "<fix or documented known limitation>"` in the dispositions file;
+- every aborted attempt (a `.partial` file, which holds the measurements taken before it was abandoned) has an entry
+  `"<cell>:partial-<n>"`.
+
+The record hashes prove that files are unchanged since recording, not who recorded them. Commit the evidence directory
+to the qualification evidence PR to make it authoritative.

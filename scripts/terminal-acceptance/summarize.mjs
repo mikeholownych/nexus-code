@@ -8,7 +8,9 @@
 //   - an attempt is complete only when its self-hash, file hashes, both launch measurements and the mock log's
 //     scenario proof (approve x2 tool rounds, stream, sleep tool call) all verify;
 //   - checks 2, 5 and 6 have zero FAIL in ANY attempt; a measured survivor or unrestored terminal turns PASS into FAIL;
-//   - every other FAIL, in any attempt, needs a written disposition keyed "<cell>:<check>".
+//   - every other FAIL, in any attempt, needs a written disposition keyed "<cell>:<check>";
+//   - an aborted attempt (a .partial file) needs a written disposition keyed "<cell>:partial-<n>".
+// Hashes prove the files are unchanged since recording, not who recorded them: commit the evidence directory.
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
@@ -56,7 +58,12 @@ for (const terminal of TERMINALS) {
   for (const size of SIZES) {
     const cell = `${terminal}-${size}`;
     const files = fs.readdirSync(dir).filter((f) => new RegExp(`^cell-${cell.replace(/\./g, "\\.")}\\.attempt-\\d+\\.json$`).test(f)).sort();
-    const aborted = fs.readdirSync(dir).filter((f) => f.startsWith(`cell-${cell}.attempt-`) && f.endsWith(".partial")).length;
+    const partials = fs.readdirSync(dir).filter((f) => f.startsWith(`cell-${cell}.attempt-`) && f.endsWith(".partial"));
+    const aborted = partials.length;
+    for (const partial of partials) {
+      const n = /attempt-(\d+)\.partial$/.exec(partial)?.[1];
+      if (!dispositions[`${cell}:partial-${n}`]) problems.push(`${cell}: aborted attempt ${n} without a written disposition`);
+    }
     const attempts = [];
     for (const name of files) {
       const file = path.join(dir, name);

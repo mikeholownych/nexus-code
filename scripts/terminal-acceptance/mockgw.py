@@ -37,7 +37,8 @@ def text_of(content):
 
 def latest_turn(body):
     """The operator's latest scenario prompt (first word is a keyword) and how many tool results followed it.
-    Other user messages, such as reminders the client injects, neither start nor reset a scenario."""
+    Other user messages, such as reminders the client injects, neither start nor reset a scenario, so a later plain
+    prompt continues the last scenario: follow the README order (approve, stream, sleep)."""
     prompt, tools = "", 0
     for m in body.get("messages", []):
         if m.get("role") == "user":

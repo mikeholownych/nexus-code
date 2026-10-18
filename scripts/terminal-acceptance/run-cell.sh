@@ -34,6 +34,10 @@ nexus_real="$(readlink -f "$nexus_bin")"
 package="$(dirname "$(dirname "$nexus_real")")"
 [[ "$(cat "$package/VERSION" 2>/dev/null)" == "$rc" ]] || { echo "nexus resolves to $nexus_real, which is not an installed $rc package" >&2; exit 2; }
 (cd "$package" && sha256sum --check --status MANIFEST.sha256) || { echo "installed package at $package fails its MANIFEST.sha256" >&2; exit 2; }
+# The manifest must also list every file: an extra file in the package would pass sha256sum --check.
+diff <(cd "$package" && find . -type f ! -name MANIFEST.sha256 | sed 's|^\./||' | LC_ALL=C sort) \
+     <(sed -E 's/^[0-9a-f]{64} [ *]//; s|^\./||' "$package/MANIFEST.sha256" | LC_ALL=C sort) >/dev/null \
+  || { echo "installed package at $package has files its MANIFEST.sha256 does not list" >&2; exit 2; }
 manifest_sha="$(sha256sum "$package/MANIFEST.sha256" | cut -d' ' -f1)"
 version_line="$(nexus --version 2>&1 | head -n 1)"
 [[ "$(grep -oE '[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?' <<< "$version_line" | head -n 1)" == "${rc#v}" ]] || { echo "nexus reports '$version_line', not exactly ${rc#v}" >&2; exit 2; }
@@ -47,9 +51,9 @@ case "$terminal" in
   xterm) [[ -n "${XTERM_VERSION:-}" && -z "${TMUX:-}" ]] || { echo "XTERM_VERSION unset or inside tmux: not xterm" >&2; exit 2; } ;;
   kitty) [[ -n "${KITTY_WINDOW_ID:-}" && -z "${TMUX:-}" ]] || { echo "KITTY_WINDOW_ID unset or inside tmux: not kitty" >&2; exit 2; } ;;
   vscode) [[ "${TERM_PROGRAM:-}" == vscode ]] || { echo "TERM_PROGRAM is not vscode" >&2; exit 2; } ;;
-  gnome) [[ -n "${VTE_VERSION:-}" && -z "${TMUX:-}" && -z "${KITTY_WINDOW_ID:-}" ]] || { echo "VTE_VERSION unset or inside tmux/kitty: not GNOME Terminal" >&2; exit 2; } ;;
+  gnome) [[ -n "${GNOME_TERMINAL_SCREEN:-}${GNOME_TERMINAL_SERVICE:-}" && -z "${TMUX:-}" ]] || { echo "GNOME_TERMINAL_SCREEN/SERVICE unset or inside tmux: not GNOME Terminal" >&2; exit 2; } ;;
   tmux-gnome)
-    [[ -n "${TMUX:-}" && -n "${VTE_VERSION:-}" ]] || { echo "run inside tmux inside GNOME Terminal" >&2; exit 2; }
+    [[ -n "${TMUX:-}" && -n "${GNOME_TERMINAL_SCREEN:-}${GNOME_TERMINAL_SERVICE:-}" ]] || { echo "run inside tmux inside GNOME Terminal" >&2; exit 2; }
     tmux_version="$(tmux -V)"; [[ "$tmux_version" =~ ^tmux\ 3\. ]] || { echo "need tmux 3.x, have $tmux_version" >&2; exit 2; } ;;
 esac
 kitty_protocol=""
@@ -58,12 +62,16 @@ if [[ "$terminal" == kitty ]]; then
   [[ "$kitty_protocol" == yes ]] || { echo "enable the kitty keyboard protocol first" >&2; exit 2; }
 fi
 
-# Attempts are numbered in one directory and never overwritten; the gate counts every attempt.
+# The scope-based survivor check needs the user's systemd manager.
+systemd-run --user --scope --quiet -- true || { echo "systemd user scopes are unavailable in this session" >&2; exit 2; }
+
+# Attempts are numbered in one directory and never overwritten; the gate counts every attempt, including aborted ones.
 cell="$terminal-$size"
 mkdir -p "$out"
 attempt=1
 while [[ -e "$out/cell-$cell.attempt-$attempt.json" || -e "$out/cell-$cell.attempt-$attempt.partial" ]]; do attempt=$((attempt + 1)); done
 stem="$out/cell-$cell.attempt-$attempt"
+attempt_start="$(date +%s)"
 : > "$stem.partial"
 
 # Isolated HOME and workspace; nothing touches the operator's ~/.nexus or ~/.config/nexus.
@@ -85,7 +93,7 @@ printf 'LOCAL_LLM_ENDPOINT=http://127.0.0.1:%s/v1\nLOCAL_LLM_MODEL=terminal-matr
 # The TUI sees only a whitelisted environment, so operator gateway or API settings cannot redirect it.
 launch_env=(env -i PATH="$PATH" HOME="$cell_home" XDG_CONFIG_HOME="$cell_home/.config" XDG_DATA_HOME="$cell_home/.local/share"
   XDG_STATE_HOME="$cell_home/.local/state" XDG_CACHE_HOME="$cell_home/.cache" LANG="${LANG:-C.UTF-8}")
-for var in TERM COLORTERM TERM_PROGRAM TERM_PROGRAM_VERSION VTE_VERSION KITTY_WINDOW_ID TMUX TMUX_PANE XTERM_VERSION DISPLAY WAYLAND_DISPLAY; do
+for var in TERM COLORTERM TERM_PROGRAM TERM_PROGRAM_VERSION VTE_VERSION KITTY_WINDOW_ID TMUX TMUX_PANE XTERM_VERSION DISPLAY WAYLAND_DISPLAY XDG_RUNTIME_DIR DBUS_SESSION_BUS_ADDRESS; do
   [[ -n "${!var:-}" ]] && launch_env+=("$var=${!var}")
 done
 
@@ -106,16 +114,26 @@ sleep 0.3
 cell_processes | grep -qx "$canary_pid" || { echo "survivor scan cannot see a planted cell process; refusing to measure" >&2; exit 1; }
 kill "$canary_pid"; wait "$canary_pid" 2>/dev/null || true; canary_pid=""
 
+# Each launch runs in its own transient systemd user scope: anything still in that cgroup after the TUI exits is a
+# survivor, whatever its HOME, working directory, session or process group.
+scope_procs() {
+  local cg; cg="$(systemctl --user show -P ControlGroup "$1.scope" 2>/dev/null)"
+  [[ -n "$cg" && -r "/sys/fs/cgroup$cg/cgroup.procs" ]] && wc -l < "/sys/fs/cgroup$cg/cgroup.procs" || echo 0
+}
 launch() {
   local label="$1"; shift
-  local before after status=0 survivors
+  local before after status=0 survivors scoped unit="nexus-terminal-$cell-$attempt-$label"
   before="$(stty -g)"
-  (cd "$ws" && "${launch_env[@]}" "$@" nexus) || status=$?
+  (cd "$ws" && systemd-run --user --scope --quiet --unit="$unit" -- "${launch_env[@]}" "$@" nexus) || status=$?
   after="$(stty -g)"
   sleep 2
+  scoped="$(scope_procs "$unit")"
   survivors="$(cell_processes | wc -l)"
-  [[ "$survivors" == 0 ]] || cell_processes | xargs -r ps -o pid=,args= -p >&2
+  (( scoped > survivors )) && survivors="$scoped"
+  [[ "$survivors" == 0 ]] || { cell_processes | xargs -r ps -o pid=,args= -p >&2; systemctl --user kill --signal=KILL "$unit.scope" 2>/dev/null || true; }
   printf '%s\t%s\t%s\t%s\t%s\n' "$label" "$status" "$([[ "$before" == "$after" ]] && echo true || echo false)" "$survivors" "$(date -u +%FT%TZ)" >> "$cell_home/exits.tsv"
+  # Measurements reach the evidence directory as they happen, so an attempt abandoned later still shows them.
+  cp "$cell_home/exits.tsv" "$stem.partial"
 }
 
 cat <<EOF
@@ -158,8 +176,10 @@ read -r -p "operator name: " operator
 while true; do
   read -r -p "approval-panel screenshot path: " shot_approval
   read -r -p "post-exit screenshot path: " shot_exit
-  if [[ -f "$shot_approval" && -f "$shot_exit" ]] && ! cmp -s "$shot_approval" "$shot_exit"; then break; fi
-  echo "both screenshots must exist and differ; try again"
+  if [[ "$shot_approval" =~ \.(png|jpe?g)$ && "$shot_exit" =~ \.(png|jpe?g)$ && -f "$shot_approval" && -f "$shot_exit" ]] \
+     && ! cmp -s "$shot_approval" "$shot_exit" \
+     && (( $(stat -c %Y "$shot_approval") >= attempt_start && $(stat -c %Y "$shot_exit") >= attempt_start )); then break; fi
+  echo "both screenshots must be .png/.jpg files taken during this attempt, and differ; try again"
 done
 approval_copy="$stem.approval.${shot_approval##*.}"
 exit_copy="$stem.post-exit.${shot_exit##*.}"
