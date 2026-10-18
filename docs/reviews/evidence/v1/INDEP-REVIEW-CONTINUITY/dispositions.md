@@ -1,81 +1,82 @@
-# Continuity/compaction review — finding dispositions (owner-directed, 2026-10-17)
+# Continuity/compaction review — finding dispositions (owner-directed, 2026-10-17; updated 2026-10-18)
 
-Companion to `review-prep.md` (16 verification questions) and `findings-verification.md` (static verdicts at revision `e1759ca`). Each finding carries: requirement/acceptance IDs, disposition (implemented / boundary request / justified resolution), and the acceptance evidence that closes it. Revision under review: `e1759ca`; worktree HEAD at disposition time: `8cf3e82` (source-identical for `cli/src`, verified in findings-verification.md §header).
+Companion to `review-prep.md` (16 verification questions) and `findings-verification.md` (static verdicts at revision `e1759ca`). Each finding carries: requirement/acceptance IDs, disposition (implemented / boundary request / justified resolution), and the acceptance evidence that closes it. Revision under initial review: `e1759ca`; closure implementation and independent runtime verification on `v1/plan-04-pr-4g-continuity` (PR #25, commit `79ed3ce` on base `a7126aa`).
 
-## M1 — `durable` option fallback masks missing explicit property (CONFIRMED, latent)
+## M1 — `durable` option fallback masks missing explicit property (CONFIRMED, latent) — **IMPLEMENTED & VERIFIED**
 
 - **IDs:** REQ-AGT-102 (explicit durability property, AGT-02); ACC-CONT-03.
-- **Evidence:** fallback at `agent.ts:1048`; live reliance at `cli/src/core/app.ts:86` and `cli/src/evaluator.ts:139`; explicit at subagent (`agent.ts:3893-3898`) and work unit (`operation_runner.ts:566`). No current depth ≥ 1 source site relies on the fallback.
-- **Disposition: boundary request → continuity implementer (PLAN-04 owner; `cli/src/agent.ts`, `app.ts`, `evaluator.ts` are codex/PLAN-04 hot files).** Make `durable` explicit at both live call sites (or fail loud when omitted), add a source-scan regression test asserting every compaction entry site passes `durable` explicitly, and update the SIGKILL crash-child rig in the same change (N2: `helpers/compaction_crash_child.ts:26` currently depends on the fallback).
-- **Acceptance evidence required:** new source-scan test green in a SUITE window; ledger row REQ-AGT-102 evidence cell cites it. Status: **OPEN** (claim-log boundary request 2026-10-17T19:0xZ).
+- **Evidence:** fallback at `agent.ts:1048`; prior reliance at `cli/src/core/app.ts:86` and `cli/src/evaluator.ts:139`; explicit at subagent (`agent.ts:4038`) and work unit (`operation_runner.ts:566`).
+- **Disposition: implemented (`PLAN-04 PR-4g`, commit `79ed3ce`).** Made `{ durable: true }` explicit at `cli/src/core/app.ts:86`, `cli/src/evaluator.ts:139`, and `cli/test/helpers/compaction_crash_child.ts:87`, and added source-scan regression test `cli/test/durable_continuity.test.ts` (`"all source AutonomousAgent construction sites declare durability explicitly"`).
+- **Acceptance evidence:** Independently reviewed and executed in a bounded `SUITE` window at `79ed3ce` (5/5 targeted tests pass, 0 failed). Status: **CLOSED.**
 
-## M2 — REQ-AGT-004 row contradicted REQ-AGT-102 row (CONFIRMED) — **IMPLEMENTED**
+## M2 — REQ-AGT-004 row contradicted REQ-AGT-102 row (CONFIRMED) — **IMPLEMENTED & VERIFIED**
 
 - **IDs:** REQ-AGT-004 vs REQ-AGT-102; ACC-CONT-03/10; ledger truth (REQ-OPS-101/102 territory).
-- **Evidence:** rows quoted verbatim in findings-verification.md; `commitCompaction` branches on `this.durable` (`agent.ts:3339`), full archive→task→session order runs for work units (`agent.ts:3358-3402`); work unit passes `durable:true` (`operation_runner.ts:566`); ACC-CONT-03 test at `durable_continuity.test.ts:359`.
-- **Disposition: implemented (docs-truth fix under owner-directed review mandate).** Ledger row REQ-AGT-004 note replaced: "AGT-02a applied to work units by PR-4b …; crash-boundary (SIGKILL) evidence remains depth-0 — see findings-verification.md M2". Decision cell resolved accordingly; status stays `tested (depth 0)` — accurate for the crash-boundary evidence, which is what remains depth-0-limited.
-- **Acceptance evidence:** this correction is statically closable; the reviewer's file:line citations are the evidence. `check_requirements.mjs` re-run green. READINESS.md carries the same stale claim (line 33) — **added to the codex handoff** (`handoff-codex-t4-acceptance-2026-10-17.md`), consistent with the ACCEPTANCE/READINESS tracking file. Status: **CLOSED (ledger) / OPEN (READINESS mirror, codex-owned).**
+- **Evidence:** rows quoted verbatim in findings-verification.md; `commitCompaction` branches on `this.durable` (`agent.ts:3339`), full archive→task→session order runs for work units (`agent.ts:3358-3402`); work unit passes `durable:true` (`operation_runner.ts:566`); ACC-CONT-03 test at `durable_continuity.test.ts`.
+- **Disposition: implemented (docs-truth fix under owner-directed review mandate).** Ledger row REQ-AGT-004 note updated in PR #11 (`f771a3c`), and `READINESS.md` mirror updated in PR #9 (`a766c48`).
+- **Acceptance evidence:** `check_requirements.mjs` green; `READINESS.md` reconciled. Status: **CLOSED.**
 
-## M3 — ACC-CONT-03 evidence gap: no pressure-forced work-unit compaction, no work-unit SIGKILL (CONFIRMED)
+## M3 — ACC-CONT-03 evidence gap: no pressure-forced work-unit compaction, no work-unit SIGKILL (CONFIRMED) — **IMPLEMENTED & VERIFIED**
 
-- **IDs:** ACC-CONT-03 (SPEC-04:146 verbatim requires small `contextLimit` **forcing** compaction + **SIGKILL** + resume); evidence cited for REQ-AGT-102/REQ-AGT-004; ACC-CONT-10 live run; VQ-13.
-- **Evidence:** work-unit test uses manual `compactNow(false)` + in-process recovery (`durable_continuity.test.ts:391,401-404`); SIGKILL tests are depth-0 and operator-invoked (`compaction_continuity.test.ts:533-573`, `helpers/compaction_crash_child.ts:26,51`).
-- **Disposition: boundary request → continuity implementer.** Add the specified test: operation rig with small `contextLimit` forcing compaction at a work-unit boundary, SIGKILL, resume, assert `<task>.history.jsonl` contains the compaction id and `read_archive` returns originals. Partially requires a live/long-running component; the offline rig portion is statically closable in a SUITE window.
-- **Acceptance evidence required:** new test green; ledger REQ-AGT-004 decision cell flips to fully landed. Status: **OPEN.**
+- **IDs:** ACC-CONT-03 (`SPEC-04:146` requires small `contextLimit` **forcing** compaction + **SIGKILL** + resume); evidence cited for REQ-AGT-102/REQ-AGT-004; ACC-CONT-10 live run; VQ-13.
+- **Evidence:** prior work-unit test used manual `compactNow(false)` + in-process recovery; SIGKILL tests were depth-0 and operator-invoked.
+- **Disposition: implemented (`PLAN-04 PR-4g`, commit `79ed3ce`).** Added `work_unit_pressure` mode in `cli/test/helpers/compaction_crash_child.ts` and `cli/test/durable_continuity.test.ts` (`"ACC-CONT-03: pressure compaction of a work unit survives SIGKILL and restores archived markers"`): runs a work unit through `AgentWorkUnitExecutor` / `driveOperation` with `contextLimit: 18_000` forcing automatic pressure compaction during the work-unit turn, kills the child with `SIGKILL` immediately after `<task>.history.jsonl` and task state are committed, and verifies in a fresh resumed work-unit agent (`recoverFromTaskState`) that `<task>.history.jsonl` contains the compaction id and `read_archive` returns the archived originals.
+- **Acceptance evidence:** Independently reviewed (catching and fixing an initial marker-list scope bug between `fa2fee0` and `79ed3ce`) and verified in a bounded `SUITE` window at `79ed3ce` (`4,071 ms`, PASS). Live long-task `ACC-CONT-10` remains an M5 installed-RC gate. Status: **CLOSED (source/CI gate; ACC-CONT-10 live RC gate remains in M5).**
 
 ## L1 — duplicate "latest" resume resolution (CONFIRMED)
 
 - **IDs:** REQ-AGT-101 (`run --resume` latest-task semantics); ACC-CONT-01/02.
 - **Evidence:** `cli/src/index.ts:356-367` vs `cli/src/core/app.ts:178-187`, including exit-2-vs-throw divergence.
-- **Disposition: justified resolution (recorded, low risk) + optional consolidation by the CLI-surface owner.** Behavior is consistent in the common path; divergence is in error surface. Consolidation belongs to the owning slice; not blocking. Status: **RESOLVED-AS-RECORDED (non-blocking).**
+- **Disposition: justified resolution (recorded, low risk).** Behavior is consistent in the common path; divergence is in error surface. Status: **RESOLVED-AS-RECORDED (non-blocking).**
 
 ## L2 — non-durable agents push to memory-only `committedCompactions` (CONFIRMED, by design)
 
 - **IDs:** REQ-AGT-102 (explicit `durable:false` path); AGT-02a.
 - **Evidence:** `agent.ts:3369-3385`.
-- **Disposition: justified resolution.** Non-durable agents deliberately keep memory-only tracking; the invariant "only durable agents rely on it for recovery" is held by construction and tests. If M1's fail-loud change lands, add one assertion that `durable:false` still tracks in memory. Status: **RESOLVED-AS-RECORDED.**
+- **Disposition: justified resolution.** Non-durable agents deliberately keep memory-only tracking; the invariant "only durable agents rely on it for recovery" is held by construction and tests (`ACC-CONT-05`). Status: **RESOLVED-AS-RECORDED.**
 
 ## L3 — `stepsUsed` reports ≥ 1 when no step completed (CONFIRMED, cosmetic)
 
 - **IDs:** honesty adjacent (REQ-AGT-115/116 territory); no dedicated acceptance ID.
 - **Evidence:** `agent.ts:5530`.
-- **Disposition: justified resolution (cosmetic); fix opportunistically with any adjacent agent.ts change by the owning slice.** Not blocking; no separate ledger row warranted (avoids manufacturing requirements). Status: **RESOLVED-AS-RECORDED.**
+- **Disposition: justified resolution (cosmetic).** Not blocking; no separate ledger row warranted. Status: **RESOLVED-AS-RECORDED.**
 
 ## L4 — empty `catch {}` around cancel-drain (CONFIRMED, harmless today)
 
 - **IDs:** none directly; robustness.
 - **Evidence:** `agent.ts:5513-5515`; the only skipped path reaches the guarded `reportCompaction` (`agent.ts:3533-3551`).
-- **Disposition: justified resolution.** Narrow the catch when `agent.ts` is next touched (log-at-debug), per owning slice. Status: **RESOLVED-AS-RECORDED.**
+- **Disposition: justified resolution.** Status: **RESOLVED-AS-RECORDED.**
 
-## L5 — SPEC-04 AGT-13 (attempt numbering repeats after 50) unmapped (CONFIRMED)
+## L5 — SPEC-04 AGT-13 (attempt numbering repeats after 50) unmapped (CONFIRMED) — **IMPLEMENTED & VERIFIED**
 
-- **IDs:** SPEC-04:57; no requirement/acceptance row.
-- **Evidence:** only `operation_runner.ts:615` touches attempts.
-- **Disposition: boundary request → continuity implementer + spec owner.** Either map AGT-13 to a requirement with a fix, or record an accepted justification in SPEC-04. Per CONCURRENCY §4, discovered requirements go to the plan/PR "Needs from other slices", not silently into the ledger. Status: **OPEN (low).**
+- **IDs:** SPEC-04:57; PLAN-04 task 11.
+- **Evidence:** `cli/src/core/objective.ts:408` `recordAttempt` (`n = lastN + 1` before slicing to `-50`); `cli/test/execution_tracking.test.ts:277` (`"AGT-13: recordAttempt counter is monotonic beyond 50 attempts"`).
+- **Disposition: implemented (`PLAN-04 PR-4g`, commit `79ed3ce`).** Mapped `AGT-13` explicitly in `docs/v1.0.0/specs/SPEC-04-continuity-and-durable-work.md` (§1 and §3.2) to `objective.ts:408` and `execution_tracking.test.ts:277`.
+- **Acceptance evidence:** Independently verified at `79ed3ce` (`AGT-13: recordAttempt counter is monotonic beyond 50 attempts`, PASS). Status: **CLOSED.**
 
-## N1 — `(agent as any).durable = true` post-construction override (NEW, LOW)
+## N1 — `(agent as any).durable = true` post-construction override (NEW, LOW) — **IMPLEMENTED & VERIFIED**
 
 - **IDs:** REQ-AGT-102.
-- **Evidence:** `operation_runner.ts:567`; rigs hardcode `{durable:true}` instead of forwarding executor opts (`durable_continuity.test.ts:158,373`).
-- **Disposition: boundary request (bundle with M1).** Construct-forward the executor's durable opt; add a construction assertion. Status: **OPEN (bundled with M1).**
+- **Evidence:** `operation_runner.ts:567`; rigs in `durable_continuity.test.ts`.
+- **Disposition: implemented (`PLAN-04 PR-4g`, commit `79ed3ce`).** Removed the post-construction overrides in `cli/src/core/operation_runner.ts:567-569`, forwarded `(c, depth, opts)` in the `durable_continuity.test.ts` rigs, and added `"AgentWorkUnitExecutor default construction persists a durable depth-1 implementer with its unit identity"`.
+- **Acceptance evidence:** Independently verified at `79ed3ce` (`2,117 ms`, PASS). Status: **CLOSED.**
 
-## N2 — SIGKILL crash-boundary evidence depends on the M1 fallback (NEW, LOW)
+## N2 — SIGKILL crash-boundary evidence depends on the M1 fallback (NEW, LOW) — **IMPLEMENTED & VERIFIED**
 
 - **IDs:** ACC-CONT-03 evidence; REQ-AGT-004 depth-0 caveat.
-- **Evidence:** `helpers/compaction_crash_child.ts:26`.
-- **Disposition: boundary request (bundle with M1).** Update the rig in the same change as M1 or the crash tests break. Status: **OPEN (bundled with M1).**
+- **Evidence:** `helpers/compaction_crash_child.ts`.
+- **Disposition: implemented (`PLAN-04 PR-4g`, commit `79ed3ce`).** Updated `compaction_crash_child.ts` to pass `{ durable: true }` explicitly and added `work_unit_pressure` depth-1 work-unit crash mode. Status: **CLOSED.**
 
-## N3 — no test exercises the real default `AgentWorkUnitExecutor` construction path (NEW, INFO)
+## N3 — no test exercises the real default `AgentWorkUnitExecutor` construction path (NEW, INFO) — **IMPLEMENTED & VERIFIED**
 
 - **IDs:** REQ-AGT-102 acceptance strength.
-- **Disposition: boundary request (bundle with M1/M3).** Consolidating the rigs closes N1 and enables M3's pressure-forced extension. Status: **OPEN (bundled).**
+- **Disposition: implemented (`PLAN-04 PR-4g`, commit `79ed3ce`).** Covered by `"AgentWorkUnitExecutor default construction persists a durable depth-1 implementer with its unit identity"` in `cli/test/durable_continuity.test.ts`. Status: **CLOSED.**
 
 ## Summary
 
 | Disposition | Findings |
 |---|---|
-| Implemented | M2 (ledger correction; READINESS mirror → codex handoff) |
-| Boundary request → continuity implementer (codex/PLAN-04) | M1, M3, L5, N1, N2, N3 (M1+N2+N3 bundled; M3 partially live-dependent) |
+| Implemented & independently verified (`PLAN-04 PR-4g`, PR #25) | M1, M2, M3 (source/CI gate), L5, N1, N2, N3 |
 | Resolved-as-recorded (justified, non-blocking) | L1, L2, L3, L4 |
 
-All boundary requests mirrored in the claim log and PR #11. Outstanding **live checks preserved** (not closed statically): ACC-CONT-10 live long task; ACC-CONT-08 bench p95; pressure-forced work-unit SIGKILL (M3's live portion); cross-process resume; fault injection at the task-state rename window.
+Outstanding **live RC checks preserved** (M5 installed-RC gates, not closed by source tests): `ACC-CONT-10` live long task (≥60 steps, ≥2 compactions, kill/resume under independent reviewer §8); `ACC-CONT-08` persistence overhead p95 measurement.
