@@ -17,7 +17,9 @@ const SKIP_DIRS = new Set([
 /** Paths whose content steers test discovery, tool behaviour or module resolution: never carried across. */
 const BLOCKED = [
   // tests, test data and test configuration
-  /(^|\/)(testdata|fixtures?|__snapshots__|snapshots?|golden|__mocks__|mocks?|e2e|testing|testutils?|test_?utils?|test_helpers?)\//,
+  /(^|\/)(testdata|fixtures?|__snapshots__|snapshots?|golden|__mocks__|mocks?|e2e|testing|testutils?|test_?utils?|test_helpers?|testhelpers?|testenv|testlib)\//,
+  /(^|\/)_?testing\.py$/, /(^|\/)(test[-_]?(setup|helpers?|utils?|env|lib|fixtures?)|setup[-_]tests?)\.[^/]+$/,
+  /(^|\/)(karma\.conf|jest[-.]preset|vitest\.workspace|global[-_]?setup|global[-_]?teardown)[^/]*$/i,
   /\.(golden|snap)$/, /(^|\/)setupTests\.[^/]+$/, /\.setup\.[cm]?[jt]sx?$/,
   /(^|\/)tests?\//, /(^|\/)__tests__\//, /(^|\/)spec\//, /(^|\/)test_[^/]*\.py$/, /_test\.py$/, /_test\.go$/, /\.(test|spec)\.[cm]?[jt]sx?$/,
   /(^|\/)conftest\.py$/, /(^|\/)(pytest|tox)\.ini$/, /(^|\/)setup\.(cfg|py)$/, /(^|\/)noxfile\.py$/, /(^|\/)\.coveragerc$/,
@@ -113,8 +115,10 @@ export function testConfigChange(relative, before, after) {
     // [lib], [profile.*] and [patch] can drop or redirect targets. Only dependency tables may change.
     const key = changedTomlSection(before, after, (k) => k === "[dependencies]" || /^\[dependencies\.[A-Za-z0-9_-]+\]$/.test(k));
     if (key) return `Cargo.toml ${key} changed`;
-    const deps = [...tomlSections(after)].filter(([k]) => k === "[dependencies]" || k.startsWith("[dependencies.")).map(([, v]) => v).join("");
-    return /\b(path|git|registry)\s*=/.test(deps) ? "Cargo.toml dependencies point at a local, git or alternate-registry source" : null;
+    // Only lines the agent added are scanned, so a baseline path dependency does not refuse unrelated edits.
+    const kept = new Set((before ?? "").split("\n"));
+    const added = (after ?? "").split("\n").filter((line) => !kept.has(line)).join("\n");
+    return /\b(path|git|registry)\s*=/.test(added) ? "Cargo.toml dependencies point at a local, git or alternate-registry source" : null;
   }
   if (base === "go.mod") {
     // Everything but the require lines and blocks must stay byte-identical (replace/exclude entries inside blocks too).

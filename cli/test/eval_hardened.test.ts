@@ -26,6 +26,7 @@ test("test infrastructure is recognised across Python, Go, JS/TS and Rust layout
   const { isTestInfraPath } = await hardened();
   for (const p of ["conftest.py", "pkg/conftest.py", "pytest.ini", "tox.ini", "setup.cfg", "sitecustomize.py", "x.pth", "tests/test_a.py", "src/test_a.py", "a_test.py",
     "pkg/x_test.go", "src/x.test.ts", "web/a.spec.jsx", "__tests__/a.js", "jest.config.js", "vitest.config.mts", ".mocharc.json", "build.rs", ".cargo/config.toml", ".github/workflows/ci.yml", "Makefile", ".env.local",
+    "karma.conf.js", "jest-preset.js", "vitest.workspace.ts", "globalSetup.ts", "setup-tests.js", "test-helpers.ts", "internal/testhelper/x.go", "pkg/_testing.py",
     ".npmrc", ".yarnrc.yml", ".pnpmfile.cjs", "go.work", "rust-toolchain.toml", "tsconfig.json", ".coveragerc", ".gitattributes", "node_modules/x/i.js", ".venv/lib/x.py", "a/__pycache__/m.pyc"]) {
     assert.equal(isTestInfraPath(p), true, p);
   }
@@ -241,6 +242,8 @@ test("manifest guards fail closed on TOML headers they do not recognise, go.mod 
   assert.match(testConfigChange("Cargo.toml", cargo, `${cargo}[profile.test]\nopt-level = 3\n`) ?? "", /profile\.test/);
   assert.match(testConfigChange("Cargo.toml", cargo, cargo.replace('serde = "1"', 'serde = { version = "1", registry = "evil" }')) ?? "", /alternate-registry/);
   assert.equal(testConfigChange("Cargo.toml", cargo, cargo.replace('serde = "1"', 'serde = "1.0.200"')), null);
+  const withPath = cargo.replace('serde = "1"', 'serde = "1"\nlocal = { path = "crates/local" }');
+  assert.equal(testConfigChange("Cargo.toml", withPath, withPath.replace('serde = "1"', 'serde = "1.0.200"')), null, "a baseline path dependency does not refuse unrelated edits");
   const gomod = "module x\n\ngo 1.22\n\nrequire (\n\tgithub.com/a/b v1.0.0\n)\n\nreplace (\n\tgithub.com/c/d => github.com/c/d v1.2.0\n)\n";
   assert.equal(testConfigChange("go.mod", gomod, gomod.replace("v1.0.0", "v1.1.0")), null, "require changes are dependency edits");
   assert.match(testConfigChange("go.mod", gomod, gomod.replace("v1.2.0\n)", "v1.2.0\n\tgithub.com/a/b => ./fake\n)")) ?? "", /outside its require/, "an entry added inside an existing replace block");
