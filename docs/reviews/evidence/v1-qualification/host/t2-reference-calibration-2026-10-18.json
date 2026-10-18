@@ -1,0 +1,196 @@
+{
+  "calibratedAt": "2026-10-18T12:54:26.880Z",
+  "host": "mike-dev",
+  "profile": {
+    "cpuPercent": 800,
+    "memoryBytes": 17179869184,
+    "tasks": 4096,
+    "storageBytes": 21474836480,
+    "workspaceRoot": "/srv/nexus-qual/ws"
+  },
+  "tasksTotal": 40,
+  "tasksPassed": 40,
+  "tasksFailed": 0,
+  "maxMemoryPeakBytes": 1265086464,
+  "maxMemoryPeakMiB": 1206.5,
+  "maxPidsPeak": 163,
+  "maxWorkspaceBytes": 235941936,
+  "maxWorkspaceMiB": 225,
+  "maxPhaseWallMs": 119157,
+  "totalCpuUsageSec": 1182.9,
+  "totalCpuThrottledSec": 0,
+  "oomKills": 0,
+  "pidsMaxEvents": 0,
+  "uncleanPhases": 0,
+  "byLanguage": {
+    "go": {
+      "tasks": 10,
+      "passed": 10,
+      "maxMemoryPeakBytes": 382705664,
+      "maxPidsPeak": 50,
+      "maxWorkspaceBytes": 992032,
+      "maxPhaseWallMs": 7252
+    },
+    "javascript": {
+      "tasks": 10,
+      "passed": 10,
+      "maxMemoryPeakBytes": 1265086464,
+      "maxPidsPeak": 19,
+      "maxWorkspaceBytes": 15919596,
+      "maxPhaseWallMs": 119157
+    },
+    "python": {
+      "tasks": 10,
+      "passed": 10,
+      "maxMemoryPeakBytes": 259919872,
+      "maxPidsPeak": 101,
+      "maxWorkspaceBytes": 8388194,
+      "maxPhaseWallMs": 70883
+    },
+    "rust": {
+      "tasks": 10,
+      "passed": 10,
+      "maxMemoryPeakBytes": 456048640,
+      "maxPidsPeak": 163,
+      "maxWorkspaceBytes": 235941936,
+      "maxPhaseWallMs": 17279
+    }
+  },
+  "revision": {
+    "commit": "06e38de830afc4e9081e84670d3968af6ec29554",
+    "dirty": false,
+    "profileSha256": "4e8d42a218a68fa2fd3fd0de4d9788b205fa41b9ab71935cc2b6cf73f5d63543",
+    "manifestSha256": "50895b84a604fbfd45ed82e29cbef4ba795d7fffbe6611af23bfbc9851f3e89b",
+    "sourceDigests": [
+      {
+        "file": "eval/host/validate.mjs",
+        "sha256": "b597319069d7189e81b4e3561d2d0a71fdfe5337f131b3be5d61bc17b3263b09"
+      },
+      {
+        "file": "eval/host/provision.sh",
+        "sha256": "1db27fdcb9a70e013a41f47d431ceb788184a5489a9f10490c9e507aa5e12e62"
+      },
+      {
+        "file": "eval/host/rollback.sh",
+        "sha256": "e8cdd1797456fc11543a0c18a51a9dbdd6cca559b6296478a62ad748e0a74c10"
+      },
+      {
+        "file": "eval/host/resource-profile.json",
+        "sha256": "4e8d42a218a68fa2fd3fd0de4d9788b205fa41b9ab71935cc2b6cf73f5d63543"
+      },
+      {
+        "file": "eval/resources.mjs",
+        "sha256": "7a1e276938a88ed5b9858a1e1b5aa174f96c75fdf1ad393cb29e5c383858f2b6"
+      },
+      {
+        "file": "eval/cgroup_supervisor.mjs",
+        "sha256": "222646943526480db44bc4359416f4b69ac389c5d50a8bc49e3a00a233a1a8ca"
+      },
+      {
+        "file": "eval/isolate.mjs",
+        "sha256": "8e48e2622550fc8eb530d4dd7b4a4ef13a5111352824747aef51bb68ea33c54b"
+      },
+      {
+        "file": "eval/validate.mjs",
+        "sha256": "fb066731fc72e7ee21ceaa87f210c2e69cf4e45a048f13d3e07df109113a7566"
+      },
+      {
+        "file": "eval/run.mjs",
+        "sha256": "07681f90663a0ff11303bb75351f2989d48d5ae332acd10068a77486d56ad0c7"
+      },
+      {
+        "file": "eval/hardened_check.mjs",
+        "sha256": "8c14d6a5cc702969693193d54ccb93c3549d1fdb75ef1dd47d3e3a0db6d32119"
+      },
+      {
+        "file": "eval/hide_oracle.cjs",
+        "sha256": "f6c15333acf82e75df55af60c021a3ee3347b115c7b72051bc68da64d0fdd537"
+      },
+      {
+        "file": "eval/hide_oracle.py",
+        "sha256": "0b4a0e24f254091c1efe2985c95670549460c0325f487910a6aac591fb33d37e"
+      },
+      {
+        "file": "eval/unlink_then_exec.sh",
+        "sha256": "65129082580d5942b11df3f491c4e567dd2ccb00632885e1bcebacc80eef5870"
+      },
+      {
+        "file": "eval/workspace.mjs",
+        "sha256": "5386a21d1b86c0701647457a0b7b61db6ab4eab27ec9e49ecf3d969c1cfb96af"
+      }
+    ]
+  },
+  "sourceEquivalenceAssessment": {
+    "assessedAt": "2026-10-18T18:14:14.303Z",
+    "currentCommit": "b122486a62a68d4ed57580840ca0ae1abe75b5ff",
+    "observedAtCommit": "06e38de830afc4e9081e84670d3968af6ec29554",
+    "dirty": false,
+    "profileSha256": "4e8d42a218a68fa2fd3fd0de4d9788b205fa41b9ab71935cc2b6cf73f5d63543",
+    "manifestSha256": "50895b84a604fbfd45ed82e29cbef4ba795d7fffbe6611af23bfbc9851f3e89b",
+    "currentSourceDigests": [
+      {
+        "file": "eval/host/validate.mjs",
+        "sha256": "2031a2ad95e7ae02ae78758935050d4b854475115360203a307de61b3e24c82e"
+      },
+      {
+        "file": "eval/host/provision.sh",
+        "sha256": "1db27fdcb9a70e013a41f47d431ceb788184a5489a9f10490c9e507aa5e12e62"
+      },
+      {
+        "file": "eval/host/rollback.sh",
+        "sha256": "e8cdd1797456fc11543a0c18a51a9dbdd6cca559b6296478a62ad748e0a74c10"
+      },
+      {
+        "file": "eval/host/resource-profile.json",
+        "sha256": "4e8d42a218a68fa2fd3fd0de4d9788b205fa41b9ab71935cc2b6cf73f5d63543"
+      },
+      {
+        "file": "eval/resources.mjs",
+        "sha256": "7a1e276938a88ed5b9858a1e1b5aa174f96c75fdf1ad393cb29e5c383858f2b6"
+      },
+      {
+        "file": "eval/cgroup_supervisor.mjs",
+        "sha256": "222646943526480db44bc4359416f4b69ac389c5d50a8bc49e3a00a233a1a8ca"
+      },
+      {
+        "file": "eval/isolate.mjs",
+        "sha256": "a81b8cb869e03e601a727bd5d5876e9dae68775951a1115058015c43e9491446"
+      },
+      {
+        "file": "eval/validate.mjs",
+        "sha256": "96e7716f2be905c5f1ca78dff188039218d1d47969a7a3776459d42368906d2c"
+      },
+      {
+        "file": "eval/run.mjs",
+        "sha256": "5e096dc4af34f0c6e91ba694e022e9e051bdbb5723df4c82240fa1c0739bc3c0"
+      },
+      {
+        "file": "eval/hardened_check.mjs",
+        "sha256": "8c14d6a5cc702969693193d54ccb93c3549d1fdb75ef1dd47d3e3a0db6d32119"
+      },
+      {
+        "file": "eval/hide_oracle.cjs",
+        "sha256": "f6c15333acf82e75df55af60c021a3ee3347b115c7b72051bc68da64d0fdd537"
+      },
+      {
+        "file": "eval/hide_oracle.py",
+        "sha256": "0b4a0e24f254091c1efe2985c95670549460c0325f487910a6aac591fb33d37e"
+      },
+      {
+        "file": "eval/unlink_then_exec.sh",
+        "sha256": "65129082580d5942b11df3f491c4e567dd2ccb00632885e1bcebacc80eef5870"
+      },
+      {
+        "file": "eval/workspace.mjs",
+        "sha256": "5386a21d1b86c0701647457a0b7b61db6ab4eab27ec9e49ecf3d969c1cfb96af"
+      }
+    ],
+    "changedFilesSinceObservation": [
+      "eval/isolate.mjs",
+      "eval/validate.mjs",
+      "eval/run.mjs",
+      "eval/host/validate.mjs"
+    ],
+    "rationale": "Original observational provenance in report.revision (commit 06e38de830afc4e9081e84670d3968af6ec29554) is preserved unchanged without retroactive relabeling; fresh exact-head host validation is recorded separately in validate-exact-head.json. The delta between 06e38de830afc4e9081e84670d3968af6ec29554 and b122486a62a68d4ed57580840ca0ae1abe75b5ff adds shared host-mount-source enumeration (including toolchainDirectories goRoot/rustRoot), corpusCustody.reportPath overlap protection, v2 manifest fixture full-tree sha256 enforcement, and blackbox-v1 qualification preflight. None of these preflight additions alter the provisioned host account (uid 985), sudoers policy, dedicated tmpfs mount (/srv/nexus-qual/ws), cgroup v2 resource limits, or per-task setup/reference resource envelopes."
+  }
+}

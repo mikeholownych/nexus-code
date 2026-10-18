@@ -10,10 +10,11 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { startModelProxy } from "./model_proxy.mjs";
-import { asUser, corpusManifestProblem, corpusTaskRows, fetchModelEntry, hiddenTestIsolationProblem, modelFingerprint, nexusContextLimitArgs, nexusLimitsProblem, qualificationBudgetProblem, taskTreeDigest, validateTask } from "./validate.mjs";
-import { agentSandboxArgv, assertNoSymlinks, confinedPath, grantRunAsAccess, isolatedProcessArgv, runIsolated, runIsolatedProcess, sandboxAvailable } from "./isolate.mjs";
+import { asUserSpec, corpusManifestProblem, corpusTaskRows, fetchModelEntry, hiddenTestIsolationProblem, modelFingerprint, nexusContextLimitArgs, nexusLimitsProblem, qualificationBudgetProblem, runtimeCorpusOverlapProblem, taskTreeDigest, validateTask } from "./validate.mjs";
+import { agentSandboxArgv, assertNoSymlinks, confinedPath, grantRunAsAccess, hiddenOutputHasTests, isolatedProcessArgv, normalizeRunAsPermissions, runIsolated, runIsolatedProcess, sandboxAvailable, stageHiddenFiles } from "./isolate.mjs";
 import { runBlackBoxOracle } from "./oracle.mjs";
 import { stageRepoWorkspace } from "./workspace.mjs";
+import { applyAgentChanges, cloneWorkspace } from "./hardened_check.mjs";
 import { containmentProblem, resourceProbeProblem, spawnContained } from "./resources.mjs";
 import { StringDecoder } from "node:string_decoder";
 import { commandBaseline, countCompactions, createT3Driver, scoreT3Run, steeringBaseline, steeringPrecondition, t3Snapshot } from "./t3.mjs";
@@ -29,6 +30,21 @@ const configBytes = fs.readFileSync(args.config);
 const configSha256 = createHash("sha256").update(configBytes).digest("hex");
 const config = JSON.parse(configBytes.toString("utf8"));
 const tasksDir = path.resolve(args.tasks ?? path.join(ROOT, "eval/tasks"));
+function custodyCorpusPathsForRun() {
+  return [
+    config.corpusCustody?.reportPath,
+    config.corpusCustody?.storeRoot,
+    config.corpusCustody?.validatorPath,
+    config.corpusCustody?.referencePath,
+    config.corpusCustody?.authorLogPath,
+  ].filter(Boolean);
+}
+function protectedCorpusPathsForRun() {
+  const parent = path.dirname(tasksDir);
+  const evalDir = path.join(ROOT, "eval");
+  const includeParent = config.qualification === true || fs.realpathSync(parent) !== fs.realpathSync(evalDir);
+  return [tasksDir, ...(includeParent ? [parent] : []), ...custodyCorpusPathsForRun()];
+}
 const runs = Number(args.runs ?? config.runs ?? 1);
 const only = args.only ? new Set(String(args.only).split(",")) : null;
 // --pairs "task run,task run": rerun exactly these (runs that failed on infrastructure; see eval/infra.mjs).
@@ -161,11 +177,14 @@ async function runOnce(task, run) {
   // Under the resource contract these are on a tmpfs, so candidate writes count against the run's memory limit.
   const scratch = config.resources?.workspaceRoot ?? os.tmpdir();
   const ws = fs.mkdtempSync(path.join(scratch, `nexus-eval-${task.id}-`));
+  const checkDirs = [];
   const home = fs.mkdtempSync(path.join(scratch, "nexus-eval-home-"));
   const budget = effectiveBudget(task, config);
   const base = { task: task.id, tier: task.tier, ...(task.tier === "T3" ? { t3SteeringItems: task.steering.length } : {}), config: config.name, agent: config.agent ?? "nexus", agentVersion: agentIdentity.record, budget, run, harness: identity.string, model: config.model, startedAt: new Date().toISOString() };
   try {
     await prepareWorkspace(task, ws);
+    // Taken now, while .git is the harness's own: after the agent runs, nothing executes git against its workspace.
+    const baselineTree = gitRev(ws, "HEAD^{tree}");
     const t3Baseline = task.tier === "T3" ? steeringBaseline(task, ws) : null;
     // On the per-run task copy, so the steering hook in runAgent can read it. The commands run on a throwaway copy of
     // the staged workspace, so the agent starts on exactly the staged tree.
@@ -174,7 +193,7 @@ async function runOnce(task, run) {
       const probe = fs.mkdtempSync(path.join(scratch, `nexus-eval-t3-baseline-${task.id}-`));
       try {
         fs.cpSync(ws, probe, { recursive: true, verbatimSymlinks: true });
-        task.t3CommandBaseline = await commandBaseline(task, (command) => runIsolated(command, { cwd: probe, home: true, timeoutSec: 300, resources: config.resources ?? null }).then((r) => {
+        task.t3CommandBaseline = await commandBaseline(task, (command) => runIsolated(command, { cwd: probe, home: true, timeoutSec: 300, resources: config.resources ?? null, protectedCorpusPaths: protectedCorpusPathsForRun() }).then((r) => {
           if (r.resources) t3BaselineResources.push(r.resources);
           const error = r.containmentProblem ?? (r.timedOut ? "timed out" : r.overflow ? "output limit" : r.status === null ? "did not exit" : null);
           return { pass: r.status === 0 && !error, error };
@@ -209,20 +228,43 @@ async function runOnce(task, run) {
     });
     const started = Date.now();
     let agent;
+    let agentEndedAt;
     try {
       agent = await runAgent(task, ws, home, budget, agentIdentity, proxyDir, localToken);
+      agentEndedAt = Date.now();
+      if (config.runAs) {
+        for (const dir of [ws, home]) await normalizeRunAsPermissions(config.runAs, dir, asUserSpec);
+      }
     } finally {
       await proxy?.close();
       fs.rmSync(proxyDir, { recursive: true, force: true });
     }
-    const wallMs = Date.now() - started;
+    const wallMs = agentEndedAt - started;
     if (agent.containmentProblem) throw new Error(`candidate containment failed: ${agent.containmentProblem}`);
     const model = proxy ? proxy.stats() : null;
     const contaminated = treeDigest(task.dir) !== sourceBefore || `${agent.stdout}${agent.stderr}`.includes(tasksDir);
     // T3 judges the workspace as it was when the objective's work ended (snapshot taken before the probe turn).
     const t3 = agent.t3Driver ? scoreT3Run({ task, baseline: t3Baseline, driver: agent.t3Driver, preconditions: agent.t3Preconditions, compactions: countCompactions(home) }) : null;
-    const hidden = await runCheck(task, ws, task.hidden, true);
-    const regression = task.regression ? await runCheck(task, ws, task.regression, false) : null;
+    // Legacy hidden tests share a process with candidate code. In qualification (or with hardenedChecks) they never
+    // run in the agent's workspace: each check gets a fresh staging of the baseline with only the agent's source
+    // changes (eval/hardened_check.mjs). Black-box oracles already keep expectations outside the candidate.
+    const hardened = (config.qualification === true || config.hardenedChecks === true) && task.hidden?.protocol !== "blackbox-v1";
+    let hardening = null;
+    let hiddenWs = ws;
+    let regressionWs = ws;
+    if (hardened) {
+      hiddenWs = fs.mkdtempSync(path.join(scratch, `nexus-eval-check-${task.id}-`));
+      regressionWs = fs.mkdtempSync(path.join(scratch, `nexus-eval-regression-${task.id}-`));
+      checkDirs.push(hiddenWs, regressionWs);
+      await prepareWorkspace(task, hiddenWs);
+      // Fixture tasks commit at staging time, so compare content (the tree), not the commit id.
+      if (gitRev(hiddenWs, "HEAD^{tree}") !== baselineTree) throw new Error("hardened check workspace staged a different baseline");
+      hardening = { baseline: baselineTree, ...applyAgentChanges(ws, hiddenWs) };
+      cloneWorkspace(hiddenWs, regressionWs);
+    }
+    const refused = (check) => ({ pass: false, status: null, timedOut: false, overflow: false, output: `hardened check refused: ${hardening.configChanges.join("; ")}`, refused: true, resources: null, containmentProblem: null, check });
+    const hidden = hardening?.configChanges.length ? refused("hidden") : await runCheck(task, hiddenWs, task.hidden, true, { readOnlyHidden: hardened });
+    const regression = task.regression ? (hardening?.configChanges.length ? refused("regression") : await runCheck(task, regressionWs, task.regression, false)) : null;
     for (const [phase, check] of [["hidden", hidden], ["regression", regression]]) {
       if (check?.containmentProblem) throw new Error(`${phase} check containment failed: ${check.containmentProblem}`);
     }
@@ -245,6 +287,7 @@ async function runOnce(task, run) {
       falseVerified: turn?.outcome === "VERIFIED" && !hidden.pass,
       contaminated,
       tokens: agent.json?.tokenStats ?? null,
+      ...(hardening ? { hardened: { baseline: hardening.baseline, applied: hardening.applied.length, discarded: hardening.discarded, configChanges: hardening.configChanges } } : {}),
       ...(t3 ? { t3 } : {}),
       model,
       resources: config.resources ? { agent: agent.resources, hidden: hidden.resources ?? null, regression: regression?.resources ?? null, ...(t3BaselineResources.length ? { t3Baseline: t3BaselineResources } : {}) } : null,
@@ -254,6 +297,7 @@ async function runOnce(task, run) {
     return { ...base, wallMs: 0, error: String(err?.message ?? err), hiddenPass: false, regressionPass: null, falseVerified: false, claimedComplete: false, claimedVerified: false };
   } finally {
     if (!args.keep) {
+      for (const dir of checkDirs) fs.rmSync(dir, { recursive: true, force: true });
       fs.rmSync(ws, { recursive: true, force: true });
       fs.rmSync(home, { recursive: true, force: true });
     }
@@ -276,7 +320,7 @@ async function prepareWorkspace(task, ws) {
     stageRepoWorkspace(cache, task.repo.commit, ws);
   } else throw new Error(`task ${task.id} has neither fixture nor repo`);
   for (const cmd of task.setup ?? []) {
-    const result = await runIsolated(cmd, { cwd: ws, home: true, timeoutSec: task.setupTimeoutSec ?? 300, resources: config.resources ?? null });
+    const result = await runIsolated(cmd, { cwd: ws, home: true, timeoutSec: task.setupTimeoutSec ?? 300, resources: config.resources ?? null, protectedCorpusPaths: protectedCorpusPathsForRun() });
     if (result.containmentProblem) throw new Error(`isolated setup containment failed for ${task.id}: ${result.containmentProblem}`);
     if (result.status !== 0 || result.timedOut || result.overflow) throw new Error(`isolated setup failed for ${task.id}: ${result.timedOut ? "timeout" : result.overflow ? "output limit" : `exit ${result.status}`}`);
   }
@@ -352,7 +396,7 @@ async function resolveAgentIdentity(config) {
       allowedFiles: [candidatePath, ...argsPrefix.filter((item) => path.isAbsolute(item))],
       timeoutMs: 5000,
     });
-    const wrapped = config.runAs ? asUser(config.runAs, spec.cmd, spec.argv) : spec;
+    const wrapped = config.runAs ? asUserSpec(config.runAs, spec) : spec;
     probe = await runIsolatedProcess(wrapped, { outputLimit: 4096, resources: config.resources ?? null });
   } finally {
     fs.rmSync(probeWorkspace, { recursive: true, force: true });
@@ -490,14 +534,26 @@ function runAgent(task, ws, home, budget, agentIdentity, proxyDirectory, localTo
     if (fs.existsSync(coreBinary)) runtimePaths.push(coreBinary);
   }
   const sandboxRuntimePaths = [...new Set(runtimePaths)];
-  const allowedRuntimeRoots = [...new Set([...(config.sandboxRuntimeRoots ?? []), ...((config.agent ?? "nexus") === "nexus" && agentIdentity.argsPrefix[0] === path.join(ROOT, "cli/dist/index.js") ? [ROOT] : [])])];
-  const sandbox = agentSandboxArgv({ cwd: ws, home, proxyDirectory, readOnlyPaths: sandboxRuntimePaths, allowedRuntimeRoots, runtimeExecutablePaths: [cmd, ...agentIdentity.argsPrefix], supervisorPath: path.join(ROOT, "eval/agent_sandbox.mjs") });
-  const wrapped = config.runAs ? asUser(config.runAs, sandbox.cmd, sandbox.argv) : sandbox;
+  const allowedRuntimeRoots = [...new Set([...(config.sandboxRuntimeRoots ?? []), ...((config.agent ?? "nexus") === "nexus" && agentIdentity.argsPrefix[0] === path.join(ROOT, "cli/dist/index.js") ? [path.join(ROOT, "cli"), path.join(ROOT, "core")] : [])])];
+  const supervisorPath = path.join(ROOT, "eval/agent_sandbox.mjs");
+  const corpusPaths = custodyCorpusPathsForRun();
+  const protectedCorpusPaths = protectedCorpusPathsForRun();
+  const corpusOverlap = runtimeCorpusOverlapProblem(sandboxRuntimePaths, allowedRuntimeRoots, tasksDir, corpusPaths, {
+    cwd: ws,
+    home,
+    proxyDirectory,
+    nodeRuntime: cmd,
+    supervisorPath,
+    qualification: config.qualification === true,
+  });
+  if (corpusOverlap) throw new Error(corpusOverlap);
+  const sandbox = agentSandboxArgv({ cwd: ws, home, proxyDirectory, readOnlyPaths: sandboxRuntimePaths, allowedRuntimeRoots, runtimeExecutablePaths: [cmd, ...agentIdentity.argsPrefix], supervisorPath, protectedCorpusPaths });
+  const wrapped = config.runAs ? asUserSpec(config.runAs, sandbox) : sandbox;
   return new Promise((resolve) => {
     const { child, containment } = spawnContained(wrapped, config.resources ?? null, { cwd: "/", env: {}, stdio: ["pipe", "pipe", "pipe"], detached: true });
     // T3: the payload is the first line and the sidecar protocol follows on the same stdin (eval/agent_sandbox.mjs).
     const preconditions = {};
-    const runConstraint = (command) => runIsolated(command, { cwd: ws, home: true, timeoutSec: 300, resources: config.resources ?? null }).then((r) => ({ pass: r.status === 0 && !r.timedOut && !r.overflow }));
+    const runConstraint = (command) => runIsolated(command, { cwd: ws, home: true, timeoutSec: 300, resources: config.resources ?? null, protectedCorpusPaths: protectedCorpusPathsForRun() }).then((r) => ({ pass: r.status === 0 && !r.timedOut && !r.overflow }));
     const driver = protocol ? createT3Driver(task, (line) => { if (!child.stdin.destroyed) child.stdin.write(line); }, {
       onSteer: (item) => { preconditions[item.id] = steeringPrecondition(item, ws, task.t3CommandBaseline); },
       beforeProbe: () => t3Snapshot(task, ws, runConstraint),
@@ -561,7 +617,7 @@ function runAgent(task, ws, home, budget, agentIdentity, proxyDirectory, localTo
   });
 }
 
-function runCheck(task, ws, check, hidden) {
+function runCheck(task, ws, check, hidden, { readOnlyHidden = false } = {}) {
   if (hidden && check.protocol === "blackbox-v1") {
     return runBlackBoxOracle(task, ws, check, { resources: config.resources ?? null }).then((result) => ({
       ...result,
@@ -578,15 +634,25 @@ function runCheck(task, ws, check, hidden) {
       }),
     }));
   }
+  if (hidden && config.qualification === true) {
+    throw new Error("qualification refuses in-process legacy hidden validators; use the isolated blackbox-v1 oracle");
+  }
+  const hiddenSubpaths = [];
   if (hidden && check.dir) {
     const source = confinedPath(task.dir, check.dir);
-    assertNoSymlinks(source);
-    const relativeTarget = check.into ?? check.dir;
-    const destination = confinedPath(ws, relativeTarget, { allowMissingLeaf: true });
-    fs.cpSync(source, destination, { recursive: true, verbatimSymlinks: true });
+    hiddenSubpaths.push(...stageHiddenFiles(source, ws, check.into ?? check.dir, { readOnlyHidden }));
   }
-  return runIsolated(check.command, { cwd: ws, home: true, timeoutSec: check.timeoutSec ?? 300, outputLimit: 1_000_000, resources: config.resources ?? null })
-    .then((r) => ({ pass: r.status === 0 && !r.timedOut && !r.overflow, status: r.status, timedOut: r.timedOut, overflow: r.overflow, output: `${r.stdout}${r.stderr}`.slice(-20_000), resources: r.resources ?? null, containmentProblem: r.containmentProblem ?? null }));
+  const command = check.command;
+  return runIsolated(command, { cwd: ws, home: true, timeoutSec: check.timeoutSec ?? 300, outputLimit: 1_000_000, resources: config.resources ?? null, protectedCorpusPaths: protectedCorpusPathsForRun(), hiddenSubpaths: hidden && readOnlyHidden ? hiddenSubpaths : [], readOnlySubpaths: hidden && readOnlyHidden ? [] : hiddenSubpaths })
+    .then((r) => {
+      const output = `${r.stdout}${r.stderr}`;
+      // Qualification keeps hidden-test output out of the evidence: it would disclose the sealed tests.
+      const kept = hidden && config.qualification === true
+        ? JSON.stringify({ status: r.status, timedOut: r.timedOut, overflow: r.overflow, bytes: Buffer.byteLength(output), outputSha256: createHash("sha256").update(output).digest("hex") })
+        : output.slice(-20_000);
+      const vacuousHiddenPass = hidden && readOnlyHidden && !hiddenOutputHasTests(output);
+      return { pass: r.status === 0 && !r.timedOut && !r.overflow && !vacuousHiddenPass, status: r.status, timedOut: r.timedOut, overflow: r.overflow, output: kept, resources: r.resources ?? null, containmentProblem: r.containmentProblem ?? null };
+    });
 }
 
 function saveLogs(task, run, agent, hidden, regression) {
@@ -597,6 +663,12 @@ function saveLogs(task, run, agent, hidden, regression) {
   fs.writeFileSync(path.join(dir, "hidden.log"), hidden.output);
   if (regression) fs.writeFileSync(path.join(dir, "regression.log"), regression.output);
   return path.relative(args.out, dir);
+}
+
+function gitRev(ws, rev) {
+  const r = spawnSync("git", ["rev-parse", rev], { cwd: ws, encoding: "utf8", env: { PATH: "/usr/bin:/bin", HOME: os.tmpdir(), GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: "/dev/null" } });
+  if (r.status !== 0) throw new Error("staged workspace has no baseline commit");
+  return r.stdout.trim();
 }
 
 function treeDigest(dir) {
@@ -617,7 +689,7 @@ function harnessIdentity() {
   const git = (...a) => spawnSync("git", a, { cwd: ROOT, encoding: "utf8" }).stdout.trim();
   const commit = git("rev-parse", "HEAD");
   const dirty = Boolean(git("status", "--porcelain", "--untracked-files=all", "--", ".", ":(exclude)cli/dist"));
-  const sourceFiles = ["eval/run.mjs", "eval/validate.mjs", "eval/isolate.mjs", "eval/agent_sandbox.mjs", "eval/model_proxy.mjs", "eval/score.mjs", "eval/infra.mjs", "eval/workspace.mjs", "eval/resources.mjs", "eval/cgroup_supervisor.mjs", "eval/t3.mjs"];
+  const sourceFiles = ["eval/run.mjs", "eval/validate.mjs", "eval/isolate.mjs", "eval/hide_oracle.cjs", "eval/hide_oracle.py", "eval/unlink_then_exec.sh", "eval/agent_sandbox.mjs", "eval/model_proxy.mjs", "eval/score.mjs", "eval/infra.mjs", "eval/workspace.mjs", "eval/resources.mjs", "eval/cgroup_supervisor.mjs", "eval/t3.mjs", "eval/hardened_check.mjs"];
   const sourceDigests = sourceFiles.map((file) => ({ file, sha256: createHash("sha256").update(fs.readFileSync(path.join(ROOT, file))).digest("hex") }));
   const sourceSha256 = createHash("sha256").update(JSON.stringify(sourceDigests)).digest("hex");
   return { commit, dirty, sourceDigests, sourceSha256, string: `${commit.slice(0, 12)}${dirty ? "-dirty" : ""}` };
