@@ -22,7 +22,9 @@ enforce what GitHub *can* check: required CI, no history rewriting, and immutabl
 
 `rulesets/protected-branches.json` covers `main` and `v1/integration`:
 - no deletion and no force-push;
-- changes only through a pull request (0 required approvals, for the reason above);
+- changes only through a pull request (0 required approvals, for the reason above), merged with a **merge commit
+  only** (`allowed_merge_methods: ["merge"]`). A squash or rebase merge would create new commits, leaving the RC tag
+  commit or the stable commit `S` off `main`;
 - required checks: `test-matrix (20)`, `test-matrix (22)`, `test-matrix (24)`, `linux-x86_64` and
   `cloudflare-contest-contract`, all from GitHub Actions;
 - the strict "branch must be up to date" policy is **off**. See the deadlock analysis below. CONCURRENCY §5.4
@@ -49,12 +51,23 @@ No bypass actors are defined. To repair a mistaken tag, the owner disables the r
 4. **Publication.** `release.yml` creates the stable release as a draft. `gh release edit v1.0.0 --draft=false` is not
    affected by these rules.
 
+## Not covered by rulesets (owner settings, optional)
+
+- **Actions SHA pinning** (`sha_pinning_required`). This would break the current workflows, which pin actions by tag,
+  until every `uses:` is pinned to a full SHA. It is recommended as a follow-up, not a v1 prerequisite.
+- **Release immutability.** This is a repository setting, not a ruleset. If enabled before publication, a published
+  release's assets cannot be replaced.
+
 ## Apply, verify, roll back (owner)
 
 ```sh
 R=repos/mikeholownych/nexus-code
 gh api -X POST "$R/rulesets" --input docs/releases/rulesets/protected-branches.json
 gh api -X POST "$R/rulesets" --input docs/releases/rulesets/release-tags.json
+# before applying: the required contexts must equal the check names of the latest green integration run
+gh api "$R/commits/$(git rev-parse origin/v1/integration)/check-runs" -q '[.check_runs[].name] | sort'
+jq -r '[.rules[] | select(.type == "required_status_checks") | .parameters.required_status_checks[].context] | sort' \
+  docs/releases/rulesets/protected-branches.json
 # verify
 gh api "$R/rules/branches/main" -q '[.[].type]'           # deletion, non_fast_forward, pull_request, required_status_checks
 gh api "$R/rules/branches/v1/integration" -q '[.[].type]'
