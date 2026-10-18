@@ -664,6 +664,7 @@ export class SidecarServer {
       resumeSession: (sessionId) => this.resumeSession(sessionId),
       history: () => this.history,
       confirm: (signal) => this.confirmFor(id, signal),
+      requestApproval: (tool, args, signal) => this.requestApproval(id, signal, tool, args),
       receipt: () => this.receipt(),
     };
   }

@@ -313,5 +313,123 @@ export const SESSION_HANDLERS: Record<string, SlashHandler> = {
   onboard,
   theme,
   receipt: ({ host }) => reply("receipt", receiptText(host.receipt())),
+  upgrade: upgradeSlash,
   exit: () => reply("exit", "Press q, or ctrl+c with an empty composer, to quit."),
 };
+
+/**
+ * `/upgrade [--check] [--version <v>] [--yes] [--force]`: compare the installed version with a published
+ * release and safely upgrade using the canonical installer and deliberate operator approval.
+ */
+async function upgradeSlash({ host, args, signal }: SlashContext): Promise<SlashOutcome> {
+  const {
+    detectInstallation,
+    resolveTargetRelease,
+    compareInstallationWithRelease,
+    performUpgrade,
+  } = await import("../upgrade.js");
+
+  const tokens = args.split(/\s+/).filter(Boolean);
+  let isCheck = false;
+  let isForce = false;
+  let isYes = false;
+  let allowDowngrade = false;
+  let pinnedVersion: string | undefined;
+
+  for (let i = 0; i < tokens.length; i++) {
+    const t = tokens[i];
+    if (t === "--check") isCheck = true;
+    else if (t === "--force" || t === "-f") isForce = true;
+    else if (t === "--yes" || t === "-y") isYes = true;
+    else if (t === "--allow-downgrade") allowDowngrade = true;
+    else if (t === "--version" || t === "-v") {
+      pinnedVersion = tokens[++i];
+    } else if (!t.startsWith("-") && !pinnedVersion) {
+      pinnedVersion = t;
+    }
+  }
+
+  const installed = detectInstallation();
+  let targetRelease;
+  try {
+    targetRelease = await resolveTargetRelease(pinnedVersion, { signal });
+  } catch (err: any) {
+    return reply("upgrade", `Failed to resolve release: ${err.message || String(err)}`, false);
+  }
+
+  const comparison = compareInstallationWithRelease(installed, targetRelease, { force: isForce });
+
+  if (isCheck) {
+    const lines = [
+      `Installed version:  ${installed.version} (${installed.provenance})`,
+      `Target release:     ${targetRelease.tag_name}${targetRelease.prerelease ? " (prerelease)" : " (stable)"}${targetRelease.published_at ? ` [published ${targetRelease.published_at}]` : ""}`,
+    ];
+    if (installed.prefix) lines.push(`Install prefix:     ${installed.prefix}`);
+    if (comparison.reasons.length > 0) {
+      for (const r of comparison.reasons) lines.push(`Note:               ${r}`);
+    }
+    if (comparison.action === "upgrade") {
+      lines.push(`\nUpdate available: ${installed.version} -> ${comparison.targetVersion}. Run /upgrade to install.`);
+    } else if (comparison.action === "downgrade") {
+      lines.push(`\nTarget ${comparison.targetVersion} is older than current ${installed.version}. Run /upgrade --version ${comparison.targetVersion} --allow-downgrade to downgrade.`);
+    } else {
+      lines.push(`\nNexus is already up to date (${installed.version}).`);
+    }
+    return reply("upgrade", lines.join("\n"), true);
+  }
+
+  if (!comparison.canUpgrade) {
+    return reply("upgrade", `Cannot upgrade: ${comparison.reasons.join("\n")}`, false);
+  }
+
+  if (comparison.action === "none" && !isForce) {
+    return reply("upgrade", `Nexus is already up to date (${installed.version}). Use /upgrade --force to reinstall.`, true);
+  }
+
+  if (comparison.action === "downgrade" && !allowDowngrade && !isYes) {
+    return reply("upgrade", `Target version ${comparison.targetVersion} is a downgrade from ${installed.version}. Specify --allow-downgrade to proceed.`, false);
+  }
+
+  // Deliberate confirmation
+  if (!isYes) {
+    const confirmFn = host.requestApproval
+      ? (tool: string, a: Record<string, any>) => host.requestApproval!(tool, a, signal)
+      : host.confirm(signal);
+
+    if (!confirmFn) {
+      return reply(
+        "upgrade",
+        `Proposed ${comparison.action}: ${installed.version} -> ${comparison.targetVersion}.\nConfirmation required: run /upgrade --yes to apply, or review in interactive mode.`,
+        false
+      );
+    }
+
+    const targetDest = path.join(installed.prefix || "", "lib/nexus", comparison.targetVersion);
+    const approved = await confirmFn("nexus_upgrade", {
+      action: comparison.action,
+      installedVersion: installed.version,
+      targetVersion: comparison.targetVersion,
+      destination: targetDest,
+      notice: "Installs the release package and atomically swaps the launcher symlink. The running session continues safely on the current version until restart."
+    });
+
+    if (!approved) {
+      return reply("upgrade", `Upgrade to ${comparison.targetVersion} was declined.`, false);
+    }
+  }
+
+  try {
+    const result = await performUpgrade(comparison, {
+      force: isForce,
+      allowDowngrade,
+      signal,
+    });
+    return reply(
+      "upgrade",
+      `✔ Nexus successfully upgraded to ${result.newVersion}.\nDestination: ${result.installedPath}\nLauncher:    ${result.binPath}\n\nNotice: ${result.restartNotice}`,
+      true
+    );
+  } catch (err: any) {
+    return reply("upgrade", `Upgrade failed: ${err.message || String(err)}`, false);
+  }
+}

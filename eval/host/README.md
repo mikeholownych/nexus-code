@@ -26,6 +26,14 @@ node eval/host/validate.mjs --heldout <sealed task store> --json docs/reviews/ev
 # undo: sudo bash eval/host/rollback.sh
 ```
 
+`eval/host/container-test/run.sh` exercises provision and rollback as root in a disposable privileged container:
+fresh and repeated runs, rollback, refusal of a foreign account, sudoers file or symlinked root (with no changes),
+recovery from an interrupted run, and rollback leaving a re-created account alone. Every line must read PASS.
+
+`validate.mjs` uses the operator's own root sudo for two probes of the custodian's root-owned store: that it
+exists, and which file to try reading as the evaluator. The file's name is used but never printed or stored. These
+probes need the operator's general sudo, not the narrow evaluator rule.
+
 The harness's `asUser` invokes `/usr/bin/sudo -n -u nexus-eval -- /usr/bin/bwrap …` directly. sudo's `env_reset`
 and Bubblewrap's `--clearenv` clear the environment, so the rule names only `/usr/bin/bwrap`. This host's sudo PAM
 stack (`common-session-noninteractive`) does not load `pam_systemd`, so a process switched to `nexus-eval` stays in the

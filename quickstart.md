@@ -72,7 +72,33 @@ Resuming a saved session or durable task keeps verification pending because loca
 
 ## Upgrade and remove
 
-Run the same installer to reinstall or upgrade. Pin an upgrade with the `NEXUS_VERSION` pipeline form above. Removal is manual and limited to Nexus-owned paths:
+Check whether a newer release is published:
+
+```sh
+nexus upgrade --check
+```
+
+To upgrade in-place to the latest stable release:
+
+```sh
+nexus upgrade
+```
+
+To target or reinstall an exact pinned version:
+
+```sh
+nexus upgrade --version v1.0.0
+```
+
+Inside the interactive live TUI, run `/upgrade` or `/upgrade --check`. An upgrade requires deliberate modal confirmation before modifying the installation. In scripts or CI, non-interactive upgrades require `--yes`.
+
+Alternatively, run the installer pipeline to reinstall or upgrade:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/mikeholownych/nexus-code/main/install.sh | NEXUS_VERSION=v1.0.0 sh
+```
+
+Removal is manual and limited to Nexus-owned paths:
 
 ```sh
 rm "$HOME/.local/bin/nexus"

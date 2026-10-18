@@ -376,7 +376,7 @@ async function resolveAgentIdentity(config) {
       allowedFiles: [candidatePath, ...argsPrefix.filter((item) => path.isAbsolute(item))],
       timeoutMs: 5000,
     });
-    const wrapped = config.runAs ? asUser(config.runAs, spec.cmd, spec.argv, {}) : spec;
+    const wrapped = config.runAs ? asUser(config.runAs, spec.cmd, spec.argv) : spec;
     probe = await runIsolatedProcess(wrapped, { outputLimit: 4096, resources: config.resources ?? null });
   } finally {
     fs.rmSync(probeWorkspace, { recursive: true, force: true });
@@ -516,7 +516,7 @@ function runAgent(task, ws, home, budget, agentIdentity, proxyDirectory, localTo
   const sandboxRuntimePaths = [...new Set(runtimePaths)];
   const allowedRuntimeRoots = [...new Set([...(config.sandboxRuntimeRoots ?? []), ...((config.agent ?? "nexus") === "nexus" && agentIdentity.argsPrefix[0] === path.join(ROOT, "cli/dist/index.js") ? [ROOT] : [])])];
   const sandbox = agentSandboxArgv({ cwd: ws, home, proxyDirectory, readOnlyPaths: sandboxRuntimePaths, allowedRuntimeRoots, runtimeExecutablePaths: [cmd, ...agentIdentity.argsPrefix], supervisorPath: path.join(ROOT, "eval/agent_sandbox.mjs") });
-  const wrapped = config.runAs ? asUser(config.runAs, sandbox.cmd, sandbox.argv, {}) : sandbox;
+  const wrapped = config.runAs ? asUser(config.runAs, sandbox.cmd, sandbox.argv) : sandbox;
   return new Promise((resolve) => {
     const { child, containment } = spawnContained(wrapped, config.resources ?? null, { cwd: "/", env: {}, stdio: ["pipe", "pipe", "pipe"], detached: true });
     // T3: the payload is the first line and the sidecar protocol follows on the same stdin (eval/agent_sandbox.mjs).

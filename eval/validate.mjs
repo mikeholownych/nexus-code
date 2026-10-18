@@ -311,7 +311,12 @@ export function corpusManifestProblem(config, tasksDir, ids, frozenRows = null) 
 }
 
 /** The command line that runs `cmd argv` as `user` with exactly `env` (sudo -n: no password prompt in a run). */
-export function asUser(user, cmd, argv, env) {
-  const assignments = Object.entries(env).filter(([, v]) => v !== undefined).map(([k, v]) => `${k}=${v}`);
-  return { cmd: "sudo", argv: ["-n", "-u", user, "--", "env", "-i", ...assignments, cmd, ...argv] };
+/**
+ * Run `cmd` as the evaluator account, in exactly the form eval/host/provision.sh's sudoers rule permits
+ * (`<operator> ALL=(nexus-eval) NOPASSWD: /usr/bin/bwrap`). sudo resets the environment (env_reset) and every caller
+ * passes Bubblewrap, which clears it again (--clearenv); an `env` wrapper would need a rule allowing any command.
+ */
+export function asUser(user, cmd, argv) {
+  if (!path.isAbsolute(cmd)) throw new Error("evaluator-account commands must be absolute paths");
+  return { cmd: "/usr/bin/sudo", argv: ["-n", "-u", user, "--", cmd, ...argv] };
 }

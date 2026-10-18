@@ -1,0 +1,12 @@
+#!/bin/bash
+# Test shim: mount units only.
+cmd="$1"; shift
+[[ "$cmd" == disable && "$1" == --now ]] && { shift; cmd=stop; }
+unitfile="/etc/systemd/system/${1:-}"
+where() { sed -n 's/^Where=//p' "$unitfile"; }
+case "$cmd" in
+  daemon-reload|enable) exit 0 ;;
+  start) findmnt --mountpoint "$(where)" >/dev/null || mount -t tmpfs -o "$(sed -n 's/^Options=//p' "$unitfile")" tmpfs "$(where)" ;;
+  stop) [[ -f "$unitfile" ]] && { findmnt --mountpoint "$(where)" >/dev/null && umount "$(where)"; } ; exit 0 ;;
+  *) exit 0 ;;
+esac
