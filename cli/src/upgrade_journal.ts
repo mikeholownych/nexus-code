@@ -251,7 +251,7 @@ export interface RecoveryOutcome {
 /**
  * Idempotent crash recovery: inspects journal and restores working installation or finalizes transition.
  */
-export function recoverUpgrade(prefix: string, options: { forceRollback?: boolean; timeoutMs?: number } = {}): RecoveryOutcome {
+export function recoverUpgrade(prefix: string, options: { forceRollback?: boolean; timeoutMs?: number; lockHeld?: boolean } = {}): RecoveryOutcome {
   const lock = path.join(prefix, "lib", "nexus", ".upgrade.lock");
   let owned = false;
   try {
@@ -259,6 +259,7 @@ export function recoverUpgrade(prefix: string, options: { forceRollback?: boolea
       if (!isRealFile(lock)) throw new Error("Upgrade lock is redirected");
       const holder = JSON.parse(fs.readFileSync(lock, "utf8"));
       if (!Number.isSafeInteger(holder.pid) || holder.pid < 1) throw new Error("Upgrade lock is invalid");
+      if (holder.pid === process.pid && !options.lockHeld) throw new Error("An upgrade transaction is still active in this process");
       if (holder.pid !== process.pid) {
         try { process.kill(holder.pid, 0); throw new Error("An upgrade transaction is still active"); }
         catch (error:any) { if (error.code !== "ESRCH") throw error; }
@@ -273,7 +274,7 @@ export function recoverUpgrade(prefix: string, options: { forceRollback?: boolea
   } catch (error:any) { return { recovered:false, action:"manual_intervention", details:error.message }; }
   finally { if (owned) try { fs.unlinkSync(lock); } catch {} }
 }
-function recoverUpgradeLocked(prefix: string, options: { forceRollback?: boolean; timeoutMs?: number } = {}): RecoveryOutcome {
+function recoverUpgradeLocked(prefix: string, options: { forceRollback?: boolean; timeoutMs?: number; lockHeld?: boolean } = {}): RecoveryOutcome {
   const journalPath = getJournalPath(prefix);
   const journal = readJournal(prefix);
   const failed = (details: string): RecoveryOutcome => ({ recovered:false, action:"manual_intervention", details });

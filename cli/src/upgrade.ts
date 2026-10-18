@@ -936,7 +936,9 @@ export async function performUpgrade(
   } catch (err: any) {
     if (err.code === "EEXIST") {
       try {
+        if (!fs.lstatSync(lockFile).isFile() || fs.realpathSync(lockFile) !== path.resolve(lockFile)) throw new Error("Upgrade lock path is redirected");
         const existing = JSON.parse(fs.readFileSync(lockFile, "utf8"));
+        if (!Number.isSafeInteger(existing.pid) || existing.pid < 1) throw new Error("Upgrade lock owner is invalid");
         if (typeof existing.pid === "number") {
           try {
             process.kill(existing.pid, 0);
@@ -1229,7 +1231,7 @@ export async function performUpgrade(
     };
   } catch (error: any) {
     if (journalEntry) {
-      const outcome = recoverUpgrade(prefix, { forceRollback:true, timeoutMs:options?.timeoutMs });
+      const outcome = recoverUpgrade(prefix, { forceRollback:true, timeoutMs:options?.timeoutMs, lockHeld:true });
       // Read back the durable outcome rather than claiming rollback after a
       // failed rename, journal write, probe, or symlink update.
       const durable = readJournal(prefix);

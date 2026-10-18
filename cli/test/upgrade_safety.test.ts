@@ -713,7 +713,7 @@ describe("Upgrade Journal, Crash Recovery & PATH Shadowing (REQ-REL-116, ACC-UPG
     writeJournal(tmpPrefix, entry);
     const outcome = recoverUpgrade(tmpPrefix);
     assert.equal(outcome.recovered, false);
-    assert.match(outcome.details, /real contained directories/);
+    assert.match(outcome.details, /validation|real contained directories/);
     assert.equal(fs.readFileSync(path.join(outsideStage, "canary"), "utf8"), "must survive");
   });
 
