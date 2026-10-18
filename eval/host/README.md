@@ -44,7 +44,10 @@ run's cgroup. `validate.mjs` checks this.
 `resource-profile.json` holds the values. The three frozen T2 configs and every T3/T4 config embed them as their
 `resources` object, byte-identical. `score.mjs --pairs` refuses comparisons whose manifests differ.
 
-| Key | Proposed | Exact kernel meaning |
+Custodian calibration across all 40 sealed T2 reference solutions passed 40/40 under this profile:
+`maxMemoryPeakMiB` 1206.5, `maxPidsPeak` 163, `maxWorkspaceMiB` 225.0, `oomKills` 0, and `pidsMaxEvents` 0.
+
+| Key | Frozen | Exact kernel meaning |
 |---|---|---|
 | `cpuPercent` | 800 | `cpu.max = 800000 100000`. The payload's processes may together use at most 8 CPUs' worth of runtime per wall-clock second. This is **rate throttling, not a total budget**. Total CPU time is bounded only by the phase's wall-clock limit times 8, and each phase's `cpuUsageUsec` and `cpuThrottledUsec` are recorded. |
 | `memoryBytes` | 16 GiB | `memory.max`, with `memory.swap.max = 0` and `memory.oom.group = 1`. The charge counts the phase's anonymous memory, the page cache it faults in (reclaimable before OOM), **and the tmpfs pages it writes**. A phase that writes 6 GiB of build output therefore has about 10 GiB left for its processes. Exceeding the limit OOM-kills the whole phase, and this is recorded. |
