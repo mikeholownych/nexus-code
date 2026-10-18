@@ -10,7 +10,7 @@ import { fileURLToPath } from "node:url";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 
-test("the production version probe writes only on the configured capped workspace filesystem", { timeout: 60_000 }, async () => {
+test("the production version-probe workspace uses the configured capped filesystem", { timeout: 60_000 }, async () => {
   const workspaceRoot = process.env.NEXUS_EVAL_TEST_WORKSPACE_ROOT;
   assert.ok(workspaceRoot, "requires the dedicated capped workspace fixture configured by CI");
   const cap = fs.statfsSync(workspaceRoot);
@@ -41,10 +41,10 @@ console.log('goose-storage-probe 1.0.0');
   const config = path.join(temp, "config.json");
   const out = path.join(temp, "out");
   fs.writeFileSync(config, JSON.stringify({
-    name: "bounded-version-probe", agent: "goose", expectedAgentVersion: "goose-storage-probe 1.0.0",
+    name: "bounded-version-probe", agent: "goose", expectedAgentVersion: "1.0.0",
     endpoint: `http://127.0.0.1:${address.port}/v1`, model: "storage-probe-model", proxy: false,
     env: { PATH: `${tools}${path.delimiter}${process.env.PATH ?? ""}` },
-    sandboxRuntimePaths: [agent], sandboxRuntimeRoots: [tools],
+    sandboxRuntimePaths: [agent], sandboxRuntimeRoots: [],
     resources: { cpuPercent: 100, memoryBytes: 256 * 1024 * 1024, tasks: 64, storageBytes: cap.blocks * cap.bsize, workspaceRoot },
   }));
   try {
