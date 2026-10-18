@@ -59,7 +59,7 @@ Companion to `review-prep.md` (16 verification questions) and `findings-verifica
 - **IDs:** REQ-AGT-102.
 - **Evidence:** `cli/src/core/operation_runner.ts:559-567`; `cli/test/durable_continuity.test.ts`.
 - **Disposition:** The production/default construction path supplies durable, role, and unit identity in the `AutonomousAgent` constructor. The default-path test was independently verified at `79ed3ce` (`2,117 ms`, PASS). A later compatibility change, `057ecb6`, retained a conditional post-construction fallback for injected custom factories that omit those options; the earlier review did not cover that later behavior. This fallback is now covered by `"AgentWorkUnitExecutor applies durable identity when a custom factory omits constructor options"` in the current correction slice.
-- **Acceptance evidence:** The default-path evidence is independent and historical. The new custom-factory regression requires targeted execution and independent review on the exact correction commit before the expanded claim is closed. Until then, the fallback is implemented but not independently accepted.
+- **Acceptance evidence:** The default-path evidence is independent and historical. The custom-factory regression passed on `104fba6e4172455f03a15f2b8fb378ac026088a5` (1 test, 0 failures), and an independent read-only review of that exact commit returned **ACCEPT**. The reviewer confirmed that the factory omits the executor's options, the executor applies the fallback, and the resulting operation persists the bound task state. The exact PR CI is still pending. This closes the source-level fallback evidence gap; it does not close installed-RC or release qualification gates.
 
 ## N2 — SIGKILL crash-boundary evidence depends on the M1 fallback (NEW, LOW) — **IMPLEMENTED & VERIFIED**
 
@@ -77,7 +77,7 @@ Companion to `review-prep.md` (16 verification questions) and `findings-verifica
 | Disposition | Findings |
 |---|---|
 | Implemented & independently verified (`PLAN-04 PR-4g`, PR #25) | M1, M2, M3 (source/CI gate), L5, N2, N3 |
-| Implemented; custom-factory fallback verification pending | N1 |
+| Implemented & independently reviewed; exact PR CI pending | N1 |
 | Resolved-as-recorded (justified, non-blocking) | L1, L2, L3, L4 |
 
 Outstanding **live RC checks preserved** (M5 installed-RC gates, not closed by source tests): `ACC-CONT-10` live long task (≥60 steps, ≥2 compactions, kill/resume under independent reviewer §8); `ACC-CONT-08` persistence overhead p95 measurement.
