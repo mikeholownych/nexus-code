@@ -65,6 +65,9 @@ describe("durable same-version transaction recovery",()=>{
     writeJournal(prefix,entry);
     const libRoot=path.join(prefix,"lib/nexus"), barrier=path.join(prefix,"barrier");
     fs.mkdirSync(barrier);fs.writeFileSync(path.join(libRoot,".upgrade.lock"),JSON.stringify({pid:999999,token:"dead"}),{mode:0o600});
+    // The kernel guard is permanent: simulate a guard left behind by any prior
+    // run (including a crashed reclaimer) so both contenders race on the flock.
+    fs.writeFileSync(path.join(libRoot,".upgrade.lock.guard"),"",{mode:0o600});
     const cwd=path.resolve(import.meta.dirname || path.dirname(new URL(import.meta.url).pathname),"..");
     const children=[1,2].map(id=>{
       const code=`import * as fs from 'node:fs'; import * as path from 'node:path'; import { recoverUpgrade } from './src/upgrade_journal.ts'; const b=${JSON.stringify(barrier)}; const p=${JSON.stringify(prefix)}; const id=${id}; const result=recoverUpgrade(p,{onStaleLockObserved(){fs.writeFileSync(path.join(b,'ready-'+id),'ready'); const end=Date.now()+5000; while(Date.now()<end && (!fs.existsSync(path.join(b,'ready-1')) || !fs.existsSync(path.join(b,'ready-2')))) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)),0,0,10); if(!fs.existsSync(path.join(b,'ready-1')) || !fs.existsSync(path.join(b,'ready-2'))) throw new Error('barrier timed out'); Atomics.wait(new Int32Array(new SharedArrayBuffer(4)),0,0,150); }}); console.log(JSON.stringify(result));`;
@@ -76,51 +79,65 @@ describe("durable same-version transaction recovery",()=>{
     assert.equal(results.filter(r=>r.recovered && r.action==="rolled_back").length,1,JSON.stringify(results));
     assert.equal(results.filter(r=>!r.recovered && r.action==="upgrade_in_progress").length,1,JSON.stringify(results));
     assert.equal(fs.existsSync(path.join(libRoot,".upgrade.lock")),false);
+    assert.equal(fs.existsSync(path.join(libRoot,".upgrade.lock.guard")),true);
     assert.equal(fs.readFileSync(path.join(entry.sourceInstallDir,"marker"),"utf8"),"original");
     assert.equal(verifyInstalledRuntime(entry.sourceInstallDir,"v1.0.0").healthy,true);
     assert.equal(readJournal(prefix)?.state,"rolled_back");
   });
-  it("removes a reclaim gate whose owner is dead and recovers the interrupted upgrade",()=>{
+  it("reclaims a stale lock through the kernel guard without contention",()=>{
     writeJournal(prefix,entry);
     const libRoot=path.join(prefix,"lib/nexus");
     fs.writeFileSync(path.join(libRoot,".upgrade.lock"),JSON.stringify({pid:999999,token:"dead"}),{mode:0o600});
-    const gate=path.join(libRoot,".upgrade.lock.reclaim");
-    fs.mkdirSync(gate,{mode:0o700});
-    fs.writeFileSync(path.join(gate,"owner"),JSON.stringify({pid:999998,token:"crashed-reclaimer"}),{mode:0o600});
     const result=recoverUpgrade(prefix);
     assert.equal(result.recovered,true,result.details);
     assert.equal(result.action,"rolled_back");
-    assert.equal(fs.existsSync(gate),false);
     assert.equal(fs.existsSync(path.join(libRoot,".upgrade.lock")),false);
+    assert.equal(fs.existsSync(path.join(libRoot,".upgrade.lock.guard")),true);
     assert.equal(readJournal(prefix)?.state,"rolled_back");
   });
-  it("removes an ownerless reclaim gate once it exceeds the age bound",()=>{
+  it("reports the guard path and stays back while a live reclaimer holds the kernel guard",async()=>{
     writeJournal(prefix,entry);
     const libRoot=path.join(prefix,"lib/nexus");
     fs.writeFileSync(path.join(libRoot,".upgrade.lock"),JSON.stringify({pid:999999,token:"dead"}),{mode:0o600});
-    const gate=path.join(libRoot,".upgrade.lock.reclaim");
-    fs.mkdirSync(gate,{mode:0o700});
-    const aged=new Date(Date.now()-60000);
-    fs.utimesSync(gate,aged,aged);
-    const result=recoverUpgrade(prefix);
-    assert.equal(result.recovered,true,result.details);
-    assert.equal(fs.existsSync(gate),false);
-    assert.equal(fs.existsSync(path.join(libRoot,".upgrade.lock")),false);
-    assert.equal(readJournal(prefix)?.state,"rolled_back");
+    const guardPath=path.join(libRoot,".upgrade.lock.guard"), held=path.join(prefix,"guard-held");
+    fs.writeFileSync(guardPath,"",{mode:0o600});
+    const cwd=path.resolve(import.meta.dirname || path.dirname(new URL(import.meta.url).pathname),"..");
+    const code=`import * as fs from 'node:fs'; import { spawnSync } from 'node:child_process'; const g=${JSON.stringify(guardPath)}; const m=${JSON.stringify(held)}; const fd=fs.openSync(g,'r+'); const r=spawnSync('/usr/bin/flock',['-n','-E','75','3'],{stdio:['ignore','ignore','ignore',fd]}); if(r.status!==0){process.exit(3);} fs.writeFileSync(m,'held'); setInterval(()=>{},1000);`;
+    const child=spawn(process.execPath,["--import","tsx","--input-type=module","-e",code],{cwd,env:{...process.env,HOME:prefix},stdio:["ignore","ignore","pipe"]});
+    const failTimer=setTimeout(()=>child.kill("SIGKILL"),10000);
+    try {
+      const end=Date.now()+5000;
+      while(Date.now()<end && !fs.existsSync(held)) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)),0,0,25);
+      assert.equal(fs.existsSync(held),true,"guard holder did not start");
+      const result=recoverUpgrade(prefix);
+      assert.equal(result.action,"upgrade_in_progress");
+      assert.ok(result.details.includes(".upgrade.lock.guard"),result.details);
+      assert.equal(fs.existsSync(path.join(libRoot,".upgrade.lock")),true);
+      assert.equal(readJournal(prefix)?.state,"switching");
+    } finally { clearTimeout(failTimer); child.kill("SIGKILL"); await new Promise<void>(r=>child.on("exit",()=>r())); }
   });
-  it("reports the gate path and stays back while a live reclaimer holds the gate",()=>{
+  it("acquires the kernel guard after its holder is killed",async()=>{
     writeJournal(prefix,entry);
     const libRoot=path.join(prefix,"lib/nexus");
     fs.writeFileSync(path.join(libRoot,".upgrade.lock"),JSON.stringify({pid:999999,token:"dead"}),{mode:0o600});
-    const gate=path.join(libRoot,".upgrade.lock.reclaim");
-    fs.mkdirSync(gate,{mode:0o700});
-    fs.writeFileSync(path.join(gate,"owner"),JSON.stringify({pid:process.pid,token:"live-reclaimer"}),{mode:0o600});
-    const result=recoverUpgrade(prefix);
-    assert.equal(result.action,"upgrade_in_progress");
-    assert.ok(result.details.includes(".upgrade.lock.reclaim"),result.details);
-    assert.equal(fs.existsSync(gate),true);
-    assert.equal(fs.existsSync(path.join(libRoot,".upgrade.lock")),true);
-    assert.equal(readJournal(prefix)?.state,"switching");
+    const guardPath=path.join(libRoot,".upgrade.lock.guard"), held=path.join(prefix,"guard-held-2");
+    fs.writeFileSync(guardPath,"",{mode:0o600});
+    const cwd=path.resolve(import.meta.dirname || path.dirname(new URL(import.meta.url).pathname),"..");
+    const code=`import * as fs from 'node:fs'; import { spawnSync } from 'node:child_process'; const g=${JSON.stringify(guardPath)}; const m=${JSON.stringify(held)}; const fd=fs.openSync(g,'r+'); const r=spawnSync('/usr/bin/flock',['-n','-E','75','3'],{stdio:['ignore','ignore','ignore',fd]}); if(r.status!==0){process.exit(3);} fs.writeFileSync(m,'held'); setInterval(()=>{},1000);`;
+    const child=spawn(process.execPath,["--import","tsx","--input-type=module","-e",code],{cwd,env:{...process.env,HOME:prefix},stdio:["ignore","ignore","pipe"]});
+    try {
+      const end=Date.now()+5000;
+      while(Date.now()<end && !fs.existsSync(held)) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)),0,0,25);
+      assert.equal(fs.existsSync(held),true,"guard holder did not start");
+      child.kill("SIGKILL");
+      await new Promise<void>(r=>child.on("exit",()=>r()));
+      const result=recoverUpgrade(prefix);
+      assert.equal(result.recovered,true,result.details);
+      assert.equal(result.action,"rolled_back");
+      assert.equal(fs.existsSync(path.join(libRoot,".upgrade.lock")),false);
+      assert.equal(fs.existsSync(guardPath),true);
+      assert.equal(readJournal(prefix)?.state,"rolled_back");
+    } finally { child.kill("SIGKILL"); }
   });
   it("does not touch the lock for a completed journal in a read-only package directory",()=>{
     entry.state="complete";writeJournal(prefix,entry);

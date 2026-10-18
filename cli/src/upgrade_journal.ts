@@ -10,6 +10,7 @@
 
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { spawnSync } from "node:child_process";
 import { verifyInstalledRuntime } from "./upgrade_health.js";
 
 export type JournalState =
@@ -248,54 +249,63 @@ export interface RecoveryOutcome {
   details: string;
 }
 
-/** A reclaim gate older than this bound is removed even without an owner record. */
-const RECLAIM_GATE_MAX_AGE_MS = 30_000;
+/**
+ * Permanent kernel-owned guard that serializes stale-lock reclamation between
+ * concurrent processes. The guard is a regular file that is never unlinked or
+ * replaced; mutual exclusion comes from an advisory flock held on the open file
+ * description for the whole reclaim section. The kernel releases the lock when
+ * the last referring descriptor closes, so a reclaimer killed by SIGKILL or a
+ * power loss cannot wedge later upgrades, and no recursive takeover of a stale
+ * gate directory is ever performed.
+ */
+export interface ReclaimGuard {
+  path: string;
+  fd: number;
+}
+
+const FLOCK_UTILITY = "/usr/bin/flock";
+const FLOCK_CONTENTION_EXIT = 75;
+
+function openGuardFile(guardPath: string): number {
+  let fd: number;
+  try { fd = fs.openSync(guardPath, "ax+", 0o600); }
+  catch (error: any) {
+    if (error.code !== "EEXIST") throw error;
+    fd = fs.openSync(guardPath, "r+");
+  }
+  const self = fs.fstatSync(fd);
+  const current = fs.lstatSync(guardPath, { throwIfNoEntry:false });
+  if (!self.isFile() || !current?.isFile() || self.ino !== current.ino) {
+    fs.closeSync(fd);
+    throw new Error("Reclaim guard path is redirected");
+  }
+  return fd;
+}
 
 /**
- * Serializes stale-lock reclamation between concurrent processes. The gate is a
- * directory that records its owner, so a reclaimer that crashes between mkdir
- * and cleanup cannot wedge every later upgrade: waiters take the gate over when
- * its owner is dead or it exceeds the age bound. Returns true when this process
- * owns the gate and must later call releaseReclaimGate.
+ * Acquires the reclaim guard. Returns null on contention (another live
+ * reclaimer holds the kernel lock) and throws on any unsupported or failed
+ * prerequisite so callers fail closed instead of proceeding unserialized.
  */
-export function acquireReclaimGate(reclaimDir: string): boolean {
-  if (tryCreateReclaimGate(reclaimDir)) return true;
-  if (!isReclaimGateAbandoned(reclaimDir)) return false;
-  try { fs.rmSync(reclaimDir, { recursive: true, force: true }); }
-  catch { return false; }
-  return tryCreateReclaimGate(reclaimDir);
-}
-
-export function releaseReclaimGate(reclaimDir: string): void {
-  try { fs.rmSync(reclaimDir, { recursive: true, force: true }); } catch {}
-}
-
-function tryCreateReclaimGate(reclaimDir: string): boolean {
-  try { fs.mkdirSync(reclaimDir, { mode: 0o700 }); }
-  catch (error: any) { if (error.code === "EEXIST") return false; throw error; }
-  // Best effort: a gate whose owner record is missing still excludes via the age bound.
+export function acquireReclaimGuard(guardPath: string): ReclaimGuard | null {
+  const fd = openGuardFile(guardPath);
   try {
-    fs.writeFileSync(path.join(reclaimDir, "owner"), JSON.stringify({ pid: process.pid }), { mode: 0o600 });
-  } catch {}
-  return true;
+    // The utility exits immediately; the lock persists on the shared open file
+    // description while this process keeps the descriptor open.
+    const probe = spawnSync(FLOCK_UTILITY, ["-n", "-E", String(FLOCK_CONTENTION_EXIT), "3"], { stdio:["ignore","ignore","ignore", fd], timeout: 2000 });
+    if (probe.error) throw new Error(`Reclaim guard utility ${FLOCK_UTILITY} is unavailable: ${probe.error.message}`);
+    if (probe.status === 0) return { path: guardPath, fd };
+    if (probe.status === FLOCK_CONTENTION_EXIT) return null;
+    throw new Error(`Reclaim guard acquisition failed (exit ${probe.status})`);
+  } catch (error) {
+    try { fs.closeSync(fd); } catch {}
+    throw error;
+  }
 }
 
-function isReclaimGateAbandoned(reclaimDir: string): boolean {
-  let gateStat: fs.Stats;
-  try { gateStat = fs.lstatSync(reclaimDir); } catch { return false; }
-  if (!gateStat.isDirectory()) return false;
-  try {
-    const owner = JSON.parse(fs.readFileSync(path.join(reclaimDir, "owner"), "utf8"));
-    if (Number.isSafeInteger(owner.pid) && owner.pid >= 1) {
-      try { process.kill(owner.pid, 0); return false; }
-      catch (error: any) {
-        if (error.code === "EPERM") return false;
-        if (error.code !== "ESRCH") throw error;
-      }
-      return true;
-    }
-  } catch {}
-  return Date.now() - gateStat.mtimeMs > RECLAIM_GATE_MAX_AGE_MS;
+export function releaseReclaimGuard(guard: ReclaimGuard | null): void {
+  if (!guard) return;
+  try { fs.closeSync(guard.fd); } catch {}
 }
 
 /**
@@ -327,15 +337,16 @@ export function recoverUpgrade(prefix: string, options: { forceRollback?: boolea
         try { process.kill(holder.pid, 0); return inProgress; }
         catch (error:any) { if (error.code === "EPERM") return inProgress; if (error.code !== "ESRCH") throw error; }
         options.onStaleLockObserved?.();
-        const reclaimDir = `${lock}.reclaim`;
-        if (!acquireReclaimGate(reclaimDir)) {
-          // A live reclaimer holds the gate: give it a moment, then re-check
-          // whether it took over the lock before reporting an in-progress upgrade.
-          const until = Date.now() + 200;
-          while (Date.now() < until && fs.existsSync(reclaimDir)) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10);
+        const guardPath = `${lock}.guard`;
+        let guard = acquireReclaimGuard(guardPath);
+        if (!guard) {
+          // A live reclaimer holds the kernel guard: give it a moment, then
+          // re-check whether it took over the lock before reporting progress.
+          Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 200);
           const current = fs.lstatSync(lock, { throwIfNoEntry:false });
           if (!current || current.ino !== staleIno) return inProgress;
-          if (!acquireReclaimGate(reclaimDir)) return { recovered:false, action:"upgrade_in_progress", details:`An upgrade transaction is currently in progress (reclaim gate: ${reclaimDir}).` };
+          guard = acquireReclaimGuard(guardPath);
+          if (!guard) return { recovered:false, action:"upgrade_in_progress", details:`An upgrade transaction is currently in progress (reclaim guard: ${guardPath}).` };
         }
         try {
           const currentStat = fs.lstatSync(lock, { throwIfNoEntry:false });
@@ -345,7 +356,7 @@ export function recoverUpgrade(prefix: string, options: { forceRollback?: boolea
             fs.unlinkSync(lock);
           }
           acquire();
-        } finally { releaseReclaimGate(reclaimDir); }
+        } finally { releaseReclaimGuard(guard); }
       }
     }
     if (!owned && !fs.existsSync(lock) && fs.existsSync(path.dirname(lock))) {

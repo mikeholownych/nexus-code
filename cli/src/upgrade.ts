@@ -32,8 +32,8 @@ import {
   recoverUpgrade,
   getJournalPath,
   syncDirectory,
-  acquireReclaimGate,
-  releaseReclaimGate,
+  acquireReclaimGuard,
+  releaseReclaimGuard,
 } from "./upgrade_journal.js";
 
 export const CANONICAL_REPO = "mikeholownych/nexus-code";
@@ -954,15 +954,16 @@ export async function performUpgrade(
           if (probeErr.code === "EPERM") throw new Error(`Another upgrade process (PID ${existing.pid}) is currently running.`);
           if (probeErr.code !== "ESRCH") throw probeErr;
         }
-        const reclaimDir = `${lockFile}.reclaim`;
-        if (!acquireReclaimGate(reclaimDir)) {
-          // A live reclaimer holds the gate: give it a moment, then re-check
-          // whether it took over the lock before giving up.
-          const until = Date.now() + 200;
-          while (Date.now() < until && fs.existsSync(reclaimDir)) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10);
+        const guardPath = `${lockFile}.guard`;
+        let guard = acquireReclaimGuard(guardPath);
+        if (!guard) {
+          // A live reclaimer holds the kernel guard: give it a moment, then
+          // re-check whether it took over the lock before giving up.
+          Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 200);
           const current = fs.lstatSync(lockFile, { throwIfNoEntry:false });
           if (!current || current.ino !== staleIno) throw new Error("Another upgrade is in progress; lock was replaced.");
-          if (!acquireReclaimGate(reclaimDir)) throw new Error(`Another upgrade is in progress; stale lock reclaim gate is held at ${reclaimDir}.`);
+          guard = acquireReclaimGuard(guardPath);
+          if (!guard) throw new Error(`Another upgrade is in progress; stale lock reclaim guard is held at ${guardPath}.`);
         }
         try {
           const current = fs.lstatSync(lockFile, { throwIfNoEntry:false });
@@ -972,7 +973,7 @@ export async function performUpgrade(
             fs.unlinkSync(lockFile);
           }
           writeOwnedLock();
-        } finally { releaseReclaimGate(reclaimDir); }
+        } finally { releaseReclaimGuard(guard); }
       } catch (inner: any) {
         throw new Error(`Another upgrade is in progress (lockfile present at ${lockFile}): ${inner.message || inner}`);
       }
