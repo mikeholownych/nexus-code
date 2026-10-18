@@ -14,10 +14,13 @@ import {
 } from "./tar_safety.js";
 import {
   ReleaseCompatibilityMetadata,
+  CURRENT_CONFIG_SCHEMA_VERSION,
   checkReleaseCompatibility,
   validateCompatibilityMetadata,
+  validateCompatibilityAssetBinding,
   COMPATIBILITY_METADATA_FILENAME,
 } from "./compatibility.js";
+import { CURRENT_STATE_SCHEMA_VERSION } from "./core/state.js";
 import {
   UpgradeJournalEntry,
   readJournal,
@@ -48,6 +51,8 @@ export interface ProvenanceRecord {
   binPath: string;
   managed: boolean;
   packageManager?: string;
+  archive?: string;
+  archiveSha256?: string;
 }
 
 export interface SemVer {
@@ -1009,15 +1014,23 @@ export async function performUpgrade(
       throw new Error(`SHA-256 verification failed for ${archiveName}; no installation was changed.`);
     }
 
-    // Attempt to download standalone compatibility.json asset if available
-    let compatMeta: ReleaseCompatibilityMetadata | null = null;
+    // A detached metadata asset is optional for legacy releases, but if present
+    // it must be valid and checksum-bound. Its policy is compared with the copy
+    // embedded in the archive after extraction.
+    let externalCompat: ReleaseCompatibilityMetadata | null = null;
     try {
       await downloadFile(compatibilityUrl, localCompat, options?.signal, 5000);
       if (fs.existsSync(localCompat)) {
-        compatMeta = JSON.parse(fs.readFileSync(localCompat, "utf8"));
+        externalCompat = JSON.parse(fs.readFileSync(localCompat, "utf8"));
+        const externalValidation = validateCompatibilityMetadata(externalCompat);
+        if (!externalValidation.valid) throw new Error(`Invalid compatibility.json: ${externalValidation.errors.join("; ")}`);
+        if (!verifyChecksum(localCompat, sumsContent, COMPATIBILITY_METADATA_FILENAME)) {
+          throw new Error("SHA-256 verification failed for compatibility.json; no installation was changed.");
+        }
       }
-    } catch {
+    } catch (err: any) {
       // Release may omit standalone compatibility asset
+      if (!String(err?.message ?? err).includes("HTTP 404")) throw err;
     }
 
     // Optional attestation check via gh if present
@@ -1028,10 +1041,11 @@ export async function performUpgrade(
       if (ghProbe.status === 0) {
         options?.onProgress?.("verifying_attestation", "Checking build provenance attestation...");
         const attestCheck = spawnSync("gh", ["attestation", "verify", localArchive, "-R", CANONICAL_REPO]);
-        if (attestCheck.status === 0) {
+        const indexAttestCheck = spawnSync("gh", ["attestation", "verify", localSums, "-R", CANONICAL_REPO]);
+        if (attestCheck.status === 0 && indexAttestCheck.status === 0) {
           attestationVerified = true;
         } else if (verifyAttestation === "1") {
-          throw new Error(`Provenance attestation verification failed for ${archiveName}.`);
+          throw new Error(`Provenance attestation verification failed for ${archiveName} or SHA256SUMS.`);
         }
       }
     }
@@ -1070,19 +1084,40 @@ export async function performUpgrade(
       throw new Error("Release archive failed internal manifest checksum verification.");
     }
 
-    // Read compatibility metadata from package root if not downloaded
-    if (!compatMeta) {
-      const internalCompat = path.join(packageRoot, COMPATIBILITY_METADATA_FILENAME);
-      if (fs.existsSync(internalCompat)) {
-        try {
-          compatMeta = JSON.parse(fs.readFileSync(internalCompat, "utf8"));
-        } catch {}
+    // The in-archive copy is authenticated by the archive checksum/attestation.
+    // Detached metadata may add only the archive digest; all policy fields must
+    // match the embedded contract exactly.
+    let compatMeta: ReleaseCompatibilityMetadata | null = null;
+    const internalCompat = path.join(packageRoot, COMPATIBILITY_METADATA_FILENAME);
+    if (fs.existsSync(internalCompat)) {
+      try {
+        compatMeta = JSON.parse(fs.readFileSync(internalCompat, "utf8"));
+      } catch (err: any) {
+        throw new Error(`Invalid compatibility metadata embedded in archive: ${err?.message ?? String(err)}`);
       }
+      const internalValidation = validateCompatibilityMetadata(compatMeta);
+      if (!internalValidation.valid) throw new Error(`Invalid compatibility metadata embedded in archive: ${internalValidation.errors.join("; ")}`);
+    }
+    if (externalCompat) {
+      if (!compatMeta) throw new Error("Detached compatibility metadata is not bound to the downloaded archive.");
+      const binding = validateCompatibilityAssetBinding(
+        externalCompat,
+        compatMeta,
+        targetVersion,
+        archiveName,
+        computeSha256(localArchive)
+      );
+      if (!binding.valid) throw new Error(`Compatibility metadata binding failed: ${binding.errors.join("; ")}`);
     }
 
     // Evaluate compatibility against current state schema
-    const CURRENT_STATE_SCHEMA_VERSION = 1;
-    const compatResult = checkReleaseCompatibility(installed.version, CURRENT_STATE_SCHEMA_VERSION, compatMeta);
+    const compatResult = checkReleaseCompatibility(
+      installed.version,
+      CURRENT_STATE_SCHEMA_VERSION,
+      compatMeta,
+      "linux-x86_64",
+      CURRENT_CONFIG_SCHEMA_VERSION
+    );
     if (!compatResult.compatible) {
       if (action === "downgrade" && compatMeta && compatMeta.compatibility.stateSchemaVersion < CURRENT_STATE_SCHEMA_VERSION) {
         throw new Error(
@@ -1124,10 +1159,14 @@ export async function performUpgrade(
       method: "upgrade",
       product: "nexus-code",
       version: targetVersion,
+      revision: compatMeta?.revision,
+      builtAt: compatMeta?.builtAt,
       prefix,
       installedPath: versionDir,
       binPath: linkPath,
       managed: true,
+      archive: archiveName,
+      archiveSha256: computeSha256(localArchive),
     });
 
     // Atomic symlink swap
