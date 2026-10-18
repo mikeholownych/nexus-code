@@ -245,10 +245,10 @@ export function recoverUpgrade(prefix: string): RecoveryOutcome {
     if (targetHealthy) {
       try {
         const testRes = spawnSync(targetExecutable, ["--version"]);
-        if (testRes.status === 0) {
-          targetHealthy = true;
-        }
-      } catch {}
+        targetHealthy = testRes.status === 0;
+      } catch {
+        targetHealthy = false;
+      }
     }
 
     if (targetHealthy) {

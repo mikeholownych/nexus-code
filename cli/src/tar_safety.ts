@@ -143,6 +143,7 @@ export async function validateTarArchive(
     const inputStream = fs.createReadStream(archivePath);
     let buffer = Buffer.alloc(0);
     let paxHeaders: Record<string, string> = {};
+    let globalPaxHeaders: Record<string, string> = {};
     let finished = false;
     const fail = (message: string) => {
       if (finished) return;
@@ -213,16 +214,6 @@ export async function validateTarArchive(
           name = `${prefix}/${name}`;
         }
 
-        // Apply PAX header overrides if present
-        if (paxHeaders["path"]) {
-          name = paxHeaders["path"];
-          delete paxHeaders["path"];
-        }
-        if (paxHeaders["linkpath"]) {
-          linkname = paxHeaders["linkpath"];
-          delete paxHeaders["linkpath"];
-        }
-
         const size = parseInt(sizeOctal, 8) || 0;
         if (!Number.isSafeInteger(size) || size < 0) {
           fail("Archive contains an invalid or unsafe entry size");
@@ -237,7 +228,6 @@ export async function validateTarArchive(
           fail(`PAX metadata exceeds safety limit (${MAX_PAX_HEADER_BYTES} bytes per header)`);
           return;
         }
-
         if (buffer.length < 512 + paddedSize) {
           // Incomplete block, wait for more data
           break;
@@ -254,13 +244,23 @@ export async function validateTarArchive(
             return;
           }
           try {
-            paxHeaders = { ...paxHeaders, ...parsePax(content) };
+            const parsed = parsePax(content);
+            if (typeflag === "g") globalPaxHeaders = { ...globalPaxHeaders, ...parsed };
+            else paxHeaders = { ...paxHeaders, ...parsed };
           } catch (err: any) {
             fail(`Malformed PAX metadata: ${err.message}`);
             return;
           }
           continue;
         }
+
+        // Global PAX defaults persist; local PAX values override them for the
+        // next entry. Validate the effective names used by the tar extractor.
+        if (globalPaxHeaders["path"]) name = globalPaxHeaders["path"];
+        if (globalPaxHeaders["linkpath"]) linkname = globalPaxHeaders["linkpath"];
+        if (paxHeaders["path"]) name = paxHeaders["path"];
+        if (paxHeaders["linkpath"]) linkname = paxHeaders["linkpath"];
+        paxHeaders = {};
 
         // Strip trailing slash for uniform name checks
         const cleanName = name.replace(/\/+$/, "");

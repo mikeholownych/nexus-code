@@ -242,6 +242,22 @@ describe("Tar Archive Structural Safety Engine (REQ-REL-116, ACC-UPG-08)", () =>
     assert.ok(result.errors.some((error) => error.includes("PAX metadata exceeds safety limit")));
   });
 
+  it("applies global PAX link overrides to every later entry before validation", async () => {
+    const archive = path.join(tmpRoot, "global-pax.tar.gz");
+    const body = "linkpath=../../../../escape\n";
+    let length = Buffer.byteLength(body) + 3;
+    while (length !== Buffer.byteLength(String(length)) + 1 + Buffer.byteLength(body)) {
+      length = Buffer.byteLength(String(length)) + 1 + Buffer.byteLength(body);
+    }
+    fs.writeFileSync(archive, createTestTar([
+      { name: "GlobalHead", typeflag: "g", content: `${length} ${body}` },
+      { name: "nexus/bin/evil-link", typeflag: "2", linkname: "safe" },
+    ]));
+    const result = await validateTarArchive(archive);
+    assert.equal(result.valid, false);
+    assert.ok(result.errors.some((error) => error.includes("escapes")));
+  });
+
   it("rejects malicious tar archive with escaping symlink", async () => {
     const symlinkTar = path.join(tmpRoot, "symlink-escape.tar.gz");
     const tarGz = createTestTar([
@@ -677,6 +693,39 @@ describe("Upgrade Journal, Crash Recovery & PATH Shadowing (REQ-REL-116, ACC-UPG
     const outcome = recoverUpgrade(tmpPrefix);
     assert.equal(outcome.action, "rolled_back");
     assert.equal(fs.existsSync(canary), false);
+    assert.equal(fs.realpathSync(binPath), fs.realpathSync(sourceExecutable));
+  });
+
+  it("rolls back when a contained target launcher exits unsuccessfully", () => {
+    const libNexus = path.join(tmpPrefix, "lib", "nexus");
+    const binDir = path.join(tmpPrefix, "bin");
+    const sourceDir = path.join(libNexus, "v1.0.0");
+    const targetDir = path.join(libNexus, "v1.1.0");
+    fs.mkdirSync(path.join(sourceDir, "bin"), { recursive: true });
+    fs.mkdirSync(path.join(targetDir, "bin"), { recursive: true });
+    fs.mkdirSync(binDir, { recursive: true });
+    const sourceExecutable = path.join(sourceDir, "bin", "nexus");
+    const targetExecutable = path.join(targetDir, "bin", "nexus");
+    fs.writeFileSync(sourceExecutable, "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+    fs.writeFileSync(targetExecutable, "#!/bin/sh\nexit 1\n", { mode: 0o755 });
+    const binPath = path.join(binDir, "nexus");
+    fs.symlinkSync(targetExecutable, binPath);
+    writeJournal(tmpPrefix, {
+      formatVersion: 1,
+      id: "failed-target-launcher",
+      state: "switched",
+      sourceVersion: "v1.0.0",
+      sourceInstallDir: sourceDir,
+      sourceSymlinkTarget: sourceExecutable,
+      targetVersion: "v1.1.0",
+      targetInstallDir: targetDir,
+      prefix: tmpPrefix,
+      binPath,
+      startedAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    });
+    const outcome = recoverUpgrade(tmpPrefix);
+    assert.equal(outcome.action, "rolled_back");
     assert.equal(fs.realpathSync(binPath), fs.realpathSync(sourceExecutable));
   });
 
