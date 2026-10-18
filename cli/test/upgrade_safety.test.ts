@@ -5,7 +5,8 @@ import * as path from "node:path";
 import * as os from "node:os";
 import * as http from "node:http";
 import * as zlib from "node:zlib";
-import { execSync } from "node:child_process";
+import { execSync, spawnSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
 import {
   validateDownloadUrl,
   downloadFile,
@@ -415,6 +416,22 @@ describe("Machine-Readable Compatibility & Downgrade State Rejection (REQ-REL-11
     assert.equal(check.valid, true);
     assert.equal(check.errors.length, 0);
     assert.equal(meta.compatibility.stateSchemaVersion, 1);
+    assert.equal(validateCompatibilityMetadata({ ...meta, schemaVersion: 2 }).valid, false, "future metadata schemas fail closed");
+  });
+
+  it("package validator rejects unsupported compatibility schemas", () => {
+    const metadata = generateCompatibilityMetadata("1.0.0", "abcdef1234567890");
+    metadata.schemaVersion = 2;
+    const fixture = path.join(os.tmpdir(), `nexus-compatibility-schema-${process.pid}.json`);
+    fs.writeFileSync(fixture, `${JSON.stringify(metadata)}\n`);
+    try {
+      const validator = fileURLToPath(new URL("../../scripts/validate_compatibility.mjs", import.meta.url));
+      const result = spawnSync(process.execPath, [validator, fixture], { encoding: "utf8" });
+      assert.equal(result.status, 1, result.stderr);
+      assert.match(result.stderr, /Unsupported schemaVersion; expected 1/);
+    } finally {
+      fs.rmSync(fixture, { force: true });
+    }
   });
 
   it("rejects malformed compatibility metadata", () => {
@@ -456,6 +473,44 @@ describe("Machine-Readable Compatibility & Downgrade State Rejection (REQ-REL-11
     const compatResult = checkReleaseCompatibility("1.0.0", currentStateSchema, targetMeta);
     assert.equal(compatResult.compatible, false);
     assert.ok(compatResult.reasons.some((r) => r.includes("cannot read current state schema version")));
+  });
+
+  it("enforces minimum supported config and state schema versions", () => {
+    const targetMeta = generateCompatibilityMetadata("1.0.0", "abcdef1234567890");
+    targetMeta.compatibility.minSupportedConfigVersion = 2;
+    targetMeta.compatibility.configSchemaVersion = 2;
+    targetMeta.compatibility.minSupportedStateVersion = 2;
+    targetMeta.compatibility.stateSchemaVersion = 2;
+
+    const result = checkReleaseCompatibility("1.0.0", 1, targetMeta, "linux-x86_64", 1);
+    assert.equal(result.compatible, false);
+    assert.ok(result.reasons.some((reason) => reason.includes("requires config schema version 2")));
+    assert.ok(result.reasons.some((reason) => reason.includes("requires state schema version 2")));
+  });
+
+  it("compares minimum updater versions using full SemVer prerelease ordering", () => {
+    const targetMeta = generateCompatibilityMetadata("1.0.0", "abcdef1234567890");
+    targetMeta.minimumUpdaterVersion = "0.1.0-alpha.2";
+
+    const older = checkReleaseCompatibility("0.1.0-alpha.1", 1, targetMeta);
+    const newerPrerelease = checkReleaseCompatibility("0.1.0-alpha.10", 1, targetMeta);
+    const stable = checkReleaseCompatibility("0.1.0", 1, targetMeta);
+    assert.equal(older.compatible, false);
+    assert.equal(newerPrerelease.compatible, true);
+    assert.equal(stable.compatible, true);
+
+    targetMeta.minimumUpdaterVersion = "0.1.0-alpha.01";
+    assert.equal(validateCompatibilityMetadata(targetMeta).valid, false, "numeric SemVer prerelease identifiers cannot have leading zeroes");
+
+    targetMeta.minimumUpdaterVersion = "not-semver";
+    assert.equal(validateCompatibilityMetadata(targetMeta).valid, false);
+  });
+
+  it("rejects a target config schema older than the current config schema", () => {
+    const targetMeta = generateCompatibilityMetadata("1.0.0", "abcdef1234567890");
+    const result = checkReleaseCompatibility("1.0.0", 1, targetMeta, "linux-x86_64", 2);
+    assert.equal(result.compatible, false);
+    assert.ok(result.reasons.some((reason) => reason.includes("cannot read current config schema version 2")));
   });
 
   it("applies legacy policy for releases lacking compatibility metadata", () => {

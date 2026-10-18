@@ -21,9 +21,38 @@ describe("Public Release Upgrade Acceptance (REQ-REL-116, ACC-UPG-07..14)", () =
   let fakeHome: string;
   let mockServer: http.Server;
   let mockPort: number;
+  let compatibilityV1: Buffer;
+  let sumsV1: string;
   let origReleasesApi: string | undefined;
   let origReleaseBase: string | undefined;
   let origHome: string | undefined;
+
+  function createCompatibilityMetadata(version: string, configSchema = 1, stateSchema = 1, archiveSha256?: string): any {
+    const normalizedVersion = version.replace(/^v/, "");
+    return {
+      schemaVersion: 1,
+      product: "nexus-code",
+      version: normalizedVersion,
+      revision: "commit-123456",
+      builtAt: "2026-10-18T12:00:00Z",
+      minimumUpdaterVersion: "0.1.0-alpha.2",
+      components: { cli: normalizedVersion, core: normalizedVersion, tui: normalizedVersion, harness: normalizedVersion },
+      compatibility: {
+        configSchemaVersion: configSchema,
+        stateSchemaVersion: stateSchema,
+        minSupportedConfigVersion: 1,
+        minSupportedStateVersion: stateSchema === 0 ? 0 : 1,
+      },
+      platforms: {
+        "linux-x86_64": {
+          archive: `nexus-linux-x86_64-${version}.tar.gz`,
+          ...(archiveSha256 ? { sha256: archiveSha256 } : {}),
+          os: "linux",
+          arch: "x86_64",
+        },
+      },
+    };
+  }
 
   function createPackageArchive(version: string, configSchema = 1, stateSchema = 1): Buffer {
     const entries: Array<{ name: string; content?: string; mode?: string }> = [
@@ -49,31 +78,7 @@ describe("Public Release Upgrade Acceptance (REQ-REL-116, ACC-UPG-07..14)", () =
       },
       {
         name: "nexus/compatibility.json",
-        content: JSON.stringify(
-          {
-            schemaVersion: 1,
-            product: "nexus-code",
-            version: version.replace(/^v/, ""),
-            revision: "commit-123456",
-            builtAt: "2026-10-18T12:00:00Z",
-            components: { cli: version, core: version, tui: version, harness: version },
-            compatibility: {
-              configSchemaVersion: configSchema,
-              stateSchemaVersion: stateSchema,
-              minSupportedConfigVersion: 1,
-              minSupportedStateVersion: 1,
-            },
-            platforms: {
-              "linux-x86_64": {
-                archive: `nexus-linux-x86_64-${version}.tar.gz`,
-                os: "linux",
-                arch: "x86_64",
-              },
-            },
-          },
-          null,
-          2
-        ),
+        content: JSON.stringify(createCompatibilityMetadata(version, configSchema, stateSchema), null, 2),
         mode: "0000644\0",
       },
     ];
@@ -124,7 +129,8 @@ describe("Public Release Upgrade Acceptance (REQ-REL-116, ACC-UPG-07..14)", () =
     // Build release packages
     const pkgV1 = createPackageArchive("v1.0.0", 1, 1);
     const hashV1 = crypto.createHash("sha256").update(pkgV1).digest("hex");
-    const sumsV1 = `${hashV1}  nexus-linux-x86_64-v1.0.0.tar.gz\n`;
+    compatibilityV1 = Buffer.from(JSON.stringify(createCompatibilityMetadata("v1.0.0", 1, 1, hashV1), null, 2) + "\n");
+    sumsV1 = `${hashV1}  nexus-linux-x86_64-v1.0.0.tar.gz\n${crypto.createHash("sha256").update(compatibilityV1).digest("hex")}  compatibility.json\n`;
 
     // Package with incompatible state schema for downgrade test
     const pkgIncompatible = createPackageArchive("v0.0.5", 1, 0);
@@ -145,6 +151,7 @@ describe("Public Release Upgrade Acceptance (REQ-REL-116, ACC-UPG-07..14)", () =
               published_at: "2026-10-18T12:00:00Z",
               assets: [
                 { name: "nexus-linux-x86_64-v1.0.0.tar.gz", browser_download_url: `http://127.0.0.1:${mockPort}/download/v1.0.0/nexus-linux-x86_64-v1.0.0.tar.gz` },
+                { name: "compatibility.json", browser_download_url: `http://127.0.0.1:${mockPort}/download/v1.0.0/compatibility.json` },
                 { name: "SHA256SUMS", browser_download_url: `http://127.0.0.1:${mockPort}/download/v1.0.0/SHA256SUMS` },
               ],
             })
@@ -169,6 +176,9 @@ describe("Public Release Upgrade Acceptance (REQ-REL-116, ACC-UPG-07..14)", () =
         } else if (url === "/download/v1.0.0/SHA256SUMS") {
           res.writeHead(200, { "Content-Type": "text/plain" });
           res.end(sumsV1);
+        } else if (url === "/download/v1.0.0/compatibility.json") {
+          res.writeHead(200, { "Content-Type": "application/json" });
+          res.end(compatibilityV1);
         } else if (url === "/download/v0.0.5/nexus-linux-x86_64-v0.0.5.tar.gz") {
           res.writeHead(200, { "Content-Type": "application/gzip", "Content-Length": pkgIncompatible.length });
           res.end(pkgIncompatible);
@@ -315,6 +325,35 @@ describe("Public Release Upgrade Acceptance (REQ-REL-116, ACC-UPG-07..14)", () =
 
     // Symlink remains intact on v1.0.0
     assert.equal(fs.realpathSync(binNexus), fs.realpathSync(v1Bin));
+  });
+
+  it("rejects a checksum-listed detached compatibility asset that changes the archive's embedded contract", async () => {
+    const hash = crypto.createHash("sha256");
+    const pkgV1 = createPackageArchive("v1.0.0", 1, 1);
+    const archiveDigest = hash.update(pkgV1).digest("hex");
+    const altered = createCompatibilityMetadata("v1.0.0", 2, 1, archiveDigest);
+    compatibilityV1 = Buffer.from(`${JSON.stringify(altered, null, 2)}\n`);
+    sumsV1 = `${archiveDigest}  nexus-linux-x86_64-v1.0.0.tar.gz\n${crypto.createHash("sha256").update(compatibilityV1).digest("hex")}  compatibility.json\n`;
+
+    const oldVersion = "v0.1.0-alpha.2";
+    const oldVersionDir = path.join(tmpPrefix, "lib", "nexus", oldVersion);
+    const binDir = path.join(tmpPrefix, "bin");
+    fs.mkdirSync(path.join(oldVersionDir, "bin"), { recursive: true });
+    fs.mkdirSync(binDir, { recursive: true });
+    fs.writeFileSync(path.join(oldVersionDir, "VERSION"), `${oldVersion}\n`);
+    const oldBin = path.join(oldVersionDir, "bin", "nexus");
+    fs.writeFileSync(oldBin, `#!/bin/sh\necho "nexus ${oldVersion}"\n`, { mode: 0o755 });
+    const activeLink = path.join(binDir, "nexus");
+    fs.symlinkSync(oldBin, activeLink);
+
+    const installed = detectInstallation({ nexusHome: oldVersionDir, envPrefix: tmpPrefix });
+    const target = await resolveTargetRelease(undefined, { timeoutMs: 5000 });
+    const comparison = compareInstallationWithRelease(installed, target);
+    await assert.rejects(
+      performUpgrade(comparison, { prefix: tmpPrefix, timeoutMs: 5000 }),
+      /external metadata does not match metadata embedded in the verified archive/
+    );
+    assert.equal(fs.realpathSync(activeLink), fs.realpathSync(oldBin));
   });
 
   it("handles TUI deliberate approval flow for upgrades", async () => {

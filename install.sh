@@ -60,6 +60,7 @@ if [ "$VERSION" = "latest" ]; then
 fi
 
 ARCHIVE="nexus-linux-x86_64-$VERSION.tar.gz"
+NORMALIZED_VERSION=${VERSION#v}
 URL="$BASE/download/$VERSION"
 TMP=$(mktemp -d "${TMPDIR:-/tmp}/nexus-install.XXXXXX") || fail "could not create temporary directory."
 cleanup() { rm -rf "$TMP"; }
@@ -68,12 +69,14 @@ curl -fsSL --show-error --retry 2 "$URL/$ARCHIVE" -o "$TMP/$ARCHIVE" || fail "do
 curl -fsSL --show-error --retry 2 "$URL/SHA256SUMS" -o "$TMP/SHA256SUMS" || fail "could not download release checksums."
 grep -F "  $ARCHIVE" "$TMP/SHA256SUMS" > "$TMP/expected.sha256" || fail "checksum entry for $ARCHIVE is missing."
 (cd "$TMP" && sha256sum --check --status expected.sha256) || fail "SHA-256 verification failed; no installation was changed."
+ARCHIVE_SHA256=$(sha256sum "$TMP/$ARCHIVE" | awk '{print $1}')
 
 if [ "${NEXUS_VERIFY_ATTESTATION:-auto}" != "0" ] && command -v gh >/dev/null 2>&1; then
-  if gh attestation verify "$TMP/$ARCHIVE" -R "$REPO" >/dev/null 2>&1; then
-    printf 'nexus installer: verified build provenance attestation for %s\n' "$ARCHIVE"
+  if gh attestation verify "$TMP/$ARCHIVE" -R "$REPO" >/dev/null 2>&1 && \
+     gh attestation verify "$TMP/SHA256SUMS" -R "$REPO" >/dev/null 2>&1; then
+    printf 'nexus installer: verified build provenance for %s and its checksum index\n' "$ARCHIVE"
   elif [ "${NEXUS_VERIFY_ATTESTATION:-auto}" = "1" ]; then
-    fail "provenance attestation verification failed for $ARCHIVE."
+    fail "provenance attestation verification failed for $ARCHIVE or SHA256SUMS."
   fi
 fi
 
@@ -100,8 +103,19 @@ if [ -d "$VERSION_DIR" ] && [ "$FORCE" != "1" ]; then
       if (cd "$VERSION_DIR" && sha256sum --check --status MANIFEST.sha256 2>/dev/null); then
         NEEDS_EXTRACT=0
       fi
-    else
-      NEEDS_EXTRACT=0
+      if [ "$NEEDS_EXTRACT" = "0" ]; then
+        if ! node - "$VERSION_DIR/.provenance.json" "$ARCHIVE_SHA256" <<'NODE'
+const fs = require("node:fs");
+const [file, archiveSha256] = process.argv.slice(2);
+try {
+  const record = JSON.parse(fs.readFileSync(file, "utf8"));
+  if (record.archiveSha256 !== archiveSha256) process.exit(1);
+} catch { process.exit(1); }
+NODE
+        then
+          NEEDS_EXTRACT=1
+        fi
+      fi
     fi
   fi
 fi
@@ -114,22 +128,54 @@ if [ "$NEEDS_EXTRACT" = "1" ]; then
   if [ -f "$PACKAGE/MANIFEST.sha256" ]; then
     (cd "$PACKAGE" && sha256sum --check --status MANIFEST.sha256) || fail "release archive failed manifest checksum verification."
   fi
+  PACKAGE_VERSION_OUTPUT=$("$PACKAGE/bin/nexus" --version 2>&1) || fail "release binary failed its pre-install self-test."
+  PACKAGE_VERSION_REPORTED=$(printf '%s\n' "$PACKAGE_VERSION_OUTPUT" | sed -n '1s/[[:space:]].*$//p')
+  [ "$PACKAGE_VERSION_REPORTED" = "$NORMALIZED_VERSION" ] || fail "release binary reported version '$PACKAGE_VERSION_REPORTED' instead of '$NORMALIZED_VERSION' during self-test."
+  if [ -f "$PACKAGE/compatibility.json" ]; then
+    node - "$PACKAGE/compatibility.json" "$VERSION" "$ARCHIVE" <<'NODE' || fail "release compatibility metadata is invalid or mismatched."
+const fs = require("node:fs");
+const [file, version, archive] = process.argv.slice(2);
+const data = JSON.parse(fs.readFileSync(file, "utf8"));
+const asset = data.platforms?.["linux-x86_64"];
+const compatible = data.schemaVersion === 1 && data.product === "nexus-code" &&
+  data.version === version.replace(/^v/, "") &&
+  typeof data.revision === "string" && /^[a-f0-9]{7,64}$/i.test(data.revision) &&
+  typeof data.builtAt === "string" && !Number.isNaN(Date.parse(data.builtAt)) &&
+  asset?.archive === archive && asset.os === "linux" && asset.arch === "x86_64" &&
+  data.compatibility && Number.isSafeInteger(data.compatibility.configSchemaVersion) &&
+  Number.isSafeInteger(data.compatibility.stateSchemaVersion) &&
+  Number.isSafeInteger(data.compatibility.minSupportedConfigVersion) &&
+  Number.isSafeInteger(data.compatibility.minSupportedStateVersion) &&
+  data.compatibility.minSupportedConfigVersion <= data.compatibility.configSchemaVersion &&
+  data.compatibility.minSupportedStateVersion <= data.compatibility.stateSchemaVersion;
+if (!compatible) process.exit(1);
+NODE
+  fi
   rm -rf "$VERSION_DIR"
   mv "$PACKAGE" "$VERSION_DIR"
 fi
-cat > "$VERSION_DIR/.provenance.json" <<EOF
-{
-  "formatVersion": 1,
-  "method": "installer_script",
-  "version": "$VERSION",
-  "installedAt": "$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date +%Y-%m-%dT%H:%M:%SZ)",
-  "prefix": "$PREFIX",
-  "installPath": "$VERSION_DIR",
-  "binPath": "$LINK",
-  "archive": "$ARCHIVE"
-}
-EOF
-chmod 0644 "$VERSION_DIR/.provenance.json"
+node - "$VERSION_DIR/compatibility.json" "$VERSION" "$PREFIX" "$VERSION_DIR" "$LINK" "$ARCHIVE" "$ARCHIVE_SHA256" "$VERSION_DIR/.provenance.json" <<'NODE'
+const fs = require("node:fs");
+const [metadataPath, version, prefix, installedPath, binPath, archive, archiveSha256, output] = process.argv.slice(2);
+let metadata = null;
+try { metadata = JSON.parse(fs.readFileSync(metadataPath, "utf8")); } catch {}
+const record = {
+  formatVersion: 1,
+  method: "installer",
+  product: "nexus-code",
+  version,
+  ...(metadata?.revision ? { revision: metadata.revision } : {}),
+  ...(metadata?.builtAt ? { builtAt: metadata.builtAt } : {}),
+  prefix,
+  installedPath,
+  binPath,
+  managed: true,
+  archive,
+  archiveSha256,
+};
+fs.writeFileSync(output, `${JSON.stringify(record, null, 2)}\n`, { mode: 0o644 });
+fs.chmodSync(output, 0o644);
+NODE
 NEXT="$BIN_DIR/.nexus-link.$$"
 ln -s "$VERSION_DIR/bin/nexus" "$NEXT"
 mv -f "$NEXT" "$LINK"
