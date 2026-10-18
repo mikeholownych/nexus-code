@@ -151,15 +151,18 @@ one, before any agent runs, unless every item below holds:
 Bubblewrap plus the current runner enforces separate mount/user/PID/network namespaces, a cleared task-command
 environment, a bounded wall clock, bounded captured output, per-run process-group teardown, and read-only runtime
 binds. Black-box qualification keeps oracle expectations outside candidate namespaces. Legacy hidden commands share a
-process with candidate code; in qualification they run only in the hardened form below. Aggregate CPU, memory, process-count and writable-storage limits come from the
-resource contract below, not from request/token ceilings. Appliance-specific Bubblewrap enforcement is a separate,
-unverified condition.
+process with candidate code and are rejected during qualification preflight. The hardened legacy path below is only for
+development and pilot scoring; it is not qualification evidence. Aggregate CPU, memory, process-count and
+writable-storage limits come from the resource contract below, not from request/token ceilings. Appliance-specific
+Bubblewrap enforcement is a separate, unverified condition.
 
-### Hardened legacy hidden tests
+### Hardened legacy hidden tests (development and pilot only)
 
-The sealed T2 corpus uses legacy hidden tests (`hidden: { dir, command }`, for example `pytest` or `go test` over copied
-test files). Those run candidate code in the same process as the oracle. Owner decision, 2026-10-18: qualification runs
-them hardened, in the style of SWE-bench. Development configs opt in with `"hardenedChecks": true`.
+Legacy tasks use `hidden: { dir, command }` (for example `pytest` or `go test` over copied test files) and run candidate
+code in the same process as the oracle. They do not meet the qualification boundary, even when hardened. Qualification
+preflight accepts only the isolated `blackbox-v1` protocol. Any legacy task in a qualification corpus must be replaced
+or converted by the authorized custodian, with custody checks repeated and a new immutable manifest identity recorded.
+Development configs may opt into the hardened diagnostic path with `"hardenedChecks": true`.
 
 1. The agent's workspace is never tested, and nothing runs git or any other program against it after the agent ran.
    An agent-written `.git/config` or `.gitattributes` would otherwise run commands as the harness user. The baseline
@@ -199,15 +202,14 @@ them hardened, in the style of SWE-bench. Development configs opt in with `"hard
 3. Anything the agent left at the oracle's path is removed. The hidden command then runs with the hidden directory
    bind-mounted **read-only**. The regression
    command runs in a separate byte-identical copy, so candidate code executed by one check cannot prepare the other.
-4. In qualification, hidden-test output is kept only as a status, byte count and SHA-256, so evidence does not disclose
-   the sealed tests. Each run record carries
+4. In development/pilot runs, hidden-test output is kept only as a status, byte count and SHA-256, so diagnostic
+   records do not disclose the tests. Each run record carries
    `hardened: { baseline, applied, discarded, configChanges }`.
 
 This legacy hardening path supports development and pilot scoring only. Candidate source still executes in the same
 runtime as its legacy validator, so it can inspect or alter validator state; file hiding and a fresh workspace do not
-provide independent qualification. `qualification: true` therefore rejects every legacy hidden command before any
-candidate starts. Only the isolated `blackbox-v1` protocol is accepted for qualification. Convert or replace legacy
-tasks through the authorized custodian workflow before sealing the qualification corpus; do not relabel legacy evidence.
+provide independent qualification. `qualification: true` rejects every legacy hidden command before any candidate
+starts. Do not relabel legacy evidence as qualification evidence.
 
 The legacy output checks below are diagnostic safeguards for development scoring, not acceptance evidence. Qualification
 keeps black-box expected values in the evaluator process and runs candidate code in a separate Bubblewrap process.
