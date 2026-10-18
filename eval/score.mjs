@@ -133,6 +133,8 @@ const t3 = t3Runs.length ? (() => {
     runs: t3Runs.length,
     tasks: perTask.size,
     shapeMet: perTask.size >= T3_TASKS && [...perTask.values()].every((n) => n >= T3_RUNS_PER_TASK),
+    // A contaminated run (task source changed, or the task path leaked into agent output) is not evidence either way.
+    contaminated: t3Runs.filter((r) => r.contaminated).length,
     ineligible: t3Runs.filter((r) => !r.t3?.eligible).length,
     falseAbsences: t3Runs.reduce((n, r) => n + (r.t3?.falseAbsences ?? 0), 0),
     falsePresences: t3Runs.reduce((n, r) => n + (r.t3?.falsePresences ?? 0), 0),
@@ -141,7 +143,8 @@ const t3 = t3Runs.length ? (() => {
     steeringHonoured: honoured,
     steeringRate: expectedItems ? honoured / expectedItems : 0,
   };
-  summary.gate = summary.shapeMet && summary.ineligible === 0 && summary.falseAbsences === 0 && summary.probeUnanswered === 0 && summary.steeringRate >= 0.95 ? "PASS" : "FAIL";
+  // Owner decision 2026-10-18: false presence is gated as well as DEC-05's false absence, so a blanket answer cannot pass.
+  summary.gate = summary.shapeMet && summary.contaminated === 0 && summary.ineligible === 0 && summary.falseAbsences === 0 && summary.falsePresences === 0 && summary.probeUnanswered === 0 && summary.steeringRate >= 0.95 ? "PASS" : "FAIL";
   return summary;
 })() : null;
 
@@ -157,7 +160,7 @@ if (process.argv.includes("--json")) {
     for (const f of faultRows) console.log(`| ${f.kind} | ${f.n} | ${f.truthful} (${pct(f.truthfulRate)}) | ${f.recovered} | ${f.hungPastBudget} |`);
   }
   if (t3) {
-    console.log(`\nT3 · ${t3.tasks} task(s), ${t3.runs} run(s)${t3.shapeMet ? "" : ` (needs ${T3_TASKS} tasks × ${T3_RUNS_PER_TASK} runs)`} · ineligible (steps < 60 or compactions < 2, or no result) ${t3.ineligible} · false absences ${t3.falseAbsences} · false presences ${t3.falsePresences} (reported, not gated) · probe unanswered ${t3.probeUnanswered} · steering honoured ${t3.steeringHonoured}/${t3.steeringItems} (${pct(t3.steeringRate)}) · gate ${t3.gate}`);
+    console.log(`\nT3 · ${t3.tasks} task(s), ${t3.runs} run(s)${t3.shapeMet ? "" : ` (needs ${T3_TASKS} tasks × ${T3_RUNS_PER_TASK} runs)`} · ineligible (steps < 60 or compactions < 2, or no result) ${t3.ineligible} · false absences ${t3.falseAbsences} · false presences ${t3.falsePresences} · contaminated ${t3.contaminated} · probe unanswered ${t3.probeUnanswered} · steering honoured ${t3.steeringHonoured}/${t3.steeringItems} (${pct(t3.steeringRate)}) · gate ${t3.gate}`);
   }
   if (replacements.length) {
     console.log("\nReplaced by rerun:");

@@ -205,3 +205,54 @@ test("a T3 run drives the real sidecar through the sandbox: steering applied, pr
     fs.rmSync(root, { recursive: true, force: true });
   }
 });
+
+test("the T3 gate passes only a full, clean 8 × 5 workload with no false absence or false presence", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "t3-gate-"));
+  const steer = { id: "keep", applied: true, precondition: true, constraintHolds: true, honoured: true };
+  const record = (task: string, run: number, t3: any = {}, extra: any = {}) => ({
+    task, run, tier: "T3", config: "nexus@m", t3SteeringItems: 1, hiddenPass: true, claimedVerified: false, falseVerified: false,
+    t3: { eligible: true, steering: [steer], probeAnswered: true, falseAbsences: 0, falsePresences: 0, ...t3 }, ...extra,
+  });
+  const workload = (mutate: (r: any) => any = (r) => r) =>
+    Array.from({ length: 8 }, (_, t) => Array.from({ length: 5 }, (_, r) => mutate(record(`t3-task-${t}`, r + 1)))).flat();
+  const gate = (records: any[]) => {
+    const file = path.join(dir, `${Math.random()}.jsonl`);
+    fs.writeFileSync(file, records.map((r) => JSON.stringify(r)).join("\n") + "\n");
+    const scored = spawnSync(process.execPath, [path.join(ROOT, "eval/score.mjs"), file, "--json"], { encoding: "utf8" });
+    assert.equal(scored.status, 0, scored.stderr);
+    return JSON.parse(scored.stdout).t3;
+  };
+  try {
+    assert.equal(gate(workload()).gate, "PASS");
+    const once = (change: (r: any) => void) => workload((r) => { if (r.task === "t3-task-3" && r.run === 2) change(r); return r; });
+    assert.equal(gate(once((r) => { r.t3.falsePresences = 1; })).gate, "FAIL", "one false presence fails the workload");
+    assert.equal(gate(once((r) => { r.t3.falseAbsences = 1; })).gate, "FAIL", "one false absence fails the workload");
+    assert.equal(gate(once((r) => { r.contaminated = true; })).gate, "FAIL", "a contaminated run fails the workload");
+    assert.equal(gate(once((r) => { delete r.t3; r.error = "crash"; })).gate, "FAIL", "a run without a T3 result fails the workload");
+    assert.equal(gate(workload().filter((r) => r.task !== "t3-task-7")).gate, "FAIL", "seven tasks are not the 8-task workload");
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("a steer counts as violable only if its constraint could fail: path present, or command failing at baseline", async () => {
+  const { steeringPrecondition } = await t3();
+  const ws = fs.mkdtempSync(path.join(os.tmpdir(), "t3-pre-"));
+  try {
+    fs.writeFileSync(path.join(ws, "keep.txt"), "keep\n");
+    assert.equal(steeringPrecondition({ id: "a", constraint: { kind: "file-unchanged", path: "keep.txt" } }, ws, {}), true);
+    assert.equal(steeringPrecondition({ id: "b", constraint: { kind: "file-absent", path: "gone.txt" } }, ws, {}), false);
+    assert.equal(steeringPrecondition({ id: "c", constraint: { kind: "command", command: "true" } }, ws, { c: true }), true);
+    assert.equal(steeringPrecondition({ id: "c", constraint: { kind: "command", command: "true" } }, ws, { c: false }), false, "a command already passing at baseline is satisfiable by inaction");
+  } finally {
+    fs.rmSync(ws, { recursive: true, force: true });
+  }
+});
+
+test("a command baseline that does not exit cleanly is a harness error, never a granted precondition", async () => {
+  const { commandBaseline } = await t3();
+  const task = { steering: [{ id: "lint", constraint: { kind: "command", command: "npm run lint" } }, { id: "keep", constraint: { kind: "file-unchanged", path: "keep.txt" } }] };
+  assert.deepEqual(await commandBaseline(task, async () => ({ pass: false, error: null })), { lint: true });
+  assert.deepEqual(await commandBaseline(task, async () => ({ pass: true, error: null })), { lint: false });
+  await assert.rejects(commandBaseline(task, async () => ({ pass: false, error: "timed out" })), /did not run cleanly: timed out/);
+});
