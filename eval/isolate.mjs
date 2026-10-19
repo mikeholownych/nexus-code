@@ -86,14 +86,17 @@ function pathVariants(source) {
 }
 
 function candidateMountOverlapProblem(mountSources, protectedCorpusPaths) {
-  if (!Array.isArray(protectedCorpusPaths)) return "candidate sandbox protectedCorpusPaths must be an array";
-  const sources = [
+  return mountSourceOverlapProblem([
     ...mountSources.systemDirectories,
     ...mountSources.systemFiles,
     ...mountSources.systemEtcDirectories,
     ...mountSources.toolchainDirectories,
     ...Object.values(mountSources.runtimeSources).flatMap((value) => Array.isArray(value) ? value : value === null ? [] : [value]),
-  ];
+  ], protectedCorpusPaths);
+}
+
+function mountSourceOverlapProblem(sources, protectedCorpusPaths) {
+  if (!Array.isArray(protectedCorpusPaths)) return "candidate sandbox protectedCorpusPaths must be an array";
   for (const protectedPath of protectedCorpusPaths) {
     const protectedVariants = pathVariants(protectedPath);
     if (!protectedVariants.length) return "candidate sandbox protected corpus paths must be absolute";
@@ -305,7 +308,7 @@ export function agentSandboxArgv({ cwd, home, proxyDirectory, readOnlyPaths = []
 }
 
 /** Run a fixed executable probe without exposing the host filesystem, environment, or network. */
-export function isolatedProcessArgv({ cwd, command, argv = [], readOnlyPaths = [], allowedRoots = [], allowedFiles = [], timeoutMs = 5000, workspaceReadOnly = false }) {
+export function isolatedProcessArgv({ cwd, command, argv = [], readOnlyPaths = [], allowedRoots = [], allowedFiles = [], timeoutMs = 5000, workspaceReadOnly = false, protectedCorpusPaths = [] }) {
   if (!sandboxAvailable()) throw new Error("Bubblewrap is unavailable; refusing executable probe");
   const mountProblem = runtimeMountProblem(readOnlyPaths, allowedRoots, allowedFiles);
   if (mountProblem) throw new Error(mountProblem);
@@ -343,6 +346,9 @@ export function isolatedProcessArgv({ cwd, command, argv = [], readOnlyPaths = [
   if (!SYSTEM_BINARIES.some((root) => resolvedCommand === root || resolvedCommand.startsWith(`${root}${path.sep}`)) && !readOnlyPaths.some((item) => fs.realpathSync(item) === resolvedCommand)) {
     throw new Error("isolated executable must be included in the explicit read-only runtime paths");
   }
+  const bindSources = args.flatMap((arg, i) => (arg === "--bind" || arg === "--ro-bind") ? [args[i + 1]] : []);
+  const protectedOverlap = mountSourceOverlapProblem(bindSources, protectedCorpusPaths);
+  if (protectedOverlap) throw new Error(protectedOverlap);
   args.push("--chdir", "/workspace", "--clearenv", "--setenv", "PATH", "/usr/bin:/bin", "--setenv", "HOME", "/home/eval", "--setenv", "LANG", "C.UTF-8", "--");
   args.push(resolvedCommand, ...argv);
   return { cmd: BWRAP, argv: args, timeoutMs };
@@ -403,30 +409,6 @@ export function grantRunAsAccess(user, targets) {
   if (!fs.existsSync(setfacl)) throw new Error("setfacl is unavailable; refusing unsafe workspace permission changes");
   for (const target of targets) {
     const resolved = fs.realpathSync(target);
-    // Prefer ownership transfer: under a 0711 workspace root, Bubblewrap (sudo -u evaluator)
-    // can open an evaluator-owned 0700 child even when POSIX ACLs do not take effect on the mount.
-    const chown = spawnSync("/usr/bin/sudo", ["-n", "chown", "-R", `${user}:`, resolved], {
-      encoding: "utf8",
-      timeout: 5000,
-      env: { PATH: "/usr/bin:/bin" },
-    });
-    if (chown.status === 0) {
-      const opAcl = spawnSync(setfacl, ["-R", "-m", `u:${opUid}:rwX`, resolved], {
-        encoding: "utf8",
-        timeout: 5000,
-        env: { PATH: "/usr/bin:/bin" },
-      });
-      if (opAcl.status !== 0) {
-        // Cleanup may need sudo later; ownership transfer for bind-open still succeeded.
-      } else if (fs.statSync(resolved).isDirectory()) {
-        spawnSync(setfacl, ["-m", `d:u:${opUid}:rwx,d:m::rwx`, resolved], {
-          encoding: "utf8",
-          timeout: 5000,
-          env: { PATH: "/usr/bin:/bin" },
-        });
-      }
-      continue;
-    }
     const { access, defaults } = runAsAclArgs(user, opUid, resolved, fs.statSync(resolved).isDirectory());
     const result = spawnSync(setfacl, access, { encoding: "utf8", timeout: 5000, env: { PATH: "/usr/bin:/bin" } });
     if (result.status !== 0) throw new Error(`could not grant scoped evaluator access to disposable path (${result.status ?? "signal"})`);

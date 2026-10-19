@@ -1015,3 +1015,22 @@ test("the model proxy injects each scheduled fault into the chat request it name
   }
   await assert.rejects(startModelProxy({ upstream: "http://127.0.0.1:9/v1", faults: [{ kind: "nope", atRequest: 1 }] }), /invalid fault/);
 });
+
+test("executable probes refuse bind sources that overlap protected corpus material", async () => {
+  const { isolatedProcessArgv } = await import(path.join(ROOT, "eval/isolate.mjs"));
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-eval-probe-overlap-"));
+  try {
+    const store = path.join(root, "heldout-v2");
+    const workspace = path.join(root, "workspace");
+    fs.mkdirSync(path.join(store, "reference"), { recursive: true });
+    fs.mkdirSync(workspace);
+    const alias = path.join(root, "store-alias");
+    fs.symlinkSync(store, alias, "dir");
+    const probe = (options: Record<string, unknown>) => () => isolatedProcessArgv({ command: "/usr/bin/true", argv: ["--version"], ...options });
+    assert.throws(probe({ cwd: workspace, protectedCorpusPaths: ["/usr/share/nexus-heldout"] }), /overlaps protected corpus material: \/usr\/share/, "system bind containing a protected path");
+    assert.throws(probe({ cwd: path.join(alias, "reference"), protectedCorpusPaths: [store] }), /overlaps protected corpus material/, "workspace bind through a symlink alias");
+    assert.doesNotThrow(probe({ cwd: workspace, protectedCorpusPaths: [store] }), "an unrelated workspace remains usable");
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
