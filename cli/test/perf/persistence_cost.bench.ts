@@ -11,6 +11,7 @@ import path from "node:path";
 import { performance } from "node:perf_hooks";
 import { DurableStateManager, DurableTaskState } from "../../src/core/state.js";
 import { ChatMessage } from "../../src/types.js";
+import { WorkspacePath } from "../../src/core/workspace_path.js";
 
 function percentile(sorted: number[], p: number): number {
   if (sorted.length === 0) return 0;
@@ -21,7 +22,7 @@ function percentile(sorted: number[], p: number): number {
 test("ACC-CONT-08: 200-step persistence overhead measurement (threshold p95 < 100 ms)", () => {
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-perf-persistence-"));
   try {
-    const stateManager = new DurableStateManager({ baseDir: tmpDir });
+    const stateManager = new DurableStateManager({ baseDir: tmpDir, workspacePaths: [WorkspacePath.fromSelectedWorkspace(tmpDir)] });
     const taskId = "task-bench-200-steps";
     const workspace = tmpDir;
 
@@ -139,9 +140,7 @@ test("ACC-CONT-08: 200-step persistence overhead measurement (threshold p95 < 10
 
     assert.equal(sorted.length, 200, "All 200 steps must be recorded");
     assert.ok(p95 > 0, "p95 overhead must be positive");
-    if (exceeded) {
-      console.warn(`[ACC-CONT-08] p95 overhead (${p95.toFixed(2)} ms) exceeds 100 ms SSD threshold: opening follow-up for split-record schema (SPEC-04 §3.7 / SPEC-08).`);
-    }
+    assert.ok(!exceeded, `[ACC-CONT-08] p95 overhead (${p95.toFixed(2)} ms) exceeds the unchanged 100 ms SSD threshold after the split-record implementation.`);
   } finally {
     fs.rmSync(tmpDir, { recursive: true, force: true });
   }

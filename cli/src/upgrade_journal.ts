@@ -10,7 +10,8 @@
 
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { spawnSync } from "node:child_process";
+import { acquireFileGuard, releaseFileGuard, type FileGuard } from "./core/file_guard.js";
+import { withStateStoreGuard, STATE_STORE_GUARD_FILE } from "./core/state_store_guard.js";
 import { verifyInstalledRuntime } from "./upgrade_health.js";
 
 export type JournalState =
@@ -164,7 +165,7 @@ export function createPreMigrationBackup(homeDir: string = process.env.HOME || "
 
     // Snapshot all durable state, not just its index. Backup directories are
     // excluded to avoid recursion; symbolic links are refused rather than read.
-    copyPrivateTree(stateDir, path.join(backupDest, "state"), new Set(["backups"]));
+    withDurableStoreGuards(homeDir, () => copyPrivateTree(stateDir, path.join(backupDest, "state"), new Set(["backups"])));
     const configDir = path.join(homeDir, ".config", "nexus");
     if (fs.existsSync(configDir)) copyPrivateTree(configDir, path.join(backupDest, "config"), new Set(["backups"]));
     fs.writeFileSync(path.join(backupDest, "backup.json"), JSON.stringify({ formatVersion:1, kind:"nexus-state-config", createdAt:new Date().toISOString() }), { mode:0o600 });
@@ -191,7 +192,7 @@ export function restoreConfigBackup(backupPath: string, homeDir: string = proces
       validatePrivateTree(resolved);
       const state = path.join(resolved, "state");
       const config = path.join(resolved, "config");
-      if (fs.existsSync(state)) restorePrivateTree(state, path.join(homeDir, ".nexus"), new Set(["backups"]));
+      if (fs.existsSync(state)) withDurableStoreGuards(homeDir, () => restorePrivateTree(state, path.join(homeDir, ".nexus"), new Set(["backups"])));
       if (fs.existsSync(config)) restorePrivateTree(config, configRoot, new Set(["backups"]));
       return true;
     }
@@ -207,6 +208,27 @@ export function restoreConfigBackup(backupPath: string, homeDir: string = proces
     return true;
   } catch { return false; }
 }
+/** Keep permanent guard inodes even when rolling back to a backup without that store. */
+function removeRestoredObsoleteTree(target: string): void {
+  const stat = fs.lstatSync(target);
+  if (!stat.isDirectory()) { fs.unlinkSync(target); return; }
+  for (const name of fs.readdirSync(target)) {
+    if (name !== STATE_STORE_GUARD_FILE) removeRestoredObsoleteTree(path.join(target, name));
+  }
+  if (fs.readdirSync(target).length === 0) fs.rmdirSync(target);
+}
+
+/** New clients serialize task/session multi-file snapshots in a fixed lock order. */
+function withDurableStoreGuards<T>(homeDir: string, callback: () => T): T {
+  const tasks = path.join(homeDir, ".nexus", "tasks");
+  const sessions = path.join(homeDir, ".nexus", "sessions");
+  for (const directory of [tasks, sessions]) {
+    fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
+    if (fs.realpathSync(directory) !== path.resolve(directory)) throw new Error("State store is redirected");
+  }
+  return withStateStoreGuard(tasks, () => withStateStoreGuard(sessions, callback));
+}
+
 function validatePrivateTree(source: string): void {
   if (fs.realpathSync(source) !== path.resolve(source)) throw new Error("Backup path is redirected");
   const stat = fs.lstatSync(source);
@@ -219,7 +241,7 @@ function copyPrivateTree(source: string, destination: string, excluded = new Set
   if (fs.realpathSync(destination) !== path.resolve(destination)) throw new Error("Backup destination is redirected");
   fs.chmodSync(destination, 0o700);
   for (const entry of fs.readdirSync(source, { withFileTypes:true })) {
-    if (excluded.has(entry.name)) continue;
+    if (excluded.has(entry.name) || entry.name === STATE_STORE_GUARD_FILE) continue;
     const from = path.join(source, entry.name), to = path.join(destination, entry.name);
     if (entry.isDirectory()) copyPrivateTree(from, to);
     else {
@@ -232,9 +254,9 @@ function restorePrivateTree(source: string, destination: string, preserved = new
   if (fs.existsSync(destination)) validatePrivateTreeExcept(destination, preserved);
   copyPrivateTree(source, destination);
   for (const name of fs.readdirSync(destination)) {
-    if (preserved.has(name)) continue;
+    if (preserved.has(name) || name === STATE_STORE_GUARD_FILE) continue;
     const from = path.join(source, name), to = path.join(destination, name);
-    if (!fs.existsSync(from)) fs.rmSync(to, { recursive:true, force:true });
+    if (!fs.existsSync(from)) removeRestoredObsoleteTree(to);
     else if (fs.lstatSync(from).isDirectory()) restorePrivateTree(from, to);
   }
 }
@@ -258,52 +280,9 @@ export interface RecoveryOutcome {
  * power loss cannot wedge later upgrades, and no recursive takeover of a stale
  * gate directory is ever performed.
  */
-export interface ReclaimGuard {
-  path: string;
-  fd: number;
-}
+export type ReclaimGuard = FileGuard;
 
 const FLOCK_UTILITY = "/usr/bin/flock";
-const FLOCK_CONTENTION_EXIT = 75;
-
-/** Rejects a guard we do not solely own: wrong type, foreign owner, or permissive mode. */
-function validateGuardIdentity(guardPath: string, fd: number): void {
-  const self = fs.fstatSync(fd);
-  if (!self.isFile()) throw new Error("Reclaim guard is not a regular file");
-  if (typeof process.getuid === "function" && self.uid !== process.getuid()) throw new Error("Reclaim guard is not owned by the running user");
-  if ((self.mode & 0o077) !== 0) throw new Error(`Reclaim guard has unsafe permissions (${(self.mode & 0o777).toString(8)})`);
-  const current = fs.lstatSync(guardPath, { throwIfNoEntry:false });
-  if (!current?.isFile() || current.ino !== self.ino || current.dev !== self.dev) throw new Error("Reclaim guard path is redirected");
-}
-
-function openGuardFile(guardPath: string): number {
-  // Fail closed on platforms without no-follow/non-blocking open support.
-  if (fs.constants.O_NOFOLLOW === undefined || fs.constants.O_NONBLOCK === undefined) {
-    throw new Error("Reclaim guard requires O_NOFOLLOW/O_NONBLOCK open support");
-  }
-  let fd: number;
-  try {
-    // O_CREAT|O_EXCL never follows a symlink, so creation is race-free.
-    fd = fs.openSync(guardPath, fs.constants.O_RDWR | fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_NONBLOCK, 0o600);
-  } catch (error: any) {
-    if (error.code !== "EEXIST") throw error;
-    try {
-      // The kernel refuses to follow a symlinked path under O_NOFOLLOW (ELOOP)
-      // and O_NONBLOCK prevents any special file from blocking the open, so no
-      // check-to-open race exists; identity is then verified on the descriptor.
-      fd = fs.openSync(guardPath, fs.constants.O_RDWR | fs.constants.O_NONBLOCK | fs.constants.O_NOFOLLOW);
-    } catch (openError: any) {
-      if (openError.code === "ELOOP") throw new Error("Reclaim guard path is redirected");
-      throw openError;
-    }
-  }
-  try { validateGuardIdentity(guardPath, fd); }
-  catch (error) {
-    fs.closeSync(fd);
-    throw error;
-  }
-  return fd;
-}
 
 /**
  * Acquires the reclaim guard. Returns null on contention (another live
@@ -313,29 +292,11 @@ function openGuardFile(guardPath: string): number {
  * behavior without modifying the real system utility.
  */
 export function acquireReclaimGuard(guardPath: string, flockUtility: string = FLOCK_UTILITY): ReclaimGuard | null {
-  const fd = openGuardFile(guardPath);
-  try {
-    // The utility exits immediately; the lock persists on the shared open file
-    // description while this process keeps the descriptor open.
-    const probe = spawnSync(flockUtility, ["-n", "-E", String(FLOCK_CONTENTION_EXIT), "3"], { stdio:["ignore","ignore","ignore", fd], timeout: 2000 });
-    if (probe.error) throw new Error(`Reclaim guard utility ${flockUtility} is unavailable: ${probe.error.message}`);
-    if (probe.status === 0) return { path: guardPath, fd };
-    if (probe.status === FLOCK_CONTENTION_EXIT) {
-      // Contention is not ownership: close the descriptor so repeated busy
-      // recovery calls cannot leak it in a long-lived process.
-      fs.closeSync(fd);
-      return null;
-    }
-    throw new Error(`Reclaim guard acquisition failed (exit ${probe.status})`);
-  } catch (error) {
-    try { fs.closeSync(fd); } catch {}
-    throw error;
-  }
+  return acquireFileGuard(guardPath, { utility: flockUtility, label: "Reclaim guard" });
 }
 
 export function releaseReclaimGuard(guard: ReclaimGuard | null): void {
-  if (!guard) return;
-  try { fs.closeSync(guard.fd); } catch {}
+  releaseFileGuard(guard);
 }
 
 /**

@@ -116,3 +116,9 @@ Packaged CLI/TUI startup checks pending journals before normal execution. Explic
 ### Concurrent stale-lock reclamation
 
 When a recovery or upgrade observes a stale lock (dead holder PID), exactly one process may unlink and replace it. Serialization uses a permanent kernel-owned guard file `$PREFIX/lib/nexus/.upgrade.lock.guard` (never unlinked or replaced; accepted only as a regular file owned by the running user with no group/other permission bits): the reclaimer holds an advisory `flock` on the file's open file description for the whole reclaim section, acquired through `/usr/bin/flock` (util-linux; Linux runtime prerequisite) with exit status 75 distinguishing contention. The kernel drops the lock when the last referring descriptor closes, so a reclaimer killed by SIGKILL or power loss releases automatically instead of wedging later upgrades. If the flock utility or filesystem is unavailable, acquisition fails closed with a manual-intervention error rather than proceeding unserialized.
+
+### Durable state store coordination (schema 2)
+
+Task and session progress files refer to separate append-only message journals. Backup and rollback acquire both permanent state-store guards in a fixed order while copying or restoring these components. Guard files are omitted from snapshots and their existing inodes survive restore, including cleanup of directories absent from an older snapshot. This uses the same kernel-owned file guard as upgrade stale-lock recovery; it does not introduce a stale directory lock or unlink live guard files.
+
+Close older clients before migration or rollback. Older versions cannot participate in schema 2 store locking. A new client requires util-linux `/usr/bin/flock` for state transactions and fails closed when it is unavailable. A busy store stops a snapshot instead of producing a mixed progress/message backup.

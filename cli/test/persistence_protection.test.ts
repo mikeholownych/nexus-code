@@ -13,6 +13,12 @@ import { InformationFlowBoundary } from "../src/core/egress.js";
 import { writeProtectedTextFile } from "../src/core/persistence_protection.js";
 import { WorkspacePath } from "../src/core/workspace_path.js";
 
+/** Inspect every active schema2 component; migration backups retain exact old bytes separately. */
+function readActiveTaskBytes(primary: string): string {
+  const log = primary.replace(/\.json$/, ".messages.jsonl");
+  return fs.readFileSync(primary, "utf8") + (fs.existsSync(log) ? fs.readFileSync(log, "utf8") : "");
+}
+
 const syntheticGithubToken = `ghp_${"A".repeat(36)}`;
 const syntheticOpenAiToken = `sk-${"B".repeat(28)}`;
 const syntheticBearer = `Bearer ${"C".repeat(32)}`;
@@ -52,7 +58,7 @@ test("session persistence scrubs nested credential plaintext and keeps recoverab
 
     manager.saveSession(state);
     const filePath = path.join(sessionsDir, "pers002-task.json");
-    const persisted = fs.readFileSync(filePath, "utf8");
+    const persisted = readActiveTaskBytes(filePath);
 
     assert.equal(persisted.includes(syntheticGithubToken), false);
     assert.equal(persisted.includes(syntheticOpenAiToken), false);
@@ -98,7 +104,7 @@ test("loading an older plaintext session rewrites protected bytes before success
     const recovered = manager.loadSession("legacy-task");
     assert.ok(recovered);
     assert.match(recovered.messages[0].content as string, /REDACTED/);
-    const persisted = fs.readFileSync(path.join(sessionsDir, "legacy-task.json"), "utf8");
+    const persisted = readActiveTaskBytes(path.join(sessionsDir, "legacy-task.json"));
     assert.equal(persisted.includes(secret), false);
   } finally {
     fs.rmSync(tempDir, { recursive: true, force: true });
@@ -485,7 +491,7 @@ test("selected typed WorkspacePath survives durable serialization and restart re
       messages: [{ role: "user", content: "ordinary retained content" }],
     } as any);
 
-    const persisted = fs.readFileSync(path.join(stateDir, "typed-workspace-task.json"), "utf8");
+    const persisted = readActiveTaskBytes(path.join(stateDir, "typed-workspace-task.json"));
     assert.match(persisted, new RegExp(selectedWorkspace.value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
     assert.match(persisted, /ordinary retained content/);
 
@@ -630,7 +636,7 @@ test("typed WorkspacePath does not exempt arbitrary high-entropy message content
       validationReceipts: [],
       messages: [{ role: "user", content: `opaque payload ${syntheticPayload}` }],
     } as any);
-    const durable = fs.readFileSync(path.join(stateDir, "typed-payload-task.json"), "utf8");
+    const durable = readActiveTaskBytes(path.join(stateDir, "typed-payload-task.json"));
     assert.equal(durable.includes(syntheticPayload), false);
     assert.match(durable, /REDACTED/);
     assert.match(durable, /ordinary title/);
