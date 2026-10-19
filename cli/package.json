@@ -9,7 +9,7 @@
   },
   "scripts": {
     "build": "tsc && node scripts/write_build_info.mjs",
-    "test": "node scripts/run_tests.mjs",
+    "test": "node scripts/run_tests.mjs && bash ../scripts/terminal-acceptance/test-scope-procs.sh",
     "start": "node dist/index.js",
     "dev": "tsx watch src/index.ts"
   },
