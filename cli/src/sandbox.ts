@@ -1,4 +1,4 @@
-import { execSync } from "node:child_process";
+import { execFileSync } from "node:child_process";
 import * as path from "node:path";
 import * as fs from "node:fs";
 import * as os from "node:os";
@@ -33,7 +33,7 @@ export function quoteForShell(arg: string): string {
  */
 export function isBwrapAvailable(): boolean {
   try {
-    execSync("bwrap --version", { stdio: ["ignore", "ignore", "ignore"], timeout: 2000 });
+    execFileSync("bwrap", ["--version"], { stdio: ["ignore", "ignore", "ignore"], timeout: 2000 });
     return true;
   } catch {
     return false;
@@ -45,7 +45,7 @@ export function isBwrapAvailable(): boolean {
  */
 export function isDockerAvailable(): boolean {
   try {
-    execSync("docker --version", { stdio: ["ignore", "ignore", "ignore"], timeout: 2000 });
+    execFileSync("docker", ["--version"], { stdio: ["ignore", "ignore", "ignore"], timeout: 2000 });
     return true;
   } catch {
     return false;
@@ -70,7 +70,8 @@ function probeBwrapSandbox(): boolean {
     fs.writeFileSync(outside, "protected");
     const probe = wrapSandboxedCommand(`printf escaped > ${JSON.stringify(outside)}; printf writable > probe.txt`, workspace, { mode: "bwrap" });
     if (!probe.sandboxed) return false;
-    execSync(probe.command, { stdio: "ignore", timeout: 5000 });
+    if (!probe.argv?.length) return false;
+    execFileSync(probe.argv[0], probe.argv.slice(1), { stdio: "ignore", timeout: 5000 });
     return fs.readFileSync(outside, "utf8") === "protected"
       && fs.readFileSync(path.join(workspace, "probe.txt"), "utf8") === "writable";
   } catch {
@@ -89,7 +90,8 @@ function probeDockerSandbox(): boolean {
     fs.mkdirSync(workspace);
     const probe = wrapSandboxedCommand("printf writable > probe.txt", workspace, { mode: "docker" });
     if (!probe.sandboxed) return false;
-    execSync(probe.command, { stdio: "ignore", timeout: 15000 });
+    if (!probe.argv?.length) return false;
+    execFileSync(probe.argv[0], probe.argv.slice(1), { stdio: "ignore", timeout: 15000 });
     return fs.readFileSync(path.join(workspace, "probe.txt"), "utf8") === "writable";
   } catch {
     return false;
@@ -192,13 +194,25 @@ export function wrapSandboxedCommand(
       };
     }
 
-    const safeEscaped = cmd.replace(/'/g, "'\\''");
     const mountMode = options.readOnlyHost ? ":ro" : "";
-    const networkMode = options.network === false ? "--network none " : "";
-    const dockerCmd = `docker run --rm ${networkMode}-v "${absWorkspace}:${absWorkspace}${mountMode}" -w "${absWorkspace}" alpine:latest sh -c '${safeEscaped}'`;
+    const dockerArgs = [
+      "docker",
+      "run",
+      "--rm",
+      ...(options.network === false ? ["--network", "none"] : []),
+      "-v",
+      `${absWorkspace}:${absWorkspace}${mountMode}`,
+      "-w",
+      absWorkspace,
+      "alpine:latest",
+      "sh",
+      "-c",
+      cmd,
+    ];
 
     return {
-      command: dockerCmd,
+      command: dockerArgs.map(quoteForShell).join(" "),
+      argv: dockerArgs,
       sandboxed: true,
       engine: "docker",
     };
