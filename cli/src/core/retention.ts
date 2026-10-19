@@ -461,7 +461,7 @@ export function planRetention(options: RetentionPolicyOptions = {}): RetentionPl
   const maxSizeBytes = options.maxSizeBytes !== undefined ? options.maxSizeBytes : DEFAULT_RETENTION_MAX_SIZE_BYTES;
   const deadline = options.deadline !== undefined
     ? options.deadline
-    : (options.timeBudgetMs ? startTime + options.timeBudgetMs : undefined);
+    : (options.timeBudgetMs !== undefined ? startTime + options.timeBudgetMs : undefined);
 
   const nexusDir = path.join(home, ".nexus");
   const tasksDir = path.join(nexusDir, "tasks");
@@ -630,7 +630,7 @@ function executeRetentionLocked(plan: RetentionPlan, options: { dryRun?: boolean
   const dryRun = Boolean(options.dryRun);
   const deadline = options.deadline !== undefined
     ? options.deadline
-    : (options.timeBudgetMs ? startTime + options.timeBudgetMs : undefined);
+    : (options.timeBudgetMs !== undefined ? startTime + options.timeBudgetMs : undefined);
 
   let deletedCount = 0;
   let deletedBytes = 0;
@@ -767,7 +767,7 @@ export function runRetentionGc(options: RetentionPolicyOptions = {}): GcExecutio
   const startTime = Date.now();
   const deadline = options.deadline !== undefined
     ? options.deadline
-    : (options.timeBudgetMs ? startTime + options.timeBudgetMs : undefined);
+    : (options.timeBudgetMs !== undefined ? startTime + options.timeBudgetMs : undefined);
   const plan = planRetention({ ...options, deadline });
   const remainingBudgetMs = deadline !== undefined ? Math.max(0, deadline - Date.now()) : options.timeBudgetMs;
   const result = executeRetention(plan, { dryRun: options.dryRun, deadline, timeBudgetMs: remainingBudgetMs });
@@ -803,7 +803,7 @@ export function acknowledgeDailyGc(home: string = os.homedir()): GcState {
 /**
  * Background daily GC runner with first-run acknowledgement check (REQ-PER-102, DEC-11).
  */
-export async function maybeRunDailyGc(options: { home?: string; force?: boolean; timeBudgetMs?: number } = {}): Promise<{
+export async function maybeRunDailyGc(options: { home?: string; force?: boolean; timeBudgetMs?: number; deadline?: number } = {}): Promise<{
   status: "ran" | "already_ran_today" | "disabled" | "needs_acknowledgement";
   summary?: GcExecutionResult;
   notice?: string;
@@ -836,7 +836,7 @@ export async function maybeRunDailyGc(options: { home?: string; force?: boolean;
   }
 
   const budgetMs = options.timeBudgetMs ?? DEFAULT_AUTO_GC_TIME_BUDGET_MS;
-  const deadline = Date.now() + budgetMs;
+  const deadline = options.deadline !== undefined ? options.deadline : (Date.now() + budgetMs);
 
   // Run bounded GC (2 s default budget).
   // The stated 2s time budget bounds the expensive filesystem discovery, planning,
