@@ -137,3 +137,20 @@ test("new message logs and their directories remain private under a permissive u
     assert.equal(fs.statSync(path.dirname(file)).mode & 0o077, 0);
   } finally { process.umask(old); }
 }));
+
+test("decoded reuse still detects same-size ancestor tampering with an unchanged committed head", () => fixture(file => {
+  const first = appendTaskMessages(file, task, null, [], [message("one")]); assert.ok(first);
+  const next = appendTaskMessages(file, task, first, [message("one")], [message("one"), message("two")]); assert.ok(next);
+  assert.deepEqual(readTaskMessages(file, task, next), [message("one"), message("two")]);
+  const raw = fs.readFileSync(file); const at = raw.indexOf(Buffer.from('"content":"one"')); assert.ok(at >= 0);
+  Buffer.from('"content":"bad"').copy(raw, at); fs.writeFileSync(file, raw);
+  assert.throws(() => readTaskMessages(file, task, next), corrupt);
+}));
+
+test("decoded reuse is isolated from caller mutation and validates the complete cursor", () => fixture(file => {
+  const cursor = appendTaskMessages(file, task, null, [], [message("one")]); assert.ok(cursor);
+  const read = readTaskMessages(file, task, cursor); read[0].content = "mutated outside the store";
+  assert.deepEqual(readTaskMessages(file, task, cursor), [message("one")]);
+  assert.throws(() => readTaskMessages(file, task, { ...cursor, count: 2 }), corrupt);
+  assert.throws(() => readTaskMessages(file, "different-task", cursor), corrupt);
+}));

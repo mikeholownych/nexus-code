@@ -92,12 +92,12 @@ function parseDelta(bytes: Buffer, expectedTaskId: string): MessageDelta {
 }
 
 /** Find a displaced append without trusting or replaying other writers' records. */
-function locate(fd: number, cursor: TaskMessageCursor): { bytes: Buffer; offset: number } {
+function locate(fd: number, cursor: TaskMessageCursor, snapshot?: Buffer): { bytes: Buffer; offset: number } {
   checkCursor(cursor);
-  const size = fs.fstatSync(fd).size;
+  const size = snapshot?.length ?? fs.fstatSync(fd).size;
   if (cursor.offset <= size && cursor.bytes <= size - cursor.offset) {
-    const bytes = Buffer.alloc(cursor.bytes);
-    if (fs.readSync(fd, bytes, 0, bytes.length, cursor.offset) === bytes.length && digest(bytes) === cursor.sha256) {
+    const bytes = snapshot ? snapshot.subarray(cursor.offset, cursor.offset + cursor.bytes) : Buffer.alloc(cursor.bytes);
+    if ((snapshot || fs.readSync(fd, bytes, 0, bytes.length, cursor.offset) === bytes.length) && digest(bytes) === cursor.sha256) {
       return { bytes, offset: cursor.offset };
     }
   }
@@ -123,6 +123,11 @@ function locate(fd: number, cursor: TaskMessageCursor): { bytes: Buffer; offset:
   return corrupt("Committed message record is missing or its digest does not match");
 }
 
+// Keep one bounded decoded revision, never caller-owned mutable messages. Each
+// reuse first reads and hashes the entire small journal again: stat metadata or
+// a previously checked head alone cannot hide tampering with an ancestor.
+let decodedRevision: { file: string; taskId: string; cursor: string; fileDigest: string; messages: string } | undefined;
+
 export function readTaskMessages(file: string, taskId: string, cursor: TaskMessageCursor | null): ChatMessage[] {
   if (cursor === null) return [];
   checkCursor(cursor);
@@ -133,6 +138,27 @@ export function readTaskMessages(file: string, taskId: string, cursor: TaskMessa
     return corrupt("Committed message log cannot be read");
   }
   try {
+    // Small journals fit in a bounded snapshot. This avoids one fstat/read pair
+    // per ancestor while still authenticating every cursor and record digest.
+    // Larger histories retain bounded incremental reads rather than allocating
+    // an unbounded buffer from a file size controlled by the workspace.
+    const size = fs.fstatSync(fd).size;
+    let snapshot: Buffer | undefined;
+    if (size <= 8 * 1024 * 1024) {
+      snapshot = Buffer.alloc(size);
+      let read = 0;
+      while (read < size) {
+        const count = fs.readSync(fd, snapshot, read, size - read, read);
+        if (!count) corrupt("Message journal changed during recovery");
+        read += count;
+      }
+    }
+    const fileDigest = snapshot ? digest(snapshot) : undefined;
+    const cursorIdentity = JSON.stringify(cursor);
+    if (fileDigest && decodedRevision?.file === file && decodedRevision.taskId === taskId &&
+        decodedRevision.cursor === cursorIdentity && decodedRevision.fileDigest === fileDigest) {
+      return JSON.parse(decodedRevision.messages);
+    }
     const chain: Array<{ record: MessageDelta; cursor: TaskMessageCursor }> = [];
     const seen = new Set<string>();
     let current: TaskMessageCursor | null = cursor;
@@ -141,7 +167,7 @@ export function readTaskMessages(file: string, taskId: string, cursor: TaskMessa
       checkCursor(current);
       if (seen.has(current.sha256)) corrupt("Committed message ancestry contains a cycle");
       seen.add(current.sha256);
-      const located = locate(fd, current);
+      const located = locate(fd, current, snapshot);
       if (located.offset + located.bytes.length >= childOffset) corrupt("Committed message ancestry is out of order");
       childOffset = located.offset;
       const record = parseDelta(located.bytes, taskId);
@@ -155,6 +181,7 @@ export function readTaskMessages(file: string, taskId: string, cursor: TaskMessa
       messages = [...messages.slice(0, record.keep), ...record.append];
       if (messages.length !== committed.count) corrupt("Committed message count does not match its cursor");
     }
+    if (fileDigest) decodedRevision = { file, taskId, cursor: cursorIdentity, fileDigest, messages: JSON.stringify(messages) };
     return messages;
   } finally { fs.closeSync(fd); }
 }
@@ -169,6 +196,21 @@ export function appendTaskMessages(
   if (parent !== null && JSON.stringify(readTaskMessages(file, taskId, parent)) !== JSON.stringify(previous)) {
     corrupt("Previous messages do not match the committed conversation");
   }
+  return appendValidatedMessages(file, taskId, parent, previous, messages);
+}
+
+/** Load and authenticate the parent once when the caller has no prior history. */
+export function updateTaskMessages(
+  file: string, taskId: string, parent: TaskMessageCursor | null, messages: readonly ChatMessage[],
+): TaskMessageCursor | null {
+  const previous = readTaskMessages(file, taskId, parent);
+  return appendValidatedMessages(file, taskId, parent, previous, messages);
+}
+
+function appendValidatedMessages(
+  file: string, taskId: string, parent: TaskMessageCursor | null,
+  previous: readonly ChatMessage[], messages: readonly ChatMessage[],
+): TaskMessageCursor | null {
   let keep = 0;
   while (keep < previous.length && keep < messages.length && JSON.stringify(previous[keep]) === JSON.stringify(messages[keep])) keep++;
   if (keep === previous.length && keep === messages.length) return parent;

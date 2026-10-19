@@ -4,6 +4,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
 import { spawnSync, spawn } from "node:child_process";
+import { CURRENT_STATE_SCHEMA_VERSION } from "../src/core/state.js";
 import { verifyInstalledRuntime } from "../src/upgrade_health.js";
 import { writeJournal, readJournal, recoverUpgrade, createPreMigrationBackup, restoreConfigBackup, acquireReclaimGuard, UpgradeJournalEntry, RecoveryOutcome } from "../src/upgrade_journal.js";
 import * as http from "node:http";
@@ -278,7 +279,9 @@ describe("live transaction exceptions after each destructive boundary",()=>{
    runtime(install,"v1.0.0","previous-real-package");runtime(packageDir,"v1.0.0","replacement-package");
    fs.mkdirSync(path.join(prefix,"bin"));fs.symlinkSync(path.join(install,"bin/nexus"),path.join(prefix,"bin/nexus"));
    if (boundary === "installed_wrong_version") fs.writeFileSync(path.join(packageDir,"bin/nexus"), `#!/bin/sh\ncase "$0" in *.tmp-upgrade-*) echo v1.0.0;; *) echo v9.9.9;; esac\n`, { mode:0o755 });
-   fs.writeFileSync(path.join(packageDir,"compatibility.json"),JSON.stringify(generateCompatibilityMetadata("v1.0.0","deadbeef")));
+   const candidateMetadata = generateCompatibilityMetadata("v1.0.0","deadbeef");
+   candidateMetadata.compatibility.stateSchemaVersion = CURRENT_STATE_SCHEMA_VERSION;
+   fs.writeFileSync(path.join(packageDir,"compatibility.json"),JSON.stringify(candidateMetadata));
    const manifest=["VERSION","bin/nexus","lib/core/harness-core","lib/core/nexus-tui","lib/cli/dist/index.js","compatibility.json"].map(name=>crypto.createHash("sha256").update(fs.readFileSync(path.join(packageDir,name))).digest("hex")+"  "+name).join("\n");
    fs.writeFileSync(path.join(packageDir,"MANIFEST.sha256"),manifest);
    const archive=path.join(tmp,"package.tar.gz");assert.equal(spawnSync("tar",["-C",path.join(tmp,"stage"),"-czf",archive,"nexus"]).status,0);
@@ -315,4 +318,22 @@ describe("live transaction exceptions after each destructive boundary",()=>{
    }
   });
  }
+});
+
+it("rollback preserves permanent state guard inodes absent from an older snapshot", () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-rollback-guard-"));
+  try {
+    fs.mkdirSync(path.join(home, ".nexus"));
+    const backup = createPreMigrationBackup(home);
+    const taskGuard = path.join(home, ".nexus/tasks/.nexus-state.guard");
+    const before = fs.statSync(taskGuard).ino;
+    fs.mkdirSync(path.join(home, ".nexus/tasks/nested"));
+    const nestedGuard = path.join(home, ".nexus/tasks/nested/.nexus-state.guard");
+    fs.writeFileSync(nestedGuard, "", { mode: 0o600 }); const nestedInode = fs.statSync(nestedGuard).ino;
+    fs.writeFileSync(path.join(home, ".nexus/tasks/nested/obsolete"), "old");
+    assert.equal(restoreConfigBackup(backup.stateBackupDir!, home), true);
+    assert.equal(fs.statSync(taskGuard).ino, before);
+    assert.equal(fs.statSync(nestedGuard).ino, nestedInode);
+    assert.equal(fs.existsSync(path.join(home, ".nexus/tasks/nested/obsolete")), false);
+  } finally { fs.rmSync(home, { recursive: true, force: true }); }
 });

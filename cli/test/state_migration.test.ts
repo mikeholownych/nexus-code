@@ -35,7 +35,8 @@ describe("ACC-PER-04 & ACC-PER-07: State Compatibility, Migration & Corruption R
     fs.mkdirSync(sessionsDir, { recursive: true });
     fs.mkdirSync(testWsDir, { recursive: true });
     ws = WorkspacePath.fromSelectedWorkspace(testWsDir);
-    fixturesDir = path.resolve(__dirname, "fixtures", "state", "v1");
+    fixturesDir = path.join(tmpDir, "fixtures");
+    fs.cpSync(path.resolve(__dirname, "fixtures", "state", "v1"), fixturesDir, { recursive: true });
   });
 
   afterEach(() => {
@@ -66,7 +67,7 @@ describe("ACC-PER-04 & ACC-PER-07: State Compatibility, Migration & Corruption R
     const stateManager = new DurableStateManager({ baseDir: fixturesDir });
 
     const task = stateManager.loadTaskState("task-v1-valid");
-    assert.strictEqual(task.schemaVersion, 1);
+    assert.strictEqual(task.schemaVersion, CURRENT_STATE_SCHEMA_VERSION);
     assert.strictEqual(task.taskId, "task-v1-valid");
     assert.strictEqual(task.status, "completed");
     assert.strictEqual(task.activePlan.length, 1);
@@ -75,7 +76,7 @@ describe("ACC-PER-04 & ACC-PER-07: State Compatibility, Migration & Corruption R
     const sessionManager = new SessionManager(fixturesDir);
     const session = sessionManager.loadSession("session-v1-valid");
     assert.ok(session);
-    assert.strictEqual(session.schemaVersion, 1);
+    assert.strictEqual(session.schemaVersion, CURRENT_STATE_SCHEMA_VERSION);
     assert.strictEqual(session.id, "session-v1-valid");
     assert.strictEqual(session.messages.length, 2);
   });
