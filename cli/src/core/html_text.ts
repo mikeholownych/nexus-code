@@ -32,7 +32,20 @@ function findTagEnd(input: string, from: number): number {
   return input.indexOf(">", from);
 }
 
+/** Next closing tag whose name is exactly `tag` (a spec boundary follows the name). */
+function findRawTextClose(lower: string, tag: string, from: number): number {
+  const needle = `</${tag}`;
+  let at = lower.indexOf(needle, from);
+  while (at >= 0) {
+    const after = lower[at + needle.length];
+    if (after === undefined || after === ">" || after === "/" || /\s/.test(after)) return at;
+    at = lower.indexOf(needle, at + 1);
+  }
+  return -1;
+}
+
 export function htmlToText(input: string): string {
+  const lower = input.toLowerCase();
   let out = "";
   let i = 0;
   while (i < input.length) {
@@ -53,11 +66,10 @@ export function htmlToText(input: string): string {
     // Raw-text elements: drop the open tag, its contents, and its close tag.
     let dropped = false;
     for (const tag of RAW_TEXT_ELEMENTS) {
-      const openAt = next === "/" ? -1 : i + 1;
-      if (openAt < 0 || !matchesTagName(input, openAt, tag)) continue;
-      const openEnd = findTagEnd(input, openAt + tag.length);
+      if (next === "/" || !matchesTagName(input, i + 1, tag)) continue;
+      const openEnd = findTagEnd(input, i + 1);
       if (openEnd < 0) return collapse(out); // unterminated tag: drop the rest
-      const close = input.toLowerCase().indexOf(`</${tag}`, openEnd + 1);
+      const close = findRawTextClose(lower, tag, openEnd + 1);
       if (close < 0) return collapse(out); // unterminated element: drop the rest
       const closeEnd = findTagEnd(input, close + 2 + tag.length);
       i = closeEnd < 0 ? input.length : closeEnd + 1;

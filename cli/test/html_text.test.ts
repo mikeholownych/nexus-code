@@ -28,6 +28,21 @@ describe("htmlToText", () => {
     assert.equal(htmlToText("a<script>var x = '</script> here</script>b"), "a here b");
   });
 
+  it("does not accept a longer close-tag name as a raw-text close", () => {
+    assert.equal(htmlToText("a<script>drop</scriptx>b"), "a");
+    assert.equal(htmlToText("a<style>drop</styley>b"), "a");
+    // A boundary character (whitespace or /) after the exact name still closes.
+    assert.equal(htmlToText("a<script>keep</script >b"), "a b");
+    assert.equal(htmlToText("a<script>keep</script/>b"), "a b");
+  });
+
+  it("stays linear across many raw-text elements", () => {
+    const many = "<script>x</script>".repeat(20_000);
+    const started = Date.now();
+    htmlToText(many);
+    assert.ok(Date.now() - started < 1_000, "repeated elements must not degrade quadratically");
+  });
+
   it("cannot be reassembled by nested malformed tags", () => {
     const attacked = "<scr<script>ipt>alert(1)</script>";
     const result = htmlToText(attacked);

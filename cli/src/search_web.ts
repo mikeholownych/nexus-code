@@ -53,9 +53,10 @@ export async function executeWebSearch(
         const data = (await res.json()) as { results?: Array<{ title?: string; url?: string; content?: string }> };
         if (data.results && Array.isArray(data.results)) {
           const results = data.results.slice(0, maxResults).map((r) => ({
-            title: r.title || "Untitled",
+            // SearXNG has no markup-free output contract: extract like the HTML path.
+            title: (r.title && htmlToReadableText(r.title)) || "Untitled",
             url: r.url || "",
-            snippet: r.content || "",
+            snippet: r.content ? htmlToReadableText(r.content) : "",
           }));
           if (results.length > 0) {
             return { success: true, results };
