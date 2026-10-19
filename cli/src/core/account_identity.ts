@@ -113,8 +113,13 @@ function removeInterruptedKeyLink(file: string, keyStat: fs.Stats): void {
   for (const name of fs.readdirSync(dir)) {
     if (!name.startsWith(prefix)) continue;
     const candidate = path.join(dir, name);
-    const stat = fs.lstatSync(candidate);
-    if (stat.isFile() && stat.dev === keyStat.dev && stat.ino === keyStat.ino) fs.unlinkSync(candidate);
+    try {
+      const stat = fs.lstatSync(candidate);
+      if (stat.isFile() && stat.dev === keyStat.dev && stat.ino === keyStat.ino) fs.unlinkSync(candidate);
+    } catch (error: any) {
+      // Another reader may remove the same interrupted link after our readdir.
+      if (error?.code !== "ENOENT") throw error;
+    }
   }
 }
 
