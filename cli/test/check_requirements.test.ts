@@ -42,7 +42,7 @@ function rcEvidenceFixture(ledgerStatus = "tested") {
   fs.mkdirSync(evidenceRoot);
   fs.copyFileSync(script, repoScript);
   fs.writeFileSync(path.join(root, "docs", "v1.0.0", "ACCEPTANCE.md"), "| ACC-SAFE-01 | fixture acceptance |\n");
-  fs.writeFileSync(path.join(root, "docs", "v1.0.0", "DECISIONS.md"), "## DEC-99: Fixture scope decision\n");
+  fs.writeFileSync(path.join(root, "docs", "v1.0.0", "DECISIONS.md"), "## DEC-99: Fixture scope decision\n\n- Qualification applicability: REQ-SEC-101 = NOT REQUIRED (source-only).\n");
   fs.writeFileSync(path.join(root, "docs", "v1.0.0", "specs", "SPEC-01.md"), "| ACC-SAFE-01 | fixture |\n");
   fs.writeFileSync(ledgerPath, [
     "| ID | Source | Requirement | Rationale | Location | Evidence | Status | Acceptance | Class | Finding | Spec / Plan |",
@@ -61,6 +61,11 @@ function rcEvidenceFixture(ledgerStatus = "tested") {
   git("config", "user.email", "requirements-fixture@example.invalid");
   git("add", "scripts", "docs");
   git("commit", "--quiet", "-m", "fixture source");
+  const commitSource = () => {
+    git("add", "docs");
+    git("commit", "--quiet", "--allow-empty", "-m", "fixture source update");
+    return git("rev-parse", "HEAD");
+  };
   const sourceCommit = git("rev-parse", "HEAD");
   git("tag", "v1.0.0-rc.1");
 
@@ -99,6 +104,16 @@ function rcEvidenceFixture(ledgerStatus = "tested") {
   };
   fs.writeFileSync(recordPath, JSON.stringify(record));
 
+  const refreshCandidateIdentity = () => {
+    const nextCommit = commitSource();
+    git("tag", "--force", "v1.0.0-rc.1", nextCommit);
+    record.sourceCommit = nextCommit;
+    record.artifactProvenance.sourceCommit = nextCommit;
+    fs.writeFileSync(provenanceFile, JSON.stringify({ sourceCommit: nextCommit, artifactSha256: sha256(artifactPath) }));
+    record.artifactProvenance.sha256 = sha256(provenanceFile);
+    fs.writeFileSync(recordPath, JSON.stringify(record));
+  };
+
   const runFixture = (...args: string[]) => spawnSync(process.execPath, [repoScript, ...args], {
     cwd: root,
     encoding: "utf8",
@@ -110,7 +125,7 @@ function rcEvidenceFixture(ledgerStatus = "tested") {
     "--rc-artifact", artifactPath,
     "--evidence-root", evidenceRoot,
   ];
-  return { root, supportRoot, record, recordPath, artifactPath, evidenceRoot, sourceCommit, runFixture, enforcedArgs };
+  return { root, supportRoot, record, recordPath, artifactPath, evidenceRoot, sourceCommit, commitSource, refreshCandidateIdentity, runFixture, enforcedArgs };
 }
 
 // REQ-OPS-102 / ACC-GOV-01
@@ -179,6 +194,16 @@ test("a blocker marked tested needs a recorded, approved qualification exception
   fs.writeFileSync(fixture.recordPath, JSON.stringify(fixture.record));
   assert.equal(fixture.runFixture(...fixture.enforcedArgs).status, 0);
 
+  const genericDecision = rcEvidenceFixture();
+  genericDecision.record.requirements["REQ-SEC-101"].status = "tested";
+  genericDecision.record.requirements["REQ-SEC-101"].qualificationNotApplicable = {
+    reason: "A generic decision heading does not approve this requirement exception.",
+    decision: "DEC-99",
+  };
+  fs.writeFileSync(path.join(genericDecision.root, "docs", "v1.0.0", "DECISIONS.md"), "## DEC-99: Generic fixture decision\n");
+  genericDecision.refreshCandidateIdentity();
+  assert.match(genericDecision.runFixture(...genericDecision.enforcedArgs).stdout, /approved decision and qualification-not-applicable reason/);
+
   delete fixture.record.requirements["REQ-SEC-101"].qualificationNotApplicable.decision;
   fs.writeFileSync(fixture.recordPath, JSON.stringify(fixture.record));
   assert.match(fixture.runFixture(...fixture.enforcedArgs).stdout, /approved decision and qualification-not-applicable reason/);
@@ -211,6 +236,11 @@ test("exact-RC qualification evidence fails without independent acceptance or co
   fs.writeFileSync(caseVariantSelfReview.recordPath, JSON.stringify(caseVariantSelfReview.record));
   assert.match(caseVariantSelfReview.runFixture(...caseVariantSelfReview.enforcedArgs).stdout, /reviewer must be independent/);
 
+  const missingImplementers = rcEvidenceFixture();
+  missingImplementers.record.independentAcceptance.implementers = [];
+  fs.writeFileSync(missingImplementers.recordPath, JSON.stringify(missingImplementers.record));
+  assert.match(missingImplementers.runFixture(...missingImplementers.enforcedArgs).stdout, /identified implementers/);
+
   const missingRequirement = rcEvidenceFixture();
   missingRequirement.record.requirements = {};
   fs.writeFileSync(missingRequirement.recordPath, JSON.stringify(missingRequirement.record));
@@ -226,6 +256,21 @@ test("exact-RC qualification evidence fails without independent acceptance or co
   Object.assign(unresolvedNonBlocker.record.independentAcceptance, { defects: [{ id: "DEF-1", blocking: false }] });
   fs.writeFileSync(unresolvedNonBlocker.recordPath, JSON.stringify(unresolvedNonBlocker.record));
   assert.match(unresolvedNonBlocker.runFixture(...unresolvedNonBlocker.enforcedArgs).stdout, /non-blocking owner dispositions/);
+});
+
+test("exact-RC evidence covers every acceptance criterion listed on each required ledger row", () => {
+  const fixture = rcEvidenceFixture();
+  const secondAcc = "ACC-SAFE-02";
+  const acceptancePath = path.join(fixture.root, "docs", "v1.0.0", "ACCEPTANCE.md");
+  const specPath = path.join(fixture.root, "docs", "v1.0.0", "specs", "SPEC-01.md");
+  const ledgerPath = path.join(fixture.root, "docs", "v1.0.0", "REQUIREMENTS.md");
+  fs.appendFileSync(acceptancePath, `| ${secondAcc} | second fixture acceptance |\n`);
+  fs.appendFileSync(specPath, `| ${secondAcc} | fixture |\n`);
+  fs.writeFileSync(ledgerPath, fs.readFileSync(ledgerPath, "utf8").replace("ACC-SAFE-01 | **B**", "ACC-SAFE-01 to ACC-SAFE-02 | **B**"));
+  fixture.refreshCandidateIdentity();
+  fixture.record.requirements["REQ-SEC-101"].evidence.push(fixture.record.requirements["REQ-SEC-101"].evidence[0]);
+  fs.writeFileSync(fixture.recordPath, JSON.stringify(fixture.record));
+  assert.match(fixture.runFixture(...fixture.enforcedArgs).stdout, /must cover every acceptance criterion/);
 });
 
 test("exact-RC qualification evidence rejects symlinked evidence files", () => {

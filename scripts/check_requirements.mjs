@@ -40,6 +40,25 @@ function testExists(file, name) {
   return fs.existsSync(p) && read(p).includes(name);
 }
 
+function acceptanceIds(value) {
+  const ids = new Set(value.match(/ACC-[A-Z0-9]+-[A-Z0-9]+/g) ?? []);
+  const ranges = /ACC-([A-Z0-9]+)-(\d+)\s+to\s+ACC-\1-(\d+)/g;
+  for (const [, family, first, last] of value.matchAll(ranges)) {
+    for (let number = Number(first); number <= Number(last); number++) ids.add(`ACC-${family}-${String(number).padStart(first.length, "0")}`);
+  }
+  return [...ids];
+}
+
+function decisionSection(decision) {
+  if (typeof decision !== "string" || !/^DEC-\d{2}$/.test(decision)) return "";
+  const heading = new RegExp(`^## ${decision}:[^\\n]*`, "m").exec(decisions);
+  if (!heading) return "";
+  const start = heading.index + heading[0].length;
+  const remaining = decisions.slice(start);
+  const nextHeading = /^## /m.exec(remaining);
+  return remaining.slice(0, nextHeading ? nextHeading.index : remaining.length);
+}
+
 const RANK = { open: 0, partial: 1, implemented: 2, tested: 3, "visually-accepted": 4, "product-qualified": 5 };
 const problems = [];
 const counts = {};
@@ -61,7 +80,7 @@ for (const line of read(ledgerPath).split("\n")) {
   const required = blocking || /^RR\b/.test(cls);
   rows++;
   counts[status] = (counts[status] ?? 0) + 1;
-  if (required) requiredRows.set(id, { id, blocking, status, line });
+  if (required) requiredRows.set(id, { id, blocking, status, acceptanceIds: acceptanceIds(acc), line });
   for (const accId of line.match(/ACC-[A-Z0-9]+-[A-Z0-9]+/g) ?? []) {
     if (!accDefined(accId)) problems.push(`${id}: ${accId} is not defined in any spec or ACCEPTANCE.md`);
   }
@@ -147,7 +166,7 @@ if (qualificationMode && (!enforce || qualificationArg < 0 || artifactArg < 0 ||
       const acceptance = record.independentAcceptance;
       const reviewer = typeof acceptance?.reviewer === "string" ? acceptance.reviewer.trim().toLocaleLowerCase("en-US") : "";
       const implementers = Array.isArray(acceptance?.implementers) ? acceptance.implementers : [];
-      if (!acceptance || !["ACCEPT", "ACCEPT WITH DEFECTS"].includes(acceptance.disposition) || !reviewer || !Array.isArray(acceptance.implementers) || implementers.some((person) => typeof person !== "string" || !person.trim()) || implementers.some((person) => person.trim().toLocaleLowerCase("en-US") === reviewer)) throw new Error("independent acceptance reviewer must be independent of implementers");
+      if (!acceptance || !["ACCEPT", "ACCEPT WITH DEFECTS"].includes(acceptance.disposition) || !reviewer || !Array.isArray(acceptance.implementers) || implementers.length === 0 || implementers.some((person) => typeof person !== "string" || !person.trim()) || implementers.some((person) => person.trim().toLocaleLowerCase("en-US") === reviewer)) throw new Error("independent acceptance reviewer must be independent of identified implementers");
       if (!Number.isInteger(acceptance.blockingDefects) || acceptance.blockingDefects !== 0) throw new Error("independent acceptance has unresolved blocker defects");
       const defects = acceptance.defects ?? [];
       if (!Array.isArray(defects) || (acceptance.disposition === "ACCEPT" && defects.length > 0) || (acceptance.disposition === "ACCEPT WITH DEFECTS" && defects.length === 0) || defects.some((defect) => typeof defect.id !== "string" || !defect.id.trim() || defect.blocking !== false || typeof defect.ownerDisposition !== "string" || !defect.ownerDisposition.trim())) throw new Error("independent acceptance defects need IDs and non-blocking owner dispositions");
@@ -163,12 +182,15 @@ if (qualificationMode && (!enforce || qualificationArg < 0 || artifactArg < 0 ||
         if (!Object.hasOwn(RANK, evidence.status) || RANK[evidence.status] < RANK.tested) throw new Error(`${id}: qualification status is below tested`);
         if (row.blocking && evidence.status !== "product-qualified") {
           const decision = evidence.qualificationNotApplicable?.decision;
-          const decisionExists = typeof decision === "string" && /^DEC-\d{2}$/.test(decision) && new RegExp(`^## ${decision}:`, "m").test(decisions);
+          const decisionExists = new RegExp(`^\\s*[-*]\\s*Qualification applicability:\\s*${id}\\s*=\\s*NOT REQUIRED\\b`, "m").test(decisionSection(decision));
           if (evidence.status !== "tested" || typeof evidence.qualificationNotApplicable?.reason !== "string" || !evidence.qualificationNotApplicable.reason.trim() || !decisionExists) throw new Error(`${id}: blocker must be product-qualified or tested with an approved decision and qualification-not-applicable reason`);
         }
         if (!Array.isArray(evidence.evidence) || evidence.evidence.length === 0) throw new Error(`${id}: qualification evidence references are required`);
+        const requiredAccs = row.acceptanceIds;
+        const evidenceAccs = evidence.evidence.map((ref) => ref?.id);
+        if (requiredAccs.length === 0 || requiredAccs.some((accId) => !evidenceAccs.includes(accId)) || evidenceAccs.some((accId) => !requiredAccs.includes(accId))) throw new Error(`${id}: qualification evidence must cover every acceptance criterion on its ledger row`);
         for (const ref of evidence.evidence) {
-          if (typeof ref?.id !== "string" || !/^ACC-[A-Z0-9]+-[A-Z0-9]+$/.test(ref.id) || !row.line.includes(ref.id)) throw new Error(`${id}: evidence must cite an acceptance criterion on its ledger row`);
+          if (typeof ref?.id !== "string" || !/^ACC-[A-Z0-9]+-[A-Z0-9]+$/.test(ref.id) || !row.acceptanceIds.includes(ref.id)) throw new Error(`${id}: evidence must cite an acceptance criterion on its ledger row`);
           const file = evidenceFile(evidenceRoot, ref.path, `${id} evidence`);
           if (!file || typeof ref.sha256 !== "string" || !/^[a-f0-9]{64}$/.test(ref.sha256) || sha256(file) !== ref.sha256) throw new Error(`${id}: evidence digest is missing or does not match`);
         }

@@ -29,6 +29,8 @@ The release sequence has five distinct stages. Passing an earlier stage is a pre
 
 The final G6 decision in §10 applies to promoting the accepted RC toward a stable release. It requires the applicable gates to pass for the accepted RC and authorizes the version-only stable commit and its source checks, followed by the stable tag and draft build; it does not waive source CI, artifact identity, installed-RC qualification, or any threshold. Public publication is a separate post-build gate in stage 5 above. The release workflow must keep stable assets in draft state until stable artifact checks pass. Source verification at integration 6a16cb6 confirms the tag-triggered release workflow now supports published RC prereleases and draft stable releases. The earlier immediate-stable-publication source blocker is resolved; an actual stable draft build, artifact verification, signed acceptance, and deliberate publication are still required and remain unproven until their run evidence is recorded.
 
+Exact-RC requirements records identify at least one implementer and an independent reviewer. For a blocking requirement recorded as `tested` instead of `product-qualified`, the cited `DECISIONS.md` section must contain a requirement-specific line of the form `Qualification applicability: REQ-... = NOT REQUIRED ...`; a decision heading or free-form rationale alone does not authorize an exception. The record must include digest-bound evidence for every `ACC-*` criterion in that requirement's ledger Acceptance column.
+
 ## 1. Rules
 
 1. The RC is built and published by the release workflow from a clean tag. Its version is identical across all components (REQ-REL-103).
