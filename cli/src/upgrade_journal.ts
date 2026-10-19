@@ -341,11 +341,11 @@ export function recoverUpgrade(prefix: string, options: { forceRollback?: boolea
         }
         try {
           const currentStat = fs.lstatSync(lock, { throwIfNoEntry:false });
-          if (currentStat && currentStat.ino !== staleIno) return inProgress;
-          if (currentStat) {
+          if (!currentStat || currentStat.ino !== staleIno) return inProgress;
+          try {
             if (JSON.parse(fs.readFileSync(lock, "utf8")).pid !== holder.pid) return inProgress;
-            fs.unlinkSync(lock);
-          }
+          } catch { return inProgress; }
+          fs.unlinkSync(lock);
           acquire();
         } finally { releaseReclaimGuard(guard); }
       }

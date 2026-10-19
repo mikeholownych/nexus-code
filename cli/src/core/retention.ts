@@ -501,6 +501,10 @@ export function planRetention(options: RetentionPolicyOptions = {}): RetentionPl
   // Case 1: --only-test-pollution
   if (options.onlyTestPollution) {
     for (const item of allItems) {
+      if (deadline && Date.now() >= deadline) {
+        timedOut = true;
+        break;
+      }
       if (item.testPollution && !item.pinned && !item.current) {
         item.reason = "test_pollution";
         reclaimable.push(item);
@@ -513,6 +517,10 @@ export function planRetention(options: RetentionPolicyOptions = {}): RetentionPl
 
     // Phase A: Expired by age
     for (const item of allItems) {
+      if (deadline && Date.now() >= deadline) {
+        timedOut = true;
+        break;
+      }
       if (item.pinned || item.current) continue;
       if (item.mtimeMs < cutoffAgeMs) {
         item.reason = "expired_age";
@@ -525,18 +533,28 @@ export function planRetention(options: RetentionPolicyOptions = {}): RetentionPl
     let survivingBytes = 0;
     const survivingCandidates: RetentionItem[] = [];
 
-    for (const item of allItems) {
-      if (reclaimableSet.has(item.primaryFile)) continue;
-      survivingBytes += item.sizeBytes;
-      if (!item.pinned && !item.current) {
-        survivingCandidates.push(item);
+    if (!timedOut) {
+      for (const item of allItems) {
+        if (deadline && Date.now() >= deadline) {
+          timedOut = true;
+          break;
+        }
+        if (reclaimableSet.has(item.primaryFile)) continue;
+        survivingBytes += item.sizeBytes;
+        if (!item.pinned && !item.current) {
+          survivingCandidates.push(item);
+        }
       }
     }
 
-    if (survivingBytes > maxSizeBytes) {
+    if (!timedOut && survivingBytes > maxSizeBytes) {
       // Sort oldest first
       survivingCandidates.sort((a, b) => a.mtimeMs - b.mtimeMs);
       for (const item of survivingCandidates) {
+        if (deadline && Date.now() >= deadline) {
+          timedOut = true;
+          break;
+        }
         if (survivingBytes <= maxSizeBytes) break;
         item.reason = "size_cap_exceeded";
         reclaimable.push(item);
@@ -555,6 +573,10 @@ export function planRetention(options: RetentionPolicyOptions = {}): RetentionPl
 
   let reclaimableBytes = 0;
   for (const item of reclaimable) {
+    if (deadline && Date.now() >= deadline) {
+      timedOut = true;
+      break;
+    }
     reclaimableBytes += item.sizeBytes;
     byKind[item.kind].count++;
     byKind[item.kind].bytes += item.sizeBytes;
@@ -781,7 +803,7 @@ export function acknowledgeDailyGc(home: string = os.homedir()): GcState {
 /**
  * Background daily GC runner with first-run acknowledgement check (REQ-PER-102, DEC-11).
  */
-export async function maybeRunDailyGc(options: { home?: string; force?: boolean } = {}): Promise<{
+export async function maybeRunDailyGc(options: { home?: string; force?: boolean; timeBudgetMs?: number } = {}): Promise<{
   status: "ran" | "already_ran_today" | "disabled" | "needs_acknowledgement";
   summary?: GcExecutionResult;
   notice?: string;
@@ -813,11 +835,20 @@ export async function maybeRunDailyGc(options: { home?: string; force?: boolean 
     }
   }
 
-  // Run bounded GC (2 s budget)
+  const budgetMs = options.timeBudgetMs ?? DEFAULT_AUTO_GC_TIME_BUDGET_MS;
+  const deadline = Date.now() + budgetMs;
+
+  // Run bounded GC (2 s default budget).
+  // The stated 2s time budget bounds the expensive filesystem discovery, planning,
+  // and deletion workload in runRetentionGc. Daily GC summary persistence (setGcState)
+  // intentionally executes immediately after the bounded run to commit the run timestamp
+  // and execution metrics. This prevents repeated GC passes on the same day when a pass
+  // reaches its deadline.
   const result = runRetentionGc({
     home,
     dryRun: false,
-    timeBudgetMs: DEFAULT_AUTO_GC_TIME_BUDGET_MS,
+    deadline,
+    timeBudgetMs: budgetMs,
   });
 
   gcState.lastRunAt = new Date().toISOString();
