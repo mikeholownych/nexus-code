@@ -36,6 +36,8 @@ export interface ResourceDescriptor {
   pool?: string;
   /** Credential identity label (a fingerprint, never the secret). */
   account?: string;
+  /** Distinguishes caller-provided account labels from credential-derived legacy hashes during migration. */
+  accountIdentitySource?: "explicit" | "credential";
   apiKeyEnv?: string;
   /** Cloud provider id (providers.ts); the endpoint is then that provider's base URL and its key its own. */
   providerId?: string;
