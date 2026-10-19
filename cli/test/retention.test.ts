@@ -13,6 +13,7 @@ import {
   maybeRunDailyGc,
   acknowledgeDailyGc,
   getGcState,
+  scanTasks,
 } from "../src/core/retention.js";
 
 function tmp(prefix: string): string {
@@ -371,6 +372,55 @@ describe("PLAN-08 PR-8c: Persistence retention, GC, and indexed sessions (REQ-PE
       // Next call within 24h respects lastRunAt and does not re-run
       const res2 = await maybeRunDailyGc({ home: testHome });
       assert.equal(res2.status, "already_ran_today");
+    } finally {
+      fs.rmSync(testHome, { recursive: true, force: true });
+    }
+  });
+
+  test("Planning: bounded metadata streaming respects deadline and preserves pin protection on large legacy state envelopes", () => {
+    const testHome = tmp("large-envelope-home-");
+    try {
+      const tasksDir = path.join(testHome, ".nexus", "tasks");
+      fs.mkdirSync(tasksDir, { recursive: true, mode: 0o700 });
+      const oldTime = new Date(Date.now() - 40 * 24 * 60 * 60 * 1000);
+
+      // Create a 2 MB legacy task with inline messages and pinned: true after messages
+      const largeTaskId = "task-large-legacy";
+      const primary = path.join(tasksDir, `${largeTaskId}.json`);
+      const hugeMessages = [{ role: "user", content: "m".repeat(2 * 1024 * 1024) }];
+      fs.writeFileSync(primary, JSON.stringify({
+        schemaVersion: 1,
+        taskId: largeTaskId,
+        messages: hugeMessages,
+        pinned: true,
+        workspace: "/tmp/fake-workspace",
+      }));
+      fs.utimesSync(primary, oldTime, oldTime);
+
+      // Scan tasks directly: verify pinned status is discovered without buffering entire file or throwing
+      const scanRes = scanTasks(tasksDir, false, undefined);
+      assert.equal(scanRes.timedOut, false);
+      const largeItem = scanRes.items.find((i) => i.id === largeTaskId);
+      assert.ok(largeItem, "Large task must be scanned");
+      assert.equal(largeItem.pinned, true, "Pinned status must be preserved");
+
+      // Normal plan: verify planRetention accounts for the item and protects it from reclamation
+      const plan = planRetention({
+        home: testHome,
+        maxAgeDays: 30,
+      });
+      assert.equal(plan.timedOut, false);
+      assert.equal(plan.totalScannedCount, 1);
+      assert.equal(plan.reclaimableCount, 0, "Pinned item must NOT be reclaimable");
+      assert.equal(plan.reclaimableItems.some((i) => i.id === largeTaskId), false, "Pinned item must NOT be reclaimable");
+
+      // Expired deadline: verify planning yields immediately
+      const timedOutPlan = planRetention({
+        home: testHome,
+        deadline: Date.now() - 1,
+        maxAgeDays: 30,
+      });
+      assert.equal(timedOutPlan.timedOut, true, "Must preempt on expired deadline");
     } finally {
       fs.rmSync(testHome, { recursive: true, force: true });
     }

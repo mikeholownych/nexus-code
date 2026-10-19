@@ -157,6 +157,156 @@ function orphanCompanions(
   return { items, timedOut: false };
 }
 
+interface EnvelopeMetadata {
+  workspace?: string;
+  pinned: boolean;
+  sessionId?: string;
+  taskId?: string;
+  id?: string;
+}
+
+const MAX_DIRECT_ENVELOPE_READ_BYTES = 64 * 1024; // 64 KiB
+const MAX_SCAN_CHUNK_BYTES = 64 * 1024; // 64 KiB
+
+function readEnvelopeMetadata(
+  filePath: string,
+  stat: fs.Stats,
+  deadline?: number
+): { metadata: EnvelopeMetadata; timedOut: boolean } {
+  if (deadline && Date.now() >= deadline) {
+    return { metadata: { pinned: false }, timedOut: true };
+  }
+
+  // Fast path for small, standard envelopes (<= 64 KiB, which covers all schema-2 envelopes).
+  if (stat.size <= MAX_DIRECT_ENVELOPE_READ_BYTES) {
+    try {
+      const raw = fs.readFileSync(filePath, "utf8");
+      const parsed = JSON.parse(raw);
+      return {
+        metadata: {
+          workspace: typeof parsed.workspacePath === "string" ? parsed.workspacePath : (typeof parsed.workspace === "string" ? parsed.workspace : undefined),
+          pinned: Boolean(parsed.pinned),
+          sessionId: typeof parsed.sessionId === "string" ? parsed.sessionId : undefined,
+          taskId: typeof parsed.taskId === "string" ? parsed.taskId : undefined,
+          id: typeof parsed.id === "string" ? parsed.id : undefined,
+        },
+        timedOut: false,
+      };
+    } catch {
+      return { metadata: { pinned: false }, timedOut: false };
+    }
+  }
+
+  // Bounded streaming scanner for large legacy/unmigrated files.
+  // Avoids buffering multi-megabyte inline messages or allocating memory proportional to file size.
+  let fd: number | undefined;
+  let timedOut = false;
+  const result: EnvelopeMetadata = { pinned: false };
+  const buf = Buffer.alloc(MAX_SCAN_CHUNK_BYTES);
+
+  try {
+    fd = fs.openSync(filePath, "r");
+    let depth = 0;
+    let inString = false;
+    let escaped = false;
+    let key = "";
+    let inKey = false;
+    let afterColon = false;
+    let val = "";
+    let inValString = false;
+
+    while (true) {
+      if (deadline && Date.now() >= deadline) {
+        timedOut = true;
+        break;
+      }
+      const bytesRead = fs.readSync(fd, buf, 0, buf.length, null);
+      if (bytesRead === 0) break;
+
+      for (let i = 0; i < bytesRead; i++) {
+        const byte = buf[i];
+        if (inString) {
+          if (escaped) {
+            escaped = false;
+            if (inKey && key.length < 64) key += String.fromCharCode(byte);
+            else if (inValString && val.length < 4096) val += String.fromCharCode(byte);
+          } else if (byte === 92) { // \
+            escaped = true;
+          } else if (byte === 34) { // "
+            inString = false;
+            if (inKey) {
+              inKey = false;
+              afterColon = false;
+            } else if (inValString) {
+              inValString = false;
+              if (key === "workspace" || key === "workspacePath") result.workspace = val;
+              else if (key === "sessionId") result.sessionId = val;
+              else if (key === "taskId") result.taskId = val;
+              else if (key === "id") result.id = val;
+              key = "";
+              val = "";
+            }
+          } else {
+            if (inKey && key.length < 64) key += String.fromCharCode(byte);
+            else if (inValString && val.length < 4096) val += String.fromCharCode(byte);
+          }
+          continue;
+        }
+
+        if (byte === 34) { // "
+          inString = true;
+          if (depth === 1 && !afterColon) {
+            inKey = true;
+            key = "";
+          } else if (depth === 1 && afterColon) {
+            inValString = true;
+            val = "";
+          }
+          continue;
+        }
+
+        if (byte === 123 || byte === 91) { // { or [
+          depth++;
+          continue;
+        }
+        if (byte === 125 || byte === 93) { // } or ]
+          depth--;
+          if (depth === 0) break;
+          continue;
+        }
+
+        if (depth === 1) {
+          if (byte === 58) { // :
+            afterColon = true;
+          } else if (byte === 44) { // ,
+            afterColon = false;
+            key = "";
+          } else if (afterColon && key === "pinned") {
+            if (byte === 116) { // 't' in true
+              result.pinned = true;
+              afterColon = false;
+              key = "";
+            } else if (byte === 102) { // 'f' in false
+              result.pinned = false;
+              afterColon = false;
+              key = "";
+            }
+          }
+        }
+      }
+      if (depth === 0) break;
+    }
+  } catch {
+    // Read errors retain existing defaults
+  } finally {
+    if (fd !== undefined) {
+      try { fs.closeSync(fd); } catch {}
+    }
+  }
+
+  return { metadata: result, timedOut };
+}
+
 export function scanTasks(tasksDir: string, checkTestPollution: boolean = false, deadline?: number, currentSessionId?: string): { items: RetentionItem[]; timedOut: boolean } {
   const items: RetentionItem[] = [];
   let timedOut = false;
@@ -185,13 +335,15 @@ export function scanTasks(tasksDir: string, checkTestPollution: boolean = false,
       let isPollution = false;
       let ws: string | undefined;
       let pinned = false, current = currentSessionId === cleanId;
-      try {
-        const metadata = JSON.parse(fs.readFileSync(fullPath, "utf8"));
-        ws = metadata.workspacePath || metadata.workspace;
-        pinned = Boolean(metadata.pinned);
-        current ||= Boolean(currentSessionId && currentSessionId === (metadata.sessionId || metadata.id));
-        isPollution = checkTestPollution && isTestPollutionPath(ws);
-      } catch { /* Invalid records retain the existing age/size policy. */ }
+      const { metadata, timedOut: readTimedOut } = readEnvelopeMetadata(fullPath, stat, deadline);
+      if (readTimedOut) {
+        timedOut = true;
+        break;
+      }
+      ws = metadata.workspace;
+      pinned = metadata.pinned;
+      current ||= Boolean(currentSessionId && currentSessionId === (metadata.sessionId || metadata.id));
+      isPollution = checkTestPollution && isTestPollutionPath(ws);
 
       items.push({
         kind: "task",
@@ -249,9 +401,13 @@ export function scanSessions(
 
           // Cached pin/workspace/identity fields are advisory: expiry must use
           // the current envelope even if an index timestamp appears newer.
-          const metadata = JSON.parse(fs.readFileSync(primaryFile, "utf8"));
+          const { metadata, timedOut: readTimedOut } = readEnvelopeMetadata(primaryFile, stat, deadline);
+          if (readTimedOut) {
+            timedOut = true;
+            break;
+          }
           const actualId = metadata.sessionId || metadata.taskId || metadata.id || cleanId;
-          const workspace = metadata.workspacePath || metadata.workspace;
+          const workspace = metadata.workspace;
           knownFromIndex.add(cleanId);
           const companion = companions.records.get(cleanId);
           const associatedFiles = companion?.files ?? [];
@@ -268,7 +424,7 @@ export function scanSessions(
             workspace,
             sizeBytes: stat.size + (companion?.bytes ?? 0),
             mtimeMs: stat.mtimeMs,
-            pinned: Boolean(metadata.pinned),
+            pinned: metadata.pinned,
             current: isCurrent,
             testPollution: isPollution,
           });
@@ -295,17 +451,14 @@ export function scanSessions(
       const companion = companions.records.get(cleanId);
       const associatedFiles = companion?.files ?? [];
 
-      let ws: string | undefined;
-      let pinned = false;
-      let realId = cleanId;
-
-      try {
-        const content = fs.readFileSync(fullPath, "utf8");
-        const data = JSON.parse(content);
-        realId = data.sessionId || data.taskId || data.id || cleanId;
-        ws = data.workspacePath || data.workspace;
-        pinned = Boolean(data.pinned);
-      } catch {}
+      const { metadata, timedOut: readTimedOut } = readEnvelopeMetadata(fullPath, stat, deadline);
+      if (readTimedOut) {
+        timedOut = true;
+        break;
+      }
+      const realId = metadata.sessionId || metadata.taskId || metadata.id || cleanId;
+      const ws = metadata.workspace;
+      const pinned = metadata.pinned;
 
       const isCurrent = Boolean(currentSessionId && (currentSessionId === cleanId || currentSessionId === realId));
       const isPollution = checkTestPollution ? isTestPollutionPath(ws) : false;
