@@ -17,11 +17,11 @@ import { connectWithKey, disconnect, startSignIn } from "./provider_connect.js";
 export function describeTarget(config: HarnessConfig): string {
   const target = (provider: string | undefined, endpoint: string, model: string) => {
     // Endpoint paths, userinfo, query strings and model ids are operator-controlled environment/config values.
-    // Show only the parsed origin and whether a model is configured; never echo the raw setting to a terminal.
+    // Show only the parsed origin and a model id that passes the display allowlist.
     const origin = originOf(endpoint);
     const label = provider ? PROVIDERS[provider]?.label ?? "Cloud provider" : "Local endpoint";
     const where = origin ? `${label} (${origin})` : `${label} (endpoint unavailable)`;
-    return `${where} · ${model ? "model configured" : "no model"} · ${disclosureClass(endpoint, provider, config.cloudRoutedOrigins)}`;
+    return `${where} · ${model ? safeModelId(model) : "no model"} · ${disclosureClass(endpoint, provider, config.cloudRoutedOrigins)}`;
   };
   const parts = [`main: ${target(config.provider, config.endpoint, config.model)}`];
   if (config.plannerModel) {
@@ -35,15 +35,63 @@ export function describeTarget(config: HarnessConfig): string {
   return `[nexus] Inference — ${parts.join(" | ")}`;
 }
 
+function safeProviderId(value: string | undefined): string | undefined {
+  return value && Object.prototype.hasOwnProperty.call(PROVIDERS, value) ? value : value ? "(unrecognized provider)" : undefined;
+}
+
+function safeModelId(value: string): string {
+  // Provider/model identifiers may contain routing punctuation, but not whitespace, controls or arbitrary diagnostics.
+  return /^[A-Za-z0-9._:\/@+-]{1,160}$/.test(value) ? value : "(unprintable model id)";
+}
+
+const SAFE_FAILURE_KINDS = new Set([
+  "http_error", "network_error", "timeout", "stream_interrupted", "stream_incomplete", "provider_error_frame",
+  "malformed_event", "output_truncated", "protocol_error", "aborted", "policy_denied", "configuration_error", "verification_error",
+]);
+const SAFE_FAILURE_CONDITIONS = new Set([
+  "TEMPORARILY_UNAVAILABLE", "RATE_LIMITED", "OVERLOADED", "DRAINING", "AUTH_FAILURE", "QUOTA_EXHAUSTED",
+  "CAPACITY_REJECTED", "REQUEST_REJECTED", "PERMANENT_FAILURE", "AVAILABLE",
+]);
+
+function safeStepDetail(ok: boolean, detail: string): string {
+  if (!ok) return detail === "Provider request failed" ? detail : "Verification failed";
+  if (/^streamed completion received \(\d+ chars\)$/.test(detail)) return detail;
+  if (/^echo_token tool call completed \(\d+ call\(s\)\)$/.test(detail)) return detail;
+  return detail === "tool result round trip completed" ? detail : "Verification succeeded";
+}
+
 /** A credential-safe JSON projection for `providers verify --json`; raw provider diagnostics are deliberately omitted. */
-export function verificationSummary(steps: readonly VerificationStep[], receipts: readonly import("./usage.js").InferenceReceipt[]) {
+export function verificationSummary(
+  steps: readonly VerificationStep[],
+  receipts: readonly import("./usage.js").InferenceReceipt[],
+  target?: Pick<HarnessConfig, "provider" | "model">,
+) {
+  const provider = safeProviderId(target?.provider ?? receipts[0]?.providerId);
+  const model = target?.model ?? receipts[0]?.selectedModel;
   return {
     passed: steps.length === 3 && steps.every((step) => step.ok),
-    steps: steps.map(({ step, ok, requestId }) => ({ step, ok, requestId })),
-    receipts: receipts.map(({ at, requestId, role, protocol, disclosure, executions, outcome, failureKind, usage, usageConfidence, costConfidence }) => ({
-      at, requestId, role, protocol, disclosure, ...(executions !== undefined ? { executions } : {}), outcome,
-      ...(failureKind ? { failureKind } : {}), ...(usage ? { usage } : {}), usageConfidence, costConfidence,
-    })),
+    ...(provider ? { provider } : {}),
+    ...(model ? { model: safeModelId(model) } : {}),
+    steps: steps.map(({ step, ok, requestId, detail, failureKind, failureCondition }) => {
+      const safeKind = failureKind && SAFE_FAILURE_KINDS.has(failureKind) ? failureKind : undefined;
+      const safeCondition = failureCondition && SAFE_FAILURE_CONDITIONS.has(failureCondition) ? failureCondition : undefined;
+      return {
+        step, ok, requestId, detail: safeStepDetail(ok, detail),
+        ...(safeKind ? { failureKind: safeKind } : {}),
+        ...(safeCondition ? { condition: safeCondition } : {}),
+      };
+    }),
+    receipts: receipts.map(({ at, requestId, role, providerId, selectedModel, effectiveModel, endpointOrigin, protocol, disclosure, executions, outcome, failureKind, usage, usageConfidence, costConfidence }) => {
+      const origin = originOf(endpointOrigin);
+      return {
+        at, requestId, role, providerId: safeProviderId(providerId) ?? "(unrecognized provider)",
+        selectedModel: safeModelId(selectedModel),
+        ...(effectiveModel ? { effectiveModel: safeModelId(effectiveModel) } : {}),
+        ...(origin ? { endpointOrigin: origin } : {}),
+        protocol, disclosure, ...(executions !== undefined ? { executions } : {}), outcome,
+        ...(failureKind ? { failureKind } : {}), ...(usage ? { usage } : {}), usageConfidence, costConfidence,
+      };
+    }),
   };
 }
 
@@ -61,6 +109,8 @@ export interface VerificationStep {
   ok: boolean;
   detail: string;
   requestId: string;
+  failureKind?: string;
+  failureCondition?: string;
 }
 
 /**
@@ -75,8 +125,14 @@ export async function verifyProvider(config: HarnessConfig, signal?: AbortSignal
     try {
       steps.push({ step, ok: true, detail: await fn(requestId), requestId });
     } catch (err: any) {
-      const detail = err instanceof InferenceError ? `${err.kind}/${err.condition}: ${err.message}` : String(err?.message ?? err);
-      steps.push({ step, ok: false, detail, requestId });
+      steps.push({
+        step,
+        ok: false,
+        detail: err instanceof InferenceError ? "Provider request failed" : "Verification failed",
+        requestId,
+        failureKind: err instanceof InferenceError ? err.kind : "verification_error",
+        ...(err instanceof InferenceError ? { failureCondition: err.condition } : {}),
+      });
     }
   };
   await run("streamed completion", async (id) => {
@@ -84,7 +140,7 @@ export async function verifyProvider(config: HarnessConfig, signal?: AbortSignal
     const m = await client.chatCompletionStream([{ role: "user", content: "Reply with exactly the word READY." }], [], (t) => (streamed += t), id, signal);
     const text = typeof m.content === "string" ? m.content : "";
     if (!/READY/i.test(text)) throw new Error(`unexpected reply: ${text.slice(0, 80)}`);
-    return `reply "${text.trim().slice(0, 40)}", ${streamed.length} chars streamed`;
+    return `streamed completion received (${streamed.length} chars)`;
   });
   if (!steps[0].ok) return steps;
   const nonce = `n${randomUUID().slice(0, 8)}`;
@@ -99,7 +155,7 @@ export async function verifyProvider(config: HarnessConfig, signal?: AbortSignal
     if (!tc || tc.function.name !== "echo_token") throw new Error("model did not call echo_token");
     const args = JSON.parse(tc.function.arguments || "{}");
     if (args.token !== nonce) throw new Error(`tool arguments did not carry the nonce: ${tc.function.arguments.slice(0, 80)}`);
-    return `echo_token(${tc.function.arguments}) complete, ${call.tool_calls!.length} call(s)`;
+    return `echo_token tool call completed (${call.tool_calls!.length} call(s))`;
   });
   if (!steps[1].ok || !call) return steps;
   await run("tool result round trip", async (id) => {
@@ -112,7 +168,7 @@ export async function verifyProvider(config: HarnessConfig, signal?: AbortSignal
     const final = await client.chatCompletionStream(followUp, [ECHO_TOOL], undefined, id, signal);
     const text = typeof final.content === "string" ? final.content : "";
     if (!text.includes(nonce)) throw new Error(`final answer did not use the tool result: ${text.slice(0, 80)}`);
-    return `final answer cites the tool result`;
+    return "tool result round trip completed";
   });
   return steps;
 }
@@ -225,12 +281,15 @@ export function registerProviderCommands(program: Command): void {
       process.once("SIGINT", () => abort.abort(new Error("SIGINT")));
       const steps = await verifyProvider(config, abort.signal);
       const receipts = UsageLedger.global().all();
-      const summary = verificationSummary(steps, receipts);
+      const summary = verificationSummary(steps, receipts, { provider: config.provider, model: config.model });
       if (options.json) {
         console.log(JSON.stringify({ date: new Date().toISOString(), ...summary }, null, 2));
       } else {
         console.log(pc.bold(`\nLive provider check\n${describeTarget(config)}`));
-        for (const s of steps) console.log(`  ${s.ok ? pc.green("✓") : pc.red("✗")} ${s.step}: ${s.ok ? "passed" : "failed"}`);
+        for (const s of steps) {
+          const disposition = s.ok ? "passed" : `failed${s.failureKind ? ` (${s.failureKind}${s.failureCondition ? `/${s.failureCondition}` : ""})` : ""}`;
+          console.log(`  ${s.ok ? pc.green("✓") : pc.red("✗")} ${s.step}: ${disposition} — ${s.detail}`);
+        }
         const usageSummary = UsageLedger.global().summary();
         if (usageSummary) console.log(pc.dim(usageSummary));
         console.log(summary.passed ? pc.green("\nInference verified (completion + tool round trip).\n") : pc.red("\nNot verified.\n"));
