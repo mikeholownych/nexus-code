@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { createHash } from "node:crypto";
 import { syncBuiltinESMExports } from "node:module";
-import { DurableStateManager, CorruptStateError, UnsupportedSchemaVersionError, TaskStateWriteError, type DurableTaskState } from "../src/core/state.js";
+import { DurableStateManager, CorruptStateError, UnsupportedSchemaVersionError, TaskStateReadError, TaskStateWriteError, type DurableTaskState } from "../src/core/state.js";
 import { InformationFlowBoundary } from "../src/core/egress.js";
 import { WorkspacePath } from "../src/core/workspace_path.js";
 
@@ -126,6 +126,33 @@ test("missing committed messages are reported as corruption, quarantined, and ne
   fs.unlinkSync(manager.getMessageLogFilePath(state.taskId));
   assert.throws(() => manager.loadTaskState(state.taskId), CorruptStateError);
   assert.ok(fs.readdirSync(manager.getBaseDir()).some(name => name.startsWith(`${state.taskId}.json.corrupt-`)));
+}));
+
+test("permission or I/O error reading message journal fails without quarantining primary state", () => fixture((manager, state) => {
+  manager.saveTaskState(state);
+  const primaryPath = manager.getStateFilePath(state.taskId);
+  const journalPath = manager.getMessageLogFilePath(state.taskId);
+  assert.equal(fs.existsSync(primaryPath), true);
+  assert.equal(fs.existsSync(journalPath), true);
+
+  fs.chmodSync(journalPath, 0o000);
+  try {
+    assert.throws(() => manager.loadTaskState(state.taskId), (err: any) => {
+      assert.ok(err instanceof TaskStateReadError, `Expected TaskStateReadError, got ${err?.name}`);
+      assert.ok(!(err instanceof CorruptStateError), "Must not be CorruptStateError");
+      return true;
+    });
+    // Primary envelope and journal must stay untouched in place; no quarantine
+    assert.equal(fs.existsSync(primaryPath), true);
+    assert.equal(fs.existsSync(journalPath), true);
+    assert.equal(fs.readdirSync(manager.getBaseDir()).some(name => name.includes(".corrupt-")), false);
+  } finally {
+    fs.chmodSync(journalPath, 0o600);
+  }
+  // After permissions are restored, load succeeds cleanly
+  const loaded = manager.loadTaskState(state.taskId);
+  assert.equal(loaded.taskId, state.taskId);
+  assert.equal(loaded.messages.length, state.messages.length);
 }));
 
 test("future message schemas fail without changing or quarantining either component", () => fixture((manager, state) => {

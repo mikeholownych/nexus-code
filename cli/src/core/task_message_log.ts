@@ -133,9 +133,10 @@ export function readTaskMessages(file: string, taskId: string, cursor: TaskMessa
   checkCursor(cursor);
   let fd: number;
   try { fd = openRegular(file, fs.constants.O_RDONLY); }
-  catch (error) {
+  catch (error: any) {
     if (error instanceof TaskMessageLogError) throw error;
-    return corrupt("Committed message log cannot be read");
+    if (error?.code === "ENOENT") return corrupt("Committed message log is missing");
+    throw error;
   }
   try {
     // Small journals fit in a bounded snapshot. This avoids one fstat/read pair

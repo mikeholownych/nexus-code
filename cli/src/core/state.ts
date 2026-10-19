@@ -384,7 +384,10 @@ export class DurableStateManager {
       }
       return readTaskMessages(log, record.parsed.taskId, record.parsed.messageLog);
     } catch (error) {
-      return this.messageRecoveryError(taskId, record, error);
+      if (error instanceof TaskMessageLogError) {
+        return this.messageRecoveryError(taskId, record, error);
+      }
+      throw new TaskStateReadError(taskId, `Failed to read message journal: ${(error as any)?.message ?? String(error)}`);
     }
   }
 

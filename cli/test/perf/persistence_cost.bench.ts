@@ -135,7 +135,7 @@ test("ACC-CONT-08: 200-step persistence overhead measurement (threshold p95 < 10
     console.log(` Max:       ${max.toFixed(2)} ms`);
     console.log(` Threshold: p95 < 100.00 ms (SSD)`);
     const exceeded = p95 >= 100;
-    console.log(` Status:    ${exceeded ? "EXCEEDED (follow-up for split-record schema required per SPEC-04 §3.7 / SPEC-08)" : "PASSED (within budget)"}`);
+    console.log(` Status:    ${exceeded ? "EXCEEDED (latency threshold exceeded on host storage per SPEC-04 §3.7 / SPEC-08)" : "PASSED (within budget)"}`);
     console.log("=======================================================\n");
 
     assert.equal(sorted.length, 200, "All 200 steps must be recorded");
