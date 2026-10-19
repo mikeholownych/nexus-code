@@ -16,8 +16,12 @@ import { connectWithKey, disconnect, startSignIn } from "./provider_connect.js";
 /** One line naming each role's selected destination and its disclosure class. */
 export function describeTarget(config: HarnessConfig): string {
   const target = (provider: string | undefined, endpoint: string, model: string) => {
-    const where = provider ? `${provider} (${originOf(endpoint)})` : originOf(endpoint) ?? endpoint;
-    return `${where} · ${model || "(no model)"} · ${disclosureClass(endpoint, provider, config.cloudRoutedOrigins)}`;
+    // Endpoint paths, userinfo, query strings and model ids are operator-controlled environment/config values.
+    // Show only the parsed origin and whether a model is configured; never echo the raw setting to a terminal.
+    const origin = originOf(endpoint);
+    const label = provider ? PROVIDERS[provider]?.label ?? "Cloud provider" : "Local endpoint";
+    const where = origin ? `${label} (${origin})` : `${label} (endpoint unavailable)`;
+    return `${where} · ${model ? "model configured" : "no model"} · ${disclosureClass(endpoint, provider, config.cloudRoutedOrigins)}`;
   };
   const parts = [`main: ${target(config.provider, config.endpoint, config.model)}`];
   if (config.plannerModel) {
@@ -29,6 +33,18 @@ export function describeTarget(config: HarnessConfig): string {
     parts.push(`coder: ${target(p, config.coderEndpoint ?? config.endpoint, config.coderModel)}`);
   }
   return `[nexus] Inference — ${parts.join(" | ")}`;
+}
+
+/** A credential-safe JSON projection for `providers verify --json`; raw provider diagnostics are deliberately omitted. */
+export function verificationSummary(steps: readonly VerificationStep[], receipts: readonly import("./usage.js").InferenceReceipt[]) {
+  return {
+    passed: steps.length === 3 && steps.every((step) => step.ok),
+    steps: steps.map(({ step, ok, requestId }) => ({ step, ok, requestId })),
+    receipts: receipts.map(({ at, requestId, role, protocol, disclosure, executions, outcome, failureKind, usage, usageConfidence, costConfidence }) => ({
+      at, requestId, role, protocol, disclosure, ...(executions !== undefined ? { executions } : {}), outcome,
+      ...(failureKind ? { failureKind } : {}), ...(usage ? { usage } : {}), usageConfidence, costConfidence,
+    })),
+  };
 }
 
 const ECHO_TOOL: ToolDefinition = {
@@ -168,7 +184,9 @@ export function registerProviderCommands(program: Command): void {
     .action(() => {
       console.log(pc.bold("\nCloud inference providers\n"));
       for (const def of Object.values(PROVIDERS)) {
-        const base = operatorSetting(baseUrlSetting(def.id)) || def.baseUrl || "(set --base-url or " + baseUrlSetting(def.id) + ")";
+        const configuredBase = operatorSetting(baseUrlSetting(def.id));
+        const baseUrl = configuredBase || def.baseUrl;
+        const base = baseUrl ? originOf(baseUrl) ?? "(invalid endpoint)" : "(set --base-url or " + baseUrlSetting(def.id) + ")";
         const found = resolveCredential(def.id, def.credentialEnv);
         const key = found ? pc.green(`connected via ${found.source}`) : pc.yellow(`not connected (${def.credentialEnv ? `$${def.credentialEnv} or ` : ""}nexus connect ${def.id})`);
         console.log(`  ${pc.bold(def.id.padEnd(11))} ${def.protocol.padEnd(19)} ${base}`);
@@ -207,16 +225,16 @@ export function registerProviderCommands(program: Command): void {
       process.once("SIGINT", () => abort.abort(new Error("SIGINT")));
       const steps = await verifyProvider(config, abort.signal);
       const receipts = UsageLedger.global().all();
-      const passed = steps.length === 3 && steps.every((s) => s.ok);
+      const summary = verificationSummary(steps, receipts);
       if (options.json) {
-        console.log(JSON.stringify({ provider: config.provider, model: config.model, date: new Date().toISOString(), passed, steps, receipts }, null, 2));
+        console.log(JSON.stringify({ date: new Date().toISOString(), ...summary }, null, 2));
       } else {
-        console.log(pc.bold(`\nLive check: ${config.provider} · ${config.model}`));
-        for (const s of steps) console.log(`  ${s.ok ? pc.green("✓") : pc.red("✗")} ${s.step}: ${s.detail}`);
-        const summary = UsageLedger.global().summary();
-        if (summary) console.log(pc.dim(summary));
-        console.log(passed ? pc.green("\nInference verified (completion + tool round trip).\n") : pc.red("\nNot verified.\n"));
+        console.log(pc.bold(`\nLive provider check\n${describeTarget(config)}`));
+        for (const s of steps) console.log(`  ${s.ok ? pc.green("✓") : pc.red("✗")} ${s.step}: ${s.ok ? "passed" : "failed"}`);
+        const usageSummary = UsageLedger.global().summary();
+        if (usageSummary) console.log(pc.dim(usageSummary));
+        console.log(summary.passed ? pc.green("\nInference verified (completion + tool round trip).\n") : pc.red("\nNot verified.\n"));
       }
-      process.exitCode = passed ? 0 : 1;
+      process.exitCode = summary.passed ? 0 : 1;
     });
 }
