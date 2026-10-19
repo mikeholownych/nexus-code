@@ -1,3 +1,5 @@
+import { htmlToReadableText } from "./core/html_text.js";
+
 export interface SearchResult {
   title: string;
   url: string;
@@ -142,7 +144,7 @@ export async function executeWebSearch(
             } catch {}
           }
 
-          const stripHtml = (s: string) => s.replace(/<[^>]+>/g, "").replace(/&quot;/g, '"').replace(/&amp;/g, "&").trim();
+          const stripHtml = (s: string) => htmlToReadableText(s);
           const title = stripHtml(titleMatch[2] || "Result");
           const snippet = snippetMatch ? stripHtml(snippetMatch[1]) : "";
 
