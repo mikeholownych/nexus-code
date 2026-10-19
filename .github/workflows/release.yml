@@ -28,7 +28,7 @@ jobs:
         run: |
           root=/mnt/nexus-eval-release
           sudo install -d -o "$USER" -g "$USER" -m 0711 "$root"
-          sudo mount -t tmpfs -o size=128m,mode=0711,uid="$(id -u)",gid="$(id -g)",acl nexus-eval-release "$root"
+          sudo mount -t tmpfs -o size=128m,mode=0711,uid="$(id -u)",gid="$(id -g)" nexus-eval-release "$root"
           echo "NEXUS_EVAL_TEST_WORKSPACE_ROOT=$root" >> "$GITHUB_ENV"
           runtime_root=/opt/nexus-eval-ci-runtime
           sudo install -d -o "$USER" -g "$USER" -m 0711 "$runtime_root"
