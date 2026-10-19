@@ -410,18 +410,32 @@ export function grantRunAsAccess(user, targets) {
       const defaultResult = spawnSync(setfacl, defaults, { encoding: "utf8", timeout: 5000, env: { PATH: "/usr/bin:/bin" } });
       if (defaultResult.status !== 0) throw new Error(`could not set scoped evaluator default ACL (${defaultResult.status ?? "signal"})`);
     }
-    // Bubblewrap opens bind sources as the evaluator uid (sudo -u). When POSIX ACLs do not
-    // take effect on the mount, named-user entries leave other::--- so chmod alone cannot help.
+    // Bubblewrap resolves bind sources as the evaluator uid; a 0711 parent that is only
+    // searchable (other --x) can still yield EACCES on some hosts. Grant rX on the parent.
+    const parent = path.dirname(resolved);
+    if (parent && parent !== resolved && parent !== path.parse(resolved).root) {
+      spawnSync(setfacl, ["-m", `u:${user}:rX,u:${opUid}:rwX`, parent], {
+        encoding: "utf8",
+        timeout: 5000,
+        env: { PATH: "/usr/bin:/bin" },
+      });
+    }
+    // When POSIX ACLs do not take effect, named-user entries leave other::--- so chmod alone
+    // cannot help — strip ACLs then widen mode on the disposable path (and parent if needed).
     const readable = spawnSync("/usr/bin/sudo", ["-n", "-u", user, "--", "/usr/bin/test", "-r", resolved], {
       encoding: "utf8",
       timeout: 5000,
       env: { PATH: "/usr/bin:/bin" },
     });
     if (readable.status !== 0) {
-      // Named-user ACLs that do not take effect still pin other::---; strip them so mode bits apply.
-      spawnSync(setfacl, ["-b", resolved], { encoding: "utf8", timeout: 5000, env: { PATH: "/usr/bin:/bin" } });
-      const mode = fs.statSync(resolved).isDirectory() ? 0o0755 : 0o0644;
-      fs.chmodSync(resolved, mode);
+      for (const p of [resolved, parent].filter((item, index, all) => item && all.indexOf(item) === index && item !== path.parse(resolved).root)) {
+        spawnSync(setfacl, ["-b", p], { encoding: "utf8", timeout: 5000, env: { PATH: "/usr/bin:/bin" } });
+        try {
+          fs.chmodSync(p, fs.statSync(p).isDirectory() ? 0o0755 : 0o0644);
+        } catch {
+          /* parent may be a mount root we do not own; CI should mount it world-readable */
+        }
+      }
       const retry = spawnSync("/usr/bin/sudo", ["-n", "-u", user, "--", "/usr/bin/test", "-r", resolved], {
         encoding: "utf8",
         timeout: 5000,
