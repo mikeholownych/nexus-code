@@ -55,6 +55,21 @@ async function freePort(): Promise<number> {
 }
 
 describe("inference transport: success paths", () => {
+  test("normalizes endpoint URLs with a long trailing slash suffix", async () => {
+    const paths: string[] = [];
+    await withServer(
+      (req, res) => {
+        paths.push(req.url ?? "");
+        res.end(JSON.stringify({ choices: [{ message: { role: "assistant", content: "ok" }, finish_reason: "stop" }] }));
+      },
+      async (base) => {
+        const suffix = "/".repeat(4096);
+        assert.equal((await client(`${base}${suffix}`).chatCompletion(msgs, [])).content, "ok");
+      },
+    );
+    assert.deepEqual(paths, ["/v1/chat/completions"]);
+  });
+
   test("non-streaming completion", async () => {
     await withServer(
       (_q, res) => res.end(JSON.stringify({ choices: [{ message: { role: "assistant", content: "hello" }, finish_reason: "stop" }] })),
