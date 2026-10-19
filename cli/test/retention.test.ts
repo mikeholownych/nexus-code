@@ -262,6 +262,7 @@ describe("PLAN-08 PR-8c: Persistence retention, GC, and indexed sessions (REQ-PE
       const res2 = await maybeRunDailyGc({ home: testHome });
       assert.equal(res2.status, "ran");
       assert.ok(res2.summary);
+      assert.ok(res2.summary.durationMs < 3000, "duration must stay bounded within budget");
 
       // 4. Immediate second run: already ran today
       const res3 = await maybeRunDailyGc({ home: testHome });
@@ -281,6 +282,38 @@ describe("PLAN-08 PR-8c: Persistence retention, GC, and indexed sessions (REQ-PE
         if (origEnv !== undefined) process.env.NEXUS_GC = origEnv;
         else delete process.env.NEXUS_GC;
       }
+    } finally {
+      fs.rmSync(testHome, { recursive: true, force: true });
+    }
+  });
+
+  test("Background daily GC: enforces single end-to-end deadline across planning, identity capture, and execution", async () => {
+    const testHome = tmp("deadline-gc-home-");
+    try {
+      const tasksDir = path.join(testHome, ".nexus", "tasks");
+      fs.mkdirSync(tasksDir, { recursive: true, mode: 0o700 });
+      const oldTime = new Date(Date.now() - 40 * 24 * 60 * 60 * 1000);
+      for (let i = 0; i < 50; i++) {
+        const taskId = `task-deadline-${i}`;
+        const primary = path.join(tasksDir, `${taskId}.json`);
+        const sidecar = path.join(tasksDir, `${taskId}.messages.jsonl`);
+        fs.writeFileSync(primary, JSON.stringify({ schemaVersion: 2, taskId, title: `Task ${i}` }));
+        fs.writeFileSync(sidecar, "message line\n");
+        fs.utimesSync(primary, oldTime, oldTime);
+        fs.utimesSync(sidecar, oldTime, oldTime);
+      }
+
+      const start = Date.now();
+      const res = runRetentionGc({
+        home: testHome,
+        timeBudgetMs: 5,
+        maxAgeDays: 30,
+      });
+      const elapsed = Date.now() - start;
+
+      assert.equal(res.timedOut, true);
+      assert.ok(res.durationMs < 500, `durationMs (${res.durationMs}) must stay tightly bounded`);
+      assert.ok(elapsed < 1000, `wall clock time (${elapsed}) must not double budget or hang`);
     } finally {
       fs.rmSync(testHome, { recursive: true, force: true });
     }

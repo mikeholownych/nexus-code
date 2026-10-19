@@ -38,6 +38,7 @@ export interface RetentionPolicyOptions {
   dryRun?: boolean;
   onlyTestPollution?: boolean;
   timeBudgetMs?: number;
+  deadline?: number;
   currentSessionId?: string;
   home?: string;
   workspace?: string;
@@ -458,7 +459,9 @@ export function planRetention(options: RetentionPolicyOptions = {}): RetentionPl
   const home = options.home || os.homedir();
   const maxAgeDays = options.maxAgeDays !== undefined ? options.maxAgeDays : DEFAULT_RETENTION_MAX_AGE_DAYS;
   const maxSizeBytes = options.maxSizeBytes !== undefined ? options.maxSizeBytes : DEFAULT_RETENTION_MAX_SIZE_BYTES;
-  const deadline = options.timeBudgetMs ? startTime + options.timeBudgetMs : undefined;
+  const deadline = options.deadline !== undefined
+    ? options.deadline
+    : (options.timeBudgetMs ? startTime + options.timeBudgetMs : undefined);
 
   const nexusDir = path.join(home, ".nexus");
   const tasksDir = path.join(nexusDir, "tasks");
@@ -484,6 +487,10 @@ export function planRetention(options: RetentionPolicyOptions = {}): RetentionPl
 
   let totalScannedBytes = 0;
   for (const item of allItems) {
+    if (deadline && Date.now() >= deadline) {
+      timedOut = true;
+      break;
+    }
     captureRecordIdentities(item);
     totalScannedBytes += item.sizeBytes;
   }
@@ -568,7 +575,7 @@ export function planRetention(options: RetentionPolicyOptions = {}): RetentionPl
 /**
  * Execute retention plan: removes eligible files and git refs (REQ-PER-102, DEC-11).
  */
-export function executeRetention(plan: RetentionPlan, options: { dryRun?: boolean; timeBudgetMs?: number } = {}): GcExecutionResult {
+export function executeRetention(plan: RetentionPlan, options: { dryRun?: boolean; timeBudgetMs?: number; deadline?: number } = {}): GcExecutionResult {
   const directories = [...new Set(plan.reclaimableItems.filter(item => item.kind === "task" || item.kind === "session").map(item => path.dirname(item.primaryFile)))].sort();
   const busy = new Set<string>();
   function locked(index: number): GcExecutionResult {
@@ -596,16 +603,18 @@ export function executeRetention(plan: RetentionPlan, options: { dryRun?: boolea
   return locked(0);
 }
 
-function executeRetentionLocked(plan: RetentionPlan, options: { dryRun?: boolean; timeBudgetMs?: number }): GcExecutionResult {
+function executeRetentionLocked(plan: RetentionPlan, options: { dryRun?: boolean; timeBudgetMs?: number; deadline?: number }): GcExecutionResult {
   const startTime = Date.now();
   const dryRun = Boolean(options.dryRun);
-  const deadline = options.timeBudgetMs ? startTime + options.timeBudgetMs : undefined;
+  const deadline = options.deadline !== undefined
+    ? options.deadline
+    : (options.timeBudgetMs ? startTime + options.timeBudgetMs : undefined);
 
   let deletedCount = 0;
   let deletedBytes = 0;
   const deletedItems: RetentionItem[] = [];
   const errors: Array<{ path: string; error: string }> = [];
-  let timedOut = false;
+  let timedOut = Boolean(plan.timedOut);
 
   const byKind: Record<RetentionItemKind, { count: number; bytes: number }> = {
     task: { count: 0, bytes: 0 },
@@ -733,8 +742,15 @@ function executeRetentionLocked(plan: RetentionPlan, options: { dryRun?: boolean
  * Execute retention GC directly from policy options (REQ-PER-102, DEC-11).
  */
 export function runRetentionGc(options: RetentionPolicyOptions = {}): GcExecutionResult {
-  const plan = planRetention(options);
-  return executeRetention(plan, { dryRun: options.dryRun, timeBudgetMs: options.timeBudgetMs });
+  const startTime = Date.now();
+  const deadline = options.deadline !== undefined
+    ? options.deadline
+    : (options.timeBudgetMs ? startTime + options.timeBudgetMs : undefined);
+  const plan = planRetention({ ...options, deadline });
+  const remainingBudgetMs = deadline !== undefined ? Math.max(0, deadline - Date.now()) : options.timeBudgetMs;
+  const result = executeRetention(plan, { dryRun: options.dryRun, deadline, timeBudgetMs: remainingBudgetMs });
+  result.durationMs = Date.now() - startTime;
+  return result;
 }
 
 export function getGcState(home: string = os.homedir()): GcState {
