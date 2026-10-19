@@ -45,7 +45,7 @@ function attemptProblem(file, record, cell) {
   if (record.files.approvalScreenshot.sha256 === record.files.postExitScreenshot.sha256) return "the two screenshots are the same file";
   const launches = (record.measured ?? []).map((m) => m.launch).sort().join(",");
   if (launches !== "main,no_color") return `measured launches are [${launches}], not main and no_color`;
-  if (record.measured.some((m) => !Number.isInteger(m.survivors) || typeof m.sttyRestored !== "boolean")) return "measurements are malformed";
+  if (record.measured.some((m) => !Number.isInteger(m.survivors) || m.survivors < 0 || !["verified", "unavailable"].includes(m.scopeMeasurement) || typeof m.sttyRestored !== "boolean")) return "measurements are malformed";
   const s = record.scenarios ?? {};
   if (!(s.approveToolRounds?.includes(0) && s.approveToolRounds?.includes(1)) || !(s.stream >= 1) || !(s.sleepTool >= 1)) return "the mock log does not show the approve, stream and sleep scenarios";
   if (CHECKS.some((check) => !["PASS", "FAIL"].includes(record.checks?.[check]?.result))) return "a check has no PASS/FAIL";
@@ -73,6 +73,7 @@ for (const terminal of TERMINALS) {
       const results = {};
       for (const check of CHECKS) {
         let result = record.checks[check].result;
+        if (check === "5" && record.measured.some((m) => m.scopeMeasurement !== "verified")) result = "FAIL (scope measurement unavailable)";
         if (check === "5" && record.measured.some((m) => m.survivors > 0)) result = "FAIL (measured survivors)";
         if (check === "6" && record.measured.some((m) => !m.sttyRestored)) result = "FAIL (terminal not restored)";
         results[check] = result;
