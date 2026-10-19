@@ -576,7 +576,18 @@ export class InformationFlowBoundary {
         const fullMatch = match[0];
         // If capture group exists (e.g. Bearer token), extract captured secret, else fullMatch
         let secretVal = match[1] && typeof match[1] === "string" ? match[1] : fullMatch;
-        secretVal = secretVal.replace(/["';,]+$/, "");
+        let trimEnd = secretVal.length;
+        while (trimEnd > 0) {
+          const ch = secretVal.charCodeAt(trimEnd - 1);
+          if (ch === 34 || ch === 39 || ch === 59 || ch === 44) { // ", ', ;, ,
+            trimEnd--;
+          } else {
+            break;
+          }
+        }
+        if (trimEnd < secretVal.length) {
+          secretVal = secretVal.slice(0, trimEnd);
+        }
         if (
           secretVal.length >= 8 &&
           !secretVal.startsWith("[NEXUS_SEC_REF_") &&
