@@ -48,7 +48,13 @@ function normalizeResources(spec: OperationSpec, config: HarnessConfig, identity
     const provider = r.provider ?? (def ? def.id : new URL(endpoint).origin);
     const key = r.apiKeyEnv ? process.env[r.apiKeyEnv] : def ? providerApiKey(def.id, def.credentialEnv) : provider === configOrigin ? config.apiKey : undefined;
     const account = r.account ?? credentialFingerprint(key, identity);
-    return { ...r, endpoint, provider, capabilities: r.capabilities ?? ["tools"], ...(account ? { account } : {}) } as ResourceDescriptor;
+    return {
+      ...r,
+      endpoint,
+      provider,
+      capabilities: r.capabilities ?? ["tools"],
+      ...(account ? { account, accountIdentitySource: r.account !== undefined ? "explicit" as const : "credential" as const } : {}),
+    } as ResourceDescriptor;
   });
 }
 

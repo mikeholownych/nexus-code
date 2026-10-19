@@ -46,7 +46,9 @@ function keyPath(home: string): string {
     throw new AccountIdentityError("Cannot resolve the credential home for secure account identities.");
   }
   const homeStat = fs.statSync(realHome);
-  if (!homeStat.isDirectory() || homeStat.uid !== uid()) throw new AccountIdentityError("The credential home is not a user-owned directory.");
+  if (!homeStat.isDirectory() || homeStat.uid !== uid() || (homeStat.mode & 0o022) !== 0) {
+    throw new AccountIdentityError("The credential home must be a user-owned directory that is not group- or world-writable.");
+  }
   const config = checkedDirectory(realHome, ".config");
   const nexus = checkedDirectory(config, "nexus");
   const privateDir = checkedDirectory(nexus, "account-identities");
@@ -58,12 +60,14 @@ function readOrCreateKey(home: string): Buffer {
   const noFollow = fs.constants.O_NOFOLLOW;
   if (typeof noFollow !== "number") throw new AccountIdentityError("Secure account identity key access is unavailable on this platform.");
 
+  const temporary = `${file}.tmp.${process.pid}.${randomBytes(12).toString("hex")}`;
   let fd: number;
   try {
-    fd = fs.openSync(file, fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL | noFollow, 0o600);
+    fd = fs.openSync(temporary, fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL | noFollow, 0o600);
   } catch (error: any) {
-    if (error?.code !== "EEXIST") throw error;
-    return readKey(file, noFollow);
+    throw new AccountIdentityError(error?.code === "EEXIST"
+      ? "A private account identity key creation path unexpectedly already exists."
+      : "Cannot create a private account identity key safely.");
   }
 
   const key = randomBytes(KEY_BYTES);
@@ -73,13 +77,39 @@ function readOrCreateKey(home: string): Buffer {
   } finally {
     fs.closeSync(fd);
   }
-  const dirFd = fs.openSync(path.dirname(file), fs.constants.O_RDONLY | fs.constants.O_DIRECTORY | noFollow);
+  let published = false;
+  try {
+    // link() publishes the fully written inode atomically and refuses to replace a
+    // key another process may already have created.
+    fs.linkSync(temporary, file);
+    published = true;
+  } catch (error: any) {
+    if (error?.code !== "EEXIST") throw error;
+  } finally {
+    fs.unlinkSync(temporary);
+  }
+  if (published) syncDirectory(path.dirname(file), noFollow);
+  return readKey(file, noFollow);
+}
+
+function syncDirectory(dir: string, noFollow: number): void {
+  const dirFd = fs.openSync(dir, fs.constants.O_RDONLY | fs.constants.O_DIRECTORY | noFollow);
   try {
     fs.fsyncSync(dirFd);
   } finally {
     fs.closeSync(dirFd);
   }
-  return readKey(file, noFollow);
+}
+
+function removeInterruptedKeyLink(file: string, keyStat: fs.Stats): void {
+  const dir = path.dirname(file);
+  const prefix = `${path.basename(file)}.tmp.`;
+  for (const name of fs.readdirSync(dir)) {
+    if (!name.startsWith(prefix)) continue;
+    const candidate = path.join(dir, name);
+    const stat = fs.lstatSync(candidate);
+    if (stat.isFile() && stat.dev === keyStat.dev && stat.ino === keyStat.ino) fs.unlinkSync(candidate);
+  }
 }
 
 function readKey(file: string, noFollow: number): Buffer {
@@ -90,8 +120,14 @@ function readKey(file: string, noFollow: number): Buffer {
     throw new AccountIdentityError("The private account identity key cannot be opened safely.");
   }
   try {
-    const stat = fs.fstatSync(fd);
+    let stat = fs.fstatSync(fd);
     const named = fs.lstatSync(file);
+    if (stat.nlink > 1) {
+      // A process can stop after the atomic link() and before removing its
+      // temporary name. Remove only names that point at this exact key inode.
+      removeInterruptedKeyLink(file, stat);
+      stat = fs.fstatSync(fd);
+    }
     if (
       !stat.isFile() || stat.uid !== uid() || stat.nlink !== 1 || (stat.mode & 0o777) !== 0o600 ||
       named.isSymbolicLink() || named.dev !== stat.dev || named.ino !== stat.ino
