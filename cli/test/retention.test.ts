@@ -306,7 +306,7 @@ describe("PLAN-08 PR-8c: Persistence retention, GC, and indexed sessions (REQ-PE
       const start = Date.now();
       const res = runRetentionGc({
         home: testHome,
-        timeBudgetMs: 5,
+        deadline: Date.now() - 1,
         maxAgeDays: 30,
       });
       const elapsed = Date.now() - start;
@@ -357,7 +357,7 @@ describe("PLAN-08 PR-8c: Persistence retention, GC, and indexed sessions (REQ-PE
       }
 
       acknowledgeDailyGc(testHome);
-      const res = await maybeRunDailyGc({ home: testHome, timeBudgetMs: 5 });
+      const res = await maybeRunDailyGc({ home: testHome, deadline: Date.now() - 1 });
       assert.equal(res.status, "ran");
       assert.ok(res.summary);
       assert.equal(res.summary.timedOut, true);
