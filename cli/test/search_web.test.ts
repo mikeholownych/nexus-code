@@ -79,6 +79,29 @@ describe("ACC-TRUST-08 / REQ-PRV-108: Web Search Integrity and Destination Discl
     assert.strictEqual(res.results[0].snippet, "Nexus Code documentation");
   });
 
+  test("SearXNG result text fields are extracted like untrusted HTML", async () => {
+    const baseUrl = await startMockServer((req, res) => {
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(
+        JSON.stringify({
+          results: [
+            {
+              title: "<b>Doc</b><script>alert(1)</script> &amp; more",
+              url: "https://example.com/doc",
+              content: "<style>p{}</style>plain <i>text</i> &quot;quoted&quot;",
+            },
+          ],
+        })
+      );
+    });
+    process.env.SEARXNG_URL = baseUrl;
+
+    const res = await executeWebSearch("markup extraction", 5);
+    assert.strictEqual(res.success, true);
+    assert.strictEqual(res.results[0].title, "Doc & more");
+    assert.strictEqual(res.results[0].snippet, 'plain text "quoted"');
+  });
+
   test("Destination disclosure: destination is disclosed on first use", async () => {
     const baseUrl = await startMockServer((req, res) => {
       res.writeHead(200, { "Content-Type": "application/json" });

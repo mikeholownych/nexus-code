@@ -9,6 +9,7 @@ import { URL, fileURLToPath } from "node:url";
 import { ToolDefinition, ExecutionResult } from "./types.js";
 import { SecurityManager } from "./security.js";
 import { InformationFlowBoundary, matchesLocalOrigins, parseLocalOrigins } from "./core/egress.js";
+import { htmlToReadableText } from "./core/html_text.js";
 import { CapabilityRegistry, HARNESS_TOOLS, defaultRegistry } from "./core/capabilities.js";
 import { isSafeReadOnlyCommand } from "./core/authority.js";
 import { getBuildIdentity } from "./build_identity.js";
@@ -1209,12 +1210,7 @@ export class RustCoreBridge {
           return { success: false, output: "", error: `HTTP ${res.status}: ${res.statusText}` };
         }
         const text = res.text;
-        const clean = text
-          .replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, "")
-          .replace(/<style\b[^<]*(?:(?!<\/style>)<[^<]*)*<\/style>/gi, "")
-          .replace(/<[^>]+>/g, " ")
-          .replace(/\s+/g, " ")
-          .trim();
+        const clean = htmlToReadableText(text);
         const maxLen = args.max_length || 15000;
         const truncated = clean.length > maxLen ? clean.substring(0, maxLen) + "\n... [TRUNCATED]" : clean;
         return { success: true, output: truncated };
