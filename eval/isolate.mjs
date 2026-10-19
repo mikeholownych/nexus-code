@@ -403,48 +403,36 @@ export function grantRunAsAccess(user, targets) {
   if (!fs.existsSync(setfacl)) throw new Error("setfacl is unavailable; refusing unsafe workspace permission changes");
   for (const target of targets) {
     const resolved = fs.realpathSync(target);
+    // Prefer ownership transfer: under a 0711 workspace root, Bubblewrap (sudo -u evaluator)
+    // can open an evaluator-owned 0700 child even when POSIX ACLs do not take effect on the mount.
+    const chown = spawnSync("/usr/bin/sudo", ["-n", "chown", "-R", `${user}:`, resolved], {
+      encoding: "utf8",
+      timeout: 5000,
+      env: { PATH: "/usr/bin:/bin" },
+    });
+    if (chown.status === 0) {
+      const opAcl = spawnSync(setfacl, ["-R", "-m", `u:${opUid}:rwX`, resolved], {
+        encoding: "utf8",
+        timeout: 5000,
+        env: { PATH: "/usr/bin:/bin" },
+      });
+      if (opAcl.status !== 0) {
+        // Cleanup may need sudo later; ownership transfer for bind-open still succeeded.
+      } else if (fs.statSync(resolved).isDirectory()) {
+        spawnSync(setfacl, ["-m", `d:u:${opUid}:rwx,d:m::rwx`, resolved], {
+          encoding: "utf8",
+          timeout: 5000,
+          env: { PATH: "/usr/bin:/bin" },
+        });
+      }
+      continue;
+    }
     const { access, defaults } = runAsAclArgs(user, opUid, resolved, fs.statSync(resolved).isDirectory());
     const result = spawnSync(setfacl, access, { encoding: "utf8", timeout: 5000, env: { PATH: "/usr/bin:/bin" } });
     if (result.status !== 0) throw new Error(`could not grant scoped evaluator access to disposable path (${result.status ?? "signal"})`);
     if (defaults) {
       const defaultResult = spawnSync(setfacl, defaults, { encoding: "utf8", timeout: 5000, env: { PATH: "/usr/bin:/bin" } });
       if (defaultResult.status !== 0) throw new Error(`could not set scoped evaluator default ACL (${defaultResult.status ?? "signal"})`);
-    }
-    // Bubblewrap resolves bind sources as the evaluator uid; a 0711 parent that is only
-    // searchable (other --x) can still yield EACCES on some hosts. Grant rX on the parent.
-    const parent = path.dirname(resolved);
-    if (parent && parent !== resolved && parent !== path.parse(resolved).root) {
-      spawnSync(setfacl, ["-m", `u:${user}:rX,u:${opUid}:rwX`, parent], {
-        encoding: "utf8",
-        timeout: 5000,
-        env: { PATH: "/usr/bin:/bin" },
-      });
-    }
-    // When POSIX ACLs do not take effect, named-user entries leave other::--- so chmod alone
-    // cannot help — strip ACLs then widen mode on the disposable path (and parent if needed).
-    const readable = spawnSync("/usr/bin/sudo", ["-n", "-u", user, "--", "/usr/bin/test", "-r", resolved], {
-      encoding: "utf8",
-      timeout: 5000,
-      env: { PATH: "/usr/bin:/bin" },
-    });
-    if (readable.status !== 0) {
-      for (const p of [resolved, parent].filter((item, index, all) => item && all.indexOf(item) === index && item !== path.parse(resolved).root)) {
-        spawnSync(setfacl, ["-b", p], { encoding: "utf8", timeout: 5000, env: { PATH: "/usr/bin:/bin" } });
-        try {
-          fs.chmodSync(p, fs.statSync(p).isDirectory() ? 0o0755 : 0o0644);
-        } catch {
-          /* parent may be a mount root we do not own; CI should mount it world-readable */
-        }
-      }
-      const retry = spawnSync("/usr/bin/sudo", ["-n", "-u", user, "--", "/usr/bin/test", "-r", resolved], {
-        encoding: "utf8",
-        timeout: 5000,
-        env: { PATH: "/usr/bin:/bin" },
-      });
-      if (retry.status !== 0 && (fs.statSync(resolved).mode & 0o004) === 0) {
-        const detail = `${retry.stderr ?? ""}${retry.stdout ?? ""}`.trim().slice(0, 300);
-        throw new Error(`evaluator ${user} cannot open disposable path for sandbox bind after ACL and mode fallback${detail ? ` (${detail})` : ""}`);
-      }
     }
   }
 }
