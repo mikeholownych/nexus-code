@@ -86,7 +86,13 @@ function readOrCreateKey(home: string): Buffer {
   } catch (error: any) {
     if (error?.code !== "EEXIST") throw error;
   } finally {
-    fs.unlinkSync(temporary);
+    try {
+      fs.unlinkSync(temporary);
+    } catch (error: any) {
+      // A concurrent reader may have removed this exact interrupted-link name
+      // while repairing a creator that paused after publication.
+      if (error?.code !== "ENOENT") throw error;
+    }
   }
   if (published) syncDirectory(path.dirname(file), noFollow);
   return readKey(file, noFollow);
