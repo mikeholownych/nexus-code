@@ -16,6 +16,7 @@ services. The changes are limited to the following:
 | Size-capped tmpfs | `srv-nexus\x2dqual-ws.mount` at `/srv/nexus-qual/ws`, `size=storageBytes,mode=0711,uid=<operator>,nosuid,nodev` | The resource contract's `workspaceRoot`: the hard cap on what a run keeps, across all phases. |
 | Runtime directory | `/opt/nexus-qual` (root, 0755) | `sandboxRuntimeRoots` for the installed RC and the peer agents. It is filled per RC. |
 
+- `/usr/bin/bwrap` must report upstream version 0.12.0 or later (CVE-2026-87766). `validate.mjs` cannot detect distro backports, so it also rejects older vendor-patched builds. Ubuntu 24.04 `0.9.0-1ubuntu0.3` removed the fix. Install a release with the fix before qualification; `scripts/ensure-ci-bubblewrap.sh` shows the pinned source build that CI uses. `provision.sh` does not replace the binary.
 - `provision.sh` applies these changes and is idempotent. It never remounts an active tmpfs.
 - `rollback.sh` removes them. It keeps `/opt/nexus-qual` unless you pass `--purge-runtime`, and it leaves `acl` installed.
 - `validate.mjs`, run as the operator, proves the result using infrastructure fixtures only.
