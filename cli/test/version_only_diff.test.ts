@@ -32,6 +32,7 @@ test("stable promotion accepts only RC + synchronized version change", () => {
     assert.equal(spawnSync("git", ["clone", "-q", "--no-local", ROOT, repo], { env }).status, 0);
     // The checkout under test may carry uncommitted changes to the script itself: test that version.
     fs.copyFileSync(path.join(ROOT, "scripts/check-version-only-diff.mjs"), path.join(repo, "scripts/check-version-only-diff.mjs"));
+    setVersion("9.9.9-rc.1");
     git("add", "-A");
     git("commit", "-qm", "rc", "--allow-empty");
     const rc = git("rev-parse", "HEAD");
@@ -41,7 +42,16 @@ test("stable promotion accepts only RC + synchronized version change", () => {
     const good = check(rc, "HEAD");
     assert.equal(good.status, 0, good.stderr);
     assert.match(good.stdout, /version-only: .* \+ v9\.9\.9/);
+    const validStable = git("rev-parse", "HEAD");
 
+    git("reset", "-q", "--hard", rc);
+    setVersion("9.9.10");
+    git("commit", "-qam", "stable version does not match accepted RC");
+    const mismatchedPromotion = check(rc, "HEAD");
+    assert.notEqual(mismatchedPromotion.status, 0, "stable promotion must retain the accepted RC's major.minor.patch");
+    assert.match(mismatchedPromotion.stderr, /stable version 9\.9\.10 does not match RC 9\.9\.9-rc\.1/);
+
+    git("reset", "-q", "--hard", validStable);
     fs.appendFileSync(path.join(repo, "README.md"), "\nextra\n");
     git("commit", "-qam", "sneaky");
     assert.match(check(rc, "HEAD").stderr, /not a single commit directly on RC/);
