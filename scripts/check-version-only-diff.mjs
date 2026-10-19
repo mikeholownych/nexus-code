@@ -23,9 +23,10 @@ const rcPackageText = execFileSync("git", ["show", `${rc}:package.json`], { enco
 const rcPackage = JSON.parse(rcPackageText);
 const stablePackageText = execFileSync("git", ["show", `${stable}:package.json`], { encoding: "utf8" });
 const stablePackage = JSON.parse(stablePackageText);
-if (!/^\d+\.\d+\.\d+$/.test(stablePackage.version)) fail(`stable version '${stablePackage.version}' is not a stable SemVer`);
-const stableVersion = /^(\d+\.\d+\.\d+)$/.exec(stablePackage.version);
-const rcVersion = /^(\d+\.\d+\.\d+)-rc\.\d+$/.exec(rcPackage.version);
+const numeric = "(?:0|[1-9]\\d*)";
+const stableVersion = new RegExp(`^(${numeric}\\.${numeric}\\.${numeric})$`).exec(stablePackage.version);
+if (!stableVersion) fail(`stable version '${stablePackage.version}' is not a stable SemVer`);
+const rcVersion = new RegExp(`^(${numeric}\\.${numeric}\\.${numeric})-rc\\.${numeric}$`).exec(rcPackage.version);
 if (!rcVersion) fail(`RC version '${rcPackage.version}' is not a release-candidate SemVer`);
 if (stableVersion?.[1] !== rcVersion[1]) fail(`stable version ${stablePackage.version} does not match RC ${rcPackage.version}`);
 if (!isDeepStrictEqual({ ...rcPackage, version: null }, { ...stablePackage, version: null })) fail("root package.json changes more than its version");

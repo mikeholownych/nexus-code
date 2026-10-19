@@ -51,6 +51,19 @@ test("stable promotion accepts only RC + synchronized version change", () => {
     assert.notEqual(mismatchedPromotion.status, 0, "stable promotion must retain the accepted RC's major.minor.patch");
     assert.match(mismatchedPromotion.stderr, /stable version 9\.9\.10 does not match RC 9\.9\.9-rc\.1/);
 
+    git("reset", "-q", "--hard", rc);
+    setVersion("09.9.9-rc.01");
+    git("commit", "-qam", "invalid RC with leading zeroes");
+    const malformedRc = git("rev-parse", "HEAD");
+    setVersion("9.9.9");
+    git("commit", "-qam", "stable after malformed RC");
+    assert.match(check(malformedRc, "HEAD").stderr, /RC version .* is not a release-candidate SemVer/);
+
+    git("reset", "-q", "--hard", rc);
+    setVersion("09.9.9");
+    git("commit", "-qam", "invalid stable version with leading zero");
+    assert.match(check(rc, "HEAD").stderr, /stable version .* is not a stable SemVer/);
+
     git("reset", "-q", "--hard", validStable);
     fs.appendFileSync(path.join(repo, "README.md"), "\nextra\n");
     git("commit", "-qam", "sneaky");
