@@ -1,0 +1,7 @@
+# ACC-CONT-08 baseline measurement
+
+Exact source: `4508d9f33844c86a2416332df2e9b1960823f0f3`. The unmodified production persistence benchmark executed 200 steps with 2 KB tool outputs using an isolated HOME/XDG and TMPDIR under `/var/tmp` on Ubuntu WSL2. `/tmp` is tmpfs and was not used for persistence. The measured scratch mount is ext4; the Ubuntu VHDX is on Windows C:, whose disk identity matches the NVMe physical disk reported as SSD. This records a virtualized SSD-backed stack, not native Linux storage. Hardware and mount metadata accompany the result.
+
+Observed persistence overhead: p95 **222.53 ms**, mean125.27 ms, maximum362.04 ms. The accepted threshold is p95 <100 ms on SSD. **Threshold exceeded.** The benchmark deliberately warns and exits0; its TAP success does not satisfy this acceptance gate. SPEC-04§3.7 therefore requires a small progress record plus append-only messages with schemaVersion2 and forward migration under SPEC-08. No threshold or workload was changed.
+
+This is source performance evidence, not installed-RC qualification, durability/crash acceptance or a broad product-readiness pass. Raw logs, source/benchmark hashes, Node/kernel identity and exact command are retained. No inference or held-out data were used, and no load was applied to mike-dev. The local SUITE claim was held and released. Final implementation and exact-source measurement, migration/continuity regression coverage and independent acceptance remain outstanding.

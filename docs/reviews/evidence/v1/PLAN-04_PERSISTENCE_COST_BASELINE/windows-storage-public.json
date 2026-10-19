@@ -1,0 +1,19 @@
+{
+  "CDisk": {
+    "Number": 1,
+    "FriendlyName": "WD Blue SN5100 2TB",
+    "BusType": "NVMe"
+  },
+  "Physical": {
+    "DeviceId": "1",
+    "FriendlyName": "WD Blue SN5100 2TB",
+    "MediaType": "SSD",
+    "BusType": "NVMe"
+  },
+  "Ubuntu": {
+    "DistributionName": "Ubuntu",
+    "vhdVolume": "C:",
+    "vhdFileName": "ext4.vhdx"
+  },
+  "rawEvidenceLocal": "/var/tmp/nexus-cont08-ssd-9qbvr2hq/windows-storage.json"
+}
