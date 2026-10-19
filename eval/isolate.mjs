@@ -410,6 +410,25 @@ export function grantRunAsAccess(user, targets) {
       const defaultResult = spawnSync(setfacl, defaults, { encoding: "utf8", timeout: 5000, env: { PATH: "/usr/bin:/bin" } });
       if (defaultResult.status !== 0) throw new Error(`could not set scoped evaluator default ACL (${defaultResult.status ?? "signal"})`);
     }
+    // Bubblewrap opens bind sources as the evaluator uid (sudo -u). Some CI tmpfs mounts accept
+    // setfacl but still deny that open; widen mode only after a live access check fails.
+    const readable = spawnSync("/usr/bin/sudo", ["-n", "-u", user, "--", "/usr/bin/test", "-r", resolved], {
+      encoding: "utf8",
+      timeout: 5000,
+      env: { PATH: "/usr/bin:/bin" },
+    });
+    if (readable.status !== 0) {
+      const mode = fs.statSync(resolved).isDirectory() ? 0o0755 : 0o0644;
+      fs.chmodSync(resolved, mode);
+      const retry = spawnSync("/usr/bin/sudo", ["-n", "-u", user, "--", "/usr/bin/test", "-r", resolved], {
+        encoding: "utf8",
+        timeout: 5000,
+        env: { PATH: "/usr/bin:/bin" },
+      });
+      if (retry.status !== 0) {
+        throw new Error(`evaluator ${user} cannot open disposable path for sandbox bind after ACL and mode fallback`);
+      }
+    }
   }
 }
 
