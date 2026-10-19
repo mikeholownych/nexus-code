@@ -19,6 +19,9 @@ export interface RetentionItem {
   /** Exact file identities captured by planning; changed records must be replanned. */
   fileIdentities?: Record<string, string | null>;
   primaryIdentity?: string;
+  /** Missing envelope tracked when collecting an orphaned companion group. */
+  recordFile?: string;
+  orphan?: boolean;
   workspace?: string;
   gitRef?: string;
   sizeBytes: number;
@@ -110,10 +113,10 @@ function computeDirSize(dir: string, deadline?: number): number {
 
 /** Index companion files once; scanning all names for every task would be quadratic. */
 function recordCompanions(directory: string, names: string[], deadline?: number): {
-  records: Map<string, { files: string[]; bytes: number }>;
+  records: Map<string, { files: string[]; bytes: number; mtimeMs: number }>;
   timedOut: boolean;
 } {
-  const records = new Map<string, { files: string[]; bytes: number }>();
+  const records = new Map<string, { files: string[]; bytes: number; mtimeMs: number }>();
   for (const name of names) {
     if (deadline && Date.now() >= deadline) return { records, timedOut: true };
     let identity: string | undefined;
@@ -125,16 +128,35 @@ function recordCompanions(directory: string, names: string[], deadline?: number)
     try {
       const stat = fs.lstatSync(file);
       if (!stat.isFile()) continue;
-      const record = records.get(identity) ?? { files: [], bytes: 0 };
+      const record = records.get(identity) ?? { files: [], bytes: 0, mtimeMs: 0 };
       record.files.push(file);
       record.bytes += stat.size;
+      record.mtimeMs = Math.max(record.mtimeMs, stat.mtimeMs);
       records.set(identity, record);
     } catch { /* A concurrently removed companion is already absent. */ }
   }
   return { records, timedOut: false };
 }
 
-export function scanTasks(tasksDir: string, checkTestPollution: boolean = false, deadline?: number): { items: RetentionItem[]; timedOut: boolean } {
+/** Retain/account for failed first publications and interrupted cleanup without inventing an age grace. */
+function orphanCompanions(
+  directory: string, names: string[], records: Map<string, { files: string[]; bytes: number; mtimeMs: number }>,
+  kind: "task" | "session", currentSessionId?: string, deadline?: number,
+): { items: RetentionItem[]; timedOut: boolean } {
+  const present = new Set(names), items: RetentionItem[] = [];
+  for (const [id, record] of records) {
+    if (deadline && Date.now() >= deadline) return { items, timedOut: true };
+    if (present.has(`${id}.json`) || !/^[A-Za-z0-9._-]{1,160}$/.test(id) || id === "." || id === "..") continue;
+    const primaryFile = record.files[0];
+    items.push({ kind, id, primaryFile, primaryIdentity: fileIdentity(primaryFile) ?? undefined,
+      recordFile: path.join(directory, `${id}.json`), orphan: true,
+      associatedFiles: record.files.slice(1), sizeBytes: record.bytes, mtimeMs: record.mtimeMs,
+      current: currentSessionId === id });
+  }
+  return { items, timedOut: false };
+}
+
+export function scanTasks(tasksDir: string, checkTestPollution: boolean = false, deadline?: number, currentSessionId?: string): { items: RetentionItem[]; timedOut: boolean } {
   const items: RetentionItem[] = [];
   let timedOut = false;
   if (!fs.existsSync(tasksDir)) return { items, timedOut };
@@ -161,25 +183,14 @@ export function scanTasks(tasksDir: string, checkTestPollution: boolean = false,
 
       let isPollution = false;
       let ws: string | undefined;
-
-      // Extract workspace if test pollution filtering is active
-      if (checkTestPollution) {
-        try {
-          // Read up to first 2 KB to get workspacePath quickly
-          const fd = fs.openSync(fullPath, "r");
-          const buf = Buffer.alloc(2048);
-          const bytesRead = fs.readSync(fd, buf, 0, 2048, 0);
-          fs.closeSync(fd);
-          const head = buf.toString("utf8", 0, bytesRead);
-          const match = head.match(/"workspace(?:Path)?"\s*:\s*"([^"]+)"/);
-          if (match) {
-            ws = match[1];
-            isPollution = isTestPollutionPath(ws);
-          }
-        } catch {
-          // fallback to full parse if needed
-        }
-      }
+      let pinned = false, current = currentSessionId === cleanId;
+      try {
+        const metadata = JSON.parse(fs.readFileSync(fullPath, "utf8"));
+        ws = metadata.workspacePath || metadata.workspace;
+        pinned = Boolean(metadata.pinned);
+        current ||= Boolean(currentSessionId && currentSessionId === (metadata.sessionId || metadata.id));
+        isPollution = checkTestPollution && isTestPollutionPath(ws);
+      } catch { /* Invalid records retain the existing age/size policy. */ }
 
       items.push({
         kind: "task",
@@ -188,11 +199,14 @@ export function scanTasks(tasksDir: string, checkTestPollution: boolean = false,
         primaryIdentity: statIdentity(stat),
         associatedFiles,
         workspace: ws,
+        pinned, current,
         sizeBytes: totalSize,
         mtimeMs: stat.mtimeMs,
         testPollution: isPollution,
       });
     }
+    const orphans = orphanCompanions(tasksDir, entries, companions.records, "task", currentSessionId, deadline);
+    items.push(...orphans.items); timedOut ||= orphans.timedOut;
   } catch {}
 
   return { items, timedOut };
@@ -232,23 +246,28 @@ export function scanSessions(
           const stat = safeStat(primaryFile);
           if (!stat) continue;
 
+          // Cached pin/workspace/identity fields are advisory: expiry must use
+          // the current envelope even if an index timestamp appears newer.
+          const metadata = JSON.parse(fs.readFileSync(primaryFile, "utf8"));
+          const actualId = metadata.sessionId || metadata.taskId || metadata.id || cleanId;
+          const workspace = metadata.workspacePath || metadata.workspace;
           knownFromIndex.add(cleanId);
           const companion = companions.records.get(cleanId);
           const associatedFiles = companion?.files ?? [];
 
-          const isCurrent = Boolean(currentSessionId && (currentSessionId === cleanId || currentSessionId === entry.id));
-          const isPollution = checkTestPollution ? isTestPollutionPath(entry.workspace) : false;
+          const isCurrent = Boolean(currentSessionId && (currentSessionId === cleanId || currentSessionId === actualId));
+          const isPollution = checkTestPollution ? isTestPollutionPath(workspace) : false;
 
           items.push({
             kind: "session",
-            id: entry.id || cleanId,
+            id: actualId,
             primaryFile,
             primaryIdentity: statIdentity(stat),
             associatedFiles,
-            workspace: entry.workspace,
+            workspace,
             sizeBytes: stat.size + (companion?.bytes ?? 0),
             mtimeMs: stat.mtimeMs,
-            pinned: Boolean(entry.pinned),
+            pinned: Boolean(metadata.pinned),
             current: isCurrent,
             testPollution: isPollution,
           });
@@ -306,6 +325,8 @@ export function scanSessions(
     }
   } catch {}
 
+  const orphans = orphanCompanions(sessionsDir, entries, companions.records, "session", currentSessionId, deadline);
+  items.push(...orphans.items); timedOut ||= orphans.timedOut;
   return { items, timedOut };
 }
 
@@ -418,10 +439,11 @@ function fileIdentity(file: string): string | null {
 
 function captureRecordIdentities(item: RetentionItem): void {
   if (item.kind !== "task" && item.kind !== "session") return;
-  const stem = item.primaryFile.replace(/\.json$/, "");
-  const files = new Set([item.primaryFile, ...item.associatedFiles,
+  const recordFile = item.recordFile ?? item.primaryFile;
+  const stem = recordFile.replace(/\.json$/, "");
+  const files = new Set([recordFile, item.primaryFile, ...item.associatedFiles,
     `${stem}.messages.jsonl`, `${stem}.history.jsonl`,
-    `${item.primaryFile}.pre-migration-v0`, `${item.primaryFile}.pre-migration-v1`]);
+    `${recordFile}.pre-migration-v0`, `${recordFile}.pre-migration-v1`]);
   item.fileIdentities = Object.fromEntries([...files].map(file => [file, fileIdentity(file)]));
   // A record replaced between scan and identity capture must never inherit the
   // old record's expiry decision. Force execution to skip and replan it.
@@ -446,7 +468,7 @@ export function planRetention(options: RetentionPolicyOptions = {}): RetentionPl
 
   let timedOut = false;
 
-  const { items: tasks, timedOut: tOut1 } = scanTasks(tasksDir, Boolean(options.onlyTestPollution), deadline);
+  const { items: tasks, timedOut: tOut1 } = scanTasks(tasksDir, Boolean(options.onlyTestPollution), deadline, options.currentSessionId);
   if (tOut1) timedOut = true;
 
   const { items: sessions, timedOut: tOut2 } = scanSessions(sessionsDir, options.currentSessionId, Boolean(options.onlyTestPollution), deadline);
@@ -472,7 +494,7 @@ export function planRetention(options: RetentionPolicyOptions = {}): RetentionPl
   // Case 1: --only-test-pollution
   if (options.onlyTestPollution) {
     for (const item of allItems) {
-      if (item.testPollution) {
+      if (item.testPollution && !item.pinned && !item.current) {
         item.reason = "test_pollution";
         reclaimable.push(item);
         reclaimableSet.add(item.primaryFile);

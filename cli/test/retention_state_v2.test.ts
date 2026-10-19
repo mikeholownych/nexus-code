@@ -39,3 +39,37 @@ test("GC skips a store while its writer owns the kernel guard", () => fixture((h
   assert.equal(fs.existsSync(primary), true); assert.equal(fs.existsSync(log), true);
   assert.equal(executeRetention(plan).deletedCount, 1);
 }));
+
+test("orphan journals and migration backups count toward the size cap and are collected together", () => fixture((home, primary, log) => {
+  fs.unlinkSync(primary);
+  const plan = planRetention({ home, maxSizeBytes: 0 });
+  assert.equal(plan.reclaimableCount, 1); assert.equal(plan.reclaimableItems[0].orphan, true);
+  assert.equal(plan.totalScannedBytes, fs.statSync(log).size + fs.statSync(`${primary}.pre-migration-v1`).size);
+  assert.equal(executeRetention(plan).deletedCount, 1);
+  assert.equal(fs.existsSync(log), false); assert.equal(fs.existsSync(`${primary}.pre-migration-v1`), false);
+}));
+
+test("a newly published envelope cancels an orphan deletion plan", () => fixture((home, primary, log) => {
+  fs.unlinkSync(primary);
+  const plan = planRetention({ home, maxSizeBytes: 0 });
+  fs.writeFileSync(primary, JSON.stringify({ taskId: "old", schemaVersion: 2, messageLog: "new cursor" }));
+  assert.equal(executeRetention(plan).deletedCount, 0);
+  assert.equal(fs.existsSync(log), true); assert.equal(fs.existsSync(primary), true);
+}));
+
+test("GC reads pin protection from the current envelope rather than a stale newer index", () => fixture((home, primary, log) => {
+  const sessions = path.join(home, ".nexus", "sessions"); fs.mkdirSync(sessions);
+  const session = path.join(sessions, "pinned.json");
+  fs.writeFileSync(session, JSON.stringify({ sessionId: "pinned", pinned: true, workspace: "/tmp/nexus-test-fixture" }));
+  fs.utimesSync(session, new Date("2020-01-01"), new Date("2020-01-01"));
+  fs.writeFileSync(path.join(sessions, "index.json"), JSON.stringify({ version: 1, sessions: { pinned: { id: "pinned", pinned: false, mtime: Date.now() + 1000000 } } }));
+  const plan = planRetention({ home, maxSizeBytes: 0 });
+  assert.equal(plan.reclaimableItems.some(item => item.primaryFile === session), false);
+  executeRetention(plan); assert.equal(fs.existsSync(session), true);
+}));
+
+test("current and pinned tasks remain protected even during test-pollution cleanup", () => fixture((home, primary) => {
+  fs.writeFileSync(primary, JSON.stringify({ taskId: "old", sessionId: "active", pinned: true, workspace: "/tmp/nexus-test-fixture" }));
+  const plan = planRetention({ home, currentSessionId: "active", onlyTestPollution: true, maxSizeBytes: 0 });
+  assert.equal(plan.reclaimableCount, 0); assert.equal(fs.existsSync(primary), true);
+}));
