@@ -18,7 +18,8 @@ import { buildConfig } from "./config.js";
 import { DecisionRejected, newOperation, type DurableOperationState, type OperationEvent, type OperationPolicy, type WorkUnitSpec } from "./core/operation.js";
 import { AgentWorkUnitExecutor, applyOperatorDecision, driveOperation, OperationStore, resourcesFromConfig } from "./core/operation_runner.js";
 import { credentialFingerprint, type ResourceDescriptor } from "./core/resources.js";
-import { operatorSetting } from "./client.js";
+import { createOperationAccountIdentity } from "./core/account_identity.js";
+import { credentialStorageHome, operatorSetting } from "./client.js";
 import { baseUrlSetting, originOf, providerDefinition } from "./providers.js";
 import { providerApiKey } from "./credentials.js";
 import type { HarnessConfig } from "./types.js";
@@ -32,8 +33,8 @@ interface OperationSpec {
   policy?: Partial<OperationPolicy>;
 }
 
-function normalizeResources(spec: OperationSpec, config: HarnessConfig): ResourceDescriptor[] {
-  if (!spec.resources?.length) return resourcesFromConfig(config);
+function normalizeResources(spec: OperationSpec, config: HarnessConfig, identity: ReturnType<typeof createOperationAccountIdentity>): ResourceDescriptor[] {
+  if (!spec.resources?.length) return resourcesFromConfig(config, identity);
   const configOrigin = new URL(config.endpoint.replace(/\/+$/, "")).origin;
   return spec.resources.map((r) => {
     const def = providerDefinition(r.providerId);
@@ -46,7 +47,7 @@ function normalizeResources(spec: OperationSpec, config: HarnessConfig): Resourc
     const endpoint = def ? base.replace(/\/+$/, "") : plain.endsWith("/v1") ? plain : `${plain}/v1`;
     const provider = r.provider ?? (def ? def.id : new URL(endpoint).origin);
     const key = r.apiKeyEnv ? process.env[r.apiKeyEnv] : def ? providerApiKey(def.id, def.credentialEnv) : provider === configOrigin ? config.apiKey : undefined;
-    const account = r.account ?? credentialFingerprint(key);
+    const account = r.account ?? credentialFingerprint(key, identity);
     return { ...r, endpoint, provider, capabilities: r.capabilities ?? ["tools"], ...(account ? { account } : {}) } as ResourceDescriptor;
   });
 }
@@ -114,7 +115,10 @@ export function registerOperationCommands(program: Command): void {
       const spec = JSON.parse(fs.readFileSync(path.resolve(specPath), "utf-8")) as OperationSpec;
       const config = buildConfig(options);
       const store = new OperationStore(config.workspace);
-      const state = newOperation(spec.id ?? `op-${randomUUID().slice(0, 8)}`, spec.objective, spec.units, normalizeResources(spec, config), Date.now(), spec.policy);
+      const id = spec.id ?? `op-${randomUUID().slice(0, 8)}`;
+      const createdAt = Date.now();
+      const identity = createOperationAccountIdentity(credentialStorageHome());
+      const state = newOperation(id, spec.objective, spec.units, normalizeResources(spec, config, identity), createdAt, spec.policy);
       if (!options.json) console.log(pc.bold(`Operation ${state.id}`) + pc.dim(` — resume after a restart with: nexus operation resume ${state.id}`));
       await drive(state, config, store, Boolean(options.discover || spec.discoverCatalog), Boolean(options.json));
     });
@@ -157,7 +161,7 @@ export function registerOperationCommands(program: Command): void {
     .description("Show operation state, parked work, wake time and pending decisions")
     .action((id: string | undefined, options: any) => {
       const store = new OperationStore(path.resolve(options.workspace ?? process.cwd()));
-      const ops = id ? [store.load(id)] : store.list();
+      const ops = id ? [store.loadForInspection(id)] : store.listForInspection();
       if (options.json) return void console.log(JSON.stringify(ops, null, 2));
       if (!ops.length) return void console.log("No operations in this workspace.");
       ops.forEach(printStatus);
