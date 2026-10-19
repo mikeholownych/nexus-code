@@ -696,25 +696,26 @@ function executeRetentionLocked(plan: RetentionPlan, options: { dryRun?: boolean
           }
         }
       } catch (err: any) {
+        success = false;
         errors.push({ path: assoc, error: err?.message || String(err) });
       }
     }
 
-    // If checkpoint has gitRef, prune git ref
-    if (item.kind === "checkpoint" && item.gitRef && item.workspace) {
-      try {
-        execSync(`git update-ref -d refs/nexus/checkpoints/${item.id}`, {
-          cwd: item.workspace,
-          stdio: "ignore",
-        });
-      } catch {}
-    }
-
-    if (item.kind === "session") {
-      sessionsRemoved.push(item.id);
-    }
-
     if (success) {
+      // If checkpoint has gitRef, prune git ref
+      if (item.kind === "checkpoint" && item.gitRef && item.workspace) {
+        try {
+          execSync(`git update-ref -d refs/nexus/checkpoints/${item.id}`, {
+            cwd: item.workspace,
+            stdio: "ignore",
+          });
+        } catch {}
+      }
+
+      if (item.kind === "session") {
+        sessionsRemoved.push(item.id);
+      }
+
       deletedCount++;
       deletedBytes += item.sizeBytes;
       deletedItems.push(item);
