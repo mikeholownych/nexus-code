@@ -318,4 +318,62 @@ describe("PLAN-08 PR-8c: Persistence retention, GC, and indexed sessions (REQ-PE
       fs.rmSync(testHome, { recursive: true, force: true });
     }
   });
+
+  test("Planning candidate selection and size cap sorting respects expired deadline", () => {
+    const testHome = tmp("deadline-plan-home-");
+    try {
+      const tasksDir = path.join(testHome, ".nexus", "tasks");
+      fs.mkdirSync(tasksDir, { recursive: true, mode: 0o700 });
+      for (let i = 0; i < 30; i++) {
+        const taskId = `task-plan-${i}`;
+        const primary = path.join(tasksDir, `${taskId}.json`);
+        fs.writeFileSync(primary, JSON.stringify({ schemaVersion: 2, taskId, title: `Task ${i}` }));
+      }
+
+      // Expired deadline before planning Phase A/B
+      const plan = planRetention({
+        home: testHome,
+        maxSizeBytes: 100,
+        deadline: Date.now() - 10,
+      });
+
+      assert.equal(plan.timedOut, true);
+    } finally {
+      fs.rmSync(testHome, { recursive: true, force: true });
+    }
+  });
+
+  test("Background daily GC: persists summary and lastRunAt even when work budget expires", async () => {
+    const testHome = tmp("daily-gc-persist-home-");
+    try {
+      const tasksDir = path.join(testHome, ".nexus", "tasks");
+      fs.mkdirSync(tasksDir, { recursive: true, mode: 0o700 });
+      const oldTime = new Date(Date.now() - 40 * 24 * 60 * 60 * 1000);
+      for (let i = 0; i < 40; i++) {
+        const taskId = `task-daily-${i}`;
+        const primary = path.join(tasksDir, `${taskId}.json`);
+        fs.writeFileSync(primary, JSON.stringify({ schemaVersion: 2, taskId, title: `Task ${i}` }));
+        fs.utimesSync(primary, oldTime, oldTime);
+      }
+
+      acknowledgeDailyGc(testHome);
+      const res = await maybeRunDailyGc({ home: testHome, timeBudgetMs: 5 });
+      assert.equal(res.status, "ran");
+      assert.ok(res.summary);
+      assert.equal(res.summary.timedOut, true);
+
+      // Verify summary persistence
+      const state = getGcState(testHome);
+      assert.ok(state.lastRunAt);
+      assert.ok(state.lastRunSummary);
+      assert.ok(typeof state.lastRunSummary.durationMs === "number");
+
+      // Next call within 24h respects lastRunAt and does not re-run
+      const res2 = await maybeRunDailyGc({ home: testHome });
+      assert.equal(res2.status, "already_ran_today");
+    } finally {
+      fs.rmSync(testHome, { recursive: true, force: true });
+    }
+  });
 });
+

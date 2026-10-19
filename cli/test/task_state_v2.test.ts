@@ -186,15 +186,30 @@ test("deleting an explicit task removes its conversation sidecar", () => fixture
   assert.equal(fs.existsSync(manager.getMessageLogFilePath(state.taskId)), false);
 }));
 
-test("deleting an explicit task removes orphaned first-save message journal without envelope", () => fixture((manager, state) => {
+test("deleting an explicit task removes orphaned message journal, history, and migration backups without envelope", () => fixture((manager, state) => {
+  const primaryPath = manager.getStateFilePath(state.taskId);
   const sidecarPath = manager.getMessageLogFilePath(state.taskId);
+  const historyPath = path.join(path.dirname(sidecarPath), `${state.taskId}.history.jsonl`);
+  const backupV0 = `${primaryPath}.pre-migration-v0`;
+  const backupV1 = `${primaryPath}.pre-migration-v1`;
+
   fs.writeFileSync(sidecarPath, "orphaned message journal line\n");
-  assert.equal(fs.existsSync(manager.getStateFilePath(state.taskId)), false);
+  fs.writeFileSync(historyPath, "orphaned history journal line\n");
+  fs.writeFileSync(backupV0, "orphaned backup v0\n");
+  fs.writeFileSync(backupV1, "orphaned backup v1\n");
+
+  assert.equal(fs.existsSync(primaryPath), false);
   assert.equal(fs.existsSync(sidecarPath), true);
+  assert.equal(fs.existsSync(historyPath), true);
+  assert.equal(fs.existsSync(backupV0), true);
+  assert.equal(fs.existsSync(backupV1), true);
 
   assert.equal(manager.deleteTaskState(state.taskId), true);
-  assert.equal(fs.existsSync(manager.getStateFilePath(state.taskId)), false);
+  assert.equal(fs.existsSync(primaryPath), false);
   assert.equal(fs.existsSync(sidecarPath), false);
+  assert.equal(fs.existsSync(historyPath), false);
+  assert.equal(fs.existsSync(backupV0), false);
+  assert.equal(fs.existsSync(backupV1), false);
 
   assert.equal(manager.deleteTaskState(state.taskId), false);
 }));
