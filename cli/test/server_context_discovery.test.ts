@@ -36,8 +36,9 @@ async function server(routes: Record<string, (req: http.IncomingMessage) => unkn
   const seen: string[] = [];
   const s = http.createServer((req, res) => {
     seen.push(`${req.method} ${req.url}`);
-    const route = routes[`${req.method} ${req.url}`];
-    if (!route) {
+    const key = `${req.method} ${req.url}`;
+    const route = Object.hasOwn(routes, key) ? routes[key] : undefined;
+    if (typeof route !== "function") {
       res.writeHead(404);
       return void res.end("not found");
     }
@@ -49,6 +50,25 @@ async function server(routes: Record<string, (req: http.IncomingMessage) => unkn
 }
 
 describe("discovery against a local server", () => {
+  test("request paths cannot dispatch inherited route properties", async () => {
+    let inheritedCalls = 0;
+    const routes = Object.create({
+      "GET /v1/prototype": () => {
+        inheritedCalls += 1;
+        return { unsafe: true };
+      },
+    }) as Record<string, (req: http.IncomingMessage) => unknown>;
+    const srv = await server(routes);
+    try {
+      const response = await fetch(`${srv.url}/prototype`);
+      assert.equal(response.status, 404);
+      assert.equal(await response.text(), "not found");
+      assert.equal(inheritedCalls, 0);
+    } finally {
+      await srv.close();
+    }
+  });
+
   test("a llama.cpp server's /props context is discovered when its catalog lists no limits", async () => {
     const srv = await server({
       "GET /v1/models": () => ({ data: [{ id: "m", object: "model", owned_by: "llamacpp", meta: { n_ctx_train: 131072 } }] }),
