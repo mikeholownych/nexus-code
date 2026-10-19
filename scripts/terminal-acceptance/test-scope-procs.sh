@@ -50,6 +50,13 @@ expect_count 2
 
 python3 -c 'import os,sys; os.unlink(sys.argv[1])' "$NEXUS_CGROUP_ROOT/user.slice/test.scope/cgroup.procs"
 expect_unavailable
+: > "$NEXUS_CGROUP_ROOT/user.slice/test.scope/cgroup.procs"
+chmod 000 "$NEXUS_CGROUP_ROOT/user.slice/test.scope/cgroup.procs"
+expect_unavailable
+chmod 600 "$NEXUS_CGROUP_ROOT/user.slice/test.scope/cgroup.procs"
+printf 'not-a-pid\n' > "$NEXUS_CGROUP_ROOT/user.slice/test.scope/cgroup.procs"
+expect_unavailable
+python3 -c 'import os,sys; os.unlink(sys.argv[1])' "$NEXUS_CGROUP_ROOT/user.slice/test.scope/cgroup.procs"
 mkdir "$NEXUS_CGROUP_ROOT/user.slice/test.scope/cgroup.procs"
 expect_unavailable
 python3 -c 'import os,sys; os.rmdir(sys.argv[1])' "$NEXUS_CGROUP_ROOT/user.slice/test.scope/cgroup.procs"
