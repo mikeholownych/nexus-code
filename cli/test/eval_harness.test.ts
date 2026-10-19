@@ -260,6 +260,21 @@ test("qualification refuses peer output limits that differ from the installed Ne
   assert.match(nexusLimitsProblem({ limits: { context: 65536, output: 4096 } }, null), /Nexus output allowance 8192 differs/);
 });
 
+test("qualification separates native context discovery from explicit operator overrides", async () => {
+  const { nexusContextLimitArgs, nexusLimitsProblem } = await import(path.join(ROOT, "eval/validate.mjs"));
+  const entry = { id: "m", context_length: 32768, max_completion_tokens: 8192 };
+  const native = { serverProfile: "llamacpp", limits: { output: 8192 } };
+  assert.equal(nexusLimitsProblem(native, entry), null, "an advertised provider limit can be discovered natively");
+  assert.deepEqual(nexusContextLimitArgs(native, 65536), [], "the harness must not supply its default limit");
+  assert.match(nexusLimitsProblem(native, null), /native context discovery requires a positive provider-advertised/);
+  assert.match(nexusLimitsProblem({ ...native, args: ["--context-limit", "32768"] }, entry), /through limits.context/);
+  assert.match(nexusLimitsProblem({ limits: { output: 8192 } }, entry), /serverProfile native discovery/);
+
+  const override = { serverProfile: "llamacpp", limits: { context: 16384, output: 8192 } };
+  assert.equal(nexusLimitsProblem(override, entry), null, "an explicit override is checked against the provider limit");
+  assert.deepEqual(nexusContextLimitArgs(override, 32768), ["--context-limit", "16384"]);
+});
+
 function writePeerResults(root: string, agent: string, overrides: Record<string, unknown> = {}): string {
   const dir = path.join(root, agent);
   fs.mkdirSync(dir, { recursive: true });

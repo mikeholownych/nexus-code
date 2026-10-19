@@ -12,6 +12,7 @@ set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 readonly HERE
+source "$HERE/scope-procs.sh"
 rc="" terminal="" size="" out=""
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -114,24 +115,24 @@ sleep 0.3
 cell_processes | grep -qx "$canary_pid" || { echo "survivor scan cannot see a planted cell process; refusing to measure" >&2; exit 1; }
 kill "$canary_pid"; wait "$canary_pid" 2>/dev/null || true; canary_pid=""
 
-# Each launch runs in its own transient systemd user scope: anything still in that cgroup after the TUI exits is a
-# survivor, whatever its HOME, working directory, session or process group.
-scope_procs() {
-  local cg; cg="$(systemctl --user show -P ControlGroup "$1.scope" 2>/dev/null)"
-  [[ -n "$cg" && -r "/sys/fs/cgroup$cg/cgroup.procs" ]] && wc -l < "/sys/fs/cgroup$cg/cgroup.procs" || echo 0
-}
+# Each launch runs in its own transient systemd user scope. The cgroup probe
+# reports zero only for a readable empty cgroup or a scope systemd confirms is
+# stopped/gone; missing data while active remains an explicit failed measure.
 launch() {
   local label="$1"; shift
-  local before after status=0 survivors scoped unit="nexus-terminal-$cell-$attempt-$label"
+  local before after status=0 survivors scoped scope_measurement=verified unit="nexus-terminal-$cell-$attempt-$label"
   before="$(stty -g)"
   (cd "$ws" && systemd-run --user --scope --quiet --unit="$unit" -- "${launch_env[@]}" "$@" nexus) || status=$?
   after="$(stty -g)"
   sleep 2
-  scoped="$(scope_procs "$unit")"
+  if ! scoped="$(nexus_terminal_scope_procs "$unit")"; then
+    scoped=0
+    scope_measurement=unavailable
+  fi
   survivors="$(cell_processes | wc -l)"
   (( scoped > survivors )) && survivors="$scoped"
-  [[ "$survivors" == 0 ]] || { cell_processes | xargs -r ps -o pid=,args= -p >&2; systemctl --user kill --signal=KILL "$unit.scope" 2>/dev/null || true; }
-  printf '%s\t%s\t%s\t%s\t%s\n' "$label" "$status" "$([[ "$before" == "$after" ]] && echo true || echo false)" "$survivors" "$(date -u +%FT%TZ)" >> "$cell_home/exits.tsv"
+  [[ "$survivors" == 0 && "$scope_measurement" == verified ]] || { cell_processes | xargs -r ps -o pid=,args= -p >&2; systemctl --user kill --signal=KILL "$unit.scope" 2>/dev/null || true; }
+  printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$label" "$status" "$([[ "$before" == "$after" ]] && echo true || echo false)" "$survivors" "$scope_measurement" "$(date -u +%FT%TZ)" >> "$cell_home/exits.tsv"
   # Measurements reach the evidence directory as they happen, so an attempt abandoned later still shows them.
   cp "$cell_home/exits.tsv" "$stem.partial"
 }
@@ -197,8 +198,8 @@ stem = e["STEM"]
 sha = lambda p: hashlib.sha256(open(p, "rb").read()).hexdigest()
 exits = []
 for line in open(f"{stem}.exits.tsv"):
-    label, status, restored, survivors, at = line.rstrip("\n").split("\t")
-    exits.append({"launch": label, "exitStatus": int(status), "sttyRestored": restored == "true", "survivors": int(survivors), "at": at})
+    label, status, restored, survivors, scope_measurement, at = line.rstrip("\n").split("\t")
+    exits.append({"launch": label, "exitStatus": int(status), "sttyRestored": restored == "true", "survivors": int(survivors), "scopeMeasurement": scope_measurement, "at": at})
 checks = {}
 for line in open(f"{stem}.answers.tsv"):
     check, result, note = (line.rstrip("\n").split("\t") + [""])[:3]

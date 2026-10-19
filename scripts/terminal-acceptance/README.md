@@ -46,12 +46,16 @@ The script also **measures** two things:
 - whether `stty` state after each exit equals the state before it;
 - any process started from the cell's HOME that is still running after exit.
 
-A measured survivor fails check 5, and an unrestored terminal fails check 6, whatever you recorded. Each cell writes
+A measured survivor or unavailable systemd-scope measurement fails check 5, and an unrestored terminal fails check 6, whatever you recorded. A zero survivor count is recorded only when the scope's `cgroup.procs` file was readable or systemd confirmed the scope stopped or disappeared. Missing or unreadable scope data while the unit is active is recorded as unavailable and fails the matrix gate. Each cell writes
 `cell-<terminal>-<size>.json` with the RC version, binary path and SHA-256, terminal environment, measurements, your
 results and notes, screenshot hashes, and the mock request log. A cell is recorded once. To retry, keep the failed
 attempt and use a new evidence directory.
 
 ## Gate
+
+The deterministic systemd-scope measurement fixtures run as part of `npm test` in `cli/`. They cover empty and
+populated cgroups, stopped and missing units, unavailable or malformed measurements, and the summary gate's response
+to an unavailable measurement.
 
 ```sh
 # MANIFEST_SHA: sha256 of MANIFEST.sha256 inside the RC archive, e.g.
