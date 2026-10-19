@@ -61,6 +61,20 @@ describe("htmlToText", () => {
     assert.equal(htmlToText("a<?php gone ?>b"), "a b");
   });
 
+  it("does not let a quoted > end a tag early", () => {
+    const hostile = '<script x="> </script>LEAK">actual()</script>tail';
+    const result = htmlToText(hostile);
+    assert.equal(result, "tail");
+    assert.equal(result.includes("LEAK"), false, result);
+    assert.equal(result.includes("actual()"), false, result);
+    assert.equal(htmlToText("<img src='x>y'>text"), "text");
+  });
+
+  it("ends comments at --> even when they contain >", () => {
+    assert.equal(htmlToText("<!-- a > b -->tail"), "tail");
+    assert.equal(htmlToText("keep <!-- no end"), "keep");
+  });
+
   it("runs in bounded time on pathological shapes", () => {
     const pathological = "<".repeat(20_000) + "a".repeat(20_000) + "<script" + "x".repeat(20_000);
     const started = Date.now();

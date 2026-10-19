@@ -28,8 +28,27 @@ function matchesTagName(input: string, i: number, tag: string): boolean {
   return next === undefined || next === ">" || /[\s/]/.test(next);
 }
 
+/** Index of the tag's real ">": quoted attribute values may contain ">". */
 function findTagEnd(input: string, from: number): number {
-  return input.indexOf(">", from);
+  let quote: string | undefined;
+  for (let i = from; i < input.length; i += 1) {
+    const ch = input[i];
+    if (quote !== undefined) {
+      if (ch === quote) quote = undefined;
+      continue;
+    }
+    if (ch === '"' || ch === "'") {
+      quote = ch;
+      continue;
+    }
+    if (ch === ">") return i;
+  }
+  return -1;
+}
+
+/** Comments end at "-->" (or the end of input), so ">" inside them is text. */
+function findCommentEnd(input: string, from: number): number {
+  return input.indexOf("-->", from);
 }
 
 /** Next closing tag whose name is exactly `tag` (a spec boundary follows the name). */
@@ -61,6 +80,14 @@ export function htmlToText(input: string): string {
     if (!tagLike) {
       out += ch;
       i += 1;
+      continue;
+    }
+    // Comments run to "-->", not to the first ">" inside them.
+    if (next === "!" && input.slice(i + 2, i + 4) === "--") {
+      const commentEnd = findCommentEnd(input, i + 4);
+      if (commentEnd < 0) return collapse(out); // unterminated comment: drop the rest
+      out += " ";
+      i = commentEnd + 3;
       continue;
     }
     // Raw-text elements: drop the open tag, its contents, and its close tag.
