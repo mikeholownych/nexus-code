@@ -463,20 +463,26 @@ export class DurableStateManager {
 
   private deleteTaskStateLocked(taskId: string): boolean {
     const filePath = this.getStateFilePath(taskId);
+    const primaryName = path.basename(filePath);
+    const identity = primaryName.replace(/\.json$/, "");
+    const backupPrefix = `${primaryName}.pre-migration-v`;
+    let deleted = false;
     if (fs.existsSync(filePath)) {
       fs.unlinkSync(filePath);
-      const primaryName = path.basename(filePath);
-      const identity = primaryName.replace(/\.json$/, "");
-      const backupPrefix = `${primaryName}.pre-migration-v`;
-      for (const name of fs.readdirSync(this.baseDir)) {
-        if (name === `${identity}.messages.jsonl` || name === `${identity}.history.jsonl` ||
-            (name.startsWith(backupPrefix) && /^(0|[1-9]\d*)$/.test(name.slice(backupPrefix.length)))) {
+      deleted = true;
+    }
+    for (const name of fs.readdirSync(this.baseDir)) {
+      if (name === `${identity}.messages.jsonl` || name === `${identity}.history.jsonl` ||
+          (name.startsWith(backupPrefix) && /^(0|[1-9]\d*)$/.test(name.slice(backupPrefix.length)))) {
+        try {
           fs.unlinkSync(path.join(this.baseDir, name));
+          deleted = true;
+        } catch (error: any) {
+          if (error.code !== "ENOENT") throw error;
         }
       }
-      return true;
     }
-    return false;
+    return deleted;
   }
 
   /**

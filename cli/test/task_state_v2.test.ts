@@ -159,6 +159,19 @@ test("deleting an explicit task removes its conversation sidecar", () => fixture
   assert.equal(fs.existsSync(manager.getMessageLogFilePath(state.taskId)), false);
 }));
 
+test("deleting an explicit task removes orphaned first-save message journal without envelope", () => fixture((manager, state) => {
+  const sidecarPath = manager.getMessageLogFilePath(state.taskId);
+  fs.writeFileSync(sidecarPath, "orphaned message journal line\n");
+  assert.equal(fs.existsSync(manager.getStateFilePath(state.taskId)), false);
+  assert.equal(fs.existsSync(sidecarPath), true);
+
+  assert.equal(manager.deleteTaskState(state.taskId), true);
+  assert.equal(fs.existsSync(manager.getStateFilePath(state.taskId)), false);
+  assert.equal(fs.existsSync(sidecarPath), false);
+
+  assert.equal(manager.deleteTaskState(state.taskId), false);
+}));
+
 test("read-modify-save classifies the complete state once with fresh environment secrets before publication and return", () => fixture((manager, state) => {
   manager.saveTaskState(state);
   const original = InformationFlowBoundary.getGlobalInstance();
