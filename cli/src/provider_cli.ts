@@ -43,13 +43,13 @@ function safeModelId(value: string): string {
   // Provider/model identifiers may contain routing punctuation, but not whitespace, controls or arbitrary diagnostics.
   if (!/^[A-Za-z0-9._:\/@+-]{1,160}$/.test(value)) return "(unprintable model id)";
   const credentialShaped = [
-    /^sk-[A-Za-z0-9_-]{8,}$/i,
-    /^(?:gh[pousr]_[A-Za-z0-9_]{20,}|github_pat_[A-Za-z0-9_]{20,})$/i,
-    /^xox[baprs]-[A-Za-z0-9-]{10,}$/i,
-    /^AKIA[0-9A-Z]{16}$/,
-    /^AIza[0-9A-Za-z_-]{35}$/,
-    /^ya29\.[0-9A-Za-z_-]{20,}$/,
-    /^eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}$/,
+    /sk-[A-Za-z0-9_-]{8,}/i,
+    /(?:gh[pousr]_[A-Za-z0-9_]{20,}|github_pat_[A-Za-z0-9_]{20,})/i,
+    /xox[baprs]-[A-Za-z0-9-]{10,}/i,
+    /AKIA[0-9A-Z]{16}/,
+    /AIza[0-9A-Za-z_-]{35}/,
+    /ya29\.[0-9A-Za-z_-]{20,}/,
+    /eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}/,
   ].some((pattern) => pattern.test(value));
   return credentialShaped ? "(unprintable model id)" : value;
 }
