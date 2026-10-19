@@ -401,7 +401,16 @@ async function resolveAgentIdentity(config) {
     const wrapped = config.runAs ? asUserSpec(config.runAs, spec) : spec;
     probe = await runIsolatedProcess(wrapped, { outputLimit: 4096, resources: config.resources ?? null });
   } finally {
-    fs.rmSync(probeWorkspace, { recursive: true, force: true });
+    try {
+      fs.rmSync(probeWorkspace, { recursive: true, force: true });
+    } catch {
+      // After chown-to-evaluator, POSIX ACLs may not restore harness unlink rights on some mounts.
+      spawnSync("/usr/bin/sudo", ["-n", "rm", "-rf", "--", probeWorkspace], {
+        encoding: "utf8",
+        timeout: 5000,
+        env: { PATH: "/usr/bin:/bin" },
+      });
+    }
   }
   const output = `${probe?.stdout ?? ""}${probe?.stderr ?? ""}`.trim();
   const version = output.split(/\r?\n/, 1)[0]?.trim().slice(0, 200) || null;
