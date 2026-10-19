@@ -96,14 +96,24 @@ export function modelFingerprint(config, entry) {
 /** Compare the requested Nexus output/context limits with the limits exposed by the serving endpoint. */
 export function nexusLimitsProblem(config, entry) {
   const limits = config.limits;
-  if (!limits || !Number.isInteger(limits.context) || limits.context <= 0 || !Number.isInteger(limits.output) || limits.output <= 0) {
-    return "qualification requires explicit positive limits.context and limits.output for matched peer settings";
+  const nativeDiscovery = Boolean(config.serverProfile) && limits?.context === undefined;
+  const contextOverride = Number.isInteger(limits?.context) && limits.context > 0;
+  if (!limits || (!contextOverride && !nativeDiscovery) || !Number.isInteger(limits.output) || limits.output <= 0) {
+    return "qualification requires a positive limits.context override (or serverProfile native discovery) and positive limits.output";
+  }
+  const args = Array.isArray(config.args) ? config.args : [];
+  if (args.some((arg) => typeof arg === "string" && (arg === "--context-limit" || arg.startsWith("--context-limit=")))) {
+    return "qualification must declare a Nexus context override through limits.context; --context-limit in args is ambiguous";
   }
   const advertisedContext = positiveInt(entry?.context_length) ?? positiveInt(entry?.max_model_len) ?? positiveInt(entry?.meta?.n_ctx_train);
-  if (advertisedContext && limits.context > advertisedContext) {
+  if (nativeDiscovery && !advertisedContext) {
+    return "native context discovery requires a positive provider-advertised context limit";
+  }
+  if (contextOverride && advertisedContext && limits.context > advertisedContext) {
     return `configured context limit ${limits.context} exceeds the installed Nexus provider limit ${advertisedContext}`;
   }
-  const context = advertisedContext ? Math.min(advertisedContext, limits.context) : limits.context;
+  const requestedContext = nativeDiscovery ? advertisedContext : limits.context;
+  const context = advertisedContext ? Math.min(advertisedContext, requestedContext) : requestedContext;
   const advertisedOutput = positiveInt(entry?.max_completion_tokens);
   const actualOutput = Math.max(1, Math.min(advertisedOutput ?? Math.min(8192, Math.floor(context / 4)), Math.floor(context / 2)));
   if (limits.output !== actualOutput) {
