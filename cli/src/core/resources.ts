@@ -7,7 +7,7 @@
  * failure applies to the account. Provider-specific metadata (reset headers, catalog capabilities, aihost error
  * codes) refines the picture but plain OpenAI-compatible semantics are sufficient.
  */
-import { createHash } from "node:crypto";
+import { createOperationAccountIdentity, type OperationAccountIdentity } from "./account_identity.js";
 import { classifyDestination, type DestinationTrustBoundary } from "./egress.js";
 import { backoffDelayMs, type RecoveryPolicy } from "./provider_recovery.js";
 import type { InferenceFailure } from "./turn.js";
@@ -121,9 +121,8 @@ const TRUST_RANK: Record<DestinationTrustBoundary, number> = { HOST_LOCAL: 4, LO
 const ACCOUNT_CODES = new Set(["insufficient_quota", "quota_exceeded", "billing_hard_limit_reached"]);
 const POOL_CODES = new Set(["capacity_exhausted", "pool_unavailable"]);
 
-export function credentialFingerprint(secret: string | undefined): string | undefined {
-  if (!secret || secret === "not-needed" || secret === "local") return undefined;
-  return createHash("sha256").update(secret).digest("hex").slice(0, 12);
+export function credentialFingerprint(secret: string | undefined, identity: OperationAccountIdentity): string | undefined {
+  return identity.fingerprint(secret);
 }
 
 export function scopeKey(resource: ResourceDescriptor, scope: ConditionScope): string | undefined {
