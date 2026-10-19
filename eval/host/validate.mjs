@@ -11,6 +11,7 @@ import { fileURLToPath } from "node:url";
 import { isolatedArgv, grantRunAsAccess, normalizeRunAsPermissions, sandboxAvailable } from "../isolate.mjs";
 import { resourceConfigProblem, resourceProbeProblem, spawnContained } from "../resources.mjs";
 import { asUser, asUserSpec, hiddenTestIsolationProblem } from "../validate.mjs";
+import { bubblewrapVersionProblem } from "./bubblewrap.mjs";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 const ACCOUNT = "nexus-eval";
@@ -49,6 +50,14 @@ await check("sudo allows only Bubblewrap as the evaluator, in exactly the form t
 await check("setfacl and Bubblewrap are available", () => {
   must(fs.existsSync("/usr/bin/setfacl"), "setfacl is missing");
   must(sandboxAvailable(), "Bubblewrap preflight failed");
+});
+
+await check("Bubblewrap is at least the minimum patched release", () => {
+  const version = run("/usr/bin/bwrap", ["--version"]);
+  must(version.status === 0, "bwrap --version failed");
+  const problem = bubblewrapVersionProblem(version.stdout);
+  must(!problem, problem);
+  return version.stdout.trim();
 });
 
 await check("workspace root is the dedicated, operator-owned, size-capped tmpfs", () => {
