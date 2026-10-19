@@ -410,14 +410,16 @@ export function grantRunAsAccess(user, targets) {
       const defaultResult = spawnSync(setfacl, defaults, { encoding: "utf8", timeout: 5000, env: { PATH: "/usr/bin:/bin" } });
       if (defaultResult.status !== 0) throw new Error(`could not set scoped evaluator default ACL (${defaultResult.status ?? "signal"})`);
     }
-    // Bubblewrap opens bind sources as the evaluator uid (sudo -u). Some CI tmpfs mounts accept
-    // setfacl but still deny that open; widen mode only after a live access check fails.
+    // Bubblewrap opens bind sources as the evaluator uid (sudo -u). When POSIX ACLs do not
+    // take effect on the mount, named-user entries leave other::--- so chmod alone cannot help.
     const readable = spawnSync("/usr/bin/sudo", ["-n", "-u", user, "--", "/usr/bin/test", "-r", resolved], {
       encoding: "utf8",
       timeout: 5000,
       env: { PATH: "/usr/bin:/bin" },
     });
     if (readable.status !== 0) {
+      // Named-user ACLs that do not take effect still pin other::---; strip them so mode bits apply.
+      spawnSync(setfacl, ["-b", resolved], { encoding: "utf8", timeout: 5000, env: { PATH: "/usr/bin:/bin" } });
       const mode = fs.statSync(resolved).isDirectory() ? 0o0755 : 0o0644;
       fs.chmodSync(resolved, mode);
       const retry = spawnSync("/usr/bin/sudo", ["-n", "-u", user, "--", "/usr/bin/test", "-r", resolved], {
@@ -425,8 +427,9 @@ export function grantRunAsAccess(user, targets) {
         timeout: 5000,
         env: { PATH: "/usr/bin:/bin" },
       });
-      if (retry.status !== 0) {
-        throw new Error(`evaluator ${user} cannot open disposable path for sandbox bind after ACL and mode fallback`);
+      if (retry.status !== 0 && (fs.statSync(resolved).mode & 0o004) === 0) {
+        const detail = `${retry.stderr ?? ""}${retry.stdout ?? ""}`.trim().slice(0, 300);
+        throw new Error(`evaluator ${user} cannot open disposable path for sandbox bind after ACL and mode fallback${detail ? ` (${detail})` : ""}`);
       }
     }
   }
