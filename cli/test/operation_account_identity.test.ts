@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
+import { syncBuiltinESMExports } from "node:module";
 import os from "node:os";
 import path from "node:path";
 import { createHash, randomBytes } from "node:crypto";
@@ -182,6 +183,38 @@ test("account identity store repairs a fully written key left linked by an inter
     assert.deepEqual(fs.readFileSync(key), originalKey, "recovery keeps the established key bytes");
     assert.equal(fs.existsSync(interruptedLink), false);
     assert.equal(fs.statSync(key).nlink, 1);
+  });
+});
+
+test("account identity repair tolerates another reader removing the same interrupted link", () => {
+  withTemp((_root, home) => {
+    const keyIdentity = createOperationAccountIdentity(home);
+    keyIdentity.fingerprint(randomBytes(48).toString("base64url"));
+    const key = path.join(home, ".config", "nexus", "account-identities", "hmac-key");
+    const interruptedLink = `${key}.tmp.999999.${randomBytes(8).toString("hex")}`;
+    fs.linkSync(key, interruptedLink);
+    const originalLstat = fs.lstatSync.bind(fs);
+    let raced = false;
+    const wrappedLstat = ((candidate: fs.PathLike, ...args: any[]) => {
+      if (!raced && String(candidate) === interruptedLink) {
+        raced = true;
+        fs.unlinkSync(interruptedLink);
+        throw Object.assign(new Error("concurrent cleanup"), { code: "ENOENT" });
+      }
+      return (originalLstat as any)(candidate, ...args);
+    }) as typeof fs.lstatSync;
+    (fs as any).lstatSync = wrappedLstat;
+    syncBuiltinESMExports();
+
+    try {
+      assert.doesNotThrow(() => createOperationAccountIdentity(home).fingerprint(randomBytes(48).toString("base64url")));
+      assert.equal(raced, true);
+      assert.equal(fs.existsSync(interruptedLink), false);
+      assert.equal(fs.statSync(key).nlink, 1);
+    } finally {
+      (fs as any).lstatSync = originalLstat;
+      syncBuiltinESMExports();
+    }
   });
 });
 
