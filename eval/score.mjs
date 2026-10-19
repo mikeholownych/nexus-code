@@ -244,12 +244,12 @@ function validateMatchedPeers(paths) {
   }
   for (const [key, records] of grouped) {
     const budgets = expectedAgents.map((agent) => records[agent].budget);
-    if (!same(budgets[0], budgets[1]) || !same(budgets[0], budgets[2])) failPairs(`peer conditions do not match for ${key.replace("\t", " run ")}: effective budgets differ`);
+    if (!same(budgets[0], budgets[1]) || !same(budgets[0], budgets[2])) failPairs(`peer conditions do not match for ${formatRunKey(key)}: effective budgets differ`);
   }
 
   const taskIds = [...new Set([...grouped.values()].map((r) => r.nexus.task))].sort();
   const tasks = taskIds.map((task) => {
-    const runs = [...grouped.entries()].filter(([, r]) => r.nexus.task === task).map(([key, r]) => ({ run: Number(key.split("\t")[1]), records: r }));
+    const runs = [...grouped.entries()].filter(([, r]) => r.nexus.task === task).map(([key, r]) => ({ run: Number(key.slice(key.lastIndexOf("\t") + 1)), records: r }));
     if (runs.length !== 5 || !same(runs.map((r) => r.run).sort((a, b) => a - b), [1, 2, 3, 4, 5])) {
       failPairs(`${task} must have matched runs 1–5 for every peer; got ${runs.map((r) => r.run).sort((a, b) => a - b).join(",")}`);
     }
@@ -266,6 +266,14 @@ function validateMatchedPeers(paths) {
     matchedRuns: grouped.size,
     tasks,
   };
+}
+
+function formatRunKey(key) {
+  const separator = key.lastIndexOf("\t");
+  const task = key.slice(0, separator);
+  const run = key.slice(separator + 1);
+  // JSON escaping keeps untrusted task identifiers on one diagnostic line while preserving ordinary identifiers.
+  return `${JSON.stringify(task).slice(1, -1)} run ${run}`;
 }
 
 function same(a, b) {
