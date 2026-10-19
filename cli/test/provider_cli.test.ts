@@ -87,6 +87,32 @@ test("verification JSON replaces malformed provider and model identifiers", () =
   assert.doesNotMatch(JSON.stringify(report), /provider-secret-value|model-secret-value|sk-test-secret|not a URL/);
 });
 
+test("verification JSON redacts compact credential-shaped model identifiers", () => {
+  const credentials = ["sk-test-secret", "ghp_123456789012345678901234567890", "AKIA1234567890ABCDEF"];
+  for (const credential of credentials) {
+    const report = verificationSummary([], [{
+      at: "2026-10-19T00:00:00.000Z",
+      requestId: "request-1",
+      role: "qualification",
+      providerId: "openrouter",
+      selectedModel: "vendor/model-1",
+      effectiveModel: credential,
+      endpointOrigin: "https://inference.example",
+      protocol: "openai-chat",
+      disclosure: "cloud",
+      outcome: "completed",
+      usageConfidence: "none",
+      costConfidence: "unknown",
+    } as any]);
+    assert.equal(report.receipts[0].effectiveModel, "(unprintable model id)");
+    assert.doesNotMatch(JSON.stringify(report), new RegExp(credential));
+  }
+
+  const target = verificationSummary([], [], { provider: "openrouter", model: "sk-test-secret" });
+  assert.equal(target.model, "(unprintable model id)");
+  assert.doesNotMatch(JSON.stringify(target), /sk-test-secret/);
+});
+
 test("verification JSON preserves only known failure classifications and safe detail", () => {
   const report = verificationSummary([{
     step: "tool call",
