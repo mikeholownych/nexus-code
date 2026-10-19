@@ -57,7 +57,11 @@ const rows = [];
 for (const terminal of TERMINALS) {
   for (const size of SIZES) {
     const cell = `${terminal}-${size}`;
-    const files = fs.readdirSync(dir).filter((f) => new RegExp(`^cell-${cell.replace(/\./g, "\\.")}\\.attempt-\\d+\\.json$`).test(f)).sort();
+    const attemptPrefix = `cell-${cell}.attempt-`;
+    const files = fs.readdirSync(dir).filter((name) => {
+      if (!name.startsWith(attemptPrefix) || !name.endsWith(".json")) return false;
+      return /^\d+$/.test(name.slice(attemptPrefix.length, -".json".length));
+    }).sort();
     const partials = fs.readdirSync(dir).filter((f) => f.startsWith(`cell-${cell}.attempt-`) && f.endsWith(".partial"));
     const aborted = partials.length;
     for (const partial of partials) {
