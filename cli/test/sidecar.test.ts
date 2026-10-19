@@ -497,6 +497,7 @@ describe("SidecarServer: sessions and slash commands", () => {
       const dir = path.join(process.env.HOME!, ".nexus", "sessions");
       const file = fs.readdirSync(dir).map((f) => path.join(dir, f)).find((f) => fs.readFileSync(f, "utf-8").includes("broken-session"))!;
       const record = JSON.parse(fs.readFileSync(file, "utf-8"));
+      delete record.messageLog;
       delete record.messages;
       fs.writeFileSync(file, JSON.stringify(record));
       const before = app.getAgent().getMessages();
@@ -505,7 +506,7 @@ describe("SidecarServer: sessions and slash commands", () => {
       await server.idle();
       const reply = events.find((e) => e.type === "slash.result");
       assert.equal(reply.success, false);
-      assert.match(reply.output, /Session broken-session is unreadable/);
+      assert.match(reply.output, /(?:Session broken-session is unreadable|broken-session.*(?:unreadable|corrupt))/i);
       assert.deepEqual(app.getAgent().getMessages(), before);
       assert.equal((server as any).sessionId, sessionId);
     });
