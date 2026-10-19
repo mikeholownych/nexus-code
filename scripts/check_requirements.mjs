@@ -2,7 +2,9 @@
 //   report mode (default): every B/RR row links a spec, a plan and an acceptance ID; every ACC id it names is defined
 //     (in a spec table, a spec's "ACC-X-01 to ACC-X-NN" range, or ACCEPTANCE.md); every `test:<file>::"<name>"` reference
 //     in a row names an existing test file that contains <name>.
-//   --enforce (release gate): additionally every B/RR row is at least `tested` and carries a test: or ACC reference.
+//   --enforce (pre-RC source gate): every B/RR row is at least `tested`, except rows explicitly
+//     mapped to post-RC qualification in ACCEPTANCE.md. Those rows remain deferred, not accepted.
+//     Exact-RC enforcement requires a qualification record with after-RC evidence for every mapped row.
 // Exit 1 on any problem; prints a summary table either way. `--ledger <file>` checks another ledger (used by its test).
 import fs from "node:fs";
 import path from "node:path";
@@ -63,6 +65,8 @@ const RANK = { open: 0, partial: 1, implemented: 2, tested: 3, "visually-accepte
 const problems = [];
 const counts = {};
 const requiredRows = new Map();
+const seenRequirementIds = new Set();
+const deferredQualificationRows = [];
 let rows = 0;
 let header = null;
 for (const line of read(ledgerPath).split("\n")) {
@@ -80,7 +84,9 @@ for (const line of read(ledgerPath).split("\n")) {
   const required = blocking || /^RR\b/.test(cls);
   rows++;
   counts[status] = (counts[status] ?? 0) + 1;
-  if (required) requiredRows.set(id, { id, blocking, status, acceptanceIds: acceptanceIds(acc), line });
+  if (seenRequirementIds.has(id)) problems.push(`${id}: duplicate requirement ID in ledger`);
+  else seenRequirementIds.add(id);
+  if (required && !requiredRows.has(id)) requiredRows.set(id, { id, blocking, status, acceptanceIds: acceptanceIds(acc), line });
   for (const accId of line.match(/ACC-[A-Z0-9]+-[A-Z0-9]+/g) ?? []) {
     if (!accDefined(accId)) problems.push(`${id}: ${accId} is not defined in any spec or ACCEPTANCE.md`);
   }
@@ -92,6 +98,73 @@ for (const line of read(ledgerPath).split("\n")) {
     if (!/ACC-|ACCEPTANCE/.test(acc)) problems.push(`${id}: no acceptance reference`);
   }
 }
+
+function qualificationOnlyRequirements() {
+  // --ledger is a general fixture/report facility, not the authoritative release source. Exact-RC mode rejects it.
+  if (ledgerArg >= 0) return new Map();
+  const match = /<!-- RC-QUALIFICATION-ONLY:START -->([\s\S]*?)<!-- RC-QUALIFICATION-ONLY:END -->/.exec(acceptance);
+  const result = new Map();
+  if (!match) {
+    problems.push("ACCEPTANCE.md is missing the exact-RC qualification-only requirement map");
+    return result;
+  }
+  for (const line of match[1].split("\n")) {
+    if (!line.startsWith("| REQ-")) continue;
+    const cells = line.slice(1, -1).split("|").map((cell) => cell.trim());
+    const [id, criteria] = cells;
+    if (!/^REQ-[A-Z]+-\d+[a-z]?$/.test(id) || !requiredRows.has(id)) {
+      problems.push(`qualification-only map references unknown or non-required requirement ${id}`);
+      continue;
+    }
+    if (result.has(id)) {
+      problems.push(`qualification-only map repeats ${id}`);
+      continue;
+    }
+    const ids = acceptanceIds(criteria);
+    if (ids.length === 0) problems.push(`${id}: qualification-only map must name acceptance criteria`);
+    for (const accId of ids) {
+      if (!accDefined(accId)) problems.push(`${id}: qualification-only criterion ${accId} is not defined`);
+    }
+    for (const accId of requiredRows.get(id).acceptanceIds) {
+      if (!ids.includes(accId)) problems.push(`${id}: qualification-only map omits ledger acceptance criterion ${accId}`);
+    }
+    result.set(id, ids);
+  }
+  return result;
+}
+
+const rcQualificationOnly = qualificationOnlyRequirements();
+
+function qualificationExceptions() {
+  if (ledgerArg >= 0) return new Map();
+  const match = /<!-- RC-QUALIFICATION-EXCEPTIONS:START -->([\s\S]*?)<!-- RC-QUALIFICATION-EXCEPTIONS:END -->/.exec(acceptance);
+  const result = new Map();
+  if (!match) {
+    problems.push("ACCEPTANCE.md is missing the approved exact-RC qualification exception map");
+    return result;
+  }
+  for (const line of match[1].split("\n")) {
+    if (!line.startsWith("| REQ-")) continue;
+    const cells = line.slice(1, -1).split("|").map((cell) => cell.trim());
+    const [id, decision] = cells;
+    if (!/^REQ-[A-Z]+-\d+[a-z]?$/.test(id) || requiredRows.get(id)?.blocking !== true) {
+      problems.push("qualification exception map references unknown or non-blocking requirement " + id);
+      continue;
+    }
+    if (result.has(id)) {
+      problems.push("qualification exception map repeats " + id);
+      continue;
+    }
+    if (!/^DEC-\d{2}$/.test(decision) || !decisionSection(decision)) {
+      problems.push(id + ": qualification exception map must cite an existing decision");
+      continue;
+    }
+    result.set(id, decision);
+  }
+  return result;
+}
+
+const rcQualificationExceptions = qualificationExceptions();
 
 const sha256 = (file) => {
   // Keep hashing synchronous with the checker's other filesystem validation.
@@ -180,17 +253,19 @@ if (qualificationMode && (!enforce || qualificationArg < 0 || artifactArg < 0 ||
         const evidence = qualifiedRequirements[id];
         if (!evidence) throw new Error(`missing qualification evidence for ${id}`);
         if (!Object.hasOwn(RANK, evidence.status) || RANK[evidence.status] < RANK.tested) throw new Error(`${id}: qualification status is below tested`);
+        if (row.blocking && rcQualificationOnly.has(id) && evidence.status !== "product-qualified") throw new Error(`${id}: exact-RC qualification requires product-qualified status`);
         if (row.blocking && evidence.status !== "product-qualified") {
           const decision = evidence.qualificationNotApplicable?.decision;
+          const approvedDecision = rcQualificationExceptions.get(id);
           const decisionExists = new RegExp(`^\\s*[-*]\\s*Qualification applicability:\\s*${id}\\s*=\\s*NOT REQUIRED\\b`, "m").test(decisionSection(decision));
-          if (evidence.status !== "tested" || typeof evidence.qualificationNotApplicable?.reason !== "string" || !evidence.qualificationNotApplicable.reason.trim() || !decisionExists) throw new Error(`${id}: blocker must be product-qualified or tested with an approved decision and qualification-not-applicable reason`);
+          if (evidence.status !== "tested" || typeof evidence.qualificationNotApplicable?.reason !== "string" || !evidence.qualificationNotApplicable.reason.trim() || decision !== approvedDecision || !decisionExists) throw new Error(`${id}: blocker must be product-qualified or tested with an explicitly approved decision and qualification-not-applicable reason`);
         }
         if (!Array.isArray(evidence.evidence) || evidence.evidence.length === 0) throw new Error(`${id}: qualification evidence references are required`);
-        const requiredAccs = row.acceptanceIds;
+        const requiredAccs = rcQualificationOnly.get(id) ?? row.acceptanceIds;
         const evidenceAccs = evidence.evidence.map((ref) => ref?.id);
-        if (requiredAccs.length === 0 || requiredAccs.some((accId) => !evidenceAccs.includes(accId)) || evidenceAccs.some((accId) => !requiredAccs.includes(accId))) throw new Error(`${id}: qualification evidence must cover every acceptance criterion on its ledger row`);
+        if (requiredAccs.length === 0 || requiredAccs.some((accId) => !evidenceAccs.includes(accId)) || evidenceAccs.some((accId) => !requiredAccs.includes(accId))) throw new Error(`${id}: qualification evidence must cover every acceptance criterion specified for the requirement`);
         for (const ref of evidence.evidence) {
-          if (typeof ref?.id !== "string" || !/^ACC-[A-Z0-9]+-[A-Z0-9]+$/.test(ref.id) || !row.acceptanceIds.includes(ref.id)) throw new Error(`${id}: evidence must cite an acceptance criterion on its ledger row`);
+          if (typeof ref?.id !== "string" || !/^ACC-[A-Z0-9]+-[A-Z0-9]+$/.test(ref.id) || !requiredAccs.includes(ref.id)) throw new Error(`${id}: evidence must cite an acceptance criterion required for that exact-RC qualification`);
           const file = evidenceFile(evidenceRoot, ref.path, `${id} evidence`);
           if (!file || typeof ref.sha256 !== "string" || !/^[a-f0-9]{64}$/.test(ref.sha256) || sha256(file) !== ref.sha256) throw new Error(`${id}: evidence digest is missing or does not match`);
         }
@@ -201,12 +276,15 @@ if (qualificationMode && (!enforce || qualificationArg < 0 || artifactArg < 0 ||
     }
   }
   for (const [id, row] of requiredRows) {
-    if (!(row.status in RANK) || RANK[row.status] < RANK.tested) problems.push(`${id}: source ledger status '${row.status}' is below 'tested'`);
+    if (!Object.hasOwn(RANK, row.status)) problems.push(`${id}: source ledger status '${row.status}' is not recognized`);
+    else if (RANK[row.status] < RANK.tested && !rcQualificationOnly.has(id)) problems.push(`${id}: source ledger status '${row.status}' is below 'tested'`);
+    if (!qualificationMode && rcQualificationOnly.has(id)) deferredQualificationRows.push(`${id} (${row.status})`);
     if (!/test:|ACC-|ACCEPTANCE/.test(row.line)) problems.push(`${id}: no test or acceptance evidence`);
   }
 }
 
 console.log(`requirements: ${rows} rows; ${Object.entries(counts).map(([k, v]) => `${k} ${v}`).join(", ")}${enforce ? " (enforce)" : " (report)"}`);
+if (deferredQualificationRows.length > 0) console.log(`deferred to exact-RC qualification: ${deferredQualificationRows.join(", ")}`);
 for (const p of problems) console.log(`  ✖ ${p}`);
 if (rows === 0) problems.push("no requirement rows parsed");
 process.exit(problems.length ? 1 : 0);
