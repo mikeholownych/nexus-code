@@ -28,15 +28,24 @@ test("the production version-probe workspace uses the configured capped filesyst
   fs.chmodSync(tools, 0o755);
   const before = new Set(fs.readdirSync(workspaceRoot));
   const agent = path.join(tools, "goose");
-  fs.writeFileSync(agent, `#!/usr/bin/node
-const fs=require('node:fs');
-if(process.getuid()!==${evaluatorUid}){console.error('version probe did not switch evaluator uid');process.exit(94);}
-if(process.argv[2]!== '--version')process.exit(91);
-if(fs.statSync(process.cwd()).dev!==${expectedDevice}){console.error('version probe escaped capped filesystem');process.exit(92);}
-const cap=fs.statfsSync(process.cwd());
-if(cap.blocks*cap.bsize>${cap.blocks * cap.bsize})process.exit(93);
-fs.writeFileSync('version-probe-write','bounded');
-console.log('goose-storage-probe 1.0.0');
+  // Use /bin/sh: isolatedProcessArgv mounts SYSTEM_BINARIES only, not process.execPath.
+  // GHA Node from actions/setup-node is not at /usr/bin/node, so a node shebang exits 1
+  // before the fake agent body runs (local /usr/bin/node masks this).
+  fs.writeFileSync(agent, `#!/bin/sh
+set -eu
+if [ "$(id -u)" -ne ${evaluatorUid} ]; then
+  echo 'version probe did not switch evaluator uid' >&2
+  exit 94
+fi
+if [ "\${1:-}" != '--version' ]; then
+  exit 91
+fi
+if [ "$(stat -c %d .)" -ne ${expectedDevice} ]; then
+  echo 'version probe escaped capped filesystem' >&2
+  exit 92
+fi
+printf 'bounded' > version-probe-write
+echo 'goose-storage-probe 1.0.0'
 `, { mode: 0o755 });
   const server = http.createServer((_req, res) => {
     res.setHeader("Content-Type", "application/json");

@@ -406,7 +406,8 @@ async function resolveAgentIdentity(config) {
   const output = `${probe?.stdout ?? ""}${probe?.stderr ?? ""}`.trim();
   const version = output.split(/\r?\n/, 1)[0]?.trim().slice(0, 200) || null;
   if (probe?.containmentProblem || probe?.error || probe?.status !== 0 || probe?.timedOut || probe?.overflow || !version) {
-    const reason = probe?.containmentProblem ?? probe?.error ?? (probe?.timedOut ? "timeout" : probe?.overflow ? "output limit exceeded" : `exit ${probe?.status ?? "unknown"}`);
+    const detail = output ? `; output=${JSON.stringify(output.slice(0, 600))}` : "";
+    const reason = probe?.containmentProblem ?? probe?.error ?? (probe?.timedOut ? "timeout" : probe?.overflow ? "output limit exceeded" : `exit ${probe?.status ?? "unknown"}${detail}`);
     return { record: null, problem: required ? `could not identify ${agent} version (${reason})` : null, command, argsPrefix };
   }
 
