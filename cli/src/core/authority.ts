@@ -44,6 +44,9 @@ export interface AuthorityConfig {
 export const DEFAULT_SAFE_READONLY_COMMAND_REGEX =
   /^\s*(ls|dir|pwd|echo|cat|head|tail|grep|rg|find|diff|wc|which|where|git\s+(status|log|diff|branch|show)|npm\s+list|node\s+-v|rustc\s+-v)(\s+.*)?$/i;
 
+// Keep attacker-controlled command text bounded before applying the allowlist regex.
+const MAX_SAFE_READONLY_COMMAND_LENGTH = 8_192;
+
 /**
  * Validates whether a shell command is safe to execute under read-only mode.
  * Enforces AUTH-009 and AUTH-010:
@@ -57,6 +60,7 @@ export function isSafeReadOnlyCommand(
   workspace?: string
 ): boolean {
   if (!command || typeof command !== "string") return false;
+  if (command.length > MAX_SAFE_READONLY_COMMAND_LENGTH) return false;
   const trimmed = command.trim();
   if (trimmed.length === 0) return false;
 

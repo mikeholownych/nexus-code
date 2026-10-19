@@ -107,6 +107,13 @@ describe("WP-02: Authority Admission & Resource Confinement (INC-03)", () => {
     assert.strictEqual(isSafeReadOnlyCommand("git branch --delete foo"), false);
   });
 
+  test("bounds command text before read-only regex evaluation", () => {
+    assert.strictEqual(isSafeReadOnlyCommand("rg " + "x".repeat(8_189)), true);
+    assert.strictEqual(isSafeReadOnlyCommand("rg " + "x".repeat(8_190)), false);
+    assert.strictEqual(isSafeReadOnlyCommand("rg " + "x".repeat(8_190), /^rg\s+.+$/i), false);
+    assert.strictEqual(isSafeReadOnlyCommand("rg short", /^rg\s+.+$/i), true);
+  });
+
   test("AUTH-009: Read-only mode denies mutating capabilities and non-safe commands", async () => {
     const engine = new AuthorityAdmissionEngine({ readOnly: true });
     const dummyContext: InvocationContext = { workspaceRoot: wsRoot, readOnly: true };
