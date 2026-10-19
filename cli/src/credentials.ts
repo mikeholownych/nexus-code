@@ -212,7 +212,7 @@ export function externalCredentials(providerId: string): ResolvedCredential[] {
       const file = path.join(home, ".config/github-copilot", name);
       const data = readJson(file);
       if (!data || typeof data !== "object") continue;
-      const entry = Object.entries(data).find(([k, v]: [string, any]) => k.startsWith("github.com") && typeof v?.oauth_token === "string");
+      const entry = Object.entries(data).find(([k, v]: [string, any]) => (k === "github.com" || k.startsWith("github.com:")) && typeof v?.oauth_token === "string");
       if (entry) {
         const githubToken = (entry[1] as any).oauth_token as string;
         out.push({
