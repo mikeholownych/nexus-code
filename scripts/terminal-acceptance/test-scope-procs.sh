@@ -132,7 +132,11 @@ if node "$HERE/summarize.mjs" "$tmp/evidence" --rc v1.0.0-rc.1 --manifest-sha256
 fi
 grep -q 'safety check 5 FAIL (scope measurement unavailable)' "$tmp/unavailable-summary.log"
 write_evidence_fixture verified
+# Only exact numeric attempt filenames count; similarly prefixed artifacts are ignored.
+printf '%s\n' '{}' > "$tmp/evidence/cell-xterm-80x24.attempt-not-a-number.json"
+printf '%s\n' '{}' > "$tmp/evidence/cell-xterm-80x24.attempt-2.json.backup"
 node "$HERE/summarize.mjs" "$tmp/evidence" --rc v1.0.0-rc.1 --manifest-sha256 "$(printf 'a%.0s' {1..64})" > "$tmp/verified-summary.log"
 grep -q 'manual matrix gate for v1.0.0-rc.1 .*: PASS' "$tmp/verified-summary.log"
+grep -q '^| xterm-80x24 | 1 | PASS | PASS' "$tmp/verified-summary.log"
 
 echo "scope measurement fixtures passed"
