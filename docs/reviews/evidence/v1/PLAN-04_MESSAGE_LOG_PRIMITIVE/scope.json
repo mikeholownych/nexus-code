@@ -1,0 +1,26 @@
+{
+  "status": "PRIMITIVE_ONLY_NOT_INTEGRATED",
+  "base": "9db0d13",
+  "scope": "Append-only message delta log; current task store still schema1; no migration/performance/RC qualification claim",
+  "tests": {
+    "passed": 12,
+    "failed": 0,
+    "skipped": 0
+  },
+  "typescript": "tsc --noEmit passed",
+  "remaining": [
+    "schema2 task manager integration",
+    "forward-only complete backup/migration",
+    "crash publication fault tests",
+    "redaction and changed-policy guarantees",
+    "retention sidecar accounting",
+    "real concurrent appender test",
+    "full continuity and migration regressions",
+    "repeat exact workload on verified SSD",
+    "independent review and required CI"
+  ],
+  "files": {
+    "cli/src/core/task_message_log.ts": "9bd410f780521e18d50ab7b7228e81a46cc722879690b1e3f4a076277398b823",
+    "cli/test/task_message_log.test.ts": "7940fb3b079f34050c059f4b8a5dd5d3cabc99067dccf70ed669260e1aebdb20"
+  }
+}
