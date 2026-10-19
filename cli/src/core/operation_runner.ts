@@ -421,9 +421,12 @@ export function migrateLegacyAccountIdentities(
   operation: DurableOperationState,
   identity: OperationAccountIdentity,
 ): DurableOperationState {
+  const explicitAccounts = new Set(
+    operation.resources.filter((resource) => resource.accountIdentitySource === "explicit" && resource.account).map((resource) => resource.account!),
+  );
   const migrated = new Map<string, string>();
   const replacement = (value: string): string => {
-    if (!isLegacyCredentialFingerprint(value)) return value;
+    if (explicitAccounts.has(value) || !isLegacyCredentialFingerprint(value)) return value;
     let mapped = migrated.get(value);
     if (!mapped) {
       mapped = identity.migrateLegacy(value, operation.id);
@@ -530,6 +533,7 @@ export function resourcesFromConfig(config: HarnessConfig, identity = createOper
     capabilities: ["tools"],
     rank,
     ...(key ? { account: key } : {}),
+    ...(key ? { accountIdentitySource: "credential" as const } : {}),
     ...(taskClass ? { taskClass } : {}),
     ...(preferredFor ? { preferredFor } : {}),
   });

@@ -151,3 +151,46 @@ test("symlinked account identity directory is rejected without following it", ()
     assert.deepEqual(fs.readdirSync(outside), []);
   });
 });
+
+test("caller-provided short account labels are preserved while unmarked legacy hashes migrate", () => {
+  withTemp((_root, home, workspace, stateDir) => {
+    const explicit = "012345abcdef";
+    const legacy = "fedcba654321";
+    const op = newOperation("op-explicit-account", "preserve explicit account labels", [{ id: "unit", prompt: "test" }], [
+      { id: "custom", provider: "provider", endpoint: "https://provider.example/v1", model: "m1", capabilities: ["tools"], account: explicit, accountIdentitySource: "explicit" },
+      { id: "legacy", provider: "provider", endpoint: "https://legacy.example/v1", model: "m2", capabilities: ["tools"], account: legacy },
+    ], Date.now());
+    const store = new OperationStore(workspace, stateDir, home);
+    store.save(op);
+    const loaded = store.loadForInspection(op.id);
+    assert.equal(loaded.resources[0].account, explicit);
+    assert.equal(loaded.resources[1].account, `acct:legacy:v1:${createOperationAccountIdentity(home).migrateLegacy(legacy, op.id).split(":").at(-1)}`);
+  });
+});
+
+test("account identity store repairs a fully written key left linked by an interrupted creator", () => {
+  withTemp((_root, home) => {
+    const identity = createOperationAccountIdentity(home);
+    const secret = randomBytes(48).toString("base64url");
+    identity.fingerprint(secret);
+    const key = path.join(home, ".config", "nexus", "account-identities", "hmac-key");
+    const originalKey = fs.readFileSync(key);
+    const interruptedLink = `${key}.tmp.999999.${randomBytes(8).toString("hex")}`;
+    fs.linkSync(key, interruptedLink);
+    assert.equal(fs.statSync(key).nlink, 2);
+    assert.match(createOperationAccountIdentity(home).fingerprint(secret)!, /^acct:credential:v1:[0-9a-f]{64}$/);
+    assert.deepEqual(fs.readFileSync(key), originalKey, "recovery keeps the established key bytes");
+    assert.equal(fs.existsSync(interruptedLink), false);
+    assert.equal(fs.statSync(key).nlink, 1);
+  });
+});
+
+test("group- or world-writable credential homes fail closed", () => {
+  withTemp((_root, home) => {
+    fs.chmodSync(home, 0o777);
+    assert.throws(
+      () => createOperationAccountIdentity(home).fingerprint(randomBytes(48).toString("base64url")),
+      (error) => error instanceof AccountIdentityError,
+    );
+  });
+});
