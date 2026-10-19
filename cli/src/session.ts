@@ -1,6 +1,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
+import { randomBytes } from "node:crypto";
 import { ChatMessage } from "./types.js";
 import {
   DurableTaskState,
@@ -56,11 +57,25 @@ export interface SessionIndexData {
 }
 
 /** Where interactive sessions are saved unless a directory is given. */
-export function defaultSessionsDir(): string {
-  if (process.env.NEXUS_STATE_DIR) {
+export function defaultSessionsDir(): string {  if (process.env.NEXUS_STATE_DIR) {
     return path.join(process.env.NEXUS_STATE_DIR, "sessions");
   }
   return path.join(os.homedir(), ".nexus", "sessions");
+}
+
+/** Cryptographically unpredictable base36 suffix; the length stays inside the
+ *  egress classifier's session-id whitelist (session_\d{8}_\d{6}_[a-z0-9]{1,8}). */
+function randomBase36Suffix(length: number): string {
+  const alphabet = "abcdefghijklmnopqrstuvwxyz0123456789";
+  let suffix = "";
+  while (suffix.length < length) {
+    for (const byte of randomBytes(length)) {
+      // Rejection sampling keeps the base-36 mapping unbiased (36 * 7 = 252).
+      if (byte >= 252) continue;
+      if (suffix.length < length) suffix += alphabet[byte % 36];
+    }
+  }
+  return suffix;
 }
 
 export class SessionManager {
@@ -83,8 +98,7 @@ export class SessionManager {
     const d = new Date();
     const pad = (n: number) => n.toString().padStart(2, "0");
     const timestamp = `${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}_${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}`;
-    const rand = Math.random().toString(36).substring(2, 6);
-    return `session_${timestamp}_${rand}`;
+    return `session_${timestamp}_${randomBase36Suffix(8)}`;
   }
 
   /**
