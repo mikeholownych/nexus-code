@@ -337,3 +337,87 @@ it("rollback preserves permanent state guard inodes absent from an older snapsho
     assert.equal(fs.existsSync(path.join(home, ".nexus/tasks/nested/obsolete")), false);
   } finally { fs.rmSync(home, { recursive: true, force: true }); }
 });
+
+describe("crash-safe staged restore interruption recovery",()=>{
+  it("re-applies from immutable backup after interrupted restore leaves mixed state",()=>{
+    const home=fs.mkdtempSync(path.join(os.tmpdir(),"nexus-restore-interrupt-"));
+    try{
+      // Build live state with old content + guard files that must survive
+      fs.mkdirSync(path.join(home,".nexus/tasks"),{recursive:true,mode:0o700});
+      fs.mkdirSync(path.join(home,".nexus/tasks/nested"),{recursive:true,mode:0o700});
+      fs.mkdirSync(path.join(home,".nexus/sessions"),{recursive:true,mode:0o700});
+      fs.mkdirSync(path.join(home,".config/nexus"),{recursive:true,mode:0o700});
+
+      const taskGuard=path.join(home,".nexus/tasks/.nexus-state.guard");
+      const nestedGuard=path.join(home,".nexus/tasks/nested/.nexus-state.guard");
+      fs.writeFileSync(taskGuard,"",{mode:0o600});const before=fs.statSync(taskGuard).ino;
+      fs.writeFileSync(nestedGuard,"",{mode:0o600});const nestedInode=fs.statSync(nestedGuard).ino;
+
+      // Old live state (pre-backup)
+      fs.writeFileSync(path.join(home,".nexus/sessions/a.json"),"OLD-session-a");
+      fs.writeFileSync(path.join(home,".nexus/sessions/b.json"),"OLD-session-b");
+      fs.writeFileSync(path.join(home,".nexus/obsolete-key"),"old-value");
+      fs.writeFileSync(path.join(home,".config/nexus/config.env"),"OLD-CONFIG\n");
+
+      const backup=createPreMigrationBackup(home);
+
+      // Mutate live state after backup (simulating drift)
+      fs.writeFileSync(path.join(home,".nexus/sessions/a.json"),"MODIFIED-session-a");
+      fs.writeFileSync(path.join(home,".nexus/sessions/c.json"),"NEW-session-c");
+      fs.writeFileSync(path.join(home,".config/nexus/config.env"),"MODIFIED-CONFIG\n");
+
+      // Simulate an INTERRUPTED restore: some new files applied, some old files
+      // still present, an obsolete file still lingering. This is the mixed state
+      // that a non-crash-safe restore would leave behind.
+      fs.writeFileSync(path.join(home,".nexus/sessions/a.json"),"PARTIAL-session-a"); // partially applied new
+      fs.writeFileSync(path.join(home,".nexus/sessions/b.json"),"OLD-session-b");    // old, not yet updated
+      fs.writeFileSync(path.join(home,".nexus/sessions/c.json"),"PARTIAL-session-c"); // partially applied new
+      // obsolete-key still present (not yet removed)
+      // config.env still old (not yet updated)
+
+      assert.equal(restoreConfigBackup(backup.stateBackupDir!,home),true);
+
+      // All destination files must match the SOURCE backup exactly - no mixed state
+      assert.equal(fs.readFileSync(path.join(home,".nexus/sessions/a.json"),"utf8"),"OLD-session-a");
+      assert.equal(fs.readFileSync(path.join(home,".nexus/sessions/b.json"),"utf8"),"OLD-session-b");
+      // c.json was created after the backup, so it must be removed (not in staged tree)
+      assert.equal(fs.existsSync(path.join(home,".nexus/sessions/c.json")),false,"c.json not in backup must be removed");
+      // obsolete-key IS in the backup, so it must be restored with backup content
+      assert.equal(fs.readFileSync(path.join(home,".nexus/obsolete-key"),"utf8"),"old-value");
+      assert.equal(fs.readFileSync(path.join(home,".config/nexus/config.env"),"utf8"),"OLD-CONFIG\n");
+
+      // Guard file inodes must be preserved
+      assert.equal(fs.statSync(taskGuard).ino,before,"task guard inode changed");
+      assert.equal(fs.statSync(nestedGuard).ino,nestedInode,"nested guard inode changed");
+
+      // No restore staging or marker artifacts should remain
+      const nexusEntries=fs.readdirSync(path.join(home,".nexus"));
+      const restoreArtifacts=nexusEntries.filter(e=>e.startsWith(".restore-"));
+      assert.equal(restoreArtifacts.length,0,"restore artifacts should be cleaned up: "+JSON.stringify(restoreArtifacts));
+    }finally{fs.rmSync(home,{recursive:true,force:true});}
+  });
+
+  it("restore is idempotent: re-applying after completion leaves state unchanged",()=>{
+    const home=fs.mkdtempSync(path.join(os.tmpdir(),"nexus-restore-idempotent-"));
+    try{
+      fs.mkdirSync(path.join(home,".nexus"),{recursive:true,mode:0o700});
+      fs.mkdirSync(path.join(home,".config/nexus"),{recursive:true,mode:0o700});
+      fs.writeFileSync(path.join(home,".config/nexus/config.env"),"ORIGINAL\n");
+
+      const backup=createPreMigrationBackup(home);
+
+      // Change live state
+      fs.writeFileSync(path.join(home,".config/nexus/config.env"),"MODIFIED\n");
+
+      const first=restoreConfigBackup(backup.stateBackupDir!,home);
+      assert.equal(first,true);
+      assert.equal(fs.readFileSync(path.join(home,".config/nexus/config.env"),"utf8"),"ORIGINAL\n");
+
+      // Mutate again and re-apply
+      fs.writeFileSync(path.join(home,".config/nexus/config.env"),"MUTATED\n");
+      const second=restoreConfigBackup(backup.stateBackupDir!,home);
+      assert.equal(second,true);
+      assert.equal(fs.readFileSync(path.join(home,".config/nexus/config.env"),"utf8"),"ORIGINAL\n");
+    }finally{fs.rmSync(home,{recursive:true,force:true});}
+  });
+});

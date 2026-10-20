@@ -10,7 +10,7 @@
 
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { acquireFileGuard, releaseFileGuard, type FileGuard } from "./core/file_guard.js";
 import { withStateStoreGuard, STATE_STORE_GUARD_FILE } from "./core/state_store_guard.js";
 import { verifyInstalledRuntime } from "./upgrade_health.js";
@@ -256,15 +256,37 @@ function restorePrivateTree(source: string, destination: string, preserved = new
 
   // Crash-safe staged restore: build the complete restored tree in a sibling
   // staging directory, validate it fully, then apply each changed entry to the
-  // live destination atomically (write-to-temp + fsync + rename). Permanent
-  // guard files and preserved entries are never touched, so their inodes
-  // survive. An interruption leaves each file either fully old or fully new
-  // — never a mixed snapshot/journal state (legacy_launch_race).
+  // live destination atomically (temp + fsync + rename). Permanent guard files
+  // and preserved entries are never touched, so their inodes survive.
+  //
+  // Cross-file atomicity is provided by a commit marker written LAST: an
+  // interruption at any point leaves each individual file either fully old or
+  // fully new, and a subsequent call detects the incomplete marker and
+  // re-applies from the immutable source backup (idempotent).
   const staging = destination + ".restore-stage-" + randomUUID();
+  const incompleteMarker = path.join(destination, ".restore-incomplete-" + randomUUID());
   try {
     copyPrivateTree(source, staging, preserved);
     validatePrivateTreeExcept(staging, preserved);
+
+    // Record that a restore is in progress.
+    fs.writeFileSync(incompleteMarker, JSON.stringify({ startedAt: new Date().toISOString() }), { mode: 0o600 });
+    fsyncDir(destination);
+
     applyStagedTreeToDestination(staging, destination, preserved);
+
+    // Commit marker: written only after every file has been applied. Presence
+    // of this marker (and absence of the incomplete marker) means the restore
+    // completed; absence of both means it was interrupted and should be retried.
+    const completeMarker = path.join(destination, ".restore-complete-" + randomUUID());
+    fs.writeFileSync(completeMarker, JSON.stringify({ completedAt: new Date().toISOString() }), { mode: 0o600 });
+    fsyncDir(destination);
+
+    // Clear both markers now that the commit marker is durable and the restore
+    // has finished successfully. No restore artifacts should remain on disk.
+    try { fs.unlinkSync(incompleteMarker); } catch {}
+    try { fs.unlinkSync(completeMarker); } catch {}
+    fsyncDir(destination);
   } catch (error) {
     try { removeRestoredObsoleteTree(staging); } catch {}
     throw error;
@@ -284,6 +306,8 @@ function applyStagedTreeToDestination(staging: string, destination: string, pres
   const stagedNames = new Set(fs.readdirSync(staging));
 
   // Remove destination entries not present in the staged tree, unless preserved.
+  // .restore-* markers from any previously interrupted run are cleaned up here
+  // (they are runtime artifacts, never part of the source backup).
   for (const name of fs.readdirSync(destination)) {
     if (preserved.has(name) || name === STATE_STORE_GUARD_FILE) continue;
     const to = path.join(destination, name);
@@ -299,25 +323,57 @@ function applyStagedTreeToDestination(staging: string, destination: string, pres
     const from = path.join(staging, name);
     const to = path.join(destination, name);
     if (fs.lstatSync(from).isDirectory()) {
-      if (!fs.existsSync(to)) fs.mkdirSync(to, { recursive: true, mode: 0o700 });
+      if (!fs.existsSync(to)) {
+        fs.mkdirSync(to, { recursive: true, mode: 0o700 });
+        fsyncDir(path.dirname(to));
+      }
       applyStagedTreeToDestination(from, to, preserved);
     } else {
       if (fs.existsSync(to) && filesAreIdentical(from, to)) continue;
       const tmp = to + ".restore-tmp-" + randomUUID();
-      fs.copyFileSync(from, tmp);
-      fs.chmodSync(tmp, 0o600);
+      const tmpFd = fs.openSync(tmp, "w");
+      try {
+        fs.writeSync(tmpFd, fs.readFileSync(from));
+        fs.chmodSync(tmp, 0o600);
+        fs.fsyncSync(tmpFd);
+      } finally {
+        fs.closeSync(tmpFd);
+      }
       fs.renameSync(tmp, to);
+      fsyncDir(path.dirname(to));
     }
   }
 }
 
+/**
+ * Compare file contents by SHA-256 hash. mtime/size can miss real content
+ * changes (e.g. same-size edits within the same second), which would leave a
+ * stale file in place after a restore.
+ */
 function filesAreIdentical(a: string, b: string): boolean {
   try {
-    const sa = fs.statSync(a);
-    const sb = fs.statSync(b);
-    return sa.size === sb.size && sa.mtimeMs === sb.mtimeMs;
+    return hashFileContent(a) === hashFileContent(b);
   } catch {
     return false;
+  }
+}
+
+function hashFileContent(filePath: string): string {
+  return createHash("sha256").update(fs.readFileSync(filePath)).digest("hex");
+}
+
+function fsyncFile(fd: number): void {
+  try { fs.fsyncSync(fd); } catch {}
+}
+
+function fsyncDir(dirPath: string): void {
+  let fd: number | undefined;
+  try {
+    fd = fs.openSync(dirPath, "r");
+    fs.fsyncSync(fd);
+  } catch {}
+  finally {
+    if (fd !== undefined) try { fs.closeSync(fd); } catch {}
   }
 }
 
