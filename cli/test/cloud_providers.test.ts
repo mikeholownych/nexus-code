@@ -165,7 +165,7 @@ describe("configuration: provider selection, precedence and credential scope", (
     assert.equal(c.model, "claude-sonnet-x");
     assert.equal(c.apiKey, "sk-ant-op");
     assert.equal(c.credentialOrigin, "https://api.anthropic.com");
-    assert.ok(c.authorizedDisclosureOrigins!.includes("https://api.anthropic.com"));
+    assert.ok(c.authorizedDisclosureOrigins!.some((o) => o === "https://api.anthropic.com"));
   });
 
   test("flags outrank operator settings; model ids with slashes and colons are verbatim", () => {
@@ -204,7 +204,7 @@ describe("configuration: provider selection, precedence and credential scope", (
     assert.equal(c.plannerEndpoint, "https://api.anthropic.com/v1");
     assert.equal(c.plannerApiKey, "sk-ant-op");
     assert.equal(c.coderProvider, undefined);
-    assert.ok(c.authorizedDisclosureOrigins!.includes("https://api.anthropic.com"));
+    assert.ok(c.authorizedDisclosureOrigins!.some((o) => o === "https://api.anthropic.com"));
   });
 });
 
@@ -272,11 +272,13 @@ describe("connections: endpoint paths, credentials and disclosure gate", () => {
   test("an unauthorized cloud destination (incl. a cloud-routed local gateway) receives nothing", async () => {
     const m = await mock((_s, res) => json(res, 200, { choices: [{ message: { role: "assistant", content: "x" }, finish_reason: "stop" }] }));
     try {
-      const c = cfg(undefined, m.url, { cloudRoutedOrigins: [m.origin], authorizedDisclosureOrigins: [] });
+      const nearMatch = new URL(m.origin);
+      nearMatch.hostname = `${nearMatch.hostname}.evil.example`;
+      const c = cfg(undefined, m.url, { cloudRoutedOrigins: [m.origin], authorizedDisclosureOrigins: [nearMatch.origin] });
       const e = await rejects(new LocalLlmClient(c).chatCompletionStream(msgs, [], undefined, "r1"));
       assert.equal(e.kind, "policy_denied");
       assert.match(e.message, /not authorized/);
-      assert.equal(m.seen.length, 0);
+      assert.equal(m.seen.length, 0, "a suffix lookalike origin is not authorization");
       await new LocalLlmClient({ ...c, authorizedDisclosureOrigins: [m.origin] }).chatCompletion(msgs, []);
       assert.equal(m.seen.length, 1, "authorized by the operator: sent");
     } finally { await m.close(); }
@@ -765,7 +767,7 @@ describe("operation resources naming a provider", () => {
     assert.equal(c.provider, "anthropic");
     assert.equal(c.apiKey, "sk-ant-UNIT-0001");
     assert.equal(c.credentialOrigin, "https://api.anthropic.com");
-    assert.ok(c.authorizedDisclosureOrigins!.includes("https://api.anthropic.com"));
+    assert.ok(c.authorizedDisclosureOrigins!.some((o) => o === "https://api.anthropic.com"));
     const local = exec.configFor({ id: "local", provider: "x", endpoint: "https://10.0.8.5:8443/v1", model: "engineering/b0", capabilities: ["tools"] });
     assert.equal(local.provider, undefined);
     assert.equal(local.apiKey, "tok-APPLIANCE");
