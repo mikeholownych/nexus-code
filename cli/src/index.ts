@@ -47,11 +47,24 @@ import * as os from "node:os";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-loadEnvironment();
+// Keep the lease for the full frontend/sidecar lifetime, including synchronous
+// TUI dispatch. Maintenance recovery acquires its own exclusive lease instead.
+const startupArgs = process.argv.slice(2);
+const { acquireClientLease, releaseClientLease, clientInvocationKind } = await import("./core/client_lease.js");
+const invocationKind = clientInvocationKind(startupArgs);
+if (invocationKind === "client") {
+  try {
+    const lease = acquireClientLease(process.env.HOME || os.homedir());
+    process.once("exit", () => releaseClientLease(lease));
+  } catch (error: any) {
+    console.error(`[maintenance] ${error.message}`);
+    process.exit(2);
+  }
+  loadEnvironment();
+}
 
 // Diagnose an interrupted packaged upgrade before launching a new CLI/TUI
 // session. Read-only version/help/check commands never recover or write state.
-const startupArgs = process.argv.slice(2);
 const startupReadOnly = startupArgs.includes("--help") || startupArgs.includes("-h") || startupArgs.includes("--version") || startupArgs.includes("-V") || startupArgs.includes("--check");
 if (!startupReadOnly && startupArgs[0] !== "upgrade" && process.env.NEXUS_UPGRADE_HEALTH_CHECK !== "1" && process.env.NEXUS_HOME) {
   const { getJournalPath, readJournal, recoverUpgrade } = await import("./upgrade_journal.js");

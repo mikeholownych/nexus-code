@@ -9,6 +9,7 @@ export interface FileGuardOptions {
   utility?: string;
   label?: string;
   waitMs?: number;
+  mode?: "exclusive" | "shared";
 }
 
 /** Rejects a guard we do not solely own: wrong type, foreign owner, or permissive mode. */
@@ -63,7 +64,7 @@ export function acquireFileGuard(guardPath: string, options: FileGuardOptions = 
   if (!Number.isSafeInteger(waitMs) || waitMs < 0) throw new Error("Invalid file-guard wait bound");
   const fd = openGuardFile(guardPath, label);
   try {
-    const args = [...(waitMs ? ["-w", String(waitMs / 1000)] : ["-n"]), "-E", "75", "3"];
+    const args = [...(options.mode === "shared" ? ["--shared"] : []), ...(waitMs ? ["-w", String(waitMs / 1000)] : ["-n"]), "-E", "75", "3"];
     const probe = spawnSync(utility, args, { stdio: ["ignore", "ignore", "ignore", fd], timeout: Math.max(2000, waitMs + 1000) });
     if (probe.error) throw new Error(`${label} utility ${utility} is unavailable: ${probe.error.message}`);
     if (probe.status === 0) { validateGuardIdentity(guardPath, fd, label); return { path: guardPath, fd }; }
