@@ -138,15 +138,19 @@ test("providers verify captures safe JSON and preserves a sanitized cloud disclo
 
   const previousExitCode = process.exitCode;
   const previousLog = console.log;
+  const previousWarn = console.warn;
   const previousError = console.error;
   const previousCompatibleAuth = operatorSetting("NEXUS_COMPATIBLE_AUTH");
+  const previousCloudRoutedOrigins = operatorSetting("NEXUS_CLOUD_ROUTED_ORIGINS");
   const previousCredentialHome = credentialStorageHome();
   const stdout: string[] = [];
   const stderr: string[] = [];
   const model = "sk-test-secret-model";
+  const testOrigin = `http://127.0.0.1:${address.port}`;
   try {
-    setCredentialAuthority({ NEXUS_COMPATIBLE_AUTH: "none" });
+    setCredentialAuthority({ NEXUS_COMPATIBLE_AUTH: "none", NEXUS_CLOUD_ROUTED_ORIGINS: testOrigin });
     console.log = (...values: unknown[]) => stdout.push(values.join(" "));
+    console.warn = (...values: unknown[]) => stderr.push(values.join(" "));
     console.error = (...values: unknown[]) => stderr.push(values.join(" "));
     const program = new Command();
     program.exitOverride();
@@ -158,17 +162,22 @@ test("providers verify captures safe JSON and preserves a sanitized cloud disclo
 
     const output = JSON.parse(stdout.join("\n"));
     assert.equal(output.model, "(unprintable model id)");
-    assert.equal(output.receipts[0].endpointOrigin, `http://127.0.0.1:${address.port}`);
+    assert.equal(output.receipts[0].endpointOrigin, testOrigin);
     assert.equal(output.steps[0].detail, "Provider request failed");
     assert.match(stderr.join("\n"), /Cloud inference:/);
-    assert.match(stderr.join("\n"), new RegExp(`http://127\\.0\\.0\\.1:${address.port}`));
+    assert.ok(stderr.join("\n").includes(testOrigin));
     assert.doesNotMatch(stdout.join("\n"), /sk-test-secret|query-secret|private|Bearer/);
     assert.doesNotMatch(stderr.join("\n"), /sk-test-secret|query-secret|private|Bearer/);
   } finally {
     console.log = previousLog;
+    console.warn = previousWarn;
     console.error = previousError;
     process.exitCode = previousExitCode;
-    setCredentialAuthority({ NEXUS_COMPATIBLE_AUTH: previousCompatibleAuth }, previousCredentialHome);
+    setCredentialAuthority({
+      NEXUS_COMPATIBLE_AUTH: previousCompatibleAuth,
+      NEXUS_CLOUD_ROUTED_ORIGINS: previousCloudRoutedOrigins,
+    }, previousCredentialHome);
+    server.closeAllConnections();
     server.close();
   }
 });
