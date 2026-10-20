@@ -11,6 +11,8 @@ permissions:
 
 jobs:
   cloudflare-contest-contract:
+    # Retired because the contest has ended; no configured workflow event matches this job-level skip.
+    if: ${{ github.event_name == 'nexus-contest-retired' }}
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
