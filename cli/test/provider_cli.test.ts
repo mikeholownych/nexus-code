@@ -97,7 +97,7 @@ test("providers list captures redacted endpoint and authorized origins on stdout
   }
 });
 
-test("providers list does not echo an invalid configured provider diagnostic", async () => {
+test("providers list preserves safe unknown-provider diagnostics and redacts credential-shaped IDs", async () => {
   const previousExitCode = process.exitCode;
   const previousLog = console.log;
   const previousError = console.error;
@@ -106,15 +106,18 @@ test("providers list does not echo an invalid configured provider diagnostic", a
   const stdout: string[] = [];
   const stderr: string[] = [];
   try {
-    setCredentialAuthority({ NEXUS_PROVIDER: "sk-test-secret-provider" });
     console.log = (...values: unknown[]) => stdout.push(values.join(" "));
     console.error = (...values: unknown[]) => stderr.push(values.join(" "));
-    const program = new Command();
-    program.exitOverride();
-    registerProviderCommands(program);
-    await program.parseAsync(["node", "nexus", "providers"]);
+    for (const provider of ["no-such-provider", "sk-test-secret-provider"]) {
+      setCredentialAuthority({ NEXUS_PROVIDER: provider });
+      const program = new Command();
+      program.exitOverride();
+      registerProviderCommands(program);
+      await program.parseAsync(["node", "nexus", "providers"]);
+    }
 
-    assert.match(stdout.join("\n"), /Configuration error: provider configuration is invalid/);
+    assert.match(stdout.join("\n"), /Unknown provider 'no-such-provider'/);
+    assert.match(stdout.join("\n"), /Unknown provider '\(unrecognized provider\)'/);
     assert.doesNotMatch(stdout.join("\n"), /sk-test-secret-provider/);
     assert.doesNotMatch(stderr.join("\n"), /sk-test-secret-provider/);
   } finally {

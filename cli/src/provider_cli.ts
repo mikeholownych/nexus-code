@@ -69,6 +69,17 @@ function safeProviderId(value: string | undefined): string | undefined {
   return value && Object.prototype.hasOwnProperty.call(PROVIDERS, value) ? value : value ? "(unrecognized provider)" : undefined;
 }
 
+function safeConfigurationError(error: unknown): string {
+  const message = error instanceof Error ? error.message : "";
+  const match = /^Unknown provider '([^'\r\n]{1,128})' \([A-Z0-9_]{1,64}\)\. Known providers: [A-Za-z0-9, ]+\.$/.exec(message);
+  if (!match) return "Configuration error: provider configuration is invalid";
+  const value = match[1];
+  const provider = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/.test(value) && !credentialShaped(value)
+    ? value
+    : "(unrecognized provider)";
+  return `Configuration error: Unknown provider '${provider}'. Known providers: ${Object.keys(PROVIDERS).join(", ")}.`;
+}
+
 function safeModelId(value: string): string {
   // Provider/model identifiers may contain routing punctuation, but not whitespace, controls or arbitrary diagnostics.
   if (!/^[A-Za-z0-9._:\/@+-]{1,160}$/.test(value)) return "(unprintable model id)";
@@ -283,7 +294,7 @@ export function registerProviderCommands(program: Command): void {
       try {
         config = buildConfig({});
       } catch (err: any) {
-        console.log(pc.red("\nConfiguration error: provider configuration is invalid"));
+        console.log(pc.red(`\n${safeConfigurationError(err)}`));
         process.exitCode = 2;
         return;
       }
@@ -305,7 +316,7 @@ export function registerProviderCommands(program: Command): void {
       try {
         config = buildConfig(options);
       } catch (err: any) {
-        console.error(pc.red("Configuration error: provider configuration is invalid"));
+        console.error(pc.red(safeConfigurationError(err)));
         process.exit(2);
       }
       const abort = new AbortController();
