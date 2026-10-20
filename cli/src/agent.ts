@@ -2,7 +2,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
 import { randomUUID } from "node:crypto";
-import { exec, execFileSync } from "node:child_process";
+import { execFile, execFileSync } from "node:child_process";
 import { ChatMessage, DEFAULT_CONTINUATION, HarnessConfig, ToolCall, ToolDefinition } from "./types.js";
 import { LocalLlmClient } from "./client.js";
 import { HARNESS_TOOLS, RustCoreBridge, forbiddenDeletion, registerBridgeCapabilities } from "./tools.js";
@@ -804,7 +804,7 @@ function triggerNotification(title: string, message: string, surface?: string) {
   }
   try {
     process.stdout.write("\x07");
-    exec(`notify-send "${title.replace(/"/g, '\\"')}" "${message.replace(/"/g, '\\"')}"`, () => {});
+    execFile("notify-send", [title, message], () => {});
   } catch {
     // Ignore notification errors
   }
