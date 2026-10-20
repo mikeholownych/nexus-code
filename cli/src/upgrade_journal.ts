@@ -254,45 +254,120 @@ function copyPrivateTree(source: string, destination: string, excluded = new Set
 function restorePrivateTree(source: string, destination: string, preserved = new Set<string>()): void {
   if (fs.existsSync(destination)) validatePrivateTreeExcept(destination, preserved);
 
-  // Crash-safe staged restore: build the complete restored tree in a sibling
-  // staging directory, validate it fully, then apply each changed entry to the
-  // live destination atomically (temp + fsync + rename). Permanent guard files
-  // and preserved entries are never touched, so their inodes survive.
-  //
-  // Cross-file atomicity is provided by a commit marker written LAST: an
-  // interruption at any point leaves each individual file either fully old or
-  // fully new, and a subsequent call detects the incomplete marker and
-  // re-applies from the immutable source backup (idempotent).
-  const staging = destination + ".restore-stage-" + randomUUID();
-  const incompleteMarker = path.join(destination, ".restore-incomplete-" + randomUUID());
+  // Fixed paths so an interrupted restore can be found and completed on the
+  // next call (crash recovery). The staging dir lives inside the destination
+  // so both marker and staging are discoverable by path alone.
+  const staging = path.join(destination, ".restore-stage");
+  const incompleteMarker = path.join(destination, ".restore-incomplete");
+
+  // Self-heal: if an earlier restore was interrupted, its staging dir and
+  // incomplete marker are still on disk. Re-apply from the immutable staging
+  // tree (idempotent: unchanged files are skipped, missing files are applied,
+  // obsolete files are removed). Then clean up.
+  if (fs.existsSync(incompleteMarker)) {
+    if (fs.existsSync(staging)) {
+      try {
+        const marker = JSON.parse(fs.readFileSync(incompleteMarker, "utf8"));
+        const markerPreserved = new Set<string>((marker.preserved as unknown as string[]));
+        applyStagedTreeToDestination(staging, destination, markerPreserved);
+      } catch {
+        // If the marker is unreadable, fall through to a fresh restore below.
+      }
+    }
+    // Remove artifacts from the interrupted run regardless of outcome.
+    try { fs.unlinkSync(incompleteMarker); } catch {}
+    try { removeRestoredObsoleteTree(staging); } catch {}
+    fsyncDir(destination);
+    return;
+  }
+
+  // Fresh restore: build the complete tree in staging, validate it, then
+  // apply atomically to the live destination.
   try {
+    // Remove any stale staging dir from an even earlier interrupted run.
+    try { removeRestoredObsoleteTree(staging); } catch {}
     copyPrivateTree(source, staging, preserved);
     validatePrivateTreeExcept(staging, preserved);
 
-    // Record that a restore is in progress.
-    fs.writeFileSync(incompleteMarker, JSON.stringify({ startedAt: new Date().toISOString() }), { mode: 0o600 });
+    // Record that a restore is in progress BEFORE any file is replaced.
+    // This marker survives a crash and is the signal for recovery on the
+    // next startup. It is only removed after the commit marker is written.
+    fs.writeFileSync(
+      incompleteMarker,
+      JSON.stringify({ staging, preserved: [...preserved], startedAt: new Date().toISOString() }),
+      { mode: 0o600 }
+    );
     fsyncDir(destination);
 
     applyStagedTreeToDestination(staging, destination, preserved);
 
     // Commit marker: written only after every file has been applied. Presence
     // of this marker (and absence of the incomplete marker) means the restore
-    // completed; absence of both means it was interrupted and should be retried.
-    const completeMarker = path.join(destination, ".restore-complete-" + randomUUID());
-    fs.writeFileSync(completeMarker, JSON.stringify({ completedAt: new Date().toISOString() }), { mode: 0o600 });
+    // completed successfully.
+    const completeMarker = path.join(destination, ".restore-complete");
+    fs.writeFileSync(
+      completeMarker,
+      JSON.stringify({ completedAt: new Date().toISOString() }),
+      { mode: 0o600 }
+    );
     fsyncDir(destination);
 
-    // Clear both markers now that the commit marker is durable and the restore
-    // has finished successfully. No restore artifacts should remain on disk.
+    // Restore complete: clean up all artifacts.
     try { fs.unlinkSync(incompleteMarker); } catch {}
     try { fs.unlinkSync(completeMarker); } catch {}
+    try { removeRestoredObsoleteTree(staging); } catch {}
     fsyncDir(destination);
   } catch (error) {
-    try { removeRestoredObsoleteTree(staging); } catch {}
+    // Leave the staging dir and incomplete marker in place so the next call
+    // to restorePrivateTree (or recoverInterruptedRestore) can complete the
+    // restore. Do NOT remove staging here — it is needed for recovery.
     throw error;
-  } finally {
-    try { removeRestoredObsoleteTree(staging); } catch {}
   }
+}
+
+/**
+ * Recover an interrupted restore for the given destination directory.
+ * Called at CLI startup (from index.ts) before any state is loaded, so that
+ * a power loss mid-restore never leaves a mismatched state file in place.
+ *
+ * If an incomplete marker and staging dir exist, re-applies the restore from
+ * the immutable staging tree. If the marker exists but staging is missing,
+ * throws (fail closed — the restore cannot be completed and the state may
+ * be inconsistent).
+ *
+ * Returns true if a recovery was performed, false if nothing was pending.
+ */
+export function recoverInterruptedRestore(destination: string, preserved: Set<string>): boolean {
+  const incompleteMarker = path.join(destination, ".restore-incomplete");
+  const staging = path.join(destination, ".restore-stage");
+
+  if (!fs.existsSync(incompleteMarker)) return false;
+
+  if (!fs.existsSync(staging)) {
+    // Marker exists but staging is gone: the restore cannot be completed.
+    // Fail closed — do not let the CLI start with potentially inconsistent state.
+    throw new Error(
+      `Interrupted restore detected in ${destination} but staging data is missing. ` +
+      "Restore cannot be completed automatically; manual intervention required."
+    );
+  }
+
+  // Read preserved set from the marker if available, fall back to the argument.
+  let effectivePreserved = preserved;
+  try {
+    const marker = JSON.parse(fs.readFileSync(incompleteMarker, "utf8"));
+    if (Array.isArray(marker.preserved)) effectivePreserved = new Set(marker.preserved);
+  } catch {
+    // Use the argument-preserved set.
+  }
+
+  applyStagedTreeToDestination(staging, destination, effectivePreserved);
+
+  // Clean up all artifacts now that recovery is complete.
+  try { fs.unlinkSync(incompleteMarker); } catch {}
+  try { removeRestoredObsoleteTree(staging); } catch {}
+  fsyncDir(destination);
+  return true;
 }
 
 /**
@@ -301,6 +376,10 @@ function restorePrivateTree(source: string, destination: string, preserved = new
  * inodes. Permanent guard files and preserved entries are never touched.
  * Entries present in the destination but not in the staged tree (and not
  * preserved/guarded) are removed.
+ *
+ * Idempotent: calling this with the same staging and destination multiple
+ * times produces the same result. Unchanged files are skipped via SHA-256
+ * comparison, so re-application after an interruption is safe.
  */
 function applyStagedTreeToDestination(staging: string, destination: string, preserved: Set<string>): void {
   const stagedNames = new Set(fs.readdirSync(staging));
@@ -309,7 +388,7 @@ function applyStagedTreeToDestination(staging: string, destination: string, pres
   // .restore-* markers from any previously interrupted run are cleaned up here
   // (they are runtime artifacts, never part of the source backup).
   for (const name of fs.readdirSync(destination)) {
-    if (preserved.has(name) || name === STATE_STORE_GUARD_FILE) continue;
+    if (preserved.has(name) || name === STATE_STORE_GUARD_FILE || name.startsWith(".restore-")) continue;
     const to = path.join(destination, name);
     if (!stagedNames.has(name)) {
       if (fs.lstatSync(to).isDirectory()) removeRestoredObsoleteTree(to);

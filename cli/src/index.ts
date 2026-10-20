@@ -54,7 +54,7 @@ loadEnvironment();
 const startupArgs = process.argv.slice(2);
 const startupReadOnly = startupArgs.includes("--help") || startupArgs.includes("-h") || startupArgs.includes("--version") || startupArgs.includes("-V") || startupArgs.includes("--check");
 if (!startupReadOnly && startupArgs[0] !== "upgrade" && process.env.NEXUS_UPGRADE_HEALTH_CHECK !== "1" && process.env.NEXUS_HOME) {
-  const { getJournalPath, readJournal, recoverUpgrade } = await import("./upgrade_journal.js");
+  const { getJournalPath, readJournal, recoverUpgrade, recoverInterruptedRestore } = await import("./upgrade_journal.js");
   const packagedPrefix = path.resolve(process.env.NEXUS_HOME, "../../..");
   const journal = readJournal(packagedPrefix);
   if ((journal && !["idle", "complete", "rolled_back"].includes(journal.state)) || (!journal && fs.existsSync(getJournalPath(packagedPrefix)))) {
@@ -65,6 +65,22 @@ if (!startupReadOnly && startupArgs[0] !== "upgrade" && process.env.NEXUS_UPGRAD
       process.exit(2);
     }
     if (outcome.recovered) console.warn(`[upgrade] ${outcome.details}`);
+  }
+
+  // Recover any interrupted state/config restore before any state is loaded.
+  // A power loss mid-restore can leave mismatched state files; this check
+  // completes the restore from the immutable staging tree or fails closed.
+  const homeDir = os.homedir();
+  for (const dir of [path.join(homeDir, ".nexus"), path.join(homeDir, ".config", "nexus")]) {
+    if (fs.existsSync(dir)) {
+      try {
+        const recovered = recoverInterruptedRestore(dir, new Set(["backups"]));
+        if (recovered) console.warn(`[restore] Completed interrupted state restore in ${dir}`);
+      } catch (err: any) {
+        console.error(`[restore] ${err.message}`);
+        process.exit(2);
+      }
+    }
   }
 }
 

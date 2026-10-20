@@ -366,14 +366,23 @@ describe("crash-safe staged restore interruption recovery",()=>{
       fs.writeFileSync(path.join(home,".nexus/sessions/c.json"),"NEW-session-c");
       fs.writeFileSync(path.join(home,".config/nexus/config.env"),"MODIFIED-CONFIG\n");
 
-      // Simulate an INTERRUPTED restore: some new files applied, some old files
-      // still present, an obsolete file still lingering. This is the mixed state
-      // that a non-crash-safe restore would leave behind.
+      // Simulate an INTERRUPTED restore:
+      // 1. Copy backup files into staging dir (~/.nexus/.restore-stage)
+      // 2. Write incomplete marker (~/.nexus/.restore-incomplete)
+      // 3. Partially apply some files to destination (mixed state)
+      const stagingDir=path.join(home,".nexus",".restore-stage");
+      fs.mkdirSync(path.join(stagingDir,"sessions"),{recursive:true,mode:0o700});
+      fs.copyFileSync(path.join(backup.stateBackupDir!,"state","sessions","a.json"),path.join(stagingDir,"sessions","a.json"));
+      fs.copyFileSync(path.join(backup.stateBackupDir!,"state","sessions","b.json"),path.join(stagingDir,"sessions","b.json"));
+      fs.copyFileSync(path.join(backup.stateBackupDir!,"state","obsolete-key"),path.join(stagingDir,"obsolete-key"));
+      fs.writeFileSync(path.join(home,".nexus",".restore-incomplete"),JSON.stringify({startedAt:new Date().toISOString(),staging:stagingDir,preserved:["backups"]}));
+
+      // Partially apply: some files already replaced, some not
       fs.writeFileSync(path.join(home,".nexus/sessions/a.json"),"PARTIAL-session-a"); // partially applied new
       fs.writeFileSync(path.join(home,".nexus/sessions/b.json"),"OLD-session-b");    // old, not yet updated
-      fs.writeFileSync(path.join(home,".nexus/sessions/c.json"),"PARTIAL-session-c"); // partially applied new
       // obsolete-key still present (not yet removed)
       // config.env still old (not yet updated)
+      // c.json still present (created after backup, not in staged tree)
 
       assert.equal(restoreConfigBackup(backup.stateBackupDir!,home),true);
 
