@@ -44,6 +44,39 @@ test("provider destination display redacts credential-shaped hostname labels and
   assert.doesNotMatch(display, /sk-test-secret-label|query-secret|private/);
 });
 
+test("providers list captures redacted endpoint and authorized origins on stdout and stderr", async () => {
+  const secretOrigin = "https://sk-test-secret-label.inference.example:8443";
+  const previousExitCode = process.exitCode;
+  const previousLog = console.log;
+  const previousError = console.error;
+  const previousCompatibleAuth = operatorSetting("NEXUS_COMPATIBLE_AUTH");
+  const previousCredentialHome = credentialStorageHome();
+  const stdout: string[] = [];
+  const stderr: string[] = [];
+  try {
+    setCredentialAuthority({
+      NEXUS_COMPATIBLE_BASE_URL: `${secretOrigin}/v1/private?token=query-secret`,
+      NEXUS_CLOUD_DISCLOSURE_ORIGINS: secretOrigin,
+    });
+    console.log = (...values: unknown[]) => stdout.push(values.join(" "));
+    console.error = (...values: unknown[]) => stderr.push(values.join(" "));
+    const program = new Command();
+    program.exitOverride();
+    registerProviderCommands(program);
+    await program.parseAsync(["node", "nexus", "providers"]);
+
+    assert.match(stdout.join("\n"), /https:\/\/\(redacted\)\.inference\.example:8443/);
+    assert.match(stdout.join("\n"), /Authorized cloud destinations/);
+    assert.doesNotMatch(stdout.join("\n"), /sk-test-secret-label|query-secret|private/);
+    assert.doesNotMatch(stderr.join("\n"), /sk-test-secret-label|query-secret|private/);
+  } finally {
+    console.log = previousLog;
+    console.error = previousError;
+    process.exitCode = previousExitCode;
+    setCredentialAuthority({ NEXUS_COMPATIBLE_AUTH: previousCompatibleAuth }, previousCredentialHome);
+  }
+});
+
 test("providers verify captures safe JSON on stdout and keeps provider diagnostics off stderr", async () => {
   const server = createServer((_request, response) => {
     response.writeHead(401, { "content-type": "application/json" });
