@@ -748,6 +748,13 @@ export class DurableStateManager {
       candidateId?: string;
     }
   ): DurableTaskState {
+    return withStateStoreGuard(this.baseDir, () => this.recordMilestoneLocked(taskId, milestone));
+  }
+
+  private recordMilestoneLocked(
+    taskId: string,
+    milestone: { name: string; phaseIndex?: number; evidenceSummary?: string; candidateId?: string }
+  ): DurableTaskState {
     const state = this.loadTaskState(taskId);
     if (
       milestone.phaseIndex !== undefined &&
@@ -788,6 +795,13 @@ export class DurableStateManager {
       receipt: ValidationReceipt;
     }
   ): DurableTaskState {
+    return withStateStoreGuard(this.baseDir, () => this.recordCandidateAndReceiptLocked(taskId, update));
+  }
+
+  private recordCandidateAndReceiptLocked(
+    taskId: string,
+    update: { candidateId: string; candidateIdentity?: CandidateIdentity | null; receipt: ValidationReceipt }
+  ): DurableTaskState {
     const state = this.loadTaskState(taskId);
     state.candidateId = update.candidateId;
     if (update.candidateIdentity !== undefined) {
@@ -824,6 +838,10 @@ export class DurableStateManager {
     taskId: string,
     options: TaskRecoveryOptions = {}
   ): TaskRecoveryResult {
+    return withStateStoreGuard(this.baseDir, () => this.recoverTaskStateLocked(taskId, options));
+  }
+
+  private recoverTaskStateLocked(taskId: string, options: TaskRecoveryOptions): TaskRecoveryResult {
     let recoveryWorkspacePaths = options.workspacePaths || this.workspacePaths;
     if (recoveryWorkspacePaths.length === 0 && options.expectedWorkspace) {
       recoveryWorkspacePaths = [WorkspacePath.fromSelectedWorkspace(path.resolve(options.expectedWorkspace))];
