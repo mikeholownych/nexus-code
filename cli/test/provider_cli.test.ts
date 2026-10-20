@@ -108,7 +108,7 @@ test("providers list preserves safe unknown-provider diagnostics and redacts cre
   try {
     console.log = (...values: unknown[]) => stdout.push(values.join(" "));
     console.error = (...values: unknown[]) => stderr.push(values.join(" "));
-    for (const provider of ["no-such-provider", "sk-test-secret-provider"]) {
+    for (const provider of ["no-such-provider", "mysecretvalue", "sk-test-secret-provider"]) {
       setCredentialAuthority({ NEXUS_PROVIDER: provider });
       const program = new Command();
       program.exitOverride();
@@ -116,10 +116,9 @@ test("providers list preserves safe unknown-provider diagnostics and redacts cre
       await program.parseAsync(["node", "nexus", "providers"]);
     }
 
-    assert.match(stdout.join("\n"), /Unknown provider 'no-such-provider'/);
-    assert.match(stdout.join("\n"), /Unknown provider '\(unrecognized provider\)'/);
-    assert.doesNotMatch(stdout.join("\n"), /sk-test-secret-provider/);
-    assert.doesNotMatch(stderr.join("\n"), /sk-test-secret-provider/);
+    assert.equal((stdout.join("\n").match(/Unknown provider '\(unrecognized provider\)'/g) ?? []).length, 3);
+    assert.doesNotMatch(stdout.join("\n"), /no-such-provider|mysecretvalue|sk-test-secret-provider/);
+    assert.doesNotMatch(stderr.join("\n"), /no-such-provider|mysecretvalue|sk-test-secret-provider/);
   } finally {
     console.log = previousLog;
     console.error = previousError;
