@@ -1,3 +1,4 @@
+import { CURRENT_STATE_SCHEMA_VERSION } from "../src/core/state_schema.js";
 import { describe, it, beforeEach, afterEach } from "node:test";
 import assert from "node:assert/strict";
 import * as fs from "node:fs";
@@ -425,7 +426,7 @@ describe("Machine-Readable Compatibility & Downgrade State Rejection (REQ-REL-11
     const check = validateCompatibilityMetadata(meta);
     assert.equal(check.valid, true);
     assert.equal(check.errors.length, 0);
-    assert.equal(meta.compatibility.stateSchemaVersion, 1);
+    assert.equal(meta.compatibility.stateSchemaVersion, CURRENT_STATE_SCHEMA_VERSION);
     assert.equal(validateCompatibilityMetadata({ ...meta, schemaVersion: 2 }).valid, false, "future metadata schemas fail closed");
   });
 

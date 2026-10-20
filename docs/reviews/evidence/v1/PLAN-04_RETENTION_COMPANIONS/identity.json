@@ -1,0 +1,10 @@
+{
+  "base": "1abe3f390ab016182a3e6a86946769e394568a29",
+  "files": {
+    "cli/src/core/retention.ts": "13220eb5c1f277d91064759254c50cb43dc4e5e46d9020b2cfbb242e404124c5",
+    "cli/test/retention_state_v2.test.ts": "075466494de89e6199e7e1d4baec4b4b80f7bf75fd6af638271099ccbf23adc8"
+  },
+  "tests": 11,
+  "pass": 11,
+  "skips": 0
+}

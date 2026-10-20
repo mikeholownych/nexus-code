@@ -67,6 +67,7 @@ The self-upgrade mechanism enables operators to update their active Nexus instal
   - `ln -s $PREFIX/lib/nexus/$VERSION/bin/nexus $PREFIX/bin/.nexus-link.$PID && mv -f ... $PREFIX/bin/nexus`
 - `--rollback-binary` safely rolls back the launcher symlink to the previous installed version in `$PREFIX/lib/nexus`.
 - `--restore-backup <path>` accepts a canonical plain `config.env.bak.*` file for configuration-only restoration, or a private `~/.nexus/backups/state-backup-*` directory containing `backup.json`, `state/`, and optional `config/` for complete snapshot restoration. It rejects arbitrary files, tar archives, and redirected paths.
+- Run backup restoration through the stable `nexus` launcher. Close existing legacy clients before retrying a pending restore, and keep version-pinned legacy binaries and direct old entry points offline until the durable restore journal is cleared. Current managed launches route through the journal before loading configuration; the Linux process census detects already-running legacy entry points, but cannot serialize a new direct launch from a version that predates the kernel lease. That offline interval is an explicit prerequisite of the supported restore boundary.
 
 ### 3.6 Transaction Journal & Crash Recovery (ACC-UPG-11)
 - The updater logs state progression to `$PREFIX/lib/nexus/.upgrade-journal.json`:
@@ -116,3 +117,9 @@ Packaged CLI/TUI startup checks pending journals before normal execution. Explic
 ### Concurrent stale-lock reclamation
 
 When a recovery or upgrade observes a stale lock (dead holder PID), exactly one process may unlink and replace it. Serialization uses a permanent kernel-owned guard file `$PREFIX/lib/nexus/.upgrade.lock.guard` (never unlinked or replaced; accepted only as a regular file owned by the running user with no group/other permission bits): the reclaimer holds an advisory `flock` on the file's open file description for the whole reclaim section, acquired through `/usr/bin/flock` (util-linux; Linux runtime prerequisite) with exit status 75 distinguishing contention. The kernel drops the lock when the last referring descriptor closes, so a reclaimer killed by SIGKILL or power loss releases automatically instead of wedging later upgrades. If the flock utility or filesystem is unavailable, acquisition fails closed with a manual-intervention error rather than proceeding unserialized.
+
+### Durable state store coordination (schema 2)
+
+Task and session progress files refer to separate append-only message journals. Backup and rollback acquire both permanent state-store guards in a fixed order while copying or restoring these components. Guard files are omitted from snapshots and their existing inodes survive restore, including cleanup of directories absent from an older snapshot. This uses the same kernel-owned file guard as upgrade stale-lock recovery; it does not introduce a stale directory lock or unlink live guard files.
+
+Close older clients before migration or rollback. Older versions cannot participate in schema 2 store locking. A new client requires util-linux `/usr/bin/flock` for state transactions and fails closed when it is unavailable. A busy store stops a snapshot instead of producing a mixed progress/message backup.
