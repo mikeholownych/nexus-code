@@ -291,6 +291,46 @@ test("concurrent first use converges on one private key without leaking the key"
   });
 });
 
+test("an EEXIST key entry is synced before use and interrupted-link cleanup", () => {
+  withTemp((_root, home) => {
+    const privateDir = path.join(home, ".config", "nexus", "account-identities");
+    fs.mkdirSync(privateDir, { recursive: true, mode: 0o700 });
+    const key = path.join(privateDir, "hmac-key");
+    fs.writeFileSync(key, randomBytes(32), { mode: 0o600 });
+    fs.chmodSync(key, 0o600);
+    const interruptedLink = `${key}.tmp.999999.${randomBytes(8).toString("hex")}`;
+    fs.linkSync(key, interruptedLink);
+
+    const originalFsync = fs.fsyncSync;
+    const originalReadFile = fs.readFileSync;
+    let directorySyncs = 0;
+    (fs as any).fsyncSync = (fd: number) => {
+      if (fs.fstatSync(fd).isDirectory()) directorySyncs++;
+      return originalFsync(fd);
+    };
+    let keyReadAfterDirectorySync = false;
+    (fs as any).readFileSync = (file: fs.PathOrFileDescriptor, ...args: any[]) => {
+      if (typeof file === "number" && fs.fstatSync(file).isFile()) keyReadAfterDirectorySync = directorySyncs > 0;
+      return (originalReadFile as any)(file, ...args);
+    };
+    syncBuiltinESMExports();
+    try {
+      assert.match(
+        createOperationAccountIdentity(home).fingerprint(randomBytes(48).toString("base64url"))!,
+        /^acct:credential:v1:[0-9a-f]{64}$/,
+      );
+      assert.equal(keyReadAfterDirectorySync, true, "the key is read only after its directory entry is synced");
+      assert.equal(directorySyncs, 2, "the losing creator syncs key publication and interrupted-link cleanup");
+      assert.equal(fs.existsSync(interruptedLink), false);
+      assert.equal(fs.statSync(key).nlink, 1);
+    } finally {
+      (fs as any).fsyncSync = originalFsync;
+      (fs as any).readFileSync = originalReadFile;
+      syncBuiltinESMExports();
+    }
+  });
+});
+
 test("key setup and write failures remove temporary files and never publish a key", () => {
   for (const failurePoint of ["random", "write", "fsync", "close"] as const) {
     withTemp((_root, home) => {

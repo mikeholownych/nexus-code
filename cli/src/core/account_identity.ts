@@ -122,7 +122,6 @@ function readOrCreateKey(home: string): Buffer {
       : "Cannot create a private account identity key safely.");
   }
 
-  let published = false;
   let operationError: unknown;
   try {
     fs.writeFileSync(fd, key);
@@ -134,7 +133,6 @@ function readOrCreateKey(home: string): Buffer {
     // key another process may already have created.
     try {
       fs.linkSync(temporary, file);
-      published = true;
     } catch (error: any) {
       if (error?.code !== "EEXIST") throw error;
     }
@@ -161,7 +159,9 @@ function readOrCreateKey(home: string): Buffer {
     }
     if (operationError === undefined && cleanupError !== undefined) throw cleanupError;
   }
-  if (published) syncDirectory(path.dirname(file), noFollow);
+  // Another creator may have won the link() race and been interrupted before
+  // syncing this directory. Make the canonical key entry durable before using it.
+  syncDirectory(path.dirname(file), noFollow);
   return readKey(file, noFollow);
 }
 
@@ -211,6 +211,9 @@ function readKey(file: string, noFollow: number): Buffer {
       // temporary name. Remove only names that point at this exact key inode.
       removeInterruptedKeyLink(file, checkedStat);
       checkedStat = fs.fstatSync(fd);
+      // Persist interrupted-link cleanup as well, without weakening the key's
+      // already-validated canonical entry.
+      syncDirectory(path.dirname(file), noFollow);
     }
     if (
       checkedStat.uid !== uid() || checkedStat.nlink !== 1 || (checkedStat.mode & 0o777) !== 0o600 ||
