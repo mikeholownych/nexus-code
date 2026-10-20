@@ -7,17 +7,22 @@ import { randomUUID } from "node:crypto";
 import pc from "picocolors";
 import { InferenceError, LocalLlmClient, operatorSetting } from "./client.js";
 import { buildConfig } from "./config.js";
-import { baseUrlSetting, disclosureClass, originOf, PROVIDERS } from "./providers.js";
+import { baseUrlSetting, disclosureClass, PROVIDERS } from "./providers.js";
 import type { ChatMessage, HarnessConfig, ToolDefinition } from "./types.js";
 import { UsageLedger } from "./usage.js";
 import { resolveCredential } from "./credentials.js";
 import { connectWithKey, disconnect, startSignIn } from "./provider_connect.js";
+import { redactSecrets } from "./ui.js";
 
 /** One line naming each role's selected destination and its disclosure class. */
 export function describeTarget(config: HarnessConfig): string {
   const target = (provider: string | undefined, endpoint: string, model: string) => {
-    const where = provider ? `${provider} (${originOf(endpoint)})` : originOf(endpoint) ?? endpoint;
-    return `${where} · ${model || "(no model)"} · ${disclosureClass(endpoint, provider, config.cloudRoutedOrigins)}`;
+    // Endpoint paths, userinfo, query strings and model ids are operator-controlled environment/config values.
+    // Show only the parsed origin and a model id that passes the display allowlist.
+    const origin = safeOriginOf(endpoint);
+    const label = provider ? PROVIDERS[provider]?.label ?? "Cloud provider" : "Local endpoint";
+    const where = origin ? `${label} (${origin})` : `${label} (endpoint unavailable)`;
+    return `${where} · ${model ? safeModelId(model) : "no model"} · ${disclosureClass(endpoint, provider, config.cloudRoutedOrigins)}`;
   };
   const parts = [`main: ${target(config.provider, config.endpoint, config.model)}`];
   if (config.plannerModel) {
@@ -29,6 +34,131 @@ export function describeTarget(config: HarnessConfig): string {
     parts.push(`coder: ${target(p, config.coderEndpoint ?? config.endpoint, config.coderModel)}`);
   }
   return `[nexus] Inference — ${parts.join(" | ")}`;
+}
+
+function credentialShaped(value: string): boolean {
+  return [
+    /sk-[A-Za-z0-9_-]{8,}/i,
+    /(?:gh[pousr]_[A-Za-z0-9_]{20,}|github_pat_[A-Za-z0-9_]{20,})/i,
+    /xox[baprs]-[A-Za-z0-9-]{10,}/i,
+    /AKIA[0-9A-Z]{16}/i,
+    /AIza[0-9A-Za-z_-]{35}/i,
+    /ya29\.[0-9A-Za-z_-]{20,}/,
+    /eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}/i,
+  ].some((pattern) => pattern.test(value));
+}
+
+/** Keep endpoint attribution while removing credential-shaped labels from displayed hostnames. */
+function safeOriginOf(value: string | undefined): string | undefined {
+  if (!value?.trim()) return undefined;
+  try {
+    const url = new URL(value.trim());
+    const spansHostnameLabels = [
+      /ya29\.[A-Za-z0-9_-]{20,}/i,
+      /eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}/i,
+    ].some((pattern) => pattern.test(url.hostname));
+    const hostname = spansHostnameLabels
+      ? "(redacted)"
+      : url.hostname.split(".").map((label) => credentialShaped(label) ? "(redacted)" : label).join(".");
+    return `${url.protocol}//${hostname}${url.port ? `:${url.port}` : ""}`;
+  } catch {
+    return undefined;
+  }
+}
+
+function safeProviderId(value: string | undefined): string | undefined {
+  return value && Object.prototype.hasOwnProperty.call(PROVIDERS, value) ? value : value ? "(unrecognized provider)" : undefined;
+}
+
+function safeConfigurationError(error: unknown): string {
+  const message = error instanceof Error ? error.message : "";
+  const match = /^Unknown provider '([^'\r\n]{1,128})' \([A-Z0-9_]{1,64}\)\. Known providers: [A-Za-z0-9, ]+\.$/.exec(message);
+  if (!match) return "Configuration error: provider configuration is invalid";
+  // An unknown provider name comes from user configuration; even identifier-shaped values may be secrets.
+  return `Configuration error: Unknown provider '(unrecognized provider)'. Known providers: ${Object.keys(PROVIDERS).join(", ")}.`;
+}
+
+function safeModelId(value: string): string {
+  // Provider/model identifiers may contain routing punctuation, but not whitespace, controls or arbitrary diagnostics.
+  if (!/^[A-Za-z0-9._:\/@+-]{1,160}$/.test(value)) return "(unprintable model id)";
+  return credentialShaped(value) ? "(unprintable model id)" : value;
+}
+
+function safeClientDiagnostic(message: string, config: HarnessConfig): string {
+  let safe = redactSecrets(message);
+  const substitute = (raw: string | undefined, replacement: string | undefined) => {
+    if (raw && replacement && raw !== replacement) safe = safe.replaceAll(raw, () => replacement);
+  };
+  if (config.model) substitute(config.model, safeModelId(config.model));
+  const safeOrigin = safeOriginOf(config.endpoint);
+  if (safeOrigin) {
+    substitute(config.endpoint.trim(), safeOrigin);
+    try {
+      const endpoint = new URL(config.endpoint.trim());
+      substitute(endpoint.href, safeOrigin);
+      substitute(`${endpoint.origin}${endpoint.pathname}${endpoint.search}${endpoint.hash}`, safeOrigin);
+      substitute(`${endpoint.origin}${endpoint.pathname}`, safeOrigin);
+      substitute(endpoint.origin, safeOrigin);
+      substitute(endpoint.hostname, new URL(safeOrigin).hostname);
+      substitute(endpoint.pathname, "(path redacted)");
+      substitute(endpoint.search, "");
+      substitute(endpoint.hash, "");
+    } catch {
+      // Invalid endpoints are rejected by config validation before the live check starts.
+    }
+  }
+  return safe;
+}
+
+const SAFE_FAILURE_KINDS = new Set([
+  "http_error", "network_error", "timeout", "stream_interrupted", "stream_incomplete", "provider_error_frame",
+  "malformed_event", "output_truncated", "protocol_error", "aborted", "policy_denied", "configuration_error", "verification_error",
+]);
+const SAFE_FAILURE_CONDITIONS = new Set([
+  "TEMPORARILY_UNAVAILABLE", "RATE_LIMITED", "OVERLOADED", "DRAINING", "AUTH_FAILURE", "QUOTA_EXHAUSTED",
+  "CAPACITY_REJECTED", "REQUEST_REJECTED", "PERMANENT_FAILURE", "AVAILABLE",
+]);
+
+function safeStepDetail(ok: boolean, detail: string): string {
+  if (!ok) return detail === "Provider request failed" ? detail : "Verification failed";
+  if (/^streamed completion received \(\d+ chars\)$/.test(detail)) return detail;
+  if (/^echo_token tool call completed \(\d+ call\(s\)\)$/.test(detail)) return detail;
+  return detail === "tool result round trip completed" ? detail : "Verification succeeded";
+}
+
+/** A credential-safe JSON projection for `providers verify --json`; raw provider diagnostics are deliberately omitted. */
+export function verificationSummary(
+  steps: readonly VerificationStep[],
+  receipts: readonly import("./usage.js").InferenceReceipt[],
+  target?: Pick<HarnessConfig, "provider" | "model">,
+) {
+  const provider = safeProviderId(target?.provider ?? receipts[0]?.providerId);
+  const model = target?.model ?? receipts[0]?.selectedModel;
+  return {
+    passed: steps.length === 3 && steps.every((step) => step.ok),
+    ...(provider ? { provider } : {}),
+    ...(model ? { model: safeModelId(model) } : {}),
+    steps: steps.map(({ step, ok, requestId, detail, failureKind, failureCondition }) => {
+      const safeKind = failureKind && SAFE_FAILURE_KINDS.has(failureKind) ? failureKind : undefined;
+      const safeCondition = failureCondition && SAFE_FAILURE_CONDITIONS.has(failureCondition) ? failureCondition : undefined;
+      return {
+        step, ok, requestId, detail: safeStepDetail(ok, detail),
+        ...(safeKind ? { failureKind: safeKind } : {}),
+        ...(safeCondition ? { condition: safeCondition } : {}),
+      };
+    }),
+    receipts: receipts.map(({ at, requestId, role, providerId, selectedModel, effectiveModel, endpointOrigin, protocol, disclosure, executions, outcome, failureKind, usage, usageConfidence, costConfidence }) => {
+      const origin = safeOriginOf(endpointOrigin);
+      return {
+        at, requestId, role, providerId: safeProviderId(providerId) ?? "(unrecognized provider)",
+        selectedModel: safeModelId(selectedModel),
+        ...(effectiveModel ? { effectiveModel: safeModelId(effectiveModel) } : {}),
+        ...(origin ? { endpointOrigin: origin } : {}),
+        protocol, disclosure, ...(executions !== undefined ? { executions } : {}), outcome,
+        ...(failureKind && SAFE_FAILURE_KINDS.has(failureKind) ? { failureKind } : {}), ...(usage ? { usage } : {}), usageConfidence, costConfidence,
+      };
+    }),
+  };
 }
 
 const ECHO_TOOL: ToolDefinition = {
@@ -45,22 +175,34 @@ export interface VerificationStep {
   ok: boolean;
   detail: string;
   requestId: string;
+  failureKind?: string;
+  failureCondition?: string;
 }
 
 /**
  * Live qualification without workspace content: a streamed completion, then a tool round trip (the model must call
  * echo_token with a nonce, receive its result and answer). Each step is one receipt in the usage ledger.
  */
-export async function verifyProvider(config: HarnessConfig, signal?: AbortSignal): Promise<VerificationStep[]> {
-  const client = new LocalLlmClient({ ...config, maxSteps: 1 }, { role: "qualification" });
+export async function verifyProvider(
+  config: HarnessConfig,
+  signal?: AbortSignal,
+  options?: { diagnosticHandler?: (level: "error" | "warn", message: string) => void },
+): Promise<VerificationStep[]> {
+  const client = new LocalLlmClient({ ...config, maxSteps: 1 }, { role: "qualification", diagnosticHandler: options?.diagnosticHandler });
   const steps: VerificationStep[] = [];
   const run = async (step: string, fn: (requestId: string) => Promise<string>) => {
     const requestId = randomUUID();
     try {
       steps.push({ step, ok: true, detail: await fn(requestId), requestId });
     } catch (err: any) {
-      const detail = err instanceof InferenceError ? `${err.kind}/${err.condition}: ${err.message}` : String(err?.message ?? err);
-      steps.push({ step, ok: false, detail, requestId });
+      steps.push({
+        step,
+        ok: false,
+        detail: err instanceof InferenceError ? "Provider request failed" : "Verification failed",
+        requestId,
+        failureKind: err instanceof InferenceError ? err.kind : "verification_error",
+        ...(err instanceof InferenceError ? { failureCondition: err.condition } : {}),
+      });
     }
   };
   await run("streamed completion", async (id) => {
@@ -68,7 +210,7 @@ export async function verifyProvider(config: HarnessConfig, signal?: AbortSignal
     const m = await client.chatCompletionStream([{ role: "user", content: "Reply with exactly the word READY." }], [], (t) => (streamed += t), id, signal);
     const text = typeof m.content === "string" ? m.content : "";
     if (!/READY/i.test(text)) throw new Error(`unexpected reply: ${text.slice(0, 80)}`);
-    return `reply "${text.trim().slice(0, 40)}", ${streamed.length} chars streamed`;
+    return `streamed completion received (${streamed.length} chars)`;
   });
   if (!steps[0].ok) return steps;
   const nonce = `n${randomUUID().slice(0, 8)}`;
@@ -83,7 +225,7 @@ export async function verifyProvider(config: HarnessConfig, signal?: AbortSignal
     if (!tc || tc.function.name !== "echo_token") throw new Error("model did not call echo_token");
     const args = JSON.parse(tc.function.arguments || "{}");
     if (args.token !== nonce) throw new Error(`tool arguments did not carry the nonce: ${tc.function.arguments.slice(0, 80)}`);
-    return `echo_token(${tc.function.arguments}) complete, ${call.tool_calls!.length} call(s)`;
+    return `echo_token tool call completed (${call.tool_calls!.length} call(s))`;
   });
   if (!steps[1].ok || !call) return steps;
   await run("tool result round trip", async (id) => {
@@ -96,7 +238,7 @@ export async function verifyProvider(config: HarnessConfig, signal?: AbortSignal
     const final = await client.chatCompletionStream(followUp, [ECHO_TOOL], undefined, id, signal);
     const text = typeof final.content === "string" ? final.content : "";
     if (!text.includes(nonce)) throw new Error(`final answer did not use the tool result: ${text.slice(0, 80)}`);
-    return `final answer cites the tool result`;
+    return "tool result round trip completed";
   });
   return steps;
 }
@@ -168,7 +310,9 @@ export function registerProviderCommands(program: Command): void {
     .action(() => {
       console.log(pc.bold("\nCloud inference providers\n"));
       for (const def of Object.values(PROVIDERS)) {
-        const base = operatorSetting(baseUrlSetting(def.id)) || def.baseUrl || "(set --base-url or " + baseUrlSetting(def.id) + ")";
+        const configuredBase = operatorSetting(baseUrlSetting(def.id));
+        const baseUrl = configuredBase || def.baseUrl;
+        const base = baseUrl ? safeOriginOf(baseUrl) ?? "(invalid endpoint)" : "(set --base-url or " + baseUrlSetting(def.id) + ")";
         const found = resolveCredential(def.id, def.credentialEnv);
         const key = found ? pc.green(`connected via ${found.source}`) : pc.yellow(`not connected (${def.credentialEnv ? `$${def.credentialEnv} or ` : ""}nexus connect ${def.id})`);
         console.log(`  ${pc.bold(def.id.padEnd(11))} ${def.protocol.padEnd(19)} ${base}`);
@@ -178,13 +322,13 @@ export function registerProviderCommands(program: Command): void {
       try {
         config = buildConfig({});
       } catch (err: any) {
-        console.log(pc.red(`\nConfiguration error: ${err?.message ?? err}`));
+        console.log(pc.red(`\n${safeConfigurationError(err)}`));
         process.exitCode = 2;
         return;
       }
       console.log(`\n${describeTarget(config)}`);
       const authorized = config.authorizedDisclosureOrigins ?? [];
-      console.log(pc.dim(`Authorized cloud destinations: ${authorized.length ? authorized.join(", ") : "none"}`));
+      console.log(pc.dim(`Authorized cloud destinations: ${authorized.length ? authorized.map((origin) => safeOriginOf(origin) ?? "(invalid endpoint)").join(", ") : "none"}`));
       console.log(pc.dim("Select with --provider <id> --model <id> (or NEXUS_PROVIDER / NEXUS_MODEL in ~/.config/nexus/config.env).\n"));
     });
 
@@ -200,23 +344,29 @@ export function registerProviderCommands(program: Command): void {
       try {
         config = buildConfig(options);
       } catch (err: any) {
-        console.error(pc.red(`Configuration error: ${err?.message ?? err}`));
+        console.error(pc.red(safeConfigurationError(err)));
         process.exit(2);
       }
       const abort = new AbortController();
       process.once("SIGINT", () => abort.abort(new Error("SIGINT")));
-      const steps = await verifyProvider(config, abort.signal);
+      const diagnosticHandler = (level: "error" | "warn", message: string) => {
+        (level === "warn" ? console.warn : console.error)(pc.dim(safeClientDiagnostic(message, config)));
+      };
+      const steps = await verifyProvider(config, abort.signal, { diagnosticHandler });
       const receipts = UsageLedger.global().all();
-      const passed = steps.length === 3 && steps.every((s) => s.ok);
+      const summary = verificationSummary(steps, receipts, { provider: config.provider, model: config.model });
       if (options.json) {
-        console.log(JSON.stringify({ provider: config.provider, model: config.model, date: new Date().toISOString(), passed, steps, receipts }, null, 2));
+        console.log(JSON.stringify({ date: new Date().toISOString(), ...summary }, null, 2));
       } else {
-        console.log(pc.bold(`\nLive check: ${config.provider} · ${config.model}`));
-        for (const s of steps) console.log(`  ${s.ok ? pc.green("✓") : pc.red("✗")} ${s.step}: ${s.detail}`);
-        const summary = UsageLedger.global().summary();
-        if (summary) console.log(pc.dim(summary));
-        console.log(passed ? pc.green("\nInference verified (completion + tool round trip).\n") : pc.red("\nNot verified.\n"));
+        console.log(pc.bold(`\nLive provider check\n${describeTarget(config)}`));
+        for (const s of steps) {
+          const disposition = s.ok ? "passed" : `failed${s.failureKind ? ` (${s.failureKind}${s.failureCondition ? `/${s.failureCondition}` : ""})` : ""}`;
+          console.log(`  ${s.ok ? pc.green("✓") : pc.red("✗")} ${s.step}: ${disposition} — ${s.detail}`);
+        }
+        const usageSummary = UsageLedger.global().summary();
+        if (usageSummary) console.log(pc.dim(usageSummary));
+        console.log(summary.passed ? pc.green("\nInference verified (completion + tool round trip).\n") : pc.red("\nNot verified.\n"));
       }
-      process.exitCode = passed ? 0 : 1;
+      process.exitCode = summary.passed ? 0 : 1;
     });
 }
