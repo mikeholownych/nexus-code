@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
@@ -239,4 +240,97 @@ test("read-modify-save classifies the complete state once with fresh environment
     InformationFlowBoundary.setGlobalInstance(original);
     if (priorSecret === undefined) delete process.env.NEXUS_TEST_API_KEY; else process.env.NEXUS_TEST_API_KEY = priorSecret;
   }
+}));
+
+for (const boundary of ["after-log-sync", "before-progress-rename", "after-progress-rename"] as const) {
+  test(`process death at ${boundary} resumes exactly the published conversation and releases its store guard`, () => fixture((manager, state) => {
+    manager.saveTaskState(state);
+    const next = [...state.messages, { role: "assistant" as const, content: "new process revision" }];
+    const primary = manager.getStateFilePath(state.taskId), log = manager.getMessageLogFilePath(state.taskId);
+    const code = `
+      import fs from 'node:fs';
+      import {syncBuiltinESMExports} from 'node:module';
+      import {DurableStateManager} from './src/core/state.ts';
+      import {WorkspacePath} from './src/core/workspace_path.ts';
+      const manager=new DurableStateManager({baseDir:${JSON.stringify(manager.getBaseDir())},workspacePaths:[WorkspacePath.fromSelectedWorkspace(${JSON.stringify(state.workspacePath)})]});
+      const boundary=${JSON.stringify(boundary)}, primary=${JSON.stringify(primary)}, log=${JSON.stringify(log)};
+      const rename=fs.renameSync, sync=fs.fsyncSync;
+      fs.renameSync=function(source,target){
+        if(String(target)===primary && boundary==='before-progress-rename')process.kill(process.pid,'SIGKILL');
+        const result=rename(source,target);
+        if(String(target)===primary && boundary==='after-progress-rename')process.kill(process.pid,'SIGKILL');
+        return result;
+      };
+      fs.fsyncSync=function(fd){const result=sync(fd); if(boundary==='after-log-sync' && fs.readlinkSync('/proc/self/fd/'+fd)===log)process.kill(process.pid,'SIGKILL'); return result;};
+      syncBuiltinESMExports();
+      manager.recordProgress(${JSON.stringify(state.taskId)},{messages:${JSON.stringify(next)}});
+      throw new Error('fault hook did not fire');
+    `;
+    const child = spawnSync(process.execPath, ["--import", "tsx", "--input-type=module", "-e", code], { cwd: path.resolve(import.meta.dirname, ".."), encoding: "utf8", timeout: 10000 });
+    assert.equal(child.signal, "SIGKILL", child.stderr);
+    const restarted = new DurableStateManager({ baseDir: manager.getBaseDir(), workspacePaths: [WorkspacePath.fromSelectedWorkspace(state.workspacePath)] });
+    const expected = boundary === "after-progress-rename" ? next : state.messages;
+    assert.deepEqual(restarted.loadTaskState(state.taskId).messages, expected);
+    restarted.recordProgress(state.taskId, { messages: next });
+    assert.deepEqual(restarted.loadTaskState(state.taskId).messages, next);
+  }));
+}
+
+test("process death during legacy migration preserves exact original and backup bytes for retry", () => fixture((manager, state) => {
+  const primary = manager.getStateFilePath(state.taskId);
+  const raw = JSON.stringify({ ...state, extension: { keep: "legacy recovery field" } });
+  fs.writeFileSync(primary, raw, { mode: 0o600 });
+  const code = `
+    import fs from 'node:fs'; import {syncBuiltinESMExports} from 'node:module';
+    import {DurableStateManager} from './src/core/state.ts'; import {WorkspacePath} from './src/core/workspace_path.ts';
+    const rename=fs.renameSync; fs.renameSync=function(source,target){if(String(target)===${JSON.stringify(primary)})process.kill(process.pid,'SIGKILL');return rename(source,target);};syncBuiltinESMExports();
+    const manager=new DurableStateManager({baseDir:${JSON.stringify(manager.getBaseDir())},workspacePaths:[WorkspacePath.fromSelectedWorkspace(${JSON.stringify(state.workspacePath)})]});manager.loadTaskState(${JSON.stringify(state.taskId)});
+  `;
+  const child = spawnSync(process.execPath, ["--import", "tsx", "--input-type=module", "-e", code], { cwd: path.resolve(import.meta.dirname, ".."), encoding: "utf8", timeout: 10000 });
+  assert.equal(child.signal, "SIGKILL", child.stderr);
+  assert.equal(fs.readFileSync(primary, "utf8"), raw);
+  assert.equal(fs.readFileSync(`${primary}.pre-migration-v1`, "utf8"), raw);
+  const recovered: any = manager.loadTaskState(state.taskId);
+  assert.deepEqual(recovered.messages, state.messages); assert.equal(recovered.extension.keep, "legacy recovery field");
+  assert.equal(fs.readFileSync(`${primary}.pre-migration-v1`, "utf8"), raw);
+}));
+
+test("two real processes preserve independent progress fields across a contended read-modify-save", () => fixture((manager, state) => {
+  manager.saveTaskState(state);
+  const primary = manager.getStateFilePath(state.taskId);
+  const barrier = path.join(manager.getBaseDir(), "barrier"); fs.mkdirSync(barrier);
+  const worker = `
+    import fs from 'node:fs'; import path from 'node:path'; import {syncBuiltinESMExports} from 'node:module';
+    import {DurableStateManager} from './src/core/state.ts'; import {WorkspacePath} from './src/core/workspace_path.ts';
+    const id=process.argv[1], barrier=${JSON.stringify(barrier)};
+    const manager=new DurableStateManager({baseDir:${JSON.stringify(manager.getBaseDir())},workspacePaths:[WorkspacePath.fromSelectedWorkspace(${JSON.stringify(state.workspacePath)})]});
+    fs.writeFileSync(path.join(barrier,id),'ready');
+    const deadline=Date.now()+5000;
+    while(!fs.existsSync(path.join(barrier,'a')) || !fs.existsSync(path.join(barrier,'b'))){if(Date.now()>deadline)throw new Error('barrier timed out');Atomics.wait(new Int32Array(new SharedArrayBuffer(4)),0,0,5);}
+    const rename=fs.renameSync;fs.renameSync=function(source,target){if(String(target)===${JSON.stringify(primary)})Atomics.wait(new Int32Array(new SharedArrayBuffer(4)),0,0,150);return rename(source,target);};syncBuiltinESMExports();
+    manager.recordProgress(${JSON.stringify(state.taskId)},id==='a'?{findings:['parallel finding']}:{unverifiedChangesPending:true});
+  `;
+  const coordinator = `
+    const {spawn}=require('node:child_process');
+    const workers=['a','b'].map(id=>spawn(process.execPath,['--import','tsx','--input-type=module','-e',${JSON.stringify(worker)},id],{stdio:['ignore','ignore','pipe']}));
+    let failed=false;for(const child of workers){child.stderr.pipe(process.stderr);child.on('error',error=>{console.error(error);failed=true;for(const other of workers)other.kill('SIGTERM');});}
+    Promise.all(workers.map(child=>new Promise(resolve=>child.on('exit',(code,signal)=>resolve(code===0&&!signal))))).then(results=>process.exit(!failed&&results.every(Boolean)?0:1));
+    process.on('SIGTERM',()=>{for(const child of workers)child.kill('SIGTERM');process.exit(2);});
+  `;
+  const child = spawnSync(process.execPath, ["-e", coordinator], { cwd: path.resolve(import.meta.dirname, ".."), encoding: "utf8", timeout: 15000, killSignal: "SIGTERM" });
+  assert.equal(child.status, 0, child.stderr);
+  const recovered = manager.loadTaskState(state.taskId);
+  assert.deepEqual(recovered.findings, ["parallel finding"]);
+  assert.equal(recovered.unverifiedChangesPending, true);
+  assert.deepEqual(recovered.messages, state.messages);
+}));
+
+test("a schema-one record with missing conversation cannot silently migrate to an empty history", () => fixture((manager, state) => {
+  const { messages, ...legacy } = state;
+  const primary = manager.getStateFilePath(state.taskId); fs.writeFileSync(primary, JSON.stringify(legacy));
+  assert.throws(() => manager.loadTaskState(state.taskId), CorruptStateError);
+  assert.equal(fs.existsSync(primary), false);
+  assert.equal(fs.existsSync(manager.getMessageLogFilePath(state.taskId)), false);
+  const quarantined = fs.readdirSync(manager.getBaseDir()).find(name => name.startsWith(`${state.taskId}.json.corrupt-`));
+  assert.ok(quarantined); assert.deepEqual(JSON.parse(fs.readFileSync(path.join(manager.getBaseDir(), quarantined), "utf8")), legacy);
 }));

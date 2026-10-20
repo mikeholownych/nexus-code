@@ -12,6 +12,7 @@ import {
   CorruptStateError,
   UnsupportedSchemaVersionError,
 } from "./core/state.js";
+import { withStateStoreGuard } from "./core/state_store_guard.js";
 import { WorkspacePath } from "./core/workspace_path.js";
 import { protectArchivedMessages } from "./core/persistence_protection.js";
 import { appendLinesDurably, readArchiveLines, type ArchiveRead, ensurePrivateDir, writePrivateFile } from "./core/durable_file.js";
@@ -88,6 +89,7 @@ export class SessionManager {
     this.selectedWorkspace = selectedWorkspace;
     ensurePrivateDir(this.sessionsDir);
     this.stateManager = new DurableStateManager({ baseDir: this.sessionsDir });
+    this.sessionsDir = this.stateManager.getBaseDir();
   }
 
   public getStateManager(): DurableStateManager {
@@ -105,6 +107,10 @@ export class SessionManager {
    * Atomically saves session data conforming to the DurableTaskState envelope.
    */
   public saveSession(session: Partial<SessionData> & { id: string }, workspacePath?: WorkspacePath): void {
+    return withStateStoreGuard(this.sessionsDir, () => this.saveSessionLocked(session, workspacePath));
+  }
+
+  private saveSessionLocked(session: Partial<SessionData> & { id: string }, workspacePath?: WorkspacePath): void {
     const selectedWorkspace = this.currentSelectedWorkspace();
     if (workspacePath && (!selectedWorkspace || !selectedWorkspace.matches(workspacePath.value))) {
       throw new Error("Session workspace identity is not selected by the application");
@@ -147,15 +153,16 @@ export class SessionManager {
     };
 
     this.stateManager.saveTaskState(fullState, selectedWorkspace ? [selectedWorkspace] : []);
+    const committed = this.stateManager.loadTaskState(taskId, undefined, selectedWorkspace ? [selectedWorkspace] : []);
     this.updateIndexEntry({
       id: sessionId,
       cleanId: taskId.replace(/\.json$/, ""),
-      title: fullState.title || "Active Session",
-      updatedAt: fullState.updatedAt || new Date().toISOString(),
+      title: committed.title || "Active Session",
+      updatedAt: committed.updatedAt || new Date().toISOString(),
       workspace,
-      messageCount: Array.isArray(fullState.messages) ? fullState.messages.length : 0,
+      messageCount: committed.messages.length,
       mtime: Date.now(),
-      pinned: Boolean(fullState.pinned),
+      pinned: Boolean(committed.pinned),
     });
   }
 
@@ -165,6 +172,10 @@ export class SessionManager {
    * Returns null if no matching session is found.
    */
   public resolveResumeId(prefix: string): string | null {
+    return withStateStoreGuard(this.sessionsDir, () => this.resolveResumeIdLocked(prefix));
+  }
+
+  private resolveResumeIdLocked(prefix: string): string | null {
     const cleanId = prefix.replace(/\.json$/, "");
     if (!cleanId) return null;
 
@@ -224,6 +235,10 @@ export class SessionManager {
    * Loads session with strict integrity and schema validation, migrating legacy session files if needed.
    */
   public loadSession(sessionId: string): SessionData | null {
+    return withStateStoreGuard(this.sessionsDir, () => this.loadSessionLocked(sessionId));
+  }
+
+  private loadSessionLocked(sessionId: string): SessionData | null {
     const cleanId = sessionId.replace(/\.json$/, "");
     const targetId = this.resolveResumeId(cleanId);
     if (!targetId) {
@@ -254,6 +269,13 @@ export class SessionManager {
    * Recovers a session, validating candidate state on disk and detecting interrupted operations.
    */
   public recoverSession(
+    sessionId: string,
+    options?: TaskRecoveryOptions
+  ): TaskRecoveryResult | null {
+    return withStateStoreGuard(this.sessionsDir, () => this.recoverSessionLocked(sessionId, options));
+  }
+
+  private recoverSessionLocked(
     sessionId: string,
     options?: TaskRecoveryOptions
   ): TaskRecoveryResult | null {
@@ -301,9 +323,11 @@ export class SessionManager {
    */
   public appendArchivedHistory(sessionId: string, messages: ChatMessage[], compactionId?: string): void {
     if (!messages.length) return;
-    const at = new Date().toISOString();
-    const lines = protectArchivedMessages(messages).map((message) => JSON.stringify({ archivedAt: at, ...(compactionId ? { compactionId } : {}), message }));
-    appendLinesDurably(this.archivedHistoryPath(sessionId), lines);
+    withStateStoreGuard(this.sessionsDir, () => {
+      const at = new Date().toISOString();
+      const lines = protectArchivedMessages(messages).map((message) => JSON.stringify({ archivedAt: at, ...(compactionId ? { compactionId } : {}), message }));
+      appendLinesDurably(this.archivedHistoryPath(sessionId), lines);
+    });
   }
 
   /**
@@ -312,7 +336,7 @@ export class SessionManager {
    * set aside and counted, and committed compactions with no line are listed as missing.
    */
   public readArchivedHistory(sessionId: string, committed?: ReadonlySet<string>): ArchiveRead<ChatMessage> {
-    return readArchiveLines<ChatMessage>(this.archivedHistoryPath(sessionId), committed);
+    return withStateStoreGuard(this.sessionsDir, () => readArchiveLines<ChatMessage>(this.archivedHistoryPath(sessionId), committed));
   }
 
   public getLatestSession(): SessionData | null {
@@ -362,6 +386,10 @@ export class SessionManager {
   }
 
   public rebuildIndex(): SessionIndexData {
+    return withStateStoreGuard(this.sessionsDir, () => this.rebuildIndexLocked());
+  }
+
+  private rebuildIndexLocked(): SessionIndexData {
     const indexPath = this.getIndexPath();
     const index: SessionIndexData = {
       version: 1,
@@ -386,7 +414,7 @@ export class SessionManager {
           title: data.title || "Untitled Session",
           updatedAt: data.updatedAt || stat.mtime.toISOString(),
           workspace: data.workspacePath || data.workspace || "~",
-          messageCount: Array.isArray(data.messages) ? data.messages.length : 0,
+          messageCount: data.schemaVersion === 2 ? (data.messageLog?.count ?? 0) : (Array.isArray(data.messages) ? data.messages.length : 0),
           mtime: stat.mtimeMs,
           pinned: Boolean(data.pinned),
         };
@@ -403,6 +431,17 @@ export class SessionManager {
   }
 
   public listSessions(): Array<{
+    id: string;
+    title: string;
+    updatedAt: string;
+    workspace: string;
+    messageCount: number;
+    pinned?: boolean;
+  }> {
+    return withStateStoreGuard(this.sessionsDir, () => this.listSessionsLocked());
+  }
+
+  private listSessionsLocked(): Array<{
     id: string;
     title: string;
     updatedAt: string;
@@ -461,7 +500,7 @@ export class SessionManager {
               title: data.title || "Untitled Session",
               updatedAt: data.updatedAt || stat.mtime.toISOString(),
               workspace: data.workspacePath || data.workspace || "~",
-              messageCount: Array.isArray(data.messages) ? data.messages.length : 0,
+              messageCount: data.schemaVersion === 2 ? (data.messageLog?.count ?? 0) : (Array.isArray(data.messages) ? data.messages.length : 0),
               mtime: stat.mtimeMs,
               pinned: Boolean(data.pinned),
             };
