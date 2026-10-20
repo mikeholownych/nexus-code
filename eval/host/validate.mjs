@@ -12,6 +12,7 @@ import { isolatedArgv, grantRunAsAccess, normalizeRunAsPermissions, sandboxAvail
 import { resourceConfigProblem, resourceProbeProblem, spawnContained } from "../resources.mjs";
 import { asUser, asUserSpec, hiddenTestIsolationProblem } from "../validate.mjs";
 import { bubblewrapVersionProblem } from "./bubblewrap.mjs";
+import { operatorAccountHome } from "./operator_home.mjs";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 const ACCOUNT = "nexus-eval";
@@ -107,7 +108,7 @@ await check("the evaluator cannot reach operator files or the held-out store", (
   // Paths are checked to exist operator-side first, so a missing path cannot pass the check vacuously.
   const heldout = path.resolve(process.argv[process.argv.indexOf("--heldout") + 1] ?? "");
   must(process.argv.includes("--heldout") && run("/usr/bin/sudo", ["-n", "/usr/bin/test", "-d", heldout]).status === 0, "pass --heldout <sealed task store> (an existing directory)");
-  const home = os.homedir();
+  const home = operatorAccountHome();
   must(fs.statSync(home).isDirectory(), "operator home is missing");
   // One real file inside the store, chosen operator-side and never printed, must be unreadable even by exact path.
   // The custodian's store is root-owned (0700), so root picks the file; its name is used, never printed or read.
@@ -162,7 +163,7 @@ report.revision = {
   dirty: Boolean(spawnSync("git", ["status", "--porcelain", "--untracked-files=no"], { cwd: ROOT, encoding: "utf8" }).stdout.trim()),
   profileSha256: createHash("sha256").update(fs.readFileSync(path.join(ROOT, "eval/host/resource-profile.json"))).digest("hex"),
   manifestSha256: "50895b84a604fbfd45ed82e29cbef4ba795d7fffbe6611af23bfbc9851f3e89b",
-  sourceDigests: ["eval/host/validate.mjs", "eval/host/provision.sh", "eval/host/rollback.sh", "eval/host/resource-profile.json", "eval/resources.mjs", "eval/cgroup_supervisor.mjs", "eval/isolate.mjs", "eval/validate.mjs", "eval/run.mjs", "eval/hardened_check.mjs", "eval/hide_oracle.cjs", "eval/hide_oracle.py", "eval/unlink_then_exec.sh", "eval/workspace.mjs"].map((file) => ({ file, sha256: createHash("sha256").update(fs.readFileSync(path.join(ROOT, file))).digest("hex") })),
+  sourceDigests: ["eval/host/validate.mjs", "eval/host/operator_home.mjs", "eval/host/bubblewrap.mjs", "eval/host/provision.sh", "eval/host/rollback.sh", "eval/host/resource-profile.json", "eval/resources.mjs", "eval/cgroup_supervisor.mjs", "eval/isolate.mjs", "eval/validate.mjs", "eval/run.mjs", "eval/hardened_check.mjs", "eval/hide_oracle.cjs", "eval/hide_oracle.py", "eval/unlink_then_exec.sh", "eval/workspace.mjs"].map((file) => ({ file, sha256: createHash("sha256").update(fs.readFileSync(path.join(ROOT, file))).digest("hex") })),
 };
 const out = process.argv.indexOf("--json");
 if (out > 0) fs.writeFileSync(process.argv[out + 1], `${JSON.stringify(report, null, 2)}\n`);
