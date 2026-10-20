@@ -277,7 +277,7 @@ function formatRunKey(key) {
 
 function formatTaskId(task) {
   // JSON escaping keeps untrusted task identifiers on one diagnostic line while preserving ordinary identifiers.
-  return JSON.stringify(task).slice(1, -1);
+  return JSON.stringify(String(task)).slice(1, -1);
 }
 
 function same(a, b) {
