@@ -914,32 +914,10 @@ function loadPromptHistory(file: string): string[] {
 async function main(argv: string[]): Promise<void> {
   const protocolWrite = process.stdout.write.bind(process.stdout);
   const debug = process.env.NEXUS_DEBUG === "1";
-  (process.stdout as any).write = (chunk: unknown, encoding?: unknown, cb?: unknown): boolean => {
-    if (debug) process.stderr.write(typeof chunk === "string" ? chunk : Buffer.from(chunk as Uint8Array));
-    const done = typeof encoding === "function" ? encoding : cb;
-    if (typeof done === "function") (done as () => void)();
-    return true;
-  };
   const toStderr = (...args: unknown[]): void => {
     if (debug) process.stderr.write(args.map((a) => (typeof a === "string" ? a : JSON.stringify(a))).join(" ") + "\n");
   };
-  console.log = toStderr;
-  console.info = toStderr;
-  console.warn = toStderr;
-  console.debug = toStderr;
 
-  // The packaged TUI may launch this entry point directly, without passing
-  // through index.ts. Recover before reading config and keep a shared lease
-  // while the sidecar can access state, just as the main CLI does.
-  const home = process.env.HOME || os.homedir();
-  const { acquireClientLease, releaseClientLease } = await import("./core/client_lease.js");
-  const { hasPendingStateRestore, recoverPendingStateRestore } = await import("./core/state_restore.js");
-  if (hasPendingStateRestore(home) && !recoverPendingStateRestore(home)) {
-    throw new Error("Pending state restore could not be recovered; no state was admitted");
-  }
-  const lease = acquireClientLease(home);
-  process.once("exit", () => releaseClientLease(lease));
-  loadEnvironment();
   const program = new Command()
     .name("nexus-sidecar")
     .option("-e, --endpoint <url>", "Local LLM endpoint")
@@ -971,6 +949,31 @@ async function main(argv: string[]): Promise<void> {
     .option("--mode <mode>", "Execution mode: auto, review, or read-only (default: auto for trusted workspaces, review for untrusted)")
     .option("-r, --resume [id]", "Resume a saved session (the latest when no id is given)")
     .parse(argv);
+
+  // Commander help is ordinary CLI output, before protocol-only stdout
+  // handling begins. Parsing help and metadata invocations is read-only: do
+  // it before restore recovery, then hold a lifetime lease before any normal
+  // startup state is read or used. The packaged TUI may launch this entry
+  // point directly, without passing through index.ts.
+  (process.stdout as any).write = (chunk: unknown, encoding?: unknown, cb?: unknown): boolean => {
+    if (debug) process.stderr.write(typeof chunk === "string" ? chunk : Buffer.from(chunk as Uint8Array));
+    const done = typeof encoding === "function" ? encoding : cb;
+    if (typeof done === "function") (done as () => void)();
+    return true;
+  };
+  console.log = toStderr;
+  console.info = toStderr;
+  console.warn = toStderr;
+  console.debug = toStderr;
+  const home = process.env.HOME || os.homedir();
+  const { acquireClientLease, releaseClientLease } = await import("./core/client_lease.js");
+  const { hasPendingStateRestore, recoverPendingStateRestore } = await import("./core/state_restore.js");
+  if (hasPendingStateRestore(home) && !recoverPendingStateRestore(home)) {
+    throw new Error("Pending state restore could not be recovered; no state was admitted");
+  }
+  const lease = acquireClientLease(home);
+  process.once("exit", () => releaseClientLease(lease));
+  loadEnvironment();
   const options = program.opts();
   const config = await autoDetectModel(buildConfig(options));
   config.surface = "tui";

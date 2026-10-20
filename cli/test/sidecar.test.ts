@@ -7,6 +7,7 @@ import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { ApplicationCore } from "../src/core/app.js";
+import { hasPendingStateRestore, restoreFromSources } from "../src/core/state_restore.js";
 import { SidecarOptions, SidecarServer } from "../src/sidecar.js";
 import { slashCatalog } from "../src/slash/catalog.js";
 import { startGateway, makeRepo, makeHome, waitForEvent, waitUntil, Reply } from "./helpers/fixtures.js";
@@ -660,8 +661,8 @@ describe("SidecarServer: evidence and receipts", () => {
 const cliRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const sidecarSrc = path.join(cliRoot, "src", "sidecar.ts");
 
-function spawnSidecar(gwUrl: string, repo: string, home: string, entry: string = sidecarSrc) {
-  const child = spawn(process.execPath, ["--import", "tsx", entry, "-w", repo, "-e", gwUrl, "-m", "m"], {
+function spawnSidecar(gwUrl: string, repo: string, home: string, entry: string = sidecarSrc, args: string[] = ["-w", repo, "-e", gwUrl, "-m", "m"]) {
+  const child = spawn(process.execPath, ["--import", "tsx", entry, ...args], {
     cwd: cliRoot,
     env: { ...process.env, HOME: home, NEXUS_DEBUG: "0" },
   });
@@ -674,6 +675,60 @@ function spawnSidecar(gwUrl: string, repo: string, home: string, entry: string =
 }
 
 describe("sidecar process", () => {
+  test("holds its shared client lease for the complete sidecar lifetime", async () => {
+    const gw = await startGateway(readOnlyTurn);
+    const repo = makeRepo();
+    const home = makeHome();
+    const proc = spawnSidecar(gw.url, repo, home);
+    try {
+      await waitUntil(() => proc.lines().some((line) => line.includes('"type":"hello"')), 20000);
+      const source = path.join(home, "restore.env");
+      fs.writeFileSync(source, "MODEL=replacement\n", { mode: 0o600 });
+      let restoreError: unknown;
+      assert.equal(restoreFromSources(home, [{ store: "config", source, mode: "file" }], (error) => { restoreError = error; }), false);
+      assert.match(String(restoreError), /Close all other Nexus clients before restoring/i);
+      assert.equal(hasPendingStateRestore(home), false, "lease contention must reject before publishing restore intent");
+      proc.child.stdin.write(JSON.stringify({ v: 1, type: "shutdown" }) + "\n");
+      assert.equal(await proc.exited, 0, proc.stderr());
+    } finally {
+      proc.child.kill("SIGKILL");
+      await gw.close();
+      fs.rmSync(repo, { recursive: true, force: true });
+      fs.rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  test("explicit help stays read-only when a restore is pending", async () => {
+    const gw = await startGateway(readOnlyTurn);
+    const repo = makeRepo();
+    const home = makeHome();
+    const control = path.join(home, ".nexus", "restore-control");
+    fs.mkdirSync(control, { recursive: true, mode: 0o700 });
+    fs.chmodSync(path.join(home, ".nexus"), 0o700);
+    fs.chmodSync(control, 0o700);
+    const activeMarker = path.join(control, "active.json");
+    fs.writeFileSync(activeMarker, JSON.stringify({
+      formatVersion: 1,
+      id: "6b9c1f71-137e-4ee9-b81e-9457c0e5812b",
+      homeSha256: createHash("sha256").update(fs.realpathSync(home)).digest("hex"),
+      manifestSha256: "a".repeat(64),
+      phase: "prepared",
+      stores: { state: "tree", config: null },
+    }), { mode: 0o600 });
+    const markerBefore = fs.readFileSync(activeMarker);
+    const proc = spawnSidecar(gw.url, repo, home, sidecarSrc, ["--help"]);
+    try {
+      assert.equal(await proc.exited, 0, proc.stderr());
+      assert.match(proc.lines().join("\n"), /Usage: nexus-sidecar/);
+      assert.deepEqual(fs.readFileSync(activeMarker), markerBefore);
+    } finally {
+      proc.child.kill("SIGKILL");
+      await gw.close();
+      fs.rmSync(repo, { recursive: true, force: true });
+      fs.rmSync(home, { recursive: true, force: true });
+    }
+  });
+
   test("refuses to load config when a pending restore cannot be replayed", async () => {
     const gw = await startGateway(readOnlyTurn);
     const repo = makeRepo();
