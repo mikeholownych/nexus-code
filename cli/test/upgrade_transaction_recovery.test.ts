@@ -1,6 +1,8 @@
 import { describe, it, beforeEach, afterEach } from "node:test";
 import assert from "node:assert/strict";
 import * as fs from "node:fs";
+import fsDefault from "node:fs";
+import { syncBuiltinESMExports } from "node:module";
 import * as path from "node:path";
 import * as os from "node:os";
 import { spawnSync, spawn } from "node:child_process";
@@ -12,7 +14,7 @@ import * as crypto from "node:crypto";
 import { generateCompatibilityMetadata } from "../src/compatibility.js";
 import { performUpgrade, compareInstallationWithRelease, parseSemver, rollbackBinary } from "../src/upgrade.js";
 import { withStateStoreGuard } from "../src/core/state_store_guard.js";
-import { hasPendingStateRestore, recoverPendingStateRestore } from "../src/core/state_restore.js";
+import { hasPendingStateRestore, recoverPendingStateRestore, restoreFromSources } from "../src/core/state_restore.js";
 
 function runtime(root:string, version:string, marker="original"):void {
   for (const dir of ["bin", "lib/core", "lib/cli/dist"]) fs.mkdirSync(path.join(root,dir),{recursive:true});
@@ -278,6 +280,158 @@ describe("complete private state/config backup restore",()=>{
     assert.equal(fs.existsSync(orphan),false);
     const archive=path.join(home,"backup.tar.gz");fs.writeFileSync(archive,Buffer.from([0x1f,0x8b,0x08]));
     assert.equal(restoreConfigBackup(archive,home),false);assert.equal(fs.readFileSync(config,"utf8"),"MODEL=original\n");
+  }finally{fs.rmSync(home,{recursive:true,force:true});}
+ });
+
+ it("flushes every automatic backup payload and containing directory before returning",()=>{
+  const home=fs.mkdtempSync(path.join(os.tmpdir(),"nexus-backup-fsync-"));
+  const originalFsync=fsDefault.fsyncSync;
+  const flushed=new Set<string>();
+  try{
+   const sessionDir=path.join(home,".nexus/sessions/a");
+   const configDir=path.join(home,".config/nexus");
+   fs.mkdirSync(sessionDir,{recursive:true,mode:0o700});
+   fs.mkdirSync(configDir,{recursive:true,mode:0o700});
+   for(const directory of [path.join(home,".nexus"),path.join(home,".nexus/sessions"),sessionDir,path.join(home,".config"),configDir]) fs.chmodSync(directory,0o700);
+   fs.writeFileSync(path.join(sessionDir,"events.jsonl"),"durable session",{mode:0o600});
+   fs.writeFileSync(path.join(configDir,"config.env"),"MODEL=durable\n",{mode:0o600});
+
+   fsDefault.fsyncSync=((fd:number)=>{
+    const stat=fsDefault.fstatSync(fd);
+    flushed.add(`${stat.dev}:${stat.ino}`);
+    return originalFsync(fd);
+   }) as typeof fsDefault.fsyncSync;
+   syncBuiltinESMExports();
+   const backup=createPreMigrationBackup(home);
+   assert.ok(backup.configBackupPath);
+   assert.ok(backup.stateBackupDir);
+   const expectedFiles=[
+    backup.configBackupPath!,
+    path.join(backup.stateBackupDir!,"backup.json"),
+    path.join(backup.stateBackupDir!,"state","sessions","a","events.jsonl"),
+    path.join(backup.stateBackupDir!,"config","config.env"),
+   ];
+   for(const file of expectedFiles){
+    const stat=fs.statSync(file);
+    assert.ok(flushed.has(`${stat.dev}:${stat.ino}`),`backup file was not fsynced: ${file}`);
+   }
+   const expectedDirectories=[
+    path.dirname(backup.configBackupPath!),
+    backup.stateBackupDir!,
+    path.join(backup.stateBackupDir!,"state"),
+    path.join(backup.stateBackupDir!,"state","sessions"),
+    path.join(backup.stateBackupDir!,"state","sessions","a"),
+    path.join(backup.stateBackupDir!,"config"),
+   ];
+   for(const directory of expectedDirectories){
+    const stat=fs.statSync(directory);
+    assert.ok(flushed.has(`${stat.dev}:${stat.ino}`),`backup directory was not fsynced: ${directory}`);
+   }
+  }finally{
+   fsDefault.fsyncSync=originalFsync;
+   syncBuiltinESMExports();
+   fs.rmSync(home,{recursive:true,force:true});
+  }
+ });
+
+ it("preserves an existing backup when exclusive creation reports EEXIST",()=>{
+  const home=fs.mkdtempSync(path.join(os.tmpdir(),"nexus-backup-eexist-"));
+  const originalOpenSync=fsDefault.openSync;
+  let collidedPath:string|undefined;
+  try{
+   const configDir=path.join(home,".config/nexus");
+   fs.mkdirSync(configDir,{recursive:true,mode:0o700});
+   fs.chmodSync(path.join(home,".config"),0o700);fs.chmodSync(configDir,0o700);
+   fs.writeFileSync(path.join(configDir,"config.env"),"MODEL=source\n",{mode:0o600});
+   fsDefault.openSync=((file:any,flags:any,mode?:any)=>{
+    if(!collidedPath && typeof file==="string" && file.includes(`${path.sep}config.env.bak.`) && (flags & fs.constants.O_EXCL)!==0){
+     collidedPath=file;
+     const fd=originalOpenSync(file,fs.constants.O_WRONLY|fs.constants.O_CREAT|fs.constants.O_EXCL,0o600);
+     try{fsDefault.writeSync(fd,"keep pre-existing backup\n");}finally{fsDefault.closeSync(fd);}
+     throw Object.assign(new Error("backup already exists"),{code:"EEXIST"});
+    }
+    return originalOpenSync(file,flags,mode);
+   }) as typeof fsDefault.openSync;
+   syncBuiltinESMExports();
+   assert.throws(()=>createPreMigrationBackup(home),(error:any)=>error.code==="EEXIST");
+   assert.ok(collidedPath,"exclusive backup creation was attempted");
+  }finally{
+   fsDefault.openSync=originalOpenSync;
+   syncBuiltinESMExports();
+  }
+  try{assert.equal(fs.readFileSync(collidedPath!,"utf8"),"keep pre-existing backup\n");}
+  finally{fs.rmSync(home,{recursive:true,force:true});}
+ });
+
+ it("does not merge into an existing timestamped state backup directory",()=>{
+  const home=fs.mkdtempSync(path.join(os.tmpdir(),"nexus-state-backup-eexist-"));
+  const originalMkdirSync=fsDefault.mkdirSync;
+  let collidedPath:string|undefined;
+  try{
+   const sessionDir=path.join(home,".nexus/sessions/a");
+   fs.mkdirSync(sessionDir,{recursive:true,mode:0o700});
+   fs.chmodSync(path.join(home,".nexus"),0o700);fs.chmodSync(path.join(home,".nexus/sessions"),0o700);fs.chmodSync(sessionDir,0o700);
+   fs.writeFileSync(path.join(sessionDir,"events.jsonl"),"MODEL=state source\n",{mode:0o600});
+   fsDefault.mkdirSync=((directory:any,options?:any)=>{
+    if(!collidedPath && typeof directory==="string" && directory.includes(`${path.sep}state-backup-`)){
+     collidedPath=directory;
+     originalMkdirSync(directory,{mode:0o700});
+     fsDefault.writeFileSync(path.join(directory,"sentinel.txt"),"keep existing partial backup\n",{mode:0o600});
+    }
+    return originalMkdirSync(directory,options);
+   }) as typeof fsDefault.mkdirSync;
+   syncBuiltinESMExports();
+   assert.throws(()=>createPreMigrationBackup(home),(error:any)=>error.code==="EEXIST");
+   assert.ok(collidedPath,"timestamped backup directory creation was attempted");
+  }finally{
+   fsDefault.mkdirSync=originalMkdirSync;
+   syncBuiltinESMExports();
+  }
+  try{
+   assert.deepEqual(fs.readdirSync(path.dirname(collidedPath!)),[path.basename(collidedPath!)]);
+   assert.deepEqual(fs.readdirSync(collidedPath!),["sentinel.txt"]);
+   assert.equal(fs.readFileSync(path.join(collidedPath!,"sentinel.txt"),"utf8"),"keep existing partial backup\n");
+  }finally{fs.rmSync(home,{recursive:true,force:true});}
+ });
+
+ it("keeps committed restore barriers until staged payload cleanup succeeds",()=>{
+  const home=fs.mkdtempSync(path.join(os.tmpdir(),"nexus-restore-cleanup-retry-"));
+  const originalRmSync=fsDefault.rmSync;
+  let injected=false;
+  try{
+   const source=path.join(home,"source-config");
+   const configDir=path.join(home,".config/nexus");
+   fs.mkdirSync(source,{mode:0o700});
+   fs.mkdirSync(configDir,{recursive:true,mode:0o700});
+   fs.chmodSync(path.join(home,".config"),0o700);fs.chmodSync(configDir,0o700);
+   fs.writeFileSync(path.join(source,"config.env"),"MODEL=restored\n",{mode:0o600});
+   fs.writeFileSync(path.join(configDir,"config.env"),"MODEL=before\n",{mode:0o600});
+   fsDefault.rmSync=((target:any,options:any)=>{
+    if(!injected && String(target).includes(`${path.sep}restore-control${path.sep}transactions${path.sep}`)){
+     injected=true;
+     const error=Object.assign(new Error("injected transaction cleanup failure"),{code:"EIO"});
+     throw error;
+    }
+    return originalRmSync(target,options);
+   }) as typeof fsDefault.rmSync;
+   syncBuiltinESMExports();
+   assert.equal(restoreFromSources(home,[{store:"config",source,mode:"tree"}]),false);
+   assert.equal(injected,true,"the test must exercise staging cleanup failure");
+   assert.equal(fs.readFileSync(path.join(configDir,"config.env"),"utf8"),"MODEL=restored\n");
+   assert.equal(hasPendingStateRestore(home),true,"the committed journal must remain as a retry route");
+   const activePath=path.join(home,".nexus/restore-control/active.json");
+   const active=JSON.parse(fs.readFileSync(activePath,"utf8"));
+   assert.equal(active.phase,"committed");
+   assert.ok(fs.existsSync(path.join(configDir,".nexus-restore.pending")),"the store barrier must remain until cleanup succeeds");
+  }finally{
+   fsDefault.rmSync=originalRmSync;
+   syncBuiltinESMExports();
+  }
+  try{
+   assert.equal(recoverPendingStateRestore(home),true,"recovery must retry committed transaction cleanup");
+   assert.equal(hasPendingStateRestore(home),false);
+   assert.equal(fs.existsSync(path.join(home,".nexus/restore-control/active.json")),false);
+   assert.deepEqual(fs.readdirSync(path.join(home,".nexus/restore-control/transactions")),[]);
   }finally{fs.rmSync(home,{recursive:true,force:true});}
  });
 

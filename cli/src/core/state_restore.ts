@@ -412,11 +412,14 @@ function resumeUnderLease(home: string, active: ActiveRestore): void {
       active = { ...active, phase: "committed" };
       writeDurable(activePath(home), JSON.stringify(active));
     }
-    clearStoreMarkers(home, active);
-    removeDurably(activePath(home));
+    // Keep the global journal and per-store barriers until private staging is
+    // fully removed. A crash or cleanup error can then replay this committed
+    // transaction and retry cleanup instead of leaving an untracked payload.
     const tx = transactionPath(home, active.id);
     fs.rmSync(tx, { recursive: true, force: true });
     fsyncDirectory(path.join(controlRoot(home), TRANSACTIONS_DIR));
+    clearStoreMarkers(home, active);
+    removeDurably(activePath(home));
   });
 }
 

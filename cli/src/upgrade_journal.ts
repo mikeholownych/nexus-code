@@ -147,11 +147,12 @@ export function createPreMigrationBackup(homeDir: string = process.env.HOME || "
   if (fs.existsSync(configEnv)) {
     if (!fs.lstatSync(configEnv).isFile() || fs.realpathSync(configEnv) !== path.resolve(configEnv)) throw new Error("Configuration backup source is redirected");
     const backupDir = path.join(homeDir, ".config", "nexus", "backups");
+    const backupDirExisted = fs.existsSync(backupDir);
     fs.mkdirSync(backupDir, { recursive: true, mode: 0o700 });
     if (fs.realpathSync(backupDir) !== path.resolve(backupDir)) throw new Error("Configuration backup directory is redirected");
+    if (!backupDirExisted) syncDirectory(path.dirname(backupDir));
     const backupFile = path.join(backupDir, `config.env.bak.${timestamp}`);
-    fs.copyFileSync(configEnv, backupFile);
-    fs.chmodSync(backupFile, 0o600);
+    copyPrivateFileDurably(configEnv, backupFile);
     result.configBackupPath = backupFile;
   }
 
@@ -159,17 +160,29 @@ export function createPreMigrationBackup(homeDir: string = process.env.HOME || "
   const stateDir = path.join(homeDir, ".nexus");
   if (fs.existsSync(stateDir)) {
     const stateBackupsDir = path.join(stateDir, "backups");
+    const stateBackupsDirExisted = fs.existsSync(stateBackupsDir);
     fs.mkdirSync(stateBackupsDir, { recursive: true, mode: 0o700 });
     if (fs.realpathSync(stateBackupsDir) !== path.resolve(stateBackupsDir)) throw new Error("State backup directory is redirected");
+    if (!stateBackupsDirExisted) syncDirectory(stateDir);
     const backupDest = path.join(stateBackupsDir, `state-backup-${timestamp}`);
-    fs.mkdirSync(backupDest, { recursive: true, mode: 0o700 });
+    // Each timestamped backup is a single immutable attempt. Never merge into
+    // an existing directory left by a collision or interrupted prior attempt.
+    fs.mkdirSync(backupDest, { mode: 0o700 });
+    syncDirectory(stateBackupsDir);
 
     // Snapshot all durable state, not just its index. Backup directories are
     // excluded to avoid recursion; symbolic links are refused rather than read.
     withDurableStoreGuards(homeDir, () => copyPrivateTree(stateDir, path.join(backupDest, "state"), new Set(["backups", "restore-control", STATE_RESTORE_PENDING_FILE])));
     const configDir = path.join(homeDir, ".config", "nexus");
     if (fs.existsSync(configDir)) copyPrivateTree(configDir, path.join(backupDest, "config"), new Set(["backups", STATE_RESTORE_PENDING_FILE]));
-    fs.writeFileSync(path.join(backupDest, "backup.json"), JSON.stringify({ formatVersion:1, kind:"nexus-state-config", createdAt:new Date().toISOString() }), { mode:0o600 });
+    const metadataPath = path.join(backupDest, "backup.json");
+    const metadataFd = fs.openSync(metadataPath, fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL | (fs.constants.O_NOFOLLOW ?? 0), 0o600);
+    try {
+      fs.writeFileSync(metadataFd, JSON.stringify({ formatVersion:1, kind:"nexus-state-config", createdAt:new Date().toISOString() }));
+      fs.fchmodSync(metadataFd, 0o600);
+      fs.fsyncSync(metadataFd);
+    } finally { fs.closeSync(metadataFd); }
+    syncDirectory(backupDest);
 
     result.stateBackupDir = backupDest;
   }
@@ -227,18 +240,56 @@ function validatePrivateTree(source: string): void {
 }
 function copyPrivateTree(source: string, destination: string, excluded = new Set<string>()): void {
   validatePrivateTreeExcept(source, excluded);
+  const existed = fs.existsSync(destination);
   fs.mkdirSync(destination, { recursive:true, mode:0o700 });
   if (fs.realpathSync(destination) !== path.resolve(destination)) throw new Error("Backup destination is redirected");
+  if (!existed) syncDirectory(path.dirname(destination));
   fs.chmodSync(destination, 0o700);
   for (const entry of fs.readdirSync(source, { withFileTypes:true })) {
     if (excluded.has(entry.name) || entry.name === STATE_STORE_GUARD_FILE || entry.name === STATE_RESTORE_PENDING_FILE) continue;
     const from = path.join(source, entry.name), to = path.join(destination, entry.name);
     if (entry.isDirectory()) copyPrivateTree(from, to);
-    else {
-      try { if (fs.lstatSync(to).isSymbolicLink()) throw new Error("Restore destination is redirected"); } catch (error:any) { if (error.code !== "ENOENT") throw error; }
-      fs.copyFileSync(from, to); fs.chmodSync(to, 0o600);
-    }
+    else copyPrivateFileDurably(from, to);
   }
+  syncDirectory(destination);
+}
+
+/** A backup is not returned to the journal until its bytes and directory entry are durable. */
+function copyPrivateFileDurably(source: string, destination: string): void {
+  const sourcePath = path.resolve(source);
+  if (fs.realpathSync(sourcePath) !== sourcePath) throw new Error("Backup source is redirected");
+  const sourceFd = fs.openSync(sourcePath, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW ?? 0) | (fs.constants.O_NONBLOCK ?? 0));
+  let destinationFd: number | undefined;
+  let destinationCreated = false;
+  try {
+    const opened = fs.fstatSync(sourceFd);
+    const current = fs.lstatSync(sourcePath);
+    if (!opened.isFile() || current.isSymbolicLink() || opened.dev !== current.dev || opened.ino !== current.ino) {
+      throw new Error("Backup source changed while opening");
+    }
+    destinationFd = fs.openSync(destination, fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL | (fs.constants.O_NOFOLLOW ?? 0), 0o600);
+    destinationCreated = true;
+    const buffer = Buffer.alloc(64 * 1024);
+    let position = 0;
+    while (true) {
+      const count = fs.readSync(sourceFd, buffer, 0, buffer.length, position);
+      if (count === 0) break;
+      let written = 0;
+      while (written < count) written += fs.writeSync(destinationFd, buffer, written, count - written);
+      position += count;
+    }
+    fs.fchmodSync(destinationFd, 0o600);
+    fs.fsyncSync(destinationFd);
+    fs.closeSync(destinationFd);
+    destinationFd = undefined;
+    syncDirectory(path.dirname(destination));
+  } catch (error) {
+    if (destinationFd !== undefined) try { fs.closeSync(destinationFd); } catch {}
+    if (destinationCreated) {
+      try { fs.unlinkSync(destination); syncDirectory(path.dirname(destination)); } catch {}
+    }
+    throw error;
+  } finally { fs.closeSync(sourceFd); }
 }
 function validatePrivateTreeExcept(source: string, excluded: Set<string>): void {
   if (fs.realpathSync(source) !== path.resolve(source) || !fs.lstatSync(source).isDirectory()) throw new Error("State root is redirected");
