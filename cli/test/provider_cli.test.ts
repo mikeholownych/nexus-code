@@ -127,7 +127,7 @@ test("providers list preserves safe unknown-provider diagnostics and redacts cre
   }
 });
 
-test("providers verify captures safe JSON on stdout and keeps provider diagnostics off stderr", async () => {
+test("providers verify captures safe JSON and preserves a sanitized cloud disclosure notice", async () => {
   const server = createServer((_request, response) => {
     response.writeHead(401, { "content-type": "application/json" });
     response.end(JSON.stringify({ error: { message: "Bearer sk-test-secret from provider" } }));
@@ -160,6 +160,8 @@ test("providers verify captures safe JSON on stdout and keeps provider diagnosti
     assert.equal(output.model, "(unprintable model id)");
     assert.equal(output.receipts[0].endpointOrigin, `http://127.0.0.1:${address.port}`);
     assert.equal(output.steps[0].detail, "Provider request failed");
+    assert.match(stderr.join("\n"), /Cloud inference:/);
+    assert.match(stderr.join("\n"), new RegExp(`http://127\\.0\\.0\\.1:${address.port}`));
     assert.doesNotMatch(stdout.join("\n"), /sk-test-secret|query-secret|private|Bearer/);
     assert.doesNotMatch(stderr.join("\n"), /sk-test-secret|query-secret|private|Bearer/);
   } finally {

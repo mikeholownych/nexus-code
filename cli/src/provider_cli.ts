@@ -12,6 +12,7 @@ import type { ChatMessage, HarnessConfig, ToolDefinition } from "./types.js";
 import { UsageLedger } from "./usage.js";
 import { resolveCredential } from "./credentials.js";
 import { connectWithKey, disconnect, startSignIn } from "./provider_connect.js";
+import { redactSecrets } from "./ui.js";
 
 /** One line naming each role's selected destination and its disclosure class. */
 export function describeTarget(config: HarnessConfig): string {
@@ -81,6 +82,32 @@ function safeModelId(value: string): string {
   // Provider/model identifiers may contain routing punctuation, but not whitespace, controls or arbitrary diagnostics.
   if (!/^[A-Za-z0-9._:\/@+-]{1,160}$/.test(value)) return "(unprintable model id)";
   return credentialShaped(value) ? "(unprintable model id)" : value;
+}
+
+function safeClientDiagnostic(message: string, config: HarnessConfig): string {
+  let safe = redactSecrets(message);
+  const substitute = (raw: string | undefined, replacement: string | undefined) => {
+    if (raw && replacement && raw !== replacement) safe = safe.replaceAll(raw, () => replacement);
+  };
+  if (config.model) substitute(config.model, safeModelId(config.model));
+  const safeOrigin = safeOriginOf(config.endpoint);
+  if (safeOrigin) {
+    substitute(config.endpoint.trim(), safeOrigin);
+    try {
+      const endpoint = new URL(config.endpoint.trim());
+      substitute(endpoint.href, safeOrigin);
+      substitute(`${endpoint.origin}${endpoint.pathname}${endpoint.search}${endpoint.hash}`, safeOrigin);
+      substitute(`${endpoint.origin}${endpoint.pathname}`, safeOrigin);
+      substitute(endpoint.origin, safeOrigin);
+      substitute(endpoint.hostname, new URL(safeOrigin).hostname);
+      substitute(endpoint.pathname, "(path redacted)");
+      substitute(endpoint.search, "");
+      substitute(endpoint.hash, "");
+    } catch {
+      // Invalid endpoints are rejected by config validation before the live check starts.
+    }
+  }
+  return safe;
 }
 
 const SAFE_FAILURE_KINDS = new Set([
@@ -156,8 +183,12 @@ export interface VerificationStep {
  * Live qualification without workspace content: a streamed completion, then a tool round trip (the model must call
  * echo_token with a nonce, receive its result and answer). Each step is one receipt in the usage ledger.
  */
-export async function verifyProvider(config: HarnessConfig, signal?: AbortSignal): Promise<VerificationStep[]> {
-  const client = new LocalLlmClient({ ...config, maxSteps: 1 }, { role: "qualification" });
+export async function verifyProvider(
+  config: HarnessConfig,
+  signal?: AbortSignal,
+  options?: { diagnosticHandler?: (level: "error" | "warn", message: string) => void },
+): Promise<VerificationStep[]> {
+  const client = new LocalLlmClient({ ...config, maxSteps: 1 }, { role: "qualification", diagnosticHandler: options?.diagnosticHandler });
   const steps: VerificationStep[] = [];
   const run = async (step: string, fn: (requestId: string) => Promise<string>) => {
     const requestId = randomUUID();
@@ -318,19 +349,10 @@ export function registerProviderCommands(program: Command): void {
       }
       const abort = new AbortController();
       process.once("SIGINT", () => abort.abort(new Error("SIGINT")));
-      // The client emits raw endpoint and model labels in its general-purpose disclosure notices. This command renders
-      // its own sanitized destination summary below, so keep those internal notices off both terminal output streams.
-      const originalError = console.error;
-      const originalWarn = console.warn;
-      let steps: VerificationStep[];
-      try {
-        console.error = () => {};
-        console.warn = () => {};
-        steps = await verifyProvider(config, abort.signal);
-      } finally {
-        console.error = originalError;
-        console.warn = originalWarn;
-      }
+      const diagnosticHandler = (level: "error" | "warn", message: string) => {
+        (level === "warn" ? console.warn : console.error)(pc.dim(safeClientDiagnostic(message, config)));
+      };
+      const steps = await verifyProvider(config, abort.signal, { diagnosticHandler });
       const receipts = UsageLedger.global().all();
       const summary = verificationSummary(steps, receipts, { provider: config.provider, model: config.model });
       if (options.json) {
