@@ -13,7 +13,15 @@ const env = {
 };
 
 function git(args, cwd = root, { allowFailure = false } = {}) {
-	const result = spawnSync("/usr/bin/git", ["-C", cwd, ...args], { encoding: "utf8", env, timeout: 10000, maxBuffer: 2 * 1024 * 1024 });
+	// Fetch can detach automatic maintenance; keep fixture Git work synchronous before recursive cleanup.
+	const result = spawnSync("/usr/bin/git", [
+		"-c", "maintenance.auto=false",
+		"-c", "maintenance.autoDetach=false",
+		"-c", "gc.auto=0",
+		"-c", "gc.autoDetach=false",
+		"-C", cwd,
+		...args,
+	], { encoding: "utf8", env, timeout: 10000, maxBuffer: 2 * 1024 * 1024 });
 	if (result.error || (!allowFailure && result.status !== 0)) throw new Error("SYNTHETIC_GIT_FIXTURE_FAILED");
 	return { status: result.status, stdout: result.stdout.trim() };
 }
