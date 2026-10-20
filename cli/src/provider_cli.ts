@@ -7,7 +7,7 @@ import { randomUUID } from "node:crypto";
 import pc from "picocolors";
 import { InferenceError, LocalLlmClient, operatorSetting } from "./client.js";
 import { buildConfig } from "./config.js";
-import { baseUrlSetting, disclosureClass, originOf, PROVIDERS } from "./providers.js";
+import { baseUrlSetting, disclosureClass, PROVIDERS } from "./providers.js";
 import type { ChatMessage, HarnessConfig, ToolDefinition } from "./types.js";
 import { UsageLedger } from "./usage.js";
 import { resolveCredential } from "./credentials.js";
@@ -18,7 +18,7 @@ export function describeTarget(config: HarnessConfig): string {
   const target = (provider: string | undefined, endpoint: string, model: string) => {
     // Endpoint paths, userinfo, query strings and model ids are operator-controlled environment/config values.
     // Show only the parsed origin and a model id that passes the display allowlist.
-    const origin = originOf(endpoint);
+    const origin = safeOriginOf(endpoint);
     const label = provider ? PROVIDERS[provider]?.label ?? "Cloud provider" : "Local endpoint";
     const where = origin ? `${label} (${origin})` : `${label} (endpoint unavailable)`;
     return `${where} · ${model ? safeModelId(model) : "no model"} · ${disclosureClass(endpoint, provider, config.cloudRoutedOrigins)}`;
@@ -35,14 +35,8 @@ export function describeTarget(config: HarnessConfig): string {
   return `[nexus] Inference — ${parts.join(" | ")}`;
 }
 
-function safeProviderId(value: string | undefined): string | undefined {
-  return value && Object.prototype.hasOwnProperty.call(PROVIDERS, value) ? value : value ? "(unrecognized provider)" : undefined;
-}
-
-function safeModelId(value: string): string {
-  // Provider/model identifiers may contain routing punctuation, but not whitespace, controls or arbitrary diagnostics.
-  if (!/^[A-Za-z0-9._:\/@+-]{1,160}$/.test(value)) return "(unprintable model id)";
-  const credentialShaped = [
+function credentialShaped(value: string): boolean {
+  return [
     /sk-[A-Za-z0-9_-]{8,}/i,
     /(?:gh[pousr]_[A-Za-z0-9_]{20,}|github_pat_[A-Za-z0-9_]{20,})/i,
     /xox[baprs]-[A-Za-z0-9-]{10,}/i,
@@ -51,7 +45,28 @@ function safeModelId(value: string): string {
     /ya29\.[0-9A-Za-z_-]{20,}/,
     /eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}/,
   ].some((pattern) => pattern.test(value));
-  return credentialShaped ? "(unprintable model id)" : value;
+}
+
+/** Keep endpoint attribution while removing credential-shaped labels from displayed hostnames. */
+function safeOriginOf(value: string | undefined): string | undefined {
+  if (!value?.trim()) return undefined;
+  try {
+    const url = new URL(value.trim());
+    const hostname = url.hostname.split(".").map((label) => credentialShaped(label) ? "(redacted)" : label).join(".");
+    return `${url.protocol}//${hostname}${url.port ? `:${url.port}` : ""}`;
+  } catch {
+    return undefined;
+  }
+}
+
+function safeProviderId(value: string | undefined): string | undefined {
+  return value && Object.prototype.hasOwnProperty.call(PROVIDERS, value) ? value : value ? "(unrecognized provider)" : undefined;
+}
+
+function safeModelId(value: string): string {
+  // Provider/model identifiers may contain routing punctuation, but not whitespace, controls or arbitrary diagnostics.
+  if (!/^[A-Za-z0-9._:\/@+-]{1,160}$/.test(value)) return "(unprintable model id)";
+  return credentialShaped(value) ? "(unprintable model id)" : value;
 }
 
 const SAFE_FAILURE_KINDS = new Set([
@@ -92,14 +107,14 @@ export function verificationSummary(
       };
     }),
     receipts: receipts.map(({ at, requestId, role, providerId, selectedModel, effectiveModel, endpointOrigin, protocol, disclosure, executions, outcome, failureKind, usage, usageConfidence, costConfidence }) => {
-      const origin = originOf(endpointOrigin);
+      const origin = safeOriginOf(endpointOrigin);
       return {
         at, requestId, role, providerId: safeProviderId(providerId) ?? "(unrecognized provider)",
         selectedModel: safeModelId(selectedModel),
         ...(effectiveModel ? { effectiveModel: safeModelId(effectiveModel) } : {}),
         ...(origin ? { endpointOrigin: origin } : {}),
         protocol, disclosure, ...(executions !== undefined ? { executions } : {}), outcome,
-        ...(failureKind ? { failureKind } : {}), ...(usage ? { usage } : {}), usageConfidence, costConfidence,
+        ...(failureKind && SAFE_FAILURE_KINDS.has(failureKind) ? { failureKind } : {}), ...(usage ? { usage } : {}), usageConfidence, costConfidence,
       };
     }),
   };
@@ -252,7 +267,7 @@ export function registerProviderCommands(program: Command): void {
       for (const def of Object.values(PROVIDERS)) {
         const configuredBase = operatorSetting(baseUrlSetting(def.id));
         const baseUrl = configuredBase || def.baseUrl;
-        const base = baseUrl ? originOf(baseUrl) ?? "(invalid endpoint)" : "(set --base-url or " + baseUrlSetting(def.id) + ")";
+        const base = baseUrl ? safeOriginOf(baseUrl) ?? "(invalid endpoint)" : "(set --base-url or " + baseUrlSetting(def.id) + ")";
         const found = resolveCredential(def.id, def.credentialEnv);
         const key = found ? pc.green(`connected via ${found.source}`) : pc.yellow(`not connected (${def.credentialEnv ? `$${def.credentialEnv} or ` : ""}nexus connect ${def.id})`);
         console.log(`  ${pc.bold(def.id.padEnd(11))} ${def.protocol.padEnd(19)} ${base}`);
@@ -268,7 +283,7 @@ export function registerProviderCommands(program: Command): void {
       }
       console.log(`\n${describeTarget(config)}`);
       const authorized = config.authorizedDisclosureOrigins ?? [];
-      console.log(pc.dim(`Authorized cloud destinations: ${authorized.length ? authorized.join(", ") : "none"}`));
+      console.log(pc.dim(`Authorized cloud destinations: ${authorized.length ? authorized.map((origin) => safeOriginOf(origin) ?? "(invalid endpoint)").join(", ") : "none"}`));
       console.log(pc.dim("Select with --provider <id> --model <id> (or NEXUS_PROVIDER / NEXUS_MODEL in ~/.config/nexus/config.env).\n"));
     });
 
@@ -284,12 +299,24 @@ export function registerProviderCommands(program: Command): void {
       try {
         config = buildConfig(options);
       } catch (err: any) {
-        console.error(pc.red(`Configuration error: ${err?.message ?? err}`));
+        console.error(pc.red("Configuration error: provider configuration is invalid"));
         process.exit(2);
       }
       const abort = new AbortController();
       process.once("SIGINT", () => abort.abort(new Error("SIGINT")));
-      const steps = await verifyProvider(config, abort.signal);
+      // The client emits raw endpoint and model labels in its general-purpose disclosure notices. This command renders
+      // its own sanitized destination summary below, so keep those internal notices off both terminal output streams.
+      const originalError = console.error;
+      const originalWarn = console.warn;
+      let steps: VerificationStep[];
+      try {
+        console.error = () => {};
+        console.warn = () => {};
+        steps = await verifyProvider(config, abort.signal);
+      } finally {
+        console.error = originalError;
+        console.warn = originalWarn;
+      }
       const receipts = UsageLedger.global().all();
       const summary = verificationSummary(steps, receipts, { provider: config.provider, model: config.model });
       if (options.json) {

@@ -1,7 +1,10 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { createServer } from "node:http";
+import { Command } from "commander";
+import { credentialStorageHome, operatorSetting, setCredentialAuthority } from "../src/client.js";
 import type { HarnessConfig } from "../src/types.js";
-import { describeTarget, verificationSummary } from "../src/provider_cli.js";
+import { describeTarget, registerProviderCommands, verificationSummary } from "../src/provider_cli.js";
 
 test("provider destination display omits endpoint credentials and unsafe model ids", () => {
   const display = describeTarget({
@@ -26,6 +29,63 @@ test("provider destination display never falls back to a raw invalid endpoint", 
   assert.match(display, /endpoint unavailable/);
   assert.match(display, /model-secret-value/);
   assert.doesNotMatch(display, /malformed-endpoint-secret/);
+});
+
+test("provider destination display redacts credential-shaped hostname labels and keeps origin attribution", () => {
+  const display = describeTarget({
+    provider: "compatible",
+    endpoint: "https://sk-test-secret-label.inference.example:8443/v1/private?token=query-secret",
+    model: "safe-model",
+    cloudRoutedOrigins: [],
+  } as HarnessConfig);
+
+  assert.match(display, /https:\/\/\(redacted\)\.inference\.example:8443/);
+  assert.match(display, /safe-model/);
+  assert.doesNotMatch(display, /sk-test-secret-label|query-secret|private/);
+});
+
+test("providers verify captures safe JSON on stdout and keeps provider diagnostics off stderr", async () => {
+  const server = createServer((_request, response) => {
+    response.writeHead(401, { "content-type": "application/json" });
+    response.end(JSON.stringify({ error: { message: "Bearer sk-test-secret from provider" } }));
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const address = server.address();
+  assert.ok(address && typeof address === "object");
+
+  const previousExitCode = process.exitCode;
+  const previousLog = console.log;
+  const previousError = console.error;
+  const previousCompatibleAuth = operatorSetting("NEXUS_COMPATIBLE_AUTH");
+  const previousCredentialHome = credentialStorageHome();
+  const stdout: string[] = [];
+  const stderr: string[] = [];
+  const model = "sk-test-secret-model";
+  try {
+    setCredentialAuthority({ NEXUS_COMPATIBLE_AUTH: "none" });
+    console.log = (...values: unknown[]) => stdout.push(values.join(" "));
+    console.error = (...values: unknown[]) => stderr.push(values.join(" "));
+    const program = new Command();
+    program.exitOverride();
+    registerProviderCommands(program);
+    await program.parseAsync([
+      "node", "nexus", "providers", "verify", "--provider", "compatible", "--model", model,
+      "--base-url", `http://127.0.0.1:${address.port}/v1/private?token=query-secret`, "--json",
+    ]);
+
+    const output = JSON.parse(stdout.join("\n"));
+    assert.equal(output.model, "(unprintable model id)");
+    assert.equal(output.receipts[0].endpointOrigin, `http://127.0.0.1:${address.port}`);
+    assert.equal(output.steps[0].detail, "Provider request failed");
+    assert.doesNotMatch(stdout.join("\n"), /sk-test-secret|query-secret|private|Bearer/);
+    assert.doesNotMatch(stderr.join("\n"), /sk-test-secret|query-secret|private|Bearer/);
+  } finally {
+    console.log = previousLog;
+    console.error = previousError;
+    process.exitCode = previousExitCode;
+    setCredentialAuthority({ NEXUS_COMPATIBLE_AUTH: previousCompatibleAuth }, previousCredentialHome);
+    server.close();
+  }
 });
 
 test("verification JSON keeps outcome and usage while omitting raw diagnostics and sensitive receipt fields", () => {
@@ -107,10 +167,12 @@ test("verification JSON redacts credential-shaped model identifiers and path seg
       protocol: "openai-chat",
       disclosure: "cloud",
       outcome: "completed",
+      failureKind: "Bearer sk-test-secret",
       usageConfidence: "none",
       costConfidence: "unknown",
     } as any]);
     assert.equal(report.receipts[0].effectiveModel, "(unprintable model id)");
+    assert.equal(report.receipts[0].failureKind, undefined);
     assert.doesNotMatch(JSON.stringify(report), new RegExp(credential));
   }
 
