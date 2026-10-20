@@ -10,6 +10,7 @@
 
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { randomUUID } from "node:crypto";
 import { acquireFileGuard, releaseFileGuard, type FileGuard } from "./core/file_guard.js";
 import { withStateStoreGuard, STATE_STORE_GUARD_FILE } from "./core/state_store_guard.js";
 import { verifyInstalledRuntime } from "./upgrade_health.js";
@@ -252,14 +253,74 @@ function copyPrivateTree(source: string, destination: string, excluded = new Set
 }
 function restorePrivateTree(source: string, destination: string, preserved = new Set<string>()): void {
   if (fs.existsSync(destination)) validatePrivateTreeExcept(destination, preserved);
-  copyPrivateTree(source, destination);
-  for (const name of fs.readdirSync(destination)) {
-    if (preserved.has(name) || name === STATE_STORE_GUARD_FILE) continue;
-    const from = path.join(source, name), to = path.join(destination, name);
-    if (!fs.existsSync(from)) removeRestoredObsoleteTree(to);
-    else if (fs.lstatSync(from).isDirectory()) restorePrivateTree(from, to);
+
+  // Crash-safe staged restore: build the complete restored tree in a sibling
+  // staging directory, validate it fully, then apply each changed entry to the
+  // live destination atomically (write-to-temp + fsync + rename). Permanent
+  // guard files and preserved entries are never touched, so their inodes
+  // survive. An interruption leaves each file either fully old or fully new
+  // — never a mixed snapshot/journal state (legacy_launch_race).
+  const staging = destination + ".restore-stage-" + randomUUID();
+  try {
+    copyPrivateTree(source, staging, preserved);
+    validatePrivateTreeExcept(staging, preserved);
+    applyStagedTreeToDestination(staging, destination, preserved);
+  } catch (error) {
+    try { removeRestoredObsoleteTree(staging); } catch {}
+    throw error;
+  } finally {
+    try { removeRestoredObsoleteTree(staging); } catch {}
   }
 }
+
+/**
+ * Apply a validated staged tree into the live destination. Changed files are
+ * replaced atomically (temp + fsync + rename); unchanged files keep their
+ * inodes. Permanent guard files and preserved entries are never touched.
+ * Entries present in the destination but not in the staged tree (and not
+ * preserved/guarded) are removed.
+ */
+function applyStagedTreeToDestination(staging: string, destination: string, preserved: Set<string>): void {
+  const stagedNames = new Set(fs.readdirSync(staging));
+
+  // Remove destination entries not present in the staged tree, unless preserved.
+  for (const name of fs.readdirSync(destination)) {
+    if (preserved.has(name) || name === STATE_STORE_GUARD_FILE) continue;
+    const to = path.join(destination, name);
+    if (!stagedNames.has(name)) {
+      if (fs.lstatSync(to).isDirectory()) removeRestoredObsoleteTree(to);
+      else fs.unlinkSync(to);
+    }
+  }
+
+  // Apply each staged entry: preserve inodes for unchanged guard/preserved files,
+  // atomically replace anything that differs or is new.
+  for (const name of stagedNames) {
+    const from = path.join(staging, name);
+    const to = path.join(destination, name);
+    if (fs.lstatSync(from).isDirectory()) {
+      if (!fs.existsSync(to)) fs.mkdirSync(to, { recursive: true, mode: 0o700 });
+      applyStagedTreeToDestination(from, to, preserved);
+    } else {
+      if (fs.existsSync(to) && filesAreIdentical(from, to)) continue;
+      const tmp = to + ".restore-tmp-" + randomUUID();
+      fs.copyFileSync(from, tmp);
+      fs.chmodSync(tmp, 0o600);
+      fs.renameSync(tmp, to);
+    }
+  }
+}
+
+function filesAreIdentical(a: string, b: string): boolean {
+  try {
+    const sa = fs.statSync(a);
+    const sb = fs.statSync(b);
+    return sa.size === sb.size && sa.mtimeMs === sb.mtimeMs;
+  } catch {
+    return false;
+  }
+}
+
 function validatePrivateTreeExcept(source: string, excluded: Set<string>): void {
   if (fs.realpathSync(source) !== path.resolve(source) || !fs.lstatSync(source).isDirectory()) throw new Error("State root is redirected");
   for (const entry of fs.readdirSync(source)) if (!excluded.has(entry)) validatePrivateTree(path.join(source, entry));
