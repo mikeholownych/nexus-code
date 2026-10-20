@@ -1,0 +1,29 @@
+{
+  "recordedAt": "2026-10-19T02:57:33.713432+00:00",
+  "base": "c202cf36f76daaec9fbd7f68a4d9cd8db8b603d1",
+  "scope": "Uncommitted schema2 integration source before checkpoint commit; not product acceptance",
+  "benchmark": {
+    "steps": 200,
+    "outputBytesPerStep": 2048,
+    "p95ms": 78.13,
+    "thresholdMs": 100,
+    "thresholdChanged": false,
+    "storage": "Virtualized SSD-backed WSL2 ext4 /var/tmp; baseline storage identity retained in PLAN-04_PERSISTENCE_COST_BASELINE"
+  },
+  "targeted": {
+    "files": 16,
+    "tests": 210,
+    "pass": 210,
+    "skip": 0,
+    "tmpdir": "/tmp",
+    "isLatencyEvidence": false
+  },
+  "sourceDiffSha256": "36b882138c98f3b004903abf4b99c04435e1308a13401b37d024d980147532a2",
+  "limits": [
+    "No full CLI/Rust/package/CI qualification at this source yet",
+    "Session count/index and archive guard integration pending protected owner release",
+    "Orphan companion retention and stale indexed pin metadata still need explicit coverage",
+    "No real task-process crash matrix or two-process task update qualification yet",
+    "No RC, live inference, held-out workload or human terminal acceptance implied"
+  ]
+}

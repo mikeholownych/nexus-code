@@ -47,12 +47,55 @@ import * as os from "node:os";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-loadEnvironment();
+// Keep the lease for the full frontend/sidecar lifetime, including synchronous
+// TUI dispatch. Maintenance recovery acquires its own exclusive lease instead.
+const startupArgs = process.argv.slice(2);
+const { acquireClientLease, releaseClientLease, clientInvocationKind } = await import("./core/client_lease.js");
+const invocationKind = clientInvocationKind(startupArgs);
+const startupReadOnly = invocationKind === "metadata" || (startupArgs[0] === "upgrade" && startupArgs.includes("--check"));
+// `upgrade --check` is read-only, so it must not replay a transaction. It also
+// must not load configuration while a restore journal says that config may be
+// only partially applied. Refuse before loadEnvironment() and let a normal
+// managed launch perform recovery.
+if (startupArgs[0] === "upgrade" && startupArgs.includes("--check")) {
+  try {
+    const { hasPendingStateRestore } = await import("./core/state_restore.js");
+    if (hasPendingStateRestore(process.env.HOME || os.homedir())) {
+      throw new Error("Pending state restore must be recovered before running upgrade --check");
+    }
+  } catch (error: any) {
+    console.error(`[maintenance] ${error?.message ?? "Nexus restore state could not be verified"}`);
+    process.exit(2);
+  }
+}
+// A durable state-restore intent must be replayed before environment/config
+// loading or any normal client is admitted. The recovery command takes the
+// exclusive lifetime lease; ordinary clients take their shared lease below.
+if (invocationKind === "restore" || (invocationKind === "client" && !startupReadOnly)) {
+  try {
+    const { hasPendingStateRestore, recoverPendingStateRestore } = await import("./core/state_restore.js");
+    const home = process.env.HOME || os.homedir();
+    if (hasPendingStateRestore(home) && !recoverPendingStateRestore(home)) {
+      throw new Error("Pending state restore could not be recovered; no state was admitted");
+    }
+  } catch (error: any) {
+    console.error(`[maintenance] ${error?.message ?? "Nexus restore recovery failed closed"}`);
+    process.exit(2);
+  }
+}
+if (invocationKind === "client") {
+  try {
+    const lease = acquireClientLease(process.env.HOME || os.homedir());
+    process.once("exit", () => releaseClientLease(lease));
+  } catch (error: any) {
+    console.error(`[maintenance] ${error.message}`);
+    process.exit(2);
+  }
+  loadEnvironment();
+}
 
 // Diagnose an interrupted packaged upgrade before launching a new CLI/TUI
 // session. Read-only version/help/check commands never recover or write state.
-const startupArgs = process.argv.slice(2);
-const startupReadOnly = startupArgs.includes("--help") || startupArgs.includes("-h") || startupArgs.includes("--version") || startupArgs.includes("-V") || startupArgs.includes("--check");
 if (!startupReadOnly && startupArgs[0] !== "upgrade" && process.env.NEXUS_UPGRADE_HEALTH_CHECK !== "1" && process.env.NEXUS_HOME) {
   const { getJournalPath, readJournal, recoverUpgrade } = await import("./upgrade_journal.js");
   const packagedPrefix = path.resolve(process.env.NEXUS_HOME, "../../..");

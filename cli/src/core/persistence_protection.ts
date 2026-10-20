@@ -1,6 +1,7 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { execFileSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { InformationFlowBoundary } from "./egress.js";
 import { WorkspacePath } from "./workspace_path.js";
@@ -19,6 +20,60 @@ export class SensitivePersistenceError extends Error {
  */
 export function redactForPersistence<T>(value: T): T {
   return InformationFlowBoundary.getGlobalInstance().redactForDurablePersistence(value);
+}
+
+/** Classify individual path components as well as the whole value. The general
+ * classifier intentionally does not treat slash-delimited paths as tokens. */
+function classifyPathComponents(value: string): ReturnType<InformationFlowBoundary["classifyText"]> {
+  const boundary = InformationFlowBoundary.getGlobalInstance();
+  return [
+    ...boundary.classifyText(value),
+    ...value.split(/[\\/]+/).filter(Boolean).flatMap((component) => boundary.classifyText(component)),
+  ];
+}
+
+/** Verify that an uncertain-only path is an actual Nexus worktree in the selected repository. */
+function isManagedWorktreePath(
+  workspace: WorkspacePath,
+  worktreePath: string,
+  recordTaskId: string,
+  binding: { taskId?: string; branch?: string }
+): boolean {
+  if (!binding.taskId || binding.taskId !== recordTaskId || binding.branch !== `nexus/${binding.taskId}`) return false;
+
+  try {
+    const gitRoot = execFileSync("git", ["rev-parse", "--show-toplevel"], {
+      cwd: workspace.value,
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+    }).trim();
+    const expectedPath = path.resolve(gitRoot, ".nexus", "worktrees", binding.taskId);
+    const normalizedWorktree = path.resolve(worktreePath);
+    if (normalizedWorktree !== expectedPath || fs.realpathSync(normalizedWorktree) !== normalizedWorktree) return false;
+
+    const actualRoot = execFileSync("git", ["-C", normalizedWorktree, "rev-parse", "--show-toplevel"], {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+    }).trim();
+    const actualBranch = execFileSync("git", ["-C", normalizedWorktree, "branch", "--show-current"], {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+    }).trim();
+    const rootCommonDir = execFileSync("git", ["-C", gitRoot, "rev-parse", "--git-common-dir"], {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+    }).trim();
+    const worktreeCommonDir = execFileSync("git", ["-C", normalizedWorktree, "rev-parse", "--git-common-dir"], {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+    }).trim();
+
+    return path.resolve(actualRoot) === normalizedWorktree &&
+      actualBranch === binding.branch &&
+      path.resolve(gitRoot, rootCommonDir) === path.resolve(normalizedWorktree, worktreeCommonDir);
+  } catch {
+    return false;
+  }
 }
 
 /** Provider tool-call ids at least this long are eligible for the high-entropy classifier (see egress.ts). */
@@ -59,12 +114,20 @@ function withStableToolCallIds<T>(value: T): T {
  * by the selected workspace model. Arbitrary objects receive no path exception.
  */
 export function redactTaskStateForPersistence<T extends {
+  taskId: string;
   workspacePath: string;
   workspace?: string;
-  worktreeBinding?: { worktreePath?: string } | null;
+  worktreeBinding?: { worktreePath?: string; taskId?: string; branch?: string } | null;
 }>(original: T, workspacePaths: readonly WorkspacePath[] = []): T {
   const value = withStableToolCallIds(original);
-  if (workspacePaths.length === 0) return redactForPersistence(value);
+  if (workspacePaths.length === 0) {
+    const paths = [value.workspacePath, value.workspace, value.worktreeBinding?.worktreePath]
+      .filter((candidate): candidate is string => typeof candidate === "string");
+    if (paths.some((candidate) => classifyPathComponents(candidate).length > 0)) {
+      throw new Error("Task state workspace path has no selected workspace identity");
+    }
+    return redactForPersistence(value);
+  }
 
   for (const identity of workspacePaths) identity.assertCurrent();
   const selectedWorkspace = workspacePaths.find((identity) => identity.matches(value.workspacePath));
@@ -79,9 +142,16 @@ export function redactTaskStateForPersistence<T extends {
   if (worktreePath) {
     const typedWorktree = workspacePaths.find((identity) => identity.matches(worktreePath));
     if (typedWorktree) typedPaths.push(typedWorktree);
+    else {
+      const findings = classifyPathComponents(worktreePath);
+      if (findings.some((finding) => finding.classificationType !== "UNCERTAIN") ||
+          (findings.length > 0 && !isManagedWorktreePath(selectedWorkspace, worktreePath, value.taskId, value.worktreeBinding ?? {}))) {
+        throw new Error("Task state worktree path has no selected workspace identity");
+      }
+    }
   }
   for (const identity of typedPaths) {
-    const identityFindings = boundary.classifyText(identity.value);
+    const identityFindings = classifyPathComponents(identity.value);
     if (identityFindings.some((finding) => finding.classificationType !== "UNCERTAIN")) {
       throw new Error("Workspace identity contains positively classified sensitive material");
     }
@@ -92,7 +162,7 @@ export function redactTaskStateForPersistence<T extends {
     ...value,
     workspacePath: "[NEXUS_TYPED_WORKSPACE_PATH]",
     ...(value.workspace === undefined ? {} : { workspace: "[NEXUS_TYPED_WORKSPACE_PATH]" }),
-    ...(worktreePath && typedPaths.length > 1
+    ...(worktreePath && (typedPaths.length > 1 || classifyPathComponents(worktreePath).length > 0)
       ? { worktreeBinding: { ...value.worktreeBinding, worktreePath: "[NEXUS_TYPED_WORKSPACE_PATH]" } }
       : {}),
   };
@@ -101,7 +171,7 @@ export function redactTaskStateForPersistence<T extends {
     ...protectedValue,
     workspacePath: selectedWorkspace.value,
     ...(value.workspace === undefined ? {} : { workspace: selectedWorkspace.value }),
-    ...(worktreePath && typedPaths.length > 1
+    ...(worktreePath && (typedPaths.length > 1 || classifyPathComponents(worktreePath).length > 0)
       ? { worktreeBinding: { ...protectedValue.worktreeBinding, worktreePath } }
       : {}),
   };

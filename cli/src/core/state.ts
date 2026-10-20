@@ -23,10 +23,20 @@ import { WorktreeManager } from "../worktree.js";
 import { redactForPersistence, redactTaskStateForPersistence } from "./persistence_protection.js";
 import type { ObjectiveLedger } from "./objective.js";
 import { WorkspacePath } from "./workspace_path.js";
-import { writeFileDurably, appendLinesDurably, readArchiveLines, type ArchiveRead, ensurePrivateDir } from "./durable_file.js";
+import { writeFileDurably, writePrivateFile, appendLinesDurably, readArchiveLines, type ArchiveRead, ensurePrivateDir, fsyncDirectoryDurably } from "./durable_file.js";
 import { protectArchivedMessages } from "./persistence_protection.js";
+import { updateTaskMessages, readTaskMessages, TaskMessageLogError, type TaskMessageCursor } from "./task_message_log.js";
+import { withStateStoreGuard } from "./state_store_guard.js";
 
-export const CURRENT_STATE_SCHEMA_VERSION = 1;
+import { CURRENT_STATE_SCHEMA_VERSION } from "./state_schema.js";
+export { CURRENT_STATE_SCHEMA_VERSION } from "./state_schema.js";
+
+interface StoredTaskRecord {
+  filePath: string;
+  content: Buffer;
+  parsed: Record<string, any>;
+  version: number;
+}
 
 export type TaskLifecycleStatus =
   | "pending"
@@ -308,9 +318,10 @@ export class DurableStateManager {
   private workspacePaths: WorkspacePath[];
 
   constructor(options: DurableStateManagerOptions = {}) {
-    this.baseDir = options.baseDir || defaultTaskStateDir();
+    const baseDir = options.baseDir || defaultTaskStateDir();
     this.workspacePaths = options.workspacePaths || [];
-    ensurePrivateDir(this.baseDir);
+    ensurePrivateDir(baseDir);
+    this.baseDir = fs.realpathSync(baseDir);
   }
 
   public getBaseDir(): string {
@@ -323,7 +334,114 @@ export class DurableStateManager {
 
   public getStateFilePath(taskId: string): string {
     const cleanId = taskId.replace(/\.json$/, "");
+    if (!/^[A-Za-z0-9._-]{1,160}$/.test(cleanId) || cleanId === "." || cleanId === "..") {
+      throw new TaskStateReadError("unknown", "Task identity is not a safe persistence name");
+    }
     return path.join(this.baseDir, `${cleanId}.json`);
+  }
+
+  public getMessageLogFilePath(taskId: string): string {
+    return this.getStateFilePath(taskId).replace(/\.json$/, ".messages.jsonl");
+  }
+
+  /** Read the atomic progress envelope without trusting a schema or a sidecar path from disk. */
+  private readStoredRecord(taskId: string, missingAllowed = false): StoredTaskRecord | null {
+    const filePath = this.getStateFilePath(taskId);
+    let content: Buffer;
+    try { content = fs.readFileSync(filePath); }
+    catch (error: any) {
+      if (error.code === "ENOENT") {
+        if (missingAllowed) return null;
+        throw new TaskStateNotFoundError(taskId, filePath);
+      }
+      throw new TaskStateReadError(taskId, error.message);
+    }
+    let parsed: any;
+    try { parsed = JSON.parse(content.toString("utf8")); }
+    catch {
+      throw new CorruptStateError(taskId, "JSON parse error", this.quarantineFile(filePath));
+    }
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      throw new CorruptStateError(taskId, "State file does not contain a JSON object", this.quarantineFile(filePath));
+    }
+    const version = parsed.schemaVersion ?? 0;
+    if (!Number.isSafeInteger(version) || version < 0) {
+      throw new CorruptStateError(taskId, "Invalid state schema version", this.quarantineFile(filePath));
+    }
+    if (version > CURRENT_STATE_SCHEMA_VERSION) throw new UnsupportedSchemaVersionError(version);
+    if (version < 2 && parsed.messages !== undefined && parsed.messages !== null && !Array.isArray(parsed.messages)) {
+      throw new CorruptStateError(taskId, "Legacy conversation is not an array", this.quarantineFile(filePath));
+    }
+    return { filePath, content, parsed, version };
+  }
+
+  private storedMessages(taskId: string, record: StoredTaskRecord): ChatMessage[] {
+    if (record.version < 2) {
+      if (Array.isArray(record.parsed.messages)) return record.parsed.messages;
+      // Version 1 requires an explicit conversation array. Absence is damage,
+      // not an empty conversation that an interactive resume may start over.
+      if (record.version === 1) throw new CorruptStateError(taskId, "Schema 1 state has no conversation array", this.quarantineFile(record.filePath));
+      return [];
+    }
+    const log = this.getMessageLogFilePath(taskId);
+    try {
+      if (!Object.hasOwn(record.parsed, "messageLog") || Object.hasOwn(record.parsed, "messages")) {
+        throw new TaskMessageLogError("corrupt", "Schema 2 progress must reference a separate message log");
+      }
+      return readTaskMessages(log, record.parsed.taskId, record.parsed.messageLog);
+    } catch (error) {
+      if (error instanceof TaskMessageLogError) {
+        return this.messageRecoveryError(taskId, record, error);
+      }
+      throw new TaskStateReadError(taskId, `Failed to read message journal: ${(error as any)?.message ?? String(error)}`);
+    }
+  }
+
+  private messageRecoveryError(taskId: string, record: StoredTaskRecord, error: unknown): never {
+    const log = this.getMessageLogFilePath(taskId);
+    if (error instanceof TaskMessageLogError && error.kind === "future") {
+      throw new UnsupportedSchemaVersionError(error.version ?? CURRENT_STATE_SCHEMA_VERSION + 1);
+    }
+    // Preserve both components for investigation. Never silently resume with
+    // an empty conversation when a committed message record is unavailable.
+    if (fs.existsSync(log)) this.quarantineFile(log);
+    throw new CorruptStateError(taskId, "Committed message log is corrupt or unavailable", this.quarantineFile(record.filePath));
+  }
+
+  /** A complete private backup must exist durably before a legacy envelope can be replaced. */
+  private backupBeforeMigration(record: StoredTaskRecord): void {
+    if (record.version >= CURRENT_STATE_SCHEMA_VERSION) return;
+    const backup = `${record.filePath}.pre-migration-v${record.version}`;
+    const syncDirectory = () => {
+      const directory = fs.openSync(path.dirname(backup), "r");
+      try { fs.fsyncSync(directory); }
+      catch (error: any) { if (!["EINVAL", "ENOTSUP"].includes(error.code)) throw error; }
+      finally { fs.closeSync(directory); }
+    };
+    const verifyExisting = () => {
+      const stat = fs.lstatSync(backup);
+      if (!stat.isFile()) {
+        throw new TaskStateWriteError("unknown", "A different or redirected pre-migration backup already exists");
+      }
+      const fd = fs.openSync(backup, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW ?? 0) | (fs.constants.O_NONBLOCK ?? 0));
+      try {
+        const opened = fs.fstatSync(fd);
+        if (!opened.isFile() || opened.dev !== stat.dev || opened.ino !== stat.ino || !fs.readFileSync(fd).equals(record.content)) {
+          throw new TaskStateWriteError("unknown", "A different or redirected pre-migration backup already exists");
+        }
+        fs.fsyncSync(fd);
+      } finally { fs.closeSync(fd); }
+    };
+    if (fs.existsSync(backup)) { verifyExisting(); syncDirectory(); return; }
+    const temporary = `${backup}.${randomUUID()}.tmp`;
+    try {
+      writePrivateFile(temporary, record.content, { durable: true });
+      try { fs.linkSync(temporary, backup); }
+      catch (error: any) { if (error.code !== "EEXIST") throw error; verifyExisting(); }
+      syncDirectory();
+    } finally {
+      try { fs.unlinkSync(temporary); } catch (error: any) { if (error.code !== "ENOENT") throw error; }
+    }
   }
 
   /** Archive of the originals compaction replaced in this task's conversation (redacted JSON lines beside the state). */
@@ -334,12 +452,14 @@ export class DurableStateManager {
 
   /** Appends one compaction's originals, durably, before any record names that compaction as committed. */
   public appendArchive(taskId: string, compactionId: string, messages: ChatMessage[]): void {
-    const at = new Date().toISOString();
-    appendLinesDurably(this.archivePath(taskId), protectArchivedMessages(messages).map((message) => JSON.stringify({ archivedAt: at, compactionId, message })));
+    withStateStoreGuard(this.baseDir, () => {
+      const at = new Date().toISOString();
+      appendLinesDurably(this.archivePath(taskId), protectArchivedMessages(messages).map((message) => JSON.stringify({ archivedAt: at, compactionId, message })));
+    });
   }
 
   public readArchive(taskId: string, committed?: ReadonlySet<string>): ArchiveRead<ChatMessage> {
-    return readArchiveLines<ChatMessage>(this.archivePath(taskId), committed);
+    return withStateStoreGuard(this.baseDir, () => readArchiveLines<ChatMessage>(this.archivePath(taskId), committed));
   }
 
   public hasTaskState(taskId: string): boolean {
@@ -347,12 +467,42 @@ export class DurableStateManager {
   }
 
   public deleteTaskState(taskId: string): boolean {
+    return withStateStoreGuard(this.baseDir, () => this.deleteTaskStateLocked(taskId));
+  }
+
+  private deleteTaskStateLocked(taskId: string): boolean {
     const filePath = this.getStateFilePath(taskId);
-    if (fs.existsSync(filePath)) {
+    const primaryName = path.basename(filePath);
+    const identity = primaryName.replace(/\.json$/, "");
+    const backupPrefix = `${primaryName}.pre-migration-v`;
+    const companionNames = fs.readdirSync(this.baseDir).filter(name =>
+      name === `${identity}.messages.jsonl` || name === `${identity}.history.jsonl` ||
+      (name.startsWith(backupPrefix) && /^(0|[1-9]\d*)$/.test(name.slice(backupPrefix.length)))
+    );
+    const hasPrimary = fs.existsSync(filePath);
+    if (!hasPrimary && companionNames.length === 0) return false;
+
+    // Verify directory syncing is available before changing the record. If the
+    // primary is already absent, make that state durable before removing logs.
+    fsyncDirectoryDurably(this.baseDir);
+    let deleted = false;
+    if (hasPrimary) {
       fs.unlinkSync(filePath);
-      return true;
+      deleted = true;
+      // A crash may leave either the primary or its companions, but never a
+      // live primary whose message/history data was already removed.
+      fsyncDirectoryDurably(this.baseDir);
     }
-    return false;
+    for (const name of companionNames) {
+      try {
+        fs.unlinkSync(path.join(this.baseDir, name));
+        deleted = true;
+      } catch (error: any) {
+        if (error.code !== "ENOENT") throw error;
+      }
+    }
+    if (companionNames.length > 0 && deleted) fsyncDirectoryDurably(this.baseDir);
+    return deleted;
   }
 
   /**
@@ -360,25 +510,31 @@ export class DurableStateManager {
    * Prevents partially written or corrupted state from being seen on disk (PERS-001, PERS-003).
    */
   public saveTaskState(state: DurableTaskState, workspacePaths: WorkspacePath[] = this.workspacePaths): void {
+    withStateStoreGuard(this.baseDir, () => this.saveTaskStateLocked(state, workspacePaths));
+  }
+
+  private saveTaskStateLocked(state: DurableTaskState, workspacePaths: WorkspacePath[]): DurableTaskState {
     if (!state.taskId) {
       throw new TaskStateWriteError("unknown", "Missing required taskId");
     }
+    if (state.schemaVersion !== undefined && (!Number.isSafeInteger(state.schemaVersion) || state.schemaVersion < 0)) {
+      throw new TaskStateWriteError("unknown", "Invalid state schema version");
+    }
 
     state.updatedAt = new Date().toISOString();
-    if (!state.schemaVersion) {
-      state.schemaVersion = CURRENT_STATE_SCHEMA_VERSION;
-    }
+    if (state.schemaVersion > CURRENT_STATE_SCHEMA_VERSION) throw new UnsupportedSchemaVersionError(state.schemaVersion);
+    state.schemaVersion = CURRENT_STATE_SCHEMA_VERSION;
     // Maintain compatibility aliases
     state.id = state.sessionId || state.taskId;
     state.workspace = state.workspacePath;
 
-    let serialized: string;
+    let protectedState: DurableTaskState;
     let safeTaskId: string;
     let protectionPhase = "classification";
     let changedIdentityFields: string[] = [];
     try {
       const authorizedPaths = this.authorizeWorkspacePaths(workspacePaths);
-      const protectedState = redactTaskStateForPersistence(state, authorizedPaths);
+      protectedState = redactTaskStateForPersistence(state, authorizedPaths);
       protectionPhase = "identity validation";
       changedIdentityFields = (["taskId", "sessionId", "id", "workspacePath"] as const).filter(
         (field) => protectedState[field] !== state[field]
@@ -394,8 +550,8 @@ export class DurableStateManager {
       }
       safeTaskId = state.taskId;
       protectionPhase = "serialization";
-      serialized = JSON.stringify(protectedState, null, 2);
-      if (serialized === undefined) throw new Error("Task state is not JSON serializable");
+      if (!Array.isArray(protectedState.messages)) throw new Error("Task messages must be an array");
+      if (JSON.stringify(protectedState) === undefined) throw new Error("Task state is not JSON serializable");
     } catch {
       const conflict = changedIdentityFields.length > 0 ? ` (${changedIdentityFields.join(", ")})` : "";
       throw new TaskStateWriteError("unknown", `Sensitive-data protection or ${protectionPhase} failed${conflict}`);
@@ -404,9 +560,31 @@ export class DurableStateManager {
     const targetPath = this.getStateFilePath(safeTaskId);
 
     try {
+      const previous = this.readStoredRecord(safeTaskId, true);
+      if (previous?.parsed.taskId && previous.parsed.taskId !== safeTaskId) {
+        throw new TaskIdentityMismatchError(safeTaskId, previous.parsed.taskId);
+      }
+      if (previous) this.backupBeforeMigration(previous);
+      const parent: TaskMessageCursor | null = previous?.version === 2 ? previous.parsed.messageLog : null;
+      let messageLog: TaskMessageCursor | null;
+      try {
+        if (previous?.version === 2 && (!Object.hasOwn(previous.parsed, "messageLog") || Object.hasOwn(previous.parsed, "messages"))) {
+          throw new TaskMessageLogError("corrupt", "Schema 2 progress must reference a separate message log");
+        }
+        messageLog = updateTaskMessages(this.getMessageLogFilePath(safeTaskId), safeTaskId, parent, protectedState.messages);
+      } catch (error) {
+        if (error instanceof TaskMessageLogError && previous) this.messageRecoveryError(safeTaskId, previous, error);
+        throw error;
+      }
+      const { messages: _messages, ...progress } = protectedState;
+      const serialized = JSON.stringify({ ...progress, messageLog }, null, 2);
+      // The append is synced first. Death before this publication leaves the
+      // prior cursor authoritative; the unpublished branch remains recoverable.
       // Temp file, fsync, atomic rename, directory fsync: the previous or the new complete state, durably.
       writeFileDurably(targetPath, serialized);
+      return protectedState;
     } catch (err: any) {
+      if (err instanceof TaskStateError) throw err;
       throw new TaskStateWriteError(safeTaskId, `filesystem persistence failed (${String(err?.code ?? err?.message ?? err).slice(0, 80)})`);
     }
   }
@@ -420,39 +598,14 @@ export class DurableStateManager {
     expectedWorkspace?: string,
     workspacePaths: WorkspacePath[] = this.workspacePaths,
   ): DurableTaskState {
-    const filePath = this.getStateFilePath(taskId);
-    if (!fs.existsSync(filePath)) {
-      throw new TaskStateNotFoundError(taskId, filePath);
-    }
+    return withStateStoreGuard(this.baseDir, () => this.loadTaskStateLocked(taskId, expectedWorkspace, workspacePaths));
+  }
 
-    let content: string;
-    try {
-      content = fs.readFileSync(filePath, "utf-8");
-    } catch (err: any) {
-      throw new TaskStateReadError(taskId, err.message);
-    }
-
-    let parsed: any;
-    try {
-      parsed = JSON.parse(content);
-    } catch (err: any) {
-      const quarantined = this.quarantineFile(filePath);
-      throw new CorruptStateError(taskId, `JSON parse error: ${err.message}`, quarantined);
-    }
-
-    if (!parsed || typeof parsed !== "object") {
-      const quarantined = this.quarantineFile(filePath);
-      throw new CorruptStateError(taskId, "State file does not contain a JSON object", quarantined);
-    }
-
-    // Schema version check (fails closed on unsupported future versions)
-    const version = parsed.schemaVersion ?? 0;
-    if (version > CURRENT_STATE_SCHEMA_VERSION) {
-      throw new UnsupportedSchemaVersionError(version, CURRENT_STATE_SCHEMA_VERSION);
-    }
-
-    // Migrate legacy session file if necessary with pre-migration backup
-    const state: DurableTaskState = this.migrateIfLegacy(parsed, taskId, filePath);
+  private loadTaskStateLocked(taskId: string, expectedWorkspace: string | undefined, workspacePaths: WorkspacePath[], protectOnLoad = true): DurableTaskState {
+    const record = this.readStoredRecord(taskId)!;
+    // Schema version check (fails closed on unsupported future versions) is performed before reading any messages.
+    // Migrate legacy session file if necessary with pre-migration backup; publication below creates the backup first.
+    const state: DurableTaskState = this.migrateIfLegacy(record.parsed, taskId);
 
     // Verify task identity binding
     if (state.taskId && taskId && state.taskId !== taskId && state.sessionId !== taskId) {
@@ -471,6 +624,11 @@ export class DurableStateManager {
       selectedPaths = [...workspacePaths, expectedIdentity];
     }
 
+    state.messages = this.storedMessages(taskId, record);
+    // Internal synchronous read-modify-save transactions classify the complete
+    // state once, after mutation and before publication/return. Public recovery
+    // reads always protect here, including migration of older plaintext state.
+    if (!protectOnLoad) return state;
     try {
       selectedPaths = this.authorizeWorkspacePaths(selectedPaths);
       const protectedState = redactTaskStateForPersistence(state, selectedPaths);
@@ -483,12 +641,13 @@ export class DurableStateManager {
       if (changedIdentityFields.length > 0) {
         throw new TaskStateReadError(taskId, "Sensitive data intersects durable state identity");
       }
-      if (JSON.stringify(protectedState) !== JSON.stringify(state)) {
+      if (record.version < CURRENT_STATE_SCHEMA_VERSION || JSON.stringify(protectedState) !== JSON.stringify(state)) {
         // Migrate older plaintext state on disk before reporting a successful load.
         this.saveTaskState(protectedState, selectedPaths);
         return protectedState;
       }
-    } catch {
+    } catch (error) {
+      if (error instanceof TaskStateError) throw error;
       throw new TaskStateReadError(taskId, "Sensitive-data protection failed during state recovery");
     }
 
@@ -522,19 +681,20 @@ export class DurableStateManager {
       argsSummary?: string;
     }
   ): DurableTaskState {
-    const state = this.loadTaskState(taskId);
-    state.currentOperation = {
-      invocationId: operation.invocationId,
-      ...(operation.seq !== undefined ? { seq: operation.seq } : {}),
-      toolName: operation.toolName,
-      targetResources: operation.targetResources,
-      argsSummary: operation.argsSummary,
-      startedAt: new Date().toISOString(),
-      status: "in_flight",
-    };
-    state.status = "in_progress";
-    this.saveTaskState(state);
-    return state;
+    return withStateStoreGuard(this.baseDir, () => {
+      const state = this.loadTaskStateLocked(taskId, undefined, this.workspacePaths, false);
+      state.currentOperation = {
+        invocationId: operation.invocationId,
+        ...(operation.seq !== undefined ? { seq: operation.seq } : {}),
+        toolName: operation.toolName,
+        targetResources: operation.targetResources,
+        argsSummary: operation.argsSummary,
+        startedAt: new Date().toISOString(),
+        status: "in_flight",
+      };
+      state.status = "in_progress";
+      return this.saveTaskStateLocked(state, this.workspacePaths);
+    });
   }
 
   /**
@@ -546,15 +706,16 @@ export class DurableStateManager {
     result: { success: boolean; error?: string },
     seq?: number
   ): DurableTaskState {
-    const state = this.loadTaskState(taskId);
-    const op = state.currentOperation;
-    if (op && (seq !== undefined && op.seq !== undefined ? op.seq === seq : op.invocationId === invocationId)) {
-      op.status = result.success ? "completed" : "failed";
-      op.completedAt = new Date().toISOString();
-      op.error = result.error;
-    }
-    this.saveTaskState(state);
-    return state;
+    return withStateStoreGuard(this.baseDir, () => {
+      const state = this.loadTaskStateLocked(taskId, undefined, this.workspacePaths, false);
+      const op = state.currentOperation;
+      if (op && (seq !== undefined && op.seq !== undefined ? op.seq === seq : op.invocationId === invocationId)) {
+        op.status = result.success ? "completed" : "failed";
+        op.completedAt = new Date().toISOString();
+        op.error = result.error;
+      }
+      return this.saveTaskStateLocked(state, this.workspacePaths);
+    });
   }
 
   /**
@@ -572,17 +733,18 @@ export class DurableStateManager {
       changeBaseline?: { command: string; failed: boolean; tests: Record<string, string> | null; verifier?: Record<string, string> | null; trustedDeliverables?: string[]; at: string } | null;
     }
   ): DurableTaskState {
-    const state = this.loadTaskState(taskId);
-    if (progress.messages) {
-      state.messages = progress.messages;
-      if (state.currentOperation && state.currentOperation.status !== "in_flight") state.currentOperation = null;
-    }
-    if (progress.findings) state.findings = progress.findings;
-    if (progress.objective !== undefined) state.objective = progress.objective;
-    if (progress.unverifiedChangesPending !== undefined) state.unverifiedChangesPending = progress.unverifiedChangesPending;
-    if (progress.changeBaseline !== undefined) state.changeBaseline = progress.changeBaseline;
-    this.saveTaskState(state);
-    return state;
+    return withStateStoreGuard(this.baseDir, () => {
+      const state = this.loadTaskStateLocked(taskId, undefined, this.workspacePaths, false);
+      if (progress.messages) {
+        state.messages = progress.messages;
+        if (state.currentOperation && state.currentOperation.status !== "in_flight") state.currentOperation = null;
+      }
+      if (progress.findings) state.findings = progress.findings;
+      if (progress.objective !== undefined) state.objective = progress.objective;
+      if (progress.unverifiedChangesPending !== undefined) state.unverifiedChangesPending = progress.unverifiedChangesPending;
+      if (progress.changeBaseline !== undefined) state.changeBaseline = progress.changeBaseline;
+      return this.saveTaskStateLocked(state, this.workspacePaths);
+    });
   }
 
   /**
@@ -596,6 +758,13 @@ export class DurableStateManager {
       evidenceSummary?: string;
       candidateId?: string;
     }
+  ): DurableTaskState {
+    return withStateStoreGuard(this.baseDir, () => this.recordMilestoneLocked(taskId, milestone));
+  }
+
+  private recordMilestoneLocked(
+    taskId: string,
+    milestone: { name: string; phaseIndex?: number; evidenceSummary?: string; candidateId?: string }
   ): DurableTaskState {
     const state = this.loadTaskState(taskId);
     if (
@@ -637,6 +806,13 @@ export class DurableStateManager {
       receipt: ValidationReceipt;
     }
   ): DurableTaskState {
+    return withStateStoreGuard(this.baseDir, () => this.recordCandidateAndReceiptLocked(taskId, update));
+  }
+
+  private recordCandidateAndReceiptLocked(
+    taskId: string,
+    update: { candidateId: string; candidateIdentity?: CandidateIdentity | null; receipt: ValidationReceipt }
+  ): DurableTaskState {
     const state = this.loadTaskState(taskId);
     state.candidateId = update.candidateId;
     if (update.candidateIdentity !== undefined) {
@@ -673,6 +849,10 @@ export class DurableStateManager {
     taskId: string,
     options: TaskRecoveryOptions = {}
   ): TaskRecoveryResult {
+    return withStateStoreGuard(this.baseDir, () => this.recoverTaskStateLocked(taskId, options));
+  }
+
+  private recoverTaskStateLocked(taskId: string, options: TaskRecoveryOptions): TaskRecoveryResult {
     let recoveryWorkspacePaths = options.workspacePaths || this.workspacePaths;
     if (recoveryWorkspacePaths.length === 0 && options.expectedWorkspace) {
       recoveryWorkspacePaths = [WorkspacePath.fromSelectedWorkspace(path.resolve(options.expectedWorkspace))];
@@ -892,20 +1072,12 @@ export class DurableStateManager {
    * Safely migrates legacy session files (schemaVersion 0 or undefined) into the complete DurableTaskState envelope.
    * Forward-only migration with a pre-migration backup copy (REQ-PER-106).
    */
-  private migrateIfLegacy(raw: any, fallbackId: string, filePath?: string): DurableTaskState {
-    if (raw.schemaVersion && raw.schemaVersion >= CURRENT_STATE_SCHEMA_VERSION && raw.taskId) {
-      return raw as DurableTaskState;
-    }
-
-    // Forward-only migration with a backup of the pre-migration file (REQ-PER-106)
-    if (filePath && fs.existsSync(filePath)) {
-      try {
-        const backupPath = `${filePath}.pre-migration-v${raw.schemaVersion ?? 0}`;
-        if (!fs.existsSync(backupPath)) {
-          fs.copyFileSync(filePath, backupPath);
-          try { fs.chmodSync(backupPath, 0o600); } catch {}
-        }
-      } catch {}
+  private migrateIfLegacy(raw: any, fallbackId: string): DurableTaskState {
+    const { messageLog: _messageLog, ...fields } = raw;
+    if (raw.taskId && raw.schemaVersion >= 1) {
+      // Preserve every v1 envelope field; rebuilding only the legacy subset
+      // would discard objectives, findings, operation state and recovery data.
+      return { ...fields, schemaVersion: CURRENT_STATE_SCHEMA_VERSION } as DurableTaskState;
     }
 
     const taskId = raw.taskId || raw.id || fallbackId;
@@ -913,6 +1085,7 @@ export class DurableStateManager {
     const workspacePath = raw.workspacePath || raw.workspace || process.cwd();
 
     const migrated: DurableTaskState = {
+      ...fields,
       schemaVersion: CURRENT_STATE_SCHEMA_VERSION,
       taskId,
       sessionId,

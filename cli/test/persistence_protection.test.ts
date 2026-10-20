@@ -13,6 +13,12 @@ import { InformationFlowBoundary } from "../src/core/egress.js";
 import { writeProtectedTextFile } from "../src/core/persistence_protection.js";
 import { WorkspacePath } from "../src/core/workspace_path.js";
 
+/** Inspect every active schema2 component; migration backups retain exact old bytes separately. */
+function readActiveTaskBytes(primary: string): string {
+  const log = primary.replace(/\.json$/, ".messages.jsonl");
+  return fs.readFileSync(primary, "utf8") + (fs.existsSync(log) ? fs.readFileSync(log, "utf8") : "");
+}
+
 const syntheticGithubToken = `ghp_${"A".repeat(36)}`;
 const syntheticOpenAiToken = `sk-${"B".repeat(28)}`;
 const syntheticBearer = `Bearer ${"C".repeat(32)}`;
@@ -52,7 +58,7 @@ test("session persistence scrubs nested credential plaintext and keeps recoverab
 
     manager.saveSession(state);
     const filePath = path.join(sessionsDir, "pers002-task.json");
-    const persisted = fs.readFileSync(filePath, "utf8");
+    const persisted = readActiveTaskBytes(filePath);
 
     assert.equal(persisted.includes(syntheticGithubToken), false);
     assert.equal(persisted.includes(syntheticOpenAiToken), false);
@@ -98,7 +104,7 @@ test("loading an older plaintext session rewrites protected bytes before success
     const recovered = manager.loadSession("legacy-task");
     assert.ok(recovered);
     assert.match(recovered.messages[0].content as string, /REDACTED/);
-    const persisted = fs.readFileSync(path.join(sessionsDir, "legacy-task.json"), "utf8");
+    const persisted = readActiveTaskBytes(path.join(sessionsDir, "legacy-task.json"));
     assert.equal(persisted.includes(secret), false);
   } finally {
     fs.rmSync(tempDir, { recursive: true, force: true });
@@ -463,6 +469,41 @@ test("durable task state refuses a high-entropy path component rather than prese
   }
 });
 
+test("typed WorkspacePath preserves whole-path detection for slash-containing AWS secrets", () => {
+  const root = makeTempDir("nexus-pers002-slashed-aws-secret-");
+  const awsSecret = `${"A".repeat(20)}/${"B".repeat(19)}`;
+  const workspace = path.join(root, `aws_secret_access_key=${awsSecret}`);
+  fs.mkdirSync(workspace, { recursive: true });
+  const boundary = InformationFlowBoundary.getGlobalInstance();
+  try {
+    assert.equal(awsSecret.length, 40);
+    assert.ok(
+      boundary.classifyText(`aws_secret_access_key=${awsSecret}`).some((finding) => finding.classificationType !== "UNCERTAIN"),
+      "the complete slash-containing AWS secret must be positively classified",
+    );
+    const identity = WorkspacePath.fromSelectedWorkspace(workspace);
+    const stateDir = path.join(root, "state");
+    const manager = new DurableStateManager({ baseDir: stateDir, workspacePaths: [identity] });
+    assert.throws(() => manager.saveTaskState({
+      taskId: "typed-slashed-aws-secret",
+      sessionId: "typed-slashed-aws-secret-session",
+      id: "typed-slashed-aws-secret-session",
+      title: "synthetic slash-containing path secret",
+      workspacePath: identity.value,
+      workspace: identity.value,
+      status: "in_progress",
+      activePlan: [],
+      milestones: [],
+      validationReceipts: [],
+      messages: [],
+    } as any), TaskStateWriteError);
+    assert.equal(fs.existsSync(path.join(stateDir, "typed-slashed-aws-secret.json")), false);
+    assert.equal(fs.readdirSync(stateDir).some((name) => name.endsWith(".tmp")), false);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("selected typed WorkspacePath survives durable serialization and restart recovery", () => {
   const root = makeTempDir("nexus-pers002-typed-workspace-");
   const workspace = path.join(root, "workspace");
@@ -485,7 +526,7 @@ test("selected typed WorkspacePath survives durable serialization and restart re
       messages: [{ role: "user", content: "ordinary retained content" }],
     } as any);
 
-    const persisted = fs.readFileSync(path.join(stateDir, "typed-workspace-task.json"), "utf8");
+    const persisted = readActiveTaskBytes(path.join(stateDir, "typed-workspace-task.json"));
     assert.match(persisted, new RegExp(selectedWorkspace.value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
     assert.match(persisted, /ordinary retained content/);
 
@@ -583,7 +624,7 @@ test("typed WorkspacePath may resolve only an UNCERTAIN path entropy finding", (
   const workspace = path.join(root, syntheticHighEntropyPathPart);
   fs.mkdirSync(workspace);
   try {
-    assert.ok(InformationFlowBoundary.getGlobalInstance().classifyText(workspace)
+    assert.ok(InformationFlowBoundary.getGlobalInstance().classifyText(syntheticHighEntropyPathPart)
       .some((finding) => finding.classificationType === "UNCERTAIN"));
     const identity = WorkspacePath.fromSelectedWorkspace(workspace);
     const stateDir = path.join(root, "state");
@@ -630,7 +671,7 @@ test("typed WorkspacePath does not exempt arbitrary high-entropy message content
       validationReceipts: [],
       messages: [{ role: "user", content: `opaque payload ${syntheticPayload}` }],
     } as any);
-    const durable = fs.readFileSync(path.join(stateDir, "typed-payload-task.json"), "utf8");
+    const durable = readActiveTaskBytes(path.join(stateDir, "typed-payload-task.json"));
     assert.equal(durable.includes(syntheticPayload), false);
     assert.match(durable, /REDACTED/);
     assert.match(durable, /ordinary title/);
