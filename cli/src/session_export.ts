@@ -92,6 +92,19 @@ export function buildSessionExport(manager: SessionManager, session: SessionData
   return { json, markdown: markdownExport(session, history, archived.messages) };
 }
 
+/**
+ * Escape a value for a Markdown table cell. Newlines are normalized to spaces first so they
+ * cannot terminate the table row; backslashes are escaped next, then pipes, so an existing
+ * backslash (e.g. from `\|` in the source) cannot neutralise the pipe escape and break the
+ * surrounding table row (CodeQL js/incomplete-sanitization).
+ */
+export function escapeTableCell(value: string): string {
+  return value
+    .replace(/\r\n|\r|\n/g, " ")
+    .replace(/\\/g, "\\\\")
+    .replace(/\|/g, "\\|");
+}
+
 function markdownExport(session: SessionData, history: HistoryCompleteness, archived: ChatMessage[]): string {
   const out: string[] = [
     "# Nexus Code Session Export",
@@ -111,7 +124,7 @@ function markdownExport(session: SessionData, history: HistoryCompleteness, arch
     const gating = gatingRequirements(objective);
     if (gating.length) {
       out.push("| Requirement | Status | Evidence / note |", "|---|---|---|");
-      for (const r of gating) out.push(`| ${r.id} ${r.text.replace(/\|/g, "\\|")} | ${r.status} | ${[...r.evidence, r.note ?? ""].filter(Boolean).join("; ").replace(/\|/g, "\\|")} |`);
+      for (const r of gating) out.push(`| ${escapeTableCell(r.id)} ${escapeTableCell(r.text)} | ${escapeTableCell(r.status)} | ${escapeTableCell([...r.evidence, r.note ?? ""].filter(Boolean).join("; "))} |`);
       out.push("");
     }
     if (objective.outcome) {
