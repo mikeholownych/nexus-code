@@ -27,6 +27,7 @@ import { DurableStateManager } from "../src/core/state.js";
 import { WorkspacePath } from "../src/core/workspace_path.js";
 import { SidecarServer } from "../src/sidecar.js";
 import { type HarnessConfig, DEFAULT_CONTINUATION } from "../src/types.js";
+import { readTaskMessages, updateTaskMessages } from "../src/core/task_message_log.js";
 
 const cliRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const srcIndex = path.join(cliRoot, "src/index.ts");
@@ -1170,7 +1171,10 @@ describe("R1: task state and sessions without a recorded obligation (written by 
         const legacy = JSON.parse(fs.readFileSync(file, "utf-8"));
         assert.equal("unverifiedChangesPending" in legacy, false);
         assert.equal(legacy.lastTurn?.unverifiedChangesPending, false, "precondition: the recorded turn was clean");
-        assert.equal(legacy.messages.filter((m: any) => m.role === "tool").length, 2);
+        const messages = Array.isArray(legacy.messages)
+          ? legacy.messages
+          : readTaskMessages(path.join(path.dirname(file), `${legacy.taskId}.messages.jsonl`), legacy.taskId, legacy.messageLog);
+        assert.equal(messages.filter((m: any) => m.role === "tool").length, 2);
         fs.writeFileSync(path.join(repo, "x.txt"), "x");
 
         const more = decisionOf(op, "markers").options.find((o) => o.label === "continue with more steps")!;
@@ -1480,7 +1484,30 @@ describe("V1: a unit whose durable history is missing or inconsistent is blocked
 });
 
 function edit(file: string, fn: (state: any) => any): void {
-  fs.writeFileSync(file, JSON.stringify(fn(JSON.parse(fs.readFileSync(file, "utf-8"))), null, 2));
+  const raw = JSON.parse(fs.readFileSync(file, "utf-8"));
+  const dir = path.dirname(file);
+  const taskId = raw.taskId || path.basename(file, ".json");
+  const logPath = path.join(dir, `${taskId}.messages.jsonl`);
+
+  if (raw.schemaVersion === 2 && raw.messages === undefined) {
+    if (raw.messageLog && fs.existsSync(logPath)) {
+      raw.messages = readTaskMessages(logPath, taskId, raw.messageLog);
+    } else {
+      raw.messages = [];
+    }
+  }
+
+  const modified = fn(raw);
+
+  if (modified.schemaVersion === 2 || (!modified.schemaVersion && raw.schemaVersion === 2)) {
+    if (Array.isArray(modified.messages)) {
+      const parent = raw.messageLog ?? null;
+      const newCursor = updateTaskMessages(logPath, taskId, parent, modified.messages);
+      modified.messageLog = newCursor;
+      delete modified.messages;
+    }
+  }
+  fs.writeFileSync(file, JSON.stringify(modified, null, 2));
 }
 
 // ---------------------------------------------------------------- V1: real process death

@@ -1,0 +1,31 @@
+TAP version 13
+# =======================================================
+#  ACC-CONT-08 Persistence Overhead Benchmark (200 steps) 
+# =======================================================
+#  Steps:     200
+#  Output/step: 2 KB
+#  Min:       16.67 ms
+#  Mean:      125.27 ms
+#  p50:       121.51 ms
+#  p90:       202.00 ms
+#  p95:       222.53 ms
+#  p99:       265.80 ms
+#  Max:       362.04 ms
+#  Threshold: p95 < 100.00 ms (SSD)
+#  Status:    EXCEEDED (follow-up for split-record schema required per SPEC-04 §3.7 / SPEC-08)
+# =======================================================
+# [ACC-CONT-08] p95 overhead (222.53 ms) exceeds 100 ms SSD threshold: opening follow-up for split-record schema (SPEC-04 §3.7 / SPEC-08).
+# Subtest: ACC-CONT-08: 200-step persistence overhead measurement (threshold p95 < 100 ms)
+ok 1 - ACC-CONT-08: 200-step persistence overhead measurement (threshold p95 < 100 ms)
+  ---
+  duration_ms: 25083.370392
+  ...
+1..1
+# tests 1
+# suites 0
+# pass 1
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 25520.053874

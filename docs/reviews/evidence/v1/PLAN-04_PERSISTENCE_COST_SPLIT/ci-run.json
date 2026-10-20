@@ -1,0 +1,37 @@
+{
+  "slice": "PLAN-04_PERSISTENCE_COST_SPLIT",
+  "pr": 61,
+  "branch": "v1/plan-04-persistence-cost-split",
+  "headCommit": "9e5280c427352fc2a7dd741eeb0952ea351b6a71",
+  "baseCommit": "a337a77ffcc33c4ff3e9396f59fd18be4acfc3f3",
+  "workflowRuns": [
+    {
+      "workflow": "CI",
+      "runId": 39312204363,
+      "conclusion": "SUCCESS",
+      "url": "https://github.com/mikeholownych/nexus-code/actions/runs/39312204363",
+      "jobs": {
+        "cloudflare-contest-contract": "SUCCESS",
+        "test-matrix-20": "SUCCESS",
+        "test-matrix-22": "SUCCESS",
+        "test-matrix-24": "SUCCESS",
+        "linux-x86_64": "SUCCESS"
+      }
+    },
+    {
+      "workflow": "CodeQL",
+      "runId": 39312204405,
+      "conclusion": "SUCCESS",
+      "url": "https://github.com/mikeholownych/nexus-code/actions/runs/39312204405",
+      "jobs": {
+        "javascript-typescript": "SUCCESS"
+      }
+    }
+  ],
+  "reviewResolution": {
+    "orphanCompanionCleanup": "Verified in task_state_v2.test.ts",
+    "gcPlanningDeadline": "Verified in retention.test.ts",
+    "dailyGcSummaryPersistence": "Verified in retention.test.ts",
+    "staleLockContenderRace": "Resolved in upgrade_journal.ts and verified in upgrade_transaction_recovery.test.ts"
+  }
+}

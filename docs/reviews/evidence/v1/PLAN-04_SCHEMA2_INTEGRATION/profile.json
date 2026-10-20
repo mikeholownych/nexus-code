@@ -1,0 +1,27 @@
+{
+  "pid": 91597,
+  "source": "c202cf3-with-uncommitted-schema2-WIP",
+  "diagnosticOnly": true,
+  "cpu": {
+    "user": 26040944,
+    "system": 1924800
+  },
+  "stats": {
+    "redaction": {
+      "calls": 1201,
+      "ms": 19322.313585999982
+    },
+    "fsync": {
+      "calls": 1404,
+      "ms": 2744.977457999948
+    },
+    "read": {
+      "calls": 1201,
+      "ms": 69.29130099994916
+    },
+    "write": {
+      "calls": 802,
+      "ms": 26.71285799996093
+    }
+  }
+}

@@ -1,3 +1,4 @@
+import { CURRENT_STATE_SCHEMA_VERSION } from "../src/core/state_schema.js";
 import { describe, it, beforeEach, afterEach } from "node:test";
 import assert from "node:assert/strict";
 import * as fs from "node:fs";
@@ -28,7 +29,7 @@ describe("Public Release Upgrade Acceptance (REQ-REL-116, ACC-UPG-07..14)", () =
   let origReleaseBase: string | undefined;
   let origHome: string | undefined;
 
-  function createCompatibilityMetadata(version: string, configSchema = 1, stateSchema = 1, archiveSha256?: string): any {
+  function createCompatibilityMetadata(version: string, configSchema = 1, stateSchema = CURRENT_STATE_SCHEMA_VERSION, archiveSha256?: string): any {
     const normalizedVersion = version.replace(/^v/, "");
     return {
       schemaVersion: 1,
@@ -55,7 +56,7 @@ describe("Public Release Upgrade Acceptance (REQ-REL-116, ACC-UPG-07..14)", () =
     };
   }
 
-  function createPackageArchive(version: string, configSchema = 1, stateSchema = 1, customNexusScript?: string): Buffer {
+  function createPackageArchive(version: string, configSchema = 1, stateSchema = CURRENT_STATE_SCHEMA_VERSION, customNexusScript?: string): Buffer {
     const normalizedVersion = version.replace(/^v/, "");
     const entries: Array<{ name: string; content?: string; mode?: string }> = [
       { name: "nexus/", mode: "0000755\0" },
@@ -150,9 +151,9 @@ describe("Public Release Upgrade Acceptance (REQ-REL-116, ACC-UPG-07..14)", () =
     process.env.HOME = fakeHome;
 
     // Build release packages
-    pkgV1 = createPackageArchive("v1.0.0", 1, 1);
+    pkgV1 = createPackageArchive("v1.0.0", 1, CURRENT_STATE_SCHEMA_VERSION);
     const hashV1 = crypto.createHash("sha256").update(pkgV1).digest("hex");
-    compatibilityV1 = Buffer.from(JSON.stringify(createCompatibilityMetadata("v1.0.0", 1, 1, hashV1), null, 2) + "\n");
+    compatibilityV1 = Buffer.from(JSON.stringify(createCompatibilityMetadata("v1.0.0", 1, CURRENT_STATE_SCHEMA_VERSION, hashV1), null, 2) + "\n");
     sumsV1 = `${hashV1}  nexus-linux-x86_64-v1.0.0.tar.gz\n${crypto.createHash("sha256").update(compatibilityV1).digest("hex")}  compatibility.json\n`;
 
     // Package with incompatible state schema for downgrade test
@@ -331,7 +332,7 @@ describe("Public Release Upgrade Acceptance (REQ-REL-116, ACC-UPG-07..14)", () =
     // Attempting performUpgrade should refuse downgrade due to state schema mismatch
     await assert.rejects(
       performUpgrade(comparison, { prefix: tmpPrefix, allowDowngrade: true, timeoutMs: 5000 }),
-      /Downgrade refused: Target version v0\.0\.5 uses state schema version 0, which cannot read current state schema version 1/
+      /Downgrade refused: Target version v0\.0\.5 uses state schema version 0, which cannot read current state schema version 2/
     );
 
     // Symlink remains intact on v1.0.0
@@ -340,9 +341,9 @@ describe("Public Release Upgrade Acceptance (REQ-REL-116, ACC-UPG-07..14)", () =
 
   it("rejects a checksum-listed detached compatibility asset that changes the archive's embedded contract", async () => {
     const hash = crypto.createHash("sha256");
-    const pkgV1 = createPackageArchive("v1.0.0", 1, 1);
+    const pkgV1 = createPackageArchive("v1.0.0", 1, CURRENT_STATE_SCHEMA_VERSION);
     const archiveDigest = hash.update(pkgV1).digest("hex");
-    const altered = createCompatibilityMetadata("v1.0.0", 2, 1, archiveDigest);
+    const altered = createCompatibilityMetadata("v1.0.0", 2, CURRENT_STATE_SCHEMA_VERSION, archiveDigest);
     compatibilityV1 = Buffer.from(`${JSON.stringify(altered, null, 2)}\n`);
     sumsV1 = `${archiveDigest}  nexus-linux-x86_64-v1.0.0.tar.gz\n${crypto.createHash("sha256").update(compatibilityV1).digest("hex")}  compatibility.json\n`;
 
@@ -412,9 +413,9 @@ case "$0" in
     ;;
 esac
 `;
-    pkgV1 = createPackageArchive("v1.0.0", 1, 1, failingScript);
+    pkgV1 = createPackageArchive("v1.0.0", 1, CURRENT_STATE_SCHEMA_VERSION, failingScript);
     const hash = crypto.createHash("sha256").update(pkgV1).digest("hex");
-    compatibilityV1 = Buffer.from(JSON.stringify(createCompatibilityMetadata("v1.0.0", 1, 1, hash), null, 2) + "\n");
+    compatibilityV1 = Buffer.from(JSON.stringify(createCompatibilityMetadata("v1.0.0", 1, CURRENT_STATE_SCHEMA_VERSION, hash), null, 2) + "\n");
     sumsV1 = `${hash}  nexus-linux-x86_64-v1.0.0.tar.gz\n${crypto.createHash("sha256").update(compatibilityV1).digest("hex")}  compatibility.json\n`;
 
     // Existing installation at v0.1.0-alpha.2
@@ -460,9 +461,9 @@ esac
 
     // Make incoming v1.0.0 package fail staging self-test
     const brokenScript = `#!/bin/sh\necho "fatal broken binary" >&2\nexit 1\n`;
-    pkgV1 = createPackageArchive("v1.0.0", 1, 1, brokenScript);
+    pkgV1 = createPackageArchive("v1.0.0", 1, CURRENT_STATE_SCHEMA_VERSION, brokenScript);
     const hash = crypto.createHash("sha256").update(pkgV1).digest("hex");
-    compatibilityV1 = Buffer.from(JSON.stringify(createCompatibilityMetadata("v1.0.0", 1, 1, hash), null, 2) + "\n");
+    compatibilityV1 = Buffer.from(JSON.stringify(createCompatibilityMetadata("v1.0.0", 1, CURRENT_STATE_SCHEMA_VERSION, hash), null, 2) + "\n");
     sumsV1 = `${hash}  nexus-linux-x86_64-v1.0.0.tar.gz\n${crypto.createHash("sha256").update(compatibilityV1).digest("hex")}  compatibility.json\n`;
 
     const installed = detectInstallation({ nexusHome: v1Dir, envPrefix: tmpPrefix });

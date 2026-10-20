@@ -27,6 +27,13 @@ export SOURCE_DATE_EPOCH
 GIT_COMMIT=$(git -C "$ROOT" rev-parse HEAD)
 BUILD_DATE=$(date -u -d "@$SOURCE_DATE_EPOCH" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -r "$SOURCE_DATE_EPOCH" +%Y-%m-%dT%H:%M:%SZ)
 ARCHIVE="nexus-linux-x86_64-$VERSION.tar.gz"
+STATE_SCHEMA_VERSION=$(node --input-type=module - "$PKG/lib/cli/dist/core/state.js" <<'EOF'
+import { pathToFileURL } from 'node:url';
+const { CURRENT_STATE_SCHEMA_VERSION: version } = await import(pathToFileURL(process.argv[2]).href);
+if (!Number.isSafeInteger(version) || version < 1) throw new Error('packaged client has no valid state schema');
+process.stdout.write(String(version));
+EOF
+)
 
 # Embed the compatibility contract in the attested archive. The detached asset
 # adds the archive digest after the archive is built and is covered by SHA256SUMS.
@@ -46,9 +53,9 @@ cat > "$PKG/compatibility.json" <<EOF
   },
   "compatibility": {
     "configSchemaVersion": 1,
-    "stateSchemaVersion": 1,
+    "stateSchemaVersion": $STATE_SCHEMA_VERSION,
     "minSupportedConfigVersion": 1,
-    "minSupportedStateVersion": 1
+    "minSupportedStateVersion": 0
   },
   "platforms": {
     "linux-x86_64": {
