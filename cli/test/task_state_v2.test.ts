@@ -25,6 +25,35 @@ function fixture(run: (manager: DurableStateManager, state: DurableTaskState) =>
   finally { fs.rmSync(root, { recursive: true, force: true }); }
 }
 
+function withDirectoryMutationEvents(directory: string, run: (events: string[]) => void): void {
+  const events: string[] = [];
+  const directoryFds = new Set<number>();
+  const originalOpen = fs.openSync;
+  const originalFsync = fs.fsyncSync;
+  const originalUnlink = fs.unlinkSync;
+  (fs as any).openSync = (file: any, flags: any, mode?: any) => {
+    const fd = originalOpen(file, flags, mode);
+    if (typeof file === "string" && path.resolve(file) === path.resolve(directory)) directoryFds.add(fd);
+    return fd;
+  };
+  (fs as any).fsyncSync = (fd: number) => {
+    if (directoryFds.has(fd)) events.push("sync-directory");
+    return originalFsync(fd);
+  };
+  (fs as any).unlinkSync = (file: any) => {
+    if (typeof file === "string" && path.dirname(file) === directory) events.push(`unlink:${path.basename(file)}`);
+    return originalUnlink(file);
+  };
+  syncBuiltinESMExports();
+  try { run(events); }
+  finally {
+    (fs as any).openSync = originalOpen;
+    (fs as any).fsyncSync = originalFsync;
+    (fs as any).unlinkSync = originalUnlink;
+    syncBuiltinESMExports();
+  }
+}
+
 test("schema two stores a small progress envelope and returns the complete conversation", () => fixture((manager, state) => {
   state.messages.push({ role: "assistant", content: "A".repeat(20_000) });
   manager.saveTaskState(state);
@@ -185,6 +214,57 @@ test("deleting an explicit task removes its conversation sidecar", () => fixture
   assert.equal(manager.deleteTaskState(state.taskId), true);
   assert.equal(fs.existsSync(manager.getStateFilePath(state.taskId)), false);
   assert.equal(fs.existsSync(manager.getMessageLogFilePath(state.taskId)), false);
+}));
+
+test("task deletion durably removes the primary before its message companions", () => fixture((manager, state) => {
+  manager.saveTaskState(state);
+  const primary = manager.getStateFilePath(state.taskId);
+  const log = manager.getMessageLogFilePath(state.taskId);
+  const history = path.join(manager.getBaseDir(), `${state.taskId}.history.jsonl`);
+  fs.writeFileSync(history, "committed task history");
+  withDirectoryMutationEvents(manager.getBaseDir(), events => {
+    assert.equal(manager.deleteTaskState(state.taskId), true);
+    const primaryUnlink = events.indexOf(`unlink:${path.basename(primary)}`);
+    const primarySync = events.indexOf("sync-directory", primaryUnlink + 1);
+    const firstCompanionUnlink = events.findIndex(event => event.startsWith("unlink:") && event !== `unlink:${path.basename(primary)}`);
+    const finalSync = events.lastIndexOf("sync-directory");
+    assert.ok(primaryUnlink >= 0 && primarySync > primaryUnlink, events.join(","));
+    assert.ok(firstCompanionUnlink > primarySync, events.join(","));
+    assert.ok(finalSync > events.lastIndexOf("unlink:" + path.basename(history)), events.join(","));
+    assert.equal(fs.existsSync(log), false);
+    assert.equal(fs.existsSync(history), false);
+  });
+}));
+
+test("task deletion preserves companions when primary directory sync fails and can be retried", () => fixture((manager, state) => {
+  manager.saveTaskState(state);
+  const primary = manager.getStateFilePath(state.taskId);
+  const log = manager.getMessageLogFilePath(state.taskId);
+  const originalOpen = fs.openSync;
+  const originalFsync = fs.fsyncSync;
+  const directoryFds = new Set<number>();
+  let directorySyncs = 0;
+  (fs as any).openSync = (file: any, flags: any, mode?: any) => {
+    const fd = originalOpen(file, flags, mode);
+    if (typeof file === "string" && path.resolve(file) === path.resolve(manager.getBaseDir())) directoryFds.add(fd);
+    return fd;
+  };
+  (fs as any).fsyncSync = (fd: number) => {
+    if (directoryFds.has(fd) && ++directorySyncs === 2) throw Object.assign(new Error("injected directory sync failure"), { code: "EIO" });
+    return originalFsync(fd);
+  };
+  syncBuiltinESMExports();
+  try {
+    assert.throws(() => manager.deleteTaskState(state.taskId), /injected directory sync failure/);
+    assert.equal(fs.existsSync(primary), false);
+    assert.equal(fs.existsSync(log), true);
+  } finally {
+    (fs as any).openSync = originalOpen;
+    (fs as any).fsyncSync = originalFsync;
+    syncBuiltinESMExports();
+  }
+  assert.equal(manager.deleteTaskState(state.taskId), true);
+  assert.equal(fs.existsSync(log), false);
 }));
 
 test("deleting an explicit task removes orphaned message journal, history, and migration backups without envelope", () => fixture((manager, state) => {

@@ -18,6 +18,35 @@ function fixture(run: (home: string, primary: string, log: string, history: stri
   try { run(home, primary, log, history); } finally { fs.rmSync(home, { recursive: true, force: true }); }
 }
 
+function withDirectoryMutationEvents(directory: string, run: (events: string[]) => void): void {
+  const events: string[] = [];
+  const directoryFds = new Set<number>();
+  const originalOpen = fs.openSync;
+  const originalFsync = fs.fsyncSync;
+  const originalUnlink = fs.unlinkSync;
+  (fs as any).openSync = (file: any, flags: any, mode?: any) => {
+    const fd = originalOpen(file, flags, mode);
+    if (typeof file === "string" && path.resolve(file) === path.resolve(directory)) directoryFds.add(fd);
+    return fd;
+  };
+  (fs as any).fsyncSync = (fd: number) => {
+    if (directoryFds.has(fd)) events.push("sync-directory");
+    return originalFsync(fd);
+  };
+  (fs as any).unlinkSync = (file: any) => {
+    if (typeof file === "string" && path.dirname(file) === directory) events.push(`unlink:${path.basename(file)}`);
+    return originalUnlink(file);
+  };
+  syncBuiltinESMExports();
+  try { run(events); }
+  finally {
+    (fs as any).openSync = originalOpen;
+    (fs as any).fsyncSync = originalFsync;
+    (fs as any).unlinkSync = originalUnlink;
+    syncBuiltinESMExports();
+  }
+}
+
 test("GC accounts for and removes message journals, history logs, and exact migration backups", () => fixture((home, primary, log, history) => {
   const plan = planRetention({ home });
   assert.equal(plan.reclaimableCount, 1);
@@ -25,6 +54,56 @@ test("GC accounts for and removes message journals, history logs, and exact migr
   const result = executeRetention(plan);
   assert.equal(result.deletedCount, 1);
   for (const file of [primary, log, history, `${primary}.pre-migration-v1`]) assert.equal(fs.existsSync(file), false);
+}));
+
+test("GC durably removes a task primary before its associated conversation files", () => fixture((home, primary, log, history) => {
+  const plan = planRetention({ home });
+  const directory = path.dirname(primary);
+  withDirectoryMutationEvents(directory, events => {
+    const result = executeRetention(plan);
+    assert.equal(result.deletedCount, 1);
+    const primaryUnlink = events.indexOf(`unlink:${path.basename(primary)}`);
+    const primarySync = events.indexOf("sync-directory", primaryUnlink + 1);
+    const firstCompanionUnlink = events.findIndex(event => event.startsWith("unlink:") && event !== `unlink:${path.basename(primary)}`);
+    const finalSync = events.lastIndexOf("sync-directory");
+    assert.ok(primaryUnlink >= 0 && primarySync > primaryUnlink, events.join(","));
+    assert.ok(firstCompanionUnlink > primarySync, events.join(","));
+    assert.ok(finalSync > events.lastIndexOf(`unlink:${path.basename(history)}`), events.join(","));
+    assert.equal(fs.existsSync(primary), false);
+    assert.equal(fs.existsSync(log), false);
+    assert.equal(fs.existsSync(history), false);
+  });
+}));
+
+test("GC preserves task companions when syncing primary removal fails", () => fixture((home, primary, log, history) => {
+  const plan = planRetention({ home });
+  const originalOpen = fs.openSync;
+  const originalFsync = fs.fsyncSync;
+  const directoryFds = new Set<number>();
+  let directorySyncs = 0;
+  const directory = path.dirname(primary);
+  (fs as any).openSync = (file: any, flags: any, mode?: any) => {
+    const fd = originalOpen(file, flags, mode);
+    if (typeof file === "string" && path.resolve(file) === path.resolve(directory)) directoryFds.add(fd);
+    return fd;
+  };
+  (fs as any).fsyncSync = (fd: number) => {
+    if (directoryFds.has(fd) && ++directorySyncs === 2) throw Object.assign(new Error("injected directory sync failure"), { code: "EIO" });
+    return originalFsync(fd);
+  };
+  syncBuiltinESMExports();
+  try {
+    const result = executeRetention(plan);
+    assert.equal(result.deletedCount, 0);
+    assert.ok(result.errors.some(error => error.error.includes("injected directory sync failure")));
+    assert.equal(fs.existsSync(primary), false);
+    assert.equal(fs.existsSync(log), true);
+    assert.equal(fs.existsSync(history), true);
+  } finally {
+    (fs as any).openSync = originalOpen;
+    (fs as any).fsyncSync = originalFsync;
+    syncBuiltinESMExports();
+  }
 }));
 
 test("GC preserves all components of a record modified after planning", () => fixture((home, primary, log, history) => {

@@ -3,7 +3,7 @@ import * as path from "node:path";
 import * as os from "node:os";
 import { execSync } from "node:child_process";
 import { tryStateStoreGuard } from "./state_store_guard.js";
-import { ensurePrivateDir, writePrivateFile } from "./durable_file.js";
+import { ensurePrivateDir, writePrivateFile, fsyncDirectoryDurably } from "./durable_file.js";
 
 export const DEFAULT_RETENTION_MAX_AGE_DAYS = 90; // DEC-11
 export const DEFAULT_RETENTION_MAX_SIZE_BYTES = 2 * 1024 * 1024 * 1024; // 2 GB (DEC-11)
@@ -855,6 +855,19 @@ function executeRetentionLocked(plan: RetentionPlan, options: { dryRun?: boolean
       }
     }
     let success = true;
+    const durableTaskRecord = item.kind === "task" || item.kind === "session";
+
+    // For schema-2 task/session records, companion logs are part of the
+    // committed record. Ensure the primary directory is syncable before any
+    // mutation, including when the plan is collecting an orphan group.
+    if (durableTaskRecord) {
+      try {
+        fsyncDirectoryDurably(path.dirname(item.primaryFile));
+      } catch (err: any) {
+        errors.push({ path: path.dirname(item.primaryFile), error: err?.message || String(err) });
+        continue;
+      }
+    }
 
     // Delete primary file
     try {
@@ -864,6 +877,18 @@ function executeRetentionLocked(plan: RetentionPlan, options: { dryRun?: boolean
     } catch (err: any) {
       success = false;
       errors.push({ path: item.primaryFile, error: err?.message || String(err) });
+    }
+
+    // Make primary removal durable before removing its associated files. If
+    // syncing fails, preserve the companions so a surviving primary stays
+    // readable and retryable after recovery.
+    if (success && durableTaskRecord) {
+      try {
+        fsyncDirectoryDurably(path.dirname(item.primaryFile));
+      } catch (err: any) {
+        success = false;
+        errors.push({ path: path.dirname(item.primaryFile), error: err?.message || String(err) });
+      }
     }
 
     // A failed primary removal must never leave a live envelope without its log.
@@ -883,6 +908,18 @@ function executeRetentionLocked(plan: RetentionPlan, options: { dryRun?: boolean
       } catch (err: any) {
         success = false;
         errors.push({ path: assoc, error: err?.message || String(err) });
+      }
+    }
+
+    if (success && durableTaskRecord && item.associatedFiles.length > 0) {
+      const directories = new Set(item.associatedFiles.map(file => path.dirname(file)));
+      for (const directory of directories) {
+        try {
+          fsyncDirectoryDurably(directory);
+        } catch (err: any) {
+          success = false;
+          errors.push({ path: directory, error: err?.message || String(err) });
+        }
       }
     }
 

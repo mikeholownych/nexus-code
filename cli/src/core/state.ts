@@ -23,7 +23,7 @@ import { WorktreeManager } from "../worktree.js";
 import { redactForPersistence, redactTaskStateForPersistence } from "./persistence_protection.js";
 import type { ObjectiveLedger } from "./objective.js";
 import { WorkspacePath } from "./workspace_path.js";
-import { writeFileDurably, writePrivateFile, appendLinesDurably, readArchiveLines, type ArchiveRead, ensurePrivateDir } from "./durable_file.js";
+import { writeFileDurably, writePrivateFile, appendLinesDurably, readArchiveLines, type ArchiveRead, ensurePrivateDir, fsyncDirectoryDurably } from "./durable_file.js";
 import { protectArchivedMessages } from "./persistence_protection.js";
 import { updateTaskMessages, readTaskMessages, TaskMessageLogError, type TaskMessageCursor } from "./task_message_log.js";
 import { withStateStoreGuard } from "./state_store_guard.js";
@@ -475,22 +475,33 @@ export class DurableStateManager {
     const primaryName = path.basename(filePath);
     const identity = primaryName.replace(/\.json$/, "");
     const backupPrefix = `${primaryName}.pre-migration-v`;
+    const companionNames = fs.readdirSync(this.baseDir).filter(name =>
+      name === `${identity}.messages.jsonl` || name === `${identity}.history.jsonl` ||
+      (name.startsWith(backupPrefix) && /^(0|[1-9]\d*)$/.test(name.slice(backupPrefix.length)))
+    );
+    const hasPrimary = fs.existsSync(filePath);
+    if (!hasPrimary && companionNames.length === 0) return false;
+
+    // Verify directory syncing is available before changing the record. If the
+    // primary is already absent, make that state durable before removing logs.
+    fsyncDirectoryDurably(this.baseDir);
     let deleted = false;
-    if (fs.existsSync(filePath)) {
+    if (hasPrimary) {
       fs.unlinkSync(filePath);
       deleted = true;
+      // A crash may leave either the primary or its companions, but never a
+      // live primary whose message/history data was already removed.
+      fsyncDirectoryDurably(this.baseDir);
     }
-    for (const name of fs.readdirSync(this.baseDir)) {
-      if (name === `${identity}.messages.jsonl` || name === `${identity}.history.jsonl` ||
-          (name.startsWith(backupPrefix) && /^(0|[1-9]\d*)$/.test(name.slice(backupPrefix.length)))) {
-        try {
-          fs.unlinkSync(path.join(this.baseDir, name));
-          deleted = true;
-        } catch (error: any) {
-          if (error.code !== "ENOENT") throw error;
-        }
+    for (const name of companionNames) {
+      try {
+        fs.unlinkSync(path.join(this.baseDir, name));
+        deleted = true;
+      } catch (error: any) {
+        if (error.code !== "ENOENT") throw error;
       }
     }
+    if (companionNames.length > 0 && deleted) fsyncDirectoryDurably(this.baseDir);
     return deleted;
   }
 
