@@ -52,7 +52,11 @@ function safeOriginOf(value: string | undefined): string | undefined {
   if (!value?.trim()) return undefined;
   try {
     const url = new URL(value.trim());
-    const hostname = /eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}/i.test(url.hostname)
+    const spansHostnameLabels = [
+      /ya29\.[A-Za-z0-9_-]{20,}/i,
+      /eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}/i,
+    ].some((pattern) => pattern.test(url.hostname));
+    const hostname = spansHostnameLabels
       ? "(redacted)"
       : url.hostname.split(".").map((label) => credentialShaped(label) ? "(redacted)" : label).join(".");
     return `${url.protocol}//${hostname}${url.port ? `:${url.port}` : ""}`;

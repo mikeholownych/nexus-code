@@ -48,6 +48,7 @@ test("provider destination display redacts URL-normalized AWS, Google and JWT ho
   const credentialHosts = [
     "AKIA1234567890ABCDEF.inference.example",
     "AIza12345678901234567890123456789012345.inference.example",
+    "ya29.123456789012345678901234.inference.example",
     "eyJabcdefghij.eyJabcdefghij.eyJabcdefghij.inference.example",
   ];
   for (const hostname of credentialHosts) {
@@ -59,7 +60,7 @@ test("provider destination display redacts URL-normalized AWS, Google and JWT ho
     } as HarnessConfig);
     assert.match(display, /https:\/\//);
     assert.match(display, /safe-model/);
-    assert.doesNotMatch(display, /AKIA1234567890ABCDEF|AIza12345678901234567890123456789012345|eyJabcdefghij/i);
+    assert.doesNotMatch(display, /AKIA1234567890ABCDEF|AIza12345678901234567890123456789012345|ya29\.123456789012345678901234|eyJabcdefghij/i);
   }
 });
 
