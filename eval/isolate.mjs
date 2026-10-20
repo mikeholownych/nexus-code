@@ -86,14 +86,17 @@ function pathVariants(source) {
 }
 
 function candidateMountOverlapProblem(mountSources, protectedCorpusPaths) {
-  if (!Array.isArray(protectedCorpusPaths)) return "candidate sandbox protectedCorpusPaths must be an array";
-  const sources = [
+  return mountSourceOverlapProblem([
     ...mountSources.systemDirectories,
     ...mountSources.systemFiles,
     ...mountSources.systemEtcDirectories,
     ...mountSources.toolchainDirectories,
     ...Object.values(mountSources.runtimeSources).flatMap((value) => Array.isArray(value) ? value : value === null ? [] : [value]),
-  ];
+  ], protectedCorpusPaths);
+}
+
+function mountSourceOverlapProblem(sources, protectedCorpusPaths) {
+  if (!Array.isArray(protectedCorpusPaths)) return "candidate sandbox protectedCorpusPaths must be an array";
   for (const protectedPath of protectedCorpusPaths) {
     const protectedVariants = pathVariants(protectedPath);
     if (!protectedVariants.length) return "candidate sandbox protected corpus paths must be absolute";
@@ -305,7 +308,7 @@ export function agentSandboxArgv({ cwd, home, proxyDirectory, readOnlyPaths = []
 }
 
 /** Run a fixed executable probe without exposing the host filesystem, environment, or network. */
-export function isolatedProcessArgv({ cwd, command, argv = [], readOnlyPaths = [], allowedRoots = [], allowedFiles = [], timeoutMs = 5000, workspaceReadOnly = false }) {
+export function isolatedProcessArgv({ cwd, command, argv = [], readOnlyPaths = [], allowedRoots = [], allowedFiles = [], timeoutMs = 5000, workspaceReadOnly = false, protectedCorpusPaths = [] }) {
   if (!sandboxAvailable()) throw new Error("Bubblewrap is unavailable; refusing executable probe");
   const mountProblem = runtimeMountProblem(readOnlyPaths, allowedRoots, allowedFiles);
   if (mountProblem) throw new Error(mountProblem);
@@ -343,6 +346,9 @@ export function isolatedProcessArgv({ cwd, command, argv = [], readOnlyPaths = [
   if (!SYSTEM_BINARIES.some((root) => resolvedCommand === root || resolvedCommand.startsWith(`${root}${path.sep}`)) && !readOnlyPaths.some((item) => fs.realpathSync(item) === resolvedCommand)) {
     throw new Error("isolated executable must be included in the explicit read-only runtime paths");
   }
+  const bindSources = args.flatMap((arg, i) => (arg === "--bind" || arg === "--ro-bind") ? [args[i + 1]] : []);
+  const protectedOverlap = mountSourceOverlapProblem(bindSources, protectedCorpusPaths);
+  if (protectedOverlap) throw new Error(protectedOverlap);
   args.push("--chdir", "/workspace", "--clearenv", "--setenv", "PATH", "/usr/bin:/bin", "--setenv", "HOME", "/home/eval", "--setenv", "LANG", "C.UTF-8", "--");
   args.push(resolvedCommand, ...argv);
   return { cmd: BWRAP, argv: args, timeoutMs };
