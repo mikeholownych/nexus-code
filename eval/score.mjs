@@ -164,19 +164,19 @@ if (process.argv.includes("--json")) {
   }
   if (replacements.length) {
     console.log("\nReplaced by rerun:");
-    for (const r of replacements) console.log(`- ${r.config} ${r.task} run ${r.run}: ${r.was} → ${r.now}`);
+    for (const r of replacements) console.log(`- ${r.config} ${formatTaskId(r.task)} run ${r.run}: ${r.was} → ${r.now}`);
   }
   if (peerComparison) {
     console.log(`\nMatched peer comparison · ${peerComparison.matchedRuns} runs · model ${peerComparison.model.alias}`);
     for (const [agent, version] of Object.entries(peerComparison.versions)) console.log(`- ${agent}: ${version}`);
     console.log("| task | runs | Nexus correct | Goose correct | OpenCode correct |\n|---|---:|---:|---:|---:|");
-    for (const task of peerComparison.tasks) console.log(`| ${task.task} | ${task.runs} | ${task.correct.nexus} | ${task.correct.goose} | ${task.correct.opencode} |`);
+    for (const task of peerComparison.tasks) console.log(`| ${formatTaskId(task.task)} | ${task.runs} | ${task.correct.nexus} | ${task.correct.goose} | ${task.correct.opencode} |`);
   }
   console.log("");
   console.log("| config | task | tier | n | claimed | correct (95% CI) | false VERIFIED | regressions | timed out | contaminated | median wall s | median steps | median tokens |");
   console.log("|---|---|---|---|---|---|---|---|---|---|---|---|---|");
   for (const r of rows) {
-    console.log(`| ${r.config} | ${r.task} | ${r.tier} | ${r.n} | ${r.claimed} | ${r.correct} (${pct(r.correctCI[0])}–${pct(r.correctCI[1])}) | ${r.falseVerified} | ${r.regressions} | ${r.timedOut} | ${r.contaminated} | ${r.medianWallS?.toFixed(0) ?? "–"} | ${r.medianSteps ?? "–"} | ${r.medianTokens ?? "–"} |`);
+    console.log(`| ${r.config} | ${formatTaskId(r.task)} | ${r.tier} | ${r.n} | ${r.claimed} | ${r.correct} (${pct(r.correctCI[0])}–${pct(r.correctCI[1])}) | ${r.falseVerified} | ${r.regressions} | ${r.timedOut} | ${r.contaminated} | ${r.medianWallS?.toFixed(0) ?? "–"} | ${r.medianSteps ?? "–"} | ${r.medianTokens ?? "–"} |`);
   }
 }
 

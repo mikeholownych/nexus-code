@@ -103,3 +103,30 @@ test("--pairs escapes control characters in task IDs in missing-budget and missi
     fs.rmSync(out, { recursive: true, force: true });
   }
 });
+
+test("--pairs escapes control characters in successful human-readable task tables", () => {
+  const out = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-eval-score-diagnostic-success-"));
+  try {
+    const task = "fixture\tname\nnext-line";
+    const files = [
+      writePeerResults(out, "nexus", task, { steps: 40, minutes: 15 }),
+      writePeerResults(out, "goose", task, { steps: 40, minutes: 15 }),
+      writePeerResults(out, "opencode", task, { steps: 40, minutes: 15 }),
+    ];
+    for (const file of files) {
+      const record = JSON.parse(fs.readFileSync(file, "utf8"));
+      fs.writeFileSync(file, Array.from({ length: 5 }, (_, index) => JSON.stringify({ ...record, run: index + 1 })).join("\n") + "\n");
+    }
+    const home = path.join(out, "home");
+    fs.mkdirSync(home);
+    const scored = spawnSync(process.execPath, [path.join(ROOT, "eval/score.mjs"), "--pairs", ...files], {
+      encoding: "utf8",
+      env: { ...process.env, HOME: home, XDG_CONFIG_HOME: path.join(home, ".config") },
+    });
+    assert.equal(scored.status, 0, scored.stderr);
+    assert.match(scored.stdout, /\| fixture\\tname\\nnext-line \| 5 \|/);
+    assert.equal(scored.stdout.includes("fixture\tname\nnext-line"), false, "human-readable tables must not contain raw task control characters");
+  } finally {
+    fs.rmSync(out, { recursive: true, force: true });
+  }
+});
