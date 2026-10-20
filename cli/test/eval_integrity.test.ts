@@ -533,24 +533,27 @@ test("qualification remains fail-closed without enforced aggregate resource cont
   if (process.env.NEXUS_EVAL_TEST_WORKSPACE_ROOT) assert.equal(isolation, null, "the dedicated test tmpfs and kernel resource contract must pass preflight");
   else assert.match(isolation ?? "", /dedicated tmpfs|exact mount point/, "a shared /dev/shm must fail qualification preflight");
   if (process.env.NEXUS_EVAL_TEST_WORKSPACE_ROOT) {
+    // CI mounts the capped workspace as 0711 (owner rwx, other --x). Mode probes must restore
+    // that contract so later runAs / version-probe suites can still traverse as the evaluator.
+    const restoreMode = 0o711;
     fs.chmodSync(workspaceRoot, 0o755);
     try {
       assert.match(qualificationResourceIsolationProblem({ resources: ok }) ?? "", /non-readable\/non-writable by group or other/);
     } finally {
-      fs.chmodSync(workspaceRoot, 0o700);
+      fs.chmodSync(workspaceRoot, restoreMode);
     }
     assert.equal(qualificationResourceIsolationProblem({ resources: ok }), null, "restored dedicated mount root must pass preflight");
     fs.chmodSync(workspaceRoot, 0o731);
     try {
       assert.match(qualificationResourceIsolationProblem({ resources: ok }) ?? "", /non-readable\/non-writable by group or other/);
     } finally {
-      fs.chmodSync(workspaceRoot, 0o700);
+      fs.chmodSync(workspaceRoot, restoreMode);
     }
     fs.chmodSync(workspaceRoot, 0o711);
     try {
       assert.equal(qualificationResourceIsolationProblem({ resources: ok }), null, "execute-only traversal for the isolated evaluator account is compatible with the private root");
     } finally {
-      fs.chmodSync(workspaceRoot, 0o700);
+      fs.chmodSync(workspaceRoot, restoreMode);
     }
   }
   const syntheticRoot = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-mount-mode-"));
@@ -1011,4 +1014,23 @@ test("the model proxy injects each scheduled fault into the chat request it name
     upstream.close();
   }
   await assert.rejects(startModelProxy({ upstream: "http://127.0.0.1:9/v1", faults: [{ kind: "nope", atRequest: 1 }] }), /invalid fault/);
+});
+
+test("executable probes refuse bind sources that overlap protected corpus material", async () => {
+  const { isolatedProcessArgv } = await import(path.join(ROOT, "eval/isolate.mjs"));
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-eval-probe-overlap-"));
+  try {
+    const store = path.join(root, "heldout-v2");
+    const workspace = path.join(root, "workspace");
+    fs.mkdirSync(path.join(store, "reference"), { recursive: true });
+    fs.mkdirSync(workspace);
+    const alias = path.join(root, "store-alias");
+    fs.symlinkSync(store, alias, "dir");
+    const probe = (options: Record<string, unknown>) => () => isolatedProcessArgv({ command: "/usr/bin/true", argv: ["--version"], ...options });
+    assert.throws(probe({ cwd: workspace, protectedCorpusPaths: ["/usr/share/nexus-heldout"] }), /overlaps protected corpus material: \/usr\/share/, "system bind containing a protected path");
+    assert.throws(probe({ cwd: path.join(alias, "reference"), protectedCorpusPaths: [store] }), /overlaps protected corpus material/, "workspace bind through a symlink alias");
+    assert.doesNotThrow(probe({ cwd: workspace, protectedCorpusPaths: [store] }), "an unrelated workspace remains usable");
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
 });

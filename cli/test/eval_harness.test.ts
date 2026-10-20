@@ -221,7 +221,9 @@ test("version identity probes run inside the sandbox and reject a mismatched exp
     class: "bugfix",
     difficulty: "easy",
   }));
-  const installed = path.join(out, "goose");
+  // The agent lives outside the tasks' parent, which the harness protects as corpus material.
+  const agentDir = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-eval-rc-agent-"));
+  const installed = path.join(agentDir, "goose");
   const probeMarker = `/tmp/nexus-version-probe-${process.pid}-${Date.now()}`;
   fs.writeFileSync(installed, `#!/bin/sh\n[ -z "$EVAL_VERSION_PROBE_CANARY" ] || exit 9\ntouch ${probeMarker}\nprintf '%s\\n' '0.1.0-alpha.2 (legacy, main)'\n`);
   fs.chmodSync(installed, 0o755);
@@ -239,7 +241,7 @@ test("version identity probes run inside the sandbox and reject a mismatched exp
   try {
     process.env.EVAL_VERSION_PROBE_CANARY = "VERSION_PROBE_HOST_CANARY";
     process.env.EVAL_VERSION_PROBE_CANARY = "VERSION_PROBE_HOST_CANARY";
-    const env = { ...process.env, PATH: `${out}${path.delimiter}${process.env.PATH ?? ""}` };
+    const env = { ...process.env, PATH: `${agentDir}${path.delimiter}${process.env.PATH ?? ""}` };
     const run = await runNode([path.join(ROOT, "eval/run.mjs"), "--config", config, "--out", path.join(out, "results"), "--tasks", tasks, "--only", "no-task-selected"], env);
     assert.equal(run.status, 2, `${run.stdout}\n${run.stderr}`);
     assert.match(run.stderr, /goose version 0\.1\.0-alpha\.2 does not match expected version 1\.0\.0-rc\.1/);
@@ -248,6 +250,7 @@ test("version identity probes run inside the sandbox and reject a mismatched exp
   } finally {
     delete process.env.EVAL_VERSION_PROBE_CANARY;
     fs.rmSync(out, { recursive: true, force: true });
+    fs.rmSync(agentDir, { recursive: true, force: true });
   }
 });
 
