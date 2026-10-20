@@ -324,17 +324,31 @@ test("key setup and write failures remove temporary files and never publish a ke
   }
 });
 
-test("stale unlinked temporary keys are removed before a new key is created", () => {
+test("stale cleanup is scoped to the current PID namespace", (t) => {
   withTemp((_root, home) => {
     const privateDir = path.join(home, ".config", "nexus", "account-identities");
     fs.mkdirSync(privateDir, { recursive: true, mode: 0o700 });
-    const hostId = createHash("sha256").update(os.hostname()).digest("hex").slice(0, 16);
-    const stale = path.join(privateDir, `hmac-key.tmp.${hostId}.2147483647.0123456789abcdef01234567`);
+    let bootId: string;
+    let pidNamespace: string;
+    try {
+      bootId = fs.readFileSync("/proc/sys/kernel/random/boot_id", "utf8").trim();
+      pidNamespace = fs.readlinkSync("/proc/self/ns/pid");
+    } catch {
+      t.skip("Linux boot and PID namespace identities are unavailable");
+      return;
+    }
+    const scopeId = createHash("sha256").update(os.hostname()).update("\0").update(bootId).update("\0").update(pidNamespace).digest("hex").slice(0, 16);
+    const otherNamespace = createHash("sha256").update(os.hostname()).update("\0").update(bootId).update("\0").update("pid:[99999999]").digest("hex").slice(0, 16);
+    const stale = path.join(privateDir, `hmac-key.tmp.${scopeId}.2147483647.0123456789abcdef01234567`);
+    const foreign = path.join(privateDir, `hmac-key.tmp.${otherNamespace}.2147483647.0123456789abcdef01234568`);
     fs.writeFileSync(stale, randomBytes(32), { mode: 0o600 });
+    fs.writeFileSync(foreign, randomBytes(32), { mode: 0o600 });
     fs.utimesSync(stale, new Date(0), new Date(0));
+    fs.utimesSync(foreign, new Date(0), new Date(0));
     assert.throws(() => process.kill(2147483647, 0), { code: "ESRCH" });
     createOperationAccountIdentity(home).fingerprint("synthetic-token");
     assert.equal(fs.existsSync(stale), false);
+    assert.equal(fs.existsSync(foreign), true, "same-hostname file from another PID namespace is preserved");
   });
 });
 

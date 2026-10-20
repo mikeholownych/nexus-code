@@ -7,7 +7,21 @@ import { createHash, createHmac, randomBytes } from "node:crypto";
 const KEY_BYTES = 32;
 const LEGACY_FINGERPRINT = /^[0-9a-f]{12}$/;
 const STALE_TEMP_AGE_MS = 60_000;
-const TEMP_HOST_ID = createHash("sha256").update(os.hostname()).digest("hex").slice(0, 16);
+
+function processScopeId(): string | undefined {
+  try {
+    const bootId = fs.readFileSync("/proc/sys/kernel/random/boot_id", "utf8").trim();
+    const pidNamespace = fs.readlinkSync("/proc/self/ns/pid");
+    if (!bootId || !/^pid:\[\d+\]$/.test(pidNamespace)) return undefined;
+    return createHash("sha256").update(os.hostname()).update("\0").update(bootId).update("\0").update(pidNamespace).digest("hex").slice(0, 16);
+  } catch {
+    // Without a verifiable process namespace, preserve stale files rather than
+    // risk mistaking a live process in another container for a dead local PID.
+    return undefined;
+  }
+}
+
+const TEMP_PROCESS_SCOPE_ID = processScopeId();
 
 export class AccountIdentityError extends Error {
   constructor(message: string) {
@@ -58,14 +72,15 @@ function keyPath(home: string): string {
 }
 
 function cleanupStaleTemporaryKeys(file: string): void {
+  if (!TEMP_PROCESS_SCOPE_ID) return;
   const dir = path.dirname(file);
   const now = Date.now();
   for (const name of fs.readdirSync(dir)) {
     const match = /^hmac-key\.tmp\.([0-9a-f]{16})\.(\d+)\.([0-9a-f]{24})$/.exec(name);
     if (!match) continue;
-    // Only reap names created on this host. A shared home may contain an active
-    // writer whose PID cannot be checked in this process namespace.
-    if (match[1] !== TEMP_HOST_ID) continue;
+    // Include the PID namespace, not just hostname: multiple containers can
+    // share a hostname while process.kill() observes different PID spaces.
+    if (match[1] !== TEMP_PROCESS_SCOPE_ID) continue;
     const pid = Number(match[2]);
     if (!Number.isSafeInteger(pid) || pid <= 0) continue;
     const candidate = path.join(dir, name);
@@ -97,7 +112,7 @@ function readOrCreateKey(home: string): Buffer {
   // Generate bytes before opening a path so entropy-provider failures cannot
   // strand an open descriptor or an empty temporary file.
   const key = randomBytes(KEY_BYTES);
-  const temporary = `${file}.tmp.${TEMP_HOST_ID}.${process.pid}.${randomBytes(12).toString("hex")}`;
+  const temporary = `${file}.tmp.${TEMP_PROCESS_SCOPE_ID ?? "unknown000000000"}.${process.pid}.${randomBytes(12).toString("hex")}`;
   let fd: number;
   try {
     fd = fs.openSync(temporary, fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL | noFollow, 0o600);
