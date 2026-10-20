@@ -342,6 +342,17 @@ test("exact-RC evidence rejects undefined and malformed platform criterion looka
   }
 });
 
+test("pre-RC enforcement rejects required rows with only prose acceptance references", () => {
+  const fixture = rcEvidenceFixture("tested", {
+    requirementId: "REQ-QUAL-102",
+    acceptanceCell: "ACCEPTANCE §6.1",
+    evidenceIds: ["ACC-QUAL-T2"],
+  });
+  const result = fixture.runFixture("--enforce");
+  assert.notEqual(result.status, 0, result.stdout + result.stderr);
+  assert.match(result.stdout, /required row must name explicit acceptance criteria/);
+});
+
 test("exact-RC evidence requires exact acceptance identifiers", () => {
   const fixture = rcEvidenceFixture("tested", {
     acceptanceCell: "ACC-PKG-01",

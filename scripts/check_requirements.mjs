@@ -291,6 +291,7 @@ if (qualificationMode && (!enforce || qualificationArg < 0 || artifactArg < 0 ||
     }
   }
   for (const [id, row] of requiredRows) {
+    if ((rcQualificationOnly.get(id) ?? row.acceptanceIds).length === 0) problems.push(`${id}: required row must name explicit acceptance criteria before RC qualification`);
     if (!Object.hasOwn(RANK, row.status)) problems.push(`${id}: source ledger status '${row.status}' is not recognized`);
     else if (RANK[row.status] < RANK.tested && !rcQualificationOnly.has(id)) problems.push(`${id}: source ledger status '${row.status}' is below 'tested'`);
     if (!qualificationMode && rcQualificationOnly.has(id)) deferredQualificationRows.push(`${id} (${row.status})`);
