@@ -21,6 +21,13 @@ export function redactForPersistence<T>(value: T): T {
   return InformationFlowBoundary.getGlobalInstance().redactForDurablePersistence(value);
 }
 
+/** Classify individual path components as well as the whole value. The general
+ * classifier intentionally does not treat slash-delimited paths as tokens. */
+function classifyPathComponents(value: string): ReturnType<InformationFlowBoundary["classifyText"]> {
+  const boundary = InformationFlowBoundary.getGlobalInstance();
+  return value.split(/[\\/]+/).filter(Boolean).flatMap((component) => boundary.classifyText(component));
+}
+
 /** Provider tool-call ids at least this long are eligible for the high-entropy classifier (see egress.ts). */
 const ENTROPY_CHECKED_LENGTH = 20;
 
@@ -64,7 +71,14 @@ export function redactTaskStateForPersistence<T extends {
   worktreeBinding?: { worktreePath?: string } | null;
 }>(original: T, workspacePaths: readonly WorkspacePath[] = []): T {
   const value = withStableToolCallIds(original);
-  if (workspacePaths.length === 0) return redactForPersistence(value);
+  if (workspacePaths.length === 0) {
+    const paths = [value.workspacePath, value.workspace, value.worktreeBinding?.worktreePath]
+      .filter((candidate): candidate is string => typeof candidate === "string");
+    if (paths.some((candidate) => classifyPathComponents(candidate).length > 0)) {
+      throw new Error("Task state workspace path has no selected workspace identity");
+    }
+    return redactForPersistence(value);
+  }
 
   for (const identity of workspacePaths) identity.assertCurrent();
   const selectedWorkspace = workspacePaths.find((identity) => identity.matches(value.workspacePath));
@@ -79,9 +93,12 @@ export function redactTaskStateForPersistence<T extends {
   if (worktreePath) {
     const typedWorktree = workspacePaths.find((identity) => identity.matches(worktreePath));
     if (typedWorktree) typedPaths.push(typedWorktree);
+    else if (classifyPathComponents(worktreePath).length > 0) {
+      throw new Error("Task state worktree path has no selected workspace identity");
+    }
   }
   for (const identity of typedPaths) {
-    const identityFindings = boundary.classifyText(identity.value);
+    const identityFindings = classifyPathComponents(identity.value);
     if (identityFindings.some((finding) => finding.classificationType !== "UNCERTAIN")) {
       throw new Error("Workspace identity contains positively classified sensitive material");
     }

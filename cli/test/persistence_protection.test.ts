@@ -589,7 +589,7 @@ test("typed WorkspacePath may resolve only an UNCERTAIN path entropy finding", (
   const workspace = path.join(root, syntheticHighEntropyPathPart);
   fs.mkdirSync(workspace);
   try {
-    assert.ok(InformationFlowBoundary.getGlobalInstance().classifyText(workspace)
+    assert.ok(InformationFlowBoundary.getGlobalInstance().classifyText(syntheticHighEntropyPathPart)
       .some((finding) => finding.classificationType === "UNCERTAIN"));
     const identity = WorkspacePath.fromSelectedWorkspace(workspace);
     const stateDir = path.join(root, "state");
