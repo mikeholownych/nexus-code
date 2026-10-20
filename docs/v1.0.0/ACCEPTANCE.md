@@ -29,6 +29,35 @@ The release sequence has five distinct stages. Passing an earlier stage is a pre
 
 The final G6 decision in §10 applies to promoting the accepted RC toward a stable release. It requires the applicable gates to pass for the accepted RC and authorizes the version-only stable commit and its source checks, followed by the stable tag and draft build; it does not waive source CI, artifact identity, installed-RC qualification, or any threshold. Public publication is a separate post-build gate in stage 5 above. The release workflow must keep stable assets in draft state until stable artifact checks pass. Source verification at integration 6a16cb6 confirms the tag-triggered release workflow now supports published RC prereleases and draft stable releases. The earlier immediate-stable-publication source blocker is resolved; an actual stable draft build, artifact verification, signed acceptance, and deliberate publication are still required and remain unproven until their run evidence is recorded.
 
+Exact-RC requirements records identify at least one implementer and an independent reviewer. For a blocking requirement recorded as `tested` instead of `product-qualified`, the cited decision must be explicitly allowlisted for that requirement in the approved qualification-exceptions table below, and its `DECISIONS.md` section must contain a matching requirement-specific line of the form `Qualification applicability: REQ-... = NOT REQUIRED ...`. A record-supplied or unrelated decision cannot authorize an exception. The record must include digest-bound evidence for every `ACC-*` criterion in that requirement's ledger Acceptance column.
+
+The post-RC closure requirements listed below may remain `open`, `partial`, or `implemented` in the source ledger at the RC commit because their remaining acceptance is completed during G6 or installed-RC qualification. The bare `--enforce` invocation is the pre-RC source gate: it checks every other B/RR row against the source threshold and reports mapped rows as deferred, not accepted. At G6, the exact-RC invocation must provide a record meeting the normal B/RR status threshold and digest-bound evidence for every criterion in this table. The table also supplies the criterion mapping for rows whose ledger points to an ACCEPTANCE section instead of naming ACC IDs. The source ledger is never rewritten by the record. Any below-tested required row omitted from this table still fails.
+
+<!-- RC-QUALIFICATION-ONLY:START -->
+### Qualification-only requirements for exact-RC enforcement
+
+| Requirement | Acceptance criteria required in the exact-RC record | Remaining stage |
+|---|---|---|
+| REQ-AGT-002 | ACC-VER-03, ACC-VER-04, ACC-VER-09, ACC-QUAL-T2, ACC-QUAL-T3, ACC-QUAL-T4 | Installed-RC T2/T3/T4 outcome thresholds |
+| REQ-AGT-010 | ACC-TRUST-04 | Independent acceptance of the DEC-04 v1 subset |
+| REQ-PRV-003 | ACC-INF-10 | Installed-RC standalone and absent-gateway behavior |
+| REQ-REL-005 | ACC-SUP-04, ACC-SUP-05 | Exact-RC security and dependency artifact checks |
+| REQ-AGT-110 | ACC-CONT-10, ACC-GOV-06 | Installed-RC continuity and independent acceptance |
+| REQ-PRV-111 | ACC-PRV-LIVE | Installed-RC provider verification |
+| REQ-REL-114 | ACC-SUP-08 | Exact-RC cross-runner reproducibility |
+| REQ-QUAL-101 | ACC-QUAL-T2 | Installed-RC held-out T2 qualification |
+| REQ-QUAL-107 | ACC-PRV-STANDALONE, ACC-PRV-LIVE | Installed-RC standalone and provider matrix |
+| REQ-QUAL-108 | ACC-TUI-STEER, ACC-TUI-A11Y, ACC-TUI-MANUAL | CI PTY checks and installed-RC real-terminal matrix |
+| REQ-QUAL-109 | ACC-QUAL-T3 | Installed-RC T3 long-task qualification |
+<!-- RC-QUALIFICATION-ONLY:END -->
+
+<!-- RC-QUALIFICATION-EXCEPTIONS:START -->
+### Approved exact-RC qualification exceptions
+
+| Requirement | Approved decision | Scope |
+|---|---|---|
+<!-- RC-QUALIFICATION-EXCEPTIONS:END -->
+
 ## 1. Rules
 
 1. The RC is built and published by the release workflow from a clean tag. Its version is identical across all components (REQ-REL-103).
@@ -82,11 +111,13 @@ These are retained commitments from REQUIREMENTS §2 and cross-cutting checks.
 | ACC-SEC-JAIL | `core/tests` plus harness-core calls with `..`, absolute, symlinked-file, symlinked-dir and symlinked-parent payloads | Every one is refused (C §4 R1 set). |
 | ACC-SEC-B6 | Re-run `docs/reviews/evidence/qualification_2026-10-12/repro/zz_trust_repro.test.ts`. Seeded-secret scan of `~/.nexus` and `.nexus` after a scripted turn. | Zero plaintext seeded secrets in durable stores or outbound bodies. |
 | ACC-PRV-LIVE | `nexus providers verify --provider <p> -m <pinned model> -j` for each provider listed as supported (DEC-06) | `passed: true`. Receipts archived. |
+| ACC-PRV-STANDALONE | §4.2 on the installed RC through the approved stripped proxy, with gateway credentials absent from the child environment | Every required profile completes through the proxy and the absent-gateway boundary holds; receipts archived. |
 | ACC-PLAT | E2 matrix, §7 | All rows pass. |
 | ACC-QUAL-T2 | §6.1 + §6.4 | Thresholds met. |
 | ACC-QUAL-T3 | §6.3 + §6.4 | Thresholds met. |
 | ACC-QUAL-T4 | §6.2 + §6.4 | Thresholds met. |
 | ACC-QUAL-SMOKE | `make test` includes the T1 self-test and the T4 smoke | Present and passing. |
+| ACC-TUI-MANUAL | §5.3 on the installed RC across five required terminal environments and three required sizes | Every cell passes; screenshots and per-cell verdicts are archived. |
 
 ## 4. Standalone and provider qualification (REQ-PRV-106, REQ-PRV-111, REQ-QUAL-107)
 
@@ -302,9 +333,10 @@ G6 passes only when every item below holds. It authorizes a version-only stable 
 - [ ] §6 thresholds: all hold.
 - [ ] §7 install matrix: all rows PASS.
 - [ ] §8 independent acceptance: ACCEPT, or ACCEPT WITH DEFECTS with owner dispositions and no blocker defects outstanding.
-- [ ] `scripts/check_requirements.mjs --enforce` passes:
-  - every B row is `product-qualified`, or `tested` with a recorded justification for why product qualification does not apply;
-  - every RR row is ≥ `tested`.
+- [ ] The pre-RC source gate passes from a clean source worktree: `node scripts/check_requirements.mjs --enforce`. Every B/RR source row outside the §1.1 qualification-only map must be ≥ `tested`. A mapped row below `tested` is reported as deferred; this result does not accept or qualify it.
+- [ ] The exact-RC evidence gate passes from the clean RC worktree and is bound to the exact RC source commit and installed RC artifact. Run the checker with the custodian-approved, immutable qualification record and evidence directory:
+  `node scripts/check_requirements.mjs --enforce --qualification-record <record.json> --rc-artifact <installed-rc-package> --evidence-root <evidence-directory>`.
+  The version 1 record contains `sourceCommit` (full commit ID), `rcTag` (for example `v1.0.0-rc.1`), `artifactSha256`, `artifactProvenance` (`sourceCommit`, `artifactSha256`, and a hashed provenance report), `independentAcceptance` (`disposition`, `reviewer`, `implementers`, zero `blockingDefects`, and a hashed report reference), and one `requirements` entry for every B/RR row. For `ACCEPT WITH DEFECTS`, include each non-blocking defect with its owner disposition; unresolved or blocking defects fail. Each requirement entry records its status and one or more hashed evidence files covering the exact criteria required by the ledger and the §1.1 qualification-only map. A B row recorded as `tested` also needs a non-empty `qualificationNotApplicable.reason` and a `qualificationNotApplicable.decision` matching the approved per-requirement exception table and a matching applicability declaration in DECISIONS.md; an unrelated or record-supplied decision is rejected. Evidence paths must be relative regular files under the evidence root, with no symlinks. Missing, unknown, stale, mismatched, or incomplete evidence fails the gate. The checker requires a clean worktree, rejects `--ledger` overrides, enforces source-ledger thresholds outside the explicit §1.1 lifecycle rows, and requires the exact-RC record itself to meet the normal status threshold for every row. It never mutates the source ledger or relaxes a requirement's B/RR record threshold. The checker verifies source/tag/artifact/evidence hash bindings; it does not authenticate the reviewer or prove that the artifact was built from the source commit. The approved release workflow must independently verify build provenance/attestation, and the designated custodian and independent reviewer must verify their respective approvals and custody evidence.
 - [ ] Docs checklist (SPEC-09 §3.2) is signed off.
 - [ ] Release notes state the standalone scope (DEC-16), the provider tiers (DEC-06), the experimental surfaces (DEC-03, DEC-07) and the known limitations.
 - [ ] Owner approval to publish (X7).
