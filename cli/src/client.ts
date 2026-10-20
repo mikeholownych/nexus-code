@@ -513,6 +513,7 @@ export class LocalLlmClient {
   private lastAdmission?: AdmissionReport;
   private readonly reasoningEffort?: string;
   private readonly thinkingBudget?: number;
+  private readonly diagnosticHandler?: (level: "error" | "warn", message: string) => void;
   /** Usage the provider reported for the most recent completed request on this client (provider connections only). */
   private lastUsageReport?: UsageReport;
   private pending?: PendingRequest;
@@ -528,6 +529,8 @@ export class LocalLlmClient {
       taskClass?: string;
       /** Receipt label: main, planner, coder, subagent, work-unit. */
       role?: string;
+      /** Optional diagnostic sink for bounded command surfaces that must sanitize provider-controlled labels. */
+      diagnosticHandler?: (level: "error" | "warn", message: string) => void;
     }
   ) {
     this.conn = connectionFor(config.provider, config.model);
@@ -566,6 +569,7 @@ export class LocalLlmClient {
     this.model = config.model;
     this.temperature = config.temperature ?? 0.2;
     this.boundary = options?.boundary || InformationFlowBoundary.getGlobalInstance();
+    this.diagnosticHandler = options?.diagnosticHandler;
     this.taskId = options?.taskId;
     this.sessionId = options?.sessionId;
     this.taskClass = options?.taskClass ?? config.taskClass;
@@ -604,6 +608,16 @@ export class LocalLlmClient {
   /** "cloud" when `url` (default: the active endpoint) receives content outside the operator's machines/network. */
   public disclosureOf(url: string = this.endpoint): "local" | "cloud" {
     return disclosureClass(url, this.conn.providerId, this.cloudRoutedOrigins);
+  }
+
+  private emitDiagnostic(level: "error" | "warn", message: string): void {
+    if (this.diagnosticHandler) {
+      this.diagnosticHandler(level, message);
+    } else if (level === "warn") {
+      console.warn(message);
+    } else {
+      console.error(message);
+    }
   }
 
   /** Why task content may not be sent to `url`, or undefined when it may. */
@@ -649,7 +663,7 @@ export class LocalLlmClient {
     if (!announcedDestinations.has(origin)) {
       announcedDestinations.add(origin);
       const locality = classifyLocality(url);
-      console.error(pc.dim(`[nexus] Cloud inference: ${this.conn.label} (${origin}, locality: ${locality.reason}), model ${this.model || "(unset)"}. Task content — prompts, tool results and file excerpts — is sent to this provider.`));
+      this.emitDiagnostic("error", pc.dim(`[nexus] Cloud inference: ${this.conn.label} (${origin}, locality: ${locality.reason}), model ${this.model || "(unset)"}. Task content — prompts, tool results and file excerpts — is sent to this provider.`));
     }
   }
 
@@ -791,7 +805,7 @@ export class LocalLlmClient {
         const droppable = this.conn.providerId ? DROPPABLE_PARAMS : LOCAL_DROPPABLE_PARAMS;
         if (!param || !droppable.has(param) || this.unsupportedParams.has(param)) throw err;
         this.unsupportedParams.add(param);
-        console.error(pc.dim(`[nexus] ${this.conn.label} rejected '${param}' for ${this.model}; resending without it.`));
+        this.emitDiagnostic("error", pc.dim(`[nexus] ${this.conn.label} rejected '${param}' for ${this.model}; resending without it.`));
       }
     }
   }
@@ -983,7 +997,7 @@ export class LocalLlmClient {
       try {
         const result = await operation(currentEp);
         if (idx !== this.activeEndpointIndex) {
-          console.warn(
+          this.emitDiagnostic("warn",
             pc.yellow(`\n⚡ Failover: Active inference endpoint switched to ${currentEp}`)
           );
           this.activeEndpointIndex = idx;
@@ -994,7 +1008,7 @@ export class LocalLlmClient {
         if (err instanceof InferenceError && !err.failoverEligible) throw err;
         if (total > 1 && attempt < total - 1) {
           const nextIdx = (idx + 1) % total;
-          console.warn(
+          this.emitDiagnostic("warn",
             pc.dim(
               `⚠️ [Failover] ${operationName} failed on ${currentEp} (${err.message}). Trying backup endpoint ${this.endpoints[nextIdx]}...`
             )
@@ -1718,7 +1732,7 @@ export class LocalLlmClient {
       if (!fullContent && !reasoningContent && assembledToolCalls.length === 0) {
         if (this.pending) this.pending.executions = 2;
         else this.pending = { endpoint: currentEp, executions: 2 };
-        console.error(pc.dim(`[nexus] Empty stream from ${this.conn.label}; re-requesting non-streaming completion (executions: 2).`));
+        this.emitDiagnostic("error", pc.dim(`[nexus] Empty stream from ${this.conn.label}; re-requesting non-streaming completion (executions: 2).`));
         const res = await this.chatCompletionOnce(messages, tools, randomUUID(), signal);
         if (this.pending) this.pending.executions = 2;
         else this.pending = { endpoint: currentEp, executions: 2 };
@@ -1801,7 +1815,7 @@ export class LocalLlmClient {
       const req = anthropic ? buildAnthropicRequest(input) : buildResponsesRequest(input);
       this.omitUnsupported(req.body);
       if (req.droppedState) {
-        console.error(pc.dim(`[nexus] ${req.droppedState} earlier assistant turn(s) carry reasoning state owned by another provider/model or altered since capture; it is not replayed to ${owner} (visible text and tool calls are kept).`));
+        this.emitDiagnostic("error", pc.dim(`[nexus] ${req.droppedState} earlier assistant turn(s) carry reasoning state owned by another provider/model or altered since capture; it is not replayed to ${owner} (visible text and tool calls are kept).`));
       }
       const url = `${currentEp}${req.path}`;
       this.pending = { endpoint: currentEp };
