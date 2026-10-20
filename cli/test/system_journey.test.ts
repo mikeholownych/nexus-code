@@ -6,6 +6,7 @@ import * as os from "node:os";
 import { execFileSync } from "node:child_process";
 import { ApplicationCore } from "../src/core/app.js";
 import { CandidateTracker, hashContent, ValidationReceipt } from "../src/core/candidate.js";
+import { InformationFlowBoundary } from "../src/core/egress.js";
 import { HarnessConfig } from "../src/types.js";
 
 /**
@@ -89,6 +90,7 @@ describe("WP-11: Decisive Multi-Actor System Journey & Lifecycle Qualification (
     // Bind worktree to durable state
     const taskState = implementerApp.getStateManager().loadTaskState(implementerTaskId);
     taskState.worktreeBinding = {
+      taskId: implementerTaskId,
       worktreePath,
       branch: worktreeInfo.branch,
       baseCommit: worktreeInfo.baseCommit,
@@ -198,5 +200,51 @@ describe("WP-11: Decisive Multi-Actor System Journey & Lifecycle Qualification (
     assert.strictEqual(recResult.success, true, "Task state must recover cleanly");
     assert.strictEqual(recoveryApp.getTaskId(), implementerTaskId);
     assert.strictEqual(recoveryApp.getTaskState().candidateId, candidate.candidateId);
+  });
+
+  test("real generated worktree paths tolerate uncertain entropy and reject positive credentials", () => {
+    const syntheticEntropyComponent = "aZ7mK2pQ9x-V4nR8cT1yB6hW3";
+    assert.ok(InformationFlowBoundary.getGlobalInstance().classifyText(syntheticEntropyComponent)
+      .some((finding) => finding.classificationType === "UNCERTAIN"));
+
+    const workspace = path.join(tmpDir, syntheticEntropyComponent, "repo");
+    fs.mkdirSync(path.join(workspace, "src"), { recursive: true });
+    fs.writeFileSync(path.join(workspace, "README.md"), "# Synthetic workspace\n");
+    fs.writeFileSync(path.join(workspace, "src", "index.ts"), "export const status = 'healthy';\n");
+    execFileSync("git", ["init"], { cwd: workspace });
+    execFileSync("git", ["config", "user.name", "Tester"], { cwd: workspace });
+    execFileSync("git", ["config", "user.email", "tester@nexus.local"], { cwd: workspace });
+    execFileSync("git", ["config", "commit.gpgsign", "false"], { cwd: workspace });
+    execFileSync("git", ["add", "."], { cwd: workspace });
+    execFileSync("git", ["commit", "-m", "Initial commit"], { cwd: workspace });
+
+    const app = createApp({ worktree: true, workspace });
+    const taskId = app.getTaskId();
+    assert.ok(taskId);
+    const generatedWorktree = app.getAgent().getWorktreeManager().createWorktree(taskId);
+    const stateManager = app.getStateManager();
+    const taskState = stateManager.loadTaskState(taskId);
+    taskState.worktreeBinding = {
+      taskId: generatedWorktree.taskId,
+      worktreePath: generatedWorktree.worktreePath,
+      branch: generatedWorktree.branch,
+      baseCommit: generatedWorktree.baseCommit,
+    };
+    assert.doesNotThrow(() => stateManager.saveTaskState(taskState));
+    assert.equal(stateManager.loadTaskState(taskId).worktreeBinding?.worktreePath, generatedWorktree.worktreePath);
+
+    const mismatchedTaskState = {
+      ...taskState,
+      taskId: `other-${taskId}`,
+      worktreeBinding: { ...taskState.worktreeBinding, worktreePath: generatedWorktree.worktreePath },
+    };
+    assert.throws(() => stateManager.saveTaskState(mismatchedTaskState), /Sensitive-data protection or classification failed/);
+
+    taskState.worktreeBinding.worktreePath = path.join(tmpDir, "external", syntheticEntropyComponent, "repo");
+    assert.throws(() => stateManager.saveTaskState(taskState), /Sensitive-data protection or classification failed/);
+
+    const syntheticCredential = `ghp_${"A".repeat(36)}`;
+    taskState.worktreeBinding.worktreePath = path.join(workspace, ".nexus", "worktrees", syntheticCredential);
+    assert.throws(() => stateManager.saveTaskState(taskState), /Sensitive-data protection or classification failed/);
   });
 });
