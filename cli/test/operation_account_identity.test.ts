@@ -217,23 +217,30 @@ test("a FIFO at the account identity key path is rejected without blocking or mi
   });
 });
 
-test("explicit short labels are preserved and unmarked legacy-looking IDs migrate stably", () => {
+test("explicit delimiter-containing labels keep account scope while legacy IDs migrate stably", () => {
   withTemp((_root, home, workspace, stateDir) => {
-    const explicit = "012345abcdef";
+    const explicit = "external|account|012345abcdef";
     const legacy = "fedcba654321";
     const op = newOperation("op-explicit-account", "preserve explicit account labels", [{ id: "unit", prompt: "test" }], [
       { id: "custom", provider: "provider", endpoint: "https://provider.example/v1", model: "m1", capabilities: ["tools"], account: explicit, accountIdentitySource: "explicit" },
       { id: "legacy", provider: "provider", endpoint: "https://legacy.example/v1", model: "m2", capabilities: ["tools"], account: legacy },
     ], Date.now());
+    op.conditions.push({
+      scope: "account", key: `provider|account|${explicit}`, condition: "AUTH_FAILED", temporary: false,
+      source: "probe", confidence: "authoritative", reason: "synthetic explicit-label condition", observedAt: new Date().toISOString(),
+      failures: 1, resourceId: "custom",
+    });
     const store = new OperationStore(workspace, stateDir, home);
     store.save(op);
     const loaded = store.loadForInspection(op.id);
     assert.equal(loaded.resources[0].account, explicit);
     assert.match(loaded.resources[1].account!, /^acct:legacy:v1:[0-9a-f]{64}$/);
     assert.notEqual(loaded.resources[1].account, legacy);
+    assert.equal(loaded.conditions[0].key, `provider|account|${explicit}`);
     const restarted = new OperationStore(workspace, stateDir, home).loadForInspection(op.id);
     assert.equal(restarted.resources[0].account, explicit);
     assert.equal(restarted.resources[1].account, loaded.resources[1].account);
+    assert.equal(restarted.conditions[0].key, `provider|account|${explicit}`);
   });
 });
 

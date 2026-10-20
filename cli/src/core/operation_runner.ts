@@ -427,6 +427,11 @@ export function migrateLegacyAccountIdentities(
   const explicitAccounts = new Set(
     operation.resources.filter((resource) => resource.accountIdentitySource === "explicit" && resource.account).map((resource) => resource.account!),
   );
+  const explicitAccountConditionKeys = new Set(
+    operation.resources
+      .filter((resource) => resource.accountIdentitySource === "explicit" && resource.account)
+      .map((resource) => `${resource.provider}|account|${resource.account}`),
+  );
   const migrated = new Map<string, string>();
   const replacement = (value: string): string => {
     if (explicitAccounts.has(value) || !isLegacyCredentialFingerprint(value)) return value;
@@ -443,6 +448,9 @@ export function migrateLegacyAccountIdentities(
   }
   for (const condition of operation.conditions) {
     if (condition.scope !== "account") continue;
+    // Account labels are arbitrary strings and may themselves contain `|account|`; preserve the full key for
+    // explicitly labeled resources instead of parsing the final delimiter as a structural boundary.
+    if (explicitAccountConditionKeys.has(condition.key)) continue;
     const marker = "|account|";
     const markerAt = condition.key.lastIndexOf(marker);
     if (markerAt < 0) continue;
