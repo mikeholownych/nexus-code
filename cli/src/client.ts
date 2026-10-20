@@ -537,7 +537,8 @@ export class LocalLlmClient {
     this.unsupportedParams = new Set(this.conn.omitParams);
     // A provider's base URL already carries its API path and version; only the legacy endpoint path appends /v1.
     const normalizeEp = (urlStr: string) => {
-      let ep = urlStr.trim().replace(/\/+$/, "");
+      let ep = urlStr.trim();
+      while (ep.length > 0 && ep.endsWith("/")) ep = ep.slice(0, -1);
       if (!this.conn.providerId && !ep.endsWith("/v1")) {
         ep = `${ep}/v1`;
       }
