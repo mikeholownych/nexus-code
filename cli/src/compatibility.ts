@@ -1,3 +1,4 @@
+import { CURRENT_STATE_SCHEMA_VERSION } from "./core/state_schema.js";
 /**
  * Machine-Readable Release Compatibility Metadata (REQ-REL-116, ACC-UPG-07)
  *
@@ -74,9 +75,9 @@ export function generateCompatibilityMetadata(
     },
     compatibility: {
       configSchemaVersion: 1,
-      stateSchemaVersion: 1,
+      stateSchemaVersion: CURRENT_STATE_SCHEMA_VERSION,
       minSupportedConfigVersion: 1,
-      minSupportedStateVersion: 1,
+      minSupportedStateVersion: 0,
     },
     platforms: platforms ?? {
       "linux-x86_64": {

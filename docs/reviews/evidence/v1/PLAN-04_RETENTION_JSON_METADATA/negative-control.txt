@@ -1,0 +1,128 @@
+TAP version 13
+# Subtest: PLAN-08 PR-8c: Persistence retention, GC, and indexed sessions (REQ-PER-102, DEC-11, ACC-PER-02)
+    # Subtest: Session indexing with rebuild-on-miss and performance (1k sessions lists in < 500 ms)
+    ok 1 - Session indexing with rebuild-on-miss and performance (1k sessions lists in < 500 ms) # SKIP test name does not match pattern
+      ---
+      duration_ms: 0.916195
+      ...
+    # Subtest: ACC-PER-02: seed 10k tasks and 2k sessions; gc --dry-run reports and gc brings store under cap
+    ok 2 - ACC-PER-02: seed 10k tasks and 2k sessions; gc --dry-run reports and gc brings store under cap # SKIP test name does not match pattern
+      ---
+      duration_ms: 0.097299
+      ...
+    # Subtest: Checkpoints git ref and snapshot pruning, flights pruning
+    ok 3 - Checkpoints git ref and snapshot pruning, flights pruning # SKIP test name does not match pattern
+      ---
+      duration_ms: 0.081299
+      ...
+    # Subtest: Background daily GC: first-run acknowledgement, NEXUS_GC=auto, and 2s timeout bounding
+    ok 4 - Background daily GC: first-run acknowledgement, NEXUS_GC=auto, and 2s timeout bounding # SKIP test name does not match pattern
+      ---
+      duration_ms: 0.0782
+      ...
+    # Subtest: Background daily GC: enforces single end-to-end deadline across planning, identity capture, and execution
+    ok 5 - Background daily GC: enforces single end-to-end deadline across planning, identity capture, and execution # SKIP test name does not match pattern
+      ---
+      duration_ms: 0.0687
+      ...
+    # Subtest: Planning candidate selection and size cap sorting respects expired deadline
+    ok 6 - Planning candidate selection and size cap sorting respects expired deadline # SKIP test name does not match pattern
+      ---
+      duration_ms: 0.065499
+      ...
+    # Subtest: Background daily GC: persists summary and lastRunAt even when work budget expires
+    ok 7 - Background daily GC: persists summary and lastRunAt even when work budget expires # SKIP test name does not match pattern
+      ---
+      duration_ms: 0.0698
+      ...
+    # Subtest: Planning: bounded metadata streaming respects deadline and preserves pin protection on large legacy state envelopes
+    ok 8 - Planning: bounded metadata streaming respects deadline and preserves pin protection on large legacy state envelopes # SKIP test name does not match pattern
+      ---
+      duration_ms: 0.224999
+      ...
+    1..8
+ok 1 - PLAN-08 PR-8c: Persistence retention, GC, and indexed sessions (REQ-PER-102, DEC-11, ACC-PER-02)
+  ---
+  duration_ms: 3.722179
+  type: 'suite'
+  ...
+# Subtest: large escaped JSON metadata keeps pinned records and decodes Unicode workspaces
+not ok 2 - large escaped JSON metadata keeps pinned records and decodes Unicode workspaces
+  ---
+  duration_ms: 18.535697
+  location: '/var/tmp/nexus-persistence-recovery-mh_bj0rw/source/cli/test/retention.test.ts:1:12605'
+  failureType: 'testCodeFailure'
+  error: |-
+    JSON-escaped pinned keys must preserve pin protection
+    
+    false !== true
+    
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected: true
+  actual: false
+  operator: 'strictEqual'
+  stack: |-
+    TestContext.<anonymous> (/var/tmp/nexus-persistence-recovery-mh_bj0rw/source/cli/test/retention.test.ts:452:14)
+    Test.runInAsyncScope (node:async_hooks:206:9)
+    Test.run (node:internal/test_runner/test:796:25)
+    Test.processPendingSubtests (node:internal/test_runner/test:527:18)
+    Suite.postRun (node:internal/test_runner/test:889:19)
+    Suite.run (node:internal/test_runner/test:1150:10)
+    async Test.processPendingSubtests (node:internal/test_runner/test:527:7)
+  ...
+# Subtest: large escaped session identity keeps the current session out of retention
+not ok 3 - large escaped session identity keeps the current session out of retention
+  ---
+  duration_ms: 4.868073
+  location: '/var/tmp/nexus-persistence-recovery-mh_bj0rw/source/cli/test/retention.test.ts:1:13986'
+  failureType: 'testCodeFailure'
+  error: |-
+    Expected values to be strictly equal:
+    
+    false !== true
+    
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected: true
+  actual: false
+  operator: 'strictEqual'
+  stack: |-
+    TestContext.<anonymous> (/var/tmp/nexus-persistence-recovery-mh_bj0rw/source/cli/test/retention.test.ts:471:12)
+    Test.runInAsyncScope (node:async_hooks:206:9)
+    Test.run (node:internal/test_runner/test:796:25)
+    Test.processPendingSubtests (node:internal/test_runner/test:527:18)
+    Test.postRun (node:internal/test_runner/test:889:19)
+    Test.run (node:internal/test_runner/test:835:12)
+    async Test.processPendingSubtests (node:internal/test_runner/test:527:7)
+  ...
+# Subtest: metadata reads remain bounded when a small envelope is replaced after stat
+not ok 4 - metadata reads remain bounded when a small envelope is replaced after stat
+  ---
+  duration_ms: 31.177527
+  location: '/var/tmp/nexus-persistence-recovery-mh_bj0rw/source/cli/test/retention.test.ts:1:14894'
+  failureType: 'testCodeFailure'
+  error: 'metadata performed an unbounded 2097212-byte whole-file read after stat'
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected: true
+  actual: false
+  operator: '=='
+  stack: |-
+    TestContext.<anonymous> (/var/tmp/nexus-persistence-recovery-mh_bj0rw/source/cli/test/retention.test.ts:500:12)
+    Test.runInAsyncScope (node:async_hooks:206:9)
+    Test.run (node:internal/test_runner/test:796:25)
+    Test.processPendingSubtests (node:internal/test_runner/test:527:18)
+    Test.postRun (node:internal/test_runner/test:889:19)
+    Test.run (node:internal/test_runner/test:835:12)
+    async Test.processPendingSubtests (node:internal/test_runner/test:527:7)
+  ...
+1..4
+# tests 11
+# suites 1
+# pass 0
+# fail 3
+# cancelled 0
+# skipped 8
+# todo 0
+# duration_ms 377.742209

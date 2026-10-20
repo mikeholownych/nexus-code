@@ -576,7 +576,18 @@ export class InformationFlowBoundary {
         const fullMatch = match[0];
         // If capture group exists (e.g. Bearer token), extract captured secret, else fullMatch
         let secretVal = match[1] && typeof match[1] === "string" ? match[1] : fullMatch;
-        secretVal = secretVal.replace(/["';,]+$/, "");
+        let trimEnd = secretVal.length;
+        while (trimEnd > 0) {
+          const ch = secretVal.charCodeAt(trimEnd - 1);
+          if (ch === 34 || ch === 39 || ch === 59 || ch === 44) { // ", ', ;, ,
+            trimEnd--;
+          } else {
+            break;
+          }
+        }
+        if (trimEnd < secretVal.length) {
+          secretVal = secretVal.slice(0, trimEnd);
+        }
         if (
           secretVal.length >= 8 &&
           !secretVal.startsWith("[NEXUS_SEC_REF_") &&
@@ -597,7 +608,12 @@ export class InformationFlowBoundary {
     }
 
     // 3. Contextual / Heuristic Classifications (DATA-002: Category 3, DATA-003: Preserves LHS identifiers)
-    for (const { name, regex } of InformationFlowBoundary.CONTEXTUAL_PATTERNS) {
+    // Every contextual pattern requires one of these literal key fragments.
+    // Avoid the bounded identifier backtracking on large ordinary tool outputs;
+    // matching texts still use the unchanged patterns and result ordering.
+    const contextualPatterns = /password|passwd|secret|api_key|apikey|access_token|private_key|auth_token/i.test(text)
+      ? InformationFlowBoundary.CONTEXTUAL_PATTERNS : [];
+    for (const { name, regex } of contextualPatterns) {
       const re = new RegExp(regex.source, regex.flags);
       let match: RegExpExecArray | null;
       while ((match = re.exec(text)) !== null) {
@@ -694,12 +710,19 @@ export class InformationFlowBoundary {
 
   private redactClassifiedValue<T>(value: T): T {
     const envSecrets = this.environmentSecrets();
+    // This cache lives only for one traversal, under one fresh environment and
+    // policy snapshot. Repeated string values have identical classification;
+    // the serialized context pass below remains mandatory and uncached.
+    const redactedStrings = new Map<string, string>();
     const visit = (item: any): any => {
       if (typeof item === "string") {
+        const cached = redactedStrings.get(item);
+        if (cached !== undefined) return cached;
         let sanitized = item;
         for (const secret of this.classifyText(item, envSecrets)) {
           sanitized = sanitized.replaceAll(secret.secret, `[REDACTED:${secret.patternName || "SECRET"}]`);
         }
+        redactedStrings.set(item, sanitized);
         return sanitized;
       }
       if (Array.isArray(item)) return item.map(visit);

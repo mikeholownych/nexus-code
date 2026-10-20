@@ -45,6 +45,20 @@ function fsyncDirectory(dir: string): void {
   }
 }
 
+/**
+ * Fsyncs a directory and propagates unsupported-operation and I/O failures.
+ * Deletion code uses this before removing dependent files so it never reports
+ * a durable primary removal when the containing directory cannot be synced.
+ */
+export function fsyncDirectoryDurably(dir: string): void {
+  const fd = fs.openSync(dir, "r");
+  try {
+    fs.fsyncSync(fd);
+  } finally {
+    fs.closeSync(fd);
+  }
+}
+
 let syncDepth = 0;
 
 /**

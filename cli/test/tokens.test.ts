@@ -63,6 +63,14 @@ function materializeCorpus(entry: CalibrationEntry): string {
 }
 
 describe("ACC-VER-07 & REQ-AGT-118: Conservative token estimator and calibration", () => {
+  test("long whitespace runs are processed without changing conservative counts", () => {
+    const run = " ".repeat(131_072);
+    assert.equal(countTokens(run), Math.ceil(run.length / 3));
+    assert.equal(countTokens(`${run}a`), Math.ceil((run.length - 1) / 3) + 1);
+    const tabs = "\t".repeat(131_072);
+    assert.equal(countTokens(`${tabs}a`), Math.ceil((tabs.length - 1) / 3) + 2);
+  });
+
   test("ACC-VER-07: countTokens is within 1.5x of pinned tokenizer reference counts (floor-bound corpora excepted per DEC-17)", () => {
     const fixture = JSON.parse(fs.readFileSync(fixturePath, "utf8")) as CalibrationFixture;
     assert.ok(fixture.corpora.length >= 8, "calibration fixture must contain all required corpora");

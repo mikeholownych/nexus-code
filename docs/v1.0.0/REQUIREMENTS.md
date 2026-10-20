@@ -94,7 +94,7 @@ Independent acceptance is recorded separately in the "Indep." column: **Y** = an
 | UI-006/007 ("Ratatui only a hypothesis; Issue #10 must not be implemented") | DEMONSTRATED | Ratatui TUI shipped | **Superseded** by an operator decision (docs/superpowers specs 2026-10-04) |
 | DEDUP-003 (retain the 36-tool surface pending ablation) | DEMONSTRATED | 38 tools; rare groups offered on demand (0090f9c) | **Superseded**. Ablation evidence is partial (eval pilot). Tool-group behaviour is protected by `tool_groups.test.ts`. |
 | "No Git remote" (P2 §2) | constraint | Public GitHub repository | **Superseded** |
-| CTX-001 (per-item provenance) | PARTIALLY_DEMONSTRATED_BLOCKING | Partial: v1 subset implemented and tested (REQ-SEC-113 / ACC-TRUST-04); remainder open, post-v1 | DEC-04: **partial** in v1 (REQ-AGT-010 via REQ-SEC-113); remainder post-v1 |
+| CTX-001 (per-item provenance) | PARTIALLY_DEMONSTRATED_BLOCKING | Historical Issue #12 blocking claim is superseded for v1 by DEC-04: the scoped REQ-SEC-113 / ACC-TRUST-04 subset is partial in v1; the full provenance graph remains post-v1 and is not a v1 blocker. See REQ-AGT-010 for current status and evidence. | DEC-04: **partial** in v1 (REQ-AGT-010 via REQ-SEC-113); remainder post-v1 |
 | CTX-002 (knowledge freshness and applicability) | PARTIALLY_DEMONSTRATED_BLOCKING | Open | DEC-04: **descoped to post-v1**, with written rationale (auto-extract off and knowledge trust-gated) |
 | EXT-004 (middleware before/after audit) | PARTIALLY_DEMONSTRATED_BLOCKING | Open (HIST-01) | DEC-04: **implement** → REQ-SEC-116 (B) |
 | PERS-002 legacy identity-sensitive files | accepted limitation | Unchanged | Retained limitation. Permissions mitigate it (REQ-PER-101). |
