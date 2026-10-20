@@ -10,7 +10,9 @@
 
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { spawnSync } from "node:child_process";
+import { acquireFileGuard, releaseFileGuard, type FileGuard } from "./core/file_guard.js";
+import { withStateStoreGuard, STATE_RESTORE_PENDING_FILE, STATE_STORE_GUARD_FILE } from "./core/state_store_guard.js";
+import { restoreFromSources } from "./core/state_restore.js";
 import { verifyInstalledRuntime } from "./upgrade_health.js";
 
 export type JournalState =
@@ -145,11 +147,12 @@ export function createPreMigrationBackup(homeDir: string = process.env.HOME || "
   if (fs.existsSync(configEnv)) {
     if (!fs.lstatSync(configEnv).isFile() || fs.realpathSync(configEnv) !== path.resolve(configEnv)) throw new Error("Configuration backup source is redirected");
     const backupDir = path.join(homeDir, ".config", "nexus", "backups");
+    const backupDirExisted = fs.existsSync(backupDir);
     fs.mkdirSync(backupDir, { recursive: true, mode: 0o700 });
     if (fs.realpathSync(backupDir) !== path.resolve(backupDir)) throw new Error("Configuration backup directory is redirected");
+    if (!backupDirExisted) syncDirectory(path.dirname(backupDir));
     const backupFile = path.join(backupDir, `config.env.bak.${timestamp}`);
-    fs.copyFileSync(configEnv, backupFile);
-    fs.chmodSync(backupFile, 0o600);
+    copyPrivateFileDurably(configEnv, backupFile);
     result.configBackupPath = backupFile;
   }
 
@@ -157,17 +160,29 @@ export function createPreMigrationBackup(homeDir: string = process.env.HOME || "
   const stateDir = path.join(homeDir, ".nexus");
   if (fs.existsSync(stateDir)) {
     const stateBackupsDir = path.join(stateDir, "backups");
+    const stateBackupsDirExisted = fs.existsSync(stateBackupsDir);
     fs.mkdirSync(stateBackupsDir, { recursive: true, mode: 0o700 });
     if (fs.realpathSync(stateBackupsDir) !== path.resolve(stateBackupsDir)) throw new Error("State backup directory is redirected");
+    if (!stateBackupsDirExisted) syncDirectory(stateDir);
     const backupDest = path.join(stateBackupsDir, `state-backup-${timestamp}`);
-    fs.mkdirSync(backupDest, { recursive: true, mode: 0o700 });
+    // Each timestamped backup is a single immutable attempt. Never merge into
+    // an existing directory left by a collision or interrupted prior attempt.
+    fs.mkdirSync(backupDest, { mode: 0o700 });
+    syncDirectory(stateBackupsDir);
 
     // Snapshot all durable state, not just its index. Backup directories are
     // excluded to avoid recursion; symbolic links are refused rather than read.
-    copyPrivateTree(stateDir, path.join(backupDest, "state"), new Set(["backups"]));
+    withDurableStoreGuards(homeDir, () => copyPrivateTree(stateDir, path.join(backupDest, "state"), new Set(["backups", "restore-control", STATE_RESTORE_PENDING_FILE])));
     const configDir = path.join(homeDir, ".config", "nexus");
-    if (fs.existsSync(configDir)) copyPrivateTree(configDir, path.join(backupDest, "config"), new Set(["backups"]));
-    fs.writeFileSync(path.join(backupDest, "backup.json"), JSON.stringify({ formatVersion:1, kind:"nexus-state-config", createdAt:new Date().toISOString() }), { mode:0o600 });
+    if (fs.existsSync(configDir)) copyPrivateTree(configDir, path.join(backupDest, "config"), new Set(["backups", STATE_RESTORE_PENDING_FILE]));
+    const metadataPath = path.join(backupDest, "backup.json");
+    const metadataFd = fs.openSync(metadataPath, fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL | (fs.constants.O_NOFOLLOW ?? 0), 0o600);
+    try {
+      fs.writeFileSync(metadataFd, JSON.stringify({ formatVersion:1, kind:"nexus-state-config", createdAt:new Date().toISOString() }));
+      fs.fchmodSync(metadataFd, 0o600);
+      fs.fsyncSync(metadataFd);
+    } finally { fs.closeSync(metadataFd); }
+    syncDirectory(backupDest);
 
     result.stateBackupDir = backupDest;
   }
@@ -178,7 +193,7 @@ export function createPreMigrationBackup(homeDir: string = process.env.HOME || "
 /**
  * Restores configuration from a previous backup file.
  */
-export function restoreConfigBackup(backupPath: string, homeDir: string = process.env.HOME || ""): boolean {
+export function restoreConfigBackup(backupPath: string, homeDir: string = process.env.HOME || "", onError?: (error: unknown) => void): boolean {
   try {
     const resolved = path.resolve(backupPath);
     if (fs.realpathSync(resolved) !== resolved) return false;
@@ -191,22 +206,32 @@ export function restoreConfigBackup(backupPath: string, homeDir: string = proces
       validatePrivateTree(resolved);
       const state = path.join(resolved, "state");
       const config = path.join(resolved, "config");
-      if (fs.existsSync(state)) restorePrivateTree(state, path.join(homeDir, ".nexus"), new Set(["backups"]));
-      if (fs.existsSync(config)) restorePrivateTree(config, configRoot, new Set(["backups"]));
-      return true;
+      const sources = [];
+      if (fs.existsSync(state)) sources.push({ store: "state" as const, source: state, mode: "tree" as const });
+      if (fs.existsSync(config)) sources.push({ store: "config" as const, source: config, mode: "tree" as const });
+      return sources.length > 0 && restoreFromSources(homeDir, sources, onError);
     }
     // Legacy plain config backups are recognized by their canonical location
     // and name. Archives and arbitrary files must never become config.env.
     if (path.dirname(resolved) !== path.join(configRoot, "backups") || !/^config\.env\.bak\.[A-Za-z0-9T_.-]+$/.test(path.basename(resolved)) || !fs.lstatSync(resolved).isFile()) return false;
-    fs.mkdirSync(configRoot, { recursive:true, mode:0o700 });
-    if (fs.realpathSync(configRoot) !== path.resolve(configRoot)) return false;
-    const target = path.join(configRoot, "config.env");
-    if (fs.existsSync(target) && (!fs.lstatSync(target).isFile() || fs.realpathSync(target) !== target)) return false;
-    fs.copyFileSync(resolved, target);
-    fs.chmodSync(target, 0o600);
-    return true;
-  } catch { return false; }
+    return restoreFromSources(homeDir, [{ store:"config", source:resolved, mode:"file" }], onError);
+  } catch (error) {
+    try { onError?.(error); } catch {}
+    return false;
+  }
 }
+/** Keep permanent guard inodes even when rolling back to a backup without that store. */
+/** New clients serialize task/session multi-file snapshots in a fixed lock order. */
+function withDurableStoreGuards<T>(homeDir: string, callback: () => T): T {
+  const tasks = path.join(homeDir, ".nexus", "tasks");
+  const sessions = path.join(homeDir, ".nexus", "sessions");
+  for (const directory of [tasks, sessions]) {
+    fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
+    if (fs.realpathSync(directory) !== path.resolve(directory)) throw new Error("State store is redirected");
+  }
+  return withStateStoreGuard(tasks, () => withStateStoreGuard(sessions, callback));
+}
+
 function validatePrivateTree(source: string): void {
   if (fs.realpathSync(source) !== path.resolve(source)) throw new Error("Backup path is redirected");
   const stat = fs.lstatSync(source);
@@ -215,28 +240,56 @@ function validatePrivateTree(source: string): void {
 }
 function copyPrivateTree(source: string, destination: string, excluded = new Set<string>()): void {
   validatePrivateTreeExcept(source, excluded);
+  const existed = fs.existsSync(destination);
   fs.mkdirSync(destination, { recursive:true, mode:0o700 });
   if (fs.realpathSync(destination) !== path.resolve(destination)) throw new Error("Backup destination is redirected");
+  if (!existed) syncDirectory(path.dirname(destination));
   fs.chmodSync(destination, 0o700);
   for (const entry of fs.readdirSync(source, { withFileTypes:true })) {
-    if (excluded.has(entry.name)) continue;
+    if (excluded.has(entry.name) || entry.name === STATE_STORE_GUARD_FILE || entry.name === STATE_RESTORE_PENDING_FILE) continue;
     const from = path.join(source, entry.name), to = path.join(destination, entry.name);
     if (entry.isDirectory()) copyPrivateTree(from, to);
-    else {
-      try { if (fs.lstatSync(to).isSymbolicLink()) throw new Error("Restore destination is redirected"); } catch (error:any) { if (error.code !== "ENOENT") throw error; }
-      fs.copyFileSync(from, to); fs.chmodSync(to, 0o600);
-    }
+    else copyPrivateFileDurably(from, to);
   }
+  syncDirectory(destination);
 }
-function restorePrivateTree(source: string, destination: string, preserved = new Set<string>()): void {
-  if (fs.existsSync(destination)) validatePrivateTreeExcept(destination, preserved);
-  copyPrivateTree(source, destination);
-  for (const name of fs.readdirSync(destination)) {
-    if (preserved.has(name)) continue;
-    const from = path.join(source, name), to = path.join(destination, name);
-    if (!fs.existsSync(from)) fs.rmSync(to, { recursive:true, force:true });
-    else if (fs.lstatSync(from).isDirectory()) restorePrivateTree(from, to);
-  }
+
+/** A backup is not returned to the journal until its bytes and directory entry are durable. */
+function copyPrivateFileDurably(source: string, destination: string): void {
+  const sourcePath = path.resolve(source);
+  if (fs.realpathSync(sourcePath) !== sourcePath) throw new Error("Backup source is redirected");
+  const sourceFd = fs.openSync(sourcePath, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW ?? 0) | (fs.constants.O_NONBLOCK ?? 0));
+  let destinationFd: number | undefined;
+  let destinationCreated = false;
+  try {
+    const opened = fs.fstatSync(sourceFd);
+    const current = fs.lstatSync(sourcePath);
+    if (!opened.isFile() || current.isSymbolicLink() || opened.dev !== current.dev || opened.ino !== current.ino) {
+      throw new Error("Backup source changed while opening");
+    }
+    destinationFd = fs.openSync(destination, fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL | (fs.constants.O_NOFOLLOW ?? 0), 0o600);
+    destinationCreated = true;
+    const buffer = Buffer.alloc(64 * 1024);
+    let position = 0;
+    while (true) {
+      const count = fs.readSync(sourceFd, buffer, 0, buffer.length, position);
+      if (count === 0) break;
+      let written = 0;
+      while (written < count) written += fs.writeSync(destinationFd, buffer, written, count - written);
+      position += count;
+    }
+    fs.fchmodSync(destinationFd, 0o600);
+    fs.fsyncSync(destinationFd);
+    fs.closeSync(destinationFd);
+    destinationFd = undefined;
+    syncDirectory(path.dirname(destination));
+  } catch (error) {
+    if (destinationFd !== undefined) try { fs.closeSync(destinationFd); } catch {}
+    if (destinationCreated) {
+      try { fs.unlinkSync(destination); syncDirectory(path.dirname(destination)); } catch {}
+    }
+    throw error;
+  } finally { fs.closeSync(sourceFd); }
 }
 function validatePrivateTreeExcept(source: string, excluded: Set<string>): void {
   if (fs.realpathSync(source) !== path.resolve(source) || !fs.lstatSync(source).isDirectory()) throw new Error("State root is redirected");
@@ -258,52 +311,9 @@ export interface RecoveryOutcome {
  * power loss cannot wedge later upgrades, and no recursive takeover of a stale
  * gate directory is ever performed.
  */
-export interface ReclaimGuard {
-  path: string;
-  fd: number;
-}
+export type ReclaimGuard = FileGuard;
 
 const FLOCK_UTILITY = "/usr/bin/flock";
-const FLOCK_CONTENTION_EXIT = 75;
-
-/** Rejects a guard we do not solely own: wrong type, foreign owner, or permissive mode. */
-function validateGuardIdentity(guardPath: string, fd: number): void {
-  const self = fs.fstatSync(fd);
-  if (!self.isFile()) throw new Error("Reclaim guard is not a regular file");
-  if (typeof process.getuid === "function" && self.uid !== process.getuid()) throw new Error("Reclaim guard is not owned by the running user");
-  if ((self.mode & 0o077) !== 0) throw new Error(`Reclaim guard has unsafe permissions (${(self.mode & 0o777).toString(8)})`);
-  const current = fs.lstatSync(guardPath, { throwIfNoEntry:false });
-  if (!current?.isFile() || current.ino !== self.ino || current.dev !== self.dev) throw new Error("Reclaim guard path is redirected");
-}
-
-function openGuardFile(guardPath: string): number {
-  // Fail closed on platforms without no-follow/non-blocking open support.
-  if (fs.constants.O_NOFOLLOW === undefined || fs.constants.O_NONBLOCK === undefined) {
-    throw new Error("Reclaim guard requires O_NOFOLLOW/O_NONBLOCK open support");
-  }
-  let fd: number;
-  try {
-    // O_CREAT|O_EXCL never follows a symlink, so creation is race-free.
-    fd = fs.openSync(guardPath, fs.constants.O_RDWR | fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_NONBLOCK, 0o600);
-  } catch (error: any) {
-    if (error.code !== "EEXIST") throw error;
-    try {
-      // The kernel refuses to follow a symlinked path under O_NOFOLLOW (ELOOP)
-      // and O_NONBLOCK prevents any special file from blocking the open, so no
-      // check-to-open race exists; identity is then verified on the descriptor.
-      fd = fs.openSync(guardPath, fs.constants.O_RDWR | fs.constants.O_NONBLOCK | fs.constants.O_NOFOLLOW);
-    } catch (openError: any) {
-      if (openError.code === "ELOOP") throw new Error("Reclaim guard path is redirected");
-      throw openError;
-    }
-  }
-  try { validateGuardIdentity(guardPath, fd); }
-  catch (error) {
-    fs.closeSync(fd);
-    throw error;
-  }
-  return fd;
-}
 
 /**
  * Acquires the reclaim guard. Returns null on contention (another live
@@ -313,29 +323,11 @@ function openGuardFile(guardPath: string): number {
  * behavior without modifying the real system utility.
  */
 export function acquireReclaimGuard(guardPath: string, flockUtility: string = FLOCK_UTILITY): ReclaimGuard | null {
-  const fd = openGuardFile(guardPath);
-  try {
-    // The utility exits immediately; the lock persists on the shared open file
-    // description while this process keeps the descriptor open.
-    const probe = spawnSync(flockUtility, ["-n", "-E", String(FLOCK_CONTENTION_EXIT), "3"], { stdio:["ignore","ignore","ignore", fd], timeout: 2000 });
-    if (probe.error) throw new Error(`Reclaim guard utility ${flockUtility} is unavailable: ${probe.error.message}`);
-    if (probe.status === 0) return { path: guardPath, fd };
-    if (probe.status === FLOCK_CONTENTION_EXIT) {
-      // Contention is not ownership: close the descriptor so repeated busy
-      // recovery calls cannot leak it in a long-lived process.
-      fs.closeSync(fd);
-      return null;
-    }
-    throw new Error(`Reclaim guard acquisition failed (exit ${probe.status})`);
-  } catch (error) {
-    try { fs.closeSync(fd); } catch {}
-    throw error;
-  }
+  return acquireFileGuard(guardPath, { utility: flockUtility, label: "Reclaim guard" });
 }
 
 export function releaseReclaimGuard(guard: ReclaimGuard | null): void {
-  if (!guard) return;
-  try { fs.closeSync(guard.fd); } catch {}
+  releaseFileGuard(guard);
 }
 
 /**
@@ -380,11 +372,11 @@ export function recoverUpgrade(prefix: string, options: { forceRollback?: boolea
         }
         try {
           const currentStat = fs.lstatSync(lock, { throwIfNoEntry:false });
-          if (currentStat && currentStat.ino !== staleIno) return inProgress;
-          if (currentStat) {
+          if (!currentStat || currentStat.ino !== staleIno) return inProgress;
+          try {
             if (JSON.parse(fs.readFileSync(lock, "utf8")).pid !== holder.pid) return inProgress;
-            fs.unlinkSync(lock);
-          }
+          } catch { return inProgress; }
+          fs.unlinkSync(lock);
           acquire();
         } finally { releaseReclaimGuard(guard); }
       }

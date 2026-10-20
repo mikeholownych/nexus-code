@@ -1,0 +1,117 @@
+TAP version 13
+# Subtest: PLAN-08 PR-8c: Persistence retention, GC, and indexed sessions (REQ-PER-102, DEC-11, ACC-PER-02)
+    # Subtest: Session indexing with rebuild-on-miss and performance (1k sessions lists in < 500 ms)
+    ok 1 - Session indexing with rebuild-on-miss and performance (1k sessions lists in < 500 ms)
+      ---
+      duration_ms: 163.745354
+      ...
+    # Subtest: ACC-PER-02: seed 10k tasks and 2k sessions; gc --dry-run reports and gc brings store under cap
+    ok 2 - ACC-PER-02: seed 10k tasks and 2k sessions; gc --dry-run reports and gc brings store under cap
+      ---
+      duration_ms: 5543.377134
+      ...
+    # Subtest: Checkpoints git ref and snapshot pruning, flights pruning
+    ok 3 - Checkpoints git ref and snapshot pruning, flights pruning
+      ---
+      duration_ms: 150.948406
+      ...
+    # Subtest: Background daily GC: first-run acknowledgement, NEXUS_GC=auto, and 2s timeout bounding
+    ok 4 - Background daily GC: first-run acknowledgement, NEXUS_GC=auto, and 2s timeout bounding
+      ---
+      duration_ms: 3.846966
+      ...
+    # Subtest: Background daily GC: enforces single end-to-end deadline across planning, identity capture, and execution
+    ok 5 - Background daily GC: enforces single end-to-end deadline across planning, identity capture, and execution
+      ---
+      duration_ms: 9.97223
+      ...
+    # Subtest: Planning candidate selection and size cap sorting respects expired deadline
+    ok 6 - Planning candidate selection and size cap sorting respects expired deadline
+      ---
+      duration_ms: 3.655457
+      ...
+    # Subtest: Background daily GC: persists summary and lastRunAt even when work budget expires
+    ok 7 - Background daily GC: persists summary and lastRunAt even when work budget expires
+      ---
+      duration_ms: 4.571797
+      ...
+    # Subtest: Planning: bounded metadata streaming respects deadline and preserves pin protection on large legacy state envelopes
+    ok 8 - Planning: bounded metadata streaming respects deadline and preserves pin protection on large legacy state envelopes
+      ---
+      duration_ms: 86.809041
+      ...
+    1..8
+ok 1 - PLAN-08 PR-8c: Persistence retention, GC, and indexed sessions (REQ-PER-102, DEC-11, ACC-PER-02)
+  ---
+  duration_ms: 5968.872723
+  type: 'suite'
+  ...
+# Subtest: large escaped JSON metadata keeps pinned records and decodes Unicode workspaces
+ok 2 - large escaped JSON metadata keeps pinned records and decodes Unicode workspaces
+  ---
+  duration_ms: 19.48044
+  ...
+# Subtest: large metadata preserves the ordinary JSON pin value semantics
+ok 3 - large metadata preserves the ordinary JSON pin value semantics
+  ---
+  duration_ms: 28.169314
+  ...
+# Subtest: large escaped session identity keeps the current session out of retention
+ok 4 - large escaped session identity keeps the current session out of retention
+  ---
+  duration_ms: 8.719676
+  ...
+# Subtest: metadata reads remain bounded when a small envelope is replaced after stat
+ok 5 - metadata reads remain bounded when a small envelope is replaced after stat
+  ---
+  duration_ms: 25.501799
+  ...
+# Subtest: GC accounts for and removes message journals, history logs, and exact migration backups
+ok 6 - GC accounts for and removes message journals, history logs, and exact migration backups
+  ---
+  duration_ms: 10.053034
+  ...
+# Subtest: GC preserves all components of a record modified after planning
+ok 7 - GC preserves all components of a record modified after planning
+  ---
+  duration_ms: 5.501937
+  ...
+# Subtest: GC skips a store while its writer owns the kernel guard
+ok 8 - GC skips a store while its writer owns the kernel guard
+  ---
+  duration_ms: 8.289357
+  ...
+# Subtest: orphan journals and migration backups count toward the size cap and are collected together
+ok 9 - orphan journals and migration backups count toward the size cap and are collected together
+  ---
+  duration_ms: 4.159479
+  ...
+# Subtest: a newly published envelope cancels an orphan deletion plan
+ok 10 - a newly published envelope cancels an orphan deletion plan
+  ---
+  duration_ms: 5.321729
+  ...
+# Subtest: companion removal failure propagates into deletion disposition and preserves record status
+ok 11 - companion removal failure propagates into deletion disposition and preserves record status
+  ---
+  duration_ms: 5.126821
+  ...
+# Subtest: GC reads pin protection from the current envelope rather than a stale newer index
+ok 12 - GC reads pin protection from the current envelope rather than a stale newer index
+  ---
+  duration_ms: 6.28417
+  ...
+# Subtest: current and pinned tasks remain protected even during test-pollution cleanup
+ok 13 - current and pinned tasks remain protected even during test-pollution cleanup
+  ---
+  duration_ms: 2.635509
+  ...
+1..13
+# tests 20
+# suites 1
+# pass 20
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 6686.383438

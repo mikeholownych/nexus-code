@@ -2,7 +2,8 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
 import { execSync } from "node:child_process";
-import { ensurePrivateDir, writePrivateFile } from "./durable_file.js";
+import { tryStateStoreGuard } from "./state_store_guard.js";
+import { ensurePrivateDir, writePrivateFile, fsyncDirectoryDurably } from "./durable_file.js";
 
 export const DEFAULT_RETENTION_MAX_AGE_DAYS = 90; // DEC-11
 export const DEFAULT_RETENTION_MAX_SIZE_BYTES = 2 * 1024 * 1024 * 1024; // 2 GB (DEC-11)
@@ -15,6 +16,12 @@ export interface RetentionItem {
   id: string;
   primaryFile: string;
   associatedFiles: string[];
+  /** Exact file identities captured by planning; changed records must be replanned. */
+  fileIdentities?: Record<string, string | null>;
+  primaryIdentity?: string;
+  /** Missing envelope tracked when collecting an orphaned companion group. */
+  recordFile?: string;
+  orphan?: boolean;
   workspace?: string;
   gitRef?: string;
   sizeBytes: number;
@@ -31,6 +38,7 @@ export interface RetentionPolicyOptions {
   dryRun?: boolean;
   onlyTestPollution?: boolean;
   timeBudgetMs?: number;
+  deadline?: number;
   currentSessionId?: string;
   home?: string;
   workspace?: string;
@@ -104,13 +112,242 @@ function computeDirSize(dir: string, deadline?: number): number {
   return size;
 }
 
-export function scanTasks(tasksDir: string, checkTestPollution: boolean = false, deadline?: number): { items: RetentionItem[]; timedOut: boolean } {
+/** Index companion files once; scanning all names for every task would be quadratic. */
+function recordCompanions(directory: string, names: string[], deadline?: number): {
+  records: Map<string, { files: string[]; bytes: number; mtimeMs: number }>;
+  timedOut: boolean;
+} {
+  const records = new Map<string, { files: string[]; bytes: number; mtimeMs: number }>();
+  for (const name of names) {
+    if (deadline && Date.now() >= deadline) return { records, timedOut: true };
+    let identity: string | undefined;
+    if (name.endsWith(".messages.jsonl")) identity = name.slice(0, -".messages.jsonl".length);
+    else if (name.endsWith(".history.jsonl")) identity = name.slice(0, -".history.jsonl".length);
+    else identity = /^(.+)\.json\.pre-migration-v(?:0|[1-9]\d*)$/.exec(name)?.[1];
+    if (!identity) continue;
+    const file = path.join(directory, name);
+    try {
+      const stat = fs.lstatSync(file);
+      if (!stat.isFile()) continue;
+      const record = records.get(identity) ?? { files: [], bytes: 0, mtimeMs: 0 };
+      record.files.push(file);
+      record.bytes += stat.size;
+      record.mtimeMs = Math.max(record.mtimeMs, stat.mtimeMs);
+      records.set(identity, record);
+    } catch { /* A concurrently removed companion is already absent. */ }
+  }
+  return { records, timedOut: false };
+}
+
+/** Retain/account for failed first publications and interrupted cleanup without inventing an age grace. */
+function orphanCompanions(
+  directory: string, names: string[], records: Map<string, { files: string[]; bytes: number; mtimeMs: number }>,
+  kind: "task" | "session", currentSessionId?: string, deadline?: number,
+): { items: RetentionItem[]; timedOut: boolean } {
+  const present = new Set(names), items: RetentionItem[] = [];
+  for (const [id, record] of records) {
+    if (deadline && Date.now() >= deadline) return { items, timedOut: true };
+    if (present.has(`${id}.json`) || !/^[A-Za-z0-9._-]{1,160}$/.test(id) || id === "." || id === "..") continue;
+    const primaryFile = record.files[0];
+    items.push({ kind, id, primaryFile, primaryIdentity: fileIdentity(primaryFile) ?? undefined,
+      recordFile: path.join(directory, `${id}.json`), orphan: true,
+      associatedFiles: record.files.slice(1), sizeBytes: record.bytes, mtimeMs: record.mtimeMs,
+      current: currentSessionId === id });
+  }
+  return { items, timedOut: false };
+}
+
+interface EnvelopeMetadata {
+  workspace?: string;
+  pinned: boolean;
+  sessionId?: string;
+  taskId?: string;
+  id?: string;
+}
+
+const MAX_DIRECT_ENVELOPE_READ_BYTES = 64 * 1024; // 64 KiB
+const MAX_SCAN_CHUNK_BYTES = 64 * 1024; // 64 KiB
+const MAX_METADATA_KEY_BYTES = 128; // All recognized keys fit even when fully JSON-escaped.
+const MAX_METADATA_VALUE_BYTES = 24 * 1024; // A 4 KiB path with every byte JSON-escaped.
+
+function readEnvelopeMetadata(
+  filePath: string,
+  stat: fs.Stats,
+  deadline?: number
+): { metadata: EnvelopeMetadata; timedOut: boolean } {
+  if (deadline && Date.now() >= deadline) {
+    return { metadata: { pinned: false }, timedOut: true };
+  }
+
+  // Bounded streaming scanner for large legacy/unmigrated files.
+  // Avoids buffering multi-megabyte inline messages or allocating memory proportional to file size.
+  let fd: number | undefined;
+  let timedOut = false;
+  const result: EnvelopeMetadata = { pinned: false };
+  const buf = Buffer.alloc(MAX_SCAN_CHUNK_BYTES);
+  let unknownMetadata = false;
+
+  try {
+    fd = fs.openSync(filePath, fs.constants.O_RDONLY | (fs.constants.O_NONBLOCK ?? 0) | (fs.constants.O_NOFOLLOW ?? 0));
+    const opened = fs.fstatSync(fd);
+    if (!opened.isFile()) throw new Error("Envelope metadata requires a regular file");
+    // The planning stat is only a hint: an atomic publication can replace that
+    // file before open. Even growth after fstat cannot make this read unbounded.
+    if (stat.size <= MAX_DIRECT_ENVELOPE_READ_BYTES && opened.size <= MAX_DIRECT_ENVELOPE_READ_BYTES) {
+      const small = Buffer.alloc(MAX_DIRECT_ENVELOPE_READ_BYTES + 1);
+      let size = 0;
+      while (size < small.length) {
+        const count = fs.readSync(fd, small, size, small.length - size, size);
+        if (!count) break;
+        size += count;
+      }
+      if (size <= MAX_DIRECT_ENVELOPE_READ_BYTES) {
+        const parsed = JSON.parse(small.subarray(0, size).toString("utf8"));
+        return { metadata: {
+          workspace: typeof parsed.workspacePath === "string" ? parsed.workspacePath : (typeof parsed.workspace === "string" ? parsed.workspace : undefined),
+          pinned: Boolean(parsed.pinned),
+          sessionId: typeof parsed.sessionId === "string" ? parsed.sessionId : undefined,
+          taskId: typeof parsed.taskId === "string" ? parsed.taskId : undefined,
+          id: typeof parsed.id === "string" ? parsed.id : undefined,
+        }, timedOut: false };
+      }
+      // Positional reads leave fd at offset zero for the streaming fallback.
+    }
+    let depth = 0;
+    let inString = false;
+    let escaped = false;
+    let key = "";
+    let inKey = false;
+    let afterColon = false;
+    let val = "";
+    let inValString = false;
+    let stringOverflow = false;
+    let scalar = "";
+    const stringFields = new Set(["workspace", "workspacePath", "sessionId", "taskId", "id", "pinned"]);
+    const decodeString = (raw: string): string => JSON.parse('"' + Buffer.from(raw, "latin1").toString("utf8") + '"');
+    const appendByte = (byte: number) => {
+      if (inKey) {
+        if (key.length < MAX_METADATA_KEY_BYTES) key += String.fromCharCode(byte);
+        else stringOverflow = true;
+      } else if (inValString) {
+        if (val.length < MAX_METADATA_VALUE_BYTES) val += String.fromCharCode(byte);
+        else stringOverflow = true;
+      }
+    };
+    const finishPinnedScalar = () => {
+      if (!scalar) return;
+      try { result.pinned = Boolean(JSON.parse(scalar)); }
+      catch { unknownMetadata = true; }
+      scalar = ""; key = ""; afterColon = false;
+    };
+
+    while (true) {
+      if (deadline && Date.now() >= deadline) {
+        timedOut = true;
+        break;
+      }
+      const bytesRead = fs.readSync(fd, buf, 0, buf.length, null);
+      if (bytesRead === 0) break;
+
+      for (let i = 0; i < bytesRead; i++) {
+        const byte = buf[i];
+        if (inString) {
+          if (escaped) {
+            escaped = false;
+            appendByte(byte);
+          } else if (byte === 92) { // \
+            appendByte(byte); // Preserve the escape for JSON.parse, including chunk boundaries.
+            escaped = true;
+          } else if (byte === 34) { // "
+            inString = false;
+            if (inKey) {
+              inKey = false;
+              key = stringOverflow ? "" : decodeString(key);
+              afterColon = false;
+            } else if (inValString) {
+              inValString = false;
+              if (stringOverflow) unknownMetadata = true;
+              else {
+                const value = decodeString(val);
+                if (key === "workspace" || key === "workspacePath") result.workspace = value;
+                else if (key === "sessionId") result.sessionId = value;
+                else if (key === "taskId") result.taskId = value;
+                else if (key === "id") result.id = value;
+                else if (key === "pinned") result.pinned = Boolean(value);
+              }
+              key = "";
+              val = "";
+            }
+          } else {
+            appendByte(byte);
+          }
+          continue;
+        }
+
+        if (byte === 34) { // "
+          inString = true;
+          if (depth === 1 && !afterColon) {
+            inKey = true;
+            key = "";
+            stringOverflow = false;
+          } else if (depth === 1 && afterColon) {
+            inValString = stringFields.has(key);
+            val = "";
+            stringOverflow = false;
+          }
+          continue;
+        }
+
+        if (byte === 123 || byte === 91) { // { or [
+          if (depth === 1 && afterColon && key === "pinned") {
+            result.pinned = true; key = ""; afterColon = false;
+          }
+          depth++;
+          continue;
+        }
+        if (byte === 125 || byte === 93) { // } or ]
+          if (depth === 1) finishPinnedScalar();
+          depth--;
+          if (depth === 0) break;
+          continue;
+        }
+
+        if (depth === 1) {
+          if (byte === 58) { // :
+            afterColon = true;
+          } else if (byte === 44) { // ,
+            finishPinnedScalar();
+            afterColon = false;
+            key = "";
+          } else if (afterColon && key === "pinned") {
+            if (byte === 32 || byte === 9 || byte === 10 || byte === 13) finishPinnedScalar();
+            else if (scalar.length < MAX_METADATA_KEY_BYTES) scalar += String.fromCharCode(byte);
+            else unknownMetadata = true;
+          }
+        }
+      }
+      if (depth === 0) break;
+    }
+  } catch {
+    // Read errors retain existing defaults
+  } finally {
+    if (fd !== undefined) {
+      try { fs.closeSync(fd); } catch {}
+    }
+  }
+
+  return { metadata: unknownMetadata ? { ...result, pinned: true } : result, timedOut };
+}
+
+export function scanTasks(tasksDir: string, checkTestPollution: boolean = false, deadline?: number, currentSessionId?: string): { items: RetentionItem[]; timedOut: boolean } {
   const items: RetentionItem[] = [];
   let timedOut = false;
   if (!fs.existsSync(tasksDir)) return { items, timedOut };
 
   try {
     const entries = fs.readdirSync(tasksDir);
+    const companions = recordCompanions(tasksDir, entries, deadline);
+    if (companions.timedOut) return { items: [], timedOut: true };
     for (const name of entries) {
       if (deadline && Date.now() >= deadline) {
         timedOut = true;
@@ -123,46 +360,38 @@ export function scanTasks(tasksDir: string, checkTestPollution: boolean = false,
       if (!stat || !stat.isFile()) continue;
 
       const cleanId = name.replace(/\.json$/, "");
-      const historyFile = path.join(tasksDir, `${cleanId}.history.jsonl`);
-      const histStat = safeStat(historyFile);
-
-      let totalSize = stat.size + (histStat ? histStat.size : 0);
-      const associatedFiles: string[] = [];
-      if (histStat) associatedFiles.push(historyFile);
+      const companion = companions.records.get(cleanId);
+      const totalSize = stat.size + (companion?.bytes ?? 0);
+      const associatedFiles = companion?.files ?? [];
 
       let isPollution = false;
       let ws: string | undefined;
-
-      // Extract workspace if test pollution filtering is active
-      if (checkTestPollution) {
-        try {
-          // Read up to first 2 KB to get workspacePath quickly
-          const fd = fs.openSync(fullPath, "r");
-          const buf = Buffer.alloc(2048);
-          const bytesRead = fs.readSync(fd, buf, 0, 2048, 0);
-          fs.closeSync(fd);
-          const head = buf.toString("utf8", 0, bytesRead);
-          const match = head.match(/"workspace(?:Path)?"\s*:\s*"([^"]+)"/);
-          if (match) {
-            ws = match[1];
-            isPollution = isTestPollutionPath(ws);
-          }
-        } catch {
-          // fallback to full parse if needed
-        }
+      let pinned = false, current = currentSessionId === cleanId;
+      const { metadata, timedOut: readTimedOut } = readEnvelopeMetadata(fullPath, stat, deadline);
+      if (readTimedOut) {
+        timedOut = true;
+        break;
       }
+      ws = metadata.workspace;
+      pinned = metadata.pinned;
+      current ||= Boolean(currentSessionId && currentSessionId === (metadata.sessionId || metadata.id));
+      isPollution = checkTestPollution && isTestPollutionPath(ws);
 
       items.push({
         kind: "task",
         id: cleanId,
         primaryFile: fullPath,
+        primaryIdentity: statIdentity(stat),
         associatedFiles,
         workspace: ws,
+        pinned, current,
         sizeBytes: totalSize,
         mtimeMs: stat.mtimeMs,
         testPollution: isPollution,
       });
     }
+    const orphans = orphanCompanions(tasksDir, entries, companions.records, "task", currentSessionId, deadline);
+    items.push(...orphans.items); timedOut ||= orphans.timedOut;
   } catch {}
 
   return { items, timedOut };
@@ -177,6 +406,12 @@ export function scanSessions(
   const items: RetentionItem[] = [];
   let timedOut = false;
   if (!fs.existsSync(sessionsDir)) return { items, timedOut };
+  let entries: string[];
+  try { entries = fs.readdirSync(sessionsDir); }
+  catch { return { items, timedOut }; }
+  const companions = recordCompanions(sessionsDir, entries, deadline);
+  if (companions.timedOut) return { items: [], timedOut: true };
+  const presentNames = new Set(entries);
 
   // Fast path: try index.json if present
   const indexPath = path.join(sessionsDir, "index.json");
@@ -191,28 +426,37 @@ export function scanSessions(
             timedOut = true;
             break;
           }
+          if (!presentNames.has(`${cleanId}.json`)) continue;
           const primaryFile = path.join(sessionsDir, `${cleanId}.json`);
           const stat = safeStat(primaryFile);
           if (!stat) continue;
 
+          // Cached pin/workspace/identity fields are advisory: expiry must use
+          // the current envelope even if an index timestamp appears newer.
+          const { metadata, timedOut: readTimedOut } = readEnvelopeMetadata(primaryFile, stat, deadline);
+          if (readTimedOut) {
+            timedOut = true;
+            break;
+          }
+          const actualId = metadata.sessionId || metadata.taskId || metadata.id || cleanId;
+          const workspace = metadata.workspace;
           knownFromIndex.add(cleanId);
-          const historyFile = path.join(sessionsDir, `${cleanId}.history.jsonl`);
-          const histStat = safeStat(historyFile);
-          const associatedFiles: string[] = [];
-          if (histStat) associatedFiles.push(historyFile);
+          const companion = companions.records.get(cleanId);
+          const associatedFiles = companion?.files ?? [];
 
-          const isCurrent = Boolean(currentSessionId && (currentSessionId === cleanId || currentSessionId === entry.id));
-          const isPollution = checkTestPollution ? isTestPollutionPath(entry.workspace) : false;
+          const isCurrent = Boolean(currentSessionId && (currentSessionId === cleanId || currentSessionId === actualId));
+          const isPollution = checkTestPollution ? isTestPollutionPath(workspace) : false;
 
           items.push({
             kind: "session",
-            id: entry.id || cleanId,
+            id: actualId,
             primaryFile,
+            primaryIdentity: statIdentity(stat),
             associatedFiles,
-            workspace: entry.workspace,
-            sizeBytes: stat.size + (histStat ? histStat.size : 0),
+            workspace,
+            sizeBytes: stat.size + (companion?.bytes ?? 0),
             mtimeMs: stat.mtimeMs,
-            pinned: Boolean(entry.pinned),
+            pinned: metadata.pinned,
             current: isCurrent,
             testPollution: isPollution,
           });
@@ -223,7 +467,6 @@ export function scanSessions(
 
   // Scan any session files not found in the index
   try {
-    const entries = fs.readdirSync(sessionsDir);
     for (const name of entries) {
       if (deadline && Date.now() >= deadline) {
         timedOut = true;
@@ -237,22 +480,17 @@ export function scanSessions(
       const stat = safeStat(fullPath);
       if (!stat || !stat.isFile()) continue;
 
-      const historyFile = path.join(sessionsDir, `${cleanId}.history.jsonl`);
-      const histStat = safeStat(historyFile);
-      const associatedFiles: string[] = [];
-      if (histStat) associatedFiles.push(historyFile);
+      const companion = companions.records.get(cleanId);
+      const associatedFiles = companion?.files ?? [];
 
-      let ws: string | undefined;
-      let pinned = false;
-      let realId = cleanId;
-
-      try {
-        const content = fs.readFileSync(fullPath, "utf8");
-        const data = JSON.parse(content);
-        realId = data.sessionId || data.taskId || data.id || cleanId;
-        ws = data.workspacePath || data.workspace;
-        pinned = Boolean(data.pinned);
-      } catch {}
+      const { metadata, timedOut: readTimedOut } = readEnvelopeMetadata(fullPath, stat, deadline);
+      if (readTimedOut) {
+        timedOut = true;
+        break;
+      }
+      const realId = metadata.sessionId || metadata.taskId || metadata.id || cleanId;
+      const ws = metadata.workspace;
+      const pinned = metadata.pinned;
 
       const isCurrent = Boolean(currentSessionId && (currentSessionId === cleanId || currentSessionId === realId));
       const isPollution = checkTestPollution ? isTestPollutionPath(ws) : false;
@@ -261,9 +499,10 @@ export function scanSessions(
         kind: "session",
         id: realId,
         primaryFile: fullPath,
+        primaryIdentity: statIdentity(stat),
         associatedFiles,
         workspace: ws,
-        sizeBytes: stat.size + (histStat ? histStat.size : 0),
+        sizeBytes: stat.size + (companion?.bytes ?? 0),
         mtimeMs: stat.mtimeMs,
         pinned,
         current: isCurrent,
@@ -272,6 +511,8 @@ export function scanSessions(
     }
   } catch {}
 
+  const orphans = orphanCompanions(sessionsDir, entries, companions.records, "session", currentSessionId, deadline);
+  items.push(...orphans.items); timedOut ||= orphans.timedOut;
   return { items, timedOut };
 }
 
@@ -371,6 +612,30 @@ export function scanFlights(flightsDir: string, deadline?: number): { items: Ret
   return { items, timedOut };
 }
 
+function statIdentity(stat: fs.Stats): string {
+  return [stat.dev, stat.ino, stat.mode, stat.size, stat.mtimeMs, stat.ctimeMs].join(":");
+}
+
+function fileIdentity(file: string): string | null {
+  try {
+    const stat = fs.lstatSync(file);
+    return statIdentity(stat);
+  } catch (error: any) { if (error.code === "ENOENT") return null; throw error; }
+}
+
+function captureRecordIdentities(item: RetentionItem): void {
+  if (item.kind !== "task" && item.kind !== "session") return;
+  const recordFile = item.recordFile ?? item.primaryFile;
+  const stem = recordFile.replace(/\.json$/, "");
+  const files = new Set([recordFile, item.primaryFile, ...item.associatedFiles,
+    `${stem}.messages.jsonl`, `${stem}.history.jsonl`,
+    `${recordFile}.pre-migration-v0`, `${recordFile}.pre-migration-v1`]);
+  item.fileIdentities = Object.fromEntries([...files].map(file => [file, fileIdentity(file)]));
+  // A record replaced between scan and identity capture must never inherit the
+  // old record's expiry decision. Force execution to skip and replan it.
+  if (item.primaryIdentity !== item.fileIdentities[item.primaryFile]) item.fileIdentities[item.primaryFile] = "changed-during-scan";
+}
+
 /**
  * Plan garbage collection according to age, size cap, and test pollution rules (REQ-PER-102, DEC-11).
  */
@@ -379,7 +644,9 @@ export function planRetention(options: RetentionPolicyOptions = {}): RetentionPl
   const home = options.home || os.homedir();
   const maxAgeDays = options.maxAgeDays !== undefined ? options.maxAgeDays : DEFAULT_RETENTION_MAX_AGE_DAYS;
   const maxSizeBytes = options.maxSizeBytes !== undefined ? options.maxSizeBytes : DEFAULT_RETENTION_MAX_SIZE_BYTES;
-  const deadline = options.timeBudgetMs ? startTime + options.timeBudgetMs : undefined;
+  const deadline = options.deadline !== undefined
+    ? options.deadline
+    : (options.timeBudgetMs !== undefined ? startTime + options.timeBudgetMs : undefined);
 
   const nexusDir = path.join(home, ".nexus");
   const tasksDir = path.join(nexusDir, "tasks");
@@ -389,7 +656,7 @@ export function planRetention(options: RetentionPolicyOptions = {}): RetentionPl
 
   let timedOut = false;
 
-  const { items: tasks, timedOut: tOut1 } = scanTasks(tasksDir, Boolean(options.onlyTestPollution), deadline);
+  const { items: tasks, timedOut: tOut1 } = scanTasks(tasksDir, Boolean(options.onlyTestPollution), deadline, options.currentSessionId);
   if (tOut1) timedOut = true;
 
   const { items: sessions, timedOut: tOut2 } = scanSessions(sessionsDir, options.currentSessionId, Boolean(options.onlyTestPollution), deadline);
@@ -405,6 +672,11 @@ export function planRetention(options: RetentionPolicyOptions = {}): RetentionPl
 
   let totalScannedBytes = 0;
   for (const item of allItems) {
+    if (deadline && Date.now() >= deadline) {
+      timedOut = true;
+      break;
+    }
+    captureRecordIdentities(item);
     totalScannedBytes += item.sizeBytes;
   }
 
@@ -414,7 +686,11 @@ export function planRetention(options: RetentionPolicyOptions = {}): RetentionPl
   // Case 1: --only-test-pollution
   if (options.onlyTestPollution) {
     for (const item of allItems) {
-      if (item.testPollution) {
+      if (deadline && Date.now() >= deadline) {
+        timedOut = true;
+        break;
+      }
+      if (item.testPollution && !item.pinned && !item.current) {
         item.reason = "test_pollution";
         reclaimable.push(item);
         reclaimableSet.add(item.primaryFile);
@@ -426,6 +702,10 @@ export function planRetention(options: RetentionPolicyOptions = {}): RetentionPl
 
     // Phase A: Expired by age
     for (const item of allItems) {
+      if (deadline && Date.now() >= deadline) {
+        timedOut = true;
+        break;
+      }
       if (item.pinned || item.current) continue;
       if (item.mtimeMs < cutoffAgeMs) {
         item.reason = "expired_age";
@@ -438,18 +718,28 @@ export function planRetention(options: RetentionPolicyOptions = {}): RetentionPl
     let survivingBytes = 0;
     const survivingCandidates: RetentionItem[] = [];
 
-    for (const item of allItems) {
-      if (reclaimableSet.has(item.primaryFile)) continue;
-      survivingBytes += item.sizeBytes;
-      if (!item.pinned && !item.current) {
-        survivingCandidates.push(item);
+    if (!timedOut) {
+      for (const item of allItems) {
+        if (deadline && Date.now() >= deadline) {
+          timedOut = true;
+          break;
+        }
+        if (reclaimableSet.has(item.primaryFile)) continue;
+        survivingBytes += item.sizeBytes;
+        if (!item.pinned && !item.current) {
+          survivingCandidates.push(item);
+        }
       }
     }
 
-    if (survivingBytes > maxSizeBytes) {
+    if (!timedOut && survivingBytes > maxSizeBytes) {
       // Sort oldest first
       survivingCandidates.sort((a, b) => a.mtimeMs - b.mtimeMs);
       for (const item of survivingCandidates) {
+        if (deadline && Date.now() >= deadline) {
+          timedOut = true;
+          break;
+        }
         if (survivingBytes <= maxSizeBytes) break;
         item.reason = "size_cap_exceeded";
         reclaimable.push(item);
@@ -468,6 +758,10 @@ export function planRetention(options: RetentionPolicyOptions = {}): RetentionPl
 
   let reclaimableBytes = 0;
   for (const item of reclaimable) {
+    if (deadline && Date.now() >= deadline) {
+      timedOut = true;
+      break;
+    }
     reclaimableBytes += item.sizeBytes;
     byKind[item.kind].count++;
     byKind[item.kind].bytes += item.sizeBytes;
@@ -488,16 +782,46 @@ export function planRetention(options: RetentionPolicyOptions = {}): RetentionPl
 /**
  * Execute retention plan: removes eligible files and git refs (REQ-PER-102, DEC-11).
  */
-export function executeRetention(plan: RetentionPlan, options: { dryRun?: boolean; timeBudgetMs?: number } = {}): GcExecutionResult {
+export function executeRetention(plan: RetentionPlan, options: { dryRun?: boolean; timeBudgetMs?: number; deadline?: number } = {}): GcExecutionResult {
+  const directories = [...new Set(plan.reclaimableItems.filter(item => item.kind === "task" || item.kind === "session").map(item => path.dirname(item.primaryFile)))].sort();
+  const busy = new Set<string>();
+  function locked(index: number): GcExecutionResult {
+    if (options.dryRun || index === directories.length) {
+      return executeRetentionLocked({ ...plan, reclaimableItems: plan.reclaimableItems.filter(item => !busy.has(path.dirname(item.primaryFile))) }, options);
+    }
+    const directory = directories[index];
+    let result: ReturnType<typeof tryStateStoreGuard<GcExecutionResult>>;
+    let entered = false;
+    try { result = tryStateStoreGuard(directory, () => { entered = true; return locked(index + 1); }); }
+    catch (error: any) {
+      if (entered) throw error;
+      // Preserve records when a store cannot be safely locked.
+      busy.add(directory);
+      const next = locked(index + 1);
+      next.errors.push({ path: directory, error: error?.message || String(error) });
+      return next;
+    }
+    if (result.acquired) return result.value;
+    busy.add(directory);
+    const next = locked(index + 1);
+    next.errors.push({ path: directory, error: "State store is busy; collection skipped" });
+    return next;
+  }
+  return locked(0);
+}
+
+function executeRetentionLocked(plan: RetentionPlan, options: { dryRun?: boolean; timeBudgetMs?: number; deadline?: number }): GcExecutionResult {
   const startTime = Date.now();
   const dryRun = Boolean(options.dryRun);
-  const deadline = options.timeBudgetMs ? startTime + options.timeBudgetMs : undefined;
+  const deadline = options.deadline !== undefined
+    ? options.deadline
+    : (options.timeBudgetMs !== undefined ? startTime + options.timeBudgetMs : undefined);
 
   let deletedCount = 0;
   let deletedBytes = 0;
   const deletedItems: RetentionItem[] = [];
   const errors: Array<{ path: string; error: string }> = [];
-  let timedOut = false;
+  let timedOut = Boolean(plan.timedOut);
 
   const byKind: Record<RetentionItemKind, { count: number; bytes: number }> = {
     task: { count: 0, bytes: 0 },
@@ -523,7 +847,27 @@ export function executeRetention(plan: RetentionPlan, options: { dryRun?: boolea
       continue;
     }
 
+    if (item.kind === "task" || item.kind === "session") {
+      const identities = item.fileIdentities;
+      if (!identities || Object.entries(identities).some(([file, identity]) => fileIdentity(file) !== identity)) {
+        errors.push({ path: item.primaryFile, error: "Record changed since planning; collection skipped" });
+        continue;
+      }
+    }
     let success = true;
+    const durableTaskRecord = item.kind === "task" || item.kind === "session";
+
+    // For schema-2 task/session records, companion logs are part of the
+    // committed record. Ensure the primary directory is syncable before any
+    // mutation, including when the plan is collecting an orphan group.
+    if (durableTaskRecord) {
+      try {
+        fsyncDirectoryDurably(path.dirname(item.primaryFile));
+      } catch (err: any) {
+        errors.push({ path: path.dirname(item.primaryFile), error: err?.message || String(err) });
+        continue;
+      }
+    }
 
     // Delete primary file
     try {
@@ -534,6 +878,21 @@ export function executeRetention(plan: RetentionPlan, options: { dryRun?: boolea
       success = false;
       errors.push({ path: item.primaryFile, error: err?.message || String(err) });
     }
+
+    // Make primary removal durable before removing its associated files. If
+    // syncing fails, preserve the companions so a surviving primary stays
+    // readable and retryable after recovery.
+    if (success && durableTaskRecord) {
+      try {
+        fsyncDirectoryDurably(path.dirname(item.primaryFile));
+      } catch (err: any) {
+        success = false;
+        errors.push({ path: path.dirname(item.primaryFile), error: err?.message || String(err) });
+      }
+    }
+
+    // A failed primary removal must never leave a live envelope without its log.
+    if (!success) continue;
 
     // Delete associated files (history, snapshots)
     for (const assoc of item.associatedFiles) {
@@ -547,25 +906,38 @@ export function executeRetention(plan: RetentionPlan, options: { dryRun?: boolea
           }
         }
       } catch (err: any) {
+        success = false;
         errors.push({ path: assoc, error: err?.message || String(err) });
       }
     }
 
-    // If checkpoint has gitRef, prune git ref
-    if (item.kind === "checkpoint" && item.gitRef && item.workspace) {
-      try {
-        execSync(`git update-ref -d refs/nexus/checkpoints/${item.id}`, {
-          cwd: item.workspace,
-          stdio: "ignore",
-        });
-      } catch {}
-    }
-
-    if (item.kind === "session") {
-      sessionsRemoved.push(item.id);
+    if (success && durableTaskRecord && item.associatedFiles.length > 0) {
+      const directories = new Set(item.associatedFiles.map(file => path.dirname(file)));
+      for (const directory of directories) {
+        try {
+          fsyncDirectoryDurably(directory);
+        } catch (err: any) {
+          success = false;
+          errors.push({ path: directory, error: err?.message || String(err) });
+        }
+      }
     }
 
     if (success) {
+      // If checkpoint has gitRef, prune git ref
+      if (item.kind === "checkpoint" && item.gitRef && item.workspace) {
+        try {
+          execSync(`git update-ref -d refs/nexus/checkpoints/${item.id}`, {
+            cwd: item.workspace,
+            stdio: "ignore",
+          });
+        } catch {}
+      }
+
+      if (item.kind === "session") {
+        sessionsRemoved.push(item.id);
+      }
+
       deletedCount++;
       deletedBytes += item.sizeBytes;
       deletedItems.push(item);
@@ -615,8 +987,15 @@ export function executeRetention(plan: RetentionPlan, options: { dryRun?: boolea
  * Execute retention GC directly from policy options (REQ-PER-102, DEC-11).
  */
 export function runRetentionGc(options: RetentionPolicyOptions = {}): GcExecutionResult {
-  const plan = planRetention(options);
-  return executeRetention(plan, { dryRun: options.dryRun, timeBudgetMs: options.timeBudgetMs });
+  const startTime = Date.now();
+  const deadline = options.deadline !== undefined
+    ? options.deadline
+    : (options.timeBudgetMs !== undefined ? startTime + options.timeBudgetMs : undefined);
+  const plan = planRetention({ ...options, deadline });
+  const remainingBudgetMs = deadline !== undefined ? Math.max(0, deadline - Date.now()) : options.timeBudgetMs;
+  const result = executeRetention(plan, { dryRun: options.dryRun, deadline, timeBudgetMs: remainingBudgetMs });
+  result.durationMs = Date.now() - startTime;
+  return result;
 }
 
 export function getGcState(home: string = os.homedir()): GcState {
@@ -647,7 +1026,7 @@ export function acknowledgeDailyGc(home: string = os.homedir()): GcState {
 /**
  * Background daily GC runner with first-run acknowledgement check (REQ-PER-102, DEC-11).
  */
-export async function maybeRunDailyGc(options: { home?: string; force?: boolean } = {}): Promise<{
+export async function maybeRunDailyGc(options: { home?: string; force?: boolean; timeBudgetMs?: number; deadline?: number } = {}): Promise<{
   status: "ran" | "already_ran_today" | "disabled" | "needs_acknowledgement";
   summary?: GcExecutionResult;
   notice?: string;
@@ -679,11 +1058,20 @@ export async function maybeRunDailyGc(options: { home?: string; force?: boolean 
     }
   }
 
-  // Run bounded GC (2 s budget)
+  const budgetMs = options.timeBudgetMs ?? DEFAULT_AUTO_GC_TIME_BUDGET_MS;
+  const deadline = options.deadline !== undefined ? options.deadline : (Date.now() + budgetMs);
+
+  // Run bounded GC (2 s default budget).
+  // The stated 2s time budget bounds the expensive filesystem discovery, planning,
+  // and deletion workload in runRetentionGc. Daily GC summary persistence (setGcState)
+  // intentionally executes immediately after the bounded run to commit the run timestamp
+  // and execution metrics. This prevents repeated GC passes on the same day when a pass
+  // reaches its deadline.
   const result = runRetentionGc({
     home,
     dryRun: false,
-    timeBudgetMs: DEFAULT_AUTO_GC_TIME_BUDGET_MS,
+    deadline,
+    timeBudgetMs: budgetMs,
   });
 
   gcState.lastRunAt = new Date().toISOString();
