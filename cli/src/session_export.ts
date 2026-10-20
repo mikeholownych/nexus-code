@@ -93,12 +93,16 @@ export function buildSessionExport(manager: SessionManager, session: SessionData
 }
 
 /**
- * Escape a value for a Markdown table cell. Backslashes are escaped first, then pipes, so an
- * existing backslash (e.g. from `\|` in the source) cannot neutralise the pipe escape and break
- * the surrounding table row (CodeQL js/incomplete-sanitization).
+ * Escape a value for a Markdown table cell. Newlines are normalized to spaces first so they
+ * cannot terminate the table row; backslashes are escaped next, then pipes, so an existing
+ * backslash (e.g. from `\|` in the source) cannot neutralise the pipe escape and break the
+ * surrounding table row (CodeQL js/incomplete-sanitization).
  */
 export function escapeTableCell(value: string): string {
-  return value.replace(/\\/g, "\\\\").replace(/\|/g, "\\|");
+  return value
+    .replace(/\r\n|\r|\n/g, " ")
+    .replace(/\\/g, "\\\\")
+    .replace(/\|/g, "\\|");
 }
 
 function markdownExport(session: SessionData, history: HistoryCompleteness, archived: ChatMessage[]): string {
@@ -120,7 +124,7 @@ function markdownExport(session: SessionData, history: HistoryCompleteness, arch
     const gating = gatingRequirements(objective);
     if (gating.length) {
       out.push("| Requirement | Status | Evidence / note |", "|---|---|---|");
-      for (const r of gating) out.push(`| ${r.id} ${escapeTableCell(r.text)} | ${r.status} | ${escapeTableCell([...r.evidence, r.note ?? ""].filter(Boolean).join("; "))} |`);
+      for (const r of gating) out.push(`| ${escapeTableCell(r.id)} ${escapeTableCell(r.text)} | ${escapeTableCell(r.status)} | ${escapeTableCell([...r.evidence, r.note ?? ""].filter(Boolean).join("; "))} |`);
       out.push("");
     }
     if (objective.outcome) {

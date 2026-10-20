@@ -20,4 +20,15 @@ describe("escapeTableCell", () => {
   test("leaves ordinary text untouched", () => {
     assert.equal(escapeTableCell("plain text"), "plain text");
   });
+
+  test("normalizes newlines to spaces so they cannot terminate a table row", () => {
+    assert.equal(escapeTableCell("a\nb"), "a b");
+    assert.equal(escapeTableCell("a\r\nb"), "a b");
+    assert.equal(escapeTableCell("a\rb"), "a b");
+  });
+
+  test("escapes pipe and backslash in requirement id and status cells too", () => {
+    assert.equal(escapeTableCell("req-1 | injected"), "req-1 \\| injected");
+    assert.equal(escapeTableCell("pass\\fail"), "pass\\\\fail");
+  });
 });
