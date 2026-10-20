@@ -30,7 +30,7 @@ M0 Foundation ──► M1 Safety floor ─────────────�
 | **RC1** | Tag `v1.0.0-rc.1` (owner approves publishing a prerelease; X7) | RC build installed through the documented command | G0–G4 green on the RC commit | <1 ed |
 | **M5 Qualification** | PLAN-10 task 11 (T2 held-out 5×, T3, T4, standalone stripped-proxy profiles, provider verify); task 12 (terminal matrix); ACC-SUP-08 cross-runner reproducibility; independent acceptance (X5) of continuity and of the RC | Qualification evidence archive, scorer verdict table, independent reports | **G5**: ACCEPTANCE §4–§8 all PASS | 10–20 calendar days. About 84 h of serial inference for T2, plus T3/T4/standalone. Excludes fix loops. |
 | **Fix loop(s)** | Defects found in M5, landed as `rc.N` | Re-run the failed gate subsets, plus regression subsets | G5 | 0–15 ed per loop (unknown) |
-| **M6 Release** | PLAN-09 task 7 (ledger enforce mode, final statuses); docs sign-off; release notes; tag `v1.0.0` (X7) | Published v1.0.0 with notices, SBOM and attestation | **G6**: ACCEPTANCE §10 checklist | 2–4 ed |
+| **M6 Release** | PLAN-09 task 7 (verify source-ledger statuses and references were reconciled before RC tagging/artifact construction; record exact-RC dispositions in the acceptance record without mutating the accepted RC source; enforce mode is active before RC); docs sign-off; release notes; tag `v1.0.0` (X7) | Published v1.0.0 with notices, SBOM and attestation | **G6**: ACCEPTANCE §10 checklist | 2–4 ed |
 
 **Total implementation:** about 46–78 ed (the sum of M0–M4 and M6). **Qualification:** 2–4 calendar weeks. **Fix loops:** unknown. A plausible range is 0–2 loops.
 
