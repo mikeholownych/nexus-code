@@ -25,44 +25,62 @@ function encodedRunTokens(run: string): number | undefined {
 // - at least len/3 for base64-like and long unbroken runs
 // DEC-17: the >= 1/char floor deliberately over-estimates merging scripts (CJK 2.0x, Hangul 1.67x vs the
 // pinned tokenizer) and takes precedence over ACC-VER-07's 1.5x band; never under-estimate (context overflow).
-const BPE_REGEX = /[A-Za-z0-9+/=_-]{16,}|'s|'t|'re|'ve|'m|'ll|'d| ?[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}]| ?\p{L}+| ?\p{N}| ?[^\s\p{L}\p{N}]+|\s+(?!\S)|\s+/gu;
+// Keep whitespace out of this expression. The prior overlapping `\s+(?!\S)|\s+`
+// alternatives trigger CodeQL's polynomial-backtracking finding on long whitespace runs.
+// Whitespace is scanned linearly below, preserving the prior rule that leaves one trailing
+// whitespace code unit available to prefix the next token when possible.
+const BPE_TOKEN_REGEX = /[A-Za-z0-9+/=_-]{16,}|'s|'t|'re|'ve|'m|'ll|'d| ?[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}]| ?\p{L}+| ?\p{N}| ?[^\s\p{L}\p{N}]+/uy;
 
 /**
  * Fast, conservative BPE token counter estimation for local and remote LLMs
  */
 export function countTokens(text: string | null | undefined): number {
   if (!text) return 0;
-  const matches = text.match(BPE_REGEX);
-  if (!matches) {
-    return Math.ceil(text.length / 3);
-  }
   let count = 0;
-  for (const m of matches) {
-    if (ALL_DIGITS_RE.test(m)) {
-      count += m.trim().length;
+  let offset = 0;
+  while (offset < text.length) {
+    BPE_TOKEN_REGEX.lastIndex = offset;
+    const token = BPE_TOKEN_REGEX.exec(text)?.[0];
+    if (token) {
+      count += estimateTokenChunk(token);
+      offset += token.length;
       continue;
     }
-    const encoded = encodedRunTokens(m);
-    if (encoded !== undefined) {
-      count += encoded;
-      continue;
-    }
-    const trimmed = m.trimStart();
-    if (trimmed.length > 0 && !/\s/.test(trimmed) && !CJK_KANA_HANGUL_RE.test(trimmed)) {
-      const codePoints = Array.from(trimmed);
-      if (codePoints.some((cp) => (cp.codePointAt(0) ?? 0) > 0xffff)) {
-        count += codePoints.length;
-        continue;
-      }
-    }
-    if (m.length > 8) {
-      // Long unbroken words/identifiers: ~3 chars per token (REQ-AGT-118 floor)
-      count += Math.ceil(m.length / 3);
-    } else {
+
+    // Match the previous `\s+(?!\S)|\s+` behavior without regex backtracking: a final run
+    // is consumed whole; a run before non-whitespace leaves one code unit for an optional
+    // single-space prefix on the following token. A one-code-unit run is consumed whole.
+    if (!/\s/u.test(text[offset])) {
+      // All non-whitespace code points are covered by BPE_TOKEN_REGEX. Keep a conservative
+      // fallback for any future pattern gap rather than looping without making progress.
+      const codePoint = text.codePointAt(offset);
+      const width = codePoint !== undefined && codePoint > 0xffff ? 2 : 1;
       count += 1;
+      offset += width;
+      continue;
     }
+
+    let end = offset + 1;
+    while (end < text.length && /\s/u.test(text[end])) end++;
+    const runLength = end - offset;
+    const consumed = end === text.length || runLength === 1 ? runLength : runLength - 1;
+    count += estimateTokenChunk(text.slice(offset, offset + consumed));
+    offset += consumed;
   }
   return count;
+}
+
+function estimateTokenChunk(m: string): number {
+  if (ALL_DIGITS_RE.test(m)) return m.trim().length;
+  const encoded = encodedRunTokens(m);
+  if (encoded !== undefined) return encoded;
+  const trimmed = m.trimStart();
+  if (trimmed.length > 0 && !/\s/.test(trimmed) && !CJK_KANA_HANGUL_RE.test(trimmed)) {
+    const codePoints = Array.from(trimmed);
+    if (codePoints.some((cp) => (cp.codePointAt(0) ?? 0) > 0xffff)) return codePoints.length;
+  }
+  if (m.length > 8) return Math.ceil(m.length / 3);
+  return 1;
 }
 
 export interface TokenBudget {
