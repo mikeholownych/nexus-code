@@ -374,6 +374,7 @@ async function resolveAgentIdentity(config) {
   const probeWorkspace = fs.mkdtempSync(path.join(config.resources?.workspaceRoot ?? os.tmpdir(), "nexus-eval-version-workspace-"));
   let probe;
   try {
+    if (config.runAs) grantRunAsAccess(config.runAs, [probeWorkspace]);
     const runtimePaths = [candidatePath, ...argsPrefix.filter((item) => path.isAbsolute(item)).map((item) => fs.realpathSync(item))];
     const isCheckoutNexus = agent === "nexus" && argsPrefix[0] === path.join(ROOT, "cli/dist/index.js");
     if (isCheckoutNexus) {
@@ -396,6 +397,7 @@ async function resolveAgentIdentity(config) {
       allowedRoots,
       allowedFiles: [candidatePath, ...argsPrefix.filter((item) => path.isAbsolute(item))],
       timeoutMs: 5000,
+      protectedCorpusPaths: protectedCorpusPathsForRun(),
     });
     const wrapped = config.runAs ? asUserSpec(config.runAs, spec) : spec;
     probe = await runIsolatedProcess(wrapped, { outputLimit: 4096, resources: config.resources ?? null });
@@ -405,7 +407,8 @@ async function resolveAgentIdentity(config) {
   const output = `${probe?.stdout ?? ""}${probe?.stderr ?? ""}`.trim();
   const version = output.split(/\r?\n/, 1)[0]?.trim().slice(0, 200) || null;
   if (probe?.containmentProblem || probe?.error || probe?.status !== 0 || probe?.timedOut || probe?.overflow || !version) {
-    const reason = probe?.containmentProblem ?? probe?.error ?? (probe?.timedOut ? "timeout" : probe?.overflow ? "output limit exceeded" : `exit ${probe?.status ?? "unknown"}`);
+    const detail = output ? `; output=${JSON.stringify(output.slice(0, 600))}` : "";
+    const reason = probe?.containmentProblem ?? probe?.error ?? (probe?.timedOut ? "timeout" : probe?.overflow ? "output limit exceeded" : `exit ${probe?.status ?? "unknown"}${detail}`);
     return { record: null, problem: required ? `could not identify ${agent} version (${reason})` : null, command, argsPrefix };
   }
 
