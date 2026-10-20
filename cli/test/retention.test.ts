@@ -1,6 +1,8 @@
 import { test, describe } from "node:test";
 import * as assert from "node:assert/strict";
 import * as fs from "node:fs";
+import mutableFs from "node:fs";
+import { syncBuiltinESMExports } from "node:module";
 import * as os from "node:os";
 import * as path from "node:path";
 import { execFileSync, execSync } from "node:child_process";
@@ -14,6 +16,7 @@ import {
   acknowledgeDailyGc,
   getGcState,
   scanTasks,
+  scanSessions,
 } from "../src/core/retention.js";
 
 function tmp(prefix: string): string {
@@ -425,5 +428,91 @@ describe("PLAN-08 PR-8c: Persistence retention, GC, and indexed sessions (REQ-PE
       fs.rmSync(testHome, { recursive: true, force: true });
     }
   });
+});
+
+test("large escaped JSON metadata keeps pinned records and decodes Unicode workspaces", () => {
+  const home = tmp("retention-json-metadata-");
+  const directory = path.join(home, ".nexus", "tasks");
+  fs.mkdirSync(directory, { recursive: true });
+  const workspace = "/tmp/nexus-test-café-🚀";
+  const old = new Date(Date.now() - 200 * 86400000);
+  try {
+    for (const escapedValue of [false, true]) {
+      let raw = JSON.stringify({ schemaVersion: 1, taskId: `pinned-${escapedValue}`, pinned: true,
+        workspace, messages: [{ role: "user", content: "m".repeat(80000) }] });
+      raw = raw.replace('"pinned"', '"\\u0070inned"').replace('"workspace"', '"work\\u0073pace"');
+      if (escapedValue) raw = raw.replace("é", "\\u00e9").replace("🚀", "\\ud83d\\ude80");
+      const file = path.join(directory, `pinned-${escapedValue}.json`);
+      fs.writeFileSync(file, raw); fs.utimesSync(file, old, old);
+      assert.equal(JSON.parse(raw).pinned, true);
+    }
+    const scanned = scanTasks(directory);
+    assert.equal(scanned.items.length, 2);
+    for (const item of scanned.items) {
+      assert.equal(item.pinned, true, "JSON-escaped pinned keys must preserve pin protection");
+      assert.equal(item.workspace, workspace, "metadata must decode UTF-8 and JSON escapes exactly");
+    }
+    const result = runRetentionGc({ home, maxAgeDays: 30, maxSizeBytes: 1, dryRun: false });
+    assert.equal(result.deletedCount, 0);
+    assert.equal(fs.readdirSync(directory).filter(name => name.endsWith(".json")).length, 2);
+  } finally { fs.rmSync(home, { recursive: true, force: true }); }
+});
+
+test("large metadata preserves the ordinary JSON pin value semantics", () => {
+  const home = tmp("retention-json-pin-values-");
+  try {
+    for (const [index, pinned] of [false, true, null, 0, 1, -1, 0.25, "", "yes", [], {}].entries()) {
+      const directory = path.join(home, String(index)); fs.mkdirSync(directory);
+      const raw = JSON.stringify({ pinned, messages: [{ content: "m".repeat(80000) }] });
+      fs.writeFileSync(path.join(directory, "entry.json"), raw);
+      assert.equal(scanTasks(directory).items[0].pinned, Boolean(JSON.parse(raw).pinned));
+    }
+  } finally { fs.rmSync(home, { recursive: true, force: true }); }
+});
+
+test("large escaped session identity keeps the current session out of retention", () => {
+  const home = tmp("retention-json-current-");
+  const directory = path.join(home, ".nexus", "sessions");
+  fs.mkdirSync(directory, { recursive: true });
+  try {
+    const raw = JSON.stringify({ schemaVersion: 1, taskId: "record-name", sessionId: "active-session",
+      messages: [{ role: "user", content: "m".repeat(80000) }] })
+      .replace('"sessionId"', '"\\u0073essionId"').replace('"active-session"', '"active\\u002dsession"');
+    const file = path.join(directory, "record-name.json"); fs.writeFileSync(file, raw);
+    const old = new Date(Date.now() - 200 * 86400000); fs.utimesSync(file, old, old);
+    assert.equal(scanSessions(directory, "active-session").items[0].current, true);
+    assert.equal(runRetentionGc({ home, currentSessionId: "active-session", maxAgeDays: 30, maxSizeBytes: 1, dryRun: false }).deletedCount, 0);
+    assert.equal(fs.existsSync(file), true);
+  } finally { fs.rmSync(home, { recursive: true, force: true }); }
+});
+
+test("metadata reads remain bounded when a small envelope is replaced after stat", () => {
+  const home = tmp("retention-json-stat-race-");
+  const directory = path.join(home, ".nexus", "tasks"); fs.mkdirSync(directory, { recursive: true });
+  const primary = path.join(directory, "raced.json"), replacement = path.join(directory, "replacement.tmp");
+  fs.writeFileSync(primary, JSON.stringify({ taskId: "raced", pinned: false }));
+  fs.writeFileSync(replacement, JSON.stringify({ taskId: "raced", messages: [{ content: "m".repeat(2 * 1024 * 1024) }], pinned: true }));
+  const stat = mutableFs.statSync, read = mutableFs.readFileSync;
+  let replaced = false, largestWholeRead = 0;
+  try {
+    mutableFs.statSync = ((...args: any[]) => {
+      const result = (stat as any)(...args);
+      if (String(args[0]) === primary && !replaced) { replaced = true; fs.renameSync(replacement, primary); }
+      return result;
+    }) as typeof mutableFs.statSync;
+    mutableFs.readFileSync = ((...args: any[]) => {
+      const result = (read as any)(...args);
+      if (String(args[0]) === primary) largestWholeRead = Math.max(largestWholeRead, Buffer.byteLength(result));
+      return result;
+    }) as typeof mutableFs.readFileSync;
+    syncBuiltinESMExports();
+    const scanned = scanTasks(directory);
+    assert.equal(replaced, true, "the replacement must occur after the old file stat");
+    assert.equal(scanned.items[0].pinned, true, "the replacement's pin must be read without truncation");
+    assert.ok(largestWholeRead <= 64 * 1024, `metadata performed an unbounded ${largestWholeRead}-byte whole-file read after stat`);
+  } finally {
+    mutableFs.statSync = stat; mutableFs.readFileSync = read; syncBuiltinESMExports();
+    fs.rmSync(home, { recursive: true, force: true });
+  }
 });
 

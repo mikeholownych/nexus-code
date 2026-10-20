@@ -167,6 +167,8 @@ interface EnvelopeMetadata {
 
 const MAX_DIRECT_ENVELOPE_READ_BYTES = 64 * 1024; // 64 KiB
 const MAX_SCAN_CHUNK_BYTES = 64 * 1024; // 64 KiB
+const MAX_METADATA_KEY_BYTES = 128; // All recognized keys fit even when fully JSON-escaped.
+const MAX_METADATA_VALUE_BYTES = 24 * 1024; // A 4 KiB path with every byte JSON-escaped.
 
 function readEnvelopeMetadata(
   filePath: string,
@@ -177,35 +179,40 @@ function readEnvelopeMetadata(
     return { metadata: { pinned: false }, timedOut: true };
   }
 
-  // Fast path for small, standard envelopes (<= 64 KiB, which covers all schema-2 envelopes).
-  if (stat.size <= MAX_DIRECT_ENVELOPE_READ_BYTES) {
-    try {
-      const raw = fs.readFileSync(filePath, "utf8");
-      const parsed = JSON.parse(raw);
-      return {
-        metadata: {
-          workspace: typeof parsed.workspacePath === "string" ? parsed.workspacePath : (typeof parsed.workspace === "string" ? parsed.workspace : undefined),
-          pinned: Boolean(parsed.pinned),
-          sessionId: typeof parsed.sessionId === "string" ? parsed.sessionId : undefined,
-          taskId: typeof parsed.taskId === "string" ? parsed.taskId : undefined,
-          id: typeof parsed.id === "string" ? parsed.id : undefined,
-        },
-        timedOut: false,
-      };
-    } catch {
-      return { metadata: { pinned: false }, timedOut: false };
-    }
-  }
-
   // Bounded streaming scanner for large legacy/unmigrated files.
   // Avoids buffering multi-megabyte inline messages or allocating memory proportional to file size.
   let fd: number | undefined;
   let timedOut = false;
   const result: EnvelopeMetadata = { pinned: false };
   const buf = Buffer.alloc(MAX_SCAN_CHUNK_BYTES);
+  let unknownMetadata = false;
 
   try {
-    fd = fs.openSync(filePath, "r");
+    fd = fs.openSync(filePath, fs.constants.O_RDONLY | (fs.constants.O_NONBLOCK ?? 0) | (fs.constants.O_NOFOLLOW ?? 0));
+    const opened = fs.fstatSync(fd);
+    if (!opened.isFile()) throw new Error("Envelope metadata requires a regular file");
+    // The planning stat is only a hint: an atomic publication can replace that
+    // file before open. Even growth after fstat cannot make this read unbounded.
+    if (stat.size <= MAX_DIRECT_ENVELOPE_READ_BYTES && opened.size <= MAX_DIRECT_ENVELOPE_READ_BYTES) {
+      const small = Buffer.alloc(MAX_DIRECT_ENVELOPE_READ_BYTES + 1);
+      let size = 0;
+      while (size < small.length) {
+        const count = fs.readSync(fd, small, size, small.length - size, size);
+        if (!count) break;
+        size += count;
+      }
+      if (size <= MAX_DIRECT_ENVELOPE_READ_BYTES) {
+        const parsed = JSON.parse(small.subarray(0, size).toString("utf8"));
+        return { metadata: {
+          workspace: typeof parsed.workspacePath === "string" ? parsed.workspacePath : (typeof parsed.workspace === "string" ? parsed.workspace : undefined),
+          pinned: Boolean(parsed.pinned),
+          sessionId: typeof parsed.sessionId === "string" ? parsed.sessionId : undefined,
+          taskId: typeof parsed.taskId === "string" ? parsed.taskId : undefined,
+          id: typeof parsed.id === "string" ? parsed.id : undefined,
+        }, timedOut: false };
+      }
+      // Positional reads leave fd at offset zero for the streaming fallback.
+    }
     let depth = 0;
     let inString = false;
     let escaped = false;
@@ -214,6 +221,25 @@ function readEnvelopeMetadata(
     let afterColon = false;
     let val = "";
     let inValString = false;
+    let stringOverflow = false;
+    let scalar = "";
+    const stringFields = new Set(["workspace", "workspacePath", "sessionId", "taskId", "id", "pinned"]);
+    const decodeString = (raw: string): string => JSON.parse('"' + Buffer.from(raw, "latin1").toString("utf8") + '"');
+    const appendByte = (byte: number) => {
+      if (inKey) {
+        if (key.length < MAX_METADATA_KEY_BYTES) key += String.fromCharCode(byte);
+        else stringOverflow = true;
+      } else if (inValString) {
+        if (val.length < MAX_METADATA_VALUE_BYTES) val += String.fromCharCode(byte);
+        else stringOverflow = true;
+      }
+    };
+    const finishPinnedScalar = () => {
+      if (!scalar) return;
+      try { result.pinned = Boolean(JSON.parse(scalar)); }
+      catch { unknownMetadata = true; }
+      scalar = ""; key = ""; afterColon = false;
+    };
 
     while (true) {
       if (deadline && Date.now() >= deadline) {
@@ -228,27 +254,32 @@ function readEnvelopeMetadata(
         if (inString) {
           if (escaped) {
             escaped = false;
-            if (inKey && key.length < 64) key += String.fromCharCode(byte);
-            else if (inValString && val.length < 4096) val += String.fromCharCode(byte);
+            appendByte(byte);
           } else if (byte === 92) { // \
+            appendByte(byte); // Preserve the escape for JSON.parse, including chunk boundaries.
             escaped = true;
           } else if (byte === 34) { // "
             inString = false;
             if (inKey) {
               inKey = false;
+              key = stringOverflow ? "" : decodeString(key);
               afterColon = false;
             } else if (inValString) {
               inValString = false;
-              if (key === "workspace" || key === "workspacePath") result.workspace = val;
-              else if (key === "sessionId") result.sessionId = val;
-              else if (key === "taskId") result.taskId = val;
-              else if (key === "id") result.id = val;
+              if (stringOverflow) unknownMetadata = true;
+              else {
+                const value = decodeString(val);
+                if (key === "workspace" || key === "workspacePath") result.workspace = value;
+                else if (key === "sessionId") result.sessionId = value;
+                else if (key === "taskId") result.taskId = value;
+                else if (key === "id") result.id = value;
+                else if (key === "pinned") result.pinned = Boolean(value);
+              }
               key = "";
               val = "";
             }
           } else {
-            if (inKey && key.length < 64) key += String.fromCharCode(byte);
-            else if (inValString && val.length < 4096) val += String.fromCharCode(byte);
+            appendByte(byte);
           }
           continue;
         }
@@ -258,18 +289,24 @@ function readEnvelopeMetadata(
           if (depth === 1 && !afterColon) {
             inKey = true;
             key = "";
+            stringOverflow = false;
           } else if (depth === 1 && afterColon) {
-            inValString = true;
+            inValString = stringFields.has(key);
             val = "";
+            stringOverflow = false;
           }
           continue;
         }
 
         if (byte === 123 || byte === 91) { // { or [
+          if (depth === 1 && afterColon && key === "pinned") {
+            result.pinned = true; key = ""; afterColon = false;
+          }
           depth++;
           continue;
         }
         if (byte === 125 || byte === 93) { // } or ]
+          if (depth === 1) finishPinnedScalar();
           depth--;
           if (depth === 0) break;
           continue;
@@ -279,18 +316,13 @@ function readEnvelopeMetadata(
           if (byte === 58) { // :
             afterColon = true;
           } else if (byte === 44) { // ,
+            finishPinnedScalar();
             afterColon = false;
             key = "";
           } else if (afterColon && key === "pinned") {
-            if (byte === 116) { // 't' in true
-              result.pinned = true;
-              afterColon = false;
-              key = "";
-            } else if (byte === 102) { // 'f' in false
-              result.pinned = false;
-              afterColon = false;
-              key = "";
-            }
+            if (byte === 32 || byte === 9 || byte === 10 || byte === 13) finishPinnedScalar();
+            else if (scalar.length < MAX_METADATA_KEY_BYTES) scalar += String.fromCharCode(byte);
+            else unknownMetadata = true;
           }
         }
       }
@@ -304,7 +336,7 @@ function readEnvelopeMetadata(
     }
   }
 
-  return { metadata: result, timedOut };
+  return { metadata: unknownMetadata ? { ...result, pinned: true } : result, timedOut };
 }
 
 export function scanTasks(tasksDir: string, checkTestPollution: boolean = false, deadline?: number, currentSessionId?: string): { items: RetentionItem[]; timedOut: boolean } {
