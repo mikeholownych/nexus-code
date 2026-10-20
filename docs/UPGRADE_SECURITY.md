@@ -67,6 +67,7 @@ The self-upgrade mechanism enables operators to update their active Nexus instal
   - `ln -s $PREFIX/lib/nexus/$VERSION/bin/nexus $PREFIX/bin/.nexus-link.$PID && mv -f ... $PREFIX/bin/nexus`
 - `--rollback-binary` safely rolls back the launcher symlink to the previous installed version in `$PREFIX/lib/nexus`.
 - `--restore-backup <path>` accepts a canonical plain `config.env.bak.*` file for configuration-only restoration, or a private `~/.nexus/backups/state-backup-*` directory containing `backup.json`, `state/`, and optional `config/` for complete snapshot restoration. It rejects arbitrary files, tar archives, and redirected paths.
+- Run backup restoration through the stable `nexus` launcher. Close existing legacy clients before retrying a pending restore, and keep version-pinned legacy binaries and direct old entry points offline until the durable restore journal is cleared. Current managed launches route through the journal before loading configuration; the Linux process census detects already-running legacy entry points, but cannot serialize a new direct launch from a version that predates the kernel lease. That offline interval is an explicit prerequisite of the supported restore boundary.
 
 ### 3.6 Transaction Journal & Crash Recovery (ACC-UPG-11)
 - The updater logs state progression to `$PREFIX/lib/nexus/.upgrade-journal.json`:

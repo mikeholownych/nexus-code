@@ -11,7 +11,8 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { acquireFileGuard, releaseFileGuard, type FileGuard } from "./core/file_guard.js";
-import { withStateStoreGuard, STATE_STORE_GUARD_FILE } from "./core/state_store_guard.js";
+import { withStateStoreGuard, STATE_RESTORE_PENDING_FILE, STATE_STORE_GUARD_FILE } from "./core/state_store_guard.js";
+import { restoreFromSources } from "./core/state_restore.js";
 import { verifyInstalledRuntime } from "./upgrade_health.js";
 
 export type JournalState =
@@ -165,9 +166,9 @@ export function createPreMigrationBackup(homeDir: string = process.env.HOME || "
 
     // Snapshot all durable state, not just its index. Backup directories are
     // excluded to avoid recursion; symbolic links are refused rather than read.
-    withDurableStoreGuards(homeDir, () => copyPrivateTree(stateDir, path.join(backupDest, "state"), new Set(["backups"])));
+    withDurableStoreGuards(homeDir, () => copyPrivateTree(stateDir, path.join(backupDest, "state"), new Set(["backups", "restore-control", STATE_RESTORE_PENDING_FILE])));
     const configDir = path.join(homeDir, ".config", "nexus");
-    if (fs.existsSync(configDir)) copyPrivateTree(configDir, path.join(backupDest, "config"), new Set(["backups"]));
+    if (fs.existsSync(configDir)) copyPrivateTree(configDir, path.join(backupDest, "config"), new Set(["backups", STATE_RESTORE_PENDING_FILE]));
     fs.writeFileSync(path.join(backupDest, "backup.json"), JSON.stringify({ formatVersion:1, kind:"nexus-state-config", createdAt:new Date().toISOString() }), { mode:0o600 });
 
     result.stateBackupDir = backupDest;
@@ -179,7 +180,7 @@ export function createPreMigrationBackup(homeDir: string = process.env.HOME || "
 /**
  * Restores configuration from a previous backup file.
  */
-export function restoreConfigBackup(backupPath: string, homeDir: string = process.env.HOME || ""): boolean {
+export function restoreConfigBackup(backupPath: string, homeDir: string = process.env.HOME || "", onError?: (error: unknown) => void): boolean {
   try {
     const resolved = path.resolve(backupPath);
     if (fs.realpathSync(resolved) !== resolved) return false;
@@ -192,32 +193,21 @@ export function restoreConfigBackup(backupPath: string, homeDir: string = proces
       validatePrivateTree(resolved);
       const state = path.join(resolved, "state");
       const config = path.join(resolved, "config");
-      if (fs.existsSync(state)) withDurableStoreGuards(homeDir, () => restorePrivateTree(state, path.join(homeDir, ".nexus"), new Set(["backups"])));
-      if (fs.existsSync(config)) restorePrivateTree(config, configRoot, new Set(["backups"]));
-      return true;
+      const sources = [];
+      if (fs.existsSync(state)) sources.push({ store: "state" as const, source: state, mode: "tree" as const });
+      if (fs.existsSync(config)) sources.push({ store: "config" as const, source: config, mode: "tree" as const });
+      return sources.length > 0 && restoreFromSources(homeDir, sources, onError);
     }
     // Legacy plain config backups are recognized by their canonical location
     // and name. Archives and arbitrary files must never become config.env.
     if (path.dirname(resolved) !== path.join(configRoot, "backups") || !/^config\.env\.bak\.[A-Za-z0-9T_.-]+$/.test(path.basename(resolved)) || !fs.lstatSync(resolved).isFile()) return false;
-    fs.mkdirSync(configRoot, { recursive:true, mode:0o700 });
-    if (fs.realpathSync(configRoot) !== path.resolve(configRoot)) return false;
-    const target = path.join(configRoot, "config.env");
-    if (fs.existsSync(target) && (!fs.lstatSync(target).isFile() || fs.realpathSync(target) !== target)) return false;
-    fs.copyFileSync(resolved, target);
-    fs.chmodSync(target, 0o600);
-    return true;
-  } catch { return false; }
+    return restoreFromSources(homeDir, [{ store:"config", source:resolved, mode:"file" }], onError);
+  } catch (error) {
+    try { onError?.(error); } catch {}
+    return false;
+  }
 }
 /** Keep permanent guard inodes even when rolling back to a backup without that store. */
-function removeRestoredObsoleteTree(target: string): void {
-  const stat = fs.lstatSync(target);
-  if (!stat.isDirectory()) { fs.unlinkSync(target); return; }
-  for (const name of fs.readdirSync(target)) {
-    if (name !== STATE_STORE_GUARD_FILE) removeRestoredObsoleteTree(path.join(target, name));
-  }
-  if (fs.readdirSync(target).length === 0) fs.rmdirSync(target);
-}
-
 /** New clients serialize task/session multi-file snapshots in a fixed lock order. */
 function withDurableStoreGuards<T>(homeDir: string, callback: () => T): T {
   const tasks = path.join(homeDir, ".nexus", "tasks");
@@ -241,23 +231,13 @@ function copyPrivateTree(source: string, destination: string, excluded = new Set
   if (fs.realpathSync(destination) !== path.resolve(destination)) throw new Error("Backup destination is redirected");
   fs.chmodSync(destination, 0o700);
   for (const entry of fs.readdirSync(source, { withFileTypes:true })) {
-    if (excluded.has(entry.name) || entry.name === STATE_STORE_GUARD_FILE) continue;
+    if (excluded.has(entry.name) || entry.name === STATE_STORE_GUARD_FILE || entry.name === STATE_RESTORE_PENDING_FILE) continue;
     const from = path.join(source, entry.name), to = path.join(destination, entry.name);
     if (entry.isDirectory()) copyPrivateTree(from, to);
     else {
       try { if (fs.lstatSync(to).isSymbolicLink()) throw new Error("Restore destination is redirected"); } catch (error:any) { if (error.code !== "ENOENT") throw error; }
       fs.copyFileSync(from, to); fs.chmodSync(to, 0o600);
     }
-  }
-}
-function restorePrivateTree(source: string, destination: string, preserved = new Set<string>()): void {
-  if (fs.existsSync(destination)) validatePrivateTreeExcept(destination, preserved);
-  copyPrivateTree(source, destination);
-  for (const name of fs.readdirSync(destination)) {
-    if (preserved.has(name) || name === STATE_STORE_GUARD_FILE) continue;
-    const from = path.join(source, name), to = path.join(destination, name);
-    if (!fs.existsSync(from)) removeRestoredObsoleteTree(to);
-    else if (fs.lstatSync(from).isDirectory()) restorePrivateTree(from, to);
   }
 }
 function validatePrivateTreeExcept(source: string, excluded: Set<string>): void {
