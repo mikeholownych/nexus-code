@@ -25,4 +25,13 @@ describe("single-quoted JSON repair", () => {
   test("a trailing backslash cannot break out of the string", () => {
     assert.equal(unescapeSingleQuoteBody("x\\"), "x\\\\");
   });
+
+  test("valid \\uXXXX unicode escapes are preserved as JSON escapes", () => {
+    assert.equal(unescapeSingleQuoteBody("\\u0041"), "\\u0041");
+  });
+
+  test("invalid \\u followed by non-hex escapes the backslash instead of emitting Bad Unicode escape", () => {
+    assert.equal(unescapeSingleQuoteBody("\\ux"), "\\\\ux");
+    assert.equal(unescapeSingleQuoteBody("C:\\users"), "C:\\\\users");
+  });
 });

@@ -157,10 +157,19 @@ export function unescapeSingleQuoteBody(inner: string): string {
     if (ch === "\\") {
       const next = inner[i + 1];
       if (next === undefined) out += "\\\\";
-      else if (next === "'") out += "'";
-      else if ('"\\/bfnrtu'.includes(next)) out += "\\" + next;
-      else out += "\\\\" + next;
-      if (next !== undefined) i++;
+      else if (next === "'") { out += "'"; i++; }
+      else if (next === 'u') {
+        const hex = inner.slice(i + 2, i + 6);
+        if (/^[0-9a-fA-F]{4}$/.test(hex)) {
+          out += "\\u" + hex;
+          i += 5; // skip \uXXXX so loop++ lands at i+6
+        } else {
+          out += "\\\\u";
+          i++;
+        }
+        continue;
+      } else if ('"\\/bfnrt'.includes(next)) { out += "\\" + next; i++; }
+      else { out += "\\\\" + next; i++; }
       continue;
     }
     out += ch === '"' ? '\\"' : ch;
