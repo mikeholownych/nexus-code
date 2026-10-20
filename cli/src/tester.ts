@@ -544,8 +544,34 @@ export function extractPathTokens(workspace: string, text: string): Set<string> 
   const parts = text.split(/[\s'"()`,]+/);
   for (let part of parts) {
     if (!part) continue;
-    part = part.replace(/[.,;:]+$/, "");
-    part = part.replace(/:\d+(?::\d+)?$/, "");
+    let end = part.length;
+    while (end > 0) {
+      const code = part.charCodeAt(end - 1);
+      if (code === 46 || code === 44 || code === 59 || code === 58) end--;
+      else break;
+    }
+    if (end !== part.length) part = part.slice(0, end);
+
+    let suffixStart = part.length;
+    let cursor = part.length;
+    while (cursor > 0) {
+      const code = part.charCodeAt(cursor - 1);
+      if (code >= 48 && code <= 57) cursor--;
+      else break;
+    }
+    if (cursor < part.length && cursor > 0 && part.charCodeAt(cursor - 1) === 58) {
+      suffixStart = cursor - 1;
+      let lineStart = suffixStart;
+      while (lineStart > 0) {
+        const code = part.charCodeAt(lineStart - 1);
+        if (code >= 48 && code <= 57) lineStart--;
+        else break;
+      }
+      if (lineStart < suffixStart && lineStart > 0 && part.charCodeAt(lineStart - 1) === 58) {
+        suffixStart = lineStart - 1;
+      }
+    }
+    if (suffixStart !== part.length) part = part.slice(0, suffixStart);
     if (!part) continue;
 
     const norm = part.replace(/\\/g, "/");
