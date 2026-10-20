@@ -376,7 +376,13 @@ export class DurableStateManager {
   }
 
   private storedMessages(taskId: string, record: StoredTaskRecord): ChatMessage[] {
-    if (record.version < 2) return Array.isArray(record.parsed.messages) ? record.parsed.messages : [];
+    if (record.version < 2) {
+      if (Array.isArray(record.parsed.messages)) return record.parsed.messages;
+      // Version 1 requires an explicit conversation array. Absence is damage,
+      // not an empty conversation that an interactive resume may start over.
+      if (record.version === 1) throw new CorruptStateError(taskId, "Schema 1 state has no conversation array", this.quarantineFile(record.filePath));
+      return [];
+    }
     const log = this.getMessageLogFilePath(taskId);
     try {
       if (!Object.hasOwn(record.parsed, "messageLog") || Object.hasOwn(record.parsed, "messages")) {
