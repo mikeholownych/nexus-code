@@ -274,6 +274,20 @@ test("pre-RC enforcement defers only requirements explicitly mapped to exact-RC 
   assert.match(result.stdout, /REQ-SEC-101: source ledger status 'open' is below 'tested'/);
 });
 
+test("authoritative pre-RC enforcement rejects a dirty source worktree", () => {
+  const fixture = rcEvidenceFixture("open", {
+    requirementId: "REQ-QUAL-101",
+    acceptanceCell: "ACCEPTANCE §6.1",
+    evidenceIds: ["ACC-QUAL-T2"],
+    qualificationOnly: true,
+  });
+  fs.writeFileSync(path.join(fixture.root, "uncommitted-acceptance-change.txt"), "uncommitted source change\n");
+
+  const result = fixture.runFixture("--enforce");
+  assert.equal(result.status, 1, result.stdout + result.stderr);
+  assert.match(result.stdout, /pre-RC enforcement requires a clean source worktree/);
+});
+
 test("unrecognized and inherited source status names cannot be hidden by the qualification-only map", () => {
   for (const status of ["unknown", "__proto__", "toString"]) {
     const fixture = rcEvidenceFixture(status, {

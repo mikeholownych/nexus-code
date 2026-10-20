@@ -213,6 +213,21 @@ if (qualificationMode && (!enforce || qualificationArg < 0 || artifactArg < 0 ||
   problems.push("--qualification-record, --rc-artifact, and --evidence-root must be supplied together with --enforce");
 } else if (enforce) {
   let qualifiedRequirements = null;
+  // Bare --enforce is the authoritative pre-RC source gate. A dirty checkout
+  // can otherwise make the ledger or the acceptance map differ from HEAD.
+  // --ledger is reserved for isolated checker fixtures and is not authoritative.
+  if (!qualificationMode && ledgerArg < 0) {
+    try {
+      const status = execFileSync("git", ["status", "--porcelain", "--untracked-files=all"], {
+        cwd: root,
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "pipe"],
+      }).trim();
+      if (status) problems.push("pre-RC enforcement requires a clean source worktree");
+    } catch {
+      problems.push("pre-RC enforcement requires a Git worktree");
+    }
+  }
   if (qualificationMode) {
     try {
       const recordPath = path.resolve(args[qualificationArg + 1]);
