@@ -200,3 +200,29 @@ test("history never carries unparseable tool-call arguments to the server", asyn
   const args = sent.messages[1].tool_calls[0].function.arguments;
   assert.doesNotThrow(() => JSON.parse(args), "arguments must be valid JSON on the wire");
 });
+
+test("endpoint normalization strips trailing slashes and appends /v1 for legacy path", () => {
+  // Legacy endpoint path (no providerId): trailing slashes stripped, /v1 appended when missing
+  const c1 = new LocalLlmClient({ model: "m", endpoint: "http://localhost:1234/v1/", apiKey: "k" } as any);
+  assert.equal(c1.getEndpoints()[0], "http://localhost:1234/v1");
+
+  const c2 = new LocalLlmClient({ model: "m", endpoint: "http://localhost:5678///", apiKey: "k" } as any);
+  assert.equal(c2.getEndpoints()[0], "http://localhost:5678/v1");
+
+  const c3 = new LocalLlmClient({ model: "m", endpoint: "http://localhost:9999/v1", apiKey: "k" } as any);
+  assert.equal(c3.getEndpoints()[0], "http://localhost:9999/v1");
+
+  const c4 = new LocalLlmClient({ model: "m", endpoint: "http://localhost:1111/api", apiKey: "k" } as any);
+  assert.equal(c4.getEndpoints()[0], "http://localhost:1111/api/v1");
+
+  // Fallback endpoints are normalized too
+  const c5 = new LocalLlmClient({
+    model: "m",
+    endpoint: "http://localhost:1234/v1",
+    apiKey: "k",
+    fallbackEndpoints: ["http://localhost:5678///", "http://localhost:9999/api"],
+  } as any);
+  assert.equal(c5.getEndpoints()[0], "http://localhost:1234/v1");
+  assert.equal(c5.getEndpoints()[1], "http://localhost:5678/v1");
+  assert.equal(c5.getEndpoints()[2], "http://localhost:9999/api/v1");
+});
