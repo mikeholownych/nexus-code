@@ -66,6 +66,7 @@ function rcEvidenceFixture(ledgerStatus = "tested", options: {
     "| ACC-CONT-10 | fixture continuity qualification |",
     "| ACC-GOV-06 | fixture independent acceptance |",
     "| ACC-PKG-01 | fixture exact criterion identifier |",
+    "| ACC-PLAT | fixture supported platform criterion |",
     "<!-- RC-QUALIFICATION-ONLY:START -->",
     qualificationMap,
     "<!-- RC-QUALIFICATION-ONLY:END -->",
@@ -315,6 +316,30 @@ test("exact-RC evidence must meet the RR threshold and cover every mapped criter
   fixture.record.requirements["REQ-AGT-110"].evidence.pop();
   fs.writeFileSync(fixture.recordPath, JSON.stringify(fixture.record));
   assert.match(fixture.runFixture(...fixture.enforcedArgs).stdout, /must cover every acceptance criterion/);
+});
+
+test("exact-RC evidence accepts the declared single-segment platform criterion", () => {
+  const fixture = rcEvidenceFixture("tested", {
+    requirementId: "REQ-REL-003",
+    requirementClass: "RR",
+    acceptanceCell: "ACC-PLAT",
+    evidenceIds: ["ACC-PLAT"],
+  });
+  const result = fixture.runFixture(...fixture.enforcedArgs);
+  assert.equal(result.status, 0, result.stdout + result.stderr);
+});
+
+test("exact-RC evidence rejects undefined and malformed platform criterion lookalikes", () => {
+  for (const id of ["ACC-UNKNOWN", "ACC-PLAT-extra", "ACC-PLAT-", "ACC-PLAT_suffix"]) {
+    const fixture = rcEvidenceFixture("tested", {
+      requirementId: "REQ-REL-003",
+      requirementClass: "RR",
+      acceptanceCell: id,
+      evidenceIds: [id],
+    });
+    const result = fixture.runFixture(...fixture.enforcedArgs);
+    assert.notEqual(result.status, 0, `${id}: ${result.stdout}${result.stderr}`);
+  }
 });
 
 test("exact-RC evidence requires exact acceptance identifiers", () => {
