@@ -605,8 +605,14 @@ const SECRETS = [TOKEN, CONFIG_KEY, FOREIGN_KEY, OPERATOR_KEY];
 
 /** HOME configured like a real install: config.env names the gateway; the token file (or a config.env key) is its credential. */
 function installHome(home: string, gatewayUrl: string, o: { configKey?: boolean } = {}): void {
-  fs.mkdirSync(path.join(home, ".config/nexus"), { recursive: true });
-  fs.mkdirSync(path.join(home, ".config/opencode"), { recursive: true });
+  // Tests may run under a permissive umask (for example, 0002). Keep the
+  // credential-home hierarchy private so AccountIdentity exercises the
+  // gateway boundary instead of rejecting an insecure fixture directory.
+  fs.mkdirSync(path.join(home, ".config/nexus"), { recursive: true, mode: 0o700 });
+  fs.mkdirSync(path.join(home, ".config/opencode"), { recursive: true, mode: 0o700 });
+  fs.chmodSync(path.join(home, ".config"), 0o700);
+  fs.chmodSync(path.join(home, ".config/nexus"), 0o700);
+  fs.chmodSync(path.join(home, ".config/opencode"), 0o700);
   fs.writeFileSync(path.join(home, ".config/nexus/config.env"), `LOCAL_LLM_ENDPOINT=${gatewayUrl}\nLOCAL_LLM_MODEL=m\n${o.configKey ? `LOCAL_LLM_API_KEY=${CONFIG_KEY}\n` : ""}`);
   if (!o.configKey) fs.writeFileSync(path.join(home, ".config/nexus/gateway-token"), `${TOKEN}\n`, { mode: 0o600 });
 }
