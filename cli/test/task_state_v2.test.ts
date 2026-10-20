@@ -334,3 +334,69 @@ test("a schema-one record with missing conversation cannot silently migrate to a
   const quarantined = fs.readdirSync(manager.getBaseDir()).find(name => name.startsWith(`${state.taskId}.json.corrupt-`));
   assert.ok(quarantined); assert.deepEqual(JSON.parse(fs.readFileSync(path.join(manager.getBaseDir(), quarantined), "utf8")), legacy);
 }));
+
+for (const operation of ["recordMilestone", "recordCandidateAndReceipt", "recoverTaskState"] as const) {
+  test(`${operation} keeps snapshot and publication atomic against a separate message writer`, (t) => fixture((manager, state) => {
+    manager.saveTaskState(state);
+    if (operation === "recoverTaskState") {
+      manager.recordOperationStart(state.taskId, { invocationId: "recovery-race-operation", toolName: "read_file", seq: 1 });
+    }
+    const message = { role: "assistant" as const, content: "separate process committed this message" };
+    const code = `
+      import {DurableStateManager} from './src/core/state.ts';
+      import {WorkspacePath} from './src/core/workspace_path.ts';
+      const manager=new DurableStateManager({baseDir:${JSON.stringify(manager.getBaseDir())},workspacePaths:[WorkspacePath.fromSelectedWorkspace(${JSON.stringify(state.workspacePath)})]});
+      try {
+        const state=manager.loadTaskState(${JSON.stringify(state.taskId)});
+        manager.recordProgress(state.taskId,{messages:[...state.messages,${JSON.stringify(message)}],findings:['separate process finding']});
+        process.stdout.write('committed');
+      } catch(error) {
+        if(error?.name==='StateStoreBusyError'){process.stdout.write('busy');process.exit(75);}
+        throw error;
+      }
+    `;
+    const writer = () => spawnSync(process.execPath, ["--import", "tsx", "--input-type=module", "-e", code], {
+      cwd: path.resolve(import.meta.dirname, ".."), encoding: "utf8", timeout: 10000,
+    });
+    const load = manager.loadTaskState.bind(manager);
+    let concurrent: ReturnType<typeof writer> | undefined;
+    manager.loadTaskState = (...args: Parameters<DurableStateManager["loadTaskState"]>) => {
+      const snapshot = load(...args);
+      // Force the other process to try committing after this transaction has
+      // loaded its snapshot, before it can publish any milestone/receipt/recovery.
+      if (!concurrent) concurrent = writer();
+      return snapshot;
+    };
+
+    if (operation === "recordMilestone") manager.recordMilestone(state.taskId, { name: "race milestone" });
+    else if (operation === "recordCandidateAndReceipt") manager.recordCandidateAndReceipt(state.taskId, {
+      candidateId: "race-candidate", receipt: { receiptId: "race-receipt", candidateId: "race-candidate",
+        verifierCommand: "fixture verifier", exitCode: 0, stdoutHash: "fixture-output", timestamp: state.createdAt,
+        status: "PASSED", materialDependencies: [] },
+    });
+    else manager.recoverTaskState(state.taskId, { revalidateCandidate: false });
+
+    assert.ok(concurrent, "the writer must run at the loaded-snapshot boundary");
+    const published = load(state.taskId);
+    t.diagnostic(`writer_exit=${concurrent.status} published_messages=${published.messages.length}`);
+    if (concurrent.status === 0) {
+      assert.deepEqual(published.messages, [...state.messages, message], "a concurrent successful message commit must not be truncated by the stale snapshot");
+    }
+    assert.equal(concurrent.status, 75, concurrent.stderr || "the complete transaction must exclude a separate process writer");
+    assert.equal(concurrent.stdout, "busy");
+    if (operation === "recordMilestone") assert.equal(published.milestones.at(-1)?.name, "race milestone");
+    else if (operation === "recordCandidateAndReceipt") assert.equal(published.validationReceipts.at(-1)?.receiptId, "race-receipt");
+    else assert.equal(published.currentOperation?.status, "interrupted");
+
+    // Once the transaction releases the guard, a fresh retry must preserve
+    // both the parent publication and the other process's conversation update.
+    const retry = writer();
+    assert.equal(retry.status, 0, retry.stderr);
+    const recovered = load(state.taskId);
+    assert.deepEqual(recovered.messages, [...state.messages, message]);
+    assert.deepEqual(recovered.findings, ["separate process finding"]);
+    if (operation === "recordMilestone") assert.equal(recovered.milestones.at(-1)?.name, "race milestone");
+    else if (operation === "recordCandidateAndReceipt") assert.equal(recovered.validationReceipts.at(-1)?.receiptId, "race-receipt");
+    else assert.equal(recovered.status, "interrupted");
+  }));
+}
