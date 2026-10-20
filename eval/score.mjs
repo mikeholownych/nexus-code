@@ -164,19 +164,19 @@ if (process.argv.includes("--json")) {
   }
   if (replacements.length) {
     console.log("\nReplaced by rerun:");
-    for (const r of replacements) console.log(`- ${r.config} ${r.task} run ${r.run}: ${r.was} → ${r.now}`);
+    for (const r of replacements) console.log(`- ${r.config} ${formatTaskId(r.task)} run ${r.run}: ${r.was} → ${r.now}`);
   }
   if (peerComparison) {
     console.log(`\nMatched peer comparison · ${peerComparison.matchedRuns} runs · model ${peerComparison.model.alias}`);
     for (const [agent, version] of Object.entries(peerComparison.versions)) console.log(`- ${agent}: ${version}`);
     console.log("| task | runs | Nexus correct | Goose correct | OpenCode correct |\n|---|---:|---:|---:|---:|");
-    for (const task of peerComparison.tasks) console.log(`| ${task.task} | ${task.runs} | ${task.correct.nexus} | ${task.correct.goose} | ${task.correct.opencode} |`);
+    for (const task of peerComparison.tasks) console.log(`| ${formatTaskId(task.task)} | ${task.runs} | ${task.correct.nexus} | ${task.correct.goose} | ${task.correct.opencode} |`);
   }
   console.log("");
   console.log("| config | task | tier | n | claimed | correct (95% CI) | false VERIFIED | regressions | timed out | contaminated | median wall s | median steps | median tokens |");
   console.log("|---|---|---|---|---|---|---|---|---|---|---|---|---|");
   for (const r of rows) {
-    console.log(`| ${r.config} | ${r.task} | ${r.tier} | ${r.n} | ${r.claimed} | ${r.correct} (${pct(r.correctCI[0])}–${pct(r.correctCI[1])}) | ${r.falseVerified} | ${r.regressions} | ${r.timedOut} | ${r.contaminated} | ${r.medianWallS?.toFixed(0) ?? "–"} | ${r.medianSteps ?? "–"} | ${r.medianTokens ?? "–"} |`);
+    console.log(`| ${r.config} | ${formatTaskId(r.task)} | ${r.tier} | ${r.n} | ${r.claimed} | ${r.correct} (${pct(r.correctCI[0])}–${pct(r.correctCI[1])}) | ${r.falseVerified} | ${r.regressions} | ${r.timedOut} | ${r.contaminated} | ${r.medianWallS?.toFixed(0) ?? "–"} | ${r.medianSteps ?? "–"} | ${r.medianTokens ?? "–"} |`);
   }
 }
 
@@ -235,7 +235,7 @@ function validateMatchedPeers(paths) {
   for (const agent of expectedAgents) {
     for (const record of byAgent.get(agent)) {
       if (!record.budget || !Number.isInteger(record.budget.steps) || !Number.isInteger(record.budget.minutes)) {
-        failPairs(`${agent} ${record.task} run ${record.run} is missing its effective step/minute budget`);
+        failPairs(`${agent} ${formatTaskId(record.task)} run ${record.run} is missing its effective step/minute budget`);
       }
       const key = runKey(record);
       if (!grouped.has(key)) grouped.set(key, {});
@@ -244,14 +244,14 @@ function validateMatchedPeers(paths) {
   }
   for (const [key, records] of grouped) {
     const budgets = expectedAgents.map((agent) => records[agent].budget);
-    if (!same(budgets[0], budgets[1]) || !same(budgets[0], budgets[2])) failPairs(`peer conditions do not match for ${key.replace("\t", " run ")}: effective budgets differ`);
+    if (!same(budgets[0], budgets[1]) || !same(budgets[0], budgets[2])) failPairs(`peer conditions do not match for ${formatRunKey(key)}: effective budgets differ`);
   }
 
   const taskIds = [...new Set([...grouped.values()].map((r) => r.nexus.task))].sort();
   const tasks = taskIds.map((task) => {
-    const runs = [...grouped.entries()].filter(([, r]) => r.nexus.task === task).map(([key, r]) => ({ run: Number(key.split("\t")[1]), records: r }));
+    const runs = [...grouped.entries()].filter(([, r]) => r.nexus.task === task).map(([key, r]) => ({ run: Number(key.slice(key.lastIndexOf("\t") + 1)), records: r }));
     if (runs.length !== 5 || !same(runs.map((r) => r.run).sort((a, b) => a - b), [1, 2, 3, 4, 5])) {
-      failPairs(`${task} must have matched runs 1–5 for every peer; got ${runs.map((r) => r.run).sort((a, b) => a - b).join(",")}`);
+      failPairs(`${formatTaskId(task)} must have matched runs 1–5 for every peer; got ${runs.map((r) => r.run).sort((a, b) => a - b).join(",")}`);
     }
     return {
       task,
@@ -266,6 +266,18 @@ function validateMatchedPeers(paths) {
     matchedRuns: grouped.size,
     tasks,
   };
+}
+
+function formatRunKey(key) {
+  const separator = key.lastIndexOf("\t");
+  const task = key.slice(0, separator);
+  const run = key.slice(separator + 1);
+  return `${formatTaskId(task)} run ${run}`;
+}
+
+function formatTaskId(task) {
+  // JSON escaping keeps untrusted task identifiers on one diagnostic line while preserving ordinary identifiers.
+  return JSON.stringify(String(task)).slice(1, -1);
 }
 
 function same(a, b) {
