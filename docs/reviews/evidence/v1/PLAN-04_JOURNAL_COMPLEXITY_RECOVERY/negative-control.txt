@@ -1,0 +1,128 @@
+TAP version 13
+# Subtest: message log appends new messages and leaves every previous commit readable
+ok 1 - message log appends new messages and leaves every previous commit readable # SKIP test name does not match pattern
+  ---
+  duration_ms: 0.682553
+  ...
+# Subtest: unchanged or initially empty conversations do not append unnecessary data
+ok 2 - unchanged or initially empty conversations do not append unnecessary data # SKIP test name does not match pattern
+  ---
+  duration_ms: 0.091307
+  ...
+# Subtest: edits, shortened history and compaction select a new branch without deleting originals
+ok 3 - edits, shortened history and compaction select a new branch without deleting originals # SKIP test name does not match pattern
+  ---
+  duration_ms: 0.088406
+  ...
+# Subtest: torn and complete unpublished appends cannot become part of a later committed branch
+ok 4 - torn and complete unpublished appends cannot become part of a later committed branch # SKIP test name does not match pattern
+  ---
+  duration_ms: 0.077606
+  ...
+# Subtest: a displaced byte hint resolves by committed digest instead of returning another append
+ok 5 - a displaced byte hint resolves by committed digest instead of returning another append # SKIP test name does not match pattern
+  ---
+  duration_ms: 0.12611
+  ...
+# Subtest: a writer cannot claim a prefix different from its committed parent
+ok 6 - a writer cannot claim a prefix different from its committed parent # SKIP test name does not match pattern
+  ---
+  duration_ms: 0.091607
+  ...
+# Subtest: corrupt committed data fails closed, including damage to an ancestor
+ok 7 - corrupt committed data fails closed, including damage to an ancestor # SKIP test name does not match pattern
+  ---
+  duration_ms: 0.071806
+  ...
+# Subtest: a different task identity or incorrect committed count is refused
+ok 8 - a different task identity or incorrect committed count is refused # SKIP test name does not match pattern
+  ---
+  duration_ms: 0.117209
+  ...
+# Subtest: future cursor schemas fail before touching the named file
+ok 9 - future cursor schemas fail before touching the named file # SKIP test name does not match pattern
+  ---
+  duration_ms: 0.145611
+  ...
+# Subtest: future message-record schemas are preserved and reported without mutation
+ok 10 - future message-record schemas are preserved and reported without mutation # SKIP test name does not match pattern
+  ---
+  duration_ms: 0.13351
+  ...
+# Subtest: redirected and hard-linked logs cannot redirect either reads or writes
+ok 11 - redirected and hard-linked logs cannot redirect either reads or writes # SKIP test name does not match pattern
+  ---
+  duration_ms: 0.081407
+  ...
+# Subtest: new message logs and their directories remain private under a permissive umask
+ok 12 - new message logs and their directories remain private under a permissive umask # SKIP test name does not match pattern
+  ---
+  duration_ms: 0.077006
+  ...
+# Subtest: decoded reuse still detects same-size ancestor tampering with an unchanged committed head
+ok 13 - decoded reuse still detects same-size ancestor tampering with an unchanged committed head # SKIP test name does not match pattern
+  ---
+  duration_ms: 0.067605
+  ...
+# Subtest: decoded reuse is isolated from caller mutation and validates the complete cursor
+ok 14 - decoded reuse is isolated from caller mutation and validates the complete cursor # SKIP test name does not match pattern
+  ---
+  duration_ms: 0.155612
+  ...
+# Subtest: append-heavy ancestry recovery visits introduced messages without repeatedly traversing retained prefixes
+not ok 15 - append-heavy ancestry recovery visits introduced messages without repeatedly traversing retained prefixes
+  ---
+  duration_ms: 2229.287158
+  location: '/var/tmp/nexus-pr61-red-control-w7c15eu2/source/cli/test/task_message_log.test.ts:1:8030'
+  failureType: 'testCodeFailure'
+  error: 'Recovery traversed 18003000 messages for 6000 introduced messages; retained prefixes must not be replayed per revision'
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected: true
+  actual: false
+  operator: '=='
+  stack: |-
+    <anonymous> (/var/tmp/nexus-pr61-red-control-w7c15eu2/source/cli/test/task_message_log.test.ts:189:10)
+    fixture (/var/tmp/nexus-pr61-red-control-w7c15eu2/source/cli/test/task_message_log.test.ts:16:9)
+    TestContext.<anonymous> (/var/tmp/nexus-pr61-red-control-w7c15eu2/source/cli/test/task_message_log.test.ts:158:122)
+    Test.runInAsyncScope (node:async_hooks:206:9)
+    Test.run (node:internal/test_runner/test:796:25)
+    Test.processPendingSubtests (node:internal/test_runner/test:527:18)
+    Test.postRun (node:internal/test_runner/test:889:19)
+    Test.run (node:internal/test_runner/test:835:12)
+    async Test.processPendingSubtests (node:internal/test_runner/test:527:7)
+  ...
+# revisions=6000 introduced_message_visits=18003000
+# Subtest: displaced-offset recovery scans oversized orphan lines without accumulating or recopying their chunks
+not ok 16 - displaced-offset recovery scans oversized orphan lines without accumulating or recopying their chunks
+  ---
+  duration_ms: 644.132334
+  location: '/var/tmp/nexus-pr61-red-control-w7c15eu2/source/cli/test/task_message_log.test.ts:1:9642'
+  failureType: 'testCodeFailure'
+  error: 'Recovery recopied 2441674895 bytes while scanning two 12582912-byte orphan lines'
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected: true
+  actual: false
+  operator: '=='
+  stack: |-
+    <anonymous> (/var/tmp/nexus-pr61-red-control-w7c15eu2/source/cli/test/task_message_log.test.ts:215:10)
+    fixture (/var/tmp/nexus-pr61-red-control-w7c15eu2/source/cli/test/task_message_log.test.ts:16:9)
+    TestContext.<anonymous> (/var/tmp/nexus-pr61-red-control-w7c15eu2/source/cli/test/task_message_log.test.ts:192:118)
+    Test.runInAsyncScope (node:async_hooks:206:9)
+    Test.run (node:internal/test_runner/test:796:25)
+    Test.processPendingSubtests (node:internal/test_runner/test:527:18)
+    Test.postRun (node:internal/test_runner/test:889:19)
+    Test.run (node:internal/test_runner/test:835:12)
+    async Test.processPendingSubtests (node:internal/test_runner/test:527:7)
+  ...
+# orphan_bytes_per_scan=12582912 scans=2 concatenated_bytes=2441674895
+1..16
+# tests 16
+# suites 0
+# pass 0
+# fail 2
+# cancelled 0
+# skipped 14
+# todo 0
+# duration_ms 3094.499612

@@ -154,3 +154,63 @@ test("decoded reuse is isolated from caller mutation and validates the complete 
   assert.throws(() => readTaskMessages(file, task, { ...cursor, count: 2 }), corrupt);
   assert.throws(() => readTaskMessages(file, "different-task", cursor), corrupt);
 }));
+
+test("append-heavy ancestry recovery visits introduced messages without repeatedly traversing retained prefixes", (t) => fixture(file => {
+  const revisions = 6000;
+  const parts: Buffer[] = [];
+  let cursor: TaskMessageCursor | null = null;
+  let offset = 0;
+  for (let index = 0; index < revisions; index++) {
+    const bytes = Buffer.from(JSON.stringify({ schemaVersion: 2, taskId: task, revision: `revision-${index}`,
+      parent: cursor, keep: index, append: [message(`complexity-entry-${index}`)] }));
+    parts.push(Buffer.from("\n"), bytes, Buffer.from("\n"));
+    cursor = { schemaVersion: 2, sha256: createHash("sha256").update(bytes).digest("hex"), offset: offset + 1, bytes: bytes.length, count: index + 1 };
+    offset += bytes.length + 2;
+  }
+  fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
+  fs.writeFileSync(file, Buffer.concat(parts), { mode: 0o600 });
+  const prototype = Array.prototype as any;
+  const originalIterator = prototype[Symbol.iterator];
+  let visitedMessages = 0;
+  let recovered: ChatMessage[];
+  try {
+    prototype[Symbol.iterator] = function* (this: unknown[]) {
+      for (const value of originalIterator.call(this)) {
+        if (value?.role === "user" && typeof value.content === "string" && value.content.startsWith("complexity-entry-")) visitedMessages++;
+        yield value;
+      }
+    };
+    recovered = readTaskMessages(file, task, cursor);
+  } finally { prototype[Symbol.iterator] = originalIterator; }
+  assert.equal(recovered.length, revisions);
+  assert.equal(recovered[0].content, "complexity-entry-0");
+  assert.equal(recovered[revisions - 1].content, `complexity-entry-${revisions - 1}`);
+  t.diagnostic(`revisions=${revisions} message_iterator_visits=${visitedMessages}`);
+  assert.ok(visitedMessages <= revisions * 2, `Recovery traversed ${visitedMessages} messages for ${revisions} introduced messages; retained prefixes must not be replayed per revision`);
+}));
+
+test("displaced-offset recovery scans oversized orphan lines without accumulating or recopying their chunks", (t) => fixture(file => {
+  const orphanBytes = 12 * 1024 * 1024; // Above the bounded snapshot path.
+  const content = "y".repeat(192 * 1024); // Selected record crosses several read chunks too.
+  const bytes = Buffer.from(JSON.stringify({ schemaVersion: 2, taskId: task, revision: "after-long-orphan",
+    parent: null, keep: 0, append: [message(content)] }));
+  const cursor: TaskMessageCursor = { schemaVersion: 2, sha256: createHash("sha256").update(bytes).digest("hex"),
+    offset: 0, bytes: bytes.length, count: 1 }; // Deliberately displaced seek hint.
+  fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
+  fs.writeFileSync(file, Buffer.alloc(orphanBytes, 120), { mode: 0o600 });
+  fs.appendFileSync(file, "\n"); fs.appendFileSync(file, bytes); fs.appendFileSync(file, "\n");
+  const originalConcat = Buffer.concat;
+  let copiedBytes = 0;
+  try {
+    Buffer.concat = ((list: readonly Uint8Array[], totalLength?: number) => {
+      copiedBytes += list.reduce((sum, part) => sum + part.byteLength, 0);
+      return originalConcat(list, totalLength);
+    }) as typeof Buffer.concat;
+    assert.deepEqual(readTaskMessages(file, task, cursor), [message(content)]);
+    // A fully unterminated line must also fail in linear work, without replay.
+    fs.writeFileSync(file, Buffer.alloc(orphanBytes, 120));
+    assert.throws(() => readTaskMessages(file, task, cursor), corrupt);
+  } finally { Buffer.concat = originalConcat; }
+  t.diagnostic(`orphan_bytes_per_scan=${orphanBytes} scans=2 concatenated_bytes=${copiedBytes}`);
+  assert.ok(copiedBytes <= orphanBytes * 2, `Recovery recopied ${copiedBytes} bytes while scanning two ${orphanBytes}-byte orphan lines`);
+}));

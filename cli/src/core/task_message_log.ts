@@ -105,19 +105,42 @@ function locate(fd: number, cursor: TaskMessageCursor, snapshot?: Buffer): { byt
   // our fstat and write. Scan lines only on this uncommon path; ordinary loads
   // seek directly to their committed records, regardless of orphaned tails.
   const chunk = Buffer.alloc(64 * 1024);
-  let position = 0, lineOffset = 0;
-  let pending = Buffer.alloc(0);
+  let position = 0, lineOffset = 0, lineLength = 0;
+  let lineHash: ReturnType<typeof createHash> | undefined = createHash("sha256");
   while (position < size) {
     const read = fs.readSync(fd, chunk, 0, Math.min(chunk.length, size - position), position);
     if (!read) break;
+    const chunkOffset = position;
     position += read;
-    pending = Buffer.concat([pending, chunk.subarray(0, read)]);
-    let newline: number;
-    while ((newline = pending.indexOf(10)) !== -1) {
-      const line = pending.subarray(0, newline);
-      if (line.length === cursor.bytes && digest(line) === cursor.sha256) return { bytes: Buffer.from(line), offset: lineOffset };
-      pending = pending.subarray(newline + 1);
-      lineOffset += newline + 1;
+    const data = chunk.subarray(0, read);
+    let start = 0;
+    while (start < read) {
+      const newline = data.indexOf(10, start);
+      const end = newline === -1 ? read : newline;
+      lineLength += end - start;
+      // An oversized line cannot be the selected record. Discard its digest
+      // state and scan for its delimiter without retaining or copying its tail.
+      if (lineLength <= cursor.bytes) lineHash?.update(data.subarray(start, end));
+      else lineHash = undefined;
+      if (newline === -1) break;
+      if (lineLength === cursor.bytes && lineHash?.digest("hex") === cursor.sha256) {
+        // Allocate only the authenticated matching record, not an arbitrary
+        // unterminated line. Check again after materialization in case the file
+        // changed between the scan and this read.
+        const bytes = Buffer.alloc(cursor.bytes);
+        let copied = 0;
+        while (copied < bytes.length) {
+          const count = fs.readSync(fd, bytes, copied, bytes.length - copied, lineOffset + copied);
+          if (!count) corrupt("Committed message record changed during recovery");
+          copied += count;
+        }
+        if (digest(bytes) !== cursor.sha256) corrupt("Committed message record changed during recovery");
+        return { bytes, offset: lineOffset };
+      }
+      lineOffset = chunkOffset + newline + 1;
+      lineLength = 0;
+      lineHash = createHash("sha256");
+      start = newline + 1;
     }
   }
   return corrupt("Committed message record is missing or its digest does not match");
@@ -175,11 +198,15 @@ export function readTaskMessages(file: string, taskId: string, cursor: TaskMessa
       chain.push({ record, cursor: current });
       current = record.parent;
     }
-    let messages: ChatMessage[] = [];
+    const messages: ChatMessage[] = [];
     for (let index = chain.length - 1; index >= 0; index--) {
       const { record, cursor: committed } = chain[index];
       if (record.keep > messages.length) corrupt("Committed message prefix is unavailable");
-      messages = [...messages.slice(0, record.keep), ...record.append];
+      // Retain the prefix in place. Re-copying it for every revision makes
+      // append-heavy recovery quadratic; truncation and append are amortized
+      // linear in the messages actually introduced by the selected ancestry.
+      messages.length = record.keep;
+      for (const message of record.append) messages.push(message);
       if (messages.length !== committed.count) corrupt("Committed message count does not match its cursor");
     }
     if (fileDigest) decodedRevision = { file, taskId, cursor: cursorIdentity, fileDigest, messages: JSON.stringify(messages) };
