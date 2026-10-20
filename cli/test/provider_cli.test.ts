@@ -44,6 +44,25 @@ test("provider destination display redacts credential-shaped hostname labels and
   assert.doesNotMatch(display, /sk-test-secret-label|query-secret|private/);
 });
 
+test("provider destination display redacts URL-normalized AWS, Google and JWT hostname credentials", () => {
+  const credentialHosts = [
+    "AKIA1234567890ABCDEF.inference.example",
+    "AIza12345678901234567890123456789012345.inference.example",
+    "eyJabcdefghij.eyJabcdefghij.eyJabcdefghij.inference.example",
+  ];
+  for (const hostname of credentialHosts) {
+    const display = describeTarget({
+      provider: "compatible",
+      endpoint: `https://${hostname}:8443/v1`,
+      model: "safe-model",
+      cloudRoutedOrigins: [],
+    } as HarnessConfig);
+    assert.match(display, /https:\/\//);
+    assert.match(display, /safe-model/);
+    assert.doesNotMatch(display, /AKIA1234567890ABCDEF|AIza12345678901234567890123456789012345|eyJabcdefghij/i);
+  }
+});
+
 test("providers list captures redacted endpoint and authorized origins on stdout and stderr", async () => {
   const secretOrigin = "https://sk-test-secret-label.inference.example:8443";
   const previousExitCode = process.exitCode;
@@ -69,6 +88,34 @@ test("providers list captures redacted endpoint and authorized origins on stdout
     assert.match(stdout.join("\n"), /Authorized cloud destinations/);
     assert.doesNotMatch(stdout.join("\n"), /sk-test-secret-label|query-secret|private/);
     assert.doesNotMatch(stderr.join("\n"), /sk-test-secret-label|query-secret|private/);
+  } finally {
+    console.log = previousLog;
+    console.error = previousError;
+    process.exitCode = previousExitCode;
+    setCredentialAuthority({ NEXUS_COMPATIBLE_AUTH: previousCompatibleAuth }, previousCredentialHome);
+  }
+});
+
+test("providers list does not echo an invalid configured provider diagnostic", async () => {
+  const previousExitCode = process.exitCode;
+  const previousLog = console.log;
+  const previousError = console.error;
+  const previousCompatibleAuth = operatorSetting("NEXUS_COMPATIBLE_AUTH");
+  const previousCredentialHome = credentialStorageHome();
+  const stdout: string[] = [];
+  const stderr: string[] = [];
+  try {
+    setCredentialAuthority({ NEXUS_PROVIDER: "sk-test-secret-provider" });
+    console.log = (...values: unknown[]) => stdout.push(values.join(" "));
+    console.error = (...values: unknown[]) => stderr.push(values.join(" "));
+    const program = new Command();
+    program.exitOverride();
+    registerProviderCommands(program);
+    await program.parseAsync(["node", "nexus", "providers"]);
+
+    assert.match(stdout.join("\n"), /Configuration error: provider configuration is invalid/);
+    assert.doesNotMatch(stdout.join("\n"), /sk-test-secret-provider/);
+    assert.doesNotMatch(stderr.join("\n"), /sk-test-secret-provider/);
   } finally {
     console.log = previousLog;
     console.error = previousError;
