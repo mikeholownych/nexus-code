@@ -928,6 +928,17 @@ async function main(argv: string[]): Promise<void> {
   console.warn = toStderr;
   console.debug = toStderr;
 
+  // The packaged TUI may launch this entry point directly, without passing
+  // through index.ts. Recover before reading config and keep a shared lease
+  // while the sidecar can access state, just as the main CLI does.
+  const home = process.env.HOME || os.homedir();
+  const { acquireClientLease, releaseClientLease } = await import("./core/client_lease.js");
+  const { hasPendingStateRestore, recoverPendingStateRestore } = await import("./core/state_restore.js");
+  if (hasPendingStateRestore(home) && !recoverPendingStateRestore(home)) {
+    throw new Error("Pending state restore could not be recovered; no state was admitted");
+  }
+  const lease = acquireClientLease(home);
+  process.once("exit", () => releaseClientLease(lease));
   loadEnvironment();
   const program = new Command()
     .name("nexus-sidecar")
