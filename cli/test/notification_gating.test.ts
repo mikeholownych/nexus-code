@@ -40,7 +40,7 @@ describe("REQ-AGT-109a / ACC-PROC-08: notification and BEL gating", () => {
     const shimDir = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-shim-"));
     const notifyLog = path.join(shimDir, "notify.log");
     const shimScript = path.join(shimDir, "notify-send");
-    fs.writeFileSync(shimScript, `#!/bin/sh\necho "$@" >> "${notifyLog}"\n`, { mode: 0o755 });
+    fs.writeFileSync(shimScript, `#!/bin/sh\nprintf '%s\\n' "$#" "$@" >> "${notifyLog}"\n`, { mode: 0o755 });
     const origPath = process.env.PATH;
     process.env.PATH = `${shimDir}:${origPath}`;
 
@@ -86,7 +86,7 @@ describe("REQ-AGT-109a / ACC-PROC-08: notification and BEL gating", () => {
     const shimDir = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-shim-"));
     const notifyLog = path.join(shimDir, "notify.log");
     const shimScript = path.join(shimDir, "notify-send");
-    fs.writeFileSync(shimScript, `#!/bin/sh\necho "$@" >> "${notifyLog}"\n`, { mode: 0o755 });
+    fs.writeFileSync(shimScript, `#!/bin/sh\nprintf '%s\\n' "$#" "$@" >> "${notifyLog}"\n`, { mode: 0o755 });
     const origPath = process.env.PATH;
     process.env.PATH = `${shimDir}:${origPath}`;
 
@@ -114,7 +114,7 @@ describe("REQ-AGT-109a / ACC-PROC-08: notification and BEL gating", () => {
       }
       assert.ok(fs.existsSync(notifyLog), "Interactive REPL on TTY must invoke notify-send");
       const logged = fs.readFileSync(notifyLog, "utf-8");
-      assert.ok(logged.includes("Turn finished."));
+      assert.deepEqual(logged.trimEnd().split("\n"), ["2", "Nexus Code", "Turn finished."], "notify-send must receive title and message as separate argv entries");
     } finally {
       Object.defineProperty(process.stdout, "isTTY", { value: origIsTTY, configurable: true });
       process.stdout.write = origWrite;
