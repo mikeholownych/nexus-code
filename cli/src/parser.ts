@@ -142,6 +142,41 @@ function mapOutsideStrings(str: string, fix: (segment: string) => string): strin
   return out + (inString ? segment : fix(segment));
 }
 
+/**
+ * Convert the body of a single-quoted string literal into a valid JSON double-quoted string body.
+ * Valid JSON escapes (\", \\, \/, \b, \f, \n, \r, \t, \uXXXX) and `\"` are preserved so string
+ * contents are not altered; `\'` (valid in JS, invalid in JSON) is unescaped to `'`; any other
+ * backslash (e.g. a Windows path separator) is itself escaped. This closes CodeQL
+ * js/incomplete-sanitization: the input was previously only scanned for `"`, so a backslash could
+ * escape the inserted quote and break out of the string.
+ */
+export function unescapeSingleQuoteBody(inner: string): string {
+  let out = "";
+  for (let i = 0; i < inner.length; i++) {
+    const ch = inner[i];
+    if (ch === "\\") {
+      const next = inner[i + 1];
+      if (next === undefined) out += "\\\\";
+      else if (next === "'") { out += "'"; i++; }
+      else if (next === 'u') {
+        const hex = inner.slice(i + 2, i + 6);
+        if (/^[0-9a-fA-F]{4}$/.test(hex)) {
+          out += "\\u" + hex;
+          i += 5; // skip \uXXXX so loop++ lands at i+6
+        } else {
+          out += "\\\\u";
+          i++;
+        }
+        continue;
+      } else if ('"\\/bfnrt'.includes(next)) { out += "\\" + next; i++; }
+      else { out += "\\\\" + next; i++; }
+      continue;
+    }
+    out += ch === '"' ? '\\"' : ch;
+  }
+  return out;
+}
+
 export function repairJsonWithClass<T = any>(raw: string): { value: T; repaired: JsonRepairClass } {
   if (typeof raw !== "string") return { value: raw as unknown as T, repaired: "none" };
   let str = raw.trim();
@@ -192,10 +227,7 @@ export function repairJsonWithClass<T = any>(raw: string): { value: T; repaired:
   }
 
   // 5. Convert single-quoted keys and string literals: 'key': 'value' -> "key": "value"
-  const singleQuoteCleaned = cleaned.replace(/'([^'\\]*(?:\\.[^'\\]*)*)'/g, (_, inner) => {
-    const escaped = inner.replace(/"/g, '\\"');
-    return `"${escaped}"`;
-  });
+  const singleQuoteCleaned = cleaned.replace(/'([^'\\]*(?:\\.[^'\\]*)*)'/g, (_, inner) => `"${unescapeSingleQuoteBody(inner)}"`);
 
   try {
     return { value: JSON.parse(singleQuoteCleaned), repaired: "trailing" };
