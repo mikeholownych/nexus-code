@@ -235,7 +235,7 @@ function validateMatchedPeers(paths) {
   for (const agent of expectedAgents) {
     for (const record of byAgent.get(agent)) {
       if (!record.budget || !Number.isInteger(record.budget.steps) || !Number.isInteger(record.budget.minutes)) {
-        failPairs(`${agent} ${record.task} run ${record.run} is missing its effective step/minute budget`);
+        failPairs(`${agent} ${formatTaskId(record.task)} run ${record.run} is missing its effective step/minute budget`);
       }
       const key = runKey(record);
       if (!grouped.has(key)) grouped.set(key, {});
@@ -251,7 +251,7 @@ function validateMatchedPeers(paths) {
   const tasks = taskIds.map((task) => {
     const runs = [...grouped.entries()].filter(([, r]) => r.nexus.task === task).map(([key, r]) => ({ run: Number(key.slice(key.lastIndexOf("\t") + 1)), records: r }));
     if (runs.length !== 5 || !same(runs.map((r) => r.run).sort((a, b) => a - b), [1, 2, 3, 4, 5])) {
-      failPairs(`${task} must have matched runs 1–5 for every peer; got ${runs.map((r) => r.run).sort((a, b) => a - b).join(",")}`);
+      failPairs(`${formatTaskId(task)} must have matched runs 1–5 for every peer; got ${runs.map((r) => r.run).sort((a, b) => a - b).join(",")}`);
     }
     return {
       task,
@@ -272,8 +272,12 @@ function formatRunKey(key) {
   const separator = key.lastIndexOf("\t");
   const task = key.slice(0, separator);
   const run = key.slice(separator + 1);
+  return `${formatTaskId(task)} run ${run}`;
+}
+
+function formatTaskId(task) {
   // JSON escaping keeps untrusted task identifiers on one diagnostic line while preserving ordinary identifiers.
-  return `${JSON.stringify(task).slice(1, -1)} run ${run}`;
+  return JSON.stringify(task).slice(1, -1);
 }
 
 function same(a, b) {
