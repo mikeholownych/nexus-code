@@ -90,6 +90,7 @@ describe("WP-11: Decisive Multi-Actor System Journey & Lifecycle Qualification (
     // Bind worktree to durable state
     const taskState = implementerApp.getStateManager().loadTaskState(implementerTaskId);
     taskState.worktreeBinding = {
+      taskId: implementerTaskId,
       worktreePath,
       branch: worktreeInfo.branch,
       baseCommit: worktreeInfo.baseCommit,
@@ -224,12 +225,23 @@ describe("WP-11: Decisive Multi-Actor System Journey & Lifecycle Qualification (
     const stateManager = app.getStateManager();
     const taskState = stateManager.loadTaskState(taskId);
     taskState.worktreeBinding = {
+      taskId: generatedWorktree.taskId,
       worktreePath: generatedWorktree.worktreePath,
       branch: generatedWorktree.branch,
       baseCommit: generatedWorktree.baseCommit,
     };
     assert.doesNotThrow(() => stateManager.saveTaskState(taskState));
     assert.equal(stateManager.loadTaskState(taskId).worktreeBinding?.worktreePath, generatedWorktree.worktreePath);
+
+    const mismatchedTaskState = {
+      ...taskState,
+      taskId: `other-${taskId}`,
+      worktreeBinding: { ...taskState.worktreeBinding, worktreePath: generatedWorktree.worktreePath },
+    };
+    assert.throws(() => stateManager.saveTaskState(mismatchedTaskState), /Sensitive-data protection or classification failed/);
+
+    taskState.worktreeBinding.worktreePath = path.join(tmpDir, "external", syntheticEntropyComponent, "repo");
+    assert.throws(() => stateManager.saveTaskState(taskState), /Sensitive-data protection or classification failed/);
 
     const syntheticCredential = `ghp_${"A".repeat(36)}`;
     taskState.worktreeBinding.worktreePath = path.join(workspace, ".nexus", "worktrees", syntheticCredential);
