@@ -2,10 +2,12 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { createHmac, randomBytes } from "node:crypto";
+import { createHash, createHmac, randomBytes } from "node:crypto";
 
 const KEY_BYTES = 32;
 const LEGACY_FINGERPRINT = /^[0-9a-f]{12}$/;
+const STALE_TEMP_AGE_MS = 60_000;
+const TEMP_HOST_ID = createHash("sha256").update(os.hostname()).digest("hex").slice(0, 16);
 
 export class AccountIdentityError extends Error {
   constructor(message: string) {
@@ -55,12 +57,47 @@ function keyPath(home: string): string {
   return path.join(privateDir, "hmac-key");
 }
 
+function cleanupStaleTemporaryKeys(file: string): void {
+  const dir = path.dirname(file);
+  const now = Date.now();
+  for (const name of fs.readdirSync(dir)) {
+    const match = /^hmac-key\.tmp\.([0-9a-f]{16})\.(\d+)\.([0-9a-f]{24})$/.exec(name);
+    if (!match) continue;
+    // Only reap names created on this host. A shared home may contain an active
+    // writer whose PID cannot be checked in this process namespace.
+    if (match[1] !== TEMP_HOST_ID) continue;
+    const pid = Number(match[2]);
+    if (!Number.isSafeInteger(pid) || pid <= 0) continue;
+    const candidate = path.join(dir, name);
+    try {
+      const stat = fs.lstatSync(candidate);
+      if (!stat.isFile() || stat.uid !== uid() || (stat.mode & 0o777) !== 0o600 || stat.nlink !== 1 || now - stat.mtimeMs < STALE_TEMP_AGE_MS) continue;
+      try {
+        process.kill(pid, 0);
+        continue;
+      } catch (error: any) {
+        if (error?.code !== "ESRCH") continue;
+      }
+      // Re-check the inode immediately before unlinking in case another writer
+      // changed the candidate after the first lstat.
+      const current = fs.lstatSync(candidate);
+      if (current.dev === stat.dev && current.ino === stat.ino && current.nlink === 1) fs.unlinkSync(candidate);
+    } catch (error: any) {
+      if (error?.code !== "ENOENT") throw error;
+    }
+  }
+}
+
 function readOrCreateKey(home: string): Buffer {
   const file = keyPath(home);
   const noFollow = fs.constants.O_NOFOLLOW;
   if (typeof noFollow !== "number") throw new AccountIdentityError("Secure account identity key access is unavailable on this platform.");
+  cleanupStaleTemporaryKeys(file);
 
-  const temporary = `${file}.tmp.${process.pid}.${randomBytes(12).toString("hex")}`;
+  // Generate bytes before opening a path so entropy-provider failures cannot
+  // strand an open descriptor or an empty temporary file.
+  const key = randomBytes(KEY_BYTES);
+  const temporary = `${file}.tmp.${TEMP_HOST_ID}.${process.pid}.${randomBytes(12).toString("hex")}`;
   let fd: number;
   try {
     fd = fs.openSync(temporary, fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL | noFollow, 0o600);
@@ -70,29 +107,44 @@ function readOrCreateKey(home: string): Buffer {
       : "Cannot create a private account identity key safely.");
   }
 
-  const key = randomBytes(KEY_BYTES);
+  let published = false;
+  let operationError: unknown;
   try {
     fs.writeFileSync(fd, key);
     fs.fsyncSync(fd);
-  } finally {
-    fs.closeSync(fd);
-  }
-  let published = false;
-  try {
+    const openedFd = fd;
+    fd = -1;
+    fs.closeSync(openedFd);
     // link() publishes the fully written inode atomically and refuses to replace a
     // key another process may already have created.
-    fs.linkSync(temporary, file);
-    published = true;
-  } catch (error: any) {
-    if (error?.code !== "EEXIST") throw error;
+    try {
+      fs.linkSync(temporary, file);
+      published = true;
+    } catch (error: any) {
+      if (error?.code !== "EEXIST") throw error;
+    }
+  } catch (error) {
+    operationError = error;
+    throw error;
   } finally {
+    let cleanupError: unknown;
+    if (fd >= 0) {
+      const openedFd = fd;
+      fd = -1;
+      try {
+        fs.closeSync(openedFd);
+      } catch (error) {
+        cleanupError = error;
+      }
+    }
     try {
       fs.unlinkSync(temporary);
     } catch (error: any) {
       // A concurrent reader may have removed this exact interrupted-link name
       // while repairing a creator that paused after publication.
-      if (error?.code !== "ENOENT") throw error;
+      if (error?.code !== "ENOENT" && cleanupError === undefined) cleanupError = error;
     }
+    if (operationError === undefined && cleanupError !== undefined) throw cleanupError;
   }
   if (published) syncDirectory(path.dirname(file), noFollow);
   return readKey(file, noFollow);
@@ -125,23 +177,29 @@ function removeInterruptedKeyLink(file: string, keyStat: fs.Stats): void {
 
 function readKey(file: string, noFollow: number): Buffer {
   let fd: number;
+  const nonBlock = fs.constants.O_NONBLOCK;
+  if (typeof nonBlock !== "number") throw new AccountIdentityError("Non-blocking account identity key access is unavailable on this platform.");
   try {
-    fd = fs.openSync(file, fs.constants.O_RDONLY | noFollow);
+    // O_NOFOLLOW prevents symlink traversal; O_NONBLOCK prevents an attacker who
+    // replaces the key with a FIFO from hanging the caller before fstat can reject it.
+    fd = fs.openSync(file, fs.constants.O_RDONLY | noFollow | nonBlock);
   } catch {
     throw new AccountIdentityError("The private account identity key cannot be opened safely.");
   }
   try {
-    let stat = fs.fstatSync(fd);
+    const stat = fs.fstatSync(fd);
+    if (!stat.isFile()) throw new AccountIdentityError("The private account identity key must be a regular file.");
     const named = fs.lstatSync(file);
-    if (stat.nlink > 1) {
+    let checkedStat = stat;
+    if (checkedStat.nlink > 1) {
       // A process can stop after the atomic link() and before removing its
       // temporary name. Remove only names that point at this exact key inode.
-      removeInterruptedKeyLink(file, stat);
-      stat = fs.fstatSync(fd);
+      removeInterruptedKeyLink(file, checkedStat);
+      checkedStat = fs.fstatSync(fd);
     }
     if (
-      !stat.isFile() || stat.uid !== uid() || stat.nlink !== 1 || (stat.mode & 0o777) !== 0o600 ||
-      named.isSymbolicLink() || named.dev !== stat.dev || named.ino !== stat.ino
+      checkedStat.uid !== uid() || checkedStat.nlink !== 1 || (checkedStat.mode & 0o777) !== 0o600 ||
+      named.isSymbolicLink() || named.dev !== checkedStat.dev || named.ino !== checkedStat.ino
     ) {
       throw new AccountIdentityError("The private account identity key has unsafe ownership, permissions, or file type.");
     }

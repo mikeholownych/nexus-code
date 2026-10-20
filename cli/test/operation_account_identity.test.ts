@@ -1,9 +1,12 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { spawn, spawnSync } from "node:child_process";
+import crypto from "node:crypto";
 import fs from "node:fs";
 import { syncBuiltinESMExports } from "node:module";
 import os from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { createHash, randomBytes } from "node:crypto";
 import { createOperationAccountIdentity, AccountIdentityError } from "../src/core/account_identity.js";
 import { newOperation } from "../src/core/operation.js";
@@ -19,6 +22,21 @@ function withTemp<T>(fn: (root: string, home: string, workspace: string, stateDi
   fs.mkdirSync(stateDir, { mode: 0o700 });
   try {
     return fn(root, home, workspace, stateDir);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+}
+
+async function withTempAsync<T>(fn: (root: string, home: string, workspace: string, stateDir: string) => Promise<T>): Promise<T> {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-account-identity-"));
+  const home = path.join(root, "home");
+  const workspace = path.join(root, "workspace");
+  const stateDir = path.join(root, "state");
+  fs.mkdirSync(home, { mode: 0o700 });
+  fs.mkdirSync(workspace, { mode: 0o700 });
+  fs.mkdirSync(stateDir, { mode: 0o700 });
+  try {
+    return await fn(root, home, workspace, stateDir);
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
@@ -153,7 +171,53 @@ test("symlinked account identity directory is rejected without following it", ()
   });
 });
 
-test("caller-provided short account labels are preserved while unmarked legacy hashes migrate", () => {
+test("a FIFO at the account identity key path is rejected without blocking or migrating state", (t) => {
+  withTemp((_root, home, workspace, stateDir) => {
+    const privateDir = path.join(home, ".config", "nexus", "account-identities");
+    fs.mkdirSync(privateDir, { recursive: true, mode: 0o700 });
+    const key = path.join(privateDir, "hmac-key");
+    const fifo = spawnSync("mkfifo", [key], { encoding: "utf8" });
+    if (fifo.error || fifo.status !== 0) {
+      t.skip("mkfifo is unavailable on this platform");
+      return;
+    }
+
+    const cliRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+    const script = `
+      import { AccountIdentityError } from "./src/core/account_identity.ts";
+      import { newOperation } from "./src/core/operation.ts";
+      import { OperationStore } from "./src/core/operation_runner.ts";
+      const store = new OperationStore(process.env.NEXUS_TEST_WORKSPACE, process.env.NEXUS_TEST_STATE, process.env.HOME);
+      const operation = newOperation("op-fifo", "fifo must not migrate", [{ id: "unit", prompt: "test" }], [
+        { id: "primary", provider: "provider", endpoint: "https://provider.example/v1", model: "m", capabilities: ["tools"] },
+      ], Date.now());
+      store.save(operation);
+      const prior = store.manager.loadTaskState(operation.id);
+      prior.operation.resources[0].account = "012345abcdef";
+      prior.operation.conditions.push({ scope: "account", key: "provider|account|012345abcdef", condition: "AUTH_FAILED", temporary: false, source: "probe", confidence: "authoritative", reason: "synthetic", observedAt: new Date().toISOString(), failures: 1, resourceId: "primary" });
+      store.manager.saveTaskState(prior);
+      try {
+        store.loadForInspection(operation.id);
+        process.exitCode = 2;
+      } catch (error) {
+        const after = store.manager.loadTaskState(operation.id).operation;
+        process.exitCode = error instanceof AccountIdentityError && after.resources[0].account === "012345abcdef" && after.conditions[0].key === "provider|account|012345abcdef" ? 0 : 3;
+        if (process.exitCode === 0) console.log("state-unchanged");
+      }
+    `;
+    const result = spawnSync(process.execPath, ["--import", "tsx", "--input-type=module", "--eval", script], {
+      cwd: cliRoot,
+      env: { ...process.env, HOME: home, XDG_CONFIG_HOME: path.join(home, ".config"), NEXUS_TEST_WORKSPACE: workspace, NEXUS_TEST_STATE: stateDir },
+      encoding: "utf8",
+      timeout: 2_000,
+    });
+    assert.equal(result.error?.name, undefined, result.error?.message);
+    assert.equal(result.status, 0, result.stderr || result.stdout);
+    assert.match(result.stdout, /state-unchanged/);
+  });
+});
+
+test("explicit short labels are preserved and unmarked legacy-looking IDs migrate stably", () => {
   withTemp((_root, home, workspace, stateDir) => {
     const explicit = "012345abcdef";
     const legacy = "fedcba654321";
@@ -165,7 +229,11 @@ test("caller-provided short account labels are preserved while unmarked legacy h
     store.save(op);
     const loaded = store.loadForInspection(op.id);
     assert.equal(loaded.resources[0].account, explicit);
-    assert.equal(loaded.resources[1].account, `acct:legacy:v1:${createOperationAccountIdentity(home).migrateLegacy(legacy, op.id).split(":").at(-1)}`);
+    assert.match(loaded.resources[1].account!, /^acct:legacy:v1:[0-9a-f]{64}$/);
+    assert.notEqual(loaded.resources[1].account, legacy);
+    const restarted = new OperationStore(workspace, stateDir, home).loadForInspection(op.id);
+    assert.equal(restarted.resources[0].account, explicit);
+    assert.equal(restarted.resources[1].account, loaded.resources[1].account);
   });
 });
 
@@ -183,6 +251,90 @@ test("account identity store repairs a fully written key left linked by an inter
     assert.deepEqual(fs.readFileSync(key), originalKey, "recovery keeps the established key bytes");
     assert.equal(fs.existsSync(interruptedLink), false);
     assert.equal(fs.statSync(key).nlink, 1);
+  });
+});
+
+test("concurrent first use converges on one private key without leaking the key", async () => {
+  await withTempAsync(async (root, home) => {
+    const cliRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+    const script = `
+      import { createOperationAccountIdentity } from "./src/core/account_identity.ts";
+      console.log(createOperationAccountIdentity(process.env.HOME).migrateLegacy("legacy-value", "shared-operation"));
+    `;
+    const outputs = await Promise.all(Array.from({ length: 4 }, () => new Promise<string>((resolve, reject) => {
+      const child = spawn(process.execPath, ["--import", "tsx", "--input-type=module", "--eval", script], {
+        cwd: cliRoot,
+        env: { ...process.env, HOME: home, XDG_CONFIG_HOME: path.join(home, ".config") },
+        stdio: ["ignore", "pipe", "pipe"],
+      });
+      let stdout = "";
+      let stderr = "";
+      const timer = setTimeout(() => {
+        child.kill("SIGKILL");
+        reject(new Error("concurrent key creator timed out"));
+      }, 10_000);
+      child.stdout.setEncoding("utf8").on("data", (chunk) => { stdout += chunk; });
+      child.stderr.setEncoding("utf8").on("data", (chunk) => { stderr += chunk; });
+      child.once("error", (error) => { clearTimeout(timer); reject(error); });
+      child.once("close", (code) => {
+        clearTimeout(timer);
+        if (code !== 0) reject(new Error(stderr || `key creator exited ${code}`));
+        else resolve(stdout.trim());
+      });
+    })));
+    assert.ok(outputs.every((value) => value === outputs[0]), "all creators use the same persisted key");
+    assert.match(outputs[0]!, /^acct:legacy:v1:[0-9a-f]{64}$/);
+    const key = path.join(home, ".config", "nexus", "account-identities", "hmac-key");
+    assert.equal(fs.statSync(key).nlink, 1);
+    assert.equal(fs.statSync(key).mode & 0o777, 0o600);
+    assert.equal(fs.readdirSync(path.dirname(key)).filter((name) => name.startsWith("hmac-key.tmp.")).length, 0);
+  });
+});
+
+test("key setup and write failures remove temporary files and never publish a key", () => {
+  for (const failurePoint of ["random", "write", "fsync", "close"] as const) {
+    withTemp((_root, home) => {
+      const privateDir = path.join(home, ".config", "nexus", "account-identities");
+      fs.mkdirSync(privateDir, { recursive: true, mode: 0o700 });
+      const property = failurePoint === "random"
+        ? "randomBytes"
+        : failurePoint === "write" ? "writeFileSync" : failurePoint === "fsync" ? "fsyncSync" : "closeSync";
+      const target = failurePoint === "random" ? crypto : fs;
+      const original = (target as any)[property];
+      let calls = 0;
+      (target as any)[property] = (...args: any[]) => {
+        calls++;
+        if (failurePoint === "random" && calls === 1) return original(...args); // operation salt succeeds; key generation fails before open
+        if (failurePoint === "close") {
+          original(...args);
+          throw new Error("injected close failure");
+        }
+        throw new Error(`injected ${failurePoint} failure`);
+      };
+      syncBuiltinESMExports();
+      try {
+        assert.throws(() => createOperationAccountIdentity(home).fingerprint("synthetic-token"), /injected/);
+      } finally {
+        (target as any)[property] = original;
+        syncBuiltinESMExports();
+      }
+      assert.equal(fs.existsSync(path.join(privateDir, "hmac-key")), false);
+      assert.deepEqual(fs.readdirSync(privateDir), [], "failed key creation leaves no temporary or published key");
+    });
+  }
+});
+
+test("stale unlinked temporary keys are removed before a new key is created", () => {
+  withTemp((_root, home) => {
+    const privateDir = path.join(home, ".config", "nexus", "account-identities");
+    fs.mkdirSync(privateDir, { recursive: true, mode: 0o700 });
+    const hostId = createHash("sha256").update(os.hostname()).digest("hex").slice(0, 16);
+    const stale = path.join(privateDir, `hmac-key.tmp.${hostId}.2147483647.0123456789abcdef01234567`);
+    fs.writeFileSync(stale, randomBytes(32), { mode: 0o600 });
+    fs.utimesSync(stale, new Date(0), new Date(0));
+    assert.throws(() => process.kill(2147483647, 0), { code: "ESRCH" });
+    createOperationAccountIdentity(home).fingerprint("synthetic-token");
+    assert.equal(fs.existsSync(stale), false);
   });
 });
 

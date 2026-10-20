@@ -421,6 +421,9 @@ export function migrateLegacyAccountIdentities(
   operation: DurableOperationState,
   identity: OperationAccountIdentity,
 ): DurableOperationState {
+  // Schema-1 records do not retain whether an old 12-hex account value came
+  // from the CLI label or the former credential hash. Preserve explicitly
+  // marked labels; migrate unmarked 12-hex values as legacy credential IDs.
   const explicitAccounts = new Set(
     operation.resources.filter((resource) => resource.accountIdentitySource === "explicit" && resource.account).map((resource) => resource.account!),
   );
