@@ -21,7 +21,8 @@ test("a subcommand receives its own --provider and -m", { skip: fs.existsSync(CL
   const r = nexus("providers", "verify", "--provider", "no-such-provider", "-m", "m");
   const out = `${r.stdout}${r.stderr}`;
   assert.doesNotMatch(out, /required option '--provider <id>' not specified/);
-  assert.match(out, /no-such-provider/, out);
+  assert.match(out, /Unknown provider '\(unrecognized provider\)'/, out);
+  assert.doesNotMatch(out, /no-such-provider/);
 });
 
 test("top-level options before a subcommand are still accepted", { skip: fs.existsSync(CLI) ? false : "cli/dist is not built" }, () => {

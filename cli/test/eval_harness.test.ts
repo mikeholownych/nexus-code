@@ -221,7 +221,9 @@ test("version identity probes run inside the sandbox and reject a mismatched exp
     class: "bugfix",
     difficulty: "easy",
   }));
-  const installed = path.join(out, "goose");
+  // The agent lives outside the tasks' parent, which the harness protects as corpus material.
+  const agentDir = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-eval-rc-agent-"));
+  const installed = path.join(agentDir, "goose");
   const probeMarker = `/tmp/nexus-version-probe-${process.pid}-${Date.now()}`;
   fs.writeFileSync(installed, `#!/bin/sh\n[ -z "$EVAL_VERSION_PROBE_CANARY" ] || exit 9\ntouch ${probeMarker}\nprintf '%s\\n' '0.1.0-alpha.2 (legacy, main)'\n`);
   fs.chmodSync(installed, 0o755);
@@ -239,7 +241,7 @@ test("version identity probes run inside the sandbox and reject a mismatched exp
   try {
     process.env.EVAL_VERSION_PROBE_CANARY = "VERSION_PROBE_HOST_CANARY";
     process.env.EVAL_VERSION_PROBE_CANARY = "VERSION_PROBE_HOST_CANARY";
-    const env = { ...process.env, PATH: `${out}${path.delimiter}${process.env.PATH ?? ""}` };
+    const env = { ...process.env, PATH: `${agentDir}${path.delimiter}${process.env.PATH ?? ""}` };
     const run = await runNode([path.join(ROOT, "eval/run.mjs"), "--config", config, "--out", path.join(out, "results"), "--tasks", tasks, "--only", "no-task-selected"], env);
     assert.equal(run.status, 2, `${run.stdout}\n${run.stderr}`);
     assert.match(run.stderr, /goose version 0\.1\.0-alpha\.2 does not match expected version 1\.0\.0-rc\.1/);
@@ -248,6 +250,7 @@ test("version identity probes run inside the sandbox and reject a mismatched exp
   } finally {
     delete process.env.EVAL_VERSION_PROBE_CANARY;
     fs.rmSync(out, { recursive: true, force: true });
+    fs.rmSync(agentDir, { recursive: true, force: true });
   }
 });
 
@@ -258,6 +261,21 @@ test("qualification refuses peer output limits that differ from the installed Ne
   assert.match(nexusLimitsProblem({ limits: { context: 65536, output: 4096 } }, entry), /Nexus output allowance 8192 differs from matched peer limit 4096/);
   assert.match(nexusLimitsProblem({ limits: { context: 131072, output: 8192 } }, entry), /configured context limit 131072 exceeds/);
   assert.match(nexusLimitsProblem({ limits: { context: 65536, output: 4096 } }, null), /Nexus output allowance 8192 differs/);
+});
+
+test("qualification separates native context discovery from explicit operator overrides", async () => {
+  const { nexusContextLimitArgs, nexusLimitsProblem } = await import(path.join(ROOT, "eval/validate.mjs"));
+  const entry = { id: "m", context_length: 32768, max_completion_tokens: 8192 };
+  const native = { serverProfile: "llamacpp", limits: { output: 8192 } };
+  assert.equal(nexusLimitsProblem(native, entry), null, "an advertised provider limit can be discovered natively");
+  assert.deepEqual(nexusContextLimitArgs(native, 65536), [], "the harness must not supply its default limit");
+  assert.match(nexusLimitsProblem(native, null), /native context discovery requires a positive provider-advertised/);
+  assert.match(nexusLimitsProblem({ ...native, args: ["--context-limit", "32768"] }, entry), /through limits.context/);
+  assert.match(nexusLimitsProblem({ limits: { output: 8192 } }, entry), /serverProfile native discovery/);
+
+  const override = { serverProfile: "llamacpp", limits: { context: 16384, output: 8192 } };
+  assert.equal(nexusLimitsProblem(override, entry), null, "an explicit override is checked against the provider limit");
+  assert.deepEqual(nexusContextLimitArgs(override, 32768), ["--context-limit", "16384"]);
 });
 
 function writePeerResults(root: string, agent: string, overrides: Record<string, unknown> = {}): string {

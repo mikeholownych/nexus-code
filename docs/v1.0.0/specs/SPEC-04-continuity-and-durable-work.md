@@ -48,7 +48,7 @@ Work units (`/team`, `nexus operation`) run as `new AutonomousAgent(config, 1)` 
 |---|---|
 | AGT-03 | Subagent and findings-distillation inference is not counted in token/request stats. Reproduced: 4 gateway requests, stats showed 2. |
 | AGT-04 | In-turn subagents write orphan durable task records (reproduced). |
-| AGT-05 | The duplicated subagent loop (`agent.ts:5298-5431`) skips admission measurement, strict counting, empty-reply retry and steering. The offered and accepted tool sets differ. |
+| AGT-05 | The duplicated subagent loop (`agent.ts` `runSubagent`) historically skipped admission measurement and offered a different tool set than it accepted. **v1 subset closed:** `measureAdmission` runs in the subagent loop and chat uses `getEffectiveTools()` (see `cli/test/agt111_subagent_parity.test.ts` and `EXECUTION_CONVERGENCE.md` §10). Remaining post-v1 divergences: non-streaming responses, no empty-reply retry, no operator steering queue, non-durable in-turn helpers, no separate cancellation signal. |
 | AGT-06 | The subagent obligation write short-circuits `setUnverifiedChanges`. |
 | AGT-08 | An exception escaping `runTurn` yields `failedTurnFromError` with a hard-coded `unverifiedChangesPending:false` and `steps.used:0` (`turn.ts:444-460`, `app.ts:229`). Queued steering and compaction are never reported. |
 | AGT-09 | Once state identity is "unknown" (more than 1.5 s on a large repo, `agent.ts:2026-2047`), ≥12 consecutive successful writes count as no progress, which gives a false STAGNATION_DETECTED (INFERENCE). |

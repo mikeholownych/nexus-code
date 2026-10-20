@@ -242,7 +242,10 @@ test("task validation: pinned repos, one source, and black-box hidden oracle for
   assert.match(validateTask({ ...good, repo: { url: good.repo.url, commit: "main" } }, dir).join(), /pinned/);
   assert.match(validateTask({ ...good, fixture: "repo" }, dir).join(), /exactly one of fixture or repo/);
   assert.match(validateTask({ ...good, hidden: {} }, dir).join(), /hidden.command/);
-  assert.match(validateTask(good, dir, { qualification: true }).join(), /blackbox-v1/);
+  // Legacy checks execute candidate modules in the validator process and are therefore not independent qualification.
+  assert.match(validateTask(good, dir, { qualification: true }).join(), /qualification requires the isolated blackbox-v1 hidden oracle/);
+  assert.match(validateTask({ ...good, class: "bugfix", difficulty: "medium", hidden: { dir: "candidate", command: "npm test" } }, dir, { qualification: true }).join(), /in-process legacy validators are not accepted/);
+  assert.match(validateTask({ ...good, class: "bugfix", difficulty: "medium", hidden: { protocol: "blackbox-v1", command: "npm test" } }, dir, { qualification: true }).join(), /unsupported fields/);
   const cases = path.join(dir, "private-cases.json");
   fs.writeFileSync(cases, JSON.stringify([{ input: { x: 1 }, expected: { x: 1 } }]));
   fs.symlinkSync(cases, path.join(dir, "private-cases-link.json"));
@@ -350,7 +353,7 @@ test("hidden tests must be unreadable to the agent's own user", async () => {
   fs.chmodSync(tasks, 0o755);
   assert.equal(hiddenTestIsolationProblem({}, tasks), null, "development runs may run as the operator");
   assert.match(hiddenTestIsolationProblem({ qualification: true }, tasks), /need runAs/);
-  assert.match(hiddenTestIsolationProblem({ runAs: "nexus-eval" }, tasks), /evaluator account|setfacl/);
+  assert.match(hiddenTestIsolationProblem({ runAs: "nexus-eval" }, tasks), /evaluator account|setfacl|sandboxRuntimePaths/);
   assert.match(hiddenTestIsolationProblem({ runAs: "bad user;" }, tasks), /not a valid user name/);
   const wrapped = asUser("nexus-eval", "/usr/bin/bwrap", ["--unshare-all", "--", "/runner/node"]);
   // Exactly the form the provisioned sudoers rule permits: no env wrapper that would need an any-command rule.
@@ -358,7 +361,150 @@ test("hidden tests must be unreadable to the agent's own user", async () => {
   assert.deepEqual(wrapped.argv, ["-n", "-u", "nexus-eval", "--", "/usr/bin/bwrap", "--unshare-all", "--", "/runner/node"]);
   assert.throws(() => asUser("nexus-eval", "bwrap", []), /absolute/);
   const sudoers = fs.readFileSync(path.join(ROOT, "eval/host/provision.sh"), "utf8");
-  assert.match(sudoers, /NOPASSWD: \/usr\/bin\/bwrap\\n/, "the harness's sudo command and the provisioned rule name the same binary");
+  assert.match(sudoers, /ALL=\(%s\) !ALL\\n%s ALL=\(%s\) NOPASSWD: \/usr\/bin\/bwrap\\n/, "the explicit deny-all precedes the exact bwrap grant");
+});
+
+test("qualification runtime mounts cannot overlap the task tree, held-out store, or private validator paths", async () => {
+  const { hiddenTestIsolationProblem, runtimeCorpusOverlapProblem } = await import(path.join(ROOT, "eval/validate.mjs"));
+  const { agentSandboxArgv, candidateSandboxHostMountSources, isolatedArgv } = await import(path.join(ROOT, "eval/isolate.mjs"));
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-eval-corpus-overlap-"));
+  try {
+    const store = path.join(root, "heldout-v2");
+    const tasks = path.join(store, "tasks");
+    const references = path.join(store, "reference");
+    const runtimeRoot = path.join(root, "runtime");
+    const home = path.join(root, "home");
+    const proxyDirectory = path.join(root, "proxy");
+    const readOnlyRuntime = path.join(runtimeRoot, "runtime.bin");
+    const supervisorPath = path.join(ROOT, "eval/agent_sandbox.mjs");
+    const privateValidator = path.join(root, "private-validator");
+    fs.mkdirSync(tasks, { recursive: true });
+    fs.mkdirSync(references);
+    fs.mkdirSync(runtimeRoot);
+    fs.mkdirSync(home);
+    fs.mkdirSync(proxyDirectory);
+    fs.mkdirSync(privateValidator);
+    fs.writeFileSync(readOnlyRuntime, "runtime\n");
+    fs.writeFileSync(path.join(tasks, "task.json"), "{}\n");
+    fs.writeFileSync(path.join(references, "solution.patch"), "REFERENCE_SOLUTION_CANARY\n");
+    fs.writeFileSync(path.join(privateValidator, "validate.mjs"), "PRIVATE_VALIDATOR_CANARY\n");
+    const alias = path.join(root, "store-alias");
+    fs.symlinkSync(store, alias, "dir");
+
+    const mountContext = { cwd: runtimeRoot, home, proxyDirectory, nodeRuntime: process.execPath, supervisorPath };
+    const hostMounts = candidateSandboxHostMountSources({ ...mountContext, readOnlyPaths: [readOnlyRuntime] });
+    const hostToolchain = (preferred: string, command: string, argv: string[]) => {
+      try { if (fs.statSync(preferred).isDirectory()) return preferred; } catch {}
+      const result = spawnSync(command, argv, { encoding: "utf8" });
+      const candidate = result.status === 0 ? result.stdout.trim() : "";
+      try { return fs.statSync(candidate).isDirectory() ? candidate : null; } catch { return null; }
+    };
+    const expectedToolchains = [
+      hostToolchain("/usr/local/go", "go", ["env", "GOROOT"]),
+      hostToolchain("/opt/nexus-qual/rust", "rustc", ["--print", "sysroot"]),
+    ].filter((item): item is string => Boolean(item));
+    const existingDirectories = ["/usr/bin", "/usr/lib", "/usr/lib64", "/usr/libexec", "/usr/share", "/lib", "/lib64", "/usr/local/lib"]
+      .filter((item) => { try { return fs.statSync(item).isDirectory(); } catch { return false; } });
+    const existingEtcFiles = ["/etc/ld.so.cache", "/etc/passwd", "/etc/group", "/etc/nsswitch.conf", "/etc/localtime"]
+      .filter((item) => { try { return fs.statSync(item).isFile(); } catch { return false; } });
+    const existingEtcDirectories = ["/etc/alternatives"]
+      .filter((item) => { try { return fs.statSync(item).isDirectory(); } catch { return false; } });
+    assert.deepEqual(hostMounts.systemDirectories, existingDirectories);
+    assert.deepEqual(hostMounts.systemFiles, existingEtcFiles);
+    assert.deepEqual(hostMounts.systemEtcDirectories, existingEtcDirectories);
+    assert.deepEqual(hostMounts.toolchainDirectories, expectedToolchains);
+    assert.deepEqual(hostMounts.runtimeSources, {
+      cwd: fs.realpathSync(runtimeRoot),
+      home: fs.realpathSync(home),
+      proxyDirectory,
+      nodeRuntime: fs.realpathSync(process.execPath),
+      supervisorPath: fs.realpathSync(supervisorPath),
+      readOnlyPaths: [fs.realpathSync(readOnlyRuntime)],
+    });
+
+    assert.equal(runtimeCorpusOverlapProblem([runtimeRoot], [runtimeRoot], tasks), null, "an unrelated pinned runtime remains usable");
+    assert.match(runtimeCorpusOverlapProblem([path.join(references, "solution.patch")], [store], tasks) ?? "", /overlaps protected corpus material/);
+    assert.match(runtimeCorpusOverlapProblem([runtimeRoot], [store], tasks) ?? "", /overlaps protected corpus material/, "a broad allowlist root cannot contain the corpus store");
+    assert.match(runtimeCorpusOverlapProblem([path.join(alias, "reference", "solution.patch")], [alias], tasks) ?? "", /overlaps protected corpus material/, "symlink aliases are resolved before comparing paths");
+    assert.match(runtimeCorpusOverlapProblem([privateValidator], [privateValidator], tasks, [privateValidator]) ?? "", /overlaps protected corpus material/);
+    assert.match(runtimeCorpusOverlapProblem([runtimeRoot], [runtimeRoot], tasks, [path.join(root, "missing-validator")]) ?? "", /private corpus path is unavailable/);
+    assert.equal(runtimeCorpusOverlapProblem([], [], path.join(ROOT, "eval/tasks")), null, "default in-repo development eval/tasks does not collide with eval/agent_sandbox.mjs");
+    assert.equal(runtimeCorpusOverlapProblem([path.join(ROOT, "cli/dist")], [path.join(ROOT, "cli"), path.join(ROOT, "core")], path.join(ROOT, "eval/tasks")), null, "default development Nexus runtime roots do not overlap eval/tasks");
+    assert.match(runtimeCorpusOverlapProblem([], [], path.join(ROOT, "eval/tasks"), [], { qualification: true }) ?? "", /overlaps protected corpus material/, "qualification mode still rejects using in-repo eval/tasks because its parent overlaps eval/agent_sandbox.mjs");
+
+    const unconditionalMountPaths = [
+      ...hostMounts.systemDirectories.map((source) => path.join(source, "synthetic-corpus-subdir")),
+      ...hostMounts.systemFiles,
+      ...hostMounts.systemEtcDirectories.map((source) => path.join(source, "synthetic-corpus-subdir")),
+      ...hostMounts.toolchainDirectories.map((source) => path.join(source, "synthetic-corpus-subdir")),
+    ];
+    const runtimeMountPaths = [
+      path.join(runtimeRoot, "corpus-leak"),
+      path.join(home, "corpus-leak"),
+      path.join(proxyDirectory, "corpus-leak"),
+      process.execPath,
+      supervisorPath,
+      readOnlyRuntime,
+    ];
+    for (const protectedPath of [...unconditionalMountPaths, ...runtimeMountPaths]) {
+      assert.match(
+        runtimeCorpusOverlapProblem([], [], tasks, [protectedPath], mountContext) ?? "",
+        /overlaps protected corpus material/,
+        `runtime preflight rejects mounted corpus path ${protectedPath}`,
+      );
+      assert.match(
+        hiddenTestIsolationProblem({ qualification: true, sandboxRuntimePaths: [], sandboxRuntimeRoots: [], corpusCustody: { storeRoot: protectedPath }, mountContext }, tasks) ?? "",
+        /overlaps protected corpus material/,
+        `hidden-test qualification preflight rejects mounted corpus path ${protectedPath}`,
+      );
+      assert.throws(() => agentSandboxArgv({
+        cwd: runtimeRoot,
+        home,
+        proxyDirectory,
+        readOnlyPaths: [readOnlyRuntime],
+        supervisorPath,
+        protectedCorpusPaths: [protectedPath],
+      }), /overlaps protected corpus material/);
+      if (unconditionalMountPaths.includes(protectedPath)) {
+        // This check precedes Bubblewrap availability, including on minimal CI hosts.
+        assert.throws(() => isolatedArgv({ cwd: runtimeRoot, command: "true", protectedCorpusPaths: [protectedPath] }), /overlaps protected corpus material/);
+      }
+    }
+    assert.match(
+      runtimeCorpusOverlapProblem([], ["/usr/bin"], tasks, [path.join("/usr/bin", "synthetic-corpus-subdir")]) ?? "",
+      /overlaps protected corpus material/,
+      "a runtime allowlist root below an unconditional system mount is rejected",
+    );
+    assert.match(
+      runtimeCorpusOverlapProblem([readOnlyRuntime], [], tasks, [readOnlyRuntime], mountContext) ?? "",
+      /overlaps protected corpus material/,
+      "an explicit read-only runtime source is checked against the corpus",
+    );
+    assert.match(
+      hiddenTestIsolationProblem({ qualification: true, sandboxRuntimePaths: [readOnlyRuntime], sandboxRuntimeRoots: [], corpusCustody: { storeRoot: readOnlyRuntime }, mountContext }, tasks) ?? "",
+      /overlaps protected corpus material/,
+      "hidden-test preflight checks explicit read-only runtime sources",
+    );
+    const custodyReportPath = readOnlyRuntime;
+    assert.match(hiddenTestIsolationProblem({
+      qualification: true,
+      runAs: "nexus-eval",
+      sandboxRuntimePaths: [readOnlyRuntime],
+      sandboxRuntimeRoots: [runtimeRoot],
+      corpusCustody: { reportPath: custodyReportPath },
+      mountContext,
+    }, tasks) ?? "", /overlaps protected corpus material/);
+    assert.throws(() => agentSandboxArgv({
+      cwd: runtimeRoot,
+      home,
+      proxyDirectory,
+      readOnlyPaths: [readOnlyRuntime],
+      supervisorPath,
+      protectedCorpusPaths: [custodyReportPath],
+    }), /overlaps protected corpus material/);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
 });
 
 test("qualification remains fail-closed without enforced aggregate resource controls", async () => {
@@ -381,30 +527,33 @@ test("qualification remains fail-closed without enforced aggregate resource cont
   assert.match(qualificationResourceIsolationProblem({ resources: { ...ok, tasks: 0 } }) ?? "", /tasks/);
   assert.match(qualificationResourceIsolationProblem({ resources: { ...ok, cpuPercent: 1.5 } }) ?? "", /cpuPercent/);
   assert.match(qualificationResourceIsolationProblem({ resources: { ...ok, memoryBytes: 256 * 1024 * 1024 + 1 } }) ?? "", /multiple of 4096/);
-  assert.match(qualificationResourceIsolationProblem({ resources: { ...ok, storageBytes: ok.storageBytes - 4096 } }) ?? "", /tmpfs with size<=storageBytes/);
+  assert.match(qualificationResourceIsolationProblem({ resources: { ...ok, storageBytes: ok.storageBytes - 4096 } }) ?? "", /tmpfs with size<=storageBytes|owner-accessible/);
   assert.match(qualificationResourceIsolationProblem({ resources: { ...ok, storageBytes: undefined } }) ?? "", /storageBytes/);
   const isolation = qualificationResourceIsolationProblem({ resources: ok });
   if (process.env.NEXUS_EVAL_TEST_WORKSPACE_ROOT) assert.equal(isolation, null, "the dedicated test tmpfs and kernel resource contract must pass preflight");
   else assert.match(isolation ?? "", /dedicated tmpfs|exact mount point/, "a shared /dev/shm must fail qualification preflight");
   if (process.env.NEXUS_EVAL_TEST_WORKSPACE_ROOT) {
+    // CI mounts the capped workspace as 0711 (owner rwx, other --x). Mode probes must restore
+    // that contract so later runAs / version-probe suites can still traverse as the evaluator.
+    const restoreMode = 0o711;
     fs.chmodSync(workspaceRoot, 0o755);
     try {
       assert.match(qualificationResourceIsolationProblem({ resources: ok }) ?? "", /non-readable\/non-writable by group or other/);
     } finally {
-      fs.chmodSync(workspaceRoot, 0o700);
+      fs.chmodSync(workspaceRoot, restoreMode);
     }
     assert.equal(qualificationResourceIsolationProblem({ resources: ok }), null, "restored dedicated mount root must pass preflight");
     fs.chmodSync(workspaceRoot, 0o731);
     try {
       assert.match(qualificationResourceIsolationProblem({ resources: ok }) ?? "", /non-readable\/non-writable by group or other/);
     } finally {
-      fs.chmodSync(workspaceRoot, 0o700);
+      fs.chmodSync(workspaceRoot, restoreMode);
     }
     fs.chmodSync(workspaceRoot, 0o711);
     try {
       assert.equal(qualificationResourceIsolationProblem({ resources: ok }), null, "execute-only traversal for the isolated evaluator account is compatible with the private root");
     } finally {
-      fs.chmodSync(workspaceRoot, 0o700);
+      fs.chmodSync(workspaceRoot, restoreMode);
     }
   }
   const syntheticRoot = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-mount-mode-"));
@@ -517,12 +666,34 @@ test("repository workspaces carry no history beyond the pinned baseline commit",
     git(upstream, "commit", "-qam", "reference fix");
     const child = git(upstream, "rev-parse", "HEAD");
     git(upstream, "tag", "v-fix");
+    const danglingBlobResult = spawnSync("git", ["hash-object", "-w", "--stdin"], { cwd: upstream, env, input: "DANGLING_BLOB_CANARY_999", encoding: "utf8" });
+    assert.equal(danglingBlobResult.status, 0, danglingBlobResult.stderr);
+    const danglingBlob = danglingBlobResult.stdout.trim();
+    const baselineTree = git(upstream, "rev-parse", `${baseline}^{tree}`);
+    const danglingCommitEnv = { ...env, GIT_AUTHOR_DATE: "2000-01-01T00:00:00Z", GIT_COMMITTER_DATE: "2000-01-01T00:00:00Z" };
+    const danglingCommitResult = spawnSync("git", ["-c", "user.name=t", "-c", "user.email=t@example.invalid", "commit-tree", baselineTree, "-p", baseline, "-m", "DANGLING_COMMIT_CANARY_999"], { cwd: upstream, env: danglingCommitEnv, encoding: "utf8" });
+    assert.equal(danglingCommitResult.status, 0, danglingCommitResult.stderr);
+    const danglingCommit = danglingCommitResult.stdout.trim();
+    git(upstream, "update-ref", "--create-reflog", "HEAD", danglingCommit);
+    git(upstream, "update-ref", "HEAD", child);
+    const danglingReflog = fs.readFileSync(path.join(upstream, ".git/logs/HEAD"), "utf8");
+    assert.match(danglingReflog, new RegExp(danglingCommit), "the upstream fixture has a HEAD reflog pointing at the dangling commit");
     git(upstream, "checkout", "-qb", "later");
     fs.writeFileSync(path.join(upstream, "later.txt"), "later\n");
     git(upstream, "add", "-A");
     git(upstream, "commit", "-qm", "later work");
     const cache = path.join(base, "cache");
     git(base, "clone", "-q", "--no-checkout", upstream, cache);
+    const cacheBlobResult = spawnSync("git", ["hash-object", "-w", "--stdin"], { cwd: cache, env, input: "DANGLING_BLOB_CANARY_999", encoding: "utf8" });
+    assert.equal(cacheBlobResult.status, 0, cacheBlobResult.stderr);
+    assert.equal(cacheBlobResult.stdout.trim(), danglingBlob, "the cache contains the dangling blob object");
+    const cacheCommitResult = spawnSync("git", ["-c", "user.name=t", "-c", "user.email=t@example.invalid", "commit-tree", baselineTree, "-p", baseline, "-m", "DANGLING_COMMIT_CANARY_999"], { cwd: cache, env: danglingCommitEnv, encoding: "utf8" });
+    assert.equal(cacheCommitResult.status, 0, cacheCommitResult.stderr);
+    assert.equal(cacheCommitResult.stdout.trim(), danglingCommit, "the cache contains the dangling commit object");
+    const cacheHead = git(cache, "rev-parse", "HEAD");
+    git(cache, "update-ref", "--create-reflog", "HEAD", danglingCommit);
+    git(cache, "update-ref", "HEAD", cacheHead);
+    assert.match(fs.readFileSync(path.join(cache, ".git/logs/HEAD"), "utf8"), new RegExp(danglingCommit), "the cache HEAD reflog points at the dangling commit");
 
     // Control: the former `clone --shared` + checkout layout exposes the child and is detected.
     const leaky = path.join(base, "leaky");
@@ -553,6 +724,16 @@ test("repository workspaces carry no history beyond the pinned baseline commit",
     assert.equal(git(ws, "remote"), "");
     assert.equal(git(ws, "tag", "--list"), "");
     assert.equal(fs.existsSync(path.join(ws, ".git/FETCH_HEAD")), false);
+    const allObjects = spawnSync("git", ["cat-file", "--batch-check=%(objectname)", "--batch-all-objects"], { cwd: ws, env, encoding: "utf8" });
+    assert.equal(allObjects.status, 0, allObjects.stderr);
+    assert.doesNotMatch(allObjects.stdout, new RegExp(danglingBlob));
+    assert.doesNotMatch(allObjects.stdout, new RegExp(danglingCommit));
+    assert.notEqual(spawnSync("git", ["cat-file", "-p", danglingBlob], { cwd: ws, env, encoding: "utf8" }).status, 0);
+    assert.notEqual(spawnSync("git", ["cat-file", "-p", danglingCommit], { cwd: ws, env, encoding: "utf8" }).status, 0);
+    const planted = spawnSync("git", ["hash-object", "-w", "--stdin"], { cwd: ws, env, input: "PLANTED_DANGLING_CANARY", encoding: "utf8" });
+    assert.equal(planted.status, 0, planted.stderr);
+    assert.match(workspaceHistoryProblem(ws, baseline) ?? "", /unreachable object/);
+    fs.rmSync(path.join(ws, ".git", "objects", planted.stdout.trim().slice(0, 2), planted.stdout.trim().slice(2)));
     assert.throws(() => stageRepoWorkspace(cache, "main", path.join(base, "ws-ref")), /full pinned commit/);
 
     // Exercise the production workspace stager and candidate sandbox together. The future solution remains in the
@@ -588,6 +769,16 @@ test("repository workspaces carry no history beyond the pinned baseline commit",
     assert.equal(observed.external, "unavailable unavailable unavailable ", "candidate could access an external cache, validator, or custodian path");
     assert.doesNotMatch(observed.refs, new RegExp(child));
     assert.doesNotMatch(`${task.stdout}${task.stderr}`, /REFERENCE_SOLUTION_CANARY_72d9|EXTERNAL_VALIDATOR_CANARY_0e42/);
+    const objectProbe = `const cp=require('node:child_process'),fs=require('node:fs'),path=require('node:path');const run=(args)=>cp.spawnSync('git',args,{cwd:'/workspace',encoding:'utf8',env:{PATH:'/usr/bin:/bin',HOME:'/home/eval',GIT_CONFIG_NOSYSTEM:'1',GIT_CONFIG_GLOBAL:'/dev/null'}});let disk='';const walk=(d)=>{for(const e of fs.readdirSync(d,{withFileTypes:true})){const p=path.join(d,e.name);if(e.isDirectory())walk(p);else try{disk+=fs.readFileSync(p).toString('utf8')}catch{}}};walk('/workspace/.git');console.log(JSON.stringify({fsck:run(['fsck','--unreachable']),all:run(['cat-file','--batch-check=%(objectname)','--batch-all-objects']),blob:run(['cat-file','-p',${JSON.stringify(danglingBlob)}]),commit:run(['cat-file','-p',${JSON.stringify(danglingCommit)}]),disk}))`;
+    const objectTask = await runSandbox(sandbox.cmd, sandbox.argv, JSON.stringify({ command: nodeRuntime, argv: ["-e", objectProbe], env: { PATH: "/usr/bin:/bin" } }));
+    assert.equal(objectTask.status, 0, `${objectTask.error ?? ""}\n${objectTask.stderr}`);
+    const objectObserved = JSON.parse(objectTask.stdout.trim());
+    assert.equal(objectObserved.fsck.status, 0);
+    assert.doesNotMatch(objectObserved.fsck.stdout, /unreachable/);
+    assert.doesNotMatch(objectObserved.all.stdout, new RegExp(`${danglingBlob}|${danglingCommit}`));
+    assert.notEqual(objectObserved.blob.status, 0);
+    assert.notEqual(objectObserved.commit.status, 0);
+    assert.doesNotMatch(`${objectObserved.disk}${objectObserved.fsck.stderr}${objectObserved.blob.stderr}${objectObserved.commit.stderr}`, /DANGLING_(?:BLOB|COMMIT)_CANARY_999/);
   } finally {
     fs.rmSync(base, { recursive: true, force: true });
   }
@@ -823,4 +1014,23 @@ test("the model proxy injects each scheduled fault into the chat request it name
     upstream.close();
   }
   await assert.rejects(startModelProxy({ upstream: "http://127.0.0.1:9/v1", faults: [{ kind: "nope", atRequest: 1 }] }), /invalid fault/);
+});
+
+test("executable probes refuse bind sources that overlap protected corpus material", async () => {
+  const { isolatedProcessArgv } = await import(path.join(ROOT, "eval/isolate.mjs"));
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-eval-probe-overlap-"));
+  try {
+    const store = path.join(root, "heldout-v2");
+    const workspace = path.join(root, "workspace");
+    fs.mkdirSync(path.join(store, "reference"), { recursive: true });
+    fs.mkdirSync(workspace);
+    const alias = path.join(root, "store-alias");
+    fs.symlinkSync(store, alias, "dir");
+    const probe = (options: Record<string, unknown>) => () => isolatedProcessArgv({ command: "/usr/bin/true", argv: ["--version"], ...options });
+    assert.throws(probe({ cwd: workspace, protectedCorpusPaths: ["/usr/share/nexus-heldout"] }), /overlaps protected corpus material: \/usr\/share/, "system bind containing a protected path");
+    assert.throws(probe({ cwd: path.join(alias, "reference"), protectedCorpusPaths: [store] }), /overlaps protected corpus material/, "workspace bind through a symlink alias");
+    assert.doesNotThrow(probe({ cwd: workspace, protectedCorpusPaths: [store] }), "an unrelated workspace remains usable");
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
 });

@@ -1,3 +1,4 @@
+import { generateCompatibilityMetadata } from "../src/compatibility.js";
 import { describe, it, beforeEach, afterEach } from "node:test";
 import assert from "node:assert/strict";
 import * as fs from "node:fs";
@@ -347,10 +348,14 @@ describe("Installation safety, checksum verification, and recovery", () => {
     fs.chmodSync(newBin, 0o755);
     const mockCore1 = path.join(pkgStage, "lib", "core", "harness-core");
     const mockCore2 = path.join(pkgStage, "lib", "core", "nexus-tui");
-    fs.writeFileSync(mockCore1, "#!/bin/sh\nexit 0\n");
-    fs.writeFileSync(mockCore2, "#!/bin/sh\nexit 0\n");
+    fs.writeFileSync(mockCore1, `#!/bin/sh\necho ${newVersion}\n`);
+    fs.writeFileSync(mockCore2, `#!/bin/sh\nif [ "$1" = --version ]; then echo ${newVersion}; else echo NEXUS; fi\n`);
     fs.chmodSync(mockCore1, 0o755);
     fs.chmodSync(mockCore2, 0o755);
+
+    fs.mkdirSync(path.join(pkgStage,"lib/cli/dist"), { recursive:true });
+    fs.writeFileSync(path.join(pkgStage,"lib/cli/dist/index.js"), "// fixture payload\n");
+    fs.writeFileSync(path.join(pkgStage,"compatibility.json"), JSON.stringify(generateCompatibilityMetadata(newVersion,"deadbeef")));
 
     // Compute MANIFEST.sha256
     const binSum = computeSha256(newBin);

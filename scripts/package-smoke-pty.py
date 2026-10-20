@@ -35,7 +35,7 @@ if pid == 0:
 os.close(slave)
 out = b""
 start = time.time()
-while time.time() - start < 4:
+while time.time() - start < 15:
     r, _, _ = select.select([master], [], [], 0.1)
     if master in r:
         try:
@@ -43,7 +43,8 @@ while time.time() - start < 4:
             if not chunk:
                 break
             out += chunk
-            if b"ask Nexus" in out or b"commands" in out:
+            clean = re.sub(rb"\x1b\[[0-9;?]*[a-zA-Z]", b"", out)
+            if re.search(rb"ask Nexus|enter send", clean):
                 break
         except OSError:
             break

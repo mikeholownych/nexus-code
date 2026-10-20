@@ -2472,27 +2472,58 @@ error[E0308]: mismatched types
     assert.strictEqual(typeof pasteRes.success, "boolean");
   });
 
-  test("Web search module rejects empty queries and structures results (Candidate #45)", async () => {
+  test("RustCoreBridge dispatches search_web tool execution through configured provider (Candidate #45)", async () => {
     const emptyRes = await executeWebSearch("");
     assert.strictEqual(emptyRes.success, false);
     assert.strictEqual(emptyRes.results.length, 0);
 
-    const validQueryRes = await executeWebSearch("rust axum json", 3);
-    assert.strictEqual(validQueryRes.success, true);
-    assert.ok(validQueryRes.results.length >= 1);
-    assert.ok(validQueryRes.results[0].title);
-  });
-
-  test("RustCoreBridge dispatches search_web tool execution (Candidate #45)", async () => {
-    const bridge = new RustCoreBridge(process.cwd());
+    const previousSearxngUrl = process.env.SEARXNG_URL;
+    const previousSearxUrl = process.env.SEARX_URL;
+    const previousDisableSearch = process.env.NEXUS_DISABLE_WEB_SEARCH;
+    const server = http.createServer((_req, res) => {
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({
+        results: [
+          {
+            title: "TypeScript interface example",
+            url: "https://example.test/typescript-interface",
+            content: "A deterministic mock search result.",
+          },
+        ],
+      }));
+    });
+    let bridge: RustCoreBridge | undefined;
     try {
+      await new Promise<void>((resolve, reject) => {
+        server.once("error", reject);
+        server.listen(0, "127.0.0.1", resolve);
+      });
+
+      const address = server.address();
+      assert.ok(address && typeof address !== "string");
+      process.env.SEARXNG_URL = `http://127.0.0.1:${address.port}`;
+      delete process.env.SEARX_URL;
+      delete process.env.NEXUS_DISABLE_WEB_SEARCH;
+      bridge = new RustCoreBridge(process.cwd());
+
       const toolRes = await bridge.executeTool("search_web", { query: "typescript interface example" });
       assert.strictEqual(toolRes.success, true);
       const parsed = JSON.parse(toolRes.output);
       assert.strictEqual(parsed.query, "typescript interface example");
       assert.ok(Array.isArray(parsed.results));
+      assert.strictEqual(parsed.total_results, 1);
+      assert.strictEqual(parsed.results[0].title, "TypeScript interface example");
     } finally {
-      bridge.shutdown();
+      bridge?.shutdown();
+      if (previousSearxngUrl === undefined) delete process.env.SEARXNG_URL;
+      else process.env.SEARXNG_URL = previousSearxngUrl;
+      if (previousSearxUrl === undefined) delete process.env.SEARX_URL;
+      else process.env.SEARX_URL = previousSearxUrl;
+      if (previousDisableSearch === undefined) delete process.env.NEXUS_DISABLE_WEB_SEARCH;
+      else process.env.NEXUS_DISABLE_WEB_SEARCH = previousDisableSearch;
+      if (server.listening) {
+        await new Promise<void>((resolve) => server.close(() => resolve()));
+      }
     }
   });
 

@@ -16,8 +16,11 @@ import { startGateway } from "./helpers/provider_fixture.js";
 
 /** Live processes whose whole command line is exactly `command`. */
 function running(command: string): number[] {
+  // pgrep reads the pattern as a POSIX ERE; escape every metacharacter so `command` is matched
+  // literally rather than as a regex (CodeQL js/incomplete-sanitization).
+  const pattern = command.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   try {
-    return execFileSync("pgrep", ["-x", "-f", command.replace(/\./g, "\\.")], { encoding: "utf8" }).trim().split("\n").filter(Boolean).map(Number);
+    return execFileSync("pgrep", ["-x", "-f", pattern], { encoding: "utf8" }).trim().split("\n").filter(Boolean).map(Number);
   } catch {
     return [];
   }

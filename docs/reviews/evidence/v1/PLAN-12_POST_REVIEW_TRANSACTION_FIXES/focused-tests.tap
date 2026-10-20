@@ -1,0 +1,636 @@
+TAP version 13
+# Subtest: coherent 1.0.0 metadata passes updater and publisher validation
+ok 1 - coherent 1.0.0 metadata passes updater and publisher validation
+  ---
+  duration_ms: 32.414101
+  ...
+# Subtest: coherent 1.0.0-rc.1 metadata passes updater and publisher validation
+ok 2 - coherent 1.0.0-rc.1 metadata passes updater and publisher validation
+  ---
+  duration_ms: 32.079016
+  ...
+# Subtest: coherent 1.0.0+build.1 metadata passes updater and publisher validation
+ok 3 - coherent 1.0.0+build.1 metadata passes updater and publisher validation
+  ---
+  duration_ms: 40.165467
+  ...
+# Subtest: reject mixed cli=9.9.9 throughout validation
+ok 4 - reject mixed cli=9.9.9 throughout validation
+  ---
+  duration_ms: 36.801812
+  ...
+# Subtest: reject mixed cli=1.0.0-rc.1 throughout validation
+ok 5 - reject mixed cli=1.0.0-rc.1 throughout validation
+  ---
+  duration_ms: 36.035145
+  ...
+# Subtest: reject mixed cli=1.0.0+other throughout validation
+ok 6 - reject mixed cli=1.0.0+other throughout validation
+  ---
+  duration_ms: 31.017562
+  ...
+# Subtest: reject mixed core=9.9.9 throughout validation
+ok 7 - reject mixed core=9.9.9 throughout validation
+  ---
+  duration_ms: 32.195111
+  ...
+# Subtest: reject mixed core=1.0.0-rc.1 throughout validation
+ok 8 - reject mixed core=1.0.0-rc.1 throughout validation
+  ---
+  duration_ms: 30.163799
+  ...
+# Subtest: reject mixed core=1.0.0+other throughout validation
+ok 9 - reject mixed core=1.0.0+other throughout validation
+  ---
+  duration_ms: 29.846012
+  ...
+# Subtest: reject mixed tui=9.9.9 throughout validation
+ok 10 - reject mixed tui=9.9.9 throughout validation
+  ---
+  duration_ms: 30.36609
+  ...
+# Subtest: reject mixed tui=1.0.0-rc.1 throughout validation
+ok 11 - reject mixed tui=1.0.0-rc.1 throughout validation
+  ---
+  duration_ms: 32.891381
+  ...
+# Subtest: reject mixed tui=1.0.0+other throughout validation
+ok 12 - reject mixed tui=1.0.0+other throughout validation
+  ---
+  duration_ms: 31.879324
+  ...
+# Subtest: reject mixed harness=9.9.9 throughout validation
+ok 13 - reject mixed harness=9.9.9 throughout validation
+  ---
+  duration_ms: 29.484227
+  ...
+# Subtest: reject mixed harness=1.0.0-rc.1 throughout validation
+ok 14 - reject mixed harness=1.0.0-rc.1 throughout validation
+  ---
+  duration_ms: 32.422401
+  ...
+# Subtest: reject mixed harness=1.0.0+other throughout validation
+ok 15 - reject mixed harness=1.0.0+other throughout validation
+  ---
+  duration_ms: 32.599693
+  ...
+# Subtest: explicit published legacy target 0.1.0-alpha.1 stays eligible within original bounds
+ok 16 - explicit published legacy target 0.1.0-alpha.1 stays eligible within original bounds
+  ---
+  duration_ms: 1.008457
+  ...
+# Subtest: explicit published legacy target v0.1.0-alpha.1 stays eligible within original bounds
+ok 17 - explicit published legacy target v0.1.0-alpha.1 stays eligible within original bounds
+  ---
+  duration_ms: 0.125695
+  ...
+# Subtest: explicit published legacy target 0.1.0-alpha.2 stays eligible within original bounds
+ok 18 - explicit published legacy target 0.1.0-alpha.2 stays eligible within original bounds
+  ---
+  duration_ms: 0.089396
+  ...
+# Subtest: explicit published legacy target v0.1.0-alpha.2 stays eligible within original bounds
+ok 19 - explicit published legacy target v0.1.0-alpha.2 stays eligible within original bounds
+  ---
+  duration_ms: 0.082796
+  ...
+# Subtest: missing metadata fails closed for target undefined
+ok 20 - missing metadata fails closed for target undefined
+  ---
+  duration_ms: 0.358184
+  ...
+# Subtest: missing metadata fails closed for target 1.0.0
+ok 21 - missing metadata fails closed for target 1.0.0
+  ---
+  duration_ms: 0.092896
+  ...
+# Subtest: missing metadata fails closed for target v1.0.0-rc.1
+ok 22 - missing metadata fails closed for target v1.0.0-rc.1
+  ---
+  duration_ms: 0.142294
+  ...
+# Subtest: missing metadata fails closed for target 0.1.0-alpha.3
+ok 23 - missing metadata fails closed for target 0.1.0-alpha.3
+  ---
+  duration_ms: 0.091396
+  ...
+# Subtest: missing metadata fails closed for target 0.1.0-alpha.2+other
+ok 24 - missing metadata fails closed for target 0.1.0-alpha.2+other
+  ---
+  duration_ms: 0.148694
+  ...
+# Subtest: missing metadata fails closed for target 
+ok 25 - missing metadata fails closed for target 
+  ---
+  duration_ms: 0.112695
+  ...
+# Subtest: missing metadata fails closed for target not-a-version
+ok 26 - missing metadata fails closed for target not-a-version
+  ---
+  duration_ms: 0.258489
+  ...
+# Subtest: legacy target cannot bypass state schema 0
+ok 27 - legacy target cannot bypass state schema 0
+  ---
+  duration_ms: 0.134694
+  ...
+# Subtest: legacy target cannot bypass config schema 0
+ok 28 - legacy target cannot bypass config schema 0
+  ---
+  duration_ms: 0.178192
+  ...
+# Subtest: legacy target cannot bypass state schema 2
+ok 29 - legacy target cannot bypass state schema 2
+  ---
+  duration_ms: 0.141094
+  ...
+# Subtest: legacy target cannot bypass config schema 2
+ok 30 - legacy target cannot bypass config schema 2
+  ---
+  duration_ms: 0.094396
+  ...
+# Subtest: legacy target cannot bypass state schema 99
+ok 31 - legacy target cannot bypass state schema 99
+  ---
+  duration_ms: 0.094896
+  ...
+# Subtest: legacy target cannot bypass config schema 99
+ok 32 - legacy target cannot bypass config schema 99
+  ---
+  duration_ms: 0.090896
+  ...
+# Subtest: legacy target cannot bypass state schema NaN
+ok 33 - legacy target cannot bypass state schema NaN
+  ---
+  duration_ms: 0.218691
+  ...
+# Subtest: legacy target cannot bypass config schema NaN
+ok 34 - legacy target cannot bypass config schema NaN
+  ---
+  duration_ms: 0.099795
+  ...
+# Subtest: legacy release cannot claim an unpublished platform
+ok 35 - legacy release cannot claim an unpublished platform
+  ---
+  duration_ms: 0.269988
+  ...
+# Subtest: modern release remains eligible with validated compatibility metadata
+ok 36 - modern release remains eligible with validated compatibility metadata
+  ---
+  duration_ms: 0.957959
+  ...
+# Subtest: embedded metadata binds to the requested target even without detached metadata
+ok 37 - embedded metadata binds to the requested target even without detached metadata
+  ---
+  duration_ms: 0.342685
+  ...
+# Subtest: SemVer 2.0.0 parser and comparator
+    # Subtest: normalizes and validates release tags
+    ok 1 - normalizes and validates release tags
+      ---
+      duration_ms: 0.948961
+      ...
+    # Subtest: parses valid SemVer strings with and without prerelease or build tags
+    ok 2 - parses valid SemVer strings with and without prerelease or build tags
+      ---
+      duration_ms: 1.440293
+      ...
+    # Subtest: correctly orders semantic versions according to SemVer 2.0.0 rules
+    ok 3 - correctly orders semantic versions according to SemVer 2.0.0 rules
+      ---
+      duration_ms: 0.337122
+      ...
+    1..3
+ok 38 - SemVer 2.0.0 parser and comparator
+  ---
+  duration_ms: 3.550129
+  type: 'suite'
+  ...
+# Subtest: Installation provenance detection
+    # Subtest: detects packaged installation from NEXUS_HOME layout
+    ok 1 - detects packaged installation from NEXUS_HOME layout
+      ---
+      duration_ms: 1.806517
+      ...
+    # Subtest: detects development checkout when executed inside source tree
+    ok 2 - detects development checkout when executed inside source tree
+      ---
+      duration_ms: 0.46543
+      ...
+    1..2
+ok 39 - Installation provenance detection
+  ---
+  duration_ms: 2.412056
+  type: 'suite'
+  ...
+# Subtest: Release resolution and comparison
+    # Subtest: starts mock HTTP server for GitHub release endpoints
+    ok 1 - starts mock HTTP server for GitHub release endpoints
+      ---
+      duration_ms: 3.627835
+      ...
+    # Subtest: resolves latest stable release excluding drafts and prereleases
+    ok 2 - resolves latest stable release excluding drafts and prereleases
+      ---
+      duration_ms: 35.857418
+      ...
+    # Subtest: resolves pinned exact release, allowing explicit prerelease
+    ok 3 - resolves pinned exact release, allowing explicit prerelease
+      ---
+      duration_ms: 5.132932
+      ...
+    # Subtest: refuses to resolve an unpublished draft
+    ok 4 - refuses to resolve an unpublished draft
+      ---
+      duration_ms: 4.266776
+      ...
+    # Subtest: fails with clear error when pinned release does not exist
+    ok 5 - fails with clear error when pinned release does not exist
+      ---
+      duration_ms: 4.894616
+      ...
+    # Subtest: identifies upgrade, downgrade, and reinstall actions correctly
+    ok 6 - identifies upgrade, downgrade, and reinstall actions correctly
+      ---
+      duration_ms: 0.542135
+      ...
+    # Subtest: closes mock HTTP server
+    ok 7 - closes mock HTTP server
+      ---
+      duration_ms: 1.111372
+      ...
+    1..7
+ok 40 - Release resolution and comparison
+  ---
+  duration_ms: 56.089926
+  type: 'suite'
+  ...
+# Subtest: Installation safety, checksum verification, and recovery
+    # Subtest: successfully performs an end-to-end upgrade with atomic symlink swap and verification
+    ok 1 - successfully performs an end-to-end upgrade with atomic symlink swap and verification
+      ---
+      duration_ms: 683.355202
+      ...
+    # Subtest: fails closed on checksum mismatch and leaves the previous installation untouched
+    ok 2 - fails closed on checksum mismatch and leaves the previous installation untouched
+      ---
+      duration_ms: 14.205279
+      ...
+    1..2
+ok 41 - Installation safety, checksum verification, and recovery
+  ---
+  duration_ms: 698.097329
+  type: 'suite'
+  ...
+# Subtest: Download Origin, Redirect & Bounds Safety (REQ-REL-116, ACC-UPG-08)
+    # Subtest: validates allowed release download origins
+    ok 1 - validates allowed release download origins
+      ---
+      duration_ms: 1.012236
+      ...
+    # Subtest: rejects downloads redirecting to disallowed hosts or exceeding hop limits
+    ok 2 - rejects downloads redirecting to disallowed hosts or exceeding hop limits
+      ---
+      duration_ms: 51.426813
+      ...
+    1..2
+ok 42 - Download Origin, Redirect & Bounds Safety (REQ-REL-116, ACC-UPG-08)
+  ---
+  duration_ms: 53.547408
+  type: 'suite'
+  ...
+# Subtest: Tar Archive Structural Safety Engine (REQ-REL-116, ACC-UPG-08)
+    # Subtest: verifies path safety checks: rejects traversal and absolute paths
+    ok 1 - verifies path safety checks: rejects traversal and absolute paths
+      ---
+      duration_ms: 0.838696
+      ...
+    # Subtest: verifies symlink safety: rejects symlinks escaping package root
+    ok 2 - verifies symlink safety: rejects symlinks escaping package root
+      ---
+      duration_ms: 0.761778
+      ...
+    # Subtest: rejects malicious tar archive with path traversal
+    ok 3 - rejects malicious tar archive with path traversal
+      ---
+      duration_ms: 14.162408
+      ...
+    # Subtest: rejects oversized PAX metadata before retaining or parsing it
+    ok 4 - rejects oversized PAX metadata before retaining or parsing it
+      ---
+      duration_ms: 2.618812
+      ...
+    # Subtest: keeps global PAX link overrides active across later entries
+    ok 5 - keeps global PAX link overrides active across later entries
+      ---
+      duration_ms: 3.026707
+      ...
+    # Subtest: rejects local and global PAX size overrides that diverge from extraction accounting
+    ok 6 - rejects local and global PAX size overrides that diverge from extraction accounting
+      ---
+      duration_ms: 3.085221
+      ...
+    # Subtest: rejects malicious tar archive with escaping symlink
+    ok 7 - rejects malicious tar archive with escaping symlink
+      ---
+      duration_ms: 3.494316
+      ...
+    # Subtest: rejects archive containing disallowed entry types (FIFOs, devices, hardlinks)
+    ok 8 - rejects archive containing disallowed entry types (FIFOs, devices, hardlinks)
+      ---
+      duration_ms: 2.934686
+      ...
+    # Subtest: rejects archive with duplicate entries
+    ok 9 - rejects archive with duplicate entries
+      ---
+      duration_ms: 6.227255
+      ...
+    # Subtest: safely extracts valid archive and validates containment walk
+    ok 10 - safely extracts valid archive and validates containment walk
+      ---
+      duration_ms: 11.498886
+      ...
+    1..10
+ok 43 - Tar Archive Structural Safety Engine (REQ-REL-116, ACC-UPG-08)
+  ---
+  duration_ms: 49.585083
+  type: 'suite'
+  ...
+# Subtest: Pre-Migration Backups & Migration/Downgrade Safety (REQ-REL-116, ACC-UPG-09)
+    # Subtest: creates protected config and state backups with 0600 file and 0700 dir permissions
+    ok 1 - creates protected config and state backups with 0600 file and 0700 dir permissions
+      ---
+      duration_ms: 2.814757
+      ...
+    # Subtest: restores configuration cleanly from backup with strict 0600 permissions
+    ok 2 - restores configuration cleanly from backup with strict 0600 permissions
+      ---
+      duration_ms: 1.02704
+      ...
+    1..2
+ok 44 - Pre-Migration Backups & Migration/Downgrade Safety (REQ-REL-116, ACC-UPG-09)
+  ---
+  duration_ms: 4.042544
+  type: 'suite'
+  ...
+# Subtest: Machine-Readable Compatibility & Downgrade State Rejection (REQ-REL-116, ACC-UPG-07)
+    # Subtest: validates and generates valid compatibility metadata
+    ok 1 - validates and generates valid compatibility metadata
+      ---
+      duration_ms: 0.925516
+      ...
+    # Subtest: package validator rejects unsupported compatibility schemas
+    ok 2 - package validator rejects unsupported compatibility schemas
+      ---
+      duration_ms: 34.46425
+      ...
+    # Subtest: rejects malformed compatibility metadata
+    ok 3 - rejects malformed compatibility metadata
+      ---
+      duration_ms: 0.181042
+      ...
+    # Subtest: refuses downgrade when target release state schema is older than current state schema
+    ok 4 - refuses downgrade when target release state schema is older than current state schema
+      ---
+      duration_ms: 0.380189
+      ...
+    # Subtest: enforces minimum supported config and state schema versions
+    ok 5 - enforces minimum supported config and state schema versions
+      ---
+      duration_ms: 0.267462
+      ...
+    # Subtest: compares minimum updater versions using full SemVer prerelease ordering
+    ok 6 - compares minimum updater versions using full SemVer prerelease ordering
+      ---
+      duration_ms: 0.522222
+      ...
+    # Subtest: rejects a target config schema older than the current config schema
+    ok 7 - rejects a target config schema older than the current config schema
+      ---
+      duration_ms: 0.239556
+      ...
+    # Subtest: applies legacy policy for releases lacking compatibility metadata
+    ok 8 - applies legacy policy for releases lacking compatibility metadata
+      ---
+      duration_ms: 0.206148
+      ...
+    1..8
+ok 45 - Machine-Readable Compatibility & Downgrade State Rejection (REQ-REL-116, ACC-UPG-07)
+  ---
+  duration_ms: 37.633791
+  type: 'suite'
+  ...
+# Subtest: Durable Provenance & Package-Manager Protection (REQ-REL-116, ACC-UPG-10)
+    # Subtest: writes and reads durable installation provenance record
+    ok 1 - writes and reads durable installation provenance record
+      ---
+      duration_ms: 1.980062
+      ...
+    # Subtest: detects package-manager installations and blocks self-upgrade
+    ok 2 - detects package-manager installations and blocks self-upgrade
+      ---
+      duration_ms: 1.512954
+      ...
+    1..2
+ok 46 - Durable Provenance & Package-Manager Protection (REQ-REL-116, ACC-UPG-10)
+  ---
+  duration_ms: 3.689362
+  type: 'suite'
+  ...
+# Subtest: Upgrade Journal, Crash Recovery & PATH Shadowing (REQ-REL-116, ACC-UPG-11, ACC-UPG-12)
+    # Subtest: recovers an interrupted upgrade that crashed during downloading or staging
+    ok 1 - recovers an interrupted upgrade that crashed during downloading or staging
+      ---
+      duration_ms: 187.694443
+      ...
+    # Subtest: fails closed without deleting paths named by a malicious journal
+    ok 2 - fails closed without deleting paths named by a malicious journal
+      ---
+      duration_ms: 1.353916
+      ...
+    # Subtest: rejects a staging path whose apparent parent is redirected by a symlink
+    ok 3 - rejects a staging path whose apparent parent is redirected by a symlink
+      ---
+      duration_ms: 1.252492
+      ...
+    # Subtest: accepts backup paths under HOME with a custom installation prefix
+    ok 4 - accepts backup paths under HOME with a custom installation prefix
+      ---
+      duration_ms: 0.886707
+      ...
+    # Subtest: never executes a target binary redirected outside its version directory
+    ok 5 - never executes a target binary redirected outside its version directory
+      ---
+      duration_ms: 170.021715
+      ...
+    # Subtest: does not repoint the launcher to an external source symlink during early recovery
+    ok 6 - does not repoint the launcher to an external source symlink during early recovery
+      ---
+      duration_ms: 1.49535
+      ...
+    # Subtest: rolls back when a contained target launcher exits unsuccessfully
+    ok 7 - rolls back when a contained target launcher exits unsuccessfully
+      ---
+      duration_ms: 159.219292
+      ...
+    # Subtest: recovers a crash during switching by reverting symlink to source installation
+    ok 8 - recovers a crash during switching by reverting symlink to source installation
+      ---
+      duration_ms: 176.352193
+      ...
+    # Subtest: reverts launcher symlink to previous release with rollbackBinary
+    ok 9 - reverts launcher symlink to previous release with rollbackBinary
+      ---
+      duration_ms: 160.541333
+      ...
+    # Subtest: detects PATH shadowing when another nexus executable precedes prefix bin in PATH
+    ok 10 - detects PATH shadowing when another nexus executable precedes prefix bin in PATH
+      ---
+      duration_ms: 0.861072
+      ...
+    1..10
+ok 47 - Upgrade Journal, Crash Recovery & PATH Shadowing (REQ-REL-116, ACC-UPG-11, ACC-UPG-12)
+  ---
+  duration_ms: 860.211449
+  type: 'suite'
+  ...
+# Subtest: durable same-version transaction recovery
+    # Subtest: preserves the only working package after crash before-old-move
+    ok 1 - preserves the only working package after crash before-old-move
+      ---
+      duration_ms: 326.555415
+      ...
+    # Subtest: preserves the only working package after crash after-old-move
+    ok 2 - preserves the only working package after crash after-old-move
+      ---
+      duration_ms: 484.301258
+      ...
+    # Subtest: preserves the only working package after crash after-new-move
+    ok 3 - preserves the only working package after crash after-new-move
+      ---
+      duration_ms: 470.035985
+      ...
+    # Subtest: preserves the only working package after crash after-provenance
+    ok 4 - preserves the only working package after crash after-provenance
+      ---
+      duration_ms: 459.244271
+      ...
+    # Subtest: preserves the only working package after crash after-link
+    ok 5 - preserves the only working package after crash after-link
+      ---
+      duration_ms: 468.436338
+      ...
+    # Subtest: preserves the only working package after crash after-failed-displacement
+    ok 6 - preserves the only working package after crash after-failed-displacement
+      ---
+      duration_ms: 455.569531
+      ...
+    # Subtest: retains backups and truthful journal when restoring the link fails
+    ok 7 - retains backups and truthful journal when restoring the link fails
+      ---
+      duration_ms: 347.256407
+      ...
+    # Subtest: does not finalize a launcher that reports the wrong release
+    ok 8 - does not finalize a launcher that reports the wrong release
+      ---
+      duration_ms: 386.881196
+      ...
+    # Subtest: refuses missing runtime components despite a successful version shim
+    ok 9 - refuses missing runtime components despite a successful version shim
+      ---
+      duration_ms: 2.876458
+      ...
+    # Subtest: uses the actual previous same-version package for explicit binary rollback
+    ok 10 - uses the actual previous same-version package for explicit binary rollback
+      ---
+      duration_ms: 329.154852
+      ...
+    # Subtest: rejects a redirected backup without touching outside data
+    ok 11 - rejects a redirected backup without touching outside data
+      ---
+      duration_ms: 1.951188
+      ...
+    # Subtest: check-only leaves a pending transaction byte-for-byte unchanged
+    ok 12 - check-only leaves a pending transaction byte-for-byte unchanged
+      ---
+      duration_ms: 436.388471
+      ...
+    # Subtest: explicit recovery rejects invalid journals with an operational exit
+    ok 13 - explicit recovery rejects invalid journals with an operational exit
+      ---
+      duration_ms: 328.215738
+      ...
+    # Subtest: bounds hung probes and kills their process group
+    ok 14 - bounds hung probes and kills their process group
+      ---
+      duration_ms: 189.270933
+      ...
+    1..14
+ok 48 - durable same-version transaction recovery
+  ---
+  duration_ms: 4687.608846
+  type: 'suite'
+  ...
+# Subtest: complete private state/config backup restore
+    # Subtest: restores session payloads and config rather than copying an archive into config.env
+    ok 1 - restores session payloads and config rather than copying an archive into config.env
+      ---
+      duration_ms: 4.103077
+      ...
+    1..1
+ok 49 - complete private state/config backup restore
+  ---
+  duration_ms: 4.215539
+  type: 'suite'
+  ...
+# Subtest: live transaction exceptions after each destructive boundary
+    # Subtest: restores the real previous same-version package after package_preserved
+    ok 1 - restores the real previous same-version package after package_preserved
+      ---
+      duration_ms: 708.158447
+      ...
+    # Subtest: restores the real previous same-version package after package_moved
+    ok 2 - restores the real previous same-version package after package_moved
+      ---
+      duration_ms: 719.677174
+      ...
+    # Subtest: restores the real previous same-version package after provenance_written
+    ok 3 - restores the real previous same-version package after provenance_written
+      ---
+      duration_ms: 664.285774
+      ...
+    # Subtest: restores the real previous same-version package after launcher_switched
+    ok 4 - restores the real previous same-version package after launcher_switched
+      ---
+      duration_ms: 652.342094
+      ...
+    # Subtest: restores the real previous same-version package after verifying_install
+    ok 5 - restores the real previous same-version package after verifying_install
+      ---
+      duration_ms: 830.217485
+      ...
+    # Subtest: restores the real previous same-version package after installed_wrong_version
+    ok 6 - restores the real previous same-version package after installed_wrong_version
+      ---
+      duration_ms: 667.371171
+      ...
+    # Subtest: restores the real previous same-version package after kill_after_package_move
+    ok 7 - restores the real previous same-version package after kill_after_package_move
+      ---
+      duration_ms: 894.659641
+      ...
+    1..7
+ok 50 - live transaction exceptions after each destructive boundary
+  ---
+  duration_ms: 5137.462816
+  type: 'suite'
+  ...
+1..50
+# tests 107
+# suites 13
+# pass 107
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 13134.014702

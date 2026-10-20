@@ -16,6 +16,7 @@ services. The changes are limited to the following:
 | Size-capped tmpfs | `srv-nexus\x2dqual-ws.mount` at `/srv/nexus-qual/ws`, `size=storageBytes,mode=0711,uid=<operator>,nosuid,nodev` | The resource contract's `workspaceRoot`: the hard cap on what a run keeps, across all phases. |
 | Runtime directory | `/opt/nexus-qual` (root, 0755) | `sandboxRuntimeRoots` for the installed RC and the peer agents. It is filled per RC. |
 
+- `/usr/bin/bwrap` must report upstream version 0.12.0 or later (CVE-2026-87766). `validate.mjs` cannot detect distro backports, so it also rejects older vendor-patched builds. Ubuntu 24.04 `0.9.0-1ubuntu0.3` removed the fix. Install a release with the fix before qualification; `scripts/ensure-ci-bubblewrap.sh` shows the pinned source build that CI uses. `provision.sh` does not replace the binary.
 - `provision.sh` applies these changes and is idempotent. It never remounts an active tmpfs.
 - `rollback.sh` removes them. It keeps `/opt/nexus-qual` unless you pass `--purge-runtime`, and it leaves `acl` installed.
 - `validate.mjs`, run as the operator, proves the result using infrastructure fixtures only.
@@ -44,7 +45,10 @@ run's cgroup. `validate.mjs` checks this.
 `resource-profile.json` holds the values. The three frozen T2 configs and every T3/T4 config embed them as their
 `resources` object, byte-identical. `score.mjs --pairs` refuses comparisons whose manifests differ.
 
-| Key | Proposed | Exact kernel meaning |
+Custodian calibration across all 40 sealed T2 reference solutions passed 40/40 under this profile:
+`maxMemoryPeakMiB` 1206.5, `maxPidsPeak` 163, `maxWorkspaceMiB` 225.0, `oomKills` 0, and `pidsMaxEvents` 0.
+
+| Key | Frozen | Exact kernel meaning |
 |---|---|---|
 | `cpuPercent` | 800 | `cpu.max = 800000 100000`. The payload's processes may together use at most 8 CPUs' worth of runtime per wall-clock second. This is **rate throttling, not a total budget**. Total CPU time is bounded only by the phase's wall-clock limit times 8, and each phase's `cpuUsageUsec` and `cpuThrottledUsec` are recorded. |
 | `memoryBytes` | 16 GiB | `memory.max`, with `memory.swap.max = 0` and `memory.oom.group = 1`. The charge counts the phase's anonymous memory, the page cache it faults in (reclaimable before OOM), **and the tmpfs pages it writes**. A phase that writes 6 GiB of build output therefore has about 10 GiB left for its processes. Exceeding the limit OOM-kills the whole phase, and this is recorded. |

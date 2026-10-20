@@ -3,13 +3,16 @@
 //   node eval/host/validate.mjs --heldout <sealed task store> [--json out.json]
 // Uses no task corpus and no inference. Every check must pass; the report lists each result.
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { isolatedArgv, grantRunAsAccess, sandboxAvailable } from "../isolate.mjs";
+import { isolatedArgv, grantRunAsAccess, normalizeRunAsPermissions, sandboxAvailable } from "../isolate.mjs";
 import { resourceConfigProblem, resourceProbeProblem, spawnContained } from "../resources.mjs";
-import { asUser } from "../validate.mjs";
+import { asUser, asUserSpec, hiddenTestIsolationProblem } from "../validate.mjs";
+import { bubblewrapVersionProblem } from "./bubblewrap.mjs";
+import { operatorAccountHome } from "./operator_home.mjs";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 const ACCOUNT = "nexus-eval";
@@ -50,6 +53,14 @@ await check("setfacl and Bubblewrap are available", () => {
   must(sandboxAvailable(), "Bubblewrap preflight failed");
 });
 
+await check("Bubblewrap is at least the minimum patched release", () => {
+  const version = run("/usr/bin/bwrap", ["--version"]);
+  must(version.status === 0, "bwrap --version failed");
+  const problem = bubblewrapVersionProblem(version.stdout);
+  must(!problem, problem);
+  return version.stdout.trim();
+});
+
 await check("workspace root is the dedicated, operator-owned, size-capped tmpfs", () => {
   const live = run("findmnt", ["-n", "-b", "-o", "FSTYPE,SIZE", "--mountpoint", resources.workspaceRoot]).stdout.trim().split(/\s+/);
   must(live[0] === "tmpfs", `${resources.workspaceRoot} is not a tmpfs mount point (${live.join(" ") || "not mounted"})`);
@@ -75,10 +86,12 @@ await check("evaluator processes stay in the limited cgroup, and every one is re
       child.on("close", async () => resolve(await containment.final));
     });
     // The harness's own sandbox, as the evaluator: right uid, inside the payload leaf.
-    const sandboxed = await contained(isolatedArgv({ cwd: dir, home: false, command: "id -u > /workspace/uid; cat /proc/self/cgroup > /workspace/cgroup", timeoutSec: 30 }));
+    const sandboxed = await contained(isolatedArgv({ cwd: dir, home: false, command: "id -u > /workspace/uid; cat /proc/self/cgroup > /workspace/cgroup; mkdir -p /workspace/private; echo secret > /workspace/private/f; chmod 600 /workspace/private/f; chmod 700 /workspace/private", timeoutSec: 30 }));
     must(sandboxed?.cleaned === true, `containment report: ${JSON.stringify(sandboxed)}`);
     must(Number(fs.readFileSync(path.join(dir, "uid"), "utf8")) === Number(account()[2]), "payload did not run as the evaluator");
     must(/\/payload$/.test(fs.readFileSync(path.join(dir, "cgroup"), "utf8").trim()), "evaluator process is not in the payload cgroup");
+    await normalizeRunAsPermissions(ACCOUNT, dir, asUserSpec);
+    must(fs.readFileSync(path.join(dir, "private", "f"), "utf8") === "secret\n", "operator cannot read an evaluator-created 0600 file");
     // Without a PID namespace nothing but the cgroup can reap a daemon: the operator-side supervisor must find the
     // evaluator-owned survivor and kill it across uids.
     const daemon = await contained({ cmd: "/usr/bin/bwrap", argv: ["--ro-bind", "/", "/", "--dev", "/dev", "--proc", "/proc", "--unshare-net", "--", "/bin/sh", "-c", "setsid sh -c 'exec sleep 300' </dev/null >/dev/null 2>&1 & sleep 0.5"] });
@@ -95,7 +108,7 @@ await check("the evaluator cannot reach operator files or the held-out store", (
   // Paths are checked to exist operator-side first, so a missing path cannot pass the check vacuously.
   const heldout = path.resolve(process.argv[process.argv.indexOf("--heldout") + 1] ?? "");
   must(process.argv.includes("--heldout") && run("/usr/bin/sudo", ["-n", "/usr/bin/test", "-d", heldout]).status === 0, "pass --heldout <sealed task store> (an existing directory)");
-  const home = os.homedir();
+  const home = operatorAccountHome();
   must(fs.statSync(home).isDirectory(), "operator home is missing");
   // One real file inside the store, chosen operator-side and never printed, must be unreadable even by exact path.
   // The custodian's store is root-owned (0700), so root picks the file; its name is used, never printed or read.
@@ -112,6 +125,15 @@ await check("qualification preflight fails closed without the controls", () => {
   try {
     const tasks = path.join(scratch, "tasks");
     fs.mkdirSync(tasks);
+    const HELD_OUT = tasks;
+    must(/overlaps protected corpus material/.test(hiddenTestIsolationProblem({
+      qualification: true,
+      runAs: ACCOUNT,
+      sandboxRuntimePaths: ["/usr/bin"],
+      sandboxRuntimeRoots: ["/usr/bin"],
+      corpusCustody: { storeRoot: "/usr/bin/synthetic-corpus-leak" },
+      resources,
+    }, HELD_OUT) ?? ""), "qualification preflight must reject protected corpus paths under unconditional host mounts");
     const base = { name: "failclosed", qualification: true, endpoint: "http://127.0.0.1:9/v1", model: "m", runAs: ACCOUNT, sandboxRuntimePaths: [], sandboxRuntimeRoots: ["/opt/nexus-qual"] };
     const cases = [
       [{ ...base, resources: undefined }, /enforced CPU, memory, process-count, and workspace-storage limits/],
@@ -136,6 +158,13 @@ await check("no run directories are left in the workspace root", () => {
 
 const failed = results.filter((r) => !r.pass);
 const report = { host: os.hostname(), at: new Date().toISOString(), profile: resources, results, pass: failed.length === 0 };
+report.revision = {
+  commit: spawnSync("git", ["rev-parse", "HEAD"], { cwd: ROOT, encoding: "utf8" }).stdout.trim(),
+  dirty: Boolean(spawnSync("git", ["status", "--porcelain", "--untracked-files=no"], { cwd: ROOT, encoding: "utf8" }).stdout.trim()),
+  profileSha256: createHash("sha256").update(fs.readFileSync(path.join(ROOT, "eval/host/resource-profile.json"))).digest("hex"),
+  manifestSha256: "50895b84a604fbfd45ed82e29cbef4ba795d7fffbe6611af23bfbc9851f3e89b",
+  sourceDigests: ["eval/host/validate.mjs", "eval/host/operator_home.mjs", "eval/host/bubblewrap.mjs", "eval/host/provision.sh", "eval/host/rollback.sh", "eval/host/resource-profile.json", "eval/resources.mjs", "eval/cgroup_supervisor.mjs", "eval/isolate.mjs", "eval/validate.mjs", "eval/run.mjs", "eval/hardened_check.mjs", "eval/hide_oracle.cjs", "eval/hide_oracle.py", "eval/unlink_then_exec.sh", "eval/workspace.mjs"].map((file) => ({ file, sha256: createHash("sha256").update(fs.readFileSync(path.join(ROOT, file))).digest("hex") })),
+};
 const out = process.argv.indexOf("--json");
 if (out > 0) fs.writeFileSync(process.argv[out + 1], `${JSON.stringify(report, null, 2)}\n`);
 for (const r of results) console.log(`${r.pass ? "PASS" : "FAIL"} ${r.name}${r.detail ? ` — ${r.detail}` : ""}`);

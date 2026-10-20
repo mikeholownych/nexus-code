@@ -14,7 +14,8 @@ readonly HERE
 readonly PROFILE="$HERE/resource-profile.json"
 readonly ACCOUNT=nexus-eval
 readonly ACCOUNT_HOME=/var/lib/nexus-eval
-readonly SUDOERS=/etc/sudoers.d/90-nexus-eval
+readonly SUDOERS=/etc/sudoers.d/99-nexus-eval
+readonly LEGACY_SUDOERS=/etc/sudoers.d/90-nexus-eval
 readonly RUNTIME=/opt/nexus-qual
 readonly LEDGER_DIR=/var/lib/nexus-qual-host
 readonly LEDGER="$LEDGER_DIR/ledger"
@@ -35,12 +36,20 @@ unit="$(systemd-escape -p --suffix=mount "$workspace_root")"
 unit_file="/etc/systemd/system/$unit"
 op_uid=$(id -u "$OPERATOR"); op_gid=$(id -g "$OPERATOR")
 
+if [[ -e "$LEDGER_DIR" || -L "$LEDGER_DIR" ]]; then
+  [[ ! -L "$LEDGER_DIR" && -d "$LEDGER_DIR" && "$(stat -c %u:%g:%a "$LEDGER_DIR")" == "0:0:700" ]] || { echo "unsafe ledger directory $LEDGER_DIR" >&2; exit 1; }
+fi
+for f in "$LEDGER_DIR/lock" "$LEDGER"; do
+  if [[ -e "$f" || -L "$f" ]]; then
+    [[ ! -L "$f" && -f "$f" && "$(stat -c %u:%g "$f")" == "0:0" ]] || { echo "unsafe ledger file $f" >&2; exit 1; }
+  fi
+done
 install -d -o root -g root -m 0700 "$LEDGER_DIR"
 exec 9>"$LEDGER_DIR/lock"
 flock -n 9 || { echo "another provision or rollback is running" >&2; exit 1; }
 touch "$LEDGER"; chmod 0600 "$LEDGER"
 has() { grep -qxF "$1" "$LEDGER"; }
-sha() { sha256sum "$1" | cut -d' ' -f1; }
+sha() { sha256sum < "$1" | awk '{print $1}'; }
 pending() { has "pending $1" || printf 'pending %s\n' "$1" >> "$LEDGER"; }
 # Rewrite the ledger without line $1 (atomic, root-only).
 drop() { local tmp; tmp="$(mktemp "$LEDGER_DIR/.ledger.XXXXXX")"; grep -vxF "$1" "$LEDGER" > "$tmp" || true; chmod 0600 "$tmp"; mv "$tmp" "$LEDGER"; }
@@ -65,12 +74,6 @@ ours_file() {
 }
 # A directory is ours only once confirmed; a pending entry never adopts a directory that exists.
 ours_dir() { has "dir $1"; }
-# Drop stale pending directory entries (interrupted before mkdir): whatever exists now was not made by us.
-while IFS= read -r line; do
-  path="${line#pending dir }"
-  [[ -e "$path" || -L "$path" ]] && drop "$line"
-done < <(grep '^pending dir ' "$LEDGER" || true)
-
 # Collision checks first: nothing is changed unless every resource is absent or verifiably ours.
 problems=()
 if id -u "$ACCOUNT" >/dev/null 2>&1 && ! ours_account; then problems+=("account $ACCOUNT exists but was not created by this procedure"); fi
@@ -84,21 +87,34 @@ for dir in "$workspace_parent" "$workspace_root"; do
   if [[ -L "$dir" ]] || { [[ -e "$dir" ]] && [[ "$(realpath "$dir")" != "$dir" ]]; }; then problems+=("$dir is or passes through a symlink"); fi
 done
 if findmnt --mountpoint "$workspace_root" >/dev/null && ! ours_file "$unit_file"; then problems+=("$workspace_root is already a mount point not made by this procedure"); fi
+if [[ -e "$LEGACY_SUDOERS" || -L "$LEGACY_SUDOERS" ]] && ! ours_file "$LEGACY_SUDOERS"; then problems+=("$LEGACY_SUDOERS exists (or is a symlink) and is not this procedure's"); fi
 if [[ -e "$workspace_root" ]] && ! ours_dir "$workspace_root" && [[ -n "$(ls -A "$workspace_root" 2>/dev/null)" ]]; then problems+=("$workspace_root exists and is not empty"); fi
 if [[ -e "$RUNTIME" ]] && ! ours_dir "$RUNTIME"; then problems+=("$RUNTIME exists but was not created by this procedure"); fi
 if ((${#problems[@]})); then printf 'refusing to provision (no changes made):\n' >&2; printf '  - %s\n' "${problems[@]}" >&2; exit 1; fi
 
+# Drop stale pending directory entries only after every collision check succeeds.
+while IFS= read -r line; do
+  path="${line#pending dir }"
+  [[ -e "$path" || -L "$path" ]] && drop "$line"
+done < <(grep '^pending dir ' "$LEDGER" || true)
+if ours_file "$LEGACY_SUDOERS"; then legacy_sha=$(sha "$LEGACY_SUDOERS"); rm -f "$LEGACY_SUDOERS"; drop "file $LEGACY_SUDOERS sha256=$legacy_sha"; drop "pending file $LEGACY_SUDOERS"; fi
+
 # 1. setfacl, which the harness uses to grant the evaluator uid access to each disposable run directory.
 if ! command -v setfacl >/dev/null; then
   apt-get update -qq
-  DEBIAN_FRONTEND=noninteractive apt-get install --yes --no-install-recommends acl
+  NEEDRESTART_SUSPEND=1 DEBIAN_FRONTEND=noninteractive apt-get install --yes --no-install-recommends acl
   confirm "package acl"
 fi
 
 # 2. The evaluator account: a system user with no login shell and a private home it never needs for runs.
 if ! id -u "$ACCOUNT" >/dev/null 2>&1; then
+  free_uid=""
+  for u in $(seq 985 -1 900); do
+    if ! id -u "$u" >/dev/null 2>&1 && ! pgrep -u "$u" >/dev/null 2>&1; then free_uid="$u"; break; fi
+  done
+  [[ -n "$free_uid" ]] || { echo "no free system uid in 900..985" >&2; exit 1; }
   pending "account $ACCOUNT"
-  useradd --system --home-dir "$ACCOUNT_HOME" --create-home --shell /usr/sbin/nologin "$ACCOUNT"
+  useradd --system --uid "$free_uid" --home-dir "$ACCOUNT_HOME" --create-home --shell /usr/sbin/nologin "$ACCOUNT"
 fi
 if has "pending account $ACCOUNT"; then confirm "$(account_line)"; drop "pending account $ACCOUNT"; fi
 chmod 0700 "$ACCOUNT_HOME"
@@ -106,7 +122,7 @@ chmod 0700 "$ACCOUNT_HOME"
 # 3. The only privilege: the operator may run Bubblewrap as the evaluator account, without a password. The harness
 #    invokes exactly `sudo -n -u nexus-eval -- /usr/bin/bwrap …` (eval/validate.mjs asUser).
 tmp="$(mktemp)"
-printf '%s\n%s ALL=(%s) NOPASSWD: /usr/bin/bwrap\n' "$MARKER" "$OPERATOR" "$ACCOUNT" > "$tmp"
+printf '%s\n%s ALL=(%s) !ALL\n%s ALL=(%s) NOPASSWD: /usr/bin/bwrap\n' "$MARKER" "$OPERATOR" "$ACCOUNT" "$OPERATOR" "$ACCOUNT" > "$tmp"
 visudo -cqf "$tmp"
 pending "file $SUDOERS"
 install -o root -g root -m 0440 "$tmp" "$SUDOERS"
