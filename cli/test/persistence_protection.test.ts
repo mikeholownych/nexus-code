@@ -469,6 +469,41 @@ test("durable task state refuses a high-entropy path component rather than prese
   }
 });
 
+test("typed WorkspacePath preserves whole-path detection for slash-containing AWS secrets", () => {
+  const root = makeTempDir("nexus-pers002-slashed-aws-secret-");
+  const awsSecret = `${"A".repeat(20)}/${"B".repeat(19)}`;
+  const workspace = path.join(root, `aws_secret_access_key=${awsSecret}`);
+  fs.mkdirSync(workspace, { recursive: true });
+  const boundary = InformationFlowBoundary.getGlobalInstance();
+  try {
+    assert.equal(awsSecret.length, 40);
+    assert.ok(
+      boundary.classifyText(`aws_secret_access_key=${awsSecret}`).some((finding) => finding.classificationType !== "UNCERTAIN"),
+      "the complete slash-containing AWS secret must be positively classified",
+    );
+    const identity = WorkspacePath.fromSelectedWorkspace(workspace);
+    const stateDir = path.join(root, "state");
+    const manager = new DurableStateManager({ baseDir: stateDir, workspacePaths: [identity] });
+    assert.throws(() => manager.saveTaskState({
+      taskId: "typed-slashed-aws-secret",
+      sessionId: "typed-slashed-aws-secret-session",
+      id: "typed-slashed-aws-secret-session",
+      title: "synthetic slash-containing path secret",
+      workspacePath: identity.value,
+      workspace: identity.value,
+      status: "in_progress",
+      activePlan: [],
+      milestones: [],
+      validationReceipts: [],
+      messages: [],
+    } as any), TaskStateWriteError);
+    assert.equal(fs.existsSync(path.join(stateDir, "typed-slashed-aws-secret.json")), false);
+    assert.equal(fs.readdirSync(stateDir).some((name) => name.endsWith(".tmp")), false);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("selected typed WorkspacePath survives durable serialization and restart recovery", () => {
   const root = makeTempDir("nexus-pers002-typed-workspace-");
   const workspace = path.join(root, "workspace");

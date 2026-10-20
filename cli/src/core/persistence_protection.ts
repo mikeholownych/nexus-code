@@ -25,7 +25,10 @@ export function redactForPersistence<T>(value: T): T {
  * classifier intentionally does not treat slash-delimited paths as tokens. */
 function classifyPathComponents(value: string): ReturnType<InformationFlowBoundary["classifyText"]> {
   const boundary = InformationFlowBoundary.getGlobalInstance();
-  return value.split(/[\\/]+/).filter(Boolean).flatMap((component) => boundary.classifyText(component));
+  return [
+    ...boundary.classifyText(value),
+    ...value.split(/[\\/]+/).filter(Boolean).flatMap((component) => boundary.classifyText(component)),
+  ];
 }
 
 /** Provider tool-call ids at least this long are eligible for the high-entropy classifier (see egress.ts). */
