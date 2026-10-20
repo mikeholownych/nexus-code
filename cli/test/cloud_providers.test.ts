@@ -272,11 +272,13 @@ describe("connections: endpoint paths, credentials and disclosure gate", () => {
   test("an unauthorized cloud destination (incl. a cloud-routed local gateway) receives nothing", async () => {
     const m = await mock((_s, res) => json(res, 200, { choices: [{ message: { role: "assistant", content: "x" }, finish_reason: "stop" }] }));
     try {
-      const c = cfg(undefined, m.url, { cloudRoutedOrigins: [m.origin], authorizedDisclosureOrigins: [] });
+      const nearMatch = new URL(m.origin);
+      nearMatch.hostname = `${nearMatch.hostname}.evil.example`;
+      const c = cfg(undefined, m.url, { cloudRoutedOrigins: [m.origin], authorizedDisclosureOrigins: [nearMatch.origin] });
       const e = await rejects(new LocalLlmClient(c).chatCompletionStream(msgs, [], undefined, "r1"));
       assert.equal(e.kind, "policy_denied");
       assert.match(e.message, /not authorized/);
-      assert.equal(m.seen.length, 0);
+      assert.equal(m.seen.length, 0, "a suffix lookalike origin is not authorization");
       await new LocalLlmClient({ ...c, authorizedDisclosureOrigins: [m.origin] }).chatCompletion(msgs, []);
       assert.equal(m.seen.length, 1, "authorized by the operator: sent");
     } finally { await m.close(); }
