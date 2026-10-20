@@ -96,7 +96,9 @@ export function redactTaskStateForPersistence<T extends {
   if (worktreePath) {
     const typedWorktree = workspacePaths.find((identity) => identity.matches(worktreePath));
     if (typedWorktree) typedPaths.push(typedWorktree);
-    else if (classifyPathComponents(worktreePath).length > 0) {
+    // Generated path components can trigger low-confidence entropy heuristics;
+    // keep the path intact and fail closed on positive credential classifications.
+    else if (classifyPathComponents(worktreePath).some((finding) => finding.classificationType !== "UNCERTAIN")) {
       throw new Error("Task state worktree path has no selected workspace identity");
     }
   }
