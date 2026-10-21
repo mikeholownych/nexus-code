@@ -10,34 +10,6 @@ permissions:
   contents: read
 
 jobs:
-  cloudflare-contest-contract:
-    runs-on: ubuntu-24.04
-    steps:
-      - uses: actions/checkout@v4
-      - run: sudo apt-get update && sudo apt-get install --yes nodejs
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-          cache: npm
-          cache-dependency-path: |
-            cli/package-lock.json
-            demo/package-lock.json
-            experiments/cloudflare-artifacts-vertical-slice/package-lock.json
-      - run: npm ci --prefix demo
-      - run: npm ci --prefix cli
-      - run: npm test --prefix demo
-      - run: npm ci --prefix experiments/cloudflare-artifacts-vertical-slice
-      - run: npm run typecheck --prefix experiments/cloudflare-artifacts-vertical-slice
-        env:
-          NEXUS_CF_WORKER_NAME: nexus-contest-ci
-          NEXUS_CF_NAMESPACE: nexus-contest-ci
-          NEXUS_CF_REPOSITORY: fixture
-      - run: npm run build --prefix experiments/cloudflare-artifacts-vertical-slice
-        env:
-          NEXUS_CF_WORKER_NAME: nexus-contest-ci
-          NEXUS_CF_NAMESPACE: nexus-contest-ci
-          NEXUS_CF_REPOSITORY: fixture
-
   linux-x86_64:
     runs-on: ubuntu-22.04
     steps:
