@@ -1,7 +1,24 @@
 # v1.0.0 release readiness checkpoint
 
-**Updated:** 2026-10-21 14:56 UTC
-**Current integration candidate:** `8f4504ebd3484149bde39b78934c193752a95bfd` (`v1/integration`)
+## Current state update (2026-10-21 15:26 UTC, `7d6673f`)
+
+**Authoritative integration:** `origin/v1/integration` is `7d6673f108316dda015b858c85b2abe20f3a4f78`, merged from PR #102. The shared checkout remains on `main@db1ca558086014912b20dae8232af111ccb21d67` with unrelated local modifications; it was not changed for this checkpoint.
+
+**Campaign status:** `NEXUS_V1_CONVERGENCE_ACTIVE`
+
+**Acceptance status:** `IN_PROGRESS`
+
+**Release status:** no Nexus v1.0.0 RC or stable publication exists. Publication authorization is granted and remains gated on independent acceptance.
+
+- **Exact-head CI:** PR #8 targets `main@db1ca55` from `v1/integration@7d6673f`. On current head, `javascript-typescript` runs [39624982585](https://github.com/mikeholownych/nexus-code/actions/runs/39624982585) and [39624995598](https://github.com/mikeholownych/nexus-code/actions/runs/39624995598) passed, as did CodeQL [119308898279](https://github.com/mikeholownych/nexus-code/runs/119308898279). The required `test-matrix (20)`, `(22)`, and `(24)` jobs in run [39624995762](https://github.com/mikeholownych/nexus-code/actions/runs/39624995762) were still pending at 15:26 UTC. The successful source workflow [39615105190] ran on parent `8f4504e`, so its results are not represented as exact-`7d6673f` results.
+- **Requirements gate:** `node scripts/check_requirements.mjs --enforce` was independently rerun with isolated HOME/XDG on exact `7d6673f` and passed: 123 rows (109 tested, 5 partial, 2 implemented, 7 open). Eleven requirements remain explicitly deferred to exact-RC qualification: `REQ-AGT-002`, `REQ-AGT-010`, `REQ-PRV-003`, `REQ-REL-005`, `REQ-AGT-110`, `REQ-PRV-111`, `REQ-REL-114`, `REQ-QUAL-101`, `REQ-QUAL-107`, `REQ-QUAL-108`, and `REQ-QUAL-109`. This source-stage gate pass does not satisfy those qualification requirements.
+- **Contest:** the contest is over; no contest freeze applies. The contest-contract check has been retired and is not a release gate. Historical contest artifacts remain evidence of past activity only.
+- **Qualification and release:** PR #102 contributes synthetic host-preflight evidence only. Private held-out custody/schema compatibility, T2/T3/T4 qualification, live provider and standalone checks, exact-RC reproducibility, the five-environment by three-size human terminal matrix, and independent RC acceptance remain outstanding. No RC has been constructed, installed, or accepted.
+
+This update supersedes the 14:56 UTC `8f4504e` checkpoint below for current state. Earlier evidence remains bound to its recorded revisions.
+
+**Updated:** 2026-10-21 15:26 UTC
+**Current integration candidate:** `7d6673f108316dda015b858c85b2abe20f3a4f78` (`v1/integration`)
 **Separate historical candidate branch:** `6151a231e9179c109cfbe8cff87e0a4148587b6a` (`v1/candidate-1`)
 **Campaign status:** `NEXUS_V1_CONVERGENCE_ACTIVE`
 **Acceptance status:** `IN_PROGRESS`
