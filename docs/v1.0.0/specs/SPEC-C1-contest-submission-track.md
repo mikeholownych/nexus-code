@@ -64,4 +64,4 @@ See ACCEPTANCE.md §9. In summary:
 
 ## 5. Relationship to the client
 
-The client v1.0.0 gates never depend on this track. The demo exercises only the client's `run` mode and generated-code validation. Client changes from SPEC-01 (an explicit posture for headless runs) reach the demo through `NEXUS_APPROVAL_MODE=auto` in the demo's environment. No demo file is edited during judging (DEC-13).
+The client v1.0.0 gates never depend on this track. The demo exercises only the client's `run` mode and generated-code validation. Client changes from SPEC-01 (an explicit posture for headless runs) reach the demo through `NEXUS_APPROVAL_MODE=auto` in the demo's environment. No demo file was edited while judging was open under the temporary DEC-13 restriction; that restriction has ended and does not constrain current maintenance.
