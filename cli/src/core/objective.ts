@@ -123,6 +123,8 @@ export interface ContinuationState {
 
 export interface ObjectiveLedger {
   version: number;
+  /** Work unit id when this ledger is scoped to a work unit in an operation or team (REQ-AGT-102/103). */
+  unitId?: string;
   objective: string;
   objectiveSha256: string;
   startedAt: string;
@@ -183,9 +185,10 @@ function firstLine(text: string): string {
   return text.split("\n").map((line) => line.trim()).find(Boolean) ?? text.trim();
 }
 
-export function createLedger(objective: string, at = now()): ObjectiveLedger {
+export function createLedger(objective: string, at = now(), unitId?: string): ObjectiveLedger {
   return {
     version: LEDGER_VERSION,
+    ...(unitId ? { unitId } : {}),
     objective,
     objectiveSha256: sha256(objective),
     startedAt: at,
@@ -248,7 +251,14 @@ export function isNewObjective(ledger: ObjectiveLedger | undefined, prompt: stri
  * short qualifier such as "continue please" or "go on from where you stopped"). Anything that states new work is not.
  */
 export function isContinuationPrompt(prompt: string): boolean {
-  const text = prompt.trim().toLowerCase().replace(/[.!…]+$/, "");
+  const normalized = prompt.trim().toLowerCase();
+  let end = normalized.length;
+  while (end > 0) {
+    const code = normalized.charCodeAt(end - 1);
+    if (code === 33 || code === 46 || code === 0x2026) end--;
+    else break;
+  }
+  const text = end === normalized.length ? normalized : normalized.slice(0, end);
   if (!text || text.length > 80 || text.includes("\n")) return false;
   return /^(?:please\s+)?(?:continue|keep going|keep at it|go on|go ahead|carry on|resume|proceed|try again|retry|next|finish(?: it| the task| the job)?|ok(?:ay)?,?\s+continue)\b(?:[\s,]+(?:please|then|now|on|with (?:it|the task|the work)|where you (?:left off|stopped)|from where you (?:left off|stopped)))*$/.test(text);
 }
@@ -481,7 +491,8 @@ export function priorAttempt(
 }
 
 export function recordAttempt(ledger: ObjectiveLedger, attempt: Omit<VerificationAttempt, "n" | "at">, at = now()): VerificationAttempt {
-  const record: VerificationAttempt = { n: ledger.verification.length + 1, at, ...attempt };
+  const lastN = ledger.verification.length > 0 ? (ledger.verification[ledger.verification.length - 1]?.n ?? 0) : 0;
+  const record: VerificationAttempt = { n: lastN + 1, at, ...attempt };
   ledger.verification.push(record);
   if (ledger.verification.length > 50) ledger.verification = ledger.verification.slice(-50);
   return record;
@@ -627,6 +638,7 @@ export const REQUIREMENTS_CAPABILITY: CanonicalCapability = {
     "modelToolName": "update_requirements",
     "category": "orchestration",
     "mutating": false,
+    "effect": "internal",
     "sideEffectContract": "Record progress against the operator's acceptance requirements (no workspace change)",
     "backend": "ts_native",
     "toolDefinition": {
@@ -667,6 +679,7 @@ export const READ_OBJECTIVE_CAPABILITY: CanonicalCapability = {
   modelToolName: "read_objective",
   category: "orchestration",
   mutating: false,
+  effect: "internal",
   sideEffectContract: "Read the operator's objective verbatim (no workspace change)",
   backend: "ts_native",
   toolDefinition: {

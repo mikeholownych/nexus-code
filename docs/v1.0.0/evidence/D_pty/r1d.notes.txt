@@ -1,0 +1,5 @@
+[   0.64s] SAW prompt
+[   0.64s] SEND b'create hello.txt\r'
+[   1.29s] SEND 'y' typed mid-turn (e.g. answering the model) before approval prompt
+[   2.90s] SEND Enter
+[   9.44s] SCREEN after (100x30)

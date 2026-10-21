@@ -49,7 +49,7 @@ You are a senior software engineer. Your objective is precise, idiomatic impleme
 - Maintain existing coding conventions, documentation comments, and typing rules.
 - Make minimal, surgical edits using edit_file and patch_file.
 - Verify syntactical correctness and avoid unintended breaking changes.`,
-    recommendedTools: ["read_file", "write_file", "edit_file", "patch_file", "run_command", "run_tests", "task_completed"],
+    recommendedTools: ["read_file", "write_file", "edit_file", "patch_file", "run_command", "run_tests", "read_objective", "update_requirements", "task_completed"],
   },
   tester: {
     role: "tester",
@@ -60,7 +60,7 @@ You are a QA automation and test engineer. Your objective is rigorous verificati
 - Run automated test suites via run_tests or run_command.
 - Analyze test failures, parse compiler/test diagnostics, and pinpoint regressions.
 - Author unit and integration tests covering positive paths, error handling, and boundary conditions.`,
-    recommendedTools: ["run_tests", "run_command", "read_file", "write_file", "edit_file", "search_code", "task_completed"],
+    recommendedTools: ["run_tests", "run_command", "read_file", "write_file", "edit_file", "search_code", "read_objective", "update_requirements", "task_completed"],
   },
   reviewer: {
     role: "reviewer",
@@ -71,9 +71,19 @@ You are reviewing work produced by a different model. Do not assume it is correc
 - Read the changed code and the stated design; check correctness, edge cases and regressions.
 - Do not modify files; report concrete findings with file paths and line references.
 - Conclude with an explicit verdict: acceptable, or the specific defects that must be fixed.`,
-    recommendedTools: ["read_file", "batch_read", "search_code", "run_tests", "task_completed"],
+    recommendedTools: ["read_file", "batch_read", "search_code", "task_completed"],
   },
 };
+
+/**
+ * Roles that run with a read-only tool set (DEC-07, REQ-AGT-119). The operation runner starts their units in read-only
+ * mode, so a write or exec call is refused by the agent rather than relying on the prompt.
+ */
+export const READ_ONLY_ROLES: ReadonlySet<AgentRole> = new Set<AgentRole>(["researcher", "reviewer"]);
+
+export function isReadOnlyRole(role: AgentRole | string | undefined): boolean {
+  return role !== undefined && READ_ONLY_ROLES.has(role as AgentRole);
+}
 
 export interface RoleRequirement {
   /** Qualification a resource must hold (resources without a qualification list hold all). */

@@ -1,0 +1,31 @@
+{
+  "schemaVersion": 1,
+  "id": "session-v1-valid",
+  "taskId": "session-v1-valid",
+  "sessionId": "session-v1-valid",
+  "title": "Interactive Exploration",
+  "workspacePath": "/tmp/nexus-test-workspace",
+  "workspace": "/tmp/nexus-test-workspace",
+  "model": "qwen2.5-coder",
+  "createdAt": "2026-10-15T10:00:00.000Z",
+  "updatedAt": "2026-10-15T10:15:00.000Z",
+  "status": "completed",
+  "activePlan": [],
+  "milestones": [],
+  "validationReceipts": [],
+  "messages": [
+    {
+      "role": "user",
+      "content": "Hello Nexus"
+    },
+    {
+      "role": "assistant",
+      "content": "Hello! How can I assist you with your project today?"
+    }
+  ],
+  "tokenStats": {
+    "prompt": 50,
+    "completion": 25,
+    "total": 75
+  }
+}

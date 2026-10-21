@@ -1,0 +1,97 @@
+{
+  "provider": "openrouter",
+  "model": "nvidia/nemotron-3-super-120b-a12b:free",
+  "date": "2026-10-16T21:28:58.716Z",
+  "passed": true,
+  "steps": [
+    {
+      "step": "streamed completion",
+      "ok": true,
+      "detail": "reply \"READY\", 5 chars streamed",
+      "requestId": "3efa772e-eb67-4515-b0aa-cb1f1ea9d9e0"
+    },
+    {
+      "step": "tool call",
+      "ok": true,
+      "detail": "echo_token({\"token\":\"n26a01590\"}) complete, 1 call(s)",
+      "requestId": "79870757-2f11-48a8-9e7b-6a23850c7dc6"
+    },
+    {
+      "step": "tool result round trip",
+      "ok": true,
+      "detail": "final answer cites the tool result",
+      "requestId": "56fc6f24-e8c6-4f6d-95ab-effcc7da003a"
+    }
+  ],
+  "receipts": [
+    {
+      "at": "2026-10-16T21:28:54.327Z",
+      "requestId": "3efa772e-eb67-4515-b0aa-cb1f1ea9d9e0",
+      "role": "qualification",
+      "providerId": "openrouter",
+      "selectedModel": "nvidia/nemotron-3-super-120b-a12b:free",
+      "effectiveModel": "nvidia/nemotron-3-super-120b-a12b:free",
+      "endpointOrigin": "https://openrouter.ai",
+      "protocol": "openai-chat",
+      "disclosure": "cloud",
+      "origin_class": "cloud",
+      "providerRequestId": "gen-1792186133-Vflfa5WmPjUshxepQZ0n",
+      "usage": {
+        "inputTokens": 24,
+        "outputTokens": 29,
+        "cachedInputTokens": 0,
+        "reasoningTokens": 24,
+        "costUsd": 0
+      },
+      "costConfidence": "provider-reported",
+      "outcome": "completed",
+      "usageConfidence": "provider"
+    },
+    {
+      "at": "2026-10-16T21:28:57.054Z",
+      "requestId": "79870757-2f11-48a8-9e7b-6a23850c7dc6",
+      "role": "qualification",
+      "providerId": "openrouter",
+      "selectedModel": "nvidia/nemotron-3-super-120b-a12b:free",
+      "effectiveModel": "nvidia/nemotron-3-super-120b-a12b:free",
+      "endpointOrigin": "https://openrouter.ai",
+      "protocol": "openai-chat",
+      "disclosure": "cloud",
+      "origin_class": "cloud",
+      "providerRequestId": "gen-1792186134-Bj1tZlIXEKU14RLYvf3m",
+      "usage": {
+        "inputTokens": 322,
+        "outputTokens": 67,
+        "cachedInputTokens": 0,
+        "reasoningTokens": 33,
+        "costUsd": 0
+      },
+      "costConfidence": "provider-reported",
+      "outcome": "completed",
+      "usageConfidence": "provider"
+    },
+    {
+      "at": "2026-10-16T21:28:58.715Z",
+      "requestId": "56fc6f24-e8c6-4f6d-95ab-effcc7da003a",
+      "role": "qualification",
+      "providerId": "openrouter",
+      "selectedModel": "nvidia/nemotron-3-super-120b-a12b:free",
+      "effectiveModel": "nvidia/nemotron-3-super-120b-a12b:free",
+      "endpointOrigin": "https://openrouter.ai",
+      "protocol": "openai-chat",
+      "disclosure": "cloud",
+      "origin_class": "cloud",
+      "providerRequestId": "gen-1792186137-UNtsv5k4HtEkAFNe0qHL",
+      "usage": {
+        "inputTokens": 383,
+        "outputTokens": 110,
+        "cachedInputTokens": 0,
+        "reasoningTokens": 91,
+        "costUsd": 0
+      },
+      "costConfidence": "provider-reported",
+      "outcome": "completed",
+      "usageConfidence": "provider"
+    }
+  ]
+}

@@ -1,0 +1,6 @@
+{
+  "cli/src/session.ts": "3f84a9c569b29a19281c93616a1639b3a72106d3ded8ec782903c1c5a4975689",
+  "cli/src/core/state.ts": "6a19ea81c1de68d3411ad332a64cfebc15315522f9a6ebc4ec67185532263b0f",
+  "cli/test/session_state_v2.test.ts": "5379ee2c5bb5098afb1a3e37e2820840971a5dffebe04603db295ae3972ab732",
+  "cli/test/task_state_v2.test.ts": "b213b63503d7fdc1bc6453b2611a2463102e1f0f7bad4e45e3a9022fc15fb1e5"
+}

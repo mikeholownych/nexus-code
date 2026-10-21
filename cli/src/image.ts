@@ -16,8 +16,10 @@ const MIME_MAP: Record<string, string> = {
   ".jpeg": "image/jpeg",
   ".webp": "image/webp",
   ".gif": "image/gif",
-  ".svg": "image/svg+xml",
 };
+
+/** Largest image accepted for a vision request (VER-15); base64 adds about a third on top. */
+export const MAX_IMAGE_BYTES = 20 * 1024 * 1024;
 
 /**
  * Read and base64-encode an image for vision-capable models (Candidate #25)
@@ -45,11 +47,22 @@ export function encodeImageFile(filePath: string, workspace?: string): EncodedIm
       mimeType: "",
       dataUri: "",
       sizeBytes: 0,
-      error: `Unsupported image format '${ext}'. Supported: png, jpg, jpeg, webp, gif, svg`,
+      error: `Unsupported image format '${ext}'. Supported: png, jpg, jpeg, webp, gif`,
     };
   }
 
   try {
+    const size = fs.statSync(resolvedPath).size;
+    if (size > MAX_IMAGE_BYTES) {
+      return {
+        success: false,
+        filePath,
+        mimeType,
+        dataUri: "",
+        sizeBytes: size,
+        error: `Image is ${(size / 1024 / 1024).toFixed(1)} MB; the limit is 20 MB. Resize or compress it first.`,
+      };
+    }
     const buffer = fs.readFileSync(resolvedPath);
     const base64 = buffer.toString("base64");
     const dataUri = `data:${mimeType};base64,${base64}`;

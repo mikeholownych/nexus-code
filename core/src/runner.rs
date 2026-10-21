@@ -13,6 +13,34 @@ pub struct RunCommandArgs {
     pub shell: String,
     #[serde(default)]
     pub pty: bool,
+    #[serde(default)]
+    pub argv: Option<Vec<String>>,
+    #[serde(default)]
+    pub background: bool,
+    #[serde(default)]
+    pub service_name: Option<String>,
+}
+
+impl Default for RunCommandArgs {
+    fn default() -> Self {
+        Self {
+            command: String::new(),
+            cwd: None,
+            timeout_secs: default_timeout(),
+            shell: default_shell(),
+            pty: false,
+            argv: None,
+            background: false,
+            service_name: None,
+        }
+    }
+}
+
+pub fn max_tool_timeout_secs() -> u64 {
+    std::env::var("NEXUS_MAX_TOOL_TIMEOUT_SECS")
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+        .unwrap_or(1800)
 }
 
 fn default_timeout() -> u64 {
@@ -35,80 +63,437 @@ pub struct RunCommandResult {
     pub stderr: String,
     pub duration_ms: u128,
     pub timed_out: bool,
+    /// The operator's cancel (or the engine's shutdown) ended the command.
+    #[serde(default)]
+    pub cancelled: bool,
 }
 
 const MAX_OUTPUT_CHARS: usize = 32_000;
 
-fn truncate_output(s: &str) -> String {
-    if s.len() > MAX_OUTPUT_CHARS {
-        let half = MAX_OUTPUT_CHARS / 2;
-        let mut head_idx = half;
-        while !s.is_char_boundary(head_idx) && head_idx > 0 {
-            head_idx -= 1;
+/// Output kept per stream: the first and last halves of MAX_OUTPUT_CHARS bytes plus a count of everything. Memory stays
+/// bounded however much a command prints (400 MB of output used to be buffered whole before truncation).
+struct BoundedCapture {
+    head: Vec<u8>,
+    tail: std::collections::VecDeque<u8>,
+    total: u64,
+}
+
+impl BoundedCapture {
+    const HALF: usize = MAX_OUTPUT_CHARS / 2;
+
+    fn new() -> Self {
+        Self { head: Vec::new(), tail: std::collections::VecDeque::new(), total: 0 }
+    }
+
+    fn push(&mut self, bytes: &[u8]) {
+        self.total += bytes.len() as u64;
+        let mut rest = bytes;
+        if self.head.len() < Self::HALF {
+            let take = rest.len().min(Self::HALF - self.head.len());
+            self.head.extend_from_slice(&rest[..take]);
+            rest = &rest[take..];
         }
-        let mut tail_idx = s.len().saturating_sub(half);
-        while !s.is_char_boundary(tail_idx) && tail_idx < s.len() {
-            tail_idx += 1;
+        if rest.len() >= Self::HALF {
+            self.tail.clear();
+            self.tail.extend(&rest[rest.len() - Self::HALF..]);
+        } else {
+            let overflow = (self.tail.len() + rest.len()).saturating_sub(Self::HALF);
+            self.tail.drain(..overflow);
+            self.tail.extend(rest);
         }
-        format!(
-            "{}\n\n... [TRUNCATED {} BYTES] ...\n\n{}",
-            &s[..head_idx],
-            s.len() - (head_idx + (s.len() - tail_idx)),
-            &s[tail_idx..]
-        )
-    } else {
-        s.to_string()
+    }
+
+    /// The captured text: whole when it fit, otherwise head and tail around a count of the bytes left out.
+    fn render(&self) -> String {
+        let (tail, _) = self.tail.as_slices();
+        let mut tail_bytes = tail.to_vec();
+        tail_bytes.extend_from_slice(self.tail.as_slices().1);
+        let kept = (self.head.len() + tail_bytes.len()) as u64;
+        let head = String::from_utf8_lossy(&self.head);
+        let tail = String::from_utf8_lossy(&tail_bytes);
+        if kept >= self.total {
+            format!("{head}{tail}")
+        } else {
+            format!("{head}\n\n... [TRUNCATED {} BYTES] ...\n\n{tail}", self.total - kept)
+        }
     }
 }
 
+/// Process groups of commands started over RPC, so a cancel request or the engine's shutdown can end them (and
+/// everything they started) instead of leaving them running: REQ-AGT-109 / REQ-SEC-106.
+#[cfg(unix)]
+mod registry {
+    use std::collections::{HashMap, HashSet};
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::{Arc, Mutex, OnceLock};
+    use std::time::{Duration, Instant};
+
+    #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+    pub struct ServiceInfo {
+        pub name: String,
+        pub pgid: libc::pid_t,
+        pub command: String,
+    }
+
+    struct Running {
+        pgid: libc::pid_t,
+        cancelled: Arc<AtomicBool>,
+    }
+
+    #[derive(Default)]
+    struct State {
+        running: HashMap<String, Running>,
+        /// Groups still alive after their command returned (a `server &` the command started).
+        lingering: HashSet<libc::pid_t>,
+        /// Registered long-lived background services that survive turn cancellation.
+        services: HashMap<String, ServiceInfo>,
+    }
+
+    fn state() -> &'static Mutex<State> {
+        static STATE: OnceLock<Mutex<State>> = OnceLock::new();
+        STATE.get_or_init(|| Mutex::new(State::default()))
+    }
+
+    fn alive(pgid: libc::pid_t) -> bool {
+        unsafe { libc::killpg(pgid, 0) == 0 }
+    }
+
+    /// TERM, a grace period for the group to exit, then KILL for whatever is left.
+    pub fn end_groups(pgids: &[libc::pid_t], grace: Duration) {
+        for &pgid in pgids {
+            unsafe { libc::killpg(pgid, libc::SIGTERM) };
+        }
+        let start = Instant::now();
+        while start.elapsed() < grace && pgids.iter().any(|&p| alive(p)) {
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        for &pgid in pgids {
+            if alive(pgid) {
+                unsafe { libc::killpg(pgid, libc::SIGKILL) };
+            }
+        }
+    }
+
+    pub fn start(key: &str, pgid: libc::pid_t) -> Arc<AtomicBool> {
+        let cancelled = Arc::new(AtomicBool::new(false));
+        let mut st = state().lock().unwrap();
+        st.lingering.retain(|&p| alive(p));
+        st.running.insert(key.to_string(), Running { pgid, cancelled: Arc::clone(&cancelled) });
+        cancelled
+    }
+
+    pub fn finish(key: &str) {
+        let mut st = state().lock().unwrap();
+        if let Some(run) = st.running.remove(key) {
+            if alive(run.pgid) {
+                if !st.services.values().any(|s| s.pgid == run.pgid) {
+                    st.lingering.insert(run.pgid);
+                }
+            }
+        }
+    }
+
+    pub fn register_service(name: &str, pgid: libc::pid_t, command: &str) {
+        let mut st = state().lock().unwrap();
+        if let Some(old) = st.services.remove(name) {
+            if alive(old.pgid) && old.pgid != pgid {
+                end_groups(&[old.pgid], Duration::from_millis(500));
+            }
+        }
+        st.services.insert(name.to_string(), ServiceInfo {
+            name: name.to_string(),
+            pgid,
+            command: command.to_string(),
+        });
+    }
+
+    pub fn list_services() -> Vec<ServiceInfo> {
+        let mut st = state().lock().unwrap();
+        st.services.retain(|_, s| alive(s.pgid));
+        let mut list: Vec<ServiceInfo> = st.services.values().cloned().collect();
+        list.sort_by(|a, b| a.name.cmp(&b.name));
+        list
+    }
+
+    /// Ends the command started by request `key`. Returns whether such a command was running.
+    pub fn cancel(key: &str, grace: Duration) -> bool {
+        let pgid = {
+            let st = state().lock().unwrap();
+            match st.running.get(key) {
+                Some(run) => {
+                    run.cancelled.store(true, Ordering::SeqCst);
+                    run.pgid
+                }
+                None => return false,
+            }
+        };
+        end_groups(&[pgid], grace);
+        true
+    }
+
+    /// Ends background processes that finished commands left running. Returns how many groups were ended.
+    pub fn end_lingering(grace: Duration) -> usize {
+        let pgids: Vec<libc::pid_t> = {
+            let mut st = state().lock().unwrap();
+            st.lingering.retain(|&p| alive(p));
+            st.lingering.drain().collect()
+        };
+        end_groups(&pgids, grace);
+        pgids.len()
+    }
+
+    /// Ends every running command, lingering background group, and registered service (engine shutdown).
+    pub fn end_all(grace: Duration) -> usize {
+        let pgids: Vec<libc::pid_t> = {
+            let mut st = state().lock().unwrap();
+            for run in st.running.values() {
+                run.cancelled.store(true, Ordering::SeqCst);
+            }
+            let mut all: Vec<libc::pid_t> = st.running.values().map(|r| r.pgid).collect();
+            all.extend(st.lingering.drain());
+            for svc in st.services.drain().map(|(_, s)| s.pgid) {
+                if !all.contains(&svc) {
+                    all.push(svc);
+                }
+            }
+            all
+        };
+        end_groups(&pgids, grace);
+        pgids.len()
+    }
+}
+
+#[cfg(unix)]
+#[allow(unused_imports)]
+pub use registry::{cancel as cancel_command, end_all as end_all_commands, end_lingering as end_background_commands, list_services, register_service, ServiceInfo};
+
+#[cfg(not(unix))]
+#[allow(unused_imports)]
+pub use registry_stub::{list_services, register_service, ServiceInfo};
+
+#[cfg(not(unix))]
+mod registry_stub {
+    use serde::{Deserialize, Serialize};
+
+    #[derive(Clone, Debug, Serialize, Deserialize)]
+    pub struct ServiceInfo {
+        pub name: String,
+        pub pgid: u32,
+        pub command: String,
+    }
+
+    pub fn list_services() -> Vec<ServiceInfo> {
+        Vec::new()
+    }
+
+    pub fn register_service(_name: &str, _pgid: u32, _command: &str) {}
+}
+
+fn tokenize_and_split_subcommands(cmd: &str) -> Vec<Vec<String>> {
+    let tokens = match shell_words::split(cmd) {
+        Ok(toks) => toks,
+        Err(_) => cmd.split_whitespace().map(|s| s.to_string()).collect(),
+    };
+
+    let mut subcommands = Vec::new();
+    let mut current = Vec::new();
+
+    for token in tokens {
+        if token == ";" || token == "&&" || token == "||" || token == "|" || token == "&" {
+            if !current.is_empty() {
+                subcommands.push(std::mem::take(&mut current));
+            }
+        } else if token.contains(';') || token.contains('&') || token.contains('|') {
+            let mut buf = String::new();
+            for ch in token.chars() {
+                if ch == ';' || ch == '&' || ch == '|' {
+                    if !buf.is_empty() {
+                        current.push(std::mem::take(&mut buf));
+                    }
+                    if !current.is_empty() {
+                        subcommands.push(std::mem::take(&mut current));
+                    }
+                } else {
+                    buf.push(ch);
+                }
+            }
+            if !buf.is_empty() {
+                current.push(buf);
+            }
+        } else {
+            current.push(token);
+        }
+    }
+    if !current.is_empty() {
+        subcommands.push(current);
+    }
+    subcommands
+}
+
 pub fn is_dangerous_command(cmd: &str) -> Option<&'static str> {
-    let normalized = cmd.trim().to_lowercase();
-
-    // Check destructive rm patterns
-    if normalized.contains("rm ") && (
-        normalized.contains("-rf /") || 
-        normalized.contains("-fr /") || 
-        normalized.contains("-rf /*") || 
-        normalized.contains("-fr /*") ||
-        normalized.contains("-rf ~") ||
-        normalized.contains("-rf $home") ||
-        normalized.contains("-rf .") ||
-        normalized.contains("-fr .")
-    ) {
-        return Some("Destructive recursive deletion of root, home, or current directory (rm -rf)");
-    }
-
-    // Format / filesystem destroyers
-    if normalized.starts_with("mkfs") || normalized.contains(" mkfs") {
-        return Some("Filesystem destruction command (mkfs)");
-    }
-
-    // Raw disk writes
-    if normalized.contains("dd if=") && (
-        normalized.contains("of=/dev/sd") || 
-        normalized.contains("of=/dev/nvme") || 
-        normalized.contains("of=/dev/vd") || 
-        (!normalized.contains("of=/dev/null") && !normalized.contains("of=/dev/zero") && normalized.contains("of=/dev/"))
-    ) {
-        return Some("Raw disk block overwrite (dd of=/dev/...)");
-    }
+    let normalized = cmd.trim();
 
     // Fork bombs
-    if normalized.contains(":(){ :|:& };:") || normalized.contains(":(){:|:&};:") {
+    if normalized.contains(":(){ :|:& };:")
+        || normalized.contains(":(){:|:&};:")
+        || (normalized.contains(":(){") && normalized.contains(":|:"))
+    {
         return Some("Fork bomb denial-of-service");
     }
 
-    // Destructive root permissions
-    if (normalized.contains("chmod -r 777 /") || (normalized.contains("chown -r") && normalized.contains(" /"))) && !normalized.contains(" ./") {
-        return Some("Recursive root permission alteration");
+    // Raw disk device redirection
+    if normalized.contains("> /dev/sd")
+        || normalized.contains(">/dev/sd")
+        || normalized.contains("> /dev/nvme")
+        || normalized.contains(">/dev/nvme")
+        || normalized.contains("> /dev/vd")
+        || normalized.contains(">/dev/vd")
+    {
+        return Some("Raw disk device redirection");
+    }
+
+    let subcommands = tokenize_and_split_subcommands(cmd);
+    for sub in &subcommands {
+        if sub.is_empty() {
+            continue;
+        }
+
+        let mut idx = 0;
+        while idx < sub.len() {
+            let word = sub[idx].as_str();
+            if word == "sudo" || word == "doas" || word == "nohup" {
+                idx += 1;
+                while idx < sub.len() && sub[idx].starts_with('-') {
+                    if (sub[idx] == "-u" || sub[idx] == "-g") && idx + 1 < sub.len() {
+                        idx += 2;
+                    } else {
+                        idx += 1;
+                    }
+                }
+            } else if word == "env" {
+                idx += 1;
+                while idx < sub.len() && (sub[idx].starts_with('-') || sub[idx].contains('=')) {
+                    idx += 1;
+                }
+            } else {
+                break;
+            }
+        }
+        if idx >= sub.len() {
+            continue;
+        }
+
+        let exe_full = &sub[idx];
+        let exe = exe_full.rsplit('/').next().unwrap_or(exe_full.as_str());
+        let args = &sub[idx + 1..];
+
+        // System shutdown or reboot commands
+        if exe == "shutdown" || exe == "reboot" || exe == "poweroff" || exe == "halt" {
+            return Some("System shutdown or reboot command");
+        }
+        if exe == "init" && args.iter().any(|a| a == "0" || a == "6") {
+            return Some("System shutdown or reboot command (init 0/6)");
+        }
+
+        // Filesystem destruction command (mkfs)
+        if exe == "mkfs" || exe.starts_with("mkfs.") {
+            return Some("Filesystem destruction command (mkfs)");
+        }
+
+        // Raw disk block overwrite (dd of=/dev/...)
+        if exe == "dd" {
+            let has_dangerous_of = args.iter().any(|a| {
+                if let Some(target) = a.strip_prefix("of=") {
+                    let t = target.trim_matches('"').trim_matches('\'');
+                    t.starts_with("/dev/sd")
+                        || t.starts_with("/dev/nvme")
+                        || t.starts_with("/dev/vd")
+                        || (t.starts_with("/dev/")
+                            && t != "/dev/null"
+                            && t != "/dev/zero"
+                            && t != "/dev/urandom"
+                            && t != "/dev/random")
+                } else {
+                    false
+                }
+            });
+            if has_dangerous_of {
+                return Some("Raw disk block overwrite (dd of=/dev/...)");
+            }
+        }
+
+        // Destructive root permissions or ownership
+        if exe == "chmod" || exe == "chown" {
+            let is_recursive = args.iter().any(|a| {
+                if a.starts_with('-') && !a.starts_with("--") {
+                    a.contains('R') || a.contains('r')
+                } else {
+                    a == "--recursive"
+                }
+            });
+            if is_recursive {
+                let targets_root = args.iter().any(|a| a == "/" || a == "/*");
+                if targets_root {
+                    if exe == "chmod" {
+                        if args.iter().any(|a| a == "777" || a == "0777") {
+                            return Some("Recursive root permission alteration");
+                        }
+                    } else {
+                        return Some("Recursive root permission alteration");
+                    }
+                }
+            }
+        }
+
+        // Destructive rm
+        if exe_full == "rm" {
+            let has_rf = args.iter().any(|a| a == "-rf" || a == "-fr");
+            let has_dash_dash = args.iter().any(|a| a == "--");
+            if has_rf && !has_dash_dash {
+                for a in args {
+                    if a.starts_with('-') {
+                        continue;
+                    }
+                    let t = a.trim();
+                    if t == "/"
+                        || t == "/*"
+                        || t == "."
+                        || t == ".."
+                        || t == "~"
+                        || t.eq_ignore_ascii_case("$home")
+                        || t.eq_ignore_ascii_case("${home}")
+                    {
+                        return Some("Destructive recursive deletion of root, home, or current directory (rm -rf)");
+                    }
+                }
+            }
+        }
+
+        // Shell wrapper inspection: bash -c "..."
+        if (exe == "bash" || exe == "sh" || exe == "zsh") && args.len() >= 2 {
+            for (i, a) in args.iter().enumerate() {
+                if a == "-c" && i + 1 < args.len() {
+                    if let Some(r) = is_dangerous_command(&args[i + 1]) {
+                        return Some(r);
+                    }
+                }
+            }
+        }
     }
 
     None
 }
 
+#[allow(dead_code)]
 pub fn run_command(args: RunCommandArgs, base_dir: &Path) -> Result<RunCommandResult, String> {
+    run_command_tracked(args, base_dir, None)
+}
+
+/// Runs a command; with `key` (the RPC request id) its process group is registered so `cancel_command(key)` and the
+/// engine's shutdown can end it.
+pub fn run_command_tracked(args: RunCommandArgs, base_dir: &Path, key: Option<&str>) -> Result<RunCommandResult, String> {
     if let Some(reason) = is_dangerous_command(&args.command) {
-        return Err(format!("Security Violation: Dangerous command blocked by safety guard ({reason}): '{}'", args.command));
+        return Err(format!("Destructive-command tripwire: Command blocked by safety guard ({reason}): '{}'", args.command));
     }
 
     let base_canon = base_dir.canonicalize().map_err(|e| format!("Invalid workspace directory: {e}"))?;
@@ -139,22 +524,54 @@ pub fn run_command(args: RunCommandArgs, base_dir: &Path) -> Result<RunCommandRe
         args.shell.trim().to_string()
     };
 
+    let max_timeout = max_tool_timeout_secs();
+    let (effective_timeout, clamped) = if args.timeout_secs > max_timeout {
+        (max_timeout, true)
+    } else {
+        (args.timeout_secs, false)
+    };
+    let clamp_notice = if clamped {
+        Some(format!("[Notice: timeout_secs clamped from {} to {} (NEXUS_MAX_TOOL_TIMEOUT_SECS)]\n", args.timeout_secs, effective_timeout))
+    } else {
+        None
+    };
+
     if args.pty {
-        return run_command_pty(&args.command, &working_dir, args.timeout_secs, &shell_name);
+        return run_command_pty(&args.command, &working_dir, effective_timeout, &shell_name, args.argv.as_deref(), key);
     }
 
     let start = Instant::now();
 
-    // Cross-platform shell process execution (Candidate #50)
-    let mut cmd = Command::new(&shell_name);
-    #[cfg(windows)]
-    if shell_name.contains("powershell") {
-        cmd.args(["-NoProfile", "-Command", &args.command]);
+    // Cross-platform process execution: direct argv if provided, else via shell (REQ-SEC-108)
+    let mut cmd = if let Some(ref argv) = args.argv {
+        if let Some((exe, rest)) = argv.split_first() {
+            let mut c = Command::new(exe);
+            c.args(rest);
+            c
+        } else {
+            let mut c = Command::new(&shell_name);
+            #[cfg(windows)]
+            if shell_name.contains("powershell") {
+                c.args(["-NoProfile", "-Command", &args.command]);
+            } else {
+                c.args(["/C", &args.command]);
+            }
+            #[cfg(not(windows))]
+            c.args(["-c", &args.command]);
+            c
+        }
     } else {
-        cmd.args(["/C", &args.command]);
-    }
-    #[cfg(not(windows))]
-    cmd.args(["-c", &args.command]);
+        let mut c = Command::new(&shell_name);
+        #[cfg(windows)]
+        if shell_name.contains("powershell") {
+            c.args(["-NoProfile", "-Command", &args.command]);
+        } else {
+            c.args(["/C", &args.command]);
+        }
+        #[cfg(not(windows))]
+        c.args(["-c", &args.command]);
+        c
+    };
 
     cmd.current_dir(&working_dir)
         .stdin(Stdio::null())
@@ -175,7 +592,7 @@ pub fn run_command(args: RunCommandArgs, base_dir: &Path) -> Result<RunCommandRe
 
     // Readers append to shared buffers, so output already read is kept even if a pipe stays open past the drain.
     let reader = |pipe: Box<dyn std::io::Read + Send>| {
-        let collected = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let collected = std::sync::Arc::new(std::sync::Mutex::new(BoundedCapture::new()));
         let sink = std::sync::Arc::clone(&collected);
         let (done_tx, done_rx) = std::sync::mpsc::channel::<()>();
         std::thread::spawn(move || {
@@ -184,7 +601,7 @@ pub fn run_command(args: RunCommandArgs, base_dir: &Path) -> Result<RunCommandRe
             loop {
                 match pipe.read(&mut chunk) {
                     Ok(0) | Err(_) => break,
-                    Ok(n) => sink.lock().unwrap().extend_from_slice(&chunk[..n]),
+                    Ok(n) => sink.lock().unwrap().push(&chunk[..n]),
                 }
             }
             let _ = done_tx.send(());
@@ -194,7 +611,86 @@ pub fn run_command(args: RunCommandArgs, base_dir: &Path) -> Result<RunCommandRe
     let (stdout_buf, stdout_done) = reader(Box::new(stdout));
     let (stderr_buf, stderr_done) = reader(Box::new(stderr));
 
-    let timeout = Duration::from_secs(args.timeout_secs);
+    #[cfg(unix)]
+    let pgid = child.id() as libc::pid_t;
+
+    #[cfg(unix)]
+    if args.background {
+        if let Some(ref sname) = args.service_name {
+            registry::register_service(sname, pgid, &args.command);
+        }
+    }
+
+    #[cfg(unix)]
+    let cancelled = key.map(|k| registry::start(k, pgid));
+
+    if args.background {
+        let startup_grace = Duration::from_millis(150);
+        let poll_step = Duration::from_millis(20);
+        let start_wait = Instant::now();
+        let mut early_exit = None;
+        while start_wait.elapsed() < startup_grace {
+            match child.try_wait() {
+                Ok(Some(status)) => {
+                    early_exit = Some(status);
+                    break;
+                }
+                Ok(None) => std::thread::sleep(poll_step),
+                Err(e) => return Err(format!("Error checking background process: {e}")),
+            }
+        }
+
+        #[cfg(unix)]
+        if let Some(k) = key {
+            registry::finish(k);
+        }
+
+        if let Some(status) = early_exit {
+            let _ = stdout_done.recv_timeout(Duration::from_millis(100));
+            let _ = stderr_done.recv_timeout(Duration::from_millis(100));
+            let mut out = stdout_buf.lock().unwrap().render();
+            let err = stderr_buf.lock().unwrap().render();
+            if let Some(ref notice) = clamp_notice {
+                out = format!("{notice}{out}");
+            }
+            let code = status.code().unwrap_or(0);
+            if code == 0 && args.service_name.is_some() {
+                let sname = args.service_name.as_deref().unwrap();
+                #[cfg(unix)]
+                {
+                    out = format!("Background service '{sname}' registered (pgid {pgid})\n{out}");
+                }
+            }
+            return Ok(RunCommandResult {
+                command: args.command,
+                shell: shell_name,
+                exit_code: Some(code),
+                stdout: out,
+                stderr: err,
+                duration_ms: start.elapsed().as_millis(),
+                timed_out: false,
+                cancelled: false,
+            });
+        }
+
+        let sname = args.service_name.as_deref().unwrap_or("unnamed");
+        let mut out = format!("Background service '{sname}' started (pgid {pgid})\n");
+        if let Some(ref notice) = clamp_notice {
+            out = format!("{notice}{out}");
+        }
+        return Ok(RunCommandResult {
+            command: args.command,
+            shell: shell_name,
+            exit_code: Some(0),
+            stdout: out,
+            stderr: String::new(),
+            duration_ms: start.elapsed().as_millis(),
+            timed_out: false,
+            cancelled: false,
+        });
+    }
+
+    let timeout = Duration::from_secs(effective_timeout);
     let poll_interval = Duration::from_millis(50);
     let mut timed_out = false;
 
@@ -221,21 +717,33 @@ pub fn run_command(args: RunCommandArgs, base_dir: &Path) -> Result<RunCommandRe
     let drain_deadline = Instant::now() + drain;
     let _ = stdout_done.recv_timeout(drain_deadline.saturating_duration_since(Instant::now()));
     let _ = stderr_done.recv_timeout(drain_deadline.saturating_duration_since(Instant::now()));
-    let stdout_bytes = std::mem::take(&mut *stdout_buf.lock().unwrap());
-    let stderr_bytes = std::mem::take(&mut *stderr_buf.lock().unwrap());
+    let mut stdout_text = stdout_buf.lock().unwrap().render();
+    if let Some(ref notice) = clamp_notice {
+        stdout_text = format!("{notice}{stdout_text}");
+    }
+    let stderr_text = stderr_buf.lock().unwrap().render();
     let duration_ms = start.elapsed().as_millis();
 
-    let raw_stdout = String::from_utf8_lossy(&stdout_bytes).to_string();
-    let raw_stderr = String::from_utf8_lossy(&stderr_bytes).to_string();
+    #[cfg(unix)]
+    let was_cancelled = match (key, cancelled) {
+        (Some(k), Some(flag)) => {
+            registry::finish(k);
+            flag.load(std::sync::atomic::Ordering::SeqCst)
+        }
+        _ => false,
+    };
+    #[cfg(not(unix))]
+    let was_cancelled = false;
 
     Ok(RunCommandResult {
         command: args.command,
         shell: shell_name,
         exit_code: exit_status.and_then(|s| s.code()),
-        stdout: truncate_output(&raw_stdout),
-        stderr: truncate_output(&raw_stderr),
+        stdout: stdout_text,
+        stderr: stderr_text,
         duration_ms,
         timed_out,
+        cancelled: was_cancelled,
     })
 }
 
@@ -271,6 +779,8 @@ pub fn run_command_pty(
     working_dir: &Path,
     timeout_secs: u64,
     shell_name: &str,
+    argv: Option<&[String]>,
+    key: Option<&str>,
 ) -> Result<RunCommandResult, String> {
     use portable_pty::{native_pty_system, PtySize, CommandBuilder};
     let start = Instant::now();
@@ -283,15 +793,35 @@ pub fn run_command_pty(
         pixel_height: 0,
     }).map_err(|e| format!("Failed to allocate PTY: {e}"))?;
 
-    let mut cmd = CommandBuilder::new(shell_name);
-    #[cfg(windows)]
-    if shell_name.contains("powershell") {
-        cmd.args(["-NoProfile", "-Command", command_str]);
+    let mut cmd = if let Some(argv) = argv {
+        if let Some((exe, rest)) = argv.split_first() {
+            let mut c = CommandBuilder::new(exe);
+            c.args(rest);
+            c
+        } else {
+            let mut c = CommandBuilder::new(shell_name);
+            #[cfg(windows)]
+            if shell_name.contains("powershell") {
+                c.args(["-NoProfile", "-Command", command_str]);
+            } else {
+                c.args(["/C", command_str]);
+            }
+            #[cfg(not(windows))]
+            c.args(["-c", command_str]);
+            c
+        }
     } else {
-        cmd.args(["/C", command_str]);
-    }
-    #[cfg(not(windows))]
-    cmd.args(["-c", command_str]);
+        let mut c = CommandBuilder::new(shell_name);
+        #[cfg(windows)]
+        if shell_name.contains("powershell") {
+            c.args(["-NoProfile", "-Command", command_str]);
+        } else {
+            c.args(["/C", command_str]);
+        }
+        #[cfg(not(windows))]
+        c.args(["-c", command_str]);
+        c
+    };
 
     cmd.cwd(working_dir);
 
@@ -303,12 +833,34 @@ pub fn run_command_pty(
         .map_err(|e| format!("Failed to clone PTY master reader: {e}"))?;
 
     let output_handle = std::thread::spawn(move || {
-        let mut buf = Vec::new();
-        let _ = std::io::Read::read_to_end(&mut reader, &mut buf);
-        buf
+        let mut capture = BoundedCapture::new();
+        let mut chunk = [0u8; 8192];
+        loop {
+            match std::io::Read::read(&mut reader, &mut chunk) {
+                Ok(0) | Err(_) => break,
+                Ok(n) => capture.push(&chunk[..n]),
+            }
+        }
+        capture
     });
 
-    let timeout = Duration::from_secs(timeout_secs);
+    // The PTY child leads its own session, so its pid is its process group: a timeout or cancel ends the group.
+    #[cfg(unix)]
+    let pty_pgid = child.process_id().map(|p| p as libc::pid_t);
+    #[cfg(unix)]
+    let cancelled = match (key, pty_pgid) {
+        (Some(k), Some(pgid)) => Some(registry::start(k, pgid)),
+        _ => None,
+    };
+
+    let max_timeout = max_tool_timeout_secs();
+    let (effective_timeout, clamped) = if timeout_secs > max_timeout {
+        (max_timeout, true)
+    } else {
+        (timeout_secs, false)
+    };
+
+    let timeout = Duration::from_secs(effective_timeout);
     let poll_interval = Duration::from_millis(50);
     let mut timed_out = false;
 
@@ -317,6 +869,10 @@ pub fn run_command_pty(
             Ok(Some(status)) => break Some(status),
             Ok(None) => {
                 if start.elapsed() > timeout {
+                    #[cfg(unix)]
+                    if let Some(pgid) = pty_pgid {
+                        registry::end_groups(&[pgid], Duration::from_millis(500));
+                    }
                     let _ = child.kill();
                     timed_out = true;
                     let _ = child.wait();
@@ -329,17 +885,31 @@ pub fn run_command_pty(
     };
 
     drop(pair.master);
-    let raw_out = output_handle.join().unwrap_or_default();
-    let text = String::from_utf8_lossy(&raw_out).to_string();
+    let mut text = output_handle.join().map(|c| c.render()).unwrap_or_default();
+    if clamped {
+        text = format!("[Notice: timeout_secs clamped from {} to {} (NEXUS_MAX_TOOL_TIMEOUT_SECS)]\n{}", timeout_secs, effective_timeout, text);
+    }
+
+    #[cfg(unix)]
+    let was_cancelled = match (key, cancelled) {
+        (Some(k), Some(flag)) => {
+            registry::finish(k);
+            flag.load(std::sync::atomic::Ordering::SeqCst)
+        }
+        _ => false,
+    };
+    #[cfg(not(unix))]
+    let was_cancelled = false;
 
     Ok(RunCommandResult {
         command: command_str.to_string(),
         shell: shell_name.to_string(),
         exit_code: exit_status.and_then(|s| if s.success() { Some(0) } else { Some(1) }),
-        stdout: truncate_output(&text),
+        stdout: text,
         stderr: String::new(),
         duration_ms: start.elapsed().as_millis(),
         timed_out,
+        cancelled: was_cancelled,
     })
 }
 
@@ -347,13 +917,16 @@ pub fn run_command_pty(
 mod tests {
     use super::*;
 
+    static TEST_MUTEX: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
     #[test]
     #[cfg(unix)]
     fn output_is_kept_when_a_background_process_holds_the_pipe() {
+        let _guard = TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
         let dir = std::env::temp_dir();
         let started = Instant::now();
         let result = run_command(
-            RunCommandArgs { command: "echo before; sleep 3 & echo after".into(), cwd: None, timeout_secs: 30, shell: default_shell(), pty: false },
+            RunCommandArgs { command: "echo before; sleep 3 & echo after".into(), cwd: None, timeout_secs: 30, shell: default_shell(), pty: false, argv: None, ..Default::default() },
             &dir,
         )
         .unwrap();
@@ -365,20 +938,40 @@ mod tests {
 
     #[test]
     fn test_dangerous_command_detection() {
+        // Destructive commands that must trigger the tripwire
         assert!(is_dangerous_command("rm -rf /").is_some());
         assert!(is_dangerous_command("sudo rm -rf /*").is_some());
         assert!(is_dangerous_command("rm -rf ~").is_some());
+        assert!(is_dangerous_command("rm -rf $HOME").is_some());
+        assert!(is_dangerous_command("rm -rf .").is_some());
+        assert!(is_dangerous_command("rm -rf ..").is_some());
         assert!(is_dangerous_command("mkfs.ext4 /dev/sda1").is_some());
         assert!(is_dangerous_command("dd if=/dev/zero of=/dev/sda bs=1M").is_some());
         assert!(is_dangerous_command(":(){ :|:& };:").is_some());
         assert!(is_dangerous_command("chmod -R 777 /").is_some());
+        assert!(is_dangerous_command("shutdown -h now").is_some());
+        assert!(is_dangerous_command("reboot").is_some());
 
-        // Safe commands
+        // Safe commands that must not be blocked
         assert!(is_dangerous_command("cargo test").is_none());
         assert!(is_dangerous_command("ls -la /").is_none());
         assert!(is_dangerous_command("git status").is_none());
         assert!(is_dangerous_command("cat /etc/hosts").is_none());
         assert!(is_dangerous_command("npm run build").is_none());
+
+        // False positives that must pass (ACC-SAFE-07 / SEC-02)
+        assert!(is_dangerous_command("rm -rf ./build").is_none());
+        assert!(is_dangerous_command("rm -rf ./x").is_none());
+        assert!(is_dangerous_command("rm -rf /tmp/x").is_none());
+        assert!(is_dangerous_command("grep -rn reboot src").is_none());
+        assert!(is_dangerous_command("grep reboot").is_none());
+        assert!(is_dangerous_command("echo shutdown").is_none());
+        assert!(is_dangerous_command("chown -R me /srv").is_none());
+
+        // Documented non-goals (bypasses asserted as not blocked by design per SPEC-01 §5.5)
+        assert!(is_dangerous_command("find / -delete").is_none());
+        assert!(is_dangerous_command("/bin/rm -rf /").is_none());
+        assert!(is_dangerous_command("python3 -c 'import shutil; shutil.rmtree(\"/\")'").is_none());
     }
 
     #[test]
@@ -390,10 +983,29 @@ mod tests {
             timeout_secs: 5,
             shell: default_shell(),
             pty: true,
+            argv: None,
+            ..Default::default()
         }, &cwd).unwrap();
 
         assert_eq!(res.exit_code, Some(0));
         assert!(res.stdout.contains("PTY terminal test"));
+    }
+
+    #[test]
+    fn test_run_command_direct_argv() {
+        let cwd = std::env::current_dir().unwrap();
+        let res = run_command(RunCommandArgs {
+            command: "fallback command".into(),
+            cwd: None,
+            timeout_secs: 5,
+            shell: default_shell(),
+            pty: false,
+            argv: Some(vec!["echo".into(), "direct argv output /tmp/a b/'q".into()]),
+            ..Default::default()
+        }, &cwd).unwrap();
+
+        assert_eq!(res.exit_code, Some(0));
+        assert!(res.stdout.contains("direct argv output /tmp/a b/'q"));
     }
 
     #[test]
@@ -414,6 +1026,8 @@ mod tests {
             timeout_secs: 5,
             shell: default_shell(),
             pty: false,
+            argv: None,
+            ..Default::default()
         }, &workspace);
         assert!(res_none.is_ok());
 
@@ -424,6 +1038,8 @@ mod tests {
             timeout_secs: 5,
             shell: default_shell(),
             pty: false,
+            argv: None,
+            ..Default::default()
         }, &workspace);
         assert!(res_sub.is_ok());
 
@@ -434,6 +1050,8 @@ mod tests {
             timeout_secs: 5,
             shell: default_shell(),
             pty: false,
+            argv: None,
+            ..Default::default()
         }, &workspace);
         assert!(res_ext.is_err());
         assert!(res_ext.unwrap_err().contains("cwd escapes workspace jail"));
@@ -445,6 +1063,8 @@ mod tests {
             timeout_secs: 5,
             shell: default_shell(),
             pty: false,
+            argv: None,
+            ..Default::default()
         }, &workspace);
         assert!(res_traversal.is_err());
         assert!(res_traversal.unwrap_err().contains("cwd escapes workspace jail"));
@@ -460,12 +1080,113 @@ mod tests {
                 timeout_secs: 5,
                 shell: default_shell(),
                 pty: false,
+                argv: None,
+                ..Default::default()
             }, &workspace);
             assert!(res_sym.is_err());
             assert!(res_sym.unwrap_err().contains("cwd escapes workspace jail"));
         }
 
         let _ = std::fs::remove_dir_all(&temp_base);
+    }
+
+    #[test]
+    fn bounded_capture_keeps_head_tail_and_an_exact_count() {
+        let mut cap = BoundedCapture::new();
+        let data: Vec<u8> = (0..100_000u32).map(|i| b'a' + (i % 26) as u8).collect();
+        for chunk in data.chunks(777) {
+            cap.push(chunk);
+        }
+        let half = MAX_OUTPUT_CHARS / 2;
+        let out = cap.render();
+        assert!(out.starts_with(std::str::from_utf8(&data[..half]).unwrap()));
+        assert!(out.ends_with(std::str::from_utf8(&data[data.len() - half..]).unwrap()));
+        assert!(out.contains(&format!("[TRUNCATED {} BYTES]", data.len() - 2 * half)), "{}", &out[half..half + 80]);
+
+        let mut small = BoundedCapture::new();
+        small.push(b"hello ");
+        small.push(b"world");
+        assert_eq!(small.render(), "hello world");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn large_output_is_bounded_and_counted() {
+        let cwd = std::env::current_dir().unwrap();
+        let res = run_command(RunCommandArgs {
+            command: "head -c 5000000 /dev/zero | tr '\\0' a".to_string(),
+            cwd: None,
+            timeout_secs: 30,
+            shell: default_shell(),
+            pty: false,
+            argv: None,
+            ..Default::default()
+        }, &cwd).unwrap();
+        assert!(res.stdout.len() < MAX_OUTPUT_CHARS + 200, "{}", res.stdout.len());
+        assert!(res.stdout.contains(&format!("[TRUNCATED {} BYTES]", 5_000_000 - MAX_OUTPUT_CHARS)));
+    }
+
+    /// REQ-AGT-109: cancelling a request ends its whole process group (background children included), promptly.
+    #[cfg(unix)]
+    #[test]
+    fn cancel_ends_the_command_group() {
+        let _guard = TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+        let cwd = std::env::current_dir().unwrap();
+        let marker = "sleep 30.123";
+        let handle = std::thread::spawn({
+            let cwd = cwd.clone();
+            move || run_command_tracked(RunCommandArgs {
+                command: format!("({marker} &); {marker}"),
+                cwd: None,
+                timeout_secs: 120,
+                shell: default_shell(),
+                pty: false,
+                argv: None,
+                ..Default::default()
+            }, &cwd, Some("cancel-test"))
+        });
+        let started = Instant::now();
+        while count_exact(marker) < 2 && started.elapsed() < Duration::from_secs(5) {
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        assert!(cancel_command("cancel-test", Duration::from_secs(2)));
+        let res = handle.join().unwrap().unwrap();
+        assert!(res.cancelled, "the result says the command was cancelled");
+        assert!(!res.timed_out);
+        assert!(started.elapsed() < Duration::from_secs(8));
+        std::thread::sleep(Duration::from_millis(200));
+        assert_eq!(count_exact(marker), 0, "processes survived the cancel");
+        assert!(!cancel_command("cancel-test", Duration::from_secs(1)), "nothing left to cancel");
+    }
+
+    /// REQ-SEC-106: background processes a finished command left running are ended on request and at shutdown.
+    #[cfg(unix)]
+    #[test]
+    fn background_processes_left_by_a_command_are_ended() {
+        let _guard = TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+        let cwd = std::env::current_dir().unwrap();
+        let marker = "sleep 30.456";
+        let res = run_command_tracked(RunCommandArgs {
+            command: format!("{marker} & echo started"),
+            cwd: None,
+            timeout_secs: 30,
+            shell: default_shell(),
+            pty: false,
+            argv: None,
+            ..Default::default()
+        }, &cwd, Some("background-test")).unwrap();
+        assert!(res.stdout.contains("started"));
+        assert_eq!(count_exact(marker), 1, "the background process outlives the call by design");
+        assert!(end_background_commands(Duration::from_secs(2)) >= 1);
+        std::thread::sleep(Duration::from_millis(200));
+        assert_eq!(count_exact(marker), 0, "background process survived");
+    }
+
+    /// Processes whose whole command line is exactly `command` (not the shells that started them).
+    #[cfg(unix)]
+    fn count_exact(command: &str) -> usize {
+        let out = Command::new("pgrep").args(["-x", "-f", &regex::escape(command)]).output().unwrap();
+        String::from_utf8_lossy(&out.stdout).lines().count()
     }
 
     #[cfg(unix)]
@@ -488,6 +1209,8 @@ mod tests {
             timeout_secs: 1,
             shell: default_shell(),
             pty: false,
+            argv: None,
+            ..Default::default()
         }, &cwd).unwrap();
         let elapsed = started.elapsed();
 
@@ -509,10 +1232,61 @@ mod tests {
             timeout_secs: 5,
             shell: default_shell(),
             pty: false,
+            argv: None,
+            ..Default::default()
         }, &cwd).unwrap();
         assert!(!res.timed_out);
         assert_eq!(res.exit_code, Some(3));
         assert!(res.stdout.contains("failing"));
+    }
+
+    #[test]
+    fn test_timeout_clamp_and_notice() {
+        let _guard = TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+        unsafe { std::env::set_var("NEXUS_MAX_TOOL_TIMEOUT_SECS", "5") };
+        let cwd = std::env::current_dir().unwrap();
+        let res = run_command(RunCommandArgs {
+            command: "echo clamped test".to_string(),
+            cwd: None,
+            timeout_secs: 3600,
+            ..Default::default()
+        }, &cwd).unwrap();
+        unsafe { std::env::remove_var("NEXUS_MAX_TOOL_TIMEOUT_SECS") };
+
+        assert!(res.stdout.contains("[Notice: timeout_secs clamped from 3600 to 5 (NEXUS_MAX_TOOL_TIMEOUT_SECS)]"), "stdout was: {}", res.stdout);
+        assert!(res.stdout.contains("clamped test"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_background_service_registration_and_lifecycle() {
+        let _guard = TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+        let cwd = std::env::current_dir().unwrap();
+        let marker = "sleep 33.777";
+        let res = run_command_tracked(RunCommandArgs {
+            command: format!("{marker}"),
+            cwd: None,
+            background: true,
+            service_name: Some("my_service".into()),
+            ..Default::default()
+        }, &cwd, Some("svc_req_1")).unwrap();
+
+        assert!(res.stdout.contains("Background service 'my_service' started") || res.stdout.contains("Background service 'my_service' registered"));
+        assert_eq!(count_exact(marker), 1, "service is running");
+
+        // Service is listed in list_services()
+        let services = list_services();
+        assert!(services.iter().any(|s| s.name == "my_service"), "services: {:?}", services);
+
+        // Turn cancellation (end_background_commands) does NOT kill registered services
+        assert_eq!(end_background_commands(Duration::from_millis(500)), 0);
+        assert_eq!(count_exact(marker), 1, "registered service survived turn cancel");
+
+        // Shutdown sweep (end_all_commands) DOES kill registered services
+        assert!(end_all_commands(Duration::from_millis(500)) >= 1);
+        std::thread::sleep(Duration::from_millis(200));
+        assert_eq!(count_exact(marker), 0, "registered service was killed on shutdown");
+        assert_eq!(list_services().len(), 0);
     }
 }
 

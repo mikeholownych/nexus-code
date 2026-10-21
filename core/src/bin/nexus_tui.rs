@@ -115,11 +115,19 @@ enum Overlay {
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut args = env::args_os().skip(1);
     let first = args.next().ok_or(
-        "usage: nexus-tui [--plain] SNAPSHOT.json\n       nexus-tui --live [--sidecar PATH] [--node BIN] [-- SIDECAR_ARGS...]",
+        "usage: nexus-tui [--plain] SNAPSHOT.json\n       nexus-tui --live [--check] [--sidecar PATH] [--node BIN] [-- SIDECAR_ARGS...]",
     )?;
     if first == "--live" {
         let rest = args.map(|arg| arg.to_string_lossy().into_owned()).collect();
         std::process::exit(live::main(rest, &mut io::stderr()));
+    }
+    if first == "--check" {
+        let rest = vec!["--check".to_string()];
+        std::process::exit(live::main(rest, &mut io::stderr()));
+    }
+    if first == "--version" {
+        println!("{}", env!("CARGO_PKG_VERSION"));
+        return Ok(());
     }
     let plain = first == "--plain";
     let snapshot_path = PathBuf::from(if plain {

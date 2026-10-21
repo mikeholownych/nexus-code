@@ -1,0 +1,20 @@
+{
+  "source": "4508d9f33844c86a2416332df2e9b1960823f0f3",
+  "node": "v20.18.1",
+  "kernel": "6.6.114.1-microsoft-standard-WSL2",
+  "distribution": "Ubuntu",
+  "storage": "Ubuntu WSL ext4 VHDX on Windows C NVMe SSD; virtualized, not nativeSSD",
+  "tmpdir": "/var/tmp/nexus-cont08-ssd-9qbvr2hq/scratch",
+  "command": [
+    "/usr/bin/node",
+    "--import",
+    "tsx",
+    "--test",
+    "test/perf/persistence_cost.bench.ts"
+  ],
+  "exit": 0,
+  "files": {
+    "cli/test/perf/persistence_cost.bench.ts": "1eb07f58a247367372795338d7f69cf779245d7d8b08c495a741edb33e49b1f9",
+    "cli/src/core/state.ts": "697058a2a5ac023942f5fc6dedfcf257d2c101e38966111b93a1ce453c285fc4"
+  }
+}

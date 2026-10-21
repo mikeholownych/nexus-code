@@ -1,13 +1,22 @@
 import { spawn, spawnSync, ChildProcess } from "node:child_process";
 import * as path from "node:path";
 import * as fs from "node:fs";
-import { fileURLToPath } from "node:url";
+import * as http from "node:http";
+import * as https from "node:https";
+import * as net from "node:net";
+import * as dns from "node:dns";
+import { URL, fileURLToPath } from "node:url";
 import { ToolDefinition, ExecutionResult } from "./types.js";
 import { SecurityManager } from "./security.js";
-import { InformationFlowBoundary } from "./core/egress.js";
+import { InformationFlowBoundary, matchesLocalOrigins, parseLocalOrigins } from "./core/egress.js";
+import { htmlToReadableText } from "./core/html_text.js";
 import { CapabilityRegistry, HARNESS_TOOLS, defaultRegistry } from "./core/capabilities.js";
 import { isSafeReadOnlyCommand } from "./core/authority.js";
+import { getBuildIdentity } from "./build_identity.js";
 export { HARNESS_TOOLS, defaultRegistry };
+
+/** JSON-RPC protocol version spoken between the CLI and harness-core (REQ-REL-103). */
+export const CORE_PROTOCOL_VERSION = 1;
 
 /** Rust engine binaries the bridge looks for, in order (release before debug). */
 export function coreBinaryCandidates(): string[] {
@@ -49,6 +58,152 @@ export function forbiddenDeletion(workspace: string, target: string): string | n
   return null;
 }
 
+/**
+ * Parses and expands a standard IPv6 string into a 128-bit BigInt value.
+ */
+function parseIPv6ToBigInt(ip: string): bigint | null {
+  const zoneIndex = ip.indexOf("%");
+  const cleanIp = (zoneIndex >= 0 ? ip.slice(0, zoneIndex) : ip).toLowerCase();
+
+  let v4Suffix: string | null = null;
+  let baseIp = cleanIp;
+  const lastColon = cleanIp.lastIndexOf(":");
+  if (lastColon >= 0) {
+    const after = cleanIp.slice(lastColon + 1);
+    if (after.includes(".")) {
+      v4Suffix = after;
+      baseIp = cleanIp.slice(0, lastColon);
+    }
+  }
+
+  let groups: string[];
+  if (baseIp.includes("::")) {
+    const halves = baseIp.split("::");
+    if (halves.length !== 2) return null;
+    const left = halves[0] ? halves[0].split(":") : [];
+    const right = halves[1] ? halves[1].split(":") : [];
+    const needed = (v4Suffix ? 6 : 8) - (left.length + right.length);
+    if (needed < 0) return null;
+    groups = [...left, ...Array(needed).fill("0"), ...right];
+  } else {
+    groups = baseIp.split(":");
+  }
+
+  if (v4Suffix) {
+    if (groups.length !== 6) return null;
+    const v4Parts = v4Suffix.split(".").map((x) => parseInt(x, 10));
+    if (v4Parts.length !== 4 || v4Parts.some((n) => isNaN(n) || n < 0 || n > 255)) return null;
+    const g6 = ((v4Parts[0] << 8) | v4Parts[1]).toString(16);
+    const g7 = ((v4Parts[2] << 8) | v4Parts[3]).toString(16);
+    groups.push(g6, g7);
+  }
+
+  if (groups.length !== 8) return null;
+
+  let value = 0n;
+  for (const g of groups) {
+    const num = parseInt(g, 16);
+    if (isNaN(num) || num < 0 || num > 0xffff) return null;
+    value = (value << 16n) | BigInt(num);
+  }
+  return value;
+}
+
+/**
+ * Validates whether an IP address (IPv4 or IPv6) is a globally reachable public IP.
+ * Rejects loopback, private networks, CGNAT, link-local, ULA, multicast, and reserved ranges.
+ */
+export function isPublicIp(ip: string): boolean {
+  let clean = ip.trim();
+  if (clean.startsWith("[") && clean.endsWith("]")) {
+    clean = clean.slice(1, -1);
+  }
+  const v4 = net.isIP(clean) === 4;
+  const v6 = net.isIP(clean) === 6;
+  if (!v4 && !v6) return false;
+
+  if (v4) {
+    const parts = clean.split(".").map(Number);
+    if (parts.length !== 4 || parts.some((n) => isNaN(n) || n < 0 || n > 255)) return false;
+    const [a, b, c] = parts;
+    // 0.0.0.0/8 (Broadcast/This host - RFC 1122)
+    if (a === 0) return false;
+    // 10.0.0.0/8 (RFC 1918)
+    if (a === 10) return false;
+    // 100.64.0.0/10 (CGNAT / Shared Address Space RFC 6598)
+    if (a === 100 && b >= 64 && b <= 127) return false;
+    // 127.0.0.0/8 (Loopback RFC 1122)
+    if (a === 127) return false;
+    // 169.254.0.0/16 (Link-local RFC 3927)
+    if (a === 169 && b === 254) return false;
+    // 172.16.0.0/12 (RFC 1918)
+    if (a === 172 && b >= 16 && b <= 31) return false;
+    // 192.0.0.0/24 (IETF Protocol Assignments RFC 6890)
+    if (a === 192 && b === 0 && c === 0) return false;
+    // 192.0.2.0/24 (TEST-NET-1 RFC 5737)
+    if (a === 192 && b === 0 && c === 2) return false;
+    // 192.88.99.0/24 (6to4 Relay Anycast RFC 7526)
+    if (a === 192 && b === 88 && c === 99) return false;
+    // 192.168.0.0/16 (RFC 1918)
+    if (a === 192 && b === 168) return false;
+    // 198.18.0.0/15 (Benchmarking RFC 2544)
+    if (a === 198 && (b === 18 || b === 19)) return false;
+    // 198.51.100.0/24 (TEST-NET-2 RFC 5737)
+    if (a === 198 && b === 51 && c === 100) return false;
+    // 203.0.113.0/24 (TEST-NET-3 RFC 5737)
+    if (a === 203 && b === 0 && c === 113) return false;
+    // 224.0.0.0/4 (Multicast RFC 5771) and 240.0.0.0/4 (Reserved RFC 1112)
+    if (a >= 224) return false;
+    return true;
+  }
+
+  // IPv6
+  const v6Big = parseIPv6ToBigInt(clean);
+  if (v6Big === null) return false;
+
+  // Unspecified :: (0)
+  if (v6Big === 0n) return false;
+  // Loopback ::1 (1)
+  if (v6Big === 1n) return false;
+
+  // IPv4-mapped address: ::ffff:0:0/96 (top 80 bits zero, next 16 bits 0xffff)
+  if ((v6Big >> 32n) === 0xffffn) {
+    const lower = Number(v6Big & 0xffffffffn);
+    const a = (lower >>> 24) & 0xff;
+    const b = (lower >>> 16) & 0xff;
+    const c = (lower >>> 8) & 0xff;
+    const d = lower & 0xff;
+    return isPublicIp(`${a}.${b}.${c}.${d}`);
+  }
+
+  // IPv6 ULA: fc00::/7 (first 7 bits 0x7e -> fc00:: to fdff:ffff:...)
+  if ((v6Big >> 121n) === 0x7en) return false;
+
+  // IPv6 link-local: fe80::/10 (first 10 bits 0x3fa -> fe80:: to febf:ffff:...)
+  if ((v6Big >> 118n) === 0x3fan) return false;
+
+  // IPv6 multicast: ff00::/8 (first 8 bits 0xff)
+  if ((v6Big >> 120n) === 0xffn) return false;
+
+  // Discard prefix: 100::/64
+  if ((v6Big >> 64n) === 0x0100000000000000n) return false;
+
+  // Documentation: 2001:db8::/32 (first 32 bits 0x20010db8)
+  if ((v6Big >> 96n) === 0x20010db8n) return false;
+
+  // 6to4: 2002::/16 -> check encapsulated IPv4
+  if ((v6Big >> 112n) === 0x2002n) {
+    const v4Val = Number((v6Big >> 80n) & 0xffffffffn);
+    const a = (v4Val >>> 24) & 0xff;
+    const b = (v4Val >>> 16) & 0xff;
+    const c = (v4Val >>> 8) & 0xff;
+    const d = v4Val & 0xff;
+    return isPublicIp(`${a}.${b}.${c}.${d}`);
+  }
+
+  return true;
+}
+
 export function isSafeOutboundUrl(urlStr: string): { safe: boolean; reason?: string } {
   let parsed: URL;
   try {
@@ -61,7 +216,15 @@ export function isSafeOutboundUrl(urlStr: string): { safe: boolean; reason?: str
     return { safe: false, reason: `Blocked protocol '${parsed.protocol}'. Only http and https are permitted.` };
   }
 
-  const hostname = parsed.hostname.toLowerCase();
+  let hostname = parsed.hostname.toLowerCase();
+  if (hostname.startsWith("[") && hostname.endsWith("]")) {
+    hostname = hostname.slice(1, -1);
+  }
+
+  const allowedOrigins = parseLocalOrigins(process.env.NEXUS_LOCAL_ORIGINS);
+  if (matchesLocalOrigins(hostname, parsed.origin, allowedOrigins)) {
+    return { safe: true };
+  }
 
   // Cloud metadata & special internal domains
   if (
@@ -100,14 +263,215 @@ export function isSafeOutboundUrl(urlStr: string): { safe: boolean; reason?: str
     if (a === 0) {
       return { safe: false, reason: "SSRF Guard: Zero network address (0.0.0.0/8) is blocked." };
     }
+    if (a === 100 && b >= 64 && b <= 127) {
+      return { safe: false, reason: "SSRF Guard: CGNAT shared address (100.64.0.0/10) is blocked." };
+    }
+    if (!isPublicIp(hostname)) {
+      return { safe: false, reason: `SSRF Guard: Non-public address ${hostname} is blocked.` };
+    }
   }
 
-  // IPv6 loopback
-  if (hostname === "::1" || hostname === "[::1]") {
-    return { safe: false, reason: "SSRF Guard: IPv6 loopback (::1) is blocked." };
+  // IPv6 check
+  if (net.isIP(hostname) === 6) {
+    if (hostname === "::1") {
+      return { safe: false, reason: "SSRF Guard: IPv6 loopback (::1) is blocked." };
+    }
+    if (!isPublicIp(hostname)) {
+      return { safe: false, reason: `SSRF Guard: Non-public address ${hostname} is blocked.` };
+    }
   }
 
   return { safe: true };
+}
+
+export interface SafeFetchOptions {
+  maxBytes?: number;
+  maxRedirects?: number;
+  timeoutMs?: number;
+  headers?: Record<string, string>;
+  localOrigins?: readonly string[];
+  dnsLookup?: (hostname: string, options: any) => Promise<Array<{ address: string; family: number }>>;
+}
+
+export interface SafeFetchResponse {
+  ok: boolean;
+  status: number;
+  statusText: string;
+  headers: http.IncomingHttpHeaders;
+  text: string;
+  finalUrl: string;
+  truncated: boolean;
+}
+
+/**
+ * SSRF-safe HTTP/HTTPS fetch (REQ-SEC-112).
+ * Resolves host via DNS, refuses non-public addresses, pins the resolved address for connection,
+ * executes manual redirects up to maxRedirects checking IP safety on every hop,
+ * and streams the body up to maxBytes (default 5 MB) aborting early to prevent unbounded memory growth.
+ */
+export async function safeFetch(
+  targetUrl: string,
+  options: SafeFetchOptions = {}
+): Promise<SafeFetchResponse> {
+  const maxBytes = options.maxBytes ?? 5 * 1024 * 1024;
+  const maxRedirects = options.maxRedirects ?? 5;
+  const timeoutMs = options.timeoutMs ?? 15000;
+  const allowedOrigins =
+    options.localOrigins ?? parseLocalOrigins(process.env.NEXUS_LOCAL_ORIGINS);
+
+  let currentUrl = targetUrl;
+  let redirectCount = 0;
+  const reqHeaders: Record<string, string> = {
+    "User-Agent": "Mozilla/5.0 (compatible; NexusCode/1.0)",
+    ...(options.headers || {}),
+  };
+
+  while (true) {
+    let parsed: URL;
+    try {
+      parsed = new URL(currentUrl);
+    } catch {
+      throw new Error(`Invalid URL format: '${currentUrl}'`);
+    }
+
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+      throw new Error(
+        `Blocked protocol '${parsed.protocol}'. Only http and https are permitted.`
+      );
+    }
+
+    let host = parsed.hostname.toLowerCase();
+    if (host.startsWith("[") && host.endsWith("]")) {
+      host = host.slice(1, -1);
+    }
+
+    const isExplicitlyAllowed = matchesLocalOrigins(host, parsed.origin, allowedOrigins);
+
+    if (!isExplicitlyAllowed) {
+      if (
+        host === "localhost" ||
+        host.endsWith(".localhost") ||
+        host.endsWith(".local") ||
+        host.endsWith(".internal") ||
+        host === "metadata.google.internal"
+      ) {
+        throw new Error("SSRF Guard: Access to local/internal domains is blocked.");
+      }
+    }
+
+    let resolved: Array<{ address: string; family: number }> = [];
+    if (net.isIP(host)) {
+      resolved = [{ address: host, family: net.isIP(host) }];
+    } else {
+      const lookupFn = options.dnsLookup ?? dns.promises.lookup;
+      try {
+        const res = await lookupFn(host, { all: true });
+        resolved = Array.isArray(res) ? res : [res];
+      } catch (err: any) {
+        throw new Error(`DNS lookup failed for '${host}': ${err.message}`);
+      }
+    }
+
+    if (!resolved.length) {
+      throw new Error(`DNS resolution returned no addresses for '${host}'`);
+    }
+
+    for (const addr of resolved) {
+      if (!isPublicIp(addr.address)) {
+        const addrAllowed =
+          isExplicitlyAllowed ||
+          matchesLocalOrigins(addr.address, parsed.origin, allowedOrigins);
+        if (!addrAllowed) {
+          throw new Error(`SSRF Guard: Non-public address ${addr.address} is blocked.`);
+        }
+      }
+    }
+
+    const pinnedAddr = resolved[0].address;
+    const pinnedFamily = resolved[0].family;
+
+    const reqOptions: http.RequestOptions = {
+      method: "GET",
+      hostname: parsed.hostname,
+      port: parsed.port || (parsed.protocol === "https:" ? 443 : 80),
+      path: parsed.pathname + parsed.search,
+      headers: {
+        ...reqHeaders,
+        Host: parsed.host,
+      },
+      lookup: (_h: string, o: any, cb: any) => {
+        if (typeof o === "function") {
+          cb = o;
+          o = {};
+        }
+        if (o && o.all) {
+          cb(null, [{ address: pinnedAddr, family: pinnedFamily }]);
+        } else {
+          cb(null, pinnedAddr, pinnedFamily);
+        }
+      },
+      ...(parsed.protocol === "https:" && !net.isIP(parsed.hostname)
+        ? { servername: parsed.hostname }
+        : {}),
+    };
+
+    const res: http.IncomingMessage = await new Promise((resolve, reject) => {
+      const transport = parsed.protocol === "https:" ? https : http;
+      const req = transport.request(reqOptions, resolve);
+      req.on("error", reject);
+      const timer = setTimeout(() => {
+        req.destroy(new Error(`Request timed out after ${timeoutMs}ms`));
+      }, timeoutMs);
+      req.on("close", () => clearTimeout(timer));
+      req.end();
+    });
+
+    const status = res.statusCode || 0;
+    if ([301, 302, 303, 307, 308].includes(status) && res.headers.location) {
+      res.destroy();
+      redirectCount++;
+      if (redirectCount > maxRedirects) {
+        throw new Error(`Too many redirects (maximum ${maxRedirects})`);
+      }
+      const nextUrl = new URL(res.headers.location, currentUrl).toString();
+      if (new URL(nextUrl).origin !== parsed.origin) {
+        if (reqHeaders.authorization) delete reqHeaders.authorization;
+        if (reqHeaders.cookie) delete reqHeaders.cookie;
+      }
+      currentUrl = nextUrl;
+      continue;
+    }
+
+    let bytesRead = 0;
+    let truncated = false;
+    const chunks: Buffer[] = [];
+    for await (const chunk of res) {
+      const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+      if (bytesRead + buf.length > maxBytes) {
+        const remaining = maxBytes - bytesRead;
+        if (remaining > 0) {
+          chunks.push(buf.subarray(0, remaining));
+          bytesRead += remaining;
+        }
+        truncated = true;
+        res.destroy();
+        break;
+      }
+      chunks.push(buf);
+      bytesRead += buf.length;
+    }
+
+    const bodyText = Buffer.concat(chunks, bytesRead).toString("utf-8");
+    return {
+      ok: status >= 200 && status < 300,
+      status,
+      statusText: res.statusMessage || "",
+      headers: res.headers,
+      text: bodyText,
+      finalUrl: currentUrl,
+      truncated,
+    };
+  }
 }
 
 /** Default `run_command` deadline in the Rust runner (seconds); mirrored here so the bridge can outlast it. */
@@ -116,17 +480,30 @@ export const RUN_COMMAND_DEFAULT_TIMEOUT_SECS = 60;
 export const RPC_GRACE_SECS = 5;
 const RPC_DEFAULT_TIMEOUT_MS = 35_000;
 
+/** Maximum allowed tool timeout in seconds per REQ-SEC-107 (default 1800). */
+export function maxToolTimeoutSecs(): number {
+  const env = process.env.NEXUS_MAX_TOOL_TIMEOUT_SECS;
+  if (!env) return 1800;
+  const parsed = parseInt(env, 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : 1800;
+}
+
 /**
  * Deadline ownership for one RPC. For `run_command` the runner owns the command deadline (`runnerSecs`) and the bridge's
  * outer timer is strictly longer; for other tools only the bridge timer applies.
  */
 export function rpcDeadlines(toolName: string, args: Record<string, any>): { runnerSecs?: number; bridgeMs: number } {
   if (toolName === "run_command") {
-    const runnerSecs = typeof args.timeout_secs === "number" && args.timeout_secs > 0 ? args.timeout_secs : RUN_COMMAND_DEFAULT_TIMEOUT_SECS;
+    const rawSecs = typeof args.timeout_secs === "number" && args.timeout_secs > 0 ? args.timeout_secs : RUN_COMMAND_DEFAULT_TIMEOUT_SECS;
+    const maxSecs = maxToolTimeoutSecs();
+    const runnerSecs = Math.min(rawSecs, maxSecs);
     return { runnerSecs, bridgeMs: (runnerSecs + RPC_GRACE_SECS) * 1000 };
   }
   return { bridgeMs: args.timeout_secs ? (args.timeout_secs + RPC_GRACE_SECS) * 1000 : RPC_DEFAULT_TIMEOUT_MS };
 }
+
+/** How long a cancelled RPC waits for the runner to confirm the command ended (its grace period is 2 s). */
+const RPC_CANCEL_CONFIRM_MS = 5_000;
 
 export class RustCoreBridge {
   private static activeBridges: Set<RustCoreBridge> = new Set();
@@ -145,7 +522,10 @@ export class RustCoreBridge {
   private readOnly: boolean = false;
   private sandbox: boolean | string = false;
   private requireSandbox: boolean = false;
+  private verifierTimeoutSecs?: number;
   private securityManager: SecurityManager;
+  private handshakePromise: Promise<{ version: string; protocol: number }> | null = null;
+  private handshakeError: Error | null = null;
 
   constructor(
     workspace: string,
@@ -187,6 +567,10 @@ export class RustCoreBridge {
 
   public setSandbox(sandbox: boolean | string): void {
     this.sandbox = sandbox;
+  }
+
+  public setVerifierTimeoutSecs(secs?: number): void {
+    this.verifierTimeoutSecs = secs;
   }
 
   private resolveBinary(): void {
@@ -264,6 +648,7 @@ export class RustCoreBridge {
     }
     this.pendingRequests.clear();
     this.rpcBuffer = "";
+    this.handshakePromise = null;
   }
 
   private handleRpcStdout(data: string): void {
@@ -307,7 +692,69 @@ export class RustCoreBridge {
 
   public shutdown(): void {
     this.cleanupRpc();
+    this.handshakePromise = null;
+    this.handshakeError = null;
     RustCoreBridge.activeBridges.delete(this);
+  }
+
+  /**
+   * Reset handshake cache (used after restart or in tests).
+   */
+  public resetHandshake(): void {
+    this.handshakePromise = null;
+    this.handshakeError = null;
+  }
+
+  /**
+   * REQ-REL-103: Verifies that the running harness-core engine matches the CLI's expected protocol
+   * version and release version via the `hello` JSON-RPC method.
+   */
+  public async ensureHandshake(): Promise<{ version: string; protocol: number }> {
+    if (this.handshakeError) {
+      throw this.handshakeError;
+    }
+    if (this.handshakePromise) {
+      return this.handshakePromise;
+    }
+
+    this.handshakePromise = (async () => {
+      try {
+        const result = await this.executeViaRpc("hello", {}, { ignoreTurnSignal: true });
+        if (!result) {
+          throw new Error("Failed to communicate with core engine during startup handshake.");
+        }
+        if (!result.success) {
+          throw new Error(`Core engine handshake failed: ${result.error || "Unknown error"}`);
+        }
+        let data: any;
+        try {
+          data = JSON.parse(result.output);
+        } catch {
+          throw new Error(`Invalid JSON in core engine hello handshake response: ${result.output}`);
+        }
+        const coreProtocol = data.protocol;
+        const coreVersion = data.version;
+        const expectedVersion = getBuildIdentity().version;
+
+        if (coreProtocol !== CORE_PROTOCOL_VERSION) {
+          throw new Error(
+            `Engine protocol mismatch: core engine reports protocol ${coreProtocol}, but CLI expects ${CORE_PROTOCOL_VERSION}. Run 'make build' to update.`
+          );
+        }
+        if (expectedVersion !== "unknown" && coreVersion !== expectedVersion) {
+          throw new Error(
+            `Engine version mismatch: core engine reports version ${coreVersion}, but CLI is ${expectedVersion}. Run 'make build' to update.`
+          );
+        }
+        return { version: coreVersion, protocol: coreProtocol };
+      } catch (err: any) {
+        this.handshakeError = err;
+        this.cleanupRpc();
+        throw err;
+      }
+    })();
+
+    return this.handshakePromise;
   }
 
   public static shutdownAllGlobal(): void {
@@ -317,10 +764,55 @@ export class RustCoreBridge {
     RustCoreBridge.activeBridges.clear();
   }
 
-  private async executeViaRpc(toolName: string, args: Record<string, any>): Promise<ExecutionResult | null> {
+  /**
+   * The abort signal of the turn now running. Every RPC sent while it is set is tied to it: when the turn is cancelled,
+   * the runner is told to end that request's command (its whole process group) instead of leaving it running.
+   */
+  private turnSignal?: AbortSignal;
+
+  public setTurnSignal(signal: AbortSignal | undefined): void {
+    this.turnSignal = signal;
+  }
+
+  /** Asks the runner to end the request's command; best effort (the daemon may already be gone). */
+  private sendCancel(requestId: number): void {
+    const daemon = this.rpcProcess;
+    if (!daemon?.stdin || daemon.stdin.destroyed) return;
+    try {
+      daemon.stdin.write(JSON.stringify({ id: this.nextRequestId++, method: "cancel", params: { request_id: requestId } }) + "\n");
+    } catch {}
+  }
+
+  /**
+   * Ends background processes that finished commands left running (`server &`), for a cancelled turn. Returns how many
+   * process groups were ended, or 0 when the runner is not running.
+   */
+  public async endBackground(): Promise<number> {
+    if (!this.rpcProcess) return 0;
+    const result = await this.executeViaRpc("end_background", {}, { ignoreTurnSignal: true });
+    try {
+      return Number(JSON.parse(result?.output ?? "{}").ended ?? 0);
+    } catch {
+      return 0;
+    }
+  }
+
+  private async executeViaRpc(toolName: string, args: Record<string, any>, options: { ignoreTurnSignal?: boolean } = {}): Promise<ExecutionResult | null> {
+    const signal = options.ignoreTurnSignal ? undefined : this.turnSignal;
+    if (signal?.aborted) {
+      return { success: false, output: "", error: `'${toolName}' was not started: the turn was cancelled`, cancelled: true };
+    }
     const daemon = this.ensureRpcDaemon();
     if (!daemon || !daemon.stdin || daemon.stdin.destroyed) {
       return null;
+    }
+
+    if (toolName !== "hello") {
+      try {
+        await this.ensureHandshake();
+      } catch (err: any) {
+        return { success: false, output: "", error: err.message };
+      }
     }
 
     const id = this.nextRequestId++;
@@ -333,15 +825,39 @@ export class RustCoreBridge {
       params,
     });
 
-    return new Promise<ExecutionResult>((resolve) => {
+    return new Promise<ExecutionResult>((outerResolve) => {
+      let cancelTimer: NodeJS.Timeout | undefined;
+      const onAbort = () => {
+        if (!this.pendingRequests.has(id)) return;
+        // The runner ends the command's process group and answers with cancelled: true within its grace period; if it
+        // does not answer, the call is reported cancelled anyway rather than left waiting.
+        this.sendCancel(id);
+        cancelTimer = setTimeout(() => {
+          if (this.pendingRequests.has(id)) {
+            const pending = this.pendingRequests.get(id)!;
+            clearTimeout(pending.timeoutTimer);
+            this.pendingRequests.delete(id);
+            resolve({ success: false, output: "", error: `'${toolName}' was cancelled; the command runner did not confirm within ${RPC_CANCEL_CONFIRM_MS / 1000}s`, cancelled: true });
+          }
+        }, RPC_CANCEL_CONFIRM_MS);
+      };
+      const resolve = (result: ExecutionResult) => {
+        signal?.removeEventListener("abort", onAbort);
+        if (cancelTimer) clearTimeout(cancelTimer);
+        outerResolve(signal?.aborted && toolName === "run_command" ? { ...result, cancelled: true } : result);
+      };
+      signal?.addEventListener("abort", onAbort, { once: true });
+
       const timeoutMs = deadlines.bridgeMs;
       const timeoutTimer = setTimeout(() => {
         if (this.pendingRequests.has(id)) {
           this.pendingRequests.delete(id);
+          // The bridge stops waiting; the runner is told to end the command too, so nothing keeps running unowned.
+          this.sendCancel(id);
           resolve({
             success: false,
             output: "",
-            error: `RPC request for '${toolName}' timed out after ${timeoutMs / 1000}s without an answer from the command runner (result unknown)`,
+            error: `RPC request for '${toolName}' timed out after ${timeoutMs / 1000}s without an answer from the command runner (result unknown); the command was told to stop`,
             timedOut: true,
           });
         }
@@ -443,8 +959,24 @@ export class RustCoreBridge {
       }
     }
 
-    if (["write_file", "edit_file", "patch_file", "delete_file", "read_file", "list_dir", "file_tree", "outline_file", "cst_symbols"].includes(toolName)) {
-      const targetPath = args.path || "";
+    const PATH_CHECKED_TOOLS = [
+      "write_file",
+      "edit_file",
+      "patch_file",
+      "delete_file",
+      "read_file",
+      "file_info",
+      "count_lines",
+      "list_dir",
+      "file_tree",
+      "outline_file",
+      "cst_symbols",
+      "lsp_hover",
+      "lsp_definition",
+      "lsp_diagnostics",
+    ];
+    if (PATH_CHECKED_TOOLS.includes(toolName)) {
+      const targetPath = args.path || args.target_file || args.file_path || "";
       const check = this.securityManager.isPathProtected(targetPath);
       if (check.protected) {
         return {
@@ -485,7 +1017,7 @@ export class RustCoreBridge {
       if (toolName === "run_command") {
         const cmd = (args.command || "").trim();
         // The same check as the authority engine: one allowlist, with argument-level escapes (find -exec, rg --pre…).
-        if (!isSafeReadOnlyCommand(cmd)) {
+        if (!isSafeReadOnlyCommand(cmd, undefined, this.workspace)) {
           return {
             success: false,
             output: "",
@@ -555,7 +1087,7 @@ export class RustCoreBridge {
       }
       if (toolName === "run_command") {
         const cmd = (args.command || "").trim();
-        if (!isSafeReadOnlyCommand(cmd)) {
+        if (!isSafeReadOnlyCommand(cmd, undefined, this.workspace)) {
           return {
             success: true,
             output: `[DRY-RUN SIMULATION] Command '${cmd}' simulated without execution to protect disk state.`,
@@ -586,12 +1118,28 @@ export class RustCoreBridge {
     }
 
     if (toolName === "run_tests") {
-      const { detectTestCommand, runTestSuiteWithExecutor } = await import("./tester.js");
-      const command = detectTestCommand(this.workspace, args.filter);
+      const { discoverVerifier, runTestSuiteWithExecutor, verifierTimeoutSecs } = await import("./tester.js");
+      const discovered = discoverVerifier(this.workspace, args.filter);
+      if (!discovered) {
+        return {
+          success: false,
+          output: JSON.stringify({
+            command: "none",
+            passed: false,
+            noVerifier: true,
+            failures: [],
+            diagnostics: [],
+            report: "no verifier: no verification command is configured or discovered in this workspace.",
+            summary: "no verifier: no verification command is configured or discovered in this workspace.",
+          }),
+          error: "no verifier: no verification command is configured or discovered in this workspace.",
+        };
+      }
+      const timeoutSecs = verifierTimeoutSecs(this.verifierTimeoutSecs);
       const res = await runTestSuiteWithExecutor(
         this.workspace,
-        (testCommand) => this.executeTool("run_command", { command: testCommand, timeout_secs: 120 }),
-        command,
+        (testCommand) => this.executeTool("run_command", { command: testCommand, timeout_secs: timeoutSecs }),
+        discovered.command,
       );
       return {
         success: res.success,
@@ -650,22 +1198,19 @@ export class RustCoreBridge {
           }
         }
 
-        const res = await fetch(url, {
+        const res = await safeFetch(url, {
+          maxBytes: 5 * 1024 * 1024,
+          maxRedirects: 5,
+          timeoutMs: 15000,
           headers: {
             "User-Agent": "Mozilla/5.0 (compatible; NexusCode/1.0)",
           },
-          signal: AbortSignal.timeout(15000),
         });
         if (!res.ok) {
           return { success: false, output: "", error: `HTTP ${res.status}: ${res.statusText}` };
         }
-        const text = await res.text();
-        const clean = text
-          .replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, "")
-          .replace(/<style\b[^<]*(?:(?!<\/style>)<[^<]*)*<\/style>/gi, "")
-          .replace(/<[^>]+>/g, " ")
-          .replace(/\s+/g, " ")
-          .trim();
+        const text = res.text;
+        const clean = htmlToReadableText(text);
         const maxLen = args.max_length || 15000;
         const truncated = clean.length > maxLen ? clean.substring(0, maxLen) + "\n... [TRUNCATED]" : clean;
         return { success: true, output: truncated };
@@ -747,8 +1292,17 @@ export class RustCoreBridge {
       }
     }
 
-    // Default the shell and wrap with sandbox if enabled
+    // Default the shell and wrap with sandbox if enabled.
+    // Note: Path protection checks are enforced on all file read/write/edit tools (REQ-SEC-118).
+    // For run_command, path protection is advisory because shell commands (e.g. cat, grep)
+    // execute through the host shell environment.
+    let clampedNotice = "";
     if (toolName === "run_command") {
+      const maxSecs = maxToolTimeoutSecs();
+      if (typeof args.timeout_secs === "number" && args.timeout_secs > maxSecs) {
+        clampedNotice = `[Notice: timeout_secs clamped from ${args.timeout_secs} to ${maxSecs} (NEXUS_MAX_TOOL_TIMEOUT_SECS)]\n`;
+        args.timeout_secs = maxSecs;
+      }
       if (!args.shell) {
         args.shell = this.defaultShell;
       }
@@ -776,21 +1330,49 @@ export class RustCoreBridge {
           };
         }
         args.command = sandboxed.command;
+        if (sandboxed.argv) {
+          args.argv = sandboxed.argv;
+        }
       }
     }
+
+    const applyNotice = (res: ExecutionResult): ExecutionResult => {
+      if (clampedNotice && !res.output?.includes("[Notice: timeout_secs clamped")) {
+        return {
+          ...res,
+          output: clampedNotice + (res.output || ""),
+        };
+      }
+      return res;
+    };
 
     // Attempt persistent JSON-RPC execution
     try {
       const rpcResult = await this.executeViaRpc(toolName, args);
       if (rpcResult !== null) {
-        return rpcResult;
+        return applyNotice(rpcResult);
       }
     } catch {
       // Fall through to fallback
     }
 
     // Fallback: spawnSync invocation
-    return this.executeViaSpawnSync(toolName, args);
+    return applyNotice(this.executeViaSpawnSync(toolName, args));
+  }
+
+  public async listServices(): Promise<Array<{ name: string; pgid: number; command: string }>> {
+    try {
+      const res = await this.executeViaRpc("list_services", {}, { ignoreTurnSignal: true });
+      if (res && res.output) {
+        const parsed = JSON.parse(res.output);
+        if (Array.isArray(parsed)) {
+          return parsed;
+        }
+      }
+    } catch {
+      // Return empty if RPC is not running or failed
+    }
+    return [];
   }
 
   public registerWithCapabilities(registry: CapabilityRegistry): void {

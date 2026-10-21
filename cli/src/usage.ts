@@ -8,6 +8,7 @@
  */
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { ensurePrivateDir, appendPrivateFile } from "./core/durable_file.js";
 
 export interface UsageReport {
   inputTokens?: number;
@@ -30,6 +31,8 @@ export interface InferenceReceipt {
   endpointOrigin: string;
   protocol: string;
   disclosure: "local" | "cloud";
+  origin_class?: "local" | "cloud" | string;
+  executions?: number;
   outcome: "completed" | "failed" | "aborted";
   failureKind?: string;
   providerRequestId?: string;
@@ -107,12 +110,13 @@ export class UsageLedger {
 
   record(receipt: InferenceReceipt, workspace?: string): void {
     this.reserved.delete(receipt.requestId);
+    if (process.env.NEXUS_RECEIPTS === "0") return;
     this.receipts.push(receipt);
     if (!workspace) return;
     try {
       const dir = path.join(workspace, ".nexus");
-      fs.mkdirSync(dir, { recursive: true });
-      fs.appendFileSync(path.join(dir, "inference_receipts.jsonl"), JSON.stringify(receipt) + "\n", { mode: 0o600 });
+      ensurePrivateDir(dir);
+      appendPrivateFile(path.join(dir, "inference_receipts.jsonl"), JSON.stringify(receipt) + "\n");
     } catch {
       // Receipts are diagnostics; an unwritable workspace must not fail the inference that already happened.
     }

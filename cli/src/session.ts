@@ -1,6 +1,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
+import { randomBytes } from "node:crypto";
 import { ChatMessage } from "./types.js";
 import {
   DurableTaskState,
@@ -8,13 +9,27 @@ import {
   TaskRecoveryOptions,
   TaskRecoveryResult,
   CURRENT_STATE_SCHEMA_VERSION,
+  CorruptStateError,
+  UnsupportedSchemaVersionError,
 } from "./core/state.js";
+import { withStateStoreGuard } from "./core/state_store_guard.js";
 import { WorkspacePath } from "./core/workspace_path.js";
 import { protectArchivedMessages } from "./core/persistence_protection.js";
-import { appendLinesDurably, readArchiveLines, type ArchiveRead } from "./core/durable_file.js";
+import { appendLinesDurably, readArchiveLines, type ArchiveRead, ensurePrivateDir, writePrivateFile } from "./core/durable_file.js";
 
 // Re-export core state primitives
 export * from "./core/state.js";
+
+export class AmbiguousSessionResumeError extends Error {
+  public readonly prefix: string;
+  public readonly candidates: string[];
+  constructor(prefix: string, candidates: string[]) {
+    super(`Ambiguous session ID prefix '${prefix}'. Matches: ${candidates.join(", ")}`);
+    this.name = "AmbiguousSessionResumeError";
+    this.prefix = prefix;
+    this.candidates = candidates;
+  }
+}
 
 /**
  * Upgraded SessionData envelope conforming to DurableTaskState (PERS-001..PERS-004).
@@ -25,9 +40,43 @@ export interface SessionData extends DurableTaskState {
   model: string;
 }
 
+export interface SessionIndexEntry {
+  id: string;
+  cleanId: string;
+  title: string;
+  updatedAt: string;
+  workspace: string;
+  messageCount: number;
+  mtime: number;
+  pinned?: boolean;
+}
+
+export interface SessionIndexData {
+  version: 1;
+  updatedAt: string;
+  sessions: Record<string, SessionIndexEntry>;
+}
+
 /** Where interactive sessions are saved unless a directory is given. */
-export function defaultSessionsDir(): string {
+export function defaultSessionsDir(): string {  if (process.env.NEXUS_STATE_DIR) {
+    return path.join(process.env.NEXUS_STATE_DIR, "sessions");
+  }
   return path.join(os.homedir(), ".nexus", "sessions");
+}
+
+/** Cryptographically unpredictable base36 suffix; the length stays inside the
+ *  egress classifier's session-id whitelist (session_\d{8}_\d{6}_[a-z0-9]{1,8}). */
+function randomBase36Suffix(length: number): string {
+  const alphabet = "abcdefghijklmnopqrstuvwxyz0123456789";
+  let suffix = "";
+  while (suffix.length < length) {
+    for (const byte of randomBytes(length)) {
+      // Rejection sampling keeps the base-36 mapping unbiased (36 * 7 = 252).
+      if (byte >= 252) continue;
+      if (suffix.length < length) suffix += alphabet[byte % 36];
+    }
+  }
+  return suffix;
 }
 
 export class SessionManager {
@@ -38,10 +87,9 @@ export class SessionManager {
   constructor(customDir?: string, selectedWorkspace?: () => WorkspacePath) {
     this.sessionsDir = customDir || defaultSessionsDir();
     this.selectedWorkspace = selectedWorkspace;
-    if (!fs.existsSync(this.sessionsDir)) {
-      fs.mkdirSync(this.sessionsDir, { recursive: true });
-    }
+    ensurePrivateDir(this.sessionsDir);
     this.stateManager = new DurableStateManager({ baseDir: this.sessionsDir });
+    this.sessionsDir = this.stateManager.getBaseDir();
   }
 
   public getStateManager(): DurableStateManager {
@@ -52,14 +100,17 @@ export class SessionManager {
     const d = new Date();
     const pad = (n: number) => n.toString().padStart(2, "0");
     const timestamp = `${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}_${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}`;
-    const rand = Math.random().toString(36).substring(2, 6);
-    return `session_${timestamp}_${rand}`;
+    return `session_${timestamp}_${randomBase36Suffix(8)}`;
   }
 
   /**
    * Atomically saves session data conforming to the DurableTaskState envelope.
    */
   public saveSession(session: Partial<SessionData> & { id: string }, workspacePath?: WorkspacePath): void {
+    return withStateStoreGuard(this.sessionsDir, () => this.saveSessionLocked(session, workspacePath));
+  }
+
+  private saveSessionLocked(session: Partial<SessionData> & { id: string }, workspacePath?: WorkspacePath): void {
     const selectedWorkspace = this.currentSelectedWorkspace();
     if (workspacePath && (!selectedWorkspace || !selectedWorkspace.matches(workspacePath.value))) {
       throw new Error("Session workspace identity is not selected by the application");
@@ -89,6 +140,7 @@ export class SessionManager {
       validationReceipts: session.validationReceipts || [],
       currentOperation: session.currentOperation || null,
       messages: session.messages || [],
+      ...(session.pinned !== undefined ? { pinned: session.pinned } : {}),
       ...(session.unverifiedChangesPending !== undefined ? { unverifiedChangesPending: session.unverifiedChangesPending } : {}),
       durableNotes: session.durableNotes,
       compactionProvenance: session.compactionProvenance,
@@ -101,31 +153,114 @@ export class SessionManager {
     };
 
     this.stateManager.saveTaskState(fullState, selectedWorkspace ? [selectedWorkspace] : []);
+    const committed = this.stateManager.loadTaskState(taskId, undefined, selectedWorkspace ? [selectedWorkspace] : []);
+    this.updateIndexEntry({
+      id: sessionId,
+      cleanId: taskId.replace(/\.json$/, ""),
+      title: committed.title || "Active Session",
+      updatedAt: committed.updatedAt || new Date().toISOString(),
+      workspace,
+      messageCount: committed.messages.length,
+      mtime: Date.now(),
+      pinned: Boolean(committed.pinned),
+    });
+  }
+
+  /**
+   * Resolves a session ID by exact match or unique prefix (REQ-PER-104).
+   * Throws AmbiguousSessionResumeError if a prefix matches multiple sessions.
+   * Returns null if no matching session is found.
+   */
+  public resolveResumeId(prefix: string): string | null {
+    return withStateStoreGuard(this.sessionsDir, () => this.resolveResumeIdLocked(prefix));
+  }
+
+  private resolveResumeIdLocked(prefix: string): string | null {
+    const cleanId = prefix.replace(/\.json$/, "");
+    if (!cleanId) return null;
+
+    // 1. Exact match check against session file on disk
+    const exactFilePath = path.join(this.sessionsDir, `${cleanId}.json`);
+    if (fs.existsSync(exactFilePath)) {
+      return cleanId;
+    }
+
+    if (!fs.existsSync(this.sessionsDir)) return null;
+
+    // 2. Gather candidates for prefix matching
+    const candidates = new Set<string>();
+    const files = fs.readdirSync(this.sessionsDir);
+    for (const file of files) {
+      if (!file.endsWith(".json") || file === "index.json" || file.startsWith(".corrupt-")) continue;
+      const id = file.replace(/\.json$/, "");
+      if (id === cleanId) {
+        return id;
+      }
+      if (id.startsWith(cleanId)) {
+        candidates.add(id);
+      }
+    }
+
+    // Also check index entries in case IDs differ
+    const indexPath = this.getIndexPath();
+    if (fs.existsSync(indexPath)) {
+      try {
+        const raw = JSON.parse(fs.readFileSync(indexPath, "utf-8"));
+        if (raw && typeof raw.sessions === "object") {
+          for (const key of Object.keys(raw.sessions)) {
+            const entry = raw.sessions[key];
+            const sid = entry?.id || entry?.cleanId || key;
+            if (sid === cleanId || key === cleanId) {
+              return sid;
+            }
+            if (sid.startsWith(cleanId)) {
+              candidates.add(sid);
+            }
+          }
+        }
+      } catch {}
+    }
+
+    const candidateList = Array.from(candidates).sort();
+    if (candidateList.length === 1) {
+      return candidateList[0];
+    }
+    if (candidateList.length > 1) {
+      throw new AmbiguousSessionResumeError(cleanId, candidateList);
+    }
+    return null;
   }
 
   /**
    * Loads session with strict integrity and schema validation, migrating legacy session files if needed.
    */
   public loadSession(sessionId: string): SessionData | null {
-    let cleanId = sessionId.replace(/\.json$/, "");
-    let targetId = cleanId;
+    return withStateStoreGuard(this.sessionsDir, () => this.loadSessionLocked(sessionId));
+  }
 
-    if (!this.stateManager.hasTaskState(cleanId)) {
-      // Find matching session if partial ID was supplied
-      const all = this.listSessions();
-      const match = all.find((s) => s.id.startsWith(cleanId) || s.id.includes(cleanId));
-      if (match) {
-        targetId = match.id;
-      } else {
-        return null;
-      }
+  private loadSessionLocked(sessionId: string): SessionData | null {
+    const cleanId = sessionId.replace(/\.json$/, "");
+    const targetId = this.resolveResumeId(cleanId);
+    if (!targetId) {
+      return null;
     }
 
     try {
       const workspacePath = this.workspacePathFromSessionFile(targetId);
-      const state = this.stateManager.loadTaskState(targetId, undefined, [workspacePath]);
+      const state = this.stateManager.loadTaskState(
+        targetId,
+        undefined,
+        workspacePath ? [workspacePath] : undefined
+      );
       return state as SessionData;
-    } catch {
+    } catch (err: any) {
+      if (
+        err instanceof CorruptStateError ||
+        err instanceof UnsupportedSchemaVersionError ||
+        err instanceof AmbiguousSessionResumeError
+      ) {
+        throw err;
+      }
       return null;
     }
   }
@@ -137,24 +272,33 @@ export class SessionManager {
     sessionId: string,
     options?: TaskRecoveryOptions
   ): TaskRecoveryResult | null {
-    let cleanId = sessionId.replace(/\.json$/, "");
-    if (!this.stateManager.hasTaskState(cleanId)) {
-      const all = this.listSessions();
-      const match = all.find((s) => s.id.startsWith(cleanId) || s.id.includes(cleanId));
-      if (match) {
-        cleanId = match.id;
-      } else {
-        return null;
-      }
+    return withStateStoreGuard(this.sessionsDir, () => this.recoverSessionLocked(sessionId, options));
+  }
+
+  private recoverSessionLocked(
+    sessionId: string,
+    options?: TaskRecoveryOptions
+  ): TaskRecoveryResult | null {
+    const cleanId = sessionId.replace(/\.json$/, "");
+    const targetId = this.resolveResumeId(cleanId);
+    if (!targetId) {
+      return null;
     }
 
     try {
-      const workspacePath = this.workspacePathFromSessionFile(cleanId);
-      return this.stateManager.recoverTaskState(cleanId, {
+      const workspacePath = this.workspacePathFromSessionFile(targetId);
+      return this.stateManager.recoverTaskState(targetId, {
         ...options,
-        workspacePaths: [workspacePath],
+        workspacePaths: workspacePath ? [workspacePath] : undefined,
       });
-    } catch {
+    } catch (err: any) {
+      if (
+        err instanceof CorruptStateError ||
+        err instanceof UnsupportedSchemaVersionError ||
+        err instanceof AmbiguousSessionResumeError
+      ) {
+        throw err;
+      }
       return null;
     }
   }
@@ -179,9 +323,11 @@ export class SessionManager {
    */
   public appendArchivedHistory(sessionId: string, messages: ChatMessage[], compactionId?: string): void {
     if (!messages.length) return;
-    const at = new Date().toISOString();
-    const lines = protectArchivedMessages(messages).map((message) => JSON.stringify({ archivedAt: at, ...(compactionId ? { compactionId } : {}), message }));
-    appendLinesDurably(this.archivedHistoryPath(sessionId), lines);
+    withStateStoreGuard(this.sessionsDir, () => {
+      const at = new Date().toISOString();
+      const lines = protectArchivedMessages(messages).map((message) => JSON.stringify({ archivedAt: at, ...(compactionId ? { compactionId } : {}), message }));
+      appendLinesDurably(this.archivedHistoryPath(sessionId), lines);
+    });
   }
 
   /**
@@ -190,7 +336,7 @@ export class SessionManager {
    * set aside and counted, and committed compactions with no line are listed as missing.
    */
   public readArchivedHistory(sessionId: string, committed?: ReadonlySet<string>): ArchiveRead<ChatMessage> {
-    return readArchiveLines<ChatMessage>(this.archivedHistoryPath(sessionId), committed);
+    return withStateStoreGuard(this.sessionsDir, () => readArchiveLines<ChatMessage>(this.archivedHistoryPath(sessionId), committed));
   }
 
   public getLatestSession(): SessionData | null {
@@ -199,56 +345,197 @@ export class SessionManager {
     return this.loadSession(list[0].id);
   }
 
+  public getSessionsDir(): string {
+    return this.sessionsDir;
+  }
+
+  public getIndexPath(): string {
+    return path.join(this.sessionsDir, "index.json");
+  }
+
+  private updateIndexEntry(entry: {
+    id: string;
+    cleanId: string;
+    title: string;
+    updatedAt: string;
+    workspace: string;
+    messageCount: number;
+    mtime: number;
+    pinned?: boolean;
+  }): void {
+    try {
+      const indexPath = this.getIndexPath();
+      let index: SessionIndexData | null = null;
+      if (fs.existsSync(indexPath)) {
+        try {
+          const raw = JSON.parse(fs.readFileSync(indexPath, "utf-8"));
+          if (raw && raw.version === 1 && typeof raw.sessions === "object") {
+            index = raw as SessionIndexData;
+          }
+        } catch {}
+      }
+      if (!index) {
+        index = { version: 1, updatedAt: new Date().toISOString(), sessions: {} };
+      }
+      index.sessions[entry.cleanId] = entry;
+      index.updatedAt = new Date().toISOString();
+      writePrivateFile(indexPath, JSON.stringify(index, null, 2));
+    } catch {
+      // index update failure should not break session save
+    }
+  }
+
+  public rebuildIndex(): SessionIndexData {
+    return withStateStoreGuard(this.sessionsDir, () => this.rebuildIndexLocked());
+  }
+
+  private rebuildIndexLocked(): SessionIndexData {
+    const indexPath = this.getIndexPath();
+    const index: SessionIndexData = {
+      version: 1,
+      updatedAt: new Date().toISOString(),
+      sessions: {},
+    };
+
+    if (!fs.existsSync(this.sessionsDir)) return index;
+
+    const files = fs.readdirSync(this.sessionsDir);
+    for (const file of files) {
+      if (!file.endsWith(".json") || file === "index.json" || file.startsWith(".corrupt-")) continue;
+      const cleanId = file.replace(/\.json$/, "");
+      const fullPath = path.join(this.sessionsDir, file);
+      try {
+        const stat = fs.statSync(fullPath);
+        const content = fs.readFileSync(fullPath, "utf-8");
+        const data = JSON.parse(content);
+        index.sessions[cleanId] = {
+          id: data.sessionId || data.taskId || data.id || cleanId,
+          cleanId,
+          title: data.title || "Untitled Session",
+          updatedAt: data.updatedAt || stat.mtime.toISOString(),
+          workspace: data.workspacePath || data.workspace || "~",
+          messageCount: data.schemaVersion === 2 ? (data.messageLog?.count ?? 0) : (Array.isArray(data.messages) ? data.messages.length : 0),
+          mtime: stat.mtimeMs,
+          pinned: Boolean(data.pinned),
+        };
+      } catch {
+        // ignore corrupted files in index
+      }
+    }
+
+    try {
+      writePrivateFile(indexPath, JSON.stringify(index, null, 2));
+    } catch {}
+
+    return index;
+  }
+
   public listSessions(): Array<{
     id: string;
     title: string;
     updatedAt: string;
     workspace: string;
     messageCount: number;
+    pinned?: boolean;
+  }> {
+    return withStateStoreGuard(this.sessionsDir, () => this.listSessionsLocked());
+  }
+
+  private listSessionsLocked(): Array<{
+    id: string;
+    title: string;
+    updatedAt: string;
+    workspace: string;
+    messageCount: number;
+    pinned?: boolean;
   }> {
     if (!fs.existsSync(this.sessionsDir)) return [];
 
-    const files = fs.readdirSync(this.sessionsDir).filter((f) => f.endsWith(".json"));
-    const results: Array<{
-      id: string;
-      title: string;
-      updatedAt: string;
-      workspace: string;
-      messageCount: number;
-      mtime: number;
-    }> = [];
+    const indexPath = this.getIndexPath();
+    let index: SessionIndexData | null = null;
 
-    for (const file of files) {
+    if (fs.existsSync(indexPath)) {
       try {
-        const fullPath = path.join(this.sessionsDir, file);
-        const stat = fs.statSync(fullPath);
-        const content = fs.readFileSync(fullPath, "utf-8");
-        const data = JSON.parse(content);
-        const cleanId = file.replace(/\.json$/, "");
-        results.push({
-          id: data.sessionId || data.taskId || data.id || cleanId,
-          title: data.title || "Untitled Session",
-          updatedAt: data.updatedAt || stat.mtime.toISOString(),
-          workspace: data.workspacePath || data.workspace || "~",
-          messageCount: Array.isArray(data.messages) ? data.messages.length : 0,
-          mtime: stat.mtimeMs,
-        });
+        const raw = JSON.parse(fs.readFileSync(indexPath, "utf-8"));
+        if (raw && raw.version === 1 && typeof raw.sessions === "object") {
+          index = raw as SessionIndexData;
+        }
       } catch {
-        // ignore corrupted files in listing
+        index = null; // Rebuild on miss/corrupt
       }
     }
 
-    results.sort((a, b) => b.mtime - a.mtime);
-    return results.map(({ mtime, ...rest }) => rest);
+    const files = fs.readdirSync(this.sessionsDir);
+    const sessionFiles = new Set<string>();
+    for (const f of files) {
+      if (f.endsWith(".json") && f !== "index.json" && !f.startsWith(".corrupt-")) {
+        sessionFiles.add(f);
+      }
+    }
+
+    if (!index) {
+      index = this.rebuildIndex();
+    } else {
+      let dirty = false;
+      // Remove deleted
+      for (const key of Object.keys(index.sessions)) {
+        if (!sessionFiles.has(`${key}.json`)) {
+          delete index.sessions[key];
+          dirty = true;
+        }
+      }
+      // Check for new or updated files
+      for (const file of sessionFiles) {
+        const cleanId = file.replace(/\.json$/, "");
+        const existing = index.sessions[cleanId];
+        const fullPath = path.join(this.sessionsDir, file);
+        try {
+          const stat = fs.statSync(fullPath);
+          if (!existing || stat.mtimeMs > existing.mtime) {
+            const content = fs.readFileSync(fullPath, "utf-8");
+            const data = JSON.parse(content);
+            index.sessions[cleanId] = {
+              id: data.sessionId || data.taskId || data.id || cleanId,
+              cleanId,
+              title: data.title || "Untitled Session",
+              updatedAt: data.updatedAt || stat.mtime.toISOString(),
+              workspace: data.workspacePath || data.workspace || "~",
+              messageCount: data.schemaVersion === 2 ? (data.messageLog?.count ?? 0) : (Array.isArray(data.messages) ? data.messages.length : 0),
+              mtime: stat.mtimeMs,
+              pinned: Boolean(data.pinned),
+            };
+            dirty = true;
+          }
+        } catch {}
+      }
+
+      if (dirty) {
+        try {
+          index.updatedAt = new Date().toISOString();
+          writePrivateFile(indexPath, JSON.stringify(index, null, 2));
+        } catch {}
+      }
+    }
+
+    const sessionList: SessionIndexEntry[] = Object.values(index.sessions);
+    return sessionList
+      .sort((a, b) => b.mtime - a.mtime)
+      .map(({ mtime, cleanId, ...rest }) => rest);
   }
 
-  private workspacePathFromSessionFile(taskId: string): WorkspacePath {
+  private workspacePathFromSessionFile(taskId: string): WorkspacePath | undefined {
     const selected = this.currentSelectedWorkspace();
-    if (!selected) throw new Error("Session recovery requires an independently selected workspace");
+    if (!selected) return undefined;
     selected.assertCurrent();
     this.stateManager.setWorkspacePaths([selected]);
     const filePath = this.stateManager.getStateFilePath(taskId);
-    const raw = JSON.parse(fs.readFileSync(filePath, "utf8"));
+    if (!fs.existsSync(filePath)) return selected;
+    let raw: any;
+    try {
+      raw = JSON.parse(fs.readFileSync(filePath, "utf8"));
+    } catch {
+      return selected;
+    }
     const value = raw?.workspacePath || raw?.workspace;
     if (typeof value !== "string") throw new Error("Session record has no workspace identity");
     if (!selected.matches(value) || (raw?.workspacePath && raw.workspacePath !== selected.value) ||

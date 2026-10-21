@@ -1,5 +1,7 @@
 # Gateway capability handoff: request counting equivalent to admission
 
+> **Historical record.** This document is kept for provenance. Current requirements and status: [docs/v1.0.0/REQUIREMENTS.md](../v1.0.0/REQUIREMENTS.md). Statuses here may have been superseded or contradicted since it was written.
+
 **From:** nexus-code (`feat/compaction-continuity`, base `a58f860`). **To:** homelab-ai maintainers.
 **Status:** read-only finding; nothing in homelab-ai was changed, deployed or promoted. Nexus works without any of
 this. It is an integration improvement, not a dependency.

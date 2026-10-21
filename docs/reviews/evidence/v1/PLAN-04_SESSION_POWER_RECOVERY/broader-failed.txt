@@ -1,0 +1,2212 @@
+TAP version 13
+# Subtest: all source AutonomousAgent construction sites declare durability explicitly
+ok 1 - all source AutonomousAgent construction sites declare durability explicitly
+  ---
+  duration_ms: 16.576121
+  ...
+# - Nexus is considering the next step
+# ✔ Nexus is considering the next step
+# - Working: task_completed
+# ✔ Working: task_completed
+# Subtest: AgentWorkUnitExecutor default construction persists a durable depth-1 implementer with its unit identity
+ok 2 - AgentWorkUnitExecutor default construction persists a durable depth-1 implementer with its unit identity
+  ---
+  duration_ms: 696.101135
+  ...
+# Subtest: AgentWorkUnitExecutor applies durable identity when a custom factory omits constructor options
+ok 3 - AgentWorkUnitExecutor applies durable identity when a custom factory omits constructor options
+  ---
+  duration_ms: 485.591551
+  ...
+# Subtest: ACC-CONT-03: pressure compaction of a work unit survives SIGKILL and restores archived markers
+not ok 4 - ACC-CONT-03: pressure compaction of a work unit survives SIGKILL and restores archived markers
+  ---
+  duration_ms: 1634.829501
+  location: '/var/tmp/nexus-persistence-recovery-mh_bj0rw/source/cli/test/durable_continuity.test.ts:1:5738'
+  failureType: 'testCodeFailure'
+  error: |-
+    child must die from SIGKILL; got {"code":3,"signal":null}
+    [provider_capabilities] reason=step model=m context 18000 (operator); output allowance 500 (operator); discovery unsupported (catalog lists no limits); token counting unsupported
+    [context_admission] step=1 request_id=6ea58816-c1e5-4786-bccd-78fc356ec96d state=admitted estimated_tokens=4787 completion_reserve=500 tool_response_reserve=500 limit=18000 compacted=false messages=2
+    [token_count] step=1 request_id=6ea58816-c1e5-4786-bccd-78fc356ec96d source=client_estimate prompt_tokens=4787 client_estimate=4787 context_limit=18000 (operator) output_allowance=500 (operator) tool_headroom_policy=500 unmeasured="the connection advertises no request counting"
+    [context_admission] step=2 request_id=d3fe1b49-ec1c-40b4-b547-605fd04a826c state=admitted estimated_tokens=4855 completion_reserve=500 tool_response_reserve=500 limit=18000 compacted=false messages=4
+    [token_count] step=2 request_id=d3fe1b49-ec1c-40b4-b547-605fd04a826c source=client_estimate prompt_tokens=4855 client_estimate=4855 context_limit=18000 (operator) output_allowance=500 (operator) tool_headroom_policy=500 unmeasured="the connection advertises no request counting"
+    [context_admission] step=3 request_id=b8f1c71c-6d12-4439-a750-f3f03e1c5910 state=admitted estimated_tokens=4924 completion_reserve=500 tool_response_reserve=500 limit=18000 compacted=false messages=6
+    [token_count] step=3 request_id=b8f1c71c-6d12-4439-a750-f3f03e1c5910 source=client_estimate prompt_tokens=4924 client_estimate=4924 context_limit=18000 (operator) output_allowance=500 (operator) tool_headroom_policy=500 unmeasured="the connection advertises no request counting"
+    [context_admission] step=4 request_id=6ab66828-4bcf-4acd-bf52-d002273a1c08 state=admitted estimated_tokens=4990 completion_reserve=500 tool_response_reserve=500 limit=18000 compacted=false messages=8
+    [token_count] step=4 request_id=6ab66828-4bcf-4acd-bf52-d002273a1c08 source=client_estimate prompt_tokens=4990 client_estimate=4990 context_limit=18000 (operator) output_allowance=500 (operator) tool_headroom_policy=500 unmeasured="the connection advertises no request counting"
+    [context_admission] step=5 request_id=030fd941-554f-48d0-b472-f883c0694fe8 state=admitted estimated_tokens=5056 completion_reserve=500 tool_response_reserve=500 limit=18000 compacted=false messages=10
+    [token_count] step=5 request_id=030fd941-554f-48d0-b472-f883c0694fe8 source=client_estimate prompt_tokens=5056 client_estimate=5056 context_limit=18000 (operator) output_allowance=500 (operator) tool_headroom_policy=500 unmeasured="the connection advertises no request counting"
+    [context_admission] step=6 request_id=2540b71d-7e73-4069-b1ed-54ebbf5814d2 state=admitted estimated_tokens=5124 completion_reserve=500 tool_response_reserve=500 limit=18000 compacted=false messages=12
+    [token_count] step=6 request_id=2540b71d-7e73-4069-b1ed-54ebbf5814d2 source=client_estimate prompt_tokens=5124 client_estimate=5124 context_limit=18000 (operator) output_allowance=500 (operator) tool_headroom_policy=500 unmeasured="the connection advertises no request counting"
+    [context_admission] step=7 request_id=0a726bb1-7c4a-4c10-93b5-d56ebf843d2b state=admitted estimated_tokens=5194 completion_reserve=500 tool_response_reserve=500 limit=18000 compacted=false messages=14
+    [token_count] step=7 request_id=0a726bb1-7c4a-4c10-93b5-d56ebf843d2b source=client_estimate prompt_tokens=5194 client_estimate=5194 context_limit=18000 (operator) output_allowance=500 (operator) tool_headroom_policy=500 unmeasured="the connection advertises no request counting"
+    [context_admission] step=8 request_id=765dc147-c4a3-48c1-8c7e-bfef9194a035 state=admitted estimated_tokens=5273 completion_reserve=500 tool_response_reserve=500 limit=18000 compacted=false messages=16
+    [token_count] step=8 request_id=765dc147-c4a3-48c1-8c7e-bfef9194a035 source=client_estimate prompt_tokens=5273 client_estimate=5273 context_limit=18000 (operator) output_allowance=500 (operator) tool_headroom_policy=500 unmeasured="the connection advertises no request counting"
+    
+    
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected: true
+  actual: false
+  operator: '=='
+  stack: |-
+    <anonymous> (/var/tmp/nexus-persistence-recovery-mh_bj0rw/source/cli/test/durable_continuity.test.ts:161:14)
+    process.processTicksAndRejections (node:internal/process/task_queues:95:5)
+    async withHome (/var/tmp/nexus-persistence-recovery-mh_bj0rw/source/cli/test/durable_continuity.test.ts:289:12)
+    async TestContext.<anonymous> (/var/tmp/nexus-persistence-recovery-mh_bj0rw/source/cli/test/durable_continuity.test.ts:144:3)
+    async Test.run (node:internal/test_runner/test:797:9)
+    async Test.processPendingSubtests (node:internal/test_runner/test:527:7)
+  ...
+# Subtest: V2: unverified changes survive retries, step limits, restarts and resumes
+    # Subtest: retry after UNVERIFIED: the resumed attempt changes nothing, the unit stays unverified and its dependent never runs
+    not ok 1 - retry after UNVERIFIED: the resumed attempt changes nothing, the unit stays unverified and its dependent never runs
+      ---
+      duration_ms: 677.216471
+      location: '/var/tmp/nexus-persistence-recovery-mh_bj0rw/source/cli/test/durable_continuity.test.ts:7:3886'
+      failureType: 'testCodeFailure'
+      error: |-
+        Expected values to be strictly equal:
+        + actual - expected
+        
+        + 'COMPLETE'
+        - 'BLOCKED'
+      code: 'ERR_ASSERTION'
+      name: 'AssertionError'
+      expected: 'BLOCKED'
+      actual: 'COMPLETE'
+      operator: 'strictEqual'
+      stack: |-
+        <anonymous> (/var/tmp/nexus-persistence-recovery-mh_bj0rw/source/cli/test/durable_continuity.test.ts:359:16)
+        process.processTicksAndRejections (node:internal/process/task_queues:95:5)
+        async withHome (/var/tmp/nexus-persistence-recovery-mh_bj0rw/source/cli/test/durable_continuity.test.ts:289:12)
+        async TestContext.<anonymous> (/var/tmp/nexus-persistence-recovery-mh_bj0rw/source/cli/test/durable_continuity.test.ts:353:5)
+        async Test.run (node:internal/test_runner/test:797:9)
+        async Promise.all (index 0)
+        async Suite.run (node:internal/test_runner/test:1135:7)
+        async Test.processPendingSubtests (node:internal/test_runner/test:527:7)
+      ...
+    # Subtest: continue after the step limit: a write before the limit is still unverified after the continuation
+    ok 2 - continue after the step limit: a write before the limit is still unverified after the continuation
+      ---
+      duration_ms: 930.520668
+      ...
+    # Subtest: a continuation cannot trust a carried baseline after recovery and keeps dependents blocked
+    not ok 3 - a continuation cannot trust a carried baseline after recovery and keeps dependents blocked
+      ---
+      duration_ms: 1307.12117
+      location: '/var/tmp/nexus-persistence-recovery-mh_bj0rw/source/cli/test/durable_continuity.test.ts:7:6178'
+      failureType: 'testCodeFailure'
+      error: |-
+        The input did not match the regular expression /unverified|verification|regression_free/i. Input:
+        
+        'step limit 3 reached'
+        
+      code: 'ERR_ASSERTION'
+      name: 'AssertionError'
+      expected:
+      actual: 'step limit 3 reached'
+      operator: 'match'
+      stack: |-
+        <anonymous> (/var/tmp/nexus-persistence-recovery-mh_bj0rw/source/cli/test/durable_continuity.test.ts:407:16)
+        process.processTicksAndRejections (node:internal/process/task_queues:95:5)
+        async withHome (/var/tmp/nexus-persistence-recovery-mh_bj0rw/source/cli/test/durable_continuity.test.ts:289:12)
+        async TestContext.<anonymous> (/var/tmp/nexus-persistence-recovery-mh_bj0rw/source/cli/test/durable_continuity.test.ts:398:5)
+        async Test.run (node:internal/test_runner/test:797:9)
+        async Suite.processPendingSubtests (node:internal/test_runner/test:527:7)
+      ...
+    # Subtest: nexus run --resume <task> and /recover: a restarted process inherits the unverified change; a read-only turn is not NOT_REQUIRED
+    not ok 4 - nexus run --resume <task> and /recover: a restarted process inherits the unverified change; a read-only turn is not NOT_REQUIRED
+      ---
+      duration_ms: 391.998817
+      location: '/var/tmp/nexus-persistence-recovery-mh_bj0rw/source/cli/test/durable_continuity.test.ts:7:7313'
+      failureType: 'testCodeFailure'
+      error: |-
+        Expected values to be strictly equal:
+        + actual - expected
+        
+        + 'NOT_REQUIRED'
+        - 'UNVERIFIED'
+      code: 'ERR_ASSERTION'
+      name: 'AssertionError'
+      expected: 'UNVERIFIED'
+      actual: 'NOT_REQUIRED'
+      operator: 'strictEqual'
+      stack: |-
+        <anonymous> (/var/tmp/nexus-persistence-recovery-mh_bj0rw/source/cli/test/durable_continuity.test.ts:427:16)
+        process.processTicksAndRejections (node:internal/process/task_queues:95:5)
+        async withHome (/var/tmp/nexus-persistence-recovery-mh_bj0rw/source/cli/test/durable_continuity.test.ts:289:12)
+        async TestContext.<anonymous> (/var/tmp/nexus-persistence-recovery-mh_bj0rw/source/cli/test/durable_continuity.test.ts:418:5)
+        async Test.run (node:internal/test_runner/test:797:9)
+        async Suite.processPendingSubtests (node:internal/test_runner/test:527:7)
+      ...
+# 💭 Assistant: noted
+# 💭 Assistant: reply
+    # Subtest: ACC-CONT-01: run --resume <id> continues the recovered conversation, objective and task id
+    ok 5 - ACC-CONT-01: run --resume <id> continues the recovered conversation, objective and task id
+      ---
+      duration_ms: 335.69368
+      ...
+# 💭 Assistant: done
+# 💭 Assistant: done
+    # Subtest: ACC-CONT-02: run --resume (no id) resumes latest task, or fails with code 2 and guidance
+    ok 6 - ACC-CONT-02: run --resume (no id) resumes latest task, or fails with code 2 and guidance
+      ---
+      duration_ms: 1838.280217
+      ...
+    # Subtest: ACC-CONT-03: work unit compaction writes archive lines and read_archive returns originals after resume
+    ok 7 - ACC-CONT-03: work unit compaction writes archive lines and read_archive returns originals after resume
+      ---
+      duration_ms: 703.913623
+      ...
+    # Subtest: ACC-CONT-04: resume a unit after two identical loops; a third repetition triggers recovery note
+    ok 8 - ACC-CONT-04: resume a unit after two identical loops; a third repetition triggers recovery note
+      ---
+      duration_ms: 1021.402992
+      ...
+    # Subtest: REQ-AGT-103: recovered verifier baseline persists as continuity evidence but is never trusted
+    ok 9 - REQ-AGT-103: recovered verifier baseline persists as continuity evidence but is never trusted
+      ---
+      duration_ms: 247.395274
+      ...
+    # Subtest: ACC-VER-06: forged candidate identity cannot clear the verifier obligation after resume
+    ok 10 - ACC-VER-06: forged candidate identity cannot clear the verifier obligation after resume
+      ---
+      duration_ms: 998.581687
+      ...
+    # Subtest: ACC-VER-07: a new run cannot clear recovered verifier invalidation and rebaseline edited tests
+    ok 11 - ACC-VER-07: a new run cannot clear recovered verifier invalidation and rebaseline edited tests
+      ---
+      duration_ms: 865.604334
+      ...
+# - Working: read_file
+# ✖ Working: read_file
+# 💭 Assistant: Parent done.
+    # Subtest: ACC-CONT-05: subagent token accounting and no durable task files (REQ-AGT-104, REQ-AGT-105)
+    ok 12 - ACC-CONT-05: subagent token accounting and no durable task files (REQ-AGT-104, REQ-AGT-105)
+      ---
+      duration_ms: 343.580942
+      ...
+# - Working: write_file
+# ✖ Working: write_file
+# 💭 Assistant: Parent finished without verification.
+    # Subtest: AGT-06: subagent obligation write increments turnMutations once and persists immediately
+    not ok 13 - AGT-06: subagent obligation write increments turnMutations once and persists immediately
+      ---
+      duration_ms: 453.716831
+      location: '/var/tmp/nexus-persistence-recovery-mh_bj0rw/source/cli/test/durable_continuity.test.ts:8:15219'
+      failureType: 'testCodeFailure'
+      error: |-
+        Expected values to be strictly equal:
+        
+        false !== true
+        
+      code: 'ERR_ASSERTION'
+      name: 'AssertionError'
+      expected: true
+      actual: false
+      operator: 'strictEqual'
+      stack: |-
+        <anonymous> (/var/tmp/nexus-persistence-recovery-mh_bj0rw/source/cli/test/durable_continuity.test.ts:912:16)
+        process.processTicksAndRejections (node:internal/process/task_queues:95:5)
+        async withHome (/var/tmp/nexus-persistence-recovery-mh_bj0rw/source/cli/test/durable_continuity.test.ts:289:12)
+        async TestContext.<anonymous> (/var/tmp/nexus-persistence-recovery-mh_bj0rw/source/cli/test/durable_continuity.test.ts:893:5)
+        async Test.run (node:internal/test_runner/test:797:9)
+        async Suite.processPendingSubtests (node:internal/test_runner/test:527:7)
+      ...
+# 💭 Assistant: done
+    # Subtest: ACC-CONT-06: throwing admitContext after a write yields UNHANDLED_ERROR with pending=true and cancelled steering notice
+    not ok 14 - ACC-CONT-06: throwing admitContext after a write yields UNHANDLED_ERROR with pending=true and cancelled steering notice
+      ---
+      duration_ms: 273.830387
+      location: '/var/tmp/nexus-persistence-recovery-mh_bj0rw/source/cli/test/durable_continuity.test.ts:8:16395'
+      failureType: 'testCodeFailure'
+      error: 'admitContext threw after write'
+      code: 'ERR_ASSERTION'
+      name: 'AssertionError'
+      expected: true
+      actual: false
+      operator: '=='
+      stack: |-
+        <anonymous> (/var/tmp/nexus-persistence-recovery-mh_bj0rw/source/cli/test/durable_continuity.test.ts:969:16)
+        process.processTicksAndRejections (node:internal/process/task_queues:95:5)
+        async withHome (/var/tmp/nexus-persistence-recovery-mh_bj0rw/source/cli/test/durable_continuity.test.ts:289:12)
+        async TestContext.<anonymous> (/var/tmp/nexus-persistence-recovery-mh_bj0rw/source/cli/test/durable_continuity.test.ts:932:5)
+        async Test.run (node:internal/test_runner/test:797:9)
+        async Suite.processPendingSubtests (node:internal/test_runner/test:527:7)
+      ...
+    # Subtest: AGT-14 / REQ-AGT-106: durable-write failures (operation start/end and checkpoints) are reported through reportPersistenceFailure
+    ok 15 - AGT-14 / REQ-AGT-106: durable-write failures (operation start/end and checkpoints) are reported through reportPersistenceFailure
+      ---
+      duration_ms: 305.795984
+      ...
+# 💭 Assistant: I wrote impl.txt.
+    # Subtest: interactive /resume (sidecar): a resumed session keeps its outstanding verification obligation
+    not ok 16 - interactive /resume (sidecar): a resumed session keeps its outstanding verification obligation
+      ---
+      duration_ms: 509.540157
+      location: '/var/tmp/nexus-persistence-recovery-mh_bj0rw/source/cli/test/durable_continuity.test.ts:8:18928'
+      failureType: 'testCodeFailure'
+      error: |-
+        Expected values to be strictly equal:
+        + actual - expected
+        
+        + 'NOT_REQUIRED'
+        - 'UNVERIFIED'
+      code: 'ERR_ASSERTION'
+      name: 'AssertionError'
+      expected: 'UNVERIFIED'
+      actual: 'NOT_REQUIRED'
+      operator: 'strictEqual'
+      stack: |-
+        <anonymous> (/var/tmp/nexus-persistence-recovery-mh_bj0rw/source/cli/test/durable_continuity.test.ts:1040:16)
+        process.processTicksAndRejections (node:internal/process/task_queues:95:5)
+        async withHome (/var/tmp/nexus-persistence-recovery-mh_bj0rw/source/cli/test/durable_continuity.test.ts:289:12)
+        async TestContext.<anonymous> (/var/tmp/nexus-persistence-recovery-mh_bj0rw/source/cli/test/durable_continuity.test.ts:1021:5)
+        async Test.run (node:internal/test_runner/test:797:9)
+        async Suite.processPendingSubtests (node:internal/test_runner/test:527:7)
+      ...
+# [provider_capabilities] reason=step model=m context 65536 (client_default); output allowance 8192 (client_default); discovery unsupported (catalog lists no limits); token counting unsupported
+# [context_admission] step=1 request_id=af1e8303-2786-436d-939b-29972a6489ff state=admitted estimated_tokens=4515 completion_reserve=8192 tool_response_reserve=4096 limit=65536 compacted=false messages=2
+# [token_count] step=1 request_id=af1e8303-2786-436d-939b-29972a6489ff source=client_estimate prompt_tokens=4515 client_estimate=4515 context_limit=65536 (client_default) output_allowance=8192 (client_default) tool_headroom_policy=4096 unmeasured="the connection advertises no request counting"
+# [context_admission] step=2 request_id=c6bce388-aed6-482e-bec6-fba47de45142 state=admitted estimated_tokens=4588 completion_reserve=8192 tool_response_reserve=4096 limit=65536 compacted=false messages=4
+# [token_count] step=2 request_id=c6bce388-aed6-482e-bec6-fba47de45142 source=client_estimate prompt_tokens=4588 client_estimate=4588 context_limit=65536 (client_default) output_allowance=8192 (client_default) tool_headroom_policy=4096 unmeasured="the connection advertises no request counting"
+    # Subtest: interactive /resume after the process ended mid-turn: the change made before the end is still unverified
+    ok 17 - interactive /resume after the process ended mid-turn: the change made before the end is still unverified
+      ---
+      duration_ms: 1417.023611
+      ...
+    1..17
+not ok 5 - V2: unverified changes survive retries, step limits, restarts and resumes
+  ---
+  duration_ms: 12623.958615
+  type: 'suite'
+  location: '/var/tmp/nexus-persistence-recovery-mh_bj0rw/source/cli/test/durable_continuity.test.ts:7:3796'
+  failureType: 'subtestsFailed'
+  error: '6 subtests failed'
+  code: 'ERR_TEST_FAILURE'
+  ...
+# [provider_capabilities] reason=step model=m context 65536 (client_default); output allowance 8192 (client_default); discovery unsupported (catalog lists no limits); token counting unsupported
+# [context_admission] step=1 request_id=6e911d26-47e9-406a-af13-eed563a853fb state=admitted estimated_tokens=4514 completion_reserve=8192 tool_response_reserve=4096 limit=65536 compacted=false messages=2
+# [token_count] step=1 request_id=6e911d26-47e9-406a-af13-eed563a853fb source=client_estimate prompt_tokens=4514 client_estimate=4514 context_limit=65536 (client_default) output_allowance=8192 (client_default) tool_headroom_policy=4096 unmeasured="the connection advertises no request counting"
+# [context_admission] step=2 request_id=0e7960f6-0169-4fd9-a40e-0645a6f8ac9f state=admitted estimated_tokens=4583 completion_reserve=8192 tool_response_reserve=4096 limit=65536 compacted=false messages=4
+# [token_count] step=2 request_id=0e7960f6-0169-4fd9-a40e-0645a6f8ac9f source=client_estimate prompt_tokens=4583 client_estimate=4583 context_limit=65536 (client_default) output_allowance=8192 (client_default) tool_headroom_policy=4096 unmeasured="the connection advertises no request counting"
+# Subtest: V2: a tool still running when an interactive host ends
+    # Subtest: interactive /resume after the host ended inside a writing command: the change is still unverified
+    not ok 1 - interactive /resume after the host ended inside a writing command: the change is still unverified
+      ---
+      duration_ms: 15128.501103
+      location: '/var/tmp/nexus-persistence-recovery-mh_bj0rw/source/cli/test/durable_continuity.test.ts:8:21904'
+      failureType: 'testCodeFailure'
+      error: 'timed out'
+      code: 'ERR_TEST_FAILURE'
+      stack: |-
+        until (/var/tmp/nexus-persistence-recovery-mh_bj0rw/source/cli/test/durable_continuity.test.ts:1544:38)
+        async <anonymous> (/var/tmp/nexus-persistence-recovery-mh_bj0rw/source/cli/test/durable_continuity.test.ts:1113:9)
+        async withHome (/var/tmp/nexus-persistence-recovery-mh_bj0rw/source/cli/test/durable_continuity.test.ts:289:12)
+        async TestContext.<anonymous> (/var/tmp/nexus-persistence-recovery-mh_bj0rw/source/cli/test/durable_continuity.test.ts:1099:5)
+        async Test.run (node:internal/test_runner/test:797:9)
+        async Promise.all (index 0)
+        async Suite.run (node:internal/test_runner/test:1135:7)
+        async Test.processPendingSubtests (node:internal/test_runner/test:527:7)
+      ...
+    1..1
+not ok 6 - V2: a tool still running when an interactive host ends
+  ---
+  duration_ms: 15129.04
+  type: 'suite'
+  location: '/var/tmp/nexus-persistence-recovery-mh_bj0rw/source/cli/test/durable_continuity.test.ts:8:21833'
+  failureType: 'subtestsFailed'
+  error: '1 subtest failed'
+  code: 'ERR_TEST_FAILURE'
+  ...
+# Subtest: R1: task state and sessions without a recorded obligation (written by earlier builds)
+    # Subtest: an operation interrupted after an earlier clean turn: after 'continue after inspection' the unit stays UNVERIFIED and its dependent never runs
+    ok 1 - an operation interrupted after an earlier clean turn: after 'continue after inspection' the unit stays UNVERIFIED and its dependent never runs
+      ---
+      duration_ms: 839.044697
+      ...
+    # Subtest: interactive /resume (sidecar): saved session obligation flags cannot authenticate a clean workspace
+    ok 2 - interactive /resume (sidecar): saved session obligation flags cannot authenticate a clean workspace
+      ---
+      duration_ms: 1466.270518
+      ...
+    # Subtest: ACC-VER-08: restored session flags cannot authenticate a verifier baseline
+    ok 3 - ACC-VER-08: restored session flags cannot authenticate a verifier baseline
+      ---
+      duration_ms: 375.815151
+      ...
+    # Subtest: ACC-VER-09: generic verifier output cannot discharge an unauthenticated restored obligation
+    ok 4 - ACC-VER-09: generic verifier output cannot discharge an unauthenticated restored obligation
+      ---
+      duration_ms: 137.722006
+      ...
+    1..4
+ok 7 - R1: task state and sessions without a recorded obligation (written by earlier builds)
+  ---
+  duration_ms: 2819.33771
+  type: 'suite'
+  ...
+# Subtest: V1: a unit whose durable history is missing or inconsistent is blocked, never completed
+    # Subtest: missing conversation (empty history): resume blocks without inference, and only an explicit restart runs the authorized task again
+    ok 1 - missing conversation (empty history): resume blocks without inference, and only an explicit restart runs the authorized task again
+      ---
+      duration_ms: 1221.165204
+      ...
+    # Subtest: inconsistent conversation (a replacement objective): resume blocks without inference, and only an explicit restart runs the authorized task again
+    ok 2 - inconsistent conversation (a replacement objective): resume blocks without inference, and only an explicit restart runs the authorized task again
+      ---
+      duration_ms: 911.051716
+      ...
+    # Subtest: partial history after a write (the obligation record survives): resume blocks without inference, and only an explicit restart runs the authorized task again
+    not ok 3 - partial history after a write (the obligation record survives): resume blocks without inference, and only an explicit restart runs the authorized task again
+      ---
+      duration_ms: 397.293019
+      location: '/var/tmp/nexus-persistence-recovery-mh_bj0rw/source/cli/test/durable_continuity.test.ts:8:32845'
+      failureType: 'testCodeFailure'
+      error: 'the first attempt changed the workspace'
+      code: 'ERR_ASSERTION'
+      name: 'AssertionError'
+      expected: true
+      actual: false
+      operator: '=='
+      stack: |-
+        <anonymous> (/var/tmp/nexus-persistence-recovery-mh_bj0rw/source/cli/test/durable_continuity.test.ts:1353:41)
+        process.processTicksAndRejections (node:internal/process/task_queues:95:5)
+        async withHome (/var/tmp/nexus-persistence-recovery-mh_bj0rw/source/cli/test/durable_continuity.test.ts:289:12)
+        async TestContext.<anonymous> (/var/tmp/nexus-persistence-recovery-mh_bj0rw/source/cli/test/durable_continuity.test.ts:1346:7)
+        async Test.run (node:internal/test_runner/test:797:9)
+        async Suite.processPendingSubtests (node:internal/test_runner/test:527:7)
+      ...
+    # Subtest: missing durable state (task file deleted): resume blocks without inference, and only an explicit restart runs the authorized task again
+    ok 4 - missing durable state (task file deleted): resume blocks without inference, and only an explicit restart runs the authorized task again
+      ---
+      duration_ms: 895.682039
+      ...
+    # Subtest: a task file written before obligations were recorded, with no conversation: resume blocks without inference, and only an explicit restart runs the authorized task again
+    ok 5 - a task file written before obligations were recorded, with no conversation: resume blocks without inference, and only an explicit restart runs the authorized task again
+      ---
+      duration_ms: 967.164634
+      ...
+    # Subtest: a conversation truncated to its system prompt, with no obligation record: resume blocks without inference, and only an explicit restart runs the authorized task again
+    ok 6 - a conversation truncated to its system prompt, with no obligation record: resume blocks without inference, and only an explicit restart runs the authorized task again
+      ---
+      duration_ms: 957.448361
+      ...
+    # Subtest: a compacted recovered conversation continues its task but cannot claim verified completion
+    ok 7 - a compacted recovered conversation continues its task but cannot claim verified completion
+      ---
+      duration_ms: 767.65622
+      ...
+    # Subtest: a conversation where nothing happened yet (only the system prompt) starts the unit, without a restart decision
+    ok 8 - a conversation where nothing happened yet (only the system prompt) starts the unit, without a restart decision
+      ---
+      duration_ms: 854.903391
+      ...
+    # Subtest: an operator revision continues the recorded conversation but keeps recovered changes unverified
+    ok 9 - an operator revision continues the recorded conversation but keeps recovered changes unverified
+      ---
+      duration_ms: 750.515514
+      ...
+    # Subtest: a resumed unit is told its authorized task again and remains unverified after continuation
+    ok 10 - a resumed unit is told its authorized task again and remains unverified after continuation
+      ---
+      duration_ms: 876.013589
+      ...
+    1..10
+not ok 8 - V1: a unit whose durable history is missing or inconsistent is blocked, never completed
+  ---
+  duration_ms: 8599.999711
+  type: 'suite'
+  location: '/var/tmp/nexus-persistence-recovery-mh_bj0rw/source/cli/test/durable_continuity.test.ts:8:30555'
+  failureType: 'subtestsFailed'
+  error: '1 subtest failed'
+  code: 'ERR_TEST_FAILURE'
+  ...
+# Subtest: V1: process death mid-turn, then restart and resume
+    # Subtest: killed between tools (low-entropy tool-call ids): resumed unit preserves task/results but cannot claim verified completion
+    not ok 1 - killed between tools (low-entropy tool-call ids): resumed unit preserves task/results but cannot claim verified completion
+      ---
+      duration_ms: 1854.165092
+      location: '/var/tmp/nexus-persistence-recovery-mh_bj0rw/source/cli/test/durable_continuity.test.ts:11:6295'
+      failureType: 'testCodeFailure'
+      error: 'earlier tool results were recovered'
+      code: 'ERR_ASSERTION'
+      name: 'AssertionError'
+      expected:
+      actual: |-
+        You are Nexus Code, an autonomous AI software engineering agent running in a Linux shell environment.
+        You solve coding problems, build features, fix bugs, and refactor codebases by iteratively exploring, reading, editing, and verifying files.
+        
+        ### Operating Rules:
+        1. EXPLORE FIRST: Before editing files, always explore the workspace using `file_tree`, `list_dir`, `find_files`, `search_code`, or `read_file`. For large files, use `outline_file` first to inspect class/function signatures without loading the entire file into context.
+        2. HIGH-EFFICIENCY BATCHING: Prefer `batch_read` to read multiple files concurrently in a single turn, and `file_info` to inspect metadata without loading whole files.
+        3. PRECISE EDITS & PATCHES: When modifying existing files, use `edit_file` with unique snippets or `patch_file` with unified diffs.
+        4. PLANNING: Use `update_plan` only for work with three or more distinct phases (not for a fix and its test); update it alongside other tool calls.
+        5. VERIFICATION: After making code changes, use `run_command` with bash/zsh commands to run tests, builds, or linting (e.g. `cargo check`, `cargo test`, `npm test`, `pytest`).
+        6. SELF-CORRECTION: If a command or tool returns an error, analyze the error message, identify the root cause, and fix it.
+        7. AUTONOMOUS COMPLETION: Keep executing tools until the entire task is thoroughly resolved. When everything is verified and done, invoke `task_completed` with a short summary of what changed and how it was checked.
+        8. BOUNDED CONTEXT: Your context window is limited, and earlier tool output is compacted out of the conversation as you work; your own messages are what carry forward. After inspecting large output you will rely on later, state its key findings in a line or two (with file and symbol references) before moving on; do not restate small files or narrate routine steps. Re-read earlier output only when you need a specific detail you did not record or it may have changed.
+        
+        
+        
+        Always explain your reasoning before or alongside your tool calls.
+        
+        ### Shell Environment:
+        - Active Shell: bash (standard GNU/Linux shell environment)
+        - Workspace directory: /var/tmp/nexus-session-recovery-validation-4o0lnna8/nexus-cont-kill-SO4Hkn/ws
+        
+        
+        
+        [Work unit 'markers': Markers] Part of the operation: report the markers
+        
+        Task:
+        OBJ-READ-ABC: read a.txt, b.txt and c.txt, then report their markers.
+        
+        Call task_completed with a concise summary when done.
+        
+        Error executing read_file: Core engine handshake failed: Rust core RPC daemon disconnected
+        
+        Error executing read_file: Core engine handshake failed: Rust core RPC daemon disconnected
+        [Work unit resumed on probe (m) after: resource became eligible again]
+        The unit's authorized task, which remains its only objective:
+        OBJ-READ-ABC: read a.txt, b.txt and c.txt, then report their markers.
+        Your earlier progress on this unit is above; tools that already ran are not repeated. Continue the unit and call task_completed with a concise summary when done.
+      operator: 'match'
+      stack: |-
+        TestContext.<anonymous> (/var/tmp/nexus-persistence-recovery-mh_bj0rw/source/cli/test/durable_continuity.test.ts:1591:16)
+        process.processTicksAndRejections (node:internal/process/task_queues:95:5)
+        async Test.run (node:internal/test_runner/test:797:9)
+        async Promise.all (index 0)
+        async Suite.run (node:internal/test_runner/test:1135:7)
+        async Test.processPendingSubtests (node:internal/test_runner/test:527:7)
+      ...
+    # Subtest: killed between tools (high-entropy tool-call ids): resumed unit preserves task/results but cannot claim verified completion
+    not ok 2 - killed between tools (high-entropy tool-call ids): resumed unit preserves task/results but cannot claim verified completion
+      ---
+      duration_ms: 1780.967836
+      location: '/var/tmp/nexus-persistence-recovery-mh_bj0rw/source/cli/test/durable_continuity.test.ts:11:6295'
+      failureType: 'testCodeFailure'
+      error: 'earlier tool results were recovered'
+      code: 'ERR_ASSERTION'
+      name: 'AssertionError'
+      expected:
+      actual: |-
+        You are Nexus Code, an autonomous AI software engineering agent running in a Linux shell environment.
+        You solve coding problems, build features, fix bugs, and refactor codebases by iteratively exploring, reading, editing, and verifying files.
+        
+        ### Operating Rules:
+        1. EXPLORE FIRST: Before editing files, always explore the workspace using `file_tree`, `list_dir`, `find_files`, `search_code`, or `read_file`. For large files, use `outline_file` first to inspect class/function signatures without loading the entire file into context.
+        2. HIGH-EFFICIENCY BATCHING: Prefer `batch_read` to read multiple files concurrently in a single turn, and `file_info` to inspect metadata without loading whole files.
+        3. PRECISE EDITS & PATCHES: When modifying existing files, use `edit_file` with unique snippets or `patch_file` with unified diffs.
+        4. PLANNING: Use `update_plan` only for work with three or more distinct phases (not for a fix and its test); update it alongside other tool calls.
+        5. VERIFICATION: After making code changes, use `run_command` with bash/zsh commands to run tests, builds, or linting (e.g. `cargo check`, `cargo test`, `npm test`, `pytest`).
+        6. SELF-CORRECTION: If a command or tool returns an error, analyze the error message, identify the root cause, and fix it.
+        7. AUTONOMOUS COMPLETION: Keep executing tools until the entire task is thoroughly resolved. When everything is verified and done, invoke `task_completed` with a short summary of what changed and how it was checked.
+        8. BOUNDED CONTEXT: Your context window is limited, and earlier tool output is compacted out of the conversation as you work; your own messages are what carry forward. After inspecting large output you will rely on later, state its key findings in a line or two (with file and symbol references) before moving on; do not restate small files or narrate routine steps. Re-read earlier output only when you need a specific detail you did not record or it may have changed.
+        
+        
+        
+        Always explain your reasoning before or alongside your tool calls.
+        
+        ### Shell Environment:
+        - Active Shell: bash (standard GNU/Linux shell environment)
+        - Workspace directory: /var/tmp/nexus-session-recovery-validation-4o0lnna8/nexus-cont-kill-SkuCU8/ws
+        
+        
+        
+        [Work unit 'markers': Markers] Part of the operation: report the markers
+        
+        Task:
+        OBJ-READ-ABC: read a.txt, b.txt and c.txt, then report their markers.
+        
+        Call task_completed with a concise summary when done.
+        
+        Error executing read_file: Core engine handshake failed: Rust core RPC daemon disconnected
+        
+        Error executing read_file: Core engine handshake failed: Rust core RPC daemon disconnected
+        [Work unit resumed on probe (m) after: resource became eligible again]
+        The unit's authorized task, which remains its only objective:
+        OBJ-READ-ABC: read a.txt, b.txt and c.txt, then report their markers.
+        Your earlier progress on this unit is above; tools that already ran are not repeated. Continue the unit and call task_completed with a concise summary when done.
+      operator: 'match'
+      stack: |-
+        TestContext.<anonymous> (/var/tmp/nexus-persistence-recovery-mh_bj0rw/source/cli/test/durable_continuity.test.ts:1591:16)
+        process.processTicksAndRejections (node:internal/process/task_queues:95:5)
+        async Test.run (node:internal/test_runner/test:797:9)
+        async Suite.processPendingSubtests (node:internal/test_runner/test:527:7)
+      ...
+    # Subtest: killed while a writing tool ran: resume blocks, and continuing after inspection cannot complete the unit unverified
+    ok 3 - killed while a writing tool ran: resume blocks, and continuing after inspection cannot complete the unit unverified
+      ---
+      duration_ms: 1807.978816
+      ...
+    1..3
+not ok 9 - V1: process death mid-turn, then restart and resume
+  ---
+  duration_ms: 5443.44198
+  type: 'suite'
+  location: '/var/tmp/nexus-persistence-recovery-mh_bj0rw/source/cli/test/durable_continuity.test.ts:11:6179'
+  failureType: 'subtestsFailed'
+  error: '2 subtests failed'
+  code: 'ERR_TEST_FAILURE'
+  ...
+# Subtest: V2: process death while a subagent ran
+    # Subtest: a subagent that wrote before the kill leaves the unit unverified after continuing
+    not ok 1 - a subagent that wrote before the kill leaves the unit unverified after continuing
+      ---
+      duration_ms: 60027.943582
+      location: '/var/tmp/nexus-persistence-recovery-mh_bj0rw/source/cli/test/durable_continuity.test.ts:12:3136'
+      failureType: 'testCodeFailure'
+      error: 'timed out'
+      code: 'ERR_TEST_FAILURE'
+      stack: |-
+        until (/var/tmp/nexus-persistence-recovery-mh_bj0rw/source/cli/test/durable_continuity.test.ts:1544:38)
+        async TestContext.<anonymous> (/var/tmp/nexus-persistence-recovery-mh_bj0rw/source/cli/test/durable_continuity.test.ts:1656:7)
+        async Test.run (node:internal/test_runner/test:797:9)
+        async Promise.all (index 0)
+        async Suite.run (node:internal/test_runner/test:1135:7)
+        async Test.processPendingSubtests (node:internal/test_runner/test:527:7)
+      ...
+    1..1
+not ok 10 - V2: process death while a subagent ran
+  ---
+  duration_ms: 60028.440187
+  type: 'suite'
+  location: '/var/tmp/nexus-persistence-recovery-mh_bj0rw/source/cli/test/durable_continuity.test.ts:12:3081'
+  failureType: 'subtestsFailed'
+  error: '1 subtest failed'
+  code: 'ERR_TEST_FAILURE'
+  ...
+# Subtest: durable operation records match their start whatever the provider's call id looks like
+    # Subtest: a high-entropy invocation id is redacted on disk, yet the operation is recorded as completed; recorded progress clears it
+    ok 1 - a high-entropy invocation id is redacted on disk, yet the operation is recorded as completed; recorded progress clears it
+      ---
+      duration_ms: 86.037831
+      ...
+    1..1
+ok 11 - durable operation records match their start whatever the provider's call id looks like
+  ---
+  duration_ms: 86.136353
+  type: 'suite'
+  ...
+# Subtest: invocation-local reuse preserves contextual, key and serialized redaction
+ok 12 - invocation-local reuse preserves contextual, key and serialized redaction
+  ---
+  duration_ms: 21.980705
+  ...
+# Subtest: redaction reuse never crosses an environment or policy change
+ok 13 - redaction reuse never crosses an environment or policy change
+  ---
+  duration_ms: 1.100006
+  ...
+# Subtest: all contextual key aliases retain classification with case and identifier prefixes
+ok 14 - all contextual key aliases retain classification with case and identifier prefixes
+  ---
+  duration_ms: 19.580674
+  ...
+# Subtest: independent descriptors contend and release permits reacquisition
+ok 15 - independent descriptors contend and release permits reacquisition
+  ---
+  duration_ms: 27.713353
+  ...
+# Subtest: duplicate release cannot close an unrelated reused descriptor
+ok 16 - duplicate release cannot close an unrelated reused descriptor
+  ---
+  duration_ms: 11.131266
+  ...
+# Subtest: unsafe guards and missing lock utility fail closed
+ok 17 - unsafe guards and missing lock utility fail closed
+  ---
+  duration_ms: 19.788894
+  ...
+# Subtest: state store supports synchronous nesting and releases after exceptions
+ok 18 - state store supports synchronous nesting and releases after exceptions
+  ---
+  duration_ms: 32.729534
+  ...
+# Subtest: background collection skips an externally held store
+ok 19 - background collection skips an externally held store
+  ---
+  duration_ms: 12.905436
+  ...
+# Subtest: kernel ownership is released when the owning process is killed
+ok 20 - kernel ownership is released when the owning process is killed
+  ---
+  duration_ms: 168.122196
+  ...
+# Subtest: session persistence scrubs nested credential plaintext and keeps recoverable safe state
+ok 21 - session persistence scrubs nested credential plaintext and keeps recoverable safe state
+  ---
+  duration_ms: 62.124775
+  ...
+# Subtest: loading an older plaintext session rewrites protected bytes before successful recovery
+ok 22 - loading an older plaintext session rewrites protected bytes before successful recovery
+  ---
+  duration_ms: 44.296931
+  ...
+# Subtest: persisted session workspace cannot mint WorkspacePath provenance or expand selected workspace
+ok 23 - persisted session workspace cannot mint WorkspacePath provenance or expand selected workspace
+  ---
+  duration_ms: 6.631548
+  ...
+# Subtest: caller-supplied WorkspacePath cannot override selected SessionManager or state-manager identity
+ok 24 - caller-supplied WorkspacePath cannot override selected SessionManager or state-manager identity
+  ---
+  duration_ms: 11.262401
+  ...
+# Subtest: legacy state with a classified identity fails recovery without writing a sanitized shadow record
+ok 25 - legacy state with a classified identity fails recovery without writing a sanitized shadow record
+  ---
+  duration_ms: 9.764455
+  ...
+# Subtest: knowledge persistence does not write credential plaintext and reloads a redacted entry
+ok 26 - knowledge persistence does not write credential plaintext and reloads a redacted entry
+  ---
+  duration_ms: 19.910147
+  ...
+# Subtest: git checkpoint refuses to persist modified files containing classified credentials
+ok 27 - git checkpoint refuses to persist modified files containing classified credentials
+  ---
+  duration_ms: 83.95751
+  ...
+# Subtest: git checkpoint retains ordinary tracked state without changing the worktree
+ok 28 - git checkpoint retains ordinary tracked state without changing the worktree
+  ---
+  duration_ms: 139.630454
+  ...
+# Subtest: git checkpoint permits a staged deletion with no index blob to inspect
+ok 29 - git checkpoint permits a staged deletion with no index blob to inspect
+  ---
+  duration_ms: 124.027728
+  ...
+# Subtest: non-git checkpoint refuses to copy sensitive workspace files
+ok 30 - non-git checkpoint refuses to copy sensitive workspace files
+  ---
+  duration_ms: 11.382613
+  ...
+# Subtest: non-git checkpoint preserves an ordinary workspace snapshot
+ok 31 - non-git checkpoint preserves an ordinary workspace snapshot
+  ---
+  duration_ms: 30.541587
+  ...
+# Subtest: structured session export text is redacted before a durable file write
+ok 32 - structured session export text is redacted before a durable file write
+  ---
+  duration_ms: 20.059661
+  ...
+# Subtest: REPL history appends a redacted durable copy while retaining the live input in memory
+ok 33 - REPL history appends a redacted durable copy while retaining the live input in memory
+  ---
+  duration_ms: 1.317729
+  ...
+# Subtest: REPL history loading scrubs legacy plaintext on disk before returning recovered history
+ok 34 - REPL history loading scrubs legacy plaintext on disk before returning recovered history
+  ---
+  duration_ms: 18.681726
+  ...
+# Subtest: durable task state refuses a write if the persistence classifier fails
+ok 35 - durable task state refuses a write if the persistence classifier fails
+  ---
+  duration_ms: 4.401431
+  ...
+# Subtest: durable task state refuses a credential embedded in workspace identity
+ok 36 - durable task state refuses a credential embedded in workspace identity
+  ---
+  duration_ms: 5.61975
+  ...
+# Subtest: durable task state refuses a high-entropy path component rather than preserving it unclassified
+ok 37 - durable task state refuses a high-entropy path component rather than preserving it unclassified
+  ---
+  duration_ms: 8.024985
+  ...
+# Subtest: selected typed WorkspacePath survives durable serialization and restart recovery
+ok 38 - selected typed WorkspacePath survives durable serialization and restart recovery
+  ---
+  duration_ms: 32.072237
+  ...
+# Subtest: typed WorkspacePath does not override a positively identified credential
+ok 39 - typed WorkspacePath does not override a positively identified credential
+  ---
+  duration_ms: 14.41841
+  ...
+# Subtest: canonical positive credential findings block typed WorkspacePath persistence
+ok 40 - canonical positive credential findings block typed WorkspacePath persistence
+  ---
+  duration_ms: 60.891954
+  ...
+# Subtest: typed WorkspacePath may resolve only an UNCERTAIN path entropy finding
+ok 41 - typed WorkspacePath may resolve only an UNCERTAIN path entropy finding
+  ---
+  duration_ms: 18.444003
+  ...
+# Subtest: typed WorkspacePath does not exempt arbitrary high-entropy message content
+ok 42 - typed WorkspacePath does not exempt arbitrary high-entropy message content
+  ---
+  duration_ms: 29.691617
+  ...
+# Subtest: workspacePath property name alone does not grant typed-path preservation
+ok 43 - workspacePath property name alone does not grant typed-path preservation
+  ---
+  duration_ms: 6.201917
+  ...
+# Subtest: WorkspacePath rejects normalization changes and detects a changed symlink target
+ok 44 - WorkspacePath rejects normalization changes and detects a changed symlink target
+  ---
+  duration_ms: 24.860375
+  ...
+# Subtest: a reminted WorkspacePath cannot authorize a retargeted selected symlink
+ok 45 - a reminted WorkspacePath cannot authorize a retargeted selected symlink
+  ---
+  duration_ms: 8.492446
+  ...
+# Subtest: selected WorkspacePath capability is immutable and rejects forged instances
+ok 46 - selected WorkspacePath capability is immutable and rejects forged instances
+  ---
+  duration_ms: 10.74897
+  ...
+# Subtest: PLAN-08 PR-8c: Persistence retention, GC, and indexed sessions (REQ-PER-102, DEC-11, ACC-PER-02)
+    # Subtest: Session indexing with rebuild-on-miss and performance (1k sessions lists in < 500 ms)
+    ok 1 - Session indexing with rebuild-on-miss and performance (1k sessions lists in < 500 ms)
+      ---
+      duration_ms: 579.318826
+      ...
+    # Subtest: ACC-PER-02: seed 10k tasks and 2k sessions; gc --dry-run reports and gc brings store under cap
+    ok 2 - ACC-PER-02: seed 10k tasks and 2k sessions; gc --dry-run reports and gc brings store under cap
+      ---
+      duration_ms: 5487.608996
+      ...
+    # Subtest: Checkpoints git ref and snapshot pruning, flights pruning
+    ok 3 - Checkpoints git ref and snapshot pruning, flights pruning
+      ---
+      duration_ms: 136.376677
+      ...
+    # Subtest: Background daily GC: first-run acknowledgement, NEXUS_GC=auto, and 2s timeout bounding
+    ok 4 - Background daily GC: first-run acknowledgement, NEXUS_GC=auto, and 2s timeout bounding
+      ---
+      duration_ms: 2.76665
+      ...
+    # Subtest: Background daily GC: enforces single end-to-end deadline across planning, identity capture, and execution
+    ok 5 - Background daily GC: enforces single end-to-end deadline across planning, identity capture, and execution
+      ---
+      duration_ms: 7.051962
+      ...
+    # Subtest: Planning candidate selection and size cap sorting respects expired deadline
+    ok 6 - Planning candidate selection and size cap sorting respects expired deadline
+      ---
+      duration_ms: 2.894539
+      ...
+    # Subtest: Background daily GC: persists summary and lastRunAt even when work budget expires
+    ok 7 - Background daily GC: persists summary and lastRunAt even when work budget expires
+      ---
+      duration_ms: 5.257925
+      ...
+    # Subtest: Planning: bounded metadata streaming respects deadline and preserves pin protection on large legacy state envelopes
+    ok 8 - Planning: bounded metadata streaming respects deadline and preserves pin protection on large legacy state envelopes
+      ---
+      duration_ms: 72.93321
+      ...
+    1..8
+ok 47 - PLAN-08 PR-8c: Persistence retention, GC, and indexed sessions (REQ-PER-102, DEC-11, ACC-PER-02)
+  ---
+  duration_ms: 6295.897897
+  type: 'suite'
+  ...
+# Subtest: GC accounts for and removes message journals, history logs, and exact migration backups
+ok 48 - GC accounts for and removes message journals, history logs, and exact migration backups
+  ---
+  duration_ms: 96.123403
+  ...
+# Subtest: GC preserves all components of a record modified after planning
+ok 49 - GC preserves all components of a record modified after planning
+  ---
+  duration_ms: 36.831726
+  ...
+# Subtest: GC skips a store while its writer owns the kernel guard
+ok 50 - GC skips a store while its writer owns the kernel guard
+  ---
+  duration_ms: 41.141739
+  ...
+# Subtest: orphan journals and migration backups count toward the size cap and are collected together
+ok 51 - orphan journals and migration backups count toward the size cap and are collected together
+  ---
+  duration_ms: 12.579204
+  ...
+# Subtest: a newly published envelope cancels an orphan deletion plan
+ok 52 - a newly published envelope cancels an orphan deletion plan
+  ---
+  duration_ms: 10.903544
+  ...
+# Subtest: companion removal failure propagates into deletion disposition and preserves record status
+ok 53 - companion removal failure propagates into deletion disposition and preserves record status
+  ---
+  duration_ms: 61.069947
+  ...
+# Subtest: GC reads pin protection from the current envelope rather than a stale newer index
+ok 54 - GC reads pin protection from the current envelope rather than a stale newer index
+  ---
+  duration_ms: 15.293765
+  ...
+# Subtest: current and pinned tasks remain protected even during test-pollution cleanup
+ok 55 - current and pinned tasks remain protected even during test-pollution cleanup
+  ---
+  duration_ms: 18.789499
+  ...
+# Subtest: session listing rebuilds and refreshes message counts from schema-two cursors
+ok 56 - session listing rebuilds and refreshes message counts from schema-two cursors
+  ---
+  duration_ms: 273.916926
+  ...
+# Subtest: session index uses protected committed metadata rather than a caller's unredacted title
+ok 57 - session index uses protected committed metadata rather than a caller's unredacted title
+  ---
+  duration_ms: 179.414378
+  ...
+# Subtest: session archive publication fails closed while another process owns the store guard
+ok 58 - session archive publication fails closed while another process owns the store guard
+  ---
+  duration_ms: 2033.139329
+  ...
+# Subtest: SidecarServer: session and turns
+    # Subtest: start announces the protocol and an idle session
+    ok 1 - start announces the protocol and an idle session
+      ---
+      duration_ms: 175.747086
+      ...
+# [provider_capabilities] reason=step model=m context 65536 (client_default); output allowance 8192 (client_default); discovery unsupported (catalog lists no limits); token counting unsupported
+# [context_admission] step=1 request_id=0e417862-a3e2-49d2-8f71-11fb5b1a4301 state=admitted estimated_tokens=4516 completion_reserve=8192 tool_response_reserve=4096 limit=65536 compacted=false messages=2
+# [token_count] step=1 request_id=0e417862-a3e2-49d2-8f71-11fb5b1a4301 source=client_estimate prompt_tokens=4516 client_estimate=4516 context_limit=65536 (client_default) output_allowance=8192 (client_default) tool_headroom_policy=4096 unmeasured="the connection advertises no request counting"
+# - Nexus is considering the next step
+# ✔ Nexus is considering the next step
+#   · Exploring workspace  .
+# - Working: list_dir
+# ✖ Working: list_dir
+# ✖ Tool Error:
+#   Core engine handshake failed: Rust core RPC daemon disconnected
+# [context_admission] step=2 request_id=45fa3337-6e3e-4218-8d04-0f6d7b7ddb8d state=admitted estimated_tokens=4584 completion_reserve=8192 tool_response_reserve=4096 limit=65536 compacted=false messages=4
+# [token_count] step=2 request_id=45fa3337-6e3e-4218-8d04-0f6d7b7ddb8d source=client_estimate prompt_tokens=4584 client_estimate=4584 context_limit=65536 (client_default) output_allowance=8192 (client_default) tool_headroom_policy=4096 unmeasured="the connection advertises no request counting"
+# - Nexus is considering the next step
+# ✔ Nexus is considering the next step
+# 💭 Assistant: There is one file.
+# ✓ TURN ENDED - NO CHANGES TO VERIFY  execution=COMPLETED outcome=NOT_REQUIRED modelStop=FINAL_TEXT
+    # Subtest: a read-only turn streams tool and text events, then a truthful turn.result
+    not ok 2 - a read-only turn streams tool and text events, then a truthful turn.result
+      ---
+      duration_ms: 974.122574
+      location: '/var/tmp/nexus-persistence-recovery-mh_bj0rw/source/cli/test/sidecar.test.ts:1:2292'
+      failureType: 'testCodeFailure'
+      error: |-
+        Expected values to be strictly equal:
+        
+        false !== true
+        
+      code: 'ERR_ASSERTION'
+      name: 'AssertionError'
+      expected: true
+      actual: false
+      operator: 'strictEqual'
+      stack: |-
+        <anonymous> (/var/tmp/nexus-persistence-recovery-mh_bj0rw/source/cli/test/sidecar.test.ts:82:14)
+        process.processTicksAndRejections (node:internal/process/task_queues:95:5)
+        async withSidecar (/var/tmp/nexus-persistence-recovery-mh_bj0rw/source/cli/test/sidecar.test.ts:38:5)
+        async TestContext.<anonymous> (/var/tmp/nexus-persistence-recovery-mh_bj0rw/source/cli/test/sidecar.test.ts:71:5)
+        async Test.run (node:internal/test_runner/test:797:9)
+        async Suite.processPendingSubtests (node:internal/test_runner/test:527:7)
+      ...
+# [provider_capabilities] reason=step model=m context 65536 (client_default); output allowance 8192 (client_default); discovery unsupported (catalog lists no limits); token counting unsupported
+# [context_admission] step=1 request_id=e4052b51-d73d-4dbd-b33e-38d6f56aded0 state=admitted estimated_tokens=4514 completion_reserve=8192 tool_response_reserve=4096 limit=65536 compacted=false messages=2
+# [token_count] step=1 request_id=e4052b51-d73d-4dbd-b33e-38d6f56aded0 source=client_estimate prompt_tokens=4514 client_estimate=4514 context_limit=65536 (client_default) output_allowance=8192 (client_default) tool_headroom_policy=4096 unmeasured="the connection advertises no request counting"
+# - Nexus is considering the next step
+# ✖ Inference provider temporarily unavailable
+# ⏳ Provider recovery (step 1): http_error HTTP 500, execution UNKNOWN; next check in 1s (request e4052b51-d73d-4dbd-b33e-38d6f56aded0).
+# ✗ Provider recovery exhausted: execution status unknown and the replay budget (1) is spent
+# Fatal error communicating with LLM server: Inference error (HTTP 500): {"error":"boom"}
+# × TURN FAILED  execution=FAILED outcome=NOT_ESTABLISHED (INFERENCE_FAILED: http_error/provider HTTP 500; provider recovery exhausted after 2 submissions, 1s waiting)
+# Inference http_error (origin: provider, HTTP 500): Inference error (HTTP 500): {"error":"boom"}
+    # Subtest: an inference failure is projected as FAILED, not success
+    ok 3 - an inference failure is projected as FAILED, not success
+      ---
+      duration_ms: 962.33158
+      ...
+# [provider_capabilities] reason=step model=m context 65536 (client_default); output allowance 8192 (client_default); discovery unsupported (catalog lists no limits); token counting unsupported
+# [context_admission] step=1 request_id=6d8f1e97-2bde-4971-b11b-4d997c3227e0 state=admitted estimated_tokens=4514 completion_reserve=8192 tool_response_reserve=4096 limit=65536 compacted=false messages=2
+# [token_count] step=1 request_id=6d8f1e97-2bde-4971-b11b-4d997c3227e0 source=client_estimate prompt_tokens=4514 client_estimate=4514 context_limit=65536 (client_default) output_allowance=8192 (client_default) tool_headroom_policy=4096 unmeasured="the connection advertises no request counting"
+# - Nexus is considering the next step
+# ✖ Inference provider temporarily unavailable
+# ⏳ Provider recovery (step 1): http_error HTTP 500, execution UNKNOWN; next check in 1s (request 6d8f1e97-2bde-4971-b11b-4d997c3227e0).
+# ✗ Provider recovery exhausted: execution status unknown and the replay budget (1) is spent
+# Fatal error communicating with LLM server: Inference error (HTTP 500): {"error":"upstream rejected Bearer [REDACTED:BEARER_AUTH_HEADER]"}
+# × TURN FAILED  execution=FAILED outcome=NOT_ESTABLISHED (INFERENCE_FAILED: http_error/provider HTTP 500; provider recovery exhausted after 2 submissions, 1s waiting)
+# Inference http_error (origin: provider, HTTP 500): Inference error (HTTP 500): {"error":"upstream rejected Bearer [REDACTED:BEARER_AUTH_HEADER]"}
+    # Subtest: turn.result redacts secrets inside the embedded turn object
+    ok 4 - turn.result redacts secrets inside the embedded turn object
+      ---
+      duration_ms: 971.389334
+      ...
+# [context_admission] step=1 request_id=d594fbcc-8c5a-47ae-a56f-7ef334a82445 state=admitted estimated_tokens=4513 completion_reserve=8192 tool_response_reserve=4096 limit=65536 compacted=false messages=2
+# [token_count] step=1 request_id=d594fbcc-8c5a-47ae-a56f-7ef334a82445 source=client_estimate prompt_tokens=4513 client_estimate=4513 context_limit=65536 (client_default) output_allowance=8192 (client_default) tool_headroom_policy=4096 unmeasured="the connection advertises no request counting"
+# - Nexus is considering the next step
+# ✖ Inference request aborted by operator
+# ! TURN INTERRUPTED  execution=INTERRUPTED outcome=NOT_ESTABLISHED; 0 tool call(s) not dispatched
+    # Subtest: an exception escaping runTurn is reported as INTERNAL and idle() still resolves
+    ok 5 - an exception escaping runTurn is reported as INTERNAL and idle() still resolves
+      ---
+      duration_ms: 131.97536
+      ...
+    # Subtest: a second prompt while busy is rejected with BUSY
+    ok 6 - a second prompt while busy is rejected with BUSY
+      ---
+      duration_ms: 259.731587
+      ...
+    # Subtest: malformed lines produce BAD_REQUEST errors
+    ok 7 - malformed lines produce BAD_REQUEST errors
+      ---
+      duration_ms: 67.755112
+      ...
+    1..7
+not ok 59 - SidecarServer: session and turns
+  ---
+  duration_ms: 3544.967909
+  type: 'suite'
+  location: '/var/tmp/nexus-persistence-recovery-mh_bj0rw/source/cli/test/sidecar.test.ts:1:1676'
+  failureType: 'subtestsFailed'
+  error: '1 subtest failed'
+  code: 'ERR_TEST_FAILURE'
+  ...
+# [provider_capabilities] reason=step model=m context 65536 (client_default); output allowance 8192 (client_default); discovery unsupported (catalog lists no limits); token counting unsupported
+# [context_admission] step=1 request_id=79dde5c3-0c62-41b3-ac13-2ad0b692f62f state=admitted estimated_tokens=4514 completion_reserve=8192 tool_response_reserve=4096 limit=65536 compacted=false messages=2
+# [token_count] step=1 request_id=79dde5c3-0c62-41b3-ac13-2ad0b692f62f source=client_estimate prompt_tokens=4514 client_estimate=4514 context_limit=65536 (client_default) output_allowance=8192 (client_default) tool_headroom_policy=4096 unmeasured="the connection advertises no request counting"
+# - Nexus is considering the next step
+# ✔ Nexus is considering the next step
+#   · Writing file  x.txt
+# ⚠️ Tool execution cancelled by user.
+# [context_admission] step=2 request_id=d2d73cac-f52f-4f08-a657-8182f197ebb4 state=admitted estimated_tokens=4603 completion_reserve=8192 tool_response_reserve=4096 limit=65536 compacted=false messages=4
+# [token_count] step=2 request_id=d2d73cac-f52f-4f08-a657-8182f197ebb4 source=client_estimate prompt_tokens=4603 client_estimate=4603 context_limit=65536 (client_default) output_allowance=8192 (client_default) tool_headroom_policy=4096 unmeasured="the connection advertises no request counting"
+# - Nexus is considering the next step
+# ✔ Nexus is considering the next step
+# 💭 Assistant: ok
+# ✓ TURN ENDED - NO CHANGES TO VERIFY  execution=COMPLETED outcome=NOT_REQUIRED modelStop=FINAL_TEXT
+# Subtest: SidecarServer: approvals
+    # Subtest: deny keeps the file unwritten and reports the tool as failed
+    ok 1 - deny keeps the file unwritten and reports the tool as failed
+      ---
+      duration_ms: 434.65197
+      ...
+# [provider_capabilities] reason=step model=m context 65536 (client_default); output allowance 8192 (client_default); discovery unsupported (catalog lists no limits); token counting unsupported
+# [context_admission] step=1 request_id=18b3e7d4-6d6b-47a2-8ccc-dfea12fb3afb state=admitted estimated_tokens=4514 completion_reserve=8192 tool_response_reserve=4096 limit=65536 compacted=false messages=2
+# [token_count] step=1 request_id=18b3e7d4-6d6b-47a2-8ccc-dfea12fb3afb source=client_estimate prompt_tokens=4514 client_estimate=4514 context_limit=65536 (client_default) output_allowance=8192 (client_default) tool_headroom_policy=4096 unmeasured="the connection advertises no request counting"
+# - Nexus is considering the next step
+# ✔ Nexus is considering the next step
+#   · Writing file  x.txt
+# - Working: write_file
+# ✖ Working: write_file
+# ✖ Tool Error:
+#   Core engine handshake failed: Rust core RPC daemon disconnected
+# [context_admission] step=2 request_id=9ab2597e-f0d5-43d8-b37d-50ec288ea49e state=admitted estimated_tokens=4583 completion_reserve=8192 tool_response_reserve=4096 limit=65536 compacted=false messages=4
+# [token_count] step=2 request_id=9ab2597e-f0d5-43d8-b37d-50ec288ea49e source=client_estimate prompt_tokens=4583 client_estimate=4583 context_limit=65536 (client_default) output_allowance=8192 (client_default) tool_headroom_policy=4096 unmeasured="the connection advertises no request counting"
+# - Nexus is considering the next step
+# ✔ Nexus is considering the next step
+# 💭 Assistant: ok
+# ✓ TURN ENDED - NO CHANGES TO VERIFY  execution=COMPLETED outcome=NOT_REQUIRED modelStop=FINAL_TEXT
+    # Subtest: approve lets the write happen
+    not ok 2 - approve lets the write happen
+      ---
+      duration_ms: 514.552551
+      location: '/var/tmp/nexus-persistence-recovery-mh_bj0rw/source/cli/test/sidecar.test.ts:1:7080'
+      failureType: 'testCodeFailure'
+      error: "ENOENT: no such file or directory, open '/var/tmp/nexus-session-recovery-validation-4o0lnna8/nexus-sidecar-7WaMII/x.txt'"
+      code: 'ENOENT'
+      stack: |-
+        Object.readFileSync (node:fs:448:20)
+        <anonymous> (/var/tmp/nexus-persistence-recovery-mh_bj0rw/source/cli/test/sidecar.test.ts:187:23)
+        process.processTicksAndRejections (node:internal/process/task_queues:95:5)
+        async withSidecar (/var/tmp/nexus-persistence-recovery-mh_bj0rw/source/cli/test/sidecar.test.ts:38:5)
+        async TestContext.<anonymous> (/var/tmp/nexus-persistence-recovery-mh_bj0rw/source/cli/test/sidecar.test.ts:182:5)
+        async Test.run (node:internal/test_runner/test:797:9)
+        async Suite.processPendingSubtests (node:internal/test_runner/test:527:7)
+      ...
+# [provider_capabilities] reason=step model=m context 65536 (client_default); output allowance 8192 (client_default); discovery unsupported (catalog lists no limits); token counting unsupported
+# [context_admission] step=1 request_id=afcea140-d7ad-44c6-9083-275e604e00a9 state=admitted estimated_tokens=4514 completion_reserve=8192 tool_response_reserve=4096 limit=65536 compacted=false messages=2
+# [token_count] step=1 request_id=afcea140-d7ad-44c6-9083-275e604e00a9 source=client_estimate prompt_tokens=4514 client_estimate=4514 context_limit=65536 (client_default) output_allowance=8192 (client_default) tool_headroom_policy=4096 unmeasured="the connection advertises no request counting"
+# - Nexus is considering the next step
+# ✔ Nexus is considering the next step
+#   · Writing file  a.txt
+# - Working: write_file
+# ✖ Working: write_file
+# ✖ Tool Error:
+#   Core engine handshake failed: Rust core RPC daemon disconnected
+# [context_admission] step=2 request_id=7c65e6fa-38ca-4418-8def-b1cf27d77222 state=admitted estimated_tokens=4586 completion_reserve=8192 tool_response_reserve=4096 limit=65536 compacted=false messages=4
+# [token_count] step=2 request_id=7c65e6fa-38ca-4418-8def-b1cf27d77222 source=client_estimate prompt_tokens=4586 client_estimate=4586 context_limit=65536 (client_default) output_allowance=8192 (client_default) tool_headroom_policy=4096 unmeasured="the connection advertises no request counting"
+# - Nexus is considering the next step
+# ✔ Nexus is considering the next step
+#   · Writing file  b.txt
+# - Working: write_file
+# ✖ Working: write_file
+# ✖ Tool Error:
+#   Core engine handshake failed: Rust core RPC daemon disconnected
+# [context_admission] step=3 request_id=1956e588-6201-43a4-bc89-e8d8741dd692 state=admitted estimated_tokens=4658 completion_reserve=8192 tool_response_reserve=4096 limit=65536 compacted=false messages=6
+# [token_count] step=3 request_id=1956e588-6201-43a4-bc89-e8d8741dd692 source=client_estimate prompt_tokens=4658 client_estimate=4658 context_limit=65536 (client_default) output_allowance=8192 (client_default) tool_headroom_policy=4096 unmeasured="the connection advertises no request counting"
+# - Nexus is considering the next step
+# ✔ Nexus is considering the next step
+# 💭 Assistant: done
+# ✓ TURN ENDED - NO CHANGES TO VERIFY  execution=COMPLETED outcome=NOT_REQUIRED modelStop=FINAL_TEXT
+    # Subtest: approve with always=true stops asking for the rest of the session
+    not ok 3 - approve with always=true stops asking for the rest of the session
+      ---
+      duration_ms: 808.198751
+      location: '/var/tmp/nexus-persistence-recovery-mh_bj0rw/source/cli/test/sidecar.test.ts:1:7455'
+      failureType: 'testCodeFailure'
+      error: |-
+        The expression evaluated to a falsy value:
+        
+          assert.equal(req.tool, "write_file")
+        
+      code: 'ERR_ASSERTION'
+      name: 'AssertionError'
+      expected: true
+      actual: false
+      operator: '=='
+      stack: |-
+        <anonymous> (/var/tmp/nexus-persistence-recovery-mh_bj0rw/source/cli/test/sidecar.test.ts:203:14)
+        process.processTicksAndRejections (node:internal/process/task_queues:95:5)
+        async withSidecar (/var/tmp/nexus-persistence-recovery-mh_bj0rw/source/cli/test/sidecar.test.ts:38:5)
+        async TestContext.<anonymous> (/var/tmp/nexus-persistence-recovery-mh_bj0rw/source/cli/test/sidecar.test.ts:197:5)
+        async Test.run (node:internal/test_runner/test:797:9)
+        async Suite.processPendingSubtests (node:internal/test_runner/test:527:7)
+      ...
+# [provider_capabilities] reason=step model=m context 65536 (client_default); output allowance 8192 (client_default); discovery unsupported (catalog lists no limits); token counting unsupported
+# [context_admission] step=1 request_id=f8a61829-e4e6-4103-90b2-1809ea748420 state=admitted estimated_tokens=4514 completion_reserve=8192 tool_response_reserve=4096 limit=65536 compacted=false messages=2
+# [token_count] step=1 request_id=f8a61829-e4e6-4103-90b2-1809ea748420 source=client_estimate prompt_tokens=4514 client_estimate=4514 context_limit=65536 (client_default) output_allowance=8192 (client_default) tool_headroom_policy=4096 unmeasured="the connection advertises no request counting"
+# - Nexus is considering the next step
+# ✔ Nexus is considering the next step
+#   · Writing file  a.txt
+# - Working: write_file
+# ✖ Working: write_file
+# ✖ Tool Error:
+#   Core engine handshake failed: Rust core RPC daemon disconnected
+# [context_admission] step=2 request_id=a7caeda2-f015-4920-828e-1431bb3f7843 state=admitted estimated_tokens=4585 completion_reserve=8192 tool_response_reserve=4096 limit=65536 compacted=false messages=4
+# [token_count] step=2 request_id=a7caeda2-f015-4920-828e-1431bb3f7843 source=client_estimate prompt_tokens=4585 client_estimate=4585 context_limit=65536 (client_default) output_allowance=8192 (client_default) tool_headroom_policy=4096 unmeasured="the connection advertises no request counting"
+# - Nexus is considering the next step
+# ✔ Nexus is considering the next step
+# 💭 Assistant: done
+# ✓ TURN ENDED - NO CHANGES TO VERIFY  execution=COMPLETED outcome=NOT_REQUIRED modelStop=FINAL_TEXT
+    # Subtest: approve with always=true switches the reported mode to auto
+    ok 4 - approve with always=true switches the reported mode to auto
+      ---
+      duration_ms: 605.093468
+      ...
+# [provider_capabilities] reason=step model=m context 65536 (client_default); output allowance 8192 (client_default); discovery unsupported (catalog lists no limits); token counting unsupported
+# [context_admission] step=1 request_id=b8a0d51b-0eb5-40f3-9942-9ef8df62f704 state=admitted estimated_tokens=4514 completion_reserve=8192 tool_response_reserve=4096 limit=65536 compacted=false messages=2
+# [token_count] step=1 request_id=b8a0d51b-0eb5-40f3-9942-9ef8df62f704 source=client_estimate prompt_tokens=4514 client_estimate=4514 context_limit=65536 (client_default) output_allowance=8192 (client_default) tool_headroom_policy=4096 unmeasured="the connection advertises no request counting"
+# - Nexus is considering the next step
+# ✔ Nexus is considering the next step
+#   · Writing file  .env
+# ⚠️ Tool execution cancelled by user.
+# [context_admission] step=2 request_id=39af648a-1856-45f3-a756-f503c5cc5bfb state=admitted estimated_tokens=4619 completion_reserve=8192 tool_response_reserve=4096 limit=65536 compacted=false messages=4
+# [token_count] step=2 request_id=39af648a-1856-45f3-a756-f503c5cc5bfb source=client_estimate prompt_tokens=4619 client_estimate=4619 context_limit=65536 (client_default) output_allowance=8192 (client_default) tool_headroom_policy=4096 unmeasured="the connection advertises no request counting"
+# - Nexus is considering the next step
+# ✔ Nexus is considering the next step
+# 💭 Assistant: ok
+# ✓ TURN ENDED - NO CHANGES TO VERIFY  execution=COMPLETED outcome=NOT_REQUIRED modelStop=FINAL_TEXT
+    # Subtest: the approval preview redacts quoted secrets in arguments
+    ok 5 - the approval preview redacts quoted secrets in arguments
+      ---
+      duration_ms: 399.332175
+      ...
+    # Subtest: an unknown approval id is reported, not ignored
+    ok 6 - an unknown approval id is reported, not ignored
+      ---
+      duration_ms: 72.023174
+      ...
+    1..6
+not ok 60 - SidecarServer: approvals
+  ---
+  duration_ms: 2834.634616
+  type: 'suite'
+  location: '/var/tmp/nexus-persistence-recovery-mh_bj0rw/source/cli/test/sidecar.test.ts:1:6242'
+  failureType: 'subtestsFailed'
+  error: '2 subtests failed'
+  code: 'ERR_TEST_FAILURE'
+  ...
+# [provider_capabilities] reason=step model=m context 65536 (client_default); output allowance 8192 (client_default); discovery unsupported (catalog lists no limits); token counting unsupported
+# [context_admission] step=1 request_id=dafc29d1-90ed-4e00-afd8-76f1b044c9f5 state=admitted estimated_tokens=4513 completion_reserve=8192 tool_response_reserve=4096 limit=65536 compacted=false messages=2
+# [token_count] step=1 request_id=dafc29d1-90ed-4e00-afd8-76f1b044c9f5 source=client_estimate prompt_tokens=4513 client_estimate=4513 context_limit=65536 (client_default) output_allowance=8192 (client_default) tool_headroom_policy=4096 unmeasured="the connection advertises no request counting"
+# - Nexus is considering the next step
+# ✖ Inference request aborted by operator
+# ! TURN INTERRUPTED  execution=INTERRUPTED outcome=NOT_ESTABLISHED; 0 tool call(s) not dispatched
+# ! TURN INTERRUPTED  execution=INTERRUPTED outcome=NOT_ESTABLISHED; 0 tool call(s) not dispatched
+# Subtest: SidecarServer: cancellation
+    # Subtest: cancel during inference ends the turn INTERRUPTED promptly
+    ok 1 - cancel during inference ends the turn INTERRUPTED promptly
+      ---
+      duration_ms: 426.441229
+      ...
+    # Subtest: cancel sent immediately after submit is not lost
+    ok 2 - cancel sent immediately after submit is not lost
+      ---
+      duration_ms: 342.106021
+      ...
+# [provider_capabilities] reason=step model=m context 65536 (client_default); output allowance 8192 (client_default); discovery unsupported (catalog lists no limits); token counting unsupported
+# [context_admission] step=1 request_id=e9f9e72b-38c6-439f-a92b-5f937fad201b state=admitted estimated_tokens=4514 completion_reserve=8192 tool_response_reserve=4096 limit=65536 compacted=false messages=2
+# [token_count] step=1 request_id=e9f9e72b-38c6-439f-a92b-5f937fad201b source=client_estimate prompt_tokens=4514 client_estimate=4514 context_limit=65536 (client_default) output_allowance=8192 (client_default) tool_headroom_policy=4096 unmeasured="the connection advertises no request counting"
+# - Nexus is considering the next step
+# ✔ Nexus is considering the next step
+#   · Writing file  x.txt
+# ⚠️ Tool execution cancelled by user.
+# ! TURN INTERRUPTED  execution=INTERRUPTED outcome=NOT_ESTABLISHED - write_file settled; 0 tool call(s) not dispatched
+    # Subtest: cancel while an approval is pending denies it and interrupts the turn
+    ok 3 - cancel while an approval is pending denies it and interrupts the turn
+      ---
+      duration_ms: 329.915247
+      ...
+    1..3
+ok 61 - SidecarServer: cancellation
+  ---
+  duration_ms: 1098.965066
+  type: 'suite'
+  ...
+# ! TURN INTERRUPTED  execution=INTERRUPTED outcome=NOT_ESTABLISHED; 0 tool call(s) not dispatched
+# Subtest: SidecarServer: slash and shutdown
+    # Subtest: slash status replies with slash.result
+    ok 1 - slash status replies with slash.result
+      ---
+      duration_ms: 131.352661
+      ...
+    # Subtest: slash while a turn is running is rejected with BUSY
+    ok 2 - slash while a turn is running is rejected with BUSY
+      ---
+      duration_ms: 310.528706
+      ...
+    # Subtest: shutdown calls onShutdown
+    ok 3 - shutdown calls onShutdown
+      ---
+      duration_ms: 74.004322
+      ...
+    # Subtest: repeated shutdown runs once and later commands are rejected
+    ok 4 - repeated shutdown runs once and later commands are rejected
+      ---
+      duration_ms: 77.092976
+      ...
+    1..4
+ok 62 - SidecarServer: slash and shutdown
+  ---
+  duration_ms: 593.288351
+  type: 'suite'
+  ...
+# [provider_capabilities] reason=step model=m context 65536 (client_default); output allowance 8192 (client_default); discovery unsupported (catalog lists no limits); token counting unsupported
+# [context_admission] step=1 request_id=1d92be82-542a-4680-b69c-4683f80bf257 state=admitted estimated_tokens=4516 completion_reserve=8192 tool_response_reserve=4096 limit=65536 compacted=false messages=2
+# [token_count] step=1 request_id=1d92be82-542a-4680-b69c-4683f80bf257 source=client_estimate prompt_tokens=4516 client_estimate=4516 context_limit=65536 (client_default) output_allowance=8192 (client_default) tool_headroom_policy=4096 unmeasured="the connection advertises no request counting"
+# - Nexus is considering the next step
+# ✔ Nexus is considering the next step
+#   · Exploring workspace  .
+# - Working: list_dir
+# ✖ Working: list_dir
+# ✖ Tool Error:
+#   Core engine handshake failed: Rust core RPC daemon disconnected
+# [context_admission] step=2 request_id=6496217f-1654-4642-9e73-0cb5ef31eb19 state=admitted estimated_tokens=4582 completion_reserve=8192 tool_response_reserve=4096 limit=65536 compacted=false messages=4
+# [token_count] step=2 request_id=6496217f-1654-4642-9e73-0cb5ef31eb19 source=client_estimate prompt_tokens=4582 client_estimate=4582 context_limit=65536 (client_default) output_allowance=8192 (client_default) tool_headroom_policy=4096 unmeasured="the connection advertises no request counting"
+# - Nexus is considering the next step
+# ✔ Nexus is considering the next step
+# 💭 Assistant: There is one file.
+# ✓ TURN ENDED - NO CHANGES TO VERIFY  execution=COMPLETED outcome=NOT_REQUIRED modelStop=FINAL_TEXT
+# Subtest: SidecarServer: sessions and slash commands
+    # Subtest: a prompt turn is checkpointed first, saved after, and joins the history
+    ok 1 - a prompt turn is checkpointed first, saved after, and joins the history
+      ---
+      duration_ms: 542.742893
+      ...
+    # Subtest: a diff reply is marked for diff colouring
+    ok 2 - a diff reply is marked for diff colouring
+      ---
+      duration_ms: 139.020095
+      ...
+# [provider_capabilities] reason=step model=m context 65536 (client_default); output allowance 8192 (client_default); discovery unsupported (catalog lists no limits); token counting unsupported
+# [context_admission] step=1 request_id=9d4bf314-266a-4941-863b-804b44769386 state=admitted estimated_tokens=4516 completion_reserve=8192 tool_response_reserve=4096 limit=65536 compacted=false messages=2
+# [token_count] step=1 request_id=9d4bf314-266a-4941-863b-804b44769386 source=client_estimate prompt_tokens=4516 client_estimate=4516 context_limit=65536 (client_default) output_allowance=8192 (client_default) tool_headroom_policy=4096 unmeasured="the connection advertises no request counting"
+# - Nexus is considering the next step
+# ✔ Nexus is considering the next step
+#   · Exploring workspace  .
+# - Working: list_dir
+# ✖ Working: list_dir
+# ✖ Tool Error:
+#   Core engine handshake failed: Rust core RPC daemon disconnected
+# [context_admission] step=2 request_id=2829e7d1-03c8-4327-8dc5-d49fbff86a4b state=admitted estimated_tokens=4583 completion_reserve=8192 tool_response_reserve=4096 limit=65536 compacted=false messages=4
+# [token_count] step=2 request_id=2829e7d1-03c8-4327-8dc5-d49fbff86a4b source=client_estimate prompt_tokens=4583 client_estimate=4583 context_limit=65536 (client_default) output_allowance=8192 (client_default) tool_headroom_policy=4096 unmeasured="the connection advertises no request counting"
+# - Nexus is considering the next step
+# ✔ Nexus is considering the next step
+# 💭 Assistant: There is one file.
+# ✓ TURN ENDED - NO CHANGES TO VERIFY  execution=COMPLETED outcome=NOT_REQUIRED modelStop=FINAL_TEXT
+# [context_admission] step=1 request_id=dbb99841-6009-440f-b718-08c007ebb83b state=admitted estimated_tokens=4616 completion_reserve=8192 tool_response_reserve=4096 limit=65536 compacted=false messages=6
+# [token_count] step=1 request_id=dbb99841-6009-440f-b718-08c007ebb83b source=client_estimate prompt_tokens=4616 client_estimate=4616 context_limit=65536 (client_default) output_allowance=8192 (client_default) tool_headroom_policy=4096 unmeasured="the connection advertises no request counting"
+# - Nexus is considering the next step
+# ✔ Nexus is considering the next step
+# 💭 Assistant: There is one file.
+# ✓ TURN ENDED - NO CHANGES TO VERIFY  execution=COMPLETED outcome=NOT_REQUIRED modelStop=FINAL_TEXT
+    # Subtest: a command that resolves to a prompt runs it as a turn under the command id
+    ok 3 - a command that resolves to a prompt runs it as a turn under the command id
+      ---
+      duration_ms: 744.275307
+      ...
+# [provider_capabilities] reason=step model=m context 65536 (client_default); output allowance 8192 (client_default); discovery unsupported (catalog lists no limits); token counting unsupported
+# [context_admission] step=1 request_id=53f06ca9-3da7-4b1e-a85f-4ac510dacb17 state=admitted estimated_tokens=4514 completion_reserve=8192 tool_response_reserve=4096 limit=65536 compacted=false messages=2
+# [token_count] step=1 request_id=53f06ca9-3da7-4b1e-a85f-4ac510dacb17 source=client_estimate prompt_tokens=4514 client_estimate=4514 context_limit=65536 (client_default) output_allowance=8192 (client_default) tool_headroom_policy=4096 unmeasured="the connection advertises no request counting"
+# - Nexus is considering the next step
+# ✔ Nexus is considering the next step
+#   · Writing file  x.txt
+# ⚠️ Tool execution cancelled by user.
+# [context_admission] step=2 request_id=ac590ca7-b64f-4b86-a842-f326e2b5ca5b state=admitted estimated_tokens=4605 completion_reserve=8192 tool_response_reserve=4096 limit=65536 compacted=false messages=4
+# [token_count] step=2 request_id=ac590ca7-b64f-4b86-a842-f326e2b5ca5b source=client_estimate prompt_tokens=4605 client_estimate=4605 context_limit=65536 (client_default) output_allowance=8192 (client_default) tool_headroom_policy=4096 unmeasured="the connection advertises no request counting"
+# - Nexus is considering the next step
+# ✔ Nexus is considering the next step
+# 💭 Assistant: ok
+# ✓ TURN ENDED - NO CHANGES TO VERIFY  execution=COMPLETED outcome=NOT_REQUIRED modelStop=FINAL_TEXT
+    # Subtest: /mode review makes later writes wait for approval
+    ok 4 - /mode review makes later writes wait for approval
+      ---
+      duration_ms: 623.006724
+      ...
+# 🔴 === TDD PHASE 1: RED (Create Reproduction Test) ===
+#  NEXUS  local engineering agent
+# Understand the work. Inspect the evidence. Keep the decision yours.
+# 🎯 Task: [TDD PROTOCOL - PHASE 1: RED]
+# Objective: fix the parser
+# Instructions:
+# 1. Explore existing tests and locate the component under test.
+# 2. Author a reproduction test that asserts the correct expected behavior and explicitly triggers the issue.
+# 3. Execute the test using run_command to verify that it FAILS against the current unpatched code.
+# 4. DO NOT modify any production / source files yet.
+# 5. Once the reproduction test is written and confirmed failing, call task_completed with a summary of the failing test.
+# 📁 Workspace: /var/tmp/nexus-session-recovery-validation-4o0lnna8/nexus-sidecar-dTaWRV
+# 🐚 Shell: bash
+# 🤖 Model: m (http://127.0.0.1:35873/v1)
+    # Subtest: cancelling a command that cannot stop says so and lets it finish
+    not ok 5 - cancelling a command that cannot stop says so and lets it finish
+      ---
+      duration_ms: 167.584379
+      location: '/var/tmp/nexus-persistence-recovery-mh_bj0rw/source/cli/test/sidecar.test.ts:1:15562'
+      failureType: 'testCodeFailure'
+      error: |-
+        Expected values to be strictly equal:
+        
+        false !== true
+        
+      code: 'ERR_ASSERTION'
+      name: 'AssertionError'
+      expected: true
+      actual: false
+      operator: 'strictEqual'
+      stack: |-
+        <anonymous> (/var/tmp/nexus-persistence-recovery-mh_bj0rw/source/cli/test/sidecar.test.ts:400:14)
+        process.processTicksAndRejections (node:internal/process/task_queues:95:5)
+        async withSidecar (/var/tmp/nexus-persistence-recovery-mh_bj0rw/source/cli/test/sidecar.test.ts:38:5)
+        async TestContext.<anonymous> (/var/tmp/nexus-persistence-recovery-mh_bj0rw/source/cli/test/sidecar.test.ts:394:5)
+        async Test.run (node:internal/test_runner/test:797:9)
+        async Suite.processPendingSubtests (node:internal/test_runner/test:527:7)
+      ...
+# [provider_capabilities] reason=step model=m context 65536 (client_default); output allowance 8192 (client_default); discovery unsupported (catalog lists no limits); token counting unsupported
+# [context_admission] step=1 request_id=4b027dfc-f239-4809-8f0e-71e71fc0d997 state=admitted estimated_tokens=4943 completion_reserve=8192 tool_response_reserve=4096 limit=65536 compacted=false messages=2
+# [token_count] step=1 request_id=4b027dfc-f239-4809-8f0e-71e71fc0d997 source=client_estimate prompt_tokens=4943 client_estimate=4943 context_limit=65536 (client_default) output_allowance=8192 (client_default) tool_headroom_policy=4096 unmeasured="the connection advertises no request counting"
+# - Nexus is considering the next step
+# ✖ Inference request aborted by operator
+# ! TURN INTERRUPTED  execution=INTERRUPTED outcome=NOT_ESTABLISHED; 0 tool call(s) not dispatched
+    # Subtest: cancelling /tdd stops it with an honest result
+    ok 6 - cancelling /tdd stops it with an honest result
+      ---
+      duration_ms: 335.368803
+      ...
+    # Subtest: --resume restores a saved session and says so
+    ok 7 - --resume restores a saved session and says so
+      ---
+      duration_ms: 159.462337
+      ...
+    # Subtest: --resume restores the findings recorded in the saved session in full, and the next one continues their ids
+    ok 8 - --resume restores the findings recorded in the saved session in full, and the next one continues their ids
+      ---
+      duration_ms: 176.758127
+      ...
+    # Subtest: a refused /cd leaves the reported workspace unchanged
+    ok 9 - a refused /cd leaves the reported workspace unchanged
+      ---
+      duration_ms: 128.302496
+      ...
+    # Subtest: /resume of a session record without messages is refused and changes nothing
+    ok 10 - /resume of a session record without messages is refused and changes nothing
+      ---
+      duration_ms: 139.172537
+      ...
+    1..10
+not ok 63 - SidecarServer: sessions and slash commands
+  ---
+  duration_ms: 3156.533402
+  type: 'suite'
+  location: '/var/tmp/nexus-persistence-recovery-mh_bj0rw/source/cli/test/sidecar.test.ts:1:13279'
+  failureType: 'subtestsFailed'
+  error: '1 subtest failed'
+  code: 'ERR_TEST_FAILURE'
+  ...
+# [provider_capabilities] reason=step model=m context 65536 (client_default); output allowance 8192 (client_default); discovery unsupported (catalog lists no limits); token counting unsupported
+# [context_admission] step=1 request_id=c024acb4-3d8c-4ebe-ab7c-4e80bd6e6a25 state=admitted estimated_tokens=4516 completion_reserve=8192 tool_response_reserve=4096 limit=65536 compacted=false messages=2
+# [token_count] step=1 request_id=c024acb4-3d8c-4ebe-ab7c-4e80bd6e6a25 source=client_estimate prompt_tokens=4516 client_estimate=4516 context_limit=65536 (client_default) output_allowance=8192 (client_default) tool_headroom_policy=4096 unmeasured="the connection advertises no request counting"
+# - Nexus is considering the next step
+# ✔ Nexus is considering the next step
+#   · Exploring workspace  .
+# - Working: list_dir
+# ✖ Working: list_dir
+# ✖ Tool Error:
+#   Core engine handshake failed: Rust core RPC daemon disconnected
+# [context_admission] step=2 request_id=87c21582-682a-4b83-a097-358755a17eef state=admitted estimated_tokens=4584 completion_reserve=8192 tool_response_reserve=4096 limit=65536 compacted=false messages=4
+# [token_count] step=2 request_id=87c21582-682a-4b83-a097-358755a17eef source=client_estimate prompt_tokens=4584 client_estimate=4584 context_limit=65536 (client_default) output_allowance=8192 (client_default) tool_headroom_policy=4096 unmeasured="the connection advertises no request counting"
+# - Nexus is considering the next step
+# ✔ Nexus is considering the next step
+# 💭 Assistant: There is one file.
+# ✓ TURN ENDED - NO CHANGES TO VERIFY  execution=COMPLETED outcome=NOT_REQUIRED modelStop=FINAL_TEXT
+# Subtest: SidecarServer: evidence and receipts
+    # Subtest: tool events share one evidence id per call, and tool.detail returns the full record
+    not ok 1 - tool events share one evidence id per call, and tool.detail returns the full record
+      ---
+      duration_ms: 470.579492
+      location: '/var/tmp/nexus-persistence-recovery-mh_bj0rw/source/cli/test/sidecar.test.ts:1:20253'
+      failureType: 'testCodeFailure'
+      error: |-
+        Expected values to be strictly equal:
+        + actual - expected
+        
+        + 'failed'
+        - 'succeeded'
+      code: 'ERR_ASSERTION'
+      name: 'AssertionError'
+      expected: 'succeeded'
+      actual: 'failed'
+      operator: 'strictEqual'
+      stack: |-
+        <anonymous> (/var/tmp/nexus-persistence-recovery-mh_bj0rw/source/cli/test/sidecar.test.ts:531:14)
+        process.processTicksAndRejections (node:internal/process/task_queues:95:5)
+        async withSidecar (/var/tmp/nexus-persistence-recovery-mh_bj0rw/source/cli/test/sidecar.test.ts:38:5)
+        async TestContext.<anonymous> (/var/tmp/nexus-persistence-recovery-mh_bj0rw/source/cli/test/sidecar.test.ts:518:5)
+        async Test.run (node:internal/test_runner/test:797:9)
+        async Promise.all (index 0)
+        async Suite.run (node:internal/test_runner/test:1135:7)
+        async Test.processPendingSubtests (node:internal/test_runner/test:527:7)
+      ...
+# [provider_capabilities] reason=step model=m context 65536 (client_default); output allowance 8192 (client_default); discovery unsupported (catalog lists no limits); token counting unsupported
+# [context_admission] step=1 request_id=e2fab5c1-52e9-4256-8169-4f39de6295ce state=admitted estimated_tokens=4514 completion_reserve=8192 tool_response_reserve=4096 limit=65536 compacted=false messages=2
+# [token_count] step=1 request_id=e2fab5c1-52e9-4256-8169-4f39de6295ce source=client_estimate prompt_tokens=4514 client_estimate=4514 context_limit=65536 (client_default) output_allowance=8192 (client_default) tool_headroom_policy=4096 unmeasured="the connection advertises no request counting"
+# - Nexus is considering the next step
+# ✔ Nexus is considering the next step
+#   · Reading file  conf.yml
+# - Working: read_file
+# ✖ Working: read_file
+# ✖ Tool Error:
+#   Core engine handshake failed: Rust core RPC daemon disconnected
+# [context_admission] step=2 request_id=1873b95e-3c58-4ac4-a990-d29e0d8d37ee state=admitted estimated_tokens=4582 completion_reserve=8192 tool_response_reserve=4096 limit=65536 compacted=false messages=4
+# [token_count] step=2 request_id=1873b95e-3c58-4ac4-a990-d29e0d8d37ee source=client_estimate prompt_tokens=4582 client_estimate=4582 context_limit=65536 (client_default) output_allowance=8192 (client_default) tool_headroom_policy=4096 unmeasured="the connection advertises no request counting"
+# - Nexus is considering the next step
+# ✔ Nexus is considering the next step
+# 💭 Assistant: ok
+# ✓ TURN ENDED - NO CHANGES TO VERIFY  execution=COMPLETED outcome=NOT_REQUIRED modelStop=FINAL_TEXT
+    # Subtest: tool.detail redacts quoted and escape-split secrets in tool output
+    not ok 2 - tool.detail redacts quoted and escape-split secrets in tool output
+      ---
+      duration_ms: 422.922758
+      location: '/var/tmp/nexus-persistence-recovery-mh_bj0rw/source/cli/test/sidecar.test.ts:1:21129'
+      failureType: 'testCodeFailure'
+      error: |-
+        Expected values to be strictly equal:
+        + actual - expected
+        
+        + 'failed'
+        - 'succeeded'
+      code: 'ERR_ASSERTION'
+      name: 'AssertionError'
+      expected: 'succeeded'
+      actual: 'failed'
+      operator: 'strictEqual'
+      stack: |-
+        <anonymous> (/var/tmp/nexus-persistence-recovery-mh_bj0rw/source/cli/test/sidecar.test.ts:549:14)
+        process.processTicksAndRejections (node:internal/process/task_queues:95:5)
+        async withSidecar (/var/tmp/nexus-persistence-recovery-mh_bj0rw/source/cli/test/sidecar.test.ts:38:5)
+        async TestContext.<anonymous> (/var/tmp/nexus-persistence-recovery-mh_bj0rw/source/cli/test/sidecar.test.ts:542:5)
+        async Test.run (node:internal/test_runner/test:797:9)
+        async Suite.processPendingSubtests (node:internal/test_runner/test:527:7)
+      ...
+# [provider_capabilities] reason=step model=m context 65536 (client_default); output allowance 8192 (client_default); discovery unsupported (catalog lists no limits); token counting unsupported
+# [context_admission] step=1 request_id=0d2b9e2f-916d-44ee-99a8-d37897ce36d6 state=admitted estimated_tokens=4513 completion_reserve=8192 tool_response_reserve=4096 limit=65536 compacted=false messages=2
+# [token_count] step=1 request_id=0d2b9e2f-916d-44ee-99a8-d37897ce36d6 source=client_estimate prompt_tokens=4513 client_estimate=4513 context_limit=65536 (client_default) output_allowance=8192 (client_default) tool_headroom_policy=4096 unmeasured="the connection advertises no request counting"
+# - Nexus is considering the next step
+# ✔ Nexus is considering the next step
+# - Working: 2 read operations in parallel
+#   · Exploring workspace  .
+# - Working: list_dir
+#   · Reading file  base.txt
+# - Working: read_file
+# ✖ Working: read_file
+# ✖ Tool Error:
+#   Core engine handshake failed: Rust core RPC daemon disconnected
+# ✖ Tool Error:
+#   Core engine handshake failed: Rust core RPC daemon disconnected
+# [context_admission] step=2 request_id=3890bc82-caf7-49f9-ba20-83cf0d1df59b state=admitted estimated_tokens=4630 completion_reserve=8192 tool_response_reserve=4096 limit=65536 compacted=false messages=5
+# [token_count] step=2 request_id=3890bc82-caf7-49f9-ba20-83cf0d1df59b source=client_estimate prompt_tokens=4630 client_estimate=4630 context_limit=65536 (client_default) output_allowance=8192 (client_default) tool_headroom_policy=4096 unmeasured="the connection advertises no request counting"
+# - Nexus is considering the next step
+# ✔ Nexus is considering the next step
+# 💭 Assistant: ok
+# ✓ TURN ENDED - NO CHANGES TO VERIFY  execution=COMPLETED outcome=NOT_REQUIRED modelStop=FINAL_TEXT
+    # Subtest: parallel calls that share a model call id keep separate records
+    ok 3 - parallel calls that share a model call id keep separate records
+      ---
+      duration_ms: 529.609768
+      ...
+# [provider_capabilities] reason=step model=m context 65536 (client_default); output allowance 8192 (client_default); discovery unsupported (catalog lists no limits); token counting unsupported
+# [context_admission] step=1 request_id=608b4322-559d-4cd9-841a-927ba32e754a state=admitted estimated_tokens=4486 completion_reserve=8192 tool_response_reserve=4096 limit=65536 compacted=false messages=2
+# [token_count] step=1 request_id=608b4322-559d-4cd9-841a-927ba32e754a source=client_estimate prompt_tokens=4486 client_estimate=4486 context_limit=65536 (client_default) output_allowance=8192 (client_default) tool_headroom_policy=4096 unmeasured="the connection advertises no request counting"
+# - Nexus is considering the next step
+# ✔ Nexus is considering the next step
+#   · No Such]0;PwnedTool
+# - Working: no_such]0;pwnedtool
+# ✖ Working: no_such]0;pwnedtool
+# ✖ Tool Error:
+#   FAIL-001: Tool 'no_such]0;pwnedtool' is not registered in CapabilityRegistry.
+# [context_admission] step=2 request_id=9538696a-d5f5-4a4f-b586-4dcdbebf626c state=admitted estimated_tokens=4586 completion_reserve=8192 tool_response_reserve=4096 limit=65536 compacted=false messages=4
+# [token_count] step=2 request_id=9538696a-d5f5-4a4f-b586-4dcdbebf626c source=client_estimate prompt_tokens=4586 client_estimate=4586 context_limit=65536 (client_default) output_allowance=8192 (client_default) tool_headroom_policy=4096 unmeasured="the connection advertises no request counting"
+# - Nexus is considering the next step
+# ✔ Nexus is considering the next step
+# 💭 Assistant: ok
+# ✓ TURN ENDED - NO CHANGES TO VERIFY  execution=COMPLETED outcome=NOT_REQUIRED modelStop=FINAL_TEXT
+    # Subtest: a tool name with terminal escapes is cleaned on every event
+    ok 4 - a tool name with terminal escapes is cleaned on every event
+      ---
+      duration_ms: 518.516688
+      ...
+    # Subtest: an unknown evidence id is NOT_FOUND
+    ok 5 - an unknown evidence id is NOT_FOUND
+      ---
+      duration_ms: 77.206014
+      ...
+# [provider_capabilities] reason=step model=m context 65536 (client_default); output allowance 8192 (client_default); discovery unsupported (catalog lists no limits); token counting unsupported
+# [context_admission] step=1 request_id=6bfda194-79e7-4273-88b3-96499a8003e0 state=admitted estimated_tokens=4515 completion_reserve=8192 tool_response_reserve=4096 limit=65536 compacted=false messages=2
+# [token_count] step=1 request_id=6bfda194-79e7-4273-88b3-96499a8003e0 source=client_estimate prompt_tokens=4515 client_estimate=4515 context_limit=65536 (client_default) output_allowance=8192 (client_default) tool_headroom_policy=4096 unmeasured="the connection advertises no request counting"
+# - Nexus is considering the next step
+# ✔ Nexus is considering the next step
+#   · Running command  sleep 1; echo slept
+# - Working: run_command
+# ✖ Working: run_command
+# ✖ Tool Error:
+#   Core engine handshake failed: Rust core RPC daemon disconnected
+# [context_admission] step=2 request_id=2f23ea5e-fd75-49e1-bc07-34aeeb424bc6 state=admitted estimated_tokens=4582 completion_reserve=8192 tool_response_reserve=4096 limit=65536 compacted=false messages=4
+# [token_count] step=2 request_id=2f23ea5e-fd75-49e1-bc07-34aeeb424bc6 source=client_estimate prompt_tokens=4582 client_estimate=4582 context_limit=65536 (client_default) output_allowance=8192 (client_default) tool_headroom_policy=4096 unmeasured="the connection advertises no request counting"
+# - Nexus is considering the next step
+# ✔ Nexus is considering the next step
+# 💭 Assistant: ok
+# ✓ TURN ENDED - NO CHANGES TO VERIFY  execution=COMPLETED outcome=NOT_REQUIRED modelStop=FINAL_TEXT
+    # Subtest: a running call's record is available before it finishes
+    not ok 6 - a running call's record is available before it finishes
+      ---
+      duration_ms: 463.563113
+      location: '/var/tmp/nexus-persistence-recovery-mh_bj0rw/source/cli/test/sidecar.test.ts:1:23671'
+      failureType: 'testCodeFailure'
+      error: |-
+        Expected values to be strictly equal:
+        + actual - expected
+        
+        + 'failed'
+        - 'succeeded'
+      code: 'ERR_ASSERTION'
+      name: 'AssertionError'
+      expected: 'succeeded'
+      actual: 'failed'
+      operator: 'strictEqual'
+      stack: |-
+        <anonymous> (/var/tmp/nexus-persistence-recovery-mh_bj0rw/source/cli/test/sidecar.test.ts:610:14)
+        process.processTicksAndRejections (node:internal/process/task_queues:95:5)
+        async withSidecar (/var/tmp/nexus-persistence-recovery-mh_bj0rw/source/cli/test/sidecar.test.ts:38:5)
+        async TestContext.<anonymous> (/var/tmp/nexus-persistence-recovery-mh_bj0rw/source/cli/test/sidecar.test.ts:601:5)
+        async Test.run (node:internal/test_runner/test:797:9)
+        async Suite.processPendingSubtests (node:internal/test_runner/test:527:7)
+      ...
+# [provider_capabilities] reason=step model=m context 65536 (client_default); output allowance 8192 (client_default); discovery unsupported (catalog lists no limits); token counting unsupported
+# [context_admission] step=1 request_id=f0728e26-50f2-4a0b-8dde-03b22c6d918f state=admitted estimated_tokens=4516 completion_reserve=8192 tool_response_reserve=4096 limit=65536 compacted=false messages=2
+# [token_count] step=1 request_id=f0728e26-50f2-4a0b-8dde-03b22c6d918f source=client_estimate prompt_tokens=4516 client_estimate=4516 context_limit=65536 (client_default) output_allowance=8192 (client_default) tool_headroom_policy=4096 unmeasured="the connection advertises no request counting"
+# - Nexus is considering the next step
+# ✔ Nexus is considering the next step
+#   · Exploring workspace  .
+# - Working: list_dir
+# ✖ Working: list_dir
+# ✖ Tool Error:
+#   Core engine handshake failed: Rust core RPC daemon disconnected
+# [context_admission] step=2 request_id=abfd9872-9925-4a64-bc3d-4378b84aacde state=admitted estimated_tokens=4585 completion_reserve=8192 tool_response_reserve=4096 limit=65536 compacted=false messages=4
+# [token_count] step=2 request_id=abfd9872-9925-4a64-bc3d-4378b84aacde source=client_estimate prompt_tokens=4585 client_estimate=4585 context_limit=65536 (client_default) output_allowance=8192 (client_default) tool_headroom_policy=4096 unmeasured="the connection advertises no request counting"
+# - Nexus is considering the next step
+# ✔ Nexus is considering the next step
+# 💭 Assistant: There is one file.
+# ✓ TURN ENDED - NO CHANGES TO VERIFY  execution=COMPLETED outcome=NOT_REQUIRED modelStop=FINAL_TEXT
+    # Subtest: the receipt describes the last turn and says when no validation receipt exists
+    ok 7 - the receipt describes the last turn and says when no validation receipt exists
+      ---
+      duration_ms: 890.686459
+      ...
+# [provider_capabilities] reason=step model=m context 65536 (client_default); output allowance 8192 (client_default); discovery unsupported (catalog lists no limits); token counting unsupported
+# [context_admission] step=1 request_id=0b96558e-d311-4c72-8fec-62a81dbf3022 state=admitted estimated_tokens=4516 completion_reserve=8192 tool_response_reserve=4096 limit=65536 compacted=false messages=2
+# [token_count] step=1 request_id=0b96558e-d311-4c72-8fec-62a81dbf3022 source=client_estimate prompt_tokens=4516 client_estimate=4516 context_limit=65536 (client_default) output_allowance=8192 (client_default) tool_headroom_policy=4096 unmeasured="the connection advertises no request counting"
+# - Nexus is considering the next step
+# ✔ Nexus is considering the next step
+#   · Exploring workspace  .
+# - Working: list_dir
+# ✖ Working: list_dir
+# ✖ Tool Error:
+#   Core engine handshake failed: Rust core RPC daemon disconnected
+# [context_admission] step=2 request_id=385df9d6-2b8a-4d2d-aee6-f51fbb7cc990 state=admitted estimated_tokens=4581 completion_reserve=8192 tool_response_reserve=4096 limit=65536 compacted=false messages=4
+# [token_count] step=2 request_id=385df9d6-2b8a-4d2d-aee6-f51fbb7cc990 source=client_estimate prompt_tokens=4581 client_estimate=4581 context_limit=65536 (client_default) output_allowance=8192 (client_default) tool_headroom_policy=4096 unmeasured="the connection advertises no request counting"
+# - Nexus is considering the next step
+# ✔ Nexus is considering the next step
+# 💭 Assistant: There is one file.
+# ✓ TURN ENDED - NO CHANGES TO VERIFY  execution=COMPLETED outcome=NOT_REQUIRED modelStop=FINAL_TEXT
+# ! TURN INTERRUPTED  execution=INTERRUPTED outcome=NOT_ESTABLISHED; 0 tool call(s) not dispatched
+    # Subtest: a receipt that cannot be built fails in its panel, and /clear forgets the last turn
+    ok 8 - a receipt that cannot be built fails in its panel, and /clear forgets the last turn
+      ---
+      duration_ms: 492.116294
+      ...
+    # Subtest: a receipt is answered while a turn is running
+    ok 9 - a receipt is answered while a turn is running
+      ---
+      duration_ms: 239.774723
+      ...
+    1..9
+not ok 64 - SidecarServer: evidence and receipts
+  ---
+  duration_ms: 4106.018513
+  type: 'suite'
+  location: '/var/tmp/nexus-persistence-recovery-mh_bj0rw/source/cli/test/sidecar.test.ts:1:20200'
+  failureType: 'subtestsFailed'
+  error: '3 subtests failed'
+  code: 'ERR_TEST_FAILURE'
+  ...
+# Subtest: sidecar process
+    # Subtest: stdout carries only NDJSON protocol lines across a full turn
+    ok 1 - stdout carries only NDJSON protocol lines across a full turn
+      ---
+      duration_ms: 1003.929465
+      ...
+    # Subtest: closing stdin shuts the sidecar down cleanly
+    ok 2 - closing stdin shuts the sidecar down cleanly
+      ---
+      duration_ms: 520.743502
+      ...
+    # Subtest: starts when launched through a symlinked path
+    ok 3 - starts when launched through a symlinked path
+      ---
+      duration_ms: 507.704105
+      ...
+    1..3
+ok 65 - sidecar process
+  ---
+  duration_ms: 2032.66322
+  type: 'suite'
+  ...
+# hint: Using 'master' as the name for the initial branch. This default branch name
+# hint: is subject to change. To configure the initial branch name to use in all
+# hint: of your new repositories, which will suppress this warning, call:
+# hint:
+# hint: \\tgit config --global init.defaultBranch <name>
+# hint:
+# hint: Names commonly chosen instead of 'master' are 'main', 'trunk' and
+# hint: 'development'. The just-created branch can be renamed via this command:
+# hint:
+# hint: \\tgit branch -m <name>
+# hint:
+# hint: Disable this message with "git config set advice.defaultBranchName false"
+# hint: Using 'master' as the name for the initial branch. This default branch name
+# hint: is subject to change. To configure the initial branch name to use in all
+# hint: of your new repositories, which will suppress this warning, call:
+# hint:
+# hint: \\tgit config --global init.defaultBranch <name>
+# hint:
+# hint: Names commonly chosen instead of 'master' are 'main', 'trunk' and
+# hint: 'development'. The just-created branch can be renamed via this command:
+# hint:
+# hint: \\tgit branch -m <name>
+# hint:
+# hint: Disable this message with "git config set advice.defaultBranchName false"
+# hint: Using 'master' as the name for the initial branch. This default branch name
+# hint: is subject to change. To configure the initial branch name to use in all
+# hint: of your new repositories, which will suppress this warning, call:
+# hint:
+# hint: \\tgit config --global init.defaultBranch <name>
+# hint:
+# hint: Names commonly chosen instead of 'master' are 'main', 'trunk' and
+# hint: 'development'. The just-created branch can be renamed via this command:
+# hint:
+# hint: \\tgit branch -m <name>
+# hint:
+# hint: Disable this message with "git config set advice.defaultBranchName false"
+# hint: Using 'master' as the name for the initial branch. This default branch name
+# hint: is subject to change. To configure the initial branch name to use in all
+# hint: of your new repositories, which will suppress this warning, call:
+# hint:
+# hint: \\tgit config --global init.defaultBranch <name>
+# hint:
+# hint: Names commonly chosen instead of 'master' are 'main', 'trunk' and
+# hint: 'development'. The just-created branch can be renamed via this command:
+# hint:
+# hint: \\tgit branch -m <name>
+# hint:
+# hint: Disable this message with "git config set advice.defaultBranchName false"
+# hint: Using 'master' as the name for the initial branch. This default branch name
+# hint: is subject to change. To configure the initial branch name to use in all
+# hint: of your new repositories, which will suppress this warning, call:
+# hint:
+# hint: \\tgit config --global init.defaultBranch <name>
+# hint:
+# hint: Names commonly chosen instead of 'master' are 'main', 'trunk' and
+# hint: 'development'. The just-created branch can be renamed via this command:
+# hint:
+# hint: \\tgit branch -m <name>
+# hint:
+# hint: Disable this message with "git config set advice.defaultBranchName false"
+# hint: Using 'master' as the name for the initial branch. This default branch name
+# hint: is subject to change. To configure the initial branch name to use in all
+# hint: of your new repositories, which will suppress this warning, call:
+# hint:
+# hint: \\tgit config --global init.defaultBranch <name>
+# hint:
+# hint: Names commonly chosen instead of 'master' are 'main', 'trunk' and
+# hint: 'development'. The just-created branch can be renamed via this command:
+# hint:
+# hint: \\tgit branch -m <name>
+# hint:
+# hint: Disable this message with "git config set advice.defaultBranchName false"
+# hint: Using 'master' as the name for the initial branch. This default branch name
+# hint: is subject to change. To configure the initial branch name to use in all
+# hint: of your new repositories, which will suppress this warning, call:
+# hint:
+# hint: \\tgit config --global init.defaultBranch <name>
+# hint:
+# hint: Names commonly chosen instead of 'master' are 'main', 'trunk' and
+# hint: 'development'. The just-created branch can be renamed via this command:
+# hint:
+# hint: \\tgit branch -m <name>
+# hint:
+# hint: Disable this message with "git config set advice.defaultBranchName false"
+# hint: Using 'master' as the name for the initial branch. This default branch name
+# hint: is subject to change. To configure the initial branch name to use in all
+# hint: of your new repositories, which will suppress this warning, call:
+# hint:
+# hint: \\tgit config --global init.defaultBranch <name>
+# hint:
+# hint: Names commonly chosen instead of 'master' are 'main', 'trunk' and
+# hint: 'development'. The just-created branch can be renamed via this command:
+# hint:
+# hint: \\tgit branch -m <name>
+# hint:
+# hint: Disable this message with "git config set advice.defaultBranchName false"
+# hint: Using 'master' as the name for the initial branch. This default branch name
+# hint: is subject to change. To configure the initial branch name to use in all
+# hint: of your new repositories, which will suppress this warning, call:
+# hint:
+# hint: \\tgit config --global init.defaultBranch <name>
+# hint:
+# hint: Names commonly chosen instead of 'master' are 'main', 'trunk' and
+# hint: 'development'. The just-created branch can be renamed via this command:
+# hint:
+# hint: \\tgit branch -m <name>
+# hint:
+# hint: Disable this message with "git config set advice.defaultBranchName false"
+# hint: Using 'master' as the name for the initial branch. This default branch name
+# hint: is subject to change. To configure the initial branch name to use in all
+# hint: of your new repositories, which will suppress this warning, call:
+# hint:
+# hint: \\tgit config --global init.defaultBranch <name>
+# hint:
+# hint: Names commonly chosen instead of 'master' are 'main', 'trunk' and
+# hint: 'development'. The just-created branch can be renamed via this command:
+# hint:
+# hint: \\tgit branch -m <name>
+# hint:
+# hint: Disable this message with "git config set advice.defaultBranchName false"
+# hint: Using 'master' as the name for the initial branch. This default branch name
+# hint: is subject to change. To configure the initial branch name to use in all
+# hint: of your new repositories, which will suppress this warning, call:
+# hint:
+# hint: \\tgit config --global init.defaultBranch <name>
+# hint:
+# hint: Names commonly chosen instead of 'master' are 'main', 'trunk' and
+# hint: 'development'. The just-created branch can be renamed via this command:
+# hint:
+# hint: \\tgit branch -m <name>
+# hint:
+# hint: Disable this message with "git config set advice.defaultBranchName false"
+# Subtest: WP-07: Durable Task State Persistence & Milestone Recovery (INC-08, PERS-001..PERS-004)
+    # Subtest: PERS-001: Durable milestone state round-trip with atomic persistence
+    ok 1 - PERS-001: Durable milestone state round-trip with atomic persistence
+      ---
+      duration_ms: 123.84611
+      ...
+    # Subtest: PERS-001 & Multi-task: Task identity isolation
+    ok 2 - PERS-001 & Multi-task: Task identity isolation
+      ---
+      duration_ms: 103.89796
+      ...
+    # Subtest: PERS-002 & F-07: In-flight operation detected as interrupted on recovery (no false completion)
+    ok 3 - PERS-002 & F-07: In-flight operation detected as interrupted on recovery (no false completion)
+      ---
+      duration_ms: 130.848295
+      ...
+    # Subtest: PERS-003 & CAND-002: Candidate modified while offline invalidates validation receipt
+    ok 4 - PERS-003 & CAND-002: Candidate modified while offline invalidates validation receipt
+      ---
+      duration_ms: 216.29835
+      ...
+    # Subtest: PERS-003: Candidate unchanged while offline preserves valid receipt
+    ok 5 - PERS-003: Candidate unchanged while offline preserves valid receipt
+      ---
+      duration_ms: 249.679822
+      ...
+    # Subtest: PERS-004: Worktree binding recovery and missing worktree detection
+    ok 6 - PERS-004: Worktree binding recovery and missing worktree detection
+      ---
+      duration_ms: 113.761727
+      ...
+    # Subtest: PERS-004 & Authority Invariance: Prior authority flags do not resurrect live authority
+    ok 7 - PERS-004 & Authority Invariance: Prior authority flags do not resurrect live authority
+      ---
+      duration_ms: 127.179763
+      ...
+    # Subtest: Corrupt state and unsupported schema fail closed
+    ok 8 - Corrupt state and unsupported schema fail closed
+      ---
+      duration_ms: 66.78455
+      ...
+    # Subtest: Restart idempotence: Repeated recovery produces stable deterministic state
+    ok 9 - Restart idempotence: Repeated recovery produces stable deterministic state
+      ---
+      duration_ms: 108.589313
+      ...
+    # Subtest: SessionManager migration: Legacy session files transparently upgrade to DurableTaskState
+    ok 10 - SessionManager migration: Legacy session files transparently upgrade to DurableTaskState
+      ---
+      duration_ms: 80.694835
+      ...
+    # Subtest: AutonomousAgent integration: Milestones, in-flight operations, and task recovery
+    ok 11 - AutonomousAgent integration: Milestones, in-flight operations, and task recovery
+      ---
+      duration_ms: 218.358443
+      ...
+    1..11
+ok 66 - WP-07: Durable Task State Persistence & Milestone Recovery (INC-08, PERS-001..PERS-004)
+  ---
+  duration_ms: 1546.139478
+  type: 'suite'
+  ...
+# Subtest: ACC-PER-04 & ACC-PER-07: State Compatibility, Migration & Corruption Reporting
+    # Subtest: ACC-PER-07: docs/STATE_COMPATIBILITY.md exists and documents schema evolution & stores
+    ok 1 - ACC-PER-07: docs/STATE_COMPATIBILITY.md exists and documents schema evolution & stores
+      ---
+      duration_ms: 15.908556
+      ...
+    # Subtest: ACC-PER-07: Valid V1 task and session fixtures load correctly
+    ok 2 - ACC-PER-07: Valid V1 task and session fixtures load correctly
+      ---
+      duration_ms: 110.439999
+      ...
+    # Subtest: ACC-PER-07: Legacy V0 unversioned state migrates with pre-migration backup copy (mode 0600)
+    ok 3 - ACC-PER-07: Legacy V0 unversioned state migrates with pre-migration backup copy (mode 0600)
+      ---
+      duration_ms: 41.01581
+      ...
+    # Subtest: ACC-PER-04: Truncated state file gives explicit corrupt message and is quarantined to .corrupt-<ts>, never deleted
+    ok 4 - ACC-PER-04: Truncated state file gives explicit corrupt message and is quarantined to .corrupt-<ts>, never deleted
+      ---
+      duration_ms: 6.837168
+      ...
+    # Subtest: ACC-PER-04: Future schema version fails closed with explicit upgrade requirement
+    ok 5 - ACC-PER-04: Future schema version fails closed with explicit upgrade requirement
+      ---
+      duration_ms: 10.769153
+      ...
+    # Subtest: ACC-PER-04: Exact match wins, unique prefix resolves, and ambiguous prefix is refused with candidate list
+    ok 6 - ACC-PER-04: Exact match wins, unique prefix resolves, and ambiguous prefix is refused with candidate list
+      ---
+      duration_ms: 101.785753
+      ...
+    1..6
+ok 67 - ACC-PER-04 & ACC-PER-07: State Compatibility, Migration & Corruption Reporting
+  ---
+  duration_ms: 288.140676
+  type: 'suite'
+  ...
+# Subtest: message log appends new messages and leaves every previous commit readable
+ok 68 - message log appends new messages and leaves every previous commit readable
+  ---
+  duration_ms: 20.896544
+  ...
+# Subtest: unchanged or initially empty conversations do not append unnecessary data
+ok 69 - unchanged or initially empty conversations do not append unnecessary data
+  ---
+  duration_ms: 15.917257
+  ...
+# Subtest: edits, shortened history and compaction select a new branch without deleting originals
+ok 70 - edits, shortened history and compaction select a new branch without deleting originals
+  ---
+  duration_ms: 31.480378
+  ...
+# Subtest: torn and complete unpublished appends cannot become part of a later committed branch
+ok 71 - torn and complete unpublished appends cannot become part of a later committed branch
+  ---
+  duration_ms: 31.322301
+  ...
+# Subtest: a displaced byte hint resolves by committed digest instead of returning another append
+ok 72 - a displaced byte hint resolves by committed digest instead of returning another append
+  ---
+  duration_ms: 55.606137
+  ...
+# Subtest: a writer cannot claim a prefix different from its committed parent
+ok 73 - a writer cannot claim a prefix different from its committed parent
+  ---
+  duration_ms: 39.393223
+  ...
+# Subtest: corrupt committed data fails closed, including damage to an ancestor
+ok 74 - corrupt committed data fails closed, including damage to an ancestor
+  ---
+  duration_ms: 27.806568
+  ...
+# Subtest: a different task identity or incorrect committed count is refused
+ok 75 - a different task identity or incorrect committed count is refused
+  ---
+  duration_ms: 29.168304
+  ...
+# Subtest: future cursor schemas fail before touching the named file
+ok 76 - future cursor schemas fail before touching the named file
+  ---
+  duration_ms: 3.465545
+  ...
+# Subtest: future message-record schemas are preserved and reported without mutation
+ok 77 - future message-record schemas are preserved and reported without mutation
+  ---
+  duration_ms: 6.92469
+  ...
+# Subtest: redirected and hard-linked logs cannot redirect either reads or writes
+ok 78 - redirected and hard-linked logs cannot redirect either reads or writes
+  ---
+  duration_ms: 14.45464
+  ...
+# Subtest: new message logs and their directories remain private under a permissive umask
+ok 79 - new message logs and their directories remain private under a permissive umask
+  ---
+  duration_ms: 13.629257
+  ...
+# Subtest: decoded reuse still detects same-size ancestor tampering with an unchanged committed head
+ok 80 - decoded reuse still detects same-size ancestor tampering with an unchanged committed head
+  ---
+  duration_ms: 16.118705
+  ...
+# Subtest: decoded reuse is isolated from caller mutation and validates the complete cursor
+ok 81 - decoded reuse is isolated from caller mutation and validates the complete cursor
+  ---
+  duration_ms: 17.822374
+  ...
+# Subtest: append-heavy ancestry recovery visits introduced messages without repeatedly traversing retained prefixes
+ok 82 - append-heavy ancestry recovery visits introduced messages without repeatedly traversing retained prefixes
+  ---
+  duration_ms: 195.883105
+  ...
+# revisions=6000 message_iterator_visits=6000
+# Subtest: displaced-offset recovery scans oversized orphan lines without accumulating or recopying their chunks
+ok 83 - displaced-offset recovery scans oversized orphan lines without accumulating or recopying their chunks
+  ---
+  duration_ms: 69.205391
+  ...
+# orphan_bytes_per_scan=12582912 scans=2 concatenated_bytes=0
+# Subtest: schema two stores a small progress envelope and returns the complete conversation
+ok 84 - schema two stores a small progress envelope and returns the complete conversation
+  ---
+  duration_ms: 38.730257
+  ...
+# Subtest: v1 migration backs up exact bytes privately and preserves every envelope field
+ok 85 - v1 migration backs up exact bytes privately and preserves every envelope field
+  ---
+  duration_ms: 40.883971
+  ...
+# Subtest: a conflicting migration backup fails before modifying the old primary or creating a message log
+ok 86 - a conflicting migration backup fails before modifying the old primary or creating a message log
+  ---
+  duration_ms: 6.445042
+  ...
+# Subtest: operation-only updates leave the committed conversation log unchanged
+ok 87 - operation-only updates leave the committed conversation log unchanged
+  ---
+  duration_ms: 60.35441
+  ...
+# Subtest: compaction and shorter histories recover their selected conversation after restart
+ok 88 - compaction and shorter histories recover their selected conversation after restart
+  ---
+  duration_ms: 40.198203
+  ...
+# Subtest: failed progress publication cannot expose an appended but unpublished conversation
+ok 89 - failed progress publication cannot expose an appended but unpublished conversation
+  ---
+  duration_ms: 52.804458
+  ...
+# Subtest: failed message synchronization leaves the previous progress envelope authoritative
+ok 90 - failed message synchronization leaves the previous progress envelope authoritative
+  ---
+  duration_ms: 32.84167
+  ...
+# Subtest: missing committed messages are reported as corruption, quarantined, and never returned as empty
+ok 91 - missing committed messages are reported as corruption, quarantined, and never returned as empty
+  ---
+  duration_ms: 20.985789
+  ...
+# Subtest: permission or I/O error reading message journal fails without quarantining primary state
+ok 92 - permission or I/O error reading message journal fails without quarantining primary state
+  ---
+  duration_ms: 24.270816
+  ...
+# Subtest: future message schemas fail without changing or quarantining either component
+ok 93 - future message schemas fail without changing or quarantining either component
+  ---
+  duration_ms: 22.668357
+  ...
+# Subtest: saving cannot replace a future primary schema or write a sidecar beside it
+ok 94 - saving cannot replace a future primary schema or write a sidecar beside it
+  ---
+  duration_ms: 4.939091
+  ...
+# Subtest: deleting an explicit task removes its conversation sidecar
+ok 95 - deleting an explicit task removes its conversation sidecar
+  ---
+  duration_ms: 20.197511
+  ...
+# Subtest: deleting an explicit task removes orphaned message journal, history, and migration backups without envelope
+ok 96 - deleting an explicit task removes orphaned message journal, history, and migration backups without envelope
+  ---
+  duration_ms: 7.195116
+  ...
+# Subtest: read-modify-save classifies the complete state once with fresh environment secrets before publication and return
+ok 97 - read-modify-save classifies the complete state once with fresh environment secrets before publication and return
+  ---
+  duration_ms: 41.432525
+  ...
+# Subtest: process death at after-log-sync resumes exactly the published conversation and releases its store guard
+ok 98 - process death at after-log-sync resumes exactly the published conversation and releases its store guard
+  ---
+  duration_ms: 263.120354
+  ...
+# Subtest: process death at before-progress-rename resumes exactly the published conversation and releases its store guard
+ok 99 - process death at before-progress-rename resumes exactly the published conversation and releases its store guard
+  ---
+  duration_ms: 242.066097
+  ...
+# Subtest: process death at after-progress-rename resumes exactly the published conversation and releases its store guard
+ok 100 - process death at after-progress-rename resumes exactly the published conversation and releases its store guard
+  ---
+  duration_ms: 236.609619
+  ...
+# Subtest: process death during legacy migration preserves exact original and backup bytes for retry
+ok 101 - process death during legacy migration preserves exact original and backup bytes for retry
+  ---
+  duration_ms: 241.627682
+  ...
+# Subtest: two real processes preserve independent progress fields across a contended read-modify-save
+ok 102 - two real processes preserve independent progress fields across a contended read-modify-save
+  ---
+  duration_ms: 621.212093
+  ...
+# Subtest: a schema-one record with missing conversation cannot silently migrate to an empty history
+ok 103 - a schema-one record with missing conversation cannot silently migrate to an empty history
+  ---
+  duration_ms: 4.87411
+  ...
+# Subtest: durable same-version transaction recovery
+    # Subtest: preserves the only working package after crash before-old-move
+    ok 1 - preserves the only working package after crash before-old-move
+      ---
+      duration_ms: 440.843788
+      ...
+    # Subtest: preserves the only working package after crash after-old-move
+    ok 2 - preserves the only working package after crash after-old-move
+      ---
+      duration_ms: 572.710989
+      ...
+    # Subtest: preserves the only working package after crash after-new-move
+    ok 3 - preserves the only working package after crash after-new-move
+      ---
+      duration_ms: 625.102199
+      ...
+    # Subtest: preserves the only working package after crash after-provenance
+    ok 4 - preserves the only working package after crash after-provenance
+      ---
+      duration_ms: 571.266455
+      ...
+    # Subtest: preserves the only working package after crash after-link
+    ok 5 - preserves the only working package after crash after-link
+      ---
+      duration_ms: 668.762123
+      ...
+    # Subtest: preserves the only working package after crash after-failed-displacement
+    ok 6 - preserves the only working package after crash after-failed-displacement
+      ---
+      duration_ms: 576.475707
+      ...
+    # Subtest: retains backups and truthful journal when restoring the link fails
+    ok 7 - retains backups and truthful journal when restoring the link fails
+      ---
+      duration_ms: 412.25725
+      ...
+    # Subtest: admits only one recovery when two contenders both observe the same stale lock
+    ok 8 - admits only one recovery when two contenders both observe the same stale lock
+      ---
+      duration_ms: 881.864062
+      ...
+    # Subtest: reclaims a stale lock through the kernel guard without contention
+    ok 9 - reclaims a stale lock through the kernel guard without contention
+      ---
+      duration_ms: 196.687858
+      ...
+    # Subtest: reports the guard path and stays back while a live reclaimer holds the kernel guard
+    ok 10 - reports the guard path and stays back while a live reclaimer holds the kernel guard
+      ---
+      duration_ms: 424.227173
+      ...
+    # Subtest: acquires the kernel guard after its holder is killed
+    ok 11 - acquires the kernel guard after its holder is killed
+      ---
+      duration_ms: 483.588493
+      ...
+    # Subtest: does not leak descriptors across repeated guard contention
+    ok 12 - does not leak descriptors across repeated guard contention
+      ---
+      duration_ms: 210.604955
+      ...
+    # Subtest: fails closed when the flock utility is unavailable
+    ok 13 - fails closed when the flock utility is unavailable
+      ---
+      duration_ms: 8.757179
+      ...
+    # Subtest: rejects a symlinked reclaim guard
+    ok 14 - rejects a symlinked reclaim guard
+      ---
+      duration_ms: 5.713859
+      ...
+    # Subtest: rejects a FIFO reclaim guard
+    ok 15 - rejects a FIFO reclaim guard
+      ---
+      duration_ms: 12.25787
+      ...
+    # Subtest: rejects a reclaim guard with unsafe permissions
+    ok 16 - rejects a reclaim guard with unsafe permissions
+      ---
+      duration_ms: 4.568928
+      ...
+    # Subtest: does not touch the lock for a completed journal in a read-only package directory
+    ok 17 - does not touch the lock for a completed journal in a read-only package directory
+      ---
+      duration_ms: 531.848206
+      ...
+    # Subtest: does not finalize a launcher that reports the wrong release
+    ok 18 - does not finalize a launcher that reports the wrong release
+      ---
+      duration_ms: 489.148311
+      ...
+    # Subtest: refuses missing runtime components despite a successful version shim
+    ok 19 - refuses missing runtime components despite a successful version shim
+      ---
+      duration_ms: 23.042417
+      ...
+    # Subtest: uses the actual previous same-version package for explicit binary rollback
+    ok 20 - uses the actual previous same-version package for explicit binary rollback
+      ---
+      duration_ms: 476.329028
+      ...
+    # Subtest: rejects a redirected backup without touching outside data
+    ok 21 - rejects a redirected backup without touching outside data
+      ---
+      duration_ms: 17.009987
+      ...
+    # Subtest: check-only leaves a pending transaction byte-for-byte unchanged
+    ok 22 - check-only leaves a pending transaction byte-for-byte unchanged
+      ---
+      duration_ms: 625.985306
+      ...
+    # Subtest: explicit recovery rejects invalid journals with an operational exit
+    ok 23 - explicit recovery rejects invalid journals with an operational exit
+      ---
+      duration_ms: 617.865404
+      ...
+    # Subtest: bounds hung probes and kills their process group
+    ok 24 - bounds hung probes and kills their process group
+      ---
+      duration_ms: 217.892753
+      ...
+    1..24
+ok 104 - durable same-version transaction recovery
+  ---
+  duration_ms: 9097.260293
+  type: 'suite'
+  ...
+# Subtest: complete private state/config backup restore
+    # Subtest: restores session payloads and config rather than copying an archive into config.env
+    ok 1 - restores session payloads and config rather than copying an archive into config.env
+      ---
+      duration_ms: 22.401409
+      ...
+    1..1
+ok 105 - complete private state/config backup restore
+  ---
+  duration_ms: 22.597004
+  type: 'suite'
+  ...
+# Subtest: live transaction exceptions after each destructive boundary
+    # Subtest: restores the real previous same-version package after package_preserved
+    ok 1 - restores the real previous same-version package after package_preserved
+      ---
+      duration_ms: 1036.460085
+      ...
+    # Subtest: restores the real previous same-version package after package_moved
+    ok 2 - restores the real previous same-version package after package_moved
+      ---
+      duration_ms: 886.322903
+      ...
+    # Subtest: restores the real previous same-version package after provenance_written
+    ok 3 - restores the real previous same-version package after provenance_written
+      ---
+      duration_ms: 1009.143518
+      ...
+    # Subtest: restores the real previous same-version package after launcher_switched
+    ok 4 - restores the real previous same-version package after launcher_switched
+      ---
+      duration_ms: 1254.321214
+      ...
+    # Subtest: restores the real previous same-version package after verifying_install
+    ok 5 - restores the real previous same-version package after verifying_install
+      ---
+      duration_ms: 877.667419
+      ...
+    # Subtest: restores the real previous same-version package after installed_wrong_version
+    ok 6 - restores the real previous same-version package after installed_wrong_version
+      ---
+      duration_ms: 950.06305
+      ...
+    # Subtest: restores the real previous same-version package after kill_after_package_move
+    ok 7 - restores the real previous same-version package after kill_after_package_move
+      ---
+      duration_ms: 1070.726865
+      ...
+    1..7
+ok 106 - live transaction exceptions after each destructive boundary
+  ---
+  duration_ms: 7085.697949
+  type: 'suite'
+  ...
+# Subtest: rollback preserves permanent state guard inodes absent from an older snapshot
+ok 107 - rollback preserves permanent state guard inodes absent from an older snapshot
+  ---
+  duration_ms: 16.07518
+  ...
+1..107
+# tests 223
+# suites 20
+# pass 204
+# fail 19
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 109135.825378

@@ -1,7 +1,9 @@
 [package]
 name = "harness-core"
-version = "1.2.1"
+version = "0.1.0-alpha.2"
 edition = "2024"
+rust-version = "1.85.0"
+license = "Apache-2.0"
 
 [[bin]]
 name = "harness-core"
@@ -27,6 +29,7 @@ ratatui = { version = "0.30.2", default-features = false, features = ["crossterm
 crossterm = "0.29.0"
 unicode-segmentation = "1.13"
 unicode-width = "0.2"
+shell-words = "1.1"
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2.189"

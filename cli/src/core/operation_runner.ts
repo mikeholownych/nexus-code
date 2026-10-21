@@ -7,14 +7,15 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { AutonomousAgent } from "../agent.js";
-import { LocalLlmClient, mayBindCredential, storedCredentialFor } from "../client.js";
+import { credentialStorageHome, LocalLlmClient, mayBindCredential, storedCredentialFor } from "../client.js";
 import { providerDefinition } from "../providers.js";
 import { providerApiKey } from "../credentials.js";
 import type { ChatMessage, HarnessConfig } from "../types.js";
 import { realRecoveryClock, type RecoveryClock } from "./provider_recovery.js";
 import { ConvergenceScheduler, unitBaseTask, type Decision, type DurableOperationState, type OperationEvent, type UnitRunResult, type WorkUnit } from "./operation.js";
 import { redactForPersistence } from "./persistence_protection.js";
-import { ROLE_PROFILES } from "./roles.js";
+import { REQUIREMENTS_CAPABILITY, READ_OBJECTIVE_CAPABILITY } from "./objective.js";
+import { ROLE_PROFILES, isReadOnlyRole, type AgentRole } from "./roles.js";
 import {
   applyProviderCatalog,
   credentialFingerprint,
@@ -23,6 +24,7 @@ import {
   type ResourceConditionRecord,
   type ResourceDescriptor,
 } from "./resources.js";
+import { AccountIdentityError, createOperationAccountIdentity, isLegacyCredentialFingerprint, type OperationAccountIdentity } from "./account_identity.js";
 import { DurableStateManager, type DurableTaskState, type TaskRecoveryResult } from "./state.js";
 import { turnSucceeded, type InferenceFailure, type TurnResult } from "./turn.js";
 import { WorkspacePath } from "./workspace_path.js";
@@ -132,7 +134,10 @@ export class OperationRunner {
         unitId: "*",
         cause: "NOT_CONVERGING",
         question: `The scheduler made ${maxIterations} transitions without converging. Resume (nexus operation resume), or stop the operation?`,
-        options: [],
+        options: [
+          { id: "1", label: "resume the operation", action: { kind: "keep_waiting" } },
+          { id: "2", label: "stop the operation", action: { kind: "cancel_operation" } },
+        ],
       }],
     });
     this.save();
@@ -285,14 +290,17 @@ const LIFECYCLE: Record<DurableOperationState["status"], DurableTaskState["statu
 export class OperationStore {
   readonly manager: DurableStateManager;
   private readonly workspace: WorkspacePath;
+  private readonly accountIdentityHome: string;
 
   /** `baseDir` defaults to the task store turn recovery uses (~/.nexus/tasks). */
-  constructor(workspace: string, baseDir?: string) {
+  constructor(workspace: string, baseDir?: string, accountIdentityHome = credentialStorageHome()) {
     this.workspace = WorkspacePath.fromSelectedWorkspace(path.resolve(workspace));
     this.manager = new DurableStateManager({ ...(baseDir ? { baseDir } : {}), workspacePaths: [this.workspace] });
+    this.accountIdentityHome = accountIdentityHome;
   }
 
   save(op: DurableOperationState): void {
+    op = migrateLegacyAccountIdentities(op, createOperationAccountIdentity(this.accountIdentityHome));
     const existing = this.manager.hasTaskState(op.id) ? this.manager.loadTaskState(op.id) : undefined;
     const state: DurableTaskState = {
       schemaVersion: 1,
@@ -318,7 +326,24 @@ export class OperationStore {
   load(id: string): DurableOperationState {
     const state = this.manager.loadTaskState(id, this.workspace.value, [this.workspace]);
     if (!state.operation) throw new Error(`Task ${id} is not an operation`);
-    return state.operation;
+    return migrateLegacyAccountIdentities(state.operation, createOperationAccountIdentity(this.accountIdentityHome));
+  }
+
+  /** Status/export callers migrate legacy IDs on disk only when they can hold the operation lock. */
+  loadForInspection(id: string): DurableOperationState {
+    let release: (() => void) | undefined;
+    try {
+      release = this.acquire(id);
+    } catch (error) {
+      if (!(error instanceof OperationLockedError)) throw error;
+    }
+    try {
+      const operation = this.load(id);
+      if (release) this.save(operation);
+      return operation;
+    } finally {
+      release?.();
+    }
   }
 
   list(): DurableOperationState[] {
@@ -327,7 +352,23 @@ export class OperationStore {
       if (!t.title.startsWith("Operation: ")) continue;
       try {
         out.push(this.load(t.taskId));
-      } catch {}
+      } catch (error) {
+        if (error instanceof AccountIdentityError) throw error;
+      }
+    }
+    return out;
+  }
+
+  /** Status/export listing persists each legacy migration only when its operation lock is available. */
+  listForInspection(): DurableOperationState[] {
+    const out: DurableOperationState[] = [];
+    for (const task of this.manager.listTasks()) {
+      if (!task.title.startsWith("Operation: ")) continue;
+      try {
+        out.push(this.loadForInspection(task.taskId));
+      } catch (error) {
+        if (error instanceof AccountIdentityError) throw error;
+      }
     }
     return out;
   }
@@ -350,7 +391,7 @@ export class OperationStore {
       // A lock written before this host last booted is stale even if its pid has since been reused.
       const beforeBoot = holder.at !== undefined && Date.parse(holder.at) < Date.now() - os.uptime() * 1000;
       if (holder.host !== os.hostname() || (!beforeBoot && holder.pid !== undefined && processAlive(holder.pid))) {
-        throw new Error(`Operation ${id} is already being driven by pid ${holder.pid ?? "?"} on ${holder.host ?? "?"} (lock ${lockPath}).`);
+        throw new OperationLockedError(`Operation ${id} is already being driven by pid ${holder.pid ?? "?"} on ${holder.host ?? "?"} (lock ${lockPath}).`);
       }
       fs.rmSync(lockPath, { force: true });
       create();
@@ -366,6 +407,58 @@ export class OperationStore {
   latestResumable(): DurableOperationState | undefined {
     return this.list().find((op) => op.status === "WAITING" || op.status === "RUNNING");
   }
+}
+
+export class OperationLockedError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "OperationLockedError";
+  }
+}
+
+/** Re-key legacy short hashes without changing which resources share an account-scoped condition. */
+export function migrateLegacyAccountIdentities(
+  operation: DurableOperationState,
+  identity: OperationAccountIdentity,
+): DurableOperationState {
+  // Schema-1 records do not retain whether an old 12-hex account value came
+  // from the CLI label or the former credential hash. Preserve explicitly
+  // marked labels; migrate unmarked 12-hex values as legacy credential IDs.
+  const explicitAccounts = new Set(
+    operation.resources.filter((resource) => resource.accountIdentitySource === "explicit" && resource.account).map((resource) => resource.account!),
+  );
+  const explicitAccountConditionKeys = new Set(
+    operation.resources
+      .filter((resource) => resource.accountIdentitySource === "explicit" && resource.account)
+      .map((resource) => `${resource.provider}|account|${resource.account}`),
+  );
+  const migrated = new Map<string, string>();
+  const replacement = (value: string): string => {
+    if (explicitAccounts.has(value) || !isLegacyCredentialFingerprint(value)) return value;
+    let mapped = migrated.get(value);
+    if (!mapped) {
+      mapped = identity.migrateLegacy(value, operation.id);
+      migrated.set(value, mapped);
+    }
+    return mapped;
+  };
+
+  for (const resource of operation.resources) {
+    if (resource.account) resource.account = replacement(resource.account);
+  }
+  for (const condition of operation.conditions) {
+    if (condition.scope !== "account") continue;
+    // Account labels are arbitrary strings and may themselves contain `|account|`; preserve the full key for
+    // explicitly labeled resources instead of parsing the final delimiter as a structural boundary.
+    if (explicitAccountConditionKeys.has(condition.key)) continue;
+    const marker = "|account|";
+    const markerAt = condition.key.lastIndexOf(marker);
+    if (markerAt < 0) continue;
+    const oldAccount = condition.key.slice(markerAt + marker.length);
+    const newAccount = replacement(oldAccount);
+    if (newAccount !== oldAccount) condition.key = `${condition.key.slice(0, markerAt + marker.length)}${newAccount}`;
+  }
+  return operation;
 }
 
 export interface DriveOptions extends Omit<OperationRunnerOptions, "persist"> {
@@ -440,8 +533,8 @@ const PLANNER_PREFERRED = ["research", "architecture", "review"];
 const CODER_PREFERRED = ["implementation", "verification"];
 
 /** Resources implied by the existing configuration (primary model, fallback endpoints, planner and coder slots). */
-export function resourcesFromConfig(config: HarnessConfig): ResourceDescriptor[] {
-  const account = credentialFingerprint(config.apiKey) ?? (config.provider ? undefined : credentialFingerprint(storedCredentialFor(config.endpoint) ?? undefined));
+export function resourcesFromConfig(config: HarnessConfig, identity = createOperationAccountIdentity(credentialStorageHome())): ResourceDescriptor[] {
+  const account = credentialFingerprint(config.apiKey, identity) ?? (config.provider ? undefined : credentialFingerprint(storedCredentialFor(config.endpoint) ?? undefined, identity));
   const make = (id: string, endpoint: string, model: string, rank: number, taskClass?: string, key = account, preferredFor?: string[], providerId?: string): ResourceDescriptor => ({
     id,
     provider: providerId ?? origin(normalizeEndpoint(endpoint)),
@@ -451,6 +544,7 @@ export function resourcesFromConfig(config: HarnessConfig): ResourceDescriptor[]
     capabilities: ["tools"],
     rank,
     ...(key ? { account: key } : {}),
+    ...(key ? { accountIdentitySource: "credential" as const } : {}),
     ...(taskClass ? { taskClass } : {}),
     ...(preferredFor ? { preferredFor } : {}),
   });
@@ -460,11 +554,11 @@ export function resourcesFromConfig(config: HarnessConfig): ResourceDescriptor[]
   const roleProvider = (own?: string, ownEndpoint?: string) => own ?? (ownEndpoint ? undefined : config.provider);
   if (config.plannerModel) {
     const p = roleProvider(config.plannerProvider, config.plannerEndpoint);
-    out.push(make("planner", config.plannerEndpoint ?? config.endpoint, config.plannerModel, 2, config.plannerTaskClass, credentialFingerprint(config.plannerApiKey) ?? account, PLANNER_PREFERRED, p));
+    out.push(make("planner", config.plannerEndpoint ?? config.endpoint, config.plannerModel, 2, config.plannerTaskClass, credentialFingerprint(config.plannerApiKey, identity) ?? account, PLANNER_PREFERRED, p));
   }
   if (config.coderModel) {
     const p = roleProvider(config.coderProvider, config.coderEndpoint);
-    out.push(make("coder", config.coderEndpoint ?? config.endpoint, config.coderModel, 2, config.taskClass, credentialFingerprint(config.coderApiKey) ?? account, CODER_PREFERRED, p));
+    out.push(make("coder", config.coderEndpoint ?? config.endpoint, config.coderModel, 2, config.taskClass, credentialFingerprint(config.coderApiKey, identity) ?? account, CODER_PREFERRED, p));
   }
   const seen = new Set<string>();
   return out.filter((r) => {
@@ -480,7 +574,7 @@ export function resourcesFromConfig(config: HarnessConfig): ResourceDescriptor[]
 export interface AgentExecutorOptions {
   baseConfig: HarnessConfig;
   /** Builds the unit's agent (tests inject state directories and clocks). */
-  createAgent?: (config: HarnessConfig) => AutonomousAgent;
+  createAgent?: (config: HarnessConfig, depth?: number, options?: { durable?: boolean; role?: AgentRole; unitId?: string }) => AutonomousAgent;
   /** Read provider `/v1/models` metadata on wake and at start. */
   discoverCatalog?: boolean;
 }
@@ -551,18 +645,26 @@ export class AgentWorkUnitExecutor implements WorkUnitExecutor {
       coderApiKey: undefined,
       plannerProvider: undefined,
       coderProvider: undefined,
+      ...(unit?.role && isReadOnlyRole(unit.role) ? { readOnly: true, approvalMode: "read-only" as const } : {}),
     };
   }
 
   async run(unit: WorkUnit, resource: ResourceDescriptor, ctx: UnitRunContext): Promise<UnitRunResult> {
     const config = this.configFor(resource, unit);
-    const agent = this.opts.createAgent ? this.opts.createAgent(config) : new AutonomousAgent(config, 1);
+    const agent = this.opts.createAgent
+      ? this.opts.createAgent(config, 1, { durable: true, role: unit.role, unitId: unit.id })
+      : new AutonomousAgent(config, 1, undefined, { durable: true, role: unit.role, unitId: unit.id });
+    if (this.opts.createAgent) {
+      if (!agent.durable) (agent as any).durable = true;
+      if (unit.role && !agent.role) (agent as any).role = unit.role;
+      if (unit.id && !agent.unitId) (agent as any).unitId = unit.id;
+    }
     let lastCondition: ResourceConditionRecord | null = null;
     try {
       let prompt: string;
+      let unusable: string | undefined;
       if (unit.agentTaskId) {
         let recovered: TaskRecoveryResult | undefined;
-        let unusable: string | undefined;
         try {
           recovered = await agent.recoverFromTaskState(unit.agentTaskId);
         } catch (err: any) {
@@ -581,7 +683,7 @@ export class AgentWorkUnitExecutor implements WorkUnitExecutor {
         }
         // Only a record that tracks obligations can show that nothing happened; without one, earlier work is unknown.
         const notStarted =
-          !unusable && recovered?.state.unverifiedChangesPending !== undefined && conversationNotStarted(agent.getMessages());
+          !unusable && recovered?.obligationRecordPresent === true && conversationNotStarted(agent.getMessages());
         if (!notStarted) unusable ??= resumeHistoryProblem(agent.getMessages(), unit);
         const decision = ctx.operatorDecision
           ? `The operator decided: ${ctx.operatorDecision.label}${ctx.operatorDecision.note ? ` — ${ctx.operatorDecision.note}` : ""}.\n`
@@ -599,12 +701,15 @@ export class AgentWorkUnitExecutor implements WorkUnitExecutor {
           }
           // Without a recorded obligation (state unloadable, or written before obligations were recorded) earlier
           // changes are unknown, so they count as unverified.
-          agent.restartConversation(!recovered || recovered.state.unverifiedChangesPending === undefined);
+          agent.restartConversation(!recovered || !recovered.obligationRecordPresent);
           prompt =
             `${this.initialPrompt(unit, ctx)}\n\n${decision}` +
-            `Note: an earlier attempt at this unit ran, but its record was lost (${unusable}). Workspace changes it may have made are unknown and unverified; check the workspace before relying on it.`;
+            `Note: earlier task history was unusable (${unusable}). Prior workspace changes may be unknown and remain unverified; inspect the workspace before relying on them.`;
         } else if (notStarted) {
-          prompt = `${this.initialPrompt(unit, ctx)}${decision ? `\n\n${decision}` : ""}`;
+          const restartNotice = ctx.operatorDecision?.restart
+            ? "\n\nNote: this unit was explicitly restarted after recovery. Earlier workspace history may be incomplete, and any prior changes remain unverified; inspect the workspace before relying on them."
+            : "";
+          prompt = `${this.initialPrompt(unit, ctx)}${decision ? `\n\n${decision}` : ""}${restartNotice}`;
         } else {
           const op = recovered?.state.currentOperation;
           const stopped = op?.status === "interrupted"
@@ -619,6 +724,11 @@ export class AgentWorkUnitExecutor implements WorkUnitExecutor {
         prompt = this.initialPrompt(unit, ctx);
       }
       ctx.bindAgentTask(agent.getTaskId());
+      if (agent.durable && !unit.agentTaskId) {
+        try {
+          agent.checkpointDurableState("work unit start");
+        } catch {}
+      }
       agent.setProviderRecoveryHooks({
         onFailure: (f) => {
           const c = ctx.observeFailure(f);
@@ -626,11 +736,23 @@ export class AgentWorkUnitExecutor implements WorkUnitExecutor {
         },
         shouldYield: (f, delay) => ctx.shouldYield(f, delay),
       });
-      const turn = await agent.runTurn(prompt, undefined, { signal: ctx.signal });
+      const isResume = Boolean(unit.agentTaskId && !unusable && !ctx.operatorDecision?.restart);
+      const priorVerificationAttempts = agent.getObjective()?.verification.length ?? 0;
+      const turn = await agent.runTurn(prompt, undefined, { signal: ctx.signal, resume: isResume });
+      const configuredVerifier = config.authoritativeVerifierCommand?.trim();
+      const testerVerifiedThisTurn = unit.role === "tester" &&
+        (agent.getObjective()?.verification.slice(priorVerificationAttempts).some((attempt) => {
+          if (attempt.status !== "PASSED" || attempt.isDeliverableBound !== true || attempt.filtered === true) return false;
+          // An operator-configured verifier is authoritative. A discovered verifier needs
+          // independent fail-before/pass-after evidence; a passing generic suite is not enough.
+          return configuredVerifier
+            ? attempt.command === configuredVerifier && attempt.independent !== false
+            : attempt.independent === true;
+        }) ?? false);
       try {
         agent.checkpointDurableState(`work unit ${unit.id}`, turn);
       } catch {}
-      return this.classify(unit, resource, turn, agent.getCompletionSummary()?.summary, lastCondition, ctx);
+      return this.classify(unit, resource, turn, agent.getCompletionSummary()?.summary, lastCondition, ctx, testerVerifiedThisTurn);
     } finally {
       agent.setProviderRecoveryHooks(undefined);
       agent.shutdown();
@@ -655,11 +777,33 @@ export class AgentWorkUnitExecutor implements WorkUnitExecutor {
     summary: string | undefined,
     condition: ResourceConditionRecord | null,
     ctx: UnitRunContext,
+    testerVerifiedThisTurn = false,
   ): UnitRunResult {
     if (turn.execution === "INTERRUPTED") return { kind: "cancelled" };
     if (turnSucceeded(turn)) {
+      if (
+        (turn.modelStop === "FINAL_TEXT" ||
+          (turn.outcome === "NOT_REQUIRED" && !(unit.role === "tester" && testerVerifiedThisTurn)) ||
+          (unit.role === "tester" && turn.outcome === "VERIFIED" && !testerVerifiedThisTurn)) &&
+        (unit.role === "implementer" || unit.role === "tester")
+      ) {
+        return {
+          kind: "failed",
+          cause: "EXECUTION_FAILED",
+          reason: "no_change: implementer or tester completed with prose only (no changes made)",
+          question: `${unit.title}: answered in prose without making or verifying changes. Retry it, accept as no-op, or stop?`,
+          options: [
+            { label: "retry", action: { kind: "retry" } },
+            { label: "accept as no-op", action: { kind: "accept_no_change" } },
+          ],
+        };
+      }
       ctx.observeSuccess();
-      return { kind: "completed", summary: summary ?? turn.detail ?? "completed", outcome: turn.outcome };
+      return {
+        kind: "completed",
+        summary: summary ?? turn.detail ?? "completed",
+        outcome: unit.role === "tester" && turn.outcome === "NOT_REQUIRED" && testerVerifiedThisTurn ? "VERIFIED" : turn.outcome,
+      };
     }
     const f = turn.inferenceFailure;
     if (f) {

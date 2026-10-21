@@ -170,6 +170,16 @@ After a crash at any point of a compaction, `/resume` is consistent:
 Compaction never replays an action. It only rewrites context, and only at a boundary where every tool call has its
 recorded result. A call whose result was never recorded keeps the existing "outcome unknown" note.
 
+### Work unit compaction and durability
+
+Work units executed in durable workflows (`/team`, `nexus operation`) have `durable: true` and participate in the same durable compaction contract as depth-0 interactive turns:
+
+1. **Archive append**: Replaced messages are appended to `<task-id>.history.jsonl` (with durable sync/fsync) tagged with the compaction id before switching context.
+2. **Context switch & task record**: The in-memory conversation switches to the compacted form and the durable task record (`<task-id>.json`) is synced to disk, recording the committed compaction id. Work units operate without a session record, so durability commits directly through archive → task state.
+3. **Failure handling**: If the archive cannot be written, compaction is aborted and stops the turn with `PERSISTENCE_FAILED`.
+4. **Resume & recovery**: On resume, `readArchiveLines` reads the committed originals from `<task-id>.history.jsonl`. For legacy alpha.2 work unit records that name compactions without archive lines, recovery reports a clear notice: "this unit was compacted by an earlier version; originals before <id> are not recoverable".
+5. **In-turn subagents**: In contrast, nested subagents spawned during a turn (`durable: false`) maintain compaction in memory only, write no archive lines and leave no durable task files.
+
 ### Context sizing and token accounting
 
 At each step Nexus resolves the context window and the output allowance, and labels where each came from:

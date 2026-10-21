@@ -2,7 +2,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
 import { randomUUID } from "node:crypto";
-import { exec, execFileSync } from "node:child_process";
+import { execFile, execFileSync } from "node:child_process";
 import { ChatMessage, DEFAULT_CONTINUATION, HarnessConfig, ToolCall, ToolDefinition } from "./types.js";
 import { LocalLlmClient } from "./client.js";
 import { HARNESS_TOOLS, RustCoreBridge, forbiddenDeletion, registerBridgeCapabilities } from "./tools.js";
@@ -12,7 +12,11 @@ import {
   createDefaultRegistry,
   defaultRegistry,
   changesWorkspace,
+  needsOperatorDecision,
+  type EffectClass,
 } from "./core/capabilities.js";
+import { ApprovalPolicy, defaultApprovalPolicy, PolicyContext, ApprovalMode } from "./core/approval_policy.js";
+import { isWorkspaceTrusted } from "./workspace_trust.js";
 import {
   ExecutionSpine,
   ExecutionReceipt,
@@ -36,7 +40,7 @@ import {
   ledgerStateIdentity,
   type ObservationVerdict,
 } from "./core/execution_tracking.js";
-import { parseModelResponse } from "./parser.js";
+import { parseModelResponse, repairJsonWithClass, isWriteOrExecTool } from "./parser.js";
 import { TerminalUI, redactSecrets } from "./ui.js";
 import { getGitInfo, getProjectRules } from "./git.js";
 import { SkillManager } from "./skills.js";
@@ -49,9 +53,10 @@ import { selectRelevantFewShots } from "./fewshots.js";
 import { FlightRecorder } from "./flight.js";
 import { WorktreeManager } from "./worktree.js";
 import { isSandboxAvailable } from "./sandbox.js";
-import { runTestSuiteWithExecutor, discoverVerifier, hasExecutedTests, isVerifierDeliverableBound, isFilteredVerifierCommand } from "./tester.js";
+import { runTestSuiteWithExecutor, discoverVerifier, describeVerifier, hasExecutedTests, isVerifierDeliverableBound, isFilteredVerifierCommand, verifierTimeoutSecs } from "./tester.js";
 import { ENABLE_TOOLS_CAPABILITY, TOOL_GROUPS, groupsTriggeredBy, toolGroupOf } from "./core/tool_groups.js";
-import { judgeWithoutCopy, prepareBaselineTestsCopy, snapshotTests, type ChangeBaseline, type Independence } from "./core/independent_check.js";
+import { judgeWithoutCopy, prepareBaselineTestsCopy, requiresWorkspaceVerifierDefinitionBinding, trustedDeliverablesFromBaseline, testsChangedSince, snapshotTests, snapshotVerifierDefinition, verifierDefinitionChangedSince, type ChangeBaseline, type Independence } from "./core/independent_check.js";
+import { ensurePrivateDir, appendPrivateFile } from "./core/durable_file.js";
 
 /** Tools that edit files directly: the first one of an unverified change triggers the pre-change verifier run. */
 const FILE_EDIT_TOOLS = new Set(["write_file", "edit_file", "patch_file", "delete_file"]);
@@ -102,6 +107,7 @@ import {
   RecoveryPolicy,
   realRecoveryClock,
   recoveryPolicyFromEnv,
+  startupEndpointWarning,
 } from "./core/provider_recovery.js";
 import {
   ObjectiveLedger,
@@ -118,6 +124,7 @@ import {
   createLedger,
   failedCheckFrom,
   gatingRequirements,
+  isContinuationPrompt,
   isNewObjective,
   ledgerNeedsPinning,
   openRequirements,
@@ -142,6 +149,7 @@ import {
 } from "./core/findings.js";
 import { FileChange, describeChange, editTarget, snapshot } from "./file_diff.js";
 import type { TurnReason } from "./core/turn.js";
+import { isReadOnlyRole, ROLE_PROFILES, type AgentRole } from "./core/roles.js";
 import pc from "picocolors";
 import { untrustedWorkspaceExtensions } from "./workspace_trust.js";
 
@@ -640,6 +648,20 @@ function normalizeMessageContent(content: ChatMessage["content"]): NormalizedMes
   return { text, preserveOriginal };
 }
 
+/**
+ * The destination an egress call is approved for: the URL's origin, or the tool family when the call names no URL
+ * (a search, or acting on the page the browser already has open). Review mode asks once per destination per session.
+ */
+function egressOriginOf(toolName: string, args: Record<string, any>): string {
+  const url = typeof args.url === "string" ? args.url : undefined;
+  if (url) {
+    try {
+      return new URL(url).origin;
+    } catch {}
+  }
+  return toolName.startsWith("browser_") ? "browser:current-page" : `tool:${toolName}`;
+}
+
 const READ_ONLY_TOOLS = new Set([
   "read_file",
   "batch_read",
@@ -758,7 +780,9 @@ function describeArchiveRead(read: ArchiveRead<ChatMessage>): string | undefined
   const notes: string[] = [];
   if (read.uncommittedLines) notes.push(`${read.uncommittedLines} archived message(s) from a compaction that was interrupted before it was committed were set aside; their originals are in the resumed conversation itself`);
   if (read.unreadableLines) notes.push(`${read.unreadableLines} archive line(s) could not be read (an interrupted write); they are not used`);
-  if (read.missingCompactions.length) notes.push(`the archive lacks the originals of compaction(s) ${read.missingCompactions.slice(0, 5).join(", ")}: read_archive cannot return them`);
+  if (read.missingCompactions.length) {
+    notes.push(`this unit was compacted by an earlier version; originals before ${read.missingCompactions[0]} are not recoverable`);
+  }
   return notes.length ? `Compaction archive: ${notes.join("; ")}.` : undefined;
 }
 
@@ -770,10 +794,17 @@ function stepPosition(step: number, max: number): string {
 /** A workspace state identity that took longer than this disables further ones for the turn (reported, not hidden). */
 const STATE_IDENTITY_BUDGET_MS = 1_500;
 
-function triggerNotification(title: string, message: string) {
+function triggerNotification(title: string, message: string, surface?: string) {
+  // Desktop notification and BEL happen only when stdout is an interactive TTY and the surface is the REPL or TUI (REQ-AGT-109a).
+  if (!process.stdout.isTTY) {
+    return;
+  }
+  if (surface !== "repl" && surface !== "tui") {
+    return;
+  }
   try {
     process.stdout.write("\x07");
-    exec(`notify-send "${title.replace(/"/g, '\\"')}" "${message.replace(/"/g, '\\"')}"`, () => {});
+    execFile("notify-send", [title, message], () => {});
   } catch {
     // Ignore notification errors
   }
@@ -789,9 +820,7 @@ function logAudit(entry: {
 }) {
   try {
     const auditDir = path.join(os.homedir(), ".nexus");
-    if (!fs.existsSync(auditDir)) {
-      fs.mkdirSync(auditDir, { recursive: true });
-    }
+    ensurePrivateDir(auditDir);
     const auditPath = path.join(auditDir, "audit.log");
     const record = InformationFlowBoundary.getGlobalInstance().redactForTelemetry({
       timestamp: new Date().toISOString(),
@@ -802,7 +831,7 @@ function logAudit(entry: {
       duration_ms: entry.durationMs,
       error: entry.error,
     });
-    fs.appendFileSync(auditPath, JSON.stringify(record) + "\n");
+    appendPrivateFile(auditPath, JSON.stringify(record) + "\n");
   } catch {
     // Ignore audit log write errors
   }
@@ -825,6 +854,10 @@ export class AutonomousAgent {
   private hasPendingModifications: boolean = false;
   /** Modified files tracked during the session/task for deliverable verification boundaries. */
   private modifiedFiles: Set<string> = new Set<string>();
+  /** Pending recovered work has no authenticated pre-change verifier snapshot. */
+  private verificationBaselineInvalidated: boolean = false;
+  /** A persisted baseline retained only as untrusted continuity evidence after recovery. */
+  private untrustedRecoveredBaseline?: DurableTaskState["changeBaseline"];
   /** Evidence from the verifier run that covers the current workspace changes. Cleared by any later mutation. */
   private verificationEvidence?: VerificationEvidence;
   private verificationEvidenceRawOutput: string = "";
@@ -889,6 +922,11 @@ export class AutonomousAgent {
   private completionSummary?: { summary: string; notes?: string };
   private observer?: AgentObserver;
   private toolDispatchSeq = 0;
+  /** Egress destinations the operator approved this session (cleared on reset and restore: approvals never persist). */
+  private approvedEgressOrigins = new Set<string>();
+  /** Verifier commands the operator approved this session (cleared on reset and restore). */
+  private approvedVerifiers = new Set<string>();
+  private approvalPolicy: ApprovalPolicy = defaultApprovalPolicy;
   private verifiedWorktreeCompletion: boolean = false;
   private worktreeRunTurnAuthorized: boolean = false;
   private managedWorktreeWorkspaceSwitch: boolean = false;
@@ -971,17 +1009,55 @@ export class AutonomousAgent {
   public recoveryArchiveNotice?: string;
   /** Every original compaction replaced in this conversation (bounded), searchable with read_archive. */
   private archiveForReading: ChatMessage[] = [];
+  /** Execution surface: 'repl', 'tui', or 'headless' (REQ-AGT-109a). */
+  private surface: string;
+  public readonly durable: boolean;
+  public readonly role?: AgentRole;
+  public readonly unitId?: string;
 
   constructor(
     config: HarnessConfig,
     depth: number = 0,
-    inheritedWorktreeScope?: { workspace: string; requireSandbox: true },
+    inheritedWorktreeScopeOrOptions?: { workspace: string; requireSandbox: true } | { durable?: boolean; role?: AgentRole; unitId?: string },
+    options?: { durable?: boolean; role?: AgentRole; unitId?: string },
   ) {
     canonicalDurableProvenance.set(this, new WeakMap());
     this.config = config;
+    this.surface = config.surface || "headless";
     this.primaryWorkspacePathIdentity = WorkspacePath.fromSelectedWorkspace(path.resolve(config.workspace || process.cwd()));
     this.workspacePathIdentity = this.primaryWorkspacePathIdentity;
     this.depth = depth;
+
+    let inheritedWorktreeScope: { workspace: string; requireSandbox: true } | undefined;
+    let durableOption: boolean | undefined;
+    let roleOption: AgentRole | undefined;
+    let unitIdOption: string | undefined;
+
+    if (inheritedWorktreeScopeOrOptions) {
+      if ("workspace" in inheritedWorktreeScopeOrOptions) {
+        inheritedWorktreeScope = inheritedWorktreeScopeOrOptions;
+        durableOption = options?.durable;
+        roleOption = options?.role;
+        unitIdOption = options?.unitId;
+      } else {
+        durableOption = (inheritedWorktreeScopeOrOptions as { durable?: boolean }).durable;
+        roleOption = (inheritedWorktreeScopeOrOptions as { role?: AgentRole }).role;
+        unitIdOption = (inheritedWorktreeScopeOrOptions as { unitId?: string }).unitId;
+      }
+    } else if (options) {
+      durableOption = options.durable;
+      roleOption = options.role;
+      unitIdOption = options.unitId;
+    }
+    this.durable = durableOption !== undefined ? durableOption : depth === 0;
+    this.role = roleOption ?? config.role;
+    this.unitId = unitIdOption;
+
+    if (this.role && isReadOnlyRole(this.role)) {
+      this.config.readOnly = true;
+      this.config.approvalMode = "read-only";
+    }
+
     this.inheritedWorktreeScope = inheritedWorktreeScope;
     if (inheritedWorktreeScope && path.resolve(config.workspace) !== path.resolve(inheritedWorktreeScope.workspace)) {
       throw new Error("Subagent workspace does not match its inherited worktree authority.");
@@ -1015,9 +1091,9 @@ export class AutonomousAgent {
       this.coderClient = this.client;
     }
     this.hybridSearch = new HybridSearchEngine(ws, this.client);
-    this.synthesizer = new SynthesizerEngine(ws, (command) => this.bridge.executeTool("run_command", { command, timeout_secs: 120 }));
+    this.synthesizer = new SynthesizerEngine(ws, (command) => this.bridge.executeTool("run_command", { command, timeout_secs: verifierTimeoutSecs(config.verifierTimeoutSecs) }));
     this.browser = new BrowserDriver(ws);
-    this.knowledge = new KnowledgeGraph(ws);
+    this.knowledge = new KnowledgeGraph(ws, { readOnly: config.readOnly });
     this.bridge = new RustCoreBridge(
       ws,
       config.shell,
@@ -1027,14 +1103,16 @@ export class AutonomousAgent {
       inheritedWorktreeScope ? (config.sandbox || "auto") : config.sandbox,
       Boolean(inheritedWorktreeScope?.requireSandbox),
     );
+    this.bridge.setVerifierTimeoutSecs(config.verifierTimeoutSecs);
     this.securityManager = new SecurityManager(ws);
     this.ui = new TerminalUI();
-    this.skillManager = new SkillManager(ws);
+    this.skillManager = new SkillManager(ws, { readOnly: config.readOnly });
     this.mcpManager = new McpClientManager(ws, { readOnly: config.readOnly });
     this.pluginManager = new PluginManager(ws, { readOnly: config.readOnly });
     this.worktreeManager = new WorktreeManager(ws);
     if (config.recordFlight) {
       this.flightRecorder = new FlightRecorder(ws);
+      this.pluginManager.setFlightRecorder(this.flightRecorder);
     }
     this.candidateTracker = new CandidateTracker();
     this.capabilityRegistry = createDefaultRegistry();
@@ -1133,7 +1211,7 @@ export class AutonomousAgent {
         },
       },
     });
-    if (depth === 0) {
+    if (depth === 0 || this.role === "implementer" || this.role === "tester") {
       this.capabilityRegistry.register(REQUIREMENTS_CAPABILITY);
       this.capabilityRegistry.register(READ_OBJECTIVE_CAPABILITY);
     }
@@ -1145,7 +1223,9 @@ export class AutonomousAgent {
     if (typeof (this.client as any)?.setTaskId === "function") this.client.setTaskId(this.currentTaskId);
     if (typeof (this.plannerClient as any)?.setTaskId === "function") this.plannerClient.setTaskId(this.currentTaskId);
     if (typeof (this.coderClient as any)?.setTaskId === "function") this.coderClient.setTaskId(this.currentTaskId);
-    this.initTaskState();
+    if (this.durable) {
+      this.initTaskState();
+    }
     this.resetConversation();
   }
 
@@ -1157,8 +1237,41 @@ export class AutonomousAgent {
     return this.currentTaskId;
   }
 
+  public setApprovalPolicy(policy: ApprovalPolicy): void {
+    this.approvalPolicy = policy;
+  }
+
+  public getApprovalPolicy(): ApprovalPolicy {
+    return this.approvalPolicy;
+  }
+
+  public clearApprovedEgressOrigins(): void {
+    this.approvedEgressOrigins.clear();
+  }
+
+  public clearApprovedVerifiers(): void {
+    this.approvedVerifiers.clear();
+  }
+
+  public setApprovalMode(mode: ApprovalMode): void {
+    this.config.approvalMode = mode;
+    if (mode !== "auto") {
+      this.config.fullAccess = false;
+    }
+    this.clearApprovedEgressOrigins();
+    this.clearApprovedVerifiers();
+  }
+
+  public getApprovalMode(): ApprovalMode {
+    if (this.config.approvalMode) return this.config.approvalMode;
+    if (this.config.readOnly) return "read-only";
+    if (this.config.fullAccess) return "auto";
+    const trusted = isWorkspaceTrusted(this.config.workspace, Boolean(this.config.readOnly));
+    return trusted ? "auto" : "review";
+  }
+
   private initTaskState(): void {
-    if (!this.stateManager) return;
+    if (!this.durable || !this.stateManager) return;
     try {
       this.stateManager.saveTaskState({
         schemaVersion: 1,
@@ -1179,9 +1292,8 @@ export class AutonomousAgent {
         currentOperation: null,
         unverifiedChangesPending: this.hasPendingModifications,
       });
-    } catch {
-      this.initialStatePersistenceFailure =
-        "Initial durable task state was not persisted; restart recovery is unavailable until a later successful checkpoint.";
+    } catch (err: any) {
+      this.reportPersistenceFailure("init", err);
     }
   }
 
@@ -1223,6 +1335,18 @@ export class AutonomousAgent {
       objective: this.objective ?? null,
       findings: this.getFindings(),
       history: this.getHistoryCompleteness(),
+      changeBaseline: this.changeBaseline
+        ? {
+            command: this.changeBaseline.command,
+            failed: this.changeBaseline.failed,
+            tests: this.changeBaseline.tests ? Object.fromEntries(this.changeBaseline.tests) : null,
+            verifier: this.changeBaseline.verifier ? Object.fromEntries(this.changeBaseline.verifier) : null,
+            trustedDeliverables: this.changeBaseline.trustedDeliverables,
+            at: this.changeBaseline.at,
+          }
+        : (this.changeBaseline === null
+          ? this.untrustedRecoveredBaseline ?? null
+          : this.untrustedRecoveredBaseline ?? undefined),
       tokenStats: { ...this.totalTokens },
       cognitiveRouting: {
         activeTier: this.activeTier,
@@ -1244,9 +1368,13 @@ export class AutonomousAgent {
         if (!state.validationReceipts.length && existing.validationReceipts) {
           state.validationReceipts = existing.validationReceipts;
         }
+        if (state.changeBaseline === undefined && existing.changeBaseline !== undefined) {
+          state.changeBaseline = existing.changeBaseline;
+        }
       } catch {}
     }
 
+    if (!this.durable) return state;
     this.stateManager.saveTaskState(state);
     return state;
   }
@@ -1273,27 +1401,36 @@ export class AutonomousAgent {
     this.messages = state.messages || [];
     this.restoreFindings(state.findings);
     this.objective = state.objective ?? undefined;
+    // Durable task state is writable by the same local user who can run candidate
+    // commands. Never trust a saved baseline, nor capture a new one over a
+    // resumed workspace with pending changes: an attacker could delete the field
+    // and make candidate-edited tests look pristine.
+    this.changeBaseline = undefined;
+    this.untrustedRecoveredBaseline = state.changeBaseline ?? undefined;
     this.restoreHistory(state.history);
     const committed = Array.isArray((state.history as any)?.committedCompactions) ? new Set<string>((state.history as any).committedCompactions) : undefined;
     const archived = this.stateManager.readArchive(state.taskId, committed);
     this.restoreArchive(archived.messages);
     this.recoveryArchiveNotice = describeArchiveRead(archived);
-    const unsettled = this.settleUnrecordedToolCalls();
+    this.settleUnrecordedToolCalls();
     // Resumed work is the same unit: what compaction removed before the restart is still not in context.
     this.carriedRemovedObservations = unreacquiredRemovals(this.messages);
-    // Changes made before the restart are still unverified unless a verifier established them. A record without the
-    // obligation (written before it was recorded) cannot show that nothing changed: its writes in an interrupted turn
-    // are in neither its conversation nor its last turn. A tool that may have run without its outcome being recorded
-    // counts as a change unless it is known not to write.
-    const interruptedTool = state.currentOperation?.status === "interrupted" ? state.currentOperation.toolName : undefined;
-    const pending =
-      (state.unverifiedChangesPending ?? true) ||
-      [...unsettled, ...(interruptedTool ? [interruptedTool] : [])].some((tool) => this.mayWrite(tool));
+    // Durable task fields and the ordinary candidate hash are writable by the same local identity as candidate
+    // commands, so none can authenticate a clean verifier baseline across process recovery. Keep the verification
+    // obligation pending after every recovery. A workspace-discovered or generic operator-configured verifier cannot
+    // establish a pre-change state for the possibly modified workspace; resume stays unverified until a trusted
+    // baseline or a task-specific authenticated verifier mechanism is available.
+    const pending = true;
     this.hasPendingModifications = pending;
+    this.verificationBaselineInvalidated = pending;
+    if (pending) this.changeBaseline = null;
     this.verificationEvidence = undefined;
-    // An absent obligation already reads as pending and stays absent: the record remains recognizably one that did not
-    // track obligations (see the executor's restart and not-started checks).
-    if (pending && state.unverifiedChangesPending === false) this.persistProgress({ unverifiedChangesPending: true });
+    // Persist the fail-closed state. The recovery result separately retains whether the original
+    // record tracked obligations so the executor can still diagnose incomplete history accurately.
+    // Keep the original baseline record for REQ-AGT-103 continuity, but keep it
+    // out of the active verifier path. It is mutable disk state and cannot prove
+    // verifier independence after recovery.
+    this.persistProgress({ unverifiedChangesPending: true });
 
     if (state.worktreeBinding && recoveryResult.worktreeStatus === "consistent") {
       this.activeWorktree = {
@@ -1334,6 +1471,14 @@ export class AutonomousAgent {
 
   public getCapabilityRegistry(): CapabilityRegistry {
     return this.capabilityRegistry;
+  }
+
+  public setSurface(surface: string): void {
+    this.surface = surface;
+  }
+
+  public getSurface(): string {
+    return this.surface;
   }
 
   public async initExtensibility(): Promise<void> {
@@ -1378,6 +1523,7 @@ export class AutonomousAgent {
 
   public enableFlightRecorder(flightId?: string): FlightRecorder {
     this.flightRecorder = new FlightRecorder(this.config.workspace, flightId);
+    this.pluginManager.setFlightRecorder(this.flightRecorder);
     return this.flightRecorder;
   }
 
@@ -1492,18 +1638,24 @@ export class AutonomousAgent {
       return !group || this.enabledToolGroups.has(group);
     });
     const allEnabled = Object.keys(TOOL_GROUPS).every((group) => this.enabledToolGroups.has(group));
-    return [
+    let tools = [
       ...offered,
       ...(allEnabled ? [] : [ENABLE_TOOLS_CAPABILITY.toolDefinition as ToolDefinition]),
       // Only with an objective ledger: without one update_requirements returns nothing and read_objective has nothing to
       // read, but offered anyway the model spent a step on each (eval debug-logs trace).
-      ...(this.depth === 0 && this.objective ? [READ_OBJECTIVE_CAPABILITY.toolDefinition as ToolDefinition] : []),
-      ...(this.depth === 0 && this.objective?.requirements.length ? [REQUIREMENTS_CAPABILITY.toolDefinition as ToolDefinition] : []),
+      ...((this.depth === 0 || this.role === "implementer" || this.role === "tester") && this.objective ? [READ_OBJECTIVE_CAPABILITY.toolDefinition as ToolDefinition] : []),
+      ...((this.depth === 0 || this.role === "implementer" || this.role === "tester") && this.objective?.requirements.length ? [REQUIREMENTS_CAPABILITY.toolDefinition as ToolDefinition] : []),
       READ_FINDINGS_CAPABILITY.toolDefinition as ToolDefinition,
       READ_ARCHIVE_CAPABILITY.toolDefinition as ToolDefinition,
       ...this.mcpManager.getToolDefinitions(),
       ...this.pluginManager.getCustomToolDefinitions(),
     ];
+    if (this.role && isReadOnlyRole(this.role)) {
+      const allowed = new Set(ROLE_PROFILES[this.role]?.recommendedTools || []);
+      allowed.add("task_completed");
+      tools = tools.filter((t) => allowed.has(t.function.name));
+    }
+    return tools;
   }
 
   public getMessages(): ChatMessage[] {
@@ -1547,6 +1699,8 @@ export class AutonomousAgent {
   }
 
   public restoreSession(msgs: ChatMessage[], unverifiedChangesPending?: boolean, objective?: ObjectiveLedger | null, findings?: readonly string[] | null): void {
+    this.approvedEgressOrigins.clear();
+    this.approvedVerifiers.clear();
     this.messages = [...msgs];
     this.restoreFindings(findings);
     this.objective = objective ?? undefined;
@@ -1555,10 +1709,19 @@ export class AutonomousAgent {
       // to the model as still pending and applied at the first step of the next turn.
       this.objective.continuation = { ...this.objective.continuation, segments: 1, lastProgressStep: 0 };
     }
-    const unsettled = this.settleUnrecordedToolCalls();
-    const pending = (unverifiedChangesPending ?? true) || unsettled.some((tool) => this.mayWrite(tool));
-    if (pending) this.verificationEvidence = undefined;
-    this.setUnverifiedChanges(this.hasPendingModifications || pending);
+    this.settleUnrecordedToolCalls();
+    // Session files are writable by the same local identity that can run candidate
+    // commands. Their pending flag and any verifier snapshot cannot authenticate
+    // that the workspace remained unchanged since the session was saved. Treat
+    // every restored session as requiring verification and prevent a discovered
+    // verifier from taking a new baseline over the potentially modified workspace.
+    // The argument is retained for compatibility with older session records, but
+    // is deliberately not an authority signal.
+    void unverifiedChangesPending;
+    this.changeBaseline = null;
+    this.verificationBaselineInvalidated = true;
+    this.verificationEvidence = undefined;
+    this.setUnverifiedChanges(true);
   }
 
   /**
@@ -1569,6 +1732,7 @@ export class AutonomousAgent {
     this.resetConversation();
     this.carriedRemovedObservations = new Set();
     if (priorChangesUnknown) {
+      this.verificationBaselineInvalidated = true;
       this.verificationEvidence = undefined;
       this.setUnverifiedChanges(true);
     }
@@ -1594,35 +1758,109 @@ export class AutonomousAgent {
    * Durable progress within a turn. A failed write is tolerated here: the turn-end checkpoint writes the same state,
    * and an operation whose result never reached the durable conversation is detected on recovery.
    */
+  private async ensureVerifierApproved(command: string, confirmHandler?: ConfirmHandler): Promise<boolean> {
+    const isTrusted = isWorkspaceTrusted(this.config.workspace, Boolean(this.config.readOnly));
+    const mode = this.config.approvalMode ?? (this.config.readOnly ? "read-only" : (this.config.fullAccess ? "auto" : (isTrusted ? "auto" : "review")));
+    const policyContext: PolicyContext = {
+      mode,
+      trusted: isTrusted,
+      sandbox: this.config.sandbox,
+      approvedEgressOrigins: this.approvedEgressOrigins,
+      fullAccess: Boolean(this.config.fullAccess),
+    };
+
+    if (!this.approvalPolicy.requiresDecision("exec", policyContext)) {
+      return true;
+    }
+
+    const desc = describeVerifier(this.config.workspace, command);
+    const verifierCmd = desc?.command || command;
+    const digest = desc?.digest || createHash("sha256").update(verifierCmd).digest("hex");
+    const cacheKey = `${this.config.workspace}:${verifierCmd}:${digest}`;
+
+    if (this.approvedVerifiers.has(cacheKey)) {
+      return true;
+    }
+
+    const onConfirm = confirmHandler ?? this.activeTurn?.onConfirm;
+    if (!onConfirm) {
+      return false;
+    }
+
+    const approved = await onConfirm("verifier", {
+      command: verifierCmd,
+      script: desc?.script,
+      detail: desc?.evidence,
+      digest,
+    });
+
+    if (approved) {
+      this.approvedVerifiers.add(cacheKey);
+      return true;
+    }
+    return false;
+  }
+
   /**
-   * Before the first file edit of an unverified change: the discovered verifier's result and the test files as they
-   * are, so a later pass can be judged fail-before / pass-after. Skipped when the operator configured a verifier (their
-   * check decides), in dry-run and read-only modes, and when no verifier is discovered.
+   * Before the first file edit of an unverified change, capture the verifier definition, operator-declared scope and
+   * test files. A discovered verifier also runs before the edit so independence can be judged fail-before/pass-after;
+   * a configured verifier is an operator check and needs the immutable binding snapshot, but not a pre-change run.
    */
-  private async captureChangeBaseline(): Promise<void> {
-    if (this.changeBaseline !== undefined || this.config.dryRun || this.config.readOnly || this.config.authoritativeVerifierCommand?.trim()) return;
-    const command = discoverVerifier(this.config.workspace)?.command;
+  private async captureChangeBaseline(confirmHandler?: ConfirmHandler): Promise<void> {
+    // A new conversation does not make candidate writes from an interrupted or
+    // resumed task trustworthy. Do not establish a discovered-verifier baseline
+    // from a workspace that still carries an unverified-change obligation.
+    if (this.hasPendingModifications || this.verificationBaselineInvalidated || this.changeBaseline !== undefined || this.config.dryRun || this.config.readOnly) return;
+    const configured = this.config.authoritativeVerifierCommand?.trim();
+    const command = configured || discoverVerifier(this.config.workspace)?.command;
     if (!command) {
       this.changeBaseline = null;
       return;
     }
     try {
       const tests = snapshotTests(this.config.workspace);
+      const trustedDeliverables = [...(this.config.trustedDeliverableFiles ?? [])];
+      const verifier = snapshotVerifierDefinition(this.config.workspace, command, trustedDeliverables);
+      if (configured) {
+        this.changeBaseline = { command, failed: false, tests, verifier, trustedDeliverables, at: new Date().toISOString() };
+        if (this.durable) {
+          try {
+            this.checkpointDurableState("configured verifier baseline captured");
+          } catch (err: any) {
+            this.reportPersistenceFailure("baseline", err);
+          }
+        }
+        return;
+      }
+      const approved = await this.ensureVerifierApproved(command, confirmHandler);
+      if (!approved) {
+        this.changeBaseline = null;
+        return;
+      }
       this.activity("verifying", { tool: `${command} (before the change)` });
       const deadlineSecs = this.config.verifierTimeoutSecs ?? DEFAULT_VERIFIER_TIMEOUT_SECS;
       const run = await runTestSuiteWithExecutor(this.config.workspace, (c) => this.bridge.executeTool("run_command", { command: c, timeout_secs: deadlineSecs }), command);
-      this.changeBaseline = { command, failed: !run.success, tests, at: new Date().toISOString() };
+      this.changeBaseline = { command, failed: !run.success, tests, verifier, trustedDeliverables, at: new Date().toISOString() };
+      if (this.durable) {
+        try {
+          this.checkpointDurableState("baseline captured");
+        } catch (err: any) {
+          this.reportPersistenceFailure("baseline", err);
+        }
+      }
     } catch {
       this.changeBaseline = null;
     }
   }
 
   /** Whether a passing, covering run of the discovered `command` is independent evidence of the change. */
-  private async judgeIndependence(command: string, deadlineSecs: number): Promise<Independence> {
+  private async judgeIndependence(command: string, deadlineSecs: number, confirmHandler?: ConfirmHandler): Promise<Independence> {
     const judged = judgeWithoutCopy(this.config.workspace, command, this.changeBaseline);
     if (judged !== "needs-copy") return judged;
+    const approved = await this.ensureVerifierApproved(command, confirmHandler);
+    if (!approved) return { independent: false, detail: "verifier execution was not approved" };
     // Nexus edited test files: run the tests as they were before the change against the changed code.
-    const dir = prepareBaselineTestsCopy(this.config.workspace, this.changeBaseline!.tests!);
+    const dir = prepareBaselineTestsCopy(this.config.workspace, this.changeBaseline!.tests!, this.changeBaseline!.verifier!);
     if (!dir) return { independent: false, detail: "the workspace is too large to rerun the pre-change tests without Nexus's own test edits" };
     try {
       this.activity("verifying", { tool: `${command} (tests as they were before the change)` });
@@ -1636,13 +1874,43 @@ export class AutonomousAgent {
     }
   }
 
-  private persistProgress(progress: { messages?: boolean; unverifiedChangesPending?: boolean }): void {
+  private persistProgress(progress: { messages?: boolean; unverifiedChangesPending?: boolean; changeBaseline?: ChangeBaseline | null }): void {
+    if (!this.durable) return;
     try {
       if (this.stateManager && !this.stateManager.hasTaskState(this.currentTaskId)) this.checkpointDurableState();
       else this.stateManager?.recordProgress(this.currentTaskId, {
         // The ledger travels with the conversation: steering applied as a message is also a ledger record.
-        ...(progress.messages ? { messages: this.messages, findings: this.getFindings(), objective: this.objective ?? null, unverifiedChangesPending: this.hasPendingModifications } : {}),
+        ...(progress.messages ? {
+          messages: this.messages,
+          findings: this.getFindings(),
+          objective: this.objective ?? null,
+          unverifiedChangesPending: this.hasPendingModifications,
+          changeBaseline: this.changeBaseline
+            ? {
+                command: this.changeBaseline.command,
+                failed: this.changeBaseline.failed,
+                tests: this.changeBaseline.tests ? Object.fromEntries(this.changeBaseline.tests) : null,
+                verifier: this.changeBaseline.verifier ? Object.fromEntries(this.changeBaseline.verifier) : null,
+                trustedDeliverables: this.changeBaseline.trustedDeliverables,
+                at: this.changeBaseline.at,
+              }
+            : (this.changeBaseline === null
+              ? this.untrustedRecoveredBaseline ?? null
+              : this.untrustedRecoveredBaseline ?? undefined),
+        } : {}),
         ...(progress.unverifiedChangesPending !== undefined ? { unverifiedChangesPending: progress.unverifiedChangesPending } : {}),
+        ...(progress.changeBaseline !== undefined ? {
+          changeBaseline: progress.changeBaseline
+            ? {
+                command: progress.changeBaseline.command,
+                failed: progress.changeBaseline.failed,
+                tests: progress.changeBaseline.tests ? Object.fromEntries(progress.changeBaseline.tests) : null,
+                verifier: progress.changeBaseline.verifier ? Object.fromEntries(progress.changeBaseline.verifier) : null,
+                trustedDeliverables: progress.changeBaseline.trustedDeliverables,
+                at: progress.changeBaseline.at,
+              }
+            : null,
+        } : {}),
       });
       this.progressSaveFailing = false;
     } catch (err: any) {
@@ -1669,6 +1937,30 @@ export class AutonomousAgent {
         else console.warn(pc.yellow(text));
       }
     }
+  }
+
+  /**
+   * Routes all durable-write failures (op start/end, baseline, plan, requirements, recovery)
+   * through one path (AGT-14). Warns and records the failure in `turnPersistenceFailures`.
+   */
+  public reportPersistenceFailure(kind: string, err: unknown): void {
+    const message = redactSecrets(err instanceof Error ? err.message : String(err)).slice(0, 200);
+    let text: string;
+    if (kind === "operation_start" || kind === "operation_end") {
+      text = `Tool operation record (${kind}) could not be written durably (${message}); crash recovery degraded.`;
+    } else if (kind === "init") {
+      text = `Initial durable task state was not persisted (${message}); restart recovery is unavailable until a later successful checkpoint.`;
+      this.initialStatePersistenceFailure = text;
+    } else if (kind === "final_checkpoint") {
+      text = `The turn's final task state could not be saved: ${message}`;
+    } else {
+      text = `Durable checkpoint (${kind}) could not be saved (${message}); if the process stops, state since last save may be lost.`;
+    }
+    this.turnPersistenceFailures.push(text);
+    try {
+      if (this.observer?.onNotice) this.observer.onNotice(text);
+      else console.warn(pc.yellow(text));
+    } catch {}
   }
 
   /**
@@ -1708,7 +2000,23 @@ export class AutonomousAgent {
   }
 
   public resetConversation(): void {
-    this.changeBaseline = undefined;
+    this.approvedEgressOrigins.clear();
+    this.approvedVerifiers.clear();
+    // A conversation reset in this process is not a durable recovery boundary. Keep
+    // the already captured baseline so a follow-up turn can verify the same pending
+    // workspace changes. Disk/session recovery explicitly clears this authority in
+    // recoverFromTaskState() and restoreSession(). If pending work has no trusted
+    // baseline, keep it fail-closed instead of capturing one retroactively.
+    let workspaceIdentityIsCurrent = true;
+    try {
+      this.workspacePathIdentity.assertCurrent();
+    } catch {
+      workspaceIdentityIsCurrent = false;
+    }
+    if (!workspaceIdentityIsCurrent) this.invalidateVerificationBaseline();
+    const hasTrustedInMemoryBaseline = workspaceIdentityIsCurrent && this.changeBaseline !== undefined && !this.verificationBaselineInvalidated;
+    if (!hasTrustedInMemoryBaseline) this.changeBaseline = undefined;
+    this.verificationBaselineInvalidated = this.verificationBaselineInvalidated || (this.hasPendingModifications && !hasTrustedInMemoryBaseline);
     this.enabledToolGroups = new Set();
     this.stepNoticeStep = 0;
     this.cutResponse = undefined;
@@ -1725,6 +2033,13 @@ export class AutonomousAgent {
       },
     ];
     this.restoreFindings(undefined);
+  }
+
+  /** Invalidate an in-memory baseline when its workspace or command boundary changes. */
+  private invalidateVerificationBaseline(): void {
+    this.changeBaseline = this.hasPendingModifications ? null : undefined;
+    this.verificationBaselineInvalidated = this.hasPendingModifications;
+    if (this.hasPendingModifications) this.verificationEvidence = undefined;
   }
 
   public getHistoryCount(): number {
@@ -1758,9 +2073,28 @@ export class AutonomousAgent {
     if (this.activeWorktree && !this.managedWorktreeWorkspaceSwitch) {
       throw new Error("Cannot switch workspaces while a speculative worktree is unresolved; merge or discard it first.");
     }
+    const selectedWorkspace = WorkspacePath.fromSelectedWorkspace(path.resolve(newWorkspace));
+    let currentWorkspaceIdentityIsValid = true;
+    try {
+      this.workspacePathIdentity.assertCurrent();
+    } catch {
+      currentWorkspaceIdentityIsValid = false;
+    }
+    if (!currentWorkspaceIdentityIsValid || selectedWorkspace.value !== this.workspacePathIdentity.value) {
+      this.invalidateVerificationBaseline();
+    }
+    if (selectedWorkspace.value === this.primaryWorkspacePathIdentity.value) {
+      try {
+        this.primaryWorkspacePathIdentity.assertCurrent();
+      } catch {
+        // Explicitly selecting the replacement rebinds persistence to the live directory,
+        // but the verifier baseline stays invalidated by the identity check above.
+        this.primaryWorkspacePathIdentity = selectedWorkspace;
+      }
+    }
     this.bridge.shutdown();
     this.mcpManager.shutdownAll();
-    this.workspacePathIdentity = WorkspacePath.fromSelectedWorkspace(path.resolve(newWorkspace));
+    this.workspacePathIdentity = selectedWorkspace;
     this.stateManager.setWorkspacePaths(
       this.workspacePathIdentity.value === this.primaryWorkspacePathIdentity.value
         ? [this.primaryWorkspacePathIdentity]
@@ -1786,13 +2120,15 @@ export class AutonomousAgent {
     this.hybridSearch = new HybridSearchEngine(newWorkspace, this.client);
     this.synthesizer = new SynthesizerEngine(newWorkspace, (command) => this.bridge.executeTool("run_command", { command, timeout_secs: 120 }));
     this.browser = new BrowserDriver(newWorkspace);
-    this.knowledge = new KnowledgeGraph(newWorkspace);
+    this.knowledge = new KnowledgeGraph(newWorkspace, { readOnly: this.config.readOnly });
+    this.skillManager.setWorkspace(newWorkspace, { readOnly: this.config.readOnly });
     this.extensibilityInitialized = false;
     this.setupSpineHandlers();
     this.resetConversation();
   }
 
   public setShell(newShell: string): void {
+    if (newShell !== this.config.shell) this.invalidateVerificationBaseline();
     this.bridge.shutdown();
     this.config.shell = newShell;
     this.bridge = new RustCoreBridge(
@@ -1879,7 +2215,7 @@ export class AutonomousAgent {
   /** What `prompt` would do to the tracked objective if submitted now (for the host's notice before the turn). */
   public objectiveDecision(prompt: string): { kind: "new" | "amend"; unresolved: number } {
     const ledger = this.objective;
-    if (this.depth > 0 || !ledger || isNewObjective(ledger, prompt)) return { kind: "new", unresolved: 0 };
+    if (!this.durable || !ledger || isNewObjective(ledger, prompt)) return { kind: "new", unresolved: 0 };
     return { kind: "amend", unresolved: gatingRequirements(ledger).filter((r) => !requirementDone(r)).length };
   }
 
@@ -1986,7 +2322,7 @@ export class AutonomousAgent {
    */
   private requestMessages(messages: ChatMessage[] = this.messages): ChatMessage[] {
     const ledger = this.objective;
-    if (!ledger || this.depth > 0 || messages.length === 0) return messages;
+    if (!ledger || !this.durable || messages.length === 0) return messages;
     const inContext = this.objectiveInContext(messages);
     if (!ledgerNeedsPinning(ledger, inContext)) return messages;
     // A quarter of the context window (≈4 characters per token) for the objective when it must be carried in full.
@@ -2245,12 +2581,17 @@ export class AutonomousAgent {
       const caps = this.capabilities;
       let count: RequestCount | undefined;
       let unmeasured: string | undefined;
-      if (!caps?.advertised?.tokenize) {
+      const canTokenize = Boolean(
+        caps?.advertised?.tokenize ||
+        caps?.advertised?.via === "llamacpp" ||
+        caps?.advertised?.via === "vllm"
+      );
+      if (!canTokenize) {
         unmeasured = caps?.discovery === "unavailable" ? `capability discovery unavailable (${caps.discoveryDetail ?? "no detail"})` : "the connection advertises no request counting";
       } else if (this.tokenCountingState === "unavailable" && Date.now() < this.tokenCountingCooldownUntil) {
         unmeasured = `request counting unavailable (${this.tokenCountingDetail ?? "no detail"})`;
       } else if (this.tokenCountingState === "unsupported") {
-        unmeasured = `request counting unsupported (${this.tokenCountingDetail ?? "no detail"})`;
+        unmeasured = !caps?.advertised?.tokenize ? "the connection advertises no request counting" : `request counting unsupported (${this.tokenCountingDetail ?? "no detail"})`;
       } else {
         try {
           count = await client.countRequestTokens(messages, tools, requestId, signal);
@@ -2265,9 +2606,13 @@ export class AutonomousAgent {
           this.tokenCountingCooldownUntil = Date.now() + TOKEN_COUNT_COOLDOWN_MS;
           if (caps) {
             caps.tokenCounting = this.tokenCountingState;
-            caps.tokenCountingDetail = this.tokenCountingDetail;
+            if (caps.advertised?.tokenize || kind !== "unsupported") {
+              caps.tokenCountingDetail = this.tokenCountingDetail;
+            }
           }
-          unmeasured = `request counting ${this.tokenCountingDetail}`;
+          unmeasured = !caps?.advertised?.tokenize && kind === "unsupported"
+            ? "the connection advertises no request counting"
+            : `request counting ${this.tokenCountingDetail}`;
         }
       }
       const source: CountSource = count?.source ?? "client_estimate";
@@ -2860,9 +3205,13 @@ export class AutonomousAgent {
       try {
         const res = await client.chatCompletion(prompt, [], randomUUID(), signal);
         text = typeof res.content === "string" ? res.content.trim() : "";
-        this.totalTokens.prompt += calculateContextBudget(prompt, [], contextLimit).totalActiveTokens;
-        this.totalTokens.completion += countTokens(text);
+        const reported = client.getProviderId?.() ? client.getLastUsage?.() : undefined;
+        this.totalTokens.prompt += reported?.inputTokens ?? calculateContextBudget(prompt, [], contextLimit).totalActiveTokens;
+        this.totalTokens.completion += reported?.outputTokens ?? countTokens(text);
         this.totalTokens.total = this.totalTokens.prompt + this.totalTokens.completion;
+        this.totalTokens.requests++;
+        if (reported?.inputTokens !== undefined) this.totalTokens.reportedRequests++;
+        else this.totalTokens.estimatedRequests++;
       } catch {
         text = "";
       }
@@ -2966,7 +3315,7 @@ export class AutonomousAgent {
     const maxCompactionAttempts = 5;
     // Anti-thrashing across steps: after consecutive pressure compactions that each freed little (see
     // ExecutionTracker.compaction), compact only when the request would not fit, not on pressure alone.
-    const lowYieldRun = this.depth === 0 && this.objective?.execution ? this.objective.execution.lowYieldCompactions : 0;
+    const lowYieldRun = this.durable && this.objective?.execution ? this.objective.execution.lowYieldCompactions : 0;
     const pressureCompactionAllowed = lowYieldRun < LOW_YIELD_COMPACTIONS_BEFORE_HOLD;
     const removedNow: string[] = [];
     // Anti-thrashing: only re-compact when the previous ladder pass actually shrank the
@@ -3075,10 +3424,10 @@ export class AutonomousAgent {
     const kept = new Set(compacted);
     const replaced = original.filter((message, index) => index > 0 && !kept.has(message) && message.role !== "system");
     const id = `c${this.compactions + 1}-${randomUUID().slice(0, 8)}`;
-    const tracker = this.depth === 0 && this.objective ? trackingOf(this.objective) : undefined;
+    const tracker = this.durable && this.objective ? trackingOf(this.objective) : undefined;
     const window = this.contextLimit();
     const records: CompactionOutcome["records"] = {};
-    const durableUnit = this.depth === 0;
+    const durableUnit = this.durable;
     const outcome = (durable: boolean, message: string): CompactionOutcome => ({
       id, trigger: meta.trigger, durable, archived: replaced.length, beforeTokens: meta.beforeTokens, afterTokens: meta.afterTokens, records, message,
     });
@@ -3303,13 +3652,15 @@ export class AutonomousAgent {
 
     // Invariant prompt prefix optimization for local AI:
     // Fixed canonical few-shots ensure byte-exact prefix caching across turns (vLLM / llama.cpp / Ollama)
-    const fewShotSection = `\n${selectRelevantFewShots(this.config.workspace)}\n`;
+    const nativeTools = this.client?.supportsNativeTools?.() ?? true;
+    const fewShotSection = `\n${selectRelevantFewShots(this.config.workspace, 2, { nativeTools })}\n`;
     const tddSection = this.config.tdd
       ? `\n### Test-Driven Development (RED-GREEN-REFACTOR) Protocol Enforced:
 1. PHASE 1 (RED): Before modifying any production code, author a reproduction test that asserts the desired behavior and verify that it FAILS.
 2. PHASE 2 (GREEN): Make surgical edits to production files until the reproduction test PASSES.
 3. PHASE 3 (REFACTOR): Run the complete test suite to ensure zero regressions before completing the task.\n`
       : "";
+    const roleSection = this.role && ROLE_PROFILES[this.role] ? `\n${ROLE_PROFILES[this.role].systemPromptAddendum}\n` : "";
 
     // The test command Nexus will verify with, so the model runs that rather than guessing (a wrong guess costs a step).
     const verifierCommand = this.config.authoritativeVerifierCommand?.trim() || discoverVerifier(this.config.workspace)?.command;
@@ -3327,7 +3678,7 @@ You solve coding problems, build features, fix bugs, and refactor codebases by i
 6. SELF-CORRECTION: If a command or tool returns an error, analyze the error message, identify the root cause, and fix it.
 7. AUTONOMOUS COMPLETION: Keep executing tools until the entire task is thoroughly resolved. When everything is verified and done, invoke \`task_completed\` with a short summary of what changed and how it was checked.
 8. BOUNDED CONTEXT: Your context window is limited, and earlier tool output is compacted out of the conversation as you work; your own messages are what carry forward. After inspecting large output you will rely on later, state its key findings in a line or two (with file and symbol references) before moving on; do not restate small files or narrate routine steps. Re-read earlier output only when you need a specific detail you did not record or it may have changed.
-${fewShotSection}${tddSection}
+${fewShotSection}${tddSection}${roleSection}
 Always explain your reasoning before or alongside your tool calls.
 
 ### Shell Environment:
@@ -3360,7 +3711,7 @@ The pinned Objective Ledger lists the operator's requirements; your plan never r
       }
 
       // The operator's acceptance requirements gate completion; a coarse completed plan does not.
-      if (this.objective && this.depth === 0) {
+      if (this.objective && (this.depth === 0 || this.role === "implementer" || this.role === "tester")) {
         const open = openRequirements(this.objective);
         const blocked = blockedRequirements(this.objective);
         if (open.length || blocked.length) {
@@ -3383,6 +3734,8 @@ The pinned Objective Ledger lists the operator's requirements; your plan never r
         ? this.worktreeManager.hasChanges(this.activeWorktree.taskId)
         : false;
       let verifierSucceeded = false;
+      let hasExecuted = false;
+      let isDeliverableBound = false;
       let noApplicableVerifier = false;
 
       // An operator-configured verifier gates every completion, not only one that follows changes.
@@ -3408,6 +3761,44 @@ The pinned Objective Ledger lists the operator's requirements; your plan never r
               candidateId = this.candidateTracker.computeCandidateIdentitySync(this.config.workspace).candidateId;
             } catch {}
             const current = candidateId ? { inputs: candidateId, epoch: this.epoch, mutationSeq: this.mutationSeq, external: externalInputsFingerprint(this.config.workspace) } : undefined;
+            const bindsWorkspaceDefinition =
+              source === "discovered" ||
+              requiresWorkspaceVerifierDefinitionBinding(verifierCommand);
+            const matchingBaseline =
+              this.changeBaseline?.command === verifierCommand;
+            const verifierDefinitionChanged =
+              matchingBaseline &&
+              verifierDefinitionChangedSince(
+                this.config.workspace,
+                this.changeBaseline!,
+              );
+            if (
+              bindsWorkspaceDefinition &&
+              (!matchingBaseline || verifierDefinitionChanged)
+            ) {
+              const detail = !matchingBaseline
+              ? "The workspace-resolved verifier has no matching pre-change baseline. Its current output cannot establish verification; start a fresh task from an operator-reviewed trusted workspace baseline."
+                : this.changeBaseline?.verifier
+                  ? "The workspace-resolved verifier definition changed after its baseline. Restore it or start a fresh task from a trusted baseline; its output cannot establish verification."
+                  : "The workspace-resolved verifier definition was not captured before this work. Its current output cannot establish verification; start a fresh task from an operator-reviewed trusted workspace baseline.";
+              this.verificationEvidence = {
+                status: "FAILED",
+                command: verifierCommand,
+                source,
+                exitSuccess: false,
+                hasExecutedTests: false,
+                isDeliverableBound: false,
+                independent: false,
+                independenceDetail: detail,
+                candidateId,
+                at: new Date().toISOString(),
+              };
+              return {
+                success: false,
+                output: "",
+                error: detail,
+              };
+            }
             const prior = this.objective && current ? priorAttempt(this.objective, verifierCommand, current) : undefined;
             if (prior && (prior.status === "FAILED" || prior.status === "TIMED_OUT") && this.objective && current) {
               recordAttempt(this.objective, { command: verifierCommand, ...current, status: "SKIPPED_UNCHANGED_INPUTS", ...(prior.failedCheck ? { failedCheck: prior.failedCheck } : {}) });
@@ -3426,6 +3817,29 @@ The pinned Objective Ledger lists the operator's requirements; your plan never r
                   `and end with a final message stating what remains and the next action.`,
               };
             }
+            // Gate verifier execution through approval policy
+            const onConfirm = this.activeTurn?.onConfirm;
+            const approved = await this.ensureVerifierApproved(verifierCommand, onConfirm);
+            if (!approved) {
+              const isTrusted = isWorkspaceTrusted(this.config.workspace, Boolean(this.config.readOnly));
+              const mode = this.config.approvalMode ?? (this.config.readOnly ? "read-only" : (this.config.fullAccess ? "auto" : (isTrusted ? "auto" : "review")));
+              const policyContext: PolicyContext = {
+                mode,
+                trusted: isTrusted,
+                sandbox: this.config.sandbox,
+                approvedEgressOrigins: this.approvedEgressOrigins,
+                fullAccess: Boolean(this.config.fullAccess),
+              };
+              const error = (!onConfirm && this.approvalPolicy.requiresDecision("exec", policyContext))
+                ? `Error: Verifier '${verifierCommand}' requires operator approval (exec), but no operator is present (headless execution). Run with --yes or --mode auto, or 'nexus trust .' to trust this workspace.`
+                : `Verification Oracle: verifier execution was not approved by operator (${verifierCommand}).`;
+              return {
+                success: false,
+                output: "",
+                error,
+              };
+            }
+
             // The oracle owns the verifier's deadline (never an incidental bridge default); the runner enforces it.
             const deadlineSecs = this.config.verifierTimeoutSecs ?? DEFAULT_VERIFIER_TIMEOUT_SECS;
             this.activity("verifying", { tool: verifierCommand });
@@ -3436,20 +3850,32 @@ The pinned Objective Ledger lists the operator's requirements; your plan never r
             );
             // Configured or discovered, a verifier is evidence about the change only when its run shows tests that
             // executed and cover the changed files.
-            const isDeliverableBound = isVerifierDeliverableBound(
+            hasExecuted = hasExecutedTests(testRes.rawOutput || "");
+            const baselineTests = this.changeBaseline?.tests;
+            const baselineTestsChanged = !baselineTests || testsChangedSince(this.config.workspace, baselineTests);
+            // A generic current-invocation verifier cannot authenticate recovered scope or its
+            // candidate-controlled tests. Only a verifier definition and test snapshot captured
+            // before the current task's edits can bind workspace changes.
+            const configuredTestsStable = source !== "configured" || !baselineTestsChanged;
+            isDeliverableBound = (!this.verificationBaselineInvalidated && hasExecuted && configuredTestsStable && isVerifierDeliverableBound(
               this.config.workspace,
               Array.from(this.modifiedFiles),
               verifierCommand,
-              testRes.rawOutput || ""
-            );
+              testRes.rawOutput || "",
+              this.changeBaseline?.trustedDeliverables?.length
+                ? trustedDeliverablesFromBaseline(this.changeBaseline)
+                : new Set(this.config.trustedDeliverableFiles ?? []),
+              baselineTests ?? undefined,
+            ));
             // A discovered verifier's pass makes the change VERIFIED only on independent evidence (fail-before /
             // pass-after on tests the change did not write); the operator's configured verifier is their own check.
-            const independence = source === "discovered" && testRes.success && isDeliverableBound ? await this.judgeIndependence(verifierCommand, deadlineSecs) : undefined;
+            const independence = source === "discovered" && testRes.success && isDeliverableBound ? await this.judgeIndependence(verifierCommand, deadlineSecs, onConfirm) : undefined;
             const evidence: VerificationEvidence = {
               status: testRes.success ? "PASSED" : testRes.timedOut ? "TIMED_OUT" : "FAILED",
               command: verifierCommand,
               source,
               exitSuccess: testRes.success,
+              hasExecutedTests: hasExecuted,
               isDeliverableBound,
               ...(independence ? { independent: independence.independent, independenceDetail: independence.detail } : {}),
               ...(testRes.timedOut ? { deadlineSecs } : {}),
@@ -3511,9 +3937,15 @@ The pinned Objective Ledger lists the operator's requirements; your plan never r
       }
 
       // The obligation is discharged only by a passing run of the selected verifier (never by command text).
-      if (!noApplicableVerifier) this.setUnverifiedChanges(false);
+      // Zero executed tests does not discharge the obligation.
+      if (!noApplicableVerifier && hasExecuted && verifierSucceeded && isDeliverableBound) {
+        // With the latch set, no generic verifier can authenticate the recovered workspace or its oracle.
+        // A trusted pre-change baseline must be established by a fresh task or a future authenticated verifier.
+        if (this.verificationBaselineInvalidated) this.verificationBaselineInvalidated = false;
+        this.setUnverifiedChanges(false);
+      }
       // Files a passing run covered are verified; ones it did not cover stay for a later run to cover.
-      if (verifierSucceeded && this.verificationEvidence?.isDeliverableBound) {
+      if (verifierSucceeded && hasExecuted && this.verificationEvidence?.isDeliverableBound) {
         this.modifiedFiles.clear();
         this.changeBaseline = undefined;
       }
@@ -3542,14 +3974,16 @@ The pinned Objective Ledger lists the operator's requirements; your plan never r
               materialDependencies: [],
             });
             this.verifiedWorktreeCompletion = true;
-            if (this.stateManager && this.currentTaskId) {
+            if (this.durable && this.stateManager && this.currentTaskId) {
               try {
                 this.stateManager.recordCandidateAndReceipt(this.currentTaskId, {
                   candidateId: candidateIdentity.candidateId,
                   candidateIdentity,
                   receipt: this.activeValidationReceipt,
                 });
-              } catch {}
+              } catch (err: any) {
+                this.reportPersistenceFailure("candidate_receipt", err);
+              }
             }
           } catch {
             this.verifiedWorktreeCompletion = false;
@@ -3604,17 +4038,10 @@ The pinned Objective Ledger lists the operator's requirements; your plan never r
         subagent = new AutonomousAgent(
           subagentConfig,
           this.depth + 1,
-          inheritedWorktreeScope
+          inheritedWorktreeScope,
+          { durable: false }
         );
         const subResult = await subagent.runSubagent(subPrompt, this.activeTurn?.onConfirm, this.activeTurn?.controller.signal);
-        if (subagent.turnMutations > 0 || subagent.turnCarriedChanges) {
-          this.turnMutations += subagent.turnMutations;
-          this.mutationSeq += subagent.mutationSeq;
-          this.hasPendingModifications = true;
-          if (this.objective) {
-            invalidateVerified(this.objective, `subagent changed workspace`);
-          }
-        }
         this.ui.stopSpinner(subResult.completed);
         if (!subResult.completed) {
           return { success: false, output: subResult.summary, error: `Subagent did not complete: ${subResult.reason}` };
@@ -3632,14 +4059,28 @@ The pinned Objective Ledger lists the operator's requirements; your plan never r
           error: `Subagent failed with error: ${subErr.message}`,
         };
       } finally {
-        // The child's workspace changes are this turn's changes: the parent's own completion must verify them.
-        const childMutations = subagent?.turnMutations ?? 0;
-        if (childMutations > 0) {
-          this.setUnverifiedChanges(true);
-          this.verificationEvidence = undefined;
-          this.turnMutations += childMutations;
+        if (subagent) {
+          const subStats = subagent.getTokenStats();
+          this.totalTokens.prompt += subStats.prompt;
+          this.totalTokens.completion += subStats.completion;
+          this.totalTokens.total += subStats.total;
+          this.totalTokens.requests += subStats.requests;
+          this.totalTokens.reportedRequests += subStats.reportedRequests;
+          this.totalTokens.estimatedRequests += subStats.estimatedRequests;
+
+          // The child's workspace changes are this turn's changes: the parent's own completion must verify them.
+          const childMutations = subagent.turnMutations;
+          if (childMutations > 0 || subagent.turnCarriedChanges) {
+            this.mutationSeq += subagent.mutationSeq;
+            this.turnMutations += childMutations;
+            this.verificationEvidence = undefined;
+            if (this.objective) {
+              invalidateVerified(this.objective, `subagent changed workspace`);
+            }
+            this.setUnverifiedChanges(true);
+          }
+          subagent.shutdown();
         }
-        subagent?.shutdown();
       }
     });
 
@@ -3788,6 +4229,14 @@ The pinned Objective Ledger lists the operator's requirements; your plan never r
       const skillName = args.name;
       const skill = this.skillManager.getSkill(skillName);
       if (!skill) {
+        const untrusted = this.skillManager.getUntrustedSkill(skillName);
+        if (untrusted) {
+          return {
+            success: false,
+            output: "",
+            error: `Error: Skill '${skillName}' is in an untrusted workspace and cannot be activated. Run 'nexus trust .' to trust this workspace.`,
+          };
+        }
         const avail = this.skillManager.listSkills().map((s) => s.name).join(", ");
         return {
           success: false,
@@ -3798,7 +4247,7 @@ The pinned Objective Ledger lists the operator's requirements; your plan never r
       console.log(pc.green(`✔ Activated skill: ${pc.bold(skill.name)}`));
       return {
         success: true,
-        output: `[Activated Skill: ${skill.name}]\n\n${skill.content}`,
+        output: `[Activated Skill: ${skill.name}] [source: ${skill.path}] [trust: ${skill.trusted ? "trusted" : "untrusted"}]\n\n${skill.content}`,
       };
     });
 
@@ -3836,7 +4285,9 @@ The pinned Objective Ledger lists the operator's requirements; your plan never r
       if (result.changed) {
         try {
           this.checkpointDurableState("requirements updated");
-        } catch {}
+        } catch (err: any) {
+          this.reportPersistenceFailure("requirements", err);
+        }
       }
       const states = gatingRequirements(this.objective).map((r) => `${r.id}:${r.status}`);
       return {
@@ -3850,7 +4301,7 @@ The pinned Objective Ledger lists the operator's requirements; your plan never r
       const phases = Array.isArray(args.phases) ? args.phases : [];
       this.activePlan = phases;
       this.ui.renderPlan(this.activePlan);
-      if (this.stateManager && this.currentTaskId) {
+      if (this.durable && this.stateManager && this.currentTaskId) {
         try {
           this.checkpointDurableState();
           for (let i = 0; i < phases.length; i++) {
@@ -3863,7 +4314,9 @@ The pinned Objective Ledger lists the operator's requirements; your plan never r
               });
             }
           }
-        } catch {}
+        } catch (err: any) {
+          this.reportPersistenceFailure("plan", err);
+        }
       }
       return {
         success: true,
@@ -3885,6 +4338,7 @@ The pinned Objective Ledger lists the operator's requirements; your plan never r
   ): Promise<{ receipt: ExecutionReceipt; shouldExit: boolean }> {
     const toolName = call.function.name;
     let args: Record<string, any> = {};
+    let structurallyRepaired = (call as any).repaired === "structural";
 
     try {
       args =
@@ -3892,7 +4346,40 @@ The pinned Objective Ledger lists the operator's requirements; your plan never r
           ? JSON.parse(call.function.arguments)
           : call.function.arguments;
     } catch {
-      args = toolName === "task_completed" ? {} : { raw: call.function.arguments };
+      if (typeof call.function.arguments === "string") {
+        try {
+          const { value, repaired } = repairJsonWithClass(call.function.arguments);
+          if (repaired === "structural") structurallyRepaired = true;
+          args = value && typeof value === "object" ? value : { raw: call.function.arguments };
+        } catch {
+          structurallyRepaired = true;
+          args = toolName === "task_completed" ? {} : { raw: call.function.arguments };
+        }
+      } else {
+        args = toolName === "task_completed" ? {} : { raw: call.function.arguments };
+      }
+    }
+    if (structurallyRepaired && isWriteOrExecTool(toolName)) {
+      return {
+        receipt: {
+          invocationId: call.id,
+          taskId: this.activeWorktree?.taskId || this.currentTaskId,
+          actor,
+          executionDomain: actor === "subagent" ? "subagent" : "agent_orchestration",
+          capabilityId: this.capabilityRegistry.getByToolName(toolName)?.id || toolName,
+          toolName,
+          targetResources: [],
+          success: false,
+          output: "",
+          error: `Tool call "${toolName}" rejected: arguments required structural JSON repair (truncated or unclosed string/bracket). Re-issue the call with complete valid JSON arguments.`,
+          durationMs: 0,
+          candidateMutated: false,
+          status: "DENIED",
+          timestamp: new Date().toISOString(),
+          simulated: Boolean(this.config.dryRun),
+        },
+        shouldExit: false,
+      };
     }
 
     try {
@@ -3942,11 +4429,88 @@ The pinned Objective Ledger lists the operator's requirements; your plan never r
     this.activity("tool", { tool: toolName, ...(subject ? { subject } : {}) });
 
     const cap = this.capabilityRegistry.getByToolName(toolName);
-    const isMutating = cap ? cap.mutating : !READ_ONLY_TOOLS.has(toolName);
+    // Tools outside the registry (MCP servers, plugins) are treated as running code: review mode asks before them.
+    const effect: EffectClass = cap ? cap.effect : READ_ONLY_TOOLS.has(toolName) ? "read_workspace" : "exec";
+    const egressOrigin = effect === "egress" ? egressOriginOf(toolName, args) : undefined;
+    const isTrusted = isWorkspaceTrusted(this.config.workspace, Boolean(this.config.readOnly));
+    const mode = this.config.approvalMode ?? (this.config.readOnly ? "read-only" : (this.config.fullAccess ? "auto" : (isTrusted ? "auto" : "review")));
+    const policyContext: PolicyContext = {
+      mode,
+      trusted: isTrusted,
+      sandbox: this.config.sandbox,
+      approvedEgressOrigins: this.approvedEgressOrigins,
+      egressOrigin,
+      fullAccess: Boolean(this.config.fullAccess),
+    };
+    const askOperator = this.approvalPolicy.requiresDecision(effect, policyContext);
 
-    if (onConfirm && isMutating) {
+    if (toolName === "activate_skill") {
+      const skillName = args?.name;
+      if (skillName && this.skillManager.getUntrustedSkill(skillName)) {
+        const cancelMsg = `Error: Skill '${skillName}' is in an untrusted workspace and cannot be activated. Run 'nexus trust .' to trust this workspace.`;
+        const receipt: ExecutionReceipt = {
+          invocationId: call.id,
+          taskId: this.activeWorktree?.taskId || this.currentTaskId,
+          actor,
+          executionDomain: actor === "subagent" ? "subagent" : "agent_orchestration",
+          capabilityId: this.capabilityRegistry.getByToolName(toolName)?.id || "activate_skill",
+          toolName,
+          targetResources: extractTargetResources(toolName, args),
+          success: false,
+          output: "",
+          error: cancelMsg,
+          durationMs: 0,
+          candidateMutated: false,
+          status: "DENIED",
+          denialReason: "UNTRUSTED_WORKSPACE_SKILL",
+          timestamp: new Date().toISOString(),
+          simulated: Boolean(this.config.dryRun),
+        };
+        this.observer?.onToolEnd?.({ dispatch, callId: call.id, tool: toolName, success: false, output: "", error: cancelMsg });
+        return { receipt, shouldExit: false };
+      }
+    }
+
+    if (askOperator) {
+      if (!onConfirm) {
+        const cancelMsg = `Error: Tool '${toolName}' requires operator approval (${effect}), but no operator is present (headless execution). Run with --yes or --mode auto, or 'nexus trust .' to trust this workspace.`;
+        const receipt: ExecutionReceipt = {
+          invocationId: call.id,
+          taskId: this.activeWorktree?.taskId || this.currentTaskId,
+          actor,
+          executionDomain: actor === "subagent" ? "subagent" : "agent_orchestration",
+          capabilityId:
+            this.capabilityRegistry.getByToolName(toolName)?.id || "unknown",
+          toolName,
+          targetResources: extractTargetResources(toolName, args),
+          success: false,
+          output: "",
+          error: cancelMsg,
+          durationMs: 0,
+          candidateMutated: false,
+          status: "DENIED",
+          denialReason: "DECISION_REQUIRED_NO_OPERATOR",
+          timestamp: new Date().toISOString(),
+          simulated: Boolean(this.config.dryRun),
+        };
+        if (this.flightRecorder) {
+          this.flightRecorder.recordToolResult(
+            currentStep,
+            call.id,
+            toolName,
+            false,
+            cancelMsg,
+            0,
+            "DECISION_REQUIRED_NO_OPERATOR"
+          );
+        }
+        this.observer?.onToolEnd?.({ dispatch, callId: call.id, tool: toolName, success: false, output: "", error: cancelMsg });
+        return { receipt, shouldExit: false };
+      }
+
       this.activity("approval", { tool: toolName, ...(subject ? { subject } : {}) });
       const approved = await onConfirm(toolName, args);
+      if (approved && egressOrigin) this.approvedEgressOrigins.add(egressOrigin);
       if (approved) this.activity("tool", { tool: toolName, ...(subject ? { subject } : {}) });
       if (!approved) {
         console.log(`⚠️ Tool execution cancelled by user.`);
@@ -4019,7 +4583,7 @@ The pinned Objective Ledger lists the operator's requirements; your plan never r
     // operation's change only and never includes edits already in the working tree.
     const diffTarget = this.observer?.onFileChange && !this.config.dryRun ? editTarget(toolName, args, this.config.workspace) : undefined;
     const before = diffTarget ? snapshot(diffTarget) : undefined;
-    if (this.stateManager && effectiveTaskId) {
+    if (this.durable && this.stateManager && effectiveTaskId) {
       try {
         this.stateManager.recordOperationStart(effectiveTaskId, {
           invocationId: call.id,
@@ -4028,10 +4592,16 @@ The pinned Objective Ledger lists the operator's requirements; your plan never r
           targetResources: args.path ? [args.path] : (args.target_file ? [args.target_file] : undefined),
           argsSummary: JSON.stringify(args).slice(0, 200),
         });
-      } catch {}
+      } catch (err: any) {
+        this.reportPersistenceFailure("operation_start", err);
+      }
     }
 
-    if (FILE_EDIT_TOOLS.has(toolName) && this.depth === 0) await this.captureChangeBaseline();
+    // Baseline capture is process-local evidence as well as durable evidence.
+    // Subagents are intentionally non-durable, but their edits still need a
+    // pre-change verifier snapshot so the parent cannot mistake an unbound
+    // passing test run for independent verification.
+    if (FILE_EDIT_TOOLS.has(toolName)) await this.captureChangeBaseline(onConfirm);
     // A tool of a group not offered yet still runs (the model may know it from earlier); offer its group from now on.
     const calledGroup = toolGroupOf(toolName);
     if (calledGroup) this.enabledToolGroups.add(calledGroup);
@@ -4048,13 +4618,15 @@ The pinned Objective Ledger lists the operator's requirements; your plan never r
       context
     );
 
-    if (this.stateManager && effectiveTaskId) {
+    if (this.durable && this.stateManager && effectiveTaskId) {
       try {
         this.stateManager.recordOperationEnd(effectiveTaskId, call.id, {
           success: receipt.success,
           error: receipt.error,
         }, operationSeq);
-      } catch {}
+      } catch (err: any) {
+        this.reportPersistenceFailure("operation_end", err);
+      }
     }
 
     await this.pluginManager.notifyToolResult(toolName, {
@@ -4063,16 +4635,21 @@ The pinned Objective Ledger lists the operator's requirements; your plan never r
       error: receipt.error,
     });
     // A run_tests result is a verifier attempt on the current workspace (what a requirement's `verified` rests on).
-    if (toolName === "run_tests" && this.objective && this.depth === 0) {
+    if (toolName === "run_tests" && this.objective && this.durable) {
       try {
         const parsed = JSON.parse(receipt.output || "{}");
         const state = this.verifierState();
-        if (state && typeof parsed.command === "string") {
-          const isDeliverableBound = isVerifierDeliverableBound(
+        if (state && typeof parsed.command === "string" && parsed.command !== "none" && !parsed.noVerifier) {
+          const rawOutput = typeof parsed.report === "string" ? parsed.report : (receipt.output || "");
+          const hasExecuted = hasExecutedTests(rawOutput);
+          const baselineTests = this.changeBaseline?.tests;
+          const isDeliverableBound = !this.verificationBaselineInvalidated && hasExecuted && isVerifierDeliverableBound(
             this.config.workspace,
             Array.from(this.modifiedFiles),
             parsed.command,
-            receipt.output || ""
+            rawOutput,
+            trustedDeliverablesFromBaseline(this.changeBaseline),
+            baselineTests ?? undefined,
           );
           const filtered = Boolean(args.filter) || isFilteredVerifierCommand(parsed.command);
           // Without the copy run (task_completed does that): independent only when unmodified pre-change tests that
@@ -4087,8 +4664,8 @@ The pinned Objective Ledger lists the operator's requirements; your plan never r
             isDeliverableBound,
             ...(judged ? { independent: judged !== "needs-copy" && judged.independent } : {}),
             filtered,
-            status: parsed.passed === true && receipt.success ? "PASSED" : "FAILED",
-            ...(parsed.passed === true ? {} : { failedCheck: failedCheckFrom(`${receipt.output}\n${receipt.error ?? ""}`) }),
+            status: parsed.passed === true && receipt.success && hasExecuted ? "PASSED" : "FAILED",
+            ...(parsed.passed === true ? {} : { failedCheck: failedCheckFrom(`${rawOutput}\n${receipt.error ?? ""}`) }),
           });
         }
       } catch {}
@@ -4172,8 +4749,9 @@ The pinned Objective Ledger lists the operator's requirements; your plan never r
 
   /**
    * Operator stop request. This is an authority event: once recorded, no new inference request or tool
-   * dispatch is admitted for the active turn. An already-executing tool call cannot be force-stopped
-   * (the Rust RPC daemon has no cancel verb); it is awaited and reported as outstanding until it settles.
+   * dispatch is admitted for the active turn. A command already running is ended by the runner (its whole process
+   * group, through the bridge's turn signal) and awaited until it settles; background processes earlier commands of
+   * this session left running are ended too (REQ-AGT-109).
    * Returns false when no turn is active or cancellation was already requested.
    */
   public requestCancel(reason: string = "operator"): boolean {
@@ -4182,6 +4760,7 @@ The pinned Objective Ledger lists the operator's requirements; your plan never r
     turn.cancelRequestedAt = new Date().toISOString();
     if (turn.phase === "tool") turn.toolInFlightAtCancel = turn.currentTool;
     turn.controller.abort(new Error(`turn cancelled: ${reason}`));
+    void this.bridge.endBackground().catch(() => 0);
     logAudit({
       workspace: this.config.workspace,
       tool: "turn_cancel",
@@ -4206,6 +4785,23 @@ The pinned Objective Ledger lists the operator's requirements; your plan never r
   /** Recovery of the current inference step; null when no provider failure is being waited out. */
   public getProviderRecovery(): ProviderRecoveryRecord | null {
     return this.activeProviderRecovery;
+  }
+
+  /**
+   * 3 s startup reachability check (`GET /models`, REQ-TUI-105). Returns an actionable warning naming the endpoint,
+   * cause and fix (`nexus doctor`, `~/.config/nexus/config.env`, `/connect`) when unreachable or rejected; undefined when ok.
+   */
+  public async probeStartupEndpoint(signal?: AbortSignal): Promise<string | undefined> {
+    if (typeof this.client.probeAvailability !== "function") return undefined;
+    try {
+      const probe = await this.client.probeAvailability(signal, { timeoutMs: 3_000 });
+      if (probe.available && probe.httpStatus !== undefined && probe.httpStatus >= 200 && probe.httpStatus < 300) {
+        this.client.markSucceeded?.(this.client.endpoint);
+      }
+      return startupEndpointWarning(this.client.endpoint, probe);
+    } catch {
+      return undefined;
+    }
   }
 
   public setProviderRecoveryHooks(hooks: Pick<RecoveryHooks<unknown>, "onFailure" | "shouldYield"> | undefined): void {
@@ -4239,7 +4835,9 @@ The pinned Objective Ledger lists the operator's requirements; your plan never r
     if (record.state === "WAITING" || record.state === "RESUMED") {
       try {
         this.checkpointDurableState(`provider recovery ${record.state.toLowerCase()}`);
-      } catch {}
+      } catch (err: any) {
+        this.reportPersistenceFailure("provider_recovery", err);
+      }
     }
     try {
       this.observer?.onProviderRecovery?.({ record, discardedPartialOutput });
@@ -4251,7 +4849,7 @@ The pinned Objective Ledger lists the operator's requirements; your plan never r
     return this.activeTurn?.controller.signal;
   }
 
-  async runTurn(taskPrompt: string | any[], onConfirm?: ConfirmHandler, options?: { signal?: AbortSignal }): Promise<TurnResult> {
+  async runTurn(taskPrompt: string | any[], onConfirm?: ConfirmHandler, options?: { signal?: AbortSignal; resume?: boolean }): Promise<TurnResult> {
     // The REPL calls runTurn directly. Route worktree-enabled turns through the
     // same establishment and resolution boundary as one-shot `run` tasks.
     if (this.config.worktree && this.activeWorktree && !this.worktreeRunTurnAuthorized) {
@@ -4261,6 +4859,26 @@ The pinned Objective Ledger lists the operator's requirements; your plan never r
       return await this.run(taskPrompt, onConfirm, options);
     }
     if (this.activeTurn) throw new Error("A turn is already active; wait for it to finish or cancel it.");
+    const authoritativeVerifier = this.config.authoritativeVerifierCommand?.trim();
+    if (authoritativeVerifier && this.changeBaseline === undefined) {
+      // Capture workspace-resolved operator verifier files before plugins or the model can change them.
+      // Existing pending work without an earlier snapshot remains unverified rather than being blessed retroactively.
+      this.changeBaseline = {
+        command: authoritativeVerifier,
+        failed: false,
+        tests: this.hasPendingModifications ? null : snapshotTests(this.config.workspace),
+        verifier: this.hasPendingModifications ? null : snapshotVerifierDefinition(this.config.workspace, authoritativeVerifier, this.config.trustedDeliverableFiles ?? []),
+        trustedDeliverables: [...(this.config.trustedDeliverableFiles ?? [])],
+        at: new Date().toISOString(),
+      };
+      if (this.durable) {
+        try {
+          this.checkpointDurableState("authoritative verifier definition captured");
+        } catch (err: any) {
+          this.reportPersistenceFailure("baseline", err);
+        }
+      }
+    }
     await this.initExtensibility();
     const promptText = typeof taskPrompt === "string" ? taskPrompt : "[Multi-modal Vision Input]";
     for (const group of groupsTriggeredBy(promptText)) this.enabledToolGroups.add(group);
@@ -4269,12 +4887,13 @@ The pinned Objective Ledger lists the operator's requirements; your plan never r
     const turn: NonNullable<AutonomousAgent["activeTurn"]> = { controller: new AbortController(), phase: "idle", step: 0, onConfirm };
     this.activeTurn = turn;
     const signal = turn.controller.signal;
+    this.bridge.setTurnSignal(signal);
     if (options?.signal) {
       if (options.signal.aborted) this.requestCancel("external signal");
       else options.signal.addEventListener("abort", () => this.requestCancel("external signal"), { once: true });
     }
     this.completionSummary = undefined;
-    this.turnPersistenceFailures = [];
+    this.turnPersistenceFailures = this.initialStatePersistenceFailure ? [this.initialStatePersistenceFailure] : [];
     this.turnMutations = 0;
     this.turnConfiguredVerifier = "NOT_RUN";
     this.turnCarriedChanges = this.hasPendingModifications;
@@ -4291,21 +4910,37 @@ The pinned Objective Ledger lists the operator's requirements; your plan never r
     // The objective this turn works toward: a new one, or a short follow-up on the one still unresolved.
     const priorLedger = this.objective ? structuredClone(this.objective) : undefined;
     let continuingObjective = false;
-    if (typeof taskPrompt === "string" && this.depth === 0) {
+    const isResume = Boolean(options?.resume);
+    if (typeof taskPrompt === "string" && this.durable) {
       let ledger = this.objective;
-      continuingObjective = Boolean(ledger && !isNewObjective(ledger, taskPrompt));
-      if (!ledger || isNewObjective(ledger, taskPrompt)) {
+      continuingObjective = Boolean(ledger && (isResume || !isNewObjective(ledger, taskPrompt)));
+      if (!ledger || (!isResume && isNewObjective(ledger, taskPrompt))) {
         const carried = ledger?.steering.filter((s) => s.status === "queued") ?? [];
-        ledger = createLedger(taskPrompt);
+        ledger = createLedger(taskPrompt, undefined, this.unitId);
         ledger.steering.push(...carried);
       } else {
-        // The unfinished objective is kept; numbered items in the follow-up are added as further requirements.
-        amendObjective(ledger, taskPrompt);
+        if (this.unitId && !ledger.unitId) {
+          ledger.unitId = this.unitId;
+        }
+        const isHarnessResume = /^\[(?:Nexus|Work unit resumed)/.test(taskPrompt);
+        if (!isHarnessResume) {
+          // The unfinished objective is kept; numbered items in the follow-up are added as further requirements.
+          amendObjective(ledger, taskPrompt);
+        }
       }
       ledger.outcome = undefined;
       ledger.continuation = { ...ledger.continuation, segments: 1, lastProgressStep: 0, stopReason: undefined };
       this.objective = ledger;
     }
+
+    let currentStep = 1;
+    let stepsUsed = 0;
+    const providerRecoveries: ProviderRecoveryRecord[] = [];
+    const budget = this.config.continuation;
+    const segmentSteps = Math.max(1, this.config.maxSteps);
+    const maxTotalSteps = budget ? Math.max(budget.maxTotalSteps, segmentSteps) : segmentSteps;
+    let segment = 1;
+    const tracker = this.objective && this.durable ? trackingOf(this.objective) : ExecutionTracker.fresh();
 
     try {
       if (this.flightRecorder) {
@@ -4342,19 +4977,17 @@ The pinned Objective Ledger lists the operator's requirements; your plan never r
       this.persistProgress({ messages: true });
       const pendingMessageChars = typeof effectiveUserContent === "string" ? effectiveUserContent.length : JSON.stringify(effectiveUserContent).length;
 
-      let currentStep = 1;
-      let stepsUsed = 0;
       let capacityBlock: CapacityRecord | null = null;
       let modelStop: ModelStop = "NONE";
       let finalOutputComplete = false;
       let previousReplyEmpty = false;
       // The previous step's reply was cut off at the output limit; a second one in a row ends the turn.
       let previousReplyTruncated = false;
+      let capacityRetryAttempted = false;
       let inferenceFailure: InferenceFailure | null = null;
       let interruption: InterruptionRecord | null = null;
       let undispatched = 0;
       let persistenceFailure: string | undefined;
-      const providerRecoveries: ProviderRecoveryRecord[] = [];
 
       const markInterrupted = (phase: InterruptionRecord["phase"], extra: Partial<InterruptionRecord> = {}) => {
         interruption = {
@@ -4376,21 +5009,20 @@ The pinned Objective Ledger lists the operator's requirements; your plan never r
       // progress, an actionable failure, or a step/time limit the operator set explicitly — each with its own reason.
       // There is no default step or time ceiling. Without a budget (`--no-continuation`, the operator's explicit choice),
       // the first segment boundary ends the turn (LIMIT_REACHED, legacy).
-      const budget = this.config.continuation;
-      const segmentSteps = Math.max(1, this.config.maxSteps);
-      const maxTotalSteps = budget ? Math.max(budget.maxTotalSteps, segmentSteps) : segmentSteps;
       const turnDeadline = budget && Number.isFinite(budget.maxTurnMinutes) ? Date.now() + budget.maxTurnMinutes * 60_000 : Number.POSITIVE_INFINITY;
-      let segment = 1;
       let stopReason: TurnReason | undefined;
       let stopDetail: string | undefined;
       let completionNudges = 0;
       let recoveries = 0;
-      // Objective-scoped tracking (persisted in the ledger): survives compaction, follow-up turns and restart.
-      const tracker = this.objective && this.depth === 0 ? trackingOf(this.objective) : ExecutionTracker.fresh();
       this.stateIdentityDisabled = false;
       this.stateIdentityUncertainty = undefined;
       tracker.beginTurn();
-      if (continuingObjective) tracker.operatorInput(tracker.data.cumulativeSteps, `operator follow-up: ${promptText.slice(0, 160)}`);
+      if (continuingObjective) {
+        const isHarnessResume = typeof taskPrompt === "string" && /^\[(?:Nexus|Work unit resumed)/.test(taskPrompt);
+        if (!isHarnessResume && !options?.resume) {
+          tracker.operatorInput(tracker.data.cumulativeSteps, `operator follow-up: ${promptText.slice(0, 160)}`);
+        }
+      }
       let stateNow = this.workspaceStateIdentity();
       tracker.noteState(stateNow);
       tracker.noteLedgerState(this.ledgerProgressIdentity());
@@ -4438,13 +5070,15 @@ The pinned Objective Ledger lists the operator's requirements; your plan never r
           withDurableSync(() => {
             try {
               this.checkpointDurableState(`continuation: segment ${segment} begins at step ${currentStep}`);
-            } catch {}
+            } catch (err: any) {
+              this.reportPersistenceFailure("continuation", err);
+            }
             this.persistProgress({ messages: true });
           });
           console.warn(pc.dim(`↻ Continuing automatically: segment ${segment} begins at step ${currentStep}; the work is still progressing.`));
         }
         const cumulativeStep = tracker.beginStep();
-        if (this.objective && this.depth === 0) this.objective.continuation.totalSteps = tracker.data.cumulativeSteps;
+        if (this.objective && this.durable) this.objective.continuation.totalSteps = tracker.data.cumulativeSteps;
         const stepStateBefore = stateNow;
         const verdicts: ObservationVerdict[] = [];
         let operatorInputApplied = this.applyQueuedSteering(currentStep) > 0;
@@ -4608,7 +5242,10 @@ The pinned Objective Ledger lists the operator's requirements; your plan never r
         // Temporary provider failures are waited out here, at the inference boundary: history and tool state
         // are untouched while waiting, and a submission's output is used only once it is complete.
         const policy = this.recoveryPolicy ?? recoveryPolicyFromEnv();
-        const recovery = new ProviderRecoveryController(policy, this.recoveryClock, currentStep);
+        const recovery = new ProviderRecoveryController(policy, this.recoveryClock, currentStep, {
+          everSucceeded: typeof activeClient.hasEverSucceeded === "function" ? activeClient.hasEverSucceeded() : true,
+          endpoint: activeClient.endpoint,
+        });
         const lengthGuard = { step: currentStep, cutAfterMs: 0 };
         try {
           assistantMessage = await recovery.run(requestId, {
@@ -4686,7 +5323,42 @@ The pinned Objective Ledger lists the operator's requirements; your plan never r
           inferenceFailure = err instanceof InferenceError
             ? err.toFailure()
             : { kind: "protocol_error", origin: "client", message: err?.message || String(err), requestId };
-          if (inferenceFailure?.condition === "CAPACITY_REJECTED") this.capabilitiesStale = "the provider rejected a request for capacity";
+          if (inferenceFailure?.condition === "CAPACITY_REJECTED") {
+            this.capabilitiesStale = "the provider rejected a request for capacity";
+            if (!capacityRetryAttempted) {
+              capacityRetryAttempted = true;
+              const original = this.messages;
+              const candidate = this.compactionCandidate(original, 1, 1200);
+              const accepted = (candidate.messages.length < original.length || this.scaledBudget(candidate.messages, this.contextLimit()).totalActiveTokens < this.scaledBudget(original, this.contextLimit()).totalActiveTokens)
+                ? candidate
+                : this.compactionCandidate(original, 0, 0);
+              for (const key of accepted.removedObservations) this.turnRemovedObservations.add(key);
+              try {
+                this.commitCompaction(original, accepted.messages, {
+                  trigger: "auto",
+                  step: currentStep,
+                  beforeTokens: this.scaledBudget(original, this.contextLimit()).totalActiveTokens,
+                  afterTokens: this.scaledBudget(accepted.messages, this.contextLimit()).totalActiveTokens,
+                  pressureOnly: false,
+                });
+              } catch {
+                this.messages = accepted.messages;
+              }
+              this.ui.stopSpinner(false, "Provider rejected request for capacity; compacted context and retrying once at reduced budget...");
+              tracker.intervention(cumulativeStep, "capacity_rejected_retry", "provider rejected request for capacity; retrying after compaction");
+              inferenceFailure = null;
+              stepsUsed = currentStep;
+              endStep();
+              continue;
+            }
+            const discovered = this.getProviderCapabilities()?.advertised?.contextLength ?? this.contextLimit();
+            const actionableMsg = `The inference server rejected the request for context capacity (CAPACITY_REJECTED). Set --context-limit ${discovered} (or NEXUS_CONTEXT_LIMIT) to match the server's window.`;
+            console.error(pc.red(`\n${actionableMsg}`));
+            inferenceFailure = {
+              ...inferenceFailure,
+              message: actionableMsg,
+            };
+          }
           break;
         } finally {
           if (recovery.record) providerRecoveries.push(recovery.record);
@@ -4698,7 +5370,8 @@ The pinned Objective Ledger lists the operator's requirements; your plan never r
         this.noteAdmission(activeClient, currentStep);
 
         // Parse the response using hybrid parser
-        const parsed = parseModelResponse(assistantMessage, this.getEffectiveTools().map((t) => t.function.name));
+        const nativeTools = activeClient?.supportsNativeTools?.() ?? true;
+        const parsed = parseModelResponse(assistantMessage, { nativeTools });
 
         // Update cumulative token usage
         const promptEst = calculateContextBudget(
@@ -4752,6 +5425,20 @@ The pinned Objective Ledger lists the operator's requirements; your plan never r
 
         // No tool calls: the model stopped acting. That is a fact about the model, not evidence of success.
         if (parsed.toolCalls.length === 0) {
+          // If a malformed or unknown tool call was dropped, give the model a notice and continue turn (ACC-VER-02)
+          if (parsed.notices && parsed.notices.length > 0) {
+            for (const notice of parsed.notices) {
+              this.ui.stopSpinner(false, `[notice] ${notice}`);
+              this.messages.push({
+                role: "user",
+                content: `[Nexus: ${notice}]`,
+              });
+            }
+            this.persistProgress({ messages: true });
+            endStep();
+            continue;
+          }
+
           // Steering that arrived while the model was answering is applied next step instead of being dropped.
           if (this.hasQueuedSteering()) {
             endStep();
@@ -4929,7 +5616,7 @@ The pinned Objective Ledger lists the operator's requirements; your plan never r
         );
       }
 
-      triggerNotification("Nexus Code", "Turn finished.");
+      triggerNotification("Nexus Code", "Turn finished.", this.surface);
 
       try {
         this.knowledge.autoExtract(promptText, "");
@@ -4965,18 +5652,21 @@ The pinned Objective Ledger lists the operator's requirements; your plan never r
       };
       let result = this.buildTurnResult(resultInput);
       if (this.objective) {
-        if (this.depth === 0) this.objective.continuation.totalSteps = tracker.data.cumulativeSteps;
+        if (this.durable) this.objective.continuation.totalSteps = tracker.data.cumulativeSteps;
         this.objective.continuation.stopReason = stopReason ?? (persistenceFailure ? "PERSISTENCE_FAILED" : undefined);
         this.objective.outcome = { ...this.objectiveOutcome(result), at: result.finishedAt };
         try {
           withDurableSync(() => this.checkpointDurableState(undefined, result));
         } catch (err: any) {
-          // The result says so: a turn whose final state was not saved is never reported as durably recorded.
-          this.turnPersistenceFailures.push(`The turn's final task state could not be saved: ${redactSecrets(String(err?.message ?? err)).slice(0, 200)}`);
+          this.reportPersistenceFailure("final_checkpoint", err);
           result = this.buildTurnResult(resultInput);
-          const text = this.turnPersistenceFailures[this.turnPersistenceFailures.length - 1];
-          if (this.observer?.onNotice) this.observer.onNotice(text);
-          else console.warn(pc.yellow(text));
+        }
+      } else if (this.durable) {
+        try {
+          withDurableSync(() => this.checkpointDurableState(undefined, result));
+        } catch (err: any) {
+          this.reportPersistenceFailure("final_checkpoint", err);
+          result = this.buildTurnResult(resultInput);
         }
       }
       this.lastTurnResult = result;
@@ -4989,18 +5679,83 @@ The pinned Objective Ledger lists the operator's requirements; your plan never r
       }
       this.ui.turnSummary(result, this.completionSummary);
       return result;
+    } catch (err: any) {
+      turn.closing = true;
+      if (this.compactionQueue.length) {
+        try {
+          await this.drainCompactionQueue(currentStep, undefined, "the turn failed unexpectedly");
+        } catch {}
+      }
+      if (this.hasQueuedSteering()) {
+        this.cancelQueuedSteering(
+          `the turn failed unexpectedly (${redactSecrets(String(err?.message ?? err)).slice(0, 200)}) before it could be applied`
+        );
+      }
+      const unhandledMessage = redactSecrets(err instanceof Error ? err.message : String(err));
+      const resultInput = {
+        unhandledError: unhandledMessage,
+        modelStop: "NONE" as const,
+        finalOutputComplete: false,
+        inferenceFailure: null,
+        interruption: null,
+        limitReached: false,
+        stepsUsed: stepsUsed || Math.min(currentStep, maxTotalSteps),
+        providerRecoveries,
+        maxSteps: maxTotalSteps,
+        stopReason: "UNHANDLED_ERROR" as const,
+        stopDetail: unhandledMessage.slice(0, 300),
+        ...(budget
+          ? {
+              continuation: {
+                segments: segment,
+                segmentSteps,
+                stopReason: "UNHANDLED_ERROR",
+                stepsWithoutProgress: tracker.data.stepsWithoutProgress,
+                cumulativeSteps: tracker.data.cumulativeSteps,
+                ...(tracker.loops().length ? { repeated: tracker.loops().slice(0, 5).map((r) => ({ action: r.action, count: r.count, firstStep: r.firstStep, lastStep: r.lastStep })) } : {}),
+                ...(this.stateIdentityUncertainty ? { stateUncertainty: this.stateIdentityUncertainty } : {}),
+              },
+            }
+          : {}),
+      };
+      let result = this.buildTurnResult(resultInput);
+      if (this.objective) {
+        if (this.durable) this.objective.continuation.totalSteps = tracker.data.cumulativeSteps;
+        this.objective.continuation.stopReason = "UNHANDLED_ERROR";
+        this.objective.outcome = { ...this.objectiveOutcome(result), at: result.finishedAt };
+      }
+      if (this.durable) {
+        try {
+          withDurableSync(() => this.checkpointDurableState(undefined, result));
+        } catch (saveErr: any) {
+          this.reportPersistenceFailure("final_checkpoint", saveErr);
+          result = this.buildTurnResult(resultInput);
+        }
+      }
+      this.lastTurnResult = result;
+      if (this.flightRecorder) {
+        this.flightRecorder.recordSessionEnd(
+          `${summarizeTurn(result).heading}: ${summarizeTurn(result).line}`,
+          false,
+          this.totalTokens
+        );
+      }
+      this.ui.turnSummary(result, this.completionSummary);
+      return result;
     } finally {
       this.activeTurn = undefined;
+      this.bridge.setTurnSignal(undefined);
     }
   }
 
   /**
-   * Whether the operator-configured verifier must pass before any completion of this agent. An in-turn subagent's own
-   * changes are verified as before and again by its parent, so its read-only reports are not gated. Work units also run
-   * at depth 1 but have no parent turn to verify them, so they are gated.
+   * Whether the operator-configured verifier must pass before this agent can complete. Team research, architecture,
+   * and review roles produce non-mutating reports, so a workspace verifier cannot establish those reports. Mutating
+   * work units have no parent turn to verify them; their configured verifier remains a completion gate.
    */
   private configuredVerifierGatesCompletion(): boolean {
-    return !this.runningAsSubagent && Boolean(this.config.authoritativeVerifierCommand?.trim());
+    const nonMutatingTeamRole = this.role === "researcher" || this.role === "architect" || this.role === "reviewer";
+    return !this.runningAsSubagent && !nonMutatingTeamRole && Boolean(this.config.authoritativeVerifierCommand?.trim());
   }
 
   /** Single place where a turn's execution/outcome dimensions are derived from evidence held by the agent. */
@@ -5020,11 +5775,12 @@ The pinned Objective Ledger lists the operator's requirements; your plan never r
     stopReason?: TurnReason;
     stopDetail?: string;
     continuation?: TurnResult["continuation"];
+    unhandledError?: string;
   }): TurnResult {
     const evidence = this.verificationEvidence ?? null;
     const recoveries = input.providerRecoveries ?? [];
     const lastRecovery = recoveries[recoveries.length - 1];
-    const ledger = this.depth === 0 ? this.objective : undefined;
+    const ledger = (this.depth === 0 || this.role === "implementer" || this.role === "tester") ? this.objective : undefined;
     const open = ledger ? openRequirements(ledger) : [];
     const blocked = ledger ? blockedRequirements(ledger) : [];
     const gating = ledger ? gatingRequirements(ledger) : [];
@@ -5053,12 +5809,17 @@ The pinned Objective Ledger lists the operator's requirements; your plan never r
       ...(input.continuation ? { continuation: input.continuation } : {}),
       ...(objective ? { objective } : {}),
       ...(this.turnPersistenceFailures.length ? { persistence: { durable: false as const, failures: [...new Set(this.turnPersistenceFailures)].slice(0, 8) } } : {}),
-      ...(this.depth === 0 ? { tokenAccounting: this.tokenAccounting() } : {}),
+      ...(this.durable ? { tokenAccounting: this.tokenAccounting() } : {}),
     };
 
     if (input.interruption) {
       return deepFreezeTurn(assertTurnResultInvariants({
         ...base, execution: "INTERRUPTED", outcome: "NOT_ESTABLISHED", reason: "OPERATOR_INTERRUPT", finalOutputComplete: false,
+      }));
+    }
+    if (input.unhandledError) {
+      return deepFreezeTurn(assertTurnResultInvariants({
+        ...base, execution: "FAILED", outcome: "NOT_ESTABLISHED", reason: "UNHANDLED_ERROR", detail: input.unhandledError.slice(0, 300), finalOutputComplete: false,
       }));
     }
     if (input.persistenceFailure) {
@@ -5067,10 +5828,14 @@ The pinned Objective Ledger lists the operator's requirements; your plan never r
       }));
     }
     if (input.inferenceFailure) {
+      const exhaustedDetail =
+        lastRecovery?.state === "EXHAUSTED"
+          ? `; provider recovery exhausted after ${lastRecovery.submissions.length} submissions, ${Math.round(lastRecovery.waitedMs / 1000)}s waiting` +
+            (lastRecovery.everSucceeded === false ? " — run `nexus doctor`, check LOCAL_LLM_ENDPOINT in ~/.config/nexus/config.env, or use /connect" : "")
+          : "";
       return deepFreezeTurn(assertTurnResultInvariants({
         ...base, execution: "FAILED", outcome: "NOT_ESTABLISHED", reason: "INFERENCE_FAILED",
-        detail: `${input.inferenceFailure.kind}/${input.inferenceFailure.origin}${input.inferenceFailure.httpStatus ? ` HTTP ${input.inferenceFailure.httpStatus}` : ""}` +
-          (lastRecovery?.state === "EXHAUSTED" ? `; provider recovery exhausted after ${lastRecovery.submissions.length} submissions, ${Math.round(lastRecovery.waitedMs / 1000)}s waiting` : ""),
+        detail: `${input.inferenceFailure.kind}/${input.inferenceFailure.origin}${input.inferenceFailure.httpStatus ? ` HTTP ${input.inferenceFailure.httpStatus}` : ""}${exhaustedDetail}`,
         finalOutputComplete: false,
       }));
     }
@@ -5099,6 +5864,15 @@ The pinned Objective Ledger lists the operator's requirements; your plan never r
 
     // Execution COMPLETED: derive the engineering outcome strictly from verifier evidence.
     if (this.hasPendingModifications) {
+      if (evidence?.status === "PASSED" && evidence?.hasExecutedTests === false) {
+        return deepFreezeTurn(assertTurnResultInvariants({
+          ...base,
+          execution: "COMPLETED",
+          outcome: "UNVERIFIED",
+          reason: "NO_TESTS_EXECUTED",
+          detail: "Passing test run executed zero tests.",
+        }));
+      }
       if (evidence?.status === "FAILED") {
         return deepFreezeTurn(assertTurnResultInvariants({ ...base, execution: "COMPLETED", outcome: "NOT_ESTABLISHED", reason: "VERIFIER_FAILED", detail: evidence.command }));
       }
@@ -5108,8 +5882,36 @@ The pinned Objective Ledger lists the operator's requirements; your plan never r
       if (requirementsIncomplete) {
         return deepFreezeTurn(assertTurnResultInvariants({ ...base, execution: "COMPLETED", outcome: "NOT_ESTABLISHED", reason: "REQUIREMENTS_INCOMPLETE", detail: incompleteDetail() }));
       }
+      // A current task may have a trustworthy pre-change verifier snapshot but no operator-declared
+      // deliverable scope. Its passing tests are regression evidence only; keep the obligation pending.
+      // Recovered work is different: the snapshot itself is unauthenticated, so even that evidence
+      // cannot support REGRESSION_FREE until a trusted baseline exists.
+      if (
+        !this.verificationBaselineInvalidated &&
+        evidence?.status === "PASSED" &&
+        evidence.hasExecutedTests === true &&
+        evidence.isDeliverableBound === false
+      ) {
+        return deepFreezeTurn(assertTurnResultInvariants({
+          ...base,
+          execution: "COMPLETED",
+          outcome: "REGRESSION_FREE",
+          reason: "REGRESSION_FREE",
+          detail: "Passing test run did not cover the modified deliverables.",
+        }));
+      }
       const noVerifier = evidence?.status === "NO_APPLICABLE_VERIFIER" ||
         (!evidence && !this.config.authoritativeVerifierCommand?.trim() && !discoverVerifier(this.config.workspace));
+      if (noVerifier && this.turnRemovedObservations.size > 0) {
+        const lost = Array.from(this.turnRemovedObservations);
+        return deepFreezeTurn(assertTurnResultInvariants({
+          ...base,
+          execution: "COMPLETED",
+          outcome: "UNVERIFIED",
+          reason: "CONTEXT_EVIDENCE_NOT_RETAINED",
+          detail: `${lost.length} tool output(s) removed by context compaction and not re-read: ${lost.slice(0, 3).join("; ")}`.slice(0, 300),
+        }));
+      }
       return deepFreezeTurn(assertTurnResultInvariants({
         ...base, execution: "COMPLETED", outcome: "UNVERIFIED",
         reason: noVerifier ? "NO_APPLICABLE_VERIFIER" : "VERIFICATION_NOT_RUN",
@@ -5120,6 +5922,15 @@ The pinned Objective Ledger lists the operator's requirements; your plan never r
     }
     if (this.turnMutations > 0 || this.turnCarriedChanges) {
       if (evidence?.status === "PASSED") {
+        if (evidence.hasExecutedTests === false) {
+          return deepFreezeTurn(assertTurnResultInvariants({
+            ...base,
+            execution: "COMPLETED",
+            outcome: "UNVERIFIED",
+            reason: "NO_TESTS_EXECUTED",
+            detail: "Passing test run executed zero tests.",
+          }));
+        }
         // The verifier passed on the change; it does not show the change's content rests on what the model saw. Output
         // that left context during the turn and was not read again is counted on the result (CTX-03).
         const contextQualifier = this.turnRemovedObservations.size ? { contextNotRetained: this.turnRemovedObservations.size } : {};
@@ -5196,7 +6007,7 @@ The pinned Objective Ledger lists the operator's requirements; your plan never r
     };
   }
 
-  async run(taskPrompt: string | any[], onConfirm?: ConfirmHandler, options?: { signal?: AbortSignal }): Promise<TurnResult> {
+  async run(taskPrompt: string | any[], onConfirm?: ConfirmHandler, options?: { signal?: AbortSignal; resume?: boolean }): Promise<TurnResult> {
     this.ui.banner();
     console.log(`🎯 Task: ${typeof taskPrompt === "string" ? taskPrompt : "[Multi-modal task input]"}\n`);
     console.log(`📁 Workspace: ${this.config.workspace}`);
@@ -5233,7 +6044,9 @@ The pinned Objective Ledger lists the operator's requirements; your plan never r
       });
     }
 
-    this.resetConversation();
+    if (!options?.resume) {
+      this.resetConversation();
+    }
     this.worktreeRunTurnAuthorized = true;
     let turnResult: TurnResult | undefined;
     try {
@@ -5303,6 +6116,8 @@ The pinned Objective Ledger lists the operator's requirements; your plan never r
       throw new Error("Subagent workspace no longer matches its inherited worktree authority.");
     }
     this.runningAsSubagent = true;
+    // A subagent is used for one run: its commands are tied to the parent turn's cancellation for its lifetime.
+    this.bridge.setTurnSignal(signal);
     this.resetConversation();
     this.messages.push({
       role: "user",
@@ -5332,11 +6147,15 @@ The pinned Objective Ledger lists the operator's requirements; your plan never r
       const { client: activeClient } = this.selectCognitiveClient(currentStep, this.messages);
       try {
         await this.admitWithFindings(activeClient, currentStep, requestId, signal);
+        await this.measureAdmission(activeClient, currentStep, requestId, signal);
         const policy = this.recoveryPolicy ?? recoveryPolicyFromEnv();
         const lengthGuard = { step: currentStep, cutAfterMs: 0 };
-        assistantMessage = await new ProviderRecoveryController(policy, this.recoveryClock, currentStep).run(requestId, {
+        assistantMessage = await new ProviderRecoveryController(policy, this.recoveryClock, currentStep, {
+          everSucceeded: typeof activeClient.hasEverSucceeded === "function" ? activeClient.hasEverSucceeded() : true,
+          endpoint: activeClient.endpoint,
+        }).run(requestId, {
           submit: (s) => this.submitGuardingLength(lengthGuard, this.messages, (request) =>
-            activeClient.chatCompletion(request, [...HARNESS_TOOLS, READ_FINDINGS_CAPABILITY.toolDefinition as ToolDefinition], s.requestId, signal)),
+            activeClient.chatCompletion(request, this.getEffectiveTools(), s.requestId, signal)),
           probe: (probeSignal, opts) =>
             typeof activeClient.probeAvailability === "function"
               ? activeClient.probeAvailability(probeSignal, { timeoutMs: policy.probeTimeoutMs, ...opts })
@@ -5359,7 +6178,28 @@ The pinned Objective Ledger lists the operator's requirements; your plan never r
       }
 
       previousReplyTruncated = false;
-      const parsed = parseModelResponse(assistantMessage, this.getEffectiveTools().map((t) => t.function.name));
+      const promptEst = calculateContextBudget(
+        this.requestMessages(this.messages),
+        this.getEffectiveTools(),
+        this.contextLimit(),
+      ).totalActiveTokens;
+      const compContent = typeof assistantMessage.content === "string"
+        ? assistantMessage.content
+        : Array.isArray(assistantMessage.content)
+        ? JSON.stringify(assistantMessage.content)
+        : "";
+      const compEst =
+        countTokens(compContent) +
+        countTokens(JSON.stringify(assistantMessage.tool_calls || []));
+      const reported = activeClient.getProviderId?.() ? activeClient.getLastUsage?.() : undefined;
+      this.totalTokens.prompt += reported?.inputTokens ?? promptEst;
+      this.totalTokens.completion += reported?.outputTokens ?? compEst;
+      this.totalTokens.total = this.totalTokens.prompt + this.totalTokens.completion;
+      this.totalTokens.requests++;
+      if (reported?.inputTokens !== undefined) this.totalTokens.reportedRequests++;
+      else this.totalTokens.estimatedRequests++;
+      const nativeTools = activeClient?.supportsNativeTools?.() ?? true;
+      const parsed = parseModelResponse(assistantMessage, { nativeTools });
       this.messages.push({
         role: "assistant",
         content: assistantMessage.content || "",

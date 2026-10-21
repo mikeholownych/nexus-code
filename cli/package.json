@@ -9,7 +9,7 @@
   },
   "scripts": {
     "build": "tsc && node scripts/write_build_info.mjs",
-    "test": "tsx --test --test-concurrency=1 test/*.test.ts",
+    "test": "node scripts/run_tests.mjs && bash ../scripts/terminal-acceptance/test-scope-procs.sh",
     "start": "node dist/index.js",
     "dev": "tsx watch src/index.ts"
   },
@@ -24,6 +24,9 @@
   ],
   "author": "",
   "license": "MIT",
+  "engines": {
+    "node": ">=20"
+  },
   "dependencies": {
     "commander": "^12.1.0",
     "dotenv": "^16.4.5",

@@ -1,0 +1,30 @@
+TAP version 13
+# =======================================================
+#  ACC-CONT-08 Persistence Overhead Benchmark (200 steps) 
+# =======================================================
+#  Steps:     200
+#  Output/step: 2 KB
+#  Min:       22.34 ms
+#  Mean:      50.80 ms
+#  p50:       48.85 ms
+#  p90:       73.63 ms
+#  p95:       78.13 ms
+#  p99:       85.48 ms
+#  Max:       88.93 ms
+#  Threshold: p95 < 100.00 ms (SSD)
+#  Status:    PASSED (within budget)
+# =======================================================
+# Subtest: ACC-CONT-08: 200-step persistence overhead measurement (threshold p95 < 100 ms)
+ok 1 - ACC-CONT-08: 200-step persistence overhead measurement (threshold p95 < 100 ms)
+  ---
+  duration_ms: 10184.688694
+  ...
+1..1
+# tests 1
+# suites 0
+# pass 1
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 10468.952768

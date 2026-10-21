@@ -1,5 +1,7 @@
 # Nexus: Context-Compaction Convergence Remediation (2026-10-09)
 
+> **Historical record.** This document is kept for provenance. Current requirements and status: [docs/v1.0.0/REQUIREMENTS.md](../v1.0.0/REQUIREMENTS.md). Statuses here may have been superseded or contradicted since it was written.
+
 Disposition: **`NEXUS_CONTEXT_CONVERGENCE_IMPLEMENTED_NOT_ESTABLISHED`**
 
 The demonstrated defect is fixed and qualified. A batch of tool results the model had not yet seen is no longer

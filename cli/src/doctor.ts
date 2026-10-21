@@ -13,6 +13,8 @@
  * read-only policy, serialised by a lock, backed up (previous modes recorded), checked again just before each change,
  * and verified afterwards by re-running the affected checks.
  */
+import { X509Certificate } from "node:crypto";
+import { setMaxListeners } from "node:events";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -23,13 +25,17 @@ import { LocalLlmClient, credentialStorageHome } from "./client.js";
 import { credentialsPath } from "./credentials.js";
 import { mcpConfigFiles } from "./mcp.js";
 import { pluginDirs } from "./plugins.js";
-import { untrustedWorkspaceExtensions, WORKSPACE_MCP_FILES } from "./workspace_trust.js";
+import { untrustedWorkspaceExtensions, WORKSPACE_MCP_FILES, isWorkspaceTrusted } from "./workspace_trust.js";
 import { BuildIdentity, getBuildIdentity } from "./build_identity.js";
 import { defaultSessionsDir } from "./session.js";
 import { defaultTaskStateDir } from "./core/state.js";
 import { coreCargoManifest, resolveCoreBinary } from "./tools.js";
+import { isProjectEnvKey } from "./config.js";
+import { classifyLocality } from "./core/egress.js";
 import { redactSecrets } from "./ui.js";
 import { SafePathError, ancestryProblem, chmodVerified, identityOf, mkdirVerified, readVerified, unlinkVerified, writeExclusiveVerified, type Identity } from "./safe_fs.js";
+import { isNexusDirPermissive } from "./core/durable_file.js";
+export { isNexusDirPermissive };
 import type { HarnessConfig } from "./types.js";
 
 export const DOCTOR_SCHEMA_VERSION = 2;
@@ -66,6 +72,11 @@ export interface DoctorReport {
   tool: "nexus doctor";
   nexusVersion: string;
   buildIdentity?: BuildIdentity;
+  posture?: {
+    mode: "auto" | "review" | "read-only";
+    sandbox: string;
+    trusted: boolean;
+  };
   /** `cli`: a fresh configuration built from flags and environment. `session`: the running session's configuration. */
   context: "cli" | "session";
   deep: boolean;
@@ -101,13 +112,16 @@ const CORE_ROOT = PACKAGED_HOME ? path.join(PACKAGED_HOME, "lib/core") : path.jo
 const DEFAULT_TIMEOUT_MS = 4000;
 
 /** Credentials, authorization headers and URL secrets, in any field. */
-export function redactDiagnostic(value: string): string {
-  return redactSecrets(
-    value
-      .replace(/(authorization\s*[:=]\s*(?:bearer|basic)?\s*)[^\s,;"']+/gi, "$1[REDACTED]")
-      .replace(/((?:api[_-]?key|access[_-]?token|token|password|passwd|secret|key)=)[^&\s"']+/gi, "$1[REDACTED]")
-      .replace(/(https?:\/\/)[^/@\s:]+:[^/@\s]+@/gi, "$1[REDACTED]@"),
-  );
+export function redactDiagnostic(value: string, options?: { kind?: "path" | "text" }): string {
+  const scrubbed = value
+    .replace(/(authorization\s*[:=]\s*(?:bearer|basic)?\s*)[^\s,;"']+/gi, "$1[REDACTED]")
+    .replace(/((?:api[_-]?key|access[_-]?token|token|password|passwd|secret|key)=)[^&\s"']+/gi, "$1[REDACTED]")
+    .replace(/(https?:\/\/)[^/@\s:]+:[^/@\s]+@/gi, "$1[REDACTED]@");
+  const isPath = options?.kind === "path" || (options?.kind !== "text" && path.isAbsolute(scrubbed));
+  if (isPath) {
+    return scrubbed;
+  }
+  return redactSecrets(scrubbed);
 }
 
 /** Redacts every string in a value, plus any exact secret value given (a key never printed even when unpatterned). */
@@ -310,10 +324,10 @@ const installCheck: Check = async () => {
   const dist = path.join(CLI_ROOT, "dist/index.js");
   const evidence = [
     `version ${build.version}`,
-    build.commit === "unknown" ? "build identity unknown (built before build-info was recorded; run `make build`)" : `built from ${build.commit}${build.dirty ? " with uncommitted changes" : ""}${build.branch ? ` on ${build.branch}` : ""}`,
+    build.commit === "unknown" ? (PACKAGED_HOME ? "build identity unknown" : "build identity unknown (built before build-info was recorded; run `make build`)") : `built from ${build.commit}${build.dirty ? " with uncommitted changes" : ""}${build.branch ? ` on ${build.branch}` : ""}`,
     `install root ${INSTALL_ROOT}`,
   ];
-  if (!fs.existsSync(dist)) return f("install.build", "install", "fail", "The CLI build (cli/dist) is missing.", evidence, `Run \`make build\` in ${INSTALL_ROOT}.`);
+  if (!fs.existsSync(dist)) return f("install.build", "install", "fail", "The CLI build (cli/dist) is missing.", evidence, PACKAGED_HOME ? "Re-run the installer to restore missing files." : `Run \`make build\` in ${INSTALL_ROOT}.`);
   const built = fs.statSync(dist).mtimeMs;
   const source = PACKAGED_HOME ? 0 : newestMtime(path.join(CLI_ROOT, "src"), ".ts");
   if (source > built) {
@@ -329,20 +343,22 @@ const runtimeCheck: Check = async () => {
 
 const launcherCheck: Check = async () => {
   const launcher = resolveExecutable("nexus");
-  if (!launcher) return f("runtime.launcher", "runtime", "skip", "No `nexus` launcher is on PATH (optional: Nexus can run as `node cli/dist/index.js`).", [], `Optionally link ${path.join(INSTALL_ROOT, "harness.sh")} into a PATH directory as \`nexus\`.`);
+  if (!launcher) return f("runtime.launcher", "runtime", "skip", "No `nexus` launcher is on PATH (optional: Nexus can run as `node cli/dist/index.js`).", [], PACKAGED_HOME ? "Add ~/.local/bin to PATH or re-run the installer." : `Optionally link ${path.join(INSTALL_ROOT, "harness.sh")} into a PATH directory as \`nexus\`.`);
   let real = launcher;
   try {
     real = fs.realpathSync(launcher);
   } catch {}
-  const evidence = [`${launcher} -> ${real}`];
   const ours = real === (PACKAGED_HOME ? path.join(PACKAGED_HOME, "bin/nexus") : path.join(INSTALL_ROOT, "harness.sh"));
+  const evidence = PACKAGED_HOME
+    ? [ours ? "The nexus launcher resolves to this packaged installation." : "The nexus launcher resolves outside this packaged installation."]
+    : [`${launcher} -> ${real}`];
   let routesDoctor = false;
   try {
     routesDoctor = /\[\[ "\$1" == "doctor" \]\]/.test(fs.readFileSync(real, "utf8"));
   } catch {}
-  if (!ours) return f("runtime.launcher", "runtime", "warn", "The `nexus` on PATH is not this installation's launcher.", evidence, PACKAGED_HOME ? "Use the nexus launcher installed by the package." : `Point it at ${path.join(INSTALL_ROOT, "harness.sh")}, or run this installation directly.`);
+  if (!ours) return f("runtime.launcher", "runtime", "warn", "The `nexus` on PATH is not this installation's launcher.", evidence, PACKAGED_HOME ? "Use the nexus launcher installed by the package (add ~/.local/bin to PATH)." : `Point it at ${path.join(INSTALL_ROOT, "harness.sh")}, or run this installation directly.`);
   if (PACKAGED_HOME) return f("runtime.launcher", "runtime", "pass", "The `nexus` launcher on PATH is this packaged installation.", evidence);
-  if (!routesDoctor) return f("runtime.launcher", "runtime", "fail", "The `nexus` launcher does not route `doctor`; `nexus doctor` would start an agent task instead.", evidence, "Update harness.sh from this checkout.");
+  if (!routesDoctor) return f("runtime.launcher", "runtime", "fail", "The `nexus` launcher does not route `doctor`; `nexus doctor` would start an agent task instead.", evidence, PACKAGED_HOME ? "Re-run the installer to restore the nexus launcher." : "Update harness.sh from this checkout.");
   return f("runtime.launcher", "runtime", "pass", "The `nexus` launcher on PATH is this installation and routes `doctor`.", evidence);
 };
 
@@ -359,6 +375,29 @@ const configCheck: Check = async (ctx) => {
   return f("config.valid", "config", "pass", "The configuration builds with the same rules a session uses.", evidence);
 };
 
+/** REQ-SEC-110: settings a workspace .env tried to set that Nexus ignores (they belong to the operator). */
+const projectEnvCheck: Check = async (ctx) => {
+  const workspace = ctx.config?.workspace ?? process.cwd();
+  const file = path.join(workspace, ".env");
+  if (!fs.existsSync(file)) return f("config.project_env_ignored", "config", "skip", "The workspace has no .env.", [file]);
+  let keys: string[];
+  try {
+    keys = Object.keys(parseDotenv(fs.readFileSync(file)));
+  } catch (err) {
+    return f("config.project_env_ignored", "config", "warn", "The workspace .env could not be read.", [file, String((err as Error)?.message ?? err)]);
+  }
+  const ignored = keys.filter((key) => !isProjectEnvKey(key));
+  if (!ignored.length) return f("config.project_env_ignored", "config", "pass", "The workspace .env sets only per-project settings.", [file]);
+  return f(
+    "config.project_env_ignored",
+    "config",
+    "warn",
+    `The workspace .env sets ${ignored.length} operator-only setting(s) that Nexus ignores: ${ignored.join(", ")}.`,
+    [file],
+    "Move settings you meant for Nexus to ~/.config/nexus/config.env (or your shell environment); a repository cannot change TLS, proxies, credentials, timeouts, the shell or trust.",
+  );
+};
+
 interface EndpointEvidence {
   configured: boolean;
   endpoint?: string;
@@ -367,6 +406,7 @@ interface EndpointEvidence {
   detail?: string;
   models?: string[];
   modelError?: string;
+  advertised?: import("./core/provider_capabilities.js").Advertisement;
 }
 
 async function gatherEndpoint(ctx: CheckContext, signal: AbortSignal): Promise<EndpointEvidence> {
@@ -376,20 +416,30 @@ async function gatherEndpoint(ctx: CheckContext, signal: AbortSignal): Promise<E
   const probe = await client.probeAvailability(signal, { timeoutMs: ctx.timeoutMs });
   const evidence: EndpointEvidence = { configured: true, endpoint: config.endpoint, reachable: probe.httpStatus !== undefined, httpStatus: probe.httpStatus, detail: probe.detail };
   if (probe.httpStatus !== undefined && probe.httpStatus >= 200 && probe.httpStatus < 300) {
+    let timer: NodeJS.Timeout | undefined;
+    let onAbort: (() => void) | undefined;
     try {
       evidence.models = await Promise.race([
         client.listModels(),
         new Promise<never>((_, reject) => {
-          const timer = setTimeout(() => reject(new Error(`model list did not answer within ${ctx.timeoutMs} ms`)), ctx.timeoutMs);
-          signal.addEventListener("abort", () => {
+          timer = setTimeout(() => reject(new Error(`model list did not answer within ${ctx.timeoutMs} ms`)), ctx.timeoutMs);
+          onAbort = () => {
             clearTimeout(timer);
             reject(new Error("cancelled"));
-          }, { once: true });
+          };
+          signal.addEventListener("abort", onAbort, { once: true });
         }),
       ]);
     } catch (err: any) {
       evidence.modelError = err?.message ?? String(err);
+    } finally {
+      if (timer) clearTimeout(timer);
+      if (onAbort) signal.removeEventListener("abort", onAbort);
     }
+    try {
+      const adv = await client.discoverAdvertisement(signal);
+      if (adv?.advertised) evidence.advertised = adv.advertised;
+    } catch {}
   }
   return evidence;
 }
@@ -403,7 +453,22 @@ const endpointChecks: Check = async (ctx, signal) => {
   }
   const where = `${config.endpoint}${config.provider ? ` (provider ${config.provider})` : ""}`;
   const out: Array<Omit<DoctorFinding, "durationMs">> = [];
-  out.push(f("endpoint.configured", "endpoint", config.endpoint ? "pass" : "fail", config.endpoint ? "An inference endpoint is configured." : "No inference endpoint is configured.", [where, `credential ${config.apiKey && config.apiKey !== "local" ? "present (bound to its own origin; not shown)" : "none configured; stored gateway credentials are attached per origin by the client"}`]));
+  const locality = classifyLocality(config.endpoint);
+  const localityEvidence = `locality ${locality.boundary} (${locality.reason})`;
+  const localityHelp =
+    locality.boundary === "EXTERNAL_PUBLIC" && locality.reason === "hostname_external" && !config.provider
+      ? "If this is a local LAN host, add it to NEXUS_LOCAL_ORIGINS in ~/.config/nexus/config.env."
+      : undefined;
+  out.push(
+    f(
+      "endpoint.configured",
+      "endpoint",
+      config.endpoint ? "pass" : "fail",
+      config.endpoint ? "An inference endpoint is configured." : "No inference endpoint is configured.",
+      [where, localityEvidence, `credential ${config.apiKey && config.apiKey !== "local" ? "present (bound to its own origin; not shown)" : "none configured; stored gateway credentials are attached per origin by the client"}`],
+      localityHelp
+    )
+  );
   const ev = await (ctx.endpoint ??= gatherEndpoint(ctx, signal));
   if (!ev.reachable) {
     out.push(f("endpoint.reachable", "endpoint", "fail", "The endpoint did not answer.", [where, ev.detail ?? "no HTTP response"], config.provider ? `Check network access to ${config.endpoint}.` : "Start the local model server (LM Studio / vLLM) or point LOCAL_LLM_ENDPOINT / -e at a running one."));
@@ -424,14 +489,17 @@ const endpointChecks: Check = async (ctx, signal) => {
     return out;
   }
   out.push(f("endpoint.authenticated", "endpoint", "pass", "The endpoint accepted the request with the credential Nexus would send.", [where]));
+  const contextEvidence = ev.advertised
+    ? [`context ${ev.advertised.contextLength ?? "default"} via ${ev.advertised.via}${ev.advertised.serverKind ? ` (${ev.advertised.serverKind})` : ""}`]
+    : [];
   if (ev.modelError || !ev.models) {
-    out.push(f("model.available", "endpoint", "warn", "The model list could not be read.", [ev.modelError ?? "no list"]));
+    out.push(f("model.available", "endpoint", "warn", "The model list could not be read.", [ev.modelError ?? "no list", ...contextEvidence]));
   } else if (!config.model || config.model === "local-model") {
-    out.push(f("model.available", "endpoint", ev.models.length ? "pass" : "warn", ev.models.length ? `No model is named; a session would use the first listed model (${ev.models[0]}).` : "The endpoint lists no models.", [`${ev.models.length} listed`], ev.models.length ? undefined : "Load a model on the server."));
+    out.push(f("model.available", "endpoint", ev.models.length ? "pass" : "warn", ev.models.length ? `No model is named; a session would use the first listed model (${ev.models[0]}).` : "The endpoint lists no models.", [`${ev.models.length} listed`, ...contextEvidence], ev.models.length ? undefined : "Load a model on the server."));
   } else if (ev.models.includes(config.model)) {
-    out.push(f("model.available", "endpoint", "pass", `The configured model ${config.model} is listed by the endpoint.`, [`${ev.models.length} models listed`]));
+    out.push(f("model.available", "endpoint", "pass", `The configured model ${config.model} is listed by the endpoint.`, [`${ev.models.length} models listed`, ...contextEvidence]));
   } else {
-    out.push(f("model.available", "endpoint", "fail", `The configured model ${config.model} is not in the endpoint's model list.`, [`listed: ${ev.models.slice(0, 8).join(", ")}${ev.models.length > 8 ? ", …" : ""}`], "Choose a listed model (-m, LOCAL_LLM_MODEL, NEXUS_MODEL or /model)."));
+    out.push(f("model.available", "endpoint", "fail", `The configured model ${config.model} is not in the endpoint's model list.`, [`listed: ${ev.models.slice(0, 8).join(", ")}${ev.models.length > 8 ? ", …" : ""}`, ...contextEvidence], "Choose a listed model (-m, LOCAL_LLM_MODEL, NEXUS_MODEL or /model)."));
   }
   return out;
 };
@@ -473,8 +541,8 @@ const engineCheck: Check = async (ctx, signal) => {
     const cargo = resolveExecutable("cargo");
     out.push(
       cargo
-        ? f("engine.binary", "engine", "warn", "The Rust engine is not built; tools will run through a slow `cargo run` fallback.", [coreCargoManifest(), cargo], "Run `make build-core`.")
-        : f("engine.binary", "engine", "fail", "The Rust engine is not built and cargo is unavailable, so no tool can run.", [coreCargoManifest()], "Install Rust and run `make build-core`."),
+        ? f("engine.binary", "engine", "warn", "The Rust engine is not built; tools will run through a slow `cargo run` fallback.", [coreCargoManifest(), cargo], PACKAGED_HOME ? "Re-run the installer." : "Run `make build-core`.")
+        : f("engine.binary", "engine", "fail", "The Rust engine is not built and cargo is unavailable, so no tool can run.", [coreCargoManifest()], PACKAGED_HOME ? "Re-run the installer." : "Install Rust and run `make build-core`."),
     );
     return out;
   }
@@ -482,16 +550,16 @@ const engineCheck: Check = async (ctx, signal) => {
   const reported = version.stdout.trim().split(/\s+/).pop() ?? "";
   const evidence = [binary, version.stdout.trim() || version.error || version.stderr.trim()];
   if (version.code !== 0) {
-    out.push(f("engine.binary", "engine", "fail", "The Rust engine binary does not run.", evidence, "Rebuild it with `make build-core`."));
+    out.push(f("engine.binary", "engine", "fail", "The Rust engine binary does not run.", evidence, PACKAGED_HOME ? "Re-run the installer." : "Rebuild it with `make build-core`."));
     return out;
   }
   const builtAt = fs.statSync(binary).mtimeMs;
   // The engine is built from core/src/*.rs; core/src/bin holds the TUI, checked separately.
   const sourceAt = PACKAGED_HOME ? 0 : newestMtime(path.join(path.dirname(coreCargoManifest()), "src"), ".rs", 2000, false);
   if (reported !== nexusVersion()) {
-    out.push(f("engine.binary", "engine", "warn", `The engine reports version ${reported}, the CLI ${nexusVersion()}.`, evidence, "Rebuild with `make build`."));
+    out.push(f("engine.binary", "engine", "warn", `The engine reports version ${reported}, the CLI ${nexusVersion()}.`, evidence, PACKAGED_HOME ? "Re-run the installer." : "Rebuild with `make build`."));
   } else if (sourceAt > builtAt) {
-    out.push(f("engine.binary", "engine", "warn", "The engine binary is older than its source; it may not include recent fixes.", [...evidence, `built ${new Date(builtAt).toISOString()}`, `newest source ${new Date(sourceAt).toISOString()}`], "Rebuild with `make build-core`."));
+    out.push(f("engine.binary", "engine", "warn", "The engine binary is older than its source; it may not include recent fixes.", [...evidence, `built ${new Date(builtAt).toISOString()}`, `newest source ${new Date(sourceAt).toISOString()}`], PACKAGED_HOME ? "Re-run the installer." : "Rebuild with `make build-core`."));
   } else {
     out.push(f("engine.binary", "engine", "pass", "The Rust engine binary runs and matches the CLI version.", evidence));
   }
@@ -506,25 +574,55 @@ const engineCheck: Check = async (ctx, signal) => {
     } catch {}
     out.push(ok
       ? f("engine.tool", "engine", "pass", "The engine executed a read-only tool (list_dir) in the workspace.", [workspace])
-      : f("engine.tool", "engine", "fail", "The engine could not execute a read-only tool in the workspace.", [workspace, call.timedOut ? "timed out" : (call.stderr || call.error || call.stdout).trim().slice(0, 300)], "Check workspace permissions and rebuild the engine."));
+      : f("engine.tool", "engine", "fail", "The engine could not execute a read-only tool in the workspace.", [workspace, call.timedOut ? "timed out" : (call.stderr || call.error || call.stdout).trim().slice(0, 300)], PACKAGED_HOME ? "Check workspace permissions and re-run the installer." : "Check workspace permissions and rebuild the engine."));
   }
   return out;
 };
 
-/** The live TUI and its sidecar: present and built from current source (a stale build hides recent fixes). */
-const tuiCheck: Check = async () => {
+/** The live TUI and its sidecar: launchable and built from current source. */
+const tuiCheck: Check = async (ctx, signal) => {
   const core = path.dirname(coreCargoManifest());
-  const tui = PACKAGED_HOME ? path.join(CORE_ROOT, "nexus-tui") : path.join(core, "target/release/nexus-tui");
+  const candidates = [
+    ...(PACKAGED_HOME ? [path.join(CORE_ROOT, "nexus-tui")] : []),
+    path.join(core, "target/release/nexus-tui"),
+    path.join(core, "target/debug/nexus-tui"),
+  ];
+  const tui = candidates.find((c) => fs.existsSync(c));
   const sidecar = path.join(CLI_ROOT, "dist/sidecar.js");
-  if (!fs.existsSync(tui) || !fs.existsSync(sidecar)) {
-    return f("tui.build", "install", "warn", "The live TUI is not built; `nexus` without arguments falls back to the readline REPL.", [fs.existsSync(tui) ? sidecar : tui], "Run `make build`.");
+  if (!tui || !fs.existsSync(sidecar)) {
+    return f(
+      "tui.launch",
+      "install",
+      "warn",
+      "The live TUI is not built; `nexus` without arguments falls back to the readline REPL.",
+      [!tui ? "nexus-tui binary missing" : "cli/dist/sidecar.js missing"],
+      PACKAGED_HOME ? "Re-run the installer." : "Run `make build`."
+    );
+  }
+  const checkResult = await run(tui, ["--live", "--check"], { timeoutMs: ctx.timeoutMs, signal });
+  if (checkResult.code !== 0) {
+    return f(
+      "tui.launch",
+      "install",
+      "warn",
+      "The live TUI cannot launch; `nexus` without arguments falls back to the readline REPL.",
+      [tui, checkResult.stderr.trim() || checkResult.stdout.trim() || "sidecar resolution failed"],
+      PACKAGED_HOME ? "Re-run the installer." : "Run `make build`."
+    );
   }
   const sourceAt = PACKAGED_HOME ? 0 : newestMtime(path.join(core, "src/bin"), ".rs");
   const builtAt = fs.statSync(tui).mtimeMs;
   if (sourceAt > builtAt) {
-    return f("tui.build", "install", "warn", "The live TUI binary is older than its source.", [tui, `built ${new Date(builtAt).toISOString()}`, `newest source ${new Date(sourceAt).toISOString()}`], "Run `make build-core`.");
+    return f(
+      "tui.launch",
+      "install",
+      "warn",
+      "The live TUI binary is older than its source.",
+      [tui, `built ${new Date(builtAt).toISOString()}`, `newest source ${new Date(sourceAt).toISOString()}`],
+      "Run `make build-core`."
+    );
   }
-  return f("tui.build", "install", "pass", "The live TUI and its sidecar are built from current source.", [tui, sidecar]);
+  return f("tui.launch", "install", "pass", "The live TUI is launchable and its sidecar resolves.", [tui, sidecar]);
 };
 
 const workspaceCheck: Check = async (ctx) => {
@@ -596,6 +694,78 @@ const stateDirCheck: Check = async (ctx) => {
   return out;
 };
 
+const statePermissionsCheck: Check = async (ctx) => {
+  const nexusDir = path.join(ctx.home, ".nexus");
+  const historyFile = path.join(ctx.home, ".nexus_history");
+  const out: Array<Omit<DoctorFinding, "durationMs">> = [];
+
+  if (fs.existsSync(nexusDir)) {
+    const unsafe = ancestryProblem(ctx.home, nexusDir);
+    const mode = modeOf(nexusDir);
+    if (mode !== undefined && (mode & 0o077) !== 0) {
+      if (unsafe) {
+        out.push(f("state.permissions", "state", "warn", `The ~/.nexus directory is readable by other users (mode ${mode.toString(8)}), and its path is not safe to change automatically (${unsafe}).`, [nexusDir], "Review the path and restrict the real directory yourself (doctor never changes permissions through a link)."));
+      } else {
+        out.push(f("state.permissions", "state", "warn", `The ~/.nexus directory is readable by other users (mode ${mode.toString(8)}).`, [nexusDir], undefined, { id: "state.permissions", description: `chmod ${nexusDir} from ${mode.toString(8)} to 700`, expect: identityOf(nexusDir) }));
+      }
+    }
+
+    const scanDir = (dir: string, depth = 0) => {
+      if (depth > 6) return;
+      let entries: fs.Dirent[];
+      try {
+        entries = fs.readdirSync(dir, { withFileTypes: true });
+      } catch {
+        return;
+      }
+      for (const entry of entries) {
+        const full = path.join(dir, entry.name);
+        const itemUnsafe = ancestryProblem(ctx.home, full);
+        if (entry.isDirectory()) {
+          if (entry.isSymbolicLink()) continue;
+          const dirMode = modeOf(full);
+          if (dirMode !== undefined && (dirMode & 0o077) !== 0) {
+            if (itemUnsafe) {
+              out.push(f("state.permissions", "state", "warn", `The ${path.relative(ctx.home, full)} directory is readable by other users (mode ${dirMode.toString(8)}), and its path is not safe to change automatically (${itemUnsafe}).`, [full], "Review the path and restrict the real directory yourself."));
+            } else {
+              out.push(f("state.permissions", "state", "warn", `The ${path.relative(ctx.home, full)} directory is readable by other users (mode ${dirMode.toString(8)}).`, [full], undefined, { id: "state.permissions", description: `chmod ${full} from ${dirMode.toString(8)} to 700`, expect: identityOf(full) }));
+            }
+          }
+          scanDir(full, depth + 1);
+        } else if (entry.isFile()) {
+          if (entry.isSymbolicLink()) continue;
+          const fileMode = modeOf(full);
+          if (fileMode !== undefined && ((fileMode & 0o077) !== 0 || (fileMode & 0o111) !== 0)) {
+            if (itemUnsafe) {
+              out.push(f("state.permissions", "state", "warn", `The ${path.relative(ctx.home, full)} file is readable by other users (mode ${fileMode.toString(8)}), and its path is not safe to change automatically (${itemUnsafe}).`, [full], "Review the path and restrict the real file yourself."));
+            } else {
+              out.push(f("state.permissions", "state", "warn", `The ${path.relative(ctx.home, full)} file is readable by other users (mode ${fileMode.toString(8)}).`, [full], undefined, { id: "state.permissions", description: `chmod ${full} from ${fileMode.toString(8)} to 600`, expect: identityOf(full) }));
+            }
+          }
+        }
+      }
+    };
+    scanDir(nexusDir);
+  }
+
+  if (fs.existsSync(historyFile)) {
+    const histUnsafe = ancestryProblem(ctx.home, historyFile);
+    const histMode = modeOf(historyFile);
+    if (histMode !== undefined && ((histMode & 0o077) !== 0 || (histMode & 0o111) !== 0)) {
+      if (histUnsafe) {
+        out.push(f("state.permissions", "state", "warn", `The ~/.nexus_history file is readable by other users (mode ${histMode.toString(8)}), and its path is not safe to change automatically (${histUnsafe}).`, [historyFile], "Review the path and restrict the real file yourself."));
+      } else {
+        out.push(f("state.permissions", "state", "warn", `The ~/.nexus_history file is readable by other users (mode ${histMode.toString(8)}).`, [historyFile], undefined, { id: "state.permissions", description: `chmod ${historyFile} from ${histMode.toString(8)} to 600`, expect: identityOf(historyFile) }));
+      }
+    }
+  }
+
+  if (out.length === 0) {
+    return f("state.permissions", "state", "pass", "Nexus state directories and files are private (0700/0600).", [nexusDir]);
+  }
+  return out;
+};
+
 const stateIntegrityCheck: Check = async (ctx) => {
   const dirs = [path.join(ctx.home, ".nexus", "sessions"), path.join(ctx.home, ".nexus", "tasks")];
   let checked = 0;
@@ -649,6 +819,61 @@ const credentialStoreCheck: Check = async (ctx) => {
     return f("credentials.store", "state", "warn", `The credential store is readable by other users (mode ${mode.toString(8)}).`, [file], undefined, { id: "credentials.permissions", description: `chmod ${file} from ${mode.toString(8)} to 600`, expect: identityOf(file) });
   }
   return f("credentials.store", "state", "pass", "The credential store is private to this user.", [file, `mode ${mode.toString(8)}`]);
+};
+
+const configEnvCheck: Check = async (ctx) => {
+  const file = path.join(ctx.home, ".config/nexus/config.env");
+  if (!fs.existsSync(file)) {
+    return f("config.env", "config", "pass", "No ~/.config/nexus/config.env file present (optional configuration).", [file]);
+  }
+  const mode = modeOf(file) ?? 0;
+  if (mode & 0o077) {
+    const unsafe = ancestryProblem(ctx.home, file);
+    if (unsafe) {
+      return f("config.env", "config", "warn", `The configuration file is readable by other users (mode ${mode.toString(8)}), and its path is not safe to change automatically (${unsafe}).`, [file], "Review the path and restrict the real file yourself (doctor never changes permissions through a link).");
+    }
+    return f("config.env", "config", "warn", `The configuration file is readable by other users (mode ${mode.toString(8)}).`, [file], undefined, { id: "config.permissions", description: `chmod ${file} from ${mode.toString(8)} to 600`, expect: identityOf(file) });
+  }
+  return f("config.env", "config", "pass", "The configuration file is private to this user.", [file, `mode ${mode.toString(8)}`]);
+};
+
+const customCaCheck: Check = async (ctx) => {
+  let raw: string | undefined;
+  const configFile = path.join(ctx.home, ".config/nexus/config.env");
+  if (fs.existsSync(configFile)) {
+    try {
+      raw = parseDotenv(fs.readFileSync(configFile)).NODE_EXTRA_CA_CERTS?.trim();
+    } catch {}
+  }
+  if (!raw && ctx.home === credentialStorageHome()) {
+    raw = process.env.NODE_EXTRA_CA_CERTS?.trim();
+  }
+  if (!raw) {
+    return f("config.custom_ca", "config", "skip", "No custom CA certificate bundle (NODE_EXTRA_CA_CERTS) is configured (optional).");
+  }
+  const resolved = raw.startsWith("~/") ? path.join(ctx.home, raw.slice(2)) : path.resolve(ctx.home, raw);
+  if (!fs.existsSync(resolved)) {
+    return f("config.custom_ca", "config", "fail", `The configured custom CA bundle (${resolved}) does not exist.`, [resolved], "Set NODE_EXTRA_CA_CERTS in ~/.config/nexus/config.env to a readable PEM certificate file.");
+  }
+  let content: string;
+  try {
+    if (!fs.statSync(resolved).isFile()) {
+      return f("config.custom_ca", "config", "fail", `The configured custom CA bundle (${resolved}) is not a regular file.`, [resolved], "Set NODE_EXTRA_CA_CERTS in ~/.config/nexus/config.env to a PEM certificate file.");
+    }
+    content = fs.readFileSync(resolved, "utf8");
+  } catch (err: any) {
+    return f("config.custom_ca", "config", "fail", `The configured custom CA bundle (${resolved}) could not be read.`, [resolved, err?.code ?? String(err)], "Check permissions on the certificate file.");
+  }
+  const blocks = content.match(/-----BEGIN CERTIFICATE-----[\s\S]*?-----END CERTIFICATE-----/g) ?? [];
+  if (!blocks.length) {
+    return f("config.custom_ca", "config", "fail", `The custom CA bundle (${resolved}) contains no PEM certificate blocks.`, [resolved], "Point NODE_EXTRA_CA_CERTS at a PEM-encoded X.509 certificate file.");
+  }
+  try {
+    for (const block of blocks) new X509Certificate(block);
+  } catch (err: any) {
+    return f("config.custom_ca", "config", "fail", `The custom CA bundle (${resolved}) could not be parsed as X.509 PEM.`, [resolved, String(err?.message ?? err)], "Replace the file named by NODE_EXTRA_CA_CERTS with a valid PEM certificate.");
+  }
+  return f("config.custom_ca", "config", "pass", `The custom CA bundle (${resolved}) exists and contains ${blocks.length} valid X.509 certificate(s).`, [resolved]);
 };
 
 const mcpCheck: Check = async (ctx) => {
@@ -730,14 +955,18 @@ const CHECKS: Array<[string, Check]> = [
   ["runtime", runtimeCheck],
   ["launcher", launcherCheck],
   ["config", configCheck],
+  ["project_env_ignored", projectEnvCheck],
   ["endpoint", endpointChecks],
   ["inference", inferenceCheck],
   ["shell", shellCheck],
   ["engine", engineCheck],
   ["workspace", workspaceCheck],
   ["state", stateDirCheck],
+  ["permissions", statePermissionsCheck],
   ["integrity", stateIntegrityCheck],
   ["credentials", credentialStoreCheck],
+  ["config_env", configEnvCheck],
+  ["custom_ca", customCaCheck],
   ["mcp", mcpCheck],
   ["plugins", pluginCheck],
 ];
@@ -749,12 +978,20 @@ async function runCheck(name: string, check: Check, ctx: CheckContext, parent: A
   const controller = new AbortController();
   const onAbort = () => controller.abort();
   parent.addEventListener("abort", onAbort, { once: true });
+  let onParentCancel: (() => void) | undefined;
   let timer: NodeJS.Timeout | undefined;
   try {
     const result = await Promise.race([
       check(ctx, controller.signal),
       new Promise<"timeout">((resolve) => (timer = setTimeout(() => resolve("timeout"), limit))),
-      new Promise<"cancelled">((resolve) => (parent.aborted ? resolve("cancelled") : parent.addEventListener("abort", () => resolve("cancelled"), { once: true }))),
+      new Promise<"cancelled">((resolve) => {
+        if (parent.aborted) {
+          resolve("cancelled");
+        } else {
+          onParentCancel = () => resolve("cancelled");
+          parent.addEventListener("abort", onParentCancel, { once: true });
+        }
+      }),
     ]);
     if (result === "timeout" || result === "cancelled") {
       controller.abort();
@@ -766,6 +1003,9 @@ async function runCheck(name: string, check: Check, ctx: CheckContext, parent: A
   } finally {
     clearTimeout(timer);
     parent.removeEventListener("abort", onAbort);
+    if (onParentCancel) {
+      parent.removeEventListener("abort", onParentCancel);
+    }
   }
 }
 
@@ -777,7 +1017,18 @@ export async function runDoctor(optionsOrConfig: DoctorOptions | HarnessConfig |
   if (options.timeoutMs !== undefined && !(Number.isFinite(options.timeoutMs) && options.timeoutMs > 0)) {
     throw new Error(`--timeout must be a positive number of milliseconds (got ${String(options.timeoutMs)})`);
   }
-  const signal = options.signal ?? new AbortController().signal;
+  // Checks are deliberately started together. Each `runCheck` owns two one-shot
+  // listeners on its parent signal (abort propagation and Promise.race cancellation),
+  // so their known bounded fan-out exceeds Node 20's default EventTarget warning
+  // threshold. Use a private signal and set its limit to that explicit fan-out;
+  // never change the caller's signal or the process-wide listener default.
+  const checksController = new AbortController();
+  const signal = checksController.signal;
+  const callerSignal = options.signal;
+  const forwardAbort = () => checksController.abort(callerSignal?.reason);
+  if (callerSignal?.aborted) forwardAbort();
+  else callerSignal?.addEventListener("abort", forwardAbort, { once: true });
+  setMaxListeners(CHECKS.length * 2, signal);
   const ctx: CheckContext = {
     config: options.config,
     configError: options.configError,
@@ -786,15 +1037,32 @@ export async function runDoctor(optionsOrConfig: DoctorOptions | HarnessConfig |
     home: options.home ?? credentialStorageHome(),
     timeoutMs: options.timeoutMs ?? DEFAULT_TIMEOUT_MS,
   };
-  const results = await Promise.all(CHECKS.map(([name, check]) => runCheck(name, check, ctx, signal)));
+  let results: DoctorFinding[][];
+  try {
+    results = await Promise.all(CHECKS.map(([name, check]) => runCheck(name, check, ctx, signal)));
+  } finally {
+    callerSignal?.removeEventListener("abort", forwardAbort);
+  }
   const findings = results.flat();
   const summary: Record<DoctorStatus, number> = { pass: 0, warn: 0, fail: 0, skip: 0 };
   for (const finding of findings) summary[finding.status]++;
+  const config = options.config;
+  let posture: { mode: "auto" | "review" | "read-only"; sandbox: string; trusted: boolean } | undefined;
+  if (config) {
+    const trusted = isWorkspaceTrusted(config.workspace, Boolean(config.readOnly));
+    const sandboxStatus = config.sandbox ? (typeof config.sandbox === "string" ? config.sandbox : "on") : "off";
+    posture = {
+      mode: config.approvalMode ?? (trusted ? "auto" : "review"),
+      sandbox: sandboxStatus,
+      trusted,
+    };
+  }
   const report: DoctorReport = {
     schemaVersion: DOCTOR_SCHEMA_VERSION,
     tool: "nexus doctor",
     nexusVersion: nexusVersion(),
     buildIdentity: getBuildIdentity(),
+    posture,
     context: options.context ?? "cli",
     deep: ctx.deep,
     generatedAt: new Date().toISOString(),
@@ -808,7 +1076,7 @@ export async function runDoctor(optionsOrConfig: DoctorOptions | HarnessConfig |
 }
 
 function isDoctorOptions(value: unknown): value is DoctorOptions {
-  return Boolean(value && typeof value === "object" && ("config" in (value as any) || "configError" in (value as any) || "context" in (value as any) || "deep" in (value as any)));
+  return Boolean(value && typeof value === "object" && ("config" in (value as any) || "configError" in (value as any) || "context" in (value as any) || "deep" in (value as any) || "home" in (value as any) || "timeoutMs" in (value as any)));
 }
 
 /** Exact secret values the report must never contain, whatever their shape. */
@@ -836,10 +1104,13 @@ interface PlannedRepair {
 
 function planRepairs(report: DoctorReport): PlannedRepair[] {
   const plans: PlannedRepair[] = [];
+  const seenTargets = new Set<string>();
   for (const finding of report.findings) {
     if (!finding.repair) continue;
     const target = finding.evidence[0];
     if (!target) continue;
+    if (seenTargets.has(target)) continue;
+    seenTargets.add(target);
     if (finding.repair.id === "state.create") {
       plans.push({
         id: "state.create",
@@ -852,8 +1123,15 @@ function planRepairs(report: DoctorReport): PlannedRepair[] {
           mkdirVerified(home, target);
         },
       });
-    } else if (finding.repair.id === "state.permissions" || finding.repair.id === "credentials.permissions") {
-      const wanted = finding.repair.id === "state.permissions" ? 0o700 : 0o600;
+    } else if (finding.repair.id === "state.permissions" || finding.repair.id === "credentials.permissions" || finding.repair.id === "config.permissions") {
+      let isDir = false;
+      try {
+        isDir = fs.lstatSync(target).isDirectory();
+      } catch {
+        isDir = finding.repair.id === "state.permissions";
+      }
+      const wanted = isDir ? 0o700 : 0o600;
+      const kind: "dir" | "file" = isDir ? "dir" : "file";
       // The object as diagnosed, not as it is now: a change made in between must make the repair stand down.
       const diagnosed: Identity | undefined = finding.repair.expect;
       plans.push({
@@ -864,7 +1142,7 @@ function planRepairs(report: DoctorReport): PlannedRepair[] {
         previousMode: diagnosed?.mode,
         apply: (home) => {
           if (!diagnosed) throw new SafePathError(`${target} was not found when the repair was planned`);
-          chmodVerified(home, target, wanted, diagnosed, wanted === 0o700 ? "dir" : "file");
+          chmodVerified(home, target, wanted, diagnosed, kind);
         },
       });
     }
@@ -946,12 +1224,13 @@ export async function runRepairs(report: DoctorReport, options: RepairOptions): 
   }
   const verified = await runDoctor({ ...options, signal: options.signal });
   for (const repair of repairs) {
-    const after = verified.findings.find((finding) => finding.id === repair.findingId && finding.evidence[0] === plans.find((p) => p.id === repair.id && p.findingId === repair.findingId)?.target)
-      ?? verified.findings.find((finding) => finding.id === repair.findingId);
-    repair.verified = after?.status;
-    if (repair.status === "applied" && after && after.status !== "pass") {
+    const plan = plans.find((p) => p.id === repair.id && p.description === repair.description);
+    const stillFailing = verified.findings.find((finding) => finding.id === repair.findingId && finding.evidence[0] === plan?.target && finding.status !== "pass");
+    const after = stillFailing ?? verified.findings.find((finding) => finding.id === repair.findingId);
+    repair.verified = after?.status ?? "pass";
+    if (repair.status === "applied" && stillFailing) {
       repair.status = "unresolved";
-      repair.detail += ` The check still reports ${after.status}: ${after.explanation}`;
+      repair.detail += ` The check still reports ${stillFailing.status}: ${stillFailing.explanation}`;
     }
   }
   return { ...verified, repairs };
@@ -996,6 +1275,11 @@ export function renderDoctorText(report: DoctorReport): string {
   const out: string[] = [];
   const s = report.summary;
   out.push(`Nexus doctor ${report.nexusVersion} — ${report.context === "session" ? "active session configuration" : "fresh CLI configuration"}${report.deep ? " (deep)" : ""}`);
+  if (report.posture) {
+    const p = report.posture;
+    const trustStr = p.trusted ? "trusted" : "untrusted (nexus trust .)";
+    out.push(`mode: ${p.mode} · sandbox: ${p.sandbox} · workspace: ${trustStr}`);
+  }
   out.push(`${s.pass} pass · ${s.warn} warn · ${s.fail} fail · ${s.skip} skipped · ${report.durationMs} ms${report.cancelled ? " · CANCELLED (incomplete)" : ""}`);
   out.push("");
   const order: DoctorStatus[] = ["fail", "warn", "pass", "skip"];

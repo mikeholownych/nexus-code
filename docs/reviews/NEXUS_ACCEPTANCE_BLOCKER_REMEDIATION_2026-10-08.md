@@ -1,5 +1,7 @@
 # Nexus I1/I6 acceptance-blocker remediation (V1, V2, V3): evidence report
 
+> **Historical record.** This document is kept for provenance. Current requirements and status: [docs/v1.0.0/REQUIREMENTS.md](../v1.0.0/REQUIREMENTS.md). Statuses here may have been superseded or contradicted since it was written.
+
 Scope: close the three violations confirmed in `docs/reviews/NEXUS_ACCEPTANCE_BLOCKERS_2026-10-08.md` (V1 durable
 objective and continuity, V2 durable verification obligations, V3 credential storage isolation) without weakening the
 accepted convergence (I1, G) and credential-authority (I6) invariants. Not merged, not pushed; the post-remediation

@@ -119,6 +119,8 @@ export interface ExecutionReceipt {
   candidateMutated: boolean;
   /** High-level execution status */
   status: "COMPLETED" | "DENIED" | "FAILED" | "BLOCKED";
+  /** Typed denial reason if status is DENIED */
+  denialReason?: string;
   /** ISO 8601 timestamp (EVID-003) */
   timestamp: string;
   /** Whether operation was simulated rather than actual host effect (EXEC-010) */

@@ -98,13 +98,16 @@ ptyTest("the whole live TUI through a pseudo-terminal", { timeout: 420_000 }, as
   });
   const gw = await startGateway(script);
   const home = makeHome();
+  const trustDir = path.join(home, ".config", "nexus");
+  fs.mkdirSync(trustDir, { recursive: true });
+  fs.writeFileSync(path.join(trustDir, "trusted_workspaces.json"), JSON.stringify({ trustedPaths: [fs.realpathSync(repo)] }, null, 2));
   const logs = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-tui-surface-"));
   fs.mkdirSync(EVIDENCE, { recursive: true });
   const plan = {
     tui: TUI,
     recorder: RECORDER,
     node: process.execPath,
-    sidecar_args: ["-w", repo, "-e", gw.url, "-m", "m"],
+    sidecar_args: ["-w", repo, "-e", gw.url, "-m", "m", "--mode", "auto"],
     cast: path.join(EVIDENCE, "tui_surface.cast"),
     screens: path.join(EVIDENCE, "tui_surface_screens.json"),
     env: {

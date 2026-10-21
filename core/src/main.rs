@@ -50,8 +50,22 @@ struct RpcResponse {
     error: Option<String>,
 }
 
+/// How long a cancelled or shut-down command group gets between SIGTERM and SIGKILL.
+const CANCEL_GRACE: std::time::Duration = std::time::Duration::from_secs(2);
+
 fn execute_tool(tool_name: &str, params: Value, base_dir: &Path) -> Result<Value, String> {
+    execute_request(tool_name, params, base_dir, None)
+}
+
+/// `key` identifies the RPC request, so a later `cancel` can end the command it started.
+fn execute_request(tool_name: &str, params: Value, base_dir: &Path, key: Option<String>) -> Result<Value, String> {
     match tool_name {
+        "hello" => {
+            Ok(serde_json::json!({
+                "version": env!("CARGO_PKG_VERSION"),
+                "protocol": 1,
+            }))
+        }
         "read_file" => {
             let args: file_ops::ReadFileArgs = serde_json::from_value(params)
                 .map_err(|e| format!("Invalid read_file arguments: {e}"))?;
@@ -103,8 +117,26 @@ fn execute_tool(tool_name: &str, params: Value, base_dir: &Path) -> Result<Value
         "run_command" => {
             let args: runner::RunCommandArgs = serde_json::from_value(params)
                 .map_err(|e| format!("Invalid run_command arguments: {e}"))?;
-            let res = runner::run_command(args, base_dir)?;
+            let res = runner::run_command_tracked(args, base_dir, key.as_deref())?;
             serde_json::to_value(res).map_err(|e| e.to_string())
+        }
+        // Ends the command started by request `request_id` (TERM, then KILL after a grace period).
+        #[cfg(unix)]
+        "cancel" => {
+            let target = params.get("request_id").cloned().unwrap_or(Value::Null).to_string();
+            let found = runner::cancel_command(&target, CANCEL_GRACE);
+            Ok(serde_json::json!({ "cancelled": found }))
+        }
+        // Ends background processes that earlier commands left running (`server &`).
+        #[cfg(unix)]
+        "end_background" => {
+            let ended = runner::end_background_commands(CANCEL_GRACE);
+            Ok(serde_json::json!({ "ended": ended }))
+        }
+        // Lists active background services.
+        "list_services" => {
+            let services = runner::list_services();
+            serde_json::to_value(services).map_err(|e| e.to_string())
         }
         "file_info" => {
             let args: file_ops::FileInfoArgs = serde_json::from_value(params)
@@ -182,6 +214,22 @@ async fn run_rpc_async(workspace: &Path) {
     let stdout = Arc::new(tokio::sync::Mutex::new(tokio::io::stdout()));
     let ws = Arc::new(workspace.to_path_buf());
 
+    // The engine owns the commands it started: when its client goes away (stdin closes), or it is told to stop, every
+    // command group still running (and every background process they left) is ended before it exits (REQ-SEC-106).
+    #[cfg(unix)]
+    {
+        use tokio::signal::unix::{signal, SignalKind};
+        for kind in [SignalKind::terminate(), SignalKind::hangup(), SignalKind::interrupt()] {
+            if let Ok(mut stream) = signal(kind) {
+                tokio::spawn(async move {
+                    if stream.recv().await.is_some() {
+                        shutdown_and_exit(143).await;
+                    }
+                });
+            }
+        }
+    }
+
     while let Ok(Some(line)) = lines.next_line().await {
         let trimmed = line.trim().to_string();
         if trimmed.is_empty() {
@@ -197,8 +245,9 @@ async fn run_rpc_async(workspace: &Path) {
                     let method = req.method;
                     let params = req.params;
                     let id = req.id;
+                    let key = id.as_ref().map(|v| v.to_string());
                     let exec_res = tokio::task::spawn_blocking(move || {
-                        execute_tool(&method, params, &ws_clone)
+                        execute_request(&method, params, &ws_clone, key)
                     })
                     .await;
 
@@ -234,6 +283,16 @@ async fn run_rpc_async(workspace: &Path) {
             }
         });
     }
+    shutdown_and_exit(0).await;
+}
+
+/// Ends every command group the engine started, then exits.
+async fn shutdown_and_exit(code: i32) {
+    #[cfg(unix)]
+    {
+        let _ = tokio::task::spawn_blocking(|| runner::end_all_commands(CANCEL_GRACE)).await;
+    }
+    std::process::exit(code);
 }
 
 fn parse_flexible_json(input: &str) -> Result<Value, String> {
@@ -281,6 +340,11 @@ async fn main() {
             }
         }
         Commands::Rpc => {
+            // If the client dies without closing stdin, the kernel delivers SIGTERM, which runs the same shutdown.
+            #[cfg(target_os = "linux")]
+            unsafe {
+                libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGTERM);
+            }
             run_rpc_async(&workspace).await;
         }
     }

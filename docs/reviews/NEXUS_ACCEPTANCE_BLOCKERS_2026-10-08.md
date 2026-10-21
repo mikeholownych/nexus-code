@@ -1,5 +1,7 @@
 # Nexus convergence-invariant remediation: acceptance-blocker report (V1, V2, V3)
 
+> **Historical record.** This document is kept for provenance. Current requirements and status: [docs/v1.0.0/REQUIREMENTS.md](../v1.0.0/REQUIREMENTS.md). Statuses here may have been superseded or contradicted since it was written.
+
 Date: 2026-10-08. Scope: the three violations confirmed during independent acceptance of the convergence-invariant
 remediation (`a27901c`, documented in `1854f7c`/`fef7cde`). This report establishes facts only. No implementation was
 changed, nothing was merged or pushed, and the dogfood rerun was not started.

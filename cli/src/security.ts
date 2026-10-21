@@ -26,10 +26,91 @@ const DEFAULT_PROTECTED_PATHS = [
   ".git",
   // The operator's list of trusted workspaces: the agent must not trust a workspace for itself.
   "trusted_workspaces.json",
-  ".env",
-  "id_rsa",
-  "id_ed25519",
+  ".env*",
+  "id_rsa*",
+  "id_ed25519*",
 ];
+
+export function splitShellWords(cmd: string): string[] {
+  const words: string[] = [];
+  let current = "";
+  let inSingleQuote = false;
+  let inDoubleQuote = false;
+  let escaped = false;
+
+  for (let i = 0; i < cmd.length; i++) {
+    const ch = cmd[i];
+    if (escaped) {
+      current += ch;
+      escaped = false;
+      continue;
+    }
+    if (ch === "\\") {
+      escaped = true;
+      continue;
+    }
+    if (ch === "'" && !inDoubleQuote) {
+      inSingleQuote = !inSingleQuote;
+      continue;
+    }
+    if (ch === '"' && !inSingleQuote) {
+      inDoubleQuote = !inDoubleQuote;
+      continue;
+    }
+    if (!inSingleQuote && !inDoubleQuote && /\s/.test(ch)) {
+      if (current.length > 0) {
+        words.push(current);
+        current = "";
+      }
+      continue;
+    }
+    current += ch;
+  }
+  if (current.length > 0) {
+    words.push(current);
+  }
+  return words;
+}
+
+export function splitSubcommands(cmd: string): string[][] {
+  const tokens = splitShellWords(cmd);
+  const subcommands: string[][] = [];
+  let current: string[] = [];
+
+  for (const token of tokens) {
+    if (token === ";" || token === "&&" || token === "||" || token === "|" || token === "&") {
+      if (current.length > 0) {
+        subcommands.push(current);
+        current = [];
+      }
+    } else if (token.includes(";") || token.includes("&") || token.includes("|")) {
+      let buf = "";
+      for (const ch of token) {
+        if (ch === ";" || ch === "&" || ch === "|") {
+          if (buf.length > 0) {
+            current.push(buf);
+            buf = "";
+          }
+          if (current.length > 0) {
+            subcommands.push(current);
+            current = [];
+          }
+        } else {
+          buf += ch;
+        }
+      }
+      if (buf.length > 0) {
+        current.push(buf);
+      }
+    } else {
+      current.push(token);
+    }
+  }
+  if (current.length > 0) {
+    subcommands.push(current);
+  }
+  return subcommands;
+}
 
 export class SecurityManager {
   private policy: SecurityPolicy;
@@ -76,34 +157,258 @@ export class SecurityManager {
   }
 
   public isCommandBlocked(command: string): { blocked: boolean; reason?: string } {
+    if (!command || typeof command !== "string") {
+      return { blocked: false };
+    }
     const trimmed = command.trim();
-    for (const pattern of this.policy.blockedCommands || []) {
+    if (trimmed.length === 0) {
+      return { blocked: false };
+    }
+
+    // 1. Custom blocked commands from policy (outside the default tripwire set)
+    const customPatterns = (this.policy.blockedCommands || []).filter(
+      (p) => !DEFAULT_BLOCKED_COMMANDS.includes(p)
+    );
+    for (const pattern of customPatterns) {
       if (pattern && trimmed.includes(pattern)) {
         return {
           blocked: true,
-          reason: `Security Policy Violation: Command matches blocked pattern '${pattern}'`,
+          reason: `Destructive-command tripwire: Command matches blocked pattern '${pattern}'`,
         };
       }
     }
+
+    // 2. Fork bomb denial of service
+    if (
+      trimmed.includes(":(){ :|:& };:") ||
+      trimmed.includes(":(){:|:&};:") ||
+      (trimmed.includes(":(){") && trimmed.includes(":|:"))
+    ) {
+      return {
+        blocked: true,
+        reason: "Destructive-command tripwire: Command blocked by safety guard (Fork bomb denial-of-service)",
+      };
+    }
+
+    // 3. Raw disk block redirection
+    if (/>\s*\/dev\/(sd|nvme|vd)/.test(trimmed)) {
+      return {
+        blocked: true,
+        reason: "Destructive-command tripwire: Command blocked by safety guard (Raw disk device redirection)",
+      };
+    }
+
+    // 4. Tokenized subcommand inspection
+    const subcommands = splitSubcommands(trimmed);
+    for (const sub of subcommands) {
+      if (sub.length === 0) continue;
+
+      // Strip wrapper commands: sudo, doas, nohup, env
+      let idx = 0;
+      while (idx < sub.length) {
+        const word = sub[idx];
+        if (word === "sudo" || word === "doas" || word === "nohup") {
+          idx++;
+          while (idx < sub.length && sub[idx].startsWith("-")) {
+            if ((sub[idx] === "-u" || sub[idx] === "-g") && idx + 1 < sub.length) {
+              idx += 2;
+            } else {
+              idx++;
+            }
+          }
+        } else if (word === "env") {
+          idx++;
+          while (idx < sub.length && (sub[idx].startsWith("-") || sub[idx].includes("="))) {
+            idx++;
+          }
+        } else {
+          break;
+        }
+      }
+      if (idx >= sub.length) continue;
+
+      const exe = sub[idx];
+      const args = sub.slice(idx + 1);
+
+      // System shutdown or reboot
+      if (["shutdown", "reboot", "poweroff", "halt"].includes(exe)) {
+        return {
+          blocked: true,
+          reason: "Destructive-command tripwire: Command blocked by safety guard (System shutdown or reboot command)",
+        };
+      }
+      if (exe === "init" && args.some((a) => a === "0" || a === "6")) {
+        return {
+          blocked: true,
+          reason: "Destructive-command tripwire: Command blocked by safety guard (System shutdown or reboot command (init 0/6))",
+        };
+      }
+
+      // Filesystem destruction (mkfs)
+      if (exe === "mkfs" || exe.startsWith("mkfs.")) {
+        return {
+          blocked: true,
+          reason: "Destructive-command tripwire: Command blocked by safety guard (Filesystem destruction command (mkfs))",
+        };
+      }
+
+      // Raw disk write via dd
+      if (exe === "dd") {
+        const hasDangerousOf = args.some((a) => {
+          if (!a.startsWith("of=")) return false;
+          const target = a.slice(3).replace(/^['"]|['"]$/g, "");
+          return (
+            target.startsWith("/dev/sd") ||
+            target.startsWith("/dev/nvme") ||
+            target.startsWith("/dev/vd") ||
+            (target.startsWith("/dev/") &&
+              !["/dev/null", "/dev/zero", "/dev/urandom", "/dev/random"].includes(target))
+          );
+        });
+        if (hasDangerousOf) {
+          return {
+            blocked: true,
+            reason: "Destructive-command tripwire: Command blocked by safety guard (Raw disk block overwrite (dd of=/dev/...))",
+          };
+        }
+      }
+
+      // Destructive root permissions or ownership
+      if (exe === "chmod" || exe === "chown") {
+        const isRecursive = args.some(
+          (a) => a === "-R" || a === "-r" || a === "--recursive" || /^-[a-zA-Z]*[rR]/.test(a)
+        );
+        if (isRecursive) {
+          const targetsRoot = args.some((a) => a === "/" || a === "/*");
+          if (targetsRoot) {
+            if (exe === "chmod") {
+              if (args.some((a) => a === "777" || a === "0777")) {
+                return {
+                  blocked: true,
+                  reason: "Destructive-command tripwire: Command blocked by safety guard (Recursive root permission alteration)",
+                };
+              }
+            } else {
+              return {
+                blocked: true,
+                reason: "Destructive-command tripwire: Command blocked by safety guard (Recursive root permission alteration)",
+              };
+            }
+          }
+        }
+      }
+
+      // Destructive recursive deletion (rm -rf /)
+      if (exe === "rm") {
+        const hasRf = args.some((a) => a === "-rf" || a === "-fr");
+        const hasDashDash = args.includes("--");
+        if (hasRf && !hasDashDash) {
+          for (const a of args) {
+            if (a.startsWith("-")) continue;
+            const norm = a.toLowerCase();
+            if (
+              norm === "/" ||
+              norm === "/*" ||
+              norm === "." ||
+              norm === ".." ||
+              norm === "~" ||
+              norm === "$home" ||
+              norm === "${home}"
+            ) {
+              return {
+                blocked: true,
+                reason:
+                  "Destructive-command tripwire: Command blocked by safety guard (Destructive recursive deletion of root, home, or current directory (rm -rf))",
+              };
+            }
+          }
+        }
+      }
+    }
+
     return { blocked: false };
   }
 
+  /**
+   * Check whether a path matches any protected pattern (REQ-SEC-118, ACC-TRUST-09).
+   * Matches `.env*` and case-insensitive variants, and inspects the canonical target.
+   * Path protection is enforced on all file read/write/edit tools; for `run_command` it is advisory.
+   */
   public isPathProtected(targetPath: string): { protected: boolean; reason?: string } {
-    const clean = targetPath.replace(/\\/g, "/");
-    for (const pattern of this.policy.protectedPaths || []) {
-      if (
-        clean === pattern ||
-        clean.startsWith(pattern + "/") ||
-        clean.includes("/" + pattern) ||
-        clean.endsWith("/" + pattern) ||
-        clean.endsWith(pattern)
-      ) {
-        return {
-          protected: true,
-          reason: `Security Policy Violation: Path '${targetPath}' is protected under security policy`,
-        };
-      }
+    if (!targetPath || typeof targetPath !== "string") {
+      return { protected: false };
     }
+
+    const checkCandidate = (cand: string): { protected: boolean; reason?: string } => {
+      const clean = cand.replace(/\\/g, "/");
+      const segments = clean.split("/").filter(Boolean);
+      const base = path.posix.basename(clean).toLowerCase();
+
+      for (const pattern of this.policy.protectedPaths || []) {
+        const patLower = pattern.toLowerCase();
+        if (patLower === ".env*" || patLower === ".env") {
+          if (segments.some((seg) => seg.toLowerCase().startsWith(".env"))) {
+            return {
+              protected: true,
+              reason: `Security Policy Violation: Path '${targetPath}' matches protected pattern '${pattern}'`,
+            };
+          }
+        } else if (patLower.endsWith("*")) {
+          const prefix = patLower.slice(0, -1);
+          if (segments.some((seg) => seg.toLowerCase().startsWith(prefix))) {
+            return {
+              protected: true,
+              reason: `Security Policy Violation: Path '${targetPath}' matches protected pattern '${pattern}'`,
+            };
+          }
+        } else {
+          if (
+            segments.some((seg) => seg.toLowerCase() === patLower) ||
+            base === patLower ||
+            clean.toLowerCase() === patLower ||
+            clean.toLowerCase().endsWith("/" + patLower)
+          ) {
+            return {
+              protected: true,
+              reason: `Security Policy Violation: Path '${targetPath}' is protected under security policy`,
+            };
+          }
+        }
+      }
+      return { protected: false };
+    };
+
+    // 1. Raw given path
+    const rawCheck = checkCandidate(targetPath);
+    if (rawCheck.protected) return rawCheck;
+
+    // 2. Absolute path in workspace
+    const absPath = path.isAbsolute(targetPath) ? targetPath : path.resolve(this.workspace, targetPath);
+    const absCheck = checkCandidate(absPath);
+    if (absCheck.protected) return absCheck;
+
+    // 3. Canonical target (resolves symlinks)
+    try {
+      if (fs.existsSync(absPath)) {
+        const real = fs.realpathSync(absPath);
+        const realCheck = checkCandidate(real);
+        if (realCheck.protected) {
+          return {
+            protected: true,
+            reason: `Security Policy Violation: Path '${targetPath}' resolves to protected target '${real}'`,
+          };
+        }
+      } else {
+        const dir = path.dirname(absPath);
+        if (fs.existsSync(dir)) {
+          const realDir = fs.realpathSync(dir);
+          const canonicalTarget = path.join(realDir, path.basename(absPath));
+          const canonCheck = checkCandidate(canonicalTarget);
+          if (canonCheck.protected) return canonCheck;
+        }
+      }
+    } catch {}
+
     return { protected: false };
   }
 

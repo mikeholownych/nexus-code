@@ -1,5 +1,7 @@
 # Cloud providers — live qualification (2026-10-11)
 
+> **Historical record.** This document is kept for provenance. Current requirements and status: [docs/v1.0.0/REQUIREMENTS.md](../v1.0.0/REQUIREMENTS.md). Statuses here may have been superseded or contradicted since it was written.
+
 Build: branch `feat/cloud-providers` at `1310e3a` (cli/dist). Command: `nexus providers verify --provider <id> --model <m> -j`
 (streamed completion, a tool call with a nonce, and a tool-result round trip; no workspace content sent).
 Credentials were the operator's existing connections, read in place by Nexus; neither file was modified
