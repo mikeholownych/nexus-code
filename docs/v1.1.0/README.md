@@ -70,7 +70,13 @@ Drawing from modern LLM platform patterns analyzed in [LANGSMITH_REVIEW.md](../v
 - Adds real-time trace inspection to the Ratatui TUI (`nexus-tui`), allowing operators to drill down into execution trees, tool call parameters, intermediate stdout, and token latencies.
 - Formalizes human-in-the-loop review queues (`nexus review <session>`) to standardize independent acceptance reviews.
 
-### Pillar 4: Resolution of Deferred Post-v1 Backlog Items
+### Pillar 4: Logit-Constrained Tool Calling & GBNF Grammar Engine
+- Eliminates JSON argument syntax errors, trailing conversational chatter, and hallucinated tool names on local open-weights models (`llama.cpp`, `vLLM`, `Ollama`).
+- Dynamically compiles registered tool schemas (`run_command`, `read_file`, `write_file`, `edit_file`) into Context-Free Grammars (GGML GBNF and Outlines JSON schemas).
+- Supports **hybrid grammars** for reasoning architectures (DeepSeek R1, Qwen QwQ), allowing chain-of-thought tokens inside `<think>...</think>` before locking sampling into strict tool invocation schemas.
+- Achieves zero syntax repair retries (`repair_rate = 0.00`), enabling reliable multi-turn agentic workflows on consumer 7B/14B Q4_K_M local models.
+
+### Pillar 5: Resolution of Deferred Post-v1 Backlog Items
 - Fulfills the recorded backlog from `docs/v1.0.0/REQUIREMENTS.md` §5:
   - **REQ-AGT-111:** Single step loop execution mode.
   - **CTX-001:** Full context provenance metadata graph across all prompt injections.
