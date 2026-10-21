@@ -19,8 +19,8 @@ v1.0.0 (RC.1 Freeze)                v1.1.0                              v1.2.0
 - Ratatui TUI & Token Accounting    - Flight Recorder Redaction         - TUI Trace Inspector
 - Deterministic Packages & Provenance - Standalone `nexus eval` CLI      - Human Annotation Queue
                                     - Deterministic Code Evaluators     - Failure Clustering
-                                                                           │
-                                                                           ▼
+                                    - GBNF Tool Grammar Engine          │
+                                                                        ▼
                                                                         v1.3.0
                                                                         - Standard OTLP Exporter
                                                                         - Full Context Provenance (CTX-1)
@@ -45,12 +45,14 @@ v1.0.0 (RC.1 Freeze)                v1.1.0                              v1.2.0
 | **WP-1104** | **Standalone `nexus eval` Command** | Implement `nexus eval` subcommand in launcher grammar, supporting `--dataset <path>`, `--runs <count>`, `--isolated-home`, and structured JSON score outputs. | `REQ-EVL-101`, `ROADMAP.md` |
 | **WP-1105** | **Deterministic Code Evaluators** | Implement modular evaluator library in `eval/evaluators/code/`: AST syntax validation, build pass/fail, typecheck exit codes, diff boundary compliance, and JSON repair rates. | `LANGSMITH_REVIEW` §4.1 |
 | **WP-1106** | **Single Step Loop Mode** | Implement `--step` flag in `nexus run` and `/step` REPL command to execute one agent turn and pause deterministically for operator confirmation. | `REQ-AGT-111` |
+| **WP-1107** | **Constrained Decoding & GBNF Tool Grammar Engine** | Implement dynamic Context-Free Grammar (GBNF) generation from registered tool schemas (`read_file`, `write_file`, `edit_file`, `run_command`). Interfaces with `llama.cpp` (`grammar`), `vLLM` (`guided_json`), and `Ollama` (`format`). Supports hybrid grammars (`<think>...</think>` + tool call) for reasoning models (DeepSeek R1). Drives JSON argument parse errors to 0.0% and unlocks reliable agentic execution on 7B/14B Q4_K_M local models. | `POSITIONING.md` §3.6, `SPEC-EVALUATION.md` §6 |
 
 ### v1.1.0 Release Gates
 
 - **Gate G1.1-1 (Zero-Leak Tracing):** Local trace engine produces valid OTel GenAI spans for all turn steps without leaking environment credentials or writing outside `~/.local/share/nexus/traces/`.
 - **Gate G1.1-2 (Dataset Decoupling):** Evaluator executes 100% of benchmark tasks with zero leakage of `oracles.jsonl` to agent prompt context.
 - **Gate G1.1-3 (CLI Parity):** `nexus eval` executes cleanly from packaged binary installations without developer dependencies.
+- **Gate G1.1-4 (Constrained Decoding Reliability):** GBNF-constrained execution achieves 100% valid JSON tool call emission (0 syntax repair retries) across supported local inference endpoints (llama.cpp, vLLM, Ollama).
 
 ---
 

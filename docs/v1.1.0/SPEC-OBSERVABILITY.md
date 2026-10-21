@@ -190,9 +190,53 @@ Located in `eval/evaluators/code/`:
 
 ---
 
-## 7. Command-Line Interface Extensions
+## 7. Logit-Constrained Tool Calling & GBNF Engine (WP-1107)
 
-### 7.1 Standalone Evaluation (`nexus eval`)
+To eliminate JSON argument parse failures and conversational rambling from open-weights models, Nexus v1.1.0 provides a logit-level constrained decoding engine:
+
+```
+Registered Tools ──► Tool Schema Compiler ──► GBNF / Outlines Grammar ──► Local Engine (llama.cpp / vLLM)
+                                                                                   │
+Model Sampling Logits: Token Masking (-∞ for schema-invalid tokens) ◄──────────────┘
+                                    │
+                                    ▼
+       100% Mathematically Valid Tool Call Payload (repair_rate = 0.0)
+```
+
+### 7.1 Dynamic GBNF Grammar Generation
+Nexus compiles registered tool definitions (`run_command`, `read_file`, `write_file`, `edit_file`) into a strict Context-Free Grammar conforming to GGML GBNF:
+
+```ebnf
+root        ::= ws (thought ws)? tool-call ws
+thought     ::= "<think>" [^<]* "</think>"
+tool-call   ::= "{" ws "\"name\":" ws tool-name "," ws "\"args\":" ws tool-args "}"
+tool-name   ::= "\"run_command\"" | "\"read_file\"" | "\"write_file\"" | "\"edit_file\""
+tool-args   ::= run-args | read-args | write-args | edit-args
+
+run-args    ::= "{" ws "\"CommandLine\":" ws string "," ws "\"WaitMsBeforeAsync\":" ws integer ("," ws "\"IsDaemon\":" ws boolean)? "}"
+read-args   ::= "{" ws "\"Path\":" ws string ("," ws "\"StartLine\":" ws integer)? ("," ws "\"EndLine\":" ws integer)? "}"
+
+string      ::= "\"" ([^"\\] | "\\" (["\\/bfnrt] | "u" [0-9a-fA-F] [0-9a-fA-F] [0-9a-fA-F] [0-9a-fA-F]))* "\""
+integer     ::= [0-9]+
+boolean     ::= "true" | "false"
+ws          ::= [ \t\n\r]*
+```
+
+### 7.2 Hybrid Grammar for Reasoning Models
+For reasoning architectures (e.g. DeepSeek R1, Qwen QwQ), enforcing immediate JSON emission truncates internal chain-of-thought tokens. The GBNF engine supports **hybrid grammars**: allowing an optional `<think>...</think>` block before strictly locking sampling into the tool invocation schema.
+
+### 7.3 Multi-Backend Transport Adapter
+- **`llama.cpp`:** Emits raw `.gbnf` syntax via the `grammar` API parameter.
+- **`vLLM` / Outlines:** Emits JSON Schema via `guided_json` / `response_format`.
+- **`Ollama`:** Emits JSON Schema via `format: <json_schema>`.
+- **Cloud Endpoints (OpenAI / Anthropic):** Passes standard `tools` array with strict mode enabled (`strict: true`).
+- **Unconstrained Fallback:** Retains heuristic regex and `repairJson` recovery when running against servers without grammar sampling support.
+
+---
+
+## 8. Command-Line Interface Extensions
+
+### 8.1 Standalone Evaluation (`nexus eval`)
 ```bash
 nexus eval --dataset eval/datasets/core-regression-v1 \
            --split benchmark \
@@ -205,7 +249,7 @@ nexus eval --dataset eval/datasets/core-regression-v1 \
 - Aggregates pass rates with 95% Wilson confidence intervals.
 - Asserts DEC-05 thresholds: `false_verified == 0`, `crash_rate <= 0.02`.
 
-### 7.2 Deterministic Session Replay (`nexus replay`)
+### 8.2 Deterministic Session Replay (`nexus replay`)
 ```bash
 nexus replay <trace-id> [--verify-only] [--interactive]
 ```
@@ -215,7 +259,7 @@ nexus replay <trace-id> [--verify-only] [--interactive]
 
 ---
 
-## 8. Security & Egress Verification
+## 9. Security & Egress Verification
 
 - **Default Invariant:** `NEXUS_TELEMETRY=0` (or `local-only`). No network packets are sent outside localhost during trace generation.
 - **Export Verification:** When `NEXUS_OTLP_ENDPOINT` is configured, outgoing endpoints are subject to `safeFetch` destination classification: link-local, loopback, and internal addresses are validated to prevent SSRF vulnerabilities.
