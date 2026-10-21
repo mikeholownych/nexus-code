@@ -52,10 +52,6 @@
           {
             "context": "linux-x86_64",
             "integration_id": 15368
-          },
-          {
-            "context": "cloudflare-contest-contract",
-            "integration_id": 15368
           }
         ]
       }
