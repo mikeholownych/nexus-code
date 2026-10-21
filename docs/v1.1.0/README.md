@@ -86,6 +86,7 @@ Drawing from modern LLM platform patterns analyzed in [LANGSMITH_REVIEW.md](../v
 | Document | Purpose |
 | :--- | :--- |
 | [`ROADMAP.md`](./ROADMAP.md) | Release cadence, milestone definitions (v1.1, v1.2, v1.3), and work packages |
-| [`SPEC-OBSERVABILITY.md`](./SPEC-OBSERVABILITY.md) | Technical specification for OTel tracing, local storage, and datasets |
+| [`SPEC-OBSERVABILITY.md`](./SPEC-OBSERVABILITY.md) | Technical specification for local-first OTel GenAI tracing, span schemas, and sanitization |
+| [`SPEC-EVALUATION.md`](./SPEC-EVALUATION.md) | Continuous evaluation architecture, dataset governance, evaluator taxonomy, and Wilson intervals |
 | [`../v1.0.0/LANGSMITH_REVIEW.md`](../v1.0.0/LANGSMITH_REVIEW.md) | Conceptual analysis of LangSmith observability and evaluation paradigms |
 | [`../v1.0.0/REQUIREMENTS.md`](../v1.0.0/REQUIREMENTS.md) | Baseline normative ledger and post-v1 backlog registry |
