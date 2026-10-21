@@ -58,11 +58,12 @@ Most mainstream agents treat the developer as a passive subscriber to a closed c
 | **Supply Chain Assurance** | Closed distribution | Closed marketplace | Standard PyPI package | **Bit-for-Bit Reproducible Packaging (`cmp`), CycloneDX SBOM, SLSA Provenance** |
 | **Token Accounting** | Server-calculated bill | Monthly subscription | Client estimate | **Provider `/models` Discovery & Native Tokenizer (`--strict-token-count`)** |
 | **Constrained Tool Calling** | Unconstrained JSON prompting + retry | Client schema parsing | Unconstrained prompting | **Logit-Constrained GBNF Engine (`llama.cpp`, `vLLM`, `Ollama`), 0 Syntax Repair Retries** |
+| **External App Ecosystem** | Basic bash/file tools only; no native multi-app integration | Manual MCP configuration per server | Git/terminal commands only | **Composio 250+ App Ecosystem Bridge (Managed OAuth, GBNF-constrained API schemas, automated Linear/Jira failure filing)** |
 | **Technical Debt & Deprecations** | Opaque closed dependencies | Hidden upstream debt | Pinned legacy Python libs | **Zero Deprecated Packages Policy: 100% modern upstream deps, fail-closed deprecation gates** |
 
 ---
 
-## 3. The 7 Core Value Drivers
+## 3. The 8 Core Value Drivers
 
 ```
                           ┌──────────────────────────────┐
@@ -74,7 +75,14 @@ Most mainstream agents treat the developer as a passive subscriber to a closed c
 ┌──────────────┐  ┌──────────────┐┌──────────────┐┌──────────────┐    ┌──────────────┐
 │  Air-Gapped  │  │ Time-Travel  ││ In-Repo BYOE ││ Multi-Agent  │    │ GBNF Grammar │
 │  Sovereignty │  │ Replay Core  ││  Evaluation  ││ Worktree Mesh│    │ Constrained  │
-└──────────────┘  └──────────────┘└──────────────┘└──────────────┘    └──────────────┘
+└──────────────┘  └──────────────┘└──────────────┘└──────────────┘    └──────┬───────┘
+                                                                             │
+                                              ┌──────────────────────────────┴───────┐
+                                              ▼                                      ▼
+                                       ┌──────────────┐                       ┌──────────────┐
+                                       │ SBOM Supply  │                       │ Composio App │
+                                       │ Chain Proven.│                       │ Mesh (250+)  │
+                                       └──────────────┘                       └──────────────┘
 ```
 
 ### 3.1 Air-Gapped Sovereign AI (The Enterprise Compliance Moat)
@@ -135,6 +143,15 @@ Most mainstream agents treat the developer as a passive subscriber to a closed c
   - **Zero Repair Overhead:** Achieves `repair_rate = 0.00` and `ERR_PARSER = 0`, allowing resource-constrained 7B/14B Q4_K_M local models to execute multi-turn agentic workflows with the reliability of frontier cloud models.
 - **Target Value:** Flawless autonomous tool execution on consumer hardware with 0 API costs and 0 retry token waste.
 
+### 3.8 Enterprise App Ecosystem & Managed Integrations (Composio Bridge)
+- **The Problem:** Autonomous agents that operate exclusively on local files leave developers with the manual burden of copy-pasting compiler errors into Jira/Linear tickets, notifying teammates on Slack, or manually provisioning API keys for external cloud services. Conversely, agents with unconstrained external API tools frequently hallucinate non-existent API parameters, break JSON payloads, or leak sensitive tokens into logs.
+- **The Nexus Moat:**
+  - **Composio Startup Program Integration:** Nexus Code incorporates managed OAuth connectors for 250+ enterprise services (Linear, Jira, Slack, GitHub, Notion, Sentry, AWS) backed by the Composio Startup Program Pro platform.
+  - **Zero-Friction Issue Sync:** Eval failure clusters (`WP-1205`) and human review findings (`WP-1204`) automatically serialize into structured bug reports and push directly to team issue trackers with full trace bundles attached.
+  - **GBNF-Constrained API Schemas:** Enterprise action schemas compile directly into Context-Free Grammars (`WP-1107`), making it mathematically impossible for even 7B/14B open-weights models to emit invalid JSON or hallucinate API parameters during multi-argument external calls.
+  - **Air-Gapped Sovereignty Preserved:** External integrations are strictly opt-in (`NEXUS_COMPOSIO_API_KEY`), all write actions require explicit operator confirmation prompts, and credentials undergo automated zero-leak sanitization (`CRED003`).
+- **Target Value:** Seamless bidirectional workflow between the developer's local terminal and the entire team's enterprise toolchain, with zero credential leaks and zero schema errors.
+
 ---
 
 ## 4. Persona-Driven Value Propositions
@@ -187,3 +204,5 @@ Most mainstream agents treat the developer as a passive subscriber to a closed c
 | **Deterministic Replay (`nexus replay`)** | `v1.2.0` | [`SPEC-OBSERVABILITY.md`](./SPEC-OBSERVABILITY.md) §8 | Instant offline reproduction of agent failures at zero token cost |
 | **Multi-Agent Worktree Mesh** | `v1.2.0` | [`ROADMAP.md`](./ROADMAP.md) §3 | Parallel multi-agent execution with zero git race conditions |
 | **Interactive TUI Trace Inspector** | `v1.2.0` | [`ROADMAP.md`](./ROADMAP.md) §3 | Real-time visual drill-down into tool executions and token latencies |
+| **Composio Developer Ecosystem Bridge** | `v1.2.0` | [`ROADMAP.md`](./ROADMAP.md) §3 | Automated Linear/Jira issue creation from failure clusters & PR review sync |
+| **Composio Enterprise Multi-App MCP Mesh** | `v1.3.0` | [`ROADMAP.md`](./ROADMAP.md) §4 | 250+ enterprise SaaS connectors with GBNF logit constraints & sandbox isolation |

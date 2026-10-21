@@ -94,6 +94,12 @@ A foundational directive established during the initial v1.0.0 architecture and 
   - **Platform Expansion:** macOS and arm64 build pipelines (DEC-12).
   - **Toolchain & Dependency Modernization (WP-1108):** Structured triage, testing, and migration of the 27 post-v1 Dependabot updates (#103–#129) across Rust core, CI workflows, and CLI runtime packages.
 
+### Pillar 6: Ecosystem Tool Mesh & Managed Integrations (Composio Bridge)
+- Bridges Nexus Code with 250+ enterprise and developer platforms (GitHub, Linear, Jira, Slack, Notion, Sentry, Salesforce) via the Composio platform (leveraging the Composio Startup Program Pro tier).
+- Provides managed OAuth and automated issue synchronization: eval failure clusters (`WP-1205`) and human annotation findings (`WP-1204`) map automatically into structured Linear and Jira tickets.
+- Couples with the GBNF Tool Grammar Engine (`WP-1107`) to compile enterprise action schemas into logit-constrained sampling grammars, guaranteeing 0% JSON syntax and parameter validation failures during multi-argument API calls on local models.
+- Upholds strict sovereign invariants: all external integrations are opt-in (`NEXUS_COMPOSIO_API_KEY`), execute in unprivileged sandboxes with egress filtering, require operator confirmation for write actions, and automatically sanitize tokens from traces and flight logs (`CRED003`).
+
 ---
 
 ## 3. Post-v1.0.0 Documentation Map

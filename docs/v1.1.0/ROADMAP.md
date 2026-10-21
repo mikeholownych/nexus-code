@@ -19,7 +19,7 @@ v1.0.0 (RC.1 Freeze)                v1.1.0                              v1.2.0
 - Ratatui TUI & Token Accounting    - Flight Recorder Redaction         - TUI Trace Inspector
 - Deterministic Packages & Provenance - Standalone `nexus eval` CLI      - Human Annotation Queue
                                     - Deterministic Code Evaluators     - Failure Clustering
-                                    - GBNF Tool Grammar Engine          │
+                                    - GBNF Tool Grammar Engine          - Composio Dev Bridge (WP-1207)
                                     - Dependabot Modernization (WP-1108)│
                                                                         ▼
                                                                         v1.3.0
@@ -27,6 +27,7 @@ v1.0.0 (RC.1 Freeze)                v1.1.0                              v1.2.0
                                                                         - Full Context Provenance (CTX-1)
                                                                         - macOS / arm64 Builds
                                                                         - Knowledge Freshness (CTX-2)
+                                                                        - Composio 250+ App Mesh (WP-1306)
 ```
 
 ---
@@ -116,6 +117,7 @@ Major version bumps requiring focused API compatibility audits and code changes:
 | **WP-1204** | **Human Review & Annotation Queue** | Implement `nexus review <session-id>`: Interactive CLI / TUI prompt guiding reviewers through structured rubrics (tool correctness, intent fulfillment) and recording signed audit evidence. | `REQ-AGT-010`, `LANGSMITH_REVIEW` §6 |
 | **WP-1205** | **Heuristic Failure Clustering** | Implement automated classification of failing eval runs into structured failure modes (`TIMEOUT`, `LOOP_DETECTED`, `SCHEMA_CORRUPTION`, `UNAUTHORIZED_PATH`, `COMPILER_ERROR`). | `LANGSMITH_REVIEW` §7 |
 | **WP-1206** | **`/tdd` Phase Enforcement** | Enforce red-green-refactor phase invariants when running under test-driven development posture. | `VER-08`, `REQUIREMENTS.md` §5 |
+| **WP-1207** | **Composio Developer Ecosystem & Review Bridge** | Integrate Composio platform connectors (backed by Composio Startup Program Pro) to provide managed OAuth and bidirectional developer workflows: automated Linear and Jira issue creation from failure clusters (`WP-1205`), GitHub pull request review synchronization, and Slack/Discord notification dispatch for human annotation queues (`WP-1204`). Operates under strict zero-leak credential isolation (`CRED003`), unprivileged execution sandbox boundaries, and requires explicit operator confirmation for write actions. | Composio Startup Program, `POSITIONING.md` §3.8 |
 
 ---
 
@@ -133,6 +135,7 @@ Major version bumps requiring focused API compatibility audits and code changes:
 | **WP-1303** | **macOS & arm64 Build Pipelines** | Add native GitHub Actions packaging runners and platform sandboxing (macOS `sandbox-exec` / Linux `arm64`). | `DEC-12`, `REQUIREMENTS.md` §5 |
 | **WP-1304** | **Knowledge Freshness & Lifecycle** | Implement automated staleness detection, contradiction resolution, and operator prompts for expiring project knowledge. | `CTX-002`, `REQUIREMENTS.md` §5 |
 | **WP-1305** | **cgroup v2 Fine-Grained Limits** | Add direct per-command CPU throttling and memory caps via systemd/cgroup-v2 scopes. | `REQUIREMENTS.md` §5 |
+| **WP-1306** | **Composio Enterprise Multi-App MCP Mesh** | Enable dynamic discovery and tool execution across 250+ enterprise SaaS applications (Salesforce, Google Workspace, AWS, Notion, Datadog, Sentry, Asana) using Composio's Model Context Protocol (MCP) toolsets. Compiles enterprise action schemas into logit-constrained GBNF grammars via `WP-1107` to mathematically eliminate argument hallucination on local models. Enforces egress domain filtering, tmpfs execution isolation, and sovereign zero-telemetry defaults. | Composio Startup Program, `SPEC-OBSERVABILITY.md` §7 |
 
 ---
 
@@ -150,3 +153,8 @@ Major version bumps requiring focused API compatibility audits and code changes:
      - Any Rust crate flagged as unmaintained, yanked, or deprecated in the RustSec advisory database (`cargo deny check bans advisories`).
      - Any outdated major release with known end-of-life status.
    - When upstream dependencies announce deprecation or breaking lifecycles, Nexus must refactor, migrate, or replace them before minor release qualification. Under no circumstances may technical debt be deferred into permanent legacy layers.
+6. **Opt-In External Integrations & Boundary Invariant:**
+   - All third-party services and app connectors (including Composio developer bridges and enterprise app toolsets) are strictly **opt-in** and disabled by default.
+   - Nexus Code must always retain 100% operational capability in air-gapped, zero-network environments without external API keys.
+   - External tokens (`COMPOSIO_API_KEY`) must never be leaked into git commits, trace logs, or flight recordings (`CRED003`).
+   - High-impact or state-mutating actions on external services require explicit operator confirmation prompts before execution.
