@@ -27,8 +27,8 @@ enforce what GitHub *can* check: required CI, no history rewriting, and immutabl
 - changes only through a pull request (0 required approvals, for the reason above), merged with a **merge commit
   only** (`allowed_merge_methods: ["merge"]`). A squash or rebase merge would create new commits, leaving the RC tag
   commit or the stable commit `S` off `main`;
-- required checks: `test-matrix (20)`, `test-matrix (22)`, `test-matrix (24)`, `linux-x86_64` and
-  `cloudflare-contest-contract`, all from GitHub Actions;
+- required checks: `test-matrix (20)`, `test-matrix (22)`, `test-matrix (24)` and `linux-x86_64`, all from
+  GitHub Actions. The retired contest-contract check is not required;
 - the strict "branch must be up to date" policy is **off**. See the deadlock analysis below. CONCURRENCY §5.4
   (rebase onto the base, then rerun) remains the process rule.
 
