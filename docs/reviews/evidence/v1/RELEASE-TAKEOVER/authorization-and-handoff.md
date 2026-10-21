@@ -17,3 +17,7 @@ The source checkout on `main` is dirty and is not the integration/runtime author
 ## Remaining administrative matters
 
 The user need not approve publication again. Actual missing permissions or explicitly required human acceptance must be identified precisely. Contest material stays frozen; security alerts in that material are not dismissed or silently waived. Broad host-service changes are outside the qualification provisioning lane.
+
+## Dated status correction — 2026-10-21
+
+The owner confirms that the contest has concluded and no contest freeze applies. The sentence above that contest material “stays frozen” is retained as part of this earlier handoff record, but is superseded as current guidance by the DEC-13 status amendment in [DECISIONS.md](../../../../v1.0.0/DECISIONS.md). Contest-related maintenance may proceed through normal claims, review, and validation. Submitted tags, manifests, and run records remain historical evidence; current maintenance does not change the historical submission identity.
