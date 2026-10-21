@@ -15,7 +15,7 @@ import fs from "node:fs";
 import http from "node:http";
 import os from "node:os";
 import path from "node:path";
-import { randomBytes } from "node:crypto";
+import { randomInt } from "node:crypto";
 import { execSync, spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { AutonomousAgent } from "../src/agent.js";
@@ -210,7 +210,7 @@ const ID_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456
 const highEntropyId = () => {
   const chars = [...ID_ALPHABET];
   for (let i = chars.length - 1; i > 0; i--) {
-    const j = randomBytes(1)[0] % (i + 1);
+    const j = randomInt(i + 1);
     [chars[i], chars[j]] = [chars[j], chars[i]];
   }
   return `call_${chars.slice(0, 32).join("")}`;
