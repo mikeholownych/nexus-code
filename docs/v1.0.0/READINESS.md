@@ -1,5 +1,10 @@
 # v1.0.0 release readiness checkpoint
 
+## CI progression update (2026-10-21 15:39 UTC)
+
+- PR #8 remains on exact head `7d6673f108316dda015b858c85b2abe20f3a4f78` and base `main@db1ca558086014912b20dae8232af111ccb21d67`. Its Node 20, 22, and 24 matrix jobs in run [39624995762](https://github.com/mikeholownych/nexus-code/actions/runs/39624995762) passed (16m26s, 16m19s, and 16m33s respectively). The required `linux-x86_64` job is still running; merge remains gated on its result. CodeQL and both TypeScript checks passed. No results from parent revision `8f4504e` are substituted for this exact-head run.
+- The source requirements gate remains a clean-worktree pass on exact integration `7d6673f`; eleven requirements remain deferred to exact-RC qualification as listed in the checkpoint below. Acceptance remains `IN_PROGRESS`; this CI progression does not establish RC readiness or acceptance.
+
 ## Current state update (2026-10-21 15:26 UTC, `7d6673f`)
 
 **Authoritative integration:** `origin/v1/integration` is `7d6673f108316dda015b858c85b2abe20f3a4f78`, merged from PR #102. The shared checkout remains on `main@db1ca558086014912b20dae8232af111ccb21d67` with unrelated local modifications; it was not changed for this checkpoint.
