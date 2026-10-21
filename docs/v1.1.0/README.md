@@ -17,6 +17,14 @@ Building upon that foundation, the **v1.1.x series** addresses the core challeng
 
 Drawing from modern LLM platform patterns analyzed in [LANGSMITH_REVIEW.md](../v1.0.0/LANGSMITH_REVIEW.md), Nexus v1.1.0 establishes a comprehensive evaluation and observability layer while strictly preserving Nexus Code's foundational identity: **local-first, privacy-preserving, zero-leak by default, and free of proprietary cloud vendor lock-in**.
 
+### 1.1 Zero Technical Debt & Zero Deprecated Packages Doctrine
+
+A foundational directive established during the initial v1.0.0 architecture and strictly re-iterated for all post-v1 development: **Nexus Code tolerates zero technical debt**. Specifically:
+- **NO deprecated packages or unmaintained libraries may be used, ever.**
+- Upstream dependencies across both TypeScript/Node (`cli/`, `demo/`, `experiments/`) and Rust/Cargo (`core/`) ecosystems must remain actively maintained, modern, and continuously upgraded.
+- Automated CI gates fail closed on any dependency marked deprecated by the npm registry or flagged as unmaintained/yanked in RustSec databases (`cargo deny check`).
+- Staged dependency modernizations (WP-1108) must cleanly adopt modern upstream APIs (e.g. Commander 15, Ora 9) rather than preserving legacy polyfills, compatibility wrappers, or technical debt shims.
+
 ---
 
 ## 2. Core Pillars of Post-v1.0.0 Development

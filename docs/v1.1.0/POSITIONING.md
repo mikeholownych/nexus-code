@@ -58,6 +58,7 @@ Most mainstream agents treat the developer as a passive subscriber to a closed c
 | **Supply Chain Assurance** | Closed distribution | Closed marketplace | Standard PyPI package | **Bit-for-Bit Reproducible Packaging (`cmp`), CycloneDX SBOM, SLSA Provenance** |
 | **Token Accounting** | Server-calculated bill | Monthly subscription | Client estimate | **Provider `/models` Discovery & Native Tokenizer (`--strict-token-count`)** |
 | **Constrained Tool Calling** | Unconstrained JSON prompting + retry | Client schema parsing | Unconstrained prompting | **Logit-Constrained GBNF Engine (`llama.cpp`, `vLLM`, `Ollama`), 0 Syntax Repair Retries** |
+| **Technical Debt & Deprecations** | Opaque closed dependencies | Hidden upstream debt | Pinned legacy Python libs | **Zero Deprecated Packages Policy: 100% modern upstream deps, fail-closed deprecation gates** |
 
 ---
 
@@ -109,12 +110,13 @@ Most mainstream agents treat the developer as a passive subscriber to a closed c
 - **Target Value:** True multi-agent parallel development where 5 agents can work on 5 independent PR slices simultaneously without human friction.
 
 ### 3.5 Cryptographic Supply Chain & Signed Audit Manifests
-- **The Problem:** The deployment of AI-generated code introduces legal, copyright, and security risks. Enterprise compliance requires proof of provenance.
+- **The Problem:** The deployment of AI-generated code introduces legal, copyright, and security risks. Enterprise compliance requires proof of provenance and absence of unmaintained or abandoned code.
 - **The Nexus Moat:**
   - Bit-for-bit reproducible packaging verified via `cmp` on hosted runners.
   - Automated CycloneDX Software Bill of Materials (`sbom.cdx.json`) and SLSA provenance.
+  - **Zero Deprecated Packages Guarantee:** Nexus strictly enforces a zero-technical-debt invariant across all dependencies. Any package marked deprecated by npm or RustSec triggers an immediate build failure.
   - **Signed Audit Evidence:** Every autonomous PR slice produces an immutable audit record in `docs/reviews/evidence/` recording model identity, token consumption, diff boundaries, test evidence, and reviewer sign-offs.
-- **Target Value:** Complete auditability for SOC 2, ISO 27001, and regulatory compliance reviews.
+- **Target Value:** Complete auditability for SOC 2, ISO 27001, and regulatory compliance reviews with zero accumulated dependency rot.
 
 ### 3.6 Strict Token Accounting & Cost Arbitrage
 - **The Problem:** Unchecked context windows and hidden token serialization lead to sudden mid-turn context truncations, silent failures, and unexpected budget blowouts.

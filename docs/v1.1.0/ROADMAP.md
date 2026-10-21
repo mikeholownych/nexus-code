@@ -47,7 +47,7 @@ v1.0.0 (RC.1 Freeze)                v1.1.0                              v1.2.0
 | **WP-1105** | **Deterministic Code Evaluators** | Implement modular evaluator library in `eval/evaluators/code/`: AST syntax validation, build pass/fail, typecheck exit codes, diff boundary compliance, and JSON repair rates. | `LANGSMITH_REVIEW` §4.1 |
 | **WP-1106** | **Single Step Loop Mode** | Implement `--step` flag in `nexus run` and `/step` REPL command to execute one agent turn and pause deterministically for operator confirmation. | `REQ-AGT-111` |
 | **WP-1107** | **Constrained Decoding & GBNF Tool Grammar Engine** | Implement dynamic Context-Free Grammar (GBNF) generation from registered tool schemas (`read_file`, `write_file`, `edit_file`, `run_command`). Interfaces with `llama.cpp` (`grammar`), `vLLM` (`guided_json`), and `Ollama` (`format`). Supports hybrid grammars (`<think>...</think>` + tool call) for reasoning models (DeepSeek R1). Drives JSON argument parse errors to 0.0% and unlocks reliable agentic execution on 7B/14B Q4_K_M local models. | `POSITIONING.md` §3.6, `SPEC-EVALUATION.md` §6 |
-| **WP-1108** | **Dependency Modernization & Toolchain Maintenance** | Triage, validate, and integrate the 27 post-v1.0.0 Dependabot PRs (#103–#129) across 5 staged batches: Core Rust runtime (#105, #107, #110, #113), GitHub Actions CI workflows (#103, #104, #106, #108, #112), Cloudflare micro-workers (#109, #115–#118, #121–#123, #125–#128), TypeScript compiler (#119, #124, #129), and CLI runtime migrations (#111, #114, #120 including Commander 12→15 compatibility audit). | PRs #103–#129, `ROADMAP.md` §2.1 |
+| **WP-1108** | **Zero Technical Debt & Dependency Modernization** | Triage, validate, and integrate the 27 post-v1.0.0 Dependabot PRs (#103–#129) under an absolute zero-deprecation policy. Categorized across 5 staged batches: Core Rust runtime (#105, #107, #110, #113), GitHub Actions CI workflows (#103, #104, #106, #108, #112), Cloudflare micro-workers (#109, #115–#118, #121–#123, #125–#128), TypeScript compiler (#119, #124, #129), and CLI runtime migrations (#111, #114, #120 including Commander 12→15 compatibility audit). Enforces continuous zero-technical-debt invariants. | PRs #103–#129, `ROADMAP.md` §2.1 |
 
 ### v1.1.0 Release Gates
 
@@ -55,7 +55,7 @@ v1.0.0 (RC.1 Freeze)                v1.1.0                              v1.2.0
 - **Gate G1.1-2 (Dataset Decoupling):** Evaluator executes 100% of benchmark tasks with zero leakage of `oracles.jsonl` to agent prompt context.
 - **Gate G1.1-3 (CLI Parity):** `nexus eval` executes cleanly from packaged binary installations without developer dependencies.
 - **Gate G1.1-4 (Constrained Decoding Reliability):** GBNF-constrained execution achieves 100% valid JSON tool call emission (0 syntax repair retries) across supported local inference endpoints (llama.cpp, vLLM, Ollama).
-- **Gate G1.1-5 (Dependency Modernization & Regression Baseline):** All 27 Dependabot PR upgrades pass unit/PTY suites, CodeQL security audits (0 alerts), package reproducibility (`cmp`), and CLI option compatibility without breaking unprivileged sandbox invariants.
+- **Gate G1.1-5 (Zero Technical Debt & Zero Deprecated Packages):** Strictly 0 deprecated packages, 0 unmaintained dependencies, 0 CodeQL alerts, and 0 compiler warnings repository-wide. All 27 Dependabot PR upgrades pass unit/PTY suites, `cargo deny check`, automated npm registry deprecation scans, package reproducibility (`cmp`), and CLI option compatibility without breaking unprivileged sandbox invariants.
 
 ### 2.1 Dependabot Triage & Integration Matrix (WP-1108)
 
@@ -142,3 +142,11 @@ Major version bumps requiring focused API compatibility audits and code changes:
 2. **Local Sovereignty:** Nexus remains 100% operational in air-gapped, offline, and self-hosted environments. External network transmission of telemetry is disabled by default and strictly opt-in.
 3. **Open Standards:** Telemetry formats conform to OpenTelemetry GenAI semantic conventions rather than proprietary vendor SDKs.
 4. **Reproducibility:** All benchmark datasets, evaluator code, and comparison tools are committed directly to the repository and execute deterministically under isolated `$HOME`.
+5. **Zero Technical Debt & Zero Deprecated Packages (Inviolable Invariant):**
+   - Strictly **NO deprecated packages or unmaintained dependencies** may ever be introduced, merged, or retained in any component or release—ever.
+   - Every npm dependency and Cargo crate must be on active, supported upstream releases.
+   - Automated CI gates fail closed on:
+     - Any npm package marked `deprecated` by the npm registry (`npm audit` and package-tree deprecation scans).
+     - Any Rust crate flagged as unmaintained, yanked, or deprecated in the RustSec advisory database (`cargo deny check bans advisories`).
+     - Any outdated major release with known end-of-life status.
+   - When upstream dependencies announce deprecation or breaking lifecycles, Nexus must refactor, migrate, or replace them before minor release qualification. Under no circumstances may technical debt be deferred into permanent legacy layers.
