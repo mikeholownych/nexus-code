@@ -43,7 +43,7 @@ function testExists(file, name) {
 }
 
 function acceptanceIds(value) {
-  const ids = new Set(value.match(/ACC-[A-Z0-9]+-[A-Z0-9]+/g) ?? []);
+  const ids = new Set(value.match(/(?<![A-Za-z0-9_-])ACC-[A-Z0-9]+(?:-[A-Z0-9]+)*(?![A-Za-z0-9_-])/g) ?? []);
   const ranges = /ACC-([A-Z0-9]+)-(\d+)\s+to\s+ACC-\1-(\d+)/g;
   for (const [, family, first, last] of value.matchAll(ranges)) {
     for (let number = Number(first); number <= Number(last); number++) ids.add(`ACC-${family}-${String(number).padStart(first.length, "0")}`);
@@ -87,7 +87,7 @@ for (const line of read(ledgerPath).split("\n")) {
   if (seenRequirementIds.has(id)) problems.push(`${id}: duplicate requirement ID in ledger`);
   else seenRequirementIds.add(id);
   if (required && !requiredRows.has(id)) requiredRows.set(id, { id, blocking, status, acceptanceIds: acceptanceIds(acc), line });
-  for (const accId of line.match(/ACC-[A-Z0-9]+-[A-Z0-9]+/g) ?? []) {
+  for (const accId of line.match(/(?<![A-Za-z0-9_-])ACC-[A-Z0-9]+(?:-[A-Z0-9]+)*(?![A-Za-z0-9_-])/g) ?? []) {
     if (!accDefined(accId)) problems.push(`${id}: ${accId} is not defined in any spec or ACCEPTANCE.md`);
   }
   for (const m of line.matchAll(/test:([\w./-]+)::"([^"]+)"/g)) {
@@ -280,9 +280,16 @@ if (qualificationMode && (!enforce || qualificationArg < 0 || artifactArg < 0 ||
         const evidenceAccs = evidence.evidence.map((ref) => ref?.id);
         if (requiredAccs.length === 0 || requiredAccs.some((accId) => !evidenceAccs.includes(accId)) || evidenceAccs.some((accId) => !requiredAccs.includes(accId))) throw new Error(`${id}: qualification evidence must cover every acceptance criterion specified for the requirement`);
         for (const ref of evidence.evidence) {
-          if (typeof ref?.id !== "string" || !/^ACC-[A-Z0-9]+-[A-Z0-9]+$/.test(ref.id) || !requiredAccs.includes(ref.id)) throw new Error(`${id}: evidence must cite an acceptance criterion required for that exact-RC qualification`);
+          if (typeof ref?.id !== "string" || !/^ACC-[A-Z0-9]+(?:-[A-Z0-9]+)*$/.test(ref.id) || !requiredAccs.includes(ref.id)) throw new Error(`${id}: evidence must cite an acceptance criterion required for that exact-RC qualification`);
           const file = evidenceFile(evidenceRoot, ref.path, `${id} evidence`);
           if (!file || typeof ref.sha256 !== "string" || !/^[a-f0-9]{64}$/.test(ref.sha256) || sha256(file) !== ref.sha256) throw new Error(`${id}: evidence digest is missing or does not match`);
+          // A valid digest alone can still name a report from another candidate. Criterion JSON must
+          // bind itself to the same source, tag and artifact as the enclosing qualification record.
+          let criterion;
+          try { criterion = JSON.parse(read(file)); }
+          catch { throw new Error(`${id}: criterion evidence must be a candidate-bound JSON object`); }
+          if (!criterion || typeof criterion !== "object" || Array.isArray(criterion)) throw new Error(`${id}: criterion evidence must be a candidate-bound JSON object`);
+          if (criterion.sourceCommit !== sourceCommit || criterion.rcTag !== record.rcTag || criterion.artifactSha256 !== record.artifactSha256) throw new Error(`${id}: criterion evidence identity does not match the exact RC source, tag and artifact`);
         }
       }
       console.log(`qualification evidence verified for ${record.rcTag} at ${sourceCommit} (${record.artifactSha256})`);
@@ -291,6 +298,7 @@ if (qualificationMode && (!enforce || qualificationArg < 0 || artifactArg < 0 ||
     }
   }
   for (const [id, row] of requiredRows) {
+    if ((rcQualificationOnly.get(id) ?? row.acceptanceIds).length === 0) problems.push(`${id}: required row must name explicit acceptance criteria before RC qualification`);
     if (!Object.hasOwn(RANK, row.status)) problems.push(`${id}: source ledger status '${row.status}' is not recognized`);
     else if (RANK[row.status] < RANK.tested && !rcQualificationOnly.has(id)) problems.push(`${id}: source ledger status '${row.status}' is below 'tested'`);
     if (!qualificationMode && rcQualificationOnly.has(id)) deferredQualificationRows.push(`${id} (${row.status})`);

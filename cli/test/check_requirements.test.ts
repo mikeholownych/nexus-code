@@ -66,6 +66,7 @@ function rcEvidenceFixture(ledgerStatus = "tested", options: {
     "| ACC-CONT-10 | fixture continuity qualification |",
     "| ACC-GOV-06 | fixture independent acceptance |",
     "| ACC-PKG-01 | fixture exact criterion identifier |",
+    "| ACC-PLAT | fixture supported platform criterion |",
     "<!-- RC-QUALIFICATION-ONLY:START -->",
     qualificationMap,
     "<!-- RC-QUALIFICATION-ONLY:END -->",
@@ -101,13 +102,19 @@ function rcEvidenceFixture(ledgerStatus = "tested", options: {
   const sourceCommit = git("rev-parse", "HEAD");
   git("tag", "v1.0.0-rc.1");
 
+  const sha256 = (file: string) => createHash("sha256").update(fs.readFileSync(file)).digest("hex");
   fs.writeFileSync(artifactPath, "synthetic immutable RC artifact\n");
   const evidenceFile = path.join(evidenceRoot, "t2-qualification.json");
-  fs.writeFileSync(evidenceFile, JSON.stringify({ disposition: "PASS", tasks: 40 }));
+  fs.writeFileSync(evidenceFile, JSON.stringify({
+    sourceCommit,
+    rcTag: "v1.0.0-rc.1",
+    artifactSha256: sha256(artifactPath),
+    disposition: "PASS",
+    tasks: 40,
+  }));
   const reportFile = path.join(evidenceRoot, "independent-acceptance.md");
   fs.writeFileSync(reportFile, "Independent ACCEPT for the exact synthetic fixture candidate.\n");
   const provenanceFile = path.join(evidenceRoot, "build-provenance.json");
-  const sha256 = (file: string) => createHash("sha256").update(fs.readFileSync(file)).digest("hex");
   fs.writeFileSync(provenanceFile, JSON.stringify({ sourceCommit, artifactSha256: sha256(artifactPath) }));
   const record = {
     schemaVersion: 1,
@@ -136,6 +143,16 @@ function rcEvidenceFixture(ledgerStatus = "tested", options: {
   };
   fs.writeFileSync(recordPath, JSON.stringify(record));
 
+  const writeCriterionEvidence = (value: unknown) => {
+    fs.writeFileSync(evidenceFile, JSON.stringify(value));
+    for (const requirement of Object.values(record.requirements)) {
+      for (const ref of requirement.evidence) {
+        if (ref.path === "t2-qualification.json") ref.sha256 = sha256(evidenceFile);
+      }
+    }
+    fs.writeFileSync(recordPath, JSON.stringify(record));
+  };
+
   const refreshCandidateIdentity = () => {
     const nextCommit = commitSource();
     git("tag", "--force", "v1.0.0-rc.1", nextCommit);
@@ -143,7 +160,12 @@ function rcEvidenceFixture(ledgerStatus = "tested", options: {
     record.artifactProvenance.sourceCommit = nextCommit;
     fs.writeFileSync(provenanceFile, JSON.stringify({ sourceCommit: nextCommit, artifactSha256: sha256(artifactPath) }));
     record.artifactProvenance.sha256 = sha256(provenanceFile);
-    fs.writeFileSync(recordPath, JSON.stringify(record));
+    writeCriterionEvidence({
+      ...JSON.parse(fs.readFileSync(evidenceFile, "utf8")),
+      sourceCommit: nextCommit,
+      rcTag: record.rcTag,
+      artifactSha256: record.artifactSha256,
+    });
   };
 
   const runFixture = (...args: string[]) => spawnSync(process.execPath, [repoScript, ...args], {
@@ -157,7 +179,7 @@ function rcEvidenceFixture(ledgerStatus = "tested", options: {
     "--rc-artifact", artifactPath,
     "--evidence-root", evidenceRoot,
   ];
-  return { root, supportRoot, record, recordPath, artifactPath, evidenceRoot, sourceCommit, commitSource, refreshCandidateIdentity, runFixture, enforcedArgs };
+  return { root, supportRoot, record, recordPath, artifactPath, evidenceRoot, sourceCommit, commitSource, refreshCandidateIdentity, writeCriterionEvidence, runFixture, enforcedArgs };
 }
 
 // REQ-OPS-102 / ACC-GOV-01
@@ -315,6 +337,89 @@ test("exact-RC evidence must meet the RR threshold and cover every mapped criter
   fixture.record.requirements["REQ-AGT-110"].evidence.pop();
   fs.writeFileSync(fixture.recordPath, JSON.stringify(fixture.record));
   assert.match(fixture.runFixture(...fixture.enforcedArgs).stdout, /must cover every acceptance criterion/);
+});
+
+test("exact-RC evidence accepts the declared single-segment platform criterion", () => {
+  const fixture = rcEvidenceFixture("tested", {
+    requirementId: "REQ-REL-003",
+    requirementClass: "RR",
+    acceptanceCell: "ACC-PLAT",
+    evidenceIds: ["ACC-PLAT"],
+  });
+  const result = fixture.runFixture(...fixture.enforcedArgs);
+  assert.equal(result.status, 0, result.stdout + result.stderr);
+});
+
+test("exact-RC evidence rejects undefined and malformed platform criterion lookalikes", () => {
+  for (const id of ["ACC-UNKNOWN", "ACC-PLAT-extra", "ACC-PLAT-", "ACC-PLAT_suffix"]) {
+    const fixture = rcEvidenceFixture("tested", {
+      requirementId: "REQ-REL-003",
+      requirementClass: "RR",
+      acceptanceCell: id,
+      evidenceIds: [id],
+    });
+    const result = fixture.runFixture(...fixture.enforcedArgs);
+    assert.notEqual(result.status, 0, `${id}: ${result.stdout}${result.stderr}`);
+  }
+});
+
+test("pre-RC enforcement rejects required rows with only prose acceptance references", () => {
+  const fixture = rcEvidenceFixture("tested", {
+    requirementId: "REQ-QUAL-102",
+    acceptanceCell: "ACCEPTANCE §6.1",
+    evidenceIds: ["ACC-QUAL-T2"],
+  });
+  const result = fixture.runFixture("--enforce");
+  assert.notEqual(result.status, 0, result.stdout + result.stderr);
+  assert.match(result.stdout, /required row must name explicit acceptance criteria/);
+});
+
+test("exact-RC criterion evidence accepts matching identities after a candidate refresh", () => {
+  const fixture = rcEvidenceFixture();
+  fixture.refreshCandidateIdentity();
+  const result = fixture.runFixture(...fixture.enforcedArgs);
+  assert.equal(result.status, 0, result.stdout + result.stderr);
+});
+
+test("exact-RC criterion evidence rejects digest-valid reports missing candidate identity", () => {
+  for (const field of ["all", "sourceCommit", "rcTag", "artifactSha256"]) {
+    const fixture = rcEvidenceFixture();
+    const payload = JSON.parse(fs.readFileSync(path.join(fixture.evidenceRoot, "t2-qualification.json"), "utf8"));
+    if (field === "all") {
+      fixture.writeCriterionEvidence({ disposition: "PASS", tasks: 40 });
+    } else {
+      delete payload[field];
+      fixture.writeCriterionEvidence(payload);
+    }
+    const result = fixture.runFixture(...fixture.enforcedArgs);
+    assert.notEqual(result.status, 0, `${field}: ${result.stdout}${result.stderr}`);
+    assert.match(result.stdout, /criterion evidence identity does not match/);
+  }
+});
+
+test("exact-RC criterion evidence rejects stale source, tag and artifact despite a matching file digest", () => {
+  for (const field of ["sourceCommit", "rcTag", "artifactSha256"]) {
+    const fixture = rcEvidenceFixture();
+    fixture.refreshCandidateIdentity();
+    const payload = JSON.parse(fs.readFileSync(path.join(fixture.evidenceRoot, "t2-qualification.json"), "utf8"));
+    payload[field] = field === "sourceCommit" ? fixture.sourceCommit
+      : field === "rcTag" ? "v1.0.0-rc.2"
+      : createHash("sha256").update("another RC artifact").digest("hex");
+    fixture.writeCriterionEvidence(payload);
+    const result = fixture.runFixture(...fixture.enforcedArgs);
+    assert.notEqual(result.status, 0, `${field}: ${result.stdout}${result.stderr}`);
+    assert.match(result.stdout, /criterion evidence identity does not match/);
+  }
+});
+
+test("exact-RC criterion evidence rejects digest-valid JSON primitives and arrays", () => {
+  for (const payload of [null, [], "PASS", true]) {
+    const fixture = rcEvidenceFixture();
+    fixture.writeCriterionEvidence(payload);
+    const result = fixture.runFixture(...fixture.enforcedArgs);
+    assert.notEqual(result.status, 0, result.stdout + result.stderr);
+    assert.match(result.stdout, /criterion evidence must be a candidate-bound JSON object/);
+  }
 });
 
 test("exact-RC evidence requires exact acceptance identifiers", () => {
