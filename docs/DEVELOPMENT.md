@@ -2,7 +2,7 @@
 
 ## Build and checks
 
-Requirements: Rust stable/Cargo, Node.js 20+, npm, a C compiler/linker, and glibc development headers. Node.js 20 remains the compatibility floor for v1.0.0, but reached upstream end of life on 2026-03-24 per the [Node.js EOL schedule](https://nodejs.org/en/about/eol). Use a maintained Node.js release such as 22 or 24 to receive upstream security updates. From a clean checkout:
+Requirements: Rust stable/Cargo, Node.js 22+, npm, a C compiler/linker, and glibc development headers. Node.js 22 is the minimum supported runtime; end-of-life Node.js releases are not supported. From a clean checkout:
 
 ```sh
 npm ci --prefix cli
@@ -16,7 +16,7 @@ bash scripts/security_gates.sh
 
 ## Release package
 
-The current binary release target is **Linux x86-64 on glibc 2.35 or newer**, built on Ubuntu 22.04. Node.js 20+ is required at runtime for v1.0.0 compatibility. Node.js 20 reached upstream end of life on 2026-03-24 per the [Node.js EOL schedule](https://nodejs.org/en/about/eol); use a maintained release such as Node.js 22 or 24 for security updates. The archive contains the TypeScript client, production npm dependencies, `harness-core`, and `nexus-tui`; Rust/Cargo are not runtime requirements. No other OS, libc, or architecture is supported by the binary release yet.
+The current binary release target is **Linux x86-64 on glibc 2.35 or newer**, built on Ubuntu 22.04. Node.js 22 or newer is required at runtime. The archive contains the TypeScript client, production npm dependencies, `harness-core`, and `nexus-tui`; Rust/Cargo are not runtime requirements. No other OS, libc, or architecture is supported by the binary release yet.
 
 Create and inspect a candidate locally. Set `NEXUS_VERSION` to the release tag being built; for an RC, use its RC tag, and for a stable release, use its stable tag:
 

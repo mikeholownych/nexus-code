@@ -11,9 +11,9 @@ case "$(uname -s):$(uname -m)" in
   Linux:x86_64|Linux:amd64) ;;
   *) fail "unsupported system $(uname -s)/$(uname -m); supported: Linux x86-64 (glibc)." ;;
 esac
-command -v node >/dev/null 2>&1 || fail "Node.js 20 or newer is required; install Node.js and retry."
+command -v node >/dev/null 2>&1 || fail "Node.js 22 or newer is required; install Node.js and retry."
 NODE_MAJOR=$(node -p 'Number(process.versions.node.split(".")[0])' 2>/dev/null || printf 0)
-[ "$NODE_MAJOR" -ge 20 ] || fail "Node.js 20 or newer is required (found $(node --version 2>/dev/null || echo unknown))."
+[ "$NODE_MAJOR" -ge 22 ] || fail "Node.js 22 or newer is required (found $(node --version 2>/dev/null || echo unknown))."
 command -v curl >/dev/null 2>&1 || fail "curl is required."
 command -v tar >/dev/null 2>&1 || fail "tar is required."
 command -v sha256sum >/dev/null 2>&1 || fail "sha256sum is required."

@@ -338,7 +338,7 @@ const installCheck: Check = async () => {
 
 const runtimeCheck: Check = async () => {
   const major = Number(process.versions.node.split(".")[0]);
-  return f("runtime.node", "runtime", major >= 20 ? "pass" : "fail", `Node.js ${process.versions.node} (${major >= 20 ? "supported" : "older than the supported 20"}).`, [process.execPath], major >= 20 ? undefined : "Install Node.js 20 or later.");
+  return f("runtime.node", "runtime", major >= 22 ? "pass" : "fail", `Node.js ${process.versions.node} (${major >= 22 ? "supported" : "older than the supported 22"}).`, [process.execPath], major >= 22 ? undefined : "Install Node.js 22 or later.");
 };
 
 const launcherCheck: Check = async () => {
