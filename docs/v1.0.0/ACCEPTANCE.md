@@ -231,7 +231,7 @@ Environment: E4 (gateway direct), serial runs, with matched model fingerprint, b
 
 ### 6.2 T4 fault injection (ACC-QUAL-T4)
 
-9 fault classes × 5 runs on the Nexus RC, via `eval/faults/proxy.mjs` and the fixture hooks (DEC-05 amendment, 2026-10-17: the union of the distinct scenarios below):
+9 fault classes × 5 runs on the Nexus RC. The configured faults run through `eval/run.mjs` and `eval/model_proxy.mjs`; the hanging-command and full-disk cases use task fixtures, and SIGTERM-then-resume uses the runner case (DEC-05 amendment, 2026-10-17: the union of the distinct scenarios below):
 
 1. refused connection mid-turn
 2. 5xx / overloaded
@@ -259,6 +259,7 @@ Environment: E4 (gateway direct), serial runs, with matched model fingerprint, b
 | T4 truthful outcome | = 100% |
 | T4 hang beyond budget + 5 min | = 0 |
 | T3 false-absence | = 0 |
+| T3 false-presence | = 0 |
 | T3 steering honoured | ≥ 95% |
 | Operator interventions in `run` mode | = 0 |
 
