@@ -751,6 +751,13 @@ describe("contextual secrets in code", () => {
     }
     assert.ok(!boundary.classifyText("API_KEY=$OTHER_VARIABLE_NAME").some((s) => s.patternName === "ENV_ASSIGNMENT_SECRET"), "a reference is not a value");
   });
+
+  test("trailing quote, semicolon and comma delimiters are stripped from a contextual value", () => {
+    const boundary = new InformationFlowBoundary();
+    const found = boundary.classifyText("DATABASE_PASSWORD=plain-env-value-42;;,").map((s) => s.secret);
+    assert.ok(found.includes("plain-env-value-42"), JSON.stringify(found));
+    assert.ok(!found.some((s) => /[;,]$/.test(s)), JSON.stringify(found));
+  });
 });
 
 describe("paths are not secrets", () => {
