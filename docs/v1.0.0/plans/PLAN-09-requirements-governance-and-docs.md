@@ -4,7 +4,7 @@ This plan implements [SPEC-09](../specs/SPEC-09-requirements-governance-and-docs
 
 | | |
 |---|---|
-| Milestones | **M0** (ledger checker, historical banners). **M6** (final doc sign-off). Doc fixes land with each feature PR. |
+| Milestones | **M0** (ledger checker, historical banners). **Pre-RC** (source-ledger reconciliation and enforcement). **M6** (verify the pre-RC gate and final doc sign-off). Doc fixes land with each feature PR. |
 | Requirements | REQ-OPS-101, REQ-OPS-102, REQ-OPS-103, REQ-DX-105, REQ-DX-106, REQ-AGT-110 |
 | Decision | DEC-04 |
 
@@ -18,7 +18,7 @@ This plan implements [SPEC-09](../specs/SPEC-09-requirements-governance-and-docs
 | 4 | Fix documentation as part of each feature PR, following the SPEC-09 §3.2 checklist. Run a final pass before the RC. | docs | M1–M6 |
 | 5 | Remove the parity claim, homelab identifiers, and the `file:///` link. Correct the ARCHITECTURE controls-and-limits section. | `USER_MANUAL.md:3`, `ARCHITECTURE.md`, `MCP_GUIDE.md`, `CLOUD_PROVIDERS.md` | M0 (cheap, standalone) |
 | 6 | Arrange the independent acceptance of continuity, compaction and truncation recovery (owner action X5). The reviewer receives SPEC-04 §1–2, ACC-CONT-01..10, and the RC build. Their report goes to `docs/reviews/`. | — | M5 |
-| 7 | In M6, verify that REQUIREMENTS.md statuses, references and last-verified commits were reconciled against the exact candidate source revision before RC tagging and artifact construction. Do not write installed-RC qualification results back into the frozen RC source ledger: record those dispositions in the exact-RC acceptance record bound to the RC source commit and artifact digest. Any source-ledger change after candidate construction changes the candidate identity; create a new RC candidate and rerun source checks, artifact construction, and affected qualification gates. CI must already use enforce mode from the pre-RC source gate. | ledger; exact-RC acceptance record | M6 |
+| 7 | Before RC construction, reconcile REQUIREMENTS.md statuses, references and last-verified commits against the exact candidate source revision, then pass the pre-RC `--enforce` gate. At M6, verify that evidence and record installed-RC qualification dispositions in the exact-RC acceptance record bound to the RC source commit and artifact digest. Do not write qualification results back into the RC source ledger. Any source-ledger change after candidate construction changes the candidate identity; create a new RC candidate and rerun source checks, artifact construction, and affected qualification gates. | ledger; exact-RC acceptance record | Pre-RC; M6 |
 
 ## PR slices
 
