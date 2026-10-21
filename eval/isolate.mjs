@@ -20,6 +20,10 @@ function shellQuote(value) {
   return `'${value.replaceAll("'", `'\\''`)}'`;
 }
 
+export function selectToolchainRoot(configuredRoot, fallbackRoot) {
+  return configuredRoot ?? fallbackRoot ?? null;
+}
+
 function resolveHostToolchains() {
   if (hostToolchains) return hostToolchains;
   const availableDirectory = (candidate) => {
@@ -31,7 +35,7 @@ function resolveHostToolchains() {
     return result.status === 0 ? availableDirectory(result.stdout.trim()) : null;
   };
   hostToolchains = {
-    goRoot: availableDirectory("/usr/local/go") ?? fromCommand("go", ["env", "GOROOT"]),
+    goRoot: selectToolchainRoot(fromCommand("go", ["env", "GOROOT"]), availableDirectory("/usr/local/go")),
     rustRoot: availableDirectory("/opt/nexus-qual/rust") ?? fromCommand("rustc", ["--print", "sysroot"]),
   };
   return hostToolchains;

@@ -17,7 +17,7 @@ The unversioned installer follows the latest stable release. If no stable releas
 curl -fsSL https://raw.githubusercontent.com/mikeholownych/nexus-code/main/install.sh | sh
 ```
 
-This follows the latest stable release and installs the Linux x86-64 package under your home directory. The installer verifies its SHA-256 checksum and requires Node.js 20+. To pin a specific version or install a prerelease, set `NEXUS_VERSION` to that release's tag. See [release status and platform requirements](docs/DEVELOPMENT.md).
+This follows the latest stable release and installs the Linux x86-64 package under your home directory. The installer verifies its SHA-256 checksum and requires Node.js 20+. Node.js 20 reached upstream end of life on 2026-03-24; for security updates, use a maintained Node.js release such as 22 or 24. To pin a specific version or install a prerelease, set `NEXUS_VERSION` to that release's tag. See [release status and platform requirements](docs/DEVELOPMENT.md).
 
 ## Build and contribute
 
