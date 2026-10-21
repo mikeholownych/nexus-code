@@ -4,7 +4,7 @@ Nexus Code is a local coding client. It is separate from the Cloudflare Workers 
 
 ## Install
 
-On Linux x86-64 with glibc 2.35 or newer and Node.js 20 or newer:
+On Linux x86-64 with glibc 2.35 or newer and Node.js 20 or newer (use a maintained release such as Node.js 22 or 24; Node.js 20 reached upstream end of life on 2026-03-24 per the [Node.js EOL schedule](https://nodejs.org/en/about/eol)):
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/mikeholownych/nexus-code/main/install.sh | sh
