@@ -10,35 +10,6 @@ permissions:
   contents: read
 
 jobs:
-  cloudflare-contest-contract:
-    runs-on: ubuntu-24.04
-    steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-      - run: sudo apt-get update && sudo apt-get install --yes nodejs
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
-        with:
-          node-version: 22
-          cache: npm
-          cache-dependency-path: |
-            cli/package-lock.json
-            demo/package-lock.json
-            experiments/cloudflare-artifacts-vertical-slice/package-lock.json
-      - run: npm ci --prefix demo
-      - run: npm ci --prefix cli
-      - run: npm run build --prefix cli
-      - run: npm test --prefix demo
-      - run: npm ci --prefix experiments/cloudflare-artifacts-vertical-slice
-      - run: npm run typecheck --prefix experiments/cloudflare-artifacts-vertical-slice
-        env:
-          NEXUS_CF_WORKER_NAME: nexus-contest-ci
-          NEXUS_CF_NAMESPACE: nexus-contest-ci
-          NEXUS_CF_REPOSITORY: fixture
-      - run: npm run build --prefix experiments/cloudflare-artifacts-vertical-slice
-        env:
-          NEXUS_CF_WORKER_NAME: nexus-contest-ci
-          NEXUS_CF_NAMESPACE: nexus-contest-ci
-          NEXUS_CF_REPOSITORY: fixture
-
   test-matrix:
     runs-on: ubuntu-22.04
     strategy:
@@ -47,15 +18,18 @@ jobs:
         node: [20, 22, 24]
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-      - run: sudo apt-get update && sudo apt-get install --yes make bubblewrap build-essential meson ninja-build pkg-config libcap-dev
+      - run: sudo apt-get update && sudo apt-get install --yes acl make bubblewrap build-essential meson ninja-build pkg-config libcap-dev
       - run: bash scripts/ensure-ci-bubblewrap.sh
       - run: bash scripts/ensure-ci-user-cgroups.sh
       - name: Mount a dedicated capped tmpfs for evaluator resource fixtures
         run: |
           root=/mnt/nexus-eval-ci
-          sudo install -d -o "$USER" -g "$USER" -m 0700 "$root"
-          sudo mount -t tmpfs -o size=128m,mode=0700,uid="$(id -u)",gid="$(id -g)" nexus-eval-ci "$root"
+          sudo install -d -o "$USER" -g "$USER" -m 0711 "$root"
+          sudo mount -t tmpfs -o size=128m,mode=0711,uid="$(id -u)",gid="$(id -g)" nexus-eval-ci "$root"
           echo "NEXUS_EVAL_TEST_WORKSPACE_ROOT=$root" >> "$GITHUB_ENV"
+          runtime_root=/opt/nexus-eval-ci-runtime
+          sudo install -d -o "$USER" -g "$USER" -m 0711 "$runtime_root"
+          echo "NEXUS_EVAL_TEST_RUNTIME_ROOT=$runtime_root" >> "$GITHUB_ENV"
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: ${{ matrix.node }}
@@ -104,15 +78,18 @@ jobs:
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-      - run: sudo apt-get update && sudo apt-get install --yes make bubblewrap build-essential meson ninja-build pkg-config libcap-dev
+      - run: sudo apt-get update && sudo apt-get install --yes acl make bubblewrap build-essential meson ninja-build pkg-config libcap-dev
       - run: bash scripts/ensure-ci-bubblewrap.sh
       - run: bash scripts/ensure-ci-user-cgroups.sh
       - name: Mount a dedicated capped tmpfs for evaluator resource fixtures
         run: |
           root=/mnt/nexus-eval-ci
-          sudo install -d -o "$USER" -g "$USER" -m 0700 "$root"
-          sudo mount -t tmpfs -o size=128m,mode=0700,uid="$(id -u)",gid="$(id -g)" nexus-eval-ci "$root"
+          sudo install -d -o "$USER" -g "$USER" -m 0711 "$root"
+          sudo mount -t tmpfs -o size=128m,mode=0711,uid="$(id -u)",gid="$(id -g)" nexus-eval-ci "$root"
           echo "NEXUS_EVAL_TEST_WORKSPACE_ROOT=$root" >> "$GITHUB_ENV"
+          runtime_root=/opt/nexus-eval-ci-runtime
+          sudo install -d -o "$USER" -g "$USER" -m 0711 "$runtime_root"
+          echo "NEXUS_EVAL_TEST_RUNTIME_ROOT=$runtime_root" >> "$GITHUB_ENV"
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 20

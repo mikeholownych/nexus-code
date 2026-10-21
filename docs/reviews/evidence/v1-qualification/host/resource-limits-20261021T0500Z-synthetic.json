@@ -1,0 +1,258 @@
+{
+  "at": "2026-10-21T04:58:39.020Z",
+  "host": "mike-dev",
+  "revision": "dc65f35f8367f67b2b5c9dd33d195c116d409be6",
+  "harness": "production isolatedArgv + asUser + spawnContained; synthetic infrastructure commands only",
+  "cases": [
+    {
+      "name": "cpu quota throttles a busy task tree",
+      "process": {
+        "code": 124,
+        "signal": null
+      },
+      "containment": {
+        "limits": {
+          "memory.max": "67108864",
+          "memory.swap.max": "0",
+          "memory.oom.group": "1",
+          "pids.max": "8",
+          "cpu.max": "10000 100000"
+        },
+        "memoryPeakBytes": 3239936,
+        "oomKills": 0,
+        "memoryMaxEvents": 0,
+        "pidsPeak": 6,
+        "pidsMaxEvents": 0,
+        "cpuUsageUsec": 335777,
+        "cpuThrottledUsec": 3009849,
+        "survivorsAfterExit": 0,
+        "cleaned": true,
+        "stopped": false,
+        "exitCode": 124,
+        "signal": null,
+        "spawnError": null
+      },
+      "stderr": ""
+    },
+    {
+      "name": "memory limit OOM-kills oversized task",
+      "process": {
+        "code": 137,
+        "signal": null
+      },
+      "containment": {
+        "limits": {
+          "memory.max": "67108864",
+          "memory.swap.max": "0",
+          "memory.oom.group": "1",
+          "pids.max": "128",
+          "cpu.max": "800000 100000"
+        },
+        "memoryPeakBytes": 67108864,
+        "oomKills": 3,
+        "memoryMaxEvents": 20,
+        "pidsPeak": 10,
+        "pidsMaxEvents": 0,
+        "cpuUsageUsec": 193424,
+        "cpuThrottledUsec": 0,
+        "survivorsAfterExit": 3,
+        "cleaned": true,
+        "stopped": false,
+        "exitCode": null,
+        "signal": "SIGKILL",
+        "spawnError": null
+      },
+      "stderr": ""
+    },
+    {
+      "name": "process limit rejects excess children and cleanup reaps survivors",
+      "process": {
+        "code": 0,
+        "signal": null
+      },
+      "containment": {
+        "limits": {
+          "memory.max": "67108864",
+          "memory.swap.max": "0",
+          "memory.oom.group": "1",
+          "pids.max": "128",
+          "cpu.max": "800000 100000"
+        },
+        "memoryPeakBytes": 39186432,
+        "oomKills": 0,
+        "memoryMaxEvents": 0,
+        "pidsPeak": 128,
+        "pidsMaxEvents": 10,
+        "cpuUsageUsec": 482870,
+        "cpuThrottledUsec": 0,
+        "survivorsAfterExit": 37,
+        "cleaned": true,
+        "stopped": false,
+        "exitCode": 0,
+        "signal": null,
+        "spawnError": null
+      },
+      "stderr": ""
+    },
+    {
+      "name": "workspace storage cap returns ENOSPC",
+      "process": {
+        "code": 1,
+        "signal": null
+      },
+      "containment": {
+        "limits": {
+          "memory.max": "268435456",
+          "memory.swap.max": "0",
+          "memory.oom.group": "1",
+          "pids.max": "128",
+          "cpu.max": "800000 100000"
+        },
+        "memoryPeakBytes": 137900032,
+        "oomKills": 0,
+        "memoryMaxEvents": 0,
+        "pidsPeak": 4,
+        "pidsMaxEvents": 0,
+        "cpuUsageUsec": 173145,
+        "cpuThrottledUsec": 0,
+        "survivorsAfterExit": 0,
+        "cleaned": true,
+        "stopped": false,
+        "exitCode": 1,
+        "signal": null,
+        "spawnError": null
+      },
+      "stderr": "dd: error writing '/workspace/storage-overflow': No space left on device\n"
+    },
+    {
+      "name": "actual candidate sandbox hides host and protected canary paths",
+      "process": {
+        "code": 0,
+        "signal": null
+      },
+      "containment": {
+        "limits": {
+          "memory.max": "67108864",
+          "memory.swap.max": "0",
+          "memory.oom.group": "1",
+          "pids.max": "128",
+          "cpu.max": "800000 100000"
+        },
+        "memoryPeakBytes": 3014656,
+        "oomKills": 0,
+        "memoryMaxEvents": 0,
+        "pidsPeak": 4,
+        "pidsMaxEvents": 0,
+        "cpuUsageUsec": 34452,
+        "cpuThrottledUsec": 0,
+        "survivorsAfterExit": 0,
+        "cleaned": true,
+        "stopped": false,
+        "exitCode": 0,
+        "signal": null,
+        "spawnError": null
+      },
+      "stderr": ""
+    }
+  ],
+  "pass": true,
+  "workspaceEmptyAfterCleanup": true,
+  "environment": {
+    "sourceRevision": "dc65f35f8367f67b2b5c9dd33d195c116d409be6",
+    "testedProductionFiles": [
+      {
+        "file": "eval/isolate.mjs",
+        "sha256": "84b1203d2970753fde3a87ea9c041e269d166238ec27a91db515e67716bdd1dd"
+      },
+      {
+        "file": "eval/resources.mjs",
+        "sha256": "7a1e276938a88ed5b9858a1e1b5aa174f96c75fdf1ad393cb29e5c383858f2b6"
+      },
+      {
+        "file": "eval/cgroup_supervisor.mjs",
+        "sha256": "222646943526480db44bc4359416f4b69ac389c5d50a8bc49e3a00a233a1a8ca"
+      },
+      {
+        "file": "eval/validate.mjs",
+        "sha256": "833060b5397089db8a069672da04119dd2db415e87e46016b2797d176a6a1674"
+      }
+    ],
+    "executor": "nexus-eval uid 985; operator harness uid 1000; systemd --user delegated cgroup v2; Bubblewrap candidate sandbox",
+    "fixtureTmpfs": {
+      "path": "/tmp/nexus-resource-limits-fixture",
+      "sizeBytes": 134217728,
+      "ownerUid": 1000,
+      "mode": "0711",
+      "nosuid": true,
+      "nodev": true,
+      "removedAfterRun": true
+    },
+    "isolatedHome": "/tmp/nexus-host-probe-home (removed)",
+    "privateCanary": "/tmp/nexus-private-canary.txt (root-owned; contents not read; removed)",
+    "workspaceCleanup": "all workspace children removed; no nexus-eval processes remained"
+  },
+  "commands": [
+    {
+      "name": "cpu quota throttles a busy task tree",
+      "command": "/usr/bin/timeout 3s yes >/dev/null",
+      "resources": {
+        "cpuPercent": 10,
+        "memoryBytes": 67108864,
+        "tasks": 8,
+        "storageBytes": 134217728
+      }
+    },
+    {
+      "name": "memory limit OOM-kills oversized task",
+      "command": "node -e 'Buffer.allocUnsafe(512*1024*1024).fill(1)'",
+      "resources": {
+        "cpuPercent": 800,
+        "memoryBytes": 67108864,
+        "tasks": 128,
+        "storageBytes": 134217728
+      }
+    },
+    {
+      "name": "process limit rejects excess children and cleanup reaps survivors",
+      "command": "node -e 'const {spawn}=require(\"node:child_process\");let denied=false;for(let i=0;i<128;i++){try{const c=spawn(\"/bin/sleep\",[\"30\"],{stdio:\"ignore\"});c.on(\"error\",e=>{if(e.code===\"EAGAIN\")denied=true});c.unref()}catch(e){if(e.code===\"EAGAIN\")denied=true}}setTimeout(()=>process.exit(denied?0:3),500)'",
+      "resources": {
+        "cpuPercent": 800,
+        "memoryBytes": 67108864,
+        "tasks": 128,
+        "storageBytes": 134217728
+      }
+    },
+    {
+      "name": "workspace storage cap returns ENOSPC",
+      "command": "dd if=/dev/zero of=/workspace/storage-overflow bs=1M count=160 status=none",
+      "resources": {
+        "cpuPercent": 800,
+        "memoryBytes": 268435456,
+        "tasks": 128,
+        "storageBytes": 134217728
+      }
+    },
+    {
+      "name": "actual candidate sandbox hides host and protected canary paths",
+      "command": "test ! -e /home/mike && test ! -e /home/mike/nexus-heldout-v2 && test ! -e /proc/1/root/home/mike/nexus-heldout-v2 && test ! -e /tmp/nexus-private-canary.txt && test ! -e /proc/1/root/tmp/nexus-private-canary.txt",
+      "resources": {
+        "cpuPercent": 800,
+        "memoryBytes": 67108864,
+        "tasks": 128,
+        "storageBytes": 134217728
+      }
+    }
+  ],
+  "limitEvidence": {
+    "cpu": "cpu.throttled_usec increased 3009849",
+    "memory": "oom_kill=3; phase exited 137; cleaned=true",
+    "processes": "pids.events max=10; 37 survivors observed then cleaned=true",
+    "storage": "write of 160 MiB failed with ENOSPC on 128 MiB tmpfs; cleaned=true",
+    "filesystemBoundary": "direct and /proc/1/root probes could not reach operator home, held-out path, or root-owned canary"
+  },
+  "scopeLimitations": [
+    "Synthetic infrastructure evidence only; not a held-out or qualification result.",
+    "The path-canary check exercised the production Bubblewrap candidate sandbox, not end-to-end eval/run task staging with Git object canaries.",
+    "Custody acceptance, account-level effective-access review, and private store isolation remain separate gates."
+  ]
+}

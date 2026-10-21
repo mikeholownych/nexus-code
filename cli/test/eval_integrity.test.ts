@@ -533,24 +533,27 @@ test("qualification remains fail-closed without enforced aggregate resource cont
   if (process.env.NEXUS_EVAL_TEST_WORKSPACE_ROOT) assert.equal(isolation, null, "the dedicated test tmpfs and kernel resource contract must pass preflight");
   else assert.match(isolation ?? "", /dedicated tmpfs|exact mount point/, "a shared /dev/shm must fail qualification preflight");
   if (process.env.NEXUS_EVAL_TEST_WORKSPACE_ROOT) {
+    // CI mounts the capped workspace as 0711 (owner rwx, other --x). Mode probes must restore
+    // that contract so later runAs / version-probe suites can still traverse as the evaluator.
+    const restoreMode = 0o711;
     fs.chmodSync(workspaceRoot, 0o755);
     try {
       assert.match(qualificationResourceIsolationProblem({ resources: ok }) ?? "", /non-readable\/non-writable by group or other/);
     } finally {
-      fs.chmodSync(workspaceRoot, 0o700);
+      fs.chmodSync(workspaceRoot, restoreMode);
     }
     assert.equal(qualificationResourceIsolationProblem({ resources: ok }), null, "restored dedicated mount root must pass preflight");
     fs.chmodSync(workspaceRoot, 0o731);
     try {
       assert.match(qualificationResourceIsolationProblem({ resources: ok }) ?? "", /non-readable\/non-writable by group or other/);
     } finally {
-      fs.chmodSync(workspaceRoot, 0o700);
+      fs.chmodSync(workspaceRoot, restoreMode);
     }
     fs.chmodSync(workspaceRoot, 0o711);
     try {
       assert.equal(qualificationResourceIsolationProblem({ resources: ok }), null, "execute-only traversal for the isolated evaluator account is compatible with the private root");
     } finally {
-      fs.chmodSync(workspaceRoot, 0o700);
+      fs.chmodSync(workspaceRoot, restoreMode);
     }
   }
   const syntheticRoot = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-mount-mode-"));
@@ -753,8 +756,8 @@ test("repository workspaces carry no history beyond the pinned baseline commit",
       runtimeExecutablePaths: [nodeRuntime],
       supervisorPath: path.join(ROOT, "eval/agent_sandbox.mjs"),
     });
-    const candidateProbe = `const fs=require('node:fs'),cp=require('node:child_process');const run=(args)=>cp.spawnSync('git',args,{cwd:'/workspace',encoding:'utf8',env:{PATH:'/usr/bin:/bin',HOME:'/home/eval',GIT_CONFIG_NOSYSTEM:'1',GIT_CONFIG_GLOBAL:'/dev/null'}});const head=run(['rev-parse','HEAD']),baselineObject=run(['cat-file','-e',${JSON.stringify(`${baseline}^{commit}`)}]),object=run(['cat-file','-e',${JSON.stringify(`${child}^{commit}`)}]),source=fs.readFileSync('/workspace/lib.txt','utf8');let external='';for(const p of [${JSON.stringify(externalCanary)},${JSON.stringify(path.join(cache, ".git/objects"))},'/home/mike/nexus-heldout-v2']){try{const s=fs.statSync(p);external+=s.isDirectory()?'directory ':fs.readFileSync(p,'utf8')}catch{external+='unavailable '}};const refs=run(['rev-list','--all','--reflog','--objects']);console.log(JSON.stringify({head:head.stdout.trim(),headStatus:head.status,baselineObjectStatus:baselineObject.status,objectStatus:object.status,objectOutput:object.stdout+object.stderr,source,external,refs:refs.stdout+refs.stderr,workspace:fs.realpathSync('/workspace')}))`;
-    const task = await runSandbox(sandbox.cmd, sandbox.argv, JSON.stringify({ command: nodeRuntime, argv: ["-e", candidateProbe], env: { PATH: "/usr/bin:/bin" } }));
+    const candidateProbe = `const fs=require('node:fs'),cp=require('node:child_process');const run=(args)=>cp.spawnSync('git',args,{cwd:'/workspace',encoding:'utf8',env:{PATH:'/usr/bin:/bin',HOME:'/home/eval',GIT_CONFIG_NOSYSTEM:'1',GIT_CONFIG_GLOBAL:'/dev/null'}});const head=run(['rev-parse','HEAD']),[baselineRef,childRef,...externalPaths]=process.argv.slice(1),baselineObject=run(['cat-file','-e',baselineRef]),object=run(['cat-file','-e',childRef]),source=fs.readFileSync('/workspace/lib.txt','utf8');let external='';for(const p of [...externalPaths,'/home/mike/nexus-heldout-v2']){try{const s=fs.statSync(p);external+=s.isDirectory()?'directory ':fs.readFileSync(p,'utf8')}catch{external+='unavailable '}};const refs=run(['rev-list','--all','--reflog','--objects']);console.log(JSON.stringify({head:head.stdout.trim(),headStatus:head.status,baselineObjectStatus:baselineObject.status,objectStatus:object.status,objectOutput:object.stdout+object.stderr,source,external,refs:refs.stdout+refs.stderr,workspace:fs.realpathSync('/workspace')}))`;
+    const task = await runSandbox(sandbox.cmd, sandbox.argv, JSON.stringify({ command: nodeRuntime, argv: ["-e", candidateProbe, `${baseline}^{commit}`, `${child}^{commit}`, externalCanary, path.join(cache, ".git/objects")], env: { PATH: "/usr/bin:/bin" } }));
     assert.equal(task.status, 0, `${task.error ?? ""}\n${task.stderr}\n${task.stdout}`);
     const observed = JSON.parse(task.stdout.trim());
     assert.equal(observed.headStatus, 0);
@@ -766,8 +769,8 @@ test("repository workspaces carry no history beyond the pinned baseline commit",
     assert.equal(observed.external, "unavailable unavailable unavailable ", "candidate could access an external cache, validator, or custodian path");
     assert.doesNotMatch(observed.refs, new RegExp(child));
     assert.doesNotMatch(`${task.stdout}${task.stderr}`, /REFERENCE_SOLUTION_CANARY_72d9|EXTERNAL_VALIDATOR_CANARY_0e42/);
-    const objectProbe = `const cp=require('node:child_process'),fs=require('node:fs'),path=require('node:path');const run=(args)=>cp.spawnSync('git',args,{cwd:'/workspace',encoding:'utf8',env:{PATH:'/usr/bin:/bin',HOME:'/home/eval',GIT_CONFIG_NOSYSTEM:'1',GIT_CONFIG_GLOBAL:'/dev/null'}});let disk='';const walk=(d)=>{for(const e of fs.readdirSync(d,{withFileTypes:true})){const p=path.join(d,e.name);if(e.isDirectory())walk(p);else try{disk+=fs.readFileSync(p).toString('utf8')}catch{}}};walk('/workspace/.git');console.log(JSON.stringify({fsck:run(['fsck','--unreachable']),all:run(['cat-file','--batch-check=%(objectname)','--batch-all-objects']),blob:run(['cat-file','-p',${JSON.stringify(danglingBlob)}]),commit:run(['cat-file','-p',${JSON.stringify(danglingCommit)}]),disk}))`;
-    const objectTask = await runSandbox(sandbox.cmd, sandbox.argv, JSON.stringify({ command: nodeRuntime, argv: ["-e", objectProbe], env: { PATH: "/usr/bin:/bin" } }));
+    const objectProbe = `const cp=require('node:child_process'),fs=require('node:fs'),path=require('node:path');const run=(args)=>cp.spawnSync('git',args,{cwd:'/workspace',encoding:'utf8',env:{PATH:'/usr/bin:/bin',HOME:'/home/eval',GIT_CONFIG_NOSYSTEM:'1',GIT_CONFIG_GLOBAL:'/dev/null'}});let disk='';const walk=(d)=>{for(const e of fs.readdirSync(d,{withFileTypes:true})){const p=path.join(d,e.name);if(e.isDirectory())walk(p);else try{disk+=fs.readFileSync(p).toString('utf8')}catch{}}};walk('/workspace/.git');console.log(JSON.stringify({fsck:run(['fsck','--unreachable']),all:run(['cat-file','--batch-check=%(objectname)','--batch-all-objects']),blob:run(['cat-file','-p',process.argv[1]]),commit:run(['cat-file','-p',process.argv[2]]),disk}))`;
+    const objectTask = await runSandbox(sandbox.cmd, sandbox.argv, JSON.stringify({ command: nodeRuntime, argv: ["-e", objectProbe, danglingBlob, danglingCommit], env: { PATH: "/usr/bin:/bin" } }));
     assert.equal(objectTask.status, 0, `${objectTask.error ?? ""}\n${objectTask.stderr}`);
     const objectObserved = JSON.parse(objectTask.stdout.trim());
     assert.equal(objectObserved.fsck.status, 0);
@@ -1011,4 +1014,23 @@ test("the model proxy injects each scheduled fault into the chat request it name
     upstream.close();
   }
   await assert.rejects(startModelProxy({ upstream: "http://127.0.0.1:9/v1", faults: [{ kind: "nope", atRequest: 1 }] }), /invalid fault/);
+});
+
+test("executable probes refuse bind sources that overlap protected corpus material", async () => {
+  const { isolatedProcessArgv } = await import(path.join(ROOT, "eval/isolate.mjs"));
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-eval-probe-overlap-"));
+  try {
+    const store = path.join(root, "heldout-v2");
+    const workspace = path.join(root, "workspace");
+    fs.mkdirSync(path.join(store, "reference"), { recursive: true });
+    fs.mkdirSync(workspace);
+    const alias = path.join(root, "store-alias");
+    fs.symlinkSync(store, alias, "dir");
+    const probe = (options: Record<string, unknown>) => () => isolatedProcessArgv({ command: "/usr/bin/true", argv: ["--version"], ...options });
+    assert.throws(probe({ cwd: workspace, protectedCorpusPaths: ["/usr/share/nexus-heldout"] }), /overlaps protected corpus material: \/usr\/share/, "system bind containing a protected path");
+    assert.throws(probe({ cwd: path.join(alias, "reference"), protectedCorpusPaths: [store] }), /overlaps protected corpus material/, "workspace bind through a symlink alias");
+    assert.doesNotThrow(probe({ cwd: workspace, protectedCorpusPaths: [store] }), "an unrelated workspace remains usable");
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
 });

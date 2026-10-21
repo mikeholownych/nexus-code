@@ -8,6 +8,18 @@ import { execFile } from "node:child_process";
 import { PublishedRelease } from "../src/upgrade.js";
 
 const CLI_ENTRY = path.resolve("dist/index.js");
+const CURRENT_VERSION = (
+  JSON.parse(fs.readFileSync(new URL("../package.json", import.meta.url), "utf8")) as {
+    version: string;
+  }
+).version;
+const CURRENT_MAJOR = Number.parseInt(CURRENT_VERSION.split(".", 1)[0] ?? "", 10);
+if (!Number.isSafeInteger(CURRENT_MAJOR)) {
+  throw new Error(`Invalid CLI package version: ${CURRENT_VERSION}`);
+}
+const CURRENT_TAG = `v${CURRENT_VERSION}`;
+const NEWER_STABLE_TAG = `v${CURRENT_MAJOR + 1}.0.0`;
+const MISSING_RELEASE_TAG = `v${CURRENT_MAJOR + 2}.0.0`;
 
 function runCliAsync(
   args: string[],
@@ -38,21 +50,21 @@ describe("CLI nexus upgrade command execution and exit codes", () => {
 
   const mockReleases: PublishedRelease[] = [
     {
-      tag_name: "v0.1.0-alpha.2",
-      name: "v0.1.0-alpha.2",
-      draft: false,
-      prerelease: true,
-      published_at: "2026-10-14T08:00:00Z",
-      html_url: "https://github.com/mock/nexus/releases/v0.1.0-alpha.2",
-      assets: [],
-    },
-    {
-      tag_name: "v1.0.0",
-      name: "v1.0.0",
+      tag_name: NEWER_STABLE_TAG,
+      name: NEWER_STABLE_TAG,
       draft: false,
       prerelease: false,
       published_at: "2026-10-18T10:00:00Z",
-      html_url: "https://github.com/mock/nexus/releases/v1.0.0",
+      html_url: `https://github.com/mock/nexus/releases/${NEWER_STABLE_TAG}`,
+      assets: [],
+    },
+    {
+      tag_name: CURRENT_TAG,
+      name: CURRENT_TAG,
+      draft: false,
+      prerelease: CURRENT_VERSION.includes("-"),
+      published_at: "2026-10-14T08:00:00Z",
+      html_url: `https://github.com/mock/nexus/releases/${CURRENT_TAG}`,
       assets: [],
     },
   ];
@@ -117,7 +129,6 @@ describe("CLI nexus upgrade command execution and exit codes", () => {
   });
 
   it("returns exit code 1 when update is available in --check mode", async () => {
-    // Under test, current version is v0.1.0-alpha.2; target stable is v1.0.0
     const res = await runCliAsync(["upgrade", "--check"], {
       env: {
         ...process.env,
@@ -127,12 +138,11 @@ describe("CLI nexus upgrade command execution and exit codes", () => {
     });
     assert.equal(res.code, 1);
     assert.match(res.stdout, /An update is available/);
-    assert.match(res.stdout, /v1\.0\.0/);
+    assert.ok(res.stdout.includes(NEWER_STABLE_TAG));
   });
 
   it("returns exit code 0 when already current in --check mode with pinned version", async () => {
-    // Current is v0.1.0-alpha.2; target pinned to v0.1.0-alpha.2
-    const res = await runCliAsync(["upgrade", "--check", "--version", "v0.1.0-alpha.2"], {
+    const res = await runCliAsync(["upgrade", "--check", "--version", CURRENT_TAG], {
       env: {
         ...process.env,
         NEXUS_RELEASES_API: `http://127.0.0.1:${port}/api/releases`,
@@ -156,14 +166,14 @@ describe("CLI nexus upgrade command execution and exit codes", () => {
     assert.equal(parsed.schemaVersion, 1);
     assert.equal(parsed.tool, "nexus upgrade");
     assert.equal(parsed.status, "update_available");
-    assert.equal(parsed.targetVersion, "v1.0.0");
+    assert.equal(parsed.targetVersion, NEWER_STABLE_TAG);
     assert.equal(parsed.action, "upgrade");
     assert.ok(parsed.release);
-    assert.equal(parsed.release.tag, "v1.0.0");
+    assert.equal(parsed.release.tag, NEWER_STABLE_TAG);
   });
 
   it("returns exit code 2 on operational error (release not found)", async () => {
-    const res = await runCliAsync(["upgrade", "--check", "--version", "v9.9.9"], {
+    const res = await runCliAsync(["upgrade", "--check", "--version", MISSING_RELEASE_TAG], {
       env: {
         ...process.env,
         NEXUS_RELEASES_API: `http://127.0.0.1:${port}/api/releases`,
@@ -171,7 +181,7 @@ describe("CLI nexus upgrade command execution and exit codes", () => {
       },
     });
     assert.equal(res.code, 2);
-    assert.match(res.stderr, /could not find release v9\.9\.9/);
+    assert.ok(res.stderr.includes(`could not find release ${MISSING_RELEASE_TAG}`));
   });
 
   it("returns exit code 2 on operational error when offline or host unreachable", async () => {

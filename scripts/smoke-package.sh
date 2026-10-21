@@ -54,12 +54,16 @@ node "$(dirname "$0")/check_notices.mjs" "$TMP/nexus/THIRD_PARTY_NOTICES.txt"
 
 test -x "$TMP/nexus/lib/core/harness-core"
 test -x "$TMP/nexus/lib/core/nexus-tui"
-node --input-type=module - "$TMP/nexus/lib/cli/dist/tools.js" "$TMP/nexus/lib/core/harness-core" <<'EOF'
+node --input-type=module - "$TMP/nexus/lib/cli/dist/tools.js" "$TMP/nexus/lib/core/harness-core" "$TMP/nexus/compatibility.json" "$TMP/nexus/lib/cli/dist/core/state.js" <<'EOF'
 import { pathToFileURL } from 'node:url';
+import fs from 'node:fs';
 const moduleUrl = pathToFileURL(process.argv[2]).href;
 process.env.NEXUS_HOME = process.argv[3].replace(/\/lib\/core\/harness-core$/, '');
 const { resolveCoreBinary } = await import(moduleUrl);
 if (resolveCoreBinary() !== process.argv[3]) throw new Error('packaged core resolution failed');
+const { CURRENT_STATE_SCHEMA_VERSION } = await import(pathToFileURL(process.argv[5]).href);
+const metadata = JSON.parse(fs.readFileSync(process.argv[4], 'utf8'));
+if (metadata.compatibility.stateSchemaVersion !== CURRENT_STATE_SCHEMA_VERSION) throw new Error('packaged state schema disagrees with compatibility metadata');
 EOF
 "$TMP/nexus/lib/core/harness-core" --help >/dev/null
 cat > "$TMP/snapshot.json" <<'EOF'

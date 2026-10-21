@@ -7,7 +7,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { AutonomousAgent } from "../agent.js";
-import { LocalLlmClient, mayBindCredential, storedCredentialFor } from "../client.js";
+import { credentialStorageHome, LocalLlmClient, mayBindCredential, storedCredentialFor } from "../client.js";
 import { providerDefinition } from "../providers.js";
 import { providerApiKey } from "../credentials.js";
 import type { ChatMessage, HarnessConfig } from "../types.js";
@@ -24,6 +24,7 @@ import {
   type ResourceConditionRecord,
   type ResourceDescriptor,
 } from "./resources.js";
+import { AccountIdentityError, createOperationAccountIdentity, isLegacyCredentialFingerprint, type OperationAccountIdentity } from "./account_identity.js";
 import { DurableStateManager, type DurableTaskState, type TaskRecoveryResult } from "./state.js";
 import { turnSucceeded, type InferenceFailure, type TurnResult } from "./turn.js";
 import { WorkspacePath } from "./workspace_path.js";
@@ -289,14 +290,17 @@ const LIFECYCLE: Record<DurableOperationState["status"], DurableTaskState["statu
 export class OperationStore {
   readonly manager: DurableStateManager;
   private readonly workspace: WorkspacePath;
+  private readonly accountIdentityHome: string;
 
   /** `baseDir` defaults to the task store turn recovery uses (~/.nexus/tasks). */
-  constructor(workspace: string, baseDir?: string) {
+  constructor(workspace: string, baseDir?: string, accountIdentityHome = credentialStorageHome()) {
     this.workspace = WorkspacePath.fromSelectedWorkspace(path.resolve(workspace));
     this.manager = new DurableStateManager({ ...(baseDir ? { baseDir } : {}), workspacePaths: [this.workspace] });
+    this.accountIdentityHome = accountIdentityHome;
   }
 
   save(op: DurableOperationState): void {
+    op = migrateLegacyAccountIdentities(op, createOperationAccountIdentity(this.accountIdentityHome));
     const existing = this.manager.hasTaskState(op.id) ? this.manager.loadTaskState(op.id) : undefined;
     const state: DurableTaskState = {
       schemaVersion: 1,
@@ -322,7 +326,24 @@ export class OperationStore {
   load(id: string): DurableOperationState {
     const state = this.manager.loadTaskState(id, this.workspace.value, [this.workspace]);
     if (!state.operation) throw new Error(`Task ${id} is not an operation`);
-    return state.operation;
+    return migrateLegacyAccountIdentities(state.operation, createOperationAccountIdentity(this.accountIdentityHome));
+  }
+
+  /** Status/export callers migrate legacy IDs on disk only when they can hold the operation lock. */
+  loadForInspection(id: string): DurableOperationState {
+    let release: (() => void) | undefined;
+    try {
+      release = this.acquire(id);
+    } catch (error) {
+      if (!(error instanceof OperationLockedError)) throw error;
+    }
+    try {
+      const operation = this.load(id);
+      if (release) this.save(operation);
+      return operation;
+    } finally {
+      release?.();
+    }
   }
 
   list(): DurableOperationState[] {
@@ -331,7 +352,23 @@ export class OperationStore {
       if (!t.title.startsWith("Operation: ")) continue;
       try {
         out.push(this.load(t.taskId));
-      } catch {}
+      } catch (error) {
+        if (error instanceof AccountIdentityError) throw error;
+      }
+    }
+    return out;
+  }
+
+  /** Status/export listing persists each legacy migration only when its operation lock is available. */
+  listForInspection(): DurableOperationState[] {
+    const out: DurableOperationState[] = [];
+    for (const task of this.manager.listTasks()) {
+      if (!task.title.startsWith("Operation: ")) continue;
+      try {
+        out.push(this.loadForInspection(task.taskId));
+      } catch (error) {
+        if (error instanceof AccountIdentityError) throw error;
+      }
     }
     return out;
   }
@@ -354,7 +391,7 @@ export class OperationStore {
       // A lock written before this host last booted is stale even if its pid has since been reused.
       const beforeBoot = holder.at !== undefined && Date.parse(holder.at) < Date.now() - os.uptime() * 1000;
       if (holder.host !== os.hostname() || (!beforeBoot && holder.pid !== undefined && processAlive(holder.pid))) {
-        throw new Error(`Operation ${id} is already being driven by pid ${holder.pid ?? "?"} on ${holder.host ?? "?"} (lock ${lockPath}).`);
+        throw new OperationLockedError(`Operation ${id} is already being driven by pid ${holder.pid ?? "?"} on ${holder.host ?? "?"} (lock ${lockPath}).`);
       }
       fs.rmSync(lockPath, { force: true });
       create();
@@ -370,6 +407,58 @@ export class OperationStore {
   latestResumable(): DurableOperationState | undefined {
     return this.list().find((op) => op.status === "WAITING" || op.status === "RUNNING");
   }
+}
+
+export class OperationLockedError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "OperationLockedError";
+  }
+}
+
+/** Re-key legacy short hashes without changing which resources share an account-scoped condition. */
+export function migrateLegacyAccountIdentities(
+  operation: DurableOperationState,
+  identity: OperationAccountIdentity,
+): DurableOperationState {
+  // Schema-1 records do not retain whether an old 12-hex account value came
+  // from the CLI label or the former credential hash. Preserve explicitly
+  // marked labels; migrate unmarked 12-hex values as legacy credential IDs.
+  const explicitAccounts = new Set(
+    operation.resources.filter((resource) => resource.accountIdentitySource === "explicit" && resource.account).map((resource) => resource.account!),
+  );
+  const explicitAccountConditionKeys = new Set(
+    operation.resources
+      .filter((resource) => resource.accountIdentitySource === "explicit" && resource.account)
+      .map((resource) => `${resource.provider}|account|${resource.account}`),
+  );
+  const migrated = new Map<string, string>();
+  const replacement = (value: string): string => {
+    if (explicitAccounts.has(value) || !isLegacyCredentialFingerprint(value)) return value;
+    let mapped = migrated.get(value);
+    if (!mapped) {
+      mapped = identity.migrateLegacy(value, operation.id);
+      migrated.set(value, mapped);
+    }
+    return mapped;
+  };
+
+  for (const resource of operation.resources) {
+    if (resource.account) resource.account = replacement(resource.account);
+  }
+  for (const condition of operation.conditions) {
+    if (condition.scope !== "account") continue;
+    // Account labels are arbitrary strings and may themselves contain `|account|`; preserve the full key for
+    // explicitly labeled resources instead of parsing the final delimiter as a structural boundary.
+    if (explicitAccountConditionKeys.has(condition.key)) continue;
+    const marker = "|account|";
+    const markerAt = condition.key.lastIndexOf(marker);
+    if (markerAt < 0) continue;
+    const oldAccount = condition.key.slice(markerAt + marker.length);
+    const newAccount = replacement(oldAccount);
+    if (newAccount !== oldAccount) condition.key = `${condition.key.slice(0, markerAt + marker.length)}${newAccount}`;
+  }
+  return operation;
 }
 
 export interface DriveOptions extends Omit<OperationRunnerOptions, "persist"> {
@@ -444,8 +533,8 @@ const PLANNER_PREFERRED = ["research", "architecture", "review"];
 const CODER_PREFERRED = ["implementation", "verification"];
 
 /** Resources implied by the existing configuration (primary model, fallback endpoints, planner and coder slots). */
-export function resourcesFromConfig(config: HarnessConfig): ResourceDescriptor[] {
-  const account = credentialFingerprint(config.apiKey) ?? (config.provider ? undefined : credentialFingerprint(storedCredentialFor(config.endpoint) ?? undefined));
+export function resourcesFromConfig(config: HarnessConfig, identity = createOperationAccountIdentity(credentialStorageHome())): ResourceDescriptor[] {
+  const account = credentialFingerprint(config.apiKey, identity) ?? (config.provider ? undefined : credentialFingerprint(storedCredentialFor(config.endpoint) ?? undefined, identity));
   const make = (id: string, endpoint: string, model: string, rank: number, taskClass?: string, key = account, preferredFor?: string[], providerId?: string): ResourceDescriptor => ({
     id,
     provider: providerId ?? origin(normalizeEndpoint(endpoint)),
@@ -455,6 +544,7 @@ export function resourcesFromConfig(config: HarnessConfig): ResourceDescriptor[]
     capabilities: ["tools"],
     rank,
     ...(key ? { account: key } : {}),
+    ...(key ? { accountIdentitySource: "credential" as const } : {}),
     ...(taskClass ? { taskClass } : {}),
     ...(preferredFor ? { preferredFor } : {}),
   });
@@ -464,11 +554,11 @@ export function resourcesFromConfig(config: HarnessConfig): ResourceDescriptor[]
   const roleProvider = (own?: string, ownEndpoint?: string) => own ?? (ownEndpoint ? undefined : config.provider);
   if (config.plannerModel) {
     const p = roleProvider(config.plannerProvider, config.plannerEndpoint);
-    out.push(make("planner", config.plannerEndpoint ?? config.endpoint, config.plannerModel, 2, config.plannerTaskClass, credentialFingerprint(config.plannerApiKey) ?? account, PLANNER_PREFERRED, p));
+    out.push(make("planner", config.plannerEndpoint ?? config.endpoint, config.plannerModel, 2, config.plannerTaskClass, credentialFingerprint(config.plannerApiKey, identity) ?? account, PLANNER_PREFERRED, p));
   }
   if (config.coderModel) {
     const p = roleProvider(config.coderProvider, config.coderEndpoint);
-    out.push(make("coder", config.coderEndpoint ?? config.endpoint, config.coderModel, 2, config.taskClass, credentialFingerprint(config.coderApiKey) ?? account, CODER_PREFERRED, p));
+    out.push(make("coder", config.coderEndpoint ?? config.endpoint, config.coderModel, 2, config.taskClass, credentialFingerprint(config.coderApiKey, identity) ?? account, CODER_PREFERRED, p));
   }
   const seen = new Set<string>();
   return out.filter((r) => {

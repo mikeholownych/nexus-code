@@ -1315,7 +1315,10 @@ export async function upgradeCommand(options: any): Promise<void> {
   // 2. Restore backup command
   if (options.restoreBackup) {
     const backupPath = String(options.restoreBackup);
-    const restored = restoreConfigBackup(backupPath);
+    let restoreFailure: string | undefined;
+    const restored = restoreConfigBackup(backupPath, undefined, (error) => {
+      restoreFailure = error instanceof Error ? error.message : String(error);
+    });
     if (isJson) {
       console.log(
         JSON.stringify(
@@ -1324,6 +1327,7 @@ export async function upgradeCommand(options: any): Promise<void> {
             tool: "nexus upgrade",
             status: restored ? "restored" : "error",
             backupPath,
+            ...(restored ? {} : { error: restoreFailure ?? "Backup path was not accepted or is unavailable." }),
           },
           null,
           2
@@ -1333,7 +1337,9 @@ export async function upgradeCommand(options: any): Promise<void> {
       if (restored) {
         console.log(`✔ Restored configuration/state backup from ${backupPath}.`);
       } else {
-        console.error(`Restore failed: backup file ${backupPath} not found.`);
+        console.error(restoreFailure
+          ? `Restore failed: ${restoreFailure}`
+          : `Restore failed: backup path ${backupPath} was not accepted or is unavailable.`);
       }
     }
     process.exit(restored ? UPGRADE_EXIT.ok : UPGRADE_EXIT.error);
