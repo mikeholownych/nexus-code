@@ -18,16 +18,17 @@ bash scripts/security_gates.sh
 
 The current binary release target is **Linux x86-64 on glibc 2.35 or newer**, built on Ubuntu 22.04. Node.js 20+ is required at runtime. The archive contains the TypeScript client, production npm dependencies, `harness-core`, and `nexus-tui`; Rust/Cargo are not runtime requirements. No other OS, libc, or architecture is supported by the binary release yet.
 
-Create and inspect a candidate locally:
+Create and inspect a candidate locally. Set `NEXUS_VERSION` to the release tag being built; for an RC, use its RC tag, and for a stable release, use its stable tag:
 
 ```sh
-bash scripts/package-linux.sh v0.1.0-alpha.2 ./release
-bash scripts/smoke-package.sh ./release/nexus-linux-x86_64-v0.1.0-alpha.2.tar.gz
+: "${NEXUS_VERSION:?Set NEXUS_VERSION to the release tag, for example v1.0.0-rc.1 or v1.0.0}"
+bash scripts/package-linux.sh "$NEXUS_VERSION" ./release
+bash scripts/smoke-package.sh "./release/nexus-linux-x86_64-$NEXUS_VERSION.tar.gz"
 ```
 
 The root `package.json` version is the single source of truth. After changing it, run `node scripts/sync-version.mjs` to update `cli/package.json`, its lockfile, `core/Cargo.toml` and `core/Cargo.lock`. CI and the release workflow run `node scripts/sync-version.mjs --check`, which fails on any drift or on a tag that does not match.
 
-CI validates pull requests and `main`. A SemVer tag matching `package.json` triggers the controlled GitHub Release workflow; prerelease tags are marked prereleases. Releases contain the versioned archive and `SHA256SUMS`. The current published candidate is [`v0.1.0-alpha.2`](https://github.com/mikeholownych/nexus-code/releases/tag/v0.1.0-alpha.2).
+CI validates pull requests and `main`. A SemVer tag matching `package.json` triggers the controlled GitHub Release workflow; prerelease tags are marked prereleases. Releases contain the versioned archive and `SHA256SUMS`. Find the published stable release and any prereleases on the [GitHub Releases page](https://github.com/mikeholownych/nexus-code/releases).
 
 The installer uses these stable URLs:
 
