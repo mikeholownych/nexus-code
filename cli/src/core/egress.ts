@@ -412,6 +412,13 @@ export function calculateShannonEntropy(str: string): number {
   return entropy;
 }
 
+/** Strips trailing quote/semicolon/comma delimiters; a linear scan equivalent to `/["';,]+$/`. */
+function trimTrailingDelimiters(value: string): string {
+  let end = value.length;
+  while (end > 0 && `"';,`.includes(value[end - 1])) end--;
+  return value.slice(0, end);
+}
+
 /**
  * InformationFlowBoundary: The authoritative egress interception & secret quarantine layer.
  */
@@ -619,7 +626,7 @@ export class InformationFlowBoundary {
       while ((match = re.exec(text)) !== null) {
         let secretVal = match[1];
         if (!secretVal) continue;
-        secretVal = secretVal.replace(/["';,]+$/, "");
+        secretVal = trimTrailingDelimiters(secretVal);
         if (
           secretVal.length >= 8 &&
           !secretVal.startsWith("[NEXUS_SEC_REF_") &&

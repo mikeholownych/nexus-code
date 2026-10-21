@@ -10,37 +10,6 @@ permissions:
   contents: read
 
 jobs:
-  cloudflare-contest-contract:
-    # Retired because the contest has ended; no configured workflow event matches this job-level skip.
-    if: ${{ github.event_name == 'nexus-contest-retired' }}
-    runs-on: ubuntu-24.04
-    steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-      - run: sudo apt-get update && sudo apt-get install --yes nodejs
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
-        with:
-          node-version: 22
-          cache: npm
-          cache-dependency-path: |
-            cli/package-lock.json
-            demo/package-lock.json
-            experiments/cloudflare-artifacts-vertical-slice/package-lock.json
-      - run: npm ci --prefix demo
-      - run: npm ci --prefix cli
-      - run: npm run build --prefix cli
-      - run: npm test --prefix demo
-      - run: npm ci --prefix experiments/cloudflare-artifacts-vertical-slice
-      - run: npm run typecheck --prefix experiments/cloudflare-artifacts-vertical-slice
-        env:
-          NEXUS_CF_WORKER_NAME: nexus-contest-ci
-          NEXUS_CF_NAMESPACE: nexus-contest-ci
-          NEXUS_CF_REPOSITORY: fixture
-      - run: npm run build --prefix experiments/cloudflare-artifacts-vertical-slice
-        env:
-          NEXUS_CF_WORKER_NAME: nexus-contest-ci
-          NEXUS_CF_NAMESPACE: nexus-contest-ci
-          NEXUS_CF_REPOSITORY: fixture
-
   test-matrix:
     runs-on: ubuntu-22.04
     strategy:
