@@ -42,7 +42,7 @@ without stopping the others.
 |---|---|
 | `install.build` | The packaged CLI build exists; in a source checkout, `cli/dist` is not older than `cli/src`. |
 | `tui.build` | The packaged TUI binary and `cli/dist/sidecar.js` exist; in a source checkout, they are newer than `core/src/bin`. |
-| `runtime.node` | Node.js 20 or later. |
+| `runtime.node` | Node.js 22 or later. |
 | `runtime.launcher` | The `nexus` on PATH resolves to this packaged install or the configured source checkout launcher. |
 | `config.valid` | `buildConfig` succeeds with the flags given (provider selection, base URLs, budgets). |
 | `endpoint.configured` | An endpoint is configured; whether a credential is present (never shown). |
