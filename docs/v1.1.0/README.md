@@ -84,6 +84,7 @@ Drawing from modern LLM platform patterns analyzed in [LANGSMITH_REVIEW.md](../v
   - **REQ-EVL-101:** Dedicated `nexus eval` CLI launcher.
   - **REQ-DX-105 / CRED003:** Bounded flight recorder with automated credential redaction.
   - **Platform Expansion:** macOS and arm64 build pipelines (DEC-12).
+  - **Toolchain & Dependency Modernization (WP-1108):** Structured triage, testing, and migration of the 27 post-v1 Dependabot updates (#103–#129) across Rust core, CI workflows, and CLI runtime packages.
 
 ---
 

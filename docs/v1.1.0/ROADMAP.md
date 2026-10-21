@@ -20,6 +20,7 @@ v1.0.0 (RC.1 Freeze)                v1.1.0                              v1.2.0
 - Deterministic Packages & Provenance - Standalone `nexus eval` CLI      - Human Annotation Queue
                                     - Deterministic Code Evaluators     - Failure Clustering
                                     - GBNF Tool Grammar Engine          │
+                                    - Dependabot Modernization (WP-1108)│
                                                                         ▼
                                                                         v1.3.0
                                                                         - Standard OTLP Exporter
@@ -46,6 +47,7 @@ v1.0.0 (RC.1 Freeze)                v1.1.0                              v1.2.0
 | **WP-1105** | **Deterministic Code Evaluators** | Implement modular evaluator library in `eval/evaluators/code/`: AST syntax validation, build pass/fail, typecheck exit codes, diff boundary compliance, and JSON repair rates. | `LANGSMITH_REVIEW` §4.1 |
 | **WP-1106** | **Single Step Loop Mode** | Implement `--step` flag in `nexus run` and `/step` REPL command to execute one agent turn and pause deterministically for operator confirmation. | `REQ-AGT-111` |
 | **WP-1107** | **Constrained Decoding & GBNF Tool Grammar Engine** | Implement dynamic Context-Free Grammar (GBNF) generation from registered tool schemas (`read_file`, `write_file`, `edit_file`, `run_command`). Interfaces with `llama.cpp` (`grammar`), `vLLM` (`guided_json`), and `Ollama` (`format`). Supports hybrid grammars (`<think>...</think>` + tool call) for reasoning models (DeepSeek R1). Drives JSON argument parse errors to 0.0% and unlocks reliable agentic execution on 7B/14B Q4_K_M local models. | `POSITIONING.md` §3.6, `SPEC-EVALUATION.md` §6 |
+| **WP-1108** | **Dependency Modernization & Toolchain Maintenance** | Triage, validate, and integrate the 27 post-v1.0.0 Dependabot PRs (#103–#129) across 5 staged batches: Core Rust runtime (#105, #107, #110, #113), GitHub Actions CI workflows (#103, #104, #106, #108, #112), Cloudflare micro-workers (#109, #115–#118, #121–#123, #125–#128), TypeScript compiler (#119, #124, #129), and CLI runtime migrations (#111, #114, #120 including Commander 12→15 compatibility audit). | PRs #103–#129, `ROADMAP.md` §2.1 |
 
 ### v1.1.0 Release Gates
 
@@ -53,6 +55,49 @@ v1.0.0 (RC.1 Freeze)                v1.1.0                              v1.2.0
 - **Gate G1.1-2 (Dataset Decoupling):** Evaluator executes 100% of benchmark tasks with zero leakage of `oracles.jsonl` to agent prompt context.
 - **Gate G1.1-3 (CLI Parity):** `nexus eval` executes cleanly from packaged binary installations without developer dependencies.
 - **Gate G1.1-4 (Constrained Decoding Reliability):** GBNF-constrained execution achieves 100% valid JSON tool call emission (0 syntax repair retries) across supported local inference endpoints (llama.cpp, vLLM, Ollama).
+- **Gate G1.1-5 (Dependency Modernization & Regression Baseline):** All 27 Dependabot PR upgrades pass unit/PTY suites, CodeQL security audits (0 alerts), package reproducibility (`cmp`), and CLI option compatibility without breaking unprivileged sandbox invariants.
+
+### 2.1 Dependabot Triage & Integration Matrix (WP-1108)
+
+Following the PR #8 integration merge to `main`, Dependabot opened 27 automated dependency update pull requests (PRs #103–#129). These are triaged into 5 distinct integration batches scheduled for the v1.1.0 development cycle:
+
+#### Batch 1: Core Rust Engine Runtime (Low Risk / Immediate Merge)
+Patches to Rust core dependencies that preserve API compatibility and improve stability and performance:
+- **PR #105:** `tokio` (1.53.1 → 1.53.3 in `/core`) — Async runtime maintenance patch.
+- **PR #107:** `similar` (2.7.0 → 3.2.0 in `/core`) — Text diffing library minor upgrade.
+- **PR #110:** `libc` (0.2.189 → 0.2.191 in `/core`) — System call bindings patch.
+- **PR #113:** `serde_json` (1.0.151 → 1.0.154 in `/core`) — Serialization optimization patch.
+- *Verification Requirement:* `cargo test --locked --manifest-path core/Cargo.toml` under isolated HOME; bit-for-bit packaging `cmp` check.
+
+#### Batch 2: Cloudflare Experimental Micro-Workers (Low Risk / Isolated)
+Maintenance updates for the isolated Cloudflare artifacts vertical slice (retired contest contract track):
+- **PRs #125, #126, #127, #128:** `vite` (8.3.3 → 8.3.4 across root and worker packages).
+- **PRs #115, #117, #118:** `@cloudflare/vite-plugin` (2.0.0-beta.sha-52b0dc0e9 → 2.0.0-beta.v.1).
+- **PRs #109, #116, #121, #122, #123:** `cf` (1.0.0-beta.10 → 1.0.0-beta.18 across worker bundles).
+- *Verification Requirement:* `npm run build --prefix experiments/cloudflare-artifacts-vertical-slice` and typecheck pass.
+
+#### Batch 3: GitHub Actions CI Workflows (Medium Risk / CI Pipeline Validation)
+Modernization of hosted automation actions in `.github/workflows/`:
+- **PR #103:** `actions/attest-build-provenance` (commit hash update for SLSA build provenance).
+- **PR #104:** `actions/checkout` (v4.4.0 → v7.0.1) — Major runner checkout upgrade.
+- **PR #106:** `actions/download-artifact` (v4.3.0 → v8.0.2) — Artifact fetcher upgrade.
+- **PR #108:** `softprops/action-gh-release` (v2.6.2 → v3.0.3) — GitHub release asset upload upgrade.
+- **PR #112:** `actions/setup-node` (v4.4.0 → v7.1.0) — Node environment provisioning upgrade.
+- *Verification Requirement:* Staged workflow validation on test branch; assert identical artifact download and release asset publishing behavior.
+
+#### Batch 4: TypeScript Compiler & Typing Toolchain (Medium Risk / Type Safety Validation)
+Modernization of the TypeScript compiler toolchain:
+- **PR #119:** `typescript` (5.9.3 → 7.0.2 in `/demo`) — Demo runner compiler bump.
+- **PR #124:** `@types/node` (22.20.4 → 26.6.5 in `/cli`) — Node.js runtime typings.
+- **PR #129:** `typescript` (5.9.3 → 7.0.2 in `/cli`) — Core CLI compiler bump.
+- *Verification Requirement:* Zero TypeScript compiler errors (`npm run build --prefix cli`, `tsc --noEmit`), clean declaration emission, and zero new `any` casts.
+
+#### Batch 5: Production CLI Runtime Libraries (High Risk / Breaking API Migration)
+Major version bumps requiring focused API compatibility audits and code changes:
+- **PR #111:** `dotenv` (16.6.1 → 18.0.8 in `/cli`) — Environment loading library update. Verify untrusted workspace `.env` rejection invariants (REQ-SEC-001) remain strictly intact.
+- **PR #114:** `commander` (12.1.0 → 15.0.0 in `/cli`) — Major CLI option parser upgrade. Requires comprehensive audit of subcommands (`nexus run`, `check`, `models`, `upgrade`), option parsing (`--strict-token-count`, `--isolated-home`), and exit code propagation.
+- **PR #120:** `ora` (8.2.0 → 9.4.1 in `/cli`) — Terminal spinner library update. Validate stdout/stderr streaming, non-interactive CI fallback, and Ratatui TUI coexistence.
+- *Verification Requirement:* Full CLI unit and PTY suite (1,243+ tests), CLI journey tests (`cli/test/system_journey.test.ts`), and doctor verification.
 
 ---
 

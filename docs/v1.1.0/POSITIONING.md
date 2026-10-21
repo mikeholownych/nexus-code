@@ -181,6 +181,7 @@ Most mainstream agents treat the developer as a passive subscriber to a closed c
 | **Versioned Datasets (`eval/datasets/`)** | `v1.1.0` | [`SPEC-EVALUATION.md`](./SPEC-EVALUATION.md) §3 | In-repo private benchmarking with decoupled oracles |
 | **Standalone `nexus eval` CLI** | `v1.1.0` | [`SPEC-EVALUATION.md`](./SPEC-EVALUATION.md) §8 | Quantifiable model selection and automated CI gating |
 | **Constrained Tool Grammar Engine (GBNF)** | `v1.1.0` | [`SPEC-OBSERVABILITY.md`](./SPEC-OBSERVABILITY.md) §7 | 0% JSON parse errors and zero syntax repair retries on local models |
+| **Dependency Modernization (Dependabot Batch)** | `v1.1.0` | [`ROADMAP.md`](./ROADMAP.md) §2.1 | Staged integration of 27 automated dependency and CI workflow upgrades |
 | **Deterministic Replay (`nexus replay`)** | `v1.2.0` | [`SPEC-OBSERVABILITY.md`](./SPEC-OBSERVABILITY.md) §8 | Instant offline reproduction of agent failures at zero token cost |
 | **Multi-Agent Worktree Mesh** | `v1.2.0` | [`ROADMAP.md`](./ROADMAP.md) §3 | Parallel multi-agent execution with zero git race conditions |
 | **Interactive TUI Trace Inspector** | `v1.2.0` | [`ROADMAP.md`](./ROADMAP.md) §3 | Real-time visual drill-down into tool executions and token latencies |
