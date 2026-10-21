@@ -26,7 +26,7 @@ export function clientInvocationKind(args: readonly string[]): "metadata" | "res
       continue;
     }
     if (arg === "--prefix" || arg === "--restore-backup") {
-      if (index + 1 >= args.length) return "client";
+      if (index + 1 >= args.length || (arg === "--restore-backup" && args[index + 1].startsWith("-"))) return "client";
       if (arg === "--restore-backup") {
         if (restore) return "client";
         restore = true;
