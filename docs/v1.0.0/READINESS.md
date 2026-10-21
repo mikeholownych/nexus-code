@@ -3,7 +3,10 @@
 **Updated:** 2026-10-21 14:56 UTC
 **Current integration candidate:** `8f4504ebd3484149bde39b78934c193752a95bfd` (`v1/integration`)
 **Separate historical candidate branch:** `6151a231e9179c109cfbe8cff87e0a4148587b6a` (`v1/candidate-1`)
-**Disposition:** `IN_PROGRESS`; exact-source CI and requirements enforcement pass on `8f4504e`, but held-out custody and corpus compatibility, installed-RC qualification, independent RC acceptance, and final publication remain incomplete. No v1.0.0 RC or stable release exists. Publication authorization is granted and remains gated on acceptance.
+**Campaign status:** `NEXUS_V1_CONVERGENCE_ACTIVE`
+**Acceptance status:** `IN_PROGRESS`
+
+Exact-source CI and requirements enforcement pass on `8f4504e`, but held-out custody and corpus compatibility, installed-RC qualification, independent RC acceptance, and final publication remain incomplete. No v1.0.0 RC or stable release exists. Publication authorization is granted and remains gated on acceptance.
 
 This checkpoint reconciles the candidate ledger and acceptance procedure against recorded source and test evidence. It is not a release approval. Historical inspection sections below are preserved as audit evidence and do not represent current branch state where superseded by the 2026-10-21 update.
 
