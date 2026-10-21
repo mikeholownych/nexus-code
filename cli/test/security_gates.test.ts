@@ -202,6 +202,54 @@ ${bodies[report]}
     assert.ok(componentNames.includes("commander"), "Must include commander from cli/package.json");
     assert.ok(componentNames.includes("serde"), "Must include serde from core/Cargo.toml");
 
+    // The release SBOM must describe the lockfile production closure that the
+    // shipped Linux binaries use, not every compile-only Cargo component.
+    const cargoTree = execFileSync(
+      "cargo",
+      [
+        "tree",
+        "--locked",
+        "--manifest-path",
+        path.join(rootDir, "core/Cargo.toml"),
+        "--target",
+        "x86_64-unknown-linux-gnu",
+        "--edges",
+        "normal,build",
+        "--prefix",
+        "none",
+        "--format",
+        "{p}",
+      ],
+      { cwd: rootDir, encoding: "utf-8" }
+    );
+    const rustIdentity = (name: string, version: string) =>
+      `${name.replaceAll("-", "_").toLowerCase()}@${version}`;
+    const cargoTreeEntries = cargoTree
+      .trim()
+      .split(/\r?\n/)
+      .map((entry) => {
+        const match = entry.match(/^(.+?) v([^\s]+)(?:\s|$)/);
+        assert.ok(match, `Unparseable Cargo production dependency: ${entry}`);
+        return rustIdentity(match[1], match[2]);
+      });
+    const cargoRoot = cargoTreeEntries[0];
+    assert.ok(cargoRoot, "Cargo production tree must identify the root package");
+    const expectedCargoClosure = new Set(cargoTreeEntries.slice(1));
+    const actualCargoEntries = sbom.components
+      .filter((component: any) => component.purl?.startsWith("pkg:cargo/"))
+      .map((component: any) => rustIdentity(component.name, component.version));
+    assert.strictEqual(
+      actualCargoEntries.filter((identity: string) => identity === cargoRoot).length,
+      1,
+      "Merged SBOM must contain exactly one Cargo root package component"
+    );
+    const actualCargoClosure = new Set(actualCargoEntries.filter((identity: string) => identity !== cargoRoot));
+    assert.deepStrictEqual(
+      [...actualCargoClosure].sort(),
+      [...expectedCargoClosure].sort(),
+      "Cargo SBOM components must exactly match the locked shipped-target normal/build closure"
+    );
+
     // Verify checksum
     const checksumLine = fs.readFileSync(checksumPath, "utf-8").trim();
     assert.ok(checksumLine.endsWith("sbom.json"));
