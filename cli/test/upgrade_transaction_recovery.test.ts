@@ -15,6 +15,23 @@ import { generateCompatibilityMetadata } from "../src/compatibility.js";
 import { performUpgrade, compareInstallationWithRelease, parseSemver, rollbackBinary } from "../src/upgrade.js";
 import { withStateStoreGuard } from "../src/core/state_store_guard.js";
 import { hasPendingStateRestore, recoverPendingStateRestore, restoreFromSources } from "../src/core/state_restore.js";
+import { clientInvocationKind } from "../src/core/client_lease.js";
+
+describe("managed client invocation classification",()=>{
+ it("keeps ambiguous maintenance options on the normal client path",()=>{
+  assert.equal(clientInvocationKind(["upgrade","--prefix","--restore-backup"]),"client");
+  assert.equal(clientInvocationKind(["upgrade","--restore-backup","--prefix"]),"client");
+  assert.equal(clientInvocationKind(["upgrade","--restore-backup="]),"client");
+  assert.equal(clientInvocationKind(["upgrade","--restore-backup","/backup","--check"]),"client");
+ });
+
+ it("releases the normal client lease only for recognized metadata and restore commands",()=>{
+  assert.equal(clientInvocationKind(["--version"]),"metadata");
+  assert.equal(clientInvocationKind(["sessions","--help"]),"metadata");
+  assert.equal(clientInvocationKind(["upgrade","--prefix","/prefix","--restore-backup","/backup"]),"restore");
+  assert.equal(clientInvocationKind(["upgrade","--prefix","/prefix"]),"client");
+ });
+});
 
 function runtime(root:string, version:string, marker="original"):void {
   for (const dir of ["bin", "lib/core", "lib/cli/dist"]) fs.mkdirSync(path.join(root,dir),{recursive:true});
@@ -548,6 +565,48 @@ describe("complete private state/config backup restore",()=>{
    assert.equal(fs.readFileSync(path.join(home,".nexus/sessions/a/events.jsonl"),"utf8"),"original session");
   }finally{
    if(legacy.exitCode===null&&legacy.signalCode===null){legacy.kill("SIGTERM");await new Promise<void>(resolve=>{if(legacy.exitCode!==null||legacy.signalCode!==null)resolve();else legacy.once("exit",()=>resolve());});}
+   fs.rmSync(root,{recursive:true,force:true});
+  }
+ });
+
+ it("keeps a restore pending while a detached legacy client outlives its launcher",async()=>{
+  const root=fs.mkdtempSync(path.join(os.tmpdir(),"nexus-restore-detached-"));
+  const home=path.join(root,"home"), launcher=path.join(root,"legacy","lib/nexus/v1.0.0/bin/nexus");
+  const pidFile=path.join(root,"detached.pid"), readyFile=path.join(root,"detached.ready");
+  fs.mkdirSync(home,{mode:0o700});
+  fs.mkdirSync(path.join(home,".nexus/sessions/a"),{recursive:true,mode:0o700});
+  fs.mkdirSync(path.join(home,".config/nexus"),{recursive:true,mode:0o700});
+  for(const directory of [".nexus",".nexus/sessions",".nexus/sessions/a",".config/nexus"]) fs.chmodSync(path.join(home,directory),0o700);
+  const session=path.join(home,".nexus/sessions/a/events.jsonl");
+  fs.writeFileSync(session,"original session");
+  const backup=createPreMigrationBackup(home);
+  fs.writeFileSync(session,"changed during detached legacy session");
+  fs.mkdirSync(path.dirname(launcher),{recursive:true});
+  fs.writeFileSync(launcher,`const fs=require("node:fs"); const {spawn}=require("node:child_process"); const [mode,pidFile,readyFile]=process.argv.slice(2); if(mode==="parent"){ const child=spawn(process.execPath,[__filename,"child",pidFile,readyFile],{detached:true,stdio:"ignore",env:process.env}); fs.writeFileSync(pidFile,String(child.pid)); child.unref(); } else { fs.writeFileSync(readyFile,String(process.pid)); setInterval(()=>{},1000); }\n`);
+  const parent=spawn(process.execPath,[launcher,"parent",pidFile,readyFile],{env:{...process.env,HOME:home},stdio:"ignore"});
+  let childPid:number|undefined;
+  try{
+   await new Promise<void>((resolve,reject)=>{parent.once("error",reject);parent.once("exit",()=>resolve());});
+   const readyDeadline=Date.now()+5000;
+   while(!fs.existsSync(readyFile)&&Date.now()<readyDeadline) await new Promise(resolve=>setTimeout(resolve,10));
+   assert.ok(fs.existsSync(readyFile),"the detached legacy client must finish startup before its parent exits");
+   childPid=Number(fs.readFileSync(pidFile,"utf8"));
+   assert.ok(Number.isInteger(childPid)&&childPid>0);
+   let restoreError:unknown;
+   assert.equal(restoreConfigBackup(backup.stateBackupDir!,home,error=>{restoreError=error;}),false);
+   assert.match(String(restoreError),/legacy Nexus client.*Do not launch version-pinned legacy binaries/i);
+   assert.equal(hasPendingStateRestore(home),true,"the launcher recovery route must remain durable while the detached client is alive");
+   assert.equal(fs.readFileSync(session,"utf8"),"changed during detached legacy session");
+   try{process.kill(-childPid,"SIGTERM");}catch{}
+   for(let attempt=0;attempt<100;attempt++){
+    try{process.kill(childPid,0);await new Promise(resolve=>setTimeout(resolve,10));}
+    catch(error:any){if(error?.code==="ESRCH")break;throw error;}
+   }
+   assert.equal(recoverPendingStateRestore(home),true,"recovery must resume after the detached legacy client exits");
+   assert.equal(fs.readFileSync(session,"utf8"),"original session");
+  }finally{
+   if(!childPid&&fs.existsSync(pidFile)) childPid=Number(fs.readFileSync(pidFile,"utf8"));
+   if(childPid){try{process.kill(-childPid,"SIGKILL");}catch{}}
    fs.rmSync(root,{recursive:true,force:true});
   }
  });
