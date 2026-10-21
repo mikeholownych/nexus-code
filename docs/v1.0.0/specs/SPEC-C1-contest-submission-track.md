@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| Status | **Submission completed** (owner, 2026-10-14). Frozen while judging is open. This spec is the post-contest hardening backlog ([DEC-13](../DECISIONS.md#dec-13-contest-track-disposition)). It does not block the Nexus client v1.0.0. |
+| Status | **Submission completed** (2026-10-14); the contest has concluded and no contest freeze applies (2026-10-21 status amendment to [DEC-13](../DECISIONS.md#dec-13-contest-track-disposition)). This spec is the post-contest hardening backlog. It does not block the Nexus client v1.0.0. |
 | Product | The Cloudflare Workers + Artifacts agent-collaboration service. Nexus Code is its demonstration harness. |
 | Requirements | REQ-CON-101 to REQ-CON-107 (contest-scoped, not part of the client release gates) |
 | Findings | CON-001 to CON-014 |

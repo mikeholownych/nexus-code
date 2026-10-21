@@ -244,7 +244,7 @@ Every row has status **open** at `db1ca55` unless stated otherwise. In the "Evid
 
 ## 4. Contest requirements (separate product; not client gates)
 
-These are REQ-CON-101 to REQ-CON-107, specified in [SPEC-C1](specs/SPEC-C1-contest-submission-track.md). The submission was **completed** (owner, 2026-10-14) and is frozen until judging ends (DEC-13). Every row is post-contest hardening with status `open`. The evidence is `evidence/G_contest_eval.md` (CON-001 to CON-014).
+These are REQ-CON-101 to REQ-CON-107, specified in [SPEC-C1](specs/SPEC-C1-contest-submission-track.md). The submission was **completed** (2026-10-14), judging has concluded, and no contest freeze applies (DEC-13 status amendment). Every row remains post-contest hardening with status `open`; no evidence status is promoted by this clarification. The evidence is `evidence/G_contest_eval.md` (CON-001 to CON-014).
 
 ## 5. Post-v1 backlog (recorded, not dropped)
 

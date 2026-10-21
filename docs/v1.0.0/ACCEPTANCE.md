@@ -311,11 +311,11 @@ The reviewer performs:
 
 ## 9. Contest (separate product; not a client gate)
 
-The submission is completed and frozen until judging ends (DEC-13). After judging, the post-contest hardening is accepted by:
+The contest submission is complete and judging has concluded. No contest freeze applies (DEC-13 status amendment); post-contest hardening is tracked separately from client v1.0.0 acceptance and is accepted by:
 
 | ID | Check |
 |---|---|
-| CON-A1 | The CI contest job builds `agent-collab-worker`. `worker.config.json` has the configured name, and the bundle contains the `/work-state` handler. |
+| CON-A1 | Ordinary maintained package/experiment checks build `agent-collab-worker`. `worker.config.json` has the configured name, and the bundle contains the `/work-state` handler. Do not restore the retired `cloudflare-contest-contract` status check. |
 | CON-A2 | Broker negative tests: caller-supplied env paths and URLs are ignored. A host outside `*.artifacts.cloudflare.net` is refused. |
 | CON-A3 | On a clean VM, `install.sh --fresh` followed by `post-install-qualify.py` passes. |
 | CON-A4 | `sudo -l` for the demo user shows only fixed argv. `sudo setpriv --reuid=0 id` is denied. |

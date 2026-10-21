@@ -34,7 +34,7 @@ This package is the evidence-based path from `v0.1.0-alpha.2` (audited at `db1ca
 | 10 | v1 qualification and evaluation | [SPEC-10](specs/SPEC-10-v1-qualification-and-evaluation.md) | [PLAN-10](plans/PLAN-10-v1-qualification-and-evaluation.md) | M3/M5 | QUAL-101 to 107 |
 | 11 | Verification and tool-call integrity | [SPEC-11](specs/SPEC-11-verification-and-tool-call-integrity.md) | [PLAN-11](plans/PLAN-11-verification-and-tool-call-integrity.md) | M1/M3 | AGT-112, 113, 114 |
 | 12 | In-place CLI and TUI upgrade | [SPEC-12](specs/SPEC-12-cli-and-tui-upgrade.md) | [PLAN-12](plans/PLAN-12-cli-and-tui-upgrade.md) | M2 | REL-115 |
-| C1 | Contest (separate product; frozen until judging ends) | [SPEC-C1](specs/SPEC-C1-contest-submission-track.md) | [PLAN-C1](plans/PLAN-C1-contest-submission-track.md) | post-contest | — (not a client gate) |
+| C1 | Contest (separate product; post-contest maintenance; no freeze applies) | [SPEC-C1](specs/SPEC-C1-contest-submission-track.md) | [PLAN-C1](plans/PLAN-C1-contest-submission-track.md) | post-contest | — (not a client gate) |
 
 
 ## How to execute
