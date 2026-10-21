@@ -393,14 +393,21 @@ test("qualification runtime mounts cannot overlap the task tree, held-out store,
 
     const mountContext = { cwd: runtimeRoot, home, proxyDirectory, nodeRuntime: process.execPath, supervisorPath };
     const hostMounts = candidateSandboxHostMountSources({ ...mountContext, readOnlyPaths: [readOnlyRuntime] });
-    const hostToolchain = (preferred: string, command: string, argv: string[]) => {
-      try { if (fs.statSync(preferred).isDirectory()) return preferred; } catch {}
+    const hostToolchain = (preferred: string, command: string, argv: string[], preferCommand = false) => {
+      const fallback = () => {
+        try { return fs.statSync(preferred).isDirectory() ? preferred : null; } catch { return null; }
+      };
+      if (!preferCommand) {
+        const result = fallback();
+        if (result) return result;
+      }
       const result = spawnSync(command, argv, { encoding: "utf8" });
       const candidate = result.status === 0 ? result.stdout.trim() : "";
-      try { return fs.statSync(candidate).isDirectory() ? candidate : null; } catch { return null; }
+      try { if (fs.statSync(candidate).isDirectory()) return candidate; } catch {}
+      return preferCommand ? fallback() : null;
     };
     const expectedToolchains = [
-      hostToolchain("/usr/local/go", "go", ["env", "GOROOT"]),
+      hostToolchain("/usr/local/go", "go", ["env", "GOROOT"], true),
       hostToolchain("/opt/nexus-qual/rust", "rustc", ["--print", "sysroot"]),
     ].filter((item): item is string => Boolean(item));
     const existingDirectories = ["/usr/bin", "/usr/lib", "/usr/lib64", "/usr/libexec", "/usr/share", "/lib", "/lib64", "/usr/local/lib"]
