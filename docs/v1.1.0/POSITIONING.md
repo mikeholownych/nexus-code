@@ -1,13 +1,13 @@
 # Nexus Code: Strategic Positioning, Value Architecture & Competitive Differentiation
 
-**Target Milestones:** Nexus Code `v1.1.0` – `v1.3.0`  
-**Status:** Strategic Architecture & Product Specification  
-**Anchor Documents:**  
-- [`docs/v1.0.0/LANGSMITH_REVIEW.md`](../v1.0.0/LANGSMITH_REVIEW.md) (Observability & Evaluation Ecosystem Analysis)  
-- [`docs/v1.1.0/README.md`](./README.md) (Post-v1 Vision & Pillars)  
-- [`docs/v1.1.0/ROADMAP.md`](./ROADMAP.md) (Milestone Schedule & Work Packages)  
-- [`docs/v1.1.0/SPEC-OBSERVABILITY.md`](./SPEC-OBSERVABILITY.md) (Local Tracing & Credential Pipeline)  
-- [`docs/v1.1.0/SPEC-EVALUATION.md`](./SPEC-EVALUATION.md) (Continuous Evaluation & Dataset Governance)  
+**Target Milestones:** Nexus Code `v1.1.0` – `v1.3.0`
+**Status:** Strategic Architecture & Product Specification
+**Anchor Documents:**
+- [`docs/v1.0.0/LANGSMITH_REVIEW.md`](../v1.0.0/LANGSMITH_REVIEW.md) (Observability & Evaluation Ecosystem Analysis)
+- [`docs/v1.1.0/README.md`](./README.md) (Post-v1 Vision & Pillars)
+- [`docs/v1.1.0/ROADMAP.md`](./ROADMAP.md) (Milestone Schedule & Work Packages)
+- [`docs/v1.1.0/SPEC-OBSERVABILITY.md`](./SPEC-OBSERVABILITY.md) (Local Tracing & Credential Pipeline)
+- [`docs/v1.1.0/SPEC-EVALUATION.md`](./SPEC-EVALUATION.md) (Continuous Evaluation & Dataset Governance)
 
 ---
 

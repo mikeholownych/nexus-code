@@ -12,7 +12,7 @@
 
 ## 1. Overview & Architectural Goals
 
-Evaluation in autonomous coding agents cannot rely solely on conventional unit testing. Agent execution is inherently stateful, multi-turn, non-deterministic, and reliant on LLM reasoning over fluctuating context. 
+Evaluation in autonomous coding agents cannot rely solely on conventional unit testing. Agent execution is inherently stateful, multi-turn, non-deterministic, and reliant on LLM reasoning over fluctuating context.
 
 Nexus Code v1.0.0 established basic evaluation fixtures (`eval/tasks/`) and statistical scoring scripts (`eval/score.mjs`). This specification formalizes a comprehensive, continuous evaluation architecture based on the ecosystem review in [LANGSMITH_REVIEW.md](../v1.0.0/LANGSMITH_REVIEW.md).
 
