@@ -1,5 +1,17 @@
 # v1.0.0 release readiness checkpoint
 
+## Current release checkpoint (2026-10-21 22:48 UTC)
+
+**Authoritative source:** `origin/main` is `049880f14b0dc99fd8b5e934c3cd256d6405f600`. Exact-main CI run [39684072775](https://github.com/mikeholownych/nexus-code/actions/runs/39684072775) passed all four jobs, including the Node 20/22/24 matrix, Linux package and installer checks, security/requirements enforcement, and SBOM validation. Exact-main CodeQL run [39684072631](https://github.com/mikeholownych/nexus-code/actions/runs/39684072631) passed. The pre-RC requirements check on this commit reported 123 rows: 109 tested, 5 partial, 2 implemented, and 7 open; 11 rows remain explicitly deferred to exact-RC evidence as listed in `ACCEPTANCE.md` §1.1. These source gates do not establish RC qualification.
+
+**RC and publication:** GitHub currently publishes `v1.0.0-rc.1` as a prerelease; its package asset digest is `8d7dd32f3d00adb98d4f0ea2c6a484ea8e04fc547b4d78b21b060000eda22b9d`. The tag resolves to `cb364c386c42faa53b67e04cacc81d7e01520779`, an ancestor of current `main`; current `main` contains subsequent source changes, including the Go toolchain and SBOM closure remediations. RC1 is therefore not the artifact for qualifying current source. No `v1.0.0` stable tag or release exists. Build and qualify a new RC from the reconciled source before any stable promotion.
+
+**Runtime-floor decision:** Merged DEC-12/PR #132 keeps the Node.js floor at `>=20` and discloses Node 20's upstream end of life. A separate, unmerged Node 22 candidate exists at `f5666296a5e32dc15defe22611a11f445edd9ab0`; its package engine declarations and acceptance/requirements records still say Node 20, and the active protected-branch ruleset requires the `test-matrix (20)` status context. The Node 22 candidate cannot be treated as an accepted or merge-ready floor change until the owner resolves the policy and the required check context. Current main remains on the merged `>=20` policy.
+
+**Installed-RC qualification and acceptance:** The exact-RC artifact gates, installed package/provider/standalone checks, T2/T3/T4 workload outcomes, cross-runner reproducibility, manual five-environment by three-size terminal matrix, independent RC acceptance, and G6 stable-promotion disposition are not established for a candidate built from current `main`. Keep publication blocked until each applicable gate is recorded against the accepted RC commit and artifact digest, then complete the version-only stable commit, source checks, draft artifact verification, and separate publication step required by `ACCEPTANCE.md` §1.1.
+
+This checkpoint supersedes the earlier 2026-10-21 updates below for current source and release status. Historical reports remain bound to their recorded revisions.
+
 ## CI progression update (2026-10-21 15:39 UTC)
 
 - PR #8 remains on exact head `7d6673f108316dda015b858c85b2abe20f3a4f78` and base `main@db1ca558086014912b20dae8232af111ccb21d67`. Its Node 20, 22, and 24 matrix jobs in run [39624995762](https://github.com/mikeholownych/nexus-code/actions/runs/39624995762) passed (16m26s, 16m19s, and 16m33s respectively). The required `linux-x86_64` job is still running; merge remains gated on its result. CodeQL and both TypeScript checks passed. No results from parent revision `8f4504e` are substituted for this exact-head run.
