@@ -20,7 +20,7 @@ This checkpoint reconciles the candidate ledger and acceptance procedure against
 - **Other qualification gates:** No installed-RC provider or standalone matrix, T2/T3/T4 scored qualification, exact-RC cross-runner reproducibility, or independent RC acceptance exists. `ACCEPTANCE.md` §5.3 and `scripts/terminal-acceptance/README.md` define the human five-environment × three-size matrix and evidence capture; all 15 real-terminal cells remain unrun because no RC is installed. Automated PTY results do not replace those operator results.
 - **Version, RC, and publication:** Root and CLI package versions remain `0.1.0-alpha.2`. GitHub currently lists only alpha pre-releases `v0.1.0-alpha.1` and `v0.1.0-alpha.2`; no `v1.0.0-rc.N` artifact/tag or stable v1.0.0 tag, npm package, or GitHub release exists. Follow the staged lifecycle in `ACCEPTANCE.md`: pre-RC source gates, RC construction, artifact-bound RC gates, installed-RC qualification and independent G6 acceptance, then stable promotion/publication and post-publication verification.
 
-The 2026-10-18 checkpoint sections below remain historical evidence. The previously closed PR #46 was never merged; its two readiness commits are retained in the reconciliation branch's history and superseded by this exact `8f4504e` update.
+The 2026-10-18 checkpoint sections below remain historical evidence. The previously closed PR #46 was never merged; its two readiness commits remain available on the preserved closed-PR branch, not in this reconciliation branch's history, and are superseded by this exact `8f4504e` update.
 
 ## Publication status correction (2026-10-18 17:25 UTC)
 
