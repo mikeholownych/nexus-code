@@ -54,7 +54,7 @@ Do not add new required check contexts until successful runs exist and their exa
 
 ## Dependency and automation boundaries
 
-Dependabot covers GitHub Actions, CLI npm dependencies, and core Cargo dependencies. It does not auto-merge updates. Review security advisories and CI; SHA pinning does not replace dependency monitoring. Frozen contest/demo dependency trees are intentionally excluded pending their owner's freeze policy. Extend coverage explicitly once that freeze ends.
+Dependabot covers GitHub Actions, CLI npm dependencies, core Cargo dependencies, the contest demo, and the Cloudflare artifact experiment package roots and nested manifests. The contest has concluded, and no contest freeze applies. Dependabot does not auto-merge updates. Review security advisories and CI; SHA pinning does not replace dependency monitoring.
 
 Pinned actions reduce mutable-reference risk. Build tooling downloaded by shell commands and the moving Rust stable toolchain remain separate supply-chain work; do not describe the entire build as hermetic. Cross-runner and installed-release acceptance still follow the accepted release plan.
 

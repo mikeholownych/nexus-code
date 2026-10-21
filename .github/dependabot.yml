@@ -19,3 +19,38 @@ updates:
     schedule:
       interval: weekly
     open-pull-requests-limit: 5
+  - package-ecosystem: npm
+    directory: /demo
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+  - package-ecosystem: npm
+    directory: /experiments/cloudflare-artifacts-vertical-slice
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+  - package-ecosystem: npm
+    directory: /experiments/cloudflare-artifacts-vertical-slice/agent-collab-fixture
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+  - package-ecosystem: npm
+    directory: /experiments/cloudflare-artifacts-vertical-slice/agent-collab-worker
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+  - package-ecosystem: npm
+    directory: /experiments/cloudflare-artifacts-vertical-slice/fork-worker
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+  - package-ecosystem: npm
+    directory: /experiments/cloudflare-artifacts-vertical-slice/shared-ref-worker
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+  - package-ecosystem: npm
+    directory: /experiments/cloudflare-artifacts-vertical-slice/trusted-broker-bundle
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5

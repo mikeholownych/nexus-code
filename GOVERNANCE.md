@@ -14,7 +14,7 @@ The active branch rules require pull requests and named CI checks without histor
 
 Follow the [release protection procedure](docs/releases/PROTECTIONS.md) and [v1 acceptance lifecycle](docs/v1.0.0/ACCEPTANCE.md). Assign one publisher, preserve immutable tags, and attach evidence to the exact candidate. A draft is not a published release; source CI is not installed-product qualification.
 
-Do not merge unrelated changes during accepted-RC promotion if they would violate the version-only stable-promotion contract. Keep the Cloudflare contest submission separate and preserve its freeze.
+Do not merge unrelated changes during accepted-RC promotion if they would violate the version-only stable-promotion contract. Keep the Cloudflare contest track separate from the client release. The contest has concluded; no contest freeze applies. Continue ordinary maintenance through the normal review process, and preserve historical submission snapshots and evidence as historical records.
 
 ## Community and disputes
 

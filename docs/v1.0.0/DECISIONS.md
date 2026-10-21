@@ -18,7 +18,7 @@ Some decisions cannot be carried out by an implementer alone. They need an exter
 | [DEC-10](#dec-10-tracking-of-clidist) | Tracking of `cli/dist` | Untrack | No |
 | [DEC-11](#dec-11-retention-defaults) | Retention defaults | 90 days / 2 GB; audit log 10 MB × 5; first GC needs acknowledgement | No |
 | [DEC-12](#dec-12-platform-scope) | Platform scope | Linux x86-64 glibc only for v1.0.0 | No |
-| [DEC-13](#dec-13-contest-track-disposition) | Contest track | Submission already completed; it is frozen until judging ends, then PLAN-C1 runs as post-contest hardening | No |
+| [DEC-13](#dec-13-contest-track-disposition) | Contest track | Submission completed and judging ended; no contest freeze applies, PLAN-C1 continues as post-contest hardening | No |
 | [DEC-14](#dec-14-free-text-on-the-command-line) | Free text on the command line | Explicit `nexus run` required | No |
 | [DEC-15](#dec-15-knowledge-auto-extraction) | Knowledge auto-extraction | Off by default, opt-in | No |
 | [DEC-16](#dec-16-standalone-qualification-under-a-gateway-only-environment) | Standalone qualification with no direct worker access | Stripping proxy over the gateway for live runs, plus server-kind conformance fixtures | No |
@@ -162,12 +162,14 @@ Some decisions cannot be carried out by an implementer alone. They need an exter
 
 **Chosen:**
 - The contest is a separate track (SPEC-C1). It never gates the client.
-- **Freeze:** the submitted material (contest docs, `experiments/cloudflare-artifacts-vertical-slice/`, `demo/`, contest CI job) is not changed while judging is open. Post-deadline edits to submission-referenced files could be read as amending the entry. The audit findings CON-001 to CON-014 are recorded, not acted on.
-- After judging concludes, PLAN-C1 runs as **post-contest hardening**. Its first task is the CON-001 correction, with a dated "post-submission correction" note in CONTEST.md.
-- One exception is allowed during the freeze: if the contest rules permit errata, a single erratum may state that the documented deploy builds the legacy Experiment-1 Worker and that reproduction is operator-host only. The owner checks the rules first; the default is no change.
-- Client work that touches `demo/lib/real-agent-runner.mjs` (PLAN-01 task 8, `--yes`) is deferred until after judging. Until then, the client keeps backward-compatible behaviour for `nexus run` invoked by the demo. In practice the demo passes the auto posture explicitly via `NEXUS_APPROVAL_MODE=auto` in its own environment once the client changes, and no demo file needs editing, because the env var is read by the client.
+- **Historical freeze (ended):** while judging was open, the submitted material (contest docs, `experiments/cloudflare-artifacts-vertical-slice/`, `demo/`, contest CI job) was not changed because post-deadline edits could have been read as amending the entry. The audit findings CON-001 to CON-014 were recorded during that period.
+- After judging concluded, PLAN-C1 proceeded as **post-contest hardening**. Its first task is the CON-001 correction, with a dated "post-submission correction" note in CONTEST.md.
+- During that historical freeze, one exception was considered: if contest rules permitted errata, an erratum could state that the documented deploy builds the legacy Experiment-1 Worker and reproduction is operator-host only. That restriction ended with judging; it does not limit current maintenance.
+- Client work that touched `demo/lib/real-agent-runner.mjs` (PLAN-01 task 8, `--yes`) was deferred while judging was open. That deferral has ended; update the demo alongside the client where needed. The runner may continue to pass `NEXUS_APPROVAL_MODE=auto` when required by the current CLI contract.
 
 **Tradeoff:** judges who follow the documented deploy may deploy the legacy Worker. That Worker deploys into their own account, so the exposure is confined to their own test deployment.
+
+**Status amendment (2026-10-21):** The contest has concluded. The release coordinator confirmed that no contest freeze applies. The historical freeze above is no longer a restriction; PLAN-C1 and other contest-related maintenance may proceed through normal claims, review, and validation. Preserve submitted tags, run records, and manifests as historical evidence, and do not represent changed current sources as the original submission. The retired `cloudflare-contest-contract` check remains retired and must not be reintroduced as a release gate.
 
 ## DEC-14: Free text on the command line
 
@@ -241,6 +243,6 @@ This amendment is **narrow by design**. It applies only to corpora where the mea
 | X3 | ~~Separate standalone host~~. **Withdrawn:** no worker or GPU is available apart from the gateway. Replaced by DEC-16 (stripping proxy plus conformance fixtures). Remaining action: none. Optional: approve a CPU-only llama.cpp container on the dev box for the protocol smoke test. | DEC-16 | — |
 | X4 | **Partly resolved 2026-10-14:** the existing ChatGPT sign-in and OpenRouter connections are authorized for small-spend checks; both were live-verified at db1ca55. Optional: add OpenAI API-key or Anthropic keys if those providers should be listed as supported. | DEC-06 | M5 (optional) |
 | X5 | Independent reviewer for continuity/compaction acceptance and RC acceptance | REQ-AGT-110, ACCEPTANCE §8 | M5/M6 |
-| X6 | After judging: provide a clean Cloudflare account and VM for CON-106. During judging: check whether contest rules permit an erratum (default: no change) | DEC-13 | Post-contest |
+| X6 | Provide a clean Cloudflare account and VM for CON-106; judging is over, so the historical erratum check is no longer applicable | DEC-13 | Post-contest |
 | X7 | **Authorized by the owner in the implementation/release handoff, reaffirmed by the 2026-10-18 takeover instruction.** Necessary commits, pushes, PRs, merges, RC tags and final v1.0.0 publication are authorized, conditional on the existing checks and acceptance gates. Release publisher: `codex-api-root`, succeeding rate-limited `claude-code`; no duplicate publisher. See [authorization and handoff](../reviews/evidence/v1/RELEASE-TAKEOVER/authorization-and-handoff.md). | Release | Authorization resolved; execution remains gated |
 | X8 | Decide whether to clean the 52k test-polluted records in the real `~/.nexus/tasks` (PER-03). Safe to remove: `task-*.json` whose `workspacePath` starts with `/tmp/nexus-app-test-`. | Hygiene | Any time |

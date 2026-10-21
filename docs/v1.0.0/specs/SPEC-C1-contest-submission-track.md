@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| Status | **Submission completed** (owner, 2026-10-14). Frozen while judging is open. This spec is the post-contest hardening backlog ([DEC-13](../DECISIONS.md#dec-13-contest-track-disposition)). It does not block the Nexus client v1.0.0. |
+| Status | **Submission completed** (2026-10-14); the contest has concluded and no contest freeze applies (2026-10-21 status amendment to [DEC-13](../DECISIONS.md#dec-13-contest-track-disposition)). This spec is the post-contest hardening backlog. It does not block the Nexus client v1.0.0. |
 | Product | The Cloudflare Workers + Artifacts agent-collaboration service. Nexus Code is its demonstration harness. |
 | Requirements | REQ-CON-101 to REQ-CON-107 (contest-scoped, not part of the client release gates) |
 | Findings | CON-001 to CON-014 |
@@ -64,4 +64,4 @@ See ACCEPTANCE.md §9. In summary:
 
 ## 5. Relationship to the client
 
-The client v1.0.0 gates never depend on this track. The demo exercises only the client's `run` mode and generated-code validation. Client changes from SPEC-01 (an explicit posture for headless runs) reach the demo through `NEXUS_APPROVAL_MODE=auto` in the demo's environment. No demo file is edited during judging (DEC-13).
+The client v1.0.0 gates never depend on this track. The demo exercises only the client's `run` mode and generated-code validation. Client changes from SPEC-01 (an explicit posture for headless runs) reach the demo through `NEXUS_APPROVAL_MODE=auto` in the demo's environment. No demo file was edited while judging was open under the temporary DEC-13 restriction; that restriction has ended and does not constrain current maintenance.
