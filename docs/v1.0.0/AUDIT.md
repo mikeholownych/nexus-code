@@ -9,6 +9,8 @@
 
 This document reports implementation state and audit evidence only. It is not an independent acceptance (see §8). Client release readiness and contest readiness are assessed separately (§7).
 
+> **Historical snapshot:** This audit was performed on 2026-10-14. The Cloudflare contest has since ended, and the `cloudflare-contest-contract` CI job was removed from the current workflow (PR #91, included in `v1/integration`). Contest-contract results and CI inventories below describe the audit-time state; they are not current v1.0.0 release gates.
+
 ## 1. Project identity
 
 | Item | Value | Evidence |
