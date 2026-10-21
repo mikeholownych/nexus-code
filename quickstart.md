@@ -16,10 +16,10 @@ The installer downloads the matching versioned client archive and `SHA256SUMS` f
 export PATH="$HOME/.local/bin:$PATH"
 ```
 
-Without `NEXUS_VERSION`, the installer follows the latest stable release. No stable release is currently published, so pin a published prerelease to install Nexus Code:
+Without `NEXUS_VERSION`, the installer follows the latest stable release. If no stable release has been published yet, the installer exits with a hint to select a prerelease tag from [GitHub Releases](https://github.com/mikeholownych/nexus-code/releases). To install a prerelease or pin a version, set `NEXUS_VERSION` to its published tag. For example, to install the v1.0.0 release candidate:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/mikeholownych/nexus-code/main/install.sh | NEXUS_VERSION=v0.1.0-alpha.2 sh
+curl -fsSL https://raw.githubusercontent.com/mikeholownych/nexus-code/main/install.sh | NEXUS_VERSION=v1.0.0-rc.1 sh
 ```
 
 For inspect-before-running, download [install.sh](https://raw.githubusercontent.com/mikeholownych/nexus-code/main/install.sh), read it, then run `sh install.sh`.

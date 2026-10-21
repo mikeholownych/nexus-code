@@ -11,7 +11,7 @@ The contest has concluded. Its submission was the agent-collaboration service; N
 
 ## Install Nexus Code
 
-No stable release has been published yet. The unversioned installer below follows the latest stable release and will remain unavailable until the first stable release is published. To install the current published prerelease, use the pinned command in the [quickstart](quickstart.md).
+The unversioned installer follows the latest stable release. If no stable release has been published yet, it exits with a hint to select a prerelease tag. To install a prerelease or pin a version, use the tag shown on [GitHub Releases](https://github.com/mikeholownych/nexus-code/releases) and set `NEXUS_VERSION`; see the [quickstart](quickstart.md).
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/mikeholownych/nexus-code/main/install.sh | sh
