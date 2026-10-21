@@ -34,6 +34,22 @@ test("runAsAclArgs scopes evaluator and operator permissions with directory defa
   });
 });
 
+test("configured Go toolchain takes precedence over the host fallback", async () => {
+  const { selectToolchainRoot } = await import(path.join(ROOT, "eval/isolate.mjs"));
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "go-root-precedence-"));
+  try {
+    const configured = path.join(root, "configured-go-root");
+    const fallback = path.join(root, "host-go-root");
+    fs.mkdirSync(configured);
+    fs.mkdirSync(fallback);
+    assert.equal(selectToolchainRoot(configured, fallback), configured);
+    assert.equal(selectToolchainRoot(null, fallback), fallback);
+    assert.equal(selectToolchainRoot(null, null), null);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("asUserSpec preserves timeout metadata and isolated processes reject missing timeouts", async () => {
   const { asUserSpec } = await import(path.join(ROOT, "eval/validate.mjs"));
   const { runIsolatedProcess } = await import(path.join(ROOT, "eval/isolate.mjs"));
