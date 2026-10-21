@@ -283,6 +283,13 @@ if (qualificationMode && (!enforce || qualificationArg < 0 || artifactArg < 0 ||
           if (typeof ref?.id !== "string" || !/^ACC-[A-Z0-9]+(?:-[A-Z0-9]+)*$/.test(ref.id) || !requiredAccs.includes(ref.id)) throw new Error(`${id}: evidence must cite an acceptance criterion required for that exact-RC qualification`);
           const file = evidenceFile(evidenceRoot, ref.path, `${id} evidence`);
           if (!file || typeof ref.sha256 !== "string" || !/^[a-f0-9]{64}$/.test(ref.sha256) || sha256(file) !== ref.sha256) throw new Error(`${id}: evidence digest is missing or does not match`);
+          // A valid digest alone can still name a report from another candidate. Criterion JSON must
+          // bind itself to the same source, tag and artifact as the enclosing qualification record.
+          let criterion;
+          try { criterion = JSON.parse(read(file)); }
+          catch { throw new Error(`${id}: criterion evidence must be a candidate-bound JSON object`); }
+          if (!criterion || typeof criterion !== "object" || Array.isArray(criterion)) throw new Error(`${id}: criterion evidence must be a candidate-bound JSON object`);
+          if (criterion.sourceCommit !== sourceCommit || criterion.rcTag !== record.rcTag || criterion.artifactSha256 !== record.artifactSha256) throw new Error(`${id}: criterion evidence identity does not match the exact RC source, tag and artifact`);
         }
       }
       console.log(`qualification evidence verified for ${record.rcTag} at ${sourceCommit} (${record.artifactSha256})`);
