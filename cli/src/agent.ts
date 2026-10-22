@@ -963,6 +963,8 @@ export class AutonomousAgent {
   /** Set when a workspace state identity proved too costly this turn; see workspaceStateIdentity. */
   private stateIdentityDisabled = false;
   private stateIdentityUncertainty?: string;
+  /** User-selected read-only mode after a sensitive pre-turn checkpoint was declined. */
+  private checkpointReadOnlyFallback = false;
   /** Provider capabilities in effect for the main connection (provider_capabilities.ts); undefined until discovered. */
   private capabilities?: ProviderCapabilities;
   private capabilitiesKey = "";
@@ -1263,11 +1265,25 @@ export class AutonomousAgent {
   }
 
   public getApprovalMode(): ApprovalMode {
+    if (this.checkpointReadOnlyFallback) return "read-only";
     if (this.config.approvalMode) return this.config.approvalMode;
     if (this.config.readOnly) return "read-only";
     if (this.config.fullAccess) return "auto";
     const trusted = isWorkspaceTrusted(this.config.workspace, Boolean(this.config.readOnly));
     return trusted ? "auto" : "review";
+  }
+
+  /** Restrict this session to read-only authority when its workspace cannot be safely checkpointed. */
+  public setCheckpointReadOnlyFallback(enabled: boolean): void {
+    this.checkpointReadOnlyFallback = enabled;
+    if (enabled) {
+      this.clearApprovedEgressOrigins();
+      this.clearApprovedVerifiers();
+    }
+  }
+
+  private isReadOnly(): boolean {
+    return Boolean(this.config.readOnly || this.checkpointReadOnlyFallback);
   }
 
   private initTaskState(): void {
@@ -1759,14 +1775,14 @@ export class AutonomousAgent {
    * and an operation whose result never reached the durable conversation is detected on recovery.
    */
   private async ensureVerifierApproved(command: string, confirmHandler?: ConfirmHandler): Promise<boolean> {
-    const isTrusted = isWorkspaceTrusted(this.config.workspace, Boolean(this.config.readOnly));
-    const mode = this.config.approvalMode ?? (this.config.readOnly ? "read-only" : (this.config.fullAccess ? "auto" : (isTrusted ? "auto" : "review")));
+    const isTrusted = isWorkspaceTrusted(this.config.workspace, this.isReadOnly());
+    const mode = this.getApprovalMode();
     const policyContext: PolicyContext = {
       mode,
       trusted: isTrusted,
       sandbox: this.config.sandbox,
       approvedEgressOrigins: this.approvedEgressOrigins,
-      fullAccess: Boolean(this.config.fullAccess),
+      fullAccess: Boolean(this.config.fullAccess) && !this.isReadOnly(),
     };
 
     if (!this.approvalPolicy.requiresDecision("exec", policyContext)) {
@@ -1810,7 +1826,7 @@ export class AutonomousAgent {
     // A new conversation does not make candidate writes from an interrupted or
     // resumed task trustworthy. Do not establish a discovered-verifier baseline
     // from a workspace that still carries an unverified-change obligation.
-    if (this.hasPendingModifications || this.verificationBaselineInvalidated || this.changeBaseline !== undefined || this.config.dryRun || this.config.readOnly) return;
+    if (this.hasPendingModifications || this.verificationBaselineInvalidated || this.changeBaseline !== undefined || this.config.dryRun || this.isReadOnly()) return;
     const configured = this.config.authoritativeVerifierCommand?.trim();
     const command = configured || discoverVerifier(this.config.workspace)?.command;
     if (!command) {
@@ -3742,7 +3758,7 @@ The pinned Objective Ledger lists the operator's requirements; your plan never r
       if (
         (this.hasPendingModifications || worktreeHasChanges || this.configuredVerifierGatesCompletion()) &&
         !this.config.dryRun &&
-        !this.config.readOnly
+        !this.isReadOnly()
       ) {
         try {
           const configured = this.config.authoritativeVerifierCommand?.trim();
@@ -3821,14 +3837,14 @@ The pinned Objective Ledger lists the operator's requirements; your plan never r
             const onConfirm = this.activeTurn?.onConfirm;
             const approved = await this.ensureVerifierApproved(verifierCommand, onConfirm);
             if (!approved) {
-              const isTrusted = isWorkspaceTrusted(this.config.workspace, Boolean(this.config.readOnly));
-              const mode = this.config.approvalMode ?? (this.config.readOnly ? "read-only" : (this.config.fullAccess ? "auto" : (isTrusted ? "auto" : "review")));
+              const isTrusted = isWorkspaceTrusted(this.config.workspace, this.isReadOnly());
+              const mode = this.getApprovalMode();
               const policyContext: PolicyContext = {
                 mode,
                 trusted: isTrusted,
                 sandbox: this.config.sandbox,
                 approvedEgressOrigins: this.approvedEgressOrigins,
-                fullAccess: Boolean(this.config.fullAccess),
+                fullAccess: Boolean(this.config.fullAccess) && !this.isReadOnly(),
               };
               const error = (!onConfirm && this.approvalPolicy.requiresDecision("exec", policyContext))
                 ? `Error: Verifier '${verifierCommand}' requires operator approval (exec), but no operator is present (headless execution). Run with --yes or --mode auto, or 'nexus trust .' to trust this workspace.`
@@ -3954,7 +3970,7 @@ The pinned Objective Ledger lists the operator's requirements; your plan never r
           verifierSucceeded &&
           this.config.authoritativeVerifierCommand?.trim() &&
           !this.config.dryRun &&
-          !this.config.readOnly;
+          !this.isReadOnly();
 
         if (canValidate) {
           try {
@@ -4432,15 +4448,51 @@ The pinned Objective Ledger lists the operator's requirements; your plan never r
     // Tools outside the registry (MCP servers, plugins) are treated as running code: review mode asks before them.
     const effect: EffectClass = cap ? cap.effect : READ_ONLY_TOOLS.has(toolName) ? "read_workspace" : "exec";
     const egressOrigin = effect === "egress" ? egressOriginOf(toolName, args) : undefined;
-    const isTrusted = isWorkspaceTrusted(this.config.workspace, Boolean(this.config.readOnly));
-    const mode = this.config.approvalMode ?? (this.config.readOnly ? "read-only" : (this.config.fullAccess ? "auto" : (isTrusted ? "auto" : "review")));
+    const isTrusted = isWorkspaceTrusted(this.config.workspace, this.isReadOnly());
+    const mode = this.getApprovalMode();
+    if (this.checkpointReadOnlyFallback && ["egress", "delegate", "context_inject", "write_workspace"].includes(effect)) {
+      const cancelMsg = `Read-only fallback: ${toolName} is disabled because the workspace could not be safely checkpointed.`;
+      if (this.flightRecorder) {
+        this.flightRecorder.recordToolResult(
+          currentStep,
+          call.id,
+          toolName,
+          false,
+          cancelMsg,
+          0,
+          "CHECKPOINT_READ_ONLY_FALLBACK"
+        );
+      }
+      this.observer?.onToolEnd?.({ dispatch, callId: call.id, tool: toolName, success: false, output: "", error: cancelMsg });
+      return {
+        receipt: {
+          invocationId: call.id,
+          taskId: this.activeWorktree?.taskId || this.currentTaskId,
+          actor,
+          executionDomain: actor === "subagent" ? "subagent" : "agent_orchestration",
+          capabilityId: cap?.id || toolName,
+          toolName,
+          targetResources: extractTargetResources(toolName, args),
+          success: false,
+          output: "",
+          error: cancelMsg,
+          durationMs: 0,
+          candidateMutated: false,
+          status: "DENIED",
+          denialReason: "CHECKPOINT_READ_ONLY_FALLBACK",
+          timestamp: new Date().toISOString(),
+          simulated: Boolean(this.config.dryRun),
+        },
+        shouldExit: false,
+      };
+    }
     const policyContext: PolicyContext = {
       mode,
       trusted: isTrusted,
       sandbox: this.config.sandbox,
       approvedEgressOrigins: this.approvedEgressOrigins,
       egressOrigin,
-      fullAccess: Boolean(this.config.fullAccess),
+      fullAccess: Boolean(this.config.fullAccess) && !this.isReadOnly(),
     };
     const askOperator = this.approvalPolicy.requiresDecision(effect, policyContext);
 
@@ -4556,7 +4608,7 @@ The pinned Objective Ledger lists the operator's requirements; your plan never r
     const context: InvocationContext = {
       workspaceRoot: this.config.workspace,
       dryRun: this.config.dryRun,
-      readOnly: this.config.readOnly,
+      readOnly: this.isReadOnly(),
       bridge: this.bridge,
       metadata: { actor, stepIndex: currentStep },
       defaultHandler: async (tName, tArgs) => {

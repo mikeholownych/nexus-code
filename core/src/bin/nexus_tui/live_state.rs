@@ -376,6 +376,7 @@ pub const APPROVAL_AFTER_DECISION: Duration = Duration::from_millis(1500);
 #[derive(Clone, Debug, PartialEq)]
 pub enum Overlay {
     Approval(Approval),
+    CheckpointChoice { id: String, message: String, selected: Option<usize> },
     Help { scroll: usize },
     Detail(Detail),
     Receipt(ReceiptPanel),
@@ -912,6 +913,9 @@ impl LiveState {
                     None => self.overlay = Some(Overlay::Approval(approval)),
                     Some(_) => self.pending_approvals.push_back(approval),
                 }
+            }
+            Event::CheckpointChoiceRequest { id, message } => {
+                self.overlay = Some(Overlay::CheckpointChoice { id, message, selected: None });
             }
             Event::TurnResult { heading, line, turn, model_summary } => {
                 self.pending = None;
@@ -1543,6 +1547,7 @@ impl LiveState {
         }
         match self.overlay {
             Some(Overlay::Approval(_)) => return self.on_approval_key(key, now),
+            Some(Overlay::CheckpointChoice { .. }) => return self.on_checkpoint_choice_key(key),
             Some(Overlay::Review(_)) => return self.on_review_key(key),
             Some(Overlay::Models(_)) => return self.on_models_key(key),
             Some(Overlay::Connect(_)) => return self.on_connect_key(key),
@@ -1612,6 +1617,33 @@ impl LiveState {
         }
     }
 
+    fn on_checkpoint_choice_key(&mut self, key: KeyEvent) -> Option<Action> {
+        let Some(Overlay::CheckpointChoice { id, selected, .. }) = &mut self.overlay else { return None; };
+        let choice = match key.code {
+            KeyCode::Char('1') => { *selected = Some(0); return None; }
+            KeyCode::Char('2') => { *selected = Some(1); return None; }
+            KeyCode::Char('3') => { *selected = Some(2); return None; }
+            KeyCode::Char('4') => { *selected = Some(3); return None; }
+            KeyCode::Char('5') => { *selected = Some(4); return None; }
+            KeyCode::Up | KeyCode::Left => { *selected = Some(selected.unwrap_or(0).saturating_sub(1)); return None; }
+            KeyCode::Down | KeyCode::Right => { *selected = Some(selected.unwrap_or(0).saturating_add(1).min(4)); return None; }
+            KeyCode::Enter => match *selected {
+                Some(0) => Some("read_only"),
+                Some(1) => Some("without_checkpoint"),
+                Some(2) => Some("allow_sensitive"),
+                Some(3) => Some("cancel"),
+                Some(4) => Some("other"),
+                _ => return None,
+            },
+            KeyCode::Esc => Some("cancel"),
+            _ => return None,
+        };
+        let Some(choice) = choice else { return None; };
+        let id = id.clone();
+        self.overlay = None;
+        Some(Action::Send(Command::CheckpointChoice { id, choice: choice.into() }))
+    }
+
     fn on_ctrl_c(&mut self) -> Option<Action> {
         match &self.overlay {
             Some(Overlay::Connect(Connect { step: Step::Waiting { request, auth: Some(_), .. }, .. })) => {
@@ -1630,6 +1662,11 @@ impl LiveState {
             ) => {
                 self.overlay = None;
                 return None;
+            }
+            Some(Overlay::CheckpointChoice { id, .. }) => {
+                let id = id.clone();
+                self.overlay = None;
+                return Some(Action::Send(Command::CheckpointChoice { id, choice: "cancel".into() }));
             }
             // Cancelling the turn settles the pending approval on the sidecar; the turn result reports it.
             Some(Overlay::Approval(_)) => self.overlay = None,
@@ -3018,6 +3055,24 @@ mod tests {
                 typed_into: false,
             }))
         );
+    }
+
+    #[test]
+    fn checkpoint_choice_requires_explicit_selection() {
+        let mut state = ready();
+        state.apply(ev(r#"{"v":1,"type":"checkpoint.choice.request","id":"choice-1","turn_id":"t1","message":"Sensitive content prevents checkpointing."}"#));
+        assert_eq!(state.on_key(key(KeyCode::Enter)), None);
+        assert_eq!(state.on_key(key(KeyCode::Char('4'))), None);
+        assert_eq!(state.on_key(key(KeyCode::Enter)), Some(Action::Send(Command::CheckpointChoice {
+            id: "choice-1".into(),
+            choice: "cancel".into(),
+        })));
+        state.apply(ev(r#"{"v":1,"type":"checkpoint.choice.request","id":"choice-2","turn_id":"t1","message":"Sensitive content prevents checkpointing."}"#));
+        assert_eq!(state.on_key(key(KeyCode::Char('5'))), None);
+        assert_eq!(state.on_key(key(KeyCode::Enter)), Some(Action::Send(Command::CheckpointChoice {
+            id: "choice-2".into(),
+            choice: "other".into(),
+        })));
     }
 
     const APPROVAL: &str = r#"{"v":1,"type":"approval.request","id":"approval-1","turn_id":"t1","tool":"write_file","subject":"x.txt","preview":"{}","review":{"kind":"change","path":"x.txt","before":null,"after":"hi\n","created":true,"truncated":false}}"#;

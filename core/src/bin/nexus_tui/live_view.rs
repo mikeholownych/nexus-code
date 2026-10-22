@@ -192,6 +192,9 @@ pub fn render_live(frame: &mut Frame, state: &LiveState) -> LiveLayout {
         Some(Overlay::Approval(approval)) => {
             (layout.overlay_rows, layout.overlay_limit, layout.approval_drawn) = render_approval(frame, rows[1], approval, state.depth, state.approvals_waiting(), state.approval_settling());
         }
+        Some(Overlay::CheckpointChoice { message, selected, .. }) => {
+            layout.overlay_rows = render_checkpoint_choice(frame, rows[1], message, *selected);
+        }
         Some(Overlay::Help { scroll }) => {
             (layout.overlay_rows, layout.overlay_limit) =
                 render_help(frame, rows[1], *scroll, &state.commands);
@@ -214,6 +217,66 @@ pub fn render_live(frame: &mut Frame, state: &LiveState) -> LiveLayout {
     }
     theme::downsample(frame.buffer_mut(), state.depth);
     layout
+}
+
+fn render_checkpoint_choice(
+    frame: &mut Frame,
+    area: Rect,
+    message: &str,
+    selected: Option<usize>,
+) -> usize {
+    let key = Style::default().fg(ACCENT).add_modifier(Modifier::BOLD);
+    let options = [
+        "Read-only",
+        "Continue without checkpoint",
+        "Create checkpoint anyway",
+        "Cancel this turn",
+        "Other (re-enter instruction)",
+    ];
+    // The modal has one border cell on each side and one column of margin on each side.
+    // Pre-wrap every line at the actual inner width so the height estimate includes wrapped text.
+    let width = area.width.saturating_sub(4).max(1);
+    // The sidecar message enumerates every choice for non-TUI clients. This modal
+    // renders those choices separately, so use a compact warning to keep all five
+    // visible on the smallest supported terminal size.
+    let display_message = if message.starts_with("Sensitive content blocked the checkpoint") {
+        "Sensitive content may persist if you create a checkpoint anyway."
+    } else {
+        message
+    };
+    let mut lines = markdown::wrap(
+        vec![Span::raw(display_message.to_owned())],
+        usize::from(width),
+        Vec::new(),
+        Vec::new(),
+    );
+    for (index, option) in options.iter().enumerate() {
+        let marker = if selected == Some(index) { "▸" } else { " " };
+        let style = Style::default().fg(Color::White);
+        lines.extend(markdown::wrap(
+            vec![Span::styled(
+                format!("{marker} {}. {option}", index + 1),
+                style,
+            )],
+            usize::from(width),
+            Vec::new(),
+            Vec::new(),
+        ));
+    }
+    lines.push(Line::from(Span::styled(
+        "1–5 choose · enter · esc cancel",
+        key,
+    )));
+    let height = u16::try_from(lines.len() + 2)
+        .unwrap_or(area.height)
+        .min(area.height);
+    let rect = modal(area, 92, height);
+    let block = modal_block(" Checkpoint could not be created ");
+    let inner = block.inner(rect);
+    frame.render_widget(Clear, rect);
+    frame.render_widget(block, rect);
+    frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), inner);
+    usize::from(inner.height)
 }
 
 /// The complete diff of one operation (or the cumulative workspace diff), with hunk and file/edit navigation,
@@ -1763,6 +1826,7 @@ fn composer_hint(state: &LiveState) -> Cow<'static, str> {
         _ if state.connecting() => " starting the agent… ",
         _ if matches!(&state.overlay, Some(Overlay::Approval(approval)) if approval.letters) => " approval needed · y approve · n deny (after a pause) ",
         _ if matches!(state.overlay, Some(Overlay::Approval(_))) => " approval needed · ←→ then enter (typing is ignored) · esc denies ",
+        _ if matches!(state.overlay, Some(Overlay::CheckpointChoice { .. })) => " checkpoint choice · 1–5 choose · enter confirm · esc cancel ",
         // An approval waits behind the open panel: say so, and how to reach it.
         _ if state.approval_waiting() => " approval waiting · esc closes this panel to review it ",
         _ if matches!(state.overlay, Some(Overlay::Help { .. })) => " esc close help ",
@@ -2571,6 +2635,23 @@ mod tests {
         let x = u16::try_from(lines[added][..column].chars().count()).unwrap();
         let cell = &terminal.backend().buffer()[(x, u16::try_from(added).unwrap())];
         assert_eq!(cell.bg, Color::Rgb(22, 56, 36), "the added row is tinted by the shared diff palette");
+    }
+
+    #[test]
+    fn checkpoint_choice_modal_explains_all_available_paths() {
+        let mut state = ready();
+        feed(&mut state, &[r#"{"v":1,"type":"checkpoint.choice.request","id":"choice-1","turn_id":"t1","message":"Sensitive content blocked the checkpoint. Choose 1 read-only, 2 continue without a rollback checkpoint, 3 create a checkpoint anyway (may persist sensitive content), 4 cancel this turn, or 5 re-enter the instruction."}"#]);
+        let screen = draw(&state, 40, 14);
+        assert_shows(&screen, &[
+            "Sensitive content may persist",
+            "checkpoint anyway",
+            "Read-only",
+            "Continue without checkpoint",
+            "Create checkpoint anyway",
+            "Cancel this turn",
+            "Other (re-enter instruction)",
+            "1–5 choose",
+        ]);
     }
 
     #[test]

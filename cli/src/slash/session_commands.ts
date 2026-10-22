@@ -138,10 +138,12 @@ function mode({ host, args }: SlashContext): SlashOutcome {
   const wanted = args.trim().toLowerCase();
   if (wanted === "auto" || wanted === "autonomous") {
     host.setMode("auto");
+    if (host.mode() === "read-only") return reply("mode", "Mode: read-only. Auto mode will take effect after a safe workspace checkpoint.");
     return reply("mode", "Mode: auto. Edits and commands run without asking.");
   }
   if (wanted === "review" || wanted === "ask") {
     host.setMode("review");
+    if (host.mode() === "read-only") return reply("mode", "Mode: read-only. Review mode will take effect after a safe workspace checkpoint.");
     return reply("mode", "Mode: review. Edits and commands wait for your approval.");
   }
   return reply("mode", `Current mode: ${host.mode()}. Use /mode auto or /mode review.`, !wanted);
