@@ -95,6 +95,25 @@ test("the T3 driver submits the objective, steers after the scripted tool calls,
   assert.match(state.protocolErrors.join(), /unexpected approval request/);
 });
 
+test("the noninteractive T3 driver cancels a checkpoint choice request and does not hang", async () => {
+  const { createT3Driver } = await t3();
+  const sent: any[] = [];
+  const driver = createT3Driver(TASK, (line: string) => sent.push(JSON.parse(line)));
+  const feed = (event: object) => driver.handleLine(JSON.stringify({ v: 1, ...event }));
+  feed({ type: "hello", protocol: 1, pid: 1, commands: [] });
+  feed({ type: "checkpoint.choice.request", id: "checkpoint-choice-1", turn_id: "t3-objective", message: "Sensitive content blocks the rollback checkpoint." });
+  feed({ type: "error", id: "t3-objective", code: "INTERNAL", message: "This turn was cancelled before it started." });
+
+  const state = await driver.done;
+  assert.deepEqual(sent.slice(-2), [
+    { v: 1, type: "checkpoint.choice", id: "checkpoint-choice-1", choice: "cancel" },
+    { v: 1, type: "shutdown" },
+  ]);
+  assert.match(state.protocolErrors.join(), /unexpected interactive checkpoint choice request/);
+  assert.match(state.protocolErrors.join(), /This turn was cancelled before it started/);
+  assert.equal(state.probeSends, 0, "a cancelled objective must not proceed to the closing probe");
+});
+
 test("the probe answer is the last balanced JSON object", async () => {
   const { lastJsonObject } = await t3();
   assert.deepEqual(lastJsonObject('I saw {braces} early. Final: {"a": "present", "b": {"x": 1}}'), { a: "present", b: { x: 1 } });
