@@ -41,7 +41,7 @@ Strengths to preserve:
 2. **REQ-REL-108.** Each release ships a lockfile-derived SBOM: CycloneDX 1.5 JSON for npm (prod) and Cargo, merged. It is validated by `cyclonedx validate` in CI.
 3. **REQ-REL-109.** Release assets carry verifiable provenance (DEC-09: `actions/attest-build-provenance`). The installer can optionally verify it when `gh` is present. The installer is also published as a release asset, so a tag-pinned installer exists.
 4. **REQ-REL-110.** The vulnerability gate fails closed. `cargo-audit` or `cargo-deny` is installed explicitly in workflows with `--locked`. The toy fallback is removed. A missing tool exits non-zero.
-5. **REQ-REL-111.** The CI matrix covers Node 20, 22 and 24, with a pinned Rust toolchain (`rust-toolchain.toml`) and a declared MSRV (`rust-version`). It includes a `cli/dist` freshness check, with dist untracked per DEC-10. The package declares `"engines": { "node": ">=20" }`.
+5. **REQ-REL-111.** The CI matrix covers Node 22 and 24 (DEC-12: Node.js 20 is end of life and unsupported), with a pinned Rust toolchain (`rust-toolchain.toml`) and a declared MSRV (`rust-version`). It includes a `cli/dist` freshness check, with dist untracked per DEC-10. The package declares `"engines": { "node": ">=20" }`.
 6. **REQ-REL-112.** SECURITY.md defines the reporting channel, the supported versions and the response targets. CHANGELOG.md is maintained, and the release body is taken from `docs/releases/<tag>.md` (the release fails if that file is missing).
 7. **REQ-REL-113.** Dead CI config is removed, and tracked bytecode is removed and ignored.
 8. **REQ-REL-114.** Cross-machine reproducibility is demonstrated once for the RC: two different runner images with the pinned toolchain produce identical tarballs. This is RELEASE-REQUIRED evidence, not a code change.
@@ -55,7 +55,7 @@ Strengths to preserve:
   - `cargo deny check licenses` runs in CI with the same allowlist, so new incompatible licenses fail early.
 - **SBOM.** `npx @cyclonedx/cyclonedx-npm --omit dev` and `cargo cyclonedx --format json`, merged with `cyclonedx merge`. Replace `scripts/generate_sbom.sh` and update `make sbom`.
 - **Provenance.** Add `permissions: id-token: write, attestations: write` to release.yml and a step `actions/attest-build-provenance@v1` with `subject-path` set to the tarball and SHA256SUMS. Docs: `gh attestation verify <tarball> -R mikeholownych/nexus-code`.
-- **CI.** `strategy.matrix.node: [20, 22, 24]` for the test job. Packaging runs on Node 20 only. Add `cargo install cargo-audit --locked --version <pin>`. Add a step `git diff --exit-code -- cli/dist` after the build.
+- **CI.** `strategy.matrix.node: [22, 24]` for the test job. Packaging, release and reproducibility builds run on Node 22. Add `cargo install cargo-audit --locked --version <pin>`. Add a step `git diff --exit-code -- cli/dist` after the build.
 
 ## 4. Acceptance criteria
 

@@ -22,7 +22,7 @@ This plan implements [SPEC-07](../specs/SPEC-07-supply-chain-and-release-enginee
 
 | # | Task | Code locations | Depends on |
 |---|---|---|---|
-| 1 | Add `rust-toolchain.toml` pinned to the current stable (1.95.0 at audit time), set `rust-version` in Cargo.toml, and add `"engines": {"node": ">=20"}`. | root, `core/Cargo.toml`, `cli/package.json` | — |
+| 1 | Add `rust-toolchain.toml` pinned to the current stable (1.95.0 at audit time), set `rust-version` in Cargo.toml, and add `"engines": {"node": ">=22"}` (DEC-12). | root, `core/Cargo.toml`, `cli/package.json` | — |
 | 2 | Third-party notices: install cargo-about and the npm license checker in CI. Use `about.toml` with an allowlist (MIT, Apache-2.0, BSD-2/3, ISC, Unicode-3.0, Zlib, MPL-2.0 only if reviewed). Have `package-linux.sh` write `THIRD_PARTY_NOTICES.txt` and upload it as an asset. | `package-linux.sh:22`; `release.yml` | 1 |
 | 3 | `cargo deny check licenses advisories` in CI. Make `security_gates.sh` fail if `cargo-audit`/`cargo-deny` is missing, and delete `audit_rust_deps.py`. | `security_gates.sh:84-97`; `ci.yml`; `release.yml` | 1 |
 | 4 | Build the SBOM from lockfiles with cyclonedx-npm and cargo-cyclonedx, merge and validate, and attach it to the release. Replace `generate_sbom.sh` and update `make sbom`. | `scripts/generate_sbom.sh`; `Makefile`; `release.yml` | — |
