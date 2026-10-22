@@ -13,10 +13,11 @@ describe("WP-11: Security Lifecycle Gates & Segregation (INC-12, SCAN-001..005, 
     const scriptPath = path.join(scriptsDir, "security_gates.sh");
     assert.strictEqual(fs.existsSync(scriptPath), true, "security_gates.sh must exist");
 
-    const out = execFileSync("bash", [scriptPath], {
-      cwd: rootDir,
-      encoding: "utf-8",
-    });
+    // Keep the gate test deterministic: the live npm advisory service is exercised by CI's
+    // security-gates step, while this test verifies the gate's clean-result handling.
+    const res = runGate(stubNpm("clean", true));
+    assert.equal(res.status, 0, res.stderr);
+    const out = res.stdout;
 
     assert.ok(out.includes("NEXUS CODE LIFECYCLE SECURITY SCANNING GATES"));
     assert.ok(out.includes("Gate 1"));
@@ -63,7 +64,7 @@ describe("WP-11: Security Lifecycle Gates & Segregation (INC-12, SCAN-001..005, 
    * A stand-in `npm` first on PATH, so Gate 1's outcome is fixed and a later gate's assertion cannot be masked by a
    * network or npm configuration problem. Like npm 11, it refuses an inherited npm_config_allow_scripts.
    */
-  function stubNpm(report: "clean" | "findings" | "error"): string {
+  function stubNpm(report: "clean" | "findings" | "error", rustScannerAvailable = false): string {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-stub-npm-"));
     const bodies = {
       clean: `echo '{"metadata":{"vulnerabilities":{"info":0,"low":1,"moderate":0,"high":0,"critical":0}}}'; exit 0`,
@@ -72,7 +73,7 @@ describe("WP-11: Security Lifecycle Gates & Segregation (INC-12, SCAN-001..005, 
     };
     fs.writeFileSync(
       path.join(dir, "npm"),
-      `#!/usr/bin/env bash
+      `#!/bin/bash
 if [[ -n "\${npm_config_allow_scripts:-}" ]]; then
   echo '{"error":{"code":"EALLOWSCRIPTS","summary":"--allow-scripts is not allowed in project-scoped installs."}}'
   exit 1
@@ -81,6 +82,26 @@ ${bodies[report]}
 `,
       { mode: 0o755 },
     );
+    fs.symlinkSync(process.execPath, path.join(dir, "node"));
+    for (const utility of ["bash", "dirname", "env", "mktemp", "rm", "sed"]) {
+      const source = (process.env.PATH || "")
+        .split(path.delimiter)
+        .map((entry) => path.join(entry, utility))
+        .find((candidate) => {
+          try {
+            fs.accessSync(candidate, fs.constants.X_OK);
+            return true;
+          } catch {
+            return false;
+          }
+        });
+      assert.ok(source, `Required test utility ${utility} must be available`);
+      fs.symlinkSync(fs.realpathSync(source), path.join(dir, utility));
+    }
+    if (rustScannerAvailable) {
+      fs.writeFileSync(path.join(dir, "cargo-deny"), "#!/bin/bash\nexit 0\n", { mode: 0o755 });
+      fs.writeFileSync(path.join(dir, "cargo"), "#!/bin/bash\nexit 0\n", { mode: 0o755 });
+    }
     return dir;
   }
 
@@ -125,12 +146,9 @@ ${bodies[report]}
   });
 
   test("ACC-SUP-04: PATH without cargo-audit or cargo-deny makes security_gates.sh exit non-zero", () => {
-    // Strip any directory containing cargo-audit or cargo-deny from PATH
-    const cleanPath = (process.env.PATH || "")
-      .split(":")
-      .filter((dir) => !fs.existsSync(path.join(dir, "cargo-audit")) && !fs.existsSync(path.join(dir, "cargo-deny")))
-      .join(":");
-    const res = runGate(stubNpm("clean"), { PATH: cleanPath, SIMULATE_RUST_SCANNER_UNAVAILABLE: "0" });
+    // Use only the test stubs and required shell utilities; this cannot expose Rust scanners or call npm's service.
+    const npmDir = stubNpm("clean");
+    const res = runGate(npmDir, { PATH: npmDir, SIMULATE_RUST_SCANNER_UNAVAILABLE: "0" });
     assert.notEqual(res.status, 0);
     assert.ok(
       res.stderr.includes("Rust vulnerability scanner unavailable"),
