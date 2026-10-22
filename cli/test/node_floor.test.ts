@@ -47,8 +47,9 @@ test("installer accepts Node.js 22 at the runtime gate", () => {
 });
 
 test("package engines, doctor, upgrade preflight and installer state the same Node.js floor", () => {
-  const engines = JSON.parse(read("cli/package.json")).engines?.node;
-  assert.equal(engines, `>=${FLOOR}`);
+  for (const manifest of ["package.json", "cli/package.json"]) {
+    assert.equal(JSON.parse(read(manifest)).engines?.node, `>=${FLOOR}`, `${manifest} engines`);
+  }
   // npm records root engines in the lockfile only when it regenerates it; if present it must agree.
   const lockRoot = JSON.parse(read("cli/package-lock.json")).packages?.[""]?.engines?.node;
   if (lockRoot !== undefined) assert.equal(lockRoot, `>=${FLOOR}`);
@@ -65,5 +66,14 @@ test("CI, release and reproducibility workflows never run below the Node.js floo
       ...[...text.matchAll(/node:\s*\[([^\]]*)\]/g)].flatMap((match) => match[1].split(",").map((value) => Number(value.trim()))),
     ];
     for (const version of versions) assert.ok(version >= FLOOR, `${workflow} uses Node.js ${version}`);
+  }
+});
+
+test("v1.0.0 release notes never present an end-of-life Node.js floor as promotable", () => {
+  // rc.1 is published history; later notes that still describe a Node 20 build must say it cannot become v1.0.0.
+  const releases = path.join(root, "docs/releases");
+  for (const name of fs.readdirSync(releases).filter((file) => /^v1\.0\.0.*\.md$/.test(file) && file !== "v1.0.0-rc.1.md")) {
+    const text = fs.readFileSync(path.join(releases, name), "utf8");
+    if (/Node\.js 20 or newer/.test(text)) assert.match(text, /not promotable/, `${name} presents Node.js 20 as supported`);
   }
 });
