@@ -1,6 +1,6 @@
 # Nexus Code client guide
 
-For binary installation and first run, start with the [quickstart](../quickstart.md). It documents the currently supported package target: Linux x86-64, glibc 2.35+, and Node.js 20+.
+For binary installation and first run, start with the [quickstart](../quickstart.md). It documents the currently supported package target: Linux x86-64, glibc 2.35+, and Node.js 22+.
 
 ## Interfaces and commands
 

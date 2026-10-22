@@ -4,7 +4,7 @@ Nexus Code is a local coding client. It is separate from the Cloudflare Workers 
 
 ## Install
 
-On Linux x86-64 with glibc 2.35 or newer and Node.js 20 or newer (use a maintained release such as Node.js 22 or 24; Node.js 20 reached upstream end of life on 2026-03-24 per the [Node.js EOL schedule](https://nodejs.org/en/about/eol)):
+On Linux x86-64 with glibc 2.35 or newer and Node.js 22 or newer:
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/mikeholownych/nexus-code/main/install.sh | sh
@@ -109,4 +109,4 @@ User configuration, credentials, sessions, and project `.nexus` data are retaine
 
 ## Build from source
 
-See [Development and release](docs/DEVELOPMENT.md). Source builds require Rust, Cargo, Node.js 20+, npm, a C toolchain, and platform libraries. The release installer is the recommended path for supported Linux x86-64 systems.
+See [Development and release](docs/DEVELOPMENT.md). Source builds require Rust, Cargo, Node.js 22+, npm, a C toolchain, and platform libraries. The release installer is the recommended path for supported Linux x86-64 systems.

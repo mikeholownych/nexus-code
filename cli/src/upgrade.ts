@@ -567,9 +567,9 @@ export function compareInstallationWithRelease(
 
   // Node version check
   const nodeMajor = parseInt(process.versions.node.split(".")[0], 10) || 0;
-  if (nodeMajor < 20) {
+  if (nodeMajor < 22) {
     canUpgrade = false;
-    reasons.push(`Node.js 20 or newer is required (found ${process.version}).`);
+    reasons.push(`Node.js 22 or newer is required (found ${process.version}).`);
   }
 
   // Provenance check

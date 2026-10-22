@@ -38,10 +38,6 @@
         "strict_required_status_checks_policy": false,
         "required_status_checks": [
           {
-            "context": "test-matrix (20)",
-            "integration_id": 15368
-          },
-          {
             "context": "test-matrix (22)",
             "integration_id": 15368
           },
