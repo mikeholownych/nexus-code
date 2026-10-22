@@ -154,7 +154,9 @@ Some decisions cannot be carried out by an implementer alone. They need an exter
 
 ## DEC-12: Platform scope
 
-**Chosen:** Linux x86-64, glibc ≥ 2.35, Node ≥ 20 for v1.0.0, which is what is built and tested. The docs keep the conservative "≥ 2.35" claim; the binaries reference glibc symbols ≤ 2.34. macOS, arm64 and musl are post-v1 roadmap items.
+**Chosen:** Linux x86-64, glibc ≥ 2.35, Node ≥ 22 for v1.0.0. The owner selected Node 22 as the minimum on 2026-10-22 because Node 20 reached end of life on 2026-04-30; v1.0.0 must not require or build on an end-of-life Node runtime. Validate Node 22 and 24 in the source CI matrix, with release and reproducibility builds on Node 22. The docs keep the conservative glibc "≥ 2.35" claim; the binaries reference glibc symbols ≤ 2.34. macOS, arm64 and musl are post-v1 roadmap items.
+
+This supersedes the earlier Node ≥ 20 decision. The immutable `v1.0.0-rc.2` tag targets `19d6f0a80e21f9b640a46ee12200c4f5f6d967a4`, whose package engine and workflows still use Node 20; that tag is not a qualifying RC under this decision.
 
 ## DEC-13: Contest track disposition
 
