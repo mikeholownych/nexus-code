@@ -38,6 +38,7 @@ The post-RC closure requirements listed below may remain `open`, `partial`, or `
 
 | Requirement | Acceptance criteria required in the exact-RC record | Remaining stage |
 |---|---|---|
+| REQ-REL-003 | ACC-PLAT | Installed-RC platform and Node-version matrix |
 | REQ-AGT-002 | ACC-VER-03, ACC-VER-04, ACC-VER-09, ACC-QUAL-T2, ACC-QUAL-T3, ACC-QUAL-T4 | Installed-RC T2/T3/T4 outcome thresholds |
 | REQ-AGT-010 | ACC-TRUST-04 | Independent acceptance of the DEC-04 v1 subset |
 | REQ-PRV-003 | ACC-INF-10 | Installed-RC standalone and absent-gateway behavior |

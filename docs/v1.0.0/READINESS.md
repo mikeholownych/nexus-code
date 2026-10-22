@@ -1,5 +1,15 @@
 # v1.0.0 release readiness checkpoint
 
+## Integration update (2026-10-22 21:14 UTC)
+
+The authoritative source is `origin/main@269d611ca0a0c8a55244bf70d89fa4a918b9d218`. The Node 22 convergence branch was refreshed without rewriting history and is `v1/node22-floor-converged@fb798a1bd517ac85fd3c99f76d3fda1709540a8d`; it contains the Node `>=22` implementation and policy updates but is not yet integrated. `node scripts/sync-version.mjs --check` passes at version `1.0.0-rc.2`. The source requirements check currently fails because REQ-REL-111 remains partial pending exact-candidate checks; REQ-REL-003 remains partial for installed-RC platform qualification and is now explicitly mapped to ACC-PLAT in the exact-RC stage. No threshold or qualification evidence was changed.
+
+The live GitHub `v1-protected-branches` ruleset (ID `25340146`) currently requires `test-matrix (22)`, `test-matrix (24)`, and `linux-x86_64`; it does not require Node 20. The checked-in ruleset snapshot now matches that live required-check set. No live protection setting was modified. PR #137 still targets an older base, PR #146 remains a draft, and the refreshed candidate branch has not yet been opened as a replacement PR. Independent review of the refreshed candidate requested these documentation reconciliations; code/runtime review otherwise found no blocker.
+
+PR #149 is open at `1972adb8a6d4b9bacf9974f33974b61d751de8ab` on base `269d611`; Node 20/22/24 matrix checks and CodeQL pass, while its exact-head Linux packaging job is still running. Its independent source review accepted the T3 symlink hardening, but it is not integrated until the required job concludes.
+
+The public `v1.0.0-rc.1` release remains the only published v1 candidate. `v1.0.0-rc.2` points to older source and is nonqualifying under the Node 22 decision. There is no accepted RC or stable release. Held-out custody, provider/standalone qualification, T2/T3/T4, cross-runner reproducibility, installed-RC packaging and qualification, five-terminal by three-size human evidence, and independent acceptance remain incomplete. Campaign status is `NEXUS_V1_CONVERGENCE_ACTIVE`; acceptance remains `IN_PROGRESS`; publication authorization remains granted and gated.
+
 ## Integration update (2026-10-22 11:50 UTC)
 
 `origin/main` is now `dceac980b3d77c99a26bb9ddedb61c443168952a`, after PR #142 merged as `08861feb2c6a164a89f4c0573e1c7793c9f938e5` and PR #143 merged as `dceac980b3d77c99a26bb9ddedb61c443168952a`. PR #143 corrects the Node 20 EOL date in the RC1 release note; independent review accepted its exact net diff, and exact-head CI `39769489238` plus CodeQL `39769489243` passed on PR head `5e1f221e920bf6738fb3d62296199f34c8db53a0` against base `08861fe`. Post-merge CI `39773603423` and CodeQL `39773603376` are running on exact `main@dceac980`; no post-merge conclusion is claimed yet. Contest work is over and no contest freeze applies. Campaign status remains `NEXUS_V1_CONVERGENCE_ACTIVE`; acceptance remains `IN_PROGRESS`. RC1 remains an older artifact, and no stable v1.0.0 release is asserted.
