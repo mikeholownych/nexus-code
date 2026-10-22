@@ -41,7 +41,7 @@ Strengths to preserve:
 2. **REQ-REL-108.** Each release ships a lockfile-derived SBOM: CycloneDX 1.5 JSON for npm (prod) and Cargo, merged. It is validated by `cyclonedx validate` in CI.
 3. **REQ-REL-109.** Release assets carry verifiable provenance (DEC-09: `actions/attest-build-provenance`). The installer can optionally verify it when `gh` is present. The installer is also published as a release asset, so a tag-pinned installer exists.
 4. **REQ-REL-110.** The vulnerability gate fails closed. `cargo-audit` or `cargo-deny` is installed explicitly in workflows with `--locked`. The toy fallback is removed. A missing tool exits non-zero.
-5. **REQ-REL-111.** The CI matrix covers Node 22 and 24 (DEC-12: Node.js 20 is end of life and unsupported), with a pinned Rust toolchain (`rust-toolchain.toml`) and a declared MSRV (`rust-version`). It includes a `cli/dist` freshness check, with dist untracked per DEC-10. The package declares `"engines": { "node": ">=20" }`.
+5. **REQ-REL-111.** The CI matrix covers Node 22 and 24 (DEC-12: Node.js 20 is end of life and unsupported), with a pinned Rust toolchain (`rust-toolchain.toml`) and a declared MSRV (`rust-version`). It includes a `cli/dist` freshness check, with dist untracked per DEC-10. The package declares `"engines": { "node": ">=22" }`.
 6. **REQ-REL-112.** SECURITY.md defines the reporting channel, the supported versions and the response targets. CHANGELOG.md is maintained, and the release body is taken from `docs/releases/<tag>.md` (the release fails if that file is missing).
 7. **REQ-REL-113.** Dead CI config is removed, and tracked bytecode is removed and ignored.
 8. **REQ-REL-114.** Cross-machine reproducibility is demonstrated once for the RC: two different runner images with the pinned toolchain produce identical tarballs. This is RELEASE-REQUIRED evidence, not a code change.
@@ -65,7 +65,7 @@ Strengths to preserve:
 | ACC-SUP-02 | `cyclonedx validate --input-file sbom.cdx.json` passes. The component count equals the lockfile prod closure (±0). |
 | ACC-SUP-03 | `gh attestation verify` passes for the RC tarball. |
 | ACC-SUP-04 | `PATH` without cargo-audit makes `security_gates.sh` exit non-zero. |
-| ACC-SUP-05 | The CI matrix is green on Node 20, 22 and 24, and the dist-freshness step is present. |
+| ACC-SUP-05 | The CI matrix is green on Node 22 and 24, release and reproducibility packaging use Node 22, and the dist-freshness step is present. |
 | ACC-SUP-06 | SECURITY.md and CHANGELOG.md exist. `gh release view <rc>` body equals `docs/releases/<rc>.md`. |
 | ACC-SUP-07 | `.gitlab-ci.yml` is removed (or marked as a mirror). `git ls-files '*.pyc'` is empty. |
 | ACC-SUP-08 | Cross-runner reproducibility: tarballs built on ubuntu-22.04 and ubuntu-24.04 runners with the pinned toolchain are byte-identical, or the differences are documented and accepted as a DEC-10 follow-up. |

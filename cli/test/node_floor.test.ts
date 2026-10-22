@@ -46,6 +46,28 @@ test("installer accepts Node.js 22 at the runtime gate", () => {
   assert.match(result.stderr, /curl is required/);
 });
 
+test("release requirements and plan agree on the supported Node.js floor", () => {
+  const spec = read("docs/v1.0.0/specs/SPEC-07-supply-chain-and-release-engineering.md");
+  const plan = read("docs/v1.0.0/plans/PLAN-07-supply-chain-and-release-engineering.md");
+  const requirement = spec.split("\n").find((line) => line.includes("REQ-REL-111."));
+  const acceptance = spec.split("\n").find((line) => line.startsWith("| ACC-SUP-05 |"));
+  const engineTask = plan.split("\n").find((line) => line.startsWith("| 1 |"));
+  const matrixTask = plan.split("\n").find((line) => line.startsWith("| 6 |"));
+  assert.ok(requirement, "SPEC-07 REQ-REL-111 exists");
+  assert.ok(acceptance, "SPEC-07 ACC-SUP-05 exists");
+  assert.ok(engineTask, "PLAN-07 engine task exists");
+  assert.ok(matrixTask, "PLAN-07 matrix task exists");
+  assert.match(requirement, /"node": ">=22"/);
+  assert.doesNotMatch(requirement, /">=20"/);
+  assert.match(acceptance, /Node 22 and 24/);
+  assert.match(acceptance, /packaging use Node 22/);
+  assert.doesNotMatch(acceptance, /Node 20/);
+  assert.match(engineTask, /"node": ">=22"/);
+  assert.match(matrixTask, /Node 22\/24/);
+  assert.match(matrixTask, /builds use Node 22/);
+  assert.doesNotMatch(matrixTask, /Node 20/);
+});
+
 test("package engines, doctor, upgrade preflight and installer state the same Node.js floor", () => {
   for (const manifest of ["package.json", "cli/package.json"]) {
     assert.equal(JSON.parse(read(manifest)).engines?.node, `>=${FLOOR}`, `${manifest} engines`);
