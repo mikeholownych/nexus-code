@@ -1,6 +1,16 @@
 # v1.0.0 release readiness checkpoint
 
-## Integration update (2026-10-22 21:14 UTC)
+## Current integration and candidate status (2026-10-22 22:21 UTC)
+
+**Authoritative release source:** `origin/main` is `a4a7edd9a17a0015abdf8135ecf3c1caac05560c`, the PR #151 merge commit. The release workflow checks that release tags are ancestors of `main`; the separate `origin/v1/integration` ref is `7d6673f108316dda015b858c85b2abe20f3a4f78` and is not the current release base. PR #151's exact-head CI `39859201869` and CodeQL checks `39859202021` / `120105729719` passed before merge. Post-merge CI `39863828016` is still running its Node 20/22/24 matrix on `a4a7edd`; post-merge CodeQL `39863827963` passed. No complete post-merge CI conclusion is claimed yet.
+
+**Node runtime-floor candidate:** PR #150 is refreshed to exact head `e1ea80e98a93d8847d32ecd66feb02d9b44f9b26` on base `a4a7edd9a17a0015abdf8135ecf3c1caac05560c`. It enforces Node `>=22` across runtime checks, package metadata, installer, CI, release, and reproducibility workflows. Exact-head CodeQL `39864054534` passed; CI `39864054585` is still running the Node 22/24 matrix. Focused Node-floor tests passed 6/6 and `npm --prefix cli run build` passed with no `cli/dist` diff under isolated HOME/XDG. Independent review found the runtime and policy mapping coherent but requested this readiness-status correction; obtain a fresh review after this update. PR #150 remains open and unaccepted.
+
+**Checkpoint behavior and RC identity:** PR #147 merged as `6e7bf0b04752986ae4dde4bbe77ae76926aa9f06`; its checkpoint-choice change is present in `main` but absent from immutable RC1 (`cb364c386c42faa53b67e04cacc81d7e01520779`) and RC2 (`19d6f0a80e21f9b640a46ee12200c4f5f6d967a4`). Source regressions passed 51/51 sidecar tests and 2/2 focused TUI tests, with independent review ACCEPT; this does not change the existing packages. A new candidate must use a fresh immutable identity after all pre-RC gates are met.
+
+**Qualification and release disposition:** The custodian has not replied to the metadata-only compatibility/handoff question last posted to Issue #1 at 22:08 UTC; T2/T3 held-out qualification has not started. Provider/standalone, T3/T4, exact-RC reproducibility, the human five-terminal by three-size matrix, and independent exact-RC acceptance remain outstanding. Campaign status is `NEXUS_V1_CONVERGENCE_ACTIVE`; acceptance is `IN_PROGRESS`; publication authorization remains granted and gated. No RC is accepted and no stable release is claimed.
+
+## Historical integration update (2026-10-22 21:14 UTC; superseded by the current status above)
 
 The authoritative source is `origin/main@269d611ca0a0c8a55244bf70d89fa4a918b9d218`. The Node 22 convergence branch was refreshed without rewriting history and its current candidate head is `v1/node22-floor-converged@658ace9d4ab67901b5b2db1c090f6b01537be27a`; the Node `>=22` source implementation was validated at `fb798a1bd517ac85fd3c99f76d3fda1709540a8d`, and the candidate adds reviewed ruleset and acceptance-stage reconciliations. It is not yet integrated. `node scripts/sync-version.mjs --check` passes at version `1.0.0-rc.2`. The source requirements check currently fails because REQ-REL-111 remains partial pending exact-candidate checks; REQ-REL-003 remains partial for installed-RC platform qualification and is now explicitly mapped to ACC-PLAT in the exact-RC stage. No threshold or qualification evidence was changed.
 
