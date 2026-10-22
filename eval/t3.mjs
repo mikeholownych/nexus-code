@@ -69,8 +69,10 @@ export function createT3Driver(task, write, { onSteer = () => {}, beforeProbe = 
   };
   let resolveDone;
   const done = new Promise((resolve) => { resolveDone = resolve; });
+  let cancelTimer;
   const finish = () => {
     if (state.phase === "done") return;
+    clearTimeout(cancelTimer);
     state.phase = "done";
     send({ type: "shutdown" });
     resolveDone(state);
@@ -122,7 +124,9 @@ export function createT3Driver(task, write, { onSteer = () => {}, beforeProbe = 
       const turn = String(event.turn_id ?? "");
       state.textByTurn[turn] = (state.textByTurn[turn] ?? "") + String(event.text ?? "");
     } else if (event.type === "turn.result") {
-      if (state.phase === "objective" || state.phase === "ending") { // "ending": a follow-up turn finished quickly
+      if (state.phase === "cancelling") {
+        finish();
+      } else if (state.phase === "objective" || state.phase === "ending") { // "ending": a follow-up turn finished quickly
         state.objectiveTurns.push(event.turn ?? null);
         state.steps += event.turn?.steps?.used ?? 0;
         state.phase = "ending";
@@ -138,9 +142,18 @@ export function createT3Driver(task, write, { onSteer = () => {}, beforeProbe = 
       // The sidecar runs with --yes; an approval request is unexpected. Deny it (never approve on the agent's behalf).
       state.protocolErrors.push(`unexpected approval request for ${event.tool ?? "a tool"}`);
       send({ type: "deny", id: event.id });
+    } else if (event.type === "checkpoint.choice.request") {
+      // T3 is noninteractive. Cancel explicitly and fail the run instead of leaving the sidecar waiting forever.
+      state.protocolErrors.push("unexpected interactive checkpoint choice request in T3");
+      send({ type: "checkpoint.choice", id: event.id, choice: "cancel" });
+      state.phase = "cancelling";
+      cancelTimer = setTimeout(finish, 5_000);
     } else if (event.type === "error") {
-      if (state.phase === "probe" && event.code === "BUSY" && String(event.id ?? "").startsWith("t3-probe")) { probeRejected = true; return; }
-      state.protocolErrors.push(`${event.code ?? "error"}: ${String(event.message ?? "").slice(0, 200)}`);
+      if (state.phase === "cancelling") {
+        state.protocolErrors.push(`${event.code ?? "error"}: ${String(event.message ?? "").slice(0, 200)}`);
+        finish();
+      } else if (state.phase === "probe" && event.code === "BUSY" && String(event.id ?? "").startsWith("t3-probe")) { probeRejected = true; return; }
+      else state.protocolErrors.push(`${event.code ?? "error"}: ${String(event.message ?? "").slice(0, 200)}`);
     }
   };
   return { handleLine, done, state, abort: finish };
