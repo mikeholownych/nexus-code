@@ -1,5 +1,9 @@
 # v1.0.0 release readiness checkpoint
 
+## Integration update (2026-10-22 11:50 UTC)
+
+`origin/main` is now `dceac980b3d77c99a26bb9ddedb61c443168952a`, after PR #142 merged as `08861feb2c6a164a89f4c0573e1c7793c9f938e5` and PR #143 merged as `dceac980b3d77c99a26bb9ddedb61c443168952a`. PR #143 corrects the Node 20 EOL date in the RC1 release note; independent review accepted its exact net diff, and exact-head CI `39769489238` plus CodeQL `39769489243` passed on PR head `5e1f221e920bf6738fb3d62296199f34c8db53a0` against base `08861fe`. Post-merge CI `39773603423` and CodeQL `39773603376` are running on exact `main@dceac980`; no post-merge conclusion is claimed yet. Contest work is over and no contest freeze applies. Campaign status remains `NEXUS_V1_CONVERGENCE_ACTIVE`; acceptance remains `IN_PROGRESS`. RC1 remains an older artifact, and no stable v1.0.0 release is asserted.
+
 ## Current release checkpoint (2026-10-22 09:32 UTC)
 
 **Authoritative source and CI:** `origin/main` is `44ca13d58a262b5f89be459b47aefa50c2d61683`, PR #140's merge commit. Exact-main CI [39747222866](https://github.com/mikeholownych/nexus-code/actions/runs/39747222866) passed all four jobs on that exact SHA: Node 20, 22, 24, and Linux x86-64 packaging, including the CLI suite and package smoke check. Exact-main CodeQL [39747222840](https://github.com/mikeholownych/nexus-code/actions/runs/39747222840) passed. PR #140's host report is synthetic-only: 10/10 infrastructure checks passed and independent review accepted it; it does not establish held-out qualification.
