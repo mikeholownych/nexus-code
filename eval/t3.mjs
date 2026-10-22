@@ -4,12 +4,147 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import { confinedPath } from "./isolate.mjs";
 
 export const T3_MIN_STEPS = 60;
 export const T3_MIN_COMPACTIONS = 2;
 const PROTOCOL = 1;
 const CONSTRAINT_KINDS = new Set(["file-unchanged", "file-absent", "command"]);
+const DIR_FLAGS = fs.constants.O_RDONLY | fs.constants.O_DIRECTORY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK;
+const FILE_FLAGS = fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK;
+const MAX_T3_PATH_LENGTH = 4_096;
+const MAX_T3_DIRECTORY_ENTRIES = 10_000;
+const MAX_T3_RECORD_BYTES = 16 * 1024 * 1024;
+const MAX_T3_HISTORY_BYTES = 64 * 1024 * 1024;
+const MAX_T3_TOTAL_BYTES = 256 * 1024 * 1024;
+const T3_FILESYSTEM_ERROR = "T3 evaluator rejected an unsafe or oversized filesystem entry";
+
+/** T3 task paths are POSIX workspace-relative names, never host paths or traversal. */
+function validT3Path(value) {
+  if (typeof value !== "string" || value.length === 0 || value.length > MAX_T3_PATH_LENGTH || value.includes("\0") || value.includes("\\") || path.posix.isAbsolute(value)) return false;
+  return value.split("/").every((part) => part !== "" && part !== "." && part !== "..");
+}
+
+/** Open a harness-owned root directory without following a final symlink. */
+function openT3Root(root) {
+  if (fs.constants.O_NOFOLLOW === undefined || fs.constants.O_DIRECTORY === undefined || fs.constants.O_NONBLOCK === undefined || !fs.existsSync("/proc/self/fd")) {
+    throw new Error("T3 no-follow filesystem access is unavailable");
+  }
+  try {
+    const fd = fs.openSync(path.resolve(root), DIR_FLAGS);
+    if (!fs.fstatSync(fd).isDirectory()) { fs.closeSync(fd); throw new Error(T3_FILESYSTEM_ERROR); }
+    return fd;
+  } catch (error) {
+    if (error?.code === "ENOENT") return null;
+    if (error?.message === T3_FILESYSTEM_ERROR || error?.message === "T3 no-follow filesystem access is unavailable") throw error;
+    throw new Error(T3_FILESYSTEM_ERROR);
+  }
+}
+
+/** Open one child directory relative to an already pinned directory descriptor. */
+function openT3DirectoryAt(parentFd, name, missingIsOk = false) {
+  let fd;
+  try {
+    fd = fs.openSync(`/proc/self/fd/${parentFd}/${name}`, DIR_FLAGS);
+    if (!fs.fstatSync(fd).isDirectory()) throw new Error(T3_FILESYSTEM_ERROR);
+    return fd;
+  } catch (error) {
+    if (fd !== undefined) fs.closeSync(fd);
+    if (missingIsOk && error?.code === "ENOENT") return null;
+    throw new Error(T3_FILESYSTEM_ERROR);
+  }
+}
+
+/** Open a child regular file without following symlinks or blocking on special files. */
+function openT3FileAt(parentFd, name, missingIsOk = false) {
+  let fd;
+  try {
+    fd = fs.openSync(`/proc/self/fd/${parentFd}/${name}`, FILE_FLAGS);
+    if (!fs.fstatSync(fd).isFile()) throw new Error(T3_FILESYSTEM_ERROR);
+    return fd;
+  } catch (error) {
+    if (fd !== undefined) fs.closeSync(fd);
+    if (missingIsOk && error?.code === "ENOENT") return null;
+    throw new Error(T3_FILESYSTEM_ERROR);
+  }
+}
+
+/** Open a non-symlink regular file or directory for existence checks. */
+function openT3EntryAt(parentFd, name, missingIsOk = false) {
+  let fd;
+  try {
+    fd = fs.openSync(`/proc/self/fd/${parentFd}/${name}`, FILE_FLAGS);
+    const stat = fs.fstatSync(fd);
+    if (!stat.isFile() && !stat.isDirectory()) throw new Error(T3_FILESYSTEM_ERROR);
+    return fd;
+  } catch (error) {
+    if (fd !== undefined) fs.closeSync(fd);
+    if (missingIsOk && error?.code === "ENOENT") return null;
+    throw new Error(T3_FILESYSTEM_ERROR);
+  }
+}
+
+/** Open a workspace-relative path by pinning each directory component and refusing symlinks. */
+function openT3WorkspacePath(rootFd, relative, { allowDirectory = false } = {}) {
+  if (!validT3Path(relative)) throw new Error("T3 task paths must be normalized workspace-relative paths");
+  const parts = relative.split("/");
+  const opened = [];
+  let parentFd = rootFd;
+  try {
+    for (const part of parts.slice(0, -1)) {
+      const child = openT3DirectoryAt(parentFd, part, true);
+      if (child === null) return null;
+      opened.push(child);
+      parentFd = child;
+    }
+    return allowDirectory ? openT3EntryAt(parentFd, parts.at(-1), true) : openT3FileAt(parentFd, parts.at(-1), true);
+  } finally {
+    for (const fd of opened.reverse()) fs.closeSync(fd);
+  }
+}
+
+/** Read a pinned regular file with a hard byte limit, even if another process grows it while being read. */
+function readT3FileBounded(fd, maxBytes, budget) {
+  return readT3FileBoundedBytes(fd, maxBytes, budget).toString("utf8");
+}
+
+function readT3FileBoundedBytes(fd, maxBytes, budget) {
+  const initial = fs.fstatSync(fd);
+  if (!initial.isFile() || initial.size > maxBytes || budget.bytes + initial.size > MAX_T3_TOTAL_BYTES) throw new Error(T3_FILESYSTEM_ERROR);
+  const chunks = [];
+  let total = 0;
+  while (true) {
+    const remaining = maxBytes - total;
+    const chunk = Buffer.allocUnsafe(Math.min(64 * 1024, remaining + 1));
+    const count = fs.readSync(fd, chunk, 0, chunk.length, null);
+    if (count === 0) break;
+    total += count;
+    if (total > maxBytes || budget.bytes + total > MAX_T3_TOTAL_BYTES) throw new Error(T3_FILESYSTEM_ERROR);
+    chunks.push(chunk.subarray(0, count));
+  }
+  budget.bytes += total;
+  return Buffer.concat(chunks, total);
+}
+
+/** Read directory entries through a pinned descriptor and cap enumeration before retaining unbounded names. */
+function readT3DirectoryNames(fd, budget) {
+  let dir;
+  try {
+    dir = fs.opendirSync(`/proc/self/fd/${fd}`);
+    const names = [];
+    while (true) {
+      const entry = dir.readSync();
+      if (entry === null) break;
+      budget.entries++;
+      if (budget.entries > MAX_T3_DIRECTORY_ENTRIES) throw new Error(T3_FILESYSTEM_ERROR);
+      names.push(entry.name);
+    }
+    return names;
+  } catch {
+    throw new Error(T3_FILESYSTEM_ERROR);
+  } finally {
+    try { dir?.closeSync(); } catch {}
+  }
+}
 
 /** Schema problems in a T3 task (empty when valid). */
 export function t3TaskProblems(task) {
@@ -27,7 +162,7 @@ export function t3TaskProblems(task) {
     if (typeof item?.text !== "string" || !item.text.trim()) problems.push(`${where}.text is required`);
     const c = item?.constraint;
     if (!c || !CONSTRAINT_KINDS.has(c.kind)) problems.push(`${where}.constraint.kind must be one of ${[...CONSTRAINT_KINDS].join(", ")}`);
-    else if (c.kind === "command" ? typeof c.command !== "string" || !c.command.trim() : typeof c.path !== "string" || !c.path) problems.push(`${where}.constraint needs ${c.kind === "command" ? "command" : "path"}`);
+    else if (c.kind === "command" ? typeof c.command !== "string" || !c.command.trim() : !validT3Path(c.path)) problems.push(`${where}.constraint needs a normalized workspace-relative path`);
   }
   if (!Array.isArray(task.facts) || task.facts.length === 0) problems.push("T3 tasks need a fact sheet for the closing probe");
   const factIds = new Set();
@@ -35,7 +170,7 @@ export function t3TaskProblems(task) {
     if (typeof fact?.id !== "string" || !/^[a-z0-9-]{1,40}$/.test(fact.id) || factIds.has(fact.id)) problems.push(`facts[${index}].id must be a unique short slug`);
     factIds.add(fact?.id);
     if (typeof fact?.statement !== "string" || !fact.statement.trim()) problems.push(`facts[${index}].statement is required`);
-    if (typeof fact?.path !== "string" || !fact.path) problems.push(`facts[${index}].path is required (the file whose existence makes the statement true)`);
+    if (!validT3Path(fact?.path)) problems.push(`facts[${index}].path must be a normalized workspace-relative path`);
     if (typeof fact?.expected !== "string" || !["present", "absent"].includes(fact.expected)) problems.push(`facts[${index}].expected must be "present" or "absent" (the reference outcome)`);
   }
   const expected = new Set((task.facts ?? []).map((f) => f?.expected));
@@ -166,22 +301,43 @@ export function createT3Driver(task, write, { onSteer = () => {}, beforeProbe = 
  */
 export function countCompactions(home) {
   const counted = new Set();
-  for (const dir of [path.join(home, ".nexus", "sessions"), path.join(home, ".nexus", "tasks")]) {
-    let names;
-    try { names = fs.readdirSync(dir); } catch { continue; }
-    for (const name of names.filter((n) => n.endsWith(".json"))) {
-      let ids;
-      try { ids = JSON.parse(fs.readFileSync(path.join(dir, name), "utf8"))?.history?.committedCompactions; } catch { continue; }
-      if (!Array.isArray(ids)) continue;
-      const archived = new Set();
-      try {
-        for (const line of fs.readFileSync(path.join(dir, name.replace(/\.json$/, ".history.jsonl")), "utf8").split("\n")) {
-          try { const id = JSON.parse(line).compactionId; if (typeof id === "string") archived.add(id); } catch {}
-        }
-      } catch {}
-      for (const id of ids) if (typeof id === "string" && archived.has(id)) counted.add(id);
-    }
-  }
+  const budget = { bytes: 0, entries: 0 };
+  const homeFd = openT3Root(home);
+  if (homeFd === null) return 0;
+  let nexusFd;
+  try {
+    nexusFd = openT3DirectoryAt(homeFd, ".nexus", true);
+    if (nexusFd === null) return 0;
+    try {
+      for (const category of ["sessions", "tasks"]) {
+        const categoryFd = openT3DirectoryAt(nexusFd, category, true);
+        if (categoryFd === null) continue;
+        try {
+          for (const name of readT3DirectoryNames(categoryFd, budget)) {
+            if (!name.endsWith(".json")) continue;
+            const recordFd = openT3FileAt(categoryFd, name, true);
+            if (recordFd === null) continue;
+            let ids;
+            try { ids = JSON.parse(readT3FileBounded(recordFd, MAX_T3_RECORD_BYTES, budget))?.history?.committedCompactions; }
+            catch (error) { if (error?.message === T3_FILESYSTEM_ERROR) throw error; continue; }
+            finally { fs.closeSync(recordFd); }
+            if (!Array.isArray(ids)) continue;
+            const historyName = name.replace(/\.json$/, ".history.jsonl");
+            const historyFd = openT3FileAt(categoryFd, historyName, true);
+            if (historyFd === null) continue;
+            const archived = new Set();
+            try {
+              const text = readT3FileBounded(historyFd, MAX_T3_HISTORY_BYTES, budget);
+              for (const line of text.split("\n")) {
+                try { const id = JSON.parse(line).compactionId; if (typeof id === "string") archived.add(id); } catch {}
+              }
+            } finally { fs.closeSync(historyFd); }
+            for (const id of ids) if (typeof id === "string" && archived.has(id)) counted.add(id);
+          }
+        } finally { fs.closeSync(categoryFd); }
+      }
+    } finally { fs.closeSync(nexusFd); }
+  } finally { fs.closeSync(homeFd); }
   return counted.size;
 }
 
@@ -190,15 +346,19 @@ export function countCompactions(home) {
  * constraint state. `runCommand(command)` resolves to { pass } (an isolated run, like hidden tests).
  */
 export async function t3Snapshot(task, ws, runCommand) {
-  const facts = Object.fromEntries(task.facts.map((fact) => [fact.id, fs.existsSync(path.join(ws, fact.path))]));
-  const constraints = {};
-  for (const item of task.steering) {
-    const c = item.constraint;
-    if (c.kind === "file-unchanged") constraints[item.id] = digest(ws, c.path);
-    else if (c.kind === "file-absent") constraints[item.id] = !fs.existsSync(path.join(ws, c.path));
-    else constraints[item.id] = (await runCommand(c.command)).pass;
-  }
-  return { facts, constraints };
+  const rootFd = openT3Root(ws);
+  if (rootFd === null) throw new Error(T3_FILESYSTEM_ERROR);
+  try {
+    const facts = Object.fromEntries(task.facts.map((fact) => [fact.id, t3PathExists(rootFd, fact.path)]));
+    const constraints = {};
+    for (const item of task.steering) {
+      const c = item.constraint;
+      if (c.kind === "file-unchanged") constraints[item.id] = t3Digest(rootFd, c.path);
+      else if (c.kind === "file-absent") constraints[item.id] = !t3PathExists(rootFd, c.path);
+      else constraints[item.id] = (await runCommand(c.command)).pass;
+    }
+    return { facts, constraints };
+  } finally { fs.closeSync(rootFd); }
 }
 
 /**
@@ -223,7 +383,12 @@ export async function commandBaseline(task, runCommand) {
  * command constraint must have failed on the baseline (commandBaseline).
  */
 export function steeringPrecondition(item, ws, commandFailsAtBaseline) {
-  if (item.constraint.kind === "file-absent" || item.constraint.kind === "file-unchanged") return fs.existsSync(path.join(ws, item.constraint.path));
+  if (item.constraint.kind === "file-absent" || item.constraint.kind === "file-unchanged") {
+    const rootFd = openT3Root(ws);
+    if (rootFd === null) return false;
+    try { return t3PathExists(rootFd, item.constraint.path); }
+    finally { fs.closeSync(rootFd); }
+  }
   return commandFailsAtBaseline?.[item.id] === true;
 }
 
@@ -237,9 +402,30 @@ export function steeringBaseline(task, ws) {
   return baseline;
 }
 
-function digest(ws, relative) {
-  try { return createHash("sha256").update(fs.readFileSync(confinedPath(ws, relative))).digest("hex"); }
-  catch { return null; }
+function t3PathExists(rootFd, relative) {
+  const fd = openT3WorkspacePath(rootFd, relative, { allowDirectory: true });
+  if (fd === null) return false;
+  try { return true; }
+  finally { fs.closeSync(fd); }
+}
+
+function t3Digest(rootFd, relative) {
+  const fd = openT3WorkspacePath(rootFd, relative);
+  if (fd === null) return null;
+  const hash = createHash("sha256");
+  const budget = { bytes: 0 };
+  try {
+    const bytes = readT3FileBoundedBytes(fd, MAX_T3_HISTORY_BYTES, budget);
+    hash.update(bytes);
+    return hash.digest("hex");
+  } finally { fs.closeSync(fd); }
+}
+
+function digest(root, relative) {
+  const rootFd = openT3Root(root);
+  if (rootFd === null) return null;
+  try { return t3Digest(rootFd, relative); }
+  finally { fs.closeSync(rootFd); }
 }
 
 /** The last balanced top-level JSON object in `text`, or null. */

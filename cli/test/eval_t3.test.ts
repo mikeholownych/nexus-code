@@ -41,6 +41,9 @@ test("T3 task schema requires steering with checkable constraints, a fact sheet,
   assert.match(problems, /constraint.kind/);
   assert.match(problems, /fact sheet/);
   assert.match(t3TaskProblems({ ...TASK, facts: [TASK.facts[0]] }).join(), /both present and absent/);
+  for (const badPath of ["../solution.txt", "/etc/passwd", "nested\\solution.txt", "nested//solution.txt"]) {
+    assert.match(t3TaskProblems({ ...TASK, facts: [{ ...TASK.facts[0], path: badPath }] }).join(), /normalized workspace-relative path/);
+  }
 });
 
 const tick = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -142,6 +145,77 @@ test("compactions count only ids a session or task record commits that have orig
   }
 });
 
+test("T3 evaluator rejects candidate symlinks in workspace facts and steering snapshots", async () => {
+  const { t3Snapshot, steeringPrecondition, steeringBaseline } = await t3();
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "t3-symlink-workspace-"));
+  const outside = fs.mkdtempSync(path.join(os.tmpdir(), "t3-symlink-canary-"));
+  const canary = path.join(outside, "solution.txt");
+  fs.writeFileSync(canary, "PRIVATE_T3_CANARY_91d2\n");
+  const taskFor = (factPath: string, constraintPath = "keep.txt") => ({
+    facts: [{ id: "canary", path: factPath }],
+    steering: [{ id: "keep", constraint: { kind: "file-unchanged", path: constraintPath } }],
+  });
+  try {
+    fs.symlinkSync(canary, path.join(root, "leaf"));
+    fs.mkdirSync(path.join(root, "parent"));
+    fs.symlinkSync(outside, path.join(root, "parent-link"));
+    fs.symlinkSync(outside, path.join(root, "directory-link"));
+    fs.writeFileSync(path.join(root, "keep.txt"), "baseline\n");
+
+    assert.equal((await t3Snapshot(taskFor("parent"), root, async () => ({ pass: true }))).facts.canary, true, "directories remain valid existing paths");
+    await assert.rejects(t3Snapshot(taskFor("leaf"), root, async () => ({ pass: true })), /unsafe or oversized filesystem entry/);
+    await assert.rejects(t3Snapshot(taskFor("parent-link/solution.txt"), root, async () => ({ pass: true })), /unsafe or oversized filesystem entry/);
+    await assert.rejects(t3Snapshot(taskFor("keep.txt", "leaf"), root, async () => ({ pass: true })), /unsafe or oversized filesystem entry/);
+    assert.throws(() => steeringPrecondition({ id: "keep", constraint: { kind: "file-unchanged", path: "leaf" } }, root, {}), /unsafe or oversized filesystem entry/);
+    assert.throws(() => steeringBaseline({ steering: [{ id: "keep", constraint: { kind: "file-unchanged", path: "leaf" } }] }, root), /unsafe or oversized filesystem entry/);
+    assert.throws(() => steeringPrecondition({ id: "keep", constraint: { kind: "file-absent", path: "directory-link" } }, root, {}), /unsafe or oversized filesystem entry/);
+  } catch (error: any) {
+    assert.doesNotMatch(String(error?.message), /PRIVATE_T3_CANARY_91d2/);
+    throw error;
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+    fs.rmSync(outside, { recursive: true, force: true });
+  }
+});
+
+test("T3 compaction counting rejects symlinks in HOME, .nexus categories, records and archives", async () => {
+  const { countCompactions } = await t3();
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "t3-symlink-home-"));
+  const outside = fs.mkdtempSync(path.join(os.tmpdir(), "t3-symlink-home-canary-"));
+  fs.writeFileSync(path.join(outside, "session.json"), '{"secret":"PRIVATE_T3_CANARY_91d2"}');
+  try {
+    fs.symlinkSync(outside, path.join(root, "home-link"));
+    assert.throws(() => countCompactions(path.join(root, "home-link")), /unsafe or oversized filesystem entry/);
+
+    fs.mkdirSync(path.join(root, "h1"), { recursive: true });
+    fs.symlinkSync(outside, path.join(root, "h1/.nexus"));
+    assert.throws(() => countCompactions(path.join(root, "h1")), /unsafe or oversized filesystem entry/);
+
+    fs.mkdirSync(path.join(root, "h2/.nexus"), { recursive: true });
+    fs.symlinkSync(outside, path.join(root, "h2/.nexus/sessions"));
+    assert.throws(() => countCompactions(path.join(root, "h2")), /unsafe or oversized filesystem entry/);
+
+    for (const target of ["session.json", "session.history.jsonl"]) {
+      const home = path.join(root, target.endsWith(".json") ? "h3" : "h4");
+      fs.mkdirSync(path.join(home, ".nexus/sessions"), { recursive: true });
+      const link = path.join(home, ".nexus/sessions", target);
+      fs.symlinkSync(path.join(outside, "session.json"), link);
+      if (target === "session.json") assert.throws(() => countCompactions(home), /unsafe or oversized filesystem entry/);
+      else {
+        fs.writeFileSync(path.join(home, ".nexus/sessions/session.json"), JSON.stringify({ history: { committedCompactions: ["c1"] } }));
+        assert.throws(() => countCompactions(home), /unsafe or oversized filesystem entry/);
+      }
+    }
+    assert.equal(fs.readFileSync(path.join(outside, "session.json"), "utf8").includes("PRIVATE_T3_CANARY_91d2"), true);
+  } catch (error: any) {
+    assert.doesNotMatch(String(error?.message), /PRIVATE_T3_CANARY_91d2/);
+    throw error;
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+    fs.rmSync(outside, { recursive: true, force: true });
+  }
+});
+
 test("T3 scoring judges the snapshot: steering honoured only when applied, violable and kept; false absence counted", async () => {
   const { scoreT3Run } = await t3();
   const baseline = { keep: "k" };
@@ -222,6 +296,58 @@ test("a T3 run drives the real sidecar through the sandbox: steering applied, pr
   } finally {
     await gw.close();
     fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("the real T3 runner fails closed when a candidate-created fact path symlinks to an external canary", { timeout: 300_000 }, async () => {
+  const outside = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-eval-t3-external-"));
+  const canary = path.join(outside, "solution.txt");
+  fs.writeFileSync(canary, "PRIVATE_T3_CANARY_91d2\n");
+  const gw = await startGateway((_n: number, body: any) => {
+    const toolCalls = (body?.messages ?? []).filter((m: any) => m.role === "tool").length;
+    if (toolCalls === 0) return { kind: "tools", calls: [{ name: "run_command", args: { command: `ln -s '${canary}' leak.txt` } }] };
+    if (toolCalls === 1) return { kind: "tools", calls: [{ name: "task_completed", args: { summary: "completed synthetic workspace task" } }] };
+    return { kind: "text", content: "complete" };
+  });
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-eval-t3-symlink-run-"));
+  try {
+    const task = {
+      ...TASK,
+      id: "t3-external-symlink",
+      facts: [...TASK.facts, { id: "leak", statement: "leak.txt exists", path: "leak.txt", expected: "absent" }],
+      hidden: { command: "test -f keep.txt" },
+    };
+    const tasks = path.join(root, "tasks");
+    const repo = path.join(tasks, task.id, "repo");
+    fs.mkdirSync(path.join(repo, "notes"), { recursive: true });
+    fs.writeFileSync(path.join(repo, "README.md"), "# synthetic T3 symlink fixture\n");
+    fs.writeFileSync(path.join(repo, "notes/plan.md"), "plan\n");
+    fs.writeFileSync(path.join(repo, "keep.txt"), "keep\n");
+    fs.writeFileSync(path.join(tasks, task.id, "task.json"), JSON.stringify(task));
+    const config = path.join(root, "config.json");
+    fs.writeFileSync(config, JSON.stringify({ name: "nexus@mock", agent: "nexus", endpoint: gw.url, model: "m", runs: 1, steps: 60, minutes: 5 }));
+    const out = path.join(root, "out");
+    const run = await new Promise<{ status: number | null; stdout: string; stderr: string }>((resolve) => {
+      const child = spawn(process.execPath, [path.join(ROOT, "eval/run.mjs"), "--config", config, "--tasks", tasks, "--out", out], { stdio: ["ignore", "pipe", "pipe"] });
+      let stdout = "";
+      let stderr = "";
+      child.stdout.on("data", (c) => (stdout += c));
+      child.stderr.on("data", (c) => (stderr += c));
+      child.on("close", (status) => resolve({ status, stdout, stderr }));
+    });
+    assert.equal(run.status, 0, `${run.stdout}\n${run.stderr}`);
+    const resultsText = fs.readFileSync(path.join(out, "results.jsonl"), "utf8");
+    assert.doesNotMatch(resultsText, /PRIVATE_T3_CANARY_91d2/);
+    const [record] = resultsText.trim().split("\n").map((line) => JSON.parse(line));
+    assert.ok(record.t3, `the real T3 evaluation path must produce a scored run: ${JSON.stringify(record)}`);
+    assert.match(record.t3.protocolErrors.join("\n"), /snapshot failed: T3 evaluator rejected an unsafe or oversized filesystem entry/, JSON.stringify({ t3: record.t3, model: record.model, exitCode: record.exitCode, error: record.error, logs: record.logs, toolResults: gw.requests.flatMap((request: any) => request.messages.filter((message: any) => message.role === "tool").map((message: any) => message.content)) }));
+    assert.equal(record.t3.snapshotTaken, false);
+    assert.equal(record.t3.probeAnswered, false, "unsafe post-run state cannot advance to the closing probe");
+    assert.equal(fs.readFileSync(canary, "utf8"), "PRIVATE_T3_CANARY_91d2\n", "the fixture payload remains outside the task sandbox");
+  } finally {
+    await gw.close();
+    fs.rmSync(root, { recursive: true, force: true });
+    fs.rmSync(outside, { recursive: true, force: true });
   }
 });
 
