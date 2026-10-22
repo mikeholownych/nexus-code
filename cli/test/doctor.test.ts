@@ -167,13 +167,27 @@ describe("doctor findings name the actual failure", () => {
     try {
       const missing = await doctor({ config: cfg({ endpoint: m.url, model: "gamma" }) });
       assert.equal(find(missing, "endpoint.authenticated")?.status, "pass");
-      assert.equal(find(missing, "model.available")?.status, "fail");
+      assert.equal(find(missing, "model.available")?.status, "warn");
+      assert.match(find(missing, "model.available")!.explanation, /not listed.*availability is unverified/);
       assert.match(find(missing, "model.available")!.evidence[0], /alpha, beta/);
       assert.ok(m.paths.every((p) => p.startsWith("/v1/")), `requests kept /v1: ${m.paths.join(" ")}`);
       const present = await doctor({ config: cfg({ endpoint: m.url, model: "beta" }) });
       assert.equal(find(present, "model.available")?.status, "pass");
       assert.equal(find(present, "inference.verified")?.status, "skip", "a listed model is not proof of inference");
       assert.equal(m.chats, 0, "default checks send no inference request");
+    } finally {
+      await m.close();
+    }
+  });
+
+  test("--deep can verify a configured model omitted from /models", async () => {
+    const m = await mock({ models: ["alpha"] });
+    try {
+      const report = await doctor({ config: cfg({ endpoint: m.url, model: "gamma" }), deep: true });
+      assert.equal(find(report, "inference.verified")?.status, "pass");
+      assert.equal(find(report, "model.available")?.status, "pass");
+      assert.match(find(report, "model.available")!.explanation, /not listed.*successful --deep inference probe verified/);
+      assert.equal(m.chats, 1);
     } finally {
       await m.close();
     }
@@ -260,6 +274,80 @@ describe("doctor findings name the actual failure", () => {
     assert.equal(find(report, "state.integrity")?.status, "warn");
     assert.ok(fs.existsSync(path.join(h, ".nexus", "sessions", "bad.json")));
     fs.rmSync(h, { recursive: true, force: true });
+  });
+
+  test("state integrity accepts the index and authoritative schema-2 task cursor, but reports malformed records", async () => {
+    const h = tmp("nexus-doctor-schema2-");
+    const sessions = path.join(h, ".nexus", "sessions");
+    const tasks = path.join(h, ".nexus", "tasks");
+    fs.mkdirSync(sessions, { recursive: true, mode: 0o700 });
+    fs.mkdirSync(tasks, { recursive: true, mode: 0o700 });
+    fs.writeFileSync(path.join(sessions, "index.json"), JSON.stringify({ schemaVersion: 1, sessions: [] }));
+    const record = { schemaVersion: 2, taskId: "task-abc", messageLog: { schemaVersion: 2, sha256: "a".repeat(64), offset: 0, bytes: 1, count: 0 } };
+    fs.writeFileSync(path.join(tasks, "task-abc.json"), JSON.stringify(record));
+    fs.writeFileSync(path.join(tasks, "task-bad.json"), JSON.stringify({ schemaVersion: 2, taskId: "task-bad", messageLog: null }));
+    try {
+      const report = await runDoctor({ home: h, config: cfg() });
+      const finding = find(report, "state.integrity")!;
+      assert.equal(finding.status, "warn");
+      assert.match(finding.explanation, /1 saved record\(s\) are malformed/);
+      assert.ok(!finding.evidence.includes(path.join(tasks, "task-abc.json")));
+      assert.ok(!finding.evidence.includes(path.join(sessions, "index.json")));
+      assert.ok(fs.existsSync(path.join(tasks, "task-abc.json")), "valid state remains untouched");
+      assert.ok(fs.existsSync(path.join(tasks, "task-bad.json")), "malformed state remains untouched");
+    } finally {
+      fs.rmSync(h, { recursive: true, force: true });
+    }
+  });
+
+  test("state integrity only warns about writer-shaped temporary files and never labels arbitrary or active temp files interrupted", async () => {
+    const h = tmp("nexus-doctor-temps-");
+    const sessions = path.join(h, ".nexus", "sessions");
+    fs.mkdirSync(sessions, { recursive: true, mode: 0o700 });
+    const arbitrary = path.join(sessions, "notes.tmp");
+    const atomic = path.join(sessions, "session_20261022_000000_abc.json.12345678-1234-1234-1234-123456789abc.tmp");
+    fs.writeFileSync(arbitrary, "user temp");
+    fs.writeFileSync(atomic, "possibly active writer");
+    try {
+      const report = await runDoctor({ home: h, config: cfg() });
+      const finding = find(report, "state.integrity")!;
+      assert.equal(finding.status, "warn");
+      assert.match(finding.explanation, /write may still be active/);
+      assert.doesNotMatch(finding.explanation, /interrupted write/);
+      assert.ok(finding.evidence.includes(atomic));
+      assert.ok(!finding.evidence.includes(arbitrary));
+      assert.ok(fs.existsSync(atomic));
+      assert.ok(fs.existsSync(arbitrary));
+    } finally {
+      fs.rmSync(h, { recursive: true, force: true });
+    }
+  });
+
+  test("state integrity directory traversal is asynchronous and leaves other event-loop work responsive", async () => {
+    const h = tmp("nexus-doctor-async-state-");
+    const sessions = path.join(h, ".nexus", "sessions");
+    fs.mkdirSync(sessions, { recursive: true, mode: 0o700 });
+    const originalOpenDir = fs.promises.opendir;
+    let delayedOpen = false;
+    (fs.promises as any).opendir = async function (dir: string, ...args: any[]) {
+      if (dir === sessions) {
+        delayedOpen = true;
+        await new Promise((resolve) => setTimeout(resolve, 40));
+      }
+      return (originalOpenDir as any).call(this, dir, ...args);
+    };
+    let heartbeat = false;
+    try {
+      const reportPromise = runDoctor({ home: h, config: cfg() });
+      await new Promise<void>((resolve) => setTimeout(() => { heartbeat = true; resolve(); }, 0));
+      const report = await reportPromise;
+      assert.ok(delayedOpen, "integrity scan used asynchronous directory traversal");
+      assert.ok(heartbeat, "event-loop timer ran while the filesystem scan was pending");
+      assert.ok(find(report, "state.integrity"));
+    } finally {
+      (fs.promises as any).opendir = originalOpenDir;
+      fs.rmSync(h, { recursive: true, force: true });
+    }
   });
 
   test("MCP servers and plugins are inspected without being started or loaded", async () => {

@@ -159,6 +159,9 @@ interface CheckContext {
   timeoutMs: number;
   /** Shared endpoint evidence: later endpoint findings depend on earlier ones. */
   endpoint?: Promise<EndpointEvidence>;
+  /** An absent /models entry is advisory; --deep can independently verify it. */
+  unlistedModel?: string;
+  deepModelVerified?: boolean;
 }
 
 const f = (
@@ -499,7 +502,8 @@ const endpointChecks: Check = async (ctx, signal) => {
   } else if (ev.models.includes(config.model)) {
     out.push(f("model.available", "endpoint", "pass", `The configured model ${config.model} is listed by the endpoint.`, [`${ev.models.length} models listed`, ...contextEvidence]));
   } else {
-    out.push(f("model.available", "endpoint", "fail", `The configured model ${config.model} is not in the endpoint's model list.`, [`listed: ${ev.models.slice(0, 8).join(", ")}${ev.models.length > 8 ? ", …" : ""}`, ...contextEvidence], "Choose a listed model (-m, LOCAL_LLM_MODEL, NEXUS_MODEL or /model)."));
+    ctx.unlistedModel = config.model;
+    out.push(f("model.available", "endpoint", "warn", `The configured model ${config.model} is not listed by the endpoint; availability is unverified. A --deep inference probe can verify it.`, [`${ev.models.length} model(s) listed: ${ev.models.slice(0, 8).join(", ")}${ev.models.length > 8 ? ", …" : ""}`, ...contextEvidence]));
   }
   return out;
 };
@@ -517,6 +521,7 @@ const inferenceCheck: Check = async (ctx, signal) => {
     const reply = await client.chatCompletion([{ role: "user", content: "Reply with the single word OK." }], [], undefined, AbortSignal.any([signal, AbortSignal.timeout(ctx.timeoutMs * 6)]), "diagnostic");
     const text = typeof reply.content === "string" ? reply.content.trim() : "";
     if (!text && !reply.tool_calls?.length) return f("inference.verified", "endpoint", "fail", "The model answered with an empty reply.", [`${Date.now() - started} ms`]);
+    ctx.deepModelVerified = true;
     return f("inference.verified", "endpoint", "pass", `One inference request completed (costed model work: one short prompt and reply).`, [`model ${ctx.config.model}`, `${Date.now() - started} ms`, `reply ${JSON.stringify(text.slice(0, 40))}`]);
   } catch (err: any) {
     return f("inference.verified", "endpoint", "fail", "The inference request failed.", [err?.message ?? String(err)], "Check the model name and the provider's account limits; run with NEXUS_DEBUG=1 for request ids.");
@@ -766,40 +771,124 @@ const statePermissionsCheck: Check = async (ctx) => {
   return out;
 };
 
-const stateIntegrityCheck: Check = async (ctx) => {
+interface RecentStateFile {
+  name: string;
+  mtimeMs: number;
+}
+
+/** Keep only the newest `limit` entries in a min-heap, with filesystem work remaining asynchronous. */
+function keepNewest(heap: RecentStateFile[], candidate: RecentStateFile, limit: number): void {
+  if (heap.length < limit) {
+    heap.push(candidate);
+    let index = heap.length - 1;
+    while (index > 0) {
+      const parent = Math.floor((index - 1) / 2);
+      if (heap[parent].mtimeMs <= heap[index].mtimeMs) break;
+      [heap[parent], heap[index]] = [heap[index], heap[parent]];
+      index = parent;
+    }
+    return;
+  }
+  if (candidate.mtimeMs <= heap[0].mtimeMs) return;
+  heap[0] = candidate;
+  let index = 0;
+  for (;;) {
+    const left = index * 2 + 1;
+    const right = left + 1;
+    let smallest = index;
+    if (left < heap.length && heap[left].mtimeMs < heap[smallest].mtimeMs) smallest = left;
+    if (right < heap.length && heap[right].mtimeMs < heap[smallest].mtimeMs) smallest = right;
+    if (smallest === index) return;
+    [heap[index], heap[smallest]] = [heap[smallest], heap[index]];
+    index = smallest;
+  }
+}
+
+const ATOMIC_JSON_TEMP = /^([A-Za-z0-9._-]{1,200}\.json)\.[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.tmp$/i;
+
+/** Only recognize the target.UUID.tmp names used by atomic JSON state writers, never arbitrary *.tmp files. */
+function isAtomicJsonTemp(name: string): boolean {
+  return ATOMIC_JSON_TEMP.test(name);
+}
+
+async function newestStateFiles(dir: string, limit: number, signal: AbortSignal, temps: string[]): Promise<RecentStateFile[]> {
+  const newest: RecentStateFile[] = [];
+  const directory = await fs.promises.opendir(dir);
+  for await (const entry of directory) {
+    if (signal.aborted) break;
+    const full = path.join(dir, entry.name);
+    if (isAtomicJsonTemp(entry.name)) {
+      try {
+        const stat = await fs.promises.lstat(full);
+        if (stat.isFile() && stat.nlink === 1) temps.push(full);
+      } catch {}
+      if (signal.aborted) break;
+    }
+    if (!entry.isFile() || !entry.name.endsWith(".json") || entry.name === "index.json" || entry.name.startsWith(".corrupt-")) continue;
+    try {
+      const stat = await fs.promises.lstat(full);
+      if (stat.isFile() && stat.nlink === 1) keepNewest(newest, { name: entry.name, mtimeMs: stat.mtimeMs }, limit);
+    } catch {}
+  }
+  return newest.sort((a, b) => b.mtimeMs - a.mtimeMs);
+}
+
+function validMessageCursor(value: any): boolean {
+  return Boolean(value && typeof value === "object" && value.schemaVersion === 2 &&
+    typeof value.sha256 === "string" && /^[a-f0-9]{64}$/.test(value.sha256) &&
+    Number.isSafeInteger(value.offset) && value.offset >= 0 &&
+    Number.isSafeInteger(value.bytes) && value.bytes >= 1 &&
+    Number.isSafeInteger(value.count) && value.count >= 0);
+}
+
+function validStateConversation(data: any, taskRecord: boolean): boolean {
+  if (!data || typeof data !== "object" || Array.isArray(data)) return false;
+  if (data.schemaVersion === 2) {
+    return typeof data.taskId === "string" && data.taskId.length > 0 &&
+      !Object.hasOwn(data, "messages") && validMessageCursor(data.messageLog);
+  }
+  const identity = taskRecord ? data.taskId || data.id : data.sessionId || data.taskId || data.id;
+  return Boolean(identity) && Array.isArray(data.messages);
+}
+
+const stateIntegrityCheck: Check = async (ctx, signal) => {
   const dirs = [path.join(ctx.home, ".nexus", "sessions"), path.join(ctx.home, ".nexus", "tasks")];
   let checked = 0;
   const corrupt: string[] = [];
   const temps: string[] = [];
+  const limit = ctx.deep ? 5000 : 300;
   for (const dir of dirs) {
-    let names: string[];
+    if (signal.aborted) break;
+    let files: RecentStateFile[];
     try {
-      names = fs.readdirSync(dir);
+      files = await newestStateFiles(dir, limit, signal, temps);
     } catch {
       continue;
     }
-    for (const name of names) if (name.endsWith(".tmp")) temps.push(path.join(dir, name));
-    const files = names
-      .filter((n) => n.endsWith(".json"))
-      .map((n) => ({ n, t: (() => { try { return fs.statSync(path.join(dir, n)).mtimeMs; } catch { return 0; } })() }))
-      .sort((a, b) => b.t - a.t)
-      .slice(0, ctx.deep ? 5000 : 300);
-    for (const { n } of files) {
+    for (const { name } of files) {
+      if (signal.aborted) break;
+      const full = path.join(dir, name);
       checked++;
       try {
-        const data = JSON.parse(fs.readFileSync(path.join(dir, n), "utf8"));
-        if (!(data.taskId || data.sessionId || data.id) || !Array.isArray(data.messages)) corrupt.push(path.join(dir, n));
-      } catch {
-        corrupt.push(path.join(dir, n));
+        const text = await fs.promises.readFile(full, { encoding: "utf8", signal });
+        if (signal.aborted) break;
+        const data = JSON.parse(text);
+        if (!validStateConversation(data, path.basename(dir) === "tasks")) corrupt.push(full);
+      } catch (error: any) {
+        if (signal.aborted || error?.name === "AbortError") break;
+        corrupt.push(full);
       }
     }
   }
   if (checked === 0 && temps.length === 0) return f("state.integrity", "state", "pass", "No saved sessions or task state yet.");
-  const evidence = [`${checked} record(s) checked${ctx.deep ? "" : " (newest 300 per directory; --deep checks all)"}`];
-  if (corrupt.length || temps.length) {
-    return f("state.integrity", "state", "warn", `${corrupt.length} saved record(s) cannot be read${temps.length ? ` and ${temps.length} interrupted write(s) were left behind` : ""}; they are skipped when listing or resuming.`, [...evidence, ...corrupt.slice(0, 5), ...temps.slice(0, 3)], "Inspect and move the listed files aside manually; doctor never deletes sessions or checkpoints.");
+  const evidence = [`${checked} record(s) checked${ctx.deep ? " (newest 5000 per directory)" : " (newest 300 per directory; --deep checks up to 5000)"}`];
+  const issues: string[] = [];
+  if (corrupt.length) issues.push(`${corrupt.length} saved record(s) are malformed and may not load`);
+  if (temps.length) issues.push(`${temps.length} recognized atomic-write temporary file(s) are present; a write may still be active, so doctor cannot determine whether they are stale`);
+  if (issues.length) {
+    return f("state.integrity", "state", "warn", `${issues.join("; ")}.`, [...evidence, ...corrupt.slice(0, 5), ...temps.slice(0, 3)], "Inspect the listed paths manually; doctor never deletes or repairs session or task files.");
   }
-  return f("state.integrity", "state", "pass", "Every checked session and task-state record parses and has an id and a message list.", evidence);
+  return f("state.integrity", "state", "pass", "Every checked session and task-state record parses and has an id plus valid conversation metadata.", evidence);
 };
 
 const credentialStoreCheck: Check = async (ctx) => {
@@ -1044,6 +1133,14 @@ export async function runDoctor(optionsOrConfig: DoctorOptions | HarnessConfig |
     callerSignal?.removeEventListener("abort", forwardAbort);
   }
   const findings = results.flat();
+  if (ctx.unlistedModel && ctx.deepModelVerified) {
+    const availability = findings.find((finding) => finding.id === "model.available");
+    if (availability?.status === "warn") {
+      availability.status = "pass";
+      availability.explanation = `The configured model ${ctx.unlistedModel} is not listed by the endpoint, but a successful --deep inference probe verified that it is available.`;
+      availability.evidence.push("verified by one successful deep inference request");
+    }
+  }
   const summary: Record<DoctorStatus, number> = { pass: 0, warn: 0, fail: 0, skip: 0 };
   for (const finding of findings) summary[finding.status]++;
   const config = options.config;
