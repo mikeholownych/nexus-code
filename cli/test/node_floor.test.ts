@@ -98,4 +98,10 @@ test("v1.0.0 release notes never present an end-of-life Node.js floor as promota
     const text = fs.readFileSync(path.join(releases, name), "utf8");
     if (/Node\.js 20 or newer/.test(text)) assert.match(text, /not promotable/, `${name} presents Node.js 20 as supported`);
   }
+
+  const changelog = read("CHANGELOG.md");
+  const unreleased = changelog.split("## [v0.1.0-alpha.2]")[0];
+  assert.match(unreleased, /Node\.js pinned to `>=22`/);
+  assert.match(unreleased, /Node testing across Node 22 and 24/);
+  assert.doesNotMatch(unreleased, /Node(?:\.js)? 20/);
 });
