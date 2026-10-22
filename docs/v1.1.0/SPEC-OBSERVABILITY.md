@@ -5,7 +5,7 @@
 | Status | Proposed / Specification |
 | Target Milestone | Nexus Code `v1.1.0` |
 | Primary Requirements | `REQ-OPS-101`, `REQ-DX-105`, `REQ-EVL-101`, `REQ-SEC-111` |
-| Parent Strategy | [LANGSMITH_REVIEW.md](../v1.0.0/LANGSMITH_REVIEW.md), [ROADMAP.md](./ROADMAP.md) |
+| Parent Strategy | [LANGSMITH_REVIEW.md](./LANGSMITH_REVIEW.md), [ROADMAP.md](./ROADMAP.md) |
 | Affected Components | `cli/src/core/trace.ts`, `cli/src/core/agent.ts`, `eval/`, `cli/src/index.ts` |
 
 ---
@@ -192,7 +192,7 @@ Located in `eval/evaluators/code/`:
 
 ## 7. Logit-Constrained Tool Calling & GBNF Engine (WP-1107)
 
-To eliminate JSON argument parse failures and conversational rambling from open-weights models, Nexus v1.1.0 provides a logit-level constrained decoding engine:
+To prevent JSON argument parse failures and conversational rambling from open-weights models, Nexus v1.1.0 provides a logit-level constrained decoding engine targeting near-zero repair retries on supported inference backends:
 
 ```
 Registered Tools ──► Tool Schema Compiler ──► GBNF / Outlines Grammar ──► Local Engine (llama.cpp / vLLM)
@@ -200,7 +200,7 @@ Registered Tools ──► Tool Schema Compiler ──► GBNF / Outlines Gramma
 Model Sampling Logits: Token Masking (-∞ for schema-invalid tokens) ◄──────────────┘
                                     │
                                     ▼
-       100% Mathematically Valid Tool Call Payload (repair_rate = 0.0)
+       Schema-Compliant Tool Call Payload (repair_rate target = 0.0)
 ```
 
 ### 7.1 Dynamic GBNF Grammar Generation

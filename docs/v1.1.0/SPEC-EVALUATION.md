@@ -5,7 +5,7 @@
 | Status | Proposed / Specification |
 | Target Milestone | Nexus Code `v1.1.0` (with extensions in `v1.2.0`) |
 | Primary Requirements | `REQ-EVL-101`, `REQ-QUAL-101` – `REQ-QUAL-109`, `DEC-05` |
-| Parent Strategy | [LANGSMITH_REVIEW.md](../v1.0.0/LANGSMITH_REVIEW.md), [ROADMAP.md](./ROADMAP.md) |
+| Parent Strategy | [LANGSMITH_REVIEW.md](./LANGSMITH_REVIEW.md), [ROADMAP.md](./ROADMAP.md) |
 | Target Directory | `eval/`, `cli/src/eval/` |
 
 ---
@@ -14,7 +14,7 @@
 
 Evaluation in autonomous coding agents cannot rely solely on conventional unit testing. Agent execution is inherently stateful, multi-turn, non-deterministic, and reliant on LLM reasoning over fluctuating context.
 
-Nexus Code v1.0.0 established basic evaluation fixtures (`eval/tasks/`) and statistical scoring scripts (`eval/score.mjs`). This specification formalizes a comprehensive, continuous evaluation architecture based on the ecosystem review in [LANGSMITH_REVIEW.md](../v1.0.0/LANGSMITH_REVIEW.md).
+Nexus Code v1.0.0 established basic evaluation fixtures (`eval/tasks/`) and statistical scoring scripts (`eval/score.mjs`). This specification formalizes a comprehensive, continuous evaluation architecture based on the ecosystem review in [LANGSMITH_REVIEW.md](./LANGSMITH_REVIEW.md).
 
 ### Core Design Goals
 1. **Separation of Stimulus and Assertion:** Agent execution tasks must never expose assertions, ground truth diffs, or verification commands to the agent during prompt generation or turn execution.
