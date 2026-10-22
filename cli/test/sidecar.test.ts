@@ -381,9 +381,9 @@ describe("SidecarServer: sessions and slash commands", () => {
       assert.equal(events.filter((event) => event.type === "session.state").at(-1)?.mode, "read-only");
       assert.ok(events.some((event) => event.type === "tool.end" && event.tool === "list_dir" && event.success === true));
       const deniedWrite = events.find((event) => event.type === "tool.end" && event.tool === "write_file");
-      assert.ok(deniedWrite);
+      assert.ok(deniedWrite, "the attempted write receives a terminal denial event");
       assert.equal(deniedWrite.success, false);
-      assert.match(deniedWrite.error, /read-only mode violation/i);
+      assert.match(deniedWrite.summary, /Read-only fallback/);
       assert.equal(fs.existsSync(path.join(repo, "new.txt")), false);
       assert.ok(events.some((event) => event.type === "turn.result" && event.turn_id === "t-sensitive"));
 

@@ -4452,6 +4452,18 @@ The pinned Objective Ledger lists the operator's requirements; your plan never r
     const mode = this.getApprovalMode();
     if (this.checkpointReadOnlyFallback && ["egress", "delegate", "context_inject", "write_workspace"].includes(effect)) {
       const cancelMsg = `Read-only fallback: ${toolName} is disabled because the workspace could not be safely checkpointed.`;
+      if (this.flightRecorder) {
+        this.flightRecorder.recordToolResult(
+          currentStep,
+          call.id,
+          toolName,
+          false,
+          cancelMsg,
+          0,
+          "CHECKPOINT_READ_ONLY_FALLBACK"
+        );
+      }
+      this.observer?.onToolEnd?.({ dispatch, callId: call.id, tool: toolName, success: false, output: "", error: cancelMsg });
       return {
         receipt: {
           invocationId: call.id,
