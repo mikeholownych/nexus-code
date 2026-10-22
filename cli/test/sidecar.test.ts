@@ -122,8 +122,16 @@ describe("SidecarServer: session and turns", () => {
 
   test("an exception escaping runTurn is reported as INTERNAL and idle() still resolves", async () => {
     await withSidecar(readOnlyTurn, "auto", async ({ server, events, send }) => {
-      (server as any).app.getAgent = () => {
-        throw new Error("agent exploded token=supersecretvalue");
+      const app = (server as any).app;
+      const getAgent = app.getAgent.bind(app);
+      let calls = 0;
+      app.getAgent = () => {
+        calls += 1;
+        if (calls === 3) {
+          app.getAgent = getAgent;
+          throw new Error("agent exploded token=supersecretvalue");
+        }
+        return getAgent();
       };
       await send({ type: "prompt.submit", id: "t1", text: "x" });
       await server.idle();
@@ -668,8 +676,12 @@ describe("SidecarServer: evidence and receipts", () => {
       ? { kind: "tools", calls: [{ name: "read_file", args: { path: "conf.yml" } }] }
       : { kind: "text", content: "ok" };
     await withSidecar(readConf, "auto", async ({ server, events, repo, send }) => {
+      fs.writeFileSync(path.join(repo, "base.txt"), 'password: "yamlsecret777"\n');
       fs.writeFileSync(path.join(repo, "conf.yml"), 'password: "yamlsecret777"\nkey: sk-ABCDEFGH\x1b[0mIJKLMNOPQRSTUVWXYZ123456\n');
       await send({ type: "prompt.submit", id: "t1", text: "read it" });
+      await waitUntil(() => events.some((event) => event.type === "checkpoint.choice.request"));
+      const checkpointChoice = events.find((event) => event.type === "checkpoint.choice.request");
+      await send({ type: "checkpoint.choice", id: checkpointChoice.id, choice: "without_checkpoint" });
       await server.idle();
       const start = events.find((e) => e.type === "tool.start");
       await send({ type: "tool.detail", id: "d1", evidence: start.evidence });
