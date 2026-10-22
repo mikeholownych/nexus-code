@@ -8,6 +8,7 @@ This plan implements [SPEC-07](../specs/SPEC-07-supply-chain-and-release-enginee
 ## Safe change boundary
 
 - `scripts/package-linux.sh`, `scripts/generate_sbom.sh`, `scripts/security_gates.sh`, `scripts/audit_rust_deps.py`
+- `cli/test/security_gates.test.ts` (required by ACC-SUP-04; scanner behavior must remain fail-closed)
 - `.github/workflows/{ci,release}.yml`, `.gitlab-ci.yml`
 - `Makefile`
 - new `about.toml`, `about.hbs`, `deny.toml`, `rust-toolchain.toml`
