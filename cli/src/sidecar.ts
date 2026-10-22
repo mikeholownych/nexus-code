@@ -10,7 +10,7 @@ import { autoDetectModel, buildConfig, loadEnvironment } from "./config.js";
 import { withDurableSync, writePrivateFile } from "./core/durable_file.js";
 import { isNexusDirPermissive } from "./doctor.js";
 import { ApplicationCore } from "./core/app.js";
-import { redactForPersistence } from "./core/persistence_protection.js";
+import { redactForPersistence, SensitivePersistenceError } from "./core/persistence_protection.js";
 import { TurnResult, failedTurnFromError, lifecycleStatusForTurn, summarizeTurn } from "./core/turn.js";
 import { getGitInfo } from "./git.js";
 import { redactSecrets } from "./ui.js";
@@ -24,6 +24,19 @@ import { STEERING_PREFIX } from "./core/objective.js";
 /** Messages of a resumed conversation sent to the client, and the characters kept of each. */
 const HISTORY_ENTRIES = 60;
 const HISTORY_CHARS = 4000;
+
+function readOnlySlashAllowed(command: string, args: string): boolean {
+  const spec = findSlash(command);
+  const name = spec?.name ?? command.trim().replace(/^\//, "").toLowerCase();
+  const value = args.trim().toLowerCase();
+  if (["help", "status", "tokens", "diff", "git", "checkpoints", "audit", "receipt", "sessions", "exit", "mode", "clear", "history", "skills"].includes(name)) return true;
+  if (name === "checkpoint") return value === "diff" || value.startsWith("diff ");
+  if (name === "worktree") return !value || value === "status";
+  if (name === "plan" || name === "requirements" || name === "knowledge") return !value;
+  if (name === "skill") return !value || !/^(init)(?:\s|$)/.test(value);
+  if (name === "theme") return !value;
+  return false;
+}
 import {
   DIFF_PREVIEW_CHARS,
   HistoryEntry,
@@ -70,6 +83,7 @@ export class SidecarServer {
   private activeTurn?: Promise<void>;
   private turnAbort?: AbortController;
   private pendingApproval?: { id: string; settle: (approved: boolean) => void };
+  private pendingCheckpointChoice?: { id: string; settle: (choice: "read_only" | "without_checkpoint" | "allow_sensitive" | "cancel" | "other") => void };
   private approvalSeq = 0;
   private shutdownPromise?: Promise<void>;
   private readonly resume?: string;
@@ -160,6 +174,9 @@ export class SidecarServer {
       case "deny":
         this.resolveApproval(command.id, false, false);
         return;
+      case "checkpoint.choice":
+        this.resolveCheckpointChoice(command.id, command.choice);
+        return;
       case "slash":
         this.slash(command.id, command.command, command.args);
         return;
@@ -174,18 +191,34 @@ export class SidecarServer {
         }
         return;
       case "models.list":
+        if (this.app.getAgent().getApprovalMode() === "read-only") {
+          this.emit({ type: "error", id: command.id, code: "BUSY", message: "Provider discovery is disabled while the session is in read-only mode." });
+          return;
+        }
         void this.modelsList(command.id);
         return;
       case "model.select":
+        if (this.app.getAgent().getApprovalMode() === "read-only") {
+          this.emit({ type: "error", id: command.id, code: "BUSY", message: "Model changes are disabled while the session is in read-only mode." });
+          return;
+        }
         this.modelSelect(command.id, command.provider, command.model);
         return;
       case "provider.connect":
+        if (this.app.getAgent().getApprovalMode() === "read-only") {
+          this.emit({ type: "provider.result", id: command.id, provider: command.provider, success: false, message: "Provider connections are disabled while the session is in read-only mode." });
+          return;
+        }
         void this.providerConnect(command.id, command.provider, command.method, command.key);
         return;
       case "provider.cancel":
         this.signIns.get(command.id)?.cancel();
         return;
       case "provider.disconnect": {
+        if (this.app.getAgent().getApprovalMode() === "read-only") {
+          this.emit({ type: "provider.result", id: command.id, provider: command.provider, success: false, message: "Provider changes are disabled while the session is in read-only mode." });
+          return;
+        }
         const r = disconnect(command.provider);
         this.emit({ type: "provider.result", id: command.id, provider: command.provider, success: r.ok, message: r.message });
         return;
@@ -496,14 +529,52 @@ export class SidecarServer {
 
   /** One agent turn: checkpoint, run, save the session, report the result. */
   private async turn(turnId: string, prompt: string | any[], label: string, checkpoint: string, signal: AbortSignal): Promise<void> {
-    try {
-      this.checkpointManager.createCheckpoint(checkpoint);
-    } catch (err) {
-      const message = `No checkpoint could be saved, so the turn did not start: ${redactSecrets(errorText(err))}`;
-      this.emit({ type: "error", id: turnId, code: "INTERNAL", message });
-      return;
-    }
     const agent = this.app.getAgent();
+    let allowSensitiveCheckpoint = false;
+    if (this.app.getConfig().readOnly) {
+      // Read-only turns cannot change the workspace, so a workspace rollback snapshot is unnecessary.
+      agent.setCheckpointReadOnlyFallback(false);
+    } else {
+      try {
+        this.checkpointManager.createCheckpoint(checkpoint);
+        agent.setCheckpointReadOnlyFallback(false);
+      } catch (err) {
+        if (err instanceof SensitivePersistenceError) {
+          const choice = await this.requestCheckpointChoice(turnId, signal);
+          if (choice === "cancel" || choice === "other") {
+            const message = choice === "other"
+              ? "This turn was not started. Enter a different instruction in the composer."
+              : "This turn was cancelled before it started.";
+            this.emit({ type: "error", id: turnId, code: "INTERNAL", message });
+            return;
+          }
+          if (choice === "read_only") {
+            agent.setCheckpointReadOnlyFallback(true);
+            this.emit({ type: "notice", text: "Continuing this turn in read-only mode as requested. Workspace changes, unsafe commands, external actions, and delegation are disabled." });
+            this.emitSessionState();
+          } else if (choice === "without_checkpoint") {
+            this.emit({ type: "notice", text: "Continuing in the current mode without a rollback checkpoint, as requested." });
+          } else if (choice === "allow_sensitive") {
+            allowSensitiveCheckpoint = true;
+            this.emit({ type: "notice", text: "Creating a checkpoint that may persist sensitive workspace content, as requested." });
+          }
+        } else {
+          const message = `No checkpoint could be saved, so the turn did not start: ${redactSecrets(errorText(err))}`;
+          this.emit({ type: "error", id: turnId, code: "INTERNAL", message });
+          return;
+        }
+      }
+    }
+    if (allowSensitiveCheckpoint) {
+      try {
+        this.checkpointManager.createCheckpoint(checkpoint, { allowSensitive: true });
+        agent.setCheckpointReadOnlyFallback(false);
+      } catch (err) {
+        const message = `No checkpoint could be saved, so the turn did not start: ${redactSecrets(errorText(err))}`;
+        this.emit({ type: "error", id: turnId, code: "INTERNAL", message });
+        return;
+      }
+    }
     if (typeof prompt === "string") {
       const decision = agent.objectiveDecision(prompt);
       if (decision.kind === "amend") {
@@ -587,7 +658,47 @@ export class SidecarServer {
     pending.settle(approved);
   }
 
+  private requestCheckpointChoice(turnId: string, signal: AbortSignal): Promise<"read_only" | "without_checkpoint" | "allow_sensitive" | "cancel" | "other"> {
+    if (signal.aborted) return Promise.resolve("cancel");
+    const id = `checkpoint-choice-${++this.approvalSeq}`;
+    return new Promise((resolve) => {
+      const settle = (choice: "read_only" | "without_checkpoint" | "allow_sensitive" | "cancel" | "other") => {
+        signal.removeEventListener("abort", onAbort);
+        this.pendingCheckpointChoice = undefined;
+        resolve(choice);
+      };
+      const onAbort = () => settle("cancel");
+      signal.addEventListener("abort", onAbort, { once: true });
+      this.pendingCheckpointChoice = { id, settle };
+      this.emit({
+        type: "checkpoint.choice.request",
+        id,
+        turn_id: turnId,
+        message: "Sensitive content blocked the checkpoint. Choose 1 read-only, 2 continue without a rollback checkpoint, 3 create a checkpoint anyway (may persist sensitive content), 4 cancel this turn, or 5 re-enter the instruction.",
+      });
+    });
+  }
+
+  private resolveCheckpointChoice(id: string, choice: "read_only" | "without_checkpoint" | "allow_sensitive" | "cancel" | "other"): void {
+    const pending = this.pendingCheckpointChoice;
+    if (!pending || pending.id !== id) {
+      this.emit({ type: "error", id, code: "NOT_FOUND", message: `No pending checkpoint choice with id ${id}.` });
+      return;
+    }
+    pending.settle(choice);
+  }
+
   private slash(id: string, command: string, args: string): void {
+    if (this.app.getAgent().getApprovalMode() === "read-only" && !readOnlySlashAllowed(command, args)) {
+      this.emit({
+        type: "slash.result",
+        id,
+        command: command.trim().replace(/^\//, "").toLowerCase(),
+        success: false,
+        output: "This command is disabled while the session is in read-only mode.",
+      });
+      return;
+    }
     // /compact while work runs is queued, never refused or run concurrently: see queueCompaction.
     if (command.trim().replace(/^\//, "").toLowerCase() === "compact" && this.activeTurn && !this.shutdownPromise) {
       this.queueCompaction(id, args.split(/\s+/).includes("--llm"));
@@ -647,7 +758,7 @@ export class SidecarServer {
   private slashHost(id: string): SlashHost {
     return {
       app: this.app,
-      mode: () => this.mode,
+      mode: () => this.app.getAgent().getApprovalMode(),
       setMode: (mode) => {
         this.mode = mode as ApprovalMode;
         this.app.getAgent().setApprovalMode(this.mode);
@@ -863,12 +974,12 @@ export class SidecarServer {
       workspace: config.workspace,
       workspace_name: path.basename(config.workspace),
       model: config.provider ? `${config.provider} · ${config.model}` : config.model,
-      mode: this.mode,
+      mode: this.app.getAgent().getApprovalMode(),
       git: git.isRepo ? { branch: git.branch, dirty: git.dirtyCount } : null,
       busy: Boolean(this.activeTurn),
       session: this.sessionId,
       posture: {
-        mode: this.mode,
+        mode: this.app.getAgent().getApprovalMode(),
         sandbox: sandboxStatus,
         trusted,
       },

@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { spawn } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { ApplicationCore } from "../src/core/app.js";
@@ -349,6 +349,132 @@ describe("SidecarServer: sessions and slash commands", () => {
       await send({ type: "slash", id: "s1", command: "history" });
       await server.idle();
       assert.match(events.find((e) => e.type === "slash.result").output, /^\[1\] what is here\?$/m);
+    });
+  });
+
+  test("sensitive checkpoint rejection asks before starting a read-only review turn", async () => {
+    const replies = (n: number): Reply => n === 1
+      ? { kind: "tools", calls: [{ name: "list_dir", args: { path: "." } }] }
+      : n === 2
+        ? { kind: "tools", calls: [{ name: "write_file", args: { path: "new.txt", content: "must not be written" } }] }
+        : { kind: "text", content: "The workspace contains the expected files." };
+    await withSidecar(replies, "review", async ({ server, events, repo, send }) => {
+      fs.writeFileSync(path.join(repo, "base.txt"), `changed ${`ghp_${"A".repeat(36)}`}\n`);
+
+      await send({ type: "prompt.submit", id: "t-sensitive", text: "review the codebase" });
+      await waitUntil(() => events.some((event) => event.type === "checkpoint.choice.request"));
+      const request = events.find((event) => event.type === "checkpoint.choice.request");
+      assert.match(request.message, /Sensitive content blocked the checkpoint/);
+      assert.match(request.message, /may persist sensitive content/);
+      await send({ type: "checkpoint.choice", id: request.id, choice: "read_only" });
+      await server.idle();
+
+      assert.ok(events.some((event) => event.type === "notice" && /Continuing this turn in read-only mode as requested/.test(event.text)));
+      assert.equal(events.filter((event) => event.type === "session.state").at(-1)?.mode, "read-only");
+      assert.ok(events.some((event) => event.type === "tool.end" && event.tool === "list_dir" && event.success === true));
+      const deniedWrite = events.find((event) => event.type === "tool.end" && event.tool === "write_file");
+      assert.ok(deniedWrite);
+      assert.equal(deniedWrite.success, false);
+      assert.match(deniedWrite.error, /read-only mode violation/i);
+      assert.equal(fs.existsSync(path.join(repo, "new.txt")), false);
+      assert.ok(events.some((event) => event.type === "turn.result" && event.turn_id === "t-sensitive"));
+
+      await send({ type: "slash", id: "s-init", command: "init" });
+      await server.idle();
+      const deniedInit = events.find((event) => event.type === "slash.result" && event.id === "s-init");
+      assert.equal(deniedInit.success, false);
+      assert.match(deniedInit.output, /disabled while the session is in read-only mode/i);
+      assert.equal(fs.existsSync(path.join(repo, "AGENTS.md")), false);
+
+      await send({ type: "provider.connect", id: "p-connect", provider: "openai", method: "api-key", key: "synthetic-test-key" });
+      const deniedProvider = events.find((event) => event.type === "provider.result" && event.id === "p-connect");
+      assert.equal(deniedProvider.success, false);
+      assert.match(deniedProvider.message, /disabled while the session is in read-only mode/i);
+      await send({ type: "models.list", id: "models-list" });
+      const deniedCatalog = events.find((event) => event.type === "error" && event.id === "models-list");
+      assert.equal(deniedCatalog.code, "BUSY");
+      assert.match(deniedCatalog.message, /disabled while the session is in read-only mode/i);
+
+      await send({ type: "slash", id: "s-mode", command: "mode", args: "auto" });
+      await server.idle();
+      assert.equal(events.filter((event) => event.type === "session.state").at(-1)?.mode, "read-only");
+      assert.match(events.find((event) => event.type === "slash.result" && event.id === "s-mode").output, /will take effect after a safe workspace checkpoint/i);
+
+      fs.writeFileSync(path.join(repo, "base.txt"), "safe workspace content\n");
+      await send({ type: "prompt.submit", id: "t-recovered", text: "continue reviewing" });
+      await server.idle();
+      assert.equal(events.filter((event) => event.type === "session.state").at(-1)?.mode, "auto");
+      assert.ok(events.some((event) => event.type === "turn.result" && event.turn_id === "t-recovered"));
+    });
+  });
+
+  test("operator can continue in the existing mode without a rollback checkpoint", async () => {
+    await withSidecar(() => ({ kind: "text", content: "Review started." }), "review", async ({ server, events, repo, app, send }) => {
+      fs.writeFileSync(path.join(repo, "base.txt"), `changed ${`ghp_${"B".repeat(36)}`}\n`);
+      await send({ type: "prompt.submit", id: "t-no-checkpoint", text: "review the codebase" });
+      await waitUntil(() => events.some((event) => event.type === "checkpoint.choice.request"));
+      const request = events.find((event) => event.type === "checkpoint.choice.request");
+      await send({ type: "checkpoint.choice", id: request.id, choice: "without_checkpoint" });
+      await server.idle();
+      assert.ok(events.some((event) => event.type === "notice" && /without a rollback checkpoint/.test(event.text)));
+      assert.equal(events.filter((event) => event.type === "session.state").at(-1)?.mode, "review");
+      assert.ok(events.some((event) => event.type === "turn.result" && event.turn_id === "t-no-checkpoint"));
+      assert.equal(app.getCheckpointManager().listCheckpoints().length, 0);
+    });
+  });
+
+  test("checkpoint choice rejects unknown actions", async () => {
+    await withSidecar(() => ({ kind: "text", content: "Review started." }), "review", async ({ server, events, repo, app, send }) => {
+      fs.writeFileSync(path.join(repo, "base.txt"), `changed ${`ghp_${"C".repeat(36)}`}\n`);
+      await send({ type: "checkpoint.choice", id: "checkpoint-choice-invalid", choice: "persist_everything" });
+      const error = events.find((event) => event.type === "error" && event.id === "checkpoint-choice-invalid");
+      assert.equal(error.code, "BAD_REQUEST");
+      assert.equal(app.getCheckpointManager().listCheckpoints().length, 0);
+    });
+  });
+
+  test("operator can explicitly create a checkpoint that may contain sensitive workspace content", async () => {
+    await withSidecar(() => ({ kind: "text", content: "Review started." }), "review", async ({ events, repo, app, send }) => {
+      const sensitiveMarker = `ghp_${"E".repeat(36)}`;
+      fs.writeFileSync(path.join(repo, "base.txt"), `changed ${sensitiveMarker}\n`);
+      await send({ type: "prompt.submit", id: "t-sensitive-checkpoint", text: "review the codebase" });
+      await waitUntil(() => events.some((event) => event.type === "checkpoint.choice.request"));
+      const request = events.find((event) => event.type === "checkpoint.choice.request");
+      assert.match(request.message, /1 read-only.*2 continue without a rollback checkpoint.*3 create a checkpoint anyway \(may persist sensitive content\).*4 cancel this turn.*5 re-enter the instruction/);
+      await send({ type: "checkpoint.choice", id: request.id, choice: "allow_sensitive" });
+      await waitUntil(() => events.some((event) => event.type === "turn.result" && event.turn_id === "t-sensitive-checkpoint"));
+      const [checkpoint] = app.getCheckpointManager().listCheckpoints();
+      assert.ok(checkpoint?.gitRef);
+      const persisted = execFileSync("git", ["show", `${checkpoint.gitRef}:base.txt`], { cwd: repo, encoding: "utf8" });
+      assert.equal(persisted.includes(sensitiveMarker), true);
+      assert.ok(events.some((event) => event.type === "notice" && /may persist sensitive workspace content/.test(event.text)));
+    });
+  });
+
+  test("cancel choice does not start the turn", async () => {
+    await withSidecar(() => ({ kind: "text", content: "must not run" }), "review", async ({ server, events, repo, send }) => {
+      fs.writeFileSync(path.join(repo, "base.txt"), `changed ${`ghp_${"D".repeat(36)}`}\n`);
+      await send({ type: "prompt.submit", id: "t-cancel-checkpoint", text: "review the codebase" });
+      await waitUntil(() => events.some((event) => event.type === "checkpoint.choice.request"));
+      const request = events.find((event) => event.type === "checkpoint.choice.request");
+      await send({ type: "checkpoint.choice", id: request.id, choice: "cancel" });
+      await server.idle();
+      assert.ok(events.some((event) => event.type === "error" && event.id === "t-cancel-checkpoint" && /cancelled before it started/.test(event.message)));
+      assert.equal(events.some((event) => event.type === "turn.result" && event.turn_id === "t-cancel-checkpoint"), false);
+    });
+  });
+
+  test("other choice cancels the turn and asks for a different instruction", async () => {
+    await withSidecar(() => ({ kind: "text", content: "must not run" }), "review", async ({ server, events, repo, send }) => {
+      fs.writeFileSync(path.join(repo, "base.txt"), `changed ${`ghp_${"F".repeat(36)}`}\n`);
+      await send({ type: "prompt.submit", id: "t-other-checkpoint", text: "review the codebase" });
+      await waitUntil(() => events.some((event) => event.type === "checkpoint.choice.request"));
+      const request = events.find((event) => event.type === "checkpoint.choice.request");
+      await send({ type: "checkpoint.choice", id: request.id, choice: "other" });
+      await server.idle();
+      assert.ok(events.some((event) => event.type === "error" && event.id === "t-other-checkpoint" && /Enter a different instruction/.test(event.message)));
+      assert.equal(events.some((event) => event.type === "turn.result" && event.turn_id === "t-other-checkpoint"), false);
+      assert.equal(events.some((event) => event.type === "notice" && /must not run/.test(event.text)), false);
     });
   });
 

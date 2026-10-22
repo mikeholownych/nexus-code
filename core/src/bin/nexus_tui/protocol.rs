@@ -269,6 +269,8 @@ pub enum Event {
         #[serde(default)]
         review: Option<Review>,
     },
+    #[serde(rename = "checkpoint.choice.request")]
+    CheckpointChoiceRequest { id: String, message: String },
     #[serde(rename = "turn.result")]
     TurnResult {
         heading: String,
@@ -380,6 +382,8 @@ pub enum Command {
     Approve { id: String, always: bool },
     #[serde(rename = "deny")]
     Deny { id: String },
+    #[serde(rename = "checkpoint.choice")]
+    CheckpointChoice { id: String, choice: String },
     #[serde(rename = "slash")]
     Slash {
         id: String,
@@ -574,6 +578,10 @@ mod tests {
                 subject: "x.txt".into(),
                 review: None,
             })
+        );
+        assert_eq!(
+            parse_event(r#"{"v":1,"type":"checkpoint.choice.request","id":"choice-1","turn_id":"t1","message":"Sensitive content prevents checkpointing."}"#),
+            Ok(Event::CheckpointChoiceRequest { id: "choice-1".into(), message: "Sensitive content prevents checkpointing.".into() })
         );
         assert_eq!(
             parse_event(
@@ -810,6 +818,10 @@ mod tests {
                     id: "approval-1".into(),
                 },
                 serde_json::json!({"v":1,"type":"deny","id":"approval-1"}),
+            ),
+            (
+                Command::CheckpointChoice { id: "choice-1".into(), choice: "without_checkpoint".into() },
+                serde_json::json!({"v":1,"type":"checkpoint.choice","id":"choice-1","choice":"without_checkpoint"}),
             ),
             (
                 Command::Slash {

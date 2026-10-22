@@ -113,6 +113,7 @@ export type SidecarEvent =
       timed_out?: boolean;
     }
   | { type: "approval.request"; id: string; turn_id: string; tool: string; subject: string; preview: string; review: ApprovalReview }
+  | { type: "checkpoint.choice.request"; id: string; turn_id: string; message: string }
   | { type: "turn.result"; turn_id: string; heading: string; line: string; turn: TurnResult; model_summary: ModelSummary | null }
   | {
       type: "slash.result";
@@ -165,6 +166,7 @@ export type SidecarCommand =
   | { type: "cancel" }
   | { type: "approve"; id: string; always: boolean }
   | { type: "deny"; id: string }
+  | { type: "checkpoint.choice"; id: string; choice: "read_only" | "without_checkpoint" | "allow_sensitive" | "cancel" | "other" }
   | { type: "slash"; id: string; command: string; args: string }
   | { type: "tool.detail"; id: string; evidence: string }
   | { type: "receipt"; id: string }
@@ -225,6 +227,12 @@ export function parseCommand(line: string): SidecarCommand {
       return { type: "approve", id: requireId("approve"), always: msg.always === true };
     case "deny":
       return { type: "deny", id: requireId("deny") };
+    case "checkpoint.choice": {
+      const requestId = requireId("checkpoint.choice");
+      const choices = ["read_only", "without_checkpoint", "allow_sensitive", "cancel", "other"] as const;
+      if (!choices.includes(msg.choice as typeof choices[number])) throw new ProtocolError("checkpoint.choice requires a supported choice", requestId);
+      return { type: "checkpoint.choice", id: requestId, choice: msg.choice as typeof choices[number] };
+    }
     case "slash": {
       const requestId = requireId("slash");
       const command = msg.command;
