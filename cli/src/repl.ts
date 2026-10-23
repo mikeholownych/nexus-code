@@ -32,6 +32,7 @@ import { TerminalDashboard } from "./tui.js";
 import { HunkStager } from "./stager.js";
 import { TurnResult, lifecycleStatusForTurn } from "./core/turn.js";
 import { buildSessionExport } from "./session_export.js";
+import { SensitivePersistenceError } from "./core/persistence_protection.js";
 
 interface PatchHunk {
   header: string;
@@ -166,6 +167,57 @@ export class InteractiveRepl {
       withDurableSync(() => this.saveCurrentSession(label, this.agent.getLastTurnResult()));
     }
     return result;
+  }
+
+  /** Ask before a turn when a rollback checkpoint would persist sensitive workspace content. */
+  private async prepareTurnCheckpoint(name: string): Promise<boolean> {
+    if (this.config.readOnly) {
+      this.agent.setCheckpointReadOnlyFallback(false);
+      return true;
+    }
+
+    try {
+      this.checkpointManager.createCheckpoint(name);
+      this.agent.setCheckpointReadOnlyFallback(false);
+      return true;
+    } catch (error) {
+      if (!(error instanceof SensitivePersistenceError)) throw error;
+    }
+
+    console.log(pc.yellow("Sensitive content blocked the rollback checkpoint. Choose how to continue:"));
+    console.log("  1. Continue read-only for this session");
+    console.log("  2. Continue in the current mode without a rollback checkpoint");
+    console.log("  3. Create the checkpoint anyway (may persist sensitive content)");
+    console.log("  4. Cancel this turn");
+    console.log("  5. Enter a different instruction");
+
+    while (true) {
+      const choice = (await this.rl!.question("Choice [1-5]: ")).trim();
+      if (choice === "1") {
+        this.agent.setCheckpointReadOnlyFallback(true);
+        console.log(pc.yellow("Continuing this turn in read-only mode.\n"));
+        return true;
+      }
+      if (choice === "2") {
+        console.log(pc.yellow("Continuing in the current mode without a rollback checkpoint.\n"));
+        return true;
+      }
+      if (choice === "3") {
+        this.checkpointManager.createCheckpoint(name, { allowSensitive: true });
+        this.agent.setCheckpointReadOnlyFallback(false);
+        console.log(pc.yellow("Creating a checkpoint that may persist sensitive workspace content, as requested.\n"));
+        return true;
+      }
+      if (choice === "4") {
+        console.log(pc.dim("Turn cancelled before it started.\n"));
+        return false;
+      }
+      if (choice === "5") {
+        console.log(pc.dim("Enter a different instruction at the next prompt. This turn was not started.\n"));
+        return false;
+      }
+      console.log(pc.yellow("Enter a number from 1 to 5.\n"));
+    }
   }
 
   private saveCurrentSession(titlePrompt?: string, turn?: TurnResult): void {
@@ -1324,8 +1376,9 @@ export class InteractiveRepl {
               if (idx >= 0 && idx < this.history.length) {
                 const recalled = this.history[idx];
                 console.log(pc.cyan(`⚡ Running from history [#${idx + 1}]: ${pc.bold(recalled)}`));
-                this.checkpointManager.createCheckpoint(`Turn: ${recalled.slice(0, 30)}`);
-                await this.runInteractiveTurn(recalled);
+                if (await this.prepareTurnCheckpoint(`Turn: ${recalled.slice(0, 30)}`)) {
+                  await this.runInteractiveTurn(recalled);
+                }
               } else {
                 console.log(pc.red(`History index out of range: ${rawNum}\n`));
               }
@@ -1427,8 +1480,9 @@ export class InteractiveRepl {
               console.log(pc.gray(preview));
               const confirm = await this.rl!.question(pc.bold(pc.white(`\nSend clipboard content as user prompt? [y/N]: `)));
               if (confirm.trim().toLowerCase() === "y" || confirm.trim().toLowerCase() === "yes") {
-                this.checkpointManager.createCheckpoint(`Turn: ${res.text.slice(0, 30)}`);
-                await this.runInteractiveTurn(res.text);
+                if (await this.prepareTurnCheckpoint(`Turn: ${res.text.slice(0, 30)}`)) {
+                  await this.runInteractiveTurn(res.text);
+                }
               } else {
                 console.log(pc.dim("Paste cancelled.\n"));
               }
@@ -1449,8 +1503,9 @@ export class InteractiveRepl {
             }
             console.log(pc.cyan(`🖼️  Loaded image: ${pc.bold(path.basename(encoded.filePath))} (${(encoded.sizeBytes / 1024).toFixed(1)} KB)`));
             const visionPayload = formatVisionContent(userPrompt, encoded.dataUri);
-            this.checkpointManager.createCheckpoint(`Vision: ${userPrompt.slice(0, 30)}`);
-            await this.runInteractiveTurn(visionPayload, userPrompt);
+            if (await this.prepareTurnCheckpoint(`Vision: ${userPrompt.slice(0, 30)}`)) {
+              await this.runInteractiveTurn(visionPayload, userPrompt);
+            }
             continue;
           } else if (cmd === "theme") {
             if (!arg) {
@@ -1765,8 +1820,9 @@ export class InteractiveRepl {
 
         // Regular user prompt: run agent turn
         try {
-          this.checkpointManager.createCheckpoint(`Turn: ${trimmed.slice(0, 30)}`);
-          await this.runInteractiveTurn(trimmed);
+          if (await this.prepareTurnCheckpoint(`Turn: ${trimmed.slice(0, 30)}`)) {
+            await this.runInteractiveTurn(trimmed);
+          }
         } catch (err: any) {
           console.error(pc.red(`\nTurn error: ${err.message}\n`));
         }
