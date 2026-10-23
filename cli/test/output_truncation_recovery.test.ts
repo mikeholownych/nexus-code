@@ -128,9 +128,12 @@ describe("a reply cut off at the output limit", () => {
     const repo = makeRepo();
     const gw = await startGateway((n) => (n === 1 ? { kind: "text", content: `${MARKER} all requirements are`, truncated: true } : { kind: "text", content: "Short complete answer." }));
     const agent = quiet(new AutonomousAgent(cfg(gw.url, repo)));
+    const providerRecoveryStates: string[] = [];
+    agent.setObserver({ onProviderRecovery: ({ record }) => providerRecoveryStates.push(record.state) });
     try {
       const turn = await agent.runTurn("Summarize the work.");
       assert.equal(turn.execution, "COMPLETED");
+      assert.deepEqual(providerRecoveryStates, [], "a completed but truncated response is handled as an output-limit issue, not a provider outage");
       assert.match(lastUser((gw.requests as any[])[1]), /cut off at the .*output limit \(.*\) before it finished\. None of that reply was kept/);
       assert.ok(!JSON.stringify(agent.getMessages()).includes(MARKER));
     } finally {
@@ -141,10 +144,13 @@ describe("a reply cut off at the output limit", () => {
 
     const always = await startGateway(() => ({ kind: "text", content: `${MARKER} partial`, truncated: true }));
     const agent2 = quiet(new AutonomousAgent(cfg(always.url, makeRepo())));
+    const repeatedProviderRecoveryStates: string[] = [];
+    agent2.setObserver({ onProviderRecovery: ({ record }) => repeatedProviderRecoveryStates.push(record.state) });
     try {
       const turn = await agent2.runTurn("Summarize the work.");
       assert.equal(turn.reason, "INFERENCE_FAILED");
       assert.equal(always.requests.length, 2);
+      assert.deepEqual(repeatedProviderRecoveryStates, [], "repeated truncation remains a turn failure without being labeled provider recovery");
     } finally {
       agent2.shutdown();
       await always.close();

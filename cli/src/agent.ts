@@ -5321,7 +5321,9 @@ The pinned Objective Ledger lists the operator's requirements; your plan never r
               typeof activeClient.probeAvailability === "function"
                 ? activeClient.probeAvailability(probeSignal, { timeoutMs: policy.probeTimeoutMs, ...opts })
                 : Promise.resolve({ available: true, condition: "AVAILABLE" as const }),
-            classify: (err) => (err instanceof InferenceError ? err.toFailure() : null),
+            // Output-limit failures are handled by the agent loop below, not provider recovery. They are
+            // completed responses with unusable output, not provider availability failures.
+            classify: (err) => (err instanceof InferenceError && err.kind !== "output_truncated" ? err.toFailure() : null),
             newRequestId: () => randomUUID(),
             onFailure: this.providerRecoveryHooks?.onFailure,
             shouldYield: this.providerRecoveryHooks?.shouldYield,
@@ -6212,7 +6214,7 @@ The pinned Objective Ledger lists the operator's requirements; your plan never r
             typeof activeClient.probeAvailability === "function"
               ? activeClient.probeAvailability(probeSignal, { timeoutMs: policy.probeTimeoutMs, ...opts })
               : Promise.resolve({ available: true, condition: "AVAILABLE" as const }),
-          classify: (err) => (err instanceof InferenceError ? err.toFailure() : null),
+          classify: (err) => (err instanceof InferenceError && err.kind !== "output_truncated" ? err.toFailure() : null),
           newRequestId: () => randomUUID(),
         }, signal);
       } catch (err: any) {
