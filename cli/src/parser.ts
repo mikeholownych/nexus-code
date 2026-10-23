@@ -177,6 +177,63 @@ export function unescapeSingleQuoteBody(inner: string): string {
   return out;
 }
 
+/**
+ * Convert single-quoted string literals to JSON double-quoted strings in one scan.
+ *
+ * A regex over the whole document cannot do this: an apostrophe inside a double-quoted
+ * value ("echo don't") would pair with the opening quote of a later single-quoted key and
+ * corrupt both. Here double-quoted strings are copied verbatim, so only real single-quoted
+ * literals are rewritten, while a double quote inside a single-quoted literal stays data.
+ */
+function convertSingleQuotedStrings(str: string): string {
+  let out = "";
+  let i = 0;
+  while (i < str.length) {
+    const ch = str[i];
+    if (ch === '"') {
+      out += ch;
+      i++;
+      while (i < str.length) {
+        const c = str[i];
+        out += c;
+        i++;
+        if (c === "\\") {
+          if (i < str.length) {
+            out += str[i];
+            i++;
+          }
+        } else if (c === '"') {
+          break;
+        }
+      }
+      continue;
+    }
+    if (ch === "'") {
+      i++;
+      let inner = "";
+      while (i < str.length) {
+        const c = str[i];
+        if (c === "\\" && i + 1 < str.length) {
+          inner += c + str[i + 1];
+          i += 2;
+          continue;
+        }
+        if (c === "'") {
+          i++;
+          break;
+        }
+        inner += c;
+        i++;
+      }
+      out += `"${unescapeSingleQuoteBody(inner)}"`;
+      continue;
+    }
+    out += ch;
+    i++;
+  }
+  return out;
+}
+
 export function repairJsonWithClass<T = any>(raw: string): { value: T; repaired: JsonRepairClass } {
   if (typeof raw !== "string") return { value: raw as unknown as T, repaired: "none" };
   let str = raw.trim();
@@ -227,7 +284,7 @@ export function repairJsonWithClass<T = any>(raw: string): { value: T; repaired:
   }
 
   // 5. Convert single-quoted keys and string literals: 'key': 'value' -> "key": "value"
-  const singleQuoteCleaned = cleaned.replace(/'([^'\\]*(?:\\.[^'\\]*)*)'/g, (_, inner) => `"${unescapeSingleQuoteBody(inner)}"`);
+  const singleQuoteCleaned = convertSingleQuotedStrings(cleaned);
 
   try {
     return { value: JSON.parse(singleQuoteCleaned), repaired: "trailing" };

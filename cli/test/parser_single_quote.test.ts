@@ -34,4 +34,26 @@ describe("single-quoted JSON repair", () => {
     assert.equal(unescapeSingleQuoteBody("\\ux"), "\\\\ux");
     assert.equal(unescapeSingleQuoteBody("C:\\users"), "C:\\\\users");
   });
+
+  test("an apostrophe in a double-quoted value is not paired with a later single-quoted key", () => {
+    assert.deepEqual(
+      repairJson(`{'command': "echo it's ok", 'timeout_secs': 30}`),
+      { command: "echo it's ok", timeout_secs: 30 }
+    );
+    assert.deepEqual(
+      repairJson(`{'a': "don't", 'b': 'c'}`),
+      { a: "don't", b: "c" }
+    );
+    assert.deepEqual(
+      repairJson(`{'a': 'x', "b": "it's", 'c': 'y'}`),
+      { a: "x", b: "it's", c: "y" }
+    );
+  });
+
+  test("a double quote inside a single-quoted value stays data", () => {
+    assert.deepEqual(
+      repairJson(`{'a': 'he said "hi"', 'b': 1}`),
+      { a: 'he said "hi"', b: 1 }
+    );
+  });
 });
