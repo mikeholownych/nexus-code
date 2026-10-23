@@ -137,4 +137,10 @@ describe("htmlToReadableText", () => {
     assert.equal(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f]/.test(out), false, JSON.stringify(out));
     assert.match(out, /PWNED/);
   });
+
+  it("normalizes entity-decoded carriage returns and other line separators", () => {
+    const out = htmlToReadableText("trusted&#13;spoof\nline\tcontinued");
+    assert.equal(out, "trusted spoof line continued");
+    assert.equal(/[\r\n\t]/.test(out), false, JSON.stringify(out));
+  });
 });

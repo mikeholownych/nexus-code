@@ -2,7 +2,8 @@
 
 | | |
 |---|---|
-| Base revision | `830680b392a0c0584379820b26a26a9439073753` (`origin/main`) |
+| Original defect base | `830680b392a0c0584379820b26a26a9439073753` (`origin/main` when the slice began) |
+| Refreshed integration base | `4bf6e2b041dc2efb54af551a73796aacc54494a3` (`main`, PR #174 included) |
 | Branch | `v1/defect-html-control-injection` |
 | Affected behavior | `decodeHtmlEntities` accepted numeric character references for C0 controls (including ESC `&#27;`) and C1 controls (including CSI `&#155;`). `htmlToReadableText` also passed raw control bytes in the page text. Text fetched from an untrusted page or search result therefore reached tool output containing terminal escape sequences. |
 | Severity | Medium: terminal escape-sequence injection. The REPL prints tool output through `ui.printToolResult` without stripping ANSI; `fetch_web`/`search_web` feed this text to the model and the operator. OSC/CSI sequences can alter the title, clipboard, hyperlinks or screen. |
@@ -22,16 +23,18 @@ and DEL passed. `collapse` collapsed whitespace but did not remove controls.
 
 - Reject numeric references whose code point is a C0 control other than tab/LF/CR, DEL, or a C1
   control (`0x7f–0x9f`); the literal entity text is kept.
-- Strip those controls from extracted text (`collapse`) and again after entity decoding, so a named
-  or numeric entity cannot reintroduce one.
+- Strip unsafe controls from extracted text. After entity decoding, collapse whitespace again so
+  numeric CR/LF/TAB references cannot reintroduce terminal line movement or line breaks.
 - `search_web` now sanitizes every result field: SearXNG/DDG titles and snippets go through the same
-  extractor, and URLs are passed through the exported `stripUnsafeControlCharacters`, closing the
-  DuckDuckGo Instant Answer and `uddg=` paths that previously returned raw controls.
+  extractor, and URLs are passed through the exported `stripUnsafeControlCharacters`, which removes
+  all C0/C1 controls including CR/LF/TAB. This closes the DuckDuckGo Instant Answer and `uddg=` paths
+  that previously returned raw controls.
 - Printable numeric references and ordinary whitespace are unchanged.
 
 ## Verification
 
-- `cli/test/html_text.test.ts` + `cli/test/search_web.test.ts`: 29/29 pass.
+- `cli/test/html_text.test.ts` + `cli/test/search_web.test.ts`: 30/30 pass on the refreshed branch
+  working tree. Regression coverage includes entity-decoded CR and raw CR/LF/TAB in a search URL.
 - Four new tests fail on the pre-fix sources:
   - numeric entities never produce a control;
   - raw ESC/BEL/C1 are stripped from page text;
@@ -42,7 +45,6 @@ and DEL passed. `collapse` collapsed whitespace but did not remove controls.
 
 ## Residual risk (not closed here)
 
-Bidi overrides, zero-width characters and other non-C0/C1 spoofing are not stripped. Numeric entities
-for tab/LF/CR are still decoded (ordinary whitespace, not terminal escapes); line-oriented consumers
-should treat them as whitespace. The TUI has its own ANSI redaction; the REPL relied on this extractor
-and the search-field sanitizer for control-character safety.
+Bidi overrides, zero-width characters and other non-C0/C1 spoofing are not stripped. The TUI has its
+own ANSI redaction; the REPL relies on this extractor and the search-field sanitizer for C0/C1
+control-character safety.

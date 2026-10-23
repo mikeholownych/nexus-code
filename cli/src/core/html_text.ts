@@ -118,6 +118,7 @@ export function htmlToText(input: string): string {
  * escape sequences (OSC/CSI title, clipboard or screen commands) into text shown to the operator.
  */
 const UNSAFE_CONTROL = /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f]/g;
+const ALL_CONTROL_CHARACTERS = /[\u0000-\u001f\u007f-\u009f]/g;
 
 function stripControlCharacters(text: string): string {
   return text.replace(UNSAFE_CONTROL, "");
@@ -125,7 +126,7 @@ function stripControlCharacters(text: string): string {
 
 /** Public sanitizer for untrusted non-HTML fields (for example a search result URL). */
 export function stripUnsafeControlCharacters(text: string): string {
-  return stripControlCharacters(text);
+  return text.replace(ALL_CONTROL_CHARACTERS, "");
 }
 
 function isUnsafeControl(value: number): boolean {
@@ -168,6 +169,6 @@ export function decodeHtmlEntities(text: string): string {
 
 /** htmlToText plus entity decoding; tags never survive into the result. */
 export function htmlToReadableText(input: string): string {
-  // strip again after decoding: a named or numeric entity must not reintroduce a control character.
-  return stripControlCharacters(decodeHtmlEntities(htmlToText(input)));
+  // Normalize again after decoding: entities can introduce CR/LF/TAB after the first whitespace pass.
+  return collapse(decodeHtmlEntities(htmlToText(input)));
 }

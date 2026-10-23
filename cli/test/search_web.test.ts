@@ -111,7 +111,7 @@ describe("ACC-TRUST-08 / REQ-PRV-108: Web Search Integrity and Destination Discl
         return new Response(JSON.stringify({
           Heading: "Title\u001b]0;PWNED\u0007",
           AbstractText: "snippet\u009b2J",
-          AbstractURL: "https://example.com/\u001b]52;c;x\u0007",
+          AbstractURL: "https://example.com/\u001b]52;c;x\u0007\r\n\t",
           RelatedTopics: [{ Text: "topic\u001b[31mred", FirstURL: "https://example.com/t\u009b" }],
         }), { status: 200, headers: { "Content-Type": "application/json" } });
       }
