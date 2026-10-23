@@ -1512,7 +1512,7 @@ export class RustCoreBridge {
               workspaceFd,
               network: false,
             });
-            if (!sandboxed.sandboxed || !sandboxed.argv) {
+            if (!sandboxed.sandboxed || sandboxed.engine !== "bwrap" || !sandboxed.argv) {
               return {
                 success: false,
                 output: "",
