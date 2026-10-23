@@ -33,8 +33,11 @@ and DEL passed. `collapse` collapsed whitespace but did not remove controls.
 
 ## Verification
 
-- `cli/test/html_text.test.ts` + `cli/test/search_web.test.ts`: 30/30 pass on the refreshed branch
-  working tree. Regression coverage includes entity-decoded CR and raw CR/LF/TAB in a search URL.
+- Source commit `c7517eeed96bb866b201189abd35bed59008966d` on refreshed base `4bf6e2b041dc2efb54af551a73796aacc54494a3`.
+- On that exact source commit, `node scripts/run_tests.mjs test/html_text.test.ts test/search_web.test.ts`:
+  30/30 pass. Regression coverage includes entity-decoded CR and raw CR/LF/TAB in a search URL.
+- On that exact source commit, `./node_modules/.bin/tsc --noEmit -p tsconfig.json`: pass.
+- `git diff --check`: pass before commit.
 - Four new tests fail on the pre-fix sources:
   - numeric entities never produce a control;
   - raw ESC/BEL/C1 are stripped from page text;
