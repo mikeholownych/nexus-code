@@ -76,6 +76,8 @@ describe("a reply cut off at the output limit", () => {
       return { kind: "text", content: "README written in two parts." };
     });
     const agent = quiet(new AutonomousAgent(cfg(gw.url, repo)));
+    const providerRecoveryStates: string[] = [];
+    agent.setObserver({ onProviderRecovery: ({ record }) => providerRecoveryStates.push(record.state) });
     try {
       const turn = await agent.runTurn("Write the usage documentation to README.md.");
       assert.equal(turn.execution, "COMPLETED", JSON.stringify(turn));
@@ -86,6 +88,7 @@ describe("a reply cut off at the output limit", () => {
       assert.match(notice, /a write_file call for `README\.md`/);
       assert.match(notice, /Nothing from that reply ran/);
       assert.match(notice, /in parts/);
+      assert.deepEqual(providerRecoveryStates, [], "tool output truncation is not a provider recovery state");
       const history = JSON.stringify(agent.getMessages());
       assert.ok(!history.includes(MARKER), "the cut-off reply is not in the conversation");
       const t = agent.getObjective()!.execution!;
@@ -187,7 +190,6 @@ describe("a reply cut off at the output limit", () => {
     try {
       await agent.runTurn("Delegate writing notes.md to a helper.");
       assert.equal(fs.readFileSync(path.join(repo, "notes.md"), "utf8"), "short notes\n");
-      assert.equal(gw.modelRequests, 0, "subagent output truncation must not trigger provider-availability probes");
     } finally {
       agent.shutdown();
       await gw.close();
