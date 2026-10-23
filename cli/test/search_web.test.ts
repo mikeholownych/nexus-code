@@ -102,6 +102,38 @@ describe("ACC-TRUST-08 / REQ-PRV-108: Web Search Integrity and Destination Discl
     assert.strictEqual(res.results[0].snippet, 'plain text "quoted"');
   });
 
+  test("DuckDuckGo JSON result fields are stripped of terminal controls", async () => {
+    delete process.env.SEARXNG_URL;
+    delete process.env.SEARX_URL;
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async (input: any) => {
+      if (String(input).startsWith("https://api.duckduckgo.com/")) {
+        return new Response(JSON.stringify({
+          Heading: "Title\u001b]0;PWNED\u0007",
+          AbstractText: "snippet\u009b2J",
+          AbstractURL: "https://example.com/\u001b]52;c;x\u0007",
+          RelatedTopics: [{ Text: "topic\u001b[31mred", FirstURL: "https://example.com/t\u009b" }],
+        }), { status: 200, headers: { "Content-Type": "application/json" } });
+      }
+      return new Response("", { status: 404 });
+    }) as any;
+    try {
+      const res = await executeWebSearch("control test", 5);
+      assert.strictEqual(res.success, true);
+      assert.ok(res.results.length >= 2);
+      const hasControl = (s: string) => /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f]/.test(s);
+      for (const r of res.results) {
+        assert.strictEqual(hasControl(r.title), false, `title: ${JSON.stringify(r.title)}`);
+        assert.strictEqual(hasControl(r.url), false, `url: ${JSON.stringify(r.url)}`);
+        assert.strictEqual(hasControl(r.snippet), false, `snippet: ${JSON.stringify(r.snippet)}`);
+      }
+      assert.strictEqual(res.results[0].snippet, "snippet2J");
+      assert.strictEqual(res.results[0].url, "https://example.com/]52;c;x");
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
   test("Destination disclosure: destination is disclosed on first use", async () => {
     const baseUrl = await startMockServer((req, res) => {
       res.writeHead(200, { "Content-Type": "application/json" });

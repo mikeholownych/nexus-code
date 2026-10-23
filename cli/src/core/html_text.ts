@@ -123,6 +123,11 @@ function stripControlCharacters(text: string): string {
   return text.replace(UNSAFE_CONTROL, "");
 }
 
+/** Public sanitizer for untrusted non-HTML fields (for example a search result URL). */
+export function stripUnsafeControlCharacters(text: string): string {
+  return stripControlCharacters(text);
+}
+
 function isUnsafeControl(value: number): boolean {
   return (
     (value < 0x20 && value !== 0x09 && value !== 0x0a && value !== 0x0d) ||

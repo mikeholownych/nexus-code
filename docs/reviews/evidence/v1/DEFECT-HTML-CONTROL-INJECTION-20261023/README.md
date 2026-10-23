@@ -24,19 +24,25 @@ and DEL passed. `collapse` collapsed whitespace but did not remove controls.
   control (`0x7f–0x9f`); the literal entity text is kept.
 - Strip those controls from extracted text (`collapse`) and again after entity decoding, so a named
   or numeric entity cannot reintroduce one.
+- `search_web` now sanitizes every result field: SearXNG/DDG titles and snippets go through the same
+  extractor, and URLs are passed through the exported `stripUnsafeControlCharacters`, closing the
+  DuckDuckGo Instant Answer and `uddg=` paths that previously returned raw controls.
 - Printable numeric references and ordinary whitespace are unchanged.
 
 ## Verification
 
-- `cli/test/html_text.test.ts`: 23/23 pass.
-- Three new tests fail on the pre-fix source:
+- `cli/test/html_text.test.ts` + `cli/test/search_web.test.ts`: 29/29 pass.
+- Four new tests fail on the pre-fix sources:
   - numeric entities never produce a control;
   - raw ESC/BEL/C1 are stripped from page text;
-  - injection attempts keep printable text but no control bytes.
+  - injection attempts keep printable text but no control bytes;
+  - DuckDuckGo JSON title/snippet/URL fields (including a control-bearing URL) are stripped.
 - `npx tsc --noEmit -p tsconfig.json`: pass.
 - `git diff --check`: pass.
 
 ## Residual risk (not closed here)
 
-Bidi overrides, zero-width characters and other non-C0/C1 spoofing are not stripped. The TUI has its
-own ANSI redaction; the REPL relied on this text extractor for control-character safety.
+Bidi overrides, zero-width characters and other non-C0/C1 spoofing are not stripped. Numeric entities
+for tab/LF/CR are still decoded (ordinary whitespace, not terminal escapes); line-oriented consumers
+should treat them as whitespace. The TUI has its own ANSI redaction; the REPL relied on this extractor
+and the search-field sanitizer for control-character safety.
