@@ -1,0 +1,8 @@
+sourceCommit=1da67c3622f7290944a496a58965606961a5afc0
+worktree=/tmp/nexus-main-150-worktree-Sg9u0K
+worktreeState=clean detached HEAD
+home=isolated temporary directory
+xdgConfig=isolated temporary directory
+command=node scripts/check_requirements.mjs --enforce
+requirements: 123 rows; tested 108, partial 6, implemented 2, open 7 (enforce)
+deferred to exact-RC qualification: REQ-AGT-002 (partial), REQ-AGT-010 (partial), REQ-PRV-003 (implemented), REQ-REL-003 (partial), REQ-REL-005 (partial), REQ-AGT-110 (open), REQ-PRV-111 (partial), REQ-REL-114 (open), REQ-QUAL-101 (open), REQ-QUAL-107 (open), REQ-QUAL-108 (partial), REQ-QUAL-109 (open)
