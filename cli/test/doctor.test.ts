@@ -350,6 +350,43 @@ describe("doctor findings name the actual failure", () => {
     }
   });
 
+  test("state integrity stats large task directories in bounded concurrent batches", async () => {
+    const h = tmp("nexus-doctor-batched-state-");
+    const tasks = path.join(h, ".nexus", "tasks");
+    fs.mkdirSync(tasks, { recursive: true, mode: 0o700 });
+    const record = JSON.stringify({ taskId: "task", messages: [] });
+    for (let i = 0; i < 512; i++) fs.writeFileSync(path.join(tasks, `task-${String(i).padStart(4, "0")}.json`), record);
+
+    const originalLstat = fs.promises.lstat;
+    let active = 0;
+    let peakActive = 0;
+    let taskStats = 0;
+    (fs.promises as any).lstat = async function (file: fs.PathLike, ...args: any[]) {
+      if (path.dirname(String(file)) === tasks) {
+        active++;
+        taskStats++;
+        peakActive = Math.max(peakActive, active);
+        try {
+          await new Promise((resolve) => setTimeout(resolve, 20));
+        } finally {
+          active--;
+        }
+      }
+      return (originalLstat as any).call(this, file, ...args);
+    };
+    try {
+      const report = await runDoctor({ home: h, config: cfg() });
+      assert.equal(find(report, "state.integrity")?.status, "pass");
+      assert.equal(find(report, "integrity.check"), undefined, "large state scan must finish before its per-check deadline");
+      assert.equal(taskStats, 512, "every task record is considered when selecting the newest records");
+      assert.ok(peakActive > 1, `stats should overlap instead of serializing; observed ${peakActive}`);
+      assert.ok(peakActive <= 128, `stat concurrency must remain bounded; observed ${peakActive}`);
+    } finally {
+      (fs.promises as any).lstat = originalLstat;
+      fs.rmSync(h, { recursive: true, force: true });
+    }
+  });
+
   test("MCP servers and plugins are inspected without being started or loaded", async () => {
     const marker = path.join(workspace, "started.marker");
     const server = path.join(workspace, "mcp-server.sh");

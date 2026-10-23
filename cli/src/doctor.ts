@@ -814,22 +814,33 @@ function isAtomicJsonTemp(name: string): boolean {
 async function newestStateFiles(dir: string, limit: number, signal: AbortSignal, temps: string[]): Promise<RecentStateFile[]> {
   const newest: RecentStateFile[] = [];
   const directory = await fs.promises.opendir(dir);
-  for await (const entry of directory) {
-    if (signal.aborted) break;
+  const pending: Promise<void>[] = [];
+  // Keep the scan asynchronous without making long-lived state directories spend one deadline per file.
+  // A fixed batch also bounds metadata requests if an operator has an unexpectedly large state tree.
+  const statBatchSize = 128;
+  const inspect = (entry: fs.Dirent) => {
     const full = path.join(dir, entry.name);
-    if (isAtomicJsonTemp(entry.name)) {
+    const isTemp = isAtomicJsonTemp(entry.name);
+    const isRecord = entry.isFile() && entry.name.endsWith(".json") && entry.name !== "index.json" && !entry.name.startsWith(".corrupt-");
+    if (!isTemp && !isRecord) return;
+    pending.push((async () => {
       try {
         const stat = await fs.promises.lstat(full);
-        if (stat.isFile() && stat.nlink === 1) temps.push(full);
+        if (signal.aborted || !stat.isFile() || stat.nlink !== 1) return;
+        if (isTemp) temps.push(full);
+        if (isRecord) keepNewest(newest, { name: entry.name, mtimeMs: stat.mtimeMs }, limit);
       } catch {}
-      if (signal.aborted) break;
+    })());
+  };
+  for await (const entry of directory) {
+    if (signal.aborted) break;
+    inspect(entry);
+    if (pending.length >= statBatchSize) {
+      await Promise.all(pending);
+      pending.length = 0;
     }
-    if (!entry.isFile() || !entry.name.endsWith(".json") || entry.name === "index.json" || entry.name.startsWith(".corrupt-")) continue;
-    try {
-      const stat = await fs.promises.lstat(full);
-      if (stat.isFile() && stat.nlink === 1) keepNewest(newest, { name: entry.name, mtimeMs: stat.mtimeMs }, limit);
-    } catch {}
   }
+  await Promise.all(pending);
   return newest.sort((a, b) => b.mtimeMs - a.mtimeMs);
 }
 
