@@ -28,6 +28,10 @@ describe("read-only command path confinement", () => {
   fs.symlinkSync(path.join(root, "secret.txt"), path.join(ws, "--link"));
   fs.symlinkSync(path.join(ws, "inside.txt"), path.join(ws, "alias"));
   fs.symlinkSync(path.join(root, "outside-dir"), path.join(ws, "outdir"));
+  fs.mkdirSync(path.join(ws, "A"));
+  fs.mkdirSync(path.join(ws, "B"));
+  fs.writeFileSync(path.join(ws, "B", "plink"), "other\n");
+  fs.symlinkSync(path.join(root, "secret.txt"), path.join(ws, "A", "plink"));
   // A repository may legitimately have a directory symlink with this name; a pattern that merely
   // mentions it must not be mistaken for a path argument.
   fs.symlinkSync(path.join(root, "outside-dir"), path.join(ws, "node_modules"));
@@ -150,10 +154,15 @@ describe("read-only command path confinement", () => {
       "rg -e root -- --link",
       "grep -- -e --link",
       "diff -- --link inside.txt",
+      "diff -I -- -r A B",
+      "grep -e -- -R .",
+      "rg -e -- -L .",
+      "diff A B",
     ]) {
       assert.equal(isSafeReadOnlyCommand(command, undefined, ws), false, command);
     }
     assert.equal(isSafeReadOnlyCommand("cat -- inside.txt", undefined, ws), true);
-    assert.equal(isSafeReadOnlyCommand("grep -e root -- inside.txt", undefined, ws), true);
+    assert.equal(isSafeReadOnlyCommand("grep -e root inside.txt", undefined, ws), true);
+    assert.equal(isSafeReadOnlyCommand("diff inside.txt inside.txt", undefined, ws), true);
   });
 });

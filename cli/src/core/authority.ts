@@ -277,6 +277,13 @@ export function isSafeReadOnlyCommand(
 
   // 2b. Path confinement: reject arguments with absolute paths escaping workspace or escaping traversal (..).
   // The words are the shell's words, so a quoted or concatenated symlink name is resolved as written.
+  //
+  // A standalone `--` is only an end-of-options marker when no preceding option could have consumed it
+  // as a value (`diff -I -- -r A B`). Modelling every command's value-taking option table is not
+  // worthwhile: for a content-reading command, refuse a `--` that follows any option instead.
+  if (separator > 1 && REALPATH_COMMANDS.has(baseCommand) && words.slice(1, separator).some(isOptionWord)) {
+    return false;
+  }
   const resolvedWs = workspace ? path.resolve(workspace) : undefined;
   let realWs: string | undefined;
   if (resolvedWs) {
@@ -315,6 +322,10 @@ export function isSafeReadOnlyCommand(
       try {
         const realTarget = fs.realpathSync(path.resolve(resolvedWs!, candidatePath));
         if (realTarget !== realWs && !realTarget.startsWith(realWs + path.sep)) {
+          return false;
+        }
+        // `diff` dereferences symlinks inside a directory operand even without -r; allow only files.
+        if (baseCommand === "diff" && fs.statSync(realTarget).isDirectory()) {
           return false;
         }
       } catch {

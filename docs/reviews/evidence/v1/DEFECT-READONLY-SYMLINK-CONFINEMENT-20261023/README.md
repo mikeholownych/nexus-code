@@ -47,7 +47,11 @@ unterminated quote. On those words the guard:
   `-e`/`--regexp`) as the pattern so patterns do not collide with symlink names; `find` checks only
   its starting point;
 - treats every word after a standalone `--` as an operand, so a dash-prefixed repository entry such
-  as `--link` is resolved (`cat -- --link`, `grep -- -e --link`);
+  as `--link` is resolved (`cat -- --link`, `grep -- -e --link`). Because a `--` can itself be the
+  value of a preceding option (`diff -I -- -r A B`), a content-reading command with any option before
+  `--` is refused rather than guessing every command's getopt table;
+- refuses directory operands to `diff`: GNU diff dereferences symlinks inside a directory even without
+  `-r` (`diff A B` dumped `A/plink -> /etc/passwd`);
 - accepts `node -v` and `rustc -v` only with no operand;
 - fails closed when a supplied workspace cannot be resolved.
 
@@ -78,6 +82,8 @@ secret under `/var/tmp` so bwrap's `--tmpfs /tmp` does not hide the target; `ws/
 | `rg --follow SECRET .` | success, returned `OUTSIDE SECRET` | `Read-only mode violation` |
 | `diff --recursive . node_modules` | success, returned `OUTSIDE SECRET` | `Read-only mode violation` |
 | `diff --from-file=link inside.txt` | success, returned `OUTSIDE SECRET` | `Read-only mode violation` |
+| `diff A B` (nested symlink) | success, returned `OUTSIDE SECRET` | `Read-only mode violation` |
+| `diff -I -- -r A B` | success, returned `OUTSIDE SECRET` | `Read-only mode violation` |
 | `rustc -v link` | success, echoed a source line | `Read-only mode violation` |
 | `grep - link` | success, returned `OUTSIDE SECRET` | `Read-only mode violation` |
 | `cat -- --link` | success, returned `OUTSIDE SECRET` | `Read-only mode violation` |
