@@ -87,7 +87,7 @@ describe("ACC-TRUST-08 / REQ-PRV-108: Web Search Integrity and Destination Discl
           results: [
             {
               title: "<b>Doc</b><script>alert(1)</script> &amp; more",
-              url: "https://example.com/doc",
+              url: "https://example.com/doc\r\n\t",
               content: "<style>p{}</style>plain <i>text</i> &quot;quoted&quot;",
             },
           ],
@@ -99,7 +99,33 @@ describe("ACC-TRUST-08 / REQ-PRV-108: Web Search Integrity and Destination Discl
     const res = await executeWebSearch("markup extraction", 5);
     assert.strictEqual(res.success, true);
     assert.strictEqual(res.results[0].title, "Doc & more");
+    assert.strictEqual(res.results[0].url, "https://example.com/doc");
     assert.strictEqual(res.results[0].snippet, 'plain text "quoted"');
+  });
+
+  test("DuckDuckGo HTML result URLs are stripped of terminal controls", async () => {
+    delete process.env.SEARXNG_URL;
+    delete process.env.SEARX_URL;
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async (input: any) => {
+      const url = String(input);
+      if (url.startsWith("https://api.duckduckgo.com/")) return new Response("", { status: 404 });
+      if (url.startsWith("https://html.duckduckgo.com/")) {
+        return new Response(
+          '<div class="result results_links"><a class="result__url" href="https://example.com/a\r\n\tb">example</a><a class="result__snippet">snippet</a></div>',
+          { status: 200 }
+        );
+      }
+      return new Response("", { status: 404 });
+    }) as any;
+    try {
+      const res = await executeWebSearch("control test", 5);
+      assert.strictEqual(res.success, true);
+      assert.strictEqual(res.results[0].url, "https://example.com/ab");
+      assert.strictEqual(/[\u0000-\u001f\u007f-\u009f]/.test(res.results[0].url), false);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
   });
 
   test("DuckDuckGo JSON result fields are stripped of terminal controls", async () => {
