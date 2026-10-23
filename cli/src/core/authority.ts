@@ -178,13 +178,17 @@ function shortOptionLetters(word: string): string | null {
 }
 
 /**
- * The short-option letters before an attached `-e` pattern. A cluster such as `-ieroot` is
- * `-i -e root` to grep/rg; `f` before `e` is a refused pattern-file option.
+ * grep/rg pattern-option guard. Only a cluster whose first letter is `e` is the pattern option
+ * (`-ePATTERN` / `-e PATTERN`). An `e` anywhere else is the tail of another option's attached value
+ * (`rg -rXe` is `-r Xe`), so treating it as `-e` would misclassify the next file operand. Refuse
+ * such clusters rather than model every value-taking letter. `f` is the pattern-file option and is
+ * always refused.
  */
-function shortOptionLettersBeforePattern(word: string): string {
-  const letters = shortOptionLetters(word) ?? "";
-  const e = letters.indexOf("e");
-  return e < 0 ? letters : letters.slice(0, e);
+function isAmbiguousPatternCluster(word: string): boolean {
+  const letters = shortOptionLetters(word);
+  if (letters === null) return false;
+  if (letters.includes("f")) return true;
+  return letters.indexOf("e") > 0;
 }
 
 /** Whether `word` is an option rather than an operand (`-` alone is an operand to grep/rg). */
@@ -217,7 +221,7 @@ function hasUnsafeReadOnlyOption(base: string, words: string[], separator: numbe
     } else if (isDangerousLongOption(base, w)) {
       return true;
     }
-    if ((base === "grep" || base === "rg") && shortOptionLettersBeforePattern(w).includes("f")) {
+    if ((base === "grep" || base === "rg") && isAmbiguousPatternCluster(w)) {
       return true;
     }
     if (GLOB_READING_COMMANDS.has(base) && isAttachedFileOption(w)) return true;
@@ -255,10 +259,9 @@ function pathWordIndexes(base: string, words: string[], separator: number): Set<
         }
         const letters = shortOptionLetters(w);
         if (letters !== null) {
-          const e = letters.indexOf("e");
-          if (e >= 0) {
+          if (letters[0] === "e") {
             patternSeen = true;
-            if (e === letters.length - 1) i++; // -e with a detached pattern value
+            if (letters.length === 1) i++; // -e with a detached pattern value
           }
           continue;
         }
