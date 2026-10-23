@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { spawnSync } from "node:child_process";
 import { RustCoreBridge } from "../src/tools.js";
 import { wrapSandboxedCommand, isBwrapAvailable } from "../src/sandbox.js";
 
@@ -32,6 +33,36 @@ async function withFixtureHome(
 }
 
 describe("ACC-SAFE-04 & REQ-SEC-104: Read-only HOME masking and workspace path confinement", () => {
+  test("read-only sandbox commands keep the event loop responsive and honor cancellation and deadlines", { skip: !isBwrapAvailable() }, async () => {
+    await withFixtureHome(async (_fixtureHome, workspace) => {
+      const fifoPath = path.join(workspace, "pending-read.fifo");
+      const fifoResult = spawnSync("mkfifo", [fifoPath], { encoding: "utf8" });
+      assert.equal(fifoResult.status, 0, fifoResult.stderr);
+      const bridge = new RustCoreBridge(workspace, "bash", undefined, false, true);
+      try {
+        const controller = new AbortController();
+        bridge.setTurnSignal(controller.signal);
+        let timerFired = false;
+        const pending = bridge.executeTool("run_command", { command: "cat pending-read.fifo", timeout_secs: 5 });
+        setTimeout(() => {
+          timerFired = true;
+          controller.abort();
+        }, 25);
+        const cancelled = await pending;
+        assert.equal(timerFired, true, "the read-only command must not block timers on the agent event loop");
+        assert.equal(cancelled.cancelled, true);
+
+        bridge.setTurnSignal(undefined);
+        const timedOut = await bridge.executeTool("run_command", { command: "cat pending-read.fifo", timeout_secs: 0.1 });
+        assert.equal(timedOut.timedOut, true);
+        assert.match(timedOut.error || "", /timed out/);
+      } finally {
+        bridge.setTurnSignal(undefined);
+        bridge.shutdown();
+      }
+    });
+  });
+
   test("--read-only + run_command 'cat ~/.ssh/id_rsa' refuses or fails with No such file", async () => {
     await withFixtureHome(async (fixtureHome, workspace) => {
       const bridge = new RustCoreBridge(workspace, "bash", undefined, false, true);
