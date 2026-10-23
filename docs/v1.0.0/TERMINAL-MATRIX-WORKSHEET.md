@@ -70,17 +70,22 @@ Select exactly one PASS or FAIL for each cell. Add the approval-panel and post-e
 - All non-safety failures have a written disposition: [ ] yes  [ ] no  [ ] no such failures
 - Safety gate has zero failures: [ ] yes  [ ] no
 
-Overall worksheet disposition: [ ] PASS  [ ] FAIL  [ ] INCOMPLETE
+§5.3 matrix gate: [ ] PASS  [ ] FAIL  [ ] INCOMPLETE
 
-Select PASS only when all 15 cell verdicts are PASS, both required screenshots
-and all per-cell evidence references are complete, checks 2, 5, and 6 have zero
-failures, and every non-safety failure has a written disposition. Record a
-documented non-safety limitation as required by §5.3, but it does not convert a
-failed cell to PASS or satisfy ACC-TUI-MANUAL. Any failed cell makes the overall
-disposition FAIL until fixed or the acceptance criterion is formally amended.
-Missing verdicts, screenshots, or evidence references, or an undisposed
-non-safety failure, make the disposition INCOMPLETE unless any cell is already
-marked FAIL. A failure on checks 2, 5, or 6 makes the overall disposition FAIL.
+Mark the §5.3 matrix gate PASS when all 15 verdicts, screenshots, and evidence
+references are complete, checks 2, 5, and 6 have zero failures, and every
+failure on another check has a written disposition. Mark it FAIL if any safety
+check (2, 5, or 6) failed. Mark it INCOMPLETE when required evidence is missing
+or a non-safety failure has no written disposition.
+
+ACC-TUI-MANUAL: [ ] PASS  [ ] FAIL  [ ] INCOMPLETE
+
+Mark ACC-TUI-MANUAL PASS only when all 15 cell verdicts are PASS and the
+required screenshots and per-cell evidence are archived. Mark it FAIL if any
+cell is FAIL. Mark it INCOMPLETE when evidence is missing and no cell has
+failed. A documented known limitation for a non-safety failure may satisfy the
+§5.3 disposition requirement, but the cell remains FAIL and ACC-TUI-MANUAL
+remains unmet until every cell passes.
 
 Operator summary / evidence index: ______________________________________________
 
