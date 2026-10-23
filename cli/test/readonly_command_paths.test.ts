@@ -8,7 +8,9 @@ import assert from "node:assert/strict";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { spawnSync } from "node:child_process";
 import { isSafeReadOnlyCommand } from "../src/core/authority.js";
+import { isBwrapAvailable, wrapSandboxedCommand } from "../src/sandbox.js";
 
 describe("read-only command path confinement", () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-ro-paths-"));
@@ -144,6 +146,110 @@ describe("read-only command path confinement", () => {
 
   test("an unresolvable workspace fails closed", () => {
     assert.equal(isSafeReadOnlyCommand("cat link", undefined, "/nonexistent/nexus-workspace"), false);
+  });
+
+  test("read-only bwrap cannot follow an in-workspace symlink swapped after admission", { skip: !isBwrapAvailable() }, () => {
+    const outsideRoot = fs.mkdtempSync(path.join("/var/tmp", "nexus-ro-outside-"));
+    const outside = path.join(outsideRoot, "outside-canary.txt");
+    const link = path.join(ws, "race-link");
+    fs.writeFileSync(outside, "OUTSIDE_CANARY_DO_NOT_READ");
+    fs.symlinkSync(path.join(ws, "inside.txt"), link);
+
+    try {
+      assert.equal(isSafeReadOnlyCommand("cat race-link", undefined, ws), true, "initial in-workspace target is admitted");
+      const wrapped = wrapSandboxedCommand("cat race-link", ws, {
+        mode: "bwrap",
+        readOnlyHost: true,
+        network: false,
+      });
+      assert.equal(wrapped.sandboxed, true);
+      assert.ok(wrapped.argv);
+
+      const beforeSwap = spawnSync(wrapped.argv![0], wrapped.argv!.slice(1), { encoding: "utf8", timeout: 5_000 });
+      assert.equal(beforeSwap.status, 0, beforeSwap.stderr);
+      assert.match(beforeSwap.stdout, /workspace content/);
+
+      fs.unlinkSync(link);
+      fs.symlinkSync(outside, link);
+      const afterSwap = spawnSync(wrapped.argv![0], wrapped.argv!.slice(1), { encoding: "utf8", timeout: 5_000 });
+      assert.notEqual(afterSwap.status, 0, "the swapped outside target must not be readable");
+      assert.doesNotMatch(afterSwap.stdout, /OUTSIDE_CANARY_DO_NOT_READ/);
+      assert.doesNotMatch(afterSwap.stderr, /OUTSIDE_CANARY_DO_NOT_READ/);
+    } finally {
+      fs.rmSync(link, { force: true });
+      fs.rmSync(outsideRoot, { recursive: true, force: true });
+    }
+  });
+
+  test("read-only bwrap cannot follow a path created as an escaping symlink after admission", { skip: !isBwrapAvailable() }, () => {
+    const outsideRoot = fs.mkdtempSync(path.join("/var/tmp", "nexus-ro-outside-"));
+    const outside = path.join(outsideRoot, "outside-canary.txt");
+    const link = path.join(ws, "created-after-admission");
+    fs.writeFileSync(outside, "OUTSIDE_CANARY_DO_NOT_READ");
+
+    try {
+      assert.equal(isSafeReadOnlyCommand("cat created-after-admission", undefined, ws), true, "missing operands are currently admitted");
+      const wrapped = wrapSandboxedCommand("cat created-after-admission", ws, {
+        mode: "bwrap",
+        readOnlyHost: true,
+        network: false,
+      });
+      assert.equal(wrapped.sandboxed, true);
+      assert.ok(wrapped.argv);
+
+      fs.symlinkSync(outside, link);
+      const result = spawnSync(wrapped.argv![0], wrapped.argv!.slice(1), { encoding: "utf8", timeout: 5_000 });
+      assert.notEqual(result.status, 0, "a path created after admission must not expose the outside target");
+      assert.doesNotMatch(result.stdout, /OUTSIDE_CANARY_DO_NOT_READ/);
+      assert.doesNotMatch(result.stderr, /OUTSIDE_CANARY_DO_NOT_READ/);
+    } finally {
+      fs.rmSync(link, { force: true });
+      fs.rmSync(outsideRoot, { recursive: true, force: true });
+    }
+  });
+
+  test("read-only bwrap remounts only the workspace when it is nested under HOME", { skip: !isBwrapAvailable() }, () => {
+    const home = fs.mkdtempSync(path.join("/var/tmp", "nexus-ro-home-"));
+    const nestedWorkspace = path.join(home, "project");
+    const outside = path.join(home, "private-canary.txt");
+    const link = path.join(nestedWorkspace, "home-race-link");
+    fs.mkdirSync(nestedWorkspace);
+    fs.writeFileSync(path.join(nestedWorkspace, "inside.txt"), "NESTED_WORKSPACE_CANARY");
+    fs.writeFileSync(outside, "HOME_CANARY_DO_NOT_READ");
+    fs.symlinkSync(path.join(nestedWorkspace, "inside.txt"), link);
+
+    const priorHome = process.env.HOME;
+    let wrapped: ReturnType<typeof wrapSandboxedCommand> | undefined;
+    try {
+      process.env.HOME = home;
+      assert.equal(isSafeReadOnlyCommand("cat home-race-link", undefined, nestedWorkspace), true);
+      wrapped = wrapSandboxedCommand("cat home-race-link", nestedWorkspace, {
+        mode: "bwrap",
+        readOnlyHost: true,
+        network: false,
+      });
+    } finally {
+      if (priorHome === undefined) delete process.env.HOME;
+      else process.env.HOME = priorHome;
+    }
+
+    try {
+      assert.ok(wrapped);
+      assert.equal(wrapped.sandboxed, true);
+      assert.ok(wrapped.argv);
+      const beforeSwap = spawnSync(wrapped.argv![0], wrapped.argv!.slice(1), { encoding: "utf8", timeout: 5_000 });
+      assert.equal(beforeSwap.status, 0, beforeSwap.stderr);
+      assert.match(beforeSwap.stdout, /NESTED_WORKSPACE_CANARY/);
+
+      fs.unlinkSync(link);
+      fs.symlinkSync(outside, link);
+      const afterSwap = spawnSync(wrapped.argv![0], wrapped.argv!.slice(1), { encoding: "utf8", timeout: 5_000 });
+      assert.notEqual(afterSwap.status, 0, "the masked home sibling must not be readable");
+      assert.doesNotMatch(afterSwap.stdout, /HOME_CANARY_DO_NOT_READ/);
+      assert.doesNotMatch(afterSwap.stderr, /HOME_CANARY_DO_NOT_READ/);
+    } finally {
+      fs.rmSync(home, { recursive: true, force: true });
+    }
   });
 
   test("words after -- are operands, including a dash-prefixed symlink name", () => {
