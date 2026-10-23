@@ -96,9 +96,16 @@ describe("read-only command path confinement", () => {
       "find -L .",
       "find . -files0-from outside.list",
       "diff -r . outdir",
+      "diff --recursive . outdir",
+      "diff --recursive=unified . outdir",
       "grep -f/etc/shadow x",
       "grep -flink x",
       "grep -f link x",
+      "grep --exclude-from=/etc/shadow x",
+      "grep - link",
+      "rg - link",
+      "grep -i - link",
+      "wc --files0-from outside.list",
     ]) {
       assert.equal(isSafeReadOnlyCommand(command, undefined, ws), false, command);
     }
@@ -108,6 +115,19 @@ describe("read-only command path confinement", () => {
     assert.equal(isSafeReadOnlyCommand("grep node_modules inside.txt", undefined, ws), true);
     assert.equal(isSafeReadOnlyCommand("rg node_modules inside.txt", undefined, ws), true);
     assert.equal(isSafeReadOnlyCommand("grep -e 'foo bar' inside.txt", undefined, ws), true);
+  });
+
+  test("non-reading commands and option values keep working", () => {
+    for (const command of [
+      "git log --since=2024/01/01",
+      "rg --glob='src/*.ts' TODO",
+      "grep --exclude=node_modules -r x .",
+      "echo node_modules",
+      "which link",
+      "ls node_modules",
+    ]) {
+      assert.equal(isSafeReadOnlyCommand(command, undefined, ws), true, command);
+    }
   });
 
   test("an unresolvable workspace fails closed", () => {

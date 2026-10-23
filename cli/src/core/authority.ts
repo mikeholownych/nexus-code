@@ -108,29 +108,42 @@ function splitShellWords(command: string): string[] | null {
  */
 const GLOB_READING_COMMANDS = new Set(["cat", "head", "tail", "grep", "rg", "diff", "wc"]);
 
+/** Commands whose plain words are resolved through the filesystem before execution. */
+const REALPATH_COMMANDS = new Set([...GLOB_READING_COMMANDS, "find", "git"]);
+
+/** Whether `word` is an option rather than an operand (`-` alone is an operand to grep/rg). */
+function isOptionWord(word: string): boolean {
+  return word !== "-" && word.startsWith("-");
+}
+
+/** An attached option value that names a file the command would read (`-f/etc/shadow`, `--file=x`). */
+function isAttachedFileOption(word: string): boolean {
+  return word === "-f" || word === "--file" || word.startsWith("--file=") || (word.startsWith("-f") && word.length > 2);
+}
+
 /**
  * Options that make an allowlisted command read files without naming them as a plain argument:
- * recursive symlink following, an attached path (for example `grep -f/etc/shadow`), and pattern
- * files. They are refused in read-only mode rather than parsed.
+ * recursive symlink following, attached paths, pattern/ignore files, and path lists. They are
+ * refused in read-only mode rather than parsed.
  */
 function hasUnsafeReadOnlyOption(base: string, words: string[]): boolean {
   for (const w of words.slice(1)) {
-    if (w.startsWith("-") && w.includes("/")) return true;
-    if (base === "grep" || base === "rg") {
-      if (w === "-f" || w === "--file" || w.startsWith("--file=") || (w.startsWith("-f") && w.length > 2)) {
-        return true;
-      }
+    if (GLOB_READING_COMMANDS.has(base) && isAttachedFileOption(w)) return true;
+    if (base === "grep") {
+      if (w === "--exclude-from" || w.startsWith("--exclude-from=")) return true;
+      if (w === "--dereference-recursive" || (/^-[A-Za-z]+$/.test(w) && w.includes("R"))) return true;
     }
-    if (base === "grep" && (w === "--dereference-recursive" || (/^-[A-Za-z]+$/.test(w) && w.includes("R")))) {
-      return true;
-    }
-    if (base === "rg" && (w === "--follow" || (/^-[A-Za-z]+$/.test(w) && w.includes("L")))) {
-      return true;
+    if (base === "rg") {
+      if (w === "--ignore-file" || w.startsWith("--ignore-file=")) return true;
+      if (w === "--follow" || (/^-[A-Za-z]+$/.test(w) && w.includes("L"))) return true;
     }
     if (base === "find" && (w === "-L" || w === "-H" || w === "-follow" || w === "-files0-from" || w.startsWith("-files0-from="))) {
       return true;
     }
-    if (base === "diff" && /^-[A-Za-z]*r[A-Za-z]*$/.test(w)) return true;
+    if (base === "diff" && (w === "--recursive" || w.startsWith("--recursive=") || /^-[A-Za-z]*r[A-Za-z]*$/.test(w))) {
+      return true;
+    }
+    if (base === "wc" && (w === "--files0-from" || w.startsWith("--files0-from="))) return true;
   }
   return false;
 }
@@ -155,7 +168,7 @@ function pathWordIndexes(base: string, words: string[]): Set<number> {
         patternSeen = true;
         continue;
       }
-      if (w.startsWith("-")) continue;
+      if (isOptionWord(w)) continue;
       if (!patternSeen) {
         patternSeen = true;
         continue;
@@ -166,14 +179,14 @@ function pathWordIndexes(base: string, words: string[]): Set<number> {
   }
   if (base === "find") {
     for (let i = 1; i < words.length; i++) {
-      if (words[i].startsWith("-")) continue;
+      if (isOptionWord(words[i])) continue;
       indexes.add(i);
       break;
     }
     return indexes;
   }
   for (let i = 1; i < words.length; i++) {
-    if (!words[i].startsWith("-")) indexes.add(i);
+    if (!isOptionWord(words[i])) indexes.add(i);
   }
   return indexes;
 }
@@ -246,15 +259,13 @@ export function isSafeReadOnlyCommand(
   const withinWorkspace = (target: string): boolean =>
     Boolean(resolvedWs) && (target === resolvedWs || target.startsWith(resolvedWs + path.sep));
   const pathIndexes = pathWordIndexes(baseCommand, words);
+  const resolveWords = REALPATH_COMMANDS.has(baseCommand);
   for (let i = 1; i < words.length; i++) {
-    let candidatePath = words[i];
-    if (candidatePath.startsWith("-")) {
-      const equals = candidatePath.indexOf("=");
-      if (equals < 0) continue;
-      candidatePath = candidatePath.slice(equals + 1);
-    } else if (!pathIndexes.has(i)) {
-      continue;
-    }
+    // Option values are not operands. The options that could point a content-reading command at a
+    // file (`-f`, `--file`, `--files0-from`, ...) are refused above, so nothing is skipped here.
+    if (isOptionWord(words[i])) continue;
+    if (!pathIndexes.has(i)) continue;
+    const candidatePath = words[i];
     if (!candidatePath) continue;
     if (candidatePath.startsWith("/") && !withinWorkspace(path.resolve(candidatePath))) {
       return false;
@@ -266,9 +277,9 @@ export function isSafeReadOnlyCommand(
       }
     }
     // A lexical check is not enough for a read-only workspace: an in-workspace symlink can point
-    // outside it, and the sandbox still exposes host paths read-only. Resolve existing path
-    // arguments and refuse any that land outside the workspace's real path.
-    if (realWs) {
+    // outside it, and the sandbox still exposes host paths read-only. Resolve operands of commands
+    // that read contents or traverse the tree; listing/text commands keep working.
+    if (realWs && resolveWords) {
       try {
         const realTarget = fs.realpathSync(path.resolve(resolvedWs!, candidatePath));
         if (realTarget !== realWs && !realTarget.startsWith(realWs + path.sep)) {
