@@ -60,14 +60,18 @@ check and `killpg`.
 ## Exact limitation and test scope
 
 `killpg(pgid, 0)` is a point-in-time liveness probe. It does not pin the identity of the original
-process group. If that group becomes empty after the probe and the numeric PGID is reused before a
-subsequent `killpg(pgid, SIGTERM)` or `killpg(pgid, SIGKILL)`, the later signal could target the new
-group. The check and signal are not atomic. This limitation applies to cancellation, timeouts,
-service replacement, and engine shutdown paths that signal by numeric PGID.
+process group. If the original group exits and its numeric PGID is already reused before the probe,
+the probe can mistake the unrelated group for the service and retain its stale entry. If reuse
+happens after the probe but before a subsequent `killpg(pgid, SIGTERM)` or
+`killpg(pgid, SIGKILL)`, the signal can target the new group. The check and signal are not atomic.
+This limitation applies to cancellation, timeouts, service replacement, and engine shutdown paths
+that signal by numeric PGID.
 
 Process-group cleanup is therefore best effort and is not an identity-preserving isolation boundary.
-The implementation must not claim that the liveness filter prevents signaling a reused PGID. The
-startup-exit tests verify dead-service unregistration and live-descendant management; they do not
-deterministically exercise OS-level PGID reuse or prove that the check-and-signal race is eliminated.
-A design requiring that guarantee needs stable group supervision or an OS resource boundary with
-identity-bound lifecycle semantics, with platform support verified independently.
+The liveness filter only omits a signal when no process group occupies that number at probe time; it
+cannot distinguish the original group from one that reused its PGID. The implementation must not
+claim that the filter prevents signaling a reused PGID. The startup-exit tests verify dead-service
+unregistration and live-descendant management; they do not deterministically exercise OS-level PGID
+reuse or prove that the identity ambiguity is eliminated. A design requiring that guarantee needs
+stable group supervision or an OS resource boundary with identity-bound lifecycle semantics, with
+platform support verified independently.

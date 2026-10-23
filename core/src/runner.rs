@@ -155,14 +155,16 @@ mod registry {
     }
 
     fn alive(pgid: libc::pid_t) -> bool {
-        // This is a liveness probe for a numeric PGID, not an identity handle. A group can exit
-        // and the number can be reused between this probe and a later killpg call.
+        // This is a liveness probe for a numeric PGID, not an identity handle. If the original
+        // group exited and the number was already reused, this reports the unrelated group alive;
+        // reuse can also happen between this probe and a later killpg call.
         unsafe { libc::killpg(pgid, 0) == 0 }
     }
 
     /// Best-effort TERM, a grace period, then KILL for whatever is still in the numeric group.
-    /// The liveness checks reduce stale-PGID signals but cannot make the check-and-signal atomic or
-    /// prove that a group found by the numeric ID is the original command's group.
+    /// The liveness checks only omit a signal when the numeric ID is unoccupied at probe time.
+    /// They cannot distinguish the original group from a reused PGID, whether reuse happened
+    /// before the probe or between the probe and the signal.
     pub fn end_groups(pgids: &[libc::pid_t], grace: Duration) {
         for &pgid in pgids {
             unsafe { libc::killpg(pgid, libc::SIGTERM) };
@@ -279,9 +281,9 @@ mod registry {
                     all.push(svc);
                 }
             }
-            // A service can die after the startup grace. This snapshot drops groups already gone,
-            // reducing stale-PGID signals; numeric PGIDs do not preserve identity across the gap
-            // between this check and the later killpg call.
+            // Drop numeric PGIDs that are unoccupied at this snapshot. If an ID has already been
+            // reused, the probe sees the unrelated group as alive; reuse can also happen between
+            // this check and the later killpg call. Numeric PGIDs do not preserve identity.
             all.retain(|&p| alive(p));
             all
         };
@@ -689,8 +691,9 @@ pub fn run_command_tracked(args: RunCommandArgs, base_dir: &Path, key: Option<&s
             let code = status.code().unwrap_or(0);
             // The group was registered before the startup grace to cover shutdown during startup.
             // The shell can exit while `cmd &` keeps the group alive: keep that registration. If
-            // the numeric PGID is gone now, unregister it. This is a point-in-time liveness check;
-            // it does not prevent reuse between the check and a later signal.
+            // the numeric PGID is unoccupied now, unregister it. If reuse happened before this
+            // check, an unrelated group can appear alive; reuse after this check is also possible.
+            // The numeric liveness check cannot verify that this is the original service group.
             #[cfg(unix)]
             if let Some(ref sname) = args.service_name {
                 if registry::pgid_alive(pgid) {
@@ -787,9 +790,10 @@ pub fn run_command_tracked(args: RunCommandArgs, base_dir: &Path, key: Option<&s
 }
 
 /// Best-effort process-group cleanup: SIGTERM first, then SIGKILL after a grace period. A numeric
-/// PGID identifies the original group only while that group exists; if it becomes empty and the ID
-/// is reused between signals, a later signal could target a different group. This is cleanup, not
-/// an identity-preserving isolation boundary. Always reaps the shell.
+/// PGID does not identify the original group after it becomes empty. A reused ID may already refer
+/// to another group before a signal, or may be reused between signals, so cleanup can target a
+/// different group. This is best-effort cleanup, not an identity-preserving isolation boundary.
+/// Always reaps the shell.
 fn terminate_process_tree(child: &mut std::process::Child) {
     #[cfg(unix)]
     {
