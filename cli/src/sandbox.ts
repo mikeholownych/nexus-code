@@ -59,6 +59,24 @@ export function isSandboxAvailable(mode: SandboxMode = "auto"): boolean {
   return probeBwrapSandbox() || probeDockerSandbox();
 }
 
+function isPathWithin(candidate: string, root: string): boolean {
+  const relative = path.relative(root, candidate);
+  return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
+}
+
+function appendDirectoryTree(args: string[], target: string, known: Set<string>): void {
+  const absolute = path.resolve(target);
+  const parts = absolute.split(path.sep).filter(Boolean);
+  let current = path.parse(absolute).root;
+  for (const part of parts) {
+    current = path.join(current, part);
+    if (!known.has(current)) {
+      args.push("--dir", current);
+      known.add(current);
+    }
+  }
+}
+
 /** Exercise the actual mount boundary, not just the presence of a binary. */
 function probeBwrapSandbox(): boolean {
   if (!isBwrapAvailable()) return false;
@@ -132,43 +150,96 @@ export function wrapSandboxedCommand(
       };
     }
 
-    // Build bwrap flags:
-    // - Read-only host filesystem: --ro-bind / /
-    // - Mount /dev and /proc
-    // - Read-write bind exclusively for the workspace
-    // - Unshare PID namespace
-    // - Isolate /tmp
-    const userHome = process.env.HOME || os.homedir();
-    const bwrapArgs: string[] = [
-      "bwrap",
-      "--ro-bind", "/", "/",
-      // A self-bind of / is not reliably remounted read-only on all kernels.
-      // Explicitly remount the sandbox root before selectively adding its one
-      // writable worktree mount below.
-      "--remount-ro", "/",
-      "--dev", "/dev",
-      "--proc", "/proc",
-      "--tmpfs", "/tmp",
-    ];
+    const userHome = path.resolve(process.env.HOME || os.homedir());
+    const bwrapArgs: string[] = ["bwrap"];
 
-    if (options.readOnlyHost && userHome) {
-      bwrapArgs.push("--tmpfs", userHome);
+    if (options.readOnlyHost) {
+      // Do not expose the host root to read-only commands. A path admitted by the
+      // authority check can be replaced before the shell opens it; a read-only
+      // bind of / still lets that race disclose unrelated host files.
+      if (options.customBwrapArgs?.length) {
+        return {
+          command: cmd,
+          sandboxed: false,
+          engine: "none",
+          warning: "Custom Bubblewrap mounts are incompatible with read-only host confinement.",
+        };
+      }
+
+      bwrapArgs.push("--tmpfs", "/");
+      const knownDirectories = new Set<string>(["/"]);
+      const systemRoots: string[] = [];
+      for (const source of ["/usr", "/bin", "/sbin", "/lib", "/lib64"]) {
+        try {
+          if (!fs.statSync(source).isDirectory()) continue;
+          appendDirectoryTree(bwrapArgs, source, knownDirectories);
+          systemRoots.push(source);
+        } catch {
+          // A platform may not have every conventional system directory.
+        }
+      }
+      for (const mountpoint of ["/dev", "/proc", "/tmp", "/etc"]) {
+        appendDirectoryTree(bwrapArgs, mountpoint, knownDirectories);
+      }
+
+      const homeIsUsable = userHome !== "/";
+      if (homeIsUsable && !systemRoots.some((root) => isPathWithin(userHome, root))) {
+        appendDirectoryTree(bwrapArgs, userHome, knownDirectories);
+      }
+      const workspaceNeedsLaterCreation =
+        isPathWithin(absWorkspace, "/tmp") ||
+        (homeIsUsable && isPathWithin(absWorkspace, userHome));
+      if (!workspaceNeedsLaterCreation && !systemRoots.some((root) => isPathWithin(absWorkspace, root))) {
+        appendDirectoryTree(bwrapArgs, absWorkspace, knownDirectories);
+      }
+
+      // Make the synthetic root read-only before adding its explicitly scoped mounts.
+      bwrapArgs.push("--remount-ro", "/");
+      for (const source of ["/usr", "/bin", "/sbin", "/lib", "/lib64"]) {
+        try {
+          if (fs.statSync(source).isDirectory()) {
+            bwrapArgs.push("--ro-bind", fs.realpathSync(source), source);
+          }
+        } catch {
+          // Keep absent optional runtime directories absent in the synthetic root.
+        }
+      }
+      bwrapArgs.push("--dev", "/dev", "--proc", "/proc", "--tmpfs", "/tmp");
+
+      if (homeIsUsable && userHome !== "/tmp" && !systemRoots.some((root) => isPathWithin(userHome, root))) {
+        if (isPathWithin(userHome, "/tmp")) {
+          appendDirectoryTree(bwrapArgs, userHome, new Set(["/", "/tmp"]));
+        }
+        bwrapArgs.push("--tmpfs", userHome);
+      }
+
+      if (workspaceNeedsLaterCreation) {
+        const containingMount = homeIsUsable && isPathWithin(absWorkspace, userHome) ? userHome : "/tmp";
+        appendDirectoryTree(bwrapArgs, absWorkspace, new Set(["/", ...systemRoots, containingMount]));
+      }
+      bwrapArgs.push("--ro-bind", absWorkspace, absWorkspace);
+      bwrapArgs.push("--setenv", "PATH", "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin");
+      bwrapArgs.push("--setenv", "HOME", userHome);
+    } else {
+      // General worktree sandbox retains the host runtime read-only while allowing
+      // writes only through its dedicated workspace bind.
+      bwrapArgs.push(
+        "--ro-bind", "/", "/",
+        "--remount-ro", "/",
+        "--dev", "/dev",
+        "--proc", "/proc",
+        "--tmpfs", "/tmp",
+      );
+      bwrapArgs.push("--bind", absWorkspace, absWorkspace);
     }
 
-    bwrapArgs.push(
-      options.readOnlyHost ? "--ro-bind" : "--bind",
-      absWorkspace,
-      absWorkspace,
-      "--chdir",
-      absWorkspace,
-      "--unshare-pid",
-    );
+    bwrapArgs.push("--chdir", absWorkspace, "--unshare-pid");
 
     if (options.network === false) {
       bwrapArgs.push("--unshare-net");
     }
 
-    if (options.customBwrapArgs && options.customBwrapArgs.length > 0) {
+    if (!options.readOnlyHost && options.customBwrapArgs && options.customBwrapArgs.length > 0) {
       bwrapArgs.push(...options.customBwrapArgs);
     }
 
