@@ -43,3 +43,19 @@ the allowlist keeps working for in-workspace reads.
   the fix.
 - `npx tsc --noEmit -p tsconfig.json`: pass.
 - `git diff --check`: pass.
+
+## End-to-end confirmation (RT)
+
+With the real `harness-core` from the published RC3 package (`1b9791f`) and bwrap 0.13.1, a workspace
+and an outside secret both under `/var/tmp` (so the bwrap `--tmpfs /tmp` does not hide the target), and
+`ws/link -> ../secret.txt`:
+
+| Command | Pre-fix | Post-fix |
+|---|---|---|
+| `cat inside.txt` | success, no secret | success, no secret |
+| `cat link` | success, returned `OUTSIDE SECRET` | `Read-only mode violation` |
+| `cat *` | success, returned `OUTSIDE SECRET` | `Read-only mode violation` |
+
+A fixture under `/tmp` shows no leak because bwrap tmpfs-mounts `/tmp`; the `/var/tmp` fixture exercises
+the `--ro-bind / /` host exposure that the lexical check was supposed to gate.
+
