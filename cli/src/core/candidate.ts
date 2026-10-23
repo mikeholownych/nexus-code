@@ -133,6 +133,39 @@ export function openCandidateDirectory(
   }
 }
 
+export function openCandidatePathParent(
+  workspacePath: string,
+  relativePath: string,
+  filesystem: typeof fs = fs,
+): { parent: { fd: number; dir: fs.Dir }; name: string; fullPath: string } {
+  const components = relativePath.split("/").filter(Boolean);
+  if (components.length === 0 || components.some((part) => part === "." || part === "..")) {
+    throw new Error("Invalid candidate path from workspace root");
+  }
+
+  let parent = openCandidateDirectory(workspacePath, undefined, undefined, filesystem);
+  try {
+    for (let index = 0; index < components.length - 1; index += 1) {
+      const component = components[index];
+      const next = openCandidateDirectory(
+        path.join(workspacePath, ...components.slice(0, index + 1)),
+        parent.fd,
+        component,
+        filesystem,
+      );
+      parent.dir.closeSync();
+      filesystem.closeSync(parent.fd);
+      parent = next;
+    }
+    const name = components[components.length - 1];
+    return { parent, name, fullPath: procFdPath(parent.fd, name, filesystem) };
+  } catch (error) {
+    parent.dir.closeSync();
+    filesystem.closeSync(parent.fd);
+    throw error;
+  }
+}
+
 export interface CandidateValidationDecision {
   valid: boolean;
   currentCandidateId?: string;
@@ -270,24 +303,18 @@ export function resolveFileCandidateDetails(
   }
 }
 
-function resolveWorkspaceFileDetails(workspacePath: string, relativePath: string, maxBytes: number): EntryStructuralDetails {
-  const components = relativePath.split(/[\\/]+/).filter(Boolean);
-  if (components.length === 0 || components.some((part) => part === "." || part === "..")) {
-    throw new Error("Invalid candidate path from workspace root");
-  }
-  const opened: Array<{ fd: number; dir: fs.Dir }> = [openCandidateDirectory(workspacePath)];
+function resolveWorkspaceFileDetails(
+  workspacePath: string,
+  relativePath: string,
+  maxBytes: number,
+  filesystem: typeof fs = fs,
+): EntryStructuralDetails {
+  const located = openCandidatePathParent(workspacePath, relativePath, filesystem);
   try {
-    for (const component of components.slice(0, -1)) {
-      const parent = opened[opened.length - 1];
-      opened.push(openCandidateDirectory(path.join(workspacePath, relativePath), parent.fd, component));
-    }
-    const parent = opened[opened.length - 1];
-    return resolveFileCandidateDetails(procFdPath(parent.fd, components[components.length - 1]), fs, maxBytes);
+    return resolveFileCandidateDetails(located.fullPath, filesystem, maxBytes);
   } finally {
-    for (const handle of opened.reverse()) {
-      handle.dir.closeSync();
-      fs.closeSync(handle.fd);
-    }
+    located.parent.dir.closeSync();
+    filesystem.closeSync(located.parent.fd);
   }
 }
 
@@ -316,12 +343,21 @@ export function computeCandidateIdentitySync(
   workspacePath: string,
   options: CandidateComputeOptions = {}
 ): CandidateIdentity {
+  return computeCandidateIdentitySyncForTesting(workspacePath, options, fs);
+}
+
+/** Test seam for deterministic filesystem race fixtures; production callers use computeCandidateIdentitySync. */
+export function computeCandidateIdentitySyncForTesting(
+  workspacePath: string,
+  options: CandidateComputeOptions,
+  filesystem: typeof fs,
+): CandidateIdentity {
   const resolvedWorkspace = path.resolve(workspacePath);
-  if (!fs.existsSync(resolvedWorkspace)) {
+  if (!filesystem.existsSync(resolvedWorkspace)) {
     throw new Error(`Workspace path does not exist: ${resolvedWorkspace}`);
   }
 
-  const stat = fs.statSync(resolvedWorkspace);
+  const stat = filesystem.statSync(resolvedWorkspace);
   if (!stat.isDirectory()) {
     throw new Error(`Workspace path is not a directory: ${resolvedWorkspace}`);
   }
@@ -341,9 +377,9 @@ export function computeCandidateIdentitySync(
   const includeUntracked = options.includeUntracked !== false;
 
   if (isGit) {
-    return computeGitCandidateIdentity(resolvedWorkspace, options, includeUntracked);
+    return computeGitCandidateIdentity(resolvedWorkspace, options, includeUntracked, filesystem);
   } else {
-    return computeNonGitCandidateIdentity(resolvedWorkspace, options);
+    return computeNonGitCandidateIdentity(resolvedWorkspace, options, filesystem);
   }
 }
 
@@ -353,7 +389,8 @@ export function computeCandidateIdentitySync(
 function computeGitCandidateIdentity(
   workspacePath: string,
   options: CandidateComputeOptions,
-  includeUntracked: boolean
+  includeUntracked: boolean,
+  filesystem: typeof fs,
 ): CandidateIdentity {
   const entryLimit = configuredEntryLimit(options);
   const byteLimit = configuredByteLimit(options);
@@ -408,7 +445,7 @@ function computeGitCandidateIdentity(
 
   function addUntrackedFile(fullPath: string, posixPath: string): void {
     recordUntrackedEntry();
-    const details = resolveFileCandidateDetails(fullPath, fs, byteLimit - trackedBytes - untrackedBudget.bytes);
+    const details = resolveFileCandidateDetails(fullPath, filesystem, byteLimit - trackedBytes - untrackedBudget.bytes);
     if (details.isDeleted) return;
     untrackedBudget.bytes += details.size;
     if (trackedBytes + untrackedBudget.bytes > byteLimit) {
@@ -434,7 +471,7 @@ function computeGitCandidateIdentity(
       throw new Error(`Candidate directory depth exceeds ${MAX_CANDIDATE_DIRECTORY_DEPTH}: ${relativePath}`);
     }
     recordUntrackedEntry();
-    const openedDirectory = openCandidateDirectory(directoryPath, parentFd, childName);
+    const openedDirectory = openCandidateDirectory(directoryPath, parentFd, childName, filesystem);
     const directory = openedDirectory.dir;
     try {
       while (true) {
@@ -442,9 +479,9 @@ function computeGitCandidateIdentity(
         if (child === null) break;
         // Nested repository history and metadata are deliberately outside candidate identity.
         if (child.name === ".git") continue;
-        const fullPath = procFdPath(openedDirectory.fd, child.name);
+        const fullPath = procFdPath(openedDirectory.fd, child.name, filesystem);
         const childRelativePath = `${relativePath}/${child.name}`;
-        const details = fs.lstatSync(fullPath, { bigint: true });
+        const details = filesystem.lstatSync(fullPath, { bigint: true });
         if (details.isDirectory()) {
           walkUntrackedDirectory(fullPath, childRelativePath, depth + 1, openedDirectory.fd, child.name);
         } else if (details.isFile() || details.isSymbolicLink()) {
@@ -455,7 +492,7 @@ function computeGitCandidateIdentity(
       }
     } finally {
       directory.closeSync();
-      fs.closeSync(openedDirectory.fd);
+      filesystem.closeSync(openedDirectory.fd);
     }
   }
 
@@ -495,7 +532,7 @@ function computeGitCandidateIdentity(
             status: "deleted",
           });
         } else {
-          const details = resolveWorkspaceFileDetails(workspacePath, filePath, remainingBytesForTrackedPath(posixPath));
+          const details = resolveWorkspaceFileDetails(workspacePath, filePath, remainingBytesForTrackedPath(posixPath), filesystem);
           if (details.isDeleted) {
             setTrackedEntry({
               path: posixPath,
@@ -554,27 +591,22 @@ function computeGitCandidateIdentity(
         }
 
         const posixPath = rawFile.split(path.sep).join("/").replace(/\/+$/, "");
-        const fullPath = path.join(workspacePath, rawFile);
 
         if (code === "??") {
           if (includeUntracked) {
-            const details = fs.lstatSync(fullPath);
-            if (details.isDirectory()) {
-              const rootDirectory = openCandidateDirectory(workspacePath);
-              try {
-                walkUntrackedDirectory(fullPath, posixPath, 1, rootDirectory.fd, rawFile);
-              } finally {
-                rootDirectory.dir.closeSync();
-                fs.closeSync(rootDirectory.fd);
+            const located = openCandidatePathParent(workspacePath, rawFile, filesystem);
+            try {
+              const details = filesystem.lstatSync(located.fullPath, { bigint: true });
+              if (details.isDirectory()) {
+                walkUntrackedDirectory(located.fullPath, posixPath, 1, located.parent.fd, located.name);
+              } else if (details.isFile() || details.isSymbolicLink()) {
+                addUntrackedFile(located.fullPath, posixPath);
+              } else {
+                throw new Error(`Unsupported filesystem object type in untracked candidate path: ${posixPath}`);
               }
-            } else {
-              const rootDirectory = openCandidateDirectory(workspacePath);
-              try {
-                addUntrackedFile(procFdPath(rootDirectory.fd, rawFile), posixPath);
-              } finally {
-                rootDirectory.dir.closeSync();
-                fs.closeSync(rootDirectory.fd);
-              }
+            } finally {
+              located.parent.dir.closeSync();
+              filesystem.closeSync(located.parent.fd);
             }
           }
         } else {
@@ -589,7 +621,7 @@ function computeGitCandidateIdentity(
               status: "deleted",
             });
           } else {
-            const details = resolveWorkspaceFileDetails(workspacePath, rawFile, remainingBytesForTrackedPath(posixPath));
+            const details = resolveWorkspaceFileDetails(workspacePath, rawFile, remainingBytesForTrackedPath(posixPath), filesystem);
             if (details.isDeleted) {
               setTrackedEntry({
                 path: posixPath,
@@ -667,7 +699,8 @@ function computeGitCandidateIdentity(
  */
 function computeNonGitCandidateIdentity(
   workspacePath: string,
-  options: CandidateComputeOptions
+  options: CandidateComputeOptions,
+  filesystem: typeof fs,
 ): CandidateIdentity {
   const entryLimit = configuredEntryLimit(options);
   const byteLimit = configuredByteLimit(options);
@@ -702,7 +735,7 @@ function computeNonGitCandidateIdentity(
     if (depth > MAX_CANDIDATE_DIRECTORY_DEPTH) {
       throw new Error(`Candidate directory depth exceeds ${MAX_CANDIDATE_DIRECTORY_DEPTH}`);
     }
-    const openedDirectory = openCandidateDirectory(currentDir, parentFd, childName);
+    const openedDirectory = openCandidateDirectory(currentDir, parentFd, childName, filesystem);
     const directory = openedDirectory.dir;
     try {
       while (true) {
@@ -713,12 +746,12 @@ function computeNonGitCandidateIdentity(
         if (visitedEntries > entryLimit) {
           throw new Error(`Candidate manifest exceeds ${entryLimit} entry limit`);
         }
-        const fullPath = procFdPath(openedDirectory.fd, item.name);
+        const fullPath = procFdPath(openedDirectory.fd, item.name, filesystem);
         const relativePath = relativeDir ? `${relativeDir}/${item.name}` : item.name;
         if (item.isDirectory()) {
           walk(fullPath, depth + 1, relativePath, openedDirectory.fd, item.name);
         } else if (item.isFile() || item.isSymbolicLink()) {
-          const details = resolveFileCandidateDetails(fullPath, fs, byteLimit - totalBytes);
+          const details = resolveFileCandidateDetails(fullPath, filesystem, byteLimit - totalBytes);
           if (!details.isDeleted) {
             totalBytes += details.size;
             if (totalBytes > byteLimit) {
@@ -738,7 +771,7 @@ function computeNonGitCandidateIdentity(
       }
     } finally {
       directory.closeSync();
-      fs.closeSync(openedDirectory.fd);
+      filesystem.closeSync(openedDirectory.fd);
     }
   }
 

@@ -13,6 +13,7 @@ import { execFileSync } from "node:child_process";
 import {
   CandidateTracker,
   computeCandidateIdentitySync,
+  computeCandidateIdentitySyncForTesting,
   hashContent,
   openCandidateDirectory,
   resolveFileCandidateDetails,
@@ -295,6 +296,56 @@ describe("WP-04: Candidate Identity & Validation Binding (INC-05, DEC-02)", () =
     }
   });
 
+  test("untracked nested path parent swap fails closed during candidate computation", () => {
+    const parentDirectory = path.join(rootGit, "untracked-parent");
+    const movedDirectory = path.join(rootGit, "untracked-parent-original");
+    const outsideDirectory = path.join(tmpRoot, "untracked-parent-outside");
+    fs.mkdirSync(path.join(parentDirectory, "child"), { recursive: true });
+    fs.writeFileSync(path.join(parentDirectory, "child", "file.txt"), "candidate content\n");
+    fs.mkdirSync(outsideDirectory);
+    fs.writeFileSync(path.join(outsideDirectory, "file.txt"), "outside content must not be read\n");
+
+    const status = execFileSync("git", ["status", "--porcelain=v1", "--untracked-files=all"], {
+      cwd: rootGit,
+      encoding: "utf-8",
+    });
+    assert.match(status, /\?\? untracked-parent\/child\/file\.txt/);
+
+    const originalLstat = fs.lstatSync;
+    let replaced = false;
+    const raceFs = new Proxy(fs, {
+      get(target, property) {
+        if (property === "lstatSync") {
+          return (...args: any[]) => {
+            const result = originalLstat(...args);
+            if (!replaced && /^\/proc\/self\/fd\/\d+\/untracked-parent$/.test(String(args[0]))) {
+              replaced = true;
+              fs.renameSync(parentDirectory, movedDirectory);
+              fs.symlinkSync(outsideDirectory, parentDirectory);
+            }
+            return result;
+          };
+        }
+        return Reflect.get(target, property, target);
+      },
+    }) as typeof fs;
+
+    try {
+      assert.throws(
+        () => computeCandidateIdentitySyncForTesting(rootGit, {}, raceFs),
+        /Failed to query git status for candidate identity/,
+      );
+      assert.strictEqual(replaced, true, "Fixture must swap a nested parent after lstat and before open");
+    } finally {
+      if (fs.lstatSync(parentDirectory, { throwIfNoEntry: false })?.isSymbolicLink()) {
+        fs.unlinkSync(parentDirectory);
+      }
+      if (fs.existsSync(movedDirectory)) fs.renameSync(movedDirectory, parentDirectory);
+      fs.rmSync(parentDirectory, { recursive: true, force: true });
+      fs.rmSync(outsideDirectory, { recursive: true, force: true });
+    }
+  });
+
   test("tracked file byte budget rejects oversized content before hashing", () => {
     const readmePath = path.join(rootGit, "README.md");
     const original = fs.readFileSync(readmePath);
@@ -306,6 +357,24 @@ describe("WP-04: Candidate Identity & Validation Binding (INC-05, DEC-02)", () =
       );
     } finally {
       fs.writeFileSync(readmePath, original);
+    }
+  });
+
+  test("aggregate tracked byte budget rejects a set of files before hashing the over-budget file", () => {
+    const readmePath = path.join(rootGit, "README.md");
+    const sourcePath = path.join(rootGit, "src", "index.ts");
+    const originalReadme = fs.readFileSync(readmePath);
+    const originalSource = fs.readFileSync(sourcePath);
+    try {
+      fs.writeFileSync(readmePath, "1234");
+      fs.writeFileSync(sourcePath, "5678");
+      assert.throws(
+        () => computeCandidateIdentitySync(rootGit, { maxTotalBytes: 6 }),
+        /Candidate file exceeds 2 byte limit/,
+      );
+    } finally {
+      fs.writeFileSync(readmePath, originalReadme);
+      fs.writeFileSync(sourcePath, originalSource);
     }
   });
 
