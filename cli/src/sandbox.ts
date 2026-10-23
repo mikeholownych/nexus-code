@@ -77,6 +77,61 @@ function appendDirectoryTree(args: string[], target: string, known: Set<string>)
   }
 }
 
+/** Add one trusted runtime file and its dynamic loader dependencies to a synthetic root. */
+function appendRuntimeFile(
+  args: string[],
+  source: string,
+  knownDirectories: Set<string>,
+  mountedFiles: Set<string>,
+  depth = 0,
+): void {
+  if (depth > 4) return;
+  let resolved: string;
+  try {
+    resolved = fs.realpathSync(source);
+    if (!fs.statSync(resolved).isFile() || mountedFiles.has(source)) return;
+  } catch {
+    return;
+  }
+
+  appendDirectoryTree(args, path.dirname(source), knownDirectories);
+  args.push("--ro-bind", resolved, source);
+  mountedFiles.add(source);
+
+  // Runtime commands in the read-only allowlist are fixed platform binaries. Mount their
+  // individual ELF dependencies, never the containing host directories.
+  try {
+    const output = execFileSync("ldd", [resolved], { encoding: "utf8", timeout: 2_000, stdio: ["ignore", "pipe", "ignore"] });
+    for (const line of output.split("\n")) {
+      const match = line.match(/(?:=>\s*)?(\/[^\s]+)\s+\(/);
+      if (match?.[1]) appendRuntimeFile(args, match[1], knownDirectories, mountedFiles, depth + 1);
+    }
+  } catch {
+    // Static binaries and scripts do not have ldd dependencies.
+  }
+
+  // The only runtime script admitted here is an installed command with a fixed shebang.
+  try {
+    const firstLine = fs.readFileSync(resolved, "utf8").split("\n", 1)[0];
+    const shebang = firstLine.match(/^#!\s*(\/[^\s]+)/)?.[1];
+    if (shebang) appendRuntimeFile(args, shebang, knownDirectories, mountedFiles, depth + 1);
+  } catch {
+    // Binary files are not UTF-8 scripts.
+  }
+}
+
+function appendReadOnlyRuntime(args: string[], knownDirectories: Set<string>): void {
+  const mountedFiles = new Set<string>();
+  for (const command of [
+    "/usr/bin/bash", "/bin/bash", "/usr/bin/sh", "/bin/sh",
+    "/usr/bin/ls", "/usr/bin/dir", "/usr/bin/pwd", "/usr/bin/cat", "/usr/bin/head",
+    "/usr/bin/tail", "/usr/bin/grep", "/usr/bin/rg", "/usr/bin/find", "/usr/bin/wc",
+    "/usr/bin/which", "/usr/bin/git", "/usr/bin/node",
+  ]) {
+    appendRuntimeFile(args, command, knownDirectories, mountedFiles);
+  }
+}
+
 /** Exercise the actual mount boundary, not just the presence of a binary. */
 function probeBwrapSandbox(): boolean {
   if (!isBwrapAvailable()) return false;
@@ -168,45 +223,27 @@ export function wrapSandboxedCommand(
 
       bwrapArgs.push("--tmpfs", "/");
       const knownDirectories = new Set<string>(["/"]);
-      const systemRoots: string[] = [];
-      for (const source of ["/usr", "/bin", "/sbin", "/lib", "/lib64"]) {
-        try {
-          if (!fs.statSync(source).isDirectory()) continue;
-          appendDirectoryTree(bwrapArgs, source, knownDirectories);
-          systemRoots.push(source);
-        } catch {
-          // A platform may not have every conventional system directory.
-        }
-      }
       for (const mountpoint of ["/dev", "/proc", "/tmp", "/etc"]) {
         appendDirectoryTree(bwrapArgs, mountpoint, knownDirectories);
       }
 
       const homeIsUsable = userHome !== "/";
-      if (homeIsUsable && !systemRoots.some((root) => isPathWithin(userHome, root))) {
+      if (homeIsUsable) {
         appendDirectoryTree(bwrapArgs, userHome, knownDirectories);
       }
       const workspaceNeedsLaterCreation =
         isPathWithin(absWorkspace, "/tmp") ||
         (homeIsUsable && isPathWithin(absWorkspace, userHome));
-      if (!workspaceNeedsLaterCreation && !systemRoots.some((root) => isPathWithin(absWorkspace, root))) {
+      if (!workspaceNeedsLaterCreation) {
         appendDirectoryTree(bwrapArgs, absWorkspace, knownDirectories);
       }
 
-      // Make the synthetic root read-only before adding its explicitly scoped mounts.
+      appendReadOnlyRuntime(bwrapArgs, knownDirectories);
+      // Make the completed synthetic root read-only after creating its exact runtime mounts.
       bwrapArgs.push("--remount-ro", "/");
-      for (const source of ["/usr", "/bin", "/sbin", "/lib", "/lib64"]) {
-        try {
-          if (fs.statSync(source).isDirectory()) {
-            bwrapArgs.push("--ro-bind", fs.realpathSync(source), source);
-          }
-        } catch {
-          // Keep absent optional runtime directories absent in the synthetic root.
-        }
-      }
       bwrapArgs.push("--dev", "/dev", "--proc", "/proc", "--tmpfs", "/tmp");
 
-      if (homeIsUsable && userHome !== "/tmp" && !systemRoots.some((root) => isPathWithin(userHome, root))) {
+      if (homeIsUsable && userHome !== "/tmp") {
         if (isPathWithin(userHome, "/tmp")) {
           appendDirectoryTree(bwrapArgs, userHome, new Set(["/", "/tmp"]));
         }
@@ -215,7 +252,7 @@ export function wrapSandboxedCommand(
 
       if (workspaceNeedsLaterCreation) {
         const containingMount = homeIsUsable && isPathWithin(absWorkspace, userHome) ? userHome : "/tmp";
-        appendDirectoryTree(bwrapArgs, absWorkspace, new Set(["/", ...systemRoots, containingMount]));
+        appendDirectoryTree(bwrapArgs, absWorkspace, new Set(["/", containingMount]));
       }
       bwrapArgs.push("--ro-bind", absWorkspace, absWorkspace);
       bwrapArgs.push("--setenv", "PATH", "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin");

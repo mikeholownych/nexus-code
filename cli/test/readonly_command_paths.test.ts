@@ -181,6 +181,49 @@ describe("read-only command path confinement", () => {
     }
   });
 
+  test("read-only bwrap does not expose unrelated files beneath the host runtime tree", { skip: !isBwrapAvailable() }, () => {
+    const hostFile = "/usr/share/doc/bash/copyright";
+    if (!fs.existsSync(hostFile)) return;
+    const link = path.join(ws, "runtime-tree-canary");
+    fs.symlinkSync(path.join(ws, "inside.txt"), link);
+
+    try {
+      assert.equal(isSafeReadOnlyCommand("cat runtime-tree-canary", undefined, ws), true);
+      const wrapped = wrapSandboxedCommand("cat runtime-tree-canary", ws, {
+        mode: "bwrap",
+        readOnlyHost: true,
+        network: false,
+      });
+      assert.equal(wrapped.sandboxed, true);
+      assert.ok(wrapped.argv);
+
+      fs.unlinkSync(link);
+      fs.symlinkSync(hostFile, link);
+      const result = spawnSync(wrapped.argv![0], wrapped.argv!.slice(1), { encoding: "utf8", timeout: 5_000 });
+      assert.notEqual(result.status, 0, "a host-runtime documentation file outside the mounted runtime must remain unavailable");
+      assert.doesNotMatch(result.stdout, /prepackaged version of the FSF's GNU Bash/);
+      assert.doesNotMatch(result.stderr, /prepackaged version of the FSF's GNU Bash/);
+    } finally {
+      fs.rmSync(link, { force: true });
+    }
+  });
+
+  test("read-only bwrap retains the explicitly mounted inspection runtime", { skip: !isBwrapAvailable() }, () => {
+    const wrapped = wrapSandboxedCommand(
+      "ls -1; grep workspace inside.txt; find . -maxdepth 1 -name inside.txt; node -v; which cat",
+      ws,
+      { mode: "bwrap", readOnlyHost: true, network: false },
+    );
+    assert.equal(wrapped.sandboxed, true);
+    assert.ok(wrapped.argv);
+    const result = spawnSync(wrapped.argv[0], wrapped.argv.slice(1), { encoding: "utf8", timeout: 5_000 });
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(result.stdout, /inside\.txt/);
+    assert.match(result.stdout, /workspace content/);
+    assert.match(result.stdout, /v\d+\./);
+    assert.match(result.stdout, /\/usr\/bin\/cat/);
+  });
+
   test("read-only bwrap cannot follow a path created as an escaping symlink after admission", { skip: !isBwrapAvailable() }, () => {
     const outsideRoot = fs.mkdtempSync(path.join("/var/tmp", "nexus-ro-outside-"));
     const outside = path.join(outsideRoot, "outside-canary.txt");
