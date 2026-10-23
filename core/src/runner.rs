@@ -215,6 +215,11 @@ mod registry {
         }
     }
 
+    /// Whether the service group still has a live process (the shell may exit while `cmd &` survives).
+    pub fn pgid_alive(pgid: libc::pid_t) -> bool {
+        alive(pgid)
+    }
+
     pub fn list_services() -> Vec<ServiceInfo> {
         let mut st = state().lock().unwrap();
         st.services.retain(|_, s| alive(s.pgid));
@@ -273,11 +278,11 @@ mod registry {
 
 #[cfg(unix)]
 #[allow(unused_imports)]
-pub use registry::{cancel as cancel_command, end_all as end_all_commands, end_lingering as end_background_commands, list_services, register_service, unregister_service, ServiceInfo};
+pub use registry::{cancel as cancel_command, end_all as end_all_commands, end_lingering as end_background_commands, list_services, pgid_alive, register_service, unregister_service, ServiceInfo};
 
 #[cfg(not(unix))]
 #[allow(unused_imports)]
-pub use registry_stub::{list_services, register_service, unregister_service, ServiceInfo};
+pub use registry_stub::{list_services, pgid_alive, register_service, unregister_service, ServiceInfo};
 
 #[cfg(not(unix))]
 mod registry_stub {
@@ -297,6 +302,10 @@ mod registry_stub {
     pub fn register_service(_name: &str, _pgid: u32, _command: &str) {}
 
     pub fn unregister_service(_name: &str, _pgid: u32) {}
+
+    pub fn pgid_alive(_pgid: u32) -> bool {
+        false
+    }
 }
 
 fn tokenize_and_split_subcommands(cmd: &str) -> Vec<Vec<String>> {
@@ -665,11 +674,16 @@ pub fn run_command_tracked(args: RunCommandArgs, base_dir: &Path, key: Option<&s
             }
             let code = status.code().unwrap_or(0);
             // The group was registered before the startup grace to cover shutdown during startup.
-            // It is gone now, so forget it: a stale PGID could otherwise be signalled after reuse.
+            // The shell can exit while `cmd &` keeps the group alive: keep that registration. Only
+            // forget a group that is actually gone, so it cannot be signalled after PGID reuse.
             #[cfg(unix)]
             if let Some(ref sname) = args.service_name {
-                registry::unregister_service(sname, pgid);
-                out = format!("Background service '{sname}' exited during startup (pgid {pgid})\n{out}");
+                if registry::pgid_alive(pgid) {
+                    out = format!("Background service '{sname}' started (pgid {pgid})\n{out}");
+                } else {
+                    registry::unregister_service(sname, pgid);
+                    out = format!("Background service '{sname}' exited during startup (pgid {pgid})\n{out}");
+                }
             }
             return Ok(RunCommandResult {
                 command: args.command,
@@ -1319,6 +1333,35 @@ mod tests {
             res.stdout
         );
         assert!(!list_services().iter().any(|s| s.name == "gone_service"));
+        assert_eq!(end_all_commands(Duration::from_millis(500)), 0, "no stale service group remains");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_background_service_with_live_descendant_stays_registered() {
+        let _guard = TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+        let cwd = std::env::current_dir().unwrap();
+        let marker = "sleep 34.123";
+        // The shell exits during the grace while the backgrounded child keeps the group alive.
+        let res = run_command_tracked(RunCommandArgs {
+            command: format!("{marker} &"),
+            cwd: None,
+            background: true,
+            service_name: Some("desc_service".into()),
+            ..Default::default()
+        }, &cwd, Some("svc_req_desc")).unwrap();
+
+        assert!(
+            res.stdout.contains("started") || res.stdout.contains("registered"),
+            "a live descendant keeps the service: {}",
+            res.stdout
+        );
+        assert!(list_services().iter().any(|s| s.name == "desc_service"));
+        assert_eq!(count_exact(marker), 1, "descendant is running");
+        assert!(end_all_commands(Duration::from_millis(500)) >= 1);
+        std::thread::sleep(Duration::from_millis(200));
+        assert_eq!(count_exact(marker), 0, "shutdown sweep kills the registered group");
+        assert_eq!(list_services().len(), 0);
     }
 }
 

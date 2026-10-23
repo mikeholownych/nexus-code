@@ -27,21 +27,29 @@ hides the entry because the process is dead, but the `services` map still holds 
 ## Root cause
 
 `registry::register_service` is called immediately after spawn, before the grace loop. The early-exit
-branch only adjusted the message (`if code == 0`), and never removed the entry.
+branch only adjusted the message (`if code == 0`), and never removed the entry. Naively removing it is
+also wrong when the shell exits but a backgrounded child (`cmd &`) keeps the process group alive: the
+group would then be in neither `services` nor `lingering` and would never be swept at shutdown.
 
 ## Fix
 
 Add `registry::unregister_service(name, pgid)`, which removes the entry only when the recorded PGID
-matches. On an early exit, unregister and report:
+matches. On an early exit:
 
-`Background service '<name>' exited during startup (pgid …)`
+- if `registry::pgid_alive(pgid)`, keep the registration and report
+  `Background service '<name>' started (pgid …)` (the live descendant is the service);
+- otherwise unregister and report `Background service '<name>' exited during startup (pgid …)`.
 
 The pre-grace registration is kept so a shutdown during startup still sees the group.
 
 ## Verification
 
-- New test: `runner::tests::test_background_service_that_exits_during_startup_is_not_registered`.
-  It fails on the pre-fix source (`registered` is reported; assertion at the startup-exit message) and
-  passes after the fix.
-- `cargo test --bin harness-core runner::tests` with isolated `HOME`: 14/14 pass.
+- New tests:
+  - `test_background_service_that_exits_during_startup_is_not_registered` fails on the pre-fix source
+    (`registered` is reported) and passes after the fix; it also asserts the shutdown sweep sees no
+    stale group.
+  - `test_background_service_with_live_descendant_stays_registered` (`sleep … &`) fails on the
+    unconditional-unregister variant (the live service disappears from `list_services` and survives
+    shutdown) and passes with the alive gate.
+- `cargo test --bin harness-core runner::tests` with isolated `HOME`: 15/15 pass.
 - `git diff --check`: pass.
