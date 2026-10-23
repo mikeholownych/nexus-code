@@ -35,29 +35,31 @@ workspace symlink without naming it, and `rustc -v <file>` echoed the file's sou
 unterminated quote. On those words the guard:
 
 - rejects unquoted globs for content-reading commands (`cat *`) and refuses recursive
-  symlink-following options (`grep -R`/`--dereference-recursive`, `rg -L`/`--follow`,
-  `find -L`/`-H`/`-follow`, `diff -r`/`--recursive`);
-- refuses options that read files without a plain operand (`grep -f`/`--file`,
-  `grep --exclude-from`, `rg --ignore-file`, `find -files0-from`, `diff --from-file`/`--to-file`/
-  `--exclude-from`, `wc --files0-from`);
+  symlink-following options (`grep -R`, `rg -L`/`--follow`, `find -L`/`-H`/`-follow`);
+- accepts only an exact allowlist of long options for `cat`, `head`, `tail`, `wc`, `grep` and `rg`.
+  Anything else is refused, so getopt_long abbreviations cannot resurrect a refused option
+  (`--dereference-recursiv`, `--follo`, `--files0-fro`, `--from-f`); `git --ext-diff`/`--textconv`
+  are matched by prefix for the same reason. This covers pattern files (`grep -f`/`--file`,
+  `grep --exclude-from`, `rg --ignore-file`, `wc --files0-from`) and the short `-f` forms;
 - resolves operands with `realpath` relative to the workspace for commands that read contents or
-  traverse (`cat`, `head`, `tail`, `grep`, `rg`, `diff`, `wc`, `find`, `git`), rejecting anything
-  outside the workspace real path and comparing containment with a path boundary, not a bare prefix;
+  traverse (`cat`, `head`, `tail`, `grep`, `rg`, `wc`, `find`, `git`), rejecting anything outside the
+  workspace real path and comparing containment with a path boundary, not a bare prefix;
 - treats `-` as an operand, and for `grep`/`rg` treats the first plain word (or the value after
   `-e`/`--regexp`) as the pattern so patterns do not collide with symlink names; `find` checks only
   its starting point;
 - treats every word after a standalone `--` as an operand, so a dash-prefixed repository entry such
   as `--link` is resolved (`cat -- --link`, `grep -- -e --link`). Because a `--` can itself be the
-  value of a preceding option (`diff -I -- -r A B`), a content-reading command with any option before
-  `--` is refused rather than guessing every command's getopt table;
-- refuses directory operands to `diff`: GNU diff dereferences symlinks inside a directory even without
-  `-r` (`diff A B` dumped `A/plink -> /etc/passwd`);
+  value of a preceding option, a content-reading command with any option before `--` is refused
+  rather than guessing every command's getopt table;
 - accepts `node -v` and `rustc -v` only with no operand;
 - fails closed when a supplied workspace cannot be resolved.
 
-Pure listing/text commands (`ls`, `echo`, `which`, ...) and option values are not resolved, so
-`ls node_modules`, `echo node_modules`, `git log --since=2024/01/01` and `rg --glob='src/*.ts'` keep
-working. `AuthorityAdmissionEngine` now receives the workspace so its gate matches the tool bridge.
+`diff` is no longer on the read-only allowlist: its directory and option semantics kept producing new
+symlink-following content reads (`diff A B` dereferenced a nested symlink even without `-r`). `git diff`
+remains available for repository diffs. Pure listing/text commands (`ls`, `echo`, `which`, ...) and
+option values are not resolved, so `ls node_modules`, `echo node_modules`,
+`git log --since=2024/01/01`, `rg --glob='src/*.ts'` and `grep --exclude=... -r` keep working.
+`AuthorityAdmissionEngine` now receives the workspace so its gate matches the tool bridge.
 
 ## Verification
 
@@ -80,10 +82,10 @@ secret under `/var/tmp` so bwrap's `--tmpfs /tmp` does not hide the target; `ws/
 | `cat l"ink"` | success, returned `OUTSIDE SECRET` | `Read-only mode violation` |
 | `grep -R SECRET .` | success, returned `OUTSIDE SECRET` | `Read-only mode violation` |
 | `rg --follow SECRET .` | success, returned `OUTSIDE SECRET` | `Read-only mode violation` |
-| `diff --recursive . node_modules` | success, returned `OUTSIDE SECRET` | `Read-only mode violation` |
-| `diff --from-file=link inside.txt` | success, returned `OUTSIDE SECRET` | `Read-only mode violation` |
-| `diff A B` (nested symlink) | success, returned `OUTSIDE SECRET` | `Read-only mode violation` |
-| `diff -I -- -r A B` | success, returned `OUTSIDE SECRET` | `Read-only mode violation` |
+| `diff --recursive . node_modules` | success, returned `OUTSIDE SECRET` | not permitted (`diff` removed) |
+| `diff --from-file=link inside.txt` | success, returned `OUTSIDE SECRET` | not permitted (`diff` removed) |
+| `diff A B` (nested symlink) | success, returned `OUTSIDE SECRET` | not permitted (`diff` removed) |
+| `diff -I -- -r A B` | success, returned `OUTSIDE SECRET` | not permitted (`diff` removed) |
 | `rustc -v link` | success, echoed a source line | `Read-only mode violation` |
 | `grep - link` | success, returned `OUTSIDE SECRET` | `Read-only mode violation` |
 | `cat -- --link` | success, returned `OUTSIDE SECRET` | `Read-only mode violation` |

@@ -44,7 +44,7 @@ export interface AuthorityConfig {
  * Standard safe commands allowed under --read-only mode.
  */
 export const DEFAULT_SAFE_READONLY_COMMAND_REGEX =
-  /^\s*(ls|dir|pwd|echo|cat|head|tail|grep|rg|find|diff|wc|which|where|git\s+(status|log|diff|branch|show)|npm\s+list|node\s+-v|rustc\s+-v)(\s+.*)?$/i;
+  /^\s*(ls|dir|pwd|echo|cat|head|tail|grep|rg|find|wc|which|where|git\s+(status|log|diff|branch|show)|npm\s+list|node\s+-v|rustc\s+-v)(\s+.*)?$/i;
 
 // Keep attacker-controlled command text bounded before applying the allowlist regex.
 const MAX_SAFE_READONLY_COMMAND_LENGTH = 8_192;
@@ -106,10 +106,70 @@ function splitShellWords(command: string): string[] | null {
  * Commands that read file contents: a glob is expanded by the shell after the allowlist runs, so
  * `cat *` could still name an escaping symlink. Commands that only list names keep glob support.
  */
-const GLOB_READING_COMMANDS = new Set(["cat", "head", "tail", "grep", "rg", "diff", "wc"]);
+const GLOB_READING_COMMANDS = new Set(["cat", "head", "tail", "grep", "rg", "wc"]);
+
+/**
+ * Long options accepted for the commands whose contents the read-only guard reasons about. Anything
+ * else is refused: getopt_long accepts unambiguous prefixes, so an exact allowlist is the only way to
+ * keep `--from-f=link` or `--dereference-recursiv` from becoming a new spelling of a refused option.
+ */
+const SAFE_LONG_OPTIONS: Record<string, ReadonlySet<string>> = {
+  cat: new Set([
+    "--number", "--number-nonblank", "--show-ends", "--show-tabs", "--show-all", "--squeeze-blank",
+    "--show-nonprinting", "--help", "--version",
+  ]),
+  head: new Set(["--lines", "--bytes", "--quiet", "--silent", "--verbose", "--help", "--version"]),
+  tail: new Set([
+    "--lines", "--bytes", "--sleep-interval", "--pid", "--max-unchanged-stats", "--retry", "--quiet",
+    "--silent", "--verbose", "--help", "--version",
+  ]),
+  wc: new Set(["--lines", "--words", "--bytes", "--chars", "--max-line-length", "--help", "--version"]),
+  grep: new Set([
+    "--regexp", "--ignore-case", "--no-ignore-case", "--invert-match", "--line-number",
+    "--no-line-number", "--word-regexp", "--line-regexp", "--fixed-strings", "--extended-regexp",
+    "--perl-regexp", "--basic-regexp", "--only-matching", "--quiet", "--silent", "--no-messages",
+    "--count", "--files-with-matches", "--files-without-match", "--with-filename", "--no-filename",
+    "--color", "--colour", "--include", "--exclude", "--exclude-dir", "--binary-files", "--text",
+    "--byte-offset", "--null", "--initial-tab", "--before-context", "--after-context", "--context",
+    "--max-count", "--directories", "--devices", "--label", "--group-separator",
+    "--no-group-separator", "--line-buffered", "--null-data", "--help", "--version",
+  ]),
+  rg: new Set([
+    "--regexp", "--ignore-case", "--no-ignore-case", "--smart-case", "--case-sensitive",
+    "--invert-match", "--line-number", "--no-line-number", "--column", "--no-column", "--word-regexp",
+    "--line-regexp", "--fixed-strings", "--only-matching", "--quiet", "--count", "--count-matches",
+    "--files-with-matches", "--files-without-match", "--with-filename", "--no-filename", "--heading",
+    "--no-heading", "--color", "--colors", "--max-count", "--after-context", "--before-context",
+    "--context", "--glob", "--iglob", "--type", "--type-not", "--type-list", "--hidden",
+    "--no-ignore", "--no-ignore-vcs", "--no-ignore-parent", "--no-ignore-global", "--text", "--binary",
+    "--null", "--trim", "--passthru", "--stats", "--files", "--sort", "--threads", "--max-columns",
+    "--max-depth", "--line-buffered", "--help", "--version",
+  ]),
+};
+
+/** Commands whose long options are checked against the exact allowlist above. */
+const LONG_OPTION_ALLOWLIST_COMMANDS = new Set(Object.keys(SAFE_LONG_OPTIONS));
 
 /** Commands whose plain words are resolved through the filesystem before execution. */
 const REALPATH_COMMANDS = new Set([...GLOB_READING_COMMANDS, "find", "git"]);
+
+/** Long options that read a file named by the option rather than by an operand (git only here). */
+const DANGEROUS_LONG_OPTIONS: Record<string, readonly string[]> = {
+  git: ["--ext-diff", "--textconv"],
+};
+
+/** The long-option name without an attached `=value`, or null for a short option. */
+function longOptionName(word: string): string | null {
+  if (!word.startsWith("--") || word === "--") return null;
+  const equals = word.indexOf("=");
+  return equals < 0 ? word : word.slice(0, equals);
+}
+
+function isDangerousLongOption(base: string, word: string): boolean {
+  const name = longOptionName(word);
+  if (!name) return false;
+  return (DANGEROUS_LONG_OPTIONS[base] ?? []).some((target) => target.startsWith(name));
+}
 
 /** Whether `word` is an option rather than an operand (`-` alone is an operand to grep/rg). */
 function isOptionWord(word: string): boolean {
@@ -135,32 +195,18 @@ function hasUnsafeReadOnlyOption(base: string, words: string[], separator: numbe
   for (let i = 1; i < words.length; i++) {
     if (i === separator || (separator >= 0 && i > separator)) continue;
     const w = words[i];
+    const name = longOptionName(w);
+    if (name && LONG_OPTION_ALLOWLIST_COMMANDS.has(base)) {
+      if (!SAFE_LONG_OPTIONS[base].has(name)) return true;
+    } else if (isDangerousLongOption(base, w)) {
+      return true;
+    }
     if (GLOB_READING_COMMANDS.has(base) && isAttachedFileOption(w)) return true;
-    if (base === "grep") {
-      if (w === "--exclude-from" || w.startsWith("--exclude-from=")) return true;
-      if (w === "--dereference-recursive" || (/^-[A-Za-z]+$/.test(w) && w.includes("R"))) return true;
-    }
-    if (base === "rg") {
-      if (w === "--ignore-file" || w.startsWith("--ignore-file=")) return true;
-      if (w === "--follow" || (/^-[A-Za-z]+$/.test(w) && w.includes("L"))) return true;
-    }
+    if (base === "grep" && /^-[A-Za-z]+$/.test(w) && w.includes("R")) return true;
+    if (base === "rg" && /^-[A-Za-z]+$/.test(w) && w.includes("L")) return true;
     if (base === "find" && (w === "-L" || w === "-H" || w === "-follow" || w === "-files0-from" || w.startsWith("-files0-from="))) {
       return true;
     }
-    if (base === "diff" && (
-      w === "--recursive" ||
-      w.startsWith("--recursive=") ||
-      w === "--from-file" ||
-      w.startsWith("--from-file=") ||
-      w === "--to-file" ||
-      w.startsWith("--to-file=") ||
-      w === "--exclude-from" ||
-      w.startsWith("--exclude-from=") ||
-      /^-[A-Za-z]*r[A-Za-z]*$/.test(w)
-    )) {
-      return true;
-    }
-    if (base === "wc" && (w === "--files0-from" || w.startsWith("--files0-from="))) return true;
   }
   return false;
 }
@@ -322,10 +368,6 @@ export function isSafeReadOnlyCommand(
       try {
         const realTarget = fs.realpathSync(path.resolve(resolvedWs!, candidatePath));
         if (realTarget !== realWs && !realTarget.startsWith(realWs + path.sep)) {
-          return false;
-        }
-        // `diff` dereferences symlinks inside a directory operand even without -r; allow only files.
-        if (baseCommand === "diff" && fs.statSync(realTarget).isDirectory()) {
           return false;
         }
       } catch {

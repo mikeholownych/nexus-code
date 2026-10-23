@@ -158,11 +158,17 @@ describe("read-only command path confinement", () => {
       "grep -e -- -R .",
       "rg -e -- -L .",
       "diff A B",
+      "diff --from-f=link inside.txt",
+      "grep --dereference-recursiv ABBR .",
+      "rg --follo ABBR .",
+      "wc --files0-fro outside.list",
+      "git diff --ext-diff",
+      "cat --fil=link",
     ]) {
       assert.equal(isSafeReadOnlyCommand(command, undefined, ws), false, command);
     }
     assert.equal(isSafeReadOnlyCommand("cat -- inside.txt", undefined, ws), true);
     assert.equal(isSafeReadOnlyCommand("grep -e root inside.txt", undefined, ws), true);
-    assert.equal(isSafeReadOnlyCommand("diff inside.txt inside.txt", undefined, ws), true);
+    assert.equal(isSafeReadOnlyCommand("git diff", undefined, ws), true);
   });
 });
