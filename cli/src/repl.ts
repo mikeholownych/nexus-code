@@ -185,7 +185,7 @@ export class InteractiveRepl {
     }
 
     console.log(pc.yellow("Sensitive content blocked the rollback checkpoint. Choose how to continue:"));
-    console.log("  1. Continue read-only for this session");
+    console.log("  1. Continue this turn read-only; return to configured mode after a safe checkpoint");
     console.log("  2. Continue in the current mode without a rollback checkpoint");
     console.log("  3. Create the checkpoint anyway (may persist sensitive content)");
     console.log("  4. Cancel this turn");
@@ -195,7 +195,7 @@ export class InteractiveRepl {
       const choice = (await this.rl!.question("Choice [1-5]: ")).trim();
       if (choice === "1") {
         this.agent.setCheckpointReadOnlyFallback(true);
-        console.log(pc.yellow("Continuing this turn in read-only mode.\n"));
+        console.log(pc.yellow("Continuing this turn in read-only mode. Your configured mode resumes after a safe checkpoint succeeds.\n"));
         return true;
       }
       if (choice === "2") {

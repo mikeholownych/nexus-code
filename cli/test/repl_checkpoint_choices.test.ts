@@ -23,7 +23,10 @@ function makeRepl(choice: string, checkpoint: (allowSensitive: boolean) => void 
       return {};
     },
   };
-  repl.agent = { setCheckpointReadOnlyFallback: (value: boolean) => fallback.push(value) };
+  repl.agent = {
+    setCheckpointReadOnlyFallback: (value: boolean) => fallback.push(value),
+    setApprovalMode: () => {},
+  };
   repl.rl = { question: async (prompt: string) => { prompts.push(prompt); return choice; } };
   return { repl, prompts, fallback };
 }
@@ -63,4 +66,16 @@ test("REPL does not request a checkpoint for an explicitly read-only launch", as
   assert.equal(checkpointCalls, 0);
   assert.deepEqual(prompts, []);
   assert.deepEqual(fallback, [false]);
+});
+
+test("REPL uses read-only for the current turn and resumes after a later safe checkpoint", async () => {
+  const { repl, fallback } = makeRepl("1");
+  assert.equal(await (repl as any).prepareTurnCheckpoint("Turn: sensitive workspace"), true);
+  assert.deepEqual(fallback, [true]);
+
+  let checkpointsAfterChoice = 0;
+  repl.checkpointManager.createCheckpoint = () => { checkpointsAfterChoice++; };
+  assert.equal(await (repl as any).prepareTurnCheckpoint("Turn: later instruction"), true);
+  assert.equal(checkpointsAfterChoice, 1, "the later turn starts only after its safe checkpoint succeeds");
+  assert.deepEqual(fallback, [true, false], "configured mode resumes only after the successful checkpoint");
 });
