@@ -413,6 +413,40 @@ describe("read-only command path confinement", () => {
     }
   });
 
+  test("read-only bwrap cannot address the host PID namespace through a workspace symlink race", { skip: !isBwrapAvailable() }, (t) => {
+    const link = path.join(ws, "host-pid-canary");
+    const sentinelName = "NEXUS_SYNTHETIC_HOST_PID_ENV_CANARY";
+    const sentinelValue = "synthetic-host-pid-test-value";
+    const previousValue = process.env[sentinelName];
+    process.env[sentinelName] = sentinelValue;
+    fs.symlinkSync(path.join(ws, "inside.txt"), link);
+    const workspaceFd = openWorkspaceFd(ws);
+
+    try {
+      const pinnedWorkspace = `/proc/${process.pid}/fd/${workspaceFd}`;
+      assert.equal(isSafeReadOnlyCommand("cat host-pid-canary", undefined, pinnedWorkspace), true);
+      const wrapped = wrapSandboxedCommand("cat host-pid-canary", ws, {
+        mode: "bwrap",
+        readOnlyHost: true,
+        workspaceFd,
+        network: false,
+      });
+      assert.equal(wrapped.sandboxed, true);
+
+      fs.unlinkSync(link);
+      fs.symlinkSync(`/proc/${process.pid}/environ`, link);
+      const result = runPinnedSandbox(wrapped, workspaceFd);
+      assert.notEqual(result.status, 0, "the host PID must not be visible in the sandbox procfs");
+      assert.doesNotMatch(result.stdout, new RegExp(`${sentinelName}=${sentinelValue}`));
+      assert.doesNotMatch(result.stderr, new RegExp(`${sentinelName}=${sentinelValue}`));
+    } finally {
+      fs.closeSync(workspaceFd);
+      fs.rmSync(link, { force: true });
+      if (previousValue === undefined) delete process.env[sentinelName];
+      else process.env[sentinelName] = previousValue;
+    }
+  });
+
   test("read-only bwrap retains the explicitly mounted inspection runtime", { skip: !isBwrapAvailable() }, () => {
     const workspaceFd = openWorkspaceFd(ws);
     try {
@@ -428,6 +462,25 @@ describe("read-only command path confinement", () => {
       assert.match(result.stdout, /workspace content/);
       assert.match(result.stdout, /v\d+\./);
       assert.match(result.stdout, /\/usr\/bin\/cat/);
+    } finally {
+      fs.closeSync(workspaceFd);
+    }
+  });
+
+  test("read-only bwrap mounts the advertised zsh runtime", { skip: !isBwrapAvailable() || !fs.existsSync("/usr/bin/zsh") }, () => {
+    const workspaceFd = openWorkspaceFd(ws);
+    try {
+      const wrapped = wrapSandboxedCommand("printf 'zsh runtime\\n'", ws, {
+        mode: "bwrap",
+        readOnlyHost: true,
+        workspaceFd,
+        network: false,
+        shell: "zsh",
+      });
+      assert.equal(wrapped.sandboxed, true);
+      const result = runPinnedSandbox(wrapped, workspaceFd);
+      assert.equal(result.status, 0, result.stderr);
+      assert.equal(result.stdout, "zsh runtime\n");
     } finally {
       fs.closeSync(workspaceFd);
     }

@@ -131,7 +131,7 @@ function appendRuntimeFile(
 function appendReadOnlyRuntime(args: string[], knownDirectories: Set<string>): void {
   const mountedFiles = new Set<string>();
   for (const command of [
-    "/usr/bin/bash", "/bin/bash", "/usr/bin/sh", "/bin/sh",
+    "/usr/bin/bash", "/bin/bash", "/usr/bin/zsh", "/bin/zsh", "/usr/bin/sh", "/bin/sh",
     "/usr/bin/ls", "/usr/bin/dir", "/usr/bin/pwd", "/usr/bin/cat", "/usr/bin/head",
     "/usr/bin/tail", "/usr/bin/grep", "/usr/bin/rg", "/usr/bin/find", "/usr/bin/wc",
     "/usr/bin/which", "/usr/bin/git", "/usr/bin/node", "/usr/bin/env",
@@ -259,6 +259,7 @@ export function wrapSandboxedCommand(
       // Do not expose the host root to read-only commands. A path admitted by the
       // authority check can be replaced before the shell opens it; a read-only
       // bind of / still lets that race disclose unrelated host files.
+      bwrapArgs.push("--unshare-pid");
       if (options.customBwrapArgs?.length) {
         return {
           command: cmd,
