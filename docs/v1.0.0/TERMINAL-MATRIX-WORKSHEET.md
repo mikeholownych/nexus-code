@@ -72,14 +72,15 @@ Select exactly one PASS or FAIL for each cell. Add the approval-panel and post-e
 
 Overall worksheet disposition: [ ] PASS  [ ] FAIL  [ ] INCOMPLETE
 
-Select PASS only when all 15 cells have exactly one verdict, both required
-screenshots and all per-cell evidence references are complete, checks 2, 5, and
-6 have zero failures, and every failure on another check has a written
-disposition. A documented known limitation for a non-safety check is a valid
-disposition and does not alone fail this gate. Any failure on checks 2, 5, or 6
-makes the overall disposition FAIL. Missing verdicts, screenshots, or evidence
-references, or an undisposed non-safety failure, make the disposition
-INCOMPLETE unless a safety check has failed.
+Select PASS only when all 15 cell verdicts are PASS, both required screenshots
+and all per-cell evidence references are complete, checks 2, 5, and 6 have zero
+failures, and every non-safety failure has a written disposition. Record a
+documented non-safety limitation as required by §5.3, but it does not convert a
+failed cell to PASS or satisfy ACC-TUI-MANUAL. Any failed cell makes the overall
+disposition FAIL until fixed or the acceptance criterion is formally amended.
+Missing verdicts, screenshots, or evidence references, or an undisposed
+non-safety failure, make the disposition INCOMPLETE unless any cell is already
+marked FAIL. A failure on checks 2, 5, or 6 makes the overall disposition FAIL.
 
 Operator summary / evidence index: ______________________________________________
 
