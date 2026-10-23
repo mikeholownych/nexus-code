@@ -77,3 +77,22 @@ This report is historical relative to
 run against that later commit. Independent review verified that the evaluator
 source files covered by this report had unchanged digests between `92d7a62` and
 `158e3ce`; that comparison does not make this a fresh `158e3ce` preflight.
+
+
+## Latest exact-source run: origin/main@6383623
+
+At `origin/main@6383623d94b771f3a61d4337132d34e30e98fe50`, the synthetic
+infrastructure-only preflight ran on `mike-dev` at `2026-10-23T19:36:26Z`.
+The `--heldout` argument pointed to a temporary root-owned directory containing
+only a synthetic canary file; the custodian store and private corpus were not
+accessed. All 10 checks passed, including resource enforcement, process-tree
+cleanup, denied access to operator and synthetic-store files, fail-closed
+preflight, and an empty evaluator workspace root. The exact-source JSON and
+stdout are `validate-6383623-20261023T193626Z.json` and `.log`; both are
+included in `SHA256SUMS`. The report records the exact commit, clean source
+tree, resource-profile digest, manifest digest, and all 16 evaluator source
+digests. The temporary marker and isolated HOME were removed after the run.
+
+This is synthetic host-infrastructure evidence only. It is not custodian
+acceptance, a held-out task run, provider or standalone qualification, or
+installed-RC acceptance.
