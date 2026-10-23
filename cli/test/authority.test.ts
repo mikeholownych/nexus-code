@@ -61,6 +61,7 @@ describe("WP-02: Authority Admission & Resource Confinement (INC-03)", () => {
     assert.strictEqual(isSafeReadOnlyCommand("npm list"), true);
     assert.strictEqual(isSafeReadOnlyCommand("node -v"), true);
     assert.strictEqual(isSafeReadOnlyCommand("rustc -v"), false);
+    assert.strictEqual(isSafeReadOnlyCommand("where node"), false, "where is not provided by the confined read-only runtime");
 
     // 2. Denied shell composition, chaining, redirection, and substitution
     assert.strictEqual(isSafeReadOnlyCommand("cat file.txt | rm -rf /"), false);
