@@ -1,6 +1,7 @@
 import { test, describe, before, after } from "node:test";
 import * as assert from "node:assert";
 import * as http from "node:http";
+import * as https from "node:https";
 import * as os from "node:os";
 import * as path from "node:path";
 import * as fs from "node:fs";
@@ -155,6 +156,17 @@ describe("ACC-TRUST-03: SSRF protection, DNS pinning, redirect hop checks, and s
     assert.strictEqual(isPublicIp("::ffff:192.168.1.1"), false);
     assert.strictEqual(isPublicIp("::ffff:100.64.0.1"), false);
     assert.strictEqual(isPublicIp("::ffff:8.8.8.8"), true);
+
+    // IPv4-compatible (::/96) and IPv4-translated (::ffff:0:0/96) forms are reserved
+    // rather than globally reachable; classify by their embedded IPv4 address.
+    assert.strictEqual(isPublicIp("::7f00:1"), false);
+    assert.strictEqual(isPublicIp("::a00:1"), false);
+    assert.strictEqual(isPublicIp("::a9fe:a9fe"), false);
+    assert.strictEqual(isPublicIp("::c0a8:101"), false);
+    assert.strictEqual(isPublicIp("::ffff:0:7f00:1"), false);
+    assert.strictEqual(isPublicIp("::ffff:0:a00:1"), false);
+    assert.strictEqual(isPublicIp("::808:808"), true);
+    assert.strictEqual(isSafeOutboundUrl("http://[::7f00:1]/admin").safe, false);
 
     // IPv6 ULA (fc00::/7)
     assert.strictEqual(isPublicIp("fd00::1"), false);
@@ -327,6 +339,35 @@ describe("ACC-TRUST-03: SSRF protection, DNS pinning, redirect hop checks, and s
     );
   });
 
+  test("safeFetch rejects an unreachable pinned address without crashing the process", () => {
+    // Node's http(s).request can emit ENETUNREACH/EINVAL on the socket before the request
+    // attaches its error listener when a custom `lookup` supplies the pinned address. That
+    // unhandled 'error' event terminated the whole CLI. Run in a child so a regression is a
+    // clean test failure instead of killing the test runner.
+    const script = `
+import { safeFetch } from ${JSON.stringify(path.resolve("src/tools.ts"))};
+try {
+  await safeFetch("http://[2001:2::1]:80/", { timeoutMs: 800 });
+  console.log("RESOLVED");
+} catch (error) {
+  console.log("REJECTED:" + (error?.code || error?.message));
+}
+process.exit(0);
+`;
+    const result = cp.spawnSync(
+      process.execPath,
+      ["--import", "tsx", "--input-type=module", "--eval", script],
+      {
+        cwd: path.resolve("."),
+        env: { ...process.env, HOME: tempDir, XDG_CONFIG_HOME: path.join(tempDir, ".config") },
+        encoding: "utf8",
+        timeout: 10_000,
+      }
+    );
+    assert.equal(result.status, 0, `child crashed or timed out:\n${result.stderr || result.stdout}`);
+    assert.match(result.stdout, /^REJECTED:/, `expected a rejected fetch, got: ${result.stdout}`);
+  });
+
   test("safeFetch pins DNS address for the connection", async () => {
     // Custom mock DNS lookup returns a custom address
     let lookupCalledWithHost = "";
@@ -346,3 +387,83 @@ describe("ACC-TRUST-03: SSRF protection, DNS pinning, redirect hop checks, and s
     assert.match(res.text, /Hello World/);
   });
 });
+
+describe(
+  "safeFetch HTTPS keeps certificate identity while pinning",
+  { skip: cp.spawnSync("openssl", ["version"]).status !== 0 && "openssl not available" },
+  () => {
+    let dir: string;
+    let tlsServer: https.Server;
+    let tlsPort: number;
+    let caPath: string;
+
+    before(async () => {
+      dir = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-ssrf-tls-"));
+      const openssl = (args: string[]) => cp.execFileSync("openssl", args, { cwd: dir, stdio: "pipe" });
+      openssl(["req", "-x509", "-newkey", "ec", "-pkeyopt", "ec_paramgen_curve:prime256v1", "-nodes",
+        "-keyout", "ca.key", "-out", "ca.crt", "-days", "2", "-subj", "/CN=Nexus SSRF Test Root",
+        "-addext", "basicConstraints=critical,CA:TRUE", "-addext", "keyUsage=critical,keyCertSign"]);
+      openssl(["req", "-newkey", "ec", "-pkeyopt", "ec_paramgen_curve:prime256v1", "-nodes",
+        "-keyout", "srv.key", "-out", "srv.csr", "-subj", "/CN=pinned.example"]);
+      fs.writeFileSync(path.join(dir, "ext.cnf"),
+        "[ext]\nsubjectAltName=DNS:pinned.example,IP:127.0.0.1\nbasicConstraints=CA:FALSE\n" +
+        "keyUsage=digitalSignature,keyEncipherment\nextendedKeyUsage=serverAuth\n");
+      openssl(["x509", "-req", "-in", "srv.csr", "-CA", "ca.crt", "-CAkey", "ca.key",
+        "-CAcreateserial", "-out", "srv.crt", "-days", "2", "-extfile", "ext.cnf", "-extensions", "ext"]);
+      caPath = path.join(dir, "ca.crt");
+      tlsServer = https.createServer(
+        { key: fs.readFileSync(path.join(dir, "srv.key")), cert: fs.readFileSync(path.join(dir, "srv.crt")) },
+        (_req, res) => { res.writeHead(200); res.end("TLS OK"); }
+      );
+      await new Promise<void>((resolve) => tlsServer.listen(0, "127.0.0.1", () => resolve()));
+      tlsPort = (tlsServer.address() as any).port;
+    });
+
+    after(async () => {
+      if (tlsServer) await new Promise<void>((resolve) => tlsServer.close(() => resolve()));
+      if (dir && fs.existsSync(dir)) fs.rmSync(dir, { recursive: true, force: true });
+    });
+
+    for (const host of ["pinned.example", "127.0.0.1"]) {
+      test(`pins and preserves the certificate identity for https://${host}`, async () => {
+        const script = `
+import { safeFetch } from ${JSON.stringify(path.resolve("src/tools.ts"))};
+try {
+  const r = await safeFetch(process.env.TEST_URL, {
+    timeoutMs: 8000,
+    localOrigins: ["*"],
+    dnsLookup: async () => [{ address: "127.0.0.1", family: 4 }],
+  });
+  console.log("TLSRESULT:" + r.status + ":" + r.text);
+} catch (error) {
+  console.log("TLSERROR:" + error.message);
+}
+process.exit(0);
+`;
+        // The TLS server lives in this process, so spawn asynchronously; spawnSync would block
+        // the event loop and the child could never connect.
+        const child = cp.spawn(
+          process.execPath,
+          ["--import", "tsx", "--input-type=module", "--eval", script],
+          {
+            cwd: path.resolve("."),
+            env: {
+              ...process.env,
+              HOME: dir,
+              XDG_CONFIG_HOME: path.join(dir, ".config"),
+              NODE_EXTRA_CA_CERTS: caPath,
+              TEST_URL: `https://${host}:${tlsPort}/hello`,
+            },
+          }
+        );
+        let stdout = "";
+        let stderr = "";
+        child.stdout.on("data", (d) => (stdout += d));
+        child.stderr.on("data", (d) => (stderr += d));
+        const status = await new Promise<number | null>((resolve) => child.on("exit", resolve));
+        assert.equal(status, 0, stderr || stdout);
+        assert.match(stdout, /TLSRESULT:200:TLS OK/, stdout + stderr);
+      });
+    }
+  }
+);
