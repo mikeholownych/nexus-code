@@ -90,20 +90,43 @@ export function isSafeReadOnlyCommand(
   // 2b. Path confinement: reject arguments with absolute paths escaping workspace or escaping traversal (..):
   const rawTokens = trimmed.split(/\s+/);
   const resolvedWs = workspace ? path.resolve(workspace) : undefined;
+  let realWs: string | undefined;
+  if (resolvedWs) {
+    try {
+      realWs = fs.realpathSync(resolvedWs);
+    } catch {
+      realWs = undefined;
+    }
+  }
   for (let i = 1; i < rawTokens.length; i++) {
     const raw = rawTokens[i];
     // Strip leading/trailing quotes if present
     const t = raw.replace(/^['"]|['"]$/g, "");
     const candidatePath = t.includes("=") && t.startsWith("-") ? t.split("=")[1] : t;
+    const withinWorkspace = (target: string): boolean =>
+      Boolean(resolvedWs) && (target === resolvedWs || target.startsWith(resolvedWs + path.sep));
     if (candidatePath.startsWith("/")) {
-      if (!resolvedWs || !path.resolve(candidatePath).startsWith(resolvedWs)) {
+      if (!withinWorkspace(path.resolve(candidatePath))) {
         return false;
       }
     }
     if (candidatePath.includes("..")) {
       const target = resolvedWs ? path.resolve(resolvedWs, candidatePath) : path.resolve(candidatePath);
-      if (!resolvedWs || !target.startsWith(resolvedWs)) {
+      if (!withinWorkspace(target)) {
         return false;
+      }
+    }
+    // A lexical check is not enough for a read-only workspace: an in-workspace symlink can point
+    // outside it, and the sandbox still exposes host paths read-only. Resolve existing path
+    // arguments and refuse any that land outside the workspace's real path.
+    if (realWs && candidatePath && !candidatePath.startsWith("-")) {
+      try {
+        const realTarget = fs.realpathSync(path.resolve(resolvedWs!, candidatePath));
+        if (realTarget !== realWs && !realTarget.startsWith(realWs + path.sep)) {
+          return false;
+        }
+      } catch {
+        // Not an existing path (a pattern, option value or missing file), so there is nothing to resolve.
       }
     }
   }
