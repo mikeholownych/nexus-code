@@ -1,0 +1,97 @@
+{
+  "evidenceType": "E5 installed-RC provider verification",
+  "recordedAt": "2026-10-23T16:59:10.683Z",
+  "sourceCommit": "1b9791f07d301c885fe48f04a796203583ab5a5c",
+  "rcTag": "v1.0.0-rc.3",
+  "artifactSha256": "efb446d2760f2e1aa7890e9d786b8a2ba8e4ebb784fbcac1e66afe827428864d",
+  "artifact": {
+    "name": "nexus-linux-x86_64-v1.0.0-rc.3.tar.gz",
+    "sha256FromGitHubRelease": "efb446d2760f2e1aa7890e9d786b8a2ba8e4ebb784fbcac1e66afe827428864d",
+    "sha256DownloadedArtifact": "efb446d2760f2e1aa7890e9d786b8a2ba8e4ebb784fbcac1e66afe827428864d",
+    "manifestVerification": "all packaged files passed MANIFEST.sha256",
+    "installedIdentity": "1.0.0-rc.3 (1b9791f07d30)",
+    "installedExecutableSha256": "320d7dc1603d30f863a9560a9101ab3fe1a57f164b7119c49e01d9ace40792c4",
+    "installedTreeMatchesArchive": true,
+    "installationOnlyExtra": ".provenance.json"
+  },
+  "method": {
+    "command": "nexus providers verify --provider <provider> --model <pinned-model> --json",
+    "workingDirectory": "empty temporary workspace",
+    "workspaceContentSent": false,
+    "credentials": "used through existing provider integration; not inspected, copied, or logged",
+    "receiptsLocation": "temporary workspace .nexus/inference_receipts.jsonl",
+    "bounds": {
+      "maximumRequestsPerAttempt": 3,
+      "maximumEstimatedTokensPerAttempt": 25000,
+      "openRouterMaximumReportedCostUsd": 0.05
+    }
+  },
+  "results": [
+    {
+      "provider": "chatgpt",
+      "model": "gpt-6-luna",
+      "disposition": "PASSED",
+      "steps": [
+        {
+          "name": "streamed completion",
+          "passed": true
+        },
+        {
+          "name": "tool call",
+          "passed": true
+        },
+        {
+          "name": "tool result round trip",
+          "passed": true
+        }
+      ],
+      "requestIds": [
+        "f03be780-f220-4801-ba8d-3b649629b2ea",
+        "1a5df9d5-940e-407c-866c-895e63f9e431",
+        "47be294b-3f0d-41fb-a6ab-e0a76db8f6b5"
+      ],
+      "receiptFile": "provider-receipts-20261023T1659Z.jsonl",
+      "usageConfidence": "provider-reported",
+      "costConfidence": "unknown"
+    },
+    {
+      "provider": "openrouter",
+      "model": "nvidia/nemotron-3-ultra-550b-a55b:free",
+      "disposition": "PASSED",
+      "steps": [
+        {
+          "name": "streamed completion",
+          "passed": true
+        },
+        {
+          "name": "tool call",
+          "passed": true
+        },
+        {
+          "name": "tool result round trip",
+          "passed": true
+        }
+      ],
+      "requestIds": [
+        "24a6aab0-d91f-443f-a225-6abf69debe3b",
+        "b96adfad-275b-4b96-812b-3e3152ccbfea",
+        "6b0abf39-7840-417c-a5c2-9b1585f9f835"
+      ],
+      "receiptFile": "provider-receipts-20261023T1659Z.jsonl",
+      "usageConfidence": "provider-reported",
+      "costConfidence": "provider-reported",
+      "reportedCostUsd": 0
+    }
+  ],
+  "preservedFailedAttempt": {
+    "provider": "openrouter",
+    "model": "nvidia/nemotron-3-super-120b-a12b:free",
+    "disposition": "FAILED",
+    "failureKind": "http_error",
+    "failureCondition": "REQUEST_REJECTED",
+    "requestId": "e5ad5e55-85bd-41a9-b304-459832133c3c",
+    "note": "Retained in the same raw receipt file; the previous attempt is not counted as a pass."
+  },
+  "qualificationDisposition": "Provider verification passed for ChatGPT sign-in and one explicitly pinned OpenRouter model. The separate required live engineering task per ACCEPTANCE.md §4.3 remains incomplete; this record does not establish overall RC acceptance.",
+  "providerReceiptFileSha256": "179406d98fe04b428b970092d10969734fa6ab59c29b5f8b60c15fed94377394"
+}
