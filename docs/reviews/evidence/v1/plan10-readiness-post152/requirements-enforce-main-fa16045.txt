@@ -1,0 +1,10 @@
+Nexus v1.0.0 source requirements enforcement
+
+Source SHA: fa16045a6351ce61763bc3fcc93b562c50849285
+Observed: 2026-10-23T02:11:58Z
+Command: node scripts/check_requirements.mjs --enforce
+Environment: clean detached worktree; isolated HOME and XDG_CONFIG_HOME
+Exit code: 0
+
+requirements: 123 rows; tested 108, partial 6, implemented 2, open 7 (enforce)
+deferred to exact-RC qualification: REQ-AGT-002 (partial), REQ-AGT-010 (partial), REQ-PRV-003 (implemented), REQ-REL-003 (partial), REQ-REL-005 (partial), REQ-AGT-110 (open), REQ-PRV-111 (partial), REQ-REL-114 (open), REQ-QUAL-101 (open), REQ-QUAL-107 (open), REQ-QUAL-108 (partial), REQ-QUAL-109 (open)
