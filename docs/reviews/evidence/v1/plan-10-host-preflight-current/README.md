@@ -21,7 +21,78 @@ All 10 reported checks passed. The host had Bubblewrap 0.13.1, delegated cgroup
 v2, and the dedicated 20 GiB tmpfs. The JSON report records the exact source
 commit, resource profile, manifest digest, and all 16 source-file digests.
 
-This result establishes the current host's synthetic infrastructure boundary
-only. It does not establish held-out custody, evaluator authorization for the
-private store, actual task-run Git-history isolation, task-quality thresholds,
-or installed-RC qualification and acceptance.
+This result records the synthetic infrastructure boundary observed on
+`mike-dev` for that exact source revision only. It does not establish held-out
+custody, evaluator authorization for the private store, actual task-run
+Git-history isolation, task-quality thresholds, or installed-RC qualification
+and acceptance.
+
+## Historical exact-source run on main@1f3c655
+
+At `main@1f3c655971ade086f55347926db16cf2ecd52d1f`, the same infrastructure-only
+preflight was repeated on `mike-dev` at `2026-10-23T13:57:05Z`. The `--heldout`
+argument was a newly created root-owned synthetic directory containing only an
+empty marker; the custodian store and all private corpus material were not
+accessed. The isolated `HOME` and synthetic marker were removed after the run.
+All 10 checks passed, including the 20 GiB tmpfs, cgroup resource controls,
+process-tree cleanup, denied access to operator and synthetic-store files, and
+fail-closed qualification preflight. The exact-source JSON and stdout are
+`validate-1f3c655-20261023T135703Z.json` and `.log`; `SHA256SUMS` covers both
+historical and refreshed evidence.
+
+This refresh remains synthetic host-infrastructure evidence. It is not
+custodian acceptance, a held-out run, or RC qualification.
+
+## Historical exact-source run on main@a12c070
+
+At `main@a12c07091f15f4e7d581907fab110b0653c4c264`, the same infrastructure-only
+preflight was repeated on `mike-dev` at `2026-10-23T16:20:30Z`. The `--heldout`
+argument pointed to a temporary root-owned directory containing only a
+synthetic marker. The custodian store and private corpus were not accessed. The
+isolated `HOME`, marker store, and detached source worktree were removed after
+the run. All 10 checks passed, including resource enforcement, process-tree
+cleanup, denied access to operator and synthetic-store files, fail-closed
+preflight, and an empty evaluator workspace root. The exact-source JSON and
+stdout are `validate-a12-20261023T162028Z.json` and `.log`; `SHA256SUMS` binds
+both. This remains synthetic infrastructure evidence, not custody acceptance,
+a held-out run, or RC qualification.
+
+## Latest recorded exact-source run: origin/main@92d7a62
+
+At `origin/main@92d7a62f0fa20f4f2f3b91786c737fd6d5517075`, the same
+infrastructure-only preflight ran on `mike-dev` at `2026-10-23T17:48:43Z`.
+It used an isolated `HOME` and a temporary root-owned directory containing
+only a synthetic marker; the custodian store and private corpus were not
+accessed. All 10 checks passed. The report binds the exact source commit,
+resource profile, 16 evaluator source-file digests, and manifest digest. Its
+JSON and stdout are `validate-92d7-20261023T174843Z.json` and `.log`; both are
+included in `SHA256SUMS`.
+
+This establishes the synthetic host-infrastructure boundary at that time. It
+does not establish custodian acceptance, private-store authorization, held-out
+qualification, or installed-RC acceptance.
+
+This report is historical relative to
+`origin/main@158e3ceaf83c99b2f6bf20dfdf0b6c95297ec090`. No host preflight was
+run against that later commit. Independent review verified that the evaluator
+source files covered by this report had unchanged digests between `92d7a62` and
+`158e3ce`; that comparison does not make this a fresh `158e3ce` preflight.
+
+
+## Latest exact-source run: origin/main@6383623
+
+At `origin/main@6383623d94b771f3a61d4337132d34e30e98fe50`, the synthetic
+infrastructure-only preflight ran on `mike-dev` at `2026-10-23T19:36:26Z`.
+The `--heldout` argument pointed to a temporary root-owned directory containing
+only a synthetic canary file; the custodian store and private corpus were not
+accessed. All 10 checks passed, including resource enforcement, process-tree
+cleanup, denied access to operator and synthetic-store files, fail-closed
+preflight, and an empty evaluator workspace root. The exact-source JSON and
+stdout are `validate-6383623-20261023T193626Z.json` and `.log`; both are
+included in `SHA256SUMS`. The report records the exact commit, clean source
+tree, resource-profile digest, manifest digest, and all 16 evaluator source
+digests. The temporary marker and isolated HOME were removed after the run.
+
+This is synthetic host-infrastructure evidence only. It is not custodian
+acceptance, a held-out task run, provider or standalone qualification, or
+installed-RC acceptance.
