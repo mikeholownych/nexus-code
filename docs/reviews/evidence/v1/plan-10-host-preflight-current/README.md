@@ -55,3 +55,18 @@ preflight, and an empty evaluator workspace root. The exact-source JSON and
 stdout are `validate-a12-20261023T162028Z.json` and `.log`; `SHA256SUMS` binds
 both. This remains synthetic infrastructure evidence, not custody acceptance,
 a held-out run, or RC qualification.
+
+## Exact-source refresh on origin/main@92d7a62
+
+At `origin/main@92d7a62f0fa20f4f2f3b91786c737fd6d5517075`, the same
+infrastructure-only preflight ran on `mike-dev` at `2026-10-23T17:48:43Z`.
+It used an isolated `HOME` and a temporary root-owned directory containing
+only a synthetic marker; the custodian store and private corpus were not
+accessed. All 10 checks passed. The report binds the exact source commit,
+resource profile, 16 evaluator source-file digests, and manifest digest. Its
+JSON and stdout are `validate-92d7-20261023T174843Z.json` and `.log`; both are
+included in `SHA256SUMS`.
+
+This establishes the synthetic host-infrastructure boundary at that time. It
+does not establish custodian acceptance, private-store authorization, held-out
+qualification, or installed-RC acceptance.
