@@ -56,6 +56,12 @@ describe("ACC-SAFE-04 & REQ-SEC-104: Read-only HOME masking and workspace path c
         const timedOut = await bridge.executeTool("run_command", { command: "cat pending-read.fifo", timeout_secs: 0.1 });
         assert.equal(timedOut.timedOut, true);
         assert.match(timedOut.error || "", /timed out/);
+
+        fs.writeFileSync(path.join(workspace, "large-output.txt"), "x".repeat(70_000));
+        const bounded = await bridge.executeTool("run_command", { command: "cat large-output.txt" });
+        assert.equal(bounded.success, true);
+        assert.match(bounded.output, /\[TRUNCATED 38000 BYTES\]/);
+        assert.ok(Buffer.byteLength(bounded.output) < 33_000, "captured output must remain bounded");
       } finally {
         bridge.setTurnSignal(undefined);
         bridge.shutdown();

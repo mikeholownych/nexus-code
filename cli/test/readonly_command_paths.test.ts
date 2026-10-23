@@ -314,6 +314,59 @@ describe("read-only command path confinement", () => {
     }
   });
 
+  test("read-only bwrap cannot reach unrelated files under an explicitly mounted runtime directory", { skip: !isBwrapAvailable() }, (t) => {
+    const hostFile = "/usr/share/doc/bash/copyright";
+    if (!fs.existsSync(hostFile)) {
+      t.skip("host runtime canary fixture is unavailable");
+      return;
+    }
+    const link = path.join(ws, "runtime-tree-canary");
+    fs.symlinkSync(path.join(ws, "inside.txt"), link);
+    const workspaceFd = openWorkspaceFd(ws);
+
+    try {
+      const pinnedWorkspace = `/proc/${process.pid}/fd/${workspaceFd}`;
+      assert.equal(isSafeReadOnlyCommand("cat runtime-tree-canary", undefined, pinnedWorkspace), true);
+      const wrapped = wrapSandboxedCommand("cat runtime-tree-canary", ws, {
+        mode: "bwrap",
+        readOnlyHost: true,
+        workspaceFd,
+        network: false,
+      });
+      assert.equal(wrapped.sandboxed, true);
+
+      fs.unlinkSync(link);
+      fs.symlinkSync(hostFile, link);
+      const result = runPinnedSandbox(wrapped, workspaceFd);
+      assert.notEqual(result.status, 0, "an unlisted host file beneath /usr/share must remain inaccessible");
+      assert.doesNotMatch(result.stdout, /GNU Bash/);
+      assert.doesNotMatch(result.stderr, /GNU Bash/);
+    } finally {
+      fs.closeSync(workspaceFd);
+      fs.rmSync(link, { force: true });
+    }
+  });
+
+  test("read-only bwrap retains the explicitly mounted inspection runtime", { skip: !isBwrapAvailable() }, () => {
+    const workspaceFd = openWorkspaceFd(ws);
+    try {
+      const wrapped = wrapSandboxedCommand(
+        "ls -1; grep workspace inside.txt; find . -maxdepth 1 -name inside.txt; node -v; which cat",
+        ws,
+        { mode: "bwrap", readOnlyHost: true, workspaceFd, network: false },
+      );
+      assert.equal(wrapped.sandboxed, true);
+      const result = runPinnedSandbox(wrapped, workspaceFd);
+      assert.equal(result.status, 0, result.stderr);
+      assert.match(result.stdout, /inside\.txt/);
+      assert.match(result.stdout, /workspace content/);
+      assert.match(result.stdout, /v\d+\./);
+      assert.match(result.stdout, /\/usr\/bin\/cat/);
+    } finally {
+      fs.closeSync(workspaceFd);
+    }
+  });
+
   test("words after -- are operands, including a dash-prefixed symlink name", () => {
     for (const command of [
       "cat -- --link",

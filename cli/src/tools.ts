@@ -519,8 +519,58 @@ export function rpcDeadlines(toolName: string, args: Record<string, any>): { run
   return { bridgeMs: args.timeout_secs ? (args.timeout_secs + RPC_GRACE_SECS) * 1000 : RPC_DEFAULT_TIMEOUT_MS };
 }
 
-const READ_ONLY_COMMAND_MAX_OUTPUT = 10 * 1024 * 1024;
+const READ_ONLY_COMMAND_MAX_OUTPUT_BYTES = 32_000;
 const READ_ONLY_COMMAND_KILL_GRACE_MS = 500;
+
+class BoundedCommandOutput {
+  private static readonly HALF = READ_ONLY_COMMAND_MAX_OUTPUT_BYTES / 2;
+  private head: Buffer[] = [];
+  private headBytes = 0;
+  private tail: Buffer[] = [];
+  private tailBytes = 0;
+  private totalBytes = 0;
+
+  public push(chunk: Buffer): void {
+    this.totalBytes += chunk.length;
+    let rest = chunk;
+    if (this.headBytes < BoundedCommandOutput.HALF) {
+      const take = Math.min(rest.length, BoundedCommandOutput.HALF - this.headBytes);
+      if (take) this.head.push(Buffer.from(rest.subarray(0, take)));
+      this.headBytes += take;
+      rest = rest.subarray(take);
+    }
+    if (rest.length >= BoundedCommandOutput.HALF) {
+      this.tail = [Buffer.from(rest.subarray(rest.length - BoundedCommandOutput.HALF))];
+      this.tailBytes = BoundedCommandOutput.HALF;
+      return;
+    }
+    if (rest.length) {
+      this.tail.push(Buffer.from(rest));
+      this.tailBytes += rest.length;
+      while (this.tailBytes > BoundedCommandOutput.HALF) {
+        const overflow = this.tailBytes - BoundedCommandOutput.HALF;
+        const first = this.tail[0];
+        if (first.length <= overflow) {
+          this.tail.shift();
+          this.tailBytes -= first.length;
+        } else {
+          this.tail[0] = Buffer.from(first.subarray(overflow));
+          this.tailBytes -= overflow;
+        }
+      }
+    }
+  }
+
+  public render(): string {
+    const head = Buffer.concat(this.head);
+    const tail = Buffer.concat(this.tail);
+    if (this.totalBytes <= READ_ONLY_COMMAND_MAX_OUTPUT_BYTES) {
+      return Buffer.concat([head, tail]).toString("utf8");
+    }
+    const omittedBytes = Math.max(0, this.totalBytes - head.length - tail.length);
+    return `${head.toString("utf8")}\n\n... [TRUNCATED ${omittedBytes} BYTES] ...\n\n${tail.toString("utf8")}`;
+  }
+}
 
 /** Run the already-confined Bubblewrap command without blocking the agent event loop. */
 function runReadOnlySandbox(
@@ -547,18 +597,11 @@ function runReadOnlySandbox(
       return;
     }
 
-    const stdout: Buffer[] = [];
-    const stderr: Buffer[] = [];
-    let stdoutBytes = 0;
-    let stderrBytes = 0;
+    const stdout = new BoundedCommandOutput();
+    const stderr = new BoundedCommandOutput();
     let termination: "timeout" | "cancelled" | undefined;
     let settled = false;
     let killTimer: NodeJS.Timeout | undefined;
-    const appendBounded = (chunks: Buffer[], chunk: Buffer, currentBytes: number): number => {
-      const remaining = READ_ONLY_COMMAND_MAX_OUTPUT - currentBytes;
-      if (remaining > 0) chunks.push(chunk.length <= remaining ? chunk : chunk.subarray(0, remaining));
-      return currentBytes + Math.max(0, Math.min(remaining, chunk.length));
-    };
     const forceStop = (reason: "timeout" | "cancelled") => {
       if (termination) return;
       termination = reason;
@@ -584,8 +627,8 @@ function runReadOnlySandbox(
       clearTimeout(timer);
       if (killTimer) clearTimeout(killTimer);
       signal?.removeEventListener("abort", onAbort);
-      const output = Buffer.concat(stdout).toString("utf8");
-      const errorOutput = Buffer.concat(stderr).toString("utf8");
+      const output = stdout.render();
+      const errorOutput = stderr.render();
       if (termination === "cancelled") {
         resolve({ success: false, output, error: "Read-only command was cancelled.", cancelled: true });
       } else if (termination === "timeout") {
@@ -600,10 +643,10 @@ function runReadOnlySandbox(
     };
 
     child.stdout?.on("data", (chunk: Buffer | string) => {
-      stdoutBytes = appendBounded(stdout, Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk), stdoutBytes);
+      stdout.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
     });
     child.stderr?.on("data", (chunk: Buffer | string) => {
-      stderrBytes = appendBounded(stderr, Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk), stderrBytes);
+      stderr.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
     });
     child.once("error", (err) => finish({ code: null, error: err.message }));
     child.once("close", (code) => finish({ code }));
@@ -1474,7 +1517,7 @@ export class RustCoreBridge {
               };
             }
 
-            const timeoutSecs = typeof args.timeout_secs === "number" ? args.timeout_secs : maxToolTimeoutSecs();
+            const timeoutSecs = rpcDeadlines("run_command", args).runnerSecs ?? RUN_COMMAND_DEFAULT_TIMEOUT_SECS;
             return await runReadOnlySandbox(
               sandboxed.argv[0],
               sandboxed.argv.slice(1),
