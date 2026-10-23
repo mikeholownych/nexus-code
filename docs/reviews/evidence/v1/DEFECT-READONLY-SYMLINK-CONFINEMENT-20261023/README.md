@@ -54,7 +54,7 @@ unterminated quote. On those words the guard:
   as `--link` is resolved (`cat -- --link`, `grep -- -e --link`). Because a `--` can itself be the
   value of a preceding option, a content-reading command with any option before `--` is refused
   rather than guessing every command's getopt table;
-- accepts `node -v` and `rustc -v` only with no operand;
+- accepts `node -v` only with no operand; `rustc -v` is refused because the host Rust toolchain is not mounted into the confined runtime;
 - fails closed when a supplied workspace cannot be resolved.
 
 `diff` is no longer on the read-only allowlist: its directory and option semantics kept producing new

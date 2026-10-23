@@ -69,6 +69,58 @@ describe("ACC-SAFE-04 & REQ-SEC-104: Read-only HOME masking and workspace path c
     });
   });
 
+  test("read-only sandbox strips inherited environment from /proc after a workspace-entry race", { skip: !isBwrapAvailable() }, async () => {
+    await withFixtureHome(async (_fixtureHome, workspace) => {
+      const fifoPath = path.join(workspace, "env-gate.fifo");
+      const fifoResult = spawnSync("mkfifo", [fifoPath], { encoding: "utf8" });
+      assert.equal(fifoResult.status, 0, fifoResult.stderr);
+      const linkPath = path.join(workspace, "env-race-link");
+      fs.symlinkSync(path.join(workspace, "README.md"), linkPath);
+
+      const secretName = "NEXUS_READONLY_ENV_CANARY";
+      const priorSecret = process.env[secretName];
+      const secret = "SYNTHETIC_PARENT_ENV_SECRET_DO_NOT_EXPOSE";
+      process.env[secretName] = secret;
+      const bridge = new RustCoreBridge(workspace, "bash", undefined, false, true);
+      const controller = new AbortController();
+      bridge.setTurnSignal(controller.signal);
+      let writer: ReturnType<typeof fs.createWriteStream> | undefined;
+      try {
+        // cat blocks on the first in-workspace FIFO. Opening the writer proves
+        // admission and FIFO open completed before swapping the second path.
+        const pending = bridge.executeTool("run_command", { command: "cat env-gate.fifo env-race-link", timeout_secs: 5 });
+        writer = fs.createWriteStream(fifoPath);
+        await new Promise<void>((resolve, reject) => {
+          const timeout = setTimeout(() => reject(new Error("read-only command did not open the FIFO")), 3_000);
+          writer!.once("open", () => {
+            clearTimeout(timeout);
+            resolve();
+          });
+          writer!.once("error", (error) => {
+            clearTimeout(timeout);
+            reject(error);
+          });
+        });
+        fs.unlinkSync(linkPath);
+        fs.symlinkSync("/proc/self/environ", linkPath);
+        writer.end("release\n");
+
+        const result = await pending;
+        assert.equal(result.success, true, result.error);
+        assert.match(result.output, /PATH=/);
+        assert.match(result.output, /HOME=\/tmp/);
+        assert.doesNotMatch(result.output, new RegExp(secret));
+      } finally {
+        writer?.destroy();
+        controller.abort();
+        bridge.shutdown();
+        if (priorSecret === undefined) delete process.env[secretName];
+        else process.env[secretName] = priorSecret;
+        fs.rmSync(linkPath, { force: true });
+      }
+    });
+  });
+
   test("--read-only + run_command 'cat ~/.ssh/id_rsa' refuses or fails with No such file", async () => {
     await withFixtureHome(async (fixtureHome, workspace) => {
       const bridge = new RustCoreBridge(workspace, "bash", undefined, false, true);

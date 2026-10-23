@@ -134,10 +134,38 @@ function appendReadOnlyRuntime(args: string[], knownDirectories: Set<string>): v
     "/usr/bin/bash", "/bin/bash", "/usr/bin/sh", "/bin/sh",
     "/usr/bin/ls", "/usr/bin/dir", "/usr/bin/pwd", "/usr/bin/cat", "/usr/bin/head",
     "/usr/bin/tail", "/usr/bin/grep", "/usr/bin/rg", "/usr/bin/find", "/usr/bin/wc",
-    "/usr/bin/which", "/usr/bin/git", "/usr/bin/node",
+    "/usr/bin/which", "/usr/bin/git", "/usr/bin/node", "/usr/bin/env",
   ]) {
     appendRuntimeFile(args, command, knownDirectories, mountedFiles);
   }
+
+  // npm is a script with package-local modules and data files, not a single ELF
+  // binary. Mount only its installed runtime package when the conventional npm
+  // entrypoint is present; do not expose the containing global node_modules tree.
+  try {
+    const npmEntry = fs.realpathSync("/usr/bin/npm");
+    let directory = path.dirname(npmEntry);
+    while (directory !== path.dirname(directory)) {
+      const packageJson = path.join(directory, "package.json");
+      try {
+        const metadata = JSON.parse(fs.readFileSync(packageJson, "utf8"));
+        if (metadata.name === "npm") {
+          appendDirectoryTree(args, path.dirname(directory), knownDirectories);
+          args.push("--ro-bind", directory, directory);
+          const npmLink = fs.readlinkSync("/usr/bin/npm");
+          appendDirectoryTree(args, path.dirname("/usr/bin/npm"), knownDirectories);
+          args.push("--symlink", npmLink, "/usr/bin/npm");
+          break;
+        }
+      } catch {
+        // Keep looking up from the npm entrypoint to its package root.
+      }
+      directory = path.dirname(directory);
+    }
+  } catch {
+    // npm is optional on minimal hosts.
+  }
+
   // The dynamic loader can use this cache, but mounting all of /etc would expose
   // unrelated host configuration through a workspace symlink race.
   appendRuntimeFile(args, "/etc/ld.so.cache", knownDirectories, mountedFiles);
@@ -276,8 +304,9 @@ export function wrapSandboxedCommand(
       // Bind through inherited fd 3 so a rename or replacement of the source
       // pathname cannot redirect Bubblewrap to a different directory.
       bwrapArgs.push("--ro-bind", "/proc/self/fd/3", absWorkspace);
+      bwrapArgs.push("--clearenv");
       bwrapArgs.push("--setenv", "PATH", "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin");
-      bwrapArgs.push("--setenv", "HOME", userHome);
+      bwrapArgs.push("--setenv", "HOME", "/tmp");
     } else {
       // General worktree sandbox retains the host runtime read-only while allowing
       // writes only through its dedicated workspace bind.

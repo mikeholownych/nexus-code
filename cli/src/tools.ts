@@ -590,6 +590,9 @@ function runReadOnlySandbox(
       child = spawn(command, args, {
         cwd: "/",
         detached: process.platform !== "win32",
+        // Do not let a read-only command recover the agent's credentials or runtime
+        // configuration through /proc/self/environ after a workspace-entry race.
+        env: { PATH: "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin" },
         stdio: ["ignore", "pipe", "pipe", workspaceFd],
       });
     } catch (err: any) {

@@ -152,10 +152,10 @@ describe("read-only command path confinement", () => {
       "which link",
       "ls node_modules",
       "node -v",
-      "rustc -v",
     ]) {
       assert.equal(isSafeReadOnlyCommand(command, undefined, ws), true, command);
     }
+    assert.equal(isSafeReadOnlyCommand("rustc -v", undefined, ws), false, "the host Rust toolchain is not exposed inside the read-only sandbox");
   });
 
   test("an unresolvable workspace fails closed", () => {
@@ -380,6 +380,39 @@ describe("read-only command path confinement", () => {
     }
   });
 
+  test("read-only bwrap clears inherited environment before exposing procfs", { skip: !isBwrapAvailable() }, (t) => {
+    const link = path.join(ws, "proc-environ-canary");
+    const sentinelName = "NEXUS_SYNTHETIC_READONLY_ENV_CANARY";
+    const sentinelValue = "synthetic-test-value-not-a-credential";
+    const previousValue = process.env[sentinelName];
+    process.env[sentinelName] = sentinelValue;
+    fs.symlinkSync(path.join(ws, "inside.txt"), link);
+    const workspaceFd = openWorkspaceFd(ws);
+
+    try {
+      const pinnedWorkspace = `/proc/${process.pid}/fd/${workspaceFd}`;
+      assert.equal(isSafeReadOnlyCommand("cat proc-environ-canary", undefined, pinnedWorkspace), true);
+      const wrapped = wrapSandboxedCommand("cat proc-environ-canary", ws, {
+        mode: "bwrap",
+        readOnlyHost: true,
+        workspaceFd,
+        network: false,
+      });
+      assert.equal(wrapped.sandboxed, true);
+
+      fs.unlinkSync(link);
+      fs.symlinkSync("/proc/self/environ", link);
+      const result = runPinnedSandbox(wrapped, workspaceFd);
+      assert.equal(result.status, 0, result.stderr);
+      assert.doesNotMatch(result.stdout, new RegExp(`${sentinelName}=${sentinelValue}`));
+    } finally {
+      fs.closeSync(workspaceFd);
+      fs.rmSync(link, { force: true });
+      if (previousValue === undefined) delete process.env[sentinelName];
+      else process.env[sentinelName] = previousValue;
+    }
+  });
+
   test("read-only bwrap retains the explicitly mounted inspection runtime", { skip: !isBwrapAvailable() }, () => {
     const workspaceFd = openWorkspaceFd(ws);
     try {
@@ -397,6 +430,28 @@ describe("read-only command path confinement", () => {
       assert.match(result.stdout, /\/usr\/bin\/cat/);
     } finally {
       fs.closeSync(workspaceFd);
+    }
+  });
+
+  test("read-only bwrap retains the installed npm inspection runtime", { skip: !isBwrapAvailable() || !fs.existsSync("/usr/bin/npm") }, () => {
+    const npmWorkspace = path.join(root, "npm-workspace");
+    fs.mkdirSync(npmWorkspace);
+    fs.writeFileSync(path.join(npmWorkspace, "package.json"), JSON.stringify({ name: "sandbox-inspection-fixture", version: "1.0.0" }));
+    const workspaceFd = openWorkspaceFd(npmWorkspace);
+    try {
+      const wrapped = wrapSandboxedCommand("npm list --depth=0", npmWorkspace, {
+        mode: "bwrap",
+        readOnlyHost: true,
+        workspaceFd,
+        network: false,
+      });
+      assert.equal(wrapped.sandboxed, true);
+      const result = runPinnedSandbox(wrapped, workspaceFd);
+      assert.equal(result.status, 0, result.stderr);
+      assert.match(result.stdout, /sandbox-inspection-fixture@1\.0\.0/);
+    } finally {
+      fs.closeSync(workspaceFd);
+      fs.rmSync(npmWorkspace, { recursive: true, force: true });
     }
   });
 

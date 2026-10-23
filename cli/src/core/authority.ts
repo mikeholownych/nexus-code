@@ -44,7 +44,7 @@ export interface AuthorityConfig {
  * Standard safe commands allowed under --read-only mode.
  */
 export const DEFAULT_SAFE_READONLY_COMMAND_REGEX =
-  /^\s*(ls|dir|pwd|echo|cat|head|tail|grep|rg|find|wc|which|where|git\s+(status|log|diff|branch|show)|npm\s+list|node\s+-v|rustc\s+-v)(\s+.*)?$/i;
+  /^\s*(ls|dir|pwd|echo|cat|head|tail|grep|rg|find|wc|which|where|git\s+(status|log|diff|branch|show)|npm\s+list|node\s+-v)(\s+.*)?$/i;
 
 // Keep attacker-controlled command text bounded before applying the allowlist regex.
 const MAX_SAFE_READONLY_COMMAND_LENGTH = 8_192;
@@ -346,9 +346,9 @@ export function isSafeReadOnlyCommand(
     return false;
   }
 
-  // `-v` is a version query only. A trailing operand made `rustc -v <file>` echo the file's source
-  // line in its diagnostic, so these commands accept no arguments at all.
-  if ((baseCommand === "node" || baseCommand === "rustc") && !(words.length === 2 && words[1] === "-v")) {
+  // `-v` is a version query only. A trailing operand made `node -v <file>` echo the file's source
+  // line in its diagnostic, so this command accepts no arguments at all.
+  if (baseCommand === "node" && !(words.length === 2 && words[1] === "-v")) {
     return false;
   }
 
