@@ -157,6 +157,7 @@ interface CheckContext {
   deep: boolean;
   home: string;
   timeoutMs: number;
+  timeoutOverride: boolean;
   /** Shared endpoint evidence: later endpoint findings depend on earlier ones. */
   endpoint?: Promise<EndpointEvidence>;
   /** An absent /models entry is advisory; --deep can independently verify it. */
@@ -1074,7 +1075,10 @@ const CHECKS: Array<[string, Check]> = [
 /** Runs `check` with its own deadline; a throw or timeout becomes a finding, so other checks are unaffected. */
 async function runCheck(name: string, check: Check, ctx: CheckContext, parent: AbortSignal): Promise<DoctorFinding[]> {
   const started = Date.now();
-  const limit = name === "inference" ? ctx.timeoutMs * 6 + 1000 : name === "endpoint" ? ctx.timeoutMs * 2 + 1000 : ctx.timeoutMs + 1000;
+  const defaultLimit = name === "inference" ? ctx.timeoutMs * 6 + 1000 : name === "endpoint" ? ctx.timeoutMs * 2 + 1000 : ctx.timeoutMs + 1000;
+  // The default integrity scan gets more time for large, long-lived stores.
+  // An explicit --timeout remains authoritative for every check.
+  const limit = name === "integrity" && !ctx.timeoutOverride ? Math.max(defaultLimit, 30_000) : defaultLimit;
   const controller = new AbortController();
   const onAbort = () => controller.abort();
   parent.addEventListener("abort", onAbort, { once: true });
@@ -1136,6 +1140,7 @@ export async function runDoctor(optionsOrConfig: DoctorOptions | HarnessConfig |
     deep: Boolean(options.deep),
     home: options.home ?? credentialStorageHome(),
     timeoutMs: options.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+    timeoutOverride: options.timeoutMs !== undefined,
   };
   let results: DoctorFinding[][];
   try {

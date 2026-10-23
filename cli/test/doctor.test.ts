@@ -387,6 +387,50 @@ describe("doctor findings name the actual failure", () => {
     }
   });
 
+  test("default state integrity has a bounded extended deadline for slow long-lived stores", async () => {
+    const h = tmp("nexus-doctor-integrity-deadline-");
+    const tasks = path.join(h, ".nexus", "tasks");
+    fs.mkdirSync(tasks, { recursive: true, mode: 0o700 });
+    fs.writeFileSync(path.join(tasks, "task-slow.json"), JSON.stringify({ taskId: "task-slow", messages: [] }));
+    const originalLstat = fs.promises.lstat;
+    (fs.promises as any).lstat = async function (file: fs.PathLike, ...args: any[]) {
+      if (String(file) === path.join(tasks, "task-slow.json")) {
+        await new Promise((resolve) => setTimeout(resolve, 5200));
+      }
+      return (originalLstat as any).call(this, file, ...args);
+    };
+    try {
+      const report = await runDoctor({ home: h, config: cfg() });
+      assert.equal(find(report, "state.integrity")?.status, "pass");
+      assert.equal(find(report, "integrity.check"), undefined, "slow state metadata must not inherit the short endpoint timeout");
+    } finally {
+      (fs.promises as any).lstat = originalLstat;
+      fs.rmSync(h, { recursive: true, force: true });
+    }
+  });
+
+  test("an explicit timeout still bounds the state integrity check", async () => {
+    const h = tmp("nexus-doctor-integrity-explicit-timeout-");
+    const tasks = path.join(h, ".nexus", "tasks");
+    fs.mkdirSync(tasks, { recursive: true, mode: 0o700 });
+    fs.writeFileSync(path.join(tasks, "task-slow.json"), JSON.stringify({ taskId: "task-slow", messages: [] }));
+    const originalLstat = fs.promises.lstat;
+    (fs.promises as any).lstat = async function (file: fs.PathLike, ...args: any[]) {
+      if (String(file) === path.join(tasks, "task-slow.json")) {
+        await new Promise((resolve) => setTimeout(resolve, 1300));
+      }
+      return (originalLstat as any).call(this, file, ...args);
+    };
+    try {
+      const report = await runDoctor({ home: h, config: cfg(), timeoutMs: 100 });
+      assert.equal(find(report, "integrity.check")?.status, "warn");
+      assert.match(find(report, "integrity.check")?.explanation ?? "", /within 1100 ms/);
+    } finally {
+      (fs.promises as any).lstat = originalLstat;
+      fs.rmSync(h, { recursive: true, force: true });
+    }
+  });
+
   test("MCP servers and plugins are inspected without being started or loaded", async () => {
     const marker = path.join(workspace, "started.marker");
     const server = path.join(workspace, "mcp-server.sh");
