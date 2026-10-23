@@ -24,6 +24,7 @@ jobs:
     env:
       VERSION: ${{ inputs.version }}
       COMMIT: ${{ inputs.commit }}
+      NEXUS_BUILD_CONTAINER_IMAGE: rust:1.95.0-bullseye@sha256:646e8ceea789b00c5cfa339816a3ed44940dbf1651dc167b78f3c0aefcae0025
     steps:
       - name: Validate requested source identity
         run: |

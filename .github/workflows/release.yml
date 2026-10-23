@@ -16,6 +16,8 @@ jobs:
       contents: write
       id-token: write
       attestations: write
+    env:
+      NEXUS_BUILD_CONTAINER_IMAGE: rust:1.95.0-bullseye@sha256:646e8ceea789b00c5cfa339816a3ed44940dbf1651dc167b78f3c0aefcae0025
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:

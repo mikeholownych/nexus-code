@@ -32,6 +32,7 @@ if (mode === "record") {
       untracked: run("git", "ls-files", "--others", "--exclude-standard").split("\n").filter(Boolean),
     },
     toolchain: { node: process.version, npm: run("npm", "--version"), rustc: run("rustc", "-V"), cargo: run("cargo", "-V") },
+    buildEnvironment: { rustContainerImage: process.env.NEXUS_BUILD_CONTAINER_IMAGE ?? null },
     runner: { label, image: process.env.ImageOS ?? null, imageVersion: process.env.ImageVersion ?? null },
     workflow: { ref: process.env.GITHUB_REF ?? null, sha: process.env.GITHUB_WORKFLOW_SHA ?? null, runId: process.env.GITHUB_RUN_ID ?? null, runAttempt: process.env.GITHUB_RUN_ATTEMPT ?? null },
     artifacts: Object.fromEntries(fs.readdirSync(dist).sort().map((file) => [file, sha256(path.join(dist, file))])),
@@ -48,6 +49,9 @@ if (mode === "record") {
   const labels = builders.map((id) => id.runner.label).sort();
   if (JSON.stringify(labels) !== JSON.stringify(BUILDERS)) fail(`builders must be exactly ${BUILDERS.join(", ")}; got ${labels.join(", ")}`);
   if (builders.some((id) => !id.runner.image || !id.runner.imageVersion)) fail("every builder must record its runner image and image version");
+  const buildImages = builders.map((id) => id.buildEnvironment?.rustContainerImage);
+  if (buildImages.some((image) => !/^.+@sha256:[0-9a-f]{64}$/.test(image ?? ""))) fail("every builder must use a Rust build image pinned by sha256 digest");
+  if (new Set(buildImages).size !== 1) fail("builders used different Rust build images");
   // The workflow definition itself must come from the RC tag, so a modified repro.yml on a branch cannot PASS.
   for (const id of builders) {
     if (id.workflow?.ref !== `refs/tags/${version}` || id.workflow?.sha !== commit) fail(`${id.runner.label} ran the workflow from ${id.workflow?.ref}@${id.workflow?.sha}, not refs/tags/${version}@${commit}`);
@@ -56,7 +60,7 @@ if (mode === "record") {
   if (builders.some((id) => JSON.stringify(id.source) !== JSON.stringify(first.source))) fail("builders packaged different source or lockfiles");
   if (builders.some((id) => JSON.stringify(id.artifacts) !== JSON.stringify(first.artifacts))) fail("artifact digests differ between builders");
   const workflowRun = process.env.GITHUB_RUN_ID ? `${process.env.GITHUB_SERVER_URL}/${process.env.GITHUB_REPOSITORY}/actions/runs/${process.env.GITHUB_RUN_ID}` : null;
-  const evidence = { requirement: "REQ-REL-114", acceptance: "ACC-SUP-08", result: "PASS", workflowRun, workflow: first.workflow, source: first.source, artifacts: first.artifacts, builders: builders.map(({ runner, toolchain }) => ({ runner, toolchain })) };
+  const evidence = { requirement: "REQ-REL-114", acceptance: "ACC-SUP-08", result: "PASS", workflowRun, workflow: first.workflow, source: first.source, buildEnvironment: first.buildEnvironment, artifacts: first.artifacts, builders: builders.map(({ runner, toolchain }) => ({ runner, toolchain })) };
   fs.writeFileSync(out, `${JSON.stringify(evidence, null, 2)}\n`);
 } else {
   fail("mode must be record or compare");

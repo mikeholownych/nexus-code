@@ -11,14 +11,37 @@ trap 'rm -rf "$WORK"' EXIT
 
 npm --prefix "$ROOT/cli" ci
 npm --prefix "$ROOT/cli" run build
-cargo build --locked --release --manifest-path "$ROOT/core/Cargo.toml" --bin harness-core --bin nexus-tui
+
+if [[ -n "${NEXUS_BUILD_CONTAINER_IMAGE:-}" ]]; then
+  if [[ ! "$NEXUS_BUILD_CONTAINER_IMAGE" =~ @sha256:[0-9a-f]{64}$ ]]; then
+    echo "NEXUS_BUILD_CONTAINER_IMAGE must be pinned by sha256 digest" >&2
+    exit 2
+  fi
+  command -v docker >/dev/null || { echo "docker is required for the pinned Rust build image" >&2; exit 2; }
+  mkdir -p "$WORK/rust-build"
+  docker run --rm --pull=always --platform linux/amd64 \
+    --user "$(id -u):$(id -g)" \
+    --mount "type=bind,src=$ROOT,dst=/nexus-source,readonly" \
+    --mount "type=bind,src=$WORK/rust-build,dst=/nexus-build" \
+    --workdir /nexus-source \
+    --env HOME=/tmp/nexus-package-build-home \
+    --env CARGO_HOME=/nexus-build/cargo-home \
+    --env CARGO_TARGET_DIR=/nexus-build/target \
+    --env RUSTUP_HOME=/usr/local/rustup \
+    "$NEXUS_BUILD_CONTAINER_IMAGE" \
+    cargo build --locked --release --manifest-path /nexus-source/core/Cargo.toml --bin harness-core --bin nexus-tui
+  RUST_CORE_TARGET="$WORK/rust-build/target/release"
+else
+  cargo build --locked --release --manifest-path "$ROOT/core/Cargo.toml" --bin harness-core --bin nexus-tui
+  RUST_CORE_TARGET="$ROOT/core/target/release"
+fi
 
 PKG="$WORK/nexus"
 mkdir -p "$PKG/bin" "$PKG/lib/core" "$PKG/lib/cli"
 cp -R "$ROOT/cli/dist" "$PKG/lib/cli/dist"
 cp "$ROOT/cli/package.json" "$ROOT/cli/package-lock.json" "$PKG/lib/cli/"
 npm ci --omit=dev --prefix "$PKG/lib/cli"
-cp "$ROOT/core/target/release/harness-core" "$ROOT/core/target/release/nexus-tui" "$PKG/lib/core/"
+cp "$RUST_CORE_TARGET/harness-core" "$RUST_CORE_TARGET/nexus-tui" "$PKG/lib/core/"
 cp "$ROOT/LICENSE" "$PKG/LICENSE"
 printf '%s\n' "$VERSION" > "$PKG/VERSION"
 
