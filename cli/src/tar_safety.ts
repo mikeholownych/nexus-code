@@ -81,13 +81,17 @@ export function isSymlinkSafe(linkname: string, entryPath: string, expectedRoot:
     return { safe: false, reason: `Absolute symlink target forbidden: ${linkname}` };
   }
 
-  // Compute resolved target relative to fake root
-  const entryDir = path.dirname(entryPath);
-  const resolved = path.normalize(path.join("/", entryDir, linkname)).replace(/\\/g, "/");
+  // Compute resolved target relative to fake root. Normalize backslash separators before
+  // `normalize`, otherwise `..\..\outside` survives as literal characters and passes the
+  // root check even though a Windows extractor would treat it as a traversal.
+  const entryDir = path.posix.dirname(entryPath.replace(/\\/g, "/"));
+  const resolved = path.posix.normalize(
+    path.posix.join("/", entryDir, linkname.replace(/\\/g, "/"))
+  );
 
   // Check if it escapes fake root or expected root
   const segments = resolved.split("/").filter(Boolean);
-  if (segments.length === 0 || segments[0] !== expectedRoot) {
+  if (segments.length === 0 || segments[0] !== expectedRoot || segments.includes("..")) {
     return { safe: false, reason: `Symlink target '${linkname}' at '${entryPath}' escapes '${expectedRoot}/' (resolves to ${resolved})` };
   }
 
