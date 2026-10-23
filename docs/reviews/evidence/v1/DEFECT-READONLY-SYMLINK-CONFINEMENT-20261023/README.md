@@ -46,6 +46,8 @@ unterminated quote. On those words the guard:
 - treats `-` as an operand, and for `grep`/`rg` treats the first plain word (or the value after
   `-e`/`--regexp`) as the pattern so patterns do not collide with symlink names; `find` checks only
   its starting point;
+- treats every word after a standalone `--` as an operand, so a dash-prefixed repository entry such
+  as `--link` is resolved (`cat -- --link`, `grep -- -e --link`);
 - accepts `node -v` and `rustc -v` only with no operand;
 - fails closed when a supplied workspace cannot be resolved.
 
@@ -55,7 +57,7 @@ working. `AuthorityAdmissionEngine` now receives the workspace so its gate match
 
 ## Verification
 
-- `cli/test/readonly_command_paths.test.ts`: 23/23 pass; `cli/test/authority.test.ts`: 14/14 pass.
+- `cli/test/readonly_command_paths.test.ts`: 24/24 pass; `cli/test/authority.test.ts`: 14/14 pass.
 - Regression tests cover every shape above; they fail on the pre-fix source and pass now.
 - `npx tsc --noEmit -p tsconfig.json`: pass.
 - `git diff --check`: pass.
@@ -78,6 +80,8 @@ secret under `/var/tmp` so bwrap's `--tmpfs /tmp` does not hide the target; `ws/
 | `diff --from-file=link inside.txt` | success, returned `OUTSIDE SECRET` | `Read-only mode violation` |
 | `rustc -v link` | success, echoed a source line | `Read-only mode violation` |
 | `grep - link` | success, returned `OUTSIDE SECRET` | `Read-only mode violation` |
+| `cat -- --link` | success, returned `OUTSIDE SECRET` | `Read-only mode violation` |
+| `grep -- -e --link` | success, returned `OUTSIDE SECRET` | `Read-only mode violation` |
 | `ls node_modules` / `echo node_modules` | success | success (no violation) |
 
 A fixture under `/tmp` shows no leak because bwrap tmpfs-mounts `/tmp`; the `/var/tmp` fixture

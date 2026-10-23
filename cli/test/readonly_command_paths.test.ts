@@ -25,6 +25,7 @@ describe("read-only command path confinement", () => {
   fs.symlinkSync(path.join(root, "secret.txt"), path.join(ws, "link"));
   fs.symlinkSync("../secret.txt", path.join(ws, "rel-link"));
   fs.symlinkSync(path.join(root, "secret.txt"), path.join(ws, "a b"));
+  fs.symlinkSync(path.join(root, "secret.txt"), path.join(ws, "--link"));
   fs.symlinkSync(path.join(ws, "inside.txt"), path.join(ws, "alias"));
   fs.symlinkSync(path.join(root, "outside-dir"), path.join(ws, "outdir"));
   // A repository may legitimately have a directory symlink with this name; a pattern that merely
@@ -139,5 +140,20 @@ describe("read-only command path confinement", () => {
 
   test("an unresolvable workspace fails closed", () => {
     assert.equal(isSafeReadOnlyCommand("cat link", undefined, "/nonexistent/nexus-workspace"), false);
+  });
+
+  test("words after -- are operands, including a dash-prefixed symlink name", () => {
+    for (const command of [
+      "cat -- --link",
+      "head -1 -- --link",
+      "grep -e root -- --link",
+      "rg -e root -- --link",
+      "grep -- -e --link",
+      "diff -- --link inside.txt",
+    ]) {
+      assert.equal(isSafeReadOnlyCommand(command, undefined, ws), false, command);
+    }
+    assert.equal(isSafeReadOnlyCommand("cat -- inside.txt", undefined, ws), true);
+    assert.equal(isSafeReadOnlyCommand("grep -e root -- inside.txt", undefined, ws), true);
   });
 });

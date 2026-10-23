@@ -116,6 +116,11 @@ function isOptionWord(word: string): boolean {
   return word !== "-" && word.startsWith("-");
 }
 
+/** Index of the standalone `--` end-of-options separator, or -1. */
+function endOfOptionsIndex(words: string[]): number {
+  return words.indexOf("--", 1);
+}
+
 /** An attached option value that names a file the command would read (`-f/etc/shadow`, `--file=x`). */
 function isAttachedFileOption(word: string): boolean {
   return word === "-f" || word === "--file" || word.startsWith("--file=") || (word.startsWith("-f") && word.length > 2);
@@ -124,10 +129,12 @@ function isAttachedFileOption(word: string): boolean {
 /**
  * Options that make an allowlisted command read files without naming them as a plain argument:
  * recursive symlink following, attached paths, pattern/ignore files, and path lists. They are
- * refused in read-only mode rather than parsed.
+ * refused in read-only mode rather than parsed. Words after `--` are operands, never options.
  */
-function hasUnsafeReadOnlyOption(base: string, words: string[]): boolean {
-  for (const w of words.slice(1)) {
+function hasUnsafeReadOnlyOption(base: string, words: string[], separator: number): boolean {
+  for (let i = 1; i < words.length; i++) {
+    if (i === separator || (separator >= 0 && i > separator)) continue;
+    const w = words[i];
     if (GLOB_READING_COMMANDS.has(base) && isAttachedFileOption(w)) return true;
     if (base === "grep") {
       if (w === "--exclude-from" || w.startsWith("--exclude-from=")) return true;
@@ -161,24 +168,28 @@ function hasUnsafeReadOnlyOption(base: string, words: string[]): boolean {
 /**
  * Indices of words that name files. For grep/rg the first plain word is the pattern (or the value
  * after -e/--regexp); for find only the starting point. Everything else that is not an option is a
- * path for the remaining allowlisted commands.
+ * path for the remaining allowlisted commands. After `--`, every word is an operand.
  */
-function pathWordIndexes(base: string, words: string[]): Set<number> {
+function pathWordIndexes(base: string, words: string[], separator: number): Set<number> {
   const indexes = new Set<number>();
+  const beforeSeparator = (i: number): boolean => separator < 0 || i < separator;
   if (base === "grep" || base === "rg") {
     let patternSeen = false;
     for (let i = 1; i < words.length; i++) {
       const w = words[i];
-      if (w === "-e" || w === "--regexp") {
-        patternSeen = true;
-        i++;
-        continue;
+      if (i === separator) continue;
+      if (beforeSeparator(i)) {
+        if (w === "-e" || w === "--regexp") {
+          patternSeen = true;
+          i++;
+          continue;
+        }
+        if (w.startsWith("--regexp=") || (w.startsWith("-e") && w.length > 2)) {
+          patternSeen = true;
+          continue;
+        }
+        if (isOptionWord(w)) continue;
       }
-      if (w.startsWith("--regexp=") || (w.startsWith("-e") && w.length > 2)) {
-        patternSeen = true;
-        continue;
-      }
-      if (isOptionWord(w)) continue;
       if (!patternSeen) {
         patternSeen = true;
         continue;
@@ -189,14 +200,17 @@ function pathWordIndexes(base: string, words: string[]): Set<number> {
   }
   if (base === "find") {
     for (let i = 1; i < words.length; i++) {
-      if (isOptionWord(words[i])) continue;
+      if (i === separator) continue;
+      if (beforeSeparator(i) && isOptionWord(words[i])) continue;
       indexes.add(i);
       break;
     }
     return indexes;
   }
   for (let i = 1; i < words.length; i++) {
-    if (!isOptionWord(words[i])) indexes.add(i);
+    if (i === separator) continue;
+    if (beforeSeparator(i) && isOptionWord(words[i])) continue;
+    indexes.add(i);
   }
   return indexes;
 }
@@ -240,6 +254,7 @@ export function isSafeReadOnlyCommand(
   const words = splitShellWords(trimmed);
   if (!words || words.length === 0) return false;
   const baseCommand = words[0].toLowerCase();
+  const separator = endOfOptionsIndex(words);
   if (GLOB_READING_COMMANDS.has(baseCommand) && hasUnquotedGlob(trimmed)) {
     return false;
   }
@@ -250,7 +265,7 @@ export function isSafeReadOnlyCommand(
     return false;
   }
 
-  if (hasUnsafeReadOnlyOption(baseCommand, words)) {
+  if (hasUnsafeReadOnlyOption(baseCommand, words, separator)) {
     return false;
   }
 
@@ -274,12 +289,13 @@ export function isSafeReadOnlyCommand(
   }
   const withinWorkspace = (target: string): boolean =>
     Boolean(resolvedWs) && (target === resolvedWs || target.startsWith(resolvedWs + path.sep));
-  const pathIndexes = pathWordIndexes(baseCommand, words);
+  const pathIndexes = pathWordIndexes(baseCommand, words, separator);
   const resolveWords = REALPATH_COMMANDS.has(baseCommand);
   for (let i = 1; i < words.length; i++) {
-    // Option values are not operands. The options that could point a content-reading command at a
-    // file (`-f`, `--file`, `--files0-from`, ...) are refused above, so nothing is skipped here.
-    if (isOptionWord(words[i])) continue;
+    if (i === separator) continue;
+    // Before `--`, option words are not operands. After it every word is an operand, including a
+    // dash-prefixed file name such as `--link`.
+    if ((separator < 0 || i < separator) && isOptionWord(words[i])) continue;
     if (!pathIndexes.has(i)) continue;
     const candidatePath = words[i];
     if (!candidatePath) continue;
