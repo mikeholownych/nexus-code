@@ -13,7 +13,10 @@ import { execFileSync } from "node:child_process";
 import {
   CandidateTracker,
   computeCandidateIdentitySync,
+  computeCandidateIdentitySyncForTesting,
   hashContent,
+  openCandidateDirectory,
+  resolveFileCandidateDetails,
   ValidationReceipt,
   CandidateIdentity,
 } from "../src/core/candidate.js";
@@ -142,6 +145,237 @@ describe("WP-04: Candidate Identity & Validation Binding (INC-05, DEC-02)", () =
 
     const cleanedId = tracker.computeCandidateIdentitySync(rootGit).candidateId;
     assert.strictEqual(cleanedId, baselineId, "Removing untracked file must restore baseline candidateId");
+  });
+
+  test("candidate identity hashes nested repository worktree files but excludes nested Git history", () => {
+    const tracker = new CandidateTracker();
+    const nestedRepo = path.join(rootGit, "nested-repo");
+    const nestedFile = path.join(nestedRepo, "src", "candidate.ts");
+    const externalTarget = path.join(tmpRoot, "external-target.txt");
+    const nestedLink = path.join(nestedRepo, "external-link");
+    const source = "export const candidate = 'one';\n";
+
+    try {
+      initGitRepo(nestedRepo);
+      fs.mkdirSync(path.dirname(nestedFile), { recursive: true });
+      fs.writeFileSync(nestedFile, source);
+      fs.writeFileSync(externalTarget, "external version one\n");
+      fs.symlinkSync(path.relative(nestedRepo, externalTarget), nestedLink);
+      execFileSync("git", ["add", "-A"], { cwd: nestedRepo, stdio: "ignore" });
+      execFileSync("git", ["commit", "-m", "nested candidate"], { cwd: nestedRepo, stdio: "ignore" });
+
+      const initial = tracker.computeCandidateIdentitySync(rootGit);
+      assert.ok(initial.untrackedFiles.some((entry) => entry.path === "nested-repo/src/candidate.ts"));
+      assert.strictEqual(initial.untrackedFiles.find((entry) => entry.path === "nested-repo/external-link")?.mode, "120000");
+      assert.ok(initial.untrackedFiles.every((entry) => !entry.path.startsWith("nested-repo/.git/")));
+
+      fs.writeFileSync(externalTarget, "external version two\n");
+      assert.strictEqual(
+        tracker.computeCandidateIdentitySync(rootGit).candidateId,
+        initial.candidateId,
+        "Candidate identity hashes symlink text without reading its external target",
+      );
+
+      fs.writeFileSync(nestedFile, "export const candidate = 'two';\n");
+      const changed = tracker.computeCandidateIdentitySync(rootGit);
+      assert.notStrictEqual(changed.candidateId, initial.candidateId, "Nested worktree content must change candidate identity");
+
+      fs.writeFileSync(nestedFile, source);
+      execFileSync("git", ["commit", "--allow-empty", "-m", "history only"], { cwd: nestedRepo, stdio: "ignore" });
+      const historyOnly = tracker.computeCandidateIdentitySync(rootGit);
+      assert.strictEqual(historyOnly.candidateId, initial.candidateId, "Nested repository history metadata must not affect worktree identity");
+    } finally {
+      fs.rmSync(nestedRepo, { recursive: true, force: true });
+      fs.rmSync(externalTarget, { force: true });
+    }
+  });
+
+  test("candidate identity fails closed on special files inside an untracked directory", () => {
+    if (process.platform === "win32") return;
+    const specialDir = path.join(rootGit, "special-candidate-dir");
+    try {
+      initGitRepo(specialDir);
+      execFileSync("mkfifo", [path.join(specialDir, "pipe")]);
+      assert.throws(() => computeCandidateIdentitySync(rootGit), /Unsupported filesystem object type/);
+    } finally {
+      fs.rmSync(specialDir, { recursive: true, force: true });
+    }
+  });
+
+  test("candidate directory traversal stops when its entry budget is exceeded", () => {
+    const nestedRepo = path.join(rootGit, "limited-nested-repo");
+    try {
+      initGitRepo(nestedRepo);
+      fs.mkdirSync(path.join(nestedRepo, "one", "two"), { recursive: true });
+      fs.writeFileSync(path.join(nestedRepo, "one", "two", "file.txt"), "candidate\n");
+      execFileSync("git", ["add", "-A"], { cwd: nestedRepo, stdio: "ignore" });
+      execFileSync("git", ["commit", "-m", "nested candidate"], { cwd: nestedRepo, stdio: "ignore" });
+
+      assert.throws(
+        () => computeCandidateIdentitySync(rootGit, { maxEntries: 2 }),
+        /Candidate manifest exceeds 2 entry limit/,
+      );
+    } finally {
+      fs.rmSync(nestedRepo, { recursive: true, force: true });
+    }
+  });
+
+  test("candidate file replacement with a symlink during resolution fails closed", () => {
+    const targetFile = path.join(rootGit, "candidate-race.txt");
+    const outsideTarget = path.join(tmpRoot, "candidate-race-target.txt");
+    fs.writeFileSync(targetFile, "original regular file\n");
+    fs.writeFileSync(outsideTarget, "must not be read through a replacement symlink\n");
+
+    const originalLstat = fs.lstatSync;
+    let replaced = false;
+    const raceFs = new Proxy(fs, {
+      get(target, property) {
+        if (property === "lstatSync") {
+          return (...args: any[]) => {
+            const result = originalLstat(...args);
+            if (!replaced && path.resolve(String(args[0])) === targetFile) {
+              replaced = true;
+              fs.unlinkSync(targetFile);
+              fs.symlinkSync(outsideTarget, targetFile);
+            }
+            return result;
+          };
+        }
+        return Reflect.get(target, property, target);
+      },
+    }) as typeof fs;
+
+    try {
+      assert.throws(() => resolveFileCandidateDetails(targetFile, raceFs));
+      assert.strictEqual(replaced, true, "Fixture must replace the path after lstat and before the open");
+    } finally {
+      fs.rmSync(targetFile, { force: true });
+      fs.rmSync(outsideTarget, { force: true });
+    }
+  });
+
+  test("candidate directory replacement with a symlink is rejected before traversal", () => {
+    const childDirectory = path.join(rootGit, "directory-race");
+    const outsideDirectory = path.join(tmpRoot, "directory-race-outside");
+    fs.mkdirSync(childDirectory);
+    fs.mkdirSync(outsideDirectory);
+    fs.writeFileSync(path.join(outsideDirectory, "private.txt"), "must never be traversed\n");
+
+    const rootDirectory = openCandidateDirectory(rootGit);
+    const targetPath = `/proc/self/fd/${rootDirectory.fd}/directory-race`;
+    const originalLstat = fs.lstatSync;
+    let replaced = false;
+    const raceFs = new Proxy(fs, {
+      get(target, property) {
+        if (property === "lstatSync") {
+          return (...args: any[]) => {
+            const result = originalLstat(...args);
+            if (!replaced && String(args[0]) === targetPath) {
+              replaced = true;
+              fs.rmdirSync(childDirectory);
+              fs.symlinkSync(outsideDirectory, childDirectory);
+            }
+            return result;
+          };
+        }
+        return Reflect.get(target, property, target);
+      },
+    }) as typeof fs;
+
+    try {
+      assert.throws(() => openCandidateDirectory(childDirectory, rootDirectory.fd, "directory-race", raceFs));
+      assert.strictEqual(replaced, true, "Fixture must swap the directory after lstat and before open");
+      assert.strictEqual(fs.lstatSync(childDirectory).isSymbolicLink(), true);
+    } finally {
+      rootDirectory.dir.closeSync();
+      fs.closeSync(rootDirectory.fd);
+      if (fs.existsSync(childDirectory) || fs.lstatSync(childDirectory, { throwIfNoEntry: false })) {
+        fs.unlinkSync(childDirectory);
+      }
+      fs.rmSync(outsideDirectory, { recursive: true, force: true });
+    }
+  });
+
+  test("untracked nested path parent swap fails closed during candidate computation", () => {
+    const parentDirectory = path.join(rootGit, "untracked-parent");
+    const movedDirectory = path.join(rootGit, "untracked-parent-original");
+    const outsideDirectory = path.join(tmpRoot, "untracked-parent-outside");
+    fs.mkdirSync(path.join(parentDirectory, "child"), { recursive: true });
+    fs.writeFileSync(path.join(parentDirectory, "child", "file.txt"), "candidate content\n");
+    fs.mkdirSync(outsideDirectory);
+    fs.writeFileSync(path.join(outsideDirectory, "file.txt"), "outside content must not be read\n");
+
+    const status = execFileSync("git", ["status", "--porcelain=v1", "--untracked-files=all"], {
+      cwd: rootGit,
+      encoding: "utf-8",
+    });
+    assert.match(status, /\?\? untracked-parent\/child\/file\.txt/);
+
+    const originalLstat = fs.lstatSync;
+    let replaced = false;
+    const raceFs = new Proxy(fs, {
+      get(target, property) {
+        if (property === "lstatSync") {
+          return (...args: any[]) => {
+            const result = originalLstat(...args);
+            if (!replaced && /^\/proc\/self\/fd\/\d+\/untracked-parent$/.test(String(args[0]))) {
+              replaced = true;
+              fs.renameSync(parentDirectory, movedDirectory);
+              fs.symlinkSync(outsideDirectory, parentDirectory);
+            }
+            return result;
+          };
+        }
+        return Reflect.get(target, property, target);
+      },
+    }) as typeof fs;
+
+    try {
+      assert.throws(
+        () => computeCandidateIdentitySyncForTesting(rootGit, {}, raceFs),
+        /Failed to query git status for candidate identity/,
+      );
+      assert.strictEqual(replaced, true, "Fixture must swap a nested parent after lstat and before open");
+    } finally {
+      if (fs.lstatSync(parentDirectory, { throwIfNoEntry: false })?.isSymbolicLink()) {
+        fs.unlinkSync(parentDirectory);
+      }
+      if (fs.existsSync(movedDirectory)) fs.renameSync(movedDirectory, parentDirectory);
+      fs.rmSync(parentDirectory, { recursive: true, force: true });
+      fs.rmSync(outsideDirectory, { recursive: true, force: true });
+    }
+  });
+
+  test("tracked file byte budget rejects oversized content before hashing", () => {
+    const readmePath = path.join(rootGit, "README.md");
+    const original = fs.readFileSync(readmePath);
+    try {
+      fs.writeFileSync(readmePath, "this exceeds the test byte budget\n");
+      assert.throws(
+        () => computeCandidateIdentitySync(rootGit, { maxTotalBytes: 4 }),
+        /Candidate file exceeds 4 byte limit/,
+      );
+    } finally {
+      fs.writeFileSync(readmePath, original);
+    }
+  });
+
+  test("aggregate tracked byte budget rejects a set of files before hashing the over-budget file", () => {
+    const readmePath = path.join(rootGit, "README.md");
+    const sourcePath = path.join(rootGit, "src", "index.ts");
+    const originalReadme = fs.readFileSync(readmePath);
+    const originalSource = fs.readFileSync(sourcePath);
+    try {
+      fs.writeFileSync(readmePath, "1234");
+      fs.writeFileSync(sourcePath, "5678");
+      assert.throws(
+        () => computeCandidateIdentitySync(rootGit, { maxTotalBytes: 6 }),
+        /Candidate file exceeds 2 byte limit/,
+      );
+    } finally {
+      fs.writeFileSync(readmePath, originalReadme);
+      fs.writeFileSync(sourcePath, originalSource);
+    }
   });
 
   test("Property E: Git-ignored build artifacts are excluded from candidate identity", () => {

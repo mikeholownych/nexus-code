@@ -10,7 +10,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import { execFileSync } from "node:child_process";
 
-import { BenchmarkEvaluator, SweBenchInstance } from "../src/evaluator.js";
+import { BenchmarkEvaluator, recordEvaluationReceiptIfIdentified, SweBenchInstance } from "../src/evaluator.js";
 import { CandidateTracker } from "../src/core/candidate.js";
 import { WorktreeManager } from "../src/worktree.js";
 
@@ -103,6 +103,21 @@ describe("WP-04: Evaluator Candidate Binding (VER-001, VER-005, F-02)", () => {
     }
   });
 
+  test("evaluator does not issue a passed receipt when candidate identity is unresolved", () => {
+    const tracker = new CandidateTracker();
+    const unresolvedReceipt = recordEvaluationReceiptIfIdentified(
+      tracker,
+      undefined,
+      true,
+      "npm test",
+      "all tests passed",
+      "synthetic-unresolved-candidate",
+    );
+
+    assert.strictEqual(unresolvedReceipt, undefined);
+    assert.strictEqual(tracker.getActiveReceipt("UNRESOLVED_CANDIDATE"), null);
+  });
+
   test("Evaluator scorecard renders summary metrics", () => {
     const scorecard = BenchmarkEvaluator.renderScorecard({
       benchmarkName: "SWE-bench-Lite",
@@ -132,6 +147,7 @@ describe("WP-04: Evaluator Candidate Binding (VER-001, VER-005, F-02)", () => {
           durationMs: 15400,
           tokensConsumed: { prompt: 4000, completion: 1500, total: 5500 },
           stepsTaken: 6,
+          candidateIdentityIssue: "Candidate identity exceeded a safety limit. Review the workspace size or file count, then retry; no validation receipt was recorded.",
         },
       ],
     });
@@ -140,5 +156,7 @@ describe("WP-04: Evaluator Candidate Binding (VER-001, VER-005, F-02)", () => {
     assert.match(scorecard, /Pass Rate @ 1.*50%/);
     assert.match(scorecard, /inst-1/);
     assert.match(scorecard, /inst-2/);
+    assert.match(scorecard, /Candidate identity exceeded a safety limit/);
+    assert.match(scorecard, /no validation receipt was recorded/);
   });
 });

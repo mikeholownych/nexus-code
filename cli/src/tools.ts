@@ -4,6 +4,7 @@ import * as fs from "node:fs";
 import * as http from "node:http";
 import * as https from "node:https";
 import * as net from "node:net";
+import * as tls from "node:tls";
 import * as dns from "node:dns";
 import { URL, fileURLToPath } from "node:url";
 import { ToolDefinition, ExecutionResult } from "./types.js";
@@ -168,6 +169,19 @@ export function isPublicIp(ip: string): boolean {
 
   // IPv4-mapped address: ::ffff:0:0/96 (top 80 bits zero, next 16 bits 0xffff)
   if ((v6Big >> 32n) === 0xffffn) {
+    const lower = Number(v6Big & 0xffffffffn);
+    const a = (lower >>> 24) & 0xff;
+    const b = (lower >>> 16) & 0xff;
+    const c = (lower >>> 8) & 0xff;
+    const d = lower & 0xff;
+    return isPublicIp(`${a}.${b}.${c}.${d}`);
+  }
+
+  // IPv4-compatible (::/96, deprecated) and IPv4-translated (::ffff:0:0/96) forms embed an
+  // IPv4 address in the low 32 bits. They are reserved/deprecated rather than globally
+  // reachable, and some stacks map them to the embedded address; classify by the embedded
+  // IPv4 address instead of treating the whole prefix as public.
+  if ((v6Big >> 32n) === 0n || (v6Big >> 32n) === 0xffff0000n) {
     const lower = Number(v6Big & 0xffffffffn);
     const a = (lower >>> 24) & 0xff;
     const b = (lower >>> 16) & 0xff;
@@ -390,29 +404,32 @@ export async function safeFetch(
     const pinnedAddr = resolved[0].address;
     const pinnedFamily = resolved[0].family;
 
+    // Connect over a socket we create ourselves, pinned to the validated address. Passing a
+    // `lookup` callback to http(s).request instead lets Node emit some connect failures
+    // (ENETUNREACH, EINVAL) on the socket before the request has attached its error listener,
+    // which surfaces as an unhandled 'error' event and terminates the whole process.
+    const port = Number(parsed.port || (parsed.protocol === "https:" ? 443 : 80));
+    const createConnection = () => {
+      if (parsed.protocol === "https:") {
+        return tls.connect({
+          host: pinnedAddr,
+          port,
+          ...(net.isIP(host) ? {} : { servername: host }),
+        });
+      }
+      return net.connect({ host: pinnedAddr, port, family: pinnedFamily });
+    };
+
     const reqOptions: http.RequestOptions = {
       method: "GET",
       hostname: parsed.hostname,
-      port: parsed.port || (parsed.protocol === "https:" ? 443 : 80),
+      port,
       path: parsed.pathname + parsed.search,
       headers: {
         ...reqHeaders,
         Host: parsed.host,
       },
-      lookup: (_h: string, o: any, cb: any) => {
-        if (typeof o === "function") {
-          cb = o;
-          o = {};
-        }
-        if (o && o.all) {
-          cb(null, [{ address: pinnedAddr, family: pinnedFamily }]);
-        } else {
-          cb(null, pinnedAddr, pinnedFamily);
-        }
-      },
-      ...(parsed.protocol === "https:" && !net.isIP(parsed.hostname)
-        ? { servername: parsed.hostname }
-        : {}),
+      createConnection,
     };
 
     const res: http.IncomingMessage = await new Promise((resolve, reject) => {

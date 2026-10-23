@@ -52,7 +52,9 @@ describe("WP-02: Authority Admission & Resource Confinement (INC-03)", () => {
     assert.strictEqual(isSafeReadOnlyCommand("tail -n 5 log.txt"), true);
     assert.strictEqual(isSafeReadOnlyCommand('grep "foo" file.txt'), true);
     assert.strictEqual(isSafeReadOnlyCommand('rg "pattern" src/'), true);
-    assert.strictEqual(isSafeReadOnlyCommand("diff file1 file2"), true);
+    // `diff` is not on the read-only allowlist: its directory and getopt semantics kept producing
+    // symlink-following content reads. `git diff` remains available for repository diffs.
+    assert.strictEqual(isSafeReadOnlyCommand("diff file1 file2"), false);
     assert.strictEqual(isSafeReadOnlyCommand("wc -l package.json"), true);
     assert.strictEqual(isSafeReadOnlyCommand('find . -name "*.ts"'), true);
     assert.strictEqual(isSafeReadOnlyCommand("find src -type f"), true);
