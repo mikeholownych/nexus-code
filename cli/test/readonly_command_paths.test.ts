@@ -64,4 +64,12 @@ describe("read-only command path confinement", () => {
   test("an option value that names an escaping path is denied", () => {
     assert.equal(isSafeReadOnlyCommand("cat --file=link", undefined, ws), false);
   });
+
+  test("an unquoted glob cannot select an escaping symlink after the check", () => {
+    assert.equal(isSafeReadOnlyCommand("cat *", undefined, ws), false);
+    assert.equal(isSafeReadOnlyCommand("head *", undefined, ws), false);
+    assert.equal(isSafeReadOnlyCommand("grep SECRET *", undefined, ws), false);
+    assert.equal(isSafeReadOnlyCommand("cat '*.txt'", undefined, ws), true);
+    assert.equal(isSafeReadOnlyCommand("ls *.txt", undefined, ws), true);
+  });
 });

@@ -47,6 +47,27 @@ export const DEFAULT_SAFE_READONLY_COMMAND_REGEX =
 // Keep attacker-controlled command text bounded before applying the allowlist regex.
 const MAX_SAFE_READONLY_COMMAND_LENGTH = 8_192;
 
+/** Whether the command contains an unquoted shell glob, which expands after this check. */
+function hasUnquotedGlob(command: string): boolean {
+  let quoteChar = "";
+  for (const ch of command) {
+    if (quoteChar) {
+      if (ch === quoteChar) quoteChar = "";
+    } else if (ch === '"' || ch === "'") {
+      quoteChar = ch;
+    } else if (ch === "*" || ch === "?" || ch === "[") {
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * Commands that read file contents: a glob is expanded by the shell after the allowlist runs, so
+ * `cat *` could still name an escaping symlink. Commands that only list names keep glob support.
+ */
+const GLOB_READING_COMMANDS = new Set(["cat", "head", "tail", "grep", "rg", "diff", "wc"]);
+
 /**
  * Validates whether a shell command is safe to execute under read-only mode.
  * Enforces AUTH-009 and AUTH-010:
@@ -78,6 +99,13 @@ export function isSafeReadOnlyCommand(
   // {, }   - command block grouping
   // \      - escape character
   if (/[><&;|`$~\n\r(){}\\]/.test(trimmed)) {
+    return false;
+  }
+
+  // A glob expands after this check, so the arguments above never see the real file names.
+  // Commands that read contents must not rely on it: `cat *` can select an escaping symlink.
+  const baseCommand = trimmed.split(/\s+/)[0].toLowerCase();
+  if (GLOB_READING_COMMANDS.has(baseCommand) && hasUnquotedGlob(trimmed)) {
     return false;
   }
 

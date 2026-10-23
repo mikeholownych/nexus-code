@@ -21,19 +21,25 @@ isSafeReadOnlyCommand("cat /tmp/.../ws-evil/secret.txt", undefined, ws) // true 
 The absolute-path and `..` checks also used a bare `startsWith(workspace)`, so a sibling directory
 `ws-evil` was treated as inside `ws`.
 
+A shell glob had the same effect: `cat *` passed the guard (the token `*` names no existing path),
+then the shell expanded it to every workspace entry, including an escaping symlink.
+
 ## Fix
 
 - Resolve every existing non-flag path argument with `fs.realpathSync` (relative to the workspace) and
   reject anything whose real path is outside the workspace's real path.
 - Compare workspace containment with a path boundary (`target === ws || target.startsWith(ws + sep)`)
   for the absolute and traversal checks, not a bare prefix.
+- Reject an unquoted glob for commands that read file contents (`cat`, `head`, `tail`, `grep`, `rg`,
+  `diff`, `wc`). Quoted patterns and listing commands keep working.
 
 Non-path tokens (grep patterns, `find -name` globs, option values that do not exist) are left alone, so
 the allowlist keeps working for in-workspace reads.
 
 ## Verification
 
-- `cli/test/readonly_command_paths.test.ts`: 17/17 pass; `cli/test/authority.test.ts`: 14/14 pass.
-- The escaping-argument tests (8 of 17) fail on the parent source and pass after the fix.
+- `cli/test/readonly_command_paths.test.ts`: 18/18 pass; `cli/test/authority.test.ts`: 14/14 pass.
+- The escaping-argument tests (8) and the unquoted-glob test fail on the parent source and pass after
+  the fix.
 - `npx tsc --noEmit -p tsconfig.json`: pass.
 - `git diff --check`: pass.
