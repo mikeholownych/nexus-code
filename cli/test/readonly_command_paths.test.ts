@@ -181,9 +181,12 @@ describe("read-only command path confinement", () => {
     }
   });
 
-  test("read-only bwrap does not expose unrelated files beneath the host runtime tree", { skip: !isBwrapAvailable() }, () => {
+  test("read-only bwrap does not expose unrelated files beneath the host runtime tree", { skip: !isBwrapAvailable() }, (t) => {
     const hostFile = "/usr/share/doc/bash/copyright";
-    if (!fs.existsSync(hostFile)) return;
+    if (!fs.existsSync(hostFile)) {
+      t.skip("host runtime canary fixture is unavailable");
+      return;
+    }
     const link = path.join(ws, "runtime-tree-canary");
     fs.symlinkSync(path.join(ws, "inside.txt"), link);
 

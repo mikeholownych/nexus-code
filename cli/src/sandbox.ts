@@ -111,12 +111,18 @@ function appendRuntimeFile(
   }
 
   // The only runtime script admitted here is an installed command with a fixed shebang.
+  let fd: number | undefined;
   try {
-    const firstLine = fs.readFileSync(resolved, "utf8").split("\n", 1)[0];
+    fd = fs.openSync(resolved, "r");
+    const prefix = Buffer.alloc(256);
+    const count = fs.readSync(fd, prefix, 0, prefix.length, 0);
+    const firstLine = prefix.subarray(0, count).toString("utf8").split("\n", 1)[0];
     const shebang = firstLine.match(/^#!\s*(\/[^\s]+)/)?.[1];
     if (shebang) appendRuntimeFile(args, shebang, knownDirectories, mountedFiles, depth + 1);
   } catch {
     // Binary files are not UTF-8 scripts.
+  } finally {
+    if (fd !== undefined) fs.closeSync(fd);
   }
 }
 
