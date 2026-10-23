@@ -30,8 +30,9 @@ nexus doctor [-e URL] [-m MODEL] [-k KEY] [--provider ID] [--base-url URL] [-w D
   and integrity checks over every saved record instead of the newest 300.
 - `--fix` proposes the supported repairs and applies them only after confirmation. `--yes` confirms without asking
   (unattended use). `--read-only` refuses every repair.
-- `--timeout` is the per-check limit in milliseconds (default 4000). Ctrl-C cancels; the report then says
-  `CANCELLED (incomplete)`.
+- `--timeout` is the per-check limit in milliseconds (default 4000), including the state-integrity check when
+  explicitly supplied. With no override, state integrity has a 30-second minimum window to inspect large,
+  long-lived stores; Ctrl-C cancels it. The report then says `CANCELLED (incomplete)`.
 
 ## Checks
 
