@@ -525,6 +525,7 @@ const RPC_CANCEL_CONFIRM_MS = 5_000;
 export class RustCoreBridge {
   private static activeBridges: Set<RustCoreBridge> = new Set();
   private workspace: string;
+  private workspaceIdentity?: { dev: number; ino: number };
   private defaultShell: string;
   private coreBinaryPath: string | null = null;
   private cargoManifestPath: string;
@@ -554,6 +555,14 @@ export class RustCoreBridge {
     requireSandbox: boolean = false
   ) {
     this.workspace = path.resolve(workspace);
+    try {
+      const workspaceStat = fs.statSync(this.workspace);
+      if (workspaceStat.isDirectory()) {
+        this.workspaceIdentity = { dev: workspaceStat.dev, ino: workspaceStat.ino };
+      }
+    } catch {
+      // Read-only command execution fails closed if the workspace identity is unavailable.
+    }
     this.defaultShell = defaultShell;
     this.cargoManifestPath = path.resolve(__dirname, "../../core/Cargo.toml");
     this.dryRun = dryRun;
@@ -1327,6 +1336,76 @@ export class RustCoreBridge {
         const { wrapSandboxedCommand } = await import("./sandbox.js");
         const configuredMode = typeof this.sandbox === "string" ? (this.sandbox as any) : "auto";
         const mode = this.readOnly && configuredMode === "none" ? "auto" : configuredMode;
+
+        if (this.readOnly) {
+          let workspaceFd: number | undefined;
+          try {
+            const flags = fs.constants.O_RDONLY | (fs.constants.O_DIRECTORY ?? 0);
+            workspaceFd = fs.openSync(this.workspace, flags);
+            const pinnedStat = fs.fstatSync(workspaceFd);
+            if (
+              !pinnedStat.isDirectory() ||
+              !this.workspaceIdentity ||
+              pinnedStat.dev !== this.workspaceIdentity.dev ||
+              pinnedStat.ino !== this.workspaceIdentity.ino
+            ) {
+              return {
+                success: false,
+                output: "",
+                error: "Read-only mode violation: workspace identity changed before command execution.",
+              };
+            }
+
+            const pinnedWorkspace = `/proc/${process.pid}/fd/${workspaceFd}`;
+            if (!isSafeReadOnlyCommand(args.command || "", undefined, pinnedWorkspace)) {
+              return {
+                success: false,
+                output: "",
+                error: "Read-only mode violation: command operands escaped the pinned workspace.",
+              };
+            }
+
+            const sandboxed = wrapSandboxedCommand(args.command || "", this.workspace, {
+              mode,
+              shell: args.shell,
+              readOnlyHost: true,
+              workspaceFd,
+              network: false,
+            });
+            if (!sandboxed.sandboxed || !sandboxed.argv) {
+              return {
+                success: false,
+                output: "",
+                error: `Read-only mode violation: filesystem-isolated shell execution is unavailable. ${sandboxed.warning || "No supported sandbox engine is available."}`,
+              };
+            }
+
+            const timeoutSecs = typeof args.timeout_secs === "number" ? args.timeout_secs : maxToolTimeoutSecs();
+            const res = spawnSync(sandboxed.argv[0], sandboxed.argv.slice(1), {
+              cwd: "/",
+              encoding: "utf-8",
+              maxBuffer: 10 * 1024 * 1024,
+              timeout: timeoutSecs * 1000,
+              stdio: ["ignore", "pipe", "pipe", workspaceFd],
+            });
+            if (res.error) {
+              return { success: false, output: "", error: `Failed to execute read-only command: ${res.error.message}` };
+            }
+            if (res.status !== 0) {
+              return {
+                success: false,
+                output: res.stdout || "",
+                error: res.stderr || `Read-only command exited with code ${res.status}`,
+              };
+            }
+            return { success: true, output: (res.stdout || "").trim() };
+          } catch (err: any) {
+            return { success: false, output: "", error: `Read-only command confinement failed: ${err.message}` };
+          } finally {
+            if (workspaceFd !== undefined) fs.closeSync(workspaceFd);
+          }
+        }
+
         const sandboxed = wrapSandboxedCommand(args.command || "", this.workspace, {
           mode,
           shell: args.shell,

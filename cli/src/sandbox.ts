@@ -8,6 +8,8 @@ export type SandboxMode = "auto" | "bwrap" | "docker" | "none";
 export interface SandboxOptions {
   mode?: SandboxMode;
   readOnlyHost?: boolean;
+  /** Open workspace directory inherited by bwrap as child fd 3. */
+  workspaceFd?: number;
   network?: boolean;
   shell?: string;
   customBwrapArgs?: string[];
@@ -154,6 +156,14 @@ export function wrapSandboxedCommand(
     const bwrapArgs: string[] = ["bwrap"];
 
     if (options.readOnlyHost) {
+      if (!Number.isInteger(options.workspaceFd) || options.workspaceFd! < 3) {
+        return {
+          command: cmd,
+          sandboxed: false,
+          engine: "none",
+          warning: "Read-only Bubblewrap requires a pinned workspace directory descriptor.",
+        };
+      }
       // Do not expose the host root to read-only commands. A path admitted by the
       // authority check can be replaced before the shell opens it; a read-only
       // bind of / still lets that race disclose unrelated host files.
@@ -217,7 +227,10 @@ export function wrapSandboxedCommand(
         const containingMount = homeIsUsable && isPathWithin(absWorkspace, userHome) ? userHome : "/tmp";
         appendDirectoryTree(bwrapArgs, absWorkspace, new Set(["/", ...systemRoots, containingMount]));
       }
-      bwrapArgs.push("--ro-bind", absWorkspace, absWorkspace);
+      // The descriptor is inherited as fd 3 by the process launching bwrap. Binding
+      // through /proc/self/fd pins the admitted directory even if its pathname is
+      // renamed or replaced before bwrap resolves the mount source.
+      bwrapArgs.push("--ro-bind", "/proc/self/fd/3", absWorkspace);
       bwrapArgs.push("--setenv", "PATH", "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin");
       bwrapArgs.push("--setenv", "HOME", userHome);
     } else {
@@ -256,6 +269,14 @@ export function wrapSandboxedCommand(
 
   // 2. Try Docker container isolation
   if (mode === "docker" || (mode === "auto" && isDockerAvailable())) {
+    if (options.readOnlyHost) {
+      return {
+        command: cmd,
+        sandboxed: false,
+        engine: "none",
+        warning: "Read-only host confinement requires Bubblewrap with a pinned workspace descriptor.",
+      };
+    }
     if (!isDockerAvailable() && mode === "docker") {
       return {
         command: cmd,

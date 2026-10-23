@@ -86,16 +86,50 @@ describe("ACC-SAFE-04 & REQ-SEC-104: Read-only HOME masking and workspace path c
     });
   });
 
+  test("read-only bridge rejects a workspace pathname replaced after bridge admission", async () => {
+    await withFixtureHome(async (_fixtureHome, workspace) => {
+      const originalWorkspace = `${workspace}-original`;
+      const replacementWorkspace = `${workspace}-replacement`;
+      fs.mkdirSync(replacementWorkspace);
+      fs.writeFileSync(path.join(replacementWorkspace, "README.md"), "REPLACEMENT_WORKSPACE_SECRET");
+      const bridge = new RustCoreBridge(workspace, "bash", undefined, false, true);
+
+      try {
+        fs.renameSync(workspace, originalWorkspace);
+        fs.symlinkSync(replacementWorkspace, workspace);
+        const result = await bridge.executeTool("run_command", { command: "cat README.md" });
+        assert.equal(result.success, false);
+        assert.match(result.error || "", /workspace identity changed/);
+        assert.doesNotMatch(result.output, /REPLACEMENT_WORKSPACE_SECRET/);
+      } finally {
+        bridge.shutdown();
+        try {
+          fs.unlinkSync(workspace);
+        } catch {
+          // The workspace path may still be the original directory if setup failed.
+        }
+        if (fs.existsSync(originalWorkspace)) fs.renameSync(originalWorkspace, workspace);
+      }
+    });
+  });
+
   test("bwrap wraps with --tmpfs $HOME when readOnlyHost is true", async () => {
     if (!isBwrapAvailable()) {
       return;
     }
 
     await withFixtureHome(async (fixtureHome, workspace) => {
-      const sandboxed = wrapSandboxedCommand("ls -la $HOME", workspace, {
-        mode: "bwrap",
-        readOnlyHost: true,
-      });
+      const workspaceFd = fs.openSync(workspace, fs.constants.O_RDONLY | (fs.constants.O_DIRECTORY ?? 0));
+      let sandboxed: ReturnType<typeof wrapSandboxedCommand>;
+      try {
+        sandboxed = wrapSandboxedCommand("ls -la $HOME", workspace, {
+          mode: "bwrap",
+          readOnlyHost: true,
+          workspaceFd,
+        });
+      } finally {
+        fs.closeSync(workspaceFd);
+      }
 
       assert.equal(sandboxed.sandboxed, true);
       assert.equal(sandboxed.engine, "bwrap");
