@@ -22,9 +22,12 @@ Create and inspect a candidate locally. Set `NEXUS_VERSION` to the release tag b
 
 ```sh
 : "${NEXUS_VERSION:?Set NEXUS_VERSION to the release tag, for example v1.0.0-rc.1 or v1.0.0}"
-bash scripts/package-linux.sh "$NEXUS_VERSION" ./release
+NEXUS_BUILD_CONTAINER_IMAGE="$(make -s -f Makefile -p 2>/dev/null | sed -n 's/^APPROVED_RUST_BUILD_IMAGE := //p')" \
+  bash scripts/package-linux.sh "$NEXUS_VERSION" ./release
 bash scripts/smoke-package.sh "./release/nexus-linux-x86_64-$NEXUS_VERSION.tar.gz"
 ```
+
+Packaging builds the Rust binaries inside the approved, digest-pinned builder image (`APPROVED_RUST_BUILD_IMAGE` in the `Makefile`) and requires Docker. `scripts/package-linux.sh` exits with status 2 if `NEXUS_BUILD_CONTAINER_IMAGE` is unset or names any other image. `make verify-reproducibility` builds the package twice with that image and compares the archive, `SHA256SUMS`, notices and SBOM byte for byte. For a local, non-release build only, `NEXUS_ALLOW_HOST_RUST_BUILD=1` builds with the host Rust toolchain instead; such a package is not a release candidate.
 
 The root `package.json` version is the single source of truth. After changing it, run `node scripts/sync-version.mjs` to update `cli/package.json`, its lockfile, `core/Cargo.toml` and `core/Cargo.lock`. CI and the release workflow run `node scripts/sync-version.mjs --check`, which fails on any drift or on a tag that does not match.
 
