@@ -6,7 +6,12 @@ VERSION=${1:?usage: package-linux.sh VERSION OUTPUT_DIR}
 OUT=${2:?usage: package-linux.sh VERSION OUTPUT_DIR}
 APPROVED_RUST_BUILD_IMAGE='rust:1.95.0-bookworm@sha256:4c2fd73ef19c5ef9d54bee03b06b2839a392604fbfcd578ed948b71b37c1d7fb'
 case "$VERSION" in v[0-9]*.[0-9]*.[0-9]*) ;; *) echo "version must look like v1.2.3" >&2; exit 2 ;; esac
-if [[ -n "${NEXUS_BUILD_CONTAINER_IMAGE:-}" && "$NEXUS_BUILD_CONTAINER_IMAGE" != "$APPROVED_RUST_BUILD_IMAGE" ]]; then
+if [[ -z "${NEXUS_BUILD_CONTAINER_IMAGE:-}" ]]; then
+  if [[ "${NEXUS_ALLOW_HOST_RUST_BUILD:-}" != "1" ]]; then
+    echo "NEXUS_BUILD_CONTAINER_IMAGE must use the approved digest-pinned Rust 1.95 Bookworm builder (set NEXUS_ALLOW_HOST_RUST_BUILD=1 only for local development)" >&2
+    exit 2
+  fi
+elif [[ "$NEXUS_BUILD_CONTAINER_IMAGE" != "$APPROVED_RUST_BUILD_IMAGE" ]]; then
   echo "NEXUS_BUILD_CONTAINER_IMAGE must use the approved digest-pinned Rust 1.95 Bookworm builder" >&2
   exit 2
 fi

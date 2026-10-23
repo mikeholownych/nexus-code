@@ -13,6 +13,7 @@ import { fileURLToPath } from "node:url";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 const SCRIPT = path.join(ROOT, "scripts/repro-identity.mjs");
+const PACKAGE_SCRIPT = path.join(ROOT, "scripts/package-linux.sh");
 const COMMIT = "a".repeat(40);
 const APPROVED_RUST_IMAGE = "rust:1.95.0-bookworm@sha256:4c2fd73ef19c5ef9d54bee03b06b2839a392604fbfcd578ed948b71b37c1d7fb";
 
@@ -61,6 +62,23 @@ test("repro compare accepts only identical source, lockfiles and artifacts from 
       assert.match(result.stderr, message, name);
     }
     assert.notEqual(compare(a).status, 0, "a single builder is not cross-runner evidence");
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("Linux packaging rejects an omitted pinned builder unless host builds are explicitly opted into", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "package-builder-guard-"));
+  const out = path.join(dir, "dist");
+  try {
+    const result = spawnSync("bash", [PACKAGE_SCRIPT, "v1.0.0", out], {
+      cwd: ROOT,
+      encoding: "utf8",
+      env: { ...process.env, NEXUS_BUILD_CONTAINER_IMAGE: "", NEXUS_ALLOW_HOST_RUST_BUILD: "" },
+    });
+    assert.equal(result.status, 2, result.stderr);
+    assert.match(result.stderr, /NEXUS_BUILD_CONTAINER_IMAGE must use the approved digest-pinned Rust 1\.95 Bookworm builder/);
+    assert.equal(fs.existsSync(out), false, "reject before creating package output or invoking build tools");
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
