@@ -347,6 +347,39 @@ describe("read-only command path confinement", () => {
     }
   });
 
+  test("read-only bwrap cannot reach host configuration through a workspace symlink race", { skip: !isBwrapAvailable() }, (t) => {
+    const hostFile = "/etc/hostname";
+    if (!fs.existsSync(hostFile)) {
+      t.skip("host configuration canary fixture is unavailable");
+      return;
+    }
+    const link = path.join(ws, "etc-tree-canary");
+    fs.symlinkSync(path.join(ws, "inside.txt"), link);
+    const workspaceFd = openWorkspaceFd(ws);
+
+    try {
+      const pinnedWorkspace = `/proc/${process.pid}/fd/${workspaceFd}`;
+      assert.equal(isSafeReadOnlyCommand("cat etc-tree-canary", undefined, pinnedWorkspace), true);
+      const wrapped = wrapSandboxedCommand("cat etc-tree-canary", ws, {
+        mode: "bwrap",
+        readOnlyHost: true,
+        workspaceFd,
+        network: false,
+      });
+      assert.equal(wrapped.sandboxed, true);
+
+      fs.unlinkSync(link);
+      fs.symlinkSync(hostFile, link);
+      const result = runPinnedSandbox(wrapped, workspaceFd);
+      assert.notEqual(result.status, 0, "an unlisted host configuration file must remain inaccessible");
+      assert.doesNotMatch(result.stdout, /hostname|[a-f0-9-]{12,}/i);
+      assert.doesNotMatch(result.stderr, /hostname|[a-f0-9-]{12,}/i);
+    } finally {
+      fs.closeSync(workspaceFd);
+      fs.rmSync(link, { force: true });
+    }
+  });
+
   test("read-only bwrap retains the explicitly mounted inspection runtime", { skip: !isBwrapAvailable() }, () => {
     const workspaceFd = openWorkspaceFd(ws);
     try {
