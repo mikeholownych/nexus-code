@@ -10,6 +10,7 @@ import path from "node:path";
 
 const LOCKFILES = ["cli/package-lock.json", "core/Cargo.lock", "rust-toolchain.toml"];
 const BUILDERS = ["ubuntu-22.04", "ubuntu-24.04"];
+const APPROVED_RUST_BUILD_IMAGE = "rust:1.95.0-bookworm@sha256:4c2fd73ef19c5ef9d54bee03b06b2839a392604fbfcd578ed948b71b37c1d7fb";
 const sha256 = (file) => createHash("sha256").update(fs.readFileSync(file)).digest("hex");
 const run = (cmd, ...argv) => execFileSync(cmd, argv, { encoding: "utf8" }).trim();
 const fail = (message) => { console.error(`repro-identity: ${message}`); process.exit(1); };
@@ -18,6 +19,7 @@ const [mode, ...rest] = process.argv.slice(2);
 if (mode === "record") {
   const [version, dist, out, label] = rest;
   if (!version || !dist || !out || !label) fail("usage: record <version> <dist-dir> <out.json> <runner-label>");
+  if (process.env.NEXUS_BUILD_CONTAINER_IMAGE !== APPROVED_RUST_BUILD_IMAGE) fail("Rust build image is not the approved digest-pinned Bookworm builder");
   // Packaging must not have changed tracked source: the artifacts must still correspond to the recorded commit.
   const dirty = run("git", "status", "--porcelain", "--untracked-files=no");
   if (dirty) fail(`packaging modified tracked files:\n${dirty}`);
@@ -50,7 +52,7 @@ if (mode === "record") {
   if (JSON.stringify(labels) !== JSON.stringify(BUILDERS)) fail(`builders must be exactly ${BUILDERS.join(", ")}; got ${labels.join(", ")}`);
   if (builders.some((id) => !id.runner.image || !id.runner.imageVersion)) fail("every builder must record its runner image and image version");
   const buildImages = builders.map((id) => id.buildEnvironment?.rustContainerImage);
-  if (buildImages.some((image) => !/^.+@sha256:[0-9a-f]{64}$/.test(image ?? ""))) fail("every builder must use a Rust build image pinned by sha256 digest");
+  if (buildImages.some((image) => image !== APPROVED_RUST_BUILD_IMAGE)) fail("every builder must use the approved digest-pinned Bookworm Rust build image");
   if (new Set(buildImages).size !== 1) fail("builders used different Rust build images");
   // The workflow definition itself must come from the RC tag, so a modified repro.yml on a branch cannot PASS.
   for (const id of builders) {

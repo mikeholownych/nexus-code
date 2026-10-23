@@ -4,7 +4,12 @@ set -euo pipefail
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 VERSION=${1:?usage: package-linux.sh VERSION OUTPUT_DIR}
 OUT=${2:?usage: package-linux.sh VERSION OUTPUT_DIR}
+APPROVED_RUST_BUILD_IMAGE='rust:1.95.0-bookworm@sha256:4c2fd73ef19c5ef9d54bee03b06b2839a392604fbfcd578ed948b71b37c1d7fb'
 case "$VERSION" in v[0-9]*.[0-9]*.[0-9]*) ;; *) echo "version must look like v1.2.3" >&2; exit 2 ;; esac
+if [[ -n "${NEXUS_BUILD_CONTAINER_IMAGE:-}" && "$NEXUS_BUILD_CONTAINER_IMAGE" != "$APPROVED_RUST_BUILD_IMAGE" ]]; then
+  echo "NEXUS_BUILD_CONTAINER_IMAGE must use the approved digest-pinned Rust 1.95 Bookworm builder" >&2
+  exit 2
+fi
 mkdir -p "$OUT"
 WORK=$(mktemp -d)
 trap 'rm -rf "$WORK"' EXIT
@@ -42,6 +47,17 @@ cp -R "$ROOT/cli/dist" "$PKG/lib/cli/dist"
 cp "$ROOT/cli/package.json" "$ROOT/cli/package-lock.json" "$PKG/lib/cli/"
 npm ci --omit=dev --prefix "$PKG/lib/cli"
 cp "$RUST_CORE_TARGET/harness-core" "$RUST_CORE_TARGET/nexus-tui" "$PKG/lib/core/"
+command -v readelf >/dev/null || { echo "readelf is required to verify package glibc compatibility" >&2; exit 2; }
+for binary in "$PKG/lib/core/harness-core" "$PKG/lib/core/nexus-tui"; do
+  required_glibc=$(readelf --version-info --wide "$binary" | grep -oE 'Name: GLIBC_[0-9]+(\.[0-9]+)+' | sed 's/.*GLIBC_//' | sort -V | tail -n 1)
+  if [[ -n "$required_glibc" ]]; then
+    IFS=. read -r glibc_major glibc_minor _ <<< "$required_glibc"
+    if (( glibc_major > 2 || (glibc_major == 2 && glibc_minor > 35) )); then
+      echo "$binary requires GLIBC_$required_glibc, above the GLIBC_2.35 compatibility ceiling" >&2
+      exit 1
+    fi
+  fi
+done
 cp "$ROOT/LICENSE" "$PKG/LICENSE"
 printf '%s\n' "$VERSION" > "$PKG/VERSION"
 
