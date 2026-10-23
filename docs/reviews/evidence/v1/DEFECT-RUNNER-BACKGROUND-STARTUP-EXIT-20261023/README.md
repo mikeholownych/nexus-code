@@ -41,8 +41,9 @@ matches. On an early exit:
 - otherwise unregister and report `Background service '<name>' exited during startup (pgid …)`.
 
 The pre-grace registration is kept so a shutdown during startup still sees the group. The shutdown
-sweep now also drops dead PGIDs before signalling, so a service that dies after the grace cannot be
-signalled after reuse; the narrow race between that liveness check and `killpg` remains inherent.
+sweep now also drops PGIDs that are already dead when checked before signalling. This reduces
+stale-ID signaling, but does not establish identity: the PGID can be reused between the liveness
+check and `killpg`.
 
 ## Verification
 
@@ -55,3 +56,18 @@ signalled after reuse; the narrow race between that liveness check and `killpg` 
     shutdown) and passes with the alive gate.
 - `cargo test --bin harness-core runner::tests` with isolated `HOME`: 15/15 pass.
 - `git diff --check`: pass.
+
+## Exact limitation and test scope
+
+`killpg(pgid, 0)` is a point-in-time liveness probe. It does not pin the identity of the original
+process group. If that group becomes empty after the probe and the numeric PGID is reused before a
+subsequent `killpg(pgid, SIGTERM)` or `killpg(pgid, SIGKILL)`, the later signal could target the new
+group. The check and signal are not atomic. This limitation applies to cancellation, timeouts,
+service replacement, and engine shutdown paths that signal by numeric PGID.
+
+Process-group cleanup is therefore best effort and is not an identity-preserving isolation boundary.
+The implementation must not claim that the liveness filter prevents signaling a reused PGID. The
+startup-exit tests verify dead-service unregistration and live-descendant management; they do not
+deterministically exercise OS-level PGID reuse or prove that the check-and-signal race is eliminated.
+A design requiring that guarantee needs stable group supervision or an OS resource boundary with
+identity-bound lifecycle semantics, with platform support verified independently.
