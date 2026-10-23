@@ -5,7 +5,7 @@
  */
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
-import { repairJson, unescapeSingleQuoteBody } from "../src/parser.js";
+import { repairJson, unescapeSingleQuoteBody, parseModelResponse } from "../src/parser.js";
 
 describe("single-quoted JSON repair", () => {
   test("preserves valid JSON escapes", () => {
@@ -55,5 +55,31 @@ describe("single-quoted JSON repair", () => {
       repairJson(`{'a': 'he said "hi"', 'b': 1}`),
       { a: 'he said "hi"', b: 1 }
     );
+  });
+
+  test("trailing-comma and unquoted-key repair never rewrite single-quoted values", () => {
+    assert.deepEqual(
+      repairJson(`{'note': 'keep a,} literal', 'n': 1}`),
+      { note: "keep a,} literal", n: 1 }
+    );
+    assert.deepEqual(
+      repairJson(`{'code': 'if (a) { b, } else { c, }', 'n': 1}`),
+      { code: "if (a) { b, } else { c, }", n: 1 }
+    );
+    assert.deepEqual(
+      repairJson(`{'s': 'x, b: c', 'n': 1}`),
+      { s: "x, b: c", n: 1 }
+    );
+  });
+
+  test("a fenced tool call keeps the exact content of a single-quoted argument", () => {
+    const content = "```json\n{'name': 'write_file', 'arguments': {'path': 'a.txt', 'content': 'if (a) { b, }'}}\n```";
+    const parsed = parseModelResponse({ role: "assistant", content });
+    assert.equal(parsed.toolCalls.length, 1);
+    assert.equal(parsed.toolCalls[0].function.name, "write_file");
+    assert.deepEqual(JSON.parse(parsed.toolCalls[0].function.arguments), {
+      path: "a.txt",
+      content: "if (a) { b, }",
+    });
   });
 });

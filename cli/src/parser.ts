@@ -119,27 +119,27 @@ function replaceUnquotedPythonLiterals(str: string): string {
  * Automatically repairs trailing commas, single quotes, unquoted keys, Python literals outside strings,
  * unescaped newlines/tabs inside string values, and missing closing brackets.
  */
-/** Applies `fix` to the parts of `str` outside double-quoted JSON strings, leaving string contents untouched. */
+/** Applies `fix` to the parts of `str` outside quoted JSON string literals, leaving string contents untouched. */
 function mapOutsideStrings(str: string, fix: (segment: string) => string): string {
   let out = "";
   let segment = "";
-  let inString = false;
+  let quoteChar = "";
   let escaped = false;
   for (const ch of str) {
-    if (inString) {
+    if (quoteChar) {
       out += ch;
       if (escaped) escaped = false;
       else if (ch === "\\") escaped = true;
-      else if (ch === '"') inString = false;
-    } else if (ch === '"') {
+      else if (ch === quoteChar) quoteChar = "";
+    } else if (ch === '"' || ch === "'") {
       out += fix(segment) + ch;
       segment = "";
-      inString = true;
+      quoteChar = ch;
     } else {
       segment += ch;
     }
   }
-  return out + (inString ? segment : fix(segment));
+  return out + (quoteChar ? segment : fix(segment));
 }
 
 /**
