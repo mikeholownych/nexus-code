@@ -14,6 +14,7 @@ import {
   CandidateTracker,
   computeCandidateIdentitySync,
   hashContent,
+  resolveFileCandidateDetails,
   ValidationReceipt,
   CandidateIdentity,
 } from "../src/core/candidate.js";
@@ -196,6 +197,58 @@ describe("WP-04: Candidate Identity & Validation Binding (INC-05, DEC-02)", () =
       assert.throws(() => computeCandidateIdentitySync(rootGit), /Unsupported filesystem object type/);
     } finally {
       fs.rmSync(specialDir, { recursive: true, force: true });
+    }
+  });
+
+  test("candidate directory traversal stops when its entry budget is exceeded", () => {
+    const nestedRepo = path.join(rootGit, "limited-nested-repo");
+    try {
+      initGitRepo(nestedRepo);
+      fs.mkdirSync(path.join(nestedRepo, "one", "two"), { recursive: true });
+      fs.writeFileSync(path.join(nestedRepo, "one", "two", "file.txt"), "candidate\n");
+      execFileSync("git", ["add", "-A"], { cwd: nestedRepo, stdio: "ignore" });
+      execFileSync("git", ["commit", "-m", "nested candidate"], { cwd: nestedRepo, stdio: "ignore" });
+
+      assert.throws(
+        () => computeCandidateIdentitySync(rootGit, { maxEntries: 2 }),
+        /Candidate manifest exceeds 2 entry limit/,
+      );
+    } finally {
+      fs.rmSync(nestedRepo, { recursive: true, force: true });
+    }
+  });
+
+  test("candidate file replacement with a symlink during resolution fails closed", () => {
+    const targetFile = path.join(rootGit, "candidate-race.txt");
+    const outsideTarget = path.join(tmpRoot, "candidate-race-target.txt");
+    fs.writeFileSync(targetFile, "original regular file\n");
+    fs.writeFileSync(outsideTarget, "must not be read through a replacement symlink\n");
+
+    const originalLstat = fs.lstatSync;
+    let replaced = false;
+    const raceFs = new Proxy(fs, {
+      get(target, property) {
+        if (property === "lstatSync") {
+          return (...args: any[]) => {
+            const result = originalLstat(...args);
+            if (!replaced && path.resolve(String(args[0])) === targetFile) {
+              replaced = true;
+              fs.unlinkSync(targetFile);
+              fs.symlinkSync(outsideTarget, targetFile);
+            }
+            return result;
+          };
+        }
+        return Reflect.get(target, property, target);
+      },
+    }) as typeof fs;
+
+    try {
+      assert.throws(() => resolveFileCandidateDetails(targetFile, raceFs));
+      assert.strictEqual(replaced, true, "Fixture must replace the path after lstat and before the open");
+    } finally {
+      fs.rmSync(targetFile, { force: true });
+      fs.rmSync(outsideTarget, { force: true });
     }
   });
 

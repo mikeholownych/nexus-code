@@ -38,6 +38,7 @@ export interface EvaluationResult {
   patchDiff?: string;
   testOutput?: string;
   candidateId?: string;
+  candidateIdentityIssue?: string;
   validationReceipt?: ValidationReceipt;
   error?: string;
 }
@@ -84,6 +85,17 @@ export function recordEvaluationReceiptIfIdentified(
     },
     materialDependencies: [],
   });
+}
+
+function candidateIdentityFailureGuidance(error: unknown): string {
+  const message = error instanceof Error ? error.message : "";
+  if (/exceeds .* (entry|byte|depth) limit/.test(message)) {
+    return "Candidate identity exceeded a safety limit. Review the workspace size or file count, then retry; no validation receipt was recorded.";
+  }
+  if (/cannot enforce no-follow/.test(message)) {
+    return "Candidate identity could not be secured on this platform. Retry on a supported platform; no validation receipt was recorded.";
+  }
+  return "Candidate identity could not be established. Review workspace readability and unsupported files, then retry; no validation receipt was recorded.";
 }
 
 /**
@@ -181,12 +193,16 @@ export class BenchmarkEvaluator {
       // 2. Inspect candidate identity and patch diff directly from evaluated candidate workspace
       let patchDiff = "";
       let candidateIdentity: CandidateIdentity | undefined;
+      let candidateIdentityIssue: string | undefined;
       let validationReceipt: ValidationReceipt | undefined;
 
       const candidateTracker = agent.candidateTracker || new CandidateTracker();
       try {
         candidateIdentity = candidateTracker.computeCandidateIdentitySync(evalWorkspace);
-      } catch {}
+      } catch (error) {
+        candidateIdentityIssue = candidateIdentityFailureGuidance(error);
+        console.log(pc.yellow(candidateIdentityIssue));
+      }
 
       const diffBase = instance.base_commit || "HEAD";
       try {
@@ -257,6 +273,7 @@ export class BenchmarkEvaluator {
         patchDiff,
         testOutput,
         ...(candidateIdentity ? { candidateId: candidateIdentity.candidateId } : {}),
+        ...(candidateIdentityIssue ? { candidateIdentityIssue } : {}),
         validationReceipt,
       };
 
@@ -341,6 +358,7 @@ export class BenchmarkEvaluator {
     for (const r of summary.results) {
       const icon = r.status === "RESOLVED" ? "✅ RESOLVED" : r.status === "ERROR" ? "⚠️ ERROR" : "❌ UNRESOLVED";
       lines.push(`| \`${r.instanceId}\` | ${r.repo} | ${icon} | ${(r.durationMs / 1000).toFixed(1)}s | ${r.stepsTaken} | ${r.tokensConsumed.total} |`);
+      if (r.candidateIdentityIssue) lines.push(`  - ${r.candidateIdentityIssue}`);
     }
 
     return lines.join("\n") + "\n";

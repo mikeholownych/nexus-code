@@ -65,12 +65,23 @@ export interface CandidateComputeOptions {
   includeUntracked?: boolean;
   ignoredPatterns?: string[];
   materialDependencies?: MaterialValidationDependency[];
+  /** Optional stricter manifest bound; values above the hard limit are clamped. */
+  maxEntries?: number;
 }
 
 const MAX_CANDIDATE_ENTRIES = 100_000;
 const MAX_CANDIDATE_FILE_BYTES = 256 * 1024 * 1024;
 const MAX_CANDIDATE_TOTAL_BYTES = 1024 * 1024 * 1024;
 const MAX_CANDIDATE_DIRECTORY_DEPTH = 128;
+
+function configuredEntryLimit(options: CandidateComputeOptions): number {
+  const configured = options.maxEntries;
+  if (configured === undefined) return MAX_CANDIDATE_ENTRIES;
+  if (!Number.isSafeInteger(configured) || configured < 1) {
+    throw new Error("Candidate maxEntries must be a positive safe integer");
+  }
+  return Math.min(configured, MAX_CANDIDATE_ENTRIES);
+}
 
 export interface CandidateValidationDecision {
   valid: boolean;
@@ -108,11 +119,20 @@ export function toPosixRelativePath(basePath: string, targetPath: string): strin
  * Resolves structural attributes for a candidate file or symlink entry on disk.
  * Uses lstatSync to preserve symbolic link identity and readlinkSync to hash link target text.
  */
-export function resolveFileCandidateDetails(fullPath: string): EntryStructuralDetails {
+export function resolveFileCandidateDetails(
+  fullPath: string,
+  filesystem: typeof fs = fs,
+): EntryStructuralDetails {
+  let entryObserved = false;
   try {
-    const lstat = fs.lstatSync(fullPath);
+    const lstat = filesystem.lstatSync(fullPath, { bigint: true });
+    entryObserved = true;
     if (lstat.isSymbolicLink()) {
-      const targetText = fs.readlinkSync(fullPath);
+      const targetText = filesystem.readlinkSync(fullPath);
+      const afterReadlink = filesystem.lstatSync(fullPath, { bigint: true });
+      if (lstat.dev !== afterReadlink.dev || lstat.ino !== afterReadlink.ino) {
+        throw new Error(`Candidate symlink changed while resolving identity: ${fullPath}`);
+      }
       return {
         mode: "120000",
         contentHash: hashContent(targetText),
@@ -122,25 +142,66 @@ export function resolveFileCandidateDetails(fullPath: string): EntryStructuralDe
       };
     }
     if (lstat.isFile()) {
-      if (lstat.size > MAX_CANDIDATE_FILE_BYTES) {
+      if (lstat.size > BigInt(MAX_CANDIDATE_FILE_BYTES)) {
         throw new Error(`Candidate file exceeds ${MAX_CANDIDATE_FILE_BYTES} byte limit: ${fullPath}`);
       }
-      const isExec = (lstat.mode & 0o111) !== 0;
-      const buf = fs.readFileSync(fullPath);
-      if (buf.length > MAX_CANDIDATE_FILE_BYTES) {
-        throw new Error(`Candidate file exceeds ${MAX_CANDIDATE_FILE_BYTES} byte limit: ${fullPath}`);
+      const noFollow = filesystem.constants.O_NOFOLLOW;
+      const nonBlocking = filesystem.constants.O_NONBLOCK;
+      if (typeof noFollow !== "number" || typeof nonBlocking !== "number") {
+        throw new Error(`Platform cannot enforce no-follow candidate file reads: ${fullPath}`);
       }
-      return {
-        mode: isExec ? "100755" : "100644",
-        contentHash: hashContent(buf),
-        size: buf.length,
-        isDeleted: false,
-        isSymlink: false,
-      };
+      const descriptor = filesystem.openSync(fullPath, filesystem.constants.O_RDONLY | noFollow | nonBlocking);
+      try {
+        const opened = filesystem.fstatSync(descriptor, { bigint: true });
+        if (!opened.isFile() || opened.dev !== lstat.dev || opened.ino !== lstat.ino) {
+          throw new Error(`Candidate file changed or is not regular while resolving identity: ${fullPath}`);
+        }
+        if (opened.size > BigInt(MAX_CANDIDATE_FILE_BYTES)) {
+          throw new Error(`Candidate file exceeds ${MAX_CANDIDATE_FILE_BYTES} byte limit: ${fullPath}`);
+        }
+
+        const hash = crypto.createHash("sha256");
+        const chunk = Buffer.allocUnsafe(64 * 1024);
+        let size = 0;
+        while (true) {
+          const bytesRead = filesystem.readSync(descriptor, chunk, 0, chunk.length, null);
+          if (bytesRead === 0) break;
+          size += bytesRead;
+          if (size > MAX_CANDIDATE_FILE_BYTES) {
+            throw new Error(`Candidate file exceeds ${MAX_CANDIDATE_FILE_BYTES} byte limit: ${fullPath}`);
+          }
+          hash.update(chunk.subarray(0, bytesRead));
+        }
+
+        const afterRead = filesystem.fstatSync(descriptor, { bigint: true });
+        if (
+          afterRead.dev !== opened.dev ||
+          afterRead.ino !== opened.ino ||
+          afterRead.size !== opened.size ||
+          afterRead.mtimeNs !== opened.mtimeNs ||
+          afterRead.ctimeNs !== opened.ctimeNs ||
+          BigInt(size) !== opened.size
+        ) {
+          throw new Error(`Candidate file changed while resolving identity: ${fullPath}`);
+        }
+        const currentPath = filesystem.lstatSync(fullPath, { bigint: true });
+        if (!currentPath.isFile() || currentPath.dev !== opened.dev || currentPath.ino !== opened.ino) {
+          throw new Error(`Candidate file path changed while resolving identity: ${fullPath}`);
+        }
+        return {
+          mode: (opened.mode & 0o111n) !== 0n ? "100755" : "100644",
+          contentHash: hash.digest("hex"),
+          size,
+          isDeleted: false,
+          isSymlink: false,
+        };
+      } finally {
+        filesystem.closeSync(descriptor);
+      }
     }
     throw new Error(`Unsupported filesystem object type for candidate entry at: ${fullPath}`);
   } catch (err: any) {
-    if (err.code === "ENOENT") {
+    if (err.code === "ENOENT" && !entryObserved) {
       return {
         mode: "000000",
         contentHash: "0000000000000000000000000000000000000000000000000000000000000000",
@@ -217,6 +278,7 @@ function computeGitCandidateIdentity(
   options: CandidateComputeOptions,
   includeUntracked: boolean
 ): CandidateIdentity {
+  const entryLimit = configuredEntryLimit(options);
   let rootBaseSha = "UNKNOWN_BASE";
   try {
     rootBaseSha = execFileSync(
@@ -238,15 +300,15 @@ function computeGitCandidateIdentity(
 
   function recordUntrackedEntry(): void {
     untrackedBudget.entries += 1;
-    if (untrackedBudget.entries > MAX_CANDIDATE_ENTRIES) {
-      throw new Error(`Candidate manifest exceeds ${MAX_CANDIDATE_ENTRIES} entry limit`);
+    if (untrackedBudget.entries > entryLimit) {
+      throw new Error(`Candidate manifest exceeds ${entryLimit} entry limit`);
     }
   }
 
   function addUntrackedFile(fullPath: string, posixPath: string): void {
+    recordUntrackedEntry();
     const details = resolveFileCandidateDetails(fullPath);
     if (details.isDeleted) return;
-    recordUntrackedEntry();
     untrackedBudget.bytes += details.size;
     if (untrackedBudget.bytes > MAX_CANDIDATE_TOTAL_BYTES) {
       throw new Error(`Candidate manifest exceeds ${MAX_CANDIDATE_TOTAL_BYTES} byte limit`);
@@ -265,22 +327,26 @@ function computeGitCandidateIdentity(
       throw new Error(`Candidate directory depth exceeds ${MAX_CANDIDATE_DIRECTORY_DEPTH}: ${relativePath}`);
     }
     recordUntrackedEntry();
-    const children = fs.readdirSync(directoryPath, { withFileTypes: true }).sort((a, b) =>
-      a.name.localeCompare(b.name)
-    );
-    for (const child of children) {
-      // Nested repository history and metadata are deliberately outside candidate identity.
-      if (child.name === ".git") continue;
-      const fullPath = path.join(directoryPath, child.name);
-      const childRelativePath = `${relativePath}/${child.name}`;
-      const details = fs.lstatSync(fullPath);
-      if (details.isDirectory()) {
-        walkUntrackedDirectory(fullPath, childRelativePath, depth + 1);
-      } else if (details.isFile() || details.isSymbolicLink()) {
-        addUntrackedFile(fullPath, childRelativePath);
-      } else {
-        throw new Error(`Unsupported filesystem object type in candidate directory at: ${childRelativePath}`);
+    const directory = fs.opendirSync(directoryPath, { bufferSize: 32 });
+    try {
+      while (true) {
+        const child = directory.readSync();
+        if (child === null) break;
+        // Nested repository history and metadata are deliberately outside candidate identity.
+        if (child.name === ".git") continue;
+        const fullPath = path.join(directoryPath, child.name);
+        const childRelativePath = `${relativePath}/${child.name}`;
+        const details = fs.lstatSync(fullPath, { bigint: true });
+        if (details.isDirectory()) {
+          walkUntrackedDirectory(fullPath, childRelativePath, depth + 1);
+        } else if (details.isFile() || details.isSymbolicLink()) {
+          addUntrackedFile(fullPath, childRelativePath);
+        } else {
+          throw new Error(`Unsupported filesystem object type in candidate directory at: ${childRelativePath}`);
+        }
       }
+    } finally {
+      directory.closeSync();
     }
   }
 
@@ -441,8 +507,8 @@ function computeGitCandidateIdentity(
     a.path.localeCompare(b.path)
   );
   const manifestEntries = [...trackedChanges, ...untrackedFiles];
-  if (manifestEntries.length > MAX_CANDIDATE_ENTRIES) {
-    throw new Error(`Candidate manifest exceeds ${MAX_CANDIDATE_ENTRIES} entry limit`);
+  if (manifestEntries.length > entryLimit) {
+    throw new Error(`Candidate manifest exceeds ${entryLimit} entry limit`);
   }
   const totalManifestBytes = manifestEntries.reduce((total, entry) => total + entry.size, 0);
   if (totalManifestBytes > MAX_CANDIDATE_TOTAL_BYTES) {
@@ -481,6 +547,7 @@ function computeNonGitCandidateIdentity(
   workspacePath: string,
   options: CandidateComputeOptions
 ): CandidateIdentity {
+  const entryLimit = configuredEntryLimit(options);
   const rootBaseSha = "NON_GIT_WORKSPACE";
   const allEntries: FileCandidateEntry[] = [];
 
@@ -506,36 +573,42 @@ function computeNonGitCandidateIdentity(
     if (depth > MAX_CANDIDATE_DIRECTORY_DEPTH) {
       throw new Error(`Candidate directory depth exceeds ${MAX_CANDIDATE_DIRECTORY_DEPTH}`);
     }
-    const items = fs.readdirSync(currentDir, { withFileTypes: true });
-    for (const item of items) {
-      if (defaultExcludes.has(item.name)) continue;
-      visitedEntries += 1;
-      if (visitedEntries > MAX_CANDIDATE_ENTRIES) {
-        throw new Error(`Candidate manifest exceeds ${MAX_CANDIDATE_ENTRIES} entry limit`);
-      }
-      const fullPath = path.join(currentDir, item.name);
-      if (item.isDirectory()) {
-        walk(fullPath, depth + 1);
-      } else if (item.isFile() || item.isSymbolicLink()) {
-        const relPath = toPosixRelativePath(workspacePath, fullPath);
-        const details = resolveFileCandidateDetails(fullPath);
-        if (!details.isDeleted) {
-          totalBytes += details.size;
-          if (totalBytes > MAX_CANDIDATE_TOTAL_BYTES) {
-            throw new Error(`Candidate manifest exceeds ${MAX_CANDIDATE_TOTAL_BYTES} byte limit`);
-          }
-          allEntries.push({
-            path: relPath,
-            mode: details.mode,
-            contentHash: details.contentHash,
-            size: details.size,
-            status: details.isSymlink ? "typechange" : "modified",
-          });
+    const directory = fs.opendirSync(currentDir, { bufferSize: 32 });
+    try {
+      while (true) {
+        const item = directory.readSync();
+        if (item === null) break;
+        if (defaultExcludes.has(item.name)) continue;
+        visitedEntries += 1;
+        if (visitedEntries > entryLimit) {
+          throw new Error(`Candidate manifest exceeds ${entryLimit} entry limit`);
         }
-      } else {
-        const relPath = toPosixRelativePath(workspacePath, fullPath);
-        throw new Error(`Unsupported filesystem object type in non-git workspace at: ${relPath}`);
+        const fullPath = path.join(currentDir, item.name);
+        if (item.isDirectory()) {
+          walk(fullPath, depth + 1);
+        } else if (item.isFile() || item.isSymbolicLink()) {
+          const relPath = toPosixRelativePath(workspacePath, fullPath);
+          const details = resolveFileCandidateDetails(fullPath);
+          if (!details.isDeleted) {
+            totalBytes += details.size;
+            if (totalBytes > MAX_CANDIDATE_TOTAL_BYTES) {
+              throw new Error(`Candidate manifest exceeds ${MAX_CANDIDATE_TOTAL_BYTES} byte limit`);
+            }
+            allEntries.push({
+              path: relPath,
+              mode: details.mode,
+              contentHash: details.contentHash,
+              size: details.size,
+              status: details.isSymlink ? "typechange" : "modified",
+            });
+          }
+        } else {
+          const relPath = toPosixRelativePath(workspacePath, fullPath);
+          throw new Error(`Unsupported filesystem object type in non-git workspace at: ${relPath}`);
+        }
       }
+    } finally {
+      directory.closeSync();
     }
   }
 

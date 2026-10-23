@@ -147,6 +147,7 @@ describe("WP-04: Evaluator Candidate Binding (VER-001, VER-005, F-02)", () => {
           durationMs: 15400,
           tokensConsumed: { prompt: 4000, completion: 1500, total: 5500 },
           stepsTaken: 6,
+          candidateIdentityIssue: "Candidate identity exceeded a safety limit. Review the workspace size or file count, then retry; no validation receipt was recorded.",
         },
       ],
     });
@@ -155,5 +156,7 @@ describe("WP-04: Evaluator Candidate Binding (VER-001, VER-005, F-02)", () => {
     assert.match(scorecard, /Pass Rate @ 1.*50%/);
     assert.match(scorecard, /inst-1/);
     assert.match(scorecard, /inst-2/);
+    assert.match(scorecard, /Candidate identity exceeded a safety limit/);
+    assert.match(scorecard, /no validation receipt was recorded/);
   });
 });
