@@ -220,6 +220,12 @@ mod registry {
         alive(pgid)
     }
 
+    /// Test-only view of the map, including entries whose process already exited.
+    #[cfg(test)]
+    pub fn service_count_including_dead() -> usize {
+        state().lock().unwrap().services.len()
+    }
+
     pub fn list_services() -> Vec<ServiceInfo> {
         let mut st = state().lock().unwrap();
         st.services.retain(|_, s| alive(s.pgid));
@@ -269,6 +275,9 @@ mod registry {
                     all.push(svc);
                 }
             }
+            // A service can die after the startup grace (or between the liveness check and here).
+            // Never signal a dead PGID: its number may already belong to an unrelated group.
+            all.retain(|&p| alive(p));
             all
         };
         end_groups(&pgids, grace);
@@ -1332,8 +1341,10 @@ mod tests {
             "a service that already exited must not be reported registered: {}",
             res.stdout
         );
-        assert!(!list_services().iter().any(|s| s.name == "gone_service"));
+        // Run the sweep before list_services(): list_services prunes dead entries itself.
+        assert_eq!(registry::service_count_including_dead(), 0, "dead service must not remain registered");
         assert_eq!(end_all_commands(Duration::from_millis(500)), 0, "no stale service group remains");
+        assert!(!list_services().iter().any(|s| s.name == "gone_service"));
     }
 
     #[cfg(unix)]

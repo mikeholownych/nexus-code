@@ -40,7 +40,9 @@ matches. On an early exit:
   `Background service '<name>' started (pgid …)` (the live descendant is the service);
 - otherwise unregister and report `Background service '<name>' exited during startup (pgid …)`.
 
-The pre-grace registration is kept so a shutdown during startup still sees the group.
+The pre-grace registration is kept so a shutdown during startup still sees the group. The shutdown
+sweep now also drops dead PGIDs before signalling, so a service that dies after the grace cannot be
+signalled after reuse; the narrow race between that liveness check and `killpg` remains inherent.
 
 ## Verification
 
