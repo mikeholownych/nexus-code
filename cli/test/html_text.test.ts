@@ -101,6 +101,16 @@ describe("decodeHtmlEntities", () => {
   it("leaves unknown entities untouched", () => {
     assert.equal(decodeHtmlEntities("&unknown;"), "&unknown;");
   });
+
+  it("never decodes a numeric entity into a terminal control character", () => {
+    const decoded = decodeHtmlEntities("&#x1b;&#155;&#27;&#x7f;&#0;");
+    assert.equal(
+      /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f]/.test(decoded),
+      false,
+      JSON.stringify(decoded)
+    );
+    assert.equal(decodeHtmlEntities("&#65;&#x42;&#9;"), "AB\t");
+  });
 });
 
 describe("htmlToReadableText", () => {
@@ -114,5 +124,17 @@ describe("htmlToReadableText", () => {
     assert.equal(/<[a-zA-Z!/]/.test(result), false, result);
     // Entity-encoded markup decodes to literal text, which is data, not markup.
     assert.equal(htmlToReadableText("a &lt;iframe&gt; b"), "a <iframe> b");
+  });
+
+  it("strips raw terminal controls from untrusted page text", () => {
+    const out = htmlToReadableText("a\u001b]0;title\u0007b\u009b2Jc");
+    assert.equal(out, "a]0;titleb2Jc");
+    assert.equal(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f]/.test(out), false);
+  });
+
+  it("keeps printable text when numeric entities try to inject escape sequences", () => {
+    const out = htmlToReadableText("a&#x1b;]0;PWNED&#x1b;\\b&#155;2Jc");
+    assert.equal(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f]/.test(out), false, JSON.stringify(out));
+    assert.match(out, /PWNED/);
   });
 });
