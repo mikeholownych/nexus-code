@@ -140,7 +140,17 @@ function hasUnsafeReadOnlyOption(base: string, words: string[]): boolean {
     if (base === "find" && (w === "-L" || w === "-H" || w === "-follow" || w === "-files0-from" || w.startsWith("-files0-from="))) {
       return true;
     }
-    if (base === "diff" && (w === "--recursive" || w.startsWith("--recursive=") || /^-[A-Za-z]*r[A-Za-z]*$/.test(w))) {
+    if (base === "diff" && (
+      w === "--recursive" ||
+      w.startsWith("--recursive=") ||
+      w === "--from-file" ||
+      w.startsWith("--from-file=") ||
+      w === "--to-file" ||
+      w.startsWith("--to-file=") ||
+      w === "--exclude-from" ||
+      w.startsWith("--exclude-from=") ||
+      /^-[A-Za-z]*r[A-Za-z]*$/.test(w)
+    )) {
       return true;
     }
     if (base === "wc" && (w === "--files0-from" || w.startsWith("--files0-from="))) return true;
@@ -241,6 +251,12 @@ export function isSafeReadOnlyCommand(
   }
 
   if (hasUnsafeReadOnlyOption(baseCommand, words)) {
+    return false;
+  }
+
+  // `-v` is a version query only. A trailing operand made `rustc -v <file>` echo the file's source
+  // line in its diagnostic, so these commands accept no arguments at all.
+  if ((baseCommand === "node" || baseCommand === "rustc") && !(words.length === 2 && words[1] === "-v")) {
     return false;
   }
 

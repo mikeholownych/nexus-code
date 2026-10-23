@@ -98,6 +98,11 @@ describe("read-only command path confinement", () => {
       "diff -r . outdir",
       "diff --recursive . outdir",
       "diff --recursive=unified . outdir",
+      "diff --from-file=link inside.txt",
+      "diff --to-file=link inside.txt",
+      "diff --exclude-from=link x",
+      "rustc -v link",
+      "node -v link",
       "grep -f/etc/shadow x",
       "grep -flink x",
       "grep -f link x",
@@ -125,6 +130,8 @@ describe("read-only command path confinement", () => {
       "echo node_modules",
       "which link",
       "ls node_modules",
+      "node -v",
+      "rustc -v",
     ]) {
       assert.equal(isSafeReadOnlyCommand(command, undefined, ws), true, command);
     }
