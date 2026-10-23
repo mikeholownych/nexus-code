@@ -1,0 +1,47 @@
+{
+  "evidence_type": "E5 provider verification",
+  "recorded_at": "2026-10-23T13:15:52Z",
+  "candidate": {
+    "tag": "v1.0.0-rc.3",
+    "source_commit": "1b9791f07d301c885fe48f04a796203583ab5a5c",
+    "linux_x86_64_archive": "nexus-linux-x86_64-v1.0.0-rc.3.tar.gz",
+    "archive_sha256": "efb446d2760f2e1aa7890e9d786b8a2ba8e4ebb784fbcac1e66afe827428864d",
+    "installed_command_version": "1.0.0-rc.3 (1b9791f07d30)"
+  },
+  "method": {
+    "command": "nexus providers verify --provider <provider> -m <pinned-model> --json",
+    "workspace_content_sent": false,
+    "home_isolated": true,
+    "credentials_copied": false,
+    "credential_files_exposed_as_read_only_symlinks": [
+      "Codex CLI auth.json",
+      "OpenCode auth.json"
+    ]
+  },
+  "results": [
+    {
+      "provider": "openrouter",
+      "model": "nvidia/nemotron-3-super-120b-a12b:free",
+      "disposition": "FAILED_NOT_AUTHENTICATED",
+      "failure_condition": "AUTH_FAILURE",
+      "steps": [
+        { "name": "streamed completion", "passed": false }
+      ],
+      "credential_status": "not connected in the isolated verification environment"
+    },
+    {
+      "provider": "chatgpt",
+      "model": "gpt-6-luna",
+      "disposition": "PASSED",
+      "steps": [
+        { "name": "streamed completion", "passed": true },
+        { "name": "tool call", "passed": true },
+        { "name": "tool result round trip", "passed": true }
+      ],
+      "usage_confidence": "provider-reported",
+      "cost_confidence": "unknown",
+      "disclosure": "cloud"
+    }
+  ],
+  "qualification_status": "partial; OpenRouter verification and its required live task remain outstanding. This record does not establish overall RC acceptance."
+}
