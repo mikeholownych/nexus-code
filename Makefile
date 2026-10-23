@@ -1,4 +1,5 @@
 export PATH := $(HOME)/.cargo/bin:$(PATH)
+APPROVED_RUST_BUILD_IMAGE := rust:1.95.0-bookworm@sha256:4c2fd73ef19c5ef9d54bee03b06b2839a392604fbfcd578ed948b71b37c1d7fb
 
 .PHONY: all setup build build-core build-cli check clean test audit security-scan sbom verify-reproducibility
 
@@ -37,8 +38,8 @@ verify-reproducibility:
 	@echo "[*] Verifying reproducible package build..."
 	@TMP1=$$(mktemp -d) && TMP2=$$(mktemp -d) && \
 	VERSION=$$(node -p 'require("./package.json").version') && \
-	bash scripts/package-linux.sh "v$$VERSION" "$$TMP1" && \
-	bash scripts/package-linux.sh "v$$VERSION" "$$TMP2" && \
+	NEXUS_BUILD_CONTAINER_IMAGE=$(APPROVED_RUST_BUILD_IMAGE) bash scripts/package-linux.sh "v$$VERSION" "$$TMP1" && \
+	NEXUS_BUILD_CONTAINER_IMAGE=$(APPROVED_RUST_BUILD_IMAGE) bash scripts/package-linux.sh "v$$VERSION" "$$TMP2" && \
 	cmp "$$TMP1/nexus-linux-x86_64-v$$VERSION.tar.gz" "$$TMP2/nexus-linux-x86_64-v$$VERSION.tar.gz" && \
 	cmp "$$TMP1/SHA256SUMS" "$$TMP2/SHA256SUMS" && \
 	cmp "$$TMP1/THIRD_PARTY_NOTICES.txt" "$$TMP2/THIRD_PARTY_NOTICES.txt" && \

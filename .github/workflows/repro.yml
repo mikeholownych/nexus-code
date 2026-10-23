@@ -24,6 +24,7 @@ jobs:
     env:
       VERSION: ${{ inputs.version }}
       COMMIT: ${{ inputs.commit }}
+      NEXUS_BUILD_CONTAINER_IMAGE: rust:1.95.0-bookworm@sha256:4c2fd73ef19c5ef9d54bee03b06b2839a392604fbfcd578ed948b71b37c1d7fb
     steps:
       - name: Validate requested source identity
         run: |
