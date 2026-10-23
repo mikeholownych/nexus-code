@@ -1,0 +1,131 @@
+{
+  "host": "mike-dev",
+  "at": "2026-10-23T17:48:46.158Z",
+  "profile": {
+    "cpuPercent": 800,
+    "memoryBytes": 17179869184,
+    "tasks": 4096,
+    "storageBytes": 21474836480,
+    "workspaceRoot": "/srv/nexus-qual/ws"
+  },
+  "results": [
+    {
+      "name": "evaluator account exists, is separate and cannot log in",
+      "pass": true,
+      "detail": "uid=985 shell=/usr/sbin/nologin"
+    },
+    {
+      "name": "sudo allows only Bubblewrap as the evaluator, in exactly the form the harness uses",
+      "pass": true
+    },
+    {
+      "name": "setfacl and Bubblewrap are available",
+      "pass": true
+    },
+    {
+      "name": "Bubblewrap is at least the minimum patched release",
+      "pass": true,
+      "detail": "bubblewrap 0.13.1"
+    },
+    {
+      "name": "workspace root is the dedicated, operator-owned, size-capped tmpfs",
+      "pass": true,
+      "detail": "tmpfs 21474836480 bytes"
+    },
+    {
+      "name": "the host applies and cleans up the resource contract",
+      "pass": true
+    },
+    {
+      "name": "evaluator processes stay in the limited cgroup, and every one is reaped",
+      "pass": true,
+      "detail": "limits {\"memory.max\":\"17179869184\",\"memory.swap.max\":\"0\",\"memory.oom.group\":\"1\",\"pids.max\":\"4096\",\"cpu.max\":\"800000 100000\"}; reaped 1 evaluator survivor(s)"
+    },
+    {
+      "name": "the evaluator cannot reach operator files or the held-out store",
+      "pass": true,
+      "detail": "home and /tmp/nexus-preflight-marker-oONS7T unreachable"
+    },
+    {
+      "name": "qualification preflight fails closed without the controls",
+      "pass": true
+    },
+    {
+      "name": "no run directories are left in the workspace root",
+      "pass": true
+    }
+  ],
+  "pass": true,
+  "revision": {
+    "commit": "92d7a62f0fa20f4f2f3b91786c737fd6d5517075",
+    "dirty": false,
+    "profileSha256": "4e8d42a218a68fa2fd3fd0de4d9788b205fa41b9ab71935cc2b6cf73f5d63543",
+    "manifestSha256": "50895b84a604fbfd45ed82e29cbef4ba795d7fffbe6611af23bfbc9851f3e89b",
+    "sourceDigests": [
+      {
+        "file": "eval/host/validate.mjs",
+        "sha256": "1026ce4bc5bd3a9a5e23687b9165a8ffe2ae200f6abcb46bcc1211726355b737"
+      },
+      {
+        "file": "eval/host/operator_home.mjs",
+        "sha256": "7be486c94008ff04a67187cfdbd94402ee94cbd3f0e9f2d290de78f94e36d271"
+      },
+      {
+        "file": "eval/host/bubblewrap.mjs",
+        "sha256": "eb3059ef859b4bd95ed12ab64041ac4731f8281a461b04e2aa54958b65aa4b78"
+      },
+      {
+        "file": "eval/host/provision.sh",
+        "sha256": "1db27fdcb9a70e013a41f47d431ceb788184a5489a9f10490c9e507aa5e12e62"
+      },
+      {
+        "file": "eval/host/rollback.sh",
+        "sha256": "e8cdd1797456fc11543a0c18a51a9dbdd6cca559b6296478a62ad748e0a74c10"
+      },
+      {
+        "file": "eval/host/resource-profile.json",
+        "sha256": "4e8d42a218a68fa2fd3fd0de4d9788b205fa41b9ab71935cc2b6cf73f5d63543"
+      },
+      {
+        "file": "eval/resources.mjs",
+        "sha256": "7a1e276938a88ed5b9858a1e1b5aa174f96c75fdf1ad393cb29e5c383858f2b6"
+      },
+      {
+        "file": "eval/cgroup_supervisor.mjs",
+        "sha256": "222646943526480db44bc4359416f4b69ac389c5d50a8bc49e3a00a233a1a8ca"
+      },
+      {
+        "file": "eval/isolate.mjs",
+        "sha256": "c94631478f54a4b72b59cf8f73cd7ede9bf6086e815a1453a81f7b1afa941813"
+      },
+      {
+        "file": "eval/validate.mjs",
+        "sha256": "833060b5397089db8a069672da04119dd2db415e87e46016b2797d176a6a1674"
+      },
+      {
+        "file": "eval/run.mjs",
+        "sha256": "290a2674676c56d3b8efdb7752fb277e8a49c4b3af5b2b87e5ccb2402bb9f853"
+      },
+      {
+        "file": "eval/hardened_check.mjs",
+        "sha256": "8c14d6a5cc702969693193d54ccb93c3549d1fdb75ef1dd47d3e3a0db6d32119"
+      },
+      {
+        "file": "eval/hide_oracle.cjs",
+        "sha256": "f6c15333acf82e75df55af60c021a3ee3347b115c7b72051bc68da64d0fdd537"
+      },
+      {
+        "file": "eval/hide_oracle.py",
+        "sha256": "0b4a0e24f254091c1efe2985c95670549460c0325f487910a6aac591fb33d37e"
+      },
+      {
+        "file": "eval/unlink_then_exec.sh",
+        "sha256": "65129082580d5942b11df3f491c4e567dd2ccb00632885e1bcebacc80eef5870"
+      },
+      {
+        "file": "eval/workspace.mjs",
+        "sha256": "5386a21d1b86c0701647457a0b7b61db6ab4eab27ec9e49ecf3d969c1cfb96af"
+      }
+    ]
+  }
+}

@@ -1121,6 +1121,7 @@ export class AutonomousAgent {
     this.authorityEngine = new AuthorityAdmissionEngine({
       readOnly: config.readOnly,
       fullAccess: config.fullAccess ?? false,
+      workspace: ws,
       registry: this.capabilityRegistry,
     });
     this.spine = new ExecutionSpine({

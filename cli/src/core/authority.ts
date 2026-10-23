@@ -34,6 +34,8 @@ export interface AuthorityConfig {
   grants?: AuthorityGrant[];
   allowedDomains?: string[];
   safeReadOnlyCommandRegex?: RegExp;
+  /** Workspace used to resolve read-only command path arguments. */
+  workspace?: string;
   /** Registry tool names resolve against; defaults to the shared baseline registry. */
   registry?: CapabilityRegistry;
 }
@@ -42,10 +44,253 @@ export interface AuthorityConfig {
  * Standard safe commands allowed under --read-only mode.
  */
 export const DEFAULT_SAFE_READONLY_COMMAND_REGEX =
-  /^\s*(ls|dir|pwd|echo|cat|head|tail|grep|rg|find|diff|wc|which|where|git\s+(status|log|diff|branch|show)|npm\s+list|node\s+-v|rustc\s+-v)(\s+.*)?$/i;
+  /^\s*(ls|dir|pwd|echo|cat|head|tail|grep|rg|find|wc|which|where|git\s+(status|log|diff|branch|show)|npm\s+list|node\s+-v|rustc\s+-v)(\s+.*)?$/i;
 
 // Keep attacker-controlled command text bounded before applying the allowlist regex.
 const MAX_SAFE_READONLY_COMMAND_LENGTH = 8_192;
+
+/** Whether the command contains an unquoted shell glob, which expands after this check. */
+function hasUnquotedGlob(command: string): boolean {
+  let quoteChar = "";
+  for (const ch of command) {
+    if (quoteChar) {
+      if (ch === quoteChar) quoteChar = "";
+    } else if (ch === '"' || ch === "'") {
+      quoteChar = ch;
+    } else if (ch === "*" || ch === "?" || ch === "[") {
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * Split a command into the words the shell will execute. Returns null for an unterminated quote.
+ * Backslash, `$`, backticks and control operators are rejected before this runs, so quotes are the
+ * only shell grammar left to interpret.
+ */
+function splitShellWords(command: string): string[] | null {
+  const words: string[] = [];
+  let current = "";
+  let started = false;
+  let quoteChar = "";
+  for (const ch of command) {
+    if (quoteChar) {
+      if (ch === quoteChar) quoteChar = "";
+      else current += ch;
+      started = true;
+      continue;
+    }
+    if (ch === '"' || ch === "'") {
+      quoteChar = ch;
+      started = true;
+      continue;
+    }
+    if (/\s/.test(ch)) {
+      if (started) {
+        words.push(current);
+        current = "";
+        started = false;
+      }
+      continue;
+    }
+    current += ch;
+    started = true;
+  }
+  if (quoteChar) return null;
+  if (started) words.push(current);
+  return words;
+}
+
+/**
+ * Commands that read file contents: a glob is expanded by the shell after the allowlist runs, so
+ * `cat *` could still name an escaping symlink. Commands that only list names keep glob support.
+ */
+const GLOB_READING_COMMANDS = new Set(["cat", "head", "tail", "grep", "rg", "wc"]);
+
+/**
+ * Long options accepted for the commands whose contents the read-only guard reasons about. Anything
+ * else is refused: getopt_long accepts unambiguous prefixes, so an exact allowlist is the only way to
+ * keep `--from-f=link` or `--dereference-recursiv` from becoming a new spelling of a refused option.
+ */
+const SAFE_LONG_OPTIONS: Record<string, ReadonlySet<string>> = {
+  cat: new Set([
+    "--number", "--number-nonblank", "--show-ends", "--show-tabs", "--show-all", "--squeeze-blank",
+    "--show-nonprinting", "--help", "--version",
+  ]),
+  head: new Set(["--lines", "--bytes", "--quiet", "--silent", "--verbose", "--help", "--version"]),
+  tail: new Set([
+    "--lines", "--bytes", "--sleep-interval", "--pid", "--max-unchanged-stats", "--retry", "--quiet",
+    "--silent", "--verbose", "--help", "--version",
+  ]),
+  wc: new Set(["--lines", "--words", "--bytes", "--chars", "--max-line-length", "--help", "--version"]),
+  grep: new Set([
+    "--regexp", "--ignore-case", "--no-ignore-case", "--invert-match", "--line-number",
+    "--no-line-number", "--word-regexp", "--line-regexp", "--fixed-strings", "--extended-regexp",
+    "--perl-regexp", "--basic-regexp", "--only-matching", "--quiet", "--silent", "--no-messages",
+    "--count", "--files-with-matches", "--files-without-match", "--with-filename", "--no-filename",
+    "--color", "--colour", "--include", "--exclude", "--exclude-dir", "--binary-files", "--text",
+    "--byte-offset", "--null", "--initial-tab", "--before-context", "--after-context", "--context",
+    "--max-count", "--directories", "--devices", "--label", "--group-separator",
+    "--no-group-separator", "--line-buffered", "--null-data", "--help", "--version",
+  ]),
+  rg: new Set([
+    "--regexp", "--ignore-case", "--no-ignore-case", "--smart-case", "--case-sensitive",
+    "--invert-match", "--line-number", "--no-line-number", "--column", "--no-column", "--word-regexp",
+    "--line-regexp", "--fixed-strings", "--only-matching", "--quiet", "--count", "--count-matches",
+    "--files-with-matches", "--files-without-match", "--with-filename", "--no-filename", "--heading",
+    "--no-heading", "--color", "--colors", "--max-count", "--after-context", "--before-context",
+    "--context", "--glob", "--iglob", "--type", "--type-not", "--type-list", "--hidden",
+    "--no-ignore", "--no-ignore-vcs", "--no-ignore-parent", "--no-ignore-global", "--text", "--binary",
+    "--null", "--trim", "--passthru", "--stats", "--files", "--sort", "--threads", "--max-columns",
+    "--max-depth", "--line-buffered", "--help", "--version",
+  ]),
+};
+
+/** Commands whose long options are checked against the exact allowlist above. */
+const LONG_OPTION_ALLOWLIST_COMMANDS = new Set(Object.keys(SAFE_LONG_OPTIONS));
+
+/** Commands whose plain words are resolved through the filesystem before execution. */
+const REALPATH_COMMANDS = new Set([...GLOB_READING_COMMANDS, "find", "git"]);
+
+/** Long options that read a file named by the option rather than by an operand (git only here). */
+const DANGEROUS_LONG_OPTIONS: Record<string, readonly string[]> = {
+  git: ["--ext-diff", "--textconv"],
+};
+
+/** The long-option name without an attached `=value`, or null for a short option. */
+function longOptionName(word: string): string | null {
+  if (!word.startsWith("--") || word === "--") return null;
+  const equals = word.indexOf("=");
+  return equals < 0 ? word : word.slice(0, equals);
+}
+
+function isDangerousLongOption(base: string, word: string): boolean {
+  const name = longOptionName(word);
+  if (!name) return false;
+  return (DANGEROUS_LONG_OPTIONS[base] ?? []).some((target) => target.startsWith(name));
+}
+
+/** The letters of a short-option cluster (`-ieroot` -> `ieroot`), or null for a long option/operand. */
+function shortOptionLetters(word: string): string | null {
+  if (!word.startsWith("-") || word.startsWith("--") || word === "-") return null;
+  return word.slice(1);
+}
+
+/**
+ * grep/rg pattern-option guard. Only a cluster whose first letter is `e` is the pattern option
+ * (`-ePATTERN` / `-e PATTERN`). An `e` anywhere else is the tail of another option's attached value
+ * (`rg -rXe` is `-r Xe`), so treating it as `-e` would misclassify the next file operand. Refuse
+ * such clusters rather than model every value-taking letter. `f` is the pattern-file option and is
+ * always refused.
+ */
+function isAmbiguousPatternCluster(word: string): boolean {
+  const letters = shortOptionLetters(word);
+  if (letters === null) return false;
+  if (letters.includes("f")) return true;
+  return letters.indexOf("e") > 0;
+}
+
+/** Whether `word` is an option rather than an operand (`-` alone is an operand to grep/rg). */
+function isOptionWord(word: string): boolean {
+  return word !== "-" && word.startsWith("-");
+}
+
+/** Index of the standalone `--` end-of-options separator, or -1. */
+function endOfOptionsIndex(words: string[]): number {
+  return words.indexOf("--", 1);
+}
+
+/** An attached option value that names a file the command would read (`-f/etc/shadow`, `--file=x`). */
+function isAttachedFileOption(word: string): boolean {
+  return word === "-f" || word === "--file" || word.startsWith("--file=") || (word.startsWith("-f") && word.length > 2);
+}
+
+/**
+ * Options that make an allowlisted command read files without naming them as a plain argument:
+ * recursive symlink following, attached paths, pattern/ignore files, and path lists. They are
+ * refused in read-only mode rather than parsed. Words after `--` are operands, never options.
+ */
+function hasUnsafeReadOnlyOption(base: string, words: string[], separator: number): boolean {
+  for (let i = 1; i < words.length; i++) {
+    if (i === separator || (separator >= 0 && i > separator)) continue;
+    const w = words[i];
+    const name = longOptionName(w);
+    if (name && LONG_OPTION_ALLOWLIST_COMMANDS.has(base)) {
+      if (!SAFE_LONG_OPTIONS[base].has(name)) return true;
+    } else if (isDangerousLongOption(base, w)) {
+      return true;
+    }
+    if ((base === "grep" || base === "rg") && isAmbiguousPatternCluster(w)) {
+      return true;
+    }
+    if (GLOB_READING_COMMANDS.has(base) && isAttachedFileOption(w)) return true;
+    if (base === "grep" && /^-[A-Za-z]+$/.test(w) && w.includes("R")) return true;
+    if (base === "rg" && /^-[A-Za-z]+$/.test(w) && w.includes("L")) return true;
+    if (base === "find" && (w === "-L" || w === "-H" || w === "-follow" || w === "-files0-from" || w.startsWith("-files0-from="))) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * Indices of words that name files. For grep/rg the first plain word is the pattern (or the value
+ * after -e/--regexp); for find only the starting point. Everything else that is not an option is a
+ * path for the remaining allowlisted commands. After `--`, every word is an operand.
+ */
+function pathWordIndexes(base: string, words: string[], separator: number): Set<number> {
+  const indexes = new Set<number>();
+  const beforeSeparator = (i: number): boolean => separator < 0 || i < separator;
+  if (base === "grep" || base === "rg") {
+    let patternSeen = false;
+    for (let i = 1; i < words.length; i++) {
+      const w = words[i];
+      if (i === separator) continue;
+      if (beforeSeparator(i)) {
+        if (w === "--regexp") {
+          patternSeen = true;
+          i++;
+          continue;
+        }
+        if (w.startsWith("--regexp=")) {
+          patternSeen = true;
+          continue;
+        }
+        const letters = shortOptionLetters(w);
+        if (letters !== null) {
+          if (letters[0] === "e") {
+            patternSeen = true;
+            if (letters.length === 1) i++; // -e with a detached pattern value
+          }
+          continue;
+        }
+        if (isOptionWord(w)) continue;
+      }
+      if (!patternSeen) {
+        patternSeen = true;
+        continue;
+      }
+      indexes.add(i);
+    }
+    return indexes;
+  }
+  if (base === "find") {
+    for (let i = 1; i < words.length; i++) {
+      if (i === separator) continue;
+      if (beforeSeparator(i) && isOptionWord(words[i])) continue;
+      indexes.add(i);
+      break;
+    }
+    return indexes;
+  }
+  for (let i = 1; i < words.length; i++) {
+    if (i === separator) continue;
+    if (beforeSeparator(i) && isOptionWord(words[i])) continue;
+    indexes.add(i);
+  }
+  return indexes;
+}
 
 /**
  * Validates whether a shell command is safe to execute under read-only mode.
@@ -81,29 +326,83 @@ export function isSafeReadOnlyCommand(
     return false;
   }
 
+  // A glob expands after this check, so the arguments below never see the real file names.
+  // Commands that read contents must not rely on it: `cat *` can select an escaping symlink.
+  const words = splitShellWords(trimmed);
+  if (!words || words.length === 0) return false;
+  const baseCommand = words[0].toLowerCase();
+  const separator = endOfOptionsIndex(words);
+  if (GLOB_READING_COMMANDS.has(baseCommand) && hasUnquotedGlob(trimmed)) {
+    return false;
+  }
+
   // 2. Validate against the safe read-only command allowlist
   const regex = customRegex || DEFAULT_SAFE_READONLY_COMMAND_REGEX;
   if (!regex.test(trimmed)) {
     return false;
   }
 
-  // 2b. Path confinement: reject arguments with absolute paths escaping workspace or escaping traversal (..):
-  const rawTokens = trimmed.split(/\s+/);
+  if (hasUnsafeReadOnlyOption(baseCommand, words, separator)) {
+    return false;
+  }
+
+  // `-v` is a version query only. A trailing operand made `rustc -v <file>` echo the file's source
+  // line in its diagnostic, so these commands accept no arguments at all.
+  if ((baseCommand === "node" || baseCommand === "rustc") && !(words.length === 2 && words[1] === "-v")) {
+    return false;
+  }
+
+  // 2b. Path confinement: reject arguments with absolute paths escaping workspace or escaping traversal (..).
+  // The words are the shell's words, so a quoted or concatenated symlink name is resolved as written.
+  //
+  // A standalone `--` is only an end-of-options marker when no preceding option could have consumed it
+  // as a value (`diff -I -- -r A B`). Modelling every command's value-taking option table is not
+  // worthwhile: for a content-reading command, refuse a `--` that follows any option instead.
+  if (separator > 1 && REALPATH_COMMANDS.has(baseCommand) && words.slice(1, separator).some(isOptionWord)) {
+    return false;
+  }
   const resolvedWs = workspace ? path.resolve(workspace) : undefined;
-  for (let i = 1; i < rawTokens.length; i++) {
-    const raw = rawTokens[i];
-    // Strip leading/trailing quotes if present
-    const t = raw.replace(/^['"]|['"]$/g, "");
-    const candidatePath = t.includes("=") && t.startsWith("-") ? t.split("=")[1] : t;
-    if (candidatePath.startsWith("/")) {
-      if (!resolvedWs || !path.resolve(candidatePath).startsWith(resolvedWs)) {
-        return false;
-      }
+  let realWs: string | undefined;
+  if (resolvedWs) {
+    try {
+      realWs = fs.realpathSync(resolvedWs);
+    } catch {
+      // A workspace was supplied but cannot be resolved: fail closed rather than skip confinement.
+      return false;
+    }
+  }
+  const withinWorkspace = (target: string): boolean =>
+    Boolean(resolvedWs) && (target === resolvedWs || target.startsWith(resolvedWs + path.sep));
+  const pathIndexes = pathWordIndexes(baseCommand, words, separator);
+  const resolveWords = REALPATH_COMMANDS.has(baseCommand);
+  for (let i = 1; i < words.length; i++) {
+    if (i === separator) continue;
+    // Before `--`, option words are not operands. After it every word is an operand, including a
+    // dash-prefixed file name such as `--link`.
+    if ((separator < 0 || i < separator) && isOptionWord(words[i])) continue;
+    if (!pathIndexes.has(i)) continue;
+    const candidatePath = words[i];
+    if (!candidatePath) continue;
+    if (candidatePath.startsWith("/") && !withinWorkspace(path.resolve(candidatePath))) {
+      return false;
     }
     if (candidatePath.includes("..")) {
       const target = resolvedWs ? path.resolve(resolvedWs, candidatePath) : path.resolve(candidatePath);
-      if (!resolvedWs || !target.startsWith(resolvedWs)) {
+      if (!withinWorkspace(target)) {
         return false;
+      }
+    }
+    // A lexical check is not enough for a read-only workspace: an in-workspace symlink can point
+    // outside it, and the sandbox still exposes host paths read-only. Resolve operands of commands
+    // that read contents or traverse the tree; listing/text commands keep working.
+    if (realWs && resolveWords) {
+      try {
+        const realTarget = fs.realpathSync(path.resolve(resolvedWs!, candidatePath));
+        if (realTarget !== realWs && !realTarget.startsWith(realWs + path.sep)) {
+          return false;
+        }
+      } catch {
+        // Not an existing path (a pattern, option value or missing file), so there is nothing to resolve.
       }
     }
   }
@@ -171,12 +470,14 @@ export class AuthorityAdmissionEngine {
   private grants: AuthorityGrant[] = [];
   private allowedDomains: Set<string> | null = null;
   private safeCommandRegex: RegExp = DEFAULT_SAFE_READONLY_COMMAND_REGEX;
+  private workspace?: string;
   private readonly registry: CapabilityRegistry;
 
   constructor(config: AuthorityConfig = {}) {
     this.registry = config.registry ?? defaultRegistry;
     this.fullAccess = Boolean(config.fullAccess);
     this.readOnly = Boolean(config.readOnly);
+    this.workspace = config.workspace;
     this.grants = config.grants ? [...config.grants] : [];
     if (config.allowedDomains && config.allowedDomains.length > 0) {
       this.allowedDomains = new Set(config.allowedDomains);
@@ -249,7 +550,7 @@ export class AuthorityAdmissionEngine {
     if (effectiveReadOnly) {
       if (capability.id === "proc_exec" || capability.id === "command_execution" || toolName === "run_command") {
         const cmd = request.args?.command;
-        if (!isSafeReadOnlyCommand(cmd, this.safeCommandRegex)) {
+        if (!isSafeReadOnlyCommand(cmd, this.safeCommandRegex, this.workspace)) {
           return {
             admitted: false,
             reason: `AUTH-010: Read-only mode violation: Command '${cmd}' is not permitted in read-only mode. Only safe inspection commands are permitted.`,
