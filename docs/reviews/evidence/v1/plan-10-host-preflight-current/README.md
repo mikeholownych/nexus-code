@@ -21,12 +21,13 @@ All 10 reported checks passed. The host had Bubblewrap 0.13.1, delegated cgroup
 v2, and the dedicated 20 GiB tmpfs. The JSON report records the exact source
 commit, resource profile, manifest digest, and all 16 source-file digests.
 
-This result establishes the current host's synthetic infrastructure boundary
-only. It does not establish held-out custody, evaluator authorization for the
-private store, actual task-run Git-history isolation, task-quality thresholds,
-or installed-RC qualification and acceptance.
+This result records the synthetic infrastructure boundary observed on
+`mike-dev` for that exact source revision only. It does not establish held-out
+custody, evaluator authorization for the private store, actual task-run
+Git-history isolation, task-quality thresholds, or installed-RC qualification
+and acceptance.
 
-## Refresh on current main
+## Historical exact-source run on main@1f3c655
 
 At `main@1f3c655971ade086f55347926db16cf2ecd52d1f`, the same infrastructure-only
 preflight was repeated on `mike-dev` at `2026-10-23T13:57:05Z`. The `--heldout`
@@ -42,7 +43,7 @@ historical and refreshed evidence.
 This refresh remains synthetic host-infrastructure evidence. It is not
 custodian acceptance, a held-out run, or RC qualification.
 
-## Refresh on main@a12c070
+## Historical exact-source run on main@a12c070
 
 At `main@a12c07091f15f4e7d581907fab110b0653c4c264`, the same infrastructure-only
 preflight was repeated on `mike-dev` at `2026-10-23T16:20:30Z`. The `--heldout`
@@ -56,7 +57,7 @@ stdout are `validate-a12-20261023T162028Z.json` and `.log`; `SHA256SUMS` binds
 both. This remains synthetic infrastructure evidence, not custody acceptance,
 a held-out run, or RC qualification.
 
-## Exact-source refresh on origin/main@92d7a62
+## Latest recorded exact-source run: origin/main@92d7a62
 
 At `origin/main@92d7a62f0fa20f4f2f3b91786c737fd6d5517075`, the same
 infrastructure-only preflight ran on `mike-dev` at `2026-10-23T17:48:43Z`.
@@ -70,3 +71,9 @@ included in `SHA256SUMS`.
 This establishes the synthetic host-infrastructure boundary at that time. It
 does not establish custodian acceptance, private-store authorization, held-out
 qualification, or installed-RC acceptance.
+
+This report is historical relative to
+`origin/main@158e3ceaf83c99b2f6bf20dfdf0b6c95297ec090`. No host preflight was
+run against that later commit. Independent review verified that the evaluator
+source files covered by this report had unchanged digests between `92d7a62` and
+`158e3ce`; that comparison does not make this a fresh `158e3ce` preflight.
