@@ -857,7 +857,8 @@ function validStateConversation(data: any, taskRecord: boolean): boolean {
   if (!data || typeof data !== "object" || Array.isArray(data)) return false;
   if (data.schemaVersion === 2) {
     return typeof data.taskId === "string" && data.taskId.length > 0 &&
-      !Object.hasOwn(data, "messages") && validMessageCursor(data.messageLog);
+      !Object.hasOwn(data, "messages") &&
+      (data.messageLog === null || validMessageCursor(data.messageLog));
   }
   const identity = taskRecord ? data.taskId || data.id : data.sessionId || data.taskId || data.id;
   return Boolean(identity) && Array.isArray(data.messages);

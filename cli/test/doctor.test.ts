@@ -276,7 +276,7 @@ describe("doctor findings name the actual failure", () => {
     fs.rmSync(h, { recursive: true, force: true });
   });
 
-  test("state integrity accepts the index and authoritative schema-2 task cursor, but reports malformed records", async () => {
+  test("state integrity accepts empty and cursor-backed schema-2 histories, but reports malformed records", async () => {
     const h = tmp("nexus-doctor-schema2-");
     const sessions = path.join(h, ".nexus", "sessions");
     const tasks = path.join(h, ".nexus", "tasks");
@@ -285,15 +285,19 @@ describe("doctor findings name the actual failure", () => {
     fs.writeFileSync(path.join(sessions, "index.json"), JSON.stringify({ schemaVersion: 1, sessions: [] }));
     const record = { schemaVersion: 2, taskId: "task-abc", messageLog: { schemaVersion: 2, sha256: "a".repeat(64), offset: 0, bytes: 1, count: 0 } };
     fs.writeFileSync(path.join(tasks, "task-abc.json"), JSON.stringify(record));
-    fs.writeFileSync(path.join(tasks, "task-bad.json"), JSON.stringify({ schemaVersion: 2, taskId: "task-bad", messageLog: null }));
+    fs.writeFileSync(path.join(tasks, "task-empty.json"), JSON.stringify({ schemaVersion: 2, taskId: "task-empty", messageLog: null }));
+    fs.writeFileSync(path.join(tasks, "task-bad.json"), JSON.stringify({ schemaVersion: 2, taskId: "task-bad", messageLog: "not-a-cursor" }));
     try {
       const report = await runDoctor({ home: h, config: cfg() });
       const finding = find(report, "state.integrity")!;
       assert.equal(finding.status, "warn");
       assert.match(finding.explanation, /1 saved record\(s\) are malformed/);
       assert.ok(!finding.evidence.includes(path.join(tasks, "task-abc.json")));
+      assert.ok(!finding.evidence.includes(path.join(tasks, "task-empty.json")));
+      assert.ok(finding.evidence.includes(path.join(tasks, "task-bad.json")));
       assert.ok(!finding.evidence.includes(path.join(sessions, "index.json")));
       assert.ok(fs.existsSync(path.join(tasks, "task-abc.json")), "valid state remains untouched");
+      assert.ok(fs.existsSync(path.join(tasks, "task-empty.json")), "valid empty-history state remains untouched");
       assert.ok(fs.existsSync(path.join(tasks, "task-bad.json")), "malformed state remains untouched");
     } finally {
       fs.rmSync(h, { recursive: true, force: true });
