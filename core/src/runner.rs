@@ -207,6 +207,14 @@ mod registry {
         });
     }
 
+    /// Forgets a service only when the recorded process group is still the one being removed.
+    pub fn unregister_service(name: &str, pgid: libc::pid_t) {
+        let mut st = state().lock().unwrap();
+        if st.services.get(name).map_or(false, |s| s.pgid == pgid) {
+            st.services.remove(name);
+        }
+    }
+
     pub fn list_services() -> Vec<ServiceInfo> {
         let mut st = state().lock().unwrap();
         st.services.retain(|_, s| alive(s.pgid));
@@ -265,11 +273,11 @@ mod registry {
 
 #[cfg(unix)]
 #[allow(unused_imports)]
-pub use registry::{cancel as cancel_command, end_all as end_all_commands, end_lingering as end_background_commands, list_services, register_service, ServiceInfo};
+pub use registry::{cancel as cancel_command, end_all as end_all_commands, end_lingering as end_background_commands, list_services, register_service, unregister_service, ServiceInfo};
 
 #[cfg(not(unix))]
 #[allow(unused_imports)]
-pub use registry_stub::{list_services, register_service, ServiceInfo};
+pub use registry_stub::{list_services, register_service, unregister_service, ServiceInfo};
 
 #[cfg(not(unix))]
 mod registry_stub {
@@ -287,6 +295,8 @@ mod registry_stub {
     }
 
     pub fn register_service(_name: &str, _pgid: u32, _command: &str) {}
+
+    pub fn unregister_service(_name: &str, _pgid: u32) {}
 }
 
 fn tokenize_and_split_subcommands(cmd: &str) -> Vec<Vec<String>> {
@@ -654,12 +664,12 @@ pub fn run_command_tracked(args: RunCommandArgs, base_dir: &Path, key: Option<&s
                 out = format!("{notice}{out}");
             }
             let code = status.code().unwrap_or(0);
-            if code == 0 && args.service_name.is_some() {
-                let sname = args.service_name.as_deref().unwrap();
-                #[cfg(unix)]
-                {
-                    out = format!("Background service '{sname}' registered (pgid {pgid})\n{out}");
-                }
+            // The group was registered before the startup grace to cover shutdown during startup.
+            // It is gone now, so forget it: a stale PGID could otherwise be signalled after reuse.
+            #[cfg(unix)]
+            if let Some(ref sname) = args.service_name {
+                registry::unregister_service(sname, pgid);
+                out = format!("Background service '{sname}' exited during startup (pgid {pgid})\n{out}");
             }
             return Ok(RunCommandResult {
                 command: args.command,
@@ -1287,6 +1297,28 @@ mod tests {
         std::thread::sleep(Duration::from_millis(200));
         assert_eq!(count_exact(marker), 0, "registered service was killed on shutdown");
         assert_eq!(list_services().len(), 0);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_background_service_that_exits_during_startup_is_not_registered() {
+        let _guard = TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+        let cwd = std::env::current_dir().unwrap();
+        let res = run_command_tracked(RunCommandArgs {
+            command: "true".into(),
+            cwd: None,
+            background: true,
+            service_name: Some("gone_service".into()),
+            ..Default::default()
+        }, &cwd, Some("svc_req_gone")).unwrap();
+
+        assert!(res.stdout.contains("exited during startup"), "stdout: {}", res.stdout);
+        assert!(
+            !res.stdout.contains("registered"),
+            "a service that already exited must not be reported registered: {}",
+            res.stdout
+        );
+        assert!(!list_services().iter().any(|s| s.name == "gone_service"));
     }
 }
 
