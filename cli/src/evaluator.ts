@@ -9,6 +9,7 @@ import { WorktreeManager, WorktreeCreateResult } from "./worktree.js";
 import pc from "picocolors";
 import {
   CandidateTracker,
+  CandidateIdentity,
   ValidationReceipt,
   hashContent,
 } from "./core/candidate.js";
@@ -37,6 +38,7 @@ export interface EvaluationResult {
   patchDiff?: string;
   testOutput?: string;
   candidateId?: string;
+  candidateIdentityIssue?: string;
   validationReceipt?: ValidationReceipt;
   error?: string;
 }
@@ -52,6 +54,48 @@ export interface BenchmarkSummary {
   totalTokensConsumed: number;
   avgDurationSeconds: number;
   results: EvaluationResult[];
+}
+
+/**
+ * Record evaluator validation only when candidate identity was resolved from the workspace.
+ * A placeholder string is not an identity and must never authorize a PASSED receipt.
+ */
+export function recordEvaluationReceiptIfIdentified(
+  tracker: CandidateTracker,
+  candidateIdentity: CandidateIdentity | undefined,
+  testsPassed: boolean,
+  testCommand: string,
+  testOutput: string,
+  instanceId: string,
+): ValidationReceipt | undefined {
+  if (!testsPassed || !candidateIdentity || !/^[a-f0-9]{64}$/.test(candidateIdentity.candidateId)) {
+    return undefined;
+  }
+  return tracker.recordValidationReceipt({
+    candidateId: candidateIdentity.candidateId,
+    verifierCommand: testCommand || "runTestSuite",
+    exitCode: 0,
+    stdoutHash: hashContent(testOutput),
+    status: "PASSED",
+    evaluatorBinding: {
+      evaluatorId: "swe-bench",
+      evaluatorType: "BenchmarkEvaluator",
+      instanceId,
+      testSuite: testCommand,
+    },
+    materialDependencies: [],
+  });
+}
+
+function candidateIdentityFailureGuidance(error: unknown): string {
+  const message = error instanceof Error ? error.message : "";
+  if (/exceeds .* (entry|byte|depth) limit/.test(message)) {
+    return "Candidate identity exceeded a safety limit. Review the workspace size or file count, then retry; no validation receipt was recorded.";
+  }
+  if (/cannot enforce no-follow/.test(message)) {
+    return "Candidate identity could not be secured on this platform. Retry on a supported platform; no validation receipt was recorded.";
+  }
+  return "Candidate identity could not be established. Review workspace readability and unsupported files, then retry; no validation receipt was recorded.";
 }
 
 /**
@@ -148,15 +192,16 @@ export class BenchmarkEvaluator {
 
       // 2. Inspect candidate identity and patch diff directly from evaluated candidate workspace
       let patchDiff = "";
-      let candidateId = "";
+      let candidateIdentity: CandidateIdentity | undefined;
+      let candidateIdentityIssue: string | undefined;
       let validationReceipt: ValidationReceipt | undefined;
 
       const candidateTracker = agent.candidateTracker || new CandidateTracker();
       try {
-        const candidateIdentity = candidateTracker.computeCandidateIdentitySync(evalWorkspace);
-        candidateId = candidateIdentity.candidateId;
-      } catch {
-        candidateId = "UNRESOLVED_CANDIDATE";
+        candidateIdentity = candidateTracker.computeCandidateIdentitySync(evalWorkspace);
+      } catch (error) {
+        candidateIdentityIssue = candidateIdentityFailureGuidance(error);
+        console.log(pc.yellow(candidateIdentityIssue));
       }
 
       const diffBase = instance.base_commit || "HEAD";
@@ -203,27 +248,19 @@ export class BenchmarkEvaluator {
       testsPassed = testRes.success || testRes.command === "none";
       testOutput = testRes.rawOutput || "";
 
-      if (testsPassed && candidateId) {
-        validationReceipt = candidateTracker.recordValidationReceipt({
-          candidateId,
-          verifierCommand: testRes.command || "runTestSuite",
-          exitCode: 0,
-          stdoutHash: hashContent(testOutput),
-          status: "PASSED",
-          evaluatorBinding: {
-            evaluatorId: "swe-bench",
-            evaluatorType: "BenchmarkEvaluator",
-            instanceId: instance.instance_id,
-            testSuite: testRes.command,
-          },
-          materialDependencies: [],
-        });
-      }
+      validationReceipt = recordEvaluationReceiptIfIdentified(
+        candidateTracker,
+        candidateIdentity,
+        testsPassed,
+        testRes.command,
+        testOutput,
+        instance.instance_id,
+      );
 
       const durationMs = Date.now() - t0;
       const tokensConsumed = agent.getTokenStats();
       const hasCodeChanges = patchDiff.trim().length > 0;
-      const resolved = testsPassed && (hasCodeChanges || testRes.command === "none");
+      const resolved = Boolean(validationReceipt) && testsPassed && (hasCodeChanges || testRes.command === "none");
 
       const result: EvaluationResult = {
         instanceId: instance.instance_id,
@@ -235,7 +272,8 @@ export class BenchmarkEvaluator {
         stepsTaken: agent.getHistoryCount(),
         patchDiff,
         testOutput,
-        candidateId,
+        ...(candidateIdentity ? { candidateId: candidateIdentity.candidateId } : {}),
+        ...(candidateIdentityIssue ? { candidateIdentityIssue } : {}),
         validationReceipt,
       };
 
@@ -320,6 +358,7 @@ export class BenchmarkEvaluator {
     for (const r of summary.results) {
       const icon = r.status === "RESOLVED" ? "✅ RESOLVED" : r.status === "ERROR" ? "⚠️ ERROR" : "❌ UNRESOLVED";
       lines.push(`| \`${r.instanceId}\` | ${r.repo} | ${icon} | ${(r.durationMs / 1000).toFixed(1)}s | ${r.stepsTaken} | ${r.tokensConsumed.total} |`);
+      if (r.candidateIdentityIssue) lines.push(`  - ${r.candidateIdentityIssue}`);
     }
 
     return lines.join("\n") + "\n";
