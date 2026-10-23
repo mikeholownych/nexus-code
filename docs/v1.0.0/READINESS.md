@@ -1,8 +1,8 @@
 # v1.0.0 release readiness checkpoint
 
-## Current integration and candidate status (observed 2026-10-23 00:03 UTC at `1da67c3`; point-in-time snapshot)
+## Current integration and candidate status (observed 2026-10-23 00:18 UTC at `1da67c3`; point-in-time snapshot)
 
-**Authoritative release source:** `origin/main` is `1da67c3622f7290944a496a58965606961a5afc0`, the merge of PR #150. PR #150's exact head `c638da0dbf6c3cc42069b3bce02b0f679eba4a90` passed Node 22, Node 24, and Linux x86-64 package/repro/install-smoke CI in run `39870175272`; CodeQL `39870175275` passed. The independent reviewer accepted the exact PR head. Post-merge CodeQL `39874058549` passed on `1da67c3`. At the latest poll, post-merge CI `39874058557` had passed Node 22; the Node 24 CLI suite remained in progress, so exact-main CI is not yet terminal.
+**Authoritative release source:** `origin/main` is `1da67c3622f7290944a496a58965606961a5afc0`, the merge of PR #150. PR #150's exact head `c638da0dbf6c3cc42069b3bce02b0f679eba4a90` passed Node 22, Node 24, and Linux x86-64 package/repro/install-smoke CI in run `39870175272`; CodeQL `39870175275` passed. The independent reviewer accepted the exact PR head. Exact post-merge CI run `39874058557` passed Node 22 at 23:59:33Z, Node 24 at 00:04:23Z, and Linux x86-64 packaging/reproducibility/smoke/install at 00:18:14Z. Post-merge CodeQL `39874058549` passed at 23:50:32Z. These checks are bound to exact main `1da67c3`.
 
 **Node runtime floor:** The accepted user decision is Node `>=22`. PR #150 integrates that floor in package engines, installer checks, CLI diagnostics and upgrade behavior, CI/release/reproducibility configuration, tests, and current release documentation. Superseded PRs #137 and #146 were closed after their intended policy changes were verified in current main; their older branch evidence is not current qualification evidence.
 
