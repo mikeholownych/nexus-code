@@ -171,6 +171,22 @@ function isDangerousLongOption(base: string, word: string): boolean {
   return (DANGEROUS_LONG_OPTIONS[base] ?? []).some((target) => target.startsWith(name));
 }
 
+/** The letters of a short-option cluster (`-ieroot` -> `ieroot`), or null for a long option/operand. */
+function shortOptionLetters(word: string): string | null {
+  if (!word.startsWith("-") || word.startsWith("--") || word === "-") return null;
+  return word.slice(1);
+}
+
+/**
+ * The short-option letters before an attached `-e` pattern. A cluster such as `-ieroot` is
+ * `-i -e root` to grep/rg; `f` before `e` is a refused pattern-file option.
+ */
+function shortOptionLettersBeforePattern(word: string): string {
+  const letters = shortOptionLetters(word) ?? "";
+  const e = letters.indexOf("e");
+  return e < 0 ? letters : letters.slice(0, e);
+}
+
 /** Whether `word` is an option rather than an operand (`-` alone is an operand to grep/rg). */
 function isOptionWord(word: string): boolean {
   return word !== "-" && word.startsWith("-");
@@ -201,6 +217,9 @@ function hasUnsafeReadOnlyOption(base: string, words: string[], separator: numbe
     } else if (isDangerousLongOption(base, w)) {
       return true;
     }
+    if ((base === "grep" || base === "rg") && shortOptionLettersBeforePattern(w).includes("f")) {
+      return true;
+    }
     if (GLOB_READING_COMMANDS.has(base) && isAttachedFileOption(w)) return true;
     if (base === "grep" && /^-[A-Za-z]+$/.test(w) && w.includes("R")) return true;
     if (base === "rg" && /^-[A-Za-z]+$/.test(w) && w.includes("L")) return true;
@@ -225,13 +244,22 @@ function pathWordIndexes(base: string, words: string[], separator: number): Set<
       const w = words[i];
       if (i === separator) continue;
       if (beforeSeparator(i)) {
-        if (w === "-e" || w === "--regexp") {
+        if (w === "--regexp") {
           patternSeen = true;
           i++;
           continue;
         }
-        if (w.startsWith("--regexp=") || (w.startsWith("-e") && w.length > 2)) {
+        if (w.startsWith("--regexp=")) {
           patternSeen = true;
+          continue;
+        }
+        const letters = shortOptionLetters(w);
+        if (letters !== null) {
+          const e = letters.indexOf("e");
+          if (e >= 0) {
+            patternSeen = true;
+            if (e === letters.length - 1) i++; // -e with a detached pattern value
+          }
           continue;
         }
         if (isOptionWord(w)) continue;

@@ -41,6 +41,9 @@ unterminated quote. On those words the guard:
   (`--dereference-recursiv`, `--follo`, `--files0-fro`, `--from-f`); `git --ext-diff`/`--textconv`
   are matched by prefix for the same reason. This covers pattern files (`grep -f`/`--file`,
   `grep --exclude-from`, `rg --ignore-file`, `wc --files0-from`) and the short `-f` forms;
+- parses short-option clusters for `grep`/`rg`: an attached `e` (`-ieroot`) supplies the pattern, so
+  the next plain word is a file operand and is resolved; an `f` before `e` (`-nf/etc/passwd`) is a
+  refused pattern-file option;
 - resolves operands with `realpath` relative to the workspace for commands that read contents or
   traverse (`cat`, `head`, `tail`, `grep`, `rg`, `wc`, `find`, `git`), rejecting anything outside the
   workspace real path and comparing containment with a path boundary, not a bare prefix;
@@ -88,6 +91,8 @@ secret under `/var/tmp` so bwrap's `--tmpfs /tmp` does not hide the target; `ws/
 | `diff -I -- -r A B` | success, returned `OUTSIDE SECRET` | not permitted (`diff` removed) |
 | `rustc -v link` | success, echoed a source line | `Read-only mode violation` |
 | `grep - link` | success, returned `OUTSIDE SECRET` | `Read-only mode violation` |
+| `grep -ieroot link` / `rg -ieroot link` | success, returned `OUTSIDE SECRET` | `Read-only mode violation` |
+| `grep --dereference-recursiv SECRET .` | success, returned `OUTSIDE SECRET` | `Read-only mode violation` |
 | `cat -- --link` | success, returned `OUTSIDE SECRET` | `Read-only mode violation` |
 | `grep -- -e --link` | success, returned `OUTSIDE SECRET` | `Read-only mode violation` |
 | `ls node_modules` / `echo node_modules` | success | success (no violation) |

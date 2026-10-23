@@ -164,11 +164,18 @@ describe("read-only command path confinement", () => {
       "wc --files0-fro outside.list",
       "git diff --ext-diff",
       "cat --fil=link",
+      "grep -ieroot link",
+      "rg -ieroot link",
+      "grep -nieroot link",
+      "grep -ihello link",
+      "grep -nf/etc/passwd x",
     ]) {
       assert.equal(isSafeReadOnlyCommand(command, undefined, ws), false, command);
     }
     assert.equal(isSafeReadOnlyCommand("cat -- inside.txt", undefined, ws), true);
     assert.equal(isSafeReadOnlyCommand("grep -e root inside.txt", undefined, ws), true);
+    assert.equal(isSafeReadOnlyCommand("grep -ieroot inside.txt", undefined, ws), true);
+    assert.equal(isSafeReadOnlyCommand("rg -ieroot inside.txt", undefined, ws), true);
     assert.equal(isSafeReadOnlyCommand("git diff", undefined, ws), true);
   });
 });
