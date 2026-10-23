@@ -14,6 +14,7 @@ import {
   CandidateTracker,
   computeCandidateIdentitySync,
   hashContent,
+  openCandidateDirectory,
   resolveFileCandidateDetails,
   ValidationReceipt,
   CandidateIdentity,
@@ -249,6 +250,62 @@ describe("WP-04: Candidate Identity & Validation Binding (INC-05, DEC-02)", () =
     } finally {
       fs.rmSync(targetFile, { force: true });
       fs.rmSync(outsideTarget, { force: true });
+    }
+  });
+
+  test("candidate directory replacement with a symlink is rejected before traversal", () => {
+    const childDirectory = path.join(rootGit, "directory-race");
+    const outsideDirectory = path.join(tmpRoot, "directory-race-outside");
+    fs.mkdirSync(childDirectory);
+    fs.mkdirSync(outsideDirectory);
+    fs.writeFileSync(path.join(outsideDirectory, "private.txt"), "must never be traversed\n");
+
+    const rootDirectory = openCandidateDirectory(rootGit);
+    const targetPath = `/proc/self/fd/${rootDirectory.fd}/directory-race`;
+    const originalLstat = fs.lstatSync;
+    let replaced = false;
+    const raceFs = new Proxy(fs, {
+      get(target, property) {
+        if (property === "lstatSync") {
+          return (...args: any[]) => {
+            const result = originalLstat(...args);
+            if (!replaced && String(args[0]) === targetPath) {
+              replaced = true;
+              fs.rmdirSync(childDirectory);
+              fs.symlinkSync(outsideDirectory, childDirectory);
+            }
+            return result;
+          };
+        }
+        return Reflect.get(target, property, target);
+      },
+    }) as typeof fs;
+
+    try {
+      assert.throws(() => openCandidateDirectory(childDirectory, rootDirectory.fd, "directory-race", raceFs));
+      assert.strictEqual(replaced, true, "Fixture must swap the directory after lstat and before open");
+      assert.strictEqual(fs.lstatSync(childDirectory).isSymbolicLink(), true);
+    } finally {
+      rootDirectory.dir.closeSync();
+      fs.closeSync(rootDirectory.fd);
+      if (fs.existsSync(childDirectory) || fs.lstatSync(childDirectory, { throwIfNoEntry: false })) {
+        fs.unlinkSync(childDirectory);
+      }
+      fs.rmSync(outsideDirectory, { recursive: true, force: true });
+    }
+  });
+
+  test("tracked file byte budget rejects oversized content before hashing", () => {
+    const readmePath = path.join(rootGit, "README.md");
+    const original = fs.readFileSync(readmePath);
+    try {
+      fs.writeFileSync(readmePath, "this exceeds the test byte budget\n");
+      assert.throws(
+        () => computeCandidateIdentitySync(rootGit, { maxTotalBytes: 4 }),
+        /Candidate file exceeds 4 byte limit/,
+      );
+    } finally {
+      fs.writeFileSync(readmePath, original);
     }
   });
 

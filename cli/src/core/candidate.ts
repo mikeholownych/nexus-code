@@ -67,6 +67,8 @@ export interface CandidateComputeOptions {
   materialDependencies?: MaterialValidationDependency[];
   /** Optional stricter manifest bound; values above the hard limit are clamped. */
   maxEntries?: number;
+  /** Optional stricter byte bound; values above the hard limit are clamped. */
+  maxTotalBytes?: number;
 }
 
 const MAX_CANDIDATE_ENTRIES = 100_000;
@@ -81,6 +83,54 @@ function configuredEntryLimit(options: CandidateComputeOptions): number {
     throw new Error("Candidate maxEntries must be a positive safe integer");
   }
   return Math.min(configured, MAX_CANDIDATE_ENTRIES);
+}
+
+function configuredByteLimit(options: CandidateComputeOptions): number {
+  const configured = options.maxTotalBytes;
+  if (configured === undefined) return MAX_CANDIDATE_TOTAL_BYTES;
+  if (!Number.isSafeInteger(configured) || configured < 1) {
+    throw new Error("Candidate maxTotalBytes must be a positive safe integer");
+  }
+  return Math.min(configured, MAX_CANDIDATE_TOTAL_BYTES);
+}
+
+function procFdPath(fd: number, childName?: string, filesystem: typeof fs = fs): string {
+  if (process.platform !== "linux" || !filesystem.existsSync("/proc/self/fd")) {
+    throw new Error("Platform cannot enforce descriptor-relative candidate traversal");
+  }
+  return childName === undefined ? `/proc/self/fd/${fd}` : `/proc/self/fd/${fd}/${childName}`;
+}
+
+export function openCandidateDirectory(
+  fullPath: string,
+  parentFd?: number,
+  childName?: string,
+  filesystem: typeof fs = fs,
+): { fd: number; dir: fs.Dir } {
+  const directoryFlag = filesystem.constants.O_DIRECTORY;
+  const noFollow = filesystem.constants.O_NOFOLLOW;
+  const nonBlocking = filesystem.constants.O_NONBLOCK;
+  if (typeof directoryFlag !== "number" || typeof noFollow !== "number" || typeof nonBlocking !== "number") {
+    throw new Error("Platform cannot enforce no-follow candidate directory traversal");
+  }
+  if (parentFd !== undefined && childName === undefined) {
+    throw new Error("Descriptor-relative candidate directory requires a child name");
+  }
+  const target = parentFd === undefined ? filesystem.realpathSync(fullPath) : procFdPath(parentFd, childName, filesystem);
+  const before = filesystem.lstatSync(target, { bigint: true });
+  if (!before.isDirectory()) throw new Error(`Candidate directory changed or is not a directory: ${fullPath}`);
+  const fd = filesystem.openSync(target, filesystem.constants.O_RDONLY | directoryFlag | noFollow | nonBlocking);
+  try {
+    const opened = filesystem.fstatSync(fd, { bigint: true });
+    if (!opened.isDirectory() || opened.dev !== before.dev || opened.ino !== before.ino) {
+      throw new Error(`Candidate directory changed while opening: ${fullPath}`);
+    }
+    const dir = filesystem.opendirSync(procFdPath(fd, undefined, filesystem), { bufferSize: 32 });
+    return { fd, dir };
+  } catch (error) {
+    filesystem.closeSync(fd);
+    throw error;
+  }
 }
 
 export interface CandidateValidationDecision {
@@ -122,6 +172,7 @@ export function toPosixRelativePath(basePath: string, targetPath: string): strin
 export function resolveFileCandidateDetails(
   fullPath: string,
   filesystem: typeof fs = fs,
+  maxBytes = MAX_CANDIDATE_FILE_BYTES,
 ): EntryStructuralDetails {
   let entryObserved = false;
   try {
@@ -129,6 +180,10 @@ export function resolveFileCandidateDetails(
     entryObserved = true;
     if (lstat.isSymbolicLink()) {
       const targetText = filesystem.readlinkSync(fullPath);
+      const targetSize = Buffer.byteLength(targetText);
+      if (targetSize > Math.min(MAX_CANDIDATE_FILE_BYTES, maxBytes)) {
+        throw new Error(`Candidate file exceeds ${Math.min(MAX_CANDIDATE_FILE_BYTES, maxBytes)} byte limit: ${fullPath}`);
+      }
       const afterReadlink = filesystem.lstatSync(fullPath, { bigint: true });
       if (lstat.dev !== afterReadlink.dev || lstat.ino !== afterReadlink.ino) {
         throw new Error(`Candidate symlink changed while resolving identity: ${fullPath}`);
@@ -136,14 +191,15 @@ export function resolveFileCandidateDetails(
       return {
         mode: "120000",
         contentHash: hashContent(targetText),
-        size: Buffer.byteLength(targetText),
+        size: targetSize,
         isDeleted: false,
         isSymlink: true,
       };
     }
     if (lstat.isFile()) {
-      if (lstat.size > BigInt(MAX_CANDIDATE_FILE_BYTES)) {
-        throw new Error(`Candidate file exceeds ${MAX_CANDIDATE_FILE_BYTES} byte limit: ${fullPath}`);
+      const fileByteLimit = Math.min(MAX_CANDIDATE_FILE_BYTES, maxBytes);
+      if (lstat.size > BigInt(fileByteLimit)) {
+        throw new Error(`Candidate file exceeds ${fileByteLimit} byte limit: ${fullPath}`);
       }
       const noFollow = filesystem.constants.O_NOFOLLOW;
       const nonBlocking = filesystem.constants.O_NONBLOCK;
@@ -156,8 +212,8 @@ export function resolveFileCandidateDetails(
         if (!opened.isFile() || opened.dev !== lstat.dev || opened.ino !== lstat.ino) {
           throw new Error(`Candidate file changed or is not regular while resolving identity: ${fullPath}`);
         }
-        if (opened.size > BigInt(MAX_CANDIDATE_FILE_BYTES)) {
-          throw new Error(`Candidate file exceeds ${MAX_CANDIDATE_FILE_BYTES} byte limit: ${fullPath}`);
+        if (opened.size > BigInt(fileByteLimit)) {
+          throw new Error(`Candidate file exceeds ${fileByteLimit} byte limit: ${fullPath}`);
         }
 
         const hash = crypto.createHash("sha256");
@@ -167,8 +223,8 @@ export function resolveFileCandidateDetails(
           const bytesRead = filesystem.readSync(descriptor, chunk, 0, chunk.length, null);
           if (bytesRead === 0) break;
           size += bytesRead;
-          if (size > MAX_CANDIDATE_FILE_BYTES) {
-            throw new Error(`Candidate file exceeds ${MAX_CANDIDATE_FILE_BYTES} byte limit: ${fullPath}`);
+          if (size > fileByteLimit) {
+            throw new Error(`Candidate file exceeds ${fileByteLimit} byte limit: ${fullPath}`);
           }
           hash.update(chunk.subarray(0, bytesRead));
         }
@@ -211,6 +267,27 @@ export function resolveFileCandidateDetails(
       };
     }
     throw err;
+  }
+}
+
+function resolveWorkspaceFileDetails(workspacePath: string, relativePath: string, maxBytes: number): EntryStructuralDetails {
+  const components = relativePath.split(/[\\/]+/).filter(Boolean);
+  if (components.length === 0 || components.some((part) => part === "." || part === "..")) {
+    throw new Error("Invalid candidate path from workspace root");
+  }
+  const opened: Array<{ fd: number; dir: fs.Dir }> = [openCandidateDirectory(workspacePath)];
+  try {
+    for (const component of components.slice(0, -1)) {
+      const parent = opened[opened.length - 1];
+      opened.push(openCandidateDirectory(path.join(workspacePath, relativePath), parent.fd, component));
+    }
+    const parent = opened[opened.length - 1];
+    return resolveFileCandidateDetails(procFdPath(parent.fd, components[components.length - 1]), fs, maxBytes);
+  } finally {
+    for (const handle of opened.reverse()) {
+      handle.dir.closeSync();
+      fs.closeSync(handle.fd);
+    }
   }
 }
 
@@ -279,6 +356,7 @@ function computeGitCandidateIdentity(
   includeUntracked: boolean
 ): CandidateIdentity {
   const entryLimit = configuredEntryLimit(options);
+  const byteLimit = configuredByteLimit(options);
   let rootBaseSha = "UNKNOWN_BASE";
   try {
     rootBaseSha = execFileSync(
@@ -297,21 +375,44 @@ function computeGitCandidateIdentity(
   const trackedEntriesMap = new Map<string, FileCandidateEntry>();
   const untrackedEntriesMap = new Map<string, FileCandidateEntry>();
   const untrackedBudget = { entries: 0, bytes: 0 };
+  let trackedBytes = 0;
+
+  function assertTrackedEntryAvailable(posixPath: string): void {
+    if (!trackedEntriesMap.has(posixPath) && trackedEntriesMap.size + untrackedBudget.entries >= entryLimit) {
+      throw new Error(`Candidate manifest exceeds ${entryLimit} entry limit`);
+    }
+  }
+
+  function setTrackedEntry(entry: FileCandidateEntry): void {
+    const previous = trackedEntriesMap.get(entry.path);
+    assertTrackedEntryAvailable(entry.path);
+    const nextBytes = trackedBytes - (previous?.size || 0) + entry.size;
+    if (nextBytes + untrackedBudget.bytes > byteLimit) {
+      throw new Error(`Candidate manifest exceeds ${byteLimit} byte limit`);
+    }
+    trackedEntriesMap.set(entry.path, entry);
+    trackedBytes = nextBytes;
+  }
+
+  function remainingBytesForTrackedPath(posixPath: string): number {
+    const oldSize = trackedEntriesMap.get(posixPath)?.size || 0;
+    return byteLimit - (trackedBytes - oldSize) - untrackedBudget.bytes;
+  }
 
   function recordUntrackedEntry(): void {
     untrackedBudget.entries += 1;
-    if (untrackedBudget.entries > entryLimit) {
+    if (untrackedBudget.entries + trackedEntriesMap.size > entryLimit) {
       throw new Error(`Candidate manifest exceeds ${entryLimit} entry limit`);
     }
   }
 
   function addUntrackedFile(fullPath: string, posixPath: string): void {
     recordUntrackedEntry();
-    const details = resolveFileCandidateDetails(fullPath);
+    const details = resolveFileCandidateDetails(fullPath, fs, byteLimit - trackedBytes - untrackedBudget.bytes);
     if (details.isDeleted) return;
     untrackedBudget.bytes += details.size;
-    if (untrackedBudget.bytes > MAX_CANDIDATE_TOTAL_BYTES) {
-      throw new Error(`Candidate manifest exceeds ${MAX_CANDIDATE_TOTAL_BYTES} byte limit`);
+    if (trackedBytes + untrackedBudget.bytes > byteLimit) {
+      throw new Error(`Candidate manifest exceeds ${byteLimit} byte limit`);
     }
     untrackedEntriesMap.set(posixPath, {
       path: posixPath,
@@ -322,23 +423,30 @@ function computeGitCandidateIdentity(
     });
   }
 
-  function walkUntrackedDirectory(directoryPath: string, relativePath: string, depth: number): void {
+  function walkUntrackedDirectory(
+    directoryPath: string,
+    relativePath: string,
+    depth: number,
+    parentFd?: number,
+    childName?: string,
+  ): void {
     if (depth > MAX_CANDIDATE_DIRECTORY_DEPTH) {
       throw new Error(`Candidate directory depth exceeds ${MAX_CANDIDATE_DIRECTORY_DEPTH}: ${relativePath}`);
     }
     recordUntrackedEntry();
-    const directory = fs.opendirSync(directoryPath, { bufferSize: 32 });
+    const openedDirectory = openCandidateDirectory(directoryPath, parentFd, childName);
+    const directory = openedDirectory.dir;
     try {
       while (true) {
         const child = directory.readSync();
         if (child === null) break;
         // Nested repository history and metadata are deliberately outside candidate identity.
         if (child.name === ".git") continue;
-        const fullPath = path.join(directoryPath, child.name);
+        const fullPath = procFdPath(openedDirectory.fd, child.name);
         const childRelativePath = `${relativePath}/${child.name}`;
         const details = fs.lstatSync(fullPath, { bigint: true });
         if (details.isDirectory()) {
-          walkUntrackedDirectory(fullPath, childRelativePath, depth + 1);
+          walkUntrackedDirectory(fullPath, childRelativePath, depth + 1, openedDirectory.fd, child.name);
         } else if (details.isFile() || details.isSymbolicLink()) {
           addUntrackedFile(fullPath, childRelativePath);
         } else {
@@ -347,13 +455,15 @@ function computeGitCandidateIdentity(
       }
     } finally {
       directory.closeSync();
+      fs.closeSync(openedDirectory.fd);
     }
   }
 
   // 1. If baseRef is provided and differs from worktree HEAD, inspect committed differences on branch
   if (options.baseRef && options.baseRef !== "HEAD") {
+    let diffOut = "";
     try {
-      const diffOut = execFileSync(
+      diffOut = execFileSync(
         "git",
         ["diff", "--name-status", options.baseRef, "HEAD"],
         {
@@ -363,55 +473,51 @@ function computeGitCandidateIdentity(
         }
       ).trim();
 
-      if (diffOut.length > 0) {
-        const lines = diffOut.split("\n");
-        for (const line of lines) {
-          const parts = line.trim().split(/\s+/);
-          if (parts.length >= 2) {
-            const statusChar = parts[0][0];
-            const filePath = parts[parts.length - 1];
-            const posixPath = filePath.split(path.sep).join("/");
-            const fullPath = path.join(workspacePath, filePath);
+    } catch {
+      // Diff command fallback
+    }
+    if (diffOut.trim().length > 0) {
+      const lines = diffOut.trim().split("\n");
+      for (const line of lines) {
+        const parts = line.trim().split(/\s+/);
+        if (parts.length < 2) continue;
+        const statusChar = parts[0][0];
+        const filePath = parts[parts.length - 1];
+        const posixPath = filePath.split(path.sep).join("/");
+        assertTrackedEntryAvailable(posixPath);
 
-            if (statusChar === "D") {
-              trackedEntriesMap.set(posixPath, {
-                path: posixPath,
-                mode: "000000",
-                contentHash: "0000000000000000000000000000000000000000000000000000000000000000",
-                size: 0,
-                status: "deleted",
-              });
-            } else {
-              const details = resolveFileCandidateDetails(fullPath);
-              if (details.isDeleted) {
-                trackedEntriesMap.set(posixPath, {
-                  path: posixPath,
-                  mode: "000000",
-                  contentHash: details.contentHash,
-                  size: 0,
-                  status: "deleted",
-                });
-              } else {
-                let status: CandidateFileStatus = "modified";
-                if (statusChar === "T" || details.isSymlink) {
-                  status = "typechange";
-                } else if (statusChar === "A") {
-                  status = "added";
-                }
-                trackedEntriesMap.set(posixPath, {
-                  path: posixPath,
-                  mode: details.mode,
-                  contentHash: details.contentHash,
-                  size: details.size,
-                  status,
-                });
-              }
-            }
+        if (statusChar === "D") {
+          setTrackedEntry({
+            path: posixPath,
+            mode: "000000",
+            contentHash: "0000000000000000000000000000000000000000000000000000000000000000",
+            size: 0,
+            status: "deleted",
+          });
+        } else {
+          const details = resolveWorkspaceFileDetails(workspacePath, filePath, remainingBytesForTrackedPath(posixPath));
+          if (details.isDeleted) {
+            setTrackedEntry({
+              path: posixPath,
+              mode: "000000",
+              contentHash: details.contentHash,
+              size: 0,
+              status: "deleted",
+            });
+          } else {
+            let status: CandidateFileStatus = "modified";
+            if (statusChar === "T" || details.isSymlink) status = "typechange";
+            else if (statusChar === "A") status = "added";
+            setTrackedEntry({
+              path: posixPath,
+              mode: details.mode,
+              contentHash: details.contentHash,
+              size: details.size,
+              status,
+            });
           }
         }
       }
-    } catch {
-      // Diff command fallback
     }
   }
 
@@ -453,13 +559,29 @@ function computeGitCandidateIdentity(
         if (code === "??") {
           if (includeUntracked) {
             const details = fs.lstatSync(fullPath);
-            if (details.isDirectory()) walkUntrackedDirectory(fullPath, posixPath, 1);
-            else addUntrackedFile(fullPath, posixPath);
+            if (details.isDirectory()) {
+              const rootDirectory = openCandidateDirectory(workspacePath);
+              try {
+                walkUntrackedDirectory(fullPath, posixPath, 1, rootDirectory.fd, rawFile);
+              } finally {
+                rootDirectory.dir.closeSync();
+                fs.closeSync(rootDirectory.fd);
+              }
+            } else {
+              const rootDirectory = openCandidateDirectory(workspacePath);
+              try {
+                addUntrackedFile(procFdPath(rootDirectory.fd, rawFile), posixPath);
+              } finally {
+                rootDirectory.dir.closeSync();
+                fs.closeSync(rootDirectory.fd);
+              }
+            }
           }
         } else {
+          assertTrackedEntryAvailable(posixPath);
           // Tracked modification (staged or unstaged or typechange or deletion)
           if (code.includes("D")) {
-            trackedEntriesMap.set(posixPath, {
+            setTrackedEntry({
               path: posixPath,
               mode: "000000",
               contentHash: "0000000000000000000000000000000000000000000000000000000000000000",
@@ -467,9 +589,9 @@ function computeGitCandidateIdentity(
               status: "deleted",
             });
           } else {
-            const details = resolveFileCandidateDetails(fullPath);
+            const details = resolveWorkspaceFileDetails(workspacePath, rawFile, remainingBytesForTrackedPath(posixPath));
             if (details.isDeleted) {
-              trackedEntriesMap.set(posixPath, {
+              setTrackedEntry({
                 path: posixPath,
                 mode: "000000",
                 contentHash: details.contentHash,
@@ -483,7 +605,7 @@ function computeGitCandidateIdentity(
               } else if (code.includes("A")) {
                 status = "added";
               }
-              trackedEntriesMap.set(posixPath, {
+              setTrackedEntry({
                 path: posixPath,
                 mode: details.mode,
                 contentHash: details.contentHash,
@@ -511,8 +633,8 @@ function computeGitCandidateIdentity(
     throw new Error(`Candidate manifest exceeds ${entryLimit} entry limit`);
   }
   const totalManifestBytes = manifestEntries.reduce((total, entry) => total + entry.size, 0);
-  if (totalManifestBytes > MAX_CANDIDATE_TOTAL_BYTES) {
-    throw new Error(`Candidate manifest exceeds ${MAX_CANDIDATE_TOTAL_BYTES} byte limit`);
+  if (totalManifestBytes > byteLimit) {
+    throw new Error(`Candidate manifest exceeds ${byteLimit} byte limit`);
   }
 
   const manifestLines: string[] = [];
@@ -548,6 +670,7 @@ function computeNonGitCandidateIdentity(
   options: CandidateComputeOptions
 ): CandidateIdentity {
   const entryLimit = configuredEntryLimit(options);
+  const byteLimit = configuredByteLimit(options);
   const rootBaseSha = "NON_GIT_WORKSPACE";
   const allEntries: FileCandidateEntry[] = [];
 
@@ -569,11 +692,18 @@ function computeNonGitCandidateIdentity(
 
   let visitedEntries = 0;
   let totalBytes = 0;
-  function walk(currentDir: string, depth: number): void {
+  function walk(
+    currentDir: string,
+    depth: number,
+    relativeDir = "",
+    parentFd?: number,
+    childName?: string,
+  ): void {
     if (depth > MAX_CANDIDATE_DIRECTORY_DEPTH) {
       throw new Error(`Candidate directory depth exceeds ${MAX_CANDIDATE_DIRECTORY_DEPTH}`);
     }
-    const directory = fs.opendirSync(currentDir, { bufferSize: 32 });
+    const openedDirectory = openCandidateDirectory(currentDir, parentFd, childName);
+    const directory = openedDirectory.dir;
     try {
       while (true) {
         const item = directory.readSync();
@@ -583,19 +713,19 @@ function computeNonGitCandidateIdentity(
         if (visitedEntries > entryLimit) {
           throw new Error(`Candidate manifest exceeds ${entryLimit} entry limit`);
         }
-        const fullPath = path.join(currentDir, item.name);
+        const fullPath = procFdPath(openedDirectory.fd, item.name);
+        const relativePath = relativeDir ? `${relativeDir}/${item.name}` : item.name;
         if (item.isDirectory()) {
-          walk(fullPath, depth + 1);
+          walk(fullPath, depth + 1, relativePath, openedDirectory.fd, item.name);
         } else if (item.isFile() || item.isSymbolicLink()) {
-          const relPath = toPosixRelativePath(workspacePath, fullPath);
-          const details = resolveFileCandidateDetails(fullPath);
+          const details = resolveFileCandidateDetails(fullPath, fs, byteLimit - totalBytes);
           if (!details.isDeleted) {
             totalBytes += details.size;
-            if (totalBytes > MAX_CANDIDATE_TOTAL_BYTES) {
-              throw new Error(`Candidate manifest exceeds ${MAX_CANDIDATE_TOTAL_BYTES} byte limit`);
+            if (totalBytes > byteLimit) {
+              throw new Error(`Candidate manifest exceeds ${byteLimit} byte limit`);
             }
             allEntries.push({
-              path: relPath,
+              path: relativePath,
               mode: details.mode,
               contentHash: details.contentHash,
               size: details.size,
@@ -603,12 +733,12 @@ function computeNonGitCandidateIdentity(
             });
           }
         } else {
-          const relPath = toPosixRelativePath(workspacePath, fullPath);
-          throw new Error(`Unsupported filesystem object type in non-git workspace at: ${relPath}`);
+          throw new Error(`Unsupported filesystem object type in non-git workspace at: ${relativePath}`);
         }
       }
     } finally {
       directory.closeSync();
+      fs.closeSync(openedDirectory.fd);
     }
   }
 
