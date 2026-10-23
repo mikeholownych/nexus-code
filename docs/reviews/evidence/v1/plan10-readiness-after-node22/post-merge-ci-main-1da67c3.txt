@@ -1,0 +1,12 @@
+sourceCommit=1da67c3622f7290944a496a58965606961a5afc0
+ciRun=39874058557
+ciStatus=completed
+ciConclusion=success
+requiredJob.test-matrix (22)=success
+requiredJob.test-matrix (24)=success
+requiredJob.linux-x86_64=success
+ciUpdatedAt=2026-10-23T00:18:15Z
+codeqlRun=39874058549
+codeqlStatus=completed
+codeqlConclusion=success
+codeqlUpdatedAt=2026-10-22T23:50:32Z
