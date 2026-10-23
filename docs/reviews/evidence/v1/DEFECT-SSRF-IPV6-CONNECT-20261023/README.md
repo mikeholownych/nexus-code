@@ -51,3 +51,12 @@ still re-validate every hop. Also classify IPv4-compatible (`::/96`) and IPv4-tr
 - `npx tsc --noEmit -p tsconfig.json`: pass.
 - Manual HTTPS probe: `safeFetch("https://example.com/")` → `200`, body returned.
 - `git diff --check`: pass.
+
+## Residual risk (not fixed here)
+
+The NAT64 well-known prefix `64:ff9b::/96` is still classified as public even though it embeds an IPv4
+address (e.g. `64:ff9b::7f00:1`). It is only reachable on hosts with a NAT64 route, which this host does
+not have, so no reproduction was possible; network-specific NAT64 prefixes cannot be recognised without
+operator configuration. Teredo (`2001::/32`) is likewise not decoded. Both predate this change and are
+recorded here rather than silently fixed.
+
