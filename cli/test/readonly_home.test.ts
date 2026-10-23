@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { spawnSync } from "node:child_process";
 import { RustCoreBridge } from "../src/tools.js";
 import { wrapSandboxedCommand, isBwrapAvailable } from "../src/sandbox.js";
 
@@ -32,6 +33,94 @@ async function withFixtureHome(
 }
 
 describe("ACC-SAFE-04 & REQ-SEC-104: Read-only HOME masking and workspace path confinement", () => {
+  test("read-only sandbox commands keep the event loop responsive and honor cancellation and deadlines", { skip: !isBwrapAvailable() }, async () => {
+    await withFixtureHome(async (_fixtureHome, workspace) => {
+      const fifoPath = path.join(workspace, "pending-read.fifo");
+      const fifoResult = spawnSync("mkfifo", [fifoPath], { encoding: "utf8" });
+      assert.equal(fifoResult.status, 0, fifoResult.stderr);
+      const bridge = new RustCoreBridge(workspace, "bash", undefined, false, true);
+      try {
+        const controller = new AbortController();
+        bridge.setTurnSignal(controller.signal);
+        let timerFired = false;
+        const pending = bridge.executeTool("run_command", { command: "cat pending-read.fifo", timeout_secs: 5 });
+        setTimeout(() => {
+          timerFired = true;
+          controller.abort();
+        }, 25);
+        const cancelled = await pending;
+        assert.equal(timerFired, true, "the read-only command must not block timers on the agent event loop");
+        assert.equal(cancelled.cancelled, true);
+
+        bridge.setTurnSignal(undefined);
+        const timedOut = await bridge.executeTool("run_command", { command: "cat pending-read.fifo", timeout_secs: 0.1 });
+        assert.equal(timedOut.timedOut, true);
+        assert.match(timedOut.error || "", /timed out/);
+
+        fs.writeFileSync(path.join(workspace, "large-output.txt"), "x".repeat(70_000));
+        const bounded = await bridge.executeTool("run_command", { command: "cat large-output.txt" });
+        assert.equal(bounded.success, true);
+        assert.match(bounded.output, /\[TRUNCATED 38000 BYTES\]/);
+        assert.ok(Buffer.byteLength(bounded.output) < 33_000, "captured output must remain bounded");
+      } finally {
+        bridge.setTurnSignal(undefined);
+        bridge.shutdown();
+      }
+    });
+  });
+
+  test("read-only sandbox strips inherited environment from /proc after a workspace-entry race", { skip: !isBwrapAvailable() }, async () => {
+    await withFixtureHome(async (_fixtureHome, workspace) => {
+      const fifoPath = path.join(workspace, "env-gate.fifo");
+      const fifoResult = spawnSync("mkfifo", [fifoPath], { encoding: "utf8" });
+      assert.equal(fifoResult.status, 0, fifoResult.stderr);
+      const linkPath = path.join(workspace, "env-race-link");
+      fs.symlinkSync(path.join(workspace, "README.md"), linkPath);
+
+      const secretName = "NEXUS_READONLY_ENV_CANARY";
+      const priorSecret = process.env[secretName];
+      const secret = "SYNTHETIC_PARENT_ENV_SECRET_DO_NOT_EXPOSE";
+      process.env[secretName] = secret;
+      const bridge = new RustCoreBridge(workspace, "bash", undefined, false, true);
+      const controller = new AbortController();
+      bridge.setTurnSignal(controller.signal);
+      let writer: ReturnType<typeof fs.createWriteStream> | undefined;
+      try {
+        // cat blocks on the first in-workspace FIFO. Opening the writer proves
+        // admission and FIFO open completed before swapping the second path.
+        const pending = bridge.executeTool("run_command", { command: "cat env-gate.fifo env-race-link", timeout_secs: 5 });
+        writer = fs.createWriteStream(fifoPath);
+        await new Promise<void>((resolve, reject) => {
+          const timeout = setTimeout(() => reject(new Error("read-only command did not open the FIFO")), 3_000);
+          writer!.once("open", () => {
+            clearTimeout(timeout);
+            resolve();
+          });
+          writer!.once("error", (error) => {
+            clearTimeout(timeout);
+            reject(error);
+          });
+        });
+        fs.unlinkSync(linkPath);
+        fs.symlinkSync("/proc/self/environ", linkPath);
+        writer.end("release\n");
+
+        const result = await pending;
+        assert.equal(result.success, true, result.error);
+        assert.match(result.output, /PATH=/);
+        assert.match(result.output, /HOME=\/tmp/);
+        assert.doesNotMatch(result.output, new RegExp(secret));
+      } finally {
+        writer?.destroy();
+        controller.abort();
+        bridge.shutdown();
+        if (priorSecret === undefined) delete process.env[secretName];
+        else process.env[secretName] = priorSecret;
+        fs.rmSync(linkPath, { force: true });
+      }
+    });
+  });
+
   test("--read-only + run_command 'cat ~/.ssh/id_rsa' refuses or fails with No such file", async () => {
     await withFixtureHome(async (fixtureHome, workspace) => {
       const bridge = new RustCoreBridge(workspace, "bash", undefined, false, true);
@@ -86,16 +175,50 @@ describe("ACC-SAFE-04 & REQ-SEC-104: Read-only HOME masking and workspace path c
     });
   });
 
+  test("read-only bridge rejects a workspace pathname replaced after bridge admission", async () => {
+    await withFixtureHome(async (_fixtureHome, workspace) => {
+      const originalWorkspace = `${workspace}-original`;
+      const replacementWorkspace = `${workspace}-replacement`;
+      fs.mkdirSync(replacementWorkspace);
+      fs.writeFileSync(path.join(replacementWorkspace, "README.md"), "REPLACEMENT_WORKSPACE_SECRET");
+      const bridge = new RustCoreBridge(workspace, "bash", undefined, false, true);
+
+      try {
+        fs.renameSync(workspace, originalWorkspace);
+        fs.symlinkSync(replacementWorkspace, workspace);
+        const result = await bridge.executeTool("run_command", { command: "cat README.md" });
+        assert.equal(result.success, false);
+        assert.match(result.error || "", /workspace identity changed/);
+        assert.doesNotMatch(result.output, /REPLACEMENT_WORKSPACE_SECRET/);
+      } finally {
+        bridge.shutdown();
+        try {
+          fs.unlinkSync(workspace);
+        } catch {
+          // The workspace path may still be the original directory if setup failed.
+        }
+        if (fs.existsSync(originalWorkspace)) fs.renameSync(originalWorkspace, workspace);
+      }
+    });
+  });
+
   test("bwrap wraps with --tmpfs $HOME when readOnlyHost is true", async () => {
     if (!isBwrapAvailable()) {
       return;
     }
 
     await withFixtureHome(async (fixtureHome, workspace) => {
-      const sandboxed = wrapSandboxedCommand("ls -la $HOME", workspace, {
-        mode: "bwrap",
-        readOnlyHost: true,
-      });
+      const workspaceFd = fs.openSync(workspace, fs.constants.O_RDONLY | (fs.constants.O_DIRECTORY ?? 0));
+      let sandboxed: ReturnType<typeof wrapSandboxedCommand>;
+      try {
+        sandboxed = wrapSandboxedCommand("ls -la $HOME", workspace, {
+          mode: "bwrap",
+          readOnlyHost: true,
+          workspaceFd,
+        });
+      } finally {
+        fs.closeSync(workspaceFd);
+      }
 
       assert.equal(sandboxed.sandboxed, true);
       assert.equal(sandboxed.engine, "bwrap");

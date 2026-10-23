@@ -8,6 +8,8 @@ export type SandboxMode = "auto" | "bwrap" | "docker" | "none";
 export interface SandboxOptions {
   mode?: SandboxMode;
   readOnlyHost?: boolean;
+  /** Open workspace directory inherited by Bubblewrap as child fd 3. */
+  workspaceFd?: number;
   network?: boolean;
   shell?: string;
   customBwrapArgs?: string[];
@@ -57,6 +59,116 @@ export function isSandboxAvailable(mode: SandboxMode = "auto"): boolean {
   if (mode === "docker") return probeDockerSandbox();
   if (mode === "none") return false;
   return probeBwrapSandbox() || probeDockerSandbox();
+}
+
+function isPathWithin(candidate: string, root: string): boolean {
+  const relative = path.relative(root, candidate);
+  return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
+}
+
+function appendDirectoryTree(args: string[], target: string, known: Set<string>): void {
+  const absolute = path.resolve(target);
+  const parts = absolute.split(path.sep).filter(Boolean);
+  let current = path.parse(absolute).root;
+  for (const part of parts) {
+    current = path.join(current, part);
+    if (!known.has(current)) {
+      args.push("--dir", current);
+      known.add(current);
+    }
+  }
+}
+
+/** Add one trusted runtime file and its dynamic loader dependencies to a synthetic root. */
+function appendRuntimeFile(
+  args: string[],
+  source: string,
+  knownDirectories: Set<string>,
+  mountedFiles: Set<string>,
+  depth = 0,
+): void {
+  if (depth > 4) return;
+  let resolved: string;
+  try {
+    resolved = fs.realpathSync(source);
+    if (!fs.statSync(resolved).isFile() || mountedFiles.has(source)) return;
+  } catch {
+    return;
+  }
+
+  appendDirectoryTree(args, path.dirname(source), knownDirectories);
+  args.push("--ro-bind", resolved, source);
+  mountedFiles.add(source);
+
+  // Runtime commands in the read-only allowlist are fixed platform binaries. Mount their
+  // individual ELF dependencies, never the containing host directories.
+  try {
+    const output = execFileSync("ldd", [resolved], { encoding: "utf8", timeout: 2_000, stdio: ["ignore", "pipe", "ignore"] });
+    for (const line of output.split("\n")) {
+      const match = line.match(/(?:=>\s*)?(\/[^\s]+)\s+\(/);
+      if (match?.[1]) appendRuntimeFile(args, match[1], knownDirectories, mountedFiles, depth + 1);
+    }
+  } catch {
+    // Static binaries and scripts do not have ldd dependencies.
+  }
+
+  // The only runtime script admitted here is an installed command with a fixed shebang.
+  let fd: number | undefined;
+  try {
+    fd = fs.openSync(resolved, "r");
+    const prefix = Buffer.alloc(256);
+    const count = fs.readSync(fd, prefix, 0, prefix.length, 0);
+    const firstLine = prefix.subarray(0, count).toString("utf8").split("\n", 1)[0];
+    const shebang = firstLine.match(/^#!\s*(\/[^\s]+)/)?.[1];
+    if (shebang) appendRuntimeFile(args, shebang, knownDirectories, mountedFiles, depth + 1);
+  } catch {
+    // Binary files are not UTF-8 scripts.
+  } finally {
+    if (fd !== undefined) fs.closeSync(fd);
+  }
+}
+
+function appendReadOnlyRuntime(args: string[], knownDirectories: Set<string>): void {
+  const mountedFiles = new Set<string>();
+  for (const command of [
+    "/usr/bin/bash", "/bin/bash", "/usr/bin/zsh", "/bin/zsh", "/usr/bin/sh", "/bin/sh",
+    "/usr/bin/ls", "/usr/bin/dir", "/usr/bin/pwd", "/usr/bin/cat", "/usr/bin/head",
+    "/usr/bin/tail", "/usr/bin/grep", "/usr/bin/rg", "/usr/bin/find", "/usr/bin/wc",
+    "/usr/bin/which", "/usr/bin/git", "/usr/bin/node", "/usr/bin/env",
+  ]) {
+    appendRuntimeFile(args, command, knownDirectories, mountedFiles);
+  }
+
+  // npm is a script with package-local modules and data files, not a single ELF
+  // binary. Mount only its installed runtime package when the conventional npm
+  // entrypoint is present; do not expose the containing global node_modules tree.
+  try {
+    const npmEntry = fs.realpathSync("/usr/bin/npm");
+    let directory = path.dirname(npmEntry);
+    while (directory !== path.dirname(directory)) {
+      const packageJson = path.join(directory, "package.json");
+      try {
+        const metadata = JSON.parse(fs.readFileSync(packageJson, "utf8"));
+        if (metadata.name === "npm") {
+          appendDirectoryTree(args, path.dirname(directory), knownDirectories);
+          args.push("--ro-bind", directory, directory);
+          const npmLink = fs.readlinkSync("/usr/bin/npm");
+          appendDirectoryTree(args, path.dirname("/usr/bin/npm"), knownDirectories);
+          args.push("--symlink", npmLink, "/usr/bin/npm");
+          break;
+        }
+      } catch {
+        // Keep looking up from the npm entrypoint to its package root.
+      }
+      directory = path.dirname(directory);
+    }
+  } catch {
+    // npm is optional on minimal hosts.
+  }
+
+  // The dynamic loader can use this cache, but mounting all of /etc would expose
+  // unrelated host configuration through a workspace symlink race.
+  appendRuntimeFile(args, "/etc/ld.so.cache", knownDirectories, mountedFiles);
 }
 
 /** Exercise the actual mount boundary, not just the presence of a binary. */
@@ -132,43 +244,90 @@ export function wrapSandboxedCommand(
       };
     }
 
-    // Build bwrap flags:
-    // - Read-only host filesystem: --ro-bind / /
-    // - Mount /dev and /proc
-    // - Read-write bind exclusively for the workspace
-    // - Unshare PID namespace
-    // - Isolate /tmp
-    const userHome = process.env.HOME || os.homedir();
-    const bwrapArgs: string[] = [
-      "bwrap",
-      "--ro-bind", "/", "/",
-      // A self-bind of / is not reliably remounted read-only on all kernels.
-      // Explicitly remount the sandbox root before selectively adding its one
-      // writable worktree mount below.
-      "--remount-ro", "/",
-      "--dev", "/dev",
-      "--proc", "/proc",
-      "--tmpfs", "/tmp",
-    ];
+    const userHome = path.resolve(process.env.HOME || os.homedir());
+    const bwrapArgs: string[] = ["bwrap"];
 
-    if (options.readOnlyHost && userHome) {
-      bwrapArgs.push("--tmpfs", userHome);
+    if (options.readOnlyHost) {
+      if (!Number.isInteger(options.workspaceFd) || options.workspaceFd! < 3) {
+        return {
+          command: cmd,
+          sandboxed: false,
+          engine: "none",
+          warning: "Read-only Bubblewrap requires a pinned workspace directory descriptor.",
+        };
+      }
+      // Do not expose the host root to read-only commands. A path admitted by the
+      // authority check can be replaced before the shell opens it; a read-only
+      // bind of / still lets that race disclose unrelated host files.
+      bwrapArgs.push("--unshare-pid");
+      if (options.customBwrapArgs?.length) {
+        return {
+          command: cmd,
+          sandboxed: false,
+          engine: "none",
+          warning: "Custom Bubblewrap mounts are incompatible with read-only host confinement.",
+        };
+      }
+
+      bwrapArgs.push("--tmpfs", "/");
+      const knownDirectories = new Set<string>(["/"]);
+      for (const mountpoint of ["/dev", "/proc", "/tmp"]) {
+        appendDirectoryTree(bwrapArgs, mountpoint, knownDirectories);
+      }
+
+      const homeIsUsable = userHome !== "/";
+      if (homeIsUsable) {
+        appendDirectoryTree(bwrapArgs, userHome, knownDirectories);
+      }
+      const workspaceNeedsLaterCreation =
+        isPathWithin(absWorkspace, "/tmp") ||
+        (homeIsUsable && isPathWithin(absWorkspace, userHome));
+      if (!workspaceNeedsLaterCreation) {
+        appendDirectoryTree(bwrapArgs, absWorkspace, knownDirectories);
+      }
+
+      appendReadOnlyRuntime(bwrapArgs, knownDirectories);
+      // Make the completed synthetic root read-only after creating its exact runtime mounts.
+      bwrapArgs.push("--remount-ro", "/");
+      bwrapArgs.push("--dev", "/dev", "--proc", "/proc", "--tmpfs", "/tmp");
+
+      if (homeIsUsable && userHome !== "/tmp") {
+        if (isPathWithin(userHome, "/tmp")) {
+          appendDirectoryTree(bwrapArgs, userHome, new Set(["/", "/tmp"]));
+        }
+        bwrapArgs.push("--tmpfs", userHome);
+      }
+
+      if (workspaceNeedsLaterCreation) {
+        const containingMount = homeIsUsable && isPathWithin(absWorkspace, userHome) ? userHome : "/tmp";
+        appendDirectoryTree(bwrapArgs, absWorkspace, new Set(["/", containingMount]));
+      }
+      // Bind through inherited fd 3 so a rename or replacement of the source
+      // pathname cannot redirect Bubblewrap to a different directory.
+      bwrapArgs.push("--ro-bind", "/proc/self/fd/3", absWorkspace);
+      bwrapArgs.push("--clearenv");
+      bwrapArgs.push("--setenv", "PATH", "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin");
+      bwrapArgs.push("--setenv", "HOME", "/tmp");
+    } else {
+      // General worktree sandbox retains the host runtime read-only while allowing
+      // writes only through its dedicated workspace bind.
+      bwrapArgs.push(
+        "--ro-bind", "/", "/",
+        "--remount-ro", "/",
+        "--dev", "/dev",
+        "--proc", "/proc",
+        "--tmpfs", "/tmp",
+      );
+      bwrapArgs.push("--bind", absWorkspace, absWorkspace);
     }
 
-    bwrapArgs.push(
-      options.readOnlyHost ? "--ro-bind" : "--bind",
-      absWorkspace,
-      absWorkspace,
-      "--chdir",
-      absWorkspace,
-      "--unshare-pid",
-    );
+    bwrapArgs.push("--chdir", absWorkspace, "--unshare-pid");
 
     if (options.network === false) {
       bwrapArgs.push("--unshare-net");
     }
 
-    if (options.customBwrapArgs && options.customBwrapArgs.length > 0) {
+    if (!options.readOnlyHost && options.customBwrapArgs && options.customBwrapArgs.length > 0) {
       bwrapArgs.push(...options.customBwrapArgs);
     }
 

@@ -519,12 +519,153 @@ export function rpcDeadlines(toolName: string, args: Record<string, any>): { run
   return { bridgeMs: args.timeout_secs ? (args.timeout_secs + RPC_GRACE_SECS) * 1000 : RPC_DEFAULT_TIMEOUT_MS };
 }
 
+const READ_ONLY_COMMAND_MAX_OUTPUT_BYTES = 32_000;
+const READ_ONLY_COMMAND_KILL_GRACE_MS = 500;
+
+class BoundedCommandOutput {
+  private static readonly HALF = READ_ONLY_COMMAND_MAX_OUTPUT_BYTES / 2;
+  private head: Buffer[] = [];
+  private headBytes = 0;
+  private tail: Buffer[] = [];
+  private tailBytes = 0;
+  private totalBytes = 0;
+
+  public push(chunk: Buffer): void {
+    this.totalBytes += chunk.length;
+    let rest = chunk;
+    if (this.headBytes < BoundedCommandOutput.HALF) {
+      const take = Math.min(rest.length, BoundedCommandOutput.HALF - this.headBytes);
+      if (take) this.head.push(Buffer.from(rest.subarray(0, take)));
+      this.headBytes += take;
+      rest = rest.subarray(take);
+    }
+    if (rest.length >= BoundedCommandOutput.HALF) {
+      this.tail = [Buffer.from(rest.subarray(rest.length - BoundedCommandOutput.HALF))];
+      this.tailBytes = BoundedCommandOutput.HALF;
+      return;
+    }
+    if (rest.length) {
+      this.tail.push(Buffer.from(rest));
+      this.tailBytes += rest.length;
+      while (this.tailBytes > BoundedCommandOutput.HALF) {
+        const overflow = this.tailBytes - BoundedCommandOutput.HALF;
+        const first = this.tail[0];
+        if (first.length <= overflow) {
+          this.tail.shift();
+          this.tailBytes -= first.length;
+        } else {
+          this.tail[0] = Buffer.from(first.subarray(overflow));
+          this.tailBytes -= overflow;
+        }
+      }
+    }
+  }
+
+  public render(): string {
+    const head = Buffer.concat(this.head);
+    const tail = Buffer.concat(this.tail);
+    if (this.totalBytes <= READ_ONLY_COMMAND_MAX_OUTPUT_BYTES) {
+      return Buffer.concat([head, tail]).toString("utf8");
+    }
+    const omittedBytes = Math.max(0, this.totalBytes - head.length - tail.length);
+    return `${head.toString("utf8")}\n\n... [TRUNCATED ${omittedBytes} BYTES] ...\n\n${tail.toString("utf8")}`;
+  }
+}
+
+/** Run the already-confined Bubblewrap command without blocking the agent event loop. */
+function runReadOnlySandbox(
+  command: string,
+  args: string[],
+  workspaceFd: number,
+  timeoutMs: number,
+  signal?: AbortSignal,
+): Promise<ExecutionResult> {
+  if (signal?.aborted) {
+    return Promise.resolve({ success: false, output: "", error: "Read-only command cancelled before it started.", cancelled: true });
+  }
+
+  return new Promise((resolve) => {
+    let child: ChildProcess;
+    try {
+      child = spawn(command, args, {
+        cwd: "/",
+        detached: process.platform !== "win32",
+        // Do not let a read-only command recover the agent's credentials or runtime
+        // configuration through /proc/self/environ after a workspace-entry race.
+        env: { PATH: "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin" },
+        stdio: ["ignore", "pipe", "pipe", workspaceFd],
+      });
+    } catch (err: any) {
+      resolve({ success: false, output: "", error: `Failed to execute read-only command: ${err?.message ?? String(err)}` });
+      return;
+    }
+
+    const stdout = new BoundedCommandOutput();
+    const stderr = new BoundedCommandOutput();
+    let termination: "timeout" | "cancelled" | undefined;
+    let settled = false;
+    let killTimer: NodeJS.Timeout | undefined;
+    const forceStop = (reason: "timeout" | "cancelled") => {
+      if (termination) return;
+      termination = reason;
+      const signalSandbox = (signalName: NodeJS.Signals) => {
+        if (process.platform !== "win32" && child.pid !== undefined) {
+          try {
+            process.kill(-child.pid, signalName);
+          } catch (err: any) {
+            if (err?.code !== "ESRCH") child.kill(signalName);
+          }
+        } else {
+          child.kill(signalName);
+        }
+      };
+      signalSandbox("SIGTERM");
+      killTimer = setTimeout(() => signalSandbox("SIGKILL"), READ_ONLY_COMMAND_KILL_GRACE_MS);
+    };
+    const timer = setTimeout(() => forceStop("timeout"), timeoutMs);
+    const onAbort = () => forceStop("cancelled");
+    const finish = (result: { code: number | null; error?: string }) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      if (killTimer) clearTimeout(killTimer);
+      signal?.removeEventListener("abort", onAbort);
+      const output = stdout.render();
+      const errorOutput = stderr.render();
+      if (termination === "cancelled") {
+        resolve({ success: false, output, error: "Read-only command was cancelled.", cancelled: true });
+      } else if (termination === "timeout") {
+        resolve({ success: false, output, error: `Read-only command timed out after ${timeoutMs / 1000}s.`, timedOut: true });
+      } else if (result.error) {
+        resolve({ success: false, output, error: `Failed to execute read-only command: ${result.error}` });
+      } else if (result.code !== 0) {
+        resolve({ success: false, output, error: errorOutput || `Read-only command exited with code ${result.code}` });
+      } else {
+        resolve({ success: true, output: output.trim() });
+      }
+    };
+
+    child.stdout?.on("data", (chunk: Buffer | string) => {
+      stdout.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+    });
+    child.stderr?.on("data", (chunk: Buffer | string) => {
+      stderr.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+    });
+    child.once("error", (err) => finish({ code: null, error: err.message }));
+    child.once("close", (code) => finish({ code }));
+    signal?.addEventListener("abort", onAbort, { once: true });
+    // Close the race between the initial check and listener registration.
+    if (signal?.aborted) onAbort();
+  });
+}
+
 /** How long a cancelled RPC waits for the runner to confirm the command ended (its grace period is 2 s). */
 const RPC_CANCEL_CONFIRM_MS = 5_000;
 
 export class RustCoreBridge {
   private static activeBridges: Set<RustCoreBridge> = new Set();
   private workspace: string;
+  private workspaceIdentity?: { dev: number; ino: number };
   private defaultShell: string;
   private coreBinaryPath: string | null = null;
   private cargoManifestPath: string;
@@ -554,6 +695,14 @@ export class RustCoreBridge {
     requireSandbox: boolean = false
   ) {
     this.workspace = path.resolve(workspace);
+    try {
+      const workspaceStat = fs.statSync(this.workspace);
+      if (workspaceStat.isDirectory()) {
+        this.workspaceIdentity = { dev: workspaceStat.dev, ino: workspaceStat.ino };
+      }
+    } catch {
+      // Read-only command execution fails closed if the workspace identity is unavailable.
+    }
     this.defaultShell = defaultShell;
     this.cargoManifestPath = path.resolve(__dirname, "../../core/Cargo.toml");
     this.dryRun = dryRun;
@@ -1327,6 +1476,65 @@ export class RustCoreBridge {
         const { wrapSandboxedCommand } = await import("./sandbox.js");
         const configuredMode = typeof this.sandbox === "string" ? (this.sandbox as any) : "auto";
         const mode = this.readOnly && configuredMode === "none" ? "auto" : configuredMode;
+
+        if (this.readOnly) {
+          let workspaceFd: number | undefined;
+          try {
+            const flags = fs.constants.O_RDONLY | (fs.constants.O_DIRECTORY ?? 0);
+            workspaceFd = fs.openSync(this.workspace, flags);
+            const pinnedStat = fs.fstatSync(workspaceFd);
+            if (
+              !pinnedStat.isDirectory() ||
+              !this.workspaceIdentity ||
+              pinnedStat.dev !== this.workspaceIdentity.dev ||
+              pinnedStat.ino !== this.workspaceIdentity.ino
+            ) {
+              return {
+                success: false,
+                output: "",
+                error: "Read-only mode violation: workspace identity changed before command execution.",
+              };
+            }
+
+            const pinnedWorkspace = `/proc/${process.pid}/fd/${workspaceFd}`;
+            if (!isSafeReadOnlyCommand(args.command || "", undefined, pinnedWorkspace)) {
+              return {
+                success: false,
+                output: "",
+                error: "Read-only mode violation: command operands escaped the pinned workspace.",
+              };
+            }
+
+            const sandboxed = wrapSandboxedCommand(args.command || "", this.workspace, {
+              mode,
+              shell: args.shell,
+              readOnlyHost: true,
+              workspaceFd,
+              network: false,
+            });
+            if (!sandboxed.sandboxed || !sandboxed.argv) {
+              return {
+                success: false,
+                output: "",
+                error: `Read-only mode violation: filesystem-isolated shell execution is unavailable. ${sandboxed.warning || "No supported sandbox engine is available."}`,
+              };
+            }
+
+            const timeoutSecs = rpcDeadlines("run_command", args).runnerSecs ?? RUN_COMMAND_DEFAULT_TIMEOUT_SECS;
+            return await runReadOnlySandbox(
+              sandboxed.argv[0],
+              sandboxed.argv.slice(1),
+              workspaceFd,
+              timeoutSecs * 1000,
+              this.turnSignal,
+            );
+          } catch (err: any) {
+            return { success: false, output: "", error: `Read-only command confinement failed: ${err.message}` };
+          } finally {
+            if (workspaceFd !== undefined) fs.closeSync(workspaceFd);
+          }
+        }
+
         const sandboxed = wrapSandboxedCommand(args.command || "", this.workspace, {
           mode,
           shell: args.shell,
