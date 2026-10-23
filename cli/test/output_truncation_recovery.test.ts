@@ -184,9 +184,12 @@ describe("a reply cut off at the output limit", () => {
     });
     const repo = makeRepo();
     const agent = quiet(new AutonomousAgent(cfg(gw.url, repo)));
+    const subagentProviderRecoveryStates: string[] = [];
+    agent.setObserver({ onProviderRecovery: ({ record }) => subagentProviderRecoveryStates.push(record.state) });
     try {
       await agent.runTurn("Delegate writing notes.md to a helper.");
       assert.equal(fs.readFileSync(path.join(repo, "notes.md"), "utf8"), "short notes\n");
+      assert.deepEqual(subagentProviderRecoveryStates, [], "subagent output truncation must not be labeled provider recovery");
     } finally {
       agent.shutdown();
       await gw.close();
