@@ -56,6 +56,23 @@ describe("read-only command path confinement", () => {
     fs.rmSync(root, { recursive: true, force: true });
   });
 
+  test("read-only host confinement rejects Docker path mounts", () => {
+    const workspaceFd = openWorkspaceFd(ws);
+    try {
+      const result = wrapSandboxedCommand("cat inside.txt", ws, {
+        mode: "docker",
+        readOnlyHost: true,
+        workspaceFd,
+      });
+
+      assert.equal(result.sandboxed, false);
+      assert.equal(result.engine, "none");
+      assert.match(result.warning || "", /requires Bubblewrap with a pinned workspace descriptor/);
+    } finally {
+      fs.closeSync(workspaceFd);
+    }
+  });
+
   for (const command of [
     "cat link",
     "cat ./link",
