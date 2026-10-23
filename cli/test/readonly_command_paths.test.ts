@@ -24,8 +24,12 @@ describe("read-only command path confinement", () => {
   fs.writeFileSync(path.join(root, "outside-dir", "secret.txt"), "OUTSIDE DIR SECRET\n");
   fs.symlinkSync(path.join(root, "secret.txt"), path.join(ws, "link"));
   fs.symlinkSync("../secret.txt", path.join(ws, "rel-link"));
+  fs.symlinkSync(path.join(root, "secret.txt"), path.join(ws, "a b"));
   fs.symlinkSync(path.join(ws, "inside.txt"), path.join(ws, "alias"));
   fs.symlinkSync(path.join(root, "outside-dir"), path.join(ws, "outdir"));
+  // A repository may legitimately have a directory symlink with this name; a pattern that merely
+  // mentions it must not be mistaken for a path argument.
+  fs.symlinkSync(path.join(root, "outside-dir"), path.join(ws, "node_modules"));
 
   after(() => {
     fs.rmSync(root, { recursive: true, force: true });
@@ -69,7 +73,44 @@ describe("read-only command path confinement", () => {
     assert.equal(isSafeReadOnlyCommand("cat *", undefined, ws), false);
     assert.equal(isSafeReadOnlyCommand("head *", undefined, ws), false);
     assert.equal(isSafeReadOnlyCommand("grep SECRET *", undefined, ws), false);
+    assert.equal(isSafeReadOnlyCommand("cat li*", undefined, ws), false);
     assert.equal(isSafeReadOnlyCommand("cat '*.txt'", undefined, ws), true);
     assert.equal(isSafeReadOnlyCommand("ls *.txt", undefined, ws), true);
+  });
+
+  test("quoting and concatenation cannot hide an escaping path from the shell words", () => {
+    assert.equal(isSafeReadOnlyCommand("cat 'a b'", undefined, ws), false);
+    assert.equal(isSafeReadOnlyCommand('cat l"ink"', undefined, ws), false);
+    assert.equal(isSafeReadOnlyCommand("cat li'nk'", undefined, ws), false);
+    assert.equal(isSafeReadOnlyCommand(`cat "inside.txt"`, undefined, ws), true);
+  });
+
+  test("recursive symlink-following and pattern-file options are refused", () => {
+    for (const command of [
+      "grep -R SECRET .",
+      "grep --dereference-recursive SECRET .",
+      "grep -Rn SECRET .",
+      "rg --follow SECRET .",
+      "rg -L SECRET .",
+      "find . -follow",
+      "find -L .",
+      "find . -files0-from outside.list",
+      "diff -r . outdir",
+      "grep -f/etc/shadow x",
+      "grep -flink x",
+      "grep -f link x",
+    ]) {
+      assert.equal(isSafeReadOnlyCommand(command, undefined, ws), false, command);
+    }
+  });
+
+  test("a pattern that names an escaping directory symlink is not treated as a path", () => {
+    assert.equal(isSafeReadOnlyCommand("grep node_modules inside.txt", undefined, ws), true);
+    assert.equal(isSafeReadOnlyCommand("rg node_modules inside.txt", undefined, ws), true);
+    assert.equal(isSafeReadOnlyCommand("grep -e 'foo bar' inside.txt", undefined, ws), true);
+  });
+
+  test("an unresolvable workspace fails closed", () => {
+    assert.equal(isSafeReadOnlyCommand("cat link", undefined, "/nonexistent/nexus-workspace"), false);
   });
 });

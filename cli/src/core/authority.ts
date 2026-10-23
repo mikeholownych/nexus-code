@@ -34,6 +34,8 @@ export interface AuthorityConfig {
   grants?: AuthorityGrant[];
   allowedDomains?: string[];
   safeReadOnlyCommandRegex?: RegExp;
+  /** Workspace used to resolve read-only command path arguments. */
+  workspace?: string;
   /** Registry tool names resolve against; defaults to the shared baseline registry. */
   registry?: CapabilityRegistry;
 }
@@ -63,10 +65,118 @@ function hasUnquotedGlob(command: string): boolean {
 }
 
 /**
+ * Split a command into the words the shell will execute. Returns null for an unterminated quote.
+ * Backslash, `$`, backticks and control operators are rejected before this runs, so quotes are the
+ * only shell grammar left to interpret.
+ */
+function splitShellWords(command: string): string[] | null {
+  const words: string[] = [];
+  let current = "";
+  let started = false;
+  let quoteChar = "";
+  for (const ch of command) {
+    if (quoteChar) {
+      if (ch === quoteChar) quoteChar = "";
+      else current += ch;
+      started = true;
+      continue;
+    }
+    if (ch === '"' || ch === "'") {
+      quoteChar = ch;
+      started = true;
+      continue;
+    }
+    if (/\s/.test(ch)) {
+      if (started) {
+        words.push(current);
+        current = "";
+        started = false;
+      }
+      continue;
+    }
+    current += ch;
+    started = true;
+  }
+  if (quoteChar) return null;
+  if (started) words.push(current);
+  return words;
+}
+
+/**
  * Commands that read file contents: a glob is expanded by the shell after the allowlist runs, so
  * `cat *` could still name an escaping symlink. Commands that only list names keep glob support.
  */
 const GLOB_READING_COMMANDS = new Set(["cat", "head", "tail", "grep", "rg", "diff", "wc"]);
+
+/**
+ * Options that make an allowlisted command read files without naming them as a plain argument:
+ * recursive symlink following, an attached path (for example `grep -f/etc/shadow`), and pattern
+ * files. They are refused in read-only mode rather than parsed.
+ */
+function hasUnsafeReadOnlyOption(base: string, words: string[]): boolean {
+  for (const w of words.slice(1)) {
+    if (w.startsWith("-") && w.includes("/")) return true;
+    if (base === "grep" || base === "rg") {
+      if (w === "-f" || w === "--file" || w.startsWith("--file=") || (w.startsWith("-f") && w.length > 2)) {
+        return true;
+      }
+    }
+    if (base === "grep" && (w === "--dereference-recursive" || (/^-[A-Za-z]+$/.test(w) && w.includes("R")))) {
+      return true;
+    }
+    if (base === "rg" && (w === "--follow" || (/^-[A-Za-z]+$/.test(w) && w.includes("L")))) {
+      return true;
+    }
+    if (base === "find" && (w === "-L" || w === "-H" || w === "-follow" || w === "-files0-from" || w.startsWith("-files0-from="))) {
+      return true;
+    }
+    if (base === "diff" && /^-[A-Za-z]*r[A-Za-z]*$/.test(w)) return true;
+  }
+  return false;
+}
+
+/**
+ * Indices of words that name files. For grep/rg the first plain word is the pattern (or the value
+ * after -e/--regexp); for find only the starting point. Everything else that is not an option is a
+ * path for the remaining allowlisted commands.
+ */
+function pathWordIndexes(base: string, words: string[]): Set<number> {
+  const indexes = new Set<number>();
+  if (base === "grep" || base === "rg") {
+    let patternSeen = false;
+    for (let i = 1; i < words.length; i++) {
+      const w = words[i];
+      if (w === "-e" || w === "--regexp") {
+        patternSeen = true;
+        i++;
+        continue;
+      }
+      if (w.startsWith("--regexp=") || (w.startsWith("-e") && w.length > 2)) {
+        patternSeen = true;
+        continue;
+      }
+      if (w.startsWith("-")) continue;
+      if (!patternSeen) {
+        patternSeen = true;
+        continue;
+      }
+      indexes.add(i);
+    }
+    return indexes;
+  }
+  if (base === "find") {
+    for (let i = 1; i < words.length; i++) {
+      if (words[i].startsWith("-")) continue;
+      indexes.add(i);
+      break;
+    }
+    return indexes;
+  }
+  for (let i = 1; i < words.length; i++) {
+    if (!words[i].startsWith("-")) indexes.add(i);
+  }
+  return indexes;
+}
 
 /**
  * Validates whether a shell command is safe to execute under read-only mode.
@@ -102,9 +212,11 @@ export function isSafeReadOnlyCommand(
     return false;
   }
 
-  // A glob expands after this check, so the arguments above never see the real file names.
+  // A glob expands after this check, so the arguments below never see the real file names.
   // Commands that read contents must not rely on it: `cat *` can select an escaping symlink.
-  const baseCommand = trimmed.split(/\s+/)[0].toLowerCase();
+  const words = splitShellWords(trimmed);
+  if (!words || words.length === 0) return false;
+  const baseCommand = words[0].toLowerCase();
   if (GLOB_READING_COMMANDS.has(baseCommand) && hasUnquotedGlob(trimmed)) {
     return false;
   }
@@ -115,28 +227,37 @@ export function isSafeReadOnlyCommand(
     return false;
   }
 
-  // 2b. Path confinement: reject arguments with absolute paths escaping workspace or escaping traversal (..):
-  const rawTokens = trimmed.split(/\s+/);
+  if (hasUnsafeReadOnlyOption(baseCommand, words)) {
+    return false;
+  }
+
+  // 2b. Path confinement: reject arguments with absolute paths escaping workspace or escaping traversal (..).
+  // The words are the shell's words, so a quoted or concatenated symlink name is resolved as written.
   const resolvedWs = workspace ? path.resolve(workspace) : undefined;
   let realWs: string | undefined;
   if (resolvedWs) {
     try {
       realWs = fs.realpathSync(resolvedWs);
     } catch {
-      realWs = undefined;
+      // A workspace was supplied but cannot be resolved: fail closed rather than skip confinement.
+      return false;
     }
   }
-  for (let i = 1; i < rawTokens.length; i++) {
-    const raw = rawTokens[i];
-    // Strip leading/trailing quotes if present
-    const t = raw.replace(/^['"]|['"]$/g, "");
-    const candidatePath = t.includes("=") && t.startsWith("-") ? t.split("=")[1] : t;
-    const withinWorkspace = (target: string): boolean =>
-      Boolean(resolvedWs) && (target === resolvedWs || target.startsWith(resolvedWs + path.sep));
-    if (candidatePath.startsWith("/")) {
-      if (!withinWorkspace(path.resolve(candidatePath))) {
-        return false;
-      }
+  const withinWorkspace = (target: string): boolean =>
+    Boolean(resolvedWs) && (target === resolvedWs || target.startsWith(resolvedWs + path.sep));
+  const pathIndexes = pathWordIndexes(baseCommand, words);
+  for (let i = 1; i < words.length; i++) {
+    let candidatePath = words[i];
+    if (candidatePath.startsWith("-")) {
+      const equals = candidatePath.indexOf("=");
+      if (equals < 0) continue;
+      candidatePath = candidatePath.slice(equals + 1);
+    } else if (!pathIndexes.has(i)) {
+      continue;
+    }
+    if (!candidatePath) continue;
+    if (candidatePath.startsWith("/") && !withinWorkspace(path.resolve(candidatePath))) {
+      return false;
     }
     if (candidatePath.includes("..")) {
       const target = resolvedWs ? path.resolve(resolvedWs, candidatePath) : path.resolve(candidatePath);
@@ -147,7 +268,7 @@ export function isSafeReadOnlyCommand(
     // A lexical check is not enough for a read-only workspace: an in-workspace symlink can point
     // outside it, and the sandbox still exposes host paths read-only. Resolve existing path
     // arguments and refuse any that land outside the workspace's real path.
-    if (realWs && candidatePath && !candidatePath.startsWith("-")) {
+    if (realWs) {
       try {
         const realTarget = fs.realpathSync(path.resolve(resolvedWs!, candidatePath));
         if (realTarget !== realWs && !realTarget.startsWith(realWs + path.sep)) {
@@ -222,12 +343,14 @@ export class AuthorityAdmissionEngine {
   private grants: AuthorityGrant[] = [];
   private allowedDomains: Set<string> | null = null;
   private safeCommandRegex: RegExp = DEFAULT_SAFE_READONLY_COMMAND_REGEX;
+  private workspace?: string;
   private readonly registry: CapabilityRegistry;
 
   constructor(config: AuthorityConfig = {}) {
     this.registry = config.registry ?? defaultRegistry;
     this.fullAccess = Boolean(config.fullAccess);
     this.readOnly = Boolean(config.readOnly);
+    this.workspace = config.workspace;
     this.grants = config.grants ? [...config.grants] : [];
     if (config.allowedDomains && config.allowedDomains.length > 0) {
       this.allowedDomains = new Set(config.allowedDomains);
@@ -300,7 +423,7 @@ export class AuthorityAdmissionEngine {
     if (effectiveReadOnly) {
       if (capability.id === "proc_exec" || capability.id === "command_execution" || toolName === "run_command") {
         const cmd = request.args?.command;
-        if (!isSafeReadOnlyCommand(cmd, this.safeCommandRegex)) {
+        if (!isSafeReadOnlyCommand(cmd, this.safeCommandRegex, this.workspace)) {
           return {
             admitted: false,
             reason: `AUTH-010: Read-only mode violation: Command '${cmd}' is not permitted in read-only mode. Only safe inspection commands are permitted.`,
