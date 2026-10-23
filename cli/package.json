@@ -1,6 +1,6 @@
 {
   "name": "local-code-harness",
-  "version": "1.0.0-rc.3",
+  "version": "1.0.0-rc.4",
   "type": "module",
   "description": "Autonomous local AI coding harness (Codex / Claude-Code style) for LM Studio and vLLM",
   "main": "dist/index.js",
