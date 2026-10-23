@@ -41,3 +41,17 @@ historical and refreshed evidence.
 
 This refresh remains synthetic host-infrastructure evidence. It is not
 custodian acceptance, a held-out run, or RC qualification.
+
+## Refresh on main@a12c070
+
+At `main@a12c07091f15f4e7d581907fab110b0653c4c264`, the same infrastructure-only
+preflight was repeated on `mike-dev` at `2026-10-23T16:20:30Z`. The `--heldout`
+argument pointed to a temporary root-owned directory containing only a
+synthetic marker. The custodian store and private corpus were not accessed. The
+isolated `HOME`, marker store, and detached source worktree were removed after
+the run. All 10 checks passed, including resource enforcement, process-tree
+cleanup, denied access to operator and synthetic-store files, fail-closed
+preflight, and an empty evaluator workspace root. The exact-source JSON and
+stdout are `validate-a12-20261023T162028Z.json` and `.log`; `SHA256SUMS` binds
+both. This remains synthetic infrastructure evidence, not custody acceptance,
+a held-out run, or RC qualification.
