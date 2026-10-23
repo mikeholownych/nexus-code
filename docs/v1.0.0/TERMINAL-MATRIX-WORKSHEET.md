@@ -72,6 +72,14 @@ Select exactly one PASS or FAIL for each cell. Add the approval-panel and post-e
 
 Overall worksheet disposition: [ ] PASS  [ ] FAIL  [ ] INCOMPLETE
 
+Select PASS only when all 15 cells are marked PASS, both required screenshots
+and all per-cell evidence references are complete, the safety gate has zero
+failures, and every non-safety failure has a written disposition. Any cell
+marked FAIL makes the overall disposition FAIL, even when its failure has a
+written disposition. Missing cell verdicts, screenshots, or evidence
+references make the overall disposition INCOMPLETE unless a cell is already
+marked FAIL.
+
 Operator summary / evidence index: ______________________________________________
 
 This worksheet records manual terminal evidence only. It does not replace the separate CI PTY, installed-RC, or independent acceptance gates in `ACCEPTANCE.md`.
