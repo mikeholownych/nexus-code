@@ -144,6 +144,61 @@ describe("WP-04: Candidate Identity & Validation Binding (INC-05, DEC-02)", () =
     assert.strictEqual(cleanedId, baselineId, "Removing untracked file must restore baseline candidateId");
   });
 
+  test("candidate identity hashes nested repository worktree files but excludes nested Git history", () => {
+    const tracker = new CandidateTracker();
+    const nestedRepo = path.join(rootGit, "nested-repo");
+    const nestedFile = path.join(nestedRepo, "src", "candidate.ts");
+    const externalTarget = path.join(tmpRoot, "external-target.txt");
+    const nestedLink = path.join(nestedRepo, "external-link");
+    const source = "export const candidate = 'one';\n";
+
+    try {
+      initGitRepo(nestedRepo);
+      fs.mkdirSync(path.dirname(nestedFile), { recursive: true });
+      fs.writeFileSync(nestedFile, source);
+      fs.writeFileSync(externalTarget, "external version one\n");
+      fs.symlinkSync(path.relative(nestedRepo, externalTarget), nestedLink);
+      execFileSync("git", ["add", "-A"], { cwd: nestedRepo, stdio: "ignore" });
+      execFileSync("git", ["commit", "-m", "nested candidate"], { cwd: nestedRepo, stdio: "ignore" });
+
+      const initial = tracker.computeCandidateIdentitySync(rootGit);
+      assert.ok(initial.untrackedFiles.some((entry) => entry.path === "nested-repo/src/candidate.ts"));
+      assert.strictEqual(initial.untrackedFiles.find((entry) => entry.path === "nested-repo/external-link")?.mode, "120000");
+      assert.ok(initial.untrackedFiles.every((entry) => !entry.path.startsWith("nested-repo/.git/")));
+
+      fs.writeFileSync(externalTarget, "external version two\n");
+      assert.strictEqual(
+        tracker.computeCandidateIdentitySync(rootGit).candidateId,
+        initial.candidateId,
+        "Candidate identity hashes symlink text without reading its external target",
+      );
+
+      fs.writeFileSync(nestedFile, "export const candidate = 'two';\n");
+      const changed = tracker.computeCandidateIdentitySync(rootGit);
+      assert.notStrictEqual(changed.candidateId, initial.candidateId, "Nested worktree content must change candidate identity");
+
+      fs.writeFileSync(nestedFile, source);
+      execFileSync("git", ["commit", "--allow-empty", "-m", "history only"], { cwd: nestedRepo, stdio: "ignore" });
+      const historyOnly = tracker.computeCandidateIdentitySync(rootGit);
+      assert.strictEqual(historyOnly.candidateId, initial.candidateId, "Nested repository history metadata must not affect worktree identity");
+    } finally {
+      fs.rmSync(nestedRepo, { recursive: true, force: true });
+      fs.rmSync(externalTarget, { force: true });
+    }
+  });
+
+  test("candidate identity fails closed on special files inside an untracked directory", () => {
+    if (process.platform === "win32") return;
+    const specialDir = path.join(rootGit, "special-candidate-dir");
+    try {
+      initGitRepo(specialDir);
+      execFileSync("mkfifo", [path.join(specialDir, "pipe")]);
+      assert.throws(() => computeCandidateIdentitySync(rootGit), /Unsupported filesystem object type/);
+    } finally {
+      fs.rmSync(specialDir, { recursive: true, force: true });
+    }
+  });
+
   test("Property E: Git-ignored build artifacts are excluded from candidate identity", () => {
     const tracker = new CandidateTracker();
     const baselineId = tracker.computeCandidateIdentitySync(rootGit).candidateId;

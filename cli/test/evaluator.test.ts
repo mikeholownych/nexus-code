@@ -10,7 +10,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import { execFileSync } from "node:child_process";
 
-import { BenchmarkEvaluator, SweBenchInstance } from "../src/evaluator.js";
+import { BenchmarkEvaluator, recordEvaluationReceiptIfIdentified, SweBenchInstance } from "../src/evaluator.js";
 import { CandidateTracker } from "../src/core/candidate.js";
 import { WorktreeManager } from "../src/worktree.js";
 
@@ -101,6 +101,21 @@ describe("WP-04: Evaluator Candidate Binding (VER-001, VER-005, F-02)", () => {
     } finally {
       fs.writeFileSync(mathFile, orig);
     }
+  });
+
+  test("evaluator does not issue a passed receipt when candidate identity is unresolved", () => {
+    const tracker = new CandidateTracker();
+    const unresolvedReceipt = recordEvaluationReceiptIfIdentified(
+      tracker,
+      undefined,
+      true,
+      "npm test",
+      "all tests passed",
+      "synthetic-unresolved-candidate",
+    );
+
+    assert.strictEqual(unresolvedReceipt, undefined);
+    assert.strictEqual(tracker.getActiveReceipt("UNRESOLVED_CANDIDATE"), null);
   });
 
   test("Evaluator scorecard renders summary metrics", () => {

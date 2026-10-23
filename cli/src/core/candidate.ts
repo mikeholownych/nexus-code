@@ -67,6 +67,11 @@ export interface CandidateComputeOptions {
   materialDependencies?: MaterialValidationDependency[];
 }
 
+const MAX_CANDIDATE_ENTRIES = 100_000;
+const MAX_CANDIDATE_FILE_BYTES = 256 * 1024 * 1024;
+const MAX_CANDIDATE_TOTAL_BYTES = 1024 * 1024 * 1024;
+const MAX_CANDIDATE_DIRECTORY_DEPTH = 128;
+
 export interface CandidateValidationDecision {
   valid: boolean;
   currentCandidateId?: string;
@@ -117,8 +122,14 @@ export function resolveFileCandidateDetails(fullPath: string): EntryStructuralDe
       };
     }
     if (lstat.isFile()) {
+      if (lstat.size > MAX_CANDIDATE_FILE_BYTES) {
+        throw new Error(`Candidate file exceeds ${MAX_CANDIDATE_FILE_BYTES} byte limit: ${fullPath}`);
+      }
       const isExec = (lstat.mode & 0o111) !== 0;
       const buf = fs.readFileSync(fullPath);
+      if (buf.length > MAX_CANDIDATE_FILE_BYTES) {
+        throw new Error(`Candidate file exceeds ${MAX_CANDIDATE_FILE_BYTES} byte limit: ${fullPath}`);
+      }
       return {
         mode: isExec ? "100755" : "100644",
         contentHash: hashContent(buf),
@@ -223,6 +234,55 @@ function computeGitCandidateIdentity(
 
   const trackedEntriesMap = new Map<string, FileCandidateEntry>();
   const untrackedEntriesMap = new Map<string, FileCandidateEntry>();
+  const untrackedBudget = { entries: 0, bytes: 0 };
+
+  function recordUntrackedEntry(): void {
+    untrackedBudget.entries += 1;
+    if (untrackedBudget.entries > MAX_CANDIDATE_ENTRIES) {
+      throw new Error(`Candidate manifest exceeds ${MAX_CANDIDATE_ENTRIES} entry limit`);
+    }
+  }
+
+  function addUntrackedFile(fullPath: string, posixPath: string): void {
+    const details = resolveFileCandidateDetails(fullPath);
+    if (details.isDeleted) return;
+    recordUntrackedEntry();
+    untrackedBudget.bytes += details.size;
+    if (untrackedBudget.bytes > MAX_CANDIDATE_TOTAL_BYTES) {
+      throw new Error(`Candidate manifest exceeds ${MAX_CANDIDATE_TOTAL_BYTES} byte limit`);
+    }
+    untrackedEntriesMap.set(posixPath, {
+      path: posixPath,
+      mode: details.mode,
+      contentHash: details.contentHash,
+      size: details.size,
+      status: "untracked",
+    });
+  }
+
+  function walkUntrackedDirectory(directoryPath: string, relativePath: string, depth: number): void {
+    if (depth > MAX_CANDIDATE_DIRECTORY_DEPTH) {
+      throw new Error(`Candidate directory depth exceeds ${MAX_CANDIDATE_DIRECTORY_DEPTH}: ${relativePath}`);
+    }
+    recordUntrackedEntry();
+    const children = fs.readdirSync(directoryPath, { withFileTypes: true }).sort((a, b) =>
+      a.name.localeCompare(b.name)
+    );
+    for (const child of children) {
+      // Nested repository history and metadata are deliberately outside candidate identity.
+      if (child.name === ".git") continue;
+      const fullPath = path.join(directoryPath, child.name);
+      const childRelativePath = `${relativePath}/${child.name}`;
+      const details = fs.lstatSync(fullPath);
+      if (details.isDirectory()) {
+        walkUntrackedDirectory(fullPath, childRelativePath, depth + 1);
+      } else if (details.isFile() || details.isSymbolicLink()) {
+        addUntrackedFile(fullPath, childRelativePath);
+      } else {
+        throw new Error(`Unsupported filesystem object type in candidate directory at: ${childRelativePath}`);
+      }
+    }
+  }
 
   // 1. If baseRef is provided and differs from worktree HEAD, inspect committed differences on branch
   if (options.baseRef && options.baseRef !== "HEAD") {
@@ -321,21 +381,14 @@ function computeGitCandidateIdentity(
           rawFile = rawFile.slice(1, -1);
         }
 
-        const posixPath = rawFile.split(path.sep).join("/");
+        const posixPath = rawFile.split(path.sep).join("/").replace(/\/+$/, "");
         const fullPath = path.join(workspacePath, rawFile);
 
         if (code === "??") {
           if (includeUntracked) {
-            const details = resolveFileCandidateDetails(fullPath);
-            if (!details.isDeleted) {
-              untrackedEntriesMap.set(posixPath, {
-                path: posixPath,
-                mode: details.mode,
-                contentHash: details.contentHash,
-                size: details.size,
-                status: "untracked",
-              });
-            }
+            const details = fs.lstatSync(fullPath);
+            if (details.isDirectory()) walkUntrackedDirectory(fullPath, posixPath, 1);
+            else addUntrackedFile(fullPath, posixPath);
           }
         } else {
           // Tracked modification (staged or unstaged or typechange or deletion)
@@ -387,6 +440,14 @@ function computeGitCandidateIdentity(
   const untrackedFiles = Array.from(untrackedEntriesMap.values()).sort((a, b) =>
     a.path.localeCompare(b.path)
   );
+  const manifestEntries = [...trackedChanges, ...untrackedFiles];
+  if (manifestEntries.length > MAX_CANDIDATE_ENTRIES) {
+    throw new Error(`Candidate manifest exceeds ${MAX_CANDIDATE_ENTRIES} entry limit`);
+  }
+  const totalManifestBytes = manifestEntries.reduce((total, entry) => total + entry.size, 0);
+  if (totalManifestBytes > MAX_CANDIDATE_TOTAL_BYTES) {
+    throw new Error(`Candidate manifest exceeds ${MAX_CANDIDATE_TOTAL_BYTES} byte limit`);
+  }
 
   const manifestLines: string[] = [];
   for (const entry of trackedChanges) {
@@ -439,17 +500,30 @@ function computeNonGitCandidateIdentity(
     }
   }
 
-  function walk(currentDir: string): void {
+  let visitedEntries = 0;
+  let totalBytes = 0;
+  function walk(currentDir: string, depth: number): void {
+    if (depth > MAX_CANDIDATE_DIRECTORY_DEPTH) {
+      throw new Error(`Candidate directory depth exceeds ${MAX_CANDIDATE_DIRECTORY_DEPTH}`);
+    }
     const items = fs.readdirSync(currentDir, { withFileTypes: true });
     for (const item of items) {
       if (defaultExcludes.has(item.name)) continue;
+      visitedEntries += 1;
+      if (visitedEntries > MAX_CANDIDATE_ENTRIES) {
+        throw new Error(`Candidate manifest exceeds ${MAX_CANDIDATE_ENTRIES} entry limit`);
+      }
       const fullPath = path.join(currentDir, item.name);
       if (item.isDirectory()) {
-        walk(fullPath);
+        walk(fullPath, depth + 1);
       } else if (item.isFile() || item.isSymbolicLink()) {
         const relPath = toPosixRelativePath(workspacePath, fullPath);
         const details = resolveFileCandidateDetails(fullPath);
         if (!details.isDeleted) {
+          totalBytes += details.size;
+          if (totalBytes > MAX_CANDIDATE_TOTAL_BYTES) {
+            throw new Error(`Candidate manifest exceeds ${MAX_CANDIDATE_TOTAL_BYTES} byte limit`);
+          }
           allEntries.push({
             path: relPath,
             mode: details.mode,
@@ -465,7 +539,7 @@ function computeNonGitCandidateIdentity(
     }
   }
 
-  walk(workspacePath);
+  walk(workspacePath, 0);
   allEntries.sort((a, b) => a.path.localeCompare(b.path));
 
   const manifestLines = allEntries.map(
