@@ -79,6 +79,8 @@ jobs:
   linux-x86_64:
     needs: [test-matrix]
     runs-on: ubuntu-22.04
+    env:
+      NEXUS_BUILD_CONTAINER_IMAGE: rust:1.95.0-bookworm@sha256:4c2fd73ef19c5ef9d54bee03b06b2839a392604fbfcd578ed948b71b37c1d7fb
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - run: sudo apt-get update && sudo apt-get install --yes acl make bubblewrap build-essential meson ninja-build pkg-config libcap-dev

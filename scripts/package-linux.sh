@@ -4,21 +4,65 @@ set -euo pipefail
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 VERSION=${1:?usage: package-linux.sh VERSION OUTPUT_DIR}
 OUT=${2:?usage: package-linux.sh VERSION OUTPUT_DIR}
+APPROVED_RUST_BUILD_IMAGE='rust:1.95.0-bookworm@sha256:4c2fd73ef19c5ef9d54bee03b06b2839a392604fbfcd578ed948b71b37c1d7fb'
 case "$VERSION" in v[0-9]*.[0-9]*.[0-9]*) ;; *) echo "version must look like v1.2.3" >&2; exit 2 ;; esac
+if [[ -z "${NEXUS_BUILD_CONTAINER_IMAGE:-}" ]]; then
+  if [[ "${NEXUS_ALLOW_HOST_RUST_BUILD:-}" != "1" ]]; then
+    echo "NEXUS_BUILD_CONTAINER_IMAGE must use the approved digest-pinned Rust 1.95 Bookworm builder (set NEXUS_ALLOW_HOST_RUST_BUILD=1 only for local development)" >&2
+    exit 2
+  fi
+elif [[ "$NEXUS_BUILD_CONTAINER_IMAGE" != "$APPROVED_RUST_BUILD_IMAGE" ]]; then
+  echo "NEXUS_BUILD_CONTAINER_IMAGE must use the approved digest-pinned Rust 1.95 Bookworm builder" >&2
+  exit 2
+fi
 mkdir -p "$OUT"
 WORK=$(mktemp -d)
 trap 'rm -rf "$WORK"' EXIT
 
 npm --prefix "$ROOT/cli" ci
 npm --prefix "$ROOT/cli" run build
-cargo build --locked --release --manifest-path "$ROOT/core/Cargo.toml" --bin harness-core --bin nexus-tui
+
+if [[ -n "${NEXUS_BUILD_CONTAINER_IMAGE:-}" ]]; then
+  if [[ ! "$NEXUS_BUILD_CONTAINER_IMAGE" =~ @sha256:[0-9a-f]{64}$ ]]; then
+    echo "NEXUS_BUILD_CONTAINER_IMAGE must be pinned by sha256 digest" >&2
+    exit 2
+  fi
+  command -v docker >/dev/null || { echo "docker is required for the pinned Rust build image" >&2; exit 2; }
+  mkdir -p "$WORK/rust-build"
+  docker run --rm --pull=always --platform linux/amd64 \
+    --user "$(id -u):$(id -g)" \
+    --mount "type=bind,src=$ROOT,dst=/nexus-source,readonly" \
+    --mount "type=bind,src=$WORK/rust-build,dst=/nexus-build" \
+    --workdir /nexus-source \
+    --env HOME=/tmp/nexus-package-build-home \
+    --env CARGO_HOME=/nexus-build/cargo-home \
+    --env CARGO_TARGET_DIR=/nexus-build/target \
+    --env RUSTUP_HOME=/usr/local/rustup \
+    "$NEXUS_BUILD_CONTAINER_IMAGE" \
+    cargo build --locked --release --manifest-path /nexus-source/core/Cargo.toml --bin harness-core --bin nexus-tui
+  RUST_CORE_TARGET="$WORK/rust-build/target/release"
+else
+  cargo build --locked --release --manifest-path "$ROOT/core/Cargo.toml" --bin harness-core --bin nexus-tui
+  RUST_CORE_TARGET="$ROOT/core/target/release"
+fi
 
 PKG="$WORK/nexus"
 mkdir -p "$PKG/bin" "$PKG/lib/core" "$PKG/lib/cli"
 cp -R "$ROOT/cli/dist" "$PKG/lib/cli/dist"
 cp "$ROOT/cli/package.json" "$ROOT/cli/package-lock.json" "$PKG/lib/cli/"
 npm ci --omit=dev --prefix "$PKG/lib/cli"
-cp "$ROOT/core/target/release/harness-core" "$ROOT/core/target/release/nexus-tui" "$PKG/lib/core/"
+cp "$RUST_CORE_TARGET/harness-core" "$RUST_CORE_TARGET/nexus-tui" "$PKG/lib/core/"
+command -v readelf >/dev/null || { echo "readelf is required to verify package glibc compatibility" >&2; exit 2; }
+for binary in "$PKG/lib/core/harness-core" "$PKG/lib/core/nexus-tui"; do
+  required_glibc=$(readelf --version-info --wide "$binary" | grep -oE 'Name: GLIBC_[0-9]+(\.[0-9]+)+' | sed 's/.*GLIBC_//' | sort -V | tail -n 1)
+  if [[ -n "$required_glibc" ]]; then
+    IFS=. read -r glibc_major glibc_minor _ <<< "$required_glibc"
+    if (( glibc_major > 2 || (glibc_major == 2 && glibc_minor > 35) )); then
+      echo "$binary requires GLIBC_$required_glibc, above the GLIBC_2.35 compatibility ceiling" >&2
+      exit 1
+    fi
+  fi
+done
 cp "$ROOT/LICENSE" "$PKG/LICENSE"
 printf '%s\n' "$VERSION" > "$PKG/VERSION"
 
