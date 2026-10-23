@@ -1,0 +1,17 @@
+Nexus v1.0.0 exact-main post-merge CI and CodeQL
+
+Source SHA: fa16045a6351ce61763bc3fcc93b562c50849285
+PR: #152, merged 2026-10-23T01:38:01Z
+Observed: 2026-10-23T02:11:19Z
+
+CI run 39885102002: SUCCESS on exact source SHA.
+- test-matrix (24): SUCCESS, 2026-10-23T01:38:06Z to 01:53:51Z
+- test-matrix (22): SUCCESS, 2026-10-23T01:38:06Z to 01:54:15Z
+- linux-x86_64: SUCCESS, 2026-10-23T01:54:17Z to 02:11:18Z
+  Includes package build, deterministic package/SBOM comparison, smoke and installer smoke.
+  https://github.com/mikeholownych/nexus-code/actions/runs/39885102002
+
+CodeQL run 39885101945: SUCCESS on the same source SHA, completed 2026-10-23T01:41:15Z.
+https://github.com/mikeholownych/nexus-code/actions/runs/39885101945
+
+These are source CI and static-analysis results. They do not establish installed-RC qualification or release acceptance.
