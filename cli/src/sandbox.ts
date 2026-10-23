@@ -344,6 +344,14 @@ export function wrapSandboxedCommand(
 
   // 2. Try Docker container isolation
   if (mode === "docker" || (mode === "auto" && isDockerAvailable())) {
+    if (options.readOnlyHost) {
+      return {
+        command: cmd,
+        sandboxed: false,
+        engine: "none",
+        warning: "Read-only host confinement requires Bubblewrap with a pinned workspace descriptor; Docker path mounts are not supported.",
+      };
+    }
     if (!isDockerAvailable() && mode === "docker") {
       return {
         command: cmd,
