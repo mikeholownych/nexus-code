@@ -18,6 +18,16 @@ describe("tar symlink target confinement", () => {
     }
   });
 
+  test("rejects a target that traverses above the root and returns", () => {
+    for (const link of [
+      "../../../nexus/file",
+      "..\\..\\..\\nexus\\file",
+      "../../nexus/file",
+    ]) {
+      assert.equal(isSymlinkSafe(link, "nexus/link").safe, false, link);
+    }
+  });
+
   test("allows targets that stay inside the package root", () => {
     assert.equal(isSymlinkSafe("../inside", "nexus/dir/link").safe, true);
     assert.equal(isSymlinkSafe("..\\inside", "nexus/dir/link").safe, true);

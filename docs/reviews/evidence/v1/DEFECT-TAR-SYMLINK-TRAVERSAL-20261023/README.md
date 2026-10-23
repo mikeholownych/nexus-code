@@ -21,23 +21,37 @@ isSymlinkSafe("sub\\..\\..\\..\\outside", "nexus/dir/link") // { safe: true }
 const resolved = path.normalize(path.join("/", entryDir, linkname)).replace(/\\/g, "/");
 ```
 
-`normalize` ran while the backslashes were still literal characters, so it did not collapse the
-`..` segments. The later replacement produced `..` segments that the first-segment check ignored.
+Two related errors: `normalize` ran while the backslashes were still literal characters, so it did
+not collapse the `..` segments; and joining under an absolute fake root let `..` clamp at `/`, so a
+target such as `../../../nexus/file` "escaped and returned" lexically and passed while the real link
+resolved above the package root.
 
 ## Fix
 
-Normalize separators before joining/normalizing, using the platform-independent POSIX path
-implementation, and reject any remaining `..` segment:
+Resolve from the package-relative entry directory after converting separators, so `..` segments are
+preserved for the check:
 
 ```ts
 const entryDir = path.posix.dirname(entryPath.replace(/\\/g, "/"));
-const resolved = path.posix.normalize(path.posix.join("/", entryDir, linkname.replace(/\\/g, "/")));
+const resolved = path.posix.normalize(path.posix.join(entryDir, linkname.replace(/\\/g, "/")));
 ```
+
+Reject an empty resolution, a first segment other than `expectedRoot`, or any remaining `..` segment.
+This rejects both `..\..\outside` and the escape-and-return spelling; in-root targets such as
+`../inside`, `..\inside`, `nexus/file` and `../nexus/file` from `nexus/link` still pass.
 
 ## Verification
 
-- New `cli/test/tar_safety.test.ts`: 3/3 pass.
-- The traversal test fails on the pre-fix source at `..\..\outside` (returned safe) and passes now.
-- In-root backslash targets (`..\inside`) and normal relative targets still pass; absolute targets and
-  drive letters remain rejected.
-- `npx tsc --noEmit -p tsconfig.json`: pass; `git diff --check`: pass.
+- New `cli/test/tar_safety.test.ts`: 4/4 pass.
+- The traversal and escape-and-return tests fail on the pre-fix source; the escape-and-return test
+  also fails on the intermediate absolute-root implementation.
+- In-root backslash targets and normal relative targets still pass; absolute targets and drive letters
+  remain rejected.
+- `npx tsc --noEmit -p tsconfig.json`: pass (source tree only; `cli/tsconfig.json` does not include tests).
+- `git diff --check`: pass.
+
+## Residual risk
+
+A symlink target that is a genuinely literal filename containing backslashes (`..\..\notes`) is now
+treated as a traversal on Linux and rejected; that is deliberate for cross-separator consistency.
+Bidi/zero-width and non-path archive metadata are out of scope.
