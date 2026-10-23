@@ -14,6 +14,7 @@ import { fileURLToPath } from "node:url";
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 const SCRIPT = path.join(ROOT, "scripts/repro-identity.mjs");
 const PACKAGE_SCRIPT = path.join(ROOT, "scripts/package-linux.sh");
+const MAKEFILE = path.join(ROOT, "Makefile");
 const COMMIT = "a".repeat(40);
 const APPROVED_RUST_IMAGE = "rust:1.95.0-bookworm@sha256:4c2fd73ef19c5ef9d54bee03b06b2839a392604fbfcd578ed948b71b37c1d7fb";
 
@@ -82,4 +83,12 @@ test("Linux packaging rejects an omitted pinned builder unless host builds are e
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
+});
+
+test("Makefile reproducibility gate uses the approved builder for both package builds", () => {
+  const makefile = fs.readFileSync(MAKEFILE, "utf8");
+  assert.ok(makefile.includes(`APPROVED_RUST_BUILD_IMAGE := ${APPROVED_RUST_IMAGE}`));
+  const reproducibilityTarget = makefile.slice(makefile.indexOf("verify-reproducibility:"));
+  const packageCalls = reproducibilityTarget.match(/NEXUS_BUILD_CONTAINER_IMAGE=\$\(APPROVED_RUST_BUILD_IMAGE\) bash scripts\/package-linux\.sh/g) ?? [];
+  assert.equal(packageCalls.length, 2, "both reproducibility builds must use the approved digest-pinned Rust builder");
 });
