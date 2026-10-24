@@ -35,6 +35,8 @@ size refusal does not depend on the parser's.
   outline test pins its own read path rather than relying on the parser's error.
 - `test_cst_accepts_the_read_limit_and_empty_files` pins the exact 8 MB boundary (still parsed/outlined), a zero-byte
   file, and their line/symbol counts.
+- `test_cst_handles_newline_dense_file_at_read_limit_without_line_allocations` exercises an 8 MB newline-dense input,
+  which previously expanded into millions of separately allocated `String` values.
 - Existing symbol-parsing/outline test still passes; full `cargo test --bin harness-core` 40/40; `cargo check` has no
   warnings.
 - `cargo check --bin harness-core` has no unused-import warning; `git diff --check`: pass.
@@ -45,6 +47,7 @@ size refusal does not depend on the parser's.
   total work is proportional to workspace size (each individual file is now capped). Directory scans use
   `if let Ok(syms)`, so an oversized file inside a directory is silently omitted (the same path passed as a file
   returns the 8 MB error).
-- The bounded text and its line vector are retained together while parsing, so peak memory at the cap is somewhat
-  above the file size; an 8 MB file no longer scales with larger input.
+- Parsing now walks borrowed lines and retains only a nine-line signature lookahead window; documentation text is
+  accumulated in one string instead of a per-line vector. Peak memory still includes the bounded source, parsed
+  symbols and their output strings, so it scales with both input size and declaration count.
 - Query filtering still happens after parsing; the whole (bounded) file is parsed even when only one symbol matches.
