@@ -56,7 +56,7 @@ export function ensureGitExclude(workspace: string): void {
     const lines = content.split(/\r?\n/);
     const rules = new Set(lines);
     const hasExactRule = rules.has(rule) || rules.has(`/${rule}`);
-    if (isIgnored(relativePath)) continue;
+    if (hasExactRule && isIgnored(relativePath)) continue;
 
     if (hasExactRule) {
       const lastExactRule = Math.max(lines.lastIndexOf(rule), lines.lastIndexOf(`/${rule}`));
