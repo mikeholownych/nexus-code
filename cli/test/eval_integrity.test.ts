@@ -651,6 +651,146 @@ test("resource contract: candidate memory, processes, storage and CPU are kernel
   }
 });
 
+test("candidate sandbox and resource supervisor compose around a staged repository", { timeout: 30_000 }, async () => {
+  const { stageRepoWorkspace } = await import(path.join(ROOT, "eval/workspace.mjs"));
+  const { agentSandboxArgv } = await import(path.join(ROOT, "eval/isolate.mjs"));
+  const { resourceConfigProblem, spawnContained } = await import(path.join(ROOT, "eval/resources.mjs"));
+  assert.equal((await import(path.join(ROOT, "eval/isolate.mjs"))).sandboxAvailable(), true, "this security test requires the real Bubblewrap executable");
+
+  let base: string | null = null;
+  let workspace: string | null = null;
+  let contained: ReturnType<typeof spawnContained> | null = null;
+  let childClosed: Promise<void> | null = null;
+  let candidateProcessClosed = false;
+  let shutdownComplete = false;
+  let executionStarted = false;
+  let candidateSpawnError: Error | undefined;
+  let timedOut = false;
+  try {
+    base = fs.mkdtempSync(path.join(os.tmpdir(), "eval-contained-candidate-"));
+    const profile = JSON.parse(fs.readFileSync(path.join(ROOT, "eval/host/resource-profile.json"), "utf8"));
+    const workspaceRoot = process.env.NEXUS_EVAL_TEST_WORKSPACE_ROOT ?? profile.workspaceRoot;
+    const resources = {
+      cpuPercent: profile.cpuPercent,
+      memoryBytes: profile.memoryBytes,
+      tasks: profile.tasks,
+      storageBytes: profile.storageBytes,
+      workspaceRoot,
+    };
+    assert.equal(resourceConfigProblem(resources), null, "the test requires the configured dedicated tmpfs resource boundary");
+    workspace = fs.mkdtempSync(path.join(workspaceRoot, "eval-contained-candidate-ws-"));
+    const fixtureBase = base;
+    const fixtureWorkspace = workspace;
+    const env = { PATH: "/usr/bin:/bin", HOME: fixtureBase, GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: "/dev/null", GIT_TERMINAL_PROMPT: "0" };
+    const git = (cwd: string, ...argv: string[]) => {
+      const result = spawnSync("git", ["-c", "user.name=fixture", "-c", "user.email=fixture@example.invalid", "-c", "init.defaultBranch=main", ...argv], { cwd, env, encoding: "utf8" });
+      assert.equal(result.status, 0, result.stderr);
+      return result.stdout.trim();
+    };
+    const upstream = path.join(fixtureBase, "upstream");
+    fs.mkdirSync(upstream);
+    git(upstream, "init", "-q");
+    fs.writeFileSync(path.join(upstream, "input.txt"), "baseline-input\n");
+    git(upstream, "add", "-A");
+    git(upstream, "commit", "-qm", "baseline");
+    const baseline = git(upstream, "rev-parse", "HEAD");
+    fs.writeFileSync(path.join(upstream, "input.txt"), "SYNTHETIC_FUTURE_SOLUTION_CANARY_71ad\n");
+    git(upstream, "commit", "-qam", "synthetic future solution");
+    const future = git(upstream, "rev-parse", "HEAD");
+    const cache = path.join(fixtureBase, "cache");
+    git(fixtureBase, "clone", "-q", "--no-checkout", upstream, cache);
+
+    const staged = path.join(fixtureWorkspace, "repo");
+    stageRepoWorkspace(cache, baseline, staged);
+    const candidateHome = path.join(fixtureWorkspace, "home");
+    const proxyDirectory = path.join(fixtureWorkspace, "proxy");
+    fs.mkdirSync(candidateHome);
+    fs.mkdirSync(proxyDirectory);
+    const externalCanary = path.join(fixtureBase, "synthetic-private-validator.txt");
+    fs.writeFileSync(externalCanary, "SYNTHETIC_EXTERNAL_VALIDATOR_CANARY_9c32");
+    const readyMarker = path.join(staged, "descendant-ready");
+    const lateMarker = path.join(staged, "descendant-survived");
+    const nodeRuntime = process.execPath;
+    const sandbox = agentSandboxArgv({
+      cwd: staged,
+      home: candidateHome,
+      proxyDirectory,
+      readOnlyPaths: [nodeRuntime],
+      runtimeExecutablePaths: [nodeRuntime],
+      supervisorPath: path.join(ROOT, "eval/agent_sandbox.mjs"),
+    });
+
+    // This descendant deliberately outlives the candidate command. The resource supervisor must reap it after the
+    // production candidate sandbox exits, while the candidate only receives the staged baseline and no host canary.
+    const candidate = `const fs=require('node:fs'),cp=require('node:child_process');const git=(args)=>cp.spawnSync('git',args,{cwd:'/workspace',encoding:'utf8',env:{PATH:'/usr/bin:/bin',HOME:'/home/eval',GIT_CONFIG_NOSYSTEM:'1',GIT_CONFIG_GLOBAL:'/dev/null'}});const baseline=git(['rev-parse','HEAD']),future=git(['cat-file','-p',process.argv[1]]),source=fs.readFileSync('/workspace/input.txt','utf8');let externalReadable=false;try{fs.readFileSync(process.argv[2],'utf8');externalReadable=true}catch{};const child=cp.spawn(process.execPath,['-e',\`const fs=require('node:fs');fs.writeFileSync(process.argv[1],'ready');setTimeout(()=>fs.writeFileSync(process.argv[2],'survived'),2500)\`,process.argv[3],process.argv[4]],{detached:true,stdio:'ignore'});child.unref();const deadline=Date.now()+5000;while(!fs.existsSync(process.argv[3])&&Date.now()<deadline)Atomics.wait(new Int32Array(new SharedArrayBuffer(4)),0,0,10);console.log(JSON.stringify({head:baseline.stdout.trim(),headStatus:baseline.status,source,futureStatus:future.status,externalReadable,ready:fs.existsSync(process.argv[3])}))`;
+    const execution = spawnContained(sandbox, resources, { cwd: "/", env: {}, stdio: ["pipe", "pipe", "pipe"], detached: true });
+    contained = execution;
+    executionStarted = true;
+    let stdout = "";
+    let stderr = "";
+    execution.child.stdout.setEncoding("utf8").on("data", (chunk) => { stdout += chunk; });
+    execution.child.stderr.setEncoding("utf8").on("data", (chunk) => { stderr += chunk; });
+    childClosed = new Promise<void>((resolve) => {
+      execution.child.once("error", (error) => { candidateSpawnError = error; });
+      execution.child.once("close", () => { candidateProcessClosed = true; resolve(); });
+    });
+    execution.child.stdin.end(JSON.stringify({ command: nodeRuntime, argv: ["-e", candidate, `${future}^{commit}`, externalCanary, "/workspace/descendant-ready", "/workspace/descendant-survived"], env: { PATH: "/usr/bin:/bin" } }));
+    let timeout: NodeJS.Timeout;
+    await Promise.race([
+      childClosed,
+      new Promise<void>((resolve) => {
+        timeout = setTimeout(() => { timedOut = true; execution.containment?.kill(); resolve(); }, 20_000);
+      }),
+    ]);
+    clearTimeout(timeout!);
+    if (timedOut) {
+      await Promise.race([childClosed, new Promise((resolve) => setTimeout(resolve, 15_000))]);
+    }
+    assert.equal(candidateProcessClosed, true, "contained candidate did not shut down after timeout/kill");
+    assert.equal(candidateSpawnError, undefined, candidateSpawnError?.message);
+    const final = await execution.containment!.final;
+    shutdownComplete = final?.cleaned === true;
+    assert.ok(final, `resource supervisor did not report: ${stderr}`);
+    assert.equal(timedOut, false, "contained candidate timed out");
+    assert.equal(final.error, undefined, JSON.stringify(final));
+    assert.equal(final.exitCode, 0, `${stderr}\n${stdout}\n${JSON.stringify(final)}`);
+    assert.equal(final.limits["cpu.max"], `${resources.cpuPercent * 1000} 100000`);
+    assert.equal(final.limits["memory.max"], String(resources.memoryBytes));
+    assert.equal(final.limits["memory.swap.max"], "0");
+    assert.equal(final.limits["pids.max"], String(resources.tasks));
+    assert.equal(final.cleaned, true, JSON.stringify(final));
+
+    const observed = JSON.parse(stdout.trim());
+    assert.equal(observed.headStatus, 0);
+    assert.equal(observed.head, baseline, "candidate did not run in the staged baseline workspace");
+    assert.equal(observed.source, "baseline-input\n", "candidate did not receive the approved task input");
+    assert.notEqual(observed.futureStatus, 0, "candidate retrieved the synthetic future solution object");
+    assert.equal(observed.externalReadable, false, "candidate read a synthetic external validator canary");
+    assert.equal(observed.ready, true, "the process-cleanup descendant did not start before candidate exit");
+    assert.doesNotMatch(`${stdout}${stderr}`, /SYNTHETIC_FUTURE_SOLUTION_CANARY_71ad|SYNTHETIC_EXTERNAL_VALIDATOR_CANARY_9c32/);
+    await new Promise((resolve) => setTimeout(resolve, 2800));
+    assert.equal(fs.existsSync(lateMarker), false, "a candidate descendant survived resource-supervisor cleanup");
+  } finally {
+    if (contained && executionStarted && !shutdownComplete) {
+      contained.containment?.kill();
+      if (childClosed && !candidateProcessClosed) {
+        await Promise.race([childClosed, new Promise((resolve) => setTimeout(resolve, 15_000))]);
+      }
+      if (candidateProcessClosed) {
+        const final = await contained.containment?.final;
+        shutdownComplete = final?.cleaned === true;
+      }
+    }
+    // Never remove mounted candidate paths until the resource supervisor confirms that its cgroup was emptied.
+    if (!executionStarted || shutdownComplete) {
+      if (workspace) fs.rmSync(workspace, { recursive: true, force: true });
+      if (base) fs.rmSync(base, { recursive: true, force: true });
+    } else {
+      console.error(`preserving evaluator fixture paths because process cleanup was not confirmed: ${workspace ?? "workspace unavailable"}`);
+    }
+  }
+});
+
 test("repository workspaces carry no history beyond the pinned baseline commit", { timeout: 15_000 }, async () => {
   const { stageRepoWorkspace, workspaceHistoryProblem } = await import(path.join(ROOT, "eval/workspace.mjs"));
   const base = fs.mkdtempSync(path.join(os.tmpdir(), "eval-ws-history-"));
