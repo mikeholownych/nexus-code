@@ -22,7 +22,6 @@ jobs:
       tag_sha: ${{ steps.resolve.outputs.tag_sha }}
     env:
       TARGET_TAG: ${{ inputs.tag }}
-      GH_TOKEN: ${{ github.token }}
     steps:
       - name: Require dispatch from main
         run: |
@@ -52,9 +51,13 @@ jobs:
           test "$(node -p 'require("./package.json").version')" = "${TARGET_TAG#v}"
           node scripts/sync-version.mjs --check --tag "$TARGET_TAG"
           test -f "docs/releases/$TARGET_TAG.md"
+          printf 'tag_sha=%s\n' "$tag_sha" >> "$GITHUB_OUTPUT"
+      - name: Verify the public RC release is published
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
           gh release view "$TARGET_TAG" --json isPrerelease,isDraft \
             | jq -e '.isPrerelease == true and .isDraft == false' >/dev/null
-          printf 'tag_sha=%s\n' "$tag_sha" >> "$GITHUB_OUTPUT"
 
   build:
     needs: resolve-tag
@@ -123,7 +126,6 @@ jobs:
     env:
       TARGET_TAG: ${{ inputs.tag }}
       EXPECTED_TAG_SHA: ${{ needs.resolve-tag.outputs.tag_sha }}
-      GH_TOKEN: ${{ github.token }}
     steps:
       - uses: actions/download-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
@@ -133,17 +135,23 @@ jobs:
         with:
           name: nexus-repro-ubuntu-24.04
           path: ${{ runner.temp }}/ubuntu-24.04
+      - name: Download published RC assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          archive="nexus-linux-x86_64-$TARGET_TAG.tar.gz"
+          mkdir -p "$RUNNER_TEMP/published"
+          gh release download "$TARGET_TAG" \
+            --pattern "$archive" \
+            --pattern compatibility.json \
+            --pattern SHA256SUMS \
+            --dir "$RUNNER_TEMP/published"
       - name: Compare both runner builds with each other and the published RC
         run: |
           archive="nexus-linux-x86_64-$TARGET_TAG.tar.gz"
           for runner in ubuntu-22.04 ubuntu-24.04; do
             (cd "$RUNNER_TEMP/$runner" && sha256sum --check SHA256SUMS)
           done
-          gh release download "$TARGET_TAG" \
-            --pattern "$archive" \
-            --pattern compatibility.json \
-            --pattern SHA256SUMS \
-            --dir "$RUNNER_TEMP/published"
           (cd "$RUNNER_TEMP/published" && sha256sum --check SHA256SUMS)
           for file in "$archive" compatibility.json SHA256SUMS; do
             cmp "$RUNNER_TEMP/ubuntu-22.04/$file" "$RUNNER_TEMP/ubuntu-24.04/$file"
