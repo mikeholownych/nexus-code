@@ -815,6 +815,94 @@ describe("repairs cannot be redirected by links anywhere in the path", () => {
       assert.ok(!fs.existsSync(path.join(elsewhere, "victim2")));
     });
   });
+
+  test("failed exclusive creation never unlinks a pathname that may have been replaced", async () => {
+    await withDirs(async (h, elsewhere) => {
+      const parent = path.join(h, "parent");
+      const movedParent = path.join(h, "parent-moved");
+      const target = path.join(parent, "new");
+      const redirectedTarget = path.join(elsewhere, "new");
+      fs.mkdirSync(parent);
+      let swapped = false;
+      let unlinkAttempted = false;
+      const mutableFs = fs as unknown as { openSync: typeof fs.openSync; unlinkSync: typeof fs.unlinkSync };
+      const originalOpenSync = fs.openSync;
+      const originalUnlinkSync = fs.unlinkSync;
+
+      try {
+        mutableFs.openSync = ((file: fs.PathLike, flags: string | number, mode?: number) => {
+          if (!swapped && typeof file === "string" && path.resolve(file) === target && typeof flags === "number" && (flags & fs.constants.O_CREAT) !== 0) {
+            swapped = true;
+            fs.renameSync(parent, movedParent);
+            fs.symlinkSync(elsewhere, parent, "dir");
+          }
+          return originalOpenSync(file, flags as number, mode);
+        }) as typeof fs.openSync;
+        mutableFs.unlinkSync = ((file: fs.PathLike) => {
+          if (typeof file === "string" && path.resolve(file) === redirectedTarget) {
+            unlinkAttempted = true;
+            fs.renameSync(redirectedTarget, `${redirectedTarget}.created`);
+            fs.writeFileSync(redirectedTarget, "replacement owned by another process");
+          }
+          return originalUnlinkSync(file);
+        }) as typeof fs.unlinkSync;
+
+        assert.throws(() => writeExclusiveVerified(h, target, "sensitive content"), SafePathError);
+        assert.equal(swapped, true);
+        assert.equal(unlinkAttempted, false, "failed verification must not unlink through a replaceable pathname");
+        assert.equal(fs.statSync(redirectedTarget).size, 0, "content is not written before descriptor verification");
+      } finally {
+        mutableFs.openSync = originalOpenSync;
+        mutableFs.unlinkSync = originalUnlinkSync;
+        if (fs.lstatSync(parent, { throwIfNoEntry: false })?.isSymbolicLink()) fs.unlinkSync(parent);
+        if (fs.existsSync(movedParent)) fs.renameSync(movedParent, parent);
+      }
+    });
+  });
+
+  test("failed directory creation never removes a pathname that may have been replaced", async () => {
+    await withDirs(async (h, elsewhere) => {
+      const parent = path.join(h, "parent");
+      const movedParent = path.join(h, "parent-moved");
+      const target = path.join(parent, "new");
+      const redirectedTarget = path.join(elsewhere, "new");
+      fs.mkdirSync(parent);
+      let swapped = false;
+      let removalAttempted = false;
+      const mutableFs = fs as unknown as { mkdirSync: typeof fs.mkdirSync; rmdirSync: typeof fs.rmdirSync };
+      const originalMkdirSync = fs.mkdirSync;
+      const originalRmdirSync = fs.rmdirSync;
+
+      try {
+        mutableFs.mkdirSync = ((directory: fs.PathLike, options?: fs.MakeDirectoryOptions | fs.Mode) => {
+          if (!swapped && typeof directory === "string" && path.resolve(directory) === target) {
+            swapped = true;
+            fs.renameSync(parent, movedParent);
+            fs.symlinkSync(elsewhere, parent, "dir");
+          }
+          return originalMkdirSync(directory, options as fs.MakeDirectoryOptions | fs.Mode | undefined);
+        }) as typeof fs.mkdirSync;
+        mutableFs.rmdirSync = ((directory: fs.PathLike) => {
+          if (typeof directory === "string" && path.resolve(directory) === redirectedTarget) {
+            removalAttempted = true;
+            fs.renameSync(redirectedTarget, `${redirectedTarget}.created`);
+            fs.mkdirSync(redirectedTarget);
+          }
+          return originalRmdirSync(directory);
+        }) as typeof fs.rmdirSync;
+
+        assert.throws(() => mkdirVerified(h, target), SafePathError);
+        assert.equal(swapped, true);
+        assert.equal(removalAttempted, false, "failed verification must not remove through a replaceable pathname");
+        assert.equal(fs.statSync(redirectedTarget).isDirectory(), true, "the raced directory is left untouched");
+      } finally {
+        mutableFs.mkdirSync = originalMkdirSync;
+        mutableFs.rmdirSync = originalRmdirSync;
+        if (fs.lstatSync(parent, { throwIfNoEntry: false })?.isSymbolicLink()) fs.unlinkSync(parent);
+        if (fs.existsSync(movedParent)) fs.renameSync(movedParent, parent);
+      }
+    });
+  });
 });
 
 describe("entry points share one engine", () => {
