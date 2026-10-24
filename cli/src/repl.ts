@@ -67,9 +67,11 @@ function parsePatchHunks(patch: string): { fileHeader: string; hunks: PatchHunk[
 export const REPL_APPROVAL_GRACE_MS = 400;
 
 /**
- * Slash commands an explicit --read-only REPL may run. Kept deliberately conservative: writes, provider/model
- * changes, scaffolding, test execution, upgrades and state mutations are refused; read-only inspection and the
- * mode command (which cannot lower the agent's read-only authority) remain available.
+ * Slash commands a read-only REPL may run: an explicit --read-only launch, or a session whose effective mode is
+ * read-only (mode-selected). Kept deliberately conservative: writes, provider/model changes, scaffolding, test
+ * execution, upgrades and state mutations are refused; inspection and the mode command remain available. In an
+ * explicit --read-only launch the mode command cannot lower the agent's authority; a mode-selected session can
+ * leave read-only deliberately with /mode auto or /mode review.
  */
 export function replReadOnlyAllowed(command: string, args: string): boolean {
   const name = command.trim().replace(/^\//, "").toLowerCase();

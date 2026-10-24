@@ -17,7 +17,7 @@ test("read-only REPL allows inspection but refuses mutating slash commands", () 
     ["stage", "."], ["save", ""], ["export", "out.md"], ["worktree", "add x"], ["knowledge", "set k v"],
     ["theme", "dark"], ["doctor", "--fix"], ["plan", "set"], ["model", "x"], ["test", ""],
     ["compact", ""], ["onboard", ""], ["undo", ""], ["INIT", ""], ["doctor", "--fix=true"],
-    ["doctor", "--fix --yes"], ["mcp", "list"], ["upgrade", "--check"],
+    ["doctor", "--fix --yes"], ["mcp", "list"], ["upgrade", "--check"], ["  init  ", ""],
   ]) {
     assert.equal(replReadOnlyAllowed(command, args), false, `/${command} ${args} must be refused`);
   }

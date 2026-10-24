@@ -32,7 +32,9 @@ allowlist is conservative and default-deny: inspection/navigation (`help`/`?`, `
 read-only `doctor`, non-mutating `plan`/`knowledge`, viewing a skill, and the bare `theme` command remain available.
 Scaffolding, every `/mcp` form (including read-only ones: MCP initialization starts configured servers), commits,
 upgrades, staging, saves/exports, model/shell changes, test execution, checkpoints and every `--fix`/`--fix=…`
-doctor form are refused. `/mode auto` is allowed but cannot lower the agent’s read-only authority (PR #203).
+doctor form are refused. `/mode auto` is allowed; in an explicit `--read-only` launch it cannot lower the agent’s read-only authority
+(PR #203). A mode-selected read-only session can deliberately leave that mode with `/mode auto` or `/mode review`,
+matching the sidecar.
 
 ## Verification
 
@@ -52,7 +54,8 @@ doctor form are refused. `/mode auto` is allowed but cannot lower the agent’s 
 - The allowlist is a policy list, not a capability proof: a future REPL command is refused by default until it is
   reviewed and added, which is the intended fail-closed direction but may surprise users of a new safe command.
   Safe inspections that also start or discover services (`/mcp`, `/plugins`, model discovery, `/upgrade --check`)
-  remain blocked deliberately; a later read-only-only implementation can widen this.
+  remain blocked deliberately, as does bare `/stage` hunk listing; a later read-only-only implementation can widen
+  this.
 - `/doctor --deep` is allowed (read-only analysis); every `--fix` form is refused. Other command-specific side
   effects should be re-reviewed when a command is added.
 - `/cd` is pre-existing and not read-only-specific: a nonexistent path can raise, and changing workspace constructs
