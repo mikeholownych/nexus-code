@@ -29,6 +29,75 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 const INDEX = path.resolve(here, "../dist/index.js");
 
 describe("ACC-INF-07 (REQ-TUI-105): Startup endpoint probe and first-contact deadline", () => {
+  ptyTest("startup trust Escape exits the CLI process promptly", { timeout: 30_000 }, async () => {
+    assert.ok(fs.existsSync(INDEX), `missing ${INDEX} (run npm --prefix cli run build)`);
+    const repo = makeRepo();
+    const home = makeHome();
+    const pyScript = `
+import os, pty, select, subprocess, sys, time, json
+
+master, slave = pty.openpty()
+env = os.environ.copy()
+env["HOME"] = ${JSON.stringify(home)}
+env["XDG_CONFIG_HOME"] = ${JSON.stringify(path.join(home, ".config"))}
+proc = subprocess.Popen(
+    [${JSON.stringify(process.execPath)}, ${JSON.stringify(INDEX)}, "repl", "--yes", "-w", ${JSON.stringify(repo)}],
+    stdin=slave, stdout=slave, stderr=slave, env=env, close_fds=True
+)
+os.close(slave)
+
+buf = ""
+def read_until(substr, timeout):
+    global buf
+    deadline = time.time() + timeout
+    while time.time() < deadline and substr not in buf:
+        ready, _, _ = select.select([master], [], [], 0.1)
+        if ready:
+            try:
+                data = os.read(master, 4096).decode("utf-8", errors="replace")
+                if not data:
+                    break
+                buf += data
+            except OSError:
+                break
+    return substr in buf
+
+prompted = read_until("Trust this folder?", 10.0)
+if prompted:
+    os.write(master, b"\\x1b")
+try:
+    code = proc.wait(timeout=4.0)
+except subprocess.TimeoutExpired:
+    code = None
+    proc.terminate()
+    try:
+        proc.wait(timeout=2.0)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        proc.wait()
+os.close(master)
+print(json.dumps({"prompted": prompted, "exited": code is not None, "code": code, "output": buf[-1000:]}))
+`;
+    try {
+      const { code, out, err } = await new Promise<{ code: number | null; out: string; err: string }>((resolve) => {
+        const child = spawn("python3", ["-c", pyScript], { stdio: ["ignore", "pipe", "pipe"] });
+        let out = "";
+        let err = "";
+        child.stdout.on("data", (chunk) => (out += chunk));
+        child.stderr.on("data", (chunk) => (err += chunk));
+        child.on("close", (exitCode) => resolve({ code: exitCode, out, err }));
+      });
+      assert.equal(code, 0, `PTY script failed: ${err}\n${out}`);
+      const result = JSON.parse(out.trim().split("\n").pop() || "{}");
+      assert.equal(result.prompted, true, `startup trust prompt did not appear:\n${result.output}`);
+      assert.equal(result.exited, true, `CLI stayed alive after trust prompt exit:\n${result.output}`);
+      assert.equal(result.code, 0, `CLI exit should be clean:\n${result.output}`);
+    } finally {
+      fs.rmSync(repo, { recursive: true, force: true });
+      fs.rmSync(home, { recursive: true, force: true });
+    }
+  });
+
   test("SidecarServer.start() probes unreachable endpoint (127.0.0.1:9) and emits notice with URL and fix hint", async () => {
     const repo = makeRepo();
     const home = makeHome();

@@ -151,6 +151,9 @@ export function promptWorkspaceTrust(
       input.removeListener("keypress", onKeypress);
       input.removeListener("close", onClose);
       try { input.setRawMode(oldRawMode); } catch {}
+      if (decision === "exit") {
+        try { input.pause(); } catch {}
+      }
       output.write("\u001b[?25h\n");
       resolve(decision);
     };
