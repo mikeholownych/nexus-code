@@ -154,7 +154,25 @@ export function generateConventionalCommit(workspace: string): { message: string
 
 export function commitChanges(workspace: string, message: string): { success: boolean; hash?: string; error?: string } {
   try {
-    execFileSync("git", ["add", "-A"], { cwd: workspace, stdio: ["pipe", "pipe", "pipe"] });
+    const gitEnv = { ...process.env };
+    for (const key of ["GIT_LITERAL_PATHSPECS", "GIT_GLOB_PATHSPECS", "GIT_NOGLOB_PATHSPECS", "GIT_ICASE_PATHSPECS"]) {
+      delete gitEnv[key];
+    }
+    // Exclusions in `git add` do not remove paths that were already staged.
+    // Restore only the internal state entries in the index, leaving their working
+    // tree contents untouched, before staging the user's workspace changes.
+    execFileSync("git", ["reset", "--quiet", "HEAD", "--", ":(top).nexus"], {
+      cwd: workspace,
+      env: gitEnv,
+      stdio: ["pipe", "pipe", "pipe"],
+    });
+    // Internal Nexus state must never enter an automated workspace commit, even if a user's
+    // .git/info/exclude contains a malformed rule or a later negation that exposes .nexus/.
+    execFileSync("git", ["add", "-A", "--", ":(top,exclude).nexus", ":(top,exclude).nexus/**"], {
+      cwd: workspace,
+      env: gitEnv,
+      stdio: ["pipe", "pipe", "pipe"],
+    });
     execFileSync("git", ["commit", "-m", message], {
       cwd: workspace,
       encoding: "utf-8",
