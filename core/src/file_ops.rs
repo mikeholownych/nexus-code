@@ -634,9 +634,22 @@ pub fn edit_file(args: EditFileArgs, base_dir: &Path) -> Result<EditFileResult, 
     let raw_original = {
         let file = File::open(&target).map_err(|e| format!("Failed to open file: {e}"))?;
         verify_descriptor_confinement(&file, &base_canon)?;
-        let mut reader = BufReader::new(file);
+        // Editing needs the whole file in memory. Refuse the sizes the read tool would not load whole, and cap the
+        // read so a file that grows after the check cannot allocate without bound.
+        let size = file.metadata().map_err(|e| format!("Failed to get metadata: {e}"))?.len();
+        if size > MAX_READ_BYTES as u64 {
+            return Err(format!(
+                "File is too large to edit safely: {size} bytes exceeds the 8 MB limit ({MAX_READ_BYTES} bytes)"
+            ));
+        }
+        let mut reader = BufReader::new(file).take(MAX_READ_BYTES as u64 + 1);
         let mut content = String::new();
         reader.read_to_string(&mut content).map_err(|e| format!("Failed to read file: {e}"))?;
+        if content.len() > MAX_READ_BYTES {
+            return Err(format!(
+                "File is too large to edit safely: it grew beyond the 8 MB limit ({MAX_READ_BYTES} bytes)"
+            ));
+        }
         content
     };
 
@@ -1173,9 +1186,20 @@ pub fn patch_file(args: PatchFileArgs, base_dir: &Path) -> Result<PatchFileResul
         if is_binary_file_descriptor(&file).unwrap_or(false) {
             return Err(format!("Cannot patch binary file: {}", args.path));
         }
-        let mut reader = BufReader::new(file);
+        let size = file.metadata().map_err(|e| format!("Failed to get metadata: {e}"))?.len();
+        if size > MAX_READ_BYTES as u64 {
+            return Err(format!(
+                "File is too large to patch safely: {size} bytes exceeds the 8 MB limit ({MAX_READ_BYTES} bytes)"
+            ));
+        }
+        let mut reader = BufReader::new(file).take(MAX_READ_BYTES as u64 + 1);
         let mut content = String::new();
         reader.read_to_string(&mut content).map_err(|e| format!("Failed to read file: {e}"))?;
+        if content.len() > MAX_READ_BYTES {
+            return Err(format!(
+                "File is too large to patch safely: it grew beyond the 8 MB limit ({MAX_READ_BYTES} bytes)"
+            ));
+        }
         content
     };
 
@@ -1339,6 +1363,54 @@ mod tests {
         assert!(res_parent.is_err(), "Expected escaping symlink parent to be rejected");
 
         let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn test_edit_file_refuses_files_above_the_read_limit() {
+        let dir = std::env::temp_dir().join(format!("test_edit_limit_{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let target = dir.join("big-edit.txt");
+        let mut content = String::from("needle unique\n");
+        content.push_str(&"x".repeat(MAX_READ_BYTES));
+        fs::write(&target, &content).unwrap();
+        let before = fs::read(&target).unwrap();
+
+        let result = edit_file(
+            EditFileArgs {
+                path: "big-edit.txt".into(),
+                old_content: "needle unique".into(),
+                new_content: "changed".into(),
+                replace_all: None,
+            },
+            &dir,
+        );
+        assert!(result.is_err(), "edit_file must refuse a file above the read limit");
+        assert!(result.unwrap_err().contains("8 MB"));
+        assert_eq!(fs::read(&target).unwrap(), before, "the oversized file was modified");
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn test_patch_file_refuses_files_above_the_read_limit() {
+        let dir = std::env::temp_dir().join(format!("test_patch_limit_{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let target = dir.join("big-patch.txt");
+        let mut content = String::from("needle unique\n");
+        content.push_str(&"x".repeat(MAX_READ_BYTES));
+        fs::write(&target, &content).unwrap();
+        let before = fs::read(&target).unwrap();
+
+        let result = patch_file(
+            PatchFileArgs {
+                path: "big-patch.txt".into(),
+                patch: "@@\n-needle unique\n+changed\n".into(),
+            },
+            &dir,
+        );
+        assert!(result.is_err(), "patch_file must refuse a file above the read limit");
+        assert!(result.unwrap_err().contains("8 MB"));
+        assert_eq!(fs::read(&target).unwrap(), before, "the oversized file was modified");
+        fs::remove_dir_all(&dir).ok();
     }
 
     #[test]
