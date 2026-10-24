@@ -585,6 +585,9 @@ export class McpClientManager {
     toolCount: number;
     resourceCount: number;
     promptCount: number;
+    /** Whether the configuration reached disk; undefined when saveToConfig is false. */
+    persisted?: boolean;
+    persistError?: string;
   }> {
     const conn = new McpConnection(name, config);
     const connected = await conn.connect();
@@ -601,26 +604,54 @@ export class McpClientManager {
     this.connections.set(name, conn);
     this.rebuildToolMap();
 
+    let persisted: boolean | undefined;
+    let persistError: string | undefined;
     if (saveToConfig) {
+      const configDir = path.join(os.homedir(), ".config", "nexus");
+      const configFile = path.join(configDir, "mcp.json");
+      const temp = `${configFile}.${process.pid}.tmp`;
       try {
-        const configDir = path.join(os.homedir(), ".config", "nexus");
-        if (!fs.existsSync(configDir)) {
-          fs.mkdirSync(configDir, { recursive: true });
-        }
-        const configFile = path.join(configDir, "mcp.json");
+        fs.mkdirSync(configDir, { recursive: true, mode: 0o700 });
+        // A server's env may hold its token; never leave the file or its directory group/world readable.
+        fs.chmodSync(configDir, 0o700);
         let existing: McpConfigFile = {};
         if (fs.existsSync(configFile)) {
+          // Never replace a config we cannot parse: that would silently drop every other server definition.
+          const raw = fs.readFileSync(configFile, "utf-8");
+          let parsed: unknown;
           try {
-            existing = JSON.parse(fs.readFileSync(configFile, "utf-8"));
-          } catch {}
+            parsed = JSON.parse(raw);
+          } catch {
+            // Do not echo the parser message: it quotes the malformed input, which may contain a server token.
+            throw new Error(`${configFile} is not valid JSON; left untouched`);
+          }
+          if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+            throw new Error(`${configFile} is not a JSON object; left untouched`);
+          }
+          existing = parsed as McpConfigFile;
         }
-        if (!existing.mcpServers) {
+        if (existing.mcpServers === undefined) {
           existing.mcpServers = {};
+        } else if (
+          !existing.mcpServers ||
+          typeof existing.mcpServers !== "object" ||
+          Array.isArray(existing.mcpServers)
+        ) {
+          throw new Error(`${configFile}: mcpServers is not an object; left untouched`);
         }
         existing.mcpServers[name] = config;
-        fs.writeFileSync(configFile, JSON.stringify(existing, null, 2), "utf-8");
+        // Write a private temporary file, then replace the target atomically (following an existing symlink target).
+        fs.writeFileSync(temp, JSON.stringify(existing, null, 2) + "\n", { encoding: "utf-8", mode: 0o600 });
+        fs.chmodSync(temp, 0o600);
+        fs.renameSync(temp, fs.existsSync(configFile) ? fs.realpathSync(configFile) : configFile);
+        persisted = true;
       } catch (err: any) {
-        console.error(pc.yellow(`Warning: Connected to MCP server, but failed to persist config: ${err.message}`));
+        try {
+          fs.unlinkSync(temp);
+        } catch {}
+        persisted = false;
+        persistError = err?.message ?? String(err);
+        console.error(pc.yellow(`Warning: Connected to MCP server, but failed to persist config: ${persistError}`));
       }
     }
 
@@ -629,6 +660,7 @@ export class McpClientManager {
       toolCount: conn.getTools().length,
       resourceCount: conn.getResources().length,
       promptCount: conn.getPrompts().length,
+      ...(persisted === undefined ? {} : { persisted, persistError }),
     };
   }
 

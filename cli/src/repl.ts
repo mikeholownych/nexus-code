@@ -1273,7 +1273,11 @@ export class InteractiveRepl {
                 console.log(`  • Exposed Tools: ${pc.cyan(res.toolCount)}`);
                 console.log(`  • Exposed Resources: ${pc.cyan(res.resourceCount)}`);
                 console.log(`  • Exposed Prompts: ${pc.cyan(res.promptCount)}`);
-                console.log(`  • Configuration saved to ~/.config/nexus/mcp.json\n`);
+                if (res.persisted === false) {
+                  console.log(pc.yellow(`  • Configuration was NOT saved: ${res.persistError}\n`));
+                } else {
+                  console.log(`  • Configuration saved to ~/.config/nexus/mcp.json\n`);
+                }
               } else {
                 console.log(pc.red(`✖ MCP connection failed: ${res.error}\n`));
               }

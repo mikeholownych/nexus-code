@@ -113,7 +113,12 @@ async function mcpAdd(manager: McpClientManager, words: string[]): Promise<Slash
   else return reply("mcp", usage, false);
   const result = await manager.addServer(name, config as any, true);
   return result.success
-    ? reply("mcp", `Connected to ${name}: ${result.toolCount} tools, ${result.resourceCount} resources, ${result.promptCount} prompts. Saved to ~/.config/nexus/mcp.json.`)
+    ? reply(
+        "mcp",
+        result.persisted === false
+          ? `Connected to ${name}: ${result.toolCount} tools, ${result.resourceCount} resources, ${result.promptCount} prompts. Configuration was NOT saved: ${result.persistError}`
+          : `Connected to ${name}: ${result.toolCount} tools, ${result.resourceCount} resources, ${result.promptCount} prompts. Saved to ~/.config/nexus/mcp.json.`
+      )
     : reply("mcp", `Connection failed: ${result.error}`, false);
 }
 
