@@ -389,3 +389,17 @@ test("non-Git checkpoint rejects sensitive nested filename components", () => {
     fs.rmSync(workspace, { recursive: true, force: true });
   }
 });
+
+test("checkpoint rejects sensitive symlink-target components", () => {
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-sensitive-link-target-"));
+  const manager = new CheckpointManager(workspace);
+  try {
+    fs.symlinkSync("dir/API_KEY=supersecret", path.join(workspace, "link.txt"));
+
+    assert.throws(() => manager.createCheckpoint("sensitive link target"), SensitivePersistenceError);
+    assert.equal(manager.listCheckpoints().length, 0);
+  } finally {
+    fs.rmSync(manager.getCheckpointDir(), { recursive: true, force: true });
+    fs.rmSync(workspace, { recursive: true, force: true });
+  }
+});

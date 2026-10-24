@@ -160,15 +160,17 @@ export class CheckpointManager {
     }).toString("utf8").split("\0").filter(Boolean);
   }
 
+  private assertSnapshotTextSafe(value: string): void {
+    for (const component of value.split(/[\\/]/)) assertNoSensitivePersistenceContent(component, "checkpoint");
+  }
+
   private assertUntrackedEntriesSafe(relativePaths: string[], sourceRoot: string, allowSensitive: boolean): void {
     for (const relativePath of relativePaths) {
       const sourcePath = path.join(sourceRoot, relativePath);
       const stat = fs.lstatSync(sourcePath);
-      if (!allowSensitive) {
-        for (const component of relativePath.split("/")) assertNoSensitivePersistenceContent(component, "checkpoint");
-      }
+      if (!allowSensitive) this.assertSnapshotTextSafe(relativePath);
       if (stat.isSymbolicLink()) {
-        if (!allowSensitive) assertNoSensitivePersistenceContent(fs.readlinkSync(sourcePath), "checkpoint");
+        if (!allowSensitive) this.assertSnapshotTextSafe(fs.readlinkSync(sourcePath));
       } else if (stat.isFile()) {
         if (!allowSensitive) assertNoSensitivePersistenceContent(fs.readFileSync(sourcePath, "utf8"), "checkpoint");
       } else {
@@ -204,7 +206,7 @@ export class CheckpointManager {
       const stat = fs.lstatSync(sourcePath);
       if (stat.isSymbolicLink()) {
         const linkTarget = fs.readlinkSync(sourcePath);
-        if (!allowSensitive) assertNoSensitivePersistenceContent(linkTarget, "checkpoint");
+        if (!allowSensitive) this.assertSnapshotTextSafe(linkTarget);
         if (fs.lstatSync(targetPath, { throwIfNoEntry: false })) fs.rmSync(targetPath, { force: true });
         fs.symlinkSync(linkTarget, targetPath);
       } else if (stat.isFile()) {
