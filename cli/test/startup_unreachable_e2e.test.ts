@@ -23,7 +23,7 @@ import { AutonomousAgent } from "../src/agent.js";
 import { DurableStateManager } from "../src/core/state.js";
 import { DEFAULT_RECOVERY_POLICY } from "../src/core/provider_recovery.js";
 import { fakeClock, startGateway } from "./helpers/provider_fixture.js";
-import { makeRepo, makeHome, ptyTest } from "./helpers/fixtures.js";
+import { makeRepo, makeHome, trustWorkspace, ptyTest } from "./helpers/fixtures.js";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const INDEX = path.resolve(here, "../dist/index.js");
@@ -115,6 +115,7 @@ describe("ACC-INF-07 (REQ-TUI-105): Startup endpoint probe and first-contact dea
     assert.ok(fs.existsSync(INDEX), `missing ${INDEX} (run npm --prefix cli run build)`);
     const repo = makeRepo();
     const home = makeHome();
+    trustWorkspace(home, repo);
     const pyScript = `
 import os, pty, select, subprocess, sys, time, json
 
