@@ -30,6 +30,8 @@ if pid == 0:
     os.dup2(slave, 2)
     os.close(slave)
     os.environ["TERM"] = "xterm-256color"
+    # This smoke test asserts packaged TUI startup, not the workspace-trust chooser.
+    os.environ["NEXUS_TRUST_WORKSPACE"] = "1"
     os.execvp(cmd[0], cmd)
 
 os.close(slave)

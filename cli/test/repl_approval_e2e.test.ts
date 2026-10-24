@@ -16,7 +16,7 @@ import os from "node:os";
 import path from "node:path";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import { startGateway, makeRepo, makeHome, Reply, ptyTest } from "./helpers/fixtures.js";
+import { startGateway, makeRepo, makeHome, trustWorkspace, Reply, ptyTest } from "./helpers/fixtures.js";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(here, "..");
@@ -55,6 +55,7 @@ function script(_n: number, body: any): Reply {
 async function runScenario(scenario: string): Promise<any> {
   const repo = makeRepo();
   const home = makeHome();
+  trustWorkspace(home, repo);
   const gw = await startGateway(script);
   const plan = {
     node: process.execPath,

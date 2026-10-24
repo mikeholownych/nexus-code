@@ -177,6 +177,17 @@ export function makeHome(): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), "nexus-home-"));
 }
 
+/** Seed an isolated HOME with explicit trust for a PTY test that needs to reach the REPL. */
+export function trustWorkspace(home: string, workspace: string): void {
+  const trustDir = path.join(home, ".config", "nexus");
+  fs.mkdirSync(trustDir, { recursive: true, mode: 0o700 });
+  fs.writeFileSync(
+    path.join(trustDir, "trusted_workspaces.json"),
+    JSON.stringify({ trustedPaths: [fs.realpathSync(workspace)] }, null, 2),
+    { mode: 0o600 },
+  );
+}
+
 export async function waitUntil(cond: () => boolean, timeoutMs = 10000): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   while (!cond()) {

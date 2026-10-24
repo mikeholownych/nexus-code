@@ -25,6 +25,7 @@ import { buildConfig as buildConfigOrThrow, loadEnvironment } from "./config.js"
 import { describeTarget, registerProviderCommands } from "./provider_cli.js";
 import { UsageLedger } from "./usage.js";
 import { DOCTOR_EXIT, DOCTOR_SCHEMA_VERSION, doctorExitCode, redactDiagnostic, renderDoctorJson, renderDoctorText, runDoctor, runRepairs } from "./doctor.js";
+import { promptWorkspaceTrust } from "./startup_trust.js";
 
 function collectDeliverableFile(value: string, previous: string[] = []): string[] {
   return [...previous, value];
@@ -196,7 +197,6 @@ function triggerBackgroundGc(): void {
 }
 
 async function startRepl(options: any): Promise<void> {
-  triggerBackgroundGc();
   if (process.env.NEXUS_TEST_RECORD_REPL) {
     const log = process.env.NEXUS_TEST_RECORD_REPL;
     const parts = ["repl"];
@@ -205,6 +205,9 @@ async function startRepl(options: any): Promise<void> {
     fs.appendFileSync(log, parts.join(" ").trim() + "\n");
     return;
   }
+  const trustDecision = await promptWorkspaceTrust(options.workspace ? path.resolve(options.workspace) : process.cwd());
+  if (trustDecision === "exit") return;
+  triggerBackgroundGc();
   const config = buildConfig(options);
   if (config.model === "local-model") {
     try {
@@ -226,7 +229,6 @@ async function startRepl(options: any): Promise<void> {
 }
 
 async function runDefault(options: any): Promise<void> {
-  triggerBackgroundGc();
   if (options.repl) {
     await startRepl(options);
     return;
@@ -244,12 +246,18 @@ async function runDefault(options: any): Promise<void> {
       console.error("nexus sidecar is not built. Run 'npm run build' in cli first.");
       process.exit(1);
     }
+    const trustDecision = await promptWorkspaceTrust(options.workspace ? path.resolve(options.workspace) : process.cwd());
+    if (trustDecision === "exit") return;
+    triggerBackgroundGc();
     spawnTui(tuiBin, sidecarScript);
     return;
   }
 
   const isInteractiveTty = Boolean(process.stdin.isTTY && process.stdout.isTTY);
   if (isInteractiveTty && tuiBin && sidecarScript) {
+    const trustDecision = await promptWorkspaceTrust(options.workspace ? path.resolve(options.workspace) : process.cwd());
+    if (trustDecision === "exit") return;
+    triggerBackgroundGc();
     spawnTui(tuiBin, sidecarScript);
     return;
   }

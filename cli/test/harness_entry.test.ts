@@ -46,6 +46,8 @@ function env(checkout: Checkout): NodeJS.ProcessEnv {
     HOME: checkout.root,
     NODE_EXEC: checkout.node,
     NEXUS_TEST_RECORD_REPL: checkout.log,
+    // These tests assert harness argument routing, not the startup workspace-trust prompt.
+    NEXUS_TRUST_WORKSPACE: "1",
   };
 }
 

@@ -17,6 +17,7 @@ nexus
 ```bash
 nexus repl
 ```
+- On each interactive launch from an untrusted folder, Nexus asks whether to trust the folder, continue without trust, or exit. Trust loads project instructions when present and enables trusted workspace integrations; trusted workspaces default to `auto` unless an explicit mode is selected. Continuing without trust leaves project instructions and integrations unloaded and keeps the existing permission settings (untrusted workspaces default to `review`). Non-interactive launches do not prompt and do not load project instructions unless the folder is already trusted.
 
 ### Execution Postures & Approval Modes
 
@@ -362,11 +363,13 @@ Nexus Code provides high-performance tools executed via compiled native 64-bit R
 - **Lightweight Container Sandboxing & Direct Argv Spawning (`--sandbox`, REQ-SEC-109)**: Restricts filesystem mutation strictly to the target workspace using Linux Bubblewrap (`bwrap`) or Docker isolation. Sandbox commands are constructed as direct `argv` argument arrays and executed without passing through a host shell (`sh -c` / `bash -c`), preventing shell escaping vulnerabilities with paths containing spaces or quotes.
 - **In-Process Plugin Execution & Middleware Auditing**: Custom plugin handlers and middleware execute in-process with full user authority. Plugins are loaded only from documented directories: `~/.config/nexus/plugins/`, `~/.nexus/plugins/`, and trusted workspace directories (`.nexus/plugins/`, `plugins/`). The undocumented foreign directory `~/.config/opencode/plugins` has been removed (REQ-SEC-115), and the legacy worker-thread sandbox claim has been retired (`executeSandboxed` deleted, REQ-SEC-117). Any middleware rewriting of tool I/O (`preToolExecution` or `postToolExecution`) is cryptographically audited with before-and-after SHA-256 digests in both `~/.nexus/audit.log` (`kind: "middleware_rewrite"`) and the flight log (EXT-004, REQ-SEC-116).
 - **Workspace Trust & Context Provenance (REQ-SEC-113, CTX-001)**: An opened workspace is data until explicitly trusted by the operator. Workspace trust covers:
+  - Project instructions (`AGENTS.md`, `CLAUDE.md`, `CODEX.md`, `.nexusrules`).
   - Workspace `.mcp.json` / `mcp.json` server definitions.
   - Workspace plugins (`.nexus/plugins/`, `plugins/`).
   - Workspace skills (`skills/`, `.nexus/skills/`, `.claude/skills/`).
   - Workspace knowledge graph (`.nexus/knowledge.json`).
   Trust is managed via `nexus trust [path]` (undo with `nexus trust --remove`, list with `nexus trust --list`; stored in `~/.config/nexus/trusted_workspaces.json`, which the agent's file tools cannot write). In an untrusted workspace:
+  - Project instructions are not injected into the agent prompt.
   - Workspace MCP servers and plugins are not loaded.
   - Workspace skills are not loaded into context; `/skills` lists them as "untrusted (not loaded)". Attempting to use `/skill <name>` or the `activate_skill` tool on an untrusted skill is refused with: `Skill '<name>' belongs to an untrusted workspace. Run 'nexus trust .' to trust this workspace.`.
   - Workspace knowledge is ignored and not loaded into context.

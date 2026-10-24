@@ -676,7 +676,18 @@ const hasScript = spawnSync("script", ["--version"], { encoding: "utf-8" }).stat
 describe("interactive REPL (pty)", { skip: hasScript ? false : "util-linux `script` not available" }, () => {
   async function session(gw: Gateway, repo: string, home: string) {
     const cmd = `${JSON.stringify(process.execPath)} --import tsx ${JSON.stringify(srcIndex)} repl --mode auto -w ${JSON.stringify(repo)} -e ${JSON.stringify(gw.url)} -m m`;
-    const child = spawn("script", ["-qfec", cmd, "/dev/null"], { cwd: cliRoot, env: { ...process.env, HOME: home, TERM: "xterm", COLUMNS: "120", LINES: "40" } });
+    const child = spawn("script", ["-qfec", cmd, "/dev/null"], {
+      cwd: cliRoot,
+      env: {
+        ...process.env,
+        HOME: home,
+        TERM: "xterm",
+        COLUMNS: "120",
+        LINES: "40",
+        // These tests cover turn interruption, not the startup workspace-trust prompt.
+        NEXUS_TRUST_WORKSPACE: "1",
+      },
+    });
     let out = "";
     child.stdout.on("data", (d) => (out += d.toString()));
     child.stderr.on("data", (d) => (out += d.toString()));
