@@ -42,7 +42,11 @@ NAT64 embedding was the only difference.
 - NAT64 prefixes other than the well-known `/96` and local-use `/48` (operator-specific `/64`, `/56`,
   `/40`, `/32` from RFC 6052) cannot be recognized from the address alone and remain classified as
   ordinary IPv6.
-- Teredo (`2001::/32`) and 6to4 are unchanged; 6to4 already classifies by the embedded relay IPv4.
-  Teredo's embedded client address is obfuscated and does not route directly to that IPv4.
+- `classifyIpv4Trust` keeps its pre-existing IPv4 rule set (loopback, RFC1918, CGNAT, link-local), so an
+  embedded documentation/multicast/reserved address is `EXTERNAL_PUBLIC` exactly as the equivalent plain
+  IPv4 literal is. `isPublicIp` rejects those ranges. This divergence predates the change.
+- Teredo (`2001::/32`) and 6to4 are unchanged. `isPublicIp` already classifies 6to4 by the embedded
+  relay IPv4; `classifyLocality` never handled 6to4. Teredo's embedded client address is obfuscated and
+  does not route directly to that IPv4.
 - The guard still relies on the local stack honoring NAT64; a host with no NAT64 route simply fails the
   connection.

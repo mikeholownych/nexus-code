@@ -198,7 +198,7 @@ describe("ACC-TRUST-03: SSRF protection, DNS pinning, redirect hop checks, and s
     assert.strictEqual(isPublicIp("2606:2800:220:1:248:1893:25c8:1946"), true);
   });
 
-  test("fetch_web refuses non-public address literals: [::ffff:127.0.0.1], [fd00::1], 100.64.0.1", async () => {
+  test("fetch_web refuses non-public address literals: [::ffff:127.0.0.1], [fd00::1], 100.64.0.1, [64:ff9b::7f00:1]", async () => {
     const targets = [
       "http://[::ffff:127.0.0.1]",
       "http://[::ffff:127.0.0.1]:8080/secret",
