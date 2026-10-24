@@ -66,6 +66,29 @@ function parsePatchHunks(patch: string): { fileHeader: string; hunks: PatchHunk[
 
 export const REPL_APPROVAL_GRACE_MS = 400;
 
+/**
+ * Slash commands an explicit --read-only REPL may run. Kept deliberately conservative: writes, provider/model
+ * changes, scaffolding, test execution, upgrades and state mutations are refused; read-only inspection and the
+ * mode command (which cannot lower the agent's read-only authority) remain available.
+ */
+export function replReadOnlyAllowed(command: string, args: string): boolean {
+  const name = command.trim().replace(/^\//, "").toLowerCase();
+  const value = args.trim().toLowerCase();
+  if (["help", "status", "tokens", "cost", "diff", "git", "checkpoints", "audit", "receipt", "sessions",
+       "exit", "quit", "q", "mode", "clear", "reset", "history", "skills", "copy", "paste", "image", "cd"].includes(name)) {
+    return true;
+  }
+  if (name === "checkpoint") return value === "diff" || value.startsWith("diff ");
+  if (name === "worktree") return !value || value === "status";
+  if (name === "plan" || name === "requirements" || name === "knowledge") {
+    return !value || value === "list" || value === "show" || value === "get";
+  }
+  if (name === "skill") return !value || !/^init(?:\s|$)/.test(value);
+  if (name === "theme") return !value;
+  if (name === "doctor") return !/(^|\s)--fix(?:\s|$)/.test(value);
+  return false;
+}
+
 export class InteractiveRepl {
   private app: ApplicationCore;
   private agent: AutonomousAgent;
@@ -777,6 +800,11 @@ export class InteractiveRepl {
           const parts = trimmed.slice(1).split(/\s+/);
           const cmd = parts[0].toLowerCase();
           const arg = parts.slice(1).join(" ");
+
+          if (this.config.readOnly && !replReadOnlyAllowed(cmd, arg)) {
+            console.log(pc.yellow(`/${cmd} is disabled while the session is read-only.\n`));
+            continue;
+          }
 
           if (cmd === "exit" || cmd === "quit" || cmd === "q") {
             console.log(pc.dim("\nSession ended. Goodbye!"));

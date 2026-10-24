@@ -236,6 +236,23 @@ def main():
                 "passed": auto1_cancelled and auto1_created and auto2_created,
             }
 
+        elif scenario == "readonly_slash":
+            # A mode change is allowed but must not unlock direct slash scaffolding.
+            s.send(b"/mode auto\r", settle=1.0)
+            s.wait_text("❯", timeout=15)
+            s.send(b"/skill init leaked\r", settle=1.5)
+            s.wait_text("❯", timeout=15)
+            skill_created = os.path.exists(os.path.join(ws, ".nexus", "skills", "leaked", "SKILL.md"))
+            s.send(b"/init\r", settle=1.5)
+            s.wait_text("❯", timeout=15)
+            agents_created = os.path.exists(os.path.join(ws, "AGENTS.md"))
+            result = {
+                "scenario": scenario,
+                "skill_created": skill_created,
+                "agents_created": agents_created,
+                "passed": not skill_created and not agents_created,
+            }
+
         else:
             raise ValueError(f"Unknown scenario: {scenario}")
 
