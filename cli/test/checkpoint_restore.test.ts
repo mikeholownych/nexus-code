@@ -199,3 +199,51 @@ test("legacy restore removes tracked files deleted at the checkpoint", () => {
     fs.rmSync(repo, { recursive: true, force: true });
   }
 });
+
+test("a checkpoint manifest cannot write into Git metadata", () => {
+  const { repo, git } = gitRepo();
+  try {
+    const head = git("rev-parse", "HEAD");
+    fs.writeFileSync(path.join(repo, "draft.txt"), "ordinary snapshot\n");
+    const manager = new CheckpointManager(repo);
+    const checkpoint = manager.createCheckpoint("malformed manifest");
+    const recordPath = path.join(manager.getCheckpointDir(), `${checkpoint.id}.json`);
+    const record = JSON.parse(fs.readFileSync(recordPath, "utf8"));
+    record.untrackedFiles = [".git/HEAD"];
+    fs.writeFileSync(recordPath, JSON.stringify(record));
+    fs.mkdirSync(path.join(checkpoint.snapshotDir!, ".git"), { recursive: true });
+    fs.writeFileSync(path.join(checkpoint.snapshotDir!, ".git", "HEAD"), "malicious replacement\n");
+
+    const result = manager.restore(checkpoint.id);
+
+    assert.equal(result.success, false);
+    assert.equal(git("rev-parse", "HEAD"), head);
+    assert.notEqual(fs.readFileSync(path.join(repo, ".git", "HEAD"), "utf8"), "malicious replacement\n");
+  } finally {
+    fs.rmSync(repo, { recursive: true, force: true });
+  }
+});
+
+test("tracked deletion cleanup never follows a parent symlink outside the workspace", () => {
+  const { repo, git } = gitRepo();
+  const external = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-checkpoint-external-"));
+  try {
+    fs.mkdirSync(path.join(repo, "dir"));
+    fs.writeFileSync(path.join(repo, "dir", "file.txt"), "tracked\n");
+    git("add", "dir/file.txt");
+    git("commit", "-qm", "add tracked directory");
+    fs.rmSync(path.join(repo, "dir"), { recursive: true });
+    const manager = new CheckpointManager(repo);
+    const checkpoint = manager.createCheckpoint("parent symlink");
+    fs.writeFileSync(path.join(external, "file.txt"), "external canary\n");
+    fs.symlinkSync(external, path.join(repo, "dir"));
+
+    const result = manager.restore(checkpoint.id);
+
+    assert.equal(result.success, true, result.message);
+    assert.equal(fs.readFileSync(path.join(external, "file.txt"), "utf8"), "external canary\n");
+  } finally {
+    fs.rmSync(repo, { recursive: true, force: true });
+    fs.rmSync(external, { recursive: true, force: true });
+  }
+});
