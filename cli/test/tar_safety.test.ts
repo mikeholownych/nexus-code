@@ -5,7 +5,14 @@
  */
 import { describe, test } from "node:test";
 import assert from "node:assert/strict";
-import { isSymlinkSafe } from "../src/tar_safety.js";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { spawnSync } from "node:child_process";
+import { isSymlinkSafe, safeExtractTar } from "../src/tar_safety.js";
+
+const SYSTEM_TAR = ["/usr/bin/tar", "/bin/tar"].find((candidate) => fs.existsSync(candidate));
+const SYSTEM_GZIP = ["/usr/bin/gzip", "/bin/gzip"].find((candidate) => fs.existsSync(candidate));
 
 describe("tar symlink target confinement", () => {
   test("rejects parent traversal with forward or backslash separators", () => {
@@ -38,6 +45,113 @@ describe("tar symlink target confinement", () => {
   test("still rejects absolute targets and drive letters", () => {
     for (const link of ["/etc/passwd", "\\windows\\system32", "C:\\Windows"]) {
       assert.equal(isSymlinkSafe(link, "nexus/link").safe, false, link);
+    }
+  });
+});
+
+describe("tar extraction trusted tools and environment", () => {
+  test("does not resolve tar from PATH", async (t) => {
+    if (!SYSTEM_TAR) return t.skip("no system tar at /usr/bin/tar or /bin/tar");
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-tar-env-"));
+    const pkg = path.join(root, "nexus");
+    fs.mkdirSync(path.join(pkg, "bin"), { recursive: true });
+    fs.mkdirSync(path.join(pkg, "lib", "core"), { recursive: true });
+    for (const rel of ["bin/nexus", "lib/core/harness-core", "lib/core/nexus-tui", "VERSION"]) {
+      fs.writeFileSync(path.join(pkg, rel), "payload\n");
+    }
+    const archive = path.join(root, "release.tar.gz");
+    const built = spawnSync(SYSTEM_TAR!, ["-czf", archive, "-C", root, "nexus"], { encoding: "utf8" });
+    assert.equal(built.status, 0, built.stderr);
+
+    const marker = path.join(root, "tar-executed");
+    const bin = path.join(root, "bin-path");
+    fs.mkdirSync(bin);
+    fs.writeFileSync(path.join(bin, "tar"), `#!/bin/sh\ntouch '${marker}'\nexec /usr/bin/tar "$@"\n`, { mode: 0o755 });
+    fs.chmodSync(path.join(bin, "tar"), 0o755);
+    const savedPath = process.env.PATH;
+    process.env.PATH = `${bin}:${savedPath ?? ""}`;
+    try {
+      const destination = path.join(root, "out");
+      fs.mkdirSync(destination);
+      await safeExtractTar(archive, destination, "nexus");
+      assert.equal(fs.existsSync(marker), false, "tar was resolved from PATH");
+      assert.ok(fs.existsSync(path.join(destination, "nexus", "VERSION")), "the archive was still extracted");
+    } finally {
+      if (savedPath === undefined) delete process.env.PATH;
+      else process.env.PATH = savedPath;
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("does not honor ambient TAR_OPTIONS during extraction", async (t) => {
+    if (!SYSTEM_TAR) return t.skip("no system tar at /usr/bin/tar or /bin/tar");
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-tar-options-"));
+    const pkg = path.join(root, "nexus");
+    fs.mkdirSync(path.join(pkg, "bin"), { recursive: true });
+    fs.mkdirSync(path.join(pkg, "lib", "core"), { recursive: true });
+    for (const rel of ["bin/nexus", "lib/core/harness-core", "lib/core/nexus-tui", "VERSION"]) {
+      fs.writeFileSync(path.join(pkg, rel), "payload\n");
+    }
+    const archive = path.join(root, "release.tar.gz");
+    const built = spawnSync(SYSTEM_TAR!, ["-czf", archive, "-C", root, "nexus"], { encoding: "utf8" });
+    assert.equal(built.status, 0, built.stderr);
+
+    const marker = path.join(root, "to-command-executed");
+    const command = path.join(root, "evil-command");
+    fs.writeFileSync(command, `#!/bin/sh\ntouch '${marker}'\ncat >/dev/null\n`, { mode: 0o755 });
+    fs.chmodSync(command, 0o755);
+    const saved = process.env.TAR_OPTIONS;
+    process.env.TAR_OPTIONS = `--to-command=${command}`;
+    const destination = path.join(root, "out");
+    fs.mkdirSync(destination);
+    let failure: unknown;
+    try {
+      await safeExtractTar(archive, destination, "nexus");
+    } catch (err) {
+      failure = err;
+    } finally {
+      if (saved === undefined) delete process.env.TAR_OPTIONS;
+      else process.env.TAR_OPTIONS = saved;
+    }
+    try {
+      assert.equal(fs.existsSync(marker), false, "ambient TAR_OPTIONS executed a command during extraction");
+      if (failure) throw failure;
+      assert.ok(fs.existsSync(path.join(destination, "nexus", "VERSION")), "the archive was extracted without ambient options");
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("does not resolve the decompressor from PATH", async (t) => {
+    if (!SYSTEM_TAR || !SYSTEM_GZIP) return t.skip("no system tar/gzip for the decompressor probe");
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-gzip-env-"));
+    const pkg = path.join(root, "nexus");
+    fs.mkdirSync(path.join(pkg, "bin"), { recursive: true });
+    fs.mkdirSync(path.join(pkg, "lib", "core"), { recursive: true });
+    for (const rel of ["bin/nexus", "lib/core/harness-core", "lib/core/nexus-tui", "VERSION"]) {
+      fs.writeFileSync(path.join(pkg, rel), "payload\n");
+    }
+    const archive = path.join(root, "release.tar.gz");
+    const built = spawnSync(SYSTEM_TAR, ["-czf", archive, "-C", root, "nexus"], { encoding: "utf8" });
+    assert.equal(built.status, 0, built.stderr);
+
+    const marker = path.join(root, "gzip-executed");
+    const shim = path.join(root, "bin-path");
+    fs.mkdirSync(shim);
+    fs.writeFileSync(path.join(shim, "gzip"), `#!/bin/sh\ntouch '${marker}'\nexec '${SYSTEM_GZIP}' "$@"\n`, { mode: 0o755 });
+    fs.chmodSync(path.join(shim, "gzip"), 0o755);
+    const savedPath = process.env.PATH;
+    process.env.PATH = `${shim}:${savedPath ?? ""}`;
+    try {
+      const destination = path.join(root, "out");
+      fs.mkdirSync(destination);
+      await safeExtractTar(archive, destination, "nexus");
+      assert.equal(fs.existsSync(marker), false, "tar resolved its decompressor from PATH");
+      assert.ok(fs.existsSync(path.join(destination, "nexus", "VERSION")), "the archive was still extracted");
+    } finally {
+      if (savedPath === undefined) delete process.env.PATH;
+      else process.env.PATH = savedPath;
+      fs.rmSync(root, { recursive: true, force: true });
     }
   });
 });
