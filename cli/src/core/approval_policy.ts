@@ -1,6 +1,6 @@
 /**
  * Approval Policy Framework
- * Nexus SPEC-01 §5.1, §5.2 — Safe Execution Defaults (DEC-01 option C)
+ * Nexus SPEC-01 §5.1, §5.2 — Safe Execution Defaults (DEC-01, as amended)
  */
 import { EffectClass } from "./capabilities.js";
 
@@ -8,6 +8,7 @@ export type ApprovalMode = "auto" | "review" | "read-only";
 
 export interface PolicyContext {
   mode: ApprovalMode;
+  /** Workspace trust is reported separately; it never selects or widens tool authority. */
   trusted: boolean;
   sandbox?: boolean | string;
   approvedEgressOrigins?: Set<string>;
@@ -19,13 +20,14 @@ export interface PolicyContext {
 export class ApprovalPolicy {
   /**
    * Decides whether an operator decision is required before executing a capability with effect class `effect`.
-   * SPEC-01 §5.1, DEC-01 option C:
-   * - Untrusted workspace -> review for write_workspace, exec, egress and context_inject.
-   * - Trusted workspace -> auto for write_workspace and exec; egress asks once per origin per session.
+   * Permission mode controls tool approvals independently of workspace trust:
+   * - Review mode asks before writes, commands and egress.
+   * - Auto mode allows writes and commands; egress asks once per origin per session.
+   * - Untrusted context sources remain distinguishable from workspace trust.
    * - --yes / fullAccess forces auto for write and exec.
    */
   public requiresDecision(effect: EffectClass, context: PolicyContext): boolean {
-    const { mode, trusted, approvedEgressOrigins, egressOrigin, isUntrustedSource, fullAccess } = context;
+    const { mode, approvedEgressOrigins, egressOrigin, isUntrustedSource, fullAccess } = context;
 
     // Full access (--yes / operator force auto) bypasses confirmation prompts for write and exec
     if (fullAccess) {
@@ -57,9 +59,7 @@ export class ApprovalPolicy {
         }
         return true;
       }
-      if (effect === "context_inject") {
-        return Boolean(isUntrustedSource || !trusted);
-      }
+      if (effect === "context_inject") return Boolean(isUntrustedSource);
       return false;
     }
 
@@ -69,8 +69,7 @@ export class ApprovalPolicy {
         return false;
       }
       if (effect === "exec") {
-        // DEC-01 option C: auto mode in an untrusted workspace asks before exec unless trusted
-        return !trusted;
+        return false;
       }
       if (effect === "egress") {
         // Egress asks on the first call per origin per session, then allowed for that origin
@@ -80,7 +79,7 @@ export class ApprovalPolicy {
         return true;
       }
       if (effect === "context_inject") {
-        return Boolean(isUntrustedSource || !trusted);
+        return Boolean(isUntrustedSource);
       }
       return false;
     }

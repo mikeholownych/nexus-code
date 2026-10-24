@@ -103,7 +103,7 @@ export function promptWorkspaceTrust(
   if (!input.isTTY || !output.isTTY) {
     noticeOutput.write(
       `Nexus: ${displayWorkspace} is not trusted. Project instructions and workspace integrations stay unloaded. ` +
-      `Run 'nexus trust .' to trust this folder; untrusted workspaces default to review mode.\n`,
+      `Run 'nexus trust .' to load them. Tool approvals follow your permission settings.\n`,
     );
     return Promise.resolve("untrusted");
   }
@@ -134,11 +134,12 @@ export function promptWorkspaceTrust(
         fit(displayWorkspace),
         "Load project instructions",
         fit(projectFile),
-        "Trust saved for future workspace files.",
-        "Rules/integrations require trust.",
-        "Default mode follows trust.",
-        "Trusted: auto · untrusted: review",
-        "Explicit mode still applies.",
+        "Trust remembered for this folder.",
+        "Includes future project config changes.",
+        "Trust loads project instructions and",
+        "workspace integrations.",
+        "Tool approvals use permission settings.",
+        "Folder trust doesn't change approvals.",
         ...(statusMessage ? [fit(statusMessage)] : []),
         "",
         ...rows,

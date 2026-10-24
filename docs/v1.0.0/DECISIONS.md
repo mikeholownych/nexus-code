@@ -6,7 +6,7 @@ Some decisions cannot be carried out by an implementer alone. They need an exter
 
 | ID | Decision | Resolution | Blocks execution? |
 |---|---|---|---|
-| [DEC-01](#dec-01-default-execution-posture) | Default execution posture | Review by default; auto only in trusted workspaces | No (resolved) |
+| [DEC-01](#dec-01-default-execution-posture) | Default execution posture | Review by default; permission mode is independent of folder trust | No (resolved) |
 | [DEC-02](#dec-02-role-of-the-repl) | Role of the REPL | Supported secondary surface; TUI primary; top-level flags implemented | No |
 | [DEC-03](#dec-03-team-and-operation-scope-in-v1) | `/team` and `nexus operation` in v1 | Shipped as **experimental**; data-loss fix still a blocker | No |
 | [DEC-04](#dec-04-issue-12-open-normative-blockers) | Issue #12 open blockers | EXT-004 implemented; CTX-001 partially implemented; CTX-002 descoped post-v1 | No |
@@ -34,10 +34,12 @@ Some decisions cannot be carried out by an implementer alone. They need an exter
 |---|---|---|
 | A | Review by default: write, exec and egress ask | Safest. More prompts. Changes existing users' habits. |
 | B | Auto with an enforced sandbox by default | Few prompts. bwrap is unavailable on some hosts (WSL, rootless containers), and the Docker fallback is unpinned and networked. Egress is unsolved. |
-| **C (chosen)** | Posture follows workspace trust. **Untrusted workspace → review** for `write_workspace`, `exec`, `egress` and `context_inject`. **Trusted workspace → auto** for `write_workspace` and `exec`; `egress` asks once per origin per session. `--yes` or `NEXUS_APPROVAL_MODE=auto` force auto. `--sandbox` stays available. | Safe for cloned or unknown repos. Low friction on the operator's own repos after one `nexus trust .`. Reuses the existing trust store, so there is no new concept. |
+| **C (original choice; amended 2026-10-24)** | Permission mode controls approvals independently of workspace trust. The default is `review`. `--mode auto` permits writes and commands regardless of folder trust and keeps first-use egress approval per origin. `--yes` and `NEXUS_APPROVAL_MODE=auto` select full access and bypass confirmation prompts, including egress. | Folder trust is a separate choice for loading project instructions and workspace integrations. |
 | D | Keep auto | Contradicts REQ-SEC-101; rejected. |
 
-**Rationale.** The threat that matters is content from an untrusted repository or the web. Trust is the existing per-workspace boundary that MCP and plugins already honour. Option C closes SEC-01 and VER-01 on exactly the inputs that cause them, and keeps the daily-driver experience on trusted repos.
+**Rationale.** Folder trust protects project instructions and workspace integrations from being loaded before the operator approves those sources. Tool authority is governed by the operator's permission settings and must not change when a folder is trusted. A configured `auto` mode remains the operator's choice; when no permission mode is configured, Nexus defaults to `review`.
+
+**Amendment (2026-10-24, operator direction).** This supersedes the original trust-derived mode and approval behavior. Trust affects project instruction and integration loading only; it does not select or change tool approval mode. Approval behavior follows the configured permission mode, with `review` as the unconfigured default.
 
 **Further rules:**
 - Headless `nexus run` with no TTY: decision-required calls are DENIED with a typed reason unless `--yes` is given.

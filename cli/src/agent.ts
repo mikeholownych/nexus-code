@@ -1272,8 +1272,8 @@ export class AutonomousAgent {
     if (this.checkpointReadOnlyFallback || this.config.readOnly) return "read-only";
     if (this.config.approvalMode) return this.config.approvalMode;
     if (this.config.fullAccess) return "auto";
-    const trusted = isWorkspaceTrusted(this.config.workspace, Boolean(this.config.readOnly));
-    return trusted ? "auto" : "review";
+    // Workspace trust controls project instructions and integrations; permission settings alone select approval posture.
+    return "review";
   }
 
   /** Restrict this session to read-only authority when its workspace cannot be safely checkpointed. */
@@ -3850,7 +3850,7 @@ The pinned Objective Ledger lists the operator's requirements; your plan never r
                 fullAccess: Boolean(this.config.fullAccess) && !this.isReadOnly(),
               };
               const error = (!onConfirm && this.approvalPolicy.requiresDecision("exec", policyContext))
-                ? `Error: Verifier '${verifierCommand}' requires operator approval (exec), but no operator is present (headless execution). Run with --yes or --mode auto, or 'nexus trust .' to trust this workspace.`
+                ? `Error: Verifier '${verifierCommand}' requires operator approval (exec), but no operator is present (headless execution). Run with --yes or --mode auto to explicitly select automatic approvals.`
                 : `Verification Oracle: verifier execution was not approved by operator (${verifierCommand}).`;
               return {
                 success: false,
@@ -4528,7 +4528,10 @@ The pinned Objective Ledger lists the operator's requirements; your plan never r
 
     if (askOperator) {
       if (!onConfirm) {
-        const cancelMsg = `Error: Tool '${toolName}' requires operator approval (${effect}), but no operator is present (headless execution). Run with --yes or --mode auto, or 'nexus trust .' to trust this workspace.`;
+        const approvalGuidance = effect === "egress"
+          ? "Run with --yes to explicitly allow egress without an operator prompt."
+          : "Run with --yes or --mode auto to explicitly select automatic approvals.";
+        const cancelMsg = `Error: Tool '${toolName}' requires operator approval (${effect}), but no operator is present (headless execution). ${approvalGuidance}`;
         const receipt: ExecutionReceipt = {
           invocationId: call.id,
           taskId: this.activeWorktree?.taskId || this.currentTaskId,

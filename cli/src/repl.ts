@@ -102,7 +102,7 @@ export class InteractiveRepl {
     } else if (typeof modeOrAutoApprove === "boolean") {
       this.approvalMode = modeOrAutoApprove ? "auto" : "review";
     } else {
-      this.approvalMode = this.config.approvalMode || (isWorkspaceTrusted(this.config.workspace, Boolean(this.config.readOnly)) ? "auto" : "review");
+      this.approvalMode = this.config.approvalMode || (this.config.readOnly ? "read-only" : this.config.fullAccess ? "auto" : "review");
     }
     this.config.surface = "repl";
     this.agent.setSurface("repl");
@@ -1643,9 +1643,9 @@ export class InteractiveRepl {
             const desc = describeVerifier(this.config.workspace, commandOverride);
             const testCmd = desc?.command || commandOverride;
 
-            // Verifier gating under review mode / untrusted workspace
+            // Verifier gating follows the permission mode; trust only controls workspace integrations.
             const isTrusted = isWorkspaceTrusted(this.config.workspace, Boolean(this.config.readOnly));
-            const mode = this.config.approvalMode ?? (this.config.readOnly ? "read-only" : (this.config.fullAccess ? "auto" : (isTrusted ? "auto" : "review")));
+            const mode = this.config.approvalMode ?? (this.config.readOnly ? "read-only" : (this.config.fullAccess ? "auto" : "review"));
             const policyContext: PolicyContext = {
               mode,
               trusted: isTrusted,
