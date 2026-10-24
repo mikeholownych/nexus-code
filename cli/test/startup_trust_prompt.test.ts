@@ -67,6 +67,11 @@ test("trust prompt offers explicit trust, continue-untrusted, and exit choices",
     assert.match(rendered, /Trust and continue/);
     assert.match(rendered, /Continue without trusting/);
     assert.match(rendered, /Exit/);
+    assert.match(rendered, /Trust remembered for this folder/);
+    assert.match(rendered, /Includes future project config changes/);
+    assert.match(rendered, /Tool approvals follow your settings/);
+    assert.match(rendered, /Mode default if unset:/);
+    assert.match(rendered, /trusted=auto, untrusted=review/);
     assert.ok(rendered.split("\n").every((line) => displayWidth(line) <= 40), rendered);
 
     terminal.input.emit("keypress", undefined, { name: "down" });
