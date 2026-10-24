@@ -17,18 +17,20 @@ nexus
 ```bash
 nexus repl
 ```
-- On each interactive launch from an untrusted folder, Nexus asks whether to trust the folder, continue without trust, or exit. Trust loads project instructions when present and enables trusted workspace integrations; trusted workspaces default to `auto` unless an explicit mode is selected. Continuing without trust leaves project instructions and integrations unloaded and keeps the existing permission settings (untrusted workspaces default to `review`). Non-interactive launches do not prompt and do not load project instructions unless the folder is already trusted.
+- On each interactive launch from an untrusted folder, Nexus asks whether to trust the folder, continue without trust, or exit. Trust loads project instructions when present and enables trusted workspace integrations. Folder trust is separate from tool permissions: an explicit mode controls approvals, and an unset mode defaults to `review` in every folder. Non-interactive launches do not prompt and do not load project instructions unless the folder is already trusted.
 
 ### Execution Postures & Approval Modes
 
-Nexus Code resolves execution posture per workspace trust (DEC-01 option C):
-- **Untrusted workspaces:** Default to `review` posture, requiring human confirmation before executing shell commands, file modifications, network requests, or verifier test runs.
-- **Trusted workspaces:** Default to `auto` posture, permitting autonomous execution.
+Nexus Code resolves tool approval posture from permission settings, independently of workspace trust (amended DEC-01):
+- **Default:** `review` posture, requiring human confirmation before executing shell commands, file modifications, network requests, or verifier test runs, regardless of folder trust.
+- **Auto:** Select with `--mode auto`. Writes and commands run without approval; network egress still asks on first use of each origin. This is independent of folder trust.
+- **Full access:** Select with `--yes` or `NEXUS_APPROVAL_MODE=auto` to bypass approval prompts, including egress.
 
 Flags and commands:
-- **Trust your workspace:** Run `nexus trust .` to mark the current repository trusted and enable default `auto` execution.
+- **Trust your workspace:** Run `nexus trust .` to load project instructions and workspace integrations. It does not change tool permission settings.
 - **Review mode (human-in-the-loop):** Run `nexus --approve` (or `nexus --mode review`) to require explicit approval for all actions regardless of workspace trust.
-- **Autonomous mode (scripts and CI):** Pass `nexus --yes` (or `nexus --mode auto`, or set `NEXUS_APPROVAL_MODE=auto`) to run autonomously without interactive approval prompts.
+- **Auto mode:** Pass `nexus --mode auto` for autonomous writes and commands, with first-use egress prompts.
+- **Full access (scripts and CI):** Pass `nexus --yes` or set `NEXUS_APPROVAL_MODE=auto` to run without interactive approval prompts.
 - **Read-only mode:** Run `nexus --read-only` to explore and analyze code without permitting any modifications or non-read commands.
 
 To resume your latest session:
@@ -385,7 +387,7 @@ Nexus Code provides high-performance tools executed via compiled native 64-bit R
 - **Structured Context Compaction**: `/compact` distills discarded messages into structured memory (files touched, commands run, architectural decisions) instead of discarding context blindly.
 - **Dynamic Few-Shot Injection**: Context-aware injection of valid tool exemplars (edits, test repair, batch reads) tailored to the active task, eliminating tool hallucination in local models (Qwen 2.5, DeepSeek Coder).
 - **Destructive Command Convenience Tripwire (REQ-SEC-108)**: Shell-words tokenization in TypeScript and Rust blocks obviously destructive commands (`rm -rf /`, `mkfs`, raw block device writes, fork bombs) without false positives on legitimate project commands (`rm -rf ./build`, `rm -rf /tmp/x`, `grep reboot`, `echo shutdown`, `chown -R me /srv`). This denylist is a **convenience tripwire** to catch obvious mistakes, **not a security boundary**. Known bypasses (such as `find / -delete`, `/bin/rm -rf /`, `rm -r -f /`, Python scripts) are documented non-goals that pass by design; the sandbox (`--sandbox`) and approval posture (`review`) form the security boundary.
-- **Verifier Execution Gating (REQ-SEC-119)**: Automated test runs and verifiers (`run_tests`, `/test`, completion oracle) are classified as `exec` capabilities subject to the approval policy. In untrusted workspaces, the first verifier execution prompts for approval, displaying the exact test command and resolved script body from `package.json`, `Makefile`, or `Cargo.toml`.
+- **Verifier Execution Gating (REQ-SEC-119)**: Automated test runs and verifiers (`run_tests`, `/test`, completion oracle) are classified as `exec` capabilities subject to the configured approval mode. In review mode, the first verifier execution prompts for approval, displaying the exact test command and resolved script body from `package.json`, `Makefile`, or `Cargo.toml`; folder trust alone does not authorize it.
 - **Approval Input Safety & Surface Integrity (REQ-SEC-103, TUI-09, TUI-10)**:
   - In `InteractiveRepl`: Prompts display `[y/N/d/a]`. Lone Enter safely defaults to No (`N`). A 400ms grace period discards typed-ahead input and pastes. Selecting `a` (approve all) requires explicit typing of `all` to confirm.
   - In the Ratatui TUI: The approval modal lays out `Approve` (left) · `All later` (center) · `Deny` (right). Left arrow (`←`) selects `Approve` and Right arrow (`→`) selects `Deny`. On narrow terminals (<60 columns), short-form hints fit within 38 columns without clipping.

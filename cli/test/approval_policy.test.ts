@@ -135,7 +135,7 @@ describe("review-mode gate in the agent loop", () => {
   });
 });
 
-describe("ApprovalPolicy DEC-01 option C decision matrix", () => {
+describe("ApprovalPolicy permission-mode decision matrix", () => {
   const policy = new ApprovalPolicy();
 
   test("read_workspace and delegate never require operator decision", () => {
@@ -157,12 +157,11 @@ describe("ApprovalPolicy DEC-01 option C decision matrix", () => {
     assert.equal(policy.requiresDecision("write_workspace", { mode: "auto", trusted: false, fullAccess: true }), false);
   });
 
-  test("exec requires decision in review mode and in auto mode when untrusted", () => {
-    // Review mode: always asks
+  test("exec approval follows permission mode regardless of workspace trust", () => {
     assert.equal(policy.requiresDecision("exec", { mode: "review", trusted: true }), true);
     assert.equal(policy.requiresDecision("exec", { mode: "review", trusted: false }), true);
-    // Auto mode: asks only when untrusted
-    assert.equal(policy.requiresDecision("exec", { mode: "auto", trusted: false }), true);
+    // Auto mode follows the operator's permission setting in both trusted and untrusted folders.
+    assert.equal(policy.requiresDecision("exec", { mode: "auto", trusted: false }), false);
     assert.equal(policy.requiresDecision("exec", { mode: "auto", trusted: true }), false);
     // fullAccess (--yes): never asks
     assert.equal(policy.requiresDecision("exec", { mode: "auto", trusted: false, fullAccess: true }), false);
@@ -179,9 +178,9 @@ describe("ApprovalPolicy DEC-01 option C decision matrix", () => {
     assert.equal(policy.requiresDecision("egress", { mode: "auto", trusted: true, egressOrigin: "https://example.com", approvedEgressOrigins: approved }), false);
   });
 
-  test("context_inject asks when source is untrusted or workspace is untrusted", () => {
-    assert.equal(policy.requiresDecision("context_inject", { mode: "review", trusted: false }), true);
-    assert.equal(policy.requiresDecision("context_inject", { mode: "auto", trusted: false }), true);
+  test("workspace trust does not change context-injection approval; untrusted sources remain gated", () => {
+    assert.equal(policy.requiresDecision("context_inject", { mode: "review", trusted: false }), false);
+    assert.equal(policy.requiresDecision("context_inject", { mode: "auto", trusted: false }), false);
     assert.equal(policy.requiresDecision("context_inject", { mode: "auto", trusted: true, isUntrustedSource: true }), true);
     assert.equal(policy.requiresDecision("context_inject", { mode: "auto", trusted: true, isUntrustedSource: false }), false);
   });

@@ -1,8 +1,8 @@
 /**
  * SPEC-01 §3 rule 8 & ACC-SAFE-09: Verifier executions that Nexus initiates itself
  * (change baseline, completion oracle, independence copy, /test) are exec-class actions.
- * - In an untrusted workspace, the first verifier run requires a one-time approval with command and script body.
- * - In a trusted workspace, they run without asking under auto posture.
+ * - In review mode, the first verifier run requires a one-time approval with command and script body.
+ * - Explicit auto mode runs without asking regardless of workspace trust.
  * - Approvals are cached per (workspace, command, digest) for the session.
  */
 import { test, describe } from "node:test";
@@ -57,12 +57,14 @@ describe("ACC-SAFE-09: Verifier Gating", () => {
     }
   });
 
-  test("untrusted repo under review mode prompts for verifier and script body, writes sentinel only after approval, and caches session decision", async () => {
+  for (const trusted of [false, true]) {
+    test(`${trusted ? "trusted" : "untrusted"} repo in review mode prompts for verifier and script body, writes sentinel only after approval, and caches session decision`, async () => {
     const savedHome = process.env.HOME;
     const tempHome = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-vg-home-"));
     process.env.HOME = tempHome;
 
-    const { ws, sentinelPath } = setupRepo("untrusted");
+    const { ws, sentinelPath } = setupRepo(`review-${trusted ? "trusted" : "untrusted"}`);
+    if (trusted) setWorkspaceTrusted(ws, true);
     const replies = [
       {
         kind: "tools" as const,
@@ -85,7 +87,7 @@ describe("ACC-SAFE-09: Verifier Gating", () => {
 
     const promptLog: Array<{ tool: string; args: any }> = [];
     try {
-      assert.equal(isWorkspaceTrusted(ws), false, "repo should be untrusted by default");
+      assert.equal(isWorkspaceTrusted(ws), trusted, `repo trust should be ${trusted}`);
 
       await agent.runTurn("make changes and finish", async (tool, args) => {
         promptLog.push({ tool, args });
@@ -119,7 +121,8 @@ describe("ACC-SAFE-09: Verifier Gating", () => {
       fs.rmSync(tempHome, { recursive: true, force: true });
       process.env.HOME = savedHome;
     }
-  });
+    });
+  }
 
   test("denied verifier does not execute verifier and sentinel is not written", async () => {
     const savedHome = process.env.HOME;
@@ -161,13 +164,14 @@ describe("ACC-SAFE-09: Verifier Gating", () => {
     }
   });
 
-  test("trusted repo in auto mode runs verifier with zero prompts", async () => {
+  for (const trusted of [false, true]) {
+    test(`${trusted ? "trusted" : "untrusted"} repo in explicitly configured auto mode runs verifier without prompts`, async () => {
     const savedHome = process.env.HOME;
     const tempHome = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-vg-home-"));
     process.env.HOME = tempHome;
 
-    const { ws, sentinelPath } = setupRepo("trusted");
-    setWorkspaceTrusted(ws, true);
+    const { ws, sentinelPath } = setupRepo(`auto-${trusted ? "trusted" : "untrusted"}`);
+    if (trusted) setWorkspaceTrusted(ws, true);
 
     const replies = [
       {
@@ -187,14 +191,14 @@ describe("ACC-SAFE-09: Verifier Gating", () => {
 
     const promptLog: string[] = [];
     try {
-      assert.equal(isWorkspaceTrusted(ws), true, "repo should be trusted");
+      assert.equal(isWorkspaceTrusted(ws), trusted, `repo trust should be ${trusted}`);
 
       await agent.runTurn("make change", async (tool) => {
         promptLog.push(tool);
         return true;
       });
 
-      assert.equal(promptLog.length, 0, "auto mode in trusted workspace should require zero prompts");
+      assert.equal(promptLog.length, 0, "explicit auto mode should not depend on workspace trust");
       assert.equal(fs.existsSync(sentinelPath), true, "sentinel should be created automatically");
     } finally {
       agent.shutdown();
@@ -203,7 +207,8 @@ describe("ACC-SAFE-09: Verifier Gating", () => {
       fs.rmSync(tempHome, { recursive: true, force: true });
       process.env.HOME = savedHome;
     }
-  });
+    });
+  }
 
   test("headless execution refuses verifier output without a matching pre-change baseline", async () => {
     const savedHome = process.env.HOME;

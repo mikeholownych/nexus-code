@@ -7,6 +7,25 @@ import { buildConfig, autoDetectModel } from "../src/config.js";
 import { startGateway } from "./helpers/fixtures.js";
 
 describe("config", () => {
+  test("workspace trust does not select the tool approval mode", () => {
+    const previousTrustOverride = process.env.NEXUS_TRUST_WORKSPACE;
+    const previousApprovalMode = process.env.NEXUS_APPROVAL_MODE;
+    process.env.NEXUS_TRUST_WORKSPACE = "1";
+    delete process.env.NEXUS_APPROVAL_MODE;
+    try {
+      assert.equal(buildConfig({ endpoint: "e", model: "x" }).approvalMode, "review");
+      assert.equal(buildConfig({ endpoint: "e", model: "x", mode: "auto" }).approvalMode, "auto");
+      assert.equal(buildConfig({ endpoint: "e", model: "x", mode: "read-only" }).approvalMode, "read-only");
+      process.env.NEXUS_APPROVAL_MODE = "auto";
+      assert.equal(buildConfig({ endpoint: "e", model: "x" }).approvalMode, "auto");
+    } finally {
+      if (previousTrustOverride === undefined) delete process.env.NEXUS_TRUST_WORKSPACE;
+      else process.env.NEXUS_TRUST_WORKSPACE = previousTrustOverride;
+      if (previousApprovalMode === undefined) delete process.env.NEXUS_APPROVAL_MODE;
+      else process.env.NEXUS_APPROVAL_MODE = previousApprovalMode;
+    }
+  });
+
   test("operator deliverable scope is literal, workspace-relative, and rejects oracle paths and symlinks", () => {
     const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-deliverable-scope-"));
     const outside = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-deliverable-outside-"));

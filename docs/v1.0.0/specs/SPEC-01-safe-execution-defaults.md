@@ -2,14 +2,16 @@
 
 | | |
 |---|---|
-| Status | Ready. Default posture resolved by [DEC-01](../DECISIONS.md#dec-01-default-execution-posture) (option C: review in untrusted workspaces, auto in trusted ones). |
+| Status | Updated by [DEC-01](../DECISIONS.md#dec-01-default-execution-posture): permission mode is independent of folder trust; unset mode defaults to review. |
 | Release class | **BLOCKER** |
 | Requirements | REQ-SEC-101, REQ-SEC-102, REQ-SEC-103, REQ-SEC-104, REQ-TUI-102, REQ-SEC-108, REQ-SEC-109, REQ-SEC-119 |
 | Findings | SEC-01, VER-01, HIST-05, TUI-07, TUI-02, TUI-03, TUI-12, SEC-02, SEC-04, SEC-10, VER-14, TUI-09, TUI-10 |
 | Plan | [PLAN-01](../plans/PLAN-01-safe-execution-defaults.md) |
 | Acceptance | ACC-SAFE-01 to ACC-SAFE-06 in [ACCEPTANCE.md](../ACCEPTANCE.md) |
 
-## 1. Problem
+## 1. Original finding (historical baseline)
+
+The observations in this section describe the original audit baseline and are not assertions about the amended DEC-01 behavior. In particular, the reported trust-derived `auto` default was the defect identified by SEC-01; DEC-01 was amended on 2026-10-24 to make permission mode independent of folder trust and default to `review`.
 
 Nexus's default interactive mode is `auto` on both surfaces (`cli/src/sidecar.ts:935`, `cli/src/index.ts:93,115`, `cli/src/repl.ts:69`). In `auto`:
 
@@ -58,9 +60,9 @@ The live Ratatui TUI's approval guard is strong. It held under continuous typing
 5. **REQ-TUI-102.** At session start, both surfaces state the active posture, how to change it, and whether the workspace is trusted.
 6. **REQ-SEC-108.** The command denylist is documented and labelled as a convenience tripwire, not a boundary. Its known false positives are removed.
 7. **REQ-SEC-109.** The sandbox command line is built as an argv array and never re-parsed by a shell.
-8. **REQ-SEC-119.** Verifier executions that Nexus initiates itself (change baseline, completion oracle, independence copy, `run_tests`, `/test`) are `exec`-class actions. They are subject to the same posture as `run_command`.
-   - In an untrusted workspace, the first verifier run requires a one-time approval. The approval shows the exact command and the script body it resolves to (for example the `scripts.test` entry, or the Makefile `test:` recipe).
-   - In a trusted workspace, they run without asking under the auto posture.
+8. **REQ-SEC-119.** Verifier executions that Nexus initiates itself (change baseline, completion oracle, independence copy, `run_tests`, `/test`) are `exec`-class actions. They are subject to the same permission mode as `run_command`.
+   - In review mode, the first verifier run requires a one-time approval. The approval shows the exact command and the script body it resolves to (for example the `scripts.test` entry, or the Makefile `test:` recipe).
+   - An explicitly configured auto posture runs without asking regardless of workspace trust; folder trust controls project instructions and integrations only.
    - All of them go through the Rust runner (sandbox, cancel and output bounds apply), never host `execSync`.
 
 ## 4. Scope
@@ -93,16 +95,16 @@ Add `effect: EffectClass` to `CanonicalCapability` (`cli/src/core/capabilities.t
 |---|---|---|---|---|
 | `read_workspace` | read_file, search_code, list_dir, git_status | allowed | allowed | allowed |
 | `write_workspace` | write_file, edit_file, patch_file, delete_file | refused | ask | allowed |
-| `exec` | run_command, run_tests, LSP server spawn, plugin and MCP tool calls | refused, except the confined read-only allowlist | ask | allowed if the workspace is trusted; otherwise ask (DEC-01 option C) |
+| `exec` | run_command, run_tests, LSP server spawn, plugin and MCP tool calls | refused, except the confined read-only allowlist | ask | allowed under explicit auto mode regardless of folder trust |
 | `egress` | fetch_web, search_web, browser_*, MCP remote tools | refused | ask | ask on the first call per origin per session, then allowed for that origin (DEC-01 option C) |
 | `delegate` | spawn_subagent | allowed (the child inherits the parent mode) | allowed (the child is gated individually) | allowed |
-| `context_inject` | activate_skill, manage_knowledge write | refused (write) | ask when the source is untrusted (see SPEC-03) | allowed if trusted |
+| `context_inject` | activate_skill, manage_knowledge write | refused (write) | ask when the source is untrusted (see SPEC-03) | ask only when the source is untrusted; folder trust does not decide |
 
 Each capability declaration must state its class. A unit test enumerates the registry and fails on any capability without a class. MCP and plugin tools registered at runtime default to `exec`.
 
 ### 5.2 Gate
 
-In `cli/src/agent.ts:3945-3947`, replace `onConfirm && isMutating` with `policy.requiresDecision(cap.effect, context)`. `context` contains the mode, the trust state, the sandbox state and the per-origin egress memory.
+In `cli/src/agent.ts:3945-3947`, replace `onConfirm && isMutating` with `policy.requiresDecision(cap.effect, context)`. `context` contains the permission mode, source trust, sandbox state and per-origin egress memory. Workspace trust is reported separately and never selects authority.
 
 When no `onConfirm` handler exists (headless `nexus run`) and a decision is required, the call is DENIED with a typed reason. It is not silently allowed. `nexus run` keeps its current semantics only when `--yes` or `--mode auto` is explicit. The `nexus run --help` text must say so.
 
@@ -135,13 +137,13 @@ Line 1 of the TUI header and the REPL banner: `mode: review · sandbox: off · w
 ## 6. Interfaces and state changes
 
 - `CanonicalCapability.effect` is a new required field. The registry validates it at registration.
-- `HarnessConfig.approvalMode: "auto" | "review" | "read-only"`. This replaces the boolean `autoApprove` flags in the REPL and sidecar. CLI flags map onto it: `--approve` = review, `--yes`/`--mode auto` = auto, `--read-only`.
+- `HarnessConfig.approvalMode: "auto" | "review" | "read-only"`. This replaces the boolean `autoApprove` flags in the REPL and sidecar. `--mode auto` selects auto with per-origin egress approval; `--yes` and `NEXUS_APPROVAL_MODE=auto` select full access and bypass egress approval too. `--approve` selects review and `--read-only` selects read-only.
 - Sidecar protocol: `session.state` gains `posture { mode, sandbox, trusted }`. The Rust TUI renders it (`core/src/bin/nexus_tui/protocol.rs`). The new optional field is backward-compatible.
 - Persisted sessions do **not** persist an approval mode. Resume uses the current launch posture. This avoids resurrecting authority, per PERS-004.
 
 ## 7. Compatibility and migration
 
-- Changing the default for untrusted workspaces from `auto` to review (DEC-01 option C) is a user-visible change. Release notes and the startup banner must state it. Provide `NEXUS_APPROVAL_MODE=auto` and `nexus trust .` + `--yes` for scripted users.
+- Unset approval mode defaults to review regardless of folder trust. Release notes and startup messaging must distinguish permission mode from folder trust. Use `--mode auto` for automatic writes and commands with per-origin egress approval; use `NEXUS_APPROVAL_MODE=auto` or `--yes` for full access.
 - `nexus run` in CI and eval contexts (`eval/run.mjs`) must pass `--yes` explicitly. Update the eval adapters in the same PR.
 - The test suites that assume auto default (`cli/test/harness.test.ts`, `sidecar*.test.ts`) must be updated to set the mode explicitly. This is a large but mechanical change.
 
@@ -165,7 +167,7 @@ Line 1 of the TUI header and the REPL banner: `mode: review · sandbox: off · w
 
 | ID | Check | Type |
 |---|---|---|
-| ACC-SAFE-01 | Fresh HOME, `nexus` (TUI) and `nexus repl`, mock gateway scripted to call `run_command "echo x > ../outside"`: in an untrusted workspace the call is not executed without an approval panel. After `nexus trust .` it runs without a panel (DEC-01 option C). | PTY |
+| ACC-SAFE-01 | Fresh HOME; run `nexus` and `nexus repl` in both trusted and untrusted fixture workspaces with explicit `--mode review` and `--mode auto`. A mock gateway calls `run_command "echo x > ../outside"`: review asks in both folders; auto permits according to the configured execution boundary in both folders. With no mode configured, both folders default to review. Trust affects only project instruction/integration loading. | PTY |
 | ACC-SAFE-02 | Capability × mode matrix test: enumerate the registry. For each mode, the expected decision matches §5.1 for every capability, including MCP and plugin-registered tools. | unit |
 | ACC-SAFE-03 | REPL PTY: lone Enter → DENIED. `y` typed before the prompt + Enter → DENIED. Paste `y\n` → DENIED. Deliberate `y` + Enter after 500 ms → APPROVED. | PTY (r1a/r1d scripts) |
 | ACC-SAFE-04 | `--read-only` + `run_command "cat ~/.ssh/id_rsa"` with a fixture HOME → refused, or fails with "No such file" inside the masked home. | integration |
@@ -173,12 +175,12 @@ Line 1 of the TUI header and the REPL banner: `mode: review · sandbox: off · w
 | ACC-SAFE-06 | Startup screen of both surfaces shows mode/sandbox/trust. Doctor JSON contains `posture`. | PTY + unit |
 | ACC-SAFE-07 | Tripwire tests: the false-positive list passes, the documented bypass list is asserted as "not blocked (by design)". | unit |
 | ACC-SAFE-08 | Existing `tui_approval_input_e2e` stays green. | PTY (CI) |
-| ACC-SAFE-09 | Untrusted fixture repo whose `package.json` `scripts.test` writes a sentinel file. Session in review mode; the operator approves one `edit_file`. The sentinel is **not** written until a verifier approval is given, and that approval panel shows `npm test` and the script body. In a trusted repo under auto, the sentinel is written without a panel. | integration + PTY |
+| ACC-SAFE-09 | Fixture repo whose `package.json` `scripts.test` writes a sentinel file. In review mode, the sentinel is not written until a verifier approval is given, and the approval panel shows `npm test` and the script body, regardless of folder trust. In auto mode, execution follows the configured permission mode regardless of folder trust. | integration + PTY |
 | ACC-SAFE-10 | `/test` runs through the runner: Esc cancels it within 5 s, and in sandbox mode it runs inside bwrap (`/proc/self/mountinfo` probe). | PTY |
 
 ## 11. Dependencies and open decisions
 
-- **DEC-01** is resolved as option C (review in untrusted workspaces, auto in trusted ones). Nothing in this spec is blocked.
+- **DEC-01** is resolved as amended: review by default; explicit permission mode controls approvals independently of folder trust. Nothing in this spec is blocked by the decision.
 - **DEC-02** is resolved: the REPL stays a supported secondary surface, so §5.3 is required.
 - SPEC-03 provides the trust state for skills and knowledge (`context_inject`).
 - SPEC-06 makes the TUI the packaged default, which reduces exposure to the REPL but does not remove it.
