@@ -53,9 +53,18 @@ export function ensureGitExclude(workspace: string): void {
 
   for (const { path: relativePath, rule } of protectedPaths) {
     const content = fs.readFileSync(excludePath, "utf-8");
-    const rules = new Set(content.split(/\r?\n/));
+    const lines = content.split(/\r?\n/);
+    const rules = new Set(lines);
     const hasExactRule = rules.has(rule) || rules.has(`/${rule}`);
-    if (hasExactRule && isIgnored(relativePath)) continue;
+    if (isIgnored(relativePath)) continue;
+
+    if (hasExactRule) {
+      const lastExactRule = Math.max(lines.lastIndexOf(rule), lines.lastIndexOf(`/${rule}`));
+      const laterNegation = lines.slice(lastExactRule + 1).some((line) => line.trimStart().startsWith("!"));
+      if (!laterNegation) {
+        throw new Error(`Git still does not ignore ${relativePath} after updating info/exclude`);
+      }
+    }
 
     const prefix = content.length === 0 || content.endsWith("\n") ? "" : "\n";
     fs.appendFileSync(excludePath, `${prefix}${rule}\n`);

@@ -116,9 +116,13 @@ test("a higher-priority repository negation fails closed when info/exclude canno
     assert.equal(isIgnored(root, ".nexus/tasks/__nexus_ignore_probe__"), true);
     assert.equal(isIgnored(root, ".nexus/"), false);
     assert.equal(isIgnored(root, ".nexus/tasks/task.json"), false);
+    const excludePath = path.join(root, ".git", "info", "exclude");
     assert.throws(() => ensureGitExclude(root), /Git still does not ignore/);
     assert.equal(isIgnored(root, ".nexus/"), false);
     assert.equal(isIgnored(root, ".nexus/tasks/task.json"), false);
+    const afterFirstAttempt = fs.readFileSync(excludePath, "utf8");
+    assert.throws(() => ensureGitExclude(root), /Git still does not ignore/);
+    assert.equal(fs.readFileSync(excludePath, "utf8"), afterFirstAttempt, "failed retries do not append duplicate rules");
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
