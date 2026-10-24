@@ -253,6 +253,18 @@ def main():
                 "passed": not skill_created and not agents_created,
             }
 
+        elif scenario == "readonly_mode_slash":
+            s.send(b"/mode read-only\r", settle=1.0)
+            s.wait_text("❯", timeout=15)
+            s.send(b"/init\r", settle=1.5)
+            s.wait_text("❯", timeout=15)
+            agents_created = os.path.exists(os.path.join(ws, "AGENTS.md"))
+            result = {
+                "scenario": scenario,
+                "agents_created": agents_created,
+                "passed": not agents_created,
+            }
+
         else:
             raise ValueError(f"Unknown scenario: {scenario}")
 

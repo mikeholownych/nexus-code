@@ -74,18 +74,18 @@ export const REPL_APPROVAL_GRACE_MS = 400;
 export function replReadOnlyAllowed(command: string, args: string): boolean {
   const name = command.trim().replace(/^\//, "").toLowerCase();
   const value = args.trim().toLowerCase();
-  if (["help", "status", "tokens", "cost", "diff", "git", "checkpoints", "audit", "receipt", "sessions",
+  if (["help", "?", "status", "tokens", "cost", "diff", "git", "checkpoints", "audit", "receipt", "sessions",
        "exit", "quit", "q", "mode", "clear", "reset", "history", "skills", "copy", "paste", "image", "cd"].includes(name)) {
     return true;
   }
   if (name === "checkpoint") return value === "diff" || value.startsWith("diff ");
   if (name === "worktree") return !value || value === "status";
-  if (name === "plan" || name === "requirements" || name === "knowledge") {
+  if (name === "plan" || name === "knowledge") {
     return !value || value === "list" || value === "show" || value === "get";
   }
   if (name === "skill") return !value || !/^init(?:\s|$)/.test(value);
   if (name === "theme") return !value;
-  if (name === "doctor") return !/(^|\s)--fix(?:\s|$)/.test(value);
+  if (name === "doctor") return !/(^|\s)--fix(?:=|\s|$)/.test(value);
   return false;
 }
 
@@ -801,7 +801,7 @@ export class InteractiveRepl {
           const cmd = parts[0].toLowerCase();
           const arg = parts.slice(1).join(" ");
 
-          if (this.config.readOnly && !replReadOnlyAllowed(cmd, arg)) {
+          if ((this.config.readOnly || this.agent.getApprovalMode() === "read-only") && !replReadOnlyAllowed(cmd, arg)) {
             console.log(pc.yellow(`/${cmd} is disabled while the session is read-only.\n`));
             continue;
           }
