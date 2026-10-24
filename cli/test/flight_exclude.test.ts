@@ -75,16 +75,36 @@ describe("ACC-PER-05: Flight Logs & Telemetry Git Exclude (REQ-PER-105)", () => 
     assert.ok(excludeContent.includes(".nexus/"), "info/exclude must contain .nexus/");
   });
 
-  test("WorktreeManager ensures .nexus/ is excluded", () => {
+  test("WorktreeManager defers .nexus exclusion until it creates workspace state", () => {
     const wm = new WorktreeManager(gitRepoDir);
     assert.ok(wm.isGitRepo());
 
     const excludePath = path.resolve(gitRepoDir, ".git", "info", "exclude");
     assert.strictEqual(fs.existsSync(excludePath), true);
+    const initialContent = fs.readFileSync(excludePath, "utf-8");
+    assert.equal(initialContent.includes(".nexus/"), false, "constructing the manager must not mutate Git metadata");
+
+    const created = wm.createWorktree("exclude-test");
+    assert.equal(created.created, true);
     const content = fs.readFileSync(excludePath, "utf-8");
     assert.ok(content.includes(".nexus/"));
     assert.ok(content.includes(".nexus/worktrees/"));
     assert.ok(content.includes(".nexus/flights/"));
+
+    assert.equal(wm.discardWorktree("exclude-test").success, true);
+  });
+
+  test("unavailable exclude metadata does not prevent startup and fails before worktree state is written", () => {
+    const excludePath = path.resolve(gitRepoDir, ".git", "info", "exclude");
+    fs.rmSync(excludePath, { force: true });
+    fs.mkdirSync(excludePath);
+
+    assert.doesNotThrow(() => new WorktreeManager(gitRepoDir));
+    assert.equal(fs.existsSync(path.join(gitRepoDir, ".nexus")), false);
+
+    const wm = new WorktreeManager(gitRepoDir);
+    assert.throws(() => wm.createWorktree("blocked-write"));
+    assert.equal(fs.existsSync(path.join(gitRepoDir, ".nexus")), false, "failed preflight must not create workspace state");
   });
 
   test("ensureGitExclude is idempotent and does not duplicate entries", () => {
