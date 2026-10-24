@@ -30,14 +30,18 @@ export function ensureGitExclude(workspace: string): void {
 
     if (fs.existsSync(excludePath)) {
       const content = fs.readFileSync(excludePath, "utf-8");
+      const rules = new Set(content.split(/\r?\n/).map((line) => line.trim()));
+      // Match whole rules, not substrings: a comment or an unrelated pattern that merely mentions
+      // `.nexus` must not suppress the ignore rule (then `/commit`'s `git add -A` could stage state).
+      const hasRule = (rule: string): boolean => rules.has(rule) || rules.has(`/${rule}`);
       const linesToAdd: string[] = [];
-      if (!content.includes(".nexus/") && !content.includes(".nexus")) {
+      if (!hasRule(".nexus/") && !hasRule(".nexus")) {
         linesToAdd.push(".nexus/");
       }
-      if (!content.includes(".nexus/worktrees")) {
+      if (!hasRule(".nexus/worktrees/") && !hasRule(".nexus/worktrees")) {
         linesToAdd.push(".nexus/worktrees/");
       }
-      if (!content.includes(".nexus/flights")) {
+      if (!hasRule(".nexus/flights/") && !hasRule(".nexus/flights")) {
         linesToAdd.push(".nexus/flights/");
       }
       if (linesToAdd.length > 0) {
