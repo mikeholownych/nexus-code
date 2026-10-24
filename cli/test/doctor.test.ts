@@ -6,6 +6,7 @@ import { test, describe, before, after } from "node:test";
 import assert from "node:assert/strict";
 import http from "node:http";
 import fs from "node:fs";
+import { syncBuiltinESMExports } from "node:module";
 import os from "node:os";
 import path from "node:path";
 import { spawn, spawnSync } from "node:child_process";
@@ -846,6 +847,7 @@ describe("repairs cannot be redirected by links anywhere in the path", () => {
           }
           return originalUnlinkSync(file);
         }) as typeof fs.unlinkSync;
+        syncBuiltinESMExports();
 
         assert.throws(() => writeExclusiveVerified(h, target, "sensitive content"), SafePathError);
         assert.equal(swapped, true);
@@ -854,6 +856,7 @@ describe("repairs cannot be redirected by links anywhere in the path", () => {
       } finally {
         mutableFs.openSync = originalOpenSync;
         mutableFs.unlinkSync = originalUnlinkSync;
+        syncBuiltinESMExports();
         if (fs.lstatSync(parent, { throwIfNoEntry: false })?.isSymbolicLink()) fs.unlinkSync(parent);
         if (fs.existsSync(movedParent)) fs.renameSync(movedParent, parent);
       }
@@ -890,6 +893,7 @@ describe("repairs cannot be redirected by links anywhere in the path", () => {
           }
           return originalRmdirSync(directory);
         }) as typeof fs.rmdirSync;
+        syncBuiltinESMExports();
 
         assert.throws(() => mkdirVerified(h, target), SafePathError);
         assert.equal(swapped, true);
@@ -898,6 +902,7 @@ describe("repairs cannot be redirected by links anywhere in the path", () => {
       } finally {
         mutableFs.mkdirSync = originalMkdirSync;
         mutableFs.rmdirSync = originalRmdirSync;
+        syncBuiltinESMExports();
         if (fs.lstatSync(parent, { throwIfNoEntry: false })?.isSymbolicLink()) fs.unlinkSync(parent);
         if (fs.existsSync(movedParent)) fs.renameSync(movedParent, parent);
       }
