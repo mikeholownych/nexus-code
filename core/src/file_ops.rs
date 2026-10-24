@@ -897,8 +897,12 @@ pub fn file_info(args: FileInfoArgs, base_dir: &Path) -> Result<FileInfoResult, 
     if is_file {
         if let Ok(file) = File::open(&target) {
             if verify_descriptor_confinement(&file, &base_canon).is_ok() {
+                // The binary probe reads only 1 KB and applies at every size; only line counting walks the file.
                 is_bin = is_binary_file_descriptor(&file).unwrap_or(false);
-                if !is_bin {
+                // Count lines only within the read tool's limit. Use the opened descriptor's size, not the path
+                // metadata read earlier: the file may have grown or been replaced since.
+                let opened_size = file.metadata().map(|m| m.len()).unwrap_or(u64::MAX);
+                if !is_bin && opened_size <= MAX_READ_BYTES as u64 {
                     if let Ok(mmap) = unsafe { memmap2::Mmap::map(&file) } {
                         let newlines = mmap.iter().filter(|&&b| b == b'\n').count();
                         let has_trailing = mmap.last().map(|&b| b != b'\n').unwrap_or(false);
@@ -1335,6 +1339,61 @@ mod tests {
         assert!(res_parent.is_err(), "Expected escaping symlink parent to be rejected");
 
         let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn test_file_info_does_not_scan_files_above_the_read_limit() {
+        let dir = std::env::temp_dir().join(format!("test_file_info_limit_{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let small = dir.join("small.txt");
+        fs::write(&small, "one\ntwo\n").unwrap();
+        let big = dir.join("big.txt");
+        let big_len = MAX_READ_BYTES + 1;
+        let chunk = vec![b'\n'; 1024 * 1024];
+        {
+            let mut file = fs::File::create(&big).unwrap();
+            let mut written = 0;
+            while written < big_len {
+                let n = (big_len - written).min(chunk.len());
+                file.write_all(&chunk[..n]).unwrap();
+                written += n;
+            }
+            file.sync_all().unwrap();
+        }
+
+        let empty = dir.join("empty.txt");
+        fs::write(&empty, "").unwrap();
+        let at_limit = dir.join("at-limit.txt");
+        {
+            let mut file = fs::File::create(&at_limit).unwrap();
+            let mut written = 0;
+            while written < MAX_READ_BYTES {
+                let n = (MAX_READ_BYTES - written).min(chunk.len());
+                file.write_all(&chunk[..n]).unwrap();
+                written += n;
+            }
+        }
+        let big_binary = dir.join("big.bin");
+        fs::write(&big_binary, vec![0u8; MAX_READ_BYTES + 1]).unwrap();
+
+        let small_info = file_info(FileInfoArgs { path: "small.txt".into() }, &dir).unwrap();
+        assert_eq!(small_info.line_count, Some(2));
+        let empty_info = file_info(FileInfoArgs { path: "empty.txt".into() }, &dir).unwrap();
+        assert_eq!(empty_info.line_count, Some(0));
+        assert_eq!(empty_info.is_binary, false);
+        let limit_info = file_info(FileInfoArgs { path: "at-limit.txt".into() }, &dir).unwrap();
+        assert_eq!(limit_info.size_bytes, MAX_READ_BYTES as u64);
+        assert_eq!(limit_info.line_count, Some(MAX_READ_BYTES), "the exact read limit is still scanned");
+        let big_info = file_info(FileInfoArgs { path: "big.txt".into() }, &dir).unwrap();
+        assert_eq!(big_info.size_bytes, big_len as u64);
+        assert_eq!(
+            big_info.line_count, None,
+            "a file above the read limit must not be scanned for its line count"
+        );
+        let big_binary_info = file_info(FileInfoArgs { path: "big.bin".into() }, &dir).unwrap();
+        assert_eq!(big_binary_info.is_binary, true, "binary detection does not depend on the read limit");
+        assert_eq!(big_binary_info.line_count, None);
+        fs::remove_dir_all(&dir).ok();
     }
 
     #[test]
