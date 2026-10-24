@@ -113,8 +113,32 @@ export function htmlToText(input: string): string {
   return collapse(out);
 }
 
+/**
+ * C0/C1 terminal controls, excluding ordinary whitespace. Untrusted pages must not be able to inject
+ * escape sequences (OSC/CSI title, clipboard or screen commands) into text shown to the operator.
+ */
+const UNSAFE_CONTROL = /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f]/g;
+const ALL_CONTROL_CHARACTERS = /[\u0000-\u001f\u007f-\u009f]/g;
+
+function stripControlCharacters(text: string): string {
+  return text.replace(UNSAFE_CONTROL, "");
+}
+
+/** Public sanitizer for untrusted non-HTML fields (for example a search result URL). */
+export function stripUnsafeControlCharacters(text: string): string {
+  return text.replace(ALL_CONTROL_CHARACTERS, "");
+}
+
+function isUnsafeControl(value: number): boolean {
+  return (
+    (value < 0x20 && value !== 0x09 && value !== 0x0a && value !== 0x0d) ||
+    value === 0x7f ||
+    (value >= 0x80 && value <= 0x9f)
+  );
+}
+
 function collapse(text: string): string {
-  return text.replace(/\s+/g, " ").trim();
+  return stripControlCharacters(text).replace(/\s+/g, " ").trim();
 }
 
 const NAMED_ENTITIES: Record<string, string> = {
@@ -129,7 +153,7 @@ const NAMED_ENTITIES: Record<string, string> = {
 export function decodeHtmlEntities(text: string): string {
   let decoded = text.replace(/&#(x[0-9a-fA-F]+|[0-9]+);/g, (match, code: string) => {
     const value = code[0] === "x" || code[0] === "X" ? parseInt(code.slice(1), 16) : parseInt(code, 10);
-    if (!Number.isInteger(value) || value < 9 || value > 0x10ffff) return match;
+    if (!Number.isInteger(value) || value < 9 || value > 0x10ffff || isUnsafeControl(value)) return match;
     try {
       return String.fromCodePoint(value);
     } catch {
@@ -145,5 +169,6 @@ export function decodeHtmlEntities(text: string): string {
 
 /** htmlToText plus entity decoding; tags never survive into the result. */
 export function htmlToReadableText(input: string): string {
-  return decodeHtmlEntities(htmlToText(input));
+  // Normalize again after decoding: entities can introduce CR/LF/TAB after the first whitespace pass.
+  return collapse(decodeHtmlEntities(htmlToText(input)));
 }

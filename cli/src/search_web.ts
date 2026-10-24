@@ -1,4 +1,4 @@
-import { htmlToReadableText } from "./core/html_text.js";
+import { htmlToReadableText, stripUnsafeControlCharacters } from "./core/html_text.js";
 
 export interface SearchResult {
   title: string;
@@ -55,7 +55,7 @@ export async function executeWebSearch(
           const results = data.results.slice(0, maxResults).map((r) => ({
             // SearXNG has no markup-free output contract: extract like the HTML path.
             title: (r.title && htmlToReadableText(r.title)) || "Untitled",
-            url: r.url || "",
+            url: stripUnsafeControlCharacters(r.url || ""),
             snippet: r.content ? htmlToReadableText(r.content) : "",
           }));
           if (results.length > 0) {
@@ -87,9 +87,9 @@ export async function executeWebSearch(
       const results: SearchResult[] = [];
       if (data.AbstractText && data.AbstractURL) {
         results.push({
-          title: data.Heading || cleanQuery,
-          url: data.AbstractURL,
-          snippet: data.AbstractText,
+          title: htmlToReadableText(data.Heading || cleanQuery),
+          url: stripUnsafeControlCharacters(data.AbstractURL),
+          snippet: htmlToReadableText(data.AbstractText),
         });
       }
 
@@ -97,10 +97,11 @@ export async function executeWebSearch(
         for (const topic of data.RelatedTopics) {
           if (results.length >= maxResults) break;
           if (topic.Text && topic.FirstURL) {
+            const text = htmlToReadableText(topic.Text);
             results.push({
-              title: topic.Text.slice(0, 60),
-              url: topic.FirstURL,
-              snippet: topic.Text,
+              title: text.slice(0, 60),
+              url: stripUnsafeControlCharacters(topic.FirstURL),
+              snippet: text,
             });
           }
         }
@@ -144,6 +145,7 @@ export async function executeWebSearch(
               url = decodeURIComponent(uddgMatch[1]);
             } catch {}
           }
+          url = stripUnsafeControlCharacters(url);
 
           const stripHtml = (s: string) => htmlToReadableText(s);
           const title = stripHtml(titleMatch[2] || "Result");
