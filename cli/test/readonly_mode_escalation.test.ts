@@ -50,6 +50,30 @@ test("an explicit read-only launch stays read-only after /mode auto and cannot r
       false,
       "read-only mode wrote a scaffolded skill",
     );
+
+    await server.handleLine(JSON.stringify({ v: 1, type: "slash", id: "mode-2", command: "mode", args: "review" }));
+    await server.idle();
+    assert.equal(app.getAgent().getApprovalMode(), "read-only", "a read-only launch must not be lowered by /mode review");
+    assert.match(
+      events.find((event) => event.type === "slash.result" && event.id === "mode-2")?.output ?? "",
+      /read-only/i,
+    );
+
+    await server.handleLine(JSON.stringify({ v: 1, type: "models.list", id: "models-1" }));
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    const catalogError = events.find((event) => event.type === "error" && event.id === "models-1");
+    assert.equal(catalogError?.code, "BUSY", "provider discovery must stay disabled in read-only mode");
+
+    await server.handleLine(JSON.stringify({ v: 1, type: "provider.connect", id: "provider-1", provider: "openai", method: "api-key", key: "synthetic-test-key" }));
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    const providerResult = events.find((event) => event.type === "provider.result" && event.id === "provider-1");
+    assert.equal(providerResult?.success, false, "provider connections must stay disabled in read-only mode");
+
+    assert.equal(
+      events.filter((event) => event.type === "session.state").at(-1)?.mode,
+      "read-only",
+      "the reported session mode stayed read-only",
+    );
   } finally {
     await server.handleLine(JSON.stringify({ v: 1, type: "cancel" })).catch(() => {});
     await server.idle().catch(() => {});

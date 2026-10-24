@@ -38,8 +38,9 @@ and `/mode auto` reports the queued behaviour instead of claiming auto.
 ## Verification
 
 - New `cli/test/readonly_mode_escalation.test.ts`: fails on the pre-fix source (`actual: auto`, expected
-  `read-only`); passes after. It also drives `/skill init leaked` and asserts the result is refused and no
-  `SKILL.md` was written.
+  `read-only`); passes after. It also drives `/skill init leaked`, `/mode review`, `models.list` and
+  `provider.connect`, asserting the slash command is refused with no `SKILL.md`, provider discovery stays `BUSY`,
+  provider connection fails, and the reported session mode stays `read-only`.
 - `approval_policy.test.ts` 13/13 and `readonly_home.test.ts` 5/5 in isolated HOME.
 - `npx tsc --noEmit` clean; `git diff --check` clean.
 - The full sidecar suite is timing-sensitive in this environment: it has unrelated failures on the base source as
