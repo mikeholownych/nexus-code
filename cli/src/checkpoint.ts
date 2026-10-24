@@ -140,7 +140,7 @@ export class CheckpointManager {
         // Create an untracked + tracked git stash commit without modifying working tree
         const stashCommit = execSync("git stash create", { cwd: this.workspace, encoding: "utf-8" }).trim();
         if (stashCommit) {
-          execSync(`git update-ref refs/nexus/checkpoints/${id} ${stashCommit}`, {
+          execFileSync("git", ["update-ref", `refs/nexus/checkpoints/${id}`, stashCommit], {
             cwd: this.workspace,
             stdio: "ignore",
           });
@@ -148,7 +148,7 @@ export class CheckpointManager {
         } else {
           // Working tree was clean; record HEAD
           const headCommit = execSync("git rev-parse HEAD", { cwd: this.workspace, encoding: "utf-8" }).trim();
-          execSync(`git update-ref refs/nexus/checkpoints/${id} ${headCommit}`, {
+          execFileSync("git", ["update-ref", `refs/nexus/checkpoints/${id}`, headCommit], {
             cwd: this.workspace,
             stdio: "ignore",
           });
@@ -202,13 +202,47 @@ export class CheckpointManager {
     const list: CheckpointInfo[] = [];
     for (const f of files) {
       try {
-        const data = JSON.parse(fs.readFileSync(path.join(this.checkpointDir, f), "utf-8"));
-        list.push(data);
+        const parsed = JSON.parse(fs.readFileSync(path.join(this.checkpointDir, f), "utf-8"));
+        const checkpoint = this.validatedCheckpoint(parsed);
+        if (checkpoint) list.push(checkpoint);
       } catch {
         // Ignore corrupt checkpoint files
       }
     }
     return list.sort((a, b) => b.timestamp.localeCompare(a.timestamp));
+  }
+
+  /**
+   * Checkpoint JSON is local state, but it is still data: a malformed or edited file must not crash
+   * lookups, make Git run shell text, or point prune/restore at an arbitrary directory.
+   */
+  private validatedCheckpoint(raw: any): CheckpointInfo | null {
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
+    if (typeof raw.id !== "string" || !/^[A-Za-z0-9_-]{1,128}$/.test(raw.id)) return null;
+    if (typeof raw.name !== "string" || typeof raw.timestamp !== "string") return null;
+    const checkpoint: CheckpointInfo = { id: raw.id, name: raw.name, timestamp: raw.timestamp };
+    if (typeof raw.workspace === "string") checkpoint.workspace = raw.workspace;
+    if (typeof raw.gitRef === "string" && /^[0-9a-f]{7,64}$/i.test(raw.gitRef)) checkpoint.gitRef = raw.gitRef;
+    const snapshotDir = this.confinedSnapshotDir(raw.id, raw.snapshotDir);
+    if (snapshotDir) checkpoint.snapshotDir = snapshotDir;
+    if (Array.isArray(raw.files)) checkpoint.files = raw.files;
+    return checkpoint;
+  }
+
+  /** A snapshot is usable only when it resolves under this checkpoint's own snapshots/<id>. */
+  private confinedSnapshotDir(id: string, value: unknown): string | undefined {
+    if (typeof value !== "string" || !path.isAbsolute(value)) return undefined;
+    try {
+      const snapshots = path.join(this.checkpointDir, "snapshots");
+      const stat = fs.lstatSync(snapshots);
+      if (!stat.isDirectory() || stat.isSymbolicLink()) return undefined;
+      const root = fs.realpathSync(snapshots);
+      const expected = path.join(root, id);
+      const real = fs.realpathSync(value);
+      return real === expected || real.startsWith(expected + path.sep) ? real : undefined;
+    } catch {
+      return undefined;
+    }
   }
 
   public getCheckpoint(id: string): CheckpointInfo | null {
@@ -234,7 +268,7 @@ export class CheckpointManager {
           if (!cpBase || !cpBase.gitRef) {
             return { success: false, diff: "", error: `Base checkpoint '${baseCheckpointId}' not found.` };
           }
-          const out = execSync(`git diff ${cpBase.gitRef} ${cpTarget.gitRef}`, {
+          const out = execFileSync("git", ["diff", cpBase.gitRef, cpTarget.gitRef], {
             cwd: this.workspace,
             encoding: "utf-8",
             maxBuffer: 10 * 1024 * 1024,
@@ -242,7 +276,7 @@ export class CheckpointManager {
           return { success: true, diff: out };
         } else {
           // Diff checkpoint ref against current working tree
-          const out = execSync(`git diff ${cpTarget.gitRef}`, {
+          const out = execFileSync("git", ["diff", cpTarget.gitRef], {
             cwd: this.workspace,
             encoding: "utf-8",
             maxBuffer: 10 * 1024 * 1024,
@@ -276,7 +310,7 @@ export class CheckpointManager {
           fs.unlinkSync(jsonPath);
         }
         if (this.isGit && cp.gitRef) {
-          execSync(`git update-ref -d refs/nexus/checkpoints/${cp.id}`, { cwd: this.workspace, stdio: "ignore" });
+          execFileSync("git", ["update-ref", "-d", `refs/nexus/checkpoints/${cp.id}`], { cwd: this.workspace, stdio: "ignore" });
         }
         if (cp.snapshotDir && fs.existsSync(cp.snapshotDir)) {
           fs.rmSync(cp.snapshotDir, { recursive: true, force: true });
@@ -309,8 +343,8 @@ export class CheckpointManager {
     try {
       if (this.isGit && cp.gitRef) {
         // Reset working tree to checkpoint commit/stash
-        execSync("git reset --hard " + cp.gitRef, { cwd: this.workspace, stdio: "ignore" });
-        execSync("git clean -fd", { cwd: this.workspace, stdio: "ignore" });
+        execFileSync("git", ["reset", "--hard", cp.gitRef], { cwd: this.workspace, stdio: "ignore" });
+        execFileSync("git", ["clean", "-fd"], { cwd: this.workspace, stdio: "ignore" });
         return { success: true, message: `Restored workspace to checkpoint '${cp.name}' (${cp.id})` };
       }
 
