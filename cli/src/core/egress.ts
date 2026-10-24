@@ -450,6 +450,8 @@ export class InformationFlowBoundary {
     { name: "SLACK_TOKEN", regex: /\b(?:xox[baprs]-[0-9a-zA-Z]{10,48})\b/g },
     // Bearer / Authorization tokens
     { name: "BEARER_AUTH_HEADER", regex: /\bBearer\s+([a-zA-Z0-9_\-\.]{16,128})/g },
+    // Authorization header values, including Basic (base64 user:password) and provider Token schemes.
+    { name: "AUTHORIZATION_HEADER", regex: /\b(?:proxy-)?authorization\s*[:=]\s*(?:basic|bearer|token)\s+([A-Za-z0-9._~+/=-]{8,})/gi },
     // JWT Tokens (3 base64url segments separated by dots)
     {
       name: "JWT_TOKEN",

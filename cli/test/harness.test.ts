@@ -54,11 +54,12 @@ describe("Nexus Code Test Suite", () => {
   });
 
   test("redactSecrets properly cleans sensitive tokens and credentials", () => {
-    const raw = "Connecting with Bearer bAGOhOwLeY7Mabcdef123456789 and sk-proj-1234567890abcdef12345 and password='supersecretpass123'";
+    const raw = "Connecting with Bearer bAGOhOwLeY7Mabcdef123456789 and sk-proj-1234567890abcdef12345 and password='supersecretpass123' and Authorization: Basic dXNlcjpwYXNzd29yZA==";
     const scrubbed = redactSecrets(raw);
     assert.ok(!scrubbed.includes("bAGOhOwLeY7M"), "Bearer token not scrubbed");
     assert.ok(!scrubbed.includes("sk-proj-"), "API key not scrubbed");
     assert.ok(!scrubbed.includes("supersecretpass123"), "Password not scrubbed");
+    assert.ok(!scrubbed.includes("dXNlcjpwYXNzd29yZA=="), "Basic credential not scrubbed");
     assert.ok(scrubbed.includes("[REDACTED"), "Missing redaction tag");
   });
 

@@ -706,6 +706,19 @@ MIIEowIBAAKCAQEA0Z3vV4k8t...fake...pem...body...content...
   });
 });
 
+describe("authorization header schemes", () => {
+  test("Basic and Token credentials are classified and redacted", () => {
+    const boundary = new InformationFlowBoundary();
+    const basic = "Authorization: Basic dXNlcjpwYXNzd29yZA==";
+    const token = "authorization=Token abcdefghijklmnop";
+    const redactedBasic = boundary.redactForTelemetry(basic);
+    const redactedToken = boundary.redactForTelemetry(token);
+    assert.ok(!redactedBasic.includes("dXNlcjpwYXNzd29yZA=="), redactedBasic);
+    assert.ok(!redactedToken.includes("abcdefghijklmnop"), redactedToken);
+    assert.match(redactedBasic, /\[REDACTED:AUTHORIZATION_HEADER\]/);
+  });
+});
+
 describe("environment-declared secrets", () => {
   test("a redaction pass over many strings reads the environment once, and still redacts its secrets", () => {
     const original = process.env;
