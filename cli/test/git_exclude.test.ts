@@ -164,11 +164,64 @@ test("a symlinked Nexus state directory is rejected before any outside write", (
   const outside = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-git-exclude-outside-"));
   try {
     fs.symlinkSync(outside, path.join(root, ".nexus"), "dir");
-    assert.throws(() => ensureGitExclude(root), /non-directory \.nexus path/);
+    assert.throws(() => ensureGitExclude(root), /\.nexus is a symbolic link/);
     assert.equal(fs.existsSync(path.join(outside, ".gitignore")), false);
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
     fs.rmSync(outside, { recursive: true, force: true });
+  }
+});
+
+test("a symlink swap cannot write self-ignore content or alter external ignore rules", () => {
+  for (const existingIgnore of [false, true]) {
+    const { root } = makeRepo("");
+    const outside = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-git-exclude-race-outside-"));
+    const nexusDir = path.join(root, ".nexus");
+    const movedNexusDir = path.join(root, ".nexus-before-race");
+    const selfIgnorePath = path.join(nexusDir, ".gitignore");
+    const outsideIgnorePath = path.join(outside, ".gitignore");
+    let swapped = false;
+    const mutableFs = fs as unknown as { openSync: typeof fs.openSync };
+    const originalOpenSync = fs.openSync;
+
+    try {
+      if (existingIgnore) {
+        fs.mkdirSync(nexusDir);
+        fs.writeFileSync(selfIgnorePath, "# operator rules\n");
+        fs.writeFileSync(outsideIgnorePath, "external operator rules\n");
+      }
+
+      mutableFs.openSync = ((file: fs.PathLike, flags: string | number, mode?: number) => {
+        if (
+          !swapped &&
+          typeof file === "string" &&
+          path.resolve(file) === selfIgnorePath &&
+          typeof flags === "number" &&
+          (flags & fs.constants.O_WRONLY) !== 0
+        ) {
+          swapped = true;
+          fs.renameSync(nexusDir, movedNexusDir);
+          fs.symlinkSync(outside, nexusDir, "dir");
+        }
+        return originalOpenSync(file, flags as number, mode);
+      }) as typeof fs.openSync;
+
+      assert.throws(() => ensureGitExclude(root), /resolves to|changed location/);
+      assert.equal(swapped, true);
+      if (existingIgnore) {
+        assert.equal(fs.readFileSync(outsideIgnorePath, "utf8"), "external operator rules\n");
+      } else {
+        assert.equal(fs.statSync(outsideIgnorePath).size, 0, "failed verification leaves no content in the redirected file");
+      }
+    } finally {
+      mutableFs.openSync = originalOpenSync;
+      if (fs.lstatSync(nexusDir, { throwIfNoEntry: false })?.isSymbolicLink()) {
+        fs.unlinkSync(nexusDir);
+      }
+      if (fs.existsSync(movedNexusDir)) fs.renameSync(movedNexusDir, nexusDir);
+      fs.rmSync(root, { recursive: true, force: true });
+      fs.rmSync(outside, { recursive: true, force: true });
+    }
   }
 });
 
