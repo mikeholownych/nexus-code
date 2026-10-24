@@ -369,8 +369,12 @@ export async function safeExtractTar(
 
   fs.mkdirSync(destinationDir, { recursive: true });
 
-  // Extract
-  const tarRes = spawnSync("tar", ["-xzf", archivePath, "-C", destinationDir]);
+  // Extract with a fixed system tar, not whatever PATH resolves, and without ambient TAR_OPTIONS
+  // (which can carry --to-command or checkpoint actions that execute code during extraction).
+  const tar = ["/usr/bin/tar", "/bin/tar"].find((candidate) => fs.existsSync(candidate)) ?? "tar";
+  const tarRes = spawnSync(tar, ["-xzf", archivePath, "-C", destinationDir], {
+    env: { ...process.env, TAR_OPTIONS: "" },
+  });
   if (tarRes.status !== 0) {
     throw new Error(`tar extraction failed: ${tarRes.stderr?.toString() || "unknown tar error"}`);
   }
