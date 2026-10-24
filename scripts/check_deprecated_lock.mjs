@@ -2,6 +2,7 @@
 // Fail closed when the release-tool dependency lock contains a deprecated npm package.
 import fs from "node:fs";
 import path from "node:path";
+import { registryPackageName } from "./registry-package-name.mjs";
 
 const lockPath = process.argv[2];
 if (!lockPath) {
@@ -46,7 +47,7 @@ async function worker() {
     const index = next++;
     if (index >= packages.length) return;
     const { name, version } = packages[index];
-    const registryName = name.replace("/", "%2f");
+    const registryName = registryPackageName(name);
     let response;
     try {
       response = await fetch(`https://registry.npmjs.org/${registryName}/${encodeURIComponent(version)}`, {

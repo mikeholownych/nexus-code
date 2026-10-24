@@ -15,9 +15,16 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..")
 const SCRIPT = path.join(ROOT, "scripts/repro-identity.mjs");
 const PACKAGE_SCRIPT = path.join(ROOT, "scripts/package-linux.sh");
 const MAKEFILE = path.join(ROOT, "Makefile");
+const REGISTRY_PACKAGE_NAME = path.join(ROOT, "scripts/registry-package-name.mjs");
 const COMMIT = "a".repeat(40);
 const WORKFLOW_COMMIT = "f".repeat(40);
 const APPROVED_RUST_IMAGE = "rust:1.95.0-bookworm@sha256:4c2fd73ef19c5ef9d54bee03b06b2839a392604fbfcd578ed948b71b37c1d7fb";
+
+test("npm registry scoped package names escape every path separator", async () => {
+  const { registryPackageName } = await import(REGISTRY_PACKAGE_NAME);
+  assert.equal(registryPackageName("@scope/package"), "@scope%2fpackage");
+  assert.equal(registryPackageName("@scope/nested/package"), "@scope%2fnested%2fpackage");
+});
 
 function identity(label: string, overrides: { commit?: string; lock?: string; archive?: string; workflowRef?: string; workflowSha?: string; image?: string | null; rustImage?: string | null; missingAsset?: boolean } = {}) {
   return {
