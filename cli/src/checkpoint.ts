@@ -211,7 +211,18 @@ export class CheckpointManager {
       encoding: "buffer",
       maxBuffer: 64 * 1024 * 1024,
     }).toString("utf8").split("\0").filter(Boolean);
-    for (const relativePath of deletedPaths) fs.rmSync(path.join(this.workspace, relativePath), { force: true });
+    const workspaceRoot = fs.realpathSync(this.workspace);
+    for (const relativePath of deletedPaths) {
+      const targetPath = path.join(workspaceRoot, relativePath);
+      let parent: string;
+      try {
+        parent = fs.realpathSync(path.dirname(targetPath));
+      } catch {
+        continue;
+      }
+      if (parent !== workspaceRoot && !parent.startsWith(workspaceRoot + path.sep)) continue;
+      fs.rmSync(targetPath, { force: true });
+    }
   }
 
   private assertFallbackSnapshotSafe(workspacePath: string, allowSensitive: boolean): void {
@@ -370,10 +381,14 @@ export class CheckpointManager {
     const snapshotDir = this.confinedSnapshotDir(raw.id, raw.snapshotDir);
     if (snapshotDir) checkpoint.snapshotDir = snapshotDir;
     if (raw.allowSensitive === true) checkpoint.allowSensitive = true;
-    if (Array.isArray(raw.untrackedFiles) && raw.untrackedFiles.every((entry: any) =>
-      typeof entry === "string" && entry.length > 0 && !entry.includes("\0") && !entry.startsWith("/") &&
-      !/^[A-Za-z]:/.test(entry) && path.posix.normalize(entry) === entry && entry !== ".." && !entry.startsWith("../"),
-    )) checkpoint.untrackedFiles = [...new Set<string>(raw.untrackedFiles)];
+    if (raw.untrackedFiles !== undefined) {
+      if (!Array.isArray(raw.untrackedFiles) || !raw.untrackedFiles.every((entry: any) =>
+        typeof entry === "string" && entry.length > 0 && !entry.includes("\0") && !entry.startsWith("/") &&
+        !/^[A-Za-z]:/.test(entry) && path.posix.normalize(entry) === entry && entry !== ".." &&
+        !entry.startsWith("../") && !entry.split("/").includes(".git"),
+      )) return null;
+      checkpoint.untrackedFiles = [...new Set<string>(raw.untrackedFiles)];
+    }
     if (Array.isArray(raw.files)) checkpoint.files = raw.files;
     return checkpoint;
   }
