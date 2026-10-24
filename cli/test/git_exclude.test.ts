@@ -132,7 +132,10 @@ test("a missing exclude file is created with the rules", () => {
   const { root, excludePath } = makeRepo(null);
   try {
     ensureGitExclude(root);
-    assert.match(fs.readFileSync(excludePath, "utf8"), /^\.nexus\/$/m);
+    const rules = fs.readFileSync(excludePath, "utf8").split(/\r?\n/);
+    assert.ok(rules.includes(".nexus/"));
+    assert.ok(rules.includes(".nexus/worktrees/"));
+    assert.ok(rules.includes(".nexus/flights/"));
     assert.equal(isIgnored(root, ".nexus/tasks/task.json"), true);
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
