@@ -20,18 +20,23 @@ abcdefghijklmnop` was likewise unchanged.
 ## Fix
 
 - Add an `AUTHORIZATION_HEADER` deterministic classifier for `(proxy-)?authorization[:=] (basic|bearer|token) <value>`; the captured value is redacted while the header and scheme stay readable.
+- Accept quoted keys/values and JSON header objects (`{"authorization":"Basic …"}`), and align the
+  three layers on an 8-character minimum.
 - Add the matching replacement to `redactSecrets` as defence in depth.
 - Add the same pattern to the TUI stderr redactor, so sidecar stderr cannot print it.
+- Remove the 128-character cap on the Bearer classifier so a long token is fully redacted.
 
 ## Verification
 
-- `cli/test/egress.test.ts`: 28/28; new Basic/Token test fails on the pre-fix source.
+- `cli/test/egress.test.ts`: 28/28; the Basic/Token test (including structured and quoted forms)
+  fails on the pre-fix source.
 - `cli/test/harness.test.ts` redaction test now covers Basic and fails on the pre-fix source.
-- Rust `nexus-tui` redact tests: 6/6; the Basic assertions fail when the new pattern is removed.
+- Rust `nexus-tui` redact tests: 6/6; the Basic/Token/JSON assertions fail when the new pattern is
+  removed.
 - `npx tsc --noEmit -p tsconfig.json`; `cargo test --bin nexus-tui redact`; `git diff --check`: pass.
 
 ## Residual risk
 
-Only the standard `Basic`, `Bearer` and `Token` schemes are recognized; `Digest`/`Negotiate` parameters and
-non-header encodings are not. Operator-declared environment secrets are still covered by the explicit
-classifier, and `doctor` retains its broader header scrub.
+Only the standard `Basic`, `Bearer` and `Token` schemes are recognized; `Digest`/`Negotiate` parameters,
+values shorter than 8 characters, and non-header encodings are not. Operator-declared environment
+secrets are still covered by the explicit classifier, and `doctor` retains its broader header scrub.

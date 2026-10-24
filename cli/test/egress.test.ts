@@ -716,6 +716,11 @@ describe("authorization header schemes", () => {
     assert.ok(!redactedBasic.includes("dXNlcjpwYXNzd29yZA=="), redactedBasic);
     assert.ok(!redactedToken.includes("abcdefghijklmnop"), redactedToken);
     assert.match(redactedBasic, /\[REDACTED:AUTHORIZATION_HEADER\]/);
+
+    const structured = boundary.redactForTelemetry({ headers: { authorization: "Basic dXNlcjpwYXNzd29yZA==" } });
+    assert.ok(!JSON.stringify(structured).includes("dXNlcjpwYXNzd29yZA=="), JSON.stringify(structured));
+    const quoted = boundary.redactForTelemetry('Authorization: Basic "dXNlcjpwYXNzd29yZA=="');
+    assert.ok(!quoted.includes("dXNlcjpwYXNzd29yZA=="), quoted);
   });
 });
 
