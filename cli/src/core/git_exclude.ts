@@ -56,6 +56,58 @@ function appendSelfIgnore(workspace: string, file: string, content: string): voi
   }
 }
 
+function openExclude(file: string, expected: string): number {
+  const noFollow = fs.constants.O_NOFOLLOW;
+  if (typeof noFollow !== "number") {
+    throw new Error("Cannot safely access Git info/exclude without O_NOFOLLOW support");
+  }
+  const fd = fs.openSync(file, fs.constants.O_RDWR | fs.constants.O_APPEND | noFollow | (fs.constants.O_NONBLOCK ?? 0));
+  try {
+    const stat = fs.fstatSync(fd);
+    if (!stat.isFile() || stat.nlink > 1) {
+      throw new Error("Refusing to access a non-file or hard-linked Git info/exclude");
+    }
+    let descriptorPath: string | undefined;
+    try {
+      descriptorPath = fs.readlinkSync(`/proc/self/fd/${fd}`);
+    } catch {
+      // On platforms without /proc, verify the opened identity against the path.
+    }
+    if (descriptorPath !== undefined) {
+      if (descriptorPath !== expected) {
+        throw new Error("Git info/exclude changed location while it was being opened");
+      }
+    } else {
+      const named = fs.lstatSync(file);
+      if (named.isSymbolicLink() || named.dev !== stat.dev || named.ino !== stat.ino || fs.realpathSync(file) !== expected) {
+        throw new Error("Git info/exclude changed while it was being opened");
+      }
+    }
+    return fd;
+  } catch (error) {
+    fs.closeSync(fd);
+    throw error;
+  }
+}
+
+function readExclude(file: string, expected: string): string {
+  const fd = openExclude(file, expected);
+  try {
+    return fs.readFileSync(fd, "utf-8");
+  } finally {
+    fs.closeSync(fd);
+  }
+}
+
+function appendExclude(file: string, expected: string, content: string): void {
+  const fd = openExclude(file, expected);
+  try {
+    fs.writeSync(fd, content);
+  } finally {
+    fs.closeSync(fd);
+  }
+}
+
 /**
  * Ensures .nexus/ is ignored by Git in the workspace (REQ-PER-105).
  * The self-contained rule protects state even when Git metadata is read-only;
@@ -81,6 +133,21 @@ export function ensureGitExclude(workspace: string): void {
   }
 
   if (!excludePath) return;
+
+  let commonDirPath: string | null = null;
+  let expectedExcludePath: string | null = null;
+  try {
+    const commonDir = execFileSync("git", ["rev-parse", "--git-common-dir"], {
+      cwd: workspace,
+      encoding: "utf-8",
+      stdio: ["ignore", "pipe", "ignore"],
+    }).trim();
+    commonDirPath = fs.realpathSync(path.resolve(workspace, commonDir));
+    expectedExcludePath = path.join(commonDirPath, "info", "exclude");
+    if (path.resolve(excludePath) !== expectedExcludePath) expectedExcludePath = null;
+  } catch {
+    // Updating the convenience file is optional; self-ignore verification below is authoritative.
+  }
 
   const nexusDir = path.join(workspace, ".nexus");
   mkdirVerified(workspace, nexusDir);
@@ -146,9 +213,23 @@ export function ensureGitExclude(workspace: string): void {
   // effective rule without mutating Git metadata. Keep the legacy rules when
   // available, but tolerate read-only or unusual Git directories.
   try {
-    const infoDir = path.dirname(excludePath);
-    fs.mkdirSync(infoDir, { recursive: true });
-    if (!fs.existsSync(excludePath)) fs.writeFileSync(excludePath, "");
+    if (!expectedExcludePath || !commonDirPath) return;
+
+    try {
+      readExclude(excludePath, expectedExcludePath);
+    } catch (error) {
+      if (typeof error !== "object" || error === null || !("code" in error) || error.code !== "ENOENT") {
+        throw error;
+      }
+      try {
+        writeExclusiveVerified(commonDirPath, expectedExcludePath, "");
+      } catch (createError) {
+        // Another safe creator may have won the exclusive-create race.
+        if (typeof createError !== "object" || createError === null || !("code" in createError) || createError.code !== "EEXIST") {
+          throw createError;
+        }
+      }
+    }
 
     const protectedPaths = [
       { path: ".nexus/", rule: ".nexus/" },
@@ -157,7 +238,7 @@ export function ensureGitExclude(workspace: string): void {
     ];
 
     for (const { path: relativePath, rule } of protectedPaths) {
-      const content = fs.readFileSync(excludePath, "utf-8");
+      const content = readExclude(excludePath, expectedExcludePath);
       const lines = content.split(/\r?\n/);
       const rules = new Set(lines);
       const hasExactRule = rules.has(rule) || rules.has(`/${rule}`);
@@ -172,7 +253,7 @@ export function ensureGitExclude(workspace: string): void {
       }
 
       const prefix = content.length === 0 || content.endsWith("\n") ? "" : "\n";
-      fs.appendFileSync(excludePath, `${prefix}${rule}\n`);
+      appendExclude(excludePath, expectedExcludePath, `${prefix}${rule}\n`);
       if (!isIgnored(relativePath)) {
         throw new Error(`Git still does not ignore ${relativePath} after updating info/exclude`);
       }
