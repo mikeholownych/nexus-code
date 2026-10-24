@@ -216,6 +216,28 @@ describe("headless execution (no onConfirm handler)", () => {
       fs.rmSync(stateDir, { recursive: true, force: true });
     }
   });
+
+  test("egress denial explains the explicit headless opt-in", async () => {
+    const repo = makeRepo();
+    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-headless-egress-state-"));
+    const agent = agentFor("http://127.0.0.1:9/v1", repo, stateDir);
+    agent.setApprovalMode("review");
+    try {
+      const result = await (agent as any).dispatchToolCall(
+        { id: "egress-1", type: "function", function: { name: "fetch_web", arguments: '{"url":"https://example.invalid"}' } },
+        1,
+        "agent",
+      );
+      assert.equal(result.receipt.status, "DENIED");
+      assert.equal(result.receipt.denialReason, "DECISION_REQUIRED_NO_OPERATOR");
+      assert.match(result.receipt.error, /--yes to explicitly allow egress without an operator prompt/);
+      assert.doesNotMatch(result.receipt.error, /--mode auto/);
+    } finally {
+      agent.shutdown();
+      fs.rmSync(repo, { recursive: true, force: true });
+      fs.rmSync(stateDir, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("posture reporting in doctor and sidecar", () => {

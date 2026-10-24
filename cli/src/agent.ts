@@ -4528,7 +4528,10 @@ The pinned Objective Ledger lists the operator's requirements; your plan never r
 
     if (askOperator) {
       if (!onConfirm) {
-        const cancelMsg = `Error: Tool '${toolName}' requires operator approval (${effect}), but no operator is present (headless execution). Run with --yes or --mode auto to explicitly select automatic approvals.`;
+        const approvalGuidance = effect === "egress"
+          ? "Run with --yes to explicitly allow egress without an operator prompt."
+          : "Run with --yes or --mode auto to explicitly select automatic approvals.";
+        const cancelMsg = `Error: Tool '${toolName}' requires operator approval (${effect}), but no operator is present (headless execution). ${approvalGuidance}`;
         const receipt: ExecutionReceipt = {
           invocationId: call.id,
           taskId: this.activeWorktree?.taskId || this.currentTaskId,
