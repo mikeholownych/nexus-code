@@ -82,72 +82,72 @@ describe("ACC-SAFE-09: Verifier Gating", () => {
     }
   });
 
-  for (const trusted of [false, true]) {
-    test(`${trusted ? "trusted" : "untrusted"} repo in review mode prompts for verifier and script body, writes sentinel only after approval, and caches session decision`, async () => {
-    const savedHome = process.env.HOME;
-    const tempHome = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-vg-home-"));
-    process.env.HOME = tempHome;
+  test("trusted and untrusted repos in review mode prompt for verifier and script body, write sentinel only after approval, and cache session decision", async () => {
+    for (const trusted of [false, true]) {
+      const savedHome = process.env.HOME;
+      const tempHome = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-vg-home-"));
+      process.env.HOME = tempHome;
 
-    const { ws, sentinelPath } = setupRepo(`review-${trusted ? "trusted" : "untrusted"}`);
-    if (trusted) setWorkspaceTrusted(ws, true);
-    const replies = [
-      {
-        kind: "tools" as const,
-        calls: [{ name: "edit_file", args: { path: "file.txt", old_content: "hello\n", new_content: "world\n" } }],
-      },
-      {
-        kind: "tools" as const,
-        calls: [{ name: "task_completed", args: { summary: "Finished editing file" } }],
-      },
-      { kind: "text" as const, content: "Done." },
-    ];
-    const gw = await startGateway((n) => replies[Math.min(n, replies.length) - 1]);
-    const agent = new AutonomousAgent({
-      endpoint: gw.url,
-      model: "m",
-      workspace: ws,
-      shell: "bash",
-      approvalMode: "review",
-    } as any);
+      const { ws, sentinelPath } = setupRepo(`review-${trusted ? "trusted" : "untrusted"}`);
+      if (trusted) setWorkspaceTrusted(ws, true);
+      const replies = [
+        {
+          kind: "tools" as const,
+          calls: [{ name: "edit_file", args: { path: "file.txt", old_content: "hello\n", new_content: "world\n" } }],
+        },
+        {
+          kind: "tools" as const,
+          calls: [{ name: "task_completed", args: { summary: "Finished editing file" } }],
+        },
+        { kind: "text" as const, content: "Done." },
+      ];
+      const gw = await startGateway((n) => replies[Math.min(n, replies.length) - 1]);
+      const agent = new AutonomousAgent({
+        endpoint: gw.url,
+        model: "m",
+        workspace: ws,
+        shell: "bash",
+        approvalMode: "review",
+      } as any);
 
-    const promptLog: Array<{ tool: string; args: any }> = [];
-    try {
-      assert.equal(isWorkspaceTrusted(ws), trusted, `repo trust should be ${trusted}`);
+      const promptLog: Array<{ tool: string; args: any }> = [];
+      try {
+        assert.equal(isWorkspaceTrusted(ws), trusted, `repo trust should be ${trusted}`);
 
-      await agent.runTurn("make changes and finish", async (tool, args) => {
-        promptLog.push({ tool, args });
-        if (tool === "edit_file") {
-          // Sentinel must NOT be written before verifier is approved!
-          assert.equal(fs.existsSync(sentinelPath), false, "sentinel must not exist when edit_file is prompted");
+        await agent.runTurn("make changes and finish", async (tool, args) => {
+          promptLog.push({ tool, args });
+          if (tool === "edit_file") {
+            // Sentinel must NOT be written before verifier is approved!
+            assert.equal(fs.existsSync(sentinelPath), false, "sentinel must not exist when edit_file is prompted");
+            return true;
+          }
+          if (tool === "verifier") {
+            // Sentinel must NOT be written before operator confirms verifier!
+            assert.equal(fs.existsSync(sentinelPath), false, "sentinel must not exist before verifier is confirmed");
+            assert.equal(args.command, "npm test");
+            assert.equal(args.script, "node test.js");
+            assert.equal(args.detail, "package.json:scripts.test");
+            assert.ok(args.digest, "digest must be provided");
+            return true;
+          }
           return true;
-        }
-        if (tool === "verifier") {
-          // Sentinel must NOT be written before operator confirms verifier!
-          assert.equal(fs.existsSync(sentinelPath), false, "sentinel must not exist before verifier is confirmed");
-          assert.equal(args.command, "npm test");
-          assert.equal(args.script, "node test.js");
-          assert.equal(args.detail, "package.json:scripts.test");
-          assert.ok(args.digest, "digest must be provided");
-          return true;
-        }
-        return true;
-      });
+        });
 
-      // Sentinel was written by the approved verifier execution!
-      assert.equal(fs.existsSync(sentinelPath), true, "sentinel must be written after verifier was approved and executed");
+        // Sentinel was written by the approved verifier execution!
+        assert.equal(fs.existsSync(sentinelPath), true, "sentinel must be written after verifier was approved and executed");
 
-      // Verifier should be prompted exactly once because session caching applies
-      const verifierPrompts = promptLog.filter((p) => p.tool === "verifier");
-      assert.equal(verifierPrompts.length, 1, "verifier should only be prompted once during the session");
-    } finally {
-      agent.shutdown();
-      await gw.close();
-      fs.rmSync(ws, { recursive: true, force: true });
-      fs.rmSync(tempHome, { recursive: true, force: true });
-      process.env.HOME = savedHome;
+        // Verifier should be prompted exactly once because session caching applies
+        const verifierPrompts = promptLog.filter((p) => p.tool === "verifier");
+        assert.equal(verifierPrompts.length, 1, "verifier should only be prompted once during the session");
+      } finally {
+        agent.shutdown();
+        await gw.close();
+        fs.rmSync(ws, { recursive: true, force: true });
+        fs.rmSync(tempHome, { recursive: true, force: true });
+        process.env.HOME = savedHome;
+      }
     }
-    });
-  }
+  });
 
   test("denied verifier does not execute verifier and sentinel is not written", async () => {
     const savedHome = process.env.HOME;
