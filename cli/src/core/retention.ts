@@ -581,7 +581,7 @@ export function scanCheckpoints(checkpointsBaseDir: string, deadline?: number): 
               const validRecordId = cpId.length > 0 && cpId !== "." && cpId !== ".." && !cpId.includes("/") && !cpId.includes("\\");
               if (validRecordId && rootStat.isDirectory() && !rootStat.isSymbolicLink()) {
                 const snapshotsRoot = fs.realpathSync(snapshotsPath);
-                if (path.dirname(snapshotsRoot) === canonicalDir) {
+                if (snapshotsRoot === snapshotsPath) {
                   const expected = path.join(snapshotsRoot, cpId);
                   const realSnapshot = fs.realpathSync(data.snapshotDir);
                   if (realSnapshot === expected || realSnapshot.startsWith(expected + path.sep)) {
