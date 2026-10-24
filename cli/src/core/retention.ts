@@ -19,6 +19,13 @@ export interface RetentionItem {
   /** Exact file identities captured by planning; changed records must be replanned. */
   fileIdentities?: Record<string, string | null>;
   primaryIdentity?: string;
+  /** Checkpoint directory identities bind execution to the tree scanned by planning. */
+  checkpointStateRootIdentity?: string;
+  checkpointRootIdentity?: string;
+  checkpointPartitionIdentity?: string;
+  checkpointSnapshotsIdentity?: string;
+  checkpointSnapshotRelativePath?: string;
+  checkpointSnapshotIdentity?: string;
   /** Missing envelope tracked when collecting an orphaned companion group. */
   recordFile?: string;
   orphan?: boolean;
@@ -92,6 +99,14 @@ function safeStat(p: string): fs.Stats | null {
   } catch {
     return null;
   }
+}
+
+function fileObjectIdentity(stat: fs.Stats): string {
+  return `${stat.dev}:${stat.ino}:${stat.mode}`;
+}
+
+function directoryIdentity(stat: fs.Stats): string {
+  return `${stat.dev}:${stat.ino}`;
 }
 
 function computeDirSize(dir: string, deadline?: number): number {
@@ -519,34 +534,69 @@ export function scanSessions(
 export function scanCheckpoints(checkpointsBaseDir: string, deadline?: number): { items: RetentionItem[]; timedOut: boolean } {
   const items: RetentionItem[] = [];
   let timedOut = false;
-  if (!fs.existsSync(checkpointsBaseDir)) return { items, timedOut };
+  const normalizedBaseDir = path.resolve(checkpointsBaseDir);
+  const stateRootPath = path.dirname(normalizedBaseDir);
+  if (!fs.existsSync(normalizedBaseDir)) return { items, timedOut };
+
+  let checkpointsRoot: string;
+  let stateRootIdentity: string;
+  let checkpointRootIdentity: string;
+  try {
+    const stateStat = fs.lstatSync(stateRootPath);
+    const rootStat = fs.lstatSync(normalizedBaseDir);
+    if (!stateStat.isDirectory() || stateStat.isSymbolicLink()) return { items, timedOut };
+    if (!rootStat.isDirectory() || rootStat.isSymbolicLink()) return { items, timedOut };
+    if (fs.realpathSync(stateRootPath) !== stateRootPath) return { items, timedOut };
+    checkpointsRoot = fs.realpathSync(normalizedBaseDir);
+    if (checkpointsRoot !== normalizedBaseDir) return { items, timedOut };
+    stateRootIdentity = directoryIdentity(stateStat);
+    checkpointRootIdentity = directoryIdentity(rootStat);
+  } catch {
+    return { items, timedOut };
+  }
 
   try {
-    const hashDirs = fs.readdirSync(checkpointsBaseDir);
+    const hashDirs = fs.readdirSync(checkpointsRoot);
     for (const hashDir of hashDirs) {
       if (deadline && Date.now() >= deadline) {
         timedOut = true;
         break;
       }
-      const dirPath = path.join(checkpointsBaseDir, hashDir);
-      const dirStat = safeStat(dirPath);
-      if (!dirStat || !dirStat.isDirectory()) continue;
+      const dirPath = path.join(checkpointsRoot, hashDir);
+      let canonicalDir: string;
+      let partitionIdentity: string;
+      try {
+        const dirStat = fs.lstatSync(dirPath);
+        if (!dirStat.isDirectory() || dirStat.isSymbolicLink()) continue;
+        canonicalDir = fs.realpathSync(dirPath);
+        if (canonicalDir !== dirPath) continue;
+        partitionIdentity = directoryIdentity(dirStat);
+      } catch {
+        continue;
+      }
 
-      const files = fs.readdirSync(dirPath);
+      const files = fs.readdirSync(canonicalDir);
       for (const file of files) {
         if (deadline && Date.now() >= deadline) {
           timedOut = true;
           break;
         }
         if (!file.endsWith(".json")) continue;
-        const jsonPath = path.join(dirPath, file);
-        const stat = safeStat(jsonPath);
-        if (!stat || !stat.isFile()) continue;
+        const jsonPath = path.join(canonicalDir, file);
+        let stat: fs.Stats;
+        try {
+          stat = fs.lstatSync(jsonPath);
+        } catch {
+          continue;
+        }
+        if (!stat.isFile() || stat.isSymbolicLink()) continue;
 
         const cpId = file.replace(/\.json$/, "");
         let gitRef: string | undefined;
         let ws: string | undefined;
-        let snapshotDir: string | undefined;
+        let snapshotRelativePath: string | undefined;
+        let snapshotIdentity: string | undefined;
+        let snapshotsRootIdentity: string | undefined;
         let snapSize = 0;
         const associatedFiles: string[] = [];
 
@@ -556,21 +606,30 @@ export function scanCheckpoints(checkpointsBaseDir: string, deadline?: number): 
           gitRef = data.gitRef;
           ws = data.workspace;
           // `snapshotDir` is untrusted state-file metadata and retention deletes it recursively.
-          // Accept only this record's snapshot under a real (not symlinked) snapshots directory; the
-          // canonical path is stored so a later swap of the lexical path cannot redirect the delete.
+          // Accept only this record's snapshot under a real (not symlinked) snapshots directory.
           if (data.snapshotDir && typeof data.snapshotDir === "string" && path.isAbsolute(data.snapshotDir) && fs.existsSync(data.snapshotDir)) {
             try {
-              const snapshotsPath = path.join(dirPath, "snapshots");
+              const snapshotsPath = path.join(canonicalDir, "snapshots");
               const rootStat = fs.lstatSync(snapshotsPath);
               const validRecordId = cpId.length > 0 && cpId !== "." && cpId !== ".." && !cpId.includes("/") && !cpId.includes("\\");
               if (validRecordId && rootStat.isDirectory() && !rootStat.isSymbolicLink()) {
                 const snapshotsRoot = fs.realpathSync(snapshotsPath);
-                const expected = path.join(snapshotsRoot, cpId);
-                const realSnapshot = fs.realpathSync(data.snapshotDir);
-                if (realSnapshot === expected || realSnapshot.startsWith(expected + path.sep)) {
-                  snapshotDir = realSnapshot;
-                  snapSize = computeDirSize(realSnapshot, deadline);
-                  associatedFiles.push(realSnapshot);
+                if (snapshotsRoot === snapshotsPath) {
+                  const expected = path.join(snapshotsRoot, cpId);
+                  const realSnapshot = fs.realpathSync(data.snapshotDir);
+                  if (realSnapshot === expected || realSnapshot.startsWith(expected + path.sep)) {
+                    const relativeSnapshot = path.relative(snapshotsRoot, realSnapshot);
+                    const snapshotStat = fs.lstatSync(realSnapshot);
+                    if (relativeSnapshot && !relativeSnapshot.startsWith(`..${path.sep}`) && relativeSnapshot !== ".." &&
+                        !path.isAbsolute(relativeSnapshot) && !snapshotStat.isSymbolicLink() &&
+                        (snapshotStat.isDirectory() || snapshotStat.isFile())) {
+                      snapshotRelativePath = relativeSnapshot;
+                      snapshotIdentity = fileObjectIdentity(snapshotStat);
+                      snapshotsRootIdentity = directoryIdentity(rootStat);
+                      snapSize = computeDirSize(realSnapshot, deadline);
+                      associatedFiles.push(realSnapshot);
+                    }
+                  }
                 }
               }
             } catch {
@@ -584,6 +643,13 @@ export function scanCheckpoints(checkpointsBaseDir: string, deadline?: number): 
           id: cpId,
           primaryFile: jsonPath,
           associatedFiles,
+          primaryIdentity: statIdentity(stat),
+          checkpointStateRootIdentity: stateRootIdentity,
+          checkpointRootIdentity,
+          checkpointPartitionIdentity: partitionIdentity,
+          checkpointSnapshotsIdentity: snapshotsRootIdentity,
+          checkpointSnapshotRelativePath: snapshotRelativePath,
+          checkpointSnapshotIdentity: snapshotIdentity,
           workspace: ws,
           gitRef,
           sizeBytes: stat.size + snapSize,
@@ -826,6 +892,168 @@ export function executeRetention(plan: RetentionPlan, options: { dryRun?: boolea
   return locked(0);
 }
 
+function procFdPath(fd: number, child?: string): string {
+  return child === undefined ? `/proc/self/fd/${fd}` : `/proc/self/fd/${fd}/${child}`;
+}
+
+function directoryOpenFlags(): number {
+  if (process.platform !== "linux" || !fs.constants.O_DIRECTORY || !fs.constants.O_NOFOLLOW || !fs.existsSync("/proc/self/fd")) {
+    throw new Error("Race-resistant checkpoint cleanup is unavailable on this platform; checkpoint was preserved");
+  }
+  return fs.constants.O_RDONLY | fs.constants.O_DIRECTORY | fs.constants.O_NOFOLLOW;
+}
+
+function openDirectoryNoFollow(target: string, expectedIdentity: string): number {
+  const flags = directoryOpenFlags();
+  const absolute = path.resolve(target);
+  const root = path.parse(absolute).root;
+  let currentFd = fs.openSync(root, flags);
+  try {
+    for (const component of path.relative(root, absolute).split(path.sep).filter(Boolean)) {
+      const nextFd = fs.openSync(procFdPath(currentFd, component), flags);
+      fs.closeSync(currentFd);
+      currentFd = nextFd;
+    }
+    const stat = fs.fstatSync(currentFd);
+    if (!stat.isDirectory() || directoryIdentity(stat) !== expectedIdentity) {
+      throw new Error("Checkpoint state directory changed since planning; checkpoint was preserved");
+    }
+    const result = currentFd;
+    currentFd = -1;
+    return result;
+  } finally {
+    if (currentFd >= 0) fs.closeSync(currentFd);
+  }
+}
+
+function openChildDirectory(parentFd: number, name: string, expectedIdentity?: string): number {
+  if (!name || name === "." || name === ".." || name.includes(path.sep)) {
+    throw new Error("Invalid checkpoint directory component; checkpoint was preserved");
+  }
+  const fd = fs.openSync(procFdPath(parentFd, name), directoryOpenFlags());
+  try {
+    const stat = fs.fstatSync(fd);
+    if (!stat.isDirectory() || (expectedIdentity && directoryIdentity(stat) !== expectedIdentity)) {
+      throw new Error(`Checkpoint directory '${name}' changed since planning; checkpoint was preserved`);
+    }
+    return fd;
+  } catch (error) {
+    fs.closeSync(fd);
+    throw error;
+  }
+}
+
+function openSnapshotParent(
+  snapshotsFd: number,
+  relativePath: string,
+  expectedIdentity: string,
+): { parentFd: number; name: string; ownsParentFd: boolean } {
+  if (!relativePath || path.isAbsolute(relativePath)) throw new Error("Invalid checkpoint snapshot path; checkpoint was preserved");
+  const components = relativePath.split(path.sep);
+  if (components.some(component => !component || component === "." || component === ".." || component.includes(path.sep))) {
+    throw new Error("Invalid checkpoint snapshot path; checkpoint was preserved");
+  }
+
+  let parentFd = snapshotsFd;
+  let ownedParentFd: number | undefined;
+  try {
+    for (const component of components.slice(0, -1)) {
+      const nextFd = openChildDirectory(parentFd, component);
+      if (ownedParentFd !== undefined) fs.closeSync(ownedParentFd);
+      ownedParentFd = nextFd;
+      parentFd = nextFd;
+    }
+    const name = components[components.length - 1];
+    const stat = fs.lstatSync(procFdPath(parentFd, name));
+    if (stat.isSymbolicLink() || (!stat.isDirectory() && !stat.isFile()) || fileObjectIdentity(stat) !== expectedIdentity) {
+      throw new Error("Checkpoint snapshot changed since planning; checkpoint was preserved");
+    }
+    const result = { parentFd, name, ownsParentFd: parentFd !== snapshotsFd };
+    ownedParentFd = undefined;
+    return result;
+  } finally {
+    if (ownedParentFd !== undefined) fs.closeSync(ownedParentFd);
+  }
+}
+
+function removeConfinedTreeAt(parentFd: number, name: string, expectedIdentity?: string): void {
+  const target = procFdPath(parentFd, name);
+  const stat = fs.lstatSync(target);
+  if (expectedIdentity && fileObjectIdentity(stat) !== expectedIdentity) {
+    throw new Error("Checkpoint snapshot changed before deletion; snapshot was preserved");
+  }
+  if (stat.isSymbolicLink()) {
+    // Removing a link from the already-confined directory never follows its target.
+    fs.unlinkSync(target);
+    return;
+  }
+  if (stat.isFile()) {
+    fs.unlinkSync(target);
+    return;
+  }
+  if (!stat.isDirectory()) throw new Error("Unsupported checkpoint snapshot entry; snapshot was preserved");
+
+  const childFd = openChildDirectory(parentFd, name, directoryIdentity(stat));
+  try {
+    for (const child of fs.readdirSync(procFdPath(childFd))) removeConfinedTreeAt(childFd, child);
+  } finally {
+    fs.closeSync(childFd);
+  }
+  // This is relative to the pinned parent descriptor. A swapped symlink is not followed.
+  fs.rmdirSync(target);
+}
+
+function deleteCheckpointConfined(item: RetentionItem): void {
+  const stateRootIdentity = item.checkpointStateRootIdentity;
+  const checkpointsRootIdentity = item.checkpointRootIdentity;
+  const partitionIdentity = item.checkpointPartitionIdentity;
+  if (!stateRootIdentity || !checkpointsRootIdentity || !partitionIdentity || !item.primaryIdentity) {
+    throw new Error("Checkpoint plan is missing directory identity evidence; checkpoint was preserved");
+  }
+
+  const partitionPath = path.dirname(item.primaryFile);
+  const checkpointsPath = path.dirname(partitionPath);
+  const stateRootPath = path.dirname(checkpointsPath);
+  let stateFd: number | undefined;
+  let checkpointsFd: number | undefined;
+  let partitionFd: number | undefined;
+  let snapshotsFd: number | undefined;
+  let snapshotParentFd: number | undefined;
+  try {
+    stateFd = openDirectoryNoFollow(stateRootPath, stateRootIdentity);
+    checkpointsFd = openChildDirectory(stateFd, path.basename(checkpointsPath), checkpointsRootIdentity);
+    partitionFd = openChildDirectory(checkpointsFd, path.basename(partitionPath), partitionIdentity);
+
+    const recordName = path.basename(item.primaryFile);
+    const recordPath = procFdPath(partitionFd, recordName);
+    const recordStat = fs.lstatSync(recordPath);
+    if (!recordStat.isFile() || recordStat.isSymbolicLink() || statIdentity(recordStat) !== item.primaryIdentity) {
+      throw new Error("Checkpoint record changed since planning; checkpoint was preserved");
+    }
+
+    if (item.checkpointSnapshotRelativePath) {
+      if (!item.checkpointSnapshotsIdentity || !item.checkpointSnapshotIdentity) {
+        throw new Error("Checkpoint plan is missing snapshot identity evidence; checkpoint was preserved");
+      }
+      snapshotsFd = openChildDirectory(partitionFd, "snapshots", item.checkpointSnapshotsIdentity);
+      const openedSnapshot = openSnapshotParent(snapshotsFd, item.checkpointSnapshotRelativePath, item.checkpointSnapshotIdentity);
+      if (openedSnapshot.ownsParentFd) snapshotParentFd = openedSnapshot.parentFd;
+
+      // Remove the record only after every parent and the target snapshot have been pinned and checked.
+      fs.unlinkSync(recordPath);
+      removeConfinedTreeAt(openedSnapshot.parentFd, openedSnapshot.name, item.checkpointSnapshotIdentity);
+    } else {
+      fs.unlinkSync(recordPath);
+    }
+  } finally {
+    if (snapshotParentFd !== undefined) fs.closeSync(snapshotParentFd);
+    if (snapshotsFd !== undefined) fs.closeSync(snapshotsFd);
+    if (partitionFd !== undefined) fs.closeSync(partitionFd);
+    if (checkpointsFd !== undefined) fs.closeSync(checkpointsFd);
+    if (stateFd !== undefined) fs.closeSync(stateFd);
+  }
+}
+
 function executeRetentionLocked(plan: RetentionPlan, options: { dryRun?: boolean; timeBudgetMs?: number; deadline?: number }): GcExecutionResult {
   const startTime = Date.now();
   const dryRun = Boolean(options.dryRun);
@@ -870,6 +1098,32 @@ function executeRetentionLocked(plan: RetentionPlan, options: { dryRun?: boolean
         continue;
       }
     }
+
+    if (item.kind === "checkpoint") {
+      try {
+        deleteCheckpointConfined(item);
+      } catch (err: any) {
+        errors.push({ path: item.primaryFile, error: err?.message || String(err) });
+        continue;
+      }
+
+      if (item.gitRef && item.workspace) {
+        try {
+          execSync(`git update-ref -d refs/nexus/checkpoints/${item.id}`, {
+            cwd: item.workspace,
+            stdio: "ignore",
+          });
+        } catch {}
+      }
+
+      deletedCount++;
+      deletedBytes += item.sizeBytes;
+      deletedItems.push(item);
+      byKind[item.kind].count++;
+      byKind[item.kind].bytes += item.sizeBytes;
+      continue;
+    }
+
     let success = true;
     const durableTaskRecord = item.kind === "task" || item.kind === "session";
 
@@ -916,16 +1170,6 @@ function executeRetentionLocked(plan: RetentionPlan, options: { dryRun?: boolean
         if (fs.existsSync(assoc)) {
           const s = safeStat(assoc);
           if (s && s.isDirectory()) {
-            if (item.kind === "checkpoint") {
-              // The plan stored a canonical snapshot path. Re-resolve immediately before the
-              // recursive delete so a swapped intermediate path cannot redirect it.
-              const current = fs.realpathSync(assoc);
-              if (current !== assoc) {
-                success = false;
-                errors.push({ path: assoc, error: "snapshot path changed since planning; deletion skipped" });
-                continue;
-              }
-            }
             fs.rmSync(assoc, { recursive: true, force: true });
           } else {
             fs.unlinkSync(assoc);
@@ -950,16 +1194,6 @@ function executeRetentionLocked(plan: RetentionPlan, options: { dryRun?: boolean
     }
 
     if (success) {
-      // If checkpoint has gitRef, prune git ref
-      if (item.kind === "checkpoint" && item.gitRef && item.workspace) {
-        try {
-          execSync(`git update-ref -d refs/nexus/checkpoints/${item.id}`, {
-            cwd: item.workspace,
-            stdio: "ignore",
-          });
-        } catch {}
-      }
-
       if (item.kind === "session") {
         sessionsRemoved.push(item.id);
       }

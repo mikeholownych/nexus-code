@@ -69,6 +69,201 @@ test("a symlinked snapshots root is not used as the confinement root", () => {
   }
 });
 
+test("a symlinked checkpoint partition cannot redirect snapshot deletion outside the store", () => {
+  const { home, cpDir } = fixture();
+  fs.rmSync(cpDir, { recursive: true, force: true });
+  const outsidePartition = path.join(home, "outside", "abc123");
+  const outsideSnapshot = path.join(outsidePartition, "snapshots", "cp_old");
+  fs.mkdirSync(outsideSnapshot, { recursive: true });
+  fs.writeFileSync(path.join(outsideSnapshot, "important.txt"), "keep");
+  const outsideRecord = writeOldRecord(outsidePartition, "cp_old.json", outsideSnapshot);
+  fs.symlinkSync(outsidePartition, cpDir);
+  try {
+    const result = reclaim(home);
+    assert.equal(result.deletedCount, 0, "the redirected partition is not treated as checkpoint state");
+    assert.equal(fs.existsSync(path.join(outsideSnapshot, "important.txt")), true, "the external snapshot survives");
+    assert.equal(fs.existsSync(outsideRecord), true, "the external record is not treated as store data");
+  } finally {
+    fs.rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test("a checkpoint root replaced after planning cannot redirect deletion", () => {
+  const { home, cpDir, cpFile } = fixture();
+  const cpRoot = path.dirname(cpDir);
+  const originalSnapshot = path.join(cpDir, "snapshots", "cp_old");
+  fs.mkdirSync(originalSnapshot, { recursive: true });
+  fs.writeFileSync(path.join(originalSnapshot, "keep.txt"), "original");
+  writeOldCheckpoint(cpFile, originalSnapshot);
+
+  const plan = planRetention({ home, maxAgeDays: 0 });
+  assert.equal(plan.reclaimableItems.some(item => item.kind === "checkpoint"), true);
+
+  const movedRoot = `${cpRoot}-moved`;
+  const outsideRoot = path.join(home, "outside-checkpoints");
+  const outsidePartition = path.join(outsideRoot, "abc123");
+  const outsideSnapshot = path.join(outsidePartition, "snapshots", "cp_old");
+  fs.renameSync(cpRoot, movedRoot);
+  fs.mkdirSync(outsideSnapshot, { recursive: true });
+  fs.writeFileSync(path.join(outsideSnapshot, "keep.txt"), "external");
+  const outsideRecord = writeOldRecord(outsidePartition, "cp_old.json", outsideSnapshot);
+  fs.symlinkSync(outsideRoot, cpRoot);
+
+  try {
+    const result = executeRetention(plan, { dryRun: false });
+    assert.equal(result.deletedCount, 0);
+    assert.equal(fs.existsSync(path.join(movedRoot, "abc123", "cp_old.json")), true, "planned source remains intact");
+    assert.equal(fs.existsSync(outsideRecord), true, "replacement record is not touched");
+    assert.equal(fs.existsSync(path.join(outsideSnapshot, "keep.txt")), true, "replacement snapshot is not touched");
+  } finally {
+    fs.rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test("a checkpoint root replaced by another real directory is rejected by identity", () => {
+  const { home, cpDir, cpFile } = fixture();
+  const cpRoot = path.dirname(cpDir);
+  const originalSnapshot = path.join(cpDir, "snapshots", "cp_old");
+  fs.mkdirSync(originalSnapshot, { recursive: true });
+  fs.writeFileSync(path.join(originalSnapshot, "keep.txt"), "original");
+  writeOldCheckpoint(cpFile, originalSnapshot);
+
+  const plan = planRetention({ home, maxAgeDays: 0 });
+  const movedRoot = `${cpRoot}-moved`;
+  const replacementRoot = path.join(home, "replacement-checkpoints");
+  const replacementSnapshot = path.join(replacementRoot, "abc123", "snapshots", "cp_old");
+  fs.renameSync(cpRoot, movedRoot);
+  fs.mkdirSync(replacementSnapshot, { recursive: true });
+  fs.writeFileSync(path.join(replacementSnapshot, "keep.txt"), "replacement");
+  writeOldRecord(path.join(replacementRoot, "abc123"), "cp_old.json", replacementSnapshot);
+  fs.renameSync(replacementRoot, cpRoot);
+
+  try {
+    const result = executeRetention(plan, { dryRun: false });
+    assert.equal(result.deletedCount, 0);
+    assert.equal(fs.existsSync(path.join(movedRoot, "abc123", "cp_old.json")), true);
+    assert.equal(fs.existsSync(path.join(cpRoot, "abc123", "cp_old.json")), true, "replacement tree is not treated as the planned tree");
+    assert.equal(fs.existsSync(path.join(cpRoot, "abc123", "snapshots", "cp_old", "keep.txt")), true);
+  } finally {
+    fs.rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test("a checkpoint partition replaced after planning cannot redirect deletion", () => {
+  const { home, cpDir, cpFile } = fixture();
+  const originalSnapshot = path.join(cpDir, "snapshots", "cp_old");
+  fs.mkdirSync(originalSnapshot, { recursive: true });
+  fs.writeFileSync(path.join(originalSnapshot, "keep.txt"), "original");
+  writeOldCheckpoint(cpFile, originalSnapshot);
+
+  const plan = planRetention({ home, maxAgeDays: 0 });
+  assert.equal(plan.reclaimableItems.some(item => item.kind === "checkpoint"), true);
+
+  const movedPartition = `${cpDir}-moved`;
+  const outsidePartition = path.join(home, "outside-partition");
+  const outsideSnapshot = path.join(outsidePartition, "snapshots", "cp_old");
+  fs.renameSync(cpDir, movedPartition);
+  fs.mkdirSync(outsideSnapshot, { recursive: true });
+  fs.writeFileSync(path.join(outsideSnapshot, "keep.txt"), "external");
+  const outsideRecord = writeOldRecord(outsidePartition, "cp_old.json", outsideSnapshot);
+  fs.symlinkSync(outsidePartition, cpDir);
+
+  try {
+    const result = executeRetention(plan, { dryRun: false });
+    assert.equal(result.deletedCount, 0);
+    assert.equal(fs.existsSync(path.join(movedPartition, "cp_old.json")), true, "planned source remains intact");
+    assert.equal(fs.existsSync(outsideRecord), true, "replacement record is not touched");
+    assert.equal(fs.existsSync(path.join(outsideSnapshot, "keep.txt")), true, "replacement snapshot is not touched");
+  } finally {
+    fs.rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test("a checkpoint partition replaced by another real directory is rejected by identity", () => {
+  const { home, cpDir, cpFile } = fixture();
+  const originalSnapshot = path.join(cpDir, "snapshots", "cp_old");
+  fs.mkdirSync(originalSnapshot, { recursive: true });
+  fs.writeFileSync(path.join(originalSnapshot, "keep.txt"), "original");
+  writeOldCheckpoint(cpFile, originalSnapshot);
+
+  const plan = planRetention({ home, maxAgeDays: 0 });
+  const movedPartition = `${cpDir}-moved`;
+  const replacementPartition = path.join(home, "replacement-partition");
+  const replacementSnapshot = path.join(replacementPartition, "snapshots", "cp_old");
+  fs.renameSync(cpDir, movedPartition);
+  fs.mkdirSync(replacementSnapshot, { recursive: true });
+  fs.writeFileSync(path.join(replacementSnapshot, "keep.txt"), "replacement");
+  writeOldRecord(replacementPartition, "cp_old.json", replacementSnapshot);
+  fs.renameSync(replacementPartition, cpDir);
+
+  try {
+    const result = executeRetention(plan, { dryRun: false });
+    assert.equal(result.deletedCount, 0);
+    assert.equal(fs.existsSync(path.join(movedPartition, "cp_old.json")), true);
+    assert.equal(fs.existsSync(cpFile), true, "replacement record is not treated as the planned record");
+    assert.equal(fs.existsSync(path.join(cpDir, "snapshots", "cp_old", "keep.txt")), true);
+  } finally {
+    fs.rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test("a checkpoint snapshots root replaced after planning preserves the record and external data", () => {
+  const { home, cpDir, cpFile } = fixture();
+  const snapshots = path.join(cpDir, "snapshots");
+  const plannedSnapshot = path.join(snapshots, "cp_old");
+  fs.mkdirSync(plannedSnapshot, { recursive: true });
+  fs.writeFileSync(path.join(plannedSnapshot, "keep.txt"), "original");
+  writeOldCheckpoint(cpFile, plannedSnapshot);
+
+  const plan = planRetention({ home, maxAgeDays: 0 });
+  assert.equal(plan.reclaimableItems.some(item => item.kind === "checkpoint"), true);
+
+  const movedSnapshots = `${snapshots}-moved`;
+  const outside = path.join(home, "outside-snapshots");
+  const outsideSnapshot = path.join(outside, "cp_old");
+  fs.renameSync(snapshots, movedSnapshots);
+  fs.mkdirSync(outsideSnapshot, { recursive: true });
+  fs.writeFileSync(path.join(outsideSnapshot, "keep.txt"), "external");
+  fs.symlinkSync(outside, snapshots);
+
+  try {
+    const result = executeRetention(plan, { dryRun: false });
+    assert.equal(result.deletedCount, 0);
+    assert.equal(fs.existsSync(cpFile), true, "record is retained when its snapshot boundary changed");
+    assert.equal(fs.existsSync(path.join(movedSnapshots, "cp_old", "keep.txt")), true, "planned snapshot remains intact");
+    assert.equal(fs.existsSync(path.join(outsideSnapshot, "keep.txt")), true, "replacement snapshot is not touched");
+  } finally {
+    fs.rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test("a checkpoint snapshots root replaced by another real directory is rejected by identity", () => {
+  const { home, cpDir, cpFile } = fixture();
+  const snapshots = path.join(cpDir, "snapshots");
+  const plannedSnapshot = path.join(snapshots, "cp_old");
+  fs.mkdirSync(plannedSnapshot, { recursive: true });
+  fs.writeFileSync(path.join(plannedSnapshot, "keep.txt"), "original");
+  writeOldCheckpoint(cpFile, plannedSnapshot);
+
+  const plan = planRetention({ home, maxAgeDays: 0 });
+  const movedSnapshots = `${snapshots}-moved`;
+  const replacementSnapshot = path.join(home, "replacement-snapshots", "cp_old");
+  fs.renameSync(snapshots, movedSnapshots);
+  fs.mkdirSync(replacementSnapshot, { recursive: true });
+  fs.writeFileSync(path.join(replacementSnapshot, "keep.txt"), "replacement");
+  fs.renameSync(path.dirname(replacementSnapshot), snapshots);
+
+  try {
+    const result = executeRetention(plan, { dryRun: false });
+    assert.equal(result.deletedCount, 0);
+    assert.equal(fs.existsSync(cpFile), true, "record is retained when its snapshots root changed");
+    assert.equal(fs.existsSync(path.join(movedSnapshots, "cp_old", "keep.txt")), true);
+    assert.equal(fs.existsSync(path.join(snapshots, "cp_old", "keep.txt")), true, "replacement snapshot is untouched");
+  } finally {
+    fs.rmSync(home, { recursive: true, force: true });
+  }
+});
+
 test("a record cannot reclaim another checkpoint's snapshot", () => {
   const { home, cpDir, cpFile } = fixture();
   const other = path.join(cpDir, "snapshots", "cp_other");
@@ -160,8 +355,9 @@ test("a snapshot inside the checkpoint store is still reclaimed", () => {
   fs.writeFileSync(path.join(snapshot, "file.txt"), "old");
   writeOldCheckpoint(cpFile, snapshot);
   try {
-    reclaim(home);
-    assert.equal(fs.existsSync(snapshot), false);
+    const result = executeRetention(planRetention({ home, maxAgeDays: 0 }), { dryRun: false });
+    assert.equal(result.deletedCount, 1, JSON.stringify(result.errors));
+    assert.equal(fs.existsSync(snapshot), false, JSON.stringify(result.errors));
     assert.equal(fs.existsSync(cpFile), false);
   } finally {
     fs.rmSync(home, { recursive: true, force: true });
