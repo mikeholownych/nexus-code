@@ -61,9 +61,13 @@ pub struct CstParseResult {
  */
 pub fn parse_cst_symbols(file_path: &Path, rel_path: &str, query_filter: Option<&str>) -> Result<Vec<CstSymbol>, String> {
     let content = read_source_file(file_path)?;
-    let lines: Vec<String> = content.lines().map(|line| line.to_string()).collect();
-
     let ext = file_path.extension().and_then(|s| s.to_str()).unwrap_or("");
+    Ok(parse_cst_content(&content, rel_path, query_filter, ext))
+}
+
+/// Parses already-bounded source text, so a caller that has the content (an outline) does not read the file again.
+fn parse_cst_content(content: &str, rel_path: &str, query_filter: Option<&str>, ext: &str) -> Vec<CstSymbol> {
+    let lines: Vec<String> = content.lines().map(|line| line.to_string()).collect();
     let mut symbols = Vec::new();
 
     let doc_regex = Regex::new(r"^\s*(?://[/!]|\s*\*\s*|#\s*|/\*\*|<!--)(.*)").unwrap();
@@ -159,7 +163,7 @@ pub fn parse_cst_symbols(file_path: &Path, rel_path: &str, query_filter: Option<
         i += 1;
     }
 
-    Ok(symbols)
+    symbols
 }
 
 /**
@@ -215,8 +219,9 @@ pub fn generate_file_outline(base_dir: &Path, args: OutlineFileArgs) -> Result<O
     }
 
     let rel_path = target.strip_prefix(base_dir).unwrap_or(&target).to_string_lossy().to_string();
-    let symbols = parse_cst_symbols(&target, &rel_path, None)?;
     let content = read_source_file(&target)?;
+    let ext = target.extension().and_then(|s| s.to_str()).unwrap_or("");
+    let symbols = parse_cst_content(&content, &rel_path, None, ext);
     let total_lines = content.lines().count();
 
     let mut outline_str = format!("File: {} ({} lines, {} symbols)\n", rel_path, total_lines, symbols.len());
@@ -279,24 +284,73 @@ pub async fn execute_task(
         let _ = std::fs::remove_file(tmp);
     }
 
-    #[test]
-    fn test_cst_refuses_files_above_the_read_limit() {
-        let name = format!("nexus_cst_big_{}.rs", std::process::id());
-        let tmp = std::env::temp_dir().join(&name);
+    struct TempSource(std::path::PathBuf);
+
+    impl TempSource {
+        fn new(name: &str) -> Self {
+            Self(std::env::temp_dir().join(name))
+        }
+
+        fn path(&self) -> &Path {
+            &self.0
+        }
+
+        fn file_name(&self) -> String {
+            self.0.file_name().unwrap().to_string_lossy().to_string()
+        }
+    }
+
+    impl Drop for TempSource {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_file(&self.0);
+        }
+    }
+
+    fn oversized_source(name: &str) -> TempSource {
+        let tmp = TempSource::new(name);
         let mut code = String::from("pub fn first() {}\n");
         while code.len() <= MAX_READ_BYTES {
             code.push_str("// filler comment line\n");
         }
-        std::fs::write(&tmp, &code).unwrap();
+        std::fs::write(tmp.path(), &code).unwrap();
+        tmp
+    }
 
-        let parsed = parse_cst_symbols(&tmp, &name, None);
+    #[test]
+    fn test_cst_refuses_files_above_the_read_limit() {
+        let tmp = oversized_source(&format!("nexus_cst_big_{}.rs", std::process::id()));
+        let parsed = parse_cst_symbols(tmp.path(), &tmp.file_name(), None);
         assert!(parsed.is_err(), "parse_cst_symbols must refuse a file above the read limit");
         assert!(parsed.unwrap_err().contains("8 MB"));
+    }
 
-        let outline = generate_file_outline(&std::env::temp_dir(), OutlineFileArgs { path: name });
+    #[test]
+    fn test_cst_outline_refuses_files_above_the_read_limit() {
+        let tmp = oversized_source(&format!("nexus_cst_big_outline_{}.rs", std::process::id()));
+        // generate_file_outline must enforce the limit itself, not rely on the parser's refusal.
+        let outline = generate_file_outline(&std::env::temp_dir(), OutlineFileArgs { path: tmp.file_name() });
         assert!(outline.is_err(), "generate_file_outline must refuse a file above the read limit");
         assert!(outline.unwrap_err().contains("8 MB"));
+    }
 
-        let _ = std::fs::remove_file(tmp);
+    #[test]
+    fn test_cst_accepts_the_read_limit_and_empty_files() {
+        let at_limit = TempSource::new(&format!("nexus_cst_at_limit_{}.rs", std::process::id()));
+        let first = "pub fn first() {}\n";
+        let mut code = String::from(first);
+        code.push_str(&"x".repeat(MAX_READ_BYTES - first.len()));
+        std::fs::write(at_limit.path(), &code).unwrap();
+        let parsed = parse_cst_symbols(at_limit.path(), &at_limit.file_name(), None).unwrap();
+        assert_eq!(parsed.len(), 1);
+        let outline = generate_file_outline(&std::env::temp_dir(), OutlineFileArgs { path: at_limit.file_name() }).unwrap();
+        assert_eq!(outline.total_lines, 2);
+        assert_eq!(outline.symbol_count, 1);
+
+        let empty = TempSource::new(&format!("nexus_cst_empty_{}.rs", std::process::id()));
+        std::fs::write(empty.path(), "").unwrap();
+        assert!(parse_cst_symbols(empty.path(), &empty.file_name(), None).unwrap().is_empty());
+        let empty_outline = generate_file_outline(&std::env::temp_dir(), OutlineFileArgs { path: empty.file_name() }).unwrap();
+        assert_eq!(empty_outline.total_lines, 0);
+        assert_eq!(empty_outline.symbol_count, 0);
     }
 }
