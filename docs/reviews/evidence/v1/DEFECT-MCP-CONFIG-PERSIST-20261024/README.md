@@ -39,7 +39,7 @@ content {"mcpServers":{"fake":{...,"env":{"FAKE_TOKEN":"s3cr3t-value"}}}}
   `config mode 644 leaks a server token to other users`; the second fails at `result.persisted === false`, and a
   separate pre-fix probe confirms the substance (the broken file was replaced and `keep` was deleted). All pass
   after the change.
-- `test/workspace_trust.test.ts` (environment allowlist, MCP config selection): 7/7 together with the new file.
+- `test/workspace_trust.test.ts` (environment allowlist, MCP config selection): 9/9 together with the new file.
 - `npx tsc --noEmit -p tsconfig.json`; `git diff --check`: pass.
 
 ## Residual risk
@@ -51,7 +51,7 @@ content {"mcpServers":{"fake":{...,"env":{"FAKE_TOKEN":"s3cr3t-value"}}}}
 - A dangling symlink at the config path is replaced rather than followed. A valid symlink has its target file
   replaced, but the temporary file is written under `~/.config/nexus`, so a target on another filesystem fails
   closed with `EXDEV` instead of being written.
-- Refusing an unparseable config requires the operator to fix the JSON before the new server can be persisted; the
-  in-memory connection still works for the current session.
+- Refusing an unparseable config, or a present-but-unusable `mcpServers` value, requires the operator to repair the
+  JSON before the new server can be persisted; the in-memory connection still works for the current session.
 - MCP config files loaded from an untrusted workspace remain governed by the existing workspace-trust gate; this
   change covers only the manager's own persistence path.

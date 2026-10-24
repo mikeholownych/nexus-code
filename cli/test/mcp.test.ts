@@ -87,7 +87,9 @@ describe("MCP server configuration persistence", () => {
     await withHome(async (home, server) => {
       const { dir, file } = configPaths(home);
       fs.mkdirSync(dir, { recursive: true });
-      const broken = '{ "mcpServers": { "keep": { "command": "keep-me", "env": { "TOKEN": "ghp_s3cr3tvalue0123456789" } } }, }';
+      // Unquoted value: V8's parse error quotes the surrounding input, including the token, so this discriminates
+      // between reporting the path and echoing the parser message.
+      const broken = '{ "mcpServers": { "keep": { "command": "keep-me", "env": { "TOKEN": ghp_s3cr3tvalue0123456789 } } } }';
       fs.writeFileSync(file, broken);
 
       const manager = new McpClientManager(home);
@@ -96,7 +98,7 @@ describe("MCP server configuration persistence", () => {
         assert.equal(result.success, true, "the connection itself still succeeded");
         assert.equal(result.persisted, false);
         assert.match(result.persistError || "", /not valid JSON|left untouched/i);
-        assert.doesNotMatch(result.persistError || "", /ghp_s3cr3tvalue/, "the parser message echoed config content");
+        assert.doesNotMatch(result.persistError || "", /ghp_|s3cr3t/, "the parser message echoed config content");
         assert.equal(fs.readFileSync(file, "utf8"), broken, "the unparseable config was overwritten");
       } finally {
         manager.shutdownAll();
