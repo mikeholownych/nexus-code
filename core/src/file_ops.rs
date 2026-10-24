@@ -1369,6 +1369,22 @@ mod tests {
     fn test_edit_file_refuses_files_above_the_read_limit() {
         let dir = std::env::temp_dir().join(format!("test_edit_limit_{}", std::process::id()));
         fs::create_dir_all(&dir).unwrap();
+        let at_limit = dir.join("at-limit-edit.txt");
+        let first_line = "needle unique\n";
+        let mut exact = String::from(first_line);
+        exact.push_str(&"x".repeat(MAX_READ_BYTES - first_line.len()));
+        fs::write(&at_limit, &exact).unwrap();
+        let boundary = edit_file(
+            EditFileArgs {
+                path: "at-limit-edit.txt".into(),
+                old_content: "needle unique".into(),
+                new_content: "changed".into(),
+                replace_all: None,
+            },
+            &dir,
+        );
+        assert!(boundary.is_ok(), "a file exactly at the read limit stays editable: {boundary:?}");
+
         let target = dir.join("big-edit.txt");
         let mut content = String::from("needle unique\n");
         content.push_str(&"x".repeat(MAX_READ_BYTES));

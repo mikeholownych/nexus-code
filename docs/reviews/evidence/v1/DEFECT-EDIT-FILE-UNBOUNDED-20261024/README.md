@@ -33,7 +33,7 @@ without bound. `write_file` is unchanged: its content already arrived in memory 
 - New `file_ops::tests::test_edit_file_refuses_files_above_the_read_limit` and
   `test_patch_file_refuses_files_above_the_read_limit`: both fail on the pre-fix source (the oversized file was
   modified) and pass after the change; they also assert the file is byte-identical and the error names the 8 MB
-  limit.
+  limit. The edit test also pins the boundary: a file exactly at `MAX_READ_BYTES` stays editable.
 - `cargo test --bin harness-core file_ops::` 18/18; full `cargo test --bin harness-core` 37/37.
 - `git diff --check`: pass.
 
@@ -46,3 +46,5 @@ without bound. `write_file` is unchanged: its content already arrived in memory 
 - A file can still grow between the capped read and `write_file_atomically`'s rename; the read cap bounds the memory
   this process allocates, not concurrent writers.
 - Binary files remain rejected by `patch_file`; `edit_file` still attempts a UTF-8 read and fails as before.
+- Sibling unbounded readers remain in `core/src/cst.rs` (`outline_file` and `scan_workspace_cst` read whole files
+  with no limit). They are reachable from the model and are a separate follow-up slice, not changed here.
