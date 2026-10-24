@@ -1,6 +1,6 @@
 # v1.0.0 release readiness checkpoint
 
-## Latest release convergence status (observed 2026-10-24 02:23 UTC at `3baee76`)
+## Latest release convergence status (observed 2026-10-24 02:25 UTC at `3baee76`)
 
 **Authoritative source and source gates:** `origin/main` is `3baee76736a21d6244f9f816bb8c2e148e4bab70`, merging PR #178. Post-merge CodeQL [40053669514](https://github.com/mikeholownych/nexus-code/actions/runs/40053669514) passed on this exact commit; post-merge CI [40053669651](https://github.com/mikeholownych/nexus-code/actions/runs/40053669651) is still running the Node 22 and Node 24 CLI test matrices, with Linux packaging pending. From a clean detached worktree at this exact SHA with isolated HOME, `node scripts/check_requirements.mjs --enforce` passed: 123 rows (108 tested, 6 partial, 2 implemented, 7 open), with 12 rows deferred to exact-RC qualification; `node scripts/sync-version.mjs --check` passed with all components at `1.0.0-rc.4`. The preceding exact-main CI [40050680348](https://github.com/mikeholownych/nexus-code/actions/runs/40050680348) and CodeQL [40050680292](https://github.com/mikeholownych/nexus-code/actions/runs/40050680292) passed on `1b055177`; its Linux job built and compared two `v1.0.0-rc.4` packages, validated the SBOM, and passed package/installer smoke checks. These source and package-build gates do not qualify an installed or published RC.
 
@@ -10,7 +10,7 @@
 
 **Distribution and RC state:** The GitHub installer/archive is the approved distribution target; npm publication is inapplicable. RC3 remains the latest published candidate; RC4 and stable v1.0.0 do not exist. No RC is accepted.
 
-**Held-out and qualification:** Public Issue #1 remains open; a metadata-only custodian status request was posted at 2026-10-24 02:16:57 UTC (comment 6378649211), and no response has been recorded yet. The sealed legacy `hidden.command` corpus remains incompatible with the current `blackbox-v1` runner. No private payload was accessed and no held-out qualification started. T2/T3/T4, long-task and fault-injection qualification, exact-RC provider/standalone checks, cross-runner reproducibility, human terminal matrix, artifact gates, and independent exact-RC acceptance remain outstanding.
+**Held-out and qualification:** Public Issue #1 remains open; a metadata-only custodian status request was posted at 2026-10-24 02:16:57 UTC (comment 6378649211), and no response has been recorded yet. The sealed legacy `hidden.command` corpus remains incompatible with the current `blackbox-v1` runner. No private payload was accessed and no held-out qualification started. `ubuntu-desktop` at `10.0.8.3` is reachable with an active GNOME Wayland session; all five required terminal environments are installed. This is setup evidence only, with 0/15 manual cells run and no screenshots. T2/T3/T4, long-task and fault-injection qualification, exact-RC provider/standalone checks, cross-runner reproducibility, human terminal matrix, artifact gates, and independent exact-RC acceptance remain outstanding.
 
 **Release disposition:** `NEXUS_V1_CONVERGENCE_ACTIVE`; acceptance remains `IN_PROGRESS`. Publication authorization remains granted and gated. No accepted RC or stable v1.0.0 release is claimed.
 
