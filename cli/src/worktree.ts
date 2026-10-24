@@ -75,7 +75,9 @@ export class WorktreeManager {
 
   private ensureGitExclude(): void {
     if (!this.isGitRepo()) return;
-    ensureGitExclude(this.workspace);
+    // Nexus stores worktree state under the repository root, even when the
+    // selected workspace is a subdirectory within that repository.
+    ensureGitExclude(this.gitRoot);
   }
 
   public getWorktreesBaseDir(): string {
