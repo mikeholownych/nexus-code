@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: Published v1.0.0 RC tag to reproduce (for example v1.0.0-rc.4)
+        description: Published v1.0.0 RC tag with lock-pinned release tools (for example v1.0.0-rc.4)
         required: true
         type: string
 
@@ -51,6 +51,13 @@ jobs:
           test "$(node -p 'require("./package.json").version')" = "${TARGET_TAG#v}"
           node scripts/sync-version.mjs --check --tag "$TARGET_TAG"
           test -f "docs/releases/$TARGET_TAG.md"
+          if [[ ! -s scripts/release-tools/package.json || ! -s scripts/release-tools/package-lock.json ]] || \
+             ! grep -Fq 'scripts/release-tools/package-lock.json' scripts/package-linux.sh || \
+             ! grep -Fq 'release-tools/package-lock.json' scripts/generate_sbom.sh || \
+             grep -Eq '(^|[[:space:]])npx([[:space:]]|$)' scripts/package-linux.sh scripts/generate_sbom.sh; then
+            echo "The selected RC predates or bypasses lock-pinned release tools; cross-runner reproduction requires an RC whose tag includes and uses the release-tools lock." >&2
+            exit 1
+          fi
           printf 'tag_sha=%s\n' "$tag_sha" >> "$GITHUB_OUTPUT"
       - name: Verify the public RC release is published
         env:
