@@ -1,5 +1,6 @@
 use regex::Regex;
 use serde::{Deserialize, Serialize};
+use std::collections::VecDeque;
 use std::fs::File;
 use std::io::{BufReader, Read};
 use std::path::Path;
@@ -67,7 +68,10 @@ pub fn parse_cst_symbols(file_path: &Path, rel_path: &str, query_filter: Option<
 
 /// Parses already-bounded source text, so a caller that has the content (an outline) does not read the file again.
 fn parse_cst_content(content: &str, rel_path: &str, query_filter: Option<&str>, ext: &str) -> Vec<CstSymbol> {
-    let lines: Vec<String> = content.lines().map(|line| line.to_string()).collect();
+    // Keep only the small signature lookahead window. A line-per-String vector can be many times larger than
+    // the bounded source when the file contains mostly newline bytes.
+    let mut source_lines = content.lines().enumerate();
+    let mut lookahead = VecDeque::with_capacity(9);
     let mut symbols = Vec::new();
 
     let doc_regex = Regex::new(r"^\s*(?://[/!]|\s*\*\s*|#\s*|/\*\*|<!--)(.*)").unwrap();
@@ -78,11 +82,9 @@ fn parse_cst_content(content: &str, rel_path: &str, query_filter: Option<&str>, 
         r"(?m)^\s*(pub(?:\([^)]+\))?\s+)?(async\s+)?(export\s+)?(default\s+)?(fn|function|def|class|struct|interface|trait|type|enum|func)\s+([A-Za-z0-9_]+)(.*)"
     ).unwrap();
 
-    let mut pending_doc = Vec::new();
-    let mut i = 0;
+    let mut pending_doc = String::new();
 
-    while i < lines.len() {
-        let line = &lines[i];
+    while let Some((i, line)) = lookahead.pop_front().or_else(|| source_lines.next()) {
         let trimmed = line.trim();
 
         // Accumulate preceding doc comments
@@ -90,10 +92,12 @@ fn parse_cst_content(content: &str, rel_path: &str, query_filter: Option<&str>, 
             if let Some(caps) = doc_regex.captures(trimmed) {
                 let comment = caps.get(1).map(|m| m.as_str().trim()).unwrap_or("");
                 if !comment.is_empty() {
-                    pending_doc.push(comment.to_string());
+                    if !pending_doc.is_empty() {
+                        pending_doc.push('\n');
+                    }
+                    pending_doc.push_str(comment);
                 }
             }
-            i += 1;
             continue;
         }
 
@@ -117,26 +121,36 @@ fn parse_cst_content(content: &str, rel_path: &str, query_filter: Option<&str>, 
 
             // Multiline signature accumulation until '{', ';', or ':' (python)
             if !trimmed.contains('{') && !trimmed.contains(';') && !(ext == "py" && trimmed.ends_with(':')) {
-                let mut j = i + 1;
-                while j < lines.len() && j < i + 10 {
-                    let next_trimmed = lines[j].trim();
+                while lookahead.len() < 9 {
+                    let Some(next_line) = source_lines.next() else { break };
+                    lookahead.push_back(next_line);
+                }
+                let mut consumed = 0;
+                let mut found_boundary = false;
+                for (j, next_line) in lookahead.iter().take(9) {
+                    let next_trimmed = next_line.trim();
                     sig_lines.push(next_trimmed.to_string());
                     if next_trimmed.contains('{') || next_trimmed.contains(';') || (ext == "py" && next_trimmed.ends_with(':')) {
-                        end_line = j + 1;
-                        i = j;
+                        end_line = *j + 1;
+                        consumed += 1;
+                        found_boundary = true;
                         break;
                     }
-                    j += 1;
+                    consumed += 1;
+                }
+                if found_boundary {
+                    for _ in 0..consumed {
+                        lookahead.pop_front();
+                    }
                 }
             }
 
             let full_sig = sig_lines.join(" ");
             let doc_text = if !pending_doc.is_empty() {
-                Some(pending_doc.join("\n"))
+                Some(std::mem::take(&mut pending_doc))
             } else {
                 None
             };
-            pending_doc.clear();
 
             let matches_query = match query_filter {
                 Some(q) => name.to_lowercase().contains(&q.to_lowercase()),
@@ -160,7 +174,6 @@ fn parse_cst_content(content: &str, rel_path: &str, query_filter: Option<&str>, 
             pending_doc.clear();
         }
 
-        i += 1;
     }
 
     symbols
@@ -352,5 +365,12 @@ pub async fn execute_task(
         let empty_outline = generate_file_outline(&std::env::temp_dir(), OutlineFileArgs { path: empty.file_name() }).unwrap();
         assert_eq!(empty_outline.total_lines, 0);
         assert_eq!(empty_outline.symbol_count, 0);
+    }
+
+    #[test]
+    fn test_cst_handles_newline_dense_file_at_read_limit_without_line_allocations() {
+        let content = "\n".repeat(MAX_READ_BYTES);
+        let symbols = parse_cst_content(&content, "dense.rs", None, "rs");
+        assert!(symbols.is_empty());
     }
 }
