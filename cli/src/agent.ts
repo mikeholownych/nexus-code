@@ -42,7 +42,8 @@ import {
 } from "./core/execution_tracking.js";
 import { parseModelResponse, repairJsonWithClass, isWriteOrExecTool } from "./parser.js";
 import { TerminalUI, redactSecrets } from "./ui.js";
-import { getGitInfo, getProjectRules } from "./git.js";
+import { getGitInfo } from "./git.js";
+import { trustedProjectRules } from "./startup_trust.js";
 import { SkillManager } from "./skills.js";
 import { McpClientManager } from "./mcp.js";
 import { PluginManager } from "./plugins.js";
@@ -3662,7 +3663,7 @@ export class AutonomousAgent {
   }
 
   private buildSystemPrompt(): string {
-    const projectRules = getProjectRules(this.config.workspace);
+    const projectRules = trustedProjectRules(this.config.workspace);
     const rulesSection = projectRules ? `\n${projectRules}\n` : "";
     const skillsSection = this.skillManager ? `\n${this.skillManager.getPromptSection()}` : "";
     const knowledgeSection = this.knowledge ? `\n${this.knowledge.exportPromptSection()}` : "";
