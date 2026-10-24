@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| Base revision | `4bf6e2b041dc2efb54af551a73796aacc54494a3` (`origin/main`) |
+| Original reproduction baseline (before PR #175) | `4bf6e2b041dc2efb54af551a73796aacc54494a3` |
 | Branch | `v1/defect-tar-symlink-traversal` |
 | Affected behavior | `isSymlinkSafe` converted `\` to `/` **after** `path.normalize`, so `..\..\outside` survived normalization as literal characters and passed the `expectedRoot` check. The equivalent `../../outside` was rejected. |
 | Severity | Low on the supported Linux target: a Linux extractor stores the backslashes literally, and the post-extraction `realpath` containment walk then fails or stays inside. The validator's own cross-separator contract is wrong, and an extractor that treats `\` as a separator (Windows) would escape. |
@@ -21,10 +21,11 @@ isSymlinkSafe("sub\\..\\..\\..\\outside", "nexus/dir/link") // { safe: true }
 const resolved = path.normalize(path.join("/", entryDir, linkname)).replace(/\\/g, "/");
 ```
 
-Two related errors: `normalize` ran while the backslashes were still literal characters, so it did
-not collapse the `..` segments; and joining under an absolute fake root let `..` clamp at `/`, so a
-target such as `../../../nexus/file` "escaped and returned" lexically and passed while the real link
-resolved above the package root.
+The validator normalized while the backslashes were still literal characters, so it did not collapse
+the `..` segments. The initial implementation also joined under an absolute fake root, which clamped
+leading `..` segments. This evidence records the original reproduction baseline; PR #176 was based on
+`d92f38b17cc145ab22748379cbfa572b711b59b4` and merged at
+`d484b9863bd7a83c170958ff9bda62a96c0bc683`.
 
 ## Fix
 
@@ -37,14 +38,19 @@ const resolved = path.posix.normalize(path.posix.join(entryDir, linkname.replace
 ```
 
 Reject an empty resolution, a first segment other than `expectedRoot`, or any remaining `..` segment.
-This rejects both `..\..\outside` and the escape-and-return spelling; in-root targets such as
-`../inside`, `..\inside`, `nexus/file` and `../nexus/file` from `nexus/link` still pass.
+This rejects targets whose final normalized destination is outside the package root, including
+`..\..\outside`. It does not reject a spelling solely for temporarily climbing above the
+`nexus/` prefix if the normalized final destination returns inside it. For example,
+`../../nexus/file` from `nexus/dir/link` resolves to `nexus/file` and is accepted. In-root targets such
+as `../inside`, `..\inside`, and `nexus/file` also pass.
 
 ## Verification
 
 - New `cli/test/tar_safety.test.ts`: 4/4 pass.
-- The traversal and escape-and-return tests fail on the pre-fix source; the escape-and-return test
-  also fails on the intermediate absolute-root implementation.
+- The forward-slash and backslash traversal cases whose final normalized target is outside the
+  package root fail on the pre-fix source.
+- The test distinguishes a final outside target (rejected) from an above-prefix spelling that
+  normalizes back inside the root (accepted).
 - In-root backslash targets and normal relative targets still pass; absolute targets and drive letters
   remain rejected.
 - `npx tsc --noEmit -p tsconfig.json`: pass (source tree only; `cli/tsconfig.json` does not include tests).

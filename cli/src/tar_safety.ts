@@ -81,9 +81,9 @@ export function isSymlinkSafe(linkname: string, entryPath: string, expectedRoot:
     return { safe: false, reason: `Absolute symlink target forbidden: ${linkname}` };
   }
 
-  // Resolve from the package-relative entry directory. Keeping the path relative (instead of joining
-  // under an absolute fake root) means `..` segments are preserved rather than clamped at `/`, so a
-  // target such as `../../../nexus/file` cannot "escape and return" and pass the containment check.
+  // Normalize separators before resolving from the package-relative entry directory. The check
+  // below enforces containment of the final normalized target; it does not reject a target solely
+  // because its unnormalized spelling temporarily climbs above the package-root prefix.
   const entryDir = path.posix.dirname(entryPath.replace(/\\/g, "/"));
   const resolved = path.posix.normalize(
     path.posix.join(entryDir, linkname.replace(/\\/g, "/"))
