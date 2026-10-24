@@ -118,6 +118,7 @@ cargo about generate -m "$ROOT/core/Cargo.toml" -c "$ROOT/about.toml" "$ROOT/abo
 RELEASE_TOOLS="$WORK/release-tools"
 mkdir -p "$RELEASE_TOOLS"
 cp "$ROOT/scripts/release-tools/package.json" "$ROOT/scripts/release-tools/package-lock.json" "$RELEASE_TOOLS/"
+node "$ROOT/scripts/check_deprecated_lock.mjs" "$ROOT/scripts/release-tools/package-lock.json"
 npm ci --ignore-scripts --prefix "$RELEASE_TOOLS"
 RELEASE_TOOLS_BIN="$RELEASE_TOOLS/node_modules/.bin"
 "$RELEASE_TOOLS_BIN/license-checker-rseidelsohn" --production --plainVertical --start "$PKG/lib/cli" > "$WORK/notices-npm.txt"
@@ -179,7 +180,7 @@ NODE
 (cd "$OUT" && sha256sum "$ARCHIVE" compatibility.json > SHA256SUMS)
 
 # Generate lockfile-derived merged CycloneDX SBOM (REQ-REL-108, ACC-SUP-02)
-NEXUS_RELEASE_TOOLS_BIN="$RELEASE_TOOLS_BIN" "$ROOT/scripts/generate_sbom.sh" "$OUT/sbom.cdx.json"
+"$ROOT/scripts/generate_sbom.sh" "$OUT/sbom.cdx.json"
 
 # Publish install.sh as release asset (REQ-REL-109)
 cp "$ROOT/install.sh" "$OUT/install.sh"

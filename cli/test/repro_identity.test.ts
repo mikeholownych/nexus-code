@@ -18,14 +18,21 @@ const MAKEFILE = path.join(ROOT, "Makefile");
 const COMMIT = "a".repeat(40);
 const APPROVED_RUST_IMAGE = "rust:1.95.0-bookworm@sha256:4c2fd73ef19c5ef9d54bee03b06b2839a392604fbfcd578ed948b71b37c1d7fb";
 
-function identity(label: string, overrides: { commit?: string; lock?: string; archive?: string; workflowRef?: string; image?: string | null; rustImage?: string | null } = {}) {
+function identity(label: string, overrides: { commit?: string; lock?: string; archive?: string; workflowRef?: string; workflowSha?: string; image?: string | null; rustImage?: string | null; missingAsset?: boolean } = {}) {
   return {
-    source: { version: "v1.0.0-rc.1", commit: overrides.commit ?? COMMIT, tree: "b".repeat(40), tagObject: "c".repeat(40), lockfiles: { "cli/package-lock.json": "1", "core/Cargo.lock": overrides.lock ?? "2", "rust-toolchain.toml": "3" } },
+    source: { version: "v1.0.0-rc.1", commit: overrides.commit ?? COMMIT, tree: "b".repeat(40), tagObject: "c".repeat(40), lockfiles: { "cli/package-lock.json": "1", "core/Cargo.lock": overrides.lock ?? "2", "rust-toolchain.toml": "3", "scripts/release-tools/package-lock.json": "4" } },
     toolchain: { node: "v22", npm: "10", rustc: "rustc 1.95.0", cargo: "cargo 1.95.0" },
     buildEnvironment: { rustContainerImage: overrides.rustImage === undefined ? APPROVED_RUST_IMAGE : overrides.rustImage },
     runner: { label, image: overrides.image === undefined ? label.replace("-", "").replace(".04", "") : overrides.image, imageVersion: "20261012.1" },
-    workflow: { ref: overrides.workflowRef ?? "refs/tags/v1.0.0-rc.1", sha: overrides.commit ?? COMMIT, runId: "42", runAttempt: "1" },
-    artifacts: { "nexus-linux-x86_64-v1.0.0-rc.1.tar.gz": overrides.archive ?? "d" },
+    workflow: { ref: overrides.workflowRef ?? "refs/heads/main", sha: overrides.workflowSha ?? "f".repeat(40), runId: "42", runAttempt: "1" },
+    artifacts: {
+      "nexus-linux-x86_64-v1.0.0-rc.1.tar.gz": overrides.archive ?? "d",
+      "compatibility.json": "e",
+      "SHA256SUMS": "f",
+      "THIRD_PARTY_NOTICES.txt": "g",
+      "sbom.cdx.json": "h",
+      ...(overrides.missingAsset ? {} : { "install.sh": "i" }),
+    },
   };
 }
 
@@ -44,6 +51,12 @@ test("repro compare accepts only identical source, lockfiles and artifacts from 
     assert.equal(evidence.buildEnvironment.rustContainerImage, APPROVED_RUST_IMAGE);
     assert.deepEqual(evidence.builders.map((builder: any) => builder.runner.label), ["ubuntu-22.04", "ubuntu-24.04"]);
 
+    const missingA = write("missing-a.json", identity("ubuntu-22.04", { missingAsset: true }));
+    const missingB = write("missing-b.json", identity("ubuntu-24.04", { missingAsset: true }));
+    const missingAssetResult = compare(missingA, missingB);
+    assert.notEqual(missingAssetResult.status, 0);
+    assert.match(missingAssetResult.stderr, /does not cover the exact six published release assets/);
+
     const cases: [string, string, RegExp][] = [
       ["other commit", write("c.json", identity("ubuntu-24.04", { commit: "e".repeat(40) })), /not v1\.0\.0-rc\.1@/],
       ["lockfile drift", write("l.json", identity("ubuntu-24.04", { lock: "9" })), /different source or lockfiles/],
@@ -55,7 +68,8 @@ test("repro compare accepts only identical source, lockfiles and artifacts from 
       ["unpinned Rust build image", write("ru.json", identity("ubuntu-24.04", { rustImage: "rust:1.95.0-bookworm" })), /approved digest-pinned Bookworm Rust build image/],
       ["EOL Bullseye build image", write("bullseye.json", identity("ubuntu-24.04", { rustImage: "rust:1.95.0-bullseye@sha256:" + "3".repeat(64) })), /approved digest-pinned Bookworm Rust build image/],
       ["different Bookworm build digest", write("rd.json", identity("ubuntu-24.04", { rustImage: "rust:1.95.0-bookworm@sha256:" + "2".repeat(64) })), /approved digest-pinned Bookworm Rust build image/],
-      ["workflow from a branch", write("w.json", identity("ubuntu-24.04", { workflowRef: "refs/heads/patched" })), /ran the workflow from refs\/heads\/patched/],
+      ["workflow from a branch", write("w.json", identity("ubuntu-24.04", { workflowRef: "refs/heads/patched" })), /reviewed main workflow identity/],
+      ["workflow identity drift", write("ws.json", identity("ubuntu-24.04", { workflowSha: "e".repeat(40) })), /different workflow definitions/],
     ];
     for (const [name, other, message] of cases) {
       const result = compare(a, other);

@@ -53,9 +53,9 @@ jobs:
           test -f "docs/releases/$TARGET_TAG.md"
           if [[ ! -s scripts/release-tools/package.json || ! -s scripts/release-tools/package-lock.json ]] || \
              ! grep -Fq 'scripts/release-tools/package-lock.json' scripts/package-linux.sh || \
-             ! grep -Fq 'release-tools/package-lock.json' scripts/generate_sbom.sh || \
+             ! grep -Fq 'check_deprecated_lock.mjs' scripts/package-linux.sh || \
              grep -Eq '(^|[[:space:]])npx([[:space:]]|$)' scripts/package-linux.sh scripts/generate_sbom.sh; then
-            echo "The selected RC predates or bypasses lock-pinned release tools; cross-runner reproduction requires an RC whose tag includes and uses the release-tools lock." >&2
+            echo "The selected RC predates or bypasses the locked notices tool and lock deprecation gate; cross-runner reproduction requires an RC whose tag includes them." >&2
             exit 1
           fi
           printf 'tag_sha=%s\n' "$tag_sha" >> "$GITHUB_OUTPUT"
@@ -94,6 +94,7 @@ jobs:
           test "$(git rev-parse HEAD)" = "$EXPECTED_TAG_SHA"
           test "$(node -p 'require("./package.json").version')" = "${TARGET_TAG#v}"
           node scripts/sync-version.mjs --check --tag "$TARGET_TAG"
+          test "$GITHUB_REF" = refs/heads/main
       - run: sudo apt-get update && sudo apt-get install --yes acl make bubblewrap build-essential meson ninja-build pkg-config libcap-dev
       - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # pinned Rust toolchain action
         with:
@@ -117,6 +118,10 @@ jobs:
           test "$NEXUS_BUILD_CONTAINER_IMAGE" = 'rust:1.95.0-bookworm@sha256:4c2fd73ef19c5ef9d54bee03b06b2839a392604fbfcd578ed948b71b37c1d7fb'
       - name: Build the exact RC package
         run: bash scripts/package-linux.sh "$TARGET_TAG" "$RUNNER_TEMP/dist"
+      - name: Record source, toolchain, and published-asset identity
+        run: |
+          node scripts/repro-identity.mjs record "$TARGET_TAG" "$RUNNER_TEMP/dist" \
+            "$RUNNER_TEMP/dist/repro-identity.json" "${{ matrix.runner }}"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: nexus-repro-${{ matrix.runner }}
@@ -124,6 +129,10 @@ jobs:
             ${{ runner.temp }}/dist/nexus-linux-x86_64-${{ inputs.tag }}.tar.gz
             ${{ runner.temp }}/dist/compatibility.json
             ${{ runner.temp }}/dist/SHA256SUMS
+            ${{ runner.temp }}/dist/THIRD_PARTY_NOTICES.txt
+            ${{ runner.temp }}/dist/sbom.cdx.json
+            ${{ runner.temp }}/dist/install.sh
+            ${{ runner.temp }}/dist/repro-identity.json
           if-no-files-found: error
           retention-days: 14
 
@@ -152,6 +161,9 @@ jobs:
             --pattern "$archive" \
             --pattern compatibility.json \
             --pattern SHA256SUMS \
+            --pattern THIRD_PARTY_NOTICES.txt \
+            --pattern sbom.cdx.json \
+            --pattern install.sh \
             --dir "$RUNNER_TEMP/published"
       - name: Compare both runner builds with each other and the published RC
         run: |
@@ -160,15 +172,26 @@ jobs:
             (cd "$RUNNER_TEMP/$runner" && sha256sum --check SHA256SUMS)
           done
           (cd "$RUNNER_TEMP/published" && sha256sum --check SHA256SUMS)
-          for file in "$archive" compatibility.json SHA256SUMS; do
+          for file in "$archive" compatibility.json SHA256SUMS THIRD_PARTY_NOTICES.txt sbom.cdx.json install.sh; do
             cmp "$RUNNER_TEMP/ubuntu-22.04/$file" "$RUNNER_TEMP/ubuntu-24.04/$file"
             cmp "$RUNNER_TEMP/ubuntu-22.04/$file" "$RUNNER_TEMP/published/$file"
           done
+          node scripts/repro-identity.mjs compare "$TARGET_TAG" "$EXPECTED_TAG_SHA" \
+            "$RUNNER_TEMP/repro-evidence.json" \
+            "$RUNNER_TEMP/ubuntu-22.04/repro-identity.json" \
+            "$RUNNER_TEMP/ubuntu-24.04/repro-identity.json"
           archive_sha="$(sha256sum "$RUNNER_TEMP/ubuntu-22.04/$archive" | cut -d' ' -f1)"
           {
             printf '## Cross-runner RC reproducibility: %s\n\n' "$TARGET_TAG"
             printf 'Source commit: %s\n' "$EXPECTED_TAG_SHA"
             printf 'Runner images: ubuntu-22.04 and ubuntu-24.04\n'
-            printf 'Both runner outputs match each other and the published RC archive.\n'
+            printf 'Both runner outputs match each other and all six published RC assets.\n'
             printf 'Archive SHA-256: %s\n' "$archive_sha"
+            printf '\nReproducibility evidence artifact: repro-evidence.json\n'
           } >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: nexus-repro-evidence-${{ inputs.tag }}
+          path: ${{ runner.temp }}/repro-evidence.json
+          if-no-files-found: error
+          retention-days: 90

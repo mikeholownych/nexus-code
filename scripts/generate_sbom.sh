@@ -17,19 +17,6 @@ cleanup() {
 }
 trap cleanup EXIT
 
-RELEASE_TOOLS_BIN="${NEXUS_RELEASE_TOOLS_BIN:-}"
-if [[ -z "$RELEASE_TOOLS_BIN" ]]; then
-  RELEASE_TOOLS="$WORK/release-tools"
-  mkdir -p "$RELEASE_TOOLS"
-  cp "${SCRIPT_DIR}/release-tools/package.json" "${SCRIPT_DIR}/release-tools/package-lock.json" "$RELEASE_TOOLS/"
-  npm ci --ignore-scripts --prefix "$RELEASE_TOOLS"
-  RELEASE_TOOLS_BIN="$RELEASE_TOOLS/node_modules/.bin"
-fi
-if [[ ! -x "$RELEASE_TOOLS_BIN/cyclonedx-npm" ]]; then
-  echo "Pinned CycloneDX npm generator is unavailable from the locked release tools" >&2
-  exit 2
-fi
-
 # 1. Generate Rust SBOM for the exact platform shipped by package-linux.sh.
 (cd "${ROOT_DIR}/core" && cargo cyclonedx --format json --spec-version 1.5 --target "$RUST_TARGET")
 mv "${ROOT_DIR}/core/harness-core.cdx.json" "$WORK/cargo.cdx.json"
@@ -160,20 +147,17 @@ print(
 )
 PY
 
-# 2. Generate Node production SBOM from cli/package-lock.json using the locked cyclonedx-npm tool.
-# `npm --prefix cli test` exports these prefix values; keep them out of the
-# generator so it resolves the CLI manifest and lockfile as the project root.
+# 2. Generate the Node production SBOM from cli/package-lock.json with npm's
+# built-in CycloneDX 1.5 generator. Clear npm prefix variables inherited by
+# nested invocations so npm resolves the CLI manifest and lockfile directly.
 env -u npm_config_local_prefix \
   -u npm_config_prefix \
   -u NPM_CONFIG_LOCAL_PREFIX \
   -u NPM_CONFIG_PREFIX \
-  "$RELEASE_TOOLS_BIN/cyclonedx-npm" \
+  npm --prefix "${ROOT_DIR}/cli" sbom \
   --package-lock-only \
-  --omit dev \
-  --spec-version 1.5 \
-  --output-format JSON \
-  --output-file "$WORK/npm.cdx.json" \
-  "${ROOT_DIR}/cli/package.json"
+  --omit=dev \
+  --sbom-format cyclonedx > "$WORK/npm.cdx.json"
 
 # 3. Merge Cargo and npm SBOMs using cyclonedx-cli
 cyclonedx merge \
