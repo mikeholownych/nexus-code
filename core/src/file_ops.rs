@@ -894,7 +894,9 @@ pub fn file_info(args: FileInfoArgs, base_dir: &Path) -> Result<FileInfoResult, 
     let mut line_count = None;
     let mut is_bin = false;
 
-    if is_file {
+    // Counting lines means reading every byte. file_info is for metadata, so do not scan a file the read tool
+    // would refuse to load whole; report the size and leave the count unknown instead.
+    if is_file && size <= MAX_READ_BYTES as u64 {
         if let Ok(file) = File::open(&target) {
             if verify_descriptor_confinement(&file, &base_canon).is_ok() {
                 is_bin = is_binary_file_descriptor(&file).unwrap_or(false);
@@ -1335,6 +1337,37 @@ mod tests {
         assert!(res_parent.is_err(), "Expected escaping symlink parent to be rejected");
 
         let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn test_file_info_does_not_scan_files_above_the_read_limit() {
+        let dir = std::env::temp_dir().join(format!("test_file_info_limit_{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let small = dir.join("small.txt");
+        fs::write(&small, "one\ntwo\n").unwrap();
+        let big = dir.join("big.txt");
+        let big_len = MAX_READ_BYTES + 1;
+        let chunk = vec![b'\n'; 1024 * 1024];
+        {
+            let mut file = fs::File::create(&big).unwrap();
+            let mut written = 0;
+            while written < big_len {
+                let n = (big_len - written).min(chunk.len());
+                file.write_all(&chunk[..n]).unwrap();
+                written += n;
+            }
+            file.sync_all().unwrap();
+        }
+
+        let small_info = file_info(FileInfoArgs { path: "small.txt".into() }, &dir).unwrap();
+        assert_eq!(small_info.line_count, Some(2));
+        let big_info = file_info(FileInfoArgs { path: "big.txt".into() }, &dir).unwrap();
+        assert_eq!(big_info.size_bytes, big_len as u64);
+        assert_eq!(
+            big_info.line_count, None,
+            "a file above the read limit must not be scanned for its line count"
+        );
+        fs::remove_dir_all(&dir).ok();
     }
 
     #[test]
