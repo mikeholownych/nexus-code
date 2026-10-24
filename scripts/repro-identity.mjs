@@ -1,6 +1,6 @@
 // Source identity for the cross-runner reproducibility workflow (ACC-SUP-08, REQ-REL-114).
-//   record  <version> <dist-dir> <out.json> <runner-label>   identity of the checked-out RC source, toolchain and artifacts
-//   compare <expected-version> <expected-commit> <out.json> <identity.json>...
+//   record  <version> <dist-dir> <out.json> <runner-label>   identity of the checked-out RC source, workflow, toolchain and artifacts
+//   compare <expected-version> <expected-commit> <expected-workflow-commit> <out.json> <identity.json>...
 // `compare` fails unless every builder packaged the expected version and commit from identical source and lockfiles
 // and produced identical artifact digests; on success it writes the combined evidence record.
 import { createHash } from "node:crypto";
@@ -25,15 +25,21 @@ if (mode === "record") {
   // Packaging must not have changed tracked source: the artifacts must still correspond to the recorded commit.
   const dirty = run("git", "status", "--porcelain", "--untracked-files=no");
   if (dirty) fail(`packaging modified tracked files:\n${dirty}`);
+  const commit = run("git", "rev-parse", "HEAD");
+  const tagCommit = run("git", "rev-parse", `refs/tags/${version}^{commit}`);
+  if (tagCommit !== commit) fail(`fetched tag ${version} resolves to ${tagCommit}, not checked-out source commit ${commit}`);
+  const workflowSha = process.env.GITHUB_WORKFLOW_SHA ?? "";
+  if (!/^[0-9a-f]{40}$/.test(workflowSha)) fail("reviewed main workflow commit is missing or invalid");
   const artifactNames = [`nexus-linux-x86_64-${version}.tar.gz`, ...RELEASE_ASSETS].sort();
   const missingArtifacts = artifactNames.filter((file) => !fs.existsSync(path.join(dist, file)));
   if (missingArtifacts.length) fail(`release output is missing required assets: ${missingArtifacts.join(", ")}`);
   const identity = {
     source: {
       version,
-      commit: run("git", "rev-parse", "HEAD"),
+      commit,
       tree: run("git", "rev-parse", "HEAD^{tree}"),
       tagObject: run("git", "rev-parse", `refs/tags/${version}`),
+      tagCommit,
       lockfiles: Object.fromEntries(LOCKFILES.map((file) => [file, sha256(file)])),
       // Non-ignored untracked files could be packaged without being part of the commit; both builders must agree.
       untracked: run("git", "ls-files", "--others", "--exclude-standard").split("\n").filter(Boolean),
@@ -41,13 +47,13 @@ if (mode === "record") {
     toolchain: { node: process.version, npm: run("npm", "--version"), rustc: run("rustc", "-V"), cargo: run("cargo", "-V") },
     buildEnvironment: { rustContainerImage: process.env.NEXUS_BUILD_CONTAINER_IMAGE ?? null },
     runner: { label, image: process.env.ImageOS ?? null, imageVersion: process.env.ImageVersion ?? null },
-    workflow: { ref: process.env.GITHUB_REF ?? null, sha: process.env.GITHUB_WORKFLOW_SHA ?? null, runId: process.env.GITHUB_RUN_ID ?? null, runAttempt: process.env.GITHUB_RUN_ATTEMPT ?? null },
+    workflow: { ref: process.env.GITHUB_REF ?? null, sha: workflowSha, runId: process.env.GITHUB_RUN_ID ?? null, runAttempt: process.env.GITHUB_RUN_ATTEMPT ?? null },
     artifacts: Object.fromEntries(artifactNames.map((file) => [file, sha256(path.join(dist, file))])),
   };
   fs.writeFileSync(out, `${JSON.stringify(identity, null, 2)}\n`);
 } else if (mode === "compare") {
-  const [version, commit, out, ...files] = rest;
-  if (!version || !/^[0-9a-f]{40}$/.test(commit ?? "") || !out || files.length < 2) fail("usage: compare <version> <commit> <out.json> <identity.json> <identity.json>...");
+  const [version, commit, workflowCommit, out, ...files] = rest;
+  if (!version || !/^[0-9a-f]{40}$/.test(commit ?? "") || !/^[0-9a-f]{40}$/.test(workflowCommit ?? "") || !out || files.length < 2) fail("usage: compare <version> <commit> <workflow-commit> <out.json> <identity.json> <identity.json>...");
   const builders = files.map((file) => JSON.parse(fs.readFileSync(file, "utf8")));
   for (const id of builders) {
     if (id.source.version !== version || id.source.commit !== commit) fail(`${id.runner.label} packaged ${id.source.version}@${id.source.commit}, not ${version}@${commit}`);
@@ -61,7 +67,7 @@ if (mode === "record") {
   if (new Set(buildImages).size !== 1) fail("builders used different Rust build images");
   // The released workflow is reviewed on main; the built product source remains bound to the exact RC tag commit above.
   for (const id of builders) {
-    if (id.workflow?.ref !== "refs/heads/main" || !/^[0-9a-f]{40}$/.test(id.workflow?.sha ?? "")) fail(`${id.runner.label} did not record the reviewed main workflow identity`);
+    if (id.workflow?.ref !== "refs/heads/main" || id.workflow?.sha !== workflowCommit) fail(`${id.runner.label} did not record the expected reviewed main workflow commit ${workflowCommit}`);
   }
   if (new Set(builders.map((id) => id.workflow.sha)).size !== 1) fail("builders used different workflow definitions");
   if (new Set(builders.map((id) => `${id.workflow.runId}/${id.workflow.runAttempt}`)).size !== 1) fail("builders belong to different workflow runs");

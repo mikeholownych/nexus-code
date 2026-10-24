@@ -20,6 +20,7 @@ jobs:
     runs-on: ubuntu-22.04
     outputs:
       tag_sha: ${{ steps.resolve.outputs.tag_sha }}
+      workflow_sha: ${{ steps.resolve.outputs.workflow_sha }}
     env:
       TARGET_TAG: ${{ inputs.tag }}
     steps:
@@ -59,6 +60,7 @@ jobs:
             exit 1
           fi
           printf 'tag_sha=%s\n' "$tag_sha" >> "$GITHUB_OUTPUT"
+          printf 'workflow_sha=%s\n' "$GITHUB_WORKFLOW_SHA" >> "$GITHUB_OUTPUT"
       - name: Verify the public RC release is published
         env:
           GH_TOKEN: ${{ github.token }}
@@ -142,7 +144,15 @@ jobs:
     env:
       TARGET_TAG: ${{ inputs.tag }}
       EXPECTED_TAG_SHA: ${{ needs.resolve-tag.outputs.tag_sha }}
+      EXPECTED_WORKFLOW_SHA: ${{ needs.resolve-tag.outputs.workflow_sha }}
     steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ needs.resolve-tag.outputs.workflow_sha }}
+          fetch-depth: 1
+          persist-credentials: false
+      - name: Verify comparison code is the exact reviewed workflow commit
+        run: test "$(git rev-parse HEAD)" = "$EXPECTED_WORKFLOW_SHA"
       - uses: actions/download-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: nexus-repro-ubuntu-22.04
@@ -176,7 +186,7 @@ jobs:
             cmp "$RUNNER_TEMP/ubuntu-22.04/$file" "$RUNNER_TEMP/ubuntu-24.04/$file"
             cmp "$RUNNER_TEMP/ubuntu-22.04/$file" "$RUNNER_TEMP/published/$file"
           done
-          node scripts/repro-identity.mjs compare "$TARGET_TAG" "$EXPECTED_TAG_SHA" \
+          node scripts/repro-identity.mjs compare "$TARGET_TAG" "$EXPECTED_TAG_SHA" "$EXPECTED_WORKFLOW_SHA" \
             "$RUNNER_TEMP/repro-evidence.json" \
             "$RUNNER_TEMP/ubuntu-22.04/repro-identity.json" \
             "$RUNNER_TEMP/ubuntu-24.04/repro-identity.json"
