@@ -242,6 +242,19 @@ MIIEowIBAAKCAQEA0Z3vV4k8t...fake...pem...body...content...
       const v4mapPriv = classifyLocality("http://[::ffff:10.0.0.1]:8000");
       assert.strictEqual(v4mapPriv.boundary, "LOCAL_APPLIANCE");
       assert.strictEqual(v4mapPriv.reason, "private_ip");
+
+      // NAT64 well-known prefix 64:ff9b::/96 embeds the destination IPv4 in the low 32 bits.
+      assert.deepStrictEqual(classifyLocality("http://[64:ff9b::7f00:1]:8000"), {
+        boundary: "LOCAL_APPLIANCE",
+        reason: "loopback_ip",
+      });
+      assert.strictEqual(classifyLocality("http://[64:ff9b::a00:1]").boundary, "LOCAL_APPLIANCE");
+      assert.strictEqual(classifyLocality("http://[64:ff9b::c0a8:1]").boundary, "LOCAL_APPLIANCE");
+      assert.strictEqual(classifyLocality("http://[64:ff9b::808:808]").boundary, "EXTERNAL_PUBLIC");
+
+      // NAT64 local-use prefix 64:ff9b:1::/48 is not globally reachable.
+      assert.strictEqual(classifyLocality("http://[64:ff9b:1::7f00:1]").boundary, "LOCAL_APPLIANCE");
+      assert.strictEqual(classifyLocality("http://[64:ff9b:1::808:808]").boundary, "LOCAL_APPLIANCE");
     });
   });
 

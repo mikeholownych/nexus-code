@@ -168,6 +168,20 @@ describe("ACC-TRUST-03: SSRF protection, DNS pinning, redirect hop checks, and s
     assert.strictEqual(isPublicIp("::808:808"), true);
     assert.strictEqual(isSafeOutboundUrl("http://[::7f00:1]/admin").safe, false);
 
+    // NAT64 well-known prefix 64:ff9b::/96 embeds IPv4 in the low 32 bits; classify by it.
+    assert.strictEqual(isPublicIp("64:ff9b::7f00:1"), false);
+    assert.strictEqual(isPublicIp("64:ff9b::a00:1"), false);
+    assert.strictEqual(isPublicIp("64:ff9b::c0a8:1"), false);
+    assert.strictEqual(isPublicIp("64:ff9b::a9fe:a9fe"), false);
+    assert.strictEqual(isPublicIp("64:ff9b::808:808"), true);
+    assert.strictEqual(isSafeOutboundUrl("http://[64:ff9b::7f00:1]/admin").safe, false);
+    assert.strictEqual(isSafeOutboundUrl("http://[64:ff9b::808:808]/").safe, true);
+
+    // NAT64 local-use prefix 64:ff9b:1::/48 is not globally reachable.
+    assert.strictEqual(isPublicIp("64:ff9b:1::7f00:1"), false);
+    assert.strictEqual(isPublicIp("64:ff9b:1::808:808"), false);
+    assert.strictEqual(isSafeOutboundUrl("http://[64:ff9b:1::7f00:1]/admin").safe, false);
+
     // IPv6 ULA (fc00::/7)
     assert.strictEqual(isPublicIp("fd00::1"), false);
     assert.strictEqual(isPublicIp("[fd00::1]"), false);
@@ -193,6 +207,9 @@ describe("ACC-TRUST-03: SSRF protection, DNS pinning, redirect hop checks, and s
       "http://100.64.0.1",
       "http://100.64.0.1:8080/metrics",
       "http://127.0.0.1:8080/admin",
+      "http://[64:ff9b::7f00:1]",
+      "http://[64:ff9b::a00:1]:8080/admin",
+      "http://[64:ff9b:1::7f00:1]/",
     ];
 
     for (const url of targets) {
