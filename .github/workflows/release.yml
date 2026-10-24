@@ -113,7 +113,7 @@ jobs:
       # RC tags (vX.Y.Z-rc.N) publish a prerelease: the workflow-produced RC is the qualification candidate
       # (ACCEPTANCE §1.1 stage 2). Stable tags only build an unpublished draft (stage 5); it is published by hand with
       # `gh release edit <tag> --draft=false` after the stable artifact checks and the signed acceptance disposition.
-      - uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
+      - uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
         with:
           files: ${{ runner.temp }}/dist/*
           body_path: docs/releases/${{ github.ref_name }}.md
