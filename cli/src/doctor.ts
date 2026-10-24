@@ -869,13 +869,18 @@ const stateIntegrityCheck: Check = async (ctx, signal) => {
   let checked = 0;
   const corrupt: string[] = [];
   const temps: string[] = [];
+  const unreadable: string[] = [];
   const limit = ctx.deep ? 5000 : 300;
   for (const dir of dirs) {
     if (signal.aborted) break;
     let files: RecentStateFile[];
     try {
       files = await newestStateFiles(dir, limit, signal, temps);
-    } catch {
+    } catch (error: any) {
+      if (signal.aborted) break;
+      // A missing store is simply empty; a store that exists but cannot be opened is not evidence of
+      // health and must not be reported as "no saved state".
+      if (error?.code !== "ENOENT") unreadable.push(dir);
       continue;
     }
     for (const { name } of files) {
@@ -893,13 +898,16 @@ const stateIntegrityCheck: Check = async (ctx, signal) => {
       }
     }
   }
-  if (checked === 0 && temps.length === 0) return f("state.integrity", "state", "pass", "No saved sessions or task state yet.");
+  if (checked === 0 && temps.length === 0 && unreadable.length === 0) {
+    return f("state.integrity", "state", "pass", "No saved sessions or task state yet.");
+  }
   const evidence = [`${checked} record(s) checked${ctx.deep ? " (newest 5000 per directory)" : " (newest 300 per directory; --deep checks up to 5000)"}`];
   const issues: string[] = [];
   if (corrupt.length) issues.push(`${corrupt.length} saved record(s) are malformed and may not load`);
   if (temps.length) issues.push(`${temps.length} recognized atomic-write temporary file(s) are present; a write may still be active, so doctor cannot determine whether they are stale`);
+  if (unreadable.length) issues.push(`${unreadable.length} state director${unreadable.length === 1 ? "y" : "ies"} could not be read, so doctor cannot determine whether the saved state is healthy`);
   if (issues.length) {
-    return f("state.integrity", "state", "warn", `${issues.join("; ")}.`, [...evidence, ...corrupt.slice(0, 5), ...temps.slice(0, 3)], "Inspect the listed paths manually; doctor never deletes or repairs session or task files.");
+    return f("state.integrity", "state", "warn", `${issues.join("; ")}.`, [...evidence, ...corrupt.slice(0, 5), ...unreadable, ...temps.slice(0, 3)], "Inspect the listed paths and their permissions; doctor never deletes or repairs session or task files.");
   }
   return f("state.integrity", "state", "pass", "Every checked session and task-state record parses and has an id plus valid conversation metadata.", evidence);
 };

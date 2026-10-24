@@ -304,6 +304,40 @@ describe("doctor findings name the actual failure", () => {
     }
   });
 
+  test("state integrity warns when a state directory cannot be read", async (t) => {
+    if (process.getuid?.() === 0) return t.skip("root can read a mode-000 directory");
+    const h = tmp("nexus-doctor-unreadable-");
+    const sessions = path.join(h, ".nexus", "sessions");
+    fs.mkdirSync(sessions, { recursive: true, mode: 0o700 });
+    fs.chmodSync(sessions, 0o000);
+    try {
+      const report = await runDoctor({ home: h, config: cfg() });
+      const finding = find(report, "state.integrity")!;
+      assert.equal(finding.status, "warn");
+      assert.match(finding.explanation, /could not be read/);
+      assert.ok(finding.evidence.includes(sessions));
+    } finally {
+      fs.chmodSync(sessions, 0o700);
+      fs.rmSync(h, { recursive: true, force: true });
+    }
+  });
+
+  test("state integrity warns when a state path is not a directory", async () => {
+    const h = tmp("nexus-doctor-notdir-");
+    const tasks = path.join(h, ".nexus", "tasks");
+    fs.mkdirSync(path.dirname(tasks), { recursive: true, mode: 0o700 });
+    fs.writeFileSync(tasks, "not a state directory");
+    try {
+      const report = await runDoctor({ home: h, config: cfg() });
+      const finding = find(report, "state.integrity")!;
+      assert.equal(finding.status, "warn");
+      assert.match(finding.explanation, /could not be read/);
+      assert.ok(finding.evidence.includes(tasks));
+    } finally {
+      fs.rmSync(h, { recursive: true, force: true });
+    }
+  });
+
   test("state integrity only warns about writer-shaped temporary files and never labels arbitrary or active temp files interrupted", async () => {
     const h = tmp("nexus-doctor-temps-");
     const sessions = path.join(h, ".nexus", "sessions");
