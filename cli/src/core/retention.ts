@@ -555,11 +555,27 @@ export function scanCheckpoints(checkpointsBaseDir: string, deadline?: number): 
           const data = JSON.parse(content);
           gitRef = data.gitRef;
           ws = data.workspace;
-          if (data.snapshotDir && typeof data.snapshotDir === "string" && fs.existsSync(data.snapshotDir)) {
-            const snapDir: string = data.snapshotDir;
-            snapshotDir = snapDir;
-            snapSize = computeDirSize(snapDir, deadline);
-            associatedFiles.push(snapDir);
+          // `snapshotDir` is untrusted state-file metadata and retention deletes it recursively.
+          // Accept only this record's snapshot under a real (not symlinked) snapshots directory; the
+          // canonical path is stored so a later swap of the lexical path cannot redirect the delete.
+          if (data.snapshotDir && typeof data.snapshotDir === "string" && path.isAbsolute(data.snapshotDir) && fs.existsSync(data.snapshotDir)) {
+            try {
+              const snapshotsPath = path.join(dirPath, "snapshots");
+              const rootStat = fs.lstatSync(snapshotsPath);
+              const validRecordId = cpId.length > 0 && cpId !== "." && cpId !== ".." && !cpId.includes("/") && !cpId.includes("\\");
+              if (validRecordId && rootStat.isDirectory() && !rootStat.isSymbolicLink()) {
+                const snapshotsRoot = fs.realpathSync(snapshotsPath);
+                const expected = path.join(snapshotsRoot, cpId);
+                const realSnapshot = fs.realpathSync(data.snapshotDir);
+                if (realSnapshot === expected || realSnapshot.startsWith(expected + path.sep)) {
+                  snapshotDir = realSnapshot;
+                  snapSize = computeDirSize(realSnapshot, deadline);
+                  associatedFiles.push(realSnapshot);
+                }
+              }
+            } catch {
+              // Missing/unresolvable/symlinked snapshots directory: leave the path untouched.
+            }
           }
         } catch {}
 
@@ -900,6 +916,16 @@ function executeRetentionLocked(plan: RetentionPlan, options: { dryRun?: boolean
         if (fs.existsSync(assoc)) {
           const s = safeStat(assoc);
           if (s && s.isDirectory()) {
+            if (item.kind === "checkpoint") {
+              // The plan stored a canonical snapshot path. Re-resolve immediately before the
+              // recursive delete so a swapped intermediate path cannot redirect it.
+              const current = fs.realpathSync(assoc);
+              if (current !== assoc) {
+                success = false;
+                errors.push({ path: assoc, error: "snapshot path changed since planning; deletion skipped" });
+                continue;
+              }
+            }
             fs.rmSync(assoc, { recursive: true, force: true });
           } else {
             fs.unlinkSync(assoc);
