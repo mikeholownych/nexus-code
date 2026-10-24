@@ -100,13 +100,14 @@ test("a later negation is overridden by a verified positive rule", () => {
     assert.equal(isIgnored(root, ".nexus/tasks/task.json"), true);
     assert.equal(isIgnored(root, ".nexus/worktrees/task/state.json"), true);
     const rules = fs.readFileSync(excludePath, "utf8").split(/\r?\n/);
-    assert.ok(rules.lastIndexOf(".nexus/") > rules.lastIndexOf("!.nexus/"));
+    assert.equal(isIgnored(root, ".nexus/.gitignore"), true);
+    assert.ok(rules.lastIndexOf(".nexus/") >= 0);
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
 });
 
-test("a higher-priority repository negation fails closed when info/exclude cannot override it", () => {
+test("a nested self-ignore protects Nexus state from higher-priority repository negations", () => {
   const { root } = makeRepo("");
   try {
     fs.writeFileSync(
@@ -116,13 +117,72 @@ test("a higher-priority repository negation fails closed when info/exclude canno
     assert.equal(isIgnored(root, ".nexus/tasks/__nexus_ignore_probe__"), true);
     assert.equal(isIgnored(root, ".nexus/"), false);
     assert.equal(isIgnored(root, ".nexus/tasks/task.json"), false);
-    const excludePath = path.join(root, ".git", "info", "exclude");
-    assert.throws(() => ensureGitExclude(root), /Git still does not ignore/);
-    assert.equal(isIgnored(root, ".nexus/"), false);
-    assert.equal(isIgnored(root, ".nexus/tasks/task.json"), false);
-    const afterFirstAttempt = fs.readFileSync(excludePath, "utf8");
-    assert.throws(() => ensureGitExclude(root), /Git still does not ignore/);
-    assert.equal(fs.readFileSync(excludePath, "utf8"), afterFirstAttempt, "failed retries do not append duplicate rules");
+    ensureGitExclude(root);
+    assert.equal(isIgnored(root, ".nexus/tasks/task.json"), true);
+    assert.equal(isIgnored(root, ".nexus/__nexus_ignore_probe__"), true);
+    assert.equal(isIgnored(root, ".nexus/.gitignore"), true);
+
+    fs.mkdirSync(path.join(root, ".nexus", "tasks"), { recursive: true });
+    fs.writeFileSync(path.join(root, ".nexus", "tasks", "task.json"), "private state");
+    execFileSync("git", ["check-ignore", "--quiet", "--no-index", ".nexus/tasks/task.json"], { cwd: root });
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("a nested ignore negation cannot expose flight logs or worktree state", () => {
+  const { root } = makeRepo("");
+  try {
+    fs.mkdirSync(path.join(root, ".nexus", "flights"), { recursive: true });
+    fs.mkdirSync(path.join(root, ".nexus", "worktrees"), { recursive: true });
+    fs.writeFileSync(path.join(root, ".nexus", ".gitignore"), "*\n!flights/\n!worktrees/\n!tasks/\n!tasks/**\n");
+    fs.writeFileSync(path.join(root, ".nexus", "flights", ".gitignore"), "!*.flightlog\n");
+    fs.writeFileSync(path.join(root, ".nexus", "worktrees", ".gitignore"), "!*.json\n");
+
+    ensureGitExclude(root);
+
+    for (const probe of [
+      ".nexus/.gitignore",
+      ".nexus/flights/__nexus_ignore_probe__.flightlog",
+      ".nexus/worktrees/__nexus_ignore_probe__/state.json",
+      ".nexus/tasks/__nexus_ignore_probe__.json",
+    ]) {
+      assert.equal(isIgnored(root, probe), true, `${probe} must remain ignored`);
+    }
+    const selfIgnoreRules = fs.readFileSync(path.join(root, ".nexus", ".gitignore"), "utf8").trimEnd().split(/\r?\n/);
+    assert.equal(selfIgnoreRules.at(-1), "*", "a final catch-all must override existing negations");
+    fs.mkdirSync(path.join(root, ".nexus", "tasks"), { recursive: true });
+    fs.writeFileSync(path.join(root, ".nexus", "tasks", "task.json"), "private state");
+    assert.equal(isIgnored(root, ".nexus/tasks/task.json"), true);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("a symlinked Nexus state directory is rejected before any outside write", () => {
+  const { root } = makeRepo("");
+  const outside = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-git-exclude-outside-"));
+  try {
+    fs.symlinkSync(outside, path.join(root, ".nexus"), "dir");
+    assert.throws(() => ensureGitExclude(root), /non-directory \.nexus path/);
+    assert.equal(fs.existsSync(path.join(outside, ".gitignore")), false);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+    fs.rmSync(outside, { recursive: true, force: true });
+  }
+});
+
+test("a hard-linked self-ignore file is rejected before changing its external link", () => {
+  const { root } = makeRepo("");
+  try {
+    const outsideFile = path.join(root, "operator-owned-ignore-rules");
+    const nexusDir = path.join(root, ".nexus");
+    fs.mkdirSync(nexusDir);
+    fs.writeFileSync(outsideFile, "operator rules\n");
+    fs.linkSync(outsideFile, path.join(nexusDir, ".gitignore"));
+
+    assert.throws(() => ensureGitExclude(root), /hard-linked \.nexus\/\.gitignore/);
+    assert.equal(fs.readFileSync(outsideFile, "utf8"), "operator rules\n");
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }

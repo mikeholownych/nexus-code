@@ -94,17 +94,34 @@ describe("ACC-PER-05: Flight Logs & Telemetry Git Exclude (REQ-PER-105)", () => 
     assert.equal(wm.discardWorktree("exclude-test").success, true);
   });
 
-  test("unavailable exclude metadata does not prevent startup and fails before worktree state is written", () => {
+  test("unavailable exclude metadata does not prevent startup or expose flight state", () => {
     const excludePath = path.resolve(gitRepoDir, ".git", "info", "exclude");
-    fs.rmSync(excludePath, { force: true });
-    fs.mkdirSync(excludePath);
+    fs.writeFileSync(excludePath, "");
+    fs.chmodSync(excludePath, 0o444);
 
     assert.doesNotThrow(() => new WorktreeManager(gitRepoDir));
     assert.equal(fs.existsSync(path.join(gitRepoDir, ".nexus")), false);
 
-    const wm = new WorktreeManager(gitRepoDir);
-    assert.throws(() => wm.createWorktree("blocked-write"));
-    assert.equal(fs.existsSync(path.join(gitRepoDir, ".nexus")), false, "failed preflight must not create workspace state");
+    const recorder = new FlightRecorder(gitRepoDir);
+    assert.equal(fs.existsSync(recorder.getLogPath()), false);
+    assert.equal(fs.existsSync(path.join(gitRepoDir, ".nexus", ".gitignore")), true);
+    assert.match(fs.readFileSync(path.join(gitRepoDir, ".nexus", ".gitignore"), "utf8"), /^\*\n$/);
+    assert.equal(fs.readFileSync(excludePath, "utf8"), "", "read-only Git metadata must remain untouched");
+    execFileSync("git", ["check-ignore", "--quiet", "--no-index", ".nexus/flights/__test__"], { cwd: gitRepoDir });
+
+    const status = execFileSync("git", ["status", "--porcelain"], { cwd: gitRepoDir, encoding: "utf8" }).trim();
+    assert.equal(status, "", `Nexus state must remain ignored when info/exclude is unavailable; found:\n${status}`);
+  });
+
+  test("an ineffective read-only self-ignore rule blocks flight state writes", () => {
+    const nexusDir = path.join(gitRepoDir, ".nexus");
+    fs.mkdirSync(nexusDir);
+    const selfIgnorePath = path.join(nexusDir, ".gitignore");
+    fs.writeFileSync(selfIgnorePath, "!*\n");
+    fs.chmodSync(selfIgnorePath, 0o444);
+
+    assert.throws(() => new FlightRecorder(gitRepoDir));
+    assert.equal(fs.existsSync(path.join(nexusDir, "flights")), false, "flight state must not be written when ignore verification fails");
   });
 
   test("ensureGitExclude is idempotent and does not duplicate entries", () => {
