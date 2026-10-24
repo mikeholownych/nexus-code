@@ -556,18 +556,24 @@ export function scanCheckpoints(checkpointsBaseDir: string, deadline?: number): 
           gitRef = data.gitRef;
           ws = data.workspace;
           // `snapshotDir` is untrusted state-file metadata and retention deletes it recursively.
-          // Only accept an absolute path that really resolves inside this checkpoint's snapshots dir.
+          // Accept only this record's snapshot under a real (not symlinked) snapshots directory; the
+          // canonical path is stored so a later swap of the lexical path cannot redirect the delete.
           if (data.snapshotDir && typeof data.snapshotDir === "string" && path.isAbsolute(data.snapshotDir) && fs.existsSync(data.snapshotDir)) {
             try {
-              const snapshotsRoot = fs.realpathSync(path.join(dirPath, "snapshots"));
-              const realSnapshot = fs.realpathSync(data.snapshotDir);
-              if (realSnapshot.startsWith(snapshotsRoot + path.sep)) {
-                snapshotDir = data.snapshotDir;
-                snapSize = computeDirSize(data.snapshotDir, deadline);
-                associatedFiles.push(data.snapshotDir);
+              const snapshotsPath = path.join(dirPath, "snapshots");
+              const rootStat = fs.lstatSync(snapshotsPath);
+              if (rootStat.isDirectory() && !rootStat.isSymbolicLink()) {
+                const snapshotsRoot = fs.realpathSync(snapshotsPath);
+                const expected = path.join(snapshotsRoot, cpId);
+                const realSnapshot = fs.realpathSync(data.snapshotDir);
+                if (realSnapshot === expected || realSnapshot.startsWith(expected + path.sep)) {
+                  snapshotDir = realSnapshot;
+                  snapSize = computeDirSize(realSnapshot, deadline);
+                  associatedFiles.push(realSnapshot);
+                }
               }
             } catch {
-              // Missing/unresolvable snapshots directory: leave the path untouched.
+              // Missing/unresolvable/symlinked snapshots directory: leave the path untouched.
             }
           }
         } catch {}

@@ -28,7 +28,10 @@ function reclaim(home: string): { deletedCount: number } {
 }
 
 test("a snapshotDir outside the checkpoint store is not deleted", () => {
-  const { home, cpFile } = fixture();
+  const { home, cpDir, cpFile } = fixture();
+  const snapshots = path.join(cpDir, "snapshots");
+  fs.mkdirSync(snapshots, { recursive: true });
+  fs.writeFileSync(path.join(snapshots, "keep.txt"), "sibling");
   const victim = path.join(home, "victim");
   fs.mkdirSync(victim, { recursive: true });
   fs.writeFileSync(path.join(victim, "important.txt"), "keep");
@@ -37,7 +40,38 @@ test("a snapshotDir outside the checkpoint store is not deleted", () => {
     const result = reclaim(home);
     assert.equal(result.deletedCount, 1, "the stale checkpoint record itself is reclaimed");
     assert.equal(fs.existsSync(path.join(victim, "important.txt")), true, "untrusted path survives");
+    assert.equal(fs.existsSync(path.join(snapshots, "keep.txt")), true, "the snapshots root is untouched");
     assert.equal(fs.existsSync(cpFile), false);
+  } finally {
+    fs.rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test("a symlinked snapshots root is not used as the confinement root", () => {
+  const { home, cpDir, cpFile } = fixture();
+  const outsideRoot = path.join(home, "outsideRoot");
+  fs.mkdirSync(path.join(outsideRoot, "cp_old"), { recursive: true });
+  fs.writeFileSync(path.join(outsideRoot, "cp_old", "important.txt"), "keep");
+  const snapshots = path.join(cpDir, "snapshots");
+  fs.symlinkSync(outsideRoot, snapshots);
+  writeOldCheckpoint(cpFile, path.join(snapshots, "cp_old"));
+  try {
+    reclaim(home);
+    assert.equal(fs.existsSync(path.join(outsideRoot, "cp_old", "important.txt")), true);
+  } finally {
+    fs.rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test("a record cannot reclaim another checkpoint's snapshot", () => {
+  const { home, cpDir, cpFile } = fixture();
+  const other = path.join(cpDir, "snapshots", "cp_other");
+  fs.mkdirSync(other, { recursive: true });
+  fs.writeFileSync(path.join(other, "important.txt"), "keep");
+  writeOldCheckpoint(cpFile, other);
+  try {
+    reclaim(home);
+    assert.equal(fs.existsSync(path.join(other, "important.txt")), true);
   } finally {
     fs.rmSync(home, { recursive: true, force: true });
   }

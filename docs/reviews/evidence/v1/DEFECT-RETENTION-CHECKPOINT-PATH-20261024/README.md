@@ -23,20 +23,24 @@ deleted every checkpoint's snapshots.
 
 ## Fix
 
-`snapshotDir` is accepted only when it is absolute and its `realpath` is strictly inside this
-checkpoint directory's `snapshots` real path:
-
-```ts
-path.isAbsolute(data.snapshotDir) && realSnapshot.startsWith(realSnapshotsRoot + path.sep)
-```
-
-Anything else (outside path, symlink resolving outside, the snapshots root itself) is left untouched;
-the checkpoint record can still be reclaimed. Legitimate snapshots under
-`checkpoints/<hash>/snapshots/<id>` are deleted as before.
+`snapshotDir` is accepted only when it is absolute, the checkpoint directory's `snapshots` entry is a
+real directory (not a symlink), and the target's `realpath` is the record's own
+`snapshots/<checkpoint-id>` path (or below it). The canonical path, not the JSON string, is stored for
+deletion. Anything else (outside path, symlinked root, symlink resolving outside, another checkpoint's
+snapshot, the snapshots root itself) is left untouched; the checkpoint record can still be reclaimed.
+Legitimate snapshots under `checkpoints/<hash>/snapshots/<id>` are deleted as before.
 
 ## Verification
 
-- New `cli/test/retention_checkpoint_confinement.test.ts`: 4/4 pass.
-- Three tests fail on the pre-fix source (outside directory, externally resolving symlink, snapshots
-  root); the legitimate-snapshot test fails if the confinement is over-tightened.
+- New `cli/test/retention_checkpoint_confinement.test.ts`: 6/6 pass.
+- Three tests fail on the original source (outside directory, snapshots root, externally resolving
+  symlink); the symlinked-root and cross-checkpoint cases fail on the intermediate containment-only
+  implementation; the legitimate-snapshot test fails if confinement is over-tightened.
 - `npx tsc --noEmit -p tsconfig.json`: pass; `git diff --check`: pass.
+
+## Residual risk
+
+Rejected records leave their snapshot directory orphaned while the JSON record is reclaimed (fail-safe,
+no deletion). `checkpoint.ts` has separate `pruneCheckpoints`/`restore` paths that read `snapshotDir`
+from the same state files; they are outside this retention slice and should reuse the same
+per-record validation.
