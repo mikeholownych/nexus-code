@@ -157,10 +157,10 @@ test("restore validates every captured file before changing the workspace", () =
 test("restore preserves untracked symlinks without copying their external targets", () => {
   const { repo } = gitRepo();
   const external = path.join(os.tmpdir(), `${path.basename(repo)}-external.txt`);
+  const manager = new CheckpointManager(repo);
   try {
     fs.writeFileSync(external, "external target must not be copied\n");
     fs.symlinkSync(external, path.join(repo, "draft-link.txt"));
-    const manager = new CheckpointManager(repo);
     const checkpoint = manager.createCheckpoint("symbolic link");
     fs.rmSync(path.join(repo, "draft-link.txt"));
     fs.writeFileSync(path.join(repo, "draft-link.txt"), "later regular file\n");
@@ -172,6 +172,7 @@ test("restore preserves untracked symlinks without copying their external target
     assert.equal(fs.readlinkSync(path.join(repo, "draft-link.txt")), external);
     assert.equal(fs.lstatSync(path.join(checkpoint.snapshotDir!, "draft-link.txt")).isSymbolicLink(), true);
   } finally {
+    fs.rmSync(manager.getCheckpointDir(), { recursive: true, force: true });
     fs.rmSync(repo, { recursive: true, force: true });
     fs.rmSync(external, { force: true });
   }
