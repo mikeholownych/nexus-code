@@ -9,6 +9,10 @@
 
 ---
 
+**Qualification first:** v1.0.0 installed-candidate qualification and its stable release decision precede v1.1 product integration; dates and roadmap entries do not establish readiness. See [roadmap precedence](ROADMAP.md#0-qualification-precedence).
+
+**Runtime additions:** [Kimi-inspired runtime plan](KIMI_RUNTIME_PLAN.md) adds WP-1111–WP-1121 with explicit dependencies, acceptance tests and risks while preserving WP-1101–WP-1110. A canonical journal feeds tracing and clients; agents share a bounded engine and completion gate. All additions remain planned.
+
 ## 1. Vision & Purpose
 
 The Nexus Code v1.0.0 release candidate baseline establishes a crash-safe and reproducible autonomous coding harness for Linux x86-64 with strict security boundaries (SSRF defense, workspace trust, environment variable isolation, and container sandboxing).
@@ -87,7 +91,7 @@ A foundational directive established during the initial v1.0.0 architecture and 
 
 ### Pillar 5: Resolution of Deferred Post-v1 Backlog Items
 - Fulfills the recorded backlog from `docs/v1.0.0/REQUIREMENTS.md` §5:
-  - **REQ-AGT-111:** Single step loop execution mode.
+  - **REQ-AGT-111:** Shared main/subagent step implementation (WP-1112); operator single-step mode remains WP-1106.
   - **CTX-001:** Full context provenance metadata graph across all prompt injections.
   - **CTX-002:** Knowledge freshness validation and dynamic retirement.
   - **REQ-EVL-101:** Dedicated `nexus eval` CLI launcher.
@@ -124,3 +128,5 @@ A foundational directive established during the initial v1.0.0 architecture and 
 | [`SPEC-EVALUATION.md`](./SPEC-EVALUATION.md) | Continuous evaluation architecture, dataset governance, evaluator taxonomy, and Wilson intervals |
 | [`LANGSMITH_REVIEW.md`](./LANGSMITH_REVIEW.md) | Conceptual analysis of LangSmith observability and evaluation paradigms |
 | [`../v1.0.0/REQUIREMENTS.md`](../v1.0.0/REQUIREMENTS.md) | Baseline normative ledger and post-v1 backlog registry |
+
+Runtime delivery and acceptance details: [KIMI_RUNTIME_PLAN.md](KIMI_RUNTIME_PLAN.md), roadmap §2.4 and gates G1.1-8/G1.1-9.

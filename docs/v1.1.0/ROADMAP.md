@@ -6,6 +6,10 @@
 
 ---
 
+## 0. Qualification precedence
+
+The schedule below is a planning horizon, not release evidence. Complete the existing [v1.0.0 readiness](../v1.0.0/READINESS.md), [acceptance sequence](../v1.0.0/ACCEPTANCE.md) and owner-controlled stable release decision before v1.1.0 product integration or qualification. Planning may proceed separately. No v1.1 package waives, renames or closes a v1.0 requirement. The inspected main at `4b474f1638645258fc6bc696400892feaf3a78d6` still records incomplete installed-RC qualification; source CI is not product acceptance.
+
 ## 1. Release Schedule Overview
 
 ```
@@ -53,6 +57,20 @@ v1.0.0 (Baseline Freeze)            v1.1.0                              v1.2.0
 | **WP-1109** | **Layered Instructions & Bounded Persistent Memory** | Add global/project and path-scoped instructions, a bounded startup knowledge index with on-demand detail, provenance and freshness checks, safe concurrent persistence, and explicit repository/worktree/profile scopes. Preserve durable objectives, compaction archives, verification obligations, and runtime authority. Planned scope and acceptance tests are in §2.2. | Read-only memory review at `269d611ca0a0c8a55244bf70d89fa4a918b9d218`; `CTX-001`, `CTX-002` (bounded v1.1 subset; broader work remains WP-1302/WP-1304) |
 | **WP-1110** | **Evidence-Gated Harness Investigations** | Investigate instruction trust, cancellation reconciliation, deterministic acceptance, serving admission, task instruction provenance and authoritative progress. Extend existing packages only after evidence review; candidate severity is not a defect finding. See §2.3. | Guaardvark comparison; Nexus source `dac465d`; INV-01–INV-06 |
 
+| ID | Title | Summary & Deliverables | Backlog / Audit Source |
+| :--- | :--- | :--- | :--- |
+| **WP-1111** | **Canonical Event Journal** | Durable execution transitions and reconstructable projections; OTel remains a derived view. See §2.4 and ACC-KIMI-JOURNAL. | Kimi review adaptation; [runtime plan](KIMI_RUNTIME_PLAN.md) |
+| **WP-1112** | **Unified Agent Step Engine** | Share main/subagent step semantics; retain WP-1106 operator stepping as a separate interface. See §2.4 and ACC-KIMI-ENGINE. | Kimi review adaptation; [runtime plan](KIMI_RUNTIME_PLAN.md) |
+| **WP-1113** | **Capability-Bounded Persistent Agents** | Isolated histories, typed results, fresh bounded grants on resume and non-escalating delegation. See §2.4 and ACC-KIMI-AGENTS. | Kimi review adaptation; [runtime plan](KIMI_RUNTIME_PLAN.md) |
+| **WP-1114** | **Durable Background TaskRegistry** | Persist task identities, claims, lifecycle and unknown-effect reconciliation across compaction/restart. See §2.4 and ACC-KIMI-TASKS. | Kimi review adaptation; [runtime plan](KIMI_RUNTIME_PLAN.md) |
+| **WP-1115** | **Explicit Completion Gate** | Require discharged objectives and current evidence before successful termination; preserve distinct verification outcomes. See §2.4 and ACC-KIMI-COMPLETE. | Kimi review adaptation; [runtime plan](KIMI_RUNTIME_PLAN.md) |
+| **WP-1116** | **Typed Failure Dispositions** | Bounded, cancellable retry/reroute/replan policy with no automatic replay of unknown effects. See §2.4 and ACC-KIMI-FAILURE. | Kimi review adaptation; [runtime plan](KIMI_RUNTIME_PLAN.md) |
+| **WP-1117** | **Measured Context Accounting** | Separate measured request usage, estimated deltas, schema/instruction costs and output reservations. See §2.4 and ACC-KIMI-CONTEXT. | Kimi review adaptation; [runtime plan](KIMI_RUNTIME_PLAN.md) |
+| **WP-1118** | **Auditable Compaction State Machine** | Bind archived source, validated summary, objective obligations and active tasks to transactional recovery. See §2.4 and ACC-KIMI-COMPACT. | Kimi review adaptation; [runtime plan](KIMI_RUNTIME_PLAN.md) |
+| **WP-1119** | **Lifecycle Hooks with Security Gates** | Typed hooks; authorization, validation and release/verification gates fail closed. See §2.4 and ACC-KIMI-HOOKS. | Kimi review adaptation; [runtime plan](KIMI_RUNTIME_PLAN.md) |
+| **WP-1120** | **ACP Runtime Adapter** | Optional client projection of the common engine, journal and approval policy; no alternate executor. See §2.4 and ACC-KIMI-ACP. | Kimi review adaptation; [runtime plan](KIMI_RUNTIME_PLAN.md) |
+| **WP-1121** | **Plugin Provenance Manifests** | Cryptographically bind extension identity and permissions to artifacts and explicit local trust decisions. See §2.4 and ACC-KIMI-PLUGIN. | Kimi review adaptation; [runtime plan](KIMI_RUNTIME_PLAN.md) |
+
 ### v1.1.0 Release Gates
 
 - **Gate G1.1-1 (Zero-Leak Tracing):** Local trace engine produces valid OTel GenAI spans for all turn steps without leaking environment credentials or writing outside `~/.local/share/nexus/traces/`.
@@ -62,6 +80,9 @@ v1.0.0 (Baseline Freeze)            v1.1.0                              v1.2.0
 - **Gate G1.1-5 (Zero Technical Debt & Zero Deprecated Packages):** Strictly 0 deprecated packages, 0 unmaintained dependencies, 0 CodeQL alerts, and 0 compiler warnings repository-wide. All 27 Dependabot PR upgrades pass unit/PTY suites, `cargo deny check`, automated npm registry deprecation scans, package reproducibility (`cmp`), and CLI option compatibility without breaking unprivileged sandbox invariants.
 
 - **Gate G1.1-6 (Layered Memory Safety & Continuity):** All ACC-MEM-01 through ACC-MEM-10 in §2.2 pass against the exact candidate source and installed package under isolated HOME. Evidence must demonstrate bounded admission, correct scoped retrieval, concurrent-write preservation, no writes during read-only loading, stale-source invalidation, authority isolation, and recovery without replay or lost objectives. Implementation, automated tests, live-model evaluation, and independent acceptance are recorded separately.
+
+- **Gate G1.1-8 (Runtime Integrity):** ACC-KIMI-JOURNAL, ENGINE, AGENTS, TASKS, COMPLETE, FAILURE, CONTEXT and COMPACT pass on the exact installed candidate; retain crash/race, authority and zero-false-VERIFIED evidence. These are mandatory release requirements, not optional telemetry coverage.
+- **Gate G1.1-9 (Extension & Client Integrity):** ACC-KIMI-HOOKS, ACP and PLUGIN pass, including disabled/offline operation, denial, revocation and reconnect tests. Signatures and client requests never grant authority by themselves.
 
 ### 2.1 Dependabot Triage & Integration Matrix (WP-1108)
 
@@ -174,6 +195,14 @@ Evidence must bind each result to requirement/test ID, exact source SHA, package
 | **INV-06 — Authoritative progress observability / P2 candidate; P1 if false terminal status reproduced** | WP-1101/02 provide trace/redaction work; WP-1203 remains the v1.2 trace inspector. `agent.ts:1893–1944` persists progress and notifies listeners; `core/operation_runner.ts` and durable state already track execution. More logging alone does not establish authoritative state. | Define durable task/invocation identity, ordered state transitions, observation time/freshness, persistence errors and terminal acceptance reference. Test disconnect/reconnect, duplicate/out-of-order events, crash after side effect, failed progress write and cancel/completion races across CLI/TUI/headless consumers. Consumers must reconcile from durable state, label stale/unknown status, distinguish queued/running/blocked/cancelled/failed/accepted, and never infer completion from silence, model narration or a partial trace. Redaction and offline operation remain mandatory; no new dashboard required. |
 
 **Investigation exit / v1.1.0 decision gate (G1.1-7):** Each INV-01–INV-06 must have a pinned-source coverage map, a runnable reproduction or explicitly justified no-defect result, retained input/output hashes and run IDs, and an owner-reviewed disposition: covered by existing behavior, confirmed defect with severity and scoped fix/acceptance, or unresolved with explicit release-risk decision. Unknowns cannot be relabeled passed. Bind confirmed v1.1 fixes to the related WP-1101–WP-1109 acceptance evidence and revalidate on the exact candidate installed package under isolated HOME. Record unit/mock results, live-provider qualification and independent acceptance separately. An unresolved critical trust/false-acceptance risk requires an explicit release decision; this gate neither waives v1.0.0 gates nor authorizes product implementation, publication, push or merge.
+
+---
+
+### 2.4 Kimi-Inspired Runtime Foundations (WP-1111–WP-1121)
+
+The [runtime plan](KIMI_RUNTIME_PLAN.md) defines contracts, dependencies, executable acceptance and risks for all eleven additions. These are proposed Nexus-native mechanisms, not claims that Kimi or Nexus has passed them. Preserve WP-1101–WP-1110, ACC-MEM-01–10, INV-01–06, G1.1-1–7, and all later milestone scope. WP-1101 consumes the journal; it does not become the authoritative execution store. WP-1106 keeps its operator-step scope; REQ-AGT-111's shared implementation belongs to WP-1112.
+
+Delivery order after v1.0 qualification: journal/redaction contract → shared engine and typed failures → persistent agents/registry and measured accounting → compaction and completion → bounded hooks/provenance → ACP. The dependency table in the runtime plan governs individual slices. Complete WP-1111–WP-1118 before discretionary TUI polish; the v1.0 human terminal matrix remains mandatory and WP-1203 stays in v1.2. Existing evaluation, dependency modernization, grammar and memory work retain scope and their own gates. Publish an integrated capacity/effort plan before implementation; if the combined v1.1 scope cannot fit, obtain an explicit owner scope decision rather than silently dropping work.
 
 ---
 
