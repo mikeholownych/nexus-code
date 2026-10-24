@@ -5,7 +5,8 @@
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import * as fs from "node:fs";
+import fs from "node:fs";
+import { syncBuiltinESMExports } from "node:module";
 import * as os from "node:os";
 import * as path from "node:path";
 import { execFileSync } from "node:child_process";
@@ -181,7 +182,6 @@ test("a symlink swap cannot write self-ignore content or alter external ignore r
     const selfIgnorePath = path.join(nexusDir, ".gitignore");
     const outsideIgnorePath = path.join(outside, ".gitignore");
     let swapped = false;
-    const mutableFs = fs as unknown as { openSync: typeof fs.openSync };
     const originalOpenSync = fs.openSync;
 
     try {
@@ -191,7 +191,7 @@ test("a symlink swap cannot write self-ignore content or alter external ignore r
         fs.writeFileSync(outsideIgnorePath, "external operator rules\n");
       }
 
-      mutableFs.openSync = ((file: fs.PathLike, flags: string | number, mode?: number) => {
+      fs.openSync = ((file: fs.PathLike, flags: string | number, mode?: number) => {
         if (
           !swapped &&
           typeof file === "string" &&
@@ -205,6 +205,7 @@ test("a symlink swap cannot write self-ignore content or alter external ignore r
         }
         return originalOpenSync(file, flags as number, mode);
       }) as typeof fs.openSync;
+      syncBuiltinESMExports();
 
       assert.throws(() => ensureGitExclude(root), /resolves to|changed location/);
       assert.equal(swapped, true);
@@ -214,7 +215,8 @@ test("a symlink swap cannot write self-ignore content or alter external ignore r
         assert.equal(fs.statSync(outsideIgnorePath).size, 0, "failed verification leaves no content in the redirected file");
       }
     } finally {
-      mutableFs.openSync = originalOpenSync;
+      fs.openSync = originalOpenSync;
+      syncBuiltinESMExports();
       if (fs.lstatSync(nexusDir, { throwIfNoEntry: false })?.isSymbolicLink()) {
         fs.unlinkSync(nexusDir);
       }
@@ -252,5 +254,58 @@ test("a missing exclude file is created with the rules", () => {
     assert.equal(isIgnored(root, ".nexus/tasks/task.json"), true);
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("a symlinked info/exclude is not followed or modified", () => {
+  const { root, excludePath } = makeRepo("");
+  const outside = path.join(root, "operator-owned-rules");
+  try {
+    fs.writeFileSync(outside, "operator rules\n");
+    fs.unlinkSync(excludePath);
+    fs.symlinkSync(outside, excludePath);
+
+    ensureGitExclude(root);
+
+    assert.equal(fs.readFileSync(outside, "utf8"), "operator rules\n");
+    assert.equal(isIgnored(root, ".nexus/tasks/task.json"), true);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("a hard-linked info/exclude is not modified", () => {
+  const { root, excludePath } = makeRepo("");
+  const outside = path.join(root, "operator-owned-rules");
+  try {
+    fs.writeFileSync(outside, "operator rules\n");
+    fs.unlinkSync(excludePath);
+    fs.linkSync(outside, excludePath);
+
+    ensureGitExclude(root);
+
+    assert.equal(fs.readFileSync(outside, "utf8"), "operator rules\n");
+    assert.equal(isIgnored(root, ".nexus/tasks/task.json"), true);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("a symlinked info directory does not redirect missing exclude creation", () => {
+  const { root, excludePath } = makeRepo(null);
+  const infoDir = path.dirname(excludePath);
+  const movedInfoDir = path.join(root, ".git", "info-before-link");
+  const outside = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-git-exclude-info-outside-"));
+  try {
+    fs.renameSync(infoDir, movedInfoDir);
+    fs.symlinkSync(outside, infoDir, "dir");
+
+    ensureGitExclude(root);
+
+    assert.equal(fs.existsSync(path.join(outside, "exclude")), false);
+    assert.equal(isIgnored(root, ".nexus/tasks/task.json"), true);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+    fs.rmSync(outside, { recursive: true, force: true });
   }
 });
