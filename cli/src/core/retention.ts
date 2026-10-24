@@ -555,11 +555,20 @@ export function scanCheckpoints(checkpointsBaseDir: string, deadline?: number): 
           const data = JSON.parse(content);
           gitRef = data.gitRef;
           ws = data.workspace;
-          if (data.snapshotDir && typeof data.snapshotDir === "string" && fs.existsSync(data.snapshotDir)) {
-            const snapDir: string = data.snapshotDir;
-            snapshotDir = snapDir;
-            snapSize = computeDirSize(snapDir, deadline);
-            associatedFiles.push(snapDir);
+          // `snapshotDir` is untrusted state-file metadata and retention deletes it recursively.
+          // Only accept an absolute path that really resolves inside this checkpoint's snapshots dir.
+          if (data.snapshotDir && typeof data.snapshotDir === "string" && path.isAbsolute(data.snapshotDir) && fs.existsSync(data.snapshotDir)) {
+            try {
+              const snapshotsRoot = fs.realpathSync(path.join(dirPath, "snapshots"));
+              const realSnapshot = fs.realpathSync(data.snapshotDir);
+              if (realSnapshot.startsWith(snapshotsRoot + path.sep)) {
+                snapshotDir = data.snapshotDir;
+                snapSize = computeDirSize(data.snapshotDir, deadline);
+                associatedFiles.push(data.snapshotDir);
+              }
+            } catch {
+              // Missing/unresolvable snapshots directory: leave the path untouched.
+            }
           }
         } catch {}
 
