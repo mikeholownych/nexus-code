@@ -45,7 +45,6 @@ export class WorktreeManager {
   constructor(workspace: string) {
     this.workspace = path.resolve(workspace);
     this.gitRoot = this.resolveGitRoot();
-    this.ensureGitExclude();
   }
 
   private resolveGitRoot(): string {
@@ -76,7 +75,9 @@ export class WorktreeManager {
 
   private ensureGitExclude(): void {
     if (!this.isGitRepo()) return;
-    ensureGitExclude(this.workspace);
+    // Nexus stores worktree state under the repository root, even when the
+    // selected workspace is a subdirectory within that repository.
+    ensureGitExclude(this.gitRoot);
   }
 
   public getWorktreesBaseDir(): string {
@@ -91,6 +92,10 @@ export class WorktreeManager {
       throw new Error(`Cannot create worktree: ${this.workspace} is not a valid git repository.`);
     }
 
+    // Starting a Nexus session is read-only with respect to Git metadata. Enforce
+    // the exclusion immediately before creating workspace state, where failure
+    // can safely stop that write without preventing the CLI from starting.
+    this.ensureGitExclude();
     const baseDir = this.getWorktreesBaseDir();
     if (!fs.existsSync(baseDir)) {
       fs.mkdirSync(baseDir, { recursive: true });
