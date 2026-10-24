@@ -69,6 +69,25 @@ test("a symlinked snapshots root is not used as the confinement root", () => {
   }
 });
 
+test("a symlinked checkpoint partition cannot redirect snapshot deletion outside the store", () => {
+  const { home, cpDir } = fixture();
+  fs.rmSync(cpDir, { recursive: true, force: true });
+  const outsidePartition = path.join(home, "outside", "abc123");
+  const outsideSnapshot = path.join(outsidePartition, "snapshots", "cp_old");
+  fs.mkdirSync(outsideSnapshot, { recursive: true });
+  fs.writeFileSync(path.join(outsideSnapshot, "important.txt"), "keep");
+  const outsideRecord = writeOldRecord(outsidePartition, "cp_old.json", outsideSnapshot);
+  fs.symlinkSync(outsidePartition, cpDir);
+  try {
+    const result = reclaim(home);
+    assert.equal(result.deletedCount, 0, "the redirected partition is not treated as checkpoint state");
+    assert.equal(fs.existsSync(path.join(outsideSnapshot, "important.txt")), true, "the external snapshot survives");
+    assert.equal(fs.existsSync(outsideRecord), true, "the external record is not treated as store data");
+  } finally {
+    fs.rmSync(home, { recursive: true, force: true });
+  }
+});
+
 test("a record cannot reclaim another checkpoint's snapshot", () => {
   const { home, cpDir, cpFile } = fixture();
   const other = path.join(cpDir, "snapshots", "cp_other");

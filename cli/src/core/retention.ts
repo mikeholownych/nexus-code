@@ -521,25 +521,41 @@ export function scanCheckpoints(checkpointsBaseDir: string, deadline?: number): 
   let timedOut = false;
   if (!fs.existsSync(checkpointsBaseDir)) return { items, timedOut };
 
+  let checkpointsRoot: string;
   try {
-    const hashDirs = fs.readdirSync(checkpointsBaseDir);
+    const rootStat = fs.lstatSync(checkpointsBaseDir);
+    if (!rootStat.isDirectory() || rootStat.isSymbolicLink()) return { items, timedOut };
+    checkpointsRoot = fs.realpathSync(checkpointsBaseDir);
+  } catch {
+    return { items, timedOut };
+  }
+
+  try {
+    const hashDirs = fs.readdirSync(checkpointsRoot);
     for (const hashDir of hashDirs) {
       if (deadline && Date.now() >= deadline) {
         timedOut = true;
         break;
       }
-      const dirPath = path.join(checkpointsBaseDir, hashDir);
-      const dirStat = safeStat(dirPath);
-      if (!dirStat || !dirStat.isDirectory()) continue;
+      const dirPath = path.join(checkpointsRoot, hashDir);
+      let canonicalDir: string;
+      try {
+        const dirStat = fs.lstatSync(dirPath);
+        if (!dirStat.isDirectory() || dirStat.isSymbolicLink()) continue;
+        canonicalDir = fs.realpathSync(dirPath);
+        if (path.dirname(canonicalDir) !== checkpointsRoot) continue;
+      } catch {
+        continue;
+      }
 
-      const files = fs.readdirSync(dirPath);
+      const files = fs.readdirSync(canonicalDir);
       for (const file of files) {
         if (deadline && Date.now() >= deadline) {
           timedOut = true;
           break;
         }
         if (!file.endsWith(".json")) continue;
-        const jsonPath = path.join(dirPath, file);
+        const jsonPath = path.join(canonicalDir, file);
         const stat = safeStat(jsonPath);
         if (!stat || !stat.isFile()) continue;
 
@@ -560,17 +576,19 @@ export function scanCheckpoints(checkpointsBaseDir: string, deadline?: number): 
           // canonical path is stored so a later swap of the lexical path cannot redirect the delete.
           if (data.snapshotDir && typeof data.snapshotDir === "string" && path.isAbsolute(data.snapshotDir) && fs.existsSync(data.snapshotDir)) {
             try {
-              const snapshotsPath = path.join(dirPath, "snapshots");
+              const snapshotsPath = path.join(canonicalDir, "snapshots");
               const rootStat = fs.lstatSync(snapshotsPath);
               const validRecordId = cpId.length > 0 && cpId !== "." && cpId !== ".." && !cpId.includes("/") && !cpId.includes("\\");
               if (validRecordId && rootStat.isDirectory() && !rootStat.isSymbolicLink()) {
                 const snapshotsRoot = fs.realpathSync(snapshotsPath);
-                const expected = path.join(snapshotsRoot, cpId);
-                const realSnapshot = fs.realpathSync(data.snapshotDir);
-                if (realSnapshot === expected || realSnapshot.startsWith(expected + path.sep)) {
-                  snapshotDir = realSnapshot;
-                  snapSize = computeDirSize(realSnapshot, deadline);
-                  associatedFiles.push(realSnapshot);
+                if (path.dirname(snapshotsRoot) === canonicalDir) {
+                  const expected = path.join(snapshotsRoot, cpId);
+                  const realSnapshot = fs.realpathSync(data.snapshotDir);
+                  if (realSnapshot === expected || realSnapshot.startsWith(expected + path.sep)) {
+                    snapshotDir = realSnapshot;
+                    snapSize = computeDirSize(realSnapshot, deadline);
+                    associatedFiles.push(realSnapshot);
+                  }
                 }
               }
             } catch {
