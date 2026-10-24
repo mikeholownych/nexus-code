@@ -1,9 +1,34 @@
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use std::fs::File;
-use std::io::{BufRead, BufReader};
+use std::io::{BufReader, Read};
 use std::path::Path;
 use walkdir::WalkDir;
+
+use crate::file_ops::MAX_READ_BYTES;
+
+/// Reads a source file for symbol parsing, bounded like the file tools: a huge file must not allocate unbounded
+/// memory here. The cap also covers growth after the size check.
+fn read_source_file(file_path: &Path) -> Result<String, String> {
+    let file = File::open(file_path).map_err(|e| format!("Failed to open file: {e}"))?;
+    let size = file.metadata().map_err(|e| format!("Failed to get metadata: {e}"))?.len();
+    if size > MAX_READ_BYTES as u64 {
+        return Err(format!(
+            "File is too large to parse: {size} bytes exceeds the 8 MB limit ({MAX_READ_BYTES} bytes)"
+        ));
+    }
+    let mut content = String::new();
+    BufReader::new(file)
+        .take(MAX_READ_BYTES as u64 + 1)
+        .read_to_string(&mut content)
+        .map_err(|e| format!("Failed to read file: {e}"))?;
+    if content.len() > MAX_READ_BYTES {
+        return Err(format!(
+            "File is too large to parse: it grew beyond the 8 MB limit ({MAX_READ_BYTES} bytes)"
+        ));
+    }
+    Ok(content)
+}
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct CstSymbol {
@@ -35,10 +60,8 @@ pub struct CstParseResult {
  * Parses multiline signatures, doc comments, visibility, and scopes across languages.
  */
 pub fn parse_cst_symbols(file_path: &Path, rel_path: &str, query_filter: Option<&str>) -> Result<Vec<CstSymbol>, String> {
-    let file = File::open(file_path).map_err(|e| format!("Failed to open file: {e}"))?;
-    let reader = BufReader::new(file);
-    let lines: Vec<String> = reader.lines().collect::<Result<_, _>>()
-        .map_err(|e| format!("Failed to read file lines: {e}"))?;
+    let content = read_source_file(file_path)?;
+    let lines: Vec<String> = content.lines().map(|line| line.to_string()).collect();
 
     let ext = file_path.extension().and_then(|s| s.to_str()).unwrap_or("");
     let mut symbols = Vec::new();
@@ -193,7 +216,7 @@ pub fn generate_file_outline(base_dir: &Path, args: OutlineFileArgs) -> Result<O
 
     let rel_path = target.strip_prefix(base_dir).unwrap_or(&target).to_string_lossy().to_string();
     let symbols = parse_cst_symbols(&target, &rel_path, None)?;
-    let content = std::fs::read_to_string(&target).map_err(|e| format!("Failed to read file: {e}"))?;
+    let content = read_source_file(&target)?;
     let total_lines = content.lines().count();
 
     let mut outline_str = format!("File: {} ({} lines, {} symbols)\n", rel_path, total_lines, symbols.len());
@@ -252,6 +275,27 @@ pub async fn execute_task(
         assert_eq!(outline_res.symbol_count, 1);
         assert!(outline_res.outline.contains("- [fn] execute_task"));
         assert!(outline_res.outline.contains("lines"));
+
+        let _ = std::fs::remove_file(tmp);
+    }
+
+    #[test]
+    fn test_cst_refuses_files_above_the_read_limit() {
+        let name = format!("nexus_cst_big_{}.rs", std::process::id());
+        let tmp = std::env::temp_dir().join(&name);
+        let mut code = String::from("pub fn first() {}\n");
+        while code.len() <= MAX_READ_BYTES {
+            code.push_str("// filler comment line\n");
+        }
+        std::fs::write(&tmp, &code).unwrap();
+
+        let parsed = parse_cst_symbols(&tmp, &name, None);
+        assert!(parsed.is_err(), "parse_cst_symbols must refuse a file above the read limit");
+        assert!(parsed.unwrap_err().contains("8 MB"));
+
+        let outline = generate_file_outline(&std::env::temp_dir(), OutlineFileArgs { path: name });
+        assert!(outline.is_err(), "generate_file_outline must refuse a file above the read limit");
+        assert!(outline.unwrap_err().contains("8 MB"));
 
         let _ = std::fs::remove_file(tmp);
     }
