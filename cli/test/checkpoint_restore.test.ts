@@ -247,3 +247,27 @@ test("tracked deletion cleanup never follows a parent symlink outside the worksp
     fs.rmSync(external, { recursive: true, force: true });
   }
 });
+
+test("untracked restore refuses an ignored destination parent symlink", () => {
+  const { repo } = gitRepo();
+  const external = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-checkpoint-ignored-external-"));
+  try {
+    fs.mkdirSync(path.join(repo, "alias"));
+    fs.writeFileSync(path.join(repo, "alias", "file.txt"), "captured\n");
+    const manager = new CheckpointManager(repo);
+    const checkpoint = manager.createCheckpoint("ignored parent symlink");
+    fs.writeFileSync(path.join(repo, ".gitignore"), "/alias\n");
+    fs.rmSync(path.join(repo, "alias"), { recursive: true });
+    fs.writeFileSync(path.join(external, "file.txt"), "external canary\n");
+    fs.symlinkSync(external, path.join(repo, "alias"));
+
+    const result = manager.restore(checkpoint.id);
+
+    assert.equal(result.success, false);
+    assert.match(result.message, /destination|unsafe/i);
+    assert.equal(fs.readFileSync(path.join(external, "file.txt"), "utf8"), "external canary\n");
+  } finally {
+    fs.rmSync(repo, { recursive: true, force: true });
+    fs.rmSync(external, { recursive: true, force: true });
+  }
+});
