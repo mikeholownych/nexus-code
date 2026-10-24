@@ -190,6 +190,21 @@ export function isPublicIp(ip: string): boolean {
     return isPublicIp(`${a}.${b}.${c}.${d}`);
   }
 
+  // NAT64 well-known prefix: 64:ff9b::/96 (RFC 6052) embeds the IPv4 destination in the
+  // low 32 bits. On an IPv6-only/NAT64 network the prefix reaches that IPv4 host, so a
+  // loopback/private embedded address is an SSRF target, not public IPv6 space.
+  if ((v6Big >> 32n) === 0x0064ff9b0000000000000000n) {
+    const lower = Number(v6Big & 0xffffffffn);
+    const a = (lower >>> 24) & 0xff;
+    const b = (lower >>> 16) & 0xff;
+    const c = (lower >>> 8) & 0xff;
+    const d = lower & 0xff;
+    return isPublicIp(`${a}.${b}.${c}.${d}`);
+  }
+
+  // NAT64 local-use prefix: 64:ff9b:1::/48 (RFC 8215) is never globally reachable.
+  if ((v6Big >> 80n) === 0x0064ff9b0001n) return false;
+
   // IPv6 ULA: fc00::/7 (first 7 bits 0x7e -> fc00:: to fdff:ffff:...)
   if ((v6Big >> 121n) === 0x7en) return false;
 

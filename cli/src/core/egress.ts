@@ -226,6 +226,34 @@ function parseIPv6(ip: string): bigint | null {
 }
 
 /**
+ * Classifies an IPv4 literal by trust boundary (loopback/private/CGNAT/link-local vs public).
+ */
+function classifyIpv4Trust(host: string): DestinationClassification {
+  const parts = host.split(".").map((x) => parseInt(x, 10));
+  if (parts.length === 4 && parts.every((n) => !isNaN(n) && n >= 0 && n <= 255)) {
+    const [a, b] = parts;
+    // Loopback 127/8
+    if (a === 127) {
+      return { boundary: "LOCAL_APPLIANCE", reason: "loopback_ip" };
+    }
+    // RFC1918 private: 10/8, 172.16/12, 192.168/16, or link-local 169.254/16
+    if (
+      a === 10 ||
+      (a === 172 && b >= 16 && b <= 31) ||
+      (a === 192 && b === 168) ||
+      (a === 169 && b === 254)
+    ) {
+      return { boundary: "LOCAL_APPLIANCE", reason: "private_ip" };
+    }
+    // CGNAT 100.64/10
+    if (a === 100 && b >= 64 && b <= 127) {
+      return { boundary: "LOCAL_APPLIANCE", reason: "cgnat_ip" };
+    }
+  }
+  return { boundary: "EXTERNAL_PUBLIC", reason: "hostname_external" };
+}
+
+/**
  * Classifies an endpoint or URL with CIDR-based locality and explicit reason codes (REQ-SEC-111).
  */
 export function classifyLocality(
@@ -261,28 +289,7 @@ export function classifyLocality(
 
   // 2. IPv4 literals and CIDRs
   if (net.isIP(host) === 4) {
-    const parts = host.split(".").map((x) => parseInt(x, 10));
-    if (parts.length === 4 && parts.every((n) => !isNaN(n) && n >= 0 && n <= 255)) {
-      const [a, b] = parts;
-      // Loopback 127/8
-      if (a === 127) {
-        return { boundary: "LOCAL_APPLIANCE", reason: "loopback_ip" };
-      }
-      // RFC1918 private: 10/8, 172.16/12, 192.168/16, or link-local 169.254/16
-      if (
-        a === 10 ||
-        (a === 172 && b >= 16 && b <= 31) ||
-        (a === 192 && b === 168) ||
-        (a === 169 && b === 254)
-      ) {
-        return { boundary: "LOCAL_APPLIANCE", reason: "private_ip" };
-      }
-      // CGNAT 100.64/10
-      if (a === 100 && b >= 64 && b <= 127) {
-        return { boundary: "LOCAL_APPLIANCE", reason: "cgnat_ip" };
-      }
-      return { boundary: "EXTERNAL_PUBLIC", reason: "hostname_external" };
-    }
+    return classifyIpv4Trust(host);
   }
 
   // 3. IPv6 literals and CIDRs
@@ -296,23 +303,21 @@ export function classifyLocality(
       // IPv4-mapped: ::ffff:a.b.c.d (top 80 bits zero, next 16 bits 0xffff)
       if ((v6 >> 32n) === 0xffffn) {
         const lower = Number(v6 & 0xffffffffn);
-        const a = (lower >>> 24) & 0xff;
-        const b = (lower >>> 16) & 0xff;
-        if (a === 127) {
-          return { boundary: "LOCAL_APPLIANCE", reason: "loopback_ip" };
-        }
-        if (
-          a === 10 ||
-          (a === 172 && b >= 16 && b <= 31) ||
-          (a === 192 && b === 168) ||
-          (a === 169 && b === 254)
-        ) {
-          return { boundary: "LOCAL_APPLIANCE", reason: "private_ip" };
-        }
-        if (a === 100 && b >= 64 && b <= 127) {
-          return { boundary: "LOCAL_APPLIANCE", reason: "cgnat_ip" };
-        }
-        return { boundary: "EXTERNAL_PUBLIC", reason: "hostname_external" };
+        return classifyIpv4Trust(
+          `${(lower >>> 24) & 0xff}.${(lower >>> 16) & 0xff}.${(lower >>> 8) & 0xff}.${lower & 0xff}`
+        );
+      }
+      // NAT64 well-known prefix: 64:ff9b::/96 (RFC 6052) embeds the IPv4 destination in
+      // the low 32 bits, so on an IPv6-only/NAT64 network the prefix reaches that host.
+      if ((v6 >> 32n) === 0x0064ff9b0000000000000000n) {
+        const lower = Number(v6 & 0xffffffffn);
+        return classifyIpv4Trust(
+          `${(lower >>> 24) & 0xff}.${(lower >>> 16) & 0xff}.${(lower >>> 8) & 0xff}.${lower & 0xff}`
+        );
+      }
+      // NAT64 local-use prefix: 64:ff9b:1::/48 (RFC 8215) is never globally reachable.
+      if ((v6 >> 80n) === 0x0064ff9b0001n) {
+        return { boundary: "LOCAL_APPLIANCE", reason: "private_ip" };
       }
       // IPv6 ULA: fc00::/7 (first 7 bits 1111 110 -> 0x7e)
       if ((v6 >> 121n) === 0x7en) {
