@@ -18,6 +18,8 @@ export interface CheckpointInfo {
   workspace?: string;
   gitRef?: string;
   snapshotDir?: string;
+  allowSensitive?: boolean;
+  untrackedFileCount?: number;
   files?: Array<{ path: string; content: string }>;
 }
 
@@ -150,6 +152,41 @@ export class CheckpointManager {
     }
   }
 
+  private gitUntrackedPaths(): string[] {
+    const ignored = new Set(["node_modules", ".git", "target", "dist", ".nexus", ".next", ".cache"]);
+    return execFileSync("git", ["ls-files", "--others", "--exclude-standard", "-z"], {
+      cwd: this.workspace,
+      encoding: "buffer",
+      maxBuffer: 64 * 1024 * 1024,
+    }).toString("utf8").split("\0").filter((relativePath) =>
+      relativePath && !relativePath.split("/").some((component) => ignored.has(component)),
+    );
+  }
+
+  private assertGitUntrackedSafe(relativePaths: string[], allowSensitive: boolean): void {
+    if (allowSensitive) return;
+    for (const relativePath of relativePaths) {
+      assertNoSensitivePersistenceContent(relativePath, "checkpoint");
+      const worktreePath = path.join(this.workspace, relativePath);
+      if (fs.existsSync(worktreePath) && fs.statSync(worktreePath).isFile()) {
+        assertNoSensitivePersistenceContent(fs.readFileSync(worktreePath, "utf8"), "checkpoint");
+      }
+    }
+  }
+
+  private copyGitUntracked(relativePaths: string[], snapshotDir: string, allowSensitive: boolean): void {
+    ensurePrivateDir(snapshotDir);
+    for (const relativePath of relativePaths) {
+      const sourcePath = path.join(this.workspace, relativePath);
+      if (!fs.existsSync(sourcePath) || !fs.statSync(sourcePath).isFile()) continue;
+      const content = fs.readFileSync(sourcePath);
+      if (!allowSensitive) assertNoSensitivePersistenceContent(content.toString("utf8"), "checkpoint");
+      const targetPath = path.join(snapshotDir, relativePath);
+      ensurePrivateDir(path.dirname(targetPath));
+      writePrivateFile(targetPath, content);
+    }
+  }
+
   private assertFallbackSnapshotSafe(workspacePath: string, allowSensitive: boolean): void {
     const ignored = new Set(["node_modules", ".git", "target", "dist", ".nexus", ".next", ".cache"]);
     const visit = (directory: string): void => {
@@ -176,11 +213,14 @@ export class CheckpointManager {
 
     let gitRef: string | undefined;
     let snapshotDir: string | undefined;
+    let untrackedPaths: string[] = [];
 
     if (this.isGit) {
       try {
         this.assertGitIndexUnlocked();
         this.assertGitChangesSafe(allowSensitive);
+        untrackedPaths = this.gitUntrackedPaths();
+        this.assertGitUntrackedSafe(untrackedPaths, allowSensitive);
         // Create an untracked + tracked git stash commit without modifying working tree
         // Clean/smudge filter drivers (filter.* selected through .gitattributes) can still run external
         // programs here and during restore; Git offers no single override for them, and refusing to
@@ -223,15 +263,20 @@ export class CheckpointManager {
       }
     }
 
-    if (!gitRef) {
+    if (untrackedPaths.length > 0 || !gitRef) {
       const snapTarget = path.join(this.checkpointDir, "snapshots", id);
       try {
-        this.assertFallbackSnapshotSafe(this.workspace, allowSensitive);
-        this.copyDirFiltered(this.workspace, snapTarget, allowSensitive);
+        if (gitRef) {
+          this.copyGitUntracked(untrackedPaths, snapTarget, allowSensitive);
+        } else {
+          this.assertFallbackSnapshotSafe(this.workspace, allowSensitive);
+          this.copyDirFiltered(this.workspace, snapTarget, allowSensitive);
+        }
         snapshotDir = snapTarget;
       } catch (error) {
         try {
           fs.rmSync(snapTarget, { recursive: true, force: true });
+          if (gitRef) execFileSync("git", ["update-ref", "-d", `refs/nexus/checkpoints/${id}`], { cwd: this.workspace, stdio: "ignore" });
         } catch {}
         throw error;
       }
@@ -244,6 +289,8 @@ export class CheckpointManager {
       workspace: this.workspace,
       gitRef,
       snapshotDir,
+      ...(allowSensitive ? { allowSensitive: true } : {}),
+      ...(this.isGit ? { untrackedFileCount: untrackedPaths.length } : {}),
     };
 
     const targetFile = path.join(this.checkpointDir, `${id}.json`);
@@ -295,6 +342,8 @@ export class CheckpointManager {
     if (typeof raw.gitRef === "string" && /^[0-9a-f]{7,64}$/i.test(raw.gitRef)) checkpoint.gitRef = raw.gitRef;
     const snapshotDir = this.confinedSnapshotDir(raw.id, raw.snapshotDir);
     if (snapshotDir) checkpoint.snapshotDir = snapshotDir;
+    if (raw.allowSensitive === true) checkpoint.allowSensitive = true;
+    if (Number.isSafeInteger(raw.untrackedFileCount) && raw.untrackedFileCount >= 0) checkpoint.untrackedFileCount = raw.untrackedFileCount;
     if (Array.isArray(raw.files)) checkpoint.files = raw.files;
     return checkpoint;
   }
@@ -452,15 +501,22 @@ export class CheckpointManager {
 
     try {
       if (this.isGit && cp.gitRef) {
-        // Reset working tree to checkpoint commit/stash
         const hookGuardEnv = envWithoutConfiguredHooks(this.workspace, ["reference-transaction", "post-index-change"]);
-        execFileSync("git", ["-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false", "reset", "--hard", cp.gitRef], { cwd: this.workspace, stdio: "ignore", env: hookGuardEnv });
-        execFileSync("git", ["-c", "core.fsmonitor=false", "clean", "-fd"], { cwd: this.workspace, stdio: "ignore", env: hookGuardEnv });
-        return { success: true, message: `Restored workspace to checkpoint '${cp.name}' (${cp.id})` };
+        if (cp.untrackedFileCount !== undefined && cp.untrackedFileCount > 0 && !cp.snapshotDir) {
+          return { success: false, message: `Rollback failed: checkpoint '${cp.id}' is missing its untracked snapshot; workspace was not changed` };
+        }
+        execFileSync("git", ["-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false", "read-tree", cp.gitRef], { cwd: this.workspace, stdio: "ignore", env: hookGuardEnv });
+        execFileSync("git", ["-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false", "checkout-index", "-f", "-a"], { cwd: this.workspace, stdio: "ignore", env: hookGuardEnv });
+        if (cp.untrackedFileCount !== undefined) {
+          execFileSync("git", ["-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false", "clean", "-fd"], { cwd: this.workspace, stdio: "ignore", env: hookGuardEnv });
+          if (cp.snapshotDir) this.copyDirFiltered(cp.snapshotDir, this.workspace, cp.allowSensitive === true);
+          return { success: true, message: `Restored workspace to checkpoint '${cp.name}' (${cp.id})` };
+        }
+        return { success: true, message: `Restored tracked workspace to checkpoint '${cp.name}' (${cp.id}); legacy untracked files were not captured and were left unchanged` };
       }
 
       if (cp.snapshotDir && fs.existsSync(cp.snapshotDir)) {
-        this.copyDirFiltered(cp.snapshotDir, this.workspace);
+        this.copyDirFiltered(cp.snapshotDir, this.workspace, cp.allowSensitive === true);
         return { success: true, message: `Restored workspace files from snapshot '${cp.name}' (${cp.id})` };
       }
 
