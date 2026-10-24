@@ -1267,9 +1267,10 @@ export class AutonomousAgent {
   }
 
   public getApprovalMode(): ApprovalMode {
-    if (this.checkpointReadOnlyFallback) return "read-only";
+    // An explicit --read-only launch is an operator invariant: a later mode change (the /mode slash command,
+    // setApprovalMode) must not lower it. The checkpoint fallback is the same class of restriction.
+    if (this.checkpointReadOnlyFallback || this.config.readOnly) return "read-only";
     if (this.config.approvalMode) return this.config.approvalMode;
-    if (this.config.readOnly) return "read-only";
     if (this.config.fullAccess) return "auto";
     const trusted = isWorkspaceTrusted(this.config.workspace, Boolean(this.config.readOnly));
     return trusted ? "auto" : "review";
