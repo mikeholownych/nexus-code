@@ -1,0 +1,72 @@
+{
+  "schemaVersion": 1,
+  "evidenceType": "E5 installed-RC live engineering task",
+  "recordedAt": "2026-10-23T22:13:57Z",
+  "candidate": {
+    "tag": "v1.0.0-rc.3",
+    "sourceCommit": "1b9791f07d301c885fe48f04a796203583ab5a5c",
+    "version": "1.0.0-rc.3",
+    "publishedLinuxArchiveSha256": "efb446d2760f2e1aa7890e9d786b8a2ba8e4ebb784fbcac1e66afe827428864d",
+    "installedLauncherSha256": "320d7dc1603d30f863a9560a9101ab3fe1a57f164b7119c49e01d9ace40792c4"
+  },
+  "provider": {
+    "id": "openrouter",
+    "pinnedModel": "nvidia/nemotron-3-ultra-550b-a55b:free",
+    "providerReportedRequests": 25,
+    "providerReportedCostUsd": 0,
+    "separateProviderVerificationRecord": {
+      "path": "e5-provider-verification-20261023T1659Z.json",
+      "sha256": "56f02a16803f7122d89020a4a98760712685fdd1a4fba03d169744b333f818df",
+      "disposition": "PASSED for ChatGPT sign-in and the same pinned OpenRouter model"
+    }
+  },
+  "task": {
+    "taskId": "task-ab96c472",
+    "workspaceBaselineCommit": "66add8944b40945292afb7157d2bd2fed9e19171",
+    "changedPaths": ["src/retry-after.mjs"],
+    "acceptanceTestsUnchanged": true,
+    "nexusVerifier": {
+      "status": "PASSED",
+      "executedTests": true,
+      "exitSuccess": true,
+      "deliverableBound": true,
+      "outputSha256": "818644dffa5b73dc17f5b9de9a39a807a4312505513c363428f3fa350c88f2c9"
+    },
+    "independentValidation": {
+      "result": "PASS",
+      "tests": 4,
+      "passed": 4,
+      "failed": 0,
+      "executedAt": "2026-10-23T22:12:00Z"
+    }
+  },
+  "preservedFailedAttempt": {
+    "taskId": "task-258b84f9",
+    "disposition": "NOT_ESTABLISHED; excluded from pass",
+    "reason": "Untrusted auto-mode approval denials; interrupted after 24 provider requests; billing was uncertain in the CLI summary."
+  },
+  "bundleIntegrity": {
+    "bundleId": "e5-openrouter-rc3-20261023T2205Z",
+    "sha256sumsFileSha256": "da357fbacda133467eb872a95b686fee424a1f2a789bab3c27b1eef56a685e02",
+    "readmeSha256": "f107f28f1bf5692defd5281b45f3fec86a7b8026082f8f42df8acbdf7e11f276",
+    "evidenceJsonSha256": "d0bdee658e4fd1abe908d77d444bc8175936ba1aed0f9aaa203810df70a35ead",
+    "embeddedArtifactHashes": {
+      "index.js": "15e93cbba844c3d84b51b35d2e8cfb35c8aa33df7e7f1edb31960b1978e17e79",
+      "retry-after.mjs": "6c63875f815af7cb3eda0be525a4779b0d251092ec56c3ee385fdef16eba76df",
+      "retry-after.test.mjs": "9260f3382c42daada811d8d09e6c7c54d3762954f6c083eeb6b8660d73af6432",
+      "task-ab96c472.json": "ad082223e6eec0d5b64602c85ce91d23c87953224c01fc87f648d2b8068d6d9d",
+      "task-ab96c472.messages.jsonl": "89301513310a7f075bd2e543204880792787cca3960fc4256fe86281b9b3162d",
+      "inference_receipts.jsonl": "2802e5d620c5c390ddee22baf5dadea83bea0d4586083b52dc0b163c02cac49a",
+      "flight-2026-10-23T22-08-41-690Z-4aea3d.flightlog": "f5afdf86676a64f019dda2e3ae87c67f28d98b64a75916085e50b33825924340",
+      "task-258b84f9.json": "7797e455af034806ae0aba16e955e9e6e78a7d479ff84e62d0cca59e175d737f",
+      "task-258b84f9.messages.jsonl": "f595561a9bb30bb222bd1a30ad83bad48bcf9e0f1a0bb099af48be52f7a23c08"
+    }
+  },
+  "independentReview": {
+    "reviewer": "acceptance_stage_clarification",
+    "disposition": "ACCEPT",
+    "scope": "The E5 OpenRouter live-task row on the installed RC3 artifact only.",
+    "limitations": "Does not establish overall RC acceptance, held-out qualification, or provider acceptance for a later RC artifact."
+  },
+  "qualificationDisposition": "The RC3 OpenRouter live-task row passed: Nexus's deliverable-bound verifier and a separate independent 4/4 test run both passed. Combined with the separate RC3 provider-verification record, this supplies RC3 E5 provider evidence only. The interrupted attempt is retained and not counted; no overall RC acceptance is implied."
+}
