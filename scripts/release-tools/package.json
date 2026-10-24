@@ -1,0 +1,11 @@
+{
+  "name": "nexus-release-tools",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Pinned npm tools used to generate release notices and the SBOM",
+  "license": "UNLICENSED",
+  "dependencies": {
+    "@cyclonedx/cyclonedx-npm": "6.0.1",
+    "license-checker-rseidelsohn": "4.1.1"
+  }
+}

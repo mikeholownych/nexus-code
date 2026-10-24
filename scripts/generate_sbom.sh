@@ -17,6 +17,19 @@ cleanup() {
 }
 trap cleanup EXIT
 
+RELEASE_TOOLS_BIN="${NEXUS_RELEASE_TOOLS_BIN:-}"
+if [[ -z "$RELEASE_TOOLS_BIN" ]]; then
+  RELEASE_TOOLS="$WORK/release-tools"
+  mkdir -p "$RELEASE_TOOLS"
+  cp "${SCRIPT_DIR}/release-tools/package.json" "${SCRIPT_DIR}/release-tools/package-lock.json" "$RELEASE_TOOLS/"
+  npm ci --ignore-scripts --prefix "$RELEASE_TOOLS"
+  RELEASE_TOOLS_BIN="$RELEASE_TOOLS/node_modules/.bin"
+fi
+if [[ ! -x "$RELEASE_TOOLS_BIN/cyclonedx-npm" ]]; then
+  echo "Pinned CycloneDX npm generator is unavailable from the locked release tools" >&2
+  exit 2
+fi
+
 # 1. Generate Rust SBOM for the exact platform shipped by package-linux.sh.
 (cd "${ROOT_DIR}/core" && cargo cyclonedx --format json --spec-version 1.5 --target "$RUST_TARGET")
 mv "${ROOT_DIR}/core/harness-core.cdx.json" "$WORK/cargo.cdx.json"
@@ -147,15 +160,14 @@ print(
 )
 PY
 
-# 2. Generate Node production SBOM from cli/package-lock.json using cyclonedx-npm
-# `npm --prefix cli test` exports these values. If they reach npm exec, npm's
-# Arborist treats cli/lib as part of the local prefix tree and fails when it is
-# absent, even though the package-lock-only SBOM can otherwise be generated.
+# 2. Generate Node production SBOM from cli/package-lock.json using the locked cyclonedx-npm tool.
+# `npm --prefix cli test` exports these prefix values; keep them out of the
+# generator so it resolves the CLI manifest and lockfile as the project root.
 env -u npm_config_local_prefix \
   -u npm_config_prefix \
   -u NPM_CONFIG_LOCAL_PREFIX \
   -u NPM_CONFIG_PREFIX \
-  npx --yes @cyclonedx/cyclonedx-npm \
+  "$RELEASE_TOOLS_BIN/cyclonedx-npm" \
   --package-lock-only \
   --omit dev \
   --spec-version 1.5 \

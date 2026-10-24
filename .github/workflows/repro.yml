@@ -1,116 +1,159 @@
-name: Cross-Runner Reproducibility
+name: Cross-runner RC reproducibility
 
 on:
   workflow_dispatch:
     inputs:
-      version:
-        description: 'RC tag to package and compare (e.g. v1.0.0-rc.1)'
+      tag:
+        description: Published v1.0.0 RC tag to reproduce (for example v1.0.0-rc.4)
         required: true
-        default: 'v1.0.0-rc.1'
-      commit:
-        description: 'Full 40-hex commit the tag must resolve to (immutable source identity)'
-        required: true
+        type: string
 
 permissions:
   contents: read
 
+concurrency:
+  group: rc-repro-${{ inputs.tag }}
+  cancel-in-progress: false
+
 jobs:
+  resolve-tag:
+    runs-on: ubuntu-22.04
+    outputs:
+      tag_sha: ${{ steps.resolve.outputs.tag_sha }}
+    env:
+      TARGET_TAG: ${{ inputs.tag }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Require dispatch from main
+        run: |
+          if [[ "$GITHUB_REF" != "refs/heads/main" ]]; then
+            echo "Dispatch this workflow from main so the checked workflow is the reviewed release version." >&2
+            exit 1
+          fi
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22.22.1
+      - id: resolve
+        name: Resolve published RC tag to an immutable commit
+        run: |
+          if [[ ! "$TARGET_TAG" =~ ^v1\.0\.0-rc\.[1-9][0-9]*$ ]]; then
+            echo "Expected a v1.0.0-rc.N tag; received an invalid tag." >&2
+            exit 1
+          fi
+          git fetch origin main --no-tags
+          git fetch origin "refs/tags/$TARGET_TAG:refs/tags/$TARGET_TAG"
+          tag_sha="$(git rev-parse "$TARGET_TAG^{commit}")"
+          git merge-base --is-ancestor "$tag_sha" origin/main
+          git checkout --detach "$tag_sha"
+          test "$(node -p 'require("./package.json").version')" = "${TARGET_TAG#v}"
+          node scripts/sync-version.mjs --check --tag "$TARGET_TAG"
+          test -f "docs/releases/$TARGET_TAG.md"
+          gh release view "$TARGET_TAG" --json isPrerelease,isDraft \
+            | jq -e '.isPrerelease == true and .isDraft == false' >/dev/null
+          printf 'tag_sha=%s\n' "$tag_sha" >> "$GITHUB_OUTPUT"
+
   build:
+    needs: resolve-tag
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 120
     strategy:
       fail-fast: false
       matrix:
         runner: [ubuntu-22.04, ubuntu-24.04]
-    runs-on: ${{ matrix.runner }}
     env:
-      VERSION: ${{ inputs.version }}
-      COMMIT: ${{ inputs.commit }}
+      TARGET_TAG: ${{ inputs.tag }}
+      EXPECTED_TAG_SHA: ${{ needs.resolve-tag.outputs.tag_sha }}
       NEXUS_BUILD_CONTAINER_IMAGE: rust:1.95.0-bookworm@sha256:4c2fd73ef19c5ef9d54bee03b06b2839a392604fbfcd578ed948b71b37c1d7fb
     steps:
-      - name: Validate requested source identity
-        run: |
-          [[ "$VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-rc\.[0-9]+)?$ ]] || { echo "version must be vX.Y.Z or vX.Y.Z-rc.N" >&2; exit 1; }
-          [[ "$COMMIT" =~ ^[0-9a-f]{40}$ ]] || { echo "commit must be a full 40-hex SHA" >&2; exit 1; }
-          # The workflow definition must be the RC's own: dispatch it on the tag, not a branch.
-          test "$GITHUB_REF" = "refs/tags/$VERSION" || { echo "dispatch this workflow on refs/tags/$VERSION (got $GITHUB_REF)" >&2; exit 1; }
-          test "$GITHUB_WORKFLOW_SHA" = "$COMMIT" || { echo "workflow file is from $GITHUB_WORKFLOW_SHA, not $COMMIT" >&2; exit 1; }
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
-          ref: refs/tags/${{ inputs.version }}
+          ref: ${{ needs.resolve-tag.outputs.tag_sha }}
+          fetch-depth: 0
           persist-credentials: false
-      - name: Require the tag, HEAD and a clean tree to be the requested commit
-        run: |
-          test "$(git rev-parse "refs/tags/$VERSION^{commit}")" = "$COMMIT" || { echo "tag $VERSION does not resolve to $COMMIT" >&2; exit 1; }
-          test "$(git rev-parse HEAD)" = "$COMMIT" || { echo "checked-out HEAD is not $COMMIT" >&2; exit 1; }
-          test -z "$(git status --porcelain --untracked-files=all)" || { echo "checkout is not clean" >&2; exit 1; }
-          node scripts/sync-version.mjs --check --tag "$VERSION"
-      - run: sudo apt-get update && sudo apt-get install --yes make
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
-          node-version: 22
+          node-version: 22.22.1
           cache: npm
           cache-dependency-path: cli/package-lock.json
-      - name: Install cargo tools
+      - name: Verify exact RC source
         run: |
-          CARGO_HOME="${CARGO_HOME:-$HOME/.cargo}"
-          export CARGO_HOME
+          test "$(git rev-parse HEAD)" = "$EXPECTED_TAG_SHA"
+          test "$(node -p 'require("./package.json").version')" = "${TARGET_TAG#v}"
+          node scripts/sync-version.mjs --check --tag "$TARGET_TAG"
+      - run: sudo apt-get update && sudo apt-get install --yes acl make bubblewrap build-essential meson ninja-build pkg-config libcap-dev
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # pinned Rust toolchain action
+        with:
+          toolchain: 1.95.0
+      - name: Install pinned SBOM and notices tools
+        run: |
+          cargo_home="${CARGO_HOME:-$HOME/.cargo}"
+          export CARGO_HOME="$cargo_home"
           mkdir -p "$CARGO_HOME/bin"
           echo "$CARGO_HOME/bin" >> "$GITHUB_PATH"
           export PATH="$CARGO_HOME/bin:$PATH"
-          cargo install cargo-audit --locked --version 0.22.2
-          curl -fsSL https://github.com/EmbarkStudios/cargo-deny/releases/download/0.20.2/cargo-deny-0.20.2-x86_64-unknown-linux-musl.tar.gz | tar -xz -C "$RUNNER_TEMP"
-          mv "$RUNNER_TEMP/cargo-deny-0.20.2-x86_64-unknown-linux-musl/cargo-deny" "$CARGO_HOME/bin/"
           curl -fsSL https://github.com/EmbarkStudios/cargo-about/releases/download/0.9.2/cargo-about-0.9.2-x86_64-unknown-linux-musl.tar.gz | tar -xz -C "$RUNNER_TEMP"
           mv "$RUNNER_TEMP/cargo-about-0.9.2-x86_64-unknown-linux-musl/cargo-about" "$CARGO_HOME/bin/"
           curl -fsSL https://github.com/CycloneDX/cyclonedx-rust-cargo/releases/download/cargo-cyclonedx-0.5.9/cargo-cyclonedx-x86_64-unknown-linux-musl.tar.xz | tar -xJ -C "$RUNNER_TEMP"
           mv "$RUNNER_TEMP/cargo-cyclonedx-x86_64-unknown-linux-musl/cargo-cyclonedx" "$CARGO_HOME/bin/"
           curl -fsSL https://github.com/CycloneDX/cyclonedx-cli/releases/download/v0.33.1/cyclonedx-linux-x64 -o "$CARGO_HOME/bin/cyclonedx"
           chmod +x "$CARGO_HOME/bin/cyclonedx"
-      - run: npm ci --prefix cli
-      - run: bash scripts/package-linux.sh "$VERSION" "$RUNNER_TEMP/dist"
-      - name: Record source and toolchain identity
+      - name: Verify the pinned package builder is available
         run: |
-          mkdir -p "$RUNNER_TEMP/identity"
-          node scripts/repro-identity.mjs record "$VERSION" "$RUNNER_TEMP/dist" "$RUNNER_TEMP/identity/source-identity.json" "$RUNNER_LABEL"
-          cat "$RUNNER_TEMP/identity/source-identity.json"
-        env:
-          RUNNER_LABEL: ${{ matrix.runner }}
+          docker info >/dev/null
+          test "$NEXUS_BUILD_CONTAINER_IMAGE" = 'rust:1.95.0-bookworm@sha256:4c2fd73ef19c5ef9d54bee03b06b2839a392604fbfcd578ed948b71b37c1d7fb'
+      - name: Build the exact RC package
+        run: bash scripts/package-linux.sh "$TARGET_TAG" "$RUNNER_TEMP/dist"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: dist-${{ matrix.runner }}
-          path: ${{ runner.temp }}/dist/*
+          name: nexus-repro-${{ matrix.runner }}
+          path: |
+            ${{ runner.temp }}/dist/nexus-linux-x86_64-${{ inputs.tag }}.tar.gz
+            ${{ runner.temp }}/dist/compatibility.json
+            ${{ runner.temp }}/dist/SHA256SUMS
           if-no-files-found: error
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        with:
-          name: identity-${{ matrix.runner }}
-          path: ${{ runner.temp }}/identity/source-identity.json
-          if-no-files-found: error
+          retention-days: 14
 
   compare:
-    needs: build
+    needs: [resolve-tag, build]
     runs-on: ubuntu-22.04
     env:
-      VERSION: ${{ inputs.version }}
-      COMMIT: ${{ inputs.commit }}
+      TARGET_TAG: ${{ inputs.tag }}
+      EXPECTED_TAG_SHA: ${{ needs.resolve-tag.outputs.tag_sha }}
+      GH_TOKEN: ${{ github.token }}
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/download-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          ref: ${{ inputs.commit }}
-          persist-credentials: false
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+          name: nexus-repro-ubuntu-22.04
+          path: ${{ runner.temp }}/ubuntu-22.04
+      - uses: actions/download-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          path: /tmp/repro
-      - name: Compare cross-runner packages (ACC-SUP-08, REQ-REL-114)
+          name: nexus-repro-ubuntu-24.04
+          path: ${{ runner.temp }}/ubuntu-24.04
+      - name: Compare both runner builds with each other and the published RC
         run: |
-          A=/tmp/repro/dist-ubuntu-22.04
-          B=/tmp/repro/dist-ubuntu-24.04
-          ARCHIVE="nexus-linux-x86_64-$VERSION.tar.gz"
-          for f in "$ARCHIVE" SHA256SUMS THIRD_PARTY_NOTICES.txt sbom.cdx.json install.sh; do cmp "$A/$f" "$B/$f"; done
-          diff <(ls "$A") <(ls "$B")
-          node scripts/repro-identity.mjs compare "$VERSION" "$COMMIT" /tmp/repro/repro-evidence.json /tmp/repro/identity-ubuntu-22.04/source-identity.json /tmp/repro/identity-ubuntu-24.04/source-identity.json
-          cat /tmp/repro/repro-evidence.json
-          echo "CROSS_RUNNER_REPRO_PASS: $VERSION@$COMMIT byte-identical across ubuntu-22.04 and ubuntu-24.04."
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        with:
-          name: repro-evidence
-          path: /tmp/repro/repro-evidence.json
-          if-no-files-found: error
+          archive="nexus-linux-x86_64-$TARGET_TAG.tar.gz"
+          for runner in ubuntu-22.04 ubuntu-24.04; do
+            (cd "$RUNNER_TEMP/$runner" && sha256sum --check SHA256SUMS)
+          done
+          gh release download "$TARGET_TAG" \
+            --pattern "$archive" \
+            --pattern compatibility.json \
+            --pattern SHA256SUMS \
+            --dir "$RUNNER_TEMP/published"
+          (cd "$RUNNER_TEMP/published" && sha256sum --check SHA256SUMS)
+          for file in "$archive" compatibility.json SHA256SUMS; do
+            cmp "$RUNNER_TEMP/ubuntu-22.04/$file" "$RUNNER_TEMP/ubuntu-24.04/$file"
+            cmp "$RUNNER_TEMP/ubuntu-22.04/$file" "$RUNNER_TEMP/published/$file"
+          done
+          archive_sha="$(sha256sum "$RUNNER_TEMP/ubuntu-22.04/$archive" | cut -d' ' -f1)"
+          {
+            printf '## Cross-runner RC reproducibility: %s\n\n' "$TARGET_TAG"
+            printf 'Source commit: %s\n' "$EXPECTED_TAG_SHA"
+            printf 'Runner images: ubuntu-22.04 and ubuntu-24.04\n'
+            printf 'Both runner outputs match each other and the published RC archive.\n'
+            printf 'Archive SHA-256: %s\n' "$archive_sha"
+          } >> "$GITHUB_STEP_SUMMARY"

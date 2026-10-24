@@ -114,7 +114,13 @@ EOF
 node "$ROOT/scripts/validate_compatibility.mjs" "$PKG/compatibility.json"
 
 cargo about generate -m "$ROOT/core/Cargo.toml" -c "$ROOT/about.toml" "$ROOT/about.hbs" > "$WORK/notices-rust.txt"
-npx --yes license-checker-rseidelsohn --production --plainVertical --start "$PKG/lib/cli" > "$WORK/notices-npm.txt"
+# Keep the full release-tool dependency graph fixed across the RC builds.
+RELEASE_TOOLS="$WORK/release-tools"
+mkdir -p "$RELEASE_TOOLS"
+cp "$ROOT/scripts/release-tools/package.json" "$ROOT/scripts/release-tools/package-lock.json" "$RELEASE_TOOLS/"
+npm ci --ignore-scripts --prefix "$RELEASE_TOOLS"
+RELEASE_TOOLS_BIN="$RELEASE_TOOLS/node_modules/.bin"
+"$RELEASE_TOOLS_BIN/license-checker-rseidelsohn" --production --plainVertical --start "$PKG/lib/cli" > "$WORK/notices-npm.txt"
 cat > "$PKG/THIRD_PARTY_NOTICES.txt" <<'EOF'
 ================================================================================
 Nexus Code Third-Party Software Notices and Licenses
@@ -173,7 +179,7 @@ NODE
 (cd "$OUT" && sha256sum "$ARCHIVE" compatibility.json > SHA256SUMS)
 
 # Generate lockfile-derived merged CycloneDX SBOM (REQ-REL-108, ACC-SUP-02)
-"$ROOT/scripts/generate_sbom.sh" "$OUT/sbom.cdx.json"
+NEXUS_RELEASE_TOOLS_BIN="$RELEASE_TOOLS_BIN" "$ROOT/scripts/generate_sbom.sh" "$OUT/sbom.cdx.json"
 
 # Publish install.sh as release asset (REQ-REL-109)
 cp "$ROOT/install.sh" "$OUT/install.sh"
