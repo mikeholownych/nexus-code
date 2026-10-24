@@ -374,3 +374,18 @@ test("non-Git restore refuses an unsafe destination parent before copying", () =
     fs.rmSync(external, { recursive: true, force: true });
   }
 });
+
+test("non-Git checkpoint rejects sensitive nested filename components", () => {
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-non-git-sensitive-name-"));
+  const manager = new CheckpointManager(workspace);
+  try {
+    fs.mkdirSync(path.join(workspace, "dir"));
+    fs.writeFileSync(path.join(workspace, "dir", "API_KEY=supersecret"), "ordinary content\n");
+
+    assert.throws(() => manager.createCheckpoint("sensitive nested name"), SensitivePersistenceError);
+    assert.equal(manager.listCheckpoints().length, 0);
+  } finally {
+    fs.rmSync(manager.getCheckpointDir(), { recursive: true, force: true });
+    fs.rmSync(workspace, { recursive: true, force: true });
+  }
+});

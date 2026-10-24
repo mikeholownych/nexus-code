@@ -164,7 +164,9 @@ export class CheckpointManager {
     for (const relativePath of relativePaths) {
       const sourcePath = path.join(sourceRoot, relativePath);
       const stat = fs.lstatSync(sourcePath);
-      if (!allowSensitive) assertNoSensitivePersistenceContent(relativePath, "checkpoint");
+      if (!allowSensitive) {
+        for (const component of relativePath.split("/")) assertNoSensitivePersistenceContent(component, "checkpoint");
+      }
       if (stat.isSymbolicLink()) {
         if (!allowSensitive) assertNoSensitivePersistenceContent(fs.readlinkSync(sourcePath), "checkpoint");
       } else if (stat.isFile()) {
