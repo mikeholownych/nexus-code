@@ -16,6 +16,7 @@ elif [[ "$NEXUS_BUILD_CONTAINER_IMAGE" != "$APPROVED_RUST_BUILD_IMAGE" ]]; then
   exit 2
 fi
 mkdir -p "$OUT"
+OUT=$(cd "$OUT" && pwd -P)
 WORK=$(mktemp -d)
 trap 'rm -rf "$WORK"' EXIT
 
@@ -163,8 +164,26 @@ exec node "$NEXUS_HOME/lib/cli/dist/index.js" "$@"
 EOF
 chmod 0755 "$PKG/bin/nexus" "$PKG/lib/core/harness-core" "$PKG/lib/core/nexus-tui"
 (cd "$PKG" && find . -type f ! -name MANIFEST.sha256 | LC_ALL=C sort | xargs sha256sum > MANIFEST.sha256)
-tar --sort=name --format=pax --mtime="@$SOURCE_DATE_EPOCH" --owner=0 --group=0 --numeric-owner \
-  --pax-option=delete=atime,delete=ctime -C "$WORK" -cf - nexus | gzip -n > "$OUT/$ARCHIVE"
+# The RC build runs on multiple Ubuntu images. Their host tar versions encode
+# the unused PAX device-number fields differently, which changes the archive
+# digest even when every packaged file is identical. Use the same digest-pinned
+# image as the Rust build for tar and gzip so the complete archive format is
+# independent of the host runner. The explicitly opted-in local development
+# path remains host-built and must not be used as reproducibility evidence.
+if [[ -n "${NEXUS_BUILD_CONTAINER_IMAGE:-}" ]]; then
+  docker run --rm --pull=always --platform linux/amd64 \
+    --user "$(id -u):$(id -g)" \
+    --mount "type=bind,src=$WORK,dst=/nexus-package,readonly" \
+    --mount "type=bind,src=$OUT,dst=/nexus-output" \
+    --workdir /nexus-package \
+    --env "SOURCE_DATE_EPOCH=$SOURCE_DATE_EPOCH" \
+    --env "ARCHIVE=$ARCHIVE" \
+    "$NEXUS_BUILD_CONTAINER_IMAGE" \
+    sh -ec 'tmp=$(mktemp); tar --sort=name --format=pax --mtime="@$SOURCE_DATE_EPOCH" --owner=0 --group=0 --numeric-owner --pax-option=delete=atime,delete=ctime -cf "$tmp" nexus; gzip -n -c "$tmp" > "/nexus-output/$ARCHIVE"'
+else
+  tar --sort=name --format=pax --mtime="@$SOURCE_DATE_EPOCH" --owner=0 --group=0 --numeric-owner \
+    --pax-option=delete=atime,delete=ctime -C "$WORK" -cf - nexus | gzip -n > "$OUT/$ARCHIVE"
+fi
 
 # The detached metadata repeats only the authenticated in-archive contract and
 # adds the digest of the exact archive. The release checksum index covers both.
