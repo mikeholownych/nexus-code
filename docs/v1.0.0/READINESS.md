@@ -1,6 +1,32 @@
 # v1.0.0 release readiness checkpoint
 
-## Latest release convergence status (observed 2026-10-24 01:29 UTC at `d484b98`)
+## Latest release convergence status (observed 2026-10-24 02:01 UTC at `1b05517`)
+
+**Authoritative source and source gates:** `origin/main` remains `1b05517705ea52b8171d6cf15670d729a223ab08`. Main CI [40050680348](https://github.com/mikeholownych/nexus-code/actions/runs/40050680348) has passed Node 22 and Node 24; its Linux x86-64 job is still running `npm --prefix cli test` (started 01:57 UTC). Main CodeQL [40050680292](https://github.com/mikeholownych/nexus-code/actions/runs/40050680292) passed. The exact-main requirements and synchronized-version checks recorded below remain bound to this unchanged commit; source CI is not complete until Linux packaging finishes.
+
+**RC4 release-note PR:** PR #178 head `f13f9ef979ccf7a324a7af236357e035dcd08007`, base `1b05517705ea52b8171d6cf15670d729a223ab08`, has independent review ACCEPT. Its Node 22, Node 24, CodeQL, and JavaScript/TypeScript checks passed; Linux x86-64 is running `npm --prefix cli test` (started 02:00 UTC). It is not merged.
+
+**Cross-runner reproducibility:** Candidate `a611577ea3e441d1de7e6673732d74d5ff19474b` is pushed on `v1/rc3-cross-runner-repro`, based on the current main. Independent review ACCEPT covers the workflow's step-scoped release token; `actionlint` and `git diff --check` passed. No PR is open while main and PR #178 full workflows remain active, avoiding another overlapping suite. This candidate is not yet integrated or qualified.
+
+**Distribution and RC state:** The GitHub installer/archive is the approved distribution target; npm publication is inapplicable. RC3 remains the latest published candidate; RC4 and stable v1.0.0 do not exist. No RC is accepted.
+
+**Held-out and qualification:** Public Issue #1 remains open; the latest custodian metadata request is 2026-10-24 00:19 UTC, with no response recorded. The sealed legacy `hidden.command` corpus remains incompatible with the current `blackbox-v1` runner. No private payload was accessed and no held-out qualification started. T2/T3/T4, long-task and fault-injection qualification, exact-RC provider/standalone checks, cross-runner reproducibility, human terminal matrix, artifact gates, and independent exact-RC acceptance remain outstanding.
+
+**Release disposition:** `NEXUS_V1_CONVERGENCE_ACTIVE`; acceptance remains `IN_PROGRESS`. Publication authorization remains granted and gated. No accepted RC or stable v1.0.0 release is claimed.
+
+## Historical release convergence status (observed 2026-10-24 01:39 UTC at `1b05517`; superseded below)
+
+**Authoritative source and source gates:** `origin/main` is `1b05517705ea52b8171d6cf15670d729a223ab08`, the PR #177 merge commit. PR #177 (`221e6953122ac4c3519e7eb0d8eec3a72507f9e3`) passed exact-head Node 22, Node 24, Linux x86-64 packaging/reproducibility, CodeQL, and JavaScript/TypeScript checks; it was merged at 2026-10-24 01:38:02 UTC. Post-merge CI [40050680348](https://github.com/mikeholownych/nexus-code/actions/runs/40050680348) and CodeQL [40050680292](https://github.com/mikeholownych/nexus-code/actions/runs/40050680292) are in progress on the merge commit; their results are not yet claimed. A clean detached worktree with isolated HOME at exact `1b055177` passed `node scripts/check_requirements.mjs --enforce`: 123 rows (108 tested, 6 partial, 2 implemented, 7 open), with 12 rows explicitly deferred to exact-RC qualification. `node scripts/sync-version.mjs --check` reports all components at `1.0.0-rc.4`. Exact post-merge CI remains the pre-RC gate.
+
+**Distribution and RC state:** GitHub installer/archive is the approved distribution target; npm publication is inapplicable. RC3 remains the latest published candidate, source `1b9791f07d301c885fe48f04a796203583ab5a5c`, archive SHA-256 `efb446d2760f2e1aa7890e9d786b8a2ba8e4ebb784fbcac1e66afe827428864d`. The `v1.0.0-rc.4` tag and release do not exist. No RC is accepted.
+
+**Installed RC3 desktop evidence:** The timestamped record [desktop setup and identity check](../reviews/evidence/v1-qualification/rc.3/terminal/desktop-setup-identity-20261024T013553Z.md) records the live host metadata, all 273 installed manifest entries verified, launcher hash, and observed version. It is installation-integrity evidence only. The 15 human terminal cells remain unrun with zero screenshots; RC3 results would not substitute for a matrix on the ultimately accepted candidate.
+
+**Held-out and qualification:** Public Issue #1 remains open; its latest custodian metadata request at 2026-10-24 00:19 UTC has no recorded response. The sealed legacy `hidden.command` corpus remains incompatible with the current `blackbox-v1` runner. No private payload was accessed and no held-out qualification started. T2/T3/T4, long-task and fault-injection qualification, RC4 provider/standalone qualification, exact-RC cross-runner reproducibility, installed-RC terminal and other artifact gates, and independent exact-RC acceptance remain outstanding.
+
+**Release disposition:** `NEXUS_V1_CONVERGENCE_ACTIVE`; acceptance remains `IN_PROGRESS`. Publication authorization remains granted and gated. No accepted RC or stable v1.0.0 release is claimed.
+
+## Historical release convergence status (observed 2026-10-24 01:29 UTC at `d484b98`; superseded below)
 
 **Authoritative source and source gates:** `origin/main` is `d484b9863bd7a83c170958ff9bda62a96c0bc683` (PR #176 merged). On an isolated clean worktree at this exact source, `node scripts/check_requirements.mjs --enforce` passed: 123 rows (108 tested, 6 partial, 2 implemented, 7 open), with 12 rows explicitly deferred to exact-RC qualification. `node scripts/sync-version.mjs --check` passed with all components at `1.0.0-rc.4`; no RC4 tag or release exists. Exact-main CI [40047136014](https://github.com/mikeholownych/nexus-code/actions/runs/40047136014) passed all jobs: Node 22, Node 24, and Linux x86-64 packaging, including reproducible package comparison, package smoke, and installer smoke. Exact-main CodeQL [40047136021](https://github.com/mikeholownych/nexus-code/actions/runs/40047136021) passed. PR #177 at `221e6953122ac4c3519e7eb0d8eec3a72507f9e3`, based on this main revision, has independent source review ACCEPT, CodeQL, JavaScript/TypeScript, and Node 22/24 checks passed; its Linux x86-64 CLI test is still running. No merge is claimed.
 
