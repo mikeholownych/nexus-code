@@ -121,15 +121,21 @@ describe("ACC-PER-05: Flight Logs & Telemetry Git Exclude (REQ-PER-105)", () => 
     fs.chmodSync(excludePath, 0o444);
 
     const manager = new WorktreeManager(workspace);
-    const created = manager.createWorktree("nested-workspace-exclude-test");
-    assert.equal(created.created, true);
-    assert.equal(fs.existsSync(path.join(gitRepoDir, ".nexus", ".gitignore")), true);
-    assert.equal(fs.existsSync(path.join(workspace, ".nexus", ".gitignore")), false);
-    execFileSync("git", ["check-ignore", "--quiet", "--no-index", ".nexus/worktrees/nested-workspace-exclude-test"], { cwd: gitRepoDir });
+    let created = false;
+    try {
+      const result = manager.createWorktree("nested-workspace-exclude-test");
+      created = result.created;
+      assert.equal(result.created, true);
+      assert.equal(fs.existsSync(path.join(gitRepoDir, ".nexus", ".gitignore")), true);
+      assert.equal(fs.existsSync(path.join(workspace, ".nexus", ".gitignore")), false);
+      execFileSync("git", ["check-ignore", "--quiet", "--no-index", ".nexus/worktrees/nested-workspace-exclude-test"], { cwd: gitRepoDir });
 
-    const status = execFileSync("git", ["status", "--porcelain"], { cwd: gitRepoDir, encoding: "utf8" }).trim();
-    assert.equal(status, "", `root worktree state must remain ignored; found:\n${status}`);
-    assert.equal(manager.discardWorktree("nested-workspace-exclude-test").success, true);
+      const status = execFileSync("git", ["status", "--porcelain"], { cwd: gitRepoDir, encoding: "utf8" }).trim();
+      assert.equal(status, "", `root worktree state must remain ignored; found:\n${status}`);
+    } finally {
+      fs.chmodSync(excludePath, 0o600);
+      if (created) assert.equal(manager.discardWorktree("nested-workspace-exclude-test").success, true);
+    }
   });
 
   test("an ineffective read-only self-ignore rule blocks flight state writes", () => {
