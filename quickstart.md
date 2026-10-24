@@ -54,9 +54,9 @@ nexus
 
 Enter a small task, review requested actions, and inspect the reported turn outcome. On a terminal, running `nexus` with no arguments opens the live TUI; in non-interactive environments or with `nexus repl`, it opens the interactive REPL. For non-interactive tasks, run `nexus run "<task>"`. Use `nexus --help` and `/help` for implemented commands.
 
-### Trust your own repository
+### Folder trust and tool permissions
 
-By default, an untrusted workspace opens in `review` posture, asking for your explicit confirmation before executing shell commands, file modifications, network egress, or test suites.
+By default, Nexus opens in `review` posture, asking for your explicit confirmation before executing shell commands, file modifications, network egress, or test suites. Folder trust is separate: it controls whether project instructions and workspace integrations are loaded.
 
 If this is your own repository and you want autonomous execution, trust it:
 
@@ -64,7 +64,7 @@ If this is your own repository and you want autonomous execution, trust it:
 nexus trust .
 ```
 
-Once trusted, Nexus runs in `auto` posture. To force review mode regardless of trust, pass `--approve`. To run autonomously in CI or scripts without trusting the workspace permanently, pass `--yes` (or `--mode auto`, or set `NEXUS_APPROVAL_MODE=auto`).
+Trusting a folder does not change its tool permission mode. Pass `--mode auto` to allow writes and commands without approval; network access still asks the first time each origin is used. Pass `--yes` (or set `NEXUS_APPROVAL_MODE=auto`) for full access without approval prompts, including network access. Use `--approve` or `--mode review` to require approval, and `--read-only` for read-only operation.
 
 Nexus reports `VERIFIED` only when its selected verifier passes and the operator has declared the product files for that task before it starts. For example: `nexus run --deliverable-file src/math.ts "Fix the addition defect"`; repeat `--deliverable-file` for each expected product file. The scope must use literal workspace-relative paths and cannot name tests. A passing suite without a declared scope is regression evidence (`REGRESSION_FREE`), not proof that the requested product change was verified. `UNVERIFIED`, `BLOCKED`, and `LIMIT_REACHED` remain distinct outcomes; a completed model response alone does not mean the work is correct.
 

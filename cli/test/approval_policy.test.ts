@@ -9,6 +9,7 @@ import os from "node:os";
 import path from "node:path";
 import { execSync } from "node:child_process";
 import { AutonomousAgent } from "../src/agent.js";
+import { isWorkspaceTrusted, setWorkspaceTrusted } from "../src/workspace_trust.js";
 import { DurableStateManager } from "../src/core/state.js";
 import { CapabilityRegistry, EFFECT_CLASSES, needsOperatorDecision, type EffectClass } from "../src/core/capabilities.js";
 import { ApprovalPolicy } from "../src/core/approval_policy.js";
@@ -135,7 +136,7 @@ describe("review-mode gate in the agent loop", () => {
   });
 });
 
-describe("ApprovalPolicy DEC-01 option C decision matrix", () => {
+describe("ApprovalPolicy permission-mode decision matrix", () => {
   const policy = new ApprovalPolicy();
 
   test("read_workspace and delegate never require operator decision", () => {
@@ -157,12 +158,11 @@ describe("ApprovalPolicy DEC-01 option C decision matrix", () => {
     assert.equal(policy.requiresDecision("write_workspace", { mode: "auto", trusted: false, fullAccess: true }), false);
   });
 
-  test("exec requires decision in review mode and in auto mode when untrusted", () => {
-    // Review mode: always asks
+  test("exec approval follows permission mode regardless of workspace trust", () => {
     assert.equal(policy.requiresDecision("exec", { mode: "review", trusted: true }), true);
     assert.equal(policy.requiresDecision("exec", { mode: "review", trusted: false }), true);
-    // Auto mode: asks only when untrusted
-    assert.equal(policy.requiresDecision("exec", { mode: "auto", trusted: false }), true);
+    // Auto mode follows the operator's permission setting in both trusted and untrusted folders.
+    assert.equal(policy.requiresDecision("exec", { mode: "auto", trusted: false }), false);
     assert.equal(policy.requiresDecision("exec", { mode: "auto", trusted: true }), false);
     // fullAccess (--yes): never asks
     assert.equal(policy.requiresDecision("exec", { mode: "auto", trusted: false, fullAccess: true }), false);
@@ -179,15 +179,58 @@ describe("ApprovalPolicy DEC-01 option C decision matrix", () => {
     assert.equal(policy.requiresDecision("egress", { mode: "auto", trusted: true, egressOrigin: "https://example.com", approvedEgressOrigins: approved }), false);
   });
 
-  test("context_inject asks when source is untrusted or workspace is untrusted", () => {
-    assert.equal(policy.requiresDecision("context_inject", { mode: "review", trusted: false }), true);
-    assert.equal(policy.requiresDecision("context_inject", { mode: "auto", trusted: false }), true);
+  test("workspace trust does not change context-injection approval; untrusted sources remain gated", () => {
+    assert.equal(policy.requiresDecision("context_inject", { mode: "review", trusted: false }), false);
+    assert.equal(policy.requiresDecision("context_inject", { mode: "auto", trusted: false }), false);
     assert.equal(policy.requiresDecision("context_inject", { mode: "auto", trusted: true, isUntrustedSource: true }), true);
     assert.equal(policy.requiresDecision("context_inject", { mode: "auto", trusted: true, isUntrustedSource: false }), false);
   });
 });
 
 describe("headless execution (no onConfirm handler)", () => {
+  test("REQ-SEC-101: the unset mode stays review in trusted and untrusted workspaces", async () => {
+    const previousHome = process.env.HOME;
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-default-review-home-"));
+    process.env.HOME = home;
+    try {
+      for (const trusted of [false, true]) {
+        const repo = makeRepo();
+        const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-default-review-state-"));
+        if (trusted) setWorkspaceTrusted(repo, true);
+        const agent = agentFor("http://127.0.0.1:9/v1", repo, stateDir);
+        const sentinel = path.join(repo, "must-not-run.txt");
+        try {
+          assert.equal(isWorkspaceTrusted(repo), trusted);
+          assert.equal(agent.getApprovalMode(), "review");
+          const command = await (agent as any).dispatchToolCall(
+            { id: `exec-${trusted}`, type: "function", function: { name: "run_command", arguments: JSON.stringify({ command: `printf escaped > '${sentinel}'` }) } },
+            1,
+            "agent",
+          );
+          assert.equal(command.receipt.status, "DENIED");
+          assert.equal(command.receipt.denialReason, "DECISION_REQUIRED_NO_OPERATOR");
+          assert.equal(fs.existsSync(sentinel), false, "exec must not run without review approval");
+
+          const egress = await (agent as any).dispatchToolCall(
+            { id: `egress-${trusted}`, type: "function", function: { name: "fetch_web", arguments: '{"url":"https://example.invalid"}' } },
+            2,
+            "agent",
+          );
+          assert.equal(egress.receipt.status, "DENIED");
+          assert.equal(egress.receipt.denialReason, "DECISION_REQUIRED_NO_OPERATOR");
+        } finally {
+          agent.shutdown();
+          fs.rmSync(repo, { recursive: true, force: true });
+          fs.rmSync(stateDir, { recursive: true, force: true });
+        }
+      }
+    } finally {
+      if (previousHome === undefined) delete process.env.HOME;
+      else process.env.HOME = previousHome;
+      fs.rmSync(home, { recursive: true, force: true });
+    }
+  });
+
   test("fails closed with DECISION_REQUIRED_NO_OPERATOR when tool requires decision", async () => {
     const replies = [
       { kind: "tools" as const, calls: [{ name: "write_file", args: { path: "test.txt", content: "hello" } }] },
@@ -213,6 +256,28 @@ describe("headless execution (no onConfirm handler)", () => {
     } finally {
       agent.shutdown();
       await gw.close();
+      fs.rmSync(repo, { recursive: true, force: true });
+      fs.rmSync(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  test("egress denial explains the explicit headless opt-in", async () => {
+    const repo = makeRepo();
+    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-headless-egress-state-"));
+    const agent = agentFor("http://127.0.0.1:9/v1", repo, stateDir);
+    agent.setApprovalMode("review");
+    try {
+      const result = await (agent as any).dispatchToolCall(
+        { id: "egress-1", type: "function", function: { name: "fetch_web", arguments: '{"url":"https://example.invalid"}' } },
+        1,
+        "agent",
+      );
+      assert.equal(result.receipt.status, "DENIED");
+      assert.equal(result.receipt.denialReason, "DECISION_REQUIRED_NO_OPERATOR");
+      assert.match(result.receipt.error, /--yes to explicitly allow egress without an operator prompt/);
+      assert.doesNotMatch(result.receipt.error, /--mode auto/);
+    } finally {
+      agent.shutdown();
       fs.rmSync(repo, { recursive: true, force: true });
       fs.rmSync(stateDir, { recursive: true, force: true });
     }

@@ -7,7 +7,6 @@ import { credentialOriginOf, credentialStorageHome, environmentCredential, Local
 import { baseUrlSetting, originOf, parseOriginList, PROVIDERS, providerDefinition } from "./providers.js";
 import { providerApiKey } from "./credentials.js";
 import { ContinuationBudget, DEFAULT_CONTINUATION, HarnessConfig, ApprovalMode } from "./types.js";
-import { isWorkspaceTrusted } from "./workspace_trust.js";
 
 const installEnv = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../.env");
 const DEFAULT_ENDPOINT = "http://localhost:1234/v1";
@@ -251,9 +250,9 @@ export function buildConfig(options: any): HarnessConfig {
     approvalMode = envMode as ApprovalMode;
     if (approvalMode === "auto") fullAccess = true;
   } else {
-    // Default resolution per DEC-01 C: trusted -> auto, else review
-    const trusted = isWorkspaceTrusted(workspace, readOnly);
-    approvalMode = trusted ? "auto" : "review";
+    // Folder trust controls project instructions and integrations, not tool authority.
+    // Use an explicit full-access setting when present; otherwise default to review.
+    approvalMode = fullAccess ? "auto" : "review";
   }
 
   const sandbox = options.sandbox ? (typeof options.sandbox === "string" ? options.sandbox : true) : undefined;

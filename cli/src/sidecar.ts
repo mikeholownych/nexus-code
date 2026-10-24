@@ -110,7 +110,7 @@ export class SidecarServer {
     this.app = options.app;
     this.write = options.write;
     const config = this.app.getConfig();
-    this.mode = options.mode ?? config.approvalMode ?? (isWorkspaceTrusted(config.workspace, Boolean(config.readOnly)) ? "auto" : "review");
+    this.mode = options.mode ?? config.approvalMode ?? (config.readOnly ? "read-only" : config.fullAccess ? "auto" : "review");
     this.app.getAgent().setApprovalMode(this.mode);
     this.onShutdown = options.onShutdown ?? (() => {});
     this.resume = options.resume;
@@ -1057,7 +1057,7 @@ async function main(argv: string[]): Promise<void> {
     .option("--coder-endpoint <url>", "Inference endpoint for the coder model")
     .option("--approve", "Require operator approval before edits and shell commands")
     .option("-y, --yes", "Run non-interactively without approval prompts (forces auto mode)")
-    .option("--mode <mode>", "Execution mode: auto, review, or read-only (default: auto for trusted workspaces, review for untrusted)")
+    .option("--mode <mode>", "Execution mode: auto, review, or read-only (default: review; folder trust does not change it)")
     .option("-r, --resume [id]", "Resume a saved session (the latest when no id is given)")
     .parse(argv);
 
