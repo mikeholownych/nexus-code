@@ -17,6 +17,10 @@ static PATTERNS: LazyLock<Vec<(Regex, &'static str)>> = LazyLock::new(|| {
             "Bearer [REDACTED_TOKEN]",
         ),
         (
+            Regex::new(r#"(?i)((?:proxy-)?authorization["']?\s*[:=]\s*["']?(?:basic|bearer|token)\s+["']?)[A-Za-z0-9._~+/=-]{8,}"#).unwrap(),
+            "${1}[REDACTED]",
+        ),
+        (
             Regex::new(r"(?:sk-|ghp_|gho_|glpat-|xoxb-|xoxp-)[A-Za-z0-9_\-]{16,}").unwrap(),
             "[REDACTED_KEY]",
         ),
@@ -93,6 +97,18 @@ mod tests {
         assert_eq!(
             redactor.line("plain diagnostic").unwrap(),
             "plain diagnostic"
+        );
+        assert_eq!(
+            redactor.line("Authorization: Basic dXNlcjpwYXNzd29yZA==").unwrap(),
+            "Authorization: Basic [REDACTED]"
+        );
+        assert_eq!(
+            redactor.line("authorization=Token abcdefghijklmnop").unwrap(),
+            "authorization=Token [REDACTED]"
+        );
+        assert_eq!(
+            redactor.line(r#"{"authorization":"Basic dXNlcjpwYXNzd29yZA=="}"#).unwrap(),
+            r#"{"authorization":"Basic [REDACTED]"}"#
         );
     }
 
