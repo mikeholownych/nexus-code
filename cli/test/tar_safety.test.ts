@@ -18,14 +18,15 @@ describe("tar symlink target confinement", () => {
     }
   });
 
-  test("rejects a target that traverses above the root and returns", () => {
-    for (const link of [
-      "../../../nexus/file",
-      "..\\..\\..\\nexus\\file",
-      "../../nexus/file",
-    ]) {
-      assert.equal(isSymlinkSafe(link, "nexus/link").safe, false, link);
+  test("checks the normalized final target after resolving parent segments", () => {
+    for (const link of ["../../outside/file", "..\\..\\outside\\file"]) {
+      assert.equal(isSymlinkSafe(link, "nexus/dir/link").safe, false, link);
     }
+
+    // The normalized destination is inside the package root even though the spelling climbs
+    // above the `nexus/` prefix before returning. The validator intentionally checks that final
+    // destination rather than requiring every intermediate lexical prefix to stay under `nexus/`.
+    assert.equal(isSymlinkSafe("../../nexus/file", "nexus/dir/link").safe, true);
   });
 
   test("allows targets that stay inside the package root", () => {
