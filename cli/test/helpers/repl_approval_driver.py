@@ -28,6 +28,7 @@ class ReplSession:
     def __init__(self, argv, env, cwd, cols=100, rows=30):
         self.cols, self.rows = cols, rows
         self.pid, self.fd = pty.fork()
+        self.reaped = False
         if self.pid == 0:
             os.chdir(cwd)
             os.execvpe(argv[0], argv, env)
@@ -74,13 +75,51 @@ class ReplSession:
 
     def close(self):
         try:
-            os.kill(self.pid, signal.SIGTERM)
-        except OSError:
-            pass
-        try:
-            os.close(self.fd)
-        except OSError:
-            pass
+            # pty.fork makes the child a session/process-group leader. Stop the
+            # whole REPL tree so a sidecar cannot keep writing session state
+            # while the parent test removes its temporary HOME.
+            try:
+                os.killpg(self.pid, signal.SIGTERM)
+            except ProcessLookupError:
+                pass
+
+            if not self._wait_for_group_exit(10.0):
+                try:
+                    os.killpg(self.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+                if not self._wait_for_group_exit(5.0):
+                    raise RuntimeError(f"REPL process group {self.pid} did not exit after SIGKILL")
+        finally:
+            try:
+                os.close(self.fd)
+            except OSError:
+                pass
+
+    def _wait_for_group_exit(self, timeout):
+        deadline = time.monotonic() + timeout
+        while True:
+            if not self.reaped:
+                try:
+                    pid, _ = os.waitpid(self.pid, os.WNOHANG)
+                    self.reaped = pid == self.pid
+                except ChildProcessError:
+                    self.reaped = True
+
+            group_alive = False
+            try:
+                os.killpg(self.pid, 0)
+                group_alive = True
+            except ProcessLookupError:
+                pass
+            except PermissionError:
+                group_alive = True
+
+            if self.reaped and not group_alive:
+                return True
+            if time.monotonic() >= deadline:
+                return False
+            time.sleep(0.05)
 
 
 def main():

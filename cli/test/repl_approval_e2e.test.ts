@@ -72,6 +72,7 @@ async function runScenario(scenario: string): Promise<any> {
   const planFile = path.join(home, "plan.json");
   fs.writeFileSync(planFile, JSON.stringify(plan));
 
+  let driverShutdownConfirmed = false;
   try {
     const { code, out, err } = await new Promise<{ code: number | null; out: string; err: string }>((resolve) => {
       const child = spawn("python3", [DRIVER, planFile], { stdio: ["ignore", "pipe", "pipe"] });
@@ -81,13 +82,19 @@ async function runScenario(scenario: string): Promise<any> {
       child.stderr.on("data", (c) => (err += c));
       child.on("close", (c) => resolve({ code: c, out, err }));
     });
+    // The driver exits successfully only after its finally block confirms that
+    // the PTY process group has stopped. Preserve the fixture on every other
+    // exit so a surviving child cannot write into a HOME being removed here.
+    driverShutdownConfirmed = code === 0;
     assert.equal(code, 0, `driver failed for scenario '${scenario}':\n${err}\n${out}`);
     const lastLine = out.trim().split("\n").pop() || "{}";
     return JSON.parse(lastLine);
   } finally {
     await gw.close();
-    fs.rmSync(repo, { recursive: true, force: true });
-    fs.rmSync(home, { recursive: true, force: true });
+    if (driverShutdownConfirmed) {
+      fs.rmSync(repo, { recursive: true, force: true });
+      fs.rmSync(home, { recursive: true, force: true });
+    }
   }
 }
 
