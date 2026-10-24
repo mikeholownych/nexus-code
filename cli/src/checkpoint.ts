@@ -222,9 +222,12 @@ export class CheckpointManager {
     if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
     if (typeof raw.id !== "string" || !/^[A-Za-z0-9_-]{1,128}$/.test(raw.id)) return null;
     if (typeof raw.name !== "string" || typeof raw.timestamp !== "string") return null;
-    // The name is printed by the checkpoint commands; state-file text must not inject terminal escapes.
-    const name = raw.name.replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f]/g, "");
-    const checkpoint: CheckpointInfo = { id: raw.id, name, timestamp: raw.timestamp };
+    // The name and timestamp are printed by the checkpoint commands; state-file text must not
+    // inject terminal escapes.
+    const control = /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f]/g;
+    const name = raw.name.replace(control, "");
+    const timestamp = raw.timestamp.replace(control, "");
+    const checkpoint: CheckpointInfo = { id: raw.id, name, timestamp };
     if (typeof raw.workspace === "string") checkpoint.workspace = raw.workspace;
     if (typeof raw.gitRef === "string" && /^[0-9a-f]{7,64}$/i.test(raw.gitRef)) checkpoint.gitRef = raw.gitRef;
     const snapshotDir = this.confinedSnapshotDir(raw.id, raw.snapshotDir);

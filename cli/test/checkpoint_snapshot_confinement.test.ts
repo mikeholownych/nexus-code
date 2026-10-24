@@ -109,6 +109,7 @@ test("git-backed prune, diff and restore never execute state text", () => {
       id: `cp_x; touch ${marker}`,
       name: "inj",
       timestamp: "1",
+      gitRef: "HEAD",
     });
     writeRecord(cpDir, "cp_1_abcd.json", {
       id: "cp_1_abcd",
@@ -148,11 +149,16 @@ test("a record id that does not match its filename is ignored", () => {
   });
 });
 
-test("terminal controls in a checkpoint name are stripped", () => {
+test("terminal controls in a checkpoint name and timestamp are stripped", () => {
   withSetup(false, ({ cpDir, cm }) => {
-    writeRecord(cpDir, "cp_1_abcd.json", { id: "cp_1_abcd", name: "evil\u001b]0;x\u0007", timestamp: "1" });
+    writeRecord(cpDir, "cp_1_abcd.json", {
+      id: "cp_1_abcd",
+      name: "evil\u001b]0;x\u0007",
+      timestamp: "1\u009b2J",
+    });
     const [checkpoint] = cm.listCheckpoints();
     assert.equal(checkpoint.name, "evil]0;x");
+    assert.equal(checkpoint.timestamp, "12J");
   });
 });
 
