@@ -1,4 +1,4 @@
-import { execFileSync, execSync } from "node:child_process";
+import { execFileSync, execSync, spawnSync } from "node:child_process";
 import * as path from "node:path";
 import * as fs from "node:fs";
 
@@ -154,7 +154,64 @@ export function generateConventionalCommit(workspace: string): { message: string
 
 export function commitChanges(workspace: string, message: string): { success: boolean; hash?: string; error?: string } {
   try {
-    execFileSync("git", ["add", "-A"], { cwd: workspace, stdio: ["pipe", "pipe", "pipe"] });
+    const gitEnv = { ...process.env };
+    for (const key of ["GIT_LITERAL_PATHSPECS", "GIT_GLOB_PATHSPECS", "GIT_NOGLOB_PATHSPECS", "GIT_ICASE_PATHSPECS"]) {
+      delete gitEnv[key];
+    }
+    // Exclusions in `git add` do not remove paths that were already staged.
+    // Restore only the internal state entries in the index, leaving their working
+    // tree contents untouched, before staging the user's workspace changes.
+    const head = spawnSync("git", ["rev-parse", "--verify", "--quiet", "HEAD"], {
+      cwd: workspace,
+      env: gitEnv,
+      stdio: "ignore",
+    });
+    if (head.error) throw head.error;
+    if (head.status === 0) {
+      execFileSync("git", ["reset", "--quiet", "HEAD", "--", ":(top).nexus"], {
+        cwd: workspace,
+        env: gitEnv,
+        stdio: ["pipe", "pipe", "pipe"],
+      });
+    } else {
+      // A newly initialized repository has no HEAD tree to reset to. Confirm that
+      // HEAD is a symbolic ref whose branch does not yet exist before treating it
+      // as unborn; a broken or detached HEAD must still fail closed.
+      const headRef = spawnSync("git", ["symbolic-ref", "-q", "HEAD"], {
+        cwd: workspace,
+        env: gitEnv,
+        encoding: "utf-8",
+        stdio: ["ignore", "pipe", "ignore"],
+      });
+      if (headRef.error) throw headRef.error;
+      if (headRef.status !== 0 || !headRef.stdout.trim()) {
+        throw new Error("Cannot resolve repository HEAD before excluding Nexus state");
+      }
+      const branchRef = headRef.stdout.trim();
+      const branch = spawnSync("git", ["show-ref", "--verify", "--quiet", branchRef], {
+        cwd: workspace,
+        env: gitEnv,
+        stdio: "ignore",
+      });
+      if (branch.error) throw branch.error;
+      if (branch.status !== 1) {
+        throw new Error("Repository HEAD is not an unborn branch; refusing to alter the index");
+      }
+      // There is no HEAD tree to restore from, so remove only staged .nexus paths
+      // from the index. --cached preserves their workspace contents.
+      execFileSync("git", ["rm", "--cached", "-r", "-f", "--ignore-unmatch", "--", ":(top).nexus"], {
+        cwd: workspace,
+        env: gitEnv,
+        stdio: ["pipe", "pipe", "pipe"],
+      });
+    }
+    // Internal Nexus state must never enter an automated workspace commit, even if a user's
+    // .git/info/exclude contains a malformed rule or a later negation that exposes .nexus/.
+    execFileSync("git", ["add", "-A", "--", ":(top,exclude).nexus", ":(top,exclude).nexus/**"], {
+      cwd: workspace,
+      env: gitEnv,
+      stdio: ["pipe", "pipe", "pipe"],
+    });
     execFileSync("git", ["commit", "-m", message], {
       cwd: workspace,
       encoding: "utf-8",
