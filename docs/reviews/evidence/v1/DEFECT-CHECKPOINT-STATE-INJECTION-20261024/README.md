@@ -22,7 +22,9 @@
 ## Fix
 
 - `validatedCheckpoint` accepts only an object with a string `id` matching `^[A-Za-z0-9_-]{1,128}$`,
-  string `name` and `timestamp`; malformed records are ignored instead of entering the list.
+  string `name` and `timestamp`; malformed records are ignored instead of entering the list. The id
+  must also equal the JSON filename stem, so a planted file cannot reclaim another checkpoint's
+  record, and control characters are stripped from the displayed name.
 - `gitRef` is kept only when it is a hex object id; `snapshotDir` is canonicalized and kept only when
   it resolves under this checkpoint's own `snapshots/<id>` with a real (non-symlink) snapshots root.
 - Every Git invocation that used a record value now uses `execFileSync` argv instead of a shell string
@@ -30,9 +32,12 @@
 
 ## Verification
 
-- New `cli/test/checkpoint_snapshot_confinement.test.ts`: 5/5 pass.
-- Four tests fail on the pre-fix source (malformed lookup, shell markers, outside prune, outside
-  restore); the legitimate-snapshot test passes before and after.
+- New `cli/test/checkpoint_snapshot_confinement.test.ts`: 8/8 pass.
+- Seven tests fail on the original source (malformed lookup, shell markers, outside prune, outside
+  restore, git-backed prune/diff/restore shell text, filename/id mismatch, terminal controls in the
+  name); the legitimate-snapshot test passes before and after. The git-backed case specifically
+  exercises `update-ref -d`, `git diff` and `git reset --hard`; the non-git marker test alone was
+  vacuous for the shell path.
 - Existing `CheckpointManager creates and records snapshots` and `handles pruning and diff inspection`
   tests still pass; `npx tsc --noEmit -p tsconfig.json` and `git diff --check` pass.
 

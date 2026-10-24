@@ -204,7 +204,9 @@ export class CheckpointManager {
       try {
         const parsed = JSON.parse(fs.readFileSync(path.join(this.checkpointDir, f), "utf-8"));
         const checkpoint = this.validatedCheckpoint(parsed);
-        if (checkpoint) list.push(checkpoint);
+        // The record must be the one its filename names; otherwise a planted file could cause
+        // prune to delete another checkpoint's JSON/snapshot.
+        if (checkpoint && checkpoint.id === f.replace(/\.json$/, "")) list.push(checkpoint);
       } catch {
         // Ignore corrupt checkpoint files
       }
@@ -220,7 +222,9 @@ export class CheckpointManager {
     if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
     if (typeof raw.id !== "string" || !/^[A-Za-z0-9_-]{1,128}$/.test(raw.id)) return null;
     if (typeof raw.name !== "string" || typeof raw.timestamp !== "string") return null;
-    const checkpoint: CheckpointInfo = { id: raw.id, name: raw.name, timestamp: raw.timestamp };
+    // The name is printed by the checkpoint commands; state-file text must not inject terminal escapes.
+    const name = raw.name.replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f]/g, "");
+    const checkpoint: CheckpointInfo = { id: raw.id, name, timestamp: raw.timestamp };
     if (typeof raw.workspace === "string") checkpoint.workspace = raw.workspace;
     if (typeof raw.gitRef === "string" && /^[0-9a-f]{7,64}$/i.test(raw.gitRef)) checkpoint.gitRef = raw.gitRef;
     const snapshotDir = this.confinedSnapshotDir(raw.id, raw.snapshotDir);

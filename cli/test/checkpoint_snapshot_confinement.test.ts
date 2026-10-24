@@ -65,7 +65,7 @@ test("malicious id and gitRef text is never executed", () => {
       timestamp: "1",
       gitRef: `HEAD; touch ${marker}2`,
     });
-    writeRecord(cpDir, "inj2.json", {
+    writeRecord(cpDir, "cp_1_abcd.json", {
       id: "cp_1_abcd",
       name: "inj2",
       timestamp: "2",
@@ -99,6 +99,60 @@ test("restore cannot copy a directory outside the checkpoint snapshots", () => {
     const result = cm.restore("cp_1_abcd");
     assert.equal(result.success, false);
     assert.equal(fs.existsSync(path.join(ws, "secret.txt")), false);
+  });
+});
+
+test("git-backed prune, diff and restore never execute state text", () => {
+  withSetup(true, ({ root, cpDir, cm }) => {
+    const marker = path.join(root, "PWNED");
+    writeRecord(cpDir, "inj.json", {
+      id: `cp_x; touch ${marker}`,
+      name: "inj",
+      timestamp: "1",
+    });
+    writeRecord(cpDir, "cp_1_abcd.json", {
+      id: "cp_1_abcd",
+      name: "inj",
+      timestamp: "2",
+      gitRef: `HEAD; touch ${marker}2`,
+    });
+    cm.pruneCheckpoints(0);
+    assert.equal(fs.existsSync(marker), false, "id text must not reach a shell");
+    assert.equal(fs.existsSync(`${marker}2`), false, "prune must not use a non-hex gitRef");
+
+    writeRecord(cpDir, "cp_1_abcd.json", {
+      id: "cp_1_abcd",
+      name: "inj",
+      timestamp: "2",
+      gitRef: `HEAD; touch ${marker}3`,
+    });
+    cm.getDiff("cp_1_abcd");
+    assert.equal(fs.existsSync(`${marker}3`), false, "diff must not use a non-hex gitRef");
+
+    writeRecord(cpDir, "cp_1_abcd.json", {
+      id: "cp_1_abcd",
+      name: "inj",
+      timestamp: "2",
+      gitRef: `HEAD; touch ${marker}4`,
+    });
+    cm.restore("cp_1_abcd");
+    assert.equal(fs.existsSync(`${marker}4`), false, "restore must not use a non-hex gitRef");
+  });
+});
+
+test("a record id that does not match its filename is ignored", () => {
+  withSetup(false, ({ cpDir, cm }) => {
+    writeRecord(cpDir, "evil.json", { id: "cp_1_abcd", name: "evil", timestamp: "1" });
+    assert.deepEqual(cm.listCheckpoints(), []);
+    assert.equal(cm.getCheckpoint("cp_1_abcd"), null);
+  });
+});
+
+test("terminal controls in a checkpoint name are stripped", () => {
+  withSetup(false, ({ cpDir, cm }) => {
+    writeRecord(cpDir, "cp_1_abcd.json", { id: "cp_1_abcd", name: "evil\u001b]0;x\u0007", timestamp: "1" });
+    const [checkpoint] = cm.listCheckpoints();
+    assert.equal(checkpoint.name, "evil]0;x");
   });
 });
 
