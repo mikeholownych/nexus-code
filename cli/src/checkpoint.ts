@@ -175,12 +175,30 @@ export class CheckpointManager {
     }
   }
 
+  private assertUntrackedDestinationSafe(relativePaths: string[], targetRoot: string): void {
+    const root = fs.realpathSync(targetRoot);
+    for (const relativePath of relativePaths) {
+      let parent = path.dirname(path.join(root, relativePath));
+      while (!fs.existsSync(parent)) {
+        const next = path.dirname(parent);
+        if (next === parent) break;
+        parent = next;
+      }
+      const realParent = fs.realpathSync(parent);
+      if (realParent !== root && !realParent.startsWith(root + path.sep)) {
+        throw new Error("Checkpoint destination path escapes the workspace");
+      }
+    }
+  }
+
   private copyUntrackedEntries(relativePaths: string[], sourceRoot: string, targetRoot: string, allowSensitive: boolean): void {
     ensurePrivateDir(targetRoot);
     for (const relativePath of relativePaths) {
       const sourcePath = path.join(sourceRoot, relativePath);
       const targetPath = path.join(targetRoot, relativePath);
+      this.assertUntrackedDestinationSafe([relativePath], targetRoot);
       ensurePrivateDir(path.dirname(targetPath));
+      this.assertUntrackedDestinationSafe([relativePath], targetRoot);
       const stat = fs.lstatSync(sourcePath);
       if (stat.isSymbolicLink()) {
         const linkTarget = fs.readlinkSync(sourcePath);
@@ -551,8 +569,9 @@ export class CheckpointManager {
           if (!cp.snapshotDir) return { success: false, message: `Rollback failed: checkpoint '${cp.id}' is missing its untracked snapshot; workspace was not changed` };
           try {
             this.assertUntrackedSnapshotSafe(cp.untrackedFiles, cp.snapshotDir, cp.allowSensitive === true);
+            this.assertUntrackedDestinationSafe(cp.untrackedFiles, this.workspace);
           } catch {
-            return { success: false, message: `Rollback failed: checkpoint '${cp.id}' has an incomplete or unsafe untracked snapshot; workspace was not changed` };
+            return { success: false, message: `Rollback failed: checkpoint '${cp.id}' has an unsafe untracked snapshot or destination; workspace was not changed` };
           }
         }
         execFileSync("git", ["-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false", "read-tree", cp.gitRef], { cwd: this.workspace, stdio: "ignore", env: hookGuardEnv });
