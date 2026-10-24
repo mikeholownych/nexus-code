@@ -18,9 +18,15 @@ function fixture(): { home: string; cpDir: string; cpFile: string } {
 }
 
 function writeOldCheckpoint(cpFile: string, snapshotDir: string): void {
-  fs.writeFileSync(cpFile, JSON.stringify({ id: "cp_old", name: "old", timestamp: new Date(0).toISOString(), snapshotDir }));
+  writeOldRecord(path.dirname(cpFile), path.basename(cpFile), snapshotDir);
+}
+
+function writeOldRecord(cpDir: string, name: string, snapshotDir: string): string {
+  const file = path.join(cpDir, name);
+  fs.writeFileSync(file, JSON.stringify({ id: name.replace(/\.json$/, ""), name, timestamp: new Date(0).toISOString(), snapshotDir }));
   const old = new Date(Date.now() - 3 * 86_400_000);
-  fs.utimesSync(cpFile, old, old);
+  fs.utimesSync(file, old, old);
+  return file;
 }
 
 function reclaim(home: string): { deletedCount: number } {
@@ -104,6 +110,44 @@ test("the snapshots root itself is not treated as a checkpoint snapshot", () => 
   try {
     reclaim(home);
     assert.equal(fs.existsSync(path.join(snapshots, "other")), true, "other checkpoints' snapshots survive");
+  } finally {
+    fs.rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test("a record filename cannot normalize the expected snapshot path", () => {
+  for (const name of [".json", "..json", "...json"]) {
+    const { home, cpDir } = fixture();
+    const other = path.join(cpDir, "snapshots", "cp_other");
+    fs.mkdirSync(other, { recursive: true });
+    fs.writeFileSync(path.join(other, "important.txt"), "keep");
+    writeOldRecord(cpDir, name, path.join(cpDir, "snapshots"));
+    try {
+      reclaim(home);
+      assert.equal(fs.existsSync(path.join(other, "important.txt")), true, name);
+      assert.equal(fs.existsSync(cpDir), true, `${name} must not delete the partition`);
+    } finally {
+      fs.rmSync(home, { recursive: true, force: true });
+    }
+  }
+});
+
+test("a snapshot path swapped after planning is not followed", () => {
+  const { home, cpDir, cpFile } = fixture();
+  const snapshot = path.join(cpDir, "snapshots", "cp_old", "nested");
+  fs.mkdirSync(snapshot, { recursive: true });
+  fs.writeFileSync(path.join(snapshot, "old.txt"), "old");
+  const victim = path.join(home, "victim", "nested");
+  fs.mkdirSync(victim, { recursive: true });
+  fs.writeFileSync(path.join(victim, "important.txt"), "keep");
+  writeOldCheckpoint(cpFile, snapshot);
+  try {
+    const plan = planRetention({ home, maxAgeDays: 0 });
+    const parent = path.join(cpDir, "snapshots", "cp_old");
+    fs.renameSync(parent, `${parent}-moved`);
+    fs.symlinkSync(path.join(home, "victim"), parent);
+    executeRetention(plan, { dryRun: false });
+    assert.equal(fs.existsSync(path.join(victim, "important.txt")), true, "the swapped-in target survives");
   } finally {
     fs.rmSync(home, { recursive: true, force: true });
   }
