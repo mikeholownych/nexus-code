@@ -147,21 +147,17 @@ print(
 )
 PY
 
-# 2. Generate Node production SBOM from cli/package-lock.json using cyclonedx-npm
-# `npm --prefix cli test` exports these values. If they reach npm exec, npm's
-# Arborist treats cli/lib as part of the local prefix tree and fails when it is
-# absent, even though the package-lock-only SBOM can otherwise be generated.
+# 2. Generate the Node production SBOM from cli/package-lock.json with npm's
+# built-in CycloneDX 1.5 generator. Clear npm prefix variables inherited by
+# nested invocations so npm resolves the CLI manifest and lockfile directly.
 env -u npm_config_local_prefix \
   -u npm_config_prefix \
   -u NPM_CONFIG_LOCAL_PREFIX \
   -u NPM_CONFIG_PREFIX \
-  npx --yes @cyclonedx/cyclonedx-npm \
+  npm --prefix "${ROOT_DIR}/cli" sbom \
   --package-lock-only \
-  --omit dev \
-  --spec-version 1.5 \
-  --output-format JSON \
-  --output-file "$WORK/npm.cdx.json" \
-  "${ROOT_DIR}/cli/package.json"
+  --omit=dev \
+  --sbom-format cyclonedx > "$WORK/npm.cdx.json"
 
 # 3. Merge Cargo and npm SBOMs using cyclonedx-cli
 cyclonedx merge \

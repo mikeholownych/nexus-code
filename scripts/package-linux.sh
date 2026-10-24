@@ -114,7 +114,14 @@ EOF
 node "$ROOT/scripts/validate_compatibility.mjs" "$PKG/compatibility.json"
 
 cargo about generate -m "$ROOT/core/Cargo.toml" -c "$ROOT/about.toml" "$ROOT/about.hbs" > "$WORK/notices-rust.txt"
-npx --yes license-checker-rseidelsohn --production --plainVertical --start "$PKG/lib/cli" > "$WORK/notices-npm.txt"
+# Keep the full release-tool dependency graph fixed across the RC builds.
+RELEASE_TOOLS="$WORK/release-tools"
+mkdir -p "$RELEASE_TOOLS"
+cp "$ROOT/scripts/release-tools/package.json" "$ROOT/scripts/release-tools/package-lock.json" "$RELEASE_TOOLS/"
+node "$ROOT/scripts/check_deprecated_lock.mjs" "$ROOT/scripts/release-tools/package-lock.json"
+npm ci --ignore-scripts --prefix "$RELEASE_TOOLS"
+RELEASE_TOOLS_BIN="$RELEASE_TOOLS/node_modules/.bin"
+"$RELEASE_TOOLS_BIN/license-checker-rseidelsohn" --production --plainVertical --start "$PKG/lib/cli" > "$WORK/notices-npm.txt"
 cat > "$PKG/THIRD_PARTY_NOTICES.txt" <<'EOF'
 ================================================================================
 Nexus Code Third-Party Software Notices and Licenses

@@ -1,0 +1,10 @@
+{
+  "name": "nexus-release-tools",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Pinned npm tool used to generate release notices",
+  "license": "UNLICENSED",
+  "dependencies": {
+    "license-checker-rseidelsohn": "5.0.1"
+  }
+}
