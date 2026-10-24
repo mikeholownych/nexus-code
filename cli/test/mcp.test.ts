@@ -87,7 +87,7 @@ describe("MCP server configuration persistence", () => {
     await withHome(async (home, server) => {
       const { dir, file } = configPaths(home);
       fs.mkdirSync(dir, { recursive: true });
-      const broken = '{ "mcpServers": { "keep": { "command": "keep-me" } }, }';
+      const broken = '{ "mcpServers": { "keep": { "command": "keep-me", "env": { "TOKEN": "ghp_s3cr3tvalue0123456789" } } }, }';
       fs.writeFileSync(file, broken);
 
       const manager = new McpClientManager(home);
@@ -95,8 +95,47 @@ describe("MCP server configuration persistence", () => {
         const result = await connectFake(manager, server);
         assert.equal(result.success, true, "the connection itself still succeeded");
         assert.equal(result.persisted, false);
-        assert.match(result.persistError || "", /JSON|object|parse/i);
+        assert.match(result.persistError || "", /not valid JSON|left untouched/i);
+        assert.doesNotMatch(result.persistError || "", /ghp_s3cr3tvalue/, "the parser message echoed config content");
         assert.equal(fs.readFileSync(file, "utf8"), broken, "the unparseable config was overwritten");
+      } finally {
+        manager.shutdownAll();
+      }
+    });
+  });
+
+  test("creates a fresh home's config directory and file owner-only", async () => {
+    await withHome(async (home, server) => {
+      const { dir, file } = configPaths(home);
+      assert.equal(fs.existsSync(path.dirname(dir)), false, "the test home must not have ~/.config yet");
+
+      const manager = new McpClientManager(home);
+      try {
+        const result = await connectFake(manager, server);
+        assert.equal(result.success, true);
+        assert.equal(result.persisted, true, `persist result: ${JSON.stringify(result)}`);
+        assert.equal(fs.statSync(file).mode & 0o777, 0o600);
+        assert.equal(fs.statSync(dir).mode & 0o777, 0o700);
+      } finally {
+        manager.shutdownAll();
+      }
+    });
+  });
+
+  test("refuses a config whose mcpServers is not an object", async () => {
+    await withHome(async (home, server) => {
+      const { dir, file } = configPaths(home);
+      fs.mkdirSync(dir, { recursive: true });
+      const shape = JSON.stringify({ mcpServers: ["not", "a", "map"] });
+      fs.writeFileSync(file, shape);
+
+      const manager = new McpClientManager(home);
+      try {
+        const result = await connectFake(manager, server);
+        assert.equal(result.success, true);
+        assert.equal(result.persisted, false);
+        assert.match(result.persistError || "", /mcpServers is not an object/i);
+        assert.equal(fs.readFileSync(file, "utf8"), shape, "a config with an unusable shape was replaced");
       } finally {
         manager.shutdownAll();
       }

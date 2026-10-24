@@ -617,14 +617,27 @@ export class McpClientManager {
         let existing: McpConfigFile = {};
         if (fs.existsSync(configFile)) {
           // Never replace a config we cannot parse: that would silently drop every other server definition.
-          const parsed = JSON.parse(fs.readFileSync(configFile, "utf-8"));
+          const raw = fs.readFileSync(configFile, "utf-8");
+          let parsed: unknown;
+          try {
+            parsed = JSON.parse(raw);
+          } catch {
+            // Do not echo the parser message: it quotes the malformed input, which may contain a server token.
+            throw new Error(`${configFile} is not valid JSON; left untouched`);
+          }
           if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-            throw new Error(`${configFile} is not a JSON object`);
+            throw new Error(`${configFile} is not a JSON object; left untouched`);
           }
           existing = parsed as McpConfigFile;
         }
-        if (!existing.mcpServers || typeof existing.mcpServers !== "object" || Array.isArray(existing.mcpServers)) {
+        if (existing.mcpServers === undefined) {
           existing.mcpServers = {};
+        } else if (
+          !existing.mcpServers ||
+          typeof existing.mcpServers !== "object" ||
+          Array.isArray(existing.mcpServers)
+        ) {
+          throw new Error(`${configFile}: mcpServers is not an object; left untouched`);
         }
         existing.mcpServers[name] = config;
         // Write a private temporary file, then replace the target atomically (following an existing symlink target).

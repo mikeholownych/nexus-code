@@ -26,15 +26,19 @@ content {"mcpServers":{"fake":{...,"env":{"FAKE_TOKEN":"s3cr3t-value"}}}}
 - Create `~/.config/nexus` as `0700` and tighten an existing directory to `0700`.
 - Write the JSON to a `0600` temporary file, `chmod 0600`, then `rename` it over the target atomically (following an
   existing symlink's target so dotfile symlinks keep working); remove the temporary file on failure.
-- Parse and validate the existing config before writing. A non-object or unparseable file is left byte-for-byte
-  untouched; the connection still succeeds but `addServer` returns `persisted: false` and `persistError`.
+- Parse and validate the existing config before writing. A non-object file, a non-object `mcpServers`, or
+  unparseable JSON is left byte-for-byte untouched; the connection still succeeds but `addServer` returns
+  `persisted: false` and `persistError`. Parse errors report only the path, never the parser's quoted input, which
+  could contain a server token.
 - Report that state in the REPL wizard and `/mcp add` instead of claiming the configuration was saved.
 
 ## Verification
 
-- New `cli/test/mcp.test.ts`: 2/2. On the pre-fix `mcp.ts`, the first test fails with
-  `config mode 644 leaks a server token to other users` and the second with the overwritten-config assertion
-  (the broken bytes were replaced). Both pass after the change.
+- New `cli/test/mcp.test.ts`: 4/4 (owner-only rewrite, unparseable preservation plus no token echo, fresh home,
+  unusable `mcpServers` shape). On the pre-fix `mcp.ts` the first test fails with
+  `config mode 644 leaks a server token to other users`; the second fails at `result.persisted === false`, and a
+  separate pre-fix probe confirms the substance (the broken file was replaced and `keep` was deleted). All pass
+  after the change.
 - `test/workspace_trust.test.ts` (environment allowlist, MCP config selection): 7/7 together with the new file.
 - `npx tsc --noEmit -p tsconfig.json`; `git diff --check`: pass.
 
@@ -42,9 +46,11 @@ content {"mcpServers":{"fake":{...,"env":{"FAKE_TOKEN":"s3cr3t-value"}}}}
 
 - Tightening an existing `~/.config/nexus` to `0700` relies on the directory being owned by the current user; if it
   is not chmod-able, persistence now fails closed (connection succeeds, `persisted: false`) rather than writing to a
-  directory whose mode cannot be secured.
-- A dangling symlink at the config path is replaced rather than followed; a valid symlink continues to have its
-  target file replaced.
+  directory whose mode cannot be secured. `chmod` follows a symlinked `nexus` directory, so that target is tightened
+  too; when `~/.config` itself is created by this path it is created `0700`.
+- A dangling symlink at the config path is replaced rather than followed. A valid symlink has its target file
+  replaced, but the temporary file is written under `~/.config/nexus`, so a target on another filesystem fails
+  closed with `EXDEV` instead of being written.
 - Refusing an unparseable config requires the operator to fix the JSON before the new server can be persisted; the
   in-memory connection still works for the current session.
 - MCP config files loaded from an untrusted workspace remain governed by the existing workspace-trust gate; this
