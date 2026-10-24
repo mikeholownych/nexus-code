@@ -84,7 +84,7 @@ test("legacy Git restore does not delete uncaptured untracked files or move HEAD
     const checkpoint = manager.createCheckpoint("legacy shape");
     const recordPath = path.join(manager.getCheckpointDir(), `${checkpoint.id}.json`);
     const record = JSON.parse(fs.readFileSync(recordPath, "utf8"));
-    delete record.untrackedFileCount;
+    delete record.untrackedFiles;
     fs.writeFileSync(recordPath, JSON.stringify(record));
     fs.writeFileSync(path.join(repo, "draft.txt"), "uncaptured user work\n");
 
@@ -112,6 +112,89 @@ test("explicitly allowed sensitive untracked content can be restored", () => {
 
     assert.equal(result.success, true, result.message);
     assert.equal(fs.readFileSync(path.join(repo, "draft.txt"), "utf8"), `${marker}\n`);
+  } finally {
+    fs.rmSync(repo, { recursive: true, force: true });
+  }
+});
+
+test("restore captures untracked files even under conventional build directory names", () => {
+  const { repo } = gitRepo();
+  try {
+    fs.mkdirSync(path.join(repo, "node_modules"));
+    fs.writeFileSync(path.join(repo, "node_modules", "local-draft.txt"), "not Git-ignored\n");
+    const manager = new CheckpointManager(repo);
+    const checkpoint = manager.createCheckpoint("build directory draft");
+    fs.rmSync(path.join(repo, "node_modules"), { recursive: true });
+
+    const result = manager.restore(checkpoint.id);
+
+    assert.equal(result.success, true, result.message);
+    assert.equal(fs.readFileSync(path.join(repo, "node_modules", "local-draft.txt"), "utf8"), "not Git-ignored\n");
+  } finally {
+    fs.rmSync(repo, { recursive: true, force: true });
+  }
+});
+
+test("restore validates every captured file before changing the workspace", () => {
+  const { repo } = gitRepo();
+  try {
+    fs.writeFileSync(path.join(repo, "draft.txt"), "captured work\n");
+    const manager = new CheckpointManager(repo);
+    const checkpoint = manager.createCheckpoint("partial snapshot");
+    fs.rmSync(path.join(checkpoint.snapshotDir!, "draft.txt"));
+    fs.writeFileSync(path.join(repo, "draft.txt"), "current work must survive\n");
+
+    const result = manager.restore(checkpoint.id);
+
+    assert.equal(result.success, false);
+    assert.match(result.message, /untracked snapshot/i);
+    assert.equal(fs.readFileSync(path.join(repo, "draft.txt"), "utf8"), "current work must survive\n");
+  } finally {
+    fs.rmSync(repo, { recursive: true, force: true });
+  }
+});
+
+test("restore preserves untracked symlinks without copying their external targets", () => {
+  const { repo } = gitRepo();
+  const external = path.join(os.tmpdir(), `${path.basename(repo)}-external.txt`);
+  try {
+    fs.writeFileSync(external, "external target must not be copied\n");
+    fs.symlinkSync(external, path.join(repo, "draft-link.txt"));
+    const manager = new CheckpointManager(repo);
+    const checkpoint = manager.createCheckpoint("symbolic link");
+    fs.rmSync(path.join(repo, "draft-link.txt"));
+    fs.writeFileSync(path.join(repo, "draft-link.txt"), "later regular file\n");
+
+    const result = manager.restore(checkpoint.id);
+
+    assert.equal(result.success, true, result.message);
+    assert.equal(fs.lstatSync(path.join(repo, "draft-link.txt")).isSymbolicLink(), true);
+    assert.equal(fs.readlinkSync(path.join(repo, "draft-link.txt")), external);
+    assert.equal(fs.lstatSync(path.join(checkpoint.snapshotDir!, "draft-link.txt")).isSymbolicLink(), true);
+  } finally {
+    fs.rmSync(repo, { recursive: true, force: true });
+    fs.rmSync(external, { force: true });
+  }
+});
+
+test("legacy restore removes tracked files deleted at the checkpoint", () => {
+  const { repo, git } = gitRepo();
+  try {
+    fs.rmSync(path.join(repo, "tracked.txt"));
+    const head = git("rev-parse", "HEAD");
+    const manager = new CheckpointManager(repo);
+    const checkpoint = manager.createCheckpoint("legacy tracked deletion");
+    const recordPath = path.join(manager.getCheckpointDir(), `${checkpoint.id}.json`);
+    const record = JSON.parse(fs.readFileSync(recordPath, "utf8"));
+    delete record.untrackedFiles;
+    fs.writeFileSync(recordPath, JSON.stringify(record));
+    fs.writeFileSync(path.join(repo, "tracked.txt"), "recreated later\n");
+
+    const result = manager.restore(checkpoint.id);
+
+    assert.equal(result.success, true, result.message);
+    assert.equal(git("rev-parse", "HEAD"), head);
+    assert.equal(fs.existsSync(path.join(repo, "tracked.txt")), false);
   } finally {
     fs.rmSync(repo, { recursive: true, force: true });
   }
