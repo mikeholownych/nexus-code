@@ -43,6 +43,31 @@ function setupRepo(name: string): { ws: string; sentinelPath: string } {
 }
 
 describe("ACC-SAFE-09: Verifier Gating", () => {
+  test("folder trust alone keeps an unset permission mode in review", () => {
+    const savedHome = process.env.HOME;
+    const tempHome = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-vg-home-"));
+    process.env.HOME = tempHome;
+
+    const { ws } = setupRepo("default-review-trusted");
+    setWorkspaceTrusted(ws, true);
+    const agent = new AutonomousAgent({
+      endpoint: "http://127.0.0.1:1/v1",
+      model: "m",
+      workspace: ws,
+      shell: "bash",
+    } as any);
+
+    try {
+      assert.equal(isWorkspaceTrusted(ws), true, "repo should be trusted");
+      assert.equal(agent.getApprovalMode(), "review");
+    } finally {
+      agent.shutdown();
+      fs.rmSync(ws, { recursive: true, force: true });
+      fs.rmSync(tempHome, { recursive: true, force: true });
+      process.env.HOME = savedHome;
+    }
+  });
+
   test("describeVerifier extracts command, script body from package.json, and sha256 digest", () => {
     const { ws } = setupRepo("describe");
     try {
@@ -297,6 +322,8 @@ describe("ACC-SAFE-09: Verifier Gating", () => {
         /requires operator approval \(exec\), but no operator is present/,
         "headless execution without an operator must deny verifier execution",
       );
+      assert.match(String(toolRes.content), /--mode auto to explicitly select automatic approvals/);
+      assert.doesNotMatch(String(toolRes.content), /nexus trust/);
       assert.equal(fs.existsSync(sentinelPath), false, "the verifier must not execute without operator approval");
     } finally {
       agent.shutdown();
