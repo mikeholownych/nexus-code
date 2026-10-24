@@ -80,6 +80,50 @@ test("a root-anchored rule is accepted without adding a duplicate", () => {
   }
 });
 
+test("leading whitespace is not treated as an existing ignore rule", () => {
+  const { root, excludePath } = makeRepo(" .nexus/\n");
+  try {
+    assert.equal(isIgnored(root, ".nexus/tasks/task.json"), false);
+    ensureGitExclude(root);
+    assert.equal(isIgnored(root, ".nexus/tasks/task.json"), true);
+    assert.match(fs.readFileSync(excludePath, "utf8"), /\n\.nexus\/\n/);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("a later negation is overridden by a verified positive rule", () => {
+  const { root, excludePath } = makeRepo(".nexus/\n!.nexus/\n");
+  try {
+    assert.equal(isIgnored(root, ".nexus/tasks/task.json"), false);
+    ensureGitExclude(root);
+    assert.equal(isIgnored(root, ".nexus/tasks/task.json"), true);
+    assert.equal(isIgnored(root, ".nexus/worktrees/task/state.json"), true);
+    const rules = fs.readFileSync(excludePath, "utf8").split(/\r?\n/);
+    assert.ok(rules.lastIndexOf(".nexus/") > rules.lastIndexOf("!.nexus/"));
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("a higher-priority repository negation fails closed when info/exclude cannot override it", () => {
+  const { root } = makeRepo("");
+  try {
+    fs.writeFileSync(
+      path.join(root, ".gitignore"),
+      ".nexus/\n!.nexus/\n.nexus/tasks/__nexus_ignore_probe__\n",
+    );
+    assert.equal(isIgnored(root, ".nexus/tasks/__nexus_ignore_probe__"), true);
+    assert.equal(isIgnored(root, ".nexus/"), false);
+    assert.equal(isIgnored(root, ".nexus/tasks/task.json"), false);
+    assert.throws(() => ensureGitExclude(root), /Git still does not ignore/);
+    assert.equal(isIgnored(root, ".nexus/"), false);
+    assert.equal(isIgnored(root, ".nexus/tasks/task.json"), false);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("a missing exclude file is created with the rules", () => {
   const { root, excludePath } = makeRepo(null);
   try {

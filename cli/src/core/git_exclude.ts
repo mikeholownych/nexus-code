@@ -7,55 +7,60 @@ import { execFileSync } from "node:child_process";
  * Called on first workspace write by FlightRecorder and WorktreeManager.
  */
 export function ensureGitExclude(workspace: string): void {
+  let excludePath: string | null = null;
   try {
-    let excludePath: string | null = null;
-    try {
-      const out = execFileSync("git", ["rev-parse", "--git-path", "info/exclude"], {
-        cwd: workspace,
-        encoding: "utf-8",
-        stdio: ["ignore", "pipe", "ignore"],
-      }).trim();
-      if (out) {
-        excludePath = path.isAbsolute(out) ? out : path.resolve(workspace, out);
-      }
-    } catch {
-      // Fallback if git binary or rev-parse fails
-      const candidate = path.join(workspace, ".git", "info", "exclude");
-      if (fs.existsSync(path.dirname(candidate))) {
-        excludePath = candidate;
-      }
-    }
-
-    if (!excludePath) return;
-
-    if (fs.existsSync(excludePath)) {
-      const content = fs.readFileSync(excludePath, "utf-8");
-      const rules = new Set(content.split(/\r?\n/).map((line) => line.trim()));
-      // Match whole rules, not substrings: a comment or an unrelated pattern that merely mentions
-      // `.nexus` must not suppress the ignore rule (then `/commit`'s `git add -A` could stage state).
-      const hasRule = (rule: string): boolean => rules.has(rule) || rules.has(`/${rule}`);
-      const linesToAdd: string[] = [];
-      if (!hasRule(".nexus/") && !hasRule(".nexus")) {
-        linesToAdd.push(".nexus/");
-      }
-      if (!hasRule(".nexus/worktrees/") && !hasRule(".nexus/worktrees")) {
-        linesToAdd.push(".nexus/worktrees/");
-      }
-      if (!hasRule(".nexus/flights/") && !hasRule(".nexus/flights")) {
-        linesToAdd.push(".nexus/flights/");
-      }
-      if (linesToAdd.length > 0) {
-        const prefix = content.endsWith("\n") || content.length === 0 ? "" : "\n";
-        fs.appendFileSync(excludePath, prefix + linesToAdd.join("\n") + "\n");
-      }
-    } else {
-      const infoDir = path.dirname(excludePath);
-      if (fs.existsSync(path.dirname(infoDir))) {
-        fs.mkdirSync(infoDir, { recursive: true });
-        fs.writeFileSync(excludePath, ".nexus/\n.nexus/worktrees/\n.nexus/flights/\n");
-      }
+    const out = execFileSync("git", ["rev-parse", "--git-path", "info/exclude"], {
+      cwd: workspace,
+      encoding: "utf-8",
+      stdio: ["ignore", "pipe", "ignore"],
+    }).trim();
+    if (out) {
+      excludePath = path.isAbsolute(out) ? out : path.resolve(workspace, out);
     }
   } catch {
-    // Ignore git exclude configuration errors
+    // Fall back only when an info/exclude file is already available without Git.
+    const candidate = path.join(workspace, ".git", "info", "exclude");
+    if (fs.existsSync(path.dirname(candidate))) {
+      excludePath = candidate;
+    }
+  }
+
+  if (!excludePath) return;
+
+  const infoDir = path.dirname(excludePath);
+  fs.mkdirSync(infoDir, { recursive: true });
+  if (!fs.existsSync(excludePath)) fs.writeFileSync(excludePath, "");
+
+  const protectedPaths = [
+    { path: ".nexus/", rule: ".nexus/" },
+    { path: ".nexus/worktrees/__nexus_ignore_probe__", rule: ".nexus/worktrees/" },
+    { path: ".nexus/flights/__nexus_ignore_probe__", rule: ".nexus/flights/" },
+  ];
+  const isIgnored = (relativePath: string): boolean => {
+    try {
+      execFileSync("git", ["check-ignore", "--quiet", "--no-index", "--", relativePath], {
+        cwd: workspace,
+        stdio: "ignore",
+      });
+      return true;
+    } catch (error) {
+      if (typeof error === "object" && error !== null && "status" in error && error.status === 1) {
+        return false;
+      }
+      throw new Error(`Could not verify whether ${relativePath} is ignored by Git`, { cause: error });
+    }
+  };
+
+  for (const { path: relativePath, rule } of protectedPaths) {
+    const content = fs.readFileSync(excludePath, "utf-8");
+    const rules = new Set(content.split(/\r?\n/));
+    const hasExactRule = rules.has(rule) || rules.has(`/${rule}`);
+    if (hasExactRule && isIgnored(relativePath)) continue;
+
+    const prefix = content.length === 0 || content.endsWith("\n") ? "" : "\n";
+    fs.appendFileSync(excludePath, `${prefix}${rule}\n`);
+    if (!isIgnored(relativePath)) {
+      throw new Error(`Git still does not ignore ${relativePath} after updating info/exclude`);
+    }
   }
 }
