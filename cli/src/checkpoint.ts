@@ -203,6 +203,7 @@ export class CheckpointManager {
       if (stat.isSymbolicLink()) {
         const linkTarget = fs.readlinkSync(sourcePath);
         if (!allowSensitive) assertNoSensitivePersistenceContent(linkTarget, "checkpoint");
+        if (fs.lstatSync(targetPath, { throwIfNoEntry: false })) fs.rmSync(targetPath, { force: true });
         fs.symlinkSync(linkTarget, targetPath);
       } else if (stat.isFile()) {
         const content = fs.readFileSync(sourcePath);
@@ -243,21 +244,40 @@ export class CheckpointManager {
     }
   }
 
-  private assertFallbackSnapshotSafe(workspacePath: string, allowSensitive: boolean): void {
+  private workspaceSnapshotPaths(root: string): string[] {
     const ignored = new Set(["node_modules", ".git", "target", "dist", ".nexus", ".next", ".cache"]);
-    const visit = (directory: string): void => {
+    const paths: string[] = [];
+    const visit = (directory: string, relative: string): void => {
       for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
         if (ignored.has(entry.name)) continue;
-        if (!allowSensitive) assertNoSensitivePersistenceContent(entry.name, "checkpoint");
-        const sourcePath = path.join(directory, entry.name);
+        const entryPath = relative ? `${relative}/${entry.name}` : entry.name;
+        if (entry.isDirectory()) visit(path.join(directory, entry.name), entryPath);
+        else if (entry.isFile() || entry.isSymbolicLink()) paths.push(entryPath);
+      }
+    };
+    visit(root, "");
+    return paths;
+  }
+
+  private removeNonSnapshotEntries(snapshotFiles: string[]): void {
+    const retained = new Set(snapshotFiles);
+    const ignored = new Set(["node_modules", ".git", "target", "dist", ".nexus", ".next", ".cache"]);
+    const visit = (directory: string, relative: string): void => {
+      for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
+        if (ignored.has(entry.name)) continue;
+        const entryPath = relative ? `${relative}/${entry.name}` : entry.name;
+        const fullPath = path.join(directory, entry.name);
         if (entry.isDirectory()) {
-          visit(sourcePath);
-        } else if (entry.isFile()) {
-          if (!allowSensitive) assertNoSensitivePersistenceContent(fs.readFileSync(sourcePath, "utf8"), "checkpoint");
+          visit(fullPath, entryPath);
+          if (fs.readdirSync(fullPath).length === 0 && ![...retained].some((file) => file.startsWith(entryPath + "/"))) {
+            fs.rmdirSync(fullPath);
+          }
+        } else if (!retained.has(entryPath)) {
+          fs.rmSync(fullPath, { force: true });
         }
       }
     };
-    visit(workspacePath);
+    visit(this.workspace, "");
   }
 
   public createCheckpoint(name?: string, options: { allowSensitive?: boolean } = {}): CheckpointInfo {
@@ -325,8 +345,9 @@ export class CheckpointManager {
         if (gitRef) {
           this.copyUntrackedEntries(untrackedPaths, this.workspace, snapTarget, allowSensitive);
         } else {
-          this.assertFallbackSnapshotSafe(this.workspace, allowSensitive);
-          this.copyDirFiltered(this.workspace, snapTarget, allowSensitive);
+          untrackedPaths = this.workspaceSnapshotPaths(this.workspace);
+          this.assertUntrackedEntriesSafe(untrackedPaths, this.workspace, allowSensitive);
+          this.copyUntrackedEntries(untrackedPaths, this.workspace, snapTarget, allowSensitive);
         }
         snapshotDir = snapTarget;
       } catch (error) {
@@ -346,7 +367,7 @@ export class CheckpointManager {
       gitRef,
       snapshotDir,
       ...(allowSensitive ? { allowSensitive: true } : {}),
-      ...(this.isGit ? { untrackedFiles: untrackedPaths } : {}),
+      ...(this.isGit || snapshotDir ? { untrackedFiles: untrackedPaths } : {}),
     };
 
     const targetFile = path.join(this.checkpointDir, `${id}.json`);
@@ -587,9 +608,21 @@ export class CheckpointManager {
         return { success: true, message: `Restored tracked workspace to checkpoint '${cp.name}' (${cp.id}); legacy untracked files were not captured and were left unchanged` };
       }
 
+      if (cp.snapshotDir && cp.untrackedFiles !== undefined) {
+        try {
+          this.assertUntrackedSnapshotSafe(cp.untrackedFiles, cp.snapshotDir, cp.allowSensitive === true);
+          this.assertUntrackedDestinationSafe([...cp.untrackedFiles, ...this.workspaceSnapshotPaths(this.workspace)], this.workspace);
+        } catch {
+          return { success: false, message: `Rollback failed: checkpoint '${cp.id}' has an incomplete or unsafe snapshot or destination; workspace was not changed` };
+        }
+        this.removeNonSnapshotEntries(cp.untrackedFiles);
+        this.copyUntrackedEntries(cp.untrackedFiles, cp.snapshotDir, this.workspace, cp.allowSensitive === true);
+        return { success: true, message: `Restored workspace files from snapshot '${cp.name}' (${cp.id})` };
+      }
+
       if (cp.snapshotDir && fs.existsSync(cp.snapshotDir)) {
         this.copyDirFiltered(cp.snapshotDir, this.workspace, cp.allowSensitive === true);
-        return { success: true, message: `Restored workspace files from snapshot '${cp.name}' (${cp.id})` };
+        return { success: true, message: `Restored workspace files from legacy snapshot '${cp.name}' (${cp.id}); other entries were left unchanged` };
       }
 
       return { success: false, message: `Cannot restore checkpoint: no valid snapshot recorded.` };

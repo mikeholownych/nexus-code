@@ -272,3 +272,105 @@ test("untracked restore refuses an ignored destination parent symlink", () => {
     fs.rmSync(external, { recursive: true, force: true });
   }
 });
+
+test("non-Git restore removes post-checkpoint entries and preserves ignored paths", () => {
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-non-git-files-"));
+  const manager = new CheckpointManager(workspace);
+  try {
+    fs.writeFileSync(path.join(workspace, "a.txt"), "at checkpoint\n");
+    const checkpoint = manager.createCheckpoint("exact non-Git restore");
+    fs.writeFileSync(path.join(workspace, "b.txt"), "created later\n");
+    fs.mkdirSync(path.join(workspace, "node_modules"));
+    fs.writeFileSync(path.join(workspace, "node_modules", "keep.txt"), "ignored\n");
+    const result = manager.restore(checkpoint.id);
+    assert.equal(result.success, true, result.message);
+    assert.equal(fs.existsSync(path.join(workspace, "b.txt")), false);
+    assert.equal(fs.readFileSync(path.join(workspace, "node_modules", "keep.txt"), "utf8"), "ignored\n");
+  } finally {
+    fs.rmSync(manager.getCheckpointDir(), { recursive: true, force: true });
+    fs.rmSync(workspace, { recursive: true, force: true });
+  }
+});
+
+test("non-Git restore refuses an incomplete snapshot before changing the workspace", () => {
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-non-git-partial-"));
+  const manager = new CheckpointManager(workspace);
+  try {
+    fs.writeFileSync(path.join(workspace, "a.txt"), "captured\n");
+    fs.writeFileSync(path.join(workspace, "b.txt"), "also captured\n");
+    const checkpoint = manager.createCheckpoint("partial non-Git snapshot");
+    fs.rmSync(path.join(checkpoint.snapshotDir!, "a.txt"));
+    fs.writeFileSync(path.join(workspace, "b.txt"), "current work must survive\n");
+    const result = manager.restore(checkpoint.id);
+    assert.equal(result.success, false);
+    assert.match(result.message, /snapshot/i);
+    assert.equal(fs.readFileSync(path.join(workspace, "b.txt"), "utf8"), "current work must survive\n");
+  } finally {
+    fs.rmSync(manager.getCheckpointDir(), { recursive: true, force: true });
+    fs.rmSync(workspace, { recursive: true, force: true });
+  }
+});
+
+test("non-Git restore preserves symlinks without copying external targets", () => {
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-non-git-link-"));
+  const external = path.join(os.tmpdir(), `${path.basename(workspace)}-external.txt`);
+  const manager = new CheckpointManager(workspace);
+  try {
+    fs.writeFileSync(external, "external target\n");
+    fs.symlinkSync(external, path.join(workspace, "link.txt"));
+    const checkpoint = manager.createCheckpoint("non-Git symlink");
+    fs.rmSync(path.join(workspace, "link.txt"));
+    const result = manager.restore(checkpoint.id);
+    assert.equal(result.success, true, result.message);
+    assert.equal(fs.lstatSync(path.join(workspace, "link.txt")).isSymbolicLink(), true);
+    assert.equal(fs.readlinkSync(path.join(workspace, "link.txt")), external);
+    assert.equal(fs.lstatSync(path.join(checkpoint.snapshotDir!, "link.txt")).isSymbolicLink(), true);
+  } finally {
+    fs.rmSync(manager.getCheckpointDir(), { recursive: true, force: true });
+    fs.rmSync(workspace, { recursive: true, force: true });
+    fs.rmSync(external, { force: true });
+  }
+});
+
+test("legacy non-Git restore never deletes entries absent from old metadata", () => {
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-non-git-legacy-"));
+  const manager = new CheckpointManager(workspace);
+  try {
+    fs.writeFileSync(path.join(workspace, "a.txt"), "captured\n");
+    const checkpoint = manager.createCheckpoint("legacy non-Git snapshot");
+    const recordPath = path.join(manager.getCheckpointDir(), `${checkpoint.id}.json`);
+    const record = JSON.parse(fs.readFileSync(recordPath, "utf8"));
+    delete record.untrackedFiles;
+    fs.writeFileSync(recordPath, JSON.stringify(record));
+    fs.writeFileSync(path.join(workspace, "b.txt"), "must survive legacy restore\n");
+    const result = manager.restore(checkpoint.id);
+    assert.equal(result.success, true, result.message);
+    assert.match(result.message, /legacy/i);
+    assert.equal(fs.readFileSync(path.join(workspace, "b.txt"), "utf8"), "must survive legacy restore\n");
+  } finally {
+    fs.rmSync(manager.getCheckpointDir(), { recursive: true, force: true });
+    fs.rmSync(workspace, { recursive: true, force: true });
+  }
+});
+
+test("non-Git restore refuses an unsafe destination parent before copying", () => {
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-non-git-destination-"));
+  const external = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-non-git-external-"));
+  const manager = new CheckpointManager(workspace);
+  try {
+    fs.mkdirSync(path.join(workspace, "alias"));
+    fs.writeFileSync(path.join(workspace, "alias", "file.txt"), "captured\n");
+    const checkpoint = manager.createCheckpoint("unsafe non-Git destination");
+    fs.rmSync(path.join(workspace, "alias"), { recursive: true });
+    fs.symlinkSync(external, path.join(workspace, "alias"));
+    fs.writeFileSync(path.join(external, "file.txt"), "external canary\n");
+    const result = manager.restore(checkpoint.id);
+    assert.equal(result.success, false);
+    assert.match(result.message, /destination|unsafe/i);
+    assert.equal(fs.readFileSync(path.join(external, "file.txt"), "utf8"), "external canary\n");
+  } finally {
+    fs.rmSync(manager.getCheckpointDir(), { recursive: true, force: true });
+    fs.rmSync(workspace, { recursive: true, force: true });
+    fs.rmSync(external, { recursive: true, force: true });
+  }
+});
