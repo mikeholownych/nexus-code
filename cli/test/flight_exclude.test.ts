@@ -113,6 +113,25 @@ describe("ACC-PER-05: Flight Logs & Telemetry Git Exclude (REQ-PER-105)", () => 
     assert.equal(status, "", `Nexus state must remain ignored when info/exclude is unavailable; found:\n${status}`);
   });
 
+  test("a subdirectory workspace protects root worktree state when Git metadata is unavailable", () => {
+    const workspace = path.join(gitRepoDir, "packages", "app");
+    fs.mkdirSync(workspace, { recursive: true });
+    const excludePath = path.resolve(gitRepoDir, ".git", "info", "exclude");
+    fs.writeFileSync(excludePath, "");
+    fs.chmodSync(excludePath, 0o444);
+
+    const manager = new WorktreeManager(workspace);
+    const created = manager.createWorktree("nested-workspace-exclude-test");
+    assert.equal(created.created, true);
+    assert.equal(fs.existsSync(path.join(gitRepoDir, ".nexus", ".gitignore")), true);
+    assert.equal(fs.existsSync(path.join(workspace, ".nexus", ".gitignore")), false);
+    execFileSync("git", ["check-ignore", "--quiet", "--no-index", ".nexus/worktrees/nested-workspace-exclude-test"], { cwd: gitRepoDir });
+
+    const status = execFileSync("git", ["status", "--porcelain"], { cwd: gitRepoDir, encoding: "utf8" }).trim();
+    assert.equal(status, "", `root worktree state must remain ignored; found:\n${status}`);
+    assert.equal(manager.discardWorktree("nested-workspace-exclude-test").success, true);
+  });
+
   test("an ineffective read-only self-ignore rule blocks flight state writes", () => {
     const nexusDir = path.join(gitRepoDir, ".nexus");
     fs.mkdirSync(nexusDir);
