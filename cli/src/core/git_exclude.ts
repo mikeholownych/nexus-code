@@ -1,7 +1,60 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { execFileSync } from "node:child_process";
-import { ensurePrivateDir } from "./durable_file.js";
+import { mkdirVerified, writeExclusiveVerified } from "../safe_fs.js";
+
+function openSelfIgnore(workspace: string, file: string, flags: number): number {
+  const noFollow = fs.constants.O_NOFOLLOW;
+  if (typeof noFollow !== "number") {
+    throw new Error("Cannot safely access .nexus/.gitignore without O_NOFOLLOW support");
+  }
+  const fd = fs.openSync(file, flags | noFollow | (fs.constants.O_NONBLOCK ?? 0));
+  try {
+    const stat = fs.fstatSync(fd);
+    if (!stat.isFile() || stat.nlink > 1) {
+      throw new Error("Refusing to access a non-file or hard-linked .nexus/.gitignore");
+    }
+    const expected = path.join(fs.realpathSync(workspace), path.relative(path.resolve(workspace), path.resolve(file)));
+    let descriptorPath: string | undefined;
+    try {
+      descriptorPath = fs.readlinkSync(`/proc/self/fd/${fd}`);
+    } catch {
+      // On platforms without /proc, verify the opened identity against the path.
+    }
+    if (descriptorPath !== undefined) {
+      if (descriptorPath !== expected) {
+        throw new Error(".nexus/.gitignore changed location while it was being opened");
+      }
+    } else {
+      const named = fs.lstatSync(file);
+      if (named.isSymbolicLink() || named.dev !== stat.dev || named.ino !== stat.ino || fs.realpathSync(file) !== expected) {
+        throw new Error(".nexus/.gitignore changed while it was being opened");
+      }
+    }
+    return fd;
+  } catch (error) {
+    fs.closeSync(fd);
+    throw error;
+  }
+}
+
+function readSelfIgnore(workspace: string, file: string): string {
+  const fd = openSelfIgnore(workspace, file, fs.constants.O_RDONLY);
+  try {
+    return fs.readFileSync(fd, "utf-8");
+  } finally {
+    fs.closeSync(fd);
+  }
+}
+
+function appendSelfIgnore(workspace: string, file: string, content: string): void {
+  const fd = openSelfIgnore(workspace, file, fs.constants.O_WRONLY | fs.constants.O_APPEND);
+  try {
+    fs.writeSync(fd, content);
+  } finally {
+    fs.closeSync(fd);
+  }
+}
 
 /**
  * Ensures .nexus/ is ignored by Git in the workspace (REQ-PER-105).
@@ -30,39 +83,28 @@ export function ensureGitExclude(workspace: string): void {
   if (!excludePath) return;
 
   const nexusDir = path.join(workspace, ".nexus");
-  try {
-    const stat = fs.lstatSync(nexusDir);
-    if (stat.isSymbolicLink() || !stat.isDirectory()) {
-      throw new Error("Refusing to write Nexus state through a non-directory .nexus path");
-    }
-  } catch (error) {
-    if (typeof error === "object" && error !== null && "code" in error && error.code === "ENOENT") {
-      // The private directory is created below.
-    } else {
-      throw error;
-    }
-  }
-  ensurePrivateDir(nexusDir);
+  mkdirVerified(workspace, nexusDir);
   const nexusGitIgnore = path.join(nexusDir, ".gitignore");
   try {
-    const stat = fs.lstatSync(nexusGitIgnore);
-    if (stat.isSymbolicLink() || !stat.isFile()) {
-      throw new Error("Refusing to write through a non-file .nexus/.gitignore path");
-    }
-    if (stat.nlink > 1) {
-      throw new Error("Refusing to write through a hard-linked .nexus/.gitignore file");
-    }
+    // Open the existing file without following links and bind the descriptor to
+    // the expected repository path before reading it.
+    readSelfIgnore(workspace, nexusGitIgnore);
   } catch (error) {
     if (typeof error === "object" && error !== null && "code" in error && error.code === "ENOENT") {
-      fs.writeFileSync(nexusGitIgnore, "*\n", { mode: 0o600 });
+      try {
+        writeExclusiveVerified(workspace, nexusGitIgnore, "*\n");
+      } catch (createError) {
+        // Another safe creator may have won the exclusive-create race. Any
+        // link or redirected parent still fails in readSelfIgnore below.
+        if (typeof createError !== "object" || createError === null || !("code" in createError) || createError.code !== "EEXIST") {
+          throw createError;
+        }
+      }
     } else {
       throw error;
     }
   }
-  if (!fs.existsSync(nexusGitIgnore)) {
-    fs.writeFileSync(nexusGitIgnore, "*\n", { mode: 0o600 });
-  }
-  const ignoreContent = fs.readFileSync(nexusGitIgnore, "utf-8");
+  const ignoreContent = readSelfIgnore(workspace, nexusGitIgnore);
   const lastRule = ignoreContent
     .split(/\r?\n/)
     .map((line) => line.trimEnd())
@@ -70,7 +112,7 @@ export function ensureGitExclude(workspace: string): void {
     .at(-1);
   if (lastRule !== "*") {
     const prefix = ignoreContent.length === 0 || ignoreContent.endsWith("\n") ? "" : "\n";
-    fs.appendFileSync(nexusGitIgnore, `${prefix}*\n`);
+    appendSelfIgnore(workspace, nexusGitIgnore, `${prefix}*\n`);
   }
 
   const isIgnored = (relativePath: string): boolean => {
