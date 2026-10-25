@@ -105,7 +105,7 @@ export const SLASH_COMMANDS: SlashSpec[] = [
   { name: "worktree", usage: "/worktree [status|merge|discard]", summary: "Manage the speculative git worktree" },
   { name: "audit", usage: "/audit [count]", summary: "Recent tool executions" },
   { name: "receipt", usage: "/receipt", summary: "Turn outcome, verifier evidence and validation receipt" },
-  { name: "test", usage: "/test [pattern]", summary: "Run the project's test suite" },
+  { name: "test", usage: "/test [pattern]", summary: "Run the project's test suite", cancellable: true },
   { name: "copy", usage: "/copy [diff|code|last]", summary: "Copy the diff, code blocks or the last reply" },
   { name: "paste", usage: "/paste", summary: "Put the clipboard into the composer" },
   { name: "sessions", usage: "/sessions", summary: "Saved sessions" },
