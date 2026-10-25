@@ -18,7 +18,7 @@ command -v curl >/dev/null 2>&1 || fail "curl is required."
 command -v tar >/dev/null 2>&1 || fail "tar is required."
 command -v sha256sum >/dev/null 2>&1 || fail "sha256sum is required."
 
-VERIFY_ATTESTATION=${NEXUS_VERIFY_ATTESTATION:-auto}
+VERIFY_ATTESTATION=${NEXUS_VERIFY_ATTESTATION-auto}
 case "$VERIFY_ATTESTATION" in
   auto|0|1) ;;
   *) fail "NEXUS_VERIFY_ATTESTATION must be auto (verify when a trusted GitHub CLI is present), 1 (require verification) or 0 (skip verification)." ;;

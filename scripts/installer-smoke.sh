@@ -66,6 +66,13 @@ if NEXUS_VERSION="$VERSION" NEXUS_PREFIX="$TMP/invalid-mode" \
   exit 1
 fi
 grep -F "NEXUS_VERIFY_ATTESTATION must be" "$TMP/invalid-mode.out" >/dev/null
+if NEXUS_VERSION="$VERSION" NEXUS_PREFIX="$TMP/empty-mode" \
+  NEXUS_RELEASE_BASE_URL="http://127.0.0.1:$PORT" NEXUS_VERIFY_ATTESTATION= \
+  sh "$INSTALLER" > "$TMP/empty-mode.out" 2>&1; then
+  echo "installer treated an explicitly empty attestation mode as auto" >&2
+  exit 1
+fi
+grep -F "NEXUS_VERIFY_ATTESTATION must be" "$TMP/empty-mode.out" >/dev/null
 cat > "$TMP/trusted/usr/bin/gh" <<'EOF'
 #!/bin/sh
 exit 1

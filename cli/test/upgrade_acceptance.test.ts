@@ -464,13 +464,16 @@ describe("Public Release Upgrade Acceptance (REQ-REL-116, ACC-UPG-07..14)", () =
     const comparison = compareInstallationWithRelease(installed, target);
 
     const savedAttestation = process.env.NEXUS_VERIFY_ATTESTATION;
-    process.env.NEXUS_VERIFY_ATTESTATION = "yes";
     try {
-      await assert.rejects(
-        performUpgrade(comparison, { prefix: tmpPrefix, timeoutMs: 5000, trustedGhPaths: [] }),
-        /NEXUS_VERIFY_ATTESTATION must be auto/,
-      );
-      assert.equal(readJournal(tmpPrefix), null, "an invalid setting must fail before starting the journal");
+      for (const value of ["yes", ""]) {
+        process.env.NEXUS_VERIFY_ATTESTATION = value;
+        await assert.rejects(
+          performUpgrade(comparison, { prefix: tmpPrefix, timeoutMs: 5000, trustedGhPaths: [] }),
+          /NEXUS_VERIFY_ATTESTATION must be auto/,
+          `an attestation setting of ${JSON.stringify(value)} must be rejected`,
+        );
+        assert.equal(readJournal(tmpPrefix), null, "an invalid setting must fail before starting the journal");
+      }
     } finally {
       if (savedAttestation === undefined) delete process.env.NEXUS_VERIFY_ATTESTATION;
       else process.env.NEXUS_VERIFY_ATTESTATION = savedAttestation;
