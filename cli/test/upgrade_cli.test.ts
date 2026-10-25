@@ -235,4 +235,57 @@ describe("CLI nexus upgrade command execution and exit codes", () => {
       fs.rmSync(tmp, { recursive: true, force: true });
     }
   });
+
+  describe("a shell NEXUS_VERIFY_ATTESTATION outranks config.env at CLI startup", () => {
+    function packagedInstallWithConfig(configValue: string): { tmp: string; env: Record<string, string> } {
+      const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-attest-cli-"));
+      const verDir = path.join(tmp, "lib", "nexus", "v0.1.0-alpha.2");
+      fs.mkdirSync(verDir, { recursive: true });
+      fs.writeFileSync(path.join(verDir, "VERSION"), "v0.1.0-alpha.2\n");
+      const home = path.join(tmp, "home");
+      fs.mkdirSync(path.join(home, ".config", "nexus"), { recursive: true });
+      fs.writeFileSync(path.join(home, ".config", "nexus", "config.env"), `NEXUS_VERIFY_ATTESTATION=${configValue}\n`);
+      const env: Record<string, string> = {};
+      for (const [key, value] of Object.entries(process.env)) if (value !== undefined) env[key] = value;
+      delete env.NEXUS_VERIFY_ATTESTATION;
+      Object.assign(env, {
+        HOME: home,
+        XDG_CONFIG_HOME: path.join(home, ".config"),
+        NEXUS_HOME: verDir,
+        NEXUS_RELEASES_API: `http://127.0.0.1:${port}/api/releases`,
+        NEXUS_RELEASE_BASE_URL: `http://127.0.0.1:${port}/download`,
+      });
+      return { tmp, env };
+    }
+
+    it("an invalid shell value is rejected even though config.env holds a valid one", async () => {
+      const { tmp, env } = packagedInstallWithConfig("0");
+      try {
+        const res = await runCliAsync(["upgrade", "--yes", "--prefix", path.join(tmp, "prefix")], {
+          env: { ...env, NEXUS_VERIFY_ATTESTATION: "yes" },
+        });
+        assert.equal(res.code, 2, res.stdout + res.stderr);
+        assert.match(res.stdout + res.stderr, /NEXUS_VERIFY_ATTESTATION must be auto/, "config.env replaced the shell value");
+      } finally {
+        fs.rmSync(tmp, { recursive: true, force: true });
+      }
+    });
+
+    it("shell =1 still requires provenance when config.env says =0", async (t) => {
+      if (["/usr/bin/gh", "/usr/local/bin/gh"].some((candidate) => fs.existsSync(candidate))) {
+        t.skip("a trusted gh is installed on this host, so the missing-gh refusal cannot be observed here");
+        return;
+      }
+      const { tmp, env } = packagedInstallWithConfig("0");
+      try {
+        const res = await runCliAsync(["upgrade", "--yes", "--prefix", path.join(tmp, "prefix")], {
+          env: { ...env, NEXUS_VERIFY_ATTESTATION: "1" },
+        });
+        assert.equal(res.code, 2, res.stdout + res.stderr);
+        assert.match(res.stdout + res.stderr, /Provenance attestation is required \(NEXUS_VERIFY_ATTESTATION=1\)/);
+      } finally {
+        fs.rmSync(tmp, { recursive: true, force: true });
+      }
+    });
+  });
 });
