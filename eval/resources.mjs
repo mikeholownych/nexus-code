@@ -82,7 +82,10 @@ export function resourceProbeProblem(resources) {
   let wrapped;
   try { wrapped = containedSpec({ cmd: "/usr/bin/true", argv: [] }, resources); }
   catch (error) { return error.message; }
-  const result = spawnSync(wrapped.cmd, wrapped.argv, { cwd: "/", env: wrapped.env, stdio: ["ignore", "ignore", "pipe", "pipe"], timeout: 15_000, encoding: "utf8" });
+  // The supervisor always opens fd 4 as its control channel, even when a probe never sends a
+  // signal. Keep the descriptor present so preflight exercises the same supervisor contract as
+  // spawnContained rather than failing before the resource check can report its result.
+  const result = spawnSync(wrapped.cmd, wrapped.argv, { cwd: "/", env: wrapped.env, stdio: ["ignore", "ignore", "pipe", "pipe", "pipe"], timeout: 15_000, encoding: "utf8" });
   const final = parseReports(result.output?.[3] ?? "").final;
   if (!final) return `resource probe produced no containment report (${result.error?.message ?? `exit ${result.status}`}: ${(result.stderr ?? "").trim().slice(-300)})`;
   if (final.error || !final.cleaned) return `resource probe failed: ${final.error ?? "payload not cleaned"}`;
