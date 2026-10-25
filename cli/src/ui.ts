@@ -3,6 +3,7 @@ import ora, { Ora } from "ora";
 import { TurnResult, summarizeTurn } from "./core/turn.js";
 import { highlightDiff, highlightCode } from "./syntax.js";
 import { InformationFlowBoundary } from "./core/egress.js";
+import { visibleControls } from "./file_diff.js";
 import { isNexusDirPermissive } from "./core/durable_file.js";
 
 export function redactSecrets(text: string): string {
@@ -23,6 +24,11 @@ export function redactSecrets(text: string): string {
     .replace(/((?:password|secret|token|api[_-]?key)["']?\s*[:=]\s*["']?)([^"' \s\n\r]{6,})(["']?)/gi, "$1[REDACTED]$3");
 }
 
+/** Text safe to write to a terminal: secrets redacted, then every terminal control/bidi character made visible. */
+function safeTerminal(text: string): string {
+  return visibleControls(redactSecrets(text));
+}
+
 export class TerminalUI {
   private spinner: Ora | null = null;
 
@@ -40,7 +46,7 @@ export class TerminalUI {
 
   startSpinner(text: string): void {
     this.spinner = ora({
-      text: pc.cyan(this.humanActivity(text)),
+      text: pc.cyan(safeTerminal(this.humanActivity(text))),
       spinner: "dots",
       // ora's default stdin discarding puts stdin in raw mode and leaves readline paused afterwards,
       // which kills the REPL prompt after the first agent turn.
@@ -52,16 +58,16 @@ export class TerminalUI {
 
   updateSpinner(text: string): void {
     if (this.spinner) {
-      this.spinner.text = pc.cyan(this.humanActivity(text));
+      this.spinner.text = pc.cyan(safeTerminal(this.humanActivity(text)));
     }
   }
 
   stopSpinner(success: boolean = true, message?: string): void {
     if (this.spinner) {
       if (success) {
-        this.spinner.succeed(message ? pc.green(message) : undefined);
+        this.spinner.succeed(message ? pc.green(safeTerminal(message)) : undefined);
       } else {
-        this.spinner.fail(message ? pc.red(message) : undefined);
+        this.spinner.fail(message ? pc.red(safeTerminal(message)) : undefined);
       }
       this.spinner = null;
     }
@@ -72,15 +78,16 @@ export class TerminalUI {
     console.log(pc.bold(pc.cyan("\n📋 Active Execution Plan:")));
     phases.forEach((p, idx) => {
       let icon = pc.gray("[ ]");
-      let nameStr = pc.white(p.name);
+      const safeName = safeTerminal(p.name);
+      let nameStr = pc.white(safeName);
       if (p.status === "completed") {
         icon = pc.green("[✔]");
-        nameStr = pc.strikethrough(pc.gray(p.name));
+        nameStr = pc.strikethrough(pc.gray(safeName));
       } else if (p.status === "in_progress") {
         icon = pc.yellow("[►]");
-        nameStr = pc.bold(pc.yellow(p.name));
+        nameStr = pc.bold(pc.yellow(safeName));
       }
-      const detailStr = p.detail ? pc.dim(` - ${p.detail}`) : "";
+      const detailStr = p.detail ? pc.dim(` - ${safeTerminal(p.detail)}`) : "";
       console.log(`  ${icon} ${idx + 1}. ${nameStr}${detailStr}`);
     });
     console.log();
@@ -89,7 +96,7 @@ export class TerminalUI {
   printThought(thought: string): void {
     if (process.env.NEXUS_DEBUG !== "1" || !thought || !thought.trim()) return;
     console.log(pc.bold(pc.magenta("\nModel rationale (unverified):")));
-    const sanitized = redactSecrets(thought.trim());
+    const sanitized = safeTerminal(thought.trim());
     const lines = sanitized.split("\n");
     for (const line of lines) {
       console.log(pc.gray("  │ ") + line);
@@ -99,12 +106,12 @@ export class TerminalUI {
 
   printToolCall(name: string, args: Record<string, any>): void {
     const subject = args.path ?? args.file_path ?? args.command ?? args.url ?? args.query ?? args.name ?? "";
-    console.log(pc.cyan("  · ") + pc.white(this.humanTool(name)) + (subject ? pc.dim(`  ${redactSecrets(String(subject)).replace(/\s+/g, " ").slice(0, 100)}`) : ""));
+    console.log(pc.cyan("  · ") + pc.white(safeTerminal(this.humanTool(name))) + (subject ? pc.dim(`  ${safeTerminal(String(subject)).replace(/\s+/g, " ").slice(0, 100)}`) : ""));
   }
 
   printToolResult(toolName: string, success: boolean, output: string, error?: string): void {
     if (success) {
-      const compact = redactSecrets(output).trim();
+      const compact = safeTerminal(output).trim();
       const first = compact.split(/\r?\n/).find((line) => line.trim())?.trim() ?? "Completed";
       const count = compact ? `${compact.split(/\r?\n/).length} lines` : "no output";
       const material = /^(write|edit|patch|delete|move|commit|stage)/i.test(toolName) ? pc.cyan("change") : pc.green("done");
@@ -112,19 +119,19 @@ export class TerminalUI {
       if (compact.length > 180 || compact.split(/\r?\n/).length > 2) console.log(pc.dim("    Full output retained in session evidence; use /tui and open this activity."));
     } else {
       console.log(pc.bold(pc.red("✖ Tool Error:")));
-      console.log(pc.red(`  ${redactSecrets(error || output)}`));
+      console.log(pc.red(`  ${safeTerminal(error || output)}`));
     }
     console.log();
   }
 
   renderDiff(diffText: string): void {
-    const sanitized = redactSecrets(diffText);
+    const sanitized = safeTerminal(diffText);
     const highlighted = highlightDiff(sanitized);
     console.log(highlighted);
   }
 
   renderCode(code: string, lang?: string, showLineNumbers: boolean = true): void {
-    const sanitized = redactSecrets(code);
+    const sanitized = safeTerminal(code);
     console.log(highlightCode(sanitized, lang, { showLineNumbers }));
   }
 
@@ -151,17 +158,17 @@ export class TerminalUI {
     const verifierFailed = result.execution === "COMPLETED" && (result.reason === "VERIFIER_FAILED" || result.reason === "VERIFIER_TIMED_OUT");
     const caution = !verifierFailed && (result.execution === "COMPLETED" || result.execution === "INTERRUPTED" || result.execution === "LIMIT_REACHED");
     const paint = verified ? pc.green : caution ? pc.yellow : pc.red;
-    console.log(`\n${paint(pc.bold(`${verified ? "✓" : caution ? "!" : "×"} ${heading}`))}  ${pc.dim(line)}`);
+    console.log(`\n${paint(pc.bold(safeTerminal(`${verified ? "✓" : caution ? "!" : "×"} ${heading}`)))}  ${pc.dim(safeTerminal(line))}`);
     if (result.inferenceFailure) {
       const f = result.inferenceFailure;
-      console.log(pc.red(`Inference ${f.kind} (origin: ${f.origin}${f.httpStatus ? `, HTTP ${f.httpStatus}` : ""}): ${redactSecrets(f.message).slice(0, 300)}`));
+      console.log(pc.red(`Inference ${f.kind} (origin: ${safeTerminal(f.origin)}${f.httpStatus ? `, HTTP ${f.httpStatus}` : ""}): ${safeTerminal(f.message).slice(0, 300)}`));
     }
     if (modelSummary && result.execution === "COMPLETED") {
       console.log(pc.bold(pc.white("\nModel-reported summary (not independently verified):")));
-      console.log(redactSecrets(modelSummary.summary));
+      console.log(safeTerminal(modelSummary.summary));
       if (modelSummary.notes && modelSummary.notes.trim()) {
         console.log(pc.bold(pc.yellow("\nNotes:")));
-        console.log(redactSecrets(modelSummary.notes));
+        console.log(safeTerminal(modelSummary.notes));
       }
     }
     console.log();
