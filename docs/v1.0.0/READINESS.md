@@ -1,16 +1,16 @@
 # v1.0.0 release readiness checkpoint
 
-## Current release checkpoint (observed 2026-10-25 23:02 UTC at `ed7232318167eed787f173538c29d5eec3204c20`)
+## Current release checkpoint (observed 2026-10-25 23:07 UTC at `ed7232318167eed787f173538c29d5eec3204c20`)
 
 **Release state:** GitHub lists `v1.0.0-rc.6` as the latest published prerelease. It is not an accepted RC; no stable `v1.0.0` release is claimed. The RC7 candidate remains a PR and has not been published.
 
-**Exact `main` source gates:** `origin/main` is `ed7232318167eed787f173538c29d5eec3204c20` (merge of PR #242). CodeQL run [40240003918](https://github.com/mikeholownych/nexus-code/actions/runs/40240003918) passed on that exact SHA. CI run [40240003952](https://github.com/mikeholownych/nexus-code/actions/runs/40240003952) is still running on the same SHA: Node 22 and Node 24 jobs passed; `linux-x86_64` remains in progress at package/reproducibility checks. These are source-CI results and do not qualify an installed release artifact.
+**Exact `main` source gates:** `origin/main` is `ed7232318167eed787f173538c29d5eec3204c20` (merge of PR #242). CodeQL run [40240003918](https://github.com/mikeholownych/nexus-code/actions/runs/40240003918) and CI run [40240003952](https://github.com/mikeholownych/nexus-code/actions/runs/40240003952) both passed on that exact SHA, including the Node 22/24 test matrix and Linux packaging/reproducibility/installer checks. These are source-CI results and do not qualify an installed release artifact.
 
-**Open candidate PRs (separate revisions):** PR #241 proposes RC7 at `d18cd95ec085c4ab2b42465c4212176f9c884405`, based on `ed723231`. Its Node 22, Node 24, and CodeQL checks passed; its Linux packaging/reproducibility job remains in progress. PR #243 proposes the checkpoint-lock diagnostic fix at `f6057abfb52f2f481280f569c706fcac9e0967c7`, also based on `ed723231`; CodeQL passed, and Node 22 and Node 24 test jobs remain in progress. The independent source review is recorded as ACCEPT. Do not combine these PR results with current-main CI or claim either candidate integrated.
+**Open candidate PRs (separate revisions):** PR #241 proposes RC7 at `d18cd95ec085c4ab2b42465c4212176f9c884405`, based on `ed723231`. Its Node 22, Node 24, and CodeQL checks passed; its Linux packaging/reproducibility job remains in progress. PR #243 proposes the checkpoint-lock diagnostic fix at `f6057abfb52f2f481280f569c706fcac9e0967c7`, also based on `ed723231`; CodeQL passed, and Node 22 and Node 24 test jobs remain in progress. A fresh independent source review ACCEPTed PR #243 at this exact head. Do not combine these PR results with current-main CI or claim either candidate integrated.
 
 **Qualification and human evidence:** Public Issue [#1](https://github.com/mikeholownych/nexus-code/issues/1) remains open; its latest comment is the coordinator's metadata-only request at 2026-10-25 06:51:23 UTC, with no custodian response recorded. No held-out qualification is evidenced here. The terminal worksheet still has all 15 cells blank; the five-environment by three-size manual matrix is pending an eligible exact RC and genuine operator evidence. Acceptance remains `IN_PROGRESS`; independent exact-RC acceptance and stable-release gates are incomplete.
 
-**Next evidence:** Finish the exact-main Linux CI job and the candidate PR checks on their own SHAs; reconcile the held-out custody request; then continue qualification against the eligible, installed RC. Keep source gates, RC construction, installed-RC qualification, and stable-release checks distinct.
+**Next evidence:** Finish the candidate PR checks on their own SHAs; reconcile the held-out custody request; then continue qualification against the eligible, installed RC. Keep source gates, RC construction, installed-RC qualification, and stable-release checks distinct.
 
 ## Current release convergence status (observed 2026-10-23 13:35 UTC at `1f3c655`)
 
