@@ -542,7 +542,9 @@ export class SidecarServer {
             checkpoint,
             allowSensitiveCheckpoint ? { allowSensitive: true } : undefined,
           );
+          const previousApprovalMode = agent.getApprovalMode();
           agent.setCheckpointReadOnlyFallback(false);
+          if (agent.getApprovalMode() !== previousApprovalMode) this.emitSessionState();
           checkpointReady = true;
         } catch (err) {
           const sensitiveContentBlocked = err instanceof SensitivePersistenceError;
@@ -570,7 +572,9 @@ export class SidecarServer {
             this.emitSessionState();
             checkpointReady = true;
           } else if (choice === "without_checkpoint") {
+            const previousApprovalMode = agent.getApprovalMode();
             agent.setCheckpointReadOnlyFallback(false);
+            if (agent.getApprovalMode() !== previousApprovalMode) this.emitSessionState();
             this.emit({ type: "notice", text: "Continuing in the current mode without a rollback checkpoint, as requested." });
             checkpointReady = true;
           } else if (choice === "allow_sensitive") {

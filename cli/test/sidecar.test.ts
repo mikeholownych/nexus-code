@@ -416,6 +416,45 @@ describe("SidecarServer: sessions and slash commands", () => {
     });
   });
 
+  test("leaving read-only checkpoint fallback updates session authority before the next turn", async () => {
+    const replies = (n: number): Reply => n === 1
+      ? { kind: "text", content: "Read-only review complete." }
+      : n === 2
+        ? { kind: "tools", calls: [{ name: "write_file", args: { path: "recovered.txt", content: "authorized after choice" } }] }
+        : { kind: "text", content: "Write completed." };
+    let sidecarApp: any;
+    let observedModeAtSecondTurn: string | undefined;
+    await withSidecar((n) => {
+      if (n === 2) observedModeAtSecondTurn = sidecarApp.getAgent().getApprovalMode();
+      return replies(n);
+    }, "auto", async ({ events, repo, app, send }) => {
+      sidecarApp = app;
+      fs.writeFileSync(path.join(repo, "base.txt"), `changed ${`ghp_${"H".repeat(36)}`}\n`);
+
+      await send({ type: "prompt.submit", id: "t-fallback", text: "review the codebase" });
+      await waitUntil(() => events.some((event) => event.type === "checkpoint.choice.request"));
+      const firstChoice = events.find((event) => event.type === "checkpoint.choice.request");
+      await send({ type: "checkpoint.choice", id: firstChoice.id, choice: "read_only" });
+      await waitUntil(() => events.some((event) => event.type === "turn.result" && event.turn_id === "t-fallback"));
+      assert.equal(events.filter((event) => event.type === "session.state").at(-1)?.mode, "read-only");
+
+      await send({ type: "prompt.submit", id: "t-recover-authority", text: "write the reviewed fix" });
+      await waitUntil(() => events.filter((event) => event.type === "checkpoint.choice.request").length === 2);
+      const secondChoice = events.filter((event) => event.type === "checkpoint.choice.request")[1];
+      const recoveryStart = events.length;
+      await send({ type: "checkpoint.choice", id: secondChoice.id, choice: "without_checkpoint" });
+      await waitUntil(() => events.some((event) => event.type === "turn.result" && event.turn_id === "t-recover-authority"));
+
+      const recoveredEvents = events.slice(recoveryStart);
+      const restoredState = recoveredEvents.findIndex((event) => event.type === "session.state" && event.mode === "auto");
+      const writeStarted = recoveredEvents.findIndex((event) => event.type === "tool.start" && event.tool === "write_file");
+      assert.ok(restoredState >= 0, "session state reports restored auto authority");
+      assert.ok(writeStarted > restoredState, "restored authority is reported before the write tool starts");
+      assert.equal(observedModeAtSecondTurn, "auto");
+      assert.equal(fs.readFileSync(path.join(repo, "recovered.txt"), "utf8"), "authorized after choice");
+    });
+  });
+
   test("operator can continue in the existing mode without a rollback checkpoint", async () => {
     await withSidecar(() => ({ kind: "text", content: "Review started." }), "review", async ({ server, events, repo, app, send }) => {
       fs.writeFileSync(path.join(repo, "base.txt"), `changed ${`ghp_${"B".repeat(36)}`}\n`);
