@@ -416,6 +416,45 @@ describe("SidecarServer: sessions and slash commands", () => {
     });
   });
 
+  test("leaving read-only checkpoint fallback updates session authority before the next turn", async () => {
+    const replies = (n: number): Reply => n === 1
+      ? { kind: "text", content: "Read-only review complete." }
+      : n === 2
+        ? { kind: "tools", calls: [{ name: "write_file", args: { path: "recovered.txt", content: "authorized after choice" } }] }
+        : { kind: "text", content: "Write completed." };
+    let sidecarApp: any;
+    let observedModeAtSecondTurn: string | undefined;
+    await withSidecar((n) => {
+      if (n === 2) observedModeAtSecondTurn = sidecarApp.getAgent().getApprovalMode();
+      return replies(n);
+    }, "auto", async ({ events, repo, app, send }) => {
+      sidecarApp = app;
+      fs.writeFileSync(path.join(repo, "base.txt"), `changed ${`ghp_${"H".repeat(36)}`}\n`);
+
+      await send({ type: "prompt.submit", id: "t-fallback", text: "review the codebase" });
+      await waitUntil(() => events.some((event) => event.type === "checkpoint.choice.request"));
+      const firstChoice = events.find((event) => event.type === "checkpoint.choice.request");
+      await send({ type: "checkpoint.choice", id: firstChoice.id, choice: "read_only" });
+      await waitUntil(() => events.some((event) => event.type === "turn.result" && event.turn_id === "t-fallback"));
+      assert.equal(events.filter((event) => event.type === "session.state").at(-1)?.mode, "read-only");
+
+      await send({ type: "prompt.submit", id: "t-recover-authority", text: "write the reviewed fix" });
+      await waitUntil(() => events.filter((event) => event.type === "checkpoint.choice.request").length === 2);
+      const secondChoice = events.filter((event) => event.type === "checkpoint.choice.request")[1];
+      const recoveryStart = events.length;
+      await send({ type: "checkpoint.choice", id: secondChoice.id, choice: "without_checkpoint" });
+      await waitUntil(() => events.some((event) => event.type === "turn.result" && event.turn_id === "t-recover-authority"));
+
+      const recoveredEvents = events.slice(recoveryStart);
+      const restoredState = recoveredEvents.findIndex((event) => event.type === "session.state" && event.mode === "auto");
+      const writeStarted = recoveredEvents.findIndex((event) => event.type === "tool.start" && event.tool === "write_file");
+      assert.ok(restoredState >= 0, "session state reports restored auto authority");
+      assert.ok(writeStarted > restoredState, "restored authority is reported before the write tool starts");
+      assert.equal(observedModeAtSecondTurn, "auto");
+      assert.equal(fs.readFileSync(path.join(repo, "recovered.txt"), "utf8"), "authorized after choice");
+    });
+  });
+
   test("operator can continue in the existing mode without a rollback checkpoint", async () => {
     await withSidecar(() => ({ kind: "text", content: "Review started." }), "review", async ({ server, events, repo, app, send }) => {
       fs.writeFileSync(path.join(repo, "base.txt"), `changed ${`ghp_${"B".repeat(36)}`}\n`);
@@ -456,6 +495,103 @@ describe("SidecarServer: sessions and slash commands", () => {
       const persisted = execFileSync("git", ["show", `${checkpoint.gitRef}:base.txt`], { cwd: repo, encoding: "utf8" });
       assert.equal(persisted.includes(sensitiveMarker), true);
       assert.ok(events.some((event) => event.type === "notice" && /may persist sensitive workspace content/.test(event.text)));
+    });
+  });
+
+  test("checkpoint failure after sensitive persistence consent asks how to proceed", async () => {
+    let modelCalls = 0;
+    await withSidecar(() => {
+      modelCalls += 1;
+      return { kind: "text", content: "Review started." };
+    }, "auto", async ({ events, repo, app, send }) => {
+      const sensitiveMarker = `ghp_${"G".repeat(36)}`;
+      fs.writeFileSync(path.join(repo, "base.txt"), `changed ${sensitiveMarker}\n`);
+      const checkpointManager = app.getCheckpointManager() as any;
+      const createCheckpoint = checkpointManager.createCheckpoint.bind(checkpointManager);
+      let attempts = 0;
+      checkpointManager.createCheckpoint = (name: string, options?: { allowSensitive?: boolean }) => {
+        attempts += 1;
+        if (options?.allowSensitive) {
+          throw new Error("Checkpoint could not verify protected Git state; no checkpoint was written");
+        }
+        return createCheckpoint(name, options);
+      };
+
+      await send({ type: "prompt.submit", id: "t-sensitive-checkpoint-failure", text: "review the codebase" });
+      await waitUntil(() => events.some((event) => event.type === "checkpoint.choice.request"));
+      const initialChoice = events.find((event) => event.type === "checkpoint.choice.request");
+      await send({ type: "checkpoint.choice", id: initialChoice.id, choice: "allow_sensitive" });
+
+      await waitUntil(() => events.some((event) => event.type === "notice" && /Retrying checkpoint with sensitive persistence allowed/.test(event.text)));
+      await waitUntil(() => events.filter((event) => event.type === "checkpoint.choice.request").length === 2);
+      const recoveryChoice = events.filter((event) => event.type === "checkpoint.choice.request")[1];
+      assert.match(recoveryChoice.message, /protected Git state.*No checkpoint was written/);
+      assert.match(recoveryChoice.message, /2 continue without a rollback checkpoint/);
+      assert.equal(modelCalls, 0, "the turn must remain unstarted while awaiting an explicit recovery choice");
+
+      await send({ type: "checkpoint.choice", id: recoveryChoice.id, choice: "without_checkpoint" });
+      await waitUntil(() => events.some((event) => event.type === "turn.result" && event.turn_id === "t-sensitive-checkpoint-failure"));
+      assert.equal(attempts, 2);
+      assert.ok(modelCalls > 0, "the explicitly authorized turn should proceed");
+      assert.equal(app.getCheckpointManager().listCheckpoints().length, 0);
+      assert.ok(events.some((event) => event.type === "notice" && /without a rollback checkpoint, as requested/.test(event.text)));
+    });
+  });
+
+  test("an initial checkpoint failure offers read-only and no-checkpoint choices", async () => {
+    let modelCalls = 0;
+    await withSidecar(() => {
+      modelCalls += 1;
+      return { kind: "text", content: "Review started." };
+    }, "auto", async ({ events, app, send }) => {
+      const checkpointManager = app.getCheckpointManager() as any;
+      checkpointManager.createCheckpoint = () => {
+        throw new Error("Checkpoint could not verify protected Git state; no checkpoint was written");
+      };
+
+      await send({ type: "prompt.submit", id: "t-initial-checkpoint-failure", text: "review the codebase" });
+      await waitUntil(() => events.some((event) => event.type === "checkpoint.choice.request"));
+      const request = events.find((event) => event.type === "checkpoint.choice.request");
+      assert.match(request.message, /protected Git state.*No checkpoint was written/);
+      assert.equal(modelCalls, 0, "the turn must remain unstarted until the user chooses");
+
+      await send({ type: "checkpoint.choice", id: request.id, choice: "without_checkpoint" });
+      await waitUntil(() => events.some((event) => event.type === "turn.result" && event.turn_id === "t-initial-checkpoint-failure"));
+      assert.ok(modelCalls > 0, "the explicitly authorized turn should proceed");
+      assert.ok(events.some((event) => event.type === "notice" && /without a rollback checkpoint, as requested/.test(event.text)));
+    });
+  });
+
+  test("a normal checkpoint retry does not grant sensitive-persistence consent", async () => {
+    let modelCalls = 0;
+    await withSidecar(() => {
+      modelCalls += 1;
+      return { kind: "text", content: "Review started." };
+    }, "auto", async ({ events, app, send }) => {
+      const checkpointManager = app.getCheckpointManager() as any;
+      const createCheckpoint = checkpointManager.createCheckpoint.bind(checkpointManager);
+      let attempts = 0;
+      checkpointManager.createCheckpoint = (name: string, options?: { allowSensitive?: boolean }) => {
+        attempts += 1;
+        assert.equal(options, undefined, "normal retry must not opt in to sensitive persistence");
+        if (attempts === 1) throw new Error("Checkpoint could not verify protected Git state; no checkpoint was written");
+        return createCheckpoint(name, options);
+      };
+
+      await send({ type: "prompt.submit", id: "t-normal-checkpoint-retry", text: "review the codebase" });
+      await waitUntil(() => events.some((event) => event.type === "checkpoint.choice.request"));
+      const request = events.find((event) => event.type === "checkpoint.choice.request");
+      assert.match(request.message, /3 retry checkpoint normally/);
+      assert.doesNotMatch(request.message, /allowing sensitive persistence/);
+      await send({ type: "checkpoint.choice", id: request.id, choice: "allow_sensitive" });
+      await waitUntil(() => events.some((event) => event.type === "error" && event.id === request.id && event.code === "BAD_REQUEST"));
+      assert.equal(modelCalls, 0, "an unavailable choice must leave the turn paused");
+
+      await send({ type: "checkpoint.choice", id: request.id, choice: "retry" });
+      await waitUntil(() => events.some((event) => event.type === "turn.result" && event.turn_id === "t-normal-checkpoint-retry"));
+      assert.equal(attempts, 2);
+      assert.equal(modelCalls, 1);
+      assert.equal(app.getCheckpointManager().listCheckpoints().length, 1);
     });
   });
 

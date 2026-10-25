@@ -24,6 +24,7 @@ import { STEERING_PREFIX } from "./core/objective.js";
 /** Messages of a resumed conversation sent to the client, and the characters kept of each. */
 const HISTORY_ENTRIES = 60;
 const HISTORY_CHARS = 4000;
+type CheckpointChoice = "read_only" | "without_checkpoint" | "retry" | "allow_sensitive" | "cancel" | "other";
 
 function readOnlySlashAllowed(command: string, args: string): boolean {
   const spec = findSlash(command);
@@ -83,7 +84,7 @@ export class SidecarServer {
   private activeTurn?: Promise<void>;
   private turnAbort?: AbortController;
   private pendingApproval?: { id: string; settle: (approved: boolean) => void };
-  private pendingCheckpointChoice?: { id: string; settle: (choice: "read_only" | "without_checkpoint" | "allow_sensitive" | "cancel" | "other") => void };
+  private pendingCheckpointChoice?: { id: string; choices: readonly CheckpointChoice[]; settle: (choice: CheckpointChoice) => void };
   private approvalSeq = 0;
   private shutdownPromise?: Promise<void>;
   private readonly resume?: string;
@@ -535,12 +536,33 @@ export class SidecarServer {
       // Read-only turns cannot change the workspace, so a workspace rollback snapshot is unnecessary.
       agent.setCheckpointReadOnlyFallback(false);
     } else {
-      try {
-        this.checkpointManager.createCheckpoint(checkpoint);
-        agent.setCheckpointReadOnlyFallback(false);
-      } catch (err) {
-        if (err instanceof SensitivePersistenceError) {
-          const choice = await this.requestCheckpointChoice(turnId, signal);
+      let checkpointReady = false;
+      while (!checkpointReady) {
+        try {
+          this.checkpointManager.createCheckpoint(
+            checkpoint,
+            allowSensitiveCheckpoint ? { allowSensitive: true } : undefined,
+          );
+          const previousApprovalMode = agent.getApprovalMode();
+          agent.setCheckpointReadOnlyFallback(false);
+          if (agent.getApprovalMode() !== previousApprovalMode) this.emitSessionState();
+          checkpointReady = true;
+        } catch (err) {
+          const sensitiveContentBlocked = err instanceof SensitivePersistenceError;
+          const failure = capText(
+            redactSecrets(errorText(err))
+              .replace(/\s+/g, " ")
+              .trim()
+              .replace(/;\s*no checkpoint was written\.?$/i, ""),
+            100,
+          );
+          const message = sensitiveContentBlocked
+            ? undefined
+            : `Checkpoint failed: ${failure}. No checkpoint was written. Choose 1 read-only, 2 continue without a rollback checkpoint, 3 retry checkpoint normally, 4 cancel this turn, or 5 re-enter the instruction.`;
+          const choices: readonly CheckpointChoice[] = sensitiveContentBlocked
+            ? ["read_only", "without_checkpoint", "allow_sensitive", "cancel", "other"]
+            : ["read_only", "without_checkpoint", "retry", "cancel", "other"];
+          const choice = await this.requestCheckpointChoice(turnId, signal, message, choices);
           if (choice === "cancel" || choice === "other") {
             const message = choice === "other"
               ? "This turn was not started. Enter a different instruction in the composer."
@@ -552,27 +574,20 @@ export class SidecarServer {
             agent.setCheckpointReadOnlyFallback(true);
             this.emit({ type: "notice", text: "Continuing this turn in read-only mode as requested. Workspace changes, unsafe commands, external actions, and delegation are disabled." });
             this.emitSessionState();
+            checkpointReady = true;
           } else if (choice === "without_checkpoint") {
+            const previousApprovalMode = agent.getApprovalMode();
+            agent.setCheckpointReadOnlyFallback(false);
+            if (agent.getApprovalMode() !== previousApprovalMode) this.emitSessionState();
             this.emit({ type: "notice", text: "Continuing in the current mode without a rollback checkpoint, as requested." });
+            checkpointReady = true;
+          } else if (choice === "retry") {
+            this.emit({ type: "notice", text: "Retrying checkpoint without changing sensitive-persistence settings. The turn remains paused until the retry succeeds or you choose another option." });
           } else if (choice === "allow_sensitive") {
             allowSensitiveCheckpoint = true;
-            this.emit({ type: "notice", text: "Creating a checkpoint that may persist sensitive workspace content, as requested." });
+            this.emit({ type: "notice", text: "Retrying checkpoint with sensitive persistence allowed, as requested; this may persist sensitive workspace content. The turn will wait until the retry succeeds or you choose another option." });
           }
-        } else {
-          const message = `No checkpoint could be saved, so the turn did not start: ${redactSecrets(errorText(err))}`;
-          this.emit({ type: "error", id: turnId, code: "INTERNAL", message });
-          return;
         }
-      }
-    }
-    if (allowSensitiveCheckpoint) {
-      try {
-        this.checkpointManager.createCheckpoint(checkpoint, { allowSensitive: true });
-        agent.setCheckpointReadOnlyFallback(false);
-      } catch (err) {
-        const message = `No checkpoint could be saved, so the turn did not start: ${redactSecrets(errorText(err))}`;
-        this.emit({ type: "error", id: turnId, code: "INTERNAL", message });
-        return;
       }
     }
     if (typeof prompt === "string") {
@@ -658,31 +673,40 @@ export class SidecarServer {
     pending.settle(approved);
   }
 
-  private requestCheckpointChoice(turnId: string, signal: AbortSignal): Promise<"read_only" | "without_checkpoint" | "allow_sensitive" | "cancel" | "other"> {
+  private requestCheckpointChoice(
+    turnId: string,
+    signal: AbortSignal,
+    message = "Sensitive content blocked the checkpoint. Choose 1 read-only, 2 continue without a rollback checkpoint, 3 create a checkpoint anyway (may persist sensitive content), 4 cancel this turn, or 5 re-enter the instruction.",
+    choices: readonly CheckpointChoice[] = ["read_only", "without_checkpoint", "allow_sensitive", "cancel", "other"],
+  ): Promise<CheckpointChoice> {
     if (signal.aborted) return Promise.resolve("cancel");
     const id = `checkpoint-choice-${++this.approvalSeq}`;
     return new Promise((resolve) => {
-      const settle = (choice: "read_only" | "without_checkpoint" | "allow_sensitive" | "cancel" | "other") => {
+      const settle = (choice: CheckpointChoice) => {
         signal.removeEventListener("abort", onAbort);
         this.pendingCheckpointChoice = undefined;
         resolve(choice);
       };
       const onAbort = () => settle("cancel");
       signal.addEventListener("abort", onAbort, { once: true });
-      this.pendingCheckpointChoice = { id, settle };
+      this.pendingCheckpointChoice = { id, choices, settle };
       this.emit({
         type: "checkpoint.choice.request",
         id,
         turn_id: turnId,
-        message: "Sensitive content blocked the checkpoint. Choose 1 read-only, 2 continue without a rollback checkpoint, 3 create a checkpoint anyway (may persist sensitive content), 4 cancel this turn, or 5 re-enter the instruction.",
+        message,
       });
     });
   }
 
-  private resolveCheckpointChoice(id: string, choice: "read_only" | "without_checkpoint" | "allow_sensitive" | "cancel" | "other"): void {
+  private resolveCheckpointChoice(id: string, choice: CheckpointChoice): void {
     const pending = this.pendingCheckpointChoice;
     if (!pending || pending.id !== id) {
       this.emit({ type: "error", id, code: "NOT_FOUND", message: `No pending checkpoint choice with id ${id}.` });
+      return;
+    }
+    if (!pending.choices.includes(choice)) {
+      this.emit({ type: "error", id, code: "BAD_REQUEST", message: "That choice is not available for this checkpoint failure." });
       return;
     }
     pending.settle(choice);
