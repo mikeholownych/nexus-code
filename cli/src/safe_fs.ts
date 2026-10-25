@@ -11,8 +11,10 @@
  *    the expected path under the root's real path, and its device/inode must match what was diagnosed. A parent or
  *    final component swapped at any point before the open is therefore detected after the open.
  * 3. Mutation: `fchmod` on that descriptor, so a swap after the check cannot redirect the change. New directories and
- *    files are created exclusively (O_EXCL, O_NOFOLLOW) and verified the same way; anything created in an unexpected
- *    place is removed again through its verified real path and reported.
+ *    files are created exclusively (O_EXCL, O_NOFOLLOW) and verified the same way. File content is written only after
+ *    verification; if a parent is redirected during creation, the descriptor is closed and the error is reported.
+ *    Entries created before a failed verification are left untouched: removing them by pathname would allow a
+ *    replacement between verification and cleanup to redirect deletion to an unrelated file.
  */
 import * as fs from "node:fs";
 import * as path from "node:path";
@@ -141,7 +143,8 @@ export function chmodVerified(root: string, target: string, mode: number, expect
 
 /**
  * Creates `target` and any missing parents below `root` with mode 0700, one component at a time, verifying each.
- * Returns the components it created.
+ * Returns the components it created. If verification fails, created entries are left untouched; cleanup by pathname
+ * could follow a redirected parent and remove a replacement directory.
  */
 export function mkdirVerified(root: string, target: string): string[] {
   const problem = ancestryProblem(root, target);
@@ -156,27 +159,17 @@ export function mkdirVerified(root: string, target: string): string[] {
     } catch (err: any) {
       if (err?.code !== "EEXIST") throw err;
     }
-    const fd = (() => {
-      try {
-        return openVerified(root, current, "dir");
-      } catch (err) {
-        // A directory we just made somewhere unexpected (a parent was swapped): remove it again where it really is.
-        for (const made of created.reverse()) {
-          try {
-            fs.rmdirSync(fs.realpathSync(made));
-          } catch {}
-        }
-        throw err;
-      }
-    })();
+    const fd = openVerified(root, current, "dir");
     fs.closeSync(fd);
   }
   return created;
 }
 
 /**
- * Creates `file` exclusively (never through a link, never over an existing entry) with mode 0600, writes `content`,
- * and verifies where it was created. Returns its identity, for a verified removal later.
+ * Creates `file` exclusively (never through a final link or over an existing entry) with mode 0600, verifies where it
+ * was created, and only then writes `content`. Returns its identity, for a verified removal later. If a parent is
+ * redirected during creation, the unexpected empty file is left in place and an error is reported; cleanup by path
+ * could unlink a different file if an attacker replaced the name after verification failed.
  */
 export function writeExclusiveVerified(root: string, file: string, content: string): Identity {
   const problem = ancestryProblem(root, file);
@@ -184,17 +177,7 @@ export function writeExclusiveVerified(root: string, file: string, content: stri
   const fd = fs.openSync(file, fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_NOFOLLOW, 0o600);
   let stat: fs.Stats;
   try {
-    try {
-      stat = verifyDescriptor(fd, root, file);
-    } catch (err) {
-      const actual = descriptorPath(fd);
-      if (actual) {
-        try {
-          fs.unlinkSync(actual);
-        } catch {}
-      }
-      throw err;
-    }
+    stat = verifyDescriptor(fd, root, file);
     fs.writeSync(fd, content);
   } finally {
     fs.closeSync(fd);

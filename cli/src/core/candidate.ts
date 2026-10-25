@@ -521,6 +521,8 @@ function computeGitCandidateIdentity(
         const statusChar = parts[0][0];
         const filePath = parts[parts.length - 1];
         const posixPath = filePath.split(path.sep).join("/");
+        // Nexus session, checkpoint, and flight data are runtime state, not candidate input.
+        if (posixPath === ".nexus" || posixPath.startsWith(".nexus/")) continue;
         assertTrackedEntryAvailable(posixPath);
 
         if (statusChar === "D") {
@@ -591,6 +593,8 @@ function computeGitCandidateIdentity(
         }
 
         const posixPath = rawFile.split(path.sep).join("/").replace(/\/+$/, "");
+        // Match the non-Git identity path: managed Nexus state must not count as workspace progress.
+        if (posixPath === ".nexus" || posixPath.startsWith(".nexus/")) continue;
 
         if (code === "??") {
           if (includeUntracked) {
