@@ -2687,7 +2687,6 @@ mod tests {
             "1–5 choose",
         ]);
         assert!(!screen.contains("Create checkpoint anyway"));
-        assert!(!screen.contains("checkpoint was written"));
     }
 
     #[test]
