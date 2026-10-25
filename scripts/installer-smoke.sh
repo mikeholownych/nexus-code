@@ -43,7 +43,8 @@ printf 'PATH shim invoked\\n' >> '$TMP/path-shim.log'
 exit 0
 EOF
 chmod +x "$TMP/path-shim/gh"
-if NEXUS_VERSION="$VERSION" NEXUS_PREFIX="$TMP/attestation-prefix" \
+if env -u NEXUS_VERIFY_ATTESTATION \
+  NEXUS_VERSION="$VERSION" NEXUS_PREFIX="$TMP/attestation-prefix" \
   NEXUS_RELEASE_BASE_URL="http://127.0.0.1:$PORT" \
   PATH="$TMP/path-shim:$PATH" sh "$TMP/install-test.sh" > "$TMP/no-trusted-gh.out" 2>&1; then
   echo "installer accepted required provenance without a trusted gh" >&2
