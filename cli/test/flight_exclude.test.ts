@@ -75,16 +75,119 @@ describe("ACC-PER-05: Flight Logs & Telemetry Git Exclude (REQ-PER-105)", () => 
     assert.ok(excludeContent.includes(".nexus/"), "info/exclude must contain .nexus/");
   });
 
-  test("WorktreeManager ensures .nexus/ is excluded", () => {
+  test("WorktreeManager defers .nexus exclusion until it creates workspace state", () => {
     const wm = new WorktreeManager(gitRepoDir);
     assert.ok(wm.isGitRepo());
 
     const excludePath = path.resolve(gitRepoDir, ".git", "info", "exclude");
     assert.strictEqual(fs.existsSync(excludePath), true);
+    const initialContent = fs.readFileSync(excludePath, "utf-8");
+    assert.equal(initialContent.includes(".nexus/"), false, "constructing the manager must not mutate Git metadata");
+
+    const created = wm.createWorktree("exclude-test");
+    assert.equal(created.created, true);
     const content = fs.readFileSync(excludePath, "utf-8");
     assert.ok(content.includes(".nexus/"));
     assert.ok(content.includes(".nexus/worktrees/"));
     assert.ok(content.includes(".nexus/flights/"));
+
+    assert.equal(wm.discardWorktree("exclude-test").success, true);
+  });
+
+  test("unavailable exclude metadata does not prevent startup or expose flight state", () => {
+    const excludePath = path.resolve(gitRepoDir, ".git", "info", "exclude");
+    fs.writeFileSync(excludePath, "");
+    fs.chmodSync(excludePath, 0o444);
+
+    assert.doesNotThrow(() => new WorktreeManager(gitRepoDir));
+    assert.equal(fs.existsSync(path.join(gitRepoDir, ".nexus")), false);
+
+    const recorder = new FlightRecorder(gitRepoDir);
+    assert.equal(fs.existsSync(recorder.getLogPath()), false);
+    assert.equal(fs.existsSync(path.join(gitRepoDir, ".nexus", ".gitignore")), true);
+    assert.match(fs.readFileSync(path.join(gitRepoDir, ".nexus", ".gitignore"), "utf8"), /^\*\n$/);
+    assert.equal(fs.readFileSync(excludePath, "utf8"), "", "read-only Git metadata must remain untouched");
+    execFileSync("git", ["check-ignore", "--quiet", "--no-index", ".nexus/flights/__test__"], { cwd: gitRepoDir });
+
+    const status = execFileSync("git", ["status", "--porcelain"], { cwd: gitRepoDir, encoding: "utf8" }).trim();
+    assert.equal(status, "", `Nexus state must remain ignored when info/exclude is unavailable; found:\n${status}`);
+  });
+
+  test("Git unavailable in a linked worktree fails closed before creating flight state", () => {
+    const linkedWorkspace = path.join(tmpDir, "linked-worktree");
+    execFileSync("git", ["worktree", "add", "--detach", linkedWorkspace, "HEAD"], { cwd: gitRepoDir });
+    assert.equal(fs.lstatSync(path.join(linkedWorkspace, ".git")).isFile(), true);
+    assert.equal(fs.existsSync(path.join(linkedWorkspace, ".git", "info")), false);
+
+    const originalPath = process.env.PATH;
+    try {
+      process.env.PATH = "";
+      assert.throws(() => new FlightRecorder(linkedWorkspace), /Git metadata is unavailable/);
+    } finally {
+      if (originalPath === undefined) delete process.env.PATH;
+      else process.env.PATH = originalPath;
+    }
+
+    assert.equal(fs.existsSync(path.join(linkedWorkspace, ".nexus", "flights")), false);
+  });
+
+  test("Git unavailable in nested repository workspaces fails closed before creating flight state", () => {
+    const normalNestedWorkspace = path.join(gitRepoDir, "packages", "app");
+    fs.mkdirSync(normalNestedWorkspace, { recursive: true });
+
+    const linkedWorkspace = path.join(tmpDir, "nested-linked-worktree");
+    execFileSync("git", ["worktree", "add", "--detach", linkedWorkspace, "HEAD"], { cwd: gitRepoDir });
+    const linkedNestedWorkspace = path.join(linkedWorkspace, "packages", "app");
+    fs.mkdirSync(linkedNestedWorkspace, { recursive: true });
+
+    const originalPath = process.env.PATH;
+    try {
+      process.env.PATH = "";
+      assert.throws(() => new FlightRecorder(normalNestedWorkspace), /Git metadata is unavailable/);
+      assert.throws(() => new FlightRecorder(linkedNestedWorkspace), /Git metadata is unavailable/);
+    } finally {
+      if (originalPath === undefined) delete process.env.PATH;
+      else process.env.PATH = originalPath;
+    }
+
+    assert.equal(fs.existsSync(path.join(normalNestedWorkspace, ".nexus", "flights")), false);
+    assert.equal(fs.existsSync(path.join(linkedNestedWorkspace, ".nexus", "flights")), false);
+  });
+
+  test("a subdirectory workspace protects root worktree state when Git metadata is unavailable", () => {
+    const workspace = path.join(gitRepoDir, "packages", "app");
+    fs.mkdirSync(workspace, { recursive: true });
+    const excludePath = path.resolve(gitRepoDir, ".git", "info", "exclude");
+    fs.writeFileSync(excludePath, "");
+    fs.chmodSync(excludePath, 0o444);
+
+    const manager = new WorktreeManager(workspace);
+    let created = false;
+    try {
+      const result = manager.createWorktree("nested-workspace-exclude-test");
+      created = result.created;
+      assert.equal(result.created, true);
+      assert.equal(fs.existsSync(path.join(gitRepoDir, ".nexus", ".gitignore")), true);
+      assert.equal(fs.existsSync(path.join(workspace, ".nexus", ".gitignore")), false);
+      execFileSync("git", ["check-ignore", "--quiet", "--no-index", ".nexus/worktrees/nested-workspace-exclude-test"], { cwd: gitRepoDir });
+
+      const status = execFileSync("git", ["status", "--porcelain"], { cwd: gitRepoDir, encoding: "utf8" }).trim();
+      assert.equal(status, "", `root worktree state must remain ignored; found:\n${status}`);
+    } finally {
+      fs.chmodSync(excludePath, 0o600);
+      if (created) assert.equal(manager.discardWorktree("nested-workspace-exclude-test").success, true);
+    }
+  });
+
+  test("an ineffective read-only self-ignore rule blocks flight state writes", () => {
+    const nexusDir = path.join(gitRepoDir, ".nexus");
+    fs.mkdirSync(nexusDir);
+    const selfIgnorePath = path.join(nexusDir, ".gitignore");
+    fs.writeFileSync(selfIgnorePath, "!*\n");
+    fs.chmodSync(selfIgnorePath, 0o444);
+
+    assert.throws(() => new FlightRecorder(gitRepoDir));
+    assert.equal(fs.existsSync(path.join(nexusDir, "flights")), false, "flight state must not be written when ignore verification fails");
   });
 
   test("ensureGitExclude is idempotent and does not duplicate entries", () => {
