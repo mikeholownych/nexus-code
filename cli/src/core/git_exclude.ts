@@ -108,6 +108,23 @@ function appendExclude(file: string, expected: string, content: string): void {
   }
 }
 
+function hasGitMarkerInAncestors(workspace: string): boolean {
+  let current = path.resolve(workspace);
+  while (true) {
+    try {
+      fs.lstatSync(path.join(current, ".git"));
+      return true;
+    } catch (error) {
+      if (typeof error !== "object" || error === null || !("code" in error) || error.code !== "ENOENT") {
+        throw new Error("Cannot determine whether Nexus state is inside a Git worktree", { cause: error });
+      }
+    }
+    const parent = path.dirname(current);
+    if (parent === current) return false;
+    current = parent;
+  }
+}
+
 /**
  * Ensures .nexus/ is ignored by Git in the workspace (REQ-PER-105).
  * The self-contained rule protects state even when Git metadata is read-only;
@@ -132,7 +149,12 @@ export function ensureGitExclude(workspace: string): void {
     }
   }
 
-  if (!excludePath) return;
+  if (!excludePath) {
+    if (hasGitMarkerInAncestors(workspace)) {
+      throw new Error("Cannot verify Nexus state is ignored because Git metadata is unavailable");
+    }
+    return;
+  }
 
   let commonDirPath: string | null = null;
   let expectedExcludePath: string | null = null;
