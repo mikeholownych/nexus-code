@@ -158,10 +158,10 @@ export class TerminalUI {
     const verifierFailed = result.execution === "COMPLETED" && (result.reason === "VERIFIER_FAILED" || result.reason === "VERIFIER_TIMED_OUT");
     const caution = !verifierFailed && (result.execution === "COMPLETED" || result.execution === "INTERRUPTED" || result.execution === "LIMIT_REACHED");
     const paint = verified ? pc.green : caution ? pc.yellow : pc.red;
-    console.log(`\n${paint(pc.bold(`${verified ? "✓" : caution ? "!" : "×"} ${heading}`))}  ${pc.dim(line)}`);
+    console.log(`\n${paint(pc.bold(safeTerminal(`${verified ? "✓" : caution ? "!" : "×"} ${heading}`)))}  ${pc.dim(safeTerminal(line))}`);
     if (result.inferenceFailure) {
       const f = result.inferenceFailure;
-      console.log(pc.red(`Inference ${f.kind} (origin: ${f.origin}${f.httpStatus ? `, HTTP ${f.httpStatus}` : ""}): ${safeTerminal(f.message).slice(0, 300)}`));
+      console.log(pc.red(`Inference ${f.kind} (origin: ${safeTerminal(f.origin)}${f.httpStatus ? `, HTTP ${f.httpStatus}` : ""}): ${safeTerminal(f.message).slice(0, 300)}`));
     }
     if (modelSummary && result.execution === "COMPLETED") {
       console.log(pc.bold(pc.white("\nModel-reported summary (not independently verified):")));
