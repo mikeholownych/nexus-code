@@ -111,17 +111,29 @@ export function containedSpec(spec, resources) {
 export function spawnContained(spec, resources, { stdio, ...options }) {
   if (!resources) return { child: spawn(spec.cmd, spec.argv, { ...options, stdio, env: options.env ?? {} }), containment: null };
   const wrapped = containedSpec(spec, resources);
-  const child = spawn(wrapped.cmd, wrapped.argv, { ...options, env: wrapped.env, stdio: [...stdio, "pipe"] });
+  const child = spawn(wrapped.cmd, wrapped.argv, { ...options, env: wrapped.env, stdio: [...stdio, "pipe", "pipe"] });
+  const control = child.stdio[4];
   let text = "";
   let cgroup = null;
   const final = new Promise((resolve) => {
     child.stdio[3].on("data", (chunk) => {
       text += chunk.toString("utf8");
-      cgroup ??= parseReports(text).cgroup;
+      const reports = parseReports(text);
+      cgroup ??= reports.cgroup;
+      // Close the supervisor's control pipe after its final report. Otherwise the parent write end can
+      // keep ChildProcess's `close` event pending even though the supervised command and scope have exited.
+      if (reports.final && control && !control.destroyed) control.end();
     });
     child.stdio[3].on("close", () => resolve(parseReports(text).final));
     child.on("error", () => resolve(null));
   });
+  const signal = (name, graceMs = 5000) => {
+    if (name !== "SIGTERM" || !Number.isSafeInteger(graceMs) || graceMs < 0 || graceMs > 30_000) {
+      throw new Error("contained payload supports SIGTERM with a grace period from 0 to 30000 ms");
+    }
+    if (!control || control.destroyed || !control.writable) return false;
+    return control.write(`${JSON.stringify({ type: "signal", name, graceMs })}\n`);
+  };
   let repeat = null;
   let fallback = null;
   const killPayload = () => { if (cgroup) { try { fs.writeFileSync(path.join(cgroup, "cgroup.kill"), "1"); } catch {} } };
@@ -137,7 +149,7 @@ export function spawnContained(spec, resources, { stdio, ...options }) {
     setTimeout(() => clearInterval(repeat), 30_000).unref();
   };
   child.on("close", () => { clearInterval(repeat); clearTimeout(fallback); killPayload(); });
-  return { child, containment: { final, kill } };
+  return { child, containment: { final, kill, signal } };
 }
 
 /** Why a finished contained execution cannot be trusted as bounded, or null. */

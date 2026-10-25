@@ -46,12 +46,49 @@ report({ cgroup: payload });
 
 let finished = false;
 let stopRequested = false;
+const signalRequests = [];
+let graceTimer = null;
+let childResult = null;
 // The shell joins the payload cgroup before exec, so nothing task-controlled ever runs outside the limits.
 const child = spawn("/bin/sh", ["-c", 'echo $$ > "$1" && shift && exec "$@"', "sh", path.join(payload, "cgroup.procs"), spec.cmd, ...spec.argv], {
   env: { PATH: "/usr/bin:/bin" },
   stdio: "inherit",
 });
 const killPayload = () => { try { fs.writeFileSync(path.join(payload, "cgroup.kill"), "1"); } catch {} };
+const signalPayload = (name, graceMs) => {
+  if (name !== "SIGTERM" || !Number.isSafeInteger(graceMs) || graceMs < 0 || graceMs > 30_000) return;
+  const pids = (read(path.join(payload, "cgroup.procs")) ?? "").split("\n").filter(Boolean).map(Number).filter(Number.isSafeInteger);
+  let delivered = 0;
+  for (const pid of pids) {
+    try { process.kill(pid, name); delivered++; } catch {}
+  }
+  const request = { name, requestedAt: new Date().toISOString(), pids: pids.length, delivered, graceMs, forced: false };
+  signalRequests.push(request);
+  if (graceTimer) clearTimeout(graceTimer);
+  graceTimer = setTimeout(() => {
+    if (/^populated 1$/m.test(read(path.join(payload, "cgroup.events")) ?? "")) {
+      request.forced = true;
+      killPayload();
+    }
+    graceTimer = null;
+    if (childResult) finish(childResult.code, childResult.signal, childResult.spawnError);
+  }, graceMs);
+  graceTimer.unref();
+};
+let controlText = "";
+const control = fs.createReadStream(null, { fd: 4, autoClose: false });
+control.on("data", (chunk) => {
+  controlText += chunk.toString("utf8");
+  let newline;
+  while ((newline = controlText.indexOf("\n")) >= 0) {
+    const line = controlText.slice(0, newline);
+    controlText = controlText.slice(newline + 1);
+    try {
+      const message = JSON.parse(line);
+      if (message?.type === "signal") signalPayload(message.name, message.graceMs);
+    } catch {}
+  }
+});
 // A stop can arrive before the shell has joined the leaf; keep emptying it until the child is gone.
 const stop = () => { if (stopRequested) return; stopRequested = true; killPayload(); setInterval(killPayload, 50).unref(); };
 for (const signal of ["SIGTERM", "SIGINT", "SIGHUP"]) process.on(signal, stop);
@@ -60,6 +97,10 @@ child.on("exit", (code, signal) => finish(code, signal, null));
 
 function finish(code, signal, spawnError) {
   if (finished) return;
+  childResult = { code, signal, spawnError };
+  // The main command may exit before a descendant finishes handling SIGTERM. Let the
+  // requested grace interval elapse before cgroup cleanup escalates to SIGKILL.
+  if (graceTimer) return;
   finished = true;
   const procs = (read(path.join(payload, "cgroup.procs")) ?? "").split("\n").filter(Boolean);
   const memoryEvents = keyed(read(path.join(payload, "memory.events")));
@@ -80,11 +121,11 @@ function finish(code, signal, spawnError) {
   const deadline = Date.now() + 5000;
   const poll = () => {
     if (/^populated 0$/m.test(read(path.join(payload, "cgroup.events")) ?? "")) {
-      report({ ...stats, cleaned: true, stopped: stopRequested, exitCode: code, signal, spawnError });
+      report({ ...stats, cleaned: true, stopped: stopRequested, signals: signalRequests, exitCode: code, signal, spawnError });
       process.exit(code ?? (signal ? 128 + (os.constants.signals[signal] ?? 0) : 125));
     }
     if (Date.now() > deadline) {
-      report({ ...stats, cleaned: false, exitCode: code, signal, spawnError, error: "payload cgroup still populated after cgroup.kill" });
+      report({ ...stats, cleaned: false, signals: signalRequests, exitCode: code, signal, spawnError, error: "payload cgroup still populated after cgroup.kill" });
       process.exit(125);
     }
     setTimeout(poll, 20);

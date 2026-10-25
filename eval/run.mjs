@@ -230,7 +230,7 @@ async function runOnce(task, run) {
     let agent;
     let agentEndedAt;
     try {
-      agent = await runAgent(task, ws, home, budget, agentIdentity, proxyDir, localToken);
+      agent = await runAgent(task, ws, home, budget, agentIdentity, proxyDir, localToken, proxy);
       agentEndedAt = Date.now();
       if (config.runAs) {
         for (const dir of [ws, home]) await normalizeRunAsPermissions(config.runAs, dir, asUserSpec);
@@ -290,6 +290,7 @@ async function runOnce(task, run) {
       ...(hardening ? { hardened: { baseline: hardening.baseline, applied: hardening.applied.length, discarded: hardening.discarded, configChanges: hardening.configChanges } } : {}),
       ...(t3 ? { t3 } : {}),
       model,
+      ...(agent.t4FaultsInjected?.length ? { t4FaultsInjected: agent.t4FaultsInjected } : {}),
       resources: config.resources ? { agent: agent.resources, hidden: hidden.resources ?? null, regression: regression?.resources ?? null, ...(t3BaselineResources.length ? { t3Baseline: t3BaselineResources } : {}) } : null,
       logs: saveLogs(task, run, agent, hidden, regression),
     };
@@ -523,8 +524,47 @@ function agentCommand(task, ws, home, budget, agentIdentity, localToken) {
   throw new Error(`agent ${agent} has no adapter`);
 }
 
-function runAgent(task, ws, home, budget, agentIdentity, proxyDirectory, localToken) {
+async function runAgent(task, ws, home, budget, agentIdentity, proxyDirectory, localToken, proxy) {
+  if (task.t4RunnerFault !== "sigterm_resume") {
+    return runAgentAttempt(task, ws, home, budget, agentIdentity, proxyDirectory, localToken);
+  }
+  if (task.tier !== "T4" || (config.agent ?? "nexus") !== "nexus" || config.qualification !== true || !config.resources) {
+    throw new Error("sigterm_resume requires an installed Nexus qualification run with the kernel resource contract");
+  }
+  const interrupted = await runAgentAttempt(task, ws, home, budget, agentIdentity, proxyDirectory, localToken, { signalAfterAnswer: true, proxy });
+  const signal = interrupted.t4Signal;
+  if (!signal?.delivered) return { ...interrupted, t4FaultsInjected: [] };
+  const resumed = await runAgentAttempt(task, ws, home, budget, agentIdentity, proxyDirectory, localToken, { resume: true });
+  const evidence = {
+    signal: "SIGTERM",
+    delivered: signal.delivered,
+    deliveredProcesses: signal.deliveredProcesses,
+    forced: signal.forced,
+    firstExitCode: signal.firstExitCode,
+    payloadExitSignal: signal.payloadExitSignal,
+    supervisorWrapperExitSignal: signal.supervisorWrapperExitSignal,
+    signalDuringActiveTurn: signal.signalDuringActiveTurn,
+    resumed: resumed.code === 0 && resumed.json?.turn?.execution === "COMPLETED",
+    resumeExitCode: resumed.code,
+    resumeTurnExecution: resumed.json?.turn?.execution ?? null,
+  };
+  return {
+    ...resumed,
+    stdout: `${interrupted.stdout}\n--- T4 SIGTERM interruption ---\n${resumed.stdout}`,
+    stderr: `${interrupted.stderr}\n--- T4 resume attempt ---\n${resumed.stderr}`,
+    t4FaultsInjected: [{ kind: "sigterm_resume", source: "task_fixture_or_runner", evidence }],
+  };
+}
+
+function runAgentAttempt(task, ws, home, budget, agentIdentity, proxyDirectory, localToken, { signalAfterAnswer = false, proxy = null, resume = false } = {}) {
   const { cmd, argv, env, protocol } = agentCommand(task, ws, home, budget, agentIdentity, localToken);
+  if (resume) {
+    if ((config.agent ?? "nexus") !== "nexus" || protocol) throw new Error("T4 resume is supported only by Nexus run mode");
+    const promptIndex = argv.lastIndexOf(task.objective);
+    if (promptIndex < 0) throw new Error("could not remove original prompt before Nexus resume");
+    argv.splice(promptIndex, 1);
+    argv.push("--resume");
+  }
   if (config.qualification === true && !config.runAs) throw new Error("qualification candidate execution requires the dedicated evaluator account");
   if (config.runAs) grantRunAsAccess(config.runAs, [ws, home, proxyDirectory]);
   const runtimePaths = [fs.realpathSync(cmd), ...agentIdentity.argsPrefix.filter((item) => path.isAbsolute(item)), ...(config.sandboxRuntimePaths ?? [])];
@@ -605,18 +645,51 @@ function runAgent(task, ws, home, budget, agentIdentity, proxyDirectory, localTo
         process.kill(-child.pid, sig);
       } catch {}
     };
+    let signalEvidence = null;
+    const signalPoll = signalAfterAnswer ? setInterval(() => {
+      if (signalEvidence || (proxy?.stats().answered ?? 0) < 1) return;
+      if (!containment) return;
+      const proxyState = proxy.stats();
+      // An answered request alone only proves the model replied sometime earlier. Require
+      // an in-flight inference request while this Nexus process is still alive so the
+      // injected interruption is demonstrably during an active turn.
+      if (proxyState.activeInferenceRequests < 1 || child.exitCode !== null) return;
+      try {
+        if (containment.signal("SIGTERM", 5000)) signalEvidence = {
+          requestedAt: new Date().toISOString(),
+          answeredBeforeSignal: true,
+          activeInferenceRequests: proxyState.activeInferenceRequests,
+          signalDuringActiveTurn: true,
+        };
+      } catch {}
+    }, 25) : null;
     const timer = setTimeout(() => {
       timedOut = true;
       killGroup("SIGTERM");
       setTimeout(() => killGroup("SIGKILL"), 10_000).unref();
     }, (budget.minutes + 5) * 60_000);
     child.on("error", (err) => (stderr += `spawn error: ${err.message}\n`));
-    child.on("close", async (code) => {
+    child.on("close", async (code, exitSignal) => {
       clearTimeout(timer);
-      killGroup("SIGKILL");
+      if (signalPoll) clearInterval(signalPoll);
+      // A contained payload is already reaped by cgroup_supervisor before its final report. Do not race that
+      // report with a second force-kill; only the uncontained development path needs process-group cleanup here.
+      if (!containment) killGroup("SIGKILL");
       const final = containment ? await containment.final : undefined;
       const json = driver ? { turn: driver.state.objectiveTurns.at(-1) ?? null } : lastJson(stdout);
-      resolve({ code, timedOut, outputExceeded, stdout, stderr, json, ...(driver ? { t3Driver: driver.state, t3Preconditions: preconditions } : {}), ...(containment ? { resources: final, containmentProblem: containmentProblem(final) } : {}) });
+      const observedSignal = final?.signals?.find((entry) => entry.name === "SIGTERM");
+      const t4Signal = signalEvidence ? {
+        ...signalEvidence,
+        delivered: (observedSignal?.delivered ?? 0) > 0,
+        deliveredProcesses: observedSignal?.delivered ?? 0,
+        forced: observedSignal?.forced ?? null,
+        firstExitCode: code,
+        // `child` is the systemd-run wrapper; only the supervisor's final report identifies
+        // the task payload's signal disposition.
+        payloadExitSignal: final?.signal ?? null,
+        supervisorWrapperExitSignal: exitSignal ?? null,
+      } : null;
+      resolve({ code, timedOut, outputExceeded, stdout, stderr, json, ...(t4Signal ? { t4Signal } : {}), ...(driver ? { t3Driver: driver.state, t3Preconditions: preconditions } : {}), ...(containment ? { resources: final, containmentProblem: containmentProblem(final) } : {}) });
     });
   });
 }
