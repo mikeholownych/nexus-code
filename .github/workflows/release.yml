@@ -54,9 +54,13 @@ jobs:
           chmod +x "$CARGO_HOME/bin/cyclonedx"
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
-          node-version: 22
+          node-version: 22.22.1
           cache: npm
           cache-dependency-path: cli/package-lock.json
+      - name: Require the pinned release Node and npm versions
+        run: |
+          test "$(node --version)" = "v22.22.1"
+          test "$(npm --version)" = "10.9.4"
       - name: Install selected Node runtime for isolated evaluation commands
         run: |
           node_runtime="$(readlink -f "$(command -v node)")"
