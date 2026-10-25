@@ -92,7 +92,9 @@ The upgrade capability is implemented in `cli/src/upgrade.ts` as a pure, testabl
 - **Integrity**:
   - Downloads release tarball and `SHA256SUMS`.
   - Computes SHA-256 of downloaded archive; compares with published checksum.
-  - If `gh` is installed and `NEXUS_VERIFY_ATTESTATION != 0`, verifies GitHub build provenance attestation.
+  - If a trusted `gh` exists at `/usr/bin/gh` or `/usr/local/bin/gh` and `NEXUS_VERIFY_ATTESTATION != 0`, verifies
+    GitHub build provenance attestation. `PATH`-resolved `gh` is not used; with `NEXUS_VERIFY_ATTESTATION=1`, a
+    missing trusted `gh` fails closed.
   - Extracts to staging directory; validates `bin/nexus`, `lib/core/harness-core`, `lib/core/nexus-tui`, and `VERSION`.
   - Verifies package `MANIFEST.sha256` if present.
 

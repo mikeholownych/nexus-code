@@ -314,6 +314,79 @@ describe("Public Release Upgrade Acceptance (REQ-REL-116, ACC-UPG-07..14)", () =
     assert.equal(journal.state, "complete");
   });
 
+  it("refuses an upgrade that requires attestation when gh is unavailable", async () => {
+    const oldVersion = "v0.1.0-alpha.2";
+    const vOldDir = setupInstalledVersion(tmpPrefix, oldVersion);
+    fs.mkdirSync(path.join(tmpPrefix, "bin"), { recursive: true });
+    fs.symlinkSync(path.join(vOldDir, "bin", "nexus"), path.join(tmpPrefix, "bin", "nexus"));
+
+    const installed = detectInstallation({ nexusHome: vOldDir, envPrefix: tmpPrefix });
+    const target = await resolveTargetRelease(undefined, { timeoutMs: 5000 });
+    const comparison = compareInstallationWithRelease(installed, target);
+    assert.equal(comparison.action, "upgrade");
+
+    const savedPath = process.env.PATH;
+    const savedAttestation = process.env.NEXUS_VERIFY_ATTESTATION;
+    // A PATH shim that claims success must not satisfy *required* attestation, and an empty trusted-path list must
+    // fail closed without spawning it.
+    const shim = path.join(tmpPrefix, "gh-shim");
+    fs.mkdirSync(shim);
+    const marker = path.join(tmpPrefix, "gh-shim-executed");
+    fs.writeFileSync(path.join(shim, "gh"), `#!/bin/sh\n: > '${marker}'\nexit 0\n`, { mode: 0o755 });
+    fs.chmodSync(path.join(shim, "gh"), 0o755);
+    process.env.PATH = shim;
+    process.env.NEXUS_VERIFY_ATTESTATION = "1";
+    try {
+      await assert.rejects(
+        performUpgrade(comparison, { prefix: tmpPrefix, timeoutMs: 5000, trustedGhPaths: [] }),
+        /no trusted GitHub CLI was found at \/usr\/bin\/gh/,
+        "a required attestation must fail closed when no trusted gh exists",
+      );
+      assert.equal(fs.existsSync(marker), false, "the PATH gh shim was executed");
+      assert.equal(readJournal(tmpPrefix), null, "required attestation must fail before starting the journal");
+      const libEntries = fs.existsSync(path.join(tmpPrefix, "lib", "nexus"))
+        ? fs.readdirSync(path.join(tmpPrefix, "lib", "nexus"))
+        : [];
+      assert.equal(
+        libEntries.some((name) => name.startsWith(".tmp-upgrade-") || name === ".upgrade-journal.json"),
+        false,
+        "required attestation must not leave upgrade staging or a journal",
+      );
+    } finally {
+      if (savedPath === undefined) delete process.env.PATH;
+      else process.env.PATH = savedPath;
+      if (savedAttestation === undefined) delete process.env.NEXUS_VERIFY_ATTESTATION;
+      else process.env.NEXUS_VERIFY_ATTESTATION = savedAttestation;
+    }
+  });
+
+  it("rejects required attestation when the trusted gh reports failure", async () => {
+    const oldVersion = "v0.1.0-alpha.2";
+    const vOldDir = setupInstalledVersion(tmpPrefix, oldVersion);
+    fs.mkdirSync(path.join(tmpPrefix, "bin"), { recursive: true });
+    fs.symlinkSync(path.join(vOldDir, "bin", "nexus"), path.join(tmpPrefix, "bin", "nexus"));
+
+    const installed = detectInstallation({ nexusHome: vOldDir, envPrefix: tmpPrefix });
+    const target = await resolveTargetRelease(undefined, { timeoutMs: 5000 });
+    const comparison = compareInstallationWithRelease(installed, target);
+
+    const failingGh = path.join(tmpPrefix, "trusted-gh");
+    fs.writeFileSync(failingGh, "#!/bin/sh\nexit 1\n", { mode: 0o755 });
+    fs.chmodSync(failingGh, 0o755);
+    const savedAttestation = process.env.NEXUS_VERIFY_ATTESTATION;
+    process.env.NEXUS_VERIFY_ATTESTATION = "1";
+    try {
+      await assert.rejects(
+        performUpgrade(comparison, { prefix: tmpPrefix, timeoutMs: 5000, trustedGhPaths: [failingGh] }),
+        /Provenance attestation verification failed for .* or SHA256SUMS/,
+        "a trusted gh reporting failure must reject required attestation",
+      );
+    } finally {
+      if (savedAttestation === undefined) delete process.env.NEXUS_VERIFY_ATTESTATION;
+      else process.env.NEXUS_VERIFY_ATTESTATION = savedAttestation;
+    }
+  });
+
   it("refuses downgrade when target release has incompatible state schema version", async () => {
     // Current installation at v1.0.0
     const v1Dir = setupInstalledVersion(tmpPrefix, "v1.0.0");
