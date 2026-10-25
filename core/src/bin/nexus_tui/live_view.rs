@@ -2676,7 +2676,10 @@ mod tests {
             "Checkpoint could not be created",
             "protected Git",
             "state could not be verified.",
-            "Retry keeps",
+            // At 40 columns, the renderer wraps between these words; assert
+            // the visible text in wrap-tolerant fragments.
+            "Retry",
+            "keeps the sensitive-data choice",
             "sensitive-data choice",
             "unchanged.",
             "Read-only",
