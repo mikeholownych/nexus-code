@@ -139,8 +139,10 @@ export function spawnContained(spec, resources, { stdio, ...options }) {
   };
   let repeat = null;
   let fallback = null;
+  let childClosed = false;
   const killPayload = () => { if (cgroup) { try { fs.writeFileSync(path.join(cgroup, "cgroup.kill"), "1"); } catch {} } };
   const kill = () => {
+    if (childClosed) { killPayload(); return; }
     if (repeat) return;
     // The payload may not have joined its leaf yet, or may fork after a kill: keep emptying the leaf until the
     // supervisor exits. The supervisor also stops on SIGTERM. One that does not exit loses its report, so the run fails
@@ -151,7 +153,7 @@ export function spawnContained(spec, resources, { stdio, ...options }) {
     fallback = setTimeout(() => { try { process.kill(-child.pid, "SIGKILL"); } catch {} }, 10_000);
     setTimeout(() => clearInterval(repeat), 30_000).unref();
   };
-  child.on("close", () => { clearInterval(repeat); clearTimeout(fallback); killPayload(); });
+  child.on("close", () => { childClosed = true; clearInterval(repeat); clearTimeout(fallback); killPayload(); });
   return { child, containment: { final, kill, signal } };
 }
 
