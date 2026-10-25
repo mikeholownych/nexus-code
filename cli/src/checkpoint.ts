@@ -27,6 +27,13 @@ class GitIndexLockError extends Error {
   }
 }
 
+class GitIndexLockCheckError extends Error {
+  constructor() {
+    super("Could not inspect the Git index lock; checkpoint creation stopped without changing Git state.");
+    this.name = "GitIndexLockCheckError";
+  }
+}
+
 export class CheckpointManager {
   private workspace: string;
   private checkpointDir: string;
@@ -50,15 +57,26 @@ export class CheckpointManager {
   }
 
   private gitIndexLockExists(): boolean {
+    let lockPath: string;
     try {
-      const lockPath = execFileSync("git", ["rev-parse", "--git-path", "index.lock"], {
+      lockPath = execFileSync("git", ["rev-parse", "--git-path", "index.lock"], {
         cwd: this.workspace,
         encoding: "utf-8",
       }).trim();
-      if (!lockPath) return false;
-      return fs.existsSync(path.isAbsolute(lockPath) ? lockPath : path.resolve(this.workspace, lockPath));
     } catch {
-      return false;
+      throw new GitIndexLockCheckError();
+    }
+    if (!lockPath) throw new GitIndexLockCheckError();
+
+    const absoluteLockPath = path.isAbsolute(lockPath) ? lockPath : path.resolve(this.workspace, lockPath);
+    try {
+      // lstat observes dangling symlinks too. Any directory entry at Git's lock
+      // path can prevent Git from creating its lock, so it must stop checkpointing.
+      fs.lstatSync(absoluteLockPath);
+      return true;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
+      throw new GitIndexLockCheckError();
     }
   }
 
@@ -180,7 +198,11 @@ export class CheckpointManager {
           gitRef = headCommit;
         }
       } catch (error) {
-        if (error instanceof SensitivePersistenceError || error instanceof GitIndexLockError) throw error;
+        if (
+          error instanceof SensitivePersistenceError ||
+          error instanceof GitIndexLockError ||
+          error instanceof GitIndexLockCheckError
+        ) throw error;
         if (this.gitIndexLockExists()) throw new GitIndexLockError();
         throw new Error("Checkpoint could not verify protected Git state; no checkpoint was written");
       }
