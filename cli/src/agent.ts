@@ -41,7 +41,7 @@ import {
   type ObservationVerdict,
 } from "./core/execution_tracking.js";
 import { parseModelResponse, repairJsonWithClass, isWriteOrExecTool } from "./parser.js";
-import { TerminalUI, redactSecrets } from "./ui.js";
+import { TerminalUI, redactSecrets, safeTerminal } from "./ui.js";
 import { getGitInfo } from "./git.js";
 import { trustedProjectRules } from "./startup_trust.js";
 import { SkillManager } from "./skills.js";
@@ -5359,7 +5359,7 @@ The pinned Objective Ledger lists the operator's requirements; your plan never r
                     process.stdout.write(pc.bold(pc.magenta("\n💭 Assistant: ")));
                     streamedTokens = true;
                   }
-                  process.stdout.write(token);
+                  process.stdout.write(safeTerminal(token));
                   this.observer?.onAssistantDelta?.(token);
                 },
                 s.requestId,
@@ -6111,7 +6111,7 @@ The pinned Objective Ledger lists the operator's requirements; your plan never r
 
   async run(taskPrompt: string | any[], onConfirm?: ConfirmHandler, options?: { signal?: AbortSignal; resume?: boolean }): Promise<TurnResult> {
     this.ui.banner();
-    console.log(`🎯 Task: ${typeof taskPrompt === "string" ? taskPrompt : "[Multi-modal task input]"}\n`);
+    console.log(`🎯 Task: ${safeTerminal(typeof taskPrompt === "string" ? taskPrompt : "[Multi-modal task input]")}\n`);
     console.log(`📁 Workspace: ${this.config.workspace}`);
     console.log(`🐚 Shell: ${this.config.shell}`);
     console.log(`🤖 Model: ${this.config.model} (${this.config.endpoint})\n`);

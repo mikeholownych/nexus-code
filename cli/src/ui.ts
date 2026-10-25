@@ -25,7 +25,7 @@ export function redactSecrets(text: string): string {
 }
 
 /** Text safe to write to a terminal: secrets redacted, then every terminal control/bidi character made visible. */
-function safeTerminal(text: string): string {
+export function safeTerminal(text: string): string {
   return visibleControls(redactSecrets(text));
 }
 
