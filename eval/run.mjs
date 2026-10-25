@@ -18,6 +18,7 @@ import { applyAgentChanges, cloneWorkspace } from "./hardened_check.mjs";
 import { containmentProblem, resourceProbeProblem, spawnContained } from "./resources.mjs";
 import { StringDecoder } from "node:string_decoder";
 import { commandBaseline, countCompactions, createT3Driver, scoreT3Run, steeringBaseline, steeringPrecondition, t3Snapshot } from "./t3.mjs";
+import { observeT4Fixture } from "./t4_fixtures.mjs";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const args = parseArgs(process.argv.slice(2));
@@ -242,6 +243,7 @@ async function runOnce(task, run) {
     const wallMs = agentEndedAt - started;
     if (agent.containmentProblem) throw new Error(`candidate containment failed: ${agent.containmentProblem}`);
     const model = proxy ? proxy.stats() : null;
+    const fixtureFaults = observeT4Fixture(task, agent, agent.resources, config.resources);
     const contaminated = treeDigest(task.dir) !== sourceBefore || `${agent.stdout}${agent.stderr}`.includes(tasksDir);
     // T3 judges the workspace as it was when the objective's work ended (snapshot taken before the probe turn).
     const t3 = agent.t3Driver ? scoreT3Run({ task, baseline: t3Baseline, driver: agent.t3Driver, preconditions: agent.t3Preconditions, compactions: countCompactions(home) }) : null;
@@ -290,7 +292,7 @@ async function runOnce(task, run) {
       ...(hardening ? { hardened: { baseline: hardening.baseline, applied: hardening.applied.length, discarded: hardening.discarded, configChanges: hardening.configChanges } } : {}),
       ...(t3 ? { t3 } : {}),
       model,
-      ...(agent.t4FaultsInjected?.length ? { t4FaultsInjected: agent.t4FaultsInjected } : {}),
+      ...((agent.t4FaultsInjected?.length || fixtureFaults.length) ? { t4FaultsInjected: [...(agent.t4FaultsInjected ?? []), ...fixtureFaults] } : {}),
       resources: config.resources ? { agent: agent.resources, hidden: hidden.resources ?? null, regression: regression?.resources ?? null, ...(t3BaselineResources.length ? { t3Baseline: t3BaselineResources } : {}) } : null,
       logs: saveLogs(task, run, agent, hidden, regression),
     };
@@ -476,6 +478,7 @@ function agentCommand(task, ws, home, budget, agentIdentity, localToken) {
   };
   const agent = config.agent ?? "nexus";
   if (agent === "nexus") {
+    if (task.t4Fixture) env.NEXUS_EVAL_TOOL_RECEIPTS = "1";
     env.LOCAL_LLM_ENDPOINT = ep;
     const contextArgs = nexusContextLimitArgs(config, limits.context);
     if (task.tier === "T3") {
@@ -766,7 +769,7 @@ function harnessIdentity() {
   const git = (...a) => spawnSync("git", a, { cwd: ROOT, encoding: "utf8" }).stdout.trim();
   const commit = git("rev-parse", "HEAD");
   const dirty = Boolean(git("status", "--porcelain", "--untracked-files=all", "--", ".", ":(exclude)cli/dist"));
-  const sourceFiles = ["eval/run.mjs", "eval/validate.mjs", "eval/isolate.mjs", "eval/hide_oracle.cjs", "eval/hide_oracle.py", "eval/unlink_then_exec.sh", "eval/agent_sandbox.mjs", "eval/model_proxy.mjs", "eval/score.mjs", "eval/infra.mjs", "eval/workspace.mjs", "eval/resources.mjs", "eval/cgroup_supervisor.mjs", "eval/t3.mjs", "eval/hardened_check.mjs"];
+  const sourceFiles = ["eval/run.mjs", "eval/validate.mjs", "eval/t4_fixtures.mjs", "eval/isolate.mjs", "eval/hide_oracle.cjs", "eval/hide_oracle.py", "eval/unlink_then_exec.sh", "eval/agent_sandbox.mjs", "eval/model_proxy.mjs", "eval/score.mjs", "eval/infra.mjs", "eval/workspace.mjs", "eval/resources.mjs", "eval/cgroup_supervisor.mjs", "eval/t3.mjs", "eval/hardened_check.mjs"];
   const sourceDigests = sourceFiles.map((file) => ({ file, sha256: createHash("sha256").update(fs.readFileSync(path.join(ROOT, file))).digest("hex") }));
   const sourceSha256 = createHash("sha256").update(JSON.stringify(sourceDigests)).digest("hex");
   return { commit, dirty, sourceDigests, sourceSha256, string: `${commit.slice(0, 12)}${dirty ? "-dirty" : ""}` };

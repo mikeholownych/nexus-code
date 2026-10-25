@@ -145,8 +145,8 @@ const runnerEvidenceValid = (event) => {
       && evidence.resumeExitCode === 0
       && evidence.resumeTurnExecution === "COMPLETED";
   }
-  if (event.kind === "hanging_test_command") return evidence.observedHung === true && evidence.timedOut === true && evidence.containmentCleaned === true;
-  if (event.kind === "full_disk") return evidence.writeFailedWithEnospc === true && Number.isSafeInteger(evidence.storageLimitBytes) && evidence.storageLimitBytes > 0;
+  if (event.kind === "hanging_test_command") return evidence.observedHung === true && evidence.timedOut === true && evidence.containmentCleaned === true && /^[0-9a-f]{64}$/.test(evidence.commandSha256 ?? "") && evidence.tool === "run_command" && Number.isSafeInteger(evidence.timeoutSecs) && evidence.timeoutSecs > 0 && (evidence.runnerExitCode === null || evidence.runnerExitCode === undefined);
+  if (event.kind === "full_disk") return evidence.storageExhausted === true && evidence.containmentCleaned === true && /^[0-9a-f]{64}$/.test(evidence.commandSha256 ?? "") && evidence.tool === "run_command" && Number.isSafeInteger(evidence.storageLimitBytes) && evidence.storageLimitBytes > 0 && Number.isSafeInteger(evidence.availableBeforeBytes) && Number.isSafeInteger(evidence.availableAfterBytes) && evidence.availableBeforeBytes > evidence.availableAfterBytes && Number.isSafeInteger(evidence.runnerExitCode) && evidence.runnerExitCode !== 0;
   return false;
 };
 const t4Runs = records.filter((r) => r.tier === "T4");

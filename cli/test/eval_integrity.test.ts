@@ -9,6 +9,7 @@ import fs from "node:fs";
 import http from "node:http";
 import os from "node:os";
 import path from "node:path";
+import { createHash } from "node:crypto";
 import { spawn, spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
@@ -237,9 +238,9 @@ test("T4 scoring requires all nine classes and five injected runs per class", ()
     const evidence = kind === "sigterm_resume"
       ? { signal: "SIGTERM", delivered: true, deliveredProcesses: 1, signalDuringActiveTurn: true, payloadExitSignal: "SIGTERM", supervisorWrapperExitSignal: null, resumed: true, resumeExitCode: 0, resumeTurnExecution: "COMPLETED" }
       : kind === "hanging_test_command"
-        ? { observedHung: true, timedOut: true, containmentCleaned: true }
+        ? { observedHung: true, timedOut: true, containmentCleaned: true, tool: "run_command", commandSha256: "a".repeat(64), timeoutSecs: 60, runnerExitCode: null }
         : kind === "full_disk"
-          ? { writeFailedWithEnospc: true, storageLimitBytes: 64 * 1024 * 1024 }
+          ? { storageExhausted: true, containmentCleaned: true, tool: "run_command", commandSha256: "a".repeat(64), storageLimitBytes: 64 * 1024 * 1024, availableBeforeBytes: 64 * 1024 * 1024, availableAfterBytes: 0, runnerExitCode: 1 }
           : undefined;
     const event = { kind, source: runnerClass ? "task_fixture_or_runner" : "model_proxy", ...(evidence ? { evidence } : {}) };
     return {
@@ -365,6 +366,10 @@ test("task validation: pinned repos, one source, and black-box hidden oracle for
   assert.match(validateTask({ ...good, t4RunnerFault: "sigterm_resume" }, dir).join(), /supported only as sigterm_resume on a T4 task/);
   assert.deepEqual(validateTask({ ...good, tier: "T4", t4RunnerFault: "sigterm_resume" }, dir), []);
   assert.match(validateTask({ ...good, tier: "T4", t4RunnerFault: "full_disk" }, dir).join(), /supported only as sigterm_resume on a T4 task/);
+  assert.deepEqual(validateTask({ ...good, tier: "T4", t4Fixture: { kind: "hanging_test_command", tool: "run_command", command: "npm test", timeoutSecs: 60 } }, dir), []);
+  assert.deepEqual(validateTask({ ...good, tier: "T4", t4Fixture: { kind: "full_disk", tool: "run_command", command: "./test-disk-cap.sh", storageLimitBytes: 64 * 1024 * 1024 } }, dir), []);
+  assert.match(validateTask({ ...good, t4Fixture: { kind: "full_disk", tool: "run_command", command: "./test-disk-cap.sh", storageLimitBytes: 64 } }, dir).join(), /only as an object on a T4 task/);
+  assert.match(validateTask({ ...good, tier: "T4", t4Fixture: { kind: "full_disk", tool: "run_command", command: "./test-disk-cap.sh" } }, dir).join(), /positive storageLimitBytes/);
   assert.match(validateTask({ ...good, repo: { url: good.repo.url, commit: "main" } }, dir).join(), /pinned/);
   assert.match(validateTask({ ...good, fixture: "repo" }, dir).join(), /exactly one of fixture or repo/);
   assert.match(validateTask({ ...good, hidden: {} }, dir).join(), /hidden.command/);
@@ -387,6 +392,25 @@ test("task validation: pinned repos, one source, and black-box hidden oracle for
   fs.writeFileSync(path.join(dir, "candidate", "private-cases.json"), fs.readFileSync(cases));
   assert.match(validateTask({ ...qualifiedTask, hidden: { ...oracle, casesFile: "candidate/private-cases.json" } }, dir, { qualification: true }).join(), /outside the candidate fixture/);
   assert.match(validateTask({ ...qualifiedTask, hidden: { ...oracle, argv: ["--eval"] } }, dir, { qualification: true }).join(), /normalized relative candidate entrypoint/);
+});
+
+test("T4 fixture evidence requires an exact CLI runner receipt and measured storage boundary", async () => {
+  const { observeT4Fixture } = await import(path.join(ROOT, "eval/t4_fixtures.mjs"));
+  const task = { tier: "T4", t4Fixture: { kind: "hanging_test_command", tool: "run_command", command: "npm test", timeoutSecs: 30 } };
+  const commandSha256 = createHash("sha256").update("npm test").digest("hex");
+  const agent = { json: { evaluationToolReceipts: [{ invocationId: "call-1", tool: "run_command", commandSha256, timeoutSecs: 30, exitCode: null, timedOut: true }] } };
+  const containment = { cleaned: true, survivorsAfterExit: 0 };
+  const hang = observeT4Fixture(task, agent, containment, { storageBytes: 64 * 1024 * 1024 });
+  assert.equal(hang[0].evidence.observedHung, true);
+  assert.equal(observeT4Fixture(task, { json: { messages: [{ role: "tool", content: "timed out" }] } }, containment, {}).length, 0, "printable transcript text is not trusted evidence");
+  assert.equal(observeT4Fixture(task, agent, { cleaned: false, survivorsAfterExit: 1 }, {}).at(0).evidence.containmentCleaned, false);
+
+  const diskTask = { tier: "T4", t4Fixture: { kind: "full_disk", tool: "run_command", command: "./test-disk-cap.sh", storageLimitBytes: 64 * 1024 * 1024 } };
+  const diskHash = createHash("sha256").update("./test-disk-cap.sh").digest("hex");
+  const diskAgent = { json: { evaluationToolReceipts: [{ invocationId: "call-2", tool: "run_command", commandSha256: diskHash, timeoutSecs: 30, exitCode: 1, timedOut: false, workspaceAvailableBeforeBytes: 64 * 1024 * 1024, workspaceAvailableAfterBytes: 0 }] } };
+  assert.equal(observeT4Fixture(diskTask, diskAgent, containment, { storageBytes: 64 * 1024 * 1024 })[0].evidence.storageExhausted, true);
+  assert.equal(observeT4Fixture(diskTask, diskAgent, containment, { storageBytes: 128 * 1024 * 1024 }).length, 0);
+  assert.equal(observeT4Fixture(diskTask, { json: { evaluationToolReceipts: [{ ...diskAgent.json.evaluationToolReceipts[0], workspaceAvailableAfterBytes: 8 * 1024 * 1024 }] } }, containment, { storageBytes: 64 * 1024 * 1024 }).length, 0, "a printed ENOSPC message without exhausted storage is insufficient");
 });
 
 test("black-box oracle keeps canary expectations outside the candidate process and returns sanitized evidence", { timeout: 15_000 }, async () => {
