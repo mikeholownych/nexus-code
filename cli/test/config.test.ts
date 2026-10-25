@@ -3,10 +3,35 @@ import assert from "node:assert/strict";
 import path from "node:path";
 import fs from "node:fs";
 import os from "node:os";
+import { spawnSync } from "node:child_process";
 import { buildConfig, autoDetectModel } from "../src/config.js";
 import { startGateway } from "./helpers/fixtures.js";
 
 describe("config", () => {
+  test("a shell NEXUS_VERIFY_ATTESTATION outranks config.env for the provenance setting", () => {
+    const cliDir = path.resolve(path.dirname(new URL(import.meta.url).pathname), "..");
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-attest-precedence-"));
+    try {
+      fs.mkdirSync(path.join(home, ".config", "nexus"), { recursive: true });
+      fs.writeFileSync(path.join(home, ".config", "nexus", "config.env"), "NEXUS_VERIFY_ATTESTATION=0\n");
+      const effective = (shell: string | undefined): unknown => {
+        const env: NodeJS.ProcessEnv = { PATH: process.env.PATH, HOME: home };
+        if (shell !== undefined) env.NEXUS_VERIFY_ATTESTATION = shell;
+        const run = spawnSync(process.execPath, [
+          "--import", "tsx", "--input-type=module", "-e",
+          'const { loadEnvironment } = await import("./src/config.ts"); loadEnvironment(); process.stdout.write(JSON.stringify(process.env.NEXUS_VERIFY_ATTESTATION ?? null));',
+        ], { cwd: cliDir, env, encoding: "utf8" });
+        assert.equal(run.status, 0, run.stderr);
+        return JSON.parse(run.stdout);
+      };
+      assert.equal(effective("1"), "1", "config.env =0 must not defeat an explicit shell =1");
+      assert.equal(effective(undefined), "0", "config.env applies when the shell does not set it");
+      assert.equal(effective(""), "", "an explicitly empty shell value is kept so it is rejected, not replaced");
+    } finally {
+      fs.rmSync(home, { recursive: true, force: true });
+    }
+  });
+
   test("workspace trust does not select the tool approval mode", () => {
     const previousTrustOverride = process.env.NEXUS_TRUST_WORKSPACE;
     const previousApprovalMode = process.env.NEXUS_APPROVAL_MODE;

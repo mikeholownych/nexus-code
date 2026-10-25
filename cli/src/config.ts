@@ -13,6 +13,7 @@ const DEFAULT_ENDPOINT = "http://localhost:1234/v1";
 let credentialAuthorityRecorded = false;
 let shellEnvironment: Record<string, string | undefined> = {};
 let userConfigFile: Record<string, string> = {};
+const SHELL_PRECEDENCE_KEYS = ["NEXUS_VERIFY_ATTESTATION"] as const;
 
 /** Loads env files in precedence order; CLI flags are applied afterwards by buildConfig. */
 export function loadEnvironment(): void {
@@ -30,6 +31,12 @@ export function loadEnvironment(): void {
   if (fs.existsSync(globalConfig)) {
     loadDotenv({ path: globalConfig, override: true });
     userConfigFile = parseDotenv(fs.readFileSync(globalConfig));
+  }
+  // A provenance setting chosen in the operator's shell outranks config.env, which was applied with override above:
+  // config.env NEXUS_VERIFY_ATTESTATION=0 must not defeat an explicit NEXUS_VERIFY_ATTESTATION=1 for this run.
+  for (const key of SHELL_PRECEDENCE_KEYS) {
+    const shellValue = shellEnvironment[key];
+    if (shellValue !== undefined) process.env[key] = shellValue;
   }
   // Credential bindings are decided by the operator environment and config.env only (see setCredentialAuthority).
   if (operatorEnvironment) {
