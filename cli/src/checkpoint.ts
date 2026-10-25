@@ -20,6 +20,13 @@ export interface CheckpointInfo {
   files?: Array<{ path: string; content: string }>;
 }
 
+class GitIndexLockError extends Error {
+  constructor() {
+    super("Git index lock exists; check for an active Git operation before deciding whether the lock is stale.");
+    this.name = "GitIndexLockError";
+  }
+}
+
 export class CheckpointManager {
   private workspace: string;
   private checkpointDir: string;
@@ -40,6 +47,23 @@ export class CheckpointManager {
     } catch {
       this.isGit = false;
     }
+  }
+
+  private gitIndexLockExists(): boolean {
+    try {
+      const lockPath = execFileSync("git", ["rev-parse", "--git-path", "index.lock"], {
+        cwd: this.workspace,
+        encoding: "utf-8",
+      }).trim();
+      if (!lockPath) return false;
+      return fs.existsSync(path.isAbsolute(lockPath) ? lockPath : path.resolve(this.workspace, lockPath));
+    } catch {
+      return false;
+    }
+  }
+
+  private assertGitIndexUnlocked(): void {
+    if (this.gitIndexLockExists()) throw new GitIndexLockError();
   }
 
   private copyDirFiltered(src: string, dest: string, allowSensitive = false): void {
@@ -136,6 +160,7 @@ export class CheckpointManager {
 
     if (this.isGit) {
       try {
+        this.assertGitIndexUnlocked();
         this.assertGitChangesSafe(allowSensitive);
         // Create an untracked + tracked git stash commit without modifying working tree
         const stashCommit = execSync("git stash create", { cwd: this.workspace, encoding: "utf-8" }).trim();
@@ -155,7 +180,8 @@ export class CheckpointManager {
           gitRef = headCommit;
         }
       } catch (error) {
-        if (error instanceof SensitivePersistenceError) throw error;
+        if (error instanceof SensitivePersistenceError || error instanceof GitIndexLockError) throw error;
+        if (this.gitIndexLockExists()) throw new GitIndexLockError();
         throw new Error("Checkpoint could not verify protected Git state; no checkpoint was written");
       }
     }
