@@ -2663,9 +2663,11 @@ mod tests {
         feed(&mut state, &[r#"{"v":1,"type":"checkpoint.choice.request","id":"choice-failure","turn_id":"t1","message":"Checkpoint failed: protected Git state could not be verified. No checkpoint was written. Choose 1 read-only, 2 continue without a rollback checkpoint, 3 retry while allowing sensitive persistence, 4 cancel this turn, or 5 re-enter the instruction."}"#]);
         let screen = draw(&state, 40, 14);
         assert_shows(&screen, &[
-            "protected Git state could not be verified",
-            "No checkpoint was written",
-            "Retry may persist sensitive content",
+            "protected Git",
+            "state could not be verified.",
+            "checkpoint was written",
+            "Retry may",
+            "persist sensitive content.",
             "Read-only",
             "Continue without checkpoint",
             "Create checkpoint anyway",
