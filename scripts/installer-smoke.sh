@@ -30,9 +30,10 @@ run_installer() {
 run_installer
 "$TMP/prefix/bin/nexus" --version | grep -F "${VERSION#v}" >/dev/null
 
-# Attestation is required by default and must never trust a PATH shim.
+# Attestation defaults to auto: verify with a trusted gh when one exists, otherwise install with a
+# visible notice. NEXUS_VERIFY_ATTESTATION=1 requires provenance; a PATH shim is never trusted.
 # Relocate only the fixed trusted binary locations in a private installer copy so this
-# fixture exercises both branches without depending on whether the host has gh installed.
+# fixture exercises every branch without depending on whether the host has gh installed.
 mkdir -p "$TMP/trusted/usr/bin" "$TMP/trusted/usr/local/bin" "$TMP/path-shim" "$TMP/attestation-prefix/bin"
 sed "s|/usr/bin/gh|$TMP/trusted/usr/bin/gh|g; s|/usr/local/bin/gh|$TMP/trusted/usr/local/bin/gh|g" \
   "$INSTALLER" > "$TMP/install-test.sh"
@@ -43,9 +44,15 @@ printf 'PATH shim invoked\\n' >> '$TMP/path-shim.log'
 exit 0
 EOF
 chmod +x "$TMP/path-shim/gh"
-if env -u NEXUS_VERIFY_ATTESTATION \
-  NEXUS_VERSION="$VERSION" NEXUS_PREFIX="$TMP/attestation-prefix" \
+env -u NEXUS_VERIFY_ATTESTATION \
+  NEXUS_VERSION="$VERSION" NEXUS_PREFIX="$TMP/auto-prefix" \
   NEXUS_RELEASE_BASE_URL="http://127.0.0.1:$PORT" \
+  PATH="$TMP/path-shim:$PATH" sh "$TMP/install-test.sh" > "$TMP/auto-no-gh.out" 2>&1 \
+  || { echo "default auto mode refused to install without a trusted gh" >&2; cat "$TMP/auto-no-gh.out" >&2; exit 1; }
+grep -F "build provenance was not verified: no trusted GitHub CLI" "$TMP/auto-no-gh.out" >/dev/null
+[ -L "$TMP/auto-prefix/bin/nexus" ] || { echo "default auto mode did not install" >&2; exit 1; }
+if NEXUS_VERSION="$VERSION" NEXUS_PREFIX="$TMP/attestation-prefix" \
+  NEXUS_RELEASE_BASE_URL="http://127.0.0.1:$PORT" NEXUS_VERIFY_ATTESTATION=1 \
   PATH="$TMP/path-shim:$PATH" sh "$TMP/install-test.sh" > "$TMP/no-trusted-gh.out" 2>&1; then
   echo "installer accepted required provenance without a trusted gh" >&2
   exit 1
@@ -53,12 +60,38 @@ fi
 grep -F "no trusted GitHub CLI was found" "$TMP/no-trusted-gh.out" >/dev/null
 [ ! -e "$TMP/path-shim.log" ] || { echo "installer invoked PATH gh shim" >&2; exit 1; }
 if NEXUS_VERSION="$VERSION" NEXUS_PREFIX="$TMP/invalid-mode" \
-  NEXUS_RELEASE_BASE_URL="http://127.0.0.1:$PORT" NEXUS_VERIFY_ATTESTATION=auto \
+  NEXUS_RELEASE_BASE_URL="http://127.0.0.1:$PORT" NEXUS_VERIFY_ATTESTATION=yes \
   sh "$INSTALLER" > "$TMP/invalid-mode.out" 2>&1; then
   echo "installer accepted an unsupported attestation mode" >&2
   exit 1
 fi
 grep -F "NEXUS_VERIFY_ATTESTATION must be" "$TMP/invalid-mode.out" >/dev/null
+if NEXUS_VERSION="$VERSION" NEXUS_PREFIX="$TMP/empty-mode" \
+  NEXUS_RELEASE_BASE_URL="http://127.0.0.1:$PORT" NEXUS_VERIFY_ATTESTATION= \
+  sh "$INSTALLER" > "$TMP/empty-mode.out" 2>&1; then
+  echo "installer treated an explicitly empty attestation mode as auto" >&2
+  exit 1
+fi
+grep -F "NEXUS_VERIFY_ATTESTATION must be" "$TMP/empty-mode.out" >/dev/null
+cat > "$TMP/trusted/usr/bin/gh" <<'EOF'
+#!/bin/sh
+exit 1
+EOF
+chmod +x "$TMP/trusted/usr/bin/gh"
+env -u NEXUS_VERIFY_ATTESTATION \
+  NEXUS_VERSION="$VERSION" NEXUS_PREFIX="$TMP/auto-failing-gh-prefix" \
+  NEXUS_RELEASE_BASE_URL="http://127.0.0.1:$PORT" \
+  sh "$TMP/install-test.sh" > "$TMP/auto-failing-gh.out" 2>&1 \
+  || { echo "default auto mode refused to install when gh could not verify" >&2; cat "$TMP/auto-failing-gh.out" >&2; exit 1; }
+grep -F "could not verify the attestation" "$TMP/auto-failing-gh.out" >/dev/null
+if NEXUS_VERSION="$VERSION" NEXUS_PREFIX="$TMP/required-failing-gh-prefix" \
+  NEXUS_RELEASE_BASE_URL="http://127.0.0.1:$PORT" NEXUS_VERIFY_ATTESTATION=1 \
+  sh "$TMP/install-test.sh" > "$TMP/required-failing-gh.out" 2>&1; then
+  echo "installer accepted a failed required provenance check" >&2
+  exit 1
+fi
+grep -F "provenance attestation verification failed" "$TMP/required-failing-gh.out" >/dev/null
+[ ! -e "$TMP/required-failing-gh-prefix/bin/nexus" ] || { echo "failed required provenance still installed" >&2; exit 1; }
 cat > "$TMP/trusted/usr/bin/gh" <<'EOF'
 #!/bin/sh
 printf '%s\n' "$*" >> "$TRUSTED_GH_LOG"
