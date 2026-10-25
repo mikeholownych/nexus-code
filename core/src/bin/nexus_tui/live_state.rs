@@ -1618,7 +1618,8 @@ impl LiveState {
     }
 
     fn on_checkpoint_choice_key(&mut self, key: KeyEvent) -> Option<Action> {
-        let Some(Overlay::CheckpointChoice { id, selected, .. }) = &mut self.overlay else { return None; };
+        let Some(Overlay::CheckpointChoice { id, message, selected }) = &mut self.overlay else { return None; };
+        let is_checkpoint_failure = message.starts_with("Checkpoint failed: ");
         let choice = match key.code {
             KeyCode::Char('1') => { *selected = Some(0); return None; }
             KeyCode::Char('2') => { *selected = Some(1); return None; }
@@ -1630,6 +1631,7 @@ impl LiveState {
             KeyCode::Enter => match *selected {
                 Some(0) => Some("read_only"),
                 Some(1) => Some("without_checkpoint"),
+                Some(2) if is_checkpoint_failure => Some("retry"),
                 Some(2) => Some("allow_sensitive"),
                 Some(3) => Some("cancel"),
                 Some(4) => Some("other"),
@@ -3072,6 +3074,12 @@ mod tests {
         assert_eq!(state.on_key(key(KeyCode::Enter)), Some(Action::Send(Command::CheckpointChoice {
             id: "choice-2".into(),
             choice: "other".into(),
+        })));
+        state.apply(ev(r#"{"v":1,"type":"checkpoint.choice.request","id":"choice-3","turn_id":"t1","message":"Checkpoint failed: protected Git state could not be verified. Choose 1 read-only, 2 continue without a rollback checkpoint, 3 retry checkpoint normally, 4 cancel this turn, or 5 re-enter the instruction."}"#));
+        assert_eq!(state.on_key(key(KeyCode::Char('3'))), None);
+        assert_eq!(state.on_key(key(KeyCode::Enter)), Some(Action::Send(Command::CheckpointChoice {
+            id: "choice-3".into(),
+            choice: "retry".into(),
         })));
     }
 

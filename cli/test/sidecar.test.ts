@@ -562,6 +562,39 @@ describe("SidecarServer: sessions and slash commands", () => {
     });
   });
 
+  test("a normal checkpoint retry does not grant sensitive-persistence consent", async () => {
+    let modelCalls = 0;
+    await withSidecar(() => {
+      modelCalls += 1;
+      return { kind: "text", content: "Review started." };
+    }, "auto", async ({ events, app, send }) => {
+      const checkpointManager = app.getCheckpointManager() as any;
+      const createCheckpoint = checkpointManager.createCheckpoint.bind(checkpointManager);
+      let attempts = 0;
+      checkpointManager.createCheckpoint = (name: string, options?: { allowSensitive?: boolean }) => {
+        attempts += 1;
+        assert.equal(options, undefined, "normal retry must not opt in to sensitive persistence");
+        if (attempts === 1) throw new Error("Checkpoint could not verify protected Git state; no checkpoint was written");
+        return createCheckpoint(name, options);
+      };
+
+      await send({ type: "prompt.submit", id: "t-normal-checkpoint-retry", text: "review the codebase" });
+      await waitUntil(() => events.some((event) => event.type === "checkpoint.choice.request"));
+      const request = events.find((event) => event.type === "checkpoint.choice.request");
+      assert.match(request.message, /3 retry checkpoint normally/);
+      assert.doesNotMatch(request.message, /allowing sensitive persistence/);
+      await send({ type: "checkpoint.choice", id: request.id, choice: "allow_sensitive" });
+      await waitUntil(() => events.some((event) => event.type === "error" && event.id === request.id && event.code === "BAD_REQUEST"));
+      assert.equal(modelCalls, 0, "an unavailable choice must leave the turn paused");
+
+      await send({ type: "checkpoint.choice", id: request.id, choice: "retry" });
+      await waitUntil(() => events.some((event) => event.type === "turn.result" && event.turn_id === "t-normal-checkpoint-retry"));
+      assert.equal(attempts, 2);
+      assert.equal(modelCalls, 1);
+      assert.equal(app.getCheckpointManager().listCheckpoints().length, 1);
+    });
+  });
+
   test("cancel choice does not start the turn", async () => {
     await withSidecar(() => ({ kind: "text", content: "must not run" }), "review", async ({ server, events, repo, send }) => {
       fs.writeFileSync(path.join(repo, "base.txt"), `changed ${`ghp_${"D".repeat(36)}`}\n`);

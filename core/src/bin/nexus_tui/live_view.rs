@@ -226,24 +226,33 @@ fn render_checkpoint_choice(
     selected: Option<usize>,
 ) -> usize {
     let key = Style::default().fg(ACCENT).add_modifier(Modifier::BOLD);
-    let options = [
-        "Read-only",
-        "Continue without checkpoint",
-        "Create checkpoint anyway",
-        "Cancel this turn",
-        "Other (re-enter instruction)",
-    ];
+    let options = if message.starts_with("Checkpoint failed: ") {
+        [
+            "Read-only",
+            "Continue without checkpoint",
+            "Retry checkpoint",
+            "Cancel this turn",
+            "Other (re-enter instruction)",
+        ]
+    } else {
+        [
+            "Read-only",
+            "Continue without checkpoint",
+            "Create checkpoint anyway",
+            "Cancel this turn",
+            "Other (re-enter instruction)",
+        ]
+    };
     // The modal has one border cell on each side and one column of margin on each side.
     // Pre-wrap every line at the actual inner width so the height estimate includes wrapped text.
     let width = area.width.saturating_sub(4).max(1);
     // The sidecar message enumerates every choice for non-TUI clients. This modal
-    // renders those choices separately, so use a compact warning to keep all five
-    // visible on the smallest supported terminal size.
+    // renders those choices separately, so keep the explanation compact enough for 40x14.
     let display_message = if message.starts_with("Sensitive content blocked the checkpoint") {
         "Sensitive content may persist if you create a checkpoint anyway.".to_owned()
     } else if let Some(failure) = message.strip_prefix("Checkpoint failed: ") {
         let failure = failure.split(". Choose ").next().unwrap_or(failure);
-        format!("Checkpoint failed: {failure} Retry may persist sensitive content.")
+        format!("Checkpoint failed: {failure} Retrying keeps sensitive-persistence settings unchanged.")
     } else {
         message.to_owned()
     };
@@ -2660,21 +2669,22 @@ mod tests {
     #[test]
     fn checkpoint_failure_modal_keeps_reason_and_choices_visible_on_small_terminal() {
         let mut state = ready();
-        feed(&mut state, &[r#"{"v":1,"type":"checkpoint.choice.request","id":"choice-failure","turn_id":"t1","message":"Checkpoint failed: protected Git state could not be verified. No checkpoint was written. Choose 1 read-only, 2 continue without a rollback checkpoint, 3 retry while allowing sensitive persistence, 4 cancel this turn, or 5 re-enter the instruction."}"#]);
+        feed(&mut state, &[r#"{"v":1,"type":"checkpoint.choice.request","id":"choice-failure","turn_id":"t1","message":"Checkpoint failed: protected Git state could not be verified. No checkpoint was written. Choose 1 read-only, 2 continue without a rollback checkpoint, 3 retry checkpoint normally, 4 cancel this turn, or 5 re-enter the instruction."}"#]);
         let screen = draw(&state, 40, 14);
         assert_shows(&screen, &[
             "protected Git",
             "state could not be verified.",
             "checkpoint was written",
-            "Retry may",
-            "persist sensitive content.",
+            "Retrying keeps",
+            "sensitive-persistence settings unchanged.",
             "Read-only",
             "Continue without checkpoint",
-            "Create checkpoint anyway",
+            "Retry checkpoint",
             "Cancel this turn",
             "Other (re-enter instruction)",
             "1–5 choose",
         ]);
+        assert!(!screen.contains("Create checkpoint anyway"));
     }
 
     #[test]

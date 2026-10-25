@@ -24,6 +24,7 @@ import { STEERING_PREFIX } from "./core/objective.js";
 /** Messages of a resumed conversation sent to the client, and the characters kept of each. */
 const HISTORY_ENTRIES = 60;
 const HISTORY_CHARS = 4000;
+type CheckpointChoice = "read_only" | "without_checkpoint" | "retry" | "allow_sensitive" | "cancel" | "other";
 
 function readOnlySlashAllowed(command: string, args: string): boolean {
   const spec = findSlash(command);
@@ -83,7 +84,7 @@ export class SidecarServer {
   private activeTurn?: Promise<void>;
   private turnAbort?: AbortController;
   private pendingApproval?: { id: string; settle: (approved: boolean) => void };
-  private pendingCheckpointChoice?: { id: string; settle: (choice: "read_only" | "without_checkpoint" | "allow_sensitive" | "cancel" | "other") => void };
+  private pendingCheckpointChoice?: { id: string; choices: readonly CheckpointChoice[]; settle: (choice: CheckpointChoice) => void };
   private approvalSeq = 0;
   private shutdownPromise?: Promise<void>;
   private readonly resume?: string;
@@ -557,8 +558,11 @@ export class SidecarServer {
           );
           const message = sensitiveContentBlocked
             ? undefined
-            : `Checkpoint failed: ${failure}. No checkpoint was written. Choose 1 read-only, 2 continue without a rollback checkpoint, 3 retry while allowing sensitive persistence, 4 cancel this turn, or 5 re-enter the instruction.`;
-          const choice = await this.requestCheckpointChoice(turnId, signal, message);
+            : `Checkpoint failed: ${failure}. No checkpoint was written. Choose 1 read-only, 2 continue without a rollback checkpoint, 3 retry checkpoint normally, 4 cancel this turn, or 5 re-enter the instruction.`;
+          const choices: readonly CheckpointChoice[] = sensitiveContentBlocked
+            ? ["read_only", "without_checkpoint", "allow_sensitive", "cancel", "other"]
+            : ["read_only", "without_checkpoint", "retry", "cancel", "other"];
+          const choice = await this.requestCheckpointChoice(turnId, signal, message, choices);
           if (choice === "cancel" || choice === "other") {
             const message = choice === "other"
               ? "This turn was not started. Enter a different instruction in the composer."
@@ -577,6 +581,8 @@ export class SidecarServer {
             if (agent.getApprovalMode() !== previousApprovalMode) this.emitSessionState();
             this.emit({ type: "notice", text: "Continuing in the current mode without a rollback checkpoint, as requested." });
             checkpointReady = true;
+          } else if (choice === "retry") {
+            this.emit({ type: "notice", text: "Retrying checkpoint without changing sensitive-persistence settings. The turn remains paused until the retry succeeds or you choose another option." });
           } else if (choice === "allow_sensitive") {
             allowSensitiveCheckpoint = true;
             this.emit({ type: "notice", text: "Retrying checkpoint with sensitive persistence allowed, as requested; this may persist sensitive workspace content. The turn will wait until the retry succeeds or you choose another option." });
@@ -671,18 +677,19 @@ export class SidecarServer {
     turnId: string,
     signal: AbortSignal,
     message = "Sensitive content blocked the checkpoint. Choose 1 read-only, 2 continue without a rollback checkpoint, 3 create a checkpoint anyway (may persist sensitive content), 4 cancel this turn, or 5 re-enter the instruction.",
-  ): Promise<"read_only" | "without_checkpoint" | "allow_sensitive" | "cancel" | "other"> {
+    choices: readonly CheckpointChoice[] = ["read_only", "without_checkpoint", "allow_sensitive", "cancel", "other"],
+  ): Promise<CheckpointChoice> {
     if (signal.aborted) return Promise.resolve("cancel");
     const id = `checkpoint-choice-${++this.approvalSeq}`;
     return new Promise((resolve) => {
-      const settle = (choice: "read_only" | "without_checkpoint" | "allow_sensitive" | "cancel" | "other") => {
+      const settle = (choice: CheckpointChoice) => {
         signal.removeEventListener("abort", onAbort);
         this.pendingCheckpointChoice = undefined;
         resolve(choice);
       };
       const onAbort = () => settle("cancel");
       signal.addEventListener("abort", onAbort, { once: true });
-      this.pendingCheckpointChoice = { id, settle };
+      this.pendingCheckpointChoice = { id, choices, settle };
       this.emit({
         type: "checkpoint.choice.request",
         id,
@@ -692,10 +699,14 @@ export class SidecarServer {
     });
   }
 
-  private resolveCheckpointChoice(id: string, choice: "read_only" | "without_checkpoint" | "allow_sensitive" | "cancel" | "other"): void {
+  private resolveCheckpointChoice(id: string, choice: CheckpointChoice): void {
     const pending = this.pendingCheckpointChoice;
     if (!pending || pending.id !== id) {
       this.emit({ type: "error", id, code: "NOT_FOUND", message: `No pending checkpoint choice with id ${id}.` });
+      return;
+    }
+    if (!pending.choices.includes(choice)) {
+      this.emit({ type: "error", id, code: "BAD_REQUEST", message: "That choice is not available for this checkpoint failure." });
       return;
     }
     pending.settle(choice);
