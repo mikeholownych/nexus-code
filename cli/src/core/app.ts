@@ -10,7 +10,7 @@ import { EventEmitter } from "node:events";
 import * as path from "node:path";
 import * as fs from "node:fs";
 import { AutonomousAgent } from "../agent.js";
-import { HarnessConfig, ChatMessage } from "../types.js";
+import { HarnessConfig, ChatMessage, EvaluationToolReceipt } from "../types.js";
 import { SessionManager, SessionData } from "../session.js";
 import {
   DurableStateManager,
@@ -62,6 +62,8 @@ export interface TaskExecutionResult {
   turn: TurnResult;
   /** Process exit code contract: 0 verified/nothing to verify, 2 completed-unverified, 130 interrupted, 1 otherwise. */
   exitCode: number;
+  /** Present only when the evaluator explicitly opts in; contains no command or output text. */
+  evaluationToolReceipts?: EvaluationToolReceipt[];
 }
 
 export interface SlashCommandResult {
@@ -172,6 +174,7 @@ export class ApplicationCore extends EventEmitter {
   public async runTask(prompt: string, options: RunTaskOptions = {}): Promise<TaskExecutionResult> {
     const startTime = Date.now();
     let taskId = this.agent.getTaskId();
+    if (process.env.NEXUS_EVAL_TOOL_RECEIPTS === "1") this.agent.clearEvaluationToolReceipts();
 
     if (options.resumeTaskId) {
       let targetTaskId = options.resumeTaskId;
@@ -311,6 +314,9 @@ export class ApplicationCore extends EventEmitter {
       logs: shouldCapture ? capturedLogs : undefined,
       turn: finalTurn,
       exitCode: exitCodeForTurn(finalTurn),
+      ...(process.env.NEXUS_EVAL_TOOL_RECEIPTS === "1"
+        ? { evaluationToolReceipts: this.agent.getEvaluationToolReceipts() }
+        : {}),
     };
 
     this.emit("task:end", result);

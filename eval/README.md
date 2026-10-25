@@ -104,7 +104,13 @@ What was injected is recorded in `model.faultsInjected`. Such runs are never tre
 - hung past budget.
 
 The remaining T4 classes come from task fixtures (a hanging test command, a full disk) and from the SIGTERM-then-resume
-runner case. `make test` includes a T4 smoke test with two injected faults (`cli/test/eval_harness.test.ts`).
+runner case. A fixture task declares `t4Fixture: { kind, tool: "run_command", command, timeoutSecs }` for a hanging
+test, or `t4Fixture: { kind: "full_disk", tool: "run_command", command, storageLimitBytes }` for a full disk. Nexus
+T4 runs opt into sanitized evaluator receipts containing the digest of the command actually executed, the runner's
+timeout/exit result, and workspace free space before and after the invocation. The runner counts an exact command
+digest plus an actual timeout for a hang, or a failed command that takes the dedicated storage tmpfs from near-full
+capacity to exhausted. Both require successful cgroup cleanup with no survivors. Task metadata cannot provide
+evidence or a pass bit. `make test` includes a T4 smoke test with two injected faults (`cli/test/eval_harness.test.ts`).
 
 ## Qualification runs
 

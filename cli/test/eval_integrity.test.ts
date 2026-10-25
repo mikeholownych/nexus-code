@@ -9,6 +9,7 @@ import fs from "node:fs";
 import http from "node:http";
 import os from "node:os";
 import path from "node:path";
+import { createHash } from "node:crypto";
 import { spawn, spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
@@ -230,6 +231,129 @@ test("contaminated runs leave the pass rate, crashes are counted, and reruns are
   assert.deepEqual(score.replacements, [{ config: "c", task: "d", run: 1, was: "error: workspace setup failed", now: "UNVERIFIED" }]);
 });
 
+test("T4 scoring requires all nine classes and five injected runs per class", () => {
+  const kinds = ["refuse", "overloaded", "stream_cut", "truncate", "hanging_test_command", "full_disk", "context_overflow", "malformed_tool_json", "sigterm_resume"];
+  const records = kinds.flatMap((kind) => Array.from({ length: 5 }, (_, index) => {
+    const runnerClass = ["hanging_test_command", "full_disk", "sigterm_resume"].includes(kind);
+    const evidence = kind === "sigterm_resume"
+      ? { signal: "SIGTERM", delivered: true, deliveredProcesses: 1, signalDuringActiveTurn: true, payloadExitSignal: "SIGTERM", supervisorWrapperExitSignal: null, resumed: true, resumeExitCode: 0, resumeTurnExecution: "COMPLETED" }
+      : kind === "hanging_test_command"
+        ? { observedHung: true, timedOut: true, containmentCleaned: true, tool: "run_command", commandSha256: "a".repeat(64), timeoutSecs: 60, runnerExitCode: null }
+        : kind === "full_disk"
+          ? { storageExhausted: true, containmentCleaned: true, tool: "run_command", commandSha256: "a".repeat(64), storageLimitBytes: 64 * 1024 * 1024, availableBeforeBytes: 64 * 1024 * 1024, availableAfterBytes: 0, runnerExitCode: 1 }
+          : undefined;
+    const event = { kind, source: runnerClass ? "task_fixture_or_runner" : "model_proxy", ...(evidence ? { evidence } : {}) };
+    return {
+      ...base,
+      agent: "nexus",
+      tier: "T4",
+      task: `t4-${kind}`,
+      run: index + 1,
+      hiddenPass: true,
+      exitCode: 0,
+      turn: { execution: "COMPLETED", outcome: "UNVERIFIED" },
+      model: ["hanging_test_command", "full_disk", "sigterm_resume"].includes(kind) ? { faultsInjected: [] } : { faultsInjected: [event] },
+      t4FaultsInjected: ["hanging_test_command", "full_disk", "sigterm_resume"].includes(kind) ? [event] : [],
+    };
+  }));
+  const full = writeResults(records);
+  const fullOut = spawnSync(process.execPath, [path.join(ROOT, "eval/score.mjs"), path.join(full, "results.jsonl"), "--json"], { encoding: "utf8" });
+  assert.equal(fullOut.status, 0, fullOut.stderr);
+  const fullScore = JSON.parse(fullOut.stdout);
+  assert.equal(fullScore.t4.gate, "PASS");
+  assert.equal(fullScore.t4.observedClasses, 9);
+  assert.equal(fullScore.t4.totalRuns, 45);
+  assert.deepEqual(fullScore.faults.map((fault: any) => fault.n), Array(9).fill(5));
+
+  const proxyOnly = writeResults(records.filter((record) => ["refuse", "overloaded", "stream_cut", "truncate", "context_overflow", "malformed_tool_json"].some((kind) => record.task === `t4-${kind}`)).slice(0, 6));
+  const partialOut = spawnSync(process.execPath, [path.join(ROOT, "eval/score.mjs"), path.join(proxyOnly, "results.jsonl"), "--json"], { encoding: "utf8" });
+  assert.equal(partialOut.status, 0, partialOut.stderr);
+  const partialScore = JSON.parse(partialOut.stdout);
+  assert.equal(partialScore.faults.length, 9, "missing fixture and runner classes remain visible");
+  assert.equal(partialScore.t4.gate, "FAIL", "a partial proxy-only run cannot pass T4");
+
+  const forged = writeResults([{
+    ...base,
+    tier: "T4",
+    task: "t4-forged-source",
+    run: 1,
+    model: { faultsInjected: [{ kind: "sigterm_resume", source: "model_proxy" }] },
+    t4FaultsInjected: [],
+  }]);
+  const forgedOut = spawnSync(process.execPath, [path.join(ROOT, "eval/score.mjs"), path.join(forged, "results.jsonl"), "--json"], { encoding: "utf8" });
+  assert.equal(forgedOut.status, 0, forgedOut.stderr);
+  const forgedScore = JSON.parse(forgedOut.stdout);
+  assert.equal(forgedScore.t4.invalidEvents, 1, "runner-only faults cannot be claimed as proxy injections");
+  assert.equal(forgedScore.t4.gate, "FAIL");
+
+  const missingRunnerEvidence = writeResults([{
+    ...base,
+    tier: "T4",
+    task: "t4-missing-runner-evidence",
+    run: 1,
+    t4FaultsInjected: [{ kind: "sigterm_resume", source: "task_fixture_or_runner" }],
+  }]);
+  const missingEvidenceOut = spawnSync(process.execPath, [path.join(ROOT, "eval/score.mjs"), path.join(missingRunnerEvidence, "results.jsonl"), "--json"], { encoding: "utf8" });
+  assert.equal(missingEvidenceOut.status, 0, missingEvidenceOut.stderr);
+  assert.equal(JSON.parse(missingEvidenceOut.stdout).t4.invalidEvents, 1, "runner fault labels without observed evidence are invalid");
+
+  const missingResumeEvidence = writeResults([{
+    ...base,
+    tier: "T4",
+    task: "t4-missing-resume-evidence",
+    run: 1,
+    t4FaultsInjected: [{
+      kind: "sigterm_resume",
+      source: "task_fixture_or_runner",
+      evidence: { signal: "SIGTERM", delivered: true, deliveredProcesses: 1, signalDuringActiveTurn: true, payloadExitSignal: "SIGTERM", supervisorWrapperExitSignal: null, resumed: true },
+    }],
+  }]);
+  const missingResumeOut = spawnSync(process.execPath, [path.join(ROOT, "eval/score.mjs"), path.join(missingResumeEvidence, "results.jsonl"), "--json"], { encoding: "utf8" });
+  assert.equal(missingResumeOut.status, 0, missingResumeOut.stderr);
+  assert.equal(JSON.parse(missingResumeOut.stdout).t4.invalidEvents, 1, "missing resume exit and resulting-turn evidence are invalid");
+
+  const inactiveSignal = writeResults([{
+    ...base,
+    tier: "T4",
+    task: "t4-inactive-signal",
+    run: 1,
+    t4FaultsInjected: [{
+      kind: "sigterm_resume",
+      source: "task_fixture_or_runner",
+      evidence: { signal: "SIGTERM", delivered: true, deliveredProcesses: 1, signalDuringActiveTurn: false, payloadExitSignal: "SIGTERM", supervisorWrapperExitSignal: null, resumed: true, resumeExitCode: 0, resumeTurnExecution: "COMPLETED" },
+    }],
+  }]);
+  const inactiveSignalOut = spawnSync(process.execPath, [path.join(ROOT, "eval/score.mjs"), path.join(inactiveSignal, "results.jsonl"), "--json"], { encoding: "utf8" });
+  assert.equal(inactiveSignalOut.status, 0, inactiveSignalOut.stderr);
+  assert.equal(JSON.parse(inactiveSignalOut.stdout).t4.invalidEvents, 1, "an interruption outside an active inference turn is invalid");
+
+  const wrapperOnlySignal = writeResults([{
+    ...base,
+    tier: "T4",
+    task: "t4-wrapper-only-signal",
+    run: 1,
+    t4FaultsInjected: [{
+      kind: "sigterm_resume",
+      source: "task_fixture_or_runner",
+      evidence: { signal: "SIGTERM", delivered: true, deliveredProcesses: 1, signalDuringActiveTurn: true, payloadExitSignal: null, supervisorWrapperExitSignal: "SIGTERM", resumed: true, resumeExitCode: 0, resumeTurnExecution: "COMPLETED" },
+    }],
+  }]);
+  const wrapperOnlyOut = spawnSync(process.execPath, [path.join(ROOT, "eval/score.mjs"), path.join(wrapperOnlySignal, "results.jsonl"), "--json"], { encoding: "utf8" });
+  assert.equal(wrapperOnlyOut.status, 0, wrapperOnlyOut.stderr);
+  assert.equal(JSON.parse(wrapperOnlyOut.stdout).t4.invalidEvents, 1, "wrapper signal metadata cannot substitute for the payload supervisor report");
+
+  const nonT4 = writeResults([{
+    ...base,
+    tier: "T2",
+    task: "t2-fault-metadata",
+    run: 1,
+    model: { faultsInjected: [{ kind: "overloaded", atRequest: 1 }] },
+  }]);
+  const nonT4Out = spawnSync(process.execPath, [path.join(ROOT, "eval/score.mjs"), path.join(nonT4, "results.jsonl"), "--json"], { encoding: "utf8" });
+  assert.equal(nonT4Out.status, 0, nonT4Out.stderr);
+  assert.equal(JSON.parse(nonT4Out.stdout).t4.observedClasses, 0, "non-T4 runs cannot satisfy the fault-class gate");
+});
+
 // ---------------------------------------------------------------- run validity (REQ-QUAL-101/102/106)
 
 test("task validation: pinned repos, one source, and black-box hidden oracle for qualification", async () => {
@@ -239,6 +363,13 @@ test("task validation: pinned repos, one source, and black-box hidden oracle for
   const good = { id, tier: "T2", objective: "fix it", repo: { url: "https://example.invalid/r.git", commit: "a".repeat(40) }, hidden: { command: "npm test" } };
   fs.mkdirSync(path.join(dir, "candidate"));
   assert.deepEqual(validateTask(good, dir), []);
+  assert.match(validateTask({ ...good, t4RunnerFault: "sigterm_resume" }, dir).join(), /supported only as sigterm_resume on a T4 task/);
+  assert.deepEqual(validateTask({ ...good, tier: "T4", t4RunnerFault: "sigterm_resume" }, dir), []);
+  assert.match(validateTask({ ...good, tier: "T4", t4RunnerFault: "full_disk" }, dir).join(), /supported only as sigterm_resume on a T4 task/);
+  assert.deepEqual(validateTask({ ...good, tier: "T4", t4Fixture: { kind: "hanging_test_command", tool: "run_command", command: "npm test", timeoutSecs: 60 } }, dir), []);
+  assert.deepEqual(validateTask({ ...good, tier: "T4", t4Fixture: { kind: "full_disk", tool: "run_command", command: "./test-disk-cap.sh", storageLimitBytes: 64 * 1024 * 1024 } }, dir), []);
+  assert.match(validateTask({ ...good, t4Fixture: { kind: "full_disk", tool: "run_command", command: "./test-disk-cap.sh", storageLimitBytes: 64 } }, dir).join(), /only as an object on a T4 task/);
+  assert.match(validateTask({ ...good, tier: "T4", t4Fixture: { kind: "full_disk", tool: "run_command", command: "./test-disk-cap.sh" } }, dir).join(), /positive storageLimitBytes/);
   assert.match(validateTask({ ...good, repo: { url: good.repo.url, commit: "main" } }, dir).join(), /pinned/);
   assert.match(validateTask({ ...good, fixture: "repo" }, dir).join(), /exactly one of fixture or repo/);
   assert.match(validateTask({ ...good, hidden: {} }, dir).join(), /hidden.command/);
@@ -261,6 +392,25 @@ test("task validation: pinned repos, one source, and black-box hidden oracle for
   fs.writeFileSync(path.join(dir, "candidate", "private-cases.json"), fs.readFileSync(cases));
   assert.match(validateTask({ ...qualifiedTask, hidden: { ...oracle, casesFile: "candidate/private-cases.json" } }, dir, { qualification: true }).join(), /outside the candidate fixture/);
   assert.match(validateTask({ ...qualifiedTask, hidden: { ...oracle, argv: ["--eval"] } }, dir, { qualification: true }).join(), /normalized relative candidate entrypoint/);
+});
+
+test("T4 fixture evidence requires an exact CLI runner receipt and measured storage boundary", async () => {
+  const { observeT4Fixture } = await import(path.join(ROOT, "eval/t4_fixtures.mjs"));
+  const task = { tier: "T4", t4Fixture: { kind: "hanging_test_command", tool: "run_command", command: "npm test", timeoutSecs: 30 } };
+  const commandSha256 = createHash("sha256").update("npm test").digest("hex");
+  const agent = { json: { evaluationToolReceipts: [{ invocationId: "call-1", tool: "run_command", commandSha256, timeoutSecs: 30, exitCode: null, timedOut: true }] } };
+  const containment = { cleaned: true, survivorsAfterExit: 0 };
+  const hang = observeT4Fixture(task, agent, containment, { storageBytes: 64 * 1024 * 1024 });
+  assert.equal(hang[0].evidence.observedHung, true);
+  assert.equal(observeT4Fixture(task, { json: { messages: [{ role: "tool", content: "timed out" }] } }, containment, {}).length, 0, "printable transcript text is not trusted evidence");
+  assert.equal(observeT4Fixture(task, agent, { cleaned: false, survivorsAfterExit: 1 }, {}).at(0).evidence.containmentCleaned, false);
+
+  const diskTask = { tier: "T4", t4Fixture: { kind: "full_disk", tool: "run_command", command: "./test-disk-cap.sh", storageLimitBytes: 64 * 1024 * 1024 } };
+  const diskHash = createHash("sha256").update("./test-disk-cap.sh").digest("hex");
+  const diskAgent = { json: { evaluationToolReceipts: [{ invocationId: "call-2", tool: "run_command", commandSha256: diskHash, timeoutSecs: 30, exitCode: 1, timedOut: false, workspaceAvailableBeforeBytes: 64 * 1024 * 1024, workspaceAvailableAfterBytes: 0 }] } };
+  assert.equal(observeT4Fixture(diskTask, diskAgent, containment, { storageBytes: 64 * 1024 * 1024 })[0].evidence.storageExhausted, true);
+  assert.equal(observeT4Fixture(diskTask, diskAgent, containment, { storageBytes: 128 * 1024 * 1024 }).length, 0);
+  assert.equal(observeT4Fixture(diskTask, { json: { evaluationToolReceipts: [{ ...diskAgent.json.evaluationToolReceipts[0], workspaceAvailableAfterBytes: 8 * 1024 * 1024 }] } }, containment, { storageBytes: 64 * 1024 * 1024 }).length, 0, "a printed ENOSPC message without exhausted storage is insufficient");
 });
 
 test("black-box oracle keeps canary expectations outside the candidate process and returns sanitized evidence", { timeout: 15_000 }, async () => {
@@ -588,7 +738,8 @@ test("resource contract: candidate memory, processes, storage and CPU are kernel
   const ws = fs.mkdtempSync(path.join(resources.workspaceRoot, "eval-resources-"));
   const run = (command: string, timeoutSec = 30) => runIsolated(command, { cwd: ws, home: true, timeoutSec, resources });
   try {
-    const memory = await run("tail /dev/zero");
+    // Actually allocate task-charged tmpfs pages. Streaming zeros to the captured pipe only tests output limits.
+    const memory = await run("dd if=/dev/zero of=/tmp/memory-fill bs=1M count=512 status=none");
     assert.notEqual(memory.status, 0);
     assert.ok(memory.resources.oomKills >= 1, JSON.stringify(memory.resources));
     assert.equal(memory.resources.limits["memory.oom.group"], "1");
@@ -648,6 +799,38 @@ test("resource contract: candidate memory, processes, storage and CPU are kernel
     assert.equal(fs.existsSync(escapedMarker), false, "a session-escaped task process survived cgroup cleanup");
   } finally {
     fs.rmSync(ws, { recursive: true, force: true });
+  }
+});
+
+test("resource supervisor preserves SIGTERM grace for descendants after the main payload exits", { timeout: 30_000 }, async () => {
+  const { spawnContained } = await import(path.join(ROOT, "eval/resources.mjs"));
+  const workspaceRoot = process.env.NEXUS_EVAL_TEST_WORKSPACE_ROOT ?? "/dev/shm";
+  const tmpfs = fs.statfsSync(workspaceRoot);
+  const resources = { cpuPercent: 20, memoryBytes: 256 * 1024 * 1024, tasks: 16, storageBytes: tmpfs.blocks * tmpfs.bsize, workspaceRoot };
+  const markerDir = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-sigterm-resource-test-"));
+  const readyMarker = path.join(markerDir, "payload-ready");
+  const signalMarker = path.join(markerDir, "flushed-state");
+  try {
+    const result = await new Promise<any>((resolve, reject) => {
+      const childScript = `process.on('SIGTERM',()=>setTimeout(()=>{require('node:fs').writeFileSync(${JSON.stringify(signalMarker)},'flushed');process.exit(143)},400));require('node:fs').writeFileSync(${JSON.stringify(readyMarker)},'ready');setInterval(()=>{},1000)`;
+      const parentScript = `require('node:child_process').spawn(process.execPath,['-e',${JSON.stringify(childScript)}],{stdio:'ignore'});setInterval(()=>{},1000)`;
+      const { child, containment } = spawnContained({ cmd: process.execPath, argv: ["-e", parentScript] }, resources, { cwd: "/", stdio: ["ignore", "ignore", "ignore"], detached: true });
+      const timeout = setTimeout(() => { containment!.kill(); reject(new Error("graceful SIGTERM fixture did not exit")); }, 15_000);
+      child.on("error", (error) => { clearTimeout(timeout); reject(error); });
+      child.on("close", async () => { clearTimeout(timeout); resolve(await containment!.final); });
+      const sendAfterReady = async () => {
+        const deadline = Date.now() + 10_000;
+        while (!fs.existsSync(readyMarker) && Date.now() < deadline) await new Promise((wait) => setTimeout(wait, 20));
+        if (!fs.existsSync(readyMarker)) return reject(new Error("contained payload did not report ready"));
+        if (!containment!.signal("SIGTERM", 2000)) reject(new Error("supervisor control channel rejected SIGTERM"));
+      };
+      void sendAfterReady().catch(reject);
+    });
+    assert.equal(fs.readFileSync(signalMarker, "utf8"), "flushed", "the payload did not receive SIGTERM before forced cleanup");
+    assert.equal(result.cleaned, true, JSON.stringify(result));
+    assert.deepEqual(result.signals.map((entry: any) => [entry.name, entry.forced]), [["SIGTERM", false]]);
+  } finally {
+    fs.rmSync(markerDir, { recursive: true, force: true });
   }
 });
 

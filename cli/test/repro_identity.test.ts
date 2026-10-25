@@ -5,6 +5,7 @@
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -26,11 +27,12 @@ test("npm registry scoped package names escape every path separator", async () =
   assert.equal(registryPackageName("@scope/nested/package"), "@scope%2fnested%2fpackage");
 });
 
-function identity(label: string, overrides: { commit?: string; lock?: string; archive?: string; workflowRef?: string; workflowSha?: string; image?: string | null; rustImage?: string | null; missingAsset?: boolean } = {}) {
+function identity(label: string, overrides: { commit?: string; lock?: string; archive?: string; workflowRef?: string; workflowSha?: string; packageToolCommit?: string; packageToolSha?: string; image?: string | null; rustImage?: string | null; missingAsset?: boolean } = {}) {
   return {
     source: { version: "v1.0.0-rc.1", commit: overrides.commit ?? COMMIT, tree: "b".repeat(40), tagObject: "c".repeat(40), lockfiles: { "cli/package-lock.json": "1", "core/Cargo.lock": overrides.lock ?? "2", "rust-toolchain.toml": "3", "scripts/release-tools/package-lock.json": "4" } },
     toolchain: { node: "v22", npm: "10", rustc: "rustc 1.95.0", cargo: "cargo 1.95.0" },
     buildEnvironment: { rustContainerImage: overrides.rustImage === undefined ? APPROVED_RUST_IMAGE : overrides.rustImage },
+    packagingTool: { commit: overrides.packageToolCommit ?? WORKFLOW_COMMIT, packageScriptSha256: overrides.packageToolSha ?? "a".repeat(64) },
     runner: { label, image: overrides.image === undefined ? label.replace("-", "").replace(".04", "") : overrides.image, imageVersion: "20261012.1" },
     workflow: { ref: overrides.workflowRef ?? "refs/heads/main", sha: overrides.workflowSha ?? "f".repeat(40), runId: "42", runAttempt: "1" },
     artifacts: {
@@ -57,13 +59,14 @@ test("repro compare accepts only identical source, lockfiles and artifacts from 
     assert.equal(evidence.result, "PASS");
     assert.equal(evidence.source.commit, COMMIT);
     assert.equal(evidence.buildEnvironment.rustContainerImage, APPROVED_RUST_IMAGE);
+    assert.equal(evidence.packagingTool.commit, WORKFLOW_COMMIT);
     assert.deepEqual(evidence.builders.map((builder: any) => builder.runner.label), ["ubuntu-22.04", "ubuntu-24.04"]);
 
     const missingA = write("missing-a.json", identity("ubuntu-22.04", { missingAsset: true }));
     const missingB = write("missing-b.json", identity("ubuntu-24.04", { missingAsset: true }));
     const missingAssetResult = compare(missingA, missingB);
     assert.notEqual(missingAssetResult.status, 0);
-    assert.match(missingAssetResult.stderr, /does not cover the exact six published release assets/);
+    assert.match(missingAssetResult.stderr, /does not cover the six selected reproducibility artifacts/);
 
     const cases: [string, string, RegExp][] = [
       ["other commit", write("c.json", identity("ubuntu-24.04", { commit: "e".repeat(40) })), /not v1\.0\.0-rc\.1@/],
@@ -76,6 +79,8 @@ test("repro compare accepts only identical source, lockfiles and artifacts from 
       ["unpinned Rust build image", write("ru.json", identity("ubuntu-24.04", { rustImage: "rust:1.95.0-bookworm" })), /approved digest-pinned Bookworm Rust build image/],
       ["EOL Bullseye build image", write("bullseye.json", identity("ubuntu-24.04", { rustImage: "rust:1.95.0-bullseye@sha256:" + "3".repeat(64) })), /approved digest-pinned Bookworm Rust build image/],
       ["different Bookworm build digest", write("rd.json", identity("ubuntu-24.04", { rustImage: "rust:1.95.0-bookworm@sha256:" + "2".repeat(64) })), /approved digest-pinned Bookworm Rust build image/],
+      ["different package tool commit", write("ptc.json", identity("ubuntu-24.04", { packageToolCommit: "e".repeat(40) })), /exact reviewed packaging tool commit and script hash/],
+      ["different package tool script", write("pts.json", identity("ubuntu-24.04", { packageToolSha: "b".repeat(64) })), /different packaging tool scripts/],
       ["workflow from a branch", write("w.json", identity("ubuntu-24.04", { workflowRef: "refs/heads/patched" })), /expected reviewed main workflow commit/],
       ["workflow identity drift", write("ws.json", identity("ubuntu-24.04", { workflowSha: "e".repeat(40) })), /expected reviewed main workflow commit/],
     ];
@@ -115,6 +120,9 @@ test("repro record binds the checked-out commit to the fetched tag's peeled comm
       fs.writeFileSync(path.join(dir, file), "fixture\n");
     }
     fs.writeFileSync(path.join(dir, "source.txt"), "source\n");
+    const packageScript = path.join(dir, "scripts", "package-linux.sh");
+    fs.mkdirSync(path.dirname(packageScript), { recursive: true });
+    fs.writeFileSync(packageScript, "#!/bin/sh\nprintf package\n");
     git("add", ".");
     git("commit", "--quiet", "-m", "source fixture");
     const sourceCommit = git("rev-parse", "HEAD");
@@ -128,7 +136,9 @@ test("repro record binds the checked-out commit to the fetched tag's peeled comm
       ...process.env,
       PATH: `${path.join(dir, "bin")}:${process.env.PATH ?? ""}`,
       GITHUB_REF: "refs/heads/main",
-      GITHUB_WORKFLOW_SHA: WORKFLOW_COMMIT,
+      GITHUB_WORKFLOW_SHA: sourceCommit,
+      NEXUS_PACKAGE_TOOL_COMMIT: sourceCommit,
+      NEXUS_PACKAGE_TOOL_SCRIPT: packageScript,
       GITHUB_RUN_ID: "42",
       GITHUB_RUN_ATTEMPT: "1",
       NEXUS_BUILD_CONTAINER_IMAGE: APPROVED_RUST_IMAGE,
@@ -140,7 +150,9 @@ test("repro record binds the checked-out commit to the fetched tag's peeled comm
     const identityRecord = JSON.parse(fs.readFileSync(out, "utf8"));
     assert.equal(identityRecord.source.commit, sourceCommit);
     assert.equal(identityRecord.source.tagCommit, sourceCommit);
-    assert.equal(identityRecord.workflow.sha, WORKFLOW_COMMIT);
+    assert.equal(identityRecord.workflow.sha, sourceCommit);
+    assert.equal(identityRecord.packagingTool.commit, sourceCommit);
+    assert.equal(identityRecord.packagingTool.packageScriptSha256, createHash("sha256").update(fs.readFileSync(packageScript)).digest("hex"));
 
     git("commit", "--quiet", "--allow-empty", "-m", "different tag target");
     const movedTagCommit = git("rev-parse", "HEAD");
@@ -166,6 +178,25 @@ test("Linux packaging rejects an omitted pinned builder unless host builds are e
     assert.equal(result.status, 2, result.stderr);
     assert.match(result.stderr, /NEXUS_BUILD_CONTAINER_IMAGE must use the approved digest-pinned Rust 1\.95 Bookworm builder/);
     assert.equal(fs.existsSync(out), false, "reject before creating package output or invoking build tools");
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("external package source override is restricted to the current Git worktree", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "package-source-root-"));
+  const out = path.join(dir, "dist");
+  try {
+    const initialized = spawnSync("git", ["init", "--quiet", dir], { encoding: "utf8" });
+    assert.equal(initialized.status, 0, initialized.stderr);
+    const result = spawnSync("bash", [PACKAGE_SCRIPT, "v1.0.0", out], {
+      cwd: ROOT,
+      encoding: "utf8",
+      env: { ...process.env, NEXUS_PACKAGE_SOURCE: dir, NEXUS_BUILD_CONTAINER_IMAGE: "" },
+    });
+    assert.equal(result.status, 2, result.stderr);
+    assert.match(result.stderr, /NEXUS_PACKAGE_SOURCE must be the current Git worktree root/);
+    assert.equal(fs.existsSync(out), false, "reject before writing package output");
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }

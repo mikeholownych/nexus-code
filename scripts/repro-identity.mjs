@@ -1,5 +1,5 @@
 // Source identity for the cross-runner reproducibility workflow (ACC-SUP-08, REQ-REL-114).
-//   record  <version> <dist-dir> <out.json> <runner-label>   identity of the checked-out RC source, workflow, toolchain and artifacts
+//   record  <version> <dist-dir> <out.json> <runner-label>   identity of the checked-out RC source, package tool, workflow, toolchain and artifacts
 //   compare <expected-version> <expected-commit> <expected-workflow-commit> <out.json> <identity.json>...
 // `compare` fails unless every builder packaged the expected version and commit from identical source and lockfiles
 // and produced identical artifact digests; on success it writes the combined evidence record.
@@ -30,6 +30,13 @@ if (mode === "record") {
   if (tagCommit !== commit) fail(`fetched tag ${version} resolves to ${tagCommit}, not checked-out source commit ${commit}`);
   const workflowSha = process.env.GITHUB_WORKFLOW_SHA ?? "";
   if (!/^[0-9a-f]{40}$/.test(workflowSha)) fail("reviewed main workflow commit is missing or invalid");
+  const packageToolCommit = process.env.NEXUS_PACKAGE_TOOL_COMMIT ?? "";
+  const packageToolScript = process.env.NEXUS_PACKAGE_TOOL_SCRIPT ?? "";
+  if (!/^[0-9a-f]{40}$/.test(packageToolCommit) || packageToolCommit !== workflowSha) fail("packaging tool commit must be the exact reviewed workflow commit");
+  if (!packageToolScript || !fs.existsSync(packageToolScript)) fail("packaging tool script identity is missing");
+  if (!fs.statSync(packageToolScript).isFile()) fail("packaging tool script identity must name a file");
+  const reviewedPackageScript = execFileSync("git", ["show", `${packageToolCommit}:scripts/package-linux.sh`], { encoding: "utf8" });
+  if (reviewedPackageScript !== fs.readFileSync(packageToolScript, "utf8")) fail("packaging script does not match the reviewed tool commit");
   const artifactNames = [`nexus-linux-x86_64-${version}.tar.gz`, ...RELEASE_ASSETS].sort();
   const missingArtifacts = artifactNames.filter((file) => !fs.existsSync(path.join(dist, file)));
   if (missingArtifacts.length) fail(`release output is missing required assets: ${missingArtifacts.join(", ")}`);
@@ -46,6 +53,7 @@ if (mode === "record") {
     },
     toolchain: { node: process.version, npm: run("npm", "--version"), rustc: run("rustc", "-V"), cargo: run("cargo", "-V") },
     buildEnvironment: { rustContainerImage: process.env.NEXUS_BUILD_CONTAINER_IMAGE ?? null },
+    packagingTool: { commit: packageToolCommit, packageScriptSha256: sha256(packageToolScript) },
     runner: { label, image: process.env.ImageOS ?? null, imageVersion: process.env.ImageVersion ?? null },
     workflow: { ref: process.env.GITHUB_REF ?? null, sha: workflowSha, runId: process.env.GITHUB_RUN_ID ?? null, runAttempt: process.env.GITHUB_RUN_ATTEMPT ?? null },
     artifacts: Object.fromEntries(artifactNames.map((file) => [file, sha256(path.join(dist, file))])),
@@ -65,6 +73,10 @@ if (mode === "record") {
   const buildImages = builders.map((id) => id.buildEnvironment?.rustContainerImage);
   if (buildImages.some((image) => image !== APPROVED_RUST_BUILD_IMAGE)) fail("every builder must use the approved digest-pinned Bookworm Rust build image");
   if (new Set(buildImages).size !== 1) fail("builders used different Rust build images");
+  const packageToolCommits = builders.map((id) => id.packagingTool?.commit);
+  const packageToolHashes = builders.map((id) => id.packagingTool?.packageScriptSha256);
+  if (packageToolCommits.some((value) => value !== workflowCommit) || packageToolHashes.some((value) => !/^[0-9a-f]{64}$/.test(value ?? ""))) fail("builders did not record the exact reviewed packaging tool commit and script hash");
+  if (new Set(packageToolHashes).size !== 1) fail("builders used different packaging tool scripts");
   // The released workflow is reviewed on main; the built product source remains bound to the exact RC tag commit above.
   for (const id of builders) {
     if (id.workflow?.ref !== "refs/heads/main" || id.workflow?.sha !== workflowCommit) fail(`${id.runner.label} did not record the expected reviewed main workflow commit ${workflowCommit}`);
@@ -74,9 +86,9 @@ if (mode === "record") {
   if (builders.some((id) => JSON.stringify(id.source) !== JSON.stringify(first.source))) fail("builders packaged different source or lockfiles");
   if (builders.some((id) => JSON.stringify(id.artifacts) !== JSON.stringify(first.artifacts))) fail("artifact digests differ between builders");
   const expectedAssets = [`nexus-linux-x86_64-${version}.tar.gz`, ...RELEASE_ASSETS].sort();
-  if (JSON.stringify(Object.keys(first.artifacts).sort()) !== JSON.stringify(expectedAssets)) fail("identity evidence does not cover the exact six published release assets");
+  if (JSON.stringify(Object.keys(first.artifacts).sort()) !== JSON.stringify(expectedAssets)) fail("identity evidence does not cover the six selected reproducibility artifacts");
   const workflowRun = process.env.GITHUB_RUN_ID ? `${process.env.GITHUB_SERVER_URL}/${process.env.GITHUB_REPOSITORY}/actions/runs/${process.env.GITHUB_RUN_ID}` : null;
-  const evidence = { requirement: "REQ-REL-114", acceptance: "ACC-SUP-08", result: "PASS", workflowRun, workflow: first.workflow, source: first.source, buildEnvironment: first.buildEnvironment, artifacts: first.artifacts, builders: builders.map(({ runner, toolchain }) => ({ runner, toolchain })) };
+  const evidence = { requirement: "REQ-REL-114", acceptance: "ACC-SUP-08", result: "PASS", workflowRun, workflow: first.workflow, source: first.source, buildEnvironment: first.buildEnvironment, packagingTool: first.packagingTool, artifacts: first.artifacts, builders: builders.map(({ runner, toolchain }) => ({ runner, toolchain })) };
   fs.writeFileSync(out, `${JSON.stringify(evidence, null, 2)}\n`);
 } else {
   fail("mode must be record or compare");

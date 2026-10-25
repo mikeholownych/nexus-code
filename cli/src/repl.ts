@@ -33,6 +33,7 @@ import { HunkStager } from "./stager.js";
 import { TurnResult, lifecycleStatusForTurn } from "./core/turn.js";
 import { buildSessionExport } from "./session_export.js";
 import { SensitivePersistenceError } from "./core/persistence_protection.js";
+import { safeTerminal } from "./ui.js";
 
 interface PatchHunk {
   header: string;
@@ -65,6 +66,31 @@ function parsePatchHunks(patch: string): { fileHeader: string; hunks: PatchHunk[
 }
 
 export const REPL_APPROVAL_GRACE_MS = 400;
+
+/**
+ * Slash commands a read-only REPL may run: an explicit --read-only launch, or a session whose effective mode is
+ * read-only (mode-selected). Kept deliberately conservative: writes, provider/model changes, scaffolding, test
+ * execution, upgrades and state mutations are refused; inspection and the mode command remain available. In an
+ * explicit --read-only launch the mode command cannot lower the agent's authority; a mode-selected session can
+ * leave read-only deliberately with /mode auto or /mode review.
+ */
+export function replReadOnlyAllowed(command: string, args: string): boolean {
+  const name = command.trim().replace(/^\//, "").toLowerCase();
+  const value = args.trim().toLowerCase();
+  if (["help", "?", "status", "tokens", "cost", "diff", "git", "checkpoints", "audit", "receipt", "sessions",
+       "exit", "quit", "q", "mode", "clear", "reset", "history", "skills", "copy", "paste", "image", "cd"].includes(name)) {
+    return true;
+  }
+  if (name === "checkpoint") return value === "diff" || value.startsWith("diff ");
+  if (name === "worktree") return !value || value === "status";
+  if (name === "plan" || name === "knowledge") {
+    return !value || value === "list" || value === "show" || value === "get";
+  }
+  if (name === "skill") return !value || !/^init(?:\s|$)/.test(value);
+  if (name === "theme") return !value;
+  if (name === "doctor") return !/(^|\s)--fix(?:=|\s|$)/.test(value);
+  return false;
+}
 
 export class InteractiveRepl {
   private app: ApplicationCore;
@@ -102,7 +128,7 @@ export class InteractiveRepl {
     } else if (typeof modeOrAutoApprove === "boolean") {
       this.approvalMode = modeOrAutoApprove ? "auto" : "review";
     } else {
-      this.approvalMode = this.config.approvalMode || (isWorkspaceTrusted(this.config.workspace, Boolean(this.config.readOnly)) ? "auto" : "review");
+      this.approvalMode = this.config.approvalMode || (this.config.readOnly ? "read-only" : this.config.fullAccess ? "auto" : "review");
     }
     this.config.surface = "repl";
     this.agent.setSurface("repl");
@@ -176,47 +202,66 @@ export class InteractiveRepl {
       return true;
     }
 
-    try {
-      this.checkpointManager.createCheckpoint(name);
-      this.agent.setCheckpointReadOnlyFallback(false);
-      return true;
-    } catch (error) {
-      if (!(error instanceof SensitivePersistenceError)) throw error;
-    }
-
-    console.log(pc.yellow("Sensitive content blocked the rollback checkpoint. Choose how to continue:"));
-    console.log("  1. Continue this turn read-only; return to configured mode after a safe checkpoint");
-    console.log("  2. Continue in the current mode without a rollback checkpoint");
-    console.log("  3. Create the checkpoint anyway (may persist sensitive content)");
-    console.log("  4. Cancel this turn");
-    console.log("  5. Enter a different instruction");
-
+    let allowSensitive = false;
     while (true) {
-      const choice = (await this.rl!.question("Choice [1-5]: ")).trim();
-      if (choice === "1") {
-        this.agent.setCheckpointReadOnlyFallback(true);
-        console.log(pc.yellow("Continuing this turn in read-only mode. Your configured mode resumes after a safe checkpoint succeeds.\n"));
-        return true;
-      }
-      if (choice === "2") {
-        console.log(pc.yellow("Continuing in the current mode without a rollback checkpoint.\n"));
-        return true;
-      }
-      if (choice === "3") {
-        this.checkpointManager.createCheckpoint(name, { allowSensitive: true });
+      try {
+        this.checkpointManager.createCheckpoint(name, allowSensitive ? { allowSensitive: true } : undefined);
         this.agent.setCheckpointReadOnlyFallback(false);
-        console.log(pc.yellow("Creating a checkpoint that may persist sensitive workspace content, as requested.\n"));
         return true;
+      } catch (error) {
+        const sensitiveBlocked = error instanceof SensitivePersistenceError;
+        const failure = safeTerminal(error instanceof Error ? error.message : String(error))
+          .replace(/;\s*no checkpoint was written\.?$/i, "")
+          .slice(0, 240) || "unknown error";
+        if (sensitiveBlocked) {
+          console.log(pc.yellow("Sensitive content blocked the rollback checkpoint. Choose how to continue:"));
+          console.log("  1. Continue this turn read-only; return to configured mode after a safe checkpoint");
+          console.log("  2. Continue in the current mode without a rollback checkpoint");
+          console.log("  3. Create the checkpoint anyway (may persist sensitive content)");
+          console.log("  4. Cancel this turn");
+          console.log("  5. Enter a different instruction");
+        } else {
+          console.log(pc.yellow(`Checkpoint creation failed: ${failure}. Do not rely on a recovery checkpoint from this attempt. Choose how to continue:`));
+          console.log("  1. Continue this turn read-only; return to configured mode after a safe checkpoint");
+          console.log("  2. Continue in the current mode without a rollback checkpoint");
+          console.log("  3. Retry checkpoint normally");
+          console.log("  4. Cancel this turn");
+          console.log("  5. Enter a different instruction");
+        }
+
+        while (true) {
+          const choice = (await this.rl!.question("Choice [1-5]: ")).trim();
+          if (choice === "1") {
+            this.agent.setCheckpointReadOnlyFallback(true);
+            console.log(pc.yellow("Continuing this turn in read-only mode. Your configured mode resumes after a safe checkpoint succeeds.\n"));
+            return true;
+          }
+          if (choice === "2") {
+            this.agent.setCheckpointReadOnlyFallback(false);
+            console.log(pc.yellow("Continuing in the current mode without a rollback checkpoint.\n"));
+            return true;
+          }
+          if (choice === "3") {
+            if (sensitiveBlocked) {
+              allowSensitive = true;
+              console.log(pc.yellow("Retrying with sensitive persistence allowed.\n"));
+            } else {
+              allowSensitive = false;
+              console.log(pc.yellow("Retrying the checkpoint normally.\n"));
+            }
+            break;
+          }
+          if (choice === "4") {
+            console.log(pc.dim("Turn cancelled before it started.\n"));
+            return false;
+          }
+          if (choice === "5") {
+            console.log(pc.dim("Enter a different instruction at the next prompt. This turn was not started.\n"));
+            return false;
+          }
+          console.log(pc.yellow("Enter a number from 1 to 5.\n"));
+        }
       }
-      if (choice === "4") {
-        console.log(pc.dim("Turn cancelled before it started.\n"));
-        return false;
-      }
-      if (choice === "5") {
-        console.log(pc.dim("Enter a different instruction at the next prompt. This turn was not started.\n"));
-        return false;
-      }
-      console.log(pc.yellow("Enter a number from 1 to 5.\n"));
     }
   }
 
@@ -777,6 +822,11 @@ export class InteractiveRepl {
           const parts = trimmed.slice(1).split(/\s+/);
           const cmd = parts[0].toLowerCase();
           const arg = parts.slice(1).join(" ");
+
+          if ((this.config.readOnly || this.agent.getApprovalMode() === "read-only") && !replReadOnlyAllowed(cmd, arg)) {
+            console.log(pc.yellow(`/${cmd} is disabled while the session is read-only.\n`));
+            continue;
+          }
 
           if (cmd === "exit" || cmd === "quit" || cmd === "q") {
             console.log(pc.dim("\nSession ended. Goodbye!"));
@@ -1643,9 +1693,9 @@ export class InteractiveRepl {
             const desc = describeVerifier(this.config.workspace, commandOverride);
             const testCmd = desc?.command || commandOverride;
 
-            // Verifier gating under review mode / untrusted workspace
+            // Verifier gating follows the permission mode; trust only controls workspace integrations.
             const isTrusted = isWorkspaceTrusted(this.config.workspace, Boolean(this.config.readOnly));
-            const mode = this.config.approvalMode ?? (this.config.readOnly ? "read-only" : (this.config.fullAccess ? "auto" : (isTrusted ? "auto" : "review")));
+            const mode = this.config.approvalMode ?? (this.config.readOnly ? "read-only" : (this.config.fullAccess ? "auto" : "review"));
             const policyContext: PolicyContext = {
               mode,
               trusted: isTrusted,

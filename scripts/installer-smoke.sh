@@ -9,6 +9,9 @@ trap cleanup EXIT
 NAME=$(basename "$ARCHIVE")
 VERSION=${NAME#nexus-linux-x86_64-}
 VERSION=${VERSION%.tar.gz}
+# This fixture uses locally generated, unattested packages except in the explicit
+# trusted-gh case below. Make that test-only opt-out visible to every installer run.
+export NEXUS_VERIFY_ATTESTATION=0
 mkdir -p "$TMP/release/download/$VERSION" "$TMP/prefix/bin"
 cp "$ARCHIVE" "$TMP/release/download/$VERSION/$NAME"
 (cd "$TMP/release/download/$VERSION" && sha256sum "$NAME" > SHA256SUMS)
@@ -26,6 +29,82 @@ run_installer() {
 }
 run_installer
 "$TMP/prefix/bin/nexus" --version | grep -F "${VERSION#v}" >/dev/null
+
+# Attestation defaults to auto: verify with a trusted gh when one exists, otherwise install with a
+# visible notice. NEXUS_VERIFY_ATTESTATION=1 requires provenance; a PATH shim is never trusted.
+# Relocate only the fixed trusted binary locations in a private installer copy so this
+# fixture exercises every branch without depending on whether the host has gh installed.
+mkdir -p "$TMP/trusted/usr/bin" "$TMP/trusted/usr/local/bin" "$TMP/path-shim" "$TMP/attestation-prefix/bin"
+sed "s|/usr/bin/gh|$TMP/trusted/usr/bin/gh|g; s|/usr/local/bin/gh|$TMP/trusted/usr/local/bin/gh|g" \
+  "$INSTALLER" > "$TMP/install-test.sh"
+chmod +x "$TMP/install-test.sh"
+cat > "$TMP/path-shim/gh" <<EOF
+#!/bin/sh
+printf 'PATH shim invoked\\n' >> '$TMP/path-shim.log'
+exit 0
+EOF
+chmod +x "$TMP/path-shim/gh"
+env -u NEXUS_VERIFY_ATTESTATION \
+  NEXUS_VERSION="$VERSION" NEXUS_PREFIX="$TMP/auto-prefix" \
+  NEXUS_RELEASE_BASE_URL="http://127.0.0.1:$PORT" \
+  PATH="$TMP/path-shim:$PATH" sh "$TMP/install-test.sh" > "$TMP/auto-no-gh.out" 2>&1 \
+  || { echo "default auto mode refused to install without a trusted gh" >&2; cat "$TMP/auto-no-gh.out" >&2; exit 1; }
+grep -F "build provenance was not verified: no trusted GitHub CLI" "$TMP/auto-no-gh.out" >/dev/null
+[ -L "$TMP/auto-prefix/bin/nexus" ] || { echo "default auto mode did not install" >&2; exit 1; }
+if NEXUS_VERSION="$VERSION" NEXUS_PREFIX="$TMP/attestation-prefix" \
+  NEXUS_RELEASE_BASE_URL="http://127.0.0.1:$PORT" NEXUS_VERIFY_ATTESTATION=1 \
+  PATH="$TMP/path-shim:$PATH" sh "$TMP/install-test.sh" > "$TMP/no-trusted-gh.out" 2>&1; then
+  echo "installer accepted required provenance without a trusted gh" >&2
+  exit 1
+fi
+grep -F "no trusted GitHub CLI was found" "$TMP/no-trusted-gh.out" >/dev/null
+[ ! -e "$TMP/path-shim.log" ] || { echo "installer invoked PATH gh shim" >&2; exit 1; }
+if NEXUS_VERSION="$VERSION" NEXUS_PREFIX="$TMP/invalid-mode" \
+  NEXUS_RELEASE_BASE_URL="http://127.0.0.1:$PORT" NEXUS_VERIFY_ATTESTATION=yes \
+  sh "$INSTALLER" > "$TMP/invalid-mode.out" 2>&1; then
+  echo "installer accepted an unsupported attestation mode" >&2
+  exit 1
+fi
+grep -F "NEXUS_VERIFY_ATTESTATION must be" "$TMP/invalid-mode.out" >/dev/null
+if NEXUS_VERSION="$VERSION" NEXUS_PREFIX="$TMP/empty-mode" \
+  NEXUS_RELEASE_BASE_URL="http://127.0.0.1:$PORT" NEXUS_VERIFY_ATTESTATION= \
+  sh "$INSTALLER" > "$TMP/empty-mode.out" 2>&1; then
+  echo "installer treated an explicitly empty attestation mode as auto" >&2
+  exit 1
+fi
+grep -F "NEXUS_VERIFY_ATTESTATION must be" "$TMP/empty-mode.out" >/dev/null
+cat > "$TMP/trusted/usr/bin/gh" <<'EOF'
+#!/bin/sh
+exit 1
+EOF
+chmod +x "$TMP/trusted/usr/bin/gh"
+env -u NEXUS_VERIFY_ATTESTATION \
+  NEXUS_VERSION="$VERSION" NEXUS_PREFIX="$TMP/auto-failing-gh-prefix" \
+  NEXUS_RELEASE_BASE_URL="http://127.0.0.1:$PORT" \
+  sh "$TMP/install-test.sh" > "$TMP/auto-failing-gh.out" 2>&1 \
+  || { echo "default auto mode refused to install when gh could not verify" >&2; cat "$TMP/auto-failing-gh.out" >&2; exit 1; }
+grep -F "could not verify the attestation" "$TMP/auto-failing-gh.out" >/dev/null
+if NEXUS_VERSION="$VERSION" NEXUS_PREFIX="$TMP/required-failing-gh-prefix" \
+  NEXUS_RELEASE_BASE_URL="http://127.0.0.1:$PORT" NEXUS_VERIFY_ATTESTATION=1 \
+  sh "$TMP/install-test.sh" > "$TMP/required-failing-gh.out" 2>&1; then
+  echo "installer accepted a failed required provenance check" >&2
+  exit 1
+fi
+grep -F "provenance attestation verification failed" "$TMP/required-failing-gh.out" >/dev/null
+[ ! -e "$TMP/required-failing-gh-prefix/bin/nexus" ] || { echo "failed required provenance still installed" >&2; exit 1; }
+cat > "$TMP/trusted/usr/bin/gh" <<'EOF'
+#!/bin/sh
+printf '%s\n' "$*" >> "$TRUSTED_GH_LOG"
+exit 0
+EOF
+chmod +x "$TMP/trusted/usr/bin/gh"
+NEXUS_VERSION="$VERSION" NEXUS_PREFIX="$TMP/attestation-prefix" \
+  NEXUS_RELEASE_BASE_URL="http://127.0.0.1:$PORT" NEXUS_VERIFY_ATTESTATION=1 \
+  TRUSTED_GH_LOG="$TMP/trusted-gh.log" PATH="$TMP/path-shim:$PATH" \
+  sh "$TMP/install-test.sh" > "$TMP/trusted-gh.out" 2>&1
+grep -F "verified build provenance" "$TMP/trusted-gh.out" >/dev/null
+[ "$(wc -l < "$TMP/trusted-gh.log")" -eq 2 ] || { echo "installer did not verify both provenance subjects" >&2; exit 1; }
+[ ! -e "$TMP/path-shim.log" ] || { echo "installer invoked PATH gh shim" >&2; exit 1; }
 node - "$TMP/prefix/lib/nexus/$VERSION/.provenance.json" "$VERSION" "$TMP/prefix" "$TMP/prefix/lib/nexus/$VERSION" "$TMP/prefix/bin/nexus" "$NAME" "$TMP/release/download/$VERSION/$NAME" <<'NODE'
 const assert = require("node:assert/strict");
 const crypto = require("node:crypto");

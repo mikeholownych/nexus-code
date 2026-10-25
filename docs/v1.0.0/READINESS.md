@@ -294,3 +294,41 @@ At `a7126aa`, `node scripts/check_requirements.mjs` passes in report mode: **121
 4. **Stage 3 — RC artifact gates:** Run `ACC-SUP-01/02/03/06/08` and dispatch `.github/workflows/repro.yml` (`REQ-REL-114`) against the exact `v1.0.0-rc.1` tag and commit.
 5. **Stage 4 — Installed-RC qualification:** Install the workflow-produced `v1.0.0-rc.1` package via the documented installer and execute `ACCEPTANCE.md` §§4–8 (standalone/provider matrix, CI/scripted/manual terminal matrix, T2 40×5 held-out comparison, T4 9×5 fault matrix, T3 8×5 long-task matrix, install matrix, SPEC-09 §3.2 docs checklist, and §8 independent acceptance). Archive all evidence under `docs/reviews/evidence/v1-qualification/v1.0.0-rc.1/`.
 6. **Stage 5 — G6 decision, version-only stable promotion, draft verification, and publication:** After G6 passes on the accepted RC, create the version-only `v1.0.0` commit directly on the accepted RC commit (enforced by `scripts/check-version-only-diff.mjs` in `release.yml`), run source CI, tag `v1.0.0` to build the unpublished draft release, complete Stage 5 stable artifact/install/attestation checks, record the signed G6 and Stage 5 disposition, and publish the draft release (`gh release edit v1.0.0 --draft=false`).
+
+## RC5 qualification checkpoint (2026-10-25)
+
+### Release identity and source gates
+
+- **Campaign:** `NEXUS_V1_RC_QUALIFICATION_ACTIVE`. **Acceptance:** `IN_PROGRESS`. RC5 is a public prerelease; neither an accepted RC nor stable v1.0.0 is claimed.
+- **Exact source:** `main` / `v1.0.0-rc.5` at `405f5b96e20b988523b99c8907d29b73bcd2a8fd` (tag object `ffccefea5859db9fe5306450f891d1f137ac6c05`).
+- **Source CI:** run [40190718023](https://github.com/mikeholownych/nexus-code/actions/runs/40190718023) and CodeQL [40190718020](https://github.com/mikeholownych/nexus-code/actions/runs/40190718020) passed on the exact main revision. Requirements enforcement passed: 123 rows; 108 tested, 6 partial, 2 implemented, 7 open; the 12 mapped exact-RC qualification rows remain deferred and enforced as such.
+- **PR #216:** merged to that source revision after exact-head checks and independent source review. The unrelated shared checkout remains dirty and was not used or modified for this checkpoint.
+
+### RC5 artifacts and installation
+
+- Release workflow [40193772994](https://github.com/mikeholownych/nexus-code/actions/runs/40193772994) completed successfully and published `v1.0.0-rc.5` as a prerelease. The archive SHA-256 is `b15c45f6ac7684ce8752b45432df30d77b3ecd4cc7c4ab9ee1afc8670eea8c19`; `SHA256SUMS` SHA-256 is `2206b35a0aed8a4b9635012c0ad55a6eae34d12fe3255c53d43ab8b1d8e7a8c1`.
+- Published asset hashes and provenance attestations verified against the release workflow and exact tag. The official installer installed the archive on the authenticated engineering host; its version, package manifest and provenance sidecar matched the candidate.
+- E2 is **partial**: all eight fresh-install/minimum-runtime cells and eight expected negative preflight cells passed across the prepared Ubuntu 22.04/24.04, Debian 12 and Fedora 40 images. One Ubuntu 22.04 / Node 22 lifecycle cell passed alpha.2 upgrade, repair, rollback and uninstall. The remaining lifecycle cases are not complete. Current-source evaluator host preflight passed 10/10 using synthetic markers only; this is not held-out custody or qualification evidence.
+- Ubuntu/GNOME is reachable and has all five required terminal applications, but `gh auth status` there reports no GitHub login. The RC5 installer stopped before creating files; the version-scoped desktop install prefix is absent. The manual terminal matrix is **0/15**.
+
+### Provider, PTY and reproducibility evidence
+
+- On the exact installed RC5 package, OpenRouter pinned model `nvidia/nemotron-3-ultra-550b-a55b:free` and ChatGPT sign-in model `gpt-6-luna` each passed streamed completion and tool-call/result verification. No workspace content was involved. OpenRouter's required live small engineering task remains pending; the disposable synthetic task has a failing baseline and waits for the operator's folder-trust choice. Nexus remains in its default `review` approval mode; folder trust does not change approvals.
+- The installed-package startup PTY smoke reached the Nexus prompt under isolated HOME. This does not satisfy the §5.2 scripted PTY set or the §5.3 human matrix. An attempted legacy §5.2 driver was invalid: its checkout-layout paths and wait condition do not match the current RC startup/trust prompt; its mock gateway recorded zero requests. No product pass/fail was inferred.
+- Reproducibility workflow [40195749685](https://github.com/mikeholownych/nexus-code/actions/runs/40195749685) built successfully on Ubuntu 22.04 and 24.04 from the exact tag, but its official `compare` job **failed**. The comparator's earlier archive and compatibility checks passed; it then found that `metadata.tools` records npm `10.9.9` in the published RC SBOM versus npm `10.9.4` in both rebuild SBOMs. Because it stopped at that mismatch, the later `install.sh` comparison was not reached. A local comparison of only the runner identity artifacts passed but did not establish `REQ-REL-114 / ACC-SUP-08`; the official result is authoritative. `REQ-REL-114` remains open until the toolchain is aligned, the release/rebuild evidence is regenerated as needed, and a new exact-RC comparison passes.
+
+### Remaining qualification gates
+
+| Gate | State at RC5 | Next executable step / completion condition |
+|---|---|---|
+| T2/T3 held-out custody | Blocked. Issue #1 has no custodian reply; the public 40-task manifest does not establish private custody acceptance, and the legacy validator contract is incompatible with the current evaluator. No private payload was accessed or run. | Independent custodian confirms author/handoff, compatible immutable corpus or successor, validation, access separation, digests and custody acceptance; only then prepare and execute the approved runs. |
+| Evaluator resource/secret boundary | Synthetic current-source host preflight 10/10; no accepted qualification-host/custody result. | Complete independent host and custody acceptance before any held-out execution. |
+| Standalone profiles | Not run on the installed RC; T2 subset dependency remains unmet. | After custody and frozen configuration, execute §4.2 profiles and archive exact-artifact receipts. |
+| T4 and long-task T3 | Not run. T4 remains nine fault classes × five runs; T3 remains eight tasks × five runs. | Freeze approved workload/configurations and prerequisites, then run exact RC serially with independent scoring. |
+| Scripted installed-RC PTY (§5.2) | Not established; legacy driver invocation was invalid. | Use an RC-compatible driver or otherwise execute all listed scenarios against the installed package and mock gateway, with measured outcomes. |
+| Human terminal matrix (§5.3) | 0/15. No screenshots or per-cell operator verdicts. | Install exact RC on the desktop after GitHub CLI authentication; complete all five terminals × three sizes with two distinct screenshots per cell. |
+| Cross-runner `REQ-REL-114` | **Failed** on RC5: run 40195749685 `compare` reports npm-version metadata mismatch (published 10.9.9; both rebuilds 10.9.4). Builder archives match, but the SBOM does not. | Align and pin release/rebuild toolchains; independently review and integrate the fix; create the next correctly versioned RC only after pre-RC gates; rerun exact-artifact cross-runner comparison and retain its generated evidence. |
+| Independent RC acceptance | Not performed. | Independent reviewer evaluates the exact candidate and all mandatory evidence after qualification gates pass. |
+| Stable v1.0.0 | Not created or published. | Follow the version-only stable promotion and publish only after accepted RC, G6, final artifact/install checks and release evidence are complete. |
+
+Public metadata updates were added to issues [#3](https://github.com/mikeholownych/nexus-code/issues/3) and [#5](https://github.com/mikeholownych/nexus-code/issues/5). Publication authority remains granted but gated by acceptance; no additional authorization is requested here.

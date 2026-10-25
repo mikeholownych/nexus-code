@@ -5,6 +5,21 @@
 import fs from "node:fs";
 import path from "node:path";
 
+const T4_FAULT_CLASSES = [
+  "refuse",
+  "overloaded",
+  "stream_cut",
+  "truncate",
+  "hanging_test_command",
+  "full_disk",
+  "context_overflow",
+  "malformed_tool_json",
+  "sigterm_resume",
+];
+const T4_RUNS_PER_CLASS = 5;
+const T4_PROXY_CLASSES = new Set(["refuse", "overloaded", "stream_cut", "truncate", "context_overflow", "malformed_tool_json"]);
+const T4_RUNNER_CLASSES = new Set(["hanging_test_command", "full_disk", "sigterm_resume"]);
+
 // Several files may be given: a later record for the same configuration, task and run replaces an earlier one (a rerun
 // of a run that failed on infrastructure, see eval/infra.mjs). The replaced records stay in their files.
 const files = process.argv.slice(2).filter((a) => !a.startsWith("--"));
@@ -109,14 +124,62 @@ const pooled = [...new Set(records.map((r) => r.config))].map((config) => {
   };
 });
 
-// T4: per injected fault kind. Truthful = the run ended with a result of its own (no crash, no hang past the budget)
-// and never claimed VERIFIED while the hidden tests failed; recovered = the task was still done correctly.
-const faultRows = [...new Set(records.flatMap((r) => (r.model?.faultsInjected ?? []).map((f) => f.kind)))].sort().map((kind) => {
-  const rs = records.filter((r) => (r.model?.faultsInjected ?? []).some((f) => f.kind === kind));
-  const truthful = rs.filter((r) => !r.falseVerified && !crashed(r) && !r.timedOut).length;
-  const recovered = rs.filter((r) => r.hiddenPass).length;
-  return { kind, n: rs.length, truthful, truthfulRate: truthful / rs.length, recovered, hungPastBudget: rs.filter((r) => r.timedOut).length };
+// T4: emit all nine preregistered classes, including empty rows. Proxy, task-fixture, and
+// runner-injected events share one scoring path so a proxy-only result cannot look complete.
+const t4Events = (r) => [
+  ...(r.model?.faultsInjected ?? []).map((f) => ({ ...f, source: f.source ?? "model_proxy" })),
+  ...(r.t4FaultsInjected ?? []),
+];
+const expectedSource = (kind) => T4_PROXY_CLASSES.has(kind) ? "model_proxy" : T4_RUNNER_CLASSES.has(kind) ? "task_fixture_or_runner" : null;
+const runnerEvidenceValid = (event) => {
+  const evidence = event.evidence;
+  if (!evidence || typeof evidence !== "object") return false;
+  if (event.kind === "sigterm_resume") {
+    return evidence.signal === "SIGTERM"
+      && evidence.delivered === true
+      && Number.isInteger(evidence.deliveredProcesses)
+      && evidence.deliveredProcesses > 0
+      && evidence.signalDuringActiveTurn === true
+      && evidence.payloadExitSignal === "SIGTERM"
+      && evidence.resumed === true
+      && evidence.resumeExitCode === 0
+      && evidence.resumeTurnExecution === "COMPLETED";
+  }
+  if (event.kind === "hanging_test_command") return evidence.observedHung === true && evidence.timedOut === true && evidence.containmentCleaned === true && /^[0-9a-f]{64}$/.test(evidence.commandSha256 ?? "") && evidence.tool === "run_command" && Number.isSafeInteger(evidence.timeoutSecs) && evidence.timeoutSecs > 0 && (evidence.runnerExitCode === null || evidence.runnerExitCode === undefined);
+  if (event.kind === "full_disk") return evidence.storageExhausted === true && evidence.containmentCleaned === true && /^[0-9a-f]{64}$/.test(evidence.commandSha256 ?? "") && evidence.tool === "run_command" && Number.isSafeInteger(evidence.storageLimitBytes) && evidence.storageLimitBytes > 0 && Number.isSafeInteger(evidence.availableBeforeBytes) && Number.isSafeInteger(evidence.availableAfterBytes) && evidence.availableBeforeBytes > evidence.availableAfterBytes && Number.isSafeInteger(evidence.runnerExitCode) && evidence.runnerExitCode !== 0;
+  return false;
+};
+const t4Runs = records.filter((r) => r.tier === "T4");
+const invalidT4Events = t4Runs.flatMap((r) => t4Events(r)
+  .filter((f) => !expectedSource(f.kind) || f.source !== expectedSource(f.kind) || (T4_RUNNER_CLASSES.has(f.kind) && !runnerEvidenceValid(f)))
+  .map((f) => ({ task: r.task, run: r.run, kind: f.kind ?? null, source: f.source ?? null })));
+const faultRows = T4_FAULT_CLASSES.map((kind) => {
+  const injected = records.filter((r) => t4Events(r).some((f) => f.kind === kind && f.source === expectedSource(kind)));
+  const rs = t4Runs.filter((r) => t4Events(r).some((f) => f.kind === kind && f.source === expectedSource(kind)));
+  const truthful = injected.filter((r) => !r.error && !r.falseVerified && !crashed(r) && !r.timedOut && !r.outputExceeded).length;
+  const qualificationTruthful = rs.filter((r) => !r.error && !r.falseVerified && !crashed(r) && !r.timedOut && !r.outputExceeded).length;
+  const recovered = injected.filter((r) => r.hiddenPass).length;
+  const hungPastBudget = injected.filter((r) => r.timedOut).length;
+  return {
+    kind,
+    n: injected.length,
+    qualificationRuns: rs.length,
+    qualificationTruthful,
+    truthful,
+    truthfulRate: injected.length ? truthful / injected.length : null,
+    recovered,
+    hungPastBudget,
+    gate: rs.length >= T4_RUNS_PER_CLASS && qualificationTruthful === rs.length && rs.every((r) => !r.timedOut) ? "PASS" : "FAIL",
+  };
 });
+const t4 = {
+  requiredClasses: T4_FAULT_CLASSES.length,
+  requiredRunsPerClass: T4_RUNS_PER_CLASS,
+  observedClasses: faultRows.filter((r) => r.qualificationRuns > 0).length,
+  totalRuns: faultRows.reduce((n, r) => n + r.qualificationRuns, 0),
+  invalidEvents: invalidT4Events.length,
+  gate: invalidT4Events.length === 0 && faultRows.every((r) => r.gate === "PASS") ? "PASS" : "FAIL",
+};
 
 // T3 (REQ-QUAL-109): every T3 run counts. A run with no T3 result, too few steps or fewer than two compactions is
 // ineligible and fails the workload rather than leaving it; DEC-05 thresholds are false-absence 0, steering >= 95%.
@@ -149,16 +212,17 @@ const t3 = t3Runs.length ? (() => {
 })() : null;
 
 if (process.argv.includes("--json")) {
-  console.log(JSON.stringify({ totals, pooled, rows, faults: faultRows, ...(t3 ? { t3 } : {}), replacements, ...(peerComparison ? { peerComparison } : {}) }, null, 2));
+  console.log(JSON.stringify({ totals, pooled, rows, faults: faultRows, t4, ...(t3 ? { t3 } : {}), replacements, ...(peerComparison ? { peerComparison } : {}) }, null, 2));
 } else {
   const pct = (x) => `${Math.round(x * 100)}%`;
   console.log(`runs ${totals.runs} · false VERIFIED ${totals.falseVerified} · crashed ${totals.crashed} · harness errors ${totals.errors} · contaminated ${totals.contaminated} (excluded from pass rates) · replaced by rerun ${totals.replacedByRerun}\n`);
   console.log("| config | scored runs | correct | pass rate (95% CI) | false VERIFIED | crash rate | regressions | tokens / correct | wall s / correct |\n|---|---|---|---|---|---|---|---|---|");
   for (const p of pooled) console.log(`| ${p.config} | ${p.n} | ${p.correct} | ${pct(p.rate)} (${pct(p.ci[0])}–${pct(p.ci[1])}) | ${p.falseVerified} | ${pct(p.crashRate)} | ${p.regressions} | ${p.tokensPerCorrect?.toFixed(0) ?? "–"} | ${p.wallSecondsPerCorrect?.toFixed(0) ?? "–"} |`);
   if (faultRows.length) {
-    console.log("\n| injected fault | runs | truthful | recovered | hung past budget |\n|---|---|---|---|---|");
-    for (const f of faultRows) console.log(`| ${f.kind} | ${f.n} | ${f.truthful} (${pct(f.truthfulRate)}) | ${f.recovered} | ${f.hungPastBudget} |`);
+    console.log("\n| T4 fault | injected runs | qualification runs | truthful | recovered | hung past budget | gate |\n|---|---:|---:|---:|---:|---:|---|");
+    for (const f of faultRows) console.log(`| ${f.kind} | ${f.n} | ${f.qualificationRuns} | ${f.truthful} (${f.truthfulRate === null ? "–" : pct(f.truthfulRate)}) | ${f.recovered} | ${f.hungPastBudget} | ${f.gate} |`);
   }
+  console.log(`\nT4 gate: ${t4.gate} (${t4.observedClasses}/${t4.requiredClasses} classes; ${t4.requiredRunsPerClass} runs required per class; ${t4.invalidEvents} invalid injection records)`);
   if (t3) {
     console.log(`\nT3 · ${t3.tasks} task(s), ${t3.runs} run(s)${t3.shapeMet ? "" : ` (needs ${T3_TASKS} tasks × ${T3_RUNS_PER_TASK} runs)`} · ineligible (steps < 60 or compactions < 2, or no result) ${t3.ineligible} · false absences ${t3.falseAbsences} · false presences ${t3.falsePresences} · contaminated ${t3.contaminated} · probe unanswered ${t3.probeUnanswered} · steering honoured ${t3.steeringHonoured}/${t3.steeringItems} (${pct(t3.steeringRate)}) · gate ${t3.gate}`);
   }

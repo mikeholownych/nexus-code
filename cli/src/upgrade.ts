@@ -132,6 +132,8 @@ export interface UpgradeOptions {
   signal?: AbortSignal;
   onProgress?: (stage: string, detail?: string) => void;
   confirm?: (proposal: UpgradeComparison) => Promise<boolean>;
+  /** Test/embedding hook: trusted gh candidates, in order. Production defaults to the system paths. */
+  trustedGhPaths?: string[];
 }
 
 // -----------------------------------------------------------------------------
@@ -912,6 +914,20 @@ export async function performUpgrade(
     throw new Error(`Cannot upgrade: ${comparison.reasons.join(" ")}`);
   }
 
+  const verifyAttestation = process.env.NEXUS_VERIFY_ATTESTATION ?? "auto";
+  if (!["auto", "0", "1"].includes(verifyAttestation)) {
+    throw new Error(
+      "NEXUS_VERIFY_ATTESTATION must be auto (verify when a trusted GitHub CLI is present), 1 (require verification) or 0 (skip verification).",
+    );
+  }
+  const trustedGhPaths = options?.trustedGhPaths ?? ["/usr/bin/gh", "/usr/local/bin/gh"];
+  const trustedGh = trustedGhPaths.find((candidate) => fs.existsSync(candidate));
+  if (verifyAttestation === "1" && !trustedGh) {
+    throw new Error(
+      "Provenance attestation is required (NEXUS_VERIFY_ATTESTATION=1) but no trusted GitHub CLI was found at /usr/bin/gh or /usr/local/bin/gh; install gh or set NEXUS_VERIFY_ATTESTATION=0.",
+    );
+  }
+
   const { installed, targetVersion, action } = comparison;
   const prefix = path.resolve(options?.prefix ?? installed.prefix ?? path.join(process.env.HOME || "", ".local"));
   const baseDownloadUrl = getReleaseBaseUrl();
@@ -1055,21 +1071,30 @@ export async function performUpgrade(
       if (!String(err?.message ?? err).includes("HTTP 404")) throw err;
     }
 
-    // Optional attestation check via gh if present
+    // Optional attestation check via a trusted gh if present. Do not resolve it from PATH: a shim that exits 0
+    // must not be able to claim a verified attestation, and a missing gh must fail closed when verification is required.
     let attestationVerified: boolean | undefined;
-    const verifyAttestation = process.env.NEXUS_VERIFY_ATTESTATION ?? "auto";
+    let provenanceWarning: string | undefined;
     if (verifyAttestation !== "0") {
-      const ghProbe = spawnSync("gh", ["--version"]);
-      if (ghProbe.status === 0) {
+      if (trustedGh) {
         options?.onProgress?.("verifying_attestation", "Checking build provenance attestation...");
-        const attestCheck = spawnSync("gh", ["attestation", "verify", localArchive, "-R", CANONICAL_REPO]);
-        const indexAttestCheck = spawnSync("gh", ["attestation", "verify", localSums, "-R", CANONICAL_REPO]);
+        const attestCheck = spawnSync(trustedGh, ["attestation", "verify", localArchive, "-R", CANONICAL_REPO]);
+        const indexAttestCheck = spawnSync(trustedGh, ["attestation", "verify", localSums, "-R", CANONICAL_REPO]);
         if (attestCheck.status === 0 && indexAttestCheck.status === 0) {
           attestationVerified = true;
         } else if (verifyAttestation === "1") {
           throw new Error(`Provenance attestation verification failed for ${archiveName} or SHA256SUMS.`);
+        } else {
+          provenanceWarning = `Warning: Build provenance was not verified: ${trustedGh} could not verify the attestation (it may need 'gh auth login'). The SHA-256 checksum was verified. Set NEXUS_VERIFY_ATTESTATION=1 to require provenance.`;
         }
+      } else if (verifyAttestation === "1") {
+        throw new Error(
+          "Provenance attestation is required (NEXUS_VERIFY_ATTESTATION=1) but no trusted GitHub CLI was found at /usr/bin/gh or /usr/local/bin/gh; install gh or set NEXUS_VERIFY_ATTESTATION=0.",
+        );
+      } else {
+        provenanceWarning = "Warning: Build provenance was not verified: no trusted GitHub CLI at /usr/bin/gh or /usr/local/bin/gh. The SHA-256 checksum was verified. Set NEXUS_VERIFY_ATTESTATION=1 to require provenance.";
       }
+      if (provenanceWarning) options?.onProgress?.("attestation_skipped", provenanceWarning);
     }
 
     // 5. Staging phase: Safe tar header validation and extraction
@@ -1250,7 +1275,7 @@ export async function performUpgrade(
       installedPath: versionDir,
       binPath: linkPath,
       restartRequired: true,
-      restartNotice: `Nexus has been upgraded to ${targetVersion} in ${versionDir}. The current session continues running on ${installed.version}. Restart Nexus to activate the new version.${pathWarning ? `\n\n${pathWarning}` : ""}`,
+      restartNotice: `Nexus has been upgraded to ${targetVersion} in ${versionDir}. The current session continues running on ${installed.version}. Restart Nexus to activate the new version.${provenanceWarning ? `\n\n${provenanceWarning}` : ""}${pathWarning ? `\n\n${pathWarning}` : ""}`,
       attestationVerified,
     };
   } catch (error: any) {

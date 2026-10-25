@@ -79,6 +79,7 @@ jobs:
     env:
       TARGET_TAG: ${{ inputs.tag }}
       EXPECTED_TAG_SHA: ${{ needs.resolve-tag.outputs.tag_sha }}
+      EXPECTED_WORKFLOW_SHA: ${{ needs.resolve-tag.outputs.workflow_sha }}
       NEXUS_BUILD_CONTAINER_IMAGE: rust:1.95.0-bookworm@sha256:4c2fd73ef19c5ef9d54bee03b06b2839a392604fbfcd578ed948b71b37c1d7fb
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
@@ -91,6 +92,10 @@ jobs:
           node-version: 22.22.1
           cache: npm
           cache-dependency-path: cli/package-lock.json
+      - name: Require the pinned release Node and npm versions
+        run: |
+          test "$(node --version)" = "v22.22.1"
+          test "$(npm --version)" = "10.9.4"
       - name: Verify exact RC source
         run: |
           test "$(git rev-parse HEAD)" = "$EXPECTED_TAG_SHA"
@@ -119,10 +124,21 @@ jobs:
           docker info >/dev/null
           test "$NEXUS_BUILD_CONTAINER_IMAGE" = 'rust:1.95.0-bookworm@sha256:4c2fd73ef19c5ef9d54bee03b06b2839a392604fbfcd578ed948b71b37c1d7fb'
       - name: Build the exact RC package
-        run: bash scripts/package-linux.sh "$TARGET_TAG" "$RUNNER_TEMP/dist"
-      - name: Record source, toolchain, and published-asset identity
+        env:
+          NEXUS_PACKAGE_TOOL_COMMIT: ${{ needs.resolve-tag.outputs.workflow_sha }}
         run: |
-          node scripts/repro-identity.mjs record "$TARGET_TAG" "$RUNNER_TEMP/dist" \
+          git fetch origin main --no-tags
+          git merge-base --is-ancestor "$NEXUS_PACKAGE_TOOL_COMMIT" origin/main
+          package_tool="$RUNNER_TEMP/package-linux.sh"
+          git show "$NEXUS_PACKAGE_TOOL_COMMIT:scripts/package-linux.sh" > "$package_tool"
+          NEXUS_PACKAGE_SOURCE="$GITHUB_WORKSPACE" bash "$package_tool" "$TARGET_TAG" "$RUNNER_TEMP/dist"
+      - name: Record source, toolchain, and published-asset identity
+        env:
+          NEXUS_PACKAGE_TOOL_COMMIT: ${{ needs.resolve-tag.outputs.workflow_sha }}
+          NEXUS_PACKAGE_TOOL_SCRIPT: ${{ runner.temp }}/package-linux.sh
+        run: |
+          git show "$EXPECTED_WORKFLOW_SHA:scripts/repro-identity.mjs" > "$RUNNER_TEMP/repro-identity.mjs"
+          node "$RUNNER_TEMP/repro-identity.mjs" record "$TARGET_TAG" "$RUNNER_TEMP/dist" \
             "$RUNNER_TEMP/dist/repro-identity.json" "${{ matrix.runner }}"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
@@ -195,7 +211,7 @@ jobs:
             printf '## Cross-runner RC reproducibility: %s\n\n' "$TARGET_TAG"
             printf 'Source commit: %s\n' "$EXPECTED_TAG_SHA"
             printf 'Runner images: ubuntu-22.04 and ubuntu-24.04\n'
-            printf 'Both runner outputs match each other and all six published RC assets.\n'
+            printf 'Both runner outputs match each other and the six selected reproducibility artifacts.\n'
             printf 'Archive SHA-256: %s\n' "$archive_sha"
             printf '\nReproducibility evidence artifact: repro-evidence.json\n'
           } >> "$GITHUB_STEP_SUMMARY"

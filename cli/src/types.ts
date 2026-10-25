@@ -9,6 +9,18 @@ export interface ToolCall {
   function: FunctionCall;
 }
 
+/** Sanitized, opt-in evaluator receipt for a real run_command invocation. */
+export interface EvaluationToolReceipt {
+  invocationId: string;
+  tool: "run_command";
+  commandSha256: string;
+  timeoutSecs: number | null;
+  exitCode: number | null;
+  timedOut: boolean;
+  workspaceAvailableBeforeBytes: number | null;
+  workspaceAvailableAfterBytes: number | null;
+}
+
 export interface ChatMessage {
   role: "system" | "user" | "assistant" | "tool";
   content?: string | null | any[];
@@ -58,7 +70,7 @@ export interface HarnessConfig {
   coreBinaryPath?: string;   // Path to compiled harness-core executable
   dryRun?: boolean;          // Dry-run simulation mode without persisting file modifications
   readOnly?: boolean;        // Reject all mutating tool executions and commands
-  approvalMode?: "auto" | "review" | "read-only"; // Execution posture: auto, review, or read-only (DEC-01 option C)
+  approvalMode?: "auto" | "review" | "read-only"; // Permission posture: auto, review, or read-only (DEC-01, independent of folder trust)
   yes?: boolean;             // Run non-interactively without confirmation prompts (forces auto mode)
   fullAccess?: boolean;      // Broad full-access mode executing without confirmation prompts (AUTH-007, AUTH-008)
   taskClass?: string;        // Routing hint sent to the gateway as X-Task-Class (e.g. "review", "architecture")

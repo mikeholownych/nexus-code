@@ -1174,7 +1174,7 @@ export async function runDoctor(optionsOrConfig: DoctorOptions | HarnessConfig |
     const trusted = isWorkspaceTrusted(config.workspace, Boolean(config.readOnly));
     const sandboxStatus = config.sandbox ? (typeof config.sandbox === "string" ? config.sandbox : "on") : "off";
     posture = {
-      mode: config.approvalMode ?? (trusted ? "auto" : "review"),
+      mode: config.approvalMode ?? (config.readOnly ? "read-only" : config.fullAccess ? "auto" : "review"),
       sandbox: sandboxStatus,
       trusted,
     };

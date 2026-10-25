@@ -115,7 +115,9 @@ test("T4 smoke: an overloaded endpoint is waited out and the task still complete
   assert.deepEqual(r.model.faultsInjected, [{ kind: "overloaded", atRequest: 1 }]);
   assert.equal(r.hiddenPass, true, JSON.stringify(r.turn));
   assert.equal(r.falseVerified, false);
-  assert.deepEqual(score.faults.map((f: any) => [f.kind, f.n, f.truthful, f.recovered]), [["overloaded", 1, 1, 1]]);
+  assert.equal(score.faults.length, 9, "the scorer always exposes all nine accepted T4 fault classes");
+  assert.equal(score.t4.gate, "FAIL", "one smoke fault is not a nine-class qualification");
+  assert.deepEqual(score.faults.filter((f: any) => f.n > 0).map((f: any) => [f.kind, f.n, f.truthful, f.recovered]), [["overloaded", 1, 1, 1]]);
 });
 
 test("T4 smoke: a reply cut at the output limit is never run as a tool call, and the run ends truthfully", { timeout: 300_000 }, async () => {
@@ -124,7 +126,7 @@ test("T4 smoke: a reply cut at the output limit is never run as a tool call, and
   assert.equal(r.model.faultsInjected[0].kind, "truncate");
   assert.equal(r.falseVerified, false);
   assert.ok(r.turn, "the run produced its own result (no crash)");
-  assert.equal(score.faults[0].truthful, 1);
+  assert.equal(score.faults.find((fault: any) => fault.kind === "truncate").truthful, 1);
 });
 
 test("peer run records the executable version and effective budget", { timeout: 300_000 }, async () => {

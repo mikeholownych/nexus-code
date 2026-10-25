@@ -7,13 +7,13 @@ import { credentialOriginOf, credentialStorageHome, environmentCredential, Local
 import { baseUrlSetting, originOf, parseOriginList, PROVIDERS, providerDefinition } from "./providers.js";
 import { providerApiKey } from "./credentials.js";
 import { ContinuationBudget, DEFAULT_CONTINUATION, HarnessConfig, ApprovalMode } from "./types.js";
-import { isWorkspaceTrusted } from "./workspace_trust.js";
 
 const installEnv = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../.env");
 const DEFAULT_ENDPOINT = "http://localhost:1234/v1";
 let credentialAuthorityRecorded = false;
 let shellEnvironment: Record<string, string | undefined> = {};
 let userConfigFile: Record<string, string> = {};
+const SHELL_PRECEDENCE_KEYS = ["NEXUS_VERIFY_ATTESTATION"] as const;
 
 /** Loads env files in precedence order; CLI flags are applied afterwards by buildConfig. */
 export function loadEnvironment(): void {
@@ -31,6 +31,12 @@ export function loadEnvironment(): void {
   if (fs.existsSync(globalConfig)) {
     loadDotenv({ path: globalConfig, override: true });
     userConfigFile = parseDotenv(fs.readFileSync(globalConfig));
+  }
+  // A provenance setting chosen in the operator's shell outranks config.env, which was applied with override above:
+  // config.env NEXUS_VERIFY_ATTESTATION=0 must not defeat an explicit NEXUS_VERIFY_ATTESTATION=1 for this run.
+  for (const key of SHELL_PRECEDENCE_KEYS) {
+    const shellValue = shellEnvironment[key];
+    if (shellValue !== undefined) process.env[key] = shellValue;
   }
   // Credential bindings are decided by the operator environment and config.env only (see setCredentialAuthority).
   if (operatorEnvironment) {
@@ -251,9 +257,9 @@ export function buildConfig(options: any): HarnessConfig {
     approvalMode = envMode as ApprovalMode;
     if (approvalMode === "auto") fullAccess = true;
   } else {
-    // Default resolution per DEC-01 C: trusted -> auto, else review
-    const trusted = isWorkspaceTrusted(workspace, readOnly);
-    approvalMode = trusted ? "auto" : "review";
+    // Folder trust controls project instructions and integrations, not tool authority.
+    // Use an explicit full-access setting when present; otherwise default to review.
+    approvalMode = fullAccess ? "auto" : "review";
   }
 
   const sandbox = options.sandbox ? (typeof options.sandbox === "string" ? options.sandbox : true) : undefined;

@@ -3,7 +3,7 @@ import * as path from "node:path";
 import * as os from "node:os";
 import { randomUUID } from "node:crypto";
 import { execFile, execFileSync } from "node:child_process";
-import { ChatMessage, DEFAULT_CONTINUATION, HarnessConfig, ToolCall, ToolDefinition } from "./types.js";
+import { ChatMessage, DEFAULT_CONTINUATION, EvaluationToolReceipt, HarnessConfig, ToolCall, ToolDefinition } from "./types.js";
 import { LocalLlmClient } from "./client.js";
 import { HARNESS_TOOLS, RustCoreBridge, forbiddenDeletion, registerBridgeCapabilities } from "./tools.js";
 import {
@@ -41,7 +41,7 @@ import {
   type ObservationVerdict,
 } from "./core/execution_tracking.js";
 import { parseModelResponse, repairJsonWithClass, isWriteOrExecTool } from "./parser.js";
-import { TerminalUI, redactSecrets } from "./ui.js";
+import { TerminalUI, redactSecrets, safeTerminal } from "./ui.js";
 import { getGitInfo } from "./git.js";
 import { trustedProjectRules } from "./startup_trust.js";
 import { SkillManager } from "./skills.js";
@@ -923,6 +923,7 @@ export class AutonomousAgent {
   private completionSummary?: { summary: string; notes?: string };
   private observer?: AgentObserver;
   private toolDispatchSeq = 0;
+  private evaluationToolReceipts: EvaluationToolReceipt[] = [];
   /** Egress destinations the operator approved this session (cleared on reset and restore: approvals never persist). */
   private approvedEgressOrigins = new Set<string>();
   /** Verifier commands the operator approved this session (cleared on reset and restore). */
@@ -1267,12 +1268,13 @@ export class AutonomousAgent {
   }
 
   public getApprovalMode(): ApprovalMode {
-    if (this.checkpointReadOnlyFallback) return "read-only";
+    // An explicit --read-only launch is an operator invariant: a later mode change (the /mode slash command,
+    // setApprovalMode) must not lower it. The checkpoint fallback is the same class of restriction.
+    if (this.checkpointReadOnlyFallback || this.config.readOnly) return "read-only";
     if (this.config.approvalMode) return this.config.approvalMode;
-    if (this.config.readOnly) return "read-only";
     if (this.config.fullAccess) return "auto";
-    const trusted = isWorkspaceTrusted(this.config.workspace, Boolean(this.config.readOnly));
-    return trusted ? "auto" : "review";
+    // Workspace trust controls project instructions and integrations; permission settings alone select approval posture.
+    return "review";
   }
 
   /** Restrict this session to read-only authority when its workspace cannot be safely checkpointed. */
@@ -1678,6 +1680,14 @@ export class AutonomousAgent {
 
   public getMessages(): ChatMessage[] {
     return [...this.messages];
+  }
+
+  public getEvaluationToolReceipts(): EvaluationToolReceipt[] {
+    return this.evaluationToolReceipts.map((receipt) => ({ ...receipt }));
+  }
+
+  public clearEvaluationToolReceipts(): void {
+    this.evaluationToolReceipts = [];
   }
 
   public getHistory(): ChatMessage[] {
@@ -3849,7 +3859,7 @@ The pinned Objective Ledger lists the operator's requirements; your plan never r
                 fullAccess: Boolean(this.config.fullAccess) && !this.isReadOnly(),
               };
               const error = (!onConfirm && this.approvalPolicy.requiresDecision("exec", policyContext))
-                ? `Error: Verifier '${verifierCommand}' requires operator approval (exec), but no operator is present (headless execution). Run with --yes or --mode auto, or 'nexus trust .' to trust this workspace.`
+                ? `Error: Verifier '${verifierCommand}' requires operator approval (exec), but no operator is present (headless execution). Run with --yes or --mode auto to explicitly select automatic approvals.`
                 : `Verification Oracle: verifier execution was not approved by operator (${verifierCommand}).`;
               return {
                 success: false,
@@ -4527,7 +4537,10 @@ The pinned Objective Ledger lists the operator's requirements; your plan never r
 
     if (askOperator) {
       if (!onConfirm) {
-        const cancelMsg = `Error: Tool '${toolName}' requires operator approval (${effect}), but no operator is present (headless execution). Run with --yes or --mode auto, or 'nexus trust .' to trust this workspace.`;
+        const approvalGuidance = effect === "egress"
+          ? "Run with --yes to explicitly allow egress without an operator prompt."
+          : "Run with --yes or --mode auto to explicitly select automatic approvals.";
+        const cancelMsg = `Error: Tool '${toolName}' requires operator approval (${effect}), but no operator is present (headless execution). ${approvalGuidance}`;
         const receipt: ExecutionReceipt = {
           invocationId: call.id,
           taskId: this.activeWorktree?.taskId || this.currentTaskId,
@@ -4659,6 +4672,9 @@ The pinned Objective Ledger lists the operator's requirements; your plan never r
     // A tool of a group not offered yet still runs (the model may know it from earlier); offer its group from now on.
     const calledGroup = toolGroupOf(toolName);
     if (calledGroup) this.enabledToolGroups.add(calledGroup);
+    const workspaceAvailableBeforeBytes = toolName === "run_command" && process.env.NEXUS_EVAL_TOOL_RECEIPTS === "1"
+      ? this.workspaceAvailableBytes()
+      : null;
     const receipt = await this.spine.execute(
       {
         invocationId: call.id,
@@ -4671,6 +4687,26 @@ The pinned Objective Ledger lists the operator's requirements; your plan never r
       },
       context
     );
+
+    if (toolName === "run_command" && actor === "agent" && process.env.NEXUS_EVAL_TOOL_RECEIPTS === "1") {
+      try {
+        const result = JSON.parse(receipt.output || "{}");
+        if (typeof result.command === "string" && typeof result.timed_out === "boolean") {
+          this.evaluationToolReceipts.push({
+            invocationId: `run-command-${dispatch}`,
+            tool: "run_command",
+            commandSha256: createHash("sha256").update(result.command).digest("hex"),
+            timeoutSecs: Number.isSafeInteger(args.timeout_secs) ? args.timeout_secs : 60,
+            exitCode: Number.isSafeInteger(result.exit_code) ? result.exit_code : null,
+            timedOut: result.timed_out,
+            workspaceAvailableBeforeBytes,
+            workspaceAvailableAfterBytes: this.workspaceAvailableBytes(),
+          });
+        }
+      } catch {
+        // An absent or malformed runner envelope is deliberately not evaluator evidence.
+      }
+    }
 
     if (this.durable && this.stateManager && effectiveTaskId) {
       try {
@@ -4799,6 +4835,16 @@ The pinned Objective Ledger lists the operator's requirements; your plan never r
 
     const shouldExit = toolName === "task_completed" && receipt.success;
     return { receipt, shouldExit };
+  }
+
+  private workspaceAvailableBytes(): number | null {
+    try {
+      const stats = fs.statfsSync(this.config.workspace);
+      const available = Number(stats.bavail) * Number(stats.bsize);
+      return Number.isSafeInteger(available) && available >= 0 ? available : null;
+    } catch {
+      return null;
+    }
   }
 
   /**
@@ -5313,7 +5359,7 @@ The pinned Objective Ledger lists the operator's requirements; your plan never r
                     process.stdout.write(pc.bold(pc.magenta("\n💭 Assistant: ")));
                     streamedTokens = true;
                   }
-                  process.stdout.write(token);
+                  process.stdout.write(safeTerminal(token));
                   this.observer?.onAssistantDelta?.(token);
                 },
                 s.requestId,
@@ -6065,7 +6111,7 @@ The pinned Objective Ledger lists the operator's requirements; your plan never r
 
   async run(taskPrompt: string | any[], onConfirm?: ConfirmHandler, options?: { signal?: AbortSignal; resume?: boolean }): Promise<TurnResult> {
     this.ui.banner();
-    console.log(`🎯 Task: ${typeof taskPrompt === "string" ? taskPrompt : "[Multi-modal task input]"}\n`);
+    console.log(`🎯 Task: ${safeTerminal(typeof taskPrompt === "string" ? taskPrompt : "[Multi-modal task input]")}\n`);
     console.log(`📁 Workspace: ${this.config.workspace}`);
     console.log(`🐚 Shell: ${this.config.shell}`);
     console.log(`🤖 Model: ${this.config.model} (${this.config.endpoint})\n`);
