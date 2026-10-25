@@ -47,6 +47,72 @@ test("a local endpoint's huge error body is bounded and redacted in the error (P
   } finally { await srv.close(); }
 });
 
+test("error-body reads retain caller cancellation and the response watchdog", async () => {
+  const srv = await server((_req, _b, res) => { res.writeHead(500); res.flushHeaders(); });
+  const ac = new AbortController();
+  const originalTotal = process.env.LOCAL_LLM_TIMEOUT_MS;
+  const originalFirstByte = process.env.LOCAL_LLM_FIRST_BYTE_TIMEOUT_MS;
+  let timer: NodeJS.Timeout | undefined;
+  let abortTimer: NodeJS.Timeout | undefined;
+  const bounded = (pending: Promise<string>) => Promise.race([
+    pending,
+    new Promise<string>((resolve) => { timer = setTimeout(() => resolve("still pending"), 900); }),
+  ]);
+  try {
+    process.env.LOCAL_LLM_TIMEOUT_MS = "0";
+    process.env.LOCAL_LLM_FIRST_BYTE_TIMEOUT_MS = "1000";
+    const aborted = client(srv.url).chatCompletionStream([{ role: "user", content: "hi" }], [], undefined, "error-body-abort", ac.signal)
+      .then(() => "resolved", (e: any) => `rejected:${e.kind}`);
+    abortTimer = setTimeout(() => ac.abort(), 250);
+    assert.equal(await bounded(aborted), "rejected:aborted");
+    clearTimeout(timer);
+    clearTimeout(abortTimer);
+
+    process.env.LOCAL_LLM_FIRST_BYTE_TIMEOUT_MS = "100";
+    const timedOut = client(srv.url).chatCompletionStream([{ role: "user", content: "hi" }], [], undefined, "error-body-timeout")
+      .then(() => "resolved", (e: any) => `rejected:${e.kind}`);
+    assert.equal(await bounded(timedOut), "rejected:timeout");
+  } finally {
+    if (timer) clearTimeout(timer);
+    if (abortTimer) clearTimeout(abortTimer);
+    ac.abort();
+    if (originalTotal === undefined) delete process.env.LOCAL_LLM_TIMEOUT_MS;
+    else process.env.LOCAL_LLM_TIMEOUT_MS = originalTotal;
+    if (originalFirstByte === undefined) delete process.env.LOCAL_LLM_FIRST_BYTE_TIMEOUT_MS;
+    else process.env.LOCAL_LLM_FIRST_BYTE_TIMEOUT_MS = originalFirstByte;
+    await srv.close();
+  }
+});
+
+test("an OpenAI invalid-request error frame is permanent", async () => {
+  const srv = await server((_req, _b, res) => {
+    res.writeHead(200, { "content-type": "text/event-stream" });
+    res.end(sse({ error: { type: "invalid_request_error", message: "bad request" } }));
+  });
+  try {
+    await assert.rejects(client(srv.url).chatCompletionStream([{ role: "user", content: "hi" }], [], undefined, "r"), (e: any) => {
+      assert.equal(e.kind, "provider_error_frame");
+      assert.equal(e.condition, "REQUEST_REJECTED");
+      assert.equal(e.execution, "UNKNOWN");
+      return true;
+    });
+  } finally { await srv.close(); }
+});
+
+test("an OpenAI error frame is bounded and redacted", async () => {
+  const srv = await server((_req, _b, res) => {
+    res.writeHead(200, { "content-type": "text/event-stream" });
+    res.end(sse({ error: { type: "overloaded_error", message: "upstream key=sk-ant-api03-" + "A".repeat(40) + " " + "x".repeat(10_000) } }));
+  });
+  try {
+    await assert.rejects(client(srv.url).chatCompletionStream([{ role: "user", content: "hi" }], [], undefined, "r"), (e: any) => {
+      assert.ok(e.message.length < 2_200, `message length ${e.message.length}`);
+      assert.ok(!e.message.includes("sk-ant-api03-AAAA"));
+      return true;
+    });
+  } finally { await srv.close(); }
+});
+
 test("model listing and embeddings stop waiting on a silent server (PRV-05)", { timeout: 40_000 }, async () => {
   const srv = await server(() => { /* never answers */ });
   try {
