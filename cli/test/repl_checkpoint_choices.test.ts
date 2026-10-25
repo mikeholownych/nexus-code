@@ -49,6 +49,17 @@ test("REPL asks how to proceed when sensitive content blocks a turn checkpoint",
   }
 });
 
+test("REPL asks how to proceed when initial protected Git verification blocks a turn checkpoint", async () => {
+  const { repl, prompts, fallback } = makeRepl("2");
+  repl.checkpointManager.createCheckpoint = () => {
+    throw new Error("Checkpoint could not verify protected Git state; no checkpoint was written");
+  };
+
+  assert.equal(await (repl as any).prepareTurnCheckpoint("Turn: protected workspace"), true);
+  assert.deepEqual(prompts, ["Choice [1-5]: "], "the user must choose how to proceed before the turn starts");
+  assert.deepEqual(fallback, [false], "continuing without a checkpoint preserves the configured permission mode");
+});
+
 test("REPL asks again when the acknowledged checkpoint attempt fails protected Git verification", async () => {
   const { repl, prompts, fallback } = makeRepl("3", (allowSensitive) => {
     if (allowSensitive) throw new Error("Checkpoint could not verify protected Git state; no checkpoint was written");
