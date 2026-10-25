@@ -253,6 +253,17 @@ function egressDenied(message: string): InferenceError {
 }
 
 const MAX_PROVIDER_ERROR_CHARS = 2_000;
+const CLASSIFIED_STREAM_ERRORS = new Set([
+  "context_length_exceeded",
+  "overloaded_error",
+  "rate_limit_error",
+  "rate_limit_exceeded",
+  "invalid_request_error",
+  "authentication_error",
+  "permission_error",
+  "billing_error",
+  "insufficient_quota",
+]);
 /** Limit for requests that carry no task content (model lists, catalogs, embeddings): a silent server never hangs them. */
 const METADATA_TIMEOUT_MS = 15_000;
 
@@ -1613,7 +1624,8 @@ export class LocalLlmClient {
               execution: fullContent ? "UNKNOWN" : "NOT_EXECUTED",
             });
           }
-          throw this.fromStreamError(new ProviderStreamError(em, hints.errorCode ?? hints.errorType, fullContent), requestId);
+          const classifiedCode = hints.errorCode && CLASSIFIED_STREAM_ERRORS.has(hints.errorCode);
+          throw this.fromStreamError(new ProviderStreamError(em, classifiedCode ? hints.errorCode : hints.errorType ?? hints.errorCode, fullContent), requestId);
         }
         if (this.pending && chunk && typeof chunk === "object") {
           if (chunk.usage) this.pending.usage = chatUsage(chunk.usage);

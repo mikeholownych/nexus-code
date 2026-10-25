@@ -99,6 +99,20 @@ test("an OpenAI invalid-request error frame is permanent", async () => {
   } finally { await srv.close(); }
 });
 
+test("an unrecognized OpenAI error code falls back to the permanent error type", async () => {
+  const srv = await server((_req, _b, res) => {
+    res.writeHead(200, { "content-type": "text/event-stream" });
+    res.end(sse({ error: { type: "invalid_request_error", code: "model_not_found", message: "unknown model" } }));
+  });
+  try {
+    await assert.rejects(client(srv.url).chatCompletionStream([{ role: "user", content: "hi" }], [], undefined, "r"), (e: any) => {
+      assert.equal(e.condition, "REQUEST_REJECTED");
+      assert.equal(e.execution, "UNKNOWN");
+      return true;
+    });
+  } finally { await srv.close(); }
+});
+
 test("an OpenAI context error code takes precedence over its error type", async () => {
   const srv = await server((_req, _b, res) => {
     res.writeHead(200, { "content-type": "text/event-stream" });
