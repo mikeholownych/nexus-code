@@ -113,6 +113,47 @@ describe("ACC-PER-05: Flight Logs & Telemetry Git Exclude (REQ-PER-105)", () => 
     assert.equal(status, "", `Nexus state must remain ignored when info/exclude is unavailable; found:\n${status}`);
   });
 
+  test("Git unavailable in a linked worktree fails closed before creating flight state", () => {
+    const linkedWorkspace = path.join(tmpDir, "linked-worktree");
+    execFileSync("git", ["worktree", "add", "--detach", linkedWorkspace, "HEAD"], { cwd: gitRepoDir });
+    assert.equal(fs.lstatSync(path.join(linkedWorkspace, ".git")).isFile(), true);
+    assert.equal(fs.existsSync(path.join(linkedWorkspace, ".git", "info")), false);
+
+    const originalPath = process.env.PATH;
+    try {
+      process.env.PATH = "";
+      assert.throws(() => new FlightRecorder(linkedWorkspace), /Git metadata is unavailable/);
+    } finally {
+      if (originalPath === undefined) delete process.env.PATH;
+      else process.env.PATH = originalPath;
+    }
+
+    assert.equal(fs.existsSync(path.join(linkedWorkspace, ".nexus", "flights")), false);
+  });
+
+  test("Git unavailable in nested repository workspaces fails closed before creating flight state", () => {
+    const normalNestedWorkspace = path.join(gitRepoDir, "packages", "app");
+    fs.mkdirSync(normalNestedWorkspace, { recursive: true });
+
+    const linkedWorkspace = path.join(tmpDir, "nested-linked-worktree");
+    execFileSync("git", ["worktree", "add", "--detach", linkedWorkspace, "HEAD"], { cwd: gitRepoDir });
+    const linkedNestedWorkspace = path.join(linkedWorkspace, "packages", "app");
+    fs.mkdirSync(linkedNestedWorkspace, { recursive: true });
+
+    const originalPath = process.env.PATH;
+    try {
+      process.env.PATH = "";
+      assert.throws(() => new FlightRecorder(normalNestedWorkspace), /Git metadata is unavailable/);
+      assert.throws(() => new FlightRecorder(linkedNestedWorkspace), /Git metadata is unavailable/);
+    } finally {
+      if (originalPath === undefined) delete process.env.PATH;
+      else process.env.PATH = originalPath;
+    }
+
+    assert.equal(fs.existsSync(path.join(normalNestedWorkspace, ".nexus", "flights")), false);
+    assert.equal(fs.existsSync(path.join(linkedNestedWorkspace, ".nexus", "flights")), false);
+  });
+
   test("a subdirectory workspace protects root worktree state when Git metadata is unavailable", () => {
     const workspace = path.join(gitRepoDir, "packages", "app");
     fs.mkdirSync(workspace, { recursive: true });
