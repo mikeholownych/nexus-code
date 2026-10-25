@@ -575,7 +575,7 @@ export class SidecarServer {
             checkpointReady = true;
           } else if (choice === "allow_sensitive") {
             allowSensitiveCheckpoint = true;
-            this.emit({ type: "notice", text: "Retrying checkpoint with sensitive persistence allowed, as requested; the turn will wait until the retry succeeds or you choose another option." });
+            this.emit({ type: "notice", text: "Retrying checkpoint with sensitive persistence allowed, as requested; this may persist sensitive workspace content. The turn will wait until the retry succeeds or you choose another option." });
           }
         }
       }
