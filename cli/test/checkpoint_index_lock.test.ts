@@ -90,3 +90,49 @@ test("checkpoint checks the linked worktree's own Git index lock path", () => {
     assertCheckpointStopped(linkedWorkspace, home, absoluteLockPath);
   });
 });
+
+test("checkpoint rechecks the index lock after stash creation before publishing its ref", () => {
+  withRepository((root, home, workspace) => {
+    fs.writeFileSync(path.join(workspace, "tracked.txt"), "changed\n");
+    const lockOutput = execFileSync("git", ["rev-parse", "--git-path", "index.lock"], {
+      cwd: workspace,
+      encoding: "utf8",
+    }).trim();
+    const lockPath = path.isAbsolute(lockOutput) ? lockOutput : path.resolve(workspace, lockOutput);
+    const wrapperDir = path.join(root, "git-wrapper");
+    fs.mkdirSync(wrapperDir);
+    const realGit = execFileSync("which", ["git"], { encoding: "utf8" }).trim();
+    const wrapperPath = path.join(wrapperDir, "git");
+    fs.writeFileSync(wrapperPath, `#!/usr/bin/env node\nimport { spawnSync } from "node:child_process";\nconst result = spawnSync(${JSON.stringify(realGit)}, process.argv.slice(2), { stdio: "inherit" });\nif (process.argv[2] === "stash" && process.argv[3] === "create" && result.status === 0) {\n  await import("node:fs").then(({ writeFileSync }) => writeFileSync(process.env.NEXUS_TEST_INDEX_LOCK, ""));\n}\nprocess.exit(result.status ?? 1);\n`);
+    fs.chmodSync(wrapperPath, 0o755);
+
+    const previousPath = process.env.PATH;
+    const previousLockPath = process.env.NEXUS_TEST_INDEX_LOCK;
+    const checkpoints = new CheckpointManager(workspace);
+    try {
+      process.env.PATH = `${wrapperDir}${path.delimiter}${previousPath ?? ""}`;
+      process.env.NEXUS_TEST_INDEX_LOCK = lockPath;
+      assert.throws(
+        () => checkpoints.createCheckpoint("lock appeared during stash"),
+        /Git index lock exists.*check for an active Git operation/i,
+      );
+    } finally {
+      if (previousPath === undefined) delete process.env.PATH;
+      else process.env.PATH = previousPath;
+      if (previousLockPath === undefined) delete process.env.NEXUS_TEST_INDEX_LOCK;
+      else process.env.NEXUS_TEST_INDEX_LOCK = previousLockPath;
+    }
+
+    assert.equal(fs.existsSync(lockPath), true, "Nexus must not remove a lock created during checkpointing");
+    assert.deepEqual(checkpoints.listCheckpoints(), [], "a raced lock must prevent checkpoint publication");
+    assert.equal(
+      execFileSync("git", ["for-each-ref", "--format=%(refname)", "refs/nexus/checkpoints"], {
+        cwd: workspace,
+        encoding: "utf8",
+      }).trim(),
+      "",
+      "a raced lock must not create a checkpoint ref",
+    );
+    assert.equal(fs.readdirSync(path.join(home, ".nexus", "checkpoints")).length, 1);
+  });
+});

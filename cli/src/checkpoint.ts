@@ -183,6 +183,10 @@ export class CheckpointManager {
         // Create an untracked + tracked git stash commit without modifying working tree
         const stashCommit = execSync("git stash create", { cwd: this.workspace, encoding: "utf-8" }).trim();
         if (stashCommit) {
+          // Catch a Git operation that began during validation or stash creation.
+          // This is a point-in-time guard; Git exposes no atomic lock spanning
+          // stash creation and publication of this separate checkpoint ref.
+          this.assertGitIndexUnlocked();
           execFileSync("git", ["update-ref", `refs/nexus/checkpoints/${id}`, stashCommit], {
             cwd: this.workspace,
             stdio: "ignore",
@@ -191,6 +195,7 @@ export class CheckpointManager {
         } else {
           // Working tree was clean; record HEAD
           const headCommit = execSync("git rev-parse HEAD", { cwd: this.workspace, encoding: "utf-8" }).trim();
+          this.assertGitIndexUnlocked();
           execFileSync("git", ["update-ref", `refs/nexus/checkpoints/${id}`, headCommit], {
             cwd: this.workspace,
             stdio: "ignore",
