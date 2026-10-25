@@ -397,6 +397,27 @@ describe("WP-04: Candidate Identity & Validation Binding (INC-05, DEC-02)", () =
     }
   });
 
+  test("Nexus runtime state does not change Git candidate identity even when the ignore rule is unavailable", () => {
+    const tracker = new CandidateTracker();
+    const ignorePath = path.join(rootGit, ".gitignore");
+    const originalIgnore = fs.readFileSync(ignorePath, "utf8");
+    const runtimeState = path.join(rootGit, ".nexus", "sessions", "session.json");
+    try {
+      fs.writeFileSync(ignorePath, originalIgnore.replace(/^\.nexus\/\n?/m, ""));
+      const beforeState = tracker.computeCandidateIdentitySync(rootGit);
+
+      fs.mkdirSync(path.dirname(runtimeState), { recursive: true });
+      fs.writeFileSync(runtimeState, JSON.stringify({ messageLog: ["turn 1"] }));
+      const afterState = tracker.computeCandidateIdentitySync(rootGit);
+
+      assert.strictEqual(afterState.candidateId, beforeState.candidateId);
+      assert.ok(afterState.untrackedFiles.every((entry) => !entry.path.startsWith(".nexus/")));
+    } finally {
+      fs.rmSync(path.join(rootGit, ".nexus"), { recursive: true, force: true });
+      fs.writeFileSync(ignorePath, originalIgnore);
+    }
+  });
+
   test("Property F: Non-Git workspace candidate identity calculation", () => {
     const tracker = new CandidateTracker();
     const id1 = tracker.computeCandidateIdentitySync(nonGitWorkspace);
