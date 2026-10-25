@@ -99,6 +99,38 @@ test("an OpenAI invalid-request error frame is permanent", async () => {
   } finally { await srv.close(); }
 });
 
+test("an OpenAI context error code takes precedence over its error type", async () => {
+  const srv = await server((_req, _b, res) => {
+    res.writeHead(200, { "content-type": "text/event-stream" });
+    res.end(sse({ error: { type: "invalid_request_error", code: "context_length_exceeded", message: "context exceeded" } }));
+  });
+  try {
+    await assert.rejects(client(srv.url).chatCompletionStream([{ role: "user", content: "hi" }], [], undefined, "r"), (e: any) => {
+      assert.equal(e.condition, "CAPACITY_REJECTED");
+      assert.equal(e.execution, "NOT_EXECUTED");
+      return true;
+    });
+  } finally { await srv.close(); }
+});
+
+test("an OpenAI pre-generation error code retains partial-output execution semantics", async () => {
+  const srv = await server((_req, _b, res) => {
+    res.writeHead(200, { "content-type": "text/event-stream" });
+    res.end(
+      sse({ choices: [{ index: 0, delta: { content: "partial" } }] }) +
+      sse({ error: { type: "invalid_request_error", code: "pre_generation", message: "gateway failed" } }),
+    );
+  });
+  try {
+    await assert.rejects(client(srv.url).chatCompletionStream([{ role: "user", content: "hi" }], [], undefined, "r"), (e: any) => {
+      assert.equal(e.condition, "TEMPORARILY_UNAVAILABLE");
+      assert.equal(e.execution, "UNKNOWN");
+      assert.equal(e.partialText, "partial");
+      return true;
+    });
+  } finally { await srv.close(); }
+});
+
 test("an OpenAI error frame is bounded and redacted", async () => {
   const srv = await server((_req, _b, res) => {
     res.writeHead(200, { "content-type": "text/event-stream" });

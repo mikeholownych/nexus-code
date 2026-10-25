@@ -1604,16 +1604,16 @@ export class LocalLlmClient {
           const em = typeof chunk.error === "string" ? chunk.error : chunk.error.message || JSON.stringify(chunk.error);
           const hints = providerHints(undefined, JSON.stringify({ error: chunk.error }));
           // The request was admitted. Only an explicit pre-generation code proves the model never ran it.
-          if (hints.errorCode === "pre_generation" && !fullContent) {
+          if (hints.errorCode === "pre_generation") {
             throw new InferenceError("provider_error_frame", "provider", `Provider error frame mid-stream: ${boundedProviderText(em)}`, {
               requestId,
               partialText: fullContent,
               hints,
               condition: "TEMPORARILY_UNAVAILABLE",
-              execution: "NOT_EXECUTED",
+              execution: fullContent ? "UNKNOWN" : "NOT_EXECUTED",
             });
           }
-          throw this.fromStreamError(new ProviderStreamError(em, hints.errorType ?? hints.errorCode, fullContent), requestId);
+          throw this.fromStreamError(new ProviderStreamError(em, hints.errorCode ?? hints.errorType, fullContent), requestId);
         }
         if (this.pending && chunk && typeof chunk === "object") {
           if (chunk.usage) this.pending.usage = chatUsage(chunk.usage);
