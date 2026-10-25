@@ -252,7 +252,8 @@ fn render_checkpoint_choice(
         "Sensitive content may persist if you create a checkpoint anyway.".to_owned()
     } else if let Some(failure) = message.strip_prefix("Checkpoint failed: ") {
         let failure = failure.split(". Choose ").next().unwrap_or(failure);
-        format!("Checkpoint failed: {failure} Retrying keeps sensitive-persistence settings unchanged.")
+        let failure = failure.strip_suffix(". No checkpoint was written.").unwrap_or(failure);
+        format!("Checkpoint failed: {failure}. Retry keeps the sensitive-data choice unchanged.")
     } else {
         message.to_owned()
     };
