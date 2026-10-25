@@ -28,15 +28,19 @@ required and no trusted `gh` exists, fail the upgrade with an explicit error. Th
 ## Verification
 
 - New acceptance test (`refuses an upgrade that requires attestation when gh is unavailable`) injects an empty
-  trusted-path list, puts a marker-writing `gh` shim in PATH, and asserts the exact “no trusted GitHub CLI” error
-  plus that the shim never ran. It fails on the base source (upgrade succeeds through the PATH shim) and passes after;
-  this host has `/usr/bin/gh`, so the injection is what makes the test pin the missing-trusted-binary branch rather
-  than the pre-existing attestation-failure branch.
-- The required-attestation precondition is checked before the journal/download transaction, so it fails fast without
-  leaving a `recovery_required` journal.
-- Full `upgrade_acceptance.test.ts` 7/7; `npx tsc --noEmit`; `git diff --check`.
-- No network/production state is used: the existing mock release server provides the archive, checksums and
-  compatibility metadata, and the injected empty trusted-path list means `gh` is never spawned.
+  trusted-path list, puts a marker-writing `gh` shim (shell redirection, no external `touch`) in PATH, and asserts the
+  exact “no trusted GitHub CLI” error, that the shim never ran, that no journal was written, and that no
+  `.tmp-upgrade-*` staging was left behind. It fails on the base source (upgrade succeeds through the PATH shim) and
+  passes after; this host has `/usr/bin/gh`, so the injected path list is what makes the test pin the
+  missing-trusted-binary branch rather than the pre-existing attestation-failure branch.
+- A second hermetic test injects a trusted fake `gh` that exits 1 and verifies required mode still rejects with the
+  attestation-failure error. It does not touch the network.
+- The required-attestation precondition is checked before the journal/download transaction; the test asserts
+  `readJournal(tmpPrefix) === null` and no staging/journal entry after the rejection.
+- Full `upgrade_acceptance.test.ts` 8/8; `npx tsc --noEmit`; `git diff --check`.
+- The two new tests are hermetic: the existing mock release server provides the archive, checksums and compatibility
+  metadata, and both inject `trustedGhPaths`, so no `gh` process is spawned. Other pre-existing auto-mode tests in the
+  suite may use a host-installed `/usr/bin/gh` and are outside this slice.
 
 ## Residual risk
 
@@ -49,4 +53,7 @@ required and no trusted `gh` exists, fail the upgrade with an explicit error. Th
   slice; it is not claimed fixed here.
 - The trusted `gh` binary is assumed provisioned by the OS/package manager; trusted paths are checked with
   `existsSync` (symlinks are followed) and ownership/executability are not independently verified.
-- Attestation remains optional by default (`auto`).
+- Attestation remains optional by default (`auto`), and a trusted `gh` present but failing is still only fatal with
+  `NEXUS_VERIFY_ATTESTATION=1`.
+- The early error text names `/usr/bin/gh` and `/usr/local/bin/gh` even when a test/embedding caller injects other
+  trusted paths; `trustedGhPaths` is an internal test/embedding hook and is not wired to CLI input.
