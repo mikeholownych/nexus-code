@@ -1,7 +1,18 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+# An externally selected package tool may target a separate immutable RC checkout, but it must
+# still run from that checkout so version, source and lockfile identity stay bound together.
+ROOT=${NEXUS_PACKAGE_SOURCE:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}
+ROOT=$(cd "$ROOT" && pwd -P)
+if [[ -n "${NEXUS_PACKAGE_SOURCE:-}" ]]; then
+  CALLER_ROOT=$(git rev-parse --show-toplevel)
+  SOURCE_ROOT=$(git -C "$ROOT" rev-parse --show-toplevel)
+  if [[ "$ROOT" != "$CALLER_ROOT" || "$ROOT" != "$SOURCE_ROOT" ]]; then
+    echo "NEXUS_PACKAGE_SOURCE must be the current Git worktree root" >&2
+    exit 2
+  fi
+fi
 VERSION=${1:?usage: package-linux.sh VERSION OUTPUT_DIR}
 OUT=${2:?usage: package-linux.sh VERSION OUTPUT_DIR}
 APPROVED_RUST_BUILD_IMAGE='rust:1.95.0-bookworm@sha256:4c2fd73ef19c5ef9d54bee03b06b2839a392604fbfcd578ed948b71b37c1d7fb'
