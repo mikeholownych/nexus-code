@@ -240,12 +240,15 @@ fn render_checkpoint_choice(
     // renders those choices separately, so use a compact warning to keep all five
     // visible on the smallest supported terminal size.
     let display_message = if message.starts_with("Sensitive content blocked the checkpoint") {
-        "Sensitive content may persist if you create a checkpoint anyway."
+        "Sensitive content may persist if you create a checkpoint anyway.".to_owned()
+    } else if let Some(failure) = message.strip_prefix("Checkpoint failed: ") {
+        let failure = failure.split(". Choose ").next().unwrap_or(failure);
+        format!("Checkpoint failed: {failure} Retry may persist sensitive content.")
     } else {
-        message
+        message.to_owned()
     };
     let mut lines = markdown::wrap(
-        vec![Span::raw(display_message.to_owned())],
+        vec![Span::raw(display_message)],
         usize::from(width),
         Vec::new(),
         Vec::new(),
@@ -2645,6 +2648,24 @@ mod tests {
         assert_shows(&screen, &[
             "Sensitive content may persist",
             "checkpoint anyway",
+            "Read-only",
+            "Continue without checkpoint",
+            "Create checkpoint anyway",
+            "Cancel this turn",
+            "Other (re-enter instruction)",
+            "1–5 choose",
+        ]);
+    }
+
+    #[test]
+    fn checkpoint_failure_modal_keeps_reason_and_choices_visible_on_small_terminal() {
+        let mut state = ready();
+        feed(&mut state, &[r#"{"v":1,"type":"checkpoint.choice.request","id":"choice-failure","turn_id":"t1","message":"Checkpoint failed: protected Git state could not be verified. No checkpoint was written. Choose 1 read-only, 2 continue without a rollback checkpoint, 3 retry while allowing sensitive persistence, 4 cancel this turn, or 5 re-enter the instruction."}"#]);
+        let screen = draw(&state, 40, 14);
+        assert_shows(&screen, &[
+            "protected Git state could not be verified",
+            "No checkpoint was written",
+            "Retry may persist sensitive content",
             "Read-only",
             "Continue without checkpoint",
             "Create checkpoint anyway",
