@@ -314,6 +314,40 @@ describe("Public Release Upgrade Acceptance (REQ-REL-116, ACC-UPG-07..14)", () =
     assert.equal(journal.state, "complete");
   });
 
+  it("refuses an upgrade that requires attestation when gh is unavailable", async () => {
+    const oldVersion = "v0.1.0-alpha.2";
+    const vOldDir = setupInstalledVersion(tmpPrefix, oldVersion);
+    fs.mkdirSync(path.join(tmpPrefix, "bin"), { recursive: true });
+    fs.symlinkSync(path.join(vOldDir, "bin", "nexus"), path.join(tmpPrefix, "bin", "nexus"));
+
+    const installed = detectInstallation({ nexusHome: vOldDir, envPrefix: tmpPrefix });
+    const target = await resolveTargetRelease(undefined, { timeoutMs: 5000 });
+    const comparison = compareInstallationWithRelease(installed, target);
+    assert.equal(comparison.action, "upgrade");
+
+    const savedPath = process.env.PATH;
+    const savedAttestation = process.env.NEXUS_VERIFY_ATTESTATION;
+    // A PATH shim that claims success must not satisfy *required* attestation.
+    const shim = path.join(tmpPrefix, "gh-shim");
+    fs.mkdirSync(shim);
+    fs.writeFileSync(path.join(shim, "gh"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+    fs.chmodSync(path.join(shim, "gh"), 0o755);
+    process.env.PATH = shim;
+    process.env.NEXUS_VERIFY_ATTESTATION = "1";
+    try {
+      await assert.rejects(
+        performUpgrade(comparison, { prefix: tmpPrefix, timeoutMs: 5000 }),
+        /attestation.*required|trusted GitHub CLI|gh .*required/i,
+        "a required attestation must fail closed when gh is missing",
+      );
+    } finally {
+      if (savedPath === undefined) delete process.env.PATH;
+      else process.env.PATH = savedPath;
+      if (savedAttestation === undefined) delete process.env.NEXUS_VERIFY_ATTESTATION;
+      else process.env.NEXUS_VERIFY_ATTESTATION = savedAttestation;
+    }
+  });
+
   it("refuses downgrade when target release has incompatible state schema version", async () => {
     // Current installation at v1.0.0
     const v1Dir = setupInstalledVersion(tmpPrefix, "v1.0.0");

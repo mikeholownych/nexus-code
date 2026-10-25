@@ -1055,20 +1055,25 @@ export async function performUpgrade(
       if (!String(err?.message ?? err).includes("HTTP 404")) throw err;
     }
 
-    // Optional attestation check via gh if present
+    // Optional attestation check via a trusted gh if present. Do not resolve it from PATH: a shim that exits 0
+    // must not be able to claim a verified attestation, and a missing gh must fail closed when verification is required.
     let attestationVerified: boolean | undefined;
     const verifyAttestation = process.env.NEXUS_VERIFY_ATTESTATION ?? "auto";
+    const gh = ["/usr/bin/gh", "/usr/local/bin/gh"].find((candidate) => fs.existsSync(candidate));
     if (verifyAttestation !== "0") {
-      const ghProbe = spawnSync("gh", ["--version"]);
-      if (ghProbe.status === 0) {
+      if (gh) {
         options?.onProgress?.("verifying_attestation", "Checking build provenance attestation...");
-        const attestCheck = spawnSync("gh", ["attestation", "verify", localArchive, "-R", CANONICAL_REPO]);
-        const indexAttestCheck = spawnSync("gh", ["attestation", "verify", localSums, "-R", CANONICAL_REPO]);
+        const attestCheck = spawnSync(gh, ["attestation", "verify", localArchive, "-R", CANONICAL_REPO]);
+        const indexAttestCheck = spawnSync(gh, ["attestation", "verify", localSums, "-R", CANONICAL_REPO]);
         if (attestCheck.status === 0 && indexAttestCheck.status === 0) {
           attestationVerified = true;
         } else if (verifyAttestation === "1") {
           throw new Error(`Provenance attestation verification failed for ${archiveName} or SHA256SUMS.`);
         }
+      } else if (verifyAttestation === "1") {
+        throw new Error(
+          "Provenance attestation is required (NEXUS_VERIFY_ATTESTATION=1) but no trusted GitHub CLI was found at /usr/bin/gh or /usr/local/bin/gh; install gh or set NEXUS_VERIFY_ATTESTATION=0.",
+        );
       }
     }
 
