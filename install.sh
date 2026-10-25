@@ -18,10 +18,10 @@ command -v curl >/dev/null 2>&1 || fail "curl is required."
 command -v tar >/dev/null 2>&1 || fail "tar is required."
 command -v sha256sum >/dev/null 2>&1 || fail "sha256sum is required."
 
-VERIFY_ATTESTATION=${NEXUS_VERIFY_ATTESTATION:-1}
+VERIFY_ATTESTATION=${NEXUS_VERIFY_ATTESTATION:-auto}
 case "$VERIFY_ATTESTATION" in
-  0|1) ;;
-  *) fail "NEXUS_VERIFY_ATTESTATION must be 1 (verify provenance) or 0 (explicitly skip verification)." ;;
+  auto|0|1) ;;
+  *) fail "NEXUS_VERIFY_ATTESTATION must be auto (verify when a trusted GitHub CLI is present), 1 (require verification) or 0 (skip verification)." ;;
 esac
 TRUSTED_GH=
 if [ -x /usr/bin/gh ]; then
@@ -92,7 +92,11 @@ if [ "$VERIFY_ATTESTATION" != "0" ] && [ -n "$TRUSTED_GH" ]; then
     printf 'nexus installer: verified build provenance for %s and its checksum index\n' "$ARCHIVE"
   elif [ "$VERIFY_ATTESTATION" = "1" ]; then
     fail "provenance attestation verification failed for $ARCHIVE or SHA256SUMS."
+  else
+    printf 'nexus installer: build provenance was not verified: %s could not verify the attestation (it may need gh auth login); the SHA-256 checksum was verified. Set NEXUS_VERIFY_ATTESTATION=1 to require provenance.\n' "$TRUSTED_GH" >&2
   fi
+elif [ "$VERIFY_ATTESTATION" = "auto" ]; then
+  printf 'nexus installer: build provenance was not verified: no trusted GitHub CLI at /usr/bin/gh or /usr/local/bin/gh; the SHA-256 checksum was verified. Set NEXUS_VERIFY_ATTESTATION=1 to require provenance.\n' >&2
 fi
 
 VERSION_DIR="$PREFIX/lib/nexus/$VERSION"

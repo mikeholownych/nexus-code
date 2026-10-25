@@ -387,6 +387,96 @@ describe("Public Release Upgrade Acceptance (REQ-REL-116, ACC-UPG-07..14)", () =
     }
   });
 
+  it("auto attestation upgrades without a trusted gh and reports that provenance was not verified", async () => {
+    const oldVersion = "v0.1.0-alpha.2";
+    const vOldDir = setupInstalledVersion(tmpPrefix, oldVersion);
+    fs.mkdirSync(path.join(tmpPrefix, "bin"), { recursive: true });
+    fs.symlinkSync(path.join(vOldDir, "bin", "nexus"), path.join(tmpPrefix, "bin", "nexus"));
+
+    const installed = detectInstallation({ nexusHome: vOldDir, envPrefix: tmpPrefix });
+    const target = await resolveTargetRelease(undefined, { timeoutMs: 5000 });
+    const comparison = compareInstallationWithRelease(installed, target);
+
+    const savedPath = process.env.PATH;
+    const savedAttestation = process.env.NEXUS_VERIFY_ATTESTATION;
+    const shim = path.join(tmpPrefix, "gh-shim");
+    fs.mkdirSync(shim);
+    const marker = path.join(tmpPrefix, "gh-shim-executed");
+    fs.writeFileSync(path.join(shim, "gh"), `#!/bin/sh\n: > '${marker}'\nexit 0\n`, { mode: 0o755 });
+    fs.chmodSync(path.join(shim, "gh"), 0o755);
+    process.env.PATH = `${shim}:${savedPath ?? ""}`;
+    delete process.env.NEXUS_VERIFY_ATTESTATION;
+    const stages: string[] = [];
+    try {
+      const result = await performUpgrade(comparison, {
+        prefix: tmpPrefix,
+        timeoutMs: 5000,
+        trustedGhPaths: [],
+        onProgress: (stage) => stages.push(stage),
+      });
+      assert.equal(result.success, true, "the default auto mode must not require gh");
+      assert.equal(result.attestationVerified, undefined);
+      assert.match(result.restartNotice, /Build provenance was not verified: no trusted GitHub CLI/);
+      assert.ok(stages.includes("attestation_skipped"), "the skipped verification must be reported as progress");
+      assert.equal(fs.existsSync(marker), false, "the PATH gh shim was executed");
+    } finally {
+      if (savedPath === undefined) delete process.env.PATH;
+      else process.env.PATH = savedPath;
+      if (savedAttestation === undefined) delete process.env.NEXUS_VERIFY_ATTESTATION;
+      else process.env.NEXUS_VERIFY_ATTESTATION = savedAttestation;
+    }
+  });
+
+  it("auto attestation reports, rather than hides, a trusted gh that cannot verify", async () => {
+    const oldVersion = "v0.1.0-alpha.2";
+    const vOldDir = setupInstalledVersion(tmpPrefix, oldVersion);
+    fs.mkdirSync(path.join(tmpPrefix, "bin"), { recursive: true });
+    fs.symlinkSync(path.join(vOldDir, "bin", "nexus"), path.join(tmpPrefix, "bin", "nexus"));
+
+    const installed = detectInstallation({ nexusHome: vOldDir, envPrefix: tmpPrefix });
+    const target = await resolveTargetRelease(undefined, { timeoutMs: 5000 });
+    const comparison = compareInstallationWithRelease(installed, target);
+
+    const failingGh = path.join(tmpPrefix, "trusted-gh");
+    fs.writeFileSync(failingGh, "#!/bin/sh\nexit 1\n", { mode: 0o755 });
+    fs.chmodSync(failingGh, 0o755);
+    const savedAttestation = process.env.NEXUS_VERIFY_ATTESTATION;
+    process.env.NEXUS_VERIFY_ATTESTATION = "auto";
+    try {
+      const result = await performUpgrade(comparison, { prefix: tmpPrefix, timeoutMs: 5000, trustedGhPaths: [failingGh] });
+      assert.equal(result.success, true);
+      assert.equal(result.attestationVerified, undefined);
+      assert.match(result.restartNotice, /could not verify the attestation/);
+    } finally {
+      if (savedAttestation === undefined) delete process.env.NEXUS_VERIFY_ATTESTATION;
+      else process.env.NEXUS_VERIFY_ATTESTATION = savedAttestation;
+    }
+  });
+
+  it("rejects an unsupported attestation setting before starting the upgrade", async () => {
+    const oldVersion = "v0.1.0-alpha.2";
+    const vOldDir = setupInstalledVersion(tmpPrefix, oldVersion);
+    fs.mkdirSync(path.join(tmpPrefix, "bin"), { recursive: true });
+    fs.symlinkSync(path.join(vOldDir, "bin", "nexus"), path.join(tmpPrefix, "bin", "nexus"));
+
+    const installed = detectInstallation({ nexusHome: vOldDir, envPrefix: tmpPrefix });
+    const target = await resolveTargetRelease(undefined, { timeoutMs: 5000 });
+    const comparison = compareInstallationWithRelease(installed, target);
+
+    const savedAttestation = process.env.NEXUS_VERIFY_ATTESTATION;
+    process.env.NEXUS_VERIFY_ATTESTATION = "yes";
+    try {
+      await assert.rejects(
+        performUpgrade(comparison, { prefix: tmpPrefix, timeoutMs: 5000, trustedGhPaths: [] }),
+        /NEXUS_VERIFY_ATTESTATION must be auto/,
+      );
+      assert.equal(readJournal(tmpPrefix), null, "an invalid setting must fail before starting the journal");
+    } finally {
+      if (savedAttestation === undefined) delete process.env.NEXUS_VERIFY_ATTESTATION;
+      else process.env.NEXUS_VERIFY_ATTESTATION = savedAttestation;
+    }
+  });
+
   it("refuses downgrade when target release has incompatible state schema version", async () => {
     // Current installation at v1.0.0
     const v1Dir = setupInstalledVersion(tmpPrefix, "v1.0.0");

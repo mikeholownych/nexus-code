@@ -915,6 +915,11 @@ export async function performUpgrade(
   }
 
   const verifyAttestation = process.env.NEXUS_VERIFY_ATTESTATION ?? "auto";
+  if (!["auto", "0", "1"].includes(verifyAttestation)) {
+    throw new Error(
+      "NEXUS_VERIFY_ATTESTATION must be auto (verify when a trusted GitHub CLI is present), 1 (require verification) or 0 (skip verification).",
+    );
+  }
   const trustedGhPaths = options?.trustedGhPaths ?? ["/usr/bin/gh", "/usr/local/bin/gh"];
   const trustedGh = trustedGhPaths.find((candidate) => fs.existsSync(candidate));
   if (verifyAttestation === "1" && !trustedGh) {
@@ -1069,6 +1074,7 @@ export async function performUpgrade(
     // Optional attestation check via a trusted gh if present. Do not resolve it from PATH: a shim that exits 0
     // must not be able to claim a verified attestation, and a missing gh must fail closed when verification is required.
     let attestationVerified: boolean | undefined;
+    let provenanceWarning: string | undefined;
     if (verifyAttestation !== "0") {
       if (trustedGh) {
         options?.onProgress?.("verifying_attestation", "Checking build provenance attestation...");
@@ -1078,12 +1084,17 @@ export async function performUpgrade(
           attestationVerified = true;
         } else if (verifyAttestation === "1") {
           throw new Error(`Provenance attestation verification failed for ${archiveName} or SHA256SUMS.`);
+        } else {
+          provenanceWarning = `Warning: Build provenance was not verified: ${trustedGh} could not verify the attestation (it may need 'gh auth login'). The SHA-256 checksum was verified. Set NEXUS_VERIFY_ATTESTATION=1 to require provenance.`;
         }
       } else if (verifyAttestation === "1") {
         throw new Error(
           "Provenance attestation is required (NEXUS_VERIFY_ATTESTATION=1) but no trusted GitHub CLI was found at /usr/bin/gh or /usr/local/bin/gh; install gh or set NEXUS_VERIFY_ATTESTATION=0.",
         );
+      } else {
+        provenanceWarning = "Warning: Build provenance was not verified: no trusted GitHub CLI at /usr/bin/gh or /usr/local/bin/gh. The SHA-256 checksum was verified. Set NEXUS_VERIFY_ATTESTATION=1 to require provenance.";
       }
+      if (provenanceWarning) options?.onProgress?.("attestation_skipped", provenanceWarning);
     }
 
     // 5. Staging phase: Safe tar header validation and extraction
@@ -1264,7 +1275,7 @@ export async function performUpgrade(
       installedPath: versionDir,
       binPath: linkPath,
       restartRequired: true,
-      restartNotice: `Nexus has been upgraded to ${targetVersion} in ${versionDir}. The current session continues running on ${installed.version}. Restart Nexus to activate the new version.${pathWarning ? `\n\n${pathWarning}` : ""}`,
+      restartNotice: `Nexus has been upgraded to ${targetVersion} in ${versionDir}. The current session continues running on ${installed.version}. Restart Nexus to activate the new version.${provenanceWarning ? `\n\n${provenanceWarning}` : ""}${pathWarning ? `\n\n${pathWarning}` : ""}`,
       attestationVerified,
     };
   } catch (error: any) {
