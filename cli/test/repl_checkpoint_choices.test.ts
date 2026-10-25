@@ -44,9 +44,24 @@ test("REPL asks how to proceed when sensitive content blocks a turn checkpoint",
     const proceed = await (repl as any).prepareTurnCheckpoint("Turn: protected workspace");
     assert.equal(proceed, expectedProceed, `choice ${choice} proceed disposition`);
     assert.deepEqual(prompts, ["Choice [1-5]: "]);
-    assert.deepEqual(fallback, expectedFallback ? [true] : (choice === "2" || choice === "4" || choice === "5" ? [] : [false]));
+    assert.deepEqual(fallback, expectedFallback ? [true] : (choice === "4" || choice === "5" ? [] : [false]));
     assert.equal(sensitiveRetry, expectedSensitiveRetry, `choice ${choice} sensitive checkpoint retry`);
   }
+});
+
+test("REPL asks again when the acknowledged checkpoint attempt fails protected Git verification", async () => {
+  const { repl, prompts, fallback } = makeRepl("3", (allowSensitive) => {
+    if (allowSensitive) throw new Error("Checkpoint could not verify protected Git state; no checkpoint was written");
+  });
+  const answers = ["3", "2"];
+  repl.rl.question = async (prompt: string) => {
+    prompts.push(prompt);
+    return answers.shift()!;
+  };
+
+  assert.equal(await (repl as any).prepareTurnCheckpoint("Turn: protected workspace"), true);
+  assert.deepEqual(prompts, ["Choice [1-5]: ", "Choice [1-5]: "], "the second checkpoint failure must ask before starting the turn");
+  assert.deepEqual(fallback, [false], "continuing without a checkpoint preserves the configured permission mode");
 });
 
 test("REPL re-prompts for an invalid choice instead of silently choosing a mode", async () => {
