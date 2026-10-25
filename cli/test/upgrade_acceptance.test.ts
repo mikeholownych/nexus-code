@@ -327,19 +327,22 @@ describe("Public Release Upgrade Acceptance (REQ-REL-116, ACC-UPG-07..14)", () =
 
     const savedPath = process.env.PATH;
     const savedAttestation = process.env.NEXUS_VERIFY_ATTESTATION;
-    // A PATH shim that claims success must not satisfy *required* attestation.
+    // A PATH shim that claims success must not satisfy *required* attestation, and an empty trusted-path list must
+    // fail closed without spawning it.
     const shim = path.join(tmpPrefix, "gh-shim");
     fs.mkdirSync(shim);
-    fs.writeFileSync(path.join(shim, "gh"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+    const marker = path.join(tmpPrefix, "gh-shim-executed");
+    fs.writeFileSync(path.join(shim, "gh"), `#!/bin/sh\ntouch '${marker}'\nexit 0\n`, { mode: 0o755 });
     fs.chmodSync(path.join(shim, "gh"), 0o755);
     process.env.PATH = shim;
     process.env.NEXUS_VERIFY_ATTESTATION = "1";
     try {
       await assert.rejects(
-        performUpgrade(comparison, { prefix: tmpPrefix, timeoutMs: 5000 }),
-        /attestation.*required|trusted GitHub CLI|gh .*required/i,
-        "a required attestation must fail closed when gh is missing",
+        performUpgrade(comparison, { prefix: tmpPrefix, timeoutMs: 5000, trustedGhPaths: [] }),
+        /no trusted GitHub CLI was found at \/usr\/bin\/gh/,
+        "a required attestation must fail closed when no trusted gh exists",
       );
+      assert.equal(fs.existsSync(marker), false, "the PATH gh shim was executed");
     } finally {
       if (savedPath === undefined) delete process.env.PATH;
       else process.env.PATH = savedPath;

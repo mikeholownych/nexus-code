@@ -27,16 +27,26 @@ required and no trusted `gh` exists, fail the upgrade with an explicit error. Th
 
 ## Verification
 
-- New acceptance test (`refuses an upgrade that requires attestation when gh is unavailable`) fails on the base
-  source (upgrade succeeds) and passes after the change with the shim in PATH.
+- New acceptance test (`refuses an upgrade that requires attestation when gh is unavailable`) injects an empty
+  trusted-path list, puts a marker-writing `gh` shim in PATH, and asserts the exact “no trusted GitHub CLI” error
+  plus that the shim never ran. It fails on the base source (upgrade succeeds through the PATH shim) and passes after;
+  this host has `/usr/bin/gh`, so the injection is what makes the test pin the missing-trusted-binary branch rather
+  than the pre-existing attestation-failure branch.
+- The required-attestation precondition is checked before the journal/download transaction, so it fails fast without
+  leaving a `recovery_required` journal.
 - Full `upgrade_acceptance.test.ts` 7/7; `npx tsc --noEmit`; `git diff --check`.
 - No network/production state is used: the existing mock release server provides the archive, checksums and
-  compatibility metadata.
+  compatibility metadata, and the injected empty trusted-path list means `gh` is never spawned.
 
 ## Residual risk
 
-- `gh` outside the two trusted paths (Homebrew, snap, nix, custom prefix) is not used. In `auto` mode attestation is
-  skipped as before; with `NEXUS_VERIFY_ATTESTATION=1` the upgrade fails closed, so those installs must install `gh`
-  at a trusted path or opt out explicitly.
-- Attestation remains optional by default (`auto`), and the trusted `gh` binary itself is not independently verified;
-  it is assumed to be provisioned by the OS/package manager.
+- `gh` outside the two trusted paths (Homebrew, snap, nix, custom prefix) is no longer used. In `auto` mode this is a
+  deliberate tightening but also a behavior change: those hosts silently skip attestation where they previously
+  verified it. With `NEXUS_VERIFY_ATTESTATION=1` the upgrade fails closed, so they must install `gh` at a trusted path
+  or opt out explicitly.
+- `install.sh` still has the original fail-open pattern: it resolves `gh` with `command -v gh` and skips the whole
+  block when absent, even with `NEXUS_VERIFY_ATTESTATION=1`. Fixing the installer is a follow-up outside this CLI
+  slice; it is not claimed fixed here.
+- The trusted `gh` binary is assumed provisioned by the OS/package manager; trusted paths are checked with
+  `existsSync` (symlinks are followed) and ownership/executability are not independently verified.
+- Attestation remains optional by default (`auto`).
