@@ -5,7 +5,9 @@ import * as path from "node:path";
 import { copyToClipboard, readFromClipboard } from "../clipboard.js";
 import { commitChanges, generateConventionalCommit, getGitInfo } from "../git.js";
 import { HunkStager } from "../stager.js";
-import { runTestSuiteWithExecutor, discoverVerifier, verifierTimeoutSecs } from "../tester.js";
+import { runTestSuiteWithExecutor, discoverVerifier, describeVerifier, verifierTimeoutSecs } from "../tester.js";
+import { isWorkspaceTrusted } from "../workspace_trust.js";
+import { PolicyContext } from "../core/approval_policy.js";
 import { NOT_A_REPO, SlashContext, SlashHandler, SlashOutcome, errorText, reply } from "./catalog.js";
 
 function git(cwd: string, args: string[]): string {
@@ -163,13 +165,40 @@ async function test(ctx: SlashContext): Promise<SlashOutcome> {
   if (!discovered) {
     return reply("test", "no verifier: no verification command is configured or discovered in this workspace.", false);
   }
-  const bridge = ctx.host.app.getAgent().getBridge();
+  const description = describeVerifier(ws, discovered.command);
+  const testCommand = description?.command || discovered.command;
+  const agent = ctx.host.app.getAgent();
+  const bridge = agent.getBridge();
+  const config = ctx.host.app.getConfig();
+  const policyContext: PolicyContext = {
+    mode: ctx.host.mode(),
+    trusted: isWorkspaceTrusted(ws, Boolean(config.readOnly)),
+    sandbox: config.sandbox,
+    fullAccess: Boolean(config.fullAccess),
+  };
+  if (agent.getApprovalPolicy().requiresDecision("exec", policyContext)) {
+    const approved = ctx.host.requestApproval
+      ? await ctx.host.requestApproval("verifier", {
+          command: testCommand,
+          script: description?.script,
+          detail: description?.evidence ?? discovered.evidence,
+          digest: description?.digest,
+        }, ctx.signal)
+      : false;
+    if (!approved) return reply("test", "Test run aborted by user.", false);
+  }
   const timeoutSecs = verifierTimeoutSecs(ctx.host.app.getConfig().verifierTimeoutSecs);
-  const result = await runTestSuiteWithExecutor(
-    ws,
-    (command) => bridge.executeTool("run_command", { command, timeout_secs: timeoutSecs }),
-    discovered.command,
-  );
+  bridge.setTurnSignal(ctx.signal);
+  let result;
+  try {
+    result = await runTestSuiteWithExecutor(
+      ws,
+      (command) => bridge.executeTool("run_command", { command, timeout_secs: timeoutSecs }),
+      testCommand,
+    );
+  } finally {
+    bridge.setTurnSignal(undefined);
+  }
   const lines = [`$ ${result.command}`, result.success ? "Test suite passed." : "Test suite failed."];
   if (!result.success && result.failures.length) lines.push("", "Failing tests:", ...result.failures.slice(0, 10).map((f) => `  • ${f}`));
   if (!result.success && result.diagnostics.length) {
