@@ -5,7 +5,7 @@ import os
 import sys
 import time
 
-from repl_approval_driver import ReplSession
+from repl_approval_driver import CSI, ReplSession
 
 
 def pids_with_argv_token(token):
@@ -27,6 +27,16 @@ def pids_with_argv_token(token):
         if argv[:2] == [token, "30"] and process_name == b"sleep":
             matches.append(int(name))
     return matches
+
+
+def wait_for_result_text(session, text, timeout, start_offset):
+    expected = "".join(text.split())
+    deadline = time.monotonic() + timeout
+    while expected not in "".join(CSI.sub("", session.out[start_offset:]).split()):
+        if time.monotonic() > deadline:
+            new_text = CSI.sub("", session.out[start_offset:])
+            raise TimeoutError(f"never saw {text!r}; new clean text:\n{new_text[-1000:]}")
+        session.pump(0.05)
 
 
 def main():
@@ -52,6 +62,7 @@ def main():
         ready = "enter send" if plan["surface"] == "tui" else "❯"
         session.wait_text(ready, timeout=30)
         if plan.get("kind") == "verifier":
+            test_output_offset = len(session.out)
             session.send(b"/test\r", settle=0.2)
             if plan["mode"] != "auto":
                 session.wait_text("Approval needed", timeout=20)
@@ -84,18 +95,19 @@ def main():
                             session.pump(0.05)
                     if not canary_pids:
                         raise AssertionError("unique verifier child was not observable in host /proc before cancellation")
-                    if "Testsuitefailed." in session.clean_text():
+                    if "Testsuitefailed." in "".join(session.clean_text().split()):
                         raise AssertionError("verifier had already failed before Escape was sent")
                     result["canaryVisibleBeforeCancel"] = True
                     cancelled_at = time.monotonic()
+                    cancellation_output_offset = len(session.out)
                     session.send(b"\x1b", settle=0.1)
-                    session.wait_text("Testsuitefailed.", timeout=5)
+                    wait_for_result_text(session, "Test suite failed.", timeout=5, start_offset=cancellation_output_offset)
                     result["cancelSeconds"] = time.monotonic() - cancelled_at
                 else:
-                    session.wait_text("Testsuitepassed.", timeout=30)
+                    wait_for_result_text(session, "Test suite passed.", timeout=30, start_offset=test_output_offset)
             else:
                 result["approvalPrompt"] = False
-                session.wait_text("Testsuitepassed.", timeout=30)
+                wait_for_result_text(session, "Test suite passed.", timeout=30, start_offset=test_output_offset)
             print(json.dumps(result))
             return
 
