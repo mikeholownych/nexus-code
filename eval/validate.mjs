@@ -9,6 +9,7 @@ import { assertNoSymlinks, candidateSandboxHostMountSources, confinedPath, runti
 import { blackBoxOracleProblem } from "./oracle.mjs";
 import { t3TaskProblems } from "./t3.mjs";
 import { resourceProbeProblem } from "./resources.mjs";
+import { t4FixtureProblems } from "./t4_fixtures.mjs";
 
 export const TIERS = ["T1", "T2", "T3", "T4"];
 export const CLASSES = ["bugfix", "feature", "refactor", "debug"];
@@ -61,6 +62,10 @@ export function validateTask(task, dir, { qualification = false } = {}) {
     const kinds = ["refuse", "overloaded", "stream_cut", "truncate", "context_overflow", "malformed_tool_json"];
     need(Array.isArray(task.faults) && task.faults.every((f) => kinds.includes(f?.kind) && Number.isInteger(f?.atRequest) && f.atRequest >= 1), `faults must be [{ kind: ${kinds.join("|")}, atRequest: n >= 1 }]`);
   }
+  if (task.t4RunnerFault !== undefined) {
+    need(task.tier === "T4" && task.t4RunnerFault === "sigterm_resume", "t4RunnerFault is supported only as sigterm_resume on a T4 task");
+  }
+  problems.push(...t4FixtureProblems(task));
   if (task.class !== undefined || qualification) need(CLASSES.includes(task.class), `class must be one of ${CLASSES.join(", ")}`);
   if (task.difficulty !== undefined || qualification) need(DIFFICULTIES.includes(task.difficulty), `difficulty must be one of ${DIFFICULTIES.join(", ")}`);
   return problems;

@@ -9,6 +9,18 @@ export interface ToolCall {
   function: FunctionCall;
 }
 
+/** Sanitized, opt-in evaluator receipt for a real run_command invocation. */
+export interface EvaluationToolReceipt {
+  invocationId: string;
+  tool: "run_command";
+  commandSha256: string;
+  timeoutSecs: number | null;
+  exitCode: number | null;
+  timedOut: boolean;
+  workspaceAvailableBeforeBytes: number | null;
+  workspaceAvailableAfterBytes: number | null;
+}
+
 export interface ChatMessage {
   role: "system" | "user" | "assistant" | "tool";
   content?: string | null | any[];

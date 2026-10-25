@@ -18,6 +18,7 @@ import { applyAgentChanges, cloneWorkspace } from "./hardened_check.mjs";
 import { containmentProblem, resourceProbeProblem, spawnContained } from "./resources.mjs";
 import { StringDecoder } from "node:string_decoder";
 import { commandBaseline, countCompactions, createT3Driver, scoreT3Run, steeringBaseline, steeringPrecondition, t3Snapshot } from "./t3.mjs";
+import { observeT4Fixture } from "./t4_fixtures.mjs";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const args = parseArgs(process.argv.slice(2));
@@ -230,7 +231,7 @@ async function runOnce(task, run) {
     let agent;
     let agentEndedAt;
     try {
-      agent = await runAgent(task, ws, home, budget, agentIdentity, proxyDir, localToken);
+      agent = await runAgent(task, ws, home, budget, agentIdentity, proxyDir, localToken, proxy);
       agentEndedAt = Date.now();
       if (config.runAs) {
         for (const dir of [ws, home]) await normalizeRunAsPermissions(config.runAs, dir, asUserSpec);
@@ -242,6 +243,7 @@ async function runOnce(task, run) {
     const wallMs = agentEndedAt - started;
     if (agent.containmentProblem) throw new Error(`candidate containment failed: ${agent.containmentProblem}`);
     const model = proxy ? proxy.stats() : null;
+    const fixtureFaults = observeT4Fixture(task, agent, agent.resources, config.resources);
     const contaminated = treeDigest(task.dir) !== sourceBefore || `${agent.stdout}${agent.stderr}`.includes(tasksDir);
     // T3 judges the workspace as it was when the objective's work ended (snapshot taken before the probe turn).
     const t3 = agent.t3Driver ? scoreT3Run({ task, baseline: t3Baseline, driver: agent.t3Driver, preconditions: agent.t3Preconditions, compactions: countCompactions(home) }) : null;
@@ -290,6 +292,7 @@ async function runOnce(task, run) {
       ...(hardening ? { hardened: { baseline: hardening.baseline, applied: hardening.applied.length, discarded: hardening.discarded, configChanges: hardening.configChanges } } : {}),
       ...(t3 ? { t3 } : {}),
       model,
+      ...((agent.t4FaultsInjected?.length || fixtureFaults.length) ? { t4FaultsInjected: [...(agent.t4FaultsInjected ?? []), ...fixtureFaults] } : {}),
       resources: config.resources ? { agent: agent.resources, hidden: hidden.resources ?? null, regression: regression?.resources ?? null, ...(t3BaselineResources.length ? { t3Baseline: t3BaselineResources } : {}) } : null,
       logs: saveLogs(task, run, agent, hidden, regression),
     };
@@ -475,6 +478,7 @@ function agentCommand(task, ws, home, budget, agentIdentity, localToken) {
   };
   const agent = config.agent ?? "nexus";
   if (agent === "nexus") {
+    if (task.t4Fixture) env.NEXUS_EVAL_TOOL_RECEIPTS = "1";
     env.LOCAL_LLM_ENDPOINT = ep;
     const contextArgs = nexusContextLimitArgs(config, limits.context);
     if (task.tier === "T3") {
@@ -523,8 +527,47 @@ function agentCommand(task, ws, home, budget, agentIdentity, localToken) {
   throw new Error(`agent ${agent} has no adapter`);
 }
 
-function runAgent(task, ws, home, budget, agentIdentity, proxyDirectory, localToken) {
+async function runAgent(task, ws, home, budget, agentIdentity, proxyDirectory, localToken, proxy) {
+  if (task.t4RunnerFault !== "sigterm_resume") {
+    return runAgentAttempt(task, ws, home, budget, agentIdentity, proxyDirectory, localToken);
+  }
+  if (task.tier !== "T4" || (config.agent ?? "nexus") !== "nexus" || config.qualification !== true || !config.resources) {
+    throw new Error("sigterm_resume requires an installed Nexus qualification run with the kernel resource contract");
+  }
+  const interrupted = await runAgentAttempt(task, ws, home, budget, agentIdentity, proxyDirectory, localToken, { signalAfterAnswer: true, proxy });
+  const signal = interrupted.t4Signal;
+  if (!signal?.delivered) return { ...interrupted, t4FaultsInjected: [] };
+  const resumed = await runAgentAttempt(task, ws, home, budget, agentIdentity, proxyDirectory, localToken, { resume: true });
+  const evidence = {
+    signal: "SIGTERM",
+    delivered: signal.delivered,
+    deliveredProcesses: signal.deliveredProcesses,
+    forced: signal.forced,
+    firstExitCode: signal.firstExitCode,
+    payloadExitSignal: signal.payloadExitSignal,
+    supervisorWrapperExitSignal: signal.supervisorWrapperExitSignal,
+    signalDuringActiveTurn: signal.signalDuringActiveTurn,
+    resumed: resumed.code === 0 && resumed.json?.turn?.execution === "COMPLETED",
+    resumeExitCode: resumed.code,
+    resumeTurnExecution: resumed.json?.turn?.execution ?? null,
+  };
+  return {
+    ...resumed,
+    stdout: `${interrupted.stdout}\n--- T4 SIGTERM interruption ---\n${resumed.stdout}`,
+    stderr: `${interrupted.stderr}\n--- T4 resume attempt ---\n${resumed.stderr}`,
+    t4FaultsInjected: [{ kind: "sigterm_resume", source: "task_fixture_or_runner", evidence }],
+  };
+}
+
+function runAgentAttempt(task, ws, home, budget, agentIdentity, proxyDirectory, localToken, { signalAfterAnswer = false, proxy = null, resume = false } = {}) {
   const { cmd, argv, env, protocol } = agentCommand(task, ws, home, budget, agentIdentity, localToken);
+  if (resume) {
+    if ((config.agent ?? "nexus") !== "nexus" || protocol) throw new Error("T4 resume is supported only by Nexus run mode");
+    const promptIndex = argv.lastIndexOf(task.objective);
+    if (promptIndex < 0) throw new Error("could not remove original prompt before Nexus resume");
+    argv.splice(promptIndex, 1);
+    argv.push("--resume");
+  }
   if (config.qualification === true && !config.runAs) throw new Error("qualification candidate execution requires the dedicated evaluator account");
   if (config.runAs) grantRunAsAccess(config.runAs, [ws, home, proxyDirectory]);
   const runtimePaths = [fs.realpathSync(cmd), ...agentIdentity.argsPrefix.filter((item) => path.isAbsolute(item)), ...(config.sandboxRuntimePaths ?? [])];
@@ -605,18 +648,51 @@ function runAgent(task, ws, home, budget, agentIdentity, proxyDirectory, localTo
         process.kill(-child.pid, sig);
       } catch {}
     };
+    let signalEvidence = null;
+    const signalPoll = signalAfterAnswer ? setInterval(() => {
+      if (signalEvidence || (proxy?.stats().answered ?? 0) < 1) return;
+      if (!containment) return;
+      const proxyState = proxy.stats();
+      // An answered request alone only proves the model replied sometime earlier. Require
+      // an in-flight inference request while this Nexus process is still alive so the
+      // injected interruption is demonstrably during an active turn.
+      if (proxyState.activeInferenceRequests < 1 || child.exitCode !== null) return;
+      try {
+        if (containment.signal("SIGTERM", 5000)) signalEvidence = {
+          requestedAt: new Date().toISOString(),
+          answeredBeforeSignal: true,
+          activeInferenceRequests: proxyState.activeInferenceRequests,
+          signalDuringActiveTurn: true,
+        };
+      } catch {}
+    }, 25) : null;
     const timer = setTimeout(() => {
       timedOut = true;
       killGroup("SIGTERM");
       setTimeout(() => killGroup("SIGKILL"), 10_000).unref();
     }, (budget.minutes + 5) * 60_000);
     child.on("error", (err) => (stderr += `spawn error: ${err.message}\n`));
-    child.on("close", async (code) => {
+    child.on("close", async (code, exitSignal) => {
       clearTimeout(timer);
-      killGroup("SIGKILL");
+      if (signalPoll) clearInterval(signalPoll);
+      // A contained payload is already reaped by cgroup_supervisor before its final report. Do not race that
+      // report with a second force-kill; only the uncontained development path needs process-group cleanup here.
+      if (!containment) killGroup("SIGKILL");
       const final = containment ? await containment.final : undefined;
       const json = driver ? { turn: driver.state.objectiveTurns.at(-1) ?? null } : lastJson(stdout);
-      resolve({ code, timedOut, outputExceeded, stdout, stderr, json, ...(driver ? { t3Driver: driver.state, t3Preconditions: preconditions } : {}), ...(containment ? { resources: final, containmentProblem: containmentProblem(final) } : {}) });
+      const observedSignal = final?.signals?.find((entry) => entry.name === "SIGTERM");
+      const t4Signal = signalEvidence ? {
+        ...signalEvidence,
+        delivered: (observedSignal?.delivered ?? 0) > 0,
+        deliveredProcesses: observedSignal?.delivered ?? 0,
+        forced: observedSignal?.forced ?? null,
+        firstExitCode: code,
+        // `child` is the systemd-run wrapper; only the supervisor's final report identifies
+        // the task payload's signal disposition.
+        payloadExitSignal: final?.signal ?? null,
+        supervisorWrapperExitSignal: exitSignal ?? null,
+      } : null;
+      resolve({ code, timedOut, outputExceeded, stdout, stderr, json, ...(t4Signal ? { t4Signal } : {}), ...(driver ? { t3Driver: driver.state, t3Preconditions: preconditions } : {}), ...(containment ? { resources: final, containmentProblem: containmentProblem(final) } : {}) });
     });
   });
 }
@@ -693,7 +769,7 @@ function harnessIdentity() {
   const git = (...a) => spawnSync("git", a, { cwd: ROOT, encoding: "utf8" }).stdout.trim();
   const commit = git("rev-parse", "HEAD");
   const dirty = Boolean(git("status", "--porcelain", "--untracked-files=all", "--", ".", ":(exclude)cli/dist"));
-  const sourceFiles = ["eval/run.mjs", "eval/validate.mjs", "eval/isolate.mjs", "eval/hide_oracle.cjs", "eval/hide_oracle.py", "eval/unlink_then_exec.sh", "eval/agent_sandbox.mjs", "eval/model_proxy.mjs", "eval/score.mjs", "eval/infra.mjs", "eval/workspace.mjs", "eval/resources.mjs", "eval/cgroup_supervisor.mjs", "eval/t3.mjs", "eval/hardened_check.mjs"];
+  const sourceFiles = ["eval/run.mjs", "eval/validate.mjs", "eval/t4_fixtures.mjs", "eval/isolate.mjs", "eval/hide_oracle.cjs", "eval/hide_oracle.py", "eval/unlink_then_exec.sh", "eval/agent_sandbox.mjs", "eval/model_proxy.mjs", "eval/score.mjs", "eval/infra.mjs", "eval/workspace.mjs", "eval/resources.mjs", "eval/cgroup_supervisor.mjs", "eval/t3.mjs", "eval/hardened_check.mjs"];
   const sourceDigests = sourceFiles.map((file) => ({ file, sha256: createHash("sha256").update(fs.readFileSync(path.join(ROOT, file))).digest("hex") }));
   const sourceSha256 = createHash("sha256").update(JSON.stringify(sourceDigests)).digest("hex");
   return { commit, dirty, sourceDigests, sourceSha256, string: `${commit.slice(0, 12)}${dirty ? "-dirty" : ""}` };
