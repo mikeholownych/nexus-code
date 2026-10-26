@@ -147,6 +147,9 @@ function readJson(file: string): any {
 
 function readStore(): StoreFile {
   const raw = readJson(credentialsPath());
+  if (Array.isArray(raw) || (raw && typeof raw === "object" && Array.isArray(raw.providers))) {
+    throw new Error("The Nexus credential store has an unsupported format.");
+  }
   return raw && typeof raw === "object" && raw.providers && typeof raw.providers === "object"
     ? { version: 1, providers: raw.providers }
     : { version: 1, providers: {} };

@@ -639,6 +639,22 @@ describe("connecting from the picker", () => {
     } finally { await m.close(); }
   });
 
+  test("a provider connection reports failure and preserves an array credential store", async () => {
+    const m = await mock((s, res) => json(res, s.headers["x-api-key"] === "sk-ant-GOOD" ? 200 : 401, { data: [{ id: "claude-a" }] }));
+    const original = '{"version":1,"providers":[]}\n';
+    try {
+      operator({ NEXUS_ANTHROPIC_BASE_URL: `${m.url}/v1` });
+      fs.mkdirSync(path.dirname(credentialsPath()), { recursive: true });
+      fs.writeFileSync(credentialsPath(), original, { mode: 0o600 });
+      const result = await connectWithKey(cfg(), "anthropic", "sk-ant-GOOD");
+      assert.equal(result.ok, false, "connection must not report success when its key cannot be persisted");
+      assert.match(result.message, /key not saved/);
+      assert.equal(fs.readFileSync(credentialsPath(), "utf8"), original, "the malformed store is not overwritten");
+    } finally {
+      await m.close();
+    }
+  });
+
   test("the catalog lists the appliance first, connected providers with their source, and falls back to a cached list", async () => {
     const appliance = await mock((_s, res) => json(res, 200, { data: [{ id: "engineering/b0" }] }));
     let up = true;
