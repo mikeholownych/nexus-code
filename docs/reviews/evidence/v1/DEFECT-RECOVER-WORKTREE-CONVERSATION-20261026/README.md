@@ -56,6 +56,10 @@ keeps using the current workspace identity exactly as before.
   passed, then `node scripts/run_tests.mjs test/recover_worktree_conversation.test.ts` from `cli/` passed **3/3**.
   The runner provided isolated `HOME` and XDG directories. A separate full-suite attempt was interrupted after
   identifying missing build metadata and an unavailable local inference endpoint; it is not a passing suite result.
+- At snapshot `87efa6f48cc1a0508f0d1e4848bb04120e5341d9`, a further regression assertion confirms the committed
+  archived message is restored and searchable through the resumed agent's `read_archive` handler. `npm ci --prefix cli`,
+  `npm run build --prefix cli`, and the focused recovery test passed (3/3) in an immutable detached worktree with
+  isolated `HOME`, `XDG_CONFIG_HOME`, and `NEXUS_STATE_DIR`.
 - `tsc --noEmit`, `git diff --check`: clean; isolated `HOME`/`XDG_CONFIG_HOME` under the SUITE claim.
 - Pre-existing failures in `durable_continuity.test.ts` / `context_convergence.test.ts` / `convergence_invariants.test.ts`
   are identical on base (A/B verified for `convergence_invariants`: 20 pass / 10 fail both sides) and are unrelated:
