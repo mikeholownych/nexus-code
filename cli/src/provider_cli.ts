@@ -11,7 +11,7 @@ import { baseUrlSetting, disclosureClass, PROVIDERS } from "./providers.js";
 import type { ChatMessage, HarnessConfig, ToolDefinition } from "./types.js";
 import { UsageLedger } from "./usage.js";
 import { resolveCredential } from "./credentials.js";
-import { connectWithKey, disconnect, startSignIn } from "./provider_connect.js";
+import { connectLocalEndpoint, connectWithKey, disconnect, startSignIn } from "./provider_connect.js";
 import { redactSecrets } from "./ui.js";
 
 /** One line naming each role's selected destination and its disclosure class. */
@@ -260,13 +260,66 @@ async function readSecret(prompt: string): Promise<string> {
   });
 }
 
-export function registerProviderCommands(program: Command): void {
+async function readText(prompt: string): Promise<string> {
+  const readline = await import("node:readline/promises");
+  const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+  try {
+    return (await rl.question(prompt)).trim();
+  } finally {
+    rl.close();
+  }
+}
+
+export interface ProviderCliPrompts {
+  text(prompt: string): Promise<string>;
+  secret(prompt: string): Promise<string>;
+}
+
+export function registerProviderCommands(program: Command, prompts?: ProviderCliPrompts): void {
+  const askText = prompts?.text ?? readText;
+  const askSecret = prompts?.secret ?? readSecret;
   program
     .command("connect")
-    .description("Connect a cloud provider: save an API key (verified first) or sign in")
-    .argument("<provider>", "openrouter, openai, anthropic, chatgpt, copilot, compatible")
+    .description("Connect a cloud provider or configure a local OpenAI-compatible endpoint")
+    .argument("<provider>", "local, openrouter, openai, anthropic, chatgpt, copilot, compatible")
     .option("--method <id>", "api-key (default where offered), openrouter-oauth, chatgpt-oauth, copilot-device")
     .action(async (providerId: string, options: any) => {
+      if (providerId === "local" || providerId === "appliance") {
+        if (!prompts && !process.stdin.isTTY) {
+          console.error(pc.red("Local endpoint setup requires an interactive terminal."));
+          process.exitCode = 2;
+          return;
+        }
+        let base: HarnessConfig;
+        try {
+          base = buildConfig({ appliance: true });
+        } catch {
+          console.error(pc.red("Could not read the current local endpoint configuration."));
+          process.exitCode = 2;
+          return;
+        }
+        const endpoint = await askText(`OpenAI-compatible endpoint URL [${base.endpoint}]: `) || base.endpoint;
+        const key = await askSecret("Optional endpoint API key (press Enter for none): ");
+        const discovered = await connectLocalEndpoint(base, endpoint, undefined, key);
+        if (discovered.models.length === 0) {
+          console.error(pc.red(discovered.message));
+          process.exitCode = 1;
+          return;
+        }
+        console.log(pc.bold("\nAvailable models"));
+        discovered.models.forEach((model, index) => console.log(`  ${index + 1}. ${model}`));
+        const selection = await askText("Choose a model by number or id: ");
+        const model = /^\d+$/.test(selection) ? discovered.models[Number(selection) - 1] : selection;
+        if (!model || !discovered.models.includes(model)) {
+          console.error(pc.red("Choose one of the listed models; no settings were saved."));
+          process.exitCode = 2;
+          return;
+        }
+        const result = await connectLocalEndpoint(base, endpoint, model, key);
+        console.log(result.ok ? pc.green(result.message) : pc.red(result.message));
+        process.exitCode = result.ok ? 0 : 1;
+        return;
+      }
       const def = PROVIDERS[providerId];
       if (!def) {
         console.error(pc.red(`Unknown provider '${providerId}'. Known: ${Object.keys(PROVIDERS).join(", ")}`));
@@ -282,7 +335,7 @@ export function registerProviderCommands(program: Command): void {
       if (existing) console.log(pc.dim(`${def.label} is already connected via ${existing.source}; a new connection is saved in Nexus.`));
       if (method.unofficial) console.log(pc.yellow(`${method.label}: unofficial — it signs in as another vendor's client, which the provider's terms may not permit.`));
       if (method.kind === "key") {
-        const r = await connectWithKey(base, def.id, await readSecret(`${def.label} API key: `));
+        const r = await connectWithKey(base, def.id, await askSecret(`${def.label} API key: `));
         console.log(r.ok ? pc.green(r.message) : pc.red(r.message));
         process.exitCode = r.ok ? 0 : 1;
         return;

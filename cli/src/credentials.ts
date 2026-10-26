@@ -45,6 +45,94 @@ interface StoreFile {
   providers: Record<string, StoredCredential>;
 }
 
+const LOCAL_ENDPOINT_CREDENTIAL_PREFIX = "nexus-local-endpoint:";
+
+/** Stable credential-store key for one exact HTTP(S) origin; the credential never follows another endpoint. */
+function localEndpointCredentialId(endpoint: string): string | undefined {
+  try {
+    const url = new URL(endpoint);
+    if ((url.protocol !== "http:" && url.protocol !== "https:") || url.username || url.password || url.origin === "null") return undefined;
+    return `${LOCAL_ENDPOINT_CREDENTIAL_PREFIX}${url.origin}`;
+  } catch {
+    return undefined;
+  }
+}
+
+export function saveLocalEndpointCredential(endpoint: string, key: string): boolean {
+  const id = localEndpointCredentialId(endpoint);
+  const value = key.trim();
+  if (!id || !value || /[\r\n]/.test(value)) return false;
+  saveCredential(id, { type: "api", key: value, savedAt: now() });
+  return true;
+}
+
+/** Save a verified endpoint key and its selected model as one failure-atomic setup operation. */
+export function commitLocalEndpointSetup(endpoint: string, key: string, commitSettings: () => void): boolean {
+  const id = localEndpointCredentialId(endpoint);
+  const value = key.trim();
+  if (!id || !value || /[\r\n]/.test(value)) return false;
+
+  const file = credentialsPath();
+  let previous: StoredCredential | undefined;
+  try {
+    const stat = fs.lstatSync(file);
+    if (stat.isSymbolicLink() || !stat.isFile()) throw new Error("The Nexus credential store is not a regular file.");
+    const parsed = JSON.parse(fs.readFileSync(file, "utf8"));
+    if (!parsed || typeof parsed !== "object" || parsed.version !== 1 || !parsed.providers || typeof parsed.providers !== "object" || Array.isArray(parsed.providers)) {
+      throw new Error("The Nexus credential store has an unsupported format.");
+    }
+    if (Object.hasOwn(parsed.providers, id)) {
+      const entry = parsed.providers[id];
+      if (!entry || typeof entry !== "object" || entry.type !== "api" || typeof entry.key !== "string" || !entry.key || typeof entry.savedAt !== "string") {
+        throw new Error("The local endpoint credential has an unsupported format.");
+      }
+      previous = entry;
+    }
+  } catch (error: any) {
+    if (error?.code !== "ENOENT") throw new Error("Nexus could not safely update its credential store.");
+  }
+  const hadStore = fs.existsSync(file);
+  try {
+    saveCredential(id, { type: "api", key: value, savedAt: now() });
+    commitSettings();
+    return true;
+  } catch (error) {
+    try {
+      if (previous) {
+        saveCredential(id, previous);
+      } else {
+        removeCredential(id);
+        if (!hadStore && Object.keys(readStore().providers).length === 0) {
+          try { fs.unlinkSync(file); } catch (unlinkError: any) { if (unlinkError?.code !== "ENOENT") throw unlinkError; }
+        }
+      }
+    } catch (rollbackError) {
+      throw new AggregateError([error, rollbackError], "Local endpoint setup failed and its saved credential could not be restored.");
+    }
+    throw error;
+  }
+}
+
+export function localEndpointCredential(endpoint: string): { origin: string; key: string } | undefined {
+  const id = localEndpointCredentialId(endpoint);
+  if (!id) return undefined;
+  const credential = readStore().providers[id];
+  if (credential?.type !== "api") return undefined;
+  return { origin: id.slice(LOCAL_ENDPOINT_CREDENTIAL_PREFIX.length), key: credential.key };
+}
+
+/** Used only to prevent a project or caller-supplied key from escaping its saved endpoint origin. */
+export function localEndpointCredentials(): Array<{ origin: string; key: string }> {
+  const store = readStore();
+  const result: Array<{ origin: string; key: string }> = [];
+  for (const [id, credential] of Object.entries(store.providers)) {
+    if (!id.startsWith(LOCAL_ENDPOINT_CREDENTIAL_PREFIX) || credential.type !== "api") continue;
+    const origin = id.slice(LOCAL_ENDPOINT_CREDENTIAL_PREFIX.length);
+    if (localEndpointCredentialId(origin) === id) result.push({ origin, key: credential.key });
+  }
+  return result;
+}
+
 export function credentialsPath(): string {
   return path.join(credentialStorageHome(), ".config/nexus/credentials.json");
 }

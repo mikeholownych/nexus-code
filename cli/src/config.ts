@@ -1,4 +1,4 @@
-import * as fs from "node:fs";
+import fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -14,6 +14,32 @@ let credentialAuthorityRecorded = false;
 let shellEnvironment: Record<string, string | undefined> = {};
 let userConfigFile: Record<string, string> = {};
 const SHELL_PRECEDENCE_KEYS = ["NEXUS_VERIFY_ATTESTATION"] as const;
+let applianceEndpointOverride: { endpoint: string; model?: string; apiKey?: string; persistModelOnSelection: boolean } | undefined;
+
+/** Session-scoped endpoint override established by the explicit local connect flow. */
+export function activateApplianceEndpoint(endpoint: string, model?: string, persistModelOnSelection = false, apiKey?: string): void {
+  applianceEndpointOverride = { endpoint, ...(model ? { model } : {}), ...(apiKey ? { apiKey } : {}), persistModelOnSelection };
+}
+
+export function applianceEndpointSelection(): { endpoint: string; model?: string; persistModelOnSelection: boolean } | undefined {
+  if (!applianceEndpointOverride) return undefined;
+  return {
+    endpoint: applianceEndpointOverride.endpoint,
+    ...(applianceEndpointOverride.model ? { model: applianceEndpointOverride.model } : {}),
+    persistModelOnSelection: applianceEndpointOverride.persistModelOnSelection,
+  };
+}
+
+/** Return the provisional key only for the exact endpoint origin during the setup session. */
+export function pendingApplianceEndpointKey(endpoint: string): string | undefined {
+  if (!applianceEndpointOverride?.apiKey) return undefined;
+  return originOf(applianceEndpointOverride.endpoint) === originOf(endpoint) ? applianceEndpointOverride.apiKey : undefined;
+}
+
+/** Test isolation for session-scoped endpoint changes. */
+export function resetApplianceEndpointOverride(): void {
+  applianceEndpointOverride = undefined;
+}
 
 /** Loads env files in precedence order; CLI flags are applied afterwards by buildConfig. */
 export function loadEnvironment(): void {
@@ -121,6 +147,73 @@ export function projectSetting(key: string): string | undefined {
   return projectEnvSettings[key];
 }
 
+/** Persist non-secret appliance selection in the operator config without following symlinks or storing API keys. */
+export function saveLocalEndpointSettings(endpoint: string, model?: string): void {
+  if (!endpoint || /[\r\n\0]/.test(endpoint) || (model !== undefined && (!model || /[\r\n\0]/.test(model)))) {
+    throw new Error("The local endpoint and any selected model must be non-empty single-line values.");
+  }
+  const configDir = path.join(credentialStorageHome(), ".config", "nexus");
+  const configFile = path.join(configDir, "config.env");
+  const ensureDirectory = (dir: string) => {
+    try {
+      const stat = fs.lstatSync(dir);
+      if (stat.isSymbolicLink() || !stat.isDirectory()) throw new Error("The Nexus configuration path is not a safe directory.");
+    } catch (error: any) {
+      if (error?.code !== "ENOENT") throw error;
+      fs.mkdirSync(dir, { mode: 0o700 });
+    }
+  };
+  ensureDirectory(path.dirname(configDir));
+  ensureDirectory(configDir);
+  let existing = "";
+  try {
+    const stat = fs.lstatSync(configFile);
+    if (stat.isSymbolicLink() || !stat.isFile()) throw new Error("The Nexus config.env path is not a regular file.");
+    existing = fs.readFileSync(configFile, "utf8");
+  } catch (error: any) {
+    if (error?.code !== "ENOENT") throw error;
+  }
+  const existingSettings = parseDotenv(existing);
+  const previousEndpoint = existingSettings.LOCAL_LLM_ENDPOINT ?? operatorSetting("LOCAL_LLM_ENDPOINT");
+  const existingCredentialOrigin = existingSettings.LOCAL_LLM_CREDENTIAL_ORIGIN ?? operatorSetting("LOCAL_LLM_CREDENTIAL_ORIGIN");
+  if (existingCredentialOrigin && !originOf(existingCredentialOrigin)) {
+    throw new Error("The existing local credential origin is invalid; repair it before changing the endpoint.");
+  }
+  const previousOrigin = originOf(previousEndpoint);
+  const nextOrigin = originOf(endpoint);
+  // Keep legacy LOCAL_LLM_API_KEY and gateway-token credentials bound to the endpoint they belonged to before
+  // the user changed the selection. New endpoint keys are stored separately by exact origin.
+  const preserveCredentialOrigin = !existingCredentialOrigin && previousOrigin && nextOrigin && previousOrigin !== nextOrigin
+    ? previousOrigin
+    : undefined;
+  const keys = new Set(model === undefined ? ["LOCAL_LLM_ENDPOINT"] : ["LOCAL_LLM_ENDPOINT", "LOCAL_LLM_MODEL"]);
+  if (preserveCredentialOrigin) keys.add("LOCAL_LLM_CREDENTIAL_ORIGIN");
+  const retained = existing.split(/\r?\n/).filter((line) => {
+    const match = /^\s*(?:export\s+)?([A-Z0-9_]+)\s*=/.exec(line);
+    return !match || !keys.has(match[1]);
+  }).filter((line, index, lines) => line !== "" || index < lines.length - 1);
+  const values = [`LOCAL_LLM_ENDPOINT=${JSON.stringify(endpoint)}`];
+  if (model !== undefined) values.push(`LOCAL_LLM_MODEL=${JSON.stringify(model)}`);
+  if (preserveCredentialOrigin) values.push(`LOCAL_LLM_CREDENTIAL_ORIGIN=${JSON.stringify(preserveCredentialOrigin)}`);
+  const contents = [...retained, ...values].join("\n").replace(/\n*$/, "\n");
+  const temporary = `${configFile}.${process.pid}.${Date.now()}.tmp`;
+  const fd = fs.openSync(temporary, "wx", 0o600);
+  try {
+    fs.writeFileSync(fd, contents, "utf8");
+    fs.fsyncSync(fd);
+  } finally {
+    fs.closeSync(fd);
+  }
+  try {
+    // Set permissions before publishing the new file. A chmod failure must leave the old config intact.
+    fs.chmodSync(temporary, 0o600);
+    fs.renameSync(temporary, configFile);
+  } catch (error) {
+    try { fs.unlinkSync(temporary); } catch {}
+    throw error;
+  }
+}
+
 /** Keys the working directory's .env set but loadEnvironment ignored (operator-only settings). */
 export function ignoredProjectEnvKeys(): readonly string[] {
   return projectEnvIgnored;
@@ -219,15 +312,16 @@ export function buildConfig(options: any): HarnessConfig {
   // `appliance: true` resolves the appliance connection regardless of any provider selection (the model picker's
   // appliance entry).
   const provider = options.appliance ? undefined : selectProvider(options.provider, "NEXUS_PROVIDER");
-  const endpoint = provider ? providerBaseUrl(provider, options.baseUrl) : options.endpoint || effectiveSetting("LOCAL_LLM_ENDPOINT") || DEFAULT_ENDPOINT;
+  const endpoint = provider ? providerBaseUrl(provider, options.baseUrl) : options.endpoint || (options.appliance ? applianceEndpointOverride?.endpoint : undefined) || effectiveSetting("LOCAL_LLM_ENDPOINT") || DEFAULT_ENDPOINT;
   // A cloud model is named explicitly; the appliance's LOCAL_LLM_MODEL never selects a billable cloud model.
-  const model = provider ? options.model || operatorSetting("NEXUS_MODEL") || "" : options.model || effectiveSetting("LOCAL_LLM_MODEL") || "local-model";
+  const model = provider ? options.model || operatorSetting("NEXUS_MODEL") || "" : options.model || (options.appliance ? applianceEndpointOverride?.model : undefined) || effectiveSetting("LOCAL_LLM_MODEL") || "local-model";
   // Stored gateway credentials are not baked in here: the client attaches them only to the gateway they belong to.
+  const provisionalKey = options.appliance ? pendingApplianceEndpointKey(endpoint) : undefined;
   const operatorKey = operatorSetting("LOCAL_LLM_API_KEY");
   const projectApiKey = effectiveSetting("LOCAL_LLM_API_KEY");
   const envCredential = options.apiKey || provider ? undefined : environmentCredential(options.endpoint || DEFAULT_ENDPOINT);
-  const apiKey = options.apiKey || (provider ? providerKey(provider) : operatorKey || projectApiKey || envCredential?.apiKey) || "local";
-  const credentialOrigin = apiKey === "local" ? undefined : options.apiKey || provider ? credentialOriginOf(endpoint) : (operatorKey ? envCredential?.origin : (projectApiKey ? credentialOriginOf(endpoint) : envCredential?.origin));
+  const apiKey = options.apiKey || (provider ? providerKey(provider) : provisionalKey || operatorKey || projectApiKey || envCredential?.apiKey) || "local";
+  const credentialOrigin = apiKey === "local" ? undefined : options.apiKey || provider || provisionalKey ? credentialOriginOf(endpoint) : (operatorKey ? envCredential?.origin : (projectApiKey ? credentialOriginOf(endpoint) : envCredential?.origin));
   const workspace = options.workspace ? path.resolve(options.workspace) : process.cwd();
   const maxSteps = options.maxSteps ? parseInt(options.maxSteps, 10) : 30;
   const continuation = continuationBudget(options);

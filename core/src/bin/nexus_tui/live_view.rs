@@ -3119,9 +3119,16 @@ mod tests {
         state.on_key(KeyEvent::new(KeyCode::Char('p'), KeyModifiers::CONTROL));
         let screen = draw(&state, 100, 24);
         assert!(screen.contains("Connect a provider"), "{screen}");
+        assert!(screen.contains("Appliance"), "the connect menu exposes local setup: {screen}");
         assert!(screen.contains("connected via Codex CLI"), "{screen}");
         assert!(screen.contains("unofficial sign-in"), "{screen}");
-        state.on_key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+        state.on_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        let screen = draw(&state, 100, 24);
+        assert!(screen.contains("Local OpenAI-compatible endpoint"), "{screen}");
+        assert!(screen.contains("http://localhost:1234/v1"), "{screen}");
+        state.on_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        state.on_key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE)); // appliance -> ChatGPT
+        state.on_key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE)); // ChatGPT -> Anthropic
         state.on_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
         state.on_paste("sk-ant-VISIBLE-NEVER");
         let screen = draw(&state, 100, 24);
@@ -3325,8 +3332,39 @@ fn render_connect(frame: &mut Frame, area: Rect, flow: &Connect) {
             )));
             &[("enter", "verify and save"), ("ctrl+u", "clear"), ("esc", "back")]
         }
+        Step::LocalEndpoint { input, error } => {
+            lines.push(Line::from(Span::styled("Local OpenAI-compatible endpoint", white.add_modifier(Modifier::BOLD))));
+            lines.push(Line::default());
+            lines.push(Line::from(Span::styled("Enter the base URL, including its API path when required.", muted)));
+            lines.push(Line::default());
+            lines.push(Line::from(vec![
+                Span::styled("› ", Style::default().fg(ACCENT).add_modifier(Modifier::BOLD)),
+                Span::styled(format!("{}▏", input), white),
+            ]));
+            focus = lines.len() - 1;
+            if let Some(error) = error { lines.push(Line::from(Span::styled(error.clone(), Style::default().fg(Color::Red)))); }
+            lines.push(Line::default());
+            lines.push(Line::from(Span::styled("Example: http://localhost:1234/v1", muted)));
+            &[("enter", "continue"), ("paste", "endpoint URL"), ("esc", "back")]
+        }
+        Step::LocalKey { input, error, .. } => {
+            lines.push(Line::from(Span::styled("Optional endpoint API key", white.add_modifier(Modifier::BOLD))));
+            lines.push(Line::default());
+            let dots = "•".repeat(input.0.chars().count().min(48));
+            lines.push(Line::from(vec![
+                Span::styled("› ", Style::default().fg(ACCENT).add_modifier(Modifier::BOLD)),
+                Span::styled(format!("{dots}▏"), white),
+                Span::styled(if input.0.is_empty() { String::new() } else { format!("  {} characters", input.0.chars().count()) }, muted),
+            ]));
+            focus = lines.len() - 1;
+            if let Some(error) = error { lines.push(Line::from(Span::styled(error.clone(), Style::default().fg(Color::Red)))); }
+            lines.push(Line::default());
+            lines.push(Line::from(Span::styled("Nexus checks the endpoint using this key in memory. It is stored only after you choose a model, and sent only to this origin.", muted)));
+            &[("enter", "discover models"), ("ctrl+u", "clear"), ("esc", "edit endpoint")]
+        }
         Step::Waiting { provider, method, auth, .. } => {
             match auth {
+                None if method == "local-endpoint" => lines.push(Line::from(Span::styled("Checking the local endpoint and discovering models…", white))),
                 None if method == "api-key" => lines.push(Line::from(Span::styled(format!("Checking the key with {}…", label(provider)), white))),
                 None => lines.push(Line::from(Span::styled(format!("Starting {} sign-in…", label(provider)), white))),
                 Some(info) => {

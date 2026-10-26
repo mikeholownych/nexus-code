@@ -60,7 +60,7 @@ import {
 import { SlashHost, SlashOutcome, SlashSpec, errorText, findSlash, slashCatalog } from "./slash/catalog.js";
 import { routeSlash } from "./slash/router.js";
 import { buildCatalog } from "./model_catalog.js";
-import { connectWithKey, disconnect, selectModel, startSignIn } from "./provider_connect.js";
+import { cancelLocalEndpointSetup, clearLocalEndpointSetup, clearLocalEndpointSetupAfterSelectionFailure, connectWithKey, disconnect, prepareLocalEndpoint, selectModel, startSignIn } from "./provider_connect.js";
 
 export interface SidecarOptions {
   app: ApplicationCore;
@@ -210,10 +210,15 @@ export class SidecarServer {
           this.emit({ type: "provider.result", id: command.id, provider: command.provider, success: false, message: "Provider connections are disabled while the session is in read-only mode." });
           return;
         }
-        void this.providerConnect(command.id, command.provider, command.method, command.key);
+        void this.providerConnect(command.id, command.provider, command.method, command.key, command.endpoint);
         return;
       case "provider.cancel":
         this.signIns.get(command.id)?.cancel();
+        this.signIns.delete(command.id);
+        cancelLocalEndpointSetup(command.id);
+        return;
+      case "provider.local-cancel":
+        clearLocalEndpointSetup(command.id);
         return;
       case "provider.disconnect": {
         if (this.app.getAgent().getApprovalMode() === "read-only") {
@@ -246,17 +251,31 @@ export class SidecarServer {
   private modelSelect(id: string, provider: string, model: string): void {
     if (this.rejectBusy(id)) return;
     const r = selectModel(this.app.getAgent(), this.app.getConfig(), { provider, model });
+    if (!r.ok && provider === "appliance") clearLocalEndpointSetupAfterSelectionFailure();
     this.emit({ type: "model.result", id, success: r.ok, message: r.message });
     if (r.ok) this.emitSessionState();
   }
 
-  private async providerConnect(id: string, provider: string, method: string, key?: string): Promise<void> {
+  private async providerConnect(id: string, provider: string, method: string, key?: string, endpoint?: string): Promise<void> {
     const result = (success: boolean, message: string) =>
       this.emit({ type: "provider.result", id, provider, success, message: capText(redactSecrets(message)) });
     try {
+      if (provider === "appliance" && method === "local-endpoint") {
+        if (!endpoint) {
+          result(false, "An endpoint URL is required.");
+          return;
+        }
+        const prepared = await prepareLocalEndpoint(this.app.getConfig(), endpoint, key ?? "", id);
+        if (!prepared.cancelled) result(prepared.ok, prepared.message);
+        return;
+      }
       if (method === "api-key") {
         const r = await connectWithKey(this.app.getConfig(), provider, key ?? "");
         result(r.ok, r.message);
+        return;
+      }
+      if (endpoint !== undefined) {
+        result(false, "Endpoint URLs are only accepted for local endpoint setup.");
         return;
       }
       const signIn = await startSignIn(this.app.getConfig(), provider, method);

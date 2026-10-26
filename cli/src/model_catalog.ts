@@ -5,8 +5,9 @@
  */
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { createHash } from "node:crypto";
 import { credentialStorageHome, LocalLlmClient, operatorSetting } from "./client.js";
-import { buildConfig, providerBaseUrl, providerKey } from "./config.js";
+import { applianceEndpointSelection, buildConfig, providerBaseUrl, providerKey } from "./config.js";
 import { resolveCredential } from "./credentials.js";
 import { originOf, PROVIDERS, providerDefinition, type ConnectMethod } from "./providers.js";
 import type { HarnessConfig } from "./types.js";
@@ -49,6 +50,17 @@ export interface Catalog {
 const MAX_RECENT = 8;
 const stateFile = () => path.join(credentialStorageHome(), ".local/state/nexus/recent-models.json");
 const cacheFile = (id: string) => path.join(credentialStorageHome(), ".cache/nexus/models", `${id.replace(/[^a-z0-9_-]/gi, "_")}.json`);
+
+function cacheId(providerId: string, endpoint: string): string {
+  if (providerId !== APPLIANCE) return providerId;
+  let identity = endpoint.trim();
+  try {
+    const normalized = new URL(identity);
+    normalized.hash = "";
+    identity = normalized.toString().replace(/\/+$/, "");
+  } catch {}
+  return `${APPLIANCE}-${createHash("sha256").update(identity).digest("hex").slice(0, 20)}`;
+}
 
 export function readRecent(): ModelRef[] {
   try {
@@ -102,7 +114,14 @@ async function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
 /** The appliance connection, whatever provider is currently selected. */
 export function applianceConfig(base: HarnessConfig): HarnessConfig {
   try {
-    return { ...buildConfig({ appliance: true }), workspace: base.workspace };
+    const config = buildConfig({ appliance: true });
+    const selection = applianceEndpointSelection();
+    const origin = selection ? originOf(selection.endpoint) : undefined;
+    return {
+      ...config,
+      workspace: base.workspace,
+      ...(origin ? { authorizedDisclosureOrigins: [...new Set([...(config.authorizedDisclosureOrigins ?? []), origin])] } : {}),
+    };
   } catch {
     return { ...base, provider: undefined };
   }
@@ -141,16 +160,20 @@ export function connectionOf(providerId: string): { connected: boolean; source?:
 export async function buildCatalog(config: HarnessConfig, opts: { timeoutMs?: number } = {}): Promise<Catalog> {
   const timeoutMs = opts.timeoutMs ?? 8_000;
   const appliance = applianceConfig(config);
+  const applianceClient = new LocalLlmClient(appliance);
   const providers: CatalogProvider[] = [];
   const models: CatalogModel[] = [];
 
-  const load = async (entry: CatalogProvider, list: () => Promise<string[]>) => {
+  const load = async (entry: CatalogProvider, create: () => { endpoint: string; list: () => Promise<string[]> }) => {
+    let endpoint: string | undefined;
     try {
-      const ids = (await withTimeout(list(), timeoutMs)).filter((id) => chatModel(entry.id, id));
-      cache(entry.id, ids);
+      const source = create();
+      endpoint = source.endpoint;
+      const ids = (await withTimeout(source.list(), timeoutMs)).filter((id) => chatModel(entry.id, id));
+      cache(cacheId(entry.id, endpoint), ids);
       models.push(...ids.map((id) => ({ provider: entry.id, id })));
     } catch (err: any) {
-      const old = cached(entry.id);
+      const old = endpoint ? cached(cacheId(entry.id, endpoint)) : undefined;
       entry.status = old ? "cached" : "error";
       entry.error = String(err?.message ?? err).slice(0, 200);
       if (old) models.push(...old.map((id) => ({ provider: entry.id, id })));
@@ -160,13 +183,13 @@ export async function buildCatalog(config: HarnessConfig, opts: { timeoutMs?: nu
   const applianceEntry: CatalogProvider = {
     id: APPLIANCE,
     label: `Appliance (${originOf(appliance.endpoint)?.replace(/^https?:\/\//, "") ?? appliance.endpoint})`,
-    disclosure: "local",
+    disclosure: applianceClient.disclosureOf(),
     connected: true,
     methods: [],
     status: "ok",
   };
   providers.push(applianceEntry);
-  const jobs: Promise<void>[] = [load(applianceEntry, () => new LocalLlmClient(appliance).listModels())];
+  const jobs: Promise<void>[] = [load(applianceEntry, () => ({ endpoint: appliance.endpoint, list: () => applianceClient.listModels() }))];
 
   for (const def of Object.values(PROVIDERS)) {
     const c = connectionOf(def.id);
@@ -182,7 +205,10 @@ export async function buildCatalog(config: HarnessConfig, opts: { timeoutMs?: nu
       status: c.connected ? "ok" : "disconnected",
     };
     providers.push(entry);
-    if (c.connected) jobs.push(load(entry, () => new LocalLlmClient(providerConfig(config, def.id)).listModels()));
+    if (c.connected) jobs.push(load(entry, () => {
+      const provider = providerConfig(config, def.id);
+      return { endpoint: provider.endpoint, list: () => new LocalLlmClient(provider).listModels() };
+    }));
   }
   await Promise.all(jobs);
 

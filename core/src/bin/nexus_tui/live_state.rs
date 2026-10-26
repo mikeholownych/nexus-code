@@ -567,6 +567,10 @@ impl LiveState {
     }
 
     fn on_models_key(&mut self, key: KeyEvent) -> Option<Action> {
+        let local_setup_id = match &self.overlay {
+            Some(Overlay::Models(picker)) => picker.local_endpoint_setup_id.clone(),
+            _ => None,
+        };
         let Some(Overlay::Models(picker)) = &mut self.overlay else {
             return None;
         };
@@ -577,7 +581,7 @@ impl LiveState {
         match picker.on_key(key)? {
             PickerIntent::Close => {
                 self.overlay = None;
-                None
+                local_setup_id.map(|id| Action::Send(Command::ProviderLocalCancel { id }))
             }
             PickerIntent::Select { provider, model } => {
                 self.overlay = None;
@@ -611,6 +615,25 @@ impl LiveState {
                     provider,
                     method,
                     key: key.map(Secret),
+                    endpoint: None,
+                }))
+            }
+            ConnectIntent::LocalEndpoint { endpoint, key } => {
+                let id = self.next_id('c');
+                if let Some(Overlay::Connect(flow)) = &mut self.overlay {
+                    flow.step = Step::Waiting {
+                        request: id.clone(),
+                        provider: "appliance".into(),
+                        method: "local-endpoint".into(),
+                        auth: None,
+                    };
+                }
+                Some(Action::Send(Command::ProviderConnect {
+                    id,
+                    provider: "appliance".into(),
+                    method: "local-endpoint".into(),
+                    key,
+                    endpoint: Some(endpoint),
                 }))
             }
             ConnectIntent::Cancel { request } => Some(Action::Send(Command::ProviderCancel { id: request })),
@@ -654,12 +677,18 @@ impl LiveState {
     fn on_provider_result(&mut self, id: String, provider: String, success: bool, message: String) {
         if let Some(Overlay::Connect(flow)) = &mut self.overlay {
             let waiting = matches!(&flow.step, Step::Waiting { request, .. } if *request == id);
+            let local_setup = matches!(&flow.step, Step::Waiting { request, method, .. } if *request == id && method == "local-endpoint");
             if waiting {
                 if flow.on_result(&id, success, message.clone()) {
                     self.transcript.push(Entry::Info(message));
                     // Connected: show that provider's models.
                     if let Some(action) = self.open_models(false, Some(provider)) {
                         self.outbox.push(action);
+                        if local_setup && success {
+                            if let Some(Overlay::Models(picker)) = &mut self.overlay {
+                                picker.local_endpoint_setup_id = Some(id.clone());
+                            }
+                        }
                     }
                 }
                 return;
@@ -1648,10 +1677,16 @@ impl LiveState {
 
     fn on_ctrl_c(&mut self) -> Option<Action> {
         match &self.overlay {
-            Some(Overlay::Connect(Connect { step: Step::Waiting { request, auth: Some(_), .. }, .. })) => {
+            Some(Overlay::Connect(Connect { step: Step::Waiting { request, method, auth, .. }, .. }))
+                if auth.is_some() || method == "local-endpoint" => {
                 let id = request.clone();
                 self.overlay = None;
                 return Some(Action::Send(Command::ProviderCancel { id }));
+            }
+            Some(Overlay::Models(Picker { local_endpoint_setup_id: Some(id), .. })) => {
+                let id = id.clone();
+                self.overlay = None;
+                return Some(Action::Send(Command::ProviderLocalCancel { id }));
             }
             Some(
                 Overlay::Help { .. }
@@ -3986,14 +4021,15 @@ mod tests {
         state.apply(catalog(&id));
         assert_eq!(state.on_key(ctrl('p')), None);
         assert!(matches!(state.overlay, Some(Overlay::Connect(_))));
+        state.on_key(key(KeyCode::Down)); // appliance -> chatgpt
         state.on_key(key(KeyCode::Down)); // chatgpt -> anthropic
         assert_eq!(state.on_key(key(KeyCode::Enter)), None, "a single key method opens the key field");
         state.on_paste("sk-ant-SECRET-1\n");
-        let Some(Action::Send(Command::ProviderConnect { id: request, provider, method, key: Some(secret) })) = state.on_key(key(KeyCode::Enter)) else {
+        let Some(Action::Send(Command::ProviderConnect { id: request, provider, method, key: Some(secret), .. })) = state.on_key(key(KeyCode::Enter)) else {
             panic!("expected provider.connect");
         };
         assert_eq!((provider.as_str(), method.as_str(), secret.0.as_str()), ("anthropic", "api-key", "sk-ant-SECRET-1"));
-        assert!(!format!("{:?}", Command::ProviderConnect { id: request.clone(), provider: "a".into(), method: "m".into(), key: Some(secret) }).contains("SECRET"));
+        assert!(!format!("{:?}", Command::ProviderConnect { id: request.clone(), provider: "a".into(), method: "m".into(), key: Some(secret), endpoint: None }).contains("SECRET"));
         state.apply(ev(&format!(r#"{{"v":1,"type":"provider.result","id":"{request}","provider":"anthropic","success":true,"message":"Anthropic connected (3 models available)."}}"#)));
         let outbox = state.take_outbox();
         assert!(matches!(outbox.as_slice(), [Action::Send(Command::ModelsList { .. })]), "reopens the picker for the provider");
@@ -4007,12 +4043,73 @@ mod tests {
         let Some(Action::Send(Command::ModelsList { id })) = state.on_key(key(KeyCode::Enter)) else { panic!() };
         state.apply(catalog(&id));
         assert!(matches!(state.overlay, Some(Overlay::Connect(_))), "/connect opens the connect panel once providers are known");
+        state.on_key(key(KeyCode::Down)); // local endpoint -> ChatGPT
         let Some(Action::Send(Command::ProviderConnect { id: request, key: None, .. })) = state.on_key(key(KeyCode::Enter)) else {
             panic!("chatgpt's only method is a sign-in");
         };
         state.apply(ev(&format!(r#"{{"v":1,"type":"provider.auth","id":"{request}","provider":"chatgpt","url":"https://auth.example/x","instructions":"Sign in"}}"#)));
         assert!(matches!(&state.overlay, Some(Overlay::Connect(c)) if matches!(&c.step, crate::models::Step::Waiting { auth: Some(_), .. })));
         assert_eq!(state.on_key(key(KeyCode::Esc)), Some(Action::Send(Command::ProviderCancel { id: request })));
+    }
+
+    #[test]
+    fn connect_panel_configures_local_endpoint_then_opens_its_model_picker() {
+        let mut state = ready();
+        type_text(&mut state, "/connect");
+        let Some(Action::Send(Command::ModelsList { id })) = state.on_key(key(KeyCode::Enter)) else { panic!() };
+        state.apply(catalog(&id));
+        assert!(matches!(state.overlay, Some(Overlay::Connect(_))));
+        assert_eq!(state.on_key(key(KeyCode::Enter)), None, "appliance opens local endpoint setup");
+        state.on_paste("http://127.0.0.1:1234/v1");
+        state.on_key(key(KeyCode::Enter));
+        state.on_paste("local-secret");
+        assert!(!format!("{:?}", state.overlay).contains("local-secret"));
+        let Some(Action::Send(Command::ProviderConnect { id: request, provider, method, key: Some(secret), endpoint: Some(endpoint) })) = state.on_key(key(KeyCode::Enter)) else {
+            panic!("expected local provider.connect with endpoint and protected key");
+        };
+        assert_eq!((provider.as_str(), method.as_str(), endpoint.as_str(), secret.0.as_str()), ("appliance", "local-endpoint", "http://127.0.0.1:1234/v1", "local-secret"));
+        assert!(!format!("{:?}", Command::ProviderConnect { id: request.clone(), provider, method, key: Some(secret), endpoint: Some(endpoint) }).contains("local-secret"));
+        state.apply(ev(&format!(r#"{{"v":1,"type":"provider.result","id":"{request}","provider":"appliance","success":true,"message":"Local endpoint ready (127.0.0.1; 2 models found). Choose a model to finish setup."}}"#)));
+        assert!(matches!(&state.overlay, Some(Overlay::Models(p)) if p.only.as_deref() == Some("appliance")));
+        assert!(matches!(state.take_outbox().as_slice(), [Action::Send(Command::ModelsList { .. })]));
+    }
+
+    #[test]
+    fn escaping_pending_local_endpoint_discovery_sends_matching_cancel_and_ignores_late_success() {
+        let mut state = ready();
+        type_text(&mut state, "/connect");
+        let Some(Action::Send(Command::ModelsList { id })) = state.on_key(key(KeyCode::Enter)) else { panic!() };
+        state.apply(catalog(&id));
+        state.on_key(key(KeyCode::Enter));
+        state.on_paste("http://127.0.0.1:1234/v1");
+        state.on_key(key(KeyCode::Enter));
+        state.on_paste("pending-secret");
+        let Some(Action::Send(Command::ProviderConnect { id: request, .. })) = state.on_key(key(KeyCode::Enter)) else { panic!() };
+
+        assert_eq!(state.on_key(key(KeyCode::Esc)), Some(Action::Send(Command::ProviderCancel { id: request.clone() })));
+        state.apply(ev(&format!(r#"{{"v":1,"type":"provider.result","id":"{request}","provider":"appliance","success":true,"message":"late success"}}"#)));
+        assert!(matches!(state.overlay, Some(Overlay::Connect(_))), "late success must not open the model picker after Escape");
+        assert!(!matches!(state.overlay, Some(Overlay::Models(_))));
+    }
+
+    #[test]
+    fn closing_local_endpoint_model_picker_cancels_uncommitted_setup() {
+        let mut state = ready();
+        type_text(&mut state, "/connect");
+        let Some(Action::Send(Command::ModelsList { id })) = state.on_key(key(KeyCode::Enter)) else { panic!() };
+        state.apply(catalog(&id));
+        state.on_key(key(KeyCode::Enter)); // local appliance option
+        state.on_paste("http://127.0.0.1:1234/v1");
+        state.on_key(key(KeyCode::Enter));
+        state.on_paste("pending-secret");
+        let Some(Action::Send(Command::ProviderConnect { id: request, .. })) = state.on_key(key(KeyCode::Enter)) else { panic!() };
+        state.apply(ev(&format!(r#"{{"v":1,"type":"provider.result","id":"{request}","provider":"appliance","success":true,"message":"verified"}}"#)));
+        let outbox = state.take_outbox();
+        let [Action::Send(Command::ModelsList { id: catalog_request })] = outbox.as_slice() else { panic!("expected model discovery after verification") };
+        let catalog_request = catalog_request.clone();
+        state.apply(catalog(&catalog_request));
+        assert!(matches!(&state.overlay, Some(Overlay::Models(picker)) if picker.local_endpoint_setup_id.as_deref() == Some(request.as_str())));
+        assert_eq!(state.on_key(key(KeyCode::Esc)), Some(Action::Send(Command::ProviderLocalCancel { id: request })));
     }
 
 }

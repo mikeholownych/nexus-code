@@ -409,9 +409,13 @@ pub enum Command {
         method: String,
         #[serde(skip_serializing_if = "Option::is_none")]
         key: Option<Secret>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        endpoint: Option<String>,
     },
     #[serde(rename = "provider.cancel")]
     ProviderCancel { id: String },
+    #[serde(rename = "provider.local-cancel")]
+    ProviderLocalCancel { id: String },
     #[serde(rename = "provider.disconnect")]
     ProviderDisconnect { id: String, provider: String },
     #[serde(rename = "shutdown")]

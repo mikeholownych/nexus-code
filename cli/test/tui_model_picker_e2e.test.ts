@@ -118,10 +118,11 @@ ptyTest("/model → ctrl+p → paste a key → pick the provider's model → the
     assert.ok(screenSince(mark).includes("Select model"), diag());
     assert.ok(screenSince(mark).replace(/\s+/g, "").includes("ConnectAnthropic"), diag());
 
-    // 2. ctrl+p: the connect panel; Anthropic is the third provider (openrouter, openai, anthropic, ...).
+    // 2. ctrl+p: the connect panel; the appliance setup row precedes OpenRouter, OpenAI, and Anthropic.
     mark = pty.length;
     await send("\x10");
     assert.ok(screenSince(mark).includes("Connect a provider"), diag());
+    await send("\x1b[B");
     await send("\x1b[B");
     await send("\x1b[B");
     await send("\r");

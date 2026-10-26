@@ -2,6 +2,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
 import { randomUUID } from "node:crypto";
+import { parse as parseDotenv } from "dotenv";
 import { parseAdmissionHeaders, parseAdvertisement, parseServerContext, parseTokenizeResponse, serverKindOf, type AdmissionReport, type Advertisement, type RequestCount, type ServerKind } from "./core/provider_capabilities.js";
 import { ChatMessage, ToolDefinition, HarnessConfig, ToolCall } from "./types.js";
 import { InformationFlowBoundary, DestinationTrustBoundary } from "./core/egress.js";
@@ -31,7 +32,7 @@ import { ProviderStreamError, readSse, type NativeRequestInput, type NativeResul
 import { anthropicStreamParser, buildAnthropicRequest, parseAnthropicResponse } from "./protocols/anthropic.js";
 import { buildResponsesRequest, parseResponsesResponse, responsesStreamParser } from "./protocols/openai_responses.js";
 import { UsageLedger, type UsageReport } from "./usage.js";
-import { resolveCredential, saveCredential, type StoredCredential } from "./credentials.js";
+import { localEndpointCredential, localEndpointCredentials, resolveCredential, saveCredential, type StoredCredential } from "./credentials.js";
 import { COPILOT_HEADERS, copilotToken, refreshOAuth } from "./oauth.js";
 import { providerDefinition } from "./providers.js";
 
@@ -52,14 +53,10 @@ export function credentialOriginOf(endpoint: string | undefined): string | undef
 }
 
 function readConfigEnv(): Record<string, string> {
-  const out: Record<string, string> = {};
   try {
-    for (const line of fs.readFileSync(path.join(credentialStorageHome(), ".config/nexus/config.env"), "utf-8").split("\n")) {
-      const m = /^([A-Z0-9_]+)=(.*)$/.exec(line.trim());
-      if (m) out[m[1]] = m[2].trim();
-    }
+    return parseDotenv(fs.readFileSync(path.join(credentialStorageHome(), ".config/nexus/config.env"), "utf-8"));
   } catch {}
-  return out;
+  return {};
 }
 
 /**
@@ -115,8 +112,18 @@ setLocalityAuthorityResolver(operatorSetting);
 /** Origins that stored credentials belong to, and the operator-environment key with its own origin. */
 function storedCredentialHomes(): { gateway?: string; listed: Set<string>; envKey?: string; envKeyOrigin?: string } {
   const file = readConfigEnv();
-  const envKeyOrigin = originOf(authoritySetting("LOCAL_LLM_ENDPOINT"));
-  const gateway = originOf(file.LOCAL_LLM_ENDPOINT) ?? envKeyOrigin;
+  // When a legacy config.env key was present before the endpoint changed, the setup writer records its original
+  // origin explicitly. Apply that binding to the merged operator key too: loadEnvironment() intentionally combines
+  // shell and config.env values, so deriving the key origin from the new endpoint would silently rebind the old key.
+  const configuredCredentialOrigin = authoritySetting("LOCAL_LLM_CREDENTIAL_ORIGIN") ?? file.LOCAL_LLM_CREDENTIAL_ORIGIN;
+  const invalidCredentialOrigin = Boolean(configuredCredentialOrigin && !originOf(configuredCredentialOrigin));
+  // A malformed explicit binding is not equivalent to an absent binding. Do not fall back to the currently
+  // selected endpoint, which could silently attach a legacy key to a different gateway.
+  const envKeyOrigin = invalidCredentialOrigin ? undefined : originOf(configuredCredentialOrigin)
+    ?? originOf(authoritySetting("LOCAL_LLM_ENDPOINT"));
+  const gateway = invalidCredentialOrigin ? undefined : originOf(configuredCredentialOrigin)
+    ?? originOf(file.LOCAL_LLM_ENDPOINT)
+    ?? envKeyOrigin;
   const listed = new Set(
     (authoritySetting("LOCAL_LLM_CREDENTIAL_ORIGINS") ?? "").split(",").map((o) => originOf(o)).filter((o): o is string => Boolean(o)),
   );
@@ -140,6 +147,8 @@ export function storedCredentialFor(endpoint: string): string | null {
     const token = readGatewayTokenFile() || readConfigEnv().LOCAL_LLM_API_KEY;
     if (token) return token;
   }
+  const endpointCredential = localEndpointCredential(target);
+  if (endpointCredential?.origin === target) return endpointCredential.key;
   if (target === homes.envKeyOrigin && homes.envKey) return homes.envKey;
   return null;
 }
@@ -147,7 +156,8 @@ export function storedCredentialFor(endpoint: string): string | null {
 /** True when `value` is one of the locally stored credentials (token file, config.env key, operator env key). */
 function isStoredCredential(value: string): boolean {
   const homes = storedCredentialHomes();
-  return [readGatewayTokenFile(), readConfigEnv().LOCAL_LLM_API_KEY, homes.envKey].some((stored) => stored && stored === value);
+  return [readGatewayTokenFile(), readConfigEnv().LOCAL_LLM_API_KEY, homes.envKey, ...localEndpointCredentials().map((credential) => credential.key)]
+    .some((stored) => stored && stored === value);
 }
 
 /**
@@ -160,7 +170,8 @@ export function mayBindCredential(key: string | undefined, endpoint: string): bo
   const target = originOf(endpoint);
   if (!target) return false;
   const homes = storedCredentialHomes();
-  return target === homes.gateway || homes.listed.has(target) || (target === homes.envKeyOrigin && value === homes.envKey);
+  const endpointCredential = localEndpointCredentials().find((credential) => credential.key === value);
+  return target === homes.gateway || homes.listed.has(target) || (target === homes.envKeyOrigin && value === homes.envKey) || endpointCredential?.origin === target;
 }
 
 /**
@@ -172,6 +183,10 @@ export function environmentCredential(operatorEndpoint: string): { apiKey: strin
   const apiKey = process.env.LOCAL_LLM_API_KEY?.trim();
   if (!apiKey) return undefined;
   const operatorKey = authoritySetting("LOCAL_LLM_API_KEY");
+  const configuredCredentialOrigin = authoritySetting("LOCAL_LLM_CREDENTIAL_ORIGIN") ?? readConfigEnv().LOCAL_LLM_CREDENTIAL_ORIGIN;
+  if (configuredCredentialOrigin && !originOf(configuredCredentialOrigin) && (operatorKey === apiKey || isStoredCredential(apiKey))) {
+    return undefined;
+  }
   if (operatorKey === apiKey) return { apiKey, origin: originOf(authoritySetting("LOCAL_LLM_ENDPOINT") ?? operatorEndpoint) };
   if (isStoredCredential(apiKey)) return undefined;
   return { apiKey, origin: originOf(process.env.LOCAL_LLM_ENDPOINT ?? operatorEndpoint) };
@@ -523,6 +538,7 @@ export class LocalLlmClient {
   private exchangedToken?: OAuthCredential;
   private readonly authorizedOrigins: Set<string>;
   private readonly cloudRoutedOrigins: string[];
+  private readonly allowCredentialReload: boolean;
   private readonly workspace?: string;
   private readonly role: string;
   /** Output allowance sent as max_tokens on local endpoints; resized from provider capabilities (setOutputAllowance). */
@@ -549,6 +565,8 @@ export class LocalLlmClient {
       role?: string;
       /** Optional diagnostic sink for bounded command surfaces that must sanitize provider-controlled labels. */
       diagnosticHandler?: (level: "error" | "warn", message: string) => void;
+      /** Disable 401 fallback to stored credentials while explicitly verifying a replacement local endpoint key. */
+      allowCredentialReload?: boolean;
     }
   ) {
     this.conn = connectionFor(config.provider, config.model);
@@ -599,6 +617,7 @@ export class LocalLlmClient {
         .filter((o): o is string => Boolean(o)),
     );
     this.cloudRoutedOrigins = config.cloudRoutedOrigins ?? [];
+    this.allowCredentialReload = options?.allowCredentialReload !== false;
     this.workspace = config.workspace;
     this.role = options?.role ?? (config.taskClass === "subagent" ? "subagent" : "main");
     this.maxOutputTokens = config.completionReserveTokens ?? 8192;
@@ -980,13 +999,14 @@ export class LocalLlmClient {
     return { ...this.conn.staticHeaders, ...auth };
   }
 
-  /** Provider connections refuse redirects: a credential-bearing request never follows a server to another origin. */
+  /** Requests stay on the explicitly configured destination; fetch must never forward credentials across redirects. */
   private fetchPolicy(): { redirect?: "error" } {
-    return this.conn.providerId ? { redirect: "error" } : {};
+    return { redirect: "error" };
   }
 
   /** After a 401 from `url`: re-read that gateway's stored credential (rotation). Never borrows another provider's. */
   public reloadAuthToken(url: string = this.endpoints[this.activeEndpointIndex]): boolean {
+    if (!this.allowCredentialReload) return false;
     const origin = originOf(url);
     if (!origin || this.conn.providerId) return false;
     const fresh = storedCredentialFor(url);
