@@ -215,7 +215,7 @@ export class SidecarServer {
       case "provider.cancel":
         this.signIns.get(command.id)?.cancel();
         this.signIns.delete(command.id);
-        cancelLocalEndpointSetup();
+        cancelLocalEndpointSetup(command.id);
         return;
       case "provider.disconnect": {
         if (this.app.getAgent().getApprovalMode() === "read-only") {
@@ -262,8 +262,8 @@ export class SidecarServer {
           result(false, "An endpoint URL is required.");
           return;
         }
-        const prepared = await prepareLocalEndpoint(this.app.getConfig(), endpoint, key ?? "");
-        result(prepared.ok, prepared.message);
+        const prepared = await prepareLocalEndpoint(this.app.getConfig(), endpoint, key ?? "", id);
+        if (!prepared.cancelled) result(prepared.ok, prepared.message);
         return;
       }
       if (method === "api-key") {

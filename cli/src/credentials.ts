@@ -78,10 +78,16 @@ export function commitLocalEndpointSetup(endpoint: string, key: string, commitSe
     const stat = fs.lstatSync(file);
     if (stat.isSymbolicLink() || !stat.isFile()) throw new Error("The Nexus credential store is not a regular file.");
     const parsed = JSON.parse(fs.readFileSync(file, "utf8"));
-    if (!parsed || typeof parsed !== "object" || !parsed.providers || typeof parsed.providers !== "object" || Array.isArray(parsed.providers)) {
+    if (!parsed || typeof parsed !== "object" || parsed.version !== 1 || !parsed.providers || typeof parsed.providers !== "object" || Array.isArray(parsed.providers)) {
       throw new Error("The Nexus credential store has an unsupported format.");
     }
-    previous = parsed.providers[id];
+    if (Object.hasOwn(parsed.providers, id)) {
+      const entry = parsed.providers[id];
+      if (!entry || typeof entry !== "object" || entry.type !== "api" || typeof entry.key !== "string" || !entry.key || typeof entry.savedAt !== "string") {
+        throw new Error("The local endpoint credential has an unsupported format.");
+      }
+      previous = entry;
+    }
   } catch (error: any) {
     if (error?.code !== "ENOENT") throw new Error("Nexus could not safely update its credential store.");
   }

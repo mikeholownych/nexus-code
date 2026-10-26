@@ -52,10 +52,20 @@ export interface LocalEndpointConnection {
 export interface LocalEndpointPreparation {
   ok: boolean;
   message: string;
+  cancelled?: boolean;
 }
 
-/** Cancel an uncommitted local setup after the operator closes its model picker. */
-export function cancelLocalEndpointSetup(): void {
+const localEndpointSetupRequests = new Map<string, { cancelled: boolean }>();
+
+/** Cancel an in-flight request, or clear provisional setup after the operator closes its model picker. */
+export function cancelLocalEndpointSetup(requestId?: string): void {
+  if (requestId) {
+    const request = localEndpointSetupRequests.get(requestId);
+    if (request) {
+      request.cancelled = true;
+      localEndpointSetupRequests.delete(requestId);
+    }
+  }
   resetApplianceEndpointOverride();
 }
 
@@ -89,19 +99,25 @@ function validatedKey(input: string): string | undefined {
 }
 
 /** Verify a local endpoint and keep its endpoint and optional key provisional for the live model picker. */
-export async function prepareLocalEndpoint(base: HarnessConfig, endpointInput: string, keyInput = ""): Promise<LocalEndpointPreparation> {
+export async function prepareLocalEndpoint(base: HarnessConfig, endpointInput: string, keyInput = "", requestId?: string): Promise<LocalEndpointPreparation> {
   const parsed = validatedEndpoint(endpointInput);
   if (!parsed) return { ok: false, message: "Use an http:// or https:// endpoint without embedded credentials, query, or fragment." };
   const key = validatedKey(keyInput);
   if (key === undefined) return { ok: false, message: "The API key must be a single value without whitespace." };
+  const request = { cancelled: false };
+  if (requestId) localEndpointSetupRequests.set(requestId, request);
   try {
     const models = await new LocalLlmClient(localEndpointConfig(base, parsed.endpoint, parsed.origin, key)).listModels();
+    if (request.cancelled) return { ok: false, cancelled: true, message: "Local endpoint setup was cancelled." };
     const available = models.filter((model) => /^[A-Za-z0-9._:/@+-]{1,160}$/.test(model));
     if (available.length === 0) return { ok: false, message: "That endpoint returned no usable chat models." };
     activateApplianceEndpoint(parsed.endpoint, undefined, true, key || undefined);
     return { ok: true, message: `Local endpoint verified (${parsed.origin}; ${available.length} models found). Choose a model to save setup.` };
   } catch {
+    if (request.cancelled) return { ok: false, cancelled: true, message: "Local endpoint setup was cancelled." };
     return { ok: false, message: "Could not list models from that endpoint. Check the URL and API key, then try again." };
+  } finally {
+    if (requestId && localEndpointSetupRequests.get(requestId) === request) localEndpointSetupRequests.delete(requestId);
   }
 }
 

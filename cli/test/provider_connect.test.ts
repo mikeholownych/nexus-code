@@ -12,7 +12,7 @@ import path from "node:path";
 import { createHash } from "node:crypto";
 import type { AddressInfo } from "node:net";
 import { InferenceError, LocalLlmClient, mayBindCredential, setCredentialAuthority, storedCredentialFor } from "../src/client.js";
-import { credentialsPath, localEndpointCredential, removeCredential, resolveCredential, saveCredential, saveLocalEndpointCredential } from "../src/credentials.js";
+import { commitLocalEndpointSetup, credentialsPath, localEndpointCredential, removeCredential, resolveCredential, saveCredential, saveLocalEndpointCredential } from "../src/credentials.js";
 import { setOAuthEndpoints, startAuthFlow } from "../src/oauth.js";
 import { connectLocalEndpoint, connectWithKey, disconnect, prepareLocalEndpoint } from "../src/provider_connect.js";
 import { buildCatalog } from "../src/model_catalog.js";
@@ -100,6 +100,32 @@ describe("credentials: precedence and other clients' sign-ins", () => {
     delete process.env.OPENROUTER_API_KEY;
     assert.equal(removeCredential("openrouter"), true);
     assert.equal(resolveCredential("openrouter", "OPENROUTER_API_KEY")?.source, "opencode");
+  });
+
+  test("local setup rejects unsupported store versions and malformed endpoint entries before mutation", () => {
+    const endpoint = "http://127.0.0.1:4321/v1";
+    const id = `nexus-local-endpoint:${new URL(endpoint).origin}`;
+    const cases = [
+      ["unsupported version", { version: 2, providers: {} }],
+      ["null endpoint credential", { version: 1, providers: { [id]: null } }],
+      ["invalid endpoint credential", { version: 1, providers: { [id]: { type: "api", key: 7, savedAt: "fixed" } } }],
+    ] as const;
+    for (const [label, store] of cases) {
+      fs.mkdirSync(path.dirname(credentialsPath()), { recursive: true });
+      const original = `${JSON.stringify(store)}\n`;
+      fs.writeFileSync(credentialsPath(), original, { mode: 0o640 });
+      fs.chmodSync(credentialsPath(), 0o640);
+      const mode = fs.statSync(credentialsPath()).mode & 0o777;
+      let settingsCommitted = false;
+      assert.throws(
+        () => commitLocalEndpointSetup(endpoint, "new-secret", () => { settingsCommitted = true; throw new Error("settings write failed"); }),
+        /safely update its credential store/,
+        label,
+      );
+      assert.equal(settingsCommitted, false, `${label}: settings callback must not run`);
+      assert.equal(fs.readFileSync(credentialsPath(), "utf8"), original, `${label}: original bytes must remain exact`);
+      assert.equal(fs.statSync(credentialsPath()).mode & 0o777, mode, `${label}: original mode must remain exact`);
+    }
   });
 
   test("reads Codex CLI, opencode, crush and Copilot plugin sign-ins in place and never changes those files", () => {
@@ -568,6 +594,46 @@ describe("connecting from the picker", () => {
       await server.shutdown();
       await noPrior.close();
       await prior.close();
+    }
+  });
+
+  test("sidecar: cancelling local endpoint discovery prevents a late response from activating setup", async () => {
+    const previous = await mock((_s, res) => json(res, 200, { data: [{ id: "previous-model" }] }));
+    const delayed = await mock((_s, res) => { setTimeout(() => json(res, 200, { data: [{ id: "late-model" }] }), 120); });
+    const repo = makeRepo();
+    operator({ LOCAL_LLM_ENDPOINT: `${previous.url}/v1` });
+    const app = new ApplicationCore({ endpoint: `${previous.url}/v1`, model: "previous-model", maxSteps: 3, temperature: 0, workspace: repo, shell: "bash" } as any);
+    const lines: string[] = [];
+    const server = new SidecarServer({ app, mode: "auto", write: (line) => lines.push(line) });
+    server.start();
+    const events = () => lines.map((line) => JSON.parse(line));
+    const send = (message: Record<string, unknown>) => server.handleLine(JSON.stringify({ v: 1, ...message }));
+    const waitFor = async (predicate: (event: any) => boolean) => {
+      for (let i = 0; i < 200; i++) {
+        const found = events().find(predicate);
+        if (found) return found;
+        await new Promise((resolve) => setTimeout(resolve, 25));
+      }
+      assert.fail("event not seen");
+    };
+    try {
+      await send({ type: "provider.connect", id: "delayed-connect", provider: "appliance", method: "local-endpoint", endpoint: `${delayed.url}/v1`, key: "late-secret" });
+      for (let i = 0; i < 200 && delayed.seen.length === 0; i++) await new Promise((resolve) => setTimeout(resolve, 10));
+      assert.ok(delayed.seen.length > 0, "the delayed endpoint request must be in flight before cancellation");
+      await send({ type: "provider.cancel", id: "delayed-connect" });
+      await new Promise((resolve) => setTimeout(resolve, 180));
+      assert.equal(events().some((event) => event.type === "provider.result" && event.id === "delayed-connect"), false, "a cancelled request must not publish a late result");
+      assert.equal(fs.existsSync(credentialsPath()), false, "a cancelled request must not persist its key");
+      assert.equal(localEndpointCredential(`${delayed.url}/v1`), undefined);
+
+      await send({ type: "models.list", id: "after-delayed-cancel" });
+      const catalog = await waitFor((event) => event.type === "models.catalog" && event.id === "after-delayed-cancel");
+      assert.deepEqual(catalog.models.filter((entry: any) => entry.provider === "appliance").map((entry: any) => entry.id), ["previous-model"]);
+      assert.ok(previous.seen.length > 0, "subsequent model discovery remains routed to the prior endpoint");
+    } finally {
+      await server.shutdown();
+      await previous.close();
+      await delayed.close();
     }
   });
 
