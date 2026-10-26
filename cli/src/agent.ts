@@ -1383,8 +1383,11 @@ export class AutonomousAgent {
       sessionId: this.currentTaskId,
       id: this.currentTaskId,
       title: "Task " + this.currentTaskId,
-      workspacePath: this.workspacePathIdentity.value,
-      workspace: this.workspacePathIdentity.value,
+      // A speculative worktree is not the task's identity: the durable record stays bound to the primary
+      // checkout so `--resume`, `listTasks` and retention still find it from the repository root. The
+      // worktreeBinding below names the active checkout.
+      workspacePath: this.activeWorktree ? this.primaryWorkspacePathIdentity.value : this.workspacePathIdentity.value,
+      workspace: this.activeWorktree ? this.primaryWorkspacePathIdentity.value : this.workspacePathIdentity.value,
       model: this.config.model,
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
@@ -1482,6 +1485,8 @@ export class AutonomousAgent {
         worktreePath: state.worktreeBinding.worktreePath,
         branch: state.worktreeBinding.branch,
       };
+      // Remember the checkout the task was resumed from so /merge and /discard can return there.
+      this.originalWorkspace = this.originalWorkspace ?? this.primaryWorkspacePathIdentity.value;
       this.switchWorktreeWorkspace(state.worktreeBinding.worktreePath);
     }
     this.activePlan = state.activePlan || [];
