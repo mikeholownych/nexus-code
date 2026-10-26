@@ -1473,6 +1473,17 @@ export class AutonomousAgent {
 
     const state = recoveryResult.state;
     this.currentTaskId = state.taskId;
+    // Switch to the recorded worktree before restoring the recovered envelope: setWorkspace() resets the
+    // conversation, so restoring first would silently drop the messages, objective, archive and findings that
+    // recovery just read from disk. The binding is authoritative only after the state manager validated it.
+    if (state.worktreeBinding && recoveryResult.worktreeStatus === "consistent") {
+      this.activeWorktree = {
+        taskId: state.worktreeBinding.taskId,
+        worktreePath: state.worktreeBinding.worktreePath,
+        branch: state.worktreeBinding.branch,
+      };
+      this.switchWorktreeWorkspace(state.worktreeBinding.worktreePath);
+    }
     this.activePlan = state.activePlan || [];
     this.messages = state.messages || [];
     this.restoreFindings(state.findings);
@@ -1509,15 +1520,6 @@ export class AutonomousAgent {
     // out of the active verifier path. It is mutable disk state and cannot prove
     // verifier independence after recovery.
     this.persistProgress({ unverifiedChangesPending: true });
-
-    if (state.worktreeBinding && recoveryResult.worktreeStatus === "consistent") {
-      this.activeWorktree = {
-        taskId: state.worktreeBinding.taskId,
-        worktreePath: state.worktreeBinding.worktreePath,
-        branch: state.worktreeBinding.branch,
-      };
-      this.switchWorktreeWorkspace(state.worktreeBinding.worktreePath);
-    }
 
     if (state.validationReceipts && state.validationReceipts.length > 0) {
       const activeReceipt = state.validationReceipts.find((r) => r.status === "PASSED");
