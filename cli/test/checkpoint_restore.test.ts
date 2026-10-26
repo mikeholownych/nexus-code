@@ -562,3 +562,89 @@ test("legacy Git restore refuses an untracked tracked-deletion collision before 
     fs.rmSync(repo, { recursive: true, force: true });
   }
 });
+
+test("legacy non-Git restore refuses an empty-directory destination parent symlink", () => {
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-non-git-legacy-empty-dir-"));
+  const external = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-non-git-legacy-empty-external-"));
+  const manager = new CheckpointManager(workspace);
+  try {
+    fs.writeFileSync(path.join(workspace, "captured.txt"), "captured\n");
+    const checkpoint = manager.createCheckpoint("legacy empty directory destination");
+    const recordPath = path.join(manager.getCheckpointDir(), `${checkpoint.id}.json`);
+    const record = JSON.parse(fs.readFileSync(recordPath, "utf8"));
+    delete record.untrackedFiles;
+    fs.writeFileSync(recordPath, JSON.stringify(record));
+    fs.mkdirSync(path.join(checkpoint.snapshotDir!, "alias", "newdir"), { recursive: true });
+    fs.symlinkSync(external, path.join(workspace, "alias"));
+    fs.writeFileSync(path.join(workspace, "workspace.txt"), "workspace canary\n");
+
+    const result = manager.restore(checkpoint.id);
+
+    assert.equal(result.success, false);
+    assert.match(result.message, /destination|unsafe/i);
+    assert.equal(fs.existsSync(path.join(external, "newdir")), false);
+    assert.equal(fs.readFileSync(path.join(workspace, "workspace.txt"), "utf8"), "workspace canary\n");
+    assert.equal(fs.readlinkSync(path.join(workspace, "alias")), external);
+  } finally {
+    fs.rmSync(manager.getCheckpointDir(), { recursive: true, force: true });
+    fs.rmSync(workspace, { recursive: true, force: true });
+    fs.rmSync(external, { recursive: true, force: true });
+  }
+});
+
+test("legacy Git restore refuses an ignored untracked checkout collision", () => {
+  const { repo, git } = gitRepo();
+  try {
+    fs.writeFileSync(path.join(repo, "tracked.txt"), "at checkpoint\n");
+    const manager = new CheckpointManager(repo);
+    const checkpoint = manager.createCheckpoint("legacy ignored checkout collision");
+    const recordPath = path.join(manager.getCheckpointDir(), `${checkpoint.id}.json`);
+    const record = JSON.parse(fs.readFileSync(recordPath, "utf8"));
+    delete record.untrackedFiles;
+    fs.writeFileSync(recordPath, JSON.stringify(record));
+    git("rm", "--cached", "-q", "tracked.txt");
+    fs.writeFileSync(path.join(repo, ".gitignore"), "/tracked.txt\n");
+    fs.writeFileSync(path.join(repo, "tracked.txt"), "ignored untracked canary\n");
+    assert.equal(git("check-ignore", "tracked.txt"), "tracked.txt");
+    const head = git("rev-parse", "HEAD");
+
+    const result = manager.restore(checkpoint.id);
+
+    assert.equal(result.success, false);
+    assert.match(result.message, /untracked|collision/i);
+    assert.equal(fs.readFileSync(path.join(repo, "tracked.txt"), "utf8"), "ignored untracked canary\n");
+    assert.equal(git("rev-parse", "HEAD"), head);
+  } finally {
+    fs.rmSync(repo, { recursive: true, force: true });
+  }
+});
+
+test("legacy Git restore refuses an ignored untracked tracked-deletion collision", () => {
+  const { repo, git } = gitRepo();
+  try {
+    fs.writeFileSync(path.join(repo, "deleted.txt"), "base\n");
+    git("add", "deleted.txt");
+    git("commit", "-qm", "add deleted file");
+    fs.rmSync(path.join(repo, "deleted.txt"));
+    const manager = new CheckpointManager(repo);
+    const checkpoint = manager.createCheckpoint("legacy ignored deletion collision");
+    const recordPath = path.join(manager.getCheckpointDir(), `${checkpoint.id}.json`);
+    const record = JSON.parse(fs.readFileSync(recordPath, "utf8"));
+    delete record.untrackedFiles;
+    fs.writeFileSync(recordPath, JSON.stringify(record));
+    git("rm", "--cached", "-q", "deleted.txt");
+    fs.writeFileSync(path.join(repo, ".gitignore"), "/deleted.txt\n");
+    fs.writeFileSync(path.join(repo, "deleted.txt"), "ignored untracked canary\n");
+    assert.equal(git("check-ignore", "deleted.txt"), "deleted.txt");
+    const head = git("rev-parse", "HEAD");
+
+    const result = manager.restore(checkpoint.id);
+
+    assert.equal(result.success, false);
+    assert.match(result.message, /untracked|collision/i);
+    assert.equal(fs.readFileSync(path.join(repo, "deleted.txt"), "utf8"), "ignored untracked canary\n");
+    assert.equal(git("rev-parse", "HEAD"), head);
+  } finally {
+    fs.rmSync(repo, { recursive: true, force: true });
+  }
+});

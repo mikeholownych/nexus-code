@@ -163,8 +163,8 @@ export class CheckpointManager {
     }
   }
 
-  private gitUntrackedPaths(): string[] {
-    return execFileSync("git", ["ls-files", "--others", "--exclude-standard", "-z"], {
+  private gitUntrackedPaths(includeIgnored = false): string[] {
+    return execFileSync("git", ["ls-files", "--others", ...(includeIgnored ? [] : ["--exclude-standard"]), "-z"], {
       cwd: this.workspace,
       encoding: "buffer",
       maxBuffer: 64 * 1024 * 1024,
@@ -252,7 +252,7 @@ export class CheckpointManager {
       maxBuffer: 64 * 1024 * 1024,
     }).toString("utf8").split("\0").filter(Boolean);
     const mutationPaths = new Set([...checkoutPaths, ...deletedPaths]);
-    if (this.gitUntrackedPaths().some((relativePath) => mutationPaths.has(relativePath))) {
+    if (this.gitUntrackedPaths(true).some((relativePath) => mutationPaths.has(relativePath))) {
       throw new Error("Checkpoint legacy restore would overwrite or delete an uncaptured untracked file");
     }
   }
@@ -286,6 +286,21 @@ export class CheckpointManager {
         const entryPath = relative ? `${relative}/${entry.name}` : entry.name;
         if (entry.isDirectory()) visit(path.join(directory, entry.name), entryPath);
         else if (entry.isFile() || entry.isSymbolicLink()) paths.push(entryPath);
+      }
+    };
+    visit(root, "");
+    return paths;
+  }
+
+  private workspaceSnapshotDirectories(root: string): string[] {
+    const ignored = new Set(["node_modules", ".git", "target", "dist", ".nexus", ".next", ".cache"]);
+    const paths: string[] = [];
+    const visit = (directory: string, relative: string): void => {
+      for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
+        if (ignored.has(entry.name) || !entry.isDirectory()) continue;
+        const entryPath = relative ? `${relative}/${entry.name}` : entry.name;
+        paths.push(entryPath);
+        visit(path.join(directory, entry.name), entryPath);
       }
     };
     visit(root, "");
@@ -656,8 +671,12 @@ export class CheckpointManager {
 
       if (cp.snapshotDir && fs.existsSync(cp.snapshotDir)) {
         const snapshotFiles = this.workspaceSnapshotPaths(cp.snapshotDir);
+        const snapshotDirectories = this.workspaceSnapshotDirectories(cp.snapshotDir);
         this.assertUntrackedSnapshotSafe(snapshotFiles, cp.snapshotDir, cp.allowSensitive === true);
-        this.assertUntrackedDestinationSafe(snapshotFiles, this.workspace);
+        if (!cp.allowSensitive) {
+          for (const relativePath of snapshotDirectories) this.assertSnapshotTextSafe(relativePath);
+        }
+        this.assertUntrackedDestinationSafe([...snapshotFiles, ...snapshotDirectories], this.workspace);
         this.copyDirFiltered(cp.snapshotDir, this.workspace, cp.allowSensitive === true);
         return { success: true, message: `Restored workspace files from legacy snapshot '${cp.name}' (${cp.id}); other entries were left unchanged` };
       }
