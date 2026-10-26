@@ -403,3 +403,162 @@ test("checkpoint rejects sensitive symlink-target components", () => {
     fs.rmSync(workspace, { recursive: true, force: true });
   }
 });
+
+test("legacy non-Git restore refuses a destination parent symlink before copying", () => {
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-non-git-legacy-destination-"));
+  const external = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-non-git-legacy-external-"));
+  const manager = new CheckpointManager(workspace);
+  try {
+    fs.mkdirSync(path.join(workspace, "alias"));
+    fs.writeFileSync(path.join(workspace, "alias", "file.txt"), "captured\n");
+    const checkpoint = manager.createCheckpoint("legacy non-Git destination");
+    const recordPath = path.join(manager.getCheckpointDir(), `${checkpoint.id}.json`);
+    const record = JSON.parse(fs.readFileSync(recordPath, "utf8"));
+    delete record.untrackedFiles;
+    fs.writeFileSync(recordPath, JSON.stringify(record));
+    fs.rmSync(path.join(workspace, "alias"), { recursive: true });
+    fs.symlinkSync(external, path.join(workspace, "alias"));
+    fs.writeFileSync(path.join(workspace, "workspace.txt"), "workspace canary\n");
+    fs.writeFileSync(path.join(external, "file.txt"), "external canary\n");
+
+    const result = manager.restore(checkpoint.id);
+
+    assert.equal(result.success, false);
+    assert.match(result.message, /destination|unsafe/i);
+    assert.equal(fs.readFileSync(path.join(external, "file.txt"), "utf8"), "external canary\n");
+    assert.equal(fs.readFileSync(path.join(workspace, "workspace.txt"), "utf8"), "workspace canary\n");
+    assert.equal(fs.readlinkSync(path.join(workspace, "alias")), external);
+  } finally {
+    fs.rmSync(manager.getCheckpointDir(), { recursive: true, force: true });
+    fs.rmSync(workspace, { recursive: true, force: true });
+    fs.rmSync(external, { recursive: true, force: true });
+  }
+});
+
+test("Git checkpoint rejects sensitive tracked nested filename components without writing a ref", () => {
+  const { repo, git } = gitRepo();
+  try {
+    fs.mkdirSync(path.join(repo, "dir"));
+    fs.writeFileSync(path.join(repo, "dir", "API_KEY=supersecret"), "ordinary content\n");
+    git("add", "dir/API_KEY=supersecret");
+    const manager = new CheckpointManager(repo);
+
+    assert.throws(() => manager.createCheckpoint("sensitive tracked name"), SensitivePersistenceError);
+    assert.equal(manager.listCheckpoints().length, 0);
+    assert.equal(git("for-each-ref", "--format=%(refname)", "refs/nexus/checkpoints"), "");
+  } finally {
+    fs.rmSync(repo, { recursive: true, force: true });
+  }
+});
+
+test("Git checkpoint rejects sensitive index symlink-target components without writing a ref", () => {
+  const { repo, git } = gitRepo();
+  try {
+    fs.symlinkSync("dir/API_KEY=supersecret", path.join(repo, "link.txt"));
+    git("add", "link.txt");
+    fs.unlinkSync(path.join(repo, "link.txt"));
+    fs.symlinkSync("ordinary-target", path.join(repo, "link.txt"));
+    const manager = new CheckpointManager(repo);
+
+    assert.throws(() => manager.createCheckpoint("sensitive index link"), SensitivePersistenceError);
+    assert.equal(manager.listCheckpoints().length, 0);
+    assert.equal(git("for-each-ref", "--format=%(refname)", "refs/nexus/checkpoints"), "");
+  } finally {
+    fs.rmSync(repo, { recursive: true, force: true });
+  }
+});
+
+test("Git checkpoint rejects sensitive worktree symlink-target components without writing a ref", () => {
+  const { repo, git } = gitRepo();
+  try {
+    fs.symlinkSync("ordinary-target", path.join(repo, "link.txt"));
+    git("add", "link.txt");
+    fs.unlinkSync(path.join(repo, "link.txt"));
+    fs.symlinkSync("dir/API_KEY=supersecret", path.join(repo, "link.txt"));
+    const manager = new CheckpointManager(repo);
+
+    assert.throws(() => manager.createCheckpoint("sensitive worktree link"), SensitivePersistenceError);
+    assert.equal(manager.listCheckpoints().length, 0);
+    assert.equal(git("for-each-ref", "--format=%(refname)", "refs/nexus/checkpoints"), "");
+  } finally {
+    fs.rmSync(repo, { recursive: true, force: true });
+  }
+});
+
+test("manifest restore refuses a regular-file parent before changing tracked or untracked files", () => {
+  const { repo, git } = gitRepo();
+  try {
+    fs.mkdirSync(path.join(repo, "a"));
+    fs.writeFileSync(path.join(repo, "a", "b"), "captured\n");
+    const manager = new CheckpointManager(repo);
+    const checkpoint = manager.createCheckpoint("file parent collision");
+    fs.rmSync(path.join(repo, "a"), { recursive: true });
+    fs.writeFileSync(path.join(repo, "a"), "tracked canary\n");
+    git("add", "a");
+    git("commit", "-qm", "replace directory with tracked file");
+    fs.writeFileSync(path.join(repo, "untracked.txt"), "untracked canary\n");
+
+    const result = manager.restore(checkpoint.id);
+
+    assert.equal(result.success, false);
+    assert.match(result.message, /destination|unsafe/i);
+    assert.equal(fs.readFileSync(path.join(repo, "a"), "utf8"), "tracked canary\n");
+    assert.equal(fs.readFileSync(path.join(repo, "untracked.txt"), "utf8"), "untracked canary\n");
+    assert.equal(fs.readFileSync(path.join(repo, "tracked.txt"), "utf8"), "base\n");
+  } finally {
+    fs.rmSync(repo, { recursive: true, force: true });
+  }
+});
+
+test("legacy Git restore refuses an untracked checkout collision before overwriting it", () => {
+  const { repo, git } = gitRepo();
+  try {
+    fs.writeFileSync(path.join(repo, "tracked.txt"), "at checkpoint\n");
+    const manager = new CheckpointManager(repo);
+    const checkpoint = manager.createCheckpoint("legacy checkout collision");
+    const recordPath = path.join(manager.getCheckpointDir(), `${checkpoint.id}.json`);
+    const record = JSON.parse(fs.readFileSync(recordPath, "utf8"));
+    delete record.untrackedFiles;
+    fs.writeFileSync(recordPath, JSON.stringify(record));
+    git("rm", "--cached", "-q", "tracked.txt");
+    fs.writeFileSync(path.join(repo, "tracked.txt"), "untracked canary\n");
+    const head = git("rev-parse", "HEAD");
+
+    const result = manager.restore(checkpoint.id);
+
+    assert.equal(result.success, false);
+    assert.match(result.message, /untracked|collision/i);
+    assert.equal(fs.readFileSync(path.join(repo, "tracked.txt"), "utf8"), "untracked canary\n");
+    assert.equal(git("rev-parse", "HEAD"), head);
+  } finally {
+    fs.rmSync(repo, { recursive: true, force: true });
+  }
+});
+
+test("legacy Git restore refuses an untracked tracked-deletion collision before deleting it", () => {
+  const { repo, git } = gitRepo();
+  try {
+    fs.writeFileSync(path.join(repo, "deleted.txt"), "base\n");
+    git("add", "deleted.txt");
+    git("commit", "-qm", "add deleted file");
+    fs.rmSync(path.join(repo, "deleted.txt"));
+    const manager = new CheckpointManager(repo);
+    const checkpoint = manager.createCheckpoint("legacy deletion collision");
+    const recordPath = path.join(manager.getCheckpointDir(), `${checkpoint.id}.json`);
+    const record = JSON.parse(fs.readFileSync(recordPath, "utf8"));
+    delete record.untrackedFiles;
+    fs.writeFileSync(recordPath, JSON.stringify(record));
+    git("rm", "--cached", "-q", "deleted.txt");
+    fs.writeFileSync(path.join(repo, "deleted.txt"), "untracked canary\n");
+    const head = git("rev-parse", "HEAD");
+
+    const result = manager.restore(checkpoint.id);
+
+    assert.equal(result.success, false);
+    assert.match(result.message, /untracked|collision/i);
+    assert.equal(fs.readFileSync(path.join(repo, "deleted.txt"), "utf8"), "untracked canary\n");
+    assert.equal(git("rev-parse", "HEAD"), head);
+  } finally {
+    fs.rmSync(repo, { recursive: true, force: true });
+  }
+});
