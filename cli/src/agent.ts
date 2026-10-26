@@ -1383,8 +1383,11 @@ export class AutonomousAgent {
       sessionId: this.currentTaskId,
       id: this.currentTaskId,
       title: "Task " + this.currentTaskId,
-      workspacePath: this.workspacePathIdentity.value,
-      workspace: this.workspacePathIdentity.value,
+      // A speculative worktree is not the task's identity: the durable record stays bound to the primary
+      // checkout so `--resume`, `listTasks` and retention still find it from the repository root. The
+      // worktreeBinding below names the active checkout.
+      workspacePath: this.activeWorktree ? this.primaryWorkspacePathIdentity.value : this.workspacePathIdentity.value,
+      workspace: this.activeWorktree ? this.primaryWorkspacePathIdentity.value : this.workspacePathIdentity.value,
       model: this.config.model,
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
@@ -1473,6 +1476,19 @@ export class AutonomousAgent {
 
     const state = recoveryResult.state;
     this.currentTaskId = state.taskId;
+    // Switch to the recorded worktree before restoring the recovered envelope: setWorkspace() resets the
+    // conversation, so restoring first would silently drop the messages, objective, archive and findings that
+    // recovery just read from disk. The binding is authoritative only after the state manager validated it.
+    if (state.worktreeBinding && recoveryResult.worktreeStatus === "consistent") {
+      this.activeWorktree = {
+        taskId: state.worktreeBinding.taskId,
+        worktreePath: state.worktreeBinding.worktreePath,
+        branch: state.worktreeBinding.branch,
+      };
+      // Remember the checkout the task was resumed from so /merge and /discard can return there.
+      this.originalWorkspace = this.originalWorkspace ?? this.primaryWorkspacePathIdentity.value;
+      this.switchWorktreeWorkspace(state.worktreeBinding.worktreePath);
+    }
     this.activePlan = state.activePlan || [];
     this.messages = state.messages || [];
     this.restoreFindings(state.findings);
@@ -1509,15 +1525,6 @@ export class AutonomousAgent {
     // out of the active verifier path. It is mutable disk state and cannot prove
     // verifier independence after recovery.
     this.persistProgress({ unverifiedChangesPending: true });
-
-    if (state.worktreeBinding && recoveryResult.worktreeStatus === "consistent") {
-      this.activeWorktree = {
-        taskId: state.worktreeBinding.taskId,
-        worktreePath: state.worktreeBinding.worktreePath,
-        branch: state.worktreeBinding.branch,
-      };
-      this.switchWorktreeWorkspace(state.worktreeBinding.worktreePath);
-    }
 
     if (state.validationReceipts && state.validationReceipts.length > 0) {
       const activeReceipt = state.validationReceipts.find((r) => r.status === "PASSED");
