@@ -52,14 +52,13 @@ const stateFile = () => path.join(credentialStorageHome(), ".local/state/nexus/r
 const cacheFile = (id: string) => path.join(credentialStorageHome(), ".cache/nexus/models", `${id.replace(/[^a-z0-9_-]/gi, "_")}.json`);
 
 function cacheId(providerId: string, endpoint: string): string {
-  if (providerId !== APPLIANCE) return providerId;
   let identity = endpoint.trim();
   try {
     const normalized = new URL(identity);
     normalized.hash = "";
     identity = normalized.toString().replace(/\/+$/, "");
   } catch {}
-  return `${APPLIANCE}-${createHash("sha256").update(identity).digest("hex").slice(0, 20)}`;
+  return `${providerId}-${createHash("sha256").update(identity).digest("hex").slice(0, 20)}`;
 }
 
 export function readRecent(): ModelRef[] {

@@ -683,6 +683,25 @@ describe("connecting from the picker", () => {
     }
   });
 
+  test("a provider model cache is isolated by base URL", async () => {
+    const firstEndpoint = await mock((_s, res) => json(res, 200, { data: [{ id: "first-provider-model" }] }));
+    const secondEndpoint = await mock((_s, res) => json(res, 503, {}));
+    try {
+      operator({ NEXUS_COMPATIBLE_BASE_URL: `${firstEndpoint.url}/v1`, NEXUS_COMPATIBLE_AUTH: "none" });
+      const first = await buildCatalog(cfg(), { timeoutMs: 500 });
+      assert.ok(first.models.some((model) => model.provider === "compatible" && model.id === "first-provider-model"));
+
+      operator({ NEXUS_COMPATIBLE_BASE_URL: `${secondEndpoint.url}/v1`, NEXUS_COMPATIBLE_AUTH: "none" });
+      const second = await buildCatalog(cfg(), { timeoutMs: 500 });
+      const compatible = second.providers.find((provider) => provider.id === "compatible")!;
+      assert.equal(compatible.status, "error");
+      assert.equal(second.models.some((model) => model.id === "first-provider-model"), false, "an offline provider cannot inherit a different base URL's model cache");
+    } finally {
+      await firstEndpoint.close();
+      await secondEndpoint.close();
+    }
+  });
+
   test("the catalog discloses when a configured appliance endpoint is cloud-routed", async () => {
     const originalFetch = globalThis.fetch;
     const requested: string[] = [];
