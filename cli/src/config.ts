@@ -323,7 +323,7 @@ export function buildConfig(options: any): HarnessConfig {
   const operatorOrigin = credentialOriginOf(configuredCredentialOrigin ?? operatorSetting("LOCAL_LLM_ENDPOINT") ?? options.endpoint ?? DEFAULT_ENDPOINT);
   const invalidOperatorBinding = Boolean(operatorKey && configuredCredentialOrigin && !operatorOrigin);
   const envCredential = options.apiKey || provider ? undefined : environmentCredential(options.endpoint || DEFAULT_ENDPOINT);
-  const apiKey = options.apiKey || (provider ? providerKey(provider) : provisionalKey || (invalidOperatorBinding ? (projectApiKey === operatorKey ? undefined : projectApiKey) : operatorKey || projectApiKey || envCredential?.apiKey)) || "local";
+  const apiKey = options.apiKey || (provider ? providerKey(provider) : provisionalKey || (invalidOperatorBinding ? (projectSetting("LOCAL_LLM_API_KEY") ?? (projectApiKey === operatorKey ? undefined : projectApiKey)) : operatorKey || projectApiKey || envCredential?.apiKey)) || "local";
   const credentialOrigin = apiKey === "local" ? undefined : options.apiKey || provider || provisionalKey ? credentialOriginOf(endpoint) : (invalidOperatorBinding ? credentialOriginOf(endpoint) : (operatorKey ? operatorOrigin : (projectApiKey ? credentialOriginOf(endpoint) : envCredential?.origin)));
   const workspace = options.workspace ? path.resolve(options.workspace) : process.cwd();
   const maxSteps = options.maxSteps ? parseInt(options.maxSteps, 10) : 30;

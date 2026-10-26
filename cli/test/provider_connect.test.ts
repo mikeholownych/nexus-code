@@ -5,6 +5,7 @@
  */
 import { test, describe, beforeEach, afterEach } from "node:test";
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import http from "node:http";
 import fs from "node:fs";
 import os from "node:os";
@@ -509,6 +510,36 @@ describe("connecting from the picker", () => {
     } finally {
       if (previous === undefined) delete process.env.LOCAL_LLM_API_KEY;
       else process.env.LOCAL_LLM_API_KEY = previous;
+    }
+  });
+
+  test("a malformed shell binding still allows a distinct project .env credential", () => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-shell-fallback-home-"));
+    const project = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-shell-fallback-project-"));
+    try {
+      fs.writeFileSync(path.join(project, ".env"), "LOCAL_LLM_API_KEY=project-key\n");
+      const result = spawnSync(process.execPath, ["--import", path.resolve(process.cwd(), "node_modules/tsx/dist/esm/index.mjs"), "--input-type=module", "--eval", `
+        import { loadEnvironment, buildConfig } from "${path.resolve(process.cwd(), "src/config.ts")}";
+        loadEnvironment();
+        const config = buildConfig({ endpoint: "http://project-endpoint.invalid/v1" });
+        console.log(JSON.stringify({ apiKey: config.apiKey, credentialOrigin: config.credentialOrigin }));
+      `], {
+        cwd: project,
+        env: {
+          HOME: home,
+          XDG_CONFIG_HOME: path.join(home, ".config"),
+          PATH: process.env.PATH,
+          LOCAL_LLM_API_KEY: "legacy-origin-key",
+          LOCAL_LLM_CREDENTIAL_ORIGIN: "not a valid origin",
+          LOCAL_LLM_ENDPOINT: "http://operator-endpoint.invalid/v1",
+        },
+        encoding: "utf8",
+      });
+      assert.equal(result.status, 0, result.stderr);
+      assert.deepEqual(JSON.parse(result.stdout), { apiKey: "project-key", credentialOrigin: "http://project-endpoint.invalid" });
+    } finally {
+      fs.rmSync(home, { recursive: true, force: true });
+      fs.rmSync(project, { recursive: true, force: true });
     }
   });
 
