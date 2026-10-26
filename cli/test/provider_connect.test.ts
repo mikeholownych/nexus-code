@@ -11,11 +11,12 @@ import os from "node:os";
 import path from "node:path";
 import { createHash } from "node:crypto";
 import type { AddressInfo } from "node:net";
-import { InferenceError, LocalLlmClient, setCredentialAuthority } from "../src/client.js";
-import { credentialsPath, removeCredential, resolveCredential, saveCredential } from "../src/credentials.js";
+import { InferenceError, LocalLlmClient, mayBindCredential, setCredentialAuthority, storedCredentialFor } from "../src/client.js";
+import { credentialsPath, localEndpointCredential, removeCredential, resolveCredential, saveCredential } from "../src/credentials.js";
 import { setOAuthEndpoints, startAuthFlow } from "../src/oauth.js";
-import { connectWithKey, disconnect } from "../src/provider_connect.js";
+import { connectLocalEndpoint, connectWithKey, disconnect } from "../src/provider_connect.js";
 import { buildCatalog } from "../src/model_catalog.js";
+import { resetApplianceEndpointOverride } from "../src/config.js";
 import { ApplicationCore } from "../src/core/app.js";
 import { SidecarServer } from "../src/sidecar.js";
 import { UsageLedger } from "../src/usage.js";
@@ -56,6 +57,7 @@ const ENV = ["OPENROUTER_API_KEY", "OPENAI_API_KEY", "ANTHROPIC_API_KEY", "NEXUS
 let home: string;
 let saved: Record<string, string | undefined>;
 beforeEach(() => {
+  resetApplianceEndpointOverride();
   saved = Object.fromEntries(ENV.map((k) => [k, process.env[k]]));
   for (const k of ENV) delete process.env[k];
   process.env.NEXUS_NO_BROWSER = "1";
@@ -65,6 +67,7 @@ beforeEach(() => {
   UsageLedger.global().limits = {};
 });
 afterEach(() => {
+  resetApplianceEndpointOverride();
   for (const k of ENV) { if (saved[k] === undefined) delete process.env[k]; else process.env[k] = saved[k]; }
   setOAuthEndpoints(null);
   fs.rmSync(home, { recursive: true, force: true });
@@ -281,6 +284,55 @@ describe("signed-in providers in the client", () => {
 // ---------------------------------------------------------------- connect, catalog, sidecar
 
 describe("connecting from the picker", () => {
+  test("local endpoint setup discovers a selected model and saves an optional key scoped to its origin", async () => {
+    const local = await mock((s, res) => {
+      if (s.path.endsWith("/models")) return json(res, s.headers.authorization === "Bearer local-secret" ? 200 : 401, { data: [{ id: "engineering/lead" }, { id: "small-model" }] });
+      return json(res, 200, {});
+    });
+    const other = await mock((_s, res) => json(res, 200, { data: [{ id: "other-model" }] }));
+    try {
+      const endpoint = `${local.url}/v1`;
+      const configured = await connectLocalEndpoint(cfg(), endpoint, "engineering/lead", " local-secret ");
+      assert.equal(configured.ok, true, configured.message);
+      assert.deepEqual(configured.models, ["engineering/lead", "small-model"]);
+      assert.doesNotMatch(configured.message, /local-secret/);
+      assert.equal(fs.statSync(credentialsPath()).mode & 0o777, 0o600);
+      assert.equal(fs.statSync(path.join(home, ".config/nexus/config.env")).mode & 0o777, 0o600);
+      const persisted = fs.readFileSync(path.join(home, ".config/nexus/config.env"), "utf8");
+      assert.match(persisted, /LOCAL_LLM_ENDPOINT=/);
+      assert.match(persisted, /LOCAL_LLM_MODEL="engineering\/lead"/);
+      assert.doesNotMatch(persisted, /local-secret/);
+      assert.deepEqual(localEndpointCredential(endpoint)?.origin, new URL(endpoint).origin);
+      assert.equal(storedCredentialFor(endpoint), "local-secret");
+      assert.equal(mayBindCredential("local-secret", endpoint), true);
+      assert.equal(mayBindCredential("local-secret", other.url), false);
+
+      setCredentialAuthority({ LOCAL_LLM_ENDPOINT: endpoint }, home);
+      const client = new LocalLlmClient(cfg({ endpoint, apiKey: undefined }));
+      assert.deepEqual(await client.listModels(), ["engineering/lead", "small-model"]);
+      assert.ok(local.seen.every((request) => request.headers.authorization === "Bearer local-secret"));
+      assert.ok(!other.seen.some((request) => request.headers.authorization === "Bearer local-secret"));
+    } finally {
+      await local.close();
+      await other.close();
+    }
+  });
+
+  test("local endpoint setup rejects unsafe URLs and unlisted model ids without persisting anything", async () => {
+    const local = await mock((_s, res) => json(res, 200, { data: [{ id: "safe-model" }, { id: "model\u001b[31m" }] }));
+    try {
+      const invalidUrl = await connectLocalEndpoint(cfg(), `http://user:secret@127.0.0.1:${new URL(local.url).port}/v1`, "safe-model", "key");
+      assert.equal(invalidUrl.ok, false);
+      const invalidModel = await connectLocalEndpoint(cfg(), `${local.url}/v1`, "not-listed", "key");
+      assert.equal(invalidModel.ok, false);
+      assert.deepEqual(invalidModel.models, ["safe-model"]);
+      assert.equal(fs.existsSync(credentialsPath()), false);
+      assert.equal(fs.existsSync(path.join(home, ".config/nexus/config.env")), false);
+    } finally {
+      await local.close();
+    }
+  });
+
   test("a key is verified before it is saved; a rejected key is not saved and never echoed", async () => {
     const m = await mock((s, res) => json(res, s.headers["x-api-key"] === "sk-ant-GOOD" ? 200 : 401, { data: [{ id: "claude-a" }, { id: "claude-b" }] }));
     try {
@@ -373,6 +425,49 @@ describe("connecting from the picker", () => {
       await appliance.close();
       await anth.close();
       fs.rmSync(repo, { recursive: true, force: true });
+    }
+  });
+
+  test("sidecar: local endpoint setup verifies and scopes a key, then exposes its models for selection", async () => {
+    const appliance = await mock((_s, res) => json(res, 200, { data: [{ id: "old-model" }] }));
+    const local = await mock((s, res) => {
+      if (s.path.endsWith("/models")) return json(res, s.headers.authorization === "Bearer local-sidecar-key" ? 200 : 401, { data: [{ id: "local/selected-model" }] });
+      return json(res, 200, {});
+    });
+    const repo = makeRepo();
+    operator({ LOCAL_LLM_ENDPOINT: `${appliance.url}/v1` });
+    const app = new ApplicationCore({ endpoint: `${appliance.url}/v1`, model: "old-model", maxSteps: 3, temperature: 0, workspace: repo, shell: "bash" } as any);
+    const lines: string[] = [];
+    const server = new SidecarServer({ app, mode: "auto", write: (line) => lines.push(line) });
+    server.start();
+    const events = () => lines.map((line) => JSON.parse(line));
+    const send = (message: Record<string, unknown>) => server.handleLine(JSON.stringify({ v: 1, ...message }));
+    const waitFor = async (predicate: (event: any) => boolean) => {
+      for (let i = 0; i < 200; i++) {
+        const found = events().find(predicate);
+        if (found) return found;
+        await new Promise((resolve) => setTimeout(resolve, 25));
+      }
+      assert.fail("event not seen");
+    };
+    try {
+      await send({ type: "provider.connect", id: "local-connect", provider: "appliance", method: "local-endpoint", endpoint: `${local.url}/v1`, key: "local-sidecar-key" });
+      const result = await waitFor((event) => event.type === "provider.result" && event.id === "local-connect");
+      assert.equal(result.success, true, result.message);
+      assert.doesNotMatch(lines.join("\n"), /local-sidecar-key/);
+      await send({ type: "models.list", id: "local-models" });
+      const catalog = await waitFor((event) => event.type === "models.catalog" && event.id === "local-models");
+      assert.deepEqual(catalog.models.filter((model: any) => model.provider === "appliance").map((model: any) => model.id), ["local/selected-model"]);
+      await send({ type: "model.select", id: "local-select", provider: "appliance", model: "local/selected-model" });
+      const selected = await waitFor((event) => event.type === "model.result" && event.id === "local-select");
+      assert.equal(selected.success, true, selected.message);
+      assert.equal(fs.readFileSync(path.join(home, ".config/nexus/config.env"), "utf8").includes("LOCAL_LLM_MODEL=\"local/selected-model\""), true);
+      assert.ok(local.seen.every((request) => request.headers.authorization === "Bearer local-sidecar-key"));
+    } finally {
+      await server.handleLine(JSON.stringify({ v: 1, type: "cancel" }));
+      await server.shutdown();
+      await appliance.close();
+      await local.close();
     }
   });
 });

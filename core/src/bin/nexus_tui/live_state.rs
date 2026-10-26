@@ -611,6 +611,25 @@ impl LiveState {
                     provider,
                     method,
                     key: key.map(Secret),
+                    endpoint: None,
+                }))
+            }
+            ConnectIntent::LocalEndpoint { endpoint, key } => {
+                let id = self.next_id('c');
+                if let Some(Overlay::Connect(flow)) = &mut self.overlay {
+                    flow.step = Step::Waiting {
+                        request: id.clone(),
+                        provider: "appliance".into(),
+                        method: "local-endpoint".into(),
+                        auth: None,
+                    };
+                }
+                Some(Action::Send(Command::ProviderConnect {
+                    id,
+                    provider: "appliance".into(),
+                    method: "local-endpoint".into(),
+                    key,
+                    endpoint: Some(endpoint),
                 }))
             }
             ConnectIntent::Cancel { request } => Some(Action::Send(Command::ProviderCancel { id: request })),
@@ -3986,14 +4005,15 @@ mod tests {
         state.apply(catalog(&id));
         assert_eq!(state.on_key(ctrl('p')), None);
         assert!(matches!(state.overlay, Some(Overlay::Connect(_))));
+        state.on_key(key(KeyCode::Down)); // appliance -> chatgpt
         state.on_key(key(KeyCode::Down)); // chatgpt -> anthropic
         assert_eq!(state.on_key(key(KeyCode::Enter)), None, "a single key method opens the key field");
         state.on_paste("sk-ant-SECRET-1\n");
-        let Some(Action::Send(Command::ProviderConnect { id: request, provider, method, key: Some(secret) })) = state.on_key(key(KeyCode::Enter)) else {
+        let Some(Action::Send(Command::ProviderConnect { id: request, provider, method, key: Some(secret), .. })) = state.on_key(key(KeyCode::Enter)) else {
             panic!("expected provider.connect");
         };
         assert_eq!((provider.as_str(), method.as_str(), secret.0.as_str()), ("anthropic", "api-key", "sk-ant-SECRET-1"));
-        assert!(!format!("{:?}", Command::ProviderConnect { id: request.clone(), provider: "a".into(), method: "m".into(), key: Some(secret) }).contains("SECRET"));
+        assert!(!format!("{:?}", Command::ProviderConnect { id: request.clone(), provider: "a".into(), method: "m".into(), key: Some(secret), endpoint: None }).contains("SECRET"));
         state.apply(ev(&format!(r#"{{"v":1,"type":"provider.result","id":"{request}","provider":"anthropic","success":true,"message":"Anthropic connected (3 models available)."}}"#)));
         let outbox = state.take_outbox();
         assert!(matches!(outbox.as_slice(), [Action::Send(Command::ModelsList { .. })]), "reopens the picker for the provider");
@@ -4007,12 +4027,35 @@ mod tests {
         let Some(Action::Send(Command::ModelsList { id })) = state.on_key(key(KeyCode::Enter)) else { panic!() };
         state.apply(catalog(&id));
         assert!(matches!(state.overlay, Some(Overlay::Connect(_))), "/connect opens the connect panel once providers are known");
+        state.on_key(key(KeyCode::Down)); // local endpoint -> ChatGPT
         let Some(Action::Send(Command::ProviderConnect { id: request, key: None, .. })) = state.on_key(key(KeyCode::Enter)) else {
             panic!("chatgpt's only method is a sign-in");
         };
         state.apply(ev(&format!(r#"{{"v":1,"type":"provider.auth","id":"{request}","provider":"chatgpt","url":"https://auth.example/x","instructions":"Sign in"}}"#)));
         assert!(matches!(&state.overlay, Some(Overlay::Connect(c)) if matches!(&c.step, crate::models::Step::Waiting { auth: Some(_), .. })));
         assert_eq!(state.on_key(key(KeyCode::Esc)), Some(Action::Send(Command::ProviderCancel { id: request })));
+    }
+
+    #[test]
+    fn connect_panel_configures_local_endpoint_then_opens_its_model_picker() {
+        let mut state = ready();
+        type_text(&mut state, "/connect");
+        let Some(Action::Send(Command::ModelsList { id })) = state.on_key(key(KeyCode::Enter)) else { panic!() };
+        state.apply(catalog(&id));
+        assert!(matches!(state.overlay, Some(Overlay::Connect(_))));
+        assert_eq!(state.on_key(key(KeyCode::Enter)), None, "appliance opens local endpoint setup");
+        state.on_paste("http://127.0.0.1:1234/v1");
+        state.on_key(key(KeyCode::Enter));
+        state.on_paste("local-secret");
+        assert!(!format!("{:?}", state.overlay).contains("local-secret"));
+        let Some(Action::Send(Command::ProviderConnect { id: request, provider, method, key: Some(secret), endpoint: Some(endpoint) })) = state.on_key(key(KeyCode::Enter)) else {
+            panic!("expected local provider.connect with endpoint and protected key");
+        };
+        assert_eq!((provider.as_str(), method.as_str(), endpoint.as_str(), secret.0.as_str()), ("appliance", "local-endpoint", "http://127.0.0.1:1234/v1", "local-secret"));
+        assert!(!format!("{:?}", Command::ProviderConnect { id: request.clone(), provider, method, key: Some(secret), endpoint: Some(endpoint) }).contains("local-secret"));
+        state.apply(ev(&format!(r#"{{"v":1,"type":"provider.result","id":"{request}","provider":"appliance","success":true,"message":"Local endpoint ready (127.0.0.1; 2 models found). Choose a model to finish setup."}}"#)));
+        assert!(matches!(&state.overlay, Some(Overlay::Models(p)) if p.only.as_deref() == Some("appliance")));
+        assert!(matches!(state.take_outbox().as_slice(), [Action::Send(Command::ModelsList { .. })]));
     }
 
 }

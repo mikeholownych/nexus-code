@@ -1,6 +1,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import * as fs from "node:fs";
 import { createServer } from "node:http";
+import * as path from "node:path";
 import { Command } from "commander";
 import { credentialStorageHome, operatorSetting, setCredentialAuthority } from "../src/client.js";
 import type { HarnessConfig } from "../src/types.js";
@@ -61,6 +63,54 @@ test("provider destination display redacts URL-normalized AWS, Google and JWT ho
     assert.match(display, /https:\/\//);
     assert.match(display, /safe-model/);
     assert.doesNotMatch(display, /AKIA1234567890ABCDEF|AIza12345678901234567890123456789012345|ya29\.123456789012345678901234|eyJabcdefghij/i);
+  }
+});
+
+test("nexus connect local discovers and persists an endpoint without storing an empty key", async () => {
+  const server = createServer((request, response) => {
+    if (request.url?.endsWith("/models")) {
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(JSON.stringify({ data: [{ id: "engineering/local" }] }));
+      return;
+    }
+    response.writeHead(404);
+    response.end();
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const address = server.address();
+  assert.ok(address && typeof address === "object");
+
+  const previousExitCode = process.exitCode;
+  const previousLog = console.log;
+  const previousError = console.error;
+  const previousCredentialHome = credentialStorageHome();
+  const output: string[] = [];
+  const prompts = [`http://127.0.0.1:${address.port}/v1`, "", "1"];
+  try {
+    setCredentialAuthority({}, previousCredentialHome);
+    console.log = (...values: unknown[]) => output.push(values.join(" "));
+    console.error = (...values: unknown[]) => output.push(values.join(" "));
+    const program = new Command();
+    program.exitOverride();
+    registerProviderCommands(program, {
+      text: async () => prompts.shift() ?? "",
+      secret: async () => prompts.shift() ?? "",
+    });
+    await program.parseAsync(["node", "nexus", "connect", "local"]);
+
+    assert.equal(process.exitCode, 0);
+    assert.match(output.join("\n"), /Local endpoint configured/);
+    assert.doesNotMatch(output.join("\n"), /local-secret/);
+    assert.match(fs.readFileSync(path.join(previousCredentialHome, ".config/nexus/config.env"), "utf8"), /LOCAL_LLM_MODEL="engineering\/local"/);
+    assert.equal(fs.existsSync(path.join(previousCredentialHome, ".config/nexus/credentials.json")), false);
+    assert.equal(prompts.length, 0);
+  } finally {
+    console.log = previousLog;
+    console.error = previousError;
+    process.exitCode = previousExitCode;
+    setCredentialAuthority({}, previousCredentialHome);
+    server.closeAllConnections();
+    server.close();
   }
 });
 

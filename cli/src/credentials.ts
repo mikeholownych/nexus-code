@@ -45,6 +45,47 @@ interface StoreFile {
   providers: Record<string, StoredCredential>;
 }
 
+const LOCAL_ENDPOINT_CREDENTIAL_PREFIX = "nexus-local-endpoint:";
+
+/** Stable credential-store key for one exact HTTP(S) origin; the credential never follows another endpoint. */
+function localEndpointCredentialId(endpoint: string): string | undefined {
+  try {
+    const url = new URL(endpoint);
+    if ((url.protocol !== "http:" && url.protocol !== "https:") || url.username || url.password || url.origin === "null") return undefined;
+    return `${LOCAL_ENDPOINT_CREDENTIAL_PREFIX}${url.origin}`;
+  } catch {
+    return undefined;
+  }
+}
+
+export function saveLocalEndpointCredential(endpoint: string, key: string): boolean {
+  const id = localEndpointCredentialId(endpoint);
+  const value = key.trim();
+  if (!id || !value || /[\r\n]/.test(value)) return false;
+  saveCredential(id, { type: "api", key: value, savedAt: now() });
+  return true;
+}
+
+export function localEndpointCredential(endpoint: string): { origin: string; key: string } | undefined {
+  const id = localEndpointCredentialId(endpoint);
+  if (!id) return undefined;
+  const credential = readStore().providers[id];
+  if (credential?.type !== "api") return undefined;
+  return { origin: id.slice(LOCAL_ENDPOINT_CREDENTIAL_PREFIX.length), key: credential.key };
+}
+
+/** Used only to prevent a project or caller-supplied key from escaping its saved endpoint origin. */
+export function localEndpointCredentials(): Array<{ origin: string; key: string }> {
+  const store = readStore();
+  const result: Array<{ origin: string; key: string }> = [];
+  for (const [id, credential] of Object.entries(store.providers)) {
+    if (!id.startsWith(LOCAL_ENDPOINT_CREDENTIAL_PREFIX) || credential.type !== "api") continue;
+    const origin = id.slice(LOCAL_ENDPOINT_CREDENTIAL_PREFIX.length);
+    if (localEndpointCredentialId(origin) === id) result.push({ origin, key: credential.key });
+  }
+  return result;
+}
+
 export function credentialsPath(): string {
   return path.join(credentialStorageHome(), ".config/nexus/credentials.json");
 }

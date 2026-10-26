@@ -2,7 +2,7 @@
 //! state turns intents into protocol commands and the sidecar decides every outcome.
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
-use crate::protocol::{Catalog, CatalogProvider, ConnectMethod};
+use crate::protocol::{Catalog, CatalogProvider, ConnectMethod, Secret};
 
 /// A panel's content: requested from the sidecar, then filled by its answer.
 #[derive(Clone, Debug, PartialEq)]
@@ -267,6 +267,8 @@ pub enum Step {
     Providers { pick: usize },
     Methods { provider: String, pick: usize },
     Key { provider: String, input: String, error: Option<String> },
+    LocalEndpoint { input: String, error: Option<String> },
+    LocalKey { endpoint: String, input: Secret, error: Option<String> },
     /// The sidecar is verifying a key or waiting for a sign-in; `auth` arrives for sign-ins.
     Waiting { request: String, provider: String, method: String, auth: Option<AuthInfo> },
 }
@@ -287,13 +289,14 @@ pub enum ConnectIntent {
     Back,
     /// Send provider.connect (`key` only for API keys).
     Connect { provider: String, method: String, key: Option<String> },
+    LocalEndpoint { endpoint: String, key: Option<Secret> },
     Cancel { request: String },
     Disconnect { provider: String },
 }
 
-/// Connectable providers (the appliance has no methods).
+/// Connectable cloud providers and the local appliance endpoint setup entry.
 fn connectable(providers: &[CatalogProvider]) -> Vec<&CatalogProvider> {
-    providers.iter().filter(|p| !p.methods.is_empty()).collect()
+    providers.iter().filter(|p| p.id == "appliance" || !p.methods.is_empty()).collect()
 }
 
 impl Connect {
@@ -329,6 +332,10 @@ impl Connect {
 
     /// One method goes straight to it; several ask which.
     fn choose_provider(&mut self, id: String) -> Option<ConnectIntent> {
+        if id == "appliance" {
+            self.step = Step::LocalEndpoint { input: String::new(), error: None };
+            return None;
+        }
         let methods = self.methods(&id);
         if methods.len() == 1 {
             return self.choose_method(id, methods[0].clone());
@@ -358,6 +365,12 @@ impl Connect {
         if let Step::Key { input, error, .. } = &mut self.step {
             input.extend(text.chars().filter(|c| !c.is_whitespace()));
             *error = None;
+        } else if let Step::LocalEndpoint { input, error } = &mut self.step {
+            input.extend(text.chars().filter(|c| !c.is_control()).take(2048usize.saturating_sub(input.chars().count())));
+            *error = None;
+        } else if let Step::LocalKey { input, error, .. } = &mut self.step {
+            input.0.extend(text.chars().filter(|c| !c.is_whitespace() && !c.is_control()));
+            *error = None;
         }
     }
 
@@ -371,7 +384,7 @@ impl Connect {
                     KeyCode::Up => self.step = Step::Providers { pick: pick.saturating_sub(1) },
                     KeyCode::Down => self.step = Step::Providers { pick: (pick + 1).min(ids.len().saturating_sub(1)) },
                     KeyCode::Char('d') if ctrl => {
-                        return ids.get(pick).map(|id| ConnectIntent::Disconnect { provider: id.clone() });
+                        return ids.get(pick).filter(|id| id.as_str() != "appliance").map(|id| ConnectIntent::Disconnect { provider: id.clone() });
                     }
                     KeyCode::Enter => {
                         let id = ids.get(pick)?.clone();
@@ -426,6 +439,42 @@ impl Connect {
                     _ => {}
                 }
                 self.step = Step::Key { provider, input, error };
+            }
+            Step::LocalEndpoint { mut input, mut error } => {
+                let mut transitioned = false;
+                match key.code {
+                    KeyCode::Esc => self.back_to_providers("appliance"),
+                    KeyCode::Enter if !input.trim().is_empty() => {
+                        self.step = Step::LocalKey { endpoint: input.trim().to_string(), input: Secret(String::new()), error: None };
+                        transitioned = true;
+                    }
+                    KeyCode::Enter => error = Some("Enter an endpoint URL.".into()),
+                    KeyCode::Backspace => { input.pop(); error = None; }
+                    KeyCode::Char('u') if ctrl => { input.clear(); error = None; }
+                    KeyCode::Char(c) if !ctrl && !key.modifiers.contains(KeyModifiers::ALT) && !c.is_control() => {
+                        if input.chars().count() < 2048 { input.push(c); }
+                        error = None;
+                    }
+                    _ => {}
+                }
+                if matches!(key.code, KeyCode::Esc) { return None; }
+                if !transitioned { self.step = Step::LocalEndpoint { input, error }; }
+            }
+            Step::LocalKey { endpoint, mut input, mut error } => {
+                match key.code {
+                    KeyCode::Esc => { self.step = Step::LocalEndpoint { input: endpoint, error: None }; return None; }
+                    KeyCode::Enter => {
+                        return Some(ConnectIntent::LocalEndpoint {
+                            endpoint,
+                            key: if input.0.is_empty() { None } else { Some(input) },
+                        });
+                    }
+                    KeyCode::Backspace => { input.0.pop(); error = None; }
+                    KeyCode::Char('u') if ctrl => { input.0.clear(); error = None; }
+                    KeyCode::Char(c) if !ctrl && !c.is_whitespace() && !c.is_control() => { input.0.push(c); error = None; }
+                    _ => {}
+                }
+                self.step = Step::LocalKey { endpoint, input, error };
             }
             Step::Waiting { request, provider, auth, .. } => {
                 if key.code == KeyCode::Esc {
@@ -599,7 +648,8 @@ mod tests {
     #[test]
     fn several_methods_ask_which_and_a_sign_in_can_be_cancelled() {
         let (mut c, _) = Connect::new(catalog().providers, None);
-        assert_eq!(c.list().iter().map(|p| p.id.as_str()).collect::<Vec<_>>(), vec!["openrouter", "anthropic", "chatgpt"]);
+        assert_eq!(c.list().iter().map(|p| p.id.as_str()).collect::<Vec<_>>(), vec!["appliance", "openrouter", "anthropic", "chatgpt"]);
+        c.on_key(key(KeyCode::Down));
         assert_eq!(c.on_key(key(KeyCode::Enter)), None);
         assert!(matches!(c.step, Step::Methods { .. }));
         c.on_key(key(KeyCode::Down));
@@ -631,6 +681,41 @@ mod tests {
     #[test]
     fn ctrl_d_asks_to_disconnect_the_highlighted_provider() {
         let (mut c, _) = Connect::new(catalog().providers, None);
+        assert_eq!(c.on_key(ctrl('d')), None, "the appliance setup is not a disconnectable cloud credential");
+        c.on_key(key(KeyCode::Down));
         assert_eq!(c.on_key(ctrl('d')), Some(ConnectIntent::Disconnect { provider: "openrouter".into() }));
+    }
+
+    #[test]
+    fn local_endpoint_is_a_distinct_connect_option_with_masked_optional_key() {
+        let (mut flow, intent) = Connect::new(catalog().providers, None);
+        assert!(intent.is_none());
+        assert_eq!(flow.list()[0].id, "appliance");
+        assert_eq!(flow.on_key(key(KeyCode::Enter)), None);
+        assert!(matches!(flow.step, Step::LocalEndpoint { .. }));
+        flow.on_paste("http://127.0.0.1:1234/v1");
+        assert_eq!(flow.on_key(key(KeyCode::Enter)), None);
+        flow.on_paste("local-secret");
+        assert!(!format!("{:?}", flow.step).contains("local-secret"));
+        let intent = flow.on_key(key(KeyCode::Enter));
+        assert_eq!(
+            intent,
+            Some(ConnectIntent::LocalEndpoint {
+                endpoint: "http://127.0.0.1:1234/v1".into(),
+                key: Some(Secret("local-secret".into())),
+            })
+        );
+        assert!(!format!("{intent:?}").contains("local-secret"));
+    }
+
+    #[test]
+    fn local_endpoint_api_key_is_optional() {
+        let (mut flow, _) = Connect::new(catalog().providers, Some("appliance"));
+        flow.on_paste("http://localhost:1234/v1");
+        flow.on_key(key(KeyCode::Enter));
+        assert_eq!(flow.on_key(key(KeyCode::Enter)), Some(ConnectIntent::LocalEndpoint {
+            endpoint: "http://localhost:1234/v1".into(),
+            key: None,
+        }));
     }
 }

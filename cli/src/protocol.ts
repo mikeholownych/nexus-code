@@ -173,7 +173,7 @@ export type SidecarCommand =
   | { type: "models.list"; id: string }
   | { type: "model.select"; id: string; provider: string; model: string }
   /** `key` only for method "api-key"; it is never echoed back or logged. */
-  | { type: "provider.connect"; id: string; provider: string; method: string; key?: string }
+  | { type: "provider.connect"; id: string; provider: string; method: string; key?: string; endpoint?: string }
   | { type: "provider.cancel"; id: string }
   | { type: "provider.disconnect"; id: string; provider: string }
   | { type: "shutdown" };
@@ -262,7 +262,14 @@ export function parseCommand(line: string): SidecarCommand {
         throw new ProtocolError("provider.connect requires provider and method", requestId);
       }
       if (msg.key !== undefined && typeof msg.key !== "string") throw new ProtocolError("provider.connect key must be a string", requestId);
-      return { type: "provider.connect", id: requestId, provider: msg.provider, method: msg.method, ...(typeof msg.key === "string" ? { key: msg.key } : {}) };
+      if (msg.endpoint !== undefined && (typeof msg.endpoint !== "string" || !msg.endpoint || msg.endpoint.length > 2048 || /[\r\n\0]/.test(msg.endpoint))) {
+        throw new ProtocolError("provider.connect endpoint must be a valid single-line URL", requestId);
+      }
+      return {
+        type: "provider.connect", id: requestId, provider: msg.provider, method: msg.method,
+        ...(typeof msg.key === "string" ? { key: msg.key } : {}),
+        ...(typeof msg.endpoint === "string" ? { endpoint: msg.endpoint } : {}),
+      };
     }
     case "provider.cancel":
       return { type: "provider.cancel", id: requireId("provider.cancel") };

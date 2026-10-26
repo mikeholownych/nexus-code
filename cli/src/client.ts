@@ -31,7 +31,7 @@ import { ProviderStreamError, readSse, type NativeRequestInput, type NativeResul
 import { anthropicStreamParser, buildAnthropicRequest, parseAnthropicResponse } from "./protocols/anthropic.js";
 import { buildResponsesRequest, parseResponsesResponse, responsesStreamParser } from "./protocols/openai_responses.js";
 import { UsageLedger, type UsageReport } from "./usage.js";
-import { resolveCredential, saveCredential, type StoredCredential } from "./credentials.js";
+import { localEndpointCredential, localEndpointCredentials, resolveCredential, saveCredential, type StoredCredential } from "./credentials.js";
 import { COPILOT_HEADERS, copilotToken, refreshOAuth } from "./oauth.js";
 import { providerDefinition } from "./providers.js";
 
@@ -140,6 +140,8 @@ export function storedCredentialFor(endpoint: string): string | null {
     const token = readGatewayTokenFile() || readConfigEnv().LOCAL_LLM_API_KEY;
     if (token) return token;
   }
+  const endpointCredential = localEndpointCredential(target);
+  if (endpointCredential?.origin === target) return endpointCredential.key;
   if (target === homes.envKeyOrigin && homes.envKey) return homes.envKey;
   return null;
 }
@@ -147,7 +149,8 @@ export function storedCredentialFor(endpoint: string): string | null {
 /** True when `value` is one of the locally stored credentials (token file, config.env key, operator env key). */
 function isStoredCredential(value: string): boolean {
   const homes = storedCredentialHomes();
-  return [readGatewayTokenFile(), readConfigEnv().LOCAL_LLM_API_KEY, homes.envKey].some((stored) => stored && stored === value);
+  return [readGatewayTokenFile(), readConfigEnv().LOCAL_LLM_API_KEY, homes.envKey, ...localEndpointCredentials().map((credential) => credential.key)]
+    .some((stored) => stored && stored === value);
 }
 
 /**
@@ -160,7 +163,8 @@ export function mayBindCredential(key: string | undefined, endpoint: string): bo
   const target = originOf(endpoint);
   if (!target) return false;
   const homes = storedCredentialHomes();
-  return target === homes.gateway || homes.listed.has(target) || (target === homes.envKeyOrigin && value === homes.envKey);
+  const endpointCredential = localEndpointCredentials().find((credential) => credential.key === value);
+  return target === homes.gateway || homes.listed.has(target) || (target === homes.envKeyOrigin && value === homes.envKey) || endpointCredential?.origin === target;
 }
 
 /**
